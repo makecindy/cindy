@@ -50,6 +50,7 @@ describe('live screen host', () => {
     expect(await h.list()).toEqual([
       {
         plugin: 'sim',
+        pluginIdentity: 'sim',
         pluginName: 'sim name',
         id: 'UDID-1',
         name: 'iPhone',
@@ -59,6 +60,7 @@ describe('live screen host', () => {
       },
       {
         plugin: 'sim',
+        pluginIdentity: 'sim',
         pluginName: 'sim name',
         id: 'A',
         name: 'Pixel',
@@ -154,4 +156,58 @@ describe('live screen host', () => {
     expect(isLiveScreenFrameUrl('http://127.0.0.1:80/a')).toBe(false);
     expect(isLiveScreenFrameUrl('http://127.0.0.1:41234/a#x')).toBe(false);
   });
+});
+
+// Physical instance addresses can survive namespace stamping. Provider-supplied
+// identity is ignored: only the installed record can attest source ownership.
+it('attests stamped logical identity while retaining the original routing key', async () => {
+  const stamped = {
+    ...ghost('helper', {
+      liveScreen: true,
+      node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio' },
+    }),
+    namespace: 'acme',
+    instanceKey: 'helper',
+  } as InstalledGhost;
+  const { host: h } = host([stamped], () => ({
+    ok: true,
+    screens: [
+      {
+        id: 'phone',
+        name: 'Phone',
+        platform: 'ios',
+        state: 'running',
+        taskIds: [],
+        pluginIdentity: 'helper',
+      },
+    ],
+  }));
+  expect(await h.list()).toMatchObject([{ plugin: 'helper', pluginIdentity: '_ns__acme__helper' }]);
+});
+
+it('pins each device operation to its expected installed source, including after namespace changes', async () => {
+  const stamped = {
+    ...ghost('helper', {
+      liveScreen: true,
+      node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio' },
+    }),
+    namespace: 'acme',
+    instanceKey: 'helper',
+  } as InstalledGhost;
+  const { host: h, request } = host([stamped], () => ({ ok: true }));
+  const actions = (identity: string) => [
+    () => h.open('helper', 'phone', identity),
+    () => h.input('helper', 'phone', [], identity),
+    () => h.control('helper', 'phone', {}, identity),
+    () => h.close('helper', 'phone', identity),
+  ];
+  for (const action of actions('helper'))
+    await expect(action()).rejects.toThrow('DESKTOP_SCREEN_UNAVAILABLE');
+  expect(request).not.toHaveBeenCalled();
+  await expect(h.input('helper', 'phone', [], '_ns__acme__helper')).resolves.toBeUndefined();
+  const called = request.mock.calls.length;
+  stamped.namespace = 'other';
+  for (const action of actions('_ns__acme__helper'))
+    await expect(action()).rejects.toThrow('DESKTOP_SCREEN_UNAVAILABLE');
+  expect(request).toHaveBeenCalledTimes(called);
 });

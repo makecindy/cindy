@@ -8585,6 +8585,141 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it.each([undefined, 'project'])('discovers enabled local skills without model credentials for %s context', async (context) => {
+    const home = path.join(os.tmpdir(), 'codex-skill-discovery-home');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    const workingDir = context ? path.join(home, 'project') : undefined;
+    const cwd = workingDir ?? home;
+    const skillPath = path.join(cwd, '.agents', 'skills', 'enabled', 'SKILL.md');
+    const skill = { name: 'enabled', description: 'Enabled skill', path: skillPath, scope: context ? 'repo' : 'user', enabled: true };
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.SkillsList, { result: { data: [{ cwd, skills: [
+        skill,
+        { ...skill, name: 'disabled', path: path.join(cwd, '.agents', 'skills', 'disabled', 'SKILL.md'), enabled: false },
+        { ...skill, name: 'admin', path: path.join(home, 'admin', 'skills', 'admin', 'SKILL.md'), scope: 'admin' },
+        { ...skill, name: 'internal', path: path.join(home, 'skills', '.system', 'internal', 'SKILL.md'), scope: 'system' },
+        { ...skill, name: 'plugin-internal', path: path.join(home, 'plugins', 'cache', 'publisher', 'plugin', '1.0.0', 'skills', 'internal', 'SKILL.md') },
+      ], errors: [{ path: cwd, message: 'Invalid skill metadata' }] }] } });
+    };
+    const deps = createDeps();
+    const getAuthEnv = vi.fn(async () => ({ CODEX_HOME: home }));
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => { throw new Error('Model bridge must not start for discovery'); });
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false, errorReason: 'no_credentials' }), getAuthEnv };
+    deps.prepareCodexExtraSpawnConfig = prepareCodexExtraSpawnConfig;
+    const agent = new CodexAgent(deps);
+
+    try {
+      await expect(agent.listAgentSkills({ workingDir, forceReload: true })).resolves.toMatchObject({
+        skills: [{ kind: 'agent-skill', name: 'enabled', path: skillPath, scope: skill.scope, enabled: true }],
+        errors: [{ path: cwd, message: 'Invalid skill metadata' }],
+      });
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(createdStdioOptions[0]).toMatchObject({ env: { CODEX_HOME: home }, extraArgs: expect.arrayContaining(['cli_auth_credentials_store="ephemeral"']) });
+      expect(createdTransports[0].lines.map(line => JSON.parse(line)).find(line => line.method === Method.SkillsList)?.params)
+        .toEqual({ cwds: [cwd], forceReload: true, perCwdExtraUserRoots: null });
+      expect(prepareCodexExtraSpawnConfig).not.toHaveBeenCalled();
+      expect(getAuthEnv).toHaveBeenCalledTimes(1);
+      await expect(agent.startSession({ sessionId: 'requires-auth', model: 'gpt-5.4', workingDir: cwd })).rejects.toBeInstanceOf(AgentNotAuthenticatedError);
+      expect(createdTransports).toHaveLength(1);
+    } finally { await agent.dispose(); }
+  });
+
+  it('closes credential-free skill discovery after a native RPC failure', async () => {
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.SkillsList, { error: { code: -32603, message: 'Skill discovery unavailable' } });
+    };
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv: async () => ({ CODEX_HOME: path.join(os.tmpdir(), 'codex-skill-home') }) };
+    const agent = new CodexAgent(deps);
+    try {
+      await expect(agent.listAgentSkills({ workingDir: path.join(os.tmpdir(), 'codex-skill-project') })).rejects.toThrow('Skill discovery unavailable');
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(true);
+    } finally { await agent.dispose(); }
+  });
+
+  it('refuses skill discovery when native policy overrides ephemeral authentication', async () => {
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.ConfigRead, { result: { config: { cli_auth_credentials_store: 'file' } } });
+    };
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv: async () => ({ CODEX_HOME: path.join(os.tmpdir(), 'codex-skill-home') }) };
+    const agent = new CodexAgent(deps);
+    try {
+      await expect(agent.listAgentSkills({})).rejects.toThrow('Codex could not initialize isolated account authentication');
+      expect(createdTransports[0].closed).toBe(true);
+      expect(createdTransports[0].lines.some(line => JSON.parse(line).method === Method.SkillsList)).toBe(false);
+    } finally { await agent.dispose(); }
+  });
+
+  it('does not fall back to local skill discovery for an unauthenticated remote host', async () => {
+    const deps = createDeps();
+    const getAuthEnv = vi.fn(async () => ({}));
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv };
+    const agent = new CodexAgent(deps);
+    try {
+      await expect(agent.listAgentSkills({ workingDir: '/remote/repo', remoteHostId: 'remote' })).resolves.toEqual({ skills: [] });
+      expect(createdTransports).toHaveLength(0);
+      expect(getAuthEnv).not.toHaveBeenCalled();
+    } finally { await agent.dispose(); }
+  });
+
+  it.each(['environment', 'initialize', 'skills'])('stops credential-free discovery during %s when disposed', async (phase) => {
+    let release = () => {};
+    let reached!: () => void;
+    const blocked = new Promise<void>(resolve => { reached = resolve; });
+    const pause = () => new Promise<void>(resolve => { release = resolve; reached(); });
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv: async () => {
+      if (phase === 'environment') await pause();
+      return { CODEX_HOME: path.join(os.tmpdir(), 'codex-skill-home') };
+    } };
+    if (phase === 'initialize') MockCodexTransport.beforeInitializeResponse = pause;
+    if (phase === 'skills') MockCodexTransport.beforeSkillsListResponse = pause;
+    const agent = new CodexAgent(deps);
+    const result = agent.listAgentSkills({}).catch(error => error);
+    try {
+      await blocked;
+      await agent.dispose();
+      release();
+      if (phase !== 'environment') expect(createdTransports[0].closed).toBe(true);
+      expect(await result).toBeInstanceOf(Error);
+      if (phase === 'environment') expect(createdTransports).toHaveLength(0);
+    } finally {
+      release();
+      await Promise.all(createdTransports.map(transport => transport.close()));
+      await agent.dispose();
+      await result;
+    }
+  });
+
+  it.each(['initialize', 'skills'])('bounds credential-free discovery during %s and closes its process', async (phase) => {
+    vi.useFakeTimers();
+    let release = () => {};
+    let reached!: () => void;
+    const blocked = new Promise<void>(resolve => { reached = resolve; });
+    const pause = () => new Promise<void>(resolve => { release = resolve; reached(); });
+    if (phase === 'initialize') MockCodexTransport.beforeInitializeResponse = pause;
+    else MockCodexTransport.beforeSkillsListResponse = pause;
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv: async () => ({ CODEX_HOME: path.join(os.tmpdir(), 'codex-skill-home') }) };
+    const agent = new CodexAgent(deps);
+    const result = agent.listAgentSkills({}).catch(error => error);
+    try {
+      await blocked;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(await result).toMatchObject({ message: expect.stringMatching(/timed out|timeout/) });
+    } finally {
+      release();
+      await Promise.all(createdTransports.map(transport => transport.close()));
+      await agent.dispose();
+      await result;
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps an installed skill-creator ahead of the native system fallback', async () => {
     const home = os.homedir();
     const installedPath = path.join(home, '.agents', 'skills', 'skill-creator', 'SKILL.md');

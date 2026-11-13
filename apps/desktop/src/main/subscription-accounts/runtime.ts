@@ -563,7 +563,8 @@ export function readSubscriptionAccountBlocked(
 export async function readSubscriptionPoolModelAvailability(
   provider: SubscriptionProvider,
   model: string,
-  options: { remote?: boolean } = {},
+  /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)。 */
+  options: { remote?: boolean; ownComputer?: boolean } = {},
 ): Promise<boolean | null> {
   const pool = readPool(provider);
   if (!pool || pool.accounts.length < 2) return null;
@@ -584,7 +585,7 @@ export async function readSubscriptionPoolModelAvailability(
       || (account.id === 'default' && !defaultAccountBound(provider))) return false;
     const imported = provider === 'openai' ? readLegacyCodexProviderId(account.id) : undefined;
     if (imported && !legacyAccess?.legacyCodexAccountCanRun(imported, model, {
-      remote: options.remote === true, newRoute: true,
+      remote: options.remote === true, ownComputer: options.ownComputer === true, newRoute: true,
     })) return false;
     const usage = providerGroupMemberUsageState(info.usage ?? {},
       provider === 'openai' ? model.replace(/^chatgpt\//, '') : model,
@@ -603,7 +604,8 @@ const ACCOUNT_SWITCH_PROBE_BUDGET_MS = 2_000;
 export async function readSubscriptionSessionAccount(
   provider: SubscriptionProvider,
   keys: { sessionId?: string; nativeSessionId?: string; model?: string },
-  options: { remote?: boolean } = {},
+  /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)，换号探测也认「让我的其他电脑用本机模型」。 */
+  options: { remote?: boolean; ownComputer?: boolean } = {},
 ): Promise<SubscriptionSessionAccountView> {
   // Replacement admission is optional. Share a short budget with the original bound-account
   // read so a slow original read never starts another long CLI wait before returning its view.
@@ -660,7 +662,8 @@ export async function readSubscriptionSessionAccount(
       // actual slot and the grants used by a fresh start. The probe reserves and binds nothing.
       switchAvailable = await Promise.race([
         acquireSubscriptionAccount(provider, keys.model, [], false, {
-          remote: options.remote === true, exclude: new Set([config.id]), dryRun: true,
+          remote: options.remote === true, ownComputer: options.ownComputer === true,
+          exclude: new Set([config.id]), dryRun: true,
         }).then(() => true),
         new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), switchBudget); }),
       ]);
@@ -1033,6 +1036,8 @@ export async function acquireSubscriptionAccount(
   control = false,
   options: {
     remote?: boolean;
+    /** 远程调用来自自己的其他电脑(不是受邀者)：旧版导入的 Codex 账号也认「让我的其他电脑用本机模型」。 */
+    ownComputer?: boolean;
     accountId?: string;
     resuming?: boolean;
     /** Accounts already tried for this start (provider group: each member at most once per round). */
@@ -1097,7 +1102,8 @@ export async function acquireSubscriptionAccount(
       usable: !loggingIn && info?.auth.authenticated === true && (control || (!usage.limited
         && ((Boolean(binding) && !rebind) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model))))
         && (control || !imported || legacyAccess?.legacyCodexAccountCanRun(imported, model, {
-          remote: options.remote === true, newRoute: (!binding || rebind) && !options.resuming,
+          remote: options.remote === true, ownComputer: options.ownComputer === true,
+          newRoute: (!binding || rebind) && !options.resuming,
         }) === true),
       running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
       // Control leases reserve no slot. Pinned tasks never re-pick, so the limit only gates new assignments.
@@ -1177,7 +1183,7 @@ export async function acquireSubscriptionAccount(
     const imported = provider === 'openai' ? readLegacyCodexProviderId(selected) : undefined;
     if (imported && (options.remote || modelSwitch)
       && !legacyAccess?.legacyCodexAccountCanRun(imported, targetModel, {
-        remote: options.remote === true, newRoute: false, modelSwitch,
+        remote: options.remote === true, ownComputer: options.ownComputer === true, newRoute: false, modelSwitch,
       }))
       throw new Error(options.remote ? 'Subscription account remote access was revoked' : 'Subscription account does not allow this model');
   };

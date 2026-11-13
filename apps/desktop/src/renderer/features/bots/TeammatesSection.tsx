@@ -3,8 +3,11 @@ import { aggregateTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { botRosterLabel } from '../../../shared/botCreation';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
+  Check,
+  LayoutGrid,
+  LayoutList,
   AlertTriangle,
   Archive,
   ArchiveRestore,
@@ -25,7 +28,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Tip } from '@/components/ui/tooltip';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
-import { useCollapsibleShowAll } from '@/features/cc-agent/sidebar/hooks/useCollapsibleShowAll';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { BotGroupSummary } from '../../../shared/botGroupChat';
@@ -61,7 +63,7 @@ import {
   formatBotListTimestamp,
 } from './botListDisplay';
 import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
-import { readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
+import { readTeammatesViewMode, writeTeammatesViewMode, type TeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
 import {
   canonicalBotSessionId,
   duplicateBotProfile,
@@ -84,33 +86,33 @@ const HEADER_HOVER_ACTION_CLASS = cn(
 const HEADER_ICON_BUTTON_CLASS =
   'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]';
 
-/** Only the collapsed strip is compact: unchanged 36px portrait, 40px target, 4px gap. */
+/** Icon mode is compact: unchanged 36px portrait, 40px target, 4px gap. */
 const AVATAR_SLOT_PX = 44;
 const CHAT_PREVIEW_LIMIT = 5;
 
 /**
- * 收起态只占一行:按内容宽度算出能放几个头像(含末尾「+N」),伙伴再多也不换行。
+ * 展开时的图标模式只占一行:按宽度计算头像容量(含末尾「+N」)。
  * 尚未测量(宽度 0,如首帧或测试环境)时不截断。
  */
-function useAvatarRowCapacity(ref: RefObject<HTMLDivElement | null>, active: boolean): number {
+function useAvatarRowCapacity(element: HTMLDivElement | null): number {
   const [width, setWidth] = useState(0);
-  // 头像行只在收起时挂载:每次收起后重新挂上观察。
+  // 跟随实际 DOM 挂载；空提醒、列表模式或空 roster 都会卸载头像行。
   useEffect(() => {
-    const element = active ? ref.current : null;
+    setWidth(0);
     if (!element || typeof ResizeObserver === 'undefined') return undefined;
     const observer = new ResizeObserver((entries) => {
       setWidth(Math.floor(entries[0]?.contentRect.width ?? 0));
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [ref, active]);
+  }, [element]);
   return width > 0 ? Math.max(1, Math.floor((width + 4) / AVATAR_SLOT_PX)) : Number.POSITIVE_INFINITY;
 }
 
 /**
  * 侧栏第一层的「伙伴」段(2026-10-13 定稿):固定在置顶段上方,与置顶、全部任务并存。
- * 点伙伴只切换主区域,左栏不再整栏切换。段名在「展开(行列表)」与「收起成一排头像」
- * 之间切换,默认展开,按账号记住。通知不在这里发 —— 唯一 owner 是任务侧栏。
+ * 点伙伴只切换主区域,左栏不再整栏切换。显示方式与收起状态独立，按账号记住。
+ * 收起时仅保留未读或等待处理的聊天。通知不在这里发 —— 唯一 owner 是任务侧栏。
  */
 export function TeammatesSection() {
   const { t } = useTranslation();
@@ -130,16 +132,28 @@ export function TeammatesSection() {
   const deviceId = remoteRoute?.params.deviceId;
   const selectedGroupId = matchPath('/bots/groups/:groupId', pathname)?.params.groupId;
   const [collapsed, setCollapsed] = useState(() => readTeammatesSectionCollapsed(dataOwnerId));
-  const [showAllChats, setShowAllChats] = useCollapsibleShowAll(collapsed);
-  const avatarRowRef = useRef<HTMLDivElement>(null);
-  const avatarCapacity = useAvatarRowCapacity(avatarRowRef, collapsed);
+  const [keepSelectedChat, setKeepSelectedChat] = useState(true);
+  const [viewMode, setViewMode] = useState(() => readTeammatesViewMode(dataOwnerId));
+  const changeViewMode = (mode: TeammatesViewMode) => {
+    setViewMode(mode);
+    writeTeammatesViewMode(dataOwnerId, mode);
+  };
+  const [showAllChats, setShowAllChats] = useState(false);
+  const [avatarRowElement, setAvatarRowElement] = useState<HTMLDivElement | null>(null);
+  const avatarCapacity = useAvatarRowCapacity(avatarRowElement);
   useEffect(() => {
     setCollapsed(readTeammatesSectionCollapsed(dataOwnerId));
+    setViewMode(readTeammatesViewMode(dataOwnerId));
     setShowAllChats(false);
   }, [dataOwnerId, setShowAllChats]);
   const toggleCollapsed = () => {
     const next = !collapsed;
     setCollapsed(next);
+    if (next) {
+      setShowAllChats(false);
+      // An explicit collapse overrides the temporary protection of a read chat.
+      setKeepSelectedChat(Boolean(selectedChat && needsAttention(selectedChat)));
+    }
     writeTeammatesSectionCollapsed(dataOwnerId, next);
   };
   const cloud = useCompanionCloud();
@@ -344,7 +358,30 @@ export function TeammatesSection() {
   if (selectedChat && !previewChats.includes(selectedChat)) {
     previewChats[CHAT_PREVIEW_LIMIT - 1] = selectedChat;
   }
-  const displayedChats = showAllChats ? visibleChats : previewChats;
+  const needsAttention = (entry: (typeof visibleChats)[number]) => {
+    const unread = entry.kind === 'group' ? isBotGroupUnread(entry.group)
+      : entry.kind === 'cindy' ? cindyOptions.some(option => option.unread)
+        : 'deviceId' in entry.bot ? isRemoteBotUnread(entry.bot) : (unreadByBotId[entry.bot.id] ?? 0) > 0;
+    const status = entry.kind === 'group' ? groupTeammateStatus(entry.group, bots, islandActivity, unread)
+      : entry.kind === 'cindy' ? cindyStatus : statusForBot(entry.bot);
+    return unread || status === 'awaiting' || status === 'error';
+  };
+  const selectedChatKey = selectedChat?.kind === 'group' ? `group:${selectedChat.group.id}`
+    : selectedChat?.kind === 'cindy' ? 'cindy-devices'
+      : selectedChat ? ('deviceId' in selectedChat.bot ? remoteBotKey(selectedChat.bot) : `local:${selectedChat.bot.id}`) : null;
+  const selectedNeedsAttention = Boolean(selectedChat && needsAttention(selectedChat));
+  // Switching chats or receiving new attention starts a new retention period.
+  // Manual collapse can end it without changing the currently open conversation.
+  useEffect(() => {
+    setKeepSelectedChat(true);
+  }, [selectedChatKey, dataOwnerId]);
+  useEffect(() => {
+    if (selectedNeedsAttention) setKeepSelectedChat(true);
+  }, [selectedNeedsAttention]);
+  const attentionChats = visibleChats.filter(entry =>
+    (keepSelectedChat && entry === selectedChat) || needsAttention(entry));
+  const displayedChats = collapsed ? attentionChats : showAllChats ? visibleChats : previewChats;
+  const iconChats = collapsed ? attentionChats : visibleChats;
 
   useEffect(() => {
     if (roster.visible.length + remoteBots.length + groups.length === 0) return;
@@ -513,14 +550,32 @@ export function TeammatesSection() {
             </span>
           ) : null}
           <BotCreateMenu variant="header" />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Tip text={t('ccAgent.sidebar.viewStyle')} side="bottom">
+                <button type="button" aria-label={t('ccAgent.sidebar.viewStyle')} className={HEADER_ICON_BUTTON_CLASS}>
+                  {viewMode === 'icons' ? <LayoutGrid size={13} /> : <LayoutList size={13} />}
+                </button>
+              </Tip>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {(['icons', 'list'] as const).map(mode => (
+                <DropdownMenuItem key={mode} onSelect={() => changeViewMode(mode)}>
+                  {mode === 'icons' ? <LayoutGrid size={15} /> : <LayoutList size={15} />}
+                  <span>{t(mode === 'icons' ? 'bots.list.viewIcons' : 'ccAgent.sidebar.viewStyleListWide')}</span>
+                  {viewMode === mode && <Check size={15} className="ml-auto" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
-      {collapsed ? (
-        // 收起：单行头像，只显示需要注意的状态；放不下的收进末尾「+N」（点开即展开整段）。
-        <div ref={avatarRowRef} className="flex flex-nowrap items-center gap-1 overflow-hidden py-1 pr-0 pl-[22px]">
+      {viewMode === 'icons' && iconChats.length > 0 ? (
+        // 收起时所有待处理头像换行展示，不藏进 +N。
+        <div ref={setAvatarRowElement} className={cn('flex items-center gap-1 py-1 pr-0 pl-[22px]', collapsed ? 'flex-wrap' : 'flex-nowrap overflow-hidden')}>
           {(() => {
-            const entries = visibleChats.map((entry) => {
+            const entries = iconChats.map((entry) => {
               const key = entry.kind === 'group' ? `group:${entry.group.id}`
                 : entry.kind === 'cindy' ? 'cindy-devices'
                   : 'deviceId' in entry.bot ? remoteBotKey(entry.bot) : entry.bot.id;
@@ -541,7 +596,7 @@ export function TeammatesSection() {
                 ...(mentioned ? [t('bots.groupChat.server.thread.hintMentioned')] : [])].join(' · ');
               return { entry, key, selected, status, mentioned, label };
             });
-            const overflow = entries.length > avatarCapacity;
+            const overflow = !collapsed && entries.length > avatarCapacity;
             let shown = overflow ? entries.slice(0, Math.max(0, avatarCapacity - 1)) : entries;
             // 正在看的聊天始终留在行内,占最后一个可见位。
             const selectedEntry = entries.find((item) => item.selected);
@@ -584,7 +639,7 @@ export function TeammatesSection() {
                   <Tip text={moreLabel} side="bottom">
                     <button
                       type="button"
-                      onClick={() => { toggleCollapsed(); setShowAllChats(true); }}
+                      onClick={() => { changeViewMode('list'); setShowAllChats(true); }}
                       aria-label={moreLabel}
                       className="group/overflow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-11 font-medium tabular-nums text-[var(--sidebar-nav-text)] outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
@@ -601,7 +656,7 @@ export function TeammatesSection() {
         </div>
       ) : null}
 
-      <SectionCollapse collapsed={collapsed}>
+      <SectionCollapse collapsed={viewMode === 'icons' || (collapsed && attentionChats.length === 0)}>
       <div className="flex flex-col pt-1 pr-0 pl-3">
 
       {archiveError && <p role="alert" className="mb-2 px-2.5 text-12 text-[var(--error-fg)]">{archiveError}</p>}
@@ -795,7 +850,7 @@ export function TeammatesSection() {
                 </div>
               );
             })}
-            {visibleChats.length > CHAT_PREVIEW_LIMIT ? (
+            {!collapsed && visibleChats.length > CHAT_PREVIEW_LIMIT ? (
               <button
                 type="button"
                 aria-expanded={showAllChats}
@@ -809,7 +864,7 @@ export function TeammatesSection() {
                 {showAllChats ? t('bots.list.showLess') : t('ccAgent.sidebar.showAllSessions', { count: visibleChats.length })}
               </button>
             ) : null}
-            {roster.showHiddenSection ? (
+            {!collapsed && roster.showHiddenSection ? (
               <div className="mt-3 border-t border-[var(--border-default)] pt-3">
                 <button
                   type="button"
@@ -857,7 +912,7 @@ export function TeammatesSection() {
                   : null}
               </div>
             ) : null}
-            {archivedBots.length > 0 ? (
+            {!collapsed && archivedBots.length > 0 ? (
               <div className="mt-3 border-t border-[var(--border-default)] pt-3">
                 <div className="mb-1 flex items-center gap-2 px-2.5 text-10 font-medium text-[var(--sidebar-list-muted)]">
                   <AlertTriangle size={12} />
