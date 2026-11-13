@@ -25,13 +25,16 @@ export type PaletteSkillListing = { success: true; skills: AgentSkillCommand[] }
  * a fork or a `switch_session` replaces that catalog without changing the session id,
  * so without it a reopened palette would keep serving the pre-fork command — and a
  * still-`loaded` status also stops the dispatch retry from correcting it.
+ * It carries the host process instance prefix, because the generation counter only
+ * lives inside one Pi process: a rebuilt process would otherwise start at generation 1
+ * and hit the previous process's entry within the reuse window.
  */
 export function paletteSkillListReuseKey(fields: {
   agentKind: string;
   workingDir?: string;
   sessionId?: string;
   remoteHostId?: string;
-  runtimeGeneration?: number;
+  runtimeGeneration?: string;
 }): string {
   return JSON.stringify([
     fields.agentKind,
