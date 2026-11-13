@@ -70,7 +70,7 @@ vi.mock('../WebMicAudioEngine', () => ({
       mocks.stopEngine();
     }
     async drainBufferedAudio() {
-      mocks.drainEngine(this.emit);
+      await mocks.drainEngine(this.emit);
     }
   },
   currentPowerReleaseGeneration: () => 0,
@@ -176,6 +176,44 @@ afterEach(() => {
 });
 
 describe('local voice capture independent of startup checks and cloud', () => {
+  // #6656 / discussion_r4548420426. Unit: the real stop promise gates Send.
+  // Existing tests only fail after stop IPC; ASR can fail earlier while the
+  // worklet or append-audio barrier drains. That same attempt must reject.
+  it.each(['worklet', 'audio queue'] as const)('rejects Send when ASR errors during %s drain', async barrier => {
+    const h = mount();
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.connection.resolve({ ok: true, runId: 'error-during-drain' });
+      h.result.current.start();
+    });
+    act(() => mocks.engines[0].emit(chunk(0)));
+    const drain = deferred<void>();
+    if (barrier === 'worklet') mocks.drainEngine.mockReturnValueOnce(drain.promise);
+    else h.api.drainAudioQueue.mockImplementationOnce(async () => {
+      await drain.promise;
+      return { ok: true };
+    });
+    const send = vi.fn();
+    const failed = vi.fn();
+    let stopping!: Promise<void>;
+    await act(async () => {
+      stopping = h.result.current.stop({ waitForRefinement: true }).then(send, failed);
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(h.api.stop).not.toHaveBeenCalled();
+    const receive = h.api.onEvent.mock.calls.at(-1)![0];
+    await act(async () => {
+      receive({ type: 'state', runId: 'error-during-drain', state: 'error' });
+      receive({ type: 'error', runId: 'error-during-drain', message: 'ASR failed during drain' });
+      drain.resolve();
+      await stopping;
+    });
+    expect(h.result.current.state).toBe('error');
+    expect(send).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledWith(new Error('ASR failed during drain'));
+    expect(h.api.stop).not.toHaveBeenCalled();
+  });
+
   // #6656 / discussion_r4525445800: Main can emit refining/error before its
   // stop IPC resolves. Existing startup tests never changed state during that
   // reply. Unit: the real hook's public promise must gate Send until completion

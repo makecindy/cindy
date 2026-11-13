@@ -1815,7 +1815,9 @@ export function useVoiceInput(
     // Include the final worklet sub-chunk before deciding there was no sound.
     // A silent recording must not wait for a pending cloud start or final text.
     await drainAndStopEngine();
-    if (!isActiveStartAttempt(attemptId)) return;
+    // An error during drain still belongs to this stop and must reject Send.
+    // Only cancellation/replacement makes its continuation stale.
+    if (startAttemptIdRef.current !== attemptId) return;
     if (stateRef.current === 'error') {
       throw new Error(lastErrorRef.current ?? 'Voice input failed.');
     }
