@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import ts from 'typescript';
-import { confirmedAutoTools } from '../ghostInstallConsent.js';
+import { confirmedAutoTools, confirmedHostToolGroups, confirmedEventTopics, confirmedHostUiPermissions } from '../ghostInstallConsent.js';
+import { setPluginEnabled } from '../pluginEnableService.js';
+import { createGhostExecutionPipe } from '../executionPipe.js';
+import { setTaskChangeListener } from '../../localDb/taskEvents.js';
 import { ghostInstallTargetContext, resolveForgeInstallTarget } from '../ghostInstallTarget.js';
 import {
   parsePluginStoragePart,
@@ -15,12 +18,19 @@ import {
 } from '../../../shared/pluginIdentity.js';
 
 const productionIdentityDeps = {
+  requestPluginHostToolCall: async () => ({ isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"HOST_NOT_READY"}' }] }),
+  createGhostExecutionPipe,
+  setTaskChangeListener,
+  setPluginEnabled,
   parsePluginStoragePart,
   parsePluginInstallRelId,
   findInstalledGhostForDeliveryTarget,
   LOCAL_PLUGIN_NAMESPACE,
   isOrganizationPluginNamespace,
   confirmedAutoTools,
+  confirmedHostToolGroups,
+  confirmedEventTopics,
+  confirmedHostUiPermissions,
   ghostInstallTargetContext,
   resolveForgeInstallTarget,
   installedGhostPhysicalRelId,
@@ -96,7 +106,7 @@ export function createGhostProductionCallbacks<Result>(options: {
   return (deps) => {
     const merged = { ...productionIdentityDeps, ...instanceLookupDeps(deps), ...deps };
     return new Function(
-      'deps', 'const {' + Object.keys(merged).join(',') + '} = deps;' + compiled +
+      'deps', 'const {' + Object.keys(merged).filter(name => !names.includes(name)).join(',') + '} = deps;' + compiled +
         ';return {' + names.join(',') + '};',
     )(merged) as Result;
   };

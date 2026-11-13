@@ -1,4 +1,5 @@
-import { getPluginToolUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
+import { getPluginHostUi, getPluginToolUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
+import { hostUiApprovalSubjects } from '../hostUi.js';
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANUAL_DESCRIPTION_MAX_CHARS,
@@ -18,6 +19,7 @@ import {
   isVersionlessCindyVersion,
   supportsCindyVersion,
   validateGhostManifest,
+  validateStoredGhostManifest,
 } from '../manifest.js';
 
 const validManifest = {
@@ -32,6 +34,25 @@ const validManifest = {
 } as const;
 
 describe('Ghost manifest contract', () => {
+  it('validates static task prompt declarations while preserving older installed plugin behavior', () => {
+    const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
+    expect(validateGhostManifest({ ...base, systemPrompt: [{ id: 'style', order: 0, text: 'Static', scope: 'selected-task' }] })).toMatchObject({ ok: true });
+    const historical = { ...base, systemPrompt: { vendorExtension: 'previously unknown' } };
+    expect(validateGhostManifest(historical).ok).toBe(false);
+    expect(validateStoredGhostManifest(historical)).toMatchObject({ ok: true, manifest: { tools: base.tools } });
+    const stored = validateStoredGhostManifest(historical);
+    if (stored.ok) expect(stored.manifest.systemPrompt).toBeUndefined();
+  });
+  // Runtime controls are on-demand entry points. Unlike message hooks, selecting
+  // one must not require a resident process (protocol contract, unit).
+  it('accepts on-demand runtime controls without making message hooks non-resident', () => {
+    const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
+    const hooks = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory'];
+    const result = validateGhostManifest({ ...base, subscribe: { hooks } });
+    expect(result).toMatchObject({ ok: true, manifest: { subscribe: { hooks } } });
+    expect(validateGhostManifest({ ...base, subscribe: { hooks: ['will-user-message'] } }).ok).toBe(false);
+  });
+
   it.each([2, 3])('preserves the optional Host task card visibility flag in schema v%s', (schemaVersion) => {
     const base = {
       ...validManifest,
@@ -2043,6 +2064,142 @@ describe('interactive page declarations', () => {
     expect(result.manifest.tools).toEqual(original.manifest.tools);
     expect(validateGhostManifest({ ...base, mcpApps: { ui: { resources: [], tools: { help: { visibility: ['app'] } } } } }).ok).toBe(true);
   });
+  // New host placements reference the same resource catalog. They must not
+  // require a dummy business tool or accept references outside that catalog.
+  it('accepts a resource-only named view without changing existing tool declarations', () => {
+    const mcpApps = { ui: { resources: base.mcpApps.ui.resources, tools: {} }, host: {
+      views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://planner', scope: 'global' }],
+      contributions: [{ id: 'open', title: 'Open workspace', position: 'composer.toolbar', view: 'workspace' }],
+    } };
+    expect(validateGhostManifest({ ...base, mcpApps })).toMatchObject({ ok: true, manifest: { mcpApps } });
+  });
+  it('includes a declared message menu action in explicit host approval', () => {
+    const host = { contributions: [{ id: 'help-menu', title: 'Help', position: 'message.menu', tool: 'help' }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'contribution:help-menu' }));
+  });
+  // UI opening: old unknown positions confer no authority; newly understood
+  // placements and provider input must be separately approved. Tier: unit.
+  it('keeps all eight legacy subjects unchanged when old packages contain previously unknown provider metadata', () => {
+    const positions = ['composer.toolbar', 'session.header', 'statusbar', 'message.actions', 'message.menu', 'turn.footer', 'message.body', 'tool.body'];
+    const host = { views: [{ id: 'page', title: 'Page', resourceUri: 'ui://planner' }],
+      contributions: positions.map((position, index) => ({ id: `old-${index}`, title: 'Old entry', position, view: 'page' })) };
+    const historical = { ...host, contributions: host.contributions.map(entry => ({ ...entry,
+      trigger: '@' as const, accept: { extensions: ['.pdf'] } })) };
+    expect(validateStoredGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: historical } })).toMatchObject({ ok: true,
+      manifest: { mcpApps: { host: { contributions: historical.contributions } } } });
+    expect(hostUiApprovalSubjects(historical)).toEqual(hostUiApprovalSubjects(host));
+  });
+  // Unit, #9987: persisted unknown data must not revoke approved toolbar/command
+  // subjects. The metadata-only case above did not exercise newly strict fields.
+  it.each([
+    { settings: { vendor: true } },
+    { settings: [{ id: 'invalid', title: 'Invalid', type: 'boolean', default: 'yes' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'sidebar.navigation', kind: 'status' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'session.menu', kind: 'select', tool: 'help', options: [{ label: 'One', value: 'one' }] }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'settings.section', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'composer.completion', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'composer.attachment', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'sidebar.section', tool: 'help' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'window.titlebar', kind: 'status' }] },
+  ])('keeps legacy host authority when stored extensions are invalid: %j', extension => {
+    const legacy = { contributions: [{ id: 'old', title: 'Old toolbar', position: 'composer.toolbar', tool: 'help' }],
+      commands: [{ id: 'command', title: 'Old command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
+    const host = { ...legacy, ...extension, contributions: [...legacy.contributions, ...(extension.contributions ?? [])] };
+    const raw = { ...base, mcpApps: { ...base.mcpApps, host } };
+    expect(validateGhostManifest(raw).ok).toBe(false);
+    const stored = validateStoredGhostManifest(raw);
+    if (!stored.ok) throw new Error(stored.reason);
+    const projected = getPluginHostUi(stored.manifest);
+    expect(projected).toMatchObject(legacy);
+    expect(hostUiApprovalSubjects(projected!)).toEqual(hostUiApprovalSubjects(legacy));
+  });
+  it.each(['sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar'])(
+    'approves the understood %s placement without changing an existing entry token', position => {
+      const old = { id: 'legacy', title: 'Open', position: 'composer.toolbar', tool: 'help' };
+      const entry = { id: 'extension', title: 'Extension', position,
+        ...(position === 'settings.section' ? { view: 'settings' } : { tool: 'help' }),
+        ...(position === 'composer.completion' ? { trigger: '@' as const } : {}) };
+      const host = { views: [{ id: 'settings', title: 'Settings', resourceUri: 'ui://planner' }], contributions: [old, entry] };
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+      expect(hostUiApprovalSubjects(host).find(subject => subject.key === 'contribution:extension')).toBeDefined();
+      expect(hostUiApprovalSubjects(host).find(subject => subject.key === 'contribution:legacy')).toEqual({
+        key: 'contribution:legacy', detail: '{"position":"composer.toolbar","kind":"button","tool":"help"}',
+      });
+    },
+  );
+  it('validates registered settings and approves their schema independently of translated labels/defaults', () => {
+    const field = { id: 'enabled', title: 'Enabled', type: 'boolean' as const, default: false };
+    const host = { settings: [field] };
+    const validate = (settings: unknown) => validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: { settings } } });
+    expect(validate([field]).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'setting:enabled' }));
+    expect(hostUiApprovalSubjects(host)).toEqual(hostUiApprovalSubjects({ settings: [{ ...field, title: 'Changed', default: true }] }));
+    for (const settings of [[{ ...field, default: 'false' }], [field, field], [{ ...field, id: '__proto__' }],
+      [{ id: 'count', title: 'Count', type: 'number', default: 10, min: 20 }]]) expect(validate(settings).ok).toBe(false);
+  });
+  it('rejects a completion view, missing trigger and a task-scoped settings page', () => {
+    for (const host of [
+      { contributions: [{ id: 'complete', title: 'Complete', position: 'composer.completion', tool: 'help' }] },
+      { views: [{ id: 'page', title: 'Page', resourceUri: 'ui://planner' }],
+        contributions: [{ id: 'complete', title: 'Complete', position: 'composer.completion', view: 'page', trigger: '@' }] },
+      { views: [{ id: 'page', title: 'Page', resourceUri: 'ui://planner', scope: 'task' }],
+        contributions: [{ id: 'settings', title: 'Settings', position: 'settings.section', view: 'page' }] },
+    ]) expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
+  // B: processing user-added files is separately approved; a sidebar section
+  // must reference a declared view, with no native list/layout registry (unit).
+  it('approves attachment matching and a sidebar view as distinct contributions', () => {
+    const host = { views: [{ id: 'section', title: 'Section', resourceUri: 'ui://planner' }], contributions: [
+      { id: 'files', title: 'Parse files', position: 'composer.attachment', tool: 'help', accept: { extensions: ['.pdf'], mimeTypes: ['image/*'] } },
+      { id: 'section', title: 'Section', position: 'sidebar.section', view: 'section' },
+    ] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toContain('contribution:files');
+    expect(hostUiApprovalSubjects(host).find(subject => subject.key === 'contribution:files')?.detail).toContain('image/*');
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toContain('contribution:section');
+  });
+  it('validates appearance resource declarations and grants only known fields', () => {
+    const host = { capabilities: ['appearance', 'app-icon'], appearance: { fields: ['bodyFont', 'appIcon', 'future-field'],
+      resources: [{ id: 'font', kind: 'font' as const, path: 'assets/font.woff2' }] } };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toEqual([
+      'capability:appearance', 'appearance:bodyFont', 'appearance-resource:font',
+    ]);
+    for (const path of ['../font.woff2', '/font.woff2', 'assets/../../font.woff2']) {
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...host, appearance: { ...host.appearance, resources: [{ id: 'font', kind: 'font', path }] } },
+      } }).ok).toBe(false);
+    }
+  });
+  it('requires renewed approval to present a view in an entry popover', () => {
+    const entry = { id: 'open', title: 'Open', position: 'composer.toolbar', view: 'board' };
+    const host = { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://planner' }], contributions: [entry] };
+    const popup = { ...host, contributions: [{ ...entry, presentation: 'popover' as const }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: popup } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(popup)).not.toEqual(hostUiApprovalSubjects(host));
+    for (const position of ['message.menu', 'message.body', 'tool.body'])
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...popup, contributions: [{ ...popup.contributions[0], position }] },
+      } }).ok).toBe(false);
+  });
+  it.each([
+    { kind: 'status' },
+    { kind: 'select', tool: 'help', options: [{ label: 'Help', value: 'help' }] },
+  ])('rejects a non-action message menu declaration: %j', declaration => {
+    const host = { contributions: [{ id: 'help-menu', title: 'Help', position: 'message.menu', ...declaration }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
+  it.each([
+    { views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://missing', scope: 'global' }] },
+    { views: [{ id: '../escape', title: 'Workspace', resourceUri: 'ui://planner', scope: 'global' }] },
+    { contributions: [{ id: 'open', title: 'Open', position: 'composer.toolbar', view: 'missing' }] },
+    { contributions: [{ id: 'open', title: 'Open', position: 'message.body', tool: 'help' }] },
+    { contributions: [{ id: 'one', title: 'One', position: 'composer.toolbar', tool: 'missing' }] },
+    { capabilities: ['context', 'context'] },
+  ])('rejects invalid host UI authority: %j', host => {
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
   it.each([
     { resources: [{
             uri: "ui://planner",
@@ -2129,6 +2286,14 @@ it('keeps a liveScreen declaration as a granted capability only in v3', () => {
   // Without a node worker the declaration could never run: refuse it at install.
   const { node: _node, ...withoutNode } = base;
   expect(validateGhostManifest({ ...withoutNode, liveScreen: true }).ok).toBe(false);
+  // A task page may also serve tasks on another computer, only for a live screen plugin.
+  const taskView = { html: 'task.html', remote: true };
+  const remote = validateGhostManifest({ ...base, liveScreen: true, taskView });
+  expect(remote.ok && remote.manifest.taskView).toEqual(taskView);
+  expect(validateGhostManifest({ ...base, taskView }).ok).toBe(false);
+  expect(
+    validateGhostManifest({ ...base, liveScreen: true, taskView: { ...taskView, remote: 1 } }).ok,
+  ).toBe(false);
 });
 
 describe('tool approval declaration', () => {

@@ -131,6 +131,16 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
 const PICK = { action: 'pick', sessionId: 's1', providerId: 'anthropic', agentKind: 'claude-code', model: 'opus', exclude: ['local'] };
 
 describe('provider-group:remote', () => {
+  // Unit/protocol, §6.2：手机/远控写任务所在电脑；未装配与坏请求不可伪报成功。
+  it('saves a task balancing preference on its host and rejects invalid requests', async () => {
+    const rebalancePreference = vi.fn(async () => true);
+    const d = deps({ rebalancePreference });
+    const request = { action: 'rebalance-preference', sessionId: 's1', enabled: false };
+    expect(await handleProviderGroupRemote(d, 'laptop', request)).toEqual({ ok: true });
+    expect(rebalancePreference).toHaveBeenCalledWith('s1', false);
+    expect(await handleProviderGroupRemote(deps(), 'laptop', request)).toEqual({ ok: false });
+    await expect(handleProviderGroupRemote(d, 'laptop', { ...request, enabled: 'false' })).rejects.toThrow('invalid enabled');
+  });
   it('prepares continuity only after the original Fast binding and preserves a legacy pick without an optional acknowledgement', async () => {
     const order: string[] = [];
     const d = deps({ bindFastPolicy: async () => { order.push('fast'); }, prepareContinuity: async () => {

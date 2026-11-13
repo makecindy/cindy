@@ -32,8 +32,10 @@ import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import { copySessionContextWindowBudget, pruneSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
+import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
 import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
+import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 import {
   type ClaudeTranscriptAnchorIndex,
   loadClaudeTranscriptAnchorIndex,
@@ -834,7 +836,9 @@ export async function forkSessionAtMessage(
   messageClientId: string,
   options: { sideChat?: boolean } = {},
 ): Promise<Session> {
-  const db = getDbClient().drizzle;
+  await assertTaskActionCurrent();
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
 
   // 1. 读 source session
   const [source] = await db
@@ -961,6 +965,7 @@ export async function forkSessionAtMessage(
     claudeAnchorIndex = forkSource.agentDeviceId ? null : await loadClaudeTranscriptAnchorIndex({
       sdkSessionId: forkSource.sdkSessionId,
       workingDir: source.workingDir,
+      claudeConfigDir: readBoundClaudeConfigDir(forkSource.sdkSessionId),
     }).catch(() => null);
     assistantUuid = resolveClaudeAssistantAnchor(
       sourceMessages,
@@ -990,6 +995,7 @@ export async function forkSessionAtMessage(
   // assistant 锚点：保留 pending handoff、让新会话首次发送时 lazy-create 即可。
   const newTitle = source.title.startsWith('[Fork') ? source.title : `[Fork] ${source.title}`;
   const newSessionId = createBusinessSessionId();
+  await assertTaskActionCurrent();
   let newSdkSessionId: string | null = null;
   let uuidMap = new Map<string, string>();
   let initialContextTokens: number | undefined;
@@ -1006,7 +1012,8 @@ export async function forkSessionAtMessage(
     const sourceSdkSessionId = forkSource.sdkSessionId;
     const forkOptions = {
       sourceSdkSessionId,
-      ...(isCodex ? { model: forkSource.model, providerId: forkSource.providerId } : {}),
+      model: forkSource.model,
+      providerId: forkSource.providerId,
       upToMessageId: assistantUuid,
       ...(lastTurnId ? { lastTurnId } : {}),
       ...(forkAtTimestampMs !== undefined ? { forkAtTimestampMs } : {}),
@@ -1098,9 +1105,10 @@ export async function forkSessionAtMessage(
   // 写在事务**之前**：写失败时调用方拿到的失败与「任务还没建出来」是一致的
   // （否则 DB 已提交、调用方却认为整体失败，会留下一个“报了错但存在”的任务）；
   // 事务失败则把刚写的条目撤掉，不留指向不存在任务的孤儿条目。
+  await assertTaskActionCurrent();
   const inheritedBudget = copySessionContextWindowBudget(sourceSessionId, newSessionId);
   try {
-    await getDbClient().tx('fork.session', {
+    await dbClient.tx('fork.session', {
       sourceSessionId,
       sourceClearedAt: source.clearedAt,
       targetCreatedAt: copyBoundary.createdAt,
@@ -1171,6 +1179,7 @@ export async function forkSessionAtMessage(
     throw new Error('Fork session 创建后查询失败');
   }
   if (!needsHistoryRecovery && !forkSource.reuseVendorSession && forkSource.rebuildReason) {
+    await assertTaskActionCurrent();
     await seedForkHandoffAfterSameEngineRebuild({
       sessionId: newSessionId,
       rows: sourceMessages,

@@ -1,6 +1,6 @@
 /** Isolated test adapter: a shared group's settings drawer, seen as its owner, an admin or a member. */
-import { useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { ctx, forbid, mountPage, subscription } from '../../ui-page/harness';
 import { BotGroupSettingsDrawer } from '../../../src/renderer/features/bots/BotGroupSettingsDrawer';
 import { BOT_GROUP_SETTINGS_PARAM } from '../../../src/renderer/features/bots/botGroupPresentation';
@@ -16,6 +16,8 @@ interface Data {
   noAbout?: boolean;
   /** Teammates of yours that are not in the group yet, offered by 邀请伙伴. */
   spare?: number;
+  /** A server with the group's own Cindy (bot-group-chat.md §9): on, or switched off. */
+  assistant?: 'on' | 'off';
 }
 
 const data = ctx.data as unknown as Data;
@@ -38,12 +40,16 @@ const members = data.alone ? [me] : [
   teammate('aster', 'Aster', true, { guestAccess: 'tools' }),
   teammate('pico', 'Pico', true, { status: 'paused' }),
   teammate('nova', 'Nova', false),
+  ...(data.assistant ? [{ actorId: 'group-cindy', botId: 'group-cindy', actorKind: 'bot', assistant: true, name: 'Cindy', displayName: 'Cindy',
+    role: 'member', isOwned: false, avatar: 'cindy://avatar/preset/cindy', avatarColor: 'violet', status: 'active', avatarUrl: null }] : []),
 ];
 const group = {
   id: groupId, name: 'Cindy 发布小组', serverBacked: true, revision: 3, selfActorId: 'me',
   topic: data.noAbout ? '' : '周四发版前收口 Android 更新卡与伙伴群聊',
   description: data.noAbout ? '' : '这里讨论每周发版：确认要合并的 PR、跑完回归、整理更新说明。\n\n需要谁处理就直接 @ 他；不确定的事情先发在群里，别私下拍板。\n发版当天由负责人统一确认，其他人只补充事实。\n周五回顾这一周的问题。',
-  replyMode: 'mentioned', speakingMode: 'auto', singleSpeaker: false, members,
+  replyMode: data.assistant ? 'all' : 'mentioned', speakingMode: 'auto', singleSpeaker: !!data.assistant, members,
+  ...(data.assistant ? { supportsGroupAssistant: true, assistantEnabled: data.assistant === 'on', supportsGroupProject: true,
+    project: { kind: 'github', repo: 'makecindy/cindy' } } : {}),
   organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
   supportsMentionAudiences: true, allowMentionAllBots: true,
   supportsDissolve: true, supportsGroupLeave: true, supportsListRemoval: true, supportsMemberAvatar: true,
@@ -76,6 +82,8 @@ void mountPage({
 
 /** The drawer is route-owned: open it the way the header button does. */
 function OpenSettings() {
+  const location = useLocation();
+  const [backgroundClicks, setBackgroundClicks] = useState(0);
   const [, setSearchParams] = useSearchParams();
   // The drawer reads the shared group list, which the sidebar normally loads. Open it once:
   // setSearchParams changes with every page the drawer opens.
@@ -86,5 +94,13 @@ function OpenSettings() {
     refreshBotGroups();
     setSearchParams({ [BOT_GROUP_SETTINGS_PARAM]: '1' }, { replace: true });
   }, [setSearchParams]);
-  return <BotGroupSettingsDrawer />;
+  return <>
+    <button type="button" data-testid="reopen-settings"
+      onClick={() => setSearchParams({ [BOT_GROUP_SETTINGS_PARAM]: '1' }, { replace: true })}>群设置</button>
+    <button type="button" data-testid="background-action" className="fixed left-8 top-80 h-12 w-40"
+      onClick={() => setBackgroundClicks(value => value + 1)}>背景操作 {backgroundClicks}</button>
+    <output data-testid="settings-route" hidden>{location.search}</output>
+    <output data-testid="background-clicks" hidden>{backgroundClicks}</output>
+    <BotGroupSettingsDrawer />
+  </>;
 }

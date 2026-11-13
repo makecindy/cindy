@@ -12,6 +12,7 @@
  */
 
 /** 结构化错误码 —— renderer 按 `providerError.<code>` 取 i18n 文案。 */
+import { isContextOverflowErrorMessage } from '@cindy/maker-shared/context-overflow-error';
 import {
   matchesDeterministicUsageExhaustionText,
   redactSensitiveText,
@@ -80,9 +81,6 @@ const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ABORT_ERR', 'TimeoutError', 'AbortE
  *  litellm "Invalid model name"、通用 "model_not_found"。 */
 const MODEL_NOT_FOUND_RE =
   /model[^\n]{0,80}(not.{0,4}(found|exist)|does not exist|invalid|unknown|unsupported)|model_not_found|invalid model/i;
-/** 上下文超长：Anthropic "prompt is too long"、OpenAI "maximum context length"、通用 token limit 措辞。 */
-const CONTEXT_TOO_LONG_RE =
-  /prompt is too long|maximum (?:context|prompt) length|context.{0,20}(length|window).{0,40}(exceed|too)|context_length_exceeded/i;
 /** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
@@ -153,7 +151,7 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   }
   if (status === 400 || status === 422) {
     if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
-    if (CONTEXT_TOO_LONG_RE.test(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
+    if (isContextOverflowErrorMessage(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
     if (matchesDeterministicUsageExhaustionText(body)) {
       return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
     }

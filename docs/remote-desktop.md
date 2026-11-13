@@ -1,5 +1,24 @@
 # Remote desktop
 
+## Hidden capture/data host diagnostics
+
+`Desktop capture` is the hidden host used by desktop capture, files, direct peers,
+and recording. Its presence does not by itself mean a screen is being captured.
+App activation must target the registered main window, never the first entry from
+`BrowserWindow.getAllWindows()`. Provider-share receipt only queues the approval
+UI/notification; clicking the notification or opening an invitation activates main.
+
+For an unexpectedly visible host, local `main-*.log` entries under
+`desktop-capture:window` identify its mode, window ID/native handle and bounds.
+`js-call` entries include sanitized source positions for visibility/focus calls;
+`native-event` entries report Electron events and do **not** claim an originating
+call stack. A per-window budget caps these records at 32 plus a limit notice.
+Correlate them with `provider-share` approval receipt and notification lifecycle
+records (local sequence, `show` versus `click`) to investigate no-click reports.
+These diagnostics omit notification text, share links, credentials and absolute
+stack paths, and do not expand the log-upload allowlist. They observe visibility
+without hiding or destroying a host that may carry an active connection.
+
 ## Idle protection
 
 Desktop and Mobile expose **Disconnect and lock when idle** in the remote desktop
@@ -29,6 +48,59 @@ locks the protected lease. A transient
 media reconnect preserves the live host lease and its idle deadline until resume;
 failed recovery reaches heartbeat expiry instead of renewing the idle budget.
 Only this desktop lease ends: other Device Link tasks and channels remain intact.
+
+## Keep working while away (macOS, 2026-11-06)
+
+Settings → App behavior → **Keep working while away** (macOS 14+, default off) reuses
+the privacy masks without a remote viewer. While it is on, Main holds
+`prevent-display-sleep` whether or not anything is running (the way a playing video
+does), so the display never idle-sleeps into the lock screen and a task sent later from
+a phone still finds a usable desktop. Real display sleep is not offered: macOS stops
+compositing windows for screenshots while the display is off, which would blind the
+Agent. When the owner has been away for the chosen time (30 s, 1, 2 or 5 minutes), or
+by default the system's own display-sleep time (`pmset` `displaysleep`, or an earlier
+screen saver; 10 minutes when both are Never), every display
+gets a black mask whose status line fades out after six seconds, so the screen reads as
+off; Agents keep working behind it: masks ignore mouse events and the
+`--away-guard` helper passes injected input. Owner absence is the HID idle time minus
+`cindy_computer`'s own dispatch, so Agent clicks never count as the owner.
+
+The helper consumes all physical input; only a deliberate press (key down, mouse
+button down, a modifier going down, or a real scroll of 30+ points within a second)
+turns into the fixed system lock shortcut. Releases, pointer drift, Caps Lock and stray
+scroll ticks are swallowed without locking, because idle mice, wireless receivers and
+some keypads emit them on their own (`AwayInputGate`). The owner unlocks with
+Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
+is up. Covering every Space briefly makes Electron a background app, so Main brings the
+Cindy window that was focused back to the front after unlock. Away masks are
+non-activating panels that skip Electron's Dock-hiding process transform (it left Cindy
+a background-only app), and they are 99% opaque: a fully opaque full-screen window makes
+macOS mark the windows behind as occluded and Electron apps stop painting, so an Agent
+read stale screenshots even though its clicks landed. Settings → "Try it" covers the
+displays three seconds after the click; touching locks as usual, and an untouched
+preview uncovers after two minutes without locking (the owner was just using the Mac). It also locks on
+stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a locked
+screen rather than an uncovered desktop. Main locks before removing masks when the
+setting is turned off, a display is added (including while the masks are still going
+up), or a mask window fails, and removes them only once the lock is confirmed. If it
+cannot lock (e.g. Accessibility was revoked), the masks stay up with a "press
+Control-Command-Q" note, the display assertion is released and the masks go when macOS
+locks. Agent input skips the person-at-the-Mac check only after every mask is up and
+the helper is consuming physical input. Remote desktop sessions do not end the cover:
+the remote viewer captures through it, and a session alone (view-only, plugin screens)
+does not prove anyone protects this screen. An already-locked screen just drops the masks. A Cindy started on a locked screen reads
+the lock from the console session (`ioreg`), because Electron's idle-state probe never
+reports `locked` on macOS and the guard would otherwise keep the display on behind it.
+
+Fail-safe direction: missing Accessibility for the input helper, masks that cannot
+start, or an unreadable idle time release the display assertion, so macOS sleeps and
+locks exactly as it would without Cindy; mask setup is not retried for 60 seconds.
+After the owner unlocks, absence is measured from the unlock, so the screen is never
+covered again immediately after an unlock (Codex Locked use regression). Nothing
+in this path unlocks the screen, edits authorization rules or stores a password; a
+screen that was already locked when the setting was turned on stays locked. Logic lives in
+`apps/desktop/src/main/remote-desktop/awayGuard.ts` (unit-tested state machine) and
+`awayGuardService.ts`; shared-userData passive instances do not run it.
 
 ## Desktop viewer
 
@@ -170,7 +242,10 @@ rebinding to a different owner or target does not wait on that old barrier.
 The window reuses the existing resource-usage auxiliary-window controller and
 factory for hidden prewarming, two-phase readiness, hide/reuse and bounded crash
 recovery. Prewarming loads only the shell and never connects to or captures a
-computer. Closing/minimizing retires its lease, clears pixels and stops polling;
+computer. It is skipped unless the session can use device-link or the saved
+session mode is `cloud` (auth may still be verifying at startup), so local and
+signed-out profiles keep no spare viewer; after a later sign-in the first viewer
+opens cold. Closing/minimizing retires its lease, clears pixels and stops polling;
 ordinary focus loss releases held input while retaining viewing. A crashed or
 automatically restored viewer uses `resume`, preserving a host's explicit stop.
 An account boundary destroys the viewer windows. The host's single-viewer lease
@@ -545,7 +620,18 @@ On macOS, a drag without `delivery_mode` uses `background` when the driver
 advertises that parameter. A background refusal is returned without an automatic
 foreground retry. Explicit `foreground` remains available, but agents must
 coordinate desktop use with the person before requesting it. Legacy drivers
-without the parameter retain their native behavior. Background delivery itself
+without the parameter retain their native behavior. Before each foreground
+primitive (including each text chunk), Cindy requires at least three seconds of
+system input inactivity, or its existing active away-cover input shield. It does
+not subtract Agent input from that clock: a person moving the mouse during or
+just after a CUA action is indistinguishable from synthetic input. A failed or
+invalid idle probe also refuses foreground delivery with `USER_INPUT_ACTIVE`;
+background operations remain available. This can pause consecutive foreground
+actions or stop typing after a completed prefix; it never automatically replays
+that prefix. Presence detection retains its separate Agent-event heuristic.
+This is a dispatch-boundary guard, not native cancellation: an action already
+inside CUA may finish, and physical input during that action cannot yet stop it.
+Background delivery itself
 does not guarantee focus isolation: the driver may temporarily change application
 or window focus. Cindy does not currently verify restoration of the original
 focused window or text field, and does not force focus back after an action.
@@ -648,7 +734,7 @@ phone/network latency benchmark or a guarantee of 30/60 fps. Desktop types,
 related unit tests and native memory/bounds checks pass. Phone-side smoothness
 and packaged Linux startup still require validation.
 
-Other Linux Wayland environments (including XWayland applications) expose
+Other Linux Wayland environments expose
 one portal-selected surface. Electron's PipeWire source is not a physical monitor
 enumeration and may have an empty `display_id`; see the
 [Electron Linux caveat](https://www.electronjs.org/docs/latest/api/desktop-capturer#linux)
@@ -656,6 +742,18 @@ and [source contract](https://www.electronjs.org/docs/latest/api/structures/desk
 The host advertises one view-only display slot. Its initial 1280×720 geometry is a
 viewport placeholder; video/JPEG dimensions describe the selected surface. The
 existing viewer fallback supplies its localized display name.
+
+That path needs Electron itself on Wayland. Electron picks Ozone Wayland only when
+`XDG_SESSION_TYPE=wayland`, and `--ozone-platform` overrides that choice. Started
+from a shell without that variable inside a Wayland compositor, Cindy runs on XWayland.
+Capture then reads XWayland's root window, which holds no desktop pixels: viewers
+see a black screen with only the pointer and no portal request is made (#9712).
+Hyprland's native capture does not depend on Electron's backend. Otherwise, on the
+first video offer of each run, the host logs one `remote-desktop:display-backend`
+warning listing the Wayland signals it saw (`XDG_SESSION_TYPE=wayland`,
+`WAYLAND_DISPLAY` set, a `wayland-N` socket in the runtime directory). That exact
+scope is in the log-upload allowlist. The UI does not show this state, and the
+supported compositors are unchanged.
 
 A lease creates one isolated capture window and starts one system picker. Local
 consent may take up to two minutes, independently of each bounded video RPC.

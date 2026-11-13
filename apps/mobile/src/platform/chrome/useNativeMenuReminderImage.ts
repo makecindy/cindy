@@ -18,6 +18,7 @@ export function useNativeMenuReminderImage(enabled: boolean): string | undefined
       ]);
       if (disposed) return;
       const source = Image.resolveAssetSource(require('../../../assets/navigation/filter-reminder.png'));
+      if (!source) return;
       const context = ImageManipulator.manipulate(source.uri);
       let image: Awaited<ReturnType<typeof context.renderAsync>> | undefined;
       try {

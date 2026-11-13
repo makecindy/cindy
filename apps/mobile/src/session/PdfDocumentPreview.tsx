@@ -5,9 +5,6 @@ import { File } from "expo-file-system";
 import {
   ChevronLeft,
   ChevronRight,
-  Maximize,
-  Minus,
-  Plus,
   Search,
 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -20,7 +17,7 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
-import { PreviewGlass, PreviewIconButton } from "./PreviewChrome";
+import { PreviewGlassGroup, PreviewIconButton, PreviewToolLabel } from "./PreviewChrome";
 import { preparePdfPreviewSource } from "./pdfPreviewSource";
 import { buildPdfWebViewHtml } from "./pdfWebViewHtml";
 
@@ -190,6 +187,7 @@ export function PdfDocumentPreview({ uri }: { uri: string }) {
           />
           <PreviewIconButton
             icon={Search}
+            systemImage="magnifyingglass"
             label={t("message.attachmentPreview.find")}
             onPress={() => command({ type: "find", value: query })}
           />
@@ -203,50 +201,33 @@ export function PdfDocumentPreview({ uri }: { uri: string }) {
       {status.pages > 0 && !failure ? (
         <View style={styles.toolRow}>
           {status.pages > 1 ? (
-          <PreviewGlass>
+          <PreviewGlassGroup>
             <PreviewIconButton
               icon={ChevronLeft}
+              systemImage="chevron.left"
               label={t("message.attachmentPreview.previousPage")}
               disabled={status.page <= 1}
               onPress={() => command({ type: "page", value: status.page - 1 })}
             />
-            <Text style={styles.meta}>
-              {status.page} / {status.pages}
-            </Text>
+            <PreviewToolLabel text={`${status.page} / ${status.pages}`} />
             <PreviewIconButton
               icon={ChevronRight}
+              systemImage="chevron.right"
               label={t("message.attachmentPreview.nextPage")}
               disabled={status.page >= status.pages}
               onPress={() => command({ type: "page", value: status.page + 1 })}
             />
-          </PreviewGlass>
+          </PreviewGlassGroup>
           ) : null}
-          <PreviewGlass>
-            <PreviewIconButton
-              icon={Minus}
-              label={t("message.attachmentPreview.zoomOut")}
-              onPress={() =>
-                command({ type: "zoom", value: status.zoom / 1.25 })
-              }
-            />
-            <PreviewIconButton
-              icon={Maximize}
-              label={t("message.attachmentPreview.fit")}
-              onPress={() => command({ type: "zoom", value: 1 })}
-            />
-            <PreviewIconButton
-              icon={Plus}
-              label={t("message.attachmentPreview.zoomIn")}
-              onPress={() =>
-                command({ type: "zoom", value: status.zoom * 1.25 })
-              }
-            />
+          {/* 缩放靠捏合与双击(阅读器按新倍率重新绘制,不发糊),手机不放缩放按钮。 */}
+          <PreviewGlassGroup>
             <PreviewIconButton
               icon={Search}
+              systemImage="magnifyingglass"
               label={t("message.attachmentPreview.find")}
               onPress={() => setFind((value) => !value)}
             />
-          </PreviewGlass>
+          </PreviewGlassGroup>
         </View>
       ) : null}
     </View>

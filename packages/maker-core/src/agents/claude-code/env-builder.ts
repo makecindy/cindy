@@ -12,7 +12,7 @@
  * Anthropic,host 不接管连接,见 ClaudeEnvBuildOptions.nativeCliAuth。
  */
 
-import type { AgentCredentialMode, AuthAdapter } from '../../interfaces/auth-adapter.js';
+import type { AgentCredentialMode, AuthAdapter, NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type { AgentRuntimeConfig } from '../../interfaces/runtime-config.js';
 import { applyPlainTextTerminalEnv } from '../shared/terminal-output.js';
 
@@ -31,6 +31,7 @@ interface ModelContextWindowSource {
 }
 
 interface ClaudeEnvBuildOptions {
+  nativeSubscriptionAccount?: NativeSubscriptionAccount;
   /**
    * Host-provided model context windows for provider-routed models.
    *
@@ -128,6 +129,7 @@ function serializeModelContextWindows(
  * - header 注入 (CUSTOM_HEADERS — 可塞 Authorization 直接覆盖 key)
  * - provider 切换 (Vertex / Bedrock / Foundry — 走另一套体系)
  * - 配置目录重定向 (CLAUDE_CONFIG_DIR — 让 CC 去读别处的 .credentials.json)
+ * - 凭证库定位 (CLAUDE_SECURESTORAGE_CONFIG_DIR — 让 CC 去读另一条钥匙串登录)
  *
  * 任何 host (desktop / 未来 server / CI) 都应该:
  * - boot 阶段调用 stripSensitiveAnthropicEnv() 清根上的 process.env (主防线)
@@ -161,6 +163,10 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'ANTHROPIC_FOUNDRY_RESOURCE',
   // 配置目录重定向
   'CLAUDE_CONFIG_DIR',
+  // 凭证库定位:CLI 用它(而不是 CLAUDE_CONFIG_DIR)算钥匙串条目名。设了就盖过配置目录,
+  // 设成空串还会回到默认条目 —— 继承残留会让「供应商内订阅账号」的会话读到默认登录,
+  // 或让默认账号读到别人的登录。Cindy 从不写它。
+  'CLAUDE_SECURESTORAGE_CONFIG_DIR',
   // host 接管标记:非订阅会话由 buildClaudeEnv 显式写 '1';继承来的残留(终端里的 cc
   // 会话跑 dev)会让订阅会话的 CLI 不读自己的登录凭证,而 SDK merge 只能覆盖、删不掉。
   'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
@@ -477,7 +483,11 @@ export async function buildClaudeEnv(
     : options.authModel
       ? { model: options.authModel }
       : undefined;
-  const authEnv = { ...(await auth.getAuthEnv(authOptions)) };
+  const authEnv = { ...(await auth.getAuthEnv({
+    ...authOptions,
+    ...(mode === 'local' && nativeCliAuth && options.nativeSubscriptionAccount
+      ? { nativeSubscriptionAccount: options.nativeSubscriptionAccount } : {}),
+  })) };
   if (mode === 'remote') {
     // CLAUDE_CONFIG_DIR is a host-local path. If an auth adapter injects one
     // (older Desktop dev sandboxes used a userData path), forwarding that
@@ -568,15 +578,12 @@ export async function buildClaudeEnv(
     )?.contextWindow;
   applyClaudeContextWindow(env, activeContextWindow, runtimeConfig.autoCompactThresholdPct);
 
-  // 关掉 CC SDK 内部的遥测 / 错误上报 / OTEL metrics export。
-  // 我们走自家 compat proxy + xd.inc token, 这些字段都是直打 api.anthropic.com 的
-  // 官方 endpoint, 必然 401 (token 不被认), 只产生日志噪音不影响功能。
-  // 关闭后这三类后台请求都不会发起:
-  //  - DISABLE_TELEMETRY=1       : metrics_enabled / claude_code/metrics 上报
-  //  - DISABLE_ERROR_REPORTING=1 : Sentry 类自动错误样本
-  //  - OTEL_SDK_DISABLED=true    : PeriodicExportingMetricReader 周期导出
-  // 用户 env 没显式覆盖才注入 (留个手动开 telemetry 排 SDK bug 的口子)。
-  if (env.DISABLE_TELEMETRY === undefined) env.DISABLE_TELEMETRY = '1';
+  // 网关凭证不适用于 Anthropic 遥测端点，非原生订阅继续默认关闭遥测。
+  // DISABLE_TELEMETRY 同时关闭 feature-flag 获取，连带让 supportedModels 回退到
+  // 旧清单（2.1.321 会漏掉 Fable 5.2）。原生订阅会话和发现探针都保留 CLI 默认值；
+  // 用户显式设置仍原样传递，不通过删除或改成 '0' 绕过其选择。
+  if (!nativeCliAuth && env.DISABLE_TELEMETRY === undefined) env.DISABLE_TELEMETRY = '1';
+  // 错误上报及 OTEL 周期导出独立于模型发现，继续默认关闭，显式设置优先。
   if (env.DISABLE_ERROR_REPORTING === undefined) env.DISABLE_ERROR_REPORTING = '1';
   if (env.OTEL_SDK_DISABLED === undefined) env.OTEL_SDK_DISABLED = 'true';
 

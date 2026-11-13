@@ -3,7 +3,7 @@ import {
   REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
   resolveDesktopIceServers,
 } from '@cindy/device-link';
-import { deviceLinkApiFetch } from '../device-link/deviceLinkApi.js';
+import { deviceLinkApiFetch } from '../device-link/deviceLinkApi.desktop.js';
 
 export function loadDesktopIceServers() {
   return resolveDesktopIceServers(() =>

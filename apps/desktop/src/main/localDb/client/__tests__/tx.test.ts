@@ -1,3 +1,5 @@
+import { createViewStateStorage, reconcileDeletedTaskViewState } from '../../../mcp-apps/viewStateStore.js';
+import { viewStateSnapshot } from '../../../mcp-apps/viewState.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +16,13 @@ import { createDbClient } from '../DbClient.js';
 import type { SkillUsageApplyMutationArgs } from '../tx/types.js';
 
 const INIT_SQL = `
+CREATE TABLE mcp_app_view_states (
+  message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+  state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
+);
+
 CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE migration_history (
   seq INTEGER PRIMARY KEY,
@@ -273,6 +282,109 @@ describe('db worker tx handlers', () => {
       await client.exec('UPDATE sessions SET cleared_at=? WHERE id=?', [100, 'authority']);
       expect((await client.tx('authorization.readProjection', { sessionId: 'authority', leadId: 'authority' })).sessionIntent).toBe('');
     }, { useInlineWorker, authorityProjection: true });
+  });
+  // DB tier: new private state contract requires durable commit, quota and card/owner isolation.
+  // Existing tx tests exercise messages but cannot detect state overwrites or cross-account restoration.
+  it.each([false, true])('persists view state across reopen and validates the card in each transaction (inline=%s)', async useInlineWorker => {
+    await withClient(async (client, reopen) => {
+      await seedSession(client, 'state-task');
+      const binding = { sessionId: 'state-task', clientId: 'card', serverId: 'fixture', serverRevision: 'revision',
+        resourceUri: 'ui://form', toolName: 'form', pluginInstance: null };
+      const content = JSON.stringify({ mcpApp: { version: 1, serverId: 'fixture', serverRevision: 'revision',
+        resourceUri: 'ui://form', tool: { name: 'form', inputSchema: { type: 'object' } }, arguments: {}, result: { content: [] } } });
+      await client.exec("INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES ('state-message', 'card', 'state-task', 'assistant', ?, ?, 10)", [content, JSON.stringify({ mcpApp: true })]);
+      let current = true;
+      const store = createViewStateStorage(client, binding, () => { if (!current) throw Object.assign(new Error('MCP_APP_CARD_UNAVAILABLE'), { code: 'MCP_APP_CARD_UNAVAILABLE' }); });
+      expect(await store.read()).toBeNull();
+      expect(await client.query('SELECT * FROM mcp_app_view_states')).toEqual([]);
+      await store.save(viewStateSnapshot({ version: 1, draft: 'saved' }));
+      const reopened = await reopen();
+      const restored = createViewStateStorage(reopened, binding, () => {});
+      expect(await restored.read()).toEqual({ version: 1, draft: 'saved' });
+      // Late tool-result writes replace content, not state.
+      await reopened.exec('UPDATE messages SET content = ? WHERE id = ?', [content, 'state-message']);
+      expect(await restored.read()).toEqual({ version: 1, draft: 'saved' });
+      for (const statement of ["UPDATE messages SET rewind_at = 11", "UPDATE sessions SET cleared_at = 10", "UPDATE sessions SET status = 'archived'"]) {
+        await reopened.exec(statement);
+        await expect(restored.read()).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
+        await expect(restored.save(viewStateSnapshot({ page: 2 }))).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
+        await reopened.exec('UPDATE messages SET rewind_at = NULL');
+        await reopened.exec("UPDATE sessions SET cleared_at = NULL, status = 'active'");
+      }
+      expect(await restored.read()).toEqual({ version: 1, draft: 'saved' });
+      await expect(createViewStateStorage(reopened, { ...binding, serverRevision: 'other' }, () => {}).read()).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
+      await restored.save(viewStateSnapshot(null));
+      expect(await restored.read()).toBeNull();
+      current = false;
+      await expect(store.read()).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
+      await restored.save(viewStateSnapshot({ page: 1 }));
+      await reopened.exec("UPDATE sessions SET status = 'deleted'");
+      await reconcileDeletedTaskViewState(reopened, () => false);
+      expect((await reopened.query('SELECT * FROM mcp_app_view_states')).length).toBe(1);
+      await reconcileDeletedTaskViewState(reopened, () => true);
+      expect(await reopened.query('SELECT * FROM mcp_app_view_states')).toEqual([]);
+    }, { useInlineWorker });
+  });
+  // DB regression: overwrite import bypassed terminal-status cleanup. Exercise
+  // both worker entries; a failed graph or cleanup must roll back the old drafts.
+  it.each([false, true])('deletes replaced task state atomically during share import (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await client.exec('ALTER TABLE sessions ADD COLUMN worktree_path TEXT');
+      await client.exec('ALTER TABLE sessions ADD COLUMN plan_mode_enabled INTEGER DEFAULT 0');
+      for (const id of ['replaced', 'untouched']) {
+        await seedSession(client, id);
+        await client.exec("INSERT INTO messages (id,client_id,session_id,role,content,created_at) VALUES (?,?,?,'assistant','{}',1)", [id, id, id]);
+        await client.exec("INSERT INTO mcp_app_view_states VALUES (?,?, 'fixture','revision',NULL,?,2)", [id, id, '{}']);
+      }
+      const session = { id: 'imported', title: 'Imported task', workspaceKind: 'project', model: 'fixture',
+        workingDir: null, worktreePath: null, providerId: null, sdkSessionId: null,
+        codexHistoryHasProductPrompt: null, clearedAt: null, userSendAt: null,
+        effort: 'high', permissionMode: 'ask', status: 'active', totalTokenUsage: 0, totalCostUsd: 0,
+        contextTokens: 0, contextWindow: 0, fastMode: false, planModeEnabled: false, agentKind: 'cc',
+        source: 'shared', extraDirs: '[]', createdAt: 10, updatedAt: 10 };
+      const args = { session, messages: [], replaceSessions: [{ id: 'replaced', status: 'active' as const }] };
+      await expect(client.tx('session.importShare', { ...args, session: { ...session, title: 42 } } as never)).rejects.toThrow();
+      expect(await client.query('SELECT session_id FROM mcp_app_view_states ORDER BY session_id'))
+        .toEqual([{ session_id: 'replaced' }, { session_id: 'untouched' }]);
+      await client.exec("CREATE TRIGGER fail_state_delete BEFORE DELETE ON mcp_app_view_states BEGIN SELECT RAISE(ABORT, 'state cleanup failed'); END");
+      await expect(client.tx('session.importShare', args)).rejects.toThrow('state cleanup failed');
+      expect(await client.query("SELECT id, status FROM sessions ORDER BY id"))
+        .toEqual([{ id: 'replaced', status: 'active' }, { id: 'untouched', status: 'active' }]);
+      await client.exec('DROP TRIGGER fail_state_delete');
+      await client.tx('session.importShare', args);
+      expect(await client.query("SELECT status FROM sessions WHERE id='replaced'")).toEqual([{ status: 'deleted' }]);
+      expect(await client.query('SELECT session_id FROM mcp_app_view_states')).toEqual([{ session_id: 'untouched' }]);
+    }, { useInlineWorker });
+  });
+  it.each([false, true])('enforces the task quota atomically and keeps hidden states charged (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'quota');
+      const binding = { sessionId: 'quota', clientId: 'card0', serverId: 'fixture', serverRevision: 'revision',
+        resourceUri: 'ui://form', toolName: 'form', pluginInstance: null };
+      const content = JSON.stringify({ mcpApp: { version: 1, serverId: 'fixture', serverRevision: 'revision', resourceUri: 'ui://form',
+        tool: { name: 'form', inputSchema: { type: 'object' } }, arguments: {} } });
+      const full = viewStateSnapshot({ draft: 'x'.repeat(65524) });
+      for (let i = 0; i < 17; i++) {
+        await client.exec("INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES (?, ?, 'quota', 'assistant', ?, ?, 10)",
+          ['card' + i, 'card' + i, content, JSON.stringify({ mcpApp: true })]);
+        if (i < 16) await createViewStateStorage(client, { ...binding, clientId: 'card' + i }, () => {}).save(full);
+      }
+      const overflow = createViewStateStorage(client, { ...binding, clientId: 'card16' }, () => {});
+      await client.exec("UPDATE messages SET rewind_at = 11 WHERE id = 'card0'");
+      await expect(overflow.save(viewStateSnapshot({ page: 1 }))).rejects.toThrow('CINDY_VIEW_STATE_QUOTA_EXCEEDED');
+      expect((await client.query('SELECT message_id FROM mcp_app_view_states')).length).toBe(16);
+      await client.exec("UPDATE messages SET rewind_at = NULL WHERE id = 'card0'");
+      const first = createViewStateStorage(client, binding, () => {});
+      await client.exec("CREATE TRIGGER fail_state_write BEFORE UPDATE ON mcp_app_view_states BEGIN SELECT RAISE(ABORT, 'fixture write failed'); END");
+      await expect(first.save(viewStateSnapshot({ page: 2 }))).rejects.toThrow('CINDY_VIEW_STATE_STORAGE_UNAVAILABLE');
+      expect(await first.read()).toEqual(JSON.parse(full.json!));
+      await client.exec('DROP TRIGGER fail_state_write');
+      await first.save(viewStateSnapshot(null));
+      await overflow.save(viewStateSnapshot({ page: 1 }));
+      expect(await overflow.read()).toEqual({ page: 1 });
+      await client.exec("DELETE FROM messages WHERE id = 'card16'");
+      expect(await client.query("SELECT * FROM mcp_app_view_states WHERE message_id = 'card16'")).toEqual([]);
+    }, { useInlineWorker });
   });
   beforeAll(async () => {
     workerBundleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-tx-worker-'));
@@ -1723,6 +1835,10 @@ describe('db worker tx handlers', () => {
       await seedSession(client, 'active-child', { source: 'side-chat', parentSessionId: 'parent' });
       await seedSession(client, 'archived-child', { source: 'side-chat', parentSessionId: 'parent', status: 'archived' });
       await seedSession(client, 'ordinary-fork', { parentSessionId: 'parent' });
+      for (const session of ['parent', 'active-child', 'archived-child', 'ordinary-fork']) {
+        await client.exec("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, 'assistant', '{}', 1)", [session, session, session]);
+        await client.exec("INSERT INTO mcp_app_view_states VALUES (?, ?, 'fixture', 'revision', NULL, '{}', 2)", [session, session]);
+      }
       await client.exec(`INSERT INTO shared_task_events (shared_task_id, session_id, revision, kind, terminal, recorded_at)
         VALUES ('parent-share', 'parent', 1, 'authority', 0, 1), ('child-share', 'active-child', 1, 'authority', 0, 1)`);
       await client.exec(`CREATE TRIGGER fail_child_delete BEFORE UPDATE OF status ON sessions
@@ -1734,10 +1850,18 @@ describe('db worker tx handlers', () => {
         { id: 'ordinary-fork', status: 'active' }, { id: 'parent', status: 'active' },
       ]);
       await expect(client.query("SELECT session_id FROM shared_task_events WHERE kind = 'local-close'")).resolves.toEqual([]);
+      expect((await client.query('SELECT message_id FROM mcp_app_view_states')).length).toBe(4);
       await client.exec('DROP TRIGGER fail_child_delete');
+      await client.exec("CREATE TRIGGER fail_view_state_delete BEFORE DELETE ON mcp_app_view_states BEGIN SELECT RAISE(ABORT, 'state cleanup failed'); END");
+      await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'parent', status: 'deleted' })).rejects.toThrow('state cleanup failed');
+      expect(await client.query("SELECT status FROM sessions WHERE id = 'parent'")).toEqual([{ status: 'active' }]);
+      expect((await client.query('SELECT message_id FROM mcp_app_view_states')).length).toBe(4);
+      await client.exec('DROP TRIGGER fail_view_state_delete');
       await client.tx('sessions.setTerminalStatus', { sessionId: 'parent', status: 'archived' });
       await expect(client.query('SELECT status FROM sessions WHERE id = ?', ['active-child'])).resolves.toEqual([{ status: 'active' }]);
+      expect((await client.query('SELECT message_id FROM mcp_app_view_states')).length).toBe(4);
       const result = await client.tx('sessions.setTerminalStatus', { sessionId: 'parent', status: 'deleted' });
+      expect(await client.query('SELECT message_id FROM mcp_app_view_states')).toEqual([{ message_id: 'ordinary-fork' }]);
       expect(result).toMatchObject({ deletedSideChats: expect.arrayContaining([
         expect.objectContaining({ sessionId: 'active-child' }), expect.objectContaining({ sessionId: 'archived-child' }),
       ]) });
@@ -2384,6 +2508,34 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
+  // #10187 / integration: stale resume rejection must not clear a newer runtime,
+  // overwrite preferences, or lose history if inserting the durable handoff fails.
+  it.each([false, true])('context.rebuild conditionally replaces only the rejected SDK id (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 's1', { contextTokens: 42_000 });
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, model = ?, provider_id = ?, effort = ?, fast_mode = ? WHERE id = ?',
+        ['rejected-native', 'current-model', 'current-provider', 'high', 1, 's1']);
+      const args = { sessionId: 's1', markerId: 'recovery', markerClientId: 'recovery',
+        markerContent: JSON.stringify({ reason: 'native-session-recovery', handoff: 'KEEP_HISTORY', consumed: false }),
+        markerCreatedAt: 1000, updatedAt: 1000, expectedSdkSessionId: 'rejected-native', expectedClearedAt: null };
+      for (const changed of [{ expectedSdkSessionId: 'stale-native' }, { expectedClearedAt: 123 }]) {
+        await expect(client.tx('context.rebuild', { ...args, ...changed })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+        expect(await client.query('SELECT id FROM messages WHERE client_id = ?', ['recovery'])).toEqual([]);
+      }
+      await client.exec('UPDATE sessions SET status = ? WHERE id = ?', ['deleted', 's1']);
+      await expect(client.tx('context.rebuild', args)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await client.exec('UPDATE sessions SET status = ? WHERE id = ?', ['active', 's1']);
+      await client.tx('context.rebuild', args);
+      expect(await client.queryOne('SELECT sdk_session_id, model, provider_id, effort, fast_mode, context_tokens FROM sessions WHERE id = ?', ['s1'])).toEqual({
+        sdk_session_id: null, model: 'current-model', provider_id: 'current-provider', effort: 'high', fast_mode: 1, context_tokens: 0,
+      });
+      expect(await client.queryOne('SELECT content FROM messages WHERE client_id = ?', ['recovery'])).toEqual({ content: args.markerContent });
+      await client.exec('UPDATE sessions SET sdk_session_id = ?, context_tokens = ? WHERE id = ?', ['rejected-native', 42_000, 's1']);
+      await expect(client.tx('context.rebuild', args)).rejects.toThrow();
+      expect(await client.queryOne('SELECT sdk_session_id, context_tokens FROM sessions WHERE id = ?', ['s1'])).toEqual({ sdk_session_id: 'rejected-native', context_tokens: 42_000 });
+    }, { useInlineWorker });
+  });
+
   it.each([false, true])('context.rebuild resets usage and appends markers (inline=%s)', async (useInlineWorker) => {
     await withClient(async (client) => {
       await seedSession(client, 's1', { contextTokens: 245_000, contextWindow: 500_000 });
@@ -2480,6 +2632,9 @@ describe('db worker tx handlers', () => {
           'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
           [id, id, 's1', role, JSON.stringify(id), createdAt],
         );
+      }
+      for (const id of ['target', 'thinking', 'after']) {
+        await client.exec("INSERT INTO mcp_app_view_states VALUES (?, 's1', 'fixture', 'revision', NULL, '{}', 2)", [id]);
       }
       const job = await client.exec(
         "INSERT INTO embedding_jobs (source, source_id, model_id, vec_table, scheduled_at) VALUES ('chat', ?, 'test', 'chat_vec', 0)",
@@ -2586,6 +2741,7 @@ describe('db worker tx handlers', () => {
         ],
         subagentRunIds: ['linked', 'parentless-claude', 'parentless-codex', 'parentless-pi'],
       });
+      expect(await client.query('SELECT message_id FROM mcp_app_view_states')).toEqual([{ message_id: 'after' }]);
 
       await expect(
         client.query<{
@@ -3579,6 +3735,55 @@ describe('db worker tx handlers', () => {
       await expect(
         client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['late-worker-link']),
       ).resolves.toBeUndefined();
+    }, { useInlineWorker });
+  });
+
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：orca.reserveWorkerCreation（真实 worker 线程与内联两条实现）；已归档
+   *   Worker 的名字能否被新 Worker 使用，仍在团队里的同名 Worker 是否照旧拒绝。
+   * - Bug 依据：2026-11-10 协同任务，归档五个 Worker 后按原名重建，五个全部 DUPLICATE_LABEL。
+   * - 现有覆盖缺口：相邻用例只验证归档释放名额，没有验证名字。
+   * - 最小失败输入：归档 label 为 done 的 Worker 后，用 DONE 申请创建。
+   * - tier：db（真实 SQLite 事务与唯一索引）。
+   */
+  it.each([false, true])('frees an archived worker label for reuse and keeps active labels unique (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 'lead');
+      await seedSession(client, 'done-worker', { orcaRole: 'worker' });
+      await seedSession(client, 'active-worker', { orcaRole: 'worker' });
+      await client.exec(
+        'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        ['team-1', 'lead', 'active', 1, 1],
+      );
+      for (const [id, sessionId, label] of [['worker-1', 'done-worker', 'done'], ['worker-2', 'active-worker', 'busy']]) {
+        await client.exec(
+          `INSERT INTO orca_workers (
+            id, team_id, session_id, status, label, role, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [id, 'team-1', sessionId, 'done', label, 'tester', 1, 1],
+        );
+      }
+      const reserve = (reservationId: string, label: string) => client.tx('orca.reserveWorkerCreation', {
+        reservationId, teamId: 'team-1', label, hardLimit: 8, now: 100, expiresAt: 200,
+      });
+
+      await expect(reserve('still-active', 'done')).resolves.toEqual({ ok: false, errorCode: 'DUPLICATE_LABEL' });
+
+      await client.exec("UPDATE sessions SET status = 'archived' WHERE id = ?", ['done-worker']);
+      await expect(reserve('reuse', 'DONE')).resolves.toEqual({ ok: true, occupiedSlotsBefore: 1 });
+      await expect(reserve('active-name', 'BUSY')).resolves.toEqual({ ok: false, errorCode: 'DUPLICATE_LABEL' });
+
+      // 归档的记录保留，名字改成带自身 id 的唯一值；新 Worker 以原名落库不再撞唯一索引。
+      await expect(client.query('SELECT id, label FROM orca_workers ORDER BY id')).resolves.toEqual([
+        { id: 'worker-1', label: 'done~worker-1' },
+        { id: 'worker-2', label: 'busy' },
+      ]);
+      await seedSession(client, 'new-worker', { orcaRole: 'worker' });
+      await client.tx('orca.upsertWorker', {
+        id: 'worker-3', teamId: 'team-1', sessionId: 'new-worker', status: 'idle', label: 'done', role: 'tester', focused: false, now: 101,
+      });
+      await expect(client.queryOne('SELECT label FROM orca_workers WHERE id = ?', ['worker-3'])).resolves.toEqual({ label: 'done' });
     }, { useInlineWorker });
   });
 

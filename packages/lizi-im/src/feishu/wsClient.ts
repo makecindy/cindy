@@ -253,7 +253,8 @@ export function setBotOpenIdForTest(openId: string | null): void {
   S().botOpenId = openId;
 }
 
-const FEISHU_CONFLICT_ERROR = '该 App 已被另一台设备占用 (exceed_conn_limit)';
+/** Internal conflict signal; the user-facing reason is `transportMessages.connection.conflict`. */
+const FEISHU_CONFLICT_ERROR = 'exceed_conn_limit';
 
 function isConflictSignal(message: string): boolean {
   const normalized = message.toLowerCase();
@@ -272,7 +273,7 @@ async function transitionToConflict(generation: number, appId: string): Promise<
   }
 
   S().conflictTransitionGeneration = generation;
-  setStatus('conflict', FEISHU_CONFLICT_ERROR);
+  setStatus('conflict', transportMessages.connection.conflict);
   await stop({
     keepStatus: true,
     announceOffline: false,
@@ -375,7 +376,7 @@ function makeCapturingLogger(
         handleReconnectingSignal(activeDetector, generation, appId);
       } else if (msg.includes('unable to connect to the server')) {
         activeDetector.markError(new Error('unable to connect after retries'));
-        setStatus('error', '连接失败：IM 服务无法访问，请检查网络');
+        setStatus('error', transportMessages.connection.unreachable);
       }
     },
     warn: (...args: unknown[]) => {
@@ -391,8 +392,8 @@ function makeCapturingLogger(
         return;
       }
       if (msg.includes('code: 514')) {
-        activeDetector.markError(new Error('App ID / App Secret 不正确（auth_failed）'));
-        setStatus('error', 'App ID 或 App Secret 不正确');
+        activeDetector.markError(new Error(transportMessages.connection.authFailedDetail));
+        setStatus('error', transportMessages.connection.authFailed);
       }
     },
   };
@@ -926,8 +927,8 @@ async function processClaimedMessage(
       }
     }
 
-    // whitelist gate(对外开放的实例放行非主人私聊, 下面带非主人标记进业务层)。
-    if (!ownerGuard.check(senderOpenId) && !getScope().guests) {
+    // 群成员准入不授予私聊权限。所有实例都在解析内容、下载附件和派发前验主人。
+    if (!ownerGuard.check(senderOpenId)) {
       log.warn(`[feishu/wsClient] drop non-whitelisted sender ...${senderOpenId.slice(-8)}`);
       return;
     }
@@ -976,6 +977,18 @@ async function processClaimedMessage(
     isGroup && data.message?.mentions && selfOpenId
       ? resolveMentionPlaceholders(parsed.text, data.message.mentions, selfOpenId)
       : parsed.text;
+
+  // 直接转发的第三方/模板卡片抽不出正文。引用解析必须继续留空(群历史回退),
+  // 所以兜底只加在入站: 记一条 unsupported, 编排才能回可见提示, 而不是被下面
+  // 的空门禁静默丢掉(#9245)。
+  if (
+    (msgType === 'interactive' || msgType === 'card') &&
+    !text.trim() &&
+    attachments.length === 0 &&
+    unsupported.length === 0
+  ) {
+    unsupported = [...unsupported, { type: 'interactive', label: '卡片消息' }];
+  }
 
   // Drop entirely only when there's literally nothing to relay.
   if (!text && attachments.length === 0 && unsupported.length === 0 && !(isGroup && parsed.text.trim())) {
@@ -1102,5 +1115,5 @@ async function handleCardAction(data: unknown): Promise<unknown> {
   // gives the user instant "click registered" feedback even before the
   // orchestrator finishes patching the card. Generic wording — orchestrator's
   // updateInteractiveCard authoritatively replaces the card body.
-  return parsedOk ? { toast: { type: 'success', content: '已收到您的选择' } } : {};
+  return parsedOk ? { toast: { type: 'success', content: transportMessages.card.choiceReceived } } : {};
 }

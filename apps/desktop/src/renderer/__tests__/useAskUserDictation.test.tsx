@@ -7,6 +7,7 @@ import type { VoiceInputRendererEvent } from '@cindy/voice-input-core';
 import { useAskUserDictation } from '../components/new-chat/useAskUserDictation';
 import { resolveVoiceInputStartGuards } from '@/voice-input/startGuards';
 import { startVoiceInputCaptureSession } from '@/voice-input/captureSession';
+import { playVoiceInputStartCue } from '@/voice-input/startCue';
 
 vi.mock('@/voice-input/startGuards', () => ({
   resolveVoiceInputStartGuards: vi.fn(async () => ({
@@ -26,7 +27,8 @@ vi.mock('@/voice-input/captureSession', () => ({
   }),
 }));
 
-vi.mock('@/voice-input/startCue', () => ({
+vi.mock('@/voice-input/startCue', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/voice-input/startCue')>()),
   prepareVoiceInputCues: vi.fn(),
   playVoiceInputStartCue: vi.fn(async () => undefined),
   playVoiceInputEndCue: vi.fn(),
@@ -73,7 +75,8 @@ describe('useAskUserDictation', () => {
     await act(async () => { check({ ok: true, permission: { ok: true, status: 'granted' }, readiness: { ok: true } } as Awaited<ReturnType<typeof resolveVoiceInputStartGuards>>); });
     expect(start).toHaveBeenCalledOnce();
     act(() => onEvent?.({ type: 'draft', runId: 'late-run', text: '未提交语音', source: 'partial' } as VoiceInputRendererEvent));
-    expect(hook.result.current.liveText).toBe('已有未提交语音回答');
+    // A pre-return event has no confirmed owner yet; cancellation must discard it.
+    expect(hook.result.current.liveText).toBeNull();
     let stopped: boolean | undefined;
     await act(async () => { void hook.result.current.stop().then((ok) => { stopped = ok; }); });
     expect(stopped).toBeUndefined();
@@ -90,6 +93,43 @@ describe('useAskUserDictation', () => {
     act(() => onEvent?.({ type: 'submitted', runId: 'late-run', text: '迟到的结果' } as VoiceInputRendererEvent));
     expect(cancel).toHaveBeenCalledWith({ runId: 'late-run' });
     expect(setText).not.toHaveBeenCalled();
+    hook.unmount();
+  });
+
+  // Unit regression, 2026-11-09: the question field shares event ownership with
+  // the composer. Existing tests only sent stale events after the new start.
+  // Pending start + old done must keep recording; an early matching draft must
+  // still appear once that start resolves. No device/network or real timers.
+  it('filters old terminal events during startup and retains the matching early draft', async () => {
+    let onEvent: ((event: VoiceInputRendererEvent) => void) | undefined;
+    let connected!: (value: { ok: true; runId: string }) => void;
+    const setText = vi.fn();
+    window.electronAPI = {
+      platform: 'darwin',
+      voiceInput: {
+        onEvent: (callback: typeof onEvent) => { onEvent = callback; return () => { onEvent = undefined; }; },
+        getDataSnapshot: () => ({ settings: { playInteractionSound: false, muteSystemAudio: false, refinementEnabled: false, dictionaryEntries: [], language: 'auto', refinementInstructions: '' } }),
+        getHistoryForRefinement: () => [],
+        start: () => new Promise((resolve) => { connected = resolve; }),
+        cancel: async () => ({ ok: true }), drainAudioQueue: async () => ({ ok: true }),
+      },
+    } as unknown as typeof window.electronAPI;
+    const hook = renderHook(() => useAskUserDictation({
+      getText: () => '已有', setText,
+      getSelection: () => ({ start: 2, end: 2 }), focus: () => {},
+    }));
+    await act(async () => { hook.result.current.start(); });
+    act(() => {
+      onEvent?.({ type: 'state', runId: 'old', state: 'done' });
+      onEvent?.({ type: 'draft', runId: 'new', text: '新回答', source: 'partial' } as VoiceInputRendererEvent);
+    });
+    expect(hook.result.current.state).toBe('listening');
+    expect(hook.result.current.liveText).toBeNull();
+    await act(async () => { connected({ ok: true, runId: 'new' }); });
+    expect(hook.result.current.state).toBe('listening');
+    expect(hook.result.current.liveText).toBe('已有新回答');
+    await act(async () => { await hook.result.current.cancel(); });
+    expect(hook.result.current.isBusy).toBe(false);
     hook.unmount();
   });
 
@@ -219,5 +259,45 @@ describe('useAskUserDictation', () => {
     act(() => onEvent?.({ type: 'state', runId: 'run-1', state: terminal } as VoiceInputRendererEvent));
     await expect(stopping).resolves.toBe(terminal === 'done');
     expect(text).toBe('已有补充说明');
+  });
+
+  // Unit regression, 2026-11-11: the start cue used to begin together with the
+  // microphone request; starting idle speakers delayed the first captured audio
+  // by about 450 ms. The question field wires its own cue and mute, which the
+  // composer startup tests do not reach. Minimal failing input: cue enabled,
+  // capture started but not yet retaining audio.
+  it('plays the start cue and mutes only once capture is retaining audio', async () => {
+    let captureReady!: () => void;
+    vi.mocked(startVoiceInputCaptureSession).mockImplementationOnce(async (options) => {
+      options.setEngine({ drainBufferedAudio: async () => undefined, stop: async () => undefined } as never);
+      captureReady = () => options.onCaptureReady?.();
+      return { ok: true, drainPendingChunks: () => undefined };
+    });
+    const muteSystemAudio = vi.fn(async () => ({ ok: true }));
+    window.electronAPI = {
+      platform: 'darwin',
+      voiceInput: {
+        onEvent: () => () => undefined,
+        getDataSnapshot: () => ({ settings: { playInteractionSound: true, muteSystemAudio: true, refinementEnabled: false, dictionaryEntries: [], language: 'auto', refinementInstructions: '' } }),
+        getHistoryForRefinement: () => [],
+        start: async () => ({ ok: true, runId: 'run-1' }),
+        cancel: async () => ({ ok: true }),
+        drainAudioQueue: async () => ({ ok: true }),
+        muteSystemAudio,
+        restoreSystemAudio: async () => ({ ok: true }),
+      },
+    } as unknown as typeof window.electronAPI;
+    const hook = renderHook(() => useAskUserDictation({
+      getText: () => '', setText: () => undefined,
+      getSelection: () => ({ start: 0, end: 0 }), focus: () => {},
+    }));
+    await act(async () => { expect(hook.result.current.start()).toBe(true); });
+    expect(playVoiceInputStartCue).not.toHaveBeenCalled();
+    expect(muteSystemAudio).not.toHaveBeenCalled();
+    await act(async () => { captureReady(); });
+    expect(playVoiceInputStartCue).toHaveBeenCalledOnce();
+    expect(muteSystemAudio).toHaveBeenCalledOnce();
+    await act(async () => { await hook.result.current.cancel(); });
+    hook.unmount();
   });
 });

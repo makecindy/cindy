@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
 
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AppearanceSection } from '../AppearanceSection';
 
 const themeState = vi.hoisted(() => ({ familyId: 'cindy' }));
+const themeCreation = vi.hoisted(() => ({ navigate: vi.fn(), prepareDraft: vi.fn(), error: vi.fn() }));
+
+vi.mock('react-router-dom', () => ({ useNavigate: () => themeCreation.navigate }));
+vi.mock('@/lib/themeCreatorDraft', () => ({
+  prefillThemeCreatorDraft: (prompt: string) => themeCreation.prepareDraft(prompt),
+}));
+vi.mock('@/lib/toast', () => ({ toast: { error: themeCreation.error, success: vi.fn() } }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -54,6 +61,7 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
     setWallpaper: vi.fn(),
     visibility: 0.37,
     setVisibility: vi.fn(),
+    previewVisibility: vi.fn(),
     previewBlur: vi.fn(),
     setMotion: vi.fn(),
     resetWallpaper: vi.fn(),
@@ -99,26 +107,46 @@ vi.mock('@/components/ui/slider', () => ({
   },
 }));
 
-vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null }));
+vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null, FontFamilyResetButton: () => null }));
 vi.mock('../LayoutResetControl', () => ({ LayoutResetControl: () => null }));
 
 describe('AppearanceSection accessibility', () => {
+  // Unit: the appearance action must take the user to an editable task draft;
+  // existing mode/font coverage never exercised a creation entry.
+  it('opens the theme creation draft from the named theme action', async () => {
+    themeCreation.navigate.mockClear();
+    themeCreation.prepareDraft.mockResolvedValue('prepared');
+    render(<AppearanceSection />);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.createTheme.label' }));
+    await waitFor(() => expect(themeCreation.navigate).toHaveBeenCalledWith('/cc-agent/new'));
+  });
+
+  it('keeps the user in appearance settings when the creation Skill is unavailable', async () => {
+    themeCreation.navigate.mockClear();
+    themeCreation.error.mockClear();
+    themeCreation.prepareDraft.mockResolvedValue('unavailable');
+    render(<AppearanceSection />);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.createTheme.label' }));
+    await waitFor(() => expect(themeCreation.error).toHaveBeenCalledWith('settings.appearance.createTheme.unavailable'));
+    expect(themeCreation.navigate).not.toHaveBeenCalled();
+  });
+
   it('labels the UI, code and terminal font-size number inputs', () => {
     render(<AppearanceSection />);
     const visibility = screen.getByRole('slider', {
-      name: 'settings.appearance.wallpaper.visibilityLabel',
+      name: 'settings.appearance.wallpaper.desktopVisibilityLabel',
     });
     expect(visibility.getAttribute('min')).toBe('0');
     expect(visibility.getAttribute('max')).toBe('1');
     expect(visibility.getAttribute('step')).toBe('0.01');
     expect(visibility.getAttribute('aria-describedby')).toBe('wallpaper-visibility-hint');
     expect(screen.getByText('37%')).toBeTruthy();
-    const blur = screen.getByRole('slider', { name: 'settings.appearance.wallpaper.blurLabel' });
+    const blur = screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' });
     expect(blur.getAttribute('min')).toBe('0');
     expect(blur.getAttribute('max')).toBe('20');
     expect(blur.getAttribute('step')).toBe('1');
     expect(blur.getAttribute('aria-describedby')).toBe('wallpaper-blur-hint');
-    expect(blur.hasAttribute('disabled')).toBe(true);
+    expect(blur.hasAttribute('disabled')).toBe(false);
 
     const wallpapers = within(
       screen.getByRole('radiogroup', { name: 'settings.appearance.wallpaper.aria' }),

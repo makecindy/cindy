@@ -8,13 +8,16 @@ import type { TabKindHostContext } from '../../../types';
 import type { TerminalState } from '../index';
 import type { XtermEntry } from '../lib/xtermPool';
 
-const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn() }));
+const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn(), detachXterm: vi.fn(), getXtermExit: vi.fn(() => null), setXtermExit: vi.fn(), onXtermExit: vi.fn(() => () => undefined), needsXtermAttach: vi.fn(() => false), restartXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.restart(params.id), attachXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.create(params) }));
 vi.mock('../lib/xtermPool', () => poolMocks);
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
 import { TerminalTabBody } from '../TerminalTabBody';
+import { installAppearancePresenter, presentAppearance } from '@/appearance/AppearancePresenter';
+import { applyFontSettings } from '@/hooks/useFontSettings';
+import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 
 // Keep the pre-feature defaults literal: deriving these expectations from the
 // production constant would fail to catch an accidental change to old terminals.
@@ -224,18 +227,67 @@ afterEach(() => {
 });
 
 describe('TerminalTabBody terminal font preferences', () => {
+  // Complete-theme contract: xterm must measure only after the common presenter
+  // registers the packaged FontFace. Existing tests load system fonts only.
+  // Unit, real TerminalTabBody/presenter, deferred browser font decode.
+  it('waits for packaged terminal fonts before selecting and measuring them', async () => {
+    const family = `CindyTheme_${'b'.repeat(64)}`, decode = deferred<FontFace>();
+    let face!: FontFace;
+    vi.stubGlobal('FontFace', class {
+      constructor(public family: string) { face = this as unknown as FontFace; }
+      load = () => decode.promise;
+    });
+    const add = vi.fn();
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { load: loadFonts, add, delete: vi.fn() } });
+    snapshot = { ...snapshot, terminalFamily: family, terminalSize: 17,
+      terminalFontResource: { family, reference: 'asset:terminal', hash: 'b'.repeat(64),
+        source: { themeId: 'theme', packageSha256: 'a'.repeat(64) } } };
+    Object.assign(api.appearanceSettings, { loadPluginFont: vi.fn(async () => ({ family, bytes: new ArrayBuffer(4) })) });
+    const release = installAppearancePresenter(applyFontSettings, false, snapshot);
+    try {
+      const ctx = context();
+      render(<WallpaperSettingsProvider desktopBackground={false} onAppearanceChange={presentAppearance}>
+        <TerminalTabBody state={runningState} ctx={ctx} active />
+      </WallpaperSettingsProvider>);
+      await flushWork();
+      expect(appearanceListeners.size).toBe(2); // Existing wallpaper and terminal readers only.
+      const entry = entries.get(ctx.tabId)!;
+      expect(entry.terminal.options.fontFamily).toBe(ORIGINAL_FAMILY);
+      expect(loadFonts.mock.calls.some(([query]) => String(query).includes(family))).toBe(false);
+      await act(async () => { decode.resolve(face); }); await flushWork();
+      expect(add).toHaveBeenCalledWith(face);
+      expect(entry.terminal.options.fontFamily).toContain(family);
+      expect(entry.fitSamples.at(-1)).toMatchObject({ fontFamily: expect.stringContaining(family), fontSize: 17 });
+      expect(api.terminal.restart).not.toHaveBeenCalled();
+      expect(entry.terminal.open).toHaveBeenCalledOnce();
+      await broadcast({ terminalFontResource: undefined, terminalFamily: 'Menlo' });
+      expect(entry.terminal.options.fontFamily).toContain('Menlo');
+      expect(document.fonts.delete).toHaveBeenCalledWith(face);
+    } finally { cleanup(); release(); }
+    expect(appearanceListeners.size).toBe(0);
+  });
   it('keeps the existing defaults and starts the PTY once without a settings provider', async () => {
     const ctx = context();
-    render(<TerminalTabBody state={{ ...runningState, created: false }} ctx={ctx} active />);
-    await flushWork();
-
-    const entry = entries.get(ctx.tabId)!;
-    expect(entry.terminal.options.fontFamily).toBe(ORIGINAL_FAMILY);
-    expect(entry.terminal.options.fontSize).toBe(13);
-    expect(api.appearanceSettings.getSync).toHaveBeenCalled();
-    expect(appearanceListeners.size).toBe(1);
-    expect(api.terminal.create).toHaveBeenCalledOnce();
-    expect(ctx.patchState).toHaveBeenCalledWith(expect.objectContaining({ created: true }));
+    entries.set(ctx.tabId, { ...makeEntry(), ptyAttached: false });
+    const loadPluginFont = vi.fn();
+    Object.assign(api.appearanceSettings, { loadPluginFont });
+    const release = installAppearancePresenter(applyFontSettings, false, snapshot);
+    try {
+      render(<WallpaperSettingsProvider desktopBackground={false} onAppearanceChange={presentAppearance}>
+        <TerminalTabBody state={{ ...runningState, created: false }} ctx={ctx} active />
+      </WallpaperSettingsProvider>);
+      await flushWork();
+      const entry = entries.get(ctx.tabId)!;
+      expect(entry.terminal.options.fontFamily).toBe(ORIGINAL_FAMILY);
+      expect(entry.terminal.options.fontSize).toBe(13);
+      expect(api.appearanceSettings.getSync).toHaveBeenCalledTimes(3); // Wallpaper + terminal render/effect; Presenter reuses startup snapshot.
+      expect(appearanceListeners.size).toBe(2);
+      expect(loadPluginFont).not.toHaveBeenCalled();
+      expect(document.querySelector('[data-cindy-appearance]')).toBeNull();
+      expect(api.terminal.create).toHaveBeenCalledOnce();
+      expect(ctx.patchState).toHaveBeenCalledWith(expect.objectContaining({ created: true }));
+    } finally { cleanup(); release(); }
+    expect(appearanceListeners.size).toBe(0);
   });
 
   it('applies saved settings and later broadcasts to the same terminal without changing its session or focus', async () => {

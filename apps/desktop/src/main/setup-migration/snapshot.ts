@@ -52,6 +52,22 @@ export interface SourceMarketFact {
   defaultInstall: boolean;
 }
 
+/** An official-market installation proven by the local install record, without the catalog. */
+export interface SourceInstalledServerRecord {
+  pluginId: string;
+  ghostId: string;
+  namespace?: string | null;
+}
+
+export interface SourcePluginFacts {
+  ghosts: SourceGhostFact[];
+  market: SourceMarketFact[];
+  /** The official catalog could not be read this time; `market` holds only what was readable. */
+  catalogUnavailable?: boolean;
+  /** Local install records used to keep official-market plugins out of "manual" when the catalog is missing. */
+  installedServerRecords?: SourceInstalledServerRecord[];
+}
+
 export interface SourceMarketSourceFact {
   name: string;
   source: { type: 'git'; url: string; ref?: string; sparsePaths: string[] } | { type: 'local'; path: string };
@@ -79,7 +95,7 @@ export interface SetupSnapshotSourceDeps {
   now(): number;
   settingsGroups: readonly SetupSettingsGroup[];
   readRendererPrefs(): Promise<Record<string, string> | null>;
-  readPlugins(): Promise<{ ghosts: SourceGhostFact[]; market: SourceMarketFact[] }>;
+  readPlugins(): Promise<SourcePluginFacts>;
   /** `true` when the plugin's accounts/keys are set up here; null when unknown. */
   pluginSetupReady(instanceKey: string): boolean | null;
   pluginHasUserSecrets?(instanceKey: string): boolean;
@@ -114,9 +130,12 @@ export async function collectSetupSnapshot(deps: SetupSnapshotSourceDeps): Promi
     deps.readRendererPrefs(),
   );
   if (rendererPrefs === null) unavailable.add('rendererPrefs');
-  const plugins = await guard('plugins', [] as SetupSnapshotPlugin[], async () =>
-    projectPlugins(await deps.readPlugins(), deps.pluginSetupReady, deps.pluginHasUserSecrets),
-  );
+  const plugins = await guard('plugins', [] as SetupSnapshotPlugin[], async () => {
+    const facts = await deps.readPlugins();
+    // Plugins still go out, sourced from local install records, but the target must hear it is incomplete.
+    if (facts.catalogUnavailable) unavailable.add('plugins');
+    return projectPlugins(facts, deps.pluginSetupReady, deps.pluginHasUserSecrets);
+  });
   const marketSources = await guard('plugins', [] as SetupSnapshotMarketSource[], async () =>
     projectMarketSources(await deps.readMarketSources()),
   );
@@ -190,19 +209,37 @@ async function collectSettings(
 }
 
 export function projectPlugins(
-  facts: { ghosts: SourceGhostFact[]; market: SourceMarketFact[] },
+  facts: SourcePluginFacts,
   setupReady: (instanceKey: string) => boolean | null,
   hasUserSecrets: (instanceKey: string) => boolean = () => false,
 ): SetupSnapshotPlugin[] {
   const installedMarket = facts.market.filter((item) => item.installed);
+  // The catalog missed them, not the computer: the install record still says official market.
+  const recorded: SourceMarketFact[] = facts.catalogUnavailable
+    ? (facts.installedServerRecords ?? [])
+      .filter((record) => !installedMarket.some((item) => item.pluginId === record.pluginId))
+      .map((record) => ({
+        pluginId: record.pluginId,
+        ghostId: record.ghostId,
+        ...(record.namespace !== undefined ? { namespace: record.namespace } : {}),
+        installed: true,
+        sourceType: 'server' as const,
+        sourceMarketName: null,
+        defaultInstall: false,
+      }))
+    : [];
+  const matchMarket = (candidates: SourceMarketFact[], ghostId: string, namespace: string | null) => {
+    const sameId = candidates.filter((item) => item.ghostId === ghostId);
+    return sameId.find((item) => item.namespace !== undefined && (item.namespace ?? null) === namespace) ??
+      (sameId.length === 1 && sameId[0].namespace === undefined ? sameId[0] : undefined);
+  };
   const out: SetupSnapshotPlugin[] = [];
   for (const ghost of facts.ghosts) {
     if (out.length >= SETUP_SNAPSHOT_LIMITS.plugins) break;
     const namespace = ghost.namespace ?? null;
-    const sameId = installedMarket.filter((item) => item.ghostId === ghost.ghostId);
-    const market =
-      sameId.find((item) => item.namespace !== undefined && (item.namespace ?? null) === namespace) ??
-      (sameId.length === 1 && sameId[0].namespace === undefined ? sameId[0] : undefined);
+    // Install records never vouch for a local development copy.
+    const market = matchMarket(installedMarket, ghost.ghostId, namespace) ??
+      (namespace === 'local' ? undefined : matchMarket(recorded, ghost.ghostId, namespace));
     let ready: boolean | null = null;
     try {
       ready = setupReady(ghost.instanceKey);

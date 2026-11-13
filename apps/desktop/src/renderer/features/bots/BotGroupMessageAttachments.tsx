@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next';
 
 import { ChatImageView } from '@/components/chat/ChatImageView';
 import { ImageMissingPlaceholder } from '@/components/chat/ImageMissingPlaceholder';
-import { TextLightbox } from '@/components/chat/TextLightbox';
+import { TextLightbox } from '@/components/chat/lazyPreviewLightboxes';
 import { UserAttachmentChip } from '@/components/chat/UserAttachmentChip';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { Spinner } from '@/components/ui/spinner';
@@ -168,8 +168,9 @@ function PendingAttachmentChip({
       ) : (
         <FileTypeIcon name={name} size={14} className="shrink-0" />
       )}
-      <span className="min-w-0 truncate">{name}</span>
-      <span aria-hidden="true" className="shrink-0 font-normal text-[var(--text-tertiary)]">
+      {/* 名字先让出宽度；窄气泡里较长的状态译文（西语、法语等）也可省略，完整内容在 title 里。 */}
+      <span className="min-w-0 shrink-[3] truncate">{name}</span>
+      <span aria-hidden="true" className="min-w-0 truncate font-normal text-[var(--text-tertiary)]">
         {status}
       </span>
     </span>

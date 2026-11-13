@@ -2,6 +2,11 @@
 export const MCP_APPS_INVOKE = 'maker:mcp-apps:v1';
 export const MCP_APP_CARD = 'mcp-app';
 export const MCP_APP_LINK_GRANT_MS = 30_000;
+/** An entry identity, not an arbitrary resource or a page-supplied permission. */
+export interface PluginUiSource {
+  instanceId: string;
+  viewId: string;
+}
 export interface McpAppLinkAuthorization {
   authorized: true;
   validForMs: number;
@@ -43,7 +48,7 @@ export interface McpAppRecord {
 }
 export interface McpAppDocument {
   /** Executor-owned SDK bytes for this View; absent on older hosts. Never persisted in cards. */
-  sdk?: { source: string };
+  sdk?: { source: string; addons?: { 'cindy/view-state'?: { source: string; reactSource: string } } };
   viewId: string;
   transport?: undefined;
   html: string;
@@ -59,6 +64,8 @@ export interface McpAppDocument {
 
 /** A same-origin module supplied by the execution computer, not the viewing device. */
 export const HOST_APP_SDK_PATH = '/__cindy/sdk/ext-apps/app.js';
+export const CINDY_VIEW_STATE_SDK_PATH = '/__cindy/sdk/cindy/view-state.js';
+export const CINDY_VIEW_STATE_REACT_SDK_PATH = '/__cindy/sdk/cindy/view-state-react.js';
 /** Desktop UI metadata only; credential-backed App content stays in Main. */
 export interface McpAppSandboxView {
   viewId: string;

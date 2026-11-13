@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, apiFetchRaw, registerAccountUnavailableHandler, type ApiFetchOptions } from '@/api/client';
-import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { SharedTaskScopeChangedError } from '@cindy/device-link';
 import { useSharedTaskApi } from '@/device-link/useSharedTaskApi';
 import {
@@ -16,7 +16,11 @@ import {
 type ApiFetch = <T>(path: string, opts: Omit<ApiFetchOptions, 'token'>) => Promise<T>;
 const auth = vi.hoisted(() => ({ apiFetch: null as unknown as ApiFetch, accountGeneration: 1 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
-vi.mock('react', () => ({ useMemo: (factory: () => unknown) => factory() }));
+vi.mock('react', async (importOriginal) => ({ ...(await importOriginal<typeof import('react')>()), useMemo: (factory: () => unknown) => factory() }));
+// This suite isolates the official HTTP refresh/account fence. V2 invitation
+// signing and secure native state have their own adapter integration coverage.
+vi.mock('@/device-link/agentNetSharing', () => ({ joinMobileAgentNetSharedTask: async () => null,
+  requestMobileAgentNetSharedTask: async () => null }));
 vi.mock('@/config/env', () => ({
   DEVICE_LINK_API_BASE_URL: 'https://relay.example.invalid',
   getOfficialDeviceLinkApiBaseUrl: () => 'https://official.example.invalid',
@@ -54,7 +58,10 @@ beforeEach(() => {
   refresh.mockResolvedValue('fake-refreshed-a');
   fetchMock.mockResolvedValue(response());
   vi.stubGlobal('fetch', fetchMock);
-  auth.apiFetch = new Function('getAccessToken', 'refresh', 'terminateSession', 'userRef', 'ApiError', 'apiFetchRaw', 'isSelfHostedRelayBaseUrl', compiled + '; return request;')(getAccessToken, refresh, terminateSession, { current: { id: 'account-a' } }, ApiError, apiFetchRaw, isSelfHostedRelayBaseUrl);
+  auth.apiFetch = new Function('getAccessToken', 'refresh', 'terminateSession', 'userRef', 'ApiError', 'apiFetchRaw', 'isSelfHostedRelayBaseUrl',
+    'getMobileAuthOwner', 'isMobileAuthOwnerCurrent', 'getSelfHostedRelayRouteGeneration', 'deviceIdRef', compiled + '; return request;')(
+    getAccessToken, refresh, terminateSession, { current: { id: 'account-a' } }, ApiError, apiFetchRaw, isSelfHostedRelayBaseUrl,
+    getMobileAuthOwner, isMobileAuthOwnerCurrent, () => 1, { current: null });
 });
 afterEach(() => { vi.unstubAllGlobals(); setMobileAuthOwner(null); relayRoutingTesting.reset(); });
 

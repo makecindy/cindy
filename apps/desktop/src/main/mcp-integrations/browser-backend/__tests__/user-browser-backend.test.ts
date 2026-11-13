@@ -102,6 +102,13 @@ const call = (b: UserBrowserBackend, req: Record<string, unknown>) =>
   b.call(req as unknown as BrowserControlRequest);
 
 describe('UserBrowserBackend · 就绪与连接', () => {
+  // Actual absence and temporarily unavailable selection must not share the old-plugin advice.
+  it.each(['plugin-updating', 'plugin-selection-required'] as const)('status preserves %s from the plugin slot', async reason => {
+    const b = new UserBrowserBackend({ getPageControl: () => null, getUnavailableReason: () => reason,
+      logger: { info: vi.fn(), warn: vi.fn() } });
+    expect(await call(b, { action: 'status' })).toMatchObject({ data: { configured: false, reason } });
+  });
+
   it('没有页面控制插件时 status 如实报告,动作按未配置拒绝', async () => {
     const b = backend(null);
     expect(await call(b, { action: 'status' })).toMatchObject({
@@ -513,6 +520,22 @@ describe('UserBrowserBackend · 读取与动作', () => {
       ok: true,
       data: { result: { password: false, code: false, unavailable: true } },
     });
+    // 旧版扩展不能跑页面脚本:页面可见文字改用扩展自己的声明式读取,结果形状与页面脚本相同。
+    const before = fake.jobs.length;
+    fake.responses.set('extract', () => ({ ok: true, record: { text: 'Shown   \n\n\n\ntext on the page' } }));
+    expect(
+      await call(b, {
+        action: 'act',
+        targetId: 't1',
+        request: { kind: 'evaluate', fn: 'x', domRead: { kind: 'text', text: { selector: 'main', offset: 7, maxChars: 4 } } },
+      }),
+    ).toMatchObject({
+      ok: true,
+      data: { result: { ok: true, readyState: 'complete', found: true, length: 23, text: 'text' } },
+    });
+    expect(fake.jobs.slice(before).map(([action]) => action)).not.toContain('evaluate');
+    expect(fake.jobs.at(-1)).toMatchObject(['extract', { selector: 'main', fields: { text: { selector: ':self' } }, maxChars: 30000 }]);
+    fake.responses.delete('extract');
     expect(
       fake.jobs.filter(
         ([action, payload]) =>
@@ -659,6 +682,54 @@ describe('UserBrowserBackend · 读取与动作', () => {
       ok: true,
     });
     expect(fake.jobs.at(-1)?.[0]).toBe('evaluate');
+    // 页面可见文字(read 动作、打开后的等待)走页面脚本:脚本读 innerText,不是扩展声明式读取的 textContent。
+    expect(
+      await act({ kind: 'evaluate', fn: 'ignored', domRead: { kind: 'text', text: { maxChars: 50 } } }),
+    ).toMatchObject({ ok: true });
+    expect(fake.jobs.at(-1)?.[0]).toBe('evaluate');
+    expect(String(fake.jobs.at(-1)?.[1].fn)).toContain('innerText');
+    expect(String(fake.jobs.at(-1)?.[1].fn)).not.toContain('ignored');
+    // 页面的安全策略拦了脚本(实测 github.com):同一次读取退回扩展的声明式读取,不报错。
+    fake.responses.set('evaluate', () => ({ ok: false, error: 'EVAL_BLOCKED_BY_PAGE', execution: 'not_executed' }));
+    fake.responses.set('extract', () => ({ ok: true, record: { text: 'Visible text' } }));
+    expect(
+      await act({ kind: 'evaluate', fn: 'ignored', domRead: { kind: 'text', text: { maxChars: 7 } } }),
+    ).toMatchObject({ ok: true, data: { result: { ok: true, found: true, length: 12, text: 'Visible' } } });
+    expect(fake.jobs.slice(-2).map(([action]) => action)).toEqual(['evaluate', 'extract']);
+    fake.responses.delete('evaluate');
+    fake.responses.delete('extract');
+    // 声明式读取被桥接按字段截断到 4000 字符时,结果标出 capped:后面没有可续读的,不能当成整页。
+    fake.responses.set('evaluate', () => ({ ok: false, error: 'EVAL_BLOCKED_BY_PAGE', execution: 'not_executed' }));
+    fake.responses.set('extract', () => ({ ok: true, truncated: true, record: { text: 'y'.repeat(4000) } }));
+    expect(
+      await act({ kind: 'evaluate', fn: 'ignored', domRead: { kind: 'text', text: { maxChars: 20000 } } }),
+    ).toMatchObject({ ok: true, data: { result: { ok: true, length: 4000, capped: true } } });
+    fake.responses.delete('evaluate');
+    fake.responses.delete('extract');
+  });
+
+  // 规则:调用方给的 timeoutMs 管住文字读取。桥接对作业的默认期限是 45 秒,页面无响应时,
+  // 打开后 5 秒的内容探测不能被拖到 45 秒;页面脚本被拦后的声明式读取用的是剩下的时间,不是重新计时。
+  it('「我的浏览器」文字读取遵守 timeoutMs:页面无响应时按失败返回,两条路径共用剩余时间', async () => {
+    const fake = fakeControl({ version: '0.4.43' });
+    const b = backend(fake.control);
+    await call(b, { action: 'tabs' });
+    const act = (request: Record<string, unknown>) => call(b, { action: 'act', targetId: 't1', request });
+    const hang = () => new Promise(() => {}) as never;
+    fake.responses.set('evaluate', hang);
+    const started = Date.now();
+    expect(
+      await act({ kind: 'evaluate', fn: 'x', timeoutMs: 150, domRead: { kind: 'text', text: {} } }),
+    ).toMatchObject({ ok: false, message: expect.stringContaining('BROWSER_TIMEOUT') });
+    expect(Date.now() - started).toBeLessThan(3000);
+    // 脚本先被拦(很快),随后的声明式读取无响应:同样在预算内失败。
+    fake.responses.set('evaluate', () => ({ ok: false, error: 'EVAL_BLOCKED_BY_PAGE', execution: 'not_executed' }));
+    fake.responses.set('extract', hang);
+    const second = Date.now();
+    expect(
+      await act({ kind: 'evaluate', fn: 'x', timeoutMs: 150, domRead: { kind: 'text', text: {} } }),
+    ).toMatchObject({ ok: false, message: expect.stringContaining('BROWSER_TIMEOUT') });
+    expect(Date.now() - second).toBeLessThan(3000);
   });
 
   it('新版扩展:上传只读会话允许目录里的文件,并以字节交给扩展', async () => {
@@ -1002,20 +1073,48 @@ describe('UserBrowserBackend · 读取与动作', () => {
     });
   });
 
-  it('status 先等扩展重连几秒,不在刷新后的空档里报未连接', async () => {
-    const fake = fakeControl({ version: '0.4.46' });
-    let calls = 0;
-    const realStatus = (fake.control.bridge as unknown as { status: () => Promise<{ ok: boolean; clients: Array<{ connected: boolean }> }> }).status;
-    (fake.control.bridge as unknown as { status: () => Promise<unknown> }).status = async () => {
-      const s = await realStatus();
-      // Connected first, then dropped for two reads (an extension reload), then back.
-      ++calls;
-      return calls === 2 || calls === 3 ? { ...s, clients: s.clients.map((c) => ({ ...c, connected: false })) } : s;
-    };
-    const b = new UserBrowserBackend({ getPageControl: () => fake.control, reconnectWaitMs: 5000, logger: { info: vi.fn(), warn: vi.fn() } });
-    expect(await call(b, { action: 'status' })).toMatchObject({ ok: true, data: { connected: true } });
-    expect(await call(b, { action: 'status' })).toMatchObject({ ok: true, data: { connected: true } });
-    expect(calls).toBe(4);
+  // Regression: live-client filtering removed the expired client, skipping reconnect grace.
+  // Unit tier: production call(), empty status list then reconnect, fake clock (no real sleep).
+  it.each([false, true])('waits for an expired client omitted from status (first read: %s)', async (firstRead) => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl();
+      const connected = await fake.control.bridge.status();
+      vi.spyOn(fake.control.bridge, 'status')
+        .mockResolvedValueOnce(firstRead ? { ...connected, clients: [], hadConnectedClient: true } : connected)
+        .mockResolvedValueOnce({ ...connected, clients: [], hadConnectedClient: true })
+        .mockResolvedValue(connected);
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, reconnectWaitMs: 5000, logger: { info: vi.fn(), warn: vi.fn() } });
+      if (!firstRead) await call(b, { action: 'status' });
+      const pending = call(b, { action: 'status' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toMatchObject({ ok: true, data: { connected: true } });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not wait for an unpaired install even after another browser connected', async () => {
+    const fake = fakeControl();
+    const status = await fake.control.bridge.status();
+    const statusRead = vi.spyOn(fake.control.bridge, 'status').mockResolvedValue({
+      ...status, hadConnectedClient: true,
+      clients: status.ok ? status.clients.map((c) => ({ ...c, connected: false, trusted: false })) : [],
+    });
+    const b = new UserBrowserBackend({ getPageControl: () => fake.control, logger: { info: vi.fn(), warn: vi.fn() } });
+    expect(await call(b, { action: 'status' })).toMatchObject({ data: { connected: false, reason: 'pairing-required' } });
+    expect(statusRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends reconnect grace when the browser remains closed', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] });
+      const disconnected = await fake.control.bridge.status();
+      vi.spyOn(fake.control.bridge, 'status').mockResolvedValue({ ...disconnected, hadConnectedClient: true });
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, reconnectWaitMs: 1000, logger: { info: vi.fn(), warn: vi.fn() } });
+      const pending = call(b, { action: 'status' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toMatchObject({ ok: true, data: { connected: false } });
+    } finally { vi.useRealTimers(); }
   });
 
   // Review 2026-10-29: an installed but unpaired extension waited 8 s and was then told to install
@@ -1099,5 +1198,116 @@ describe('UserBrowserBackend · 读取与动作', () => {
     const started = Date.now();
     expect(await call(b, { action: 'status' })).toMatchObject({ ok: true, data: { connected: false } });
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+});
+
+
+// Regression: a closed browser previously failed every action without trying to start it.
+// Unit tier: real backend entry, fake launcher/bridge and clock; no user browser is touched.
+describe('automatic browser startup', () => {
+  it('shares one launch and waits for connection before dispatching simultaneous operations', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      fake.responses.set('open', payload => ({ ok: true, tabId: 8, url: payload.url }));
+      const startBrowser = vi.fn(async () => { setTimeout(() => clients.push('chrome'), 1000); });
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const first = b.call({ action: 'tabs' }), second = b.call({ action: 'open', url: 'https://example.test/' });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect(fake.jobs).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(500);
+      expect((await first).ok).toBe(true); expect((await second).ok).toBe(true);
+      expect(fake.jobs.filter(([action]) => action === 'open')).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['status', 'doctor', 'profiles', 'stop'] as const)('%s never starts Chrome', async action => {
+    const fake = fakeControl({ clients: [] }), startBrowser = vi.fn();
+    const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+    await b.call({ action }); expect(startBrowser).not.toHaveBeenCalled();
+  });
+
+  it('does not launch for a missing plugin, a named profile, or an unsupported proxy', async () => {
+    const startBrowser = vi.fn();
+    const fake = fakeControl({ clients: [] });
+    for (const [control, req] of [
+      [null, { action: 'start' }],
+      [fake.control, { action: 'start', profile: 'specific-account' }],
+      [fake.control, { action: 'start', proxyServer: 'http://proxy.test' }],
+    ] as const) {
+      const b = new UserBrowserBackend({ getPageControl: () => control, startBrowser, startupWaitMs: 0, logger: { info: vi.fn(), warn: vi.fn() } });
+      await b.call(req);
+    }
+    expect(startBrowser).not.toHaveBeenCalled();
+  });
+
+  it('does not launch an alternative browser while pairing is pending', async () => {
+    const fake = fakeControl({ clients: [] }), startBrowser = vi.fn();
+    const status = await fake.control.bridge.status();
+    if (!status.ok) throw new Error('fixture status failed');
+    fake.control.bridge.status = vi.fn(async () => ({ ...status, clients: [{
+      id: 'pending', browser: 'chrome' as const, version: '0.4.68', protocolVersion: '0.4.13',
+      connected: false, trusted: false, identitySupported: true, nativeBindingRequired: true,
+      origin: 'chrome-extension://fixture', extensionId: 'fixture',
+    }] }));
+    const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+    expect((await b.call({ action: 'start' })).ok).toBe(false);
+    expect(startBrowser).not.toHaveBeenCalled(); expect(fake.jobs).toHaveLength(0);
+  });
+
+  it('launches the default browser for a profile-less request that joins a profile request already waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      fake.responses.set('open', payload => ({ ok: true, tabId: 8, url: payload.url }));
+      const startBrowser = vi.fn(async () => { setTimeout(() => clients.push('chrome'), 1000); });
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const named = b.call({ action: 'tabs', profile: 'specific-account' });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(startBrowser).not.toHaveBeenCalled();
+      const unnamed = b.call({ action: 'open', url: 'https://example.test/' });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect((await unnamed).ok).toBe(true);
+      await named;
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('stops waiting as soon as the launched browser reports an extension that still needs pairing', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] }), startBrowser = vi.fn(async () => {});
+      const empty = await fake.control.bridge.status();
+      if (!empty.ok) throw new Error('fixture status failed');
+      let pairing = false;
+      fake.control.bridge.status = vi.fn(async () => ({ ...empty, clients: pairing ? [{
+        id: 'pending', browser: 'chrome' as const, version: '0.4.68', protocolVersion: '0.4.13',
+        connected: false, trusted: false, identitySupported: true, nativeBindingRequired: true,
+        origin: 'chrome-extension://fixture', extensionId: 'fixture',
+      }] : [] }));
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const call = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(600);
+      pairing = true;
+      await vi.advanceTimersByTimeAsync(1000); // far below the 35 s startup wait
+      const result = await call;
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).toContain('配对');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('reports disconnected when startup completes but no extension arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] }), startBrowser = vi.fn(async () => {});
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, startupWaitMs: 1000, logger: { info: vi.fn(), warn: vi.fn() } });
+      const call = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await call).ok).toBe(false); expect(fake.jobs).toHaveLength(0);
+    } finally { vi.useRealTimers(); }
   });
 });

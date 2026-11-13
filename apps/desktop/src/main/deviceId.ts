@@ -15,6 +15,15 @@
 
 import path from 'node:path';
 
+/** Auth, remote registration and the Node launcher must use one identity. An
+ * explicitly isolated instance must never silently register its physical host. */
+export function resolveRuntimeDeviceId(readPhysicalId: () => string, override = process.env.XDT_DEVICE_ID_OVERRIDE): string {
+  const explicit = override?.trim();
+  if (explicit) return explicit;
+  ensureSystemBinPathForMachineId();
+  return readPhysicalId();
+}
+
 /**
  * Ensure the system bin directories are on PATH so `node-machine-id`'s bare
  * `ioreg` / `hostnamectl` invocations resolve regardless of how the app was

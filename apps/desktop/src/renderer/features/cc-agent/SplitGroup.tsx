@@ -649,11 +649,11 @@ function SplitGroupCanvas({ root, ...paneProps }: SplitPaneSharedProps & { root:
     <div ref={viewportRef} className="h-full min-h-0 w-full min-w-0 overflow-auto">
       <div
         data-split-canvas
-        className="relative"
+        className="relative bg-content-area"
         style={{ width: canvasSize.width, height: canvasSize.height }}
       >
         {paneLayouts.map(({ pane, rect }) => (
-          <div key={pane.key} className="absolute overflow-hidden" style={rect}>
+          <div key={pane.key} className="absolute overflow-hidden bg-content-area" style={rect}>
             <SplitPaneView {...paneProps} pane={pane} />
           </div>
         ))}
@@ -834,7 +834,7 @@ const SplitPaneView = memo(function SplitPaneView({
         data-split-pane-key={pane.key}
         data-split-pane-session-id={viewSessionId}
         data-split-pane-owner={isOwner ? 'true' : 'false'}
-        className="flex h-full min-h-0 w-full flex-col overflow-hidden"
+        className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-content-area"
         onPointerDownCapture={(event) => {
           if (
             isOwner ||

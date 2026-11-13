@@ -1,3 +1,6 @@
+import answerPicture from '../../../src/renderer/assets/cindy-share-character.jpg';
+import answerVideo from '../../../src/renderer/assets/wallpapers/cindy-window.mp4?url';
+import answerAudio from '../../../native/agent-island/sounds/startup-chime.mp3?url';
 import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useEffect, useRef } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
@@ -11,7 +14,7 @@ import { refreshBotGroups } from '../../../src/renderer/features/bots/botGroupSt
 import { ControlledBanner } from '../../../src/renderer/features/remote-device/ControlledBanner';
 import { applyRemoteSessionActivity } from '../../../src/renderer/features/device-link/remoteSessionActivityStore';
 import { replyWithoutAttachments } from '../../../src/main/maker-ipc/chatServerReplyFallback';
-import { i18n } from '../../../src/renderer/i18n';
+import { i18n, i18nReady } from '../../../src/renderer/i18n';
 
 // The fixture's custom origin lacks secure-context randomUUID. Only correlation
 // IDs in this isolated renderer use these tokens; production crypto is unchanged.
@@ -22,7 +25,12 @@ if (!crypto.randomUUID) {
 
 interface GroupData {
   attachmentOmitted?: boolean;
+  /** #9398: message-only push, then an explicitly released full plan read. */
+  planRead?: 'talk' | 'work' | 'missing';
   processRecord?: boolean;
+  processVariant?: 'empty' | 'late';
+  processEmpty?: boolean;
+  processUnavailable?: boolean;
   processOtherOwner?: boolean;
   /** Controlled receipts for the real renderer send/settle layout regression. */
   sendStatus?: boolean;
@@ -87,7 +95,7 @@ function bodyMessages() {
     { seq: 3, op: 'create', id: 'list', kind: 'markdown', props: { text: '- 正文可以阅读\n- **重点**保持格式' } },
     { seq: 4, op: 'create', id: 'image', kind: 'image', props: { src: 'cindy-media://blobs/fixture-image.png', alt: '图片说明保留', caption: '图片标题保留' } },
     { seq: 5, op: 'create', id: 'unnamed-image', kind: 'image', props: { src: '/private/tmp/fixture-image.png' } },
-    ...['image', 'video', 'audio'].map((kind, index) => ({ seq: index + 6, op: 'create', id: `public-${kind}`, kind, props: { src: `https://example.test/public-${kind}` } })),
+    ...Object.entries({ image: answerPicture, video: answerVideo, audio: answerAudio }).map(([kind, asset], index) => ({ seq: index + 6, op: 'create', id: `public-${kind}`, kind, props: { src: new URL(asset, location.href).href, alt: `public-${kind}`, style: { maxHeight: 120 } } })),
   ].map(item => JSON.stringify(item)).join('\n') + '\n```';
   return [
     message({ id: 'body-user', sequence: 1, content: '请整理发布前检查', createdAt: T0 }),
@@ -371,11 +379,25 @@ function groupFrom(data: GroupData) {
   };
 }
 
-void mountPage({
+// The fallback message is translated while the host fixture is constructed.
+void i18nReady.then(() => mountPage({
   route: '/bots/groups/fixture-group',
   host: (ctx) => {
     const data = ctx.data as unknown as GroupData;
-    const group = groupFrom(data);
+    let group = { ...groupFrom(data), ...(data.planRead ? { serverBacked: true, historyRevision: 'fixture-live', organizerBotId: 'b' } : {}) };
+    let planReadHeld = false;
+    const planReads: Array<() => void> = [];
+    if (data.planRead) {
+      window.addEventListener('fixture-plan-hold', () => { planReadHeld = true; }, { once: true });
+      window.addEventListener('fixture-plan-ready', () => {
+        const ready = groupFrom({ ...data, arrangement: 'running', workMentioned: data.planRead === 'work' });
+        group = { ...ready, historyRevision: 'fixture-live', organizerBotId: 'b',
+          plans: data.planRead === 'missing' ? [] : ready.plans.map(plan => ({ ...plan, organizerBotId: 'b', organizerName: 'Nova' })),
+          ...(data.planRead === 'missing' ? { openPlan: null } : {}) };
+        planReadHeld = false;
+        for (const finish of planReads.splice(0)) finish();
+      }, { once: true });
+    }
     if (data.attachmentOmitted) {
       const source = '分析已经完成，**目录边界保持不变**。\n\n详细说明见 [设计说明](../private/design.md)。\n\n![流程图](cindy-media://blobs/fixture.png)';
       Object.assign(group, { serverBacked: true, messages: [message({ id: 'omitted-answer', sequence: 1,
@@ -420,7 +442,10 @@ void mountPage({
         onCompanionCloudChanged: subscription('companionCloudChanged'),
         polishWorkingStatus: async () => null,
         listBotGroups: async () => ({ ok: true, groups: (ctx.data as unknown as GroupData).settings ? [group] : [] }),
-        getBotGroup: async () => ({ ok: true, group }),
+        getBotGroup: async () => {
+          if (planReadHeld) return new Promise(resolve => { planReads.push(() => resolve({ ok: true, group })); });
+          return { ok: true, group };
+        },
         onBotGroupChanged: subscription('botGroupChanged'),
         sendBotGroupMessage: data.sendStatus ? (input: { text: string; clientId: string }) => new Promise((resolve) => {
           window.addEventListener('fixture-send-receipt', (event) => {
@@ -466,7 +491,11 @@ void mountPage({
         onStatusChanged: subscription('deviceLinkStatus'),
         onPresenceChanged: subscription('deviceLinkPresence'),
         onResponsivenessChanged: subscription('deviceLinkResponsiveness'),
-        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? [
+        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? data.processUnavailable ? Promise.reject(new Error('Process unavailable')) : (data.processEmpty || data.processVariant ? [
+          { clientId: 'fixture-source', role: 'user', content: 'Request' },
+          { clientId: 'fixture-end', role: 'assistant', content: 'Result', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } },
+          ...(data.processVariant === 'late' ? [{ clientId: 'fixture-late', role: 'thinking', content: 'Hidden reasoning' }] : []),
+        ] : [
           { clientId: 'fixture-source', role: 'user', content: 'Request' },
           { clientId: 'fixture-thought', role: 'thinking', content: 'Hidden reasoning' },
           { clientId: 'fixture-note', role: 'assistant', content: '我先核对任务的最近进展，再看未完成 PR 的阻塞点。', agentMeta: { assistantPhase: 'commentary' } },
@@ -474,7 +503,7 @@ void mountPage({
           { clientId: 'fixture-result', role: 'tool_result', toolUseId: 'fixture-tool', content: 'Task records' },
           { clientId: 'fixture-note2', role: 'assistant', content: '已经继续获取任务信息，接下来核对未完成 PR 的当前状态。', agentMeta: { assistantPhase: 'commentary' } },
           { clientId: 'fixture-end', role: 'assistant', content: 'Result', agentMeta: { turnCompleted: true } },
-        ] : args[0]?.ref?.collectionId === 'bot-groups' ? {
+        ]).map(row => ({ ...row, agentMeta: { ...row.agentMeta, botPrivateReply: true, botGroupLane: true } })) : args[0]?.ref?.collectionId === 'bot-groups' ? {
           ref: { collectionId: 'bot-groups', kind: 'bot-group', id: group.id },
           blocks: [{ primitive: 'bot-group-chat', data: { ...group, round: { ...group.round, speakers: [{ ...group.round.speakers[0], sessionId: 'fixture-work' }] } } }],
         } : { blocks: [] },
@@ -506,7 +535,7 @@ void mountPage({
       </>
     );
   },
-});
+}));
 
 /** The drawer is route-owned: open it the way the header button does. */
 function OpenSettings() {

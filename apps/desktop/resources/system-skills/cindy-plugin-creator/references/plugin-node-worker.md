@@ -12,8 +12,9 @@
 Node worker ↔ JSON-RPC stdio ↔ 你的 main.js ↔ Cindy 主机能力
 ```
 
-Node 不能直接拿到 `cindy`、Electron IPC 或 Agent 会话。它向主机发反向 JSON-RPC
-请求时，主机会固定返回 `-32601`；需要 Cindy 能力时，Node 先把数据回给 `main.js`，
+Node 不持有 Electron IPC 或 Agent 会话。宿主提供的 `cindy.host.call` 可通过私有通道调用
+与 Agent 共用的宿主工具，须声明并批准 `agent.hostTools`，详见[宿主工具调用](plugin-host-tools.md)。
+其它反向 JSON-RPC 请求仍返回 `-32601`；需要其它 Cindy 能力时，Node 先把数据回给 `main.js`，
 再由 `main.js` 调 Cindy 通道。插件自主调用继续按 manifest 验权；当前
 Agent tool-call 内的网络与 workdir 操作按 §4.2 复用 Agent 授权。
 
@@ -219,6 +220,7 @@ MCP server 的 sampling / elicitation / roots 等 server→client 反向请求�
   最多 2048 个文件、解压后 256MB、.cindy 128MB；超限直接拒绝；
 - `on-demand` 首次 `cindy.node.request` 才启动，缺省空闲 120 秒关闭；停用、更新、
   卸载、退出 Cindy 都立即关闭。`resident` 会随插件启用一直运行，详情页单独显示；
+  交互页面的状态恢复规则与回收验收见 [§4.23](plugin-interactive-pages.md)；
 - 每个插件最多 32 条在途请求；单次 params 256KB、单行 stdout 1MB。未收齐换行的 stdout 缓冲区超限会
   杀掉该工作进程，使它的全部在途请求失败。输出前检查完整 JSON 行的字节数，多份响应合并也按总量计。单次请求缺省
   30 秒、上限 120 秒;长任务用 maxTotalMs 开启"有动静就续期",绝对上限 15 分钟

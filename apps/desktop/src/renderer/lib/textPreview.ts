@@ -21,10 +21,10 @@ import { basename } from './utils';
  * NOT in the map and NOT a markdown extension falls through to the plain
  * `<pre>` path — the safe default for .log/.csv/.txt/unknown files.
  *
- * Aliases (typescript/javascript, xml for html, etc.) are chosen to match the
- * languages bundled by `highlight.js/lib/common`, which is what rehype-highlight
- * loads by default. Adding a new entry here is the only change needed when we
- * want to support a new language.
+ * Aliases are shared by CodeMirror and highlight.js. New languages must be
+ * wired into codemirrorLanguages and, if not in the common bundle, registered
+ * in rehypeHighlightShared. Grammar-free source formats use plaintext so the
+ * editor still provides monospace text and line numbers.
  */
 export const EXT_TO_LANG: Record<string, string> = {
   json: 'json',
@@ -49,6 +49,13 @@ export const EXT_TO_LANG: Record<string, string> = {
   cxx: 'cpp',
   hpp: 'cpp',
   cs: 'csharp',
+  csx: 'csharp',
+  cake: 'csharp',
+  linq: 'csharp',
+  vb: 'vbnet',
+  fs: 'fsharp',
+  fsi: 'fsharp',
+  fsx: 'fsharp',
   scala: 'scala',
   sc: 'scala',
   groovy: 'groovy',
@@ -65,13 +72,47 @@ export const EXT_TO_LANG: Record<string, string> = {
   bash: 'bash',
   zsh: 'bash',
   ps1: 'powershell',
+  psm1: 'powershell',
+  psd1: 'powershell',
   yaml: 'yaml',
   yml: 'yaml',
   toml: 'ini',
   ini: 'ini',
+  globalconfig: 'ini',
   xml: 'xml',
+  csproj: 'xml',
+  fsproj: 'xml',
+  vbproj: 'xml',
+  props: 'xml',
+  targets: 'xml',
+  slnx: 'xml',
+  resx: 'xml',
+  nuspec: 'xml',
+  config: 'xml',
+  settings: 'xml',
+  manifest: 'xml',
+  runsettings: 'xml',
+  pubxml: 'xml',
+  filters: 'xml',
+  ruleset: 'xml',
+  dotsettings: 'xml',
+  testsettings: 'xml',
+  rdl: 'xml',
+  rdlc: 'xml',
+  resw: 'xml',
+  xaml: 'xml',
+  axaml: 'xml',
+  plist: 'xml',
+  ps1xml: 'xml',
+  'csproj.user': 'xml',
+  'fsproj.user': 'xml',
+  'vbproj.user': 'xml',
   html: 'xml',
   htm: 'xml',
+  // Razor markup uses the existing XML highlighter; embedded C# is plain text.
+  razor: 'xml',
+  cshtml: 'xml',
+  vbhtml: 'xml',
   svg: 'xml',
   vue: 'xml',
   svelte: 'xml',
@@ -80,13 +121,32 @@ export const EXT_TO_LANG: Record<string, string> = {
   sass: 'scss',
   less: 'less',
   sql: 'sql',
+  psql: 'sql',
+  slnf: 'json',
+  avsc: 'json',
+  http: 'http',
+  rest: 'http',
   graphql: 'graphql',
   gql: 'graphql',
+  graphqls: 'graphql',
   diff: 'diff',
   patch: 'diff',
   dockerfile: 'dockerfile',
   makefile: 'makefile',
   mk: 'makefile',
+  mak: 'makefile',
+  // Recognized source formats without a matching editor grammar. Keep code
+  // chrome (monospace and line numbers), without applying an unrelated syntax.
+  sln: 'plaintext',
+  bat: 'plaintext',
+  cmd: 'plaintext',
+  tf: 'plaintext',
+  tfvars: 'plaintext',
+  hcl: 'plaintext',
+  bicep: 'plaintext',
+  fbs: 'plaintext',
+  thrift: 'plaintext',
+  capnp: 'plaintext',
 };
 
 export const MARKDOWN_EXTS = new Set(['md', 'markdown', 'mdown', 'mkd', 'mdx']);
@@ -102,10 +162,7 @@ const COMMON_EXTENSIONLESS_TEXT_FILENAMES = new Set([
   'todo',
 ]);
 
-export type Renderable =
-  | { kind: 'markdown' }
-  | { kind: 'code'; lang: string }
-  | { kind: 'text' };
+export type Renderable = { kind: 'markdown' } | { kind: 'code'; lang: string } | { kind: 'text' };
 
 /**
  * Decide how to render the file body based on its name. Filename-only matches
@@ -116,10 +173,11 @@ export function detectRenderable(filePath: string): Renderable {
   const name = basename(filePath).toLowerCase();
   if (name === 'dockerfile') return { kind: 'code', lang: 'dockerfile' };
   if (name === 'makefile') return { kind: 'code', lang: 'makefile' };
+  if (name === '.editorconfig' || name === '.globalconfig') {
+    return { kind: 'code', lang: 'ini' };
+  }
 
-  const dotIdx = name.lastIndexOf('.');
-  if (dotIdx <= 0) return { kind: 'text' };
-  const ext = name.slice(dotIdx + 1);
+  const ext = extractExt(name).slice(1);
 
   if (MARKDOWN_EXTS.has(ext)) return { kind: 'markdown' };
   const lang = EXT_TO_LANG[ext];

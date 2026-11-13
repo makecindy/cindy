@@ -1,4 +1,5 @@
 import type { InstalledGhost } from '../../../shared/ghost';
+import { getApprovedGhostHostUi } from '../../../shared/ghost';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { FEATURE_RETIREMENTS } from '../../../shared/featureRetirements';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
@@ -19,7 +20,10 @@ export interface RightSidebarTabAvailability {
    * 不随任务归属变化。缺省 = 不做可用性过滤。
    */
   pluginViewGhosts?: readonly InstalledGhost[];
-  /** 任务归属未解析时仍保留本机插件页签的投影;正文另按已确认的归属加载。 */
+  /**
+   * 任务归属未解析时仍保留本机插件页签的投影;正文另按已确认的归属加载。任务在另一台
+   * 电脑上时，只含声明了 `taskView.remote` 的插件。
+   */
   pluginTaskGhosts?: readonly InstalledGhost[];
 }
 
@@ -33,6 +37,9 @@ function isUnavailablePluginView(
   const ghost = availability.pluginViewGhosts.find(
     (candidate) => installedGhostStoragePart(candidate) === instanceId,
   );
+  const viewId = (tab.state as PluginViewTabState | null)?.resourceViewId;
+  if (viewId) return !ghost || ghost.enabled === false || ghost.uiCapabilityApproved !== true ||
+    !getApprovedGhostHostUi(ghost)?.views?.some(view => view.id === viewId && view.scope !== 'task');
   return !ghost || !isGlobalTabCapableGhost(ghost);
 }
 
@@ -44,10 +51,14 @@ function isUnavailablePluginTask(
   if (tab.kind !== 'plugin-task') return false;
   const instanceId = (tab.state as { instanceId?: unknown } | null)?.instanceId;
   if (typeof instanceId !== 'string' || !instanceId) return true;
-  const ghost = (availability.pluginTaskGhosts ?? availability.installedGhosts).find(
-    (candidate) => installedGhostStoragePart(candidate) === instanceId,
-  );
-  return !ghost || ghost.enabled === false || !ghost.manifest.taskView;
+  const viewId = (tab.state as { resourceViewId?: string } | null)?.resourceViewId;
+  // Resource UI keeps its local-task scope; taskView.remote only grants the
+  // plugin's classic remote task page, not every view the same plugin owns.
+  const candidates = viewId ? availability.installedGhosts : availability.pluginTaskGhosts ?? availability.installedGhosts;
+  const ghost = candidates.find((candidate) => installedGhostStoragePart(candidate) === instanceId);
+  return !ghost || ghost.enabled === false || (viewId
+    ? ghost.uiCapabilityApproved !== true || !getApprovedGhostHostUi(ghost)?.views?.some(view => view.id === viewId && view.scope === 'task')
+    : !ghost.manifest.taskView);
 }
 
 function retiredTab(
@@ -145,8 +156,13 @@ export function buildTabAvailabilities(input: TabAvailabilityInput): TabAvailabi
     session: {
       installedGhosts:
         input.remoteHostId || input.deviceLinkDeviceId !== null ? [] : input.installedGhosts,
-      pluginTaskGhosts:
-        input.remoteHostId || input.deviceLinkDeviceId ? [] : input.installedGhosts,
+      // 另一台电脑上的任务只保留声明了 taskView.remote 的任务页（它在本机显示那台
+      // 电脑上同一插件的设备画面）；SSH 远程任务没有任务页。
+      pluginTaskGhosts: input.remoteHostId
+        ? []
+        : input.deviceLinkDeviceId
+          ? input.installedGhosts.filter((ghost) => ghost.manifest.taskView?.remote === true)
+          : input.installedGhosts,
       subagentsAvailable: input.subagentsAvailable === true || !eligibilityKnown,
       hiddenTabIds: input.hiddenTabIds,
     },

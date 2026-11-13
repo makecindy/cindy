@@ -14,6 +14,7 @@
  * 兼容已发出的旧卡片, 见 cardBuilders 头注释)。
  */
 
+import { imText } from './imText';
 import fs from 'node:fs';
 
 import type { ChannelIM, IMCardActionEvent } from '@cindy/im';
@@ -79,7 +80,7 @@ import {
   updateModelEffort,
   updatePermissionMode,
 } from './sessionRepo';
-import { COMPANION_MANAGED_COMMAND_FALLBACK } from './botCommands';
+import { companionManagedCommandFallback } from './botCommands';
 import { markImSessionManualRouteOverride } from './manualRouteOverride';
 import { changeSessionPermissionMode } from './permissionModeControl';
 import type { ImCardBuilders } from './cardBuilders';
@@ -855,7 +856,7 @@ export function createCardActionHandler(
       try {
         await im.sendMarkdownText(
           event.senderId,
-          summary ?? '_(回顾失败了, 在这个 thread 里直接发消息接着聊就行)_',
+          summary ?? imText('imBot.text.shared.takeover.summaryFailedThread'),
           { threadTs: established.scopeKey },
         );
       } catch (err) {
@@ -935,7 +936,7 @@ export function createCardActionHandler(
     // 总结失败时 fallback — 用户至少看到"已接管 + 直接发消息接着聊"。
     const summaryBody = summary
       ? `${headerText}\n\n${summary}`
-      : `${headerText}\n\n_(回顾失败了, 直接发消息接着聊就行)_`;
+      : `${headerText}\n\n${imText('imBot.text.shared.takeover.summaryFailed')}`;
     try {
       await im.patchMarkdownCard(event.messageId, summaryBody);
     } catch (err) {
@@ -1329,7 +1330,7 @@ export function createCardActionHandler(
       await patchProjectCard(
         im,
         event.messageId,
-        adapter.ui.slash.companionManagedCommand ?? COMPANION_MANAGED_COMMAND_FALLBACK,
+        adapter.ui.slash.companionManagedCommand ?? companionManagedCommandFallback(),
       );
       return;
     }
@@ -1544,7 +1545,7 @@ export function createCardActionHandler(
       case 'ask_user_question': {
         // 协议层多选是 JSON 数组; 收口卡展示再解成逗号分隔, 多问用分号。
         const joined = formatAskAnswersForDisplay(d.answers);
-        return joined ? ui.cards.ask.resolved(joined) : '✅ 已选择：继续';
+        return joined ? ui.cards.ask.resolved(joined) : imText('imBot.text.shared.card.askResolvedContinue');
       }
     }
   }
@@ -1561,6 +1562,15 @@ export function createCardActionHandler(
           log.info(
             `card action sender=...${event.senderId.slice(-8)} button=${event.buttonId} payload=${JSON.stringify(event.payload).slice(0, 200)}`,
           );
+
+          // 公共对话(服务器频道)不接入本机桌面任务 / 项目: 即使旧卡仍在，接管 / 项目按钮也不执行。
+          if (
+            (event.buttonId.startsWith('control:') || event.buttonId.startsWith('project:')) &&
+            adapter.blocksLocalTaskAccess?.(event.senderId)
+          ) {
+            log.warn(`ignored local-task card action in public conversation button=${event.buttonId}`);
+            return;
+          }
 
           // model:pick is NOT an InteractionRequest reply — it's a direct command
           // triggered by the /model slash command's picker card. Handle it

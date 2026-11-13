@@ -1,5 +1,5 @@
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 import { z } from 'zod';
 
@@ -12,9 +12,7 @@ export type SessionQueueControlErrorCode =
   | 'QUEUED_MESSAGE_NOT_FOUND'
   | 'MESSAGE_CONSUMING'
   | 'NOT_AUTHORIZED'
-  | 'INVALID_ARGS'
-  /** The sending task's review did not confirm the owner asked for this hand-off; nothing changed. */
-  | 'DELEGATION_NOT_AUTHORIZED';
+  | 'INVALID_ARGS';
 
 /** 排队消息转插话未成功、消息仍留在队列时的原因。 */
 export type SessionQueueSteerReason =
@@ -28,8 +26,7 @@ export type SessionSteerErrorCode =
   | 'NO_ACTIVE_TURN'
   | 'UNSUPPORTED_CAPABILITY'
   | 'INPUT_LOCKED'
-  | 'DELIVERY_FAILED'
-  | 'DELEGATION_NOT_AUTHORIZED';
+  | 'DELIVERY_FAILED';
 
 export type SessionStopErrorCode = 'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY';
 
@@ -42,6 +39,7 @@ export interface SessionRuntimeProfile {
 }
 
 export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
+  permissionMode?: PermissionMode;
   runtimeGeneration?: number;
   baselineProfile?: SessionRuntimeProfile;
   effectiveProfile?: SessionRuntimeProfile;
@@ -91,7 +89,7 @@ export interface SessionControlDeps {
     ControlResult<{ queuedMessageId: string; position: number }, SessionQueueControlErrorCode>
   >;
   steerSession(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     message: string;
   }): Promise<ControlResult<{ queuedMessageId: string }, SessionSteerErrorCode>>;
@@ -119,6 +117,7 @@ export interface SessionControlDeps {
       providerId?: string | null;
       effort?: Effort;
       fastMode?: boolean | 'ultrafast';
+      permissionMode?: PermissionMode;
     };
   }): Promise<
     ControlResult<
@@ -128,9 +127,10 @@ export interface SessionControlDeps {
         generation: number;
         effectiveProfile: SessionRuntimeProfile;
         pendingMutation: SessionRuntimeSnapshot['pendingMutation'];
+        permissionMode?: PermissionMode;
       },
-      'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'
-    >
+      'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY'
+    > & { data?: Record<string, unknown> }
   >;
 }
 
@@ -138,11 +138,11 @@ function requireCallerSession(deps: SessionControlDeps): string | null {
   return deps.getSessionContext().sessionId ?? null;
 }
 
-function mapControlFailure(result: { ok: false; errorCode: string; message: string }) {
+function mapControlFailure(result: { ok: false; errorCode: string; message: string; data?: Record<string, unknown> }) {
   if (result.errorCode === 'HOST_NOT_READY') {
     return errorPayload('HOST_NOT_READY', `${BRAND_NAME} 主进程会话服务尚未就绪，请稍后重试。`);
   }
-  return errorPayload(result.errorCode, result.message);
+  return errorPayload(result.errorCode, result.message, result.data);
 }
 
 export function registerUpdateSessionQueuedMessageTool(
@@ -312,11 +312,11 @@ export function registerSteerSessionTool(
     },
     handler: async ({ session_id, message }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法记录插话来源。');
       }
       const result = await deps.steerSession({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         message,
       });
@@ -385,6 +385,7 @@ export function registerGetSessionRuntimeTool(
         phase: runtime.phase,
         active: runtime.phase === 'running' || runtime.phase === 'needs-interaction',
         record_status: runtime.recordStatus ?? null,
+        ...(runtime.permissionMode !== undefined ? { permission_mode: runtime.permissionMode } : {}),
         source: runtime.source,
         attention: runtime.attention,
         workflow: runtime.workflow,
@@ -446,6 +447,8 @@ export function registerSetSessionRuntimeTool(
       model: z.string().min(1).optional().describe('目标模型 id。'),
       effort: z.enum(EFFORT_VALUES).optional().describe('推理强度。省略表示保持当前值。'),
       fast: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('false=标准，true=快速，ultrafast=超快（仅支持该档位的 Codex 模型）。'),
+      permission_mode: z.enum(['ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']).optional()
+        .describe('任务权限档，复用界面的权限提交与回滚；提高权限走逐次确认。持有任务操作授权的调用任务不支持修改自身权限（含混合 patch），返回 UNSUPPORTED_CAPABILITY。'),
       expected_generation: z
         .number()
         .int()
@@ -454,7 +457,7 @@ export function registerSetSessionRuntimeTool(
           '必填:先调用 get_session_runtime 读取当前 generation 并原样传回,用于防止覆盖并发修改。',
         ),
     },
-    handler: async ({ session_id, harness, provider_id, model, effort, fast, expected_generation }) => {
+    handler: async ({ session_id, harness, provider_id, model, effort, fast, permission_mode, expected_generation }) => {
       const targetSessionId = session_id ?? requireCallerSession(deps);
       if (!targetSessionId) {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，请显式提供 session_id。');
@@ -466,9 +469,10 @@ export function registerSetSessionRuntimeTool(
         provider_id === undefined &&
         model === undefined &&
         effort === undefined &&
-        fast === undefined
+        fast === undefined &&
+        permission_mode === undefined
       ) {
-        return errorPayload('INVALID_ARGS', '至少提供 provider_id、model、effort 或 fast 之一。');
+        return errorPayload('INVALID_ARGS', '至少提供 provider_id、model、effort、fast 或 permission_mode 之一。');
       }
       if (expected_generation === undefined) {
         // schema 已必填,此分支为纵深防御:任何绕过 zod 的调用路径仍拿到同一引导。
@@ -483,6 +487,7 @@ export function registerSetSessionRuntimeTool(
           ...(model !== undefined ? { model } : {}),
           ...(effort !== undefined ? { effort } : {}),
           ...(fast !== undefined ? { fastMode: fast } : {}),
+          ...(permission_mode !== undefined ? { permissionMode: permission_mode } : {}),
         },
       });
       if (!result.ok) return mapControlFailure(result);
@@ -490,6 +495,7 @@ export function registerSetSessionRuntimeTool(
         session_id: targetSessionId,
         status: result.status,
         generation: result.generation,
+        ...(result.permissionMode !== undefined ? { permission_mode: result.permissionMode } : {}),
         effective: runtimeProfilePayload(result.effectiveProfile),
         pending: result.pendingMutation
           ? {
