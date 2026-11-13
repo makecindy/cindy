@@ -11141,6 +11141,7 @@
         "speaking": "{{name}} が返信中…",
         "elapsed": "経過 {{time}}",
         "onDevice": "{{device}} で",
+        "onOtherComputer": "別のコンピュータで",
         "onThisComputer": "このコンピュータで",
         "viewProcess": "経過を見る",
         "hideProcess": "経過を閉じる",

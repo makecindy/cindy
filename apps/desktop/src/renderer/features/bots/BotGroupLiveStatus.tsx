@@ -204,8 +204,9 @@ function BotGroupSingleProgressStrip({
       : since !== undefined ? t('chat.teammateProcess.elapsed', { duration: formatBotGroupElapsed(Math.max(0, now - since), t) })
       : t('chat.teammateProcess.processing')}</span>
     {lead?.executor ? <span data-testid="bot-group-executor" className="min-w-0 text-[var(--text-secondary)]">
-      {[lead.executor.here || !lead.executor.deviceName ? t('bots.groupChat.progress.onThisComputer')
-        : t('bots.groupChat.progress.onDevice', { device: lead.executor.deviceName }), lead.executor.model].filter(Boolean).join(' · ')}
+      {[lead.executor.here ? t('bots.groupChat.progress.onThisComputer') : lead.executor.deviceName
+        ? t('bots.groupChat.progress.onDevice', { device: lead.executor.deviceName }) : t('bots.groupChat.progress.onOtherComputer'),
+      lead.executor.model].filter(Boolean).join(' · ')}
     </span> : null}
   </span>;
   return <div data-testid="bot-group-work" className="mt-3 flex min-w-0 items-start gap-2.5">

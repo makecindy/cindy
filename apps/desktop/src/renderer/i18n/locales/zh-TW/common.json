@@ -11141,6 +11141,7 @@
         "speaking": "{{name}} 正在說…",
         "elapsed": "已做 {{time}}",
         "onDevice": "在 {{device}} 上",
+        "onOtherComputer": "在另一台電腦上",
         "onThisComputer": "在這台電腦上",
         "viewProcess": "看過程",
         "hideProcess": "收起過程",

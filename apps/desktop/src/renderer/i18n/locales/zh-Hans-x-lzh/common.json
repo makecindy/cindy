@@ -11141,6 +11141,7 @@
         "speaking": "{{name}} 方发言…",
         "elapsed": "已行 {{time}}",
         "onDevice": "于 {{device}}",
+        "onOtherComputer": "于他机",
         "onThisComputer": "于此机",
         "viewProcess": "观其过程",
         "hideProcess": "收过程",

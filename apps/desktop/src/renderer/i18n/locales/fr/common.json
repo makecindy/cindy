@@ -11273,6 +11273,7 @@
         "speaking": "{{name}} répond…",
         "elapsed": "Temps écoulé : {{time}}",
         "onDevice": "sur {{device}}",
+        "onOtherComputer": "sur un autre ordinateur",
         "onThisComputer": "sur cet ordinateur",
         "viewProcess": "Afficher le travail",
         "hideProcess": "Masquer le travail",

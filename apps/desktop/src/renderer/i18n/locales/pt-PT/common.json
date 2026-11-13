@@ -11273,6 +11273,7 @@
         "speaking": "{{name}} está a responder…",
         "elapsed": "{{time}} até agora",
         "onDevice": "em {{device}}",
+        "onOtherComputer": "noutro computador",
         "onThisComputer": "neste computador",
         "viewProcess": "Mostrar trabalho",
         "hideProcess": "Ocultar trabalho",
