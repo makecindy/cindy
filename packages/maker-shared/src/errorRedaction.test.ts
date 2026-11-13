@@ -157,6 +157,8 @@ describe('redactSensitiveText', () => {
     ['Request rejected (403): Forbidden', 403],
     ['Authorization: Bearer tok-403-x', undefined],
     ['HTTP 4030: unrelated code', undefined],
+    ['Permission denied: HTTP 403', undefined],
+    ['HTTP 403: Permission denied', undefined],
   ])('preserves an explicit provider access status in %s', (input, errorStatus) => {
     expect(extractNonSecretErrorSignals(input)).toEqual({
       ...(errorStatus === undefined ? {} : { errorStatus }), usageLimit: false,

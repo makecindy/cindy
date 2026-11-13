@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable } from '../botCandidateRecovery';
 import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
 
@@ -50,6 +51,18 @@ function harness(bot = true) {
 }
 
 describe('Bot candidate recovery', () => {
+  // #10119 review: use the production enrichment before the production recovery callbacks.
+  it('does not turn a text-only permission denial into a provider failure after enrichment', () => {
+    const message = 'Permission denied: HTTP 403';
+    const signals = { message, ...extractNonSecretErrorSignals(message) };
+    const h = harness();
+    expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(false);
+    expect(h.onResumableTurnError('s', signals, h.item)).toBeNull();
+    expect(h.fallback).not.toHaveBeenCalled();
+    expect(h.guard).not.toHaveBeenCalled();
+    expect(h.resume).not.toHaveBeenCalled();
+  });
+
   // #9836: legacy/statusless provider envelopes must reach the real recovery callbacks.
   it.each(['switched', 'exhausted', 'failed'] as const)('handles the reported provider 403 after fallback %s', async (outcome) => {
     const signals = { message: 'HTTP 403: The caller does not have permission' };

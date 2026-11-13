@@ -126,8 +126,14 @@ export function extractNonSecretErrorSignals(input: string): NonSecretErrorSigna
       input,
     );
 
+  // Do not promote an unstructured permission denial into the newly supported
+  // provider 403 signal. Callers still preserve an explicit SDK errorStatus.
+  const errorStatus = statusMatch
+    && !(statusMatch[1] === '403' && /permission denied/i.test(input))
+    ? Number(statusMatch[1]) as NonSecretErrorSignals['errorStatus']
+    : undefined;
   return {
-    ...(statusMatch ? { errorStatus: Number(statusMatch[1]) as NonSecretErrorSignals['errorStatus'] } : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
     usageLimit,
   };
 }
