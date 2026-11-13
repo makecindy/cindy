@@ -16,7 +16,7 @@ import {
 import { androidInstaller } from './androidInstaller';
 import type { AndroidInstallState } from './androidInstallController';
 import { indeterminateSweepRange, presentAndroidUpdate, type AndroidUpdatePresentation } from './androidUpdatePresentation';
-import { androidUpdateSheetActionsStyle, androidUpdateSheetFrameWidth } from './androidUpdateSheetLayout';
+import { androidUpdateSheetFrameWidth } from './androidUpdateSheetLayout';
 
 const APP_ICON = require('../../assets/update/app-icon.jpg');
 const APP_ICON_SIZE = 48;
@@ -305,7 +305,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   ready: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
   readyText: { color: colors.textSecondary, flex: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  actions: { ...androidUpdateSheetActionsStyle, flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xl },
+  actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xl, width: '100%' },
   // Secondary actions in a paired row are filled chips without a stroke (same as CompanionCardButton).
   // Wrapped labels keep breathing room inside the pill and stay centered.
   actionButton: { paddingVertical: spacing.sm },
