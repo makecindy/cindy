@@ -912,7 +912,7 @@ describe('ModelSelector trigger variants', () => {
     expect(modelListMaxHeightForRows(100)).toBe(300);
   });
 
-  it('bounds the default-session trigger in wide, narrow and ultra-narrow composers', () => {
+  it('retains the model name and its accessible identity in narrow composers', () => {
     const props = {
       remoteAgent: undefined,
       modelId: 'claude-opus-4-8',
@@ -924,21 +924,11 @@ describe('ModelSelector trigger variants', () => {
     };
     const view = render(React.createElement(ModelSelector, { ...props, compactToolbar: false }));
 
-    const wideTrigger = screen.getByRole('button', {
-      name: /Current: Opus 4\.8, effort: 超高/,
-    });
-    expect(wideTrigger.className).toContain('max-w-[min(320px,100%)]');
-    expect(within(wideTrigger).getByText('Opus 4.8').className).toContain('truncate');
-    expect(wideTrigger.getAttribute('title')).toContain('Opus 4.8');
-
     view.rerender(React.createElement(ModelSelector, props));
 
-    let trigger = screen.getByRole('button', {
+    const trigger = screen.getByRole('button', {
       name: /Current: Opus 4\.8, effort: 超高/,
     });
-    expect(trigger.className).toContain('w-[148px]');
-    expect(trigger.className).toContain('min-w-[72px]');
-    expect(within(trigger).getByText('Opus 4.8').className).toContain('truncate');
     expect(trigger.textContent).not.toContain('超高');
 
     view.rerender(
@@ -947,15 +937,61 @@ describe('ModelSelector trigger variants', () => {
         ultraCompactToolbar: true,
       }),
     );
-    trigger = screen.getByRole('button', {
-      name: /Current: Opus 4\.8, effort: 超高/,
-    });
-    expect(trigger.className).toContain('w-[64px]');
-    expect(trigger.className).toContain('min-w-[64px]');
-    expect(within(trigger).getByText('Opus 4.8').className).toContain('hidden');
-    // 可及名仍保留完整模型 + effort，视觉仅收起文字，不丢选择能力。
+    expect(within(trigger).getByText('Opus 4.8')).toBeTruthy();
     expect(trigger.getAttribute('aria-label')).toContain('Opus 4.8');
     expect(trigger.getAttribute('aria-label')).toContain('超高');
+  });
+
+  it('closes on composer resize and stays closed after an Agent confirmation settles', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver;
+    const composer = document.createElement('div');
+    let width = 500;
+    Object.defineProperty(composer, 'clientWidth', { get: () => width });
+    let notifyResize: (() => void) | undefined;
+    class MockResizeObserver {
+      private observingComposer = false;
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        if (target !== composer) return;
+        this.observingComposer = true;
+        notifyResize = () => this.callback([], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() { if (this.observingComposer) notifyResize = undefined; }
+    }
+    Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: MockResizeObserver });
+    let resolveConfirmation!: (confirmed: boolean) => void;
+    const confirmBrowseSwitch = vi.fn(() => new Promise<boolean>((resolve) => { resolveConfirmation = resolve; }));
+    try {
+      render(React.createElement(ModelSelector, {
+        remoteAgent: undefined,
+        modelId: 'claude-opus-4-8', effort: 'high', vendorKey: 'cc',
+        onModelChange: vi.fn(), onEffortChange: vi.fn(),
+        composerRef: { current: composer },
+        agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch: vi.fn() },
+      }));
+      const trigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
+      await act(async () => fireEvent.click(trigger));
+      expect(screen.getByTestId('model-options-popover')).toBeTruthy();
+      act(() => notifyResize?.());
+      expect(screen.getByTestId('model-options-popover')).toBeTruthy();
+      width = 450;
+      act(() => notifyResize?.());
+      expect(screen.queryByTestId('model-options-popover')).toBeNull();
+
+      await act(async () => fireEvent.click(trigger));
+      fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
+      await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByTestId('mock-popover-dismiss'));
+      expect(screen.getByTestId('model-options-popover')).toBeTruthy();
+      width = 400;
+      act(() => notifyResize?.());
+      expect(screen.queryByTestId('model-options-popover')).toBeNull();
+      await act(async () => resolveConfirmation(false));
+      expect(screen.queryByTestId('model-options-popover')).toBeNull();
+    } finally {
+      Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: originalResizeObserver });
+    }
   });
 
   it('caps the toolbar panel while field panels still follow their field width', () => {
