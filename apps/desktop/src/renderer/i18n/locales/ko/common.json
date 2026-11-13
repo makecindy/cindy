@@ -17461,6 +17461,7 @@
       "copied": "{{label}}을(를) 복사했습니다",
       "copyFailed": "{{label}}을(를) 복사하지 못했습니다. 선택하여 직접 복사해 주세요.",
       "urlUnavailable": "수신 주소를 지금 사용할 수 없습니다.",
+      "unsupportedFormat": "이 버전에서는 이 보내는 곳의 형식을 지원하지 않습니다.",
       "quotaNotifyTitle": "Webhook 수신 횟수를 모두 사용했습니다",
       "quotaExhausted": "오늘의 Webhook 수신 횟수 {{limit}}회를 모두 사용했습니다. {{time}}에 다시 시작됩니다. 그때까지 외부 이벤트로 작업이 실행되지 않습니다. 예약 실행과 모델 사용량에는 영향이 없습니다.",
       "signedOut": "Cindy 계정에 로그인하면 수신이 다시 시작됩니다. 설정은 유지됩니다.",

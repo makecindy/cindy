@@ -17535,6 +17535,7 @@
       "copied": "{{label}} copied",
       "copyFailed": "Could not copy {{label}}. Select it and copy it manually.",
       "urlUnavailable": "The receiving address is unavailable right now.",
+      "unsupportedFormat": "This version doesn't support this sender's format.",
       "quotaNotifyTitle": "Webhook delivery limit reached",
       "quotaExhausted": "Today's {{limit}} Webhook deliveries are used up and resume at {{time}}. Until then, outside events won't trigger tasks. Scheduled runs and model usage aren't affected.",
       "signedOut": "Sign in to your Cindy account to resume receiving. Your settings are kept.",

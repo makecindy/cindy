@@ -17461,6 +17461,7 @@
       "copied": "{{label}}已录",
       "copyFailed": "未能录{{label}}，请自选而复制。",
       "urlUnavailable": "受信之址暂不可用。",
+      "unsupportedFormat": "此版不纳此发信方之格式。",
       "quotaNotifyTitle": "Webhook 受信之数已尽",
       "quotaExhausted": "今日 Webhook 受信之数 {{limit}} 次已尽，{{time}} 乃复。未复之时，外事不触差事；定时之行与模型耗用皆不受影响。",
       "signedOut": "登录 Cindy 名籍，则复受信；所设皆存。",

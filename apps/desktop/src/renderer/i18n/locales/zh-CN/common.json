@@ -17461,6 +17461,7 @@
       "copied": "{{label}}已复制",
       "copyFailed": "未能复制{{label}}，请手动选择并复制。",
       "urlUnavailable": "接收地址暂时不可用。",
+      "unsupportedFormat": "当前版本不支持这个发送方的格式。",
       "quotaNotifyTitle": "Webhook 接收次数已用完",
       "quotaExhausted": "今天的 {{limit}} 次 Webhook 接收次数已用完，{{time}} 恢复。在此之前外部事件不会触发任务；定时运行和模型用量不受影响。",
       "signedOut": "登录 Cindy 账号后恢复接收，配置已保留。",

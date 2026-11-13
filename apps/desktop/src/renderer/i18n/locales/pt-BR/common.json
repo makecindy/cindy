@@ -17700,6 +17700,7 @@
       "copied": "{{label}} copiado",
       "copyFailed": "Não foi possível copiar {{label}}. Selecione o conteúdo e copie manualmente.",
       "urlUnavailable": "O endereço de recebimento não está disponível agora.",
+      "unsupportedFormat": "Esta versão não oferece suporte ao formato deste remetente.",
       "quotaNotifyTitle": "Limite de recebimentos de Webhook atingido",
       "quotaExhausted": "Os {{limit}} recebimentos de Webhook de hoje acabaram e voltam às {{time}}. Até lá, eventos externos não acionarão tarefas. Execuções agendadas e o uso do modelo não são afetados.",
       "signedOut": "Entre na sua conta Cindy para retomar o recebimento. Suas configurações foram mantidas.",

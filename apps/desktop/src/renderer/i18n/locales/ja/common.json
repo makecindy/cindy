@@ -17461,6 +17461,7 @@
       "copied": "{{label}}をコピーしました",
       "copyFailed": "{{label}}をコピーできませんでした。選択して手動でコピーしてください。",
       "urlUnavailable": "受信アドレスは現在利用できません。",
+      "unsupportedFormat": "このバージョンではこの送信元の形式に対応していません。",
       "quotaNotifyTitle": "Webhook の受信回数が上限に達しました",
       "quotaExhausted": "本日の Webhook 受信回数 {{limit}} 回を使い切りました。{{time}} に再開します。それまで外部イベントではタスクは実行されません。スケジュール実行とモデルの利用枠には影響しません。",
       "signedOut": "Cindy アカウントにログインすると受信を再開します。設定は保持されています。",

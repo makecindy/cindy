@@ -17535,6 +17535,7 @@
       "copied": "{{label}} kopiert",
       "copyFailed": "{{label}} konnte nicht kopiert werden. Manuell auswählen und kopieren.",
       "urlUnavailable": "Die Empfangsadresse ist derzeit nicht verfügbar.",
+      "unsupportedFormat": "Diese Version unterstützt das Format dieses Absenders nicht.",
       "quotaNotifyTitle": "Webhook-Empfangslimit erreicht",
       "quotaExhausted": "Die heutigen {{limit}} Webhook-Empfänge sind aufgebraucht. Fortsetzung um {{time}}. Bis dahin lösen externe Ereignisse keine Aufgaben aus. Geplante Ausführungen und die Modellnutzung sind nicht betroffen.",
       "signedOut": "Melde dich bei deinem Cindy-Konto an, um den Empfang fortzusetzen. Deine Einstellungen bleiben erhalten.",
