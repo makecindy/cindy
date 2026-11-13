@@ -15,6 +15,7 @@ export interface HostTerminalScope {
   createDefaultCwd?: boolean;
   environment: NodeJS.ProcessEnv;
   assertCurrent(): void;
+  onClosed?(dispose: () => void): () => void;
 }
 
 export type HostTerminalStart = Pick<CreateOptions, 'cwd' | 'program' | 'cols' | 'rows' | 'shellPref'>;
@@ -32,6 +33,7 @@ interface ScopeEntry {
   owner: ProcessOwner;
   pendingStarts: number;
   assertCurrent(): void;
+  unsubscribeClose?: () => void;
 }
 
 // DSH jobs-local/src/index.ts:34 uses 10 active jobs per exact owner.
@@ -78,6 +80,7 @@ export class HostTerminalService {
   private disposeEntry(key: string, entry: ScopeEntry): void {
     if (this.scopes.get(key) !== entry) return;
     this.scopes.delete(key);
+    entry.unsubscribeClose?.();
     entry.owner.destroy();
   }
 
@@ -95,6 +98,8 @@ export class HostTerminalService {
     if (!entry && create) {
       entry = { owner: new ProcessOwner(), pendingStarts: 0, revision: scope.revision, pluginId: scope.pluginId, assertCurrent: scope.assertCurrent };
       this.scopes.set(scope.key, entry);
+      const captured = entry;
+      entry.unsubscribeClose = scope.onClosed?.(() => this.disposeEntry(scope.key, captured));
     }
     return entry;
   }

@@ -154,7 +154,9 @@ import { providerGroupSwitchCause } from '../provider-group/failurePolicy.js';
 import { listProviderGroups, readProviderGroup } from '../provider-group/store.js';
 import { providerGroupReshare } from '../provider-group/reshareRuntime.js';
 import {
+  isOwnComputerModelUseEnabled,
   isRemoteProviderInvocationAllowed,
+  setOwnComputerModelUse,
   setRemoteProviderInvocationEnabled,
 } from '../maker-host/remote-provider-access-store.js';
 import { readProviderRunLocation, setProviderRunLocation } from '../maker-host/provider-run-location-store.js';
@@ -1029,7 +1031,7 @@ import { resolveOrcaImageAttachmentInput } from './orcaImageAttachments.js';
 import { buildOrcaQueueDispatchNote } from './orcaQueueNote.js';
 import { createOrcaWorkerReportQueue, type OrcaWorkerReportQueue } from './orcaWorkerReportQueue.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
-import { assertTaskActionCurrent, runTaskActionRequest, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, runTaskActionRequest, runTaskActionRewindBoundary, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
   getOrcaWorkerDiagnosticStatusReadOnly,
@@ -4892,7 +4894,9 @@ export async function withSessionInputStoppedForRewind<T>(
     if (coordinator.hasActiveTurnForRewind(sessionId)) {
       // Pause /goal before abort so the terminal event cannot auto-resume it.
       await goalStopObserver?.(sessionId);
-      coordinator.stop(sessionId, { keepQueue: true, pauseQueue: true });
+      const stopping = runTaskActionRewindBoundary(sessionId, undefined, 'stop', () =>
+        coordinator.stop(sessionId, { keepQueue: true, pauseQueue: true }));
+      if (stopping instanceof Promise) await stopping;
     } else {
       coordinator.pausePendingQueueForRewind(sessionId);
     }
@@ -5016,8 +5020,9 @@ export async function captureSessionAgentRequest(sessionId: string, supplement: 
   return request;
 }
 
-export function getTaskActionInputState(sessionId: string) {
-  return readTaskActionInput(sessionId, id => getMakerIfReady()?.getSession(id), agentInputCoordinatorHolder);
+export function getTaskActionInputState(sessionId: string, forSelfRewind = false) {
+  return readTaskActionInput(sessionId, id => getMakerIfReady()?.getSession(id), agentInputCoordinatorHolder,
+    forSelfRewind ? rewindInputSessions.has(sessionId) : undefined);
 }
 
 /** Runtime-only account boundary for personal author tools; never grants external-write permission. */
@@ -7844,6 +7849,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isRemoteProviderInvocationAllowed(providerId),
     setRemoteProviderInvocationEnabled: (providerId, enabled) =>
       setRemoteProviderInvocationEnabled(providerId, enabled),
+    getOwnComputerModelUse: () => isOwnComputerModelUseEnabled(),
+    setOwnComputerModelUse: (enabled) => setOwnComputerModelUse(enabled),
     getProviderRunLocation: (providerId) => readProviderRunLocation(providerId),
     setProviderRunLocation: (providerId, location) => setProviderRunLocation(providerId, location),
     stageClearProviderDisableOverrides: (providerId) =>

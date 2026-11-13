@@ -113,8 +113,12 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
 
 // Unit: plaintext admission belongs to Host install/update, not the dependency-
 // free manifest parser. An invalid update must preserve the old approved install.
-it.each(['http://public.example:8080', 'ws://public.example:8080', 'http://gitlab.internal:8080'])
-  ('rejects plaintext origin %s at inspect, install and update before replacing old approval', async origin => {
+// #10130 / 4559022319: the real installer must also reject exact cloud metadata
+// literals, including TLS declarations and existing embedded-IP forms.
+it.each(['http://public.example:8080', 'ws://public.example:8080', 'http://gitlab.internal:8080',
+  'http://169.254.169.254', 'https://100.100.100.200', 'wss://[fd00:ec2::254]',
+  'https://169.254.169.254', 'https://[::ffff:6464:64c8]', 'https://[64:ff9b::6464:64c8]'])
+  ('rejects unsafe origin %s at inspect, install and update before replacing old approval', async origin => {
     const id = 'network-policy';
     const safe = { ...goodManifest(id), slots: ['tool', 'network'], network: { hosts: ['api.example.com'] } };
     const installed = await manager.install(await makeCindy('old.cindy', safe), { namespace: null });
@@ -131,7 +135,8 @@ it.each(['http://public.example:8080', 'ws://public.example:8080', 'http://gitla
     expect(ghostInstallApprovalToken(unchanged.approval)).toBe(approvalToken);
   });
 
-it.each(['http://10.0.0.5:8080', 'http://127.0.0.1:8080', 'ws://localhost:8080'])
+it.each(['http://10.0.0.5:8080', 'http://127.0.0.1:8080', 'ws://localhost:8080',
+  'http://169.254.1.1', 'http://100.100.100.201', 'http://[fd00:ec2::255]'])
   ('accepts declared plaintext local origin %s through the actual Host installer', async origin => {
     const manifest = { ...goodManifest(), slots: ['tool', 'network'], network: { hosts: [origin] } };
     expect(await manager.install(await makeCindy('local.cindy', manifest), { namespace: null }))

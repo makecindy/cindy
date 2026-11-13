@@ -49,12 +49,16 @@ describe('communication notification extension', () => {
     }
     const info = plist.parse(readFileSync(path.join(root, 'CindyNotificationService/Info.plist'), 'utf8'));
     expect(info.NSExtension.NSExtensionPointIdentifier).toBe('com.apple.usernotifications.service');
+    expect(pbx.hasFile('CindyNotificationService/NotificationRetirement.swift')).toBeTruthy();
+    expect(readFileSync(path.join(root, 'CindyNotificationService/NotificationRetirement.swift'), 'utf8')).toContain('enum NotificationRetirement');
     expect(readFileSync(path.join(root, 'CindyNotificationService/teammate-cindy.png')).length).toBeGreaterThan(0);
     // Regression: Xcode rejects Communication Notifications on the NSE target;
     // the containing application must still request it (unit, actual plugin mods).
     const extensionEntitlements = plist.parse(readFileSync(path.join(root, 'CindyNotificationService/CindyNotificationService.entitlements'), 'utf8'));
     expect(extensionEntitlements).not.toHaveProperty('com.apple.developer.usernotifications.communication');
     const configured = plugin(config);
+    const mainInfo = await configured.mods.ios.infoPlist({ ...configured, modResults: {}, modRequest: { introspect: true } });
+    expect(mainInfo.modResults.UIBackgroundModes).toContain('remote-notification');
     const mainEntitlements = await configured.mods.ios.entitlements({ ...configured, modResults: {}, modRequest: { introspect: true } });
     expect(mainEntitlements.modResults['com.apple.developer.usernotifications.communication']).toBe(true);
     expect(configured.extra.eas.build.experimental.ios.appExtensions).toEqual([{
@@ -93,4 +97,3 @@ describe('notification content extension', () => {
     ]);
   });
 });
-

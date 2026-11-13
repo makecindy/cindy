@@ -9,6 +9,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
 import { withGhostResolvedLocale } from '../../../shared/ghost';
+import { handlePluginHostToolRequest, type PluginHostToolPorts } from '../hostToolSlot.js';
+import { authorizePluginHostToolCall } from '../../mcp-integrations/hostToolCaller.js';
+import { bindTaskActionInput } from '../../maker-ipc/taskActionAuthorization.js';
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
   createUtilityNodeWorkerProcess,
   GhostNodeRuntimeBroker,
@@ -2821,6 +2826,65 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
       for (let i = 0; i < 8; i++) await Promise.resolve();
       expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'host1', ok: !stale });
     } finally { broker.destroyAll(); }
+  });
+
+  // Unit #9801/622jIH: real broker idle collection -> Host admission -> coordinator
+  // drain. Earlier broker tests only checked the immediate reply, before collection.
+  it('delivers an accepted message once after its source worker is normally collected', async () => {
+    vi.useFakeTimers();
+    const ghost = childSpawnGhost();
+    ghost.manifest.node!.idleTimeoutSeconds = 30;
+    ghost.manifest.agent = { hostTools: ['control'] };
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    ghost.approvedHostToolGroups = ['control'];
+    let running = true;
+    const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async () => ({ kind: 'session-dispatch', source: 'test', dispatched: true }));
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
+      isTurnRunning: () => running, isLiveTurnRunning: () => running,
+      hasPendingInteraction: () => false, getAgentKind: () => 'codex', getSdkSessionId: async () => 'sdk',
+      createUserMessage: vi.fn<AgentInputCoordinatorDeps['createUserMessage']>(),
+      touchUserSend: vi.fn<AgentInputCoordinatorDeps['touchUserSend']>(async () => {}), emitProjection: () => {},
+    });
+    const item: AgentInputQueuedMessage = {
+      clientId: 'accepted-host-message', text: 'approved body', persistedContent: 'approved body',
+      model: 'model', effort: '', permissionMode: 'auto', workingDir: '/fixture',
+      chatMessage: { clientId: 'accepted-host-message', role: 'user', content: 'approved body' },
+      createOpts: { agentKind: 'codex', model: 'model', workingDir: '/fixture' },
+    };
+    const result = { content: [{ type: 'text' as const, text: '{"ok":true,"queued":true}' }] };
+    const ports: PluginHostToolPorts = {
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => ghost,
+      approveGroup: async () => true, policy: () => 'auto-approve', confirm: async () => true,
+      createRuntime: (server, caller) => ({ describe: name => ({ name, category: 'control' }), close: async () => {},
+        call: async (tool, args) => {
+          const admission = await authorizePluginHostToolCall({ caller, sessionId: undefined, server: server as 'cindy_helper', tool, args });
+          if (!admission.ok || !admission.run) throw Error('missing Host admission');
+          return await admission.run(async () => {
+            bindTaskActionInput('target', item);
+            coordinator.enqueue('target', item);
+            return result;
+          });
+        },
+      }),
+    };
+    const { broker, worker } = await bootWorker(ghost, undefined, true, (id, payload, current) =>
+      handlePluginHostToolRequest(id, payload, current, ports));
+    try {
+      worker.emitControl({ type: 'host-tool-request', reqId: 'queued', server: 'cindy_helper', tool: 'send_to_session', args: { target_session_id: 'target', message: item.text } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'queued', result });
+      expect(send).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(worker.killed).toBe(true);
+      running = false;
+      coordinator.wakeSession('target', 'source-worker-collected');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).toHaveBeenCalledOnce();
+      coordinator.wakeSession('target', 'duplicate-wake');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).toHaveBeenCalledOnce();
+    } finally { coordinator.clearSession('target'); broker.destroyAll(); }
   });
 
   it('未声明 childSpawn:代生请求收到结构化拒绝,不 fork', async () => {

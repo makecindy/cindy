@@ -3,7 +3,8 @@ import { handlePluginHostToolRequest, type PluginHostToolPorts } from '../hostTo
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { authorizePluginHostToolCall, createHostToolRuntime, disposePluginHostTools, getPluginHostToolCaller, setHostToolProviders } from '../../mcp-integrations/hostToolCaller.js';
 import { createTaskToolCallAuthorizer } from '../../maker-ipc/taskToolCallAuthorizer.js';
-import { captureTaskActionSyncGuard, captureTaskActionDeliveryGuard, hasTaskActionAuthorization } from '../../maker-ipc/taskActionAuthorization.js';
+import { captureTaskActionSyncGuard, captureTaskActionDeliveryGuard, hasTaskActionAuthorization, bindTaskActionInput, taskActionInputGuard } from '../../maker-ipc/taskActionAuthorization.js';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { createGhostPageBridge } from '../../../shared/ghostPageBridge.js';
 import { createSchedulerMcpServer, type SchedulerMcpDeps } from '@cindy/mcps';
@@ -36,6 +37,7 @@ function fixture() {
     approvedHostToolGroups: ['history', 'control', 'scheduler'],
   };
   let generation = 1;
+  let pageLive = true;
   const owner = () => ({ dataOwnerId: 'owner', ownerGeneration: generation });
   const result = { content: [{ type: 'text' as const, text: '{"ok":true,"items":["task"]}' }], _meta: { unchanged: true } };
   const invoke = vi.fn(async (_name: string, _args: Record<string, unknown>) => result);
@@ -45,7 +47,7 @@ function fixture() {
   const ports: PluginHostToolPorts = {
     owner, getGhost: () => ghost,
     createRuntime: (_server, caller) => ({
-      describe: name => ({ name, category: name === 'list_sessions' ? 'history' : name === 'schedule_list' ? 'scheduler' : name === 'archive_sessions' ? 'control' : 'auth' }),
+      describe: name => ({ name, category: name === 'list_sessions' ? 'history' : name === 'schedule_list' ? 'scheduler' : name === 'archive_sessions' || name === 'send_to_session' ? 'control' : 'auth' }),
       call: async (tool, args) => {
         const authorization = await commonAuthorize({ caller, sessionId: undefined, server: _server as 'cindy_helper', tool, args });
         if (!authorization.ok) throw new Error(authorization.errorCode);
@@ -59,8 +61,8 @@ function fixture() {
   };
   const call = (tool = 'list_sessions', args: Record<string, unknown> = {}) => handlePluginHostToolRequest('dashboard', {
     type: 'host-tool-request', server: tool === 'schedule_list' ? 'cindy_scheduler' : 'cindy_helper', tool, args,
-  }, () => true, ports);
-  return { ports, invoke, result, call, get ghost() { return ghost!; }, remove: () => { ghost = null; }, changeOwner: () => { generation++; } };
+  }, () => pageLive, ports);
+  return { ports, invoke, result, call, closePage: () => { pageLive = false; }, get ghost() { return ghost!; }, remove: () => { ghost = null; }, changeOwner: () => { generation++; } };
 }
 const code = (value: Awaited<ReturnType<typeof handlePluginHostToolRequest>>) => JSON.parse(value.content[0].type === 'text' ? value.content[0].text : '{}').errorCode;
 
@@ -152,7 +154,7 @@ describe('plugin Host tool entry', () => {
       isValidPluginInstallRelId, pluginInstallStoragePart,
       log: { info: noop, warn: noop }, disconnectRoutineSource: noop,
       releasePluginUiRegions: noop, releasePluginAppearance: noop,
-      pluginDeviceSync: { invalidate: noop }, getGhostPipeDispatcher: () => ({ onRuntimeState: noop }),
+      pluginDeviceSync: { invalidate: noop }, pluginLiveScreenViews: { invalidate: noop }, getGhostPipeDispatcher: () => ({ onRuntimeState: noop }),
       networkSlotSingleton: null, fsSlotSingleton: null, getDesktopHostTerminalService: () => ({ disposePlugin: noop }),
       disposePluginHostTools, modelPickerSingleton: null, pluginInvocations: { invalidate: noop },
       invocationRuntimeGenerations: new Map(), broadcastGhostRuntimeStates: noop,
@@ -283,6 +285,36 @@ describe('plugin Host tool entry', () => {
     expect(beforeWrite).toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
     await expect(beforeDelivery!()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
   });
+
+  // Unit #9801/622jIH: real Host admission + existing queued-input guard.
+  // Prior gateway tests kept the page alive; only normal page retirement changes here.
+  it.each(['none', 'owner', 'disabled', 'removed', 'directory', 'revision', 'group', 'target', 'body', 'client'] as const)(
+    'keeps accepted delivery after page close while rejecting real change: %s', async change => {
+      const f = fixture();
+      const item = { clientId: 'accepted', text: 'approved body' } as AgentInputQueuedMessage;
+      let write!: () => void;
+      f.invoke.mockImplementationOnce(async () => {
+        write = captureTaskActionSyncGuard()!;
+        bindTaskActionInput('target', item);
+        return f.result;
+      });
+      expect(await f.call('send_to_session', { target_session_id: 'target', message: item.text })).toBe(f.result);
+      f.closePage();
+      expect(write).toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      if (change === 'owner') f.changeOwner();
+      if (change === 'disabled') f.ghost.enabled = false;
+      if (change === 'removed') f.remove();
+      if (change === 'directory') f.ghost.dir = '/fixture/replaced';
+      if (change === 'revision') f.ghost.approval = { state: 'approved', revision: 'r2' };
+      if (change === 'group') f.ghost.approvedHostToolGroups = [];
+      if (change === 'body') item.text = 'changed';
+      if (change === 'client') item.clientId = 'changed';
+      const delivery = taskActionInputGuard(change === 'target' ? 'other-target' : 'target', item)!;
+      if (change === 'none') await expect(delivery()).resolves.toBeUndefined();
+      else await expect(delivery()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      expect(code(await f.call())).toBe('PERMISSION_DENIED');
+    },
+  );
 
   it.each(['list_sessions', 'schedule_list', 'archive_sessions'])('dispatches %s through the shared authorizer and preserves the complete tool result', async tool => {
     const f = fixture();

@@ -32,6 +32,43 @@ import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main
 
 import { dataOwnerStorageKey } from '../../desktop/src/main/dataOwnerPath.ts';
 import { listInstalledPlugins } from './plugins.mjs';
+import { Session } from '../../../packages/maker-core/src/session.ts';
+import { createTerminalToolExecutor } from '../../desktop/src/main/terminal/terminalToolAccess.ts';
+
+// #9825 C, integration: use a real Session.close and real child PTY through the
+// shared task tool adapter. Prior plugin-stop cases did not close a task runtime.
+test('closing the actual task Session ends its managed child process', async t => {
+  const workDir = tempProfile(t);
+  const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+  const session = new Session({ id: 'managed-task', agentKind: 'pi', workDir, capabilities: {}, logger,
+    handle: { setInteractionResolver() {}, isTurnRunning: () => false, close: async () => {} }, turnStallMs: 0 });
+  let ready, exit;
+  const started = new Promise(resolve => { ready = resolve; });
+  const exited = new Promise(resolve => { exit = resolve; });
+  const terminal = new HostTerminalService({ spawn: (...args) => {
+    const pty = defaultPtySpawn(...args);
+    let output = '';
+    pty.onData(data => { output += data; if (output.includes('task-child-ready')) ready(); });
+    pty.onExit(exit);
+    return pty;
+  } });
+  const executor = createTerminalToolExecutor({ service: terminal,
+    owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
+    pluginCall: () => undefined, getGhost: () => null, getSession: () => session,
+    pluginDirectory: () => workDir });
+  t.after(async () => { terminal.disposeScoped(); await session.close(); });
+  const { job } = await executor.call({ agentKind: 'pi', workingDir: workDir, sessionId: session.id,
+    sessionInstanceId: session.instanceId }, 'terminal_start', {
+    program: { command: process.execPath, args: ['-e', "process.stdout.write('task-child-ready\\n');process.stdin.resume()"] },
+  });
+  try {
+    await started;
+    assert.equal(terminal.manager.has(job.id), true);
+    await session.close();
+    assert.equal(terminal.manager.has(job.id), false, 'Session.close must remove and terminate its exact managed PTY');
+    await exited;
+  } finally { terminal.disposeScoped(); await exited; }
+});
 
 // Load each production assembly once. Unrelated UI/database/process services
 // are boundaries; credential selection, its source guard and network are real.

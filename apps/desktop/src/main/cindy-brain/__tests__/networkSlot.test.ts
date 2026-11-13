@@ -144,6 +144,41 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
 
 const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
 
+// #10130 / 4559022319, unit: declared direct targets previously skipped public
+// SSRF checks. Synthetic transports prove no metadata hop or WS is dispatched;
+// the same Host policy is used by Desktop and Node, without external requests.
+describe('plugin cloud metadata boundary', () => {
+  it.each(['http://169.254.169.254', 'http://100.100.100.200', 'http://[fd00:ec2::254]',
+    'https://169.254.169.254', 'https://[::ffff:6464:64c8]', 'https://[64:ff9b::6464:64c8]'])
+    ('rejects initial, redirected and WebSocket metadata origin %s', async origin => {
+      const start = 'https://start.example.test';
+      const wsOrigin = origin.replace(/^http/, 'ws');
+      const socket = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('never-open');
+      const fetch = vi.fn(async (url: string) => new Response('{}', { status: url.startsWith(start) ? 302 : 200,
+        headers: url.startsWith(start) ? { location: origin } : { 'content-type': 'application/json' } }));
+      const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: [start, origin, wsOrigin] } }),
+        fetchImpl: fetch,
+      });
+      try {
+        expect(await h.slot.handleFetchRequest('web-search', { url: origin })).toMatchObject({ ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(fetch).not.toHaveBeenCalled();
+        expect(await h.slot.handleFetchRequest('web-search', { url: start })).toMatchObject({ ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(await h.slot.handleNetworkRequest('web-search', { op: 'open', url: wsOrigin })).toMatchObject({ ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(socket).not.toHaveBeenCalled();
+      } finally { socket.mockRestore(); await h.slot.disposeAll(); }
+    });
+
+  it.each(['http://10.0.0.5', 'http://169.254.1.1', 'http://100.100.100.201', 'http://[fd00:ec2::255]'])
+    ('keeps ordinary private/link-local origin %s usable', async origin => {
+      const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: [origin] } }) });
+      try {
+        expect(await h.slot.handleFetchRequest('web-search', { url: origin })).toMatchObject({ ok: true });
+        expect(h.fetchImpl).toHaveBeenCalledOnce();
+      } finally { await h.slot.disposeAll(); }
+    });
+});
+
 // §4: saved credentials may only be injected by the Host; the existing direct
 // key cases cannot observe reference revocation or the unused-path IO budget.
 describe('saved credential Host injection', () => {

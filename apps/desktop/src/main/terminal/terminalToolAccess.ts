@@ -6,7 +6,12 @@ import { hasPluginHostToolGroupApproval } from '../cindy-brain/taskCapability.js
 import { pluginNodeEnvironment } from '../cindy-brain/nodeRuntimeProcessAdapter.js';
 import { HostTerminalService, type HostTerminalScope, type HostTerminalStart } from './hostTerminalService.js';
 
-interface LiveSession { instanceId: string; workDir: string; remoteHostId?: string | null }
+interface LiveSession {
+  instanceId: string;
+  workDir: string;
+  remoteHostId?: string | null;
+  onStatusChange(listener: (status: string) => void): () => void;
+}
 interface Ports {
   service: HostTerminalService;
   owner(): DataOwnerPushStamp;
@@ -52,7 +57,8 @@ export function createTerminalToolExecutor(ports: Ports): NonNullable<XdtHelperM
     assertCurrent();
     const environment = pluginNodeEnvironment(''); delete environment.CINDY_GHOST_ID;
     return { key: JSON.stringify([owner.dataOwnerId, owner.ownerGeneration, 'task', id]), revision: session.instanceId,
-      defaultCwd: session.workDir, environment, assertCurrent };
+      defaultCwd: session.workDir, environment, assertCurrent,
+      onClosed: dispose => session.onStatusChange(status => { if (status === 'closed') dispose(); }) };
   }
 
   return { async call(context, method, args, signal) {

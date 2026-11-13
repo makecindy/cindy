@@ -494,17 +494,20 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   // A handoff shell can render beside the live overlay; it needs its own detector gesture.
   const idleEdgeGesture = useMemo(() => Gesture.Pan().enabled(false), []);
 
+  // Home reads both callbacks when a row is used, so their identity is not list
+  // content. Keep the element stable: opening, closing or an outer layout render
+  // must not render every row again just before the panel has to appear.
+  const homeHost = useRef({ onSelectSession, runNavigation });
+  homeHost.current = { onSelectSession, runNavigation };
+  const selectHomeSession = useCallback((item: RemoteSessionListItem) => homeHost.current.onSelectSession?.(item), []);
+  const runHomeNavigation = useCallback((action: () => void) => homeHost.current.runNavigation(action), []);
+  const selectsSession = !!onSelectSession;
+  const homeContent = useMemo(() => <PaneEdgeInsetProvider value={persistent ? residentEdgeInset : edge.rowInset}><MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
+    newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
+    onSelectSession={selectsSession ? selectHomeSession : undefined} runNavigation={runHomeNavigation} /></PaneEdgeInsetProvider>,
+  [newSessionActionRef, shownWidth, currentSessionId, newSessionInSystemBar, persistent, residentEdgeInset, edge.rowInset, selectsSession, selectHomeSession, runHomeNavigation]);
   // Remove a collapsed column in this render, before Home receives width=0.
   // The layout effect still settles motion and suppresses modal-close callbacks.
-  // Presentation updates must not rebuild Home's rows when its inputs did not
-  // change. Focus/data subscriptions can still update the retained list itself.
-  const homeEdgeInset = persistent ? residentEdgeInset : edge.rowInset;
-  const homeContent = useMemo(() => <PaneEdgeInsetProvider value={homeEdgeInset}>
-    <MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
-      newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
-      onSelectSession={onSelectSession} runNavigation={runNavigation} />
-  </PaneEdgeInsetProvider>, [homeEdgeInset, newSessionActionRef, shownWidth, currentSessionId,
-    newSessionInSystemBar, persistent, onSelectSession, runNavigation]);
   // The existing native host keeps Fabric ownership while its plain content
   // container docks into the Modal. A local focus boundary pauses background
   // work without hiding/recreating every native view on the next reveal.

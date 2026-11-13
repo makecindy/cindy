@@ -513,13 +513,20 @@ describe('HostTerminalService caller ownership', () => {
   });
   it('binds ordinary tasks to the live Session instance and refuses local execution for SSH contexts', async () => {
     const host = service();
-    const session = { instanceId: 'live', workDir: '/tmp' };
+    const listeners = new Set<(status: string) => void>();
+    const session = { instanceId: 'live', workDir: '/tmp',
+      onStatusChange: (listener: (status: string) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
     const call = createTerminalToolExecutor({ service: host, owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
       getGhost: () => null, getSession: () => session, pluginDirectory: () => '/tmp', pluginCall: () => undefined });
     await expect(call.call({ agentKind: 'codex', workingDir: '/tmp', sessionId: 's', sessionInstanceId: 'old' }, 'terminal_start', {})).rejects.toThrow('SESSION_REQUIRED');
     await expect(call.call({ agentKind: 'pi', workingDir: '/remote', sessionId: 's', remoteHostId: 'ssh' }, 'terminal_start', {})).rejects.toThrow('REMOTE_TERMINAL_UNSUPPORTED');
     expect(allSpawns).toHaveLength(0);
     expect(await call.call({ agentKind: 'codex', workingDir: '/ignored', sessionId: 's' }, 'terminal_start', {})).toMatchObject({ job: { cwd: expect.stringMatching(/tmp$/) } });
+    for (const listener of listeners) listener('active');
+    expect(lastSpawn!.__killed).toBe(false);
+    for (const listener of listeners) listener('closed');
+    expect(lastSpawn!.__killed).toBe(true);
+    expect(listeners.size).toBe(0);
     host.disposeScoped();
   });
 });

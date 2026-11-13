@@ -227,6 +227,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   明确说明不支持侧边栏浏览器，不回退到界面焦点、不伪造任务或新建归属；专用浏览器、我的浏览器与原 Agent/UI 行为保持。
   外部 AI 工具历史的 `scan_importable_sessions`、`get_session_import_status`、`import_sessions` 在共享 handler 中对插件返回 `UNSUPPORTED_CAPABILITY`，不进入扫描、状态或导入回调；前两者会触发既有中断导入恢复，不能作为纯读取开放。Agent 和设置页不变。
   持有任务 admission 的调用任务修改自身 `permission_mode`（含混合运行设置请求）在任何写入前返回 `UNSUPPORTED_CAPABILITY`，不改写权限快照或放宽守卫；插件、修改其他任务、无 admission 及仅改模型保持原行为。
+  合法的模型与权限组合仍可单次调用；按 live Session 能力在模型写入前拒绝不支持的权限档。模型已应用或延后后权限失败，保持原权限提交/回滚，错误回执明确已生效字段、代次及原权限错误，不新增跨字段回滚。
+  已接受的插件消息复用现有独立投递守卫，正常关闭逻辑页或回收 Node 不撤销；实际投递仍核对 owner、安装目录/批准版本、enabled、最新组批准及精确目标/正文/clientId。停用、卸载、更新重批和账号变化仍撤销；宿主重启不持久恢复守卫。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
   `browser/computer/ssh/docs` 直接复用相应现有 MCP server 的 validated handler；新组不改公共调用或调用方签名。
   browser recipe/切换用户浏览器/upload、电脑敏感输入与系统权限、SSH 认证和文档文件边界沿用原规则。
@@ -245,6 +247,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   启动及输入等变更走原风险规则；命令具有用户级本机能力，确认中必须明确说明，不能宣称文件沙箱。
   精确环境沿用 Node 插件的系统路径/语言/用户配置目录筛选，不继承宿主秘密或 Node 注入变量。
   输出按独立游标保留且有界；读取断开不杀进程，显式停用/更新/卸载、账号切换清理对应资源。
+  任务托管作业订阅当次真实 Session 的关闭状态，关闭经 ProcessOwner destroyed 释放 PTY；
+  订阅随作用域销毁移除，旧实例不能回收新实例，普通轮次结束不触发回收。插件自主作业与 UI PTY 不变。
   Node Host 通过同一 `createLiziMcpProviders` / `HostTerminalService` 装配终端，逻辑页与 Node
   私有通道均进入公共 `hostToolSlot`。首次组批准继续使用 `ensurePluginTaskApproval` 和原 receipt。
   `history` 组的本机查询通过共享 `historyToolCallbacks` 读取同一 owner 数据库，不建插件任务副本。
@@ -254,8 +258,10 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   确认载荷不进任务事件回放，不借用或伪造 Session；Node 仍按实际已装配 provider 报告能力。
   Node Host 当前不装配生产调度器；`cindy_scheduler` 返回 `UNSUPPORTED_CAPABILITY` 和执行环境不支持说明，
   不把未提供服务描述成暂未就绪，不另建插件调度实现。此入口不承担 Node Host 自身功能补齐。
-  Node Host 已有 browser/computer 平台 provider 的对象同时供 Agent 与插件使用；原客户端、后端、
-  电脑开关与输入协调器限制继续生效，不因插件批准而补齐缺失端口或另建执行器。
+  Node Host 的 browser 平台 provider 同时供 Agent 与插件使用；原客户端与后端门禁继续生效。
+  Node Host 插件 computer 在创建 runtime、弹确认和驱动执行前返回 `UNSUPPORTED_CAPABILITY`，
+  能力发现也报告不可用；不信任跨进程 caller 元数据，不新增逐次授权证明。
+  Node Agent 与 Desktop 插件的电脑调用、快照生命周期及原 guard 不变。
   `files` 组复用上述批准与详情重试。`pick({mode:'directory',access:'files'})` 的原生选择框列明
   读写、列举、删除与监听范围，成功后在原亲选目录存储中记录随机引用及目录 dev/ino；旧路径不补引用。
   `fs root:'picked'` 和 helper `file_request` 使用同一 FsSlot/file-browser-core，不借用任务身份；
@@ -673,6 +679,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   GhostManager 提前校验声明，返回原结构化 file-invalid 或批准错误 NETWORK_INSECURE_ORIGIN。
   plugin-protocol 的 manifest 解析保持零运行依赖，仅检查格式；真正强制边界在每次派发与每一跳，
   同步复用现有 net-policy/loopback 分类器、不查 DNS。`http://gitlab.internal` 等内网主机名须 HTTPS。
+  插件网络统一拒绝 URL 中的云元数据字面量，不因 HTTPS/WSS 或来源批准而放行：
+  `169.254.169.254`（复用既有 IP 规范化）及现有 `isCloudMetadataIpAddress` 覆盖的
+  `100.100.100.200`、`fd00:ec2::254` 和嵌入形式。安装/批准和运行时每跳使用同一插件策略，
+  返回既有 `NETWORK_INSECURE_ORIGIN`；其他私网、CGNAT、ULA 和 link-local 范围不变。
+  不改共享云元数据分类器或 Browser direct 策略，不增加 DNS 解析或跨请求缓存。
   既有域名凭证不扩到新端口；Host 身份令牌、动态连接和 Node 代发授权仍限原 HTTPS:443。
   `as:'stream'` 返回 Host 持有的文本流连接；`network-request` 提供 WS 精确来源的
   open/read/send/close。两者共用 `HostNetworkConnections` 的插件归属、非消费游标与有界缓冲，
@@ -1420,11 +1431,20 @@ Brave、Tavily、Mivo 的历史 provider Key 仅在原安装锁内定点迁为�
 ### 插件实时屏幕
 
 `liveScreen: true`（且必须同时声明 `node`）是独立自主能力，也是唯一一条 Host 主动调用
-Node 工作进程的方向：用户从手机经远程桌面打开设备画面时，Main 的
+Node 工作进程的方向：用户从手机或同账号的另一台电脑经远程桌面打开设备画面时，Main 的
 `cindy-brain/liveScreenHost.ts` 只对已装启用、同时声明两者的插件，经
 `GhostNodeRuntimeBroker.handleRequest` 调用固定的 `liveScreen.list/open/input/control/close`，
 沿用 broker 的启用、更新、超时与限流复核；不经 main.js，不出现在 Agent 工具里，也不给插件
-任何手机或远程桌面凭证。回复是插件数据，逐字段校验后才交给远程桌面；帧流地址只接受
-`http://127.0.0.1:<端口>`，由 Main 读取，采集页与手机都拿不到地址。旧版插件的权限不变；
+任何手机、电脑或远程桌面凭证。回复是插件数据，逐字段校验后才交给远程桌面；帧流地址只接受
+`http://127.0.0.1:<端口>`，由 Main 读取，采集页与查看端（手机、另一台电脑）都拿不到地址。旧版插件的权限不变；
 声明该字段的更新属于能力增加，按 3.1 节处理。接口见 `FORGE_GUIDE` §4.22.1，协议与兼容边界见
 [协议兼容 · 代输入](protocol-compatibility/input-handoff.md)的「插件实时屏幕」。
+
+查看端在电脑上时方向相反：同一能力让插件在**自己的页面**里显示它在本账号另一台电脑上的设备
+（`taskView.remote` + `cindy.liveScreenView()`，`remote-desktop-viewer/pluginViews.ts`），不新增
+权限项。边界由 Main 守住：只答应已装启用且声明 `liveScreen` 的插件；只列出、只打开那台电脑上
+**同一来源同一 id** 的插件的设备（按逻辑身份比对，不信页面传来的插件名）；连接仍是普通的设备
+画面租约，目标由 Main 绑定，插件拿到的只有一个带一次性令牌的本机回环地址（画面流 + 设备输入），
+拿不到远程桌面、整屏画面、其它插件的设备或任何凭证；输入只收触摸、设备按键与打字。插件停用、
+卸载、换账号或本机锁屏时地址立即失效。本机没装该插件时宿主只提示安装，不代为显示设备。
+接口见 `FORGE_GUIDE` §4.22.2。
