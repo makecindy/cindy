@@ -39,6 +39,9 @@ const h = vi.hoisted(() => ({
   /** `${kind}:${accountId}` -> provider the account belongs to (placement.ts); absent = built-in. */
   placement: {} as Record<string, string>,
   restoreLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
+  /** Providers Cindy created for subscription accounts, and the providers whose accounts were read. */
+  created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
+  refreshed: new Set<string>(),
 }));
 vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../subscription-accounts/store.js')>();
@@ -62,11 +65,21 @@ vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
     readMergedLegacyCodexAccountId: merged,
     readMergedProviderAccount: merged,
     restoreAutoMergedLegacyCodexAccounts: h.restoreLegacy,
+    readCreatedSubscriptionProviders: () => h.created,
   };
 });
 vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../subscription-accounts/runtime.js')>();
-  return { ...actual, hasConnectedSubscriptionPool: () => Boolean(h.pool && !h.pool.disconnected) };
+  return {
+    ...actual,
+    // A created provider is connected once its own accounts were read (the built-ins follow the pool).
+    hasConnectedSubscriptionPool: (id: string) => (h.created[id] ? h.refreshed.has(id) : Boolean(h.pool && !h.pool.disconnected)),
+    // No real CLI homes here: a read only records which provider was read.
+    refreshSubscriptionPool: async (id: string) => {
+      h.refreshed.add(id);
+      return { providerId: id, configured: true, strategy: 'least' as const, accounts: [] };
+    },
+  };
 });
 vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../codex-account-auth.desktop.js')>();
@@ -163,6 +176,7 @@ vi.mock('../auth-adapters.js', () => ({
     hasCodexOAuthLogin: () => false,
     hasCodexOAuthLoginReadOnly: () => false,
     hasCodexOAuthLoginUnbound: () => false,
+    readAccountPresentationState: async () => ({ authenticated: false }),
   },
 }));
 vi.mock('../claude-native-auth.js', () => ({
@@ -291,6 +305,30 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // Review regression (2026-11-13, subscription-account-pools.md 合并与拿出由用户决定): a created
+  // provider counts as connected from reading its own accounts, but listing providers read only the
+  // built-in pool, so a created GPT provider stayed out of the new-task picker until its settings
+  // page was opened. Real provider list wiring; account reads are stood in by `h.refreshed`.
+  it('reads created subscription providers with the built-in one when listing providers', async () => {
+    const previous = getActiveCatalog();
+    h.pool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
+    h.created = { 'openai-sub-fixture': { kind: 'openai', name: 'OpenAI · second', account: 'second' } };
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      h.customProviderRead.mockResolvedValue([]);
+      await refreshCustomProvidersIntoCatalog();
+      const service = getDesktopProviderService({ allowSideEffects: false });
+      const created = async (snapshotOnly: boolean) =>
+        (await service.listProviders({ snapshotOnly })).find(provider => provider.id === 'openai-sub-fixture');
+      expect((await created(true))?.connected).toBe(false);
+      expect((await created(false))?.connected).toBe(true);
+    } finally {
+      h.pool = null;
+      h.created = {};
+      h.refreshed.clear();
+      setActiveCatalog(previous);
+    }
+  });
   // A connection merged into OpenAI (since 2026-11-13 only when the user chose it) keeps its model
   // membership under the canonical supplier through the real loader/view wiring. Regression: the
   // picker was covered but explicit/lazy full-catalog reads used by scheduled admission dropped

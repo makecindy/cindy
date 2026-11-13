@@ -1212,6 +1212,16 @@ export async function needsSubscriptionAccountHandoff(
   const binding = readAccountBinding(`task:${sessionId}`, provider)
     ?? (row.sdkSessionId ? readAccountBinding(`native:${row.sdkSessionId}`, provider) : undefined);
   if (!binding && provider === 'openai' && !legacyCodexDefault(provider)) return false;
+  // The user switched this task to another provider of this kind than its account was bound
+  // through (2026-11-13; switching closes the runtime, see setModel). The next turn continues on
+  // that provider's accounts with the handed-off context, unless its account already belongs there.
+  if (binding && local && local.providerId !== (binding.via ?? provider)
+    && accountProviderId(provider, binding.accountId) !== local.providerId) {
+    // Fail before closing the old runtime if the new provider cannot serve the model.
+    const candidate = await acquireSubscriptionAccount(local.providerId, row.model ?? undefined, [], false, { resuming: false });
+    candidate?.release();
+    return true;
+  }
   const id = binding?.accountId ?? (row.sdkSessionId ? 'default' : undefined);
   if (!id || !pool.accounts.some(a => a.id === id && a.paused)) return false;
   // Pausing hands a task to another account of the provider that account belongs to now; a

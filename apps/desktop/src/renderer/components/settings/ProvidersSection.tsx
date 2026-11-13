@@ -2791,6 +2791,9 @@ export function ProvidersSection() {
         if (
           p.id === 'xd' ||
           p.connected ||
+          // A provider created for subscription accounts stays listed while signed out, so its
+          // accounts can be signed in again or the provider deleted (2026-11-13).
+          !!p.subscriptionPool ||
           p.removed === false ||
           (p.id === 'openai' && openaiReconnectRequired) ||
           openaiHasImageCap ||

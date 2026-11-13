@@ -878,6 +878,23 @@ export function publishSubscriptionPoolProviders(): void {
   }
 }
 
+/**
+ * Read the built-in subscription together with the providers created for its kind (2026-11-13).
+ * Their connection state comes from these reads; reading only the built-in left a created provider
+ * "not connected" (missing from the model picker) until its settings page was opened.
+ */
+async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Promise<void> {
+  let created: string[] = [];
+  try {
+    created = Object.entries(readCreatedSubscriptionProviders())
+      .filter(([, entry]) => entry.kind === kind).map(([id]) => id);
+  } catch {
+    // An unreadable placement file leaves created providers as they were; the next read retries.
+  }
+  await refreshSubscriptionPool(kind);
+  await Promise.all(created.map((id) => refreshSubscriptionPool(id).catch(() => undefined)));
+}
+
 /** Apply account membership to both selectable and full routing snapshots. */
 function projectSubscriptionPoolCatalog(catalog: Catalog): Catalog {
   const pool = readPool('openai');
@@ -963,7 +980,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
       anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly }) => {
         if (readPool('anthropic')) {
-          if (!snapshotOnly) await refreshSubscriptionPool('anthropic');
+          if (!snapshotOnly) await refreshSubscriptionPoolsOfKind('anthropic');
           return hasConnectedSubscriptionPool('anthropic');
         }
         if (snapshotOnly) return hasClaudeNativeLogin();
@@ -999,7 +1016,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
       openai: async ({ allowSideEffects, snapshotOnly }) => {
         if (readPool('openai')) {
-          if (!snapshotOnly) await refreshSubscriptionPool('openai');
+          if (!snapshotOnly) await refreshSubscriptionPoolsOfKind('openai');
           return hasConnectedSubscriptionPool('openai');
         }
         return allowSideEffects ? desktopCodexAuthAdapter.hasCodexOAuthLogin() : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly();

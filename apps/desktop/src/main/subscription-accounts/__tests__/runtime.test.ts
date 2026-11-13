@@ -2180,6 +2180,10 @@ describe('native account assignment on the executing computer', () => {
     await first!.bind(['task:switch']);
     first!.release();
     await expect(acquireSubscriptionAccount(created!, undefined, ['task:switch'])).rejects.toThrow('changed');
+    // Before that resume happens, the pre-send check hands the switched task over with its context.
+    const row = (providerId: string) => ({ providerId, agentKind: kind === 'anthropic' ? 'cc' : 'codex', sdkSessionId: 'switch-history' });
+    expect(await needsSubscriptionAccountHandoff('switch', row(kind))).toBe(false);
+    expect(await needsSubscriptionAccountHandoff('switch', row(created!))).toBe(true);
     const fresh = await acquireSubscriptionAccount(created!, undefined, ['task:switch'], false, { resuming: false });
     expect(fresh!.account.configDir).toBe(`${kind}/third`);
     fresh!.release();
