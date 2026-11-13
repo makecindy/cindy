@@ -27,7 +27,7 @@
     "namePlaceholder": "Ex.: Viagem de fim de semana",
     "nameRequired": "Insira um nome para o grupo",
     "membersLabel": "Escolher amigos",
-    "selectedCount_one": "{{count}} selecionados, até {{max}}",
+    "selectedCount_one": "{{count}} selecionado, até {{max}}",
     "selectedCount_other": "{{count}} selecionados, até {{max}}",
     "close": "Fechar",
     "submitShort": "Criar",
@@ -78,7 +78,7 @@
     "continuePlan": "Iniciar próxima etapa",
     "continuePlanFailed": "Não foi possível iniciar a próxima etapa. Tente novamente.",
     "stepFailed": "{{name}} não concluiu",
-    "retryStep": "Tentar etapa novamente",
+    "retryStep": "Repetir etapa",
     "retryFailed": "Não foi possível tentar esta etapa novamente. Tente de novo.",
     "endPlan": "Encerrar divisão de trabalho",
     "planDone_one": "{{count}} etapa concluída",
@@ -109,7 +109,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.",
-        "advice": "Peça ao proprietário do parceiro para verificar se a Cindy está funcionando e se o computador está conectado à rede.",
+        "advice": "Peça ao proprietário do colega para verificar se a Cindy está funcionando e se o computador está conectado à rede.",
         "details": "Quando a Cindy e a rede voltarem a funcionar, envie a mensagem novamente."
       }
     },
@@ -174,7 +174,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, por isso a ferramenta não foi executada. Tente novamente quando a conexão for restabelecida.",
-      "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
+      "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecte seu Cindy para que o Cindy possa trabalhar por você (nenhum Cindy seu está online agora)."
     }
   },
   "plan": {
@@ -189,7 +190,7 @@
     "autoNote": "Cada etapa concluída inicia a próxima automaticamente.",
     "pauseNote": "O trabalho pausa após cada etapa até você clicar em “Iniciar próxima etapa”.",
     "superseded": "Atualizado",
-    "dismissed": "Ignorada",
+    "dismissed": "Ignorado",
     "stopped": "Interrompido",
     "stepDone": "Concluído",
     "stepRunning": "Em andamento",
@@ -368,7 +369,7 @@
     "dissolve": "Dissolver grupo",
     "dissolveNote": "Esta ação não pode ser desfeita. O envio de mensagens será interrompido para todos, os trabalhos ativos serão interrompidos e os convites expirarão. Os membros manterão acesso ao histórico que já podem ler.",
     "hide": "Remover da minha lista",
-    "hideNote": "Remova esta conversa da sua lista em todos os seus dispositivos. Isso não altera a participação no grupo, exclui o histórico, interrompe trabalhos em andamento nem afeta outros membros.",
+    "hideNote": "Remova esta conversa da sua lista em todos os seus dispositivos. Isso não altera a participação no grupo, não exclui o histórico, não interrompe trabalhos em andamento nem afeta outros membros.",
     "leave": "Sair do grupo",
     "leaveNote": "Você e seus amigos sairão deste grupo. Você não receberá mais novas mensagens nem terá acesso ao histórico.",
     "unavailable": "O servidor ou computador atual ainda não oferece suporte a esta ação.",
@@ -616,7 +617,7 @@
     "alreadyMember": "Você já está neste grupo.",
     "openGroup": "Abrir grupo",
     "editLink": "Editar link",
-    "otherInvitation": "Nenhum outro convite substituiu este. Para visualizá-lo, reabra o link original.",
+    "otherInvitation": "Nenhum outro convite substituiu este. Para ver o outro convite, reabra o link original dele.",
     "countUnknown": "Contagem de membros indisponível",
     "until": "Válido até {{date}}",
     "retryAccept": "Tentar entrar novamente",

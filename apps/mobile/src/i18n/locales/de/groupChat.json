@@ -62,7 +62,7 @@
     "placeholderDivision": "Beschreibe, was erledigt werden soll. Der Organisator teilt zuerst die Arbeit auf…",
     "placeholderPlanProposed": "Sag einfach, wenn du die Aufgabenverteilung ändern möchtest…",
     "placeholderPlanWaiting": "Soll {{name}} etwas ändern? Sag es einfach…",
-    "placeholderPlanRunning": "Deine Nachricht geht an {{name}}, der gerade daran arbeitet…",
+    "placeholderPlanRunning": "{{name}} arbeitet gerade daran und erhält deine Nachricht…",
     "send": "Senden"
   },
   "timeline": {
@@ -106,7 +106,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} hat die Verarbeitung nicht innerhalb der Wartezeit begonnen. Diese Anfrage ist beendet.",
-        "advice": "Bitte den Besitzer des Partners zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht.",
+        "advice": "Bitte den Besitzer des Teammitglieds, zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht.",
         "details": "Sobald Cindy und das Netzwerk wieder funktionieren, sende die Nachricht erneut."
       }
     },
@@ -171,7 +171,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Freundes kann die Anfrage in dieser Gruppe erneut stellen.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
-      "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut."
+      "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, verbinde dein Cindy, damit Cindy für dich arbeiten kann (gerade ist kein Cindy von dir online)."
     }
   },
   "plan": {
@@ -211,7 +212,7 @@
     "stepSkipped": "Übersprungen",
     "skippingTurn": "Wird übersprungen…",
     "queueWaiting": "Wartet auf Fortsetzen",
-    "skipTurnLabel": "Überspringen {{name}}",
+    "skipTurnLabel": "{{name}} überspringen",
     "stepSpoken": "Fertig",
     "allTurns_one": "{{count}} Freund",
     "allTurns_other": "Alle {{count}} Freunde",
@@ -285,7 +286,7 @@
     "makeAdmin": "Zum Admin machen",
     "removeAdmin": "Adminrolle entfernen",
     "roles": {
-      "owner": "Eigentümer",
+      "owner": "Inhaber",
       "admin": "Admin",
       "member": "Mitglied",
       "guest": "Gast"
@@ -301,11 +302,11 @@
       "all": "Alle Nachrichten",
       "mentions": "Nur Erwähnungen",
       "none": "Aus",
-      "allHint": "Erhalte Benachrichtigungen über Gruppennachrichten und neue Antworten in abonnierten Themen.",
-      "mentionsHint": "Erhalte Benachrichtigungen, wenn du erwähnt wirst, auch bei @alle. Aktualisierungen zur Arbeitsteilung werden weiterhin gemeldet.",
+      "allHint": "Erhalte Benachrichtigungen über Gruppennachrichten und neue Antworten in abonnierten Threads.",
+      "mentionsHint": "Erhalte Benachrichtigungen, wenn du erwähnt wirst, auch bei @alle. Aktualisierungen zur Arbeitsaufteilung werden weiterhin gemeldet.",
       "noneHint": "Deaktiviere alle Systembenachrichtigungen für diese Gruppe. Ungelesene Nachrichten bleiben erhalten.",
       "saving": "Wird gespeichert…",
-      "saveFailed": "Benachrichtigungen konnten nicht gespeichert werden. Versuche es erneut."
+      "saveFailed": "Benachrichtigungseinstellungen konnten nicht gespeichert werden. Versuche es erneut."
     }
   },
   "errors": {
@@ -385,12 +386,12 @@
     "expandRoot": "Ursprüngliche Nachricht aufklappen",
     "collapseRoot": "Ursprüngliche Nachricht einklappen",
     "backToGroup": "Zurück zur Gruppe",
-    "remoteUnavailable": "Threads sind auf dem Computer noch nicht verfügbar. Du kannst auf diesem Computer zur Gruppe zurückkehren.",
+    "remoteUnavailable": "Threads sind über eine Computerverbindung noch nicht verfügbar. Du kannst auf diesem Computer zur Gruppe zurückkehren.",
     "unavailableTitle": "Dieser Thread ist nicht verfügbar",
     "rootUnavailable": "Die ursprüngliche Nachricht wurde gelöscht oder ist nicht verfügbar. Antworten sind deaktiviert.",
     "archived": "Diese Gruppe ist archiviert. Du kannst keine Nachrichten senden.",
     "follow": "Folgen",
-    "following": "Gefolgt",
+    "following": "Folge ich",
     "alsoSend": "Auch an Hauptchat senden",
     "sharedOwn": "In einem Thread geantwortet und auch hier gesendet",
     "sharedOther": "Thread-Antwort von {{name}} geteilt",
@@ -415,11 +416,11 @@
     "actions": "Nachrichtenaktionen",
     "copy": "Kopieren",
     "lastMinutes": "Vor {{count}} Min.",
-    "lastHours": "vor {{count}} Std.",
+    "lastHours": "Vor {{count}} Std.",
     "dismiss": "Schließen",
     "selected": "Ausgewählt",
     "select": "Nachricht auswählen",
-    "sidebarOwn": "Du hast eine Antwort aus einem Thema geteilt",
+    "sidebarOwn": "Du hast eine Thread-Antwort geteilt",
     "sidebarOther": "{{name}} hat eine Thread-Antwort geteilt",
     "shareFailed_many": "{{count}} Antworten sind im Thread, konnten aber nicht an den Hauptchat gesendet werden."
   },
@@ -520,8 +521,8 @@
     "myTeammates": "Deine Freunde",
     "myTeammatesCaption": "Wähle, wie andere Mitglieder deine Freunde nutzen dürfen.",
     "manage": "Gruppenverwaltung",
-    "manageHintOwner": "Antworten, Koordination, Arbeitsteilung, Archivieren und Auflösen",
-    "manageHintAdmin": "Antworten, Koordination, Arbeitsteilung und Archivieren",
+    "manageHintOwner": "Antworten, Organisator, Arbeitsaufteilung, Archivieren und Auflösen",
+    "manageHintAdmin": "Antworten, Organisator, Arbeitsaufteilung und Archivieren",
     "manageCaption": "Nur der Gruppeninhaber und Admins können diese Seite sehen.",
     "hideHint": "Du bleibst in der Gruppe; sie wird nur aus deiner Liste ausgeblendet",
     "leaveRowHint": "Deine Freunde verlassen die Gruppe mit dir",
@@ -538,7 +539,7 @@
     "accessTools": "Kann Tools und Informationen nutzen",
     "replies": "Antwortverhalten der Freunde",
     "replyModeMentionedNote": "Freunde bleiben still, solange sie niemand mit @ erwähnt.",
-    "work": "Arbeitsteilung",
+    "work": "Arbeitsaufteilung",
     "organizerHint": "Legt fest, wer die einzelnen Schritte übernimmt. Standardmäßig der erste Freund.",
     "ownFolder": "Gruppeneigener Ordner",
     "archive": "Gruppe archivieren",
@@ -608,7 +609,7 @@
     "alreadyMember": "Du bist bereits in dieser Gruppe.",
     "openGroup": "Gruppe öffnen",
     "editLink": "Link bearbeiten",
-    "otherInvitation": "Diese Einladung wurde nicht durch eine andere ersetzt. Öffne ihren ursprünglichen Link erneut, um sie anzusehen.",
+    "otherInvitation": "Die andere Einladung hat diese nicht ersetzt. Um die andere Einladung anzusehen, öffne ihren ursprünglichen Link erneut.",
     "countUnknown": "Mitgliederzahl nicht verfügbar",
     "until": "Gültig bis {{date}}",
     "retryAccept": "Beitritt erneut versuchen",

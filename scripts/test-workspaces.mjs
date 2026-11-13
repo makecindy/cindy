@@ -540,8 +540,7 @@ export function buildPnpmArgs(
 			"exec",
 			commandSpec.bin,
 			...binArgs,
-			...undersizedVitestShardArgs(commandSpec, selectedFiles),
-			...(useRelated ? ["--passWithNoTests"] : []),
+			...(useRelated ? ["--passWithNoTests"] : undersizedVitestShardArgs(commandSpec, selectedFiles)),
 			...selectedArgs,
 		];
 		for (const pattern of tierConfig.exclude ?? []) {

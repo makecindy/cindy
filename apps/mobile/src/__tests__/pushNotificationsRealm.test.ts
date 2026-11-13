@@ -238,6 +238,20 @@ describe('push notification realm routing', () => {
     expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
   });
 
+  // #10113 + #9547 merge: preserve local action-failure alerts alongside badge
+  // push preferences. Existing tray tests cover ordinary pushes, not failed
+  // replies while push is disabled. Unit, real foreground handler; no native IO.
+  it.each([true, false])('shows an action failure only in its current lifecycle (current=%s)', async current => {
+    store.set('cindy.push.enabled', '0');
+    configureForegroundNotificationBehavior(() => true, () => current);
+    const handler = mocks.setNotificationHandler.mock.calls.at(-1)![0];
+    const notification = { request: { content: { data: { deepLink: '/sessions/task', cindyActionResult: true } } } };
+    expect(await handler.handleNotification(notification)).toEqual({
+      shouldShowBanner: current, shouldShowList: current, shouldPlaySound: current, shouldSetBadge: false,
+    });
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+  });
+
   it('requests iOS badge permission along with alerts and sounds', async () => {
     mocks.getPermissionsAsync.mockResolvedValueOnce({ status: 'undetermined', canAskAgain: true });
     mocks.requestPermissionsAsync.mockResolvedValueOnce({ status: 'granted' });
