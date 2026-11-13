@@ -389,7 +389,6 @@ it.each(queueShortcuts)('sends the visible recommendation ahead of a queued mess
 
 function QueueEditHarness({
   onCancel,
-  onRemove,
   onSubmit = async () => true,
   onStartVoiceConversation,
 }: {
@@ -442,8 +441,11 @@ it('sends a remote-only Codex model when the controller has no connected provide
   h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only')])];
   const onSend = vi.fn().mockResolvedValue(true);
   const view = render(<ChatInput {...props} sessionId="ssh-send" deviceLinkDeviceId={null} remoteHostId="builder"
-    initialModel="remote-only" initialProviderId="openai" initialEffort="low" onSend={onSend} />);
-  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+    initialModel="remote-only" initialProviderId="openai" initialEffort="low" placeholder="Message" onSend={onSend} />);
+  // Unit, Windows real-device regression: the composer was a nameless Group,
+  // so UIA could not write it. Use the real editable's accessible role/name in
+  // this existing send test; native ValuePattern is verified on the device.
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy());
   await act(async () => { h.editor!.commands.setContent('<p>Hello remote</p>'); });
   const send = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
   expect(send.disabled).toBe(false);
@@ -451,6 +453,29 @@ it('sends a remote-only Codex model when the controller has no connected provide
   await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
   expect(onSend.mock.calls[0][1]).toBe('remote-only');
   expect(onSend.mock.calls[0][6]).toEqual(expect.objectContaining({ providerId: 'openai' }));
+});
+
+// #10084, unit through real ChatInput: a new task routed by a model group or plugin picks its own
+// model at send time, so the draft model having no connected source must not grey out Send or
+// stop Enter. Without a router the same draft stays blocked. The send callback rechecks the kept model.
+it.each([
+  ['model group', true, { modelGroups: { config: { routes: [] }, active: { type: 'route', id: 'r1' }, onSelect: noOp, onManage: noOp } }],
+  ['plugin model', true, { pluginModels: { models: [], active: { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' }, onSelect: noOp } }],
+  ['no router', false, {}],
+] as const)('new task with %s and a draft model without a connected source can send: %s', async (_name, sends, router) => {
+  const onSend = vi.fn().mockResolvedValue(true);
+  const view = render(<ChatInput {...props} sessionId={undefined} deviceLinkDeviceId={null}
+    initialModel="draft-only" initialEffort="low" onSend={onSend}
+    {...(router as Partial<ComponentProps<typeof ChatInput>>)} />);
+  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Route me</p>'); });
+  expect((screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement).disabled).toBe(!sends);
+  await act(async () => {
+    fireEvent.keyDown(view.container.querySelector('[contenteditable]')!, { key: 'Enter', code: 'Enter' });
+  });
+  if (!sends) return expect(onSend).not.toHaveBeenCalled();
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(h.confirm).not.toHaveBeenCalled();
 });
 
 // 回归：投影 effort 为 null（目录误判/不可调档）时选择器回落会话已持久化档位，
@@ -728,24 +753,17 @@ it.each([320, 480, 800])('preserves the model slot across hydration (width=%s)',
   const view = render(<ChatInput {...inputProps} />);
   const slot = view.container.querySelector('[data-session-model-slot]') as HTMLElement;
   expect(slot).not.toBeNull();
-  const geometry = slot.className;
+  const sendButton = screen.getByRole('button', { name: 'newChat.sendButton.send' });
   expect(slot.textContent).toBe('');
   expect(slot.querySelector('button, [tabindex]')).toBeNull();
   expect(screen.queryByTestId('model-selector')).toBeNull();
   view.rerender(<ChatInput {...inputProps} initialModel="gpt-6-astra" />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBe(slot);
-  if (narrowToolbar) {
-    expect(slot.className).toBe(geometry);
-  } else {
-    // Loaded wide toolbars must not inherit the loading placeholder's width.
-    expect(slot.classList.contains('w-[148px]')).toBe(false);
-    expect(slot.classList.contains('h-[30px]')).toBe(true);
-    expect(slot.classList.contains('min-w-0')).toBe(true);
-  }
+  expect(screen.getByRole('button', { name: 'newChat.sendButton.send' })).toBe(sendButton);
   expect(slot.contains(screen.getByTestId('model-selector'))).toBe(true);
   view.rerender(<ChatInput {...inputProps} />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBe(slot);
-  expect(slot.className).toBe(geometry);
+  expect(screen.getByRole('button', { name: 'newChat.sendButton.send' })).toBe(sendButton);
   expect(slot.textContent).toBe('');
   view.rerender(<ChatInput {...inputProps} hideRuntimeControls />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBeNull();

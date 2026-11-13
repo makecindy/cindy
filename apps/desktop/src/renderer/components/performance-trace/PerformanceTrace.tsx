@@ -182,8 +182,6 @@ export function PerformanceTrace({
           ? createPortal(status, statusContainer)
           : null}
       <ConfirmDialog
-        presentation="standard"
-        cancelFirst
         maxWidth={460}
         contentSelectable
         descriptionClassName="text-13 leading-relaxed"

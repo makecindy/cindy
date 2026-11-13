@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { IMHost, IMMessageEvent } from '../types.js';
 import { LocalWebhookReceiver } from '../localWebhook.js';
 import { BlueBubblesApi, BLUEBUBBLES_MAX_BYTES, type BlueBubblesMessage } from './api.js';
-import { BlueBubblesIM } from './index.js';
+import { BLUEBUBBLES_SECRET_KEYS, BlueBubblesIM } from './index.js';
 import { UnsupportedInboundMediaError } from '../inboundKind.js';
 import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
 
@@ -28,20 +28,23 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   vi.spyOn(api, 'message').mockImplementation(async guid => {
     const message = messages.get(guid); if (!message) throw new Error('missing'); return message;
   });
+  vi.spyOn(api, 'unregisterWebhook').mockResolvedValue(undefined);
   vi.spyOn(api, 'registerWebhook').mockImplementation(async url => { callbackUrl = url; });
   const send = vi.spyOn(api, 'sendText').mockResolvedValue({ guid: 'outbound' });
   const host: IMHost = {
     ...(media ? { media } : {}),
     ...(files ? { files } : {}),
     secrets: { read: key => secrets.get(key) ?? null, write: (key, value) => { secrets.set(key, value); return true; },
+      readResult: key => secrets.has(key) ? { kind: 'value', value: secrets.get(key)! } : { kind: 'missing' },
       remove: key => { secrets.delete(key); }, isAvailable: () => true },
     ipc: { handle() {}, broadcast() {}, throwIpcError(_code, message): never { throw new Error(message); } },
     paths: { feishuMediaDir: 'unused' }, httpPostForm: async () => ({ status: 200, body: {} }),
   };
   const receiver = new LocalWebhookReceiver('127.0.0.1', 0);
+  const storage = { read: () => saved, write: (state: BlueBubblesState) => { saved = structuredClone(state); } };
   const im = new BlueBubblesIM(host, { secretPrefix: 'test-', api: () => api,
     receiver: () => receiver, resolvePeers: async () => ['127.0.0.1'], now: () => now,
-    storage: { read: () => saved, write: state => { saved = structuredClone(state); } } });
+    storage });
   connections.push(im);
   const received: IMMessageEvent[] = [];
   im.onMessage(event => { received.push(event); });
@@ -54,10 +57,178 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   };
   const webhook = (guid: string, url = callbackUrl) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'new-message', data: { guid, text: 'forged payload', handle: { address: 'attacker' } } }) });
-  return { im, api, received, message, webhook, send, chat, otherChat, advance: (ms: number) => { now += ms; }, state: () => saved!, url: () => callbackUrl };
+  return { im, api, host, storage, secrets, received, message, webhook, send, chat, otherChat, advance: (ms: number) => { now += ms; }, state: () => saved!, url: () => callbackUrl };
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, PR #10241/r4556881876: a failed candidate edit used to permanently
+  // ignore excluded pending inputs before restoring the old chat allowlist.
+  it.each([false, true])('finalizes excluded pending receipts only after the edit commits (write fails: %s)', async failWrite => {
+    const f = await fixture(null, undefined, true);
+    const original = f.im.getEditableConfig();
+    const originalCursor = f.state().cursors[f.chat.guid];
+    f.message('excluded-pending', { chats: [f.otherChat], dateCreated: 1001 });
+    f.message('included-pending', { dateCreated: 1002 });
+    f.advance(100);
+    f.state().inbox['excluded-pending'] = { receivedAt: 1001, state: 'pending' };
+    f.state().inbox['included-pending'] = { receivedAt: 1002, state: 'pending' };
+    const write = f.storage.write;
+    let failed = false;
+    vi.spyOn(f.storage, 'write').mockImplementation(state => {
+      if (failWrite && !failed && state.cursors[f.chat.guid] > originalCursor) {
+        failed = true;
+        throw new Error('receipt disk failure');
+      }
+      write(state);
+    });
+    const update = f.im.updateCredentials({ ...original, chatGuids: [f.chat.guid] });
+    if (failWrite) await expect(update).rejects.toThrow('BLUEBUBBLES_UPDATE_FAILED');
+    else await update;
+    await f.im.reconcile();
+    expect(failed).toBe(failWrite);
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.im.getEditableConfig().chatGuids).toEqual(failWrite ? original.chatGuids : [f.chat.guid]);
+    expect(f.state().inbox['excluded-pending'].state).toBe(failWrite ? 'accepted' : 'ignored');
+    expect(f.received.map(event => event.messageId)).toEqual(failWrite ? ['excluded-pending', 'included-pending'] : ['included-pending']);
+    await f.im.dispose(); await f.im.init();
+    expect(f.received).toHaveLength(failWrite ? 2 : 1);
+  });
+
+  // Tier 1, PR #10241/r4557073972: owner reclassification must not consume a
+  // command until the candidate is committed, even with an unchanged allowlist.
+  it.each([false, true])('dispatches owner commands only after the edit settles (recovery write fails: %s)', async failWrite => {
+    const f = await fixture();
+    const original = f.im.getEditableConfig();
+    const originalCursor = f.state().cursors[f.chat.guid];
+    for (const [id, time] of [['owner-new', 1001], ['owner-stop', 1002]] as const) {
+      f.message(id, { text: id === 'owner-new' ? '/new' : '/stop', dateCreated: time });
+      f.state().inbox[id] = { receivedAt: time, state: 'pending' };
+    }
+    f.advance(100);
+    let inCandidate = false, failed = false;
+    const candidateDeliveries: IMMessageEvent[] = [];
+    f.im.onMessage(event => { if (inCandidate) candidateDeliveries.push(event); });
+    const save = f.im.saveCredentials.bind(f.im);
+    vi.spyOn(f.im, 'saveCredentials').mockImplementation(async input => {
+      inCandidate = true;
+      try { await save(input); } finally { inCandidate = false; }
+    });
+    const write = f.storage.write;
+    vi.spyOn(f.storage, 'write').mockImplementation(state => {
+      if (failWrite && !failed && state.cursors[f.chat.guid] > originalCursor) {
+        failed = true; throw new Error('receipt disk failure');
+      }
+      write(state);
+    });
+    const update = f.im.updateCredentials({ ...original, ownerAddress: 'replacement@example.test' });
+    if (failWrite) await expect(update).rejects.toThrow('BLUEBUBBLES_UPDATE_FAILED');
+    else await update;
+    await f.im.reconcile();
+    expect(candidateDeliveries).toEqual([]);
+    expect(failed).toBe(failWrite);
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.im.getEditableConfig().ownerAddress).toBe(failWrite ? original.ownerAddress : 'replacement@example.test');
+    expect(f.received.map(event => [event.messageId, event.speaker?.isOwner])).toEqual([
+      ['owner-new', failWrite], ['owner-stop', failWrite],
+    ]);
+    await f.im.dispose(); await f.im.init();
+    expect(f.received).toHaveLength(2);
+  });
+
+  // Tier 1, PR #10241/r4552494796: adding a chat must not execute its old
+  // requests, while existing chats still recover missed messages and receipts.
+  it('persists a new chat activation boundary without resetting existing history', async () => {
+    const f = await fixture();
+    const original = f.im.getEditableConfig();
+    const oldCursor = f.state().cursors[f.chat.guid];
+    f.message('existing-missed', { dateCreated: 2000 });
+    f.message('new-chat-old-command', { chats: [f.otherChat], dateCreated: 2000, text: '/new' });
+    f.advance(10_000);
+    const history = vi.mocked(f.api.history).getMockImplementation()!;
+    vi.mocked(f.api.history).mockImplementation(async (chat, after, before, offset) =>
+      (await history(chat, after, before, offset)).filter(message => message.chats?.some(row => row.guid === chat)));
+    await f.im.updateCredentials({ ...original, chatGuids: [...original.chatGuids, f.otherChat.guid] });
+    expect(f.state().activatedAt).toBe(1000);
+    expect(f.state().chatActivatedAt?.[f.otherChat.guid]).toBeGreaterThan(2000);
+    expect(f.state().chatActivatedAt?.[f.chat.guid]).toBeUndefined();
+    expect(f.state().cursors[f.chat.guid]).toBeGreaterThanOrEqual(oldCursor);
+    expect(f.received.map(event => event.messageId)).toEqual(['existing-missed']);
+    // Delayed webhook delivery must obey the same boundary as history recovery.
+    await f.webhook('new-chat-old-command');
+    await f.im.reconcile();
+    expect(f.state().inbox['new-chat-old-command'].state).toBe('ignored');
+    const accepted = structuredClone(f.state().inbox['existing-missed']);
+    const boundary = f.state().chatActivatedAt![f.otherChat.guid];
+    await f.im.dispose(); await f.im.init();
+    expect(f.state().chatActivatedAt![f.otherChat.guid]).toBe(boundary);
+    expect(f.state().inbox['existing-missed']).toEqual(accepted);
+    f.message('new-chat-current', { chats: [f.otherChat] });
+    await f.webhook('new-chat-current'); await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['existing-missed', 'new-chat-current']);
+  });
+
+  // Tier 1, PR #10241/r4552243405: an unreadable saved key must not become a
+  // missing-key rollback entry. Abort through the production edit entry point.
+  it.each([...BLUEBUBBLES_SECRET_KEYS, 'unsupported-host'])('keeps the live connection and secrets intact when snapshotting %s fails', async key => {
+    const f = await fixture();
+    const previous = new Map(f.secrets);
+    const config = f.im.getEditableConfig();
+    const dispose = vi.spyOn(f.im, 'dispose');
+    const write = vi.spyOn(f.host.secrets, 'write');
+    const remove = vi.spyOn(f.host.secrets, 'remove');
+    if (key === 'unsupported-host') delete f.host.secrets.readResult;
+    else {
+      const read = f.host.secrets.readResult!;
+      f.host.secrets.readResult = name => name === `test-${key}` ? { kind: 'error' } : read(name);
+    }
+    await expect(f.im.updateCredentials({ ...config, password: 'replacement-test-only' })).rejects.toThrow('BLUEBUBBLES_SECRET_UNAVAILABLE');
+    expect(dispose).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(f.api.unregisterWebhook).not.toHaveBeenCalled();
+    expect(f.secrets).toEqual(previous);
+    expect(f.im.getStatus().kind).toBe('connected');
+  });
+
+  // Tier 1: editing an existing connection must retain secrets/receipts and recover a failed reconnect.
+  it('updates settings without resetting credentials or receipts, and restores settings on failure', async () => {
+    const f = await fixture();
+    const original = f.im.getEditableConfig();
+    const receipt = structuredClone(f.state());
+    await f.im.updateCredentials({ ...original, listenPort: 18748 });
+    expect(f.im.getEditableConfig().listenPort).toBe(18748);
+    expect(f.secrets.get('test-bluebubbles-password')).toBe('test-only');
+    expect(f.state()).toEqual(receipt);
+    expect(f.api.unregisterWebhook).toHaveBeenCalledTimes(1);
+    vi.mocked(f.api.info).mockRejectedValueOnce(new Error('unreachable'));
+    await expect(f.im.updateCredentials({ ...original, password: 'replacement-test-only' })).rejects.toThrow('BLUEBUBBLES_UPDATE_FAILED');
+    expect(f.im.getEditableConfig().listenPort).toBe(18748);
+    expect(f.secrets.get('test-bluebubbles-password')).toBe('test-only');
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.state()).toEqual(receipt);
+    await f.im.updateCredentials({ ...original, password: 'replacement-test-only' });
+    expect(f.secrets.get('test-bluebubbles-password')).toBe('replacement-test-only');
+  });
+
+  it('does not restore removed credentials when an edit is interrupted by disconnect', async () => {
+    const f = await fixture();
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    vi.mocked(f.api.info).mockImplementationOnce(async () => {
+      entered();
+      await new Promise<void>(resolve => { release = resolve; });
+      return { server_version: '1.9.9' };
+    });
+    const updating = f.im.updateCredentials({ ...f.im.getEditableConfig(), listenPort: 18748 });
+    const rejected = expect(updating).rejects.toThrow('BLUEBUBBLES_CONNECTION_CHANGED');
+    await started;
+    await f.im.clearCredentials();
+    release();
+    await rejected;
+    expect(f.secrets.size).toBe(0);
+  });
+
   // Tier 1, #9250/r4506476913: two waiting attachments used to refetch one
   // another indefinitely. The guard only bounds the old-code failure path.
   it('retains verified metadata for multiple attachments waiting behind a slow preparation', async () => {

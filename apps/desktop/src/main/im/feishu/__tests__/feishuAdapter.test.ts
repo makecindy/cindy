@@ -8,7 +8,7 @@
  *   - 默认 title / ack emoji
  *   - 群 lane prepareAgentTurnText: 拉取最近历史 + 不使用辅助模型 + 失败通知 owner
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import os from 'node:os';
 import path from 'node:path';
@@ -127,6 +127,10 @@ const CONFIG = {
   defaultPermissionMode: 'auto' as const,
   effortOverrides: { 'claude-opus-4-7': 'xhigh' as const },
 };
+
+// 控制文案跟随界面语言; 本文件断言的是中文原文。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('feishu ImChannelAdapter characterization', () => {
   const adapter = buildFeishuAdapter(fakeIm, CONFIG);
@@ -749,7 +753,7 @@ describe('feishu group lane adapter hooks', () => {
     expect(sendMarkdownText.mock.calls[0][1]).toContain(
       '(im:message.group_msg.include_bot:read)',
     );
-    expect(sendMarkdownText.mock.calls[0][1]).toContain('错误详情: code=99991672 no permission');
+    expect(sendMarkdownText.mock.calls[0][1]).toContain('错误详情：code=99991672 no permission');
     // 一键跳转当前 bot 应用的权限页(appId 取自 getStatus)
     expect(sendMarkdownText.mock.calls[0][1]).toContain(
       '[点击前往](https://open.feishu.cn/app/cli_abc/auth)',

@@ -438,3 +438,14 @@ it('keeps rendered group text untouched for height-only changes and follows live
   resize({ width: 640 });
   expect(node.textContent).toBe(text);
 });
+
+// #8603: the lightweight group-body consumer also uses the production AST.
+it('keeps nested plain group lists indented in both themes', async () => {
+  for (const mode of ['light', 'dark'] as const) {
+    theme.mode = mode;
+    await act(async () => root.render(createElement(BotGroupMarkdownText, { content: '- A\n  - B\n    - C' })));
+    const markers = [...node.querySelectorAll('span')].filter(e => ['•', '◦', '▪'].includes(e.textContent ?? ''));
+    expect(markers.map(e => e.textContent)).toEqual(['•', '◦', '▪']);
+    expect(markers.map(e => JSON.parse(e.parentElement!.dataset.style!).paddingLeft)).toEqual([0, 17, 34]);
+  }
+});

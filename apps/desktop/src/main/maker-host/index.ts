@@ -33,6 +33,7 @@ import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval
 import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.desktop.js';
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
+import { onSubscriptionPoolCodexModelsChanged } from '../subscription-accounts/runtime.js';
 import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -543,6 +544,13 @@ setActiveCatalogChangedListener((revision) => {
     });
     return;
   }
+});
+
+// Cold-start pool discovery completes after Maker construction. Keep the same
+// capability-before-broadcast ordering as the active catalog, including remote views.
+onSubscriptionPoolCodexModelsChanged(() => {
+  refreshSelectableModelsAndBroadcast({ providerId: 'openai' });
+  modelContextRuntimeRefreshListener?.();
 });
 
 /**

@@ -251,3 +251,11 @@ describe('buildSelectableMarkdownHtml remote images', () => {
     expect(html).toContain('<span class="xdt-image-chip">tracking pixel</span>');
   });
 });
+
+// #8603 / unit: inspect the actual HTML product consumed by the file reader.
+it('preserves nested list rows and source-line locations in the file reader', () => {
+  const html = buildSelectableMarkdownHtml('- A\n  - B\n    2. C', { targetLine: 3 });
+  expect(html).toContain('<div class="list-row" style="margin-left:1em"><span class="list-marker">◦</span>');
+  expect(html).toContain('<div data-src-line="2"><div class="list-row" style="margin-left:2em">');
+  expect(html).toContain('<span class="list-marker">2.</span>');
+});

@@ -131,16 +131,6 @@ export function RelayApproveDialog({
       </div>
       <ProviderShareDialogFooter>
         <Button
-          variant="cta"
-          palette="confirmation"
-          size="lg"
-          loading={busy === 'approve'}
-          disabled={busy !== null || !request.verified}
-          onClick={() => void decide(true)}
-        >
-          {t(`${K}.approve`)}
-        </Button>
-        <Button
           variant="secondary"
           palette="confirmation"
           size="lg"
@@ -149,6 +139,16 @@ export function RelayApproveDialog({
           onClick={() => void decide(false)}
         >
           {t(`${K}.reject`)}
+        </Button>
+        <Button
+          variant="cta"
+          palette="confirmation"
+          size="lg"
+          loading={busy === 'approve'}
+          disabled={busy !== null || !request.verified}
+          onClick={() => void decide(true)}
+        >
+          {t(`${K}.approve`)}
         </Button>
       </ProviderShareDialogFooter>
     </ProviderShareDialog>

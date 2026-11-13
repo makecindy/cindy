@@ -52,9 +52,9 @@
     "signIn": "Se connecter",
     "invalidLink": "Ce lien de partage n'est pas valide ou a expiré. Créez-en un nouveau sur votre ordinateur.",
     "cancelled": "La connexion a été annulée. Pour rejoindre ce relais, créez un nouveau lien de partage sur votre ordinateur.",
-    "accountRequesting": "Demande d’accord à « {{device}} »…",
+    "accountRequesting": "Demande d’autorisation à « {{device}} »…",
     "accountWaiting": "Connexion en cours, en attente de « {{device}} »…",
-    "openOnComputer": "Ce relais a été partagé par un autre compte. Ouvrez ce lien sur votre ordinateur pour le rejoindre. Ensuite, ce téléphone le verra dans Réglages > Relais et pourra le rejoindre d’un geste."
+    "openOnComputer": "Ce relais a été partagé par un autre compte. Ouvrez ce lien sur votre ordinateur pour le rejoindre. Ensuite, ce téléphone le verra dans Paramètres → Service de relais et pourra le rejoindre d’un geste."
   },
   "errors": {
     "unreachable": "Impossible de joindre ce relais. Vérifiez que votre téléphone et votre ordinateur sont sur le même réseau, ou que votre téléphone peut ouvrir cette adresse.",

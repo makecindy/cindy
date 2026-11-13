@@ -403,6 +403,8 @@ export interface Session {
   runtimePending?: SessionRuntimePendingProjection | null;
   /** Allows a companion input to reach host baseline recovery; does not assert model availability. */
   runtimeBaselineRecoveryPending?: boolean;
+  /** Host projection of existing task plugin choices, including uninstalled providers. */
+  runtimePluginsSelected?: boolean;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。
@@ -435,7 +437,7 @@ export interface Session {
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
   /** Host-owned teammate link, also used by the existing history API. Display only. */
-  companion?: { id: string; role: string; channel?: string; routineId?: string } | null;
+  companion?: { id: string; role: string; taskProjectDir?: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
   orcaRole?: OrcaRole | null;
   /** fork-session：派生来源会话 id（self-FK，源被删 → SET NULL）。null = 顶层会话。 */

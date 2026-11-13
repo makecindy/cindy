@@ -9,19 +9,20 @@
  *    受顶部「允许被控」总开关闸门约束:总开关关 → 置灰(黑名单状态仍保留)。
  */
 
-import { isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { isCindyApp, isMobilePlatform } from '@cindy/maker-shared/device-list';
 
 /**
- * 该平台的设备是否「可被控制」(能作为远程控制目标)。
+ * 该平台与 App 的设备是否作为「可被控制」的电脑目标展示。
  * 手机 / 平板(ios / android)是控制端,**不具备被控能力**(移动端硬编码 remoteControlEnabled=false),
  * 故不展示「我控制它」选项;桌面端(darwin / win32 / linux)即使当前关了被控,仍是可控目标。
  *
- * 与切换栏同口径(isMobilePlatform 的反面):只有手机 / 平板不可被控,**平台未知 / 旧记录 platform=null**
+ * 对 Cindy 与旧记录仍和切换栏同口径(isMobilePlatform 的反面):**平台未知 / 旧记录 platform=null**
  * 都按可被控处理 —— 否则切换栏(只排除 ios/android)把 null-platform 桌面设备当可控、能连上,设置页却因
  * 白名单漏了 null 而藏掉「我控制它」,出现「能连不能管」的不一致。
+ * App 自报为非 Cindy 时仅作为控制端，不展示电脑目标操作；省略 app 保持旧记录行为。
  */
-export function canBeControlledPlatform(platform: string | null): boolean {
-  return !isMobilePlatform(platform);
+export function canBeControlledPlatform(platform: string | null, app?: string): boolean {
+  return isCindyApp(app) && !isMobilePlatform(platform);
 }
 
 /**

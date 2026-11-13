@@ -8,19 +8,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SubscriptionPoolConfig } from '../../../shared/subscriptionAccounts.js';
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, arg: unknown, model?: unknown) => Promise<unknown>>(),
-  context: null as null | { sharedTask?: object },
+  context: null as null | { sharedTask?: object; controllerDeviceId?: string },
   trusted: true,
   execute: vi.fn(),
   availability: vi.fn(),
   sessionRead: vi.fn(),
   owner: 'owner-a',
   generation: 1,
-  bindings: {} as Record<string, { providerId: 'anthropic' | 'openai'; accountId: string }>,
+  bindings: {} as Record<string, { providerId: 'anthropic' | 'openai'; accountId: string; via?: string }>,
   pools: {} as Partial<Record<'anthropic' | 'openai', SubscriptionPoolConfig>>,
   beforeWrite: undefined as (() => void) | undefined,
   access: { disabledModels: {}, disabledProviders: {} } as { disabledModels: Record<string, true>; disabledProviders: Record<string, true> },
   remoteAllowed: new Set<string>(),
+  ownComputers: false,
   remoteModels: null as string[] | null,
+  placement: {} as Record<string, string>,
+  placementUnreadable: false,
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -45,15 +48,27 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: {} }));
 vi.mock('../../maker-host/override-settings-file.js', () => ({
-  createOverrideSettingsFile: () => ({
-    invalidateIfChanged: () => {},
-    read: () => ({ bindings: h.bindings, pools: h.pools }),
-    updateAtomic: async (edit: (input: { value: { pools: typeof h.pools; bindings: typeof h.bindings } }) => { pools: typeof h.pools }) => {
-      h.beforeWrite?.();
-      const next = edit({ value: { pools: h.pools, bindings: h.bindings } });
-      h.pools = next.pools;
-    },
-  }),
+  createOverrideSettingsFile: (options: { label: string }) => options.label === 'subscription-account-placement'
+    ? {
+        invalidateIfChanged: () => {},
+        isUnreadable: () => h.placementUnreadable,
+        read: () => ({ accounts: h.placement }),
+        updateAtomic: async (edit: (input: { value: { accounts: Record<string, string> } }) => { accounts: Record<string, string> }) => {
+          h.beforeWrite?.();
+          h.placement = edit({ value: { accounts: h.placement } }).accounts;
+        },
+      }
+    : {
+        invalidateIfChanged: () => {},
+        isUnreadable: () => false,
+        read: () => ({ bindings: h.bindings, pools: h.pools }),
+        updateAtomic: async (edit: (input: { value: { pools: typeof h.pools; bindings: typeof h.bindings } }) => { pools?: typeof h.pools; bindings?: typeof h.bindings }) => {
+          h.beforeWrite?.();
+          const next = edit({ value: { pools: h.pools, bindings: h.bindings } });
+          if (next.pools) h.pools = next.pools;
+          if (next.bindings) h.bindings = next.bindings;
+        },
+      },
 }));
 vi.mock('../../userDataPath.js', () => ({
   getUserDataDir: () => path.join(homedir(), 'fake-cindy-data'),
@@ -67,6 +82,7 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({
 }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (id: string) => h.remoteAllowed.has(id),
+  isRemoteProviderOpenToOwnComputers: (id: string) => h.remoteAllowed.has(id) || h.ownComputers,
 }));
 vi.mock('../../device-link/remoteModelAccess.js', () => ({
   remoteModelAccess: { allows: (_id: string, model: string) => !!model && (h.remoteModels === null || h.remoteModels.includes(model)) },
@@ -81,12 +97,31 @@ vi.mock('../runtime.js', () => ({
   readSubscriptionSessionAccount: h.sessionRead,
 }));
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
-import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId, normalizePoolFile } from '../store.js';
+import { onSubscriptionAccountsChanged } from '../runtime.js';
+import { broadcast } from '../../device-link/index.js';
+import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId, normalizePoolFile,
+  readProviderBoundAccountIds, writeAccountBindings } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
-import { legacyCodexAccountCanRun, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
+import { legacyCodexAccountCanRun, openAiRouteAllowsModel, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
+import {
+  normalizePlacementFile,
+  readMergedLegacyCodexAccountId,
+  readOpenAiMergedLegacyAccountsIfReadable,
+  restoreAutoMergedLegacyCodexAccounts,
+} from '../placement.js';
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
+
+// #10286 review: preserve the exact reset target through the real owner push
+// adapter; ordinary pool/load events retain their original payload.
+it('forwards scoped reset invalidation without marking ordinary pool changes', () => {
+  const listener = vi.mocked(onSubscriptionAccountsChanged).mock.calls[0][0];
+  listener('openai', 'second');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai', resetAccountId: 'second' });
+  listener('openai');
+  expect(broadcast).toHaveBeenLastCalledWith('subscription-accounts:changed', { providerId: 'openai' });
+});
 beforeEach(() => {
   h.context = null;
   h.trusted = true;
@@ -97,13 +132,42 @@ beforeEach(() => {
   h.beforeWrite = undefined;
   h.access = { disabledModels: {}, disabledProviders: {} };
   h.remoteAllowed.clear();
+  h.ownComputers = false;
   h.remoteModels = null;
+  h.placement = {};
+  h.placementUnreadable = false;
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
   h.availability.mockReset().mockResolvedValue(true);
   h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
 });
 
 describe('legacy Codex account upgrade', () => {
+  // PR #10405, unit: full routing derives historical model membership from the persisted source;
+  // an update must invalidate that index without admitting bindings from another provider kind.
+  it('indexes persisted historical accounts by their actual source and follows binding writes', async () => {
+    expect([...readProviderBoundAccountIds('openai', 'openai-sub-12345678')]).toEqual([]);
+    await writeAccountBindings(['native:first'], 'openai', 'second', 'openai-sub-12345678');
+    await writeAccountBindings(['native:other'], 'anthropic', 'third', 'anthropic-sub-12345678');
+    expect([...readProviderBoundAccountIds('openai', 'openai-sub-12345678')]).toEqual(['second']);
+    await writeAccountBindings(['native:first'], 'openai', 'third', 'openai-sub-12345678');
+    expect([...readProviderBoundAccountIds('openai', 'openai-sub-12345678')]).toEqual(['third']);
+    expect([...readProviderBoundAccountIds('anthropic', 'openai-sub-12345678')]).toEqual([]);
+  });
+  // PR #10271, unit: moving a remote legacy task must not bypass the destination's own grants.
+  it('checks the merged route model and remote grants independently of the old connection', () => {
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
+    h.ownComputers = true;
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(true);
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true })).toBe(false);
+    h.remoteModels = ['other-model'];
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
+    h.remoteModels = null;
+    h.access.disabledModels['openai:chatgpt/gpt-model'] = true;
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
+    h.access.disabledModels = {};
+    h.access.disabledProviders.openai = true;
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
+  });
   it('keeps original model exclusions and remote permission after folding a connection', () => {
     h.access.disabledModels['openai-a:chatgpt/gpt-model'] = true;
     expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: false, newRoute: true })).toBe(false);
@@ -118,6 +182,16 @@ describe('legacy Codex account upgrade', () => {
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: false, newRoute: true })).toBe(false);
     setLegacyCodexAccountPaused('openai-a', false);
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: false, newRoute: true })).toBe(true);
+  });
+
+  // PR #10150 review: with 「让我的其他电脑用本机模型」 on, an imported account serves the owner's other
+  // computers, but a provider-share guest still needs the per-provider grant.
+  it('admits imported accounts for own computers through the own-computer switch, never for guests', () => {
+    h.ownComputers = true;
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, ownComputer: true, newRoute: true })).toBe(true);
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, newRoute: true })).toBe(false);
+    h.ownComputers = false;
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, ownComputer: true, newRoute: true })).toBe(false);
   });
 
   // PR #9900, standard: a provider switch alone must not bypass the imported
@@ -174,6 +248,71 @@ describe('legacy Codex account upgrade', () => {
     await expect(migrateLegacyCodexAccounts([{ providerId: 'openai-b' }], { preserveDefault: false, legacyDefault: false })).rejects.toThrow('owner');
     expect(JSON.stringify(h.pools)).toBe(before);
   });
+
+  // 2026-11-13 user decision (subscription-account-pools.md 合并与拿出由用户决定), standard: the
+  // v0.1.135 upgrade merged connections without asking (reproduced with its real metadata writer).
+  // Restoring through the real placement entry must keep homes and pool accounts, turn a pause or
+  // removal into a disabled connection, keep a merge the user chose, wait while placement cannot be
+  // read, and undo an older client merging again after a downgrade.
+  it('restores upgrade-merged connections to their own accounts and keeps merges the user chose', async () => {
+    await migrateLegacyCodexAccounts(
+      ['openai-a', 'openai-b', 'openai-c', 'openai-d'].map((providerId) => ({ providerId })),
+      { preserveDefault: true, legacyDefault: false },
+    );
+    const ids = Object.fromEntries(['a', 'b', 'c', 'd'].map((key) => [key, readLegacyCodexAccountId(`openai-${key}`)!]));
+    h.pools.openai!.accounts = h.pools.openai!.accounts
+      .filter((account) => account.id !== ids.c)
+      .map((account) => (account.id === ids.b ? { ...account, paused: true } : account));
+    h.placement = { [`openai:${ids.d}`]: 'openai' };
+    const connections = new Set(['openai-a', 'openai-b', 'openai-c', 'openai-d', 'openai-e']);
+    const disable = (providerId: string) => { h.access.disabledProviders[providerId] = true; };
+    const isDisabled = (providerId: string) => h.access.disabledProviders[providerId] === true;
+
+    h.placementUnreadable = true;
+    expect(await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled })).toBe(false);
+    expect(readMergedLegacyCodexAccountId('openai-a')).toBe(ids.a);
+    h.placementUnreadable = false;
+
+    expect(await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled })).toBe(true);
+    expect(h.placement).toEqual({
+      [`openai:${ids.a}`]: 'openai-a', [`openai:${ids.b}`]: 'openai-b', [`openai:${ids.d}`]: 'openai',
+    });
+    expect(readMergedLegacyCodexAccountId('openai-a')).toBeUndefined();
+    expect(readOpenAiMergedLegacyAccountsIfReadable()).toEqual({ 'openai-d': ids.d });
+    expect(h.pools.openai!.accounts.map((account) => [account.id, account.paused])).toEqual([
+      ['default', false], [ids.a, false], [ids.b, false], [ids.d, false],
+    ]);
+    expect(readLegacyCodexAccountId('openai-c')).toBeUndefined();
+    expect(h.access.disabledProviders).toEqual({ 'openai-b': true, 'openai-c': true });
+    expect(accountDirectory('openai', ids.a)).toBe(path.join(homedir(), 'fake-cindy-data', 'codex-accounts', createHash('sha256').update(h.owner).digest('hex'), 'openai-a'));
+    const settled = JSON.stringify([h.pools, h.placement]);
+    expect(await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled })).toBe(false);
+    expect(JSON.stringify([h.pools, h.placement])).toBe(settled);
+    // Review regression: a pause the user sets in a restored connection's account list stays a pause;
+    // only a leftover pause on a connection already turned off (an interrupted restore) is converted.
+    const pause = (accountId: string) => { h.pools.openai!.accounts = h.pools.openai!.accounts
+      .map((account) => (account.id === accountId ? { ...account, paused: true } : account)); };
+    pause(ids.a);
+    expect(await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled })).toBe(false);
+    expect(h.access.disabledProviders['openai-a']).toBeUndefined();
+    pause(ids.b);
+    expect(await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled })).toBe(true);
+    expect(h.pools.openai!.accounts.map((account) => [account.id, account.paused])).toEqual([
+      ['default', false], [ids.a, true], [ids.b, false], [ids.d, false],
+    ]);
+
+    // An older client merges a connection again after a downgrade; the next load restores it.
+    await migrateLegacyCodexAccounts([{ providerId: 'openai-e' }], { preserveDefault: true, legacyDefault: false });
+    expect(readMergedLegacyCodexAccountId('openai-e')).toBeDefined();
+    await restoreAutoMergedLegacyCodexAccounts(connections, { disable, isDisabled });
+    expect(readMergedLegacyCodexAccountId('openai-e')).toBeUndefined();
+    expect(readMergedLegacyCodexAccountId('openai-d')).toBe(ids.d);
+    // Persisted placement never moves the CLI default account or accepts a malformed entry.
+    expect(normalizePlacementFile({ accounts: {
+      'openai:default': 'openai-a', 'openai:../escape': 'openai-a', [`openai:${ids.a}`]: 'Not An Id',
+      [`anthropic:${ids.a}`]: 'claude-work',
+    } })).toEqual({ accounts: { [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {} });
+  });
 });
 describe('subscription management boundary', () => {
   // #9833, unit: new optional model query keeps old caller shape and the
@@ -184,8 +323,9 @@ describe('subscription management boundary', () => {
     expect(await quota({}, 'anthropic')).toEqual({ providerId: 'anthropic', pooled: false, usage: null });
     h.availability.mockImplementation(async (_provider, _model, options) => options?.remote !== true);
     expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: true });
-    h.context = {};
+    h.context = { controllerDeviceId: 'own-mac' };
     expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: false });
+    expect(h.availability).toHaveBeenLastCalledWith('openai', 'gpt-model', { remote: true, ownComputer: true });
     for (const model of ['', ' ', 1, {}, 'x'.repeat(513)])
       await expect(quota({}, 'anthropic', model)).rejects.toThrow('INVALID_PARAMS');
     h.context = { sharedTask: {} };
@@ -236,13 +376,25 @@ describe('subscription management boundary', () => {
   it('serves the task-account read to the owner only, with validated ids', async () => {
     const query = { action: 'session', providerId: 'openai', sessionId: 'task-1', nativeSessionId: 'sdk-1' };
     await expect(invoke(query)).resolves.toEqual({ providerId: 'anthropic', state: 'legacy' });
-    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query, { remote: false });
-    h.context = {};
+    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query, { remote: false, ownComputer: false });
+    h.context = { controllerDeviceId: 'own-mac' };
     const remoteQuery = { action: 'session', providerId: 'anthropic', nativeSessionId: 'sdk-1', model: 'claude-sonnet' };
     await invoke(remoteQuery);
-    expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', remoteQuery, { remote: true });
+    // PR #10150 review: the account-switch probe for the owner's other computer honours the own-computer switch.
+    expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', remoteQuery, { remote: true, ownComputer: true });
+    const legacyQuery = { ...query, model: 'gpt-model', legacyProviderId: 'old-codex' };
+    await invoke(legacyQuery);
+    expect(h.sessionRead).toHaveBeenLastCalledWith('openai', legacyQuery, { remote: true, ownComputer: true });
+    const freshLegacyQuery = { action: 'session', providerId: 'openai', legacyProviderId: 'old-codex', model: 'gpt-model' };
+    await invoke(freshLegacyQuery);
+    expect(h.sessionRead).toHaveBeenLastCalledWith('openai', freshLegacyQuery, { remote: true, ownComputer: true });
+    // PR #10405: a route-aware query keeps the owner boundary and cannot mix both source forms.
+    const routeQuery = { ...remoteQuery, routeProviderId: 'anthropic-sub-12345678' };
+    await invoke(routeQuery);
+    expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', routeQuery, { remote: true, ownComputer: true });
     h.context = { sharedTask: {} };
     await expect(invoke(query)).rejects.toThrow('PERMISSION_DENIED');
+    await expect(invoke(routeQuery)).rejects.toThrow('PERMISSION_DENIED');
     h.context = null;
     for (const bad of [
       { action: 'session', providerId: 'anthropic' },
@@ -250,11 +402,15 @@ describe('subscription management boundary', () => {
       { action: 'session', providerId: 'anthropic', sessionId: 'x'.repeat(257) },
       { action: 'session', providerId: 'anthropic-second', sessionId: 'task-1' },
       ...['', ' ', 1, {}, 'x'.repeat(513)].map(model => ({ ...query, model })),
+      ...['', ' ', 1, {}, 'x'.repeat(257)].map(legacyProviderId => ({ ...query, legacyProviderId })),
+      { ...remoteQuery, legacyProviderId: 'old-codex' },
+      { ...legacyQuery, routeProviderId: 'openai-sub-12345678' },
+      ...['', '../outside', {}, 1].map(routeProviderId => ({ ...query, routeProviderId })),
     ])
       await expect(invoke(bad)).rejects.toThrow('INVALID_PARAMS');
     h.sessionRead.mockRejectedValue(new Error('fixture-private-path'));
     await expect(invoke(query)).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_FAILED]');
-    expect(h.sessionRead).toHaveBeenCalledTimes(3);
+    expect(h.sessionRead).toHaveBeenCalledTimes(6);
     expect(h.execute).not.toHaveBeenCalled();
   });
   it('rejects invalid account paths, settings and login keys before any native operation', async () => {

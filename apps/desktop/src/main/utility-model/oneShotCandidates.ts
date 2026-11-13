@@ -19,7 +19,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionS
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../maker-host/anthropic-responses-bridge-host.js';
 import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../maker-host/grok-oauth-login.desktop.js';
-import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
+import { readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken, getGenericOAuthLoginGeneration } from '../maker-host/generic-oauth.desktop.js';
 // undici 的 fetch,但 per-request 现取系统代理(裸 undici 不吃代理设置)。
 import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
@@ -1049,11 +1049,18 @@ async function requestExplicitProviderText(
   const isOAuth = authStrategy === 'oauth-token';
   const wireProtocol = routing.wireProtocol;
   const noAuth = authStrategy === 'none';
-  const credential = isOAuth
-    ? readCachedGenericOAuthAccessToken(storedCustomProviderId(provider.id), provider.auth.oauth)
-    : noAuth
-      ? null
-      : readCustomProviderKey(provider.id, agentKind);
+  const oauthStorageId = storedCustomProviderId(provider.id);
+  const loginGeneration = getGenericOAuthLoginGeneration(oauthStorageId);
+  let credential: string | null;
+  try {
+    credential = isOAuth
+      ? await readGenericOAuthAccessToken(oauthStorageId, provider.auth.oauth)
+      : noAuth ? null : readCustomProviderKey(provider.id, agentKind);
+  } catch {
+    return { ok: false, reason: 'no_candidate', attempts: [{
+      providerId: provider.id, model, transport, status: 'skipped', reason: 'not_authenticated',
+    }] };
+  }
   const hasLegacyHeaderCredential = (
     authStrategy === 'api-key-header'
     && Object.entries(routing.headerOverride ?? {}).some(([key, value]) => {
@@ -1123,22 +1130,21 @@ async function requestExplicitProviderText(
         systemPrompt: requestOpts?.systemPrompt,
         onText: requestOpts?.onText,
         responseInstructions: requestOpts?.responseInstructions,
-        beforeDispatch: requestOpts?.beforeDispatch
-          ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
-          : undefined,
-        credentialStillCurrent: requestOpts?.beforeDispatch
-          ? () => {
-              if (noAuth) return true;
-              if (isOAuth) {
-                return readCachedGenericOAuthAccessToken(
-                  storedCustomProviderId(provider.id),
-                  provider.auth.oauth,
-                ) === credential;
-              }
-              return readCustomProviderKey(provider.id, agentKind) === credential;
-            }
-          : undefined,
-        routeStillCurrent: requestOpts?.beforeDispatch ? routeStillCurrent : undefined,
+        beforeDispatch: async () => {
+          if (requestOpts?.beforeDispatch && !(await requestOpts.beforeDispatch({
+            providerId: provider.id, agentKind, model,
+          }))) return false;
+          return routeStillCurrent();
+        },
+        credentialStillCurrent: () => {
+          if (noAuth) return true;
+          if (isOAuth) {
+            return getGenericOAuthLoginGeneration(oauthStorageId) === loginGeneration
+              && readCachedGenericOAuthAccessToken(oauthStorageId, provider.auth.oauth) === credential;
+          }
+          return readCustomProviderKey(provider.id, agentKind) === credential;
+        },
+        routeStillCurrent,
       });
     },
   };

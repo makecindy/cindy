@@ -59,6 +59,7 @@ const mocks = vi.hoisted(() => {
     avatarColor: 'violet',
   })),
   openPath: vi.fn(async (): Promise<{ success: boolean; error?: string }> => ({ success: true })),
+  projectRepository: vi.fn(),
   };
 });
 
@@ -244,6 +245,7 @@ beforeEach(() => {
   mocks.profiles = [];
   mocks.profilesLoaded = true;
   mocks.params = {};
+  mocks.projectRepository.mockReset().mockResolvedValue('ready');
   mocks.availableVendors = new Set(['cc', 'codex', 'pi']);
   mocks.defaultModelChain = [];
   mocks.modelListeners.clear();
@@ -267,7 +269,7 @@ beforeEach(() => {
   ] }));
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     openPath: mocks.openPath,
-    localDb: { sessionsPush: { onPatched: mocks.onSessionPatched }, bots: { listSkills: vi.fn().mockResolvedValue([]) } },
+    localDb: { sessionsPush: { onPatched: mocks.onSessionPatched }, bots: { listSkills: vi.fn().mockResolvedValue([]), projectRepository: mocks.projectRepository } },
     maker: {
       onMcpChanged: mocks.onMcpChanged,
       listAgentSkills: mocks.listAgentSkills,
@@ -635,6 +637,26 @@ describe('Bot settings profile consolidation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
     fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.open' }));
     await waitFor(() => expect(mocks.openPath).toHaveBeenCalledWith('/managed/bots/bot-1'));
+  });
+
+  // #10216 unit: the actual settings entry must read without writing, explain
+  // missing identity, and finish an explicit retry without duplicate writes.
+  it('shows the Git identity problem and retries only when requested', async () => {
+    let finish!: (value: string) => void;
+    mocks.projectRepository.mockResolvedValueOnce('needs-identity')
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
+    await screen.findByText('bots.homeFolder.repository.needsIdentity');
+    expect(mocks.projectRepository).toHaveBeenCalledExactlyOnceWith('bot-1', false);
+    const retry = screen.getByRole('button', { name: 'bots.retry' });
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(mocks.projectRepository).toHaveBeenLastCalledWith('bot-1', true);
+    expect(mocks.projectRepository).toHaveBeenCalledTimes(2);
+    await act(async () => finish('ready'));
+    expect(screen.getByText('bots.homeFolder.repository.ready')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'bots.retry' })).toBeNull();
   });
 
   it('shows the open-folder failure in place', async () => {

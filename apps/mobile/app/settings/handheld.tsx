@@ -143,7 +143,7 @@ export default function HandheldSettingsScreen() {
           </SettingsGroup>
         ) : null}
 
-        <SettingsGroup title={t('settings.handheld.controls.title')}>
+        <SettingsGroup footer={t('settings.handheld.controls.taskHint')} title={t('settings.handheld.controls.title')}>
           {[
             <InfoRow key="gamepad" label={t('settings.handheld.controls.gamepad')} value={gamepads[0] ?? t('settings.handheld.controls.noGamepad')} />,
             <InfoRow key="move" label={t('settings.handheld.controls.moveKeys')} value={t('settings.handheld.controls.move')} />,
@@ -152,6 +152,8 @@ export default function HandheldSettingsScreen() {
             <InfoRow key="voice" label={voiceKeyLabel} value={t('settings.handheld.controls.voice')} />,
             <InfoRow key="scroll" label={t('settings.handheld.controls.scrollKeys')} value={t('settings.handheld.controls.scroll')} />,
             <InfoRow key="page" label="L1 / R1" value={t('settings.handheld.controls.page')} />,
+            <InfoRow key="triggerScroll" label={t('settings.handheld.controls.triggerScrollKeys')} value={t('settings.handheld.controls.triggerScroll')} />,
+            <InfoRow key="send" label="Start" value={t('settings.handheld.controls.sendText')} />,
           ]}
         </SettingsGroup>
         <SettingsGroup>

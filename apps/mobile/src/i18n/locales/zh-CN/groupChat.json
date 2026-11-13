@@ -133,8 +133,8 @@
       },
       "AUTH_REQUIRED": {
         "summary": "{{name}}无法回复：模型连接需要重新认证。",
-        "advice": "请重新连接对应的模型来源。",
-        "details": "请在设置中重新连接对应模型来源后重新发送。"
+        "advice": "请重新连接对应的模型供应商。",
+        "details": "请在设置中重新连接对应模型供应商后重新发送。"
       },
       "RATE_LIMITED": {
         "summary": "{{name}}无法回复：模型请求过于频繁。",
@@ -149,11 +149,11 @@
       "QUOTA_EXCEEDED": {
         "summary": "{{name}}无法回复：模型用量已达上限。",
         "advice": "请检查配额或选择其他模型。",
-        "details": "请检查对应来源的配额，或选择其他可用模型。"
+        "details": "请检查对应供应商的配额，或选择其他可用模型。"
       },
       "NETWORK_ERROR": {
         "summary": "{{name}}无法回复：网络连接失败。",
-        "advice": "请检查网络或Proxy。",
+        "advice": "请检查网络或 Proxy。",
         "details": "请检查网络或 Proxy 后重新发送。"
       },
       "RUNTIME_TIMEOUT": {
@@ -313,6 +313,7 @@
     "memberLimit": "一个群需要 2–6 位伙伴",
     "memberUnavailable": "有伙伴现在不可用，换一位再试",
     "mentionUnavailable": "点名的成员已不可用，请重新选择后发送",
+    "mentionAmbiguous": "有多位成员叫「{{name}}」，请从 @ 列表里选择要找的那位",
     "notFound": "这个群聊已不存在",
     "hostNotReady": "Cindy 还在准备中，请稍后重试",
     "planOpen": "正在分工，做完或停止后才能安排新的",
@@ -374,7 +375,7 @@
   "thread": {
     "openFailed": "无法打开话题，请重试。",
     "title": "话题",
-    "root": "原问题",
+    "root": "原消息",
     "replies": "回复",
     "placeholder": "回复这个话题…",
     "create": "创建话题",
@@ -468,7 +469,7 @@
       "offline": "代答已暂停 · 电脑离线",
       "waiting": "等待手动开启",
       "unbound": "尚未选择伙伴",
-      "enabled": "伙伴正在为你待答"
+      "enabled": "伙伴已准备好为你代答"
     },
     "trigger": {
       "always": "永久触发",
@@ -582,14 +583,14 @@
     "reusableLink": "长期有效 · 多人可重复使用",
     "singleUseUntil": "只能使用一次 · {{date}} 到期",
     "copyFailed": "复制失败，请选中链接手动复制。",
-    "changeAvatar": "更换本群头像",
+    "changeAvatar": "更换我在本群的头像",
     "resetAvatar": "恢复默认头像",
-    "avatarFailed": "本群头像没能更换，请再试一次。",
+    "avatarFailed": "没能更换你在本群的头像，请再试一次。",
     "inviteLinkNote": "把链接发给朋友，对方确认后加入。",
     "copy": "复制",
     "close": "关闭",
     "copied": "已复制邀请链接",
-    "projectDirOnComputer": "项目文件夹在电脑上选择或更换。",
+    "projectDirOnComputer": "请在电脑上选择或更换项目文件夹。",
     "saveFailed": "没能保存，请再试一次。",
     "authorizeTitle": "授权本群使用 {{name}} 的工具与资料？",
     "toolsHint": "本群成员可以使用伙伴已有的工具与私人资料，结果对全群可见。原有操作审批仍有效；撤回会停止进行中的请求，已执行的操作无法撤销。",

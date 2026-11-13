@@ -35,6 +35,7 @@ import {
   messageRecord,
   MESSAGE_BODY_FORMAT,
   PROVIDER_METADATA_TRUST_MS,
+  PROVIDER_RUNNING_TURNS_FIELD,
   readProviderMetadataContinuity,
 } from '@cindy/device-link';
 import type { requestFilePeer, stopFilePeers } from './filePeer';
@@ -62,7 +63,7 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
  * 本地 settings(第二道),server 缓存陈旧 / 被绕过时兜底。
  */
 
-import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from '@cindy/device-link';
+import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef } from '@cindy/device-link';
 import { RemoteInvokeTiming, observeRemoteInvoke } from './remoteInvokeTiming.js';
 import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
@@ -130,10 +131,13 @@ import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { isDeferredHistoryPush, deferredToolBoundary, buildHistoryWorkPatch, thinkingDeltaUpdatesWorkLine } from './historyViewPush';
+import { clearHistoryViewDeltas, withoutHistoryViewDeltaToken } from './historyViewDelta';
 import { HISTORY_WORK_PATCH_CHANNEL } from '@cindy/maker-shared/message-window';
 import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
 import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
+import { createToolBodyPushProjector } from './toolBodyProjection';
+import { createToolResultLiveLimiter } from './toolResultLiveLimit';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import type { readDeviceLinkSettings } from './settings-store.desktop';
 import type { noteControllerAccessAllowed, noteControllerAccessDenied, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
@@ -231,6 +235,8 @@ export interface RemoteAgentHandler {
    * 主人是否同意过这个人显示(转分享)。
    */
   sharedGroupStatus?(providerId: string, guestController?: string): Promise<ProviderShareGroupState[] | null>;
+  /** 「远程连接」里的「让我的其他电脑用本机模型」(默认关闭)。 */
+  ownComputerModelUseEnabled?(): boolean;
 }
 
 /** 供应商组(docs/product-rules/provider-groups.md)：组摘要只服务同账号电脑。 */
@@ -1136,6 +1142,7 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    if (!sameAccountController) delete rest.subscriptionPoolTarget;
     // 「允许被远程调用」只是标记、不裁剪目录：远程控制与手机仍要看到全部供应商，
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;
@@ -1185,17 +1192,7 @@ function projectInvokeResultForTunnel(
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
-  // A pool's remote switch does not imply the same per-model grant. Compare the
-  // projected, authorized models before hiding any individually offered source.
-  const pool = providers.find(provider => provider.id === 'openai' && provider.remoteInvocationEnabled === true);
-  const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
-  for (const provider of providers) {
-    if (!provider.subscriptionPoolAlias) continue;
-    const models = remoteInvocationModels(provider as unknown as ProviderView).models;
-    const covered = poolModels && Object.entries(models ?? {}).every(([agent, rows]) =>
-      (rows ?? []).every(model => poolModels[agent as keyof typeof poolModels]?.some(candidate => candidate.id === model.id)));
-    if (!covered) delete provider.subscriptionPoolAlias;
-  }
+  foldSubscriptionPoolAliases(providers);
   // New hosts advertise the optional directory budget. Consumers deduct their
   // own read time once; an existing shorter upstream remainder wins. Older
   // controllers ignore this additive field.
@@ -1206,6 +1203,27 @@ function projectInvokeResultForTunnel(
     ...(Array.isArray(r.providerOrder) ? { providerOrder: normalizeProviderOrder(r.providerOrder) } : {}),
     providerContinuity: continuity ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS },
   };
+}
+
+/**
+ * A pool's remote switch does not imply the same per-model grant. Compare the
+ * projected, authorized models before hiding any individually offered source.
+ * Mutates the projected entries in place.
+ */
+function foldSubscriptionPoolAliases(providers: Record<string, unknown>[]): void {
+  for (const provider of providers) {
+    if (!provider.subscriptionPoolAlias) continue;
+    const target = typeof provider.subscriptionPoolTarget === 'string' ? provider.subscriptionPoolTarget : 'openai';
+    const pool = providers.find(entry => entry.id === target && entry.remoteInvocationEnabled === true);
+    const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
+    const models = remoteInvocationModels(provider as unknown as ProviderView).models;
+    const covered = poolModels && Object.entries(models ?? {}).every(([agent, rows]) =>
+      (rows ?? []).every(model => poolModels[agent as keyof typeof poolModels]?.some(candidate => candidate.id === model.id)));
+    if (!covered) {
+      delete provider.subscriptionPoolAlias;
+      delete provider.subscriptionPoolTarget;
+    }
+  }
 }
 
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */
@@ -2440,15 +2458,20 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     : null;
   // Project lazily once, before batching/offline queueing. Another Desktop or old Mobile
   // on the same relay must still receive its unchanged payload.
-  let mobilePayload: unknown;
-  let mobilePayloadReady = false;
+  // Tool-body rules follow each controller's own declaration; guests keep their existing path.
+  // The Mobile projection follows and sees the already projected event.
+  const projectToolBodies = createToolBodyPushProjector(channel, remotePayload);
+  // tool-result-live-limit-v1: an ordinary live result over 256 KB keeps its head and a marker.
+  const limitLiveResult = createToolResultLiveLimiter(channel, remotePayload,
+    (sessionId, toolUseId) => readHistoryToolName(sessionId, toolUseId));
+  const mobilePayloads = new Map<unknown, unknown>();
   const projectedPayloadFor = (dst: string): unknown => {
-    if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return remotePayload;
-    if (!mobilePayloadReady) {
-      mobilePayload = projectMobileToolPush(channel, remotePayload);
-      mobilePayloadReady = true;
-    }
-    return mobilePayload;
+    const supports = (capability: string) => subscriptions.controllerSupports(dst, capability);
+    const base = isSharedTaskPeer(dst) || isProviderSharePeer(dst) ? remotePayload
+      : limitLiveResult(projectToolBodies(supports), supports);
+    if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return base;
+    if (!mobilePayloads.has(base)) mobilePayloads.set(base, projectMobileToolPush(channel, base));
+    return mobilePayloads.get(base);
   };
   // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
   const payloadFor = (dst: string): unknown => {
@@ -2468,8 +2491,11 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   const thinkingLine = deferred && historySessionId !== null && thinkingDeltaUpdatesWorkLine(historySessionId, remotePayload);
   const offlineTargets = targetsFor(true)
     .filter((dst) => !liveTargets.includes(dst));
+  // Kept folded across a link change until the controller re-reads (history-relink-folded-v1).
+  const keptFolded = (dst: string) => deferred && historySessionId !== null
+    && subscriptions.keepsFoldedAcrossLink(dst, historySessionId);
   for (const dst of offlineTargets) {
-    if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId)) continue;
+    if (deferred && historySessionId && (subscriptions.hasHistoryView(dst, historySessionId) || keptFolded(dst))) continue;
     const sharedMetadata = isSharedTaskPeer(dst) && sharedTaskTopic !== null;
     if (OFFLINE_QUEUEABLE_PUSH_CHANNELS.has(channel) || sharedMetadata) {
       offlinePushQueue.enqueue(dst, {
@@ -2484,9 +2510,11 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   for (const dst of liveTargets) {
     let targetPayload = payloadFor(dst);
     // A pending read also needs notices: its sampled rows can precede this push.
-    // Filtering still requires ready in projectsHistoryDetails, so raw survives.
-    if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId, true)) {
-      const folded = subscriptions.projectsHistoryDetails(dst, historySessionId);
+    // Filtering still requires ready in projectsHistoryDetails, so raw survives, except for a
+    // session kept folded across a link change (history-relink-folded-v1) until it is re-read.
+    const kept = keptFolded(dst);
+    if (deferred && historySessionId && (kept || subscriptions.hasHistoryView(dst, historySessionId, true))) {
+      const folded = kept || subscriptions.projectsHistoryDetails(dst, historySessionId);
       const event = (remotePayload as { event?: { type?: string; data?: { stage?: string } } })?.event;
       // A folded duration ticks locally. Token deltas do not change its summary.
       if (!folded || event?.type !== 'thinking' || event.data?.stage !== 'delta'
@@ -2748,6 +2776,9 @@ function dropAllControllers(
     }
     clearReportedControllerName(dst);
   }
+  // 登出 / 失去持有权：随后的 client.stop() 清空全部列表增量基准，历史页增量基页也一并全部释放，
+  // 包括此前普通断线、为重连保留的控制端（它们不在上面的 controllerIds 里）。
+  if (reason === 'shutdown') clearHistoryViewDeltas();
   clearAllRemoteInvokeState();
   subscriptions.clearAll();
   topicSubscriptionControllers.clear();
@@ -2910,7 +2941,9 @@ function purgeRevokedController(deviceId: string, preservePendingOpen = false): 
  */
 function wireInboundDispatch(client: DeviceLinkClient): () => void {
   activeClient = client;
-  return client.onFrame((env: Envelope) => {
+  // 历史页增量的被控端基页与列表增量基准同时释放：控制端被主动关掉时，普通断线保留。
+  const offReleased = client.onInboundPeerReleased((peer) => clearHistoryViewDeltas(peer));
+  const offFrame = client.onFrame((env: Envelope) => {
     // 可靠传输的 ACK 边界是“已进入本地执行状态机”，不是“耗时 IPC 已执行完成”。
     // handleInvoke 会在第一次 await 前登记 in-flight requestId 去重；这里不把它的
     // Promise 交回 transport，避免一个慢查询把后续 stop/steer/push 全部堵在队头。
@@ -2918,6 +2951,10 @@ function wireInboundDispatch(client: DeviceLinkClient): () => void {
       log.error('inbound frame handling failed', err);
     });
   });
+  return () => {
+    offReleased();
+    offFrame();
+  };
 }
 
 async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<void> {
@@ -4098,7 +4135,7 @@ function compactInvokeResultForDeviceLink(
   }
   if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')
     && result.result && typeof result.result === 'object') {
-    const page = result.result as Record<string, unknown>;
+    const page = withoutHistoryViewDeltaToken(result.result as Record<string, unknown>);
     const mapPage = (map: (row: unknown) => unknown): InvokeResultPayload => ({ ok: true, result: {
       ...page,
       ...(Array.isArray(page.messages) ? { messages: page.messages.map(map) } : {}),
@@ -4776,21 +4813,81 @@ async function runProviderShareInvoke(
   return projected.ok ? { ...result, result: projected.value } : projected;
 }
 
-/**
- * 「用本机模型」被单独关掉的同账号电脑：目录照常给(远程控制与手机仍要看全部供应商)，只是不再标成
- * 可远程调用，它的模型列表与「运行于」里就不出现这台电脑。
- */
-function withoutModelUseForRevokedController(src: string, result: unknown): unknown {
-  if (!(readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(src)) return result;
+type ProviderEntry = Record<string, unknown>;
+
+function mapProviderEntries(result: unknown, map: (entry: ProviderEntry) => ProviderEntry): unknown {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
   const value = result as { providers?: unknown };
   if (!Array.isArray(value.providers)) return result;
   return {
     ...value,
     providers: value.providers.map((provider) => provider && typeof provider === 'object' && !Array.isArray(provider)
-      ? { ...(provider as Record<string, unknown>), remoteInvocationEnabled: false }
+      ? map(provider as ProviderEntry)
       : provider),
   };
+}
+
+/**
+ * 同账号电脑读本机目录时的「可远程调用」标记，在补供应商组摘要与运行数之前算好，运行数才按实际开放情况给出
+ * (别处的组把这台电脑当组员时据此计负载)：
+ * - 「远程连接」里打开了「让我的其他电脑用本机模型」：全部供应商都标成可用(本机建了组的随后由
+ *   {@link restoreGroupedOwnComputerModelUse} 还原)；
+ * - 这台电脑的「用本机模型」被单独关掉：一律不标(目录照常给，远程控制与手机仍要看全部供应商)。
+ * 其余照「允许被远程调用」原值。分享来的受邀者另有投影，不经这里。
+ */
+function projectOwnComputerModelUse(src: string, result: unknown): unknown {
+  const revoked = (readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(src);
+  // 开关由远程 Agent 主机提供；主机没起来时本机也借不出模型，按关闭处理。
+  if (!revoked && remoteAgentHandler?.ownComputerModelUseEnabled?.() !== true) return result;
+  return mapProviderEntries(result, (entry) => ({ ...entry, remoteInvocationEnabled: !revoked }));
+}
+
+/**
+ * 本机建了供应商组的供应商不随「让我的其他电脑用本机模型」打开(组内选电脑仍按逐个供应商的开关，见
+ * remote-agent host 的 ownComputersMayUse)：补完组摘要后，把只因新开关而打开的这类供应商还原成原来的
+ * 标记与运行数。逐台撤权得到的不可用不在此还原。
+ */
+function restoreGroupedOwnComputerModelUse(original: unknown, decorated: unknown): unknown {
+  const before = new Map<string, ProviderEntry>();
+  mapProviderEntries(original, (entry) => {
+    if (typeof entry.id === 'string') before.set(entry.id, entry);
+    return entry;
+  });
+  return mapProviderEntries(decorated, (entry) => {
+    // 只撤回新开关带来的打开；逐台关掉「用本机模型」得到的不可用一律保留。
+    if (!entry.group || typeof entry.id !== 'string' || entry.remoteInvocationEnabled !== true) return entry;
+    const previous = before.get(entry.id);
+    if (!previous || previous.remoteInvocationEnabled === true) return entry;
+    const restored: ProviderEntry = { ...entry, remoteInvocationEnabled: previous.remoteInvocationEnabled };
+    if (previous.remoteInvocationEnabled !== true) delete restored[PROVIDER_RUNNING_TURNS_FIELD];
+    return restored;
+  });
+}
+
+/**
+ * 账号池折叠旧 Codex 连接(subscriptionPoolAlias)要按最终的「可远程调用」判断：目录投影按原标记先折过一次，
+ * 新开关或逐台撤权改了标记后，从投影前的目录取回别名再折一次。否则账号池随新开关可用时，旧连接仍单独出现，
+ * 选择器出现重复入口，菜单栏还会为已在池里的账号多读一次配额。
+ */
+function refoldOwnComputerPoolAliases(source: unknown, final: unknown): unknown {
+  const aliases = new Map<string, { subscriptionPoolAlias: unknown; subscriptionPoolTarget?: unknown }>();
+  mapProviderEntries(source, (entry) => {
+    if (typeof entry.id === 'string' && entry.subscriptionPoolAlias) aliases.set(entry.id, {
+      subscriptionPoolAlias: entry.subscriptionPoolAlias,
+      ...(typeof entry.subscriptionPoolTarget === 'string' ? { subscriptionPoolTarget: entry.subscriptionPoolTarget } : {}),
+    });
+    return entry;
+  });
+  if (aliases.size === 0) return final;
+  const restored = mapProviderEntries(final, (entry) => typeof entry.id === 'string' && aliases.has(entry.id)
+    ? { ...entry, ...aliases.get(entry.id) }
+    : entry);
+  const providers = (restored as { providers?: unknown }).providers;
+  if (Array.isArray(providers)) {
+    foldSubscriptionPoolAliases(providers.filter((entry): entry is Record<string, unknown> =>
+      !!entry && typeof entry === 'object' && !Array.isArray(entry)));
+  }
+  return restored;
 }
 
 /**
@@ -5238,6 +5335,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
 
     const historyView = (payload.channel === 'local-db:messages:view' || payload.channel === 'local-db:messages:view-intent')
       && typeof args[0] === 'string' ? subscriptions.prepareHistoryView(src, args[0]) : undefined;
+    // history-relink-folded-v1: a raw list read means the controller renders raw rows for this
+    // session, so it gets full pushes again until its next page read.
+    if (payload.channel === 'local-db:messages:list' && typeof args[0] === 'string') subscriptions.forgetFoldedAcrossLink(src, args[0]);
     if (hasRemoteBotSessionLookup()) await timing.measure('authorizeBefore', () => assertRemoteBotInvocationAllowed(args, payload.channel));
     const listingCapabilities = payload.channel === 'maker:provider:list'
       ? invokeControllerCapabilities(payload)
@@ -5286,9 +5386,11 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     // 远程 set-* 回流:被控端 set-* runtime-only,补一次 DB 持久化 + 广播 patched,让控制端
     // 镜像收敛到被控端真相(取代控制端乐观覆盖)。本机会话不走这条(走 renderer update)。
     await timing.measure('persist', () => persistRemoteSetting(payload.channel, payload.args ?? [], result));
+    // 投影前的目录留给同账号目录在最终授权后重新折叠账号池别名。
+    let sessionProjected: unknown;
     const projected = await timing.measure('project', async () => projectInvokeResultForTunnel(
         payload.channel,
-        await projectRemoteSessionResult(payload.channel, result),
+        sessionProjected = await projectRemoteSessionResult(payload.channel, result),
         subscriptions.controllerSupports(
           src,
           CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
@@ -5298,15 +5400,20 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         isSameAccountController(src),
       ));
     // 供应商组摘要与运行数只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
-    const grouped = payload.channel === 'maker:provider:list' && isSameAccountController(src) && providerGroupRemoteHandler
-      ? await providerGroupRemoteHandler.decorateProviderList(projected)
-      : projected;
-    const decorated = payload.channel === 'maker:provider:list' && isSameAccountController(src)
-      ? withoutModelUseForRevokedController(src, grouped)
+    const ownList = payload.channel === 'maker:provider:list' && isSameAccountController(src);
+    const opened = ownList ? projectOwnComputerModelUse(src, projected) : projected;
+    const grouped = ownList && providerGroupRemoteHandler
+      ? await providerGroupRemoteHandler.decorateProviderList(opened)
+      : opened;
+    const decorated = ownList && opened !== projected
+      ? refoldOwnComputerPoolAliases(sessionProjected, restoreGroupedOwnComputerModelUse(projected, grouped))
       : grouped;
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     return { ok: true, result: decorated };
   } catch (err) {
+    // A failed page read releases a session kept folded across a link change.
+    const failedSessionId = payload.channel === 'local-db:messages:view' ? payload.args?.[0] : undefined;
+    if (typeof failedSessionId === 'string') subscriptions.forgetFoldedAcrossLink(src, failedSessionId);
     // 被控端 handler 的 throwIpcError `[CODE] message` 原样透传,
     // 控制端 renderer 继续用 extractIpcError 解码
     const message = err instanceof Error ? err.message : String(err);
@@ -5376,7 +5483,7 @@ function readOptionalString(record: unknown, key: string): string | undefined {
 }
 
 function shortId(deviceId: string): string {
-  return deviceId.slice(0, 8);
+  return shortDeviceRef(deviceId);
 }
 
 const __testing = {

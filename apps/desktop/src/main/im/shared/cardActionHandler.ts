@@ -14,6 +14,7 @@
  * 兼容已发出的旧卡片, 见 cardBuilders 头注释)。
  */
 
+import { imText } from './imText';
 import fs from 'node:fs';
 
 import type { ChannelIM, IMCardActionEvent } from '@cindy/im';
@@ -64,6 +65,7 @@ import {
   type ControlProject,
   type ControlSession,
 } from './controlProjects';
+import { projectToken } from './projectToken';
 import { exitControl } from './controlState';
 import { startThreadControlFlow } from './controlFlow';
 import { bindingStore, executeDetach, type BindingAttachResult } from '../binding';
@@ -79,7 +81,7 @@ import {
   updateModelEffort,
   updatePermissionMode,
 } from './sessionRepo';
-import { COMPANION_MANAGED_COMMAND_FALLBACK } from './botCommands';
+import { companionManagedCommandFallback } from './botCommands';
 import { markImSessionManualRouteOverride } from './manualRouteOverride';
 import { changeSessionPermissionMode } from './permissionModeControl';
 import type { ImCardBuilders } from './cardBuilders';
@@ -855,7 +857,7 @@ export function createCardActionHandler(
       try {
         await im.sendMarkdownText(
           event.senderId,
-          summary ?? '_(回顾失败了, 在这个 thread 里直接发消息接着聊就行)_',
+          summary ?? imText('imBot.text.shared.takeover.summaryFailedThread'),
           { threadTs: established.scopeKey },
         );
       } catch (err) {
@@ -935,7 +937,7 @@ export function createCardActionHandler(
     // 总结失败时 fallback — 用户至少看到"已接管 + 直接发消息接着聊"。
     const summaryBody = summary
       ? `${headerText}\n\n${summary}`
-      : `${headerText}\n\n_(回顾失败了, 直接发消息接着聊就行)_`;
+      : `${headerText}\n\n${imText('imBot.text.shared.takeover.summaryFailed')}`;
     try {
       await im.patchMarkdownCard(event.messageId, summaryBody);
     } catch (err) {
@@ -1329,7 +1331,7 @@ export function createCardActionHandler(
       await patchProjectCard(
         im,
         event.messageId,
-        adapter.ui.slash.companionManagedCommand ?? COMPANION_MANAGED_COMMAND_FALLBACK,
+        adapter.ui.slash.companionManagedCommand ?? companionManagedCommandFallback(),
       );
       return;
     }
@@ -1338,9 +1340,21 @@ export function createCardActionHandler(
     let displayName: string;
     let workspaceKind: 'project' | 'dialogue';
     if (kind === 'project') {
-      workingDir = String(event.payload.workingDir ?? '');
-      displayName = String(event.payload.displayName ?? workingDir);
+      // 按钮只带不透明标记, 目录从当前项目清单找回; 清单里已经没有这个项目就按失败收口。
+      // 升级前发出的旧卡片按钮里还带着目录本身, 照旧认。
+      const token = String(event.payload.projectToken ?? '');
+      const picked = token
+        ? (await listProjectsForControl({ projectsOnly: true, all: true })).find(
+            (project) => projectToken(project.workingDir) === token,
+          )
+        : undefined;
+      workingDir = picked?.workingDir ?? (token ? '' : String(event.payload.workingDir ?? ''));
+      displayName = picked?.displayName ?? String(event.payload.displayName ?? workingDir);
       workspaceKind = 'project';
+      if (token && !picked) {
+        await patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
+        return;
+      }
       if (!workingDir) {
         log.warn('project:pick missing workingDir — ignoring');
         return;
@@ -1544,7 +1558,7 @@ export function createCardActionHandler(
       case 'ask_user_question': {
         // 协议层多选是 JSON 数组; 收口卡展示再解成逗号分隔, 多问用分号。
         const joined = formatAskAnswersForDisplay(d.answers);
-        return joined ? ui.cards.ask.resolved(joined) : '✅ 已选择：继续';
+        return joined ? ui.cards.ask.resolved(joined) : imText('imBot.text.shared.card.askResolvedContinue');
       }
     }
   }

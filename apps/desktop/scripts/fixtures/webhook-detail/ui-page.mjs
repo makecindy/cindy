@@ -19,6 +19,7 @@ export default {
     initial: { about: '首次缺少密钥：自动展开必要配置', data: {} },
     released: { about: '已释放：状态和重新连接始终可见', data: {} },
     offline: { about: '连接中断：异常提示不会藏进设置', data: {} },
+    unsupported: { about: '发送方格式不支持：说清是版本不认这个格式，不是暂时不可用', data: {} },
   },
   async ready(page) {
     await page.locator('[role="status"], textarea').first().waitFor();
@@ -54,6 +55,11 @@ export default {
       await page.getByRole('status').first().waitFor();
       if (await toggle.getAttribute('aria-expanded') !== 'false') throw new Error('Leaving settings open must not persist the expanded state');
       await ui.capture('revisited-setup');
+      return;
+    }
+    if (ui.case === 'unsupported') {
+      await page.getByText(await ui.t('scheduler.webhook.unsupportedFormat'), { exact: true }).waitFor();
+      await ui.capture('unsupported-format');
       return;
     }
     if (ui.case !== 'default') return;

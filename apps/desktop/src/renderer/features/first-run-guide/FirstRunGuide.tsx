@@ -239,7 +239,6 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
     if (selectedKeys.length === 0 || importState === 'starting') return;
     if (selectedKeys.length > IMPORT_CONFIRM_COUNT || selectedBytes > IMPORT_CONFIRM_BYTES) {
       const accepted = await confirm({
-        presentation: 'standard',
         title: t('settings.sessionImport.confirm.title', { count: selectedKeys.length }),
         description: t('settings.sessionImport.confirm.body', {
           minutes: estimateMinutes(selectedKeys.length, selectedBytes),
