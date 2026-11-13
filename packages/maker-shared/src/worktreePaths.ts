@@ -181,7 +181,7 @@ export function sessionTaskProjectDirectory(session: {
   taskProjectDir?: string | null;
   projectDir?: string | null;
   workingDir?: string | null;
-  companion?: { taskProjectDir?: string | null } | null;
+  companion?: { id?: string; role?: string; taskProjectDir?: string | null } | null;
 }): string | null {
   return session.taskProjectDir ?? session.companion?.taskProjectDir ?? sessionProjectDirectory(session);
 }

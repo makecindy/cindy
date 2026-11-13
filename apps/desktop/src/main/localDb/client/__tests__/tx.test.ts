@@ -1756,6 +1756,17 @@ describe('db worker tx handlers', () => {
               expect.objectContaining({ sessionId: 'channel-lane', source: 'bot', status: 'archived' }),
               expect.objectContaining({ sessionId: 'group-lane', source: 'bot', status: 'archived' }),
             ]);
+          // A -> archive -> B -> restore A: only B remains eligible for group delivery.
+          await client.exec("UPDATE bot_session_links SET route_key='group:g' WHERE session_id='group-lane'");
+          await seedSession(client, 'group-successor', { source: 'bot' });
+          await client.exec("INSERT INTO bot_session_links (id,bot_id,session_id,role,route_key,created_at) VALUES ('successor','bot-1','group-successor','group','group:g',2)");
+          await client.tx('sessions.setStatus', { sessionIds: ['group-lane'], status: 'active' });
+          await expect(client.query("SELECT s.id FROM sessions s JOIN bot_session_links l ON l.session_id=s.id WHERE l.role='group' AND l.route_key='group:g' AND l.archived_at IS NULL AND s.status='active'"))
+            .resolves.toEqual([{ id: 'group-successor' }]);
+          await client.tx('sessions.setStatus', { sessionIds: ['group-lane'], status: 'archived' });
+          await client.tx('sessions.setTerminalStatus', { sessionId: 'group-successor', status: 'deleted' });
+          await client.exec("DELETE FROM bot_session_links WHERE session_id='group-successor'");
+          await client.exec("DELETE FROM sessions WHERE id='group-successor'");
           // 一条专线 + 一条私人主对话：整批回滚，专线也保持原状态。
           await client.exec("UPDATE sessions SET status = 'active' WHERE id IN ('routine-lane', 'channel-lane')");
           await expect(client.tx('sessions.setStatus', { sessionIds: ['routine-lane', 'bot-chat'], status: 'archived' }))
