@@ -6472,21 +6472,7 @@
           "defaultProjectTag": "Standard",
           "defaultProjectFullAccessWarning": "Das Standardprojekt „{{name}}“ hat Vollzugriff: Eine @Erwähnung aus jeder beliebigen Gruppe wird darin mit vollem Zugriff ausgeführt.",
           "sharedSettingsPointer": "Projekte, Modelle und Berechtigungen gelten für alle offiziellen Bots gemeinsam.",
-          "sharedSettingsPointerAction": "Einstellungen öffnen",
-          "legacyDefaultsTitle": "Die bisherigen Standardeinstellungen für „Neue Unterhaltung“ gelten weiterhin",
-          "legacyDefaultsDescription": "Auf diesem Gerät sind ältere Standardeinstellungen des offiziellen Bots gespeichert, die weiterhin als Fallback für Projekte ohne eigene Einstellungen dienen (die offiziellen Bots für Telegram und X teilen sich eine Kopie). Diese Werte werden jetzt pro Projekt festgelegt. Durch das Wiederherstellen der Standardeinstellungen wird Folgendes vollständig gelöscht:",
-          "legacyDefaultsRow": {
-            "agentKind": "Standard-Agent: {{current}} → {{fallback}}",
-            "permissionMode": "Berechtigungsmodus: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "Modell {{current}} → {{fallback}}",
-            "effort": "Denkintensität {{current}} → {{fallback}}",
-            "source": "Modellquelle {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": ", ",
-          "legacyDefaultsSourceFollowsGlobal": "folgt den globalen Einstellungen"
+          "sharedSettingsPointerAction": "Einstellungen öffnen"
         },
         "binding": {
           "copyLink": "Link kopieren",

@@ -22,7 +22,6 @@ export default {
     'none-enabled': { about: '一个机器人都没开: 区块不显示', viewport: { width: 860, height: 520 }, storage, data: { kind: 'none-enabled' } },
     'many-projects': { about: '项目很多、名称与路径很长', viewport: { width: 860, height: 2000 }, storage, data: { kind: 'many-projects' } },
     'load-failed': { about: '配置读不出来: 提示 + 重试, 选择器置灰', storage, data: { kind: 'load-failed' } },
-    'legacy-defaults': { about: '这台电脑留有旧版默认设置: 区块底部的提示', viewport: { width: 860, height: 1320 }, storage, data: { kind: 'legacy-defaults' } },
     'card-expanded': { about: '展开某个机器人的卡片: 卡片里不再有项目与模型', viewport: { width: 860, height: 1500 }, storage, data: { kind: 'card-expanded' } },
     narrow: { about: '窄窗口(480px): 名称、路径与选择器换行', viewport: { width: 480, height: 1500 }, storage, data: { kind: 'all-bots' } },
     'model-open': { about: '点开某个项目的模型选择', storage, data: { kind: 'all-bots' } },

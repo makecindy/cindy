@@ -6429,21 +6429,7 @@
           "defaultProjectTag": "常例",
           "defaultProjectFullAccessWarning": "常例案「{{name}}」之權限為完全存取：任一群中 @ 機器人，皆將以完全存取之權於其中執行，慎之。",
           "sharedSettingsPointer": "案、模型與權限，諸官方機器人共用。",
-          "sharedSettingsPointerAction": "往設之",
-          "legacyDefaultsTitle": "舊版「新言談配置」猶在生效",
-          "legacyDefaultsDescription": "此臺裝置曾存一份舊版官方 bot 常例設定，凡未另行配置之案，仍以之為兜底（官方 Telegram 與 X 共用一份）。此等值今已統一於各案中設定。復常例將一併清除以下全部內容：",
-          "legacyDefaultsRow": {
-            "agentKind": "常例 Agent：{{current}} → {{fallback}}",
-            "permissionMode": "權柄模式：{{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}：{{fields}}",
-          "legacyDefaultsField": {
-            "model": "模型 {{current}} → {{fallback}}",
-            "effort": "思力 {{current}} → {{fallback}}",
-            "source": "模型所出 {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": "，",
-          "legacyDefaultsSourceFollowsGlobal": "從全域設定"
+          "sharedSettingsPointerAction": "往設之"
         },
         "binding": {
           "copyLink": "錄連結",

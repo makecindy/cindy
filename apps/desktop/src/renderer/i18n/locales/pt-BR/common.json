@@ -6536,20 +6536,6 @@
           "defaultProjectFullAccessWarning": "O projeto padrão “{{name}}” está com Acesso total: uma @mention de qualquer grupo é executada nele com acesso total.",
           "sharedSettingsPointer": "Projetos, modelos e permissões são compartilhados por todos os bots oficiais.",
           "sharedSettingsPointerAction": "Abrir configurações",
-          "legacyDefaultsTitle": "Os padrões antigos de “nova conversa” ainda estão em vigor",
-          "legacyDefaultsDescription": "Este dispositivo salvou padrões antigos do bot oficial que ainda servem como alternativa para projetos sem configurações próprias (o Telegram oficial e o X compartilham uma cópia). Agora esses valores são definidos por projeto. Restaurar os padrões limpa todos os itens a seguir:",
-          "legacyDefaultsRow": {
-            "agentKind": "Agent padrão: {{current}} → {{fallback}}",
-            "permissionMode": "Modo de permissão: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "modelo {{current}} → {{fallback}}",
-            "effort": "esforço de raciocínio {{current}} → {{fallback}}",
-            "source": "origem do modelo {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": ", ",
-          "legacyDefaultsSourceFollowsGlobal": "segue as configurações globais",
           "workspacesBoundCount_many": "{{count}} projetos"
         },
         "binding": {

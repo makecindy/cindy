@@ -62,10 +62,12 @@ import {
 } from './workspacePrefsStore.js';
 import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
 import { lookupWorkspaces, retiredAliasPairs } from './projectWorkspaces.js';
+import { readImDefaultSettingsState, resetImDefaultSettingsGlobal } from '../im/defaultSettingsStore.js';
 import {
   OFFICIAL_PREFS_CHANNELS,
   absorbChannelChange,
   adoptReadyChannels,
+  clearLegacyGlobalDefaultsOnce,
   listSharedProjectPrefs,
   projectSharedOntoChannel,
   rowsAfterServerSnapshot,
@@ -1430,6 +1432,18 @@ export function startHookControlAccount(): void {
   ensureInstances().manager.activateAccount();
   // 账号的项目存储此时已就绪: 先把机器人可选的项目与侧栏对齐。
   void projectWorkspaceSync.run();
+  // 旧版「新对话配置」留在盘上的全局默认: 升级时清一次(见 clearLegacyGlobalDefaultsOnce)。
+  try {
+    const cleared = clearLegacyGlobalDefaultsOnce({
+      isCustomized: () => readImDefaultSettingsState().isCustomized,
+      reset: () => {
+        resetImDefaultSettingsGlobal();
+      },
+    });
+    if (cleared) log.info('legacy global IM defaults cleared on upgrade');
+  } catch (err) {
+    log.warn(`clearing legacy global IM defaults failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   // 各渠道原有的按渠道偏好并入共用的那一份(每个渠道只做一次)。
   try {
     if (adoptReadyChannels().length > 0) broadcastSharedPrefs();

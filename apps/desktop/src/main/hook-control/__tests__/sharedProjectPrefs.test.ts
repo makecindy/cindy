@@ -22,6 +22,7 @@ import {
   absorbChannelChange,
   adoptChannelPrefs,
   adoptReadyChannels,
+  clearLegacyGlobalDefaultsOnce,
   getSharedProjectPref,
   listSharedProjectPrefs,
   projectSharedOntoChannel,
@@ -278,6 +279,26 @@ describe('sharedProjectPrefs', () => {
 
     expect(getSharedProjectPref('main').model).toBe('feishu-main');
     expect(getSharedProjectPref('tool').model).toBe('picked-by-user');
+  });
+
+  // 规则(2026-11-13 用户裁决): 旧版「新对话配置」留下的全局默认在升级时直接清掉, 不等用户手动点。
+  // 只清一次: 之后这份设置再有值(别的入口写的)不得在每次启动时被抹掉。
+  // 最小失败输入: 第一次启动时改过 -> 清; 第二次启动时又是改过的 -> 不动。tier: unit。
+  it('旧版全局默认只在升级后第一次启动时清一次', () => {
+    const reset = vi.fn();
+    expect(clearLegacyGlobalDefaultsOnce({ isCustomized: () => true, reset })).toBe(true);
+    expect(reset).toHaveBeenCalledTimes(1);
+
+    expect(clearLegacyGlobalDefaultsOnce({ isCustomized: () => true, reset })).toBe(false);
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  // 没改过的电脑: 不调用重置, 但同样记为已处理 —— 以后再写进去的值不属于「旧版遗留」。
+  it('从没改过全局默认的电脑不重置, 之后写入的值也不会被清', () => {
+    const reset = vi.fn();
+    expect(clearLegacyGlobalDefaultsOnce({ isCustomized: () => false, reset })).toBe(false);
+    expect(clearLegacyGlobalDefaultsOnce({ isCustomized: () => true, reset })).toBe(false);
+    expect(reset).not.toHaveBeenCalled();
   });
 
   // 持久化: 侧栏给项目改名时, 共用那份跟着挪到新名称下, 旧名称下不留行。

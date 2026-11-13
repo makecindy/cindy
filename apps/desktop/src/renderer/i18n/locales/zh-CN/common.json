@@ -6429,21 +6429,7 @@
           "defaultProjectTag": "默认",
           "defaultProjectFullAccessWarning": "默认项目「{{name}}」的权限是完全访问：任何群里 @ 机器人，都会以完全访问在它里面执行。",
           "sharedSettingsPointer": "项目、模型与权限由所有官方机器人共用。",
-          "sharedSettingsPointerAction": "去设置",
-          "legacyDefaultsTitle": "旧版「新对话配置」仍在生效",
-          "legacyDefaultsDescription": "这台设备保存过一份旧的官方 bot 默认设置，它仍是没有单独配置过的项目的兜底值（官方 Telegram 与 X 共用同一份）。这些值现在统一在每个项目里设置。恢复默认会一并清掉以下全部内容：",
-          "legacyDefaultsRow": {
-            "agentKind": "默认 Agent：{{current}} → {{fallback}}",
-            "permissionMode": "权限模式：{{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}：{{fields}}",
-          "legacyDefaultsField": {
-            "model": "模型 {{current}} → {{fallback}}",
-            "effort": "推理强度 {{current}} → {{fallback}}",
-            "source": "模型来源 {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": "，",
-          "legacyDefaultsSourceFollowsGlobal": "跟随全局设置"
+          "sharedSettingsPointerAction": "去设置"
         },
         "binding": {
           "copyLink": "复制链接",

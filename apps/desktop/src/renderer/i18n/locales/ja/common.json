@@ -6429,21 +6429,7 @@
           "defaultProjectTag": "既定",
           "defaultProjectFullAccessWarning": "既定のプロジェクト「{{name}}」の権限はフルアクセスです。どのグループから @ で呼ばれても、この中でフルアクセスで実行されます。",
           "sharedSettingsPointer": "プロジェクト・モデル・権限はすべての公式ボットで共通です。",
-          "sharedSettingsPointerAction": "設定を開く",
-          "legacyDefaultsTitle": "旧「新規会話の設定」がまだ有効です",
-          "legacyDefaultsDescription": "この端末には以前の公式 bot 既定値が保存されており、個別に設定していないプロジェクトのフォールバックとして今も使われます（公式 Telegram と X で共通の 1 件）。これらの値は各プロジェクトごとに設定する方式になりました。既定値に戻すと、次のすべてが削除されます:",
-          "legacyDefaultsRow": {
-            "agentKind": "既定 Agent: {{current}} → {{fallback}}",
-            "permissionMode": "権限モード: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "モデル {{current}} → {{fallback}}",
-            "effort": "推論強度 {{current}} → {{fallback}}",
-            "source": "モデルの提供元 {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": "、",
-          "legacyDefaultsSourceFollowsGlobal": "グローバル設定に従う"
+          "sharedSettingsPointerAction": "設定を開く"
         },
         "binding": {
           "copyLink": "リンクをコピー",

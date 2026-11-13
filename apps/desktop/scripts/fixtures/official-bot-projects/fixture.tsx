@@ -100,7 +100,6 @@ interface Scenario {
   defaultProject?: string | null;
   prefs?: HookWorkspacePrefs[];
   loadFails?: boolean;
-  legacyDefaults?: boolean;
   expand?: 'slack' | 'telegram' | 'feishu' | 'x';
 }
 
@@ -112,7 +111,6 @@ const SCENARIOS: Record<string, Scenario> = {
   'none-enabled': { projects: PROJECTS },
   'many-projects': { slack: true, telegram: true, feishu: true, projects: MANY_PROJECTS, defaultProject: '官网与文档', prefs: PREFS },
   'load-failed': { telegram: true, feishu: true, projects: PROJECTS, defaultProject: 'orbit-garden', loadFails: true },
-  'legacy-defaults': { telegram: true, x: true, projects: PROJECTS, defaultProject: 'orbit-garden', prefs: PREFS, legacyDefaults: true },
   'card-expanded': { telegram: true, feishu: true, projects: PROJECTS, defaultProject: 'orbit-garden', prefs: PREFS, expand: 'telegram' },
 };
 
@@ -166,8 +164,8 @@ void mountPage({
         codex: { providerId: 'openai', model: 'gpt-6.1-sol', effort: 'high' },
       },
       defaults: IM_DEFAULT_SETTINGS,
-      isCustomized: scenario.legacyDefaults === true,
-      customizedKeys: scenario.legacyDefaults === true ? ['agentKind', 'agents.codex'] : [],
+      isCustomized: false,
+      customizedKeys: [],
     };
     return {
       hookControl: {
@@ -204,7 +202,6 @@ void mountPage({
       },
       maker: {
         imDefaultSettingsGet: async () => imDefaults,
-        imDefaultSettingsReset: async () => ({ ...imDefaults, isCustomized: false, customizedKeys: [] }),
         listAvailableAgents: async () => ['claude-code', 'codex', 'pi'],
         getCapabilities: async () => ({
           hasFastMode: false,

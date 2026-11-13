@@ -52,7 +52,6 @@ import { useOptionalAuthUser } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
-import type { ImDefaultAgentKind, ImDefaultSettingsState } from '../../../shared/imDefaultSettings';
 import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
 import { XUsageGuide } from './XUsageGuide';
 import {
@@ -129,202 +128,6 @@ function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: st
       <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} aria-hidden />
       {label}
     </span>
-  );
-}
-
-/**
- * 存量 global override 的收尾入口（**只对升级用户可见**）。
- *
- * 官方卡的「新对话配置」区块删掉后, 用户此前在那里改过的 agent / model / effort 仍以
- * global scope 落在盘上, 并继续被 session-runner(`readImDefaultSettings(undefined)`)与
- * 目录行的生效值解析当作 fallback —— 于是旧设置照旧影响所有没显式配置的目录、以及
- * 以后新加的目录, 而用户再也看不到、也改不了它(review 指出)。
- *
- * 不选"静默清除": 那会在升级瞬间悄悄改掉用户已保存的 agent / 模型。也不选"把区块留
- * 着": 那等于把这次要消除的重叠原样放回来。折中是**仅当确实存在 override 时**露出这
- * 一条: 说清它还在生效、显示它是什么、给一个恢复默认的按钮; 恢复后它永久消失, 从未
- * 设过的用户一次都看不到。
- *
- * **两张 provider-neutral 卡都挂**: global scope 是官方 Telegram 与 X 共用的那一份
- * (`session-runner` 对两者都读 `readImDefaultSettings(undefined)`)。只挂在 Telegram 上,
- * 曾设过 override 后关掉 Telegram、只用 X 的升级用户就没有入口, 旧值继续被 X 任务消费,
- * 而他只能猜"要重新打开 Telegram 才能清"(review 指出)。
- */
-/** 「恢复默认」实际会清掉的一条 override(供 UI 逐条列出; 纯数据, 文案在组件里)。 */
-export type LegacyOverrideRow =
-  | { kind: 'agentKind'; current: string; fallback: string }
-  | { kind: 'permissionMode'; current: string; fallback: string }
-  | {
-      kind: 'agent';
-      agent: string;
-      fields: Array<{ field: 'model' | 'effort' | 'source'; current: string; fallback: string }>;
-    };
-
-/**
- * 把 `customizedKeys` 展开成「这次会清掉什么」的完整清单。
- *
- * 为什么不能只显示当前 agentKind 的 model: `imDefaultSettingsReset()` 清的是**整个**
- * global scope, 包含 `agents` 里其它 agent 的 model / effort / 来源。用户可能曾切到另一个
- * agent 改过这些再切回来 —— 那些值此刻正被"显式选了该 agent、但模型档位仍跟随默认"的目录
- * 消费, 只报当前 agent 一行就等于让他在不知道范围的情况下改掉目录路由(review 指出)。
- */
-export function legacyOverrideRows(state: ImDefaultSettingsState): LegacyOverrideRow[] {
-  const rows: LegacyOverrideRow[] = [];
-  for (const key of state.customizedKeys) {
-    if (key === 'agentKind') {
-      rows.push({
-        kind: 'agentKind',
-        current: state.agentKind,
-        fallback: state.defaults.agentKind,
-      });
-      continue;
-    }
-    if (key === 'permissionMode') {
-      rows.push({
-        kind: 'permissionMode',
-        current: state.permissionMode,
-        fallback: state.defaults.permissionMode,
-      });
-      continue;
-    }
-    if (!key.startsWith('agents.')) continue;
-    const agent = key.slice('agents.'.length) as ImDefaultAgentKind;
-    const current = state.agents[agent];
-    const fallback = state.defaults.agents[agent];
-    if (!current || !fallback) continue;
-    // 只列真的不一样的子字段 —— 把三项全列出来会让人以为都被改过。
-    const fields: Array<{
-      field: 'model' | 'effort' | 'source';
-      current: string;
-      fallback: string;
-    }> = [];
-    if (current.model !== fallback.model) {
-      fields.push({ field: 'model', current: current.model, fallback: fallback.model });
-    }
-    if (current.effort !== fallback.effort) {
-      fields.push({ field: 'effort', current: current.effort, fallback: fallback.effort });
-    }
-    if (current.providerId !== fallback.providerId) {
-      fields.push({
-        field: 'source',
-        current: current.providerId ?? '',
-        fallback: fallback.providerId ?? '',
-      });
-    }
-    if (fields.length > 0) rows.push({ kind: 'agent', agent, fields });
-  }
-  return rows;
-}
-
-function useLegacyGlobalDefaults(onCleared: () => void): {
-  state: ImDefaultSettingsState | null;
-  pending: boolean;
-  restore: () => Promise<void>;
-} {
-  const { t } = useTranslation();
-  const [state, setState] = useState<ImDefaultSettingsState | null>(null);
-  const [pending, setPending] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    void window.electronAPI.maker
-      .imDefaultSettingsGet()
-      .then((next) => {
-        if (active) setState(next);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const restore = useCallback(async () => {
-    if (pending) return;
-    setPending(true);
-    try {
-      setState(await window.electronAPI.maker.imDefaultSettingsReset());
-      // 两张卡的目录行都以 global scope 为生效值解析源 —— 只刷新当前这张会让另一张
-      // 继续显示磁盘上已经不存在的旧默认(review 指出)。
-      onCleared();
-      toast.success(t('settings.defaults.restored'));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
-    } finally {
-      setPending(false);
-    }
-  }, [onCleared, pending, t]);
-
-  return { state, pending, restore };
-}
-
-/** 上面那条提示的纯展示部分(状态由 useLegacyGlobalDefaults 单点持有, 两张卡共用)。 */
-function LegacyGlobalDefaultsNotice({
-  state,
-  pending,
-  onRestore,
-}: {
-  state: ImDefaultSettingsState | null;
-  pending: boolean;
-  onRestore: () => void;
-}) {
-  const { t } = useTranslation();
-  if (state === null || !state.isCustomized) return null;
-  return (
-    <div
-      data-testid="hook-legacy-global-defaults"
-      className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5"
-    >
-      <span className="text-12 font-medium text-[var(--text-secondary)]">
-        {t('settings.remoteControl.hook.form.legacyDefaultsTitle')}
-      </span>
-      <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-        {t('settings.remoteControl.hook.form.legacyDefaultsDescription')}
-      </span>
-      {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
-          只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
-      <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
-        {legacyOverrideRows(state).map((row) => (
-          <li
-            key={row.kind === 'agent' ? `agent:${row.agent}` : row.kind}
-            data-testid="hook-legacy-global-defaults-row"
-            className="text-11 leading-relaxed text-[var(--text-tertiary)]"
-          >
-            {row.kind === 'agent'
-              ? t('settings.remoteControl.hook.form.legacyDefaultsRowAgent', {
-                  agent: row.agent,
-                  fields: row.fields
-                    .map((f) =>
-                      t(`settings.remoteControl.hook.form.legacyDefaultsField.${f.field}`, {
-                        current:
-                          f.current ||
-                          t('settings.remoteControl.hook.form.legacyDefaultsSourceFollowsGlobal'),
-                        fallback:
-                          f.fallback ||
-                          t('settings.remoteControl.hook.form.legacyDefaultsSourceFollowsGlobal'),
-                      }),
-                    )
-                    .join(t('settings.remoteControl.hook.form.legacyDefaultsFieldSeparator')),
-                })
-              : t(`settings.remoteControl.hook.form.legacyDefaultsRow.${row.kind}`, {
-                  current: row.current,
-                  fallback: row.fallback,
-                })}
-          </li>
-        ))}
-      </ul>
-      <Button data-settings-search-action="Restore legacy global IM defaults"
-        variant="secondary"
-        size="sm"
-        compact
-        type="button"
-        data-testid="hook-legacy-global-defaults-restore"
-        onClick={onRestore}
-        disabled={pending}
-        className="mt-0.5 w-fit"
-      >
-        {t('settings.defaults.restore')}
-      </Button>
-    </div>
   );
 }
 
@@ -779,12 +582,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
   // 项目清单与侧栏共用; 每个项目的模型与权限所有官方机器人共用一份。
   const projectPrefsState = useHookWorkspacePrefs();
-  const reloadProjectDefaults = projectPrefsState.reloadImDefaults;
-  // 存量 global override(见 useLegacyGlobalDefaults 上方注释): 清掉后生效值解析源要重读。
-  const reloadGlobalDefaults = useCallback(() => {
-    void reloadProjectDefaults();
-  }, [reloadProjectDefaults]);
-  const legacyGlobalDefaults = useLegacyGlobalDefaults(reloadGlobalDefaults);
 
   /** 复制授权链接(远程控制兜底: 到本机浏览器打开, 规则 26)。 */
   const handleCopyLink = async () => {
@@ -1283,13 +1080,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           <Plus size={12} />
           {t('settings.remoteControl.hook.form.addProject')}
         </Button>
-        {/* 存量 global override 的收尾入口: 它仍是没单独配置过的项目的兜底值, 要能看见才谈得上
-            "可管理"。从未改过的设备一次都不会渲染。 */}
-        <LegacyGlobalDefaultsNotice
-          state={legacyGlobalDefaults.state}
-          pending={legacyGlobalDefaults.pending}
-          onRestore={() => void legacyGlobalDefaults.restore()}
-        />
       </section>
     );
   };
@@ -1746,8 +1536,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </span>
           ) : null}
 
-          {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
-              只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
           {hook.enabled && !multiUi && bindingState === 'pending' && hook.binding?.authorizeUrl ? (
             <div className="flex items-center gap-2 rounded-xl border border-dashed border-[var(--border-default)] px-2.5 py-2">
               <span className="min-w-0 flex-1 truncate text-12 text-[var(--text-tertiary)]">
@@ -1759,8 +1547,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </div>
           ) : null}
 
-          {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
-              只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
           {isNotInstalled && (!multiUi || !hook.enabled) ? (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
@@ -2102,8 +1888,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </div>
           ) : null}
 
-          {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
-              只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
           {hook.enabled && !multiUi && bindingState === 'confirmed' ? (
             <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
               {t('settings.remoteControl.hook.slackBoundHint')}

@@ -2219,140 +2219,22 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(screen.queryByText('blog')).toBeNull();
   });
 
-  it('只用 X 的升级用户也能清掉存量 global override', async () => {
-    // global scope 是 Telegram 与 X 共用的那一份(session-runner 对 sourceIm='x' 同样读
-    // readImDefaultSettings(undefined))。入口只挂在 Telegram 上时, 关掉 Telegram 的用户
-    // 就得靠猜"重新打开 Telegram 才能清", 而旧值一直在被 X 任务消费。
-    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null, { telegramEnabled: false }) });
-    ipc.imDefaultSettingsGet.mockResolvedValue(customizedGlobalDefaults());
-    ipc.imDefaultSettingsReset.mockResolvedValue({ isCustomized: false, customizedKeys: [] });
-
-    render(<HookConnectionsSection />);
-    await expandChannelCard(X_CARD);
-    await screen.findByTestId('hook-legacy-global-defaults');
-    fireEvent.click(screen.getByTestId('hook-legacy-global-defaults-restore'));
-    await waitFor(() => expect(ipc.imDefaultSettingsReset).toHaveBeenCalled());
-    await waitFor(() => expect(screen.queryByTestId('hook-legacy-global-defaults')).toBeNull());
-  });
-
-  it('清掉存量 override 后, 项目行的生效值重读', async () => {
-    // 项目行(所有官方机器人共用的那一份)以 global scope 为解析源 —— 不重读的话会继续显示
-    // 磁盘上已经不存在的旧默认。
+  // 规则(2026-11-13): 旧版「新对话配置」留下的全局默认在升级时由 main 直接清掉, 设置页不再有
+  // 让用户自己「恢复默认」的提示。可观察结果: 即使读到的全局默认仍是改过的, 页面也不出现那条
+  // 提示与恢复按钮, 更不会代用户发起重置。最小失败输入: 读到一份改过的全局默认。tier: unit(jsdom)。
+  it('设置页不再提示旧版全局默认, 也不从界面发起重置', async () => {
     ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
-    ipc.imDefaultSettingsGet.mockResolvedValue(customizedGlobalDefaults());
-    ipc.imDefaultSettingsReset.mockResolvedValue({ isCustomized: false, customizedKeys: [] });
-
-    render(<HookConnectionsSection />);
-    await expandChannelCard(TELEGRAM_CARD);
-    await screen.findByTestId('hook-legacy-global-defaults');
-    prefsReload.mockClear();
-    fireEvent.click(screen.getByTestId('hook-legacy-global-defaults-restore'));
-    await waitFor(() => expect(prefsReload).toHaveBeenCalledTimes(1));
-  });
-
-  /**
-   * 存量 global override 的 fixture: 除了当前 agent(codex)之外, **另一个** agent
-   * (claude-code)的模型/档位也被改过 —— 那正是只报当前 agent 会漏掉的部分。
-   */
-  function customizedGlobalDefaults() {
-    return {
+    ipc.imDefaultSettingsGet.mockResolvedValue({
       isCustomized: true,
-      customizedKeys: ['agentKind', 'agents.codex', 'agents.claude-code'],
+      customizedKeys: ['agentKind'],
       agentKind: 'codex',
-      permissionMode: 'auto',
-      agents: {
-        'claude-code': { providerId: 'byom-1', model: 'claude-opus-4-8', effort: 'max' },
-        codex: { providerId: null, model: 'codex/gpt-5.5-pro', effort: 'xhigh' },
-        pi: { providerId: null, model: 'claude-sonnet-5', effort: 'high' },
-      },
-      defaults: {
-        agentKind: 'claude-code',
-        permissionMode: 'auto',
-        agents: {
-          'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
-          codex: { providerId: null, model: 'codex/gpt-5.5', effort: 'high' },
-          pi: { providerId: null, model: 'claude-sonnet-5', effort: 'high' },
-        },
-      },
-    };
-  }
-
-  it('恢复默认前列出**全部**将被清除的 override, 不只是当前 Agent 那一条', async () => {
-    // imDefaultSettingsReset() 清的是整个 global scope, 包含 agents 里其它 agent 的
-    // model / effort / 来源。只报当前 agent 一行, 等于让用户在不知道范围的情况下改掉
-    // "显式选了那个 agent、但模型档位仍跟随默认"的目录的实际路由。
-    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
-    ipc.imDefaultSettingsGet.mockResolvedValue(customizedGlobalDefaults());
-    render(<HookConnectionsSection />);
-    await screen.findByTestId('hook-legacy-global-defaults');
-    // 只看提示出现之后稳定下来的那一次渲染(之前的渲染次数不是这里要锁的东西)。
-    tCalls.length = 0;
-    await expandChannelCard(TELEGRAM_CARD);
-
-    // 三条 customizedKeys → 三行
-    expect(screen.getAllByTestId('hook-legacy-global-defaults-row')).toHaveLength(3);
-
-    // 另一个 agent(claude-code)那一行必须在, 且带上它真正被改过的子字段:
-    // effort(max → xhigh)与来源(byom-1 → 跟随全局); model 没变则不该出现在其中。
-    const otherAgent = tCalls.filter(
-      (c) =>
-        c.key === 'settings.remoteControl.hook.form.legacyDefaultsRowAgent' &&
-        c.vars?.agent === 'claude-code',
-    );
-    expect(otherAgent).toHaveLength(1);
-    const effort = tCalls.find(
-      (c) =>
-        c.key === 'settings.remoteControl.hook.form.legacyDefaultsField.effort' &&
-        c.vars?.current === 'max',
-    );
-    expect(effort?.vars).toMatchObject({ current: 'max', fallback: 'xhigh' });
-    expect(
-      tCalls.some(
-        (c) =>
-          c.key === 'settings.remoteControl.hook.form.legacyDefaultsField.source' &&
-          c.vars?.current === 'byom-1',
-      ),
-    ).toBe(true);
-    // claude-code 的 model 与默认相同 —— 不得列成"会被清除"
-    expect(
-      tCalls.some(
-        (c) =>
-          c.key === 'settings.remoteControl.hook.form.legacyDefaultsField.model' &&
-          c.vars?.current === 'claude-opus-4-8',
-      ),
-    ).toBe(false);
-  });
-
-  it('存量 global override: 露出可恢复入口, 恢复后消失; 从未设过的设备看不到', async () => {
-    // 删掉「新对话配置」后, 旧 override 仍被 session-runner 与目录行解析当 fallback,
-    // 却再也没有入口 —— 那是"旧设置继续生效但完全不可管理"(review 指出)。
-    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
-    ipc.imDefaultSettingsGet.mockResolvedValue(customizedGlobalDefaults());
-    ipc.imDefaultSettingsReset.mockResolvedValue({ isCustomized: false, customizedKeys: [] });
-
-    render(<HookConnectionsSection />);
-    await expandChannelCard(TELEGRAM_CARD);
-    await screen.findByTestId('hook-legacy-global-defaults');
-    // 「查看」: 说清它是什么, 而不是只说"有个旧设置"。t 的 mock 只回键名, 所以断言
-    // 插值参数(否则这条会在文案退化成"存在旧设置"时照样绿)。
-    expect(
-      tCalls.find((c) => c.key === 'settings.remoteControl.hook.form.legacyDefaultsRow.agentKind')
-        ?.vars,
-    ).toMatchObject({ current: 'codex', fallback: 'claude-code' });
-
-    fireEvent.click(screen.getByTestId('hook-legacy-global-defaults-restore'));
-    await waitFor(() => expect(ipc.imDefaultSettingsReset).toHaveBeenCalled());
-    // 恢复后永久消失(不是折叠起来)
-    await waitFor(() => expect(screen.queryByTestId('hook-legacy-global-defaults')).toBeNull());
-
-    // 从未改过的设备一次都不该看到它 —— 否则等于把删掉的重叠原样放回来
-    cleanup();
-    ipc.imDefaultSettingsGet.mockResolvedValue({ isCustomized: false, customizedKeys: [] });
-    ipc.get.mockResolvedValue({ hook: hookWithWorkdirs(null) });
+      agents: {},
+    });
     render(<HookConnectionsSection />);
     await expandChannelCard(TELEGRAM_CARD);
     await screen.findAllByRole('radio');
     expect(screen.queryByTestId('hook-legacy-global-defaults')).toBeNull();
+    expect(ipc.imDefaultSettingsReset).not.toHaveBeenCalled();
   });
 
   /**

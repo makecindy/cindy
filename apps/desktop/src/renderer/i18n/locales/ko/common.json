@@ -6429,21 +6429,7 @@
           "defaultProjectTag": "기본",
           "defaultProjectFullAccessWarning": "기본 프로젝트 ‘{{name}}’의 권한이 전체 액세스입니다. 어느 그룹에서 @로 불러도 이 안에서 전체 액세스로 실행됩니다.",
           "sharedSettingsPointer": "프로젝트, 모델, 권한은 모든 공식 봇이 함께 씁니다.",
-          "sharedSettingsPointerAction": "설정 열기",
-          "legacyDefaultsTitle": "이전 ‘새 대화 설정’이 아직 적용되고 있습니다",
-          "legacyDefaultsDescription": "이 기기에는 예전 공식 bot 기본값이 저장되어 있으며, 개별 설정이 없는 프로젝트의 대체값으로 계속 사용됩니다(공식 Telegram과 X가 같은 항목을 공유). 이 값들은 이제 프로젝트별로 설정합니다. 기본값으로 복원하면 다음 항목이 모두 삭제됩니다:",
-          "legacyDefaultsRow": {
-            "agentKind": "기본 Agent: {{current}} → {{fallback}}",
-            "permissionMode": "권한 모드: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "모델 {{current}} → {{fallback}}",
-            "effort": "추론 강도 {{current}} → {{fallback}}",
-            "source": "모델 제공자 {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": ", ",
-          "legacyDefaultsSourceFollowsGlobal": "전역 설정 따름"
+          "sharedSettingsPointerAction": "설정 열기"
         },
         "binding": {
           "copyLink": "링크 복사",

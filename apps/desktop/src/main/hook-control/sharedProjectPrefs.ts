@@ -25,9 +25,11 @@ import {
   SHARED_PREF_EDITED,
   getSharedPrefOrigin,
   getWorkspacePref,
+  isLegacyGlobalDefaultsCleared,
   isSharedPrefsAdopted,
   isWorkspacePrefsMigrated,
   listWorkspacePrefs,
+  markLegacyGlobalDefaultsCleared,
   markSharedPrefsAdopted,
   setSharedPrefOrigin,
   setWorkspacePref,
@@ -287,4 +289,24 @@ export function absorbChannelChange(
     touched.add(next.workspace);
   }
   return [...touched];
+}
+
+/**
+ * 升级时一次性清掉旧版官方机器人「新对话配置」(IM 默认设置里全局那一份)。
+ *
+ * 那个设置区块早已从界面上拿掉, 但改过的值还留在盘上, 继续充当没单独配置过的项目的兜底值 ——
+ * 用户看不到也改不了。以前靠设置页里一条提示让用户自己点「恢复默认」; 现在项目的模型统一在
+ * 「项目与模型」里设置, 升级时直接替用户清掉(2026-11-13 用户裁决), 提示随之移除。清掉之后
+ * 没单独配置过的项目按内置默认跑。只做一次: 做过就记下, 之后不再碰这份设置。
+ * 返回这次是否真的清了。
+ */
+export function clearLegacyGlobalDefaultsOnce(deps: {
+  isCustomized: () => boolean;
+  reset: () => void;
+}): boolean {
+  if (isLegacyGlobalDefaultsCleared()) return false;
+  const customized = deps.isCustomized();
+  if (customized) deps.reset();
+  markLegacyGlobalDefaultsCleared();
+  return customized;
 }

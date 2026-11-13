@@ -75,6 +75,8 @@ interface StoreFile {
    * 排在它前面的渠道稍后才并入时凭它按固定顺序顶替; 用户或 IM 里一改就去掉。
    */
   sharedOrigin?: Record<string, SharedPrefOrigin>;
+  /** 旧版官方机器人「新对话配置」(全局那份)已在升级时清过一次, 之后不再碰它。 */
+  legacyGlobalDefaultsCleared?: boolean;
   entries: WorkspacePrefsEntry[];
 }
 
@@ -203,6 +205,7 @@ function readStore(fp: string): StoreFile {
       migrated,
       ...(Object.keys(sharedAdopted).length > 0 ? { sharedAdopted } : {}),
       ...(Object.keys(sharedOrigin).length > 0 ? { sharedOrigin } : {}),
+      ...(r.legacyGlobalDefaultsCleared === true ? { legacyGlobalDefaultsCleared: true } : {}),
       entries,
     };
   } catch {
@@ -336,6 +339,17 @@ function withSharedOrigin(store: StoreFile, workspace: string, origin: SharedPre
   const next: StoreFile = { ...store, sharedOrigin };
   if (Object.keys(sharedOrigin).length === 0) delete next.sharedOrigin;
   return next;
+}
+
+export function isLegacyGlobalDefaultsCleared(): boolean {
+  return readStore(filePath()).legacyGlobalDefaultsCleared === true;
+}
+
+export function markLegacyGlobalDefaultsCleared(): void {
+  const fp = filePath();
+  const store = readStore(fp);
+  if (store.legacyGlobalDefaultsCleared === true) return;
+  writeStore(fp, { ...store, legacyGlobalDefaultsCleared: true });
 }
 
 export function isSharedPrefsAdopted(channel: HookPrefsChannel): boolean {
