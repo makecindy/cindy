@@ -146,7 +146,7 @@ interface BotGroupProgressStripProps {
   speakers: readonly BotGroupLiveSpeaker[];
   onStop: (scope?: 'all') => void;
   canStopAll?: boolean;
-  canStopMine?: boolean;
+  canStop?: boolean;
   stopping: boolean;
   showStop?: boolean;
   stopPending?: boolean;
@@ -157,7 +157,7 @@ function BotGroupSingleProgressStrip({
   speakers,
   onStop,
   canStopAll = false,
-  canStopMine = true,
+  canStop = true,
   stopping,
   showStop = true,
   stopPending,
@@ -220,7 +220,7 @@ function BotGroupSingleProgressStrip({
                 {t('bots.groupChat.progress.viewProcess')}
               </Button>
             ) : null}
-            {(!showStop || lead?.isSelfRequested === false) && !canStopAll ? null : canStopAll ? (
+            {!showStop || (!canStop && !canStopAll) ? null : canStopAll ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button type="button" variant="secondary" tone="quiet" size="sm" compact loading={buttonPending} className="text-[var(--text-danger)]">
@@ -228,7 +228,7 @@ function BotGroupSingleProgressStrip({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" side="top" className="min-w-[220px]">
-                  {canStopMine ? <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStop()}>
+                  {canStop ? <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStop()}>
                     {t('bots.groupChat.progress.stopMine')}
                   </DropdownMenuItem> : null}
                   <DropdownMenuItem className={cn(MENU_ITEM_CLASS, 'h-auto items-start py-2')} onSelect={() => onStop('all')}>

@@ -1499,6 +1499,17 @@ describe('group timeline', () => {
 });
 
 describe('group composer', () => {
+  // Unit regression: an unrelated public execution must not turn send into stop.
+  it('keeps the send affordance when public work cannot be stopped by this account', async () => {
+    await act(async () => root.render(el(BotGroupComposer, {
+      members: group().members, identityFor: (botId, name) => ({ botId, name: name ?? botId }),
+      deviceId: 'mac', online: true, running: true, canStop: false, planState: null,
+      attachmentsSupported: false, onSend: async () => {}, onStop: async () => {},
+    })));
+    expect(byId('botGroup.composer.stop')).toBeNull();
+    expect(byId('botGroup.composer.send')).not.toBeNull();
+  });
+
   // Unit regression: topic and maskIndicator each used to force an idle composer open.
   // The ordinary draft test below cannot catch either branch. Render the production composer
   // with only that distinguishing input; its toolbar/resize affordance must wait for focus.
@@ -3537,4 +3548,14 @@ it('resolves separated work anchors once per host on mount and notification', as
   h.focused = false;
   await render(data);
   expect(h.processUnsubscribe).toHaveBeenCalledWith(expect.stringMatching(/^group-work:g1:focus:/), 'studio', ['sessions']);
+});
+
+// An older host's aggregate capability must not bypass missing requester identity.
+it('keeps legacy server work read-only even when the host reports aggregate stop permission', async () => {
+  await render(group({ serverBacked: true, round: { status: 'running', canStop: true, canContinue: false, speakers: [
+    { botId: 'mimi', sessionId: null, executionId: 'legacy', activity: 'reply' },
+  ] } }));
+  expect(byId('speaker.mimi.reply')).not.toBeNull();
+  expect(byId('botGroup.work.stop')).toBeNull();
+  expect(byId('botGroup.composer.stop')).toBeNull();
 });

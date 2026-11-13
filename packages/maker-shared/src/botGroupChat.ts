@@ -553,8 +553,10 @@ export interface BotGroupRoundView {
   speakers: BotGroupSpeaker[];
   /** True when the latest round ended naturally and may be continued. */
   canContinue: boolean;
-  /** Server groups: someone else's request or teammate is also working, so stopping only yours leaves it running. */
+  /** Server groups: someone else's request is also working, so stopping only yours leaves it running. */
   othersActive?: boolean;
+  /** This account has work it can stop with the default scope; canStopAll is separate. Absent on older hosts. */
+  canStop?: boolean;
 }
 
 export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';

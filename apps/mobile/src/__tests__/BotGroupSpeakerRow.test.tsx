@@ -344,3 +344,12 @@ it('does not borrow a step description when matching work is in another anchor',
   expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(2);
   expect(node.textContent).not.toContain('Unresolved step identity');
 });
+
+// Unit regression: hide only the unauthorized control, never the public execution rows.
+it('keeps all work visible without offering an unauthorized stop', async () => {
+  const group = workGroup();
+  group.round.canStop = false;
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(2);
+  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+});

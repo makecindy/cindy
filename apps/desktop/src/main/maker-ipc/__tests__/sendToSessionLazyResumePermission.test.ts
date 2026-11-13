@@ -28,6 +28,7 @@ import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
+import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -114,14 +115,19 @@ function botTaskDispatchSlice(): string {
     ',\n    prepareAttachments:',
     registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
   );
+  const pluginSource = slice('function hostPluginInputSource()', '  const sessionControlService = createSessionControlService(');
+  const sendToSession = slice('sendToSession: async (params) => {', ',\n    enableOrca: enableOrcaInternal,')
+    .replace('sendToSession:', 'const sendToSession =');
   return ts.transpileModule(
     `${sendWithBaseline}
 ${sendToSessionInternal}
 ${dispatchBotSessionMessage}
+${pluginSource}
+${sendToSession};
 // Host-originated input to a teammate task (cloud room, group delivery) resumes with its stored mode.
 const delegationDispatch = (params) => dispatchBotSessionMessage({ ...params, resumeWithStoredPermissionMode: true });
 const groupDispatch = ${groupDispatch};
-return { delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal };`,
+return { delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal, sendToSession };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
   ).outputText;
 }
@@ -133,6 +139,7 @@ const loadBotTaskDispatch = new Function(
   `with (scope) { return (function () { ${botTaskDispatchSlice()} })(); }`,
 ) as (scope: object) => {
   sendToSessionInternal: (input: Record<string, unknown>) => ReturnType<GhostAgentTurnRunnerDeps['send']>;
+  sendToSession: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   groupDispatch: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   dispatchBotSessionMessage: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   delegationDispatch: (
@@ -179,6 +186,12 @@ function botTaskDispatchHarness(
     limit: async () => [],
   };
   const stubs: Record<string, unknown> = {
+    getPluginHostToolCaller: () => undefined,
+    sanitizeSourceName,
+    getInstalledGhostName: () => 'Dashboard',
+    captureDataOwnerBroadcastScope: () => ({}),
+    isDataOwnerBroadcastScopeCurrent: () => true,
+    classifySessionMessagePurpose: async () => ({}),
     touchSessionActivityInDb,
     assertCindyMakeSessionAvailable: noop,
     readSessionSource: asyncNoop,
@@ -281,6 +294,24 @@ function botTaskDispatchHarness(
   });
   return { ...loadBotTaskDispatch(scope), scope: stubs, bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
 }
+
+// Unit/guard: execute the same service closure as Agent tools. A plugin has no task to
+// impersonate; its approved input carries one Host source for both saved labels and model notes.
+it('stamps plugin Host input without a dispatcher task and preserves target permissions', async () => {
+  const enqueue = vi.fn(async (_input: Record<string, unknown>) => undefined);
+  const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: true } }, {}, {
+    getPluginHostToolCaller: () => ({ caller: { kind: 'plugin', pluginId: 'dashboard' } }),
+    inputCoordinator: { ensureQueueRestored: async () => {}, shouldQueueNewTurn: () => true },
+    enqueueSendToSessionMessage: enqueue,
+  });
+  expect(await h.sendToSession({ targetSessionId: 'child', message: 'Continue the report' })).toMatchObject({ ok: true, wakeKind: 'queued' });
+  const queued = enqueue.mock.calls[0]?.[0] as unknown as { sourcePlugin: { pluginId: string }; dispatcherSessionId?: string; dbRow: { permissionMode: string }; autoReviewUserText: unknown };
+  expect(queued.sourcePlugin).toEqual({ pluginId: 'dashboard', name: 'Dashboard' });
+  expect(queued.dispatcherSessionId).toBeUndefined();
+  expect(queued.dbRow.permissionMode).toBe('ask');
+  expect(buildMessageSourceNote(messageSourceSenderFromMeta({ sourcePlugin: queued.sourcePlugin }))).toContain('dashboard');
+  expect(h.bootstrapped).toEqual([]);
+});
 
 // #9489 review: the runner admitted remote tasks but omitted the cold-resume
 // policy. Existing tests supplied that policy themselves, hiding the escalation.

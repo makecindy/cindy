@@ -93,8 +93,8 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     disabled={stopPending} style={styles.stop} onPress={onPress}>
     <Text style={styles.stopText}>{t(stopPending ? 'groupChat.speaking.stopping' : 'groupChat.progress.stop')}</Text>
   </Pressable>;
-  const canStopMine = group.round.speakers.some(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId);
-  const controlSpeaker = [...group.round.speakers].reverse().find(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId)
+  const canStopMine = group.round.canStop !== false && group.round.speakers.some(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId);
+  const controlSpeaker = (canStopMine ? [...group.round.speakers].reverse().find(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId) : undefined)
     ?? (group.supportsScopedStop && group.canStopAll && group.round.othersActive ? group.round.speakers.at(-1) : undefined);
   const stopControl = online && onStop && controlSpeaker && speakers.includes(controlSpeaker) ? group.supportsScopedStop && group.canStopAll && group.round.othersActive
       ? <BotGroupMenu title={t('groupChat.progress.stop')} accessibilityLabel={t('groupChat.composer.stop')}

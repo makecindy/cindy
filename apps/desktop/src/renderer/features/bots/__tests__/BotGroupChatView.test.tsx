@@ -5946,3 +5946,16 @@ it('places live work before later messages and leaves another request read-only'
   expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
   expect(within(work[1]!).queryByRole('button', { name: 'bots.groupChat.progress.viewProcess' })).toBeNull();
 });
+
+// Missing requester metadata on older hosts must not inherit aggregate ownership controls.
+it('keeps legacy server work read-only despite aggregate stop permission', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true,
+    round: { status: 'running', canStop: true, canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'legacy', activity: 'reply' },
+    ] },
+  }) });
+  renderView();
+  expect(await screen.findByTestId('bot-group-work')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'bots.groupChat.progress.stop' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'bots.groupChat.composer.stop' })).toBeNull();
+});

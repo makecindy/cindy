@@ -79,7 +79,7 @@ export function createTurnExecutor(deps) {
           deps.hub.publish({ type: 'input_receipt', sessionId, inputClientId: turn.clientId,
             clientId: turn.clientId, status: 'interrupted' });
         }
-        deps.onTerminal(sessionId, error ? 'error' : 'done', error, turn.terminalMeta);
+        deps.onTerminal(sessionId, error ? 'error' : 'done', error, turn.terminalMeta, turn.direct === true);
       }
     });
     return turn.settlement;
@@ -429,6 +429,33 @@ export function createTurnExecutor(deps) {
 
   return {
     send,
+    wireHostSession(session) {
+      deps.assertCurrent();
+      if (deps.getMaker()?.getSession(session.id) !== session) throw new Error('Host Session was replaced');
+      listen(session.id, session);
+    },
+    async beginHostTurn(id) {
+      deps.assertCurrent();
+      const session = deps.getMaker()?.getSession(id);
+      if (!session) throw new Error('Host Session is unavailable');
+      const previous = turns.get(id);
+      const generation = session.getTurnGeneration?.();
+      if (previous?.running) {
+        if (previous.session === session && previous.generation === generation) return;
+        throw new Error('Host turn is already running');
+      }
+      const turn = { session, generation, direct: true, running: true, terminal: false, dbKind: dbKind(session.agentKind) };
+      turns.set(id, turn);
+      listen(id, session);
+      historyFor(id).noteTurnStarted(id);
+      turn.preparing = (async () => {
+        await deps.markStarted?.(id);
+        deps.assertCurrent();
+        if (turns.get(id) !== turn || deps.getMaker()?.getSession(id) !== session) throw new Error('Host Session was replaced');
+      })();
+      try { await turn.preparing; }
+      catch (error) { turn.running = false; throw error; }
+    },
     steer,
     readExecutionSession,
     readAutoReviewHistory,

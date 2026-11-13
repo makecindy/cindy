@@ -42,7 +42,7 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
       ] : [])];
   }
   const groupId = request?.ref?.id ?? request?.resourceRef?.id;
-  if (!groupId || ![GROUP, `${GROUP}-work`, `${GROUP}-talk`, `${GROUP}-member`, `${GROUP}-legacy`, `${GROUP}-requesters`].includes(groupId)) return undefined;
+  if (!groupId || ![GROUP, `${GROUP}-work`, `${GROUP}-talk`, `${GROUP}-member`, `${GROUP}-legacy`, `${GROUP}-requesters`, `${GROUP}-peer`].includes(groupId)) return undefined;
   if (channel === 'maker:remote-resources:invoke') { if (request?.actionId === 'stop') { running = false; if (request.input?.scope === 'all') othersRunning = false; } return { effects: [] }; }
   if (channel !== 'maker:remote-resources:get') return undefined;
   if (groupId.endsWith('-requesters')) return { ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: groupId },
@@ -80,7 +80,7 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
         ] },
       } }] };
   }
-  return { ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: groupId }, revision: String(running),
+  const resource = { ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: groupId }, revision: String(running),
     display: { title: '群内执行 · 模拟数据' }, actions: [], links: [], blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: '', data: {
       id: groupId, name: '群内执行 · 模拟数据', serverBacked: true, replyMode: 'mentioned', speakingMode: 'auto',
       members, plans: [], supportsScopedStop: !groupId.endsWith('-legacy'), canStopAll: !groupId.endsWith('-member'), createdAt: NOW, updatedAt: NOW,
@@ -99,4 +99,17 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
         ] : []),
       ] },
     } }] };
+  if (groupId.endsWith('-peer')) {
+    const data = resource.blocks[0].data;
+    data.members = [{ ...members[0], botId: 'qa-cindy', actorId: 'qa-cindy', name: 'Cindy', isOwned: false }];
+    data.canStopAll = false;
+    Object.assign(data.round, { canStop: false, speakers: [
+      { botId: 'qa-cindy', sessionId: null, activity: 'reply', executionId: 'qa-public-1', executionStatus: 'running' },
+      { botId: 'qa-cindy', sessionId: null, activity: 'reply', executionId: 'qa-public-2', executionStatus: 'needs_input' },
+    ] });
+    data.messages = [{ id: 'qa-public-reply', sequence: 1, kind: 'message', authorKind: 'bot', isSelf: false,
+      content: '已收到，我会把结果发到群里。', createdAt: NOW - 40_000,
+      ...{ authorBotId: 'qa-cindy', authorName: 'Cindy' } }];
+  }
+  return resource;
 }

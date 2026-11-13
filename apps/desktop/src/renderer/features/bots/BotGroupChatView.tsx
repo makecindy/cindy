@@ -1258,7 +1258,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         <BotGroupProgressStrip step={speaker === stepSpeaker && runningStep ? {
           ...runningStep, member: speaker.member, displayName: speaker.displayName,
         } : null} speakers={[speaker]} onStop={scope => void stopRound(scope)}
-          canStopMine={speakers.some(candidate => candidate.isSelfRequested)} showStop={speaker === controlSpeaker} stopPending={stopping || !speakers.some(candidate => (candidate.isSelfRequested || group?.canStopAll) && !candidate.stopping && candidate.executionStatus !== 'stopping')}
+          canStop={group?.round.canStop !== false && speakers.some(candidate => candidate.isSelfRequested)} showStop={speaker === controlSpeaker} stopPending={stopping || !speakers.some(candidate => (candidate.isSelfRequested || group?.canStopAll) && !candidate.stopping && candidate.executionStatus !== 'stopping')}
           canStopAll={!!group?.canStopAll && !!group.round.othersActive && speaker === controlSpeaker} stopping={stopping} />
         <BotGroupSpeakerInteraction speaker={speaker} />
       </>}
@@ -1555,7 +1555,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}
             members={group.members}
-            running={running && (!group.serverBacked || speakers.some(speaker => speaker.isSelfRequested))}
+            running={running} canStop={group.round.canStop !== false && (!group.serverBacked || speakers.some(speaker => speaker.isSelfRequested))}
             planState={botGroupComposerPlanState(openPlan, group.replyMode)}
             divisionSteps={!!group.singleSpeaker}
             attachments={attachmentState}
