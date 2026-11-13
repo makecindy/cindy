@@ -6,6 +6,11 @@ export const SUBSCRIPTION_ACCOUNTS_CHANGED = 'subscription-accounts:changed';
 /** Appended to legacy remote quota queries when the caller needs the CLI default account itself. */
 export const DEFAULT_ACCOUNT_USAGE_SCOPE = 'default-subscription-account';
 export type SubscriptionProvider = 'anthropic' | 'openai';
+/** Account-scoped target for the existing Codex reset control plane; never a model route. */
+export const CODEX_POOL_RESET_PREFIX = 'openai-account:';
+export function codexResetScope(accountId: string): string {
+  return accountId === 'default' ? 'openai' : `${CODEX_POOL_RESET_PREFIX}${accountId}`;
+}
 export interface SubscriptionAccountConfig {
   id: string;
   /** Last identity confirmed by the official CLI, retained across logout/restart. No credentials. */
@@ -56,6 +61,8 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   plan?: string;
   /** Advisory ISO date reported by this account's official CLI; older hosts omit it. */
   loginExpiresAt?: string;
+  /** Host-selected reset target. Imported accounts retain their original connection and settings. */
+  codexResetProviderId?: string;
   directory: string;
   status: 'ready' | 'signed-out' | 'unavailable' | 'limited';
   /** Advisory diagnosis only; absent on older hosts. Never includes CLI output. */

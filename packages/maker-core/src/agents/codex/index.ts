@@ -1747,6 +1747,7 @@ export class CodexAgent extends BaseAgent {
    * "1 agent N host" 是 codex 端做不到 "1 server N transport" 的必然后果。
    */
   private hosts = new Map<string, AppServerHost>();
+  private skillDiscoveryHosts = new Set<AppServerHost>();
   private archiveHostKeys = new Set<string>();
 
   /** Project the host's durable task status through Codex's own storage API. */
@@ -1977,10 +1978,39 @@ export class CodexAgent extends BaseAgent {
     forceReload: boolean,
     remoteHostId?: string,
   ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
-    return this.withHostOperation(async () => remoteHostId
-      ? { key: hostKey(remoteHostId), host: await this.getHost(remoteHostId) }
-      : this.getUtilityHost(),
-    host => this.listSkillsForHost(host, workingDir, forceReload));
+    const discoverySignal = this.routeResolutionAbort.signal;
+    try {
+      return await this.withHostOperation(async () => remoteHostId
+        ? { key: hostKey(remoteHostId), host: await this.getHost(remoteHostId) }
+        : this.getUtilityHost(),
+      host => this.listSkillsForHost(host, workingDir, forceReload));
+    } catch (error) {
+      if (remoteHostId || !(error instanceof AgentNotAuthenticatedError)) throw error;
+      discoverySignal.throwIfAborted();
+      const env = await buildCodexEnv(this.deps.auth, this.deps.runtimeConfig);
+      discoverySignal.throwIfAborted();
+      const host = new AppServerHost({
+        createTransport: () => createStdioTransport({
+          binaryPath: this.deps.binaryPath,
+          env: useCodexHistoryHome(env, env.CODEX_HOME ?? path.join(os.homedir(), '.codex')),
+          extraArgs: [
+            ...(this.deps.disableCodexPluginRuntime ? ['--disable', 'plugins', '--disable', 'remote_plugin'] : []),
+            '-c', 'cli_auth_credentials_store="ephemeral"',
+          ],
+          onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({ pid, role: 'control-plane-service' }),
+        }),
+        requireEphemeralAuth: true,
+        logger: this.deps.logger,
+        clientInfo: { name: 'cindy', version: '0.0.0' },
+      });
+      this.skillDiscoveryHosts.add(host);
+      try {
+        return await this.listSkillsForHost(host, workingDir, forceReload, CRITICAL_THREAD_RPC_TIMEOUT_MS);
+      } finally {
+        await host.retire('Codex skill discovery complete', { throwOnTransportError: true });
+        this.skillDiscoveryHosts.delete(host);
+      }
+    }
   }
 
   /**
@@ -15603,6 +15633,10 @@ assertRouteCurrent();
   async dispose(): Promise<void> {
     this.routeResolutionAbort.abort(new Error('Codex route selection cancelled by dispose'));
     this.routeResolutionAbort = new AbortController();
+    const skillDiscoveryRetirement = Promise.allSettled(Array.from(this.skillDiscoveryHosts, async (host) => {
+      await host.retire('CodexAgent.dispose()', { throwOnTransportError: true });
+      this.skillDiscoveryHosts.delete(host);
+    }));
     this.deps.logger.error('codex dispose called', {
       hostCount: this.hosts.size,
       inflightCount: this.hostPromises.size,
@@ -15665,6 +15699,7 @@ assertRouteCurrent();
     // codexHome 也跟着 host 走: 下次 ensureStarted() 会用新 server 的返回值重新填,
     // 防止用户中途切 CODEX_HOME (改 auth / 重登) 后这边还拿着老路径。
     this.codexHome = null;
+    await skillDiscoveryRetirement;
     if (retirements.length > 0) {
       // 并发 shutdown — 互不依赖, 一起更快收完。失败不阻断其他。
       await Promise.allSettled(retirements);

@@ -2572,7 +2572,7 @@
           "hant": "繁體"
         },
         "styles": {
-          "prose": "문언문(기본)",
+          "prose": "문언문",
           "tang-poetry": "당시",
           "song-ci": "송사",
           "yuan-qu": "원곡",
@@ -10744,6 +10744,15 @@
       "contents": "SOUL.md, USER.md, system_prompt.md, skills/, memories/가 들어 있습니다. 모델, 권한과 연결은 Cindy가 관리합니다.",
       "open": "폴더 열기",
       "openFailed": "동반자 폴더를 열 수 없습니다.",
+      "repository": {
+        "ready": "Git이 준비되었습니다",
+        "notReadyTitle": "Git이 아직 준비되지 않았습니다",
+        "needsIdentity": "이 동반자의 컴퓨터에서 동반자 폴더를 열고 workspace 하위 폴더로 이동하세요. Git의 user.name과 user.email을 설정한 후 다시 시도하세요.",
+        "notReady": "첫 버전이 저장되지 않았습니다. 다시 시도하여 Git 초기화를 완료하세요.",
+        "unavailable": "이 동반자의 컴퓨터에 Git을 설치한 후 다시 시도하세요.",
+        "failed": "Git이 첫 버전을 읽거나 저장하지 못했습니다. 이 동반자의 컴퓨터에서 저장소를 확인한 후 다시 시도하세요.",
+        "keepUsing": "동반자는 계속 사용할 수 있습니다. 기존 파일과 Git 설정은 유지됩니다."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · 기억 정리",
         "carryover": {
@@ -15457,6 +15466,7 @@
       "REMOTE_AGENT_BUSY": "상대 컴퓨터에서 실행 중인 세션이 너무 많습니다. 일부를 종료한 뒤 다시 시도하세요.",
       "REMOTE_AGENT_UNSUPPORTED": "상대 컴퓨터에서는 이 Agent를 사용할 수 없습니다. 그 컴퓨터에서 설치하거나 로그인한 뒤 다시 시도하거나, 다른 Agent를 선택하세요.",
       "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요.",
+      "REMOTE_AGENT_RESUME_REJECTED": "모델을 실행하는 컴퓨터에서 이 세션을 재개할 수 없습니다. 세션 목록에서 새 세션을 만들고 계속하는 데 필요한 내용을 복사하세요. 기존 세션과 전송 대기 중인 메시지는 유지됩니다.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "이 모델은 공유자가 설정한 모델 사용 비율 한도에 도달했습니다. 다른 사용 가능한 모델로 계속하세요.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자 또는 선택한 모델의 사용을 허용하지 않았습니다. 내 컴퓨터라면 그 컴퓨터의 원격 연결에서 '내 다른 컴퓨터에서 이 컴퓨터의 모델 사용'을 켜세요. 공유받은 것이라면 소유자에게 원격 및 공유에서 사용 범위를 조정해 달라고 요청하세요. 다른 모델을 선택할 수도 있습니다.",
       "REMOTE_AGENT_FORK_FAILED": "Agent를 실행하는 컴퓨터에서 여기서 새 세션을 시작하지 못했습니다. 다시 시도하거나 다른 메시지로 시도해 주세요.",
@@ -17461,6 +17471,7 @@
       "copied": "{{label}}을(를) 복사했습니다",
       "copyFailed": "{{label}}을(를) 복사하지 못했습니다. 선택하여 직접 복사해 주세요.",
       "urlUnavailable": "수신 주소를 지금 사용할 수 없습니다.",
+      "unsupportedFormat": "이 버전에서는 이 보내는 곳의 형식을 지원하지 않습니다.",
       "quotaNotifyTitle": "Webhook 수신 횟수를 모두 사용했습니다",
       "quotaExhausted": "오늘의 Webhook 수신 횟수 {{limit}}회를 모두 사용했습니다. {{time}}에 다시 시작됩니다. 그때까지 외부 이벤트로 작업이 실행되지 않습니다. 예약 실행과 모델 사용량에는 영향이 없습니다.",
       "signedOut": "Cindy 계정에 로그인하면 수신이 다시 시작됩니다. 설정은 유지됩니다.",
