@@ -264,7 +264,10 @@ function fileUrlToPath(href: string): string {
   }
   if (/^[A-Za-z]:$/.test(host)) return safeDecodeURIComponent(rest);
   if (host.toLowerCase() === 'localhost') {
-    return stripWindowsDriveUriSlash(safeDecodeURIComponent(rest.slice(host.length) || '/'));
+    // localhost names this machine, never a share: `file://localhost//nas/x`
+    // is the local `/nas/x`, not `//nas/x`.
+    const localPath = safeDecodeURIComponent(rest.slice(host.length) || '/').replace(/^[\\/]+/, '/');
+    return stripWindowsDriveUriSlash(localPath);
   }
   const uncHost = /[\\/]/.test(decodedHost) ? host : decodedHost;
   const sharePath = safeDecodeURIComponent(rest.slice(host.length)).replace(/\//g, '\\');

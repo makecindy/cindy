@@ -254,7 +254,7 @@ describe('resolveLocalPath', () => {
   // A file URL's host names another machine. It used to be stripped to the
   // relative `nas/share/x.pdf`, which main joined onto the task folder and
   // suffix-searched the workspace for. localhost and the malformed
-  // file://C:/ spelling keep naming a local path. Hosts `.`/`..`/`?` (even
+  // file://C:/ spelling keep naming a local path (localhost never a share). Hosts `.`/`..`/`?` (even
   // escaped) keep the relative pre-UNC text instead of a \\.\ or \\?\ device path.
   it.each([
     ['file://nas/share/x.pdf', 'C:\\proj', '\\\\nas\\share\\x.pdf'],
@@ -262,6 +262,9 @@ describe('resolveLocalPath', () => {
     ['file://a%2Fb/share/x.pdf', 'C:\\proj', '\\\\a%2Fb\\share\\x.pdf'],
     ['file://localhost/C:/x.png', 'C:\\proj', 'C:/x.png'],
     ['file://LocalHost/abs/x.png', '/cwd', '/abs/x.png'],
+    // localhost cannot name a share: extra leading separators stay a local path, not //nas.
+    ['file://localhost//nas/share/x.png', 'C:\\proj', '/nas/share/x.png'],
+    ['file://localhost/\\nas\\share\\x.png', 'C:\\proj', '/nas\\share\\x.png'],
     ['file://C:/x.png', 'C:\\proj', 'C:/x.png'],
     ['file://./docs/a.md', 'C:\\proj', './docs/a.md'],
     ['file://%3F/C:/x.png', 'C:\\proj', '?/C:/x.png'],

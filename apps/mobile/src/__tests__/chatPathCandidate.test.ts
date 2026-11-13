@@ -311,6 +311,9 @@ describe('resolveChatAbsPath', () => {
     ['\\\\nas\\share\\x.pdf', '/w', '\\\\nas\\share\\x.pdf'],
     ['file://localhost/C:/x/a.ts', 'C:\\proj', 'C:/x/a.ts'],
     ['file://LOCALHOST/w/a.ts', '/w', '/w/a.ts'],
+    // localhost 不可能指向共享:多余的前导分隔符仍是本机路径,不得变成 //nas。
+    ['file://localhost//nas/share/x.pdf', 'C:\\proj', '/nas/share/x.pdf'],
+    ['file://localhost/\\nas\\share\\x.pdf', 'C:\\proj', '/nas\\share\\x.pdf'],
     ['file://C:/x/a.ts', 'C:\\proj', 'C:/x/a.ts'],
     ['file://./docs/a.md', 'C:\\proj', './docs/a.md'],
     ['file://%2E%2E/a.md', '/w', '../a.md'],

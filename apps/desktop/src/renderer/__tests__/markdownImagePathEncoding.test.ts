@@ -103,7 +103,7 @@ describe('Markdown local image path encoding', () => {
   });
 
   // file://host used to lose its host and load <task folder>/nas/share/a.png.
-  it('loads a file://host image from its UNC share, not from the task folder', () => {
+  it('maps a file://host image src to its share path, not to a task-folder file', () => {
     expect(normalizedImageSrc('![unc](<file://nas/share/My%20Pictures/a.png>)', 'C:\\repo')).toBe(
       `xdt-file://local/?path=${encodeURIComponent('\\\\nas\\share\\My Pictures\\a.png')}`,
     );

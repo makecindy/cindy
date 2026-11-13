@@ -314,7 +314,8 @@ function fileUrlToChatPath(href: string): string {
   if (!host) return stripDriveSlash(safeDecodeChatPath(rest));
   if (/^[A-Za-z]:$/.test(host)) return safeDecodeChatPath(rest);
   if (host.toLowerCase() === 'localhost') {
-    return stripDriveSlash(safeDecodeChatPath(rest.slice(host.length) || '/'));
+    // localhost 只指本机、不可能是共享:`file://localhost//nas/x` 是本机 `/nas/x`,不是 `//nas/x`。
+    return stripDriveSlash(safeDecodeChatPath(rest.slice(host.length) || '/').replace(/^[\\/]+/, '/'));
   }
   // host 单独解码,转义出的分隔符不得挪动共享边界。
   const decodedHost = safeDecodeChatPath(host);
