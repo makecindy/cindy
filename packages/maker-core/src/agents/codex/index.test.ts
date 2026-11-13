@@ -11763,6 +11763,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       { format: 'wrapped rate limit with exhausted retries', message: 'Error running remote compact task: {"code":"400","type":"rate_limit_error"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
       { format: 'explicit bad gateway response', message: 'Error running remote compact task: HTTP 502 Bad Gateway {"code":"400"}', partial: false, completedOnly: false },
       { format: 'explicit service unavailable response', message: 'Error running remote compact task: HTTP 503 Service is temporarily Unavailable {"code":"400"}', partial: false, completedOnly: false },
+      { format: 'model mentioning unsupported tool', message: 'Error running remote compact task: {"code":"400","message":"model returned unsupported tool type"}', partial: false, completedOnly: false },
       { format: 'non-network terminated text', message: 'Error running remote compact task: {"code":"400","message":"unsupported field app_session_terminated"}', partial: false, completedOnly: false },
       { format: 'nested allowed string code', message: 'Error running remote compact task: {"code":"400","cause":{"code":"500"}}', partial: false, completedOnly: false },
       { format: 'nested allowed numeric code', message: 'Error running remote compact task: {"code":"400","cause":{"code":422}}', partial: false, completedOnly: false },
@@ -11883,6 +11884,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","type":"request_too_large"}', codexErrorInfo: 'badRequest' },
       { message: '{"code":"400","type":"overloaded_error"}' },
       { message: '{"code":"400"}', codexErrorInfo: 'serverOverloaded' },
+      { message: '{"code":"400","message":"model: glm-x not found"}' },
+      { message: '{"code":"400","message":"model: glm-x not found"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","message":"The model `x` does not exist or you do not have access"}' },
     ] as const)('keeps unsafe or non-status LiteLLM errors terminal: %j', async (sample) => {
       const { host, handle, events } = await start();
       try {
@@ -11968,6 +11972,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: 'Error running remote compact task', additionalDetails: '{"code":"400","type":"request_too_large"}', codexErrorInfo: 'badRequest' as const },
       { message: '{"code":"400","type":"overloaded_error"}', codexErrorInfo: 'other' as const },
       { message: '{"code":"400"}', codexErrorInfo: 'serverOverloaded' as const },
+      { message: 'Error running remote compact task', additionalDetails: '{"code":"400","message":"model: glm-x not found"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400","message":"The model `x` does not exist"}', codexErrorInfo: 'other' as const },
     ])('rechecks a recorded summary recovery against the authoritative error: %j', async (error) => {
       const { host, handle, events } = await start();
       try {
