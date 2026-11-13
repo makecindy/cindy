@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createBotGroupPlanDecider, createVisibleGroupPlanDecider } from '../botGroupPlanDecider.js';
+import { createBotGroupPlanDecider } from '../botGroupPlanDecider.js';
 import { buildPlanDecisionPrompt, type PlanDecisionInput } from '../botGroupDivision.js';
 
 const input: PlanDecisionInput = {
@@ -102,37 +102,5 @@ describe('createBotGroupPlanDecider', () => {
   it('returns null when no candidate answered usably', async () => {
     const decide = createBotGroupPlanDecider((async () => ({ ok: false, reason: 'all_candidates_failed', attempts: [] })) as never);
     expect(await decide(input, new AbortController().signal)).toBeNull();
-  });
-});
-
-// Unit: auxiliary planning previously had no durable task entry. Exercise the
-// production wrapper: persistence precedes dispatch and every terminal path settles.
-describe('visible group planning', () => {
-  it.each(['completed', 'failed', 'cancelled'] as const)('retains the %s outcome in the original group task', async (state) => {
-    const controller = new AbortController();
-    const calls: string[] = [];
-    const finish = vi.fn(async () => { calls.push('finish'); });
-    const run = createVisibleGroupPlanDecider({
-      begin: async () => { calls.push('begin'); return { isCurrent: () => true, finish }; },
-      decide: async () => { calls.push('decide');
-        if (state === 'cancelled') controller.abort();
-        if (state === 'failed') throw new Error('upstream unavailable');
-        return { needsPlan: false };
-      },
-    });
-    const result = run({ ...input, groupId: 'g', organizerBotId: 'mimi' }, controller.signal);
-    if (state === 'failed') await expect(result).rejects.toThrow('upstream unavailable');
-    else await result;
-    expect(calls).toEqual(['begin', 'decide', 'finish']);
-    expect(finish).toHaveBeenCalledWith(expect.objectContaining({ state }));
-  });
-  it('does not dispatch after failed persistence or publish into a changed owner', async () => {
-    const decide = vi.fn(async () => ({ needsPlan: false as const }));
-    const request = { ...input, groupId: 'g', organizerBotId: 'mimi' };
-    await expect(createVisibleGroupPlanDecider({ decide, begin: async () => { throw new Error('storage'); } })(request, new AbortController().signal)).rejects.toThrow('storage');
-    const finish = vi.fn();
-    await createVisibleGroupPlanDecider({ decide, begin: async () => ({ isCurrent: () => false, finish }) })(request, new AbortController().signal);
-    expect(decide).not.toHaveBeenCalled();
-    expect(finish).not.toHaveBeenCalled();
   });
 });

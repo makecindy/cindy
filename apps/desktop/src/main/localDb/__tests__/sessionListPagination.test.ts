@@ -111,7 +111,7 @@ it('lists existing group lanes in their companion project including private dige
     expect(flattenSessionReadRow(rows.find(row => row.session.id === 'channel')!).companion)
       .toEqual({ id: 'owner', role: 'channel', channel: 'feishu' });
     const group = flattenSessionReadRow(rows.find(row => row.session.id === 'group')!);
-    expect(group.companion).toMatchObject({ id: 'owner', role: 'group', taskProjectDir: '/buddy/workspace' });
+    expect(group.companion).toMatchObject({ id: 'owner', role: 'group', taskProjectDir: '/group/repository' });
     expect(group.workingDir).toBe('/group/repository');
     expect(group.projectDir).toBe('/group/repository');
     // 两种运行方式都投影出同一条规则 id，侧栏据此把同规则的运行收进一个文件夹。

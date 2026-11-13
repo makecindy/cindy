@@ -27,6 +27,9 @@ import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
 import { prepareChatReplyImages } from './chatServerReplyImages.js';
 import { chatServerAssistantSessions, chatServerTaskCards, chatServerWorkspaces } from './chatServerWorkspaces.js';
+import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { botGroupFolderPath } from './botGroupWorkDir.js';
+import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace.js';
 import { createGroupProjectFolders } from './groupProjectFolder.js';
 import { createGroupTaskCards } from './groupTaskCards.js';
 import { createGroupAssistantTasks, formatGroupRequest, type GroupAssistantTask } from './groupAssistantTask.js';
@@ -520,7 +523,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const memberName = (m: Member, members: readonly Member[]) => isAssistant(m) ? BOT_GROUP_ASSISTANT_NAME : chatGroupMemberName(m, members);
   /** Where a group's work happens on this computer (`groupProjectFolder.ts`, bot-group-chat.md §7.5). */
   const projectFolders = createGroupProjectFolders({
+    workspaceRoot: dialogueWorkspaceRootDir,
     chosen: roomId => workspaces().read(roomId)?.projectDir ?? null,
+    fallback: room => workspaces().read(room.id)?.fallbackDir ??
+      (existsSync(botGroupFolderPath(ownerScopedUserDataPath(), room.id)) ? botGroupFolderPath(ownerScopedUserDataPath(), room.id) : null),
+    bindFallback: (roomId, dir) => workspaces().save(roomId, { projectDir: null, plans: {}, ...workspaces().read(roomId), fallbackDir: dir }),
     get findRegistered() { return deps.findProjectDirsForRepo; },
     get checkouts() { return deps.groupCheckouts; },
     get validate() { return deps.validateProjectDir; },
@@ -2874,10 +2881,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // answered as a group and never subscribed: nothing may run without a visible group entry to watch or stop it.
       if (!ownDirectRoom && !isGroupRoom(s.room)) throw new Error('INVALID_EXECUTION_TRIGGER');
       subscribe(execution.conversation_id, s.cursor);
-      // In a group with a repository a teammate does things only for its owner. For anyone else it
-      // only talks, even with a `tools` grant: work on the project is done by the requester's own
-      // Cindy in the group, on their computer with their own logins (bot-group-chat.md §7.5).
-      if (!ownDirectRoom && s.room.project && !execution.mask_owner_id && execution.access_mode === 'tools') toolsOff = true;
+      // All group contexts share the folder. Other members cannot use this owner's tools or logins.
+      if (!ownDirectRoom && execution.access_mode !== 'owner') toolsOff = true;
       // Claim metadata and the persisted source must agree before creating a lane.
       // Reading this exact ID also covers sources outside the bounded history page.
       let eventSource: Message | undefined;
@@ -2918,7 +2923,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             const key = `${run.plan.id}:${execution.access_mode}:${execution.access_revision}`;
             run.workspace = settings.plans[key] ?? (execution.access_mode === 'owner' ? settings.plans[run.plan.id] : undefined);
             if (!run.workspace) {
-              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir: (await projectFolders.shown(s.room)).dir });
+              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir: (await projectFolders.forWork(s.room, { signIn: false, isCurrent: current })).dir });
               if (!prepared?.ok) throw new Error('WORKDIR_UNAVAILABLE');
               run.workspace = prepared;
               if (!current()) throw new Error('OWNER_CHANGED');
@@ -2935,10 +2940,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (source?.origin === 'system') throw new Error('INVALID_EXECUTION_TRIGGER');
         // Plan steps belong to the main group; a Thread request gets the Thread's own lane.
         const threadRootId = run.plan || digest ? undefined : source?.threadRootId ?? undefined;
-        // A reply to the owner's own request works in the group's project folder when this computer
-        // has one, like an ordinary task there. Other members' requests never enter it: work in the
-        // folder runs with the owner's logins (bot-group-chat.md §7.5).
-        const projectDir = !run.plan && !digest && !execution.mask_owner_id && execution.access_mode === 'owner'
+        // Folder identity is shared; toolsOff above enforces the caller's authority.
+        const projectDir = !ownDirectRoom
           ? (await projectFolders.forWork(s.room, { signIn: false, isCurrent: () => current() && running.get(execution.id) === run })).dir : null;
         const lane = await deps.ensureLane({ botId: bot.id, groupId: s.room.id, title: s.room.name,
           ...(projectDir ? { projectDir } : {}),

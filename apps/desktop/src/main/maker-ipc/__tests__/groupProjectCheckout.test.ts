@@ -1,4 +1,7 @@
 import path from 'node:path';
+import { mkdtemp, stat, rm } from 'node:fs/promises';
+import os from 'node:os';
+import { createGroupProjectFolders } from '../groupProjectFolder.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createGroupProjectCheckouts, type GitResult, type GroupCheckoutDeps } from '../groupProjectCheckout.js';
 
@@ -111,4 +114,25 @@ describe('group project checkout', () => {
     expect(checkouts.ensure('../../etc', request)).toBeNull();
     expect(checkouts.ensure('makecindy/cindy.git', request)).toBeNull();
   });
+});
+
+// Unit, §7.5: resolve the real folder without creating it during settings reads.
+// The old resolver returned null for groups without a repository.
+it('creates one workspace folder on demand and retains its binding across a rename', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'group-folder-'));
+  let bound: string | null = null;
+  try {
+    const folders = createGroupProjectFolders({ chosen: () => null, workspaceRoot: () => root,
+      fallback: () => bound, bindFallback: (_, dir) => { bound = dir; },
+      validate: async dir => ({ ok: true as const, dir }) });
+    const room = { id: 'group-1234', name: 'Team / work' };
+    const shown = await folders.shown(room);
+    await expect(stat(shown.dir!)).rejects.toThrow();
+    const actual = await folders.forWork(room, { signIn: false, isCurrent: () => true });
+    expect(actual.dir).toBe(shown.dir);
+    expect((await stat(actual.dir!)).isDirectory()).toBe(true);
+    expect((await folders.forWork({ ...room, name: 'Renamed' }, { signIn: false, isCurrent: () => true })).dir).toBe(actual.dir);
+    const missing = createGroupProjectFolders({ chosen: () => '/missing/user-choice', workspaceRoot: () => root, validate: async () => ({ ok: false as const }) });
+    await expect(missing.forWork(room, { signIn: false, isCurrent: () => true })).rejects.toThrow('WORKDIR_UNAVAILABLE');
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -58,30 +58,3 @@ export function createBotGroupPlanDecider(
     }
   };
 }
-
-export type GroupPlanDecisionRequest = PlanDecisionInput & { groupId: string; organizerBotId: string };
-export type GroupPlanDecisionOutcome = { state: 'completed' | 'failed' | 'cancelled'; decision: PlanDecision | null };
-
-/** Record auxiliary work in the organizer's real group task, never a shadow Session. */
-export function createVisibleGroupPlanDecider(deps: {
-  decide: (input: PlanDecisionInput, signal: AbortSignal) => Promise<PlanDecision | null>;
-  begin: (input: GroupPlanDecisionRequest) => Promise<{
-    isCurrent: () => boolean;
-    finish: (outcome: GroupPlanDecisionOutcome) => Promise<void>;
-  }>;
-}) {
-  return async (input: GroupPlanDecisionRequest, signal: AbortSignal): Promise<PlanDecision | null> => {
-    if (signal.aborted) return null;
-    // Persist the entry before spending model tokens. Failure must not become invisible work.
-    const record = await deps.begin(input);
-    let decision: PlanDecision | null = null;
-    try {
-      if (record.isCurrent() && !signal.aborted) decision = await deps.decide(input, signal);
-      return record.isCurrent() && !signal.aborted ? decision : null;
-    } finally {
-      if (record.isCurrent()) await record.finish({
-        state: signal.aborted ? 'cancelled' : decision ? 'completed' : 'failed', decision,
-      });
-    }
-  };
-}

@@ -5,12 +5,12 @@ import { app } from 'electron';
 import { and, eq } from 'drizzle-orm';
 
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
-import { ensureBotChatOnlyWorkspaceDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
+import { ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { botGroupPlans, botProfileVersions, botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { botGroupPlanRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, parseBotGroupPlanRouteKey } from '../../shared/botGroupChat.js';
+import { botGroupPlanRouteKey, parseBotGroupPlanRouteKey } from '../../shared/botGroupChat.js';
 
 export interface BotWorkspaceRuntimeDeps {
   ensureWorkspaceDir?: typeof ensureBotWorkspaceDir;
@@ -69,13 +69,6 @@ export async function prepareBotWorkspaceRuntime(
 
   const ownerUserDataPath = deps.ownerUserDataPath ?? ownerScopedUserDataPath;
   const groupRouteKey = link[0]?.role === 'group' ? link[0].routeKey : null;
-  if (isChatOnlyGroupLane(groupRouteKey)) {
-    opts.workingDir = await ensureBotChatOnlyWorkspaceDir(ownerUserDataPath(), botId, groupLaneOfRouteKey(groupRouteKey!));
-    opts.workspaceKind = 'dialogue';
-    opts.remoteHostId = undefined;
-    return;
-  }
-
   const planRoute = parseBotGroupPlanRouteKey(groupRouteKey);
   if (planRoute) {
     let workDir: string | null | undefined;
@@ -104,15 +97,13 @@ export async function prepareBotWorkspaceRuntime(
   const ensureWorkspaceDir = deps.ensureWorkspaceDir ?? ensureBotWorkspaceDir;
   const legacyUserDataPath = deps.legacyUserDataPath ?? (() => app.getPath('userData'));
 
-  const workingDir = await ensureWorkspaceDir(ownerUserDataPath(), botId, legacyUserDataPath());
   // A V2 group or Thread lane created in the group's project folder keeps working there, like an
   // ordinary task in that folder (bot-group-chat.md §7.5). Its stored folder must still exist.
   if (groupRouteKey) {
     const [lane] = await db.select({ workingDir: sessions.workingDir, projectDir: sessions.projectDir })
       .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-    const home = path.dirname(path.resolve(workingDir));
     const dir = lane?.projectDir && lane.workingDir === lane.projectDir ? path.resolve(lane.workingDir) : null;
-    if (dir && dir !== home && !dir.startsWith(home + path.sep)) {
+    if (dir) {
       const isDirectory = deps.isDirectory ?? isExistingDirectory;
       if (!(await isDirectory(dir))) throw new BotPlanWorkDirUnavailableError();
       opts.workingDir = dir;
@@ -122,6 +113,7 @@ export async function prepareBotWorkspaceRuntime(
       return;
     }
   }
+  const workingDir = await ensureWorkspaceDir(ownerUserDataPath(), botId, legacyUserDataPath());
   opts.workingDir = workingDir;
   opts.remoteHostId = undefined;
   // V2 (project mode): the workspace is the teammate's project, so its chats are

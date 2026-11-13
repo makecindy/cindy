@@ -411,19 +411,19 @@ describe('conversationSearch personal companion chats', () => {
       // alias matching must use the same Buddy ownership projection as the list.
       db.exec("UPDATE sessions SET working_dir = '/buddy', project_dir = '/buddy' WHERE id = 'main'");
       db.exec("UPDATE sessions SET working_dir = '/group-repo', project_dir = '/group-repo', workspace_kind = 'dialogue' WHERE id = 'group'");
-      db.prepare('INSERT INTO project_aliases VALUES (?, ?, ?)').run('local:/buddy', 'Buddy Melody', 10);
+      db.prepare('INSERT INTO project_aliases VALUES (?, ?, ?)').run('local:/group-repo', 'Group Melody', 10);
       for (const remoteVisibleOnly of [false, true]) {
-        const scoped = await searchConversations({ query: 'needle', filters: { workingDirs: ['/buddy'] } }, { remoteVisibleOnly });
-        expect(scoped.results.map(item => item.session.id).sort()).toEqual(['group', 'main']);
+        const scoped = await searchConversations({ query: 'needle', filters: { workingDirs: ['/group-repo'] } }, { remoteVisibleOnly });
+        expect(scoped.results.map(item => item.session.id).sort()).toEqual(['group']);
         expect(scoped.results.find(item => item.session.id === 'group')?.session).toMatchObject({
           workingDir: '/group-repo', projectDir: '/group-repo',
         });
       }
       const alias = await searchConversations({ query: 'Melody' }, { remoteVisibleOnly: true });
-      expect(alias.results.map(item => item.session.id).sort()).toEqual(['group', 'main']);
+      expect(alias.results.map(item => item.session.id).sort()).toEqual(['group']);
       db.exec("UPDATE bot_session_links SET route_key = 'group:qa:personal-digest' WHERE session_id = 'group'");
-      const privateScoped = await searchConversations({ query: 'needle', filters: { workingDirs: ['/buddy'] } });
-      expect(privateScoped.results.map(item => item.session.id).sort()).toEqual(['group', 'main']);
+      const privateScoped = await searchConversations({ query: 'needle', filters: { workingDirs: ['/group-repo'] } });
+      expect(privateScoped.results.map(item => item.session.id).sort()).toEqual(['group']);
       db.exec("UPDATE bot_session_links SET route_key = NULL WHERE session_id = 'group'");
 
       // A content-only hit must retain its client id and read-only owner so the

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import { githubRepositoryOfRemote, type GroupCheckoutResult, type GroupProjectCheckouts } from './groupProjectCheckout.js';
 
 /**
@@ -11,7 +12,7 @@ import { githubRepositoryOfRemote, type GroupCheckoutResult, type GroupProjectCh
  * A chosen folder is binding: when it is gone the work fails rather than running somewhere else.
  * The other two are found for the user, so a folder that went away is simply looked up again.
  */
-export interface GroupProjectRoom { id: string; project?: { kind: 'github'; repo: string } | null }
+export interface GroupProjectRoom { id: string; name?: string; project?: { kind: 'github'; repo: string } | null }
 export interface GroupProjectFolder {
   dir: string | null;
   /** Found from the group's repository, not chosen on this computer. */
@@ -27,6 +28,10 @@ const MISSED_MS = 20_000;
 export function createGroupProjectFolders(deps: {
   /** The folder chosen for this group on this computer. */
   chosen: (roomId: string) => string | null;
+  /** Persisted automatic binding survives group rename and workspace setting changes. */
+  fallback?: (room: GroupProjectRoom) => string | null;
+  bindFallback?: (roomId: string, dir: string) => void;
+  workspaceRoot?: () => string;
   /** Registered project folders whose git `origin` is this repository. */
   findRegistered?: (repo: string) => Promise<string[]>;
   checkouts?: Pick<GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged'>;
@@ -55,13 +60,25 @@ export function createGroupProjectFolders(deps: {
     return checked?.ok ? checked.dir : null;
   };
 
+  const fallback = (room: GroupProjectRoom) => deps.fallback?.(room) ?? path.join(
+    (() => { if (!deps.workspaceRoot) throw new Error('WORKDIR_UNAVAILABLE'); return deps.workspaceRoot(); })(),
+    `${(room.name ?? 'Group').replace(/[<>:\\\/|?*\x00-\x1f]/g, '-').slice(0, 80) || 'Group'}-${encodeURIComponent(room.id)}`);
+  const defaultFolder = async (room: GroupProjectRoom, isCurrent: () => boolean) => {
+    const dir = fallback(room);
+    if (!isCurrent()) throw new Error('OWNER_CHANGED');
+    await mkdir(dir, { recursive: true });
+    if (!isCurrent()) throw new Error('OWNER_CHANGED');
+    deps.bindFallback?.(room.id, dir);
+    return { dir, auto: true };
+  };
+
   return {
     /** What group management shows: the chosen folder, else the registered project. Never clones. */
     async shown(room: GroupProjectRoom): Promise<GroupProjectFolder> {
       const chosen = deps.chosen(room.id);
       if (chosen) return { dir: chosen, auto: false };
       const repo = repoOf(room);
-      return { dir: repo ? await registeredFolder(repo) : null, auto: true };
+      return { dir: (repo ? await registeredFolder(repo) : null) ?? fallback(room), auto: true };
     },
     /**
      * The folder work for this group runs in, checked to exist. `signIn`: Cindy may open its GitHub
@@ -69,30 +86,32 @@ export function createGroupProjectFolders(deps: {
      */
     async forWork(room: GroupProjectRoom, options: { signIn: boolean; isCurrent: () => boolean }): Promise<GroupWorkFolder> {
       // A host that cannot check folders has no project folders.
-      if (!deps.validate) return { dir: null, auto: false };
+      if (!options.isCurrent()) throw new Error('OWNER_CHANGED');
+      if (!deps.validate) throw new Error('WORKDIR_UNAVAILABLE');
       const chosen = deps.chosen(room.id);
       if (chosen) {
         const dir = await usable(chosen);
         if (!dir) throw new Error('WORKDIR_UNAVAILABLE');
-        return { dir, auto: false };
+        return { dir: chosen, auto: false };
       }
       const repo = repoOf(room);
-      if (!repo) return { dir: null, auto: true };
+      if (!repo) return defaultFolder(room, options.isCurrent);
       const found = await registeredFolder(repo);
       if (found && !deps.checkouts?.isManaged(found)) {
         const dir = await usable(found);
         if (dir) return { dir, auto: true };
         forget(repo);
       }
-      // Cindy's own checkout is a convenience: a clone that cannot run leaves the work without the project.
+      // A configured repository must be available before this group can execute.
       const checkout = await deps.checkouts?.ensure(repo, options)
         ?.catch(error => { if (!options.isCurrent()) throw error; return null; });
-      if (!checkout) return { dir: null, auto: true };
-      if (checkout.status !== 'ready') return { dir: null, auto: true, pending: checkout };
+      if (!checkout) throw new Error('WORKDIR_UNAVAILABLE');
+      if (checkout.status !== 'ready') throw new Error('WORKDIR_UNAVAILABLE');
       // Registered by the clone: group management shows it from now on.
       forget(repo);
       const dir = await usable(checkout.dir);
-      if (dir) await deps.checkouts!.sync(dir);
+      if (!dir) throw new Error('WORKDIR_UNAVAILABLE');
+      await deps.checkouts!.sync(dir);
       return { dir, auto: true };
     },
   };
