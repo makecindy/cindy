@@ -119,17 +119,20 @@ describe('fixed DOM reads', () => {
     await expect(readBrowserDom(options)).rejects.toThrow('PAGE_CHANGED');
     expect(changed.detach).toHaveBeenCalledOnce();
   });
-  it('bounds a stalled protocol read and still releases its session', async () => {
+  // The page lookup row is the 2026-11-14 hang: finding the tab talks to every tab, and a tab
+  // mid-redirect left it unanswered while the read's time limit had not started yet.
+  it.each(['protocol read', 'page lookup'])('bounds a stalled %s and releases any session it opened', async (stage) => {
     vi.useFakeTimers();
     try {
       const { send, detach } = pageFixture();
       const original = send.getMockImplementation()!;
-      send.mockImplementation((method, params) => method === 'Runtime.evaluate'
+      if (stage === 'page lookup') mocks.getPageForTargetId.mockReturnValue(new Promise(() => {}));
+      else send.mockImplementation((method, params) => method === 'Runtime.evaluate'
         ? new Promise(() => {}) : original(method, params));
       const assertion = expect(readBrowserDom(options)).rejects.toThrow('DOM read timed out');
       await vi.advanceTimersByTimeAsync(20000);
       await assertion;
-      expect(detach).toHaveBeenCalledOnce();
+      expect(detach).toHaveBeenCalledTimes(stage === 'page lookup' ? 0 : 1);
     } finally {
       vi.useRealTimers();
     }

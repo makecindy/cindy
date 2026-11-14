@@ -1590,6 +1590,65 @@ export async function quarantineTargetWithoutClosing(opts: {
 
 // Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.`,
     },
+    {
+      desc: 'bound the per-tab target-id probe: Target.attachToTarget can go unanswered for a tab mid-redirect, and every page lookup probes every tab, so one silent tab stalled read, snapshot and act on all tabs',
+      find: `async function pageTargetId(page: Page): Promise<string | null> {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
+    const targetId = normalizeOptionalString(info?.targetInfo?.targetId) ?? "";
+    return targetId || null;
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}`,
+      replace: `/**
+ * Chrome can leave \`Target.attachToTarget\` unanswered for a tab in the middle of
+ * a redirect (seen: a 308 to the address another open tab already shows), and
+ * Playwright sets no deadline on it. Every page lookup probes every tab, so one
+ * silent tab used to stall read, snapshot and act on all tabs indefinitely.
+ * Every caller already treats a failed probe as "unknown"; a session that
+ * attaches after the deadline is detached instead of leaking.
+ */
+const PAGE_TARGET_ID_TIMEOUT_MS = 3_000;
+
+async function pageTargetId(page: Page): Promise<string | null> {
+  let expired = false;
+  let session: { detach(): Promise<void> } | undefined;
+  const probe = (async () => {
+    const attached = await page.context().newCDPSession(page);
+    if (expired) {
+      await attached.detach().catch(() => {});
+      return null;
+    }
+    session = attached;
+    try {
+      const info = (await attached.send("Target.getTargetInfo")) as TargetInfoResponse;
+      const targetId = normalizeOptionalString(info?.targetInfo?.targetId) ?? "";
+      return targetId || null;
+    } finally {
+      await attached.detach().catch(() => {});
+    }
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("page target lookup timed out")),
+      PAGE_TARGET_ID_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([probe, deadline]);
+  } catch (err) {
+    expired = true;
+    probe.catch(() => {});
+    void session?.detach().catch(() => {});
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}`,
+    },
   ],
   'extension/src/browser/ssrf-policy-helpers.ts': [
     {

@@ -35,7 +35,7 @@ describe('git-context remote IPC security contract', () => {
     const lookup = ipcSource.indexOf('const refs = await listPrRefs(remoteSessionId);');
     const clear = ipcSource.indexOf('return [];', lookup);
     const statusQuery = ipcSource.indexOf(
-      'return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });',
+      'const statuses = await prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });',
     );
 
     expect(ipcSource).toContain("log.warn('remote PR refs lookup failed (fail closed)'");

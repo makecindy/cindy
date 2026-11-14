@@ -25,6 +25,8 @@ export function observeRemoteInvoke(
   timing: RemoteInvokeTiming,
   report: (fields: Record<string, unknown>) => void,
   now: () => number = () => performance.now(),
+  /** 协议允许被控端刻意挂起的时长(长轮询)；两个阈值都顺延它，挂起本身不是慢执行。 */
+  intendedHoldMs = 0,
 ): () => void {
   const started = now();
   const emit = (outcome: 'waiting' | 'settled') => {
@@ -32,10 +34,10 @@ export function observeRemoteInvoke(
       activeStage: timing.activeStage ?? null, stagesMs: { ...timing.stages } }); }
     catch { /* Diagnostics cannot change execution or lease cleanup. */ }
   };
-  const timer = setTimeout(() => emit('waiting'), 5_000);
+  const timer = setTimeout(() => emit('waiting'), 5_000 + intendedHoldMs);
   timer.unref?.();
   return () => {
     clearTimeout(timer);
-    if (now() - started >= 1_000) emit('settled');
+    if (now() - started >= 1_000 + intendedHoldMs) emit('settled');
   };
 }

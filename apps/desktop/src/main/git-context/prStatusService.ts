@@ -45,6 +45,18 @@ export function filterPrStatusQueriesForRefs(
   return queries.filter((query) => allowed.has(prStatusKey(query)));
 }
 
+/**
+ * Status chips never read `metadata` (PR body, author and reviewer objects); only the
+ * main-process GitHub read tools do, and they call the service directly. Dropping it from
+ * the status channel keeps each answer small: over device-link it averaged ~11 KB and was
+ * the second-largest result stream after agent events.
+ */
+export function withoutPrMetadata(result: PrStatusResult): PrStatusResult {
+  if (!result.ok || result.metadata === undefined) return result;
+  const { metadata: _metadata, ...rest } = result;
+  return rest;
+}
+
 /** 单条 PR 的远端原始字段(github-client GithubPullRequest 的子集 + thread 统计)。 */
 export interface PrRemoteState {
   state: 'open' | 'closed';

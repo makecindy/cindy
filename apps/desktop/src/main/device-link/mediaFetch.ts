@@ -39,7 +39,7 @@ import { createLogger } from '../logger.js';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { sharedTaskMediaId, withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import { assertSharedTaskMedia } from './sharedTaskMediaAccess.js';
-import { fileVersion } from './fileVersion.js';
+import { readFileVersion } from './fileVersion.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { agentNetMediaCacheScope } from './agentNetMediaRouting.js';
 
@@ -465,10 +465,11 @@ async function fetchLocalMediaForOwner(arg: unknown, assertCurrent: () => void):
       const before = await file.stat();
       if (!before.isFile()) throw new Error('REMOTE_FILE_NOT_REGULAR');
       if (maxBytes !== null && before.size > maxBytes) throw new Error('REMOTE_FILE_TOO_LARGE');
+      const identity = await readFileVersion(file, absPath, before, sourceVersion);
       const result = {
         ossKey: '',
         size: before.size,
-        version: fileVersion(absPath, before, sourceVersion),
+        version: identity.version,
         mimeType:
           mimeType ??
           mimeOf((uploadExtHint ?? path.extname(absPath)).replace(/^\./, '').toLowerCase()),
@@ -478,15 +479,15 @@ async function fetchLocalMediaForOwner(arg: unknown, assertCurrent: () => void):
         return { ...result, transferRequired: true };
       }
       // Bounded read: a growing file cannot allocate an unbounded relay response.
-      const bytes = Buffer.alloc(before.size);
-      let offset = 0;
+      const bytes = identity.bytes ?? Buffer.alloc(before.size);
+      let offset = identity.bytes ? bytes.length : 0;
       while (offset < bytes.length) {
         const read = await file.read(bytes, offset, bytes.length - offset, offset);
         if (!read.bytesRead) throw new Error('REMOTE_FILE_CHANGED');
         offset += read.bytesRead;
       }
       const after = await file.stat();
-      if (fileVersion(absPath, after, sourceVersion) !== result.version)
+      if ((await readFileVersion(file, absPath, after, sourceVersion)).version !== result.version)
         throw new Error('REMOTE_FILE_CHANGED');
       log.debug(`media:fetch prepare → inline size=${before.size} mime=${result.mimeType}`);
       return { ...result, inlineBase64: bytes.toString('base64') };
@@ -526,7 +527,18 @@ async function fetchLocalMediaForOwner(arg: unknown, assertCurrent: () => void):
   const versioned = !cacheable && !/^(audio|video)\//.test(
     mimeType ?? mimeOf((uploadExtHint ?? path.extname(absPath)).replace(/^\./, '').toLowerCase()),
   );
-  const st = cacheable || versioned ? await stat(absPath) : null;
+  const readIdentity = async () => {
+    const file = await open(absPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const st = await file.stat();
+      if (!st.isFile()) throw new Error('REMOTE_FILE_NOT_REGULAR');
+      return { stat: st, ...(await readFileVersion(file, absPath, st, sourceVersion)) };
+    } finally {
+      await file.close();
+    }
+  };
+  const beforeUpload = versioned ? await readIdentity() : null;
+  const st = beforeUpload?.stat ?? (cacheable ? await stat(absPath) : null);
   if (cacheable && st) {
     if (!skipCache) {
       const hit = lookupUploadCache(cacheKey, st.size, st.mtimeMs, Date.now());
@@ -558,10 +570,10 @@ async function fetchLocalMediaForOwner(arg: unknown, assertCurrent: () => void):
   log.debug(`media:fetch ${url.slice(0, 40)} → ossKey=${uploaded.key} size=${uploaded.size}`);
   // Fallback downloads can join the same durable version cache as direct transfers.
   // A changing source remains viewable but must never be indexed under an old version.
-  const afterUpload = versioned ? await stat(absPath).catch(() => null) : null;
-  const version = st && afterUpload && uploaded.size === st.size
-    && fileVersion(absPath, st, sourceVersion) === fileVersion(absPath, afterUpload, sourceVersion)
-    ? fileVersion(absPath, st, sourceVersion) : undefined;
+  const afterUpload = versioned ? await readIdentity().catch(() => null) : null;
+  const version = beforeUpload && afterUpload && uploaded.size === beforeUpload.stat.size
+    && beforeUpload.version === afterUpload.version
+    ? beforeUpload.version : undefined;
   return { ossKey: uploaded.key, mimeType: uploaded.contentType, size: uploaded.size, ...(version ? { version } : {}) };
 }
 

@@ -204,7 +204,7 @@ export function useHomeSessionPr(
     // eventful = 回到首页 / 回到前台:期间的轮询被跳过,PR 可能已合并或关闭,不沿用 90 秒缓存。
     const refresh = (eventful = false) => {
       if (AppState.currentState !== 'active' || (!foreground && !isActive())) return;
-      const retryIn = refreshHomeSessionPr(key, (previous) => loadHomeSessionPr(link.invoke, deviceId, sessionId, previous, includeRelated), {
+      const retryIn = refreshHomeSessionPr(key, (previous, load) => loadHomeSessionPr(link.invoke, deviceId, sessionId, previous, includeRelated, load?.reuseStatuses), {
         eventful,
         now: Date.now(),
         persist: userId ? { deviceId, related: includeRelated, scope, sessionId, userId } : undefined,

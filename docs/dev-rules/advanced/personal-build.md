@@ -893,6 +893,14 @@ standalone cold startup: keep using the personal launcher when the runtime is st
 Test cold-start routing separately before changing default handlers. Never edit the installed
 app's Info.plist in place: that breaks its signature and runtime receipt.
 
+The personal runtime also seals the same English privacy usage strings as the Forge package
+(`apps/desktop/resources/mac-permission-locales.json`). macOS silently refuses some protected
+resources when the declaration is missing: without `NSLocalNetworkUsageDescription` the personal
+app and every agent, SSH or scheduled child process it is responsible for receive `EHOSTUNREACH`
+("No route to host") even for the LAN gateway (2026-11). An already installed runtime gets the
+declaration only from the next personal build; afterwards check System Settings → Privacy &
+Security → Local Network for the personal app.
+
 Mobile debug recording includes non-secret push registration stages, realm, app variant, APNs
 environment and numeric HTTP failure status. It never records the native token or authorization
 headers. A registered event confirms only registration, and a desktop notify-sent log confirms

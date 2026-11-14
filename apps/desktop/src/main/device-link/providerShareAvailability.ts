@@ -6,6 +6,7 @@ import { getProviderGroupDirectory } from '../provider-group/runtime.js';
 import { findReceivedShare } from './providerShareGuest.js';
 import { knownStandbyGuests, reconcileStandbyGuest } from './providerShareAvailabilityGuests.js';
 import { withAvailabilityPolicyLock, rememberAvailabilityShare } from './providerShareAvailabilityPolicy.js';
+import { consistentShareAvailabilityModels, type ShareAvailabilityModel as Model } from './providerShareAvailabilityModels.js';
 /** Offline-owner admission. This contains public identities and grants, never provider credentials. */
 import { parseProviderSharePeer, ProviderShareScopeChangedError, type ProviderShareOwned } from '@cindy/device-link';
 import { remoteInvocationModels, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
@@ -22,7 +23,6 @@ import { providerShareOwnerKey } from './providerShareApi.js';
 import { applyProviderShareDelegation, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
 
 export const PROVIDER_SHARE_AVAILABILITY_CAPABILITY = 'provider-share-availability-v1';
-interface Model extends Pick<CatalogModel, 'id' | 'name' | 'contextWindow' | 'efforts' | 'defaultEffort'> { kind: AgentKind; metadata?: Partial<CatalogModel> }
 interface Executor { deviceId: string; providerId: string; models: Model[]; limit: number }
 interface Policy { revision: number; executors: Executor[]; members: Array<{ memberId: string; joinedAt: number; models: string[] }>;
   allowFast: boolean; fastRevision: number; blockedGuestDeviceIds?: string[] }
@@ -81,6 +81,7 @@ async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<v
         }
         if (models.length) policy.executors.push({ deviceId: member.agentDeviceId, providerId: member.providerId, models, limit: member.limit });
       }
+      policy.executors = consistentShareAvailabilityModels(policy.executors);
       const ids = [...new Set(policy.executors.flatMap(row => row.models.map(model => model.id)))];
       policy.members = share.members.filter(member => member.status === 'active'
         && getProviderShareUsageStore()?.memberGenerationReady({ ownerScope: providerShareOwnerKey(),

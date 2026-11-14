@@ -1614,6 +1614,23 @@ export class Session {
   }
 
   /**
+   * Provider work that outlives a turn but is not listed as a background task
+   * (see AgentSessionHandle.hasLiveBackgroundWork). Closed runtimes have none.
+   * A throwing probe counts as busy: reclamation must never guess "idle".
+   */
+  async hasLiveBackgroundWork(): Promise<boolean> {
+    if (this.status === 'closed' || this.status === 'error') return false;
+    const probe = this.handle.hasLiveBackgroundWork;
+    if (!probe) return false;
+    try {
+      return await probe.call(this.handle);
+    } catch (error) {
+      this.logger.warn('hasLiveBackgroundWork probe failed; treating runtime as busy', { error: String(error) });
+      return true;
+    }
+  }
+
+  /**
    * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
    * 会话已关闭 / agent 不支持 → 0(此时不会再有 wake turn,0 即事实)。
    */

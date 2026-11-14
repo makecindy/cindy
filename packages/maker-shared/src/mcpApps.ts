@@ -46,7 +46,11 @@ export interface McpAppRecord {
   };
   cancelled?: string;
 }
+export { McpAppSdkCache, mcpAppSdkCacheText } from './mcpAppSdkCache.js';
+
 export interface McpAppDocument {
+  /** Optional hash reference, only in response to advertised SDK bytes. */
+  sdkRef?: string;
   /** Executor-owned SDK bytes for this View; absent on older hosts. Never persisted in cards. */
   sdk?: { source: string; addons?: { 'cindy/view-state'?: { source: string; reactSource: string } } };
   viewId: string;

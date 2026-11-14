@@ -167,3 +167,18 @@ export function projectDropIndexFromY(
   }
   return layouts.length;
 }
+
+/** Display order only: never written back to a host's manual-order ledger. */
+export interface HomeDisplayOrder {
+  scope: string;
+  keys: string[];
+}
+
+export function normalizeHomeDisplayOrder(value: unknown): HomeDisplayOrder | null {
+  if (!value || typeof value !== 'object') return null;
+  const { scope, keys } = value as Partial<HomeDisplayOrder>;
+  if (typeof scope !== 'string' || scope.length > 16384 || !Array.isArray(keys)) return null;
+  if (keys.length > 1000 || keys.some(key => typeof key !== 'string' || key.length > 8192)) return null;
+  if (JSON.stringify({ scope, keys }).length > 32768) return null;
+  return { scope, keys: [...new Set(keys)] };
+}

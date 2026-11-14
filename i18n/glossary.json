@@ -186,7 +186,8 @@
       },
       "note": "产品一级概念，五语统一保留英文原词。zh-CN 现状 44:5 已是主流；zh-TW 沿用同一裁决；ja / ko 实测拉丁 Agent 同样是主流（59:38 / 58:39），故四个目标语言一致（2026-07 修正：此前误按抽样声明为片假名 エージェント / 한글 에이전트，那是少数派）。「代理」一词在中文 UI 里整体废弃——Agent 与 Proxy 都保留英文，不共用这个译名；「代理」按英文源分别登记在 agent / subagent / proxy 三条下（条件禁用），不再统一挂 proxy——统一登记会让自动替换无法确定目标：2026-07 一次批量重放就把 \"Agent\"→「代理」的 4 处和 \"Subagent models\" 的 4 处一并换成了 Proxy，产出「子 Proxy 模型」这种错译。引入术语表时全仓仅 9 处「代理」，已全部清理为 Agent / Subagent / Proxy。豁免 settings.remote 整段：那里的 agent 指 ssh-agent（英文原文即 \"SSH agent\" / \"probe agent\"），是与产品 Agent 同形的另一个概念。",
       "exempt": [
-        "desktop:settings.remote."
+        "desktop:settings.remote.",
+        "desktop:ipcError.SSH_AGENT_UNAVAILABLE"
       ]
     },
     {
