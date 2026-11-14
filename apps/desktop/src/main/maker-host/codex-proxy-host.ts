@@ -233,6 +233,22 @@ export interface CodexProxyHostPorts {
 }
 
 /** Same protocol, routing and recovery implementation for both launchers. */
+const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
+const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 12 * 1024 * 1024;
+const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 8 * 1024 * 1024;
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+export function shouldCompactCodexWebSocketFrame(message: Buffer, limitBytes = CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES): boolean {
+  if (message.length <= limitBytes) return false;
+  try {
+    const body: unknown = JSON.parse(message.toString('utf8'));
+    return isPlainObject(body) && !Object.prototype.hasOwnProperty.call(body, 'previous_response_id');
+  } catch {
+    return false;
+  }
+}
+
 export function createCodexProxyHost(ports: CodexProxyHostPorts) {
 const { bearerKeyFromHeaders, reportCindyGatewayKeyRejected, createAttachmentRecovery, createRequestSizeController, restrictSubscriptionRequest, withSubscriptionFastRequestPolicy, peekGrokAccessToken, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM, claudeUpstreamEndpoint, isOpenAiSubscriptionProviderId, createXaiProxyAuthInvalidationObserver, resolveDesktopOutboundProxy, outboundFetch, readSilentEncryptedRetrySettings, recordXaiRateLimitSnapshot, CODEX_IMAGE_GENERATION_ACTOR_HEADER, codexCustomProviderRoutesSignature, findCodexAppliedCustomProviderRoute, isCodexCustomProviderNamespacePath, parseCodexCustomProviderPath, relativeProviderRequestPath, setAppliedCustomProviderRoutes } = ports;
 
@@ -451,22 +467,8 @@ function createArmedHttpRecoveryStripTransform(useUpstreamModel = false): Reques
 // 每轮报 "stream disconnected before completion" 且无日志(2026-07 实踩)。
 // 放宽到 128MB 恢复与原生 codex 的对等;仍保留上限防内存被打爆(body 会整段
 // 缓冲 + JSON.parse,该值同时是单请求的内存 / 解析停顿预算)。
-const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
-
 // ChatGPT 订阅后端的 WebSocket 单条消息保守上限为 12 MiB；整段历史超过时先把最早的
 // 内联附件外置为本地文件，压到 8 MiB。增量帧（带 previous_response_id）保持原样。
-const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 12 * 1024 * 1024;
-const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 8 * 1024 * 1024;
-
-export function shouldCompactCodexWebSocketFrame(message: Buffer, limitBytes = CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES): boolean {
-  if (message.length <= limitBytes) return false;
-  try {
-    const body: unknown = JSON.parse(message.toString('utf8'));
-    return isPlainObject(body) && !Object.prototype.hasOwnProperty.call(body, 'previous_response_id');
-  } catch {
-    return false;
-  }
-}
 
 // proxy 路线 spawn 鉴权模式: codex 当前带的是 OAuth token(requires_openai_auth)还是 gateway key(env_key)。
 // index.ts prepareCodexExtraSpawnConfig 在每次 spawn 前按本次会话 credentialMode set; routingTransform 据此决策。
