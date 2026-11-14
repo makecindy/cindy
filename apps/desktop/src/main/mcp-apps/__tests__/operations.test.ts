@@ -13,6 +13,7 @@ function fixture() {
     context: vi.fn(),
     teardown: vi.fn(),
     cancelOpen: vi.fn(),
+    setSuspended: vi.fn(),
     displayMode: vi.fn(),
     linkResult: vi.fn(),
     authorizeLink: vi.fn(async () => ({ authorized: true, validForMs: 30_000 })),
@@ -134,4 +135,12 @@ it('returns an SDK reference only when the viewer advertises its exact content h
       op: 'open', clientId: 'card', sdkCacheHashes: hashes,
     })).resolves.toEqual({ ...f.document, sdk });
   }
+});
+
+it.each(['suspend', 'resume'])('only lets the local presenter control %s on its bound View', async op => {
+  const f = fixture();
+  await handleMcpAppOperation(f.host, 'renderer:1', 'task', { op, viewId: 'view' }, f.local);
+  expect(f.api.setSuspended).toHaveBeenCalledExactlyOnceWith('renderer:1', 'task', 'view', op === 'suspend');
+  await expect(handleMcpAppOperation(f.host, 'device:phone', 'task', { op, viewId: 'view' })).rejects.toThrow('MCP_APP_OWNER_ONLY');
+  await expect(handleMcpAppFrameOperation(f.host, 'renderer:1', 'task', 'view', { op, viewId: 'view' }, f.local.openLink)).rejects.toThrow('MCP_APP_INVALID_REQUEST');
 });

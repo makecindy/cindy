@@ -181,7 +181,21 @@ class ViewTransport implements Transport {
   }
 }
 
+function isViewStateSave(message: JSONRPCMessage): boolean {
+  return 'method' in message && [VIEW_STATE_METHOD, 'ui/set-view-state'].includes(message.method);
+}
+
 interface View {
+  suspended: boolean;
+  resuming?: boolean;
+  closing: boolean;
+  closingSave?: boolean;
+  closingState?: { id: string | number; aliases: Array<string | number>; complete(): void };
+  suspendedMessages: JSONRPCMessage[];
+  suspendedBytes: number;
+  resumeWaiters: Set<() => void>;
+  deferredNotifications: Map<string, import('@modelcontextprotocol/sdk/types.js').Notification>;
+
   files?: PluginAppFiles;
   openId?: string;
   owner: object;
@@ -563,6 +577,8 @@ export class McpAppsHost {
       );
       const bridge = createBridge();
       const view: View = {
+        suspended: false, closing: false, suspendedMessages: [], suspendedBytes: 0,
+        resumeWaiters: new Set(), deferredNotifications: new Map(),
         openId,
         owner,
         caller,
@@ -619,8 +635,10 @@ export class McpAppsHost {
       const connectDocument = async (bridge: AppBridge): Promise<void> => {
         const generation = view.generation;
         const assertCurrent = async () => {
+          await this.waitUntilActive(viewId, view);
           if (view.generation !== generation) throw new Error('MCP_APP_DOCUMENT_CHANGED');
           await assertView();
+          await this.waitUntilActive(viewId, view);
           await resourceBinding?.assertOperation?.();
           if (view.generation !== generation) throw new Error('MCP_APP_DOCUMENT_CHANGED');
         };
@@ -686,6 +704,14 @@ export class McpAppsHost {
               restored = undefined;
             }
             await transport.send(message);
+            const closing = view.closingState;
+            if (closing && !('method' in message) && 'id' in message && message.id === closing.id) {
+              // Coalesced saves receive the same commit receipt as the latest one,
+              // just like the normal single-flight writer's pending batch.
+              for (const id of closing.aliases) await transport.send({ ...message, id });
+              view.closingState = undefined;
+              closing.complete();
+            }
           },
           async close() { scopedTransport.onclose?.(); },
         };
@@ -1001,6 +1027,11 @@ export class McpAppsHost {
         view.unlisten.push(
           connection.listen((message) => {
             if (view.generation !== generation || !view.initialized || owner !== this.deps.owner()) return;
+            if (view.suspended) {
+              if (['notifications/tools/list_changed', 'notifications/resources/list_changed', 'notifications/prompts/list_changed'].includes(message.method))
+                view.deferredNotifications.set(message.method, message);
+              return;
+            }
             if (message.method === 'notifications/tools/list_changed')
               void bridge.sendToolListChanged(message.params).catch(() => {});
             if (message.method === 'notifications/resources/list_changed')
@@ -1105,12 +1136,12 @@ export class McpAppsHost {
   async readPluginFile(viewId: string, token: string, request: Request): Promise<Response> {
     const view = this.views.get(viewId);
     if (!view?.files) return new Response(null, { status: 404 });
-    try { return await view.files.read(token, request); }
+    try { await this.waitUntilActive(viewId, view); return await view.files.read(token, request); }
     catch { return new Response(null, { status: 404 }); }
   }
 
   private async sendResult(id: string, view: View): Promise<void> {
-    if (!view.record || !view.initialized || view.resultSent || (!view.record.result && !view.record.cancelled)) return;
+    if (view.suspended || !view.record || !view.initialized || view.resultSent || (!view.record.result && !view.record.cancelled)) return;
     const generation = view.generation;
     const bridge = view.bridge;
     try {
@@ -1139,7 +1170,7 @@ export class McpAppsHost {
     }
   }
 
-  private view(caller: string, sessionId: string | null, id: string): View {
+  private ownedView(caller: string, sessionId: string | null, id: string): View {
     const view = this.views.get(id);
     if (
       !view ||
@@ -1148,6 +1179,11 @@ export class McpAppsHost {
       view.owner !== this.deps.owner()
     )
       throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+    return view;
+  }
+
+  private view(caller: string, sessionId: string | null, id: string): View {
+    const view = this.ownedView(caller, sessionId, id);
     const config = this.deps.config(view.serverId);
     if (!config || this.serverRevision(config) !== view.serverRevision)
       throw new Error('MCP_APP_SERVER_CHANGED');
@@ -1156,11 +1192,72 @@ export class McpAppsHost {
     return view;
   }
 
+  private async waitUntilActive(id: string, view: View, closingPoll = false): Promise<void> {
+    while (view.suspended && this.views.get(id) === view) {
+      if (view.resumeWaiters.size >= 32) {
+        await this.disposeView(id, view);
+        throw new Error('MCP_APP_BACKPRESSURE');
+      }
+      await new Promise<void>(resolve => view.resumeWaiters.add(resolve));
+    }
+    if (this.views.get(id) !== view || view.owner !== this.deps.owner() || view.closing && !closingPoll && !view.closingSave) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+  }
+
+  /** Local Renderer control only; neither device callers nor App frames can pause another View. */
+  async setSuspended(caller: string, sessionId: string | null, id: string, suspended: boolean): Promise<void> {
+    if (!caller.startsWith('renderer:')) throw new Error('MCP_APP_OWNER_ONLY');
+    const view = this.ownedView(caller, sessionId, id);
+    if (view.closing || view.suspended === suspended) return;
+    if (suspended) { view.suspended = true; return; }
+    view.resuming = true;
+    // Revalidate before releasing any queued calls. Their normal handlers still
+    // enforce current owner, revision, document generation and tool approval.
+    try { await this.assertCurrentView(id, view); }
+    catch (error) { await this.disposeView(id, view); throw error; }
+    view.suspended = false;
+    view.resumeWaiters.forEach(resolve => resolve()); view.resumeWaiters.clear();
+    try {
+    while (!view.suspended && !view.closing && this.views.get(id) === view && view.suspendedMessages.length) {
+      const message = view.suspendedMessages.shift()!;
+      view.suspendedBytes -= Buffer.byteLength(JSON.stringify(message));
+      await this.dispatchActive(id, view, message);
+    }
+    } finally { view.resuming = false; }
+    if (view.suspended || view.closing || this.views.get(id) !== view) return;
+    const notifications = [...view.deferredNotifications.values()]; view.deferredNotifications.clear();
+    for (const message of notifications) {
+      if (message.method === 'notifications/tools/list_changed') await view.bridge.sendToolListChanged(message.params);
+      if (message.method === 'notifications/resources/list_changed') await view.bridge.sendResourceListChanged(message.params);
+      if (message.method === 'notifications/prompts/list_changed') await view.bridge.sendPromptListChanged(message.params);
+    }
+    await this.sendResult(id, view);
+  }
+
   async dispatch(caller: string, sessionId: string | null, id: string, input: unknown): Promise<void> {
     if (JSON.stringify(input).length > MCP_APPS_MAX_BYTES)
       throw new Error('MCP_APP_MESSAGE_TOO_LARGE');
-    const view = this.view(caller, sessionId, id);
+    const view = this.ownedView(caller, sessionId, id);
     let message = JSONRPCMessageSchema.parse(input);
+    if (view.closing && 'method' in message && !isViewStateSave(message)) return;
+    if ((view.suspended || view.resuming) && 'method' in message) {
+      // Queue before any card/database read or SDK handler. A hostile page cannot
+      // retain an unbounded number of RPC bodies during its five-second lease.
+      const serialized = JSON.stringify(message);
+      const bytes = Buffer.byteLength(serialized);
+      if (view.suspendedMessages.length >= 32 || view.suspendedBytes + bytes > 1024 * 1024) {
+        await this.disposeView(id, view);
+        throw new Error('MCP_APP_BACKPRESSURE');
+      }
+      view.suspendedMessages.push(JSON.parse(serialized));
+      view.suspendedBytes += bytes;
+      return;
+    }
+    await this.dispatchActive(id, view, message);
+  }
+
+  private async dispatchActive(id: string, view: View, message: JSONRPCMessage): Promise<void> {
+    const { caller, sessionId } = view;
+    this.view(caller, sessionId, id);
     // The stable spec used one content block; newer official SDKs use an array.
     if (
       'method' in message &&
@@ -1176,6 +1273,7 @@ export class McpAppsHost {
     const generation = view.generation;
     await view.documentReady;
     if (view.generation !== generation) return;
+    if (view.closing && 'method' in message && !isViewStateSave(message)) return;
     this.view(caller, sessionId, id);
     if (
       'method' in message &&
@@ -1209,10 +1307,13 @@ export class McpAppsHost {
 
   async poll(caller: string, sessionId: string | null, id: string, after: number) {
     if (!Number.isSafeInteger(after) || after < 0) throw new Error('MCP_APP_INVALID_CURSOR');
-    const view = this.view(caller, sessionId, id);
+    const view = this.ownedView(caller, sessionId, id);
+    await this.waitUntilActive(id, view, true);
+    this.view(caller, sessionId, id);
     if (after > view.transport.seq) throw new Error('MCP_APP_INVALID_CURSOR');
     await this.assertCurrentView(id, view);
     const events = await view.transport.poll(after);
+    await this.waitUntilActive(id, view, true);
     await this.assertCurrentView(id, view);
     // An authorization read may straddle a new initialize after poll has already
     // taken a snapshot. Do not return that snapshot's old-document replies.
@@ -1220,7 +1321,9 @@ export class McpAppsHost {
   }
 
   context(caller: string, sessionId: string | null, id: string, patch: McpUiHostContext): void {
-    const view = this.view(caller, sessionId, id);
+    const view = this.ownedView(caller, sessionId, id);
+    if (view.suspended || view.resuming) return;
+    this.view(caller, sessionId, id);
     const old = view.context;
     // Tool identity and granted capabilities are host-owned, never renderer overrides.
     const allowed = [
@@ -1291,19 +1394,54 @@ export class McpAppsHost {
     alreadyNotified = false,
   ): Promise<void> {
     const view = this.view(caller, sessionId, id);
-    // The controller keeps its iframe mounted until this bounded handshake finishes.
-    try {
-      if (view.initialized && !alreadyNotified)
-        await view.bridge.teardownResource({}, { timeout: 1_000 });
-    } catch {
-      /* An unresponsive App must not block leaving a task. */
+    const deadline = Date.now() + 1_000;
+    let finalSave: JSONRPCMessage | undefined;
+    let saved: Promise<void> | undefined;
+    if (view.suspended || view.resuming) {
+      view.closing = true;
+      view.resuming = false;
+      const saves = view.suspendedMessages.filter(message => isViewStateSave(message) && 'id' in message);
+      finalSave = saves.at(-1);
+      if (finalSave && 'id' in finalSave && finalSave.id !== undefined) {
+        view.closingSave = true;
+        const saveId = finalSave.id;
+        const aliases = saves.slice(0, -1).flatMap(message =>
+          'id' in message && message.id !== undefined ? [message.id] : [],
+        );
+        saved = new Promise(resolve => {
+          view.closingState = { id: saveId, aliases, complete: resolve };
+        });
+      }
+      // Normal closure preserves only the last private snapshot. Revocation uses
+      // disposeView directly and never releases queued writes or tool requests.
+      view.suspendedMessages = []; view.suspendedBytes = 0;
+      view.suspended = false;
+      view.resumeWaiters.forEach(resolve => resolve()); view.resumeWaiters.clear();
     }
-    await this.disposeView(id, view);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Final save and the existing handshake share ONE deadline, not two waits.
+    try {
+      await Promise.race([
+        (async () => {
+          if (finalSave) { await this.dispatch(caller, sessionId, id, finalSave); await saved; view.closingSave = false; }
+          if (this.views.get(id) !== view || Date.now() >= deadline) return;
+          if (view.initialized && !alreadyNotified)
+            await view.bridge.teardownResource({}, { timeout: Math.max(1, deadline - Date.now()) });
+        })(),
+        new Promise<void>(resolve => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())); }),
+      ]);
+    } catch {
+      /* A failed save or unresponsive App must not block leaving a task. */
+    } finally {
+      view.closingSave = false;
+      clearTimeout(timer);
+      await this.disposeView(id, view);
+    }
   }
 
   private async disposeView(id: string, view: View, notify = false): Promise<void> {
     if (this.views.get(id) !== view) return;
-    if (notify && view.initialized) {
+    if (notify && view.initialized && !view.suspended) {
       try {
         await view.bridge.teardownResource({}, { timeout: 1_000 });
       } catch {
@@ -1311,6 +1449,10 @@ export class McpAppsHost {
       }
     }
     this.views.delete(id);
+    view.closingState?.complete(); view.closingState = undefined;
+    view.suspendedMessages = []; view.suspendedBytes = 0;
+    view.deferredNotifications.clear();
+    view.resumeWaiters.forEach(resolve => resolve()); view.resumeWaiters.clear();
     view.stopContext?.();
     view.files?.close();
     if (!this.views.size) {
@@ -1445,7 +1587,7 @@ export class McpAppsHost {
     await Promise.allSettled(
       views.map(async ([id, view]) => {
         try {
-          if (view.initialized) await view.bridge.teardownResource({}, { timeout: 1_000 });
+          if (view.initialized && !view.suspended) await view.bridge.teardownResource({}, { timeout: 1_000 });
         } catch {
           /* Owner reset must finish even when an App no longer responds. */
         }
@@ -1457,6 +1599,9 @@ export class McpAppsHost {
 
   private async sweep(): Promise<void> {
     for (const [id, view] of this.views) {
+      // Retained local Views have their five-second Renderer lease; invalidation
+      // is pushed by the registry/owner lifecycle, not by hidden reads.
+      if (view.suspended && view.owner === this.deps.owner()) continue;
       const config = this.deps.config(view.serverId);
       if (
         view.owner !== this.deps.owner() ||

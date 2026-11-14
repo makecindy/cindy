@@ -29,7 +29,7 @@ export function setMcpAppCallerCleanup(cleanup?: (caller: string) => Promise<voi
 const documents = new Map<
   string,
   {
-    html: string; fileKey: string; document: McpAppDocument; owner: object | null; caller?: string;
+    html: string; fileKey: string; document: McpAppDocument; owner: object | null; caller?: string; local?: boolean;
     dispose?: () => void;
     bridge?: { key: string; frame?: WebFrameMain; invoke(input: unknown): Promise<unknown> };
   }
@@ -141,13 +141,18 @@ export function supplyMcpAppDocument(
 ): void {
   documents.set(document.viewId, {
     html: withMcpAppTheme(preparedAppHtml(document), hostContext ?? {}),
-    fileKey: randomUUID(), document, owner: getCurrentDbClientSnapshot(), caller, dispose,
+    fileKey: randomUUID(), document, owner: getCurrentDbClientSnapshot(), caller, local: caller?.startsWith('renderer:'), dispose,
     bridge: invoke ? { key: randomUUID(), invoke } : undefined,
   });
 }
 export function removeMcpAppDocument(id: string): void {
   const entry = documents.get(id);
   documents.delete(id);
+  if (entry?.local) {
+    try {
+      void entry.bridge?.frame?.executeJavaScript?.("window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/sandbox-failed'},'*')").catch(() => {});
+    } catch (error) { if (!isDisposedFrameError(error)) throw error; }
+  }
   entry?.dispose?.();
 }
 export function clearMcpAppDocuments(): void {

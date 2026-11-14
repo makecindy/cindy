@@ -20,16 +20,17 @@ function deferred() {
   const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-async function fixture(resourceSessionId?: string | null) {
+async function fixture(resourceSessionId?: string | null, caller = 'device:test') {
   const sessionId = resourceSessionId === undefined ? 'task' : resourceSessionId;
   vi.useFakeTimers();
   vi.spyOn(AppBridge.prototype, 'teardownResource').mockResolvedValue({});
-  const owner = {};
+  let owner = {};
   const config = { id: 'fixture', url: 'https://example.invalid', transport: 'http' as const };
   const tool = { name: 'form', inputSchema: { type: 'object' as const }, _meta: { ui: { resourceUri: 'ui://form' } } };
   const record = { version: 1 as const, serverId: config.id, serverRevision: appServerRevision(config),
     resourceUri: 'ui://form', tool, arguments: {}, result: { content: [] } };
   const connection = { getClient: async () => ({ getServerCapabilities: () => ({}) }), tools: async () => [tool],
+    config,
     resource: async () => ({ result: { contents: [{ uri: 'ui://form', mimeType: 'text/html;profile=mcp-app', text: '' }] } }),
     listen: () => () => {}, close: async () => {},
   } as unknown as AppConnection;
@@ -44,27 +45,28 @@ async function fixture(resourceSessionId?: string | null) {
   hosts.push(host);
   const context = { 'cindy/view-state': { forged: true }, viewState: 'forged' };
   const open = () => resourceSessionId === undefined
-    ? host.open('device:test', 'task', 'card', context)
-    : host.openResource('device:test', sessionId, { id: 'resource', title: 'Resource', serverId: config.id,
+    ? host.open(caller, 'task', 'card', context)
+    : host.openResource(caller, sessionId, { id: 'resource', title: 'Resource', serverId: config.id,
       serverRevision: record.serverRevision, resourceUri: record.resourceUri, assertCurrent() {} }, context);
   const doc = await open();
-  const dispatch = (viewId: string, id: number, method: string, params?: unknown) => host.dispatch('device:test', sessionId, viewId,
+  const dispatch = (viewId: string, id: number, method: string, params?: unknown) => host.dispatch(caller, sessionId, viewId,
     { jsonrpc: '2.0', id, method, params });
   const reply = async (viewId: string, id: number) => {
     await vi.advanceTimersByTimeAsync(0);
-    const events = await host.poll('device:test', sessionId, viewId, 0);
+    const events = await host.poll(caller, sessionId, viewId, 0);
     return events.map(e => e.message).find(m => m && 'id' in m && m.id === id) as
       { result?: Record<string, any>; error?: { code: number; data?: { code: string } } };
   };
   const initialize = async (viewId = doc.viewId, id = 1) => {
     await dispatch(viewId, id, 'ui/initialize', { protocolVersion: '2026-01-26', appInfo: { name: 'fixture', version: '1' }, appCapabilities: {} });
     const result = await reply(viewId, id);
-    await host.dispatch('device:test', sessionId, viewId, { jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+    await host.dispatch(caller, sessionId, viewId, { jsonrpc: '2.0', method: 'ui/notifications/initialized' });
     await vi.advanceTimersByTimeAsync(0);
     return result;
   };
   const set = (id: number, value: unknown) => dispatch(doc.viewId, id, 'cindy/view-state/set', { state: value });
-  return { host, doc, open, initialize, dispatch, reply, set, read, save, viewState };
+  return { host, doc, open, initialize, dispatch, reply, set, read, save, viewState, config,
+    changeOwner() { owner = {}; }, connection };
 }
 // Unit regression for the merged resource-view entry: no persisted card means no
 // persistence authority, even with a task ID. Existing card tests never open resources.
@@ -221,3 +223,78 @@ it('isolates captured account clients and runs deleted-task cleanup once per cli
   await reconcileDeletedTaskViewState(clients[1] as unknown as DbClient, () => owner === 1);
   expect(clients[1].exec).toHaveBeenCalledTimes(1);
 });
+
+// PR-E / #10482, unit: real Host dispatch, writer and initialize restoration.
+// The old immediate close never retained a save; dropping a held save at close
+// would lose the helper's already in-flight final edit. Fake time covers the budget.
+it('retained input survives five-second expiry close and reopen via Host state restoration', async () => {
+  const f = await fixture(undefined, 'renderer:1'); await f.initialize();
+  const teardown = vi.mocked(AppBridge.prototype.teardownResource);
+  const order: string[] = [];
+  const persist = f.save.getMockImplementation()!;
+  f.save.mockImplementation(async snapshot => { order.push('save'); await persist(snapshot); });
+  teardown.mockImplementation(async () => { order.push('teardown'); return {}; });
+  await f.host.setSuspended('renderer:1', 'task', f.doc.viewId, true);
+  await f.set(2, { version: 1, draft: 'first' });
+  await f.dispatch(f.doc.viewId, 3, 'tools/list', {});
+  await f.set(4, { version: 1, draft: 'latest' });
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(f.save).not.toHaveBeenCalled();
+  const tools = vi.spyOn(f.connection, 'tools');
+  const before = Date.now();
+  await f.host.teardown('renderer:1', 'task', f.doc.viewId);
+  expect(Date.now() - before).toBeLessThanOrEqual(1000);
+  expect(order).toEqual(['save', 'teardown']);
+  expect(f.save).toHaveBeenCalledOnce();
+  expect(tools).not.toHaveBeenCalled();
+  const next = await f.open();
+  expect((await f.initialize(next.viewId, 5)).result?.hostContext['cindy/view-state']).toEqual({ version: 1, draft: 'latest' });
+});
+
+it.each(['failure', 'timeout'])('retained final save %s does not extend the one-second close deadline', async reason => {
+  const f = await fixture(undefined, 'renderer:1'); await f.initialize();
+  const gate = deferred();
+  f.save.mockImplementation(() => reason === 'failure' ? Promise.reject(new Error('write failed')) : gate.promise);
+  await f.host.setSuspended('renderer:1', 'task', f.doc.viewId, true);
+  await f.set(2, { draft: 'last' });
+  let closed = false;
+  const closing = f.host.teardown('renderer:1', 'task', f.doc.viewId).then(() => { closed = true; });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.save).toHaveBeenCalledOnce();
+  if (reason === 'timeout') {
+    expect(closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+  }
+  await closing;
+  expect(closed).toBe(true);
+  await expect(f.host.poll('renderer:1', 'task', f.doc.viewId, 0)).rejects.toThrow('MCP_APP_VIEW_UNAVAILABLE');
+  gate.resolve();
+});
+
+it('disabled plugin drops retained state and tools without saving', async () => {
+  const reason = 'disabled';
+  await retainedInvalidation(reason);
+});
+
+it.each(['account', 'disabled', 'permission', 'revision'])('discards retained snapshots on %s invalidation', async reason => {
+  await retainedInvalidation(reason as 'account' | 'disabled' | 'permission' | 'revision');
+});
+
+async function retainedInvalidation(reason: 'account' | 'disabled' | 'permission' | 'revision') {
+  const f = await fixture(undefined, 'renderer:1'); await f.initialize();
+  await f.host.setSuspended('renderer:1', 'task', f.doc.viewId, true);
+  await f.set(2, { draft: 'must not write' });
+  await f.dispatch(f.doc.viewId, 3, 'tools/list', {});
+  const tools = vi.spyOn(f.connection, 'tools');
+  if (reason === 'account') { f.changeOwner(); await f.host.reset(); }
+  else {
+    if (reason === 'revision') f.config.url += '/changed';
+    await f.host.revokePluginServers(new Set([f.config.id]));
+  }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.save).not.toHaveBeenCalled();
+  expect(tools).not.toHaveBeenCalled();
+  await expect(f.host.setSuspended('renderer:1', 'task', f.doc.viewId, false)).rejects.toThrow();
+}

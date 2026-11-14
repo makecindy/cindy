@@ -14,6 +14,7 @@ import type { McpAppRecord } from '../../../shared/mcpApps.js';
 import { AppConnection, type AppServerConfig } from '../connection.js';
 import { McpAppsHost, appServerRevision } from '../host.js';
 import { handleMcpAppFrameOperation, handleMcpAppOperation } from '../operations.js';
+import { createMcpAppsRuntime } from '../runtimeCore.js';
 import { OwnerScopedAppResourceCache } from '../appResourceCache.js';
 
 const hosts: McpAppsHost[] = [];
@@ -162,6 +163,7 @@ async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p
   };
   let notify!: (message: Notification) => void;
   const connection = {
+    config,
     getClient: async () => ({
       ...methods,
       getServerCapabilities: () => ({ tools: {}, resources: {}, prompts: {} }),
@@ -977,4 +979,72 @@ it('keeps SDK negotiation hashes out of the initialized page hostContext', async
   expect(reply.result.hostContext).not.toHaveProperty('sdkCacheHashes');
   expect(reply.result.hostContext).not.toHaveProperty('sdkRef');
   expect(JSON.stringify(reply.result.hostContext)).not.toContain(hash);
+});
+
+// PR-E / §8.3, unit: real Host dispatch/poll and SDK bridge. Previously every
+// hidden request ran immediately. Observe upstream calls, authorization reads,
+// RPC receipts and View disposal rather than a parallel queue implementation.
+it('defers local tools and resource reads, pauses poll reads, and executes each once after resume', async () => {
+  const f = await fixture('renderer:1', true);
+  const assertPlugin = vi.spyOn(f.config.plugin!, 'assertCurrent');
+  f.methods.callTool.mockResolvedValue({ content: [] });
+  f.methods.readResource.mockResolvedValue({ contents: [] });
+  const initial = await f.poll(0);
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+  f.readCard.mockClear(); f.methods.tools.mockClear(); assertPlugin.mockClear();
+  await f.dispatch({ jsonrpc: '2.0', id: 301, method: 'tools/call', params: { name: 'form', arguments: {} } });
+  await f.dispatch({ jsonrpc: '2.0', id: 302, method: 'resources/read', params: { uri: 'data://private' } });
+  const poll = f.poll(initial.at(-1)!.seq);
+  f.host.context('renderer:1', 'task', f.viewId, { theme: 'dark' });
+  f.notify(); f.notify();
+  await Promise.resolve();
+  expect(f.readCard).not.toHaveBeenCalled();
+  expect(assertPlugin).not.toHaveBeenCalled();
+  expect(f.methods.callTool).not.toHaveBeenCalled();
+  expect(f.methods.readResource).not.toHaveBeenCalled();
+  expect(f.outgoing).toEqual([]);
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, false);
+  await vi.waitFor(() => {
+    expect(f.methods.callTool).toHaveBeenCalledOnce();
+    expect(f.methods.readResource).toHaveBeenCalledOnce();
+    expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 301, result: { content: [] } }));
+    expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 302, result: { contents: [] } }));
+  }, { interval: 1 });
+  await poll;
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, false);
+  expect(f.methods.callTool).toHaveBeenCalledOnce();
+});
+
+it.each(['teardown', 'account', 'disabled', 'revision', 'permission'] as const)(
+  'drops retained requests on %s without affecting another caller', async reason => {
+    const f = await fixture('renderer:1', true);
+    const runtime = createMcpAppsRuntime();
+    runtime.setMcpAppsHost(f.host);
+    const original = { ...f.config, plugin: { ...f.config.plugin! } };
+    runtime.replacePluginAppServers(new Map([[f.config.id, () => original]]));
+    const peer = await f.host.open('device:healthy', 'task', 'other-card', {});
+    await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+    await f.dispatch({ jsonrpc: '2.0', id: 401, method: 'tools/call', params: { name: 'form' } });
+    if (reason === 'teardown') await f.host.teardown('renderer:1', 'task', f.viewId, true);
+    else if (reason === 'account') { f.revoke('owner'); runtime.resetAppServers(); }
+    else {
+      if (reason === 'revision') f.config.plugin!.revision = 'two';
+      if (reason === 'disabled') f.revoke('server');
+      if (reason === 'permission') f.config.plugin!.assertCurrent = () => { throw new Error('MCP_PLUGIN_UNAVAILABLE'); };
+      runtime.replacePluginAppServers(reason === 'revision' ? new Map([[f.config.id, () => f.config]]) : new Map());
+    }
+    expect(f.methods.callTool).not.toHaveBeenCalled();
+    await expect(f.host.setSuspended('renderer:1', 'task', f.viewId, false)).rejects.toThrow();
+    if (reason === 'teardown') await expect(f.host.assertViewAuthorized('device:healthy', 'task', peer.viewId)).resolves.toBeUndefined();
+  },
+);
+
+it('bounds deferred page messages and denies nonlocal and foreign View suspension', async () => {
+  const f = await fixture();
+  await expect(f.host.setSuspended('device:phone', 'task', f.viewId, true)).rejects.toThrow('MCP_APP_OWNER_ONLY');
+  await expect(f.host.setSuspended('renderer:other', 'task', f.viewId, true)).rejects.toThrow('MCP_APP_VIEW_UNAVAILABLE');
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+  for (let i = 0; i < 32; i++) await f.dispatch({ jsonrpc: '2.0', id: 500 + i, method: 'tools/list' });
+  await expect(f.dispatch({ jsonrpc: '2.0', id: 600, method: 'tools/list' })).rejects.toThrow('MCP_APP_BACKPRESSURE');
+  await expect(f.poll(0)).rejects.toThrow('MCP_APP_VIEW_UNAVAILABLE');
 });
