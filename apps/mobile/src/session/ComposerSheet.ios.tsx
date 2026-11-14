@@ -165,6 +165,7 @@ export function ComposerSheet({
                   {nativeRoot.header}
                   <Form
                     testID={testID ? `${testID}.list` : undefined}
+                    initialScrollTargetId={nativeRoot.initialScrollTargetId}
                     modifiers={[...editModeModifiers, containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
                   >
                     {nativeRoot.content}
