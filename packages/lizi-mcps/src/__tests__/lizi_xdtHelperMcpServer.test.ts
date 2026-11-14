@@ -437,6 +437,49 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  // Unit: 受理宽限窗内退出的命令,结果随 start 调用同步返回——失败以 error hint
+  // (退出码+日志尾部)呈现供当回合自纠,成功以 ok payload 呈现且注明不再有回报;
+  // 坏了会退回「等回注」的旧路径,秒败白占一轮。
+  it('maps in-grace completion to synchronous payloads instead of follow-up reports', async () => {
+    const start = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        runId: 'bg-2',
+        logPath: '/tmp/bg-2.log',
+        pid: 7,
+        completed: { code: 3, signal: null, timedOut: false, tail: 'bash: cd: /e/nope: No such file or directory' },
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        runId: 'bg-3',
+        logPath: '/tmp/bg-3.log',
+        pid: 8,
+        completed: { code: 0, signal: null, timedOut: false, tail: 'done' },
+      });
+    const server = createXdtHelperMcpServer({ backgroundCommands: start }, {
+      agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task',
+      getSessionContext: () => ({ agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task' } as never),
+    });
+    const client = new Client({ name: 'bg-command-grace-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const call = () => client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'run_command_background', args: { command: 'cd /e/nope && make' } },
+      });
+      const failed = parsePayload(await call()) as { ok: boolean; errorCode?: string; data?: { hint?: string } };
+      expect(failed).toMatchObject({ ok: false, errorCode: 'COMMAND_FAILED' });
+      expect(failed.data?.hint).toContain('exit 3');
+      expect(failed.data?.hint).toContain('/e/nope');
+      expect(failed.data?.hint).toContain('/tmp/bg-2.log');
+      const ok = parsePayload(await call()) as { ok: boolean; run_id?: string; log_tail?: string; note?: string };
+      expect(ok).toMatchObject({ ok: true, run_id: 'bg-3', log_tail: 'done' });
+      expect(ok.note).toContain('不会再有');
+    } finally { await client.close(); await server.close(); }
+  });
+
   it.each(['default', 'bot-main'] as const)('exposes runtime declarations through the same helper tool for %s', async (surface) => {
     const runtimeCapabilities = vi.fn(async () => ({ ok: true, capabilities: [{ server: 'fixture' }] }));
     const server = createXdtHelperMcpServer({ resolveSurface: async () => surface, runtimeCapabilities }, {

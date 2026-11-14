@@ -19,7 +19,10 @@
  *  - 解释器点名（2026-11-14）：shell 参数与前台 bash/powershell 工具同一份菜单
  *    （默认 bash=Git Bash），模型用什么语法写就由什么解释。此前 spawn(shell:true)
  *    落宿主 cmd，前台口径（cd /e、$()、裸 bash→WSL）整类秒败——同一命令前台能跑
- *    后台必死，才有这条收敛。
+ *    后台必死,才有这条收敛。
+ *  - 受理宽限窗(2026-11-14):spawn 后等 ~3s,窗口内就退出的命令(写错/秒败/短
+ *    命令)结果作为工具结果同步返回、不再回注——秒败不占轮次(回投时机问题的
+ *    拆解:病态的短尾巴走前台语义,正常的长尾巴走后台语义)。
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -51,6 +54,8 @@ const REPORT_RETRY_MAX_DELAY_MS = 300_000;
 const LOG_RETENTION_DAYS = 14;
 /** exit 后读日志文件尾部的短延迟:容让杀毒/索引器对日志文件的瞬时锁。 */
 const SETTLE_READ_DELAY_MS = 200;
+/** 受理宽限窗:spawn 后等这么久,窗口内退出(秒败/短命令)的结果随调用同步返回、不再回注。 */
+export const BACKGROUND_COMMAND_START_GRACE_MS = 3_000;
 
 export interface BackgroundCommandStartInput {
   sessionId: string;
@@ -123,7 +128,20 @@ function buildShellInvocation(
 }
 
 export type BackgroundCommandStartResult =
-  | { ok: true; runId: string; logPath: string; pid: number | undefined }
+  | {
+      ok: true;
+      runId: string;
+      logPath: string;
+      pid: number | undefined;
+      /** 命令在受理宽限窗内退出:结果随本调用同步返回(工具结果即报告,不再回注)。 */
+      completed?: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+        timedOut: boolean;
+        spawnError?: string;
+        tail: string;
+      };
+    }
   | {
       ok: false;
       errorCode: 'INVALID_ARGS' | 'TOO_MANY_RUNS' | 'SPAWN_FAILED' | 'LOG_FAILED' | 'DISPOSED' | 'DESKTOP_INPUT_BLOCKED';
@@ -141,6 +159,8 @@ export interface BackgroundCommandServiceDeps {
   reportRetryDelayMs?: number;
   /** 报告 retry 间隔封顶;仅测试注入,与首间隔配套用。 */
   reportRetryMaxDelayMs?: number;
+  /** 受理宽限窗时长;仅测试注入,生产默认 3s。 */
+  startGraceMs?: number;
   logger: {
     info?(message: string, data?: unknown): void;
     warn?(message: string, data?: unknown): void;
@@ -316,7 +336,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
   }
 
   return {
-    start(input: BackgroundCommandStartInput): BackgroundCommandStartResult {
+    async start(input: BackgroundCommandStartInput): Promise<BackgroundCommandStartResult> {
       if (disposed) {
         return {
           ok: false,
@@ -556,6 +576,24 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       // 结算以 exit(进程退出)为准。注意：结算只管报告，名额在 exit 让出
       // （releaseSlot），治理由 timeoutTimer/组探测继续，不随后代一起结束。
       let settled = false;
+      // 受理宽限窗的等待端:settle 时通知 start() 里的 race;start 已返回(转后台)
+      // 后无人等待,通知落空即可。
+      let notifySettled:
+        | ((exit: {
+            code: number | null;
+            signal: NodeJS.Signals | null;
+            timedOut: boolean;
+            spawnError?: string;
+          }) => void)
+        | null = null;
+      const settledWithinGrace = new Promise<{
+        code: number | null;
+        signal: NodeJS.Signals | null;
+        timedOut: boolean;
+        spawnError?: string;
+      }>((resolve) => {
+        notifySettled = resolve;
+      });
       const settle = (exit: {
         code: number | null;
         signal: NodeJS.Signals | null;
@@ -564,8 +602,10 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }) => {
         if (settled) return;
         settled = true;
+        notifySettled?.(exit);
         // stdio 直写文件后没有 pipe EOF 要等;短延迟只为读尾部时避开杀毒/索引器
-        // 的瞬时文件锁。
+        // 的瞬时文件锁。同步消费(start 在宽限窗内拿到结果)时 reportSent 已置位,
+        // 这里的回注定时器是空操作。
         const grace = setTimeout(() => reportOnce(exit), SETTLE_READ_DELAY_MS);
         grace.unref?.();
       };
@@ -591,6 +631,30 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         closeHostFd();
         settle({ code: null, signal: null, timedOut: false, spawnError: error.message });
       });
+      // 受理宽限窗:窗口内退出(写错/秒败/短命令)的结果直接作为工具结果同步返回,
+      // 不占额外轮次;仍在运行的转后台,完成报告照旧回合边界投递。
+      const graceMs = Math.min(
+        Math.max(deps.startGraceMs ?? BACKGROUND_COMMAND_START_GRACE_MS, 0),
+        30_000,
+      );
+      const outcome = await Promise.race([
+        settledWithinGrace.then((exit) => ({ kind: 'exit' as const, exit })),
+        new Promise<{ kind: 'grace' }>((resolve) => {
+          const timer = setTimeout(() => resolve({ kind: 'grace' }), graceMs);
+          timer.unref?.();
+        }),
+      ]);
+      if (outcome.kind === 'exit') {
+        // 结果随本调用同步消费:settle 里的回注定时器成为空操作。
+        reportSent = true;
+        return {
+          ok: true,
+          runId,
+          logPath,
+          pid: child.pid,
+          completed: { ...outcome.exit, tail: readLogTail() },
+        };
+      }
       return { ok: true, runId, logPath, pid: child.pid };
     },
 

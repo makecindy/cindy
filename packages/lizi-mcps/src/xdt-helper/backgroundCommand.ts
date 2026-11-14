@@ -1,7 +1,9 @@
 /**
  * xdt-helper/backgroundCommand.ts —— run_command_background tool
  *
- * 把一条长耗时 shell 命令交给宿主后台运行,本回合立即返回;命令结束时宿主把
+ * 把一条长耗时 shell 命令交给宿主后台运行。受理后有约 3 秒宽限窗:窗口内就退出的
+ * 命令(写错/秒败/短命令)退出码与日志尾部直接作为本调用结果返回(不再发完成报告,
+ * 秒败不占轮次);仍在运行的立即返回 run_id/log_path,命令结束时宿主把
  * 「后台命令完成」报告(退出码 + 日志尾部 + 日志路径)注入本任务,空闲即派发、
  * 正忙则排队。这是「跑测试/门禁不干等」的回调化通道:启动后可以结束回合或做
  * 别的事,不要 sleep 轮询。
@@ -33,14 +35,27 @@ export interface BackgroundCommandToolDeps {
   start: (
     request: BackgroundCommandStartRequest,
   ) => Promise<
-    | { ok: true; runId: string; logPath: string; pid: number | undefined }
+    | {
+        ok: true;
+        runId: string;
+        logPath: string;
+        pid: number | undefined;
+        /** 命令在受理宽限窗内退出:结果随本调用同步返回,不再发完成报告。 */
+        completed?: {
+          code: number | null;
+          signal: string | null;
+          timedOut: boolean;
+          spawnError?: string;
+          tail: string;
+        };
+      }
     | { ok: false; errorCode: string; message: string }
   >;
 }
 
 const DESCRIPTION =
-  "把一条长耗时 shell 命令交给宿主在本机后台运行,调用立即返回 run_id 与 log_path,本回合可以结束或继续做别的;" +
-  "命令结束时宿主会自动向本任务发来一条「后台命令完成」消息(退出码 + 日志尾部 + 完整日志路径),无需轮询等待。" +
+  "把一条长耗时 shell 命令交给宿主在本机后台运行;受理后有约 3 秒宽限窗,窗口内就退出的命令(写错/秒败/短命令)退出码与日志尾部直接作为本调用结果返回,秒败不占额外轮次;" +
+  "仍在运行的立即返回 run_id 与 log_path,本回合可以结束或继续做别的;命令结束时宿主会自动向本任务发来一条「后台命令完成」消息(退出码 + 日志尾部 + 完整日志路径),无需轮询等待。" +
   "适用:预计超过一两分钟的测试、构建、门禁、`gh run watch --exit-status` 等;短命令仍用普通 bash。" +
   "注意:命令以当前任务工作目录为 cwd 在本机执行(远程/SSH 会话不可用),由 shell 参数点名的解释器执行——bash(Git Bash -lc,默认)或 powershell(pwsh 优先、Windows PowerShell 兜底),与前台 bash/powershell 工具同一份菜单:用什么语法写就报什么,不需要为后台改写口径;日志文件保留 14 天、单条输出上限 5MB(超过即终止命令树,完成报告会标记超限并附终止前的日志尾部——预估输出很大的命令请自行分步或重定向);应用重启会丢失完成回报,但日志文件保留;并发上限 8 条,命令自行脱离的后代(`&`/`start /b`)同样计入名额。" +
   "不要让命令自行后台化:请让命令自身持续运行,宿主会在 24h 硬顶到点时连同子进程树一起结束它。POSIX 上同进程组的后代随硬顶一并清理;Windows 上 shell 退出后宿主不再按 PID 查杀后代(防 PID 复用误杀),这类自行脱离的后代不受硬顶治理。" +
@@ -107,6 +122,33 @@ export function registerBackgroundCommandTool(
           result.errorCode,
           `后台命令启动失败:${result.message}`,
         );
+      if (result.completed) {
+        // 受理宽限窗内就退出:工具结果即报告,不再回注。失败带日志尾部,模型当回合
+        // 就能看到原因并改写重挂,不用等下一轮唤醒。
+        const { code, signal, timedOut, spawnError, tail } = result.completed;
+        const tailText = tail.trim() ? `\n日志尾部:\n---\n${tail.trim()}\n---\n` : '';
+        const logLine = `\n完整日志: ${result.logPath}`;
+        if (spawnError) {
+          return errorPayload("SPAWN_FAILED", `命令启动失败:${spawnError}${tailText}${logLine}`);
+        }
+        if (timedOut) {
+          return errorPayload(
+            "COMMAND_TIMED_OUT",
+            `命令超过时限被强制终止(结果未知;若有副作用请先核实)${tailText}${logLine}`,
+          );
+        }
+        if (code !== 0) {
+          const status = code !== null ? `exit ${code}` : `被信号终止(${signal ?? 'unknown'})`;
+          return errorPayload("COMMAND_FAILED", `命令失败(${status})${tailText}${logLine}`);
+        }
+        return okPayload({
+          run_id: result.runId,
+          log_path: result.logPath,
+          pid: result.pid ?? null,
+          ...(tail.trim() ? { log_tail: tail } : {}),
+          note: "命令在受理窗口内已完成(exit 0),结果如上;不会再有「后台命令完成」回报。",
+        });
+      }
       return okPayload({
         run_id: result.runId,
         log_path: result.logPath,

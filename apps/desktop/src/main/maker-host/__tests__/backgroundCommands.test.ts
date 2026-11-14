@@ -19,7 +19,10 @@
  *   口径事故回归：旧实现 spawn(shell:true) 落 cmd，裸 bash 解析到 WSL，前台能跑的
  *   命令后台必死）；shell=powershell 时命令由 PowerShell 解释（EncodedCommand 免
  *   转义）。shell 菜单与前台 bash/powershell 工具同源。
- * - 实测耗时：本机 < 20s（13 用例，含 5MB 输出用例、名额让出等待与两个 shell 用例）。
+ * - 最小失败输入还包括：受理宽限窗内退出的命令（秒败/短命令）——结果作为工具结果
+ *   同步返回且不再回注（2026-11-14 回投时机收口：病态短尾巴走前台语义，秒败不占
+ *   轮次），窗口后仍运行的转后台照旧回注。
+ * - 实测耗时：本机 < 30s（14 用例，含 5MB 输出用例、名额让出等待、宽限窗与两个 shell 用例）。
  */
 
 import { spawn } from 'node:child_process';
@@ -65,6 +68,9 @@ function buildService(
     enqueueReport: capture,
     resolveLogDir: resolveLogDir ?? (boundLogDir ? () => boundLogDir : () => logDir),
     logger: noopLogger,
+    // 默认窄宽限窗：绝大多数用例走「仍运行的转后台」路径；宽限窗同步路径由
+    // 专门用例注入大窗验证。
+    startGraceMs: 60,
     ...depsOverride,
   };
   return createBackgroundCommandService(deps);
@@ -84,12 +90,15 @@ function firstReport(capture: ReturnType<typeof vi.fn>) {
 it('命令退出后回注一次完成报告:退出码、日志尾部、scheduler origin', async () => {
   const capture = vi.fn();
   const service = buildService(capture);
-  const result = service.start({
+  const result = await service.start({
     sessionId: 'sess-1',
-    command: `${JSON.stringify(process.execPath)} -e "console.log('gate-output-line'); process.exit(3)"`,
+    // 活过宽限窗（buildService 默认 60ms）：走后台路径，报告照旧回注。
+    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => { console.log('gate-output-line'); process.exit(3) }, 500)"`,
     cwd: logDir,
   });
   expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error('start should succeed');
+  expect(result.completed).toBeUndefined();
 
   await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 10_000 });
   const report = firstReport(capture);
@@ -110,25 +119,51 @@ it('命令退出后回注一次完成报告:退出码、日志尾部、scheduler
   expect(service.runningCount()).toBe(0);
 });
 
+it('受理宽限窗：窗口内退出的命令结果同步返回，不再回注（秒败不占轮次）', async () => {
+  const capture = vi.fn();
+  // 大宽限窗：node 启动远快于窗口，必走同步路径。
+  const service = buildService(capture, undefined, { startGraceMs: 2_000 });
+  const failed = await service.start({
+    sessionId: 'sess-grace',
+    command: `${JSON.stringify(process.execPath)} -e "console.log('grace-out'); process.exit(3)"`,
+    cwd: logDir,
+  });
+  if (!failed.ok || !failed.completed) throw new Error('expected in-grace completion');
+  expect(failed.completed.code).toBe(3);
+  expect(failed.completed.tail).toContain('grace-out');
+  expect(failed.completed.timedOut).toBe(false);
+  // 工具结果即报告：不再有「后台命令完成」回注；名额随 exit 即时让出。
+  expect(capture).not.toHaveBeenCalled();
+  expect(service.runningCount()).toBe(0);
+});
+
 it('秒死命令不堵名额：满额退出后第 9 条立即起得来（2026-11-13 事故回归）', async () => {
   const capture = vi.fn();
   const service = buildService(capture);
+  // 活过宽限窗的命令：运行期占名额，退出即让出。
   const start = () =>
     service.start({
       sessionId: 'sess-1',
-      command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+      command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 400)"`,
       cwd: logDir,
     });
-  for (let i = 0; i < BACKGROUND_COMMAND_MAX_CONCURRENT; i += 1) {
-    expect(start().ok).toBe(true);
+  const receipts = await Promise.all(
+    Array.from({ length: BACKGROUND_COMMAND_MAX_CONCURRENT }, () => start()),
+  );
+  for (const receipt of receipts) {
+    if (!receipt.ok) throw new Error('start should succeed');
+    expect(receipt.completed).toBeUndefined();
   }
-  // 满额全部退出回注后，名额应全部让出：第 9 条不再 TOO_MANY_RUNS
-  // （旧口径 win32 在这里直接拒绝）。
+  // 满额运行中：第 9 条 TOO_MANY_RUNS（旧口径在这里也会拒绝，但名额要到硬顶才释放）。
+  const ninth = await start();
+  expect(ninth).toMatchObject({ ok: false, errorCode: 'TOO_MANY_RUNS' });
+  // 满额全部退出回注后，名额应全部让出：下一条立即起得来
+  // （旧口径 win32 在这里仍直接拒绝）。
   await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(BACKGROUND_COMMAND_MAX_CONCURRENT), {
     timeout: 15_000,
   });
-  const ninth = start();
-  expect(ninth.ok).toBe(true);
+  const next = await start();
+  expect(next.ok).toBe(true);
   // 第 9 条也等它退出回注:子进程 cwd 在临时目录里,不等会让 afterEach 清目录时
   // 撞 win32 的 EBUSY。
   await vi.waitFor(
@@ -141,9 +176,9 @@ it('名额让出后治理仍在：win32 硬顶到点留痕，POSIX 组探测等�
   const warn = vi.fn();
   const capture = vi.fn();
   const service = buildService(capture, undefined, { logger: { info: () => {}, warn } });
-  service.start({
+  await service.start({
     sessionId: 'sess-1',
-    command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 500)"`,
     cwd: logDir,
     timeoutMs: 1_000,
   });
@@ -172,12 +207,14 @@ it('队列暂停 retry 不按次数丢弃:退避轮询直到投递成功', async
     reportRetryDelayMs: 1,
     reportRetryMaxDelayMs: 1,
   });
-  const result = service.start({
+  const result = await service.start({
     sessionId: 'sess-1',
-    command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 500)"`,
     cwd: logDir,
   });
   expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error('start should succeed');
+  expect(result.completed).toBeUndefined();
   await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(13), { timeout: 10_000 });
   const last = capture.mock.settledResults[12];
   expect(last.type).toBe('fulfilled');
@@ -188,16 +225,16 @@ it('exit 0 报成功;空命令直接拒绝且不回注', async () => {
   const capture = vi.fn();
   const service = buildService(capture);
 
-  const okRun = service.start({
+  const okRun = await service.start({
     sessionId: 'sess-2',
-    command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 500)"`,
     cwd: logDir,
   });
   expect(okRun.ok).toBe(true);
   await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 10_000 });
   expect(firstReport(capture).text).toContain('成功（exit 0）');
 
-  expect(service.start({ sessionId: 's', command: '   ', cwd: logDir })).toMatchObject({
+  await expect(service.start({ sessionId: 's', command: '   ', cwd: logDir })).resolves.toMatchObject({
     ok: false,
     errorCode: 'INVALID_ARGS',
   });
@@ -205,11 +242,11 @@ it('exit 0 报成功;空命令直接拒绝且不回注', async () => {
   expect(capture).toHaveBeenCalledTimes(1);
 });
 
-it('桌面键鼠模拟命令直接拒绝且不 spawn（与 Bash PreToolUse 守卫同一判定）', () => {
+it('桌面键鼠模拟命令直接拒绝且不 spawn（与 Bash PreToolUse 守卫同一判定）', async () => {
   const capture = vi.fn();
   const service = buildService(capture);
 
-  const blocked = service.start({
+  const blocked = await service.start({
     sessionId: 'sess-desktop-input',
     command: "osascript -e 'tell application \"System Events\" to keystroke \"x\"'",
     cwd: logDir,
@@ -222,7 +259,7 @@ it('桌面键鼠模拟命令直接拒绝且不 spawn（与 Bash PreToolUse 守�
 it('超上限的输出:体量巡检杀树,文件有界,报告标记超限(fd 直写后无转写截断)', async () => {
   const capture = vi.fn();
   const service = buildService(capture);
-  const result = service.start({
+  const result = await service.start({
     sessionId: 'sess-3',
     // 每 20ms 写 256KB:一个 500ms 巡检周期内越限,杀树后文件有界。
     command: `${JSON.stringify(process.execPath)} -e "setInterval(() => process.stdout.write('x'.repeat(256 * 1024)), 20)"`,
@@ -249,7 +286,7 @@ it('超上限的输出:体量巡检杀树,文件有界,报告标记超限(fd 直
 it('长输出命令:报告尾部取自文件末尾,结论行不丢(fd 直写后无内存尾部)', async () => {
   const capture = vi.fn();
   const service = buildService(capture);
-  const result = service.start({
+  const result = await service.start({
     sessionId: 'sess-tail',
     // 10000 行 ≈ 110KB,超过 64KB 尾窗:验证尾部读的是文件末尾而非开头。
     command: `${JSON.stringify(process.execPath)} -e "for(let i=1;i<=10000;i++)console.log('line-'+String(i).padStart(5,'0'));console.log('final-tail-line')"`,
@@ -273,7 +310,7 @@ it('日志目录建不出来:拒绝启动且不回注', async () => {
   await writeFile(blocker, 'x');
   const service = buildService(capture, () => blocker);
 
-  const result = service.start({
+  const result = await service.start({
     sessionId: 'sess-log-fail',
     command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
     cwd: logDir,
@@ -287,7 +324,7 @@ it('dispose(账号边界):释放并发名额、丢弃在途报告、拒绝新启
   // 切号后旧账号的运行不能占住名额(新账号 TOO_MANY_RUNS),报告也不能落进新账号。
   const capture = vi.fn();
   const service = buildService(capture);
-  const started = service.start({
+  const started = await service.start({
     sessionId: 'sess-boundary',
     command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 30_000)"`,
     cwd: logDir,
@@ -298,7 +335,7 @@ it('dispose(账号边界):释放并发名额、丢弃在途报告、拒绝新启
   service.dispose();
   expect(service.runningCount()).toBe(0);
   // 名额已清:同实例再 start 被拒(生产里切号后是重建单例,这里验旧实例不可复用)。
-  const again = service.start({
+  const again = await service.start({
     sessionId: 'sess-boundary',
     command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
     cwd: logDir,
@@ -324,7 +361,7 @@ it('重启后孤儿日志:巡检把不在册的超限日志截回上限(体量�
   // 新服务实例 = 重启后的空注册表;巡检由本用例 start() 启动(因果必须自建,
   // 不能賍同文件其它用例泄漏的模块级 poll)。
   const service = buildService(vi.fn());
-  service.start({
+  await service.start({
     sessionId: 'sess-orphan',
     command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
     cwd: logDir,
@@ -353,21 +390,21 @@ const isWindows = process.platform === 'win32';
 
 (isWindows ? it : it.skip)('默认 bash 落在 Git Bash 而非 WSL(2026-11-14 口径事故回归)', async () => {
   const capture = vi.fn();
-  const service = buildService(capture);
-  const result = service.start({ sessionId: 'sess-bash', command: 'uname -s', cwd: logDir });
-  expect(result.ok).toBe(true);
-
-  await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 10_000 });
-  const logText = await readFile((result as { ok: true; logPath: string }).logPath, 'utf8');
-  // Git Bash 的 uname 是 MINGW*;WSL 里是 Linux——这条就是「后台口径与前台 bash
-  // 工具同源」的可观察判据。
-  expect(logText).toContain('MINGW');
+  // 大宽限窗：bash 启动远快于窗口，走同步路径——尾部直接可断言，不等回注。
+  const service = buildService(capture, undefined, { startGraceMs: 2_000 });
+  const result = await service.start({ sessionId: 'sess-bash', command: 'uname -s', cwd: logDir });
+  if (!result.ok || !result.completed) throw new Error('expected in-grace completion');
+  // Git Bash 的 uname 是 MINGW*；WSL 里是 Linux——这条就是「后台口径与前台 bash
+  // 工具同源」的可观察判据。同步消费即报告：不再回注。
+  expect(result.completed.tail).toContain('MINGW');
+  expect(result.completed.code).toBe(0);
+  expect(capture).not.toHaveBeenCalled();
 });
 
 (isWindows ? it : it.skip)('shell=powershell:命令由 PowerShell 解释,退出码与输出如实回注', async () => {
   const capture = vi.fn();
   const service = buildService(capture);
-  const result = service.start({
+  const result = await service.start({
     sessionId: 'sess-ps',
     shell: 'powershell',
     // EncodedCommand 通道:分号/引号不经 Node argv 转义,写什么执行什么。
