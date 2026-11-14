@@ -427,52 +427,69 @@ const KNOWN_DIFFERENCES: Record<string, number> = {
 /** Reachable cells where both sides start the task: the final process environment is equal. */
 const FINAL_DIFFERENCES: Record<string, number> = {};
 
-describe('Host and desktop Codex adapters', () => {
-  it('differ only where recorded, for every source and credential mode on every set of facts, in both assemblies', async () => {
+const ASSEMBLIES = ['installed', 'source'] as const;
+
+/** The recorded differences of one assembly and source: their keys start with this. */
+const recorded = (table: Record<string, number>, assembly: string, providerId: string | undefined) =>
+  Object.fromEntries(Object.entries(table).filter(([key]) =>
+    ['reachable', 'unreachable'].some(reach => key.startsWith(`${assembly} ${reach} ${providerId ?? '(none)'} / `))));
+
+// One test per assembly and source keeps each within the test time budget on slower file systems;
+// together they cover every cell. The last test checks the totals once all of them have run.
+const totals = { groups: 0, cells: 0, diagnostics: 0 };
+
+describe.each(ASSEMBLIES)('Host and desktop Codex adapters, %s', (assembly) => {
+  it.each(providers.map(providerId => [providerId ?? '(none)', providerId] as const))(
+    'differ only where recorded for source %s, every credential mode and set of facts', async (_label, providerId) => {
     const observed: Record<string, number> = {};
     const finals: Record<string, number> = {};
-    let cells = 0;
-    let diagnostics = 0;
-    for (const assembly of ['installed', 'source'] as const) {
-      h.packaged = assembly === 'installed';
-      for (const f of facts) {
-        for (const providerId of providers) for (const credentialMode of modes) {
-          const opts = { providerId, credentialMode } as AuthAdapterOptions;
-          const reachable = CODEX_AUTH_ADAPTER_ENTRY_INPUTS.includes(`${providerId ?? '-'} | ${credentialMode ?? '-'}`);
-          const desktop = new DesktopCodexAuthAdapter();
-          // The desktop's global Codex skills, rules and plugins preparation (row 25); the Host has none.
-          vi.spyOn(desktop, 'ensureGlobalCodexAssets').mockResolvedValue();
-          const dp = profile(f);
-          const d = await read(desktop, dp.codexHome, opts);
-          const hp = profile(f);
-          const o = await read(createHostCodexAuth(hp.codexHome, assembly, hp.home), hp.codexHome, opts);
-          cells += 1;
-          if (d.diagnostics) diagnostics += 1;
-          expect(o.diagnostics).toBe(false);
-          const prefix = `${assembly} ${reachable ? 'reachable' : 'unreachable'} ${providerId ?? '(none)'} / ${credentialMode ?? '(none)'}`;
-          const state = fieldDifferences(d.state as Record<string, unknown>, o.state as Record<string, unknown>);
-          const env = fieldDifferences(d.env as Record<string, unknown>, o.env as Record<string, unknown>);
-          if (state.length || env.length) {
-            const key = `${prefix} | state ${state.join('; ') || '='} | env ${env.join('; ') || '='}`;
-            observed[key] = (observed[key] ?? 0) + 1;
-          }
-          // Where a real path reaches both adapters and both let the task start, the process
-          // environment it ends with must match.
-          const dState = d.state as unknown as AuthState;
-          if (!reachable || !dState.authenticated || !(o.state as unknown as AuthState).authenticated || 'thrown' in d.raw || 'thrown' in o.raw) continue;
-          const oauthLogin = dState.authSource === 'oauth';
-          const final = fieldDifferences(await finalEnv(d.raw, dp.codexHome, opts, oauthLogin), await finalEnv(o.raw, hp.codexHome, opts, oauthLogin));
-          if (final.length) {
-            const key = `${prefix} | final ${final.join('; ')}`;
-            finals[key] = (finals[key] ?? 0) + 1;
-          }
+    h.packaged = assembly === 'installed';
+    for (const f of facts) {
+      for (const credentialMode of modes) {
+        const opts = { providerId, credentialMode } as AuthAdapterOptions;
+        const reachable = CODEX_AUTH_ADAPTER_ENTRY_INPUTS.includes(`${providerId ?? '-'} | ${credentialMode ?? '-'}`);
+        const desktop = new DesktopCodexAuthAdapter();
+        // The desktop's global Codex skills, rules and plugins preparation (row 25); the Host has none.
+        vi.spyOn(desktop, 'ensureGlobalCodexAssets').mockResolvedValue();
+        const dp = profile(f);
+        const d = await read(desktop, dp.codexHome, opts);
+        const hp = profile(f);
+        const o = await read(createHostCodexAuth(hp.codexHome, assembly, hp.home), hp.codexHome, opts);
+        totals.cells += 1;
+        if (d.diagnostics) totals.diagnostics += 1;
+        expect(o.diagnostics).toBe(false);
+        const prefix = `${assembly} ${reachable ? 'reachable' : 'unreachable'} ${providerId ?? '(none)'} / ${credentialMode ?? '(none)'}`;
+        const state = fieldDifferences(d.state as Record<string, unknown>, o.state as Record<string, unknown>);
+        const env = fieldDifferences(d.env as Record<string, unknown>, o.env as Record<string, unknown>);
+        if (state.length || env.length) {
+          const key = `${prefix} | state ${state.join('; ') || '='} | env ${env.join('; ') || '='}`;
+          observed[key] = (observed[key] ?? 0) + 1;
+        }
+        // Where a real path reaches both adapters and both let the task start, the process
+        // environment it ends with must match.
+        const dState = d.state as unknown as AuthState;
+        if (!reachable || !dState.authenticated || !(o.state as unknown as AuthState).authenticated || 'thrown' in d.raw || 'thrown' in o.raw) continue;
+        const oauthLogin = dState.authSource === 'oauth';
+        const final = fieldDifferences(await finalEnv(d.raw, dp.codexHome, opts, oauthLogin), await finalEnv(o.raw, hp.codexHome, opts, oauthLogin));
+        if (final.length) {
+          const key = `${prefix} | final ${final.join('; ')}`;
+          finals[key] = (finals[key] ?? 0) + 1;
         }
       }
     }
-    expect(cells).toBe(2 * facts.length * providers.length * modes.length);
-    // The desktop's settings-page credential diagnostics, which the Host does not produce.
-    expect(diagnostics).toBe(760);
-    expect(observed).toEqual(KNOWN_DIFFERENCES);
-    expect(finals).toEqual(FINAL_DIFFERENCES);
+    expect(observed).toEqual(recorded(KNOWN_DIFFERENCES, assembly, providerId));
+    expect(finals).toEqual(recorded(FINAL_DIFFERENCES, assembly, providerId));
+    totals.groups += 1;
   });
+});
+
+it('covers every cell, and every recorded difference belongs to exactly one assembly and source', () => {
+  for (const table of [KNOWN_DIFFERENCES, FINAL_DIFFERENCES]) {
+    const picked = ASSEMBLIES.flatMap(assembly => providers.flatMap(providerId => Object.keys(recorded(table, assembly, providerId))));
+    expect(picked.sort()).toEqual(Object.keys(table).sort());
+  }
+  expect(totals.groups, 'run the whole file: this test sums every assembly and source').toBe(ASSEMBLIES.length * providers.length);
+  expect(totals.cells).toBe(ASSEMBLIES.length * facts.length * providers.length * modes.length);
+  // The desktop's settings-page credential diagnostics, which the Host does not produce.
+  expect(totals.diagnostics).toBe(760);
 });
