@@ -48,8 +48,11 @@ export async function manageCindyMakeWorkspace(
   // Archiving alone never authorizes deleting a working directory.
   if (action === 'archive') return false;
   const discard = action === 'delete' || action === 'end';
-  const source = makeSourceCheckoutPath(userData);
-  const target = makeTaskWorktreePath(userData, runId);
+  // Managed paths are compared with `realpath`, so they come from the resolved profile:
+  // the profile can sit under a symlinked parent (macOS temp dirs, linked homes).
+  const canonicalProfile = await realpath(userData);
+  const source = makeSourceCheckoutPath(canonicalProfile);
+  const target = makeTaskWorktreePath(canonicalProfile, runId);
   const branch = makeTaskBranch(runId);
   const check = options.checkCurrent ?? (() => {});
   const git = async (args: string[], cwd = source, indexFile?: string) => {
@@ -66,19 +69,20 @@ export async function manageCindyMakeWorkspace(
     process.platform === 'win32'
       ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
       : path.resolve(left) === path.resolve(right);
-  const canonicalProfile = await realpath(userData);
   // Reject substituted roots as well as a symlink at the leaf. Never follow a
   // junction out of this profile, including when a previous cleanup was partial.
   const assertManagedPaths = async () => {
     check();
-    for (const directory of [path.dirname(source), source, makeWorktreesRoot(userData), target]) {
+    for (const directory of [
+      path.dirname(source),
+      source,
+      makeWorktreesRoot(canonicalProfile),
+      target,
+    ]) {
       if (!(await exists(directory))) continue;
       if (
         (await lstat(directory)).isSymbolicLink() ||
-        !samePath(
-          await realpath(directory),
-          path.join(canonicalProfile, path.relative(userData, directory)),
-        )
+        !samePath(await realpath(directory), directory)
       )
         throw taskError('unavailable');
     }
@@ -102,9 +106,12 @@ export async function manageCindyMakeWorkspace(
       };
     });
   const gitMarker = path.join(target, '.git');
-  let verifiedWorkspace =
-    options.preparedWorkspace?.branch === branch &&
-    samePath(options.preparedWorkspace.path, target);
+  // Persisted preparation paths can retain the profile's symlinked spelling.
+  // Compare directory identity after validating the managed roots above.
+  const preparedPath = options.preparedWorkspace?.branch === branch
+    ? await realpath(options.preparedWorkspace.path).catch(() => undefined)
+    : undefined;
+  let verifiedWorkspace = !!preparedPath && samePath(preparedPath, target);
   const canRemoveResidue = async () => {
     if (!discard || !verifiedWorkspace || !branchExists || (await exists(gitMarker))) return false;
     return !(await registrations()).some(
