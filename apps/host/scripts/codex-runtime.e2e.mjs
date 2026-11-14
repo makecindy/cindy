@@ -241,6 +241,44 @@ try {
     clearSessionProvider(sessionId);
     graph.gatewayRestart.onSessionSettled();
   }
+  // A gateway key change while a live Codex session is idle: the next send to that same session
+  // carries the new key. The pending restart of the shared runtime runs as soon as no Codex session
+  // is busy (gatewayCodexRestart.ts schedule → onSessionSettled), not at the next send.
+  {
+    const sessionId = 'native-idle-rotation';
+    setSessionProvider(sessionId, 'xd');
+    const handle = await graph.codex.startSession({ sessionId, providerId: 'xd', model: 'fixture-model', workingDir: root });
+    handles.push(handle);
+    const idleTurn = async () => {
+      const completed = (async () => {
+        for await (const event of handle.events()) {
+          if (event.type === 'error') throw new Error(`Idle rotation turn failed: ${JSON.stringify(event.data)}`);
+          if (event.type === 'done') return;
+        }
+        throw new Error('Idle rotation turn ended without done');
+      })();
+      void completed.catch(() => {});
+      let timer;
+      try {
+        await Promise.race([(async () => {
+          await handle.send({ type: 'user', content: 'return synthetic complete' }, { throwOnStartFailure: true });
+          await completed;
+        })(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Idle rotation turn timed out')), 45_000); })]);
+      } finally { clearTimeout(timer); }
+    };
+    await idleTurn();
+    assert.equal(requests.at(-1).authorization, `Bearer ${gatewayKey}`);
+    gatewayKey = 'synthetic-idle-rotated-gateway-key';
+    await modelAccess.sync.sync();
+    await idleTurn();
+    assert.equal(requests.at(-1).authorization, 'Bearer synthetic-idle-rotated-gateway-key',
+      'the next send to the idle live session carries the new key');
+    await handle.close();
+    runtime.closeSession(sessionId);
+    clearSessionProvider(sessionId);
+    graph.gatewayRestart.onSessionSettled();
+    console.log('PASS a gateway key change while a live Codex session is idle: its next send carries the new key');
+  }
   // Native storage capability fixture, as minted by the executing host after
   // owner checks. It selects two synthetic account homes, never a real login.
   // Model traffic still goes to this script's local upstream through the real graph.

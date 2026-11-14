@@ -542,6 +542,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // Engines read these lists at start; refresh them against the catalog just applied.
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     reloadCodexSkills: workingDir => codex ? codex.listAgentSkills({ workingDir, forceReload: true }) : Promise.resolve(),
+    // Assembled below; no session starts before the graph is returned.
+    beforeLocalCodexSessionStart: () => gatewayRestart.flushBeforeLocalCodexSessionStart(),
   });
   // Model lists derived from the selectable catalog, as the desktop injects them.
   const availableModels = (agent: AgentKind) => ({ availableModels: deriveAvailableModels(modelContext.getSelectableCatalog(), agent) });
