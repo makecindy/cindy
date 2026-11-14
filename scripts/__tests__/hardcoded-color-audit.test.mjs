@@ -46,10 +46,22 @@ test('semantic colours, PR prose, URL and comments are not literals; numeric hex
     'color-mix(in srgb, var(--a), var(--b))', 'PR #4135', '/* #4135 */',
     '// #4108\nconst link = "https://github.com/x/y/pull/4135";',
     '[#4022](https://github.com/x/y/pull/4022)', 'const label = "PR #4135";',
+    // A label longer than the bounded context window is still prose, not a colour.
+    '[#4022' + ' text'.repeat(220) + '](https://example.org)',
     '<a href="#fff">Link</a>', '&#229;', '#face { color: var(--x); }']) assert.deepEqual(matchBareColors(source), [], source);
   for (const value of ['#fff', '#1234', '#123456', '#12345678', 'rgb(1, 2, 3)', 'hsl(120 10% 20%)', 'oklch(.4 .2 120)']) {
     assert.deepEqual(matchBareColors(`const style = { color: '${value}' };`), [value]);
   }
+});
+
+test('markdown labels are the innermost brackets, not the surrounding statement', () => {
+  for (const [source, values] of [
+    ["const rows = [{ color: '#fff', help: '[Guide](https://example.org)' }];", ['#fff']],
+    ["const rows = [{ backgroundColor: '#123456', help: '[Docs](https://example.org)' }];", ['#123456']],
+    ["const rows = [{ color: '#fff', help: '[a [b] c](https://example.org)' }];", ['#fff']],
+  ]) assert.deepEqual(matchBareColors(source), values, source);
+  // The link label itself stays excluded, including a long one.
+  assert.deepEqual(matchBareColors('[#4022](https://github.com/x/y/pull/4022)'), []);
 });
 
 test('numeric colour functions need a colour-bearing context; plain strings are prose', () => {
@@ -65,6 +77,28 @@ test('numeric colour functions need a colour-bearing context; plain strings are 
     ["'--panel-shadow':\n    'inset 0 1px 0 rgb(1 2 3)',", ['rgb(1 2 3)']],
     ["backgroundImage: 'linear-gradient(rgb(1,2,3), var(--x))'", ['rgb(1,2,3)']],
   ]) assert.deepEqual(matchBareColors(source), values, source);
+});
+
+test('large generated lines are scanned without quadratic prefix copies (#8369)', () => {
+  // The production entry is findBareColors, and the observable contract is
+  // that every literal is still reported. The old implementation copied the
+  // complete source prefix for each match, so this repeated generated line
+  // reliably exceeded the CI budget before the bounded-context fix.
+  const source = 'color:#fff;'.repeat(100_000);
+  const startedAt = performance.now();
+  const hits = findBareColors(source);
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.equal(hits.length, 100_000);
+  assert.ok(elapsedMs < 5_000, `scan took ${Math.round(elapsedMs)}ms`);
+
+  // Unmatched brackets must not make the label pre-scan quadratic: the old
+  // /\[[^\]\n]*\]\(/g retried the whole remaining line at every `[`.
+  const brackets = '['.repeat(80_000);
+  const bracketStartedAt = performance.now();
+  assert.deepEqual(findBareColors(brackets), []);
+  const bracketElapsed = performance.now() - bracketStartedAt;
+  assert.ok(bracketElapsed < 2_000, `unmatched brackets took ${Math.round(bracketElapsed)}ms`);
 });
 
 test('nested fallback and mixed expressions report each literal at its real location', () => {
