@@ -1,6 +1,10 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { rehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression.js';
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
-import { setCustomProviders } from '../../maker-host/active-catalog.js';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { setActiveCatalog, setCustomProviders } from '../../maker-host/active-catalog.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The route helper reaches worktree preferences transitively. Keep this unit
@@ -24,9 +28,14 @@ import {
   setSessionProvider,
 } from '../../maker-host/session-provider-store.js';
 import {
+  deriveCodexCustomProviderRoutes,
   setCodexAppliedCustomProviderRoutes,
   type CodexCustomProviderRoute,
 } from '../../maker-host/codex-custom-provider-route.js';
+import {
+  configureSessionModelInterfaceStorage,
+  sessionModelInterface,
+} from '../../maker-host/session-model-interface.js';
 import {
   applyRuntimeSetModelChange,
   refreshActiveModelContextSettings,
@@ -322,6 +331,98 @@ describe('applyRuntimeSetModelChange', () => {
     expect(result.setModel).toHaveBeenCalledWith('ordinary-model-next', {
       providerId: 'ordinary-provider',
     });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：applyRuntimeSetModelChange。
+  //   已钉成 Chat 的旧任务换同一供应商的同一模型时不关会话，setModel 照常调用。
+  // - Bug／规则依据：#9759。runtimeSetModel 调 shouldCloseSessionForCredentialSwitch 时没传 sessionId，
+  //   当前目录默认已是 Responses 的旧 Chat 任务会被误判成身份失配。
+  // - 现有覆盖缺口：上面的动态身份用例不写 sessionModelInterface 快照。
+  // - 最小失败输入：Kimi Code 的 k3.1-pro，任务先钉 openai-completions，目录默认再改回 Responses，
+  //   thread 身份仍是 cindy_gateway。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('keeps a Chat-pinned task open when the model switch passes its session id', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'runtime-set-model-chat-pin-'));
+    const config = {
+      id: 'provider-kimi',
+      name: 'Kimi',
+      runtimes: {
+        codex: {
+          catalogPresetId: 'moonshot-kimi-code',
+          baseUrl: 'https://api.kimi.com/coding/v1',
+          wireProtocol: 'openai-chat' as const,
+          models: [{ id: 'k3.1-pro', name: 'Kimi' }],
+        },
+      },
+    };
+    try {
+      configureSessionModelInterfaceStorage(() => directory);
+      const chatRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const chatRoute = chatRegistry.models.flatMap(entry => entry.routes)
+        .find(item => item.providerId === 'moonshot-kimi-code' && item.modelId === 'k3.1-pro')!;
+      chatRoute.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
+      const chatProvider = buildUserProvider(config, {
+        modelRegistry: chatRegistry,
+        presets: BUNDLED_CATALOG.presets,
+      });
+      const sessionId = rememberSession('runtime-set-model-chat-pin');
+      const pinned = sessionModelInterface(
+        sessionId,
+        config.id,
+        'codex',
+        chatProvider.models.codex![0]!,
+        chatRegistry,
+      );
+      expect(pinned?.api).toBe('openai-completions');
+
+      const responsesRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const responsesRoute = responsesRegistry.models.flatMap(entry => entry.routes)
+        .find(item => item.providerId === 'moonshot-kimi-code' && item.modelId === 'k3.1-pro')!;
+      responsesRoute.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-responses'];
+      const provider = buildUserProvider(config, {
+        modelRegistry: responsesRegistry,
+        presets: BUNDLED_CATALOG.presets,
+      });
+      const catalog = {
+        ...BUNDLED_CATALOG,
+        modelRegistry: responsesRegistry,
+        providers: [...BUNDLED_CATALOG.providers, provider],
+      };
+      setActiveCatalog(catalog);
+      setCodexAppliedCustomProviderRoutes(deriveCodexCustomProviderRoutes(catalog));
+      setSessionProvider(sessionId, config.id);
+      const setModel = vi.fn(async () => {});
+      const closeSession = vi.fn(async () => {});
+      const maker: RuntimeSetModelMaker = {
+        getSession: () => ({
+          agentKind: 'codex',
+          remoteHostId: null,
+          codexProxyActive: true,
+          codexThreadModelProviderId: 'cindy_gateway',
+          model: 'k3.1-pro',
+          setModel,
+        }),
+        listActiveSessions: () => [
+          { id: sessionId, agentKind: 'codex', remoteHostId: null, isTurnRunning: () => false },
+        ],
+        closeSession,
+      };
+
+      const result = await applyRuntimeSetModelChange({
+        maker,
+        sessionId,
+        model: 'k3.1-pro',
+        providerId: config.id,
+      });
+
+      expect(result).toEqual({ status: 'applied' });
+      expect(closeSession).not.toHaveBeenCalled();
+      expect(setModel).toHaveBeenCalledWith('k3.1-pro', { providerId: config.id });
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('rolls back provider route when live setModel rejects', async () => {

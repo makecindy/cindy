@@ -17,7 +17,15 @@ import {
   CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY,
   type CodexProxySpawnAuthMode,
 } from './codex-gateway-config.js';
-import { getProviderRouteCredentialRevision } from './provider-route.js';
+import { getActiveCatalog } from './active-catalog.js';
+import {
+  getProviderRouteCredentialRevision,
+  sessionProviderRoutingForModel,
+} from './provider-route.js';
+import {
+  invocationModelRecord,
+  requiresNativeProviderAuth,
+} from './pi-provider-transport.js';
 
 export const CODEX_IMAGE_GENERATION_ACTOR_HEADER = 'x-openai-actor-authorization';
 export const CODEX_IMAGE_GENERATION_ACTOR_VALUE = 'local-image-extension';
@@ -95,6 +103,14 @@ export function hasCodexAppliedCustomProviderCapability(
   );
 }
 
+/** Whether any running Host snapshot already contains this custom Provider route. */
+export function hasAppliedCodexCustomProviderRoute(providerId: string): boolean {
+  const storedProviderId = storedCustomProviderId(providerId);
+  return [...appliedCustomProviderRoutes, ...Array.from(scopedAppliedCustomProviderRoutes.values()).flat()].some(
+    (route) => storedCustomProviderId(route.providerId) === storedProviderId,
+  );
+}
+
 function stableRouteId(providerId: string): string {
   return createHash('sha256').update(providerId, 'utf8').digest('hex').slice(0, 20);
 }
@@ -127,15 +143,31 @@ function frozenRoutingDescriptor(
 
 function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
   if (!isCustomRoutedProvider(provider) || !provider.agents.includes('codex')) return null;
+  // Native subscription accounts (claude / xai / codex) keep their fixed identities.
+  // Only a user-built API-key custom provider registers a cindy_custom route.
+  // An extra ChatGPT subscription row is also source:'user'; routing it here would
+  // send the oauth placeholder bearer to chatgpt.com (#9759).
+  if (provider.auth?.native) return null;
   const routing = provider.routing.codex;
   if (!routing || routing.disabled) return null;
   const capabilities: CodexCustomProviderCapabilities = {
     imageGeneration: routing.supportsImageGeneration === true,
   };
-  if (!Object.values(capabilities).some((enabled) => enabled === true)) return null;
-  const responseModels = (provider.models.codex ?? []).filter(
-    (model) => effectiveModelWireProtocol(model, routing) === 'openai-responses',
-  );
+  // A text-only Responses provider still needs its cindy_custom_<hash> identity.
+  // Image generation only adds the actor header; it is not an admission ticket.
+  // Dropping the route makes thread/resume fail with -32600 (#9611).
+  // Cloudflare AI Gateway / GitHub Copilot have no auth.native, but their adapter
+  // rewrites the key (cf-aig-authorization, Copilot headers) and drops Authorization.
+  // The namespace route only sends a plain Bearer, so those models stay on the
+  // ordinary native-adapter branch. Same identity as requiresNativeProviderAuth.
+  const responseModels = (provider.models.codex ?? []).filter((model) => {
+    if (effectiveModelWireProtocol(model, routing) !== 'openai-responses') return false;
+    // 供应商级 routing.upstream 可能是另一个协议的默认地址（Cloudflare 默认落在
+    // anthropic）。鉴权身份必须按这个模型自己的上游来认，否则适配器对不上，
+    // requiresNativeProviderAuth 会漏掉仍要走原生改写的 Responses 模型。
+    const modelUpstream = model.route?.baseUrl ?? routing.upstream;
+    return !requiresNativeProviderAuth(invocationModelRecord(model, modelUpstream));
+  });
   const responseModelIds = responseModels.map((model) => model.id);
   if (responseModelIds.length === 0) return null;
   const routeId = stableRouteId(storedCustomProviderId(provider.id));
@@ -257,10 +289,23 @@ export function resolveCodexCustomProviderModelProviderId(
   routes: readonly CodexCustomProviderRoute[],
   providerId: string | null | undefined,
   model: string | null | undefined,
+  sessionId?: string | null,
 ): string | null {
   if (!providerId || !model) return null;
   const route = routes.find((candidate) => candidate.providerId === providerId);
-  return route?.responseModels.includes(model) ? route.modelProviderId : null;
+  if (!route?.responseModels.includes(model)) return null;
+  // 旧任务已经把接口固定成 Chat 时，不要因当前目录默认变成 Responses 就换上 cindy_custom 身份。
+  // 返回 null 让调用方走普通路由，保留快照里的协议与路径。没有 session 或没有快照时行为不变。
+  if (sessionId) {
+    const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+    const sessionRouting = provider
+      ? sessionProviderRoutingForModel(sessionId, provider, 'codex', model)
+      : null;
+    if (sessionRouting?.wireProtocol && sessionRouting.wireProtocol !== 'openai-responses') {
+      return null;
+    }
+  }
+  return route.modelProviderId;
 }
 
 export interface CodexAppliedCustomProviderIdentityInput {
@@ -270,6 +315,8 @@ export interface CodexAppliedCustomProviderIdentityInput {
   currentThreadModelProviderId?: string | null;
   targetProviderId?: string | null;
   targetModel?: string | null;
+  /** 任务 id。用来对照该任务已经固定的接口；不传时仍按当前目录默认。 */
+  sessionId?: string | null;
 }
 
 /**
@@ -289,6 +336,7 @@ export function crossesCodexAppliedCustomProviderIdentity(
     appliedRoutes,
     input.targetProviderId?.trim() || null,
     input.targetModel?.trim() || null,
+    input.sessionId,
   );
   const actualIsAppliedCustomProviderIdentity = appliedRoutes.some(
     (route) => route.modelProviderId === actual,

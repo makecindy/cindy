@@ -42,6 +42,9 @@ const mockState = vi.hoisted(() => {
     injectionTransform: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     stripNonAnthropicFields: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     recordXaiRateLimitSnapshot: vi.fn(),
+    // 默认短路。视觉桥命名空间用例会换成真实 createVisionBridgeTransform，用完再复位。
+    // 参数类型放宽：vi.fn 的默认签名是零参数，接不住真实 opts。
+    createVisionBridgeTransform: vi.fn((..._args: unknown[]) => (() => null) as unknown),
     createInstructionsInjectionTransform: vi.fn((opts: { registry: Registry }) => {
       capturedRegistry = opts.registry;
       return (body: unknown, ctx: unknown) => state.injectionTransform(body, ctx);
@@ -147,11 +150,17 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
         /input\[\d+\]\.id[\s\S]{0,120}?(?:string too long|string_above_max_length)|string_above_max_length[\s\S]{0,120}?input\[\d+\]\.id/i.test(text),
       strip: () => null,
     }),
+    // 原生 reasoning content 的 recovery 规则和 strip 保留真实实现：
+    // 命名空间用例要证明 controller 激活后第一次请求就被洗掉。
+    createResponsesReasoningContentRecoveryRule: actual.createResponsesReasoningContentRecoveryRule,
+    stripResponsesReasoningContentFromBody: actual.stripResponsesReasoningContentFromBody,
     stripNonCanonicalResponsesItemIdsFromBody: () => null,
     shortenOversizedResponsesItemIdsFromBody: () => null,
     stripNonAnthropicFields: mockState.stripNonAnthropicFields,
     // 视觉桥 transform：默认短路（controller 未注入 → shouldBridge 恒 false → null 透传）。
-    createVisionBridgeTransform: () => (() => null),
+    // 经 mockState 转发，单测可换成真实实现，证明命名空间白名单放行后图片会被改写。
+    createVisionBridgeTransform: (...args: unknown[]) =>
+      mockState.createVisionBridgeTransform(...args) as ReturnType<typeof import('@cindy/anthropic-compat-proxy').createVisionBridgeTransform>,
     createInstructionsRegistry: () => {
       const map = new Map<string, string>();
       return {
@@ -207,6 +216,8 @@ async function freshCodexProxyHost(realStripTransforms = false) {
   mockState.injectionTransform.mockReturnValue(null);
   mockState.stripNonAnthropicFields.mockReset();
   mockState.stripNonAnthropicFields.mockReturnValue(null);
+  mockState.createVisionBridgeTransform.mockReset();
+  mockState.createVisionBridgeTransform.mockReturnValue(() => null);
   mockState.logLevel = 'debug';
   mockState.resetCapturedRegistry();
   return host;
@@ -6578,6 +6589,114 @@ describe('codex proxy host', () => {
     }
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   cindy_custom 命名空间里，不支持 Responses custom tools 的连接仍要把 exec 从
+  //   type:'custom' 转成 function；产品提示词要注入，模型改写仍跳过（#9759）。
+  // - Bug／规则依据：#9759。命名空间包装放行提示词注入与 exec 适配，但不跑模型改写。
+  // - 现有覆盖缺口：上面的 round-trip 走的是普通 /responses，不经过命名空间包装。
+  // - 最小失败输入：已登记的 Responses 路由，url 为 /_cindy/custom-provider/<routeId>/responses，
+  //   工具 type:'custom' name:'exec'，并注册了产品提示词。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('adapts exec on a custom-provider namespace route and still skips ordinary rewrites', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-exec-provider',
+      name: 'Namespace Exec Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'http://127.0.0.1:43169/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'namespace-model', name: 'Namespace Model' }],
+        },
+      },
+    });
+    // 自定义供应商没有 modelIdRewrite，真实改写本来就是空操作。这里给它装上前缀剥离，
+    // 模型改写 transform 一旦被调用就会改掉 model；它没被调用时 model 保持原样。
+    provider.routing.codex!.modelIdRewrite = { stripPrefix: 'namespace-' };
+    expect(provider.routing.codex?.supportsResponsesCustomTools).toBe(false);
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-exec', 'thread-namespace-exec', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-exec', provider.id);
+    // 桩默认返回 null。这里按真实注入行为把 registry 里的产品提示词拼进 instructions，
+    // 才能证明命名空间包装真的放行了注入 transform，而不是只放行了 exec 适配。
+    mockState.injectionTransform.mockImplementation((body: unknown, ctx: unknown) => {
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+      const record = body as { instructions?: unknown };
+      const before = typeof record.instructions === 'string' ? record.instructions : '';
+      const headers = ctx && typeof ctx === 'object' && 'headers' in ctx
+        ? (ctx as { headers?: Record<string, string> }).headers
+        : undefined;
+      const product = mockState.capturedRegistry?.get(headers?.['thread-id'] ?? '');
+      if (!product || before.includes(product)) return null;
+      return { ...record, instructions: before ? `${before}\n\n${product}` : product };
+    });
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const body = {
+        model: 'namespace-model',
+        instructions: 'base instructions',
+        tools: [{ type: 'custom', name: 'exec', description: 'run a command' }],
+        tool_choice: { type: 'custom', name: 'exec' },
+        input: [{ type: 'custom_tool_call', id: 'fc_legacy', status: 'completed',
+          name: 'exec', call_id: 'call_exec', input: 'text("local")' }],
+      };
+      const ctx = {
+        reqId: 9759,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-exec' },
+        upstreamBase: 'http://127.0.0.1:43169/v1',
+      };
+      let current: unknown = body;
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(current).toMatchObject({
+        instructions: 'base instructions\n\nPRODUCT_PROMPT',
+        model: 'namespace-model',
+        tools: [expect.objectContaining({
+          type: 'function',
+          name: 'exec',
+          parameters: expect.objectContaining({ required: ['input'] }),
+        })],
+        tool_choice: { type: 'function', name: 'exec' },
+        input: [expect.objectContaining({
+          type: 'function_call', id: 'fc_legacy', name: 'exec',
+          arguments: '{"input":"text(\\"local\\")"}',
+        })],
+      });
+      // 模型改写仍不跑：命名空间请求保留冻结路由自己的 model。
+      // 同一供应商走普通 /responses 时，同一条 transform 会把前缀剥掉，证明断言有效。
+      expect((current as { model: string }).model).toBe('namespace-model');
+      let ordinary: unknown = body;
+      const ordinaryCtx = { ...ctx, url: '/responses' };
+      for (const transform of transforms) {
+        const next = transform(ordinary, ordinaryCtx);
+        if (next !== null && next !== undefined) ordinary = next;
+      }
+      expect((ordinary as { model: string }).model).toBe('model');
+    } finally {
+      host.unregister('session-namespace-exec');
+      clearSessionProvider('session-namespace-exec');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
   it('adapts exec when env-key falls through a built-in OpenAI session to XD', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
@@ -8210,6 +8329,542 @@ describe('codex proxy host', () => {
     });
     clearSessionProvider('session-minimax');
     setCustomProviders([]);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   MiniMax 上游的命名空间请求里 reasoning.summary 被移除、xhigh 被收敛成 high。
+  // - Bug／规则依据：#9759。命名空间包装跳过了 MiniMax 参数兼容 transform，
+  //   Codex 每轮强制的 summary:'auto' 会直接 400。
+  // - 现有覆盖缺口：上面的收敛用例走普通 /responses，不经过命名空间包装。
+  // - 最小失败输入：MiniMax 上游、已登记的 Responses 路由，
+  //   url 为 /_cindy/custom-provider/<routeId>/responses，reasoning 为 xhigh + summary。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('clamps MiniMax reasoning on a custom-provider namespace route', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-minimax',
+      name: 'Namespace MiniMax',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.minimaxi.com/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'MiniMax-M3', name: 'MiniMax M3', reasoning: true, reasoningEfforts: ['high'] }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-minimax', 'thread-namespace-minimax', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-minimax', provider.id);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9760,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-minimax' },
+        upstreamBase: 'https://api.minimaxi.com/v1',
+      };
+      let current: unknown = {
+        model: 'MiniMax-M3',
+        reasoning: { effort: 'xhigh', summary: 'auto' },
+        input: [{ role: 'user', content: 'hello' }],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(current).toEqual({
+        model: 'MiniMax-M3',
+        reasoning: { effort: 'high' },
+        input: [{ role: 'user', content: 'hello' }],
+      });
+    } finally {
+      host.unregister('session-namespace-minimax');
+      clearSessionProvider('session-namespace-minimax');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   自定义供应商命名空间请求里，input 中带 encrypted_content 的 compaction
+  //   被换成明文「早期上下文不可用」提示，上游请求体不再含 encrypted_content。
+  // - Bug／规则依据：#9759。命名空间白名单漏了跨供应商加密压缩历史降级，
+  //   解不开的 compaction 会原样发给非 GPT 自定义供应商上游。
+  // - 现有覆盖缺口：降级本身有单测，但不经过命名空间包装。
+  // - 最小失败输入：已登记的 Responses 路由，url 为 /_cindy/custom-provider/<routeId>/responses，
+  //   非 GPT model，input 含 {type:'compaction', encrypted_content:'...'}。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('rewrites encrypted compaction on a custom-provider namespace route', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-compaction-provider',
+      name: 'Namespace Compaction Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'not-gpt-5', name: 'Not GPT' }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-compaction', 'thread-namespace-compaction', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-compaction', provider.id);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9761,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-compaction' },
+        upstreamBase: 'https://example.com/v1',
+      };
+      let current: unknown = {
+        model: 'not-gpt-5',
+        input: [
+          { type: 'compaction', encrypted_content: 'ENC_NAMESPACE' },
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+        ],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      const input = (current as { input: Array<Record<string, unknown>> }).input;
+      expect(input[0]).toMatchObject({
+        type: 'message',
+        role: 'user',
+        content: [expect.objectContaining({ type: 'input_text' })],
+      });
+      expect(JSON.stringify(input[0])).toContain('compacted into an encrypted snapshot');
+      expect(JSON.stringify(current)).not.toContain('encrypted_content');
+      expect(JSON.stringify(current)).not.toContain('ENC_NAMESPACE');
+    } finally {
+      host.unregister('session-namespace-compaction');
+      clearSessionProvider('session-namespace-compaction');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   视觉桥已装配（shouldBridge 为 true）时，命名空间请求 input 里的 input_image
+  //   被换成文字描述，上游请求体不再含 input_image。
+  // - Bug／规则依据：#9759。命名空间白名单漏了视觉桥，纯文本上游会收到原图。
+  // - 现有覆盖缺口：本文件把 createVisionBridgeTransform mock 成恒 null，
+  //   真实替换逻辑在视觉桥包里另有单测；这里覆盖的是命名空间包装是否放行同一实例。
+  //   mock 实现按 shouldBridge 把 input_image 换成固定文字，证明白名单放行后链上真的改写。
+  // - 最小失败输入：已登记的 Responses 路由，url 为 /_cindy/custom-provider/<routeId>/responses，
+  //   input_image 的 image_url 为 data: URL。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('replaces input_image on a custom-provider namespace route when the vision bridge is armed', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const { setVisionBridgeController } = await import('../../vision-bridge/vision-bridge-controller.js');
+    const provider = buildUserProvider({
+      id: 'namespace-vision-provider',
+      name: 'Namespace Vision Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'text-only-model', name: 'Text Only' }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-vision', 'thread-namespace-vision', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-vision', provider.id);
+    // 纯文本模型才桥接。describeImage 不会被调用：本文件的视觉桥 transform 是 mock，
+    // 见 fresh 之后对 createVisionBridgeTransform 的替换实现。
+    setVisionBridgeController({
+      shouldBridge: (model) => model === 'text-only-model',
+      describeImage: async () => 'a red square',
+    });
+    const actualProxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    mockState.createVisionBridgeTransform.mockImplementation((...args: unknown[]) =>
+      actualProxy.createVisionBridgeTransform(args[0] as Parameters<typeof actualProxy.createVisionBridgeTransform>[0]));
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9762,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-vision' },
+        upstreamBase: 'https://example.com/v1',
+      };
+      let current: unknown = {
+        model: 'text-only-model',
+        input: [{
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'what is this' },
+            { type: 'input_image', image_url: 'data:image/png;base64,eA==' },
+          ],
+        }],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        current = next !== null && next !== undefined
+          ? (typeof (next as PromiseLike<unknown>).then === 'function' ? await next : next)
+          : current;
+      }
+      expect(JSON.stringify(current)).not.toContain('input_image');
+      expect(JSON.stringify(current)).toContain('a red square');
+      expect(JSON.stringify(current)).not.toContain('data:image/png');
+    } finally {
+      setVisionBridgeController(null);
+      mockState.createVisionBridgeTransform.mockReset();
+      mockState.createVisionBridgeTransform.mockReturnValue(() => null);
+      host.unregister('session-namespace-vision');
+      clearSessionProvider('session-namespace-vision');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   Volcengine Ark / Seed 形态的自定义供应商，命名空间请求打到上游前
+  //   reasoning.summary 已被删掉，回放的 assistant 消息带 status: 'completed'。
+  // - Bug／规则依据：#9759。命名空间白名单漏了 ByteDance Seed 兼容，
+  //   Codex 每轮强制的 summary:'auto' 会直接打到不接受它的 Seed 上游。
+  // - 现有覆盖缺口：Seed 兼容本身有单测，但走普通 /responses，不经过命名空间包装。
+  // - 最小失败输入：Ark 上游、已登记的 Responses 路由，
+  //   url 为 /_cindy/custom-provider/<routeId>/responses，reasoning.summary 为 'auto'，
+  //   input 含一条没有 status 的 assistant 消息。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('strips Seed reasoning.summary on a custom-provider namespace route', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-seed',
+      name: 'Namespace Seed',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'production-deployment', name: 'Production Deployment', reasoning: true, reasoningEfforts: ['high'] }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-seed', 'thread-namespace-seed', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-seed', provider.id);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9763,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-seed' },
+        upstreamBase: 'https://ark.cn-beijing.volces.com/api/v3',
+      };
+      let current: unknown = {
+        model: 'production-deployment',
+        reasoning: { summary: 'auto' },
+        input: [
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'earlier answer' }] },
+        ],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(current).toEqual({
+        model: 'production-deployment',
+        input: [{
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text: 'earlier answer' }],
+        }],
+      });
+      expect(JSON.stringify(current)).not.toContain('"summary"');
+    } finally {
+      host.unregister('session-namespace-seed');
+      clearSessionProvider('session-namespace-seed');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   responses reasoning content 的 controller 已激活时，命名空间请求在第一次
+  //   打到上游前就把 reasoning_text 洗掉，不再等 400/422 重试。
+  // - Bug／规则依据：#9759。命名空间白名单整类跳过了按线程激活的恢复清洗，
+  //   恢复过的线程每轮都要多打一次必失败的上游请求。
+  // - 现有覆盖缺口：普通 /responses 已有「激活后下一轮预洗」用例，不经过命名空间包装。
+  // - 最小失败输入：已登记的 Responses 路由，controller.markActive 后的一次
+  //   命名空间请求，input 含 type:reasoning 且 content 里有 reasoning_text。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('pre-strips activated reasoning content on a custom-provider namespace route', async () => {
+    const host = await freshCodexProxyHost(true);
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const { responsesReasoningContentStripController } = await import('../thread-strip-controllers.js');
+    const provider = buildUserProvider({
+      id: 'namespace-strip-provider',
+      name: 'Namespace Strip Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'custom-model', name: 'Custom Model' }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-strip', 'thread-namespace-strip', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-strip', provider.id);
+    responsesReasoningContentStripController.markActive('thread-namespace-strip', 'custom-model');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    const kept = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue' }] };
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9764,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-strip' },
+        upstreamBase: 'https://example.com/v1',
+      };
+      let current: unknown = {
+        model: 'custom-model',
+        input: [
+          {
+            type: 'reasoning',
+            summary: [],
+            content: [{ type: 'reasoning_text', text: 'provider-private' }],
+            encrypted_content: 'blob',
+          },
+          kept,
+        ],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect((current as { input: unknown[] }).input).toEqual([kept]);
+      expect(JSON.stringify(current)).not.toContain('reasoning_text');
+    } finally {
+      responsesReasoningContentStripController.clear('thread-namespace-strip');
+      host.unregister('session-namespace-strip');
+      clearSessionProvider('session-namespace-strip');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+      mockState.realStripTransforms = false;
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   自定义 Grok Responses 连接走命名空间时，恢复 controller 还没激活，
+  //   历史里的 Codex agent_message 在第一次打到上游前就被改成标准 message。
+  // - Bug／规则依据：#9759。白名单只放行了激活后才生效的 xaiModelInputStripTransform，
+  //   首轮 agent_message 会原样发给 Grok，先 422 再重试。
+  // - 现有覆盖缺口：主动清洗在普通 /responses 有覆盖，不经过命名空间包装。
+  // - 最小失败输入：已登记的 Responses 路由，model 为 grok-4，
+  //   url 为 /_cindy/custom-provider/<routeId>/responses，input 含 type:agent_message。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('rewrites Grok agent_message on a custom-provider namespace route before recovery activates', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-grok',
+      name: 'Namespace Grok',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.x.ai/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'grok-4', name: 'Grok 4' }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-grok', 'thread-namespace-grok', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-grok', provider.id);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9765,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-grok' },
+        upstreamBase: 'https://api.x.ai/v1',
+      };
+      let current: unknown = {
+        model: 'grok-4',
+        input: [{ type: 'agent_message', author: 'bot', content: 'hi' }],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(JSON.stringify(current)).not.toContain('agent_message');
+      expect(current).toMatchObject({
+        model: 'grok-4',
+        input: [{ type: 'message', role: 'assistant' }],
+      });
+    } finally {
+      host.unregister('session-namespace-grok');
+      clearSessionProvider('session-namespace-grok');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：createModelRoutingTransform 里的命名空间决策。
+  //   旧任务把同一型号固定成 Chat 接口后，命名空间请求返回 403 custom_provider_model_mismatch，
+  //   不再按 Host 快照的 /responses 发出去。
+  // - Bug／规则依据：#9759。命名空间只读 responseRoutingByModel，不看任务接口快照。
+  // - 现有覆盖缺口：接口快照的覆盖在普通路由，不经过自定义供应商命名空间。
+  // - 最小失败输入：Kimi Code 预设，任务先固定 openai-completions，目录默认改回 Responses 后
+  //   再打 /_cindy/custom-provider/<routeId>/responses。
+  // - tier：unit。调公开路由函数，不启 Electron、不访问网络。
+  it('refuses a custom-provider namespace request when the task interface is pinned to Chat', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const { configureSessionModelInterfaceStorage, sessionModelInterface } = await import('../session-model-interface.js');
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-namespace-interface-'));
+    const config = {
+      id: 'namespace-kimi',
+      name: 'Namespace Kimi',
+      runtimes: {
+        codex: {
+          catalogPresetId: 'moonshot-kimi-code',
+          baseUrl: 'https://api.kimi.com/coding/v1',
+          wireProtocol: 'openai-chat' as const,
+          models: [{ id: 'k3.1-pro', name: 'Kimi' }],
+        },
+      },
+    };
+    try {
+      configureSessionModelInterfaceStorage(() => directory);
+      const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const chat = registry.models.flatMap(entry => entry.routes)
+        .find(item => item.providerId === 'moonshot-kimi-code' && item.modelId === 'k3.1-pro')!;
+      chat.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
+      const chatProvider = buildUserProvider(config, { modelRegistry: registry, presets: BUNDLED_CATALOG.presets });
+      const pinned = sessionModelInterface(
+        'session-namespace-chat',
+        config.id,
+        'codex',
+        chatProvider.models.codex![0]!,
+        registry,
+      );
+      expect(pinned?.api).toBe('openai-completions');
+
+      const responsesRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const responses = responsesRegistry.models.flatMap(entry => entry.routes)
+        .find(item => item.providerId === 'moonshot-kimi-code' && item.modelId === 'k3.1-pro')!;
+      responses.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-responses'];
+      const provider = buildUserProvider(config, { modelRegistry: responsesRegistry, presets: BUNDLED_CATALOG.presets });
+      expect(provider.models.codex![0]?.route?.wireProtocol).toBe('openai-responses');
+      const catalog = { ...BUNDLED_CATALOG, modelRegistry: responsesRegistry, providers: [...BUNDLED_CATALOG.providers, provider] };
+      setActiveCatalog(catalog);
+      const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+      expect(route.responseModels).toContain('k3.1-pro');
+      host.setCodexAppliedCustomProviderRoutes([route]);
+      host.registerComposed('session-namespace-chat', 'thread-namespace-chat', 'PRODUCT_PROMPT');
+      setSessionProvider('session-namespace-chat', provider.id);
+
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'k3.1-pro' },
+        {
+          reqId: 9766,
+          method: 'POST',
+          url: `/_cindy/custom-provider/${route.routeId}/responses`,
+          headers: { 'thread-id': 'thread-namespace-chat' },
+        },
+      ));
+      const refusal = await runLocalRefusal(decision);
+      expect(refusal.status).toBe(403);
+      expect(refusal.body.error?.code).toBe('custom_provider_model_mismatch');
+    } finally {
+      host.unregister('session-namespace-chat');
+      clearSessionProvider('session-namespace-chat');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      configureSessionModelInterfaceStorage(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('keeps xhigh effort for non-MiniMax custom Responses providers', async () => {
@@ -9940,8 +10595,48 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
           { type: 'compaction', encrypted_content: 'opaque' },
         ],
       };
-      const repaired = { ...body, reasoning: { summary: 'auto', ...(efforts.length ? { effort: efforts.at(-1) } : {}) }, input: body.input.map((item, index) => index < 2
-        ? { ...item, id: index === 0 ? 'ctc_legacy' : 'ctco_legacy' } : item) };
+      // This user-built Responses connection has supportsResponsesCustomTools === false,
+      // so the namespace path now adapts exec to a function (#9759). Effort still comes
+      // only from the frozen route; vendor fields, model and image JSON stay untouched.
+      // Encrypted compaction is not a native field of this route: the namespace allowlist
+      // now rewrites it into a plaintext context note (#9759 review). Image JSON is a
+      // different path and stays byte-identical below.
+      const execTool = body.tools[0]!;
+      const adapted = {
+        ...body,
+        reasoning: { summary: 'auto', ...(efforts.length ? { effort: efforts.at(-1) } : {}) },
+        tools: [{
+          type: 'function',
+          name: 'exec',
+          description: `Original Responses custom tool metadata:\n${JSON.stringify(execTool)}`,
+          parameters: {
+            type: 'object',
+            properties: {
+              input: {
+                type: 'string',
+                description: 'Raw string input for the original custom tool. Preserve formatting exactly.',
+              },
+            },
+            required: ['input'],
+          },
+        }],
+        input: [
+          {
+            type: 'function_call', id: 'fc_legacy', call_id: 'call_same', name: 'exec',
+            arguments: JSON.stringify({ input: '你好' }),
+          },
+          { type: 'function_call_output', id: 'fco_legacy', call_id: 'call_same', output: 'result' },
+          body.input[2],
+          {
+            type: 'message',
+            role: 'user',
+            content: [{
+              type: 'input_text',
+              text: '[context note] Earlier conversation history was compacted into an encrypted snapshot by the previous Codex backend and is not readable on the current model provider. Treat the conversation from this point on as the available context; ask the user if earlier details are needed.',
+            }],
+          },
+        ],
+      };
       const post = async (path: string, raw: string) => {
         const response = await fetch(`${endpoint}/_cindy/custom-provider/${route.routeId}/${path}`, {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: raw,
@@ -9951,8 +10646,8 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       };
       await post('responses?native=true', JSON.stringify(body));
       expect(received[0]?.path).toBe('/v1/responses?native=true');
-      expect(JSON.parse(received[0]!.body)).toEqual(repaired);
-      const unchanged = JSON.stringify(repaired, null, 2);
+      expect(JSON.parse(received[0]!.body)).toEqual(adapted);
+      const unchanged = JSON.stringify(adapted, null, 2);
       await post('responses', unchanged);
       expect(received[1]?.body).toBe(unchanged);
       // Even an image JSON body containing tool-shaped input remains byte-identical.
@@ -10158,7 +10853,14 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       expect(received.at(-1)?.body).toEqual(parentBody);
       expect(await post(namespace, parentBody, 'same-provider')).toBe(200);
       expect(received.at(-1)?.body).toEqual(parentBody);
-      expect(mockState.injectionTransform).toHaveBeenCalledTimes(2);
+      // 提示词注入现在属于命名空间白名单，同供应商的命名空间请求也会跑到它。
+      // 「不继承跨供应商出站链」看的是请求体保持原样，而不是注入 transform 没被调用。
+      // 跨供应商逃逸会把 url 改写成 /responses 再跑整条链；同供应商请求保持命名空间路径。
+      const injectionUrls = () => mockState.injectionTransform.mock.calls.map(
+        ([, callCtx]) => (callCtx as { url?: string }).url ?? '',
+      );
+      expect(injectionUrls().filter(url => url === '/responses')).toHaveLength(2);
+      expect(injectionUrls().filter(url => url.startsWith('/_cindy/custom-provider/'))).toHaveLength(2);
       // Changing ownership or routing during the token read must not enable the chain.
       for (const change of ['mutation', 'unregister'] as const) {
         host.unregister('wire-source'); register();
@@ -10175,7 +10877,8 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
         release();
         expect(await pending).toBe(503);
         expect(received).toHaveLength(count);
-        expect(mockState.injectionTransform).toHaveBeenCalledTimes(2);
+        // 授权在读 token 期间被改掉时，请求不得再进入跨供应商出站链。
+        expect(injectionUrls().filter(url => url === '/responses')).toHaveLength(2);
       }
       // Authorization remains checked after the newly enabled transform chain.
       host.unregister('wire-source'); register();
@@ -10186,7 +10889,8 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       const count = received.length;
       expect(await post(namespace, body, 'transform-race')).toBe(503);
       expect(received).toHaveLength(count);
-      expect(mockState.injectionTransform).toHaveBeenCalledTimes(3);
+      // 这次逃逸已经进入了出站链，所以 /responses 下的注入调用多一次。
+      expect(injectionUrls().filter(url => url === '/responses')).toHaveLength(3);
       expect(readOAuth).toHaveBeenCalledTimes(5);
     } finally {
       release(); host.unregister('wire-source'); sessions.clearSessionProvider('wire-source');

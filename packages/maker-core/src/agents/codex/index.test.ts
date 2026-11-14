@@ -1971,16 +1971,22 @@ function installFakeHost(
           Boolean(model && candidate.responseModels.includes(model)),
       );
       if (!route) {
-        return { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false };
+        return {
+          dynamicIdentity: false,
+          disableSubagents: false,
+          disableModelOverrides: false,
+          disableWebSearch: false,
+        };
       }
       const child = opts.subagentRoute;
-      const compatible = !child || (
-        child.providerId === route.providerId && route.responseModels.includes(child.catalogModel)
-      );
+      // 与 AppServerHost.getCustomProviderThreadPolicy 同口径：同供应商的非 Responses 子模型走协议桥接。
+      const compatible = !child || child.providerId === route.providerId;
+      const imageGeneration = route.capabilities?.imageGeneration === true;
       return {
         dynamicIdentity: true,
         disableSubagents: !compatible,
-        disableModelOverrides: true,
+        disableModelOverrides: imageGeneration,
+        disableWebSearch: imageGeneration,
       };
     },
   );
@@ -6305,6 +6311,43 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await falseHandle.close();
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：CodexAgent.startSession 的 thread/start config。
+  //   纯文本 Responses 自定义身份不写 web_search: disabled，也不关 standalone_web_search。
+  // - Bug／规则依据：#9759。dynamicIdentity 对所有自定义身份无条件关掉原生网页搜索，纯文本任务丢了搜索。
+  // - 现有覆盖缺口：上面的自定义身份用例都是 imageGeneration: true，搜索关闭是预期。
+  // - 最小失败输入：一条 imageGeneration 不为 true、模型在 responseModels 里的文本身份。
+  // - tier：unit。fake host，不启进程、不访问网络。
+  it('keeps native web search on a text-only custom Provider identity', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      codexCustomProviderRoutes: [
+        {
+          providerId: 'custom-text',
+          modelProviderId: 'cindy_custom_cccccccccccccccccccc',
+          capabilities: { imageGeneration: false },
+          responseModels: ['text-model'],
+        },
+      ],
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-custom-text-search',
+      model: 'text-model',
+      providerId: 'custom-text',
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { modelProvider?: string; config?: Record<string, unknown> };
+    expect(params.modelProvider).toBe('cindy_custom_cccccccccccccccccccc');
+    expect(params.config).not.toHaveProperty('web_search');
+    expect(params.config).not.toHaveProperty('features.standalone_web_search');
+    expect(params.config).not.toHaveProperty('agents.enabled');
+    await handle.close();
+  });
+
   it.each([
     {
       label: 'same Provider eligible child',
@@ -6326,7 +6369,8 @@ describe('CodexAgent.startSession developerInstructions', () => {
       },
       rootProviderId: 'custom-images-a',
       rootModel: 'image-a',
-      disabled: true,
+      // 同供应商跨协议走桥接，子代理不关。网页搜索仍因图片生成身份关闭。
+      disabled: false,
     },
     {
       label: 'different dynamic Provider child',

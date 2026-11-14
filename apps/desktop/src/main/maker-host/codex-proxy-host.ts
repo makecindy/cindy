@@ -114,6 +114,7 @@ import {
   getUserProviderIdForSession,
   readProviderOAuthToken,
   providerRoutingServesWireModel,
+  sessionProviderRoutingForModel,
   resolveImplicitLocalBridgeRoute,
   resolveImplicitProviderOAuthRouteDecision,
   resolveProviderOAuthControlRouteDecision,
@@ -2941,6 +2942,22 @@ function resolveCodexCustomProviderRoutingDecision(
   }
   const wireModel = parsed.pathKind === 'responses' ? requestModel : undefined;
   const sessionId = sessionIdFromHeaders(ctx.headers) ?? guestSessionId;
+  // Host 快照只记当前目录的 Responses 路径。旧任务经 sessionModelInterface 固定为
+  // Chat 接口时，命名空间仍会把它送到 /responses。按任务快照的协议判：
+  // 不是 openai-responses 就拒绝，让该任务留在普通路由；仍是 Responses 则把快照路径合进去。
+  let effectiveRouting = frozenRouting;
+  if (sessionId && wireModel) {
+    const provider = getActiveCatalog().providers.find((candidate) => candidate.id === route.providerId);
+    const sessionRouting = provider
+      ? sessionProviderRoutingForModel(sessionId, provider, 'codex', wireModel)
+      : null;
+    if (sessionRouting?.wireProtocol && sessionRouting.wireProtocol !== 'openai-responses') {
+      return codexCustomProviderRouteFailure(403, 'custom_provider_model_mismatch');
+    }
+    if (sessionRouting?.wireProtocol === 'openai-responses') {
+      effectiveRouting = { ...frozenRouting, ...sessionRouting };
+    }
+  }
   if (wireModel && !hostedProviderOffersModel(sessionId, route.providerId, 'codex', wireModel)) {
     return codexCustomProviderRouteFailure(403, 'remote_model_not_allowed');
   }
@@ -2954,7 +2971,7 @@ function resolveCodexCustomProviderRoutingDecision(
     : undefined;
   return resolveFrozenProviderRouteDecision(
     route.providerId,
-    frozenRouting,
+    effectiveRouting,
     route.credentialRevision,
     'codex',
     _readGatewayKey(),
@@ -3011,8 +3028,8 @@ function resolveCodexCustomProviderRoutingDecision(
         ...(headerDelete.size > 0 ? { headerDelete: [...headerDelete] } : {}),
         ...(parsed.pathKind === 'images'
           ? {
-              ...(frozenRouting.imageModel || allowsImageModel ? {
-                transformRequestBody: createCodexImageModelRewrite(frozenRouting.imageModel, allowsImageModel),
+              ...(effectiveRouting.imageModel || allowsImageModel ? {
+                transformRequestBody: createCodexImageModelRewrite(effectiveRouting.imageModel, allowsImageModel),
               } : {}),
               forwardLifecycle: createCodexImageGenerationForwardLifecycleObserver(
                 parsed.routeId,
@@ -3058,7 +3075,10 @@ function resolveCodexCustomProviderRoutingDecision(
             && !isProviderRouteMutationInProgress(childRoute.providerId)
             && getProviderRouteCredentialRevision(childRoute.providerId) === subagentCredentialRevisions.get(childRoute);
           if (!current()) return unresolvedCollabSpawnRouteDecision();
-          const crossesProvider = childRoute.providerId !== parentRoute.providerId;
+          // 同一供应商下，子模型不在父级 Responses 名单里时也要逃出命名空间。
+          // 否则 Chat/Messages 子代理会继续打在 Responses 命名空间上，上游回 403。
+          const crossesProvider = childRoute.providerId !== parentRoute.providerId
+            || !parentRoute.responseModels.includes(childRoute.catalogModel);
           const decision = crossesProvider
             ? createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, sourceHostAlive)(
                 body, { ...ctx, url: '/responses' },
@@ -3315,7 +3335,10 @@ function createTransformRequestChain(
   pricing: XaiRequestPricing = new Map(),
   /** 供应商分享受邀者的 proxy：不走视觉桥(视觉后端是本机用户自己的其它供应商)。 */
   guest = false,
-): RequestTransform[] {
+): {
+  transforms: RequestTransform[];
+  customProviderNamespaceTransforms: ReadonlySet<RequestTransform>;
+} {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
     const { providerId, routing } = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
@@ -3349,18 +3372,63 @@ function createTransformRequestChain(
   execFunctionAdapterTransform.onRequestSettled = (requestId) => {
     execAdapter.releaseResponse(requestId);
   };
+  const codexTransform = createCodexTransform();
+  const miniMaxResponsesCompatTransform = createMiniMaxResponsesCompatTransform();
+  // 提出同一实例：命名空间白名单按引用相等判定，链里再内联调用就进不了 Set。
+  // 这两类不是模型改写，是修复请求内容合法性：跨供应商加密压缩历史降级成明文，
+  // 以及纯文本模型上把 input_image 换成文字描述。跳过会把解不开的密文和原图原样发给自定义供应商上游。
+  const crossProviderCompactionCompatTransform = createCrossProviderCompactionCompatTransform();
+  // guest 隔离不装视觉桥：视觉桥走的是本机用户自己的视觉供应商，供应商分享的访客不能用。
+  const visionBridgeTransform = guest ? undefined : buildVisionBridgeProxyTransform(log);
+  // 命名空间白名单按引用相等判定，链里再内联调用就进不了 Set。
+  // Seed 兼容会删掉 Codex 每轮强制的 reasoning.summary，并给回放的 assistant 消息补 status。
+  // 这 7+2 个恢复清洗只在 controller 已激活（或设置开启）后才动手，用于同一份历史下一轮提前洗掉。
+  // 构造参数、enabled 谓词和在链里的位置保持不变，不合并。
+  const byteDanceSeedResponsesCompatTransform = createByteDanceSeedResponsesCompatTransform();
+  // Grok 的主动清洗不等恢复 controller 激活：首轮就把 Codex agent_message 改成标准 message。
+  // 命名空间白名单按引用相等，链里再内联调用就进不了 Set。
+  const xaiModelInputSanitizeTransform = createXaiModelInputSanitizeTransform();
+  const armedHttpRecoveryStripTransform = createArmedHttpRecoveryStripTransform();
+  const encryptedStripTransform = createActiveStripTransform({
+    controller: encryptedStripController,
+    enabled: () => readSilentEncryptedRetrySettings().enabled,
+    strip: stripEncryptedContentFromBody,
+  });
+  const imageGenerationStripTransform = createActiveStripTransform({
+    controller: imageGenerationStripController,
+    enabled: () => true,
+    strip: stripImageGenerationItemsWithoutIdFromBody,
+  });
+  const xaiModelInputStripTransform = createActiveStripTransform({
+    controller: xaiModelInputStripController,
+    enabled: () => true,
+    strip: sanitizeXaiModelInputFromBody,
+  });
+  const responsesItemIdStripTransform = createActiveStripTransform({
+    controller: responsesItemIdStripController,
+    enabled: () => true,
+    strip: stripNonCanonicalResponsesItemIdsFromBody,
+  });
+  const responsesItemIdLengthStripTransform = createActiveStripTransform({
+    controller: responsesItemIdLengthStripController,
+    enabled: () => true,
+    strip: shortenOversizedResponsesItemIdsFromBody,
+  });
+  const armedHttpRecoveryStripTransformLate = createArmedHttpRecoveryStripTransform(true);
+  const responsesReasoningContentStripTransform = createActiveStripTransform({
+    controller: responsesReasoningContentStripController,
+    enabled: () => true,
+    strip: stripResponsesReasoningContentFromBody,
+  });
+  const responsesToolCallHistoryStripTransform = createActiveStripTransform({
+    controller: responsesToolCallHistoryStripController,
+    enabled: () => true,
+    strip: normalizeRepeatedResponseToolCallIdsFromBody,
+  });
   const transforms: RequestTransform[] = [
-    createArmedHttpRecoveryStripTransform(),
-    createActiveStripTransform({
-      controller: encryptedStripController,
-      enabled: () => readSilentEncryptedRetrySettings().enabled,
-      strip: stripEncryptedContentFromBody,
-    }),
-    createActiveStripTransform({
-      controller: imageGenerationStripController,
-      enabled: () => true,
-      strip: stripImageGenerationItemsWithoutIdFromBody,
-    }),
+    armedHttpRecoveryStripTransform,
+    encryptedStripTransform,
+    imageGenerationStripTransform,
     // Guardian uses an isolated child thread. Resolve its parent business
     // session and select that session's real provider model before provider
     // compatibility transforms inspect the request.
@@ -3368,32 +3436,20 @@ function createTransformRequestChain(
     // collab_spawn 的首个 HTTP 请求可能早于 thread/started / spawn item。强制路由
     // transform 先懒登记血缘，随后 instructions transform 才能在同一请求注入产品提示词。
     createForcedSubagentRequestTransform(),
-    createCodexTransform(),
+    codexTransform,
     createLockedSubagentExecGuardTransform(),
     createGatewayNativeWebSearchTransform(frozenAuthInjection),
     // 必须先于 xAI/MiniMax 兼容改写:先把供应商绑定的历史项降级成标准 message，
     // 后续针对具体供应商的 input 归一化才能稳定处理。
-    createCrossProviderCompactionCompatTransform(),
+    crossProviderCompactionCompatTransform,
     // 必须在 compaction 降级之后:自定义 LiteLLM 别名首次 422 会激活本 strip,
     // 若先于降级跑,会把 compaction 当未知 type 丢掉,明文「早期上下文不可用」提示就没了。
-    createActiveStripTransform({
-      controller: xaiModelInputStripController,
-      enabled: () => true,
-      strip: sanitizeXaiModelInputFromBody,
-    }),
+    xaiModelInputStripTransform,
     // issue #4738: 上游拒绝过一次不合规 message/reasoning id 后, 该 thread 后续每次发送
     // 前都预洗, 避免每轮先 400 再重试。
-    createActiveStripTransform({
-      controller: responsesItemIdStripController,
-      enabled: () => true,
-      strip: stripNonCanonicalResponsesItemIdsFromBody,
-    }),
+    responsesItemIdStripTransform,
     // issue #4227: 同理, 上游拒绝过一次超长 item id 后, 该 thread 后续发送前预改写。
-    createActiveStripTransform({
-      controller: responsesItemIdLengthStripController,
-      enabled: () => true,
-      strip: shortenOversizedResponsesItemIdsFromBody,
-    }),
+    responsesItemIdLengthStripTransform,
     // Providers that explicitly lack Responses custom tools still accept ordinary
     // functions. Adapt before provider sanitizers, then restore custom_tool_call
     // events on the matching response stream.
@@ -3402,32 +3458,24 @@ function createTransformRequestChain(
     createStrictGatewayHistoryCompatTransform(),
     // Gateway / LiteLLM / 自定义 grok 不走 xAI 订阅 transform，但仍必须在
     // ModelInput deserialize 前洗 input[]。订阅直连那条会再洗一次（幂等）。
-    createXaiModelInputSanitizeTransform(),
+    xaiModelInputSanitizeTransform,
     sanitizeDeepSeekV4CustomTools,
     createXaiResponsesCompatTransform(pricing),
     createGatewayGrokResponsesCompatTransform(frozenAuthInjection),
-    createByteDanceSeedResponsesCompatTransform(),
-    createMiniMaxResponsesCompatTransform(),
+    byteDanceSeedResponsesCompatTransform,
+    miniMaxResponsesCompatTransform,
     createProviderModelRewriteTransform(frozenAuthInjection),
     providerRequestTransform,
-    createArmedHttpRecoveryStripTransform(true),
-    createActiveStripTransform({
-      controller: responsesReasoningContentStripController,
-      enabled: () => true,
-      strip: stripResponsesReasoningContentFromBody,
-    }),
+    armedHttpRecoveryStripTransformLate,
+    responsesReasoningContentStripTransform,
     // 视觉桥透明替换（层 A，Responses 格式）：controller 未注入时短路透传，零干扰；
     // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
     // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
-    ...(guest ? [] : [buildVisionBridgeProxyTransform(log)]),
+    ...(visionBridgeTransform ? [visionBridgeTransform] : []),
     // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
     // This covers native-custom routes and tool-less /responses/compact without changing call_id.
     normalizeResponsesToolItemIds,
-    createActiveStripTransform({
-      controller: responsesToolCallHistoryStripController,
-      enabled: () => true,
-      strip: normalizeRepeatedResponseToolCallIdsFromBody,
-    }),
+    responsesToolCallHistoryStripTransform,
     stripNonAnthropicFields,
   ];
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
@@ -3436,7 +3484,34 @@ function createTransformRequestChain(
   // 档位与模型改写都在上面收敛。卡片读的观察身份必须是这份最终会发出去的值。
   // 放在调试转储之后：转储只是旁路，不能盖掉它记下的出站身份。
   transforms.push(createObservedSubagentIdentityTransform());
-  return transforms;
+  // 白名单必须和上面这条链用同一批实例。按引用相等判断，链外再 new 一次对不上。
+  // 放行的是提示词注入、供应商参数兼容、请求归一化、exec 工具适配、工具 ID 校正、
+  // 加密压缩历史降级、视觉桥、Seed 兼容，以及按线程激活的恢复清洗。
+  // 模型改写和会话/目录/提示词注入之外的身份类 transform 不在这里。
+  // Seed 兼容按是不是 Seed 请求自己判断；非 Seed 请求直接 return null。
+  // 恢复清洗只在对应 controller 已激活后才改 body。
+  // 视觉桥仅在非 guest 时入链，白名单按同一实例追加；guest 不入链也不入白名单。
+  const customProviderNamespaceTransforms = new Set<RequestTransform>([
+    codexTransform,
+    miniMaxResponsesCompatTransform,
+    providerRequestTransform,
+    normalizeResponsesToolItemIds,
+    execFunctionAdapterTransform,
+    crossProviderCompactionCompatTransform,
+    ...(visionBridgeTransform ? [visionBridgeTransform] : []),
+    byteDanceSeedResponsesCompatTransform,
+    armedHttpRecoveryStripTransform,
+    encryptedStripTransform,
+    imageGenerationStripTransform,
+    xaiModelInputStripTransform,
+    xaiModelInputSanitizeTransform,
+    responsesItemIdStripTransform,
+    responsesItemIdLengthStripTransform,
+    armedHttpRecoveryStripTransformLate,
+    responsesReasoningContentStripTransform,
+    responsesToolCallHistoryStripTransform,
+  ]);
+  return { transforms, customProviderNamespaceTransforms };
 }
 
 /**
@@ -3585,42 +3660,48 @@ async function createCodexProxyHandle(
     });
     return recovered;
   };
+  const { transforms: transformChain, customProviderNamespaceTransforms } = createTransformRequestChain(
+    frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined,
+  );
+  // 命名空间上的 Responses 走冻结的供应商路由，要保住它自己的 model 与原生字段。
+  // 所以模型改写、会话/目录类 transform 仍然不跑；档位只由下面那条专用 transform
+  // 按同一份快照收敛。白名单是链构建时那一批实例，按引用相等判断。
+  const transformRequest: RequestTransform[] = transformChain.map(
+    (transform): RequestTransform => {
+      const scoped: RequestTransform = (body, ctx) => {
+        if (crossProviderRequests.has(ctx.headers)) {
+          return transform(body, { ...ctx, url: '/responses' });
+        }
+        return isCodexCustomProviderNamespacePath(ctx.url)
+          && !customProviderNamespaceTransforms.has(transform)
+          ? null : transform(body, ctx);
+      };
+      // Keep adapter rejection and request-state cleanup on ordinary routes.
+      scoped.errorMode = transform.errorMode;
+      scoped.onRequestSettled = transform.onRequestSettled;
+      return scoped;
+    },
+  ).concat((body, ctx) => {
+    // 同连接的命名空间路由不跑普通改写链，档位只在这条专用 transform 里收敛。
+    // 观察点必须排在它后面，卡片才读到真正发出去的档，而不是父任务存档档位。
+    if (crossProviderRequests.has(ctx.headers)) return null;
+    const reconciled = frozenReasoning(body, ctx);
+    const outgoing = isPlainObject(reconciled) ? reconciled : body;
+    if (isPlainObject(outgoing) && typeof outgoing.model === 'string') {
+      recordObservedSubagentIdentity(
+        ctx.headers,
+        outgoing.model,
+        observedReasoningEffort(outgoing),
+      );
+    }
+    return reconciled;
+  });
+
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
     ...(ports.authorizeInbound ? { authorizeInbound: ports.authorizeInbound } : {}),
-    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined).map(
-      (transform): RequestTransform => {
-        // Namespaced Responses use a frozen Provider route. Preserve its native
-        // fields and model. The dedicated transform below reconciles effort
-        // against that same snapshot; ordinary session/catalog transforms stay out.
-        const scoped: RequestTransform = (body, ctx) => {
-          if (crossProviderRequests.has(ctx.headers)) {
-            return transform(body, { ...ctx, url: '/responses' });
-          }
-          return isCodexCustomProviderNamespacePath(ctx.url) && transform !== normalizeResponsesToolItemIds
-            ? null : transform(body, ctx);
-        };
-        // Keep adapter rejection and request-state cleanup on ordinary routes.
-        scoped.errorMode = transform.errorMode;
-        scoped.onRequestSettled = transform.onRequestSettled;
-        return scoped;
-      },
-    ).concat((body, ctx) => {
-      // 同连接的命名空间路由不跑普通改写链，档位只在这条专用 transform 里收敛。
-      // 观察点必须排在它后面，卡片才读到真正发出去的档，而不是父任务存档档位。
-      if (crossProviderRequests.has(ctx.headers)) return null;
-      const reconciled = frozenReasoning(body, ctx);
-      const outgoing = isPlainObject(reconciled) ? reconciled : body;
-      if (isPlainObject(outgoing) && typeof outgoing.model === 'string') {
-        recordObservedSubagentIdentity(
-          ctx.headers,
-          outgoing.model,
-          observedReasoningEffort(outgoing),
-        );
-      }
-      return reconciled;
-    }),
+    transformRequest,
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);
