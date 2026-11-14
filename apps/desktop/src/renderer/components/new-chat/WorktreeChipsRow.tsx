@@ -612,33 +612,68 @@ export function BranchWorktreeChip({
   const [activeBranchIndex, setActiveBranchIndex] = useState(0);
   const listboxId = useId();
   const listboxRef = useRef<HTMLDivElement>(null);
+  const noticesRef = useRef<HTMLDivElement>(null);
+  const autoLocate = useRef(true);
+  const keyboardLocate = useRef(false);
   const optionRefs = useRef<Array<HTMLDivElement | null>>([]);
   // 过滤后列表可能变短,钳住下标避免指向已不可见的项;空列表用 -1 表示无高亮。
   const clampedActiveIndex =
     visibleBranches.length === 0 ? -1 : Math.min(activeBranchIndex, visibleBranches.length - 1);
 
+  const revealBranch = useCallback((index: number) => {
+    const list = listboxRef.current;
+    const option = optionRefs.current[index];
+    if (!list || !option) return;
+    const viewport = list.getBoundingClientRect();
+    const row = option.getBoundingClientRect();
+    // Nearest-edge scrolling limited to the list, never the surrounding page.
+    if (row.top < viewport.top) list.scrollTop -= viewport.top - row.top;
+    else if (row.bottom > viewport.bottom) list.scrollTop += row.bottom - viewport.bottom;
+  }, []);
+
   useEffect(() => {
-    if (!branchMenuOpen || clampedActiveIndex < 0) return;
-    // Radix mounts and sizes the portal after the trigger's render. Wait for
-    // that layout before measuring the inner viewport, not the whole panel.
-    const frame = requestAnimationFrame(() => {
+    if (!branchMenuOpen || branchesLoading || branchesFailed) return;
+    let frame: number;
+    const locate = () => {
+      if (autoLocate.current) revealBranch(allBranches.indexOf(branchLabel));
+    };
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(locate);
+    });
+    // The portal, notices and available-height constraint can settle in separate
+    // layouts. Keep watching until the user takes over, with no fixed delay.
+    frame = requestAnimationFrame(() => {
       const list = listboxRef.current;
-      const option = optionRefs.current[clampedActiveIndex];
-      if (!list || !option) return;
-      const viewport = list.getBoundingClientRect();
-      const row = option.getBoundingClientRect();
-      if (row.top < viewport.top) list.scrollTop -= viewport.top - row.top;
-      else if (row.bottom > viewport.bottom) list.scrollTop += row.bottom - viewport.bottom;
+      if (!list) return;
+      observer.observe(list);
+      if (noticesRef.current) observer.observe(noticesRef.current);
+      for (const group of list.querySelectorAll('[role="group"]')) observer.observe(group);
+      locate();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [branchMenuOpen, branchesLoading, branchesFailed, allBranches, branchLabel, revealBranch]);
+
+  // Explicit keyboard navigation continues to reveal its highlighted option,
+  // even after automatic positioning of the current branch has been cancelled.
+  useEffect(() => {
+    if (!branchMenuOpen || !keyboardLocate.current) return;
+    const frame = requestAnimationFrame(() => {
+      keyboardLocate.current = false;
+      revealBranch(clampedActiveIndex);
     });
     return () => cancelAnimationFrame(frame);
-  }, [branchMenuOpen, clampedActiveIndex, allBranches]);
+  }, [branchMenuOpen, clampedActiveIndex, revealBranch]);
 
   // 打开菜单、或菜单开着时分支列表异步到达/刷新,都要把高亮重新定位到当前源
   // 分支——不能依赖 branches 数组里恰好排第几位(该接口不保证顺序,参见
   // WorktreeManager.listBranches 用的是 `git branch` 默认序)。只在用户还没
   // 输入搜索词时接管,避免打断已经在筛选/用方向键挑选的操作。
   useEffect(() => {
-    if (!branchMenuOpen || normalizedBranchQuery) return;
+    if (!branchMenuOpen || !autoLocate.current || normalizedBranchQuery) return;
     const current = allBranches.indexOf(branchLabel);
     setActiveBranchIndex(current >= 0 ? current : 0);
   }, [branchMenuOpen, allBranches, branchLabel, normalizedBranchQuery]);
@@ -662,6 +697,8 @@ export function BranchWorktreeChip({
       // 拦截 Home/End)。
       case 'ArrowDown':
       case 'ArrowUp': {
+        autoLocate.current = false;
+        keyboardLocate.current = true;
         e.preventDefault();
         if (clampedActiveIndex < 0) return;
         setActiveBranchIndex(
@@ -744,6 +781,8 @@ export function BranchWorktreeChip({
       onOpenChange={(open) => {
         setBranchMenuOpen(open);
         if (open) {
+          autoLocate.current = true;
+          keyboardLocate.current = false;
           onOpenRequested();
           void sync.refresh();
           // 高亮定位交给上面的 useEffect(依赖 branches,分支异步到达/刷新时
@@ -763,9 +802,9 @@ export function BranchWorktreeChip({
         onEscapeKeyDown={(e) => {
           if (e.isComposing) e.preventDefault();
         }}
-        className="flex max-h-[min(480px,var(--radix-popover-content-available-height))] flex-col w-auto min-w-[min(280px,calc(100vw-32px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-[shadow:var(--shadow-menu)]"
+        className="flex max-h-[min(480px,var(--radix-popover-content-available-height))] flex-col w-auto min-w-[min(280px,calc(100vw-32px))] max-w-[min(360px,calc(100vw-32px))] overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-[shadow:var(--shadow-menu)]"
       >
-        <div className="shrink-0" data-testid="checkout-menu-notices">
+        <div ref={noticesRef} className="shrink-0" data-testid="checkout-menu-notices">
           {menuHeader}
         </div>
         {branchesLoading ? (
@@ -812,6 +851,7 @@ export function BranchWorktreeChip({
                   }
                   value={branchQuery}
                   onChange={(e) => {
+                    autoLocate.current = false;
                     setBranchQuery(e.target.value);
                     // 过滤集合变了,高亮回到首项,避免停留在已不可见的位置。
                     setActiveBranchIndex(0);
@@ -833,6 +873,15 @@ export function BranchWorktreeChip({
             </div>
             <div
               ref={listboxRef}
+              onWheel={() => {
+                autoLocate.current = false;
+              }}
+              onTouchMove={() => {
+                autoLocate.current = false;
+              }}
+              onPointerDown={() => {
+                autoLocate.current = false;
+              }}
               className="min-h-0 overflow-y-auto"
               role="listbox"
               id={listboxId}

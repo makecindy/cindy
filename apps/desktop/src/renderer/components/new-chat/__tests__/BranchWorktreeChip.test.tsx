@@ -73,6 +73,14 @@ const props = {
   remoteDefaultBranch: 'refs/remotes/origin/main',
 };
 beforeEach(() => {
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   vi.clearAllMocks();
   mocks.success.mockReturnValue('checkout-success-toast');
   mocks.info.mockReturnValue('checkout-info-toast');
@@ -89,6 +97,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 const branchButton = () => screen.getByRole('button', { name: 'newChat.branchChip.label' });
@@ -231,6 +240,79 @@ it.each([false, true])(
       expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
     } finally {
       bounds.mockRestore();
+    }
+  },
+);
+
+// Regression: a late notice / Popover resize can clip the selected branch after
+// the first animation frame. Unit tier; geometry changes after opening, then a
+// user gesture must prevent the resize observer from taking over the scroll.
+it.each(['wheel', 'search'])(
+  'keeps the current branch visible after resize until %s',
+  async (gesture) => {
+    const callbacks = new Set<ResizeObserverCallback>();
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe() {
+          callbacks.add(this.callback);
+        }
+        unobserve() {}
+        disconnect() {
+          callbacks.delete(this.callback);
+        }
+      },
+    );
+    let height = 200;
+    const bounds = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const list = screen.queryByRole('listbox');
+        const top =
+          this.getAttribute('aria-selected') === 'true' ? 300 - (list?.scrollTop ?? 0) : 0;
+        const h = this.getAttribute('role') === 'listbox' ? height : 30;
+        return {
+          x: 0,
+          y: top,
+          top,
+          bottom: top + h,
+          left: 0,
+          right: 280,
+          width: 280,
+          height: h,
+          toJSON: () => ({}),
+        };
+      });
+    const resize = () => {
+      for (const callback of callbacks) callback([], {} as ResizeObserver);
+    };
+    try {
+      render(
+        <BranchWorktreeChip
+          {...props}
+          branches={['feature', 'main']}
+          remoteDefaultBranch={undefined}
+        />,
+      );
+      fireEvent.click(branchButton());
+      const list = await screen.findByRole('listbox');
+      await waitFor(() => expect(list.scrollTop).toBe(130));
+      height = 120;
+      act(resize);
+      await waitFor(() => expect(list.scrollTop).toBe(210));
+      if (gesture === 'wheel') fireEvent.wheel(list, { deltaY: -60 });
+      else fireEvent.change(screen.getByRole('combobox'), { target: { value: 'main' } });
+      height = 80;
+      act(resize);
+      await act(async () => {
+        await new Promise(requestAnimationFrame);
+      });
+      expect(list.scrollTop).toBe(210);
+    } finally {
+      cleanup();
+      bounds.mockRestore();
+      vi.unstubAllGlobals();
     }
   },
 );

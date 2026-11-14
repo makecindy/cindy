@@ -187,7 +187,7 @@ export function CheckoutDialog({
                 return (
                   <label
                     key={choice}
-                    className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 focus-within:ring-2 focus-within:ring-[var(--focus-ring)] ${disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-accent'} ${strategy === choice ? 'border-foreground bg-accent' : 'border-border'}`}
+                    className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 focus-within:ring-2 focus-within:ring-[var(--focus-ring)] ${disabled ? 'cursor-not-allowed' : 'hover:bg-accent'} ${strategy === choice ? 'border-foreground bg-accent' : 'border-border'}`}
                   >
                     <input
                       type="radio"
@@ -200,10 +200,10 @@ export function CheckoutDialog({
                       checked={strategy === choice}
                       disabled={disabled}
                       onChange={() => setStrategy(choice)}
-                      className="mt-0.5 size-4 shrink-0 accent-[var(--text-primary)]"
+                      className={`mt-0.5 size-4 shrink-0 accent-[var(--text-primary)] ${disabled ? 'opacity-50' : ''}`}
                     />
                     <span className="min-w-0 break-words">
-                      <span className="block font-medium">
+                      <span className={`block font-medium ${disabled ? 'opacity-50' : ''}`}>
                         {t(`newChat.checkout.${choice}`, {
                           branch: choice === 'carry' ? target : dialog?.status.current,
                         })}

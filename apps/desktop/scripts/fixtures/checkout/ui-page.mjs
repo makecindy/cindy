@@ -256,6 +256,25 @@ export default {
           currentBox.y + currentBox.height <= viewport.y + viewport.height + 1,
         'Current branch must be visible on open',
       );
+      // Real layout regression: the notice grows after the first menu frame,
+      // as it does when checkout status arrives later than the branch list.
+      assert.ok(
+        oldBox.width <= Math.min(360, (await page.evaluate(() => globalThis.innerWidth)) - 32),
+      );
+      await notice.evaluate((el) => {
+        el.style.paddingBottom = '48px';
+      });
+      await page.waitForFunction(() => {
+        const list = globalThis.document.querySelector('[role="listbox"]');
+        const row = list?.querySelector('[aria-selected="true"]');
+        if (!list || !row) return false;
+        const viewport = list.getBoundingClientRect();
+        const current = row.getBoundingClientRect();
+        return current.top >= viewport.top - 1 && current.bottom <= viewport.bottom + 1;
+      });
+      await notice.evaluate((el) => {
+        el.style.paddingBottom = '';
+      });
       const initialScroll = await list.evaluate((el) => el.scrollTop);
       if (ui.case === 'operation') {
         assert.equal(initialScroll, 0, 'A current branch near the top must not scroll');
