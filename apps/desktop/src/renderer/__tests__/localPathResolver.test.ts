@@ -250,6 +250,27 @@ describe('resolveLocalPath', () => {
   it('returns UNC share href as-is instead of joining it onto the cwd', () => {
     expect(resolveLocalPath('\\\\server\\share\\a.ts', 'C:\\proj')).toBe('\\\\server\\share\\a.ts');
   });
+
+  // A file URL's host names another machine. It used to be stripped to the
+  // relative `nas/share/x.pdf`, which main joined onto the task folder and
+  // suffix-searched the workspace for. localhost and the malformed
+  // file://C:/ spelling keep naming a local path (localhost never a share). Hosts `.`/`..`/`?` (even
+  // escaped) keep the relative pre-UNC text instead of a \\.\ or \\?\ device path.
+  it.each([
+    ['file://nas/share/x.pdf', 'C:\\proj', '\\\\nas\\share\\x.pdf'],
+    ['file://nas/share/a%20b%2520.pdf', '/home/u', '\\\\nas\\share\\a b%20.pdf'],
+    ['file://a%2Fb/share/x.pdf', 'C:\\proj', '\\\\a%2Fb\\share\\x.pdf'],
+    ['file://localhost/C:/x.png', 'C:\\proj', 'C:/x.png'],
+    ['file://LocalHost/abs/x.png', '/cwd', '/abs/x.png'],
+    // localhost cannot name a share: extra leading separators stay a local path, not //nas.
+    ['file://localhost//nas/share/x.png', 'C:\\proj', '/nas/share/x.png'],
+    ['file://localhost/\\nas\\share\\x.png', 'C:\\proj', '/nas\\share\\x.png'],
+    ['file://C:/x.png', 'C:\\proj', 'C:/x.png'],
+    ['file://./docs/a.md', 'C:\\proj', './docs/a.md'],
+    ['file://%3F/C:/x.png', 'C:\\proj', '?/C:/x.png'],
+  ])('maps %s (cwd %s) to %s', (href, cwd, expected) => {
+    expect(resolveLocalPath(href, cwd)).toBe(expected);
+  });
 });
 
 describe('resolveToolFilePath (agent tool-input path absolutizer)', () => {
@@ -386,6 +407,54 @@ describe('file URL decoding across renderer and main', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // A file://host link must never reach the workspace join / suffix BFS. A
+  // POSIX owner cannot open a UNC share, so it is not found — even when the
+  // task folder has a same-named host/share/... file (which used to open).
+  // Windows owners stat the UNC path itself (a network lookup), so this
+  // fixture runs on POSIX CI only.
+  it.skipIf(process.platform === 'win32')(
+    'does not open a same-named workspace file for a file://host link',
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-unc-link-'));
+      fs.mkdirSync(path.join(root, 'nas', 'share'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'nas', 'share', 'x.pdf'), '%PDF');
+      vi.stubGlobal('window', { electronAPI: {
+        resolvePath: ({ href, workingDir }: { href: string; workingDir: string }) =>
+          resolveWorkspacePath(href, workingDir),
+        resolvePathBatch: ({ hrefs, workingDir }: { hrefs: string[]; workingDir: string }) =>
+          resolveWorkspacePathBatch(hrefs, workingDir),
+      } });
+      try {
+        for (const href of ['file://nas/share/x.pdf', '\\\\nas\\share\\x.pdf']) {
+          _clearSmartResolveCache();
+          const expected = { status: 'none', fallbackAbsPath: '\\\\nas\\share\\x.pdf' };
+          await expect(resolveLocalPathSmart(href, root, { refresh: true })).resolves.toEqual(expected);
+          await expect(resolveLocalPathSmartCached(href, root)).resolves.toEqual(expected);
+        }
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // Rendering must not contact a host named in message content (on Windows main
+  // would stat \\nas\share, i.e. SMB + NTLM): render-time lookups and their
+  // re-checks answer without IPC; an explicit open still asks main.
+  it('looks up a file://host link in main only on an explicit open', async () => {
+    const resolvePath = vi.fn().mockResolvedValue({ status: 'none', candidates: [] });
+    const resolvePathBatch = vi.fn().mockResolvedValue({});
+    vi.stubGlobal('window', { electronAPI: { resolvePath, resolvePathBatch } });
+    const href = 'file://nas/share/x.pdf';
+    const none = { status: 'none', fallbackAbsPath: '\\\\nas\\share\\x.pdf' };
+
+    await expect(resolveLocalPathSmartCached(href, 'C:\\proj')).resolves.toEqual(none);
+    await expect(revalidateNegativeLocalPathSmart(href, 'C:\\proj', Date.now())).resolves.toEqual(none);
+    expect(resolvePathBatch).not.toHaveBeenCalled();
+
+    await expect(resolveLocalPathSmart(href, 'C:\\proj', { refresh: true })).resolves.toEqual(none);
+    expect(resolvePath).toHaveBeenCalledWith({ href: '\\\\nas\\share\\x.pdf', workingDir: 'C:\\proj', refresh: true });
   });
 
   // F3: both IPC paths reach the production host decoder after file URL conversion.

@@ -1,17 +1,19 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(cleanup);
 
 // 每个播放器实例一个编号：同一地址重新加载只能靠重建播放器（失败态绑在实例上）。
+// data-src 与真实播放器一样经 useRemoteMediaUrl(src, sessionId) 得出，是 <video> 实际加载的地址。
 const videoMounts = vi.hoisted(() => ({ count: 0 }));
 vi.mock('../ChatVideoView', () => ({
   ChatVideoView: ({
     src,
     filename,
+    sessionId,
   }: {
     src: string;
     filename: string;
@@ -19,7 +21,8 @@ vi.mock('../ChatVideoView', () => ({
     sessionId?: string;
   }) => {
     const [instance] = useState(() => ++videoMounts.count);
-    return <video data-testid="markdown-video" data-src={src} data-instance={instance} aria-label={filename} />;
+    const displaySrc = useRemoteMediaUrl(src, sessionId);
+    return <video data-testid="markdown-video" data-src={displaySrc} data-instance={instance} aria-label={filename} />;
   },
 }));
 
@@ -44,6 +47,7 @@ vi.mock('../ChatSessionFileContext', async (importOriginal) => ({
 }));
 
 import { parseRemoteMediaUrl } from '../../../../shared/remoteMediaUrl';
+import { useRemoteMediaUrl } from '@/hooks/useRemoteMediaUrl';
 import { _clearSmartResolveCache, toLocalFileUrl } from '@/lib/localPathResolver';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { _clearStreamingMediaKeys } from '../useWorkspaceMediaPath';
@@ -422,6 +426,42 @@ describe('MarkdownRenderer workspace-relative media in local sessions', () => {
     const src = mediaSrc(view.container) ?? '';
     expect(parseRemoteMediaUrl(src)?.origUrl ?? src).toBe(toLocalFileUrl(`/task/${href}`));
     expect(resolvePathBatch).not.toHaveBeenCalled();
+  });
+});
+
+// PR #9780: file://host/share/x names a share on another computer. In a device session the
+// render-time pre-check (chat-file:stat) and media loads must not hand that path to the
+// controlled computer; an explicit click still asks.
+// Minimal inputs: a file://nas link / inline path / image / cindy-ui video and audio.
+describe('MarkdownRenderer file://host targets in device sessions', () => {
+  const share = '\\\\nas\\share\\';
+  const richNode = (kind: 'video' | 'audio', src: string) => '```cindy-ui\n' + JSON.stringify({
+    version: 1, seq: 1, op: 'create', id: 'm', kind, props: { src, alt: 'clip' },
+  }) + '\n```';
+  const renderInDevice = (content: string) => {
+    sessionFile.current = { ...REMOTE_SESSION_FILE, workingDir: 'C:\\proj' };
+    return render(<MarkdownRenderer workingDir="C:\proj" currentSessionId="s1" renderRichAnswers content={content} />);
+  };
+
+  it('does not pre-check a file://host link or inline path, and stats the link on click', async () => {
+    const chatStat = vi.fn(async () => ({ verdict: 'unknown' }));
+    (window as unknown as { electronAPI: unknown }).electronAPI = { fileBrowser: { chatStat } };
+    renderInDevice('[report](file://nas/share/report.pdf) `file://nas/share/a.png`');
+    await act(async () => {});
+    expect(chatStat).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('link', { name: 'report' }));
+    await waitFor(() => expect(chatStat).toHaveBeenCalledWith(expect.objectContaining({ absPath: `${share}report.pdf` })));
+  });
+
+  it.each([
+    ['Markdown image', '![a](file://nas/share/a.png)', 'img', toLocalFileUrl(`${share}a.png`)],
+    ['cindy-ui video', richNode('video', 'file://nas/share/clip.mp4'), '[data-testid="markdown-video"]', toLocalFileUrl(`${share}clip.mp4`)],
+    ['cindy-ui audio', richNode('audio', 'file://nas/share/a.mp3'), 'audio',
+      toLocalFileUrl(`${share}a.mp3`).replace(/^xdt-file:/, 'xdt-audio:')],
+  ])('does not route a file://host %s through the remote media fetch', (_label, content, selector, expected) => {
+    const element = renderInDevice(content).container.querySelector(selector);
+    expect(element?.getAttribute('data-src') ?? element?.getAttribute('src')).toBe(expected);
   });
 });
 

@@ -19,7 +19,7 @@ const verifyPath = vi.fn(async () => undefined);
 const pathBindings = {
   React, useContext: React.useContext, useCallback: React.useCallback, useEffect: React.useEffect, useMemo: React.useMemo, useRef: React.useRef,
   useRowStateHook: () => React.useState, ChatFilePathContext: pathContext,
-  resolveChatAbsPath, toWorkdirRel, canOpenChatPathChip, classifyChatPathLinkTarget, chatPathLabelReadsAsFileReference,
+  resolveChatAbsPath, toWorkdirRel, canOpenChatPathChip, classifyChatPathLinkTarget, chatPathLabelReadsAsFileReference, isUncPathOutsideWorkdir,
   StyleSheet: { flatten: flattenStyle },
   peekRemotePathVerdictForRender: () => 'unknown', peekRemotePathVerdict: () => undefined,
   remotePathVerdictKey: (device: string, workdir: string, path: string) => [device, workdir, path].join('|'),
@@ -68,6 +68,26 @@ describe('production path spans', () => {
     } finally { await act(async () => root.unmount()); }
     expect(verdictListeners.size).toBe(0);
   });
+
+  // 渲染时自动 stat UNC 会让被控 Windows 桌面向消息点名的主机发起 SMB;workdir 自身在共享上时照常验证。
+  // 带 `..` 段的路径字面上以 workdir 开头,被控端规范化后却在 workdir 之外,不能按前缀算作 workdir 内。
+  it.each([
+    ['file://nas/share/x.pdf', 'C:\\proj', 0],
+    ['file://nas/share/proj/../secret.svg', '\\\\nas\\share\\proj', 0],
+    ['C:\\x\\a.pdf', 'C:\\proj', 1],
+    ['src/a.ts', '\\\\srv\\share\\proj', 1],
+  ])('auto-verifies link %s in workdir %s %i time(s)', async (url, workdir, calls) => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    verifyPath.mockClear();
+    const root = createRoot(document.createElement('div'));
+    const SpanText = ({ children }: any) => React.createElement('span', null, children);
+    const context = { deviceId: 'd1', workdir, statPath: vi.fn(), onOpenPath: vi.fn() };
+    try {
+      await act(async () => root.render(React.createElement(pathContext.Provider, { value: context },
+        React.createElement(productionPath.LinkPathChipSpan, { url, display: 'x', styles: pathStyles, SpanText, baseStyle: {} }))));
+      expect(verifyPath).toHaveBeenCalledTimes(calls);
+    } finally { await act(async () => root.unmount()); }
+  });
 });
 
 import {
@@ -78,6 +98,7 @@ import {
   dropDotSegments,
   findBareFilePathMatch,
   isAbsolutePathShape,
+  isUncPathOutsideWorkdir,
   looksLikeBareFileReference,
   looksLikeFilePath,
   pathDisplayName,
@@ -279,6 +300,26 @@ describe('resolveChatAbsPath', () => {
   it('file:// 解包(含 Windows 形态)', () => {
     expect(resolveChatAbsPath('file:///w/a.ts', '/w')).toBe('/w/a.ts');
     expect(resolveChatAbsPath('file:///C:/x/a.ts', 'C:\\proj')).toBe('C:/x/a.ts');
+  });
+
+  // file://host/share/… 曾被剥成 host/share/… 再拼到 workdir 上,远端 stat 到的是 workdir
+  // 里的另一个文件;localhost 与盘符误写 file://C:/ 维持本机路径语义;host 为 `.`/`..`/`?`
+  // (含转义写法)维持旧的解码原文,不得拼出设备命名空间 `\\.\` / `\\?\`。
+  it.each([
+    ['file://nas/share/a%20b.pdf', 'C:\\proj', '\\\\nas\\share\\a b.pdf'],
+    ['file://nas/share/x.pdf', '/w', '\\\\nas\\share\\x.pdf'],
+    ['\\\\nas\\share\\x.pdf', '/w', '\\\\nas\\share\\x.pdf'],
+    ['file://localhost/C:/x/a.ts', 'C:\\proj', 'C:/x/a.ts'],
+    ['file://LOCALHOST/w/a.ts', '/w', '/w/a.ts'],
+    // localhost 不可能指向共享:多余的前导分隔符仍是本机路径,不得变成 //nas。
+    ['file://localhost//nas/share/x.pdf', 'C:\\proj', '/nas/share/x.pdf'],
+    ['file://localhost/\\nas\\share\\x.pdf', 'C:\\proj', '/nas\\share\\x.pdf'],
+    ['file://C:/x/a.ts', 'C:\\proj', 'C:/x/a.ts'],
+    ['file://./docs/a.md', 'C:\\proj', './docs/a.md'],
+    ['file://%2E%2E/a.md', '/w', '../a.md'],
+    ['file://?/C:/x', 'C:\\proj', '?/C:/x'],
+  ])('%s 不拼到 workdir(%s)上', (href, workdir, expected) => {
+    expect(resolveChatAbsPath(href, workdir)).toBe(expected);
   });
 
   it('file:// 含非法百分号序列不 throw,回退原文', () => {
