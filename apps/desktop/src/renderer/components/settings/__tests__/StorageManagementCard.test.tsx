@@ -736,7 +736,9 @@ describe('StorageManagementCard database cleanup', () => {
   it('offers only 7 days, 1 month, 3 months, and 6 months, defaulting to 7 days', async () => {
     render(<StorageManagementCard />);
 
-    await screen.findByText('taskManagement.notChecked');
+    await waitFor(() => expect(
+      screen.getByRole('switch', { name: 'taskManagement.enabled' }).hasAttribute('disabled'),
+    ).toBe(false));
     const threshold = screen.getByRole('combobox', { name: 'settings.about.storage.dbSlimmingArchiveAgeLabel' });
     expect(threshold.textContent).toContain(
       'settings.about.storage.dbSlimmingArchiveAgeOption7Days',

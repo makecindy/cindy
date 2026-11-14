@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -14,48 +14,28 @@ import {
   SettingsSection,
 } from '@/components/ui/settings-rows';
 import { toast } from '@/lib/toast';
-import { subscribeAllDraftPresence } from '@/lib/composerDraftStore';
-import type { TaskArchivePreview, TaskArchiveSettings } from '../../../shared/taskManagement';
+import type { TaskArchiveSettings } from '../../../shared/taskManagement';
 import { taskManagementSettings } from './TaskManagement.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 
 export function TaskManagementSection() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration } = useAuth();
   const enabledField = useSettingDefinition(taskManagementSettings.enabled);
   const daysField = useSettingDefinition(taskManagementSettings.days);
   const [settings, setSettings] = useState<TaskArchiveSettings | null>(null);
-  const [preview, setPreview] = useState<TaskArchivePreview | null>(null);
   const [error, setError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [custom, setCustom] = useState(false);
   const [daysText, setDaysText] = useState('7');
   const generation = useRef(0);
-  const previewRequest = useRef(0);
   const savePending = useRef(false);
   const value = Number(daysText);
   const invalid = custom && (!Number.isInteger(value) || value < 1 || value > 365);
 
-  const refreshPreview = useCallback(async () => {
-    const request = ++previewRequest.current;
-    const owner = generation.current;
-    try {
-      const result = await window.electronAPI.taskManagement.preview();
-      if (request === previewRequest.current && owner === generation.current) {
-        setPreview(result);
-        setError(false);
-      }
-    } catch {
-      if (request === previewRequest.current && owner === generation.current) {
-        setPreview(null);
-        setError(true);
-      }
-    }
-  }, []);
   useEffect(() => {
     const owner = ++generation.current;
     setSettings(null);
-    setPreview(null);
     setError(false);
     setSaving(false);
     setCustom(false);
@@ -66,30 +46,20 @@ export function TaskManagementSection() {
         const result = await window.electronAPI.taskManagement.read();
         if (owner !== generation.current) return;
         setSettings(result);
+        setError(false);
         setDaysText(String(result.days));
         setCustom(![7, 14, 30].includes(result.days));
-        await refreshPreview();
       } catch {
         if (owner === generation.current) setError(true);
       }
     };
     void load();
     const off = window.electronAPI.taskManagement.onChanged(() => void load());
-    const offArchived = window.electronAPI.taskManagement.onArchived((notice) => {
-      if (notice.ownerId === dataOwnerId) void refreshPreview();
-    });
-    const offDrafts = subscribeAllDraftPresence(() => void refreshPreview());
-    // Returning to this window refreshes counts, without resetting an unfinished
-    // custom-days edit. Committed settings changes arrive through onChanged.
-    window.addEventListener('focus', refreshPreview);
     return () => {
       generation.current++;
       off();
-      offArchived();
-      offDrafts();
-      window.removeEventListener('focus', refreshPreview);
     };
-  }, [dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration, refreshPreview]);
+  }, [dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration]);
 
   const save = async (patch: Partial<TaskArchiveSettings> | null) => {
     if (savePending.current || !dataOwnerId) return;
@@ -109,7 +79,7 @@ export function TaskManagementSection() {
         setCustom(false);
       }
       // The host broadcasts the committed rule change to this window too.
-      // Its onChanged handler refreshes the counts once for every save/reset.
+      // Its onChanged handler reloads settings without scanning task counts.
     } catch {
       if (owner === generation.current) toast.error(t('taskManagement.saveFailed'));
     } finally {
@@ -138,29 +108,19 @@ export function TaskManagementSection() {
         </Button>
       }
     >
-      <div className="grid min-w-0 gap-8 xl:grid-cols-2">
-        <SettingsCard>
-          <SettingsRow
-            {...enabledField.anchorProps}
-            title={enabledField.title}
-            hint={enabledField.description}
-            trailing={
-              <Switch
-                {...enabledField.controlProps}
-                aria-label={enabledField.title}
-                checked={settings?.enabled ?? false}
-                disabled={!settings || saving || (invalid && !settings.enabled)}
-                onCheckedChange={(enabled) => void save({ enabled })}
-              />
-            }
-          />
-          <SettingsRow
-            {...daysField.anchorProps}
-            wrap
-            title={daysField.title}
-            hint={daysField.description}
-            trailing={
-              <div className="flex min-w-0 flex-col gap-3">
+      {error && <ErrorNotice message={t('taskManagement.loadFailed')} />}
+      {!error && !settings && (
+        <p className="text-13 text-[var(--text-secondary)]">{t('taskManagement.loading')}</p>
+      )}
+      <SettingsCard>
+        <SettingsRow
+          {...enabledField.anchorProps}
+          wrap
+          title={enabledField.title}
+          hint={enabledField.description}
+          trailing={
+            <div {...daysField.anchorProps} className="flex min-w-0 max-w-full flex-col gap-3">
+              <div className="flex min-w-0 items-center gap-3">
                 <Select
                   {...daysField.controlProps}
                   label={daysField.title}
@@ -178,66 +138,48 @@ export function TaskManagementSection() {
                     void save({ days: Number(choice) });
                   }}
                 />
-                {custom && (
-                  <FormField
-                    label={t('taskManagement.customDays')}
-                    error={invalid ? t('taskManagement.invalidDays') : undefined}
-                  >
-                    {(control) => (
-                      <Input
-                        {...control}
-                        {...daysField.controlProps}
-                        type="number"
-                        min={1}
-                        max={365}
-                        step={1}
-                        inputMode="numeric"
-                        value={daysText}
-                        disabled={saving}
-                        onChange={setDaysText}
-                        onBlur={() => {
-                          if (!invalid && value !== settings?.days) void save({ days: value });
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') event.currentTarget.blur();
-                        }}
-                      />
-                    )}
-                  </FormField>
-                )}
+                <Switch
+                  {...enabledField.controlProps}
+                  aria-label={enabledField.title}
+                  checked={settings?.enabled ?? false}
+                  disabled={!settings || saving || (invalid && !settings.enabled)}
+                  onCheckedChange={(enabled) => void save({ enabled })}
+                />
               </div>
-            }
-          />
-          <SettingsBlock>
-            <p className="text-12 text-[var(--text-secondary)]">
-              {t('taskManagement.archiveHint')}
-            </p>
-          </SettingsBlock>
-        </SettingsCard>
-        <SettingsSection title={t('taskManagement.preview')}>
-          {error && <ErrorNotice message={t('taskManagement.loadFailed')} />}
-          {!error && !preview && (
-            <p className="text-13 text-[var(--text-secondary)]">{t('taskManagement.loading')}</p>
-          )}
-          {preview && (
-            <>
-              <p className="text-20 font-medium" aria-live="polite">
-                {t('taskManagement.candidateCount', { count: preview.candidateCount })}
-              </p>
-              <p className="text-13 text-[var(--text-secondary)]">
-                {t('taskManagement.keptCount', { count: preview.keptCount })}
-              </p>
-              <p className="text-12 text-[var(--text-tertiary)]">
-                {preview.lastCheckAt
-                  ? t('taskManagement.lastCheck', {
-                      date: new Date(preview.lastCheckAt).toLocaleString(i18n.language),
-                    })
-                  : t('taskManagement.notChecked')}
-              </p>
-            </>
-          )}
-        </SettingsSection>
-      </div>
+              {custom && (
+                <FormField
+                  label={t('taskManagement.customDays')}
+                  error={invalid ? t('taskManagement.invalidDays') : undefined}
+                >
+                  {(control) => (
+                    <Input
+                      {...control}
+                      {...daysField.controlProps}
+                      type="number"
+                      min={1}
+                      max={365}
+                      step={1}
+                      inputMode="numeric"
+                      value={daysText}
+                      disabled={saving}
+                      onChange={setDaysText}
+                      onBlur={() => {
+                        if (!invalid && value !== settings?.days) void save({ days: value });
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') event.currentTarget.blur();
+                      }}
+                    />
+                  )}
+                </FormField>
+              )}
+            </div>
+          }
+        />
+        <SettingsBlock>
+          <p className="text-12 text-[var(--text-secondary)]">{t('taskManagement.archiveHint')}</p>
+        </SettingsBlock>
+      </SettingsCard>
     </SettingsSection>
   );
 }

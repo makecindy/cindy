@@ -23,7 +23,7 @@ export default {
     'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: (window.__uiPage.ctx.data.cloud || window.__uiPage.ctx.data.tab === 'billing') ? 'cloud' : 'local', dataOwnerId: 'fixture-account', user: { id: 'fixture-account', name: 'Preview', membershipKind: 'personal' } });` },
   },
   cases: {
-    'archive-search': { about: 'Searching for auto archive opens its controls inside Storage without a Task management tab', data: { tab: 'general', archivePreview: true } },
+    'archive-search': { about: 'Searching for auto archive or idle days opens the inline controls inside Storage', data: { tab: 'general', archiveEnabled: true } },
     'archive-legacy': { about: 'The previous Task management link opens Storage and highlights auto archive', data: { tab: 'storage', routeTab: 'task-management' } },
     'visibility-desktop-commit': { about: 'Desktop visibility previews during a real pointer drag and commits once', data: { tab: 'appearance', previewBackground: 'none', visibility: 0.4 } },
     'visibility-wallpaper-commit': { about: 'Wallpaper visibility has the same preview/commit behavior', data: { tab: 'appearance', previewBackground: 'cindy-window', visibility: 0.4 } },
@@ -75,11 +75,16 @@ export default {
       assert.ok(await panel.getByRole('switch', { name: await ui.t('taskManagement.enabled'), exact: true }).isVisible());
       assert.equal(await page.locator('#settings-tab-task-management').count(), 0);
       await ui.capture('archive-search-target');
+      await search.fill(await ui.t('taskManagement.days'));
+      await page.locator('[id="settings-search-result-task-management.archiveDays"]').click();
+      await page.waitForFunction(() => document.getElementById('settings-task-archive-days')
+        ?.classList.contains('settings-search-target-highlight'));
+      assert.ok(await panel.getByRole('combobox', { name: await ui.t('taskManagement.days'), exact: true }).isVisible());
       return;
     }
     if (ui.data.tab === 'storage') {
       const archive = panel.getByRole('region', { name: await ui.t('taskManagement.archive'), exact: true });
-      await archive.getByText(await ui.t('taskManagement.candidateCount', { count: 30 }), { exact: true }).waitFor();
+      await archive.getByRole('switch', { name: await ui.t('taskManagement.enabled'), exact: true }).waitFor();
       assert.equal(await page.locator('#settings-tab-task-management').count(), 0);
       assert.equal(await page.getByRole('tabpanel').count(), 1);
       const database = panel.getByRole('heading', { name: await ui.t('settings.about.storage.databaseSectionTitle'), exact: true });

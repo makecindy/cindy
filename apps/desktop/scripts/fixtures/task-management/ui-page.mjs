@@ -11,40 +11,45 @@ export default {
   },
   cases: {
     default: {
-      about: 'Opt-in rule, custom days validation, one count refresh per save, and reset',
+      about: 'Inline days and switch, custom days validation and reset without preview scans',
     },
     unavailable: {
-      about: 'A failed preview shows a recoverable error, without fabricated task counts',
+      about: 'Failed settings reads disable controls and recover on the next settings notification',
     },
-    'many-tasks': {
-      about: 'Large archive counts without task rows or list navigation',
+    enabled: {
+      about: 'An enabled rule keeps its days and switch together without an archive preview',
     },
   },
   async check(page, ui) {
-    if (ui.case === 'unavailable') {
-      await page.getByText(await ui.t('taskManagement.loadFailed'), { exact: true }).waitFor();
-      return;
-    }
-    if (ui.case === 'many-tasks') {
-      await page
-        .getByText(await ui.t('taskManagement.candidateCount', { count: 100000 }), { exact: true })
-        .waitFor();
-      await page
-        .getByText(await ui.t('taskManagement.keptCount', { count: 200000 }), { exact: true })
-        .waitFor();
-      // The sole button is settings reset; counts must not allocate task rows or tabs.
-      assert.equal(await page.getByRole('button').count(), 1);
-      return;
-    }
     const toggle = page.getByRole('switch', {
       name: await ui.t('taskManagement.enabled'),
       exact: true,
     });
-    await page
-      .getByText(await ui.t('taskManagement.candidateCount', { count: 0 }), { exact: true })
-      .waitFor();
-    assert.equal(await toggle.getAttribute('aria-checked'), 'false');
     const select = page.getByRole('combobox');
+    if (ui.case === 'unavailable') {
+      await page.getByText(await ui.t('taskManagement.loadFailed'), { exact: true }).waitFor();
+      assert.ok(await toggle.isDisabled());
+      assert.ok(await select.isDisabled());
+      await ui.capture('load-error');
+      await page.evaluate(() => window.archiveFixture.recover());
+      await page.getByText(await ui.t('taskManagement.loadFailed'), { exact: true }).waitFor({ state: 'hidden' });
+    }
+    await page.waitForFunction(() => {
+      const toggle = document.querySelector('[role="switch"]');
+      return toggle && !toggle.disabled;
+    });
+    // User-requested compact settings (browser tier): the real controls share a
+    // line in narrow and wide layouts, and opening/changing rules never scans tasks.
+    const daysBox = await select.boundingBox();
+    const toggleBox = await toggle.boundingBox();
+    assert.ok(Math.abs(daysBox.y + daysBox.height / 2 - toggleBox.y - toggleBox.height / 2) < 1);
+    assert.equal(await page.getByRole('heading', { name: await ui.t('taskManagement.preview'), exact: true }).count(), 0);
+    assert.equal(await page.evaluate(() => window.archiveFixture.previewReads()), 0);
+    if (ui.case !== 'default') {
+      assert.equal(await toggle.getAttribute('aria-checked'), String(ui.case === 'enabled'));
+      return;
+    }
+    assert.equal(await toggle.getAttribute('aria-checked'), 'false');
     await select.click();
     await page
       .getByRole('option', { name: await ui.t('taskManagement.customDays'), exact: true })
@@ -54,24 +59,20 @@ export default {
     await input.press('Tab');
     await page.getByText(await ui.t('taskManagement.invalidDays'), { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => window.archiveFixture.writes.length), 0);
+    assert.ok(await toggle.isDisabled());
     await input.fill('21');
-    const beforeSave = await page.evaluate(() => window.archiveFixture.previewReads());
     await input.press('Tab');
     await page.waitForFunction(() => window.archiveFixture.settings().days === 21);
-    assert.equal(await page.evaluate(() => window.archiveFixture.previewReads()), beforeSave + 1);
+    assert.equal(await page.evaluate(() => window.archiveFixture.writes.length), 1);
     await toggle.click();
     await page.waitForFunction(() => window.archiveFixture.settings().enabled);
-    await page
-      .getByText(await ui.t('taskManagement.candidateCount', { count: 1 }), { exact: true })
-      .waitFor();
+    await ui.capture('custom-days');
     await select.click();
     await page
       .getByRole('option', { name: await ui.t('taskManagement.days7'), exact: true })
       .click();
-    await page
-      .getByText(await ui.t('taskManagement.candidateCount', { count: 2 }), { exact: true })
-      .waitFor();
-    await ui.capture('enabled-counts');
+    await page.waitForFunction(() => window.archiveFixture.settings().days === 7);
+    await ui.capture('enabled-rule');
     await page
       .getByRole('button', { name: await ui.t('taskManagement.reset'), exact: true })
       .click();
@@ -79,8 +80,7 @@ export default {
       () =>
         !window.archiveFixture.settings().enabled && window.archiveFixture.settings().days === 7,
     );
-    await page
-      .getByText(await ui.t('taskManagement.candidateCount', { count: 0 }), { exact: true })
-      .waitFor();
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    assert.equal(await page.evaluate(() => window.archiveFixture.previewReads()), 0);
   },
 };

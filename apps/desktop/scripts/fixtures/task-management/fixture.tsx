@@ -3,12 +3,16 @@ import { TaskManagementSection } from '../../../src/renderer/components/settings
 import type { TaskArchiveSettings } from '../../../src/shared/taskManagement';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../../src/shared/appearanceSettings';
 
-let settings: TaskArchiveSettings = { enabled: ctx.case === 'many-tasks', days: 7 };
+let settings: TaskArchiveSettings = { enabled: ctx.case === 'enabled', days: 7 };
+let unavailable = ctx.case === 'unavailable';
 const writes: unknown[] = [];
 const changed = new Set<() => void>();
 let previewReads = 0;
 Object.assign(window, {
-  archiveFixture: { writes, settings: () => settings, previewReads: () => previewReads },
+  archiveFixture: {
+    writes, settings: () => settings, previewReads: () => previewReads,
+    recover: () => { unavailable = false; changed.forEach((listener) => listener()); },
+  },
 });
 mountPage({
   route: '/settings?tab=storage&section=task-management',
@@ -19,7 +23,10 @@ mountPage({
       onChanged: subscription('appearance'),
     },
     taskManagement: {
-      read: async () => ({ ...settings }),
+      read: async () => {
+        if (unavailable) throw new Error('Fixture settings unavailable');
+        return { ...settings };
+      },
       update: async (patch: Partial<TaskArchiveSettings>) => {
         writes.push(patch);
         settings = { ...settings, ...patch };
@@ -38,18 +45,7 @@ mountPage({
       onArchived: subscription('archive-notice'),
       preview: async () => {
         previewReads++;
-        if (ctx.case === 'unavailable') throw new Error('Fixture preview unavailable');
-        const total = ctx.case === 'many-tasks' ? 300000 : 5;
-        const candidateCount = settings.enabled
-          ? ctx.case === 'many-tasks'
-            ? 100000
-            : [10, 25].filter((days) => days >= settings.days).length
-          : 0;
-        return {
-          candidateCount,
-          keptCount: total - candidateCount,
-          lastCheckAt: null,
-        };
+        throw new Error('Settings must not request archive counts');
       },
     },
   },
