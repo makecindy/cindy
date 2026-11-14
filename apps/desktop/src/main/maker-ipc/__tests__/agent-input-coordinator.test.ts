@@ -7543,6 +7543,66 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     },
   );
 
+  // Test value: #9679's stale Stop completion must wake real coordinator drain;
+  // adjacent stale-abort tests only protect replacement state from being cleared.
+  // Minimal failure: the dispatched replacement is live but idle, the tracker
+  // remains busy, a queued item remains, and the old abort settles. Unit tier: no I/O.
+  it('rechecks a dispatched replacement when the superseded Stop abort settles after its live Pi turn idles', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'stop-abort-stale-replacement-live-idle';
+      const piCreateOpts = {
+        ...makeItem('tmp', 'tmp').createOpts,
+        agentKind: 'pi' as const,
+        providerId: 'openai',
+        model: 'gpt-5.5',
+      };
+      const first = makeItem('q-1', 'first', { createOpts: piCreateOpts });
+      const replacement = makeItem('q-new', 'replacement', { createOpts: piCreateOpts });
+      const queued = makeItem('q-after', 'queued after replacement', {
+        createOpts: piCreateOpts,
+      });
+      const abort = deferred<void>();
+      const beforeDispatch = deferred<void>();
+      h.setAgentKind('pi');
+      h.abortSession.mockImplementationOnce(() => abort.promise);
+      h.beforeDispatchUserTurn.mockImplementationOnce(() => beforeDispatch.promise);
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        return true;
+      });
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      h.coordinator.stop(sid, { keepQueue: false });
+      h.setRunning(false);
+      beforeDispatch.resolve();
+      await flush();
+      h.coordinator.enqueue(sid, replacement);
+      await flush();
+      h.coordinator.enqueue(sid, queued);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+      h.setLiveRunning(false);
+      abort.resolve();
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(3);
+      expect(h.sendToAgent.mock.calls[2]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued after replacement',
+      });
+      expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps Codex queue abort lock until a real turn boundary', async () => {
     const h = createHarness();
     const sid = 'stop-codex';
