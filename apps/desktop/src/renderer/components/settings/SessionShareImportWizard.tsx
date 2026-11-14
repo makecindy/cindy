@@ -26,6 +26,7 @@ import { createLogger } from '@/lib/logger';
 import { emitRefresh } from '@/lib/sessionsBus';
 import { extractIpcError } from '@/utils/ipcError';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
+import appI18n from 'i18next';
 
 const log = createLogger('SessionShareImportWizard');
 
@@ -324,7 +325,7 @@ export function SessionShareImportWizard({
                         ? 'Pi'
                         : 'Codex',
                     count: preview.messageCount,
-                    exportedAt: new Date(preview.exportedAt).toLocaleString(),
+                    exportedAt: new Date(preview.exportedAt).toLocaleString(appI18n.language),
                   })}
                 </p>
                 {preview.orcaWorkerCount > 0 && (

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 
 import {
   boundAgentReferenceText,
@@ -11,7 +11,6 @@ import {
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { getDbClient } from '../localDb/client/current.js';
 import {
-  botDelegations,
   botProfiles,
   botRuntimeSnapshots,
   botSessionLinks,
@@ -30,8 +29,6 @@ export interface AgentInputReferenceHydrationOptions {
   /** Main-owned live turn lookup. null means the runtime cannot be observed. */
   isSessionTurnRunning?: (sessionId: string) => boolean | null;
 }
-
-const ACTIVE_DELEGATION_STATUSES = ['queued', 'running', 'waiting'] as const;
 
 async function readBotHostSnapshot(
   botId: string,
@@ -70,27 +67,15 @@ async function readBotHostSnapshot(
     };
   }
 
-  const [[canonical], activeDelegations] = await Promise.all([
-    db
-      .select({ sessionId: botSessionLinks.sessionId })
-      .from(botSessionLinks)
-      .where(and(
-        eq(botSessionLinks.botId, botId),
-        eq(botSessionLinks.role, 'canonical'),
-        isNull(botSessionLinks.archivedAt),
-      ))
-      .limit(1),
-    db
-      .select({ id: botDelegations.id })
-      .from(botDelegations)
-      .where(and(
-        or(
-          eq(botDelegations.requestingBotId, botId),
-          eq(botDelegations.targetBotId, botId),
-        ),
-        inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES]),
-      )),
-  ]);
+  const [canonical] = await db
+    .select({ sessionId: botSessionLinks.sessionId })
+    .from(botSessionLinks)
+    .where(and(
+      eq(botSessionLinks.botId, botId),
+      eq(botSessionLinks.role, 'canonical'),
+      isNull(botSessionLinks.archivedAt),
+    ))
+    .limit(1);
   const [runtime] = canonical
     ? await db
         .select({ status: botRuntimeSnapshots.status })
@@ -116,12 +101,13 @@ async function readBotHostSnapshot(
     name: profile.name,
     snapshot: {
       availability,
-      activity: liveTurn === true || activeDelegations.length > 0
+      activity: liveTurn === true
         ? 'working'
         : canonical
           ? 'idle'
           : 'unknown',
-      activeDelegations: activeDelegations.length,
+      activeDelegations: 0,
+      ...(canonical ? { mainSessionId: canonical.sessionId } : {}),
       ...(profile.attentionReason
         ? { reason: profile.attentionReason.slice(0, 240) }
         : !canonical

@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import { VideoSitePreview } from './VideoSitePreview';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
 import { splitRichAnswer, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
@@ -166,13 +167,14 @@ function omitMarkdownInternalProps(props: Record<string, unknown>): Record<strin
 
 /**
  * Detect whether a `pre` child element is a `<code className="language-diff">`.
- * Matches both the canonical `language-diff` token and a bare `diff` class
- * for defensive parity.
+ * Matches the canonical `language-diff` / `language-patch` tokens and a bare
+ * `diff` / `patch` class for defensive parity — a ```patch fence is the same
+ * unified diff and renders identically (DESIGN.md §2 diff colours).
  */
 function isDiffCodeChild(child: ReactNode): boolean {
   if (!isValidElement(child)) return false;
   const className = (child.props as { className?: string })?.className ?? '';
-  return /\b(language-)?diff\b/.test(className);
+  return /\b(language-)?(diff|patch)\b/.test(className);
 }
 
 /**
@@ -565,6 +567,7 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
         <button
           type="button"
           onClick={handleCopy}
+          data-chat-copy-exclude
           aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
           className={cn(
             CHAT_ICON_BUTTON_CLASS,
@@ -590,7 +593,7 @@ const baseComponents: Components = {
   // simpler renderer there. See line ~310 for the implementation.
 
   pre({ children, ...props }) {
-    // Intercept ```diff fenced blocks before they fall through to highlight.js
+    // Intercept ```diff / ```patch fenced blocks before they fall through to highlight.js
     // — we render them with our own row/gutter/symbol layout (MarkdownDiffBlock)
     // so the visual matches the Edit-tool DiffView card and the GitHub red/green
     // tokens (`--diff-add-fg` / `--diff-del-fg`) get applied predictably.
@@ -682,7 +685,7 @@ const baseComponents: Components = {
   // Lists
   ul({ children, ...props }) {
     return (
-      <ul className="my-2 ml-6 list-disc space-y-1" {...props}>
+      <ul className="my-2 list-disc space-y-1" {...props}>
         {children}
       </ul>
     );
@@ -690,10 +693,14 @@ const baseComponents: Components = {
 
   ol({ children, ...props }) {
     return (
-      <ol className="my-2 ml-6 list-decimal space-y-1" {...props}>
+      <ol className="my-2 list-decimal space-y-1" {...props}>
         {children}
       </ol>
     );
+  },
+
+  li({ children, ...props }) {
+    return <li dir="auto" {...props}>{children}</li>;
   },
 
   // Paragraphs
@@ -780,7 +787,7 @@ const baseComponents: Components = {
  *   - 已有 base renderer (h1-h6 / p / pre / table / ul / ol / blockquote / hr):
  *     把 lineAttr merge 进 props 后透传给 base 函数。base 内部 spread props 时
  *     data-source-line 自然落到对应 DOM 节点上。
- *   - base 没有的 (li): 直接 createElement 渲染原生 tag。
+ *   - base 没有的: 直接 createElement 渲染原生 tag。
  */
 type BlockTag = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'p' | 'pre' | 'table' | 'ul' | 'ol' | 'li' | 'blockquote' | 'hr';
 
@@ -924,6 +931,7 @@ function LightboxImage({
   return (
     <>
       <button
+        data-chat-image-preview
         type="button"
         aria-label={zoomLabel}
         title={t('chat.media.clickToZoom')}
@@ -1080,6 +1088,7 @@ function FileTargetChip({
   return (
     <>
       <code
+        data-chat-copy-content
         ref={chipRef}
         role="button"
         tabIndex={0}

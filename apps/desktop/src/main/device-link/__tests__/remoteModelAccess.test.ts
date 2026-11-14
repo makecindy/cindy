@@ -4,6 +4,10 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: vi.fn(), ownerScopedUserDataPath: vi.fn() }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
+vi.mock('../../ownerContext.js', () => ({ ownerScopedPath: (name: string) => path.join(root, owner, name) }));
+vi.mock('../../maker-host/logger-adapter.js', () => { const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: () => log }; return { desktopMakerLogger: log, createMakerLogger: () => log }; });
+import { setProviderDisabled } from '../../maker-host/model-disable-store';
+vi.mock('../providerShareAvailabilityPolicy.js', () => ({ withAvailabilityPolicyMutation: (_id: string, work: () => Promise<unknown>) => work() }));
 import * as locks from '../crossProcessLock';
 import { createRemoteModelAccessStore } from '../remoteModelAccess';
 import { isRemoteModelSelection } from '../../../shared/remoteModelAccess';
@@ -18,6 +22,25 @@ beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-remote-mo
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('remote model permissions', () => {
+  // Unit regression: a persisted local disable must veto remote grants without rewriting
+  // either choice. Existing tests covered remote model subsets, not provider suspension.
+  it('preserves an existing disable across reload, denies owner/guest/delegated calls, and recovers on enable', () => {
+    fs.mkdirSync(path.dirname(filePath()), { recursive: true });
+    const prefs = path.join(root, owner, 'model-disable-prefs.json');
+    const original = JSON.stringify({ disabledProviders: { p: true }, disabledModels: {} });
+    fs.writeFileSync(prefs, original);
+    const store = make();
+    const permissions = () => [store.allows('p', 'large'), store.allows('p', 'large', 'alice'),
+      store.allowsDelegatedExecution('p', 'large', 'alice')];
+    expect(permissions()).toEqual([false, false, false]);
+    expect(make().allows('p', 'large')).toBe(false);
+    expect(fs.readFileSync(prefs, 'utf8')).toBe(original);
+    expect(store.allows('q', 'large')).toBe(true);
+    setProviderDisabled('p', false);
+    expect(permissions()).toEqual([true, true, true]);
+    setProviderDisabled('p', true);
+    expect(permissions()).toEqual([false, false, false]);
+  });
   it('keeps legacy access and future models open, distinguishes an empty grant, and restores inherited defaults', async () => {
     const store = make();
     expect(store.allows('p', 'future')).toBe(true);

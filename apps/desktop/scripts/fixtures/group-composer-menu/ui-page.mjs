@@ -43,9 +43,10 @@ export default {
   entry: './fixture.tsx',
   viewport: { width: 680, height: 420 },
   real: 'BotGroupComposer, shared dropdown menu, menu labels/highlight, product fonts, themes and translations',
-  notCovered: 'Sending, attachment IO/preview, plans, account state and server operations',
+  notCovered: 'Audio capture, native voice shortcuts, sending, attachment IO/preview, plans, account state and server operations',
   // No attachment is present; preview imports need Vite's ?url loader, which this builder lacks.
   stubs: {
+    'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";',
     'src/renderer/components/new-chat/ComposerAttachments': 'export const AttachmentRejectionStrip = () => null; export const ThumbnailStrip = () => null;',
   },
   cases: {

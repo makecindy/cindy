@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ambiguousBotGroupMentionLabels,
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
-  hasAmbiguousBotGroupMentions,
   insertBotGroupMention,
   resolveBotGroupMentions,
   retainBotGroupTrackedMentions,
@@ -25,13 +25,13 @@ const members = [
 
 describe('resolveBotGroupMentions', () => {
   // #9419, unit: the production resolver must retain old drafted labels when the opt-in changes,
-  // without sending to a namesake who joined while the draft was open.
+  // while preserving main's priority for an exact current display name.
   it('resolves old owner labels but never claims a label belonging to another member', () => {
     const helper = { botId: 'helper', name: 'Helper', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true, actorKind: 'bot' as const };
     expect(resolveBotGroupMentions('@Helper (Alex) hello', { members: [helper], allLabels: [] }).botIds).toEqual(['helper']);
     const actual = { botId: 'person', name: 'Helper (Alex)', actorKind: 'human' as const };
-    expect(resolveBotGroupMentions('@Helper (Alex) hello', { members: [helper, actual], allLabels: [] }).botIds).toEqual([]);
-    expect(hasAmbiguousBotGroupMentions('@Helper (Alex) hello', { members: [helper, actual], allLabels: [] })).toBe(true);
+    expect(resolveBotGroupMentions('@Helper (Alex) hello', { members: [helper, actual], allLabels: [] }).botIds).toEqual(['person']);
+    expect(ambiguousBotGroupMentionLabels('@Helper (Alex) hello', { members: [helper, actual], allLabels: [] })).toEqual([]);
     expect(resolveBotGroupMentions('@Helper (Alex) hello', { members: [helper, actual], allLabels: [],
       tracked: [{ botId: 'person', label: 'Helper (Alex)', start: 0 }] }).botIds).toEqual(['person']);
   });
@@ -42,21 +42,21 @@ describe('resolveBotGroupMentions', () => {
       { botId: 'two', name: 'Helper (Sam)', displayName: 'Helper', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true, actorKind: 'bot' as const },
     ];
     expect(resolveBotGroupMentions('@Helper please', { members: roster, allLabels: [] }).botIds).toEqual([]);
-    expect(hasAmbiguousBotGroupMentions('@Helper please', { members: roster, allLabels: [] })).toBe(true);
+    expect(ambiguousBotGroupMentionLabels('@Helper please', { members: roster, allLabels: [] })).toEqual(['Helper']);
     expect(resolveBotGroupMentions('@Helper please', { members: roster, allLabels: [], tracked: [{ botId: 'one', label: 'Helper', start: 0 }] }).botIds).toEqual(['one']);
-    expect(hasAmbiguousBotGroupMentions('@Helper please', { members: roster, allLabels: [], tracked: [{ botId: 'one', label: 'Helper', start: 0 }] })).toBe(false);
+    expect(ambiguousBotGroupMentionLabels('@Helper please', { members: roster, allLabels: [], tracked: [{ botId: 'one', label: 'Helper', start: 0 }] })).toEqual([]);
     expect(resolveBotGroupMentions('@Helper (Sam) please', { members: roster, allLabels: [] }).botIds).toEqual(['two']);
     expect(resolveBotGroupMentions('@Helper please', { members: [{ botId: 'one', name: 'Helper (Alex)', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true }], allLabels: [] }).botIds).toEqual(['one']);
   });
 
   // #9419, unit: after the preference is turned off, a short name already typed in a draft
-  // must still resolve; when that name is shared, it must require an explicit pick.
+  // must still resolve; an exact current name retains main's priority over aliases.
   it('keeps short drafts safe when the group preference is turned off', () => {
     const helper = { botId: 'one', name: 'Helper (Alex)', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: false };
     expect(resolveBotGroupMentions('@Helper please', { members: [helper], allLabels: [] }).botIds).toEqual(['one']);
     const human = { botId: 'human', name: 'Helper', actorKind: 'human' as const };
-    expect(hasAmbiguousBotGroupMentions('@Helper please', { members: [helper, human], allLabels: [] })).toBe(true);
-    expect(resolveBotGroupMentions('@Helper please', { members: [helper, human], allLabels: [] }).botIds).toEqual([]);
+    expect(ambiguousBotGroupMentionLabels('@Helper please', { members: [helper, human], allLabels: [] })).toEqual([]);
+    expect(resolveBotGroupMentions('@Helper please', { members: [helper, human], allLabels: [] }).botIds).toEqual(['human']);
     expect(resolveBotGroupMentions('@Helper please', { members: [{ botId: 'one', name: 'Helper (Alex)' }], allLabels: [] }).botIds).toEqual([]);
   });
 
@@ -71,7 +71,7 @@ describe('resolveBotGroupMentions', () => {
     const tracked = [{ botId: 'alex', label: 'Helper', start: 0 }];
     const input = { members: roster, allLabels: [], tracked };
     expect(resolveBotGroupMentions(draft, input).botIds).toEqual(['alex']);
-    expect(hasAmbiguousBotGroupMentions(draft, input)).toBe(false);
+    expect(ambiguousBotGroupMentionLabels(draft, input)).toEqual([]);
     expect(retainBotGroupTrackedMentions(draft, `${draft}!`, { ...input, editStart: draft.length })).toEqual(tracked);
     expect(resolveBotGroupMentions(draft, { members: roster, allLabels: [] }).botIds).toEqual(['sam']);
     expect(retainBotGroupTrackedMentions(draft, draft, { ...input, editStart: 0, editEnd: 7 })).toEqual([]);
@@ -129,6 +129,30 @@ describe('resolveBotGroupMentions', () => {
     expect(resolveBotGroupMentions('@Cindy hi', { members: renamed, allLabels: [] }).botIds).toEqual([]);
   });
 
+  // Incident 2026-11-13 (unit regression): someone typed @Cindy for the group's own Cindy and
+  // Chris's companion 「Cindy (Chris)」 answered too, because a typed name addressed every member
+  // sharing it. User decision: one @ names one identity; a still-shared name names nobody.
+  it('names one identity per typed @: the full name wins over a short name, and a shared name names nobody', () => {
+    const roster = [
+      { botId: 'chris-cindy', name: 'Cindy (Chris)', displayName: 'Cindy' },
+      { botId: 'group-cindy', name: 'Cindy', displayName: 'Cindy' },
+      { botId: 'alex-cindy', name: 'Cindy (Alex Chen)', displayName: 'Cindy' },
+    ];
+    const input = { members: roster, allLabels: [] };
+    expect(resolveBotGroupMentions('@Cindy 看下，@Cindy (Chris) 也看下', input).botIds).toEqual(['group-cindy', 'chris-cindy']);
+    expect(ambiguousBotGroupMentionLabels('@Cindy 看下', input)).toEqual([]);
+    // Without a member whose full name is 「Cindy」 the short name is shared by two companions.
+    const companions = { members: [roster[0]!, roster[2]!], allLabels: [] };
+    expect(resolveBotGroupMentions('@Cindy 看下 @Cindy (Alex Chen)', companions).botIds).toEqual(['alex-cindy']);
+    expect(ambiguousBotGroupMentionLabels('@Cindy 看下 @Cindy (Alex Chen)', companions)).toEqual(['Cindy']);
+    expect(splitBotGroupRelaySteps('@Cindy 出方案', companions)).toBeNull();
+    expect(splitBotGroupRelaySteps('@Cindy 出方案', input)).toEqual([{ botId: 'group-cindy', task: '出方案' }]);
+    // A pick settles it for that token only.
+    const tracked = [{ botId: 'chris-cindy', label: 'Cindy', start: 0 }];
+    expect(resolveBotGroupMentions('@Cindy @Cindy', { ...companions, tracked }).botIds).toEqual(['chris-cindy']);
+    expect(ambiguousBotGroupMentionLabels('@Cindy', { ...companions, tracked })).toEqual([]);
+  });
+
   it('prefers the longest name and uses tracked picks only to split duplicates', () => {
     const duplicates = [
       { botId: 'a', name: '小满' },
@@ -136,7 +160,7 @@ describe('resolveBotGroupMentions', () => {
       { botId: 'c', name: '小满满' },
     ];
     expect(resolveBotGroupMentions('@小满满 在吗', { members: duplicates, allLabels: [] }).botIds).toEqual(['c']);
-    expect(resolveBotGroupMentions('@小满 在吗', { members: duplicates, allLabels: [] }).botIds).toEqual(['a', 'b']);
+    expect(resolveBotGroupMentions('@小满 在吗', { members: duplicates, allLabels: [] }).botIds).toEqual([]);
     expect(
       resolveBotGroupMentions('@小满 在吗', {
         members: duplicates,

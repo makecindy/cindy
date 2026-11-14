@@ -49,7 +49,7 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-function setup(options: { bot?: { canonicalSessionId: string | null } | null } = {}) {
+function setup(options: { bot?: { canonicalSessionId: string | null; scopeKey?: string } | null } = {}) {
   const store = {
     list: () => storage.list(),
     read: (filename: string) => storage.read(filename),
@@ -60,8 +60,9 @@ function setup(options: { bot?: { canonicalSessionId: string | null } | null } =
   } as unknown as MakerMemoryStore;
   const timers: Array<() => void> = [];
   const requestRefresh = vi.fn(async () => true);
+  const getStore = vi.fn(async (_scopeKey: string) => store);
   const service = createBotMemoryService({
-    getStore: async () => store,
+    getStore,
     readBot: async () => (options.bot === undefined ? { canonicalSessionId: 'session-1' } : options.bot),
     requestRefresh,
     setTimer: (callback) => {
@@ -73,7 +74,7 @@ function setup(options: { bot?: { canonicalSessionId: string | null } | null } =
     },
   });
   const flushTimers = () => timers.splice(0).forEach((run) => run());
-  return { service, store, requestRefresh, flushTimers };
+  return { service, store, requestRefresh, flushTimers, getStore };
 }
 
 describe('bot memory service', () => {
@@ -88,6 +89,16 @@ describe('bot memory service', () => {
         preview: '回复前主动核实事实。 没有核实的内容标注待验证； 已有证据可以复用。',
       }),
     ]);
+  });
+
+  // 依据：项目模式伙伴的记忆在项目里；缺口：设置页仍读旧的 bot: 记忆。tier：unit。
+  it('reads a project-mode teammate\'s memory from its project', async () => {
+    const { service, getStore } = setup({ bot: { canonicalSessionId: 'session-1', scopeKey: '/bots/bot-1/workspace' } });
+    await service.list('bot-1');
+    expect(getStore).toHaveBeenCalledWith('/bots/bot-1/workspace');
+    const classic = setup();
+    await classic.service.list('bot-1');
+    expect(classic.getStore).toHaveBeenCalledWith('bot:bot-1');
   });
 
   it('searches through the store and skips internal or vanished hits', async () => {
@@ -322,6 +333,22 @@ describe('cloud companion restore', () => {
     await expect(storage.read('user_tea.md')).rejects.toMatchObject({ code: 'not-found' });
     flushTimers();
     expect(requestRefresh).toHaveBeenCalledWith('session-1');
+  });
+
+  it('restores a legacy double-prefixed shard on an empty destination', async () => {
+    const { service } = setup();
+    await service.restoreRaw('bot-1', 'project_project-legacy-note.md', '---\ntitle: Legacy\n---\nold body');
+    expect((await storage.read('project_project-legacy-note.md')).body).toBe('old body');
+  });
+
+  it('restores a legacy name even when a single-prefixed alias exists', async () => {
+    const { service } = setup();
+    await storage.write({ type: 'project', name: 'legacy-note', title: 'Local', description: 'd', body: 'local body' });
+
+    await service.restoreRaw('bot-1', 'project_project-legacy-note.md', '---\ntitle: Legacy\n---\nold body');
+
+    expect((await storage.read('project_project-legacy-note.md')).body).toBe('old body');
+    expect((await storage.read('project_legacy-note.md')).body).toBe('local body');
   });
 
   it('rejects filenames outside the memory naming rule', async () => {

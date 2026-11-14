@@ -39,6 +39,34 @@ export const DEVICE_LINK_CAPABILITY_GITHUB_READ_V1 = 'github-read-v1';
 /** transport ACK 使用普通 push 承载，且 ACK 本身永不再包 transport。 */
 export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = '__cindy/device-link/transport-ack';
 
+/**
+ * 本端（作为数据发送端）能解析紧凑 ACK，并容忍累计 ACK 最多延后
+ * TRANSPORT_DELAYED_ACK_MS：
+ * - 紧凑 ACK：同一 channel，payload 为 `{ s: streamId 前 12 位, a: ackSeq, l?: linkRequestId 前 12 位 }`。
+ *   控制端在整条链路存续期间都在普通 ACK 上附带链路确认的 request id（确认帧丢失时的兜底），
+ *   所以 l 也要缩短；接收方按前缀核对；
+ * - 延后 ACK：接收端攒到 TRANSPORT_DELAYED_ACK_MESSAGES 条或 32 KiB 才立即确认，否则
+ *   延后一个短窗口合并成一条。重发间隔不低于 2 s，延后远小于它。
+ * 只有对端声明了它，接收端才对其发紧凑 / 延后 ACK；链路确认 ACK 永远立即发送。
+ */
+export const DEVICE_LINK_CAPABILITY_TRANSPORT_ACK_V2 = 'transport-ack-v2';
+/** 紧凑 ACK 里 streamId 前缀的长度（UUID 前 12 位，约 44 bit，足以区分同一对端的前后两代 stream）。 */
+export const TRANSPORT_ACK_STREAM_PREFIX_CHARS = 12;
+/** 延后 ACK 的合并窗口。 */
+export const TRANSPORT_DELAYED_ACK_MS = 200;
+/**
+ * 累计到这么多条就立即确认，不等窗口。与立即模式的批量 ACK 相同（2 条）：只把每轮交付末尾的
+ * 那个零头延后。被控端 dispatch 按可靠队列深度设了软上限（活动镜像 8、文本增量 16），延后 ACK
+ * 让队列多挂几条就会改变它的整流时机（基准里 4 条时电脑控制端的历史读取时间点发生偏移）。
+ */
+export const TRANSPORT_DELAYED_ACK_MESSAGES = 2;
+/**
+ * 累计到这么多字节就立即确认。取交付速度估算门槛（64 KiB）的一半：发送端按含包装的字节计，
+ * 被延后的 ACK 在它那边也到不了 64 KiB；另外凡是覆盖过被延后消息的 ACK 都带 delayed 标记，
+ * 发送端不拿它们估 RTT 与交付速度。
+ */
+export const TRANSPORT_DELAYED_ACK_BYTES = 32 * 1024;
+
 /** 分片目标大小；给 JSON envelope 的路由头和 wrapper 留出足够余量。 */
 export const MAX_TRANSPORT_CHUNK_BYTES = 128 * 1024;
 /** 单条逻辑消息最多允许的分片数。 */
@@ -201,6 +229,10 @@ export interface TransportAckPayload {
   ackSeq: number;
   /** 处理 link-accept 后回显其 request id；缺省表示普通累计 ACK / 旧客户端。 */
   linkRequestId?: string;
+  /** 紧凑 ACK（transport-ack-v2）：streamId 与 linkRequestId 都只是前缀，按前缀匹配。 */
+  streamPrefix?: true;
+  /** transport-ack-v2：这条 ACK 覆盖过被有意延后的消息，发送端不拿它估 RTT 与交付速度。 */
+  delayed?: true;
 }
 
 export interface TransportSkipPayload {
@@ -406,6 +438,8 @@ export function makeTransportAck(
   streamId: string,
   ackSeq: number,
   linkRequestId?: string,
+  compact = false,
+  delayed = false,
 ): Envelope {
   return {
     v: PROTOCOL_VERSION,
@@ -413,11 +447,20 @@ export function makeTransportAck(
     dst,
     payload: {
       channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
-      payload: {
-        streamId,
-        ackSeq,
-        ...(linkRequestId ? { linkRequestId } : {}),
-      } satisfies TransportAckPayload,
+      payload: compact
+        ? {
+            s: streamId.slice(0, TRANSPORT_ACK_STREAM_PREFIX_CHARS),
+            a: ackSeq,
+            ...(linkRequestId ? { l: linkRequestId.slice(0, TRANSPORT_ACK_STREAM_PREFIX_CHARS) } : {}),
+            ...(delayed ? { d: 1 } : {}),
+          }
+        : {
+            streamId,
+            ackSeq,
+            ...(linkRequestId ? { linkRequestId } : {}),
+            // 只有声明了 transport-ack-v2 的对端会收到被延后的 ACK，旧端看不到这个字段。
+            ...(delayed ? { delayed: true as const } : {}),
+          } satisfies TransportAckPayload,
     },
   };
 }
@@ -426,6 +469,16 @@ export function parseTransportAck(env: Envelope): TransportAckPayload | null {
   if (env.kind !== 'push' || !isRecord(env.payload)) return null;
   if (env.payload.channel !== DEVICE_LINK_TRANSPORT_ACK_CHANNEL) return null;
   const payload = env.payload.payload;
+  if (isRecord(payload) && payload.streamId === undefined && typeof payload.s === 'string') {
+    // 紧凑 ACK（transport-ack-v2）。只有声明了能力的本端会收到。
+    const prefix = payload.s;
+    const seq = payload.a;
+    const link = payload.l;
+    if (prefix.length < 8 || prefix.length > 128 || typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0) return null;
+    if (link !== undefined && (typeof link !== 'string' || link.length < 8 || link.length > 128)) return null;
+    return { streamId: prefix, ackSeq: seq, streamPrefix: true, ...(link !== undefined ? { linkRequestId: link } : {}),
+      ...(payload.d === 1 ? { delayed: true as const } : {}) };
+  }
   const streamId = isRecord(payload) ? payload.streamId : undefined;
   const ackSeq = isRecord(payload) ? payload.ackSeq : undefined;
   const linkRequestId = isRecord(payload) ? payload.linkRequestId : undefined;
@@ -443,6 +496,7 @@ export function parseTransportAck(env: Envelope): TransportAckPayload | null {
     return null;
   }
   return {
+    ...(isRecord(payload) && payload.delayed === true ? { delayed: true as const } : {}),
     streamId,
     ackSeq,
     ...(typeof linkRequestId === 'string' ? { linkRequestId } : {}),

@@ -17,11 +17,11 @@ import path from 'node:path';
 
 import type { AttachmentIntegrity } from '@cindy/device-link';
 
-import * as blobStore from '../cindy-media/blobStore.js';
+import * as blobStore from '../cindy-media/blobStore.desktop.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { removeRemote } from '../device-link/mediaTransfer.js';
+import { removeRemote } from '../device-link/mediaTransfer.desktop.js';
 import {
   materializeRemoteAttachment,
   parseRemoteAttachmentRef,

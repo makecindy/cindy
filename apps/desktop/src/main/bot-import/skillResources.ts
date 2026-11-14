@@ -6,6 +6,7 @@ import type { CompanionEnvironment } from './environment.js';
 import type { ImportFile } from './types.js';
 import { writeImportFiles } from './files.js';
 import { redactEnvironmentValues } from './process.js';
+import { materializeSkillArchive } from './skillArchive.js';
 
 /** Keep executable originals private; never publish their known credentials to a harness. */
 export function projectImportedSkill(files: readonly ImportFile[], slug: string, secrets: Record<string, string>) {
@@ -40,14 +41,25 @@ export function projectImportedSkill(files: readonly ImportFile[], slug: string,
 export async function withImportedSkillResources<T>(environment: CompanionEnvironment, assertOwner: () => void,
   run: (env: Record<string, string>) => Promise<T>): Promise<T> {
   const skills = Object.entries(environment.skillFiles ?? {});
-  if (!skills.length) return run(environment.env);
+  const archives = Object.entries(environment.skillArchives ?? {});
+  if (!skills.length && !archives.length) return run(environment.env);
   assertOwner();
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-skills-'));
   try {
     assertOwner();
-    await writeImportFiles(directory, skills.flatMap(([slug, files]) => files.map(file => ({
-      ...file, name: `${slug}/${file.name}`, bytes: Buffer.from(file.bytes, 'base64'),
-    }))));
+    for (const [slug, files] of skills) for (const file of files) {
+      assertOwner();
+      await writeImportFiles(directory, [{ ...file, name: `${slug}/${file.name}`, bytes: Buffer.from(file.bytes, 'base64') }]);
+    }
+    if (archives.length) {
+      const { companionEnvironmentStore } = await import('./runtime.js');
+      for (const [slug, ref] of archives) {
+        if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new Error('Invalid imported skill');
+        const root = path.join(directory, slug);
+        await fs.mkdir(root, { mode: 0o700 });
+        await materializeSkillArchive(ref, root, companionEnvironmentStore, {}, assertOwner, false);
+      }
+    }
     assertOwner();
     return await run({ ...environment.env, CINDY_IMPORTED_SKILLS: directory });
   } finally { await fs.rm(directory, { recursive: true, force: true }); }

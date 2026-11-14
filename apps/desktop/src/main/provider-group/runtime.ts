@@ -11,6 +11,7 @@ import { createLocalAgentLoadRegistry } from '../local-agent/load.js';
 import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps } from '@cindy/device-link';
 import { app } from 'electron';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
+import type { ProviderView } from '@cindy/model-providers';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -21,13 +22,13 @@ import {
 } from '../../shared/providerGroup.js';
 import { captureProviderShareGroupRecovery, getReceivedShares } from '../device-link/providerShareGuest.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
-import { remoteBackgroundInvoke, getDeviceLinkStatus, getRemoteLinkCloseEpoch, getSelfDeviceId, hasOfflineDirectPath } from '../device-link/index.js';
+import { onRemotePushChannel, remoteBackgroundInvoke, getDeviceLinkStatus, getRemoteLinkCloseEpoch, getSelfDeviceId, hasOfflineDirectPath } from '../device-link/index.js';
 import { captureProviderMetadataContinuityScope, isTemporaryProviderMetadataFailure } from '../device-link/providerMetadataContinuity.js';
 import { isMobilePlatform } from '../device-link/controllerPlatform.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { readDeviceProviderCatalog, readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
-import { listProviderGroupBindings } from './bindings.js';
+import { listProviderGroupBindings } from './bindings.desktop.js';
 import { readProviderGroupCooling, writeProviderGroupCooling } from './coolingStore.js';
 import { createProviderGroupDirectory, type ProviderGroupCatalogRead, type ProviderGroupDirectory } from './directory.js';
 import { createProviderGroupExternalLoad, type ProviderGroupExternalLoad } from './externalLoad.js';
@@ -36,7 +37,7 @@ import { captureProviderManagementScope } from './managementScope.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
-import { readSubscriptionPoolUsage } from '../subscription-accounts/runtime.js';
+import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability } from '../subscription-accounts/runtime.js';
 import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { createGroupContinuityClient } from './continuityClient.js';
 import { createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, type ProviderGroupCodexUsageSnapshot } from './usage.js';
@@ -50,6 +51,7 @@ interface OwnerRuntime {
 }
 
 let current: OwnerRuntime | null = null;
+let accountPushSubscribed = false;
 let applicationLoadListener: ((sessionId: string) => void) | null = null;
 let isTurnRunning: (sessionId: string) => boolean = () => false;
 let localLoad: (() => Promise<ReadonlyMap<string, number>>) | null = null;
@@ -59,12 +61,32 @@ let codexUsageReader: ((providerId: string) => Promise<unknown>) | null = null;
 let codexRateLimitsReader: ((providerId: string) => Promise<unknown>) | null = null;
 
 function runtimeForActiveOwner(): OwnerRuntime {
+  if (!accountPushSubscribed) {
+    accountPushSubscribed = true;
+    onSubscriptionAccountsChanged(() => {
+      if (current?.owner === activeOwnerScopeKey()) current.directory.invalidate();
+    });
+    onRemotePushChannel((deviceId, channel) => {
+      if (channel === 'subscription-accounts:changed' && current?.owner === activeOwnerScopeKey())
+        current.directory.invalidate(deviceId);
+    });
+  }
   const owner = activeOwnerScopeKey();
   if (current?.owner === owner) return current;
   type PoolQuota = Awaited<ReturnType<typeof readSubscriptionPoolUsage>>;
+  // Use the owning computer's provider metadata: a named subscription may own a pool,
+  // while an unregistered legacy connection still uses its existing single-account reader.
+  const poolProviders = new Map<string, Set<string>>();
+  const rememberPools = (deviceId: string, providers: ProviderView[]) => {
+    poolProviders.set(deviceId, new Set(providers.filter(provider =>
+      provider.subscriptionPool || provider.subscriptionAccountPool).map(provider => provider.id)));
+    return providers;
+  };
+  const hasPool = (providerId: string, deviceId = '') =>
+    isSubscriptionProvider(providerId) || poolProviders.get(deviceId)?.has(providerId) === true;
   const poolQuotaReads = new Map<string, { at: number; result: Promise<PoolQuota> }>();
   const readPoolQuota = async (providerId: string, deviceId?: string) => {
-    if (!isSubscriptionProvider(providerId)) return undefined;
+    if (!hasPool(providerId, deviceId)) return undefined;
     if (!deviceId) return readSubscriptionPoolUsage(providerId);
     const key = `${deviceId}:${providerId}`;
     const cached = poolQuotaReads.get(key);
@@ -156,12 +178,17 @@ function runtimeForActiveOwner(): OwnerRuntime {
     });
   };
   const directory = createProviderGroupDirectory({
-    listLocalProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
+    listLocalProviders: async () => rememberPools('', await getDesktopProviderService().listProviders({ allowSideEffects: false })),
     localDeviceName: () => deviceName(),
     localAppVersion: () => app.getVersion(),
     listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
-    readDeviceProviders: (agentDeviceId, options) => readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live }),
-    readDeviceProviderCatalog: (agentDeviceId, options) => readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live }),
+    readDeviceProviders: async (agentDeviceId, options) => rememberPools(agentDeviceId,
+      await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live })),
+    readDeviceProviderCatalog: async (agentDeviceId, options) => {
+      const catalog = await readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live });
+      rememberPools(agentDeviceId, catalog.views);
+      return catalog;
+    },
     listReceivedShares: () => getReceivedShares(),
     isMobilePlatform: (platform) => isMobilePlatform(platform),
     localRunning: async (providerId) => (await readProviderRunningTurnsByProvider())?.get(providerId) ?? null,
@@ -171,7 +198,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
       return mergeCodexUsage(account, limits);
     },
     peekCodexUsage: (member) => mergeCodexUsage(codexUsage.peek(member), codexLimits.peek(member)),
-    invalidateUsage: () => { usage.invalidate(); codexUsage.invalidate(); codexLimits.invalidate(); },
+    invalidateUsage: () => { poolQuotaReads.clear(); usage.invalidate(); codexUsage.invalidate(); codexLimits.invalidate(); },
     now: () => Date.now(),
     mono: () => performance.now(),
   });
@@ -179,6 +206,20 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const applicationLoad = createLocalAgentLoadRegistry();
   const router = createProviderGroupRouter({
     directory,
+    readPoolModelAvailability: async (member, model, options) => {
+      if (activeOwnerScopeKey() !== owner || !hasPool(member.providerId, member.agentDeviceId ?? '')) return null;
+      if (member.kind === 'local') return readSubscriptionPoolModelAvailability(member.providerId, model, options);
+      if (member.kind !== 'device' || !member.agentDeviceId) return null;
+      const result = await remoteBackgroundInvoke(member.agentDeviceId, 'maker:subscription-pool:quota', [member.providerId, model], {
+        preSend: () => { if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed'); },
+      });
+      if (activeOwnerScopeKey() !== owner || !result.ok) return null;
+      const raw = result.result as { providerId?: unknown; model?: unknown; available?: unknown } | null;
+      // Old peers ignore the model argument; their aggregate quota cannot prove
+      // that this model has an alternative account. Never inspect guest pools.
+      return raw?.providerId === member.providerId && raw.model === model && typeof raw.available === 'boolean'
+        ? raw.available : null;
+    },
     readCaps: async (member) => {
       if (activeOwnerScopeKey() !== owner) throw new Error('The account changed');
       const reply = await remoteBackgroundInvoke(member.agentDeviceId!, REMOTE_AGENT_CHANNEL, [{ op: 'caps' }]);
@@ -429,6 +470,7 @@ export async function readProviderGroupOfSession(sessionId: string): Promise<Pro
 export interface ProviderGroupSessionRebalance {
   suggest(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
   decide(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  preference(sessionId: string, enabled: boolean): Promise<boolean>;
 }
 
 let sessionRebalance: ProviderGroupSessionRebalance | null = null;
@@ -455,6 +497,12 @@ export async function recordProviderGroupRebalanceDecision(sessionId: string, me
   } catch {
     return false;
   }
+}
+
+/** 任务偏好由所属电脑保存；失败不伪报成功。 */
+export async function setProviderGroupRebalancePreference(sessionId: string, enabled: boolean): Promise<boolean> {
+  if (!sessionRebalance) return false;
+  return sessionRebalance.preference(sessionId, enabled);
 }
 
 /** register 装配会话表后注入：这台电脑上每个供应商正在运行一轮的任务数(localLoad.ts)。 */

@@ -23,12 +23,13 @@ import {
   restoreTaskImageRows,
   taskImageRoots,
 } from '../taskImageDelivery';
-import { resolveSafe } from '../blobStore';
+import { resolveSafe } from '../blobStore.desktop';
 import * as ledger from '../ledger';
 import { commitMessageMediaRefs } from '../chatAttachments';
 import { createHash } from 'node:crypto';
+import { dataOwnerStorageKey } from '../../dataOwnerPath';
 import { ingestMedia } from '../ingest';
-import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal';
+import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal.desktop';
 import { materializeLocalMarkdownImages } from '../../im/shared/localMarkdownImages';
 import { collectOutboundAttachments } from '../../hook-control/outbound';
 import {
@@ -45,7 +46,7 @@ const state = vi.hoisted(() => ({
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: () => (state.valid ? 'cloud:test-owner:1' : 'cloud:other-owner:2'),
-  dataOwnerStorageKey: (id: string) => (id === 'test-owner' ? 'a' : 'b').repeat(20),
+  dataOwnerStorageKey: (id: string) => dataOwnerStorageKey(id),
   getActiveAppSession: () => ({ dataOwnerId: state.valid ? 'test-owner' : 'other-owner' }),
   isAppSessionBoundaryPending: () => false,
 }));
@@ -446,7 +447,7 @@ describe('task image delivery', () => {
       const journalDir = path.join(
         state.root,
         'owners',
-        'a'.repeat(20),
+        dataOwnerStorageKey('test-owner'),
         'cindy-media',
         'ref-compensation-v1',
       );
@@ -459,7 +460,7 @@ describe('task image delivery', () => {
       expect(record.refIds).not.toContain((priorRefs[0] as { id: string }).id);
       expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 2 });
       for (const call of remove.mock.calls) expect(call[1]).toBe(client.drizzle);
-      await expect(fs.stat(path.join(state.root, 'owners', 'b'.repeat(20)))).rejects.toMatchObject({
+      await expect(fs.stat(path.join(state.root, 'owners', dataOwnerStorageKey('other-owner')))).rejects.toMatchObject({
         code: 'ENOENT',
       });
       remove.mockRestore();

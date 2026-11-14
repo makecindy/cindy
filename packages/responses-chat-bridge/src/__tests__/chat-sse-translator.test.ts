@@ -347,6 +347,39 @@ describe('ChatSseTranslator', () => {
     expect(out.filter((e) => e.type === 'response.completed')).toEqual([]);
   });
 
+  it('restores a reserved functions call without a namespace', () => {
+    const toolContext = ChatBridgeToolContext.fromRequest({
+      model: 'm',
+      input: [{
+        type: 'additional_tools',
+        role: 'developer',
+        tools: [{
+          type: 'namespace',
+          name: 'functions',
+          tools: [{ type: 'function', name: 'read', parameters: { type: 'object' } }],
+        }],
+      }],
+    });
+    const translator = new ChatSseTranslator('m', { toolContext });
+    const out = [
+      ...translator.push({
+        id: 'chatcmpl_fn',
+        choices: [{
+          delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'read', arguments: '{"path":"a"}' } }] },
+          finish_reason: 'tool_calls',
+        }],
+      }),
+      ...translator.finish(),
+    ] as Array<Record<string, unknown>>;
+    const item = out
+      .filter(event => event.type === 'response.output_item.done')
+      .map(event => (event as { item: Record<string, unknown> }).item)
+      .find(entry => entry.type === 'function_call');
+
+    expect(item).toMatchObject({ call_id: 'c1', name: 'read' });
+    expect(item).not.toHaveProperty('namespace');
+  });
+
   it('restores custom, namespace, and tool-search calls from Chat function deltas', () => {
     const toolContext = ChatBridgeToolContext.fromRequest({
       model: 'm',

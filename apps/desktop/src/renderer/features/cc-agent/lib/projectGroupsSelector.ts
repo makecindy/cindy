@@ -73,7 +73,6 @@ function sameOptions(a: GroupSessionsOptions, b: GroupSessionsOptions): boolean 
     a.includeDraftsInProjects === b.includeDraftsInProjects &&
     a.provisionalDraftTaskId === b.provisionalDraftTaskId &&
     a.localPlatform === b.localPlatform &&
-    a.botOwnerBySessionId === b.botOwnerBySessionId &&
     samePersistentProjects(a.persistentLocalProjects, b.persistentLocalProjects)
   );
 }
@@ -81,7 +80,7 @@ function sameOptions(a: GroupSessionsOptions, b: GroupSessionsOptions): boolean 
 /** One previous projection per hook; no global cache or retained session history.
  * Timestamp/preview/spend updates replace the affected row in its existing group.
  * All other changes use the canonical algorithm, including draft time fallback,
- * identity, pinning, aliases, bot ownership and remote connection state.
+ * identity, pinning, aliases and remote connection state.
  */
 export function createProjectGroupsSelector() {
   let previous:
@@ -132,7 +131,6 @@ export function createProjectGroupsSelector() {
                 pinned: replaceRows(previous.result.pinned),
                 dialogues: replaceRows(previous.result.dialogues),
                 unclassified: replaceRows(previous.result.unclassified),
-                bots: replaceGroups(previous.result.bots),
                 projects: replaceGroups(previous.result.projects),
               };
       }

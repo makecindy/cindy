@@ -56,6 +56,13 @@ export const PI_MODEL_APIS = [
 ] as const;
 export type PiModelApi = (typeof PI_MODEL_APIS)[number];
 
+/** Standalone async video APIs a custom connection can opt into, independent of its chat protocol. */
+export const PROVIDER_VIDEO_APIS = ["xai-videos", "minimax-videos", "openai-videos"] as const;
+export type ProviderVideoApi = (typeof PROVIDER_VIDEO_APIS)[number];
+export function isProviderVideoApi(value: unknown): value is ProviderVideoApi {
+  return (PROVIDER_VIDEO_APIS as readonly unknown[]).includes(value);
+}
+
 /**
  * Cindy 自带鉴权的订阅账号家族(ChatGPT / Claude / SuperGrok)。新增订阅家族只在这里加一项:
  * 各端按家族读取账号余量的入口都以 `Record<NativeSubscriptionAuth, …>` 声明,漏接会直接
@@ -204,7 +211,7 @@ export interface RoutingDescriptor {
   /** Explicit standalone image API; independent of chat wire and Codex hosted tools. */
   imageApi?: "openai-images";
   /** Explicit standalone async video API, independent of the chat protocol. */
-  videoApi?: "xai-videos";
+  videoApi?: ProviderVideoApi;
   /** Enterprise BYOK image model binding used by the Codex Images route. */
   imageModel?: { wireModel: string; litellmModel: string; supportsEdit: boolean };
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
@@ -383,6 +390,8 @@ export interface CatalogModel {
   sortOrder?: number;
   /** 上下文窗口（tokens）。该 agent 下的权威值(host 派生进 ModelDescriptor.contextWindow)。 */
   contextWindow: number;
+  /** Host-owned explicit working budget. Kept separate from the catalog default for settings. */
+  contextWindowOverride?: number;
   /** Provider-declared maximum before a per-harness recommended window is applied. */
   contextWindowMax?: number;
   /**
@@ -577,6 +586,11 @@ export interface Provider {
    * （anthropic / openai / xai 现状）。
    */
   auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: NativeSubscriptionAuth };
+  /**
+   * 2026-11-13：Cindy 为订阅账号新建的供应商（单独供应商或用户合并出的同类供应商），沿用该内置订阅
+   * （`openai` / `anthropic`）的路由与模型，账号由本机账号池按该供应商自己的账号分配。旧端忽略。
+   */
+  subscriptionPool?: 'openai' | 'anthropic';
   /** 用户使用该供应商时的额度来源；旧目录可缺省，由 source 从 bundled 同 id 条目补齐。 */
   access?: ProviderAccess;
   /**
@@ -824,7 +838,7 @@ export interface CustomProviderRuntimeConfig {
   supportsImageGeneration?: boolean;
   /** Opt-in to standalone OpenAI Images generation/edits on this runtime's connection. */
   imageApi?: "openai-images";
-  videoApi?: "xai-videos";
+  videoApi?: ProviderVideoApi;
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */
   models: ProviderRuntimeModelConfig[];
   /**

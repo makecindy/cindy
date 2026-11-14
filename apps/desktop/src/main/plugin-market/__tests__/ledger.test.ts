@@ -59,6 +59,27 @@ function sameNameNamespaceHarness(rootInstalled = true) {
 }
 
 describe('PluginMarketLedger', () => {
+  // PB97, unit: list projection repeats three ledger reads per plugin. A scan
+  // snapshot must keep precise namespace/invalid semantics and detect changes.
+  it('shares source facts for one listing and detects ledger changes before publication', () => {
+    const { filePath, ledger } = sameNameNamespaceHarness();
+    const read = vi.spyOn(fs, 'readFileSync');
+    try {
+      const snapshot = ledger.createListingLookup();
+      const reads = read.mock.calls.length;
+      expect(snapshot.lookup({ ghostId: 'helper', namespace: null })).toMatchObject({ kind: 'found', record: { namespace: null } });
+      expect(snapshot.lookup({ ghostId: 'helper', namespace: 'acme' })).toMatchObject({ kind: 'found', record: { namespace: 'acme' } });
+      expect(snapshot.lookup({ ghostId: 'missing', namespace: null })).toEqual({ kind: 'absent' });
+      expect(read.mock.calls.length).toBe(reads);
+      expect(snapshot.isCurrent()).toBe(true);
+      const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      raw.installations.helper.sha256 = 42;
+      fs.writeFileSync(filePath, JSON.stringify(raw));
+      expect(snapshot.isCurrent()).toBe(false);
+      expect(ledger.createListingLookup().lookup({ ghostId: 'helper', namespace: null })).toEqual({ kind: 'invalid' });
+      expect(ledger.lookupInstallationForAuthorization({ ghostId: 'helper', namespace: null })).toEqual({ kind: 'invalid' });
+    } finally { read.mockRestore(); }
+  });
   // Unit/performance: one synchronous registry scan must not read three ledgers
   // per installed plugin. The next scan must still observe a changed ledger.
   it('shares migration ledger reads within a scan without retaining stale authority', () => {

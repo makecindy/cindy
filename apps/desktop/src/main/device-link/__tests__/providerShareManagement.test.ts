@@ -4,8 +4,9 @@ vi.mock('../providerShareAvailabilityUsage.js', () => ({ flushStandbyUsage: stan
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ipcMain } from 'electron';
+import { ipcMain, type BrowserWindow } from 'electron';
 import { PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL, REMOTE_AGENT_CHANNEL, type InvokeResultPayload,
   type ProviderShareOwned, type ProviderShareReceived } from '@cindy/device-link';
 
@@ -14,17 +15,28 @@ import type { ProviderUsageHistoryView } from '../../../shared/providerShare';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
 const state = vi.hoisted(() => ({ owner: 'owner-a', boundaryPending: false }));
+const windowRouting = vi.hoisted(() => ({
+  windows: [] as BrowserWindow[], focusMain: vi.fn(), notifications: [] as EventEmitter[],
+}));
+vi.mock('../../deepLink.js', () => ({ focusMainWindow: windowRouting.focusMain }));
+vi.mock('../../notificationService.js', () => ({ getDesktopNotificationsEnabled: () => true }));
 const received = vi.hoisted(() => ({ shares: [] as ProviderShareReceived[], ready: true }));
 vi.mock('electron', () => ({
   app: { getPath: () => 'test-provider-share-user-data' },
   ipcMain: { handle: vi.fn() },
-  BrowserWindow: { getAllWindows: () => [] },
-  Notification: class { show() {} },
+  BrowserWindow: { getAllWindows: () => windowRouting.windows },
+  Notification: class extends EventEmitter {
+    static isSupported() { return true; }
+    constructor() { super(); windowRouting.notifications.push(this); }
+    show() { this.emit('show'); }
+  },
 }));
 const api = vi.hoisted(() => ({ createLink: vi.fn(), approve: vi.fn(), reject: vi.fn(), setMember: vi.fn() }));
 const host = vi.hoisted(() => ({
   refresh: vi.fn(), snapshot: vi.fn(), quiet: vi.fn(), active: vi.fn(), decision: vi.fn(), member: vi.fn(),
+  complete: vi.fn(), changed: vi.fn(),
 }));
+const accessMigration = vi.hoisted(() => ({ ids: vi.fn(), keep: vi.fn() }));
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
@@ -50,12 +62,14 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: state.owner, ownerGeneration: 1 }),
 }));
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
-vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
 }));
-vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true, onRemoteProviderAccessChanged: () => () => undefined }));
+vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true,
+  onRemoteProviderAccessChanged: () => () => undefined,
+  sharedProviderIdsForRevert: accessMigration.ids, keepSharedProvidersOpen: accessMigration.keep }));
 vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: remember }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
@@ -78,7 +92,7 @@ vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
     acknowledgeDirectCleanup: usageStores.acknowledgeDirectCleanup }),
   providerUsageLocalDay: () => '2026-10-17',
 }));
-vi.mock('../settings-store.js', () => ({ onDeviceLinkSettingChanged: () => () => undefined, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
+vi.mock('../settings-store.desktop.js', () => ({ onDeviceLinkSettingChanged: () => () => undefined, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: api,
   fetchIdentityCard: identityCard,
@@ -86,7 +100,7 @@ vi.mock('../providerShareApi.js', () => ({
   providerShareLinkFor: () => 'https://cindy.app/s#test-link',
   providerShareOwnerKey: () => state.owner,
 }));
-vi.mock('../dispatch.js', () => ({
+vi.mock('../dispatch.desktop.js', () => ({
   notifyProviderShareCatalogChanged: fastPolicy.publish,
   getControllerDisplayName: vi.fn(), providerShareActiveControllers: vi.fn(),
   revalidateRemoteModelAccess: vi.fn(async () => undefined), revokeProviderShareControllers: vi.fn(async () => undefined), setProviderShareAccess: vi.fn(),
@@ -97,6 +111,8 @@ vi.mock('../providerShareReshare.js', async (importOriginal) => ({
 }));
 vi.mock('../providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(), stopProviderShareHost: vi.fn(),
+  getProviderShareHostLoadedSnapshot: () => null, getProviderShareHostCompleteSnapshot: host.complete,
+  onProviderShareHostChanged: host.changed,
   refreshProviderShareHost: host.refresh, getProviderShareHostSnapshot: host.snapshot,
   clearProviderShareRequestQuiet: vi.fn(),
   providerShareAccessRevision: vi.fn(), providerShareGuestAccess: vi.fn(), ownedProviderShareGuestAccess: vi.fn(),
@@ -118,6 +134,7 @@ vi.mock('../providerShareGuestPrefs.js', () => ({ configureProviderShareGuestPre
 vi.mock('../providerShareGuestPrefsIpc.js', () => ({ setProviderShareCredentialConsentFromIpc: vi.fn() }));
 
 import {
+  openProviderShareJoin,
   executeProviderShareManagementCommand,
   parseProviderShareCommand,
   registerProviderShareIpc,
@@ -125,13 +142,14 @@ import {
   stopProviderShareRuntime,
   trimProviderUsageHistory,
 } from '../providerShareRuntime';
+import { markAppContentWindow } from '../../windowFocusClassifier';
 import { startProviderShareHost } from '../providerShareHost';
 import { startProviderShareGuest } from '../providerShareGuest';
 import { setBroadcastTapListener } from '../broadcast-tap';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
 import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
-import { revokeProviderShareControllers } from '../dispatch';
+import { revokeProviderShareControllers } from '../dispatch.desktop';
 import {
   clearAllProviderShareCatalogs,
   getCachedProviderShareCatalogs,
@@ -161,6 +179,9 @@ function saveMemberNote(entry: 'local' | 'same-account'): Promise<unknown> {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  windowRouting.windows = [];
+  windowRouting.notifications = [];
+  windowRouting.focusMain.mockReturnValue(true);
   state.owner = 'owner-a';
   state.boundaryPending = false;
   usageStores.actual = null;
@@ -174,6 +195,8 @@ beforeEach(() => {
   api.reject.mockResolvedValue({ ok: true });
   api.setMember.mockResolvedValue({ status: 'removed' });
   host.refresh.mockResolvedValue(undefined);
+  host.complete.mockReturnValue(null);
+  host.changed.mockReturnValue(() => undefined);
   memberNotes.read.mockReturnValue({});
   memberNotes.set.mockResolvedValue(undefined);
   modelAccess.read.mockReturnValue({ models: null, providerModels: null });
@@ -196,6 +219,83 @@ beforeEach(() => {
 });
 
 afterEach(() => { setBroadcastTapListener(null); stopProviderShareRuntime(); });
+
+// #10398 review / unit: content deduplication must not strand the one-time access
+// migration. Existing startup tests always had an incomplete snapshot. Exercise
+// the actual runtime subscription across unavailable local input and a failed write.
+it('retries unfinished access migration on unchanged refreshes and stops after success', async () => {
+  stopProviderShareRuntime();
+  const refreshed = new Set<() => void>();
+  host.changed.mockImplementation((listener, options) => {
+    if (options?.refreshed) refreshed.add(listener);
+    return () => refreshed.delete(listener);
+  });
+  const refresh = () => { for (const listener of refreshed) listener(); };
+  startProviderShareRuntime(vi.fn());
+  expect(accessMigration.keep).not.toHaveBeenCalled();
+  host.complete.mockReturnValue([{ providerId: 'openai' }]);
+  accessMigration.ids.mockReturnValue(null); // Legacy account pool cannot be read yet.
+  refresh();
+  expect(accessMigration.keep).not.toHaveBeenCalled();
+  const ids = new Set(['openai', 'legacy-account']);
+  accessMigration.ids.mockReturnValue(ids);
+  accessMigration.keep.mockRejectedValueOnce(new Error('synthetic unavailable'));
+  refresh(); refresh();
+  expect(accessMigration.keep).toHaveBeenCalledExactlyOnceWith(ids);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  accessMigration.keep.mockResolvedValue(undefined);
+  refresh();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  refresh(); refresh();
+  expect(accessMigration.keep).toHaveBeenCalledTimes(2);
+  expect(accessMigration.ids).toHaveBeenCalledTimes(3);
+  stopProviderShareRuntime();
+  expect(refreshed.size).toBe(0);
+});
+
+// #9437 / unit: real share entry points must not show the first hidden data host.
+// Earlier management coverage always returned no BrowserWindows. The shared
+// deepLink suite separately verifies restoration/focus of the registered main window.
+function backgroundWindow(focused = false): BrowserWindow {
+  return {
+    isDestroyed: () => false, isMinimized: () => false, isVisible: () => true,
+    isFocused: () => focused, restore: vi.fn(), show: vi.fn(), focus: vi.fn(), setAlwaysOnTop: vi.fn(),
+  } as unknown as BrowserWindow;
+}
+
+it.each([true, false])('routes invitation activation to main without touching a helper (main available: %s)', (available) => {
+  const helper = backgroundWindow();
+  windowRouting.windows = [helper];
+  windowRouting.focusMain.mockReturnValue(available);
+  openProviderShareJoin('cindy://provider-share/join?test=synthetic');
+  expect(helper.show).not.toHaveBeenCalled();
+  expect(helper.focus).not.toHaveBeenCalled();
+  expect(windowRouting.focusMain).toHaveBeenCalledOnce();
+});
+
+it.each(['background', 'helper-focused', 'app-focused'] as const)(
+  'keeps receipt passive and only notification activation focuses main (%s)', async (foreground) => {
+    const helper = backgroundWindow(foreground === 'helper-focused');
+    const main = backgroundWindow(foreground === 'app-focused');
+    markAppContentWindow(main);
+    windowRouting.windows = [helper, main];
+    const callbacks = vi.mocked(startProviderShareHost).mock.calls.at(-1)![0];
+    callbacks.requested({
+      requestId: 'synthetic', displayName: 'Test', avatarUrl: null, region: 'global', pairingCode: '4827',
+      createdAt: '2026-11-09T00:00:00Z', expiresAt: '2026-11-10T00:00:00Z',
+    }, { shareId: 'synthetic', hostDeviceId: 'host-device', providerId: 'test', providerLabel: 'Test', createdAt: '', members: [], requests: [] }, false);
+    expect(windowRouting.focusMain).not.toHaveBeenCalled();
+    if (foreground === 'app-focused') {
+      expect(windowRouting.notifications).toHaveLength(0);
+    } else {
+      await vi.waitFor(() => expect(windowRouting.notifications).toHaveLength(1));
+      windowRouting.notifications[0].emit('click');
+      expect(windowRouting.focusMain).toHaveBeenCalledOnce();
+    }
+    expect(helper.show).not.toHaveBeenCalled();
+    expect(helper.focus).not.toHaveBeenCalled();
+  },
+);
 
 // #8010 review / unit: real runtime callbacks must reach the device-link tap,
 // not just local windows. Existing management tests only observed local delivery.
@@ -272,6 +372,9 @@ it('propagates a per-share provider denial as an empty zero-budget catalog and k
   expect(producerById.get('a')?.catalog).toEqual({ providers: [],
     providerContinuity: { stale: true, remainingMs: 0 } });
   expect((producerById.get('b')?.catalog as { providers?: unknown[] } | null)?.providers).toHaveLength(1);
+  expect(producerById.get('b')).toMatchObject({
+    favoriteSource: { shareId: 'b', memberId: 'm-b', providerId: 'anthropic', owner: { region: 'global' } },
+  });
   expect(producerById.get('c')?.catalog).toBeNull();
   expect(producerById.get('d')?.catalog).toEqual({ providers: [],
     providerContinuity: { stale: true, remainingMs: 0 } });

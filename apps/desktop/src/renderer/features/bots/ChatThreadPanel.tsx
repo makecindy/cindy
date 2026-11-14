@@ -1,3 +1,7 @@
+import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
+import { BotGroupProgressStrip, BotGroupSpeakerInteraction, type BotGroupLiveSpeaker } from './BotGroupLiveStatus';
+import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
 import { botGroupFormerOwnerLabel, botGroupFormerShortLabel } from '@cindy/maker-shared/botGroupMentions';
 /**
@@ -28,6 +32,7 @@ import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import {
   botGroupMemberDisplayName,
   botGroupOwnedBotNames,
@@ -44,6 +49,17 @@ import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
+/** Unconfirmed rich replies keep their operation id across panel remounts, isolated by account. */
+const richReplyAttempts = { owner: getDataOwnerGeneration().dataOwnerId, ids: new Map<string, string>() };
+function richReplyClientId(key: string): string {
+  const owner = getDataOwnerGeneration().dataOwnerId;
+  if (richReplyAttempts.owner !== owner) { richReplyAttempts.owner = owner; richReplyAttempts.ids.clear(); }
+  const clientId = richReplyAttempts.ids.get(key) ?? crypto.randomUUID();
+  richReplyAttempts.ids.delete(key);
+  richReplyAttempts.ids.set(key, clientId);
+  if (richReplyAttempts.ids.size > 256) richReplyAttempts.ids.delete(richReplyAttempts.ids.keys().next().value!);
+  return clientId;
+}
 const STICK_TO_BOTTOM_PX = 48;
 /** Earlier pages read while looking for a reply opened from the main chat. */
 const FOCUS_PAGE_LIMIT = 5;
@@ -168,7 +184,11 @@ export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: st
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
+export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, canStopAll = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
+  speakers?: BotGroupLiveSpeaker[];
+  onStop?: (scope?: 'all') => void;
+  stopping?: boolean;
+  canStopAll?: boolean;
   group: BotGroupDetail; rootId: string; quoteSources?: readonly BotGroupMessageView[];
   /** A reply to bring into view; a new nonce repeats the jump. */
   focus?: { messageId: string; nonce: number } | null;
@@ -180,6 +200,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   resize?: ThreadPanelResize;
 }) {
   const { t, i18n } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates();
   const locale = i18n.language;
   const shareScope = `bot-group:${group.id}:thread:${rootId}`;
   const readLocatedMention = useReadLocatedMention(group.id);
@@ -445,7 +466,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 
   const members = group.members;
   const mentionLabels = useMemo(
-    () => [t('bots.groupChat.mention.all'), t('bots.groupChat.mention.allBots'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name, botGroupFormerOwnerLabel(member) || '', botGroupFormerShortLabel(member) || ''])],
+    () => [t('bots.groupChat.mention.all'), t('bots.groupChat.mention.allBots'), ...BOT_GROUP_BOT_BROADCAST_LABELS, ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name, botGroupFormerOwnerLabel(member) || '', botGroupFormerShortLabel(member) || ''])],
     [members, t],
   );
   const memberById = useMemo(() => new Map(members.map((member) => [member.botId, member])), [members]);
@@ -571,6 +592,24 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     return result;
   };
   const onSent = useCallback(() => { refreshRef.current(); refreshBotGroups(); }, []);
+  // A component reply belongs to this thread; the composer's “also send” choice and draft stay intact.
+  const sendRichAnswer = async (text: string, sourceMessageId: string) => {
+    if (readOnly || sharing) return false;
+    const owner = getDataOwnerGeneration();
+    const attemptKey = JSON.stringify([group.id, rootId, sourceMessageId, text]);
+    const input = { text, clientId: richReplyClientId(attemptKey), mentions: { all: false, botIds: [] } };
+    onSendStart({ ...input, attachments: [], quote: null });
+    try {
+      const result = await api().reply({ groupId: group.id, rootId, ...input });
+      if (!isDataOwnerGenerationCurrent(owner)) return false;
+      onSendSettled(input.clientId, result.ok ? { ok: true, messageId: result.messageId } : { ok: false });
+      if (result.ok) { richReplyAttempts.ids.delete(attemptKey); onSent(); }
+      return result.ok;
+    } catch {
+      if (isDataOwnerGenerationCurrent(owner)) onSendSettled(input.clientId, { ok: false });
+      return false;
+    }
+  };
 
   // Follow new replies while the reader is at the bottom, including content that grows later.
   const lastKey = replyRows[replyRows.length - 1]?.id ?? '';
@@ -592,7 +631,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 
   const renderRow = (message: BotGroupTimelineMessage, continued: boolean) => {
     const member = message.authorBotId ? memberById.get(message.authorBotId) : undefined;
-    const authorName = (member && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
+    const authorName = (member && !member.assistant && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
     const owned = message.authorKind === 'user' && message.isSelf === false ? botGroupOwnedBotNames(member, members).join(separator) : '';
     const shared = message.id !== root?.id && !message.pending ? sharedState(message.id) : null;
     const onReveal = shared?.shareId ? () => revealShare(shared.shareId!) : undefined;
@@ -601,6 +640,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       : { key: 'post-to-main', label: t(key('thread.postToMain')), disabled: posting.has(message.id), icon: <MessageSquareShare size={14} strokeWidth={2} className="shrink-0" />, onSelect: () => void postToMain(message.id, false) };
     return (
       <BotGroupTimelineItem
+        pluginUi={pluginUi}
         message={message}
         continued={continued}
         authorName={authorName}
@@ -611,6 +651,8 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         locale={locale}
         shareScope={shareScope}
         sharing={sharing}
+        readOnly={readOnly}
+        onRichSend={text => sendRichAnswer(text, message.id)}
         reactionGroupId={group.id}
         readersEnabled={group.supportsMessageReaders === true}
         reactionRevision={messageReactionRevision(group, message.id)}
@@ -638,6 +680,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     if (!wasFollowing && stickToBottomRef.current) refreshRef.current();
   };
 
+  const stopSpeaker = interleaveBotGroupWork([], speakers).at(-1)?.value;
   return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
@@ -650,7 +693,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
               </Tip>
             ) : null}
         </>}>
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
+        <div ref={scrollRef} onCopy={copyChatSelection} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
           onClickCapture={processScroll.onClickCapture}
           onWheel={event => navigateTimeline(() => processScroll.onWheel(event))}
           onKeyDown={event => navigateTimeline(() => processScroll.onKeyDown(event))}
@@ -665,17 +708,27 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
               {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
             </ThreadPanelRoot>
             {hasMore && <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>}
-            {replyRows.map(message => (
-              <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
+            {interleaveBotGroupWork(replyRows, sharing ? [] : speakers).map((entry, index, timeline) => {
+              if (entry.kind === 'work') {
+                const speaker = entry.value;
+                return <Fragment key={`work:${speaker.executionId ?? speaker.member.botId}`}>
+                  <BotGroupProgressStrip step={null} speakers={[speaker]} onStop={onStop} stopping={stopping}
+                    canStop={group.round.canStop} canStopAll={canStopAll} showStop={speaker === stopSpeaker}
+                    stopPending={stopping || speakers.every(item => item.stopping || item.executionStatus === 'stopping')} />
+                  <BotGroupSpeakerInteraction speaker={speaker} />
+                </Fragment>;
+              }
+              const message = entry.value;
+              return <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {message.id === firstNewId ? (
                   <div data-testid="bot-group-thread-new-replies" className="mt-3 flex select-none items-center gap-3 text-12 font-medium text-[var(--text-primary)]">
                     <span className="flex shrink-0 items-center gap-1.5"><span aria-hidden className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]" />{t(key('thread.newSeparator'))}</span>
                     <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
                   </div>
                 ) : null}
-                {renderRow(message, firstNewId === message.id ? false : layout.get(message.id)?.continued ?? false)}
-              </Fragment>
-            ))}
+                {renderRow(message, timeline[index - 1]?.kind !== 'work' && firstNewId !== message.id && (layout.get(message.id)?.continued ?? false))}
+              </Fragment>;
+            })}
           </div>
         </div>
         {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"

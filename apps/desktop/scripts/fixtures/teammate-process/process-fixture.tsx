@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { BotAvatar } from '../../../src/renderer/features/bots/BotAvatar';
 import { ThreadPanel } from '../../../src/renderer/features/bots/ThreadPanel';
 import { useState } from 'react';
@@ -6,6 +7,7 @@ import { MessageStream } from '../../../src/renderer/components/chat/MessageStre
 import type { ChatMessage } from '../../../src/renderer/lib/makerChatStore';
 import { Button } from '../../../src/renderer/components/ui/button';
 import { WorkGroupBlock } from '../../../src/renderer/components/chat/WorkGroupBlock';
+import { shareSelectionStore } from '../../../src/renderer/components/chat/shareSelectionStore';
 import { readSendFollowCancelGeneration, tryRequestFollowLatest } from '../../../src/renderer/components/chat/autoFollowIntent';
 const text = (clientId: string, content: string, phase?: 'commentary' | 'final_answer'): ChatMessage => ({
   clientId, role: 'assistant', content, assistantPhase: phase, createdAt: new Date(Date.now() - 47000).toISOString(),
@@ -88,7 +90,7 @@ function RefreshingProcess({ running }: { running: boolean }) {
       <Button data-testid="refresh-end" onClick={() => setLoading(false)}>Finish loading</Button>
       <Button data-testid="refresh-fail" onClick={() => { setLoading(false); setFailed(true); }}>Fail loading</Button>
     </div>
-    <WorkGroupBlock journal blockId="refreshing-process" isStreaming={running} durationMs={25000}
+    <WorkGroupBlock pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} journal blockId="refreshing-process" isStreaming={running} durationMs={25000}
       childItems={[{ kind: 'rendered', key: 'note', renderNode: () => <p>正在核对任务进展。</p> }]}
       deferred={{ key: 'details', expanded: true, loading, failed,
         toggle: () => undefined, retry: () => { setFailed(false); setLoading(true); } }} />
@@ -100,23 +102,72 @@ const disclosureHistory: ChatMessage[] = Array.from({ length: 8 }, (_, index) =>
   { ...text(`history-answer-${index}`, '记录已经核对。\n\n已完成的内容保持可查，未完成的事项继续跟进。', 'final_answer'), turnCompleted: true },
 ]).flat();
 
-function Subject({ done, retry, artifactCase, refresh, disclosure }: { done: boolean; retry: boolean; artifactCase?: string; refresh?: boolean; disclosure?: boolean }) {
+// Production stream, synthetic media/host only: these four independent card
+// paths used to start in the portrait column rather than the reply column.
+function ReplyColumns({ ordinary }: { ordinary: boolean }) {
+  const rows: ChatMessage[] = [
+    { ...text('columns-user', 'Prepare the deliverables.'), role: 'user' },
+    { ...text('columns-media', ''), role: 'tool_use', toolName: 'imagegen', toolUseId: 'columns-media' },
+    { ...text('columns-media-result', JSON.stringify({
+      xdt_image_urls: ['xdt-image://fixture/model.png', 'xdt-image://fixture/poster.png'],
+      _xdt_model_files: [{ provider: 'cindy', url: `cindy-media://blobs/${'a'.repeat(64)}.glb`, format: 'GLB' }],
+      xdt_video_url: 'xdt-video://fixture/clip.webm',
+      xdt_audio_tracks: [
+        { kind: 'music', xdt_audio_url: 'xdt-audio://fixture/music.wav', title: 'Fixture music' },
+        { kind: 'sound_effect', xdt_audio_url: 'xdt-audio://fixture/effect.wav', title: 'Fixture sound' },
+      ],
+    })), role: 'tool_result', toolUseId: 'columns-media' },
+    { ...text('columns-plan', ''), role: 'tool_use', toolName: 'update_plan', toolUseId: 'columns-plan', toolInput: { plan: [
+      { step: 'Inspect the files', status: 'completed' }, { step: 'Prepare the report', status: 'in_progress' },
+    ] } },
+    { ...text('columns-plan-result', 'Plan updated'), role: 'tool_result', toolUseId: 'columns-plan' },
+    { ...text('columns-agent', ''), role: 'tool_use', toolName: 'Agent', toolUseId: 'columns-agent',
+      toolInput: { description: 'Fixture background task', prompt: 'Check the files.' } },
+    { ...text('columns-app', ''), systemCardType: 'mcp-app', systemCardData: {
+      title: 'Fixture App', fallbackText: 'Saved fixture result.',
+    } },
+    { ...text('columns-answer', 'The deliverables are ready.', 'final_answer'), turnCompleted: true },
+  ];
+  return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
+    <div data-ui-page-control>
+      <Button data-testid="columns-select" onClick={() => shareSelectionStore.enter('columns-fixture')}>Select</Button>
+      <Button data-testid="columns-exit-select" onClick={() => shareSelectionStore.exit()}>Exit selection</Button>
+    </div>
+    <MessageStream workingDir="/repo" historyLoaded sessionId="columns-fixture" messages={rows}
+      assistantAvatar={ordinary ? undefined : <BotAvatar bot={{ name: 'Cindy', avatar: 'cindy://avatar/preset/cindy' }} size="sm" />}
+      simplifiedBotConversation={!ordinary} contentWidth={720} />
+  </div>;
+}
+
+function Subject({ done, retry, artifactCase, refresh, disclosure, switched, columns, ordinary, unread }: { done: boolean; retry: boolean; switched?: boolean; artifactCase?: string; refresh?: boolean; disclosure?: boolean; columns?: boolean; ordinary?: boolean; unread?: boolean }) {
   const [finished, setFinished] = useState(done);
   const [revision, setRevision] = useState(0);
-  const rows = retry ? retryMessages : messages;
+  const rows = retry ? retryMessages : switched ? [...messages.slice(0, 7), { ...text('model-switch', ''), systemCardType: 'agent-switch' as const, systemCardData: { modelOnly: true, fromModel: 'quota-test', toModel: 'gpt-6.1-sol', fromAgentKind: 'pi', toAgentKind: 'codex' } }, ...messages.slice(7)] : messages;
+  if (columns) return <ReplyColumns ordinary={ordinary === true} />;
   if (refresh) return <RefreshingProcess running={!done} />;
   if (artifactCase) return <ArtifactStream artifactCase={artifactCase} />;
   return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
     <div className="self-end p-2" data-ui-page-control><Button onClick={() => setFinished(true)} data-testid="fixture-finish">Finish fixture</Button>
       {disclosure && <><Button data-testid="fixture-update" onClick={() => setRevision(value => value + 1)}>Update</Button><Button data-testid="fixture-send" onClick={() => tryRequestFollowLatest({ sourceSessionId: 'disclosure-fixture', currentSessionId: 'disclosure-fixture', startGeneration: readSendFollowCancelGeneration('disclosure-fixture') })}>Follow latest</Button></>}
     </div>
-    <MessageStream workingDir="" historyLoaded sessionId={disclosure ? 'disclosure-fixture' : undefined} messages={[...(disclosure ? disclosureHistory : []), ...(finished ? [...rows, { ...text('final_answer', `任务与 PR 的进展已整理。未处理完的事项和需要你判断的部分，已分别列出。${revision ? `\n\n补充记录 ${revision}。` : ''}`, 'final_answer'), turnCompleted: true }] : rows)]}
+    <MessageStream workingDir="" historyLoaded sessionId={disclosure ? 'disclosure-fixture' : undefined} messages={[
+      ...(disclosure ? disclosureHistory : []), ...rows,
+      ...(finished ? [{ ...text('final_answer', `任务与 PR 的进展已整理。未处理完的事项和需要你判断的部分，已分别列出。${revision ? `\n\n补充记录 ${revision}。` : ''}`, 'final_answer'), turnCompleted: true }]
+        : unread ? [{ ...text('final_answer', '任务与 PR 的进展正在整理。', 'final_answer'), isStreaming: true }] : []),
+    ]}
+      botUnreadBoundaryAt={unread ? 1 : null}
       assistantAvatar={<span data-testid="fixture-partner-avatar"><BotAvatar bot={{ id: "fixture", name: "Cindy", avatar: "cindy://avatar/preset/cindy" }} size="sm" /></span>} simplifiedBotConversation isSessionStreaming={!finished} contentWidth={720} />
   </div>;
 }
 void mountPage({
   route: '/fixture',
-  host: ctx => ({ agentIsland: { onSessionActivity: subscription('activity') }, maker: { polishWorkingStatus: async () => null },
+  host: ctx => ({ agentIsland: { onSessionActivity: subscription('activity') }, maker: {
+    polishWorkingStatus: async () => null,
+    mcpApps: async (_sessionId: string, input: { op: string }) => {
+      if (input.op === 'open') throw new Error('MCP_APP_CARD_UNAVAILABLE');
+      return {};
+    },
+  },
     onSelectionContextMenuAddToChat: subscription('selection'),
     fsBrowse: { statPath: async () => {
       const root = document.documentElement;
@@ -125,5 +176,5 @@ void mountPage({
       return { kind: missing ? 'missing' : 'file', birthtimeMs: Date.now() - 46000, mtimeMs: Date.now() - 46000 };
     } },
   }),
-  render: ctx => <Subject done={ctx.data.done === true} retry={ctx.data.retry === true} refresh={ctx.data.refresh === true} disclosure={ctx.data.disclosure === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
+  render: ctx => <Subject columns={ctx.data.columns === true} ordinary={ctx.data.ordinary === true} unread={ctx.data.unread === true} switched={ctx.data.switched === true} done={ctx.data.done === true} retry={ctx.data.retry === true} refresh={ctx.data.refresh === true} disclosure={ctx.data.disclosure === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
 });

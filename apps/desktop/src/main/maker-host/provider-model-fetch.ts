@@ -1,5 +1,5 @@
 import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
-import { resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
@@ -26,10 +26,9 @@ import {
 import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
-  readCachedGenericOAuthAccessToken,
-  refreshGenericOAuthIfNeeded,
-} from './generic-oauth.js';
-import { outboundFetch } from './outbound-fetch.js';
+  readGenericOAuthAccessToken,
+} from './generic-oauth.desktop.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
 const FETCH_TIMEOUT_MS = 10_000;
@@ -124,15 +123,15 @@ export async function fetchSavedOAuthProviderModels(
   if (provider?.source !== 'user' || provider.auth.method !== 'oauth' || !oauth || !route || route.disabled || !isCurrent()) {
     return { ok: false, code: 'AUTH_INVALID' };
   }
+  let token: string | null;
   try {
-    await refreshGenericOAuthIfNeeded(storageProviderId, oauth);
+    token = await readGenericOAuthAccessToken(storageProviderId, oauth);
   } catch {
-    return { ok: false, code: 'UNKNOWN' };
+    return { ok: false, code: 'AUTH_INVALID' };
   }
   // A token refresh can outlive logout, account switching, or edits to this connection.
   // Never use the old endpoint snapshot with credentials from the new owner/configuration.
   if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
-  const token = readCachedGenericOAuthAccessToken(storageProviderId, oauth);
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
   const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
@@ -200,11 +199,13 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const googleCatalog = (!explicit || /^https:\/\/generativelanguage\.googleapis\.com\/v1(?:beta)?\/openai\/models\/?$/.test(explicit)) && baseUrl.origin === 'https://generativelanguage.googleapis.com'
     && /^\/v1(?:beta)?(?:\/openai)?\/?$/.test(baseUrl.pathname);
   const googleProtocol = googleCatalog || spec.wireProtocol === 'google-generative-ai';
-  const discoveryUrl = googleCatalog
+  const configuredDiscoveryUrl = googleCatalog
     ? `${baseUrl.origin}${baseUrl.pathname.replace(/\/openai\/?$/, '').replace(/\/+$/, '')}/models`
     : explicit && modelsUrl?.origin === baseUrl.origin
     ? explicit : spec.wireProtocol === 'google-generative-ai'
       ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
+  const copilot = copilotModelsRequest(configuredDiscoveryUrl);
+  const discoveryUrl = copilot?.url ?? configuredDiscoveryUrl;
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders
@@ -216,7 +217,13 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const discoveryEndpoint = new URL(discoveryUrl);
   const longcatOpenAiCatalog = discoveryEndpoint.origin === 'https://api.longcat.chat'
     && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/openai/v1/models';
-  if (discoveryEndpoint.origin === 'https://api.elevenlabs.io'
+  if (copilot) {
+    Object.assign(headers, copilot.headers);
+    delete headers['anthropic-version'];
+    delete headers['anthropic-beta'];
+    delete headers['x-api-key'];
+    if (spec.apiKey) headers.authorization = `Bearer ${spec.apiKey}`;
+  } else if (discoveryEndpoint.origin === 'https://api.elevenlabs.io'
     && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/v1/models') {
     // ElevenLabs discovery uses xi-api-key, independently of the chat runtime slot.
     delete headers.authorization;

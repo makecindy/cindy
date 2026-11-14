@@ -65,10 +65,15 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     const lease = fn.indexOf('beginGhostMutation(captureGhostMutationOwner())');
     expect(lease).toBeGreaterThan(-1);
     expect(lease).toBeLessThan(fn.indexOf('await '));
-    expect(fn).toContain('const relId = installedGhostPhysicalRelId(target)');
-    expect(fn).toContain('const storagePart = installedGhostStoragePart(target)');
-    expect(fn).toContain('await manager.setEnabled(relId, enabled, expectedInstalledApproval ?? approvalToken, assertCurrent)');
-    expect(fn).toMatch(/finally\s*\{\s*releaseMutation\(\)/);
+    expect(fn).toContain('return setPluginEnabled(');
+    expect(fn).toContain('getGhostManager().setEnabled(relId, next, approval, check)');
+    // Both launchers use the same transaction; retain the cross-file lease
+    // contract instead of requiring the old inline implementation.
+    const service = fs.readFileSync(path.join(__dirname, '..', 'pluginEnableService.ts'), 'utf8');
+    expect(service.indexOf('ports.acquire(storagePart)')).toBeLessThan(service.indexOf('await ports.stop'));
+    expect(service).toContain('installedGhostPhysicalRelId(target)');
+    expect(service).toContain('installedGhostStoragePart(target)');
+    expect(service).toMatch(/finally\s*\{\s*release\(\)/);
   });
 
   it('ghosts:uninstall 经 uninstallGhostAndCleanup 持租约(入口同步取,无异步窗口故无需 capture)', () => {

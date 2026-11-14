@@ -4,10 +4,12 @@ import type { McpAppsHost } from './host.js';
 import type { McpAppDocument, McpAppSandboxView } from '../../shared/mcpApps.js';
 import { isMcpAppLinkAuthorizationCurrent } from '../../shared/mcpApps.js';
 import { MCP_APPS_MAX_BYTES, safeAppLink } from './protocol.js';
+import type { McpAppResourceBinding } from './host.js';
 
 const id = z.string().min(1).max(256);
 export const mcpAppOperationSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('open'), clientId: id, openId: id.optional(), context: McpUiHostContextSchema.default({}) }),
+  z.object({ op: z.literal('open-resource'), source: z.object({ instanceId: id, viewId: id }), openId: id.optional(), context: McpUiHostContextSchema.default({}) }),
   z.object({ op: z.literal('cancel-open'), openId: id }),
   z.object({ op: z.literal('message'), viewId: id, message: z.unknown() }),
   z.object({ op: z.literal('poll'), viewId: id, after: z.number().int().nonnegative().default(0) }),
@@ -26,10 +28,11 @@ export const mcpAppOperationSchema = z.discriminatedUnion('op', [
 ]);
 interface LocalViewDeps {
   supply(document: McpAppDocument, caller: string): void;
+  resource?(source: { instanceId: string; viewId: string }): Promise<McpAppResourceBinding>;
 }
 /** Called only by the protocol's frame-verified channel, with Host-bound task and View IDs. */
 export async function handleMcpAppFrameOperation(
-  host: McpAppsHost, caller: string, sessionId: string, viewId: string, raw: unknown,
+  host: McpAppsHost, caller: string, sessionId: string | null, viewId: string, raw: unknown,
   openLink: (url: string) => Promise<void>,
 ): Promise<unknown> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('MCP_APP_INVALID_REQUEST');
@@ -53,12 +56,12 @@ export async function handleMcpAppFrameOperation(
 export async function handleMcpAppOperation(
   host: McpAppsHost,
   caller: string,
-  sessionId: string,
+  sessionId: string | null,
   raw: unknown,
   local?: LocalViewDeps,
 ): Promise<unknown> {
   if (
-    !id.safeParse(sessionId).success ||
+    (sessionId !== null && !id.safeParse(sessionId).success) ||
     !raw ||
     typeof raw !== 'object' ||
     Array.isArray(raw) ||
@@ -70,12 +73,20 @@ export async function handleMcpAppOperation(
   const input = parsed.data;
   switch (input.op) {
     case 'open': {
+      if (sessionId === null) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
       const document = await host.open(caller, sessionId, input.clientId, input.context, input.openId);
       if (!local) return document;
       local.supply(document, caller);
       // Main supplies the private document directly to the isolated frame.
       return { viewId: document.viewId, transport: 'sandbox',
         prefersBorder: document.prefersBorder } satisfies McpAppSandboxView;
+    }
+    case 'open-resource': {
+      if (!local?.resource) throw new Error('MCP_APP_OWNER_ONLY');
+      const binding = await local.resource(input.source);
+      const document = await host.openResource(caller, sessionId, binding, input.context, input.openId);
+      local.supply(document, caller);
+      return { viewId: document.viewId, transport: 'sandbox', prefersBorder: document.prefersBorder } satisfies McpAppSandboxView;
     }
     case 'cancel-open':
       await host.cancelOpen(caller, sessionId, input.openId);

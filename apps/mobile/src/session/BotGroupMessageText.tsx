@@ -5,23 +5,30 @@ import type { ViewInstance } from 'react-native';
  */
 import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
-import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useContext, useId, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { latexToUnicodeApproximation } from '@cindy/maker-shared/math-markdown';
+import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
 import { HighlightedCodeText } from './HighlightedCodeText';
 import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
 import { MermaidDiagramWebView } from './mermaidWebView';
 import { MathFormulaWebView } from './mathWebView';
+import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { splitBotGroupMentionSegments, type BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
 import { Text } from '@/components/AppText';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
 import { fontWeight, monoFont, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
-import { parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInline } from './messageMarkdown';
+import { mobileMarkdownListMarkerText, parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInline } from './messageMarkdown';
 import { buildMessageContentLayout } from './messageContentLayout';
 import { buildMobileMarkdownTableColumnWidths } from './messageTableLayout';
 import { botGroupMentionMember, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
+import { MarkdownBody, MessagePayloadModal, MessageHeavyContentVisibilityContext } from './MessageRenderer';
+import { ImageLightbox } from './ImageLightbox';
+import type { MessagePayload } from './messagePayload';
+import { ChatFilePathContext } from './chatFilePathContext';
+import { SessionQuickSendProvider, useSessionQuickSend } from './SessionQuickSendContext';
+import { MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
 
 type Styles = ReturnType<typeof makeStyles>;
 type BodyOptions = {
@@ -74,16 +81,23 @@ function renderMentionSegments(segments: readonly (BotGroupTextSegment & { label
   });
 }
 
-function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext): ReactNode[] {
+function inlineMathSubFontSize(baseFontSize: number): number {
+  if (baseFontSize <= typeScale.bodySmall) return typeScale.micro;
+  if (baseFontSize <= typeScale.subtitle) return typeScale.caption;
+  return typeScale.footnote;
+}
+
+function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext, baseFontSize: number = typeScale.bodyLarge): ReactNode[] {
   const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
   const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
   let offset = 0;
   const runs = inlines.map(inline => {
+    const mathSegments = inline.type === 'math' && options.richContent ? tokenizeInlineMath(inline.text) : null;
     const text = inline.type === 'image' ? inline.alt ? `[${inline.alt}]` : ''
-      : inline.type === 'math' && options.richContent ? latexToUnicodeApproximation(inline.text) : inline.text;
+      : mathSegments ? mathSegments.map(segment => segment.text).join('') : inline.text;
     const start = offset;
     offset += text.length;
-    return { inline, text, start, end: offset, excluded: ['code', 'link', 'image'].includes(inline.type) };
+    return { inline, mathSegments, text, start, end: offset, excluded: ['code', 'link', 'image', 'math'].includes(inline.type) };
   });
   offset = 0;
   // Match the whole visible word before mapping back to styled native runs:
@@ -97,10 +111,34 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
     return { ...segment, start, end: offset, label: segment.text,
       mention: segment.mention && !runs.some(run => run.excluded && run.start < offset && run.end > start) };
   }) : null;
-  return runs.map(({ inline, text, start, end, excluded }, index) => {
+  return runs.map(({ inline, mathSegments, text, start, end, excluded }, index) => {
     const textStyle = [...(inline.marks?.map(mark => markStyles[mark]) ?? []),
       inline.type === 'strong' ? styles.strong : inline.type === 'emphasis' ? styles.emphasis
         : inline.type === 'strikethrough' ? styles.strike : inline.type === 'code' ? styles.inlineCode : undefined];
+    if (mathSegments) {
+      const subFontSize = inlineMathSubFontSize(baseFontSize);
+      return (
+        <Span key={index} style={textStyle}>
+          {mathSegments.map((segment, segIndex) => (
+            <Span
+              key={`${index}:${segIndex}`}
+              style={[
+                ...textStyle,
+                segment.kind === 'var'
+                  ? styles.mathVar
+                  : segment.kind === 'sup'
+                    ? styles.mathSup
+                    : segment.kind === 'sub'
+                      ? [segment.italic ? styles.mathVar : styles.mathText, { fontSize: subFontSize }]
+                      : styles.mathText,
+              ]}
+            >
+              {segment.text}
+            </Span>
+          ))}
+        </Span>
+      );
+    }
     if (inline.type === 'link') {
       const clickable = options.richContent && options.interactive !== false && /^https?:\/\//i.test(inline.url);
       return <Span key={index} style={[textStyle, clickable && styles.link]}
@@ -145,7 +183,7 @@ function BotGroupMarkdownTable({ block, styles, options, context }: {
       {widths.map((width, index) => (
         <View key={index} style={[styles.tableCell, { width }]}>
           <MarkdownSelectableText selectable style={[styles.tableText, header && styles.tableHeaderText]}>
-            {renderInlines(cells[index] ?? [], styles, options, context)}
+            {renderInlines(cells[index] ?? [], styles, options, context, typeScale.bodySmall)}
           </MarkdownSelectableText>
         </View>
       ))}
@@ -168,8 +206,8 @@ function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOp
         <MarkdownSelectableText selectable style={[styles.text, styles.quoteText]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>
       </View>;
     case 'list_item':
-      return <View key={block.key} style={styles.listItem}>
-        <Text style={styles.text}>{block.checked === undefined ? (block.ordered ? block.marker : '•') : block.checked ? '☑' : '☐'}</Text>
+      return <View key={block.key} style={[styles.listItem, { paddingLeft: (block.depth ?? 0) * typeScale.bodyLarge }]}>
+        <Text style={styles.text}>{mobileMarkdownListMarkerText(block).trim()}</Text>
         <MarkdownSelectableText selectable style={[styles.text, styles.listText]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>
       </View>;
     case 'code':
@@ -214,15 +252,42 @@ const BotGroupMarkdownBlock = memo(function BotGroupMarkdownBlock({ block, style
   return renderBlock(block, styles, options, diagramLabel, context);
 });
 
-export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, onOpenDiagram }: {
+export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, onOpenDiagram, messageKey, messageId, readOnly = false }: {
   content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext;
+  messageKey?: string; messageId?: string; readOnly?: boolean;
 } & BodyOptions) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const touch = useMentionTouchContext(content.includes('@') ? mentionContext : undefined);
-  const blocks = useMemo(() => botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
+  const width = useWindowWidth();
+  const instanceKey = useId();
+  const sender = useSessionQuickSend();
+  const visibility = useContext(MessageListVisibilityContext);
+  const visible = useMessageListItemVisible(messageId ?? instanceKey);
+  const [payload, setPayload] = useState<MessagePayload | null>(null);
+  const layout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
+  const rich = authorKind === 'bot' && hasRichAnswer(content);
+  const blocks = useMemo(() => rich ? [] : botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
     ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
-    : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind]);
+    : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind, rich]);
+  if (rich) return (
+    <SessionQuickSendProvider value={readOnly || !interactive ? null : sender}>
+      <MessageHeavyContentVisibilityContext.Provider value={active && (!visibility || visible)}>
+        <ChatFilePathContext.Provider value={null}>
+          <MarkdownBody renderRichAnswers publicMediaOnly richStateKey={messageKey ?? instanceKey}
+            markdownImageCacheKey={messageKey ?? instanceKey} layout={layout} text={content} selectable
+            onOpenPayload={next => {
+              // Shared answers may open public media and diagrams, never task-local files.
+              if (next.kind === 'mermaid' || (next.kind === 'media' && /^https?:\/\//i.test(next.media.url))) setPayload(next);
+            }} />
+          {payload?.kind === 'media' && payload.media.kind === 'image'
+            ? <ImageLightbox images={[{ key: messageKey ?? instanceKey, title: payload.title, url: payload.media.url, payload }]}
+                initialUrl={payload.media.url} onClose={() => setPayload(null)} />
+            : payload ? <MessagePayloadModal payload={payload} onClose={() => setPayload(null)} /> : null}
+        </ChatFilePathContext.Provider>
+      </MessageHeavyContentVisibilityContext.Provider>
+    </SessionQuickSendProvider>
+  );
   const diagramLabel = t('message.renderer.openDiagramDetail');
   return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map(block =>
     <BotGroupMarkdownBlock key={block.key} block={block} styles={styles} diagramLabel={diagramLabel}
@@ -250,6 +315,18 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   strong: { fontWeight: fontWeight.semibold },
   emphasis: { fontStyle: 'italic' },
   strike: { textDecorationLine: 'line-through' },
+  mathVar: {
+    fontFamily: Platform.select({ ios: 'Times New Roman', android: 'serif', default: 'serif' }),
+    fontStyle: 'italic',
+  },
+  mathText: {
+    fontFamily: Platform.select({ ios: 'Times New Roman', android: 'serif', default: 'serif' }),
+    fontStyle: 'normal',
+  },
+  mathSup: {
+    fontFamily: Platform.select({ ios: 'Helvetica Neue', android: 'sans-serif', default: undefined }),
+    fontStyle: 'normal',
+  },
   link: { textDecorationLine: 'underline' },
   inlineCode: { fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodyLarge, backgroundColor: colors.surfaceChip },
   quote: { borderLeftWidth: 2, borderLeftColor: colors.border, paddingLeft: spacing.md },

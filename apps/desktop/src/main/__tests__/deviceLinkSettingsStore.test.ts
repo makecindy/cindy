@@ -68,10 +68,13 @@ const h = vi.hoisted(() => {
 const SETTINGS_PATH = path.join('/tmp/userdata', 'device-link-settings.json');
 
 const DEFAULT_SETTINGS = {
+  agentNetEnabled: false,
+  agentNetOnlyEncrypted: false,
   remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
+  modelUseRevokedControllers: [],
   disabledControlDeviceIds: [],
   lastKnownDeviceNames: {},
 };
@@ -97,7 +100,12 @@ vi.mock('../logger', () => ({
 
 async function load() {
   vi.resetModules(); // 清模块级 cached / writeChain
-  return import('../device-link/settings-store.js');
+  const { configureUserDataDir } = await import('../userDataPath.js');
+  configureUserDataDir('/tmp/userdata');
+  const { commitVolatileAppSession } = await import('../appSessionState.js');
+  commitVolatileAppSession('cloud', 'settings-test-account', true);
+  h.readFileSync.mockClear();
+  return import('../device-link/settings-store.desktop.js');
 }
 
 beforeEach(() => {
@@ -135,10 +143,13 @@ describe('readDeviceLinkSettings', () => {
     );
     const { readDeviceLinkSettings } = await load();
     expect(readDeviceLinkSettings()).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteControlEnabled: true,
       remoteDesktopEnabled: false,
       keepAwake: false,
       revokedControllers: ['dev-1', 'dev-2'],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });

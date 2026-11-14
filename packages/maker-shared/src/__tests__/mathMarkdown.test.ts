@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { latexToUnicodeApproximation, normalizeMathDelimiters } from '../mathMarkdown.js';
+import { latexToUnicodeApproximation, normalizeMathDelimiters, tokenizeInlineMath } from '../mathMarkdown.js';
 
 describe('normalizeMathDelimiters', () => {
   it('无定界符时返回原引用(快速通路,保住下游缓存)', () => {
@@ -217,11 +217,14 @@ describe('latexToUnicodeApproximation', () => {
   });
 
   it('handles incomplete streaming fragments and bounded nesting without throwing', () => {
-    const source = String.raw`\frac{\sqrt[3]{x}}{y}`;
-    for (let end = 0; end <= source.length; end += 1) {
-      expect(() => latexToUnicodeApproximation(source.slice(0, end))).not.toThrow();
+    for (const source of [String.raw`\frac{\sqrt[3]{x}}{y}`, String.raw`e\in\mathcal{\mathbf E}_\mathrm i`]) {
+      for (let end = 0; end <= source.length; end += 1) {
+        expect(() => latexToUnicodeApproximation(source.slice(0, end))).not.toThrow();
+      }
     }
-    expect(() => latexToUnicodeApproximation('\\sqrt{'.repeat(2000) + 'x' + '}'.repeat(2000))).not.toThrow();
+    for (const command of ['\\sqrt{', '\\mathbf{']) {
+      expect(() => latexToUnicodeApproximation(command.repeat(2000) + 'x' + '}'.repeat(2000))).not.toThrow();
+    }
   });
 
   // PR #7560 / Greptile 4391615793: the numerator must not be rendered
@@ -237,6 +240,26 @@ describe('latexToUnicodeApproximation', () => {
     expect(latexToUnicodeApproximation('\\mathbf{A} \\sin x')).toBe('A sin x');
   });
 
+  // #9422: the mobile Text/share fallback must preserve symbols and argument
+  // scope. Existing style coverage only tested an isolated, braced wrapper;
+  // stripping it before command mapping merged \in + E into unknown \inE.
+  // Unit: exercise the production converter's visible text, including single
+  // tokens, nested wrappers and wrappers used as structural/script arguments.
+  it.each([
+    [String.raw`e\in\mathcal E`, 'e∈E'],
+    [String.raw`e\in\mathcal{E}`, 'e∈E'],
+    [String.raw`\mathrm{\alpha}x`, 'αx'],
+    [String.raw`\mathbf{\mathcal{E}}`, 'E'],
+    [String.raw`\mathbf\alpha+x`, 'α+x'],
+    [String.raw`\frac\mathrm{12}2`, '(12)/2'],
+    [String.raw`\sqrt\mathrm{2}`, '√2'],
+    [String.raw`x^{\mathrm{12}}+y_\mathrm i`, 'x¹²+yᵢ'],
+    [String.raw`e\in\mathrm{\{E\}}`, 'e∈{E}'],
+    [String.raw`\mathcal{}x`, 'x'],
+  ])('preserves styled inline math argument boundaries: %s', (source, expected) => {
+    expect(latexToUnicodeApproximation(source)).toBe(expected);
+  });
+
   it('\\left \\right 修饰被丢弃', () => {
     expect(latexToUnicodeApproximation('\\left( x \\right)')).toBe('( x )');
   });
@@ -248,5 +271,102 @@ describe('latexToUnicodeApproximation', () => {
 
   it('未知命令去反斜杠保留名字,永不抛错', () => {
     expect(latexToUnicodeApproximation('\\unknowncmd x')).toBe('unknowncmd x');
+  });
+});
+
+describe('tokenizeInlineMath', () => {
+  it('renders all subscript letters cleanly without falling back to raw underscores', () => {
+    expect(tokenizeInlineMath("f'_x(0,0)=f'_y(0,0)=0")).toEqual([
+      { kind: 'var', text: 'f' },
+      { kind: 'text', text: "'" },
+      { kind: 'sub', text: 'x', italic: true },
+      { kind: 'text', text: '(0,0)=' },
+      { kind: 'var', text: 'f' },
+      { kind: 'text', text: "'" },
+      { kind: 'sub', text: 'y', italic: true },
+      { kind: 'text', text: '(0,0)=0' },
+    ]);
+  });
+
+  it('keeps functions, numbers, operators and sqrt delimiters upright and avoids double parens', () => {
+    expect(tokenizeInlineMath('(\\sqrt{|x|}+\\sqrt{|y|})^2 = \\rho(\\sqrt{|\\cos\\theta|}+\\sqrt{|\\sin\\theta|})^2')).toEqual([
+      { kind: 'text', text: '(√|' },
+      { kind: 'var', text: 'x' },
+      { kind: 'text', text: '|+√|' },
+      { kind: 'var', text: 'y' },
+      { kind: 'text', text: '|)' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: ' = ' },
+      { kind: 'var', text: 'ρ' },
+      { kind: 'text', text: '(√|cos ' },
+      { kind: 'var', text: 'θ' },
+      { kind: 'text', text: '|+√|sin ' },
+      { kind: 'var', text: 'θ' },
+      { kind: 'text', text: '|)' },
+      { kind: 'sup', text: '²', italic: false },
+    ]);
+  });
+
+  it('separates variables from upright digits/operators and supports extended letter superscripts', () => {
+    expect(tokenizeInlineMath('x^4+y^4 \\le (x^2+y^2)^2 = \\rho^4')).toEqual([
+      { kind: 'var', text: 'x' },
+      { kind: 'sup', text: '⁴', italic: false },
+      { kind: 'text', text: '+' },
+      { kind: 'var', text: 'y' },
+      { kind: 'sup', text: '⁴', italic: false },
+      { kind: 'text', text: ' ≤ (' },
+      { kind: 'var', text: 'x' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: '+' },
+      { kind: 'var', text: 'y' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: ')' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: ' = ' },
+      { kind: 'var', text: 'ρ' },
+      { kind: 'sup', text: '⁴', italic: false },
+    ]);
+    expect(tokenizeInlineMath('e^z + \\|x\\|_{a,1}')).toEqual([
+      { kind: 'var', text: 'e' },
+      { kind: 'sup', text: 'ᶻ', italic: false },
+      { kind: 'text', text: ' + ‖' },
+      { kind: 'var', text: 'x' },
+      { kind: 'text', text: '‖' },
+      { kind: 'sub', text: 'a', italic: true },
+      { kind: 'sub', text: ',1', italic: false },
+    ]);
+  });
+
+  it('handles \\text / \\mathrm upright, \\frac, and deeply nested streaming inputs safely', () => {
+    expect(tokenizeInlineMath('\\text{速度} v + \\mathrm{d}x')).toEqual([
+      { kind: 'text', text: '速度 ' },
+      { kind: 'var', text: 'v' },
+      { kind: 'text', text: ' + d' },
+      { kind: 'var', text: 'x' },
+    ]);
+    expect(() => tokenizeInlineMath('\\sqrt{'.repeat(2000) + 'x')).not.toThrow();
+  });
+
+  it('ignores Object.prototype keys like \\toString and \\constructor instead of throwing', () => {
+    expect(tokenizeInlineMath('\\toString + \\constructor + \\valueOf')).toEqual([
+      { kind: 'text', text: 'toString + constructor + valueOf' },
+    ]);
+    expect(latexToUnicodeApproximation('\\toString + \\constructor')).toBe('toString + constructor');
+  });
+
+  it('keeps outer parentheses unless a single delimiter pair wraps the whole operand', () => {
+    const plain = (latex: string) => tokenizeInlineMath(latex).map((s) => s.text).join('');
+    expect(plain('\\frac{(a)+(b)}{c}')).toBe('((a)+(b))/c');
+    expect(plain('\\frac{a}{(b)+(c)}')).toBe('a/((b)+(c))');
+    expect(plain('\\sqrt{(a)+(b)}')).toBe('√((a)+(b))');
+    expect(plain('\\sqrt{|x|+|y|}')).toBe('√(|x|+|y|)');
+    expect(plain('\\sqrt{(a+b)}')).toBe('√(a+b)');
+    expect(plain('\\sqrt{|x|}')).toBe('√|x|');
+  });
+
+  it('preserves nested subscript boundaries inside superscripts', () => {
+    const plain = (latex: string) => tokenizeInlineMath(latex).map((s) => s.text).join('');
+    expect(plain('x^{a_b}')).toBe('x^(a_b)');
+    expect(plain('2^{n_1+n_2}')).toBe('2^(n₁+n₂)');
   });
 });

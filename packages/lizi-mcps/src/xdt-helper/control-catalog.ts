@@ -15,7 +15,6 @@ const domains = [
   ['models', '模型', '供应商、默认模型、型号参数、辅助与视觉模型'],
   ['teammates', '伙伴', '资料、人设、模型、能力、记忆、渠道和生命周期'],
   ['automations', '自动化', '时间、时区、模型、脚本、投递与暂停恢复'],
-  ['routines', '例行任务', '伙伴的事件、时间、独立模型和投递'],
   ['projects', '项目', '项目归属、工作目录、环境和默认配置'],
   ['tasks', '任务', '单任务运行设置、权限、模型和上下文窗口'],
   ['groups-and-sharing', '群与共享', '群设置、成员、通知、分工与共享权限'],
@@ -30,8 +29,10 @@ const setting = (key: string, domain: string, title: string, summary: string, se
 const helper = (key: string, domain: string, title: string, summary: string, tools: string[], aliases: string[], notes?: string): Control =>
   ({ key, domain, title, summary, tools, aliases, notes, server: 'cindy_helper' });
 export const CONTROL_CATALOG: readonly Control[] = [
+  helper('devices.remote-consent', 'devices', '远程控制授权请求', '请求同账号在线电脑弹出本机确认窗口，由用户开启持续有效的远程控制设置。', ['request_remote_control'], ['远程控制', '授权', '弹窗', 'remote control', 'consent'], '使用 list_machines 的精确设备 ID；只有目标电脑返回 enabled 才能继续原操作。拒绝、超时或旧版无响应不代表同意。'),
   setting('application.preferences', 'application', '语言、主题与通知', '发送快捷键、链接打开方式、动效、消息导航和首页偏好。', 'preferences', ['language', 'theme', 'notification', '语言', '主题', '通知', '快捷键', '动效', '链接'], false),
   setting('appearance.wallpaper', 'appearance', '字体与内置壁纸', '字体、字号、窗口缩放、内置壁纸及效果；自定义图片导入另查 appearance.assets。', 'appearance', ['wallpaper', 'font', '壁纸', '背景', '字体', '字号', '缩放']),
+  helper('appearance.themes', 'appearance', '导入主题包', '将 .cindy 主题包导入当前 Cindy 并刷新主题列表；同 ID 更新。切换与回读用 application.preferences。', ['import_theme_package'], ['theme', '主题', '导入主题', '安装主题', '主题包', 'cindy'], '仅本机任务；沿用当前任务的文件权限，不安装插件、不自动切换主题。'),
   setting('projects.git-safety', 'projects', 'Git 安全快照', 'Git 自动快照开关。', 'git-safety', ['git', '快照']),
   setting('tasks.goal-defaults', 'tasks', '目标模式默认限制', '以后启动目标模式的轮数、token 预算与无进展限制。', 'goal-defaults', ['goal', '目标模式', '预算']),
   setting('runtimes.resources', 'runtimes-and-storage', '运行资源', '命令并发、进程优先级、工具链线程。', 'agent-resources', ['resource', '并发', '资源', '线程']),
@@ -45,19 +46,19 @@ export const CONTROL_CATALOG: readonly Control[] = [
   helper('teammates.capabilities', 'teammates', '伙伴能力与技能', '查询并选择当前伙伴的 Skill、MCP、工具和特性。', ['find_teammate_capabilities', 'set_teammate_capability', 'list_teammate_skills', 'read_teammate_skill', 'save_teammate_skill'], ['伙伴能力', '伙伴技能', 'capability']),
   helper('teammates.management', 'teammates', '伙伴创建与管理入口', '发现伙伴与主力电脑；创建及管理能力依当前身份。', ['create_teammate', 'list_agents', 'get_teammate_home', 'move_teammate_home'], ['创建伙伴', '主力电脑', '伙伴设置']),
   { key: 'automations.schedule', domain: 'automations', title: '自动化设置与运行', summary: '时间、时区、模型、脚本、位置、暂停与恢复。', aliases: ['automation', 'schedule', 'cron', '自动化', '定时', '时间'], server: 'cindy_scheduler', tools: ['schedule_list', 'schedule_get', 'schedule_update', 'schedule_create', 'schedule_pause', 'schedule_resume', 'schedule_run_now', 'schedule_list_models'], notes: 'intervalMs 非空时优先于 cronExpr；改时间需同时核对时区和 nextFireAt。保存不会立即运行；run_now 是独立动作。' },
-  helper('routines.settings', 'routines', '伙伴例行任务', '例行任务的触发、模型、任务模式与投递。', ['routine_list', 'routine_sources', 'routine_delivery_targets', 'routine_save', 'routine_delete', 'routine_run_now'], ['routine', '例行', '伙伴自动化'], '使用原 Routine 服务，不把例行任务当普通 schedule。'),
   helper('projects.management', 'projects', '项目管理', '查询、创建、修改和删除已登记项目。', ['list_projects', 'create_project', 'rename_project', 'remove_project'], ['project', '项目', '工作目录']),
   helper('tasks.runtime', 'tasks', '任务运行设置', '当前/指定任务的 Harness、模型、权限和运行状态。', ['get_session_runtime', 'set_session_runtime', 'get_current_session_id'], ['task', 'session', '任务', '思考', '权限', 'harness']),
+  helper('tasks.lifecycle', 'tasks', '删除、分叉与回退', '删除明确任务，从指定消息分叉或恢复检查点，沿用宿主历史与运行清理。', ['delete_session', 'fork_session', 'rewind_session'], ['删除任务', '分叉', '回退', '检查点', 'delete task', 'fork', 'rewind'], '删除与回退风险固定为逐次确认；跨电脑使用 deviceId::sessionId，结果不明时先查询，不能自动重发。'),
   { key: 'devices.ssh', domain: 'devices', title: 'SSH 连接与设备名字', summary: 'SSH 主机的查询、创建、改名、修改和移除。', aliases: ['ssh', '主机', '设备名字', '设备名', '改名'], server: 'cindy_ssh', tools: ['ssh_list_hosts', 'ssh_add_host', 'ssh_update_host', 'ssh_remove_host', 'ssh_reload_config'], notes: '显示名与连接 alias 区分；改名不修改远端机器 hostname。' },
   { key: 'tools.plugins', domain: 'tools-and-extensions', title: '插件及插件自身设置', summary: '按插件实时详情、手册和工具查询；保留 namespace 与实例身份。', aliases: ['plugin', '插件'], delegate: { server: 'cindy', tool: 'ghost_list', args: {} } },
   helper('tools.mcp', 'tools-and-extensions', '连接 MCP', '使用宿主的 MCP 配置表单。', ['request_mcp_setup'], ['mcp', '外部工具']),
   helper('tools.skills', 'tools-and-extensions', 'Skill 管理', '按当前宿主提供的 Skill 能力发现。', ['search_skills', 'start_skill_learning', 'publish_skill'], ['skill', '技能']),
   helper('runtimes.pi', 'runtimes-and-storage', 'Pi 托管运行环境', '读取版本、检查和安装托管 Pi；复用现有内核管理器。', ['get_pi_runtime', 'update_pi_runtime'], ['pi', '升级 pi', '更新 pi', '运行环境'], '更新不是改 JSON；正在运行的进程与后续任务使用版本分别报告。'),
-  helper('application.update', 'application', 'Cindy 应用更新', '检查并通过内置更新器安装。', ['check_app_update', 'install_app_update'], ['cindy 更新', 'cindy 升级', 'app update'], '安装沿用内置更新器确认，不下载替换当前宿主。'),
+  helper('application.update', 'application', 'Cindy 应用更新', '更新 Cindy 用 install_app_update，由宿主确认后通过内置更新器安装；check_app_update 仅检查版本。', ['check_app_update', 'install_app_update'], ['cindy 更新', 'cindy 升级', '更新 cindy', '升级 cindy', 'update cindy', 'upgrade cindy', 'app update'], '没有可安装更新或不支持安装时说明返回原因，不自行下载替换当前宿主。工具不可用时，在运行 Cindy 的电脑上使用设置中的“检查更新”。'),
   // Explicit gaps remain discoverable. Metadata must never imply a working mutation.
   ...[
     ['application.window', 'application', '窗口行为与开机启动', '唤醒、菜单栏、关闭窗口和激活点击', '窗口 开机 菜单栏 wake startup'],
-    ['appearance.assets', 'appearance', '自定义壁纸和主题导入', '自定义媒体与主题的导入管理', '自定义壁纸 壁纸图片 导入主题 custom wallpaper'],
+    ['appearance.assets', 'appearance', '自定义壁纸导入', '自定义壁纸媒体的导入管理；主题包见 appearance.themes', '自定义壁纸 壁纸图片 custom wallpaper'],
     ['groups.settings', 'groups-and-sharing', '群与共享设置', '群成员、分工、通知和共享权限', '群 共享 group sharing'],
     ['devices.remote-settings', 'devices', '远程控制与中转配置', '远控开关、中转服务和设备管理', '远程控制 中转 relay'],
     ['input.voice', 'media-and-input', '语音与输入设置', '麦克风、语言、词典、音效和配件', '语音 麦克风 词典 voice microphone'],
@@ -102,7 +103,7 @@ export function createControlReader(deps: Deps) {
     return { name, description: tool.description, ...(detail ? { inputSchema: z.toJSONSchema(z.strictObject(tool.inputShape)) } : {}) };
   }
   async function toolsFor(control: Control, detail: boolean, allowed: ReadonlySet<string>) {
-    if (deps.local?.() === false && (control.section || control.key === 'models.configuration' || control.key === 'runtimes.pi'))
+    if (deps.local?.() === false && (control.section || control.key === 'models.configuration' || control.key === 'runtimes.pi' || control.key === 'appearance.themes'))
       return { tools: [] as ToolInfo[], reason: 'requires_local_task' };
     if (!control.server) return { tools: [] as ToolInfo[], reason: 'not_exposed' };
     if (control.server === 'cindy_helper') {
@@ -165,6 +166,8 @@ export function createControlReader(deps: Deps) {
     const score = (item: Control) => {
       if (!term) return 1;
       if (item.key === term) return 100;
+      // Agents often search with the exact tool name a prompt gave them.
+      if (item.tools?.includes(term)) return 90;
       const words = [item.key, item.title, ...item.aliases].map(word => word.toLowerCase());
       return (item.summary.toLowerCase().includes(term) ? 1 : 0) + words.reduce((n, word) => n + (word.includes(term) || term.includes(word) ? Math.min(word.length, 20) : 0), 0);
     };

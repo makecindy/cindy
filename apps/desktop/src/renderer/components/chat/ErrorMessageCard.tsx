@@ -23,8 +23,10 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 import { useTranslation } from 'react-i18next';
 import {
   isCindyGatewayProxyTokenInvalidError,
+  isRemoteAgentResumeRejectedError,
   isResponsesLiteParallelToolCallsError,
   redactSensitiveText,
+  localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
@@ -58,7 +60,8 @@ export function ErrorMessageCard({
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
   const parsedRemoteKey = remoteErrorI18nKey(message);
-  const remoteKey = isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
+  const remoteKey = isRemoteAgentResumeRejectedError(message) ? 'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'
+    : isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
     ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
     : parsedRemoteKey;
   const isAttachmentAccessDenied = kind === 'reply-error'
@@ -80,16 +83,18 @@ export function ErrorMessageCard({
         : i18nKey
           ? t(i18nKey)
           : undefined;
+  const subscriptionGuidance = localizeSubscriptionAccountError(message, t, i18n.resolvedLanguage ?? i18n.language);
+  const fallbackText = isResponsesLiteParallelToolCallsError(decoded)
+    ? t('chat.errorBanner.requestFormatError')
+    : isStreamInterrupted
+      ? t('chat.errorBanner.streamInterruptedNoRetry')
+      : isGatewayProxyTokenInvalid
+        ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
+        : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
+          ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
-    : isResponsesLiteParallelToolCallsError(decoded)
-      ? t('chat.errorBanner.requestFormatError')
-      : isStreamInterrupted
-        ? t('chat.errorBanner.streamInterruptedNoRetry')
-        : isGatewayProxyTokenInvalid
-          ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
-          : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
-            ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+    : subscriptionGuidance ?? fallbackText;
   const showRawToggle = kind === 'reply-error' && Boolean(decoded);
 
   if (!text) return null;

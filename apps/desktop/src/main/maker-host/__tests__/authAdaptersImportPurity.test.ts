@@ -9,14 +9,21 @@
  * 生成进 git 仓库工作区**(untracked、未被 ignore,一次 `git add -A` 就会提交)。
  *
  * 修复后的约定(本测试固化):import auth-adapters 不允许产生任何文件系统写入 ——
- * 目录/软链/硬链/marker 一律不许出现;预热统一走显式 warmUp()(maker-host 装配时调)。
+ * 目录/软链/硬链/marker 一律不许出现;凭证协调走 warmUp()，运行资源按需准备。
  */
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-
-const h = vi.hoisted(() => ({ userDataDir: '' }));
+const h = await vi.hoisted(async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-auth-import-purity-'));
+  const cwdCodexHome = path.join(process.cwd(), 'codex-home');
+  const preexistingEntries = fs.existsSync(cwdCodexHome)
+    ? new Set(fs.readdirSync(cwdCodexHome))
+    : null;
+  return { userDataDir, cwdCodexHome, preexistingEntries };
+});
 
 vi.mock('electron', () => ({
   app: {
@@ -31,19 +38,17 @@ vi.mock('electron', () => ({
 // 同 providerOneShot.test:剪断 maker-core runtime 图,只保留 auth-adapters 需要的类型面。
 vi.mock('@cindy/maker-core', () => ({}));
 
+// The guard is armed in vi.hoisted BEFORE this real import, including its
+// singletons. Vite's cold transformation belongs to collection, not the test's
+// runtime timeout; moving it must not bypass the filesystem snapshots.
+import '../auth-adapters.js';
+
 describe('auth-adapters import purity', () => {
-  // Keep the side-effect assertions intact while allowing the full auth graph's
-  // cold transform on Linux under the eight-worker desktop unit pool.
   it('importing the module (and its singletons) must not write to the filesystem', async () => {
-    h.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-auth-import-purity-'));
-    const cwdCodexHome = path.join(process.cwd(), 'codex-home');
     // 本机 dev 残留可能预先存在(gitignored),不能删用户目录;快照现有条目,
     // import 后断言"没有新增条目",保住副作用检测能力。
-    const preexistingEntries = fs.existsSync(cwdCodexHome)
-      ? new Set(fs.readdirSync(cwdCodexHome))
-      : null;
+    const { cwdCodexHome, preexistingEntries } = h;
     try {
-      await import('../auth-adapters.js');
       // 旧实现的副作用是构造函数里的 fire-and-forget Promise;多让几拍微任务/宏任务
       // 跑完,确保潜在的异步写盘有机会暴露。
       await new Promise((resolve) => setTimeout(resolve, 100));

@@ -173,6 +173,12 @@ export function SubagentModelSection() {
           title="Claude Code"
           trailing={
             <div className="flex min-w-0 flex-1 items-center gap-2">
+              {/* Per-setting reset: left of the control, only while customized. */}
+              <DefaultOverrideControls
+                isCustomized={claudeCustomized}
+                disabled={pending}
+                onReset={() => void resetKeys(CLAUDE_SUBAGENT_MODEL_KEYS)}
+              />
               <div className="min-w-0 flex-1">
                 <ModelSelector
                   localOnlyReason="subagent-in-parent-task"
@@ -211,12 +217,6 @@ export function SubagentModelSection() {
                   }}
                 />
               </div>
-              <DefaultOverrideControls
-                isCustomized={claudeCustomized}
-                disabled={pending}
-                alwaysVisible
-                onReset={() => void resetKeys(CLAUDE_SUBAGENT_MODEL_KEYS)}
-              />
             </div>
           }
         />

@@ -18,6 +18,9 @@ export * from "./directRtcRuntime.js";
 export { DIRECT_LINK_RUNTIME_SOURCE } from "./directRuntimeSource.js";
 export * from "./transport.js";
 export * from "./invokeTransfer.js";
+export { INVOKE_DELTA_CHANNELS, isInvokeDeltaChannel, type InvokeResultDelta, type InvokeResultPatch } from "./invokeDelta.js";
+export * from "./pushTransfer.js";
+export * from "./pushTransferDictionary.js";
 export * from "./topics.js";
 export * from "./attachmentOssRef.js";
 export * from "./contactsSyncProtocol.js";
@@ -57,8 +60,13 @@ export * from "./metadataContinuity.js";
 export * from "./providerShareEnvelope.js";
 export * from "./providerGroup.js";
 export * from "./modelFavorites.js";
+export * from "./orcaWorkerRoles.js";
 export * from "./sessionListTransport.js";
 export * from "./sessionMessageReuse.js";
+export * from "./historyViewDelta.js";
+export * from "./toolBodyStub.js";
+export * from "./historyRelinkFolded.js";
+export * from "./toolResultLiveLimit.js";
 
 export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";
@@ -66,6 +74,7 @@ export * from "./clipboardTransfer.js";
 
 export * from "./selfHostedRelay.js";
 export * from "./selfHostedRelayAuth.js";
+export * from "./relayAccountDirectory.js";
 
 export * from "./pluginOauth.js";
 export * from "./pluginSettings.js";
@@ -83,6 +92,7 @@ export * from "./remoteAgent.js";
 export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
 export * from "./machineStatus.js";
+export * from "./agentNetSwitch.js";
 export * from "./pluginPages.js";
 
-export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from './stallDiagnostics.js';
+export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef } from './stallDiagnostics.js';

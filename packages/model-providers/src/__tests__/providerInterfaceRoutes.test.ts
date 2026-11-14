@@ -4,6 +4,18 @@ import { alignModelApiRoute, providerInterfaceModelRoute } from '../providerInte
 import { BUNDLED_CATALOG, parseCatalog } from '../catalog.js';
 
 describe('documented supplier interfaces', () => {
+  // Server #1376: the old bundled profile omitted this discovered model. Unit
+  // regression through the saved-connection consumer, preserving user choices.
+  it('resolves OpenCode Fable 5.2 through the existing Messages profile', () => {
+    const provider = buildUserProvider({ id: 'zen', name: 'Zen', runtimes: { pi: {
+      catalogPresetId: 'opencode', baseUrl: 'https://opencode.ai/zen/v1', wireProtocol: 'anthropic-messages',
+      models: [{ id: 'claude-fable-5-2', name: 'Fable', contextWindow: 64000, defaultEnabled: false }],
+    } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry, presets: BUNDLED_CATALOG.presets });
+    expect(provider.models.pi?.[0]).toMatchObject({
+      contextWindow: 64000, defaultEnabled: false,
+      selectedInterface: { profileId: 'opencode-anthropic-messages', api: 'anthropic-messages' },
+    });
+  });
   // Agnes previously fell back to 200K. Exercise saved connections and preset
   // import through the production resolver, including an explicit user budget.
   it('resolves Agnes capacity and interfaces without overwriting saved choices', () => {

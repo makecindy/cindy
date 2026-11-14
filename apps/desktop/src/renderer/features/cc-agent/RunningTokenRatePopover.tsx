@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Activity, ArrowDown, X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip } from '@/components/ui/tooltip';
+import { RunningTokenCount } from './RunningTokenCount';
 import { formatRecentOutputTokenRate, formatRunningTokenCount } from './lib/runningTokenUsage';
 import {
   emptyRateHistory,
@@ -22,7 +23,7 @@ export function useRunningTokenRateHistory(input: {
   outputTokens: number;
   generationDurationMs: number;
   generationReliable: boolean;
-  /** Host-measured speed (Pi extension algorithm); old hosts omit it. */
+  /** Host-measured speed; old hosts omit it. */
   tokenSpeed?: TokenSpeedSnapshot;
 }) {
   const { sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable, tokenSpeed } = input;
@@ -72,6 +73,7 @@ export function RunningTokenRatePopover({
   rate,
   rateText,
   isTokenCount = false,
+  tokenUsage,
   averageRate,
   outputTokens,
   history,
@@ -81,6 +83,8 @@ export function RunningTokenRatePopover({
   rate: string | null;
   rateText: string | null;
   isTokenCount?: boolean;
+  /** Authoritative count; only the visible token fallback interpolates it. */
+  tokenUsage?: number;
   averageRate: string | null;
   outputTokens: number;
   history: RateHistory;
@@ -206,7 +210,11 @@ export function RunningTokenRatePopover({
                   <>
                     <span aria-hidden="true">&middot;</span>
                     {isTokenCount && <ArrowDown size={13} aria-hidden="true" />}
-                    <span>{rateText}</span>
+                    <span>
+                      {isTokenCount && tokenUsage !== undefined
+                        ? <RunningTokenCount tokenUsage={tokenUsage} />
+                        : rateText}
+                    </span>
                   </>
                 )}
               </button>

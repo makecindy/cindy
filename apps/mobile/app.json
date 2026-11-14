@@ -69,6 +69,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/with-agent-net-native",
       "./plugins/with-message-menu-icons",
       "./plugins/with-third-party-notices",
       "./plugins/with-google-signin-modular-headers",
@@ -109,6 +110,7 @@
       "expo-apple-authentication",
       "expo-notifications",
       "./plugins/with-communication-notifications",
+      "./plugins/with-notification-content",
       "./plugins/with-usage-widgets",
       "expo-secure-store",
       "expo-web-browser",

@@ -176,7 +176,10 @@ describe("DS-8 production source", () => {
       ts.forEachChild(node, visit);
     };
     visit(source);
-    expect(new Set(ids).size).toBe(576);
+    // The approved provenance marks add eight roles; legacy IDs remain available
+    // for local theme compatibility even when built-in UI no longer consumes them.
+    // 2026-11-13: + remote-agent-net-accent (远程连接拓扑的 Agent-Net 协议标识).
+    expect(new Set(ids).size).toBe(585);
     expect(
       [
         ...Object.keys(bindings.defaults),

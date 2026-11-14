@@ -141,6 +141,21 @@ describe('registryPricingCatalog', () => {
     expect(gateway.xd['openai/gpt-5.6-luna'].cacheCreatePerMtok).toBeUndefined();
   });
 
+  // Regression (2026-11-12): turns recorded as claude-fable-5-2 found no reference price in the bundled
+  // registry, so their subscription value could not be estimated. The tariff is dated from the vendor's
+  // launch day and must stay unknown before it instead of borrowing a later price.
+  it('prices Fable 5.2 turns from its launch day, including the Fast tariff', () => {
+    const quote = (at: string) => providerReferencePriceQuote(
+      'anthropic', 'claude-fable-5-2', BUNDLED_CATALOG.modelRegistry!, { agent: 'claude-code', at, officialOnly: true },
+    );
+    expect(quote('2026-11-09')).toMatchObject({
+      currency: 'USD', inputPerMtok: 8, outputPerMtok: 40,
+      cacheReadPerMtok: 0.2, cacheCreatePerMtok: 10, cacheCreate1hPerMtok: 16,
+      priority: { inputPerMtok: 16, outputPerMtok: 80, cacheReadPerMtok: 0.4, cacheCreatePerMtok: 20 },
+    });
+    expect(quote('2026-11-08')).toBeUndefined();
+  });
+
   it.each(['fast', 'priority'] as const)('projects declared %s prices without inventing unavailable tariffs', (variant) => {
     const entry = structuredClone(BUNDLED_CATALOG.modelRegistry!.models.find((model) => model.id === 'openai/gpt-6-astra')!);
     const prices = structuredClone(BUNDLED_CATALOG.modelRegistry!.baseModels!.find(model => model.id === entry.modelRef)!.referencePriceGroups![0].prices);

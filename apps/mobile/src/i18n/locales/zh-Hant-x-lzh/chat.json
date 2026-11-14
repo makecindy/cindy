@@ -3,12 +3,12 @@
     "retry": "再試",
     "empty": "此番無可示之處理記錄",
     "unavailable": "未能讀取處理記錄",
-    "record": "辦理錄",
+    "record": "理事錄",
     "operations": "操作錄",
     "elapsed": "已理 {{duration}}",
     "took": "歷時 {{duration}}",
     "processing": "方理",
-    "worked": "辦理錄",
+    "worked": "理事錄",
     "thinking": "沉吟中",
     "thought": "已思",
     "failed_one": "{{count}} 次呼叫未成",
@@ -62,7 +62,7 @@
       "updated": "更",
       "searched": "尋",
       "fetched": "訪",
-      "used": "呼",
+      "used": "調",
       "updateTodos": "更待辦",
       "listed": "列",
       "inspect": "閱內容",
@@ -189,5 +189,13 @@
     "working": "方勞作…",
     "worked": "已勞作 {{duration}}",
     "workDetails": "勞作之程"
+  },
+  "subscriptionAccountError": {
+    "limited": "此差事所用訂閱帳號，用量已盡。可待用量重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
+    "limitedUntil": "此差事所用訂閱帳號，用量已盡，預計 {{resetAt}} 重設。可待重設後再試，或另選模型來源。此差事仍繫原帳號，不自動更換。",
+    "loginRequired": "此差事所用訂閱帳號需要重新登入。請在執行差事的電腦上重新登入該帳號，再重試。",
+    "signingIn": "此差事所用訂閱帳號正在登入，請完成登入後重試。",
+    "unavailable": "此差事所繫訂閱帳號，無法用於本次請求。請於執行差事的電腦檢查模型供方的帳號設定，或另選模型來源。",
+    "legacy": "此差事所繫訂閱帳號，暫不可用。請於執行差事的電腦檢查登入與用量，或另選模型來源。此差事不自動更換帳號。"
   }
 }

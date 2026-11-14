@@ -1,3 +1,5 @@
+import { playHaptic } from '@/platform/haptics';
+import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { useComposerDragOpen } from '@/session/useComposerDragOpen';
 import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
 import type { ViewInstance, TextInputInstance, ScrollViewInstance } from 'react-native';
@@ -677,6 +679,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // Worker 默认跟任务(Lead)的 Agent 所在电脑。
     leadAgentDeviceId: remoteAgentPick?.deviceId ?? null,
     agentLocationSelectable: workerAgentLocationSupported,
+    // 任务还没建：没有可审查、可测试的工作，内置角色不带出自带的首条任务。
+    leadHasWork: false,
   });
   const collabTarget = useMemo(() => ({
     orcaRole: null,
@@ -1283,9 +1287,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     modelSections,
   });
 
-  // 目录就绪后的来源终检(codex review P1):自动默认/恢复在目录加载期信任的来源可能已失效
-  // (provider 被删/断开/模型下架),就绪后必须复核——联合回退整对 (model, providerId)
-  // (其他来源顶替 / 首项 / 留空),不留裸模型回落默认网关(codex review P2)。
+  // 目录就绪后复核草稿：已选来源失效时保留选择，提交要求重选，不能换到同名模型的其他账号。
+  // 未指定来源的默认推荐及 Cindy Auto 的合法来源迁移仍由公共校准逻辑处理。
   // 无变化时返回原引用,不触发额外渲染。
   useEffect(() => {
     if (!deviceProviders.ready) return;
@@ -2473,11 +2476,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setPermissionSheetOpen(true);
   }, []);
 
-  // 选权限档(独立选择器与模型浮窗共用同一语义):Full access 升级先过确认弹层,
+  // 用户直接选权限档即生效(独立选择器与模型浮窗共用同一语义),
   // 非 plan 档写 per-agent 记忆(内存 + 落盘;对齐桌面 lastByVendor)。
   const selectPermissionMode = useCallback((mode: string) => {
     void (async () => {
-      if (!(await confirmFullAccessChange(draft.permissionMode, mode))) return;
       patchDraft({ permissionMode: mode });
       if (mode === 'plan') return; // 老被控端兼容档,不入记忆
       // 同步进本地 state:本次会话内切走再切回也能拿到最新记忆(落盘不回写 state)。
@@ -3175,6 +3177,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         onStateChanged: (next) => {
           // 旧 controller 的取消可晚于新启动完成,只允许本次启动交接 UI 状态。
           if (voiceStartupSeqRef.current !== startupSeq) return;
+          if (next === 'listening') playHaptic('commit');
           setVoiceState(next);
         },
         onError: (message) => {
@@ -3401,7 +3404,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       }}
       disabled={!canCreate}
       hitSlop={10}
-      onPress={() => void create()}
+      onPress={() => { playHaptic('commit'); void create(); }}
       style={({ pressed }) => [
         styles.sendButton,
         !canCreate && styles.sendButtonDisabled,
@@ -5609,6 +5612,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   ) : null}
                 </View>
               ) : null}
+              <TaskArchiveUndoSlot active={isShareTargetFocused} />
               <View style={[styles.composerToolbarWrap, composerCardActive && {
                 minHeight: COMPOSER_CARD_CHROME_HEIGHT + MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
               }]}>
@@ -5764,9 +5768,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             label={t('session.collab.draftSubmit')}
             onPress={() => {
               // 与桌面新建任务一样:确认协同草稿即记住这次的 Worker 选择。
-              collabForm.remember(collabForm.form);
+              collabForm.remember(collabForm.submission);
               collabDraftTargetRef.current = collabTargetKey;
-              setCollabDraft(collabForm.form);
+              setCollabDraft(collabForm.submission);
               setContextSheetView('main');
               setContextSheetOpen(false);
             }}
@@ -5873,12 +5877,16 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               executionDevicesError={collabForm.executionDevicesError}
               busy={creating}
               customRoleMode={collabForm.customRoleMode}
+              description={t('session.collab.enableHint')}
               form={collabForm.form}
               notice={orcaCollabEntryHint(collabEntryStatus)}
               onAgentChange={collabForm.changeAgent}
               onChange={collabForm.patch}
-              onCustomRoleModeChange={collabForm.setCustomRoleMode}
               onPermissionChange={(mode) => void collabForm.changePermission(mode)}
+              onRemoveRole={collabForm.removeRole}
+              onSelectRole={collabForm.selectRole}
+              roles={collabForm.roles}
+              rolesEditable={collabForm.rolesEditable}
               onPickModel={collabForm.modelPicker.openPicker}
               onPickDirectory={collabForm.directoryPicker.openPicker}
             />

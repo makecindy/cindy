@@ -1,3 +1,5 @@
+import { teammateFolderName, teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
+
 import type { Session } from '@/lib/ccAgent.types';
 
 import {
@@ -8,7 +10,7 @@ import {
 
 type SidebarProjectSession = Pick<
   Session,
-  'workingDir' | 'projectDir' | 'remoteHostId' | 'deviceLinkDeviceId' | 'workspaceKind'
+  'workingDir' | 'projectDir' | 'companion' | 'remoteHostId' | 'deviceLinkDeviceId' | 'workspaceKind'
 >;
 
 /**
@@ -37,7 +39,7 @@ export function isSessionInHiddenProject(
 ): boolean {
   // Dialogue tasks own a working directory too, but that directory is not a
   // user-added project and must never be hidden by a project tombstone.
-  if (session.workspaceKind === 'dialogue') return false;
+  if (session.workspaceKind === 'dialogue' && !session.companion?.taskProjectDir) return false;
   const projectKey = projectIdentityKeyForSession(session);
   return projectKey != null && isProjectHidden(projectKey, hiddenProjectKeys, localPlatform);
 }
@@ -84,7 +86,7 @@ export function isSessionInProjectComparisonSet(
   projectComparisonKeys: ReadonlySet<string>,
   localPlatform: string,
 ): boolean {
-  if (session.workspaceKind === 'dialogue') return false;
+  if (session.workspaceKind === 'dialogue' && !session.companion?.taskProjectDir) return false;
   return projectKeyComparisonSetHas(
     projectComparisonKeys,
     projectIdentityKeyForSession(session),
@@ -98,7 +100,7 @@ export function isSessionInProject(
   projectKey: string,
   localPlatform: string,
 ): boolean {
-  if (session.workspaceKind === 'dialogue') return false;
+  if (session.workspaceKind === 'dialogue' && !session.companion?.taskProjectDir) return false;
   const sessionProjectKey = projectIdentityKeyForSession(session);
   const sessionComparisonKey = projectKeyComparisonKey(sessionProjectKey, localPlatform);
   const projectComparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
@@ -111,6 +113,23 @@ function isSessionInHiddenProjectComparisonSet(
   localPlatform: string,
 ): boolean {
   return isSessionInProjectComparisonSet(session, hiddenProjectComparisonKeys, localPlatform);
+}
+
+/**
+ * A teammate's project on this computer while the teammate runs on another computer (its copy here
+ * is demoted, cloud-companions.md §2.1): hidden, its files stay; shown again once it comes back.
+ */
+export function withoutTeammateProjectsElsewhere(
+  projects: readonly ProjectNode[],
+  demotedBotIds: readonly string[],
+): ProjectNode[] {
+  if (demotedBotIds.length === 0) return Array.from(projects);
+  const folders = new Set(demotedBotIds.map(teammateFolderName));
+  return projects.filter((project) => {
+    if (project.remoteHostId || project.deviceLinkDeviceId) return true;
+    const folder = teammateFolderOfProjectPath(project.workingDir);
+    return !folder || !folders.has(folder);
+  });
 }
 
 export function visibleSidebarProjects(
@@ -159,7 +178,8 @@ export function sidebarSessionsWithHiddenProjectsAsDialogues(
       hiddenProjectComparisonKeys,
       localPlatform,
     )
-      ? { ...session, workspaceKind: 'dialogue' }
+      ? { ...session, workspaceKind: 'dialogue',
+          ...(session.companion ? { companion: { ...session.companion, taskProjectDir: undefined } } : {}) }
       : session,
   );
 }

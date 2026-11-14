@@ -20,6 +20,10 @@ import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import type { ComposerFileMentionPayload } from '@/lib/composerMentionDrag';
 import { isDangerousAttachmentName } from '../../shared/attachmentSafety';
+import { readPluginUiEntries } from '@/cindy-brain/PluginUiContributions';
+import { processPluginUiAttachment } from '@/cindy-brain/pluginUiAttachments';
+import { assertPluginUiDraftWritable } from '@/cindy-brain/pluginUiContext';
+import { insertComposerDocumentForRestore, plainTextToComposerDocument } from '@/lib/composerListDocument';
 
 const log = createLogger('UseAttachments');
 import {
@@ -35,6 +39,7 @@ import { inferFileType, base64ToUint8Array, PEEK_BYTES } from '@/lib/fileTypeInf
 import {
   captureDraftDiscardToken,
   getDraft as getComposerDraft,
+  flushDraft,
   isDraftDiscardTokenCurrent,
   saveDraft as saveComposerDraft,
   subscribeDraft as subscribeComposerDraft,
@@ -294,6 +299,50 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     [appendAttachments, isAttachmentOperationScopeCurrent],
   );
 
+  const processAddedFiles = useCallback(async (scope: AttachmentOperationScope, files: readonly AttachedFile[]) => {
+    for (const file of files) {
+      const currentFiles = () => isAttachmentOperationScopeCurrent(scope)
+        ? attachmentsRef.current : scope.storageKey ? getComposerDraft(scope.storageKey)?.attachments ?? [] : [];
+      // Editing annotations replaces the object but deliberately keeps its id.
+      const current = () => isAttachmentDraftScopeActive(scope) && currentFiles().includes(file);
+      if (!current()) continue;
+      const controller = new AbortController();
+      const stop = scope.storageKey ? subscribeDraftContent(scope.storageKey, () => { if (!current()) controller.abort(); }) : () => {};
+      let output: Awaited<ReturnType<typeof processPluginUiAttachment>> = null;
+      try {
+        output = await processPluginUiAttachment(file, scope.sessionId ?? null, controller.signal);
+        if (!output?.handled || !current()) continue;
+        const replacements = (output.files ?? []).map(item => {
+          const ext = extractExt(item.name);
+          return { ...item, id: crypto.randomUUID(), ext, category: categorizeFile(ext) ?? 'file' } satisfies AttachedFile;
+        });
+        if (output.text && !scope.storageKey) throw new Error('MCP_APP_DRAFT_UNAVAILABLE');
+        if (scope.storageKey) { flushDraft(scope.storageKey); assertPluginUiDraftWritable(scope.storageKey); }
+        if (!current()) continue;
+        const next = currentFiles().filter(item => item.id !== file.id).concat(replacements);
+        const draft = scope.storageKey ? getComposerDraft(scope.storageKey) : undefined;
+        const text = output.text ? insertComposerDocumentForRestore(plainTextToComposerDocument(output.text),
+          draft?.text ?? plainTextToComposerDocument(''), draft?.text?.content?.length ?? 0).document : draft?.text ?? null;
+        stop();
+        if (isAttachmentOperationScopeCurrent(scope)) { attachmentsRef.current = next; setAttachments(next); }
+        if (scope.storageKey) saveComposerDraft(scope.storageKey, { ...draft, text, attachments: next });
+        cleanupStagedChatAttachmentFiles([file]);
+        cleanupRemovedCachedImage(file.cacheUrlShared ? undefined : file);
+        output = null; // The draft now owns every returned file.
+      } catch {
+        if (!controller.signal.aborted) pushScopedRejections(scope, [t('pluginUi.attachmentFailed', { name: file.name })]);
+      } finally {
+        stop();
+        if (output?.files) cleanupStagedChatAttachmentFiles(output.files);
+      }
+    }
+  }, [isAttachmentOperationScopeCurrent, pushScopedRejections, t]);
+
+  const settleUserAddedAttachments = useCallback((scope: AttachmentOperationScope, files: readonly AttachedFile[]) => {
+    settleAttachmentsForScope(scope, files);
+    if (readPluginUiEntries('composer.attachment').length) void processAddedFiles(scope, files);
+  }, [settleAttachmentsForScope, processAddedFiles]);
+
   // ── Per-session draft (composer-draft-per-session) ──
   // Save current attachments back to the store on unmount / sessionId-change,
   // and restore from the store on mount / sessionId-change.
@@ -412,6 +461,9 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       lastSyncedDraftScopeRef.current = draftScope;
       return;
     }
+    // A clear or external write can precede this render's passive effect.
+    // Do not mirror the stale snapshot back into the live attachment subscription.
+    if (attachments !== attachmentsRef.current) return;
     const existing = getComposerDraft(storageKey);
     // `discardDraft` synchronously clears mounted attachment state. Its state
     // update may render once before navigation; do not recreate an empty Map
@@ -719,9 +771,9 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         }
       }
 
-      settleAttachmentsForScope(operationScope, newAttachments);
+      settleUserAddedAttachments(operationScope, newAttachments);
     },
-    [isAttachmentOperationScopeCurrent, pushScopedRejections, settleAttachmentsForScope, t],
+    [isAttachmentOperationScopeCurrent, pushScopedRejections, settleUserAddedAttachments, t],
   );
 
   /**
@@ -768,7 +820,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         }
 
         if (cached) {
-          settleAttachmentsForScope(operationScope, [
+          settleUserAddedAttachments(operationScope, [
             {
               id: crypto.randomUUID(),
               name,
@@ -789,7 +841,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
           if (currentSessionId && isAttachmentOperationScopeCurrent(operationScope)) {
             toast.warning(t('logic.toasts.attachmentLocalCacheFailed'));
           }
-          settleAttachmentsForScope(operationScope, [
+          settleUserAddedAttachments(operationScope, [
             {
               id: crypto.randomUUID(),
               name,
@@ -811,7 +863,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         ]);
       }
     },
-    [isAttachmentOperationScopeCurrent, pushScopedRejections, settleAttachmentsForScope, t],
+    [isAttachmentOperationScopeCurrent, pushScopedRejections, settleUserAddedAttachments, t],
   );
 
   const removeFile = useCallback((id: string) => {

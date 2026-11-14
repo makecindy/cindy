@@ -20,7 +20,7 @@ const state = vi.hoisted(() => ({
   addImConnection: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({})),
 }));
 vi.mock('electron', () => ({ shell: { openExternal: vi.fn() } }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../botAuthorizationService.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../botAuthorizationService.js')>();
@@ -55,7 +55,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
   isGhostAvailableForActiveSession: () => true,
   acquireGhostMutationLeaseForMcp: () => () => {}, captureGhostMutationOwnerForMcp: () => ({}),
 }));
-vi.mock('../../cindy-brain/ghostVisibility.js', () => ({
+vi.mock('../../cindy-brain/ghostVisibility.desktop.js', () => ({
   classifyGhostVisibility: () => state.visible
     ? { ok: true, ghost: state.ghost }
     : { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' },
@@ -64,7 +64,7 @@ vi.mock('../../cindy-brain/ghostWorkdirPrefs.js', () => ({ isGhostDisabledForWor
 vi.mock('../../cindy-brain/ghostSetupChangeBus.js', () => ({
   getGhostSetupChangeBus: () => ({ subscribe: state.subscribe, currentRevision: () => 1 }),
 }));
-vi.mock('../../maker-host/grok-oauth-login.js', () => ({
+vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: vi.fn(), hasGrokOAuthLogin: () => false, runGrokOAuthLogin: state.login,
   getGrokOAuthCredentialGeneration: () => 0, cancelGrokOAuthLogin: vi.fn(),
 }));
@@ -277,10 +277,10 @@ describe('authorization Host live plugin policy', () => {
     const host = await state.deps.adapter('session', hostTarget);
     state.profileStatus = status; // canonical Session remains active
     for (const [adapter, cardTarget] of [[plugin, target], [host, hostTarget]] as const) {
-      await expect(state.deps.adapter('session', cardTarget)).rejects.toThrow('teammate is unavailable');
-      await expect(adapter.assess()).rejects.toThrow('teammate is unavailable');
-      await expect(adapter.execute({ id: 'connect', kind: 'oauth_connect' }, undefined)).rejects.toThrow('teammate is unavailable');
-      await expect(state.deps.resume({ sessionId: 'session', target: cardTarget } as BotAuthorizationCard, () => {})).rejects.toThrow('teammate is unavailable');
+      await expect(state.deps.adapter('session', cardTarget)).rejects.toThrow('buddy is unavailable');
+      await expect(adapter.assess()).rejects.toThrow('buddy is unavailable');
+      await expect(adapter.execute({ id: 'connect', kind: 'oauth_connect' }, undefined)).rejects.toThrow('buddy is unavailable');
+      await expect(state.deps.resume({ sessionId: 'session', target: cardTarget } as BotAuthorizationCard, () => {})).rejects.toThrow('buddy is unavailable');
     }
     expect(state.execute).not.toHaveBeenCalled();
     expect(state.login).not.toHaveBeenCalled();

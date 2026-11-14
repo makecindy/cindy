@@ -1,3 +1,6 @@
+import { chatgptAccountIdFromIdToken, chatgptAccountIdFromTokens, currentCodexCredentialGeneration, captureCodexOAuthDispatchProof, parseCodexCredentialGeneration } from './codexCredentialRead.js';
+export { chatgptAccountIdFromIdToken, chatgptAccountIdFromTokens } from './codexCredentialRead.js';
+import { readCodexLocalAuthState } from './codex-local-auth-state.js';
 import { cindyManagedSkillRoots, listCindyManagedSkills } from './managed-skills.js';
 import { retainInvalidatedProviderPresentation, retainProviderPresentationAfterAuthChange } from './provider-presentation-store.js';
 import { subscriptionAccountKind, subscriptionAccountState } from './subscription-account-auth.js';
@@ -21,9 +24,8 @@ export { getCodexHome } from './codex-home-path.js';
  */
 
 import { app, safeStorage } from 'electron';
-import { isCodexAccountProvider, codexAccountState, codexAccountHome, prepareCodexAccountHome, parseCodexAccountIdentity } from './codex-account-auth.js';
+import { isCodexAccountProvider, codexAccountState, codexAccountHome, prepareCodexAccountHome, parseCodexAccountIdentity } from './codex-account-auth.desktop.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { promises as fsp, existsSync } from 'node:fs';
@@ -45,6 +47,7 @@ import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import {
   prepareSharedGlobalSkillLinks,
+  markClaudeSessionObserved,
   SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE,
   sharedGlobalSkillLinksFingerprint,
 } from './shared-global-skills.js';
@@ -55,10 +58,13 @@ import {
   resolveBundledSystemSkillsRoot,
 } from './built-in-skills.js';
 import {
-  copyCodexAuthSnapshot,
+  copyCodexAuthSnapshotWithRetry,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
   resolveWindowsAclPrincipal,
+  codexAuthLinkAcceptanceFor,
+  codexAuthPathsShareIdentity,
+  codexAuthPathsShareEntry,
 } from './codex-auth-link.js';
 import { getCodexCliAuthPath, getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
 import { codexWorkspaceIdFromTokens, readChatgptIdTokenClaims } from './codex-auth-identity.js';
@@ -92,11 +98,11 @@ import {
 import {
   CODEX_GATEWAY_ENV_KEY,
   CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY,
-} from './codex-gateway-config.js';
+} from './codex-gateway-config.desktop.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import { disconnectClaudeNativeLogin, readClaudeNativeLogin } from './claude-native-connection.js';
-import { claudeCliNetworkEnv } from './claude-native-cli.js';
+import { claudeCliNetworkEnv } from './claude-native-cli.desktop.js';
 import { ensureLegacyClaudeConfigMigrated } from './claude-legacy-config-migration.js';
 import { isAnthropicCompatProxyHandleReady } from './anthropic-compat-proxy-host.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
@@ -235,21 +241,6 @@ function readCodexRecoveryCredentialProof(
  * 优先 `https://api.openai.com/auth`.chatgpt_account_id，回落顶层 chatgpt_account_id / sub。
  * export 供 anthropic-responses-bridge-host 复用(同一 auth.json、同一 claim 布局,单点维护)。
  */
-export function chatgptAccountIdFromIdToken(idToken: string): string | null {
-  const workspaceId = codexWorkspaceIdFromTokens({ id_token: idToken });
-  if (workspaceId) return workspaceId;
-  const sub = readChatgptIdTokenClaims(idToken)?.sub;
-  return typeof sub === 'string' && sub.length > 0 ? sub : null;
-}
-
-/** HTTP header identity only; workspace/recovery checks must keep the strict parser. */
-export function chatgptAccountIdFromTokens(
-  tokens: { account_id?: unknown; id_token?: unknown } | undefined,
-): string | null {
-  if (typeof tokens?.account_id === 'string' && tokens.account_id.length > 0) return tokens.account_id;
-  return typeof tokens?.id_token === 'string' ? chatgptAccountIdFromIdToken(tokens.id_token) : null;
-}
-
 /**
  * Codex 一次性轻任务（起会话标题 oneShot）直连 ChatGPT 后端所需的凭证。
  * 读 xdt-maker 自管 codex-home 的 auth.json：`tokens.access_token` 作 Bearer、`account_id`
@@ -305,7 +296,7 @@ export function isCodexAuthInheritedFromSystemCli(): boolean {
     const codexHome = getCodexHome();
     const localAuth = path.join(codexHome, 'auth.json');
     if (shouldSuppressLocalCodexAuth(codexHome, localAuth)) return false;
-    const systemAuth = path.join(os.homedir(), '.codex', 'auth.json');
+    const systemAuth = getCodexCliAuthPath();
     if (!existsSync(localAuth) || !existsSync(systemAuth)) return false;
     return pathsReferToSameFileSync(localAuth, systemAuth);
   } catch {
@@ -328,68 +319,6 @@ function pathsReferToSameFileSync(left: string, right: string): boolean {
     fs.statSync(left, { bigint: true }),
     fs.statSync(right, { bigint: true }),
   );
-}
-
-type CodexCredentialGeneration = {
-  dev: string;
-  ino: string;
-  size: number;
-  mtimeMs: number;
-  sha256: string;
-};
-
-const DECIMAL_FILE_ID_RE = /^(0|[1-9]\d*)$/;
-
-function currentCodexCredentialGeneration(authPath: string): CodexCredentialGeneration | null {
-  let fd: number | null = null;
-  try {
-    fd = fs.openSync(authPath, 'r');
-    const stat = fs.fstatSync(fd, { bigint: true });
-    const bytes = fs.readFileSync(fd);
-    return {
-      dev: stat.dev.toString(),
-      ino: stat.ino.toString(),
-      size: Number(stat.size),
-      mtimeMs: Number(stat.mtimeMs),
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-    };
-  } catch {
-    return null;
-  } finally {
-    if (fd !== null) fs.closeSync(fd);
-  }
-}
-
-function parseCodexCredentialGeneration(
-  value: string | null | undefined,
-): CodexCredentialGeneration | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value) as Partial<Record<keyof CodexCredentialGeneration, unknown>>;
-    const parseFileId = (candidate: unknown): string | null => {
-      if (typeof candidate === 'string' && DECIMAL_FILE_ID_RE.test(candidate)) return candidate;
-      if (typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 0) {
-        return String(candidate);
-      }
-      return null;
-    };
-    const dev = parseFileId(parsed.dev);
-    const ino = parseFileId(parsed.ino);
-    if (
-      dev === null ||
-      ino === null ||
-      typeof parsed.size !== 'number' ||
-      !Number.isFinite(parsed.size) ||
-      typeof parsed.mtimeMs !== 'number' ||
-      !Number.isFinite(parsed.mtimeMs) ||
-      typeof parsed.sha256 !== 'string' ||
-      !/^[0-9a-f]{64}$/i.test(parsed.sha256)
-    )
-      return null;
-    return { dev, ino, size: parsed.size, mtimeMs: parsed.mtimeMs, sha256: parsed.sha256 };
-  } catch {
-    return null;
-  }
 }
 
 async function pathsReferToSameFile(left: string, right: string): Promise<boolean> {
@@ -715,6 +644,9 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   }
 
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
+    // 即将拉起 Claude CLI = 用户在用 Claude：打开 #9282 的投影门（含首次、
+    // ~/.claude 尚不存在的会话），再走共享 skills 预热。
+    markClaudeSessionObserved();
     if (options?.nativeSubscriptionAccount) {
       const account = options.nativeSubscriptionAccount;
       account.assertCurrent();
@@ -948,7 +880,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * 2026-07-03 曾因测试把 userData mock 成 cwd,构造期预热把 codex-home 整套骨架
    * (含真实 ~/.codex/auth.json 的硬链)生成进了仓库 apps/desktop/ 下(PR #438)。
    * 原构造函数的逻辑拆成: marker 读取 → ensureInvalidationMarkerLoaded(懒加载),
-   * 目录/凭证预热 → warmUp()(由 maker-host 装配时显式调用)。
+   * 凭证协调 → warmUp();运行资源仅在登录或 getAuthEnv 时准备。
    * import 纯度由 __tests__/authAdaptersImportPurity.test.ts 回归保护。
    */
 
@@ -983,8 +915,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   private shouldSnapshotReleaseCodexAuth(systemAuth: string, myAuth: string): boolean {
     if (!this.devOAuthWritesBlocked()) return false;
-    if (path.resolve(systemAuth) !== path.resolve(getReleaseCodexAuthPath())) return false;
-    return path.resolve(systemAuth) !== path.resolve(myAuth);
+    if (!codexAuthPathsShareEntry(systemAuth, getReleaseCodexAuthPath())) return false;
+    return !codexAuthPathsShareEntry(systemAuth, myAuth);
   }
 
   private warnDevOAuthWriteOverride(action: string): void {
@@ -1029,20 +961,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   /**
-   * 生产启动预热 —— 等价旧构造函数里的 fire-and-forget:提前建好 codex-home 骨架、
-   * 和本机 codex CLI (~/.codex/auth.json) 协调凭证(防止两份 refresh_token 互相
-   * rotate 导致服务端 invalidate 对方),让首次 getState / spawn 走热路径。
-   * 由 maker-host 装配 codex agent 时显式调用;失败静默,后续 getAuthEnv / getState
-   * 的按需 ensure / reconcile 会兜底。
+   * 启动只协调已有的本机登录，保留账号发现；没有凭证时 reconcile 不创建 home。
+   * Skills、规则和插件等运行资源延迟到显式登录或 getAuthEnv，避免只用 Pi 的
+   * 用户也初始化 Codex。失败由后续 getAuthEnv / getState 的按需 reconcile 兜底。
    */
-  warmUp(): void {
+  warmUp(): Promise<void> {
     this.ensureInvalidationMarkerLoaded();
-    // 串行:先建 codex-home 骨架、再 reconcile。并行时首启(目录尚不存在)的 reconcile
-    // 会在建目录前尝试硬链,白跑一次注定 ENOENT 的 IO(目录兜底见 runReconcile 内 mkdir)。
-    void this.ensureGlobalCodexAssets()
-      .catch(() => undefined)
-      .then(() => this.reconcileWithSystemCodex())
-      .catch(() => undefined);
+    return this.reconcileWithSystemCodex().catch(() => undefined);
   }
 
   /**
@@ -1103,7 +1028,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const authPath = path.join(this.codexHome, 'auth.json');
     if (
       this.devOAuthWritesBlocked() &&
-      path.resolve(getSystemCodexAuthPath()) === path.resolve(authPath)
+      codexAuthPathsShareEntry(getSystemCodexAuthPath(), authPath)
     ) {
       // Shared Dev may consume an existing Release binding, but must never
       // create or repair that binding on the Release profile.
@@ -1210,31 +1135,34 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       return;
     }
     this.ensureInvalidationMarkerLoaded();
-    if (this.suppressSystemCodexReconcile) {
-      const marker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
-      // marker 丢失时保持本进程 fail-closed；磁盘写失败不能变成下一次调用立刻回灌坏 token。
-      if (!marker) return;
-      if (
-        getActiveInvalidatedSystemCodexAuthMarker(
-          this.codexHome,
-          getSystemCodexAuthPath(),
-          path.join(this.codexHome, 'auth.json'),
-        )
-      ) {
-        return;
-      }
-      this.suppressSystemCodexReconcile = false;
-      this.oauthInvalidatedReason = null;
-      this.oauthInvalidatedCredentialScope = undefined;
-      this.oauthRecoveryRequiredReason = marker.reason;
-      this.oauthRecoveryCredentialScope = marker.credentialScope ?? 'unknown';
-    }
-
     const systemAuth = getSystemCodexAuthPath();
     const myAuth = path.join(this.codexHome, 'auth.json');
 
+    // 用户主动断开的抑制仍以当前凭证和持久标记为准。
+    const marker = this.suppressSystemCodexReconcile
+      ? readInvalidatedSystemCodexAuthMarker(this.codexHome)
+      : null;
+    const markerActive = this.suppressSystemCodexReconcile
+      ? !marker ||
+        !!getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuth, myAuth)
+      : false;
+
+    // No automatic recovery of *.swapbak: it cannot distinguish an interrupted
+    // writer from another live profile or a native logout. Leave any old backup intact.
     if (!existsSync(systemAuth)) return;
-    if (path.resolve(systemAuth) === path.resolve(myAuth)) {
+
+    if (markerActive) return;
+    if (this.suppressSystemCodexReconcile) {
+      // marker 丢失时保持本进程 fail-closed; 磁盘写失败不能变成下一次调用立刻回灌坏 token。
+      // 走到这里说明 marker 已经失效(本机 Codex 换了凭证): 解除抑制, 继续正常对账。
+      this.suppressSystemCodexReconcile = false;
+      this.oauthInvalidatedReason = null;
+      this.oauthInvalidatedCredentialScope = undefined;
+      this.oauthRecoveryRequiredReason = marker?.reason ?? null;
+      this.oauthRecoveryCredentialScope = marker?.credentialScope ?? 'unknown';
+    }
+
+    if (codexAuthPathsShareEntry(systemAuth, myAuth)) {
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;
     }
@@ -1243,11 +1171,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (topology.healthy && topology.linkType === 'hardlink') {
       markNativeProviderAuthSharedSystemCredential('openai');
     }
-    if (topology.healthy && (process.platform === 'win32' || topology.linkType === 'symlink')) {
+    // 健康的 Windows hardlink 不能再短路:Codex 0.165+ 拒绝 nlink>1。落到下面的
+    // relink,换成文件 symlink;建不了则移除本实例的旧别名,系统凭证保留,改走独立登录。
+    if (topology.healthy && topology.linkType === 'symlink') {
       if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
-        const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
+        const snapshot = await copyCodexAuthSnapshotWithRetry(systemAuth, myAuth);
         if (snapshot.kind === 'copied') {
           markNativeProviderAuthSharedSystemCredential('openai');
+          this.lastKnownCodexCredentialScope = 'system-shared';
           log.info('codex auth.json detached into a read-only Release snapshot');
         } else {
           credPathLog.warn('failed to detach Release auth snapshot; shared link left intact', {
@@ -1255,6 +1186,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
           });
           throw snapshot.error ?? new Error('Failed to detach Release auth snapshot');
         }
+        // 只读 Dev 消费的是 Release 的快照副本:Release 文件本身的残留硬链不该由这个
+        // 只读进程去清 —— 清 = 换掉 Release 的 inode(写操作),违背「Release 凭证的
+        // 字节与 inode 都不变」的边界(#9316 review)。本地 Codex 写的是快照副本,
+        // Release 那份的 nlink 与这个进程无关。
+        return;
       }
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;
@@ -1280,7 +1216,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
 
     const sysAccount = await readCodexAccountId(systemAuth);
-    if (!sysAccount) return; // 本机 auth.json 解析不出 account, 保守不动
+    // A proven hardlink can be migrated even when the expired/broken credential
+    // has no readable account: both paths already reference the same file.
+    if (!sysAccount && topology.linkType !== 'hardlink') return;
 
     const myAccount = hasLocalEntry ? await readCodexAccountId(myAuth) : null;
     if (legacyExplicitOwner && myAccount && myAccount !== sysAccount) {
@@ -1292,6 +1230,18 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         provenanceMigrated: migrated,
         ownerMatchesActive: legacyExplicitOwner === getActiveAppSession().dataOwnerId,
       });
+      return;
+    }
+
+    // Windows without symlink privilege uses an independent native login. Keep
+    // existing standalone credentials, regardless of timestamps or account equality.
+    if (
+      process.platform === 'win32' && topology.linkType === 'file' &&
+      !this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)
+    ) {
+      if (legacyExplicitOwner) {
+        migrateLegacyExplicitNativeProviderAuthToInstanceIsolated('openai', legacyExplicitOwner);
+      }
       return;
     }
 
@@ -1307,14 +1257,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // new local credential since that snapshot; never replace it using the stale orphan decision.
     if (this.pendingLogin || this.loginCancellationOpen) return;
 
-    // 无显式隔离 provenance 时使用本机凭证：POSIX symlink / Windows hardlink。
+    // 无显式隔离 provenance 时使用本机凭证：文件 symlink。Windows 建不了 symlink
+    // 时不退回 hardlink 或复制 token,改走独立登录。
     // 安全替换 (唯一 sidecar + 失败重建) 见 codex-auth-link.ts —— 避免并发撞临时文件、
     // 以及"myAuth 删了又建不回去导致用户被迫重登"的空窗。
     // 建共享链接前幂等确保 codexHome 目录存在: 首启时 assets 预热可能尚未建好目录, ENOENT
     // 会让 relink 走 link-unsupported 回退, splash 后首次 auth 查询短暂误报未登录。
     await fsp.mkdir(this.codexHome, { recursive: true }).catch(() => undefined);
     if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
-      const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
+      const snapshot = await copyCodexAuthSnapshotWithRetry(systemAuth, myAuth);
       if (hasLocalEntry && !topology.healthy) {
         this.lastOrphanRepair = snapshot.kind === 'copied' ? 'relinked' : 'failed';
       }
@@ -1335,13 +1286,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       this.lastOrphanRepair = kind === 'linked' ? 'relinked' : 'failed';
     }
     switch (kind) {
+      case 'same-entry':
+        this.lastKnownCodexCredentialScope = 'system-shared';
+        break;
       case 'linked':
         this.lastKnownCodexCredentialScope = 'system-shared';
         log.info('codex auth.json linked with shared OpenAI login', { linkType });
         break;
       case 'link-unsupported':
-        // 共享链接不支持时 myAuth 一字未动。
-        credPathLog.warn('shared OpenAI auth link failed, auth.json left intact', {
+        credPathLog.warn('shared OpenAI auth link unavailable; use independent login', {
           error: error?.message,
         });
         break;
@@ -1715,32 +1668,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const independent = providerId !== 'openai';
     const authenticated = () => independent
       ? codexAccountState(providerId).authenticated : this.hasCodexOAuthLoginReadOnly();
+    // Resolve the account home only after the login check, so an unauthenticated
+    // provider yields null instead of reaching the home lookup.
     if (!authenticated()) return null;
     const home = independent ? codexAccountHome(providerId) : this.codexHome;
-    const authPath = path.join(home, 'auth.json');
-    const credential = () => {
-      const value = currentCodexCredentialGeneration(authPath);
-      return value ? JSON.stringify(value) : null;
-    };
-    // Independent accounts authorize against their existing account record;
-    // inherited OpenAI uses the native provider authorization record.
-    const authorization = () => independent
-      ? JSON.stringify(currentCodexCredentialGeneration(path.join(home, 'account.json')))
-      : captureNativeProviderAuthorizationGeneration('openai');
-    const credentialGeneration = credential();
-    const authorizationGeneration = authorization();
-    if (!credentialGeneration || !authorizationGeneration || authorizationGeneration === 'null') return null;
-    try {
-      const raw = fs.readFileSync(authPath, 'utf8');
-      const auth = JSON.parse(raw) as { tokens?: { access_token?: unknown; account_id?: unknown; id_token?: unknown } };
-      if (auth.tokens?.access_token !== accessToken || chatgptAccountIdFromTokens(auth.tokens) !== accountId) return null;
-    } catch {
-      return null;
-    }
-    const isCurrent = () => authenticated()
-      && credential() === credentialGeneration
-      && authorization() === authorizationGeneration;
-    return isCurrent() ? isCurrent : null;
+    return captureCodexOAuthDispatchProof({ home, accessToken, accountId, authenticated,
+      authorization: () => independent
+        ? JSON.stringify(currentCodexCredentialGeneration(path.join(home, 'account.json')))
+        : captureNativeProviderAuthorizationGeneration('openai'),
+    });
   }
 
   /** Bracket one account-level RPC with compare-and-commit recovery confirmation. */
@@ -1768,43 +1704,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   private async readLocalCodexAuthState(): Promise<AuthState> {
-    if (this.devReadOnlyDetached) return { authenticated: false };
-    const authPath = path.join(this.codexHome, 'auth.json');
-    if (!existsSync(authPath)) return { authenticated: false };
-    // logout 的 marker 先于 unlink 落盘；崩溃 / 文件锁导致旧 auth 残留时也不能复活账号。
-    // 新一次显式 OAuth 会写入不同 fingerprint，因此不会被这条规则误伤。
-    if (shouldSuppressLocalCodexAuth(this.codexHome, authPath)) {
-      return { authenticated: false };
-    }
-    try {
-      const raw = await fsp.readFile(authPath, 'utf-8');
-      const obj = JSON.parse(raw) as {
-        account?: { email?: unknown };
-        expires_at?: unknown;
-        tokens?: { access_token?: unknown };
-      };
-      // Display metadata only: use the same token claims as independently added accounts.
-      // Parsing a label must not change the authentication decision below.
-      const identity = typeof obj.account?.email === 'string' && obj.account.email.trim()
-        ? obj.account.email
-        : parseCodexAccountIdentity(raw)?.label;
-      const expiresAt = typeof obj.expires_at === 'number' ? obj.expires_at : undefined;
-      // authSource='oauth' 必须与 spawn fallback 的判定同源(hasCodexOAuthLogin =
-      // auth.json 含 access_token,见下方 getAccessToken 的字段路径)。`codex login
-      // --api-key` 产生的 auth.json 没有 tokens —— 若仅凭"能解析"就标 oauth,
-      // maker-core 会把隐式会话归一成 oauth-bearer,而 spawn fallback 实际走
-      // gateway key,共享 host 被登记错形态 → 后续显式 oauth 会话静默复用网关
-      // key 进程(review P1)。tokens 缺失时不标 authSource,归一化解析不出
-      // 即回退保守的"重建"语义,登录门禁(authenticated)不受影响。
-      const hasOAuthToken =
-        typeof obj.tokens?.access_token === 'string' && obj.tokens.access_token.length > 0;
-      return hasOAuthToken
-        ? { authenticated: true, identity, expiresAt, authSource: 'oauth' }
-        : { authenticated: true, identity, expiresAt };
-    } catch {
-      // JSON.parse 失败 / IO 错 → 降级为未登录 + errorReason, 不抛
-      return { authenticated: false, errorReason: 'auth_parse_failed' };
-    }
+    return readCodexLocalAuthState(this.codexHome, this.devReadOnlyDetached);
   }
 
   triggerLogin(opts?: AuthLoginOptions): Promise<AuthState> {
@@ -1919,7 +1819,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         return { authenticated: false, errorReason: 'isolated_auth_cleanup_failed' };
       }
     }
-    if (opts?.mode === 'local') {
+    localLogin: if (opts?.mode === 'local') {
       const owner = getActiveAppSession();
       const systemAuth = getSystemCodexAuthPath();
       const localAuth = path.join(this.codexHome, 'auth.json');
@@ -1942,16 +1842,42 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         const identity = parseCodexAccountIdentity(raw);
         const tokens = JSON.parse(raw).tokens;
         if (typeof tokens?.access_token !== 'string' || !tokens.access_token) return { authenticated: false, errorReason: 'no_oauth' };
-        if (!existsSync(localAuth) || !pathsReferToSameFileSync(localAuth, systemAuth)) {
+        const topology = await inspectCodexAuthLink(systemAuth, localAuth);
+        if (
+          !codexAuthPathsShareEntry(localAuth, systemAuth) &&
+          !(topology.linkType === 'symlink' && await codexAuthPathsShareIdentity(localAuth, systemAuth))
+        ) {
           fs.mkdirSync(this.codexHome, { recursive: true, mode: 0o700 });
           // Retain the existing read-only Dev exception; writable runtimes must share
           // the native credential rather than rotate an independent refresh-token copy.
           if (this.shouldSnapshotReleaseCodexAuth(systemAuth, localAuth)) {
-            const result = await copyCodexAuthSnapshot(systemAuth, localAuth);
+            const result = await copyCodexAuthSnapshotWithRetry(systemAuth, localAuth);
             if (result.kind !== 'copied') throw new Error('Local auth snapshot failed');
           } else {
-            await relinkSharedCodexAuth(systemAuth, localAuth);
-            if (!pathsReferToSameFileSync(localAuth, systemAuth)) throw new Error('Local auth link failed');
+            const relink = await relinkSharedCodexAuth(systemAuth, localAuth);
+            // relink 可能以 recovered / swap-failed-intact 收口:此时本地凭证其实
+            // 已经共享了系统凭证(重建成功,或并发的另一次已抢先放好)。看最终的
+            // 文件身份,别把健康的结果当成失败(#9316 review)。
+            const finalTopology = await inspectCodexAuthLink(systemAuth, localAuth);
+            const sharesSystemCredential = codexAuthPathsShareEntry(localAuth, systemAuth) ||
+              (finalTopology.linkType === 'symlink' &&
+                await codexAuthPathsShareIdentity(localAuth, systemAuth));
+            const acceptance = codexAuthLinkAcceptanceFor(relink.kind, sharesSystemCredential, process.platform);
+            if (acceptance === 'accept-shared' && relink.kind !== 'linked') {
+              credPathLog.warn('codex auth.json link recovered with the shared system credential', {
+                relink: relink.kind,
+                error: relink.error?.message,
+              });
+            }
+            if (acceptance === 'reject') {
+              throw new Error('Local auth link failed');
+            }
+            if (acceptance === 'independent-login') {
+              if (!stillCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
+              // Continue through the existing browser OAuth flow in this Cindy home.
+              // It persists instance-isolated provenance after a successful login.
+              break localLogin;
+            }
           }
         }
         if (!stillCurrent()) {
@@ -1992,6 +1918,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         return { authenticated: false, errorReason: 'local_auth_unavailable' };
       }
     }
+    // Local reuse can fall through to independent OAuth. Apply the same write
+    // policy as an explicit browser/device login before preparing that flow.
+    if (this.devOAuthWritesBlocked()) {
+      return { authenticated: false, errorReason: 'dev_oauth_write_blocked', oauthWritesBlocked: true };
+    }
     await this.ensureGlobalCodexAssets();
 
     // Binary 必须在应用启动时就绪 (bootstrap-electron 的 ready 钩子会阻塞预下载)。
@@ -2021,6 +1952,22 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 执行前复核路径确为受管二进制(CodeQL js/command-line-injection 防御纵深)
     if (!isVettedAgentBinaryPath('codex', binaryPath)) {
       return { authenticated: false, errorReason: 'codex_binary_missing' };
+    }
+
+    if (opts?.mode === 'local') {
+      // This is the independent-login fallback, not successful shared reuse.
+      // Check after all asynchronous setup/cleanup: failed unlink or a new alias
+      // during setup must never hand the native credential's inode to OAuth.
+      try {
+        const local = fs.lstatSync(path.join(this.codexHome, 'auth.json'), { bigint: true });
+        if (!local.isFile() || local.nlink !== 1n) {
+          return { authenticated: false, errorReason: 'local_auth_unavailable' };
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          return { authenticated: false, errorReason: 'local_auth_unavailable' };
+        }
+      }
     }
 
     // spawn codex login。POSIX 建独立进程组，取消/超时时连同回调 server 一起收割。
@@ -2444,7 +2391,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     this.commitExplicitCodexDisconnectBoundary(activeIntent);
     const authPath = path.join(this.codexHome, 'auth.json');
     try {
-      if (!activeIntent.explicitRequested && path.resolve(authPath) !== path.resolve(getCodexCliAuthPath())) {
+      if (!activeIntent.explicitRequested && !codexAuthPathsShareEntry(authPath, getCodexCliAuthPath())) {
         await fsp.rm(authPath, { force: true });
       }
     } catch (err) {

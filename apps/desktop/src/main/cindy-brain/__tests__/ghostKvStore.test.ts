@@ -41,6 +41,21 @@ describe('cindy-brain · ghostKvStore(意识自定义参数持久化)', () => {
     expect(store.read('demo')).toEqual({ theme: 'light' }); // count 不残留
   });
 
+  // Registered fields use this same write entry even through /kv. Unit: reject
+  // an invalid field before changing the stored object or sending a notification.
+  it('validates registered settings on the original KV write before publishing', () => {
+    const changed = vi.fn();
+    const registered = createGhostKvStore({ getRootDir: () => root,
+      validate: (_instance, value) => !Object.hasOwn(value, 'enabled') || typeof value.enabled === 'boolean',
+      onWrite: changed });
+    registered.write('demo', { enabled: false, private: 'keep' });
+    changed.mockClear();
+    expect(() => registered.write('demo', { enabled: 'false' })).toThrow(GhostKvError);
+    expect(() => registered.write('demo', null as never)).toThrow(GhostKvError);
+    expect(registered.read('demo')).toEqual({ enabled: false, private: 'keep' });
+    expect(changed).not.toHaveBeenCalled();
+  });
+
   it('意识之间文件隔离', () => {
     store.write('alpha', { a: 1 });
     store.write('beta', { b: 2 });

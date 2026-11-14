@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   settings: {
     language: 'auto',
     refinementEnabled: false,
+    refinementInstructions: '',
+    dictionaryEntries: [],
     muteSystemAudio: true,
     fastActivationEnabled: false,
   },
@@ -37,6 +39,7 @@ vi.mock('@/hooks/useVoiceInputSettings', () => ({
   adviseAndRecordVoiceInputDictionaryLearning: vi.fn(),
 }));
 vi.mock('@/hooks/useVoiceInputHistory', () => ({
+  getVoiceInputHistoryForRefinement: () => [],
   recordVoiceInputHistory: () => null,
   updateVoiceInputHistoryEntry: vi.fn(),
 }));
@@ -67,7 +70,7 @@ vi.mock('../WebMicAudioEngine', () => ({
       mocks.stopEngine();
     }
     async drainBufferedAudio() {
-      mocks.drainEngine(this.emit);
+      await mocks.drainEngine(this.emit);
     }
   },
   currentPowerReleaseGeneration: () => 0,
@@ -83,6 +86,7 @@ vi.mock('../WebMicAudioEngine', () => ({
 }));
 
 import { useVoiceInput } from '../useVoiceInput';
+import { START_CUE_CAPTURE_WAIT_MS } from '../startCue';
 import {
   createComposerLongPressVoiceGesture,
   COMPOSER_LONG_PRESS_VOICE_INPUT_MS,
@@ -156,10 +160,12 @@ function mount() {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  mocks.settings.refinementEnabled = false;
   mocks.engines.length = 0;
   mocks.startEngine.mockReset().mockResolvedValue(undefined);
   mocks.stopEngine.mockReset();
   mocks.drainEngine.mockReset();
+  mocks.promptExpired.mockReset();
   mocks.releasePreparation.mockReset();
   mocks.prepareMicrophone.mockReset().mockReturnValue(mocks.releasePreparation);
 });
@@ -170,6 +176,242 @@ afterEach(() => {
 });
 
 describe('local voice capture independent of startup checks and cloud', () => {
+  // discussion_r4560895062 / unit: existing drains fail after a run already
+  // exists; Send may instead wait for startup, then its extra audio barrier.
+  // The real stop promise must reject that same attempt, not release Send.
+  it('rejects Send when ASR fails in the post-start audio barrier', async () => {
+    const h = mount();
+    await act(async () => { h.mute.resolve({ ok: true }); h.result.current.start(); });
+    act(() => mocks.engines[0].emit(chunk(0)));
+    expect(h.api.start).toHaveBeenCalledOnce();
+    const barrier = deferred<void>();
+    h.api.drainAudioQueue.mockResolvedValueOnce({ ok: true }).mockImplementationOnce(async () => {
+      await barrier.promise;
+      return { ok: true };
+    });
+    const send = vi.fn(); const failed = vi.fn();
+    let stopping!: Promise<void>;
+    await act(async () => { stopping = h.result.current.stop({ waitForRefinement: true }).then(send, failed); });
+    expect(h.api.drainAudioQueue).toHaveBeenCalledTimes(1);
+    await act(async () => { h.connection.resolve({ ok: true, runId: 'post-start-error' }); });
+    expect(h.api.drainAudioQueue).toHaveBeenCalledTimes(2);
+    expect(send).not.toHaveBeenCalled();
+    await act(async () => {
+      h.api.onEvent.mock.calls.at(-1)![0]({ type: 'error', runId: 'post-start-error', message: 'ASR failed after startup' });
+      barrier.resolve();
+      await stopping;
+    });
+    expect(h.result.current.state).toBe('error');
+    expect(send).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledWith(new Error('ASR failed after startup'));
+    expect(h.api.stop).not.toHaveBeenCalled();
+  });
+
+  // discussion_r4560047246: the real stop promise must reject Send when
+  // readiness fails after PCM arrives. Existing failures happen before stop
+  // or after a runId exists, missing this pending-start continuation (unit).
+  it('rejects Send when readiness fails while stop waits for the pending start', async () => {
+    const h = mount();
+    const readiness = deferred<{ ok: false; error: string }>();
+    h.api.getReadinessCached.mockReturnValue({ ok: false });
+    h.api.getReadiness.mockReturnValue(readiness.promise);
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.result.current.start();
+    });
+    act(() => mocks.engines[0].emit(chunk(0)));
+    expect(h.api.getReadiness).toHaveBeenCalledOnce();
+    expect(h.api.start).not.toHaveBeenCalled();
+    const send = vi.fn(); const failed = vi.fn();
+    let stopping!: Promise<void>;
+    await act(async () => {
+      stopping = h.result.current.stop({ waitForRefinement: true }).then(send, failed);
+    });
+    expect(send).not.toHaveBeenCalled();
+    await act(async () => {
+      readiness.resolve({ ok: false, error: 'readiness failed while sending' });
+      await stopping;
+    });
+    expect(h.result.current.state).toBe('error');
+    expect(send).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledWith(new Error('readiness failed while sending'));
+    expect(h.api.start).not.toHaveBeenCalled();
+    expect(h.api.stop).not.toHaveBeenCalled();
+  });
+
+  // #6656 / discussion_r4548420426. Unit: the real stop promise gates Send.
+  // Existing tests only fail after stop IPC; ASR can fail earlier while the
+  // worklet or append-audio barrier drains. That same attempt must reject.
+  it.each(['worklet', 'audio queue'] as const)('rejects Send when ASR errors during %s drain', async barrier => {
+    const h = mount();
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.connection.resolve({ ok: true, runId: 'error-during-drain' });
+      h.result.current.start();
+    });
+    act(() => mocks.engines[0].emit(chunk(0)));
+    const drain = deferred<void>();
+    if (barrier === 'worklet') mocks.drainEngine.mockReturnValueOnce(drain.promise);
+    else h.api.drainAudioQueue.mockImplementationOnce(async () => {
+      await drain.promise;
+      return { ok: true };
+    });
+    const send = vi.fn();
+    const failed = vi.fn();
+    let stopping!: Promise<void>;
+    await act(async () => {
+      stopping = h.result.current.stop({ waitForRefinement: true }).then(send, failed);
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(h.api.stop).not.toHaveBeenCalled();
+    const receive = h.api.onEvent.mock.calls.at(-1)![0];
+    await act(async () => {
+      receive({ type: 'state', runId: 'error-during-drain', state: 'error' });
+      receive({ type: 'error', runId: 'error-during-drain', message: 'ASR failed during drain' });
+      drain.resolve();
+      await stopping;
+    });
+    expect(h.result.current.state).toBe('error');
+    expect(send).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledWith(new Error('ASR failed during drain'));
+    expect(h.api.stop).not.toHaveBeenCalled();
+  });
+
+  // #6656 / discussion_r4525445800: Main can emit refining/error before its
+  // stop IPC resolves. Existing startup tests never changed state during that
+  // reply. Unit: the real hook's public promise must gate Send until completion
+  // and reject failure, while a cancelled generation still ignores its reply.
+  it('keeps the send continuation waiting for refinement after the stop IPC', async () => {
+    mocks.settings.refinementEnabled = true;
+    const h = mount();
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.connection.resolve({ ok: true, runId: 'refining-stop' });
+      h.result.current.start();
+    });
+    act(() => mocks.engines[0].emit(chunk(0)));
+    expect(h.api.start).toHaveBeenCalledWith(expect.objectContaining({ refinementEnabled: true }));
+    expect(h.result.current.state).toBe('listening');
+    const receive = h.api.onEvent.mock.calls.at(-1)![0];
+    h.api.stop.mockImplementation(async () => {
+      receive({ type: 'state', runId: 'refining-stop', state: 'refining' });
+      return { ok: true };
+    });
+    const send = vi.fn();
+    let stopping!: Promise<void>;
+    await act(async () => {
+      stopping = h.result.current.stop({ waitForRefinement: true }).then(send);
+    });
+    expect(h.api.stop).toHaveBeenCalledOnce();
+    expect(h.result.current.state).toBe('refining');
+    expect(send).not.toHaveBeenCalled();
+    await act(async () => {
+      receive({ type: 'state', runId: 'refining-stop', state: 'done' });
+      await stopping;
+    });
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('rejects stop-and-send after the current run errors (IPC ok: %s)', async ok => {
+    const h = mount();
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.connection.resolve({ ok: true, runId: 'error-during-stop' });
+      h.result.current.start();
+    });
+    act(() => mocks.engines[0].emit(chunk(0)));
+    const receive = h.api.onEvent.mock.calls.at(-1)![0];
+    h.api.stop.mockImplementation(async () => {
+      receive({ type: 'state', runId: 'error-during-stop', state: 'error' });
+      receive({ type: 'error', runId: 'error-during-stop', message: 'ASR stop failed' });
+      return ok ? { ok: true } : { ok: false, error: 'ASR stop failed' };
+    });
+    const send = vi.fn();
+    const failed = vi.fn();
+    await act(async () => {
+      await h.result.current.stop({ waitForRefinement: true }).then(send, failed);
+    });
+    expect(h.api.stop).toHaveBeenCalledOnce();
+    expect(h.result.current.state).toBe('error');
+    expect(send).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  it('ignores a failed stop reply after cancellation invalidates that generation', async () => {
+    const h = mount();
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.connection.resolve({ ok: true, runId: 'cancelled-stop' });
+      h.result.current.start();
+    });
+    act(() => mocks.engines[0].emit(chunk(0)));
+    const reply = deferred<{ ok: false; error: string }>();
+    h.api.stop.mockReturnValue(reply.promise);
+    const failed = vi.fn();
+    let stopping!: Promise<void>;
+    await act(async () => {
+      stopping = h.result.current.stop({ waitForRefinement: true }).catch(failed);
+    });
+    expect(h.api.stop).toHaveBeenCalledOnce();
+    await act(async () => { await h.result.current.cancel(); });
+    await act(async () => {
+      reply.resolve({ ok: false, error: 'stale stop failure' });
+      await stopping;
+    });
+    expect(failed).not.toHaveBeenCalled();
+    expect(h.result.current.state).toBe('done');
+    expect(h.api.cancel).toHaveBeenCalledWith({ runId: 'cancelled-stop' });
+  });
+
+  // discussion_r4526952158: Main may dispose a failed ASR run and still reject
+  // cancel IPC. Admission is already revoked, so local cleanup cannot rely on
+  // a later done event; the public control must become usable again.
+  it('finishes local cancellation and allows another recording when cancel IPC rejects', async () => {
+    const h = mount();
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.connection.resolve({ ok: true, runId: 'cancel-error' });
+      h.result.current.start();
+    });
+    const receive = h.api.onEvent.mock.calls.at(-1)![0];
+    h.api.cancel.mockRejectedValueOnce(new Error('ASR stop failed'));
+    const failed = vi.fn();
+    await act(async () => { await h.result.current.cancel().catch(failed); });
+    act(() => receive({ type: 'state', runId: 'cancel-error', state: 'done' }));
+    expect(failed).not.toHaveBeenCalled();
+    expect(h.result.current.state).toBe('done');
+    expect(h.result.current.isBusy).toBe(false);
+    h.api.start.mockResolvedValueOnce({ ok: true, runId: 'next-recording' });
+    await act(async () => { expect(h.result.current.start()).toBe(true); });
+    expect(h.api.start).toHaveBeenCalledTimes(2);
+    expect(h.result.current.state).toBe('listening');
+    await act(async () => { await h.result.current.cancel(); });
+  });
+
+  // PR #6656 error cleanup also serves rich editors, whose event admission
+  // differs from textarea owners. Prior startup cases ended healthy runs.
+  // Minimal unit input: accepted run -> state(error) -> error -> unmount;
+  // native cancel must keep its run ID and must not dismiss the error notice.
+  it('cleans a failed rich-editor run without turning its error into a successful completion', async () => {
+    const h = mount();
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.connection.resolve({ ok: true, runId: 'failed-editor' });
+      h.result.current.start();
+    });
+    const receive = h.api.onEvent.mock.calls.at(-1)![0];
+    await act(async () => {
+      receive({ type: 'state', runId: 'failed-editor', state: 'error' });
+      receive({ type: 'error', runId: 'failed-editor', message: 'connection lost' });
+    });
+    expect(h.api.cancel).toHaveBeenCalledExactlyOnceWith({ runId: 'failed-editor' });
+    act(() => receive({ type: 'state', runId: 'failed-editor', state: 'done' }));
+    expect(h.result.current.state).toBe('error');
+    expect(mocks.stopEngine).toHaveBeenCalled();
+    h.unmount();
+    expect(h.api.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps an authorized microphone closed through a short composer click', async () => {
     const h = mount();
     h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
@@ -360,7 +602,10 @@ describe('local voice capture independent of startup checks and cloud', () => {
     expect(h.api.appendAudio).toHaveBeenLastCalledWith(chunk(1, 40));
   });
 
-  it('retains all 8 seconds while both cloud and system mute are pending; signals ready only after PCM', async () => {
+  // Regression, 2026-11-11: the cue used to start together with the microphone
+  // request. Starting idle speakers delayed the first captured audio by about
+  // 450 ms, so the cue now follows the first retained PCM.
+  it('retains all 8 seconds while both cloud and system mute are pending; signals ready and plays the cue only after PCM', async () => {
     const h = mount();
     const cue = vi.fn();
     let starting!: boolean;
@@ -368,7 +613,7 @@ describe('local voice capture independent of startup checks and cloud', () => {
       starting = h.result.current.start({ onStartFeedback: cue });
     });
     expect(mocks.startEngine).toHaveBeenCalledTimes(1);
-    expect(cue).toHaveBeenCalledTimes(1);
+    expect(cue).not.toHaveBeenCalled();
     expect(h.result.current.isCaptureReady).toBe(false);
     const frames = Array.from({ length: 200 }, (_, i) => chunk(i));
     await act(async () => {
@@ -396,6 +641,9 @@ describe('local voice capture independent of startup checks and cloud', () => {
     });
     expect(mocks.startEngine).toHaveBeenCalledTimes(1);
     expect(h.api.start).not.toHaveBeenCalled();
+    // System mute touches the speakers too: without a cue it still waits for
+    // the microphone, which has not produced a frame yet.
+    expect(h.api.muteSystemAudio).not.toHaveBeenCalled();
     await act(async () => {
       h.mute.resolve({ ok: true });
       preflight.resolve(false);
@@ -406,16 +654,23 @@ describe('local voice capture independent of startup checks and cloud', () => {
     expect(h.api.start).not.toHaveBeenCalled();
   });
 
-  it('plays feedback and mutes without waiting for a slow microphone', async () => {
+  it('holds feedback and mute for the microphone, but only up to the cap when it is slow', async () => {
     const h = mount();
     const device = deferred<void>();
     mocks.startEngine.mockReturnValue(device.promise);
-    const cue = vi.fn(() => {
-      expect(mocks.startEngine).toHaveBeenCalledTimes(1);
-    });
+    const cue = vi.fn();
     let starting!: boolean;
     await act(async () => {
       starting = h.result.current.start({ onStartFeedback: cue });
+    });
+    expect(mocks.startEngine).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(START_CUE_CAPTURE_WAIT_MS - 1);
+    });
+    expect(cue).not.toHaveBeenCalled();
+    expect(h.api.muteSystemAudio).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
     });
     expect(cue).toHaveBeenCalledTimes(1);
     expect(h.api.muteSystemAudio).toHaveBeenCalledTimes(1);
@@ -455,7 +710,7 @@ describe('local voice capture independent of startup checks and cloud', () => {
     expect(h.api.appendAudio.mock.calls.map(([frame]) => frame)).toEqual([chunk(0), chunk(1)]);
   });
 
-  it('closes a late microphone after cancellation and does not replay the start cue', async () => {
+  it('closes a late microphone after cancellation, never plays the start cue and restores audio without waiting for the cap', async () => {
     const h = mount();
     const device = deferred<void>();
     mocks.startEngine.mockReturnValue(device.promise);
@@ -475,7 +730,8 @@ describe('local voice capture independent of startup checks and cloud', () => {
       mocks.engines[0].emit(chunk(0));
     });
     expect(mocks.stopEngine).toHaveBeenCalledTimes(2);
-    expect(cue).toHaveBeenCalledTimes(1);
+    expect(cue).not.toHaveBeenCalled();
+    expect(h.api.restoreSystemAudio).toHaveBeenCalledOnce();
     expect(h.api.appendAudio).not.toHaveBeenCalled();
     expect(h.result.current.isBusy).toBe(false);
     expect(h.api.cancel).toHaveBeenCalledWith({ runId: 'cancelled-run' });
@@ -555,6 +811,55 @@ describe('local voice capture independent of startup checks and cloud', () => {
       await nextStart;
     });
     expect(h.api.appendAudio).toHaveBeenCalledExactlyOnceWith(chunk(0));
+  });
+
+  // 测试价值：真实 useVoiceInput 连续 start/stop 后必须仍能停止当前麦克风。
+  // 依据：2026-11-09 旧 done 把新输入置为 done，后续 start 覆盖仍在采集的 engine。
+  // 缺口：已有 immediate-restart 测试只模拟旧 start 返回，没有旧 run 的 IPC 事件。
+  // 最小输入：A stop → B start → A done → B start 返回 → B stop；另保留早到 auth。
+  // tier: unit，mock 设备/IPC、假时钟；修复前定向墙钟 1.47s（16 过/1 失败）。
+  it('ignores a cancelled run finishing while the next microphone is already open', async () => {
+    const h = mount();
+    await act(async () => { h.result.current.start(); });
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      await h.result.current.stop();
+    });
+    const nextConnection = deferred<{ ok: true; runId: string }>();
+    h.api.start.mockReturnValue(nextConnection.promise);
+    await act(async () => { h.result.current.start(); });
+    const stopCount = mocks.stopEngine.mock.calls.length;
+    await act(async () => {
+      // main can finish the cancelled connection after the next capture starts.
+      h.connection.resolve({ ok: true, runId: 'old' });
+    });
+    act(() => {
+      h.api.onEvent.mock.calls.at(-1)![0]({ type: 'state', runId: 'old', state: 'done' });
+    });
+    expect(h.result.current.state).toBe('listening');
+    expect(mocks.stopEngine).toHaveBeenCalledTimes(stopCount);
+    await act(async () => { nextConnection.resolve({ ok: true, runId: 'new' }); });
+    expect(h.result.current.state).toBe('listening');
+    await act(async () => { await h.result.current.stop(); });
+    expect(mocks.stopEngine).toHaveBeenCalledTimes(stopCount + 1);
+    expect(h.result.current.state).toBe('done');
+  });
+
+  it('delivers an early auth event only after the matching start owns the run', async () => {
+    const h = mount();
+    await act(async () => { h.result.current.start(); });
+    act(() => {
+      h.api.onEvent.mock.calls.at(-1)![0]({
+        type: 'auth-required', runId: 'current', provider: 'codex', reason: 'expired',
+      });
+    });
+    expect(mocks.promptExpired).not.toHaveBeenCalled();
+    await act(async () => { h.connection.resolve({ ok: true, runId: 'current' }); });
+    expect(mocks.promptExpired).toHaveBeenCalledExactlyOnceWith('expired');
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      await h.result.current.cancel();
+    });
   });
 
   it('cleans up local capture when readiness IPC rejects', async () => {

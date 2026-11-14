@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, type InteractionDecision } from '@cindy/maker-core';
+import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, type AgentEvent, type InteractionDecision } from '@cindy/maker-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +25,18 @@ import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/prov
 import { decodeOpenPayload, decodeStartOptions, encodeStartOptions, decodeSendOptions, encodeSendOptions, isSafeProjectFilePath } from '../wire';
 
 let root: string;
+
+// Project memory uses a locator rather than the full index. Both wire endpoints must keep it;
+// older senders omit it and retain their existing memory behavior (unit, real codec roundtrip).
+it('roundtrips the project memory locator without requiring it from older senders', () => {
+  const input = { model: 'm', workingDir: '/project', makerMemoryEnabled: true,
+    makerMemoryProjectDir: '/project/.cindy/memory', makerMemoryIndexSnapshot: '' };
+  expect(decodeStartOptions(encodeStartOptions(input))).toMatchObject({
+    makerMemoryProjectDir: input.makerMemoryProjectDir, makerMemoryIndexSnapshot: '',
+  });
+  expect(decodeStartOptions({ model: 'm' }).makerMemoryProjectDir).toBeUndefined();
+  expect(decodeStartOptions({ model: 'm', makerMemoryProjectDir: 7 }).makerMemoryProjectDir).toBeUndefined();
+});
 
 it('encodes only application isolation, never its private URL, token, path or target', () => {
   const encoded = encodeStartOptions({ sessionId: 'client', workingDir: '/workspace', model: 'm', [LOCAL_AGENT_CLIENT]: {
@@ -364,6 +376,41 @@ describe('tunnel', () => {
 });
 
 describe('remote AgentSessionHandle close', () => {
+  // #9985 unit: close classification must use the foreground terminal and local
+  // teardown intent. Existing idle cleanup tests never sent a turn before close.
+  it.each(['idle', 'done', 'terminal-error', 'abort', 'close', 'detach'] as const)(
+    'keeps an intentional or settled %s quiet when the remote stream closes', async settlement => {
+      const dispose = vi.fn(async () => undefined);
+      const controller = createRemoteAgentHandle({
+        client: {
+          callWithId: async () => undefined,
+          call: async () => undefined,
+          close: async () => {
+            // A delayed busy snapshot must not undo our local close/detach intent.
+            controller.onState({ turnRunning: true });
+            controller.onClosed('superseded');
+          },
+        } as unknown as RemoteAgentRunClient,
+        started: { id: 'sdk-1', agentKind: 'claude-code', model: 'm', shadowDir: '', methods: [], state: {} },
+        workspace: new ExecutorWorkspace({ workingDir: root }),
+        recordApproval() {}, newId: () => 'req', dispose,
+      });
+      if (settlement !== 'idle') await controller.handle.send({ type: 'user', content: 'work' });
+      const terminal: AgentEvent = settlement === 'terminal-error'
+        ? { type: 'error', source: 'claude-code', data: { message: 'quota reached', usageResetAt: 1794400000000, isTerminal: true } }
+        : { type: 'done', source: 'claude-code', data: {} };
+      if (settlement === 'done' || settlement === 'terminal-error') controller.onEvent(terminal);
+      if (settlement === 'abort') await controller.handle.abort();
+      if (settlement === 'close' || settlement === 'detach') await controller.handle[settlement]!({ reason: 'navigation' });
+      controller.onClosed('ended');
+      controller.onClosed('error', 'late duplicate close');
+      const seen: AgentEvent[] = [];
+      for await (const event of controller.handle.events()) seen.push(event);
+      expect(seen).toEqual(settlement === 'done' || settlement === 'terminal-error' ? [terminal] : []);
+      expect(dispose).toHaveBeenCalledOnce();
+    },
+  );
+
   // #9263 unit: old execution hosts silently strip iMessage permissions. Check
   // send/steer before dispatch, including a reconnect that changes host version.
   it('requires current executor support before sending iMessage context', async () => {

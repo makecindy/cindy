@@ -143,7 +143,12 @@ interface PooledEntry {
 
 const MEMORY_SUBDIR = 'maker-memory';
 const FTS_DB_FILENAME = 'fts.db';
-const STORAGE_MIGRATION_RECEIPT = '.cindy-memory-migration-v1.json';
+/**
+ * Written in a host-resolved store once the shards of its historical `<owner>/maker-memory/<scope>`
+ * folder were copied in; a host that moves them itself writes it too, so they are copied once.
+ */
+export const MEMORY_STORAGE_MIGRATION_RECEIPT = '.cindy-memory-migration-v1.json';
+const STORAGE_MIGRATION_RECEIPT = MEMORY_STORAGE_MIGRATION_RECEIPT;
 // This shape is only a candidate: sanitized project paths can match it too.
 const LEGACY_BOT_MEMORY_DIR = /^bot-.{0,24}-[a-f0-9]{16}$/;
 
@@ -175,11 +180,36 @@ function copyLegacyMemoryShardsSync(sourceDir: string, targetDir: string): void 
     const source = path.join(sourceDir, entry.name);
     if (fsSync.lstatSync(source).isSymbolicLink()) continue;
     const target = path.join(targetDir, entry.name);
-    if (!fsSync.existsSync(target)) fsSync.copyFileSync(source, target);
+    // Exclusive: an existing file (or a link planted there) is never written through.
+    try {
+      fsSync.copyFileSync(source, target, fsSync.constants.COPYFILE_EXCL);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+}
+
+/** fts.db and its journals are derived: a link in their place is removed, never opened through. */
+function removeLinkedDatabaseFilesSync(dbPath: string): void {
+  for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, `${dbPath}-journal`]) {
+    try {
+      if (fsSync.lstatSync(file).isSymbolicLink()) fsSync.unlinkSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 }
 
 export class MakerMemoryManager {
+  /** Discover a project-local store without opening SQLite or creating any files. */
+  getProjectMemoryDirectory(scopeKey: string): string | undefined {
+    this.ensureOwnerScope();
+    if (!path.isAbsolute(scopeKey)) return undefined;
+    const dir = this.deps.resolveStorageDir?.(scopeKey, this.resolvedBasePath!);
+    if (!dir) return undefined;
+    const relative = path.relative(scopeKey, dir);
+    return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? dir : undefined;
+  }
   private enabled: boolean;
   private readonly stores = new Map<string, PooledEntry>();
   private readonly logger: Logger;
@@ -605,10 +635,11 @@ export class MakerMemoryManager {
         copyLegacyMemoryShardsSync(legacyStorageDir, storageDir);
         const receipt = path.join(storageDir, STORAGE_MIGRATION_RECEIPT);
         const receiptTmp = `${receipt}.tmp-${process.pid}`;
+        fs.rmSync(receiptTmp, { force: true });
         fs.writeFileSync(
           receiptTmp,
           `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString() })}\n`,
-          'utf8',
+          { encoding: 'utf8', flag: 'wx' },
         );
         fs.renameSync(receiptTmp, receipt);
       } catch (error) {
@@ -616,6 +647,7 @@ export class MakerMemoryManager {
       }
     }
     fs.mkdirSync(storageDir, { recursive: true });
+    removeLinkedDatabaseFilesSync(dbPath);
 
     const db = this.deps.sqliteFactory(dbPath);
     // 注册 in-flight 打开的 db (review #2388 Codex 26th P1): init 完成前不在
@@ -624,6 +656,7 @@ export class MakerMemoryManager {
     const store = new MakerMemoryStore({
       storageDir,
       absWorkdir,
+      nativeFileEdits: this.getProjectMemoryDirectory(absWorkdir) !== undefined,
       db,
       logger: this.logger.child(`memory:${sanitized}`),
       ...(this.deps.config ? { config: this.deps.config } : {}),

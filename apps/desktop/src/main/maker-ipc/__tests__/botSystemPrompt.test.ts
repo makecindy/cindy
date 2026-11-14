@@ -7,7 +7,6 @@
  * **能力有没有被写进提示词**,以及**没挂的能力有没有被闭嘴**。
  */
 import { describe, expect, it } from 'vitest';
-import { TEAMMATE_SYSTEM_SKILLS } from '@cindy/mcps';
 
 import {
   buildBotTeammateRoster,
@@ -34,42 +33,26 @@ function input(overrides: Partial<BotSystemPromptInput> = {}): BotSystemPromptIn
 }
 
 describe('稳定层:能力必须写进提示词', () => {
-  // Rule (cindy-bots-runtime.md §6「伙伴技能分层」): routines and the workbench are system Skills, read on demand
-  // and dropped together with their tools when the owner turns them off.
-  it('leaves routines to their system Skill and drops the workbench line when follow is off', () => {
-    const enabled = input();
-    enabled.capabilities.routinesEnabled = true;
-    enabled.capabilities.botModeEnabled = true;
-    expect(buildBotStableTier(enabled)).not.toContain('routine_save');
-    expect(TEAMMATE_SYSTEM_SKILLS.routine.body).toContain('保存后再读回');
-    const main = input();
-    main.capabilities.botModeEnabled = true;
-    main.capabilities.sessionControlEnabled = true;
-    main.capabilities.followEnabled = false;
-    expect(buildBotStableTier(main)).not.toContain('set_workbench_task_responsibility');
-    expect(TEAMMATE_SYSTEM_SKILLS.follow.body).toContain('set_workbench_task_responsibility');
-  });
   it('只给本机伙伴主任务讲它能管主人的任务,自动化另需挂载', () => {
     const main = input();
     main.capabilities.botModeEnabled = true;
     main.capabilities.sessionControlEnabled = true;
     const stable = buildBotStableTier(main);
-    expect(stable).toContain('你能看、能管主人的任务');
-    // The prompt states the same principal boundary the host gate enforces.
-    expect(stable).toContain('同意后继续本次调用');
+    expect(stable).toContain('你能看、能管用户的任务');
+    // No teammate-only principal or risk rule (2026-11-08); ordinary permissions apply.
+    expect(stable).not.toContain('同意后继续本次调用');
     expect(stable).not.toContain('NEEDS_OWNER_REQUEST');
     expect(stable).toContain('照常走当前任务的权限档');
     expect(stable).not.toContain('OWNER_TURN_REQUIRED');
     expect(stable).not.toContain('TASK_OUT_OF_SCOPE');
-    expect(stable).toContain('set_workbench_task_responsibility');
-    expect(stable).not.toContain('add_workbench_project');
+    expect(stable).not.toContain('set_workbench_task_responsibility');
     expect(stable).not.toContain('你能建普通自动化');
     main.capabilities.automationEnabled = true;
     expect(buildBotStableTier(main)).toContain('schedule_create');
 
-    expect(buildBotStableTier(input())).not.toContain('你能看、能管主人的任务');
+    expect(buildBotStableTier(input())).not.toContain('你能看、能管用户的任务');
     main.capabilities.botModeEnabled = false;
-    expect(buildBotStableTier(main)).not.toContain('你能看、能管主人的任务');
+    expect(buildBotStableTier(main)).not.toContain('你能看、能管用户的任务');
     expect(buildBotStableTier(main)).not.toContain('schedule_create');
   });
 
@@ -133,16 +116,15 @@ describe('稳定层:能力必须写进提示词', () => {
     // 2026-10-23 主人裁决：对话中只在主人明确要求时新建技能，其余交给夜间学习。
     expect(all).toContain('用户明确要你把一套做法记成技能时');
     expect(all).not.toContain('第一次验证完就');
-    expect(all).toContain('开后台任务，也可以给伙伴发消息');
-    expect(all).toContain('start_session_task');
-    expect(all).toContain('check_session_task');
-    expect(all).toContain('message_session_task');
-    expect(all).toContain('stop_session_task');
-    expect(all).toContain('send_to_agent');
+    expect(all).toContain('你可以开任务，也可以给伙伴发消息');
+    expect(all).not.toContain('session_task');
+    expect(all).not.toContain('notify_when_done');
+    expect(all).toContain('send_to_session');
+    expect(all).not.toContain('send_to_agent');
     expect(all).toContain('不启动任务');
     expect(all).toContain('优先在当前对话完成能清楚收口的工作');
     expect(all).toContain('用户明确要求独立任务');
-    expect(all).toContain('隔离工作区、并行交付或独立跟踪');
+    expect(all).toContain('隔离工作区或并行交付');
     expect(all).not.toContain('编码实施和中大型工作');
     expect(all).toContain('不要只为“收到”“好的”互相确认');
     expect(all).not.toContain('collaborate_with_bot');
@@ -155,7 +137,7 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(none).not.toContain('save_teammate_skill');
     expect(none).not.toContain('create_teammate');
     expect(none).not.toContain('make_pptx');
-    expect(none).not.toContain('start_session_task');
+    expect(none).not.toContain('你可以开任务');
   });
 
   it('交付纪律恒在:要真做出来,被挡住说实话,不许编', () => {
@@ -307,13 +289,11 @@ describe('Bot Mode 的角色边界', () => {
         botModeEnabled: false,
       },
     });
-    expect(canonical).toContain('你可以开后台任务，也可以给伙伴发消息');
-    expect(canonical).toContain('send_to_agent');
-    expect(canonical).toContain('start_session_task');
+    expect(canonical).toContain('你可以开任务，也可以给伙伴发消息');
+    expect(canonical).toContain('send_to_session');
     expect(canonical).not.toContain('list_tools');
-    expect(worker).not.toContain('你可以开后台任务，也可以给伙伴发消息');
-    expect(worker).not.toContain('send_to_agent');
-    expect(worker).not.toContain('start_session_task');
+    expect(worker).not.toContain('你可以开任务，也可以给伙伴发消息');
+    expect(worker).not.toContain('list_agents');
   });
 });
 
@@ -373,8 +353,8 @@ describe('buildBotTeammateRoster', () => {
   it('明确告诉伙伴不确定就别猜', () => {
     const roster = buildBotTeammateRoster([{ id: 'bot-a', name: 'A' }]);
     expect(roster).toContain('别猜');
-    expect(roster).toContain('send_to_agent');
-    expect(roster).toContain('start_session_task');
+    expect(roster).toContain('send_to_session');
+    expect(roster).not.toContain('start_session_task');
     expect(roster).not.toContain('list_tools');
     expect(roster).toContain('明确要联系');
     expect(roster).not.toContain('把任务交给某个伙伴');

@@ -1,3 +1,4 @@
+import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { BUNDLED_CATALOG, providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
 import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint } from '@cindy/model-providers';
@@ -47,7 +48,7 @@ import { pickWizardRecommend, type WizardRecommend } from './wizardRecommend';
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { isSubscriptionProvider } from '../../../shared/subscriptionAccounts';
-import { SubscriptionSignInChoices } from './SubscriptionSignInChoices';
+import { SubscriptionSignInChoices, type SubscriptionSignInTarget } from './SubscriptionSignInChoices';
 import { cardIcon, ProviderRow } from './ProviderRow';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
@@ -295,6 +296,11 @@ function GroupLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** The detected default, or another account joining the built-in provider: the pre-2026-11-13 intent. */
+function builtinChoice(choice: SubscriptionSignInTarget, providerId: string): boolean {
+  return choice.target === 'default' || choice.into === providerId;
+}
+
 export function AddProviderWizard({
   detected,
   onReturnCustom,
@@ -308,8 +314,15 @@ export function AddProviderWizard({
   const { t, i18n } = useTranslation();
   const dialog = useDialogExit();
   const panelRef = useRef<HTMLDivElement>(null);
-  const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
-  const onDone = useCallback((id?: string) => dialog.close(() => notifyDone(id)), [dialog.close, notifyDone]);
+  const { complete: completeGuideConnection, cancel: cancelGuideConnection } = useFirstRunGuideConnectionDialog();
+  const onClose = useCallback(() => dialog.close(() => {
+    cancelGuideConnection();
+    notifyClosed();
+  }), [cancelGuideConnection, dialog.close, notifyClosed]);
+  const onDone = useCallback((id?: string) => dialog.close(() => {
+    completeGuideConnection();
+    notifyDone(id);
+  }), [completeGuideConnection, dialog.close, notifyDone]);
   const onOpenCustomForm = useCallback(() => dialog.close(openCustomForm), [dialog.close, openCustomForm]);
 
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
@@ -749,21 +762,40 @@ export function AddProviderWizard({
     if (login) void window.electronAPI.maker.providerOAuthCancel(login.providerId, { ownerId: login.ownerId, releaseOwner: true });
   }, []);
 
-  const connectSubscription = useCallback(async (target: 'default' | 'new') => {
+  const connectSubscription = useCallback(async (choice: SubscriptionSignInTarget) => {
     const providerId = sel?.kind === 'oauth' ? sel.provider.id : undefined;
     if (!isSubscriptionProvider(providerId) || localLoginRef.current) return;
     setLoggingIn(true);
     const loginKey = crypto.randomUUID();
+    // A login is cancelled through the account pool of its kind, whichever provider it joins.
     const login = { cancel: () => { void window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey }).catch(() => {}); } };
     localLoginRef.current = login;
     try {
-      await window.electronAPI.subscriptionAccounts.command({ action: 'connect', providerId, target, loginKey });
+      // Another account becomes its own provider unless the user chose a provider to join
+      // (subscription-account-pools.md 合并与拿出由用户决定); the built-in one keeps the old intent.
+      const builtin = builtinChoice(choice, providerId);
+      const view = await window.electronAPI.subscriptionAccounts.command(
+        builtin
+          ? { action: 'connect', providerId, target: choice.target, loginKey }
+          : choice.target === 'new' && choice.into !== null
+            ? { action: 'add', providerId: choice.into, loginKey }
+            : { action: 'create', providerId, loginKey },
+      );
       if (localLoginRef.current !== login) return;
       toast.success(t('settings.providers.wizard.authorizedToast', { name: sel?.kind === 'oauth' ? sel.provider.name : providerId }));
-      onDone(providerId);
+      // Open the provider the account ended up in.
+      onDone(builtin ? providerId : view.providerId || providerId);
     } catch (error) {
-      if (localLoginRef.current === login && !String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED'))
-        toast.error(t('subscriptionAccounts.failed'));
+      const code = extractIpcError(error)?.code;
+      if (localLoginRef.current === login && code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+        toast.error(t(
+          code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+            ? 'subscriptionAccounts.providerManagedAuth'
+            // An older Cindy rejects a placement it does not know instead of joining the built-in provider.
+            : code === 'INVALID_PARAMS' && !builtinChoice(choice, providerId)
+              ? 'subscriptionAccounts.placement.needsUpdate'
+              : 'subscriptionAccounts.failed',
+        ));
     } finally {
       if (localLoginRef.current === login) {
         localLoginRef.current = null;
@@ -1634,7 +1666,8 @@ export function AddProviderWizard({
         >
           {step === 1 && (
             <>
-              <div className="px-4 pb-3">
+              {/* Keep the input's outer focus ring inside the clipped body. */}
+              <div className="px-4 pb-3 pt-1">
                 <div className="relative">
                   <SettingsTextInput
                     surface="ivory"

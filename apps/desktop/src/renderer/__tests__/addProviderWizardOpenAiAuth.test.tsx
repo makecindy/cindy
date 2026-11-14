@@ -120,8 +120,11 @@ type ProviderOAuthProgress = {
   url: string | null;
 };
 let providerOAuthProgressListener: ((progress: ProviderOAuthProgress) => void) | null = null;
+/** Connected providers the sign-in step may offer to join (none unless a test adds them). */
+let listedProviders: ProviderView[] = [];
 
 beforeEach(() => {
+  listedProviders = [];
   createAccount.mockReset().mockResolvedValue(undefined);
   deleteAccount.mockReset().mockResolvedValue(undefined);
   providerOAuthLogin.mockReset().mockResolvedValue({ ok: true });
@@ -132,12 +135,15 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     subscriptionAccounts: {
       command: vi.fn(async (command: SubscriptionAccountCommand) => {
-        if (command.action === 'connect') return subscriptionLogin(command);
+        if (command.action === 'connect' || command.action === 'create' || command.action === 'add')
+          return subscriptionLogin(command);
         if (command.action === 'cancel') return subscriptionCancel(command);
         return poolView;
       }),
+      onChanged: vi.fn(() => () => {}),
     },
     maker: {
+      listProviders: vi.fn(async () => ({ providers: listedProviders })),
       listProviderPresets: vi.fn(async () => ({ presets: [] })),
       localModelList: vi.fn(async () => ({
         status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
@@ -163,6 +169,61 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — OpenAI 授权边界', () => {
+  // #9517: a signed-out default used to hide the only usable recovery action.
+  it('offers an independent account when Codex delegates authentication to its provider', async () => {
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
+    command.mockImplementation(async request => request.action === 'preview'
+      ? {
+          ...poolView,
+          providerId: 'openai',
+          strategy: 'least',
+          accounts: [{
+            ...poolView.accounts[0],
+            status: 'signed-out',
+            authIssue: 'codex-provider-managed-auth',
+          }],
+        }
+      : subscriptionLogin(request));
+    render(<AddProviderWizard providers={[OPENAI_PROVIDER]}
+      entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+    expect(await screen.findByText('subscriptionAccounts.providerManagedAuth')).toBeTruthy();
+    expect(screen.queryByText('subscriptionAccounts.signIn.useCodex')).toBeNull();
+    fireEvent.click(screen.getByText('subscriptionAccounts.signIn.anotherAccount'));
+    // Nothing of this kind is connected yet, so it becomes its own provider without asking.
+    await waitFor(() => expect(subscriptionLogin).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'create', providerId: 'openai' })));
+  });
+
+  // 2026-11-13 (subscription-account-pools.md 合并与拿出由用户决定): another account used to join the
+  // built-in provider without asking. With a connected provider of the kind, the user chooses first;
+  // a separate provider stays the default and the wizard opens the provider it ended up in.
+  it.each([
+    { pick: 0, expected: { action: 'create', providerId: 'openai' }, opened: 'openai-created' },
+    { pick: 1, expected: { action: 'connect', providerId: 'openai', target: 'new' }, opened: 'openai' },
+    { pick: 2, expected: { action: 'add', providerId: 'work' }, opened: 'work' },
+  ])('asks where another account goes before signing in (option $pick)', async ({ pick, expected, opened }) => {
+    listedProviders = [
+      { ...OPENAI_PROVIDER, connected: true },
+      { ...OPENAI_PROVIDER, id: 'work', name: 'Work GPT', subscriptionPool: 'openai', connected: true },
+      { ...OPENAI_PROVIDER, id: 'idle', name: 'Idle GPT', subscriptionPool: 'openai', connected: false },
+    ];
+    subscriptionLogin.mockResolvedValue({ ...poolView, providerId: opened });
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[OPENAI_PROVIDER]}
+      entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText('subscriptionAccounts.signIn.anotherAccount'));
+    const choices = await screen.findAllByRole('radio');
+    // Only connected providers of the kind are offered, after the default separate choice.
+    expect(choices).toHaveLength(3);
+    expect(choices[0].getAttribute('aria-checked')).toBe('true');
+    expect(subscriptionLogin).not.toHaveBeenCalled();
+    // Options follow the separate default: OpenAI, then Work GPT (Idle GPT is not connected).
+    if (pick) fireEvent.click(choices[pick]!);
+    fireEvent.click(screen.getByText('subscriptionAccounts.placement.signInContinue'));
+    await waitFor(() => expect(subscriptionLogin).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(expected)));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(opened));
+  });
+
   // Unit regression: cancellation must own the selected default/new CLI operation,
   // not a different provider's login. Late completions must not close a retry.
   it('keeps the inline cancel action named and enabled during authorization', async () => {
@@ -199,9 +260,11 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     expect(onDone).not.toHaveBeenCalled();
     expect(createAccount).not.toHaveBeenCalled();
   });
-  it.each(['anthropic', 'openai'].flatMap(providerId => ['SUBSCRIPTION_ACCOUNT_FAILED', 'SUBSCRIPTION_LOGIN_CANCELLED']
+  // #9517, unit: render the actual wizard with the serialized IPC failure; the
+  // existing error matrix did not distinguish provider configuration from login failure.
+  it.each(['anthropic', 'openai'].flatMap(providerId => ['SUBSCRIPTION_ACCOUNT_FAILED', 'SUBSCRIPTION_LOGIN_CANCELLED', 'SUBSCRIPTION_CODEX_PROVIDER_AUTH']
     .map(reason => ({ providerId, reason }))))('reports $providerId $reason without completing', async ({ providerId, reason }) => {
-    subscriptionLogin.mockRejectedValue(new Error(reason));
+    subscriptionLogin.mockRejectedValue(new Error(`Error invoking remote method: Error: [${reason}] Account operation failed`));
     const onDone = vi.fn();
     render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id: providerId }]}
       entry={{ kind: 'builtin', providerId }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
@@ -209,7 +272,8 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     await waitFor(() => expect(subscriptionLogin).toHaveBeenCalledOnce());
     await screen.findByText('subscriptionAccounts.signIn.useAccount');
     if (reason === 'SUBSCRIPTION_LOGIN_CANCELLED') expect(toast.error).not.toHaveBeenCalled();
-    else expect(toast.error).toHaveBeenCalledExactlyOnceWith('subscriptionAccounts.failed');
+    else expect(toast.error).toHaveBeenCalledExactlyOnceWith(reason === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+      ? 'subscriptionAccounts.providerManagedAuth' : 'subscriptionAccounts.failed');
     expect(onDone).not.toHaveBeenCalled();
   });
   it.each(['xai'].flatMap(id =>

@@ -18,6 +18,9 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { declaredGhostControlPoints } from '../../../../shared/ghost';
+import { isRuntimePluginPoint } from '../../../../shared/pluginRuntime';
 import { sharedTaskErrorKey } from '@/features/device-link/sharedTaskCompatibility';
 import {
   DropdownMenuContent,
@@ -35,8 +38,14 @@ import {
   type TaskMoveDestination,
 } from './TaskMoveSubmenu';
 import { TaskMigrationDialog } from './TaskMigrationDialog';
+import { TaskRuntimePluginsDialog } from './TaskRuntimePluginsDialog';
 import { setSessionNotificationsMuted } from './sessionNotificationMute';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
+import { readPluginUiEntries, PluginUiSessionMenuItems } from '@/cindy-brain/PluginUiContributions';
+
+// Native window dragging ignores portal stacking. Leave 8px below the 50px drag
+// strip so the first item remains clickable when a tall menu flips upward.
+const TASK_MENU_COLLISION_PADDING = { top: 58, right: 8, bottom: 8, left: 8 };
 
 interface Props {
   session: Session;
@@ -60,6 +69,7 @@ type SharingDialog =
   | { kind: 'manage' }
   | { kind: 'migration'; destination?: TaskMoveDestination }
   | { kind: 'browse-project' }
+  | { kind: 'runtime-plugins' }
   | SharedTaskExitTarget;
 
 /** One menu order for the header, text rows and cards. Keep row-specific action handlers. */
@@ -202,6 +212,11 @@ function ActiveSessionTaskMenu({
   const archived = session.status === 'archived';
   const empty = isEmptyDraftSession(session);
   const ownerActionsBlocked = writeBlocked || guest;
+  const showRuntimePlugins = !session.deviceLinkDeviceId && (
+    session.runtimePluginsSelected === true || readInstalledGhostsSnapshot().some(ghost =>
+      declaredGhostControlPoints(ghost.manifest).some(isRuntimePluginPoint))
+  );
+  const pluginActions = !guest && !session.deviceLinkDeviceId ? readPluginUiEntries('session.menu') : [];
   const item = (key: string, action: () => void, disabled = false) => (
     <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={disabled} onSelect={action}>
       {t(`ccAgent.sidebar.sessionMenu.${key}`)}
@@ -218,7 +233,8 @@ function ActiveSessionTaskMenu({
       <DropdownMenuContent
         align="start"
         sideOffset={sideOffset}
-        className="min-w-32 overflow-hidden"
+        collisionPadding={TASK_MENU_COLLISION_PADDING}
+        className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-32 overflow-y-auto"
         onClick={(event) => event.stopPropagation()}
         onCloseAutoFocus={(event) => {
           if (dialog) event.preventDefault();
@@ -250,6 +266,10 @@ function ActiveSessionTaskMenu({
               </DropdownMenuItem>
             )}
             {tags}
+            {showRuntimePlugins && <DropdownMenuItem className={MENU_ITEM_CLASS}
+              disabled={ownerActionsBlocked} onSelect={() => setDialog({ kind: 'runtime-plugins' })}>
+              {t('runtimePlugins.title')}
+            </DropdownMenuItem>}
             {separator}
             {copy}
           </>
@@ -319,6 +339,8 @@ function ActiveSessionTaskMenu({
                 {item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)}
               </>
             )}
+            {pluginActions.length > 0 && <PluginUiSessionMenuItems sessionId={session.id}
+              disabled={ownerActionsBlocked || archived} className={MENU_ITEM_CLASS} />}
             {separator}
             {archived
               ? item('unarchive', onUnarchive, ownerActionsBlocked)
@@ -336,6 +358,7 @@ function ActiveSessionTaskMenu({
           }}
         />
       )}
+      {dialog?.kind === 'runtime-plugins' && <TaskRuntimePluginsDialog session={session} onDismiss={dismissSharing} />}
       {dialog?.kind === 'migration' && (
         <TaskMigrationDialog
           session={session}
@@ -364,7 +387,8 @@ function ActiveSessionTaskMenu({
       {dialog &&
         dialog.kind !== 'browse-project' &&
         dialog.kind !== 'manage' &&
-        dialog.kind !== 'migration' && (
+        dialog.kind !== 'migration' &&
+        dialog.kind !== 'runtime-plugins' && (
           <SharedTaskExitDialog
             target={dialog}
             onDismiss={dismissSharing}

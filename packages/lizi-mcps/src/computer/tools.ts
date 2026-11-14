@@ -24,6 +24,35 @@ const ELEMENT_TOKEN_ARG = z.string().min(1).optional().describe(
   'element_token from the latest get_window_state: `<data.snapshot_id>:<row>` for a tree_markdown row [row], or elements[].element_token when listed. Never invent or reuse it after another observation.',
 );
 
+const DESKTOP_TARGET_ARG = z.object({
+  kind: z.literal('desktop'),
+  display_id: z.literal('primary'),
+}).strict().optional().describe('Explicit full-display pointer target for menu-bar/status items. Requires user-authorized foreground control and a fresh get_desktop_state capture_id. Never inferred from a window action failure.');
+
+export function isDesktopComputerTarget(args: Record<string, unknown>): boolean {
+  return (args.target as { kind?: unknown } | undefined)?.kind === 'desktop';
+}
+
+/** Keep the new global-pointer route distinct from legacy exact-window input. */
+export function computerPointerTargetError(name: string, args: Record<string, unknown>): string | undefined {
+  if (name !== 'click' && name !== 'drag') return;
+  if (!isDesktopComputerTarget(args)) {
+    if (typeof args.pid !== 'number') return 'Window input requires pid; use an explicit desktop target for the menu bar.';
+    if (args.capture_id !== undefined) return 'capture_id is only accepted with an explicit desktop target.';
+    return;
+  }
+  if ((args.target as { display_id?: unknown }).display_id !== 'primary')
+    return 'Desktop input requires display_id:"primary".';
+  const windowFields = ['pid', 'window_id', 'element_index', 'element_token', 'snapshot_id', 'from_zoom', 'action', 'debug_image_out', 'observe', 'postcondition'];
+  if (windowFields.some((key) => args[key] !== undefined))
+    return 'Desktop input cannot mix window/element targets or window observations. Read get_desktop_state afterwards.';
+  if (args.delivery_mode !== 'foreground' || typeof args.capture_id !== 'string' || !args.capture_id)
+    return 'Desktop input requires explicit delivery_mode:"foreground" and the capture_id from a fresh get_desktop_state.';
+  const coordinates = name === 'drag' ? ['from_x', 'from_y', 'to_x', 'to_y'] : ['x', 'y'];
+  if (coordinates.some((key) => typeof args[key] !== 'number' || !Number.isFinite(args[key]) || (args[key] as number) < 0))
+    return 'Desktop pointer coordinates must be nonnegative pixels from the matching desktop screenshot.';
+}
+
 const POSTCONDITION = z
   .array(
     z
@@ -161,6 +190,16 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
     },
   },
   {
+    name: 'get_desktop_state',
+    description: 'Capture the primary display for explicitly authorized desktop control (menu bar/status items). Use the returned image pixels and capture_id with click/drag target:{kind:"desktop",display_id:"primary"}. Read again after each action; a window screenshot cannot authorize desktop input.',
+    readOnly: true,
+    inputShape: {
+      max_image_dimension: z.number().int().min(0).max(8192).optional(),
+      screenshot_out_file: z.string().optional(),
+      session: z.string().optional(),
+    },
+  },
+  {
     name: 'verify_state',
     description: 'Verify a bounded postcondition against an exact window after an action. Only status:satisfied proves the condition; unknown is not success. This observation invalidates previous element references: get_window_state again before the next element action.',
     readOnly: true,
@@ -179,9 +218,11 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   {
     name: 'click',
     description:
-      'Click a target app by element_index+window_id or by window-local coordinates. Always include pid and include window_id for coordinates. Requires a prior get_window_state for element indices.',
+      'Click a window by element or window-local coordinates. Always include pid for window input. For menu-bar/status items outside a window, use explicit target:{kind:"desktop",display_id:"primary"}, capture_id and screenshot pixels from get_desktop_state, with delivery_mode:"foreground" after user authorization. Do not reuse window elements for desktop input.',
     inputShape: {
-      pid: z.number().int().positive(),
+      pid: z.number().int().positive().optional(),
+      target: DESKTOP_TARGET_ARG,
+      capture_id: z.string().min(1).optional(),
       window_id: z.number().int().nonnegative().optional(),
       element_index: z.number().int().nonnegative().optional(),
       x: z.number().optional(),
@@ -233,9 +274,11 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   {
     name: "drag",
     description:
-      'Drag from one window-local coordinate to another. Use after get_window_state or zoom. On macOS drivers supporting delivery_mode, omitted mode defaults to background; unsupported background drag returns an error without automatic foreground escalation or retry. Explicit foreground delivery may interrupt the user\'s keyboard and mouse input; coordinate desktop use with the user before requesting it. Background delivery is not a guarantee of focus isolation.',
+      'Drag within a window after get_window_state/zoom (pid required). For menu-bar rearrangement, explicitly use target:{kind:"desktop",display_id:"primary"}, a fresh get_desktop_state capture_id, its screenshot pixels and delivery_mode:"foreground" after user authorization. Window failures never automatically escalate to desktop input.',
     inputShape: {
-      pid: z.number().int().positive(),
+      pid: z.number().int().positive().optional(),
+      target: DESKTOP_TARGET_ARG,
+      capture_id: z.string().min(1).optional(),
       window_id: z.number().int().nonnegative().optional(),
       delivery_mode: z.enum(['background', 'foreground']).optional(),
       from_x: z.number(),
@@ -308,12 +351,15 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   },
   {
     name: 'scroll',
-    description: 'Scroll a target element or window-local coordinate.',
+    description:
+      'Scroll a target element or a point from the latest window screenshot. For nested Windows web scrollers, use x/y: an element without a UIA scroll action can fall back to the window center. Supply both x and y with an exact window_id, without element_index/element_token. Coordinates use the returned screenshot pixels, not screen coordinates. Inspect the result with observe:{}; delivery alone does not confirm scrolling.',
     inputShape: {
       pid: z.number().int().positive(),
       window_id: z.number().int().nonnegative().optional(),
       element_index: z.number().int().nonnegative().optional(),
       element_token: ELEMENT_TOKEN_ARG,
+      x: z.number().optional(),
+      y: z.number().optional(),
       delivery_mode: z.enum(['background', 'foreground']).optional(),
       direction: z.enum(['up', 'down', 'left', 'right']),
       amount: z.number().int().min(1).max(50).optional(),

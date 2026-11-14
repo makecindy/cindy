@@ -95,8 +95,12 @@ function NativeChatHeader({ identity, back, actions, actionCount }: {
   const { colors } = useTheme();
   const window = useAdaptiveWindow();
   const insets = window.insets;
-  const width = Math.max(0, Math.min(240, window.width - insets.left - insets.right
-    - (navigationChrome.target * Math.max(1, actionCount) + spacing.lg * 2 + spacing.md) * 2));
+  // Reserve UIKit's side margins and inter-item clearance, as navigationTitleMaxWidth does.
+  // Spending that clearance on the identity pushes custom actions into an empty overflow
+  // menu on iOS 26. Keep Back/trailing controls once each; only the name may shrink.
+  const trailingWidth = actionCount * navigationChrome.target + Math.max(0, actionCount - 1) * spacing.md;
+  const width = Math.max(0, Math.min(240, window.width - insets.left - insets.right - spacing.lg * 4
+    - (back ? navigationChrome.target + spacing.md : 0) - trailingWidth));
   const options = useMemo(() => ({ headerShown: true, headerTransparent: true, headerShadowVisible: false,
     headerBackVisible: false, headerTintColor: colors.textPrimary,
     headerStyle: { backgroundColor: 'transparent' }, headerTitle: '',

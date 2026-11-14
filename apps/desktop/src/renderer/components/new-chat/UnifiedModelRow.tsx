@@ -10,8 +10,8 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
-import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
-import { modelSupplierLabel } from '@cindy/model-providers';
+import { providerDisplayName } from '@/lib/providerDisplayName';
+import { isCustomRoutedProvider, modelSupplierLabel } from '@cindy/model-providers';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { PriceFreeBadge, PriceTierMarks, type UnifiedRowPriceDisplay } from './priceTierMarks';
@@ -76,7 +76,10 @@ export function UnifiedModelRow({
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   sourceLabel,
+  measurementOnly = false,
 }: {
+  /** Hidden intrinsic-width probe: share row typography, omit interaction and fixed-size artwork. */
+  measurementOnly?: boolean;
   /**
    * Supplied only in the combined All / Favorites views; omitted = the local description.
    * The panel omits it only for this catalog's own Cindy AI (see UnifiedModelPanel aggregateSourceLabel).
@@ -116,6 +119,8 @@ export function UnifiedModelRow({
   const displayName = localizedModelName(entry.displayName, t);
   const description = localizedModelDescription({ id: entry.modelId, group: entry.group }, t);
   const provider = providers.find((item) => item.id === entry.providerId);
+  const wireModelId = config.wireModelId ?? entry.modelId;
+  const showModelId = isCustomRoutedProvider(provider) && wireModelId !== displayName;
   // Read the effective engine's exact wire entry, never the recommended sibling's source.
   const source = entry.capabilities[config.agent]?.discoveredSource;
   const supplier = modelSupplierLabel(source);
@@ -139,13 +144,13 @@ export function UnifiedModelRow({
     configurationEnabled && config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
   }${configurationEnabled && config.fast ? ` · ${t(config.fast === 'ultrafast' ? 'newChat.modelSelector.speed.ultrafast' : 'newChat.modelSelector.speed.fast')}` : ''}`;
   const paymentRequiredActionLabel = paymentRequired
-    ? [displayName, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
+    ? [displayName, showModelId ? wireModelId : null, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
         .filter(Boolean)
         .join(' · ')
     : undefined;
 
   // 行根节点统一处理选中、浮层与键盘，内嵌按钮阻止事件冒泡。
-  const rowRootProps = {
+  const rowRootProps = measurementOnly ? {} : {
     role: 'option' as const,
     'aria-selected': selected,
     // 付费行不能被选为模型，但它本身是“查看付费说明”的可执行入口；只有真正
@@ -192,7 +197,7 @@ export function UnifiedModelRow({
     },
   };
 
-  const starButton = onStar ? (
+  const starButton = !measurementOnly && onStar ? (
     <button
       type="button"
       disabled={interactionDisabled || paymentRequired}
@@ -220,7 +225,7 @@ export function UnifiedModelRow({
       <Star size={14} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
     </button>
   ) : null;
-  const customizeButton = (
+  const customizeButton = !measurementOnly && (
     <button
       type="button"
       data-row-customize
@@ -282,15 +287,17 @@ export function UnifiedModelRow({
         {/* 设计稿 .mark:18×18 定位盒(图标本体 13-17px 居中)。没有这个盒,名字起点
             随图标实际宽度浮动,第二行描述的 26px 缩进(18+8)就对不上第一行的名字。 */}
         <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
-          <ModelIconMark
-            {...(entry.icon !== undefined ? { icon: entry.icon } : {})}
-            providerId={entry.providerId}
-            {...(provider?.name !== undefined ? { name: provider.name } : {})}
-            {...(provider?.routing !== undefined ? { routing: provider.routing } : {})}
-            {...(provider?.logoKind !== undefined ? { logoKind: provider.logoKind } : {})}
-            colorClass="text-[var(--text-secondary)]"
-            withMargin={false}
-          />
+          {!measurementOnly && (
+            <ModelIconMark
+              {...(entry.icon !== undefined ? { icon: entry.icon } : {})}
+              providerId={entry.providerId}
+              {...(provider?.name !== undefined ? { name: provider.name } : {})}
+              {...(provider?.routing !== undefined ? { routing: provider.routing } : {})}
+              {...(provider?.logoKind !== undefined ? { logoKind: provider.logoKind } : {})}
+              colorClass="text-[var(--text-secondary)]"
+              withMargin={false}
+            />
+          )}
         </span>
         <span
           // 布局同设计稿 .m-name:内容宽、不 grow —— 徽标/钱串紧贴模型名左排,
@@ -315,8 +322,10 @@ export function UnifiedModelRow({
             tier={priceDisplay.tier}
           />
         )}
-        {starButton}
-        {configurationEnabled && customizable && customizeButton}
+        {onStar && (measurementOnly ? <span className="h-5 w-5 shrink-0" /> : starButton)}
+        {configurationEnabled && customizable && (
+          measurementOnly ? <span className="h-5 w-5 shrink-0" /> : customizeButton
+        )}
         {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。
             设计稿 .l1-right:margin-left auto 把右侧簇推到最右,左侧簇贴名字排。 */}
         <span data-model-row-meta className="ml-auto flex shrink-0 items-center gap-2">
@@ -326,17 +335,15 @@ export function UnifiedModelRow({
             // 颜色恒定,不随「已自定义」提亮(Chris 2026-08-16 裁决,所有行一致)。
             className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 font-normal text-[var(--text-tertiary)]"
           >
-            <engineOption.Mark size={12} className="shrink-0" />
+            {measurementOnly
+              ? <span className="h-3 w-3 shrink-0" />
+              : <engineOption.Mark size={12} className="shrink-0" />}
             {configurationEnabled && config.effort && (
               <span className="truncate">{effortLabelOf(config.agent, config.effort)}</span>
             )}
-            {configurationEnabled && config.fast && (
-              <SpeedIcon
-                mode={config.fast}
-                size={11}
-                className="shrink-0"
-              />
-            )}
+            {configurationEnabled && config.fast && (measurementOnly
+              ? <span style={{ width: 11, height: 11 }} className="shrink-0" />
+              : <SpeedIcon mode={config.fast} size={11} className="shrink-0" />)}
           </span>
           {paymentRequiredUnlock}
           {paymentRequiredBadge}
@@ -345,16 +352,25 @@ export function UnifiedModelRow({
             还平白吃掉一列宽度);选中态语义由 aria-selected 承载。模型面板是输入框菜单
             「选中 = 勾 + 500」约定的唯一例外,2026-10-04 用户再次确认保留整行底色、不加勾。 */}
       </div>
+      {showModelId && !measurementOnly && (
+        <div className="w-0 min-w-full break-words pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+          {wireModelId}
+        </div>
+      )}
       {sourceLabel ? (
-        <ModelSourceDetails
-          providerId={entry.providerId}
-          label={providerAccountLabel(
-            sourceDisplayLabel ?? sourceLabel,
-            provider?.openAiAccount?.identity?.trim() ||
-              provider?.subscriptionAccount?.identity?.trim(),
-          )}
-          modelId={config.wireModelId ?? entry.modelId}
-        />
+        // Source details use w-0/min-w-full and do not contribute intrinsic width.
+        // Do not mount another quota-clock subscriber just to measure this row.
+        !measurementOnly && (
+          <ModelSourceDetails
+            providerId={entry.providerId}
+            label={sourceDisplayLabel ?? sourceLabel}
+            accountIdentity={
+              provider?.openAiAccount?.identity?.trim() ||
+                provider?.subscriptionAccount?.identity?.trim()
+            }
+            modelId={config.wireModelId ?? entry.modelId}
+          />
+        )
       ) : description ? (
         // 单行截断 + title 全文;宽度上限收紧到约等于最长模型名的量级(~30ch)——
         // 描述是辅助信息,不该比模型名更长地占据视线(2026-08-13 实测反馈)。
