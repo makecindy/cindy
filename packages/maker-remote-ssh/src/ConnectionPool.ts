@@ -32,6 +32,7 @@ export interface ConnectionPoolDeps {
   /** Pre-built store; overrides `knownHostsPath` (mainly for tests). */
   hostKeys?: HostKeyStore;
   formatHostKeyError?: RemoteHostDeps['formatHostKeyError'];
+  formatAgentUnavailableError?: RemoteHostDeps['formatAgentUnavailableError'];
 }
 
 export class ConnectionPool {
@@ -149,6 +150,7 @@ export class ConnectionPool {
       logger: this.deps.logger,
       hostKeys: this.hostKeys,
       formatHostKeyError: this.deps.formatHostKeyError,
+      formatAgentUnavailableError: this.deps.formatAgentUnavailableError,
     });
     host.onStatus((snap) => this.events.emit('status', snap));
     this.hosts.set(cfg.id, host);

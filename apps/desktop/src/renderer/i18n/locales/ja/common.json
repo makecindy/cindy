@@ -1365,7 +1365,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定は保存されましたが、Cindy で再読み込みできませんでした。SSH 設定を再読み込みしてください。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy はこの SSH 設定を安全に管理できません。再読み込みして、Cindy の所有マーカーとホストエイリアスの一意性を確認してください。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy はこのホストの一部の SSH 設定規則を安全に再現できません。ターミナルの SSH は動作する場合があります。Match、条件付き Include、IdentityAgent、IdentitiesOnly、公開鍵設定を確認してください。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent を使用できません。SSH Agent を起動し、ssh-add で対応する秘密鍵を読み込んでから再試行してください。",
+    "SSH_AGENT_UNAVAILABLE": "このコンピューターの SSH 鍵エージェント（ssh-agent）を利用できません。起動していることと、ssh-add -l に必要な鍵が表示されることを確認してください。「鍵の管理」に対処方法があります。",
     "SSH_HOST_PREFS_WRITE_FAILED": "ホストは保存されていますが、表示名または Agent Proxy の設定を保存できませんでした。ローカルストレージの権限を確認して再試行してください。",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "このタスクのタブ数の上限に達しました。いくつかのタブを閉じてください",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "タブの内容が大きすぎるため、追加できません",
@@ -1896,6 +1896,12 @@
       "footnote": "Phase A は SSH 接続管理のみ。リモートでのエージェント実行は今後のアップデートで対応します。",
       "viaAuth": "{{label}} で認証",
       "readOnlyFromSshConfig": "接続情報は SSH 設定から読み込まれています",
+      "importedAgentHint": "このコンピューターの SSH 鍵エージェント（ssh-agent）で認証します。ターミナルの ssh で接続できても、エージェントが利用可能とは限りません。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent が参照する環境変数が Cindy に設定されていません。その変数を Cindy に設定するか、SSH 設定の IdentityAgent を修正してください。",
+        "endpointEmpty": "IdentityAgent の展開後の接続先が空です。SSH 設定の IdentityAgent を修正してください。",
+        "endpointUnavailable": "IdentityAgent に設定された SSH 鍵エージェントの接続先を利用できません。その接続先とエージェントを確認してください。既定の ssh-agent は別の接続先を使っている場合があります。"
+      },
       "configWarning": "一部の SSH 設定ルールを Cindy では評価できません。ホスト一覧や接続情報がターミナルの SSH と異なる場合があります。",
       "configDiagnostic": {
         "io": "Cindy は SSH 設定を読み込めませんでした。最後に正常に読み込んだホストを引き続き表示しています。ファイルのアクセス権を確認して、再読み込みしてください。",
@@ -1993,7 +1999,7 @@
           "tryThis": "ターミナルで次のコマンドを試してください",
           "close": "閉じる",
           "fallbackTitle": "あるいは agent を使わない方法も",
-          "fallbackBody": "ホスト追加時に「秘密鍵ファイル」認証に切り替えれば、{{appName}} は鍵ファイルを ssh に直接渡し、接続のたびに passphrase を尋ねます。agent は不要です。トレードオフ:接続ごとに passphrase 入力が必要ですが、メモリ上に鍵キャッシュは残りません。",
+          "fallbackBody": "ホストの追加時に「秘密鍵ファイル」を選ぶこともできます。{{appName}} が秘密鍵をプロセスのメモリに読み込み、ssh-agent は使いません。現在は暗号化されていない秘密鍵のみ対応し、接続時に鍵の passphrase を尋ねることはありません。暗号化された鍵には ssh-agent を使用してください。",
           "reason": {
             "agent_unavailable": "ssh-add が ssh-agent に到達できません(ssh-add が未インストール、agent が未起動、または SSH_AUTH_SOCK が未設定)。",
             "bad_passphrase": "ssh-add が passphrase を拒否しました。",

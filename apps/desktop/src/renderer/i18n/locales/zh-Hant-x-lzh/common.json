@@ -1361,7 +1361,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定已存，然 Cindy 重整未成。請重載 SSH 設定。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 不能安全管理此 SSH 設定。請重載，並確認 Cindy 所有權標記尚存且主機別名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 不能安全重現此主機之部分 SSH 設定規則。終端 SSH 或仍可成；請察 Match、條件式 Include、IdentityAgent、IdentitiesOnly 與公開金鑰設定。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent 今不可用。請啟 SSH Agent，並以 ssh-add 載入相應私密金鑰，而後再試。",
+    "SSH_AGENT_UNAVAILABLE": "本機 SSH 密鑰之代理（ssh-agent）不可用。請察其已啟，並以 ssh-add -l 驗所需之鑰已載；排障之法見「管理密鑰」。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主機仍已存，然顯示名稱或 Agent Proxy 設定未能存。請察此機儲存權限而後再試。",
     "REMOTE_WORKDIR_INVALID": "遠端案目錄無效，請重擇案目錄。",
     "REMOTE_WORKDIR_NOT_FOUND": "遠端案目錄不存，請重擇案目錄。",
@@ -1896,6 +1896,12 @@
       "footnote": "初版僅支援 SSH 連線管理；於遠端行 Agent 之能，將於後續版本增之。",
       "viaAuth": "經 {{label}} 認證",
       "readOnlyFromSshConfig": "連線資訊出自 SSH 設定",
+      "importedAgentHint": "由本機 SSH 密鑰代理（ssh-agent）驗身。終端 ssh 雖可通，未必代理已備。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent 所引環境變數，Cindy 尚未設。請為 Cindy 設之，或正 SSH 設定之 IdentityAgent",
+        "endpointEmpty": "IdentityAgent 解析之端點為空。請正 SSH 設定之 IdentityAgent",
+        "endpointUnavailable": "IdentityAgent 所定 SSH 密鑰代理端點不可用。請察該端點及其代理；預設 ssh-agent 或用別端點"
+      },
       "configWarning": "SSH 設定中有若干規則 Cindy 無法解析，主機列表或連線資訊或與終端 SSH 不一。",
       "configDiagnostic": {
         "io": "Cindy 無法讀取 SSH 設定。此處仍顯上次讀取成功之主機；請查卷之權柄，再重新載入。",
@@ -1993,7 +1999,7 @@
           "tryThis": "於君之終端試此諸命令",
           "close": "闔",
           "fallbackTitle": "或逕不經 agent",
-          "fallbackBody": "增 host 時可改用「Identity file」之法，{{appName}} 將金鑰卷徑交 ssh，每次連線由君輸密碼，全不依 agent。安全之權衡：每連必輸密碼，然記憶體中亦不留金鑰快取，安危自負。",
+          "fallbackBody": "新增主機亦可選「私鑰卷」：{{appName}} 直讀私鑰入行程記憶體，不倚 ssh-agent。今僅容未加密私鑰，連線時不詢鑰之密語；加密私鑰請託 ssh-agent。",
           "reason": {
             "agent_unavailable": "ssh-add 尋不得可用之 ssh-agent(或 ssh-add 未裝、agent 未啟，或 SSH_AUTH_SOCK 未設)。",
             "bad_passphrase": "ssh-add 拒此密碼。",

@@ -1396,7 +1396,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "A configuração SSH foi guardada, mas Cindy não conseguiu atualizá-la. Recarregue a configuração SSH.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy não consegue gerir esta configuração SSH com segurança. Recarregue-a e verifique o marcador de propriedade de Cindy e se o alias do anfitrião é único.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy não consegue reproduzir com segurança algumas regras de configuração SSH deste anfitrião. O SSH no terminal poderá continuar a funcionar; reveja Match, Include condicional, IdentityAgent, IdentitiesOnly e as definições de chave pública.",
-    "SSH_AGENT_UNAVAILABLE": "O SSH Agent está indisponível. Inicie-o, carregue a chave privada correspondente com ssh-add e tente novamente.",
+    "SSH_AGENT_UNAVAILABLE": "O agente local de chaves SSH (ssh-agent) está indisponível. Confirma que está em execução e que ssh-add -l apresenta a chave necessária. Consulta a gestão de chaves para resolver o problema.",
     "SSH_HOST_PREFS_WRITE_FAILED": "O anfitrião continua guardado, mas não foi possível guardar o nome de apresentação ou as definições de Agent Proxy. Verifique as permissões de armazenamento local e tente novamente.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Esta tarefa atingiu o limite de separadores. Feche primeiro alguns separadores",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "O conteúdo do separador é demasiado grande para adicionar",
@@ -1964,6 +1964,12 @@
       "footnote": "Fase A: apenas gestão de ligações SSH. A execução de Agents na máquina remota chegará numa atualização posterior.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Os detalhes da ligação provêm da configuração SSH",
+      "importedAgentHint": "Autentica através do agente local de chaves SSH (ssh-agent). Uma ligação ssh bem-sucedida no terminal não garante que o agente esteja pronto.",
+      "agentError": {
+        "environmentUnset": "A variável de ambiente referida por IdentityAgent não está definida para o Cindy. Define-a ou corrige IdentityAgent na configuração SSH.",
+        "endpointEmpty": "IdentityAgent resulta num ponto de ligação vazio. Corrige IdentityAgent na configuração SSH.",
+        "endpointUnavailable": "O ponto de ligação do agente de chaves SSH configurado por IdentityAgent está indisponível. Verifica esse ponto e o respetivo agente; o ssh-agent predefinido pode usar outro ponto de ligação."
+      },
       "configWarning": "A Cindy não consegue avaliar algumas regras de configuração SSH. A lista de anfitriões ou os detalhes da ligação podem diferir dos do SSH no terminal.",
       "configDiagnostic": {
         "io": "A Cindy não conseguiu ler a sua configuração SSH. Continuam a ser apresentados os últimos anfitriões carregados com êxito. Verifique as permissões do ficheiro e volte a carregar.",
@@ -2061,7 +2067,7 @@
           "tryThis": "Experimente isto no terminal",
           "close": "Fechar",
           "fallbackTitle": "Ou dispense por completo o agent",
-          "fallbackBody": "Em alternativa, pode adicionar este anfitrião com autenticação por \"Ficheiro de identidade\" — {{appName}} passa o ficheiro da chave diretamente ao ssh e ser-lhe-á pedida a frase de acesso em cada ligação. Não é necessário um agent. Compromisso de segurança: a frase de acesso é introduzida em cada ligação, mas não há cache da chave em memória.",
+          "fallbackBody": "Também podes escolher \"Ficheiro de identidade\" ao adicionar um anfitrião. A {{appName}} lê a chave privada para a memória do processo sem ssh-agent. Atualmente, só são suportadas chaves privadas não encriptadas; a frase-passe não é pedida ao ligar. Usa ssh-agent para chaves encriptadas.",
           "reason": {
             "agent_unavailable": "O ssh-add não conseguiu contactar o ssh-agent (binário em falta, agent inativo ou SSH_AUTH_SOCK não definido).",
             "bad_passphrase": "O ssh-add rejeitou a frase de acesso.",
