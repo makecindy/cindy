@@ -263,12 +263,20 @@ export function requestSizeBudgetAfterRejection(
     if (error.limitBytes !== undefined) next.singleImageMaxBytes = error.limitBytes;
   } else {
     if (error.kind === 'request-too-large' || error.limitBytes !== undefined) {
-      next.triggerBytes = Math.max(1, Math.min(DEFAULT_REQUEST_SIZE_TRIGGER, error.limitBytes ?? Math.floor(actual.bytes * 0.44)));
-      next.targetBytes = Math.max(1, Math.floor(next.triggerBytes * 0.44));
+      // A gateway can advertise 100 MB while rejecting a 14 MiB request.
+      // Only a limit below the rejected quantity explains this rejection;
+      // otherwise derive the unknown-limit rule from the actual wire bytes.
+      const limit = error.limitBytes !== undefined && error.limitBytes < actual.bytes
+        ? error.limitBytes : Math.floor(actual.bytes * 0.44);
+      next.triggerBytes = Math.max(1, Math.min(DEFAULT_REQUEST_SIZE_TRIGGER, previous?.triggerBytes ?? Infinity, limit));
+      next.targetBytes = Math.max(1, Math.min(DEFAULT_REQUEST_SIZE_TARGET, previous?.targetBytes ?? Infinity, Math.floor(next.triggerBytes * 0.44)));
     }
     if (error.kind === 'image-count' || error.limitCount !== undefined) {
-      next.triggerImages = Math.min(familyLimit(modelFamily)?.trigger ?? Infinity, error.limitCount ?? Math.floor(actual.images * 0.44));
-      next.targetImages = Math.floor(next.triggerImages * 0.44);
+      const family = familyLimit(modelFamily);
+      const limit = error.limitCount !== undefined && error.limitCount < actual.images
+        ? error.limitCount : Math.floor(actual.images * 0.44);
+      next.triggerImages = Math.min(family?.trigger ?? Infinity, previous?.triggerImages ?? Infinity, limit);
+      next.targetImages = Math.min(family?.keep ?? Infinity, previous?.targetImages ?? Infinity, Math.floor(next.triggerImages * 0.44));
     }
   }
   return mergeRequestSizeBudgets(previous, next);

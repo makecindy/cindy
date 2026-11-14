@@ -482,6 +482,12 @@ it.each(['responses', 'anthropic', 'chat'] as const)('learns independent count r
   expect(appended.subarray(0, retry.length - 2)).toEqual(retry.subarray(0, -2));
   expect(await send(1)).toEqual(wire(1));
   expect(await send(60, 200, 'route-b')).toEqual(wire(60));
+  for (const advertised of [100, 60]) {
+    reject = { count: advertised };
+    const recovered = await send(60, 200, `route-limit-${advertised}`);
+    expect(imageCount(recovered)).toBe(12); // Greater than OR equal to actual count is not a usable limit.
+    expect(await send(60, 200, `route-limit-${advertised}`)).toEqual(recovered);
+  }
 
   // A stricter second rejection must replay the original 60 images, not just
   // the 31 images sent on the preceding attempt: 30 -> 13 gives 24 at the tail.
@@ -489,9 +495,10 @@ it.each(['responses', 'anthropic', 'chat'] as const)('learns independent count r
   const tightened = await send(60);
   expect(imageCount(tightened)).toBe(24);
   expect(await send(60)).toEqual(tightened);
-  reject = { count: 80 }; // A looser advertised limit cannot undo the learned rule.
-  await send(60, 400);
-  expect(await send(60)).toEqual(tightened);
+  reject = { count: 80 }; // Above the actual 24 images: treat the limit as unknown and tighten again.
+  const tighterAgain = await send(60);
+  expect(imageCount(tighterAgain)).toBe(4); // 24 * 44% -> trigger 10, target 4; replay the original 60.
+  expect(await send(60)).toEqual(tighterAgain);
 
   // Route C has no prior rule. Failed retries must not teach anything.
   reject = { count: 50, failRetry: true };
@@ -514,6 +521,7 @@ it.each(['responses', 'anthropic', 'chat'] as const)('learns independent count r
   const unknownCount = await send(60, 200, 'route-f');
   expect(imageCount(unknownCount)).toBe(12); // No L: 60 * 44% -> trigger 26, target 11.
   expect(await send(60, 200, 'route-f')).toEqual(unknownCount);
+
 });
 
 it.each([400, 413])('does not learn a rule when the %i recovery retry fails', async status => {
@@ -619,4 +627,50 @@ it('replays and learns across protocol translation and an upstream model alias',
   expect(retried.model).toBe('upstream-alias');
   expect(retried.messages.filter((item: { content: Array<{ type: string }> }) => item.content[0].type === 'image_url')).toHaveLength(12);
   expect(received[2]).toEqual(received[1]);
+});
+
+// Regression: gateways can report 100 MB even when rejecting a 14 MiB request.
+// Exercise real 413 forwarding and the production replay controller, including
+// the next request and the no-images terminal case. Unit tier; 3 image blocks.
+it('shrinks a 14 MiB rejection with a misleading 100 MB limit and learns the tighter rule', async () => {
+  const received: Buffer[] = [];
+  let reject = true;
+  const error = JSON.stringify({ error: 'Request size is too large. Max size is 100 MB' });
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
+    received.push(Buffer.concat(chunks));
+    res.statusCode = reject ? 413 : 200;
+    res.end(reject ? error : 'ok'); reject = false;
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const policies: Array<{ triggerBytes?: number; targetBytes?: number }> = [];
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${port}`, transformRequest: [],
+    requestSizeController: { format: () => 'responses', route: () => ({ modelId: 'gpt-test' }),
+      control: (body, format, policy) => {
+        policies.push(policy);
+        return controlRequestSize(body, format, { ...policy, modelFamily: 'gpt' }, async () => '/tmp/saved.png');
+      },
+    },
+  });
+  cleanup.push(() => proxy.dispose());
+  const raw = Buffer.from(JSON.stringify({ input: Array.from({ length: 3 }, (_, index) => ({ role: 'user', content: [
+    { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(3.5 * 1024 * 1024, index).toString('base64')}` },
+  ] })) }));
+  const send = async (body: Buffer, status = 200) => {
+    const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+    expect(response.status).toBe(status); return response.text();
+  };
+  await send(raw);
+  expect(received).toHaveLength(2);
+  const trigger = Math.floor(raw.length * 0.44);
+  expect(policies[1]).toMatchObject({ triggerBytes: trigger, targetBytes: Math.floor(trigger * 0.44) });
+  expect(received[1].length).toBeLessThanOrEqual(trigger);
+  await send(raw);
+  expect(received[2].equals(received[1])).toBe(true);
+  reject = true;
+  const text = Buffer.from(JSON.stringify({ input: 'no images to remove' }));
+  const before = received.length;
+  expect(await send(text, 413)).toBe(error);
+  expect(received).toHaveLength(before + 1); // No retry loop when no image can be removed.
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { controlRequestSize, type InlineImagePreprocessor } from './request-size-control.js';
+import { controlRequestSize, requestSizeBudgetAfterRejection, type InlineImagePreprocessor } from './request-size-control.js';
 import { classifyRequestSizeError } from './request-size-errors.js';
 
 /**
@@ -250,4 +250,25 @@ it('removes only images still above their learned single-image limit', async () 
   expect(result!.removedImages).toBe(1);
   expect(content[0].type).toBe('input_text');
   expect(content.slice(1)).toEqual(JSON.parse(raw.toString()).input[0].content.slice(1));
+});
+
+// Rule selection is a production pure entry point: an advertised limit can be
+// below actual wire bytes yet above our current trigger. Its target must not
+// loosen the default 14 MiB window or a stricter previously learned window.
+it('never loosens effective trigger or target when interpreting a rejection limit', () => {
+  const MiB = 1024 * 1024;
+  const error = { kind: 'request-too-large' as const, limitBytes: 40 * MiB };
+  const actual = { bytes: 60 * MiB, images: 3 };
+  expect(requestSizeBudgetAfterRejection(undefined, error, actual, 'gpt'))
+    .toMatchObject({ triggerBytes: 32 * MiB, targetBytes: 14 * MiB });
+  expect(requestSizeBudgetAfterRejection({ triggerBytes: 16 * MiB, targetBytes: 6 * MiB }, error, actual, 'gpt'))
+    .toMatchObject({ triggerBytes: 16 * MiB, targetBytes: 6 * MiB });
+  const equalLimit = requestSizeBudgetAfterRejection(undefined, { kind: 'request-too-large', limitBytes: 14 * MiB }, { bytes: 14 * MiB, images: 3 }, 'gpt');
+  expect(equalLimit.triggerBytes).toBe(Math.floor(14 * MiB * 0.44));
+  expect(equalLimit.targetBytes).toBe(Math.floor(equalLimit.triggerBytes! * 0.44));
+  // Each dimension decides independently whether its advertised limit explains rejection.
+  expect(requestSizeBudgetAfterRejection(undefined, { kind: 'image-count', limitCount: 100, limitBytes: 32000 }, { bytes: 100000, images: 60 }, 'other'))
+    .toMatchObject({ triggerBytes: 32000, targetBytes: 14080, triggerImages: 26, targetImages: 11 });
+  expect(requestSizeBudgetAfterRejection(undefined, { kind: 'image-count', limitCount: 50, limitBytes: 200000 }, { bytes: 100000, images: 60 }, 'other'))
+    .toMatchObject({ triggerBytes: 44000, targetBytes: 19360, triggerImages: 50, targetImages: 22 });
 });
