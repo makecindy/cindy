@@ -2037,25 +2037,34 @@ test('a failed turn in one task leaves the next turn of another task in the same
   git('commit', '-q', '-m', 'init');
   const snapshot = createHostGitSnapshot({ getSessionMeta: async () => ({ workDir: repo, agentKind: 'claude-code' }) },
     { getLatestUserMessage: async () => ({ clientId: 'user-1', text: 'change a.txt' }) });
+  // Real Git baseline/snapshot IO has this test's 120s budget; the generic
+  // enqueue helper's 200 short polls can expire before Windows finishes it.
+  const dispatched = new Map(['repo-task-a', 'repo-task-b'].map(id => [id, Promise.withResolvers()]));
+  const snapshotEnded = Promise.withResolvers();
+  const onTurnEnd = snapshot.onTurnEnd.bind(snapshot);
+  snapshot.onTurnEnd = id => {
+    const completion = onTurnEnd(id);
+    completion.then(snapshotEnded.resolve, snapshotEnded.reject);
+    return completion;
+  };
   const h = createHarness({ getGitSnapshot: () => snapshot,
+    sent: id => dispatched.get(id)?.resolve(),
     readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
       workingDir: repo, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
-  await enqueue(h, 'repo-task-a', { clientId: 'a-1', text: 'first' });
+  t.after(() => h.queue.dispose().catch(() => {}));
+  await h.queue.enqueue('repo-task-a', { clientId: 'a-1', text: 'first' });
+  await dispatched.get('repo-task-a').promise;
   const a = h.maker.getSession('repo-task-a');
   a.emit({ type: 'error', data: { message: 'provider failed', isTerminal: true }, sessionTurnGeneration: a.generation });
   await waitFor(() => !h.queue.projection('repo-task-a').turnInProgress);
-  await enqueue(h, 'repo-task-b', { clientId: 'b-1', text: 'second' });
+  await h.queue.enqueue('repo-task-b', { clientId: 'b-1', text: 'second' });
+  await dispatched.get('repo-task-b').promise;
   writeFileSync(path.join(repo, 'a.txt'), 'two\n');
   const b = h.maker.getSession('repo-task-b');
   b.emit({ type: 'done', data: {}, sessionTurnGeneration: b.generation });
-  // onTurnEnd runs after the event is delivered; wait for its savepoint (git subprocesses).
-  let labels = [];
-  for (let attempt = 0; attempt < 500 && labels.length < 2; attempt += 1) {
-    labels = (await listShadowSavepoints(repo, 'repo-task-b')).entries.map(entry => entry.label);
-    if (labels.length < 2) await new Promise(resolve => setTimeout(resolve, 20));
-  }
+  await snapshotEnded.promise;
+  const labels = (await listShadowSavepoints(repo, 'repo-task-b')).entries.map(entry => entry.label);
   assert.deepEqual(labels, ['改动 a.txt', '本轮开始时的工作区基线']);
-  await h.queue.dispose().catch(() => {});
 });
 
 async function changeRecordFixture(t) {
