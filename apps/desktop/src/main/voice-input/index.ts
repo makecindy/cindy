@@ -1613,6 +1613,7 @@ function resetVoiceInputModelSelectionCaches(
   selection: ReturnType<typeof getVoiceInputModelSelection>,
 ): void {
   modelSelectionGeneration += 1;
+  invalidatePrewarmedRealtimeAsrWebSocketSession();
   cachedVoiceInputReadiness = null;
   readinessRefreshPromise = null;
   inFlightPrewarm = null;
