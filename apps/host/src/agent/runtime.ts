@@ -866,8 +866,15 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     },
     codexHistory: options.codexRuntime?.codexHistory ?? null,
   };
+  // A model change's window gate (model-window-gate.ts): a route's configured window with the task's
+  // window budget, as the desktop's change of model reads it (register.ts resolveWindowForRoute).
+  const modelWindow = {
+    resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null, budget: number | null) =>
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), agentKind as AgentKind, providerId, modelId, budget),
+    readSessionBudget: (sessionId: string) => startOptions.readStoredSessionContextWindowBudget(sessionId),
+  };
   return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, visionBridge, piPackages,
-    contextRecovery,
+    contextRecovery, modelWindow,
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };
 }
