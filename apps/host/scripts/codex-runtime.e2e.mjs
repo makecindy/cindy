@@ -29,6 +29,8 @@ let toolScenario = null;
 // When set, the fixture first answers with an `exec` tool call that writes a memory through the
 // Host's cindy_memory MCP server, then captures the tool result.
 let memoryScenario = null;
+// When positive, that many next /responses requests are refused as exceeding the context window.
+let overflowNext = 0;
 const responsesStream = events => events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
 const upstream = createServer(async (req, res) => {
   let raw = '';
@@ -77,6 +79,14 @@ const upstream = createServer(async (req, res) => {
   }
   if (!req.url?.endsWith('/responses')) {
     res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":{"message":"No optional endpoint in fixture"}}');
+    return;
+  }
+  if (overflowNext > 0) {
+    overflowNext -= 1;
+    requests.push({ url: req.url, authorization: req.headers.authorization, body: JSON.parse(raw), overflow: true });
+    res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: {
+      type: 'invalid_request_error', code: 'context_length_exceeded',
+      message: 'Your input exceeds the context window of this model. Please adjust your input and try again.' } }));
     return;
   }
   requests.push({ url: req.url, authorization: req.headers.authorization, body: JSON.parse(raw) });
@@ -134,6 +144,8 @@ const { createHostMessageStore } = await import('../src/message-store.ts');
 const { createChatHandler } = await import('../src/chat.mjs');
 const { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } = await import('../src/agent/memory.mjs');
 const { createHostReviewContextResolver } = await import('../src/agent/review-context.ts');
+const { createHostContextRecoveryWiring } = await import('../src/agent/context-recovery-wiring.ts');
+const { createHostAgentHandoffPending } = await import('../src/agent/handoff-pending.ts');
 initLogger({ logDir: path.join(root, 'logs'), isDev: true, level: 'debug' });
 const profile = path.join(root, 'profile');
 const ownerId = 'native-runtime-fixture';
@@ -499,6 +511,83 @@ try {
   assert.equal(await graph.maker.lifecycleHooks.getCodexHistoryHasProductPrompt(sessionId), true);
   console.log('PASS Codex product prompt delivery persists on the Host task row');
   console.log('PASS shared Host HTTP + queue + native Codex: send, persisted UUID/reply, steer, runtime reopen and stop (synthetic local upstream)');
+
+  // ---- Context recovery of an overflow, through the queue as main.ts wires it ----
+  // A third-party provider's task: one ordinary turn, then the upstream refuses the next request
+  // as too long. Recovery rebuilds the task and replays the message on a new native thread with
+  // the summary of the first turn; the client sees no error.
+  {
+    const recoveryTask = 'recovery-native-fixture';
+    await new OwnerSessionStorage({ db: () => database }).create({ id: recoveryTask,
+      title: 'Recovery fixture', agentKind: 'codex', model: 'fixture-model', workDir: root });
+    await database.drizzle.update(sessions).set({ providerId: 'cprov-fixture' }).where(eq(sessions.id, recoveryTask));
+    const store = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
+    const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
+      publish: event => hub.publish(event), log: console });
+    const recoveryQueue = createInputQueue({ getMaker: () => graph.maker, hub, readSession,
+      getOwner: getCurrentDbClientSnapshot, persistMessage: store, pendingHandoff,
+      markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
+      markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
+      ...createHostContextRecoveryWiring({ openKinds: new Set(['context-overflow']), getGraph: () => graph,
+        persistMessage: store, publish: event => hub.publish(event), pendingHandoff, log: console }),
+    });
+    const seen = [];
+    const unsubscribeRecovery = hub.subscribe(event => { if (event.sessionId === recoveryTask) seen.push(event); });
+    const doneCount = () => seen.filter(event => event.event?.type === 'done').length;
+    const until = async (predicate, what) => {
+      const deadline = Date.now() + 60_000;
+      // real-wait: the native process answers on its own schedule.
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
+    const rowsOf = async role => (await database.drizzle.select().from(messages).where(eq(messages.sessionId, recoveryTask)))
+      .filter(row => row.role === role);
+    const inputText = request => JSON.stringify(request.body.input ?? []);
+    try {
+      await recoveryQueue.enqueue(recoveryTask, { clientId: 'recovery-first', text: 'remember the word heliotrope' });
+      await until(() => doneCount() === 1, 'the first turn');
+      const beforeOverflow = requests.length;
+      overflowNext = 1;
+      await recoveryQueue.enqueue(recoveryTask, { clientId: 'recovery-second', text: 'now return synthetic complete' });
+      await until(() => doneCount() === 2, 'the replayed turn');
+      const turnRequests = requests.slice(beforeOverflow);
+      assert.equal(turnRequests[0].overflow, true, 'the upstream refused the request as too long');
+      const replayed = turnRequests.filter(request => !request.overflow);
+      assert.equal(replayed.length, 1, 'one replay reaches the upstream');
+      const [marker] = await rowsOf('context_rebuild');
+      const { handoff } = JSON.parse(marker.content);
+      const firstLine = handoff.split('\n').find(line => line.trim().length > 20);
+      assert.ok(firstLine, 'the summary has content');
+      const count = (text, needle) => text.split(JSON.stringify(needle).slice(1, -1)).length - 1;
+      assert.equal(count(inputText(replayed[0]), firstLine), 1, 'the replay carries the summary once');
+      assert.match(inputText(replayed[0]), /now return synthetic complete/);
+      assert.match(inputText(replayed[0]), /heliotrope/, 'the summary carries the first turn');
+      assert.equal(replayed[0].authorization, 'Bearer synthetic-custom-key', 'the replay uses the provider\'s credential');
+      assert.equal(seen.filter(event => event.event?.type === 'error' || event.type === 'error').length, 0, 'the client sees no error');
+      assert.equal((await rowsOf('user')).length, 2, 'the replay writes no second user row');
+      assert.equal((await rowsOf('error')).length, 0, 'no error row');
+      // The summary was consumed: the next message goes without it.
+      const beforeNext = requests.length;
+      await recoveryQueue.enqueue(recoveryTask, { clientId: 'recovery-third', text: 'one more' });
+      await until(() => doneCount() === 3, 'the next turn');
+      const next = requests.slice(beforeNext);
+      assert.equal(next.length, 1);
+      // The new user message has no summary; the history still holds the replay's one copy.
+      const userItems = (next[0].body.input ?? []).filter(item => item?.role === 'user');
+      const lastUser = JSON.stringify(userItems.at(-1) ?? null);
+      assert.match(lastUser, /one more/);
+      assert.equal(count(lastUser, firstLine), 0, 'the next message carries no summary');
+      assert.equal(count(inputText(next[0]), firstLine), 1, 'the summary is not added again to the history');
+      assert.equal(JSON.parse((await rowsOf('context_rebuild'))[0].content).consumed, true);
+    } finally {
+      unsubscribeRecovery();
+      overflowNext = 0;
+      await recoveryQueue.dispose();
+    }
+    console.log('PASS native Codex context overflow recovery through the production wiring: rebuilt, replayed once with the summary and the provider credential, no client error; the next message carries no summary');
+  }
   assert.ok(requests.length >= 3);
   // The desktop product system prompt reaches the real Codex request (runtimeConfigsCore.ts).
   assert.ok(requests.some(request => JSON.stringify(request.body).includes('You are Cindy, an open-source AI assistant.')),
