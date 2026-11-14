@@ -137,6 +137,23 @@ it('受理宽限窗：窗口内退出的命令结果同步返回，不再回注�
   expect(service.runningCount()).toBe(0);
 });
 
+it('受理宽限窗内被体量巡检杀树：同步结果带 outputCapped，不回注', async () => {
+  const capture = vi.fn();
+  const service = buildService(capture, undefined, { startGraceMs: 2_000 });
+  // 写 6MB 后挂住:capPoll(500ms)看到超限杀树,exit 落在宽限窗内。
+  const result = await service.start({
+    sessionId: 'sess-grace-cap',
+    command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(6 * 1024 * 1024)); setInterval(() => {}, 10_000)"`,
+    cwd: logDir,
+  });
+  if (!result.ok || !result.completed) throw new Error('expected in-grace completion');
+  expect(result.completed.outputCapped).toBe(true);
+  expect(result.completed.code === 0).toBe(false);
+  expect(result.completed.tail.length).toBeGreaterThan(0);
+  // 同步消费即报告：不再回注。
+  expect(capture).not.toHaveBeenCalled();
+});
+
 it('秒死命令不堵名额：满额退出后第 9 条立即起得来（2026-11-13 事故回归）', async () => {
   const capture = vi.fn();
   const service = buildService(capture);
@@ -289,7 +306,8 @@ it('长输出命令:报告尾部取自文件末尾,结论行不丢(fd 直写后�
   const result = await service.start({
     sessionId: 'sess-tail',
     // 10000 行 ≈ 110KB,超过 64KB 尾窗:验证尾部读的是文件末尾而非开头。
-    command: `${JSON.stringify(process.execPath)} -e "for(let i=1;i<=10000;i++)console.log('line-'+String(i).padStart(5,'0'));console.log('final-tail-line')"`,
+    // 显式延后输出:命令活过 60ms 宽限窗,确定走后台回注路径(不依赖子进程快慢)。
+    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => { for(let i=1;i<=10000;i++)console.log('line-'+String(i).padStart(5,'0'));console.log('final-tail-line') }, 300)"`,
     cwd: logDir,
   });
   expect(result.ok).toBe(true);

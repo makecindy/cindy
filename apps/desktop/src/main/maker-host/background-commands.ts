@@ -92,6 +92,10 @@ function resolveGitBash(): string {
   if (cachedGitBash !== null) return cachedGitBash;
   const fromEnv = process.env['CINDY_GIT_BASH'];
   if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  // 兼容 Claude Code 的同名约定:用户为 claude-code 配过 bash 路径时,后台命令
+  // 沿用同一份,而不是再报一次「找不到 Git Bash」。
+  const fromClaudeEnv = process.env['CLAUDE_CODE_GIT_BASH_PATH'];
+  if (fromClaudeEnv && existsSync(fromClaudeEnv)) return fromClaudeEnv;
   const candidates: string[] = [];
   const where = (name: string): string[] => {
     try {
@@ -186,6 +190,7 @@ export type BackgroundCommandStartResult =
         code: number | null;
         signal: NodeJS.Signals | null;
         timedOut: boolean;
+        outputCapped: boolean;
         spawnError?: string;
         tail: string;
       };
@@ -255,12 +260,15 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       .catch(() => {});
   }
 
+  // 孤儿巡检的上一轮体量:判断日志是否仍有活写者(多实例场景 = 另一实例的在册
+  // capPoll 在管)。写句柄不是 O_APPEND,活写者的 fd 按自身位置续写——截断只会
+  // 留下零洞并被续写重新撑大,所以只截「已确认不再增长」的陈旧孤儿。
+  const orphanLogSizes = new Map<string, number>();
   function truncateOrphanLogs(): void {
     // 孤儿日志兜底(体量上限的「重启后存活」):注册表只在内存,重启后上一版进程
-    // 直写的输出没人限流。把不在册且超上限的日志截回上限——只缩日志、不杀进程
-    // (与「重启不杀」同一口径);在册条目的体量由各自 capPoll 管。fd 是 O_APPEND,
-    // 截断后写入落在新 EOF,文件再增长,下一轮再截——快写者的上界是
-    // 「写入速率 × 巡检间隔」,不写穿磁盘。
+    // 直写的输出没人限流。把不在册且超上限且不再增长的日志截回上限——只缩日志、
+    // 不杀进程(与「重启不杀」同一口径);在册条目与仍在增长的日志由各自的
+    // capPoll 管。
     const logDir = deps.resolveLogDir();
     const owned = new Set<string>();
     for (const entry of running.values()) owned.add(entry.logPath);
@@ -272,9 +280,12 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
           if (owned.has(full)) continue;
           stat(full)
             .then((info) => {
-              if (info.size > BACKGROUND_COMMAND_LOG_CAP_BYTES) {
-                return truncate(full, BACKGROUND_COMMAND_LOG_CAP_BYTES);
-              }
+              const last = orphanLogSizes.get(full);
+              orphanLogSizes.set(full, info.size);
+              if (last === undefined) return; // 首轮只记录,下轮才有增长判据
+              if (info.size > last) return; // 仍在增长:有活写者,别截
+              if (info.size <= BACKGROUND_COMMAND_LOG_CAP_BYTES) return;
+              return truncate(full, BACKGROUND_COMMAND_LOG_CAP_BYTES);
             })
             .catch(() => {});
         }
@@ -631,6 +642,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
             code: number | null;
             signal: NodeJS.Signals | null;
             timedOut: boolean;
+            outputCapped: boolean;
             spawnError?: string;
           }) => void)
         | null = null;
@@ -638,6 +650,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         code: number | null;
         signal: NodeJS.Signals | null;
         timedOut: boolean;
+        outputCapped: boolean;
         spawnError?: string;
       }>((resolve) => {
         notifySettled = resolve;
@@ -646,6 +659,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         code: number | null;
         signal: NodeJS.Signals | null;
         timedOut: boolean;
+        outputCapped: boolean;
         spawnError?: string;
       }) => {
         if (settled) return;
@@ -670,14 +684,14 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       child.once('exit', (code, signal) => {
         // 命令已退出即让出并发名额：报告跟着回注，新命令不被死名额堵住。
         releaseSlot();
-        settle({ code, signal, timedOut });
+        settle({ code, signal, timedOut: false, outputCapped });
       });
       child.once('error', (error) => {
         deps.logger.warn?.('[background-command] spawn error', { runId, error: error.message });
         // spawn 失败没有进程树，直接整体移除；kill 失败等后续 error 不影响幂等性。
         endGovernance();
         closeHostFd();
-        settle({ code: null, signal: null, timedOut: false, spawnError: error.message });
+        settle({ code: null, signal: null, timedOut: false, outputCapped: false, spawnError: error.message });
       });
       // 受理宽限窗:窗口内退出(写错/秒败/短命令)的结果直接作为工具结果同步返回,
       // 不占额外轮次;仍在运行的转后台,完成报告照旧回合边界投递。

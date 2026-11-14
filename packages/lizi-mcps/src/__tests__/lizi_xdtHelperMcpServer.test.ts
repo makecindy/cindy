@@ -456,6 +456,13 @@ describe("cindy_helper MCP server", () => {
         logPath: '/tmp/bg-3.log',
         pid: 8,
         completed: { code: 0, signal: null, timedOut: false, tail: 'done' },
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        runId: 'bg-4',
+        logPath: '/tmp/bg-4.log',
+        pid: 9,
+        completed: { code: 1, signal: null, timedOut: false, outputCapped: true, tail: 'xxxx' },
       });
     const server = createXdtHelperMcpServer({ backgroundCommands: start }, {
       agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task',
@@ -477,6 +484,10 @@ describe("cindy_helper MCP server", () => {
       const ok = parsePayload(await call()) as { ok: boolean; run_id?: string; log_tail?: string; note?: string };
       expect(ok).toMatchObject({ ok: true, run_id: 'bg-3', log_tail: 'done' });
       expect(ok.note).toContain('不会再有');
+      // 体量巡检杀树的同步结果:原因说明必须随结果带回,不能只剩「被信号终止」。
+      const capped = parsePayload(await call()) as { ok: boolean; data?: { hint?: string } };
+      expect(capped).toMatchObject({ ok: false, errorCode: 'COMMAND_FAILED' });
+      expect(capped.data?.hint).toContain('输出超过宿主上限');
     } finally { await client.close(); await server.close(); }
   });
 

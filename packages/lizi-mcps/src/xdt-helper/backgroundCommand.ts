@@ -45,6 +45,7 @@ export interface BackgroundCommandToolDeps {
           code: number | null;
           signal: string | null;
           timedOut: boolean;
+          outputCapped: boolean;
           spawnError?: string;
           tail: string;
         };
@@ -125,7 +126,7 @@ export function registerBackgroundCommandTool(
       if (result.completed) {
         // 受理宽限窗内就退出:工具结果即报告,不再回注。失败带日志尾部,模型当回合
         // 就能看到原因并改写重挂,不用等下一轮唤醒。
-        const { code, signal, timedOut, spawnError, tail } = result.completed;
+        const { code, signal, timedOut, outputCapped, spawnError, tail } = result.completed;
         const tailText = tail.trim() ? `\n日志尾部:\n---\n${tail.trim()}\n---\n` : '';
         const logLine = `\n完整日志: ${result.logPath}`;
         if (spawnError) {
@@ -138,7 +139,11 @@ export function registerBackgroundCommandTool(
           );
         }
         if (code !== 0) {
-          const status = code !== null ? `exit ${code}` : `被信号终止(${signal ?? 'unknown'})`;
+          const status = outputCapped
+            ? '输出超过宿主上限(5MB),命令树已被强制终止'
+            : code !== null
+              ? `exit ${code}`
+              : `被信号终止(${signal ?? 'unknown'})`;
           return errorPayload("COMMAND_FAILED", `命令失败(${status})${tailText}${logLine}`);
         }
         return okPayload({
