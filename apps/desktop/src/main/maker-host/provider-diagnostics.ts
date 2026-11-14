@@ -51,6 +51,28 @@ const log = createMakerLogger('provider-probe');
 const PROBE_TIMEOUT_MS = 10_000;
 /** 失败响应体最多读取的字节数（分类只看前几 KB）。 */
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
+/**
+ * 「测试连接」探针的 system 载荷（#9000）。少数第三方中转在 /v1/messages 上静默丢弃
+ * `system`：请求照常 200、流也正常结束，但 agent 的指令与工具规范全部没生效，长任务
+ * 会表现为反复无效调用。探针因此自带一段固定长度的填充，再用响应 usage 反证它是否
+ * 真的计入了输入 token —— 一次用户主动触发的测试，不进入正常会话启动路径。
+ */
+const PROBE_SYSTEM_FILLER_CHARS = 3_600;
+function buildProbeSystemFiller(targetChars: number): string {
+  const words = ['probe', 'system', 'prefix', 'relay', 'budget', 'window', 'stream', 'token'];
+  let filler = '';
+  for (let index = 0; filler.length < targetChars; index += 1) {
+    filler += `${words[index % words.length]}${index % 97} `;
+  }
+  return filler.trim();
+}
+/** 探针 body 里 system 的完整文本（填充 + 一句可验证指令）。 */
+export const PROBE_SYSTEM_TEXT = `Reply with the single word: pong. ${buildProbeSystemFiller(PROBE_SYSTEM_FILLER_CHARS)}`;
+/**
+ * system 生效时 input_tokens 至少应有的下限。英文约 1 token / 4 字符，这里只取 1/10 留足
+ * 余量：正常上游约 900+，丢弃 system 的上游只剩 ping 的个位数到几十。
+ */
+export const PROBE_SYSTEM_MIN_INPUT_TOKENS = Math.floor(PROBE_SYSTEM_TEXT.length / 10);
 
 /** 一次探测的完整参数（adhoc 直填；saved 由 resolve 得到）。 */
 export interface ProviderProbeSpec {
@@ -122,6 +144,14 @@ function normalizedHeaders(headers: Record<string, string> | undefined): Record<
   return normalized;
 }
 
+/** /v1/messages 探针：cc 与 Codex 的 Anthropic 承载共用同一条判定。 */
+function usesAnthropicMessagesProbe(spec: ProviderProbeSpec): boolean {
+  return (
+    spec.wireProtocol === 'anthropic-messages' ||
+    (spec.wireProtocol === undefined && spec.agent === 'claude-code')
+  );
+}
+
 /** 构造探测请求（纯函数，单测直断言）。header 组合与 provider-route 的 api-key-header 分支对齐。 */
 export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init: RequestInit } {
   const mustStripCredentialHeaders =
@@ -143,9 +173,7 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
       }) },
     };
   }
-  const anthropicMessages =
-    spec.wireProtocol === 'anthropic-messages' ||
-    (spec.wireProtocol === undefined && spec.agent === 'claude-code');
+  const anthropicMessages = usesAnthropicMessagesProbe(spec);
   if (anthropicMessages) {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
     if (spec.apiKey) {
@@ -160,6 +188,8 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
         body: JSON.stringify({
           model: spec.modelId,
           max_tokens: 1,
+          // 与真实会话同形：system 走块数组。是否被上游吞掉由 200 之后的 usage 校验判定。
+          system: [{ type: 'text', text: PROBE_SYSTEM_TEXT }],
           messages: [{ role: 'user', content: 'ping' }],
         }),
       },
@@ -233,6 +263,82 @@ async function readFirstSsePayload(res: Response): Promise<string | null> {
         const line = buffer.replace(/\r$/, '');
         if (!line.startsWith('data:')) return null;
         return line.slice(5).trim() || null;
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* no-op */
+    }
+  }
+}
+
+/**
+ * 用 Anthropic Messages 探针的响应体判定上游是否真的把 `system` 计入了输入 token。
+ * 返回 null 表示读不到 usage（或计数量在阈值以上），交给调用方沿用「连接成功」，
+ * 避免对合法实现误报。
+ */
+async function verifyAnthropicSystemAccounting(
+  res: Response,
+  latencyMs: number,
+): Promise<ProviderConnectionTestResult | null> {
+  const raw = await readBodyWithLimit(res, MAX_ERROR_BODY_BYTES);
+  if (raw === null) return null;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(payload)) return null;
+  const usage = payload.usage;
+  if (!isPlainObject(usage)) return null;
+  // Anthropic 兼容端点会把命中缓存的 system 前缀记在 cache_read / cache_creation 里，
+  // 只读 input_tokens 会在「同一次测试连点两下」时把正常端点误报成丢弃 system。
+  const counted = readUsageTokenCount(usage, 'input_tokens')
+    + readUsageTokenCount(usage, 'cache_read_input_tokens')
+    + readUsageTokenCount(usage, 'cache_creation_input_tokens');
+  if (counted <= 0) return null;
+  if (counted >= PROBE_SYSTEM_MIN_INPUT_TOKENS) return null;
+  return {
+    ok: false,
+    code: 'WIRE_INCOMPATIBLE',
+    status: res.status,
+    latencyMs,
+    detail: `upstream counted ${counted} input tokens for a probe whose system prompt is ` +
+      `${PROBE_SYSTEM_TEXT.length} characters (expected >= ${PROBE_SYSTEM_MIN_INPUT_TOKENS}); ` +
+      'the endpoint likely drops `system`, so agent instructions would never apply',
+  };
+}
+
+/** 取一个可用的 usage 计数；非数字 / 负数一律当 0，避免 NaN 扩散。 */
+function readUsageTokenCount(usage: Record<string, unknown>, key: string): number {
+  const value = usage[key];
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * 限量读取响应体：超过上限立即取消读流，避免中转返回的超大响应体撑爆主进程内存。
+ * 返回 null 表示超限或读失败，调用方按「无法判定」处理。
+ */
+async function readBodyWithLimit(res: Response, maxBytes: number): Promise<string | null> {
+  if (!res.body) return null;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) {
+        received += value.byteLength;
+        if (received > maxBytes) return null;
+        text += decoder.decode(value, { stream: !done });
+      }
+      if (done) {
+        text += decoder.decode();
+        return text;
       }
     }
   } finally {
@@ -429,6 +535,12 @@ async function runProviderProbeUnlogged(
         }
       }
       return { ok: true, latencyMs };
+    }
+    // Anthropic Messages 探针是唯一能读到 usage 的非流式分支:读体校验 system 是否真的
+    // 计入了输入 token（#9000）。读不到 usage 时不下结论，沿用既有「连接成功」。
+    if (usesAnthropicMessagesProbe(spec)) {
+      const systemAccounting = await verifyAnthropicSystemAccounting(res, latencyMs);
+      return systemAccounting ?? { ok: true, latencyMs };
     }
     // Non-streaming probes do not need the response body; cancel it to release the connection.
     try {
