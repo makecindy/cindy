@@ -285,7 +285,11 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     async pick(input) {
       const config = deps.readGroup(input.providerId);
       if (!config) return { kind: 'none' };
-      const usable = usableFor(input);
+      // Continuity snapshots keep new-task discovery available, but cannot
+      // justify moving an existing task just to balance cached quota/load.
+      const offers = usableFor(input);
+      const usable = (r: ResolvedProviderGroupMember) => offers(r)
+        && (!input.quotaRebalance || !r.providerContinuity?.stale);
       const paused = pausedFor(input);
       const resolved = await deps.directory.resolveMembers(input.providerId, config, {
         quickMs: PROVIDER_GROUP_PICK_QUICK_MS,
@@ -345,7 +349,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       if (input.quotaRebalance) {
         const current = resolved.find((r) => r.member.key === input.quotaRebalance);
         const chosen = resolved.find((r) => r.member.key === key)!;
-        const currentQuota = current && providerGroupMemberUsageState(current, input.model, now, input.agentKind).quota;
+        const currentQuota = current && !current.providerContinuity?.stale
+          && providerGroupMemberUsageState(current, input.model, now, input.agentKind).quota;
         const targetQuota = providerGroupMemberUsageState(chosen, input.model, now, input.agentKind).quota;
         if (!currentQuota || !targetQuota || providerGroupRebalanceTarget(currentQuota, [{ key, quota: targetQuota }], now) !== key) {
           return { kind: 'unavailable', resolved };
@@ -371,7 +376,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const usable = usableFor(input);
       const paused = pausedFor(input);
       return resolved.flatMap((r) => {
-        if (input.exclude.has(r.member.key) || !usable(r) || paused(r)) return [];
+        if (input.exclude.has(r.member.key) || r.providerContinuity?.stale || !usable(r) || paused(r)) return [];
         if (memberRunning(input.providerId, r) >= effectiveConcurrencyLimit(r.member)) return [];
         const state = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
         if (!state.quota || state.fiveHourTight) return [];
