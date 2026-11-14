@@ -871,8 +871,13 @@ function scheduleStaleLocalConfigHomeSweep(
 }
 
 /** cindy Effort → pi thinking level(pi 无 ultra)。思考开关走 setThinkingEnabled / thinkingEnabled。 */
-function effortToPiThinkingLevel(effort: Effort): string {
+function effortToPiThinkingLevel(effort: Effort): Exclude<Effort, 'ultra'> {
   return effort === 'ultra' ? 'max' : effort;
+}
+
+/** Keep Cindy's selected tier while checking the level Pi can actually apply (#9037). */
+function supportsPiEffort(snapshot: readonly Effort[], effort: Effort): boolean {
+  return snapshot.includes(effort) || snapshot.includes(effortToPiThinkingLevel(effort));
 }
 
 const PI_THINKING_LEVEL_MAP_KEYS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -929,7 +934,7 @@ export function pickSupportedEffort(
 ): Effort | null {
   for (const candidate of candidates) {
     if (!candidate) continue;
-    if (snapshot === undefined || snapshot.includes(candidate)) return candidate;
+    if (snapshot === undefined || supportsPiEffort(snapshot, candidate)) return candidate;
   }
   return null;
 }
@@ -3157,7 +3162,7 @@ export class PiAgent extends BaseAgent {
       // efforts:[] 仍可能收到 resolveEffort 的 UI 占位值 low；它代表“不支持切换”，
       // 只需跳过 RPC。其它档位必须拒绝，避免热刷目录后的新 effort 绕过启动快照。
       if (!snapshot || (snapshot.length === 0 && effort === 'low')) return;
-      if (snapshot.includes(effort)) return;
+      if (supportsPiEffort(snapshot, effort)) return;
       throw new Error(
         `pi set_thinking_level refused: effort '${effort}' is not in Pi's applied model catalog.`,
       );
@@ -7421,13 +7426,13 @@ export class PiAgent extends BaseAgent {
      * 再不带档位切到不支持 `high` 的模型时 `mutableEffort` 仍是 `high`，直接下发会被
      * Pi 拒绕（开启失败）或与当前能力对不上。
      */
-    const applyThinkingEnabled = async (enabled: boolean): Promise<void> => {
+    const applyThinkingEnabled = async (enabled: boolean, selectedEffort?: Effort): Promise<void> => {
       // 目标模型不支持思考（快照为空）时没有什么可开：下发 off 并**保留**用户原来的
       // 档位记忆。否则同路由重选这类模型会发 xhigh、成功后还把 mutableEffort 改成
       // xhigh，用户之后切回支持 xhigh 的模型就被静默改了档。
       const thinkingUnsupported = activeEffortSnapshot !== undefined && activeEffortSnapshot.length === 0;
       const wanted = enabled && !thinkingUnsupported;
-      const remembered = pickSupportedEffort(activeEffortSnapshot, mutableEffort, startupEffort);
+      const remembered = pickSupportedEffort(activeEffortSnapshot, selectedEffort, mutableEffort, startupEffort);
       // 打开时回到会话当前的期望档位，而不是固定 xhigh：显式开关不该把用户选好的
       // max/medium 抹平——否则紧随其后的切模按 mutableEffort 归一化时又会把它降档。
       // 没有可用期望档位时才回到历史默认 xhigh。
@@ -7448,9 +7453,10 @@ export class PiAgent extends BaseAgent {
       // 发了 off，但那是能力所致，不能被记成「用户主动关闭」——否则之后不带档位切回
       // 推理模型会跳过档位恢复，思考再也打不开。
       thinkingExplicitlyOff = !enabled;
-      // 只在真的打开时更新档位记忆：关掉思考不丢档位——档位是用户的独立选择，
-      // 再打开应回到原档位，而不是回落到启动时的档位。
+      // 关掉思考保留原档位，除非这次选择显式带了新档位；二者是独立意图。
+      // 记忆同样等 RPC 成功后才更新，避免未确认的选择影响后续恢复。
       if (wanted) mutableEffort = targetEffort ?? 'xhigh';
+      else if (selectedEffort) mutableEffort = selectedEffort;
     };
     const switchModel = async (
       model: string,
@@ -7539,8 +7545,14 @@ export class PiAgent extends BaseAgent {
         // 同路由也可能带显式的思考开关（会话当前关思考、调用方重选同一模型并传
         // thinkingEnabled:true）：这里直接返回会让调用方以为开启成功，Pi 实际仍关闭，
         // 发送结算随后还会把这份选择清掉。
+        // An empty snapshot only accepts low as a UI placeholder, not a new remembered tier.
+        const selectedEffort = nextEffortSnapshot?.length === 0 ? undefined : setOpts?.effort;
         if (typeof setOpts?.thinkingEnabled === 'boolean') {
-          await applyThinkingEnabled(setOpts.thinkingEnabled);
+          await applyThinkingEnabled(setOpts.thinkingEnabled, selectedEffort);
+        } else if (selectedEffort) {
+          // A same-route selection still owns its tier; do not reopen explicitly disabled thinking.
+          if (thinkingExplicitlyOff) mutableEffort = selectedEffort;
+          else await applyThinkingEnabled(true, selectedEffort);
         }
         return;
       }
@@ -7690,7 +7702,7 @@ export class PiAgent extends BaseAgent {
         !keepThinkingOff &&
         restoredEffort &&
         nextEffortSnapshot && nextEffortSnapshot.length > 0 &&
-        nextEffortSnapshot.includes(restoredEffort)
+        supportsPiEffort(nextEffortSnapshot, restoredEffort)
       ) {
         // 恢复请求失败（被拒或超时/链路抛错）都不能让 setModel 失败：模型路由此刻已确认,
         // 抛错只会跳过下面的子代理快照收尾（pending 卡死委派），档位本身却救不回来。
@@ -7786,12 +7798,12 @@ export class PiAgent extends BaseAgent {
               this.deps.resolvePiRuntimeModelDescriptor?.(mutableProviderId ?? null, model)
                 ?.defaultEffort ?? null;
             const reconciled =
-              requestedEffort && usable.includes(requestedEffort)
+              requestedEffort && supportsPiEffort(usable, requestedEffort)
                 ? requestedEffort
-                : preferredDefault && usable.includes(preferredDefault)
+                : preferredDefault && supportsPiEffort(usable, preferredDefault)
                   ? preferredDefault
                   : usable[0];
-            if (requestedEffort && !usable.includes(requestedEffort)) {
+            if (requestedEffort && !supportsPiEffort(usable, requestedEffort)) {
               // 启动快照（本次 spawn 冻结）与活跃目录可能漂移：此时 Pi 实际跑的档位与
               // main 持久化/UI 显示的档位不一致，留一条日志便于排障。
               deps.logger.warn('pi: thinking effort reconciled after model switch', {

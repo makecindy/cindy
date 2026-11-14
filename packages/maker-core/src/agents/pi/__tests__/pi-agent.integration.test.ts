@@ -2437,6 +2437,62 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  // #9037: verify the adapter's ultra alias against real Pi and the final Responses payload.
+  it('keeps native ultra at max after scheduled-style controls and model switching', { timeout: 30_000 }, async () => {
+    const deps = buildDeps();
+    deps.capabilityAdditions = { availableModels: ['ultra-model-a', 'ultra-model-b'].map((id) => ({
+      id, displayName: id, contextWindow: 200_000,
+      efforts: ['low', 'ultra'], defaultEffort: 'low',
+    })) };
+    deps.resolvePiNativeProviders = async () => ({
+      providers: [{
+        id: 'ultra-native', name: 'Ultra fixture', baseUrl: endpoint,
+        api: 'openai-responses', apiKeyEnvVar: 'CINDY_PI_API_KEY',
+        models: ['ultra-model-a', 'ultra-model-b'].map((id) => ({
+          id, reasoning: true, contextWindow: 200_000,
+          thinkingLevelMap: { minimal: null, low: 'low', medium: null, high: null, xhigh: null, max: 'max' },
+        })),
+      }], env: {},
+    });
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-native-ultra-'));
+    let handle: AgentSessionHandle | undefined;
+    const before = seenRequests.length;
+    try {
+      handle = await new PiAgent(deps).startSession({
+        sessionId: 'native-ultra-controls', workingDir,
+        providerId: 'ultra-native', model: 'ultra-model-a', effort: 'low',
+      });
+      const send = async () => {
+        const done = (async () => {
+          for await (const event of handle!.events()) {
+            if (event.type === 'done') return event;
+          }
+        })();
+        scriptedResponses.push(responsesStreamBody('ultra reply', handle!.model));
+        await handle!.send({ type: 'user', content: 'reply briefly' });
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+      };
+      await handle.setModel!('ultra-model-a', { providerId: 'ultra-native', effort: 'ultra', thinkingEnabled: true });
+      await send();
+      await handle.setEffort!('ultra');
+      await handle.setModel!('ultra-model-b', { providerId: 'ultra-native', effort: 'ultra', thinkingEnabled: true });
+      await handle.setThinkingEnabled!(false);
+      await handle.setThinkingEnabled!(true);
+      await send();
+
+      const requests = seenRequests.slice(before).map((request) => JSON.parse(request.body));
+      expect(requests).toHaveLength(2);
+      expect(requests[0]).toMatchObject({ model: 'ultra-model-a', reasoning: { effort: 'max' } });
+      expect(requests[1]).toMatchObject({ model: 'ultra-model-b', reasoning: { effort: 'max' } });
+      expect(requests[1].instructions).toEqual(requests[0].instructions);
+      expect(requests[1].tools).toEqual(requests[0].tools);
+      expect(handle.getEffort!()).toBe('ultra');
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   it(
     'exportSessionHtml writes a real HTML file via pi export_html (offline, no gateway)',
     { timeout: 60_000 },
