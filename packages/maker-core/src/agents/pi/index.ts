@@ -253,6 +253,8 @@ import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
   emptyPiProjectResourceCliPaths,
+  estimateSpawnArgvLength,
+  piSpawnArgvBudget,
   type PiProjectResourceCliPaths,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
@@ -4118,6 +4120,7 @@ export class PiAgent extends BaseAgent {
     // discovery and path checks can fail before any projection is created.
     let managedSkillPaths: string[];
     let managedSkillRoot: string | undefined;
+    let projectSkillRoot: string | undefined;
     let args: string[];
     const taskSystemPrompt = opts[TASK_SYSTEM_PROMPT] ?? '';
     let taskSystemPromptPath: string | undefined;
@@ -4161,7 +4164,7 @@ export class PiAgent extends BaseAgent {
         await writeFile(taskSystemPromptPath, taskSystemPrompt, 0o600);
       }
 
-      args = [
+      const buildArgs = (projectResourceArgs: readonly string[]): string[] => [
         '--mode',
         'rpc',
         // --no-approve remains the hard project-settings gate. Explicit --skill /
@@ -4198,15 +4201,37 @@ export class PiAgent extends BaseAgent {
         bridgeExtensionPath,
         ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
         ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
-        ...(loadProjectResourcesInPlace
-          ? piProjectResourceCliArgs(projectResourceCli)
-          : []),
+        ...(loadProjectResourcesInPlace ? projectResourceArgs : []),
       ];
+      args = buildArgs(loadProjectResourcesInPlace ? piProjectResourceCliArgs(projectResourceCli) : []);
+      const spawnBudget = piSpawnArgvBudget(process.platform);
+      if (
+        projectResourceCli.skills.length > 0
+        && spawnBudget !== null
+        && estimateSpawnArgvLength(args, process.platform) > spawnBudget
+      ) {
+        // .agents/.claude/.codex may expose the same Skills through junctions.
+        // Keep the original explicit paths for ordinary launches, but collapse
+        // an oversized project-Skill segment into one session-owned root.
+        projectSkillRoot = path.join(configHome, 'cindy-project-skills');
+        args = buildArgs([
+          '--skill', projectSkillRoot,
+          ...projectResourceCli.promptTemplates.flatMap((promptPath) => ['--prompt-template', promptPath]),
+          ...projectResourceCli.extensions.flatMap((extensionPath) => ['--extension', extensionPath]),
+        ]);
+      }
       if (managedSkillRoot) {
         await fs.mkdir(managedSkillRoot);
         for (const [index, skillPath] of managedLaunchSkills.entries()) {
           // Preserve discovery order for same-name skills without long filenames.
           await fs.symlink(path.dirname(skillPath), path.join(managedSkillRoot, String(index).padStart(12, '0')),
+            process.platform === 'win32' ? 'junction' : 'dir');
+        }
+      }
+      if (projectSkillRoot) {
+        await fs.mkdir(projectSkillRoot);
+        for (const [index, skillPath] of projectResourceCli.skills.entries()) {
+          await fs.symlink(skillPath, path.join(projectSkillRoot, String(index).padStart(12, '0')),
             process.platform === 'win32' ? 'junction' : 'dir');
         }
       }
@@ -6464,6 +6489,7 @@ export class PiAgent extends BaseAgent {
             ...managedPackageRoots,
             ...projectResourceCli.skills,
             ...managedSkillPaths,
+            ...(projectSkillRoot ? [projectSkillRoot] : []),
             ...(managedSkillRoot ? [managedSkillRoot] : []),
             ...projectResourceCli.promptTemplates,
             ...projectResourceCli.extensions,
