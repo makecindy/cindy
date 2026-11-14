@@ -348,6 +348,41 @@ describe("composer attachment tray overlay foreground", () => {
     expect(host.querySelector('[data-testid="lightbox"]')).toBeNull();
   });
 
+  // Completed uploads remain identifiable after the preview action finishes;
+  // the remove control must stay a separate, explicit action.
+  it("keeps completed file names visible and separates preview from removal", () => {
+    const preview = vi.fn();
+    const remove = vi.fn();
+    const file: RemoteSerializedAttachment = {
+      id: "report",
+      name: "quarterly-report.pdf",
+      path: "/tmp/quarterly-report.pdf",
+      ext: "pdf",
+      size: 42,
+      category: "file",
+      mimeType: "application/pdf",
+    };
+    act(() =>
+      root.render(
+        <ComposerAttachmentTray
+          attachments={[file]}
+          previews={{}}
+          onRemove={remove}
+          onPreview={preview}
+          onPreviewPending={() => {}}
+          testIDPrefix="t"
+        />,
+      ),
+    );
+    expect(host.textContent).toContain("quarterly-report.pdf");
+    const buttons = host.querySelectorAll<HTMLButtonElement>("button");
+    expect(buttons).toHaveLength(2);
+    act(() => buttons[0]!.click());
+    act(() => buttons[1]!.click());
+    expect(preview).toHaveBeenCalledWith("report");
+    expect(remove).toHaveBeenCalledWith("report");
+  });
+
   // 遮罩 scrim 两种模式都是深色:前景必须恒白,不能跟着主题反相成近黑。
   it.each(["light", "dark"])(
     "keeps spinner, retry and +N readable on the dark scrim in %s mode",
