@@ -15,7 +15,7 @@ export const modelAdvancedSettings = defineSettings({
 });
 
 export default {
-  id: 'providers',
+  id: 'model-advanced',
   order: 5,
   entries: Object.values(modelAdvancedSettings),
 } satisfies SettingsSearchModule;
