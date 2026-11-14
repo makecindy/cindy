@@ -188,7 +188,7 @@ function createRequestSizeController(
         denied.add('image/webp');
         deniedRouteMimes.set(routeKey, denied);
       }
-      return result;
+      return result?.body ?? null;
     },
     control: async (body, format, policy) => {
       // Session resolution is performed by the existing recovery callback. The size controller
