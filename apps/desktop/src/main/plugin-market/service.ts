@@ -1534,7 +1534,10 @@ export class PluginMarketService {
    * Startup, resume and periodic full passes still independently recheck disk. */
   async refreshCatalogForForeground(): Promise<'completed' | 'failed'> {
     const owner = captureMarketOwner();
-    if (!getClientEndpoint('pluginApiBaseUrl')) return 'completed';
+    // 本地模式没有云端目录可检查;前台刷新直接完成,自定义来源升级仍由
+    // 启动/恢复/周期维护的 customOnlySnapshot 完成。
+    if (process.env.XDT_DESKTOP_DEV_MODE === 'local'
+      || !getClientEndpoint('pluginApiBaseUrl')) return 'completed';
     const key = marketOwnerKey(owner);
     const catalog = await this.loadCatalog(owner);
     requireSameMarketOwner(owner);
@@ -1695,7 +1698,10 @@ export class PluginMarketService {
       }
       return snapshot;
     };
-    if (!getClientEndpoint('pluginApiBaseUrl')) {
+    // 本地模式没有云端插件市场:跳过官方目录请求,但保留自定义来源的
+    // 本地发现与自动升级(customOnlySnapshot 仍完整执行)。
+    const skipCloudCatalog = process.env.XDT_DESKTOP_DEV_MODE === 'local';
+    if (skipCloudCatalog || !getClientEndpoint('pluginApiBaseUrl')) {
       const customDiscovery = await customDiscoveryPromise;
       return customOnlySnapshot(
         customDiscovery,
