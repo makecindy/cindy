@@ -271,4 +271,72 @@ describe('memorySettingsStore', () => {
     await expect(bootstrapMemorySettingsFromMain()).resolves.toBeUndefined();
     expect(getMakerMemoryEnabled()).toBe(false);
   });
+
+  it('does not send migration IPC from a stale owner bootstrap', async () => {
+    const storage = createStorage();
+    storage.setItem('memorySettings.makerLegacyMigrationV1.owner-b', '1');
+    storage.setItem('memorySettings.makerEnabled.owner-b', 'true');
+    vi.stubGlobal('localStorage', storage);
+    let resolveOwnerA!: (settings: {
+      maker: boolean;
+      claudeCode: boolean;
+      codex: boolean;
+    }) => void;
+    let resolveOwnerB!: (settings: {
+      maker: boolean;
+      claudeCode: boolean;
+      codex: boolean;
+    }) => void;
+    const ownerASettings = new Promise<{
+      maker: boolean;
+      claudeCode: boolean;
+      codex: boolean;
+    }>((resolve) => {
+      resolveOwnerA = resolve;
+    });
+    const ownerBSettings = new Promise<{
+      maker: boolean;
+      claudeCode: boolean;
+      codex: boolean;
+    }>((resolve) => {
+      resolveOwnerB = resolve;
+    });
+    // Main preserves the current true setting for legacy=null; it does not disable B.
+    const preserveLegacy = vi.fn().mockResolvedValue({
+      maker: true,
+      claudeCode: true,
+      codex: true,
+    });
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: {
+          memoryGetSettings: vi
+            .fn()
+            .mockReturnValueOnce(ownerASettings)
+            .mockReturnValueOnce(ownerBSettings),
+          memoryPreserveLegacyMakerDisabled: preserveLegacy,
+        },
+      },
+    });
+    const {
+      bootstrapMemorySettingsFromMain,
+      getMakerMemoryEnabled,
+      setMemorySettingsOwner,
+    } = await import('@/lib/memorySettingsStore');
+
+    // Controlled IPC timing checks the owner boundary, not real Electron reachability.
+    setMemorySettingsOwner('owner-a');
+    const staleBootstrap = bootstrapMemorySettingsFromMain();
+    setMemorySettingsOwner('owner-b');
+    const currentBootstrap = bootstrapMemorySettingsFromMain();
+    resolveOwnerB({ maker: true, claudeCode: true, codex: true });
+    await currentBootstrap;
+    resolveOwnerA({ maker: true, claudeCode: true, codex: true });
+    await staleBootstrap;
+
+    // A stale read must not issue migration IPC against the new owner's Main profile.
+    expect(preserveLegacy).not.toHaveBeenCalled();
+    expect(getMakerMemoryEnabled()).toBe(true);
+    expect(storage.getItem('memorySettings.makerEnabled.owner-b')).toBe('true');
+  });
 });

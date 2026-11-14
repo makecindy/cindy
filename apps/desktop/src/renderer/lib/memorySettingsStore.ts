@@ -36,6 +36,8 @@ function legacyMigrationKey(): string {
 export function setMemorySettingsOwner(ownerId: string | null): void {
   if (activeOwnerId === ownerId) return;
   activeOwnerId = ownerId;
+  // 账号边界同样使在途 bootstrap 失效，避免旧 owner 的响应写入新 owner 镜像。
+  localWriteRevision += 1;
   legacyMigrationCompletedInMemory = false;
   inMemoryValue = readStoredMakerMemoryEnabled() ?? true;
   subscribers.forEach((cb) => cb(inMemoryValue));
