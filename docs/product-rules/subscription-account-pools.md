@@ -67,6 +67,14 @@
   旧记录无法区分两种添加入口，因此统一按本次裁决拆分；账号池或归属文件读不了、切换 owner 或设置复制失败时不发布未完成结果，
   下次加载再试。实现与回归见 `subscription-accounts/placement.ts`、`__tests__/ipc.test.ts` 和
   `maker-host/__tests__/providerCatalogRealmReload.test.ts`。
+- **拆出账号后的旧任务不显示断开（2026-11-14 回归修复）**：拆分后内置供应商可能只剩未登录的默认账号，选择列表把它算作
+  未连接；选了内置供应商的旧任务因此显示「模型来源已断开」并被禁止发送，尽管执行端仍按任务绑定的账号续上原生会话。
+  修复后，本机任务账号查询在账号已不在任务来源里时附带它现在所在的供应商（`ownerProviderId`，只给本机界面，不经设备互联
+  回包）；输入框和模型选择器只为这一个已建立的任务，把原来源显示为已连接、模型取自账号所在的供应商，发送仍带原来源 ID。
+  只放开、不收紧：原来源本来已连接或被停用、账号已暂停／未登录／不可用、账号所在供应商未连接或被停用时一律不改；新任务、
+  草稿、远程与 SSH 任务不受影响，不改写任务记录。手机端暂未接入，这类任务在手机上仍把来源标红，但可以照常发送。
+  回归见 `subscription-accounts/__tests__/runtime.test.ts`、`renderer/__tests__/sourceSwitch.test.ts` 与
+  `new-chat/__tests__/chatInputModelLoading.test.tsx`。
 - **Claude 单独供应商**：以前单独添加的 Claude 连接用的是 Cindy 自己保存的登录凭证，已于 2026-09-24 停用（只能查看和删除），
   不复活、不并入、不迁移凭证。新的 Claude 单独供应商与账号池账号一样只经官方 CLI 登录，每个账号一个独立的
   `CLAUDE_CONFIG_DIR` 目录，Cindy 不读取、不复制 Claude 凭证（见[凭证与本地存储](../dev-rules/credentials-and-local-storage.md)）。
