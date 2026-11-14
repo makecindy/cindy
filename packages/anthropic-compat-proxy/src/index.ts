@@ -20,6 +20,9 @@ export type { OversizedRequestRecovery } from './types.js';
 export {
   controlRequestSize,
   countInlineRequestImages,
+  mergeRequestSizeBudgets,
+  requestSizeBudgetAfterRejection,
+  requestSizeModelFamily,
   hashImageBytes,
   routeInfoFor,
   DEFAULT_QUICK_PATH_BYTES,
@@ -32,6 +35,7 @@ export type {
   InlineImagePreprocessor,
   PreparedImage,
   RequestSizePolicy,
+  RequestSizeBudget,
   RequestSizeResult,
   WireFormat,
 } from './request-size-control.js';

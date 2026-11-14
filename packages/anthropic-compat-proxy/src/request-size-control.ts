@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { RequestSizeError } from './request-size-errors.js';
 
 export type WireFormat = 'responses' | 'anthropic' | 'chat';
 export type ImageRouteInfo = {
@@ -29,6 +30,8 @@ export const NOOP_IMAGE_PREPROCESSOR: InlineImagePreprocessor = {
 export interface RequestSizePolicy {
   triggerBytes?: number;
   targetBytes?: number;
+  triggerImages?: number;
+  targetImages?: number;
   modelFamily?: 'gpt' | 'claude' | 'other';
   route?: ImageRouteInfo;
   preprocessor?: InlineImagePreprocessor;
@@ -212,7 +215,7 @@ function walkImages(node: JsonNode, format: WireFormat, out: ImageOccurrence[], 
   }
 }
 
-/** Diagnostic fallback only: count inline media without decoding or logging its content. */
+/** Count actual wire images (including translated protocols), without decoding their bytes. */
 export function countInlineRequestImages(body: Buffer, format?: WireFormat): number {
   try {
     const root = new JsonScanner(body.toString('utf8')).parse();
@@ -233,6 +236,44 @@ function familyLimit(family: RequestSizePolicy['modelFamily']): { trigger: numbe
   return undefined;
 }
 
+export type RequestSizeBudget = Pick<RequestSizePolicy, 'triggerBytes' | 'targetBytes' | 'triggerImages' | 'targetImages' | 'singleImageMaxBytes'>;
+
+export function requestSizeModelFamily(model = ''): NonNullable<RequestSizePolicy['modelFamily']> {
+  const value = model.toLowerCase();
+  return /(?:^|[/_-])(?:gpt|o[1-9]|codex)(?:[/_.-]|$)/.test(value)
+    ? 'gpt' : value.includes('claude') ? 'claude' : 'other';
+}
+
+/** Merge at completion too: concurrent successful retries cannot loosen a rule. */
+export function mergeRequestSizeBudgets(previous: RequestSizeBudget = {}, next: RequestSizeBudget): RequestSizeBudget {
+  const merged = { ...previous };
+  for (const key of ['triggerBytes', 'targetBytes', 'triggerImages', 'targetImages', 'singleImageMaxBytes'] as const) {
+    if (next[key] !== undefined) merged[key] = Math.min(previous[key] ?? Infinity, next[key]);
+  }
+  return merged;
+}
+
+/** The retry and all later requests replay this same rule; there is no forced-cut mode. */
+export function requestSizeBudgetAfterRejection(
+  previous: RequestSizeBudget | undefined, error: RequestSizeError,
+  actual: { bytes: number; images: number }, modelFamily: RequestSizePolicy['modelFamily'],
+): RequestSizeBudget {
+  const next: RequestSizeBudget = {};
+  if (error.kind === 'single-image-too-large') {
+    if (error.limitBytes !== undefined) next.singleImageMaxBytes = error.limitBytes;
+  } else {
+    if (error.kind === 'request-too-large' || error.limitBytes !== undefined) {
+      next.triggerBytes = Math.max(1, Math.min(DEFAULT_REQUEST_SIZE_TRIGGER, error.limitBytes ?? Math.floor(actual.bytes * 0.44)));
+      next.targetBytes = Math.max(1, Math.floor(next.triggerBytes * 0.44));
+    }
+    if (error.kind === 'image-count' || error.limitCount !== undefined) {
+      next.triggerImages = Math.min(familyLimit(modelFamily)?.trigger ?? Infinity, error.limitCount ?? Math.floor(actual.images * 0.44));
+      next.targetImages = Math.floor(next.triggerImages * 0.44);
+    }
+  }
+  return mergeRequestSizeBudgets(previous, next);
+}
+
 function replacementText(path: string, seenAssistant: boolean): string {
   return `Media omitted from this request. ${seenAssistant ? 'An assistant response occurred before this media was removed.' : 'No assistant response occurred before this media was removed; it may be unseen.'} Preserved local file: ${JSON.stringify(path)}. Read that file with an image/file-reading tool when needed. Do not read all previously omitted media back into the request.`;
 }
@@ -250,9 +291,9 @@ function decodeBase64(value: string): Buffer {
 export async function controlRequestSize(body: Buffer, format: WireFormat, policy: RequestSizePolicy = {}, preserve: (bytes: Buffer, mimeType: string, occurrence: number) => Promise<string>): Promise<RequestSizeResult | null> {
   const disableRemoval = policy.allowRemoval === false;
   const trigger = disableRemoval ? Number.MAX_SAFE_INTEGER : policy.triggerBytes ?? DEFAULT_REQUEST_SIZE_TRIGGER;
-  let target = disableRemoval ? Number.MAX_SAFE_INTEGER : policy.targetBytes ?? DEFAULT_REQUEST_SIZE_TARGET;
-  const forceBudget = policy.reason === 'learned' || policy.reason?.startsWith('retry') === true;
-  const familyPolicy = disableRemoval ? undefined : familyLimit(policy.modelFamily);
+  const target = disableRemoval ? Number.MAX_SAFE_INTEGER : policy.targetBytes ?? DEFAULT_REQUEST_SIZE_TARGET;
+  const familyPolicy = disableRemoval ? undefined : policy.triggerImages === undefined ? familyLimit(policy.modelFamily)
+    : { trigger: policy.triggerImages, keep: policy.targetImages ?? Math.floor(policy.triggerImages * 0.44) };
   const quickLimit = Math.min(trigger, DEFAULT_QUICK_PATH_BYTES);
   if (body.length <= quickLimit) {
     const hint = (body.toString('utf8').match(/"type"\s*:\s*"(?:input_image|image|document|image_url)"/g) ?? []).length;
@@ -276,12 +317,14 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
     const route = policy.route ?? {};
     try {
       const output = await preprocessor.prepare({ bytes: original, mimeType: occurrence.mimeType, route, signal: policy.signal ?? new AbortController().signal });
-      let tightened = output;
-      if (policy.singleImageMaxBytes && original.length > policy.singleImageMaxBytes && preprocessor.tighten) {
-        tightened = await preprocessor.tighten({ bytes: original, mimeType: occurrence.mimeType, route, maxBytes: policy.singleImageMaxBytes, signal: policy.signal ?? new AbortController().signal });
+      if (output?.bytes?.length && output.bytes.length < original.length) {
+        next = { bytes: output.bytes, mimeType: output.mimeType, changed: true };
       }
-      if (tightened?.bytes?.length && tightened.bytes.length < original.length) {
-        next = { bytes: tightened.bytes, mimeType: tightened.mimeType, changed: true };
+      if (policy.singleImageMaxBytes && next.bytes.length > policy.singleImageMaxBytes && preprocessor.tighten) {
+        const tightened = await preprocessor.tighten({ bytes: original, mimeType: occurrence.mimeType, route, maxBytes: policy.singleImageMaxBytes, signal: policy.signal ?? new AbortController().signal });
+        if (tightened?.bytes?.length && tightened.bytes.length < next.bytes.length) {
+          next = { bytes: tightened.bytes, mimeType: tightened.mimeType, changed: true };
+        }
       }
     } catch { /* noop is deliberately fail-open */ }
     prepared.set(index, next);
@@ -291,7 +334,6 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   // bytes (including MIME/JSON overhead), as if preprocessing ran before replay.
   const rewrites = new Map<number, { start: number; end: number; text: string }>();
   const inlineBytes: number[] = [];
-  let preparedBytes = body.length;
   for (const [index, occurrence] of occurrences.entries()) {
     const item = prepared.get(index)!;
     const originalBytes = Buffer.byteLength(text.slice(occurrence.node.start, occurrence.node.end));
@@ -309,43 +351,43 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
       rewrites.set(index, { start: occurrence.node.start, end: occurrence.node.end, text: replacement });
     }
     inlineBytes.push(bytes);
-    preparedBytes += bytes - originalBytes;
   }
-  if (forceBudget && !disableRemoval) target = Math.min(target, Math.floor(preparedBytes * 0.44));
 
   let prefixBytes = 0;
   let prefixEnd = 0;
   const retained: number[] = [];
   let oldest = 0;
   const removed = new Set<number>();
+  const omitImage = async (index: number, assistantCount: number) => {
+    const occurrence = occurrences[index];
+    const item = prepared.get(index)!;
+    const localPath = await preserve(item.bytes, item.mimeType, index);
+    const replacement = { type: occurrence.textType,
+      text: replacementText(localPath, occurrence.assistantCount < assistantCount) };
+    const replacementJson = JSON.stringify(replacement);
+    prefixBytes += Buffer.byteLength(replacementJson) - inlineBytes[index];
+    const block = occurrence.node.value as Record<string, unknown>;
+    for (const key of Object.keys(block)) delete block[key];
+    Object.assign(block, replacement);
+    rewrites.set(index, { start: occurrence.node.start, end: occurrence.node.end, text: replacementJson });
+    removed.add(index);
+  };
   const compactPrefix = async (assistantCount: number) => {
-    const byteCrossing = prefixBytes > trigger || (forceBudget && !disableRemoval);
+    const byteCrossing = prefixBytes > trigger;
     const countCrossing = familyPolicy !== undefined && retained.length - oldest > familyPolicy.trigger;
     while (oldest < retained.length && (
       (byteCrossing && prefixBytes > target) ||
       (countCrossing && retained.length - oldest > familyPolicy!.keep)
-    )) {
-      const index = retained[oldest++];
-      const occurrence = occurrences[index];
-      const item = prepared.get(index)!;
-      const localPath = await preserve(item.bytes, item.mimeType, index);
-      const replacement = { type: occurrence.textType,
-        text: replacementText(localPath, occurrence.assistantCount < assistantCount) };
-      const replacementJson = JSON.stringify(replacement);
-      prefixBytes += Buffer.byteLength(replacementJson) - inlineBytes[index];
-      const block = occurrence.node.value as Record<string, unknown>;
-      for (const key of Object.keys(block)) delete block[key];
-      Object.assign(block, replacement);
-      rewrites.set(index, { start: occurrence.node.start, end: occurrence.node.end, text: replacementJson });
-      removed.add(index);
-    }
+    )) await omitImage(retained[oldest++], assistantCount);
   };
   // Both limits cross at their historical positions. Appending another image
   // consumes the remaining window; it does not reapply a final-request count cap.
   for (const [index, occurrence] of occurrences.entries()) {
     prefixBytes += Buffer.byteLength(text.slice(prefixEnd, occurrence.node.start)) + inlineBytes[index];
     prefixEnd = occurrence.node.end;
-    retained.push(index);
+    if (!disableRemoval && policy.singleImageMaxBytes !== undefined && prepared.get(index)!.bytes.length > policy.singleImageMaxBytes) {
+      await omitImage(index, occurrence.assistantCount);
+    } else retained.push(index);
     await compactPrefix(occurrence.assistantCount);
   }
   prefixBytes += Buffer.byteLength(text.slice(prefixEnd));

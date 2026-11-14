@@ -305,9 +305,9 @@ it.each(['anthropic', 'chat', 'responses'] as const)('reuses a learned 413 budge
   const port = await listenOnAvailableLoopbackPort(upstream);
   cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
   const routePath = format === 'anthropic' ? '/v1/messages' : format === 'chat' ? '/v1/chat/completions' : '/v1/responses';
-  const wire = (count: number) => Buffer.from(JSON.stringify({ metadata: { model: 'nested-decoy', note: 'a "quote" and a brace {' }, [format === 'responses' ? 'input' : 'messages']:
+  const wire = (count: number, small = false) => Buffer.from(JSON.stringify({ metadata: { model: 'nested-decoy', note: 'a "quote" and a brace {' }, [format === 'responses' ? 'input' : 'messages']:
     Array.from({ length: count }, (_, index) => {
-      const data = Buffer.alloc(count > 2 && index === 0 ? 60_000 : 2400, index + 1).toString('base64');
+      const data = Buffer.alloc(small ? 120 : count > 2 && index === 0 ? 60_000 : 2400, index + 1).toString('base64');
       const image = format === 'anthropic' ? { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }
         : format === 'chat' ? { type: 'image_url', image_url: { url: `data:image/png;base64,${data}` } }
         : { type: 'input_image', image_url: `data:image/png;base64,${data}` };
@@ -337,15 +337,21 @@ it.each(['anthropic', 'chat', 'responses'] as const)('reuses a learned 413 budge
   expect(initial.length).toBeLessThan(8192);
   expect(followup.lastIndexOf(Buffer.from('"model"'))).toBeGreaterThan(64 * 1024);
   await send(initial);
-  const learnedTarget = Math.floor(received[0].length * 0.44);
+  const learnedTrigger = Math.floor(received[0].length * 0.44);
+  const learnedTarget = Math.floor(learnedTrigger * 0.44);
+  expect(received[1].length).toBeLessThanOrEqual(learnedTrigger);
   await send(followup);
   expect(received).toHaveLength(3);
-  expect(received[2].length).toBeLessThanOrEqual(learnedTarget);
+  expect(received[2].length).toBeLessThanOrEqual(learnedTrigger);
   const spooledPolicy = policies.at(-1);
-  expect(spooledPolicy).toMatchObject({ triggerBytes: received[0].length, targetBytes: learnedTarget, reason: 'learned', allowRemoval: true,
+  expect(spooledPolicy).toMatchObject({ triggerBytes: learnedTrigger, targetBytes: learnedTarget, reason: 'learned', allowRemoval: true,
     route: { providerId: 'test-provider', modelId: 'gpt-test', deniedMimeTypes: ['image/webp'] } });
   await send(initial);
   expect(policies.at(-1)).toEqual(spooledPolicy); // Same route/policy through the memory path.
+  expect(received[3]).toEqual(received[1]); // Retry and later replay of the same history match.
+  const small = wire(1, true);
+  await send(small);
+  expect(received.at(-1)).toEqual(small);
 });
 
 // Approved Codex HTTP fallback cap: scale MiB to KiB so all four real ingress
@@ -425,3 +431,192 @@ it.each(['controlled', 'disabled', 'unowned-above', 'unowned-below'] as const)(
     }
   },
 );
+
+// Real retry/forwarding state machine, tiny inline fixtures. Learned rules must
+// be committed on success, apply to later tasks on the same route, and replay
+// from the same original history as the retry (not the already-cut wire body).
+it.each(['responses', 'anthropic', 'chat'] as const)('learns independent count rules after successful %s retries only', async format => {
+  const received: Buffer[] = [];
+  let reject: { count?: number; failRetry?: boolean; maxBytes?: number } | undefined = { count: 50 };
+  let pendingFailure = false;
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    received.push(Buffer.concat(chunks));
+    if (pendingFailure) { pendingFailure = false; res.writeHead(503); res.end('retry failed'); return; }
+    if (reject) {
+      const next = reject; reject = undefined; pendingFailure = next.failRetry === true;
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: { message: `NovaException - ${JSON.stringify({ error: { message: `${next.count === undefined ? 'Too many images.' : `Exceeded maximum number of images (${next.count}) allowed in the request.`}${next.maxBytes ? ` Max size is ${next.maxBytes} bytes` : ''}` } })}` } }));
+    } else res.end('ok');
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const path = format === 'responses' ? '/v1/responses' : format === 'anthropic' ? '/v1/messages' : '/v1/chat/completions';
+  const wire = (count: number, size = 1200) => Buffer.from(JSON.stringify({ model: 'grok-test', [format === 'responses' ? 'input' : 'messages']:
+    Array.from({ length: count }, (_, index) => {
+      const data = Buffer.alloc(size, index + 1).toString('base64');
+      return { role: 'user', content: [format === 'responses' ? { type: 'input_image', image_url: `data:image/png;base64,${data}` }
+        : format === 'chat' ? { type: 'image_url', image_url: { url: `data:image/png;base64,${data}` } }
+        : { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] };
+    }) }));
+  const imageCount = (body: Buffer) => (body.toString().match(/"type":"(?:input_image|image|image_url)"/g) ?? []).length;
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${port}`, transformRequest: [],
+    requestSizeController: { format: () => format,
+      route: (ctx) => ({ modelId: 'grok-test', providerId: ctx.headers['x-test-provider'] ?? 'route-a' }),
+      control: (body, wireFormat, policy) => controlRequestSize(body, wireFormat, policy, async (bytes, mime, index) => `/tmp/image-${index}.${mime.split('/')[1]}-${bytes.length}`),
+    },
+  });
+  cleanup.push(() => proxy.dispose());
+  const send = async (count: number, status = 200, provider = 'route-a', size = 1200) => {
+    const response = await fetch(`${proxy.url}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-provider': provider }, body: wire(count, size) });
+    expect(response.status).toBe(status); await response.text(); return received.at(-1)!;
+  };
+  const retry = await send(60);
+  expect(received).toHaveLength(2);
+  expect(imageCount(received[0])).toBe(60);
+  expect(imageCount(retry)).toBe(31);
+  expect(await send(60)).toEqual(retry);
+  const appended = await send(61);
+  expect(imageCount(appended)).toBe(32);
+  expect(appended.subarray(0, retry.length - 2)).toEqual(retry.subarray(0, -2));
+  expect(await send(1)).toEqual(wire(1));
+  expect(await send(60, 200, 'route-b')).toEqual(wire(60));
+
+  // A stricter second rejection must replay the original 60 images, not just
+  // the 31 images sent on the preceding attempt: 30 -> 13 gives 24 at the tail.
+  reject = { count: 30 };
+  const tightened = await send(60);
+  expect(imageCount(tightened)).toBe(24);
+  expect(await send(60)).toEqual(tightened);
+  reject = { count: 80 }; // A looser advertised limit cannot undo the learned rule.
+  await send(60, 400);
+  expect(await send(60)).toEqual(tightened);
+
+  // Route C has no prior rule. Failed retries must not teach anything.
+  reject = { count: 50, failRetry: true };
+  await send(60, 503, 'route-c');
+  expect(await send(60, 200, 'route-c')).toEqual(wire(60));
+
+  reject = { count: 50, maxBytes: 32000 };
+  const both = await send(60, 200, 'route-d');
+  expect(both.length).toBeLessThanOrEqual(32000);
+  expect(imageCount(both)).toBeLessThanOrEqual(50);
+  expect(await send(60, 200, 'route-d')).toEqual(both);
+  expect(imageCount(await send(60, 200, 'route-d', 3))).toBe(31); // Below the byte cap, count still applies.
+  expect((await send(6, 200, 'route-d', 5000)).length).toBeLessThanOrEqual(32000); // Below count cap, bytes still apply.
+  reject = { count: 50 };
+  const tinyRetry = await send(60, 200, 'route-e', 3);
+  expect(imageCount(tinyRetry)).toBe(31); // Placeholders can make this retry larger in bytes.
+  expect(tinyRetry.length).toBeGreaterThan(wire(60, 3).length);
+  expect(await send(60, 200, 'route-e', 3)).toEqual(tinyRetry);
+  reject = {};
+  const unknownCount = await send(60, 200, 'route-f');
+  expect(imageCount(unknownCount)).toBe(12); // No L: 60 * 44% -> trigger 26, target 11.
+  expect(await send(60, 200, 'route-f')).toEqual(unknownCount);
+});
+
+it.each([400, 413])('does not learn a rule when the %i recovery retry fails', async status => {
+  const received: Buffer[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
+    received.push(Buffer.concat(chunks));
+    res.statusCode = received.length === 1 ? status : received.length === 2 ? 503 : 200;
+    res.end(received.length === 1 ? (status === 400 ? 'Exceeded maximum number of images (50) allowed in the request.' : 'Request size is too large') : 'ok');
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const raw = Buffer.from(JSON.stringify({ model: 'grok-test', input: Array.from({ length: 60 }, () => ({ role: 'user', content: [
+    { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(1200, 1).toString('base64')}` },
+  ] })) }));
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${port}`, transformRequest: [],
+    oversizedRequestRecovery: () => (body, limit) => recoverInlineAttachments(body, limit, async () => '/tmp/kept.png'),
+    requestSizeController: { format: () => 'responses', control: (body, format, policy) => controlRequestSize(body, format, policy, async () => '/tmp/kept.png') },
+  });
+  cleanup.push(() => proxy.dispose());
+  const send = () => fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+  const first = await send(); expect(first.status).toBe(503); await first.text();
+  expect(received).toHaveLength(2);
+  const next = await send(); expect(next.status).toBe(200); await next.text();
+  expect(received.at(-1)).toEqual(raw);
+});
+
+it('keeps the stricter rule when an earlier, looser retry completes last', async () => {
+  let finishEarlier!: () => void;
+  const count = (body: Buffer) => (body.toString().match(/"type":"input_image"/g) ?? []).length;
+  const received: Array<{ lane: string; body: Buffer }> = [];
+  const attempts = new Map<string, number>();
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
+    const lane = String(req.headers['x-test-lane']);
+    received.push({ lane, body: Buffer.concat(chunks) });
+    const attempt = (attempts.get(lane) ?? 0) + 1; attempts.set(lane, attempt);
+    if (attempt === 1 && lane !== 'check') {
+      res.writeHead(400); res.end(`Exceeded maximum number of images (${lane === 'earlier' ? 50 : 30}) allowed.`);
+    } else if (lane === 'earlier') {
+      res.writeHead(200); res.write('accepted'); finishEarlier = () => res.end('done');
+    } else res.end('ok');
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const raw = Buffer.from(JSON.stringify({ model: 'grok-test', input: Array.from({ length: 60 }, () => ({ role: 'user', content: [
+    { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(1200, 1).toString('base64')}` },
+  ] })) }));
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${port}`, transformRequest: [],
+    requestSizeController: { format: () => 'responses', control: (body, format, policy) => controlRequestSize(body, format, policy, async () => '/tmp/kept.png') },
+  });
+  cleanup.push(() => proxy.dispose());
+  const send = (lane: string) => fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-lane': lane }, body: raw });
+  const earlier = await send('earlier');
+  try {
+    const tighter = await send('tighter'); expect(tighter.status).toBe(200); await tighter.text();
+    expect(count(received.find(item => item.lane === 'tighter')!.body)).toBe(60); // Merely receiving 200 headers did not learn the earlier rule.
+    expect(count(received.at(-1)!.body)).toBe(24);
+  } finally { finishEarlier(); await earlier.text(); }
+  const check = await send('check'); expect(check.status).toBe(200); await check.text();
+  expect(count(received.at(-1)!.body)).toBe(24);
+});
+
+// Retry must count the rejected wire protocol, then replay the original protocol
+// and reapply translation/model routing. Otherwise unknown count limits become 0
+// and the learned route gets stored under the upstream model alias.
+it('replays and learns across protocol translation and an upstream model alias', async () => {
+  const received: Buffer[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    received.push(Buffer.concat(chunks));
+    res.statusCode = received.length === 1 ? 400 : 200;
+    res.end(received.length === 1 ? 'Too many images.' : 'ok');
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const proxy = await createAnthropicCompatProxy({
+    upstream: `http://127.0.0.1:${port}`, transformRequest: [],
+    routingTransform: () => ({ transformRequestBody: body => {
+      const original = JSON.parse(body.toString());
+      return { body: Buffer.from(JSON.stringify({ model: 'upstream-alias', messages: original.input.map((item: { role: string; content: Array<{ type: string; image_url?: string; text?: string }> }) => ({
+        role: item.role, content: item.content.map(block => block.type === 'input_image'
+          ? { type: 'image_url', image_url: { url: block.image_url } } : { type: 'text', text: block.text }),
+      })) })) };
+    } }),
+    requestSizeController: {
+      format: () => 'responses', route: (_ctx, body) => ({ modelId: (body as { model: string }).model }),
+      control: (body, format, policy) => controlRequestSize(body, format, policy, async () => '/tmp/media.png'),
+    },
+  });
+  cleanup.push(() => proxy.dispose());
+  const raw = Buffer.from(JSON.stringify({ model: 'grok-original', input: Array.from({ length: 60 }, (_, i) => ({ role: 'user',
+    content: [{ type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(1200, i).toString('base64')}` }],
+  })) }));
+  for (let i = 0; i < 2; i++) {
+    const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+    expect(response.status).toBe(200);
+    await response.text();
+  }
+  expect(received).toHaveLength(3);
+  const retried = JSON.parse(received[1].toString());
+  expect(retried.model).toBe('upstream-alias');
+  expect(retried.messages.filter((item: { content: Array<{ type: string }> }) => item.content[0].type === 'image_url')).toHaveLength(12);
+  expect(received[2]).toEqual(received[1]);
+});

@@ -5,7 +5,7 @@ import { copyFile, lstat, mkdir, mkdtemp, open, realpath, rm, writeFile } from '
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
-import { countInlineRequestImages, controlRequestSize, recoverInlineAttachments, type ImageRouteInfo, type InlineImagePreprocessor, type OversizedRequestRecovery, type RequestSizeController } from '@cindy/anthropic-compat-proxy';
+import { requestSizeBudgetAfterRejection, requestSizeModelFamily, countInlineRequestImages, controlRequestSize, recoverInlineAttachments, type ImageRouteInfo, type InlineImagePreprocessor, type OversizedRequestRecovery, type RequestSizeController } from '@cindy/anthropic-compat-proxy';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions, mediaRefs } from '../localDb/schema.js';
 import { addRef, removeRefById } from '../cindy-media/ledger.js';
@@ -32,7 +32,6 @@ async function hashFile(file: string): Promise<string> {
 
 // A retry must not reuse another recovery's uncommitted file or reference.
 const recoveryLocks = new Map<string, Promise<unknown>>();
-const learnedRequestBudgets = new Map<string, { trigger: number; target: number }>();
 const deniedRouteMimes = new Map<string, Set<string>>();
 async function serializeRecovery<T>(key: string, run: () => Promise<T>): Promise<T> {
   const previous = recoveryLocks.get(key) ?? Promise.resolve();
@@ -165,6 +164,7 @@ function createRequestSizeController(
     },
     preprocessor,
     retry: async (body, error, ctx, signal) => {
+      if (controller.enabled?.() === false) return null;
       const parsedHint = (() => {
         const match = /"model"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(body.toString('utf8', 0, Math.min(body.length, 64 * 1024)));
         return match ? { model: JSON.parse(`"${match[1]}"`) } : {};
@@ -175,22 +175,18 @@ function createRequestSizeController(
       const sessionId = resolveSession(ctx.headers) ?? '';
       const routeKey = `${sessionId}|${route.providerId ?? ''}|${route.endpoint ?? ''}|${route.modelId ?? ''}|${format}`;
       route.deniedMimeTypes = [...(deniedRouteMimes.get(routeKey) ?? [])];
-      const limit = error.limitBytes ?? body.length;
+      const budget = requestSizeBudgetAfterRejection(undefined, error,
+        { bytes: body.length, images: countInlineRequestImages(body, format) }, requestSizeModelFamily(route.modelId));
       const result = await controller.control(body, format, {
         route,
         signal,
         context: ctx,
-        triggerBytes: limit,
-        targetBytes: Math.max(1, Math.floor(limit * 0.44)),
-        singleImageMaxBytes: error.kind === 'single-image-too-large' ? error.limitBytes : undefined,
+        ...budget,
         reason: `retry:${error.kind}`,
-        allowRemoval: true,
+        allowRemoval: error.kind !== 'unsupported-image-format',
       });
-      if (result) {
-        const model = typeof parsedHint.model === 'string' ? parsedHint.model : '';
-        const key = `${sessionId}|${route.providerId ?? ''}|${route.endpoint ?? ''}|${model}|${format}`;
-        learnedRequestBudgets.set(key, { trigger: limit, target: Math.max(1, Math.floor(limit * 0.44)) });
-      }
+      // Only the proxy sees the retried response. It commits size rules after
+      // success; generating a body here must never teach a route a new budget.
       if (error.kind === 'unsupported-image-format') {
         const denied = deniedRouteMimes.get(routeKey) ?? new Set<string>();
         denied.add('image/webp');
@@ -246,14 +242,9 @@ function createRequestSizeController(
         const staged = new Map<string, { source: string; hash: string; mimeType: string; refId?: string }>();
         try {
           const route = policy.route as ImageRouteInfo;
-          const model = route.modelId?.toLowerCase() ?? '';
-          const modelFamily = /(?:^|[/_-])(?:gpt|o[1-9]|codex)(?:[/_.-]|$)/.test(model)
-            ? 'gpt' : model.includes('claude') ? 'claude' : 'other';
-          const modelKey = route.modelId ?? '';
-          const budgetKey = `${sessionId}|${route.providerId ?? ''}|${route.endpoint ?? ''}|${modelKey}|${format}`;
-          const learned = learnedRequestBudgets.get(budgetKey);
+          const modelFamily = requestSizeModelFamily(route.modelId);
           const result = await serializeRecovery(`${scope.ownerStorageKey}/${sessionId}`, async () => controlRequestSize(
-            body, format, { route, modelFamily, signal: policy.signal, preprocessor: countingPreprocessor, singleImageMaxBytes: policy.singleImageMaxBytes, triggerBytes: policy.triggerBytes ?? learned?.trigger, targetBytes: policy.targetBytes ?? learned?.target, reason: policy.reason, allowRemoval: policy.allowRemoval },
+            body, format, { route, modelFamily, signal: policy.signal, preprocessor: countingPreprocessor, singleImageMaxBytes: policy.singleImageMaxBytes, triggerBytes: policy.triggerBytes, targetBytes: policy.targetBytes, triggerImages: policy.triggerImages, targetImages: policy.targetImages, reason: policy.reason, allowRemoval: policy.allowRemoval },
             async (bytes, mimeType, index) => {
               const hash = createHash('sha256').update(bytes).digest('hex');
               const ext = extForMime(mimeType) ?? '.bin';

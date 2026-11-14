@@ -16,10 +16,12 @@ export function classifyRequestSizeError(input: string): RequestSizeError {
   if (/model does not support image|does not support images|only supports text modality|image modality is not supported/.test(text)) return { kind: 'unsupported-image' };
   if (/context (?:length|window)|prompt is too long|input is too long/.test(text)) return { kind: 'context-too-long' };
   const count = text.match(/(?:maximum number of images|exceeded maximum number of images|too many images)[^\d]*(\d+)/);
-  if (count) return { kind: 'image-count', limitCount: Number(count[1]) };
+  const max = text.match(/(?:max(?:imum)? size is|request exceeds?[^\d]*maximum allowed size|request size)[^\d]*(\d+(?:[.,]\d+)?)\s*(kb|mb|bytes?)/);
+  if (count) return { kind: 'image-count', limitCount: Number(count[1]), ...(max ? { limitBytes: bytes(max[1], max[2]) } : {}) };
   const single = text.match(/image[^\d]*(?:exceeds?|maximum|limit)[^\d]*(\d+(?:[.,]\d+)?)\s*(kb|mb|bytes?)/);
   if (single) return { kind: 'single-image-too-large', limitBytes: bytes(single[1], single[2]) };
-  const max = text.match(/(?:max(?:imum)? size is|request exceeds?[^\d]*maximum allowed size|request size)[^\d]*(\d+(?:[.,]\d+)?)\s*(kb|mb|bytes?)/);
   if (max) return { kind: 'request-too-large', limitBytes: bytes(max[1], max[2]) };
+  if (/too many images|maximum number of images/.test(text)) return { kind: 'image-count' };
+  if (/request.{0,50}(?:too large|maximum allowed size)|request_too_large/.test(text)) return { kind: 'request-too-large' };
   return { kind: 'other' };
 }

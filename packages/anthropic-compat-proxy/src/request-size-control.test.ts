@@ -225,3 +225,29 @@ it.each([
     previous = body;
   }
 });
+
+// Regression from real CC/Pi retries: learned limits are replay thresholds,
+// never a request to shrink every subsequent body by another 44% (unit tier).
+it('leaves a small image request byte-identical under its learned trigger', async () => {
+  const raw = replayHistory(1, 4096);
+  const result = await controlRequestSize(raw, 'responses', {
+    triggerBytes: 10_000, targetBytes: 4400, reason: 'learned',
+  }, preserve);
+  expect(result?.body ?? raw).toEqual(raw);
+  expect(result?.removedImages ?? 0).toBe(0);
+});
+
+// A single-image rejection must not remove other, smaller images as a side
+// effect of treating the image's byte limit as a whole-request byte budget.
+it('removes only images still above their learned single-image limit', async () => {
+  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [
+    { type: 'input_image', image_url: `data:image/png;base64,${imageData(1, 4000)}` },
+    { type: 'input_image', image_url: `data:image/png;base64,${imageData(2, 800)}` },
+    { type: 'input_image', image_url: `data:image/png;base64,${imageData(3, 800)}` },
+  ] }] }));
+  const result = await controlRequestSize(raw, 'responses', { singleImageMaxBytes: 1000, reason: 'learned' }, preserve);
+  const content = JSON.parse(result!.body.toString()).input[0].content;
+  expect(result!.removedImages).toBe(1);
+  expect(content[0].type).toBe('input_text');
+  expect(content.slice(1)).toEqual(JSON.parse(raw.toString()).input[0].content.slice(1));
+});

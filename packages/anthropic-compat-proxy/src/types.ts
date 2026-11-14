@@ -54,6 +54,8 @@ export interface RequestSizeController {
     singleImageMaxBytes?: number;
     triggerBytes?: number;
     targetBytes?: number;
+    triggerImages?: number;
+    targetImages?: number;
     allowRemoval?: boolean;
   }) => Promise<RequestSizeResult | null>;
 }

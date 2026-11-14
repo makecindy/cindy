@@ -153,7 +153,8 @@ it.each(['thread-id', 'x-claude-code-session-id'])('uses host provider resolutio
   await controller.retry!(raw, { kind: 'unsupported-image-format' }, ctx, signal);
   expect(controller.route!(ctx, input).deniedMimeTypes).toContain('image/webp');
   const extended = Buffer.from(JSON.stringify({ ...input, trailingText: 'more history' }));
-  expect(await controller.control(extended, 'responses', { context: ctx, signal, route: controller.route!(ctx, input) })).not.toBeNull();
+  // A format rejection can deny a MIME, but must not teach a byte budget.
+  expect(await controller.control(extended, 'responses', { context: ctx, signal, route: controller.route!(ctx, input) })).toBeNull();
   provider = 'provider-b';
   expect(controller.route!(ctx, input)).toMatchObject({ providerId: 'provider-b', deniedMimeTypes: [] });
   expect(await controller.control(extended, 'responses', { context: ctx, signal, route: controller.route!(ctx, input) })).toBeNull();
@@ -201,4 +202,21 @@ it('preserves the original request on controller errors and logs only the error 
   expect(state.info).toHaveBeenCalledExactlyOnceWith('request size control skipped', {
     reqId: 74, reason: 'error', originalBytes: raw.length, imageCount: 1, errorType: 'TypeError',
   });
+});
+
+// Unit regression: retry generation persists omitted media but cannot learn a
+// rule before an upstream success. Sixty small images reproduce the 50/22 rule.
+it('persists count recovery media without learning a rule during body generation', async () => {
+  const controller = createRequestSizeController(() => state.resolved);
+  const parsed = { model: 'grok-test', input: Array.from({ length: 60 }, () => ({ role: 'user', content: [pngBlock()] })) };
+  const raw = Buffer.from(JSON.stringify(parsed));
+  const ctx = { reqId: 91, method: 'POST', url: '/v1/responses', headers: {} };
+  const signal = new AbortController().signal;
+  const retried = await controller.retry!(raw, { kind: 'image-count', limitCount: 50 }, ctx, signal);
+  const input = JSON.parse(retried!.toString()).input;
+  expect(input.filter((item: any) => item.content[0].type === 'input_image')).toHaveLength(31);
+  expect(input[0].content[0].text).toContain(path.join(state.root, 'saved.png'));
+  expect(state.ingest).toHaveBeenCalled();
+  expect(state.addRef).toHaveBeenCalled();
+  expect(await controller.control(raw, 'responses', { context: ctx, signal, route: controller.route!(ctx, parsed) })).toBeNull();
 });

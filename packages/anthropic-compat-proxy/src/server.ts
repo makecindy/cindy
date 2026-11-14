@@ -15,8 +15,8 @@
 
 import { installResponseGuard } from './response-guard.js';
 import { collectRecoverableBody } from './oversized-attachments.js';
-import { countInlineRequestImages, type WireFormat } from './request-size-control.js';
-import { classifyRequestSizeError } from './request-size-errors.js';
+import { countInlineRequestImages, mergeRequestSizeBudgets, requestSizeBudgetAfterRejection, requestSizeModelFamily, type ImageRouteInfo, type RequestSizeBudget, type WireFormat } from './request-size-control.js';
+import { classifyRequestSizeError, type RequestSizeError } from './request-size-errors.js';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from 'node:http';
@@ -977,7 +977,7 @@ function forward(
   beforeRetry?: () => Promise<boolean>,
   // Optional request-local operational observer. It never receives raw request/response data.
   forwardLifecycle?: ForwardLifecycleObserver | null,
-  recoverUpstreamOversized?: (body: Buffer, signal: AbortSignal) => Promise<Buffer>,
+  recoverUpstreamOversized?: (body: Buffer, signal: AbortSignal, error: () => RequestSizeError) => Promise<Buffer | null>,
   recoverRequestSize?: (body: Buffer, error: ReturnType<typeof classifyRequestSizeError>, signal: AbortSignal, ctx?: RequestTransformCtx) => Promise<Buffer | null>,
   requestContext?: RequestTransformCtx,
 ): void {
@@ -1190,12 +1190,15 @@ function forward(
       // upload connection so a late ALB 400/FIN cannot keep it alive.
       setImmediate(() => upstreamReq.destroy());
       void (async () => {
-        let recovered: Buffer | undefined;
-        try { recovered = await recoverUpstreamOversized(body, recoveryAbort.signal); }
+        let recovered: Buffer | null | undefined;
+        try { recovered = await recoverUpstreamOversized(body, recoveryAbort.signal, () => {
+          const error = classifyRequestSizeError(decodeBodyForLog(Buffer.concat(early413Chunks), String(upstreamRes.headers['content-encoding'] ?? '')).toString('utf8'));
+          return error.kind === 'other' ? { kind: 'request-too-large' } : error;
+        }); }
         catch { recovered = undefined; }
         finally { clientRes.off('close', abortRecovery); }
         if (clientRes.destroyed || clientRes.writableEnded) return;
-        if (recovered && recovered.length < body.length) {
+        if (recovered && !recovered.equals(body)) {
           try {
             if (beforeRetry && !(await beforeRetry())) return;
           } catch {
@@ -1282,7 +1285,11 @@ function forward(
             catch { recovered = null; }
             finally { clientRes.off('close', abortRetry); }
             if (clientRes.destroyed || clientRes.writableEnded) return;
-            if (recovered && recovered.length < body.length) {
+            if (recovered && !recovered.equals(body)) {
+              try { if (beforeRetry && !(await beforeRetry())) return; }
+              catch { recovered = null; }
+            }
+            if (recovered && !recovered.equals(body)) {
               logger.info?.('upstream request size recovery retry', {
                 reqId, originalBytes: body.length, recoveredBytes: recovered.length, reason: sizeError.kind,
               });
@@ -2089,11 +2096,11 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   const maxBodyBytes = opts.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
   const oversizedRequestCompactor: OversizedRequestCompactor | undefined = opts.oversizedRequestCompactor;
   const requestSizeController = opts.requestSizeController;
-  const learnedRequestSizeRoutes = new Map<string, { trigger: number; target: number }>();
-  const requestSizeRouteKey = (ctx: RequestTransformCtx, body: unknown, format: string): string => {
-    const model = isRecord(body) && typeof body.model === 'string' ? body.model : '';
+  const learnedRequestSizeRoutes = new Map<string, RequestSizeBudget>();
+  const requestSizeRouteKey = (ctx: RequestTransformCtx, body: unknown, format: string, route: ImageRouteInfo): string => {
+    const model = route.modelId ?? (isRecord(body) && typeof body.model === 'string' ? body.model : '');
     const account = ctx.headers.authorization ?? ctx.headers['x-api-key'] ?? '';
-    return `${account}|${ctx.url}|${model}|${format}`;
+    return JSON.stringify([account, route.providerId ?? '', route.endpoint ?? ctx.url, model, 'http', format]);
   };
   // Treat a malformed ingress override as unset.  Letting NaN reach the
   // stream guard would make `total > NaN` false forever and turn the bounded
@@ -2360,16 +2367,24 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // Freeze the kill switch for this request. Compression still runs below, but
     // disabled size control must retain the original disk-backed overflow recovery.
     const sizeControlEnabled = Boolean(requestSizeController) && requestSizeController?.enabled?.() !== false;
+    // Retain a reference (not a copy) until the first response, so a retry can
+    // replay the original history rather than recutting already omitted images.
+    let replaySource: Buffer | undefined;
+    let sizeIdentity: { key: string; route: ImageRouteInfo; format: WireFormat } | undefined;
+    const releaseReplaySource = () => { replaySource = undefined; };
+    res.once('finish', releaseReplaySource);
+    res.once('close', releaseReplaySource);
     // Keep route identity, learned limits and controller inputs identical for
     // buffered bodies and bodies collected through the disk spool.
     const controlRequestBody = async (body: Buffer, parsed: unknown, format: WireFormat, signal: AbortSignal) => {
       if (!requestSizeController) return null;
       const route = requestSizeController.route?.(requestCtx, parsed) ?? {};
-      const learned = sizeControlEnabled
-        ? learnedRequestSizeRoutes.get(requestSizeRouteKey(requestCtx, parsed, format)) : undefined;
+      sizeIdentity = { key: requestSizeRouteKey(requestCtx, parsed, format, route), route, format };
+      if (sizeControlEnabled) replaySource ??= body;
+      const learned = sizeControlEnabled ? learnedRequestSizeRoutes.get(sizeIdentity.key) : undefined;
       return requestSizeController.control(body, format, {
         route, signal, context: requestCtx, allowRemoval: sizeControlEnabled,
-        ...(learned ? { triggerBytes: learned.trigger, targetBytes: learned.target, reason: 'learned' } : {}),
+        ...learned, ...(learned ? { reason: 'learned' } : {}),
       });
     };
     let sizeControlledAtIngress = false;
@@ -2674,6 +2689,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 本地 handler 命中:不转发上游、不跑 transform 链,由 handler 直接消费(协议翻译场景)。
     // parsedBody 复用路由阶段的解析结果,不二次 parse。
     if (decision?.localHandler) {
+      releaseReplaySource();
       // PI native subscription handlers also receive provider-native JSON and
       // can carry the same accumulated vision history as forwarded requests.
       // Apply the bounded compactor before the local-handler hard-limit check;
@@ -2958,7 +2974,60 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       return;
     }
 
-    const forwardLifecycle = guardForwardLifecycleObserver(decision?.forwardLifecycle);
+    let pendingBudget: { key: string; rule: RequestSizeBudget } | undefined;
+    const originalLifecycle = guardForwardLifecycleObserver(decision?.forwardLifecycle);
+    const forwardLifecycle: ForwardLifecycleObserver = {
+      ...originalLifecycle,
+      onComplete: status => {
+        if (pendingBudget && status >= 200 && status < 300 && sizeControlEnabled && requestSizeController?.enabled?.() !== false) {
+          learnedRequestSizeRoutes.set(pendingBudget.key,
+            mergeRequestSizeBudgets(learnedRequestSizeRoutes.get(pendingBudget.key), pendingBudget.rule));
+        }
+        pendingBudget = undefined;
+        originalLifecycle?.onComplete?.(status);
+      },
+    };
+    const recoverSize = async (body: Buffer, error: RequestSizeError, signal: AbortSignal): Promise<Buffer | null> => {
+      if (!requestSizeController || !sizeControlEnabled || requestSizeController.enabled?.() === false) return null;
+      if (error.kind === 'unsupported-image-format') {
+        const restored = await requestSizeController.retry?.(body, error, requestCtx, signal);
+        return restored && restored.length <= maxBodyBytes ? restored : null;
+      }
+      const parsed = requestModelHint(replaySource ?? body);
+      const format = sizeIdentity?.format ?? requestSizeController.format?.(requestCtx, parsed);
+      if (!format) return null;
+      const imageRoute = sizeIdentity?.route ?? requestSizeController.route?.(requestCtx, parsed) ?? {};
+      const key = sizeIdentity?.key ?? requestSizeRouteKey(requestCtx, parsed, format, imageRoute);
+      const proposed = requestSizeBudgetAfterRejection(learnedRequestSizeRoutes.get(key), error,
+        { bytes: body.length, images: error.kind === 'image-count' || error.limitCount !== undefined ? countInlineRequestImages(body) : 0 },
+        requestSizeModelFamily(imageRoute.modelId));
+      let recovered: Buffer | null;
+      transformsCompleted = false;
+      try {
+        if (opts.requestSizeRetry) recovered = await opts.requestSizeRetry(body, error, signal);
+        else {
+          const controlled = await requestSizeController.control(replaySource ?? body, format, {
+            route: imageRoute, signal, context: requestCtx, ...proposed, reason: `retry:${error.kind}`, allowRemoval: true,
+          });
+          if (!controlled) return null;
+          signal.throwIfAborted();
+          let restored = controlled.body;
+          if (requestGuard) restored = requestGuard.transformBody(restored);
+          const parsedRestored = restored === controlled.body ? controlled.parsedBody : undefined;
+          const bypass = opts.bypassRequestTransforms?.(parsedRestored, transformCtx) === true;
+          recovered = bypass ? restored : await runTransforms(restored, contentType, transforms, transformCtx, logger, parsedRestored) ?? restored;
+          if (decision?.transformRequestBody) recovered = (await decision.transformRequestBody(recovered, transformCtx)).body;
+          if (requestGuard) recovered = requestGuard.transformBody(recovered, transformCtx);
+        }
+      } finally {
+        transformsCompleted = true;
+        notifyTransformSettlement();
+      }
+      signal.throwIfAborted();
+      if (!recovered || recovered.equals(body) || recovered.length > maxBodyBytes) return null;
+      pendingBudget = { key, rule: proposed };
+      return recovered;
+    };
 
     forward(
       route.target,
@@ -2974,7 +3043,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       route.overrideTarget,
       route.headerOverride,
       route.headerDelete,
-      opts.responseObserver,
+      ctx => {
+        if (ctx.status >= 200 && ctx.status < 300) releaseReplaySource();
+        return opts.responseObserver?.(ctx) ?? null;
+      },
       opts.transformResponse,
       isRecord(parsedForRewrite) && typeof parsedForRewrite.model === 'string' ? parsedForRewrite.model : '',
       outbound,
@@ -2984,57 +3056,22 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       requestDeclaredStream,
       beforeRetry,
       forwardLifecycle,
-      recoverOversized
-        ? async (body, signal) => {
-          const target = sizeControlEnabled
-            ? Math.max(1, Math.floor(body.length * 0.44)) : body.length - 1;
-          const result = await collectRecoverableBody(
-            Readable.from([body]), target,
-            (spooled) => recoverOversized!({ ...spooled, upstreamRejected: true }, target), signal,
-          );
-          if (sizeControlEnabled && requestSizeController) {
-            const parsed = (() => { try { return JSON.parse(body.toString('utf8')) as unknown; } catch { return {}; } })();
-            const format = requestSizeController.format?.(requestCtx, parsed) ?? 'unknown';
-            learnedRequestSizeRoutes.set(requestSizeRouteKey(requestCtx, parsed, format), { trigger: body.length, target });
-          }
-          return result;
+      sizeControlEnabled && requestSizeController
+        ? async (body, signal, readError) => {
+          // Recovery starts from the 413 status; one event-loop turn lets the
+          // old upload close and any already-arrived limit text drain, without
+          // waiting for an error body's end (which may never arrive).
+          await new Promise<void>(resolve => setImmediate(resolve));
+          signal.throwIfAborted();
+          const error = readError();
+          return recoverSize(body, error.kind === 'other' ? { kind: 'request-too-large' } : error, signal);
         }
-        : undefined,
-      requestSizeController && !sizeControlEnabled ? undefined : opts.requestSizeRetry ?? (requestSizeController?.retry
-        ? async (body, error, signal, ctx) => {
-          const result = await requestSizeController.retry!(body, error, ctx ?? requestCtx, signal);
-          if (result) {
-            const parsed = JSON.parse(body.toString('utf8')) as unknown;
-            const format = requestSizeController.format?.(ctx ?? requestCtx, parsed) ?? 'unknown';
-            learnedRequestSizeRoutes.set(requestSizeRouteKey(ctx ?? requestCtx, parsed, format), {
-              trigger: error.limitBytes ?? body.length,
-              target: Math.max(1, Math.floor((error.limitBytes ?? body.length) * 0.44)),
-            });
-          }
-          return result;
-        }
-        : requestSizeController
-        ? async (body, error, signal, ctx) => {
-          const context = ctx ?? requestCtx;
-          const parsed = JSON.parse(body.toString('utf8')) as unknown;
-          const format = requestSizeController.format?.(context, parsed);
-          if (!format) return null;
-          const limit = error.limitBytes ?? body.length;
-          const route = requestSizeController.route?.(context, parsed) ?? {};
-          const result = await requestSizeController.control(body, format, {
-            route, signal, context,
-            triggerBytes: limit,
-            targetBytes: Math.max(1, Math.floor(limit * 0.44)),
-            singleImageMaxBytes: error.kind === 'single-image-too-large' ? error.limitBytes : undefined,
-            reason: `retry:${error.kind}`,
-            allowRemoval: true,
-          });
-          if (result) learnedRequestSizeRoutes.set(requestSizeRouteKey(context, parsed, format), {
-            trigger: limit, target: Math.max(1, Math.floor(limit * 0.44)),
-          });
-          return result?.body ?? null;
-        }
-        : undefined),
+        : recoverOversized ? (body, signal) => collectRecoverableBody(
+          Readable.from([body]), body.length - 1,
+          spooled => recoverOversized!({ ...spooled, upstreamRejected: true }, body.length - 1), signal,
+        ) : undefined,
+      requestSizeController && !sizeControlEnabled ? undefined : requestSizeController
+        ? recoverSize : opts.requestSizeRetry,
       requestCtx,
     );
   });
