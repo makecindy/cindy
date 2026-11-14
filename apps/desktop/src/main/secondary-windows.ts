@@ -184,6 +184,9 @@ export function openSessionInNewWindow(
       // A task drag that misses a renderer drop target must never navigate the
       // application window to the dragged plain-text fallback.
       navigateOnDragDrop: false,
+      // 副窗加载与主窗同一套 renderer,右侧栏浏览器的 <webview> 在这里同样要创建;
+      // 漏配会让副窗侧栏浏览器永远空白加载。
+      webviewTag: true,
     },
   });
   markAppContentWindow(win);

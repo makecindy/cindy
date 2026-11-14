@@ -4,9 +4,13 @@ const mocks = vi.hoisted(() => ({
   loadURL: vi.fn(),
   loadFile: vi.fn(),
   installWindowZoomRestoration: vi.fn(),
+  windowOptions: [] as Array<Record<string, unknown>>,
 }));
 vi.mock('electron', () => ({
   BrowserWindow: class {
+    constructor(options: Record<string, unknown>) {
+      mocks.windowOptions.push(options);
+    }
     webContents = { on: vi.fn(), once: vi.fn(), setWindowOpenHandler: vi.fn() };
     once = vi.fn();
     hookWindowMessage = vi.fn();
@@ -43,6 +47,7 @@ import { openSessionInNewWindow } from '../secondary-windows';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.windowOptions.length = 0;
   vi.stubGlobal('MAIN_WINDOW_VITE_NAME', 'main_window');
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -85,5 +90,15 @@ describe('session window link targets', () => {
     vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
     openSessionInNewWindow('task', null);
     expect(mocks.installWindowZoomRestoration).toHaveBeenCalledOnce();
+  });
+
+  // 副窗 webPreferences 漏 webviewTag 时,右侧栏浏览器的 <webview> 永不
+  // attach,副窗侧栏空白且一直加载。主窗(bootstrap-electron)与右侧栏子窗口都
+  // 显式开启;副窗加载同一套 renderer,必须一致。
+  it('enables webviewTag so the sidebar browser renders in secondary windows', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
+    openSessionInNewWindow('task', null);
+    const options = mocks.windowOptions.at(-1);
+    expect(options?.webPreferences).toMatchObject({ webviewTag: true });
   });
 });

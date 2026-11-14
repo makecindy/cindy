@@ -231,10 +231,10 @@ GIF 只在 rgb444 每个分组的计数与 RGB 总和全部相同时复用量化
 透明图、JPEG 与编码器不可用时保持原生路径，仍先经用户的保存框选址，不新增临时媒体文件。
 复制通过媒体总仓保留文件，并写入原生文件剪贴板。
 
-`webviewTag` 默认关闭；受控例外目前只有两类——主界面与右侧栏子窗口（内置浏览器需要；
+`webviewTag` 默认关闭；受控例外目前只有三类——主界面、右侧栏子窗口与独立会话窗口（「在新窗口打开」的副窗，`main/secondary-windows.ts` 加载与主窗同一套 renderer，右侧栏浏览器 `<webview>` 同样需要；漏配会让副窗侧栏浏览器永远空白加载）。
 右侧栏整栏子窗口与页签弹出窗口共用 `main/right-sidebar-window/window.ts` 的
 `createSidebarHostWindow` 工厂与 `sidebarWindowPreload`，`main/sidebar-tab-window/window.ts`
-只改启动参数、尺寸与位置记忆）。插件面板（ghost 分区 webview）不再有专属窗口：它以右侧栏
+只改启动参数、尺寸与位置记忆。插件面板（ghost 分区 webview）不再有专属窗口：它以右侧栏
 全局页签承载，弹出时走同一扇页签窗口——所有例外都必须继续由 `webview-security.ts` 在 `will-attach-webview` 阶段
 覆盖 Renderer 传入的全部安全选项（hardener 挂在 `web-contents-created`，对所有窗口
 全局生效，ghost 附加闸只认分区与地址、不认宿主窗口）。
