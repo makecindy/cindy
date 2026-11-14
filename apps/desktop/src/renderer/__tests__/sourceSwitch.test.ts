@@ -679,11 +679,29 @@ describe('followedAccountSourceProvider — 账号被拆出后旧任务跟着账
   it.each(['ready', 'limited'])('账号在别的已连接供应商且状态 %s → 这个任务的原来源恢复可用，其他来源不变', (status) => {
     const providers = [builtIn, split];
     expect(disconnected(providers)).toBe(true);
-    const projected = followedAccountSourceProvider({ providers, providerId: 'openai', account: bound({ status }) });
+    const projected = followedAccountSourceProvider({ providers, providerId: 'openai', account: bound({ status }), agent: CODEX, modelId: MODEL_ID });
     expect(projected).toMatchObject({ id: 'openai', connected: true, models: split.models });
     const next = withFollowedAccountSource(providers, projected);
     expect(disconnected(next)).toBe(false);
     expect(next[1]).toBe(split);
+  });
+
+  // PR #10560 review: borrowing the full owner catalog exposed models whose original-source
+  // disable override may have no entry in an empty catalog. Only the persisted task route is lent.
+  it.each([false, true])('only restores the existing model and preserves its disabled=%s flag', (disabled) => {
+    const source = disabled
+      ? { ...builtIn, models: { codex: [{ id: MODEL_ID, disabled: true }] } } as unknown as ProviderView
+      : builtIn;
+    const owner = view(SPLIT, true, [MODEL_ID, 'other-model']);
+    owner.models['claude-code'] = [{ id: 'claude-sonnet', name: 'Sonnet', contextWindow: 200_000, efforts: [], defaultEffort: null }];
+    const providers = [source, owner];
+    const projected = followedAccountSourceProvider({ providers, providerId: 'openai', account: bound(), agent: CODEX, modelId: MODEL_ID });
+    expect(projected?.models.codex).toEqual([{ id: MODEL_ID, ...(disabled ? { disabled: true } : {}) }]);
+    expect(projected?.models['claude-code']).toBeUndefined();
+    const next = withFollowedAccountSource(providers, projected);
+    expect(disconnected(next)).toBe(false);
+    expect(isSelectedSourceDisconnected({ providers: next, agent: CODEX, modelId: 'other-model', selectedProviderId: 'openai', providersLoading: false })).toBe(true);
+    expect(next[1]).toBe(owner);
   });
 
   // 只放开、不收紧：以下任一情况都必须原样返回，结果与修复前完全一致。
@@ -701,7 +719,7 @@ describe('followedAccountSourceProvider — 账号被拆出后旧任务跟着账
     ['账号所在供应商被停用', [builtIn, view(SPLIT, true, [MODEL_ID], { suspended: true })], bound()],
     ['账号所在供应商不在列表里', [builtIn], bound()],
   ])('%s → 不改动', (_label, providers, account) => {
-    const projected = followedAccountSourceProvider({ providers, providerId: 'openai', account });
+    const projected = followedAccountSourceProvider({ providers, providerId: 'openai', account, agent: CODEX, modelId: MODEL_ID });
     expect(projected).toBeNull();
     expect(withFollowedAccountSource(providers, projected)).toBe(providers);
   });

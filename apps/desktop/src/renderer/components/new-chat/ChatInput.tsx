@@ -2196,13 +2196,18 @@ export function ChatInput({
   );
   const taskSourceProvider = useMemo(
     () => sessionId && !catalogDeviceId && !sshHostId
+      && activeProviderId === (runtimeEffective ? runtimeEffective.providerId : initialProviderId)
       ? followedAccountSourceProvider({
           providers: localProviders.providers,
           providerId: activeProviderId,
           account: taskAccount,
+          // 只恢复已生效路由；乐观选择的新型号不能借此绕过来源校验。
+          agent: runtimeEffective ? runtimeEffective.agentKind : runtimeAgentKind,
+          modelId: runtimeEffective ? runtimeEffective.model : initialModel,
         })
       : null,
-    [sessionId, catalogDeviceId, sshHostId, localProviders.providers, activeProviderId, taskAccount],
+    [sessionId, catalogDeviceId, sshHostId, localProviders.providers, activeProviderId, taskAccount,
+      runtimeEffective, runtimeAgentKind, initialModel, initialProviderId],
   );
   const localTaskProviders = useMemo(
     () => withFollowedAccountSource(localProviders.providers, taskSourceProvider),
