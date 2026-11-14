@@ -12,7 +12,7 @@ import { MarkdownMermaidBlock } from '@/components/chat/MarkdownMermaidBlock';
 import { prepareShareMessageClone, queryShareableMessageIds } from '@/lib/shareConversationImage';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureDraftDiscardToken, clearDraft, getAllDraftAttachmentUrls, getDraft, isDraftDiscardTokenCurrent, saveDraft } from '@/lib/composerDraftStore';
+import { captureDraftDiscardToken, clearDraft, getAllDraftAttachmentUrls, getDraft, getDraftPresence, isDraftDiscardTokenCurrent, saveDraft } from '@/lib/composerDraftStore';
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
 import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTests } from '../botReadState';
 import { botGroupAttachmentScope, botGroupDraftDoc, botGroupThreadDraftKey } from '../botGroupAttachments';
@@ -2564,9 +2564,9 @@ describe('BotGroupChatView', () => {
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     });
 
-    it('quotes into the composer without opening a 话题, and removing it keeps the text', async () => {
+    it('quotes into the composer without opening a 话题, and removing it keeps the text across a remount', async () => {
       const user = userEvent.setup();
-      renderView();
+      const view = renderView();
       await user.click(await quoteButton());
       const preview = screen.getByTestId('bot-group-quote-preview');
       expect(preview.textContent).toContain('bots.groupChat.quote.replyingTo:小满');
@@ -2579,6 +2579,10 @@ describe('BotGroupChatView', () => {
       expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
       expect((composer as HTMLTextAreaElement).value).toBe('那就这班');
       expect(document.activeElement).toBe(composer);
+      view.unmount();
+      renderView();
+      expect(((await screen.findByRole('textbox')) as HTMLTextAreaElement).value).toBe('那就这班');
+      expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
     });
 
     it('Esc takes the quote off before anything else and keeps the draft', async () => {
@@ -2986,11 +2990,21 @@ describe('BotGroupChatView', () => {
       expect(document.querySelector('[data-bot-group-message-id][class*="bg-[var(--surface-hover)]"]')).toBeNull();
     });
 
-    it('keeps a quote draft inside its own group', async () => {
+    // Real view/composer + draft store (unit): the reproduced missing-quote bug
+    // needs g1 -> g2 -> g1, which the original isolation test never exercised.
+    // Both a quote-only draft and one with text must restore and still send the quoted id.
+    it.each(['', '那就这班'])('restores its own unsent quote after switching groups (text: %j)', async (draft) => {
       const user = userEvent.setup();
       let view = renderView();
       await user.click(await quoteButton());
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: draft } });
       expect(screen.getByTestId('bot-group-quote-preview')).toBeTruthy();
+      expect(getDraftPresence(botGroupAttachmentScope('g1'))).toBe(true);
+      if (draft) {
+        pickFiles([diskFile('reply-note.txt', 'text/plain')]);
+        await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.attachments).toHaveLength(1));
+        expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupQuote?.messageId).toBe('b1');
+      }
       view.unmount();
       mocks.groupId = 'g2';
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ id: 'g2', serverBacked: true }) });
@@ -2998,6 +3012,22 @@ describe('BotGroupChatView', () => {
       await screen.findByText('周六 8:10 有票');
       expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
       await user.keyboard('x');
+      expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
+      view.unmount();
+      mocks.groupId = 'g1';
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+      view = renderView();
+      const composer = await screen.findByRole('textbox') as HTMLTextAreaElement;
+      expect(composer.value).toBe(draft);
+      expect(screen.queryByTestId('bot-group-quote-preview')?.textContent).toContain('周六 8:10 有票');
+      expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+      if (!draft) fireEvent.change(composer, { target: { value: '那就这班' } });
+      await user.type(composer, '{Enter}');
+      await waitFor(() => expect(lastSend()).toMatchObject({ groupId: 'g1', quote: { messageId: 'b1' } }));
+      await waitFor(() => expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull());
+      view.unmount();
+      renderView();
+      await screen.findByRole('textbox');
       expect(screen.queryByTestId('bot-group-quote-preview')).toBeNull();
     });
   });
