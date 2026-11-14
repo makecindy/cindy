@@ -577,6 +577,36 @@ PR 须按冷更边界写明原因、影响与发版节奏。Android 使用现有
 与 `IncomingShareBridge.tsx`。回归：`src/__tests__/incomingShare*.test.ts` 和
 `nativeIntent.test.ts`。上述 TS 层修复不修改原生配置或模块，不需要为此改变 runtime fingerprint。
 
+## Android 入站分享的消费与取消
+
+`expo-sharing` 58.0.22 的 Android 接收使用进程内单个 Intent，且清除会删除整个分享缓存，
+不能作为 Cindy 的待领取批次队列。配置仍由其 `singleShareMimeTypes` /
+`multipleShareMimeTypes` 生成 SEND / SEND_MULTIPLE；`with-android-incoming-share` 把这两个
+过滤器移到同一安装包内的 `IncomingShareActivity`，主 Activity 不再接收同一份系统分享。
+没有独立中转 App，也不增加存储权限。
+
+接收 Activity 在临时 URI 授权有效期间保持存活，后台串行复制 `content://` 到每文件独立的
+私有缓存 `cindy-share-<UUID>/<文件名>`。拒绝外部 `file://` 和本应用自身 Provider，防止
+导出入口成为读取私有文件的代理；不删除或写入源 URI。名称缺失、读取或复制失败时整批失败，
+复用已有接收失败提示，不静默导入子集。同名文件不覆盖。文件管理器分享的图片按文件上传，
+保持原字节，不进入照片预处理。
+
+完整批次以随机 ID 原子保存到 `noBackupFilesDir`，不进入 Android 自动备份；重启可重新读取
+未领取批次。读取和确认针对队首的确切快照；确认只移除记录，副本由既有附件生命周期回收，
+新批次不会清掉上一批。原生事件和前台刷新共用根桥接，下一批在前一批领取或取消后出现。
+既有选择器、稳定目标 ID、草稿追加、数量限制、上传重试和手动发送保持共用。
+
+账号切换清除整个未领取队列并递增持久代次，迟到复制不能回填；账号归属在读取前核对，
+防止进程重建后旧账号批次被另一账号领取。首次登录前的分享可以等待首次登录。
+复制中进程被系统终止的批次尚未入箱，需重新分享；不把这种情况称为已经接收。
+已入箱副本被系统回收时整批报告失败，不把剩余文件冒充完整批次。
+
+实现：`modules/cindy-incoming-share/android/`、`plugins/with-android-incoming-share.js` 和
+上述共享 TS 入口。自动回归覆盖适配器、桥接、清理和生成 Manifest；ContentResolver 的
+临时授权、Activity 生命周期及 APK 集成必须另做 Android 原生验收，JS mock 不能替代。
+新增原生模块和 Manifest 必须冷更；共享 Expo 配置可能同时改变 iOS fingerprint，按下文
+在发布前比较两端指纹并协调原生包，不能把旧包标记为新 runtime 兼容。
+
 ## Android release 代码优化
 
 所有地区共用 `app.json` 的 `expo-build-properties.android` 配置，在 release 构建中开启

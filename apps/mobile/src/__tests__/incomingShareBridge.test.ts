@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 
 const mock = vi.hoisted(() => ({
+  platform: 'ios', alert: vi.fn(), nativeChanged: undefined as (() => void) | undefined, nativeRemove: vi.fn(),
   linkReceived: undefined as ((event: { url: string }) => void) | undefined,
   foreground: undefined as ((state: string) => void) | undefined,
   cleanup: vi.fn(), receive: vi.fn(), stop: vi.fn(),
@@ -15,7 +16,8 @@ const mock = vi.hoisted(() => ({
   auth: { initialized: true, isAuthenticated: true },
 }));
 vi.mock('react-native', () => ({
-  Platform: { OS: 'ios' },
+  Platform: { get OS() { return mock.platform; } },
+  Alert: { alert: mock.alert },
   AppState: {
     get currentState() { return mock.appState; },
     addEventListener: (_event: string, listener: (state: string) => void) => {
@@ -36,7 +38,8 @@ vi.mock('@/session/incomingShare', () => ({
   receiveIncomingShare: mock.receive, useIncomingShareBatch: () => mock.batch,
   watchIncomingShareAccount: () => mock.stop,
 }));
-vi.mock('@/session/incomingShareNative', () => ({}));
+vi.mock('@/session/incomingShareNative', () => ({ subscribeSharedPayloads: (listener: () => void) => { mock.nativeChanged = listener; return { remove: mock.nativeRemove }; } }));
+vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('@/session/incomingShareCleanup', () => ({ cleanupExpiredIncomingShares: mock.cleanup }));
 
 let root: Root;
@@ -45,6 +48,7 @@ let mounted: boolean;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 beforeEach(() => {
   vi.clearAllMocks();
+  mock.platform = 'ios'; mock.nativeChanged = undefined;
   mock.ownerChanged = undefined; mock.linkReceived = undefined; mock.foreground = undefined;
   mock.batch = null; mock.segments = [];
   mock.auth = { initialized: true, isAuthenticated: true };
@@ -163,4 +167,31 @@ it('ignores unrelated links and retries a native read on a later share notificat
   expect(mock.receive).toHaveBeenCalledOnce();
   mock.linkReceived!({ url: 'cindy://expo-sharing' }); await flush();
   expect(mock.receive).toHaveBeenCalledTimes(2);
+});
+
+// Android was excluded entirely; lifecycle/URL notifications alone also miss a
+// completed native copy while already foreground. Unit: real bridge effects.
+it('receives Android cold and foreground batches without sending or reopening a selected target', async () => {
+  mock.platform = 'android';
+  await render();
+  expect(mock.receive).toHaveBeenCalledOnce();
+  expect(mock.navigate).not.toHaveBeenCalled();
+  mock.batch = { id: 'android-1' }; mock.nativeChanged!(); await flush(); await render();
+  expect(mock.navigate).toHaveBeenCalledExactlyOnceWith('/incoming-share');
+  mock.batch = { id: 'android-1', destination: 'stable-role-id' };
+  mock.nativeChanged!(); await flush(); await render();
+  expect(mock.navigate).toHaveBeenCalledTimes(1);
+  await act(() => root.unmount()); mounted = false;
+  expect(mock.nativeRemove).toHaveBeenCalledOnce();
+});
+
+it('shows a copy failure without navigating to an empty draft and can receive the next share', async () => {
+  mock.platform = 'android';
+  mock.receive.mockRejectedValueOnce(new Error('INCOMING_SHARE_COPY_FAILED'));
+  await render();
+  expect(mock.alert).toHaveBeenCalledExactlyOnceWith('composer.upload.shareReceiveFailed');
+  expect(mock.navigate).not.toHaveBeenCalled();
+  mock.nativeChanged!(); await flush();
+  expect(mock.receive).toHaveBeenCalledTimes(2);
+  expect(mock.alert).toHaveBeenCalledOnce();
 });

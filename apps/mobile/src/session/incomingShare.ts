@@ -23,9 +23,11 @@ import {
 import type { MobileLocalAttachmentUploadCandidate } from '@/session/mobileLocalAttachmentUpload';
 import { resolvePastedImageAsset } from '@/session/pastedImageAttachment';
 
+export type IncomingSharePayload = ResolvedSharePayload & { preserveOriginal?: boolean };
+
 export interface IncomingShareBatch {
   id: string;
-  payloads: readonly ResolvedSharePayload[];
+  payloads: readonly IncomingSharePayload[];
   acknowledge: () => void;
   owner: MobileAuthOwnerGeneration;
   destination?: string;
@@ -123,6 +125,7 @@ function updateIncomingShareOwner(
 
 type IncomingShareNative = {
   getSharedPayloads(): SharePayload[];
+  bindSharedPayloadAccount?(accountKey: string): void;
   getSharedPayloadsAsync?(): Promise<SharePayload[]>;
   getSharedPayloadId?(payloads: SharePayload[]): string | undefined;
   clearSharedPayloads(expected: SharePayload[]): void;
@@ -183,7 +186,7 @@ export function useIncomingShareBatch(): IncomingShareBatch | null {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-export function incomingShareBatchId(payloads: readonly ResolvedSharePayload[]): string {
+export function incomingShareBatchId(payloads: readonly IncomingSharePayload[]): string {
   return JSON.stringify(payloads.map((payload) => ({
     value: payload.value,
     shareType: payload.shareType,
@@ -197,7 +200,7 @@ export function incomingShareBatchId(payloads: readonly ResolvedSharePayload[]):
 }
 
 export function stageIncomingShareBatch(
-  payloads: readonly ResolvedSharePayload[],
+  payloads: readonly IncomingSharePayload[],
   acknowledge: () => void,
   id = incomingShareBatchId(payloads),
 ): IncomingShareBatch | null {
@@ -221,7 +224,7 @@ export function selectIncomingShareDestination(id: string, destination: string):
   return true;
 }
 
-export function incomingShareText(payloads: readonly ResolvedSharePayload[]): string {
+export function incomingShareText(payloads: readonly IncomingSharePayload[]): string {
   return payloads.filter(payload => payload.shareType === 'text' || payload.shareType === 'url')
     .map(payload => payload.value).filter(value => value.trim()).join('\n\n');
 }
@@ -266,6 +269,7 @@ export function leaveIncomingShareChooser(cancelBatchId: string | null, leave: (
 export function receiveIncomingShare(native: IncomingShareNative): void | Promise<void> {
   const owner = getMobileAuthOwner();
   if (owner.switching) return;
+  if (owner.accountKey) native.bindSharedPayloadAccount?.(owner.accountKey);
   if (native.getSharedPayloadsAsync) {
     const completed = new Set<string>();
     pendingNativeReads.add(completed);
@@ -335,7 +339,7 @@ function replaceImageExtension(name: string): string {
 }
 
 export function selectIncomingShareUploadCandidates(
-  payloads: readonly ResolvedSharePayload[],
+  payloads: readonly IncomingSharePayload[],
 ): IncomingShareUploadSelection {
   const candidates: MobileLocalAttachmentUploadCandidate[] = [];
   const rejectedUris: string[] = [];
@@ -387,7 +391,7 @@ export function selectIncomingShareUploadCandidates(
       continue;
     }
     candidates.push({
-      kind: candidateKind(category),
+      kind: payload.preserveOriginal ? 'file' : candidateKind(category),
       uri,
       name,
       size,
