@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import { expect, it, vi } from 'vitest';
-import { createAnthropicCompatProxy, controlRequestSize, type ImageRouteInfo } from '@cindy/anthropic-compat-proxy';
+import { createAnthropicCompatProxy, controlRequestSize, recoverInlineAttachments, type OversizedRequestRecovery, type ImageRouteInfo } from '@cindy/anthropic-compat-proxy';
 import { compressImageBuffer } from '@cindy/maker-core/image-compressor';
 import { ImageResizer } from '../../../../../../packages/maker-core/src/agents/shared/image-resizer.js';
 import { closeTestConnections, fetchOverTestConnections, listenOnAvailableLoopbackPort } from '../../../../../../packages/anthropic-compat-proxy/src/test-loopback-server.js';
@@ -21,8 +21,9 @@ const decode = (value: string) => {
 type Body = { model: string; input: Array<{ role: string; content: Array<{ type: string; image_url?: string; text?: string }> }> };
 const bodyFor = (images: string[]): Body => ({ model: 'gpt-6-astra', input: [{ role: 'user', content: [{ type: 'input_text', text: 'keep this text' }, ...images.map(image_url => ({ type: 'input_image', image_url }))] }] });
 
-async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => Promise<Body>, encode: ReturnType<typeof vi.fn<typeof compressImageBuffer>>, prepareCalls: () => number) => Promise<void>, singleImageMaxBytes?: number) {
+async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => Promise<Body>, encode: ReturnType<typeof vi.fn<typeof compressImageBuffer>>, prepareCalls: () => number, allowRemovals: Array<boolean | undefined>) => Promise<void>, singleImageMaxBytes?: number, oversizedRequestRecovery?: OversizedRequestRecovery) {
   const received: Body[] = [];
+  const allowRemovals: Array<boolean | undefined> = [];
   const upstream = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
@@ -37,10 +38,14 @@ async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => P
   const proxy = await createAnthropicCompatProxy({
     upstream: `http://127.0.0.1:${port}`,
     transformRequest: [],
+    oversizedRequestRecovery,
     requestSizeController: {
       enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
       format: () => 'responses', route: ctx => ({ ...route, providerId: ctx.headers['x-cindy-pi-provider-id'] }), preprocessor,
-      control: (body, format, policy) => controlRequestSize(body, format, { ...policy, preprocessor, singleImageMaxBytes }, async () => { throw new Error('Small request must not preserve images'); }),
+      control: (body, format, policy) => {
+        allowRemovals.push(policy.allowRemoval);
+        return controlRequestSize(body, format, { ...policy, preprocessor, singleImageMaxBytes }, async () => { throw new Error('Disabled removal must not preserve images'); });
+      },
     },
   });
   try {
@@ -49,7 +54,7 @@ async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => P
       expect(response.status).toBe(200);
       await response.text();
       return received.at(-1)!;
-    }, encode, () => prepare.mock.calls.length);
+    }, encode, () => prepare.mock.calls.length, allowRemovals);
   } finally {
     await closeTestConnections();
     await proxy.dispose();
@@ -160,5 +165,51 @@ it('still prepares images when request-size removal is disabled', async () => {
   } finally {
     if (previous === undefined) delete process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE;
     else process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE = previous;
+  }
+});
+
+
+// PR 1 787ab1859b: exercise the actual default 32 MiB ingress limit and legacy
+// disk-backed recovery, then compress only the image that remains inline.
+it('compresses the retained image after legacy ingress recovery with removal disabled', async () => {
+  const previous = process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-legacy-recovery-'));
+  try {
+    process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE = '1';
+    const large = await sharp({ create: { width: 3072, height: 3072, channels: 3, background: '#456789' } }).png({ compressionLevel: 0 }).toBuffer();
+    const retained = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#254769' } }).png({ compressionLevel: 0 }).toBuffer();
+    const body = bodyFor([uri(large, 'image/png'), uri(retained, 'image/png')]);
+    expect(Buffer.byteLength(JSON.stringify(body))).toBeGreaterThan(32 * 1024 * 1024);
+    const savedPath = path.join(root, 'preserved.png');
+    const commit = vi.fn(async () => {});
+    const legacy = vi.fn<OversizedRequestRecovery>(() => (spooled, target) => recoverInlineAttachments(spooled, target, {
+      prepare: async attachment => {
+        await fs.copyFile(attachment.filePath, savedPath);
+        return savedPath;
+      },
+      commit,
+    }));
+    await throughProxy({ providerId: 'openai', modelId: 'gpt-6-astra' }, async (send, encode, prepareCalls, allowRemovals) => {
+      const result = await send(body);
+      expect(legacy).toHaveBeenCalledOnce();
+      expect(commit).toHaveBeenCalledOnce();
+      expect((await fs.readFile(savedPath)).equals(large)).toBe(true);
+      expect(allowRemovals).toEqual([false]);
+      expect(prepareCalls()).toBe(1);
+      expect(encode).toHaveBeenCalledOnce();
+      expect(encode.mock.calls[0][0].bytes).toEqual(retained);
+      const content = result.input[0].content;
+      expect(content[1].type).toBe('input_text');
+      expect(content[1].text).toContain('Preserved local file:');
+      const compressed = decode(content[2].image_url!);
+      expect(compressed.mime).toBe('image/webp');
+      expect(compressed.bytes.length).toBeLessThan(retained.length * 0.85);
+      expect(await sharp(compressed.bytes).metadata()).toMatchObject({ width: 64, height: 48 });
+      expect(await sharp(compressed.bytes).raw().toBuffer()).toEqual(await sharp(retained).raw().toBuffer());
+    }, undefined, legacy);
+  } finally {
+    if (previous === undefined) delete process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE;
+    else process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE = previous;
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
