@@ -471,7 +471,7 @@ import {
   isDbClientNotReadyError,
   tryGetDbClient,
 } from '../localDb/client/current.js';
-import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
+import { canRecreateOwnerWorkingDirectory, createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
 import { createWorkingDirectoryPreflight } from './workingDirectoryPreflight.js';
 import { allocateDialogueRecoveryWorkspace, findDialogueRecoveryWorkspace, requiredDialogueRecoveryRoot } from './dialogueRecoveryWorkspace.js';
 import { workdirDiagnosticContext, workdirDiagnosticErrorCode } from '../workdirDiagnostics.js';
@@ -1661,7 +1661,15 @@ import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
 const workdirLog = createLogger('workdir-diagnostics');
-const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory, requiredRoot: requiredDialogueRecoveryRoot, findFallback: findDialogueRecoveryWorkspace }, allocateDialogueRecoveryWorkspace, workdirLog);
+const workingDirectoryRecovery = createWorkingDirectoryRecovery({
+  stat: statWorkingDirectory,
+  mkdir: mkdirWorkingDirectory,
+  realpath: realpathWorkingDirectory,
+  requiredRoot: requiredDialogueRecoveryRoot,
+  findFallback: findDialogueRecoveryWorkspace,
+  canRecreateDirectory: (dir) => !isAppSessionBoundaryPending() &&
+    canRecreateOwnerWorkingDirectory(app.getPath('userData'), ownerScopedUserDataPath(), dir),
+}, allocateDialogueRecoveryWorkspace, workdirLog);
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
   return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;

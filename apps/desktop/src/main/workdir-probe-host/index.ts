@@ -11,8 +11,8 @@ const log = createLogger('workdir-diagnostics');
 export const workdirProbeHostClient = new MainProcessWorkdirProbeClient({ log });
 
 /** Bounded filesystem identity probe for local cwd recovery; never expose paths to a controller. */
-async function directoryOperation(dir: string, kind: WorkdirProbeRequest['kind']) {
-  const result = await workdirProbeHostClient.probe(dir, path.resolve(dir), 5_000, kind);
+async function directoryOperation(dir: string, kind: WorkdirProbeRequest['kind'], isCurrent?: () => boolean) {
+  const result = await workdirProbeHostClient.probe(dir, path.resolve(dir), 5_000, kind, isCurrent);
   if (!result.ok)
     throw Object.assign(new Error('Working directory probe failed'), { code: result.code });
   return result;
@@ -25,8 +25,12 @@ export async function statWorkingDirectory(
   return { isDirectory: () => result.isDirectory, dev: result.device };
 }
 
-export async function mkdirWorkingDirectory(dir: string): Promise<void> {
-  await directoryOperation(dir, 'mkdir');
+export async function mkdirWorkingDirectory(
+  dir: string,
+  _options: { recursive: true },
+  isCurrent: () => boolean,
+): Promise<void> {
+  await directoryOperation(dir, 'mkdir', isCurrent);
 }
 
 export async function realpathWorkingDirectory(dir: string): Promise<string> {

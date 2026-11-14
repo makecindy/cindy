@@ -10,6 +10,28 @@ afterEach(async () => {
 });
 
 describe('working directory conversation recovery', () => {
+  // #10553: invalidating a recovery must stop its pending filesystem write,
+  // not merely suppress the note after recreating an abandoned owner directory.
+  // Unit tier; existing clear-during-lookup tests never reached either mkdir.
+  it.each(['original', 'fallback'] as const)('does not recreate the %s directory after invalidation during stat', async (kind) => {
+    const original = path.resolve('owned', 'bots', 'buddy', 'workspace');
+    const fallback = path.resolve('owned', 'dialogues', 'recovery');
+    let invalidate = false;
+    const io = {
+      stat: vi.fn(async () => {
+        if (invalidate) recovery.clear();
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      }),
+      mkdir: vi.fn(),
+    };
+    const recovery = createWorkingDirectoryRecovery(io, kind === 'fallback' ? async () => fallback : undefined);
+    if (kind === 'fallback') expect(await recovery.recover('task', original, undefined, [], 'unrestored-worktree')).toBe(true);
+    invalidate = true;
+    expect(await recovery.recover('task', original)).toBe(false);
+    expect(io.mkdir).not.toHaveBeenCalled();
+    expect(recovery.peek('task')).toBeNull();
+  });
+
   it('accepts a later preflight stat after deferring bootstrap observation', async () => {
     const io = {
       stat: vi.fn(async () => ({ isDirectory: () => true, dev: 7 })),
@@ -290,7 +312,7 @@ describe('working directory conversation recovery', () => {
     await recovery.observe('task', dir);
     missing = true;
     expect(await recovery.recover('task', dir)).toBe(true);
-    expect(mkdir).toHaveBeenCalledWith(dir, { recursive: true });
+    expect(mkdir).toHaveBeenCalledWith(dir, { recursive: true }, expect.any(Function));
     expect(allocate).not.toHaveBeenCalled();
   });
 
@@ -302,7 +324,7 @@ describe('working directory conversation recovery', () => {
     expect(await recovery.recover('task', '/offline/project')).toBe(true);
     recovery.consume('task', recovery.peek('task')!);
     expect(await recovery.recover('task', '/conversation')).toBe(true);
-    expect(mkdir).toHaveBeenCalledWith(path.resolve('/conversation'), { recursive: true });
+    expect(mkdir).toHaveBeenCalledWith(path.resolve('/conversation'), { recursive: true }, expect.any(Function));
     expect(recovery.resolve('task', '/offline/project')).toBe(path.resolve('/conversation'));
     expect(recovery.peek('task')).toContain('previous files have not been recovered');
   });
@@ -414,7 +436,7 @@ describe('working directory conversation recovery', () => {
       mkdir,
     });
     expect(await recovery.recover('task', '/project', '/project ')).toBe(true);
-    expect(mkdir).toHaveBeenCalledWith('/project', { recursive: true });
+    expect(mkdir).toHaveBeenCalledWith('/project', { recursive: true }, expect.any(Function));
     expect(recovery.peek('task')).toContain(JSON.stringify('/project '));
     expect(recovery.peek('task')).toContain('Inspect this candidate before reading or creating project files');
     expect(recovery.peek('task')).toContain('previous files have not been recovered');

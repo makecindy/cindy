@@ -57,7 +57,17 @@ function sharedProfile(t, ownerId) {
   configureHostOwner({ userDataDir: profileDir, ownerId });
   const codexHome = path.join(profileDir, 'codex-home');
   fs.mkdirSync(codexHome, { recursive: true });
-  fs.symlinkSync(systemAuth, path.join(codexHome, 'auth.json'));
+  try {
+    fs.symlinkSync(systemAuth, path.join(codexHome, 'auth.json'), 'file');
+  } catch (error) {
+    if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+    // The same shared-directory topology covered by codex-invalidation.test.mjs.
+    // A real junction follows atomic target replacement, unlike a hard link or
+    // copied auth.json. The just-created codexHome is empty; never remove data.
+    fs.rmdirSync(codexHome);
+    fs.symlinkSync(path.dirname(systemAuth), codexHome, 'junction');
+    t.diagnostic('native file symlink unavailable; checking shared login through a real directory junction');
+  }
   bindNativeProviderAuth('openai', { sharedSystem: true });
   const accounts = { isCodexAccountLoginActive: () => false, isCodexAccountProvider: () => false };
   const systemLogin = createHostCodexSystemLogin({ codexHome, systemAuthPath: systemAuth, loginActive: () => false });
@@ -71,12 +81,23 @@ function sharedProfile(t, ownerId) {
 test('after a system re-login the recovered login is usable on the Host, only marked', { timeout: TEST_TIMEOUT_MS }, async t => {
   t = lifoCleanup(t);
   const p = sharedProfile(t, 'recovery-owner');
+  const localAuth = path.join(p.codexHome, 'auth.json');
+  const fileSymlink = fs.lstatSync(localAuth).isSymbolicLink();
+  p.relogin('system-token-before-invalidation');
+  assert.equal(fs.readFileSync(localAuth, 'utf8'), fs.readFileSync(p.systemAuth, 'utf8'),
+    'the shared path follows atomic system-login replacement while still linked');
   await invalidateHostCodexLogin({ codexHome: p.codexHome, systemAuthPath: p.systemAuth, reason: 'token_revoked', hostBound: true,
-    credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(path.join(p.codexHome, 'auth.json'))) });
+    credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(localAuth)) });
   assert.deepEqual(await p.auth.getState({ credentialMode: 'oauth-bearer' }),
     { authenticated: false, errorReason: 'token_revoked', credentialScope: 'system-shared' });
+  // #10577 CI: invalidation unlinks the local file symlink, but must preserve a
+  // directory alias of the system's own entry. Only reconciliation restores it.
+  assert.equal(fs.existsSync(localAuth), !fileSymlink,
+    'invalidation removes only the local file link, not the shared directory entry');
   p.relogin('system-token-2');
   const state = await p.auth.getState({ credentialMode: 'oauth-bearer' });
+  assert.equal(fs.readFileSync(localAuth, 'utf8'), fs.readFileSync(p.systemAuth, 'utf8'),
+    'reconciliation restores access to the renewed system login');
   assert.equal(state.authenticated, true);
   assert.equal(state.authSource, 'oauth');
   assert.equal(state.recoveryRequiredReason, 'token_revoked');
