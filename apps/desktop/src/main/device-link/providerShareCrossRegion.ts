@@ -818,10 +818,25 @@ async function crossRegionInvokeLive(peerKey: string, channel: string, args: unk
 export async function crossRegionLeave(memberId: string): Promise<boolean> {
   const rt = runtime;
   if (!rt) return false;
+  if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
   for (const state of rt.regions.values()) {
     if (!state.shares.some((share) => share.memberId === memberId)) continue;
     if (!state.credential) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Cross-region share is not connected');
     await peerRequest(state.apiBase, `/received/${encodeURIComponent(memberId)}/leave`, {}, state.credential);
+    if (!current(rt)) return true;
+    // Retire only this membership immediately. A pre-leave /session must neither
+    // reinstall it nor rotate the shared client back to an obsolete credential.
+    state.requestRevision++;
+    const next = state.shares.filter((share) => share.memberId !== memberId);
+    noteSharePermissions(state.shares, next);
+    state.shares = next;
+    if (next.length === 0) {
+      state.client?.stop();
+      state.client = null;
+      state.credential = null;
+      state.expiresAt = 0;
+    }
+    rt.events.changed();
     await refreshRegion(rt, state.region);
     return true;
   }
