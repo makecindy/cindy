@@ -1,4 +1,4 @@
-import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/service.js';
+import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/runtime.js';
 import { setPluginEnabled } from './pluginEnableService.js';
 import { createRuntimePluginControl } from './runtimeControl.js';
 import { createRuntimeContextProviders } from './runtimeContext.js';

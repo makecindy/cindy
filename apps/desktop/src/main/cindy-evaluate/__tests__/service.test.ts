@@ -26,13 +26,15 @@ vi.mock('../../usage/gatewayMediaBilling.js', () => ({ prepareGatewayMediaBillin
     const actual = parseGatewayMediaBillingHeader(response.headers.get('X-Nova-AIGateway-Billing'));
     mocks.billing(actual ? { amount: actual.cost, currency: 'CNY' } : input.estimatedBilling());
   }, { finish: vi.fn() }) }));
-import { callEvaluate } from '../service.js';
+import * as evaluationService from '../service.js';
+import { callEvaluate, installEvaluationRuntime } from '../runtime.js';
 // Unit contract: the new paid entry point must use local model membership, distinguish
 // known HTTP rejection from an unknown submission, and omit caller document text.
 // Existing media tests do not cover these synchronous endpoints or their token usage shape.
 // Minimal failures: empty-agent reranker, HTTP 403, transport rejection, missing price.
 const context = { assertCurrent: () => {}, readImage: vi.fn() };
 beforeEach(() => {
+  installEvaluationRuntime(evaluationService);
   mocks.fetch.mockReset(); mocks.pricing.mockReset().mockResolvedValue(null); mocks.billing.mockClear();
   mocks.generation = 1; mocks.gateway = true; mocks.access.disabledProviders = {}; mocks.access.disabledModels = {};
   mocks.models[0].id = 'example-decision';

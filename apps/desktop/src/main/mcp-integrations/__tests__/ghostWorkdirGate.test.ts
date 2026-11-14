@@ -117,7 +117,7 @@ const ledgerAddRefMock = vi.fn(async (params: TestLedgerRef) => {
 const callCindyMediaMock = vi.fn();
 const callEvaluateMock = vi.fn();
 const readEvaluationImageFileMock = vi.fn();
-vi.mock('../../cindy-evaluate/service.js', () => ({ callEvaluate: callEvaluateMock, readEvaluationImageFile: readEvaluationImageFileMock }));
+vi.mock('../../cindy-evaluate/runtime.js', () => ({ callEvaluate: callEvaluateMock, readEvaluationImageFile: readEvaluationImageFileMock }));
 const dirDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'dir-ticket' } }));
 const saveDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'save-ticket' } }));
 const liveGrantStateMock = vi.fn();

@@ -1,4 +1,4 @@
-import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/service.js';
+import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/runtime.js';
 import { resolveSafe as resolveEvaluationImage } from '../imageCacheStore.desktop.js';
 /** Desktop platform services for the shared plugin gateway. */
 import { publishPluginAppResult, pluginModelResult } from '../mcp-apps/pluginCards.js';
