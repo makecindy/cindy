@@ -35,6 +35,7 @@ const appFailureCodes = new Set([
 ]);
 const MCP_APP_HEIGHT_CACHE_LIMIT = 100;
 const MCP_APP_LOADING_INDICATOR_DELAY_MS = 400;
+const MCP_APP_HEIGHT_FALLBACK_DELAY_MS = 500;
 const mcpAppHeightCache = new Map<string, number>();
 function cachedMcpAppHeight(key: string): number | undefined { return mcpAppHeightCache.get(key); }
 function rememberMcpAppHeight(key: string, height: number): void {
@@ -187,11 +188,13 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     let initialized = false;
     let resultDelivered = Boolean(source || sessionId === null);
     let sizeDelivered = false;
+    let latestHeight: number | undefined;
     let handshakeStarted = false;
     let revealTimer: ReturnType<typeof setTimeout> | undefined;
     let staticTimer: ReturnType<typeof setTimeout> | undefined;
     let maxTimer: ReturnType<typeof setTimeout> | undefined;
     let loadingTimer: ReturnType<typeof setTimeout> | undefined;
+    let heightFallbackTimer: ReturnType<typeof setTimeout> | undefined;
     let phase: 'open' | 'sandbox' | 'initialize' | 'active' = 'open';
     const heightGuard = new McpAppHeightGuard(() => createLogger('mcp-apps').warn('App height feedback loop bounded'));
     heightGuard.resize(element.clientWidth);
@@ -227,8 +230,15 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           const value = message.params?.height;
           if (typeof value === 'number' && Number.isFinite(value)) {
             const nextHeight = heightGuard.accept(value);
-            rememberMcpAppHeight(heightKey, nextHeight);
-            setHeight(nextHeight);
+            latestHeight = nextHeight;
+            if (initialized && resultDelivered) {
+              clearTimeout(heightFallbackTimer);
+              heightFallbackTimer = undefined;
+              rememberMcpAppHeight(heightKey, nextHeight);
+              setHeight(nextHeight);
+            } else if (revealedFrame) {
+              setHeight(nextHeight);
+            }
           }
         }
         if (initialized && resultDelivered && sizeDelivered && !revealedFrame) reveal();
@@ -261,6 +271,19 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer);
       clearTimeout(loadingTimer);
       if (frame) { frame.style.opacity = '1'; frame.style.pointerEvents = 'auto'; }
+      // Static pages may reveal without initialized; apply their latest size
+      // immediately. For SDK pages, keep the remembered height until a
+      // post-result size arrives, with a bounded fallback for pages that never
+      // emit another size notification.
+      if (!initialized && latestHeight !== undefined) setHeight(latestHeight);
+      if (initialized && !sizeDelivered && latestHeight !== undefined) {
+        heightFallbackTimer = setTimeout(() => {
+          heightFallbackTimer = undefined;
+          if (disposed || sizeDelivered || latestHeight === undefined) return;
+          rememberMcpAppHeight(heightKey, latestHeight);
+          setHeight(latestHeight);
+        }, MCP_APP_HEIGHT_FALLBACK_DELAY_MS);
+      }
       setRevealed(true);
       setLoading(false);
     };
@@ -341,7 +364,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     function dispose() {
       if (disposed) return;
       disposed = true;
-      clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer);
+      clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer); clearTimeout(heightFallbackTimer);
       clearTimeout(loadingTimer);
       controllerRef.current = undefined;
       // Notify before hiding the frame; close() retains the View until the

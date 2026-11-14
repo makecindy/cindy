@@ -293,12 +293,123 @@ it('restores remembered heights and evicts the oldest cards at the cache limit',
     for (let index = 0; index <= 100; index++) {
       await act(async () => root.render(<McpAppCard sessionId="height-task" clientId={`height-${index}`} title="App" />));
       await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
-      await act(async () => state.controllers.at(-1)!.message({ method: 'ui/notifications/size-changed', params: { height: 400 + index } }));
+      const controller = state.controllers.at(-1)!;
+      await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+      await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+      await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 400 + index } }));
     }
     await act(async () => root.render(<McpAppCard sessionId="height-task" clientId="height-100" title="App" />));
     expect(container.querySelector('iframe')?.parentElement?.style.height).toBe('500px');
     await act(async () => root.render(<McpAppCard sessionId="height-task" clientId="height-0" title="App" />));
     expect(container.querySelector('iframe')?.parentElement?.style.height).toBe('320px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// Regression for Windows reconnects: a pre-result size is a transient loading
+// layout and must not replace the remembered outer height or enter the cache.
+it('keeps the remembered height through pre-result sizes and remembers the ready height', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="height-reconnect-task" clientId="height-reconnect-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const first = state.controllers[0];
+    await act(async () => first.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => first.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(async () => first.message({ method: 'ui/notifications/size-changed', params: { height: 331 } }));
+    expect(container.querySelector('iframe')?.parentElement?.style.height).toBe('331px');
+    await act(async () => root.render(null));
+    state.intersections.clear();
+    await act(async () => root.render(<McpAppCard sessionId="height-reconnect-task" clientId="height-reconnect-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const second = state.controllers[1];
+    const frameRoot = container.querySelector('iframe')!.parentElement!;
+    expect(frameRoot.style.height).toBe('331px');
+    await act(async () => second.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 320 } }));
+    expect(frameRoot.style.height).toBe('331px');
+    await act(async () => second.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    expect(frameRoot.style.height).toBe('331px');
+    await act(() => vi.advanceTimersByTimeAsync(210));
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 331 } }));
+    expect(frameRoot.style.height).toBe('331px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('applies a pending height after reveal when no post-result size arrives', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="height-first-render-task" clientId="height-first-render-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    const frame = container.querySelector('iframe')!;
+    const frameRoot = frame.parentElement!;
+    await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 420 } }));
+    expect(frameRoot.style.height).toBe('320px');
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    expect(frameRoot.style.height).toBe('320px');
+    await act(() => vi.advanceTimersByTimeAsync(499));
+    expect(frameRoot.style.height).toBe('320px');
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(frameRoot.style.height).toBe('420px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('applies a real post-result height immediately and replaces the remembered value', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="height-post-result-task" clientId="height-post-result-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const first = state.controllers[0];
+    await act(async () => first.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => first.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(async () => first.message({ method: 'ui/notifications/size-changed', params: { height: 331 } }));
+    await act(async () => root.render(null));
+    state.intersections.clear();
+    await act(async () => root.render(<McpAppCard sessionId="height-post-result-task" clientId="height-post-result-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const second = state.controllers[1]; const frameRoot = container.querySelector('iframe')!.parentElement!;
+    await act(async () => second.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 320 } }));
+    expect(frameRoot.style.height).toBe('331px');
+    await act(async () => second.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 280 } }));
+    expect(frameRoot.style.height).toBe('280px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// A card without a tool result still uses initialized as its readiness gate.
+it('applies initialized sizes immediately when no result is required', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId={null} clientId="height-no-result-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0]; const frameRoot = container.querySelector('iframe')!.parentElement!;
+    await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 410 } }));
+    expect(frameRoot.style.height).toBe('410px');
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
@@ -612,6 +723,8 @@ it.each(['rising', 'oscillating'])('follows %s sizes without echoing height-only
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const controller = state.controllers[0];
     expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 0, maxHeight: 5000 } }));
+    await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
     for (let i = 0; i < 10; i++) await act(async () => {
       controller.message({ method: 'ui/notifications/size-changed', params: { height: pattern === 'rising' ? 400 + i * 30 : 400 + (i % 2) * 30 } }); resize();
     });
