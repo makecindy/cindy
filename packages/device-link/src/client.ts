@@ -1,4 +1,4 @@
-import { isPeerResetRetryableInvoke, bypassInvokeScheduling, resolveInvokePriority } from './invokePolicy.js';
+import { isPeerResetRetryableInvoke, bypassInvokeScheduling, resolveInvokePriority, invokeIntendedHoldMs } from './invokePolicy.js';
 import { InvokeScheduler } from './invokeScheduler.js';
 import { StallDiagnostics, diagnosticChannel, diagnosticOperation, diagnosticRef, shortDeviceRef } from './stallDiagnostics.js';
 import { SessionMessageReuse } from './sessionMessageReuse.js';
@@ -181,6 +181,11 @@ const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
 /** 「link 未就绪收到可靠帧」通知的 per-peer 节流(见 onReliableFrameBeforeLink)。 */
 const STALE_LINK_NOTIFY_THROTTLE_MS = 30_000;
 const SLOW_REQUEST_WARN_MS = 1_000;
+/**
+ * 系统睡眠前主动断开后，最多保持「不重连」多久(计时器在睡眠中暂停，按清醒时间计)。
+ * 正常由唤醒事件解除；睡眠被取消或平台没发唤醒事件时由它兜底恢复连接。
+ */
+export const SYSTEM_SUSPEND_RECONNECT_HOLD_MS = 60_000;
 /** Local transport admission must not consume a remote handler's response budget. */
 const REQUEST_SEND_WAIT_MAX_MS = 10_000;
 // Stop bulk writes well before the native socket's hard limit. Control envelopes
@@ -896,6 +901,8 @@ export class DeviceLinkClient {
   private localSendPressure = false;
   private readonly localSendBudget = new CongestionSendBudget();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 系统睡眠保持期：存在时不排重连(见 suspendForSystemSleep)。 */
+  private systemSuspendHoldTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectStableTimer: ReturnType<typeof setTimeout> | null = null;
   private congestionStableTimer: ReturnType<typeof setTimeout> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1138,6 +1145,9 @@ export class DeviceLinkClient {
     reason = 'connect-now',
     opts?: { overrideCongestionCooldown?: boolean; keepInFlightAttempt?: boolean },
   ): void {
+    // 睡眠保持期里没有在途连接可保留：解除后必须真的发起连接。
+    const suspendHeld = this.systemSuspendHoldTimer !== null;
+    this.clearSystemSuspendHold();
     // online 时强制重建请用 restartConnection —— 它才是「半开假活」场景的入口,
     // 且已包含 resetLinkStateForReconnect(此处曾有一个等价的 { force } 分支,
     // 生产代码从未使用,只有测试在调,故收敛为单一入口)。
@@ -1150,6 +1160,7 @@ export class DeviceLinkClient {
     // suspension, so an attempt that sat frozen in the background is restarted.
     if (
       opts?.keepInFlightAttempt
+      && !suspendHeld
       && this.status === 'connecting'
       && !this.reconnectTimer
       && Date.now() < this.connectAttemptDeadlineWallAt
@@ -1191,6 +1202,7 @@ export class DeviceLinkClient {
    * 对刚唤醒的空闲会话可接受。stopped 时不拉起(生命周期仍归 start/stop 管)。
    */
   restartConnection(reason = 'restart-connection'): void {
+    this.clearSystemSuspendHold();
     if (this.stopped) return;
     this.reconnectAttempt = 0;
     if (this.reconnectTimer) {
@@ -1206,6 +1218,59 @@ export class DeviceLinkClient {
   /** host 的整体恢复入口(系统唤醒等):作用于本机全部连接。 */
   restartConnections(reason?: string): void {
     this.restartConnection(reason);
+  }
+
+  /** host 的整体睡眠入口:作用于本机全部连接(与 restartConnections 对称)。 */
+  suspendConnectionsForSystemSleep(reason?: string): void {
+    this.suspendForSystemSleep(reason);
+  }
+
+  /**
+   * 系统即将睡眠(host 收到平台 suspend 事件):主动以 1001 正常关闭 relay 连接，
+   * 让 relay 立即广播本机离线。不这样做时，对端要等可靠层 ACK 超时(~30s)、
+   * 重置链路、再过 60s 弃帧才知道本机已不可达；笔记本合盖后每次短暂唤醒
+   * (macOS DarkWake 约 15 分钟一次)都会让对端重走一遍，期间发来的推送和请求
+   * 全部白等。
+   *
+   * 故障半径：只关本机这一条 relay 连接，可靠层 pending 按普通断线保留、唤醒后
+   * 重放；不碰对端链路状态，不改 wire 协议(relay 对正常关闭本就立即广播离线)。
+   * 保持期内不排重连；restartConnection(唤醒)/ connectNow 解除，stop 一并清除；进程
+   * 清醒满 SYSTEM_SUSPEND_RECONNECT_HOLD_MS 仍未解除(睡眠被取消、没有唤醒事件)
+   * 时自行重连，不会把本机永久留在离线。
+   */
+  suspendForSystemSleep(reason = 'system-suspend'): void {
+    if (this.stopped) return;
+    this.clearSystemSuspendHold();
+    this.systemSuspendHoldTimer = setTimeout(() => {
+      this.systemSuspendHoldTimer = null;
+      if (this.stopped) return;
+      this.log.info('system suspend hold expired without resume; reconnecting');
+      this.connectNow('system-suspend-expired');
+    }, SYSTEM_SUSPEND_RECONNECT_HOLD_MS);
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const ws = this.ws;
+    this.ws = null;
+    // 在途的 connect()(取 token / 握手中)按 epoch 守卫作废，不会在睡前又连上。
+    this.connEpoch++;
+    if (ws) {
+      try {
+        ws.close(1001, reason);
+      } catch {
+        closeOrTerminate(ws);
+      }
+      this.handleDisconnect(1001, reason);
+    } else {
+      this.setStatus('connecting');
+    }
+  }
+
+  private clearSystemSuspendHold(): void {
+    if (!this.systemSuspendHoldTimer) return;
+    clearTimeout(this.systemSuspendHoldTimer);
+    this.systemSuspendHoldTimer = null;
   }
 
   /** host 的整体恢复入口(回到前台等):作用于本机全部连接。 */
@@ -1352,6 +1417,7 @@ export class DeviceLinkClient {
     this.invokeDeltaBases.clear();
     this.inboundInvokeTransfer.clear();
     this.inboundInvokeChannels.clear();
+    this.clearSystemSuspendHold();
     if (this.stopped) return;
     this.stopped = true;
     this.directDiagnostics.clear();
@@ -2378,13 +2444,17 @@ export class DeviceLinkClient {
     let deadlineMonotonicAt = startedMonotonicAt + sendWaitMs;
     let deadlineWallAt = startedAt + sendWaitMs;
     const requestDescription = `${this.describeRequest(env, expectKind)} request=${id.slice(0, 8)}`;
+    const invokePayload = env.kind === 'invoke' ? env.payload as InvokePayload | undefined : undefined;
+    // 长轮询按协议挂起的时长不算慢：只有超出挂起上限的部分才记慢请求 / 诊断。
+    const slowRequestMs = SLOW_REQUEST_WARN_MS
+      + (invokePayload ? invokeIntendedHoldMs(invokePayload.channel, invokePayload.args) : 0);
 
     const logFinished = (outcome: 'ok' | 'timeout' | 'error', err?: DeviceLinkError, frame?: Envelope,
       transportSnapshot?: Record<string, unknown>): void => {
       const elapsedMs = Math.max(0, Math.round(this.monotonicNow() - startedMonotonicAt));
       const wallElapsedMs = Math.max(0, Date.now() - startedAt);
       const replyBytes = frame ? this.receivedDiagnosticBytes.get(frame) : undefined;
-      if (outcome === 'timeout' || elapsedMs >= SLOW_REQUEST_WARN_MS || (replyBytes ?? 0) >= 256 * 1024) {
+      if (outcome === 'timeout' || elapsedMs >= slowRequestMs || (replyBytes ?? 0) >= 256 * 1024) {
         this.stallDiagnostics.record('request', { request: diagnosticRef(id), dst: diagnosticRef(env.dst),
           channel: diagnosticChannel((env.payload as InvokePayload)?.channel ?? env.kind),
           operation: diagnostic?.operation, source: diagnostic?.source, outcome, elapsedMs, wallElapsedMs,
@@ -2409,7 +2479,7 @@ export class DeviceLinkClient {
         }
         return;
       }
-      if (elapsedMs >= SLOW_REQUEST_WARN_MS) {
+      if (elapsedMs >= slowRequestMs) {
         this.log.debug(`device-link request slow ${requestDescription} elapsed=${elapsedMs}ms${stages}`);
       }
     };
@@ -2910,6 +2980,11 @@ export class DeviceLinkClient {
 
   private scheduleReconnect(): void {
     if (this.stopped || this.reconnectTimer) return;
+    if (this.systemSuspendHoldTimer) {
+      // 睡前主动断开：等唤醒或保持期兜底，不在睡眠过渡中又连回去。
+      this.setStatus('connecting');
+      return;
+    }
     // 普通指数退避与拥塞冷却下限取 max;向下抖动(0.7x–1.0x)打散同 deviceId
     // 双连风暴 / 服务重启后的全端齐步重连,上界不变,文档承诺的最大退避
     // (reconnectMaxMs / congestionBackoffMaxMs)仍然成立。

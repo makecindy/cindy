@@ -687,6 +687,7 @@ import {
   waitForSharedTaskRelay,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
+  handleDeviceLinkSystemSuspend,
   getControllerName,
   revokeController,
 } from './device-link';
@@ -10724,6 +10725,8 @@ app.on('ready', async () => {
   // 「上次意外退出」(issue #10071)。
   powerMonitor.on('suspend', noteSystemSuspend);
   powerMonitor.on('resume', noteSystemResume);
+  // device-link:睡前主动断开 relay,对端立即看到离线(唤醒重建见下方 resume)。
+  powerMonitor.on('suspend', handleDeviceLinkSystemSuspend);
 
   // 挂起/锁屏时通知 renderer 释放语音输入的保活麦克风(用户已离开,再占着采集
   // 设备只剩隐私指示灯常亮和 idle-sleep assertion 的代价)。

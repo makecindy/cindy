@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto';
 import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-protocol';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
-import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_WAIT_MS } from '../remoteAgent.js';
+import { DeviceLinkClient, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -226,6 +227,32 @@ describe('outbound invoke admission', () => {
         expect(records).toContainEqual(expect.objectContaining({ stage: 'request', channel: 'maker:remote-resources:invoke',
           operation: actionId === 'PRIVATE_ACTION' ? 'other-resource-action' : actionId }));
         expect(JSON.stringify(info.mock.calls)).not.toContain('PRIVATE_');
+      } finally { h.client.stop(); vi.useRealTimers(); }
+    },
+  );
+
+  // Unit, 2026-11-14 logs: the 10s remote-agent long poll produced ~47k "request slow" debug
+  // lines and ~30k INFO request diagnostics in five days. Its intended hold is not slowness;
+  // time beyond the hold still is.
+  it.each([[REMOTE_AGENT_READ_WAIT_MS, false], [REMOTE_AGENT_READ_WAIT_MS + 1_500, true]] as const)(
+    'remote-agent poll answered after %ims records slow evidence: %s', async (elapsedMs, slow) => {
+      vi.useFakeTimers();
+      const info = vi.fn(); const debug = vi.fn();
+      const h = makeHarness({ logger: { info, debug, warn: vi.fn(), error: vi.fn() },
+        timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+      try {
+        h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+        const request = h.client.invoke('abcdef12', { channel: REMOTE_AGENT_CHANNEL,
+          args: [{ op: 'poll', runs: [{ runId: 'run-1', cursor: 0 }] }] });
+        const sent = h.current().sent.find(frame => frame.kind === 'invoke')!;
+        await vi.advanceTimersByTimeAsync(elapsedMs);
+        h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: sent.id, src: sent.dst,
+          payload: { ok: true, result: { runs: [] } } });
+        await expect(request).resolves.toMatchObject({ ok: true });
+        const diagnostics = info.mock.calls.filter(([line]) => String(line).startsWith('device-link diagnostic {"stage":"request"'));
+        const slowLines = debug.mock.calls.filter(([line]) => String(line).startsWith('device-link request slow'));
+        expect(diagnostics.length > 0).toBe(slow);
+        expect(slowLines.length > 0).toBe(slow);
       } finally { h.client.stop(); vi.useRealTimers(); }
     },
   );
@@ -7345,6 +7372,37 @@ describe('DeviceLinkClient', () => {
     await tick(20);
     expect(h.sockets.length).toBe(count); // 生命周期仍归 start/stop 管
     expect(h.client.getStatus()).toBe('stopped');
+  });
+
+  // Unit, 2026-11-14 logs: a sleeping laptop stayed "online" to its peers for ~1.5 min per
+  // sleep (ACK timeout, link reset, abandoned frames), every ~15 min DarkWake cycle. Suspend
+  // must close the relay connection normally and hold reconnects until resume.
+  it('suspendConnectionsForSystemSleep 正常关闭 relay、保持期内不重连，唤醒或清醒满保持期后重连', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10, pingIntervalMs: 600_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      expect(h.client.getStatus()).toBe('online');
+      const asleep = h.current();
+      h.client.suspendConnectionsForSystemSleep('system-suspend');
+      expect(asleep.closed).toEqual({ code: 1001, reason: 'system-suspend' });
+      expect(h.client.getStatus()).toBe('connecting');
+      const count = h.sockets.length;
+      await vi.advanceTimersByTimeAsync(SYSTEM_SUSPEND_RECONNECT_HOLD_MS - 1);
+      expect(h.sockets.length).toBe(count);
+
+      h.client.restartConnections('system-resume');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.sockets.length).toBe(count + 1);
+      h.current().ack();
+      expect(h.client.getStatus()).toBe('online');
+
+      // Sleep vetoed / no resume event: the awake-time hold restores the connection itself.
+      h.client.suspendConnectionsForSystemSleep('system-suspend');
+      const held = h.sockets.length;
+      await vi.advanceTimersByTimeAsync(SYSTEM_SUSPEND_RECONNECT_HOLD_MS);
+      expect(h.sockets.length).toBe(held + 1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
   it('stop 后不再重连', async () => {

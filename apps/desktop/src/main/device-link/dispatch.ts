@@ -63,7 +63,7 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
  * 本地 settings(第二道),server 缓存陈旧 / 被绕过时兜底。
  */
 
-import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef } from '@cindy/device-link';
+import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef, invokeIntendedHoldMs } from '@cindy/device-link';
 import { RemoteInvokeTiming, observeRemoteInvoke } from './remoteInvokeTiming.js';
 import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
@@ -3506,10 +3506,12 @@ async function handleInvoke(
     : () => undefined;
   const handlerStartedAt = performance.now();
   const timing = new RemoteInvokeTiming();
+  // 长轮询(远程 Agent poll)按协议挂起的时长不算慢执行。
+  const intendedHoldMs = payload ? invokeIntendedHoldMs(payload.channel, payload.args) : 0;
   const finishDiagnostic = observeRemoteInvoke(timing, fields => executionDiagnostics.record('execution', {
     request: diagnosticRef(requestId), src: diagnosticRef(src), channel: diagnosticChannel(payload?.channel ?? 'unknown'),
     operation: payload ? diagnosticOperation(payload) : 'unknown', ...fields,
-  }));
+  }), undefined, intendedHoldMs);
   const executionPromise = Promise.resolve()
     .then(() => executeInvoke(src, payload, timing))
     .catch((err): InvokeResultPayload => {
@@ -3552,7 +3554,7 @@ async function handleInvoke(
     result = normalizeInvokeResultForWire(await resultPromise);
     const executionWaitMs = Math.round(performance.now() - handlerStartedAt);
     // debug only: 300ms already shows up as a visible send delay over the relay.
-    if (executionWaitMs >= 300) {
+    if (executionWaitMs >= 300 + intendedHoldMs) {
       log.debug(`remote invoke slow execution request=${shortId(requestId)} from=${shortId(src)}`
         + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`
         + ` executionWaitMs=${executionWaitMs} ok=${result.ok} stagesMs=${JSON.stringify(timing.stages)}`);

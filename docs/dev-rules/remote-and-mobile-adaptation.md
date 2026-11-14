@@ -396,6 +396,23 @@ channel + 键（运行诊断单键；带 `providerId` 的用量按账号）做 l
   `node scripts/direct-link-electron-smoke.mjs` 另外启动两个临时 Electron 进程，验证生产
   Main/preload/隔离 renderer 的真实 IPC、WebRTC 与中继回退；账号和 userData 均为独立 fixture。
 
+### 系统睡眠前主动离线（2026-11-14）
+
+2026-11-10～14 日志：一台合盖笔记本的直连约 300 次「接上就断」，其中 93% 在 3 分钟内伴随对端离线——
+是 macOS DarkWake 约 15 分钟一次的短暂唤醒，不是直连本身抖动(其余约 20 次仍由 `directNegotiation.ts`
+既有 5s→60s 退避处理)。睡眠中的设备对对端仍显示在线约 1.5 分钟：直连 ACK 超时、回落中继再 ACK 超时、
+重置链路、60 秒后弃帧，期间推送和请求全部白等。
+
+Desktop 收到 `powerMonitor` 的 `suspend` 即调用 `suspendConnectionsForSystemSleep`：以 1001 正常关闭本机
+各条 relay 连接，relay 随即广播离线；保持期内不排重连，`resume` 的 `restartConnections`、`connectNow`
+解除，进程清醒满 `SYSTEM_SUSPEND_RECONNECT_HOLD_MS`(60s，计时器睡眠中暂停)仍未解除时自行重连。
+
+故障半径：① 平台 suspend 只说明本机即将不可达，不推断任何对端状态；② 只关本机自己的 relay 连接，
+可靠层 pending 按普通断线保留、唤醒后重放，不改 wire 协议(官方与自建中转对正常关闭都立即广播离线，
+自建中转无需修改，`device-link-relay` interop 通过)；③ 不碰对端链路、不影响其他设备，睡眠被取消或
+缺少唤醒事件时由清醒时间兜底恢复，不会把本机永久留在离线。验证：`client.test.ts`
+「suspendConnectionsForSystemSleep …」。
+
 ## 远程 Agent 的拉取与恢复(`maker:remote-agent:v1`)
 
 控制端载荷交付（2026-11-10）：512KiB 上传块经 base64 后约 683KiB，慢中转链路收齐分片可能超过
