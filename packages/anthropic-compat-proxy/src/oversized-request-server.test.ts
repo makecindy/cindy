@@ -2,7 +2,8 @@ import { Agent, createServer, request } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createAnthropicCompatProxy } from './server.js';
-import type { LocalRequestHandler } from './types.js';
+import type { LocalRequestHandler, ProxyOptions } from './types.js';
+import { controlRequestSize, type InlineImagePreprocessor } from './request-size-control.js';
 import { recoverInlineAttachments as recover, type RecoveredAttachment } from './oversized-attachments.js';
 import { closeTestConnections, fetchOverTestConnections as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 const recoverInlineAttachments = (body: Parameters<typeof recover>[0], limit: number, prepare: (a: RecoveredAttachment) => Promise<string>) =>
@@ -183,3 +184,77 @@ it('spools a request beyond the configured ingress window before request-size co
   expect(response.status).toBe(200);
   expect(received).toEqual([Buffer.from('{}')]);
 });
+
+// Regression: the disabled controller used to replace legacy ingress recovery and
+// reject recoverable histories. Production proxy + recovery, scaled to 8 KiB;
+// unit tier, ephemeral loopback fixture. Also protects the legacy 413 retry budget
+// when non-image text alone is larger than the new 44% target.
+it.each(['ingress', 'upstream-413', 'upstream-400'] as const)(
+  'disabled size control matches legacy %s bytes while retaining preprocessing', async mode => {
+    let received: Buffer[] = [];
+    let rejectNext = false;
+    const upstream = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk);
+      received.push(Buffer.concat(chunks));
+      if (rejectNext) {
+        rejectNext = false;
+        res.statusCode = mode === 'upstream-413' ? 413 : 400;
+        res.end('Exceeded maximum number of images (50) allowed in the request.');
+      } else res.end('ok');
+    });
+    const port = await listenOnAvailableLoopbackPort(upstream);
+    cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+    const image = (bytes: number) => ({ type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(bytes, 3).toString('base64')}` });
+    const raw = Buffer.from(JSON.stringify({ model: 'gpt-test', input: [{ role: 'user', content: mode === 'ingress'
+      ? [image(6000), image(2000)]
+      : [{ type: 'input_text', text: 't'.repeat(12000) }, image(6000)] }] }));
+    const prepare = vi.fn<InlineImagePreprocessor['prepare']>(async () => null);
+    const retry = vi.fn(async () => Buffer.from('{}'));
+    const targets: number[][] = [[], []];
+    const sent: Buffer[][] = [];
+    for (const disabled of [false, true]) {
+      const index = Number(disabled);
+      const options: ProxyOptions = {
+        upstream: `http://127.0.0.1:${port}`, transformRequest: [],
+        maxRequestBodyBytes: mode === 'ingress' ? 8192 : 32768,
+        oversizedRequestRecovery: () => (body, target) => {
+          targets[index].push(target);
+          return recoverInlineAttachments(body, target, async () => '/tmp/legacy-kept.png');
+        },
+        ...(disabled ? {
+          requestSizeController: {
+            enabled: () => false,
+            format: () => 'responses' as const,
+            preprocessor: { prepare }, retry,
+            control: (body, format, policy) => controlRequestSize(body, format,
+              { ...policy, modelFamily: 'gpt', preprocessor: { prepare } }, async () => '/tmp/new-path-must-not-be-used.png'),
+          },
+          requestSizeRetry: retry,
+        } : {}),
+      };
+      const proxy = await createAnthropicCompatProxy(options);
+      cleanup.push(() => proxy.dispose());
+      received = [];
+      rejectNext = mode !== 'ingress';
+      const response = await fetch(`${proxy.url}/v1/responses`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: raw,
+      });
+      expect(response.status).toBe(mode === 'upstream-400' ? 400 : 200);
+      await response.text();
+      sent.push(received);
+    }
+    expect(sent[1]).toEqual(sent[0]);
+    expect(targets[1]).toEqual(targets[0]);
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
+    if (mode === 'ingress') {
+      expect(sent[1][0].length).toBeLessThanOrEqual(8192);
+      expect(sent[1][0].toString()).toContain('Preserved local file:');
+    } else if (mode === 'upstream-413') {
+      expect(sent[1]).toHaveLength(2);
+      expect(sent[1][1].length).toBeGreaterThan(raw.length * 0.44);
+      expect(targets[1]).toEqual([raw.length - 1]);
+    } else expect(sent[1]).toHaveLength(1);
+  },
+);

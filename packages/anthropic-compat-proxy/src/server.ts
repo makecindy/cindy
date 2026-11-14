@@ -2308,7 +2308,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       try { recoverOversized = opts.oversizedRequestRecovery?.(requestCtx) ?? null; }
       catch { /* No stable owner: retain the existing bounded request path. */ }
     }
-    const sizeControlEnabled = Boolean(requestSizeController);
+    // Freeze the kill switch for this request. Compression still runs below, but
+    // disabled size control must retain the original disk-backed overflow recovery.
+    const sizeControlEnabled = Boolean(requestSizeController) && requestSizeController?.enabled?.() !== false;
     let sizeControlledAtIngress = false;
     let ingressParsedBody: unknown;
     // Request-size control owns the pre-dispatch 32 MiB budget. Above that threshold use the
@@ -2325,7 +2327,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
             route: requestSizeController.route?.(requestCtx, parsedHint) ?? {},
             signal: body.signal,
             context: requestCtx,
-            allowRemoval: requestSizeController.enabled?.() !== false,
+            allowRemoval: sizeControlEnabled,
           });
           if (!controlled) return null;
           sizeControlledAtIngress = true;
@@ -2585,12 +2587,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         const sizeStartedAt = Date.now();
         try {
           const route = requestSizeController.route?.(requestCtx, sizeParsed) ?? {};
-          const learned = learnedRequestSizeRoutes.get(requestSizeRouteKey(requestCtx, sizeParsed, format));
+          const learned = sizeControlEnabled
+            ? learnedRequestSizeRoutes.get(requestSizeRouteKey(requestCtx, sizeParsed, format)) : undefined;
           const controlled = await requestSizeController.control(rawBody, format, {
             route,
             signal: recoveryAbort.signal,
             context: requestCtx,
-            allowRemoval: requestSizeController.enabled?.() !== false,
+            allowRemoval: sizeControlEnabled,
             ...(learned ? { triggerBytes: learned.trigger, targetBytes: learned.target, reason: 'learned' } : {}),
           });
           if (controlled) {
@@ -2935,12 +2938,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       forwardLifecycle,
       recoverOversized
         ? async (body, signal) => {
-          const target = Math.max(1, Math.floor(body.length * 0.44));
+          const target = sizeControlEnabled
+            ? Math.max(1, Math.floor(body.length * 0.44)) : body.length - 1;
           const result = await collectRecoverableBody(
             Readable.from([body]), target,
             (spooled) => recoverOversized!({ ...spooled, upstreamRejected: true }, target), signal,
           );
-          if (requestSizeController) {
+          if (sizeControlEnabled && requestSizeController) {
             const parsed = (() => { try { return JSON.parse(body.toString('utf8')) as unknown; } catch { return {}; } })();
             const format = requestSizeController.format?.(requestCtx, parsed) ?? 'unknown';
             learnedRequestSizeRoutes.set(requestSizeRouteKey(requestCtx, parsed, format), { trigger: body.length, target });
@@ -2948,7 +2952,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           return result;
         }
         : undefined,
-      opts.requestSizeRetry ?? (requestSizeController?.retry
+      requestSizeController && !sizeControlEnabled ? undefined : opts.requestSizeRetry ?? (requestSizeController?.retry
         ? async (body, error, signal, ctx) => {
           const result = await requestSizeController.retry!(body, error, ctx ?? requestCtx, signal);
           if (result) {
