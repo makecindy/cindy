@@ -2,6 +2,7 @@ import type { AgentKind } from '@cindy/maker-core';
 import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-shared/orca-team';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { buildOrcaDispatchReceiptSummary, type OrcaDispatchReceipt } from '../../shared/orcaDispatchReceipt.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
 import type {
   CollabDispatchFailureOutcome,
@@ -9,6 +10,15 @@ import type {
   CollabDispatchSuccessOutcome,
 } from './collabSendOutcome.js';
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
+import {
+  detectDispatchClaim,
+  dispatchFactsForTurn,
+  dropLeadDispatchFact,
+  noteLeadDispatchFact,
+  quoteClaimSentence,
+  settleDispatchClaimIncident,
+  verifyDispatchClaim,
+} from './orcaDispatchClaims.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
 import { isOrcaCollaborationMessage } from './orcaQueueNote.js';
 import {
@@ -472,6 +482,17 @@ export interface OrcaTeamServiceDeps {
     message: string,
     workerId: string,
   ): Promise<{ accepted: boolean }>;
+  /** 宿主自撰的纠正消息（非 Worker 回报），送进 Lead 队列开一轮。 */
+  sendHostNoticeToLead(
+    leadSessionId: string,
+    message: string,
+  ): Promise<{ accepted: boolean }>;
+  /** 补派一轮仍无凭据时的升级：红点 + 既有通知通道。 */
+  notifyLeadDispatchClaimEscalation?(leadSessionId: string, message: string): void;
+  /** 能力开关，缺省开启；关闭后完全不判定也不修改结果。 */
+  readDispatchClaimVerificationEnabled?(): boolean;
+  /** 宿主接受一条派单后落库回执卡；渲染层只读这份宿主记录。 */
+  appendDispatchReceipt?(leadSessionId: string, receipt: OrcaDispatchReceipt): void;
   /**
    * 读取目标 session 输入队列的当前快照(pendingQueue + steering 中的 clientId)。
    * 实现方(register.ts)须先 ensureQueueRestored 再读,保证崩溃恢复条目可见。
@@ -618,6 +639,12 @@ export interface OrcaTeamService {
   /** Synchronous product boundary; never call for a suppressed vendor terminal. */
   noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void;
   handleWorkerTerminalTurn(params: WorkerTerminalTurnParams): Promise<void>;
+  /** Lead 收口对账：本轮声称已派但无派发凭据时唤醒补派，仍不一致才升级。 */
+  handleLeadTurnSettled(params: {
+    leadSessionId: string;
+    turnGeneration: number;
+    finalText: string;
+  }): Promise<void>;
 }
 
 /** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
@@ -1411,6 +1438,25 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         await rollbackAccepted();
         return { result, wasLiveBeforeDispatch };
       }
+      // 派发凭据只认宿主这次成功落地的投递，供 Lead 收口时的主张对账使用。
+      noteLeadDispatchFact({
+        leadSessionId: link.leadSessionId,
+        turnGeneration: deps.getLiveSession(link.leadSessionId)?.getTurnGeneration?.() ?? 0,
+        workerId: target.id,
+        workerLabel: target.label ?? target.role,
+        delivery: result.mode === 'queued' ? 'queued' : 'direct',
+        ...(result.mode === 'queued' ? { queuedMessageId: result.clientId } : {}),
+        at: Date.now(),
+      });
+      deps.appendDispatchReceipt?.(link.leadSessionId, {
+        version: 1,
+        workerId: target.id,
+        workerLabel: target.label ?? target.role ?? target.id,
+        delivery: result.mode === 'queued' ? 'queued' : 'direct',
+        ...(result.mode === 'queued' ? { queuedMessageId: result.clientId } : {}),
+        summary: buildOrcaDispatchReceiptSummary(params.message),
+        at: Date.now(),
+      });
       if (result.mode === 'dispatched') {
         // The dependency result is the direct vendor-dispatch settlement. Keep this idempotent
         // fallback even though the dispatcher also reports commit through the callback.
@@ -2035,6 +2081,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             },
     });
     if (!controlled.ok) return mapWorkerQueueControlFailure(controlled);
+    dropLeadDispatchFact(params.callerLeadSessionId, params.queuedMessageId);
     deps.log.info('orca lead cancelled queued worker message', {
       workerId: found.worker.id,
       workerSessionId: found.worker.sessionId,
@@ -2293,7 +2340,76 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     },
     captureWorkerTerminalTurn,
     noteWorkerProductTerminal,
-    async handleWorkerTurnStarted(sessionId) {
+    /**
+   * Lead 收口对账：只在 lead 文本声称已派而本轮无派发凭据时动手；
+   * 首次唤醒补派一次，补派轮仍不一致才升级。
+   */
+  async handleLeadTurnSettled(params: {
+    leadSessionId: string;
+    turnGeneration: number;
+    finalText: string;
+  }): Promise<void> {
+    if (deps.readDispatchClaimVerificationEnabled?.() === false) return;
+    const reading = detectDispatchClaim(params.finalText);
+    if (!reading.claimed) {
+      settleDispatchClaimIncident(params.leadSessionId, true);
+      return;
+    }
+    // 不是协同 Lead（没有 worker）就不做判定，避免普通会话里的同款措辞被误判。
+    const workers = await deps.listWorkersByLead(params.leadSessionId);
+    if (workers.length === 0) return;
+
+    const facts = dispatchFactsForTurn(params.leadSessionId, params.turnGeneration);
+    const verdict = verifyDispatchClaim(reading, facts);
+    const action = settleDispatchClaimIncident(params.leadSessionId, verdict.consistent);
+    if (!action) return;
+
+    const quote = quoteClaimSentence(reading.claimed ? params.finalText : '');
+    const reason = verdict.consistent
+      ? ''
+      : verdict.reason === 'unknown-message-id'
+        ? `the queued_message_id ${verdict.detail} is not in this turn's dispatch records`
+        : 'this turn has no accepted dispatch record';
+    if (action === 'wake') {
+      const accepted = await deps.sendHostNoticeToLead(
+        params.leadSessionId,
+        [
+          '[From Orca host] Dispatch claim has no matching dispatch record.',
+          `${reason}.`,
+          quote ? `Your turn said: "${quote}"` : '',
+          'Either dispatch now — send_to_worker, or create_worker with an initial task — and report dispatched only after ok=true with wake_kind resumed / already-active / queued, or state that nothing was dispatched.',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+      deps.log.info('orca lead dispatch claim wake', {
+        leadSessionId: params.leadSessionId,
+        accepted,
+        reason,
+        facts: facts.length,
+      });
+      return;
+    }
+
+    deps.notifyLeadDispatchClaimEscalation?.(
+      params.leadSessionId,
+      [
+        '[From Orca host] Dispatch claim is still unverified after one correction.',
+        `${reason}.`,
+        quote ? `Your turn said: "${quote}"` : '',
+        'Nothing was dispatched for the owner. Do not claim a dispatch without a real one.',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+    deps.log.warn('orca lead dispatch claim escalated', {
+      leadSessionId: params.leadSessionId,
+      reason,
+      facts: facts.length,
+    });
+  },
+
+  async handleWorkerTurnStarted(sessionId) {
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
 

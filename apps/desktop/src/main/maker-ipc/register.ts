@@ -701,7 +701,11 @@ import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupCha
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
-import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
+import {
+  showDesktopChatMessage,
+  getDesktopNotificationsEnabled,
+  showDesktopSessionEvent,
+} from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
@@ -2448,6 +2452,7 @@ const COLLABORATION_SETTING_KEYS = [
   'workerSoftLimit',
   'workerHardLimit',
   'workerIdleReleaseMinutes',
+  'dispatchClaimVerification',
 ] as const;
 type CollaborationSettingKey = (typeof COLLABORATION_SETTING_KEYS)[number];
 const COLLABORATION_WORKER_LIMIT_MAX = 20;
@@ -2457,14 +2462,23 @@ function isCollaborationSettingKey(key: unknown): key is CollaborationSettingKey
   return typeof key === 'string' && (COLLABORATION_SETTING_KEYS as readonly string[]).includes(key);
 }
 
-function requireInteger(value: unknown, key: CollaborationSettingKey): number {
+function requireInteger(value: unknown, key: Exclude<CollaborationSettingKey, 'dispatchClaimVerification'>): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
     throwIpcError('INVALID_PARAMS', `${key} must be an integer`);
   }
   return value;
 }
 
-function validateCollaborationSettingValue(key: CollaborationSettingKey, value: unknown): number {
+function validateCollaborationSettingValue(
+  key: CollaborationSettingKey,
+  value: unknown,
+): number | boolean {
+  if (key === 'dispatchClaimVerification') {
+    if (typeof value !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', `${key} must be a boolean`);
+    }
+    return value;
+  }
   const next = requireInteger(value, key);
   const current = readCollaborationSettings();
   if (key === 'workerIdleReleaseMinutes') {
@@ -16556,6 +16570,63 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         },
       });
       return { accepted: result.ok };
+    },
+    sendHostNoticeToLead: async (leadSessionId, message) => {
+      const result = await dispatchInterAgentMessage({
+        targetSessionId: leadSessionId,
+        rawContent: message,
+        source: 'worker',
+        senderLabel: 'Orca',
+        autoBridge: true,
+        meta: {
+          source: 'maker-ipc/dispatch-claim',
+          context: `lead_dispatch_claim/${leadSessionId}`,
+        },
+      });
+      return { accepted: result.ok };
+    },
+    notifyLeadDispatchClaimEscalation: (leadSessionId, message) => {
+      void (async () => {
+        // 升级 = 会话内纠正文本（主人看得见）+ 红点 + 通知；发送失败一律静默降级。
+        await dispatchInterAgentMessage({
+          targetSessionId: leadSessionId,
+          rawContent: message,
+          source: 'worker',
+          senderLabel: 'Orca',
+          autoBridge: true,
+          meta: {
+            source: 'maker-ipc/dispatch-claim',
+            context: `lead_dispatch_claim_escalation/${leadSessionId}`,
+          },
+        }).catch(() => ({ ok: false }));
+        let title = '';
+        try {
+          const [row] = await getDbClient()
+            .drizzle
+            .select({ title: sessions.title })
+            .from(sessions)
+            .where(eq(sessions.id, leadSessionId))
+            .limit(1);
+          title = row?.title ?? '';
+        } catch {
+          /* 标题只是装饰，读不到就留空 */
+        }
+        showDesktopSessionEvent(() => getDeepLinkMainWindow(), {
+          sessionId: leadSessionId,
+          title,
+          kind: 'error',
+        });
+      })();
+    },
+    readDispatchClaimVerificationEnabled: () => readCollaborationSettings().dispatchClaimVerification,
+    appendDispatchReceipt: (leadSessionId, receipt) => {
+      // 回执卡落库为宿主系统行：role=assistant + agentMeta 标记，正文为空，不进模型上下文。
+      void createDbMessage(leadSessionId, {
+        clientId: `orca-dispatch-${receipt.queuedMessageId ?? receipt.at}`,
+        role: 'assistant',
+        content: '',
+        agentMeta: { orcaDispatch: receipt },
+      }).catch(() => undefined);
     },
     log,
   }));

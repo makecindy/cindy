@@ -5479,7 +5479,9 @@
       "workerHardLimit": "Worker 硬上限",
       "workerHardLimitHint": "允許建立的最大 Worker 數量，必須大於等於軟上限。",
       "idleRelease": "空閒釋放（分鐘）",
-      "idleReleaseHint": "設為 0 時關閉背景自動釋放；正數表示閒置超過該時長後自動釋放。"
+      "idleReleaseHint": "設為 0 時關閉背景自動釋放；正數表示閒置超過該時長後自動釋放。",
+      "dispatchClaimVerification": "核對派發主張",
+      "dispatchClaimVerificationHint": "Lead 聲稱已派給 Worker 時，依主機派發記錄核對。不實的主張先糾正一次，仍不實則提醒你。"
     },
     "agentResource": {
       "saveFailed": "儲存失敗，請重試。",
@@ -15136,6 +15138,10 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "sent": "已派給 {{worker}}",
+        "queued": "已排隊給 {{worker}}"
+      },
       "help": {
         "title": "可用命令",
         "builtInCommands": "內建命令",

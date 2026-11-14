@@ -19944,6 +19944,11 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       systemCardType: 'voice-call' as const, systemCardData: { record: m.agentMeta.voiceCall },
       createdAt: new Date(m.createdAt).toISOString(),
     };
+    if (m.role === 'assistant' && m.agentMeta?.orcaDispatch?.version === 1) return {
+      clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
+      systemCardType: 'orca-dispatch' as const, systemCardData: { ...m.agentMeta.orcaDispatch },
+      createdAt: new Date(m.createdAt).toISOString(),
+    };
     const mcpApp = m.role === 'assistant' && m.agentMeta?.mcpApp === true ? parseMcpAppHistory(m.content) : undefined;
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,

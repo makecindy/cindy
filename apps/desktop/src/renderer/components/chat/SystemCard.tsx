@@ -94,7 +94,8 @@ interface SystemCardProps {
     | 'bot-direct-message'
     | 'bot-authorization'
     | 'context-rebuild'
-    | 'session-import';
+    | 'session-import'
+    | 'orca-dispatch';
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
@@ -1419,6 +1420,40 @@ function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
   );
 }
 
+function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
+  const worker =
+    typeof data?.workerLabel === 'string' && data.workerLabel
+      ? data.workerLabel
+      : typeof data?.workerId === 'string'
+        ? data.workerId.slice(0, 8)
+        : '';
+  const queued = data?.delivery === 'queued';
+  const summary = typeof data?.summary === 'string' ? data.summary : '';
+  const label = queued
+    ? t('chat.systemCard.orcaDispatch.queued', { worker })
+    : t('chat.systemCard.orcaDispatch.sent', { worker });
+  return (
+    <div
+      className="flex w-full select-none flex-col gap-1 py-2 text-center"
+      role="note"
+      aria-label={label}
+    >
+      <span className="inline-flex items-center justify-center gap-2 text-12 leading-[1.33] text-[var(--text-tertiary)]">
+        {label}
+      </span>
+      {summary && (
+        <span
+          className="mx-auto max-w-[86%] truncate text-11 leading-[1.33] text-[var(--text-tertiary)]"
+          title={summary}
+        >
+          {summary}
+        </span>
+      )}
+    </div>
+  );
+}
+
 const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
   'no-visible-result': 'chat.systemCard.review.noResult',
   'reviewer-closed': 'chat.systemCard.review.failure.reviewerClosed',
@@ -1584,6 +1619,8 @@ export function SystemCard({
       return <ContextRebuildCard data={data} />;
     case 'session-import':
       return <SessionImportCard data={data} />;
+    case 'orca-dispatch':
+      return <OrcaDispatchCard data={data} />;
     case 'learn':
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':
