@@ -14,7 +14,7 @@ import { createLiziMcpProviders } from '../../../../packages/lizi-mcps/src/index
 
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.ts';
 import { createBetterSqliteDatabase } from '../../../desktop/src/main/localDb/betterSqliteFactory.ts';
-import { LOGGER } from './runtime.mjs';
+import { LOGGER } from './runtime.ts';
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.ts';
 
 const DEFAULTS = Object.freeze({ maker: true, claudeCode: true, codex: true, pi: true });
@@ -67,7 +67,7 @@ export function createHostMemoryManager({ userDataDir, ownerId }) {
   });
 }
 
-/** The cindy_memory MCP server for Claude turns; Codex needs the desktop bridge (TODO). */
+/** The cindy_memory MCP server; Codex reaches it through the Host MCP bridge (mcp-runtime codexDeps), checked by codex-runtime.e2e.mjs. */
 export function createHostMemoryMcpProviders(manager) {
   return createLiziMcpProviders({
     enabled: ['cindy_memory'],

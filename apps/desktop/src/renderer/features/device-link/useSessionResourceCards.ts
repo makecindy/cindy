@@ -269,7 +269,6 @@ export function useSessionResourceCards({
           resolveRemoteText(value, i18n.language);
         const accepted = await confirm(
           {
-            presentation: 'standard',
             title: resolve(action.confirmation.title),
             description: action.confirmation.body ? resolve(action.confirmation.body) : undefined,
             confirmText: resolve(action.confirmation.confirmLabel ?? action.label),

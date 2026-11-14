@@ -1,6 +1,6 @@
 import { withHostAppSdk } from '@cindy/maker-shared/mcp-app-sdk';
 import { app, protocol, session, type WebContents, type WebFrameMain } from 'electron';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { appCsp, MCP_APPS_MAX_BYTES } from './protocol.js';
 import {
@@ -12,6 +12,7 @@ import {
   type McpAppDocument,
 } from '../../shared/mcpApps.js';
 import { mcpAppDirectSandboxDocument } from './sandboxBridge.js';
+import { OwnerScopedAppResourceCache } from './appResourceCache.js';
 
 export const mcpAppSchemePrivilege = {
   scheme: 'cindy-mcp-app',
@@ -32,6 +33,43 @@ const documents = new Map<
     bridge?: { key: string; frame?: WebFrameMain; invoke(input: unknown): Promise<unknown> };
   }
 >();
+// This value is intentionally generated per process so authored plugin content cannot
+// accidentally contain it and be rewritten during per-View URL substitution.
+const viewIdPlaceholder = `__CINDY_VIEW_ID_${randomUUID()}__`;
+const preparedHtmlCache = new OwnerScopedAppResourceCache<{ html: string }>();
+const sdkAssetHashes = new WeakMap<object, string>();
+function hashText(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+function hashSdkAsset(sdk: NonNullable<McpAppDocument['sdk']>): string {
+  const cached = sdkAssetHashes.get(sdk);
+  if (cached) return cached;
+  const addon = sdk.addons?.['cindy/view-state'];
+  const value = createHash('sha256')
+    .update(sdk.source)
+    .update('\0')
+    .update(addon?.source ?? '')
+    .update('\0')
+    .update(addon?.reactSource ?? '')
+    .digest('hex');
+  sdkAssetHashes.set(sdk, value);
+  return value;
+}
+function preparedAppHtml(document: McpAppDocument): string {
+  const owner = getCurrentDbClientSnapshot();
+  const addons = document.sdk?.addons?.['cindy/view-state'];
+  const key = `${hashText(document.html)}:${document.sdk ? hashSdkAsset(document.sdk) : 'none'}`;
+  const template = (owner && preparedHtmlCache.get(owner, key)) ?? (() => {
+    const value = withHostAppSdk(document.html, 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + HOST_APP_SDK_PATH,
+      addons ? {
+        coreUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_VIEW_STATE_SDK_PATH,
+        reactUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_VIEW_STATE_REACT_SDK_PATH,
+      } : undefined);
+    if (owner) preparedHtmlCache.set(owner, key, { html: value });
+    return { html: value };
+  })();
+  return template.html.replaceAll(viewIdPlaceholder, document.viewId);
+}
 // Electron throws this from any WebFrameMain getter (`contents.focusedFrame`, `frame.url`,
 // `frame.parent`, `event.frame`) once the render frame is gone, which is routine while an
 // App iframe is being torn down or recreated. It must not escape a WebContents event
@@ -63,11 +101,7 @@ export function supplyMcpAppDocument(
   dispose?: () => void,
 ): void {
   documents.set(document.viewId, {
-    html: withHostAppSdk(document.html, 'cindy-mcp-app://' + document.viewId + '-view' + HOST_APP_SDK_PATH,
-      document.sdk?.addons?.['cindy/view-state'] ? {
-        coreUrl: 'cindy-mcp-app://' + document.viewId + '-view' + CINDY_VIEW_STATE_SDK_PATH,
-        reactUrl: 'cindy-mcp-app://' + document.viewId + '-view' + CINDY_VIEW_STATE_REACT_SDK_PATH,
-      } : undefined),
+    html: preparedAppHtml(document),
     fileKey: randomUUID(), document, owner: getCurrentDbClientSnapshot(), caller, dispose,
     bridge: invoke ? { key: randomUUID(), invoke } : undefined,
   });

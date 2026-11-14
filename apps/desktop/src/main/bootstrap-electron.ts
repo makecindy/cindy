@@ -486,6 +486,7 @@ import {
   startHostEventBridge,
   type HostDelegationConfig,
 } from './host-delegation';
+import { createHostIpcProxy, registerHostIpcProxies } from './host-ipc-proxy';
 import { createIpcChannelUsage, registeredIpcChannels, tapIpcChannelUsage } from './ipcChannelUsage';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
@@ -875,6 +876,7 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
+  registerComputerUseIpc,
   restoreOrcaRemoteWorkersForCurrentOwner,
   stopOrcaRemoteWorkersForOwnerBoundary,
   isSessionTurnPendingCompletion,
@@ -1358,11 +1360,30 @@ function installHostClientMode(): boolean {
         && pending.channel === (channel === 'ghosts:confirm:resolve' ? 'ghosts:confirm-request' : 'ghosts:install-consent:request');
     },
   });
+  // Registered channels (host-ipc-registry) use the Host's generic route, pinned
+  // to the Host instance and to the account the windows show.
+  const hostIpcLog = createLogger('host-ipc');
+  const ipcProxy = createHostIpcProxy({
+    baseUrl: delegation.baseUrl,
+    token: delegation.token,
+    instanceId: delegation.instanceId,
+    readOwner: () => {
+      const state = authManager.getAuthState();
+      return { dataOwnerId: state.dataOwnerId, ownerGeneration: state.ownerGeneration, canEnterApp: state.canEnterApp };
+    },
+    applyAuthState: (state) => authManager.receiveHostAuthState(state as authManager.AuthState),
+    log: (message, meta) => hostIpcLog.warn(message, meta ?? {}),
+  });
+  const routed = registerHostIpcProxies({
+    ipcMain,
+    proxy: ipcProxy,
+    admit: { 'trusted-app-renderer': assertTrustedAppRendererEvent },
+  });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {
     console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
-  });
+  }, routed);
   const channelUsage = createIpcChannelUsage({
     mode: 'client',
     file: ipcUsageReportFile,
@@ -1380,6 +1401,7 @@ function installHostClientMode(): boolean {
   });
   console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
   console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
+  console.log(`[bootstrap-electron] client mode routed channels: ${routed.join(', ')}`);
   void registerHostDelegatedSync({
     channel: 'ghosts:list',
     path: '/api/ghosts',
@@ -1424,6 +1446,8 @@ function installHostClientMode(): boolean {
     token: delegation.token,
     instanceId: delegation.instanceId,
     beforeEvents: async (signal) => {
+      // A (re)connected stream may face another Host build: negotiate again on next use.
+      ipcProxy.invalidate();
       const auth = await hostClient.request('/api/auth/state', null, signal) as authManager.AuthState;
       if (!signal.aborted) {
         authManager.receiveHostAuthState(auth);
@@ -7017,6 +7041,13 @@ const registerIpcHandlers = () => {
     // never register competing handlers.
     if (hostClientMode) {
       makerIpcsRegistered = true;
+      // Computer Use settings manage this machine's CuaDriver, which keeps serving
+      // Host-run agents through the window, so they stay window-local.
+      try {
+        registerComputerUseIpc();
+      } catch (err) {
+        console.error('[bootstrap-electron] failed to register computer-use IPC', err);
+      }
       return;
     }
     // Compose here: IM runtime and hook IPC depend on maker-host, so the host

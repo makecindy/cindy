@@ -9,9 +9,22 @@ const h = vi.hoisted(() => ({
   meta: vi.fn(),
   provider: vi.fn(),
   binding: vi.fn(),
+  migrate: vi.fn(),
+  place: vi.fn(),
 }));
 vi.mock('../runtime.js', () => ({ runSubscriptionAccountCommand: h.run }));
-vi.mock('../store.js', () => ({ readAccountBinding: h.binding }));
+vi.mock('../store.js', () => ({ readAccountBinding: h.binding, migrateLegacyCodexAccounts: h.migrate,
+  readLegacyCodexAccountId: () => 'imported' }));
+vi.mock('../placement.js', () => ({ placeSubscriptionAccount: h.place,
+  resolveSubscriptionPoolProvider: (id: string) => id === 'anthropic' || id === 'openai' ? { kind: id, providerId: id } : null }));
+vi.mock('../../maker-host/active-catalog.js', () => ({ getActiveCatalog: () => ({ providers: [
+  { id: 'openai-old', source: 'user', auth: { native: 'codex' } },
+] }) }));
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({}) }));
+vi.mock('../../maker-host/nativeProviderAuthBinding.js', () => ({
+  isNativeProviderAuthBound: () => true, isNativeProviderAuthSharedSystemCredential: () => true,
+}));
+vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ publishSubscriptionPoolProviders: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => h.owner,
   isAppSessionBoundaryPending: () => false,
@@ -35,6 +48,8 @@ beforeEach(() => {
   h.meta.mockReset().mockResolvedValue({ agentKind: 'claude-code', sdkSessionId: 'native-a' });
   h.provider.mockReset().mockReturnValue('anthropic');
   h.binding.mockReset().mockReturnValue(null);
+  h.migrate.mockReset().mockResolvedValue(undefined);
+  h.place.mockReset().mockResolvedValue(undefined);
 });
 const read = () =>
   executeSubscriptionAccountCommand({ action: 'read', providerId: 'anthropic', taskId: 'task-a' });
@@ -68,4 +83,14 @@ it('rejects an owner switch during the metadata lookup', async () => {
   });
   await expect(read()).rejects.toThrow('Subscription accounts changed');
   expect(h.binding).not.toHaveBeenCalled();
+});
+
+// PR #10405, unit: registration awaited migration before changing account placement without
+// rechecking the signed-in owner; previous tests covered only the read-only metadata lookup.
+it('stops legacy placement after the owner changes during registration', async () => {
+  h.migrate.mockImplementation(async () => { h.owner = 'owner-b'; });
+  await expect(executeSubscriptionAccountCommand({ action: 'merge', providerId: 'openai-old', target: 'openai' }))
+    .rejects.toThrow('Subscription accounts changed');
+  expect(h.place).not.toHaveBeenCalled();
+  expect(h.run).not.toHaveBeenCalled();
 });

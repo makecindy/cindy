@@ -156,6 +156,52 @@ describe('MCP App transport lifecycle', () => {
     release();
     await pending;
   });
+
+  it('finishes a view-state save during native close before sending teardown', async () => {
+    let deliver!: (events: unknown[]) => void;
+    const f = fixture(() => new Promise((resolve) => { deliver = resolve; }));
+    await f.controller.open({});
+    f.controller.sandboxReady();
+    f.controller.prepareNativeClose();
+    const teardown = f.post.mock.calls.at(-1)![0] as AppRpc;
+    const pending = f.controller.close();
+    const save: AppRpc = {
+      jsonrpc: '2.0', id: 'save', method: 'cindy/view-state/set', params: { state: { version: 1, page: 2 } },
+    };
+    f.controller.receive(save);
+    await flush();
+    expect(f.invoke).toHaveBeenCalledWith('task', expect.objectContaining({
+      op: 'message', viewId: 'view', message: save,
+    }));
+    deliver([{ seq: 1, message: { jsonrpc: '2.0', id: save.id, result: {} } }]);
+    await flush();
+    expect(f.post).toHaveBeenCalledWith(expect.objectContaining({ id: save.id, result: {} }));
+    expect(f.invoke.mock.calls.some(([, input]) => input.op === 'teardown')).toBe(false);
+    f.controller.receive({ jsonrpc: '2.0', id: teardown.id, result: {} });
+    await pending;
+    const operations = f.invoke.mock.calls.map(([, input]) => input.op);
+    expect(operations.indexOf('message')).toBeLessThan(operations.indexOf('teardown'));
+  });
+
+  it('continues to drop tools and other requests during native close', async () => {
+    const f = fixture();
+    await f.controller.open({});
+    f.controller.sandboxReady();
+    f.controller.prepareNativeClose();
+    const pending = f.controller.close();
+    f.controller.receive({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} });
+    f.controller.receive({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+    await flush();
+    expect(f.invoke).not.toHaveBeenCalledWith('task', expect.objectContaining({
+      op: 'message', message: expect.objectContaining({ method: 'tools/call' }),
+    }));
+    expect(f.invoke).not.toHaveBeenCalledWith('task', expect.objectContaining({
+      op: 'message', message: expect.objectContaining({ method: 'ui/notifications/initialized' }),
+    }));
+    const teardown = f.post.mock.calls.at(-1)![0] as AppRpc;
+    f.controller.receive({ jsonrpc: '2.0', id: teardown.id, result: {} });
+    await pending;
+  });
   it('closes a View that finishes opening after its card unmounts', async () => {
     let resolve!: (value: unknown) => void;
     const invoke = vi.fn(

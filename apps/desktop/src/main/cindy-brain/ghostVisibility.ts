@@ -202,9 +202,11 @@ function classifyInstalledGhostVisibility(
 ): GhostVisibilityResult {
   const identity = installedGhostLogicalIdentity(target);
   const key = installedGhostStoragePart(target);
-  const ghost = deps.findInstalledInstance
+  let ghost = deps.findInstalledInstance
     ? deps.findInstalledInstance(key)
     : findInstalledGhostByInstanceId(deps.listGhosts(), key);
+  if (!ghost && deps.findInstalledInstance)
+    ghost = findInstalledGhostByInstanceId(deps.listGhosts(), key);
   if (!ghost || ghost.manifest.id !== identity.ghostId ||
       installedGhostLogicalIdentity(ghost).namespace !== identity.namespace ||
       ghost.dir !== target.dir ||

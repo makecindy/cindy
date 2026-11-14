@@ -92,6 +92,8 @@ test('plugin gateway and Agent attachment share the supplied Node browser provid
     getSession: () => undefined, manager: {}, confirmations, t: key => key });
   service.providers.push(...f.tools.providers);
   service.services.replace(service.providers);
+  assert.equal(new Set(service.providers.map(provider => provider.name)).size, service.providers.length,
+    'Agent and plugin assembly register each MCP service name once');
   t.after(() => { service.close(); confirmations.close(); });
   const agent = await f.client('task-a');
   const expected = await tabs(agent);

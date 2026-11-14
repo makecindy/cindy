@@ -156,6 +156,17 @@ describe('DesktopSessionStorage.create remoteHostId 规范化', () => {
   });
 });
 
+// Unit regression: provider identity must share the task INSERT; a later failing
+// update must not leave provider_id NULL for a successfully created task.
+describe('DesktopSessionStorage.create provider identity', () => {
+  it.each(['xd', null, undefined])('inserts provider %s with the task', async providerId => {
+    const storage = new DesktopSessionStorage();
+    await storage.create({ id: 'provider-create', title: 'New task', workDir: '/repo',
+      agentKind: 'codex', model: 'gpt-6-sol', providerId });
+    expect(h.captured?.providerId).toBe(providerId ?? null);
+  });
+});
+
 describe('DesktopSessionStorage.create initial plan mode', () => {
   beforeEach(() => {
     h.captured = null;
