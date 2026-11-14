@@ -24,12 +24,20 @@ export interface RelayMediaStorage {
   remove(id: string): Promise<void>;
   /**
    * Present when clients can reach the storage themselves: the relay authorizes each request, and the bytes no
-   * longer pass through it. Every request is bound to one object and expires within minutes.
+   * longer pass through it. Every request is bound to one object and expires within DIRECT_GRANT_MAX_MS.
    */
   direct?: RelayDirectMedia;
 }
+/**
+ * Longest a direct request may stay valid. With direct storage the relay keeps a removed or expired upload's record
+ * this much longer, so a write granted before the removal that lands afterwards is removed with it.
+ */
+export const DIRECT_GRANT_MAX_MS = 10 * 60_000;
 export interface RelayDirectMedia {
-  /** Appends exactly the chunk whose MD5 (base64) is `contentMd5`, at `offset`. */
+  /**
+   * Appends exactly the chunk of `size` bytes whose MD5 (base64) is `contentMd5`, at `offset`: the storage must
+   * refuse any other body, length or position, since the relay checks the size against the upload and its quota.
+   */
   append(id: string, offset: number, size: number, contentMd5: string): Promise<DirectMediaRequest>;
   /** Range reads of the complete object. */
   read(id: string): Promise<DirectMediaRequest>;

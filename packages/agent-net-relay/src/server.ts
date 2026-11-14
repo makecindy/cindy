@@ -22,8 +22,8 @@ import type { DelegationRequest } from '@cindy/agent-net-protocol';
 import { AppError as SharingError } from '@cindy/device-link-sharing/errors';
 import { createAgentNetSharing, type AgentNetSharingOptions } from './sharing.js';
 import { DatagramSendQueue } from './datagramQueue.js';
-import { MEDIA_TRANSFER_DIRECT, MEDIA_TRANSFER_HEADER } from '@cindy/agent-net-protocol';
-import { createLocalMediaStorage, guardMediaStorage, RelayMediaStorageError, RelayMediaStorageUnavailableError, type RelayMediaStorage } from './mediaStorage.js';
+import { MEDIA_TRANSFER_DIRECT, MEDIA_TRANSFER_HEADER, type DirectMediaRequest } from '@cindy/agent-net-protocol';
+import { createLocalMediaStorage, DIRECT_GRANT_MAX_MS, guardMediaStorage, RelayMediaStorageError, RelayMediaStorageUnavailableError, type RelayMediaStorage } from './mediaStorage.js';
 import { agentNetInvitationAsset } from '@cindy/device-link-sharing/pages';
 
 export class AgentNetError extends Error {
@@ -877,7 +877,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
           if (stored < item.received) return fail(409, 'MEDIA_DATA_MISSING');
           if (stored > item.size) {
             await storage.remove(media[1]);
-            await store.transaction((state) => { delete state.networks[n.id].media[media[1]]; });
+            await store.transaction((state) => { retireMedia(state.networks[n.id], media[1]); });
             return fail(409, 'MEDIA_SIZE_MISMATCH');
           }
           if (stored !== item.received) await store.transaction((state) => { state.networks[n.id].media[media[1]].received = stored; });
@@ -887,13 +887,13 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
           if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_MEDIA_BINARY_CHUNK_BYTES
             || typeof md5 !== 'string' || !/^[A-Za-z0-9+/]{22}==$/.test(md5)) return fail(400, 'MEDIA_CHUNK_INVALID');
           if (!Number.isSafeInteger(offset) || offset !== stored || stored + size > item.size) return fail(409, 'MEDIA_OFFSET_MISMATCH');
-          return writeJson(res, 200, { request: await storage.direct.append(media[1], offset, size, md5) });
+          return writeJson(res, 200, { request: boundedGrant(await storage.direct.append(media[1], offset, size, md5)) });
         }
         if (method === 'GET') {
           if (item.received !== item.size) return fail(409, 'MEDIA_INCOMPLETE');
           // A client that can reach the storage reads the ciphertext there; the relay only authorizes the read.
           if (storage.direct && req.headers[MEDIA_TRANSFER_HEADER] === MEDIA_TRANSFER_DIRECT) {
-            const request = await storage.direct.read(media[1]);
+            const request = boundedGrant(await storage.direct.read(media[1]));
             res.setHeader(MEDIA_TRANSFER_HEADER, MEDIA_TRANSFER_DIRECT);
             return writeJson(res, 200, { transfer: MEDIA_TRANSFER_DIRECT, size: item.size, request });
           }
@@ -906,13 +906,15 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
             else { start = Number(match[1]); if (match[2]) end = Math.min(end, Number(match[2])); }
             if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= item.size) return fail(416, 'INVALID_MEDIA_RANGE');
           }
+          // Open the stream first: a storage failure must still be answered with a 503, impossible once headers are out.
+          const stream = await storage.read(media[1], start, end);
           res.writeHead(range ? 206 : 200, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store',
             'accept-ranges': 'bytes', 'content-length': end - start + 1, ...(range ? { 'content-range': 'bytes ' + start + '-' + end + '/' + item.size } : {}) });
-          await pipeline(await storage.read(media[1], start, end), res); return;
+          await pipeline(stream, res); return;
         }
         if (method === 'DELETE') {
           await storage.remove(media[1]);
-          await store.transaction((state) => { delete state.networks[n.id].media[media[1]]; });
+          await store.transaction((state) => { retireMedia(state.networks[n.id], media[1]); });
           return writeJson(res, 200, { deleted: true });
         }
         if (method !== 'PUT') return fail(405, 'METHOD_NOT_ALLOWED');
@@ -939,6 +941,21 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     const networkId = routingNetwork(req);
     const owner = networkId === undefined ? undefined : ownerOf(networkId);
     return owner && owner.id !== cluster.replicaId ? owner : undefined;
+  }
+  /**
+   * A direct write granted before a removal can still land and recreate the object. With direct storage a removed
+   * upload therefore stays as an expired record (it reads as gone and counts against no quota) until every grant
+   * has lapsed, and the expiry sweep, which waits as long, removes the object again.
+   */
+  const retainExpiredMs = storage.direct ? DIRECT_GRANT_MAX_MS : 0;
+  function retireMedia(network: NetworkRecord, id: string): void {
+    const item = network.media[id];
+    if (!item) return;
+    if (retainExpiredMs) item.expiresAt = Math.min(item.expiresAt, now()); else delete network.media[id];
+  }
+  function boundedGrant(request: DirectMediaRequest): DirectMediaRequest {
+    if (!(request.expiresAt <= now() + DIRECT_GRANT_MAX_MS)) throw new RelayMediaStorageUnavailableError('DIRECT_GRANT_TOO_LONG');
+    return request;
   }
   let stateWarnedAt = -Infinity, storageWarnedAt = -Infinity;
   function storageUnavailable(): void {
@@ -1119,10 +1136,10 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     // Replicas share state; each cleans only the networks it owns.
     const ownedIds = store instanceof ClusterStore ? store.networkIds().filter(owns) : undefined;
     const swept = ownedIds ? ownedIds.flatMap(id => store.network(id) ?? []) : store.networks();
-    for (const n of swept) for (const [id, upload] of Object.entries(n.media)) if (upload.expiresAt <= at) {
+    for (const n of swept) for (const [id, upload] of Object.entries(n.media)) if (upload.expiresAt + retainExpiredMs <= at) {
       void mediaOperation(n.id, id, async () => {
         const current = store.network(n.id)?.media[id];
-        if (!current || current.expiresAt > now()) return;
+        if (!current || current.expiresAt + retainExpiredMs > now()) return;
         await storage.remove(id);
         await store.transaction((state) => { if (state.networks[n.id]) delete state.networks[n.id].media[id]; });
       }).catch(() => logger.error({}, 'agent-net media cleanup failed'));
