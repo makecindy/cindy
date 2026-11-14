@@ -76,6 +76,7 @@ const OS_ENV_KEYS = new Set([
   'corepack_enable_auto_pin',
   'corepack_enable_download_prompt',
   'npm_config_manage_package_manager_versions',
+  'pnpm_config_manage_package_manager_versions',
   'npm_config_managepackagemanagerversions',
   'pnpm_manage_package_manager_versions',
 ]);
