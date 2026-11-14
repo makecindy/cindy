@@ -244,6 +244,12 @@
     "emergencyLaunchYes": "是（此次執行內熱更不能生效）",
     "otaVersion": "熱更版本"
   },
+  "feedback": {
+    "sectionTitle": "問題回饋",
+    "label": "何處提交",
+    "value": "於電腦端輸入 /issue",
+    "hint": "回饋由電腦端之 Cindy 理為 Issue。於彼機任務中輸入 /issue；理畢後，確認卡亦現於手機，可於此確認提交。"
+  },
   "legal": {
     "sectionTitle": "備案資訊",
     "privacyPolicy": "隱私政策",

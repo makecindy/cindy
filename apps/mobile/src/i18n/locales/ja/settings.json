@@ -244,6 +244,12 @@
     "emergencyLaunchYes": "はい（この起動では OTA を適用できません）",
     "otaVersion": "OTA バージョン"
   },
+  "feedback": {
+    "sectionTitle": "フィードバック",
+    "label": "送信方法",
+    "value": "パソコンで /issue を入力",
+    "hint": "パソコン側の Cindy がフィードバックを Issue にまとめます。パソコンのタスクで /issue と入力すると、確認カードがこのスマートフォンにも届き、ここで確認して送信できます。"
+  },
   "legal": {
     "sectionTitle": "法的情報",
     "privacyPolicy": "プライバシーポリシー",

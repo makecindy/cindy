@@ -244,6 +244,12 @@
     "emergencyLaunchYes": "Sim (a OTA não pode ser aplicada nesta execução)",
     "otaVersion": "Versão OTA"
   },
+  "feedback": {
+    "sectionTitle": "Feedback",
+    "label": "Onde enviar",
+    "value": "/issue no computador",
+    "hint": "O Cindy no computador transforma o feedback em um Issue. Digite /issue em uma tarefa lá; o cartão de confirmação também aparece neste celular, onde você pode confirmá-lo."
+  },
   "legal": {
     "sectionTitle": "Informações legais",
     "privacyPolicy": "Política de Privacidade",
