@@ -993,6 +993,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // peer ACK 耗尽时，幂等的 local-db 读请求交给 linkRecovery 快速重开并只重试一次；
     // 写请求与长执行请求保持原有 in-flight 语义，避免重复副作用。
     peerResetReadRetry: true,
+    // A silent execution computer must not reconnect every controller sharing this relay.
+    // The reset listener below reuses the authorized, per-peer reopen loop.
+    peerFailurePolicy: 'isolate-outbound',
     // debug 日志开启时按 channel 统计回包字节，作为流量治理前后的对照。
     invokeMetrics: desktopInvokeTransferMetrics,
   };
@@ -1172,6 +1175,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
   client.onPeerTransportReset(({ deviceId }) => {
     invalidatePluginOauth(deviceId);
+    if (hasOutboundControlIntent(deviceId)) {
+      transportTimeoutReopen.trigger(deviceId);
+      return;
+    }
     // Mutual control shares one peer link: a locally exhausted inbound stream
     // also invalidates this Desktop's remote view, without reopening other peers.
     broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId });

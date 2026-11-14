@@ -356,6 +356,8 @@ export interface DeviceLinkClientOptions {
    * - `isolate-peer`:只复位该 peer 并通过 `onPeerTransportReset` 通知 host
    *   使用既有 `link-open` 恢复；不关闭共享 WSS,也不发送旧对端不理解的新
    *   wire 值。仅适合能独立重开每个出站 peer 的纯控制端(当前为 Mobile)。
+   * - `isolate-outbound`:Desktop 的双向连接只隔离纯出站 peer；入站旧控制端
+   *   未声明瞬时重置能力时仍沿用兼容重连。host 必须处理 reset 事件并按原授权重开。
    *
    * 这是 additive、host opt-in 的本地策略；Desktop 不传时行为完全不变。
    */
@@ -388,7 +390,7 @@ export interface DeviceLinkClientOptions {
   timing?: Partial<DeviceLinkTiming>;
 }
 
-export type DeviceLinkPeerFailurePolicy = 'legacy' | 'isolate-peer';
+export type DeviceLinkPeerFailurePolicy = 'legacy' | 'isolate-peer' | 'isolate-outbound';
 
 export interface DeviceLinkTiming {
   reconnectBaseMs: number;
@@ -6340,9 +6342,9 @@ export class DeviceLinkClient {
    *     触发 rehydrate,desktop 控制端重新 openLink;真休眠的对端收不到
    *     该帧,唤醒后自会 rehydrate → link-open。
    * - 出站发起的 link(本机是控制端):默认维持原语义——整连接重连兼作恢复
-   *   探测；Mobile 可显式选择 `peerFailurePolicy='isolate-peer'`,改为只复位
-   *   该 peer 并通知 host 独立 openLink。该路径不发任何新 wire 值,所以目标
-   *   Desktop 无需同步升级。
+   *   探测；Mobile 的 isolate-peer 与 Desktop 的 isolate-outbound 策略只复位
+   *   该 peer 并通知 host 独立 openLink，不发新 wire 值。Desktop 双向 peer
+   *   上的旧入站控制端仍需兼容重连，不能仅凭本机能重开出站方向丢掉其恢复入口。
    */
   private handleReliableRetryExhausted(dst: string, seq: number): void {
     if (this.stopped || this.status !== 'online') return;
@@ -6350,7 +6352,7 @@ export class DeviceLinkClient {
     // retry callback 与显式 close/stop 竞态时 peer 可能已经被回收。Mobile 的
     // 隔离策略不能把迟到计时器升级成连接级重建；默认策略仍保留历史语义。
     if (!peer) {
-      if (this.opts.peerFailurePolicy !== 'isolate-peer') {
+      if (!this.opts.peerFailurePolicy || this.opts.peerFailurePolicy === 'legacy') {
         this.forceReconnectForReliableTimeout(dst, seq);
       }
       return;
@@ -6358,9 +6360,11 @@ export class DeviceLinkClient {
     // 能力门:旧控制端(未声明 transport-timeout-close-v1)把未知 reason 当永久
     // 关闭且不会自动重开——relay/presence 保持在线时订阅与在途请求会静默挂死。
     // 对这类对端保留整连接重连的兼容恢复路径(presence 闪断触发其既有 rehydrate)。
+    const isolatePeer = this.opts.peerFailurePolicy === 'isolate-peer'
+      || (this.opts.peerFailurePolicy === 'isolate-outbound' && !peer.linkAcceptedInbound);
     if (
       (!peer.linkAcceptedInbound || !peer.supportsTransportTimeoutClose)
-      && this.opts.peerFailurePolicy !== 'isolate-peer'
+      && !isolatePeer
     ) {
       this.forceReconnectForReliableTimeout(dst, seq);
       return;

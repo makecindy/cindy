@@ -2686,9 +2686,9 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('Mobile opt-in:出站 peer ACK 超时只复位该 peer,旧 Desktop 可用既有 link-open 恢复且邻居零感知', async () => {
+  it.each(['isolate-peer', 'isolate-outbound'] as const)('%s:出站 peer ACK 超时只复位该 peer,旧 Desktop 可用既有 link-open 恢复且邻居零感知', async (peerFailurePolicy) => {
     const h = makeHarness({
-      peerFailurePolicy: 'isolate-peer',
+      peerFailurePolicy,
       timing: {
         pingIntervalMs: 60_000,
         requestTimeoutMs: 60_000,
@@ -2835,6 +2835,69 @@ describe('DeviceLinkClient', () => {
     });
     await expect(brokenRequest).resolves.toMatchObject({ ok: true, result: ['recovered'] });
     h.client.stop();
+  });
+
+  // Regression: Desktop's pure outbound timeout used to disconnect the shared relay
+  // before checking healthy inbound controllers. Unit tier; fake time/socket, real
+  // openLink/invoke/reset/replay. The two-peer test above did not cover mixed 1:N roles.
+  it('recovers 80 outbound peers without interrupting healthy inbound controllers', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ peerFailurePolicy: 'isolate-outbound', timing: {
+      pingIntervalMs: 600_000, requestTimeoutMs: 60_000,
+      transportRetryIntervalMs: 5, transportMaxRetryAttempts: 2,
+    } });
+    const resets: string[] = [];
+    h.client.onPeerTransportReset(({ deviceId }) => resets.push(deviceId));
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const socket = h.current();
+      for (const controller of ['controller-a', 'controller-b']) {
+        const linked = establishInboundReliableLink(h, `${controller}-stream`, 1, controller);
+        await vi.advanceTimersByTimeAsync(0); await linked;
+      }
+      const open = async (deviceId: string) => {
+        const linked = h.client.openLink(deviceId, { controllerName: 'Desktop', protocolVersion: 1, appVersion: '1' });
+        const frame = socket.sent.at(-1)!;
+        socket.push({ v: 1, kind: 'link-accept', src: deviceId, id: frame.id, payload: {
+          appVersion: '1', allowlistHash: 'hash', capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+          transportStreamId: `${deviceId}-stream`,
+        } });
+        await linked;
+      };
+      const ids = Array.from({ length: 80 }, (_, i) => `executor-${i}`);
+      for (const id of ids) await open(id);
+      const requests = ids.map(id => h.client.invoke(id, { channel: 'maker:remote-agent:v1', args: [] }, 60_000));
+      for (const request of requests) void request.catch(() => {});
+      const frames = ids.map(id => socket.sent.find(e => e.kind === 'invoke' && e.dst === id)!);
+      const healthy = h.client.invoke('controller-a', { channel: 'local-db:sessions:list', args: [] }, 60_000);
+      void healthy.catch(() => {});
+      const healthyFrame = socket.sent.at(-1)!;
+      const healthyMeta = parseTransportPayload(healthyFrame.payload)!.meta;
+      socket.push({ v: 1, kind: 'push', src: 'controller-a', payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: healthyMeta.streamId, ackSeq: healthyMeta.seq } } });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(new Set(resets)).toEqual(new Set(ids));
+      expect(resets).toHaveLength(80);
+      expect(socket.terminated).toBe(false);
+      expect(socket.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+      expect(h.client.isLinkReady('controller-a')).toBe(true);
+      expect(h.client.isLinkReady('controller-b')).toBe(true);
+      for (const [index, id] of ids.entries()) {
+        const before = socket.sent.length;
+        await open(id);
+        const original = frames[index];
+        const meta = parseTransportPayload(original.payload)!.meta;
+        expect(socket.sent.slice(before).some(e => e.id === original.id && parseTransportPayload(e.payload)?.meta.seq === meta.seq)).toBe(true);
+        socket.push({ v: 1, kind: 'push', src: id, payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: meta.streamId, ackSeq: meta.seq } } });
+        socket.push({ v: 1, kind: 'invoke-result', src: id, id: original.id, payload: { ok: true, result: id } });
+      }
+      await expect(Promise.all(requests)).resolves.toEqual(ids.map(id => ({ ok: true, result: id })));
+      socket.push({ v: 1, kind: 'invoke-result', src: 'controller-a', id: healthyFrame.id, payload: { ok: true, result: 'healthy' } });
+      await expect(healthy).resolves.toEqual({ ok: true, result: 'healthy' });
+      expect(h.sockets).toHaveLength(1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
   it.each([16, 300 * 1024])('≥2 控制端共享同一被控端:停止 ACK 的 %i 字节响应只复位该 peer,邻居零感知', async (bytes) => {
@@ -3475,8 +3538,9 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('旧控制端(未声明 transport-timeout-close-v1)重试耗尽回退整连接重连,不发新 reason', async () => {
+  it.each(['legacy', 'isolate-outbound'] as const)('%s:旧控制端(未声明 transport-timeout-close-v1)重试耗尽回退整连接重连,不发新 reason', async (peerFailurePolicy) => {
     const h = makeHarness({
+      peerFailurePolicy,
       timing: {
         pingIntervalMs: 1_000,
         reconnectBaseMs: 5,
