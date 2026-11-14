@@ -1,4 +1,4 @@
-import type { MediaCapability, ProviderVideoApi } from '@cindy/model-providers';
+import type { AgentKind, MediaCapability, ProviderVideoApi } from '@cindy/model-providers';
 import type { ImageParameters, ImageProtocol } from './imageParameters.js';
 import { supportsMediaCapability } from './mediaCapabilities.js';
 
@@ -11,6 +11,9 @@ export interface ProviderMediaRuntimeModel {
   officialDocs?: string;
   imageProtocol?: ImageProtocol;
   videoProtocol?: ProviderVideoApi;
+  guideDriven?: boolean;
+  sourceAgent?: AgentKind;
+  sourceAgents?: AgentKind[];
 }
 
 export interface ProviderVideoConnection {
@@ -39,8 +42,11 @@ export type ProviderMediaRuntimeResult = {
 } | { url: string };
 
 interface ProviderMediaRuntime {
-  listModels(): ProviderMediaRuntimeModel[];
-  listVideoModels?(): ProviderMediaRuntimeModel[];
+  guideScope?(target: { providerId: string; agent: AgentKind; modelId: string }): string | null;
+  guideProtocol?(target: { providerId: string; agent: AgentKind; modelId: string }): string | undefined;
+  resolveHttpConnection?(providerId: string, modelId: string, capability: MediaCapability, agent: AgentKind): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null>;
+  listModels(capabilities?: readonly MediaCapability[]): ProviderMediaRuntimeModel[];
+  listVideoModels?(capabilities?: readonly MediaCapability[]): ProviderMediaRuntimeModel[];
   /** Settings readiness; must include hidden models so the display switch stays togglable. */
   listExecutableModels?(): ProviderMediaRuntimeModel[];
   listExecutableVideoModels?(): ProviderMediaRuntimeModel[];
@@ -50,14 +56,40 @@ interface ProviderMediaRuntime {
 
 let runtime: ProviderMediaRuntime | null = null;
 
+export function providerMediaGuideScope(target: { providerId: string; agent: AgentKind; modelId: string }): string | null {
+  return runtime?.guideScope?.(target) ?? null;
+}
+
+export function providerMediaGuideProtocol(target: { providerId: string; agent: AgentKind; modelId: string }): string | undefined {
+  return runtime?.guideProtocol?.(target);
+}
+
+/** Compare normalized URLs before attaching a connection's managed credentials. */
+export function isMediaUrlWithinBase(url: string, baseUrl: string): boolean {
+  try {
+    const base = new URL(baseUrl);
+    const resolved = new URL(url);
+    const prefix = base.pathname.replace(/\/+$/, '');
+    return resolved.origin === base.origin &&
+      (resolved.pathname === prefix || resolved.pathname.startsWith(`${prefix}/`)) &&
+      (!prefix || !decodeURIComponent(resolved.pathname).split(/[\\/]/).some(segment => segment === '.' || segment === '..'));
+  } catch {
+    return false;
+  }
+}
+
+export function resolveProviderHttpConnection(providerId: string, modelId: string, capability: MediaCapability, agent: AgentKind) {
+  return runtime?.resolveHttpConnection?.(providerId, modelId, capability, agent) ?? null;
+}
+
 export function configureProviderMediaRuntime(next: ProviderMediaRuntime): void {
   runtime = next;
 }
 
-export function listProviderMediaModels(): ProviderMediaRuntimeModel[] {
+export function listProviderMediaModels(capabilities: readonly MediaCapability[] = []): ProviderMediaRuntimeModel[] {
   return [
-    ...(runtime?.listModels() ?? []),
-    ...(runtime?.listVideoModels?.().filter(model => model.videoProtocol) ?? []),
+    ...(runtime?.listModels(capabilities) ?? []),
+    ...(runtime?.listVideoModels?.(capabilities).filter(model => model.videoProtocol || model.guideDriven) ?? []),
   ];
 }
 
@@ -79,7 +111,7 @@ export function resolveProviderMediaModel(
   capability: MediaCapability,
 ): ProviderMediaRuntimeModel | null {
   return (
-    listProviderMediaModels().find(
+    listProviderMediaModels([capability]).find(
       (model) =>
         model.providerId === providerId &&
         model.id === modelId &&

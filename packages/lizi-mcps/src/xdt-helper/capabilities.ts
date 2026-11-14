@@ -78,6 +78,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       'list_app_settings 列出当前已接通的分类和操作；get_app_settings 返回当前值与严格 schema；update_app_settings 只提交要改的字段；reset_app_settings 只对声明支持恢复默认的分类可用。结果说明仅本机及生效时点，不把保存成功说成所有在途任务都已切换。',
       'get_app_default_model / set_app_default_model 管新任务默认；list_model_providers 包含关闭的型号和完整供应商；get_model_configuration / set_model_configuration 管单模型高级参数；configure_model_provider 管名称、顺序、开关和重新发现。当前任务换模型继续使用 control 类的 set_session_runtime。',
       'configure_model_connection 直接添加 API 供应商、通过加密代输入填写密钥、获取与设置型号及测试已保存连接，无需 Computer Use。保存和实际推理验证分别返回；凭证只交给宿主，不进对话。',
+      '自带图片/视频模型先用 configure_model_connection 的 setModels/setRuntime 声明 mode 和 modalities；manage_media_guide 每次按需获取，自定义优先，官方后备。缺失时据用户资料生成并 validate/save，不存在加载或重载。实际生成仍用正式媒体工具并走当前任务权限，不能用 shell/raw HTTP 绕过；媒体交付前不宣称接入验证成功。',
       'SSH 使用 cindy_ssh 的 ssh_list_hosts / ssh_update_host / ssh_remove_host；改显示名只传 id 和 displayName，不用桌面点击，也不改系统 hostname。',
       '没有一个额外的“AI 全开”设置。已提供的操作沿用任务权限、账号归属及群成员/共享访客规则；缺接口不能靠提高权限获得。此入口不提供任意 IPC、文件键值写入、密钥回读或当前任务自行提权。需要账号登录、密钥或原生系统授权时，仍使用 Cindy 的安全输入和授权流程。',
     ].join(' '),
@@ -331,10 +332,10 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
   {
     key: 'ai-art',
     title: 'AI 绘画 / 视频生成(media 工具)',
-    oneLiner: 'agent 通过 cindy 网关的 media 工具做文生图、改图、文生视频、图生视频,也用它把已有图片交付给用户。',
+    oneLiner: 'agent 通过 Cindy Core 的 media 工具调用 Cindy AI 或用户自带连接做文生图、改图、文生视频、图生视频,也用它交付已有图片。',
     detail: [
-      '旧 lizi_art 的 image_generate / video_generate 等工具已不再提供。现在统一走 cindy 网关的 media 工具:list_models 查当前账号可用的生图 / 视频模型(能力 image.generate / image.edit / video.generate / video.image_to_video),prepare → request 发起生成,异步任务按 recommended_poll_after_ms 调 poll。',
-      '可用模型取决于当前账号的模型权限,不要猜模型名;prepare 返回的 invocation_id 是一次性付费令牌,超时或结果未知时不要自动重提以免重复扣费。',
+      '旧 lizi_art 的 image_generate / video_generate 等工具已不再提供。统一走 Cindy Core 的 media 工具:list_models 查当前连接已声明的生图 / 视频模型(能力 image.generate / image.edit / video.generate / video.image_to_video),prepare → request 发起生成,异步任务按 recommended_poll_after_ms 调 poll。自带模型不要求开启 Cindy AI；空清单时先核对供应商停用状态及实际 runtime 的媒体声明，缺 Guide 时通过 manage_media_guide 补齐。',
+      '不要猜模型名或实际连接；prepare 固定 Guide 快照。原调用已付费但 Guide 解析不适配时，补好 Guide，重新 prepare 并传 source_invocation_id 复用原回执，随后直接 request/poll；所有配置、调用和文件交接仍走当前任务权限，不得自动重新生成。',
       '结果是 cindy-media:// / xdt-image:// / xdt-video:// 受管地址,在回复里直接嵌入展示一次即可,手机端也能看;把已有截图或本地图片发给用户用 import_image。生成结果不自动附图给模型,是否查看图片或视频由 Agent 按任务需要决定。需要查看、抽帧或分析媒体时可主动用 resolve_local_path 按当前权限取得 Host 本机路径,再自行选择已有工具;无需用户先问存储位置,也不要把 Host 路径当作 SSH 工作区路径。',
     ].join(' '),
   },

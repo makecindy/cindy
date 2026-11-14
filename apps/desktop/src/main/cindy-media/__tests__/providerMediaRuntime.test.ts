@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   configureProviderMediaRuntime,
   listProviderMediaModels,
@@ -23,6 +23,16 @@ const hidden = {
 };
 
 describe('provider media runtime display switch', () => {
+  it('passes the requested capability to image and video source discovery', () => {
+    const listModels = vi.fn(() => [visible]);
+    const listVideoModels = vi.fn(() => []);
+    configureProviderMediaRuntime({ listModels, listVideoModels,
+      invoke: async () => ({ buffer: Buffer.alloc(0), mimeType: 'image/png' }) });
+    expect(resolveProviderMediaModel(visible.providerId, visible.id, 'image.edit')).toEqual(visible);
+    expect(listModels).toHaveBeenCalledExactlyOnceWith(['image.edit']);
+    expect(listVideoModels).toHaveBeenCalledExactlyOnceWith(['image.edit']);
+  });
+
   it('Art listModels hides display-off models; settings readiness still sees them', () => {
     configureProviderMediaRuntime({
       listModels: () => [visible],

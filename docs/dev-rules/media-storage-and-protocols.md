@@ -240,17 +240,46 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 
 ## 媒体调用说明与执行绑定
 
-- 图片、视频的新调用说明统一从 Server 读取。Guide 只描述请求、参数、响应与轮询协议；
+- 图片、视频的公开调用说明从 Server 读取；用户自带连接可保存账号隔离的自定义 Guide。
+  每次需要时获取，自定义优先、官方后备，没有加载或重载步骤。Guide 只描述请求、参数、响应与轮询协议；
   provider、实际地址、Key、连接摘要、模型可见性和额度归连接与执行上下文。
 - 客户端按完整 `modelId` 及连接已有的接口格式读取公开资料，不发送账号 token、Key、
-  base URL 或连接摘要。协议说明不可用时不在本地生成 Guide，也不发出付费请求。
+  base URL 或连接摘要。缺少说明时，当前 Agent 根据用户提供的文档、cURL、示例或提示生成
+  候选，通过 `manage_media_guide` 的 get/validate/save 获取、校验和保存；Host 不隐藏调用 LLM。
+  目录呈现用户声明的媒体模型，prepare 时才按需获取说明，不逐模型预判接口是否适配。
   客户端根据本地来源绑定现有图片适配器、视频执行器或网关，不按 Server 的 `guideId` 分派。
 - `prepare` 在既有 `guide_json` 中保存选定 operation 及独立的 `binding`；`revision` 表示
-  Server 协议版本，视频 `binding.connectionRevision` 表示本地连接摘要。地址、Key 或来源
+  协议版本，自定义 HTTP 绑定同时保存 Guide 来源与 sourceAgent；视频/HTTP 的
+  `binding.connectionRevision` 表示本地连接摘要。地址、Key 或来源
   变化继续按原摘要校验，已付费任务的查询与下载不要求重新读取 Server Guide。
+- HTTP Guide 提错任务编号、状态或结果字段时，补齐 Guide 并重新 `prepare`，传入
+  `source_invocation_id` 将原付费调用的回执绑定新快照；原 `guide_json` 不变。要求同账号、
+  provider、模型、能力、sourceAgent 与连接摘要，且原 request/poll 当前不在执行。
+  prepare 原子保存为已有结果/任务的 pending，不能再次生成；不访问上游，返回后直接
+  依 `next_action` 走现有 request/poll、权限和入仓流程，没有独立恢复动作。
+  原回执缺失时说明无法恢复，不自动重提。Guide 不能提供凭证；Google/Anthropic 鉴权头复用实际连接
+  （含型号覆盖）的协议与所选 runtime 的托管 Key。
+- 声明式 HTTP 的提交回执和最近轮询回执保存在账号数据库已有的 `response_json`，以
+  `__cindyMediaReceipt` 区分未完成回执与已生成结果；旧的直接结果 JSON 继续可读，不改物理 schema。
+  未完成回执仍占在途名额并按原 TTL 清理；待交付结果沿用原恢复保留规则。
+  回执不进入 Guide、日志或 Agent 输出。每次 poll 至多更新一份回执，内容未变不重复写入。
 - 升级时只解码旧快照的 `connection` 和旧视频 revision，不请求时重写历史记录，不改数据库
-  物理 schema。旧 Guide ID 仅用于解码既有记录，不参与新调用选择。Server 须先支持公开协议读取，
-  已发布客户端继续使用旧接口投影。
+  物理 schema。旧 Guide ID 仅用于解码既有记录，不参与新调用选择。复用 Server 已有的公开协议读取接口，
+  不新增服务端协议或要求配套发布。
+- 自定义 Guide 的唯一写入者是模型配置域，按账号及实际 provider/runtime/model 保存；
+  保存需核对旧 revision 和当前任务权限，失败保留原定义。官方默认不复制进本地覆盖。
+  Guide 可不注入 body model，URL 用 `{model}` 引用型号；资料来源只以 `evidence.kind` 记录
+  `documentation/curl/prompt` 类型，不保存资料原文或凭据，不伪造 `officialDocs`。
+- 原生 HTTP 执行复用现有提交、轮询、结果保存及下载入仓流程。请求 path 相对实际连接基址，
+  原样拼接；标准 URL 归一化后的 origin 与路径段范围仍须位于该连接基址内，
+  生成、轮询与原任务内容读取共用范围检查。不得自动删除前缀、去重路径或转换参数；
+  不适配时由 Agent 根据资料补本地 Guide。
+  Guide 不能改 host 或凭证。
+  公开来源只决定说明，不改变 provider、runtime、账号或计费。新说明只影响新的 prepare。
+- Core 返回 HTTP 状态、脱敏上游错误及提交/任务状态等事实；Agent 通过工具提示判断是否
+  调整参数、处理连接、尝试官方或请用户补资料，不新增业务错误分类和自动后备重试。
+  所有调用继续走 Ask/Auto/完全访问权限；结果未知、pending 或已生成未交付时恢复原任务，
+  不能靠换 Guide、新 invocation、脚本或原始 HTTP 重复生成或绕过权限。
 - 存量插件的 `cindy-request` 图片、视频接口保留原参数与返回格式。Host 完成原有权限、配额、
   参考图归属与账号校验后，把旧参数转换为 Server operation 的输入，直接调用已有
   `callCindyMedia` 的 `prepare/request/poll`，不另起 Agent 或媒体执行链，也不按 Guide ID 筛选。

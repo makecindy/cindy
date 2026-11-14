@@ -1,11 +1,30 @@
-import { isLoopbackProviderUrl, type AgentKind, type Provider, type ProviderVideoApi } from '@cindy/model-providers';
+import { isLoopbackProviderUrl, type AgentKind, type MediaCapability, type Provider, type ProviderMediaModel, type ProviderVideoApi } from '@cindy/model-providers';
 import { withProviderAppAttribution } from '../maker-host/provider-app-attribution.js';
+import { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
 
 export interface CustomMediaConnection { agent: AgentKind; baseUrl: string; headers: Record<string, string>; videoApi?: ProviderVideoApi; }
 export interface CustomMediaConnectionOptions { getProvider(): Provider | undefined; readApiKey(agent: AgentKind): string | null; isOwnerBoundaryPending(): boolean; }
 
+export function customMediaAgents(provider: Provider, model: ProviderMediaModel, capabilities: readonly MediaCapability[] = []): AgentKind[] {
+  return (model.sourceAgents ?? (model.sourceAgent ? [model.sourceAgent] : [])).filter(agent => {
+    const route = provider.routing[agent];
+    const member = provider.models[agent]?.find(candidate => candidate.id === model.id && candidate.mode === model.mode);
+    return !!route && !route.disabled && !!member && !member.disabled &&
+      capabilities.every(capability => supportsMediaCapability(member.modalities ?? {
+        input: ['text'], output: [model.mode === 'image_generation' ? 'image' : 'video'],
+      }, capability));
+  });
+}
+
+export function customMediaGuideProtocol(provider: Provider | undefined, modelId: string, agent: AgentKind): string | undefined {
+  const route = provider?.routing[agent];
+  const mode = provider?.models[agent]?.find(model => model.id === modelId)?.mode;
+  if (mode === 'image_generation') return route?.imageApi === 'openai-images' ? 'openai' : undefined;
+  return mode === 'video_generation' ? route?.videoApi : undefined;
+}
+
 /** Preserve gateway path prefixes, accepting either an API origin or a /v1 base. */
-function mediaBaseUrl(raw: string): string | null {
+function mediaBaseUrl(raw: string, preservePath = false): string | null {
   try {
     const url = new URL(raw);
     if (
@@ -17,7 +36,7 @@ function mediaBaseUrl(raw: string): string | null {
     )
       return null;
     const path = url.pathname.replace(/\/+$/, '');
-    url.pathname = path.endsWith('/v1') ? path : `${path}/v1`;
+    url.pathname = preservePath || path.endsWith('/v1') ? path : `${path}/v1`;
     return url.toString().replace(/\/+$/, '');
   } catch {
     return null;
@@ -39,27 +58,31 @@ export function resolveCustomMediaConnection(
   opts: CustomMediaConnectionOptions,
   modelId: string,
   kind: 'image' | 'video' = 'image',
+  selection?: { guideDriven: true; agent: AgentKind },
 ): CustomMediaConnection | null {
   const provider = opts.getProvider();
-  if (opts.isOwnerBoundaryPending() || !provider || !(kind === 'image' ? isCustomImageProvider(provider) : isCustomVideoProvider(provider))) return null;
+  if (opts.isOwnerBoundaryPending() || !provider) return null;
+  if (selection ? provider.source !== 'user' || !!provider.auth.native || !['apiKey', 'none'].includes(provider.auth.method)
+    : !(kind === 'image' ? isCustomImageProvider(provider) : isCustomVideoProvider(provider))) return null;
   const media = (kind === 'image' ? provider.imageModels : provider.videoModels)?.find((model) => model.id === modelId);
   // Never borrow another runtime's credentials when the model's own route is missing.
-  const agent = media?.sourceAgent;
+  const agent = selection?.agent ?? media?.sourceAgent;
   if (!agent) return null;
   const route = provider.routing[agent];
   const model = provider.models[agent]?.find((model) => model.id === modelId);
   if (
     !route ||
     route.disabled ||
-    (kind === 'image' ? route.imageApi !== 'openai-images' : !route.videoApi) ||
+    (!selection && (kind === 'image' ? route.imageApi !== 'openai-images' : !route.videoApi)) ||
     !model ||
+    (selection && model.mode !== (kind === 'image' ? 'image_generation' : 'video_generation')) ||
     route.headerOverrideState === 'unknown'
   )
     return null;
   const upstream = model.route?.baseUrl ?? route.upstream;
-  const v1BaseUrl = mediaBaseUrl(upstream);
+  const v1BaseUrl = mediaBaseUrl(upstream, !!selection);
   // MiniMax video paths are versioned at the API root (/v2/...), not under /v1.
-  const baseUrl = kind === 'video' && route.videoApi === 'minimax-videos' ? v1BaseUrl?.replace(/\/v1$/, '') : v1BaseUrl;
+  const baseUrl = !selection && kind === 'video' && route.videoApi === 'minimax-videos' ? v1BaseUrl?.replace(/\/v1$/, '') : v1BaseUrl;
   if (!baseUrl || !mediaBaseUrl(route.upstream)) return null;
   // Model overrides must stay within the credential owner's origin.
   if (new URL(upstream).origin !== new URL(route.upstream).origin) return null;
@@ -96,6 +119,15 @@ export function resolveCustomMediaConnection(
     const key = opts.readApiKey(agent)?.trim();
     if (!key) return null;
     headers.authorization = `Bearer ${key}`;
+    if (selection) {
+      // Reuse only this runtime's existing managed authentication configuration.
+      // A Guide can neither supply these values nor choose another key owner.
+      const configured = new Headers(route.headerOverride);
+      const protocol = model.route?.wireProtocol ?? route.wireProtocol;
+      if (configured.has('api-key')) headers['api-key'] = configured.get('api-key')!;
+      if (configured.has('x-api-key') || protocol === 'anthropic-messages') headers['x-api-key'] = key;
+      if (configured.has('x-goog-api-key') || protocol === 'google-generative-ai') headers['x-goog-api-key'] = key;
+    }
   }
   return { agent, baseUrl, headers, ...(kind === 'video' ? { videoApi: route.videoApi } : {}) };
 }

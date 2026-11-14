@@ -738,15 +738,18 @@ export function buildUserProvider(
     for (const model of list ?? []) {
       const field = providerMediaField(model.mode);
       if (!field) continue;
-      // Explicit Images membership owns media routing, independent of chat harness order.
-      // Keep the old projection for connections that have never opted into Images.
+      // Legacy API declarations retain their preferred route; Guide-driven
+      // image/video execution can explicitly select every declared connection.
+      const mediaRoutes = field === 'imageModels' || field === 'videoModels';
       const owners = field === "imageModels" ? imageAgents : field === "videoModels" ? videoAgents : [];
-      if (owners.length && !owners.includes(agent as AgentKind)) continue;
       const items = (mediaLists[field] ??= []);
       const existing = items.find((item) => item.id === model.id);
-      if (existing && owners.length) {
-        // A legacy/manual config with two owners is ambiguous. Never pick a key by order.
-        delete existing.sourceAgent;
+      if (existing && mediaRoutes) {
+        existing.sourceAgents = [...(existing.sourceAgents ?? []), agent as AgentKind];
+        const preferred = existing.sourceAgents.filter(candidate => owners.includes(candidate));
+        const candidates = preferred.length ? preferred : existing.sourceAgents;
+        if (candidates.length === 1) existing.sourceAgent = candidates[0];
+        else delete existing.sourceAgent;
       }
       if (!existing)
         items.push({
@@ -757,6 +760,7 @@ export function buildUserProvider(
           defaultEnabled: model.defaultEnabled,
           discoveredMetadata: model.discoveredMetadata,
           sourceAgent: agent as AgentKind,
+          ...(mediaRoutes ? { sourceAgents: [agent as AgentKind] } : {}),
           ...(model.modalities ? { modalities: model.modalities } : {}),
           ...(model.description ? { description: model.description } : {}),
         });

@@ -741,6 +741,8 @@ import {
   isProviderDisabled,
   type MediaCapability,
   type ProviderView,
+  type Provider,
+  type ProviderMediaModel,
   xaiApiOfficialRuntimeAgents,
   XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
@@ -801,7 +803,7 @@ import {
 import { createCustomImageChannel, registerCustomImageChannels } from './customImageChannel.js';
 import { readByokCredential, readByokInferenceBase } from '../model-access/byokCredentials.js';
 import type { AgentKind } from '@cindy/model-providers';
-import { resolveCustomMediaConnection, isCustomVideoProvider } from './customMediaConnection.js';
+import { resolveCustomMediaConnection, isCustomVideoProvider, customMediaAgents as declaredCustomMediaAgents, customMediaGuideProtocol } from './customMediaConnection.js';
 import { videoConnectionRevision } from '../cindy-media/customVideoProtocol.js';
 import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
@@ -5315,7 +5317,7 @@ async function getGhostConfigurableMediaModels(
     // not let an unavailable Gateway snapshot hide an otherwise ready xAI list.
     const localVideoModels = type === 'video' ? listLocalProviderVideoModels(true) : [];
     const availability = await loadPluginMediaAvailability(type, localVideoModels.length, () =>
-      listExecutableMediaModels(),
+      listExecutableMediaModels([], { skipGateway: !getAppCapabilities().canUseCindyGateway }),
     );
     const allModels = [...availability.models, ...localVideoModels]
       .filter(
@@ -5773,32 +5775,44 @@ function resolveImageChannelForModel(
   return getImageChannelRegistry().resolve(entry.providerId, model);
 }
 
-function listLocalProviderMediaModels(respectDisplaySwitch = false) {
+function customMediaAgents(provider: Provider, model: ProviderMediaModel, respectDisplaySwitch: boolean, capabilities: readonly MediaCapability[] = []): AgentKind[] {
+  return declaredCustomMediaAgents(provider, model, capabilities).filter(agent => !respectDisplaySwitch ||
+    isCatalogMediaModelVisible(provider.id, model.id, provider.models[agent]?.find(member => member.id === model.id && member.mode === model.mode)?.defaultEnabled, agent));
+}
+
+function listLocalProviderMediaModels(respectDisplaySwitch = false, capabilities: readonly MediaCapability[] = []) {
   const access = readModelDisableOverrides();
   return getActiveCatalog().providers.flatMap((provider) => {
     if (
       provider.id === 'xd' ||
       isProviderDisabled(access, provider.id) ||
-      !getImageChannelRegistry().isProviderReady(provider.id)
+      (!getImageChannelRegistry().isProviderReady(provider.id) &&
+        !(provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method)))
     ) {
       return [];
     }
     return (provider.imageModels ?? []).flatMap((model) => {
+      const guideDriven = provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
+      const sourceAgents = guideDriven ? customMediaAgents(provider, model, respectDisplaySwitch, capabilities) : [];
       if (
-        !getImageChannelRegistry().isProviderReady(provider.id, model.id) ||
+        (guideDriven && !sourceAgents.length) ||
+        (!guideDriven && !getImageChannelRegistry().isProviderReady(provider.id, model.id)) ||
         isModelDisabled(access, provider.id, model.id) ||
-        (respectDisplaySwitch &&
+        (respectDisplaySwitch && !guideDriven &&
           !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled))
       ) {
         return [];
       }
-      const supportsEdit = getImageChannelRegistry().isProviderEditReady(provider.id, model.id);
+      const supportsEdit = guideDriven ? sourceAgents.some(agent => provider.models[agent]?.find(candidate => candidate.id === model.id)?.modalities?.input.includes('image')) : getImageChannelRegistry().isProviderEditReady(provider.id, model.id);
       // Legacy/provider catalogs may only carry id/name. The channel registry is
       // the executable capability source in that case: every registered image
       // channel accepts text generation, and editable channels additionally
       // accept an image input. Without this normalization, xAI's valid image
       // models are visible in Settings but disappear from Art's media catalog.
-      const modalities = model.modalities ?? {
+      const modalities = guideDriven ? {
+        input: [...new Set(sourceAgents.flatMap(agent => provider.models[agent]?.find(candidate => candidate.id === model.id)?.modalities?.input ?? ['text']))],
+        output: ['image'],
+      } : model.modalities ?? {
         input: supportsEdit ? ['text', 'image'] : ['text'],
         output: ['image'],
       };
@@ -5812,7 +5826,9 @@ function listLocalProviderMediaModels(respectDisplaySwitch = false) {
           name: model.name,
           providerId: provider.id,
           mode: 'image_generation' as const,
-          imageProtocol: getImageChannelRegistry().resolve(provider.id).imageProtocol,
+          ...(guideDriven ? { guideDriven, sourceAgent: model.sourceAgent && sourceAgents.includes(model.sourceAgent) ? model.sourceAgent : sourceAgents.length === 1 ? sourceAgents[0] : undefined, sourceAgents } : {}),
+          imageProtocol: getImageChannelRegistry().isProviderReady(provider.id, model.id)
+            ? getImageChannelRegistry().resolve(provider.id, model.id).imageProtocol : undefined,
           modalities: { input, output: [...modalities.output] },
           ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
         },
@@ -5826,29 +5842,36 @@ function listLocalProviderMediaModels(respectDisplaySwitch = false) {
  * provider runtime. Keep their catalog projection beside the image projection
  * so Art can read the same provider-owned models that Settings displays.
  */
-function listLocalProviderVideoModels(respectDisplaySwitch = false): ProviderMediaRuntimeModel[] {
+function listLocalProviderVideoModels(respectDisplaySwitch = false, capabilities: readonly MediaCapability[] = []): ProviderMediaRuntimeModel[] {
   const access = readModelDisableOverrides();
   const registry = getVideoProviderRegistry();
   return getActiveCatalog().providers.flatMap((provider) => {
     if (
       provider.id === 'xd' ||
       isProviderDisabled(access, provider.id) ||
-      (!isVideoCatalogProviderReady(provider.id) && !isCustomVideoProvider(provider))
+      (!isVideoCatalogProviderReady(provider.id) &&
+        !(provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method)))
     ) {
       return [];
     }
     return (provider.videoModels ?? []).flatMap((model) => {
+      const guideDriven = provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
+      const sourceAgents = guideDriven ? customMediaAgents(provider, model, respectDisplaySwitch, capabilities) : [];
       if (
+        (guideDriven && !sourceAgents.length) ||
         isModelDisabled(access, provider.id, model.id) ||
-        (isCustomVideoProvider(provider)
+        (!guideDriven && (isCustomVideoProvider(provider)
           ? !resolveCustomVideoConnection(provider.id, model.id)
-          : !registry?.hasAlias(model.id, provider.id)) ||
-        (respectDisplaySwitch &&
+          : !registry?.hasAlias(model.id, provider.id))) ||
+        (respectDisplaySwitch && !guideDriven &&
           !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled))
       ) {
         return [];
       }
-      const modalities = model.modalities ?? {
+      const modalities = guideDriven ? {
+        input: [...new Set(sourceAgents.flatMap(agent => provider.models[agent]?.find(candidate => candidate.id === model.id)?.modalities?.input ?? ['text']))],
+        output: ['video'],
+      } : model.modalities ?? {
         input: ['text', 'image'],
         output: ['video'],
       };
@@ -5859,6 +5882,7 @@ function listLocalProviderVideoModels(respectDisplaySwitch = false): ProviderMed
           name: model.name,
           providerId: provider.id,
           mode: 'video_generation' as const,
+          ...(guideDriven ? { guideDriven, sourceAgent: model.sourceAgent && sourceAgents.includes(model.sourceAgent) ? model.sourceAgent : sourceAgents.length === 1 ? sourceAgents[0] : undefined, sourceAgents } : {}),
           ...(isCustomVideoProvider(provider) && model.sourceAgent
             ? { videoProtocol: provider.routing[model.sourceAgent]?.videoApi }
             : provider.id === 'xai' ? { videoProtocol: 'xai-videos' as const } : {}),
@@ -5926,11 +5950,46 @@ function resolveCustomVideoConnection(providerId: string, modelId: string): Prov
 }
 
 configureProviderMediaRuntime({
+  guideProtocol: target => {
+    const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);
+    return customMediaGuideProtocol(provider, target.modelId, target.agent);
+  },
+  resolveHttpConnection: (providerId, modelId, capability, agent) => {
+    const kind = capability.startsWith('image.') ? 'image' : 'video';
+    const options = {
+      getProvider: () => getActiveCatalog().providers.find(provider => provider.id === providerId),
+      readApiKey: (runtime: AgentKind) => readCustomProviderKey(providerId, runtime),
+      isOwnerBoundaryPending: () => isGhostBoundaryPending(),
+    };
+    const declaration = options.getProvider()?.models[agent]?.find(model => model.id === modelId);
+    if (!declaration || !supportsMediaCapability(declaration.modalities ?? { input: ['text'], output: [kind] }, capability)) return null;
+    const binding = resolveCustomMediaConnection(options, modelId, kind, { guideDriven: true, agent });
+    if (!binding) return null;
+    const owner = activeOwnerScopeKey();
+    const revision = videoConnectionRevision(providerId, modelId, binding);
+    return { baseUrl: binding.baseUrl, headers: binding.headers, revision,
+      assertCurrent: () => {
+        const current = resolveCustomMediaConnection(options, modelId, kind, { guideDriven: true, agent });
+        if (isGhostBoundaryPending() || owner !== activeOwnerScopeKey() || !current ||
+            revision !== videoConnectionRevision(providerId, modelId, current)) throw new Error('媒体连接或账号已改变，请恢复原连接后查询原任务；不要重新生成');
+      },
+    };
+  },
+  guideScope: target => {
+    const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);
+    const route = provider?.routing[target.agent];
+    const model = provider?.models[target.agent]?.find(model => model.id === target.modelId);
+    if (!provider || provider.source !== 'user' || provider.auth.native ||
+        !['apiKey', 'none'].includes(provider.auth.method) || !route || !model ||
+        !['image_generation', 'video_generation'].includes(model.mode ?? '')) return null;
+    return createHash('sha256').update(JSON.stringify([target, model.route?.baseUrl ?? route.upstream,
+      route.authStrategy, model.route?.wireProtocol ?? route.wireProtocol])).digest('hex');
+  },
   resolveVideoConnection: (providerId, modelId) => providerId === 'xai'
     ? resolveNativeVideoConnection(providerId, modelId)
     : resolveCustomVideoConnection(providerId, modelId),
-  listModels: () => listLocalProviderMediaModels(true),
-  listVideoModels: () => listLocalProviderVideoModels(true),
+  listModels: capabilities => listLocalProviderMediaModels(true, capabilities),
+  listVideoModels: capabilities => listLocalProviderVideoModels(true, capabilities),
   listExecutableModels: () => listLocalProviderMediaModels(false),
   listExecutableVideoModels: () => listLocalProviderVideoModels(false),
   invoke: async (request) => {

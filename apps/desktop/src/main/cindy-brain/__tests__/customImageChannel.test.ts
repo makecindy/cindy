@@ -6,6 +6,7 @@ import { buildUserProvider, type Provider } from '@cindy/model-providers';
 import { createCustomImageChannel, registerCustomImageChannels } from '../customImageChannel.js';
 import { pruneDynamicImageChannels } from '../byokImageChannel.js';
 import { ImageChannelRegistry } from '../imageChannelRegistry.js';
+import { customMediaAgents, customMediaGuideProtocol, resolveCustomMediaConnection } from '../customMediaConnection.js';
 
 const MODEL = 'team/gpt-image-2.5-sunburst';
 const PNG = Buffer.from('89504e470d0a1a0a', 'hex');
@@ -83,6 +84,76 @@ function harness(initial = provider()) {
 }
 
 describe('standalone custom OpenAI Images', () => {
+  // Regression: aggregate ownership must not replace the selected runtime's
+  // protocol or advertise another runtime's image/video input capability.
+  it.each(['image_generation', 'video_generation'] as const)('discovers each declared %s protocol with multiple owners', (mode) => {
+    const source = buildUserProvider({
+      id: 'relay', name: 'Relay', auth: { method: 'apiKey' },
+      runtimes: Object.fromEntries(['pi', 'codex'].map(agent => [agent, {
+        baseUrl: `https://${agent}.example.invalid/v1`,
+        ...(mode === 'image_generation' ? { imageApi: 'openai-images' } : { videoApi: 'openai-videos' }),
+        models: [{ id: MODEL, name: 'Media', mode }],
+      }])),
+    });
+    expect((mode === 'image_generation' ? source.imageModels : source.videoModels)?.[0]?.sourceAgent).toBeUndefined();
+    for (const agent of ['pi', 'codex'] as const) {
+      expect(customMediaGuideProtocol(source, MODEL, agent)).toBe(mode === 'image_generation' ? 'openai' : 'openai-videos');
+    }
+  });
+
+  it.each([
+    ['image_generation', 'image.generate', 'image.edit', 'image'],
+    ['video_generation', 'video.generate', 'video.image_to_video', 'video'],
+  ] as const)('filters %s sources before choosing a default for image input', (mode, generate, edit, output) => {
+    const source = buildUserProvider({
+      id: 'relay', name: 'Relay', auth: { method: 'apiKey' },
+      runtimes: {
+        pi: { baseUrl: 'https://pi.example.invalid/v1',
+          ...(mode === 'image_generation' ? { imageApi: 'openai-images' as const } : { videoApi: 'openai-videos' as const }),
+          models: [{ id: MODEL, name: 'Text only', mode, modalities: { input: ['text'], output: [output] } }] },
+        codex: { baseUrl: 'https://codex.example.invalid/v1',
+          models: [{ id: MODEL, name: 'Image input', mode, modalities: { input: ['text', 'image'], output: [output] } }] },
+      },
+    });
+    const model = (mode === 'image_generation' ? source.imageModels : source.videoModels)![0]!;
+    expect(model.sourceAgent).toBe('pi');
+    expect(customMediaAgents(source, model, [generate])).toEqual(expect.arrayContaining(['pi', 'codex']));
+    expect(customMediaAgents(source, model, [edit])).toEqual(['codex']);
+    expect(customMediaAgents(source, model, [generate, edit])).toEqual(['codex']);
+    source.models.codex![0]!.disabled = true;
+    expect(customMediaAgents(source, model, [edit])).toEqual([]);
+  });
+
+  // Unit: Guide-driven routes use the existing connection auth boundary, without
+  // inventing /v1 or requiring the legacy imageApi opt-in.
+  it('resolves the exact declared runtime for a Guide without altering its API base', () => {
+    const source = provider('https://relay.example.invalid/custom/api');
+    delete source.routing.pi!.imageApi;
+    const readApiKey = vi.fn(() => 'test-owned-key');
+    const options = { getProvider: () => source, readApiKey, isOwnerBoundaryPending: () => false };
+    const connection = resolveCustomMediaConnection(options, MODEL, 'image', { guideDriven: true, agent: 'pi' });
+    expect(connection).toMatchObject({ agent: 'pi', baseUrl: 'https://relay.example.invalid/custom/api', headers: { authorization: 'Bearer test-owned-key' } });
+    expect(readApiKey).toHaveBeenCalledExactlyOnceWith('pi');
+    expect(resolveCustomMediaConnection(options, MODEL, 'image', { guideDriven: true, agent: 'codex' })).toBeNull();
+    expect(readApiKey).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ['runtime', 'google-generative-ai', 'x-goog-api-key'],
+    ['model', 'google-generative-ai', 'x-goog-api-key'],
+    ['model', 'anthropic-messages', 'x-api-key'],
+    ['headers', 'openai-chat', 'x-goog-api-key'],
+  ] as const)('reuses the selected connection authentication from %s (%s)', (level, protocol, header) => {
+    const source = provider('https://relay.example.invalid/custom/api');
+    delete source.routing.pi!.imageApi;
+    if (level === 'runtime') source.routing.pi!.wireProtocol = protocol;
+    if (level === 'model') source.models.pi![0]!.route = { baseUrl: source.routing.pi!.upstream, wireProtocol: protocol };
+    if (level === 'headers') source.routing.pi!.headerOverride = { [header]: 'stale-configured-key' };
+    const readApiKey = vi.fn(() => 'test-selected-key');
+    const connection = resolveCustomMediaConnection({ getProvider: () => source, readApiKey,
+      isOwnerBoundaryPending: () => false }, MODEL, 'image', { guideDriven: true, agent: 'pi' });
+    expect(connection?.headers[header]).toBe('test-selected-key');
+    expect(readApiKey).toHaveBeenCalledExactlyOnceWith('pi');
+  });
   it('keeps URL-capable custom sources in Core but out of the legacy image channel', () => {
     const h = harness();
     const registry = new ImageChannelRegistry();

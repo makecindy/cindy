@@ -1469,13 +1469,49 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
       expect(models).not.toHaveBeenCalled();
       await call('configure_model_connection', { change: { action: 'presets' } });
       expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'settings-owner', operation: 'connection', change: { action: 'presets' } }, expect.any(AbortSignal));
+      // Unit, real MCP: unknown image/video models were rejected by the public
+      // connection schema, so agents could only repair them through SQLite.
+      const mediaChange = { action: 'setModels', providerId: 'relay', agent: 'pi', models: [
+        { id: 'new-image', mode: 'image_generation', modalities: { input: ['text', 'image'], output: ['image'] } },
+        { id: 'new-video', mode: 'video_generation', modalities: { input: ['text', 'image'], output: ['video'] } },
+      ] };
+      expect((await call('configure_model_connection', { change: mediaChange })).isError).not.toBe(true);
+      expect(models).toHaveBeenLastCalledWith({ callerSessionId: 'settings-owner', operation: 'connection', change: mediaChange }, expect.any(AbortSignal));
+      const guideTarget = { providerId: 'relay', agent: 'pi', modelId: 'new-image' };
+      await call('manage_media_guide', { target: guideTarget, change: { action: 'get' } });
+      expect(models).toHaveBeenLastCalledWith({ callerSessionId: 'settings-owner', operation: 'mediaGuide', target: guideTarget, change: { action: 'get' } }, expect.any(AbortSignal));
       restricted = true;
       expect(parsePayload(await call('configure_model_connection', { change: { action: 'presets' } })).ok).toBe(false);
-      expect(models).toHaveBeenCalledTimes(1);
+      expect(parsePayload(await call('manage_media_guide', { target: guideTarget, change: { action: 'save', guide: {}, expectedRevision: null } })).ok).toBe(false);
+      expect(models).toHaveBeenCalledTimes(3);
       expect(parsePayload(await call('update_app_settings', { section: 'appearance', patch: { uiSize: 17 } })).ok).toBe(false);
       expect(settings).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   }
+});
+
+// Real MCP wire: evidence describes a source type; raw examples (which may
+// contain credentials) must be rejected before the settings callback runs.
+it.each(['codex', 'claude-code', 'pi'] as const)('accepts kind-only media evidence and rejects raw references in %s', async agentKind => {
+  const models = vi.fn(async () => ({ ok: true as const, saved: true }));
+  const server = createXdtHelperMcpServer({ modelSettings: { call: models } },
+    { agentKind, workingDir: '/fixture', sessionId: 'guide-evidence-owner' });
+  const client = new Client({ name: 'guide-evidence-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const target = { providerId: 'relay', agent: 'pi', modelId: 'new-image' };
+    const change = { action: 'save', guide: {}, expectedRevision: null, evidence: { kind: 'curl' } };
+    const call = (value: typeof change) => client.callTool({ name: 'call_tool', arguments: {
+      name: 'manage_media_guide', args: { target, change: value },
+    } });
+    const evidence = { kind: 'curl', reference: "curl -H 'Authorization: Bearer invalid-test-mcp-evidence-key' https://example.test/render" };
+    expect((await call({ ...change, evidence })).isError).toBe(true);
+    expect(models).not.toHaveBeenCalled();
+    expect(parsePayload(await call(change))).toMatchObject({ ok: true, saved: true });
+    expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'guide-evidence-owner',
+      operation: 'mediaGuide', target, change }, expect.any(AbortSignal));
+  } finally { await client.close(); await server.close(); }
 });
 
 // Unit, parity #7: plugins use the existing settings callbacks with no current task.

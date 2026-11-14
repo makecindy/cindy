@@ -1193,6 +1193,16 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
 });
 
 describe("cindy · media MCP 边界", () => {
+  it('binds an original paid invocation during prepare without an extra tool action', async () => {
+    const callMedia = vi.fn(async () => ({ ok: true, status: 'pending', next_action: 'poll' }));
+    const deps = fakeDeps({ callMedia });
+    expect(parsePayload(await handleMedia(deps, { action: 'prepare', source_invocation_id: 'paid-source' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(callMedia).not.toHaveBeenCalled();
+    expect(parsePayload(await handleMedia(deps, { action: 'prepare', provider_id: 'relay', model_id: 'video', capability: 'video.generate', source_invocation_id: 'paid-source' })))
+      .toMatchObject({ ok: true, next_action: 'poll' });
+    expect(callMedia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: 'prepare', providerId: 'relay', modelId: 'video', capability: 'video.generate', sourceInvocationId: 'paid-source' }));
+  });
   it("imports existing screenshots without requiring a model or plugin", async () => {
     const callMedia = vi.fn(async () => ({ ok: true, xdt_image_urls: ['cindy-media://blobs/image.png'] }));
     const deps = fakeDeps({ callMedia });
@@ -1207,6 +1217,8 @@ describe("cindy · media MCP 边界", () => {
       action: "prepare",
       capability: "image.generate",
       provider_id: "openai",
+      source_agent: 'pi',
+      guide_source: 'official',
       model_id: "vendor/image-model",
     });
 
@@ -1214,6 +1226,8 @@ describe("cindy · media MCP 边界", () => {
       action: "prepare",
       capability: "image.generate",
       providerId: "openai",
+      sourceAgent: 'pi',
+      guideSource: 'official',
       modelId: "vendor/image-model",
     });
     expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });

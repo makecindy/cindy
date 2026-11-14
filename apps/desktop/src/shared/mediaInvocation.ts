@@ -27,7 +27,8 @@ export interface MediaHttpRequestGuide {
   headers?: Record<string, string>;
   /** Defaults to JSON for persisted/older schemaVersion 1 Guides. */
   bodyEncoding?: MediaRequestBodyEncoding;
-  bodyModelPath: string[];
+  /** Omit when the upstream model is in the URL or the endpoint has no model field. */
+  bodyModelPath?: string[];
   multipartFiles?: MediaMultipartFileGuide[];
   timeoutMs: number;
   maxRequestBytes: number;
@@ -75,7 +76,7 @@ export interface MediaInvocationOperationGuide {
   instructions: string;
   exampleBody: Record<string, unknown>;
   inputSchema: Record<string, unknown>;
-  officialDocs: string;
+  officialDocs?: string;
 }
 
 export interface MediaInvocationGuide {
@@ -93,6 +94,7 @@ export interface ResolvedMediaInvocationGuide {
 /** Local execution state, never supplied by the protocol Guide. */
 export type MediaInvocationBinding =
   | { providerId: string; executor: 'gateway' | 'provider-image' }
+  | { providerId: string; executor: 'provider-http'; connectionRevision: string; sourceAgent: 'claude-code' | 'codex' | 'pi'; guideSource: 'custom' | 'official' }
   | { providerId: string; executor: 'provider-video'; connectionRevision: string; videoProtocol?: ProviderVideoApi };
 
 /** Persisted operation snapshot plus the independently selected local binding. */
@@ -104,6 +106,9 @@ type PlainObject = Record<string, unknown>;
 
 const FORBIDDEN_HEADERS = new Set([
   'authorization',
+  'api-key',
+  'x-api-key',
+  'x-goog-api-key',
   'cookie',
   'host',
   'content-length',
@@ -199,7 +204,7 @@ function relativePathError(value: unknown, path: string, allowTaskId: boolean): 
     return `${path} must be a relative HTTP path`;
   }
   if (!allowTaskId && value.includes('{taskId}')) return `${path} cannot contain {taskId}`;
-  if (/\{(?!taskId\})/.test(value)) return `${path} contains an unsupported template`;
+  if (/\{(?!taskId\}|model\})/.test(value)) return `${path} contains an unsupported template`;
   return null;
 }
 
@@ -344,10 +349,12 @@ function requestError(value: unknown, path: string): string | null {
   ) {
     return `${path}.bodyEncoding must be json or multipart`;
   }
-  error = objectPathError(value.bodyModelPath, `${path}.bodyModelPath`);
-  if (error) return error;
+  if (value.bodyModelPath !== undefined) {
+    error = objectPathError(value.bodyModelPath, `${path}.bodyModelPath`);
+    if (error) return error;
+  }
   if (value.bodyEncoding === 'multipart') {
-    if ((value.bodyModelPath as string[]).length !== 1) {
+    if (value.bodyModelPath !== undefined && (value.bodyModelPath as string[]).length !== 1) {
       return `${path}.bodyModelPath must be top-level for multipart requests`;
     }
     error = multipartFilesError(value.multipartFiles, `${path}.multipartFiles`);
@@ -479,6 +486,7 @@ function operationError(value: unknown, path: string, checkFields = true): strin
   if (error) return error;
   if (!isPlainObject(value.exampleBody)) return `${path}.exampleBody must be an object`;
   if (!isPlainObject(value.inputSchema)) return `${path}.inputSchema must be an object`;
+  if (value.officialDocs === undefined) return null;
   if (!boundedString(value.officialDocs, 2_048)) return `${path}.officialDocs must be a URL`;
   try {
     const docs = new URL(value.officialDocs);
@@ -584,22 +592,26 @@ export function parsePreparedMediaInvocationGuide(
     return fail('guide must not contain both binding and legacy connection');
   }
   if (!isPlainObject(binding)) return fail('guide.binding must be an object');
-  const bindingFields = binding.executor === 'provider-video'
+  const bindingFields = binding.executor === 'provider-http'
+    ? ['providerId', 'executor', 'connectionRevision', 'sourceAgent', 'guideSource'] : binding.executor === 'provider-video'
     ? ['providerId', 'executor', 'connectionRevision', 'videoProtocol'] : ['providerId', 'executor'];
   const bindingError = unknownField(binding, bindingFields, 'guide.binding');
   if (bindingError) return fail(bindingError);
   if (!boundedString(binding.providerId, 128) || !/^[a-zA-Z0-9_-]+$/.test(binding.providerId)) {
     return fail('guide.binding.providerId must be a bounded identifier');
   }
-  if (!['gateway', 'provider-image', 'provider-video'].includes(binding.executor as string)) {
+  if (!['gateway', 'provider-image', 'provider-video', 'provider-http'].includes(binding.executor as string)) {
     return fail('guide.binding.executor must be supported');
   }
-  if (binding.executor === 'provider-video' && !boundedString(binding.connectionRevision, 128)) {
+  if (['provider-video', 'provider-http'].includes(binding.executor as string) && !boundedString(binding.connectionRevision, 128)) {
     return fail('guide.binding.connectionRevision must be a bounded string');
   }
   if (binding.videoProtocol !== undefined && !isProviderVideoApi(binding.videoProtocol)) {
     return fail('guide.binding.videoProtocol must be supported');
   }
+  if (binding.executor === 'provider-http' &&
+      (!['claude-code', 'codex', 'pi'].includes(binding.sourceAgent as string) || !['custom', 'official'].includes(binding.guideSource as string)))
+    return fail('guide.binding must identify the selected runtime and Guide source');
   const { connection: _legacyConnection, ...snapshot } = value;
   return ok({ ...snapshot, binding } as unknown as PreparedMediaInvocationGuide);
 }
