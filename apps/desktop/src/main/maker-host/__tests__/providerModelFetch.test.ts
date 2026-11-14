@@ -5,7 +5,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../model-source-snapshots.js';
+import { acceptsModelSourceSnapshot, isCurrentModelSource, modelSourceRequestSignature } from '../model-source-snapshots.js';
+import { createModelSourceRevalidator } from '../model-source-revalidation.js';
+import type { CustomProviderConfig } from '@cindy/model-providers';
 
 import {
   buildModelsFetchRequest,
@@ -52,6 +54,172 @@ it.each(['https://api.individual.githubcopilot.com.evil.test', 'https://custom.e
 });
 
 describe('import discovery limits', () => {
+  // #9882, unit: real revalidator -> discovery -> injected HTTP. Isolated fetch
+  // tests missed slot contention before coalescing. Two connections, each with
+  // three identical runtime requests, must issue one read each when B finishes
+  // before A. A deferred response controls ordering without a real timer.
+  it('coalesces identical runtime requests before competing for discovery slots', async () => {
+    const config = (id: string): CustomProviderConfig => ({ id, name: id, auth: { method: 'apiKey' },
+      runtimes: Object.fromEntries((['claude-code', 'codex', 'pi'] as const).map(agent => [agent, {
+        baseUrl: `https://${id}.example/v1`, wireProtocol: 'openai-chat', models: [{ id: 'one', name: 'One',
+          discoveredSource: { kind: 'magpie', providerId: 'old', snapshotId: 'previous-process:receipt' },
+        }],
+      }])),
+    });
+    let releaseSlow!: () => void;
+    const slow = new Promise<void>(resolve => { releaseSlow = resolve; });
+    let fastSaved!: () => void;
+    const fastDone = new Promise<void>(resolve => { fastSaved = resolve; });
+    const requests: string[] = [];
+    const fetcher: typeof fetch = async url => {
+      const host = new URL(String(url)).hostname;
+      requests.push(host);
+      if (host === 'slow.example') await slow;
+      return fakeResponse(200, JSON.stringify({ data: ['one'] }));
+    };
+    const revalidate = createModelSourceRevalidator({
+      credentialRevision: () => 0, isMutating: () => false, now: () => 0,
+      save: async id => { if (id === 'fast') fastSaved(); return true; },
+      fetchModels: async (saved, agent, isCurrent, scheduleSourceRecovery) => {
+        const result = await fetchProviderModels(spec({ agent, baseUrl: saved.runtimes[agent]!.baseUrl,
+          wireProtocol: 'openai-chat', sourceRecovery: true, requireComplete: true,
+          sourceRecoveryScope: saved.id, scheduleSourceRecovery,
+        }), (url, init) => {
+          if (!isCurrent()) throw new Error('stale test owner');
+          return fetcher(url, init);
+        });
+        return result.ok ? result.models ?? null : null;
+      },
+    });
+    const pending = revalidate([config('slow'), config('fast')], 'scope', () => true);
+    try {
+      await fastDone;
+      expect(requests.filter(host => host === 'fast.example')).toHaveLength(1);
+    } finally { releaseSlow(); await pending; }
+    expect(requests.filter(host => host === 'slow.example')).toHaveLength(1);
+  });
+
+  // #9882, unit: real fetch + streamed pages. Per-page limits previously allowed
+  // arbitrarily large aggregate traffic up to the page-count cap. Small injected
+  // limits exercise exact exhaustion, multi-byte accounting and stream cancel.
+  it.each(['exhausted', 'overflow', 'within'] as const)('enforces aggregate recovery bytes: %s', async scenario => {
+    const first = JSON.stringify({ data: ['一'], next: '?page=2' });
+    const second = JSON.stringify({ data: ['二'] });
+    const bytes = Buffer.byteLength(first) + Buffer.byteLength(second);
+    const limit = scenario === 'exhausted' ? Buffer.byteLength(first) : scenario === 'overflow' ? bytes - 1 : bytes;
+    const cancel = vi.fn();
+    const fetcher = vi.fn(async () => {
+      if (fetcher.mock.calls.length === 1) return fakeResponse(200, first);
+      if (scenario !== 'overflow') return fakeResponse(200, second);
+      let sent = false;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent) controller.close();
+          else { sent = true; controller.enqueue(new TextEncoder().encode(second)); }
+        }, cancel,
+      }, { highWaterMark: 0 }), { headers: { 'content-length': '1' } });
+    });
+    const result = await fetchProviderModels(spec({ requireComplete: true, allowEmpty: true, responseByteLimit: limit }), fetcher);
+    expect(result.ok).toBe(scenario === 'within');
+    expect(fetcher).toHaveBeenCalledTimes(scenario === 'exhausted' ? 1 : 2);
+    if (scenario === 'overflow') expect(cancel).toHaveBeenCalledOnce();
+    if (scenario === 'within') expect(result.models?.map(model => model.id)).toEqual(['一', '二']);
+  });
+
+  // #9882, unit: real fetch entry shares identical background requests across
+  // agents, but effective headers and ownership scopes still isolate credentials.
+  it.each(['same', 'headers', 'scope'] as const)('shares background discovery with %s context', async difference => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetcher = vi.fn(async () => { await gate; return fakeResponse(200, JSON.stringify({ data: ['one'] })); });
+    const request = spec({ wireProtocol: 'openai-chat', sourceRecovery: true, requireComplete: true, sourceRecoveryScope: 'owner:connection:1' });
+    const first = fetchProviderModels(request, fetcher);
+    const second = fetchProviderModels({ ...request, agent: 'pi',
+      ...(difference === 'headers' ? { apiKey: 'other-fake-key' } : {}),
+      ...(difference === 'scope' ? { sourceRecoveryScope: 'owner:connection:2' } : {}),
+    }, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(difference === 'same' ? 1 : 2);
+    release();
+    expect((await Promise.all([first, second])).every(result => result.ok)).toBe(true);
+    await fetchProviderModels(request, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(difference === 'same' ? 2 : 3);
+  });
+
+  // #9882, unit: background discovery must not evict a pending Settings receipt
+  // or authorize a Settings commit. 33 recoveries cross the existing receipt cap.
+  it('keeps background freshness separate from Settings receipts', async () => {
+    const request = spec({ requireComplete: true });
+    const fetcher = async () => fakeResponse(200, JSON.stringify({ data: [{ id: 'a/foo', owned_by: 'A', magpie_label: 'Foo · A' }] }));
+    const manual = (await fetchProviderModels(request, fetcher)).models![0];
+    const { url, init } = buildModelsFetchRequest(request);
+    const signature = modelSourceRequestSignature(url, init);
+    for (let i = 0; i < 33; i++) {
+      const model = (await fetchProviderModels({ ...request, sourceRecovery: true }, fetcher)).models![0];
+      expect(isCurrentModelSource(model.discoveredSource)).toBe(true);
+      expect(model.discoverySnapshotId).toBeUndefined();
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'saved', request.agent, signature)).toBe(false);
+    }
+    expect(acceptsModelSourceSnapshot(manual.id, manual.discoveredSource, 'saved', request.agent, signature)).toBe(true);
+  });
+
+  // #9882, unit: preserve Retry-After through the real first/paginated fetch
+  // failure result; existing HTTP tests asserted only classification.
+  it.each(['900', 'Wed, 11 Nov 2026 10:15:00 GMT', 'invalid'])(
+    'preserves first and later page Retry-After %s', async header => {
+      const now = Date.parse('2026-11-11T10:00:00Z');
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+      try {
+        for (const later of [false, true]) {
+          const result = await fetchProviderModels(spec({ requireComplete: true }), async url =>
+            later && !String(url).includes('page=2')
+              ? fakeResponse(200, JSON.stringify({ data: ['one'], next: '?page=2' }))
+              : new Response('{}', { status: later ? 503 : 429, headers: { 'retry-after': header } }));
+          expect(result.ok).toBe(false);
+          expect(result.retryAt).toBe(header === 'invalid' ? undefined : now + 900_000);
+        }
+      } finally { clock.mockRestore(); }
+    },
+  );
+
+  // #9882 review: allowEmpty must not turn business failures into deletions.
+  // Unit via production fetch; prior error tests only covered named gateways.
+  it.each([{ error: 'unavailable', data: [] }, { error_code: 503, data: [] }])(
+    'rejects business failures on every strict discovery page: %j', async failure => {
+      for (const later of [false, true]) {
+        const result = await fetchProviderModels(spec({ allowEmpty: true, requireComplete: true }), async url =>
+          fakeResponse(200, JSON.stringify(later && !String(url).includes('page=2')
+            ? { data: ['one'], next: '?page=2' } : failure)));
+        expect(result.ok).toBe(false);
+      }
+      expect(await fetchProviderModels(spec({ allowEmpty: true, requireComplete: true }),
+        async () => fakeResponse(200, JSON.stringify({ error_code: 0, data: [] })))).toMatchObject({ ok: true, models: [] });
+    },
+  );
+
+  // Unit: background strict discovery must bound the first response without an
+  // explicit byte option; existing stream tests only exercised caller-supplied limits.
+  it.each([undefined, '1'])('bounds the first strict response with content-length %s', async length => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(' '.repeat(8 * 1024 * 1024) + JSON.stringify({ data: [] })));
+      }, cancel,
+    }), { headers: length ? { 'content-length': length } : {} });
+    expect((await fetchProviderModels(spec({ allowEmpty: true, requireComplete: true }), async () => response)).ok).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  // #9882: background provenance recovery must require every page; ordinary
+  // settings import keeps its best-effort behavior. Unit, real fetch entry.
+  it('rejects partial discovery only when complete results are required', async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url).includes('page=2')) throw new Error('offline');
+      return fakeResponse(200, JSON.stringify({ data: [{ id: 'a/foo', owned_by: 'A', magpie_label: 'Foo · A' }], next: '?page=2' }));
+    });
+    expect((await fetchProviderModels(spec(), fetcher)).models?.[0].id).toBe('a/foo');
+    expect((await fetchProviderModels(spec({ requireComplete: true }), fetcher)).ok).toBe(false);
+  });
+
   // #9101 review regression: three identical Chat runtimes must perform one
   // HTTP read, while each consumer still issues its own agent-bound receipt.
   it('coalesces concurrent Hinoki reads without sharing agent provenance', async () => {
@@ -699,12 +867,25 @@ it('does not rewrite private Google-compatible discovery or an explicit catalog'
   }
 });
 
-it.each([404, 405])('falls back from an unavailable manifest (%i) on the same authenticated endpoint', async status => {
+// #9882 independent review, unit: real discovery fallback must finish within
+// its held slot. Existing fallback tests had no scheduler. Reject reentrant
+// scheduling immediately to expose queue deadlock without a real timeout.
+it.each([
+  { status: 404, recovery: false }, { status: 405, recovery: false },
+  { status: 404, recovery: true }, { status: 405, recovery: true },
+])('falls back from manifest $status with recovery=$recovery on the same authenticated endpoint', async ({ status, recovery }) => {
+  let held = false;
+  const scheduleSourceRecovery = async <T>(work: () => Promise<T>): Promise<T> => {
+    if (held) throw new Error('discovery slot already held');
+    held = true;
+    try { return await work(); } finally { held = false; }
+  };
   const fetcher = vi.fn()
     .mockResolvedValueOnce(fakeResponse(status, '{}'))
     .mockResolvedValueOnce(fakeResponse(200, '{"data":[{"id":"grok-4.7","reasoningEfforts":["low","high"]}]}'));
   const result = await fetchProviderModels(spec({ baseUrl: 'https://relay.example/proxy/v1',
     modelsUrl: 'https://relay.example/proxy/v1/models?client_version=0.147.0&tenant=test',
+    sourceRecovery: recovery, sourceRecoveryScope: `manifest-${status}`, scheduleSourceRecovery,
   }), fetcher);
   expect(result).toMatchObject({ ok: true, models: [{ id: 'grok-4.7', discoveredMetadata: { efforts: ['low', 'high'] } }] });
   expect(fetcher).toHaveBeenCalledTimes(2);

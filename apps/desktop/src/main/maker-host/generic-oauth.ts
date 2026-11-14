@@ -82,6 +82,9 @@ export interface GenericOAuthLoginResult {
   reason?: string;
 }
 
+/** Optional upstream backoff evidence for callers that schedule recovery. */
+export interface GenericOAuthRefreshResult { retryAt: number }
+
 export interface GenericOAuthDeviceCodeProgress {
   phase: 'device-code';
   verificationUrl: string;
@@ -281,7 +284,7 @@ function isExpiringSoon(b: OAuthTokenBlob): boolean {
 
 // ── 刷新（同 provider、同登录共享一个在途请求）───────────────────────────────────
 // 每个任务绑定最初的缓存对象，重置后不能加入旧登录的刷新。
-const refreshInFlight = new Map<string, { blob: OAuthTokenBlob | null; promise: Promise<void> }>();
+const refreshInFlight = new Map<string, { blob: OAuthTokenBlob | null; promise: Promise<void | GenericOAuthRefreshResult> }>();
 
 function miniMaxExpiresAt(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value);
@@ -294,12 +297,29 @@ function normalizeProviderToken(tok: TokenResponse, oauth: OAuthProviderDescript
   return { ...tok, expires_at: miniMaxExpiresAt((tok as TokenResponse & { expired_in?: unknown }).expired_in) };
 }
 
+class OAuthRefreshBackoff extends Error {
+  constructor(readonly retryAt: number) { super('oauth_refresh_backoff'); }
+}
+
+function refreshRetryAt(response: Response): number | undefined {
+  if (response.status !== 429 && response.status !== 503) return;
+  const value = response.headers.get('retry-after')?.trim();
+  if (!value) return;
+  const deadline = /^\d+$/.test(value) ? io.now() + Number(value) * 1000 : Date.parse(value);
+  if (Number.isFinite(deadline) && deadline > io.now()) return deadline;
+}
+
 async function copilotToken(githubToken: string, signal: AbortSignal): Promise<TokenResponse> {
   const response = await io.fetchImpl('https://api.github.com/copilot_internal/v2/token', {
     headers: { accept: 'application/json', authorization: `Bearer ${githubToken}`,
       'User-Agent': 'GitHubCopilotChat/0.35.0', 'Editor-Version': 'vscode/1.107.0',
       'Editor-Plugin-Version': 'copilot-chat/0.35.0', 'Copilot-Integration-Id': 'vscode-chat' }, signal,
   });
+  const retryAt = refreshRetryAt(response);
+  if (retryAt) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new OAuthRefreshBackoff(retryAt);
+  }
   const body = await readJsonObject(response);
   if (!response.ok || typeof body?.token !== 'string' || !body.token
     || typeof body.expires_at !== 'number' || !Number.isFinite(body.expires_at)) {
@@ -308,7 +328,7 @@ async function copilotToken(githubToken: string, signal: AbortSignal): Promise<T
   return { access_token: body.token, refresh_token: githubToken, expires_at: body.expires_at * 1000 - 300_000 };
 }
 
-async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Promise<void> {
+async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Promise<void | GenericOAuthRefreshResult> {
   const fresh = readBlob(providerId);
   if (fresh === null || !isExpiringSoon(fresh) || !fresh.refresh_token) return;
   const refreshToken = fresh.refresh_token;
@@ -331,6 +351,7 @@ async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Pr
       signal: AbortSignal.timeout(REFRESH_FETCH_TIMEOUT_MS),
     });
   } catch (err) {
+    if (err instanceof OAuthRefreshBackoff) return { retryAt: err.retryAt };
     log.warn('generic oauth token 刷新请求失败', {
       providerId,
       err: err instanceof Error ? err.message : String(err),
@@ -338,8 +359,10 @@ async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Pr
     return;
   }
   if (!res.ok) {
+    const retryAt = refreshRetryAt(res);
+    await res.body?.cancel().catch(() => undefined);
     log.warn('generic oauth token 刷新失败', { providerId, status: res.status });
-    return;
+    return retryAt ? { retryAt } : undefined;
   }
   let tok: TokenResponse;
   try {
@@ -360,7 +383,7 @@ async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Pr
 function refreshGenericOAuthIfNeeded(
   providerId: string,
   oauth: OAuthProviderDescriptor,
-): Promise<void> {
+): Promise<void | GenericOAuthRefreshResult> {
   const blob = readBlob(providerId);
   const inFlight = refreshInFlight.get(providerId);
   if (inFlight?.blob === blob) return inFlight.promise;

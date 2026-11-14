@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
   owner: 'owner-default',
+  generation: 0,
   profileRoot: null as string | null,
   actualPlacement: false,
   placementError: null as Error | null,
@@ -43,6 +44,7 @@ const h = vi.hoisted(() => ({
   recoverGrokAuthAfterRejection: vi.fn(),
   warn: vi.fn(),
   request: vi.fn(),
+  outboundFetch: vi.fn<typeof fetch>(async () => { throw new Error('offline'); }),
   catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
   pool: null as import('../../../shared/subscriptionAccounts.js').SubscriptionPoolConfig | null,
   legacyLoggedIn: new Set<string>(),
@@ -195,8 +197,8 @@ vi.mock('../../authManager.js', () => ({
   getAuthState: () => ({ mode: 'signed-out', user: null }),
 }));
 vi.mock('../../appSessionState.js', () => ({
-  getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: h.owner }),
-  activeOwnerScopeKey: () => `signed-out:${h.owner ?? 'none'}`,
+  getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: h.owner, generation: h.generation }),
+  activeOwnerScopeKey: () => `signed-out:${h.owner ?? 'none'}:${h.generation}`,
   isAppSessionBoundaryPending: () => false,
   ownerScopedUserDataPath: (...segments: string[]) =>
     path.join(h.profileRoot ?? path.join(os.tmpdir(), 'provider-catalog-realm-reload'), h.owner, ...segments),
@@ -253,10 +255,11 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   addProviderSecretsClearedListener: (listener: () => void) => h.secretsClearedListeners.add(listener),
 }));
 vi.mock('../outbound-fetch.desktop.js', () => ({
-  outboundFetch: vi.fn(async () => { throw new Error('offline'); }),
+  outboundFetch: h.outboundFetch,
 }));
 vi.mock('../provider-route.js', () => ({
   getProviderRouteCredentialRevision: () => 0,
+  isProviderRouteMutationInProgress: () => false,
   setCustomProviderHeaderReader: () => undefined,
   setCustomProviderKeyReader: () => undefined,
   setOAuthTokenReader: () => undefined,
@@ -330,6 +333,7 @@ import {
   getDesktopProviderService,
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
+  refreshCustomProviderModelSources,
   reloadActiveCatalogForEndpointChange,
   syncLocalCatalogOverridesIntoActiveCatalog,
   refreshDiscoveredCodexModels,
@@ -359,6 +363,182 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // #9882, unit: production recovery reload must retain same-owner routes on
+  // transient reads, while the ordinary load still clears an unavailable snapshot.
+  it('preserves routes only for a failed best-effort recovery reload', async () => {
+    const config: CustomProviderConfig = { id: 'reload-failure', name: 'Saved route', runtimes: {} };
+    h.customProviderRead.mockResolvedValue([config]);
+    await refreshCustomProvidersIntoCatalog();
+    h.customProviderRead.mockRejectedValue(new Error('transient read failure'));
+    try {
+      await refreshCustomProvidersIntoCatalog(() => true, { preserveOnFailure: true });
+      expect(getActiveCatalog().providers.some(provider => provider.id === config.id)).toBe(true);
+      await refreshCustomProvidersIntoCatalog();
+      expect(getActiveCatalog().providers.some(provider => provider.id === config.id)).toBe(false);
+    } finally { h.customProviderRead.mockReset(); setCustomProviders([]); }
+  });
+
+  // #9882 latest review: a good first page plus a failed second page must not
+  // erase a saved source. Unit via production recovery + HTTP parser + CAS;
+  // prior restart coverage only used a complete single-page response.
+  // Latest review adds HTTP-200 business errors and unbounded first-page reads
+  // to the same unit recovery/CAS preservation contract.
+  it.each(['later-page', 'business-error', 'oversized', 'malformed-members', 'ambiguous-continuation'] as const)('preserves saved Magpie sources on %s failure', async failure => {
+    const saved: CustomProviderConfig = { id: `magpie-partial-${failure}`, name: 'Magpie', auth: { method: 'none' }, runtimes: { pi: {
+      baseUrl: 'http://127.0.0.1:3425/v1', modelsUrl: 'http://127.0.0.1:3425/v1/models', wireProtocol: 'openai-chat', models: [{
+        id: 'b/foo', name: 'My model', discoveredSource: { kind: 'magpie', providerId: 'Saved', snapshotId: 'old:receipt' },
+      }],
+    } } };
+    const before = structuredClone(saved);
+    h.customProviderRead.mockResolvedValue([saved]);
+    h.casUpdate.mockClear();
+    const cancel = vi.fn();
+    h.outboundFetch.mockClear().mockImplementation(async url => {
+      if (failure === 'business-error') return new Response(JSON.stringify({ error: 'unavailable', data: [] }));
+      if (failure === 'malformed-members') return new Response(JSON.stringify({ data: [{}] }));
+      if (failure === 'ambiguous-continuation') return new Response(JSON.stringify({ data: ['a/foo'], has_more: 1, last_id: 'a/foo' }));
+      if (failure === 'oversized') return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array(8 * 1024 * 1024 + 1)); }, cancel,
+      }));
+      if (String(url).includes('page=2')) throw new Error('offline');
+      return new Response(JSON.stringify({ data: [{ id: 'a/foo', owned_by: 'A', magpie_label: 'Foo · A' }], next: '?page=2' }));
+    });
+    const events: number[] = [];
+    setActiveCatalogChangedListener(revision => events.push(revision));
+    try {
+      await refreshCustomProviderModelSources();
+      const requests = failure === 'later-page' ? 2 : 1;
+      expect(h.outboundFetch).toHaveBeenCalledTimes(requests);
+      if (failure === 'oversized') expect(cancel).toHaveBeenCalledOnce();
+      expect(h.casUpdate).not.toHaveBeenCalled();
+      expect(saved).toEqual(before);
+      await refreshCustomProviderModelSources();
+      expect(h.outboundFetch).toHaveBeenCalledTimes(requests);
+      expect(events).toHaveLength(0);
+    } finally {
+      setActiveCatalogChangedListener(null);
+      h.customProviderRead.mockReset();
+      h.outboundFetch.mockReset().mockRejectedValue(new Error('offline'));
+    }
+  });
+
+  // #9882 review: deferred catalog reads must honor readiness-barrier adoption,
+  // while ordinary refreshes and invalidated ABA work cannot publish. Unit tier;
+  // existing tests did not vary the session generation during a pending read.
+  // Standalone file after review fixes: 7.54s (1.59s tests), 2026-11-11.
+  it.each(['adopted', 'ordinary', 'invalidated'] as const)('handles %s same-owner generation changes', async scenario => {
+    const config: CustomProviderConfig = { id: 'adoption-test', name: 'Adoption', runtimes: {} };
+    let resolve!: (configs: CustomProviderConfig[]) => void;
+    let live = true;
+    h.customProviderRead.mockReturnValueOnce(new Promise<CustomProviderConfig[]>(done => { resolve = done; }));
+    setCustomProviders([]);
+    try {
+      const pending = scenario === 'ordinary'
+        ? refreshCustomProvidersIntoCatalog()
+        : refreshCustomProvidersIntoCatalog(() => live);
+      h.generation++;
+      if (scenario === 'invalidated') live = false;
+      resolve([config]);
+      await pending;
+      expect(getActiveCatalog().providers.some(provider => provider.id === config.id)).toBe(scenario === 'adopted');
+    } finally {
+      h.customProviderRead.mockReset();
+      setCustomProviders([]);
+    }
+  });
+
+  // #9882 review: a repeated automatic load must produce zero catalog events;
+  // a real configuration edit must still publish. Unit, actual service + setter.
+  it('does not republish unchanged custom providers on automatic refresh', async () => {
+    const config: CustomProviderConfig = { id: 'no-op-test', name: 'Original', runtimes: {} };
+    h.customProviderRead.mockResolvedValue([config]);
+    await refreshCustomProvidersIntoCatalog();
+    const events: number[] = [];
+    setActiveCatalogChangedListener(revision => events.push(revision));
+    try {
+      h.customProviderRead.mockResolvedValue(structuredClone([config]));
+      await refreshCustomProvidersIntoCatalog();
+      expect(events).toHaveLength(0);
+      h.customProviderRead.mockResolvedValue([{ ...config, name: 'Edited' }]);
+      await refreshCustomProvidersIntoCatalog();
+      expect(events).toHaveLength(1);
+      expect(getActiveCatalog().providers.find(provider => provider.id === config.id)?.name).toBe('Edited');
+    } finally {
+      setActiveCatalogChangedListener(null);
+      h.customProviderRead.mockReset();
+      setCustomProviders([]);
+    }
+  });
+
+  // Unit regression: the real catalog-load entry hid saved Magpie labels after
+  // restart and never rediscovered them. Existing restart coverage only checked
+  // suppression/manual recovery. One old-epoch route per engine is sufficient;
+  // use the real HTTP parser and catalog projection, with in-memory persistence.
+  // Standalone file: 7.49s on 2026-11-10 (1.57s tests; existing service imports dominate).
+  // #9882: extend the real three-engine restart path to a failed post-CAS read;
+  // the next hint must publish current persisted sources without rediscovery.
+  // Late CAS regression: repair the same owner while the write is pending,
+  // then verify a foreground hint publishes the saved labels without HTTP.
+  it.each(['normal', 'reload-failure', 'late-cas'] as const)('restores saved Magpie sources after %s', async scenario => {
+    const failReload = scenario === 'reload-failure';
+    let saved: CustomProviderConfig = { id: `magpie-restart-${scenario}`, name: 'Magpie', auth: { method: 'none' }, runtimes: {} };
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      saved.runtimes[agent] = { baseUrl: 'http://127.0.0.1:3425/v1', modelsUrl: 'http://127.0.0.1:3425/v1/models', wireProtocol: 'openai-chat', models: [
+        { id: 'deepseek/deepseek-v4-flash', name: 'My model', nameExplicit: true, contextWindow: 123456, defaultEnabled: false, opaqueModelId: true,
+          discoveredSource: { kind: 'magpie', providerId: 'Old account', snapshotId: 'previous-process:receipt' } },
+      ] };
+    }
+    const before = structuredClone(saved);
+    h.warn.mockClear();
+    h.outboundFetch.mockClear();
+    h.customProviderRead.mockImplementation(async () => [saved]);
+    h.casUpdate.mockImplementation(async (_id, expected, next) => {
+      if (JSON.stringify(expected) !== JSON.stringify(saved)) return false;
+      saved = next as CustomProviderConfig;
+      if (scenario === 'late-cas') h.generation++;
+      if (failReload) h.customProviderRead.mockRejectedValueOnce(new Error('transient reload read'));
+      return true;
+    });
+    h.outboundFetch.mockImplementation(async () => new Response(JSON.stringify({ data: [
+      { id: 'deepseek/deepseek-v4-flash', display_name: 'Upstream name', owned_by: 'DeepSeek', magpie_label: 'DeepSeek V4 Flash · DeepSeek' },
+      { id: 'new/other-model', owned_by: 'Other', magpie_label: 'Other' },
+    ] }), { status: 200 }));
+    try {
+      await refreshCustomProvidersIntoCatalog();
+      if (scenario === 'late-cas') {
+        await vi.waitFor(() => expect(saved.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('DeepSeek'));
+        await refreshCustomProviderModelSources();
+      }
+      if (failReload) {
+        await vi.waitFor(() => expect(h.warn).toHaveBeenCalledWith('failed to reload recovered sources; retained current owner catalog snapshot'));
+        expect(getActiveCatalog().providers.some(provider => provider.id === saved.id)).toBe(true);
+        h.generation++; // Same-owner repair must not lose the pending projection.
+        await refreshCustomProviderModelSources();
+      }
+      await vi.waitFor(() => {
+        const provider = getActiveCatalog().providers.find(p => p.id === saved.id)!;
+        for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+          expect(provider.models[agent]?.[0].discoveredSource?.providerId).toBe('DeepSeek');
+        }
+      });
+      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+        const { discoveredSource: _source, ...model } = saved.runtimes[agent]!.models[0];
+        const { discoveredSource: _old, ...original } = before.runtimes[agent]!.models[0];
+        expect(model).toEqual(original);
+        expect(saved.runtimes[agent]!.models).toHaveLength(1);
+      }
+      const reads = h.outboundFetch.mock.calls.length;
+      expect(reads).toBe(1);
+      await refreshCustomProvidersIntoCatalog();
+      expect(h.outboundFetch).toHaveBeenCalledTimes(reads);
+    } finally {
+      setCustomProviders([]);
+      h.customProviderRead.mockReset();
+      h.casUpdate.mockReset().mockResolvedValue(true);
+      h.outboundFetch.mockReset().mockRejectedValue(new Error('offline'));
+    }
+  });
+
   // #10405, unit: merging A(a1,a2) into B must not remove a2-only m2 from a saved
   // schedule's strict route resolver. Picker/guest membership still cannot borrow B's m3.
   it.each(['healthy', 'origin-signed-out', 'bound-paused', 'builtin-signed-out', 'builtin-disconnected'] as const)(
@@ -1035,14 +1215,15 @@ describe('provider catalog realm reload', () => {
       resolveOwnerA = resolve;
     });
     h.customProviderRead.mockReturnValueOnce(ownerALoad);
-    let ownerAIsCurrent = true;
-    const staleRefresh = refreshCustomProvidersIntoCatalog(() => ownerAIsCurrent);
+    const previousOwner = h.owner;
+    const staleRefresh = refreshCustomProvidersIntoCatalog();
 
     setCustomProviders([]);
-    ownerAIsCurrent = false;
+    h.owner = 'owner-b-after-custom-read';
     resolveOwnerA([provider]);
     await staleRefresh;
     expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(false);
+    h.owner = previousOwner;
 
     setCustomProviders([buildUserProvider(provider)]);
     h.customProviderRead.mockRejectedValueOnce(new Error('stale owner A DB read failed'));

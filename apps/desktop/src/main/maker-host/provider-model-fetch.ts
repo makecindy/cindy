@@ -1,6 +1,7 @@
-import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
+import { issueModelSourceSnapshot, modelSourceRequestSignature, stampRecoveredModelSources } from './model-source-snapshots.js';
 import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
+import { ModelSourceRecoveryCanceled } from './model-source-revalidation.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
@@ -27,6 +28,9 @@ import { classifyProviderError, type ProviderErrorCode } from '../../shared/prov
 import {
   deriveModelsDiscoveryUrl,
   readGenericOAuthAccessToken,
+  getGenericOAuthLoginGeneration,
+  refreshGenericOAuthIfNeeded,
+  type GenericOAuthRefreshResult,
 } from './generic-oauth.desktop.js';
 import { outboundFetch } from './outbound-fetch.desktop.js';
 
@@ -94,11 +98,21 @@ export interface ProviderModelsFetchSpec {
   /** Main-only import constraints; ordinary settings discovery keeps its existing policy. */
   redirect?: 'error';
   responseByteLimit?: number;
+  /** Main-only: partial pages must not authorize removal of saved provenance. */
+  requireComplete?: boolean;
+  /** Main-only background recovery: freshness stamp without a Settings receipt. */
+  sourceRecovery?: boolean;
+  /** Main-only owner/generation/provider/credential revision, for in-flight sharing. */
+  sourceRecoveryScope?: string;
+  /** Main-only: acquire a discovery slot after identical recovery reads join. */
+  scheduleSourceRecovery?: <T>(work: () => Promise<T>) => Promise<T>;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
 export interface ProviderModelsFetchResult {
   ok: boolean;
+  /** Main-only recovery hint, absolute milliseconds since epoch. */
+  retryAt?: number;
   /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
   models?: DiscoveredModel[];
   /** 失败分类码（ok=false 时给出）。 */
@@ -109,6 +123,10 @@ export interface ProviderModelsFetchResult {
   detail?: string;
 }
 
+// Coalesce token refreshes before scheduling, just like model reads. Only
+// in-flight work is retained; owner/generation/credentials and descriptor bind it.
+const sourceRecoveryOAuthRefreshes = new Map<string, Promise<void | GenericOAuthRefreshResult>>();
+
 /** Refresh a saved OAuth connection using only Main's route and credential snapshot. */
 export async function fetchSavedOAuthProviderModels(
   provider: Provider | undefined,
@@ -117,21 +135,59 @@ export async function fetchSavedOAuthProviderModels(
   isCurrent: () => boolean,
   fetchImpl: typeof fetch = outboundFetch,
   headers?: Record<string, string>,
+  options: Pick<ProviderModelsFetchSpec, 'requireComplete' | 'sourceRecovery' | 'sourceRecoveryScope' | 'scheduleSourceRecovery'> = {},
 ): Promise<ProviderModelsFetchResult> {
   const oauth = provider?.auth.oauth;
   const route = provider?.routing[agent];
+  if (options.sourceRecovery && !isCurrent()) throw new ModelSourceRecoveryCanceled();
   if (provider?.source !== 'user' || provider.auth.method !== 'oauth' || !oauth || !route || route.disabled || !isCurrent()) {
     return { ok: false, code: 'AUTH_INVALID' };
   }
-  let token: string | null;
+  const loginGeneration = getGenericOAuthLoginGeneration(storageProviderId);
+  let refreshResult: void | GenericOAuthRefreshResult = undefined;
   try {
-    token = await readGenericOAuthAccessToken(storageProviderId, oauth);
-  } catch {
-    return { ok: false, code: 'AUTH_INVALID' };
+    const refresh = async () => {
+      if (options.sourceRecovery && (!isCurrent() || loginGeneration !== getGenericOAuthLoginGeneration(storageProviderId))) {
+        throw new ModelSourceRecoveryCanceled();
+      }
+      return refreshGenericOAuthIfNeeded(storageProviderId, oauth);
+    };
+    if (options.sourceRecovery && options.scheduleSourceRecovery) {
+      const signature = modelSourceRequestSignature(JSON.stringify([options.sourceRecoveryScope, storageProviderId, loginGeneration, oauth]), {});
+      // An absent owner scope cannot authorize sharing across callers.
+      if (!options.sourceRecoveryScope) refreshResult = await options.scheduleSourceRecovery(refresh);
+      else {
+        let pending = sourceRecoveryOAuthRefreshes.get(signature);
+        if (!pending) {
+          pending = options.scheduleSourceRecovery(refresh);
+          sourceRecoveryOAuthRefreshes.set(signature, pending);
+        }
+        try { refreshResult = await pending; } finally {
+          if (sourceRecoveryOAuthRefreshes.get(signature) === pending) sourceRecoveryOAuthRefreshes.delete(signature);
+        }
+      }
+    } else if (options.sourceRecovery) refreshResult = await refresh();
+  } catch (error) {
+    if (error instanceof ModelSourceRecoveryCanceled) throw error;
+    return { ok: false, code: 'UNKNOWN' };
+  }
+  // Preserve token-endpoint deadlines even after same-owner generation expiry.
+  // The revalidator independently rejects changed owner/credential contexts.
+  if (options.sourceRecovery && refreshResult?.retryAt) {
+    return { ok: false, code: 'UNKNOWN', retryAt: refreshResult.retryAt };
   }
   // A token refresh can outlive logout, account switching, or edits to this connection.
   // Never use the old endpoint snapshot with credentials from the new owner/configuration.
-  if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
+  if (!isCurrent() || loginGeneration !== getGenericOAuthLoginGeneration(storageProviderId)) {
+    if (options.sourceRecovery) throw new ModelSourceRecoveryCanceled();
+    return { ok: false, code: 'AUTH_INVALID' };
+  }
+  // Recovery already awaited its bounded refresh; validate expiry without
+  // starting a second refresh outside the semaphore. Manual reads await refresh.
+  let token: string | null;
+  try { token = await readGenericOAuthAccessToken(storageProviderId, options.sourceRecovery ? undefined : oauth); }
+  catch { return { ok: false, code: 'AUTH_INVALID' }; }
+  if (!isCurrent() || loginGeneration !== getGenericOAuthLoginGeneration(storageProviderId)) return { ok: false, code: 'AUTH_INVALID' };
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
   const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
@@ -143,13 +199,24 @@ export async function fetchSavedOAuthProviderModels(
     apiKey: token,
     headers,
     redirect: 'error',
+    ...options,
+    // Complete empty recovery catalogs authorize clearing old display sources.
+    // Ordinary manual imports keep their conservative empty-list policy.
+    allowEmpty: options.sourceRecovery === true,
   }, async (url, init) => {
     // Pagination and the separate speech catalog may run after the first reply.
     // Revoke the captured credentials before another request if ownership changed.
-    if (!isCurrent()) throw new Error('Provider model refresh is no longer current');
+    if (!isCurrent() || loginGeneration !== getGenericOAuthLoginGeneration(storageProviderId)) {
+      throw new Error('Provider model refresh is no longer current');
+    }
     return fetchImpl(url, init);
   });
-  return isCurrent() ? result : { ok: false, code: 'AUTH_INVALID' };
+  if (isCurrent() && loginGeneration === getGenericOAuthLoginGeneration(storageProviderId)) return result;
+  // Never accept stale models. A failed recovery can still carry a server
+  // deadline; the revalidator separately checks owner, request and credentials.
+  return { ok: false, code: 'AUTH_INVALID',
+    ...(options.sourceRecovery && !result.ok && result.retryAt ? { retryAt: result.retryAt } : {}),
+  };
 }
 
 /** origin 不含 userinfo；先独立验证地址，错误中不带原始 URL 或解析器异常。 */
@@ -274,7 +341,8 @@ function networkErrorCode(err: unknown): string {
 }
 
 /** Count decoded stream bytes before buffering/parsing, including missing or false length headers. */
-async function readLimitedBody(res: Response, limit: number): Promise<string> {
+async function readLimitedBody(res: Response, limit: number, budget?: { remaining: number }): Promise<string> {
+  limit = Math.min(limit, budget?.remaining ?? Infinity);
   if (Number(res.headers.get('content-length')) > limit) {
     await res.body?.cancel().catch(() => undefined);
     throw new Error('models response exceeds byte limit');
@@ -288,6 +356,7 @@ async function readLimitedBody(res: Response, limit: number): Promise<string> {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
+      if (budget) budget.remaining -= value.byteLength;
       if (total > limit) throw new Error('models response exceeds byte limit');
       chunks.push(value);
     }
@@ -299,6 +368,8 @@ async function readLimitedBody(res: Response, limit: number): Promise<string> {
 }
 
 /** 拉一次模型列表并分类结果。fetch 可注入（单测）。 */
+const sourceRecoveryReads = new Map<string, Promise<ProviderModelsFetchResult>>();
+
 export async function fetchProviderModels(
   spec: ProviderModelsFetchSpec,
   fetchImpl: typeof fetch = outboundFetch,
@@ -320,7 +391,41 @@ export async function fetchProviderModels(
   } catch {
     return { ok: false, code: 'UNKNOWN', detail: INVALID_DISCOVERY_URL };
   }
+  const read = () => fetchProviderModelsRequest(spec, fetchImpl, request);
+  const scheduleRead = () => spec.sourceRecovery && spec.scheduleSourceRecovery
+    ? spec.scheduleSourceRecovery(read) : read();
+  if (!spec.sourceRecovery || !spec.sourceRecoveryScope) return scheduleRead();
+  // Only background results are agent-independent; Settings receipts never share.
+  // Hash the effective wire request, not runtime metadata, and retain it only in flight.
+  const signature = modelSourceRequestSignature(JSON.stringify([spec.sourceRecoveryScope, request.url,
+    request.init.method, request.init.redirect, spec.allowEmpty, spec.requireComplete, spec.responseByteLimit]), request.init);
+  let pending = sourceRecoveryReads.get(signature);
+  if (!pending) {
+    pending = scheduleRead();
+    sourceRecoveryReads.set(signature, pending);
+  }
+  try { return await pending; } finally {
+    if (sourceRecoveryReads.get(signature) === pending) sourceRecoveryReads.delete(signature);
+  }
+}
+
+async function fetchProviderModelsRequest(
+  spec: ProviderModelsFetchSpec, fetchImpl: typeof fetch, request: ReturnType<typeof buildModelsFetchRequest>,
+): Promise<ProviderModelsFetchResult> {
+  const responseByteLimit = spec.responseByteLimit ?? (spec.requireComplete ? 8 * 1024 * 1024 : undefined);
+  // Strict recovery shares one decoded-byte allowance across the whole catalog,
+  // including auxiliary lists. Ordinary imports retain their per-page policy.
+  const budget = spec.requireComplete ? { remaining: responseByteLimit! } : undefined;
   const { url, init } = request;
+  let retryAt: number | undefined;
+  const captureRetryAfter = (response: Response) => {
+    if (!spec.requireComplete) return;
+    if (response.status !== 429 && response.status !== 503) return;
+    const value = response.headers.get('retry-after')?.trim();
+    if (!value) return;
+    const deadline = /^\d+$/.test(value) ? Date.now() + Number(value) * 1000 : Date.parse(value);
+    if (Number.isFinite(deadline) && deadline > Date.now()) retryAt = Math.max(retryAt ?? 0, deadline);
+  };
   let res: Response;
   try {
     res = await fetchModelsResponse(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }, fetchImpl);
@@ -329,30 +434,33 @@ export async function fetchProviderModels(
     return { ok: false, code: cls.code, detail: cls.detail };
   }
   if (!res.ok) {
+    captureRetryAfter(res);
     // A configured Codex manifest may be unavailable on older compatible gateways.
     // Retry only the same endpoint without its manifest selector; never retry auth failures.
     const ordinaryUrl = new URL(url);
     if ((res.status === 404 || res.status === 405) && ordinaryUrl.searchParams.has('client_version')) {
       await res.body?.cancel().catch(() => undefined);
       ordinaryUrl.searchParams.delete('client_version');
-      return fetchProviderModels({ ...spec, modelsUrl: ordinaryUrl.toString() }, fetchImpl);
+      // This is still the same discovery: retain its slot through fallback,
+      // just as for pagination. Re-entering the scheduler can deadlock all slots.
+      return fetchProviderModelsRequest(spec, fetchImpl, { url: ordinaryUrl.toString(), init });
     }
     let bodyText = '';
     try {
-      bodyText = spec.responseByteLimit === undefined
+      bodyText = responseByteLimit === undefined
         ? (await res.text()).slice(0, MAX_ERROR_BODY_BYTES)
-        : await readLimitedBody(res, Math.min(spec.responseByteLimit, MAX_ERROR_BODY_BYTES));
+        : await readLimitedBody(res, Math.min(responseByteLimit, MAX_ERROR_BODY_BYTES), budget);
     } catch {
       /* 读体失败按空体分类 */
     }
     const cls = classifyProviderError({ status: res.status, bodyText });
-    return { ok: false, code: cls.code, status: res.status, detail: cls.detail };
+    return { ok: false, code: cls.code, status: res.status, detail: cls.detail, ...(retryAt ? { retryAt } : {}) };
   }
   let json: unknown;
   try {
-    json = spec.responseByteLimit === undefined
+    json = responseByteLimit === undefined
       ? await res.json()
-      : JSON.parse(await readLimitedBody(res, spec.responseByteLimit));
+      : JSON.parse(await readLimitedBody(res, responseByteLimit, budget));
   } catch {
     return {
       ok: false,
@@ -364,10 +472,11 @@ export async function fetchProviderModels(
   const pageDeadline = Date.now() + 30_000;
   const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
     if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
+    if (budget && budget.remaining <= 0) throw new Error('catalog byte budget exhausted');
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
-    if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
-    return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
-  });
+    if (!page.ok) { captureRetryAfter(page); await page.body?.cancel(); throw new Error('catalog page failed'); }
+    return JSON.parse(await readLimitedBody(page, responseByteLimit ?? 8 * 1024 * 1024, budget));
+  }, { requireComplete: spec.requireComplete });
   // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
   // that success distinct in every consumer (wizard, edit and saved refresh),
   // without treating an error envelope as an empty catalog or an account grant.
@@ -405,7 +514,9 @@ export async function fetchProviderModels(
       code: 'UNKNOWN',
       status: res.status,
       detail: 'no models found in response',
+      ...(retryAt ? { retryAt } : {}),
     };
   }
-  return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
+  return { ok: true, models: spec.sourceRecovery ? stampRecoveredModelSources(models)
+    : issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
 }

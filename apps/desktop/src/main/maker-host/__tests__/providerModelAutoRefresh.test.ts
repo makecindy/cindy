@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
+import { createModelSourceRevalidator } from '../model-source-revalidation.js';
+import { issueModelSourceSnapshot } from '../model-source-snapshots.js';
 import type { BuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh.js';
 
 import {
@@ -34,6 +36,70 @@ function deferred(): {
 }
 
 describe('provider model auto-refresh coordinator', () => {
+  // Unit: a pending old-owner recovery cannot suppress the next owner's hint,
+  // and settling it cannot clear the next owner's shared in-flight work.
+  it('shares custom recovery within an owner without blocking a new owner', async () => {
+    let owner = 'first';
+    const first = deferred();
+    const second = deferred();
+    const refreshCustomSources = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [], refreshProvider: async () => undefined, refreshCustomSources,
+      getScopeKey: () => owner, now: () => 0, log: { debug: vi.fn(), warn: vi.fn() },
+    });
+    const initial = coordinator.requestAutoRefresh('foreground');
+    await Promise.resolve();
+    const shared = coordinator.requestAutoRefresh('model-selector-open');
+    await Promise.resolve();
+    expect(refreshCustomSources).toHaveBeenCalledTimes(1);
+    owner = 'second';
+    const changed = coordinator.requestAutoRefresh('foreground');
+    await Promise.resolve();
+    expect(refreshCustomSources).toHaveBeenCalledTimes(2);
+    first.resolve();
+    await Promise.all([initial, shared]);
+    const next = coordinator.requestAutoRefresh('providers-open');
+    await Promise.resolve();
+    expect(refreshCustomSources).toHaveBeenCalledTimes(2);
+    second.resolve();
+    await Promise.all([changed, next]);
+  });
+
+  // #9882: public catalog success must not suppress five-minute custom recovery.
+  // Unit: coordinator + production revalidator with injected time/store/network.
+  // One old-epoch route and an offline-then-online response distinguish this from
+  // existing public-only cooldown tests; no wall-clock waits or real resources.
+  it('recovers custom sources after five minutes while the public catalog is cooling down', async () => {
+    let now = 0;
+    let source = { kind: 'magpie' as const, providerId: 'Old', snapshotId: 'old-process:receipt' };
+    const config = () => ({ id: 'custom-retry', name: 'Magpie', runtimes: { pi: {
+      baseUrl: 'http://127.0.0.1:3425/v1', models: [{ id: 'a/foo', name: 'Foo', discoveredSource: source }],
+    } } });
+    const fetchModels = vi.fn().mockResolvedValueOnce(null).mockImplementation(async () =>
+      issueModelSourceSnapshot([{ id: 'a/foo', name: 'Foo', discoveredSource: { kind: 'magpie', providerId: 'Recovered' } }], 'pi', 'retry-test'));
+    const revalidate = createModelSourceRevalidator({
+      fetchModels, now: () => now, credentialRevision: () => 0, isMutating: () => false,
+      save: async (_id, _previous, next) => { source = next.runtimes.pi!.models[0].discoveredSource as typeof source; return true; },
+    });
+    const refreshCatalog = vi.fn(async () => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [], refreshProvider: async () => undefined,
+      refreshCatalog, refreshCustomSources: async () => { await revalidate([config()], 'owner', () => true); },
+      now: () => now, log: { debug: vi.fn(), warn: vi.fn() },
+    });
+    await coordinator.requestAutoRefresh('foreground');
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    await coordinator.requestAutoRefresh('providers-open');
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    now += PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
+    await coordinator.requestAutoRefresh('model-selector-open');
+    expect(source.providerId).toBe('Recovered');
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+    expect(refreshCatalog).toHaveBeenCalledTimes(1);
+    await coordinator.requestAutoRefresh('foreground');
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
   it('refreshes the public image catalog before manual OpenAI discovery', async () => {
     const catalog = deferred();
     const refreshProvider = vi.fn(async () => undefined);

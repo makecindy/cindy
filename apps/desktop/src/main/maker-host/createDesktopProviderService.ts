@@ -53,6 +53,7 @@ import {
   isModelDisabled,
   isProviderDisabled,
   storedCustomProviderId,
+  buildUserProvider,
   type Catalog,
   type CatalogCapabilityEvidence,
   type CatalogIO,
@@ -108,6 +109,9 @@ import { createProviderService, type ProviderService } from './provider-service.
 import { copyProviderDisableOverrides, readModelDisableOverrides, setProviderDisabled } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
+import { createModelSourceRevalidator } from './model-source-revalidation.js';
+import { fetchProviderModels, fetchSavedOAuthProviderModels } from './provider-model-fetch.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
 import { migrateLocalConnectProvider } from '../../shared/localConnectHarness.js';
 import {
@@ -116,6 +120,8 @@ import {
   setOAuthTokenReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
+  getProviderRouteCredentialRevision,
+  isProviderRouteMutationInProgress,
   type ProviderOAuthTokenReadOptions,
 } from './provider-route.js';
 import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provider-diagnostics.js';
@@ -652,18 +658,114 @@ export async function refreshDiscoveredCodexModels(
 // older DB read must never publish after a newer one or a persisted capability can disappear from
 // the in-memory routing catalog until the next full app restart.
 let customProviderCatalogRefreshGeneration = 0;
+let pendingSourceProjection: { owner: string } | undefined;
+
+const revalidateModelSources = createModelSourceRevalidator({
+  credentialRevision: getProviderRouteCredentialRevision,
+  isMutating: isProviderRouteMutationInProgress,
+  now: Date.now,
+  async save(id, previous, next) {
+    try {
+      return await updateCustomProviderIfUnchanged(id, previous, next);
+    } catch {
+      log.warn('custom provider model source recovery could not persist');
+      return false;
+    }
+  },
+  async fetchModels(config, agent, isCurrent, scheduleSourceRecovery) {
+    const runtime = config.runtimes[agent];
+    if (!runtime || runtime.headersState === 'unknown' || !isCurrent()) return null;
+    const sourceRecoveryScope = JSON.stringify([activeOwnerScopeKey(), config.id, getProviderRouteCredentialRevision(config.id)]);
+    const guardedFetch: typeof fetch = (url, init) => {
+      if (!isCurrent()) return Promise.reject(new Error('Model source context changed'));
+      return outboundFetch(url, init);
+    };
+    if (config.auth?.method === 'oauth') {
+      const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers, { requireComplete: true, sourceRecovery: true, sourceRecoveryScope, scheduleSourceRecovery });
+      return result.ok ? result.models ?? null : result.retryAt ? { retryAt: result.retryAt } : null;
+    }
+    const authMethod = config.auth?.method ?? 'apiKey';
+    const apiKey = authMethod === 'apiKey' ? readCustomProviderKey(config.id, agent) : null;
+    if (authMethod === 'apiKey' && !apiKey && !Object.keys(runtime.headers ?? {}).length) return null;
+    const result = await fetchProviderModels({
+      agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl, wireProtocol: runtime.wireProtocol,
+      authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true, sourceRecovery: true, sourceRecoveryScope, scheduleSourceRecovery,
+    }, guardedFetch);
+    return result.ok ? result.models ?? null : result.retryAt ? { retryAt: result.retryAt } : null;
+  },
+});
+
+async function recoverCustomProviderModelSources(
+  configs: Parameters<typeof revalidateModelSources>[0],
+  shouldApply: () => boolean,
+): Promise<void> {
+  const owner = getActiveAppSession();
+  const sameOwner = () => {
+    const current = getActiveAppSession();
+    return owner.mode === current.mode && owner.dataOwnerId === current.dataOwnerId;
+  };
+  const isCurrent = () => {
+    const current = getActiveAppSession();
+    return shouldApply() && sameOwner() && owner.generation === current.generation;
+  };
+  // Keep startup/routing responsive. Successful revalidation reloads the latest
+  // DB state through the usual catalog path and its existing change broadcast.
+  await revalidateModelSources(configs, JSON.stringify([owner.dataOwnerId, owner.generation]), isCurrent,
+    JSON.stringify([owner.mode, owner.dataOwnerId])).then(async changed => {
+    if (changed && sameOwner()) {
+      // A committed CAS still needs projection if its generation expired while
+      // awaiting SQLite. Store only owner identity; the next hint rereads the DB.
+      pendingSourceProjection = { owner: JSON.stringify([owner.mode, owner.dataOwnerId]) };
+      if (isCurrent()) await refreshCustomProvidersIntoCatalog(isCurrent, { preserveOnFailure: true });
+    }
+  }).catch(() => {
+    log.warn('custom provider model source recovery failed');
+  });
+}
+
+/** Retry display provenance independently of the public catalog's cooldown.
+ * This read does not migrate or publish configs; discovery itself shares reads
+ * and throttles failed requests for five minutes within the captured owner. */
+export async function refreshCustomProviderModelSources(): Promise<void> {
+  const owner = getActiveAppSession();
+  const isCurrent = () => {
+    const current = getActiveAppSession();
+    return owner.mode === current.mode && owner.dataOwnerId === current.dataOwnerId && owner.generation === current.generation;
+  };
+  if (pendingSourceProjection?.owner === JSON.stringify([owner.mode, owner.dataOwnerId])) {
+    await refreshCustomProvidersIntoCatalog(isCurrent, { preserveOnFailure: true });
+    return;
+  }
+  pendingSourceProjection = undefined;
+  const configs = await listCustomProvidersWithSecureHeaders();
+  if (isCurrent()) await recoverCustomProviderModelSources(configs, isCurrent);
+}
 
 export async function refreshCustomProvidersIntoCatalog(
-  shouldApply: () => boolean = () => true,
+  shouldApply?: () => boolean,
+  options: { preserveOnFailure?: boolean } = {},
 ): Promise<void> {
-  if (!shouldApply()) {
+  if (shouldApply && !shouldApply()) {
     log.info('discarded stale custom provider catalog refresh');
     return;
   }
   const generation = ++customProviderCatalogRefreshGeneration;
-  const owner = activeOwnerScopeKey();
+  const owner = getActiveAppSession();
+  const ownerScope = activeOwnerScopeKey();
+  const pendingProjection = pendingSourceProjection;
+  const projectionPublished = () => {
+    if (pendingSourceProjection === pendingProjection) pendingSourceProjection = undefined;
+  };
+  const ownerIsCurrent = (): boolean => {
+    const current = getActiveAppSession();
+    // The readiness barrier can adopt same-owner work across a generation bump.
+    // Its predicate also invalidates real owner/ABA transitions. Unscoped callers
+    // have no adoption authority and must retain the strict generation check.
+    return owner.mode === current.mode && owner.dataOwnerId === current.dataOwnerId
+      && (shouldApply ? shouldApply() : ownerScope === activeOwnerScopeKey());
+  };
   const isCurrent = (): boolean =>
-    generation === customProviderCatalogRefreshGeneration && owner === activeOwnerScopeKey() && shouldApply();
+    generation === customProviderCatalogRefreshGeneration && ownerIsCurrent();
   try {
     const configs = await listCustomProvidersWithSecureHeaders();
     if (!isCurrent()) {
@@ -703,12 +805,16 @@ export async function refreshCustomProvidersIntoCatalog(
         log.info('discarded stale custom provider catalog refresh after cas miss');
         return;
       }
-      setCustomProviderConfigs(fresh);
+      setCustomProviderConfigs(fresh, { skipUnchanged: true });
+      projectionPublished();
+      void recoverCustomProviderModelSources(fresh, ownerIsCurrent);
       requestCodexApiModelProbe();
       log.info('custom providers merged into active catalog after cas miss', { count: fresh.length });
       return;
     }
-    setCustomProviderConfigs(next);
+    setCustomProviderConfigs(next, { skipUnchanged: true });
+    projectionPublished();
+    void recoverCustomProviderModelSources(next, ownerIsCurrent);
     // Publish old routes first. Accounts are never merged automatically any more (2026-11-13,
     // subscription-account-pools.md 合并与拿出由用户决定); connections the 11-11 upgrade folded into
     // OpenAI belong to their own connection again, keeping their account, login and task bindings.
@@ -740,6 +846,10 @@ export async function refreshCustomProvidersIntoCatalog(
       log.info('discarded stale custom provider catalog refresh failure', {
         err: String(err),
       });
+      return;
+    }
+    if (options.preserveOnFailure) {
+      log.warn('failed to reload recovered sources; retained current owner catalog snapshot');
       return;
     }
     setCustomProviders([]);

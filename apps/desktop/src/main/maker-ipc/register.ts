@@ -1287,6 +1287,7 @@ import {
   getDesktopSelectableCatalog,
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
+  refreshCustomProviderModelSources,
   syncLocalCatalogOverridesIntoActiveCatalog,
 } from '../maker-host/createDesktopProviderService.js';
 import {
@@ -7727,9 +7728,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getScopeKey: () => getActiveAppSession().generation,
     // 通知唯一出口是 active-catalog changedListener(capabilities 先对齐再广播);
     // 这里不再补发 PROVIDER_CHANGED——no-op/拒收刷新就该是 0 次广播。
-    refreshCatalog: async () => {
-      await refreshActiveCatalogFromSource();
-    },
+    refreshCatalog: async () => { await refreshActiveCatalogFromSource(); },
+    // Five-minute source recovery must receive hints even while the public
+    // catalog is in its independent thirty-minute success cooldown.
+    refreshCustomSources: refreshCustomProviderModelSources,
     refreshProvider: (providerId) =>
       refreshBuiltinProviderModels(providerId, {
         refreshXd: options.refreshXdGatewayModels,
