@@ -1136,8 +1136,8 @@ export class DeviceLinkClient {
    * 已 online 时为空操作,不打断健康连接;stopped 时等价于 start()。
    *
    * 拥塞冷却例外(review P1):relay 刚以 1013 拥塞断连、冷却计时器在跑时,
-   * 默认**不** un-park——事故形态下恰是在途请求经 waitUntilOnline → connectNow
-   * 把每次 1013 后的冷却清掉,「重连 → 重放洪峰 → 再被踢」的循环因此掐不断。
+   * 默认**不** un-park，避免「重连 → 重放洪峰 → 再被踢」的循环。
+   * 请求等待只订阅状态，不调用此立即重连入口。
    * 只有显式用户意图(移动端回前台)传 overrideCongestionCooldown 保留立即重连;
    * 被 park 的调用方等冷却计时器到点自然重连(封顶 congestionBackoffMaxMs)。
    */
@@ -1351,8 +1351,8 @@ export class DeviceLinkClient {
    * 有界等待连接就绪。online 立即 resolve;否则订阅状态变化,在 timeoutMs 内
    * 等到 online 就 resolve,超时 / stopped 则 reject(NOT_CONNECTED)。
    *
-   * Desktop/Mobile 请求等待时可打断普通退避，促成一次立即重连；
-   * 已在途的握手和 relay 1013 拥塞冷却仍保留。
+   * 所有请求共享既有退避和在途握手，不因新请求到达而重置重连节奏；
+   * 否则 4429/1012 等断线后的连续请求会反复清掉计时器，放大建连压力。
    * 已 stopped 时不自动拉起连接
    * (start/stop 仍由宿主生命周期掌管),直接快速失败让上层感知。
    */
@@ -1361,9 +1361,6 @@ export class DeviceLinkClient {
     if (this.stopped) {
       return Promise.reject(new DeviceLinkError('NOT_CONNECTED', 'client stopped'));
     }
-    // Only un-park a pending retry; concurrent waiters keep the in-flight handshake.
-    if (this.reconnectTimer) this.connectNow('wait-until-online');
-
     const timeout = timeoutMs ?? this.timing.requestTimeoutMs;
     return new Promise<void>((resolve, reject) => {
       let off: (() => void) | null = null;
