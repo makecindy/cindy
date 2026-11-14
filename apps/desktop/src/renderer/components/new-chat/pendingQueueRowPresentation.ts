@@ -1,5 +1,9 @@
 import { isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId } from '@cindy/maker-shared/interaction';
-import { forwardedRequestDisplayText, isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
+import {
+  forwardedRequestDisplayText,
+  isBackgroundCommandSchedulerOrigin,
+  isHookSchedulerOrigin,
+} from '@cindy/maker-shared/message-source';
 import i18n from '@/i18n';
 import { isOrcaAutoBridgeBatch } from '@/lib/messageAutomationOrigin';
 import { queueItemVisibleSource, queueItemVisibleText } from '@cindy/maker-shared/queue';
@@ -71,16 +75,22 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
   const isOrca = origin?.kind === 'orca';
   // Hook 渠道消息复用 scheduler 形态,不是自动化:不显示自动化来源行(与历史气泡一致)。
   const isHookOrigin = isHookSchedulerOrigin(origin);
-  const isScheduler = origin?.kind === 'scheduler' && !isHookOrigin;
+  // 后台命令完成回注(`bgcmd:<runId>`)同理:宿主回调且正文自述,不出自动化来源行。
+  const isBgcmdOrigin = isBackgroundCommandSchedulerOrigin(origin);
+  const isScheduler = origin?.kind === 'scheduler' && !isHookOrigin && !isBgcmdOrigin;
   // 插件优先(与 messageSourceSenderFromMeta 同序):插件在某任务里派发时同时带来源任务 origin。
   const isPlugin = !isOrca && origin?.kind !== 'scheduler' && Boolean(entry.sourcePlugin?.pluginId);
   const isSession = origin?.kind === 'session' && !isPlugin;
-  // Hook 渠道条目同属机器投递(渠道原话),不显示来源行但同样不可编辑/插话。
-  const isMachineGenerated = isOrca || isScheduler || isSession || isPlugin || isHookOrigin;
+  // Hook 渠道/后台命令条目同属机器投递,不显示来源行但同样不可编辑/插话。
+  const isMachineGenerated =
+    isOrca || isScheduler || isSession || isPlugin || isHookOrigin || isBgcmdOrigin;
   const isSyntheticTrigger = entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX);
   const isAnswered = isAnsweredAsyncQuestionClientId(entry.clientId);
   const isContinueTrigger =
     entry.text === CONTINUE_AFTER_APP_EXIT_PROMPT || entry.text === CONTINUE_AFTER_ERROR_PROMPT;
+  // 正文选择与来源标签分开:后台命令回注与自动化心跳一样,text 是发给 Agent 的
+  // 原文(含日志尾部与指令),队列面板只显示 persistedContent 摘要。
+  const usesMachineVisibleText = isScheduler || isSession || isPlugin || isBgcmdOrigin;
   const isPendingEnqueue = entry.isPendingEnqueue === true;
 
   return {
@@ -104,8 +114,10 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
     senderBotId: isSession && origin?.kind === 'session' ? (origin.senderBotId ?? null) : null,
     displayText: isOrca
       ? (origin.displayText ?? entry.text)
-      : isScheduler || isSession || isPlugin
-        ? (isSession ? forwardedRequestDisplayText(queueItemVisibleText(entry)) : queueItemVisibleText(entry))
+      : usesMachineVisibleText
+        ? isSession
+          ? forwardedRequestDisplayText(queueItemVisibleText(entry))
+          : queueItemVisibleText(entry)
         : entry.chatMessage.quotesEncoded === true
           ? stripChatQuoteMarkerLines(entry.text)
           // An answer to a question shows as the question and the answer, never the reply format sent to the model.
@@ -113,7 +125,7 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
             ? queueItemVisibleText(entry)
             : entry.text,
     rangedSourceText:
-      isScheduler || isSession || isPlugin
+      usesMachineVisibleText
         ? (() => {
             const source = queueItemVisibleSource(entry);
             return source.replaceRanges ? source.text : null;

@@ -227,6 +227,37 @@ const feishuTransportFor = createFeishuTransportResolver({
   personalIm: feishuIm,
 });
 
+// 后台命令 + 完成回注:模块级懒建单例。createDesktopMcpProviders 会被三个 harness
+// 路径各调一次,闭包级单例会变成三份并发记账;这里收敛到模块级,deps 仍懒 import。
+let backgroundCommandServiceSingleton: Promise<
+  import('../maker-host/background-commands.js').BackgroundCommandService
+> | null = null;
+async function getBackgroundCommandService(): Promise<
+  import('../maker-host/background-commands.js').BackgroundCommandService
+> {
+  if (!backgroundCommandServiceSingleton) {
+    backgroundCommandServiceSingleton = import('../maker-host/background-commands.js').then(({ createBackgroundCommandService }) =>
+      createBackgroundCommandService({
+        enqueueReport: (req) =>
+          import('../maker-ipc/register.js').then((m) => m.enqueueSchedulerPrompt(req)),
+        resolveLogDir: () => ownerScopedUserDataPath('background-commands'),
+        logger: createLogger('mcp/background-commands'),
+      }));
+  }
+  return backgroundCommandServiceSingleton;
+}
+
+/**
+ * 切账号边界作废后台命令服务:杀掉旧账号的在途进程树、清计时器、丢弃待投递报告，
+ * 并清空单例引用（下次使用懒建全新服务）。不处理的后果：旧账号的长命令一直
+ * 占着并发名额，新账号的 run_command_background 持续 TOO_MANY_RUNS。
+ */
+export function resetBackgroundCommandService(): void {
+  const pending = backgroundCommandServiceSingleton;
+  backgroundCommandServiceSingleton = null;
+  void pending?.then((service) => service.dispose());
+}
+
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {
   setSessionPathAuthorizer((request) =>
     authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
@@ -829,6 +860,16 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       sessionTags: async (callerSessionId, request) => {
         const result = await executeTaskTags(request, callerSessionId);
         return ['update', 'delete'].includes(request.action) ? { ...result, sessions: [] } : result;
+      },
+      // 后台命令 + 完成回注:过期实例在此拒绝;服务本体是模块级单例(上方)。
+      backgroundCommands: async (request) => {
+        if (
+          request.sessionInstanceId
+          && deps.isCurrentLocalSessionInstance?.(request.sessionId, request.sessionInstanceId) === false
+        ) {
+          return { ok: false, errorCode: 'STALE_CALLER', message: 'This task instance is no longer current.' };
+        }
+        return (await getBackgroundCommandService()).start(request);
       },
       createProject,
       moveSession: createMoveSession(isSessionInTurn),

@@ -53,6 +53,10 @@ import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/typ
 import { z } from 'zod';
 import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
 import { INPUT_HANDOFF_TOOL_NAME, registerInputHandoffTool, type InputHandoffCallbacks } from './xdt-helper/input_handoff.js';
+import {
+  registerBackgroundCommandTool,
+  type BackgroundCommandToolDeps,
+} from './xdt-helper/backgroundCommand.js';
 import { jsonObjectArg } from './json-object-arg.js';
 import {
   registerAsyncQuestionTool,
@@ -207,6 +211,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；',
     '归档/取消归档、删除（delete_session）、按消息分叉（fork_session）与检查点回退（rewind_session）支持本机与跨电脑（deviceId::sessionId），删除和回退逐次确认；',
     '改名、移动、标签、排队消息、插话、停止、运行设置（含权限档）、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
+    '长命令可后台运行（run_command_background：完成时宿主自动回注本任务，免 sleep 轮询），仅本机。',
   ].join(''),
   github: [
     '读取 PR、CI、评审变化与详情，明确管理任务关联。',
@@ -485,6 +490,7 @@ export interface XdtHelperMcpDeps {
   grokLogin?: GrokLoginCallbacks;
   /** 代输入: hand an on-screen step to the owner; values stay on the host. */
   inputHandoff?: InputHandoffCallbacks;
+  backgroundCommands?: BackgroundCommandToolDeps['start'];
   /**
    * Host-owned runtime classification. `bot-main` is a local Bot's main task: it sees
    * the ordinary task surface plus Bot tools, and every call is judged by `authorizeCall`.
@@ -671,6 +677,12 @@ export function createXdtHelperMcpServer(
     registerGrokLoginTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.grokLogin);
   if (deps.inputHandoff)
     registerInputHandoffTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.inputHandoff);
+  if (deps.backgroundCommands) {
+    registerBackgroundCommandTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      start: deps.backgroundCommands,
+    });
+  }
   registerGetCurrentSessionIdTool(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
     getSessionProject: deps.getSessionProject,

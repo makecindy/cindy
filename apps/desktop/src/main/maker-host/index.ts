@@ -306,7 +306,7 @@ import {
   setCodexAppliedCustomProviderRoutes,
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.desktop.js';
-import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
+import { createDesktopMcpProviders, resetBackgroundCommandService } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.desktop.js';
 import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.desktop.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
@@ -3127,6 +3127,9 @@ export function resetMaker(): void {
   // otherwise a relogin inherits the old dispatch-busy and abort boundaries.
   // Callers keep this Maker when PI teardown is unconfirmed, preserving supervision.
   releaseSessionBindingsForOwnerBoundary();
+  // 后台命令服务是模块级单例，不在 _maker 内：不在这里作废的话，切号后旧账号的
+  // 在途进程继续占并发名额，新账号的 run_command_background 直接 TOO_MANY_RUNS。
+  resetBackgroundCommandService();
   remoteWorkerBridge = null;
   void disposeLocalAgentHost();
   disposeRemoteAgentHost();

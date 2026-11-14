@@ -24,6 +24,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  CINDY_BG_CMD_HINT,
   CINDY_BRIDGE_EXTENSION_SOURCE,
   CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS,
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
@@ -2981,4 +2982,66 @@ it('leaves a direct tool alone when its required name is not the Cindy envelope'
     .rejects.toThrow(/write_file failed/);
   expect(requests).toHaveLength(1);
   expect(requests[0].params).toEqual({ name: 'write_file', arguments: { content: 'text' } });
+});
+
+describe('background command discovery', () => {
+  it('appends the run_command_background hint to both bash and powershell descriptions, and keeps the module-level hint in sync with the bridge source', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    // 模板内 const 定义 + bash 拼接 + powershell 拼接:三处引用缺一即失效。
+    const occurrences = source.match(/CINDY_BG_CMD_HINT/g) ?? [];
+    expect(occurrences.length).toBeGreaterThanOrEqual(3);
+    // 模块级 hint 与模板内 hint 逐字一致(bridge 运行时副本手工维护,契约测试防漂移)。
+    expect(source.includes(CINDY_BG_CMD_HINT)).toBe(true);
+    // 文案要点:pi 侧模型可见的 MCP 入口是 cindy_mcp_call_tool,调用形态必须是完整三层信封;
+    // 并点名 sleep / gh run view 轮询。
+    expect(CINDY_BG_CMD_HINT).toContain(
+      'cindy_mcp_call_tool({server:"cindy_helper", tool:"call_tool", args:{name:"run_command_background", args:{command:"..."}}})',
+    );
+    expect(CINDY_BG_CMD_HINT).toContain('gh run view');
+  });
+
+  it('blocks the third same-turn identical shell call via the registered handler, resets per turn, and never parses command semantics', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('const repeatCallCounts');
+    const end = source.indexOf("pi.on('tool_call', async", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const compiled = ts.transpileModule(source.slice(start, end), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const sandbox: any = { result: undefined as any, callbacks: [] as Array<[string, (event?: any) => any]> };
+    sandbox.pi = { on: (name: string, fn: (event?: any) => any) => sandbox.callbacks.push([name, fn]) };
+    runInNewContext(compiled + '\nresult = { onToolCall: callbacks[1][1], bumpTurn: callbacks[0][1], counts: repeatCallCounts };', sandbox);
+    expect(sandbox.callbacks.map(([name]: string) => name)).toEqual(['before_agent_start', 'tool_call']);
+    // 走注册链路:handler 自己读闭包里的回合号，这里不手工传参，防止接线回归假绿。
+    const onToolCall = sandbox.result.onToolCall as (event: any) => any;
+    const bumpTurn = sandbox.result.bumpTurn as () => void;
+    const run = (cmd: string, toolName = 'bash') => onToolCall({ toolName, input: { command: cmd } });
+    // 同回合:同一命令第 1、2 次放行(状态、日志两步是合理的)，第 3 次起拦截。
+    expect(run('gh run watch 12345678 --exit-status')).toBeUndefined();
+    expect(run('gh run watch 12345678 --exit-status')).toBeUndefined();
+    const third = run('gh run watch 12345678 --exit-status');
+    expect(third && third.block).toBe(true);
+    expect(third.reason).toContain('run_command_background');
+    expect(third.reason).toContain('cindy_mcp_call_tool');
+    // 误伤自愈口:reason 指明措辞微调即可通行。
+    expect(third.reason).toContain('rephrase');
+    // 第 4 次仍拦(回合内持续)；空白差异规范化后逐字相等，同样算重复轮询。
+    expect(run('gh run watch 12345678 --exit-status')?.block).toBe(true);
+    expect(run('gh run watch  12345678  --exit-status ')?.block).toBe(true);
+    // 命令内容不同即另立计数，互不影响；轮询形态不限于 gh run view。
+    expect(run('gh run view 12345678')).toBeUndefined();
+    expect(run('sleep 60 && gh run view 12345678')).toBeUndefined();
+    expect(run('gh pr checks 7846')).toBeUndefined();
+    // 回合切换:同一命令重新从第 1 次放行计数(bumpTurn 真实生效才可能放行)，
+    // 旧回合的命令文本不残留(clear，防长寿命任务里无界增长)。
+    bumpTurn();
+    expect(sandbox.result.counts.size).toBe(0);
+    expect(run('gh run watch 12345678 --exit-status')).toBeUndefined();
+    // powershell 同样覆盖;其它工具、空命令不过闸。
+    expect(run('Get-Content log.txt', 'powershell')).toBeUndefined();
+    expect(onToolCall({ toolName: 'read', input: { command: 'x' } })).toBeUndefined();
+    expect(onToolCall({ toolName: 'bash', input: {} })).toBeUndefined();
+    expect(run('   ')).toBeUndefined();
+  });
 });

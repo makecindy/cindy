@@ -103,6 +103,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 给当前任务新建 Cindy 托管 worktree（默认最新远端默认分支，可指定基线分支 `base_ref`；绑定当前任务，随归档回收；不搬任务、不重启） | 有（`create_task_worktree`，2026-10-31；基线分支 2026-11-10） | 无 |
 | 任务     | 看输入队列；编辑 / 撤回 / 调序自己发的排队消息；插话；停止 | 有   | 无               |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
+| 任务     | 后台运行长命令（测试 / 门禁 / CI 等待），完成时宿主回注本任务（`run_command_background`，仅本机，SSH 远端不可用；命令不要自行后台化） | 有   | 无               |
 | 任务     | `fork_session` 按指定消息分叉；`rewind_session` 恢复指定 user 消息前的历史与检查点 | 有（control，回退逐次确认；共用界面入口的屏障、锁与清理） | 有（既有 fork / rewind 通道，不自动重试） |
 | 任务     | `get_session_runtime` 读权限档；`set_session_runtime(permission_mode)` 复用界面权限提交与回滚 | 有（control；权限提高逐次确认；持有 admission 的任务修改自身权限含混合请求，在所有写入前返回 `UNSUPPORTED_CAPABILITY`，其余原判定保持） | 任务在目标电脑运行工具；不新增跨电脑设置入口 |
 | 任务     | 代用户确认权限或回答提问   | 无   | 无               |

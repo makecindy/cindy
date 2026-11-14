@@ -393,6 +393,104 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  // Unit: run_command_background 是「长命令后台化 + 完成回注」的入口;守卫(无会话/
+  // 远程会话拒绝)与参数透传是它的对外契约,坏了会把远端路径当本机命令跑。
+  it('runs a background command for a local task and rejects remote or unbound callers', async () => {
+    const start = vi.fn(async () => ({ ok: true as const, runId: 'bg-1', logPath: '/tmp/bg-1.log', pid: 4321 }));
+    let context: Record<string, unknown> | undefined = {
+      agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task', sessionInstanceId: 'instance-1',
+    };
+    const server = createXdtHelperMcpServer({ backgroundCommands: start }, {
+      agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task',
+      getSessionContext: () => context as never,
+    });
+    const client = new Client({ name: 'bg-command-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const call = () => client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'run_command_background', args: { command: 'pnpm test', timeout_seconds: 600 } },
+      });
+      expect(parsePayload(await call())).toMatchObject({
+        ok: true, run_id: 'bg-1', log_path: '/tmp/bg-1.log', pid: 4321,
+      });
+      expect(start).toHaveBeenCalledWith({
+        sessionId: 'current-task', sessionInstanceId: 'instance-1',
+        command: 'pnpm test', cwd: '/repo', timeoutMs: 600_000,
+      });
+      // shell 参数必须原样穿透到宿主服务(解释器点名是模型与前台工具同源的契约);
+      // 丢了会静默回落 bash,PowerShell 语法的命令在后台换解释器必坏。
+      await client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'run_command_background', args: { command: 'Get-Content x', shell: 'powershell' } },
+      });
+      expect(start).toHaveBeenLastCalledWith({
+        sessionId: 'current-task', sessionInstanceId: 'instance-1',
+        command: 'Get-Content x', shell: 'powershell', cwd: '/repo',
+      });
+      context = { agentKind: 'pi', workingDir: '/remote', sessionId: 'ssh-task', remoteHostId: 'host-1' };
+      expect(parsePayload(await call())).toMatchObject({ ok: false, errorCode: 'REMOTE_SESSION_NOT_SUPPORTED' });
+      context = undefined;
+      expect(parsePayload(await call())).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+      expect(start).toHaveBeenCalledTimes(2);
+    } finally { await client.close(); await server.close(); }
+  });
+
+  // Unit: 受理宽限窗内退出的命令,结果随 start 调用同步返回——失败以 error hint
+  // (退出码+日志尾部)呈现供当回合自纠,成功以 ok payload 呈现且注明不再有回报;
+  // 坏了会退回「等回注」的旧路径,秒败白占一轮。
+  it('maps in-grace completion to synchronous payloads instead of follow-up reports', async () => {
+    const start = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        runId: 'bg-2',
+        logPath: '/tmp/bg-2.log',
+        pid: 7,
+        completed: { code: 3, signal: null, timedOut: false, tail: 'bash: cd: /e/nope: No such file or directory' },
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        runId: 'bg-3',
+        logPath: '/tmp/bg-3.log',
+        pid: 8,
+        completed: { code: 0, signal: null, timedOut: false, tail: 'done' },
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        runId: 'bg-4',
+        logPath: '/tmp/bg-4.log',
+        pid: 9,
+        completed: { code: 1, signal: null, timedOut: false, outputCapped: true, tail: 'xxxx' },
+      });
+    const server = createXdtHelperMcpServer({ backgroundCommands: start }, {
+      agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task',
+      getSessionContext: () => ({ agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task' } as never),
+    });
+    const client = new Client({ name: 'bg-command-grace-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const call = () => client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'run_command_background', args: { command: 'cd /e/nope && make' } },
+      });
+      const failed = parsePayload(await call()) as { ok: boolean; errorCode?: string; data?: { hint?: string } };
+      expect(failed).toMatchObject({ ok: false, errorCode: 'COMMAND_FAILED' });
+      expect(failed.data?.hint).toContain('exit 3');
+      expect(failed.data?.hint).toContain('/e/nope');
+      expect(failed.data?.hint).toContain('/tmp/bg-2.log');
+      const ok = parsePayload(await call()) as { ok: boolean; run_id?: string; log_tail?: string; note?: string };
+      expect(ok).toMatchObject({ ok: true, run_id: 'bg-3', log_tail: 'done' });
+      expect(ok.note).toContain('不会再有');
+      // 体量巡检杀树的同步结果:原因说明必须随结果带回,不能只剩「被信号终止」。
+      const capped = parsePayload(await call()) as { ok: boolean; data?: { hint?: string } };
+      expect(capped).toMatchObject({ ok: false, errorCode: 'COMMAND_FAILED' });
+      expect(capped.data?.hint).toContain('输出超过宿主上限');
+    } finally { await client.close(); await server.close(); }
+  });
+
   it.each(['default', 'bot-main'] as const)('exposes runtime declarations through the same helper tool for %s', async (surface) => {
     const runtimeCapabilities = vi.fn(async () => ({ ok: true, capabilities: [{ server: 'fixture' }] }));
     const server = createXdtHelperMcpServer({ resolveSurface: async () => surface, runtimeCapabilities }, {

@@ -300,6 +300,9 @@ export function getDesktopMcpToolApprovalPolicy(
     if (action === 'move_session' || action === 'publish_skill' || action === 'create_task_worktree') {
       return 'prompt-each-time';
     }
+    // 后台命令是任意 shell 执行面(借宿主进程绕开 bash 的同步超时)：每次调用都
+    // 交会话权限档判定，不享受可信 helper server 的静默放行。
+    if (action === 'run_command_background') return 'prompt-each-time';
     // Moving a teammate hands its running to another computer: the task's permission mode decides.
     if (action === 'manage_session_prs' && args?.action !== 'list') return 'prompt-each-time';
     if (action === 'move_teammate_home') return 'prompt-each-time';

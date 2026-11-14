@@ -1,4 +1,4 @@
-import { readMessageSourceGroup } from '@cindy/maker-shared/message-source';
+import { BGCMD_SCHEDULE_ID_PREFIX, readMessageSourceGroup } from '@cindy/maker-shared/message-source';
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
 
@@ -15,6 +15,11 @@ function redactOriginForSharedGuest(origin: Record<string, unknown>): Record<str
       return origin.scheduleId === HOOK_SCHEDULE_ID_PREFIX && Object.keys(origin).length === 2
         ? null
         : { kind: 'scheduler', scheduleId: HOOK_SCHEDULE_ID_PREFIX };
+    }
+    // 后台命令完成回注（`bgcmd:<runId>`）同理：只保留 `bgcmd:` 前缀，访客端的新判据
+    // 据此不显示自动化标签；runId 不下发。
+    if (typeof origin.scheduleId === 'string' && origin.scheduleId.startsWith(BGCMD_SCHEDULE_ID_PREFIX)) {
+      return { kind: 'scheduler', scheduleId: BGCMD_SCHEDULE_ID_PREFIX };
     }
     return Object.keys(origin).some((key) => key !== 'kind') ? { kind: 'scheduler' } : null;
   }
