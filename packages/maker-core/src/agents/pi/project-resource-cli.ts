@@ -68,9 +68,32 @@ function findNearestGitRoot(workingDir: string): string | null {
   }
 }
 
-function isWithinRoot(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+/**
+ * Windows realpath may use a different case or extended-length spelling than
+ * the working directory. Normalize both forms before checking containment so
+ * in-repo project Skills are not silently dropped.
+ */
+export function isWithinRoot(
+  root: string,
+  candidate: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const normalize = (value: string): string => {
+    let normalizedInput = value;
+    if (platform === 'win32') {
+      normalizedInput = normalizedInput.replace(/^\\\\\?\\UNC\\/i, '\\\\');
+      normalizedInput = normalizedInput.replace(/^\\\\\?\\([A-Za-z]:\\)/, '$1');
+    }
+    const normalized = pathApi.normalize(normalizedInput);
+    return platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  const relative = pathApi.relative(normalize(root), normalize(candidate));
+  return relative === '' || (
+    !relative.startsWith(`..${pathApi.sep}`)
+    && relative !== '..'
+    && !pathApi.isAbsolute(relative)
+  );
 }
 
 function listDir(dir: string): fs.Dirent[] {

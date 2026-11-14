@@ -9,6 +9,7 @@ import {
   comparePiResourcePaths,
   estimateSpawnArgvLength,
   filterPiProjectCliSkills,
+  isWithinRoot,
   PI_POSIX_SPAWN_ARGV_BUDGET,
   PI_WINDOWS_SPAWN_ARGV_BUDGET,
   piProjectResourceCliArgs,
@@ -163,6 +164,24 @@ describe('collectPiProjectResourceCliPaths', () => {
 });
 
 describe('pi project resource path order and spawn argv budget', () => {
+  it('treats Windows casing and extended-length paths as the same root', () => {
+    expect(isWithinRoot(
+      'C:\\Users\\Alice\\project',
+      'c:\\users\\alice\\PROJECT\\.agents\\skills\\demo',
+      'win32',
+    )).toBe(true);
+    expect(isWithinRoot(
+      'C:\\Users\\Alice\\project',
+      '\\\\?\\C:\\Users\\Alice\\project\\.agents\\skills\\demo',
+      'win32',
+    )).toBe(true);
+    expect(isWithinRoot(
+      'C:\\Users\\Alice\\project',
+      'D:\\Users\\Alice\\project\\.agents\\skills\\demo',
+      'win32',
+    )).toBe(false);
+  });
+
   it('orders paths by code units so locale cannot change Skill precedence', () => {
     expect(['b', 'A'].sort(comparePiResourcePaths)).toEqual(['A', 'b']);
   });
