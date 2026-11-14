@@ -14,7 +14,7 @@ app.whenReady().then(() => {
     } else if (request.operation === 'decrypt' && typeof request.value === 'string') {
       value = safeStorage.decryptString(Buffer.from(request.value, 'base64'));
     } else throw new Error();
-    process.stdout.write(JSON.stringify({ value }), () => app.exit(0));
+    process.stdout.write(JSON.stringify({ value }), () => app.quit());
   } catch {
     // Never serialize OS errors: they may contain a secret or a profile path.
     process.stdout.write(JSON.stringify({ error: 'CREDENTIAL_STORE_UNAVAILABLE' }), () => app.exit(1));
