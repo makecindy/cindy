@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { LinuxUserInstallation } from '../linuxInstallation';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 import { TEST_CDN_BASE_URL as CDN_EXTERNAL_BASE_URL } from '../../test/vitest/clientEndpointsFixture';
 
 const originalPlatform = process.platform;
@@ -41,7 +43,7 @@ const spawnProcess = vi.fn(() => ({
   unref: vi.fn(),
   on: vi.fn(),
 }));
-const findLinuxUserInstallation = vi.fn(() => null);
+const findLinuxUserInstallation = vi.fn<() => LinuxUserInstallation | null>(() => null);
 const checkDebianManagedInstallation = vi.fn<() =>
   | { status: 'managed' }
   | { status: 'not-managed' }
@@ -1018,6 +1020,17 @@ async function runStartupUpdate(
   }
 }
 
+function linuxUserInstallation(
+  overrides: Partial<LinuxUserInstallation> = {},
+): LinuxUserInstallation {
+  return {
+    prefix: '/home/devuser/.local/opt/cindy',
+    current: 'releases/0.0.64-abc',
+    region: CURRENT_CINDY_REGION === 'global' ? 'global' : 'cn',
+    ...overrides,
+  };
+}
+
 function linuxInstallerManifest(version = '0.0.65') {
   return {
     app: {
@@ -1204,6 +1217,41 @@ describe('checkForUpdate Linux installer flow', () => {
       action: 'none',
       version: '0.0.65',
     });
+  });
+
+  // Regression: a per-user install under $HOME updates without pkexec, so it
+  // must not inherit the .deb "needs a password" block at startup or idle.
+  it('auto-applies a staged update at startup for a Linux user installation', async () => {
+    findLinuxUserInstallation.mockReturnValue(linuxUserInstallation());
+    await expect(runStartupUpdate({ platform: 'linux' })).resolves.toMatchObject({
+      hasUpdate: true,
+      action: 'relaunch',
+      version: '0.0.65',
+    });
+  });
+
+  it('keeps blocking a Linux user installation from another region', async () => {
+    findLinuxUserInstallation.mockReturnValue(linuxUserInstallation({
+      region: CURRENT_CINDY_REGION === 'global' ? 'cn' : 'global',
+    }));
+    await expect(runStartupUpdate({ platform: 'linux' })).resolves.toMatchObject({
+      hasUpdate: true,
+      action: 'none',
+    });
+  });
+
+  it('treats a staged update as imminent only for a Linux user installation', async () => {
+    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    await expect(service.checkForUpdate(linuxInstallerManifest())).resolves.toBe('ready');
+    expect(service.isUpdateRelaunchImminent()).toBe(false);
+    findLinuxUserInstallation.mockReturnValue(linuxUserInstallation());
+    expect(service.isUpdateRelaunchImminent()).toBe(true);
   });
 
   // Regression: ARM64 must use the existing org-default and trusted IPC paths;
