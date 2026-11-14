@@ -423,6 +423,7 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.doesNotMatch(shards, /pnpm test:(?:unit|runner)/);
 	assert.equal([...shards.matchAll(/--tier integration --workspace @cindy\/maker-pi-manager/g)].length, 1);
 	assert.match(shards, /^      - name: Run Pi manager integration tests\r?\n        if: matrix\.shard == 1\r?\n        run: pnpm run test:workspaces --tier integration --workspace @cindy\/maker-pi-manager$/m);
+	assert.match(shards, /^      - name: Run Headless SQLite integration tests\r?\n        if: matrix\.shard == 1\r?\n        run: pnpm run test:workspaces --tier integration --workspace cindy-headless$/m);
 
 	const gate = workflowJob(workflow, "verify");
 	assert.ok(gate, "client CI must preserve the stable verify check");

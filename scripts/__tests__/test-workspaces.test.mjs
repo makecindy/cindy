@@ -493,6 +493,15 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	assert.deepEqual(piManager.tiers.integration.include, [
 		"src/__tests__/pi-manager.integration.test.ts",
 	]);
+	const headless = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "apps/cindy-headless",
+	);
+	const headlessSqliteTest = "apps/cindy-headless/src/sqlite.integration.test.ts";
+	assert.deepEqual(selectFilesForTier(headless, headless.tiers.unit, [headlessSqliteTest]), []);
+	assert.deepEqual(
+		selectFilesForTier(headless, headless.tiers.integration, [headlessSqliteTest]),
+		[headlessSqliteTest],
+	);
 	assert.deepEqual(desktop.tiers.e2e.include, [
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
 		"src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts",
