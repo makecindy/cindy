@@ -2,6 +2,11 @@ import * as React from 'react';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 
 import { cn } from '@/lib/utils';
+import {
+  TransientLayerContent,
+  useTransientCloseAutoFocus,
+  withTransientLayer,
+} from './transient-layer';
 
 import {
   MENU_OWN_HIGHLIGHT_ATTR,
@@ -45,7 +50,7 @@ type PanelHighlightProps = {
   hoverHighlight?: boolean;
 };
 
-const DropdownMenu = DropdownMenuPrimitive.Root;
+const DropdownMenu = withTransientLayer(DropdownMenuPrimitive.Root);
 
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 
@@ -122,26 +127,32 @@ const DropdownMenuContent = React.forwardRef<
     /** Optional top-layer host, e.g. a menu above native fullscreen media. */
     portalContainer?: HTMLElement | null;
   }
->(({ className, sideOffset = 4, hoverHighlight = true, children, portalContainer, ...props }, ref) => (
-  <DropdownMenuPrimitive.Portal container={portalContainer}>
-    <DropdownMenuPrimitive.Content
-      ref={useMenuPanel(ref, { highlight: hoverHighlight })}
-      {...{ [MENU_PANEL_ATTR]: '' }}
-      sideOffset={sideOffset}
-      className={cn(
-        'relative z-50 min-w-[8rem] overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--shadow-menu)]',
-        'origin-[var(--radix-dropdown-menu-content-transform-origin)] data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
-        className,
-      )}
-      {...props}
-    >
-      <MenuHighlightContext.Provider value={hoverHighlight}>
-        {hoverHighlight && <MenuHighlightLayer />}
-        {children}
-      </MenuHighlightContext.Provider>
-    </DropdownMenuPrimitive.Content>
-  </DropdownMenuPrimitive.Portal>
-));
+>(({
+  className, sideOffset = 4, hoverHighlight = true, children, portalContainer, onCloseAutoFocus, ...props
+}, ref) => {
+  const closeAutoFocus = useTransientCloseAutoFocus(onCloseAutoFocus);
+  return (
+    <DropdownMenuPrimitive.Portal container={portalContainer}>
+      <DropdownMenuPrimitive.Content
+        ref={useMenuPanel(ref, { highlight: hoverHighlight })}
+        {...{ [MENU_PANEL_ATTR]: '' }}
+        sideOffset={sideOffset}
+        onCloseAutoFocus={closeAutoFocus}
+        className={cn(
+          'relative z-50 min-w-[8rem] overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--shadow-menu)]',
+          'origin-[var(--radix-dropdown-menu-content-transform-origin)] data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
+          className,
+        )}
+        {...props}
+      >
+        <MenuHighlightContext.Provider value={hoverHighlight}>
+          {hoverHighlight && <MenuHighlightLayer />}
+          <TransientLayerContent>{children}</TransientLayerContent>
+        </MenuHighlightContext.Provider>
+      </DropdownMenuPrimitive.Content>
+    </DropdownMenuPrimitive.Portal>
+  );
+});
 DropdownMenuContent.displayName = DropdownMenuPrimitive.Content.displayName;
 
 const DropdownMenuItem = React.forwardRef<

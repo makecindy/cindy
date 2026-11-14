@@ -133,6 +133,31 @@ export default {
       );
     } else assert.equal(await transcript.getByText('听起来不错。').count(), 1);
     await ui.capture('expanded');
+    if (ui.data.mode === 'muted' || ui.data.mode === 'speaking') {
+      // r4535034311 / DESIGN §14.6: the open disclosure hides only its own Tip,
+      // not the other icon controls sharing this Popover root and anchor toolbar.
+      await details.hover();
+      await page.waitForTimeout(600);
+      assert.equal(
+        await page.getByRole('tooltip').count(),
+        0,
+        'open transcript trigger has no tip',
+      );
+      const mute = await ui.t(
+        ui.data.mode === 'muted' ? 'bots.voiceMode.unmute' : 'bots.voiceMode.mute',
+      );
+      await page.getByRole('button', { name: mute, exact: true }).hover();
+      await page.getByRole('tooltip', { name: mute, exact: true }).waitFor();
+      await ui.capture('expanded-microphone-tooltip');
+      if (ui.data.mode === 'speaking') {
+        const interrupt = await ui.t('bots.voiceMode.interrupt');
+        await page.getByRole('button', { name: interrupt, exact: true }).hover();
+        await page.getByRole('tooltip', { name: interrupt, exact: true }).waitFor();
+        await ui.capture('expanded-interrupt-tooltip');
+      }
+      await page.mouse.move(0, 0);
+      await page.getByRole('tooltip').waitFor({ state: 'hidden' });
+    }
     if (ui.data.mode === 'long') {
       await transcript.hover();
       await page.mouse.wheel(0, -400);

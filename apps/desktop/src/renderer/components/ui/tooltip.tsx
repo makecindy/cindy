@@ -22,6 +22,11 @@ import * as React from 'react';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 
 import { cn } from '@/lib/utils';
+import { TriggerTooltipBlocked } from './transient-layer';
+
+const TooltipTriggerNode = React.createContext<React.Dispatch<
+  React.SetStateAction<HTMLButtonElement | null>
+> | null>(null);
 
 // 全局默认 delayDuration（F-PJ-7 规格 500ms）—— 调用方可在 Provider 上覆盖
 // disableHoverableContent=true:鼠标离开 trigger 立即关闭,不允许移到 tip 内容
@@ -53,10 +58,23 @@ const TooltipProvider = ({
 // Radix 的状态机。
 function TooltipRoot({
   open,
+  defaultOpen,
   onOpenChange,
   ...props
 }: React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Root>) {
   const controlled = open !== undefined;
+  const transientOpen = React.useContext(TriggerTooltipBlocked);
+  const [trigger, setTrigger] = React.useState<HTMLButtonElement | null>(null);
+  const [blocked, setBlocked] = React.useState(false);
+  const [localOpen, setLocalOpen] = React.useState(defaultOpen ?? false);
+  React.useLayoutEffect(() => {
+    // Read the actual host after Radix/asChild has committed its ARIA state.
+    // A root may also contain an anchor toolbar with unrelated interactive controls.
+    const popup = trigger?.getAttribute('aria-haspopup');
+    const openPopup = trigger?.getAttribute('aria-expanded') === 'true' &&
+      (popup === 'dialog' || popup === 'menu' || popup === 'listbox');
+    setBlocked(transientOpen && Boolean(openPopup || trigger?.closest('[data-transient-morph-trigger]')));
+  }, [transientOpen, trigger]);
   const onOpenChangeRef = React.useRef(onOpenChange);
   onOpenChangeRef.current = onOpenChange;
   React.useEffect(() => {
@@ -72,9 +90,47 @@ function TooltipRoot({
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [controlled]);
-  return <TooltipPrimitive.Root {...props} open={open} onOpenChange={onOpenChange} />;
+  React.useEffect(() => {
+    if (!blocked) return;
+    setLocalOpen(false);
+    if (open) onOpenChangeRef.current?.(false);
+  }, [blocked, open]);
+  return (
+    <TooltipTriggerNode.Provider value={setTrigger}>
+      <TooltipPrimitive.Root
+        {...props}
+        open={!blocked && (open ?? localOpen)}
+        onOpenChange={(next) => {
+          if (next && blocked) return;
+          setLocalOpen(next);
+          onOpenChange?.(next);
+        }}
+      />
+    </TooltipTriggerNode.Provider>
+  );
 }
-const TooltipTrigger = TooltipPrimitive.Trigger;
+const TooltipTrigger = React.forwardRef<
+  React.ComponentRef<typeof TooltipPrimitive.Trigger>,
+  React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Trigger>
+>((props, ref) => {
+  const setTrigger = React.useContext(TooltipTriggerNode);
+  const triggerRef = React.useCallback(
+    (node: HTMLButtonElement | null) => {
+      setTrigger?.(node);
+      const cleanup: unknown = typeof ref === 'function' ? ref(node) : undefined;
+      if (ref && typeof ref !== 'function') ref.current = node;
+      return () => {
+        setTrigger?.(null);
+        if (typeof cleanup === 'function') cleanup();
+        else if (typeof ref === 'function') ref(null);
+        else if (ref) ref.current = null;
+      };
+    },
+    [ref, setTrigger],
+  );
+  return <TooltipPrimitive.Trigger {...props} ref={triggerRef} />;
+});
+TooltipTrigger.displayName = TooltipPrimitive.Trigger.displayName;
 
 const TooltipContent = React.forwardRef<
   React.ComponentRef<typeof TooltipPrimitive.Content>,

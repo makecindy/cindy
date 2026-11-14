@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { cn } from '@/lib/utils';
+import { TransientLayerContent, TransientLayerRoot, useTransientLayer } from './transient-layer';
 
 /**
  * MorphPopover —— 「chip 脱身上浮长成弹层」的容器形变原语(DESIGN.md §14.4)。
@@ -297,6 +298,14 @@ export function MorphPopover({
   // 否则旧层会在收合结束时抢走下一层交互面的焦点。键盘关闭仍按 §14.2 回焦。
   const pointerInteractionRef = useRef(false);
 
+  const layer = useTransientLayer({
+    open,
+    onOpenChange: next => {
+      // Replacement must not return focus after the closing animation.
+      if (!next) pointerInteractionRef.current = true;
+      onOpenChange(next);
+    },
+  });
   const requestClose = useCallback(() => onOpenChange(false), [onOpenChange]);
 
   if (open && !mounted) setMounted(true);
@@ -712,9 +721,10 @@ export function MorphPopover({
   }, [autoFocusTarget, mounted, open, requestClose]);
 
   return (
-    <>
+    <TransientLayerRoot layer={layer}>
       <span
         ref={wrapRef}
+        data-transient-morph-trigger=""
         className={cn('relative inline-flex', wrapperClassName)}
         onPointerDownCapture={() => {
           pointerInteractionRef.current = true;
@@ -767,11 +777,11 @@ export function MorphPopover({
                 panelClassName,
               )}
             >
-              {children}
+              <TransientLayerContent>{children}</TransientLayerContent>
             </div>
           </div>,
           document.body,
         )}
-    </>
+    </TransientLayerRoot>
   );
 }

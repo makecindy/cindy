@@ -8,6 +8,7 @@ import {
 } from 'react';
 
 import { cn } from '@/lib/utils';
+import { TransientLayerContent, useTransientCloseAutoFocus, withTransientLayer } from './transient-layer';
 import {
   MENU_OWN_HIGHLIGHT_ATTR,
   MENU_ROW_ATTR,
@@ -21,12 +22,13 @@ interface SelectFocusSource {
   setPointer(pointer: boolean): void;
 }
 const FocusSource = createContext<SelectFocusSource>({ pointer: false, setPointer: () => {} });
+const CoordinatedSelectRoot = withTransientLayer(SelectPrimitive.Root);
 
 function Root(props: ComponentPropsWithoutRef<typeof SelectPrimitive.Root>) {
   const [pointer, setPointer] = useState(false);
   return (
     <FocusSource.Provider value={{ pointer, setPointer }}>
-      <SelectPrimitive.Root {...props} />
+      <CoordinatedSelectRoot {...props} />
     </FocusSource.Provider>
   );
 }
@@ -77,11 +79,14 @@ const Content = forwardRef<
       onKeyDownCapture,
       onPointerDownOutside,
       onEscapeKeyDown,
+      onCloseAutoFocus,
+      children,
       ...props
     },
     ref,
   ) => {
     const focus = useContext(FocusSource);
+    const closeAutoFocus = useTransientCloseAutoFocus(onCloseAutoFocus);
     return (
       <SelectPrimitive.Content
         position="popper"
@@ -89,6 +94,7 @@ const Content = forwardRef<
         collisionPadding={8}
         {...props}
         ref={ref}
+        onCloseAutoFocus={closeAutoFocus}
         onPointerDownCapture={(event) => {
           focus.setPointer(true);
           onPointerDownCapture?.(event);
@@ -110,7 +116,9 @@ const Content = forwardRef<
           'data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
           className,
         )}
-      />
+      >
+        <TransientLayerContent>{children}</TransientLayerContent>
+      </SelectPrimitive.Content>
     );
   },
 );

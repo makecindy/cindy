@@ -3,10 +3,38 @@ export default {
   name: 'tooltip-after-menu-close',
   entry: './tooltip-after-menu-close.tsx',
   viewport: { width: 720, height: 360 },
-  real: '共享 Tip + DropdownMenu（会话标题栏「更多操作」的接线）',
+  real: '共享 Tip、DropdownMenu、Popover 与真实 useLinkContextMenu 自定义回焦',
   notCovered: '真实会话数据与菜单项业务逻辑',
-  cases: { default: { about: '点 ⋯ 打开菜单，再点空白关闭', data: {} } },
+  cases: {
+    default: { about: '点 ⋯ 打开菜单，再点空白关闭', data: {} },
+    'replacement-custom-focus': {
+      about: '真实链接菜单被编辑浮层替换；普通 Escape 仍回焦链接',
+      data: {},
+    },
+  },
   async check(page, ui) {
+    if (ui.case === 'replacement-custom-focus') {
+      const link = page.getByRole('link', { name: 'File link' });
+      const editor = page.getByRole('textbox', { name: 'New editor' });
+      await link.click({ button: 'right' });
+      await page.waitForSelector('[role="menu"]');
+      await page.keyboard.press('F2');
+      await editor.waitFor();
+      await page.waitForSelector('[role="menu"]', { state: 'hidden' });
+      await page.waitForFunction(
+        () => document.activeElement?.getAttribute('aria-label') === 'New editor',
+      );
+      await ui.capture('replacement-keeps-editor-focus');
+      await page.keyboard.press('Escape');
+      await editor.waitFor({ state: 'hidden' });
+      await link.click({ button: 'right' });
+      await page.waitForSelector('[role="menu"]');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[role="menu"]', { state: 'hidden' });
+      await page.waitForFunction(() => document.activeElement?.textContent === 'File link');
+      await ui.capture('escape-restores-link-focus');
+      return;
+    }
     const tooltipVisible = () =>
       page.evaluate(() => Boolean(document.querySelector('[data-radix-popper-content-wrapper]')));
 
@@ -25,7 +53,8 @@ export default {
     await page.waitForTimeout(900);
     // 先确认焦点确实回到了按钮，否则「没有提示」可能只是菜单没有回收焦点。
     const focused = await page.evaluate(() => document.activeElement?.getAttribute('aria-label'));
-    if (focused !== 'more') throw new Error(`菜单关闭后焦点没有回到 ⋯ 按钮（activeElement=${focused}）`);
+    if (focused !== 'more')
+      throw new Error(`菜单关闭后焦点没有回到 ⋯ 按钮（activeElement=${focused}）`);
     const phantom = await tooltipVisible();
     await ui.capture('after-outside-click');
     if (phantom) throw new Error('菜单关闭后没有悬停也弹出了提示');

@@ -486,6 +486,23 @@ export default {
       await popover.getByText('Ada', { exact: true }).waitFor();
       assert.equal(await popover.getByRole('listitem').count(), 4, 'the four who have read, and no one who has not');
       await ui.capture('read-list');
+      // Regression 2026-11-10: message-local state used to stack reader lists
+      // and reaction pickers. Shared primitives must switch them in one click.
+      const sent = page.locator('[data-bot-group-message-id="rr-short-sent"]').getByTestId('read-receipt');
+      await sent.click();
+      await page.getByRole('dialog').getByText(await ui.t('bots.groupChat.server.readersNone'), { exact: true }).waitFor();
+      assert.equal(await page.getByRole('dialog').count(), 1, 'another reader list replaces the first');
+      await ui.capture('switched-read-list');
+      await many.hover();
+      const reaction = many.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
+      await reaction.click();
+      await page.getByRole('dialog').getByRole('button', { name: '👍', exact: true }).waitFor();
+      assert.equal(await page.getByRole('dialog').count(), 1, 'the reaction picker replaces the reader list');
+      assert.equal(await page.getByRole('tooltip').count(), 0, 'an open picker has no trigger tooltip');
+      await ui.capture('reaction-replaces-read-list');
+      await many.getByTestId('read-receipt').click();
+      await page.getByRole('dialog').getByText('Ada', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('dialog').count(), 1, 'the reader list also replaces the reaction picker');
       await page.keyboard.press('Escape');
       await popover.waitFor({ state: 'detached' });
       assert.ok(await many.getByTestId('read-receipt').evaluate(node => node === document.activeElement), 'focus returns to the check');
