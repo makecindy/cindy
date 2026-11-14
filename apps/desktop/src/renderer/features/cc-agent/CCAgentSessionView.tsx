@@ -5666,6 +5666,16 @@ function CCAgentSessionContent({
     !pendingPlanReview &&
     (agentStatus.isRunning || backgroundTasksActive || runningWorkflow !== null);
 
+  // Both task composers expose the same approved local plugin status channel.
+  const nativeTaskStatus = sessionId && viewVisible && !readOnly && !remoteDeviceId && !session?.remoteHostId ? (
+    <PluginTaskStatus
+      sessionId={sessionId}
+      workingDir={session?.workingDir}
+      routeKey={JSON.stringify([session?.agentKind, session?.providerId, session?.model, session?.agentDeviceId])}
+      sidebarTargetSessionId={sidebarTargetSessionId}
+    />
+  ) : null;
+
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
     // FP-7: when the Plan Viewer is expanded/edit, the viewer needs to occupy
@@ -6491,14 +6501,7 @@ function CCAgentSessionContent({
                     </WorkingDirectoryTip>
                   )}
 
-                  {sessionId && viewVisible && !readOnly && !remoteDeviceId && !session?.remoteHostId && (
-                    <PluginTaskStatus
-                      sessionId={sessionId}
-                      workingDir={session?.workingDir}
-                      routeKey={JSON.stringify([session?.agentKind, session?.providerId, session?.model, session?.agentDeviceId])}
-                      sidebarTargetSessionId={sidebarTargetSessionId}
-                    />
-                  )}
+                  {nativeTaskStatus}
                   {hasPluginStatusbar && (
                     <div className="min-w-0 flex-1 overflow-x-auto">
                       <div className="w-max">
@@ -6574,7 +6577,10 @@ function CCAgentSessionContent({
                   </div>
                 </div>
               ) : (
-                <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+                <>
+                  {nativeTaskStatus}
+                  <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+                </>
               )}
             </div>
           </div>
