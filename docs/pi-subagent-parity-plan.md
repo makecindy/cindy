@@ -35,7 +35,7 @@ exit writes the same atomic stop controls synchronously before process exit.
 | Foreground execution | Parent turn waits on the same durable runner and receives its bounded result | PI extension + durable runner | Implemented, including Ask approval forwarding |
 | Detached background execution | Launch receipt; task card and Fleet continue independently | Cindy durable runner | Implemented |
 | Parallel fan-out | One batch with unique child/session identities, per-child conversations and bounded concurrency | Durable runner | Implemented, including per-child stop/steer/follow-up/resume |
-| Chained/review workflows | `mode:chain` or bounded declarative `mode:workflow` DAG | Durable runner | Implemented for foreground and detached runs |
+| Chained/review workflows | `mode:chain` / `mode:workflow`: a task declares `id` and `dependsOn`, dependents start only after their dependencies finish and receive their results | Durable runner | Implemented for foreground and detached runs; a failed dependency fails its dependents |
 | Per-child model and thinking | Model/thinking fields with provider-aware catalog validation | PI adapter + frozen run snapshot | Implemented |
 | Fresh context | Independent durable PI child session | Durable runner | Implemented |
 | Forked parent context | Explicit immutable parent transcript snapshot | PI extension + durable config | Implemented with bounded user/assistant snapshot |
@@ -50,7 +50,7 @@ exit writes the same atomic stop controls synchronously before process exit.
 | Missions | Recurring parent task whose prompt invokes a declared Subagent workflow | Existing Cindy Scheduler | Cindy-native mapping documented by `action:guide`; dedicated mission editor remains polish |
 | Schedules | Existing Cindy Scheduler bound to the parent task | Scheduler | Available without a parallel scheduler implementation |
 | Intercom | Typed steer/follow-up, approval, result, and transcript events | Host control/event protocol | Implemented without raw peer sockets |
-| Herdr | Bounded dependency fan-out/fan-in graph | Durable runner | Implemented through `mode:workflow` + `dependsOn` |
+| Herdr | Bounded dependency fan-out/fan-in graph | Durable runner | Implemented through task `id` + `dependsOn` (`mode:workflow` label for fan-in/fan-out, `mode:chain` for a single path) |
 | Workflow scripting | Reviewed declarative workflow schema | PI tool contract + durable runner | Implemented; arbitrary package scripts are intentionally excluded |
 | Sharing | User-initiated result copy | Existing Subagents detail view | Implemented; file export remains polish |
 | Doctor | `subagent {action:"doctor"}` health report | PI extension capability probes | Implemented |
