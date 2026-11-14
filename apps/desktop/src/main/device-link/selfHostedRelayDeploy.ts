@@ -409,12 +409,14 @@ UNIT
 [Unit]
 Description=Check Cindy relay Nginx certificate
 [Timer]
-OnBootSec=1min
+OnActiveSec=1min
 OnUnitActiveSec=5min
 [Install]
 WantedBy=timers.target
 UNIT
   systemctl daemon-reload
+  # 首次触发按 timer 启动计时：OnBootSec 在开机超过 1 分钟的服务器上已过，启动即触发 renew，
+  # 抢走 operation.lock 让紧随其后的 commit 失败。启动仍在 commit 前，失败时事务尚可回滚。
   systemctl enable --now cindy-relay-nginx.timer >/dev/null 2>&1
   "$NODE" "$BUNDLE" nginx --action commit
 fi
