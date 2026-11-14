@@ -116,10 +116,11 @@
     "gray-matter": "^4.0.3"
   },
   "devDependencies": {
-    "spdx-expression-parse": "3.0.1",
     "@types/ws": "^8.18.1",
+    "js-yaml": "^4.3.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "spdx-expression-parse": "3.0.1",
     "vitest": "^3.2.4",
     "ws": "^8.18.3"
   }

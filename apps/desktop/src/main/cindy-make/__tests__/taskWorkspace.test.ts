@@ -1,9 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { create as tarCreate, Header, list as tarList } from 'tar';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { withUnverifiedPnpmEnv } from '../sourcePnpm';
 
 import {
   createCindyMakeWorktree,
@@ -142,7 +144,7 @@ describe('prepareCindyMakeWorkspace', () => {
         PATH: '',
         npm_config_userconfig: os.devNull,
         npm_config_globalconfig: os.devNull,
-        XDG_CONFIG_HOME: path.join(worktreePath, 'node_modules', '.cindy-make-config'),
+        XDG_CONFIG_HOME: expect.any(String),
         pnpm_config_npmrc_auth_file: os.devNull,
         pnpm_config_userconfig: os.devNull,
         pnpm_config_globalconfig: os.devNull,
@@ -166,6 +168,23 @@ describe('prepareCindyMakeWorkspace', () => {
       worktreePath,
       expect.anything(),
     );
+  });
+
+  // pnpm 11 globals must never be prepopulated by content or inherited profile settings.
+  // The production helper owns a fresh empty config for both install and fetch;
+  // success and failure share the same cleanup. Unit, no child process or real wait.
+  it.each([false, true])('isolates and cleans the config of an unverified invocation (failure=%s)', async fail => {
+    let configRoot = '';
+    const invocation = withUnverifiedPnpmEnv({ XDG_CONFIG_HOME: userData }, async environment => {
+      configRoot = environment.XDG_CONFIG_HOME!;
+      expect(path.relative(userData, configRoot).startsWith('..')).toBe(true);
+      expect(await readdir(configRoot)).toEqual([]);
+      if (fail) throw new Error('install failed');
+      return 'completed';
+    });
+    if (fail) await expect(invocation).rejects.toThrow('install failed');
+    else await expect(invocation).resolves.toBe('completed');
+    await expect(access(configRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('keeps inherited secrets out of an unverified install environment', async () => {
@@ -217,7 +236,7 @@ describe('prepareCindyMakeWorkspace', () => {
       COREPACK_ENABLE: '0',
       npm_config_userconfig: os.devNull,
       npm_config_globalconfig: os.devNull,
-      XDG_CONFIG_HOME: path.join(worktreePath, 'node_modules', '.cindy-make-config'),
+      XDG_CONFIG_HOME: expect.any(String),
       pnpm_config_npmrc_auth_file: os.devNull,
       pnpm_config_userconfig: os.devNull,
       pnpm_config_globalconfig: os.devNull,

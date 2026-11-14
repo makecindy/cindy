@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, stat } from 'node:fs/promises';
+import { access, mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { CindyMakeTaskPreparation } from '../../shared/cindyMakeDoctor.js';
@@ -19,7 +19,7 @@ import { createMakeBuildLineOutput } from './buildProgress.js';
  * or point at a custom URL for the package manager Corepack runs before pnpm's
  * own guards apply, so its project env and project spec are disabled outright.
  */
-export function unverifiedPnpmEnv(environment: NodeJS.ProcessEnv, workspace: string): NodeJS.ProcessEnv {
+export function unverifiedPnpmEnv(environment: NodeJS.ProcessEnv, configRoot: string): NodeJS.ProcessEnv {
   return {
     ...Object.fromEntries(
       Object.entries(environment).filter(
@@ -37,8 +37,8 @@ export function unverifiedPnpmEnv(environment: NodeJS.ProcessEnv, workspace: str
     // The global config may hold registry credentials of its own.
     npm_config_globalconfig: os.devNull,
     // pnpm 11 reads its global YAML and auth.ini independently of npm config.
-    // Keep unverified content away from both, using an already-contained write root.
-    XDG_CONFIG_HOME: path.join(workspace, 'node_modules', '.cindy-make-config'),
+    // The caller owns this fresh empty directory outside content-controlled paths.
+    XDG_CONFIG_HOME: configRoot,
     pnpm_config_npmrc_auth_file: os.devNull,
     pnpm_config_userconfig: os.devNull,
     pnpm_config_globalconfig: os.devNull,
@@ -50,6 +50,20 @@ export function unverifiedPnpmEnv(environment: NodeJS.ProcessEnv, workspace: str
     COREPACK_ENABLE_PROJECT_SPEC: '0',
     COREPACK_ENABLE_UNSAFE_CUSTOM_URLS: '0',
   };
+}
+
+/** One owner and one cleanup path for the empty global config of this invocation.
+ * Content cannot prepopulate it or redirect it with a tracked link. */
+export async function withUnverifiedPnpmEnv<T>(
+  environment: NodeJS.ProcessEnv,
+  run: (environment: NodeJS.ProcessEnv) => Promise<T>,
+): Promise<T> {
+  const configRoot = await mkdtemp(path.join(os.tmpdir(), 'cindy-make-pnpm-config-'));
+  try {
+    return await run(unverifiedPnpmEnv(environment, configRoot));
+  } finally {
+    await rm(configRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 export function parseMakeDependencyProgress(
