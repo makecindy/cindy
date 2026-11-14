@@ -1,0 +1,13 @@
+// desktop typecheck 分片之二：渲染器与离屏 capture 渲染器。
+// 与 tsconfig.main.json 合起来必须覆盖 tsconfig.json 原来的 `src/**/*`；
+// 漏掉的文件不会被任何一片检查到，scripts/check-typecheck-shards.mjs 负责拦这道。
+// 本片实测堆 8.0 GiB / RSS 8.3 GB / 2m39s（含 src/shared 与 vite-env.d.ts）。
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/renderer/**/*",
+    "src/capture-renderer/**/*",
+    "src/shared/**/*",
+    "*.d.ts"
+  ]
+}

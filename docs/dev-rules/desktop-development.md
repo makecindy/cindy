@@ -371,6 +371,16 @@ pnpm test:unit:related
 pnpm test:unit
 ```
 
+- desktop 的 `typecheck` 按进程边界拆成两片：`tsconfig.main.json`（main / preload /
+  shared / test）与 `tsconfig.renderer.json`（renderer / capture-renderer / shared），
+  顺序执行、各自 10240 MB 堆上限。拆片前全量单片实测堆 11.6 GiB（12288 上限的
+  96.4%）、峰值 RSS 12.4 GB，已贴近 tsc 的 heap limit；拆片后单片峰值 RSS 8.8 GB、
+  堆 8.5 GiB，墙钟约 5 分钟（拆片前 4 分 14 秒）。`tsconfig.json` 仍是两片的基座，
+  esbuild 与 `apps/host` 继续沿用它，不要改它的 `include`。
+  新增 `src` 顶层目录时必须同步两片的 `include`；给某一片加 `exclude` 也会被
+  `scripts/check-typecheck-shards.mjs`（由 `typecheck` 先跑）拦下——它用 TypeScript 自己的
+  配置解析算出「原单片 `tsconfig.json` 实际会检查的文件集」与两片并集，比对缺漏并列出漏掉的
+  文件。
 - 改 TypeScript 至少运行相关类型检查和定向测试。
 - 跨模块、共享 package、构建链或广泛重构再扩大到 Desktop 全量测试、构建或根级单测。
 - 调整 Desktop Vitest worker 或测试分池前，先读取
