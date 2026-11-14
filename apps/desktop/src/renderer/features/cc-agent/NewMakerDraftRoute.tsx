@@ -57,7 +57,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getDefaultNewTaskWorkingDir } from '@/state/defaultNewTaskWorkingDir';
 import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
-import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
+import { BRAND_ICON_SIZE, ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
+import { useDraftHeaderWrapMotion } from './useDraftHeaderWrapMotion';
 import { ChatInput } from '@/components/new-chat/ChatInput';
 import { WorktreeChipsRow } from '@/components/new-chat/WorktreeChipsRow';
 import { checkDraftBranchBeforeStart } from './newMakerDraftBranchCheck';
@@ -772,6 +773,11 @@ export function NewMakerDraftRoute() {
   // viewport itself remains wide. Keep the draft layout responsive to that
   // actual content width rather than relying on viewport breakpoints.
   const isDraftNarrow = inputWidthBand === 0;
+  // 品牌行折行的动画锚点:容器观察换行、按钮排与输入区做 FLIP(见 hook)。
+  const draftRowRef = useRef<HTMLDivElement>(null);
+  const draftChipsRef = useRef<HTMLDivElement>(null);
+  const draftContentRef = useRef<HTMLDivElement>(null);
+  useDraftHeaderWrapMotion(draftRowRef, draftChipsRef, draftContentRef, BRAND_ICON_SIZE);
   // Keep the full vendor switcher while the composer still has room for it.
   // Icon-only mode is reserved for the tighter toolbar state, not merely a
   // moderately narrow content rail (for example, when attachments are present).
@@ -6662,7 +6668,12 @@ export function NewMakerDraftRoute() {
             )}
           >
             <div
-              className="relative flex w-full flex-col items-start"
+              ref={draftRowRef}
+              // 品牌行与输入区分行:logo 与按钮排在同一条 flex 行上,按钮排装不下时整排
+              // 折到 logo 下方(左边缘与 logo 对齐),不再绝对定位叠在 logo 上——换行点
+              // 跟着实测宽度走,窗口一窄就提前换开。输入区 w-full,永远独占一行。
+              // mb 用 margin 而不是 gap-y:各状态下与输入区的间距才是同一个 15px。
+              className="relative flex w-full flex-wrap items-end gap-x-4"
               // 与进行中对话页同源:内容列宽度跟随 useProportionalWidth 算出的
               // inputWidth(封顶 914+20=934px,见 hook 首参),不再死锁 800——大屏留出
               // 左右呼吸空间、窄屏自适应收窄,且发送后同一个 ChatInput 无宽度跳变。
@@ -6670,17 +6681,18 @@ export function NewMakerDraftRoute() {
               // 直接更新变量，不经过整页 React render。
               style={{ maxWidth: inputWidth }}
             >
-              {/* mode pill + worktree 高级入口同排(齿轮在 pill 右侧,对齐旧 F1-E 布局)。
+              <ThemeBrandLockup
+                theme={activeColorTheme}
+                testId="create-agent-brand-lockup"
+                className="mb-[15px] mr-auto shrink-0"
+              />
+              {/* mode pill + worktree 高级入口(齿轮在 pill 右侧,对齐旧 F1-E 布局)。
                   2026-07-19 修复:488cb33 对齐 Figma 重排时把 WorktreeChipsRow 注入删丢,
                   branch/worktree 入口消失(wt* 状态与 send 管线一直健在),以 advancedOnly
                   变体接回。 */}
               <div
-                className={cn(
-                  'inline-flex items-center gap-2',
-                  isDraftNarrow
-                    ? 'static order-2 mb-3 w-full flex-wrap justify-start'
-                    : 'absolute right-0 top-[22px] z-10',
-                )}
+                ref={draftChipsRef}
+                className="mb-3 flex min-w-0 flex-wrap items-center gap-2"
               >
                 {/* 设备切换器(#807):设备是一级维度,排在 mode pill 左边;没有对端设备时
                     组件自己返回 null —— 只有本机的用户看不到任何新增控件。 */}
@@ -6758,15 +6770,8 @@ export function NewMakerDraftRoute() {
                   checkboxDisabled={wtPreferenceSaving}
                 />
               </div>
-              <ThemeBrandLockup
-                theme={activeColorTheme}
-                testId="create-agent-brand-lockup"
-                className={cn('mb-[15px]', isDraftNarrow && 'order-1')}
-              />
 
-              <div
-                className={cn('flex w-full flex-col items-start gap-0', isDraftNarrow && 'order-3')}
-              >
+              <div ref={draftContentRef} className="flex w-full flex-col items-start gap-0">
                 <div className="w-full">
                   {!effectiveRemoteHostId && (
                     <div className="mb-3 empty:hidden">
