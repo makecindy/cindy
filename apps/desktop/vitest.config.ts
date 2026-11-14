@@ -3,6 +3,7 @@ import path from 'node:path';
 import { desktopClientBuildEnv } from '../../scripts/shared/client-endpoint-build-env.mjs';
 import { parseVitestCliExclude } from './src/test/vitest/cliExclude';
 import FileTimingReporter, { FILE_TIMINGS_ENV } from './src/test/vitest/fileTimingReporter';
+import { createTimingSequencer } from './src/test/vitest/timingSequencer';
 
 const clientBuildEnv = desktopClientBuildEnv({ allowEnvOverride: false });
 const cliTestExclude = parseVitestCliExclude(process.argv.slice(2));
@@ -81,6 +82,10 @@ export default defineConfig({
   test: {
     globals: true,
     ...(fileTimingReporters ? { reporters: fileTimingReporters } : {}),
+    // CI 的 --shard 按已提交的逐文件耗时切分，片内最慢的文件先跑；不分片时保持默认顺序。
+    sequence: {
+      sequencer: createTimingSequencer(path.resolve(__dirname, 'src/test/vitest/fileTimings.json')),
+    },
     setupFiles: ['./src/test/vitest/user-data-dir-setup.ts'],
     // Main-process tests do real IO (loopback HTTP servers, git subprocesses,
     // heavy module imports through the vite-node transform). On Windows those

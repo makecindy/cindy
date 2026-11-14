@@ -15,7 +15,7 @@ pnpm benchmark:desktop-workers -- --workers 1,2,4,8 --runs 1 --output <report.js
 或分池前后必须使用同一 checkout、同一机器和同一测试范围比较；单次数据需同时保留稳定性
 结果，不得只挑最快的一次。
 
-## 2026-11-14 Windows 分片 4 → 8、临时目录与文件耗时导出
+## 2026-11-14 CI 提速：8 分片、临时目录、类型检查独立与按耗时分片
 
 基线来自当天 4 次成功的 PR client-ci（run 43549591409、43549471962、43547498115、43546722990）：
 整轮墙钟 22–26 分钟，关键路径都是 Windows 单测分片（14.3–26.3 分钟）。同一时段 job 启动等待
@@ -66,6 +66,30 @@ pnpm benchmark:desktop-workers -- --workers 1,2,4,8 --runs 1 --output <report.js
   （不计有失败的一片）。最慢的 `BotGroupChatView.test.tsx` 约 187 秒、
   `CustomProviderDialogAccessibility.test.tsx` 约 158 秒，最慢 50 个文件占约 19%。
 
+### 同日第二轮：Linux 8 片、类型检查独立、按耗时分片
+
+- Linux unit 同样改为 8 片，并导出 `desktop-file-timings-linux-shard-*`。
+- Desktop 与 Mobile 的 tsc 从 verify-checks 拆到并行的 `typecheck` job，由 `verify` 汇总阻断；
+  `dev-docs-contract.test.mjs` 校验两项类型检查都在该 job，且 `verify` 依赖它。
+- Desktop 的 `--shard` 由 `src/test/vitest/timingSequencer.ts` 按已提交的
+  `src/test/vitest/fileTimings.json`（每个文件在 Windows 上的 worker 毫秒）切分：
+  - 最长的文件优先放进当前最轻的片（`scripts/shared/duration-shards.mjs`），结果只取决于文件
+    集合与耗时，不取决于输入顺序。每个分片 job 各自算出全部切分、只取自己那片，所以各片必须读
+    同一份已提交的数据；`scripts/__tests__/duration-shards.test.mjs` 校验并集恰好覆盖每个文件一次、
+    与输入顺序无关、按耗时而非文件数均衡。
+  - 片内按耗时从长到短启动，慢文件不会最后才开跑。不带 `--shard`（本地运行）时保持 Vitest
+    默认顺序。
+  - 没有测量值的文件（新加的测试）按中位数计；数据文件读不到时，所有分片一起回退到 Vitest
+    的哈希切分。数据过期只影响均衡，不影响覆盖，所以不需要每个 PR 更新。
+  - 刷新：挑一次全绿的 client-ci run，执行 `pnpm update:desktop-test-timings --run <run id>`
+    （读取该 run 的 Windows 分片产物）。大批增删测试或各片耗时明显不均时再刷新。
+  - 其余 workspace 仍用 Vitest 默认的哈希切分，runner 对空分片补 `--passWithNoTests` 的判断不变。
+  - 用真实 Desktop 配置在本机核对（4,377 个文件、8 片）：每个文件恰好分到一片；按数据估算各片
+    worker 时间的最大值与平均值之比为 1.001，原哈希切分为 1.374。
+- 单个慢文件不再决定分片下限：最慢的文件约 120–190 秒 worker 时间，每片约 1,400 秒。
+  逐个优化最慢的两个文件，摊到 8 片 × 4 worker 后每片只省几秒，本轮不做。收集（导入模块）
+  阶段约占 37%，是后续更大的空间。
+
 ## 2026-10-16 CI 关键路径与分片调整
 
 数据来自 main 上两次成功的 client-ci（run 38819825618、38805666371，当时为 2 个分片）：
@@ -106,7 +130,8 @@ head `1a7fe95729` 的 client-ci run `38901684967` 全部 13 个 job 通过：Win
 
 Vitest 每片切 `ceil(文件数 / 分片数)` 个文件，分片多于 2 个时，文件少的包末尾分片可能为空（6 个文件
 分 4 片是 2、2、2、0）。runner 原来只在「文件数少于分片数」时补 `--passWithNoTests`，本机 4/4 分片因此
-有 6 个包报 `NO_TESTS_REQUIRED`；现已按 Vitest 的切分方式判断空分片。
+有 6 个包报 `NO_TESTS_REQUIRED`；现已按 Vitest 的切分方式判断空分片。Desktop 自 2026-11-14 起改为
+按耗时切分（见上文），文件数远多于分片数，不会出现空片。
 
 审查恢复到 92 个 Desktop guard 文件后，Windows CI 暴露了另一个启动边界：逐项传递
 exclude 会超过 `vitest.cmd` 的 8,191 字符限制，Desktop 尚未收集测试便退出。runner 和
@@ -205,9 +230,8 @@ named 与 namespace wrapper、短等待、常量内层等待和参数／fixture 
 
 后续候选（每项都要在同一 runner、同一分片配置下实测后才能声称收益）：
 
-- 按历史耗时分配分片（自定义 Vitest sequencer），拉平哈希均分造成的不均衡。2026-11-14 起
-  Windows 分片已导出逐文件耗时（见上文）；所有分片必须读取同一份耗时数据，否则切分结果不一致
-  会漏跑或重复，落地时要有「各片并集恰好覆盖全部文件一次」的回归。
+- 按历史耗时分配分片（自定义 Vitest sequencer），拉平哈希均分造成的不均衡。2026-11-14 已对
+  Desktop 落地（见上文「同日第二轮」）。
 - 把 Windows checkout 与临时目录放到 Dev Drive（ReFS），降低大量小文件 IO 的开销。2026-11-14
   先把 TEMP 移到工作区所在的 D 盘（见上文）；Dev Drive 是否另有收益仍需同 runner 对照。
   路径同样要避开以 ASCII 标点开头的目录段。
