@@ -399,7 +399,7 @@ xcrun assetutil --info <Cindy.app>/Assets.car | grep -i wordmark
 | prebuild 产物 | `Images.xcassets/AppIcon-Wordmark.appiconset` + 两个 1024 PNG + `Contents.json` |
 | build setting | Debug/Release 均为 `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIcon-Wordmark` |
 | actool 产物断言 | partial Info.plist 含 `CFBundleAlternateIcons → AppIcon-Wordmark`；`Assets.car` 含对应 rendition |
-| fingerprint | iOS `3140f266` → `53bc0c6b`；Android `d79ebee5` → `9181ea6a`（确认冷更） |
+| fingerprint | iOS `3140f266` → `b1455191`；Android `d79ebee5` → `32cb02dd`（确认冷更；`assets/app-icons` 已登记为 `extraSources`） |
 
 未执行项：
 
