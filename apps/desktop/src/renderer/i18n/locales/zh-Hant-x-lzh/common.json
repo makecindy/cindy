@@ -1384,7 +1384,8 @@
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未易：所分享之供方暫不可用（彼機不在線，或彼暫閉分享）。請稍後再試，或易一模型。",
     "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "模型未易：此乃舊版分享，啟「唯用 Agent-Net」時暫不可用。請關此開關，或易一模型。",
     "SSH_HOST_KEY_MISMATCH": "SSH 主機金鑰已易",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 不能讀來源附件，訊未遣。請將檔案另存至「下載」或他可存取之卷匣，移除原附件，再以附件按鈕納其副本而後遣之。"
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 不能讀來源附件，訊未遣。請將檔案另存至「下載」或他可存取之卷匣，移除原附件，再以附件按鈕納其副本而後遣之。",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "圖片輸入之能未生效（已回退，或稍後自重試）。請再試；若仍不成，請重開此任務。"
   },
   "providerError": {
     "AUTH_INVALID": "今介面驗證未成，請察位址、金鑰與驗證方式",
@@ -4193,7 +4194,28 @@
           },
           "codexContextUnknown": "未讀得 CLI 之設",
           "codexContextValues": "全窗 {{total}} · 可用 {{usable}} · 自縮於 {{compact}} tokens",
-          "contextLimitGptHint": "GPT 預設至多用 272K；可於此自訂為 1M。Codex 將同套視窗與自動壓縮門檻，留 5% 餘量；實際容量受模型服務所限。"
+          "contextLimitGptHint": "GPT 預設至多用 272K；可於此自訂為 1M。Codex 將同套視窗與自動壓縮門檻，留 5% 餘量；實際容量受模型服務所限。",
+          "thinking": "思慮",
+          "thinkingOverride": {
+            "label": "聲明思慮之檔",
+            "inherit": "循供應商之定",
+            "declared": "已聲明",
+            "sourceHint": "目錄未聲明思慮之檔；若此模型實能推理，可於此聲明",
+            "saveFailed": "思慮之聲明未能存",
+            "saveFailedWithReason": "思慮之聲明未能存：{{reason}}"
+          },
+          "thinkingCapability": {
+            "on": "能思慮",
+            "off": "不能思慮"
+          },
+          "imageInputOverride": {
+            "label": "圖片輸入之能",
+            "inherit": "循供應商之定",
+            "declaredTrue": "能入圖片",
+            "declaredFalse": "不能入圖片",
+            "saveFailed": "圖片輸入之能未能存",
+            "saveFailedWithReason": "圖片輸入之能未能存：{{message}}"
+          }
         },
         "kindFilter": {
           "all": "全",

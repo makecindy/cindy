@@ -24,7 +24,7 @@ import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertTriangle, Check, CircleHelp, Minus, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, CircleHelp, Minus, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -38,9 +38,18 @@ import { toast } from '@/lib/toast';
 import { Tip } from '@/components/ui/tooltip';
 import { Switch } from '@/components/ui/switch';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+} from '@/components/ui/dropdown-menu';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
+import { useModelCatalogThinking } from '@/hooks/useModelCatalogThinking';
 import { useModelImageInputOverride } from '@/hooks/useModelImageInputOverride';
 import { parseContextTokenInput } from '../../../shared/modelContextLimit';
 import { ModelCompactionSettings } from './ModelCompactionSettings';
@@ -418,6 +427,58 @@ export function ModelAdvancedDrawer({
     ctxDirtyRef.current = false;
     setCtxDraft('');
   }, [open, primaryAgent, primaryModel?.id, provider.id]);
+  // 思考档位的本地声明。目标形状与图片输入完全一致：必须覆盖该行全部引擎的 id ——
+  // 运行期真正消费 thinking 档位的是 Pi，桥接投影两端 id 不同，只写主展示引擎会让声明
+  // 对运行期无效、UI 却显示「已声明」。
+  const thinkingTarget = useMemo(() => {
+    if (!open || !primaryAgent || !primaryModel) return null;
+    const relatedTargets = (row?.avail ?? [])
+      .filter((agent) => agent !== primaryAgent)
+      .flatMap((agent) => {
+        const model = row?.byAgent[agent];
+        return model ? [{ providerId: provider.id, agent, modelId: model.id }] : [];
+      });
+    return {
+      providerId: provider.id,
+      agent: primaryAgent,
+      modelId: primaryModel.id,
+      ...(relatedTargets.length > 0 ? { relatedTargets } : {}),
+    };
+  }, [open, primaryAgent, primaryModel, provider.id, row]);
+  const thinking = useModelCatalogThinking(thinkingTarget);
+  /**
+   * 档位组合用固定候选（与目录 Effort 全集同序）而不是自由输入：组合爆炸（2^7）无法
+   * 列举，而真实诉求只有「沿用厂商 / 声明常见的几档」两类。勾选语义 = 该模型支持这一档。
+   */
+  // 与目录 Effort 全集同序（含 ultra：它是合法 Effort，IPC 与 Pi 映射都接受）。
+  // 漏掉它会让「已有含 ultra 的声明」在用户勾选其它档位时被按这份列表重建 → 静默删除。
+  const THINKING_TIER_CHOICES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+  const setThinkingTiers = async (tiers: string[] | null) => {
+    // 已经是该状态就别再写一次：免掉一次空写入引起的全量目录刷新与广播。各引擎键分叉时
+    // 必须放行 —— 否则「重选当前项」被 no-op 挡掉，分叉永远修不掉。
+    const already =
+      tiers === null
+        ? !thinking.isCustomized
+        : thinking.isCustomized &&
+          tiers.length === (thinking.value?.length ?? -1) &&
+          tiers.every((tier) => thinking.value?.includes(tier));
+    if (already && !thinking.diverged) return;
+    // 默认档**不猜**：沿用读回回来的既有默认档（仍在新集合内才继续沿用），用户没有
+    // 单独改默认档的入口，猜「排序第一档」会把厂商声明的默认（如 max）静默改成 low。
+    const keptDefault =
+      tiers !== null && thinking.defaultEffort && tiers.includes(thinking.defaultEffort)
+        ? thinking.defaultEffort
+        : null;
+    const persisted = await thinking.setTiers(tiers, keptDefault);
+    if (!persisted) {
+      const reason = thinking.errorReason;
+      toast.error(
+        reason
+          ? t('settings.providers.models.advanced.thinkingOverride.saveFailedWithReason', { reason })
+          : t('settings.providers.models.advanced.thinkingOverride.saveFailed'),
+      );
+    }
+  };
   useEffect(() => {
     if (ctx.loading || ctxDirtyRef.current) return;
     setCtxDraft(effectiveLimit === null ? '' : String(effectiveLimit));
@@ -1241,6 +1302,85 @@ export function ModelAdvancedDrawer({
                             .join(' · ') || t('settings.providers.models.advanced.undeclared')}
                         </Row>
                       ))}
+                    <Row label={t('settings.providers.models.advanced.thinking')}>
+                      {/*
+                        思考档位三态声明：目录说「不支持思考」时，Pi 客户端就没有 thinking
+                        通道，模型推理只能随 content 返回、被当成普通正文渲染（用户看到的是
+                        「思考被写进正文」）。此前没有任何入口能声明这件事。勾选语义 = 该模型
+                        支持这一档；「跟随供应商」删除本机 override。
+                      */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            id="settings-search-settings-providers-models-thinking-override"
+                            data-settings-search-action="Declare which thinking effort tiers this model supports"
+                            // xd 的能力由服务端目录决定、组织托管供应商的能力由管理员下发：两者
+                            // 本机都不可覆盖，控件保留但禁用（与同抽屉其他不可改项一致）；
+                            // Main IPC 侧另有 INVALID_PARAMS / PERMISSION_DENIED 拒写兜底。
+                            disabled={
+                              thinking.saving ||
+                              provider.id === 'xd' ||
+                              isOrganizationManagedProvider(provider)
+                            }
+                            aria-label={t('settings.providers.models.advanced.thinkingOverride.label')}
+                            title={
+                              (primaryModel.efforts?.length ?? 0) > 0
+                                ? t('settings.providers.models.advanced.catalogCapabilities')
+                                : t('settings.providers.models.advanced.thinkingOverride.sourceHint')
+                            }
+                            className="inline-flex items-center gap-1 rounded-full px-2 py-1 hover:bg-[var(--surface-hover)]"
+                          >
+                            <CapabilityValue
+                              state={(primaryModel.efforts?.length ?? 0) > 0}
+                              label={
+                                (primaryModel.efforts?.length ?? 0) > 0
+                                  ? t('settings.providers.models.advanced.thinkingCapability.on')
+                                  : t('settings.providers.models.advanced.thinkingCapability.off')
+                              }
+                            />
+                            <span className="text-11 text-[var(--text-tertiary)]">
+                              {thinking.isCustomized
+                                ? t('settings.providers.models.advanced.thinkingOverride.declared')
+                                : t('settings.providers.models.advanced.thinkingOverride.inherit')}
+                            </span>
+                            <ChevronDown size={12} className="inline" aria-hidden />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="z-[10003]" align="end">
+                          <DropdownMenuItem onSelect={() => void setThinkingTiers(null)}>
+                            {t('settings.providers.models.advanced.thinkingOverride.inherit')}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {THINKING_TIER_CHOICES.map((tier) => {
+                            const active = thinking.value?.includes(tier) ?? false;
+                            return (
+                              <DropdownMenuCheckboxItem
+                                key={tier}
+                                checked={active}
+                                onSelect={(event) => {
+                                  // 多选：preventDefault 关掉 Radix 的自动关闭，用户可以连续勾多档。
+                                  event.preventDefault();
+                                  const next = active
+                                    ? (thinking.value ?? []).filter((item) => item !== tier)
+                                    : THINKING_TIER_CHOICES.filter((item) =>
+                                        item === tier || (thinking.value ?? []).includes(item),
+                                      );
+                                  // 空组合 = 「明确不支持思考」，必须走 null 之外的显式空数组：
+                                  // null 是「跟随供应商」，两者语义不同。
+                                  void setThinkingTiers(next.length > 0 ? next : []);
+                                }}
+                              >
+                                {/* 档位名一律用既有正本 effortLevels：与「默认推理强度」
+                                    选择器逐字一致，避免同一档位在两处叫不同名字（也避免
+                                    ultra 被译成与 xhigh 同名的「超高」）。 */}
+                                {t(`effortLevels.${tier}`)}
+                              </DropdownMenuCheckboxItem>
+                            );
+                          })}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </Row>
                     <Row label="Fast" muted>
                       <CapabilityValue
                         state={primaryModel.supportsFastMode}

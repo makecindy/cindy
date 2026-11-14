@@ -1415,7 +1415,8 @@
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modèle non changé : le fournisseur partagé est temporairement indisponible (l'ordinateur du propriétaire est hors ligne ou le partage est désactivé pour le moment). Réessayez plus tard ou choisissez un autre modèle.",
     "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modèle non changé : ceci est un ancien partage, inutilisable tant que « Utiliser uniquement Agent-Net » est activé. Désactivez cette option ou choisissez un autre modèle.",
     "SSH_HOST_KEY_MISMATCH": "La clé d'hôte SSH a changé",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy ne peut pas lire la pièce jointe d'origine ; le message n'a pas été envoyé. Enregistrez-en une copie dans Téléchargements ou un autre dossier accessible, retirez la pièce jointe d'origine et ajoutez la copie avec le bouton de pièce jointe avant de renvoyer le message."
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy ne peut pas lire la pièce jointe d'origine ; le message n'a pas été envoyé. Enregistrez-en une copie dans Téléchargements ou un autre dossier accessible, retirez la pièce jointe d'origine et ajoutez la copie avec le bouton de pièce jointe avant de renvoyer le message.",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "La modification de la capacité d'entrée d'images n'a pas pris effet (annulée ou nouvelle tentative prévue). Réessayez ; si l'échec persiste, rouvrez la tâche."
   },
   "providerError": {
     "AUTH_INVALID": "Échec de l'authentification pour cette interface. Vérifiez l'adresse, la clé et la méthode d'authentification.",
@@ -4289,7 +4290,28 @@
           },
           "codexContextUnknown": "Configuration de la CLI indisponible",
           "codexContextValues": "Total {{total}} · Utilisable {{usable}} · Compactage auto à {{compact}} jetons",
-          "contextLimitGptHint": "GPT est limité par défaut à 272K au maximum ; vous pouvez le passer à 1M ici. Codex applique la fenêtre et le seuil de compactage automatique ensemble, en conservant une marge de 5 %. La capacité réelle dépend du service de modèles."
+          "contextLimitGptHint": "GPT est limité par défaut à 272K au maximum ; vous pouvez le passer à 1M ici. Codex applique la fenêtre et le seuil de compactage automatique ensemble, en conservant une marge de 5 %. La capacité réelle dépend du service de modèles.",
+          "thinking": "Raisonnement",
+          "thinkingOverride": {
+            "label": "Déclarer les niveaux de raisonnement",
+            "inherit": "Suivre le fournisseur",
+            "declared": "Déclaré",
+            "sourceHint": "Le catalogue ne déclare aucun niveau de raisonnement ; déclarez-les ici si le modèle raisonne réellement",
+            "saveFailed": "Échec de l'enregistrement de la déclaration de raisonnement",
+            "saveFailedWithReason": "Échec de l'enregistrement de la déclaration de raisonnement : {{reason}}"
+          },
+          "thinkingCapability": {
+            "on": "Prend en charge le raisonnement",
+            "off": "Sans raisonnement"
+          },
+          "imageInputOverride": {
+            "label": "Capacité d'entrée d'images",
+            "inherit": "Suivre le fournisseur",
+            "declaredTrue": "Prend en charge l'entrée d'images",
+            "declaredFalse": "Pas d'entrée d'images",
+            "saveFailed": "Échec de l'enregistrement de la capacité d'entrée d'images",
+            "saveFailedWithReason": "Échec de l'enregistrement de la capacité d'entrée d'images : {{message}}"
+          }
         },
         "kindFilter": {
           "all": "Tous",

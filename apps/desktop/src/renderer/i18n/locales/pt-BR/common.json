@@ -1415,7 +1415,8 @@
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modelo não alterado: o provedor compartilhado está temporariamente indisponível (o computador do proprietário está offline ou o compartilhamento está desativado no momento). Tente novamente mais tarde ou escolha outro modelo.",
     "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modelo não alterado: este é um compartilhamento antigo e não pode ser usado enquanto \"Usar apenas Agent-Net\" estiver ativado. Desative essa opção ou escolha outro modelo.",
     "SSH_HOST_KEY_MISMATCH": "Chave do host SSH alterada",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "O Cindy não consegue ler o anexo original; a mensagem não foi enviada. Salve uma cópia em Downloads ou em outra pasta acessível, remova o anexo original e adicione a cópia usando o botão de anexos antes de enviar novamente."
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "O Cindy não consegue ler o anexo original; a mensagem não foi enviada. Salve uma cópia em Downloads ou em outra pasta acessível, remova o anexo original e adicione a cópia usando o botão de anexos antes de enviar novamente.",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "A alteração da capacidade de entrada de imagens não entrou em vigor (revertida ou será repetida mais tarde). Tente novamente; se continuar falhando, reabra a tarefa."
   },
   "providerError": {
     "AUTH_INVALID": "A autenticação falhou nesta interface. Verifique o endereço, a chave e o método de autenticação.",
@@ -4289,7 +4290,28 @@
           },
           "codexContextUnknown": "Configuração da CLI indisponível",
           "codexContextValues": "Total {{total}} · Utilizável {{usable}} · Compactação automática {{compact}} tokens",
-          "contextLimitGptHint": "O GPT usa no máximo 272K por padrão; você pode definir 1M aqui. O Codex aplica a janela e o limite de compactação automática juntos, mantendo uma margem de 5%. A capacidade real depende do serviço do modelo."
+          "contextLimitGptHint": "O GPT usa no máximo 272K por padrão; você pode definir 1M aqui. O Codex aplica a janela e o limite de compactação automática juntos, mantendo uma margem de 5%. A capacidade real depende do serviço do modelo.",
+          "thinking": "Raciocínio",
+          "thinkingOverride": {
+            "label": "Declarar níveis de raciocínio",
+            "inherit": "Seguir o provedor",
+            "declared": "Declarado",
+            "sourceHint": "O catálogo não declara níveis de raciocínio; declare-os aqui se o modelo realmente raciocina",
+            "saveFailed": "Falha ao salvar a declaração de raciocínio",
+            "saveFailedWithReason": "Falha ao salvar a declaração de raciocínio: {{reason}}"
+          },
+          "thinkingCapability": {
+            "on": "Suporta raciocínio",
+            "off": "Sem raciocínio"
+          },
+          "imageInputOverride": {
+            "label": "Capacidade de entrada de imagens",
+            "inherit": "Seguir o provedor",
+            "declaredTrue": "Suporta entrada de imagens",
+            "declaredFalse": "Sem entrada de imagens",
+            "saveFailed": "Falha ao salvar a capacidade de entrada de imagens",
+            "saveFailedWithReason": "Falha ao salvar a capacidade de entrada de imagens: {{message}}"
+          }
         },
         "kindFilter": {
           "all": "Todos",

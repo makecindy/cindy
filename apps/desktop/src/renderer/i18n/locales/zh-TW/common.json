@@ -1348,9 +1348,9 @@
     "MODEL_SWITCH_TASK_RUNNING": "模型未切換：目前任務仍在執行。請等待本次回覆結束後再試",
     "MODEL_WINDOW_PREPARATION_IN_PROGRESS": "模型未切換：正在整理目前任務的上下文。請等待完成後再試",
     "SESSION_RUNNING": "目前任務正在執行，請稍後再試。",
-    "PI_IMAGE_INPUT_UNSUPPORTED": "目前 Pi 模型未啟用圖片輸入。請切換到支援圖片的模型；如果這是自訂模型，請在供應商設定中開啟「支援圖片輸入」，然後新建 Pi 任務。",
+    "PI_IMAGE_INPUT_UNSUPPORTED": "當前 Pi 模型未啟用圖片輸入。請切換到支援圖片的模型；如果這是自定義模型，請在供應商設定中開啟“支援圖片輸入”，然後切換一次模型或新建 Pi 任務。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其他任務中執行，本次來源切換未生效（本任務仍使用原來源）。等它結束後再試。",
-    "PI_CATALOG_RELOAD_UNCONFIRMED": "模型目錄重新載入未確認，已終止本任務。請重新開啟任務後再切換模型。",
+    "PI_CATALOG_RELOAD_UNCONFIRMED": "模型目錄重載未確認，已終止本任務。請重新開啟任務後重試。",
     "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "目標模型或來源需要不同的遠端路由，請關閉並重新建立遠端任務後生效。",
     "REMOTE_PROVIDER_UPDATING": "供應商憑證正在更新，請稍後重試",
     "REMOTE_PROVIDER_UNSUPPORTED": "該供應商不支援 SSH 遠端會話，請更換來源",
@@ -1384,7 +1384,8 @@
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未切換：分享的供應商暫時無法使用（對方電腦不在線，或對方暫時關閉了分享）。請稍後再試或換一個模型。",
     "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "模型未切換：這是舊版分享，開啟「僅使用 Agent-Net」後暫時無法使用。關閉這個開關，或換一個模型。",
     "SSH_HOST_KEY_MISMATCH": "SSH 主機金鑰已變更",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 無法讀取來源附件，訊息未傳送。請將檔案另存到「下載」或其他可存取的資料夾，移除原附件，再用附件按鈕加入副本後傳送。"
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 無法讀取來源附件，訊息未傳送。請將檔案另存到「下載」或其他可存取的資料夾，移除原附件，再用附件按鈕加入副本後傳送。",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "圖片輸入能力更新未生效（已回滾或稍後自動重試）。請重試；若持續失敗請重新開啟任務。"
   },
   "providerError": {
     "AUTH_INVALID": "目前介面驗證失敗，請檢查位址、金鑰和驗證方式",
@@ -4193,7 +4194,28 @@
           },
           "codexContextUnknown": "未讀取到 CLI 設定",
           "codexContextValues": "總視窗 {{total}} · 可用 {{usable}} · 自動壓縮 {{compact}} tokens",
-          "contextLimitGptHint": "GPT 預設最多使用 272K；可在此自訂為 1M。Codex 會同步套用視窗與自動壓縮門檻，保留 5% 餘量；實際容量受模型服務限制。"
+          "contextLimitGptHint": "GPT 預設最多使用 272K；可在此自訂為 1M。Codex 會同步套用視窗與自動壓縮門檻，保留 5% 餘量；實際容量受模型服務限制。",
+          "imageInputOverride": {
+            "label": "圖片輸入能力宣告",
+            "inherit": "跟隨供應商",
+            "declaredTrue": "支援圖片輸入",
+            "declaredFalse": "不支援圖片輸入",
+            "saveFailed": "儲存圖片輸入能力失敗",
+            "saveFailedWithReason": "儲存圖片輸入能力失敗：{{message}}"
+          },
+          "thinking": "思考",
+          "thinkingOverride": {
+            "label": "宣告思考檔位",
+            "inherit": "跟隨供應商",
+            "declared": "已宣告",
+            "sourceHint": "目錄沒有宣告思考檔位；若該模型實際會推理，可在此宣告",
+            "saveFailed": "儲存思考宣告失敗",
+            "saveFailedWithReason": "儲存思考宣告失敗：{{reason}}"
+          },
+          "thinkingCapability": {
+            "on": "支援思考",
+            "off": "不支援思考"
+          }
         },
         "kindFilter": {
           "all": "全部",

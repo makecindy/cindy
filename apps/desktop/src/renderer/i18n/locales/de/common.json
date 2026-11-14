@@ -1397,7 +1397,8 @@
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modell nicht geändert: Der geteilte Anbieter ist vorübergehend nicht verfügbar (der Computer des Eigentümers ist offline oder die Freigabe ist derzeit deaktiviert). Versuch es später erneut oder wähle ein anderes Modell.",
     "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modell nicht geändert: Dies ist eine ältere Freigabe und nicht nutzbar, solange „Nur Agent-Net verwenden“ aktiviert ist. Schalte die Option aus oder wähle ein anderes Modell.",
     "SSH_HOST_KEY_MISMATCH": "SSH-Hostschlüssel geändert",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy kann den ursprünglichen Anhang nicht lesen; die Nachricht wurde nicht gesendet. Speichere eine Kopie im Ordner Downloads oder einem anderen zugänglichen Ordner, entferne den ursprünglichen Anhang und füge die Kopie über die Anhang-Schaltfläche hinzu, bevor du erneut sendest."
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy kann den ursprünglichen Anhang nicht lesen; die Nachricht wurde nicht gesendet. Speichere eine Kopie im Ordner Downloads oder einem anderen zugänglichen Ordner, entferne den ursprünglichen Anhang und füge die Kopie über die Anhang-Schaltfläche hinzu, bevor du erneut sendest.",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "Die Änderung der Bild-Eingabefähigkeit wurde nicht wirksam (zurückgesetzt oder wird später wiederholt). Bitte erneut versuchen; falls es weiterhin fehlschlägt, öffne die Aufgabe erneut."
   },
   "providerError": {
     "AUTH_INVALID": "Authentifizierung für diese Schnittstelle fehlgeschlagen. Prüfe Adresse, Schlüssel und Authentifizierungsmethode.",
@@ -4235,7 +4236,28 @@
           },
           "codexContextUnknown": "CLI-Konfiguration nicht verfügbar",
           "codexContextValues": "Gesamt {{total}} · Nutzbar {{usable}} · Automatische Komprimierung {{compact}} Tokens",
-          "contextLimitGptHint": "GPT verwendet standardmäßig höchstens 272K; hier kannst du 1M einstellen. Codex wendet das Kontextfenster und den Schwellenwert für die automatische Komprimierung gemeinsam an und hält dabei 5 % Reserve frei. Die tatsächliche Kapazität hängt vom Modelldienst ab."
+          "contextLimitGptHint": "GPT verwendet standardmäßig höchstens 272K; hier kannst du 1M einstellen. Codex wendet das Kontextfenster und den Schwellenwert für die automatische Komprimierung gemeinsam an und hält dabei 5 % Reserve frei. Die tatsächliche Kapazität hängt vom Modelldienst ab.",
+          "thinking": "Denken",
+          "thinkingOverride": {
+            "label": "Denkstufen deklarieren",
+            "inherit": "Anbieter folgen",
+            "declared": "Deklariert",
+            "sourceHint": "Der Katalog führt keine Denkstufen; deklariere sie hier, wenn das Modell tatsächlich schließt",
+            "saveFailed": "Speichern der Denkdeklaration fehlgeschlagen",
+            "saveFailedWithReason": "Speichern der Denkdeklaration fehlgeschlagen: {{reason}}"
+          },
+          "thinkingCapability": {
+            "on": "Unterstützt Denken",
+            "off": "Kein Denken"
+          },
+          "imageInputOverride": {
+            "label": "Bildeingabefähigkeit",
+            "inherit": "Anbieter folgen",
+            "declaredTrue": "Unterstützt Bild Eingabe",
+            "declaredFalse": "Keine Bildeingabe",
+            "saveFailed": "Speichern der Bildeingabefähigkeit fehlgeschlagen",
+            "saveFailedWithReason": "Speichern der Bildeingabefähigkeit fehlgeschlagen: {{message}}"
+          }
         },
         "kindFilter": {
           "all": "Alle",
