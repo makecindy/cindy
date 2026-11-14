@@ -23,4 +23,15 @@ describe('provider account entry points', () => {
     expect(providerSetupLink({ id: 'custom', docsUrl: 'https://example.com/docs' })).toBeUndefined();
     expect(providerPresetOAuth('custom')).toBeUndefined();
   });
+
+  it('exposes Devin CLI OAuth like oh-my-pi', () => {
+    const oauth = providerPresetOAuth('devin');
+    expect(oauth).toMatchObject({
+      authorizeUrl: 'https://app.devin.ai/auth/cli/continue',
+      tokenUrl: 'https://api.devin.ai/auth/cli/token',
+      redirectPort: 59653,
+      extraAuthParams: { prompt: 'select_account' },
+    });
+    expect(providerSetupLink({ id: 'devin' })?.url).toContain('app.devin.ai');
+  });
 });
