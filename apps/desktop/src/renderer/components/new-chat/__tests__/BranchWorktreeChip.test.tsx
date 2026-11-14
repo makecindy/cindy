@@ -86,6 +86,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.success.mockReturnValue('checkout-success-toast');
   mocks.info.mockReturnValue('checkout-info-toast');
+  mocks.toast.mockReturnValue('checkout-error-toast');
   status.mockResolvedValue(baseStatus);
   sync.mockResolvedValue({ status: { ...baseStatus, behind: 0 }, updated: 3 });
   Object.assign(window, {
@@ -926,6 +927,34 @@ it('allows picking an occupied branch and reports its name only after preflight'
   expect(mocks.toast).toHaveBeenCalledWith('newChat.checkout.errors.occupied{"branch":"feature"}');
   expect(branchButton().textContent).toBe('main');
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
+});
+
+// Unit regression: an occupied-branch error must not linger over the next successful
+// switch. Existing tests only checked the error itself, not its lifetime across picks.
+it('dismisses the previous checkout error when another branch switch starts', async () => {
+  const checkout = setupCheckout();
+  let current = 'before';
+  checkout.mockImplementation(async (req) => {
+    if (req.action === 'switch') current = req.branch;
+    return {
+      status: {
+        ...checkoutStatus,
+        current,
+        ...(req.branch === 'feature' ? { blocked: 'occupied' } : {}),
+      },
+    };
+  });
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('before'));
+  fireEvent.click(branchButton());
+  fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+  await waitFor(() => expect(mocks.toast).toHaveBeenCalledOnce());
+  expect(mocks.dismiss).not.toHaveBeenCalledWith('checkout-error-toast');
+  fireEvent.click(branchButton());
+  fireEvent.click(await screen.findByRole('option', { name: 'main' }));
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  expect(mocks.dismiss).toHaveBeenCalledWith('checkout-error-toast');
+  expect(mocks.toast).toHaveBeenCalledOnce();
 });
 
 // Toasts are reserved for information beyond the branch name itself, including

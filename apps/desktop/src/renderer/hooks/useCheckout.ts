@@ -61,17 +61,23 @@ export function useCheckout(
   >({});
   const undoToast = useRef<string | undefined>(undefined);
   const savedToast = useRef<{ identity: string; id?: string }>({ identity: '' });
+  const errorToast = useRef<string | undefined>(undefined);
+  const dismissError = useCallback(() => {
+    if (errorToast.current) toast.dismiss(errorToast.current);
+    errorToast.current = undefined;
+  }, []);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
       if (undoToast.current) toast.dismiss(undoToast.current);
       if (savedToast.current.id) toast.dismiss(savedToast.current.id);
+      dismissError();
       undoToast.current = undefined;
       savedToast.current = { identity: '' };
       notices.current = {};
     };
-  }, [key]);
+  }, [key, dismissError]);
   const serial = useRef(0);
   const invoke = useCallback(
     async (req: CheckoutRequest): Promise<CheckoutReply> =>
@@ -93,9 +99,10 @@ export function useCheckout(
     (code: string, status?: CheckoutStatus, branch?: string) => {
       if (!mounted.current || currentKey.current !== key) return;
       update({ error: code });
-      toast.error(formatCheckoutError(t, code, status, branch));
+      dismissError();
+      errorToast.current = toast.error(formatCheckoutError(t, code, status, branch));
     },
-    [key, t, update],
+    [key, t, update, dismissError],
   );
   const refresh = useCallback(
     async (branch?: string) => {
@@ -132,6 +139,7 @@ export function useCheckout(
   const mutate = useCallback(
     async (req: CheckoutRequest) => {
       if (active.current) return;
+      dismissError();
       active.current = true;
       onBusyChange?.(true);
       ++serial.current;
@@ -207,7 +215,7 @@ export function useCheckout(
         update({ busy: false });
       }
     },
-    [invoke, key, repo, update, onBusyChange, reportError],
+    [invoke, key, repo, update, onBusyChange, reportError, dismissError],
   );
   const performSwitch = useCallback(
     async (branch: string, status: CheckoutStatus, strategy: 'carry' | 'stash') => {
@@ -278,6 +286,7 @@ export function useCheckout(
   const pick = useCallback(
     async (branch: string) => {
       if (picking.current || active.current) return;
+      dismissError();
       picking.current = true;
       onBusyChange?.(true);
       update({ busy: true });
@@ -296,11 +305,12 @@ export function useCheckout(
         update({ busy: false });
       }
     },
-    [refresh, key, update, performSwitch, onBusyChange, reportError],
+    [refresh, key, update, performSwitch, onBusyChange, reportError, dismissError],
   );
   const undo = useCallback(
     async (expectedReceiptId?: string) => {
       if (active.current || picking.current) return;
+      dismissError();
       const matches = () =>
         stateRef.current.key === key &&
         !!stateRef.current.receipt &&
@@ -331,11 +341,12 @@ export function useCheckout(
         if (!reply.blocked) toast.success(t('newChat.checkout.undone'));
       }
     },
-    [repo, key, mutate, update, t, refresh, reportError],
+    [repo, key, mutate, update, t, refresh, reportError, dismissError],
   );
   const restore = useCallback(
     async (stashId: string) => {
       if (active.current || picking.current) return;
+      dismissError();
       let status = stateRef.current.key === key ? stateRef.current.status : undefined;
       if (!repo) {
         reportError('savedMissing');
@@ -358,7 +369,7 @@ export function useCheckout(
       });
       if (reply && !reply.blocked) toast.success(t('newChat.checkout.restored'));
     },
-    [repo, key, mutate, t, refresh, reportError],
+    [repo, key, mutate, t, refresh, reportError, dismissError],
   );
   actions.current = { undo, restore };
   const status = state.key === key ? state.status : undefined;
