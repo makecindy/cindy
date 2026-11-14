@@ -35,7 +35,7 @@ import { captureImContext } from '../../../shared/imMessageSource';
 import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
 import type { ImFinalOutput } from '@cindy/im';
-import type { ImTurnRunner } from '../shared/turnRunner';
+import type { ImTurnRunner, RouteTarget } from '../shared/turnRunner';
 import {
   createWechatTurnPermissionPolicy,
   WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS,
@@ -107,6 +107,41 @@ interface ActiveTask {
   task: WechatTask;
   routeSessionId?: string;
   terminalCommitted: boolean;
+}
+
+/**
+ * Personal WeChat always sends a per-turn confirmation policy. A channel-owned
+ * session restored from an older client can still carry a mode that bypasses
+ * that policy (for example Pi/Codex full access). Reconcile that stale route
+ * before dispatch so the message keeps its history and can be confirmed in
+ * WeChat. Desktop-taken-over and companion sessions retain their owner-owned
+ * permission contract and are intentionally left unchanged.
+ */
+async function reconcileWechatRoutePermission(
+  target: RouteTarget | null,
+  runner: Pick<
+    ImTurnRunner,
+    | 'getPermissionModes'
+    | 'getTurnPermissionPolicyUnsupportedModes'
+    | 'getMakerSessionById'
+    | 'changePermissionMode'
+  >,
+): Promise<RouteTarget | null> {
+  if (!target || target.attached || target.botOwned) return target;
+  const unsupported = runner.getTurnPermissionPolicyUnsupportedModes?.(target.row.agentKind) ?? [];
+  const liveMode = runner.getMakerSessionById(target.row.id)?.permissionModeState.mode;
+  const currentMode = liveMode ?? target.row.permissionMode;
+  if (!unsupported.includes(currentMode)) return target;
+
+  const modes = runner.getPermissionModes(target.row.agentKind);
+  if (!modes.some((mode) => mode.id === 'auto')) return target;
+  const result = await runner.changePermissionMode({
+    sessionId: target.row.id,
+    mode: 'auto',
+    modes,
+  });
+  if (result.kind !== 'changed' || result.mode !== 'auto') return target;
+  return { ...target, row: { ...target.row, permissionMode: 'auto' } };
 }
 
 function activePeerIdForSession<
@@ -1177,6 +1212,14 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     let dispatch;
     try {
       if (!signal || signal.aborted) throw new Error('WECHAT_CONNECTION_STOPPED');
+      // #8452: a stale channel-owned row/live session may retain a permission
+      // mode that cannot carry WeChat's per-turn confirmation policy. Narrow it
+      // before the runner wires or sends the task; the persisted mode change is
+      // deliberately limited to the channel-owned route above.
+      if (runtime.runner.resolveRouteTarget) {
+        const route = await runtime.runner.resolveRouteTarget(botContextId, task.peerId);
+        await reconcileWechatRoutePermission(route, runtime.runner);
+      }
       const groupHistoryAccess = receivedHistoryScope('wechat', botContextId, task.peerId);
       if (payload.platformMessageId) {
         await recordReceivedImageMessage({
@@ -2247,6 +2290,7 @@ export const __testing = {
   parseWechatInteractionReply,
   stopActiveWechatTurns,
   wechatPreDispatchFailureText,
+  reconcileWechatRoutePermission,
 };
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

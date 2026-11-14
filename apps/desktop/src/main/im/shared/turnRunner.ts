@@ -675,6 +675,8 @@ export interface ImTurnRunner {
   vendorOptionsForSession(sessionId: string): Record<string, unknown> | undefined;
   /** Permission choices exposed by the session's concrete Agent implementation. */
   getPermissionModes(agentKind: AgentKind): PermissionModeDescriptor[];
+  /** Permission modes that cannot carry a per-turn channel confirmation policy. */
+  getTurnPermissionPolicyUnsupportedModes?(agentKind: AgentKind): readonly PermissionMode[];
   changePermissionMode(args: {
     sessionId: string;
     mode: PermissionMode;
@@ -4800,6 +4802,8 @@ export function createTurnRunner(
     rotateCompanionLane,
     peekCompanionRouteTarget,
     getPermissionModes: (agentKind) => getMaker().getCapabilities(agentKind).permissionModes,
+    getTurnPermissionPolicyUnsupportedModes: (agentKind) =>
+      getMaker().getCapabilities(agentKind).turnPermissionPolicy?.unsupportedPermissionModes ?? [],
     changePermissionMode: (args) =>
       changeSessionPermissionMode({
         ...args,
