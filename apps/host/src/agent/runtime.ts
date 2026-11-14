@@ -380,6 +380,11 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
     ...(invalidate ? { invalidate } : {}),
     async getState(opts?: AuthAdapterOptions) {
       if (opts?.nativeSubscriptionAccount) return opts.nativeSubscriptionAccount.readState();
+      // The desktop's provider-oauth readState: a task on a third-party source passes by its mode; the
+      // Codex proxy injects that source's credential, and the default Codex login plays no part.
+      if (opts?.credentialMode === 'provider-oauth' && !opts.providerId) {
+        return { authenticated: true, identity: 'Provider OAuth · Proxy', authSource: 'api-key' };
+      }
       if (opts?.providerId && !['xd', 'cindy', 'openai'].includes(opts.providerId)) {
         if (accounts?.isCodexAccountProvider(opts.providerId)) return accounts.codexAccountState(opts.providerId);
         try {
@@ -455,11 +460,22 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       return logoutOperation;
     },
     async getAuthEnv(opts?: AuthAdapterOptions) {
+      // As the desktop's getAuthEnv, an independent Codex account first: its task runs in the
+      // account's own home whatever credential mode it carries, never in the default codex-home.
+      // (The desktop also projects Skills into that home here; release row 25.)
+      if (opts?.providerId && opts.providerId !== 'openai' && accounts?.isCodexAccountProvider(opts.providerId)) {
+        if (!accounts.codexAccountState(opts.providerId).authenticated) throw new Error('Codex account requires login');
+        return { CODEX_HOME: accounts.codexAccountHome(opts.providerId) };
+      }
       if (opts?.nativeSubscriptionAccount) {
         opts.nativeSubscriptionAccount.assertCurrent();
         return { CODEX_HOME: opts.nativeSubscriptionAccount.configDir };
       }
       await mkdir(codexHome, { recursive: true, mode: 0o700 });
+      // The desktop's provider-oauth getAuthEnv: the gateway key, else the placeholder the proxy replaces.
+      if (opts?.credentialMode === 'provider-oauth' && !opts.providerId) {
+        return { CODEX_HOME: codexHome, XDT_CODEX_API_KEY: gateway?.credential || CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY };
+      }
       // As the desktop's getAuthEnv: reconcile unless the login is invalidated, except for the
       // gateway-key and provider-oauth spawns and independent accounts, which it never reconciles for.
       const reconcileForSpawn = opts?.credentialMode !== 'gateway-key' && opts?.credentialMode !== 'provider-oauth'
@@ -467,10 +483,6 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       if (reconcileForSpawn && !readHostCodexInvalidation(codexHome, systemAuthPath)) await systemLogin.reconcile();
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') return { CODEX_HOME: codexHome };
       if (opts?.providerId && !['xd', 'cindy', 'openai'].includes(opts.providerId)) {
-        if (accounts?.isCodexAccountProvider(opts.providerId)) {
-          if (!accounts.codexAccountState(opts.providerId).authenticated) throw new Error('Codex account requires login');
-          return { CODEX_HOME: accounts.codexAccountHome(opts.providerId) };
-        }
         // The proxy injects the selected provider's exact credential and headers.
         // Do not place a different provider's key into the shared native process.
         return { CODEX_HOME: codexHome, XDT_CODEX_API_KEY: gateway?.credential || CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY };
