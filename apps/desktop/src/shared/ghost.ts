@@ -8025,6 +8025,14 @@ export function isGhostCardLinkAllowed(url: string): boolean {
 }
 
 /**
+ * 卡内「复制链接」按钮(data-ghost-copy-link)可写入剪贴板的值:只认整串 http/https 外链,
+ * 不收任务链接或任意文字——插件不能借它往用户剪贴板里塞命令。净化器与宿主点击桥共用。
+ */
+export function isGhostCardCopyLinkAllowed(url: string): boolean {
+  return /^https?:\/\//i.test(url) && isGhostCardLinkAllowed(url);
+}
+
+/**
  * 衍生卡 callId 的分隔标记:card-action 派发时主机铸造 `<根callId>::sp<序>`
  * 作为新卡位(spawnCallId)随事件下发。意识对它 card-update = 在原卡下方长出
  * 一张新卡(原卡原封不动——MJ 抽卡式玩法,母卡按钮可反复点);仍写原 callId
@@ -8081,7 +8089,7 @@ export function ghostCardDeclaresModelSelect(html: string, actionId: string): bo
  * 卡内图标位:插件在 span / div 上标 `data-ghost-icon="<名字>"`,宿主换成 App 里同一个
  * Lucide 图标(跟随主题颜色),与 App 其它地方统一。不认识的宿主保留插件写在里面的兜底图形。
  */
-export const GHOST_CARD_ICONS = ['settings'] as const;
+export const GHOST_CARD_ICONS = ['settings', 'copy'] as const;
 export type GhostCardIconName = (typeof GHOST_CARD_ICONS)[number];
 export function isGhostCardIconName(value: string): value is GhostCardIconName {
   return (GHOST_CARD_ICONS as readonly string[]).includes(value);

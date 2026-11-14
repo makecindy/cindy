@@ -7,7 +7,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node"],
+    "types": ["node", "vite/client"],
     "paths": { "@/*": ["../../apps/mobile/src/*"] }
   },
   "include": ["./*.ts"]

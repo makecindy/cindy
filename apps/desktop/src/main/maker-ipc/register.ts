@@ -826,7 +826,7 @@ import {
 } from './orcaIdleReleaseWatcher.js';
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
 import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
-import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL } from './claudeIdleReleaseWatcher.js';
+import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
 import {
   createPiIdleReleaseWatcher,
   createPiIdleReleaseClose,
@@ -3313,6 +3313,7 @@ let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
 /** 模块级 pi 普通会话 idle watcher；与 Orca watcher 同一生命周期。 */
 let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
 let claudeIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
+let codexIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 
 /**
  * 取 Orca collab service, ready 前返 null。registerMakerIpc 执行完成后 holder
@@ -3351,6 +3352,8 @@ function createBridgeWorkerLabel(task: string): string {
 export function stopOrcaIdleWatcher(): void {
   claudeIdleReleaseWatcher?.stop();
   claudeIdleReleaseWatcher = null;
+  codexIdleReleaseWatcher?.stop();
+  codexIdleReleaseWatcher = null;
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
 }
@@ -17068,6 +17071,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     warn: (message) => log.warn(message),
   });
   claudeIdleReleaseWatcher.start();
+
+  // Ordinary local Codex tasks: same scope and gates as Claude. Codex does not
+  // list its native children, yielded exec cells or background terminals as
+  // background tasks, so the watcher also awaits Session.hasLiveBackgroundWork
+  // (unknown = busy). Closing unsubscribes the thread and retires a
+  // single-session app-server; the next send resumes the native thread lazily.
+  codexIdleReleaseWatcher?.stop();
+  codexIdleReleaseWatcher = createClaudeIdleReleaseWatcher({
+    agentKind: 'codex',
+    listSessions: () => maker.listActiveSessions(),
+    getSession: (id) => maker.getSession(id),
+    readMinutes: () => DEFAULT_CODEX_IDLE_RELEASE_MINUTES,
+    isOrdinaryTask: async (id, sdkSessionId) => Boolean(
+      await getDbClient().queryOne(ORDINARY_CODEX_TASK_SQL, [id, sdkSessionId]),
+    ),
+    hasPendingInput: hasPendingIdleReleaseInput,
+    isHostBusy: (id) => isSessionTurnPendingCompletion(id)
+      || hasPendingAgentInteractionForSession(id)
+      || inputCoordinator.hasPendingQueuedWork(id)
+      || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
+      || inputCoordinator.isAutoResumePending(id)
+      || inputCoordinator.hasQueuedAutoResume(id)
+      || inputCoordinator.getAutoResumeAttemptToken(id) !== null
+      || pendingCredentialSwitchHolder?.has(id) === true,
+    withLock: withSendToSessionLock,
+    close: (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, async () =>
+      await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh',
+        retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed',
+    ),
+    now: () => performance.now(),
+    released: (sessionId, idleMs) => log.info('codexIdleWatcher: released idle runtime', { sessionId, idleMs }),
+    warn: (message) => log.warn(message),
+  });
+  codexIdleReleaseWatcher.start();
 
   type InternalRuntimeSelectionOptions = {
     source: 'user' | SessionRuntimeMutationSource;

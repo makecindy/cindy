@@ -2140,7 +2140,9 @@ export function getMaker(): Maker {
         // 只是这条路径从没让那个校验生效过。退役即补齐对称性，不需要在写入侧再加一层闸门。
         await codexAgent.forceDisposeLocalHostForAuthChange(
           `Codex credential invalidated: ${reason}`,
-          { preserveExternalAuth: true },
+          // Pool accounts read their own native directory and have their own admission checks.
+          // This adapter's unproven child failure cannot revoke another account's live host.
+          { preserveExternalAuth: true, preserveSubscriptionAccounts: true },
         );
         clearChatgptBridgeCredentialCache();
         await refreshDiscoveredCodexModels(false);

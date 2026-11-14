@@ -264,6 +264,8 @@
     "transferProgress": "已傳輸 {{sent}} / {{total}} · 平均 {{speed}}/s",
     "thisComputer": "本機",
     "selectedComputer": "所選電腦",
+    "sourceComputer": "來源電腦",
+    "waitingForSource": "{{name}}已離線，上線後會繼續複製。",
     "estimating": "正在統計檔案數量和大小…",
     "fileSummary": "專案檔案：{{count}} 個，共 {{size}}",
     "estimateNote": "複製前估算，含隱藏檔案；不含另行複製的 Git 歷史、任務對話及附件。檔案變化可能影響最終大小。",
@@ -1359,7 +1361,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定已儲存，但 Cindy 重新整理失敗。請重新載入 SSH 設定。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 無法安全管理此 SSH 設定。請重新載入，並確認 Cindy 所有權標記存在且主機別名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 無法安全重現此主機的部分 SSH 設定規則。終端 SSH 仍可能成功；請檢查 Match、條件式 Include、IdentityAgent、IdentitiesOnly 與公開金鑰設定。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent 目前無法使用。請啟動 SSH Agent，並用 ssh-add 載入對應私密金鑰後再試。",
+    "SSH_AGENT_UNAVAILABLE": "本機 SSH 金鑰代理程式（ssh-agent）無法使用。請確認代理程式已啟動，並用 ssh-add -l 檢查所需金鑰是否已載入；可在「管理金鑰」中查看疑難排解指引。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主機仍已儲存，但顯示名稱或 Agent Proxy 設定未能儲存。請檢查本機儲存權限後再試。",
     "REMOTE_WORKDIR_INVALID": "遠端專案目錄無效，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_FOUND": "遠端專案目錄不存在，請重新選擇專案目錄。",
@@ -1454,6 +1456,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "待查看",
+      "summaryInProgress": "進行中",
+      "summaryPending": "等你處理",
+      "summaryUnread": "未讀結果",
       "markRead": "標為已讀",
       "archive": "歸檔",
       "actionFailed": "操作未完成，提醒已保留，請重試。",
@@ -1890,6 +1896,12 @@
       "footnote": "第一版僅支援 SSH 連線管理。在遠端執行 Agent 的能力將在後續版本中加入。",
       "viaAuth": "透過 {{label}} 認證",
       "readOnlyFromSshConfig": "連線資訊來自 SSH 設定",
+      "importedAgentHint": "使用本機 SSH 金鑰代理程式（ssh-agent）完成驗證。終端機 ssh 能連線，不代表代理程式已就緒。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent 引用的環境變數未在 Cindy 中設定。請為 Cindy 設定該變數，或修正 SSH 設定中的 IdentityAgent",
+        "endpointEmpty": "IdentityAgent 解析後的端點為空。請修正 SSH 設定中的 IdentityAgent",
+        "endpointUnavailable": "IdentityAgent 設定的 SSH 金鑰代理程式端點無法使用。請檢查該端點及其代理程式；預設 ssh-agent 可能使用不同端點"
+      },
       "configWarning": "部分 SSH 設定規則 Cindy 無法解析，主機列表或連線資訊可能與終端 SSH 不一致。",
       "configDiagnostic": {
         "io": "Cindy 無法讀取 SSH 設定。這裡仍顯示上次成功讀取的主機；請檢查檔案權限，然後重新載入。",
@@ -1987,7 +1999,7 @@
           "tryThis": "在你的終端裡試一下這些命令",
           "close": "關閉",
           "fallbackTitle": "或者乾脆不走 agent",
-          "fallbackBody": "你可以在新增 host 時改用「私鑰檔案」方式，{{appName}} 會把金鑰檔案直接交給 ssh，每次連線時由你輸入 passphrase。完全不依賴 agent。安全權衡：每次連線都要輸入 passphrase，但記憶體裡不會留任何金鑰快取。",
+          "fallbackBody": "新增主機時也可選擇「私鑰檔案」：{{appName}} 會將私鑰讀入程序記憶體，不依賴 ssh-agent。目前僅支援未加密的私鑰，不會在連線時詢問金鑰密碼；加密私鑰請透過 ssh-agent 使用。",
           "reason": {
             "agent_unavailable": "ssh-add 找不到可用的 ssh-agent(可能是 ssh-add 沒裝、agent 沒啟動，或 SSH_AUTH_SOCK 沒設定)。",
             "bad_passphrase": "ssh-add 拒絕了這個密碼。",
@@ -13434,6 +13446,15 @@
           "askNoQuestion": "Agent 正在等你的回答，但沒有可顯示的問題。請回覆「繼續」。",
           "askQuestion": "Agent 需要你的回答：\n{{question}}\n{{options}}\n請回覆選項編號，或直接輸入你的回答。"
         }
+      },
+      "questions": {
+        "cardHint": "僅提問者可作答。點選選項；多題或複選選好後送出。也可回覆這則訊息補充文字。多題文字回答請寫「題號：答案」（如「2：用中文」），填好後送出。",
+        "submitLabel": "送出答案",
+        "multiSelectHint": "（可複選）",
+        "resolved": "✅ 已選：{{option}}",
+        "expired": "卡片已過期",
+        "textHint": "僅提問者可作答。回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。",
+        "replyHint": "僅提問者可作答。點選選項；多題或複選選好後送出。\n回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。"
       }
     }
   },
@@ -15965,6 +15986,8 @@
       "claudeSubscriptionWorkspaceOverride": "這個工作目錄的 .claude 設定修改了 Claude 的上游位址或驗證方式，不能在這裡使用 Claude 訂閱。請移除這些設定，或選擇閘道器或 API Key 模型",
       "deviceStillLoading": "遠端裝置仍在載入中，請稍候",
       "remoteDefaultsLoadFailed": "無法讀取遠端裝置設定。請檢查連線，Cindy 正在重試。",
+      "branchRequiresWorktree": "所選分支與目前分支不同。請勾選 worktree，或選擇目前分支。",
+      "branchCheckFailed": "無法確認目前分支。請勾選 worktree 使用所選分支，或檢查專案後重試。",
       "worktreeMissingRepo": "無法建立 worktree：找不到目前目錄的儲存庫根目錄",
       "worktreeRepoHint": "可嘗試重新選一次工作目錄，等右下角資料夾標識重新整理後再試",
       "sessionInactive": "任務已不再處於活躍狀態",

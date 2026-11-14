@@ -921,9 +921,8 @@ function CodeBlock({
 //   - Windows: enabling the ssh-agent service needs admin (UAC).
 //
 // Instead we surface platform-specific commands the user can run themselves,
-// plus an explicit "fallback" note telling them they can skip the agent flow
-// entirely and just use ~/.ssh/config with `IdentityFile` (security is then
-// their responsibility — passphrase will be prompted on each connect).
+// plus an explanation of the explicit "Identity file" option when adding a
+// host in Cindy. That mode reads an unencrypted private key into the process.
 
 interface AgentTroubleDialogProps {
   state: AgentTroubleState | null;
@@ -1073,9 +1072,8 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
               </p>
             )}
 
-            {/* Fallback: skip the agent entirely and rely on ~/.ssh/config +
-                IdentityFile. Spelled out so the user knows they're explicitly
-                opting into "no agent, type passphrase per connect" mode. */}
+            {/* Direct-key mode reads an unencrypted private key into Cindy.
+                It does not prompt for encrypted-key passphrases. */}
             <div
               className="rounded-lg p-3 text-12 leading-relaxed flex flex-col gap-1"
               style={{

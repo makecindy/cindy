@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { mcpAppSdkCacheText } from '../../shared/mcpApps.js';
 import { z } from 'zod';
 import { McpUiHostContextSchema } from '@modelcontextprotocol/ext-apps/app-bridge';
 import type { McpAppsHost } from './host.js';
@@ -8,7 +10,7 @@ import type { McpAppResourceBinding } from './host.js';
 
 const id = z.string().min(1).max(256);
 export const mcpAppOperationSchema = z.discriminatedUnion('op', [
-  z.object({ op: z.literal('open'), clientId: id, openId: id.optional(), context: McpUiHostContextSchema.default({}) }),
+  z.object({ op: z.literal('open'), clientId: id, openId: id.optional(), sdkCacheHashes: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(8).optional(), context: McpUiHostContextSchema.default({}) }),
   z.object({ op: z.literal('open-resource'), source: z.object({ instanceId: id, viewId: id }), openId: id.optional(), context: McpUiHostContextSchema.default({}) }),
   z.object({ op: z.literal('cancel-open'), openId: id }),
   z.object({ op: z.literal('message'), viewId: id, message: z.unknown() }),
@@ -75,7 +77,16 @@ export async function handleMcpAppOperation(
     case 'open': {
       if (sessionId === null) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
       const document = await host.open(caller, sessionId, input.clientId, input.context, input.openId);
-      if (!local) return document;
+      if (!local) {
+        if (document.sdk && input.sdkCacheHashes?.length) {
+          const hash = createHash('sha256').update(mcpAppSdkCacheText(document.sdk)).digest('hex');
+          if (input.sdkCacheHashes.includes(hash)) {
+            const { sdk: _sdk, ...rest } = document;
+            return { ...rest, sdkRef: hash } satisfies McpAppDocument;
+          }
+        }
+        return document;
+      }
       local.supply(document, caller, input.context as Record<string, unknown>);
       // Main supplies the private document directly to the isolated frame.
       return { viewId: document.viewId, transport: 'sandbox',

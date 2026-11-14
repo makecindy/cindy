@@ -2,6 +2,7 @@ import { createGroupAssistantTasks } from '../groupAssistantTask.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
+import { setTimeout as yieldToIo } from 'node:timers/promises';
 import path from 'node:path';
 import ts from 'typescript';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
@@ -2235,12 +2236,15 @@ describe('Chat Server result delivery and refresh', () => {
         }));
         const sync = vi.fn(() => new Promise<void>(() => {}));
         deps.groupCheckouts = { ensure, sync, isManaged: folder => folder.startsWith(root), dirOf: () => dir };
-        // Finding the folder reads the real disk, which the fake clock does not wait for (slow CI).
+        // Real disk I/O needs real time on Windows; a fixed number of setImmediate turns can
+        // finish before access() completes. Keep fake service timers frozen while waiting.
         const delivered = async (count: number) => {
-          for (let i = 0; i < 200 && dispatched().length < count; i++) {
-            await new Promise(resolve => setImmediate(resolve));
+          const deadline = vi.getRealSystemTime() + 2000;
+          while (dispatched().length < count && vi.getRealSystemTime() < deadline) {
+            await yieldToIo(1);
             await vi.advanceTimersByTimeAsync(0);
           }
+          expect(dispatched()).toHaveLength(count);
         };
         await ask(5, 'Where are the docs?');
         await delivered(1);

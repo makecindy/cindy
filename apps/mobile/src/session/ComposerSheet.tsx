@@ -11,7 +11,7 @@ export interface ComposerSheetProps {
   preventDismiss?: boolean;
   nativeHeader?: ReactNode;
   /** Keep the native root list mounted while a secondary page is shown. */
-  nativeRoot?: { active: boolean; header?: ReactNode; content: ReactNode };
+  nativeRoot?: { active: boolean; header?: ReactNode; content: ReactNode; initialScrollTargetId?: string };
   visible: boolean;
   onClose(): void;
   onClosed?(): void;
