@@ -1861,6 +1861,13 @@ function commandReadsProcessEnviron(command: unknown): boolean {
 let textOnlyTurnActive = false;
 let modelRequestControlActive = false;
 function toolsDisabledForTurn(): boolean { return textOnlyTurnActive; }
+// 同一进程里的其他扩展靠这个 Symbol 判断本回合是否禁用了工具（工具载荷折叠要
+// 在这类回合让原文整体可见，否则模型看到折叠后的历史却没有任何取回途径）。
+const TEXT_ONLY_TURN_FLAG = Symbol.for('cindy.pi.textOnlyTurn');
+function setTextOnlyTurn(on: boolean): void {
+  textOnlyTurnActive = on;
+  try { (globalThis as any)[TEXT_ONLY_TURN_FLAG] = on; } catch { /* ignore */ }
+}
 
 function installTextOnlyTurnPolicy(pi: any, prepareRuntimeControl?: (ctx: any) => Promise<void> | undefined): void {
   const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
@@ -1879,17 +1886,17 @@ function installTextOnlyTurnPolicy(pi: any, prepareRuntimeControl?: (ctx: any) =
     if (!text.startsWith(prefix)) {
       // Aborted/failed turns may omit agent_settled. Only a fresh idle RPC input
       // resets their latch; steer, follow-ups and extension continuations retain it.
-      if (ctx.isIdle() && !event.streamingBehavior) textOnlyTurnActive = false;
+      if (ctx.isIdle() && !event.streamingBehavior) setTextOnlyTurn(false);
       const result = controlled ? { action: 'transform', text, images: event.images } : undefined;
       return prepared ? prepared.then(() => result) : result;
     }
-    textOnlyTurnActive = true;
+    setTextOnlyTurn(true);
     const result = { action: 'transform', text: text.slice(prefix.length), images: event.images };
     return prepared ? prepared.then(() => result) : result;
   });
   // agent_end is too early: native retries, compaction and follow-ups retain the policy.
   pi.on('agent_settled', (_event: any, ctx: any) => {
-    if (ctx.isIdle()) textOnlyTurnActive = false;
+    if (ctx.isIdle()) setTextOnlyTurn(false);
   });
   pi.on('session_start', (_event: any, ctx: any) => {
     ctx.ui.notify(${JSON.stringify(CINDY_PI_TEXT_ONLY_READY_PREFIX)} + token, 'info');

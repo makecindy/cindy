@@ -31,6 +31,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 
+import { readToolFoldSettings } from './tool-fold-store.js';
 import { createPiModelResolvers } from './engineModelResolvers.js';
 
 import {
@@ -243,6 +244,9 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     getManagedSkills: listCindyManagedSkills,
     scanLocalCustomizations,
     ...createPiModelResolvers({ getCatalog: getActiveCatalog, resolveContextProviderId: resolveModelContextProviderId }),
+    // 实验开关：工具载荷折叠。每次 startSession 现读 —— 与 LSP Beta 同一口径
+    // (toggle 后新会话生效)。默认 false：不加载扩展，行为与改动前一致。
+    resolvePiToolFoldEnabled: () => readToolFoldSettings().enabled,
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
     get binaryPath() { return resolvePiBinaryPath() ?? binaryPath; },

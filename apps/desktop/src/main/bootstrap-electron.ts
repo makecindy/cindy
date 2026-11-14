@@ -1027,6 +1027,7 @@ import {
 } from './vision-bridge/vision-bridge-settings-store.js';
 import type { VisionBridgeSettings } from '../shared/visionBridgeSettings.js';
 import { readLspModeSettings, writeLspModeEnabled } from './maker-host/lsp-mode-store.js';
+import { readToolFoldSettings, writeToolFoldEnabled } from './maker-host/tool-fold-store.js';
 import {
   readChatEmbeddingSettings,
   readChatEmbeddingSettingsState,
@@ -5866,6 +5867,19 @@ const registerIpcHandlers = () => {
       throwIpcError('INVALID_PARAMS', 'lsp mode enabled required (boolean)');
     }
     writeLspModeEnabled(enabled);
+    return { effective: 'next-session' as const };
+  });
+
+  // 工具载荷折叠 (cindy-tool-fold) 实验开关 IPC —— 同 LSP 口径:
+  // pi 进程启动时一次性决定是否 --extension, 已开 session 不变。
+  ipcMain.handle(MAKER_IPC_INVOKE.TOOL_FOLD_GET, async () => {
+    return readToolFoldSettings();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.TOOL_FOLD_SET, async (_e, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'tool fold enabled required (boolean)');
+    }
+    writeToolFoldEnabled(enabled);
     return { effective: 'next-session' as const };
   });
 

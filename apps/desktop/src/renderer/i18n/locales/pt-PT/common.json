@@ -4703,6 +4703,18 @@
         "toggleFailed": "Falha ao ativar/desativar o LSP"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "Dobramento de payload de ferramentas (experimental)",
+        "description": "Em sessões longas do Agent, cada ida e volta de ferramenta (comando mais saída) é reenviada em cada passo. Quando ativado, as novas sessões do Agent Pi dobram as idas e voltas antigas numa única linha e truncam resultados demasiado grandes antes de entrarem no histórico; o modelo pode recuperar o original com toolfold_read. Medido em duas sessões longas: cerca de 23% a 27% menos tokens de entrada. Afeta apenas as sessões do Agent Pi iniciadas depois; com a opção desligada, o comportamento é exatamente o de antes."
+      },
+      "toggleAria": "Ativar/desativar dobra de payload de ferramentas",
+      "toast": {
+        "enabled": "Dobramento de payload de ferramentas ativado — tem efeito nas novas sessões do Agent Pi",
+        "disabled": "Dobramento de payload de ferramentas desativado — tem efeito nas novas sessões do Agent Pi",
+        "toggleFailed": "Falha ao ativar/desativar o dobra de payload de ferramentas"
+      }
+    },
     "betaChannel": {
       "title": "Canal beta",
       "badge": "Beta",

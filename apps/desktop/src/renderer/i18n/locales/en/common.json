@@ -4647,6 +4647,18 @@
         "toggleFailed": "Failed to toggle LSP"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "Tool payload folding (experimental)",
+        "description": "In long agent sessions, every tool round-trip (command plus output) is re-sent on every step. When this is on, new Pi agent sessions fold older round-trips into one line and truncate oversized results before they enter the transcript; the model can fetch the original with toolfold_read. Measured on two long sessions: roughly 23% to 27% fewer input tokens. It only affects Pi agent sessions started afterwards; with it off, behavior is exactly as before."
+      },
+      "toggleAria": "Toggle tool payload folding",
+      "toast": {
+        "enabled": "Tool payload folding enabled · takes effect in new Pi agent sessions",
+        "disabled": "Tool payload folding disabled · takes effect in new Pi agent sessions",
+        "toggleFailed": "Failed to toggle tool payload folding"
+      }
+    },
     "betaChannel": {
       "title": "Beta channel",
       "badge": "Beta",

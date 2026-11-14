@@ -30,6 +30,7 @@ import { ConfirmDialogProvider } from './components/ui/confirm-dialog-provider';
 import { bootstrapChatEmbeddingFromMain } from './lib/chatEmbeddingStore';
 import { bootstrapGitSafetySettingsFromMain } from './lib/gitSafetySettingsStore';
 import { bootstrapLspModeFromMain } from './lib/lspModeStore';
+import { bootstrapToolFoldFromMain } from './lib/toolFoldStore';
 import { bootstrapSilentEncryptedRetryFromMain } from './lib/silentEncryptedRetryStore';
 import { initRsbBrowserBridge } from './features/right-sidebar/lib/rsbBrowserBridge';
 import { isSecondaryWindow } from './lib/secondaryWindow';
@@ -68,6 +69,8 @@ void bootstrapSilentEncryptedRetryFromMain();
 void bootstrapChatEmbeddingFromMain();
 // LSP Beta 开关 (Phase 1) — admin-only, 默认 false; 同款镜像同步方式。
 void bootstrapLspModeFromMain();
+// 工具载荷折叠实验开关 — 默认 false; 同款镜像同步方式。
+void bootstrapToolFoldFromMain();
 
 const view = new URLSearchParams(window.location.search).get('view');
 const isVoiceInputOverlay = view === 'voice-input-overlay';

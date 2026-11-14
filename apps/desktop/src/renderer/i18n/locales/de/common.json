@@ -4647,6 +4647,18 @@
         "toggleFailed": "LSP konnte nicht umgeschaltet werden"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "Tool-Nutzlasten falten (experimentell)",
+        "description": "In langen Agent-Sitzungen wird jeder Werkzeug-Roundtrip (Befehl plus Ausgabe) bei jedem Schritt erneut gesendet. Ist die Option aktiv, falten neue Pi-Agent-Sitzungen ältere Roundtrips auf eine Zeile und kürzen überlange Ergebnisse, bevor sie in den Verlauf gelangen; das Modell kann das Original mit toolfold_read abrufen. An zwei langen Sitzungen gemessen: rund 23 % bis 27 % weniger Eingabetokens. Betrifft nur Pi-Agent-Sitzungen, die danach starten; bei ausgeschalteter Option ist das Verhalten exakt wie zuvor."
+      },
+      "toggleAria": "Tool-Nutzlasten falten umschalten",
+      "toast": {
+        "enabled": "Tool-Nutzlasten falten aktiviert – gilt für neue Pi-Agent-Sitzungen",
+        "disabled": "Tool-Nutzlasten falten deaktiviert – gilt für neue Pi-Agent-Sitzungen",
+        "toggleFailed": "Tool-Nutzlasten falten konnte nicht umgeschaltet werden"
+      }
+    },
     "betaChannel": {
       "title": "Beta-Kanal",
       "badge": "Beta",

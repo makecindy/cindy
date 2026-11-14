@@ -4604,6 +4604,18 @@
         "toggleFailed": "切换 LSP 开关失败"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "工具载荷折叠（实验）",
+        "description": "长 Agent 会话里，每一步都会重发全部工具往返（命令与输出）。打开后，新启动的 Pi Agent 会话把较老的工具往返折成一行，超大的输出在写入记录前先截断，模型可用 toolfold_read 取回原文。两段长会话实测：输入 token 约少 23% 到 27%。只对之后启动的 Pi Agent 会话生效；关闭时行为与现在完全一致。"
+      },
+      "toggleAria": "工具载荷折叠开关",
+      "toast": {
+        "enabled": "工具载荷折叠已开启，新建 Pi Agent 会话后生效",
+        "disabled": "工具载荷折叠已关闭，新建 Pi Agent 会话后生效",
+        "toggleFailed": "切换工具载荷折叠开关失败"
+      }
+    },
     "betaChannel": {
       "title": "Beta 测试渠道",
       "badge": "Beta",

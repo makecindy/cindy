@@ -252,6 +252,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       },
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
+      // 工具载荷折叠是实验功能，默认关闭；本文件断言的是扩展清单与项目资源装配，
+      // 所以显式打开它（真实产品默认不开，见 Desktop 的 ToolFoldCell）。
+      resolvePiToolFoldEnabled: () => true,
       spawnPiSubagentRunner: () => {
         const handle = {
           pid: 4321,
@@ -3000,6 +3003,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       // 轮 40-w4-t15:argv 里的 extension 路径是 posix join(远端派生路径统一
       // POSIX),对比也用 posix —— 平台 path.join 在 Windows 拼反斜杠不匹配。
       path.posix.join(configHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(configHome, 'internal-extensions', 'cindy-tool-fold.ts'),
       path.posix.join(configHome, 'internal-extensions', 'cindy-subagent.ts'),
     ]);
     await vi.waitFor(() => {
@@ -3010,6 +3014,22 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         requestedSkillCount: 0,
       });
     });
+    await handle.close();
+  });
+
+  it('does not load the tool-fold extension while the experimental switch is off', async () => {
+    // 实验开关默认关闭：不写扩展文件、不传 --extension，行为与没有该扩展时一致。
+    const handle = await new PiAgent(buildDeps({
+      resolvePiToolFoldEnabled: () => false,
+    })).startSession(opts());
+    const args = knobs.spawnedArgs[0]!;
+    const configHome = knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!;
+
+    expect(repeatedArgValues(args, '--extension')).toEqual([
+      path.posix.join(configHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(configHome, 'internal-extensions', 'cindy-subagent.ts'),
+    ]);
+    expect(existsSync(path.join(configHome, 'internal-extensions', 'cindy-tool-fold.ts'))).toBe(false);
     await handle.close();
   });
 
@@ -3033,6 +3053,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     ]);
     expect(repeatedArgValues(args, '--extension')).toEqual([
       path.posix.join(configHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(configHome, 'internal-extensions', 'cindy-tool-fold.ts'),
       path.posix.join(configHome, 'internal-extensions', 'cindy-subagent.ts'),
       realpathSync(path.join(cwd, '.pi', 'extensions', 'hook.ts')),
     ]);
@@ -3553,6 +3574,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--skill')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--extension')).toEqual([
       path.posix.join(approvedHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(approvedHome, 'internal-extensions', 'cindy-tool-fold.ts'),
       path.posix.join(approvedHome, 'internal-extensions', 'cindy-subagent.ts'),
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--extension')).toEqual([

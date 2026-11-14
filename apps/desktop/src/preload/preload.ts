@@ -8144,6 +8144,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     lspModeSet: (enabled: boolean): Promise<{ effective: 'next-session' }> =>
       ipcRenderer.invoke('maker:lsp-mode:set', enabled),
 
+    // 工具载荷折叠 (cindy-tool-fold) 实验开关 —— 打开后新会话加载内置折叠扩展。
+    // 默认 false; 仅对**新 session** 生效(pi 进程启动时一次性决定是否 --extension)。
+    toolFoldGet: (): Promise<{ enabled: boolean }> => ipcRenderer.invoke('maker:tool-fold:get'),
+    toolFoldSet: (enabled: boolean): Promise<{ effective: 'next-session' }> =>
+      ipcRenderer.invoke('maker:tool-fold:set', enabled),
+
     // 对话语义索引开关 —— 按 owner 保存；企业组织账号默认开，其余默认关。
     // 关闭状态下 createMessage hook 直接 return，历史搜索回退到 FTS。
     chatEmbeddingGet: (): Promise<{
