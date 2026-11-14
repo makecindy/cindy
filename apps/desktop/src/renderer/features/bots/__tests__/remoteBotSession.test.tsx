@@ -250,6 +250,22 @@ it('does not confirm offline when an online home is missing its target row', asy
   expect(screen.queryByText('cloud-offline-view')).toBeNull();
 });
 
+it('returns to canonical remote chat when the missing target row recovers', async () => {
+  h.listed = false;
+  h.deviceListStatus = 'ready';
+  h.devices = [{ deviceId: 'home', online: true, remoteControlEnabled: true }];
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home',
+      homeDevice: { deviceId: 'home', name: 'Home', online: true, isSelf: false, remoteControlEnabled: true } }] };
+  const view = render(<RemoteBotSessionView />);
+  expect(screen.queryByText('cloud-offline-view')).toBeNull();
+  h.listed = true;
+  view.rerender(<RemoteBotSessionView />);
+  await screen.findByText('remote-conversation');
+  expect(h.view).toHaveBeenLastCalledWith(expect.objectContaining({ readOnly: false,
+    sessionIdProp: 'new-canonical', botIdentity: expect.objectContaining({ canonicalChat: true }) }));
+});
+
 it('shows the cloud conversation when the missing target row is explicitly offline', async () => {
   h.listed = false;
   h.deviceListStatus = 'ready';
