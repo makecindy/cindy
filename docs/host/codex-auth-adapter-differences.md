@@ -27,6 +27,23 @@
 
 **归属（审核方裁定）**：上面两处为 M1，已对齐；具名来源的连接态（B）、xd/cindy 来源优先（C）、控制入口与账号视图（D 的相应部分）、identity 与连接诊断随 M2 供应商视图；只有 API key 的 auth.json 且无网关 key、OAuth 原始环境里的网关 key 两项长期保留（放行表各一行）；401 恢复仍未定，见最后一节。
 
+## Windows（2026-11-14）
+
+对照测试第一次在 Windows 上跑到断言时（#10506 的 CI），桌面与 Host 的差别比 macOS/Linux 多。没有新的差别类别，Host 也没有缺少桌面的哪一支：
+
+- **原因**：profile 里已经有一个普通的 `auth.json`、本机又有系统 Codex 登录时，Windows 上两边都保留这个文件，不改成指向系统登录的链接（桌面 `auth-adapters.ts` 与 Host `codex-system-login.ts` 都是 `process.platform === 'win32' && topology.linkType === 'file'` 这一支）。macOS/Linux 在同样情形下会改成链接，两边一起用系统登录。
+- **受影响的事实**：只有“profile 里有自己的 auth.json（OAuth 或只有 API key）、有系统登录、没有 openai 绑定、没有作废标记”这一种，网关 key 有无都算。
+- **落进的已有类别**：
+  - 安装态可达输入多出 2 格。“只有 API key 的 auth.json 且无网关 key”由 3 格变 4 格：两边都起不了任务，Host 更早失败，见放行表同名一行。identity 文案多 1 格（M2）。
+  - 安装态不可达输入：具名来源（M2）。
+  - 源码态：桌面开发版的写保护与它对系统登录的对账（Host 源码运行不对账）。
+- **诊断数**：桌面设置页的诊断在 Windows 上是 720 格（macOS/Linux 760），Host 仍为 0。
+- **测试的分法**：对照测试开头用桌面建链接的同一个函数（`relinkSharedCodexAuth`）在临时目录里试一次，按结果选表，结果写进用例名：
+  - 非 Windows 且能建链接：原表；
+  - Windows 且能建链接：原表加 Windows 的格数（`WINDOWS_COUNTS`），诊断 720；
+  - 建不了链接（Windows 未开开发者模式）：没有记录表，显式跳过表的比较；Host 不产生诊断、总格数、可达格子的最终进程环境相等照常断言。
+- **来源与局限**：Windows 的格数来自 CI 日志（vitest 对报错相同的用例只打印一份差异，10 组里看得到 6 组），以及本机把 `process.platform` 设为 win32 跑这个测试（10 组都有，看得到的 6 组与 CI 逐键相同；让 symlink 抛 EPERM 则 0/6 相同，所以 CI 的 Windows runner 能建链接）。本机模拟里桌面建链接走的是兜底重建（PowerShell 移动文件只在真实 Windows 上有），结果同样是链接。可达格子的最终进程环境在模拟中全等，真实 Windows 上以 CI 为准。
+
 ## 比较口径（首次采集，m1-cp18e 矩阵）
 
 对象是 `DesktopCodexAuthAdapter` 与 `createCodexLocalCliAuth` 的 `getState` / `getAuthEnv`，起点为 `hostCodexAuthAdapterParity.test.ts` 的原有矩阵。网关 key 有/无 × auth.json 为 OAuth/API-key/不存在 × OpenAI 绑定有/无 × 作废标记有/无，共 24 组事实；再乘 5 个 providerId、4 个 credentialMode，共 **480 格，389 格不同，91 格相同**。
