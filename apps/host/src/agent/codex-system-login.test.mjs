@@ -56,8 +56,16 @@ function sharedProfile(t, ownerId) {
   const profileDir = path.join(root, 'profile');
   configureHostOwner({ userDataDir: profileDir, ownerId });
   const codexHome = path.join(profileDir, 'codex-home');
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.symlinkSync(systemAuth, path.join(codexHome, 'auth.json'));
+  // This fixture exercises a shared login surviving an atomic system refresh, not
+  // file-link creation. A directory junction has the same live-entry semantics
+  // on Windows without requiring file-symlink privileges (unlike a hard link).
+  if (process.platform === 'win32') {
+    fs.mkdirSync(profileDir, { recursive: true });
+    fs.symlinkSync(path.dirname(systemAuth), codexHome, 'junction');
+  } else {
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.symlinkSync(systemAuth, path.join(codexHome, 'auth.json'), 'file');
+  }
   bindNativeProviderAuth('openai', { sharedSystem: true });
   const accounts = { isCodexAccountLoginActive: () => false, isCodexAccountProvider: () => false };
   const systemLogin = createHostCodexSystemLogin({ codexHome, systemAuthPath: systemAuth, loginActive: () => false });

@@ -77,6 +77,7 @@ vi.mock('../anthropic-compat-proxy-host.js', async (original) => ({
   ...(await original<typeof import('../anthropic-compat-proxy-host.js')>()),
   getClaudeEndpoint: () => 'http://127.0.0.1:18765',
   isAnthropicCompatProxyHandleReady: () => h.proxyReady,
+  ensureAnthropicCompatProxyReady: async () => {},
 }));
 vi.mock('../../agent-binaries/index.js', async (original) => ({
   ...(await original<typeof import('../../agent-binaries/index.js')>()),
@@ -238,7 +239,7 @@ const EXPECTED_SHAPES: Record<string, string[] | string> = {
   'custom provider, session-pinned interface': local, 'custom provider, preview': local,
   'remote session': ['cprov-key:1', 'cprov-none:1', 'cprov-routes:1', 'cindy-byom-openai-codex:1', 'cindy-byom-xai:5'],
   'managed Ollama': local, 'managed llama.cpp': local,
-  'gateway, proxy not ready': ['cprov-key:1', 'cprov-none:1', 'cprov-routes:1', 'cindy-byom-openai-codex:1'],
+  'gateway, proxy not ready': 'PiNativeProviderProxyNotReadyError: Pi model route requires the local compatibility proxy, but it is not ready',
   'SuperGrok, proxy not ready': 'PiNativeProviderProxyNotReadyError: SuperGrok Pi provider unavailable: local compatibility proxy is not ready',
 };
 const shape = (outcome: { result: unknown } | { thrown: string }) => ('result' in outcome

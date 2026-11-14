@@ -31,6 +31,29 @@ function createAuthAdapter(env: Record<string, string> = {}): AuthAdapter {
 }
 
 describe('buildClaudeEnv', () => {
+  // #10523, unit: endpoint materialization used to freeze the direct fallback
+  // even when a managed local proxy was still starting or had failed.
+  it('waits for the managed local endpoint and does not emit the fallback after failure', async () => {
+    let complete!: (url: string) => void;
+    const resolveLocalEndpoint = vi.fn(() => new Promise<string>(resolve => { complete = resolve; }));
+    const config = { endpoint: 'https://upstream.invalid', resolveLocalEndpoint };
+    let settled = false;
+    const env = buildClaudeEnv(createAuthAdapter(), config).then(value => { settled = true; return value; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    complete('http://127.0.0.1:12345');
+    expect((await env).ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:12345');
+    resolveLocalEndpoint.mockRejectedValueOnce(new Error('proxy unavailable'));
+    await expect(buildClaudeEnv(createAuthAdapter(), config)).rejects.toThrow('proxy unavailable');
+  });
+
+  it('keeps native subscription and remote environments independent of the local proxy', async () => {
+    const resolveLocalEndpoint = vi.fn(async () => { throw new Error('proxy unavailable'); });
+    const config = { endpoint: 'https://metadata.invalid', remoteEndpoint: 'https://remote.invalid', resolveLocalEndpoint };
+    expect((await buildClaudeEnv(createAuthAdapter(), config, { nativeCliAuth: true })).ANTHROPIC_BASE_URL).toBeUndefined();
+    expect((await buildClaudeEnv(createAuthAdapter(), config, { mode: 'remote' })).ANTHROPIC_BASE_URL).toBe(config.remoteEndpoint);
+    expect(resolveLocalEndpoint).not.toHaveBeenCalled();
+  });
   it('uses an explicit subscription profile only for local native authentication', async () => {
     const nativeSubscriptionAccount = { id: 'fixture', configDir: '/fixture/.claude-second', assertCurrent() {}, readState: async () => ({ authenticated: true }) };
     const getAuthEnv = vi.fn(async (options?: AuthAdapterOptions): Promise<Record<string, string>> => options?.nativeSubscriptionAccount ? { CLAUDE_CONFIG_DIR: options.nativeSubscriptionAccount.configDir } : {});

@@ -8672,14 +8672,20 @@ describe('codex proxy host', () => {
     expect(host.isCodexProxyHandleReady()).toBe(true);
   });
 
-  it('keeps handle not-ready when proxy fails to start (degrade safety, no naked)', async () => {
+  it('keeps failed warmup not-ready and permits the next explicit startup attempt', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockRejectedValueOnce(new Error('port in use'));
 
     await host.ensureCodexProxyReady();
 
-    // proxy 起不来 → handle 不就绪 → spawn 据此 setActive(false) → maker-core 发 dev,不裸奔
+    // The spawn materializer rejects this state; metadata getters may still fall back.
     expect(host.isCodexProxyHandleReady()).toBe(false);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    expect(host.isCodexProxyHandleReady()).toBe(true);
+    expect(host.getCodexProxyEndpoint()).toBe('http://127.0.0.1:43210');
   });
 
   it('deduplicates concurrent proxy startup calls', async () => {

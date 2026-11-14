@@ -143,8 +143,9 @@ export function createHostClaudeProxyRuntime(options: {
   return {
     ready: () => proxy.ensureAnthropicCompatProxyReady(),
     isReady: () => proxy.isAnthropicCompatProxyHandleReady(),
-    /** The Claude and Pi endpoint: the loopback proxy once ready, else the upstream (with a log). */
+    /** Synchronous auxiliary snapshot; local launch uses the readiness-gated resolver below. */
     endpoint: () => proxy.getClaudeEndpoint(),
+    resolveAgentEndpoint: () => proxy.resolveClaudeAgentEndpoint(),
     piGatewayRequestAgent: proxy.piGatewayRequestAgent,
     /** What this runtime's Claude Code processes send instead of the provider placeholder. */
     inboundSecret: () => runtimeSecret,

@@ -267,6 +267,7 @@ import { disposeRemoteAgentHost, installRemoteAgentHost } from '../remote-agent/
 import { disposeLocalAgentHost, installLocalAgentHost } from '../local-agent/service.js';
 import {
   getClaudeEndpoint,
+  resolveClaudeAgentEndpoint,
   setClaudeProxyGatewayKeyReader,
 } from './anthropic-compat-proxy-host.js';
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
@@ -1463,7 +1464,7 @@ export function getMaker(): Maker {
       getManagedSkills: listCindyManagedSkills,
       scanLocalCustomizations,
       auth: desktopClaudeAuthAdapter,
-      runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
+      runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint, resolveClaudeAgentEndpoint),
       get binaryPath() { return requireBinary('claude-code'); },
       logger: desktopMakerLogger,
       turnChangeCapture: {
