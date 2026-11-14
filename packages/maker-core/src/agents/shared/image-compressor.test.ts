@@ -109,6 +109,19 @@ describe('required resizing and byte budgets', () => {
     expect(result.bytes).toEqual(bytes);
     expect(result.changed).toBe(false);
   });
+  it('applies 15 percent only to ordinary recompression, not a satisfied byte budget', async () => {
+    const encoded = await sharp({ create: { width: 200, height: 100, channels: 3, background: 'white' } })
+      .jpeg({ quality: 90, mozjpeg: true, chromaSubsampling: '4:4:4' }).toBuffer();
+    // Valid JPEG with a tiny trailing pad: re-encoding saves less than 15%.
+    const bytes = Buffer.concat([encoded, Buffer.alloc(10)]);
+    const normal = await compressImageBuffer({ bytes, mimeType: 'image/jpeg' });
+    expect(normal.changed).toBe(false);
+    expect(normal.bytes).toEqual(bytes);
+    const tight = await compressImageBuffer({ bytes, mimeType: 'image/jpeg', budget: { maxBytes: encoded.length + 1 } });
+    expect(tight.changed).toBe(true);
+    expect(tight.bytes.length).toBeLessThanOrEqual(encoded.length + 1);
+    expect(tight.bytes.length).toBeGreaterThan(bytes.length * 0.85);
+  });
   it('reports an unreachable byte budget without returning an oversized candidate', async () => {
     const bytes = await pngBuffer();
     const result = await compressImageBuffer({ bytes, mimeType: 'image/png', budget: { maxBytes: 1 } });
