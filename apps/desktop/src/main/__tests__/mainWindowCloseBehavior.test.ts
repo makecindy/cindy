@@ -4,6 +4,7 @@ import {
   applyLinuxMainWindowCloseBehavior,
   cancelPendingWindowHide,
   createCloseBehaviorPromptFallbackController,
+  isWaylandSession,
   minimizeDesktopWindow,
   requestMainWindowCloseBehavior,
   type MainWindowClosePromptWindow,
@@ -72,11 +73,13 @@ function createFallbackHarness<TBehavior>(initialBehavior: TBehavior | null, fal
 }
 
 describe('main window close behavior prompt', () => {
-  // #6091: minimize is a no-op on Hyprland. Exercise the production policy with
-  // that exact window behavior; previous coverage only asserted minimize calls.
+  // #6091: compositors such as Hyprland never act on toplevel minimize requests,
+  // so Wayland sessions hide the main window to tray instead. Exercise the
+  // production policy with that exact window behavior; previous coverage only
+  // asserted minimize calls.
   // Unit tier: visible state, fullscreen events and tray failures are in-memory.
   // Standalone Vitest duration: 0.158s (macOS, 2026-10-30).
-  function hyprlandHarness() {
+  function waylandHarness() {
     const listeners = new Map<string, Set<() => void>>();
     const window = {
       visible: true,
@@ -114,7 +117,7 @@ describe('main window close behavior prompt', () => {
     };
     const options = {
       platform: 'linux' as NodeJS.Platform,
-      env: { XDG_CURRENT_DESKTOP: 'Hyprland' } as NodeJS.ProcessEnv,
+      env: { XDG_SESSION_TYPE: 'wayland' } as NodeJS.ProcessEnv,
       isMainWindow: true,
       ensureTray: vi.fn(() => true),
       onTrayError: vi.fn(),
@@ -127,7 +130,7 @@ describe('main window close behavior prompt', () => {
   it.each(['explicit reopen', 'show', 'focus', 'closed'])(
     'invalidates a pending fullscreen hide on %s',
     (event) => {
-      const { window, options, listeners } = hyprlandHarness();
+      const { window, options, listeners } = waylandHarness();
       window.fullscreen = true;
       minimizeDesktopWindow(window, options);
       const stale = window.leaveFullscreen;
@@ -140,7 +143,7 @@ describe('main window close behavior prompt', () => {
   );
 
   it('does not let an old hide consume a newer fullscreen request', () => {
-    const { window, options } = hyprlandHarness();
+    const { window, options } = waylandHarness();
     window.fullscreen = true;
     minimizeDesktopWindow(window, options);
     const stale = window.leaveFullscreen;
@@ -154,9 +157,9 @@ describe('main window close behavior prompt', () => {
   });
 
   it.each(['minimize', 'close'] as const)(
-    'hides the Hyprland main window on %s without quitting',
+    'hides the Wayland main window on %s without quitting',
     (action) => {
-      const { window, options } = hyprlandHarness();
+      const { window, options } = waylandHarness();
       const quit = vi.fn();
       const minimize = () => minimizeDesktopWindow(window, options);
       if (action === 'close') applyLinuxMainWindowCloseBehavior(window, 'minimize', quit, minimize);
@@ -168,7 +171,7 @@ describe('main window close behavior prompt', () => {
   );
 
   it('leaves the window accessible when Linux tray initialization fails', () => {
-    const { window, options } = hyprlandHarness();
+    const { window, options } = waylandHarness();
     options.ensureTray.mockReturnValue(false);
     minimizeDesktopWindow(window, options);
     expect(window.visible).toBe(true);
@@ -177,7 +180,7 @@ describe('main window close behavior prompt', () => {
   });
 
   it.each([false, true])('waits for fullscreen exit and respects destroyed=%s', (destroyed) => {
-    const { window, options } = hyprlandHarness();
+    const { window, options } = waylandHarness();
     window.fullscreen = true;
     minimizeDesktopWindow(window, options);
     expect(window.fullscreen).toBe(false);
@@ -188,12 +191,15 @@ describe('main window close behavior prompt', () => {
   });
 
   it.each([
-    { XDG_CURRENT_DESKTOP: ' Hyprland:wlroots ' },
+    { XDG_CURRENT_DESKTOP: 'Hyprland' },
     { XDG_SESSION_DESKTOP: 'hyprland' },
     { DESKTOP_SESSION: 'Hyprland' },
     { HYPRLAND_INSTANCE_SIGNATURE: 'instance' },
   ])('supports desktop identity fallbacks: %j', (env) => {
-    const { window, options } = hyprlandHarness();
+    // Wrapper/service environments can strip WAYLAND_DISPLAY and XDG_SESSION_TYPE
+    // while propagating identity vars; Hyprland cannot minimize (XWayland
+    // included), so these keep hide-to-tray (PR #6105 review, 2026-11-11).
+    const { window, options } = waylandHarness();
     minimizeDesktopWindow(window, { ...options, env });
     expect(window.visible).toBe(false);
   });
@@ -207,7 +213,7 @@ describe('main window close behavior prompt', () => {
     { env: { XDG_CURRENT_DESKTOP: 'not-hyprland' } },
     { env: {} },
   ])('preserves native minimization outside the affected main window: %j', (override) => {
-    const { window, options } = hyprlandHarness();
+    const { window, options } = waylandHarness();
     minimizeDesktopWindow(window, { ...options, ...override });
     expect(window.minimize).toHaveBeenCalledOnce();
     expect(options.ensureTray).not.toHaveBeenCalled();
@@ -231,6 +237,38 @@ describe('main window close behavior prompt', () => {
 
     expect(quit).toHaveBeenCalledTimes(1);
     expect(window.minimize).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['wayland session', { XDG_SESSION_TYPE: 'wayland' }],
+    ['wayland display fallback', { WAYLAND_DISPLAY: 'wayland-0' }],
+    ['tty session on a wayland compositor', { XDG_SESSION_TYPE: 'tty', WAYLAND_DISPLAY: 'wayland-1' }],
+    ['unclassified session on a wayland compositor', { XDG_SESSION_TYPE: 'mir', WAYLAND_DISPLAY: 'wayland-1' }],
+    ['hyprland identity without session vars', { XDG_CURRENT_DESKTOP: 'Hyprland' }],
+    ['hyprland instance signature only', { HYPRLAND_INSTANCE_SIGNATURE: 'sig' }],
+  ])('detects a %s', (_label, env) => {
+    expect(isWaylandSession(env)).toBe(true);
+  });
+
+  it.each([
+    ['x11 session', { XDG_SESSION_TYPE: 'x11' }],
+    ['tty session without a wayland display', { XDG_SESSION_TYPE: 'tty' }],
+    ['session type unset without wayland display', {}],
+    ['non-hyprland identity', { XDG_CURRENT_DESKTOP: 'GNOME' }],
+  ])('does not treat %s as Wayland', (_label, env) => {
+    expect(isWaylandSession(env)).toBe(false);
+  });
+
+  it('prefers an explicit x11 session over WAYLAND_DISPLAY when both are set', () => {
+    expect(
+      isWaylandSession({ XDG_SESSION_TYPE: 'x11', WAYLAND_DISPLAY: 'wayland-0' }),
+    ).toBe(false);
+  });
+
+  it('prefers an explicit x11 session over the Hyprland identity fallback', () => {
+    expect(
+      isWaylandSession({ XDG_SESSION_TYPE: 'x11', XDG_CURRENT_DESKTOP: 'Hyprland' }),
+    ).toBe(false);
   });
 
   it('restores and reveals the main window before requesting the custom dialog', () => {

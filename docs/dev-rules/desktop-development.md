@@ -479,13 +479,17 @@ Linux 主窗口创建时注册 Electron Tray，提供显示主窗口、打开日
 `main/__tests__/linuxTrayLifecycle.test.ts`。
 
 关闭主窗口仍保留 Linux 原有的「最小化／退出」选择，不迁移用户已有偏好。
-Hyprland（包括 Omarchy）没有原生最小化能力，因此主窗口的「最小化」及关闭时的
-「最小化」选择统一隐藏到 Linux 托盘；其他桌面与副窗口仍使用原生最小化。
+Wayland 会话的主窗口「最小化」及关闭时的「最小化」选择统一隐藏到 Linux 托盘：
+xdg-shell 的 `set_minimized` 只是向合成器发出的建议请求，协议不保证任何效果，
+Wayland 合成器（Hyprland/Omarchy、GNOME、KDE 等）普遍忽略它。会话判定以
+`XDG_SESSION_TYPE` 与 `WAYLAND_DISPLAY` 为主，session 变量被 wrapper／service
+剥掉时按桌面身份（Hyprland）兜底；显式 `x11` 会话与副窗口仍使用原生最小化。
 策略与回归见 `main/mainWindowCloseBehavior.ts`、`main/__tests__/mainWindowCloseBehavior.test.ts`。
-托盘初始化失败时提示并保留窗口。图标创建成功不代表桌面面板一定显示它；自定义 Hyprland
-配置未启用托盘宿主时，可再次打开同一安装、同一配置的 Cindy，经已有 single-instance
-入口恢复窗口。托盘实际显示、激活、菜单与退出须在 Linux 桌面验证；macOS 上的
-单测不能替代 Omarchy/Hyprland、GNOME 或 KDE 的实机验收。
+托盘初始化失败时提示并保留窗口。图标创建成功不代表桌面面板一定显示它；桌面未启用
+托盘宿主时（如默认未装 appindicator 扩展的 GNOME、未配托盘的自定义 Hyprland），
+可再次打开同一安装、同一配置的 Cindy，经已有 single-instance 入口恢复窗口。托盘实际
+显示、激活、菜单与退出须在 Linux 桌面验证；macOS 上的单测不能替代 Omarchy/Hyprland
+及 GNOME、KDE 等 Wayland 桌面的实机验收。
 
 ## Windows 窗口恢复实验
 
