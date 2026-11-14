@@ -184,6 +184,7 @@ vi.mock('../store.js', () => ({
 }));
 import {
   acquireSubscriptionAccount,
+  acquireSubscriptionRebalance,
   hasUnavailableSubscriptionPoolAccount,
   needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
   readSubscriptionPool,
@@ -206,6 +207,7 @@ import {
   pooledCodexResetTarget,
   hasRestoredPooledCodexQuota,
 } from '../runtime.js';
+import { setSubscriptionAccountActivityReader } from '../runtime.js';
 import { createCodexRateLimitResetService } from '../../usage/codexRateLimitReset.js';
 import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/codexResetAutoUse.js';
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
@@ -229,6 +231,7 @@ const account = (id: string) => ({ id, paused: false, limit: 1, weight: 1 });
 let generation = 0;
 beforeEach(() => {
   h.owner = 'owner-a:' + ++generation;
+  setSubscriptionAccountActivityReader(undefined);
   h.bound = true;
   h.shared = true;
   h.pools = { anthropic: { strategy: 'least', accounts: [account('default'), account('second')] } };
@@ -3943,4 +3946,152 @@ describe('disabled task account recovery before send', () => {
     expect(send).not.toHaveBeenCalled();
     await handle.close();
   });
+});
+
+// Unit regression: pre-pool unbound reused roots stayed outside pool load. Existing lease tests
+// never supplied a live legacy root; the same public projection and admission must now agree.
+describe('live legacy subscription activity', () => {
+  it('counts unbound roots once and admits new work only on the other account', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    const root = { sessionId: 'legacy', nativeId: 'native-old', provider: 'openai' as const, accountId: 'default', running: true };
+    setSubscriptionAccountActivityReader(async () => [root, { ...root }]);
+    expect((await readSubscriptionPool('openai')).accounts.map(a => a.running)).toEqual([1, 0]);
+    const lease = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:new']);
+    expect(lease!.accountId).toBe('second');
+    await expect(acquireSubscriptionAccount('openai', 'gpt-6', ['task:third'])).rejects.toThrow('[SUBSCRIPTION_ACCOUNTS_FULL]');
+    lease!.release();
+    root.running = false;
+    expect((await readSubscriptionPool('openai')).accounts.map(a => a.running)).toEqual([0, 0]);
+  });
+
+  it('does not double count a leased root but keeps its background work admitted', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    const lease = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:pooled']);
+    setSubscriptionAccountActivityReader(async () => [{ sessionId: 'pooled', nativeId: 'native-pooled',
+      provider: 'openai', accountId: 'default', running: true }]);
+    expect((await readSubscriptionPool('openai')).accounts[0].running).toBe(1);
+    const control = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:pooled'], true);
+    expect((await readSubscriptionPool('openai')).accounts[0].running).toBe(1);
+    control?.release();
+    lease!.running(false); // main done, but native background tools still run
+    expect((await readSubscriptionPool('openai')).accounts[0].running).toBe(1);
+    lease!.release();
+    await expect(runSubscriptionAccountCommand({ action: 'remove', providerId: 'openai', accountId: 'second' })).resolves.toBeDefined();
+  });
+
+  it('rejects late activity from the previous owner before publishing any count', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    let finish!: (value: []) => void;
+    setSubscriptionAccountActivityReader(() => new Promise<[]>(resolve => { finish = resolve; }));
+    const read = readSubscriptionPool('openai');
+    h.owner = 'another-owner';
+    finish([]);
+    await expect(read).rejects.toThrow();
+  });
+});
+
+// Unit: real quota policy + admission; a reused task gets no new native session unless the gain
+// is material and the destination can currently serve it. Includes opposite short/weekly windows.
+describe('idle subscription rebalance reservation', () => {
+  const quotas = (directory: string, used = 5) => ({ codexUsage: { appServerBuckets: { codex: {
+    updatedAt: Date.now(), primary: { usedPercent: 1, windowMinutes: 300, resetsAt: Date.now() / 1000 + 7200 },
+    secondary: { usedPercent: directory.endsWith('/second') ? used : 55, windowMinutes: 10080, resetsAt: Date.now() / 1000 + 86400 },
+  } } } });
+  it('recovers the actual workspace-credit error on an old unwrapped task without rewriting native ownership', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    h.usage.mockImplementation(async (_provider, directory: string) => {
+      const value = quotas(directory, 20);
+      if (directory.endsWith('/second')) value.codexUsage.appServerBuckets.codex.primary.usedPercent = 100;
+      return value;
+    });
+    for (const key of ['task:old', 'native:original']) h.bindings.set(key, { providerId: 'openai', accountId: 'second' });
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex', model: 'gpt-6',
+      sdkSessionId: 'original' as string | null, source: 'desktop', workDir: '/project', permissionMode: 'acceptEdits' };
+    const error = { message: 'Your workspace is out of credits. Ask your workspace owner to refill in order to continue.' };
+    expect(await readSubscriptionAccountSwitch('old', async () => row, undefined, error)).toBe('local#openai:second');
+    let running = true;
+    const rebuild = vi.fn(async (_id: string, assertCurrent: () => void) => { assertCurrent(); row.sdkSessionId = null; });
+    const deps = { readSession: async () => row, isRunning: () => running, rebuild };
+    expect(await prepareSubscriptionAccountFailover('old', deps)).toBe(false);
+    running = false;
+    rebuild.mockRejectedValueOnce(new Error('close not confirmed'));
+    await expect(prepareSubscriptionAccountFailover('old', deps)).rejects.toThrow('close not confirmed');
+    expect(h.bindings.get('task:old')?.accountId).toBe('second');
+    expect(row.sdkSessionId).toBe('original');
+    expect(await prepareSubscriptionAccountFailover('old', deps)).toBe(true);
+    expect(h.bindings.get('task:old')?.accountId).toBe('default');
+    expect(h.bindings.get('native:original')?.accountId).toBe('second');
+    expect(row).toMatchObject({ sdkSessionId: null, model: 'gpt-6', workDir: '/project', permissionMode: 'acceptEdits' });
+    expect(await prepareSubscriptionAccountFailover('old', deps, { balance: true })).toBe(false);
+    const restarted = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:old'], false, { resuming: false });
+    expect(restarted?.accountId).toBe('default');
+    expect((await readSubscriptionPool('openai')).accounts.map(a => a.running)).toEqual([1, 0]);
+    restarted?.release();
+  });
+  it('lets an idle old native task supply a second account while another root stays on the original', async () => {
+    h.pools.openai = { strategy: 'weight', accounts: [{ ...account('default'), limit: 4 }, account('second')] };
+    h.usage.mockImplementation(async (_provider, directory: string) => quotas(directory));
+    h.bindings.set('task:idle-old', { providerId: 'openai', accountId: 'default' });
+    h.bindings.set('native:old-native', { providerId: 'openai', accountId: 'default' });
+    setSubscriptionAccountActivityReader(async () => [{ sessionId: 'busy-old', nativeId: 'busy-native', provider: 'openai', accountId: 'default', running: true }]);
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex', source: 'desktop', model: 'gpt-6', sdkSessionId: 'old-native' as string | null };
+    expect(await prepareSubscriptionAccountFailover('idle-old', { readSession: async () => row, isRunning: () => false,
+      rebuild: async (_id, assertCurrent) => { assertCurrent(); row.sdkSessionId = null; } }, { balance: true })).toBe(true);
+    expect((await readSubscriptionPool('openai')).accounts.map(a => a.running)).toEqual([1, 1]);
+    expect(h.bindings.get('task:idle-old')?.accountId).toBe('second');
+  });
+  it('drops a coverage handoff when the last source root finishes during asynchronous admission', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [{ ...account('default'), limit: 4 }, account('second')] };
+    h.usage.mockImplementation(async (_provider, directory: string) => quotas(directory, 55));
+    let reads = 0;
+    let running = true;
+    setSubscriptionAccountActivityReader(async () => { if (++reads > 1) running = false; return [{
+      sessionId: 'other', nativeId: 'other-native', provider: 'openai', accountId: 'default', running, isRunning: () => running }]; });
+    expect(await acquireSubscriptionRebalance('openai', 'gpt-6', 'default')).toBeNull();
+    expect((await readSubscriptionPool('openai')).accounts.map(a => a.running)).toEqual([0, 0]);
+  });
+  it('relieves an idle old task from a tight short window before an actual rejection', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    h.usage.mockImplementation(async (_provider, directory: string) => {
+      const value = quotas(directory);
+      if (directory.endsWith('/second')) value.codexUsage.appServerBuckets.codex.primary.usedPercent = 90;
+      return value;
+    });
+    const lease = await acquireSubscriptionRebalance('openai', 'gpt-6', 'second');
+    expect(lease?.accountId).toBe('default');
+    lease?.release();
+  });
+  it('reserves an eligible materially less-used account and respects fresh bound task concurrency', async () => {
+    h.pools.openai = { strategy: 'weight', accounts: [account('default'), account('second')] };
+    h.usage.mockImplementation(async (_provider, directory: string) => quotas(directory));
+    const lease = await acquireSubscriptionRebalance('openai', 'gpt-6', 'default');
+    expect(lease?.accountId).toBe('second');
+    await lease!.bind(['task:successor']);
+    lease!.reserveForTask('successor');
+    lease!.release();
+    expect(await acquireSubscriptionRebalance('openai', 'gpt-6', 'default')).toBeNull();
+    // The successor takes over its own reservation, but another binding cannot bypass a full cap.
+    h.bindings.set('task:another', { providerId: 'openai', accountId: 'second' });
+    await expect(acquireSubscriptionAccount('openai', 'gpt-6', ['task:another'], false, { resuming: false }))
+      .rejects.toThrow('SUBSCRIPTION_ACCOUNTS_FULL');
+    const successor = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:successor'], false, { resuming: false });
+    expect(successor?.accountId).toBe('second');
+    successor!.release();
+  });
+  it.each(['unknown', 'small-gain', 'paused', 'full', 'short-tight', 'model-unavailable'] as const)(
+    'keeps the original task when the destination is %s', async why => {
+      h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+      h.usage.mockImplementation(async (_provider, directory: string) => {
+        if (why === 'unknown') return {};
+        const value = quotas(directory, why === 'small-gain' ? 45 : 5);
+        if (why === 'short-tight' && directory.endsWith('/second')) value.codexUsage.appServerBuckets.codex.primary.usedPercent = 99;
+        return value;
+      });
+      if (why === 'paused') h.pools.openai.accounts[1].paused = true;
+      if (why === 'full') setSubscriptionAccountActivityReader(async () => [{ sessionId: 'busy', nativeId: 'busy-native',
+        provider: 'openai', accountId: 'second', running: true }]);
+      if (why === 'model-unavailable') h.rpc.mockImplementation(async (directory: string, method: string) =>
+        method === 'model/list' ? { data: directory.endsWith('/second') ? [] : [{ id: 'gpt-6' }], nextCursor: null } : undefined);
+      expect(await acquireSubscriptionRebalance('openai', 'gpt-6', 'default')).toBeNull();
+    });
 });

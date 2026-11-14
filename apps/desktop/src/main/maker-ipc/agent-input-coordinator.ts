@@ -38,7 +38,7 @@ import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
 import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
-import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
+import { isAccountFailoverCandidateError } from './usageLimitAutoResume.js';
 import type { UsageLimitRecoverySnapshot } from './usageLimitRecoveryStore.js';
 import { createLogger } from '../logger.js';
 import { AUTO_BRIDGE_BATCH_HEADER_RESERVE, AUTO_BRIDGE_BATCH_MAX_CHARS, AUTO_BRIDGE_BATCH_MAX_ITEMS, AUTO_BRIDGE_BATCH_SEPARATOR, autoBridgeReportCount, buildOrcaAutoBridgeBatch, isOrcaAutoBridgeQueueItem, sameAutoBridgeDispatchOptions } from './orcaAutoBridgeBatch.js';
@@ -1229,7 +1229,7 @@ function isScheduledQuotaRecovery(
   signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
 ): boolean {
   return item?.origin?.kind === 'scheduler' && Boolean(item.origin.runId) &&
-    isAccountUsageLimitError({ ...signals, message });
+    isAccountFailoverCandidateError({ ...signals, message });
 }
 
 /** Scheduler / Orca / tool-sent session inputs are automation, not a fresh human intervention. */
@@ -7197,7 +7197,7 @@ export class AgentInputCoordinator {
     state.usageLimitWait = {
       resumeAt: null, token, recovery: state.recovery!,
     };
-    if (isAccountUsageLimitError({ ...signals, message })) this.accountLimitRecoveries.add(state.recovery!);
+    if (isAccountFailoverCandidateError({ ...signals, message })) this.accountLimitRecoveries.add(state.recovery!);
     try {
       this.deps.onUsageLimitedTurnError!(sessionId, { ...(signals ?? {}), message }, item, token);
     } catch (err) {

@@ -17,6 +17,7 @@
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import type { AgentEvent } from '@cindy/maker-core';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
+import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 
 import { buildContinuationDirective, buildFirstTurnDirective } from './directive';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton';
@@ -43,6 +44,9 @@ import {
 } from './types';
 
 const DEFAULT_DEBOUNCE_MS = 150;
+const ACCOUNT_SWITCH_DELAY_MS = 2_000;
+const MAX_ACCOUNT_SWITCH_ATTEMPTS = 3;
+const ACCOUNT_SWITCH_LAST_REASON = 'retrying with another subscription account';
 const DISPATCH_REJECTION_BASE_DELAY_MS = 500;
 const DISPATCH_REJECTION_MAX_DELAY_MS = 4_000;
 const DISPATCH_REJECTION_MAX_ATTEMPTS = 4;
@@ -354,6 +358,7 @@ interface TurnAccumulator {
   precedingTurn: { session: SessionLike; generation: number } | null;
   text: string;
   sawToolUse: boolean;
+  sawCompletedTool: boolean;
   tokensThisTurn: number;
   /** Usage already sealed by claimed SDK boundaries inside this product turn. */
   continuationTokens: number;
@@ -379,6 +384,7 @@ function freshTurn(
     precedingTurn: null,
     text: '',
     sawToolUse: false,
+    sawCompletedTool: false,
     tokensThisTurn: 0,
     continuationTokens: 0,
     finalized: false,
@@ -463,6 +469,7 @@ export class GoalController {
    * 动 schema。有产出的一轮(或手动 resume)即清零。
    */
   private readonly consecutiveOverloadTurns = new Map<string, number>();
+  private readonly accountSwitchAttempts = new Map<string, number>();
   private readonly now: () => number;
   private readonly debounceMs: number;
   private disposed = false;
@@ -541,6 +548,7 @@ export class GoalController {
     // 否则上一个目标撞过载上限变 blocked 后，新目标会继承耗尽的计数，第一次容量
     // 错误就直接 blocked、拿不到自己的重试预算。
     this.consecutiveOverloadTurns.delete(sessionId);
+    this.accountSwitchAttempts.delete(sessionId);
     if (entryBoundary?.pendingCompletion) {
       // 旧目标已经进入“达成记录 → clear”顺序提交区。新 /goal 先同步接管 owner，
       // 等旧 clear 完成后再读行；否则旧 clear 可能在新目标 upsert 之后把它删掉。
@@ -1101,6 +1109,7 @@ export class GoalController {
     if (this.disposed || this.disposing) return;
     this.clarificationApplied.delete(sessionId);
     this.consecutiveOverloadTurns.delete(sessionId);
+    this.accountSwitchAttempts.delete(sessionId);
     this.cancelDeferredManualResume(sessionId);
     this.cancelUsageResume(sessionId);
     // 只中断 GoalController 自己发起的 turn。目标仍挂着时，用户可能已经让一条普通
@@ -1268,6 +1277,7 @@ export class GoalController {
     // 等于让计数永远回到 0,止损闸门形同不存在。
     if (!opts?.auto) {
       this.consecutiveOverloadTurns.delete(sessionId);
+      this.accountSwitchAttempts.delete(sessionId);
       this.dispatchRejectionRetries.delete(sessionId);
     }
     const budgetAlreadyExhausted = exceedsGoalBudget(state);
@@ -1627,6 +1637,7 @@ export class GoalController {
     this.deferredManualResumeContexts.clear();
     this.unpersistedDispatchFailures.clear();
     this.consecutiveOverloadTurns.clear();
+    this.accountSwitchAttempts.clear();
     this.dispatchRejectionRetries.clear();
     this.disposePromise = Promise.allSettled(pendingWrites).then(() => {
       this.disposed = true;
@@ -1671,6 +1682,7 @@ export class GoalController {
     if (!turn || turn.cancelled) return;
     turn.text = '';
     turn.sawToolUse = false;
+    turn.sawCompletedTool = false;
     turn.tokensThisTurn = 0;
     turn.continuationTokens = 0;
     turn.finalized = false;
@@ -1832,6 +1844,11 @@ export class GoalController {
         turn.sawToolUse = true;
         return;
       }
+      case 'tool_result':
+      case 'tool_result_full': {
+        if ((event.data as { isError?: boolean } | null)?.isError !== true) turn.sawCompletedTool = true;
+        return;
+      }
       case 'status': {
         // Claude:status 的 tokenUsage 是"单 turn 累计(input+output),turn end reset"(见 events.ts
         // UsageSnapshot),per-turn 语义正确,直接用。Codex:status 是累积上下文快照(随轮次涨),
@@ -1892,6 +1909,10 @@ export class GoalController {
     const generation = turn.generation;
     const isCurrentTurn = (): boolean =>
       this.turns.get(sessionId) === turn && turn.generation === generation;
+    const sourceSession = this.listenerSessions.get(sessionId);
+    const failureBoundary = { instanceId: event.sessionInstanceId ?? sourceSession?.instanceId,
+      nativeId: sourceSession?.requestSessionId, generation: event.sessionTurnGeneration ?? sourceSession?.getTurnGeneration?.(),
+      isCurrent: isCurrentTurn };
 
     const state = await this.deps.storage.get(sessionId);
     if (!isCurrentTurn()) return;
@@ -1932,6 +1953,16 @@ export class GoalController {
         max: MAX_CONSECUTIVE_OVERLOAD_TURNS,
       });
     }
+    const periodicLimit = errored && classifyTurnUsageLimit(event.data);
+    const billingFailure = errored && isBillingDepletionError(event.data);
+    if (turn.text.trim() || turn.sawCompletedTool || (!errored && turn.tokensThisTurn > 0))
+      this.accountSwitchAttempts.delete(sessionId);
+    const maySwitchAccount = !!this.deps.readAccountSwitch && errored && !isOverloadTurn && (periodicLimit || billingFailure)
+      && !this.deps.isSessionShared?.(sessionId)
+      && (this.accountSwitchAttempts.get(sessionId) ?? 0) < MAX_ACCOUNT_SWITCH_ATTEMPTS;
+    const switchAccount = maySwitchAccount
+      ? await this.deps.readAccountSwitch?.(sessionId, event.data, failureBoundary).catch(() => null) ?? null : null;
+    if (!isCurrentTurn()) return;
     const outcome: TurnOutcome = {
       origin,
       sawToolUse: turn?.sawToolUse ?? false,
@@ -1951,7 +1982,7 @@ export class GoalController {
         ? overloadBudgetExhausted
           ? {}
           : { errorKind: 'overload' as const }
-        : errored && classifyTurnUsageLimit(event.data)
+        : periodicLimit || (billingFailure && !!switchAccount)
           ? { errorKind: 'usage_limit' as const }
           : {}),
     };
@@ -2023,7 +2054,12 @@ export class GoalController {
     // 过载改判:上游没容量与账号限流是两种恢复时机。这里用固定短窗口,不去查
     // getAccountLimit——账号并没有被限流,那个接口不会给出可用的 resetAt,查了只会
     // 让目标停在 usageLimited 等人手动 resume。
-    if (status === 'usageLimited' && outcome.errorKind === 'overload') {
+    if (status === 'usageLimited' && switchAccount) {
+      this.accountSwitchAttempts.set(sessionId, (this.accountSwitchAttempts.get(sessionId) ?? 0) + 1);
+      lastReason = ACCOUNT_SWITCH_LAST_REASON;
+      usageResetAt = this.now() + ACCOUNT_SWITCH_DELAY_MS;
+      shouldFire = false;
+    } else if (status === 'usageLimited' && outcome.errorKind === 'overload') {
       usageResetAt = this.now() + OVERLOAD_RESUME_DELAY_MS;
       shouldFire = false;
     } else if (status === 'usageLimited' && reportedResetAt != null) {
@@ -2359,7 +2395,8 @@ export class GoalController {
         // 判据用存档的 lastReason 而不是内存计数——后者在进程重启后会丢，而
         // usageLimited 目标恰好会在重启后按存档的 usageResetAt 重排 timer。
         const noticeKind =
-          state.lastReason === OVERLOAD_LAST_REASON ? 'capacity-resumed' : 'usage-resumed';
+          state.lastReason === OVERLOAD_LAST_REASON || state.lastReason === ACCOUNT_SWITCH_LAST_REASON
+            ? 'capacity-resumed' : 'usage-resumed';
         try {
           await this.deps.persistGoalNotice(sessionId, noticeKind);
         } catch (e) {

@@ -349,6 +349,7 @@ describe('createContextOverflowRollover', () => {
           getTurnGeneration?(): number;
           isTurnRunning(): boolean;
           listBackgroundTasks?(): ReadonlyArray<unknown>;
+          hasBackgroundWork?(): boolean;
           getUsageSnapshot?: () => {
             contextTokens: number;
             contextWindow: number;
@@ -664,6 +665,13 @@ describe('createContextOverflowRollover', () => {
       expect(deps.commitRebuild).not.toHaveBeenCalled();
       expect(deps.setPendingHandoff).not.toHaveBeenCalled();
     });
+  it('does not retire a Codex account while a native descendant outlives the root turn', async () => {
+    const deps = makeDeps([msg('user', 'finish the child build', 'u1')]);
+    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [], hasBackgroundWork: () => true });
+    await expect(createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn())).rejects.toThrow('running');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+  });
 
   it('does not commit an account handoff after the user stops recovery', async () => {
     const deps = makeDeps([msg('user', 'keep this context', 'u1')]);

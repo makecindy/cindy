@@ -1,11 +1,13 @@
 import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt, contextRecoveryAbortSignal } from './contextRecoveryAssembly.js';
-import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '../subscription-accounts/runtime.js';
+import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota, codexSubscriptionAccountForHistoryHome } from '../subscription-accounts/runtime.js';
+import { readAccountBinding, readPool, writeAccountBindings } from '../subscription-accounts/store.js';
+import { reconcileLegacySubscriptionAccount } from '../subscription-accounts/reconcile.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
-import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
+import { prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { createTaskRuntimePlugins } from './runtimePlugins.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
@@ -764,6 +766,7 @@ import {
   ensureCodexMcpBridgeStartedForRemote,
   finalizeCodexAfterAuthModeChange,
   getMaker,
+  readLiveCodexSubscriptionProvider,
   handleRemoteWorkerBridge,
   listCodexGatewayHostKeys,
   refreshCodexGatewayHost,
@@ -1941,8 +1944,8 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
   isEligible: isUsageLimitAutoResumeEligible,
   resolveResetAt: resolveSessionUsageResetAt,
   // Same-account remote Agent tasks ask their executing computer (subscription-account-pools.md 账号间自动换号).
-  canSwitchAccount: (sessionId) =>
-    canSwitchSubscriptionAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke),
+  canSwitchAccount: async (sessionId, signals, isCurrent) =>
+    (await readSessionSubscriptionAccountSwitch(sessionId, signals, { isCurrent })) !== null,
   arm: (sessionId, token, resumeAt) =>
     agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, token, resumeAt) ?? false,
   isCurrent: (sessionId, token) =>
@@ -5145,7 +5148,7 @@ const subscriptionAccountRecoveryDeps = {
   invokeRemote: remoteBackgroundInvoke,
   isRunning: (id: string) => {
     const live = getMaker().getSession(id);
-    return isSessionInTurn(id) || !!live?.isTurnRunning() || (live?.listBackgroundTasks().length ?? 0) > 0;
+    return isSessionInTurn(id) || !!live?.isTurnRunning() || live?.hasBackgroundWork() === true;
   },
   rebuild: async (id: string, assertCurrent: () => void) => {
     const recovery = contextOverflowRolloverHolder;
@@ -5174,14 +5177,73 @@ const subscriptionAccountRecoveryDeps = {
 } satisfies AccountFailoverDeps;
 
 /** 直发路径在 createSession / 重读 live session 之前换掉不能用的订阅账号、关掉不健康原生会话。 */
+async function reconcileSessionSubscriptionAccount(sessionId: string): Promise<void> {
+  let sourceProvider: string | undefined;
+  await reconcileLegacySubscriptionAccount({
+    owner: () => {
+      if (isAppSessionBoundaryPending()) throw new Error('Subscription account owner changed');
+      return activeOwnerScopeKey();
+    },
+    read: async () => {
+      const row = await getSessionRowSnapshotStrict(sessionId);
+      const live = getMaker().getSession(sessionId);
+      sourceProvider = live ? readLiveCodexSubscriptionProvider(sessionId)
+        : row?.providerId && resolveSubscriptionPoolProviderRef(row.providerId)?.kind === 'openai' ? row.providerId : undefined;
+      return row ? { nativeId: row.sdkSessionId ?? null, providerId: row.providerId,
+        eligible: row.status !== 'deleted' && row.agentKind === 'codex' && !row.remoteHostId && !row.agentDeviceId
+          && (!live || live.requestSessionId === row.sdkSessionId) } : null;
+    },
+    provider: () => sourceProvider,
+    binding: key => readAccountBinding(key === 'task' ? `task:${sessionId}` : `native:${key}`, 'openai')?.accountId,
+    account: async nativeId => {
+      const location = await readCodexThreadStorageReadOnly(nativeId);
+      return location ? codexSubscriptionAccountForHistoryHome(location.historyHome) : undefined;
+    },
+    available: id => !!readPool('openai')?.accounts.some(a => a.id === id),
+    normalize: async providerId => {
+      await persistSessionFields(sessionId, { providerId });
+      setSessionProvider(sessionId, providerId);
+    },
+    record: async (providerId, accountId, nativeId) =>
+      writeAccountBindings([`task:${sessionId}`, `native:${nativeId}`], 'openai', accountId, providerId),
+  });
+}
+
+/** A terminal error may come from a runtime predating pool wrappers. Resolve its provenance first. */
+export async function readSessionSubscriptionAccountSwitch(sessionId: string, turnError?: unknown, boundary?: {
+  instanceId?: string; nativeId?: string; generation?: number; isCurrent?: () => boolean;
+}): Promise<string | null> {
+  const owner = activeOwnerScopeKey();
+  const source = getMakerIfReady()?.getSession(sessionId);
+  const nativeId = source?.requestSessionId;
+  return withSendToSessionLock(sessionId, async () => {
+    const isCurrent = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
+      && (boundary?.isCurrent?.() ?? true)
+      && (!boundary?.instanceId || source?.instanceId === boundary.instanceId)
+      && (!boundary?.nativeId || nativeId === boundary.nativeId)
+      && (boundary?.generation === undefined || source?.getTurnGeneration() === boundary.generation)
+      && (!source || (getMakerIfReady()?.getSession(sessionId) === source && source.requestSessionId === nativeId));
+    if (!isCurrent()) return null;
+    await reconcileSessionSubscriptionAccount(sessionId);
+    if (!isCurrent()) return null;
+    return readSubscriptionAccountSwitch(sessionId, async id => {
+      const row = await readSubscriptionRuntimeSession(id);
+      return isCurrent() && (!nativeId || row?.sdkSessionId === nativeId) ? row : null;
+    }, remoteBackgroundInvoke, source && nativeId ? turnError : undefined);
+  });
+}
+
 export async function prepareUnhealthySessionForSend(sessionId: string): Promise<boolean> {
+  await reconcileSessionSubscriptionAccount(sessionId);
   const switched = await prepareSubscriptionAccountForSend(sessionId, {
     ...subscriptionAccountRecoveryDeps,
     rebuild: async (id, assertCurrent) => {
       await subscriptionAccountRecoveryDeps.rebuild(id, assertCurrent);
       agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
     },
-  }) || await prepareSubscriptionAccountFailover(sessionId, subscriptionAccountRecoveryDeps);
+  }) || await prepareSubscriptionAccountFailover(sessionId, subscriptionAccountRecoveryDeps, {
+    balance: !isSessionSharedTaskActive(sessionId) && !getSessionRuntimeControlSnapshot(sessionId).effectiveOverride,
+  });
   return switched || (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? false);
 }
 
@@ -11918,8 +11980,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         : 'superseded';
     },
     // 撞限／登录失效的只是那台电脑上的一个账号：账号池里另一个账号能接时可原地换号(由执行电脑判断)。
-    readAccountSwitch: (sessionId) =>
-      readSubscriptionAccountSwitch(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke),
+    readAccountSwitch: (id, error, isCurrent) => readSessionSubscriptionAccountSwitch(id, error, { isCurrent }),
     fallback: (sessionId, signals, token, recovery) => usageLimitAutoResume.onTurnError(sessionId, signals, token, recovery),
     // 组内电脑的报错用那台机器的本地时间：不带时区的钟点不按本机时区理解。
     readResetAt: (signals) => readTurnUsageResetAt(signals, Date.now(), { localTimeZoneTrusted: false }),
