@@ -4,19 +4,43 @@ import type { Schedule, SchedulerEvent } from '@cindy/maker-scheduler';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 import { activeScheduleFailures, isUnreadScheduleRun } from '@cindy/maker-shared/schedule-model';
-import { loadScheduleSidebarIndexRuns } from '../lib/scheduleSidebarIndexRuns';
+import { loadScheduleSidebarIndexRuns, type ScheduleSidebarIndexRun } from '../lib/scheduleSidebarIndexRuns';
 import { subscribeScheduleRunReadSync } from '../lib/scheduleRunReadSync';
 
-const log = createLogger('ScheduleUnreadRunCounts');
+const log = createLogger('ScheduleRunAttention');
 
-export function useScheduleUnreadRunCounts(
+/** 任务列表的点:红 = 未恢复的未读失败,绿 = 有未读成功结果。 */
+export type ScheduleAttentionKind = 'error' | 'done';
+
+/**
+ * 运行记录给出的点:有未读且未恢复的失败 → 红;否则有未读成功 → 绿。读过即消失。
+ * 「未恢复」沿用 activeScheduleFailures,与任务内失败提示同一口径。
+ *
+ * 维护者裁决(#10492, dash-s-cindy): AttentionDot 语义仅限 done/awaiting/error/info,
+ * 不为 paused/绑定失效等静态状态额外造点 —— paused 已用降饱和 + 「已暂停」副标题
+ * 表达,绑定失效下任务失败反而要提示用户介入。所以这里只返回 error / done。
+ */
+export function scheduleRunAttention(
+  runs: readonly ScheduleSidebarIndexRun[],
+): Map<string, ScheduleAttentionKind> {
+  const failures = activeScheduleFailures(runs.map((run) => ({ ...run, id: run.runId })));
+  const out = new Map<string, ScheduleAttentionKind>();
+  for (const run of runs) {
+    if (!isUnreadScheduleRun(run)) continue;
+    if (failures.has(run.runId)) out.set(run.scheduleId, 'error');
+    else if (run.status === 'success' && !out.has(run.scheduleId)) out.set(run.scheduleId, 'done');
+  }
+  return out;
+}
+
+export function useScheduleRunAttention(
   schedules: readonly Schedule[],
-): ReadonlyMap<string, number> {
+): ReadonlyMap<string, ScheduleAttentionKind> {
   const scheduleIdsKey = useMemo(
     () => schedules.map((schedule) => schedule.id).join('\u0000'),
     [schedules],
   );
-  const [counts, setCounts] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const [attention, setAttention] = useState<ReadonlyMap<string, ScheduleAttentionKind>>(() => new Map());
   const refreshSeqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -24,7 +48,7 @@ export function useScheduleUnreadRunCounts(
     const seq = refreshSeqRef.current + 1;
     refreshSeqRef.current = seq;
     if (scheduleIds.length === 0) {
-      setCounts(new Map());
+      setAttention(new Map());
       return;
     }
 
@@ -32,19 +56,9 @@ export function useScheduleUnreadRunCounts(
       const visibleScheduleIds = new Set(scheduleIds);
       const runs = await loadScheduleSidebarIndexRuns();
       if (refreshSeqRef.current !== seq) return;
-
-      const activeFailures = activeScheduleFailures(runs.map((run) => ({ ...run, id: run.runId })));
-      const next = new Map<string, number>();
-      for (const run of runs) {
-        if (!visibleScheduleIds.has(run.scheduleId)) continue;
-        if (!isUnreadScheduleRun(run)) continue;
-        // Recovered failures remain unread in history, but no longer light task indicators.
-        if (run.status !== 'success' && !activeFailures.has(run.runId)) continue;
-        next.set(run.scheduleId, (next.get(run.scheduleId) ?? 0) + 1);
-      }
-      setCounts(next);
+      setAttention(scheduleRunAttention(runs.filter((run) => visibleScheduleIds.has(run.scheduleId))));
     } catch (error) {
-      log.warn('failed to refresh schedule unread run counts', {
+      log.warn('failed to refresh schedule run attention', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -59,6 +73,10 @@ export function useScheduleUnreadRunCounts(
         event.type === 'fired' ||
         event.type === 'completed' ||
         event.type === 'failed' ||
+        // skipped 的前置检查通过时也算恢复(checkSucceeded),不刷新红点会滞留;
+        // deferred 撤销了一条预置 running run,顺带刷新。
+        event.type === 'skipped' ||
+        event.type === 'deferred' ||
         event.type === 'session-bound' ||
         event.type === 'changed' ||
         event.type === 'read' ||
@@ -77,5 +95,5 @@ export function useScheduleUnreadRunCounts(
     };
   }, [refresh]);
 
-  return counts;
+  return attention;
 }

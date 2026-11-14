@@ -30,7 +30,7 @@
 import { cn } from '@/lib/utils';
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
 
-/** 展示用 tone == store 的 AttentionKind(done/awaiting/error);另有不属于会话状态的 info。 */
+/** 展示用 tone == store 的 AttentionKind(done/awaiting/error);info 不属于会话状态。 */
 export type DotTone = AttentionKind | 'info';
 
 /** tone → 背景色 token。 */

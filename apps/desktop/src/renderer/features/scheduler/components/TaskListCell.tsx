@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import type { Schedule } from '@cindy/maker-scheduler';
+import type { ScheduleAttentionKind } from '../hooks/useScheduleUnreadRunCounts';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,7 +43,8 @@ import { formatLastRun, formatNextRun } from '../lib/formatters';
 interface Props {
   schedule: Schedule;
   selected: boolean;
-  unreadCount?: number;
+  /** 红 = 未恢复的未读失败,绿 = 有未读成功;不传 = 无点。 */
+  attention?: ScheduleAttentionKind;
   onSelect: (s: Schedule) => void;
   /** 右键菜单的 Pause/Resume 动作；与 RunHistoryPane ⋯ 菜单同行为。 */
   onTogglePause?: (s: Schedule) => void | Promise<void>;
@@ -82,7 +84,7 @@ interface Props {
 export function TaskListCell({
   schedule: s,
   selected,
-  unreadCount = 0,
+  attention,
   onSelect,
   onTogglePause,
   onDelete,
@@ -109,7 +111,6 @@ export function TaskListCell({
   const canEditProject = !!onEditProjectSchedule && isProjectSchedule;
   const canCloneToUser = !!onCloneToUser && isProjectSchedule;
   const canRemoveProject = !!onRemoveProjectSchedule && isProjectSchedule;
-  const hasUnreadRuns = unreadCount > 0;
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
       // 任一动作回调都没传就不弹菜单（外层未启用右键功能时直接走默认浏览器菜单）
@@ -351,9 +352,7 @@ export function TaskListCell({
           />
         ) : (
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            {/* 未读点走全端统一"完成未读=绿"(失败结局的红色语义由运行历史卡与
-                侧栏组头表达,本 cell 只有未读计数,不做失败聚合)。 */}
-            {hasUnreadRuns && <AttentionDot size={6} className="shrink-0" />}
+            {attention && <AttentionDot size={6} tone={attention} className="shrink-0" />}
             <span className="min-w-0 truncate text-sm font-medium text-[var(--msg-assistant-text)]">
               {s.name}
             </span>
