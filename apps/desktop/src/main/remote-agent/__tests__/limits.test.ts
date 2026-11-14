@@ -145,8 +145,15 @@ describe('provider computer session limits', () => {
   });
   it('returns a slot after agent startup failure', async () => {
     limits = { perDevice: 1, total: 1 };
-    const host = makeHost({ startHosted: async () => { throw new Error('startup failed'); } });
+    const entered = whenStarted(1);
+    const host = makeHost({ startHosted: async () => {
+      entered.onStarted();
+      throw new Error('startup failed');
+    } });
     await host.handle('a', request());
+    // Preparation performs real IO; measure slot cleanup after the failing
+    // startup is actually reached, retaining waitFor's original 1s budget.
+    await entered.promise;
     await vi.waitFor(() => expect(host.limitUsage().total).toBe(0));
     await expect(host.handle('a', request())).resolves.toEqual({});
   });

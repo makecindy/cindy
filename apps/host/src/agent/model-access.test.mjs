@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { configureHostOwner } from './claude-auth.mjs';
 import { createHostModelAccess } from './model-access.ts';
+import { effectiveXdGatewayBaseUrl } from '../../../desktop/src/main/model-access/effectiveEndpoint.ts';
 
 function fixture(request) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-model-access-'));
@@ -66,5 +67,43 @@ test('an in-flight result from a previous account cannot write credentials or pu
     assert.equal(f.changed, 0);
     assert.equal(f.service.gateway.credential, '');
     assert.equal(f.statuses.some(status => status.state === 'ok'), false);
+  } finally { f.close(); }
+});
+
+// The one-shot requests read the gateway endpoint through effectiveXdGatewayBaseUrl, the
+// desktop's process-wide credential store. A read before the first sync must not pin a stale
+// answer: the Host's sync writes that same store, as the desktop's does.
+test('the shared gateway endpoint reader follows what the Host sync writes', async () => {
+  let payload = { endpoint: 'https://gateway.invalid/', apiKey: 'fixture-key-1' };
+  const f = fixture(async () => payload);
+  try {
+    assert.equal(effectiveXdGatewayBaseUrl(), '');
+    await f.service.start();
+    assert.equal(effectiveXdGatewayBaseUrl(), 'https://gateway.invalid');
+    payload = { endpoint: 'https://next-gateway.invalid', apiKey: 'fixture-key-2' };
+    f.service.reportRejectedKey('fixture-key-1');
+    for (let i = 0; i < 50 && f.service.gateway.endpoint !== 'https://next-gateway.invalid'; i++) await new Promise(r => setTimeout(r, 10));
+    assert.equal(f.service.gateway.endpoint, 'https://next-gateway.invalid');
+    assert.equal(effectiveXdGatewayBaseUrl(), f.service.gateway.endpoint);
+  } finally { f.close(); }
+});
+
+// The agent-turn path (turn-executor reportAgentCindyGatewayKeyRejected): a turn that ended on a
+// rejected Cindy AI Key does not say which key it used; the current key is resynchronized once per
+// window, as the desktop's reportCindyGatewayKeyRejectedForCurrentKey.
+test('an agent turn rejected on the current key resynchronizes once per window', { timeout: 60_000 }, async () => {
+  let payload = { endpoint: 'https://gateway.invalid/', apiKey: 'fixture-key-1' };
+  const f = fixture(async () => payload);
+  try {
+    await f.service.start();
+    assert.equal(f.requests, 1);
+    payload = { endpoint: 'https://gateway.invalid/', apiKey: 'fixture-key-2' };
+    f.service.reportCurrentKeyRejected();
+    f.service.reportCurrentKeyRejected();
+    for (let attempt = 0; attempt < 200 && f.service.gateway.credential !== 'fixture-key-2'; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(f.service.gateway.credential, 'fixture-key-2');
+    assert.equal(f.requests, 2, 'the second report inside the window sends nothing');
   } finally { f.close(); }
 });

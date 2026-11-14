@@ -1223,3 +1223,13 @@ describe('trim whitespace before grouping', () => {
     expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
   });
 });
+
+// Unit: existing group lanes retain their own cwd but belong to the buddy project on phones.
+// Covers the zero-message failure path absent from ordinary project fixtures.
+it('groups companion lanes by owner project even when execution is dialogue-only', () => {
+  const lane = session('old-group', { source: 'bot', workspaceKind: 'dialogue', workingDir: '/isolated/chat',
+    companion: { taskProjectDir: '/buddy/workspace' }, _count: { messages: 0 } });
+  const sections = buildRemoteSessionSections([lane], Date.now());
+  expect(sections.map(s => s.key)).toEqual(['project:/buddy/workspace']);
+  expect(sections[0].data[0].session.workingDir).toBe('/isolated/chat');
+});

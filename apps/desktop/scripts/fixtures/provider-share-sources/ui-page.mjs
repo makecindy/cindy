@@ -23,6 +23,10 @@ export default {
     'legacy-upgrade-shared': { about: 'A migrated connection with an existing share keeps its selective revocation entry even when disconnected and paused, without duplicating unshared connections' },
     'subscription-claude-choice': { about: 'An existing Claude Code login is shown before choosing it or another account' },
     'subscription-codex-choice': { about: 'An existing Codex login is shown before choosing it or another account' },
+    'subscription-claude-added': { about: 'An already added Claude Code login leaves only the new sign-in action' },
+    'subscription-codex-added': { about: 'An already added Codex login leaves only the new sign-in action' },
+    'subscription-codex-long': { about: 'The CLI shortcut keeps its action readable while truncating a long identity',
+      data: { identity: 'a-very-long-subscription-account-identity-for-the-shortcut@example.com' } },
     'subscription-login': { about: 'OpenAI browser login adds an account inside the existing provider' },
     'subscription-cancel': { about: 'Closing OpenAI login cancels its owned CLI operation without creating another provider' },
     'subscription-pool': { about: 'The real local provider detail shows both subscription accounts, each with all of its own usage windows, under one provider header' },
@@ -53,14 +57,22 @@ export default {
       }
       return;
     }
-    if (ui.case === 'subscription-claude-choice' || ui.case === 'subscription-codex-choice') {
+    if (/^subscription-(claude|codex)-(choice|added|long)$/.test(ui.case)) {
       await page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true }).click();
       const dialog = page.getByRole('dialog');
-      const brand = ui.case === 'subscription-claude-choice' ? /^Anthropic/ : /^OpenAI/;
+      const brand = ui.case.startsWith('subscription-claude-') ? /^Anthropic/ : /^OpenAI/;
       await dialog.getByRole('button', { name: brand }).first().click();
-      await dialog.getByText('alex@example.com', { exact: true }).waitFor();
-      await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.useAccount'), exact: true }).waitFor();
+      // The shortcut names the CLI and carries the detected identity (2026-11-14).
+      const cli = ui.case.startsWith('subscription-claude-') ? 'Claude Code' : 'Codex';
       await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.anotherAccount'), exact: true }).waitFor();
+      const shortcut = dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.useAccount', { cli }) });
+      if (ui.case.endsWith('-added')) {
+        assert.equal(await shortcut.count(), 0);
+        assert.equal(await dialog.getByText('alex@example.com', { exact: true }).count(), 0);
+      } else {
+        await dialog.getByText(ui.data.identity ?? 'alex@example.com', { exact: true }).waitFor();
+        await shortcut.waitFor();
+      }
       assert.equal(await page.evaluate(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'connect')), false);
       return;
     }
@@ -88,7 +100,7 @@ export default {
       assert.equal(await accounts.getByRole('switch').count(), 2);
       // Each account shows every window of its own quota once; no provider-level copy repeats one account.
       for (const identity of ['alex@example.com', 'work@example.com']) {
-        const row = accounts.locator('div.py-4').filter({ hasText: identity });
+        const row = accounts.getByTestId('subscription-account').filter({ hasText: identity });
         for (const name of [await ui.t('quotaCard.fiveHourLabel'), await ui.t('quotaCard.weeklyLabel'), await ui.t('quotaCard.modelWeeklyLabel', { model: 'Fable' })])
           // High-usage bars append a screen-reader severity note to their accessible name.
           assert.equal(await row.getByRole('progressbar', { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).count(), 1, `${identity}: ${name}`);
@@ -113,7 +125,7 @@ export default {
       await ui.capture('builtin-save-pending');
       await page.evaluate(() => window.providerSourcesFixture.keySaveControl.release());
       await page.getByRole('dialog').waitFor({ state: 'hidden' });
-      assert.equal(await page.getByRole('combobox').count(), 0, 'success must complete without restoring the draft');
+      assert.equal(await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.namePlaceholder')).count(), 0, 'success must complete without restoring the draft');
       return;
     }
     if (ui.case === 'wizard-reopen') {
@@ -121,7 +133,7 @@ export default {
       const dialog = page.getByRole('dialog');
       await add.click();
       await dialog.waitFor();
-      await dialog.getByRole('button', { name: /^Ollama/ }).click();
+      await dialog.getByTitle('Ollama', { exact: true }).click();
       await page.waitForFunction(() => window.providerSourcesFixture.refreshControl.pending);
       await dialog.waitFor({ state: 'hidden' });
       await add.click();

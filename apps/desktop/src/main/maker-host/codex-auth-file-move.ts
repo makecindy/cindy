@@ -30,6 +30,20 @@ export async function moveCodexAuthFile(source: string, destination: string): Pr
     });
   }
   const before = await fs.stat(source, { bigint: true });
+  // Avoid starting PowerShell for an already-known collision. A cold Windows
+  // shell can exhaust its startup budget before reporting EEXIST (CI #10413).
+  // lstat also rejects dangling destination symlinks. File.Move remains the
+  // atomic no-overwrite authority if a destination appears after this check.
+  const destinationExists = await fs.lstat(destination).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return false;
+      throw Object.assign(new Error('Codex auth destination is unavailable'), { code: error.code });
+    },
+  );
+  if (destinationExists) {
+    throw Object.assign(new Error('Codex auth move failed (EEXIST)'), { code: 'EEXIST' });
+  }
   const powershell = path.win32.join(
     process.env.SystemRoot || 'C:\\Windows',
     'System32',

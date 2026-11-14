@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ambiguousBotGroupMentionLabels,
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
   insertBotGroupMention,
@@ -75,6 +76,30 @@ describe('resolveBotGroupMentions', () => {
     expect(resolveBotGroupMentions('@Cindy hi', { members: renamed, allLabels: [] }).botIds).toEqual([]);
   });
 
+  // Incident 2026-11-13 (unit regression): someone typed @Cindy for the group's own Cindy and
+  // Chris's companion 「Cindy (Chris)」 answered too, because a typed name addressed every member
+  // sharing it. User decision: one @ names one identity; a still-shared name names nobody.
+  it('names one identity per typed @: the full name wins over a short name, and a shared name names nobody', () => {
+    const roster = [
+      { botId: 'chris-cindy', name: 'Cindy (Chris)', displayName: 'Cindy' },
+      { botId: 'group-cindy', name: 'Cindy', displayName: 'Cindy' },
+      { botId: 'alex-cindy', name: 'Cindy (Alex Chen)', displayName: 'Cindy' },
+    ];
+    const input = { members: roster, allLabels: [] };
+    expect(resolveBotGroupMentions('@Cindy 看下，@Cindy (Chris) 也看下', input).botIds).toEqual(['group-cindy', 'chris-cindy']);
+    expect(ambiguousBotGroupMentionLabels('@Cindy 看下', input)).toEqual([]);
+    // Without a member whose full name is 「Cindy」 the short name is shared by two companions.
+    const companions = { members: [roster[0]!, roster[2]!], allLabels: [] };
+    expect(resolveBotGroupMentions('@Cindy 看下 @Cindy (Alex Chen)', companions).botIds).toEqual(['alex-cindy']);
+    expect(ambiguousBotGroupMentionLabels('@Cindy 看下 @Cindy (Alex Chen)', companions)).toEqual(['Cindy']);
+    expect(splitBotGroupRelaySteps('@Cindy 出方案', companions)).toBeNull();
+    expect(splitBotGroupRelaySteps('@Cindy 出方案', input)).toEqual([{ botId: 'group-cindy', task: '出方案' }]);
+    // A pick settles it for that token only.
+    const tracked = [{ botId: 'chris-cindy', label: 'Cindy', start: 0 }];
+    expect(resolveBotGroupMentions('@Cindy @Cindy', { ...companions, tracked }).botIds).toEqual(['chris-cindy']);
+    expect(ambiguousBotGroupMentionLabels('@Cindy', { ...companions, tracked })).toEqual([]);
+  });
+
   it('prefers the longest name and uses tracked picks only to split duplicates', () => {
     const duplicates = [
       { botId: 'a', name: '小满' },
@@ -82,7 +107,7 @@ describe('resolveBotGroupMentions', () => {
       { botId: 'c', name: '小满满' },
     ];
     expect(resolveBotGroupMentions('@小满满 在吗', { members: duplicates, allLabels: [] }).botIds).toEqual(['c']);
-    expect(resolveBotGroupMentions('@小满 在吗', { members: duplicates, allLabels: [] }).botIds).toEqual(['a', 'b']);
+    expect(resolveBotGroupMentions('@小满 在吗', { members: duplicates, allLabels: [] }).botIds).toEqual([]);
     expect(
       resolveBotGroupMentions('@小满 在吗', {
         members: duplicates,

@@ -20,11 +20,11 @@ export default {
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.apiKeyPlaceholder')).fill('fake-ui-key');
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.baseUrlPlaceholder')).fill(item.address);
       if (item.expectedIds.length !== 1) {
-        await page.getByText(await ui.t('settings.providers.detection.ambiguous'), { exact: true }).waitFor();
+        await page.getByText(await ui.t(item.expectedIds.length ? 'settings.providers.detection.ambiguous' : 'settings.providers.detection.custom'), { exact: true }).waitFor();
         await page.waitForTimeout(1400);
         assert.equal(await page.getByRole('button', { name: await ui.t('settings.providers.detection.configure'), exact: true }).count(), 0);
         assert.equal(await page.evaluate(() => window.templateEvidence.handoff), undefined);
-        await ui.capture('ambiguous-stayed-custom');
+        await ui.capture(item.expectedIds.length ? 'ambiguous-stayed-custom' : 'unrecognized-stayed-custom');
         return;
       }
       const configure = page.getByRole('button', { name: await ui.t('settings.providers.detection.configure'), exact: true });
@@ -54,14 +54,17 @@ export default {
     if (retained) {
       selectedModelId = 'deepseek-v4-flash-vision-exp';
       await page.getByText('DeepSeek V4 Flash Vision Exp', { exact: true }).click();
-    } else if (item.kind === 'wizard' && preset.id === 'opencode-go') {
-      // Go retains its curated plan members; arbitrary discovered IDs are not plan models.
+    } else if (['opencode-go', 'moonshot-kimi-cn', 'moonshot-kimi-global', 'agnes'].includes(preset.id)) {
+      // A shared cross-protocol inventory cannot assign an unknown ID to every engine.
+      // Exercise saving a catalog member supported by all of this template's runtimes.
       const model = preset.runtimes.pi.models.find(m => Object.values(preset.runtimes).every(rt => rt.models.some(row => row.id === m.id)));
       assert.ok(model);
       selectedModelId = model.id;
       const row = page.getByText(model.name, { exact: true });
-      await row.click(); await row.click(); // Exercise selection, then restore the recommended row.
-    } else if (item.kind === 'wizard') await page.getByText('UI catalog probe', { exact: true }).click();
+      await row.click();
+      // Direct entry preselects recommendations; address handoff starts with no selected models.
+      if (item.kind === 'wizard') await row.click();
+    } else await page.getByText('UI catalog probe', { exact: true }).click();
     await ui.capture('models');
     await finish.click();
     await page.waitForFunction(() => window.templateEvidence.saved);

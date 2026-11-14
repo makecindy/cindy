@@ -3,7 +3,8 @@ import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { buildUserProvider, connectedProvidersForAgent, getModel, isModelSelectableForNewRoute, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, chatEligibleSourcesForModel, connectedProvidersForAgent, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
+import { isDeviceModelVisible } from '@/lib/providerModels';
 import { createWorkerLabel } from '../workerLabel';
 import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
@@ -23,6 +24,8 @@ import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from '../d
 import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
 import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
+import { recallAgentDeviceSelection } from '../agentDeviceDraftMemory';
+import { filterHealthyDraftProviders, resolveDraftProviderForModel } from '../../../../shared/draftModelCalibration';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
 
@@ -42,10 +45,8 @@ function visit(node: ts.Node) {
     routeDeclarations.push(`const ${node.getText(source)};`);
   }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
-    const name = ts.isIdentifier(node.name) ? node.name.text
-      : ts.isObjectBindingPattern(node.name) && node.name.elements.some(e => e.name.getText(source) === 'draftInitialEffort')
-        ? 'draftInitialSelection' : '';
-    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftInitialSelection'].includes(name)) {
+    const name = ts.isIdentifier(node.name) ? node.name.text : '';
+    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
       callbacks[name] = node.initializer.arguments[0];
     }
   }
@@ -108,6 +109,7 @@ function provider(id = providerId, efforts: PiReasoningEffort[] = []): ProviderV
 
 async function submit(options: {
   entry?: 'send' | 'goal';
+  createFailure?: boolean;
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
   /** 选了模型组：发送时解析出的结果。 */
   modelGroupRoute?: ModelGroupResolveResult;
@@ -156,9 +158,10 @@ async function submit(options: {
     resolveSessionExecutionSelection({ selection, availableAgents: [agentKind],
       availableModels: backend.flatMap(p => p.models[agentKind] ?? []),
       providerRouting: routing, hasCindyAiApiKey: false });
-  const ipcCreate = vi.fn(async (body) => ({
-    ...body, ...admit(body), id: 'created', workingDir: '/isolated/dialogue',
-  }));
+  const ipcCreate = vi.fn(async (body) => {
+    if (options.createFailure) throw new Error('fixture create failed');
+    return { ...body, ...admit(body), id: 'created', workingDir: '/isolated/dialogue' };
+  });
   const setGoal = vi.fn(async () => {
     // Goal starts from the newly persisted selection rather than receiving an
     // independent effort argument. Exercise admission on that creation result.
@@ -218,14 +221,14 @@ async function submit(options: {
     proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey,
   }));
   const environment = {
-    deviceDisplayName, dbToMakerAgentKind, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
+    deviceDisplayName, dbToMakerAgentKind, chatEligibleSourcesForModel, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
     activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
     resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
     bindModelGroupSession: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
-    ...draftEffort, getModel, window,
+    ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
     sshDraftSelection: { model: selectedModel, effort: options.effort ?? 'medium', fastMode: false },
@@ -238,6 +241,9 @@ async function submit(options: {
     effectiveCollab: options.collab ?? { enabled: !!options.worktreeSkillsAfterCollab },
     collabPolicy: { enabled: true }, collabPolicyEligible: true,
     usesDeviceCatalog: !!options.agentDeviceId || !!options.deviceId, deviceLinkInitial: null,
+    // 这份 harness 不演「用户为这个目标明确选过某一家来源」的场景;显式选择的场景在
+    // newMakerDraftTargetCatalog.test.ts 里。
+    explicitDraftProviderId: null,
     isDeviceLinkDraft: !!options.deviceId, isRemoteProjectDraft: !!options.remoteHostId,
     isAgentDeviceDraft: !!options.agentDeviceId, remoteModelListStatus: options.remoteModelListStatus ?? 'ready', remoteDraftState: { status: 'ready' },
     effectiveRemoteHostId: options.remoteHostId, effectiveAgentDeviceId: options.agentDeviceId,
@@ -245,7 +251,8 @@ async function submit(options: {
     effectiveExtraDirs: [], effectiveWritableDirs: [], effectiveFastMode: false, effectivePlanMode: false,
     effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId,
     catalogDeviceId: modelCatalogKey(options.agentDeviceId ?? options.deviceId, options.catalogHostDeviceId),
-    agentCatalogProviders: providers, deviceProvidersLoading: false,
+    agentCatalogProviders: providers, deviceProvidersLoading: false, deviceProvidersUnsupported: false,
+    deviceModelVisibilityOverrides: undefined, isModelSelectableForNewRoute, isDeviceModelVisible,
     matchNavigationCommandName: () => null,
     wtRef: { current: hasWorktree
       ? { enabled: true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
@@ -302,7 +309,24 @@ async function submit(options: {
     });
   }
   const localDraftEffort = runInNewContext(executable('localDraftEffort'), environment)();
-  const selection = runInNewContext(executable('draftInitialSelection'), { ...environment, localDraftEffort })();
+  // 目标目录里可选的型号清单(按新路由准入 + 被控端自己的显示/隐藏过滤)。
+  const targetSelectableProviders = runInNewContext(
+    executable('targetSelectableProviders'), environment)();
+  // The route resolves the seeded pair and the effort of the final provider/model
+  // in two steps; compose them the way the route does.
+  const seeded = runInNewContext(executable('draftSeedSelection'), {
+    ...environment, targetSelectableProviders, filterHealthyDraftProviders, resolveDraftProviderForModel,
+  })();
+  const selection = {
+    model: seeded?.model ?? environment.calibratedDraftModel,
+    effort: runInNewContext(executable('draftInitialEffort'), {
+      ...environment, localDraftEffort, draftSeedSelection: seeded, targetSelectableProviders,
+      draftInitialModel: seeded?.model ?? environment.calibratedDraftModel,
+      // 这份 harness 不演「被控端快照里记着档位」的场景;档位相关场景在
+      // newMakerDraftTargetCatalog.test.ts 的 effortOf 里。
+      deviceDraftDefaults: null,
+    })(),
+  };
   Object.assign(environment, { draftInitialModel: selection.model, draftInitialEffort: selection.effort });
   const callback = runInNewContext(executable(options.entry === 'goal' ? 'handleCreateGoal' : 'handleSend'), environment);
   try {
@@ -545,6 +569,18 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
   });
+  // #10240 / unit: real creation callbacks must not commit a model-group choice
+  // after a cancelled auth gate or a rejected create. Success-only coverage missed both.
+  it.each(['send', 'goal'] as const)('does not commit %s routing when cancelled or creation fails', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'Fixture', modelName: modelId, sourceName: 'Local',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'order', quota: null, trace: [], decisionId: 'receipt',
+    };
+    for (const failure of [{ authCatalogKey: 'not-the-chosen-device' }, { createFailure: true }]) {
+      const result = await submit({ entry, modelGroupRoute, ...failure });
+      expect(result.environment.bindModelGroupSession).not.toHaveBeenCalled();
+    }
+  });
   // PR #10067 review：草稿选着另一台电脑的模型、那台目录读失败时，模型组仍要先选路；选到本机就照常建任务，
   // 只有沿用原模型时才因那台目录没就绪而拦下。之前目录检查在选路之前，整笔发送被挡住。Tier: unit。
   it.each(['send', 'goal'] as const)('lets a model group route %s away from a computer whose catalog failed to load', async (entry) => {
@@ -563,6 +599,20 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(kept.ipcCreate).not.toHaveBeenCalled();
     if (entry === 'send') expect(kept.toastError).toHaveBeenCalledWith('newChat.modelSelector.remoteLoadFailed');
     else expect(String(kept.errors.at(-1))).toContain('newChat.modelSelector.remoteLoadFailed');
+  });
+  // #10084 / unit：输入框为模型组、插件模型让出了「原模型没有已连接来源」的检查；选路沿用原模型时，
+  // 发送与新建目标都要补上它：不建任务、提示先连接，输入保留。选路选到别处时不受原模型来源影响。
+  // PR #10193 review：新建目标一开始漏了这道检查。Tier: unit。
+  describe.each(['send', 'goal'] as const)('%s', (entry) => {
+    it.each([
+      ['model group', { modelGroupRoute: { outcome: 'unavailable', groupName: 'G', trace: [] } as ModelGroupResolveResult }],
+      ['plugin model', { pluginRoute: async () => ({ outcome: 'kept', pluginName: 'Router', why: 'no-opinion', modelName: modelId }) as GhostStartTaskRouteResult }],
+    ] as const)('stops a %s that keeps a draft model without a connected source', async (_name, router) => {
+      const kept = await submit({ entry, ...router, providers: [] });
+      expect(kept.ipcCreate).not.toHaveBeenCalled();
+      if (entry === 'send') expect(kept.toastError).toHaveBeenCalledWith('newChat.noProvider.description');
+      else expect(String(kept.errors.at(-1))).toContain('newChat.noProvider.description');
+    });
   });
   // PR #8460 / unit: a source reachable only through task computer B must keep B in
   // the readiness catalog key. Existing fixtures always allowed readiness regardless

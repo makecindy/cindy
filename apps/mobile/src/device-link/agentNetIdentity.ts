@@ -1,5 +1,6 @@
 import { getRandomBytes } from 'expo-crypto';
 import { sha256 } from '@noble/hashes/sha256';
+import { md5 } from '@noble/hashes/legacy';
 import { bytesToHex } from '@noble/hashes/utils';
 import { enrollmentPayload, type DeviceCertificate } from '@cindy/agent-net-protocol';
 import { PortableAgentNetClient, fromBase64Url, toBase64Url, utf8, type BinarySocket } from '@cindy/agent-net/portable';
@@ -130,7 +131,7 @@ function prepared(scope: string, base: string, signer: MobileAgentNetEngine, nat
   const existing = cached?.scope === scope && cached.api.base === base && cached.api.rootPublicKey === root ? cached.api : null;
   const api = existing ?? new PortableAgentNetClient(base, signer, certificate, root, {
     assertCurrent: guard, verifyCertificate: verifyMobileAgentNetCertificate, verifyDelegation: verifyMobileAgentNetDelegation,
-    sha256: value => toBase64Url(sha256(value)), createWebSocket: binarySocket, ownerPinnedHttp: privateHttp,
+    sha256: value => toBase64Url(sha256(value)), md5: value => md5(value), createWebSocket: binarySocket, ownerPinnedHttp: privateHttp,
   });
   if (existing) existing.replaceCredentials(signer, certificate);
   return { scope, api, signer, seed: native.seed, context: native.context, legacySigning: native.legacySigning === true,

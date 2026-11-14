@@ -738,6 +738,8 @@
     "memoryDeleteFailed": "삭제하지 못했습니다",
     "create": "동반자 새로 만들기",
     "createFailed": "생성 결과를 아직 확인하지 못했습니다. 다시 시도해 확인하세요.",
+    "createHostUnsupported": "이 컴퓨터에서는 지금 동반자를 만들 수 없습니다. 컴퓨터의 Cindy를 업데이트하거나 그 컴퓨터에서 만드세요.",
+    "createNeedsDetails": "이름을 입력하고 아이콘을 고르면 동반자를 만들 수 있습니다.",
     "title": "동반자",
     "profile": "프로필 및 성격",
     "memory": "기억",

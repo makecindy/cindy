@@ -816,3 +816,21 @@ describe('mobileHome', () => {
     expect(revoked.emptyCopy).toContain('「MacBook」');
   });
 });
+
+// Unit: the actual phone home entry and project drill-down must agree for old
+// dialogue lanes and project/worktree lanes. Previous coverage only used cwd/projectDir.
+it.each(['dialogue', 'project'] as const)('uses group display membership on the actual home pipeline (%s)', workspaceKind => {
+  const lane = session('group-lane', { source: 'bot', workspaceKind,
+    workingDir: '/legacy/execution', projectDir: '/legacy/execution', deviceLinkDeviceId: 'mac',
+    companion: { taskProjectDir: '/groups/product' } });
+  const home = buildMobileHomePresentation({ sessions: [lane],
+    projectAliases: new Map([['device:mac:/groups/product', 'Product group']]) });
+  expect(home.chats).toHaveLength(0);
+  expect(home.projects).toHaveLength(1);
+  expect(home.projects[0]).toMatchObject({ workingDir: '/groups/product', title: 'Product group' });
+  expect(home.projects[0].sessions[0].session.workingDir).toBe('/legacy/execution');
+  expect(sessionMatchesProjectDir(lane, '/groups/product')).toBe(true);
+  expect(sessionMatchesProjectDir(lane, '/legacy/execution')).toBe(false);
+  expect(buildMobileHomePresentation({ sessions: [lane], searchQuery: 'Product group',
+    projectAliases: new Map([['device:mac:/groups/product', 'Product group']]) }).projects).toHaveLength(1);
+});

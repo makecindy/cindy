@@ -33,6 +33,19 @@ function revokeLive(sessionId: string): void {
   for (const revoke of [...(revokers.get(sessionId) ?? [])]) revoke();
 }
 
+/** Observe the existing task revocation boundary without acquiring a credential grant. */
+export function watchCredentialGrantRevocation(sessionId: string, revoke: () => void): () => void {
+  let live = revokers.get(sessionId);
+  if (!live) { live = new Set(); revokers.set(sessionId, live); }
+  live.add(revoke);
+  return () => {
+    const current = revokers.get(sessionId);
+    if (!current) return;
+    current.delete(revoke);
+    if (current.size === 0) revokers.delete(sessionId);
+  };
+}
+
 /** 原始权限档与计划模式合成比较用的值；不归并(`default` 与 `ask` 也算不同)。 */
 export function credentialGrantPermission(permissionMode: string | null | undefined, planMode: boolean): string {
   return JSON.stringify([permissionMode ?? null, planMode]);
@@ -64,18 +77,7 @@ export function credentialGrantFor(sessionId: string, deviceId: string): Credent
     },
     forget,
     watch(revoke) {
-      let live = revokers.get(sessionId);
-      if (!live) {
-        live = new Set();
-        revokers.set(sessionId, live);
-      }
-      live.add(revoke);
-      return () => {
-        const current = revokers.get(sessionId);
-        if (!current) return;
-        current.delete(revoke);
-        if (current.size === 0) revokers.delete(sessionId);
-      };
+      return watchCredentialGrantRevocation(sessionId, revoke);
     },
   };
 }

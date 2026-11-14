@@ -43,6 +43,10 @@ import { setSessionNotificationsMuted } from './sessionNotificationMute';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 import { readPluginUiEntries, PluginUiSessionMenuItems } from '@/cindy-brain/PluginUiContributions';
 
+// Native window dragging ignores portal stacking. Leave 8px below the 50px drag
+// strip so the first item remains clickable when a tall menu flips upward.
+const TASK_MENU_COLLISION_PADDING = { top: 58, right: 8, bottom: 8, left: 8 };
+
 interface Props {
   session: Session;
   open: boolean;
@@ -229,7 +233,8 @@ function ActiveSessionTaskMenu({
       <DropdownMenuContent
         align="start"
         sideOffset={sideOffset}
-        className="min-w-32 overflow-hidden"
+        collisionPadding={TASK_MENU_COLLISION_PADDING}
+        className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-32 overflow-y-auto"
         onClick={(event) => event.stopPropagation()}
         onCloseAutoFocus={(event) => {
           if (dialog) event.preventDefault();
