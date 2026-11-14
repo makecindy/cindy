@@ -1562,7 +1562,7 @@ describe('shared startup lease budget', () => {
     const owner = 'share:startup-budget';
     const target = providerShareHostPeer('startup-budget', 'executor-m');
     const generation = '11111111-1111-4111-8111-111111111111';
-    const calls: Array<{ device: string; op: string; sessionId?: string; generation?: string; runId?: string }> = [];
+    const calls: Array<{ device: string; op: string; method?: string; model?: string; callId?: string; sessionId?: string; generation?: string; runId?: string }> = [];
     const runs = new Map<string, Run>();
     const sessions = new Map<string, string>();
     const disposed: string[] = [];
@@ -1571,7 +1571,7 @@ describe('shared startup lease budget', () => {
     const allocation = deferred();
     let allocations = 0;
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
-    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false,
+    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
       startFailure: '', startFailureName: 'AgentStartupStoppedError', localFailure: '',
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
       blockClose: false, blockPrepare: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false };
@@ -1587,7 +1587,7 @@ describe('shared startup lease budget', () => {
     });
     vi.spyOn(RemoteAgentPoller.prototype, 'unregister').mockImplementation(() => {});
     const remoteInvoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
-      const request = args[0] as { op: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
+      const request = args[0] as { op: string; method?: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
       calls.push({ device, ...request });
       if (device === owner && state.ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
       // remoteBackgroundInvoke resolves `share:` before any transport and throws the share's own state.
@@ -1624,7 +1624,9 @@ describe('shared startup lease budget', () => {
       }
       if (request.op === 'call') {
         const run = runs.get(request.runId!);
-        if (run) emit(run, { t: 'result', callId: request.callId, ok: true, value: null });
+        if (run && !(state.holdSend && request.method === 'send') && !(state.holdModel && request.method === 'setModel')) {
+          emit(run, { t: 'result', callId: request.callId, ok: true, value: null });
+        }
       }
       return { ok: true, result: {} };
     });
@@ -1657,6 +1659,68 @@ describe('shared startup lease budget', () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
+
+  // Unit, direct-execution authorization contract: prompt preparation can keep
+  // a send pending. Existing renewal cases returned its RPC result immediately,
+  // hiding the shared send/authorization queue that let an online task expire.
+  // A 90s grant puts renewal at the first 60s tick without real-time waiting.
+  it.each([false, true])('renews during an unsettled send without extending an offline grant: ownerOffline=%s', async ownerOffline => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 90_000; f.state.holdSend = true;
+    const handle = await f.open();
+    let sendSettled = false;
+    const sending = handle.send({ type: 'user', content: 'long running turn' }).finally(() => { sendSettled = true; });
+    // Closing/expiry rejects a pending RPC; retain the result for cleanup.
+    const outcome = sending.catch(() => undefined);
+    try {
+      await flush();
+      expect(f.calls.filter(call => call.op === 'call')).toHaveLength(1);
+      f.state.ownerOffline = ownerOffline;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sendSettled).toBe(false);
+      expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(31_000);
+      if (ownerOffline) {
+        expect(f.disposed).toContain('pending');
+        expect(liveSharedTaskTarget('pending', f.owner)).toBeNull();
+      } else {
+        expect(f.disposed).toEqual([]);
+        expect(liveSharedTaskTarget('pending', f.owner)).toBe(f.target);
+        expect(sendSettled).toBe(false);
+      }
+      // Renewal never replays the send or reopens the executor.
+      expect(f.calls.filter(call => call.op === 'call')).toHaveLength(1);
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+    } finally {
+      f.state.ownerOffline = false;
+      await handle.close({ reason: 'account-boundary' });
+      await outcome;
+    }
+  });
+
+  it('keeps the changing model grant until its RPC settles before renewing again', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 360_000; f.state.holdModel = true;
+    const handle = await f.open();
+    await vi.advanceTimersByTimeAsync(30_000);
+    const changing = handle.setModel!('m2');
+    const outcome = changing.catch(() => undefined);
+    try {
+      await flush();
+      expect(f.calls.filter(call => call.op === 'allocate').map(call => call.model)).toEqual(['m', 'm2']);
+      await vi.advanceTimersByTimeAsync(270_000);
+      // The model grant is already m2, but the local handle still reports m.
+      // A renewal here must not replace M's m2 grant with that old snapshot.
+      expect(f.calls.filter(call => call.op === 'allocate').map(call => call.model)).toEqual(['m', 'm2']);
+      const call = f.calls.find(call => call.op === 'call' && call.method === 'setModel')!;
+      f.emit(f.runs.get(call.runId!)!, { t: 'result', callId: call.callId, ok: true, value: null });
+      await changing;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.calls.filter(call => call.op === 'allocate').map(call => call.model)).toEqual(['m', 'm2', 'm2']);
+      expect(f.disposed).toEqual([]);
+    } finally {
+      await handle.close({ reason: 'account-boundary' });
+      await outcome;
+    }
+  });
 
   // Unit: real starter -> remote start-failed -> group startup recovery -> fresh
   // open. Previously only running handles were covered; a pinned native resume
