@@ -73,8 +73,8 @@ kind 隐藏）；根横排里包着 `chat-main` 的那块是唯一的弹性区�
 
 ## 5. 共用主体与两个启动器（桌面装配、Node Host）
 
-目标是让任务、账号、插件、调度等主进程逻辑由桌面和 Node Host（`apps/host`）共用一份，
-使个人版升级时任务不中断；迁移不能改变桌面行为：
+任务、账号、插件、调度等主进程逻辑由桌面和 Node Host（`apps/host`）共用一份，目标见
+[Host 文档的“目标”](../host/README.md#目标)；迁移不能改变桌面行为：
 
 - **共用主体不直接依赖 Electron。** 需要窗口、钥匙串、原生对话框等平台能力时，由主体声明
   端口（工厂参数，例如 `createCodexProxyHost(ports)`），由平台注入。端口在调用时才取值：写成
@@ -94,8 +94,8 @@ kind 隐藏）；根横排里包着 `chat-main` 的那块是唯一的弹性区�
 
 2026-11 起，个人版迁移会调整溢出恢复、自动续跑、发送前检查与引擎切换、插件运行时钩子、
 引擎二进制等入口（迁移完成后删除本段）。在这些区域做大改前，请先开 issue 或在迁移相关的 PR
-下说明，当前在动哪些入口见个人版迁移对照表。
+下说明，当前在动哪些入口见个人版迁移放行表。
 
 Host 的实验范围与已知缺口见 [docs/host/headless-runtime-plan.md](../host/headless-runtime-plan.md)；
 迁移进度与差异见 [Host 文档入口](../host/README.md) 和
-[个人版迁移对照表](../host/personal-migration-release-table.md)。
+[个人版迁移放行表](../host/personal-migration-release-table.md)。
