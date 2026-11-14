@@ -83,6 +83,9 @@ export function parsePackageArgs(argv, defaults = {}) {
     skipSmoke: false,
     allowUnsigned: false,
     noSign: false,
+    // Agent 运行时版本来源:latest | pinned | <build-info.json>。有版本打包缺省 latest
+    // (每次发版带上上游最新组件),版本无关包缺省 null(不处理,行为同前)。
+    vendors: null,
   };
   let archFlag = null;
   let regionSpecified = false;
@@ -112,8 +115,9 @@ export function parsePackageArgs(argv, defaults = {}) {
       // 环境,不具备该环境的机器打版本无关包时用它;与 --allow-unsigned
       // (放行"缺配置")语义互补。
       case '--no-sign': out.noSign = true; out.allowUnsigned = true; break;
+      case '--vendors': out.vendors = takeValue(a, i); i++; break;
       default:
-        throw new Error(`未知参数: ${a}(支持 --platform/--arch/--region/--version/--skip-smoke/--allow-unsigned/--no-sign)`);
+        throw new Error(`未知参数: ${a}(支持 --platform/--arch/--region/--version/--skip-smoke/--allow-unsigned/--no-sign/--vendors)`);
     }
   }
 
@@ -160,6 +164,8 @@ export function parsePackageArgs(argv, defaults = {}) {
   ) {
     throw new Error(`非法 --version: ${out.versionSpec}(可选 x.y.z / major / minor / patch)`);
   }
+  // Release builds run on the signing machine: ship the reviewed, gated pins without executing them.
+  out.vendors ??= out.versionSpec !== null ? 'pinned' : null;
   return out;
 }
 
@@ -255,6 +261,10 @@ export function buildBuildInfo(ctx) {
     // 打进安装包的《Cindy MCP Apps 页面生成手册》;发布脚本据此核对上传的字节。
     // 版本无关包与没有内置手册的构建记 null。
     mcpAppsManual: ctx.versionless ? null : (ctx.mcpAppsManual ?? null),
+    // 本次打包实际带上的 Agent 运行时(Claude Code / Agent SDK / Codex / Pi / ripgrep):
+    // 版本 + 各平台上游 URL 与 SHA-256,以及测试门结果。发布侧据此把同一组版本推到 CDN;
+    // 其它平台用 --vendors <本文件> 复用同一组版本。未浮动(版本无关默认)时为 null。
+    vendors: ctx.vendors ?? null,
   };
 }
 

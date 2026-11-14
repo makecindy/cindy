@@ -14,7 +14,7 @@ import { Method, type ThreadStartResponse } from './app-server/protocol.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
 
 const repoRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../../..');
-const codexBinary = path.join(
+const codexBinary = process.env.CINDY_TEST_CODEX_BINARY || path.join(
   repoRoot,
   'apps',
   'codex-bin',

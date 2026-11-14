@@ -140,6 +140,27 @@ test('parsePackageArgs: 版本化打包必须显式指定 region', () => {
   );
 });
 
+// 有版本打包在持有签名密钥的机器上进行:缺省用已评审、已过测试门的 pin,只下载校验、不执行
+// 上游代码;升到上游最新由无凭证的每日 CI 负责,显式 --vendors latest 才在打包机上浮动。
+// 版本无关的社区包不处理。build-info 记下实际带上的组件,发布侧据此推 CDN。
+test('有版本打包缺省用已评审的 pin,并写进 build-info', () => {
+  const host = { platform: 'linux', arch: 'x64' };
+  assert.equal(parsePackageArgs(['--version', '1.2.3', '--region', 'global'], host).vendors, 'pinned');
+  assert.equal(parsePackageArgs([], host).vendors, null);
+  assert.equal(parsePackageArgs(['--version', 'patch', '--region', 'cn', '--vendors', 'pinned'], host).vendors, 'pinned');
+  assert.equal(parsePackageArgs(['--vendors', 'latest'], host).vendors, 'latest');
+  assert.equal(
+    parsePackageArgs(['--version', '1.2.3', '--region', 'global', '--vendors', 'out/build-info.json'], host).vendors,
+    'out/build-info.json',
+  );
+  assert.throws(() => parsePackageArgs(['--vendors'], host), /--vendors 需要一个值/);
+
+  const base = { version: '1.2.3', versionless: false, region: 'global', platform: 'linux', arch: 'x64', files: [], signing: {} };
+  const vendors = { mode: 'latest', changes: [], gate: [], components: { claude: { version: '2.1.321' } } };
+  assert.deepEqual(buildBuildInfo({ ...base, vendors }).vendors, vendors);
+  assert.equal(buildBuildInfo(base).vendors, null);
+});
+
 test('parsePackageArgs: linux 显式 --arch 指向宿主架构时放行', () => {
   // defaults 注入宿主身份,让断言不依赖跑测试的机器。
   for (const arch of ['x64', 'arm64']) {
