@@ -3232,6 +3232,7 @@ function recordInput(value: unknown): Record<string, unknown> {
     : {};
 }
 
+
 function schemaHint(schema: Record<string, unknown>): string {
   let rendered = '{}';
   try {
@@ -3272,7 +3273,7 @@ class CindyMcpGateway {
   private readonly reconnecting = new Map<string, Promise<void>>();
   /** 已披露工具：键为 server + NUL + tool，值为该工具当前 schema 的指纹。 */
   private readonly disclosedSchemas = new Map<string, string>();
-  /** 本次调用跳过了权限询问（hook 未披露即放行）：按 toolCallId 记账，execute 见此标记一律回路标。 */
+  /** 本次调用跳过了权限询问（未披露或无法解析）：按 toolCallId 记账，execute 见此标记一律回路标。 */
   private readonly permissionSkippedCalls = new Set<string>();
   private readonly approvedDefinitions = new Map<string, string>();
   private disclosureNotePending = false;
@@ -3429,7 +3430,34 @@ class CindyMcpGateway {
     });
   }
 
+  // Only omission denotes a parameterless call. Share the boundary between the
+  // approval hook and execute; never approve or dispatch silently erased args.
+  private callInputError(input: unknown): string | null {
+    const expected = 'Invalid cindy_mcp_call_tool input. Use {"server": <server>, "tool": <tool>, "args": {<tool parameters>}}; omit args only for tools that take none. ';
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      return expected + 'The gateway input must be a JSON object.';
+    }
+    const record = input as Record<string, unknown>;
+    if (Object.keys(record).some((key) => key !== 'server' && key !== 'tool' && key !== 'args')) {
+      return expected + 'Only server, tool and args belong at the top level; put the selected tool parameters inside args, not arguments or flattened fields.';
+    }
+    if (Object.prototype.hasOwnProperty.call(record, 'args')) {
+      if (!record.args || typeof record.args !== 'object' || Array.isArray(record.args)) {
+        return expected + 'args must be a JSON object, not null, an array, a scalar or a JSON-encoded string.';
+      }
+    } else if (typeof record.server === 'string' && typeof record.tool === 'string') {
+      const schema = this.tools.get(mcpGatewayKey(record.server, record.tool))?.inputSchema;
+      // This is only a definitive omission check, not a JSON Schema validator.
+      // Composed/optional schemas and object contents remain the server's job.
+      if (Array.isArray(schema?.required) && schema.required.length > 0) {
+        return expected + 'The selected tool declares required parameters. Inspect its schema with cindy_mcp_list_tools and provide them inside args.';
+      }
+    }
+    return null;
+  }
+
   resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
+    if (this.callInputError(input)) return null;
     const record = recordInput(input);
     const serverName = typeof record.server === 'string' ? record.server : '';
     const toolName = typeof record.tool === 'string' ? record.tool : '';
@@ -3439,7 +3467,7 @@ class CindyMcpGateway {
     if (!tool) return null;
     return {
       qualifiedName: 'mcp__' + serverName + '__' + toolName,
-      args: recordInput(record.args),
+      args: (record.args as Record<string, unknown> | undefined) ?? {},
       tool,
     };
   }
@@ -3871,12 +3899,12 @@ class CindyMcpGateway {
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
-    // 这次调用没问过权限（hook 判未披露时跳过）→ 一律回路标，不看披露状态。
+    // 这次调用没问过权限（未披露或当时无法解析）→ 一律回路标，不看当前定义与披露状态。
     const permissionSkipped = this.consumePermissionSkipped(toolCallId);
     const approvedDefinition = toolCallId ? this.approvedDefinitions.get(toolCallId) : undefined;
     if (toolCallId) this.approvedDefinitions.delete(toolCallId);
     const resolved = this.resolveCall(params);
-    if (!resolved) throw new Error(this.unknownCallMessage(params));
+    if (!resolved) throw new Error(this.callInputError(params) ?? this.unknownCallMessage(params));
     if (approvedDefinition !== undefined && this.approvalDefinition(resolved) !== approvedDefinition) {
       throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
     }
@@ -5177,9 +5205,10 @@ export default async function cindyBridge(piApi: any) {
     // 分类只认「解析成功」：披露状态不参与权限命名与采集分类，否则被门拦下的那次
     // 会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
-    // Invalid or unknown gateway input cannot execute a capability. Let execute()
-    // return its deterministic discovery/schema error without showing a misleading
-    // permission prompt for the wrapper itself.
+    // Return the deterministic input/discovery error without prompting for the
+    // wrapper. A same-batch discovery can recover a different schema before
+    // execute(), so bind this skipped approval to the invocation even if its
+    // input becomes valid against that new definition.
     if (
       (event.toolName === CINDY_MCP_CALL_TOOL
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
@@ -5189,7 +5218,10 @@ export default async function cindyBridge(piApi: any) {
         || event.toolName === CINDY_INPUT_HANDOFF_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
-    ) return;
+    ) {
+      if (event.toolName === CINDY_MCP_CALL_TOOL) mcpGateway.markPermissionSkipped(event.toolCallId);
+      return;
+    }
     // 披露门必须判在**发起权限询问之前**：pi 的权限询问由本 hook 发起，若等到工具实现
     // 里才拦，这次弹框已经发生了 —— 被门拦下的一次也打扰用户，与 pi-harness 记载的
     // 「未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框」相悖。

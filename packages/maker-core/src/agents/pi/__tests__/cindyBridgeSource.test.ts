@@ -2604,7 +2604,7 @@ it.each(['openai-responses', 'openai-codex-responses'])('applies native Fast onl
 
 // PR #6025 回归: cindy_mcp_call_tool 的 args 必须对模型可选 (无参工具按其内层
 // 空 schema 省略 args 时, 入口层不能再以 required 拦住)。同时锁死转发值: 省略
-// args 时发给 MCP server 的 arguments 必须是 {} (recordInput 归一), 而不是
+// args 时发给 MCP server 的 arguments 必须是 {}，而不是
 // undefined / 丢字段 — 否则 call_tool({name, args}) 入口 schema 又会 -32602。
 it('lets cindy_mcp_call_tool omit args and forwards an empty object for no-parameter tools', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;

@@ -250,7 +250,7 @@ function scriptedAnthropicTurn(requestBody: string): string {
     const turns: Array<{ name: string; input: Record<string, unknown> }> = [
       { name: 'cindy_mcp_list_tools', input: {} },
       { name: 'cindy_mcp_list_tools', input: { server: 'cindy_workspace', tool: 'status' } },
-      { name: 'cindy_mcp_call_tool', input: { server: 'cindy_workspace', tool: 'status', args: {} } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'cindy_workspace', tool: 'status' } },
       { name: 'cindy_mcp_list_tools', input: { server: 'cindy_workspace', tool: 'sum' } },
       {
         name: 'cindy_mcp_call_tool',
@@ -362,7 +362,19 @@ function scriptedAnthropicTurn(requestBody: string): string {
     }
     return anthropicTextTurn(4, 'blind call was gated safely');
   }
+  if (requestBody.includes('reject omitted MCP args')) {
+    const target = { server: 'cindy_echo', tool: 'echo' };
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: target },
+      { name: 'cindy_mcp_call_tool', input: target },
+      { name: 'cindy_mcp_call_tool', input: { ...target, args: { text: '记忆\n"quoted"' } } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(4, 'Arguments corrected');
+  }
   if (requestBody.includes('invalid args then correct')) {
+    // Keep tool-owned validation separate from invalid gateway wrappers.
     if (toolResultCount === 0) return anthropicToolTurn(1, 'cindy_mcp_list_tools', {});
     if (toolResultCount === 1) {
       return anthropicToolTurn(2, 'cindy_mcp_list_tools', {
@@ -421,6 +433,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   // host 下发的 `?session=<id>` 原样带到每个 MCP 请求上(orca 身份路由的 pi 侧半)。
   const seenMcpUrls: string[] = [];
   const seenRemoteHeaders: Array<{ authorization?: string; apiKey?: string }> = [];
+  const seenMcpCalls: Array<{ name: string; arguments: unknown }> = [];
   const paginatedListCursors: Array<string | undefined> = [];
   const timedOutPaginationCursors: Array<string | undefined> = [];
   const modelRequestBodies: string[] = [];
@@ -805,7 +818,9 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       res.on('close', () => { void transport.close(); void server.close(); });
       await server.connect(transport);
       const body = await readBody(req);
-      await transport.handleRequest(req, res, body ? JSON.parse(body) : undefined);
+      const message = body ? JSON.parse(body) : undefined;
+      if (message?.method === 'tools/call') seenMcpCalls.push(message.params);
+      await transport.handleRequest(req, res, message);
     });
     await new Promise<void>((r) => mcpHttp.listen(0, '127.0.0.1', r));
     const mAddr = mcpHttp.address();
@@ -1516,6 +1531,35 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       expect(finalText).toContain('CONTACT[Ada]');
     },
   );
+
+  // #10480: native Pi validates only the optional gateway args field, not the
+  // selected schema. Existing tests covered canonical args/tool-owned validation,
+  // not omission being approved and sent as {} despite required tool parameters.
+  // Minimal input: {server,tool}. Integration tier: streamed model JSON → real
+  // Pi/production bridge → SDK StreamableHTTP. Observe raw tools/call as well as
+  // the handler, because SDK validation rejects missing fields before it runs.
+  it('rejects omitted required arguments before approval or HTTP and lets Pi correct the call', { timeout: 90_000 }, async () => {
+    echoCalls.length = 0;
+    seenMcpCalls.length = 0;
+    const approvals: Array<{ toolName: string; input: unknown }> = [];
+    const { events, requests } = await runOneTurn('ask', async request => {
+      if (request.kind === 'permission') approvals.push({ toolName: request.toolName, input: request.input });
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'remote', 'reject omitted MCP args', false, 'mcp-itest-omitted-args');
+    const args = { text: '记忆\n"quoted"' };
+    expect(approvals).toEqual([{ toolName: 'mcp__cindy_echo__echo', input: args }]);
+    expect(seenMcpCalls).toEqual([{ name: 'echo', arguments: args }]);
+    expect(echoCalls).toEqual([args]);
+    const errors = events.filter(event => event.type === 'tool_result_full')
+      .map(event => event.data as { isError?: boolean; fullText: string }).filter(result => result.isError);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].fullText).toContain('declares required parameters');
+    expect(errors[0].fullText).toContain('inside args');
+    expect(latestToolResultContent(requests.at(-1)!)).toContain('ECHO[' + args.text + ']');
+    // Wrapper rejection does not mutate the stable model tool surface/prefix.
+    expect(requests.every(request => JSON.stringify(request.tools) === JSON.stringify(requests[0].tools))).toBe(true);
+    expect(requests.every(request => JSON.stringify(request.system) === JSON.stringify(requests[0].system))).toBe(true);
+  });
 
   it(
     'invalid MCP args preserve validation feedback and the inspected schema so Pi can correct the call',
