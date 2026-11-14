@@ -19243,7 +19243,7 @@
     "review": {
       "ariaLabel": "技能提案审查面板",
       "title": "技能提案：{{name}}",
-      "errorTitle": "提案加载失败",
+      "errorTitle": "提案内容还没加载出来，暂时不能应用",
       "redactionWarning": "产物中检测到疑似敏感内容（{{categories}}），请在应用前仔细检查 diff。",
       "overwriteWarning": "本地已存在同名技能，应用后将覆盖现有版本（旧版本会自动备份）。",
       "apply": "应用到本地技能",

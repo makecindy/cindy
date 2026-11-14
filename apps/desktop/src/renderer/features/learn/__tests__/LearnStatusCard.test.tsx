@@ -115,6 +115,27 @@ describe('LearnStatusCard proposal review', () => {
     expect(api.discard).toHaveBeenCalledWith({ runId: 'run-1' });
     expect(learnApiForMock.mock.calls.every(([owner]) => owner === 'remote-pane-session')).toBe(true);
   });
+
+  // A failed load explains why the proposal cannot be applied yet and offers Retry in place:
+  // the user should not have to close and reopen the panel (or restart) to try again.
+  it('retries a failed proposal load in place', async () => {
+    api.getProposalDiff
+      .mockRejectedValueOnce(new Error('fixture unavailable'))
+      .mockResolvedValueOnce({ targetExists: false, changes: [] });
+    renderReview();
+    fireEvent.click(screen.getByText('learn.card.review'));
+    await waitFor(() => expect(screen.getByText('learn.review.errorTitle')).toBeTruthy());
+    expect(screen.getByText('fixture unavailable')).toBeTruthy();
+    expect((screen.getByText('learn.review.apply') as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByText('commonUi.retry'));
+    await waitFor(() => expect((screen.getByText('learn.review.apply') as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByText('learn.review.errorTitle')).toBeNull();
+    expect(screen.getByLabelText('learn.review.ariaLabel').getAttribute('aria-hidden')).toBe('false');
+    expect(api.getProposalDiff).toHaveBeenCalledTimes(2);
+    expect(api.getProposalDiff.mock.calls.every(([params]) => params.runId === 'run-1')).toBe(true);
+    expect(learnApiForMock.mock.calls.every(([owner]) => owner === 'remote-pane-session')).toBe(true);
+  });
 });
 
 function runWithError(toolLoop: unknown): LearnRunPublic {

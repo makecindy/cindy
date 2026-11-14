@@ -19243,7 +19243,7 @@
     "review": {
       "ariaLabel": "技藝之議審閱面板",
       "title": "技藝之議：{{name}}",
-      "errorTitle": "議之載入未成",
+      "errorTitle": "議之內容未載，暫未可用",
       "redactionWarning": "產物中察得疑似敏感之內容（{{categories}}），用之前請細察 diff。",
       "overwriteWarning": "此機已有同名技藝，用之則覆現有之版（舊版自動備份）。",
       "apply": "用於此機技藝",

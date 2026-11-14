@@ -19319,7 +19319,7 @@
     "review": {
       "ariaLabel": "Skill proposal review panel",
       "title": "Skill proposal: {{name}}",
-      "errorTitle": "Failed to load the proposal",
+      "errorTitle": "The proposal hasn’t loaded yet, so it can’t be applied",
       "redactionWarning": "Potentially sensitive content detected in the output ({{categories}}). Inspect the diff carefully before applying.",
       "overwriteWarning": "A local skill with the same name already exists. Applying will overwrite it (the old version is backed up automatically).",
       "apply": "Apply to local skills",

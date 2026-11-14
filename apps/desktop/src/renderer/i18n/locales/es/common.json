@@ -19502,7 +19502,7 @@
     "review": {
       "ariaLabel": "Panel de revisión de propuestas de habilidades",
       "title": "Propuesta de habilidad: {{name}}",
-      "errorTitle": "No se pudo cargar la propuesta",
+      "errorTitle": "La propuesta aún no se ha cargado, así que todavía no se puede aplicar",
       "redactionWarning": "Se detectó contenido potencialmente sensible en la salida ({{categories}}). Revisa los cambios con cuidado antes de aplicarlos.",
       "overwriteWarning": "Ya existe una habilidad local con el mismo nombre. Al aplicarla, se sobrescribirá (se crea una copia de seguridad de la versión anterior automáticamente).",
       "apply": "Aplicar a las habilidades locales",

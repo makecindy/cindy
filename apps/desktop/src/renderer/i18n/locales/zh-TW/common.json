@@ -19243,7 +19243,7 @@
     "review": {
       "ariaLabel": "技能提案審查面板",
       "title": "技能提案：{{name}}",
-      "errorTitle": "提案載入失敗",
+      "errorTitle": "提案內容尚未載入，暫時無法應用",
       "redactionWarning": "產物中檢測到疑似敏感內容（{{categories}}），請在應用前仔細檢查 diff。",
       "overwriteWarning": "本地已存在同名技能，應用後將覆蓋現有版本（舊版本會自動備份）。",
       "apply": "應用到本地技能",
