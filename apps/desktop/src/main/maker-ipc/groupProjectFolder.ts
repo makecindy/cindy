@@ -57,8 +57,10 @@ export function createGroupProjectFolders(deps: {
     if (cached && Date.now() < cached.until) return cached.dir;
     const entry: { until: number; dir: Promise<string | null> } = { until: Date.now() + FOUND_MS, dir: Promise.resolve(null) };
     // Several registered checkouts of one repository: the one used last is the one being worked in.
+    // The user's own checkout always comes before Cindy's copy, even when the copy was used more
+    // recently (2026-11-14: a copy fetched before the fork was recognized kept winning).
     entry.dir = (deps.findRegistered?.(repo) ?? Promise.resolve([]))
-      .then(dirs => dirs[0] ?? null, () => null)
+      .then(dirs => dirs.find(dir => !deps.checkouts?.isManaged(dir)) ?? dirs[0] ?? null, () => null)
       .then(dir => { if (!dir) entry.until = Date.now() + MISSED_MS; return dir; });
     registered.set(key, entry);
     return entry.dir;

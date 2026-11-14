@@ -3,6 +3,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { Readable } from 'node:stream';
+import { Script } from 'node:vm';
 import type { ProjectScheduleConfig } from '../../scheduler-host/project-automation-loader.js';
 import { executePreRunHook } from '../../scheduler-host/pre-run-hook.js';
 
@@ -37,6 +39,30 @@ vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ 
 
 import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
+
+// Evaluate the actual generated check with real SQLite, in-process. The hook
+// protocol has its own process tests; retain one real spawn below. Repeated
+// cold Node startups made the activity matrix exceed 60s on CI (#10413).
+async function runMemoryCheck(workingDir: string, firedAt: number): Promise<number> {
+  let exitCode = 0;
+  const output = { write: (_text: string, done?: () => void) => { done?.(); } };
+  const script = await fs.readFile(path.join(workingDir, '..', '.memory-review-check-v1.cjs'), 'utf8');
+  await new Script(script).runInNewContext({
+    require: (name: string) => {
+      if (name !== 'node:sqlite') throw new Error(`Unexpected check dependency: ${name}`);
+      return { DatabaseSync };
+    },
+    console: { log() {}, error() {} },
+    process: {
+      stdin: Readable.from([JSON.stringify({ event: 'schedule-pre-run', firedAt })]),
+      stdout: output, stderr: output,
+      get exitCode() { return exitCode; },
+      set exitCode(value: number) { exitCode = value; },
+      exit: (code: number) => { exitCode = code; },
+    },
+  });
+  return exitCode;
+}
 
 // Teammate V2 (2026-11-06): the nightly review is the project's own automation,
 // added once on the teammate's model; an owner's later edit or removal is kept.
@@ -79,47 +105,50 @@ describe('ensureBotProjectAutomations', () => {
   // automatic user-role messages must not satisfy the check or create a database.
   it('skips automatic activity, admits human chat and fails closed on a missing database', async () => {
     await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
-    const config = loader.upsertSchedule.mock.calls[0]![1];
     const db = new DatabaseSync(database.path);
-    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
-      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT DEFAULT '');
-      INSERT INTO bot_session_links VALUES ('bot-1','chat'), ('other','other-chat');`);
-    const firedAt = Date.now();
-    const insert = db.prepare('INSERT INTO messages(session_id,role,rewind_at,created_at,agent_meta) VALUES (?, ?, ?, ?, ?)');
-    // Actual first-run fixture: welcoming a teammate writes a hidden user-role trigger.
-    const welcome = db.prepare('INSERT INTO messages(session_id,role,created_at,content) VALUES (?, ?, ?, ?)');
-    welcome.run('chat', 'user', firedAt - 1, '[UI_ACTION_TRIGGER]Say hello');
-    welcome.run('chat', 'user', firedAt - 1, JSON.stringify('[UI_ACTION_TRIGGER]Say hello'));
-    for (const meta of [{ origin: { kind: 'scheduler' } }, { origin: { kind: 'session' } }, { sourcePlugin: { id: 'p' } }]) {
-      insert.run('chat', 'user', null, firedAt - 10, JSON.stringify(meta));
-    }
-    insert.run('chat', 'assistant', null, firedAt - 10, null);
-    insert.run('chat', 'user', null, firedAt - 86_400_001, null);
-    insert.run('chat', 'user', firedAt, firedAt - 10, null);
-    insert.run('other-chat', 'user', null, firedAt - 10, null);
-    const run = () => executePreRunHook({ ...config.preRunHook!, cwd: workingDir,
-      stdinPayload: { event: 'schedule-pre-run', scheduleId: 'review', scheduleName: 'review', runId: 'run', firedAt } });
-    expect((await run()).exitCode).toBe(2);
-    insert.run('chat', 'user', null, firedAt - 1, null);
-    expect((await run()).exitCode).toBe(2); // 1 human message is insufficient.
-    for (let i = 1; i < 19; i++) insert.run('chat', 'user', null, firedAt - 1, null);
-    expect((await run()).exitCode).toBe(2); // 19 humans plus automatic traffic is still insufficient.
-    insert.run('chat', 'user', null, firedAt - 1, JSON.stringify({ autoResume: true }));
-    expect((await run()).exitCode).toBe(2);
-    insert.run('chat', 'user', null, firedAt - 1, null);
-    expect((await run()).exitCode).toBe(0); // Exactly 20.
-    db.exec('DELETE FROM messages');
-    for (let i = 0; i < 20; i++) insert.run('chat', 'user', null, firedAt - 1, JSON.stringify({ origin: { kind: 'scheduler', scheduleId: 'hook:telegram' } }));
-    expect((await run()).exitCode).toBe(0);
-    db.close();
+    try {
+      db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+        CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT DEFAULT '');
+        INSERT INTO bot_session_links VALUES ('bot-1','chat'), ('other','other-chat');`);
+      const firedAt = Date.now();
+      const insert = db.prepare('INSERT INTO messages(session_id,role,rewind_at,created_at,agent_meta) VALUES (?, ?, ?, ?, ?)');
+      // Actual first-run fixture: welcoming a teammate writes a hidden user-role trigger.
+      const welcome = db.prepare('INSERT INTO messages(session_id,role,created_at,content) VALUES (?, ?, ?, ?)');
+      welcome.run('chat', 'user', firedAt - 1, '[UI_ACTION_TRIGGER]Say hello');
+      welcome.run('chat', 'user', firedAt - 1, JSON.stringify('[UI_ACTION_TRIGGER]Say hello'));
+      for (const meta of [{ origin: { kind: 'scheduler' } }, { origin: { kind: 'session' } }, { sourcePlugin: { id: 'p' } }]) {
+        insert.run('chat', 'user', null, firedAt - 10, JSON.stringify(meta));
+      }
+      insert.run('chat', 'assistant', null, firedAt - 10, null);
+      insert.run('chat', 'user', null, firedAt - 86_400_001, null);
+      insert.run('chat', 'user', firedAt, firedAt - 10, null);
+      insert.run('other-chat', 'user', null, firedAt - 10, null);
+      const config = loader.upsertSchedule.mock.calls[0]![1];
+      // One smoke still exercises the production process adapter + generated script.
+      expect((await executePreRunHook({ ...config.preRunHook!, cwd: workingDir,
+        stdinPayload: { event: 'schedule-pre-run', scheduleId: 'review', scheduleName: 'review', runId: 'run', firedAt },
+      })).exitCode).toBe(2);
+      const run = () => runMemoryCheck(workingDir, firedAt);
+      insert.run('chat', 'user', null, firedAt - 1, null);
+      expect(await run()).toBe(2); // 1 human message is insufficient.
+      for (let i = 1; i < 19; i++) insert.run('chat', 'user', null, firedAt - 1, null);
+      expect(await run()).toBe(2); // 19 humans plus automatic traffic is still insufficient.
+      insert.run('chat', 'user', null, firedAt - 1, JSON.stringify({ autoResume: true }));
+      expect(await run()).toBe(2);
+      insert.run('chat', 'user', null, firedAt - 1, null);
+      expect(await run()).toBe(0); // Exactly 20.
+      db.exec('DELETE FROM messages');
+      for (let i = 0; i < 20; i++) insert.run('chat', 'user', null, firedAt - 1, JSON.stringify({ origin: { kind: 'scheduler', scheduleId: 'hook:telegram' } }));
+      expect(await run()).toBe(0);
+    } finally { db.close(); }
     await fs.rm(database.path);
-    expect((await run()).exitCode).not.toBe(0);
+    expect(await runMemoryCheck(workingDir, Date.now())).not.toBe(0);
     await expect(fs.stat(database.path)).rejects.toThrow();
   });
 
   // PR #10294: actual chatServer group dispatches retain the hidden prefix even for
   // host-attested owner text; attachments serialize it as {text,images,files}. Exercise the
-  // production-generated hook process, not a copy of its predicate (unit, synthetic SQLite).
+  // production-generated script, not a copy of its predicate (unit, synthetic SQLite).
   it.each([
     ['silent-stop continuation', '继续', { autoResume: true }, 2],
     ['human group text', '[UI_ACTION_TRIGGER]group request', { autoReviewUserText: 'Please review this' }, 0],
@@ -129,7 +158,6 @@ describe('ensureBotProjectAutomations', () => {
     ['autonomous attachments without origin', JSON.stringify({ text: '[UI_ACTION_TRIGGER]peer update', images: [], files: [{ path: 'sample.txt' }] }), null, 2],
   ] as const)('counts activity correctly for %s', async (_label, content, meta, expectedExit) => {
     await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
-    const config = loader.upsertSchedule.mock.calls[0]![1];
     const db = new DatabaseSync(database.path);
     db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
       CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
@@ -139,9 +167,7 @@ describe('ensureBotProjectAutomations', () => {
     for (let i = 0; i < 19; i++) insert.run('group', 'user', firedAt - 1, null, 'Human request');
     insert.run('group', 'user', firedAt - 1, meta === null ? null : JSON.stringify(meta), content);
     db.close();
-    const result = await executePreRunHook({ ...config.preRunHook!, cwd: workingDir,
-      stdinPayload: { event: 'schedule-pre-run', scheduleId: 'review', scheduleName: 'review', runId: 'run', firedAt } });
-    expect(result.exitCode).toBe(expectedExit);
+    expect(await runMemoryCheck(workingDir, firedAt)).toBe(expectedExit);
   });
 
   // User correction 2026-11-13: the bundled minimum is 20, not a single human input.
@@ -165,15 +191,14 @@ describe('ensureBotProjectAutomations', () => {
     const firedAt = Date.now();
     const insert = db.prepare("INSERT INTO messages VALUES ('chat', 'user', NULL, ?, NULL, 'Human request')");
     for (let i = 0; i < 19; i++) insert.run(firedAt - 1);
-    const run = () => executePreRunHook({ ...supplied.preRunHook!, cwd: workingDir,
-      stdinPayload: { event: 'schedule-pre-run', scheduleId: 'review', scheduleName: 'review', runId: 'run', firedAt } });
+    const run = () => runMemoryCheck(workingDir, firedAt);
     try {
-      expect((await run()).exitCode).toBe(0); // Actual predecessor behavior.
+      expect(await run()).toBe(0); // Actual predecessor behavior.
       loader.loadProjectSchedules.mockResolvedValue([supplied]);
       await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
-      expect((await run()).exitCode).toBe(2);
+      expect(await run()).toBe(2);
       insert.run(firedAt - 1);
-      expect((await run()).exitCode).toBe(0);
+      expect(await run()).toBe(0);
       expect(loader.upsertSchedule).toHaveBeenCalledTimes(1);
       const edited = (await fs.readFile(checkFile, 'utf8')) + '\n// Owner customization\n';
       await fs.writeFile(checkFile, edited);
