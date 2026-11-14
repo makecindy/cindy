@@ -9015,20 +9015,20 @@
     },
     "mcp": {
       "title": "외부 도구",
-      "subtitle": "직접 만든 원격 MCP 서버를 연결합니다. HTTP / Streamable HTTP 서버는 Claude와 Codex 모두에서 사용 가능하며, SSE는 Claude 전용입니다.",
+      "subtitle": "이 컴퓨터의 Claude Code, Codex, Pi에 MCP 도구를 연결합니다.",
       "cancel": "취소",
       "save": "저장",
       "editAria": "편집",
       "deleteAria": "삭제",
       "addCustom": {
         "title": "MCP 서버 추가",
-        "subtitle": "원격 MCP 엔드포인트(http/sse)를 입력하세요"
+        "subtitle": "원격 서비스 또는 로컬 프로그램 연결"
       },
       "dialog": {
         "createTitle": "MCP 서버 추가",
         "editTitle": "MCP 서버 편집",
-        "desc": "원격 http / sse 형식의 MCP만 지원합니다. 저장 후 새로 시작하는 Agent 세션에서 호출할 수 있으며 진행 중인 Agent 세션에는 영향을 주지 않습니다.",
-        "teammateDesc": "원격 http / sse 형식의 MCP만 지원합니다. 저장하면 동반자가 자신의 도구에 추가하고, 이 채팅의 다음 메시지부터 사용할 수 있습니다. 새 세션은 필요 없습니다."
+        "desc": "저장 후 새로 시작하거나 재시작한 Agent 세션에 적용됩니다. 실행 중인 세션에는 영향을 주지 않습니다. 엔진 기본 설정은 별도로 관리됩니다.",
+        "teammateDesc": "저장하면 동반자가 이 도구를 추가하고 이 채팅의 다음 메시지부터 사용할 수 있습니다. 새 세션은 필요 없습니다."
       },
       "fields": {
         "name": "표시 이름",
@@ -9040,16 +9040,20 @@
         "tokenPlaceholder": "인증 토큰 입력",
         "tokenEditPlaceholder": "비우면 저장된 토큰이 삭제됩니다",
         "tokenSaved": "저장됨",
-        "tokenHelp": "인증에 사용됩니다. Claude는 Authorization: Bearer 헤더로 전송하며, Codex는 Bearer 인증만 지원합니다.",
+        "tokenHelp": "Cindy는 Authorization: Bearer 헤더로 이 토큰을 MCP 서비스에 보냅니다.",
         "headers": "헤더(선택)",
         "headerNamePlaceholder": "헤더 이름",
         "headerValuePlaceholder": "값",
         "addHeader": "헤더 추가",
-        "removeRow": "이 행 삭제"
+        "removeRow": "이 행 삭제",
+        "localConfig": "로컬 프로그램(JSON)",
+        "localHelp": "저장하면 Cindy가 이 컴퓨터에서 사용자 계정으로 홈 폴더를 시작 위치로 명령을 실행하도록 허용합니다. command, 배열 args, 객체 env를 입력하세요. 비밀 값은 여기에만 입력하세요. 저장은 연결 테스트가 아닙니다."
       },
       "errors": {
         "nameRequired": "표시 이름을 입력하세요",
-        "urlInvalid": "유효한 http(s) URL을 입력하세요"
+        "urlInvalid": "유효한 http(s) URL을 입력하세요",
+        "localConfigInvalid": "비어 있지 않은 command, 문자열 배열 args, 문자열 키와 값의 객체 env가 포함된 올바른 JSON을 입력하세요.",
+        "localUnreadable": "설정을 읽을 수 없어 로드하지 않았습니다. 시스템 키 저장소를 확인하거나 삭제 후 다시 추가하세요."
       },
       "toast": {
         "created": "MCP 서버가 추가되었습니다",

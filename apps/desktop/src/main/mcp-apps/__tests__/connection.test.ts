@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { AppConnection } from '../connection.js';
+import { AppConnection, localMcpEnvironment } from '../connection.js';
 
 afterEach(() => vi.restoreAllMocks());
 const config = { id: 'example', url: 'https://mcp.example.invalid', transport: 'http' as const };
@@ -104,4 +104,29 @@ describe.each(['http', 'sse'] as const)('MCP App %s discovery cancellation', (tr
       await connection.close();
     }
   });
+});
+
+// Unit: a spawn failure must remain a load failure, without leaking command secrets.
+it('reports local startup failures without command arguments or environment values', async () => {
+  vi.spyOn(Client.prototype, 'connect').mockRejectedValue(new Error('spawn fixture-secret'));
+  vi.spyOn(Client.prototype, 'close').mockResolvedValue(undefined);
+  const connection = new AppConnection({ id: 'local', url: '', transport: 'stdio',
+    stdio: { command: 'node', args: ['fixture-secret'], env: {} } });
+  await expect(connection.tools()).rejects.toThrow(/^MCP_STDIO_START_FAILED$/);
+  await connection.close();
+});
+
+// Unit: Windows treats Path/PATH as one variable. The SDK merges inherited
+// uppercase keys again, so overrides must survive that second merge as well.
+it('preserves explicit environment overrides under Windows and POSIX semantics', () => {
+  const inherited = process.env.PATH;
+  const windows = localMcpEnvironment({ Path: 'fixture-path', tEmP: 'fixture-temp' }, 'win32');
+  expect(windows.PATH).toBe('fixture-path');
+  expect(windows.Path).toBeUndefined();
+  expect(windows.TEMP).toBe('fixture-temp');
+  expect(localMcpEnvironment({ Path: 'first', PATH: 'last' }, 'win32').PATH).toBe('last');
+  const posix = localMcpEnvironment({ Path: 'separate-variable' }, 'linux');
+  expect(posix.Path).toBe('separate-variable');
+  expect(posix.PATH).toBe(inherited);
+  expect(process.env.PATH).toBe(inherited);
 });

@@ -1,4 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { homedir } from 'node:os';
+import { CustomMcpProvider } from '../../mcp-integrations/custom-mcp-provider.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Script } from 'node:vm';
 import { App } from '@modelcontextprotocol/ext-apps';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -984,4 +987,52 @@ describe('official MCP Apps interoperability', () => {
       client.callTool({ name: 'create_application', arguments: { title: 'x', body: 'y' } }),
     ).rejects.toThrow('MCP_APP_TOOL_NOT_VISIBLE');
   });
+});
+
+// Integration: the same saved stdio configuration must actually discover and call
+// through the SDK facade used by all three harness adapters. Real child process,
+// no user config, no network dependency, no sleeps and no generated disk files.
+it.each(['claude-code', 'codex', 'pi'] as const)('discovers and calls a local MCP through the %s adapter facade', async agentKind => {
+  const program = String.raw`
+    const readline = require('node:readline');
+    readline.createInterface({ input: process.stdin }).on('line', line => {
+      const q = JSON.parse(line);
+      if (q.id === undefined) return;
+      let result = {};
+      if (q.method === 'initialize') result = { protocolVersion: q.params.protocolVersion,
+        capabilities: { tools: {} }, serverInfo: { name: 'local-fixture', version: '1' } };
+      if (q.method === 'tools/list') result = { tools: [{ name: 'probe',
+        description: 'Read fixture state', inputSchema: { type: 'object' } }] };
+      if (q.method === 'tools/call') result = { content: [{ type: 'text',
+        text: JSON.stringify({ cwd: process.cwd(), value: process.env.CINDY_MCP_FIXTURE_VALUE }) }] };
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: q.id, result }) + '\n');
+    });
+  `;
+  const provider = new CustomMcpProvider({ id: 'local_fixture', name: 'Fixture', transport: 'stdio', url: '', headers: {},
+    stdio: { command: process.execPath, args: ['-e', program], env: { CINDY_MCP_FIXTURE_VALUE: 'fixture-only' } },
+  }, () => { throw new Error('must not read HTTP token'); }, createAppServerProxy);
+  const config = provider.appServerConfig();
+  const owner = {};
+  const host = new McpAppsHost({ owner: () => owner, config: () => config,
+    readCard: async () => { throw new Error('no app card'); }, writeCard: async () => {},
+    authorizeTool: async () => {}, sendMessage: async () => {},
+  });
+  setMcpAppsHost(host);
+  registerAppServer(config.id, () => config);
+  const sdk = provider.toClaudeSdkConfig({ agentKind, workingDir: '/unused-project', sessionId: 'stdio-test' }) as { type: string; instance: McpServer };
+  expect(sdk.type).toBe('sdk');
+  expect(provider.getExtraEnv({ agentKind, workingDir: '' })).toBeNull();
+  const client = new Client({ name: 'harness-fixture', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  try {
+    await sdk.instance.connect(st);
+    await client.connect(ct);
+    expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(['probe']);
+    const result = await client.callTool({ name: 'probe', arguments: {} });
+    expect(result.content).toEqual([{ type: 'text', text: JSON.stringify({ cwd: homedir(), value: 'fixture-only' }) }]);
+  } finally {
+    await client.close();
+    await sdk.instance.close();
+    await host.reset();
+  }
 });

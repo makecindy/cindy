@@ -9130,20 +9130,20 @@
     },
     "mcp": {
       "title": "Outils externes",
-      "subtitle": "Connectez vos propres serveurs MCP distants. Les serveurs HTTP/Streamable HTTP fonctionnent avec Claude et Codex ; SSE est réservé à Claude.",
+      "subtitle": "Connectez des outils MCP à Claude Code, Codex et Pi sur cet ordinateur.",
       "cancel": "Annuler",
       "save": "Enregistrer",
       "editAria": "Modifier",
       "deleteAria": "Supprimer",
       "addCustom": {
         "title": "Ajouter un serveur MCP",
-        "subtitle": "Saisissez un endpoint MCP distant (http/sse)"
+        "subtitle": "Connecter un service distant ou un programme local"
       },
       "dialog": {
         "createTitle": "Ajouter un serveur MCP",
         "editTitle": "Modifier le serveur MCP",
-        "desc": "MCP distant http / sse uniquement. Les nouvelles sessions peuvent l'appeler après l'enregistrement ; les sessions en cours ne sont pas affectées.",
-        "teammateDesc": "MCP distant http / sse uniquement. Après l'enregistrement, votre ami l'ajoute à ses outils et peut l'utiliser dès le prochain message de cette conversation, sans nouvelle session."
+        "desc": "Après enregistrement, les nouvelles sessions Agent ou les sessions redémarrées peuvent les charger. Les sessions en cours restent inchangées. Les configurations natives des moteurs restent séparées.",
+        "teammateDesc": "Après enregistrement, votre ami ajoute ces outils et peut les utiliser dès le prochain message de ce chat, sans nouvelle session."
       },
       "fields": {
         "name": "Nom d'affichage",
@@ -9155,16 +9155,20 @@
         "tokenPlaceholder": "Saisissez le jeton d'authentification",
         "tokenEditPlaceholder": "Laissez vide pour supprimer le jeton enregistré",
         "tokenSaved": "Enregistré",
-        "tokenHelp": "Utilisé pour l'authentification : Claude l'envoie dans un en-tête Authorization: Bearer ; Codex ne prend en charge que l'authentification Bearer.",
+        "tokenHelp": "Cindy envoie ce jeton au service MCP via l’en-tête Authorization: Bearer.",
         "headers": "En-têtes (facultatif)",
         "headerNamePlaceholder": "Nom de l'en-tête",
         "headerValuePlaceholder": "Valeur",
         "addHeader": "Ajouter un en-tête",
-        "removeRow": "Retirer la ligne"
+        "removeRow": "Retirer la ligne",
+        "localConfig": "Programme local (JSON)",
+        "localHelp": "Enregistrer autorise Cindy à exécuter cette commande sur cet ordinateur avec votre compte, depuis votre dossier personnel. Renseignez command, le tableau args et l’objet env. Saisissez les secrets uniquement ici. L’enregistrement ne teste pas la connexion."
       },
       "errors": {
         "nameRequired": "Le nom d'affichage est obligatoire",
-        "urlInvalid": "Saisissez une URL http(s) valide"
+        "urlInvalid": "Saisissez une URL http(s) valide",
+        "localConfigInvalid": "Saisissez un JSON valide avec command non vide, args comme tableau de chaînes et env comme objet de clés et valeurs textuelles.",
+        "localUnreadable": "La configuration est illisible et n’est pas chargée. Vérifiez le stockage des clés du système ou supprimez-la puis ajoutez-la à nouveau."
       },
       "toast": {
         "created": "Serveur MCP ajouté",

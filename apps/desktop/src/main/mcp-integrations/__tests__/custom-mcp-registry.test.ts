@@ -9,6 +9,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { buildBotMcpCatalog } from '../../maker-host/botMcpCatalog.js';
 import type { McpProvider } from '@cindy/maker-core';
 import type { CustomMcpConfig } from '../../../shared/customMcp.js';
 import { detectMcpDuplicates, resolveMcpDuplicateChoices } from '../../maker-host/mcp-duplicate-detection.js';
@@ -269,4 +270,29 @@ describe('getBuiltinMcpServerNames', () => {
   it('returns nothing when no provider array is registered', () => {
     expect(getBuiltinMcpServerNames()).toEqual([]);
   });
+});
+
+// Unit: one persisted local server is registered for every engine without replacing
+// builtins; deletion refresh removes it from all arrays. No native config is read/written.
+it('registers one local configuration in all harness catalogs and removes it on refresh', async () => {
+  const arrays = ['claude', 'codex', 'pi'].map(name => [builtin(name)]);
+  registerCustomMcpArrays(...arrays);
+  storeMock.listCustomMcpServers.mockResolvedValue([{ ...config('local'), transport: 'stdio', url: '',
+    stdio: { command: 'node', args: [], env: {} } },
+    { ...config('unreadable'), transport: 'stdio', url: '', readError: 'stdio-unreadable' }]);
+  await refreshCustomMcpProviders();
+  for (const arr of arrays) expect(arr.map(provider => provider.name)).toHaveLength(2);
+  for (const arr of arrays) expect(arr.map(provider => provider.name)).not.toContain('unreadable');
+  expect(arrays.map(arr => arr[1])).toEqual([arrays[0]![1], arrays[0]![1], arrays[0]![1]]);
+  expect(getBuiltinMcpServerNames()).toEqual(['claude', 'codex', 'pi']);
+  for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
+    for (const remoteHostId of [undefined, 'ssh-fixture']) {
+      const catalog = buildBotMcpCatalog({ agentKind, remoteHostId, providers: arrays[0]!,
+        builtinNames: getBuiltinMcpServerNames(), customServers: [{ id: 'local', transport: 'stdio', updatedAt: 1 }] });
+      expect(catalog.find(entry => entry.name === 'local')).toMatchObject({ available: true, source: 'custom' });
+    }
+  }
+  storeMock.listCustomMcpServers.mockResolvedValue([]);
+  await refreshCustomMcpProviders();
+  expect(arrays.map(arr => arr.length)).toEqual([1, 1, 1]);
 });

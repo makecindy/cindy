@@ -9015,20 +9015,20 @@
     },
     "mcp": {
       "title": "外部ツール",
-      "subtitle": "独自のリモート MCP サーバーを接続します。HTTP / Streamable HTTP サーバーは Claude と Codex の両方で利用できます。SSE は Claude 専用です。",
+      "subtitle": "このコンピュータの Claude Code、Codex、Pi に MCP ツールを接続します。",
       "cancel": "キャンセル",
       "save": "保存",
       "editAria": "編集",
       "deleteAria": "削除",
       "addCustom": {
         "title": "MCP サーバーを追加",
-        "subtitle": "リモート MCP エンドポイント(http/sse)を入力"
+        "subtitle": "リモートサービスまたはローカルプログラムに接続"
       },
       "dialog": {
         "createTitle": "MCP サーバーを追加",
         "editTitle": "MCP サーバーを編集",
-        "desc": "リモート http / sse 型の MCP のみ対応。保存後、新しい Agent セッションから呼び出せます。実行中の Agent セッションには影響しません。",
-        "teammateDesc": "リモート http / sse 型の MCP のみ対応。保存すると仲間が自分のツールに追加し、このチャットの次のメッセージから使えます。新しいセッションは不要です。"
+        "desc": "保存後、新規または再起動した Agent セッションで有効になります。実行中のセッションには影響しません。各エンジンのネイティブ設定は別管理です。",
+        "teammateDesc": "保存すると仲間がこれらのツールを追加し、このチャットの次のメッセージから使えます。新しいセッションは不要です。"
       },
       "fields": {
         "name": "表示名",
@@ -9040,16 +9040,20 @@
         "tokenPlaceholder": "認証トークンを入力",
         "tokenEditPlaceholder": "空欄で保存済みトークンを削除",
         "tokenSaved": "保存済み",
-        "tokenHelp": "認証に使用:Claude は Authorization: Bearer ヘッダーとして送信します。Codex は Bearer 認証のみ対応します。",
+        "tokenHelp": "Cindy は Authorization: Bearer ヘッダーでこのトークンを MCP サービスに送信します。",
         "headers": "ヘッダー(任意)",
         "headerNamePlaceholder": "ヘッダー名",
         "headerValuePlaceholder": "値",
         "addHeader": "ヘッダーを追加",
-        "removeRow": "この行を削除"
+        "removeRow": "この行を削除",
+        "localConfig": "ローカルプログラム（JSON）",
+        "localHelp": "保存すると、このコンピュータであなたのアカウントを使い、ホームフォルダからコマンドを実行することを Cindy に許可します。command、配列 args、オブジェクト env を入力してください。秘密情報はここにのみ入力してください。保存では接続テストを行いません。"
       },
       "errors": {
         "nameRequired": "表示名を入力してください",
-        "urlInvalid": "有効な http(s) URL を入力してください"
+        "urlInvalid": "有効な http(s) URL を入力してください",
+        "localConfigInvalid": "空でない command、文字列配列 args、文字列のキーと値を持つ env を含む有効な JSON を入力してください。",
+        "localUnreadable": "設定を読み取れないため、読み込まれていません。システムの鍵ストレージを確認するか、削除して追加し直してください。"
       },
       "toast": {
         "created": "MCP サーバーを追加しました",

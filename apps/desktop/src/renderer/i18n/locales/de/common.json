@@ -9058,20 +9058,20 @@
     },
     "mcp": {
       "title": "Externe Tools",
-      "subtitle": "Verbinde deine eigenen Remote-MCP-Server. HTTP/Streamable HTTP-Server funktionieren mit Claude und Codex; SSE nur mit Claude.",
+      "subtitle": "MCP-Werkzeuge für Claude Code, Codex und Pi auf diesem Computer verbinden.",
       "cancel": "Abbrechen",
       "save": "Speichern",
       "editAria": "Bearbeiten",
       "deleteAria": "Löschen",
       "addCustom": {
         "title": "MCP-Server hinzufügen",
-        "subtitle": "Remote-MCP-Endpunkt eingeben (http/sse)"
+        "subtitle": "Remotedienst oder lokales Programm verbinden"
       },
       "dialog": {
         "createTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
-        "desc": "Nur Remote-MCP über http / sse. Neue Agent-Sitzungen können ihn nach dem Speichern aufrufen; laufende Agent-Sitzungen bleiben unverändert.",
-        "teammateDesc": "Nur Remote-MCP über http / sse. Nach dem Speichern fügt dein Freund ihn seinen Werkzeugen hinzu und kann ihn ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
+        "desc": "Nach dem Speichern für neue oder neu gestartete Agent-Sitzungen verfügbar. Laufende Sitzungen bleiben unverändert. Native Engine-Konfigurationen bleiben getrennt.",
+        "teammateDesc": "Nach dem Speichern fügt dein Freund diese Werkzeuge hinzu und kann sie ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
       },
       "fields": {
         "name": "Anzeigename",
@@ -9083,16 +9083,20 @@
         "tokenPlaceholder": "Authentifizierungstoken eingeben",
         "tokenEditPlaceholder": "Leer lassen, um das gespeicherte Token zu entfernen",
         "tokenSaved": "Gespeichert",
-        "tokenHelp": "Zur Authentifizierung: Claude sendet es als Authorization: Bearer-Header; Codex unterstützt nur Bearer-Authentifizierung.",
+        "tokenHelp": "Cindy sendet dieses Token mit dem Header Authorization: Bearer an den MCP-Dienst.",
         "headers": "Header (optional)",
         "headerNamePlaceholder": "Header-Name",
         "headerValuePlaceholder": "Wert",
         "addHeader": "Header hinzufügen",
-        "removeRow": "Zeile entfernen"
+        "removeRow": "Zeile entfernen",
+        "localConfig": "Lokales Programm (JSON)",
+        "localHelp": "Speichern erlaubt Cindy, diesen Befehl auf diesem Computer unter deinem Konto aus deinem Benutzerordner auszuführen. Gib command, das Array args und das Objekt env ein. Geheimnisse nur hier eingeben. Speichern testet die Verbindung nicht."
       },
       "errors": {
         "nameRequired": "Anzeigename ist erforderlich",
-        "urlInvalid": "Gib eine gültige http(s)-URL ein"
+        "urlInvalid": "Gib eine gültige http(s)-URL ein",
+        "localConfigInvalid": "Gib gültiges JSON mit nicht leerem command, einem Zeichenfolgen-Array args und einem env-Objekt mit Zeichenfolgen als Schlüssel und Werten ein.",
+        "localUnreadable": "Die Konfiguration konnte nicht gelesen werden und wurde nicht geladen. Prüfe den Systemschlüsselspeicher oder lösche sie und füge sie erneut hinzu."
       },
       "toast": {
         "created": "MCP-Server hinzugefügt",

@@ -9130,20 +9130,20 @@
     },
     "mcp": {
       "title": "Ferramentas externas",
-      "subtitle": "Conecte seus próprios servidores MCP remotos. Servidores HTTP/Streamable HTTP funcionam com Claude e Codex; SSE funciona apenas com Claude.",
+      "subtitle": "Conecte ferramentas MCP ao Claude Code, Codex e Pi neste computador.",
       "cancel": "Cancelar",
       "save": "Salvar",
       "editAria": "Editar",
       "deleteAria": "Excluir",
       "addCustom": {
         "title": "Adicionar servidor MCP",
-        "subtitle": "Insira um endpoint MCP remoto (http/sse)"
+        "subtitle": "Conectar um serviço remoto ou programa local"
       },
       "dialog": {
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
-        "desc": "Apenas MCP remoto http / sse. Novas sessões do Agent poderão chamá-lo após salvar; as sessões do Agent em andamento não serão afetadas.",
-        "teammateDesc": "Apenas MCP remoto http / sse. Depois de salvar, seu amigo o adiciona às ferramentas dele e pode usá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova Sessão."
+        "desc": "Após salvar, ficam disponíveis para sessões do Agent novas ou reiniciadas. As sessões em andamento não mudam. As configurações nativas de cada mecanismo permanecem separadas.",
+        "teammateDesc": "Após salvar, seu amigo adiciona estas ferramentas e pode usá-las a partir da próxima mensagem deste chat, sem uma nova sessão."
       },
       "fields": {
         "name": "Nome de exibição",
@@ -9155,16 +9155,20 @@
         "tokenPlaceholder": "Insira o token de autenticação",
         "tokenEditPlaceholder": "Deixe em branco para remover o token salvo",
         "tokenSaved": "Salvo",
-        "tokenHelp": "Usado para autenticação: Claude o envia como um cabeçalho Authorization: Bearer; Codex só oferece suporte à autenticação Bearer.",
+        "tokenHelp": "Cindy envia este token ao serviço MCP pelo cabeçalho Authorization: Bearer.",
         "headers": "Cabeçalhos (opcional)",
         "headerNamePlaceholder": "Nome do cabeçalho",
         "headerValuePlaceholder": "Valor",
         "addHeader": "Adicionar cabeçalho",
-        "removeRow": "Remover linha"
+        "removeRow": "Remover linha",
+        "localConfig": "Programa local (JSON)",
+        "localHelp": "Salvar permite que Cindy execute este comando neste computador com sua conta, a partir da sua pasta pessoal. Preencha command, o array args e o objeto env. Digite segredos somente aqui. Salvar não testa a conexão."
       },
       "errors": {
         "nameRequired": "O nome de exibição é obrigatório",
-        "urlInvalid": "Insira uma URL http(s) válida"
+        "urlInvalid": "Insira uma URL http(s) válida",
+        "localConfigInvalid": "Insira JSON válido com command não vazio, args como array de strings e env como objeto com chaves e valores de texto.",
+        "localUnreadable": "Não foi possível ler a configuração, que não foi carregada. Verifique o armazenamento de chaves do sistema ou exclua e adicione novamente."
       },
       "toast": {
         "created": "Servidor MCP adicionado",

@@ -2,6 +2,9 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { homedir } from 'node:os';
+import type { StdioMcpConfig } from '../../shared/customMcp.js';
 import {
   ToolListChangedNotificationSchema,
   ResourceListChangedNotificationSchema,
@@ -20,10 +23,21 @@ type AppServerNotification = Notification;
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { MCP_APPS_EXTENSION } from './protocol.js';
 
+/** Per-child environment only; never mutate the Desktop's process.env. */
+export function localMcpEnvironment(overrides: Record<string, string>, platform = process.platform): Record<string, string> {
+  const defaults = getDefaultEnvironment();
+  if (platform !== 'win32') return { ...defaults, ...overrides };
+  // The SDK adds its uppercase defaults once more inside start(). Canonicalize
+  // both layers so those defaults cannot shadow an explicit Path/Temp override.
+  return Object.fromEntries([...Object.entries(defaults), ...Object.entries(overrides)]
+    .map(([name, value]) => [name.toUpperCase(), value]));
+}
+
 export interface AppServerConfig {
   id: string;
   url: string;
-  transport: 'http' | 'sse' | 'in-process';
+  transport: 'http' | 'sse' | 'in-process' | 'stdio';
+  stdio?: StdioMcpConfig;
   plugin?: { ghostId?: string; namespace?: string | null; instance: string; revision: string; packageSha256: string; directory: string; title: string; trust: string; domains: string[]; assertCurrent(sessionId?: string): void; createTransport(): Transport };
   headers?: Record<string, string>;
 }
@@ -92,9 +106,19 @@ export class AppConnection {
       const client = this.createClient();
       this.client = client;
       const requestInit = { headers: this.config.headers };
-      const url = this.config.plugin ? undefined : new URL(this.config.url);
+      const local = this.config.transport === 'stdio';
+      if (local && !this.config.stdio) throw new Error('MCP_STDIO_CONFIG_MISSING');
+      const url = this.config.plugin || local ? undefined : new URL(this.config.url);
       const transport =
-        this.config.plugin ? this.config.plugin.createTransport() : this.config.transport === 'sse'
+        this.config.plugin ? this.config.plugin.createTransport() : local
+          ? new StdioClientTransport({
+              ...this.config.stdio!,
+              env: localMcpEnvironment(this.config.stdio!.env),
+              cwd: homedir(),
+              // Third-party stderr may contain credentials; never inherit Desktop logs.
+              stderr: 'ignore',
+            })
+          : this.config.transport === 'sse'
           ? new SSEClientTransport(url!, {
               requestInit,
               eventSourceInit: {
@@ -111,7 +135,7 @@ export class AppConnection {
         this.connecting = undefined;
       };
       client.onclose = retire;
-      this.connecting = client.connect(transport, { timeout: 30_000 }).then(() => {
+      this.connecting = client.connect(transport, { timeout: local ? 60_000 : 30_000 }).then(() => {
         if (this.closed || this.client !== client) throw new Error('MCP_APP_CONNECTION_CLOSED');
         for (const schema of [
           ToolListChangedNotificationSchema,
@@ -132,6 +156,8 @@ export class AppConnection {
       }).catch(async (error) => {
         retire();
         await client.close().catch(() => {});
+        // Spawn errors can contain command arguments or environment values.
+        if (local) throw new Error('MCP_STDIO_START_FAILED');
         throw error;
       });
     }

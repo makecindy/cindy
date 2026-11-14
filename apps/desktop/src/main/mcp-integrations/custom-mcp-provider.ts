@@ -1,25 +1,8 @@
 /**
- * custom-mcp-provider —— 把一条用户自定义 MCP 配置(custom-mcp-store 的 CustomMcpConfig)
- * 适配成 maker-core 的 `McpProvider`,让同一份配置同时被 Claude Code 与 Codex 调用。
- *
- * 仅支持远程 transport(http/sse):
- *   - Desktop 注入 appProxy 时，两种 transport 都由 Main 的标准 MCP Apps Host 连接，
- *     Claude/Codex/Pi 通过同一 SDK facade 访问；认证头不交给 View 或子进程。
- *   - 以下原生配置与 env 注入仅用于未提供 appProxy 的兼容路径。
- *   - Claude:`toClaudeSdkConfig` 返回原生 { type:'http'|'sse', url, headers }
- *     (本地 cc 直用;纯 JSON 也能存活 remote cc 的可序列化过滤)。
- *   - Codex:`toCodexMcpConfig` 返回 { type:'http', url, bearerTokenEnvVar? }
- *     (codex 远程 MCP 统一走 http 分支;sse 也交给它)。
- *
- * 鉴权:可选 bearer token 存 safeStorage(mcp_token_<id>),由注入的 tokenReader 读取。
- *   - Claude:合成 Authorization: Bearer <token> 进 headers。
- *   - Codex:token 不能进 process args,通过 getExtraEnv 注入 env var(CUSTOM_MCP_<id>_TOKEN),
- *     toCodexMcpConfig.bearerTokenEnvVar 指向它;缺 env 时 codexEnvironment 会跳过该 server。
- *   - 自定义 header:Codex 侧同样走 env——每个 header 值注入一个 CUSTOM_MCP_<id>_HDR_<name>
- *     env var,toCodexMcpConfig.envHttpHeaders 把 header 名映射到该 env var 名,
- *     codexEnvironment 序列化成 mcp_servers.<name>.env_http_headers.<header>="<envVar>"。
- *     用 env_http_headers 而非静态 http_headers,是为了让密钥类 header(如 API key)
- *     不暴露在 codex 子进程的 process args 里(与 bearer token 同款保护)。
+ * Adapt a shared custom MCP through the Main-owned SDK facade for every harness.
+ * HTTP/SSE credentials and local stdio commands stay on this Desktop. Native
+ * HTTP/SSE projections below are retained only for callers without an appProxy;
+ * local commands require the facade and are never serialized to a remote agent.
  */
 
 import type {
@@ -97,6 +80,9 @@ export class CustomMcpProvider implements McpProvider {
   }
 
   appServerConfig(): AppServerConfig {
+    if (this.config.transport === 'stdio') {
+      return { id: this.config.id, url: '', transport: 'stdio', stdio: this.config.stdio };
+    }
     return { id: this.config.id, url: this.config.url, transport: this.config.transport, headers: this.buildHeaders() };
   }
 
@@ -112,6 +98,8 @@ export class CustomMcpProvider implements McpProvider {
 
   toClaudeSdkConfig(_context: McpProviderContext): unknown {
     if (this.appProxy) return { type: 'sdk', name: this.name, instance: this.appProxy(() => this.appServerConfig(), _context) };
+    // Local commands require the owning Desktop's bridge; never serialize them to SSH.
+    if (this.config.transport === 'stdio') return null;
     const headers = this.buildHeaders();
     return {
       type: this.config.transport, // 'http' | 'sse'
@@ -124,7 +112,7 @@ export class CustomMcpProvider implements McpProvider {
     if (this.appProxy) return null; // Existing authenticated host bridge carries the facade.
     // Codex 只支持 Streamable HTTP transport；SSE 协议不兼容，跳过（null = 不注入 Codex）。
     // Claude 侧走 toClaudeSdkConfig，支持 sse，不受此限制。
-    if (this.config.transport === 'sse') return null;
+    if (this.config.transport !== 'http') return null;
     const headers = this.config.headers ?? {};
     const token = this.tokenReader(this.config.id);
     // 有用户自定义 Authorization header 时不再叠加 bearer(与 Claude buildHeaders 语义一致)。
@@ -152,7 +140,7 @@ export class CustomMcpProvider implements McpProvider {
     // SSE MCPs are not registered in Codex (toCodexMcpConfig returns null), so
     // neither their token nor their custom headers should be injected into the
     // Codex app-server environment.
-    if (this.config.transport === 'sse') return null;
+    if (this.config.transport !== 'http') return null;
     const headers = this.config.headers ?? {};
     const token = this.tokenReader(this.config.id);
     const env: Record<string, string> = {};
