@@ -53,6 +53,8 @@ import {
   restoreSessionAutomaticHistoryLoadAttempts,
   saveSessionScroll,
   clearSessionScroll,
+  updateRenderWindowFloor,
+  readSessionScroll,
 } from '@/lib/sessionScrollStore';
 
 const BASE_TIME = new Date('2026-05-20T00:00:00.000Z');
@@ -273,6 +275,31 @@ describe('makerChatStore active view tracking', () => {
       messageClientId: 'client-0', offset: 0, isNearBottom: true });
     vi.advanceTimersByTime(31_000);
     expect(makerChatStore.getSnapshot(view.id).messages).toHaveLength(350);
+    view.leave();
+  });
+
+  // 自动跟随的挂载面板不走滚动保存分支，只有渲染窗口推进同步的地板字段
+  // (updateRenderWindowFloor) —— 维护拍仍必须能裁(Greptile P1 回归)。
+  it('trims a continuously mounted auto-following view via the window-advance floor sync', async () => {
+    const view = await readingWindow('mounted-autofollow');
+    clearSessionScroll(view.id); // 自动跟随面板从未手动滚动过，没有阅读位置快照
+    updateRenderWindowFloor(view.id, 'client-149');
+    vi.advanceTimersByTime(31_000);
+    const messages = makerChatStore.getSnapshot(view.id).messages;
+    expect(messages).toHaveLength(201);
+    expect(messages[0]?.clientId).toBe('client-149');
+    view.leave();
+  });
+
+  it('window-advance floor sync merges without clobbering a reading position', async () => {
+    const view = await readingWindow('floor-merge');
+    saveSessionScroll(view.id, { windowAnchorKey: 'msg-client-10', viewportTopKey: 'msg-client-10',
+      messageClientId: 'client-10', offset: 4, isNearBottom: false });
+    updateRenderWindowFloor(view.id, 'client-149');
+    const snapshot = readSessionScroll(view.id);
+    expect(snapshot?.windowFloorClientId).toBe('client-149');
+    expect(snapshot?.isNearBottom).toBe(false);
+    expect(snapshot?.viewportTopKey).toBe('msg-client-10');
     view.leave();
   });
 

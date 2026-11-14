@@ -66,6 +66,26 @@ export function saveSessionScroll(sessionId: string, snapshot: SessionScrollSnap
   store.set(sessionId, { ...previous, scroll: snapshot });
 }
 
+/** 字段级更新裁剪地板 —— 渲染窗口推进时由 MessageStream 调用。
+ *  自动跟随(pinToBottom)的程序化滚动不走滚动保存分支,只靠 saveSessionScroll
+ *  会让一直跟随的视图永远没有地板快照;这里只 merge 该字段,不碰阅读位置
+ *  (isNearBottom/锚点),否则会把上翻读者的位置写成贴底。 */
+export function updateRenderWindowFloor(
+  sessionId: string,
+  windowFloorClientId: string,
+): void {
+  const previous = store.get(sessionId);
+  const scroll: SessionScrollSnapshot = previous?.scroll ?? {
+    // 从未存过快照的视图按默认窗口(贴底)起步;这些占位字段不会被消费 ——
+    // 地板更新不触发还原,还原只看 isNearBottom(始终为 true → pin 到底)。
+    windowAnchorKey: null,
+    viewportTopKey: '',
+    offset: 0,
+    isNearBottom: true,
+  };
+  store.set(sessionId, { ...previous, scroll: { ...scroll, windowFloorClientId } });
+}
+
 export function readSessionScroll(sessionId: string): SessionScrollSnapshot | undefined {
   return store.get(sessionId)?.scroll;
 }
