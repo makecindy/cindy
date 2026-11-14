@@ -74,7 +74,9 @@ import {
   appendDiscoveredCustomProviderModels,
   deleteCustomProvider,
   fetchCustomProviderModelsForRefresh,
+  isMagpieProviderView,
   providerViewToCustomProviderConfig,
+  shouldPruneMissingModels,
   readCustomProviderKey,
   updateCustomProvider,
 } from '@/lib/customProviders';
@@ -2724,6 +2726,7 @@ export function ProvidersSection() {
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
   const [rediscovering, setRediscovering] = useState(false);
   const [refreshingProviderId, setRefreshingProviderId] = useState<string | null>(null);
+  const [confirmedMagpieProviderIds, setConfirmedMagpieProviderIds] = useState<Record<string, boolean>>({});
   // React state 负责渲染反馈；ref 才是同一事件循环内立即生效的互斥锁，防止双击在
   // disabled 状态提交到 DOM 前启动两条刷新。
   const refreshingProviderIdRef = useRef<string | null>(null);
@@ -3149,6 +3152,8 @@ export function ProvidersSection() {
       try {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
+        let removed = 0;
+        let detectedMagpie = false;
         const refreshedAgents = new Set<AgentKind>();
         const batch = await fetchCustomProviderModelsForRefresh(p, config);
         for (const agent of p.agents) {
@@ -3178,13 +3183,17 @@ export function ProvidersSection() {
           const openRouterCatalog = /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(rt.baseUrl)
             ? (rt.modelsUrl ?? 'https://openrouter.ai/api/v1/models')
             : undefined;
+          if (r.gatewayKind === 'magpie') detectedMagpie = true;
+          const pruneMissing = shouldPruneMissingModels(r);
           const merged = appendDiscoveredCustomProviderModels(
             rt.models,
             r.models,
             openRouterCatalog,
+            pruneMissing ? { pruneMissing: true } : undefined,
           );
           rt.models = merged.models;
           added += merged.addedIds.length;
+          removed += merged.removedIds?.length ?? 0;
         }
         if (!refreshedAgents.size) {
           toast.error(t('settings.providers.models.refreshFailed'));
@@ -3202,8 +3211,19 @@ export function ProvidersSection() {
           return result;
         });
         if (!saved) return;
+        setConfirmedMagpieProviderIds((prev) => {
+          if (detectedMagpie && !prev[p.id]) return { ...prev, [p.id]: true };
+          if (!detectedMagpie && prev[p.id]) {
+            const next = { ...prev };
+            delete next[p.id];
+            return next;
+          }
+          return prev;
+        });
         if (speechReferenceAdded) {
           toast.success(t('settings.providers.models.refreshSpeechAdded'));
+        } else if (removed > 0) {
+          toast.success(t('settings.providers.models.refreshDone'));
         } else if (added > 0) {
           toast.success(t('settings.providers.models.refreshAdded', { count: added }));
         } else {
@@ -3725,6 +3745,9 @@ export function ProvidersSection() {
                                   onRefresh: () => void handleRefreshModels(effectiveSelected),
                                   refreshing: refreshingProviderId === effectiveSelected.id,
                                   refreshDisabled: refreshingProviderId !== null,
+                                  ...((isMagpieProviderView(effectiveSelected) || confirmedMagpieProviderIds[effectiveSelected.id])
+                                    ? { refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria') }
+                                    : {}),
                                 }
                               : {})}
                         />

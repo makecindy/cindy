@@ -131,9 +131,10 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
   for (const agent of p.agents) {
     const routing = p.routing[agent];
     const models = p.models[agent] ?? [];
+    const catalogPresetId = routing?.catalogPresetId ?? models[0]?.catalogPresetId;
     runtimes[agent] = {
       baseUrl: routing?.upstream ?? '',
-      ...(models[0]?.catalogPresetId ? { catalogPresetId: models[0].catalogPresetId } : {}),
+      ...(catalogPresetId ? { catalogPresetId } : {}),
       ...(routing?.requestPath ? { requestPath: routing.requestPath } : {}),
       ...(routing?.wireProtocol ? { wireProtocol: routing.wireProtocol } : {}),
       ...(agent === 'codex' && routing?.supportsImageGeneration === true
@@ -162,12 +163,38 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
   };
 }
 
-/** Refresh metadata and append new models; native-engine defaults decide visibility. */
+/**
+ * 严格根据本次拉取响应的实时识别结果与完整性决定是否移除服务端已取消的模型。
+ * 绝不凭历史 catalogPresetId 或历史模型来源做删除，避免 Magpie 连接改向普通网关或分页部分失败时误删。
+ */
+export function shouldPruneMissingModels(result: {
+  gatewayKind?: 'magpie';
+  catalogComplete?: boolean;
+}): boolean {
+  return result.gatewayKind === 'magpie' && result.catalogComplete === true;
+}
+
+/** 仅用于设置页刷新按钮的提示文案判断（含空模型列表下保留预设来源的连接）。 */
+export function isMagpieProviderView(
+  provider: Pick<ProviderView, 'routing' | 'models'>,
+): boolean {
+  return (
+    Object.values(provider.routing).some((r) => r?.catalogPresetId === 'magpie') ||
+    Object.values(provider.models).some((list) =>
+      list?.some(
+        (m) => m.catalogPresetId === 'magpie' || m.discoveredSource?.kind === 'magpie',
+      ),
+    )
+  );
+}
+
+/** Refresh metadata and append new models (or prune missing for authoritative gateways like Magpie). */
 export function appendDiscoveredCustomProviderModels(
   existing: readonly ProviderRuntimeModelConfig[],
   discovered: readonly DiscoveredModel[],
   discoveryUrl?: string,
-): { models: ProviderRuntimeModelConfig[]; addedIds: string[] } {
+  options?: { pruneMissing?: boolean },
+): { models: ProviderRuntimeModelConfig[]; addedIds: string[]; removedIds?: string[] } {
   let prior = existing;
   if (discoveryUrl && isOpenRouterModelsUrl(discoveryUrl)) {
     const actual = new Map(discovered.map(model => [model.id, model]));
@@ -188,11 +215,15 @@ export function appendDiscoveredCustomProviderModels(
     }
     prior = [...normalized.values()];
   }
-  const models = mergeDiscoveredRuntimeModels(prior, discovered);
+  const models = mergeDiscoveredRuntimeModels(prior, discovered, false, options);
   const known = new Set(existing.map((model) => model.id));
+  const nextIds = new Set(models.map((model) => model.id));
   return {
     models,
     addedIds: models.filter((model) => !known.has(model.id)).map((model) => model.id),
+    ...(options?.pruneMissing
+      ? { removedIds: existing.filter((model) => !nextIds.has(model.id)).map((model) => model.id) }
+      : {}),
   };
 }
 

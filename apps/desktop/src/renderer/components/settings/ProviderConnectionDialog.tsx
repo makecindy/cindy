@@ -64,6 +64,7 @@ import {
   customProviderWireProtocolForSave,
   piCatalogProviderIdAfterRouteEdit,
   readCustomProviderKey,
+  shouldPruneMissingModels,
   updateCustomProvider,
   type RuntimeKeys,
 } from '@/lib/customProviders';
@@ -211,6 +212,9 @@ interface ModelPickerState {
   models: ModelRow[];
   selected: Set<string>;
   query: string;
+  /** 本次同步刷新已从服务端剔除的旧模型 ID（确认时不从 previousModels 加回）。 */
+  prunedIds?: Set<string>;
+  emptyCatalogSignature?: string;
 }
 type DialogChildLayer =
   | { kind: 'preset-menu' }
@@ -625,6 +629,8 @@ export function ProviderConnectionDialog({
     codex: false,
     pi: false,
   });
+  // A picker-confirmed empty catalog is valid only for this connection/request.
+  const confirmedEmptyCatalogs = useRef<Partial<Record<DialogAgentKind, string>>>({});
   // 仅供当前表单展示；复用请求签名，使端点或凭证变化后不显示旧结果。
   const [modelFetchSummary, setModelFetchSummary] = useState<Partial<Record<DialogAgentKind, {
     signature: string;
@@ -1771,11 +1777,15 @@ export function ProviderConnectionDialog({
           .filter((m) => m.id.length > 0);
         const currentById = new Map(current.map((m) => [m.id, m]));
         const fetchedIds = new Set(result.models.map((m) => m.id));
-        // 行集合 = 表单已填但不在拉取结果里的（置顶保留）+ 拉取结果（撞 id 时保留用户显示名）。
+        const pruneMissing = editing && shouldPruneMissingModels(result);
+        const prunedIds = pruneMissing
+          ? new Set(current.filter((m) => !fetchedIds.has(m.id)).map((m) => m.id))
+          : undefined;
+        // 行集合 = 表单已填但不在拉取结果里的（非 Magpie 时置顶保留）+ 拉取结果（撞 id 时保留用户显示名）。
         const rows: ModelRow[] = [
-          ...current
+          ...(pruneMissing ? [] : current
             .filter((m) => !fetchedIds.has(m.id))
-            .map((m) => ({ ...m, name: m.name || m.id })),
+            .map((m) => ({ ...m, name: m.name || m.id }))),
           ...result.models.map((m) => {
             const cur = currentById.get(m.id);
             // contextWindow:表单已有的行以用户当前值为准——包括「显式清空」
@@ -1821,9 +1831,20 @@ export function ProviderConnectionDialog({
           ...previous,
           [agent]: { signature: requestSig, status: 'success', count: fetchedIds.size },
         }));
+        const selected = pruneMissing
+          ? new Set(rows.filter((m) => currentById.has(m.id)).map((m) => m.id))
+          : new Set(currentById.keys());
         setChildLayer({
           kind: 'model-picker',
-          value: { agent, models: rows, selected: new Set(currentById.keys()), query: '' },
+          value: {
+            agent,
+            models: rows,
+            selected,
+            query: '',
+            ...(prunedIds?.size ? { prunedIds } : {}),
+            ...(pruneMissing && result.models.length === 0
+              ? { emptyCatalogSignature: `${initial?.id}:${requestSig}` } : {}),
+          },
         });
         // 弹层锁定所属 runtime：把背景 Tab 同步切回请求的 runtime（标题也带 runtime 名），
         // 请求期间切过 Tab 也不会在错误上下文里确认。
@@ -1914,7 +1935,7 @@ export function ProviderConnectionDialog({
     });
     for (const m of previousModels) {
       const id = m.id.trim();
-      if (id && !pickerIds.has(id) && !merged.some((r) => r.id === id)) {
+      if (id && !pickerIds.has(id) && !picker.prunedIds?.has(id) && !merged.some((r) => r.id === id)) {
         merged.push({
           id,
           name: m.name.trim() || id,
@@ -1948,6 +1969,9 @@ export function ProviderConnectionDialog({
             : {}),
         });
       }
+    }
+    if (merged.length === 0 && picker.emptyCatalogSignature) {
+      confirmedEmptyCatalogs.current[picker.agent] = picker.emptyCatalogSignature;
     }
     patch(picker.agent, (x) => ({ ...x, models: merged }));
     setChildLayer((current) =>
@@ -2081,8 +2105,41 @@ export function ProviderConnectionDialog({
         );
         return;
       }
-      // OAuth 形态模型可留空——授权成功后自动发现并持久化（与内置订阅统一）。
-      if (models.length === 0 && authMode !== 'oauth') {
+      // OAuth discovers after authorization. Magpie may legitimately have no
+      // enabled models; only a confirmed complete response permits saving empty.
+      let confirmedEmpty = false;
+      if (models.length === 0 && authMode !== 'oauth' && editing) {
+        const signature = `${initial?.id}:${providerModelFetchRequestSignature(rf, authMode)}`;
+        confirmedEmpty = confirmedEmptyCatalogs.current[a] === signature;
+        const baseline = savedBaselineFor(a);
+        // Empty stored configs have no model row carrying gateway provenance.
+        // Revalidate only the unchanged saved endpoint/auth mode; Main retains
+        // ownership of saved headers. Neither a preset nor an old source is proof.
+        if (!confirmedEmpty && initial?.runtimes[a]?.models.length === 0 && baseline &&
+            modelFetchCanReuseSavedCredentials(rf, baseline, authMode)) {
+          savingRef.current = true;
+          setSaving(true);
+          try {
+            const headers = Object.fromEntries(rf.headers.filter(h => h.name.trim())
+              .map(h => [h.name.trim(), h.value.trim()]));
+            const result = await window.electronAPI.maker.fetchProviderModels({
+              agent: a, baseUrl: rf.baseUrl.trim(), modelsUrl: rf.modelsUrl.trim() || null,
+              authMethod: authMode, wireProtocol: rf.wireProtocol,
+              apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
+              headers: authMode === 'none' ? stripCredentialHeaders(headers) : headers,
+              savedProviderId: initial.id,
+            });
+            const currentSignature = `${initial.id}:${providerModelFetchRequestSignature(rtRef.current[a], authModeRef.current)}`;
+            confirmedEmpty = currentSignature === signature && result.ok &&
+              result.models?.length === 0 && shouldPruneMissingModels(result);
+          } catch { /* A failed recheck must retain the existing empty-save guard. */ }
+          finally {
+            savingRef.current = false;
+            setSaving(false);
+          }
+        }
+      }
+      if (models.length === 0 && authMode !== 'oauth' && !confirmedEmpty) {
         setManualOpen(true);
         setActiveTab(a);
         reportFieldError(

@@ -177,7 +177,7 @@ describe('import discovery limits', () => {
       expect(init?.redirect).toBe('error');
       return fakeResponse(200, JSON.stringify({ name: 'magpie' }));
     });
-    expect(result).toEqual({ ok: true, models: [] });
+    expect(result).toEqual({ ok: true, models: [], gatewayKind: 'magpie', catalogComplete: true });
   });
 
   it.each([
@@ -212,7 +212,59 @@ describe('import discovery limits', () => {
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer sk-test');
       return fakeResponse(200, JSON.stringify({ object: 'list', data: [] }));
     });
-    expect(result).toEqual({ ok: true, models: [] });
+    expect(result).toEqual({ ok: true, models: [], catalogComplete: true });
+  });
+
+  it('tags Magpie empty and labeled catalogs with gatewayKind: "magpie" and marks incomplete pages', async () => {
+    const emptyResult = await fetchProviderModels(spec({ baseUrl: 'http://127.0.0.1:3425/v1' }), async (url) =>
+      fakeResponse(200, JSON.stringify(String(url).endsWith('/api/hello') ? { name: 'magpie' } : { data: [] })),
+    );
+    expect(emptyResult).toEqual({ ok: true, models: [], gatewayKind: 'magpie', catalogComplete: true });
+
+    const labeledResult = await fetchProviderModels(spec({ baseUrl: 'http://127.0.0.1:3425/v1' }), async () =>
+      fakeResponse(200, JSON.stringify({
+        data: [{ id: 'a/model-1', display_name: 'Model 1', owned_by: 'a', magpie_label: 'Model 1 · A' }],
+      })),
+    );
+    expect(labeledResult.ok).toBe(true);
+    expect(labeledResult.gatewayKind).toBe('magpie');
+    expect(labeledResult.catalogComplete).toBe(true);
+
+    const partialResult = await fetchProviderModels(spec({ baseUrl: 'http://127.0.0.1:3425/v1' }), async (url) => {
+      if (String(url).includes('cursor=p2')) return fakeResponse(500, 'page 2 error');
+      return fakeResponse(200, JSON.stringify({
+        data: [{ id: 'a/model-1', display_name: 'Model 1', owned_by: 'a', magpie_label: 'Model 1 · A' }],
+        next_cursor: 'p2',
+      }));
+    });
+    expect(partialResult.ok).toBe(true);
+    expect(partialResult.gatewayKind).toBe('magpie');
+    expect(partialResult.catalogComplete).toBe(false);
+
+    for (const [label, page2Body] of [
+      ['business error', { error: 'unavailable', data: [] }],
+      ['filtered malformed items', { data: [{}] }],
+      ['partial malformed items', { data: [{ id: 'b/valid' }, {}] }],
+      ['top-level array malformed items', [{}]],
+    ] as const) {
+      const result = await fetchProviderModels(spec({ baseUrl: 'http://127.0.0.1:3425/v1' }), async (url) =>
+        fakeResponse(200, JSON.stringify(String(url).includes('cursor=p2') ? page2Body : {
+          data: [{ id: 'a/model-1', display_name: 'Model 1', owned_by: 'a', magpie_label: 'Model 1 · A' }],
+          next_cursor: 'p2',
+        })),
+      );
+      expect(result.ok, label).toBe(true);
+      expect(result.catalogComplete, label).toBe(false);
+    }
+
+    const missingCursor = await fetchProviderModels(spec({ baseUrl: 'http://127.0.0.1:3425/v1' }), async () =>
+      fakeResponse(200, JSON.stringify({
+        data: [{ id: 'a/model-1', display_name: 'Model 1', owned_by: 'a', magpie_label: 'Model 1 · A' }],
+        has_more: true,
+      })),
+    );
+    expect(missingCursor.ok).toBe(true);
+    expect(missingCursor.catalogComplete).toBe(false);
   });
 
   it.each([{}, { data: [{}] }, { data: [null] }, { data: [{ id: '' }] }, { models: [] },

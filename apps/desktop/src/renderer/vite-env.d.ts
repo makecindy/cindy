@@ -5975,6 +5975,8 @@ interface ElectronAPI {
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;
+      gatewayKind?: 'magpie';
+      catalogComplete?: boolean;
     }>;
     /**
      * 本机 agent CLI 安装 / 登录态扫描（设置「检测建议」用）。只 stat 不读凭证内容;

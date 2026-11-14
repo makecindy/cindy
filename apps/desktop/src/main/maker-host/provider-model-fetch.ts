@@ -1,6 +1,6 @@
 import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
-import { collectModelDiscoveryPages } from './model-discovery-pages.js';
+import { collectModelDiscoveryPagesWithStatus } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
@@ -107,6 +107,10 @@ export interface ProviderModelsFetchResult {
   status?: number;
   /** 上游原始信息摘要（详情展开用，UI 主文案走 i18n）。 */
   detail?: string;
+  /** 当探测到端点为特定托管网关（如 Magpie）时给出，用于客户端决定同步语义。 */
+  gatewayKind?: 'magpie';
+  /** 本次目录分页/收集是否完整（部分失败或截断时为 false，禁止据此删除旧模型）。 */
+  catalogComplete?: boolean;
 }
 
 /** Refresh a saved OAuth connection using only Main's route and credential snapshot. */
@@ -362,7 +366,7 @@ export async function fetchProviderModels(
     };
   }
   const pageDeadline = Date.now() + 30_000;
-  const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
+  const { models, complete: catalogComplete } = await collectModelDiscoveryPagesWithStatus(json, url, async nextUrl => {
     if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
@@ -407,5 +411,11 @@ export async function fetchProviderModels(
       detail: 'no models found in response',
     };
   }
-  return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
+  const isMagpie = magpieEmpty || models.some(m => m.discoveredSource?.kind === 'magpie');
+  return {
+    ok: true,
+    models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)),
+    ...(isMagpie ? { gatewayKind: 'magpie' as const } : {}),
+    catalogComplete,
+  };
 }

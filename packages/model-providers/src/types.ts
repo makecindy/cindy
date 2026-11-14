@@ -214,6 +214,8 @@ export interface RoutingDescriptor {
   videoApi?: ProviderVideoApi;
   /** Enterprise BYOK image model binding used by the Codex Images route. */
   imageModel?: { wireModel: string; litellmModel: string; supportsEdit: boolean };
+  /** 预设 ID（仅用于 UI 识别来源，不用于决定同步删除权限）。 */
+  catalogPresetId?: string;
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
   upstream: string;
   /**
