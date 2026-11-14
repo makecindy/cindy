@@ -316,7 +316,11 @@ export function finishSessionTerminalEvent(
       eventChannel: () => MAKER_PUSH.EVENT,
       log: { warn: (...args) => deps.log.warn(...args) },
     };
-    const contextRecoveryInput = { ...prepared, session, autoResumeSuppressesPersist, persistId };
+    const contextRecoveryInput = {
+      session, event, attributedEvent, broadcastEvent, eventAgentMeta,
+      isPlannedUpgradeClose, isRemoteAuthRetry, isGatewayProxyTokenRecovery,
+      autoResumeSuppressesPersist, persistId,
+    };
     const overflowClaim = claimContextRecoveryTerminal(contextRecoveryPorts, contextRecoveryInput);
     const deferUnsuccessfulProductTurn = (): void => {
       if (terminalOwner) deps.deferUnsuccessfulProductTurn?.(terminalOwner);
