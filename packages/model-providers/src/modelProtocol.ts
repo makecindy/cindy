@@ -49,26 +49,42 @@ export function modelProtocolComparison(
     const model = models[agent];
     if (!model) return null;
     const routing = provider.routing?.[agent];
-    const explicit = model.api ?? (agent === 'pi' ? model.piApi : undefined);
-    const outbound = explicit ?? (subscriptionBridge && reference ? reference : (
-      agent === 'pi'
-        ? apiFromWireProtocol(model.route?.wireProtocol ?? routing?.wireProtocol)
-        : apiFromWireProtocol(
-            model.route?.wireProtocol ??
-              routing?.wireProtocol ??
-              // A missing descriptor (e.g. a redacted remote view) is not evidence of a route.
-              (routing?.authStrategy
-                ? agent === 'codex'
-                  ? 'openai-responses'
-                  : 'anthropic-messages'
-                : undefined),
-          )));
+    // Fixed-protocol hosts execute the resolved route, not raw model API metadata.
+    // These can differ for an explicitly configured request path. Pi instead
+    // selects its SDK adapter from the model API before consulting HTTP defaults.
+    const connection = apiFromWireProtocol(routing?.wireProtocol ?? (
+      routing?.authStrategy && agent !== 'pi'
+        ? agent === 'codex' ? 'openai-responses' : 'anthropic-messages'
+        : undefined
+    ));
+    const routeApi = apiFromWireProtocol(model.route?.wireProtocol);
+    const subscriptionApi = subscriptionBridge && reference
+      ? model.api ?? (agent === 'pi' ? model.piApi : undefined) ?? reference
+      : null;
+    const outbound = subscriptionApi ?? (agent === 'pi'
+      ? model.api ?? model.piApi ?? routeApi ?? connection
+      : routeApi ?? connection ?? model.api ?? null);
+    // Stored customization is separate from the effective source: a custom
+    // path can make stale API metadata inactive, but it must still be resettable.
+    const customized = model.protocolCustomized ?? Boolean(
+      (model.userModelConfig?.interfaceId && model.userModelConfig.interfaceId !== 'auto') ||
+      model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route,
+    );
+    const usesModelProtocol = agent === 'pi'
+      ? Boolean(model.api || model.piApi || routeApi)
+      : Boolean(routeApi || (model.api && model.api === outbound));
+    const source: 'model' | 'catalog' | 'connection' = usesModelProtocol
+      ? customized ? 'model' : 'catalog'
+      : 'connection';
     const harness = harnessApi(agent, outbound);
     const path = pathFor(agent, outbound);
     const localConversion = path === 'local';
     return {
       harness,
       outbound,
+      connection,
+      source,
+      customized,
       localConversion,
       path,
       mode: localConversion

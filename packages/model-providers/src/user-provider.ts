@@ -514,8 +514,22 @@ export function buildUserProvider(
     models[agent] = rt.models.map((storedModel) => {
       // Old ID-only imports must pick up newly known per-model interfaces too.
       // An explicit model API/path remains a user choice, not a preset default.
-      const interfaceDefault = (options.modelRegistry?.schemaVersion ?? 0) < 6 && followsPreset && !storedModel.api && !storedModel.piApi && !storedModel.route
-        ? presetRuntime.models.find(model => model.id === storedModel.id) : undefined;
+      const presetDefault = followsPreset ? presetRuntime.models.find(model => model.id === storedModel.id) : undefined;
+      const interfaceRegistry = options.modelRegistry;
+      // V6 governs models with interface declarations, including withdrawn or
+      // unsupported bindings. Unbound presets (notably Pi's mixed-API catalog)
+      // still supply their per-model default after the user removes an override.
+      const v6InterfaceManaged = interfaceRegistry && interfaceRegistry.schemaVersion >= 6 && (
+        Boolean(presetDefault?.interfaceId) ||
+        Boolean(storedModel.interfaceId && storedModel.interfaceId !== 'auto') ||
+        interfaceRegistry.models.some(entry => entry.routes.some(route =>
+          route.providerId === rt.catalogPresetId && route.modelId === storedModel.id &&
+          (route.interfaces !== undefined || entry.status === 'retired'))) ||
+        interfaceRegistry.interfaceProfiles?.some(profile => profile.providerId === rt.catalogPresetId &&
+          (!profile.modelIds || profile.modelIds.includes(storedModel.id)))
+      );
+      const interfaceDefault = !v6InterfaceManaged && !storedModel.api && !storedModel.piApi && !storedModel.route
+        ? presetDefault : undefined;
       const configuredModel = interfaceDefault ? { ...storedModel,
         ...(interfaceDefault.api ? { api: interfaceDefault.api } : {}),
         ...(agent === 'pi' && interfaceDefault.piApi ? { piApi: interfaceDefault.piApi } : {}),
@@ -528,13 +542,34 @@ export function buildUserProvider(
             ?? configuredModel.route.baseUrl,
         } }
         : configuredModel;
-      const m = rt.requestPath ? boundConfiguredModel : alignModelApiRoute(
-        providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl, false, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry),
-        resolvedBaseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
+      const interfaceModel = rt.requestPath ? boundConfiguredModel
+        : providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl, false, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry);
+      // V6 projects explicit selections too, so object identity alone no longer
+      // proves catalog ownership. Automatic/default or a maintained correction of
+      // a legacy API belongs to the catalog; an explicit interface remains editable.
+      const configuredApi = boundConfiguredModel.api ?? boundConfiguredModel.piApi ??
+        (boundConfiguredModel.route?.wireProtocol === 'openai-chat'
+          ? 'openai-completions' : boundConfiguredModel.route?.wireProtocol);
+      const catalogInterfaceApplied = Boolean(interfaceModel.selectedInterface) && (
+        boundConfiguredModel.interfaceId === 'auto' ||
+        (!boundConfiguredModel.interfaceId && interfaceModel.api !== configuredApi)
+      );
+      const m = rt.requestPath ? interfaceModel : alignModelApiRoute(
+        interfaceModel, resolvedBaseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
       );
       const presetModel = followsPreset
         ? presetRuntime.models.find((model) => model.id === m.id)
         : undefined;
+      // applyPreset saves the complete protocol snapshot; the interface picker
+      // deletes api/piApi/route and saves only interfaceId. Matching the ID alone
+      // would hide a sparse explicit choice of the preset's interface from reset.
+      const presetInterfaceSnapshot = Boolean(presetModel &&
+        (presetModel.api || presetModel.piApi || presetModel.route) &&
+        storedModel.interfaceId === presetModel.interfaceId &&
+        storedModel.api === presetModel.api && storedModel.piApi === presetModel.piApi &&
+        storedModel.route?.baseUrl === presetModel.route?.baseUrl &&
+        storedModel.route?.wireProtocol === presetModel.route?.wireProtocol &&
+        storedModel.route?.requestPath === presetModel.route?.requestPath);
       const sameRoute =
         m.route?.baseUrl === presetModel?.route?.baseUrl &&
         m.route?.wireProtocol === presetModel?.route?.wireProtocol &&
@@ -664,6 +699,21 @@ export function buildUserProvider(
         ...(nativeApi !== undefined ? { nativeApi } : {}),
         // Projection is not a user edit. Save only the original configuration.
         userModelConfig: structuredClone(storedModel),
+        // applyPreset snapshots protocol fields, including generated V6 interface
+        // IDs. Their presence is not evidence of a user edit while they match this
+        // bound preset. Keep storage intact; only displayed provenance compares it.
+        // A maintained correction owns the effective route even when the saved
+        // legacy Chat snapshot differs from the current preset (or it is absent).
+        protocolCustomized: Boolean(storedModel.interfaceId && storedModel.interfaceId !== 'auto' &&
+          !presetInterfaceSnapshot) || (!catalogInterfaceApplied && Boolean(
+          (storedModel.api && storedModel.api !== presetModel?.api) ||
+          (storedModel.piApi && storedModel.piApi !== presetModel?.piApi) ||
+          (storedModel.route && (
+            storedModel.route.baseUrl !== presetModel?.route?.baseUrl ||
+            storedModel.route.wireProtocol !== presetModel?.route?.wireProtocol ||
+            storedModel.route.requestPath !== presetModel?.route?.requestPath
+          ))
+        )),
         ...(m.api ? { api: m.api, ...(agent === 'pi' ? { piApi: m.api } : {}) } : {}),
         ...(importedApi && !m.piApi && !m.api ? {
           api: importedApi, ...(agent === 'pi' ? { piApi: importedApi } : {}),

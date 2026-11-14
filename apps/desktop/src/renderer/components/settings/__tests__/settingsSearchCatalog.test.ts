@@ -384,6 +384,26 @@ describe('settings discoverability regressions', () => {
 });
 
 describe('settings search catalog', () => {
+  // #6015: existing provider-entry coverage missed the new protocol wording.
+  // Exercise translated queries against the production index without mounting UI.
+  it('finds provider protocol settings by their visible labels and explanations', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    for (const lng of ['zh-CN', 'en']) {
+      for (const key of [
+        'settings.providers.custom.wireProtocol.defaultLabel',
+        'settings.providers.custom.wireProtocol.precedenceHelp',
+        'settings.providers.models.advanced.protocol.sourceModel',
+        'settings.providers.models.advanced.protocol.sourceCatalog',
+        'settings.providers.models.advanced.protocol.restoreRoute',
+      ]) {
+        const query = searchI18n.t(key, { lng });
+        const result = searchSettings(documents, query).find(({ entry }) => entry.id === 'providers.protocol');
+        expect(result, query).toBeDefined();
+        expect(result?.entry.tab).toBe('providers');
+        expect(result?.entry.targetId).toBe('settings-panel-providers');
+      }
+    }
+  });
   // PR #9055 CI regression: discover the dynamic MCP notice even before a group is mounted.
   it('finds MCP duplicate choices and resolves their notice anchor', () => {
     const matches = searchSettings(buildSettingsSearchDocuments(t, ['builtin-tools']), 'MCP');
