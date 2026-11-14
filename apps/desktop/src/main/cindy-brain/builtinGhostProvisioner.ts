@@ -77,6 +77,8 @@ export interface BuiltinProvisionerLogger {
 export interface BuiltinStoreInstallFact {
   version: string;
   ownsInstalledBytes: boolean;
+  /** A legacy physical directory belongs to another namespace, not the root seed. */
+  preserveInstance?: boolean;
 }
 
 export interface ProvisionIdentity {
@@ -725,10 +727,10 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
             return;
           }
 
-          // 4) 商店同名安装:种子版本更新才覆盖;相同或更旧让给商店,不动它的字节。
+          // 4) 物理目录属于非 root 市场实例时不播种；root 种子版本严格更新才覆盖。
           //    已装的是商店字节就摘台账(此后是普通商店插件);仍是种子字节时保留台账,
           //    等商店自动更新覆盖回来。
-          if (store && !seedIsNewerThanStore(manifest.version, store.version)) {
+          if (store && (store.preserveInstance || !seedIsNewerThanStore(manifest.version, store.version))) {
             if (store.ownsInstalledBytes) seeded.delete(id);
             outcome.skipped.push(id);
             log?.info('builtin seed yields to the store install', {

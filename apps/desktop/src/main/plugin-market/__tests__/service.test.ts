@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createGhostBackgroundRefresh } from '../../cindy-brain/ghostBackgroundRefresh.js';
 import { GhostManager } from '../../cindy-brain/GhostManager.js';
+import { createGhostInstallReceipt } from '../../cindy-brain/ghostInstallReceipt.js';
 import { runGhostSnapshotWorkerRequest } from '../../cindy-brain/ghostSnapshotWorkerProcess.js';
 import { writeTestCindyPackage } from '../../cindy-brain/__tests__/cindyPackageFixture.js';
 import { assertGhostInstallConsent, confirmedUiCapability, type GhostInstallConsentDecision } from '../../cindy-brain/ghostInstallConsent.js';
@@ -25,6 +26,8 @@ import {
 } from '../../../shared/ghost.js';
 const runtime = vi.hoisted(() => ({
   receiptManager: null as GhostManager | null,
+  readInstanceForContent: vi.fn<GhostManager['readInstanceForContent']>(() => null),
+  readApprovedInstallReceipt: vi.fn<GhostManager['readApprovedInstallReceipt']>(() => null),
   listScans: 0,
   installationScanComplete: true,
   onList: undefined as (() => void) | undefined,
@@ -36,7 +39,7 @@ const runtime = vi.hoisted(() => ({
     dir: string;
     enabled: boolean;
     namespace?: string | null;
-    namespaceState?: 'pending';
+    namespaceState?: 'pending' | 'confirmed' | 'unconfirmed';
     approval?: GhostInstallApproval;
     trust?: GhostTrustInfo;
   }>,
@@ -170,6 +173,8 @@ vi.mock('../../cindy-brain/index.js', () => ({
       });
     },
     approvedInstallEvidence: runtime.approvedInstallEvidence,
+    readInstanceForContent: runtime.readInstanceForContent,
+    readApprovedInstallReceipt: runtime.readApprovedInstallReceipt,
     inspect: runtime.inspect,
     readApprovedInstallOriginStrict: (ghostId: string) => {
       if (runtime.installOriginError) throw new Error('receipt unreadable');
@@ -289,6 +294,10 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 
 afterEach(() => {
   runtime.receiptManager = null;
+  runtime.readInstanceForContent.mockReset();
+  runtime.readInstanceForContent.mockReturnValue(null);
+  runtime.readApprovedInstallReceipt.mockReset();
+  runtime.readApprovedInstallReceipt.mockReturnValue(null);
   vi.mocked(downloadVerifiedPlugin).mockReset();
   vi.mocked(downloadVerifiedPlugin).mockResolvedValue(undefined);
   runtime.listScans = 0;
@@ -3825,6 +3834,51 @@ describe('PluginMarketService migration and defaultInstall', () => {
     } else {
       expect(runtime.install).not.toHaveBeenCalled();
       expect(items[0]?.installState).toBe('installed');
+    }
+  });
+
+  // #10296, unit: a root seed receipt on a retained organization instance must
+  // reach the same market update route, while another resource cannot claim it.
+  // Existing seed tests only exercised root instances and bypassed the registry.
+  it.each([true, false])('restores the retained organization route only with matching provenance: %s', async matches => {
+    const item = summary({ namespace: 'acme', scope: 'organization', organizationId: 'org-1',
+      currentRelease: { ...summary().currentRelease, version: '2.0.0' } });
+    const seedManifest = manifest(item.ghostId, '1.0.0');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-org-seed-'));
+    roots.push(root);
+    const dir = path.join(root, item.ghostId);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'ghost.json'), JSON.stringify(seedManifest));
+    const receipt = createGhostInstallReceipt({ manifest: seedManifest, localeResources: {}, enabled: false,
+      namespace: null, packageSha256: 'b'.repeat(64), skillContentSha256: {},
+      trust: { level: 'unverified', publisherSigned: false, publisherVerified: false, reviewed: false } });
+    runtime.ghosts = [{ manifest: seedManifest, dir, enabled: false, namespace: 'acme',
+      namespaceState: 'unconfirmed', approval: { state: 'approved', revision: receipt.revision } }];
+    runtime.hostSeedVersions.set(item.ghostId, '1.0.0');
+    runtime.readInstanceForContent.mockReturnValue({ instanceKey: item.ghostId, contentRelId: item.ghostId,
+      ghostId: item.ghostId, namespace: 'acme', namespaceState: 'unconfirmed', source: 'market', active: true,
+      pluginId: matches ? item.id : 'another-resource', receiptRevision: receipt.revision, packageSha256: receipt.packageSha256! });
+    runtime.readApprovedInstallReceipt.mockReturnValue(receipt);
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, { namespace: 'acme',
+      manifestDigest: ghostManifestDigest(manifest(item.ghostId, '2.0.0')) }));
+    runtime.install.mockImplementationOnce(async () => {
+      const ghost = { manifest: manifest(item.ghostId, '2.0.0'), dir, enabled: false, namespace: 'acme' };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const snapshot = await h.service.snapshot();
+    if (matches) {
+      expect(runtime.install).toHaveBeenCalledTimes(1);
+      expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({ namespace: 'acme',
+        expectedInstalledApproval: ghostInstallApprovalToken({ state: 'approved', revision: receipt.revision }) });
+      expect(runtime.install.mock.calls[0]?.[1]?.sourceChanged).not.toBe(true);
+      expect(h.ledger.installationForAuthorization({ ghostId: item.ghostId, namespace: 'acme' })).toMatchObject({
+        pluginId: item.id, namespace: 'acme', version: '2.0.0', installed: true });
+      expect(runtime.ghosts[0]?.enabled).toBe(false);
+    } else {
+      expect(runtime.install).not.toHaveBeenCalled();
+      expect(snapshot.items[0]?.installState).toBe('conflict');
     }
   });
 
