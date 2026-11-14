@@ -303,3 +303,75 @@ describe('Linux close behavior', () => {
     await waitFor(() => expect(api.notifyLinuxCloseBehaviorPromptShown).toHaveBeenCalledOnce());
   });
 });
+
+// 测试价值
+// - 生产入口与可观察结果:WindowControls 挂载时查询 getMaximizeState 并订阅
+//   onMaximizeStateChange;标题栏最大化按钮的图标随窗口最大化状态在
+//   lucide-square(最大化)与 lucide-copy(还原)间切换,桥缺失时回退最大化图标。
+// - Bug/规则依据:用户可见缺口 —— 还原此前没有任何视觉入口(§3.2 结果差异:
+//   最大化态下图标与点击语义不符)。
+// - 现有覆盖缺口:本文件此前只覆盖关闭路径,最大化状态分支无覆盖。
+// - 最小失败输入:挂载查询返回 true / 推送 false / electronAPI 缺两个新方法。
+// - tier:unit(jsdom;断言渲染出的图标需要 DOM,与被测组件同文件)。
+
+function installMaximizeApi(initialMaximized: boolean) {
+  const sink: { push: ((value: boolean) => void) | null } = { push: null };
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: {
+      platform: 'win32',
+      windowMinimize: vi.fn(),
+      windowMaximize: vi.fn(),
+      windowClose: vi.fn(),
+      windowBehavior: { onWindowsCloseBehaviorRequested: () => () => {} },
+      getMaximizeState: vi.fn(async () => initialMaximized),
+      onMaximizeStateChange: vi.fn((callback: (value: boolean) => void) => {
+        sink.push = callback;
+        return () => {
+          sink.push = null;
+        };
+      }),
+    } as unknown as Window['electronAPI'],
+  });
+  return {
+    pushMaximizeState: (value: boolean) => {
+      act(() => sink.push?.(value));
+    },
+  };
+}
+
+describe('title-bar maximize⇄restore affordance', () => {
+  it('starts from the queried state and follows push updates', async () => {
+    const api = installMaximizeApi(true);
+    render(<WindowControls />);
+    const button = () => screen.getByRole('button', { name: 'titleBar.maximizeOrRestore' });
+
+    await waitFor(() => expect(button().querySelector('.lucide-copy')).toBeTruthy());
+    expect(button().querySelector('.lucide-square')).toBeNull();
+
+    api.pushMaximizeState(false);
+    await waitFor(() => expect(button().querySelector('.lucide-square')).toBeTruthy());
+    expect(button().querySelector('.lucide-copy')).toBeNull();
+
+    api.pushMaximizeState(true);
+    await waitFor(() => expect(button().querySelector('.lucide-copy')).toBeTruthy());
+  });
+
+  it('falls back to the maximize icon when the bridge is missing', () => {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        platform: 'win32',
+        windowMinimize: vi.fn(),
+        windowMaximize: vi.fn(),
+        windowClose: vi.fn(),
+        windowBehavior: { onWindowsCloseBehaviorRequested: () => () => {} },
+      } as unknown as Window['electronAPI'],
+    });
+    render(<WindowControls />);
+    const button = screen.getByRole('button', { name: 'titleBar.maximizeOrRestore' });
+
+    expect(button.querySelector('.lucide-square')).toBeTruthy();
+    expect(button.querySelector('.lucide-copy')).toBeNull();
+  });
+});

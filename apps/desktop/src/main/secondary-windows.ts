@@ -22,6 +22,7 @@ import path from 'node:path';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { createLogger } from './logger.js';
+import { installWindowMaximizeStateBroadcast } from './windowMaximizeState.js';
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { isAppContentWindow, markAppContentWindow } from './windowFocusClassifier.js';
 import {
@@ -203,6 +204,7 @@ export function openSessionInNewWindow(
   installWindowFullscreenStateBroadcast(win, {
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
   });
+  installWindowMaximizeStateBroadcast(win);
   // E4D:副窗加入 set,供 vibrancy 动态开关;关闭时移除。
   secondaryWindows.add(win);
   win.once('closed', () => {

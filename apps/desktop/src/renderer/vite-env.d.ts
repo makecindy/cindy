@@ -4270,6 +4270,12 @@ interface ElectronAPI {
   getFullscreenState: () => Promise<boolean>;
   toggleFullscreen: () => Promise<boolean>;
 
+  /** Maximize state for the title-bar maximize⇄restore icon; mount-time
+   *  query plus per-window push (covers maximized window-state restores that
+   *  happen before the renderer subscribes). */
+  getMaximizeState: () => Promise<boolean>;
+  onMaximizeStateChange: (callback: (maximized: boolean) => void) => () => void;
+
   /** 窗口是否对用户不可见(最小化 / hide)。装饰动画闸门用它兜底 ——
    *  backgroundThrottling 关闭时 document.visibilityState 会一直停在 visible。 */
   onWindowHiddenChange: (callback: (hidden: boolean) => void) => () => void;
