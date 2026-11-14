@@ -1447,7 +1447,7 @@ import {
   isSupportedRuntimeEffort,
   resolveRetainedRuntimeEffort,
 } from './runtimeSelectionAxes.js';
-import { runSchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import { runSchedulerQueuedPreparation, type SchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
 import {
   acceptSessionRuntimeAxisMutation,
   acceptSessionRuntimeMutation,
@@ -5379,10 +5379,7 @@ export type { SchedulerQueuedPromptRequest, SchedulerEnqueueResult } from './sch
 let schedulerQueueBridgeHolder: SchedulerQueueBridge | null = null;
 /** 排队心跳的 discard 监听(clientId → 通知 runner 收尾)。派发/丢弃后清条目。 */
 const schedulerQueuedPromptDiscardWatchers = new Map<string, () => void>();
-const schedulerQueuedPromptPreparations = new Map<string, {
-  onPreparing: () => Promise<void>;
-  onPreparationFailed?: (error: unknown) => void;
-}>();
+const schedulerQueuedPromptPreparations = new Map<string, SchedulerQueuedPreparation>();
 
 export async function ensureSchedulerQueueRestored(sessionId: string): Promise<boolean> {
   // 桥未就绪时不能把未知队列当成空闲；让 runner 沿用恢复待定的顺延路径。
@@ -19183,8 +19180,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       const queuedClientId = (args[3] as { persistUserMessage?: { clientId?: string } } | undefined)
         ?.persistUserMessage?.clientId;
-      await runSchedulerQueuedPreparation(queuedClientId, schedulerQueuedPromptPreparations,
-        () => { if (queuedClientId) schedulerQueuedPromptDiscardWatchers.delete(queuedClientId); });
+      args[1] = await runSchedulerQueuedPreparation(queuedClientId, schedulerQueuedPromptPreparations,
+        () => { if (queuedClientId) schedulerQueuedPromptDiscardWatchers.delete(queuedClientId); }, args[1]);
       return botInput?.remoteHostId ? sendToAgentAcceptedUnlocked(...args)
         : withCindyMakeProjectUse(app.getPath('userData'), botInput?.workingDir, () => sendToAgentAcceptedUnlocked(...args));
     });

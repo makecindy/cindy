@@ -1,6 +1,6 @@
 import type { AgentInputCoordinator } from './agent-input-coordinator.js';
 import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
-import type { SchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import type { SchedulerQueuedPreparation, SchedulerQueuedPreparationResult } from './schedulerQueuedPreparation.js';
 
 export interface SchedulerQueuedPromptRequest {
   sessionId: string;
@@ -11,8 +11,8 @@ export interface SchedulerQueuedPromptRequest {
   /** 落库与队列气泡展示的用户原始 prompt(不含隐藏协议)。 */
   persistedContent: string;
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
-  /** Runs under the send lock before the live session is captured or a user row is written. */
-  onPreparing?: () => Promise<void>;
+  /** Runs under the send lock; an optional suffix applies only to the outbound message. */
+  onPreparing?: () => Promise<SchedulerQueuedPreparationResult>;
   /** Reject the queued run if preparation fails before dispatch. */
   onPreparationFailed?: (error: unknown) => void;
   /** 排队项被 drain 派发、turn 已被会话接受时回调(等价直发路径的 send onAccepted)。 */

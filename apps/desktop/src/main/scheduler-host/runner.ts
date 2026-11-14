@@ -100,6 +100,7 @@ import { AcceptedCallbackDispatchCancelled } from '../maker-ipc/acceptedCallback
 
 
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
+import type { SchedulerQueuedPreparationResult } from '../maker-ipc/schedulerQueuedPreparation.js';
 import {
   sanitizeSendOutcomeError,
   toDesktopSessionDispatchOutcome,
@@ -236,8 +237,8 @@ export interface SchedulerQueueDeps {
     persistedContent: string;
     inheritTargetPlanMode?: boolean;
     origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
-    /** Runs under the send lock before the queued Session is captured. */
-    onPreparing?: () => Promise<void>;
+    /** Runs under the send lock; returned guidance is appended only to the wire message. */
+    onPreparing?: () => Promise<SchedulerQueuedPreparationResult>;
     onPreparationFailed?: (error: unknown) => void;
     onAccepted: (queuedPermissions?: {
       permissionMode?: string;
@@ -2571,10 +2572,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
   ): Promise<FireResult> {
     const sq = this.deps.schedulerQueue;
     if (!sq) throw new Error('fireHeartbeatViaQueue requires schedulerQueue dep');
-    const promptToSend = buildScheduledRunPrompt(
-      schedule, ctx, holder.preRunHookOutput,
-      routingBaseline.resolvedSelection?.agentKind ?? routingBaseline.agentKind,
-    );
+    // Engine-specific guidance is decided after queued owner-route restoration.
+    const promptToSend = buildScheduledRunPrompt(schedule, ctx, holder.preRunHookOutput, null);
     const origin = {
       kind: 'scheduler',
       scheduleId: schedule.id,
@@ -2717,10 +2716,21 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
         }
         const preparingLive = this.deps.maker.getSession(sessionId);
-        if ((preparingLive?.agentKind ?? routingBaseline.agentKind ?? schedule.agentKind) !== 'pi') return;
-        preparedPiRoute = await this.prepareQueuedPiRouting(
-          schedule, sessionId, preparingLive, routingBaseline,
-        );
+        if ((preparingLive?.agentKind ?? routingBaseline.agentKind ?? schedule.agentKind) === 'pi') {
+          preparedPiRoute = await this.prepareQueuedPiRouting(
+            schedule, sessionId, preparingLive, routingBaseline,
+          );
+        }
+        if (schedule.silentWhenIdle) {
+          return { getAppendText: async () => {
+            // A pre-persistence failure can retry with a fresh wire message after
+            // the user changes engines. Cache preparation, not its engine choice.
+            const dispatchAgentKind = this.deps.maker.getSession(sessionId)?.agentKind
+              ?? (await this.deps.maker.getSessionMeta(sessionId))?.agentKind
+              ?? routingBaseline.agentKind ?? schedule.agentKind;
+            return dispatchAgentKind === 'pi' ? PI_SILENT_COMPLETION_INSTRUCTION : undefined;
+          } };
+        }
       },
       onPreparationFailed: (error) => {
         failDispatch(error instanceof Error ? error : new Error(String(error)));
@@ -4031,11 +4041,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
   }
 }
 
+const PI_SILENT_COMPLETION_INSTRUCTION =
+  '\nIf all work has completed successfully and you intentionally omit the final reply, first call cindy_scheduler call_tool({ name: "schedule_silence_current_run", args: { completed: true } }). This acknowledges completion, not just notification silence. Do not use it for failed, unfinished or still-running work.';
+
 export function buildScheduledRunPrompt(
   schedule: Schedule,
   ctx: Pick<FireContext, 'firedAt' | 'webhook'>,
   checkOutput = '',
-  agentKind = schedule.modelAgentKind ?? schedule.agentKind,
+  agentKind: AgentKind | null = schedule.modelAgentKind ?? schedule.agentKind,
 ): string {
   const routineWait = schedule.source === 'bot' && schedule.recurring
     ? '\n\n[Routine checkpoint] For recurring checks with another trigger scheduled, inspect the current state and finish this run once actionable work is handled. If only external progress is pending, leave a concise checkpoint (identifiers, current state and next check) in the final result; do not keep this run alive with repeated sleep/poll calls. A later trigger may start with fresh context: when prior progress is needed, retrieve the previous result from the existing routine or schedule run history instead of assuming it is in this conversation. Complete one-time assignments and preserve explicit instructions requiring continuous observation or a delivery deadline.'
@@ -4046,9 +4059,7 @@ export function buildScheduledRunPrompt(
   return `${schedule.prompt}${checkOutput}${webhook}${buildScheduledRunContextInstruction(schedule, ctx)}${routineWait}${
     schedule.silentWhenIdle
       ? buildSilentRunInstruction(schedule.source === 'bot')
-        + (agentKind === 'pi'
-          ? '\nIf all work has completed successfully and you intentionally omit the final reply, first call cindy_scheduler call_tool({ name: "schedule_silence_current_run", args: { completed: true } }). This acknowledges completion, not just notification silence. Do not use it for failed, unfinished or still-running work.'
-          : '')
+        + (agentKind === 'pi' ? PI_SILENT_COMPLETION_INSTRUCTION : '')
       : ''
   }`;
 }

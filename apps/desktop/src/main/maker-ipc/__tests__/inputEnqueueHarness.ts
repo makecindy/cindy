@@ -5,7 +5,7 @@ import { AgentInputCoordinator, markManualSchedulerContinuation } from '../agent
 import { stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin } from '../makerSendTransaction.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import { isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
-import type { SchedulerQueuedPromptRequest } from '../register.js';
+import type { SchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 
 // Execute the production IPC handler while injecting only its host services.
 // Shared by queue tests and the real scheduler-runner continuation regression.
@@ -30,7 +30,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   const sameItem = (item: AgentInputQueuedMessage) => item;
   const owner = {};
   const acceptedCallbacks = new Map<string, () => void | Promise<void>>();
-  const preparations = new Map<string, Pick<SchedulerQueuedPromptRequest, 'onPreparing' | 'onPreparationFailed'>>();
+  const preparations = new Map<string, SchedulerQueuedPreparation>();
   const bindings = {
     inputCoordinator: coordinator,
     CONTINUE_AFTER_APP_EXIT_PROMPT,

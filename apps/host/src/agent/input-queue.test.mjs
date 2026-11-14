@@ -301,6 +301,60 @@ test('scheduled input waits behind user input, deduplicates and retains its orig
   assert.deepEqual(h.persisted.find(row => row.clientId === result.clientId)?.agentMeta?.origin, request.origin);
 });
 
+// #10479 review P1 / unit: the bridge has already copied queued text before
+// preparation. The Host must append its result to the actual outbound message,
+// without replacing a Continue body or persisting dispatch-only guidance.
+test('scheduled preparation appends guidance only to the dispatched Host message', async t => {
+  t = lifoCleanup(t);
+  const h = createHarness(); t.after(() => h.queue.dispose());
+  await enqueue(h, 'scheduled-task', { clientId: 'user', text: 'user input' });
+  const request = scheduledInput({
+    text: 'Continue',
+    onPreparing: async () => ({ getAppendText: () => '\nPi completion guidance' }),
+  });
+  const result = await h.queue.schedulerQueue().enqueuePrompt(request);
+  assert.equal(request.text, 'Continue');
+  h.maker.getSession('scheduled-task').emit({ type: 'done' });
+  await waitFor(() => h.maker.getSession('scheduled-task').sent.length === 2);
+  assert.equal(h.maker.getSession('scheduled-task').sent[1], 'Continue\nPi completion guidance');
+  assert.equal(h.persisted.find(row => row.clientId === result.clientId)?.content, request.persistedContent);
+  assert.equal(request.text, 'Continue');
+});
+
+// #10479 review P1 / integration: a startup failure after successful preparation
+// restores the original queue head; retry builds and sends a new wire message.
+test('scheduled guidance survives a pre-persistence startup failure and fresh-message retry', async t => {
+  t = lifoCleanup(t);
+  const h = createHarness(); t.after(() => h.queue.dispose());
+  const create = h.maker.createSession;
+  h.maker.createSession = async () => { throw new Error('binary unavailable'); };
+  let prepared = 0; let accepted = 0;
+  const request = scheduledInput({
+    text: 'Continue',
+    onPreparing: async () => {
+      prepared++;
+      return { getAppendText: () => '\nPi completion guidance' };
+    },
+    onAccepted: () => { accepted++; },
+  });
+  const result = await h.queue.schedulerQueue().enqueuePrompt(request);
+  await waitFor(() => Boolean(h.queue.projection('scheduled-task').error));
+  assert.equal(prepared, 1);
+  assert.equal(accepted, 0);
+  assert.equal(h.persisted.length, 0);
+  assert.equal(h.queue.schedulerQueue().isPromptTracked('scheduled-task', result.clientId), true);
+  assert.equal(h.queue.projection('scheduled-task').pendingQueue[0].text, 'Continue');
+  h.maker.createSession = create;
+  await h.queue.retryLastError('scheduled-task');
+  await waitFor(() => h.maker.getSession('scheduled-task')?.sent.length === 1);
+  assert.deepEqual(h.maker.getSession('scheduled-task').sent, ['Continue\nPi completion guidance']);
+  assert.equal(prepared, 1);
+  assert.equal(accepted, 1);
+  assert.deepEqual(h.persisted.filter(row => row.clientId === result.clientId).map(row => row.content),
+    [request.persistedContent]);
+  assert.equal(request.text, 'Continue');
+});
+
 test('removing a scheduled queue row notifies the runner once and never starts that input', async t => {
   t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
