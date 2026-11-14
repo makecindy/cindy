@@ -304,6 +304,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     // 验证恢复事件是否交给该 peer 的调度器。不是双机故障恢复的端到端验收。
     const callbacks: Array<(peer: string, streamId: string) => void> = [];
     const replayActiveSubscriptions = vi.fn();
+    const broadcast = vi.fn();
     const sharedHostStreams = new Map<string, { streamId: string; epoch: number }>();
     if (sameStream) sharedHostStreams.set(peer, { streamId: 'accepted-stream', epoch: 1 });
     acceptedRegistration.runInNewContext({
@@ -312,6 +313,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       parseSharedTaskPeer,
       shortDeviceRef,
       replayActiveSubscriptions,
+      broadcast,
+      DEVICE_LINK_PUSH,
       sharedHostStreams,
       sharedHostSourceEpoch: 1,
     });
@@ -319,6 +322,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     expect(replayActiveSubscriptions).not.toHaveBeenCalled();
 
     callbacks[0](peer, 'accepted-stream');
+
+    expect(broadcast).toHaveBeenCalledWith(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
 
     // Exact target matters: losing the peer argument would replay healthy peers.
     // Ordinary/guest peers and an unchanged shared-host stream must still replay

@@ -487,7 +487,8 @@ let sharedHostSourceEpoch = 0;
 const transportTimeoutReopen = createTransportTimeoutReopenLoop({
   // Local Main→Renderer projection only; the relay and neighboring peers remain online.
   onReset: (deviceId) => broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId }),
-  onReopened: (deviceId) => broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId }),
+  // onPeerStreamAccepted emits the reopen event after the handshake; avoid a duplicate here.
+  onReopened: () => undefined,
   reopen: async (deviceId) => {
     await openRemoteLink(deviceId);
     // link 重建成功后定向补一次订阅重放:transport-timeout 场景被控端保留了
@@ -1397,6 +1398,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 控制端列表 running/未读状态永久冻结,invoke 与 session 事件流却正常)。
     // 订阅按既有契约幂等,重放经调度器按 peer 串行去重;无订阅快照的 peer 是 no-op;
     // provider-share guest 只轮询不订阅,排除在外。
+    // 与入站 accept 和 transport-timeout 重开保持同一条 Main→Renderer 恢复投影；
+    // 出站链路恢复时 relay/presence 可能全程在线，不能依赖其它恢复事件补发。
+    broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
     if (!isProviderSharePeer(peer)) {
       replayActiveSubscriptions(`link-accepted:${shortDeviceRef(peer)}`, peer);
     }
