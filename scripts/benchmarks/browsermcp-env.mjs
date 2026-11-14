@@ -41,26 +41,54 @@ exec ${quote(process.execPath)} ${quote(entry)} host "$@"
     '--password-store=basic', '--no-default-browser-check', '--disable-search-engine-choice-screen',
     `--disable-extensions-except=${extension}`, `--load-extension=${extension}`, '--window-size=1280,900', 'about:blank'],
   { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, HOME: home } });
-  process.once('exit', () => { try { chrome.kill('SIGKILL'); } catch { /* already gone */ } });
+  const killOnExit = () => { try { chrome.kill('SIGKILL'); } catch { /* already gone */ } };
+  process.once('exit', killOnExit);
+  const exited = new Promise((resolve) => {
+    chrome.once('exit', resolve);
+    // A failed spawn has no process to reap and emits error instead of exit.
+    chrome.once('error', () => { if (!chrome.pid) resolve(); });
+  });
+  void exited.then(() => process.removeListener('exit', killOnExit));
+  const waitForExit = async () => {
+    let timer;
+    try {
+      return await Promise.race([
+        exited.then(() => true),
+        new Promise((resolve) => { timer = setTimeout(() => resolve(false), 2000); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const stop = async () => {
+    if (!chrome.pid || chrome.exitCode !== null || chrome.signalCode !== null) return;
+    chrome.kill('SIGTERM');
+    if (await waitForExit()) return;
+    chrome.kill('SIGKILL');
+    if (!await waitForExit()) throw new Error('Chrome did not exit after SIGKILL');
+  };
   let chromeErr = '';
   chrome.stderr.on('data', (chunk) => { chromeErr = (chromeErr + chunk).slice(-4000); });
-  // The host writes a discovery record once the extension has connected.
-  const run = path.join(home, '.browsermcp', 'run');
-  const connected = () => fs.existsSync(run) && fs.readdirSync(run).some((file) => file.endsWith('.json'));
-  const deadline = Date.now() + 30_000;
-  while (!connected() && Date.now() < deadline) {
-    if (chrome.exitCode !== null) throw new Error(`Chrome exited: ${chromeErr.slice(-1500)}`);
-    await new Promise((resolve) => setTimeout(resolve, 200));
+  try {
+    // Install the error listener synchronously, before spawn can emit ENOENT/EACCES.
+    await new Promise((resolve, reject) => {
+      chrome.once('spawn', resolve);
+      chrome.once('error', reject);
+    });
+    // The host writes a discovery record once the extension has connected.
+    const run = path.join(home, '.browsermcp', 'run');
+    const connected = () => fs.existsSync(run) && fs.readdirSync(run).some((file) => file.endsWith('.json'));
+    const deadline = Date.now() + 30_000;
+    while (!connected() && Date.now() < deadline) {
+      if (chrome.exitCode !== null || chrome.signalCode !== null) throw new Error(`Chrome exited: ${chromeErr.slice(-1500)}`);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (!connected()) throw new Error(`BrowserMCP host never connected: ${chromeErr.slice(-1500)}`);
+    return { mcpServer: { command: launcher, args: ['stdio'] }, stop };
+  } catch (error) {
+    try { await stop(); } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'BrowserMCP startup and cleanup failed', { cause: error });
+    }
+    throw error;
   }
-  if (!connected()) {
-    chrome.kill('SIGKILL');
-    throw new Error(`BrowserMCP host never connected: ${chromeErr.slice(-1500)}`);
-  }
-  return {
-    mcpServer: { command: launcher, args: ['stdio'] },
-    stop: async () => {
-      chrome.kill('SIGTERM');
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    },
-  };
 }
