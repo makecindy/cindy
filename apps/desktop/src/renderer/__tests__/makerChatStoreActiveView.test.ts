@@ -253,13 +253,26 @@ describe('makerChatStore active view tracking', () => {
   });
 
   // 持续挂载的 view（Orca worker 面板）没有 leaveView 时机，trim 原本永远轮不到它：
-  // 30s 维护拍必须把贴底读者的窗口裁回 TRIM_TARGET；上翻阅读中仍然不裁。
-  it('trims a continuously mounted near-bottom view on the maintenance tick', async () => {
+  // 30s 维护拍必须能裁贴底读者的窗口，但裁剪必须按「渲染窗口覆盖地板」——
+  // 渲染窗口外的原始行没有 DOM，裁掉才可证不可见（折叠工具过程/隐藏子代理行会让
+  // 贴底 ≠ 前缀离屏，Greptile P1）。快照缺地板字段时无法证明，不裁。
+  it('trims a continuously mounted near-bottom view above its render-window floor on the maintenance tick', async () => {
     const view = await readingWindow('mounted-tail');
+    saveSessionScroll(view.id, { windowAnchorKey: null, viewportTopKey: 'msg-client-149',
+      messageClientId: 'client-149', offset: 0, isNearBottom: true, windowFloorClientId: 'client-149' });
+    vi.advanceTimersByTime(31_000);
+    const messages = makerChatStore.getSnapshot(view.id).messages;
+    expect(messages).toHaveLength(201); // 350 - 149：窗口地板之上全裁，地板行本身保留
+    expect(messages[0]?.clientId).toBe('client-149');
+    view.leave();
+  });
+
+  it('keeps a mounted near-bottom view untrimmed when the snapshot has no render-window floor', async () => {
+    const view = await readingWindow('mounted-no-floor');
     saveSessionScroll(view.id, { windowAnchorKey: null, viewportTopKey: 'msg-client-0',
       messageClientId: 'client-0', offset: 0, isNearBottom: true });
     vi.advanceTimersByTime(31_000);
-    expect(makerChatStore.getSnapshot(view.id).messages).toHaveLength(200);
+    expect(makerChatStore.getSnapshot(view.id).messages).toHaveLength(350);
     view.leave();
   });
 
@@ -271,16 +284,20 @@ describe('makerChatStore active view tracking', () => {
   });
 
   it('bounds a busy session above its in-flight turn floor on the maintenance tick', async () => {
-    // 300 行完成轮 + user 触发行 + 200 行运行轮：501 行窗口在 leaveView / 维护拍上
-    // 都必须收敛到整段在途轮（触发行 + 200 行 = 201 行），不砍进运行轮 —— 首行是
-    // user 触发行。
+    // 300 行完成轮 + user 触发行 + 100 行运行轮 + 一条插话行（steer，不打断轮）+
+    // 100 行运行轮：502 行窗口在 leaveView / 维护拍上都必须收敛到整段在途轮
+    // （触发行 + 201 行 = 202 行），不砍进运行轮 —— 首行是 user 触发行；
+    // 轮起点必须跳过 steer 插话行（Greptile P1：插话不是轮起点）。
     const busyId = sid('busy-worker');
     const leaveBusy = enter(busyId);
     const at = (i: number) => new Date(BASE_TIME.getTime() + i * 1000).toISOString();
     vi.mocked(messageService.list).mockResolvedValueOnce([
       ...Array.from({ length: 300 }, (_, i) => dbMessage(busyId, `old-${i}`, 'x', at(i))),
       { ...dbMessage(busyId, 'trigger', 'dispatch', at(300)), role: 'user' },
-      ...Array.from({ length: 200 }, (_, i) => dbMessage(busyId, `run-${i}`, 'y', at(401 + i))),
+      ...Array.from({ length: 100 }, (_, i) => dbMessage(busyId, `run-a-${i}`, 'y', at(401 + i))),
+      // 插话行:历史持久化形态是 agentMeta.delivery=steer(映射后成为 ChatMessage.delivery)。
+      { ...dbMessage(busyId, 'steer', '插话', at(501)), role: 'user', agentMeta: { delivery: 'steer' } },
+      ...Array.from({ length: 100 }, (_, i) => dbMessage(busyId, `run-b-${i}`, 'y', at(601 + i))),
     ]);
     makerChatStore.ensureInitialMessages(busyId);
     await flushPromises();
@@ -289,8 +306,9 @@ describe('makerChatStore active view tracking', () => {
     leaveBusy();
     vi.advanceTimersByTime(31_000);
     const busyMessages = makerChatStore.getSnapshot(busyId).messages;
-    expect(busyMessages).toHaveLength(201);
+    expect(busyMessages).toHaveLength(202);
     expect(busyMessages[0]?.clientId).toBe('client-trigger');
+    expect(busyMessages.some((m) => m.clientId === 'client-steer')).toBe(true);
 
     // 没有任何 user 行 → 轮边界定位不到，维持豁免不裁。
     const noUser = await readingWindow('busy-no-user');

@@ -4441,6 +4441,16 @@ export function MessageStream({
         }
         itemHeights = { width: items.getBoundingClientRect().width, byKey };
       }
+      // 渲染窗口覆盖地板:窗口首 item 覆盖的最老原始行。首 item 可能是无源行的
+      // 横幅(fork_origin 等),向后走到第一个有源行的 item 为止;全都没有则缺省。
+      let windowFloorClientId: string | undefined;
+      for (let index = 0; index < visible.length; index += 1) {
+        const anchors = collectDeleteAnchorClientIds([visible[index]]);
+        if (anchors.length > 0) {
+          windowFloorClientId = anchors[0];
+          break;
+        }
+      }
       saveSessionScroll(sessionId, {
         windowAnchorKey: firstVisibleItemKeyRef.current,
         viewportTopKey: measured.viewportTopKey,
@@ -4455,6 +4465,7 @@ export function MessageStream({
         messageOffset: measured.messageOffset,
         itemHeights,
         isNearBottom: isNearBottomRef.current,
+        windowFloorClientId,
         anchoredForwardCount:
           firstVisibleItemKeyRef.current !== null ? anchoredForwardItemsRef.current : undefined,
       });

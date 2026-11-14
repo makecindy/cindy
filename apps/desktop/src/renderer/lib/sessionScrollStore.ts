@@ -32,6 +32,11 @@ export interface SessionScrollSnapshot {
   itemHeights?: { width: number; byKey: Record<string, number> };
   /** 离开时是否贴在底部。true 时不需要还原,重建后正常 pin 到底即可。 */
   isNearBottom: boolean;
+  /** 当前渲染窗口覆盖的最老原始消息 clientId(窗口首 item 的首个源行)。
+   *  渲染窗口外的原始行没有 DOM —— store 裁剪活动视图的窗口时只允许裁到它
+   *  之下;折叠/隐藏让「贴底」不再等价于「前缀离屏」,必须按窗口覆盖裁。
+   *  窗口未建立或旧版快照无此字段时缺省,store 侧保守不裁。 */
+  windowFloorClientId?: string;
   /**
    * render-window-bidirectional: 锚定窗口的向后 item 上界。
    * 仅在 windowAnchorKey !== null 时写入；null 表示旧版快照（无此字段）或默认窗口。

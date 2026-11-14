@@ -4125,30 +4125,44 @@ function _trimMessagesIfNeeded(): void {
 function _trimSessionMessages(sessionId: string): void {
   const state = sessions.get(sessionId);
   if (!state || state.messages.length <= TRIM_THRESHOLD) return;
-  // 正在被看：贴底读者（含还没存过快照的新挂视图）的视口在窗口尾部，头部早已滚出
-  // 屏幕，裁掉不可见；上翻阅读中不裁 —— 视口里的行不能删，锚点复位兜不住视口内
-  // 内容的消失。
-  if (_activeViewSessions.has(sessionId) && readSessionScroll(sessionId)?.isNearBottom === false) {
-    return;
+  // 裁剪地板集合:所有约束解析成功才允许裁,start 取 min(len - TRIM_TARGET, 各地板)。
+  const floors: number[] = [];
+  // 正在被看：读者视口必须在窗口尾部（贴底）。但渲染窗口会折叠工具过程、隐藏子代理
+  // 内部行 —— 贴底不代表原始前缀已离屏（一轮提问+300 条折叠工具行+回答可以同屏），
+  // 所以还必须按「渲染窗口覆盖地板」裁：窗口外的原始行没有 DOM，裁掉才可证不可见；
+  // 上翻阅读中不裁；快照缺 windowFloorClientId（旧快照/窗口未建立）时无法证明前缀
+  // 不可见，同样不裁。
+  if (_activeViewSessions.has(sessionId)) {
+    const scroll = readSessionScroll(sessionId);
+    if (scroll?.isNearBottom === false) return;
+    const floorIdx = scroll?.windowFloorClientId
+      ? messageIndexByClientId(state.messages, scroll.windowFloorClientId)
+      : -1;
+    if (floorIdx < 0) return;
+    floors.push(floorIdx);
   }
-  // 正在忙：不再整窗豁免，改为以「在途轮起始行」（最后一条 user 行）为地板 ——
-  // 完成轮照裁，运行轮整体保留（pending 交互、running 快照、远端乐观气泡都
-  // 住在当前轮里）。找不到 user 行就无法定位轮边界，维持原豁免。此前 busy +
-  // 挂载双豁免叠加时窗口只增不减：长协作（Orca worker 连续派活）攒出几千行，
-  // 切任务迟滞、提问导航条堆成刻度墙。
-  let floor = -1;
+  // 正在忙：不再整窗豁免，改为以「在途轮起始行」为地板 —— 完成轮照裁，运行轮整体
+  // 保留（pending 交互、running 快照、远端乐观气泡都住在当前轮里）。轮起点是最后
+  // 一条非插话 user 行（delivery: 'steer' 的插话不打断轮，与 MessageStream 的轮
+  // 边界判定同源）；找不到时无法定位轮边界，维持原豁免。此前 busy + 挂载双豁免
+  // 叠加时窗口只增不减：长协作（Orca worker 连续派活）攒出几千行，切任务迟滞、
+  // 提问导航条堆成刻度墙。
   if (_isSessionBusy(sessionId, state)) {
+    let turnStart = -1;
     for (let i = state.messages.length - 1; i >= 0; i -= 1) {
-      if (state.messages[i].role === 'user') {
-        floor = i;
+      const m = state.messages[i];
+      if (m.role === 'user' && m.delivery !== 'steer') {
+        turnStart = i;
         break;
       }
     }
-    if (floor < 0) return;
+    if (turnStart < 0) return;
+    floors.push(turnStart);
   }
-  const start = floor >= 0
-    ? Math.min(state.messages.length - TRIM_TARGET, floor)
-    : state.messages.length - TRIM_TARGET;
+  const start = Math.min(
+    state.messages.length - TRIM_TARGET,
+    ...floors,
+  );
   if (start <= 0) return;
 
   // 裁剪等于一次代际重置:它砍掉窗口中段。in-flight 的翻页 / 跳转补齐若仍按 pre-trim
@@ -4163,12 +4177,14 @@ function _trimSessionMessages(sessionId: string): void {
     if (s.messages.length <= TRIM_THRESHOLD) {
       return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     }
-    // floor 与外层守卫同源（setState 同步拿到同一份 state，见上）。busy 长轮地板
-    // 下保留行数可以超过 TRIM_TARGET —— 那是还在跑的整轮，砍它才出问题。
-    const start = floor >= 0
-      ? Math.min(s.messages.length - TRIM_TARGET, floor)
-      : s.messages.length - TRIM_TARGET;
-    const retained = start > 0 ? s.messages.slice(start) : s.messages;
+    // 各地板与外层守卫同源（setState 同步拿到同一份 state，见上）。任一地板下
+    // 保留行数可以超过 TRIM_TARGET —— 那是还在跑的整轮/仍被渲染窗口覆盖的行，
+    // 砍它才出问题。
+    const windowStart = Math.min(
+      s.messages.length - TRIM_TARGET,
+      ...floors,
+    );
+    const retained = windowStart > 0 ? s.messages.slice(windowStart) : s.messages;
     // 连续尾段被裁短、孤岛已不在保留窗口里:游标清成 null,loadOlderMessages 走
     // beforeTs(messages[0]),从新的窗口下沿接着往更早翻。
     // 保留窗口里还夹着孤岛(最新连续尾段不足 200 行):必须留下「最新连续段最老一行」
