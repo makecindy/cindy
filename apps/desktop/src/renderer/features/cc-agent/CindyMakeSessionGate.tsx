@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Navigate } from 'react-router-dom';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -18,7 +18,17 @@ export function CindyMakeSessionGate({ sessionId, children }: {
   const localSource = useSyncExternalStore(sessionsStore.subscribe, () =>
     sessionId ? sessionsStore.findById(sessionId)?.source : undefined,
   );
-  const knownSource = remoteSource !== undefined ? remoteSource : localSource;
+  const listedSource = remoteSource !== undefined ? remoteSource : localSource;
+  // 列表重拉、镜像重连时任务会短暂不在缓存里。同一任务的来源一经确认就沿用，
+  // 不能因此卸载正在显示的对话再重新挂载（消息清空、滚动位置丢失）。
+  const confirmedRef = useRef<{ id: string; source: string | null } | null>(null);
+  if (sessionId && listedSource !== undefined) {
+    confirmedRef.current = { id: sessionId, source: listedSource };
+  }
+  const confirmed = confirmedRef.current;
+  const knownSource = listedSource !== undefined
+    ? listedSource
+    : confirmed && confirmed.id === sessionId ? confirmed.source : undefined;
   const [loaded, setLoaded] = useState<{ id: string; source: string | null } | null>(null);
   const [failure, setFailure] = useState<{ id: string; reason: ReturnType<typeof sessionEntryFailure> } | null>(null);
   const [retry, setRetry] = useState(0);
