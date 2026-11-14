@@ -195,6 +195,37 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).not.toContain('prefixed with [From Orca Worker].');
   });
 
+  it('steers user follow-ups on running tasks back to the owning worker', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain(
+      '2a. While an Orca team is active and an Orca Worker has a task in flight',
+    );
+    expect(prompt).toContain("is the worker's to handle, not yours");
+    expect(prompt).toContain("in the user's original wording");
+    expect(prompt).toContain('delivered per the correction, interruption, and queue rules above');
+    expect(prompt).toContain('interrupt_worker only when the task must stop and be replaced');
+    expect(prompt).toContain('reconcile other_queued_messages before you end');
+    expect(prompt).toContain('then end the turn per rule 5');
+    expect(prompt).toContain(
+      'If you cannot uniquely tell which worker the message belongs to, ask the user',
+    );
+    // review P1 回归钉：2a 不得自带“可选 steer 否则排队”的第二条修正通道（与既有修正纪律冲突）。
+    expect(prompt).not.toContain('you may explicitly choose delivery=steer');
+    expect(prompt).not.toContain('otherwise send it plainly and let it queue');
+    // 姊妹条目：2a 落在 rule 2 与 rule 3 之间，rule 1–4 既有文本不动。
+    expect(prompt).toContain('1. Discuss task breakdown with the user before dispatching.');
+    expect(prompt).toContain('2. Before any dispatch, call get_workspace_info.');
+    expect(prompt).toContain('3. Dispatches must include Intent, Decisions, Boundaries, and Task;');
+    expect(prompt).toContain('4. If a worker explicitly asks you to reply via send_to_worker, do so.');
+    expect(prompt.indexOf('2. Before any dispatch')).toBeLessThan(
+      prompt.indexOf('2a. While an Orca team is active'),
+    );
+    expect(prompt.indexOf('2a. While an Orca team is active')).toBeLessThan(
+      prompt.indexOf('3. Dispatches must include'),
+    );
+  });
+
   it('keeps Worker routing and disclosure rules when an initial worker exists', () => {
     const prompt = renderOrcaLeadSystemPrompt({ workerId: 'worker-1', sessionId: 'session-1' });
 
@@ -257,6 +288,21 @@ describe('renderOrcaWorkerSystemPrompt', () => {
     expect(workerPrompt).toContain('12. Token hygiene: do not re-issue a tool call just to re-fetch a result you already have and that is still current');
     expect(workerPrompt).toContain('Re-running a state read after something changed, re-running verification (build/test/smoke/LSP) after new edits, and retrying a failed call are not repetition.');
     expect(workerPrompt).toContain('report only a one-line pass/fail summary to the lead — command, outcome and the log file path');
+  });
+
+  it('treats user wording forwarded by the lead as the user speaking', () => {
+    const prompt = renderOrcaWorkerSystemPrompt(workerMeta);
+
+    expect(prompt).toContain(
+      'Messages from the lead arrive prefixed with [From Orca Lead]. Treat them as tasks or instructions from the lead, not user messages.',
+    );
+    expect(prompt).toContain(
+      "When the lead forwards the user's original wording, treat it as the user speaking — it carries the same authority as a direct user instruction.",
+    );
+    expect(prompt).toContain(
+      'When the forwarded message depends on recent Lead-side discussion',
+    );
+    expect(prompt).toContain('read that context with read_lead_history before acting.');
   });
 
   it('keeps the Worker rule concise without the unreachable fallback', () => {
