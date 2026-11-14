@@ -199,3 +199,25 @@ it('withdraws auto-archive when the card is replaced by content without PR marke
   disable();
   prStatuses.clear();
 });
+
+// Rule (2026-11-14): the PR card's copy button matches the title-bar PR popover. The plugin hides it, the host
+// reveals it, and a click copies the declared link on the host side without dispatching to the plugin.
+// Production entry: the card canvas with sanitizer-shaped HTML.
+it('reveals the copy-link button and copies its link without dispatching a card action', async () => {
+  const writeText = vi.fn(() => Promise.resolve());
+  const dispatch = vi.fn();
+  vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+  vi.stubGlobal('electronAPI', { ghosts: { dispatchCardAction: dispatch } });
+  render(<MailCardEditor callId="copy-card" sessionId="copy-session" height={80}
+    html={'<div><button data-ghost-copy-link="https://github.com/octo/repo/pull/9" type="button" style="display:none"></button></div>'} />);
+  const frame = screen.getByTitle('mailReader.title') as HTMLIFrameElement;
+  frame.contentDocument!.open(); frame.contentDocument!.write(frame.srcdoc); frame.contentDocument!.close();
+  fireEvent.load(frame);
+  const button = frame.contentDocument!.querySelector<HTMLElement>('button[data-ghost-copy-link]')!;
+  expect(button.style.display).toBe('inline-flex');
+  expect(button.getAttribute('aria-label')).toBe('sharing.copyLink');
+  fireEvent.click(button);
+  await act(async () => {});
+  expect(writeText).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/9');
+  expect(dispatch).not.toHaveBeenCalled();
+});
