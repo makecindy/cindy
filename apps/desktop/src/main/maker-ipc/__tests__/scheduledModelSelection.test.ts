@@ -236,6 +236,50 @@ function fixture(agentKind: ScheduledModelSelection['agentKind'] = 'codex') {
 }
 
 describe('saved automation model selection at dispatch', () => {
+  // #6709, unit: saved automation choices and owner restoration must resolve
+  // against the execution computer. Existing tests only supply a local catalog.
+  // Minimal input: a remote target whose provider does not exist locally.
+  it('applies and restores a remote selection using only the execution catalog', async () => {
+    const local = vi.fn(async (): Promise<ScheduledModelSelection> => { throw new Error('local provider unavailable'); });
+    const remote = vi.fn(async () => [provider('custom')]);
+    const deps = {
+      ...fixture('pi'),
+      getTarget: async () => ({ agentKind: 'pi' as const, status: 'active', agentDeviceId: 'execution-computer' }),
+      resolveSelection: createScheduledModelSelectionResolver({ readRemoteProviders: remote, resolveLocalSelection: local }),
+    };
+    const original = { ...selection, agentDeviceId: 'execution-computer', effort: 'high' as const };
+    let saved: string | null = null;
+    const scope = createScheduledModelScope({
+      read: async () => ({ profile: original, baseline: saved }),
+      write: async (_id, baseline) => { saved = baseline ? JSON.stringify(baseline) : null; },
+      isBusy: () => false,
+      createId: () => 'scope-remote',
+      apply: async (_id, profile) => { await applyScheduledModelSelection(profile, deps); },
+    });
+    await scope.begin('task');
+    await expect(applyScheduledModelSelection(selection, deps)).resolves.toMatchObject({ ...selection, effort: 'medium' });
+    await scope.restore('task');
+    expect(saved).toBeNull();
+    expect(deps.applyModel).toHaveBeenLastCalledWith(expect.objectContaining(original));
+    expect(local).not.toHaveBeenCalled();
+    expect(remote).toHaveBeenCalledWith('execution-computer', selection.agentKind, selection.model, selection.providerId);
+  });
+
+  it('rejects an unavailable execution catalog without falling back to the controller', async () => {
+    const local = fixture('pi').resolveSelection;
+    const deps = {
+      ...fixture('pi'),
+      getTarget: async () => ({ agentKind: 'pi' as const, status: 'active', agentDeviceId: 'execution-computer' }),
+      resolveSelection: createScheduledModelSelectionResolver({
+        readRemoteProviders: async () => { throw new Error('execution computer offline'); },
+        resolveLocalSelection: local,
+      }),
+    };
+    await expect(applyScheduledModelSelection(selection, deps)).rejects.toThrow('execution computer offline');
+    expect(local).not.toHaveBeenCalled();
+    expect(deps.applyModel).not.toHaveBeenCalled();
+  });
+
   // Unit: same-Harness source changes previously skipped history handoff. Exercise
   // both directions plus legacy inheritance through the real selection entry point.
   it.each([
