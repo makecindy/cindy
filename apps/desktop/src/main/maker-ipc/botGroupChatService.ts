@@ -6,7 +6,7 @@ import { and, asc, desc, eq, gt, inArray, lt, ne } from 'drizzle-orm';
 
 import type { DataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
+import { visibleMessageText } from '../localDb/conversationSearch.pure.js';
 import {
   botGroupMembers,
   botGroupMessages,
@@ -602,7 +602,9 @@ export async function readPersistedReplyText(sessionId: string, messageClientId:
     .from(messages)
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, messageClientId), eq(messages.role, 'assistant')))
     .limit(1);
-  const text = visibleMessageTextForConversationSearch('assistant', row?.content ?? '').trim();
+  // Keep Markdown's line structure: settlement fallback may need reference
+  // definitions to remove a refused local file without publishing its path.
+  const text = visibleMessageText('assistant', row?.content ?? '', { preserveWhitespace: true }).trim();
   return text || null;
 }
 

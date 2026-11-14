@@ -1,7 +1,7 @@
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
 import { extractPlainText } from './agentHandoff.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
-import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
+import { hasMarkdownImages, prepareChatReplyFiles, replyFileLinks } from './chatServerReplyFiles.js';
 import type { ChatUploadAttachment } from './chatServerMedia.js';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 /** Production chat transport. The server owns messages and execution leases;
@@ -242,12 +242,15 @@ const retryableResponse = (error: ChatResponseError) => recoverableAuth(error)
 const LOCAL_FILE_REFUSALS = new Set(['ATTACHMENT_TOO_LARGE', 'ATTACHMENT_UNAVAILABLE']);
 /** Filesystem failures that may clear on their own; any other local read failure is permanent for this delivery. */
 const TRANSIENT_FS_CODES = new Set(['EAGAIN', 'EBUSY', 'EINTR', 'EMFILE', 'ENFILE', 'ENOMEM', 'EIO']);
+/** Node HTTP errors also expose `code` and `syscall`; only these syscalls identify local file access. */
+const LOCAL_FILE_SYSCALLS = new Set(['access', 'chmod', 'close', 'copyfile', 'lstat', 'open', 'read', 'realpath', 'stat']);
 /** A delivery file this computer cannot read or send: refused once, never retried. */
 function fileRefusedHere(error: unknown): boolean {
   if (!(error instanceof Error) || error instanceof ChatResponseError) return false;
   if (LOCAL_FILE_REFUSALS.has(error.message)) return true;
   const { code, syscall } = error as { code?: unknown; syscall?: unknown };
-  return typeof syscall === 'string' && typeof code === 'string' && !TRANSIENT_FS_CODES.has(code);
+  return typeof syscall === 'string' && LOCAL_FILE_SYSCALLS.has(syscall)
+    && typeof code === 'string' && !TRANSIENT_FS_CODES.has(code);
 }
 const id = z.string().uuid();
 /** Only `group` rooms are bot groups; direct companion chats, channels and later kinds are not. */
@@ -2599,6 +2602,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           };
           let contentText = text;
           let files: ChatContentBlock[] = [];
+          let filePreparationFailed = false;
           const ordinaryReply = !run.plan || run.plan.kind === 'talk';
           const validateUpload = async () => {
             assertCurrent();
@@ -2616,10 +2620,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           try {
             if (terminal.outcome !== 'error') {
               if (ordinaryReply) {
-                pending.fileReply ??= await prepareChatReplyFiles(text, run.sessionId, () => {
-                  assertCurrent();
-                  if (run.execution.access_mode === 'chat') throw new Error('ATTACHMENT_UNAVAILABLE');
-                }, !terminal.resultText.trim() ? terminal.resultMessageClientId : undefined);
+                try {
+                  pending.fileReply ??= await prepareChatReplyFiles(text, run.sessionId, () => {
+                    assertCurrent();
+                    if (run.execution.access_mode === 'chat') throw new Error('ATTACHMENT_UNAVAILABLE');
+                  }, !terminal.resultText.trim() ? terminal.resultMessageClientId : undefined);
+                } catch (error) {
+                  filePreparationFailed = true;
+                  throw error;
+                }
                 // Shared reference classification reads file bytes before image import.
                 // Retain the later upload/seal checks and authorize this read as well.
                 if (!pending.reply && pending.fileReply.attachments.length) await validateUpload();
@@ -2641,9 +2650,20 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               && !['STALE_EXECUTOR', 'STALE_EXECUTION', 'EXECUTION_EXPIRED'].includes(code);
             const permanentUpload = code === 'MEDIA_UPLOAD_FAILED' && status !== undefined
               && status >= 400 && status < 500 && ![408, 429].includes(status);
-            if (!ordinaryReply || !(fileRefusedHere(error) || permanentMediaResponse || permanentUpload
-              || ['INVALID_MEDIA_URL', 'ERR_INVALID_URL'].includes(code))) throw error;
-            terminal = pending.terminal = { ...terminal, outcome: 'error', failureCode: 'RUNTIME_ERROR' };
+            if (ordinaryReply && filePreparationFailed && fileRefusedHere(error) && !hasMarkdownImages(text)) {
+              // A local path can become unavailable after the Agent emitted its
+              // reply (for example, it points outside the task directory). The
+              // path must remain unreadable and unuploadable, but losing the
+              // whole message turns an attachment problem into a misleading
+              // runtime failure. Keep the safe Markdown text and omit files.
+              contentText = replyFileLinks(text).text;
+              produced.length = 0;
+              files = [];
+            } else {
+              if (!ordinaryReply || !(fileRefusedHere(error) || permanentMediaResponse || permanentUpload
+                || ['INVALID_MEDIA_URL', 'ERR_INVALID_URL'].includes(code))) throw error;
+              terminal = pending.terminal = { ...terminal, outcome: 'error', failureCode: 'RUNTIME_ERROR' };
+            }
           }
           if (terminal.outcome === 'error') {
             failureCodes.set(`${run.execution.id}:${run.execution.epoch}`, terminal.failureCode ?? 'RUNTIME_ERROR');
