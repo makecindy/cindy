@@ -76,7 +76,11 @@ function keyFile(dir, content, mode = 0o600) {
   return file;
 }
 
-test('a credential key file holding the keyring secret reads and writes the same v11 records', async (t) => {
+// The key file is a Linux-only source and its check relies on POSIX permission
+// bits, which Windows does not report: chmod there only toggles read-only.
+const posixModes = { skip: process.platform === 'win32' && 'credential key files rely on POSIX file permission bits' };
+
+test('a credential key file holding the keyring secret reads and writes the same v11 records', posixModes, async (t) => {
   const userDataDir = tempProfile(t);
   const credentialKeyFile = keyFile(userDataDir, `  ${TEST_SECRET}\n`);
   const viaKeyring = await createPreparedLinuxCredentialStore({ userDataDir, keyPromise: Promise.resolve(testKey()) });
@@ -88,7 +92,7 @@ test('a credential key file holding the keyring secret reads and writes the same
   assert.equal(viaKeyring.read('session'), 'from-file');
 });
 
-test('an unusable credential key file fails with its cause, never falling back', async (t) => {
+test('an unusable credential key file fails with its cause, never falling back', posixModes, async (t) => {
   const userDataDir = tempProfile(t);
   const cases = [
     ['group or world readable', () => keyFile(userDataDir, TEST_SECRET, 0o644), /group or others/],
