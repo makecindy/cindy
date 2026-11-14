@@ -749,10 +749,14 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 派发说明携带 Lead 分配的 `worker_id`；当前任务查询和历史任务列表投影来源标记，
 `parentSessionId` 继续只表示 Fork。运行设备在转发前核验根 Agent 身份，Lead 核验来源设备、
 真实任务、Worker 与当前 active team 后执行同一套本地桥接 handler，不接受任意工具或目标任务。
-运行宿主在任何异步查询前同步捕获协调器当前已接受输入的来源与本轮已消费的输入 ID。
-主动回报只允许当前输入来自 Orca 派活且具有已消费输入；用户在运行设备直接发送、已接受的
-人工插话接管或没有活动输入时返回 `NOT_LEAD_ASSIGNED_TURN`，不转发或结清。不能仅凭持久
-Worker 归属或累计回复 ID 判断当前输入仍属 Lead；只读 Lead 工具与本机 Worker 路径保持不变。
+运行宿主在任何异步查询前同步捕获本轮已消费的输入 ID。主动回报与本机 Worker 一致
+（2026-11-10 裁决，PR #9690）：任何根 Agent 轮次都能调用 `send_to_lead` 送达，不按这一轮
+是否由 Lead 派出拦截；已消费输入 ID 只决定这次回报结清哪些 Lead 派活。用户在运行设备直接
+发送的轮次能送达，但不结清任何派活，与本机 Worker 的「Direct user turns have no Lead
+obligation」相同。此前（#6659 起）要求运行设备上的当前输入带 `orca` 来源，而 device-link
+输入在 `maker:input:enqueue` 边界一律剥掉 wire 来源，来源设备也分不清 Lead 自动派活与那台
+电脑上的其他输入（见 `remote-and-mobile-adaptation.md`），所以真实派活全部被
+`NOT_LEAD_ASSIGNED_TURN` 拒绝，主动回报退化为轮询代报。只读 Lead 工具与本机 Worker 路径保持不变。
 已消费输入 ID 经可选 `reportedInputClientIds` 传给 Lead，
 不向模型工具增加参数。主动回报成功只剔除这些输入的运行期和持久等待记录；即使 B 已经
 排队，A 的回报也不能清掉 B 或提前把 Worker 标为 done。新派活的回滚链同步剔除已回报输入，

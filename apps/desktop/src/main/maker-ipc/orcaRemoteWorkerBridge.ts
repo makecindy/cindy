@@ -27,8 +27,6 @@ export interface OrcaRemoteWorkerBridgeDeps {
   ): Promise<OrcaToolResult>;
   remoteInvoke(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   getActiveInputClientIds?(sessionId: string): readonly string[];
-  /** Host-owned accepted input; cumulative reply IDs alone survive human steering. */
-  getAcceptedInputProvenance?(sessionId: string): { originKind?: string } | null;
   captureReportSettlement?(proxySessionId: string, reportedInputClientIds: readonly string[]): () => Promise<void>;
 }
 
@@ -54,8 +52,8 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
         return null;
       // Freeze before any await: another input can be queued or start during the round trip.
       // These IDs come from the execution host, never from model-supplied tool arguments.
-      const leadAssignedTurn = tool === 'send_to_lead'
-        && deps.getAcceptedInputProvenance?.(ctx.sessionId)?.originKind === 'orca';
+      // They only decide which Lead assignments this report settles; as for a local Worker, a
+      // report from a turn the Lead did not assign is still delivered but settles nothing.
       const reportedInputClientIds = tool === 'send_to_lead'
         ? [...(deps.getActiveInputClientIds?.(ctx.sessionId) ?? [])]
           .filter(isOrcaRemoteWorkerSessionId).slice(-64)
@@ -76,17 +74,13 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
           'REMOTE_WORKER_NOT_SUPPORTED',
         );
       }
-      // Provenance is checked on the execution device before crossing the device boundary.
+      // Caller provenance is checked on the execution device before crossing the device
+      // boundary. Like a local Worker, any root-Agent turn may report: device-link input carries
+      // no trustworthy origin, so requiring a Lead-assigned turn rejected every real assignment.
       if (tool === 'send_to_lead') {
         const auth = authorizeSendToLeadCaller(ctx);
         if (!auth.ok)
           return { content: [{ type: 'text', text: JSON.stringify(auth.error) }], isError: true };
-        if (!leadAssignedTurn || !reportedInputClientIds?.length) {
-          return toolError(
-            'This turn was not assigned by the Lead. Reply in the execution-device task instead.',
-            'NOT_LEAD_ASSIGNED_TURN',
-          );
-        }
       }
       const request = parseOrcaRemoteWorkerBridgeRequest({
         sessionId: ctx.sessionId,
