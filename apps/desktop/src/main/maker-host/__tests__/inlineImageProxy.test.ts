@@ -21,7 +21,7 @@ const decode = (value: string) => {
 type Body = { model: string; input: Array<{ role: string; content: Array<{ type: string; image_url?: string; text?: string }> }> };
 const bodyFor = (images: string[]): Body => ({ model: 'gpt-6-astra', input: [{ role: 'user', content: [{ type: 'input_text', text: 'keep this text' }, ...images.map(image_url => ({ type: 'input_image', image_url }))] }] });
 
-async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => Promise<Body>, encode: ReturnType<typeof vi.fn<typeof compressImageBuffer>>, prepareCalls: () => number, allowRemovals: Array<boolean | undefined>) => Promise<void>, singleImageMaxBytes?: number, oversizedRequestRecovery?: OversizedRequestRecovery) {
+async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => Promise<Body>, encode: ReturnType<typeof vi.fn<typeof compressImageBuffer>>, prepareCalls: () => number, allowRemovals: Array<boolean | undefined>) => Promise<void>, singleImageMaxBytes?: number, oversizedRequestRecovery?: OversizedRequestRecovery, maxRequestBodyBytes?: number) {
   const received: Body[] = [];
   const allowRemovals: Array<boolean | undefined> = [];
   const upstream = createServer(async (req, res) => {
@@ -39,6 +39,7 @@ async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => P
     upstream: `http://127.0.0.1:${port}`,
     transformRequest: [],
     oversizedRequestRecovery,
+    maxRequestBodyBytes,
     requestSizeController: {
       enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
       format: () => 'responses', route: ctx => ({ ...route, providerId: ctx.headers['x-cindy-pi-provider-id'] }), preprocessor,
@@ -169,17 +170,19 @@ it('still prepares images when request-size removal is disabled', async () => {
 });
 
 
-// PR 1 787ab1859b: exercise the actual default 32 MiB ingress limit and legacy
-// disk-backed recovery, then compress only the image that remains inline.
+// PR 1 787ab1859b: scale only the configurable ingress limit to 32 KiB.
+// Keep request-size triggerBytes unchanged; exercise real legacy disk-backed
+// recovery, then compress only the image that remains inline.
 it('compresses the retained image after legacy ingress recovery with removal disabled', async () => {
   const previous = process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-legacy-recovery-'));
+  const maxRequestBodyBytes = 32 * 1024;
   try {
     process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE = '1';
-    const large = await sharp({ create: { width: 3072, height: 3072, channels: 3, background: '#456789' } }).png({ compressionLevel: 0 }).toBuffer();
+    const large = await sharp({ create: { width: 128, height: 96, channels: 3, background: '#456789' } }).png({ compressionLevel: 0 }).toBuffer();
     const retained = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#254769' } }).png({ compressionLevel: 0 }).toBuffer();
     const body = bodyFor([uri(large, 'image/png'), uri(retained, 'image/png')]);
-    expect(Buffer.byteLength(JSON.stringify(body))).toBeGreaterThan(32 * 1024 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(body))).toBeGreaterThan(maxRequestBodyBytes);
     const savedPath = path.join(root, 'preserved.png');
     const commit = vi.fn(async () => {});
     const legacy = vi.fn<OversizedRequestRecovery>(() => (spooled, target) => recoverInlineAttachments(spooled, target, {
@@ -206,7 +209,7 @@ it('compresses the retained image after legacy ingress recovery with removal dis
       expect(compressed.bytes.length).toBeLessThan(retained.length * 0.85);
       expect(await sharp(compressed.bytes).metadata()).toMatchObject({ width: 64, height: 48 });
       expect(await sharp(compressed.bytes).raw().toBuffer()).toEqual(await sharp(retained).raw().toBuffer());
-    }, undefined, legacy);
+    }, undefined, legacy, maxRequestBodyBytes);
   } finally {
     if (previous === undefined) delete process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE;
     else process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE = previous;
