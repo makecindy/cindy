@@ -56,13 +56,15 @@ vi.mock('../../device-link/deviceName.js', () => ({ deviceName: () => 'Fixture' 
 vi.mock('../../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'en', mainStringKeysUnder: () => [], rawMainString: (key: string) => key }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({}));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
-vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => mocks.pool ? [{ id: 'openai', connected: true, auth: { method: 'oauth' } }] : [] }) }));
+vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => mocks.pool ? [{
+  id: mocks.pool.providerId, subscriptionAccountPool: mocks.pool.kind, connected: true, auth: { method: 'oauth', native: 'codex' },
+}] : [] }) }));
 vi.mock('../../subscription-accounts/runtime.js', () => ({
-  readSubscriptionPool: () => mocks.poolRead(),
+  readSubscriptionPool: (...args: unknown[]) => mocks.poolRead(...args),
   refreshSubscriptionPool: (...args: unknown[]) => mocks.poolRefresh(...args),
   onSubscriptionAccountsChanged: (listener: () => void) => { mocks.poolListeners.add(listener); return () => mocks.poolListeners.delete(listener); },
 }));
-vi.mock('../../subscription-accounts/store.js', () => ({ readPool: () => mocks.pool }));
+vi.mock('../../subscription-accounts/store.js', () => ({ readPool: (providerId: string) => providerId === 'openai' ? mocks.pool : null }));
 vi.mock('../../maker-ipc/appDefaultModelControl.js', () => ({}));
 vi.mock('../../maker-ipc/register.js', () => ({}));
 vi.mock('../../maker-ipc/usage.js', () => ({}));
@@ -103,8 +105,10 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 // #10110 review, unit: real native refresh message -> overview -> collector ->
 // panel/widget. A cached DTO alone never exercises the explicit-refresh path;
 // runtime.test.ts separately covers the real 30s/180s cache and native reads.
-it('refreshes the account pool through the native refresh button', async () => {
-  mocks.pool = { providerId: 'openai', configured: true, strategy: 'round', accounts: [{
+// #10405 extends the same user entry to a named target; readPool only accepts kinds,
+// so the old overview gate discarded it before the collector could show its accounts.
+it.each(['openai', 'legacy-target'])('refreshes the %s account pool through the native refresh button', async providerId => {
+  mocks.pool = { providerId, kind: 'openai', configured: true, strategy: 'round', accounts: [{
     id: 'extra', paused: false, limit: 4, weight: 1, directory: '/fixture/extra', running: 0,
     identity: 'extra@example.com', status: 'ready', usage: { codex: { credits: null, buckets: { codex: {
       limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,

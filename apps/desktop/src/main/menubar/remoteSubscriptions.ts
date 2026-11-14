@@ -99,7 +99,7 @@ async function readAccount(
   device: MenubarRemoteDevice,
   provider: ProviderView,
 ): Promise<MenubarSubscriptionInput[] | null> {
-  if (isSubscriptionProvider(provider.id)) {
+  if (isSubscriptionProvider(provider.id) || provider.subscriptionPool || provider.subscriptionAccountPool) {
     const response = await deps.invoke(device.id, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{ action: 'read', providerId: provider.id }]);
     if (response.ok) {
       const pool = response.result;

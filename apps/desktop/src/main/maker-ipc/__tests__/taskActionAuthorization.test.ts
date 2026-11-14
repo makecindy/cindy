@@ -25,6 +25,7 @@ import {
   captureTaskActionGuard,
   captureTaskActionDeliveryGuard,
   isTaskActionRevoked,
+  runTaskActionRewindBoundary,
 } from '../taskActionAuthorization.js';
 
 function fixture(ownerInput = false, delegated = false) {
@@ -199,6 +200,8 @@ vi.mock('../../appSessionState.js', () => ({
 import { orcaTeams } from '../../localDb/schema.js';
 import { createDesktopTaskActionAuthorizer } from '../taskActionHost.js';
 import { beginChannelToolScope } from '../../im/shared/channelToolScope.js';
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../agent-input-coordinator.js';
+import * as credentialGrants from '../../remote-agent/executor/credentialGrants.js';
 
 const releases: Array<() => void> = [];
 afterEach(() => {
@@ -277,6 +280,161 @@ const ownerWrites = [
   ['cindy_orca', 'send_to_worker'],
   ['cindy_orca', 'switch_focus'],
 ] as const;
+
+// Unit regression #9801 / s2AK: real Desktop admission and coordinator Stop.
+// Earlier tests ended the admitting input only for delayed delivery, not a self rewind.
+// The exact approved rewind must reach its history write once after its own Stop.
+describe('self rewind admission across its own Stop', () => {
+  async function selfRewindFixture() {
+    const h = desktopFixture();
+    let running = true;
+    let locked = false;
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async () => { throw new Error('unexpected send'); },
+      steerToAgent: async () => {},
+      abortSession: async () => { running = false; },
+      isTurnRunning: () => running,
+      isLiveTurnRunning: () => running,
+      hasPendingInteraction: () => false,
+      getAgentKind: () => 'claude-code',
+      getSdkSessionId: async () => 'sdk',
+      createUserMessage: vi.fn<AgentInputCoordinatorDeps['createUserMessage']>(),
+      touchUserSend: vi.fn<AgentInputCoordinatorDeps['touchUserSend']>(),
+      emitProjection: () => {},
+    });
+    await coordinator.steer('companion', input());
+    Object.defineProperty(h.activeInput, 'key', { get: () => JSON.stringify({
+      input: coordinator.getAcceptedInputProvenance('companion'),
+      executing: !!coordinator.getAcceptedInputProvenance('companion') || running,
+    }) });
+    Object.defineProperty(h.activeInput, 'rewind', { enumerable: true, get: () => ({
+      generation: coordinator.getGeneration('companion'),
+      signal: coordinator.getInputAbortSignal('companion'),
+      locked,
+      idle: !coordinator.getAcceptedInputProvenance('companion') && !running,
+    }) });
+    h.activeInput.permission = { permissionMode: 'auto', planModeEnabled: false, isCurrent: () => true };
+    expect(coordinator.getAcceptedInputProvenance('companion')).not.toBeNull();
+    const writeHistory = vi.fn(async () => ({ rewound: true }));
+    const request = { sessionId: 'companion', server: 'cindy_helper' as const, tool: 'rewind_session',
+      args: { session_id: 'companion', message_client_id: 'message-1', stop_if_running: true } };
+    const stop = async () => {
+      locked = true;
+      coordinator.setInteractionLock('companion', 'session-rewind', true, { preserveOnStop: true });
+      await runTaskActionRewindBoundary('companion', 'message-1', 'stop', () =>
+        coordinator.stop('companion', { keepQueue: true, pauseQueue: true }));
+      await coordinator.waitForRewindBoundaryIdle('companion', 1_000);
+    };
+    const commit = async () => {
+      await assertTaskActionCurrent();
+      return writeHistory();
+    };
+    return { ...h, coordinator, request, stop, commit, writeHistory };
+  }
+
+  it('retains the exact rewind while the coordinator stops its admitting input', async () => {
+    const h = await selfRewindFixture();
+    await expect(withToolCallAuthority(h.authorize, h.request, async () => {
+      await h.stop();
+      return h.commit();
+    })).resolves.toEqual({ rewound: true });
+    expect(h.writeHistory).toHaveBeenCalledTimes(1);
+  });
+
+  const revocations = ['permission', 'plan', 'owner', 'owner-boundary', 'clear', 'delete', 'paused',
+    'instance', 'target', 'message', 'permission-ABA'] as const;
+  for (const phase of ['before-stop', 'after-stop'] as const) {
+    it.each(revocations)('keeps %s revocation effective ' + phase, async reason => {
+      const h = await selfRewindFixture();
+      await expect(withToolCallAuthority(h.authorize, h.request, async () => {
+        if (phase === 'after-stop') await h.stop();
+        if (reason === 'permission') h.runtime.stablePermissionModeState.generation++;
+        if (reason === 'plan') h.runtime.stablePlanModeState.generation++;
+        if (reason === 'owner') hostFacts.getDb.mockReturnValue({});
+        if (reason === 'owner-boundary') hostFacts.boundaryPending.mockReturnValue(true);
+        if (reason === 'clear') h.coordinator.clearSession('companion');
+        if (reason === 'delete') h.caller.status = 'deleted';
+        if (reason === 'paused') h.caller.botStatus = 'paused';
+        if (reason === 'instance') h.getSession.mockReturnValue({ ...h.runtime });
+        if (reason === 'target') h.request.args.session_id = 'other';
+        if (reason === 'message') h.request.args.message_client_id = 'other';
+        if (reason === 'permission-ABA') {
+          h.runtime.stablePermissionModeState.generation += 2;
+          credentialGrants.forgetCredentialGrants('companion');
+        }
+        if (phase === 'before-stop') await h.stop();
+        return h.commit();
+      })).rejects.toThrow();
+      expect(h.writeHistory).not.toHaveBeenCalled();
+    });
+  }
+
+  it.each(['before', 'after'] as const)('does not adopt an ordinary Stop %s its own Stop', async phase => {
+    const h = await selfRewindFixture();
+    await expect(withToolCallAuthority(h.authorize, h.request, async () => {
+      if (phase === 'after') await h.stop();
+      h.coordinator.stop('companion', { keepQueue: true });
+      await h.coordinator.waitForRewindBoundaryIdle('companion', 1_000);
+      if (phase === 'before') await h.stop();
+      return h.commit();
+    })).rejects.toThrow();
+    expect(h.writeHistory).not.toHaveBeenCalled();
+  });
+
+  it('rejects another accepted input before its own Stop and preserves that input', async () => {
+    const h = await selfRewindFixture();
+    await expect(withToolCallAuthority(h.authorize, h.request, async () => {
+      expect(await h.coordinator.steer('companion', { ...input(), clientId: 'new-input' })).toBe(true);
+      await h.stop();
+      return h.commit();
+    })).rejects.toThrow();
+    expect(h.coordinator.getAcceptedInputProvenance('companion')?.clientId).toBe('new-input');
+    expect(h.writeHistory).not.toHaveBeenCalled();
+  });
+
+  it('keeps a new steer outside the existing rewind input lock', async () => {
+    const h = await selfRewindFixture();
+    await withToolCallAuthority(h.authorize, h.request, async () => {
+      await h.stop();
+      expect(await h.coordinator.steer('companion', { ...input(), clientId: 'new-input' })).toBe(false);
+      await h.commit();
+    });
+    expect(h.writeHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['target', 'message'] as const)('rejects a boundary for a different actual %s before stopping', async field => {
+    const h = await selfRewindFixture();
+    const stop = vi.fn(() => h.coordinator.stop('companion'));
+    await expect(withToolCallAuthority(h.authorize, h.request, () => Promise.resolve(runTaskActionRewindBoundary(
+      field === 'target' ? 'other' : 'companion', field === 'message' ? 'other' : 'message-1', 'stop', stop,
+    )))).rejects.toThrow();
+    expect(stop).not.toHaveBeenCalled();
+    expect(h.writeHistory).not.toHaveBeenCalled();
+  });
+
+  it.each(['success', 'failure', 'cancel'] as const)('releases the same revocation subscription on %s', async outcome => {
+    const h = await selfRewindFixture();
+    const watch = credentialGrants.watchCredentialGrantRevocation;
+    const notified = vi.fn();
+    const spy = vi.spyOn(credentialGrants, 'watchCredentialGrantRevocation').mockImplementation((id, revoke) =>
+      watch(id, () => { notified(); revoke(); }));
+    let lateGuard: (() => Promise<void>) | undefined;
+    try {
+      const result = withToolCallAuthority(h.authorize, h.request, async () => {
+        await h.stop();
+        lateGuard = captureTaskActionGuard();
+        if (outcome !== 'success') throw Object.assign(new Error(outcome), { name: outcome === 'cancel' ? 'AbortError' : 'Error' });
+        return h.commit();
+      });
+      if (outcome === 'success') await result;
+      else await expect(result).rejects.toThrow(outcome);
+      expect(spy).toHaveBeenCalledTimes(1);
+      credentialGrants.forgetCredentialGrants('companion');
+      expect(notified).not.toHaveBeenCalled();
+      await expect(lateGuard!()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+    } finally { spy.mockRestore(); }
+  });
+});
 
 // Regression #6399 / maker-core-and-agent-behavior.md "同范围自动跟进":
 // production Desktop admission must deliver a user-scheduled send after normal

@@ -60,7 +60,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--surfac
 body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 main { display: flex; height: 100vh; min-height: 0; flex-direction: column; padding: 28px; }
 .brand { margin: 0 0 12px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-h1 { margin: 0; font-size: 20px; font-weight: 600; line-height: 1.3; }
+h1 { margin: 0; font-size: 20px; font-weight: 500; line-height: 1.3; }
 .message { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
 .detail { margin: 24px 0 10px; font-size: 13px; line-height: 1.5; }
 ul { flex: 1; min-height: 0; margin: 0; padding: 0; overflow-y: auto; list-style: none; }

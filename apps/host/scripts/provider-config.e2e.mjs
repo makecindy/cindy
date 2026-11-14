@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { configureHostOwner } from '../src/agent/claude-auth.mjs';
 import { createHostProviderConfig } from '../src/agent/provider-config.ts';
+import { createHostPiNativeProviders } from '../src/agent/pi-native-providers.ts';
 import { createCredentialStore } from '../src/credentials/store.mjs';
 import { hostRuntimeLayout } from '../src/runtime-layout.mjs';
 import { openOwnerDatabase } from '../../desktop/src/main/localDb/startupCore.ts';
@@ -54,7 +55,9 @@ try {
   views = await config.publicViews();
   assert.equal(views.find(p => p.id === 'key-fixture').connected, true);
   assert.equal(JSON.stringify(views).includes('synthetic-api-key'), false);
-  const native = await config.piNativeProviders();
+  // Pi's native providers through the Host's resolver (no Pi binary, no loopback proxy: custom providers only).
+  const native = await createHostPiNativeProviders({ userDataDir: profile, piBinaryPath: null, endpoint: () => '',
+    claudeProxy: null, providerConfig: config }).resolvePiNativeProviders({ workingDir: profile, model: 'fixture-model', purpose: 'preview' });
   const provider = native.providers.find(p => p.id === 'key-fixture');
   assert.ok(provider);
   assert.equal(provider.models[0].contextWindow, 8192);

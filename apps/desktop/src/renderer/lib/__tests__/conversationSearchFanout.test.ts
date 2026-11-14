@@ -696,6 +696,10 @@ describe('filterResultsByWorkingDirs', () => {
     expect(filterResultsByWorkingDirs(page, ['/project']).results).toHaveLength(1);
     expect(filterResultsByWorkingDirs(page, ['/tmp/checkout']).results).toHaveLength(0);
     expect(remoteIndexedSearchIgnoredWorkingDirs(page, ['/project'])).toBe(false);
+    const buddy = response([result('group', 1, { taskProjectDir: '/buddy', projectDir: '/group-repo', workingDir: '/group-repo' })]);
+    expect(filterResultsByWorkingDirs(buddy, ['/buddy']).results).toHaveLength(1);
+    expect(filterResultsByWorkingDirs(buddy, ['/group-repo']).results).toHaveLength(0);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(buddy, ['/buddy'])).toBe(false);
   });
   it('drops remote hits that belong to another project', () => {
     const page = filterResultsByWorkingDirs(

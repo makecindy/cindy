@@ -567,7 +567,7 @@ export function UpdateBanner({
         }
 
         {/* Title */}
-        <p className="text-sm font-semibold text-foreground">
+        <p className="text-sm font-medium text-foreground">
           {isPreparing
             ? t('update.banner.preparingTitle')
             : confirming

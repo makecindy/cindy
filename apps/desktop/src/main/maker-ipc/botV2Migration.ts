@@ -265,6 +265,7 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
     if (await exists(workspace)) {
       await ensureTeammateTemplate({ botId, displayName: upgraded.name, workspace });
       assertCurrent();
+      await ensureBotProjectAutomations({ botId, displayName: upgraded.name, workingDir: workspace, addMissing: false });
       // V2's migration receipt says nothing about the initial Git commit succeeding.
       // Retry only incomplete repositories; versions must not block the buddy's use.
       await ensureWorkspaceRepository(workspace).catch((error) => {

@@ -407,7 +407,7 @@ export function ErrorBanner({
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
   const isRemoteResumeRejected = isRemoteAgentResumeRejectedError(error);
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
-  const remoteErrorKey = (isRemoteResumeRejected ? 'chat.remoteError.REMOTE_AGENT_RESUME_REJECTED' : null)
+  const remoteErrorKey = (isRemoteResumeRejected ? 'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE' : null)
     ?? (isMemberBudgetPaused(error) ? 'providerShare.memberBudget.paused' : null) ?? remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
   const remoteGuidance = remoteErrorKey && i18n.exists(remoteErrorKey) ? t(remoteErrorKey) : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
@@ -456,7 +456,7 @@ export function ErrorBanner({
   });
   // 订阅套餐错误保留 Retry：用户重新连接 Anthropic 后可从当前错误卡片重试；
   // Gateway 错误则隐藏 Retry，改走切换到 Claude.ai 的明确恢复动作。
-  const hideRetry = isMemberBudgetPaused(error) ||
+  const hideRetry = remoteErrorCode === 'REMOTE_AGENT_RESUME_UNAVAILABLE' || isMemberBudgetPaused(error) ||
     isRemoteResumeRejected ||
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
@@ -666,7 +666,9 @@ export function ErrorBanner({
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
-  if (sharedRecoveryReason) displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
+  if (sharedRecoveryReason && remoteErrorCode !== 'REMOTE_AGENT_RESUME_UNAVAILABLE') {
+    displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
+  }
   const canShowErrorDetails =
     piCloudContextRecovery ||
     isNetworkishError ||

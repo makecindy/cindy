@@ -23,6 +23,7 @@ import {
   normalizeModelGroupsConfig,
   sanitizeModelGroupSelection,
   type ModelGroupRoute,
+  type ModelGroupResolveResult,
   type ModelGroupSelection,
   type ModelGroupsConfig,
   type ModelGroupTraceQuota,
@@ -136,19 +137,54 @@ describe('createModelGroupResolver', () => {
     now: () => now,
   });
 
-  it('advances rotation only on a real pick, never on a dry run', async () => {
+  it('advances rotation only after adoption, not on cancelled picks or previews (#10240)', async () => {
     const resolver = make();
     const selection = { type: 'route', id: 'r1' } as const;
     const first = await resolver.resolve({ selection });
+    const cancelled = await resolver.resolve({ selection });
+    expect(cancelled).toMatchObject({ outcome: 'routed', route: { providerId: 'a' } });
+    expect(resolver.commit(first.decisionId!)).toBe(true);
+    expect(resolver.commit(first.decisionId!)).toBe(false);
     const preview = await resolver.resolve({ selection, dryRun: true });
+    expect(preview.decisionId).toBeUndefined();
     const second = await resolver.resolve({ selection });
     expect([first, preview, second].map((r) => r.outcome === 'routed' && r.route.providerId)).toEqual(['a', 'b', 'b']);
     // 第三个候选没有连接：轮到它时跳回第一个，并写明它为什么没被选。
+    resolver.commit(second.decisionId!);
     const third = await resolver.resolve({ selection });
     expect(third).toMatchObject({ outcome: 'routed', route: { providerId: 'a' }, sourceName: 'ChatGPT Pro', modelName: 'GPT-5.6' });
     expect(third.trace[2]).toMatchObject({ why: 'unavailable' });
   });
 
+  // #10240: resolve used to record before confirmation. Unit: two resolves without
+  // adoption must leave history empty; only one same-account commit may record.
+  it('records only committed results and rejects expired or other-account receipts', async () => {
+    let scope = 'one';
+    let now = NOW;
+    const history: ModelGroupResolveResult[] = [];
+    const resolver = createModelGroupResolver({
+      config: () => config, views: async () => [view('a', 'A'), view('b', 'B')],
+      agents: () => ['codex'], harnessInstalled: async () => true,
+      quotaWindows: async () => new Map(), scope: () => scope, now: () => now,
+      recordDecision: (_selection, result) => { history.push(result); },
+    });
+    const request = { selection: { type: 'route', id: 'r1' } } as const;
+    const cancelled = await resolver.resolve(request);
+    const adopted = await resolver.resolve(request);
+    expect(history).toEqual([]);
+    expect(resolver.commit(adopted.decisionId!)).toBe(true);
+    expect(resolver.commit(adopted.decisionId!)).toBe(false);
+    expect(history).toHaveLength(1);
+    scope = 'two';
+    expect(resolver.commit(cancelled.decisionId!)).toBe(false);
+    const expired = await resolver.resolve(request);
+    now += 60 * 60_000 + 1;
+    expect(resolver.commit(expired.decisionId!)).toBe(false);
+    expect(history).toHaveLength(1);
+    const fallback = await resolver.resolve({ selection: { type: 'route', id: 'missing' } });
+    expect(resolver.commit(fallback.decisionId!)).toBe(true);
+    expect(history[1].outcome).toBe('missing');
+  });
 
   // PR #9974 review：分模型周配额的窗口按模型家族归属，不看用户改过的显示名，也不要求显示名包含整个窗口标签。
   it.each([
@@ -353,6 +389,18 @@ describe('createModelGroupResolver with sources on other computers', () => {
     // 那台电脑自己的读数按位置给它。
     const own = make(saved, { quotaWindows: async () => new Map([['a', [week(100, 30)]], [modelGroupQuotaKey('dev-2', 'a'), [week(100, 10)]]]) });
     expect((await own.resolver.resolve({ selection })).trace[1]).toMatchObject({ state: 'picked', why: 'soonest', limitedUntilMs: NOW + 10 * HOUR });
+  });
+
+  // 2026-11-13：进行中的任务里选模式，任务换不了电脑，只在任务所在的位置里挑；别处的来源不选、也不去读那边的目录。
+  it('picks only at the running task\'s location when one is given', async () => {
+    const local = { agentKind: 'codex', providerId: 'b', model: 'gpt' } as const;
+    const { deps, resolver } = make(groups('order', [REMOTE, local]));
+    const here = await resolver.resolve({ selection, location: { agentDeviceId: null } });
+    expect(here).toMatchObject({ outcome: 'routed', route: { providerId: 'b' } });
+    expect(here.outcome === 'routed' && 'agentDeviceId' in here.route).toBe(false);
+    expect(deps.remoteViews).not.toHaveBeenCalled();
+    const there = await resolver.resolve({ selection, location: { agentDeviceId: 'dev-2' } });
+    expect(there).toMatchObject({ outcome: 'routed', route: { providerId: 'a', agentDeviceId: 'dev-2' } });
   });
 
   it('keeps a candidate saved without a location on this computer and reads nothing elsewhere', async () => {

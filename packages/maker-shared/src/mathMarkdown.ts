@@ -315,6 +315,8 @@ const LATEX_SYMBOL_MAP: Record<string, string> = {
   ldots: '…', cdots: '⋯', dots: '…', vdots: '⋮', ddots: '⋱',
   prime: '′', hbar: 'ℏ', ell: 'ℓ', Re: 'ℜ', Im: 'ℑ', aleph: 'ℵ',
   therefore: '∴', because: '∵', qed: '∎',
+  vert: '|', Vert: '‖', langle: '⟨', rangle: '⟩',
+  lfloor: '⌊', rfloor: '⌋', lceil: '⌈', rceil: '⌉',
 };
 
 // 函数名类命令:保留字面(sin/cos/log 等本来就是正文形态)。
@@ -343,11 +345,16 @@ const SUBSCRIPT_MAP: Record<string, string> = {
   h: 'ₕ', l: 'ₗ', o: 'ₒ', p: 'ₚ', s: 'ₛ', t: 'ₜ', u: 'ᵤ', v: 'ᵥ', x: 'ₓ',
 };
 
+/** 仅读取对象自有字符串键值,防止读取 Object.prototype 上的方法(如 toString/constructor)。 */
+function getOwnRecordValue(map: Record<string, string>, key: string): string | undefined {
+  return Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
 /** 整串字符都能映射时返回映射结果,否则 null(混排会破坏可读性,整体回退)。 */
 function mapAllChars(text: string, map: Record<string, string>): string | null {
   let out = '';
   for (const ch of text) {
-    const mapped = map[ch];
+    const mapped = getOwnRecordValue(map, ch);
     if (mapped == null) return null;
     out += mapped;
   }
@@ -437,7 +444,8 @@ function replaceLatexStructures(source: string, depth: number): string {
     const name = source.slice(start + 1, end);
     const fraction = name === 'frac' || name === 'dfrac' || name === 'tfrac';
     const styleWrapper = LATEX_STYLE_WRAPPERS.has(name);
-    if (nesting >= 32 || (!fraction && !styleWrapper && name !== 'sqrt' && !LATEX_ACCENTS[name])) return remember(raw);
+    const accent = getOwnRecordValue(LATEX_ACCENTS, name);
+    if (nesting >= 32 || (!fraction && !styleWrapper && name !== 'sqrt' && accent == null)) return remember(raw);
     let rootIndexSource: string | undefined;
     const indexStart = skipSpace(end);
     if (name === 'sqrt' && source[indexStart] === '[') {
@@ -472,7 +480,7 @@ function replaceLatexStructures(source: string, depth: number): string {
       text = `${root}${operand(body)}`;
     } else {
       const symbol = flattenLatex(body);
-      text = Array.from(symbol).length === 1 ? symbol + LATEX_ACCENTS[name] : `${name}(${body})`;
+      text = Array.from(symbol).length === 1 ? symbol + accent! : `${name}(${body})`;
     }
     // Preserve postfix scripts and implicit products: (a/b)² and (a/b)c.
     // Without the parentheses both can be misread as part of the denominator.
@@ -498,6 +506,409 @@ export function latexToUnicodeApproximation(latex: string): string {
   return flattenLatex(replaceLatexStructures(latex, 0));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. 结构化行内 LaTeX 分词(供移动端原生 Text 流区分正斜体与统一下标渲染)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type InlineMathSegment =
+  | { kind: 'var'; text: string }
+  | { kind: 'text'; text: string }
+  | { kind: 'sup'; text: string; italic?: boolean }
+  | { kind: 'sub'; text: string; italic?: boolean };
+
+// 在标准 SUPERSCRIPT_MAP 基础上补齐常用小写字母上标,避免 x^z / a^b 等回退成 ^z。
+const INLINE_SUPERSCRIPT_MAP: Record<string, string> = {
+  ...SUPERSCRIPT_MAP,
+  a: 'ᵃ', b: 'ᵇ', c: 'ᶜ', d: 'ᵈ', e: 'ᵉ', f: 'ᶠ', g: 'ᵍ', h: 'ʰ',
+  j: 'ʲ', l: 'ˡ', o: 'ᵒ', p: 'ᵖ', r: 'ʳ', s: 'ˢ', u: 'ᵘ', v: 'ᵛ',
+  w: 'ʷ', z: 'ᶻ',
+};
+
+// 下标小写希腊变量:TeX 排版里小写希腊字母为斜体变量,大写希腊字母(Δ/Σ/Ω)为正体。
+const LOWERCASE_GREEK_RE = /^[\u03b1-\u03c9\u03d1\u03d5\u03f1\u03f5]+$/;
+const LATEX_IGNORE_MODIFIERS = new Set(['left', 'right', 'big', 'Big', 'bigg', 'Bigg', 'bigl', 'bigr', 'Bigl', 'Bigr', 'biggl', 'biggr', 'Biggl', 'Biggr']);
+const LATEX_UPRIGHT_WRAPPERS = new Set(['text', 'mathrm', 'mathbf', 'mathsf', 'mathtt', 'operatorname', 'textbf']);
+const LATEX_SPACE_COMMANDS = new Set([',', ';', ':', ' ', 'quad', 'qquad']);
+
+function isAlreadyWrappedAtom(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 2) return false;
+  if (t.startsWith('|') && t.endsWith('|')) {
+    return t.indexOf('|', 1) === t.length - 1;
+  }
+  const open = t[0];
+  const close = open === '(' ? ')' : open === '[' ? ']' : null;
+  if (!close || t[t.length - 1] !== close) return false;
+  const stack: string[] = [];
+  for (let i = 0; i < t.length; i += 1) {
+    const ch = t[i];
+    if (ch === '(' || ch === '[') {
+      stack.push(ch);
+    } else if (ch === ')' || ch === ']') {
+      const expected = ch === ')' ? '(' : '[';
+      if (stack[stack.length - 1] !== expected) return false;
+      stack.pop();
+      if (stack.length === 0) return i === t.length - 1;
+    }
+  }
+  return false;
+}
+
+function segmentsPlainText(segments: readonly InlineMathSegment[]): string {
+  return segments.map((s) => s.text).join('');
+}
+
+function formatScriptBoundaryText(segments: readonly InlineMathSegment[]): string {
+  let out = '';
+  for (const seg of segments) {
+    if (seg.kind === 'sub') {
+      const mapped = mapAllChars(seg.text, SUBSCRIPT_MAP);
+      if (mapped != null) out += mapped;
+      else out += seg.text.length === 1 ? `_${seg.text}` : `_(${seg.text})`;
+    } else if (seg.kind === 'sup') {
+      out += seg.text.startsWith('^')
+        ? seg.text
+        : seg.text.length === 1
+          ? `^${seg.text}`
+          : `^(${seg.text})`;
+    } else {
+      out += seg.text;
+    }
+  }
+  return out;
+}
+
+function pushCoalesced(out: InlineMathSegment[], seg: InlineMathSegment): void {
+  if (!seg.text) return;
+  const prev = out[out.length - 1];
+  if (prev && prev.kind === seg.kind && (prev.kind !== 'sub' && prev.kind !== 'sup' || prev.italic === (seg as { italic?: boolean }).italic)) {
+    prev.text += seg.text;
+    return;
+  }
+  out.push({ ...seg });
+}
+
+function tokenizeInlineMathRange(source: string, upright: boolean, depth: number): InlineMathSegment[] {
+  if (depth >= 32 || !source) {
+    return source ? [{ kind: 'text', text: source }] : [];
+  }
+
+  const groupEnds = new Map<number, number>();
+  const braces: number[] = [];
+  const brackets: number[] = [];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === '\\') { i += 1; continue; }
+    if (source[i] === '{') braces.push(i);
+    else if (source[i] === '[') brackets.push(i);
+    else if (source[i] === '}' || source[i] === ']') {
+      const open = (source[i] === '}' ? braces : brackets).pop();
+      if (open != null) groupEnds.set(open, i);
+    }
+  }
+
+  type ArgSlice = { text: string; end: number };
+  const commandRanges = new Map<string, ArgSlice>();
+  const skipSpace = (from: number) => {
+    while (from < source.length && /\s/.test(source[from])) from += 1;
+    return from;
+  };
+
+  const scanCommandRange = (start: number, nesting: number): ArgSlice => {
+    const key = `${start}:${nesting}`;
+    const cached = commandRanges.get(key);
+    if (cached) return cached;
+    const remember = (range: ArgSlice) => { commandRanges.set(key, range); return range; };
+    let end = start + 1;
+    while (end < source.length && /[a-zA-Z]/.test(source[end])) end += 1;
+    if (end === start + 1) end = Math.min(source.length, end + 1);
+    const raw = { text: source.slice(start, end), end };
+    const name = source.slice(start + 1, end);
+    const fraction = name === 'frac' || name === 'dfrac' || name === 'tfrac';
+    const styleWrapper = LATEX_STYLE_WRAPPERS.has(name);
+    if (nesting >= 32 || (!fraction && !styleWrapper && name !== 'sqrt' && getOwnRecordValue(LATEX_ACCENTS, name) == null)) {
+      return remember(raw);
+    }
+    const idxStart = skipSpace(end);
+    if (name === 'sqrt' && source[idxStart] === '[') {
+      const idxEnd = groupEnds.get(idxStart);
+      if (idxEnd == null) return remember(raw);
+      end = idxEnd + 1;
+    }
+    const readNext = (from: number): ArgSlice | null => {
+      const s = skipSpace(from);
+      if (s === source.length || source[s] === '}') return null;
+      if (source[s] === '{') {
+        const gEnd = groupEnds.get(s);
+        return gEnd == null ? null : { text: source.slice(s + 1, gEnd), end: gEnd + 1 };
+      }
+      if (source[s] === '\\') return scanCommandRange(s, nesting + 1);
+      const tok = String.fromCodePoint(source.codePointAt(s)!);
+      return { text: tok, end: s + tok.length };
+    };
+    const first = readNext(end);
+    if (!first) return remember(raw);
+    const second = fraction ? readNext(first.end) : null;
+    if (fraction && !second) return remember(raw);
+    return remember({ text: source.slice(start, second?.end ?? first.end), end: second?.end ?? first.end });
+  };
+
+  const readArg = (from: number, nesting: number): ArgSlice | null => {
+    const start = skipSpace(from);
+    if (start === source.length || source[start] === '}') return null;
+    if (source[start] === '{') {
+      const end = groupEnds.get(start);
+      return end == null ? null : { text: source.slice(start + 1, end), end: end + 1 };
+    }
+    if (source[start] === '\\') return scanCommandRange(start, nesting + 1);
+    const tok = String.fromCodePoint(source.codePointAt(start)!);
+    return { text: tok, end: start + tok.length };
+  };
+
+  const readScriptInlineArg = (from: number): ArgSlice | null => {
+    const argStart = skipSpace(from);
+    if (argStart >= source.length) return null;
+    if (source[argStart] === '{') {
+      const end = groupEnds.get(argStart);
+      return end == null ? { text: source.slice(argStart + 1), end: source.length } : { text: source.slice(argStart + 1, end), end: end + 1 };
+    }
+    if (source[argStart] === '\\') {
+      return scanCommandRange(argStart, depth + 1);
+    }
+    const ch = source[argStart] ?? '';
+    return ch ? { text: ch, end: argStart + 1 } : null;
+  };
+
+  const out: InlineMathSegment[] = [];
+  const wrapBody = (segs: InlineMathSegment[], allowDelimitedAtom: boolean): InlineMathSegment[] => {
+    const plain = segmentsPlainText(segs);
+    if (Array.from(plain).length <= 1) return segs;
+    if (allowDelimitedAtom && isAlreadyWrappedAtom(plain)) return segs;
+    return [{ kind: 'text', text: '(' }, ...segs, { kind: 'text', text: ')' }];
+  };
+
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+
+    // Escaped literal characters: \{ \} \$ \% \& \# \_ \^
+    if (ch === '\\') {
+      const nextCh = source[i + 1];
+      if (nextCh && /[{}$%&#_^]/.test(nextCh)) {
+        pushCoalesced(out, { kind: 'text', text: nextCh });
+        i += 2;
+        continue;
+      }
+      if (nextCh === '|') {
+        pushCoalesced(out, { kind: 'text', text: '‖' });
+        i += 2;
+        continue;
+      }
+      if (nextCh === '!') {
+        i += 2;
+        continue;
+      }
+      if (nextCh && LATEX_SPACE_COMMANDS.has(nextCh)) {
+        pushCoalesced(out, { kind: 'text', text: ' ' });
+        i += 2;
+        continue;
+      }
+      let end = i + 1;
+      while (end < source.length && /[a-zA-Z]/.test(source[end])) end += 1;
+      if (end === i + 1) {
+        i = Math.min(source.length, i + 2);
+        continue;
+      }
+      const name = source.slice(i + 1, end);
+
+      if (LATEX_IGNORE_MODIFIERS.has(name)) {
+        i = skipSpace(end);
+        continue;
+      }
+      if (LATEX_SPACE_COMMANDS.has(name)) {
+        pushCoalesced(out, { kind: 'text', text: ' ' });
+        i = end;
+        continue;
+      }
+
+      const fraction = name === 'frac' || name === 'dfrac' || name === 'tfrac';
+      const styleWrapper = LATEX_STYLE_WRAPPERS.has(name);
+      const accent = getOwnRecordValue(LATEX_ACCENTS, name);
+      if (fraction || styleWrapper || name === 'sqrt' || accent != null) {
+        let cursor = end;
+        let rootIndexSource: string | undefined;
+        const idxStart = skipSpace(cursor);
+        if (name === 'sqrt' && source[idxStart] === '[') {
+          const idxEnd = groupEnds.get(idxStart);
+          if (idxEnd != null) {
+            rootIndexSource = source.slice(idxStart + 1, idxEnd);
+            cursor = idxEnd + 1;
+          }
+        }
+        const first = readArg(cursor, depth);
+        const second = fraction && first ? readArg(first.end, depth) : null;
+        if (first && (!fraction || second)) {
+          const resultEnd = second?.end ?? first.end;
+          if (styleWrapper) {
+            const innerUpright = LATEX_UPRIGHT_WRAPPERS.has(name) ? true : upright;
+            for (const seg of tokenizeInlineMathRange(first.text, innerUpright, depth + 1)) {
+              pushCoalesced(out, seg);
+            }
+          } else if (second) {
+            const num = wrapBody(tokenizeInlineMathRange(first.text, upright, depth + 1), true);
+            const den = wrapBody(tokenizeInlineMathRange(second.text, upright, depth + 1), true);
+            const combined: InlineMathSegment[] = [...num, { kind: 'text', text: '/' }, ...den];
+            const nextChar = source[skipSpace(resultEnd)] ?? '';
+            const wrapped = /[a-zA-Z0-9\\(^_]/.test(nextChar)
+              ? [{ kind: 'text' as const, text: '(' }, ...combined, { kind: 'text' as const, text: ')' }]
+              : combined;
+            for (const seg of wrapped) pushCoalesced(out, seg);
+          } else if (name === 'sqrt') {
+            const rootIdx = rootIndexSource === undefined
+              ? undefined
+              : segmentsPlainText(tokenizeInlineMathRange(rootIndexSource, true, depth + 1));
+            const root = rootIdx === undefined ? '√' : rootIdx === '3' ? '∛' : rootIdx === '4' ? '∜' : `√[${rootIdx}]`;
+            const body = wrapBody(tokenizeInlineMathRange(first.text, upright, depth + 1), true);
+            const combined: InlineMathSegment[] = [{ kind: 'text', text: root }, ...body];
+            const nextChar = source[skipSpace(resultEnd)] ?? '';
+            const wrapped = /[\^_]/.test(nextChar)
+              ? [{ kind: 'text' as const, text: '(' }, ...combined, { kind: 'text' as const, text: ')' }]
+              : combined;
+            for (const seg of wrapped) pushCoalesced(out, seg);
+          } else {
+            const inner = tokenizeInlineMathRange(first.text, upright, depth + 1);
+            const plain = segmentsPlainText(inner);
+            if (Array.from(plain).length === 1) {
+              const baseKind = inner[0]?.kind === 'var' ? 'var' : 'text';
+              pushCoalesced(out, { kind: baseKind, text: plain + accent! });
+            } else {
+              pushCoalesced(out, { kind: 'text', text: `${name}(` });
+              for (const seg of inner) pushCoalesced(out, seg);
+              pushCoalesced(out, { kind: 'text', text: ')' });
+            }
+          }
+          i = resultEnd;
+          continue;
+        }
+      }
+
+      if (LATEX_FUNCTION_NAMES.has(name)) {
+        pushCoalesced(out, { kind: 'text', text: name });
+        // \cos\theta / \sin x: ensure clean separation before an adjacent variable/command
+        const after = source[end] ?? '';
+        if (after === '\\' || /[a-zA-Z0-9]/.test(after)) {
+          pushCoalesced(out, { kind: 'text', text: ' ' });
+        }
+        i = end;
+        continue;
+      }
+
+      const symbol = getOwnRecordValue(LATEX_SYMBOL_MAP, name);
+      if (symbol != null) {
+        const isLowerGreek = LOWERCASE_GREEK_RE.test(symbol);
+        pushCoalesced(out, { kind: !upright && isLowerGreek ? 'var' : 'text', text: symbol });
+        i = end;
+        continue;
+      }
+
+      pushCoalesced(out, { kind: 'text', text: name });
+      i = end;
+      continue;
+    }
+
+    // Superscripts and subscripts
+    if (ch === '^' || ch === '_') {
+      const arg = readScriptInlineArg(i + 1);
+      if (arg && arg.end > i + 1) {
+        const innerSegs = tokenizeInlineMathRange(arg.text, upright, depth + 1);
+        if (ch === '_') {
+          for (const seg of innerSegs) {
+            pushCoalesced(out, {
+              kind: 'sub',
+              text: seg.text,
+              italic: seg.kind === 'var' || (seg.kind === 'sub' && seg.italic),
+            });
+          }
+        } else {
+          const hasNestedScript = innerSegs.some((seg) => seg.kind === 'sub' || seg.kind === 'sup');
+          if (hasNestedScript) {
+            const nested = formatScriptBoundaryText(innerSegs);
+            pushCoalesced(out, {
+              kind: 'sup',
+              text: Array.from(nested).length === 1 ? `^${nested}` : `^(${nested})`,
+              italic: false,
+            });
+          } else {
+            const plain = segmentsPlainText(innerSegs);
+            const mapped = plain ? mapAllChars(plain, INLINE_SUPERSCRIPT_MAP) : null;
+            if (mapped != null) {
+              pushCoalesced(out, { kind: 'sup', text: mapped, italic: false });
+            } else {
+              pushCoalesced(out, {
+                kind: 'sup',
+                text: plain.length === 1 ? `^${plain}` : `^(${plain})`,
+                italic: false,
+              });
+            }
+          }
+        }
+        i = arg.end;
+        continue;
+      }
+      pushCoalesced(out, { kind: 'text', text: ch });
+      i += 1;
+      continue;
+    }
+
+    // Grouping braces have no visual output once structured commands/scripts consumed theirs
+    if (ch === '{' || ch === '}') {
+      i += 1;
+      continue;
+    }
+
+    // Latin variable runs
+    if (/[a-zA-Z]/.test(ch)) {
+      let end = i + 1;
+      while (end < source.length && /[a-zA-Z]/.test(source[end])) end += 1;
+      pushCoalesced(out, { kind: upright ? 'text' : 'var', text: source.slice(i, end) });
+      i = end;
+      continue;
+    }
+
+    // Collapse horizontal whitespace runs into a single space
+    if (ch === ' ' || ch === '\t') {
+      let end = i + 1;
+      while (end < source.length && (source[end] === ' ' || source[end] === '\t')) end += 1;
+      pushCoalesced(out, { kind: 'text', text: ' ' });
+      i = end;
+      continue;
+    }
+
+    // Digits, operators, punctuation, CJK, etc. -> upright text
+    pushCoalesced(out, { kind: 'text', text: ch });
+    i += 1;
+  }
+
+  return out;
+}
+
+/**
+ * 将 inline LaTeX 拆分为带语义类型的排版片段(变量斜体、符号/数字/函数正体、
+ * 统一上标、任意字符下标),供移动端原生 Text 流清晰、无错位地混排。
+ */
+export function tokenizeInlineMath(latex: string): InlineMathSegment[] {
+  const segments = tokenizeInlineMathRange(latex, false, 0);
+  // Trim outer whitespace without altering internal tokens
+  if (segments.length > 0 && segments[0].kind === 'text') {
+    segments[0].text = segments[0].text.replace(/^\s+/, '');
+    if (!segments[0].text) segments.shift();
+  }
+  if (segments.length > 0 && segments[segments.length - 1].kind === 'text') {
+    segments[segments.length - 1].text = segments[segments.length - 1].text.replace(/\s+$/, '');
+    if (!segments[segments.length - 1].text) segments.pop();
+  }
+  return segments;
+}
+
 function flattenLatex(latex: string): string {
   let s = latex;
 
@@ -509,7 +920,7 @@ function flattenLatex(latex: string): string {
 
   // 命令映射:符号表 → Unicode;函数名 → 字面;未知命令 → 去掉反斜杠保留名字
   s = s.replace(/\\([a-zA-Z]+)/g, (_m, name: string) => {
-    const symbol = LATEX_SYMBOL_MAP[name];
+    const symbol = getOwnRecordValue(LATEX_SYMBOL_MAP, name);
     if (symbol != null) return symbol;
     if (LATEX_FUNCTION_NAMES.has(name)) return name;
     return name;

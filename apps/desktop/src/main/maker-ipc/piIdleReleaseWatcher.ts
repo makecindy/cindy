@@ -1,10 +1,10 @@
 /**
- * piIdleReleaseWatcher —— 桌面普通及插件 pi 会话的空闲运行时回收。
+ * piIdleReleaseWatcher —— 本机普通、插件、伙伴及自动化 Pi 会话的空闲运行时回收。
  *
  * 背景(2026-10 实测 + upstream #5830)：`pi --mode rpc` 子进程每个约 150~300MB，
  * 普通会话此前没有任何 Idle TTL/LRU —— 只有退出应用、切换 Agent 或 Orca 工人
  * 走各自路径才会回收，长时间使用后进程数与内存持续累积、整机变卡、重启才恢复。
- * 这里为「本机、桌面普通或插件来源、非 Orca/bot」的 pi 会话补一个与
+ * 这里为「本机、桌面普通/插件/伙伴/自动化来源、非 Orca」的 Pi 会话补一个与
  * `orcaIdleReleaseWatcher` 同构的 watcher。
  *
  * 候选由 SQL 给出(闲置起点取 max(updated_at, last_turn_ended_at, user_send_at))，
@@ -19,6 +19,7 @@
  */
 
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import type { Maker, Session } from '@cindy/maker-core';
 import { sessions } from '../localDb/schema.js';
 
 /** Shared by the initial scan and the lock-protected recheck. */
@@ -29,9 +30,12 @@ export const piIdleReleaseCandidateWhere = () =>
   and(
     eq(sessions.agentKind, 'pi'),
     inArray(sessions.status, ['active', 'archived']),
-    // Plugin tasks are intentionally hidden, but their processes are host-owned.
-    // Keep other hidden tasks and specialized lifecycle owners out of this scan.
-    or(and(eq(sessions.source, 'desktop'), isNull(sessions.hiddenAt)), eq(sessions.source, 'plugin')),
+    // These host-owned sources can be intentionally hidden (e.g. bot lanes).
+    // Visibility does not give them a separate process owner; other hidden sources stay out.
+    or(
+      and(eq(sessions.source, 'desktop'), isNull(sessions.hiddenAt)),
+      inArray(sessions.source, ['plugin', 'bot', 'scheduler']),
+    ),
     isNull(sessions.orcaRole),
     isNull(sessions.remoteHostId),
     isNull(sessions.agentDeviceId),
@@ -53,10 +57,22 @@ export interface PiIdleReleaseCandidate {
 
 /** 运行时会话面：只暴露回收决策需要读的状态。 */
 export interface PiIdleReleaseSession {
+  readonly id: string;
   isTurnRunning(): boolean;
   listBackgroundTasks(): readonly unknown[];
   countPendingWakeContinuations(): number;
+  manageAsyncUserQuestions: Session['manageAsyncUserQuestions'];
   closeIfIdle(): Promise<boolean>;
+}
+
+/** Preserve task resources and queued input while retiring only the current runtime. */
+export function createPiIdleReleaseClose(
+  maker: Pick<Maker, 'closeSessionIfCurrent'>,
+  withCloseSuppressed: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>,
+): (session: PiIdleReleaseSession) => Promise<boolean> {
+  return (session) => withCloseSuppressed(session.id, async () =>
+    await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh', { onlyIfIdle: true }) === 'closed',
+  );
 }
 
 /** Timer handle abstraction keeps the watcher deterministic under fake timers. */
@@ -76,6 +92,8 @@ export interface PiIdleReleaseWatcherDeps {
   readIdleSinceMs(sessionId: string): Promise<number | null>;
   /** 已排定/在途的自动续跑(stall / idle / reconnect 等)未收口时不得释放。 */
   hasScheduledAutoResume(sessionId: string): boolean;
+  /** Maker's transient close path retains native identity, attachments and worktree. */
+  closeSession(session: PiIdleReleaseSession): Promise<boolean>;
   now(): number;
   timer: PiIdleReleaseTimer;
   log: {
@@ -132,8 +150,11 @@ export function createPiIdleReleaseWatcher(
             if (idleSinceMs === null) return;
             if (deps.now() - idleSinceMs < idleReleaseMinutes * 60_000) return;
 
+            // Async questions can outlive a turn; closing would expire an unanswered card.
+            if ((session.manageAsyncUserQuestions({ action: 'list' }).questions?.length ?? 0) > 0) return;
+
             // 同步复查 + 关闭预约：并发发送要么先赢，要么看到 closePromise 被拒。
-            const released = await session.closeIfIdle();
+            const released = await deps.closeSession(session);
             if (!released) return;
 
             deps.log.info('piIdleWatcher: released idle session', {

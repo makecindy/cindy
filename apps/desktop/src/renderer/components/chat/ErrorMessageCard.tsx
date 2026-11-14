@@ -60,7 +60,7 @@ export function ErrorMessageCard({
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
   const parsedRemoteKey = remoteErrorI18nKey(message);
-  const remoteKey = isRemoteAgentResumeRejectedError(message) ? 'chat.remoteError.REMOTE_AGENT_RESUME_REJECTED'
+  const remoteKey = isRemoteAgentResumeRejectedError(message) ? 'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'
     : isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
     ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
     : parsedRemoteKey;

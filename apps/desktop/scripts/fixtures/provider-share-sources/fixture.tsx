@@ -93,10 +93,13 @@ mountPage({
           }
           const configured = ctx.case === 'subscription-pool' || ctx.case.startsWith('legacy-upgrade') || subscriptionControl.connected;
           const directory = command.providerId === 'anthropic' ? '/Users/alex/.claude' : '/Users/alex/.codex';
-          const defaultAccount = { id: ctx.case.startsWith('legacy-upgrade') ? 'imported-one' : 'default', identity: 'alex@example.com',
+          const defaultAccount = { id: ctx.case.startsWith('legacy-upgrade') ? 'imported-one' : 'default',
+            identity: typeof ctx.data.identity === 'string' ? ctx.data.identity : 'alex@example.com',
             plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: 'ready', directory,
             running: 0, paused: false, limit: 4, weight: 1 };
-          return { providerId: command.providerId, configured, strategy: 'least', accounts: configured ? [
+          return { providerId: command.providerId, configured, strategy: 'least',
+            ...(command.action === 'preview' && ctx.case.endsWith('-added') ? { defaultAdded: true } : {}),
+            accounts: configured ? [
             { ...defaultAccount, usage: accountUsage(command.providerId, [2, 86, 16]) },
             { ...defaultAccount, id: 'second', identity: 'work@example.com', plan: 'Pro', directory: directory + '-cindy-account', limit: 2,
               usage: accountUsage(command.providerId, [30, 40, 5]) },

@@ -112,7 +112,9 @@ import { readImRemoteAutomaticDefaults, readImRemotePermissionModes, readImRemot
 import { resolveImAutomaticDefaults } from '../im/defaultSessionSettings.js';
 import { getWorkspaceProviderRoute } from './workspaceProviderSourceStore.js';
 import {
+  SHARED_PREFS_CHANNEL,
   getWorkspacePref,
+  isSharedPrefsAdopted,
   isWorkspacePrefsMigrated,
   resolveWorkspacePrefOverrides,
   type HookPrefsChannel,
@@ -209,25 +211,32 @@ function hookDefaultInputs(
       ? sourceIm
       : null;
   const workspaceAlias = workspaceCtx?.alias;
+  // 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts): 这个渠道原有的按渠道偏好并入
+  // 之后, 一律读共用的那一份; 并入之前(升级后还没连上过服务端)沿用它自己的那份。
+  const shared = prefsChannel !== null && isSharedPrefsAdopted(prefsChannel);
   const localPref =
     prefsChannel !== null && workspaceAlias
-      ? getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+      ? shared
+        ? getWorkspacePref(SHARED_PREFS_CHANNEL, null, workspaceAlias)
+        : getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
   const mergedOverrides = resolveWorkspacePrefOverrides(
     localPref,
     overrides,
     prefsChannel !== null && workspaceAlias !== undefined && isWorkspacePrefsMigrated(prefsChannel),
   );
-  // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
+  // 项目级来源偏好(纯本地, 用户在设置页该项目那一行显式选的来源)优先于草稿默认来源。
   const workdirRoute =
     prefsChannel !== null && workspaceAlias
-      ? getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+      ? shared
+        ? getWorkspaceProviderRoute(SHARED_PREFS_CHANNEL, null, workspaceAlias)
+        : getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
   const workdirProviderId = workdirRoute?.providerId ?? null;
-  // 官方 Telegram hook 与个人 Bot 是两个独立入口。个人 Bot 使用
-  // channel='telegram'；官方群继续读取 global，避免任一设置卡静默
-  // 改写另一入口的新会话路由。
-  const imDefaults = readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined);
+  // 官方机器人与个人 Bot 是两个独立入口。个人 Bot 各用自己渠道的那份(如 channel='telegram');
+  // 官方机器人(含 Slack)统一读 global —— 没单独配置过的项目在哪个官方机器人里都按同一份
+  // 默认跑, 也避免任一个人 Bot 的设置卡静默改写官方入口的新任务路由。
+  const imDefaults = readImDefaultSettings();
   return { channel: prefsChannel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults };
 }
 

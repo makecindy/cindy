@@ -166,7 +166,7 @@ export default function HookTaskCard({
           const heading = hookTaskCardHeading(im, origin, t);
           return (
             <span
-              className="min-w-0 truncate text-13 font-semibold text-[var(--text-primary)]"
+              className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]"
               title={heading.title}
             >
               {heading.label}

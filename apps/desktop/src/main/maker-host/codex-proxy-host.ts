@@ -24,7 +24,7 @@ import {
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory } from '@cindy/model-compat';
+import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -225,6 +225,10 @@ export interface CodexProxyHostPorts {
   parseCodexCustomProviderPath: typeof import('./codex-custom-provider-route.js').parseCodexCustomProviderPath;
   relativeProviderRequestPath: typeof import('./codex-custom-provider-route.js').relativeProviderRequestPath;
   setAppliedCustomProviderRoutes: typeof import('./codex-custom-provider-route.js').setCodexAppliedCustomProviderRoutes;
+  /** Optional inbound admission for every Codex proxy this core starts, checked before all
+   * routing (the Node Host requires inbound credentials on its loopback proxy). Not set: no
+   * check, as before. */
+  authorizeInbound?: import('@cindy/anthropic-compat-proxy').ProxyOptions['authorizeInbound'];
 }
 
 /** Same protocol, routing and recovery implementation for both launchers. */
@@ -1325,9 +1329,23 @@ function createChatBridgeDecision(
           || (isOfficialAnthropicUpstream(standard.upstream) && (standard.contextWindow ?? 0) >= 1_000_000))) {
           appendCommaSeparatedHeaderToken(nativeHeaders, 'anthropic-beta', 'context-1m-2025-08-07');
         }
-        const nativeFetch = createPiProviderFetch({ row: { ...standard,
+        const nativeRow = { ...standard,
           supportsFastMode: selected?.supportsFastMode ?? standard.supportsFastMode,
-        }, providerId,
+        };
+        const chatProfile = standard.execution.pi.api === 'openai-completions'
+          ? resolveProviderCompatibilityProfile({
+            harness: 'codex', protocol: 'openai-chat', upstreamBase: upstream, model: actualModel,
+            authMode: route.routing.authStrategy === 'oauth-token' || route.routing.authStrategy === 'provider-oauth-header' ? 'oauth' : 'api-key',
+          }) : null;
+        // Kimi Code rejects developer messages. Its native SDK does not recognize
+        // this endpoint; fill only the missing role capability on this Codex route.
+        if ((chatProfile?.id === 'kimi' || chatProfile?.id === 'kimi-code')
+          && standard.execution.pi.compat?.supportsDeveloperRole === undefined) {
+          nativeRow.execution = { ...standard.execution, pi: { ...standard.execution.pi,
+            compat: { ...standard.execution.pi.compat, supportsDeveloperRole: false },
+          } };
+        }
+        const nativeFetch = createPiProviderFetch({ row: nativeRow, providerId,
           // Keep the catalog adapter while honoring the host assigned to this account.
           upstream,
           apiKey: nativeBridgeApiKey(headers),
@@ -3570,6 +3588,7 @@ async function createCodexProxyHandle(
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
+    ...(ports.authorizeInbound ? { authorizeInbound: ports.authorizeInbound } : {}),
     transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined).map(
       (transform): RequestTransform => {
         // Namespaced Responses use a frozen Provider route. Preserve its native

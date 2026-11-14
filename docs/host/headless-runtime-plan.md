@@ -28,7 +28,7 @@ Host 仍是主动开启的实验功能。记录里的「本地」「未提交」
 | 范围 | 代码现状 | 必须完成的调整 |
 | --- | --- | --- |
 | 任务读取 | 普通列表、详情、历史、消息写入与子任务读取已共用；任务创建已复用原服务 | 逐步把数据库、投影和服务的依赖闭包移出 `desktop/main`，保持唯一 schema 和迁移链 |
-| 任务执行 | 共用 maker-core；Host 的 `agent/runtime.mjs`、队列、凭证装配仍另有实现 | 桌面和 Host 调用同一任务服务、Agent 装配与权限确认入口；删除被替代的 Host 分支 |
+| 任务执行 | 共用 maker-core；Host 的 `agent/runtime.ts`、队列、凭证装配仍另有实现 | 桌面和 Host 调用同一任务服务、Agent 装配与权限确认入口；删除被替代的 Host 分支 |
 | 重启恢复 | 客户端已有事件重放和快照恢复；Host 已使用共用持久队列和执行标记；异常恢复仍需端到端验收 | 共用持久队列、执行状态和中断恢复规则；不能靠客户端重新发送补偿 |
 | 远程客户端 | 已装配原 Device Link Client、完整 dispatcher、账号代次、撤销与 App 调用入口；多端实机未验收 | 把 Device Link 的被控入口与 Electron 适配拆开，沿用账号、设备、订阅、撤销与协议协商 |
 | 插件 | 已装配原 GhostManager/GhostRuntime、启用/设置服务、Chromium OS 沙箱和独立 Node worker；Claude/Codex/Pi 插件 MCP 实际调用通过 | 保留 GhostRuntime、安装回执和权限判断，提供无图形环境的沙箱与子进程适配器 |
@@ -1165,24 +1165,24 @@ CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指
   当时没有核实启动进程的环境变量，也没有检查沙箱里的模型登录来源。`--mock` 与隔离
   profile 都挡不住这种沿用，只把 `HOME` 指到临时目录也不够（钥匙串不随 `HOME` 变）。
   本机 `~/.codex/auth.json` 最后修改时间早于沙箱创建，沙箱运行期间没有经这个链接写入。
-  在启动前的模型隔离有硬性保证之前，不再启动带界面的沙箱。
+  带界面的沙箱可能调用真实模型；是否允许由用户决定，在那之前不再启动带界面的沙箱。
 - **计数格式**：计数报告从 v2 起按 `(kind, channel)` 分别记 invoke 与 event。上面两份证据
   是 v2 之前录的旧格式，没有重录，脚本按每条记录的 `kind` 读取。旧格式只按通道名记数，同名的
   invoke 与 event 混在一条里，事后拆不开，需要分开时只能重新采样。今天同名的只有
   `ghosts:workdir-prefs` 一对（同步事件 S·镜像 + 异步调用 A），两份证据里都没有它的调用，
   所以排行与 133 个（722 次）不受影响。
 
-**归属**（主进程共 1456 个通道；规则表见清单「归属规则」，正本是脚本的 `OWNERSHIP_RULES`）：
+**归属**（主进程共 1482 个通道；规则表见清单「归属规则」，正本是脚本的 `OWNERSHIP_RULES`）：
 
 | 分类 | 含义 | 通道数 |
 | --- | --- | ---: |
-| 已代理 | 合同 75、客户端模式自有 2 | 77 |
-| A | 必须由后台处理：读写后台持有的数据或运行状态 | 912 |
-| B | 永久留在窗口：窗口外壳、对话框／剪贴板／系统外壳／通知、截屏录屏与远程桌面、电脑控制与浏览器、输入设备与语音、安装包更新与诊断 | 353 |
+| 已代理 | 合同及通用路由 80、客户端模式自有 2 | 82 |
+| A | 必须由后台处理：读写后台持有的数据或运行状态 | 925 |
+| B | 永久留在窗口：窗口外壳、对话框／剪贴板／系统外壳／通知、截屏录屏与远程桌面、电脑控制与浏览器、输入设备与语音、安装包更新与诊断 | 359 |
 | W | 窗口本地设置：侧栏设置与项目顺序，窗口直接读写同一份 profile | 6 |
 | S | 同步通道（处理函数给 `event.returnValue` 赋值，AST 自动识别）：S·本地 8（界面设置与登录首帧提示，窗口本地读 profile）；S·镜像 6（`ghosts:*`，数据归 Host） | 14 |
 | R | 回执通道：主进程向界面要数据、界面回执（`model-favorites:host-*`、`setup-migration:host-*`、`app-preferences:reply`） | 6 |
-| C | C-后台 32（终端、任务范围文件操作）、C-两段式 41（选择框／访达／确认框后写后台）、C-窗口本地 11（本窗口选择的本机文件、进程监视）、C-专项设计 4（`input-handoff:*`、`device-link:invoke`） | 88 |
+| C | C-后台 32（终端、任务范围文件操作）、C-两段式 43（选择框／访达／确认框后写后台）、C-窗口本地 11（本窗口选择的本机文件、进程监视）、C-专项设计 4（`input-handoff:*`、`device-link:invoke`） | 90 |
 
 依赖判定：A 领域的处理函数及其调用的两层桌面源码函数（含参数默认值，不含被调函数里的嵌套回调）
 若用到窗口 API（对话框、系统外壳、剪贴板、`BrowserWindow.fromWebContents` 等），改判 C-两段式；
@@ -1190,8 +1190,8 @@ CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指
 扫描从参数默认值起算后，唯一改判的是 `git-review:open-file`：A（git 与工作树）→ C-两段式
 （`openReviewFile` 第 4 个参数默认值是 `shell.openPath`）。它在 A 与 C-两段式之间移动，原口径 990 不变。
 
-**总口径：真正要 Host 做的 = A + C-后台 + C-两段式 = 912 + 32 + 41 = 985**；夹具巡检实际调用到
-其中 **132 个（709 次）**，这是“还差多少”的下限，巡检没有覆盖真实模型回合、附件、新建自动化、
+**总口径：真正要 Host 做的 = A + C-后台 + C-两段式 = 925 + 32 + 43 = 1000**；夹具巡检实际调用到
+其中 **131 个（666 次）**，这是“还差多少”的下限，巡检没有覆盖真实模型回合、附件、新建自动化、
 Orca、伙伴与 IM、远程执行。S 与 R 已从 A 中单列，C-窗口本地与 C-专项设计不计入。后续各批的
 范围与“还差多少”以此为准。
 
@@ -1205,7 +1205,8 @@ Orca、伙伴与 IM、远程执行。S 与 R 已从 A 中单列，C-窗口本地
 `maker:browser:*` 2 个，只在客户端模式跳过的 `registerMakerIpcsAfterSplash` → `registerMakerIpc`
 里注册，今天返回 `UNSUPPORTED_CAPABILITY`（拖拽开始是事件，无人监听）。**未实现**；#9991 不接，
 归本任务第 1a 批：#9991 合并后，把这 12 个注册拆成客户端模式也会调用的函数。另 2 个插件页面通道
-注册在 `webContents.ipc` 上，快照不覆盖。
+注册在 `webContents.ipc` 上，快照不覆盖。（第 1a 批已处理：电脑使用 10 个改在客户端分支注册，浏览器
+2 个改归 Host，见下一节。）
 
 **剩余项（本批记录，不在本批处理）**：
 
@@ -1256,3 +1257,157 @@ Orca、伙伴与 IM、远程执行。S 与 R 已从 A 中单列，C-窗口本地
 --isolated=<同名沙箱>` 启动窗口，停在登录页后取报告覆盖到
 `evidence/channel-usage-client-login.json`。两份报告都带写入时的主进程处理者快照，最后重新
 生成清单。restart 脚本为此转发 `CINDY_IPC_USAGE_FILE` 与 `CINDY_HOST_API` 两个变量。
+
+## 第 1a 批：Host 通用 IPC 路由（2026-11-12）
+
+目的是把“已登记的桌面通道由 Host 回答”的机制立起来，通道本身只接两个只读的：
+`maker:session-background-tasks:list`（任务打开时恢复后台进程）与 `maker:side-chat:list:v1`
+（任务打开时恢复旁聊标签）。协议细节以
+[实验性 Host 通用 IPC 路由](../dev-rules/protocol-compatibility/host-web-adapter-experimental.md#实验性-host-通用-ipc-路由未发布)
+为准，这里只记设计要点和范围。
+
+- **准入设计**：`POST /api/ipc/<通道名>` 只走 HTTP，不经 Device Link。顺序固定：调用方受众（只认本机
+  bearer，网页 cookie 一律 403，与“通道不存在”同一回答）→ 实例头 → 是否登记、是否绑定 → 合同指纹 →
+  请求体里的 owner 与入口 app session 比对 → 参数校验 → 处理函数。处理函数返回后再比一次 owner，变了
+  就丢弃结果；不允许“空成功”（登记了但没绑定的通道回 `channel_unsupported`）。
+- **已登记通道是跨版本合同**：登记表 `packages/maker-shared/src/hostIpcRegistry.ts`（条目按族一个文件，
+  `hostIpcEntries/`）是网页、桌面代理与 Host 共用的唯一合同。指纹精确比对，任何形状变化（包括只加一个
+  可选字段）都换新通道名；只改语义时加 `contractVersion`。
+- **返回形状在编译期钉住**：Host 绑定文件（`apps/host/src/ipc-bindings/`）为结果里的每个对象写一张
+  以产出类型为键的字段表（`ResultFields<T>`，配 `satisfies`），maker-core 给 `BackgroundTaskSnapshot`
+  加、删字段或改可选性时 Host 类型检查直接失败；路由测试再把这些表与登记表的 schema 逐项比对，并要求
+  每个带对象返回值的条目都有表。运行时的 `result_mismatch` 日志只是第三道防线。日志的 `detail` 会带
+  对象键名、不带值；以后若登记以用户数据为键的对象，`detail` 必须先改成不带键名。
+- **代理设计**：窗口端在转发前做与内嵌模式相同的可信窗口校验；未协商到的通道一律按
+  `UNSUPPORTED_CAPABILITY` 处理，界面沿用原来的“不支持”提示。只读条目仅在 Host 就绪、同一账号、指纹未变
+  时重试一次；启动器钉了 Host 实例时不换绑。超时默认 30 秒（内嵌 IPC 没有超时），作为客户端模式差异
+  记在协议文档里。
+- **电脑使用**：设置页的 10 个 `maker:computer:*` 移进 `registerComputerUseIpc`，客户端模式在
+  `registerMakerIpcsAfterSplash` 的客户端分支里调用，处理函数逐字不变（见
+  [electron-client-mode.md](electron-client-mode.md)）。`maker:browser:*` 2 个归 Host 的浏览器运行时，
+  继续回 `UNSUPPORTED_CAPABILITY`。
+
+**合入 main `8e7646f7d6`（含 #10047）后重生成清单**：总数 1456；合同 75 → 77（登记表的两个通道从 A
+计入合同）；B 353 → 351（浏览器 2 个改归 A，领域“Agent 浏览器”）；A 912 不变（−2 +2）；**Host 待接
+仍是 985**（浏览器 +2、登记表 −2；只算浏览器是 987）。巡检覆盖的待接通道 132 → 131（709 → 666 次：
+登记表两个通道共 44 次移出，浏览器状态 1 次移入）。改判的只有这 4 个，其余逐行不变。窗口类 378 → 376：
+已注册 374（其中电脑使用 10 个是源码判定，客户端快照录于 1a 之前，还没有它们），未注册 0。清单脚本从
+源码读客户端分支调用了哪些注册函数；分支被改名或挪走时生成直接失败，不会把窗口本地通道误报为被拒。
+
+### 按领域排行
+
+清单新增一节 [要 Host 做的：按领域排行](channel-coverage.md#要-host-做的按领域排行)，按归属规则的领域
+汇总 985 个待接通道，排序依据是夹具巡检的调用次数（下限：巡检没有真实模型回合、附件、新建自动化、
+Orca、伙伴与 IM、远程执行）。前十：
+
+| # | 领域 | 通道数 | 巡检调用到 | 调用次数 | 前提 |
+| ---: | --- | ---: | ---: | ---: | --- |
+| 1 | 伙伴与 IM | 133 | 22 | 128 | Host 目前拒绝伙伴任务（`send-preflight.ts`），读通道可先接，运行时要等伙伴任务能在 Host 跑 |
+| 2 | 任务、消息与输入队列 | 111 | 17 | 123 | 数据库已归 Host；含“上下文窗口”族 6 个；写通道要先给处理函数加上下文 |
+| 3 | 插件、技能与 MCP | 148 | 16 | 93 | 6 个同步通道（S·镜像）要先做窗口缓存镜像 |
+| 4 | 供应商与模型 | 82 | 15 | 80 | 含“上下文窗口”族 4 个，见下文，先做行为差距 |
+| 5 | git 与工作树 | 59 | 9 | 75 | 工作树运行租约 Host 未接（见装配差异表） |
+| 6 | 设备互联与远程执行 | 75 | 7 | 66 | Host 目前拒绝远程执行任务 |
+| 7 | 未登记前缀 | 110 | 17 | 29 | 先补归属规则再排期 |
+| 8 | 记忆、学习与钩子 | 44 | 4 | 24 | |
+| 9 | 账号与凭据 | 40 | 4 | 17 | 动凭据边界，逐个单独评审 |
+| 10 | 设置与偏好 | 31 | 9 | 15 | |
+
+**先于界面通道的是“行为差距”**：任务在 Host 上能跑、但实际行为与桌面不同的地方（下面两节）。界面通道
+接得再多，这些差距不补，同一个任务在客户端模式下的结果仍然不同，所以优先级高于排行里的普通通道。
+
+### 上下文窗口设置在 Host 上生效（任务实际运行行为的差距）
+
+桌面给三个 agent 注入 5 个解析器（`resolveModelContextLimit`、`resolveModelCompactionPct`、
+`resolveVerifiedContextWindow`、`resolveModelMaxOutputTokens`、`resolveCodexContextWindowInfo`），并在
+`prepareStartOptions` 里按任务档位应用工作上下文预算（`applySessionContextWindowBudgetToCreateOpts`）。
+Host 构造三个 agent 时一个都没传，也没有启动钩子，只有 Codex 的 `resolveCodexThreadContextWindow` 与
+启动配置里的压缩比例。结果：客户端模式下 Claude Code 与 Pi 任务不理会用户设的模型级上限、压缩比例和
+任务档位，Codex 只生效一部分；运行中的 Codex 任务查上下文窗口在 Host 上恒为空。
+
+这一族共 14 个通道，巡检调用 36 次：`maker:model-context-limit:get/set/reset`、`maker:model-compaction:set`、
+`maker:get-context-window-bounds`、`maker:set-context-window-budget`、`maker:compaction:*` 4 个、
+`maker:pi-compaction:*` 4 个。它们横跨三个领域（任务 6、供应商与模型 4、未登记前缀 4），按族一起做，
+不按领域拆。顺序：
+
+1. Host 给三个 agent 接上这 5 个解析器（用 Host 自己的供应商解析），并在启动时应用任务预算。
+2. 再接读通道（`model-context-limit:get`、`get-context-window-bounds`），这时 Host 回答的才是实际生效的值。
+3. 写通道最后，要求处理函数先有上下文（调用方、owner 戳、AbortSignal）。
+
+在第 1 步完成之前，这些读通道继续回 `UNSUPPORTED_CAPABILITY`，不让界面把一个没生效的值显示成当前设置。
+
+### 桌面与 Host 的装配差异
+
+逐项对比桌面（`apps/desktop/src/main/maker-host/index.ts`、`pi-host.ts`）与 Host
+（`apps/host/src/agent/runtime.ts`，原 `runtime.mjs`；`codex-runtime.ts`、`mcp-runtime.ts`）给三个 agent 与 `Maker` 传的
+依赖。桌面给 Claude Code 传 34 项、Codex 48 项、Pi 45 项、Maker 8 项（生命周期钩子 9 个）；Host 分别是
+7、25、9（另有 1 项键名不对）、5（钩子 1 个）。状态：
+
+- **已接**：Host 传了同一项。
+- **行为不同**：没接，任务照常在 Host 上跑，但结果与桌面不同。这是“还差多少”的主体。
+- **Host 拒绝**：没接，但 Host 在发送、插话、恢复前就拒绝这类任务（`assertHostTaskExecutionSupported`：
+  远程执行、Orca、伙伴、审查与 Cindy Make 等托管任务），不会静默跑偏。
+- **低**：只影响诊断或本机资源登记。
+
+| 依赖 | 桌面给 | Host | 说明 |
+| --- | --- | --- | --- |
+| `auth`、`runtimeConfig`、`binaryPath`、`logger`、`mcpProviders`、`makerMemory`、`getMcpToolApprovalPolicy` | 三个 | 已接 | `runtimeConfig` 已于 m1-cp5c 与桌面同源（放行表第 23 行），endpoint 仍是账号网关（第 24 行）；`mcpProviders` 只是键已接：内置工具服务只有 browser、computer、cindy_memory，见第 22 行 |
+| Codex 凭证与路由：`resolveCodexLocalAuthPolicy`、`isCodexAccountProvider`、`isolateCodexAccountSessions`、`createCodexAuthTokenReader`、`onCodexLocalModelsListed`、`resolveCodexSubagentRoutingSignature`、`resolveCodexThreadContextWindow`、`disableCodexPluginRuntime` | Codex | 已接 | |
+| Codex 代理与 MCP：`prepareCodexExtraSpawnConfig`、`registerCodexSystemPromptForThread`、`registerCodexChildThreadForParent`、`getCodexSubagentIdentity`、`armCodexHttpRecovery`、`registerCodexTextOnlyPolicy`、`registerCodexMcpThreadContext`、`unregisterCodexMcpThreadContext`、`prepareCodexMcpToolCancellation`、`withCodexMcpDiscoveryContext` | Codex | 已接 | |
+| `resolvePiAgentHome` | Pi | 已接 | |
+| `resolvePiNativeProviders` | Pi | 已接（m1-cp18b2；m1-cp18b 曾更正为“部分”） | 桌面同一份实现（`piNativeProvidersCore.ts`），Host 用自己的端口（`pi-native-providers.ts`）；之前 Host 只按自定义供应商配置生成，没有 ChatGPT、SuperGrok 订阅供应商。见放行表第 19、24 行 |
+| **`preparePiExtraSpawnConfig`**（Pi 的 MCP 桥） | Pi | **键名不对，实际未接** | Host 传的是 `prepareMcpBridge`，PiAgent 只读 `preparePiExtraSpawnConfig`（`runtime.mjs` 是 JS，没有类型检查拦住）。Host 上的 Pi 任务拿不到进程内 MCP（记忆、插件工具等）。单独小修复，不放进 1a |
+| 上下文窗口 5 个解析器 + 启动时应用任务预算 | 三个 | 行为不同 | 见上一节 |
+| 技能：`getDisabledSkillPaths`、`getManagedSkills`、`scanLocalCustomizations`、`prepareCodexSkills`、`resolveLocalMcpDuplicateChoices`；启动前共享项目 Skill 链接（`prepareStartOptions`、`onBeforeStart`） | 三个 | 行为不同 | 用户禁用的 Skill 仍会被加载；Cindy 内置与插件带的 Skill 不注入 |
+| 插件花名册与能力裁决：`getGhostRosterPrompt`、`capabilityRouting`、`resolveCapabilityRouting`、`capabilityAdditions` | 三个 | 行为不同 | 系统提示里没有插件花名册；与原生插件重叠的能力不做裁决 |
+| 复核：`reviewAutoPermissionAction`、`toolLoopReviewer`（agent 与 Maker 各一处） | 三个 | 行为不同 | Auto 模式在没有原生审查的路由上少一道复核；工具循环疑似时缺省放行，只保留最终上限 |
+| `visionBridge`（Maker）、`resolvePiVisionBridgeEnv` | Maker、Pi | 行为不同 | 没有视觉能力的模型配了视觉后端时，在 Host 上看不了图 |
+| 启动钩子：订阅快速模式策略（`fastModePolicy`）、Pi 思考开关记忆、用量价格档（`resolveUsagePriceVariant`、`getPriceVariant`） | 钩子 | 行为不同 | 快速模式与思考开关按默认值；用量不区分 Fast 价格档 |
+| 回合改动记录 `turnChangeCapture` | Claude、Pi | 行为不同 | 任务里“本轮改了哪些文件”的记录缺失 |
+| Codex 历史产品提示：`getCodexHistoryHasProductPrompt`、`onCodexProductPromptDelivery` | 钩子 | 行为不同 | 恢复时按“未知”处理，倾向重新注入产品提示 |
+| 工作树运行租约与回收：`prepareStartOptions`、`onStartFailed`、`onStartCleanupSucceeded`、`onClose` 里的租约，`onClose` 的 `WorktreePool.releaseWorktree`，`isTransientCloseRequest` | 钩子 | 行为不同 | 并发使用与关闭后回收工作树的保护缺失；瞬态重建时的保留判断缺失 |
+| Claude 专有：`claudeAllowedTools`、`claudeHooks`、`resolveModelEfforts`、`resolveClaudeSubagentModelAccess`、`registerClaudeSubagentTask`、`getClaudeSubagentTaskUsage` | Claude | 行为不同 | 只读工具也会提示；进程内 SDK 钩子不注册；effort 不按路由收窄；子代理模型判定为“未知”，子代理用量不修补 |
+| Codex 专有：`prepareCodexHostToolCatalog`、`prepareCodexLocalCredentialModeSwitch`、`prepareCodexResumeSession`、`resolveCodexThreadStorage`、`recordCodexThreadLocation` | Codex | 行为不同 | 凭证形态切换前不软关闭任务（CodexAgent 遇活动订阅时拒绝切换）；续接本机 Codex CLI/App 的外部 thread 不可用 |
+| Pi 专有：`registerPiProxySession`、`derivePiProxySessionToken`、`spawnPiSubagentRunner`、`resolvePiProjectTrustInput`、包管理 5 项（`resolvePiManagedPackageResources`、`resolvePiNativePackagePaths`、`mutatePiManagedPackage`、`onPiManagedPackageMutationSettled`、`getPiExtensionUiStrings`）、模型描述 5 项（`resolvePiRuntimeModelDescriptor`、`resolvePiRuntimeModels`、`resolvePiGatewayModel{Descriptor,Api,Spec}`）、`resolvePiGlobalContextHome`、`resolvePiNativeCompat{StorePath,Override}` | Pi | 行为不同 | 子进程不能向本机模型代理认证；持久子代理起不来；项目信任输入缺失时按失败处理；Pi 包管理与网关模型描述回落到缺省 |
+| `resolveSessionEnvironment`；启动钩子的伙伴工作区、伙伴档案运行时、Orca 启动准备，`onStartSucceeded`／`onStartFailed` 里的伙伴快照与 Orca 标记 | 三个、钩子 | Host 拒绝 | 伙伴与 Orca 任务 |
+| 远程执行：`getRemoteAgentFileOps`、`resolveRemoteClaudeRoute`、`remoteCcQueryFactory`、`getRemoteCodexTransport`、`getRemotePiTransport`、`getRemotePiFileOps`、`resolveRemotePiBinaryPath`、`remotePiSkipMcpBridge`、`getRemotePiAgentProxyEnv`；Maker 的 `startDeviceAgentSession`；启动钩子的 Agent 所在设备恢复 | 三个、Maker | Host 拒绝 | 远程执行任务 |
+| 进程登记与诊断：`registerLocalAgentProcess`、`registerLocalCodexAppServerProcess`、`resolveCcDebugFile`、`trackCcDebugFile`、`getOutboundPathFact` | 三个 | 低 | Host 起的 agent 进程不进资源用量登记；cc-debug 网络日志不落盘；Codex“后端不可达”提示不能给出实测的出口路径 |
+| 关闭清理：Codex 代理提示注销、电脑使用驱动会话、暂存附件 | 钩子 | 已接（另行） | Host 分别在 `codexRuntime.closeSession`、`platformTools.closeSession`、输入队列关闭时做 |
+
+没有逐项核对的：启动钩子里的账号供应商就绪检查与 provider 冻结（Host 有自己的发送前检查和
+`setSessionProvider`，两者是否等价没对照）；禁用插件 id 的注入（Host 只在 Codex MCP 线程登记时按工作目录
+读取，Claude 与 Pi 没核对）。
+
+### Host 真实进程验收：`test:ipc-route`
+
+```sh
+cd apps/host && pnpm run test:ipc-route
+```
+
+脚本 `apps/host/scripts/ipc-route.e2e.mjs` 起一个真实 Host 进程：数据目录与 `HOME` 都是新建的临时目录，
+端口是随机空闲端口，去掉 `CINDY_HOST_OWNER*`，结束时经该临时 profile 的停止接口关掉 Host 并删除目录。
+它不登录，所以每次调用都停在 owner 门：验证的是生产装配（`main.ts` 给出的清单、路由挂在门后、真实 HTTP
+上的路径与头编码），以及钉了实例的代理不会换绑到替换上来的 Host。登录后的路径（两个通道拿到真实的非空
+数据，旁聊用内存 SQLite 里预置的记录）在进程内测试 `src/ipc-route.test.mjs` 里覆盖；后台进程列表不调用
+真实模型就造不出运行中的后台任务，只覆盖“没有活实例回空列表”。
+
+它和另外两个 Host 进程级验收（`test:lifecycle`、`test:scheduler`）一样不在 CI 里，目前只在本机 macOS
+跑过。Host 进程继承调用方的环境变量，运行前先确认环境里没有模型密钥类变量。
+
+### 还没做
+
+- 窗口端的失败缓存留到接轮询类通道之前：钉了实例且 Host 被替换时，每次调用都会发清单与附着两个请求，
+  需要一个几秒的失败缓存。
+- 写通道与耗时的读通道之前，处理函数要先有上下文（调用方类别、入口 owner 戳、AbortSignal），代理超时
+  或中止时 Host 端的处理函数目前不会被取消。
+- 客户端模式快照需要重录才能把电脑使用 10 个从“源码判定”变成实测。这需要启动带界面的窗口；带界面
+  运行可能调用真实模型，是否允许由用户决定，目前不做。
+- 如果用户以后允许带界面运行，每份带界面运行的报告都要写一行用量核对：沙箱数据库里
+  `daily_model_usage`、`daily_session_usage`、`pi_usage_receipts` 三张表的行数和涉及的模型，如实报告
+  调用了什么。没有隔离开关，启动器的检查保证不了不调用模型，原计划的启动器 PR 已取消。
+- Pi MCP 桥的键名错误单独修（分支 `cindy/host-pi-mcp-bridge`），同时加一条守护：`runtime.mjs` 交给引擎与
+  Maker 的键必须是 `AgentDeps`／`MakerDeps` 里有的键。
+- 已在 M1 第 1 步完成：`runtime.mjs` 改名为 `apps/host/src/agent/runtime.ts` 并受类型检查。只补类型、不改运行逻辑；
+  对象字面量里写错的键由 tsc 拦下，展开进来的依赖包仍由上面那条守护管。
+- 以后可以收紧：`createCodexLocalCliAuth` 里的 `resolveRoute!(...)` 为保持原 JS 行为用了非空断言——缺少
+  resolver 时抛 TypeError，被外层 catch 成 `not_connected`。改成显式判空属于逻辑变更，M1 不做。

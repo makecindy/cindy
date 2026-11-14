@@ -161,6 +161,13 @@ describe('MessageSourceLabels plugin and row', () => {
     expect(screen.getByRole('button').textContent).toBe('chat.userMessage.pluginSent');
   });
 
+  // A received plugin message belongs to the source computer, even in a local task.
+  it('shows a remote plugin source without opening an unrelated local installation', () => {
+    render(<MessageSourceLabels sourcePlugin={{ pluginId: 'other-device::dashboard', name: 'Dashboard' }} />);
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByTitle('chat.userMessage.sourceIds.plugin:other-device::dashboard')).toBeTruthy();
+  });
+
   it('shows at most one sender label plus the device label, marked as a share-image source', () => {
     const { container } = render(
       <MessageSourceLabels

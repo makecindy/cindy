@@ -120,8 +120,11 @@ type ProviderOAuthProgress = {
   url: string | null;
 };
 let providerOAuthProgressListener: ((progress: ProviderOAuthProgress) => void) | null = null;
+/** Connected providers the sign-in step may offer to join (none unless a test adds them). */
+let listedProviders: ProviderView[] = [];
 
 beforeEach(() => {
+  listedProviders = [];
   createAccount.mockReset().mockResolvedValue(undefined);
   deleteAccount.mockReset().mockResolvedValue(undefined);
   providerOAuthLogin.mockReset().mockResolvedValue({ ok: true });
@@ -132,12 +135,15 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     subscriptionAccounts: {
       command: vi.fn(async (command: SubscriptionAccountCommand) => {
-        if (command.action === 'connect') return subscriptionLogin(command);
+        if (command.action === 'connect' || command.action === 'create' || command.action === 'add')
+          return subscriptionLogin(command);
         if (command.action === 'cancel') return subscriptionCancel(command);
         return poolView;
       }),
+      onChanged: vi.fn(() => () => {}),
     },
     maker: {
+      listProviders: vi.fn(async () => ({ providers: listedProviders })),
       listProviderPresets: vi.fn(async () => ({ presets: [] })),
       localModelList: vi.fn(async () => ({
         status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
@@ -183,7 +189,39 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     expect(await screen.findByText('subscriptionAccounts.providerManagedAuth')).toBeTruthy();
     expect(screen.queryByText('subscriptionAccounts.signIn.useCodex')).toBeNull();
     fireEvent.click(screen.getByText('subscriptionAccounts.signIn.anotherAccount'));
-    await waitFor(() => expect(subscriptionLogin).toHaveBeenCalledWith(expect.objectContaining({ target: 'new' })));
+    // Nothing of this kind is connected yet, so it becomes its own provider without asking.
+    await waitFor(() => expect(subscriptionLogin).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'create', providerId: 'openai' })));
+  });
+
+  // 2026-11-13 (subscription-account-pools.md 合并与拿出由用户决定): another account used to join the
+  // built-in provider without asking. With a connected provider of the kind, the user chooses first;
+  // a separate provider stays the default and the wizard opens the provider it ended up in.
+  it.each([
+    { pick: 0, expected: { action: 'create', providerId: 'openai' }, opened: 'openai-created' },
+    { pick: 1, expected: { action: 'connect', providerId: 'openai', target: 'new' }, opened: 'openai' },
+    { pick: 2, expected: { action: 'add', providerId: 'work' }, opened: 'work' },
+  ])('asks where another account goes before signing in (option $pick)', async ({ pick, expected, opened }) => {
+    listedProviders = [
+      { ...OPENAI_PROVIDER, connected: true },
+      { ...OPENAI_PROVIDER, id: 'work', name: 'Work GPT', subscriptionPool: 'openai', connected: true },
+      { ...OPENAI_PROVIDER, id: 'idle', name: 'Idle GPT', subscriptionPool: 'openai', connected: false },
+    ];
+    subscriptionLogin.mockResolvedValue({ ...poolView, providerId: opened });
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[OPENAI_PROVIDER]}
+      entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText('subscriptionAccounts.signIn.anotherAccount'));
+    const choices = await screen.findAllByRole('radio');
+    // Only connected providers of the kind are offered, after the default separate choice.
+    expect(choices).toHaveLength(3);
+    expect(choices[0].getAttribute('aria-checked')).toBe('true');
+    expect(subscriptionLogin).not.toHaveBeenCalled();
+    // Options follow the separate default: OpenAI, then Work GPT (Idle GPT is not connected).
+    if (pick) fireEvent.click(choices[pick]!);
+    fireEvent.click(screen.getByText('subscriptionAccounts.placement.signInContinue'));
+    await waitFor(() => expect(subscriptionLogin).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(expected)));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(opened));
   });
 
   // Unit regression: cancellation must own the selected default/new CLI operation,

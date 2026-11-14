@@ -6,6 +6,8 @@
  * 纯函数 + 注入依赖,方便单测,不直接碰 store / Electron。
  */
 
+import { sessionTaskProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { isTeammateTaskSession } from '../../shared/sessionSource';
 import { conversationSearchTitle } from '../../shared/conversationSearch';
 import type {
   ConversationSearchLastActivityFilter,
@@ -324,9 +326,9 @@ export function searchCachedSessionsByTitle(
 
   sessions.forEach((session, index) => {
     // The mirror includes companion chat metadata; ordinary search must not expose it.
-    if (session.source === 'bot' || (!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) || isOrcaWorkerSession(session)) return;
+    if ((session.source === 'bot' && !isTeammateTaskSession(session)) || (!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) || isOrcaWorkerSession(session)) return;
     if (allowed && !allowed.has(session.id)) return;
-    if (!matchesWorkingDirSet(session.projectDir ?? session.workingDir, workingDirs)) return;
+    if (!matchesWorkingDirSet(sessionTaskProjectDirectory(session), workingDirs)) return;
     if (!matchesStatus(session.status, filters.status ?? 'all')) return;
     if (
       filters.agentKind &&
@@ -398,7 +400,7 @@ export function remoteIndexedSearchIgnoredWorkingDirs(
   const allowed = normalizeWorkingDirSet(workingDirs);
   if (allowed == null) return false;
   const results = Array.isArray(response?.results) ? response.results : [];
-  return results.some((item) => !matchesWorkingDirSet(item.session.projectDir ?? item.session.workingDir, allowed));
+  return results.some((item) => !matchesWorkingDirSet(sessionTaskProjectDirectory(item.session), allowed));
 }
 
 export function filterResultsByWorkingDirs(
@@ -422,7 +424,7 @@ export function filterResultsByRequestFilters(
     ...response,
     results: response.results.filter((item) => {
       if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) return false;
-      if (!matchesWorkingDirSet(item.session.projectDir ?? item.session.workingDir, allowedDirs)) return false;
+      if (!matchesWorkingDirSet(sessionTaskProjectDirectory(item.session), allowedDirs)) return false;
       if (isOrcaWorkerSession(item.session)) return false;
       if (!matchesStatus(item.session.status, status)) return false;
       if (agentKind !== 'all' && item.session.agentKind !== agentKind) return false;
@@ -493,6 +495,7 @@ export function sessionToSearchSummary(session: Session): ConversationSearchSess
     tags: session.tags,
     workingDir: session.workingDir,
     projectDir: session.projectDir,
+    ...(session.companion?.taskProjectDir ? { taskProjectDir: session.companion.taskProjectDir } : {}),
     workspaceKind: session.workspaceKind,
     agentKind: session.agentKind,
     status: session.status,
