@@ -146,10 +146,11 @@ function createRequestSizeController(
   preprocessor: InlineImagePreprocessor = { prepare: async () => null },
 ): RequestSizeController {
   return {
-    enabled: () => process.env.XDT_DISABLE_REQUEST_SIZE_CONTROL !== '1',
+    enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
     format: ctx => ctx.url.includes('/responses') ? 'responses' : ctx.url.includes('/messages') ? 'anthropic' : ctx.url.includes('/chat/completions') ? 'chat' : null,
     route: (ctx, body) => ({
       endpoint: ctx.url,
+      providerId: ctx.headers['x-cindy-pi-provider-id'] ?? ctx.headers['x-cindy-provider-id'] ?? ctx.headers['x-openai-provider-id'],
       modelId: typeof body === 'object' && body !== null && typeof (body as { model?: unknown }).model === 'string'
         ? (body as { model: string }).model : undefined,
     }),

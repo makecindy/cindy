@@ -72,16 +72,28 @@ describe('request size control', () => {
     const preprocessor: InlineImagePreprocessor = {
       async prepare({ bytes }) {
         calls++;
-        return { bytes: bytes.subarray(0, 2), mimeType: 'image/webp', width: 1, height: 1, changed: true, cacheKey: 'fake' };
+        return calls === 1 ? { bytes: bytes.subarray(0, 2), mimeType: 'image/webp', width: 1, height: 1, changed: true, cacheKey: 'fake' } : null;
       },
     };
     const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(8, 31)}` }] }] }));
-    const result = await controlRequestSize(raw, 'responses', { triggerBytes: raw.length - 1, targetBytes: raw.length - 1, preprocessor, route: { modelId: 'cache-test' } }, preserve);
+    const result = await controlRequestSize(raw, 'responses', { triggerBytes: raw.length + 1, targetBytes: raw.length + 1, preprocessor, route: { modelId: 'cache-test' } }, preserve);
     expect(result?.removedImages).toBe(0);
     expect(result?.body.toString()).toContain('image/webp');
-    const repeated = await controlRequestSize(raw, 'responses', { triggerBytes: raw.length - 1, targetBytes: raw.length - 1, preprocessor, route: { modelId: 'cache-test' } }, preserve);
-    expect(repeated?.body).toBeDefined();
-    expect(calls).toBe(1);
+    const repeated = await controlRequestSize(raw, 'responses', { triggerBytes: raw.length + 1, targetBytes: raw.length + 1, preprocessor, route: { modelId: 'cache-test' } }, preserve);
+    expect(repeated).toBeNull();
+    expect(calls).toBe(2);
+  });
+
+  it('passes original bytes to tighten even after prepare returns an intermediate image', async () => {
+    const original = Buffer.alloc(400, 9);
+    let tightenedInput: Buffer | undefined;
+    const preprocessor: InlineImagePreprocessor = {
+      async prepare({ bytes }) { return { bytes: bytes.subarray(0, 100), mimeType: 'image/jpeg', width: 1, height: 1, changed: true, cacheKey: 'prepare' }; },
+      async tighten({ bytes }) { tightenedInput = bytes; return { bytes: bytes.subarray(0, 20), mimeType: 'image/jpeg', width: 1, height: 1, changed: true, cacheKey: 'tighten' }; },
+    };
+    const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${original.toString('base64')}` }] }] }));
+    await controlRequestSize(raw, 'responses', { triggerBytes: raw.length + 1, targetBytes: raw.length + 1, singleImageMaxBytes: 10, preprocessor }, preserve);
+    expect(tightenedInput).toEqual(original);
   });
 
   it('preserves the exact existing prefix when the same history gets a new suffix', async () => {

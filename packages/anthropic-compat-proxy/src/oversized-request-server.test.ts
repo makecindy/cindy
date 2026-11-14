@@ -154,3 +154,32 @@ it('uses the same recovered body for local provider handlers, and does not dispa
   expect((await send()).status).toBe(413);
   expect(local).toHaveBeenCalledTimes(1);
 });
+
+it('spools a request beyond the configured ingress window before request-size control', async () => {
+  const received: Buffer[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    received.push(Buffer.concat(chunks));
+    res.end('ok');
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const proxy = await createAnthropicCompatProxy({
+    upstream: `http://127.0.0.1:${port}`,
+    maxRequestBodyBytes: 100,
+    requestSizeController: {
+      enabled: () => true,
+      format: () => 'responses',
+      route: () => ({}),
+      control: async () => ({ body: Buffer.from('{}'), changed: true, originalBytes: 0, bytes: 2, removedImages: 1, imageCount: 1, reason: 'test' }),
+    },
+  });
+  cleanup.push(() => proxy.dispose());
+  const raw = JSON.stringify({ model: 'gpt-test', input: [{ role: 'user', content: [{ type: 'input_text', text: 'x'.repeat(10_000) }] }] });
+  const response = await fetch(`${proxy.url}/v1/responses`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(raw)) }, body: raw,
+  });
+  expect(response.status).toBe(200);
+  expect(received).toEqual([Buffer.from('{}')]);
+});

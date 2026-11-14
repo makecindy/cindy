@@ -17,6 +17,7 @@ import { installResponseGuard } from './response-guard.js';
 import { collectRecoverableBody } from './oversized-attachments.js';
 import { classifyRequestSizeError } from './request-size-errors.js';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { Socket, TcpSocketConnectOpts } from 'node:net';
@@ -2300,9 +2301,35 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       catch { /* No stable owner: retain the existing bounded request path. */ }
     }
     const sizeControlEnabled = requestSizeController?.enabled?.() !== false && Boolean(requestSizeController);
-    // Request-size control owns the pre-dispatch 32 MiB budget. Keep the legacy recovery
-    // callback for an upstream 413 retry, but do not let it rewrite the ingress body first.
-    const ingressRecovery = sizeControlEnabled ? null : recoverOversized;
+    // Request-size control owns the pre-dispatch 32 MiB budget. Above that threshold use the
+    // existing disk-backed collector; only the bounded controller result returns to memory.
+    const ingressRecovery = sizeControlEnabled && requestSizeController
+      ? async (body: import('./oversized-attachments.js').OversizedBody): Promise<Buffer | null> => {
+        try {
+          const raw = await readFile(body.filePath);
+          const modelMatch = /"model"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw.toString('utf8', 0, Math.min(raw.length, 64 * 1024)));
+          const parsedHint = modelMatch ? { model: JSON.parse(`"${modelMatch[1]}"`) } : {};
+          const format = requestSizeController.format?.(requestCtx, parsedHint);
+          if (!format) return null;
+          const controlled = await requestSizeController.control(raw, format, {
+            route: requestSizeController.route?.(requestCtx, parsedHint) ?? {},
+            signal: body.signal,
+            context: requestCtx,
+          });
+          if (!controlled) return null;
+          logger.info?.('request size control applied from disk spool', {
+            reqId, originalBytes: controlled.originalBytes, bytes: controlled.bytes,
+            removedImages: controlled.removedImages, reason: controlled.reason,
+          });
+          return controlled.body;
+        } catch (error) {
+          logger.warn?.('request size control spool failed', { reqId, err: error instanceof Error ? error.message : String(error) });
+          return null;
+        }
+      }
+      : recoverOversized
+      ? (body: import('./oversized-attachments.js').OversizedBody) => recoverOversized!(body, maxBodyBytes)
+      : null;
     let requestGuard: ReturnType<NonNullable<ProxyOptions['requestGuard']>>;
     try {
       requestGuard = opts.requestGuard?.(requestCtx) ?? null;
@@ -2323,7 +2350,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // binary/form uploads consume the larger ingress window.
     const requestIngressBytes =
       sizeControlEnabled && contentType.toLowerCase().startsWith('application/json')
-        ? Math.max(oversizedIngressBytes, 128 * 1024 * 1024)
+        ? maxBodyBytes
         : oversizedRequestCompactor && contentType.toLowerCase().startsWith('application/json')
         ? oversizedIngressBytes
         : maxBodyBytes;
@@ -2457,7 +2484,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       rawBody = ingressRecovery
         ? await collectRecoverableBody(req, maxBodyBytes, async body => {
             try {
-              const recovered = await recoverOversized!(body, maxBodyBytes);
+              const recovered = await ingressRecovery!(body);
               if (recovered) logger.info?.('oversized attachments preserved outside request', {
                 reqId, originalBytes: body.bytes, recoveredBytes: recovered.length,
               });

@@ -52,10 +52,6 @@ export const DEFAULT_REQUEST_SIZE_TRIGGER = 32 * MiB;
 export const DEFAULT_REQUEST_SIZE_TARGET = 14 * MiB;
 export const DEFAULT_QUICK_PATH_BYTES = 4 * MiB;
 
-const PREPROCESS_CACHE_LIMIT_BYTES = 32 * MiB;
-const PREPROCESS_CACHE_LIMIT_ENTRIES = 128;
-const preprocessCache = new Map<string, { image: PreparedImage; bytes: number }>();
-let preprocessCacheBytes = 0;
 
 type JsonNode = {
   start: number;
@@ -239,7 +235,7 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   const quickLimit = Math.min(trigger, DEFAULT_QUICK_PATH_BYTES);
   if (body.length <= quickLimit) {
     const hint = (body.toString('utf8').match(/"type"\s*:\s*"(?:input_image|image|document|image_url)"/g) ?? []).length;
-    if (!familyMax || hint <= familyMax) return null;
+    if (hint === 0) return null;
   }
   const text = body.toString('utf8');
   const root = new JsonScanner(text).parse();
@@ -247,7 +243,6 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   const assistantState = { count: 0 };
   for (const item of modelItems(root, format)) walkImages(item, format, occurrences, assistantState);
   if (body.length > trigger && occurrences.length === 0) throw new Error('REQUEST_TEXT_TOO_LARGE');
-  if (body.length <= trigger && (!familyMax || occurrences.length <= familyMax)) return null;
 
   const prepared = new Map<number, { bytes: Buffer; mimeType: string; changed: boolean }>();
   const preprocessor = policy.preprocessor ?? NOOP_IMAGE_PREPROCESSOR;
@@ -256,29 +251,16 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
     const original = decodeBase64(occurrence.raw);
     let next = { bytes: original, mimeType: occurrence.mimeType, changed: false };
     const route = policy.route ?? {};
-    const cacheKey = `${createHash('sha256').update(occurrence.raw).digest('hex')}:${route.providerId ?? ''}:${route.modelId ?? ''}:${route.endpoint ?? ''}:${(route.deniedMimeTypes ?? []).join(',')}`;
-    const cached = preprocessCache.get(cacheKey);
-    if (cached) {
-      preprocessCache.delete(cacheKey); preprocessCache.set(cacheKey, cached);
-      next = { bytes: cached.image.bytes, mimeType: cached.image.mimeType, changed: cached.image.changed };
-    } else {
-      try {
-        let output = await preprocessor.prepare({ bytes: original, mimeType: occurrence.mimeType, route, signal: policy.signal ?? new AbortController().signal });
-        if (policy.singleImageMaxBytes && original.length > policy.singleImageMaxBytes && preprocessor.tighten) {
-          output = await preprocessor.tighten({ bytes: output?.bytes ?? original, mimeType: output?.mimeType ?? occurrence.mimeType, route, maxBytes: policy.singleImageMaxBytes, signal: policy.signal ?? new AbortController().signal });
-        }
-        if (output?.bytes?.length && output.bytes.length < original.length) {
-          next = { bytes: output.bytes, mimeType: output.mimeType, changed: true };
-          const entry = { image: output, bytes: output.bytes.length };
-          preprocessCache.set(cacheKey, entry); preprocessCacheBytes += entry.bytes;
-          while (preprocessCacheBytes > PREPROCESS_CACHE_LIMIT_BYTES || preprocessCache.size > PREPROCESS_CACHE_LIMIT_ENTRIES) {
-            const oldest = preprocessCache.entries().next().value as [string, { image: PreparedImage; bytes: number }] | undefined;
-            if (!oldest) break;
-            preprocessCache.delete(oldest[0]); preprocessCacheBytes -= oldest[1].bytes;
-          }
-        }
-      } catch { /* noop is deliberately fail-open */ }
-    }
+    try {
+      const output = await preprocessor.prepare({ bytes: original, mimeType: occurrence.mimeType, route, signal: policy.signal ?? new AbortController().signal });
+      let tightened = output;
+      if (policy.singleImageMaxBytes && original.length > policy.singleImageMaxBytes && preprocessor.tighten) {
+        tightened = await preprocessor.tighten({ bytes: original, mimeType: occurrence.mimeType, route, maxBytes: policy.singleImageMaxBytes, signal: policy.signal ?? new AbortController().signal });
+      }
+      if (tightened?.bytes?.length && tightened.bytes.length < original.length) {
+        next = { bytes: tightened.bytes, mimeType: tightened.mimeType, changed: true };
+      }
+    } catch { /* noop is deliberately fail-open */ }
     prepared.set(index, next);
   }
 
