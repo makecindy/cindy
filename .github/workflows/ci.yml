@@ -206,7 +206,9 @@ jobs:
             -o Acquire::https::Timeout=20
           )
           sudo apt-get "${apt_options[@]}" update
-          sudo apt-get "${apt_options[@]}" install --yes libarchive-tools binutils desktop-file-utils xdg-utils
+          # Canvas PNG tests need a monochrome text fallback; newer Ubuntu
+          # images may otherwise render digits with Noto Color Emoji.
+          sudo apt-get "${apt_options[@]}" install --yes libarchive-tools binutils desktop-file-utils xdg-utils fonts-dejavu-core
 
       - name: Run client and package unit test shard
         # package script 会传递 npm_execpath，让子进程复用当前 pnpm 入口。
