@@ -148,15 +148,20 @@ function splitSentences(body: string): string[] {
     .filter(Boolean);
 }
 
-/** 引用块、行内代码与引号内文本是「转述」，不算 Lead 自己的主张。 */
-function stripQuotedSegments(sentence: string): string {
+/** 引号里的转述是别人的话（含旧编号），主张视图和编号视图都不采信。 */
+function blankQuotedSpans(sentence: string): string {
   return sentence
-    .replace(/`[^`]*`/g, ' ')
     .replace(/["“”][^"“”]{0,200}["“”]/g, ' ')
-    .replace(/「[^」]{0,200}」/g, ' ');
+    .replace(/「[^」]{0,200}」/g, ' ')
+    .replace(/『[^』]{0,200}』/g, ' ');
 }
 
-/** 编号常被写成行内代码，核对前要拆掉反引号，否则假编号会在提取前丢掉。 */
+/** 主张视图：行内代码是引用示例，不算 Lead 自己的主张。 */
+function blankInlineCode(sentence: string): string {
+  return sentence.replace(/`[^`]*`/g, ' ');
+}
+
+/** 编号视图：编号常被写成行内代码，去掉反引号才能读出来。 */
 function readMessageIdText(sentence: string): string {
   return sentence.replace(/`/g, '');
 }
@@ -200,12 +205,13 @@ export function readDispatchClaim(
   let quote = '';
 
   for (const sentence of splitSentences(body)) {
-    const own = stripQuotedSegments(sentence);
+    const quoted = blankQuotedSpans(sentence);
+    const own = blankInlineCode(quoted);
     if (!hasClaimWord(own) || hasNegation(own)) continue;
     for (const entry of resolveTargets(own, roster)) {
       if (!targets.some((item) => item.id === entry.id)) targets.push(entry);
     }
-    for (const id of extractLabeledMessageIds(readMessageIdText(sentence))) {
+    for (const id of extractLabeledMessageIds(readMessageIdText(quoted))) {
       if (!messageIds.includes(id)) messageIds.push(id);
     }
     quote ||= own;

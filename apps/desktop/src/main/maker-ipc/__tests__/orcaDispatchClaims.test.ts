@@ -65,6 +65,16 @@ describe('lead dispatch claim reading', () => {
     expect(labelled.messageIds).toEqual([QUEUE_ID]);
   });
 
+  it('ignores an old queue id the lead is quoting back', () => {
+    noteLeadDispatchFact(LEAD, fact({ delivery: 'direct', turnGeneration: 3 }));
+    const reading = readDispatchClaim(
+      `已派给研究员，之前的错误记录是「queued_message_id: ${QUEUE_ID}」`,
+      ROSTER,
+    );
+    expect(reading.messageIds).toEqual([]);
+    expect(verifyDispatchClaim(reading, dispatchFactsForTurn(LEAD, 3))).toEqual({ consistent: true });
+  });
+
   it('keeps a labelled queue id that is written as inline code', () => {
     const reading = readDispatchClaim(
       `已派给研究员，queued_message_id: \`${QUEUE_ID}\``,
