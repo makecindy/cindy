@@ -662,6 +662,8 @@ export interface ChatMessage {
     | 'context-rebuild'
     /** 任务导入的时间线标记：开头的来源说明与结尾的分隔。 */
     | 'session-import'
+    /** 协同派发回执 / 升级卡；由落库的 agentMeta.orcaDispatch 派生。 */
+    | 'orca-dispatch'
     | 'mcp-app';
   mcpAppClientId?: string;
   systemCardData?: Record<string, unknown>;

@@ -14,6 +14,7 @@ import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCa
 import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 import { useState, type ReactNode } from 'react';
 import type { PluginModelRouteNote } from '@/lib/ccAgent.types';
+import type { ChatMessage } from '@/lib/makerChatStore';
 import {
   ArrowLeftRight,
   ArrowRight,
@@ -65,37 +66,8 @@ import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkill
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 
 interface SystemCardProps {
-  cardType:
-    | 'plugin-model-route'
-    | 'voice-call'
-    | 'voice-call-task'
-    | 'mcp-app'
-    | 'input-handoff'
-    | 'cindy-make-doctor'
-    | 'cindy-make'
-    | 'help'
-    | 'cost'
-    | 'context'
-    | 'pwd'
-    | 'status'
-    | 'compact'
-    | 'cmd'
-    | 'goal-complete'
-    | 'goal-resumed'
-    | 'cindy-make-complete'
-    | 'learn'
-    | 'review'
-    | 'auto-resume'
-    | 'auto-resume-pending'
-    | 'agent-switch'
-    | 'bot-session-task-message'
-    | 'bot-session-task'
-    | 'bot-session-task-result'
-    | 'bot-direct-message'
-    | 'bot-authorization'
-    | 'context-rebuild'
-    | 'session-import'
-    | 'orca-dispatch';
+  /** 与消息流同一个来源：卡片类型由 ChatMessage 定义，避免两处联合各自漂移。 */
+  cardType: NonNullable<ChatMessage['systemCardType']>;
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
