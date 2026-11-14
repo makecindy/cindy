@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync, realpathSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -157,8 +157,12 @@ describe('cindy-subagent parent watchdog (executed)', () => {
   it.skipIf(!piBinaryAvailable || process.platform === 'win32')(
     'a real Pi child exits on stdin EOF when its runner is SIGKILLed',
     async () => {
-      const dir = await mkdtemp(path.join(tmpdir(), 'cindy-pi-eof-'));
+      const dir = realpathSync.native(await mkdtemp(path.join(tmpdir(), 'cindy-pi-eof-')));
       tempDirs.push(dir);
+      const home = path.join(dir, 'home');
+      const agentDir = path.join(dir, 'agent');
+      await mkdir(home, { recursive: true });
+      await mkdir(agentDir, { recursive: true });
       const pidFile = path.join(dir, 'pi-pid');
       // Stands in for the runner: same spawn shape, then killed with SIGKILL so
       // no exit handler of its own can run.
@@ -170,7 +174,8 @@ describe('cindy-subagent parent watchdog (executed)', () => {
         `const child = spawn(${JSON.stringify(PI_BINARY)}, ['--mode', 'rpc', '--no-approve', '--no-extensions'], {`,
         "  stdio: ['pipe', 'pipe', 'pipe'],",
         "  detached: process.platform !== 'win32',",
-        "  env: Object.assign({}, process.env, { PI_OFFLINE: '1' }),",
+        `  cwd: ${JSON.stringify(dir)},`,
+        `  env: Object.assign({}, process.env, { PI_OFFLINE: '1', HOME: ${JSON.stringify(home)}, USERPROFILE: ${JSON.stringify(home)}, PI_CODING_AGENT_DIR: ${JSON.stringify(agentDir)} }),`,
         '});',
         'child.stdout.on(\'data\', () => {});',
         'child.stderr.on(\'data\', () => {});',

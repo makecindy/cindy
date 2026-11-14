@@ -1316,6 +1316,68 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     }
   });
 
+  // Unit regression: real routing -> native SDK -> outbound JSON. Kimi Code returned
+  // 400 "role 'developer' is not allowed"; existing native dispatch mocks never
+  // exercised that serialization. Minimal input is a reasoning model + instructions.
+  it.each<{ model: string; upstream: string; role: string; oauth?: boolean }>([
+    ...['k3', 'k3-256k', 'k3.1-pro-highspeed', 'kimi-for-coding', 'kimi-for-coding-highspeed']
+      .map(model => ({ model, upstream: 'https://api.kimi.com/coding/v1', role: 'system' })),
+    { model: 'k3', upstream: 'https://api.kimi.com/coding/v1', role: 'system', oauth: true },
+    { model: 'k3', upstream: 'https://api.kimi.com.evil.example/coding/v1', role: 'developer' },
+    { model: 'k3', upstream: 'https://api.kimi.com/coding/v10', role: 'developer' },
+    { model: 'k3', upstream: 'http://api.kimi.com/coding/v1', role: 'developer' },
+    { model: 'k3', upstream: 'https://other-provider.example/v1', role: 'developer' },
+  ])('serializes the Codex native Chat instruction role for $model at $upstream / oauth=$oauth', async ({ model, upstream, role, oauth }) => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider, providerPresetOAuth } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader, setOAuthTokenReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const transport = await vi.importActual<typeof import('../pi-provider-transport.js')>('../pi-provider-transport.js');
+    const provider = buildUserProvider({ id: 'kimi-role', name: 'Renamed connection',
+      ...(oauth ? { auth: { method: 'oauth' as const, oauth: providerPresetOAuth('kimi')! } } : {}), runtimes: {
+      codex: { baseUrl: upstream, wireProtocol: 'openai-chat', models: [
+        { id: model, name: model, api: 'openai-completions', efforts: ['high'], defaultEffort: 'high' },
+      ] },
+    } });
+    const originalProvider = structuredClone(provider);
+    setCustomProviders([provider]);
+    setCustomProviderKeyReader(() => 'fixture-key');
+    setOAuthTokenReader(() => 'fixture-oauth');
+    host.registerComposed('session-kimi-role', 'thread-kimi-role', 'PRODUCT_PROMPT');
+    setSessionProvider('session-kimi-role', provider.id);
+    host.setCodexProxyAuthInjection('env-key');
+    try {
+      const body = { model, instructions: 'BASE_PROMPT', input: 'Reply OK', stream: true };
+      const ctx = { reqId: 10370, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-kimi-role' } };
+      const decision = await host.createModelRoutingTransform()(body, ctx);
+      if (!decision?.localHandler) throw new Error('expected native Chat handler');
+      await decision.localHandler({ rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, ctx, res: {} as never });
+      const options = vi.mocked(mockState.createPiProviderFetch as typeof transport.createPiProviderFetch).mock.lastCall?.[0];
+      const request = vi.mocked(mockState.handlePiProviderRequest as typeof transport.handlePiProviderRequest).mock.lastCall?.[1];
+      if (!options || !request) throw new Error('native dispatch was not exercised');
+      let outbound: Record<string, unknown> | undefined;
+      const fetch = transport.createPiProviderFetch({ ...options, fetchImpl: async (_url, init) => {
+        outbound = JSON.parse(String(init?.body));
+        return new Response('data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          { headers: { 'content-type': 'text/event-stream' } });
+      } });
+      const response = await fetch('https://unused.invalid', { body: JSON.stringify(request) });
+      expect(await response.text()).toContain('response.completed');
+      expect(outbound?.messages).toEqual([
+        { role, content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
+        { role: 'user', content: [{ type: 'text', text: 'Reply OK' }] },
+      ]);
+      expect(provider).toEqual(originalProvider);
+    } finally {
+      host.unregister('session-kimi-role');
+      clearSessionProvider('session-kimi-role');
+      setCustomProviderKeyReader(() => null);
+      setOAuthTokenReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('strips agent message ciphertext before a cross-provider Chat bridge request', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');
