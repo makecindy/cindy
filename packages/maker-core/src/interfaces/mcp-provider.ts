@@ -66,6 +66,8 @@ export interface CodexHttpMcpServerConfig {
 export interface McpProvider {
   /** MCP server 唯一名（host 自定义） */
   name: string;
+  /** Optional user-facing name; the stable `name` remains the routing id. */
+  displayName?: string;
   /** Discovery metadata lives beside the provider; never a second tool/permission table. */
   capability?: {
     title: string;

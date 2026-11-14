@@ -63,6 +63,67 @@ function gatewayWithFetch(fetchImpl: typeof fetch) {
 afterEach(() => vi.useRealTimers());
 
 describe('Pi MCP request lifecycle', () => {
+  it('discovers and resolves a custom MCP by display name without changing its id', async () => {
+    const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } })));
+    h.gateway.add('4de87c18-f95d-4460-aeef-47aed2160c77', h.client, [{ name: 'probe' }], 'nowledge-mem');
+
+    const listed = await h.list({ query: 'nowledge' });
+    expect(listed.details.tools).toEqual([
+      expect.objectContaining({
+        server: 'nowledge-mem',
+        serverId: '4de87c18-f95d-4460-aeef-47aed2160c77',
+        name: 'probe',
+      }),
+    ]);
+    const resolved = h.gateway.resolveCall({
+      server: 'nowledge-mem', tool: 'probe', args: {},
+    }) as { tool: { serverName: string } };
+    expect(resolved.tool.serverName).toBe('4de87c18-f95d-4460-aeef-47aed2160c77');
+  });
+
+  it('rejects an ambiguous display name with the matching stable ids', async () => {
+    const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [] } })));
+    h.gateway.add('mcp_one', h.client, [{ name: 'probe' }], 'shared-name');
+    h.gateway.add('mcp_two', h.client, [{ name: 'probe' }], 'shared-name');
+
+    const result = await h.list({ server: 'shared-name' });
+    expect(result.details).toMatchObject({
+      ok: false,
+      errorCode: 'AMBIGUOUS_SERVER',
+      matchingServerIds: ['mcp_one', 'mcp_two'],
+    });
+  });
+
+  it('reconnects an unavailable MCP when discovery uses its display name', async () => {
+    const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [] } })));
+    h.gateway.add('mcp_uuid', h.client, [{ name: 'probe' }], 'readable-name');
+    const reconnect = vi.fn(async () => ({
+      client: h.client,
+      tools: [{ name: 'probe' }],
+      displayName: 'readable-name',
+    }));
+    h.gateway.registerReconnect('mcp_uuid', reconnect);
+    h.gateway.markUnavailable('mcp_uuid', 'HTTP 503');
+
+    const result = await h.list({ server: 'readable-name' });
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(result.details.tools).toEqual([
+      expect.objectContaining({ server: 'readable-name', serverId: 'mcp_uuid', name: 'probe' }),
+    ]);
+  });
+
+  it('keeps stable ids authoritative when they collide with another display name', async () => {
+    const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [] } })));
+    h.gateway.add('alpha', h.client, [{ name: 'first' }], 'First');
+    h.gateway.add('beta', h.client, [{ name: 'second' }], 'alpha');
+
+    const stable = h.gateway.resolveCall({ server: 'alpha', tool: 'first', args: {} }) as { tool: { serverName: string } };
+    expect(stable.tool.serverName).toBe('alpha');
+    expect(h.gateway.resolveCall({ server: 'alpha', tool: 'second', args: {} })).toBeNull();
+    const beta = h.gateway.resolveCall({ server: 'beta', tool: 'second', args: {} }) as { tool: { serverName: string } };
+    expect(beta.tool.serverName).toBe('beta');
+  });
+
   // r4411121969: previous recovery tests changed definitions inside execute;
   // this unit drives the real approval hook before a preceding discovery replaces it.
   it('rejects a changed definition discovered after approval and permits a freshly approved call', async () => {
