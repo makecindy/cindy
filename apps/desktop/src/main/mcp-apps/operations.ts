@@ -27,7 +27,7 @@ export const mcpAppOperationSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('open-link'), viewId: id, url: z.string().max(8192) }),
 ]);
 interface LocalViewDeps {
-  supply(document: McpAppDocument, caller: string): void;
+  supply(document: McpAppDocument, caller: string, hostContext: Record<string, unknown>): void;
   resource?(source: { instanceId: string; viewId: string }): Promise<McpAppResourceBinding>;
 }
 /** Called only by the protocol's frame-verified channel, with Host-bound task and View IDs. */
@@ -76,7 +76,7 @@ export async function handleMcpAppOperation(
       if (sessionId === null) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
       const document = await host.open(caller, sessionId, input.clientId, input.context, input.openId);
       if (!local) return document;
-      local.supply(document, caller);
+      local.supply(document, caller, input.context as Record<string, unknown>);
       // Main supplies the private document directly to the isolated frame.
       return { viewId: document.viewId, transport: 'sandbox',
         prefersBorder: document.prefersBorder } satisfies McpAppSandboxView;
@@ -85,7 +85,7 @@ export async function handleMcpAppOperation(
       if (!local?.resource) throw new Error('MCP_APP_OWNER_ONLY');
       const binding = await local.resource(input.source);
       const document = await host.openResource(caller, sessionId, binding, input.context, input.openId);
-      local.supply(document, caller);
+      local.supply(document, caller, input.context as Record<string, unknown>);
       return { viewId: document.viewId, transport: 'sandbox', prefersBorder: document.prefersBorder } satisfies McpAppSandboxView;
     }
     case 'cancel-open':

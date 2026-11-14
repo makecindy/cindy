@@ -94,7 +94,8 @@ export class McpAppController {
         clearTimeout(this.startupTimer);
         this.startupTimer = undefined;
       }
-      if (['ui/notifications/initialized', 'ui/notifications/size-changed', 'ui/notifications/host-context-changed'].includes(message.method ?? ''))
+      if (['ui/notifications/initialized', 'ui/notifications/size-changed', 'ui/notifications/host-context-changed',
+        'ui/notifications/sandbox-handshake-started', 'ui/notifications/sandbox-result-delivered'].includes(message.method ?? ''))
         this.onState(message);
       return;
     }

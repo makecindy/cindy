@@ -7,6 +7,7 @@ frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms');
 frame.setAttribute('allow',"camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'");
 frame.style.cssText='border:0;width:100%;height:100%;display:block';
 let after=0,stopped=false,generation=0,initialized=false,initializationTimer,handshakeDelivery;
+const localNotice=method=>window.parent.postMessage({jsonrpc:'2.0',method},'*');
 const state=(message,fromHost=false)=>{
  // App notifications cannot assert Host-owned context such as display mode.
  if(['ui/notifications/initialized','ui/notifications/size-changed','ui/notifications/sandbox-escape'].includes(message.method)||(fromHost&&message.method==='ui/notifications/host-context-changed'))
@@ -28,6 +29,7 @@ window.addEventListener('message',event=>{
   clearTimeout(initializationTimer);
   initializationTimer=setTimeout(()=>{if(generation===current&&!initialized)fail();},45000);
  }
+ if(message.method==='ui/initialize')localNotice('ui/notifications/sandbox-handshake-started');
  if(message.method==='ui/notifications/initialized'){initialized=true;clearTimeout(initializationTimer);}
  state(message);
  const current=generation;
@@ -57,7 +59,11 @@ async function poll(){
     try{await invoke({op:'open-link',linkId:event.openLink.id,url:event.openLink.url});success=true;}catch{}
     if(event.generation!==undefined&&event.generation!==generation)continue;
     await invoke({op:'link-result',linkId:event.openLink.id,success});
-   }else{state(event.message,true);frame.contentWindow.postMessage(event.message,'*');}
+  }else{
+   if(['ui/notifications/tool-result','ui/notifications/tool-cancelled'].includes(event.message?.method))
+    localNotice('ui/notifications/sandbox-result-delivered');
+   state(event.message,true);frame.contentWindow.postMessage(event.message,'*');
+  }
   }
   if(!events.length&&!stopped)await new Promise(resolve=>setTimeout(resolve,250));
  }}catch{fail();}
