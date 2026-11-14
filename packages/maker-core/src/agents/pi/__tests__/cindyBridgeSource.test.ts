@@ -501,6 +501,52 @@ function loadBashTimeoutHelpers(): {
   return factory();
 }
 
+// Extracts the bridge's before_provider_request handler (with the payload
+// shapers it closes over) and runs it against a fake pi. The Gemini
+// sanitizer slice is included only when present, so this loader also runs on
+// the pre-fix bridge — where the hook returns Gemini payloads untouched.
+function loadProviderRequestHook(): (event: any, ctx: any) => Promise<any> {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const payloadStart = source.indexOf('function astraResponsesPayload');
+  const fastStart = source.indexOf('async function nativeFastPayload');
+  const fastEnd = source.indexOf('\n}\n', fastStart) + 3;
+  const geminiStart = source.indexOf('function sanitizeGeminiToolPayload');
+  const geminiCode = geminiStart >= 0
+    ? source.slice(geminiStart, source.indexOf('\n}\n', geminiStart) + 3)
+    : '';
+  const hookEnd = source.indexOf('\n  const mcpGateway');
+  // The cache-recovery source interpolated into the template registers its
+  // own before_provider_request handler first; the bridge hook is the
+  // nearest registration before the mcpGateway setup that follows it.
+  const hookStart = source.lastIndexOf("  pi.on('before_provider_request'", hookEnd);
+  if (payloadStart < 0 || fastStart <= payloadStart || fastEnd <= fastStart || hookStart < 0 || hookEnd <= hookStart) {
+    throw new Error('provider request hook was not found in the generated bridge');
+  }
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
+  const compiled = ts.transpileModule(
+    source.slice(payloadStart, fastStart)
+      + source.slice(fastStart, fastEnd)
+      + geminiCode
+      + source.slice(hookStart, hookEnd),
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  // The merged hook closes over upstream runtime-model routing
+  // (installRuntimeModelControl): the slice stubs it inactive, so the hook
+  // resolves the model from ctx. Routing itself is covered by upstream's
+  // 'registers model routing only after the first selected RPC input'.
+  runInNewContext(compiled, {
+    pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
+    process: { env: {} },
+    performance: { now: () => 0 },
+    runtimeRequestModel: () => undefined,
+    modelRequestControlActive: false,
+    runtimeModelControl: async () => ({}),
+  });
+  const hook = handlers.get('before_provider_request');
+  if (!hook) throw new Error('before_provider_request handler was not registered');
+  return hook;
+}
+
 function loadQuestionTool(): { execute: (...args: any[]) => Promise<any> } {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const start = source.indexOf('function registerCindyQuestionTool');
@@ -2533,6 +2579,97 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     await tool.execute('call-1', args, controller.signal);
     expect(calls.at(-1)).toEqual({ method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } }, signal: controller.signal });
   }
+});
+
+it('strips empty-string enum values from Gemini-bound tool payloads at the provider request hook, and leaves other providers untouched', async () => {
+  // Test value (engineering-conventions §3.2):
+  // - Production entry: the bridge's before_provider_request handler; the
+  //   observable result is the Gemini wire payload (pi-ai params shape:
+  //   config.tools[].functionDeclarations[].parametersJsonSchema).
+  // - Bug/rule: #8784 (Gemini 400 on '' enums) — Gemini-bound schemas must
+  //   drop '' while non-Gemini payloads pass through untouched.
+  // - Coverage gap: no test invoked the hook.
+  // - Minimal failing input: a Gemini payload whose probe declaration carries
+  //   an enum of [''] and a const of ''; a non-Gemini payload with the same schema.
+  // - Tier: unit; the hook runs in-process against a fake pi.
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const client = { request: async () => ({ content: [{ type: 'text', text: 'ok' }] }) };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_helper', client, [
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    { name: 'call_tool', inputSchema: { type: 'object' } },
+  ]);
+  const bot: any[] = [];
+  gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
+
+  const geminiModel = { api: 'google-generative-ai', id: 'gemini-2.5-pro', provider: 'cindy' };
+  const payload = {
+    model: 'gemini-2.5-pro',
+    contents: [{ role: 'user', parts: [{ text: 'Do the task' }] }],
+    config: {
+      tools: [{ functionDeclarations: [
+        ...bot.map((tool: any) => ({
+          name: tool.name,
+          description: tool.description,
+          parametersJsonSchema: tool.parameters,
+        })),
+        // Required property whose only enum value is '': the enum must go,
+        // the property stays required and type-constrained.
+        { name: 'probe_required_empty', description: 'probe', parametersJsonSchema: {
+          type: 'object',
+          properties: { mode: { type: 'string', enum: [''] }, flag: { const: '' } },
+          required: ['mode'],
+        } },
+      ] }],
+    },
+  };
+  const hook = loadProviderRequestHook();
+  const result = await hook({ payload }, { model: geminiModel });
+  expect(result).not.toBe(payload);
+  expect(result.model).toBe('gemini-2.5-pro');
+  expect(result.contents).toEqual(payload.contents);
+  const emptyValues: string[] = [];
+  const visit = (schema: unknown, trail: string): void => {
+    if (!schema || typeof schema !== 'object') return;
+    const record = schema as Record<string, unknown>;
+    if (Array.isArray(record.enum) && record.enum.includes('')) emptyValues.push(`${trail}.enum`);
+    if (record.const === '') emptyValues.push(`${trail}.const`);
+    for (const [key, value] of Object.entries(record)) {
+      if (key === 'enum' || key === 'const') continue;
+      visit(value, `${trail}.${key}`);
+    }
+  };
+  for (const entry of result.config.tools) {
+    for (const declaration of entry.functionDeclarations) visit(declaration.parametersJsonSchema, declaration.name);
+  }
+  expect(emptyValues).toEqual([]);
+  const probe = result.config.tools[0].functionDeclarations.find((d: any) => d.name === 'probe_required_empty');
+  expect(probe.parametersJsonSchema.properties.mode.enum).toBeUndefined();
+  expect(probe.parametersJsonSchema.properties.mode.type).toBe('string');
+  expect(probe.parametersJsonSchema.properties.flag.const).toBeUndefined();
+  expect(probe.parametersJsonSchema.required).toEqual(['mode']);
+  // The input payload is not mutated: the probe still carries ''.
+  const inputProbe = payload.config.tools[0].functionDeclarations.find((d: any) => d.name === 'probe_required_empty');
+  expect(inputProbe.parametersJsonSchema.properties.mode.enum).toEqual(['']);
+  expect(inputProbe.parametersJsonSchema.properties.flag.const).toBe('');
+  // A non-Gemini model passes through untouched, '' intact.
+  expect(await hook({ payload }, { model: { api: 'anthropic-messages', id: 'claude', provider: 'cindy' } })).toBe(payload);
+  // A Gemini payload with no '' is returned unchanged.
+  const cleanPayload = { model: 'gemini-2.5-pro', contents: [], config: { tools: [{ functionDeclarations: [{
+    name: 'read', description: 'read', parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } },
+  }] }] } };
+  expect(await hook({ payload: cleanPayload }, { model: geminiModel })).toBe(cleanPayload);
 });
 
 

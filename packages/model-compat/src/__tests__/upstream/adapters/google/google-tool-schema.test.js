@@ -451,6 +451,68 @@ describe("sanitizeGeminiToolParameters", () => {
         expect(sanitized.items).toBeUndefined();
         expect(countSchemaNodes(out)).toBe(1_024);
     });
+    test("drops empty-string enum values Gemini rejects (issue #8784)", () => {
+        const out = sanitizeGeminiToolParameters({
+            type: "object",
+            properties: {
+                modelOverride: {
+                    type: "object",
+                    properties: {
+                        effort: {
+                            type: "string",
+                            enum: ["", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+                        },
+                    },
+                },
+                onlyEmpty: { type: "string", enum: [""] },
+                emptyConst: { const: "" },
+            },
+        });
+        const props = out.properties;
+        expect(props.modelOverride.properties.effort.enum).toEqual([
+            "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ]);
+        expect(props.onlyEmpty.enum).toBeUndefined();
+        expect(props.emptyConst.enum).toBeUndefined();
+    });
+    test("drops empty-string values when merging same-type enum anyOf branches, deduplicating in order (issue #8784)", () => {
+        const out = sanitizeGeminiToolParameters({
+            type: "object",
+            properties: {
+                effort: {
+                    anyOf: [
+                        { type: "string", enum: ["", "low"] },
+                        { type: "string", enum: ["low", "high"] },
+                    ],
+                },
+            },
+        });
+        expect(out.properties.effort).toEqual({ type: "string", enum: ["low", "high"] });
+    });
+    test("keeps a required property whose only enum value is empty, with the enum constraint removed (issue #8784)", () => {
+        // Gemini rejects "" unconditionally, so there is no valid enum to keep;
+        // the property stays required and type-constrained, and an invalid value
+        // is then rejected by the tool's own validation instead of a 400.
+        const out = sanitizeGeminiToolParameters({
+            type: "object",
+            properties: { mode: { type: "string", enum: [""] } },
+            required: ["mode"],
+        });
+        expect(out.properties.mode.enum).toBeUndefined();
+        expect(out.properties.mode.type).toBe("string");
+        expect(out.required).toEqual(["mode"]);
+    });
+    test("only the empty string is dropped; whitespace-only enum values are kept (issue #8784)", () => {
+        const out = sanitizeGeminiToolParameters({
+            type: "object",
+            properties: {
+                delimiter: { type: "string", enum: [" ", "low"] },
+                blankOnly: { type: "string", enum: [" "] },
+            },
+        });
+        expect(out.properties.delimiter.enum).toEqual([" ", "low"]);
+        expect(out.properties.blankOnly.enum).toEqual([" "]);
+    });
     test("falls back to an object schema for non-object input", () => {
         expect(sanitizeGeminiToolParameters(undefined)).toEqual({ type: "object", properties: {} });
         expect(sanitizeGeminiToolParameters("nope")).toEqual({ type: "object", properties: {} });
