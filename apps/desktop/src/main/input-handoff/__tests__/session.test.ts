@@ -212,6 +212,49 @@ describe('InputHandoffSession', () => {
     expect(finished).toHaveLength(0);
   });
 
+  // PR #10497 P1: controls inserted before an existing filled key change its generated id.
+  // The old tests only replaced the entire form. Exercise both submit and window-watch through
+  // the public session API; a filled key must remain available for replacement (unit, fake time).
+  it.each(['submit', 'watch'] as const)('keeps the same filled key when navigation loads during %s', async (route) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let navigation = false;
+    const app = { pid: 42, app: 'Example', bundleId: 'com.example.app' };
+    const driver: HandoffDriver = {
+      permission: async () => 'granted',
+      requestPermission: async () => undefined,
+      windows: async () => ({ frontmost: 42, apps: [{ ...app, windows: [{ index: 0, title: 'Settings', frame: [0, 0, 800, 600], focused: true, minimized: false }] }] }),
+      snapshot: async () => ({
+        ...app, frontmost: true,
+        window: { index: 0, title: 'Settings', frame: [0, 0, 800, 600] },
+        nodes: [
+          ...(navigation ? [{ ref: '0', role: 'AXButton', depth: 1, fp: 'b|Help', title: 'Help', frame: [10, 100, 80, 30] }] : []),
+          { ref: '1', role: 'AXTextField', depth: 1, fp: 'f|API key', title: 'API key', hasValue: true, frame: [10, 10, 200, 30] },
+          { ref: '2', role: 'AXButton', depth: 1, fp: 'b|Save', title: 'Save', frame: [10, 60, 80, 30] },
+        ],
+      }),
+      commandLine: async () => '',
+      act: async () => { navigation = true; return { ok: true }; },
+      capture: async () => ({ error: 'unavailable' }),
+    };
+    const { session, finished, latest } = harness(driver);
+    try {
+      await session.start();
+      const step = latest();
+      if (route === 'submit') {
+        await session.submit({ expectedRevision: step.revision, values: {}, action: { kind: 'submit' } });
+      } else {
+        await vi.advanceTimersByTimeAsync(2000);
+        navigation = true;
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      expect(latest()).toMatchObject({ phase: 'ready', controls: [expect.objectContaining({ kind: 'text', label: 'API key', filled: true })] });
+      expect(finished).toHaveLength(0);
+    } finally {
+      session.cancel();
+      vi.useRealTimers();
+    }
+  });
+
   it('hands back once only a search box is left', async () => {
     const desktop = fakeDesktop({ start: 'done' });
     const { session, finished } = harness(desktop.driver);

@@ -224,9 +224,15 @@ const pageOf = (step: ExtractedStep): string => JSON.stringify([step.source.wind
  * the form the owner is answering, are never judged this way: a field with content can still be replaced.
  */
 const settledForm = (step: ExtractedStep, current: ExtractedStep | null): boolean =>
-  !!current && fieldShape(step) !== fieldShape(current) && !step.signIn && !step.deviceCode && step.shown.length > 0 &&
+  !!current && formFields(step) !== formFields(current) && !step.signIn && !step.deviceCode && step.shown.length > 0 &&
   step.shown.every((control) => control.kind === 'text' && control.filled && control.contentType !== 'password' &&
     control.contentType !== 'one-time-code');
+// Generated ids bind actions to the latest snapshot; they are not form identity. Navigation,
+// headings and field order can change without moving on from the form being answered.
+const formFields = (step: ExtractedStep): string => JSON.stringify(step.shown
+  .filter((control) => control.kind === 'text')
+  .map((control) => JSON.stringify([control.label, control.contentType]))
+  .sort());
 const askingNothing = (step: ExtractedStep): ExtractedStep => ({ ...step, shown: [] });
 
 /** What the owner would be asked, ignoring what they typed; the ids bind an open form to its fields. */
