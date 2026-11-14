@@ -3273,7 +3273,7 @@ class CindyMcpGateway {
   private readonly reconnecting = new Map<string, Promise<void>>();
   /** 已披露工具：键为 server + NUL + tool，值为该工具当前 schema 的指纹。 */
   private readonly disclosedSchemas = new Map<string, string>();
-  /** 本次调用跳过了权限询问（hook 未披露即放行）：按 toolCallId 记账，execute 见此标记一律回路标。 */
+  /** 本次调用跳过了权限询问（未披露或无法解析）：按 toolCallId 记账，execute 见此标记一律回路标。 */
   private readonly permissionSkippedCalls = new Set<string>();
   private readonly approvedDefinitions = new Map<string, string>();
   private disclosureNotePending = false;
@@ -3899,7 +3899,7 @@ class CindyMcpGateway {
     content: Array<Record<string, unknown>>;
     details: unknown;
   }> {
-    // 这次调用没问过权限（hook 判未披露时跳过）→ 一律回路标，不看披露状态。
+    // 这次调用没问过权限（未披露或当时无法解析）→ 一律回路标，不看当前定义与披露状态。
     const permissionSkipped = this.consumePermissionSkipped(toolCallId);
     const approvedDefinition = toolCallId ? this.approvedDefinitions.get(toolCallId) : undefined;
     if (toolCallId) this.approvedDefinitions.delete(toolCallId);
@@ -5205,9 +5205,10 @@ export default async function cindyBridge(piApi: any) {
     // 分类只认「解析成功」：披露状态不参与权限命名与采集分类，否则被门拦下的那次
     // 会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
-    // Invalid or unknown gateway input cannot execute a capability. Let execute()
-    // return its deterministic discovery/schema error without showing a misleading
-    // permission prompt for the wrapper itself.
+    // Return the deterministic input/discovery error without prompting for the
+    // wrapper. A same-batch discovery can recover a different schema before
+    // execute(), so bind this skipped approval to the invocation even if its
+    // input becomes valid against that new definition.
     if (
       (event.toolName === CINDY_MCP_CALL_TOOL
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
@@ -5217,7 +5218,10 @@ export default async function cindyBridge(piApi: any) {
         || event.toolName === CINDY_INPUT_HANDOFF_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
-    ) return;
+    ) {
+      if (event.toolName === CINDY_MCP_CALL_TOOL) mcpGateway.markPermissionSkipped(event.toolCallId);
+      return;
+    }
     // 披露门必须判在**发起权限询问之前**：pi 的权限询问由本 hook 发起，若等到工具实现
     // 里才拦，这次弹框已经发生了 —— 被门拦下的一次也打扰用户，与 pi-harness 记载的
     // 「未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框」相悖。

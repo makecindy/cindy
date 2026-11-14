@@ -88,7 +88,9 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   当前等待。恢复不自动重放 tools/call，不重启 Pi 或其它服务；新工具表替换旧表，定义改变
   或删除时拒绝用旧定义继续调用。只恢复启动快照里的服务，不热加载配置变更。
   工具批准按 toolCallId 绑定审批时的定义指纹；即使同批前面的发现已披露新定义，也不得
-  沿用旧批准。SSE 在匹配响应前结束或失效时同样标记连接需恢复，不重放原操作。
+  沿用旧批准。Ask/Auto 中因参数无效或目标未知而跳过审批的调用同样按 toolCallId 记账：
+  后续发现／连接恢复即使换成允许该输入的新 schema，本次仍不得执行；必须以新调用重新过审批。
+  Full access 不新增该审批门。SSE 在匹配响应前结束或失效时同样标记连接需恢复，不重放原操作。
 - **plan 模式**:自动挂载 Pi 分发包自带的 plan-mode 扩展，无需用户另装。UI 勾选是下一条
   消息的一次性意图，与原生运行态分开；`StartSessionOptions.planMode` 设置起始档，
   `SendOptions.planMode` 快照决定本轮，切档与 prompt 在同一 RPC 串行段执行。发送后消耗

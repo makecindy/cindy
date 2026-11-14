@@ -16,14 +16,14 @@ const compiled = ts.transpileModule(
   { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
 ).outputText;
 
-function gatewayWithFetch(fetchImpl: typeof fetch) {
+function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
   const context: Record<string, any> = {
     fetch: fetchImpl, URL, Headers, AbortController, TextDecoder, process: { env: {} },
     // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
     // 指纹计算用的 createHash 必须由宿主注入。
     setTimeout, clearTimeout, createHash,
     guestToolGate: null, toolsDisabledForTurn: () => false,
-    currentPermissionState: () => ({ mode: 'ask' }),
+    currentPermissionState: () => ({ mode: permissionMode }),
     FILE_WRITE_BUILTINS: new Set(), READONLY_BUILTINS: new Set(),
     CINDY_HOSTED: null, SUBAGENT_RUN_DIR_ENV: 'fixture-run-dir',
     resolveFileWriteTargetPath: () => null, isCindyShellTool: () => false,
@@ -47,12 +47,12 @@ function gatewayWithFetch(fetchImpl: typeof fetch) {
     },
   });
   registered.find(t => t.name === 'cindy_mcp_list_tools').execute('list', { server: 'cindy', tool: 'ghost_call' });
-  const callInput = (input: unknown, signal?: AbortSignal) => registered.find(t => t.name === 'cindy_mcp_call_tool')
-    .execute('call', input, signal);
+  const callInput = (input: unknown, signal?: AbortSignal, toolCallId = 'call') => registered.find(t => t.name === 'cindy_mcp_call_tool')
+    .execute(toolCallId, input, signal);
   const call = (signal?: AbortSignal) => callInput({ server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } }, signal);
   let approvalHook: any;
   context.installApproval(gateway, { on: (_event: string, handler: unknown) => { approvalHook = handler; } });
-  return { call, callInput, gateway, client,
+  return { call, callInput, gateway, client, toolCall: approvalHook,
     approve: (input: unknown = { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } },
       ask: () => Promise<string> = async () => 'allow') => approvalHook(
       { toolName: 'cindy_mcp_call_tool', toolCallId: 'call', input }, { ui: { input: ask } }),
@@ -133,6 +133,50 @@ describe('Pi MCP request lifecycle', () => {
     await h.approve();
     await expect(h.call()).resolves.toMatchObject({ content: [{ text: 'ok' }] });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  // r4572016907 / #10480: all same-batch approval hooks run before execute.
+  // Old required schema rejects omitted args; a preceding targeted discovery
+  // recovers/discloses a parameterless replacement before this call executes.
+  // Existing recovery cases only bound approvals that had actually been asked.
+  // Unit tier: real production hook/gateway/serializer, injected HTTP boundary.
+  it.each(['ask', 'auto', 'bypassPermissions'])('binds skipped approval across same-batch schema recovery in %s', async (mode) => {
+    const sent: unknown[] = [];
+    const h = gatewayWithFetch(vi.fn(async (_url, options) => {
+      sent.push(JSON.parse(String(options!.body)).params);
+      return Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } });
+    }), mode);
+    h.client.needsReconnect = true;
+    h.gateway.registerReconnect('cindy', async () => {
+      h.client.needsReconnect = false;
+      return { client: h.client, tools: [{ name: 'ghost_call', inputSchema: { type: 'object', properties: {} } }] };
+    });
+    const input = { server: 'cindy', tool: 'ghost_call' };
+    const approvals: unknown[] = [];
+    const ctx = { ui: { input: vi.fn(async (_title: string, payload: string) => {
+      approvals.push(JSON.parse(payload));
+      return 'allow';
+    }) } };
+    await h.toolCall({ toolName: 'cindy_mcp_list_tools', toolCallId: 'discover', input }, ctx);
+    await h.toolCall({ toolName: 'cindy_mcp_call_tool', toolCallId: 'old-call', input }, ctx);
+    expect(ctx.ui.input).not.toHaveBeenCalled();
+    const discovered = await h.list(input);
+    expect(discovered.details.tools[0].inputSchema).toEqual({ type: 'object', properties: {} });
+    if (mode === 'bypassPermissions') {
+      // Full access bypasses ordinary approval; recovery must not add a new gate.
+      await expect(h.callInput(input, undefined, 'old-call')).resolves.toMatchObject({ content: [{ text: 'ok' }] });
+    } else {
+      await expect(h.callInput(input, undefined, 'old-call')).rejects.toThrow('re-send the same call');
+      expect(sent).toEqual([]);
+    }
+    // A genuinely new invocation runs its own hook and can be approved/executed.
+    await h.toolCall({ toolName: 'cindy_mcp_call_tool', toolCallId: 'new-call', input }, ctx);
+    expect(approvals).toEqual(mode === 'bypassPermissions' ? [] : [
+      { toolName: 'mcp__cindy__ghost_call', input: {}, resolvedCredentialPaths: [] },
+    ]);
+    await expect(h.callInput(input, undefined, 'new-call')).resolves.toMatchObject({ content: [{ text: 'ok' }] });
+    expect(sent).toEqual(Array.from({ length: mode === 'bypassPermissions' ? 2 : 1 },
+      () => ({ name: 'ghost_call', arguments: {} })));
   });
 
   // r4411121974: a clean SSE EOF without this request's response must invalidate
