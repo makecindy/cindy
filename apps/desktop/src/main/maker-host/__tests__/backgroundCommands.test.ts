@@ -144,7 +144,7 @@ it('秒死命令不堵名额：满额退出后第 9 条立即起得来（2026-11
   const start = () =>
     service.start({
       sessionId: 'sess-1',
-      command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 400)"`,
+      command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 1500)"`,
       cwd: logDir,
     });
   const receipts = await Promise.all(

@@ -25,7 +25,7 @@
  *    拆解:病态的短尾巴走前台语义,正常的长尾巴走后台语义)。
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from 'node:fs';
 import { readdir, stat, truncate, unlink } from 'node:fs/promises';
@@ -73,8 +73,54 @@ export type BackgroundCommandShell = 'bash' | 'powershell';
 
 /** Git Bash 解析(win32):只认常见安装位置的完整路径。PATH 里的裸 `bash` 会落到
  * WSL(E: 盘不可见、gh 不在),正是口径事故的根;POSIX 固定 /bin/bash。 */
+/**
+ * Windows 上解析 Git Bash。这是桌面侧自带的发现链,不是 pi 前台 bash 工具那套:
+ * pi 的解析在 pi 运行时内部,宿主进程没有可导入的 API,跨进程拿它的结果需要
+ * 桥接协议上报(协议变更,单独立项)。发现顺序(逐个 existsSync):
+ *   1. CINDY_GIT_BASH 环境变量(运维逃生舱,指向 bash.exe);
+ *   2. PATH 上 git.exe 推导 Git 根(cmd/bin/mingw64 布局都认)——覆盖
+ *      scoop/winget/自定义目录等一切 Git for Windows 安装位;
+ *   3. PATH 上 bash.exe(排除 System32 的 WSL 与 WindowsApps);
+ *   4. 三个默认安装目录兑底。
+ *
+ * 结果进程级缓存:where.exe 是同步子进程,不缓存的话每次 start 都堵主进程
+ * 事件循环几十毫秒,并发启动时会把宽限窗计时器集体推退。
+ */
+let cachedGitBash: string | null = null;
 function resolveGitBash(): string {
   if (process.platform !== 'win32') return '/bin/bash';
+  if (cachedGitBash !== null) return cachedGitBash;
+  const fromEnv = process.env['CINDY_GIT_BASH'];
+  if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  const candidates: string[] = [];
+  const where = (name: string): string[] => {
+    try {
+      return execFileSync('where.exe', [name], { encoding: 'utf8' })
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+  for (const git of where('git')) {
+    const lower = git.toLowerCase();
+    // <root>\cmd\git.exe / <root>\bin\git.exe → Git 根;...\mingw64\bin\git.exe(scoop)再上一层。
+    // mingw64 分支必须先判:它也包含 \bin\git.exe。
+    const root = lower.includes('\\mingw64\\bin\\git.exe')
+      ? path.dirname(path.dirname(path.dirname(git)))
+      : lower.includes('\\cmd\\git.exe') || lower.includes('\\bin\\git.exe')
+        ? path.dirname(path.dirname(git))
+        : null;
+    if (!root) continue;
+    candidates.push(path.join(root, 'bin', 'bash.exe'), path.join(root, 'usr', 'bin', 'bash.exe'));
+  }
+  // System32\bash.exe 是 WSL;WindowsApps 是商店壳,都不是 Git Bash。
+  for (const bash of where('bash')) {
+    const lower = bash.toLowerCase();
+    if (lower.includes('\\system32\\') || lower.includes('\\windowsapps\\')) continue;
+    candidates.push(bash);
+  }
   const roots = [
     process.env['ProgramFiles'],
     process.env['ProgramFiles(x86)'],
@@ -82,10 +128,12 @@ function resolveGitBash(): string {
   ];
   for (const root of roots) {
     if (!root) continue;
-    const candidate = path.join(root, 'Git', 'bin', 'bash.exe');
-    if (existsSync(candidate)) return candidate;
+    candidates.push(path.join(root, 'Git', 'bin', 'bash.exe'));
   }
-  return '';
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return (cachedGitBash = candidate);
+  }
+  return (cachedGitBash = '');
 }
 
 function buildShellInvocation(
@@ -121,7 +169,7 @@ function buildShellInvocation(
   const bash = resolveGitBash();
   if (!bash) {
     return {
-      error: '未找到 Git Bash(Git for Windows 未安装?):请安装后重试,或改用 shell:"powershell"',
+      error: '未找到 Git Bash:请安装 Git for Windows,或设 CINDY_GIT_BASH 环境变量指向 bash.exe,或改用 shell:"powershell"',
     };
   }
   return { file: bash, args: ['-lc', command] };
