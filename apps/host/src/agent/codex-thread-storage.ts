@@ -33,6 +33,9 @@ export function createHostCodexThreadStorage(options: {
   };
   return {
     readCodexThreadStorageReadOnly: (threadId: string) => checkAfter(() => storage.readCodexThreadStorageReadOnly(threadId)),
+    /** Whether a thread's native history is too large to resume (context recovery, as codex-local-sessions.ts). */
+    classifyCodexHistoryOversized: (threadId: string, located?: { rolloutPath?: string }) =>
+      checkAfter(() => local.classifyCodexHistoryOversized(threadId, located)),
     deps: {
       prepareCodexResumeSession: (threadId: string) => checkAfter(() => storage.prepareCodexResumeSession(threadId)),
       resolveCodexThreadStorage: (threadId: string, lookup?: { readOnly?: boolean }) => checkAfter(() => storage.resolveCodexThreadStorage(threadId, lookup)),

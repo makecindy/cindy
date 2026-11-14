@@ -63,6 +63,17 @@ export interface RecoveryTerminal {
 
 export type HostContextRecovery = ReturnType<typeof createHostContextRecovery>;
 
+/** The three kinds of context recovery, each opened on the Host after its real-engine test. */
+export type ContextRecoveryKind = 'context-overflow' | 'oversized-history' | 'unsupported-request-option';
+
+/** Which kind of context recovery a terminal error's data asks for, if any. */
+export function contextRecoveryKind(data: unknown): ContextRecoveryKind | null {
+  if (isContextOverflowErrorData(data)) return 'context-overflow';
+  if (isOversizedHistoryErrorData(data)) return 'oversized-history';
+  if (isUnsupportedRequestOptionErrorData(data)) return 'unsupported-request-option';
+  return null;
+}
+
 /**
  * The terminal errors whose broadcast is held for recovery: an overflow-class terminal error of a
  * local task, as the desktop's delivery holds them (sessionEventDelivery.ts). Desktop parity is
