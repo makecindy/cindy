@@ -10,7 +10,7 @@
  * An account without an entry belongs to its built-in provider (`openai` / `anthropic`), which is
  * exactly what every older client assumes. The CLI default account always stays there.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
@@ -422,6 +422,12 @@ export async function restoreUnplacedSubscriptionAccounts(options: {
       && !Object.hasOwn(placed, keyOf(kind, account.id))
       && !(kind === 'openai' && legacy.has(account.id))).map(account => ({ kind, account })),
   );
+  // Keep collision reservations and partially prepared settings stable even if the pool order changes.
+  candidates.sort((a, b) => {
+    const left = keyOf(a.kind, a.account.id);
+    const right = keyOf(b.kind, b.account.id);
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
   if (!candidates.length) return false;
   const owner = activeOwnerScopeKey();
   let changed = false;
@@ -441,7 +447,13 @@ export async function restoreUnplacedSubscriptionAccounts(options: {
       let providerId = Object.entries(providers)
         .find(([, entry]) => entry.kind === kind && entry.account === account.id)?.[0];
       if (!providerId) {
-        do providerId = `${kind}-sub-${randomUUID().replaceAll('-', '').slice(0, 8)}`; while (providers[providerId]);
+        // Preparing settings writes a separate file before placement commits. Retry the same IDs
+        // after either write fails, instead of accumulating orphan overrides under random IDs.
+        let collision = 0;
+        do {
+          const suffix = createHash('sha256').update(`${key}:${collision++}`).digest('hex').slice(0, 8);
+          providerId = `${kind}-sub-${suffix}`;
+        } while (providers[providerId]);
       }
       options.prepare(kind, providerId);
       // Splitting a disconnected pool must not turn its accounts back on.

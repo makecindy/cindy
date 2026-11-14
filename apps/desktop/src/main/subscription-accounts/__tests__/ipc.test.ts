@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   created: {} as Record<string, import('../placement.js').CreatedSubscriptionProvider>,
   placementUnreadable: false,
   poolUnreadable: false,
+  placementWriteFails: false,
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -58,6 +59,7 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
         updateAtomic: async (edit: (input: { value: { accounts: typeof h.placement; providers: typeof h.created; strategies: Record<string, never> } }) => { accounts?: typeof h.placement; providers?: typeof h.created }) => {
           h.beforeWrite?.();
           const next = edit({ value: { accounts: h.placement, providers: h.created, strategies: {} } });
+          if (h.placementWriteFails) throw new Error('placement write unavailable');
           if (next.accounts) h.placement = next.accounts;
           if (next.providers) h.created = next.providers;
         },
@@ -143,6 +145,7 @@ beforeEach(() => {
   h.created = {};
   h.placementUnreadable = false;
   h.poolUnreadable = false;
+  h.placementWriteFails = false;
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
   h.availability.mockReset().mockResolvedValue(true);
   h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
@@ -372,6 +375,36 @@ describe('old automatically pooled account restoration', () => {
     expect(h.placement).toEqual({});
     h.placementUnreadable = false; h.poolUnreadable = false;
     expect(await restoreUnplacedSubscriptionAccounts(callbacks)).toBe(true);
+  });
+
+  // PR #10461 review, unit: a failed batch previously retried with random target IDs, so persisted
+  // model settings accumulated under orphan IDs. Two accounts, two failed attempts, then success
+  // must reuse the prepared targets, for both second-account preparation and placement-write errors.
+  it.each(['prepare', 'write'] as const)('reuses prepared provider settings after repeated %s failures', async failure => {
+    const first = pooledId();
+    const second = first.replace('123456789abc', '123456789abd');
+    h.pools.openai = { strategy: 'least', accounts: [account(first), account(second)] };
+    const prepared = new Set<string>();
+    let fail = true;
+    let inAttempt = 0;
+    const prepare = vi.fn((_kind: string, providerId: string) => {
+      if (fail && failure === 'prepare' && ++inAttempt === 2) throw new Error('settings unavailable');
+      prepared.add(providerId);
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      inAttempt = 0;
+      h.placementWriteFails = failure === 'write';
+      await expect(restoreUnplacedSubscriptionAccounts({ prepare, disable: vi.fn() })).rejects.toThrow('unavailable');
+      expect(prepared.size).toBe(failure === 'prepare' ? 1 : 2);
+      expect(h.created).toEqual({});
+      expect(h.placement).toEqual({});
+      // Pool enumeration order cannot change targets between failed attempts.
+      h.pools.openai!.accounts.reverse();
+    }
+    fail = false; h.placementWriteFails = false;
+    expect(await restoreUnplacedSubscriptionAccounts({ prepare, disable: vi.fn() })).toBe(true);
+    expect([...prepared].sort()).toEqual(Object.keys(h.created).sort());
+    expect(prepared.size).toBe(2);
   });
 
   it.each(['owner', 'generation', 'move', 'remove', 'settings'] as const)('does not publish a stale or incomplete restoration after %s changes', async change => {
