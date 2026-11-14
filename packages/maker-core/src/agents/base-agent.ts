@@ -1402,6 +1402,13 @@ export interface AgentDeps {
     reasoningEffort?: Effort | '';
   }) => void;
 
+  /** Keep the host-side Codex auto-review model route aligned with the live thread. */
+  registerCodexReviewerRouteContext?: (args: {
+    sessionId: string;
+    threadId: string;
+    model: string;
+  }) => void;
+
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
   getCodexSubagentIdentity?: (args: { childThreadId: string }) => {
     model: string;

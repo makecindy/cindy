@@ -17677,6 +17677,32 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('registers the host reviewer route on startup and model changes', async () => {
+    const registerCodexReviewerRouteContext = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexReviewerRouteContext }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-reviewer-route-context',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-reviewer-route-context',
+      threadId: handle.id,
+      model: 'gpt-5.4',
+    });
+    await handle.setModel?.('gpt-5.5');
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-reviewer-route-context',
+      threadId: handle.id,
+      model: 'gpt-5.5',
+    });
+    await handle.close();
+  });
+
   it('falls back to user approvals for remote non-subscription sessions (Auto)', async () => {
     // gateway / 第三方 provider 的 reviewer 模型路由仍未验证 — 远程同样回退。
     const agent = new CodexAgent(createDeps());
