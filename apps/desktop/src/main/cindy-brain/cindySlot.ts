@@ -81,6 +81,7 @@ import {
   type GhostVideoResolution,
   type GhostVideoResultParams,
   type InstalledGhost,
+  ghostCindyModelActionApproved,
 } from '../../shared/ghost.js';
 import type { CindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import type { LegacyMediaKind, LegacyMediaResult } from '../cindy-media/legacyMediaInvocation.js';
@@ -595,8 +596,8 @@ export class GhostCindySlot {
       const input = payload as Record<string, unknown>;
       const api = p.kind === 'list_models' ? input.api : p.kind;
       const ghost = this.deps.getGhost(ghostId);
-      if ((api !== 'decisions' && api !== 'rerank') || !ghost?.enabled || !ghost.manifest.cindy?.models?.includes(api)) {
-        return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未声明所请求的模型能力' };
+      if ((api !== 'decisions' && api !== 'rerank') || !ghostCindyModelActionApproved(ghost, api)) {
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未获准调用所请求的模型能力' };
       }
       const count = this.inflight.get(ghostId) ?? 0;
       const limit = this.deps.getInflightLimit?.(ghostId) ?? null;
@@ -604,7 +605,7 @@ export class GhostCindySlot {
       const owner = this.deps.getOwnerScopeKey();
       const assertCurrent = () => {
         if (this.deps.isOwnerBoundaryPending() || this.deps.getOwnerScopeKey() !== owner
-          || !this.deps.getGhost(ghostId)?.enabled || !this.deps.getGhost(ghostId)?.manifest.cindy?.models?.includes(api)) {
+          || !ghostCindyModelActionApproved(this.deps.getGhost(ghostId), api)) {
           throw new EvaluationError('PERMISSION_DENIED', '插件或账号授权已变化');
         }
       };

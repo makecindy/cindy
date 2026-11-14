@@ -34,6 +34,15 @@ const validManifest = {
 } as const;
 
 describe('Ghost manifest contract', () => {
+  // Unit: pre-feature stored declarations must not invalidate existing image capabilities.
+  it.each([{}, [], ['rerank', 'rerank'], [42]])('ignores malformed historical model APIs %j only when stored', models => {
+    const raw = { ...validManifest, slots: ['tool', 'cindy'], cindy: { image: ['generate'], models } };
+    expect(validateGhostManifest(raw).ok).toBe(false);
+    expect(validateStoredGhostManifest({ ...raw, cindy: { models } }).ok).toBe(true);
+    const stored = validateStoredGhostManifest(raw);
+    expect(stored).toMatchObject({ ok: true, manifest: { cindy: { image: ['generate'] } } });
+    if (stored.ok) expect(stored.manifest.cindy?.models).toEqual(models);
+  });
   it('validates static task prompt declarations while preserving older installed plugin behavior', () => {
     const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
     expect(validateGhostManifest({ ...base, systemPrompt: [{ id: 'style', order: 0, text: 'Static', scope: 'selected-task' }] })).toMatchObject({ ok: true });

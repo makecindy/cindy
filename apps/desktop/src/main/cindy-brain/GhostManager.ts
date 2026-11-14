@@ -114,6 +114,7 @@ import {
   assertManagedPluginParentSync,
   approvedHostToolGroupsField,
   approvedEventTopicsField,
+  approvedCindyModelActionsField,
   createGhostInstallReceipt,
   effectiveInstallOrigin,
   legacyFirstPartyEligibilityAfterUpdate,
@@ -3096,6 +3097,7 @@ export class GhostManager {
           ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
           ...approvedHostToolGroupsField(receipt.approvedHostToolGroups, receipt.manifest),
           ...approvedEventTopicsField(receipt.approvedEventTopics, receipt.manifest),
+          ...approvedCindyModelActionsField(receipt.approvedCindyModelActions, receipt.manifest),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -4060,6 +4062,7 @@ export class GhostManager {
       approvedAutoTools?: readonly string[];
       approvedHostToolGroups?: readonly string[];
       approvedEventTopics?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4098,6 +4101,7 @@ export class GhostManager {
       approvedAutoTools?: readonly string[];
       approvedHostToolGroups?: readonly string[];
       approvedEventTopics?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4281,6 +4285,7 @@ export class GhostManager {
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
           approvedHostToolGroups: opts?.approvedHostToolGroups,
           approvedEventTopics: opts?.approvedEventTopics,
+          approvedCindyModelActions: opts?.approvedCindyModelActions,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           trust,
@@ -4417,6 +4422,7 @@ export class GhostManager {
       approvedAutoTools?: readonly string[];
       approvedHostToolGroups?: readonly string[];
       approvedEventTopics?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4454,6 +4460,7 @@ export class GhostManager {
       approvedAutoTools?: readonly string[];
       approvedHostToolGroups?: readonly string[];
       approvedEventTopics?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4778,6 +4785,10 @@ export class GhostManager {
         approvedHostToolGroups: [
           ...(opts.approvedHostToolGroups ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedHostToolGroups ?? [] : []),
+        ],
+        approvedCindyModelActions: [
+          ...(opts.approvedCindyModelActions ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedCindyModelActions ?? [] : []),
         ],
         approvedEventTopics: [
           ...(opts.approvedEventTopics ?? []),
@@ -5207,6 +5218,7 @@ export class GhostManager {
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
         approvedHostToolGroups: current.state === 'approved' ? current.receipt.approvedHostToolGroups : undefined,
         approvedEventTopics: current.state === 'approved' ? current.receipt.approvedEventTopics : undefined,
+        approvedCindyModelActions: current.state === 'approved' ? current.receipt.approvedCindyModelActions : undefined,
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&

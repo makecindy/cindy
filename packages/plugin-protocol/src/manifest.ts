@@ -385,6 +385,13 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
 export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank'] as const;
 export type GhostCindyModelsAction = (typeof GHOST_CINDY_MODELS_ACTIONS)[number];
 
+/** Historical unknown data can be retained without being interpreted as a capability. */
+export function isGhostCindyModelActionsDeclaration(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 &&
+    value.every(action => typeof action === 'string' && GHOST_SLOT_NAME_RE.test(action)) &&
+    new Set(value).size === value.length;
+}
+
 export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
 export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
 
@@ -2036,6 +2043,12 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       if (category === 'oneshotModel') continue; // 标量意图键,不是类目,单独校验
       if (!Object.hasOwn(actionTable, category)) continue;
+      if (category === 'models' && preserveHistoricalParameterSize && !isGhostCindyModelActionsDeclaration(actionsRaw)) {
+        // Keep old opaque bytes for receipt comparisons/downgrades, but never grant them.
+        Object.assign(cindy, { models: actionsRaw });
+        continue;
+      }
+
       if (!Array.isArray(actionsRaw) || actionsRaw.length === 0) {
         return { ok: false, reason: `cindy.${category} 必须是非空数组` };
       }

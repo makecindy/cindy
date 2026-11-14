@@ -45,8 +45,9 @@ export async function readEvaluationImageFile(path: string): Promise<Buffer> {
     return data.subarray(0, offset);
   } finally { await file.close(); }
 }
-async function prepareState(state: unknown, context: EvaluationContext): Promise<unknown> {
+async function prepareState(state: unknown, context: EvaluationContext, model: string): Promise<unknown> {
   if (!Array.isArray(state)) return state;
+  const requiresMinEdge = model.startsWith('typesafe/');
   let count = 0;
   let total = 0;
   const result: unknown[] = [];
@@ -58,15 +59,16 @@ async function prepareState(state: unknown, context: EvaluationContext): Promise
     total += bytes.length;
     if (total > MAX_BYTES) throw new EvaluationError('INVALID_INPUT', '图片总大小超过 32 MiB');
     const metadata = await sharp(bytes, { limitInputPixels: 100_000_000 }).metadata();
-    if (!metadata.width || !metadata.height || Math.min(metadata.width, metadata.height) < 256) {
-      throw new EvaluationError('INVALID_INPUT', '决策图片的每边至少需要 256 像素');
+    if (!metadata.width || !metadata.height) throw new EvaluationError('INVALID_INPUT', '图片尺寸无效');
+    if (requiresMinEdge && Math.min(metadata.width, metadata.height) < 256) {
+      throw new EvaluationError('INVALID_INPUT', '此模型要求图片的每边至少为 256 像素');
     }
     const image = await desktopAnthropicImageCodec.normalize({ data: bytes.toString('base64'), mediaType: '',
       maxEdge: 1568, qualities: [85, 70, 55, 40], hardCap: 8 * 1024 * 1024,
       allowedMediaTypes: ['image/png', 'image/jpeg'] });
     if (!image) throw new EvaluationError('INVALID_INPUT', '图片无法解码');
     const normalized = await sharp(Buffer.from(image.data, 'base64')).metadata();
-    if (Math.min(normalized.width ?? 0, normalized.height ?? 0) < 256) throw new EvaluationError('INVALID_INPUT', '图片缩放后短边不足 256 像素，请裁剪后重试');
+    if (requiresMinEdge && Math.min(normalized.width ?? 0, normalized.height ?? 0) < 256) throw new EvaluationError('INVALID_INPUT', '图片缩放后短边不足 256 像素，请裁剪后重试');
     result.push({ ...item, image_url: { ...item.image_url, url: `data:${image.mediaType};base64,${image.data}` } });
   }
   return result;
@@ -117,7 +119,7 @@ export async function callEvaluate(request: CindyEvaluateToolRequest, context: E
       for (const question of Object.values(request.questions)) {
         if (!question || typeof question !== 'object' || !('type' in question) || !['noul', 'choice', 'score', 'box'].includes(String(question.type)) || !('instructions' in question) || typeof question.instructions !== 'string') throw new EvaluationError('INVALID_INPUT', '问题必须提供合法 type 和 instructions');
       }
-      body = { model, questions: request.questions, state: await prepareState(request.state, { ...context, assertCurrent }) };
+      body = { model, questions: request.questions, state: await prepareState(request.state, { ...context, assertCurrent }, model) };
     } else {
       if (typeof request.query !== 'string' || !Array.isArray(request.documents) || !request.documents.length || request.documents.some(item => typeof item !== 'string') || (request.top_n !== undefined && (!Number.isInteger(request.top_n) || request.top_n < 1 || request.top_n > request.documents.length))) throw new EvaluationError('INVALID_INPUT', 'rerank 必须提供 query、非空 documents 和合法的 top_n');
       body = { model, query: request.query, documents: request.documents, ...(request.top_n !== undefined ? { top_n: request.top_n } : {}) };
@@ -171,7 +173,8 @@ export async function callEvaluate(request: CindyEvaluateToolRequest, context: E
       const error = data.error as { message?: unknown } | undefined;
       const detail = String(error?.message ?? `HTTP ${response.status}`).split(connection.apiKey).join('[redacted]').slice(0, 1000);
       const code = response.status === 400 ? 'INVALID_INPUT' : response.status === 403 ? 'MODEL_NOT_AUTHORIZED' : response.status === 404 ? 'MODEL_NOT_FOUND' : response.status === 401 ? 'CONNECTION_UNAVAILABLE' : 'UPSTREAM_UNAVAILABLE';
-      return evaluationFailure(code, detail, response.status === 429 || response.status >= 500);
+      if (response.status >= 500) return evaluationFailure(code, `${detail}；请求可能已执行，请勿自动重提`, false, false);
+      return evaluationFailure(code, detail, response.status === 429);
     }
     const usage = data.usage as Record<string, unknown> | undefined;
     const inputTokens = api === 'rerank' ? usage?.total_tokens : usage?.input_tokens;
@@ -180,7 +183,7 @@ export async function callEvaluate(request: CindyEvaluateToolRequest, context: E
       const amount = computeGatewayTurnCost({ inputTokens, outputTokens, cacheReadTokens: 0, cacheCreateTokens: 0 }, quote);
       if (amount !== null && Number.isFinite(amount) && quote) estimate = { amount: amount * (1 - (quote.costDiscount ?? 0)), currency: quote.currency };
     }
-    await recordBilling(response);
+    if (!actualBilling) await recordBilling(response);
     assertCurrent();
     if (api === 'decisions' && !Object.hasOwn(data, 'answers')) throw new Error('Invalid decisions response');
     if (api === 'decisions') return { ok: true, model: data.model ?? model, answers: data.answers, usage: data.usage, estimated_cost: estimate };

@@ -1,5 +1,5 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { declaredGhostHostToolGroups, type GhostHostToolGroup } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { getPluginHostUi, hostUiApprovalSubjects, type GhostHostUi } from '@cindy/plugin-protocol';
@@ -658,6 +658,16 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
  */
 export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank'] as const;
 export type GhostCindyModelsAction = (typeof GHOST_CINDY_MODELS_ACTIONS)[number];
+
+export function declaredGhostCindyModelActions(manifest: GhostManifest): GhostCindyModelsAction[] {
+  const actions = manifest.cindy?.models;
+  return isGhostCindyModelActionsDeclaration(actions) ? GHOST_CINDY_MODELS_ACTIONS.filter(action => actions.includes(action)) : [];
+}
+
+export function ghostCindyModelActionApproved(ghost: InstalledGhost | null | undefined, action: GhostCindyModelsAction): boolean {
+  return ghost?.enabled === true && ghost.approval?.state === 'approved' &&
+    ghost.approvedCindyModelActions?.includes(action) === true && declaredGhostCindyModelActions(ghost.manifest).includes(action);
+}
 
 export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
 export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
@@ -1993,6 +2003,8 @@ export interface InstalledGhost {
   companionsCapabilityApproved?: true;
   approvedHostToolGroups?: GhostHostToolGroup[];
   approvedEventTopics?: GhostTaskEventTopic[];
+  /** Only model APIs explicitly shown in an install/update confirmation. Missing means none. */
+  approvedCindyModelActions?: GhostCindyModelsAction[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2339,6 +2351,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
 
   for (const [category, actions] of Object.entries(manifest.cindy ?? {})) {
     if (category === 'oneshotModel') continue; // 偏好模型是标量意图,不是能力键
+    if (category === 'models' && !isGhostCindyModelActionsDeclaration(actions)) continue;
     if (!Array.isArray(actions)) continue;
     for (const action of actions) {
       if (typeof action !== 'string') continue;
@@ -3047,7 +3060,10 @@ export function diffInstalledGhostPermissionItems(
       ...(installed.manifest.agent ? { agent: { ...installed.manifest.agent,
         hostTools: declaredGhostHostToolGroups(installed.manifest).filter(group => installed.approvedHostToolGroups?.includes(group)),
       } } : {}),
-      // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
+      // 声明过但未确认的新能力不算旧权限，更新时作为新增项复核。
+      cindy: installed.manifest.cindy ? { ...installed.manifest.cindy,
+        models: declaredGhostCindyModelActions(installed.manifest).filter(action => installed.approvedCindyModelActions?.includes(action)),
+      } : undefined,
       subscribe: withoutUnapprovedControlPoints(installed),
       systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,
       tools: withoutUnapprovedAutoTools(installed),
@@ -5057,6 +5073,12 @@ function validateGhostManifestInput(
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       if (category === 'oneshotModel') continue;
       if (!Object.hasOwn(actionTable, category)) continue;
+      if (category === 'models' && preserveHistoricalParameterSize && !isGhostCindyModelActionsDeclaration(actionsRaw)) {
+        // Keep old opaque bytes for receipt comparisons/downgrades, but never grant them.
+        Object.assign(cindy, { models: actionsRaw });
+        continue;
+      }
+
       if (!Array.isArray(actionsRaw) || actionsRaw.length === 0) {
         return { ok: false, reason: `cindy.${category} 必须是非空数组` };
       }

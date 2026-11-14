@@ -401,7 +401,8 @@ const r = await cindy.send({
 
 ### 决策与重排模型
 
-在 `cindy.models` 声明 `decisions` 或 `rerank` 后，可通过 `cindy.send` 同步调用。
+在 `cindy.models` 声明 `decisions` 或 `rerank`，并在安装或更新时确认相应权限后，可通过 `cindy.send` 同步调用。
+旧版本中作为未知字段保存的声明不会随宿主升级自动获得权限，插件原有能力照常可用。
 这些接口使用主人的 Cindy AI 模型额度，不经过媒体生成 Guide，也不创建媒体任务。
 请用 `minCindyVersion` 声明完成验收的最低客户端版本，并处理旧客户端不支持的响应。
 
@@ -420,11 +421,12 @@ const ranked = await cindy.send({
 `{ type: 'noul' | 'choice' | 'score' | 'box', instructions, criteria? }`。
 图片放在 state 顶层数组的 `{ type: 'image_url', image_url: { url } }`，url 只能使用
 图片 data URL 或本插件名下的受管媒体。每次最多 16 张、图片总大小和请求体分别不超过
-32 MiB；图片每边至少 256 像素。主机会校正方向、缩放并转成 PNG/JPEG。
+32 MiB；`typesafe/` 模型要求图片每边至少 256 像素。主机会校正方向、缩放并转成 PNG/JPEG。
 题型支持由所选模型决定，`box` 需要图片且仅支持该题型的模型可用。
 
 成功结果包含 `model`、原始 `usage`、`estimatedCost: { amount, currency } | null`，
 决策另含 `answers`，重排另含 `results: [{ index, relevance_score }]`，不重复返回文档原文。
 估算费用计入任务和当天费用；缺价时不猜测金额。失败返回
 `{ ok: false, errorCode, message }`；模型提交的失败还带 `retryable` 和 `outcomeKnown`。
-超时或断网后的 `SUBMISSION_OUTCOME_UNKNOWN` 表示结果未确认，不得自动重提付费请求。
+超时或断网后的 `SUBMISSION_OUTCOME_UNKNOWN`，以及 HTTP 5xx 返回的 `outcomeKnown: false`，
+表示请求可能已执行，不得自动重提付费请求。HTTP 429 表示明确限流，可稍后重试。

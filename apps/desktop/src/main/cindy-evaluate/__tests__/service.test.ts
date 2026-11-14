@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { parseGatewayMediaBillingHeader } from '../../usage/gatewayMediaBillingHeader.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn(), pricing: vi.fn(), billing: vi.fn(), refresh: vi.fn(),
@@ -21,7 +22,10 @@ vi.mock('../../usage/modelPricing.js', async () => ({
   getModelPriceQuote: (await import('../../../shared/modelPriceQuote.js')).getModelPriceQuote,
 }));
 vi.mock('../../usage/gatewayMediaBilling.js', () => ({ prepareGatewayMediaBilling: async (input: { estimatedBilling(): unknown }) =>
-  Object.assign(async () => { mocks.billing(input.estimatedBilling()); }, { finish: vi.fn() }) }));
+  Object.assign(async (response: Response) => {
+    const actual = parseGatewayMediaBillingHeader(response.headers.get('X-Nova-AIGateway-Billing'));
+    mocks.billing(actual ? { amount: actual.cost, currency: 'CNY' } : input.estimatedBilling());
+  }, { finish: vi.fn() }) }));
 import { callEvaluate } from '../service.js';
 // Unit contract: the new paid entry point must use local model membership, distinguish
 // known HTTP rejection from an unknown submission, and omit caller document text.
@@ -31,6 +35,7 @@ const context = { assertCurrent: () => {}, readImage: vi.fn() };
 beforeEach(() => {
   mocks.fetch.mockReset(); mocks.pricing.mockReset().mockResolvedValue(null); mocks.billing.mockClear();
   mocks.generation = 1; mocks.gateway = true; mocks.access.disabledProviders = {}; mocks.access.disabledModels = {};
+  mocks.models[0].id = 'example-decision';
   mocks.models.forEach(model => { model.availability = 'available'; });
 });
 describe('evaluate', () => {
@@ -57,10 +62,28 @@ describe('evaluate', () => {
     expect(JSON.stringify(result)).not.toContain('private text');
     expect(mocks.billing).toHaveBeenCalledWith({ amount: 0.00005, currency: 'CNY' });
   });
-  it.each([[400, 'INVALID_INPUT', false], [403, 'MODEL_NOT_AUTHORIZED', false], [404, 'MODEL_NOT_FOUND', false], [429, 'UPSTREAM_UNAVAILABLE', true], [503, 'UPSTREAM_UNAVAILABLE', true]])('maps HTTP %s without replay', async (status, code, retryable) => {
+  // Unit: a successful response with both usage and a confirmed bill must settle
+  // once. Keep the recorder mock non-idempotent to expose duplicate service calls.
+  it('settles a successful header bill once instead of the token estimate', async () => {
+    mocks.pricing.mockResolvedValue({ xd: { 'example-rerank': { providerId: 'xd', modelId: 'example-rerank', currency: 'CNY', source: 'gateway', approximate: false, inputPerMtok: 1, outputPerMtok: 0 } } });
+    mocks.fetch.mockResolvedValue(Response.json({ results: [{ index: 0, relevance_score: 0.9 }], usage: { total_tokens: 100 } }, {
+      headers: { 'X-Nova-AIGateway-Billing': Buffer.from(JSON.stringify({ cost: 0.1 })).toString('base64url') },
+    }));
+    expect(await callEvaluate({ action: 'rerank', query: 'q', documents: ['d'] }, context))
+      .toMatchObject({ ok: true, estimated_cost: { amount: 0.0001, currency: 'CNY' } });
+    expect(mocks.billing).toHaveBeenCalledExactlyOnceWith({ amount: 0.1, currency: 'CNY' });
+  });
+  it.each([[400, 'INVALID_INPUT', false], [403, 'MODEL_NOT_AUTHORIZED', false], [404, 'MODEL_NOT_FOUND', false], [429, 'UPSTREAM_UNAVAILABLE', true]])('maps HTTP %s without replay', async (status, code, retryable) => {
     mocks.fetch.mockResolvedValue(Response.json({ error: { message: 'rejected fake-test-key' } }, { status: Number(status) }));
     expect(await callEvaluate({ action: 'rerank', query: 'q', documents: ['d'] }, context)).toMatchObject({ ok: false, errorCode: code, retryable, outcomeKnown: true, message: 'rejected [redacted]' });
     expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+  it.each([500, 502, 503, 504])('does not invite replay after HTTP %s', async status => {
+    mocks.fetch.mockResolvedValue(Response.json({ error: { message: 'upstream failed' } }, { status }));
+    expect(await callEvaluate({ action: 'rerank', query: 'q', documents: ['d'] }, context))
+      .toMatchObject({ errorCode: 'UPSTREAM_UNAVAILABLE', outcomeKnown: false, retryable: false,
+        message: 'upstream failed；请求可能已执行，请勿自动重提' });
+    expect(mocks.fetch).toHaveBeenCalledOnce();
   });
   it('does not replay uncertain submissions', async () => {
     mocks.fetch.mockRejectedValue(new Error('connection reset'));
@@ -74,8 +97,8 @@ describe('evaluate', () => {
 });
 
 // Unit: a caller-authorized file must be decoded before submission; image format and
-// minimum size are endpoint contracts, not string-pattern checks.
-it('normalizes authorized WebP images and rejects undersized images before dispatch', async () => {
+// minimum size must follow the selected model's contract.
+it('normalizes authorized WebP images and limits the minimum size to typesafe models', async () => {
   const state = [{ type: 'image_url', image_url: { url: '/example/image.webp' } }];
   const request = { action: 'decisions' as const, questions: { q: { type: 'noul', instructions: 'Check' } }, state };
   const image = await sharp({ create: { width: 256, height: 256, channels: 3, background: '#336699' } }).webp().toBuffer();
@@ -88,6 +111,10 @@ it('normalizes authorized WebP images and rejects undersized images before dispa
   expect(state[0].image_url.url).toBe('/example/image.webp');
   mocks.fetch.mockClear();
   const tiny = await sharp(image).resize(128, 128).png().toBuffer();
+  mocks.fetch.mockResolvedValue(Response.json({ answers: { q: true }, usage: { input_tokens: 10, output_tokens: 0 } }));
+  expect(await callEvaluate(request, { ...context, readImage: async () => tiny })).toMatchObject({ ok: true });
+  mocks.fetch.mockClear();
+  mocks.models[0].id = 'typesafe/jev-1.14';
   expect(await callEvaluate(request, { ...context, readImage: async () => tiny })).toMatchObject({ errorCode: 'INVALID_INPUT', outcomeKnown: true });
   expect(mocks.fetch).not.toHaveBeenCalled();
 });

@@ -66,6 +66,7 @@ function fakeGhost(
           }),
     },
     dir: '/fake/brain/art',
+    approval: { state: 'approved', revision: 'test-revision' },
     enabled: overrides.enabled ?? true,
   } as InstalledGhost;
 }
@@ -2730,9 +2731,14 @@ it('requires declared model API and shares the existing inflight limit', async (
   const denied = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0) });
   expect(await denied.slot.handleModelRequest('art', { kind: 'list_models', api: 'rerank' })).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
   expect(evaluate).not.toHaveBeenCalled();
-  const allowed = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => fakeGhost({ model: { models: ['rerank'] } }) });
+  const legacy = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => fakeGhost({ model: { image: ['generate'], models: ['rerank'] } }) });
+  for (const request of [{ kind: 'list_models', api: 'rerank' }, { kind: 'rerank', query: 'q', documents: ['d'] }]) {
+    expect(await legacy.slot.handleModelRequest('art', request)).toMatchObject({ errorCode: 'PERMISSION_DENIED' });
+  }
+  expect(evaluate).not.toHaveBeenCalled();
+  const allowed = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => ({ ...fakeGhost({ model: { models: ['rerank'] } }), approvedCindyModelActions: ['rerank'] }) });
   expect(await allowed.slot.handleModelRequest('art', { kind: 'list_models', api: 'rerank' })).toEqual({ ok: true, models: [{ model: 'example', providerId: 'xd', name: 'Example' }] });
-  const busy = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => fakeGhost({ model: { models: ['rerank'] } }), getInflightLimit: () => 0 });
+  const busy = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => ({ ...fakeGhost({ model: { models: ['rerank'] } }), approvedCindyModelActions: ['rerank'] }), getInflightLimit: () => 0 });
   expect(await busy.slot.handleModelRequest('art', { kind: 'rerank', query: 'q', documents: ['d'] })).toMatchObject({ ok: false, errorCode: 'BUSY' });
   expect(evaluate).toHaveBeenCalledTimes(1);
 });
