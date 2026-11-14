@@ -457,6 +457,9 @@ HTTP MCP，每次握手都要跨机往返。Claude Code 默认 `MCP_TIMEOUT` 只
 `host.dispose()` 来自 Maker 重置，不是常规退出必经路径。两条入口共用闲置／忙碌判断，重叠时等待
 首次收尾再回收。`dispose()` 返回同一份清理完成 Promise，包含正在启动的任务与巡检已开始的删除；
 服务重建后先等待前一 host 的清理，再派发新请求，等待期间再次重建的旧入口不再接单。
+启动途中关闭的任务仍计入单设备与整机额度，直到启动完成并关闭晚到的原生句柄／隧道，不能因
+收尾事件已发出就提前让出名额。晚到的 loopback 隧道由启动路径关闭；不等待启动来发送收尾事件，
+避免启动还在等待控制端回包时互相卡住。回归见 `limits.test.ts` 与 `hostLifecycle.test.ts`。
 这只约束本进程 Maker 重置后的 host 交接，不重连共享链路、不改变线上协议。
 新版主动断开（`user` / `toggle-off`）发 `controller-disconnected`，控制端映射为
 既有 `user-revoked`，不自动续跑或让供应商组换电脑；中转也不发换电脑凭证。旧版 `aborted` 无法

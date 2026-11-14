@@ -1381,9 +1381,12 @@ describe('remote agent round trip', () => {
       expect(host.limitUsage().total).toBe(1);
       cancelPendingRemoteStart(sessionId);
       await expect(starting).rejects.toThrow('[REMOTE_AGENT_EXPIRED]');
-      await vi.waitFor(() => expect(host.limitUsage().total).toBe(0), { interval: 1, timeout: 1000 });
+      // Cancellation ends the controller's wait, but the native startup still
+      // owns its slot until the late handle has actually been closed.
+      expect(host.limitUsage().total).toBe(1);
       finishStart();
       await vi.waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(host.limitUsage().total).toBe(0), { interval: 1, timeout: 1000 });
       expect(hostSends).toEqual([]);
     } finally {
       finishStart();

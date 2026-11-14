@@ -671,6 +671,9 @@ function describeHandle(handle: AgentSessionHandle, shadowDir: string, mirrorRoo
 export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   const now = deps.now ?? Date.now;
   const runs = new Map<string, Run>();
+  // A close can finish before native startup returns its handle. Keep that
+  // reservation until startup has disposed any resources that arrived late.
+  const startingRuns = new WeakSet<Run>();
   // Completion receipts outlive a closed/purged run until the original owner can acknowledge them.
   const pendingStandbyCompletions = new Set<Run>();
   const uploads = new Map<string, Upload>();
@@ -690,7 +693,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const counts = new Map<string, number>();
     for (const run of runs.values()) {
       // 清理完成前仍占名额，包括正在关闭的实例。
-      if (run.closedAt !== undefined) continue;
+      if (run.closedAt !== undefined && !startingRuns.has(run)) continue;
       const device = limitDeviceOf(run.controller);
       counts.set(device, (counts.get(device) ?? 0) + 1);
     }
@@ -1625,8 +1628,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           },
         }),
       );
+      if (run.closing) {
+        // finishRun may already have closed the log before this async listener
+        // was available. Startup owns late resources until it settles.
+        await tunnel.close();
+        return;
+      }
       run.tunnel = tunnel;
-      if (run.closing) return;
       // 必须先发布映射，再启动 Agent。Codex startSession 会在 started 之前读取 exec-server 环境。
       if (payload.virtualWorkspace) append(run, { t: 'state', state: {
         workspaceProjection: { shadowDir, mirrorRoot, extraDirs, writableDirs, virtualWorkspace: true, ...(previousMirrorRoots.length ? { previousMirrorRoots } : {}) },
@@ -3666,6 +3674,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           ...(reserved && !relayTo ? { groupLoad: reserved } : {}),
         };
         runs.set(key(controller, request.runId), run);
+        startingRuns.add(run);
         ensureSweep();
         deps.log?.info('remote agent run opened', { runId: run.id, agent: run.kind, ...(relayTo ? { relayed: true } : {}) });
         if (groupRouted && payload.options.resumeSessionId) run.groupResumed = true;
@@ -3681,13 +3690,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               load?.release();
               append(run, { t: 'start-failed', error: relayErrorInfoFrom(error) });
               await finishRun(run, 'start-failed', 'navigation', false);
-            });
+            }).finally(() => { startingRuns.delete(run); });
           runStarts.set(run, starting);
           void starting;
         } else {
           // 组为受邀者的全新任务选中了本机这一台：本机起不来时与组内电脑一样换下一台。
           if (groupRouted && !payload.options.resumeSessionId) run.groupFreshStart = { avoid };
-          const starting = startRun(run, payload);
+          const starting = startRun(run, payload).finally(() => { startingRuns.delete(run); });
           runStarts.set(run, starting);
           void starting;
         }
