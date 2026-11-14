@@ -106,6 +106,21 @@ it('remote favorite add/update/remove use remote operations, never browser stora
   expect(local).not.toHaveBeenCalled();
   local.mockRestore();
 });
+// 回归：远控编辑必须把 ultrafast 原样送出。收成 true 后星标对不上，再改其它字段也会把档位丢掉。
+it('keeps ultrafast when a remote favorite is saved or edited', async () => {
+  await act(async () => root.render(createElement(Probe, {})));
+  await act(async () => view.store.update(item.uid, { fast: 'ultrafast' }));
+  expect(invoke).toHaveBeenCalledWith('a', 'maker:model-favorites:apply', [
+    { kind: 'update', expected: item, item: { ...item, fast: 'ultrafast' } },
+  ]);
+  const ultra = { ...item, fast: 'ultrafast' as const };
+  invoke.mockResolvedValue([ultra]);
+  await act(async () => push({ deviceId: 'a', channel: 'maker:model-favorites:changed' }));
+  await act(async () => view.store.update(ultra.uid, { effort: 'low' }));
+  expect(invoke).toHaveBeenCalledWith('a', 'maker:model-favorites:apply', [
+    { kind: 'update', expected: ultra, item: { ...ultra, effort: 'low', fast: 'ultrafast' } },
+  ]);
+});
 it('refreshes only matching remote invalidations and ignores late reads from another device', async () => {
   let resolve!: (v: unknown) => void;
   invoke.mockImplementationOnce(

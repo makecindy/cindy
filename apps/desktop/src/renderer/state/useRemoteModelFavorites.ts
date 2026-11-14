@@ -142,7 +142,12 @@ export function useRemoteModelFavorites(deviceId?: string) {
       return write({
         kind: 'update',
         expected: before,
-        item: { ...item, effort: item.effort ?? undefined, fast: item.fast ? true : undefined },
+        // 速度是三态。收成 true 后，星标对不上 ultrafast，再点会再加一条。
+        item: {
+          ...item,
+          effort: item.effort ?? undefined,
+          fast: item.fast === 'ultrafast' ? 'ultrafast' : item.fast ? true : undefined,
+        },
       });
     },
     remove: (uid) => write({ kind: 'remove', expected: expected(uid) }),
