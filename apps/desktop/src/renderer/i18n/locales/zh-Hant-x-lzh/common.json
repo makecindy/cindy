@@ -11336,7 +11336,9 @@
         "autoContinueSaveFailed": "分工交接未能存，請再試",
         "projectDirSaveFailed": "案之卷匣未能存，確其尚存後再試",
         "allowMentionAllBots": "許 @諸同伴",
-        "allowMentionAllBotsHint": "唯群主可改。諸同伴或皆回覆，大群宜慎啟之。此開關不涉 AI 代答。"
+        "allowMentionAllBotsHint": "唯群主可改。諸同伴或皆回覆，大群宜慎啟之。此開關不涉 AI 代答。",
+        "shortCompanionNames": "簡示同僚之名",
+        "shortCompanionNamesHint": "啟之則不重名者省主人名；同名者仍顯示以別之。"
       },
       "errors": {
         "memberLimit": "群議須 2–6 位同伴",

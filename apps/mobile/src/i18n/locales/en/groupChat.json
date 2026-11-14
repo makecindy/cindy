@@ -307,7 +307,9 @@
       "unavailable": "Couldn’t load group settings. Try again."
     },
     "allowMentionAllBots": "Allow @all buddies",
-    "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
+    "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent.",
+    "shortCompanionNames": "Short companion names",
+    "shortCompanionNamesHint": "Hide the owner’s name when a companion’s name is unique in this group. Namesakes keep the owner’s name to tell them apart."
   },
   "errors": {
     "memberLimit": "A group chat needs 2–6 buddies",

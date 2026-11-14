@@ -11470,7 +11470,9 @@
         "autoContinueSaveFailed": "Impossible d'enregistrer le passage entre étapes. Réessayez.",
         "projectDirSaveFailed": "Impossible d'enregistrer le dossier du projet. Vérifiez que le dossier existe toujours, puis réessayez.",
         "allowMentionAllBots": "Autoriser @tous les amis",
-        "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les amis peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous."
+        "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les amis peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous.",
+        "shortCompanionNames": "Noms courts des coéquipiers",
+        "shortCompanionNamesHint": "Si le nom est unique dans le groupe, le propriétaire est masqué. En cas de doublon, il reste affiché pour les distinguer."
       },
       "errors": {
         "memberLimit": "Une conversation de groupe nécessite de 2 à 6 amis",

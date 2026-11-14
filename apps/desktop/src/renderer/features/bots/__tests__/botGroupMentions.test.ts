@@ -24,6 +24,59 @@ const members = [
 ];
 
 describe('resolveBotGroupMentions', () => {
+  // #9419, unit: the production resolver must retain old drafted labels when the opt-in changes,
+  // while preserving main's priority for an exact current display name.
+  it('resolves old owner labels but never claims a label belonging to another member', () => {
+    const helper = { botId: 'helper', name: 'Helper', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true, actorKind: 'bot' as const };
+    expect(resolveBotGroupMentions('@Helper (Alex) hello', { members: [helper], allLabels: [] }).botIds).toEqual(['helper']);
+    const actual = { botId: 'person', name: 'Helper (Alex)', actorKind: 'human' as const };
+    expect(resolveBotGroupMentions('@Helper (Alex) hello', { members: [helper, actual], allLabels: [] }).botIds).toEqual(['person']);
+    expect(ambiguousBotGroupMentionLabels('@Helper (Alex) hello', { members: [helper, actual], allLabels: [] })).toEqual([]);
+    expect(resolveBotGroupMentions('@Helper (Alex) hello', { members: [helper, actual], allLabels: [],
+      tracked: [{ botId: 'person', label: 'Helper (Alex)', start: 0 }] }).botIds).toEqual(['person']);
+  });
+
+  it('does not fan an unpicked short draft out to same-name companions after the labels change', () => {
+    const roster = [
+      { botId: 'one', name: 'Helper (Alex)', displayName: 'Helper', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true, actorKind: 'bot' as const },
+      { botId: 'two', name: 'Helper (Sam)', displayName: 'Helper', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true, actorKind: 'bot' as const },
+    ];
+    expect(resolveBotGroupMentions('@Helper please', { members: roster, allLabels: [] }).botIds).toEqual([]);
+    expect(ambiguousBotGroupMentionLabels('@Helper please', { members: roster, allLabels: [] })).toEqual(['Helper']);
+    expect(resolveBotGroupMentions('@Helper please', { members: roster, allLabels: [], tracked: [{ botId: 'one', label: 'Helper', start: 0 }] }).botIds).toEqual(['one']);
+    expect(ambiguousBotGroupMentionLabels('@Helper please', { members: roster, allLabels: [], tracked: [{ botId: 'one', label: 'Helper', start: 0 }] })).toEqual([]);
+    expect(resolveBotGroupMentions('@Helper (Sam) please', { members: roster, allLabels: [] }).botIds).toEqual(['two']);
+    expect(resolveBotGroupMentions('@Helper please', { members: [{ botId: 'one', name: 'Helper (Alex)', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true }], allLabels: [] }).botIds).toEqual(['one']);
+  });
+
+  // #9419, unit: after the preference is turned off, a short name already typed in a draft
+  // must still resolve; an exact current name retains main's priority over aliases.
+  it('keeps short drafts safe when the group preference is turned off', () => {
+    const helper = { botId: 'one', name: 'Helper (Alex)', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: false };
+    expect(resolveBotGroupMentions('@Helper please', { members: [helper], allLabels: [] }).botIds).toEqual(['one']);
+    const human = { botId: 'human', name: 'Helper', actorKind: 'human' as const };
+    expect(ambiguousBotGroupMentionLabels('@Helper please', { members: [helper, human], allLabels: [] })).toEqual([]);
+    expect(resolveBotGroupMentions('@Helper please', { members: [helper, human], allLabels: [] }).botIds).toEqual(['human']);
+    expect(resolveBotGroupMentions('@Helper please', { members: [{ botId: 'one', name: 'Helper (Alex)' }], allLabels: [] }).botIds).toEqual([]);
+  });
+
+  // #9427 review, unit: a picked short mention must not be replaced by a longer
+  // label that appears when another companion joins while its draft is open.
+  it('keeps a picked short identity ahead of a newly matching longer label', () => {
+    const roster = [
+      { botId: 'alex', name: 'Helper (Alex)', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+      { botId: 'sam', name: 'Helper (Sam)', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+    ];
+    const draft = '@Helper (Sam) check';
+    const tracked = [{ botId: 'alex', label: 'Helper', start: 0 }];
+    const input = { members: roster, allLabels: [], tracked };
+    expect(resolveBotGroupMentions(draft, input).botIds).toEqual(['alex']);
+    expect(ambiguousBotGroupMentionLabels(draft, input)).toEqual([]);
+    expect(retainBotGroupTrackedMentions(draft, `${draft}!`, { ...input, editStart: draft.length })).toEqual(tracked);
+    expect(resolveBotGroupMentions(draft, { members: roster, allLabels: [] }).botIds).toEqual(['sam']);
+    expect(retainBotGroupTrackedMentions(draft, draft, { ...input, editStart: 0, editEnd: 7 })).toEqual([]);
+  });
+
   // User decision: Everyone addresses humans; All Teammates is an independent
   // broadcast. Existing tests cover only one broadcast kind (unit regression).
   it('keeps human and companion broadcasts separate, including a picked namesake', () => {
@@ -247,6 +300,20 @@ describe('splitBotGroupRelaySteps', () => {
     ['an @ inside a task', '@小满 实现，@Old 测一遍'],
   ])('leaves %s to the organizer', (_label, text) => {
     expect(split(text)).toBeNull();
+  });
+
+  // #9427, unit: a picked short name can overlap a newer longer name; the host
+  // has only the set of target IDs, not the position of each picked token.
+  it('leaves overlapping different targets to the organizer but accepts aliases of one target', () => {
+    const helper = { botId: 'alex', name: 'Helper', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+    const other = { botId: 'sam', name: 'Helper (Sam)', shortOwnerNamesEnabled: true };
+    expect(splitBotGroupRelaySteps('@Helper (Sam) design', { members: [helper, other], allLabels: [] })).toBeNull();
+    expect(splitBotGroupRelaySteps('@Helper (Alex) design', { members: [helper], allLabels: [] }))
+      .toEqual([{ botId: 'alex', task: 'design' }]);
+    // Older servers retain their name-only longest-match behavior.
+    expect(splitBotGroupRelaySteps('@Helper (Sam) design', {
+      members: [{ botId: 'alex', name: 'Helper' }, { botId: 'sam', name: 'Helper (Sam)' }], allLabels: [],
+    })).toEqual([{ botId: 'sam', task: 'design' }]);
   });
 });
 

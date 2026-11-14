@@ -77,6 +77,22 @@ it('reads and saves cloud settings and offers offline companions without any hos
   ]);
 });
 
+// #9419, unit: the settings hook must carry the choice through the real direct client and
+// read back the room value; existing group-setting tests did not exercise this preference.
+it('saves and reads back the group owner-name choice on a supporting server', async () => {
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (path, method, body, actor) => {
+    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupCompanionOwnerNames: 1 } };
+    if (method === 'PATCH' && body.hideCompanionOwnerNames !== undefined) snapshot.room.hide_companion_owner_names = body.hideCompanionOwnerNames;
+    return original(path, method, body, actor);
+  });
+  await render();
+  expect(result.group?.supportsCompanionOwnerNames).toBe(true);
+  await act(async () => { await result.act('update', { hideCompanionOwnerNames: true }); });
+  expect(writes()[0]).toEqual([`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, hideCompanionOwnerNames: true }, id(2)]);
+  expect(result.group?.hideCompanionOwnerNames).toBe(true);
+});
+
 it.each(['member', 'guest'] as const)('keeps %s read-only based on account membership', async role => {
   snapshot.members[0].role = role; await render();
   expect(result.reason).toBe('permission');

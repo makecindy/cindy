@@ -1,5 +1,14 @@
 # 跨端协议兼容
 
+## 群内伙伴简洁名称（提案，待 Chat Server 配套）
+
+客户端仅在服务器 `/me` 声明 `groupCompanionOwnerNames: 1` 时开放群级开关；
+读取房间 `hide_companion_owner_names`，经既有群管理 PATCH 写入 `hideCompanionOwnerNames`
+和 `expectedRevision`。新字段仅控制展示，不改变 actor 身份、归属、权限或消息内容。
+旧服务端不接收此字段，旧客户端继续显示主人后缀；双方升级后才有一致的新体验。
+服务端必须按群持久化、验证群主／管理员权限及 revision 并广播房间变化；此客户端仓
+不能证明上述服务端能力存在。见 `docs/product-rules/bot-group-chat.md` 第 10 节。
+
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改插件分发来源边界、device-link 协议／relay／隧道 payload／IPC
 > allowlist，或任何改动客户端与服务端之间 wire protocol 的地方之前

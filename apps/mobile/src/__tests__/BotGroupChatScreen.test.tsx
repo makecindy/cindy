@@ -1676,6 +1676,78 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
+  // #9427 review, unit: a newly joined namesake must not steal an explicitly picked short mention.
+  it('keeps a picked short mention when a longer matching name appears', async () => {
+    const data = group({ openPlan: null });
+    const helper = { ...data.members[0]!, name: 'Helper', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+    await render(group({ openPlan: null, members: [helper] }));
+    await type('@');
+    await click('botGroup.mention.mimi');
+    await type('@Helper (Sam) check');
+    const members = [
+      { ...helper, name: 'Helper (Alex)', ownerNameHidden: false },
+      { ...data.members[1]!, name: 'Helper (Sam)', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+    ];
+    await render(group({ openPlan: null, members }));
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: [helper.botId] } }));
+  });
+
+  // #9419, unit: a manually typed short mention must survive the room setting changing while
+  // the draft is open; the prior fixture only exercised a still-enabled preference.
+  it('keeps a typed short mention addressed when the preference is turned off', async () => {
+    const data = group({ openPlan: null });
+    const helper = { ...data.members[0]!, name: 'Ann', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+    await render(group({ openPlan: null, members: [helper] }));
+    await type('@Ann hello');
+    await render(group({ openPlan: null, members: [{ ...helper, name: 'Ann (Alex)', ownerNameHidden: false, shortOwnerNamesEnabled: false }] }));
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: [helper.botId] } }));
+  });
+
+  // #9419: an ambiguous short draft must not become an unaddressed message that wakes all bots.
+  it('keeps an ambiguous short mention in the draft until a member is picked', async () => {
+    const data = group({ openPlan: null });
+    const namesakes = [
+      { ...data.members[0]!, name: 'Ann (Alex)', displayName: 'Ann', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+      { ...data.members[1]!, name: 'Ann (Sam)', displayName: 'Ann', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+    ];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('@Ann hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    expect(h.row.value).toBe('@Ann hello');
+    expect(h.alert).toHaveBeenCalledWith('groupChat.errors.mentionAmbiguous(name=Ann)');
+  });
+
+  // #9427 review, unit: a lost acknowledgement may have stored the original send.
+  it('retries the same short mention with its original identity after a namesake joins', async () => {
+    const data = group({ openPlan: null });
+    const helper = { ...data.members[0]!, name: 'Helper', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+    await render(group({ openPlan: null, members: [helper] }));
+    await type('@Helper hello');
+    h.chat.act.mockRejectedValueOnce(new Error('NETWORK_ERROR'));
+    await click('botGroup.composer.send');
+    expect(h.row.value).toBe('@Helper hello');
+    const first = h.chat.act.mock.calls[0]![1];
+    expect(first.mentions).toEqual({ all: false, botIds: [helper.botId] });
+    const members = [
+      { ...helper, name: 'Helper (Alex)', ownerNameHidden: false },
+      { ...data.members[1]!, name: 'Helper (Sam)', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+    ];
+    await render(group({ openPlan: null, members }));
+    // A changed draft is a new intent, even while the failed attempt is retained.
+    await type('@Helper a new message');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenCalledTimes(1);
+    expect(h.row.value).toBe('@Helper a new message');
+    expect(h.alert).toHaveBeenCalledWith('groupChat.errors.mentionAmbiguous(name=Helper)');
+    await type('@Helper hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenCalledTimes(2);
+    expect(h.chat.act.mock.calls[1]![1]).toMatchObject({ clientId: first.clientId, mentions: first.mentions });
+  });
+
   // Incident 2026-11-13 (component): a typed name two members share used to address both.
   // One @ names one identity, so the draft stays and asks for a pick from the list.
   it('holds a typed name that two members share until one is picked from the list', async () => {
@@ -2053,6 +2125,29 @@ describe('group settings', () => {
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings')).not.toBeNull();
   }
+
+  // #9419, UI unit: the manager's direct phone must offer the switch only after the
+  // server advertises support and send the room setting through the existing management path.
+  it('offers the short-name switch only on a supporting server', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsCompanionOwnerNames: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', isSelf: true, isOwned: true, role: 'owner' };
+    h.chat.server = true;
+    h.management = { group: data, editable: true, ready: true, loading: false, reason: null, act: vi.fn(async () => ({})), refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    await click('botGroup.settings.shortCompanionNames');
+    expect(h.management.act).toHaveBeenCalledWith('update', { hideCompanionOwnerNames: true });
+  });
+
+  it('keeps the short-name switch out of an older server group', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', isSelf: true, isOwned: true, role: 'owner' };
+    h.chat.server = true;
+    h.management = { group: data, editable: true, ready: true, loading: false, reason: null, act: vi.fn(async () => ({})), refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    expect(byId('botGroup.settings.shortCompanionNames')).toBeNull();
+  });
 
   it('allows personal removal from an archived read-only group without management rights', async () => {
     h.chat.server = true;

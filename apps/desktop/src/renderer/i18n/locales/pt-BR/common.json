@@ -11470,7 +11470,9 @@
         "autoContinueSaveFailed": "Não foi possível salvar as transições entre etapas. Tente novamente.",
         "projectDirSaveFailed": "Não foi possível salvar a pasta do projeto. Verifique se a pasta ainda existe e tente novamente.",
         "allowMentionAllBots": "Permitir @todos os amigos",
-        "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os amigos podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome."
+        "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os amigos podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome.",
+        "shortCompanionNames": "Nomes curtos dos colegas",
+        "shortCompanionNamesHint": "Quando o nome for único no grupo, o nome do proprietário fica oculto. Em caso de nomes iguais, ele aparece para diferenciá-los."
       },
       "errors": {
         "memberLimit": "Uma conversa em grupo precisa de 2 a 6 amigos",

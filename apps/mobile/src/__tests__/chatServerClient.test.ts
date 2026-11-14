@@ -18,6 +18,27 @@ const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099'
   { id: id(10), kind: 'human', name: 'Other member', state: 'joined', ownerActorId: id(10), ownerName: '', avatar: null, role: 'member' },
 ] });
 
+// #9419, unit: the real Mobile client must never send the proposed group setting to an old
+// server; a supporting server receives the revision and manager identity with the write.
+describe('group companion owner-name setting', () => {
+  it.each([false, true])('gates the write on server support (%s)', async supported => {
+    const request = vi.fn(async (path: string) => path === '/me'
+      ? { actor: { id: id(10), kind: 'human' }, capabilities: supported ? { groupCompanionOwnerNames: 1 } : {} }
+      : { ok: true });
+    const client = createChatServerClient(request as any);
+    const write = client.manageGroup(id(1), id(10), { type: 'update', expectedRevision: 4, hideCompanionOwnerNames: true }, 'operation-1');
+    if (supported) {
+      await expect(write).resolves.toEqual({ ok: true });
+      expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}`, 'PATCH',
+        { operationId: 'operation-1', expectedRevision: 4, hideCompanionOwnerNames: true }, id(10));
+      expect(client.lifecycleCapabilities().supportsCompanionOwnerNames).toBe(true);
+    } else {
+      await expect(write).rejects.toThrow('CHAT_UNAVAILABLE');
+      expect(request).not.toHaveBeenCalledWith(`/conversations/${id(1)}`, expect.anything(), expect.anything(), expect.anything());
+    }
+  });
+});
+
 // Unit: mobile group shares must match #8386's existing Share Server contract.
 // The old suite only covered incoming invitations, not authenticated creation,
 // trusted-origin validation or account changes while publishing a share.
@@ -342,6 +363,23 @@ describe('direct Chat Server client', () => {
     ]));
   });
   // #6907: existing fixtures never pair a human's group name A with account ownerName B (unit tier).
+  // #9419: a server group may opt in for every reader; verify the real mobile projection,
+  // including the transition back to an attributed name when another joined member collides.
+  it('projects an opted-in short name across messages and the room list, but disambiguates namesakes', () => {
+    const human = { ...snapshot().members[0], name: 'Alex' };
+    const family = { ...human, id: id(13), name: 'Sam', ownerActorId: id(13) };
+    const bot = { ...human, id: id(12), kind: 'bot' as const, name: 'Helper', ownerName: 'Alex' };
+    const messages = [{ ...message(20), authorId: bot.id, author: { kind: 'bot', name: bot.name } }];
+    const source = { ...snapshot(), room: { ...room(), hide_companion_owner_names: true }, members: [human, family, bot], messages };
+    const view = chatGroupView({ snapshot: source, messages, before: null }, family.id);
+    expect(view.members.find(member => member.actorId === bot.id)).toMatchObject({ name: 'Helper', ownerName: 'Alex', ownerNameHidden: true });
+    expect(view.messages[0].authorName).toBe('Helper');
+    expect(chatRoomRow(source.room, source).item.display.subtitle).toBe('Alex · Sam · Helper');
+    const collision = { ...family, name: 'helper' };
+    const collided = { ...source, members: [human, collision, bot] };
+    expect(chatGroupView({ snapshot: collided, messages, before: null }, family.id).messages[0].authorName).toBe('Helper (Alex)');
+  });
+
   it('keeps owner labels scoped to each group and follows refreshed names without changing identities', () => {
     const human = { ...snapshot().members[0], name: 'Nickname A' };
     const bot = { ...human, id: id(12), kind: 'bot' as const, name: 'Companion X', ownerName: 'Account B' };
@@ -672,6 +710,36 @@ describe('direct Chat Server client', () => {
     request.mockClear();
     await expect(client.send(id(1), input)).rejects.toThrow('QUOTE_UNAVAILABLE');
     expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+  });
+  // #9427 / server-channel-review: quote sends must not fetch /members when the
+  // fresh snapshot already contains the roster. Direct/old servers need /members.
+  it.each([
+    ['supporting group', true, 'group', 1, 0],
+    ['older group', false, 'group', 0, 1],
+    ['supporting direct chat', true, 'direct', 0, 1],
+  ] as const)('uses only one roster source for a quote in a %s', async (_label, supported, conversationKind, snapshots, rosters) => {
+    const owner = { ...snapshot().members[0], name: 'Alex' };
+    const member = { ...owner, id: id(12), kind: 'bot' as const, name: 'Helper', ownerName: 'Alex' };
+    const original = { ...message(20), authorId: member.id, author: { kind: 'bot', name: 'Helper' } };
+    const group = { ...snapshot(), room: { ...room(), hide_companion_owner_names: true }, members: [owner, member] };
+    const request = vi.fn(async (path: string, method?: string, _body?: unknown) => {
+      if (path === '/me') return { actor: { id: id(10), kind: 'human' }, capabilities: supported ? { groupCompanionOwnerNames: 1 } : {} };
+      if (method === 'POST') return message(21);
+      if (path.endsWith('/snapshot')) return group;
+      if (path.endsWith('/members')) return group.members;
+      return original;
+    });
+    const client = createChatServerClient(request as any);
+    await client.groupSettings(id(1)); // establish the advertised capability
+    request.mockClear();
+    await client.send(id(1), { clientId: `quote-${conversationKind}`, text: 'Agreed', mentions: { all: false, botIds: [] },
+      quote: { messageId: id(20) }, conversationKind: conversationKind === 'direct' ? 'direct' : undefined });
+    expect(request.mock.calls.filter(([path]) => path.endsWith('/snapshot'))).toHaveLength(snapshots);
+    expect(request.mock.calls.filter(([path]) => path.endsWith('/members'))).toHaveLength(rosters);
+    const posted = request.mock.calls.find(([, method]) => method === 'POST');
+    expect(posted?.[2]).toMatchObject({ mentions: [member.id], content: [expect.objectContaining({
+      data: expect.objectContaining({ authorName: supported && conversationKind === 'group' ? 'Helper' : 'Helper (Alex)' }),
+    }), { type: 'text', text: 'Agreed' }] });
   });
   it('retries a lost quoted-send response with the identical posted content', async () => {
     const original = message(20);

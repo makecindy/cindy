@@ -313,7 +313,9 @@
       "noneHint": "Desactiva todos los avisos del sistema de este grupo. Los mensajes no leídos se conservan.",
       "saving": "Guardando…",
       "saveFailed": "No se pudieron guardar las notificaciones. Inténtalo de nuevo."
-    }
+    },
+    "shortCompanionNames": "Nombres cortos de compañeros",
+    "shortCompanionNamesHint": "Si el nombre es único en el grupo, se oculta el del propietario. Si hay nombres iguales, se muestra para distinguirlos."
   },
   "errors": {
     "memberLimit": "Un chat grupal necesita de 2 a 6 amigos de equipo",

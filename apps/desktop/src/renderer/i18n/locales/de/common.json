@@ -11381,7 +11381,9 @@
         "autoContinueSaveFailed": "Die Schrittübergabe konnte nicht gespeichert werden. Versuch es erneut.",
         "projectDirSaveFailed": "Der Projektordner konnte nicht gespeichert werden. Prüfe, ob der Ordner noch vorhanden ist, und versuch es erneut.",
         "allowMentionAllBots": "@Alle Freunde erlauben",
-        "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle Teammitglieder können antworten; in großen Gruppen mit Bedacht verwenden. KI-Antworten in deinem Namen sind davon unabhängig."
+        "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle Teammitglieder können antworten; in großen Gruppen mit Bedacht verwenden. KI-Antworten in deinem Namen sind davon unabhängig.",
+        "shortCompanionNames": "Kurze Partnernamen",
+        "shortCompanionNamesHint": "Bei eindeutigen Namen wird der Name des Besitzers ausgeblendet. Bei gleichen Namen bleibt er zur Unterscheidung sichtbar."
       },
       "errors": {
         "memberLimit": "Ein Gruppenchat braucht 2–6 Freunde",

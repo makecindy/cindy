@@ -306,6 +306,8 @@
       "loading": "正在读取群设置…",
       "unavailable": "群设置读取失败，请重试"
     },
+    "shortCompanionNames": "简洁显示伙伴名",
+    "shortCompanionNamesHint": "开启后，群内不重名的伙伴不显示主人名；重名时仍显示主人名以区分。",
     "allowMentionAllBots": "允许 @所有伙伴",
     "allowMentionAllBotsHint": "仅群主可更改。伙伴可能都会回复，大群请谨慎开启。此开关不影响 AI 代答。"
   },

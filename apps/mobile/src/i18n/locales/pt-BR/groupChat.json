@@ -313,7 +313,9 @@
       "noneHint": "Desative todos os alertas do sistema deste grupo. As mensagens não lidas são mantidas.",
       "saving": "Salvando…",
       "saveFailed": "Não foi possível salvar as notificações. Tente novamente."
-    }
+    },
+    "shortCompanionNames": "Nomes curtos dos colegas",
+    "shortCompanionNamesHint": "Quando o nome for único no grupo, o nome do proprietário fica oculto. Em caso de nomes iguais, ele aparece para diferenciá-los."
   },
   "errors": {
     "memberLimit": "Uma conversa em grupo precisa de 2 a 6 amigos",

@@ -306,6 +306,8 @@
       "loading": "設定を読み込み中…",
       "unavailable": "グループ設定を読み込めませんでした。もう一度お試しください。"
     },
+    "shortCompanionNames": "仲間の名前を短く表示",
+    "shortCompanionNamesHint": "グループ内で同名がない仲間は主人の名前を省略します。同名の場合は区別のため表示します。",
     "allowMentionAllBots": "すべての仲間への @ を許可",
     "allowMentionAllBotsHint": "変更できるのはオーナーのみです。全員が返信する可能性があるため、大人数のグループでは慎重に有効にしてください。本人に代わる AI の返信には影響しません。"
   },

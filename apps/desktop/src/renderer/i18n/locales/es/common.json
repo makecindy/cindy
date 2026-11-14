@@ -11470,7 +11470,9 @@
         "autoContinueSaveFailed": "No se pudieron guardar las transiciones entre pasos. Inténtalo de nuevo.",
         "projectDirSaveFailed": "No se pudo guardar la carpeta del proyecto. Asegúrate de que la carpeta aún exista e inténtalo de nuevo.",
         "allowMentionAllBots": "Permitir @todos los amigos",
-        "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los amigos podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti."
+        "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los amigos podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti.",
+        "shortCompanionNames": "Nombres cortos de compañeros",
+        "shortCompanionNamesHint": "Si el nombre es único en el grupo, se oculta el del propietario. Si hay nombres iguales, se muestra para distinguirlos."
       },
       "errors": {
         "memberLimit": "Un chat grupal necesita de 2 a 6 amigos de equipo",

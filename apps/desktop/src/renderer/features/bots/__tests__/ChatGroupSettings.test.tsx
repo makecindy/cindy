@@ -139,6 +139,21 @@ function group(owned = false): BotGroupSummary {
 function activeProfile(id: string, name: string, status = 'active') {
   return { id, name, status, sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] };
 }
+
+// #9419, UI unit: the real manager page must send the group choice with its revision,
+// while older servers must not show a switch that cannot be saved.
+it('gates the group short-name switch on server support and sends the chosen value', async () => {
+  const label = 'bots.groupChat.settings.shortCompanionNames';
+  const view = renderAt({ ...group(true), supportsCompanionOwnerNames: true, hideCompanionOwnerNames: false }, 'manage');
+  fireEvent.click(screen.getByRole('switch', { name: label }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
+    type: 'update', name: 'Team', topic: '', description: '', expectedRevision: 1, hideCompanionOwnerNames: true,
+  } }));
+  view.unmount();
+  renderAt(group(true), 'manage');
+  expect(screen.queryByRole('switch', { name: label })).toBeNull();
+});
+
 // Component: a human member edits a personal preference, independently of the
 // manager form. Confirmed props win; failed/in-flight writes never pretend to save.
 it('lets an ordinary member choose notifications and follows the confirmed cross-device value', async () => {

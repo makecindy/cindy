@@ -313,7 +313,9 @@
       "noneHint": "Désactivez toutes les alertes système de ce groupe. Les messages non lus sont conservés.",
       "saving": "Enregistrement…",
       "saveFailed": "Impossible d’enregistrer les notifications. Réessayez."
-    }
+    },
+    "shortCompanionNames": "Noms courts des coéquipiers",
+    "shortCompanionNamesHint": "Si le nom est unique dans le groupe, le propriétaire est masqué. En cas de doublon, il reste affiché pour les distinguer."
   },
   "errors": {
     "memberLimit": "Une conversation de groupe nécessite de 2 à 6 amis",

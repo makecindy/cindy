@@ -452,6 +452,11 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, identityO
         { id: 'auto', title: t('groupChat.settings.speakingModeAuto') }, { id: 'sequential', title: t('groupChat.settings.speakingModeSequential') },
       ], 'speakingMode', 'botGroup.settings.speakingMode')}
     </SettingsGroup>}
+    {group.supportsCompanionOwnerNames ? <SettingsGroup footer={t('groupChat.settings.shortCompanionNamesHint')}>
+      <SettingsSwitchRow label={t('groupChat.settings.shortCompanionNames')} value={group.hideCompanionOwnerNames === true}
+        disabled={!writable || busy || group.revision === undefined} switchTestID="botGroup.settings.shortCompanionNames"
+        onValueChange={hideCompanionOwnerNames => { void settings('update', { hideCompanionOwnerNames }); }} />
+    </SettingsGroup> : null}
     {companions.length ? <SettingsGroup title={k('work')} footer={`${k('organizerHint')}${k('projectDirOnComputer')}`}>
       {choice(t('groupChat.organizer'), group.organizerBotId ?? '', companions.map(member => ({ id: member.botId, title: identityOf(member).name || member.name })),
         'organizerBotId', 'botGroup.settings.organizer')}

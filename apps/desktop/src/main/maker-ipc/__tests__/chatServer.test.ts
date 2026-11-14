@@ -381,6 +381,39 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(150);
     expect(attention.mock.calls.at(-1)?.[1]).toBeNull();
   });
+  // #9419: getGroup feeds both Desktop and remote phones. Existing fixtures never enable
+  // the group choice with multiple humans (unit tier).
+  it('projects an opt-in short companion name to group members and messages', async () => {
+    const owner = { id: selfId, kind: 'human', name: 'Alex', state: 'joined', role: 'owner', ownerActorId: selfId };
+    const family = { ...owner, id: '30000000-0000-4000-8000-000000000002', name: 'Sam', role: 'member' };
+    const bot = { id: botId, kind: 'bot', name: 'Helper', state: 'joined', role: 'member', ownerActorId: selfId, ownerName: 'Alex' };
+    const members = [owner, family, bot];
+    const messages = [{ id: execution.source_message_id, seq: '1', authorId: botId, author: { kind: 'bot', name: 'Helper' },
+      content: [{ type: 'text', text: 'Example reply' }], createdAt: '2026-10-03T00:00:00Z', deleted: false, threadRootId: null }];
+    fixture.handle.mockImplementation(route => route.endsWith('/snapshot') ? { body: { room: { ...room(roomId), hide_companion_owner_names: true }, members, messages, cursor: '1' } }
+      : route.includes('/messages?') ? { body: messages } : response(route));
+    const result = await service.getGroup(roomId);
+    if (!result.ok) throw new Error(result.errorCode);
+    expect(result.group.members.find(member => member.actorId === botId)).toMatchObject({ name: 'Helper', ownerName: 'Alex', ownerNameHidden: true });
+    expect(result.group.messages[0].authorName).toBe('Helper');
+  });
+
+  // #9419, unit: an unsupported server must never receive the new room field; a supporting
+  // server receives it with the revision through the real Desktop management adapter.
+  it.each([false, true])('gates a group owner-name update on server support (%s)', async supported => {
+    const owner = { id: selfId, kind: 'human', name: 'Alex', state: 'joined', role: 'owner', ownerActorId: selfId };
+    fixture.handle.mockImplementation(route => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: supported ? { groupCompanionOwnerNames: 1 } : {} } };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [owner], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const result = await service.updateGroup({ groupId: roomId, expectedRevision: 1, hideCompanionOwnerNames: true });
+    expect(result.ok).toBe(supported);
+    const updates = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH');
+    expect(updates).toHaveLength(supported ? 1 : 0);
+    if (supported) expect(updates[0]![2]).toMatchObject({ expectedRevision: 1, hideCompanionOwnerNames: true });
+  });
+
   // #6907: getGroup feeds Desktop and remote phones. Existing fixtures never pair group name A
   // with the bot's account ownerName B; exercise the production projection (unit tier).
   it.each(['Nickname A', 'Account B', '   ', null] as const)('uses the current room owner name %s with safe account fallback', async name => {
@@ -1140,6 +1173,26 @@ describe('Chat Server result delivery and refresh', () => {
       };
     }
     const posts = () => fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST');
+
+    // #9427 review, unit: a subscribed room may need a fresh snapshot when a
+    // quote is sent. Its failure must not leave an unhandled derived Promise.
+    it('handles a snapshot failure during a quoted send without an unhandled rejection', async () => {
+      fixture.handle.mockImplementation(quoteResponse(quoted()));
+      expect(await service.getGroup(roomId)).toMatchObject({ ok: true });
+      fixture.handle.mockImplementation((route, method) => route.endsWith('/snapshot')
+        ? { status: 503, body: { error: { code: 'UPSTREAM_FAILED' } } } : quoteResponse(quoted())(route, method));
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+      try {
+        expect(await service.sendMessage({ groupId: roomId, text: 'Agreed', clientId: 'quote-snapshot-failure',
+          mentions: { all: false, botIds: [] }, quote: { messageId: quotedId } })).toMatchObject({ ok: false });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(unhandled).not.toHaveBeenCalled();
+        expect(posts()).toHaveLength(0);
+      } finally {
+        process.off('unhandledRejection', unhandled);
+      }
+    });
 
     it('addresses the quoted companion without creating a Thread or requiring an explicit mention', async () => {
       fixture.handle.mockImplementation(quoteResponse(quoted()));
@@ -3607,6 +3660,24 @@ describe('Chat Server result delivery and refresh', () => {
         expect(workspaceSettings.get(roomId)).toMatchObject({ startedHere: [planId] });
       });
 
+      // #9427 review, unit: a draft with historical full @labels must not inject
+      // owner names into the actual steps after the group enables short names.
+      it('keeps old owner labels out of written division tasks with short names enabled', async () => {
+        singleSpeaker((route, method) => {
+          if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), hide_companion_owner_names: true }, members: named(), messages: [], cursor: '1' } };
+          if (route === `/conversations/${roomId}/messages` && method === 'POST') return { body: { id: sourceId } };
+          if (route === `/conversations/${roomId}/plans` && method === 'POST') return { body: { id: planId, revision: 1 } };
+          if (route === `/conversations/${roomId}/plans`) return { body: [] };
+          return undefined;
+        });
+        deps.decidePlan = vi.fn() as typeof deps.decidePlan;
+        await send('@Bot (Peer) 出方案，然后 @Nova (Peer) 按方案实现');
+        expect(posts().find(([route]) => route === `/conversations/${roomId}/plans`)![2]).toMatchObject({
+          steps: [{ botId, task: '出方案' }, { botId: otherBot, task: '按方案实现' }],
+        });
+        expect(deps.decidePlan).not.toHaveBeenCalled();
+      });
+
       it('lets the organizer arrange it when a picked teammate no longer reads in the text', async () => {
         divisionServer();
         deps.decidePlan = vi.fn(async () => ({ needsPlan: true as const, steps: [{ botId, task: 'design' }, { botId: otherBot, task: 'build' }] }));
@@ -3616,6 +3687,53 @@ describe('Chat Server result delivery and refresh', () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(deps.decidePlan).toHaveBeenCalled();
         expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(false);
+      });
+
+      function namesakeDivisionServer() {
+        const namesakes = members().map(m => m.id === selfId ? { ...m, name: 'Alex' }
+          : m.id === otherHuman ? { ...m, name: 'Sam' }
+          : m.id === botId || m.id === foreignBot ? { ...m, name: 'Helper' } : m);
+        singleSpeaker((route, method) => {
+          if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), hide_companion_owner_names: true }, members: namesakes, messages: [], cursor: '1' } };
+          if (route.endsWith('/members')) return { body: namesakes };
+          if (route === `/conversations/${roomId}/messages` && method === 'POST') return { body: { id: sourceId } };
+          if (route === `/conversations/${roomId}/plans` && method === 'POST') return { body: { id: planId, revision: 1 } };
+          if (route === `/conversations/${roomId}/plans`) return { body: [] };
+          return undefined;
+        });
+        deps.decidePlan = vi.fn(async () => null);
+      }
+
+      // #9427 review, unit: parsing a longer label must not auto-start work for a bot
+      // that was not among the identities resolved by the composer.
+      it('does not auto-start a written step for an unpicked namesake', async () => {
+        namesakeDivisionServer();
+        expect(await service.sendMessage({ groupId: roomId, text: '@Helper (Sam) design; @Helper (Alex) build', clientId: 'division-unpicked',
+          mentions: { all: false, botIds: [botId] }, division: true })).toMatchObject({ ok: true });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.decidePlan).toHaveBeenCalled();
+        expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(false);
+      });
+
+      // A set of picked IDs is not enough to prove which name owns each step: both
+      // IDs can appear even when an earlier picked short name is read as a longer one.
+      it('does not auto-start overlapping steps even when both namesakes were picked', async () => {
+        namesakeDivisionServer();
+        expect(await service.sendMessage({ groupId: roomId, text: '@Helper (Alex) brief; @Helper (Sam) design; @Helper (Sam) build', clientId: 'division-overlapping-picks',
+          mentions: { all: false, botIds: [botId, foreignBot] }, division: true })).toMatchObject({ ok: true });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.decidePlan).toHaveBeenCalled();
+        expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(false);
+      });
+
+      it('still auto-starts unambiguous steps matching the resolved targets', async () => {
+        divisionServer();
+        deps.decidePlan = vi.fn() as typeof deps.decidePlan;
+        expect(await service.sendMessage({ groupId: roomId, text: '@Bot (Peer) design; @Nova (Peer) build', clientId: 'division-matching-picks',
+          mentions: { all: false, botIds: [botId, otherBot] }, division: true })).toMatchObject({ ok: true });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.decidePlan).not.toHaveBeenCalled();
+        expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(true);
       });
 
       it('answers the request when nobody can arrange it, and later messages still go out', async () => {

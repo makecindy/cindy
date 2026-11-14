@@ -876,6 +876,32 @@ describe('chat interaction controls', () => {
     expect(mocks.reply.mock.calls[2]![0].clientId).not.toBe(original.clientId);
   });
 
+  // #9427 review, unit: a lost thread reply may have reached the server. A later
+  // same-name member must not prevent retrying the original operation and targets.
+  it('reuses a failed thread reply after a short mention becomes ambiguous', async () => {
+    const helper = { botId: 'bot', name: 'Ann', status: 'active' as const, ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+    mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' }).mockResolvedValueOnce({ ok: true, messageId: 'accepted' });
+    const view = render(<ChatThreadPanel group={{ ...group, members: [helper] } as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
+    const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '@Ann hello' } });
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await screen.findByRole('alert');
+    const original = mocks.reply.mock.calls[0]![0];
+    expect(original.mentions).toEqual({ all: false, botIds: ['bot'] });
+    const members = [
+      { ...helper, name: 'Ann (Alex)', ownerNameHidden: false },
+      { ...helper, botId: 'namesake', name: 'Ann (Sam)', ownerName: 'Sam', ownerNameHidden: false },
+    ];
+    view.rerender(<Tooltip.Provider><ChatThreadPanel group={{ ...group, members } as BotGroupDetail} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1]![0]).toEqual(original);
+    fireEvent.change(input, { target: { value: '@Ann changed' } });
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    expect(mocks.reply).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('alert').textContent).toContain('bots.groupChat.errors.mentionAmbiguous');
+  });
+
   // PR #10371 review (component): the shared-name hold read the live roster before the retry
   // rule, so a member renamed to the same name after a failed send blocked its retry. A retry
   // keeps its own roster and clientId; only a newly typed @ is held.
@@ -1231,6 +1257,26 @@ describe('chat interaction controls', () => {
       fireEvent.click(screen.getAllByRole('option')[3]!);
       expect(input.value).toBe(`${'x'.repeat(7995)} @Bo `);
       expect(input.value).toHaveLength(8000);
+    });
+
+    // #9427 review, unit: a newly joined namesake must not replace an already picked target.
+    it('keeps a picked short thread mention when a longer matching name appears', async () => {
+      mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
+      const helper = { botId: 'alex', name: 'Helper', status: 'active' as const, ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+      const view = render(<ChatThreadPanel group={{ ...group, members: [helper] } as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
+      const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+      input.focus();
+      type(input, '@');
+      fireEvent.click(screen.getAllByRole('option').find(option => option.textContent === 'Helper')!);
+      type(input, '@Helper (Sam) check');
+      const members = [
+        { ...helper, name: 'Helper (Alex)', ownerNameHidden: false },
+        { ...helper, botId: 'sam', name: 'Helper (Sam)', ownerName: 'Sam', ownerNameHidden: false },
+      ];
+      view.rerender(<Tooltip.Provider><ChatThreadPanel group={{ ...group, members } as BotGroupDetail} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+      fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+      await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+      expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['alex'] });
     });
 
     it('names only the picked companion whose name is a Thread 「所有人」 alias', async () => {

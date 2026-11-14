@@ -3,6 +3,7 @@ import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import type { BotGroupMemberView, BotGroupMention } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
 import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
+import { botGroupFormerOwnerLabel, botGroupFormerShortLabel } from '@cindy/maker-shared/botGroupMentions';
 
 // Keep sent broadcasts intact across reader locales and the Buddy rename.
 // The timeline and identity resolver must recognize the same complete labels.
@@ -30,7 +31,7 @@ export function botGroupMentionMember(label: string, members: readonly BotGroupM
   if ((mentions.allBots || fallback) && botBroadcast) return undefined;
   const mentioned = new Set(mentions.botIds);
   const matches = members.filter((member) => (fallback || mentioned.has(member.botId))
-    && [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name]
+    && [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name, botGroupFormerOwnerLabel(member), botGroupFormerShortLabel(member)]
       .some((candidate) => candidate?.trim() === name));
   return matches.length === 1 ? matches[0] : undefined;
 }

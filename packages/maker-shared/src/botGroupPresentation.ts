@@ -33,8 +33,40 @@ export function chatGroupOwnerName(member: ChatGroupNamedMember, members: readon
 }
 
 /** Group-scoped labels shared by Desktop and the direct phone client; raw member records stay unchanged. */
-export function chatGroupMemberName(member: ChatGroupNamedMember, members: readonly ChatGroupNamedMember[]): string {
+export function chatGroupMemberName(member: ChatGroupNamedMember, members: readonly ChatGroupNamedMember[], hideOwnerName = false): string {
   const owner = chatGroupOwnerName(member, members);
+  if (hideOwnerName && member.kind === 'bot' && owner && member.ownerActorId) {
+    const joined = members.filter(candidate => candidate.state === 'joined');
+    const keyOf = (name: string) => name.trim().normalize('NFKC').toLowerCase();
+    const humans = new Map(joined.filter(candidate => candidate.kind === 'human').map(candidate => [candidate.id, candidate]));
+    const counts = new Map<string, number>();
+    for (const candidate of joined) {
+      const key = keyOf(candidate.name);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const short = new Map<string, { id: string; full: string }>();
+    const fullLabels: string[] = [];
+    for (const candidate of joined) {
+      const candidateOwner = candidate.kind === 'bot'
+        ? (candidate.ownerActorId ? humans.get(candidate.ownerActorId)?.name.trim() : '') || candidate.ownerName?.trim() || '' : '';
+      const key = keyOf(candidate.name);
+      const full = keyOf(candidate.kind === 'bot' && candidateOwner ? `${candidate.name} (${candidateOwner})` : candidate.name);
+      // Direct chats and absent owners retain the existing attribution. Other raw
+      // names are counted before deciding which labels may safely be shortened.
+      if (candidate.kind === 'bot' && candidate.ownerActorId && humans.has(candidate.ownerActorId) && candidateOwner && key && counts.get(key) === 1) {
+        short.set(key, { id: candidate.id, full });
+      } else {
+        fullLabels.push(full);
+      }
+    }
+    // A forced full label may itself collide with a short label. Promote each
+    // such candidate to full and propagate its label until there are no new collisions.
+    for (let index = 0; index < fullLabels.length; index++) {
+      const collision = short.get(fullLabels[index]);
+      if (collision) { short.delete(fullLabels[index]); fullLabels.push(collision.full); }
+    }
+    if (short.get(keyOf(member.name))?.id === member.id) return member.name;
+  }
   return member.kind === 'bot' && owner ? `${member.name} (${owner})` : member.name;
 }
 
