@@ -514,6 +514,53 @@ describe.skipIf(!existsSync(PI_BINARY))('Pinned Pi RPC resource discovery facts'
     expect(result.commands.some((command) => command.name === 'skill:project-pi-skill')).toBe(false);
   });
 
+  it('loads every Skill from a numeric-link projection directory', async () => {
+    const fixture = await createFixture('pi-rpc-project-skill-projection-');
+    const projection = path.join(fixture.configHome, 'project-resources', 'skills');
+    const projected = [
+      path.join(fixture.workingDir, '.pi', 'skills', 'project-pi-skill'),
+      path.join(fixture.repoRoot, '.agents', 'skills', 'ancestor-agents-skill'),
+    ];
+    mkdirSync(projection, { recursive: true });
+    for (const [index, source] of projected.entries()) {
+      symlinkSync(source, path.join(projection, String(index).padStart(12, '0')),
+        process.platform === 'win32' ? 'junction' : 'dir');
+    }
+
+    const result = await runGetCommands({
+      binaryPath: PI_BINARY,
+      cwd: fixture.workingDir,
+      configHome: fixture.configHome,
+      sessionDir: fixture.sessionDir,
+      approve: false,
+      extraArgs: ['--no-skills', '--no-extensions', '--skill', projection],
+    });
+
+    const projectedCommands = result.commands
+      .filter((command) => command.source === 'skill')
+      .sort((left, right) => String(left.name).localeCompare(String(right.name)));
+    expect(projectedCommands).toEqual([
+      expect.objectContaining({
+        name: 'skill:ancestor-agents-skill',
+        description: 'fixture ancestor-agents-skill',
+        sourceInfo: expect.objectContaining({
+          path: path.join(projection, '000000000001', 'SKILL.md'),
+        }),
+      }),
+      expect.objectContaining({
+        name: 'skill:project-pi-skill',
+        description: 'fixture project-pi-skill',
+        sourceInfo: expect.objectContaining({
+          path: path.join(projection, '000000000000', 'SKILL.md'),
+        }),
+      }),
+    ]);
+    expect(realpathSync(path.join(projection, '000000000001', 'SKILL.md')))
+      .toBe(realpathSync(path.join(projected[1]!, 'SKILL.md')));
+    expect(realpathSync(path.join(projection, '000000000000', 'SKILL.md')))
+      .toBe(realpathSync(path.join(projected[0]!, 'SKILL.md')));
+  });
+
   it('reports the exact file provenance for an explicit single-file skill', async () => {
     const fixture = await createFixture('pi-rpc-explicit-file-skill-');
     const explicitSkill = path.join(fixture.workingDir, '.pi', 'skills', 'single-file.md');
