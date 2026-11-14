@@ -32,6 +32,7 @@ import {
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
+import { ACCOUNT_PROVIDER_ID, CODEX_AUTH_ADAPTER_ENTRY_INPUTS } from './__tests__/authAdapterEntryInputs.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent as CoreAgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
@@ -8622,6 +8623,40 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(getAuthEnv).toHaveBeenCalledTimes(1);
       await expect(agent.startSession({ sessionId: 'requires-auth', model: 'gpt-5.4', workingDir: cwd })).rejects.toBeInstanceOf(AgentNotAuthenticatedError);
       expect(createdTransports).toHaveLength(1);
+    } finally { await agent.dispose(); }
+  });
+
+  // The inputs the Host and desktop adapter comparison treats as reachable
+  // (hostCodexAuthAdapterParity.test.ts). A path that starts passing another
+  // source or mode to the adapter makes this fail.
+  it('the auth adapter sees only these inputs on the session, model refresh, rate limit and discovery paths', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-entry-inputs-'));
+    tempRoots.push(home);
+    const seen = new Set<string>();
+    const note = (options?: Parameters<AuthAdapter['getState']>[0]) => {
+      seen.add(`${options?.providerId ?? '-'} | ${options?.credentialMode ?? '-'}`);
+    };
+    const deps = createDeps();
+    deps.auth = { ...deps.auth,
+      getState: async (options) => { note(options); return { authenticated: true }; },
+      getAuthEnv: async (options) => { note(options); return { CODEX_HOME: home }; } };
+    deps.isCodexAccountProvider = (providerId) => providerId === ACCOUNT_PROVIDER_ID;
+    const agent = new CodexAgent(deps);
+    const attempt = async (run: () => Promise<unknown>) => { try { await run(); } catch { /* the inputs are recorded first */ } };
+    try {
+      for (const providerId of [undefined, 'xd', 'cindy', 'openai', 'xai', 'cprov-custom', ACCOUNT_PROVIDER_ID]) {
+        await attempt(async () => {
+          const handle = await agent.startSession({ sessionId: `entry-${providerId ?? 'none'}`, model: 'gpt-5.4',
+            workingDir: home, ...(providerId ? { providerId } : {}) });
+          await handle.close();
+        });
+      }
+      // As the hosts call it: after a login, for an account after its login, and for API models.
+      for (const options of [{ credentialMode: 'oauth-bearer' as const }, { credentialMode: 'oauth-bearer' as const, providerId: ACCOUNT_PROVIDER_ID },
+        { credentialMode: 'provider-oauth' as const }]) await attempt(() => agent.refreshLocalModels(options));
+      for (const providerId of [undefined, ACCOUNT_PROVIDER_ID]) await attempt(() => agent.readAccountRateLimits(providerId));
+      await attempt(() => agent.listAgentSkills({ workingDir: home }));
+      expect([...seen].sort()).toEqual([...CODEX_AUTH_ADAPTER_ENTRY_INPUTS].sort());
     } finally { await agent.dispose(); }
   });
 
