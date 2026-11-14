@@ -472,6 +472,7 @@ it.each(['pending', 'empty', 'incomplete', 'error'])('restores Lead input before
     maker: { getSession: () => undefined }, sessions: {}, eq: vi.fn(),
     createPluginTaskStore: () => ({ get: async () => ({ payload: '{}' }) }),
     readCollaborationSettings: () => ({ workerHardLimit: 4 }),
+    workerCapacitySnapshot: (limit: { workerHardLimit: number }) => ({ ...limit, occupiedSlots: 0, remainingSlots: limit.workerHardLimit }),
     inputCoordinator: {
       ensureQueueRestored: async () => {
         if (state === 'error') throw Error('queue unavailable');
