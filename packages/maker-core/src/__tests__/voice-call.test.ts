@@ -145,6 +145,61 @@ describe("independent voice call", () => {
     expect(handoff).not.toHaveBeenCalled();
   });
 
+  it("keeps the call alive when a reply cannot be used", async () => {
+    const generate = vi
+      .fn<Deps["generate"]>()
+      .mockResolvedValueOnce("Sure! Here is my answer.")
+      .mockResolvedValueOnce('{"say":"Hello."}');
+    const { call } = setup(generate);
+    expect(await call.submit("u1", "Hello")).toBe(false);
+    // Clients hang up the whole call when a user turn is flagged failed, so an
+    // unusable reply must not flag the turn the user actually spoke.
+    expect(
+      call.record.turns.find((turn) => turn.role === "user")?.failed,
+    ).toBeUndefined();
+    // Clients leave the thinking phase when the reply turn is flagged failed,
+    // so an unusable reply still has to be published.
+    expect(
+      call.record.turns.find((turn) => turn.role === "assistant")?.failed,
+    ).toBe(true);
+    expect(await call.submit("u2", "Still there?")).toBe(true);
+    expect(call.record.turns.at(-1)).toMatchObject({
+      text: "Hello.",
+      complete: true,
+    });
+  });
+
+  it("does not duplicate a rejected handoff as a failed reply", async () => {
+    const { call, handoff } = setup(
+      vi.fn<Deps["generate"]>(async () => '{"handoff":"Do work"}'),
+    );
+    handoff.mockResolvedValue(false);
+    expect(await call.submit("u1", "Do work")).toBe(false);
+    // The handoff receipt already marks the user turn; adding an empty failed
+    // reply would show the user two failure messages for one rejected handoff.
+    expect(
+      call.record.turns.filter((turn) => turn.failed),
+    ).toHaveLength(1);
+    expect(
+      call.record.turns.find((turn) => turn.role === "user")?.failed,
+    ).toBe(true);
+    expect(
+      call.record.turns.some((turn) => turn.role === "assistant"),
+    ).toBe(false);
+    expect(call.record.handoffs[0].state).toBe("failed");
+  });
+
+  it("accepts a single pretty printed action object", async () => {
+    const { call } = setup(
+      vi.fn<Deps["generate"]>(async () => '{\n  "say": "Hello there."\n}'),
+    );
+    expect(await call.submit("u1", "Hello")).toBe(true);
+    expect(call.record.turns.at(-1)).toMatchObject({
+      text: "Hello there.",
+      complete: true,
+    });
+  });
+
   it("has independent history for every call", async () => {
     const a = setup();
     const b = setup();
