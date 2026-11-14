@@ -16842,6 +16842,32 @@ describe('queue message hold (stop point)', () => {
     expect(queuedIds(h, sid)).toEqual(['a', 'b', 'c']);
   });
 
+  // 自动合批只保留首条字段：把停点条目合进去会抹掉停点，被挂起的回报也会提前发出去。
+  it('does not coalesce a stop point into the head auto-bridge batch', async () => {
+    const h = createHarness();
+    const sid = 'hold-batch';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const autoBridge = (clientId: string, text: string) =>
+      makeItem(clientId, text, {
+        origin: { kind: 'orca', senderLabel: 'Worker', senderSessionId: 'worker-1', autoBridge: true, autoBridgeBatchCount: 1 },
+      });
+    h.coordinator.enqueue(sid, autoBridge('a', '[From Orca Worker (worker_id: w1)]\n回报一'));
+    h.coordinator.enqueue(sid, autoBridge('b', '[From Orca Worker (worker_id: w2)]\n回报二'));
+    await flush();
+
+    h.coordinator.hold(sid, 'b');
+    finishTurn(h, sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    const sentText = String((h.sendToAgent.mock.calls[0]![1] as { content?: unknown }).content ?? '');
+    expect(sentText).toContain('回报一');
+    expect(sentText).not.toContain('回报二');
+    expect(queuedIds(h, sid)).toEqual(['b']);
+    expect(heldIds(h, sid)).toEqual(['b']);
+  });
+
   it('ignores an unknown clientId without touching the queue', async () => {
     const { h, sid } = await withQueued(['a', 'b']);
     h.coordinator.hold(sid, 'b');

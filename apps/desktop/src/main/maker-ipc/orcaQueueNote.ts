@@ -43,7 +43,8 @@ export function buildOrcaQueueDispatchNote(
   const headSenderSessionId = item.origin.senderSessionId;
   return buildOrcaQueueNote(
     pendingQueue.flatMap((queued) =>
-      isOrcaCollaborationMessage(queued)
+      // 停点条目还没到送达时机：它的内容不进本轮上下文，否则停点等于没有。
+      isOrcaCollaborationMessage(queued) && queued.held !== true
         ? [
             {
               queuedMessageId: queued.clientId,

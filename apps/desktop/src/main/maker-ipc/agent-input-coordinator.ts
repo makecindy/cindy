@@ -5233,6 +5233,9 @@ export class AgentInputCoordinator {
     // 预估最终正文长度：计入批次头与分隔符，避免包装把字符预算撑破。
     let projectedChars = AUTO_BRIDGE_BATCH_HEADER_RESERVE + head.text.length;
     for (const item of state.pendingQueue.slice(1)) {
+      // 停点条目不能被合批带走：合批只保留首条字段，会把用户设的停点抹掉，
+      // 被挂起的回报与后续可合批回报也会跟着提前发出去。
+      if (item.held === true) break;
       if (!isOrcaAutoBridgeQueueItem(item) || !sameAutoBridgeDispatchOptions(head, item)) break;
       // 上限双闸：按真实报告数累计（已合批项按其 count，而非队列行数）+ 含包装的字符预算；超出的留到下一轮 drain。队首必发，不在此拦截。
       if (batchReports + autoBridgeReportCount(item) > AUTO_BRIDGE_BATCH_MAX_ITEMS) break;
