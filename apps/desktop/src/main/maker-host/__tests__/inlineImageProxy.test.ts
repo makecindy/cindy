@@ -21,7 +21,7 @@ const decode = (value: string) => {
 type Body = { model: string; input: Array<{ role: string; content: Array<{ type: string; image_url?: string; text?: string }> }> };
 const bodyFor = (images: string[]): Body => ({ model: 'gpt-6-astra', input: [{ role: 'user', content: [{ type: 'input_text', text: 'keep this text' }, ...images.map(image_url => ({ type: 'input_image', image_url }))] }] });
 
-async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => Promise<Body>, encode: ReturnType<typeof vi.fn<typeof compressImageBuffer>>, prepareCalls: () => number) => Promise<void>) {
+async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => Promise<Body>, encode: ReturnType<typeof vi.fn<typeof compressImageBuffer>>, prepareCalls: () => number) => Promise<void>, singleImageMaxBytes?: number) {
   const received: Body[] = [];
   const upstream = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
@@ -38,13 +38,14 @@ async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => P
     upstream: `http://127.0.0.1:${port}`,
     transformRequest: [],
     requestSizeController: {
-      format: () => 'responses', route: () => route, preprocessor,
-      control: (body, format, policy) => controlRequestSize(body, format, { route: policy.route, signal: policy.signal, preprocessor }, async () => { throw new Error('Small request must not preserve images'); }),
+      enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
+      format: () => 'responses', route: ctx => ({ ...route, providerId: ctx.headers['x-cindy-pi-provider-id'] }), preprocessor,
+      control: (body, format, policy) => controlRequestSize(body, format, { ...policy, preprocessor, singleImageMaxBytes }, async () => { throw new Error('Small request must not preserve images'); }),
     },
   });
   try {
     await run(async body => {
-      const response = await fetchOverTestConnections(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const response = await fetchOverTestConnections(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json', ...(route.providerId ? { 'x-cindy-pi-provider-id': route.providerId } : {}) }, body: JSON.stringify(body) });
       expect(response.status).toBe(200);
       await response.text();
       return received.at(-1)!;
@@ -61,6 +62,7 @@ it.each([
   { providerId: 'openai', modelId: 'gpt-6-astra' },
   { providerId: 'xai', modelId: 'grok-4' },
   { modelId: 'gpt-6-astra' },
+  { providerId: 'openai', modelId: 'gpt-6-astra', deniedMimeTypes: ['image/webp'] },
 ])('compresses ordinary responses images for $providerId without lowering thresholds', async route => {
   const png = await sharp({ create: { width: 128, height: 96, channels: 3, background: '#406080' } }).png({ compressionLevel: 0 }).toBuffer();
   const jpeg = await sharp({ create: { width: 128, height: 96, channels: 3, background: '#708090' } }).withMetadata().jpeg({ quality: 100 }).toBuffer();
@@ -70,7 +72,7 @@ it.each([
     const result = await send(original);
     const content = result.input[0].content;
     const compressedPng = decode(content[1].image_url!);
-    expect(compressedPng.mime).toBe(route.providerId === 'openai' ? 'image/webp' : 'image/png');
+    expect(compressedPng.mime).toBe(route.providerId === 'openai' && !route.deniedMimeTypes?.includes('image/webp') ? 'image/webp' : 'image/png');
     expect(compressedPng.bytes.length).toBeLessThanOrEqual(png.length * 0.85);
     expect(await sharp(compressedPng.bytes).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
     const compressedJpeg = decode(content[2].image_url!);
@@ -119,5 +121,44 @@ it('honors enable -> disable -> enable through the real proxy and its cache', as
   } finally {
     if (previous === undefined) delete process.env.XDT_IMAGE_COMPRESSION_DISABLE;
     else process.env.XDT_IMAGE_COMPRESSION_DISABLE = previous;
+  }
+});
+
+
+it('tightens an oversized image from original bytes and original MIME', async () => {
+  const png = await sharp({ create: { width: 200, height: 120, channels: 3, background: '#572193' } }).png({ compressionLevel: 0 }).toBuffer();
+  await throughProxy({ providerId: 'openai', modelId: 'gpt-6-astra' }, async (send, encode) => {
+    const forwarded = await send(bodyFor([uri(png, 'image/png')]));
+    expect(encode).toHaveBeenCalledTimes(2);
+    const prepared = await encode.mock.results[0].value;
+    expect(prepared.mimeType).toBe('image/webp');
+    expect(prepared.changed).toBe(true);
+    const ordinary = encode.mock.calls[0][0];
+    const tightened = encode.mock.calls[1][0];
+    expect(ordinary.bytes).toEqual(png);
+    expect(tightened.bytes).toEqual(png);
+    expect(tightened.mimeType).toBe('image/png');
+    expect(tightened.budget).toEqual({ maxBytes: 1024 });
+    const image = decode(forwarded.input[0].content[1].image_url!);
+    expect(image.bytes.length).toBeLessThanOrEqual(1024);
+    expect(await sharp(image.bytes).metadata()).toMatchObject({ width: 200, height: 120 });
+  }, 1024); // Single-image limit only; request trigger/target stay at their defaults.
+});
+
+
+it('still prepares images when request-size removal is disabled', async () => {
+  const previous = process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE;
+  try {
+    process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE = '1';
+    const png = await sharp({ create: { width: 96, height: 64, channels: 3, background: '#951753' } }).png({ compressionLevel: 0 }).toBuffer();
+    await throughProxy({ providerId: 'openai', modelId: 'gpt-6-astra' }, async (send, encode, prepareCalls) => {
+      const result = await send(bodyFor([uri(png, 'image/png')]));
+      expect(prepareCalls()).toBe(1);
+      expect(encode).toHaveBeenCalledOnce();
+      expect(decode(result.input[0].content[1].image_url!).mime).toBe('image/webp');
+    });
+  } finally {
+    if (previous === undefined) delete process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE;
+    else process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE = previous;
   }
 });
