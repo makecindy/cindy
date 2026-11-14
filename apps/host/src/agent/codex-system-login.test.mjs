@@ -57,7 +57,17 @@ function sharedProfile(t, ownerId) {
   configureHostOwner({ userDataDir: profileDir, ownerId });
   const codexHome = path.join(profileDir, 'codex-home');
   fs.mkdirSync(codexHome, { recursive: true });
-  fs.symlinkSync(systemAuth, path.join(codexHome, 'auth.json'));
+  try {
+    fs.symlinkSync(systemAuth, path.join(codexHome, 'auth.json'), 'file');
+  } catch (error) {
+    if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+    // The same shared-directory topology covered by codex-invalidation.test.mjs.
+    // A real junction follows atomic target replacement, unlike a hard link or
+    // copied auth.json. The just-created codexHome is empty; never remove data.
+    fs.rmdirSync(codexHome);
+    fs.symlinkSync(path.dirname(systemAuth), codexHome, 'junction');
+    t.diagnostic('native file symlink unavailable; checking shared login through a real directory junction');
+  }
   bindNativeProviderAuth('openai', { sharedSystem: true });
   const accounts = { isCodexAccountLoginActive: () => false, isCodexAccountProvider: () => false };
   const systemLogin = createHostCodexSystemLogin({ codexHome, systemAuthPath: systemAuth, loginActive: () => false });
@@ -76,6 +86,8 @@ test('after a system re-login the recovered login is usable on the Host, only ma
   assert.deepEqual(await p.auth.getState({ credentialMode: 'oauth-bearer' }),
     { authenticated: false, errorReason: 'token_revoked', credentialScope: 'system-shared' });
   p.relogin('system-token-2');
+  assert.equal(fs.readFileSync(path.join(p.codexHome, 'auth.json'), 'utf8'), fs.readFileSync(p.systemAuth, 'utf8'),
+    'the shared path follows atomic system-login replacement before reconciliation');
   const state = await p.auth.getState({ credentialMode: 'oauth-bearer' });
   assert.equal(state.authenticated, true);
   assert.equal(state.authSource, 'oauth');
