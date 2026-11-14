@@ -1514,9 +1514,6 @@ import {
 } from './agentSkillListIpcBoundary.js';
 import { isPalettePreviewRead, paletteRosterReuseTtlMs, paletteSkillListReuse, paletteSkillListReuseKey, shouldCachePaletteSkillListing } from './paletteSkillListCache.js';
 
-// 进程实例身份：generation 计数只在单个 Pi 进程内递增，重建后的进程会重新从 1 开始，
-// 不带它的话 30 秒复用窗口内会命中上一个进程的旧清单缓存。
-const paletteRuntimeInstance = randomUUID();
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -8449,10 +8446,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           remoteHostId: skillParams.remoteHostId,
           // Pi merges the live runtime catalog into this roster, and a fork replaces
           // that catalog in place. Reuse must follow the catalog it was merged from.
-          // The process instance prefix keeps rebuilt runtimes from hitting the
-          // previous process's cached roster at the same generation number.
+          // The pair is unique per runtime instance: the instance id changes when the
+          // host rebuilds the runtime in place (project resource drift recycles it
+          // with the same session id), and that rebuilt instance restarts its
+          // generation counter at 1 — without the id it would hit the previous
+          // instance's cached roster inside the reuse window.
           runtimeGeneration: kind === 'pi' && skillParams.sessionId
-            ? `${paletteRuntimeInstance}:${maker.getSessionRuntimeCapabilities(skillParams.sessionId)?.generation ?? ''}`
+            ? `${maker.getSession(skillParams.sessionId)?.instanceId ?? ''}:${maker.getSessionRuntimeCapabilities(skillParams.sessionId)?.generation ?? ''}`
             : undefined,
         });
         const ownerScope = activeOwnerScopeKey();
