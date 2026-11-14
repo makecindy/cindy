@@ -51,7 +51,8 @@ interface ProbeEntry {
   kind: WorkdirProbeRequest['kind'];
   id: number;
   dir: string;
-  key: string;
+  key: string | symbol;
+  isCurrent?: () => boolean;
   deadline: number;
   enqueuedAt: number;
   startedAt?: number;
@@ -81,7 +82,7 @@ export class MainProcessWorkdirProbeClient {
   private readonly fs: MainProcessWorkdirProbeFs;
   private readonly queue: ProbeEntry[] = [];
   private readonly activeEntries = new Set<ProbeEntry>();
-  private readonly inFlightByPath = new Map<string, Promise<WorkdirProbeResult>>();
+  private readonly inFlightByPath = new Map<string | symbol, Promise<WorkdirProbeResult>>();
   private active = 0;
   private nextId = 1;
   private disposed = false;
@@ -97,11 +98,14 @@ export class MainProcessWorkdirProbeClient {
     key: string,
     timeoutMs: number,
     kind: WorkdirProbeRequest['kind'] = 'probe',
+    isCurrent?: () => boolean,
   ): Promise<WorkdirProbeResult> {
     if (this.disposed) {
       return Promise.reject(this.unavailable('probe host is disposed', dir, kind, 'disposed'));
     }
-    const dedupeKey = `${kind}:${key}`;
+    // A guarded write belongs to one recovery generation. A later attempt must
+    // not inherit an earlier attempt's stale guard or already-dispatched write.
+    const dedupeKey = kind === 'mkdir' && isCurrent ? Symbol(key) : `${kind}:${key}`;
     const existing = this.inFlightByPath.get(dedupeKey);
     if (existing) return existing;
     if (this.queue.length >= this.maxQueued) {
@@ -116,6 +120,7 @@ export class MainProcessWorkdirProbeClient {
         id: this.nextId++,
         dir,
         key: dedupeKey,
+        isCurrent,
         deadline: enqueuedAt + timeoutMs,
         enqueuedAt,
         resolve,
@@ -181,7 +186,7 @@ export class MainProcessWorkdirProbeClient {
     }, remainingMs);
     entry.probeTimer.unref?.();
 
-    void this.execute(entry.kind, entry.dir).then(
+    void this.execute(entry.kind, entry.dir, entry.isCurrent).then(
       (result) => {
         if (!entry.settled) {
           this.clearProbeTimer(entry);
@@ -228,9 +233,13 @@ export class MainProcessWorkdirProbeClient {
   private async execute(
     kind: WorkdirProbeRequest['kind'],
     dir: string,
+    isCurrent?: () => boolean,
   ): Promise<WorkdirProbeResult> {
     try {
       if (kind === 'mkdir') {
+        // No await between the last owner/recovery check and the actual write.
+        // Node cannot cancel filesystem I/O once it has been dispatched.
+        if (isCurrent?.() === false) return { ok: false, code: 'WORKDIR_PROBE_UNAVAILABLE' };
         await this.fs.mkdir(dir);
         return { ok: true, isDirectory: true };
       }

@@ -53,7 +53,7 @@ describe('working directory send preflight', () => {
     await expect(h.check('s', h.dir, 'codex')).resolves.toBe(true);
     expect(h.recover).toHaveBeenCalledTimes(2);
     expect(h.recover).toHaveBeenNthCalledWith(2, 's', h.dir, expect.any(Function), []);
-    expect(h.io.mkdir).toHaveBeenCalledWith(h.dir, { recursive: true });
+    expect(h.io.mkdir).toHaveBeenCalledWith(h.dir, { recursive: true }, expect.any(Function));
     expect(h.emitMissing).not.toHaveBeenCalled();
   });
 

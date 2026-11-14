@@ -70,7 +70,7 @@ describe('owner namespace in workdir recovery', () => {
       });
       h.readiness.mockResolvedValue('gone');
       expect(await h.check('task', original, 'codex')).toBe(allowed);
-      expect(h.mkdir.mock.calls).toEqual(allowed ? [[original, { recursive: true }]] : []);
+      expect(h.mkdir.mock.calls).toEqual(allowed ? [[original, { recursive: true }, expect.any(Function)]] : []);
       expect(h.allocate).not.toHaveBeenCalled();
       expect(h.recovery.resolve('task', original)).toBe(original);
       if (!allowed) {

@@ -47,7 +47,8 @@ export function canRecreateOwnerWorkingDirectory(
 /** Local directory recovery; failed Git restores may explicitly request conversation fallback. */
 export function createWorkingDirectoryRecovery(io: {
   stat(dir: string): Promise<{ isDirectory(): boolean; dev?: number }>;
-  mkdir(dir: string, opts: { recursive: true }): Promise<unknown>;
+  // Queued adapters must recheck isCurrent immediately before dispatching the write.
+  mkdir(dir: string, opts: { recursive: true }, isCurrent: () => boolean): Promise<unknown>;
   realpath?(dir: string): Promise<string>;
   requiredRoot?(dir: string): string | undefined;
   findFallback?(sessionId: string, workingDir: string): Promise<string | undefined>;
@@ -225,7 +226,7 @@ export function createWorkingDirectoryRecovery(io: {
           }
           stage = 'fallback-mkdir';
           if (!canRecreate(own.fallback)) return false;
-          await io.mkdir(own.fallback, { recursive: true });
+          await io.mkdir(own.fallback, { recursive: true }, () => canRecreate(own.fallback!));
           if (pending.get(sessionId) !== own) return false;
           pending.set(sessionId, { ...own, note: [
             own.note ?? '[Working directory recovery]',
@@ -269,7 +270,7 @@ export function createWorkingDirectoryRecovery(io: {
         const similar = typeof similarPath === 'function' ? await similarPath() : similarPath;
         stage = 'original-mkdir';
         if (!canRecreate(workingDir)) return false;
-        await io.mkdir(workingDir, { recursive: true });
+        await io.mkdir(workingDir, { recursive: true }, () => canRecreate(workingDir));
         log?.info('workdir recovery directory created', {
           ...context, action: 'directory-recreated', code: 'ENOENT',
           similarPathFound: !!similar, elapsedMs: Date.now() - startedAt,
