@@ -135,6 +135,8 @@ interface Fixture {
   ghostRosterSnapshot?: string;
   /** 经隧道的 Cindy MCP；默认只有通讯录。 */
   mcpServers?: string[];
+  mcpProviders?: AgentDeps['mcpProviders'];
+  makerMemoryEnabled?: boolean;
   /** 任务所在电脑带来了自己的托管 Skill。 */
   controllerManagedSkills?: boolean;
 }
@@ -202,6 +204,7 @@ async function startHosted(fixture: Fixture) {
     },
     binaryPath: process.execPath,
     logger: noopLogger(),
+    mcpProviders: fixture.mcpProviders,
     getGhostRosterPrompt,
     getDisabledSkillPaths,
     getManagedSkills: async () => [{
@@ -338,6 +341,7 @@ async function startHosted(fixture: Fixture) {
     ...(fixture.guest ? { providerId: fixture.providerId ?? SHARED_PROVIDER.providerId } : {}),
     workingDir,
     permissionMode: fixture.permissionMode ?? 'acceptEdits',
+    makerMemoryEnabled: fixture.makerMemoryEnabled,
     extraDirs: fixture.extraDirs,
     writableDirs: fixture.writableDirs,
     deviceHosted,
@@ -550,6 +554,32 @@ describe('Codex device-hosted guest sessions', () => {
     expect(String(params.developerInstructions ?? '')).not.toContain(GHOST_ROSTER);
     expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
     expect(fixture.getDisabledSkillPaths).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  // #10533 review: an executor memory provider does not mean the guest host has
+  // its transport. A bare enabled override makes native thread/start fail.
+  // Unit: real startSession projection; old fixtures had no executor providers.
+  it.each([
+    { resume: false, tunnelMemory: false },
+    { resume: true, tunnelMemory: false },
+    { resume: false, tunnelMemory: true },
+  ])('uses only the guest memory transport (resume: $resume, tunnel: $tunnelMemory)', async ({ resume, tunnelMemory }) => {
+    const fixture = await startHosted({
+      guest: true,
+      resume,
+      mcpProviders: [{ name: 'cindy_memory' }],
+      makerMemoryEnabled: false,
+      mcpServers: tunnelMemory ? ['cindy_memory'] : [],
+    });
+    const handle = await fixture.started;
+    const config = threadParams(fixture.request, resume ? Method.ThreadResume : Method.ThreadStart).config as Record<string, unknown>;
+    const memoryConfig = Object.fromEntries(Object.entries(config)
+      .filter(([key]) => key.startsWith('mcp_servers.cindy_memory.')));
+    expect(memoryConfig).toEqual(tunnelMemory ? {
+      'mcp_servers.cindy_memory.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_memory',
+      'mcp_servers.cindy_memory.enabled': true,
+    } : {});
     await handle.close();
   });
 

@@ -6749,14 +6749,14 @@ assertRouteCurrent();
         // 受邀者：固定关闭本机的插件 / hooks / connectors / 记忆，再按功能清单关闭白名单之外的 Codex 功能；
         // 不含 mcp_servers.* 键，经隧道的 MCP(readHostedMcpConfig)保持启用。联网搜索不变。
         ...(hostedGuest ? { ...CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG, ...hostedGuestFeatureConfig } : {}),
-        // Review disables only transport-bearing entries discovered above.
-        // Its host omits Cindy's MCP bridge, so a bare memory override would
-        // create an invalid transport even though the entry is disabled.
+        // Review and guest hosts omit Cindy's local MCP bridge. Their isolation
+        // config disables only discovered transports; guests use controller
+        // tunnels. Executor providers must not create or disable a guest entry.
         // 设备托管：只停用本机确实配置了的 cindy_memory(没有传输配置的空条目会让 Codex 拒绝配置)。
         // A bare `enabled` override for a server the host never bridged makes Codex
         // reject the whole thread ("invalid transport in mcp_servers.cindy_memory").
         // Hosts without the memory bridge (for example cindy-host) must omit it.
-        ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT] && !makerMemoryEnabled && !isolatedBotProfile(opts.botRuntimeProfile)
+        ...(!reviewMode && !hostedGuest && !opts[LOCAL_AGENT_CLIENT] && !makerMemoryEnabled && !isolatedBotProfile(opts.botRuntimeProfile)
           && (hostedLocalMcpNames.includes('cindy_memory') || memoryBridgeAvailable)
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
