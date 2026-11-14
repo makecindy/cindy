@@ -1,3 +1,4 @@
+import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
 /**
  * session-runner.test.ts
  * ---------------------------------------------------------------------------
@@ -26,7 +27,7 @@ afterEach(() => clearSessionRuntimeControlState('sess-new'));
 import fs from 'node:fs/promises';
 import * as taskImages from '../../cindy-media/taskImageDelivery';
 import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
-import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
+import type { AgentEvent, Effort, InteractionRequest, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings';
 
@@ -3208,8 +3209,9 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
           h.statusCbs.delete(id);
         };
       },
-      setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
-        h.interactionListeners.set(id, listener);
+      setInteractionListener(listener: ((req: unknown) => Promise<unknown>) | import('@cindy/maker-core').InteractionResolver | null) {
+        if (listener) h.interactionListeners.set(id, req => listener(req as import('@cindy/maker-core').InteractionRequest));
+        else h.interactionListeners.delete(id);
       },
       send: vi.fn(
         async (
@@ -3226,6 +3228,38 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       ),
     };
   }
+
+  // Unit regression: native async questions must reach Telegram outside its turn-scoped card carrier.
+  it.each(['async', 'blocking'] as const)('routes %s Telegram questions through the shared App answer gate', async mode => {
+    vi.useFakeTimers();
+    try {
+      const session = makeInteractiveSession('sess-new');
+      let answer!: (decision: import('@cindy/maker-core').InteractionDecision) => void;
+      installDesktopInteractionHandler(session, () => new Promise(resolve => { answer = resolve; }), undefined, (_id, decision) => answer(decision));
+      fakeMaker.createSession.mockResolvedValueOnce(session);
+      const onQuestion = vi.fn(async (_question: InteractionRequest, _controls: import('../../maker-ipc/interactionRouter').QuestionControls) => undefined);
+      const onInteraction = vi.fn();
+      const onInteractionCancel = vi.fn();
+      const run = createMakerHookSessionRunner({ log }).run(baseReq({
+        source: { im: 'telegram', userText: 'Choose a format' },
+        onQuestion, onInteraction, onInteractionCancel,
+      }));
+      await vi.advanceTimersByTimeAsync(0);
+      const pending = h.interactionListeners.get('sess-new')!({
+        kind: 'ask_user_question', requestId: 'async-hook', ...(mode === 'async' ? { delivery: 'async' as const } : {}),
+        questions: [{ question: 'Any constraints?' }],
+      });
+      expect(onQuestion).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'async-hook' }),
+        expect.objectContaining({ answer: expect.any(Function), settled: expect.any(Promise) }));
+      expect(onInteraction).not.toHaveBeenCalled();
+      if (mode === 'async') { h.eventCbs.get('sess-new')!({ type: 'done', data: null }); await run; }
+      expect(onInteractionCancel).not.toHaveBeenCalled();
+      const controls = onQuestion.mock.calls[0][1];
+      controls.answer({ kind: 'ask_user_question', answers: { 'Any constraints?': 'Keep it short' } });
+      await expect(pending).resolves.toMatchObject({ answers: { 'Any constraints?': 'Keep it short' } });
+      if (mode === 'blocking') { h.eventCbs.get('sess-new')!({ type: 'done', data: null }); await run; }
+    } finally { vi.useRealTimers(); }
+  });
 
   it('等授权期间过程区挂一行状态, 决策回流后摘掉', async () => {
     setMainLocale('zh-CN');

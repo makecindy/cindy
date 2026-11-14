@@ -153,3 +153,6 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 
 协议改动按 [`desktop-development.md`](desktop-development.md) 跑相关测试，并与服务端确认
 兼容。
+
+
+普通 IM 提问的增量协议见 [IM 问题卡](protocol-compatibility/im-question-cards.md)。

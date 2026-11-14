@@ -13603,6 +13603,15 @@
           "askNoQuestion": "L'Agent attend votre réponse, mais aucune question n'est à afficher. Répondez « continuer ».",
           "askQuestion": "L'Agent a besoin de votre réponse :\n{{question}}\n{{options}}\nRépondez avec le numéro d'une option, ou saisissez directement votre réponse."
         }
+      },
+      "questions": {
+        "cardHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ; pour plusieurs questions ou choix, envoyez après sélection. Vous pouvez aussi répondre à ce message par écrit. Pour plusieurs questions, répondez « numéro : réponse » (ex. « 2: Français »), puis envoyez.",
+        "submitLabel": "Envoyer les réponses",
+        "multiSelectHint": " (plusieurs choix possibles)",
+        "resolved": "✅ Choix : {{option}}",
+        "expired": "Cette carte a expiré",
+        "textHint": "Seule la personne ayant posé la question peut répondre. Écrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer.",
+        "replyHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ; pour plusieurs questions ou choix, envoyez après sélection.\nÉcrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer."
       }
     }
   },

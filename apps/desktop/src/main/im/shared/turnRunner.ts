@@ -42,6 +42,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { isImAccountScopeClosedError } from '../accountBoundary';
 import { bindRuntimeRecoveryNotice } from './runtimeRecoveryNotice';
+import { presentImQuestion, IM_QUESTION_TIMEOUT_MS } from './questionPresentation';
 import { bindInputHandoffChannelNotice } from './inputHandoffChannelNotice';
 import { isImSubagentEvent } from './agentEventScope';
 import { isExpiredPermissionDecision, type SharedPermission } from '../../maker-ipc/sharedPermission';
@@ -352,6 +353,7 @@ interface QueuedSend {
   turnPermissionPolicy?: TurnPermissionPolicy;
   /** Main-verified owner sender (see ImRunAgentTurnArgs.requesterIsOwner). */
   requesterIsOwner?: boolean;
+  questionRespondentId?: string;
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
@@ -531,6 +533,7 @@ export interface ImRunAgentTurnArgs {
    * group speaker.isOwner). Only this unlocks owner-only Host actions; omitted = not owner.
    */
   requesterIsOwner?: boolean;
+  questionRespondentId?: string;
   /**
    * 这一轮的触发消息来自「禁止保存内容」的群。
    *
@@ -1469,6 +1472,7 @@ export function createTurnRunner(
         && args.requesterIsOwner === true && target.botOwned)
         ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
       ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),
+      questionRespondentId: args.questionRespondentId,
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
@@ -1901,12 +1905,24 @@ export function createTurnRunner(
               scope: item.channelToolScope,
             });
           }
+          const questionPresentation = item.questionRespondentId ? {
+            questionTimeoutMs: IM_QUESTION_TIMEOUT_MS,
+            presentQuestion: async (question: Extract<InteractionRequest, { kind: 'ask_user_question' }>, controls: import('../../maker-ipc/interactionRouter').QuestionControls) => {
+              if (question.delivery !== 'async') await finalizeActiveStream(rowId);
+              await presentImQuestion({ output, lane: userId, respondent: item.questionRespondentId!,
+                scope: noticeScope, request: question, controls,
+                current: () => sessionStates.get(rowId)?.makerSession === noticeSession,
+                warn: () => log.warn('IM question update failed'),
+              });
+            },
+          } : {};
           item.turn.interactionRouteLease =
             effectiveTurnPolicy?.confirmationSurface === 'desktop'
               ? beginInteractionRoute(state.makerSession, {
                   route: {
                     sessionId: rowId,
                     turnId: item.turn.turnId,
+                    ...questionPresentation,
                     origin: effectiveTurnPolicy.origin,
                     interactionSurface: 'desktop',
                     requesterAuthority: item.requesterIsOwner === true ? 'owner' : 'unknown',
@@ -1926,6 +1942,7 @@ export function createTurnRunner(
                   route: {
                     sessionId: rowId,
                     turnId: item.turn.turnId,
+                    ...questionPresentation,
                     origin: effectiveTurnPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
                     sourceDescription: item.turn.sourceDescription,

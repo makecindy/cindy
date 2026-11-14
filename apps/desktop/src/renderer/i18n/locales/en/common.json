@@ -13488,6 +13488,15 @@
           "askNoQuestion": "The Agent is waiting for your answer, but there's no question to show. Reply “continue”.",
           "askQuestion": "The Agent needs your answer:\n{{question}}\n{{options}}\nReply with an option number, or type your answer."
         }
+      },
+      "questions": {
+        "cardHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections. You can also reply to this message with text. For multiple questions, reply with “question number: answer” (e.g. “2: English”), then submit.",
+        "submitLabel": "Submit answers",
+        "multiSelectHint": " (select all that apply)",
+        "resolved": "✅ Selected: {{option}}",
+        "expired": "This card has expired",
+        "textHint": "Only the original requester can answer. Reply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all.",
+        "replyHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections.\nReply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all."
       }
     }
   },

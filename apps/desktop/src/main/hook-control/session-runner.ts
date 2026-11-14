@@ -42,6 +42,7 @@ import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
   AgentKind,
+  InteractionRequest,
   PermissionMode,
   TurnPermissionOrigin,
   UserContentBlock,
@@ -123,6 +124,7 @@ import { getDesktopProviderService } from '../maker-host/createDesktopProviderSe
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 import { observeHookTurn, type HookTurnObserver } from './turnObserver.js';
 import { bindRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
+
 import { bindInputHandoffChannelNotice } from '../im/shared/inputHandoffChannelNotice.js';
 import { beginGroupHistoryAccess } from '../im/shared/groupHistoryAccess.js';
 import {
@@ -151,6 +153,7 @@ import { resolveHookSessionConfig, type ResolvedHookSessionConfig } from './defa
 import { resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import { decodeAttachments, sanitizeAttachmentName } from './attachments.js';
 import {
+  HOOK_INTERACTION_TIMEOUT_MS,
   cancelHookInteraction,
   composeInteractionCard,
   registerHookInteraction,
@@ -1600,6 +1603,21 @@ export function createMakerHookSessionRunner(deps: {
                 turnId: randomUUID(),
                 origin: routeOrigin,
                 interactionSurface: req.onInteraction ? 'channel-card' : 'headless',
+                ...(req.onQuestion ? {
+                  questionTimeoutMs: HOOK_INTERACTION_TIMEOUT_MS,
+                  presentQuestion: async (question, controls) => {
+                    if (question.delivery !== 'async') {
+                      pendingInteractionNotices.set(question.requestId, awaitingInteractionNotice(question.kind));
+                      activeObserver?.markInteractionBoundary();
+                      activeObserver?.setNotice(awaitingInteractionNotice(question.kind));
+                      void controls.settled.finally(() => {
+                        pendingInteractionNotices.delete(question.requestId);
+                        activeObserver?.setNotice([...pendingInteractionNotices.values()].at(-1) ?? null);
+                      }).catch(() => undefined);
+                    }
+                    await req.onQuestion!(question, controls);
+                  },
+                } : {}),
                 sourceDescription: describeInteractionSource({
                   channelName: req.source?.im ?? req.origin.connectionName,
                   chatId: req.source?.channelName ?? req.title ?? req.source?.im ?? 'IM',

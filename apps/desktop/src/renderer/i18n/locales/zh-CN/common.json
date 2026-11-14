@@ -13434,6 +13434,15 @@
           "askNoQuestion": "Agent 正在等待你的回答，但没有可显示的问题。请回复“继续”。",
           "askQuestion": "Agent 需要你的回答：\n{{question}}\n{{options}}\n请回复选项序号，或直接输入你的回答。"
         }
+      },
+      "questions": {
+        "cardHint": "仅提问者可作答。点击选项；多题或多选选好后提交。也可回复这条消息补充文字。多题文字回答请写“题号：答案”（如“2：用中文”），填好后提交。",
+        "submitLabel": "提交答案",
+        "multiSelectHint": "（可多选）",
+        "resolved": "✅ 已选：{{option}}",
+        "expired": "卡片已过期",
+        "textHint": "仅提问者可作答。回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。",
+        "replyHint": "仅提问者可作答。点击选项；多题或多选选好后提交。\n回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。"
       }
     }
   },
