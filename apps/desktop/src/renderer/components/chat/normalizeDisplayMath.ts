@@ -18,57 +18,96 @@
  * - 独占一行的单行公式(`$$x = 1$$`)
  *
  * 保护边界:
- * - fenced code block(` ``` ` / `~~~`)与 inline code span(`` `...` ``)内原样保留。
+ * - fenced code block(` ``` ` / `~~~`,含引用块与列表项内部)与 inline code span
+ *   (`` `...` ``)内原样保留。
  * - 行内双 dollar(`说明 $$a+b$$ 结束` / `$$a=1$$ + $$b=2$$`)保持原样。
  * - 3 个及以上连续 `$`(`$$$` / `$$$$`)不拆分。
  * - 转义 `\$` 不计入定界符,成对 `\\$$` 正常识别为公式定界符。
+ * - 跨越引用块或列表项边界时不向后误配对。
  * - 仅用于不要求 source-line 行号保真的渲染路径(emitSourceLines=false)。
- * - 全部扫描均为线性复杂度(与 mathMarkdown.ts 同口径,无回溯正则)。
+ * - 全部扫描均为严格 O(n) 线性复杂度(无回溯正则、无长度枚举重扫)。
  */
 
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const QUOTE_PREFIX_RE = /^((?: {0,3}> ?)*)/;
 const CONTAINER_PREFIX_RE = /^((?: {0,3}> ?)*[ \t]*)/;
 const LIST_PREFIX_RE = /^([-+*]|\d{1,9}[.)])([ \t]+)/;
+const FENCE_RE = /^(`{3,}|~{3,})(.*)$/;
 const PARAGRAPH_BREAK_RE = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:`{3,}|~{3,}))/;
 
+function countQuoteMarkers(prefix: string): number {
+  let count = 0;
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (prefix[i] === '>') count += 1;
+  }
+  return count;
+}
+
+function getLineQuoteDepth(line: string): number {
+  const m = QUOTE_PREFIX_RE.exec(line);
+  return m ? countQuoteMarkers(m[1]) : 0;
+}
+
+function getLeadingSpacesCount(line: string): number {
+  let count = 0;
+  while (count < line.length && line[count] === ' ') count += 1;
+  return count;
+}
+
+function stripContainerPrefixForFence(line: string): { quoteDepth: number; rest: string } {
+  const quoteMatch = QUOTE_PREFIX_RE.exec(line);
+  const quotePrefix = quoteMatch ? quoteMatch[1] : '';
+  const quoteDepth = countQuoteMarkers(quotePrefix);
+  let rest = line.slice(quotePrefix.length).replace(/^[ \t]+/, '');
+  const listMatch = LIST_PREFIX_RE.exec(rest);
+  if (listMatch) {
+    rest = rest.slice(listMatch[0].length).replace(/^[ \t]+/, '');
+  }
+  return { quoteDepth, rest };
+}
+
+/**
+ * 单遍索引所有 backtick 运行并按长度建表,再用单调游标线性配对,避免 k 种不同
+ * 未闭合反引号长度导致 Θ(k³) 重复扫描。
+ */
 function findInlineCodeRanges(segment: string): Array<[number, number]> {
   if (!segment.includes('`')) return [];
-  const ranges: Array<[number, number]> = [];
-  const noCloserForLength = new Set<number>();
-  let cursor = 0;
-
-  while (cursor < segment.length) {
-    const tick = segment.indexOf('`', cursor);
+  const runs: Array<{ start: number; end: number; len: number }> = [];
+  const runIndicesByLen = new Map<number, number[]>();
+  let pos = 0;
+  while (pos < segment.length) {
+    const tick = segment.indexOf('`', pos);
     if (tick === -1) break;
-    let openEnd = tick;
-    while (openEnd < segment.length && segment[openEnd] === '`') openEnd += 1;
-    const runLength = openEnd - tick;
-
-    let closeStart = -1;
-    let closeEnd = openEnd;
-    if (!noCloserForLength.has(runLength)) {
-      let probe = openEnd;
-      while (probe < segment.length) {
-        const t = segment.indexOf('`', probe);
-        if (t === -1) break;
-        let e = t;
-        while (e < segment.length && segment[e] === '`') e += 1;
-        if (e - t === runLength) {
-          closeStart = t;
-          closeEnd = e;
-          break;
-        }
-        probe = e;
-      }
-      if (closeStart === -1) noCloserForLength.add(runLength);
+    let end = tick + 1;
+    while (end < segment.length && segment[end] === '`') end += 1;
+    const len = end - tick;
+    const runIdx = runs.length;
+    runs.push({ start: tick, end, len });
+    let list = runIndicesByLen.get(len);
+    if (!list) {
+      list = [];
+      runIndicesByLen.set(len, list);
     }
+    list.push(runIdx);
+    pos = end;
+  }
 
-    if (closeStart === -1) {
-      cursor = openEnd;
+  const ranges: Array<[number, number]> = [];
+  const headByLen = new Map<number, number>();
+  let r = 0;
+  while (r < runs.length) {
+    const run = runs[r];
+    const list = runIndicesByLen.get(run.len)!;
+    let head = headByLen.get(run.len) ?? 0;
+    while (head < list.length && list[head] <= r) head += 1;
+    headByLen.set(run.len, head);
+    if (head >= list.length) {
+      r += 1;
       continue;
     }
-    ranges.push([tick, closeEnd]);
-    cursor = closeEnd;
+    const closeIdx = list[head];
+    headByLen.set(run.len, head + 1);
+    ranges.push([run.start, runs[closeIdx].end]);
+    r = closeIdx + 1;
   }
 
   return ranges;
@@ -207,6 +246,11 @@ function normalizeNonFenceLines(lines: readonly string[]): { lines: string[]; ch
       ? basePrefix + ' '.repeat(listMatch[1].length + listMatch[2].length)
       : basePrefix;
     const contentStartCol = pendingCol > 0 ? pendingCol : openPrefix.length;
+    const openQuoteDepth = countQuoteMarkers(basePrefix);
+    const requiredListIndent =
+      openQuoteDepth === 0 && (listMatch !== null || basePrefix.length > 0)
+        ? contPrefix.length
+        : 0;
 
     const { cols, nextRangeCursor } = findDoubleDollarCols(
       segment,
@@ -246,13 +290,28 @@ function normalizeNonFenceLines(lines: readonly string[]): { lines: string[]; ch
         continue;
       }
 
-      // 1b. 同行只有开 `$$`,向后跨行找闭合 `$$`
+      // 1b. 同行只有开 `$$`,在同级容器内向后跨行找闭合 `$$`
       if (cols.length === 1) {
         const openBody = line.slice(cols[0] + 2);
         let closeIdx = -1;
         let closeCol = -1;
+        let sawBlankLine = false;
         for (let j = idx + 1; j < lines.length; j += 1) {
-          const closeCols = findDoubleDollarColsInMath(lines[j]);
+          const candidate = lines[j];
+          if (openQuoteDepth > 0 && getLineQuoteDepth(candidate) < openQuoteDepth) {
+            break;
+          }
+          if (openQuoteDepth === 0 && requiredListIndent > 0) {
+            if (candidate.trim() === '') {
+              sawBlankLine = true;
+              continue;
+            }
+            const indent = getLeadingSpacesCount(candidate);
+            if (indent < requiredListIndent) {
+              if (sawBlankLine || LIST_PREFIX_RE.test(candidate.trimStart())) break;
+            }
+          }
+          const closeCols = findDoubleDollarColsInMath(candidate);
           if (closeCols.length > 0) {
             closeIdx = j;
             closeCol = closeCols[0];
@@ -323,13 +382,13 @@ function normalizeNonFenceLines(lines: readonly string[]): { lines: string[]; ch
     }
 
     // 情况 3: 行内尾部悬垂奇数个 `$$`(如 `对正整数 $n$,有:$$I_n = \begin{cases}`),
-    // 仅在**同一段落内**(空行 / 标题前)找到闭合 `$$` 时才拆成 display 块,避免未闭合
-    // `$$` 误吞后续段落。
+    // 仅在同一容器同一段落内(空行 / 标题 / 容器退出前)找到闭合 `$$` 时才拆成 display 块。
     const openCol = cols[cols.length - 1];
     let closeIdx = -1;
     let closeCol = -1;
     for (let j = idx + 1; j < lines.length; j += 1) {
       const candidate = lines[j];
+      if (openQuoteDepth > 0 && getLineQuoteDepth(candidate) < openQuoteDepth) break;
       if (candidate.trim() === '' || PARAGRAPH_BREAK_RE.test(candidate)) break;
       const closeCols = findDoubleDollarColsInMath(candidate);
       if (closeCols.length > 0) {
@@ -375,7 +434,7 @@ export function normalizeDisplayMathFences(markdown: string): string {
   const lines = markdown.split('\n');
   const out: string[] = [];
   let textBuf: string[] = [];
-  let fenceMarker: string | null = null;
+  let fence: { marker: string; quoteDepth: number } | null = null;
   let anyChanged = false;
 
   const flushText = () => {
@@ -387,26 +446,33 @@ export function normalizeDisplayMathFences(markdown: string): string {
   };
 
   for (const line of lines) {
-    if (fenceMarker == null) {
-      const open = line.match(FENCE_OPEN_RE);
+    const { quoteDepth, rest } = stripContainerPrefixForFence(line);
+
+    if (fence != null && fence.quoteDepth > 0 && quoteDepth < fence.quoteDepth) {
+      // 引用块提前结束,容器内的未闭合围栏随引用块一同关闭,当前行回归正常扫描
+      fence = null;
+    }
+
+    if (fence == null) {
+      const open = rest.match(FENCE_RE);
       // CommonMark: backtick fence info string cannot contain backticks (otherwise inline code).
       if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
         flushText();
-        fenceMarker = open[1];
+        fence = { marker: open[1], quoteDepth };
         out.push(line);
         continue;
       }
       textBuf.push(line);
     } else {
       out.push(line);
-      const close = line.match(FENCE_OPEN_RE);
+      const close = rest.match(FENCE_RE);
       if (
         close &&
-        close[1][0] === fenceMarker[0] &&
-        close[1].length >= fenceMarker.length &&
+        close[1][0] === fence.marker[0] &&
+        close[1].length >= fence.marker.length &&
         close[2].trim() === ''
       ) {
-        fenceMarker = null;
+        fence = null;
       }
     }
   }

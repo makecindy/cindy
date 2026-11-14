@@ -185,6 +185,28 @@ $$`);
     expect(normalizeDisplayMathFences('$$I_n = \\begin{cases}\na')).toBe(
       '$$\nI_n = \\begin{cases}\na',
     );
+
+    // 容器边界保护: 引用块 / 列表项内未闭合 $$ 不得跨越容器边界吞并外部公式
+    const quoteBoundary = '> $$\n> x = 1\n\n正文 $$y$$';
+    expect(normalizeDisplayMathFences(quoteBoundary)).toBe(quoteBoundary);
+    const quoteHtml = renderMath(quoteBoundary);
+    expect(quoteHtml).toContain('<blockquote>');
+    expect(quoteHtml).toContain('<p>正文 <span class="katex">');
+
+    const listBoundary = '- $$\n  x = 1\n\n正文 $$y$$';
+    expect(normalizeDisplayMathFences(listBoundary)).toBe(listBoundary);
+
+    // 容器内代码围栏保护: 引用块 / 列表内的 ~~~ 与 ``` 代码块保持原样
+    const containerCode = '> ~~~tex\n> $$x$$\n> ~~~\n\n- ```tex\n  $$y$$\n  ```';
+    expect(normalizeDisplayMathFences(containerCode)).toBe(containerCode);
+    expect(renderMath(containerCode)).not.toContain('class="katex"');
+
+    // 对抗性未闭合反引号长度序列(k 种长度各一次)必须保持 O(n) 线性完成
+    const adversarialTicks = Array.from({ length: 400 }, (_, i) => '`'.repeat(i + 1)).join('a');
+    const adversarial = `$$x$$\n${adversarialTicks}`;
+    const started = Date.now();
+    normalizeDisplayMathFences(adversarial);
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });
 
