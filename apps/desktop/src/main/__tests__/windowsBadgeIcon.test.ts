@@ -1,5 +1,6 @@
-import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { describe, expect, it, vi } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { createCanvas, GlobalFonts, loadImage } from '@napi-rs/canvas';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const { addRepresentation, icon } = vi.hoisted(() => {
   const addRepresentation = vi.fn();
@@ -10,6 +11,21 @@ vi.mock('electron', () => ({ nativeImage: { createEmpty: () => icon } }));
 import { createWindowsBadgeIcon, renderWindowsBadgePng } from '../windowsBadgeIcon';
 
 describe('Windows numeric taskbar badge', () => {
+  let fixtureFont: ReturnType<typeof GlobalFonts.registerFromPath> = null;
+  beforeAll(() => {
+    // Keep the PNG assertions independent of the runner's system-font fallback.
+    // This checks real badge rendering, not the Windows Segoe UI glyph shapes.
+    fixtureFont = GlobalFonts.registerFromPath(
+      fileURLToPath(new URL('../../../native/menubar/BarlowCondensed-SemiBold.ttf', import.meta.url)),
+      'Segoe UI',
+    );
+    expect(fixtureFont).not.toBeNull();
+  });
+  afterAll(() => {
+    // The native font collection is process-wide, including Vitest threads.
+    if (fixtureFont) GlobalFonts.remove(fixtureFont);
+  });
+
   it.each([1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 8])(
     'renders exact physical dimensions at %s scale for the native Shell bridge',
     (scale) => {
