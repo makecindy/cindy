@@ -43,8 +43,10 @@ export interface ActiveTurnQuitGuard<TOwner> {
   /**
    * Tray Quit, native main-window close (Alt+F4, taskbar, window manager), the first-close
    * chooser and any quit whose sender cannot be resolved. Returns true when it quit.
+   * `busyUnknown`: the caller knows this process cannot see the turns (tray Quit in Host client
+   * mode), so it confirms as for a throwing probe instead of trusting a local idle read.
    */
-  requestQuit(): boolean;
+  requestQuit(options?: { busyUnknown?: boolean }): boolean;
   /**
    * Title-bar X of the main window. Reads the busy state and acts on it in the same call:
    * idle quits now ('quitting'); busy records a pending in-app confirmation for `owner`
@@ -83,7 +85,7 @@ export function createActiveTurnQuitGuard<TOwner>(
     deps.quit();
   };
 
-  const requestQuit = (): boolean => {
+  const requestQuit = (options?: { busyUnknown?: boolean }): boolean => {
     if (confirming) return false;
     if (pending) {
       if (deps.canShowInAppConfirmation(pending.owner)) {
@@ -92,7 +94,7 @@ export function createActiveTurnQuitGuard<TOwner>(
       }
       pending = null;
     }
-    if (readActiveTurnForQuit(() => deps.hasActiveTurn())) {
+    if (options?.busyUnknown || readActiveTurnForQuit(() => deps.hasActiveTurn())) {
       confirming = true;
       let confirmed: boolean;
       try {

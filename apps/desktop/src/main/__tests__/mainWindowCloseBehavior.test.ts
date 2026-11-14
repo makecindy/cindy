@@ -380,6 +380,19 @@ describe('main window close request quit guard', () => {
     },
   );
 
+  // Regression from this PR's first commit (Copilot review, PR #9779): in Host client mode
+  // (CINDY_HOST_API) the turns run in the Host and this process's probe reads idle. Tray Quit
+  // asked every time there before the shared guard (getMakerCore() throws in client mode); on the
+  // local probe it quit mid-task without asking. The tray route passes busyUnknown in that mode.
+  it('confirms a quit whose caller cannot read the busy state although the probe reads idle', () => {
+    const { deps, guard } = guardHarness({ busy: 'idle', confirm: false });
+
+    expect(guard.requestQuit({ busyUnknown: true })).toBe(false);
+
+    expect(deps.confirmQuit).toHaveBeenCalledTimes(1);
+    expect(deps.quit).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['win32', 'tray', null, 'hideToTray'],
     ['linux', null, 'minimize', 'minimize'],

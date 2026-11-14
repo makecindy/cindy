@@ -3890,10 +3890,11 @@ function isMainWindowOnScreen(mainWindow: BrowserWindow | null): mainWindow is B
 // hidden or minimized window (tray Quit) would hide an owned dialog with it, so it stays
 // parentless there.
 //
-// Host client mode (CINDY_HOST_API) has no local Maker, so every route reads idle and quits
-// without asking (tray Quit included, which used to always ask there because getMakerCore()
-// throws). The Host keeps running the turn after this window exits, but calls this window
-// executes for it (computer control, embedded browser) are cut off with an uncertain result
+// Host client mode (CINDY_HOST_API) has no local Maker, so the probe reads idle: the title-bar X
+// and native closes quit without asking there, as they did before this guard. Tray Quit always
+// asked there (getMakerCore() throws in client mode) and still does (quitFromDesktopTray). The
+// Host keeps running the turn after this window exits, but calls this window executes for it
+// (computer control, embedded browser) are cut off with an uncertain result
 // (docs/host/client-handoff-foundation.md).
 const activeTurnQuitGuard = createActiveTurnQuitGuard<Electron.WebContents>({
   hasActiveTurn: () => anySessionInTurn(getMakerIfReady()),
@@ -3936,7 +3937,8 @@ function quitAppWithActiveTurnGuard(): void {
 }
 
 function quitFromDesktopTray(): void {
-  quitAppWithActiveTurnGuard();
+  // This process cannot read the Host's turns in client mode; keep asking as tray Quit always did.
+  activeTurnQuitGuard.requestQuit({ busyUnknown: hostClientMode });
 }
 
 function destroyWindowsTray(): void {
