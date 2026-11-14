@@ -14,6 +14,7 @@ describe('group runtime failure diagnostics', () => {
     ['[PI_IMAGE_INPUT_UNSUPPORTED] private model details', 'IMAGE_INPUT_UNSUPPORTED'],
     ['[MODEL_NOT_FOUND] private route', 'MODEL_UNAVAILABLE'],
     ['[INVALID_TOKEN] private token', 'AUTH_REQUIRED'],
+    ['codex not authenticated: no_oauth', 'AUTH_REQUIRED'],
     ['[RATE_LIMIT_EXCEEDED] private response', 'RATE_LIMITED'],
     ['[INSUFFICIENT_BALANCE] private account', 'QUOTA_EXCEEDED'],
     ['ECONNRESET private endpoint', 'NETWORK_ERROR'],

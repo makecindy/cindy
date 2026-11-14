@@ -28,6 +28,17 @@ function withoutLineLocator(value: string): string {
   return value.includes('?') ? value : value.replace(/(?::\d+(?::\d+|-\d+)?|#L\d+(?:-L\d+)?)$/, '');
 }
 
+/** A source location is a citation, not a request to export the whole file. */
+function isLineCitation(value: string): boolean {
+  return withoutLineLocator(value) !== value;
+}
+
+function citationText(label: string, target: string): string {
+  // Keep authored source locations readable without creating another Markdown
+  // link/image or interpreting a filename as formatting. Never resolve the path.
+  return `${label} (${target.replace(/[\\`*_[\]<>]/g, '\\$&')})`;
+}
+
 // Match local references, not arbitrary URI schemes or in-message anchors.
 function isFileTarget(value: string): boolean {
   if (!value || /^[#?]/.test(value)) return false;
@@ -62,6 +73,7 @@ export function replyFileLinks(text: string) {
     if (!definitions.has(node.identifier)) definitions.set(node.identifier, node);
   });
   const links: Array<{ url: string; start: number; end: number; label: string }> = [];
+  const citations: Array<{ start: number; end: number; text: string }> = [];
   const usedDefinitions = new Set<string>();
   const imageDefinitions = new Set<string>();
   visit(tree, 'imageReference', node => { imageDefinitions.add(node.identifier); });
@@ -74,10 +86,12 @@ export function replyFileLinks(text: string) {
     // Keep nested image markup as the label for the later image-delivery pass;
     // the outer explicit file target still needs its own attachment.
     if (start === undefined || end === undefined || first === undefined || last === undefined) return;
-    links.push({ url: target.url, start, end, label: text.slice(first, last) });
+    const label = text.slice(first, last);
+    if (isLineCitation(target.url)) citations.push({ start, end, text: citationText(label, target.url) });
+    else links.push({ url: target.url, start, end, label });
     if (node.type === 'linkReference') usedDefinitions.add(node.identifier);
   });
-  const edits = links.map(link => ({ start: link.start, end: link.end, text: link.label }));
+  const edits = [...citations, ...links.map(link => ({ start: link.start, end: link.end, text: link.label }))];
   for (const identifier of usedDefinitions) {
     // The image pass decides from authorized bytes whether a shared target is
     // an image or a file-only preview. Keep its definition until then.
@@ -93,7 +107,7 @@ export function replyFileLinks(text: string) {
   const positionedLinks = links.map(link => ({ ...link, outputStart: link.start + edits
     .filter(edit => edit.end <= link.start)
     .reduce((delta, edit) => delta + edit.text.length - (edit.end - edit.start), 0) }));
-  return { links: positionedLinks, text: deliveredText };
+  return { links: positionedLinks, text: deliveredText, hasCitations: citations.length > 0 };
 }
 
 function localPath(url: string, workDir: string): string {
@@ -196,7 +210,7 @@ export async function prepareChatReplyFiles(text: string, sessionId: string, ass
     markdown = row ? visibleMessageText('assistant', row.content, { preserveWhitespace: true }) : text;
   }
   const parsed = replyFileLinks(markdown);
-  if (!parsed.links.length) return { text, attachments: [] as ChatUploadAttachment[] };
+  if (!parsed.links.length) return { text: parsed.hasCitations ? parsed.text : text, attachments: [] as ChatUploadAttachment[] };
   if (!snapshot) throw unavailable();
   const assertCurrent = () => {
     assertExecution();
