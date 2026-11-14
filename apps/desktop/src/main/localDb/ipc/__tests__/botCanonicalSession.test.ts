@@ -2,6 +2,7 @@ import { seedBotReadPositions, markBotReadPositions, pruneBotReadState as pruneH
 import { listBotDelegationHistory } from '../../../maker-ipc/botDelegationHistory';
 import { readBotResponsibilityScope } from '../../../maker-ipc/botTaskCreation';
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
+import { setBroadcastTapListener } from '../../../device-link/broadcast-tap.js';
 import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
@@ -1396,6 +1397,71 @@ describe('Bot canonical Session lifecycle', () => {
       expect(updated.name).toBe('Release Bot');
       expect(names()).toEqual(['bot-1', 'import_copy']);
     });
+  });
+
+  // #10243, db: settings and the Agent tool share updateBotProfile. Read real
+  // persisted titles and the existing remote push, rather than mocking the save.
+  it.each(['settings', 'tool'] as const)('renames the canonical task and pushes its committed title through %s', async entry => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const pushed = vi.fn();
+    setBroadcastTapListener(pushed);
+    try {
+      if (entry === 'settings') await invoke('local-db:bots:update', { id: 'bot-1', name: 'Renamed' });
+      else {
+        const service = createBotCapabilityService(capabilityDeps);
+        const result = await service.updateProfile({ callerSessionId: created.session.id,
+          expectedVersion: 1, name: 'Renamed' });
+        expect(result).toMatchObject({ ok: true });
+      }
+      expect(h.sqlite!.prepare('SELECT title FROM sessions WHERE id = ?').pluck().get(created.session.id)).toBe('Renamed');
+      expect(pushed.mock.calls.filter(([channel]) => channel === 'local-db:sessions:patched')
+        .map(([, payload]) => payload)).toEqual([{ sessionId: created.session.id, patch: { title: 'Renamed' } }]);
+    } finally { setBroadcastTapListener(null); }
+  });
+
+  it('publishes the latest committed title when an earlier rename continuation resumes late', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const originalTx = h.tx!;
+    const pushed = vi.fn();
+    h.tx = async (name, args) => {
+      const result = await originalTx(name, args);
+      if (name === 'bots.updateProfile' && (args as { displayName?: string }).displayName === 'First') {
+        await updateStoredBotProfile({ id: 'bot-1', name: 'Second' });
+      }
+      return result;
+    };
+    setBroadcastTapListener(pushed);
+    try {
+      await invoke('local-db:bots:update', { id: 'bot-1', name: 'First' });
+      expect(h.sqlite!.prepare('SELECT title FROM sessions WHERE id = ?').pluck().get(created.session.id)).toBe('Second');
+      expect(pushed.mock.calls.filter(([channel]) => channel === 'local-db:sessions:patched')
+        .map(([, payload]) => payload)).toEqual([
+        { sessionId: created.session.id, patch: { title: 'Second' } },
+        { sessionId: created.session.id, patch: { title: 'Second' } },
+      ]);
+    } finally { h.tx = originalTx; setBroadcastTapListener(null); }
+  });
+
+  it('does not push a committed rename into another account after an owner switch', async () => {
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const originalTx = h.tx!;
+    const pushed = vi.fn();
+    h.tx = async (name, args) => {
+      const result = await originalTx(name, args);
+      if (name === 'bots.updateProfile') h.ownerScopeKey = 'owner-b:2';
+      return result;
+    };
+    setBroadcastTapListener(pushed);
+    try {
+      await expect(invoke('local-db:bots:update', { id: 'bot-1', name: 'Renamed' })).rejects.toThrow('账号已切换');
+      expect(pushed.mock.calls.filter(([channel]) => channel === 'local-db:sessions:patched')).toEqual([]);
+    } finally { h.tx = originalTx; setBroadcastTapListener(null); }
   });
 
   it('allows profile edits while an existing companion retries only its portrait', async () => {

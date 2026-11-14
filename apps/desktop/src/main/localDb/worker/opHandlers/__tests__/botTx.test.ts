@@ -367,6 +367,64 @@ describe('Bot named worker transactions', () => {
     expect(db.prepare('SELECT count(*) AS n FROM bot_profiles').get()).toEqual({ n: 3 });
   });
 
+  // #10243, db: the real profile transaction must rename only the live canonical
+  // task. Existing model/permission cases did not check titles or rename rollback.
+  it('renames only the owning live canonical task without changing activity order', () => {
+    const h = savedModelFixture();
+    tx(db, { name: 'bots.createProfile', args: {
+      id: 'other', displayName: 'Other', description: '', avatar: '', avatarColor: 'blue',
+      identitySource: 'identity', capabilitiesJson: '{}', now: 1,
+    } });
+    for (const role of ['group', 'channel', 'thread', 'routine', 'route', 'worker', 'history', 'other-canonical']) {
+      db.prepare(`INSERT INTO sessions
+        (id, title, workspace_kind, model, effort, permission_mode, status, total_token_usage,
+         total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled, agent_kind,
+         extra_dirs, source, created_at, updated_at)
+        VALUES (?, ?, 'dialogue', 'model', 'high', 'ask', 'active',
+         0, 0, 0, 0, 0, 0, 'codex', '[]', 'bot', 2, 2)`).run(role, role);
+      db.prepare(`INSERT INTO bot_session_links
+        (id, bot_id, session_id, profile_version, role, created_at)
+        VALUES (?, ?, ?, 1, ?, 2)`).run(`link-${role}`, role === 'other-canonical' ? 'other' : 'saved-bot',
+          role, role === 'other-canonical' ? 'canonical' : role);
+    }
+    // The compatibility pointer is not the authority for canonical identity.
+    db.prepare("UPDATE bot_profiles SET canonical_session_id = 'routine' WHERE id = 'saved-bot'").run();
+    h.save('old', 1, { displayName: 'Renamed' });
+    expect(db.prepare("SELECT title, updated_at FROM sessions WHERE id = 'saved-session'").get())
+      .toEqual({ title: 'Renamed', updated_at: 2 });
+    expect(db.prepare("SELECT id FROM sessions WHERE id != 'saved-session' AND title != id").all()).toEqual([]);
+    db.prepare("UPDATE sessions SET title = 'Custom title' WHERE id = 'saved-session'").run();
+    h.save('old', 2, { displayName: 'Renamed' });
+    h.save('old', 3);
+    expect(db.prepare("SELECT title FROM sessions WHERE id = 'saved-session'").pluck().get()).toBe('Custom title');
+  });
+
+  it.each(['archived-link', 'deleted-session', 'missing-link'])('does not rename a %s canonical task', state => {
+    const h = savedModelFixture();
+    if (state === 'archived-link') db.prepare("UPDATE bot_session_links SET archived_at = 3 WHERE session_id = 'saved-session'").run();
+    if (state === 'deleted-session') db.prepare("UPDATE sessions SET status = 'deleted' WHERE id = 'saved-session'").run();
+    if (state === 'missing-link') db.prepare("DELETE FROM bot_session_links WHERE session_id = 'saved-session'").run();
+    h.save('old', 1, { displayName: 'Renamed' });
+    expect(db.prepare("SELECT display_name FROM bot_profiles WHERE id = 'saved-bot'").pluck().get()).toBe('Renamed');
+    expect(db.prepare("SELECT title FROM sessions WHERE id = 'saved-session'").pluck().get()).toBe('Saved');
+  });
+
+  it('keeps profile and canonical title unchanged on rejected or failed renames', () => {
+    const h = savedModelFixture();
+    tx(db, { name: 'bots.createProfile', args: {
+      id: 'other', displayName: 'Taken', description: '', avatar: '', avatarColor: 'blue',
+      identitySource: 'identity', capabilitiesJson: '{}', now: 1,
+    } });
+    expect(() => h.save('old', 0, { displayName: 'Stale' })).toThrow('刷新');
+    expect(() => h.save('old', 1, { displayName: 'Taken' })).toThrow('this name');
+    db.exec(`CREATE TRIGGER reject_title_write BEFORE UPDATE OF title ON sessions
+      BEGIN SELECT RAISE(ABORT, 'title write failed'); END`);
+    expect(() => h.save('old', 1, { displayName: 'Renamed' })).toThrow('title write failed');
+    expect(db.prepare("SELECT display_name, current_version FROM bot_profiles WHERE id = 'saved-bot'").get())
+      .toEqual({ display_name: 'Saved', current_version: 1 });
+    expect(db.prepare("SELECT title FROM sessions WHERE id = 'saved-session'").pluck().get()).toBe('Saved');
+  });
+
   it('keeps durable Bot attention monotonic and lets only a later success clear it', () => {
     tx(db, { name: 'bots.createProfile', args: {
       id: 'bot-1', displayName: 'Hermes', description: '', avatar: '🤖', avatarColor: 'violet',

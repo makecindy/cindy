@@ -484,6 +484,14 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
     }
     values.push(id);
     db.prepare(`UPDATE bot_profiles SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    if (p.displayName !== undefined && p.displayName !== current.displayName) {
+      // The canonical link owns identity; the legacy profile pointer may be stale.
+      // Renaming metadata must not reorder activity or rename independent work.
+      db.prepare(`UPDATE sessions SET title = ? WHERE status != 'deleted' AND id IN
+        (SELECT session_id FROM bot_session_links
+          WHERE bot_id = ? AND role = 'canonical' AND archived_at IS NULL)`)
+        .run(expectString(p.displayName, 'displayName'), id);
+    }
     if (avatarRef) {
       const refId = expectString(avatarRef.id, 'botAvatarRef.id');
       const hash = expectString(avatarRef.hash, 'botAvatarRef.hash');
