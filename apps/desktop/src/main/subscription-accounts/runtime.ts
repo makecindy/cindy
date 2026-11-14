@@ -1087,6 +1087,10 @@ export async function readSubscriptionSessionAccount(
       ...(info.auth.authenticated ? accountUsage(info.usage) : {}),
       ...(blocked ? { blocked: true as const, switchAvailable } : {}),
       ...((keys.routeProviderId || keys.legacyProviderId) && config.paused ? { switchAvailable } : {}),
+      // The task follows its account (subscription-account-pools.md 任务跟着账号走). Tell the local
+      // composer where the account lives now so an emptied source is not shown as disconnected for
+      // this task; remote replies keep their existing shape.
+      ...(!options.remote && destination !== requestedRoute ? { ownerProviderId: destination } : {}),
     },
   };
 }
