@@ -55,6 +55,11 @@ module.exports = {
       reasons: ["native message menu assets"],
     }))
     .concat([
+      {
+        type: "dir",
+        filePath: "assets/app-icons",
+        reasons: ["alternate app icon artwork"],
+      },
       ...["Cargo.toml", "Cargo.lock", "src", "include", "CindyAgentNetNative.podspec", "build-ios.mjs", "build-android.mjs"].map((entry) => ({
         type: entry === "src" || entry === "include" ? "dir" : "file",
         filePath: `../../packages/agent-net-native/${entry}`,
