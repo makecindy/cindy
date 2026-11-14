@@ -312,6 +312,9 @@ export class ScheduleWebhookRemote {
         if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
         if (this.githubError) throw this.githubError;
         if (this.running && !this.loaded) throw new Error('GITHUB_CONNECTION_UNAVAILABLE');
+        // A successful read can still precede the user's GitHub grant. Keep the
+        // explicit recheck until the requested repositories are accessible.
+        if (installation && this.github.unavailable?.length) this.githubInstallPending = true;
         // Capture this refresh's result before the next queued refresh resets loaded.
         return this.github;
       } catch (error) {

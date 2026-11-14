@@ -1028,7 +1028,7 @@ it('keeps the acknowledged subscription across refresh and connection checks', a
 
 // Installing the App changes permissions without changing the followed PRs.
 // Only the explicit browser round trip may bypass subscription deduplication.
-it.each(['installation', 'oauth', 'retry'])('rechecks repositories after installation (%s) without repeated background writes', async (outcome) => {
+it.each(['installation', 'oauth', 'retry', 'early-installation', 'early-oauth'])('rechecks repositories after installation (%s) without repeated background writes', async (outcome) => {
   const server = new FakeServer();
   const installUrl = 'https://github.com/apps/example-app/installations/new';
   server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], installUrl };
@@ -1042,18 +1042,30 @@ it.each(['installation', 'oauth', 'retry'])('rechecks repositories after install
   try {
     await remote.sync([follow]);
     await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: [], unavailable: ['example/project'] });
-    if (outcome === 'oauth') {
+    if (outcome.endsWith('oauth')) {
       await remote.connectGithub();
       const { redirectUri, state } = server.githubConnect!;
-      const callback = await fetch(`${redirectUri}?state=${state}&code=synthetic`, { redirect: 'manual' });
+      // Only the ephemeral port comes from the captured request. Keep the test
+      // request on loopback even if a broken callback advertises another host.
+      const port = Number(new URL(redirectUri).port);
+      const callback = await fetch(`http://127.0.0.1:${port}/github/callback?state=${encodeURIComponent(state)}&code=synthetic`, { redirect: 'manual' });
       expect(callback.headers.get('location')).toBe(installUrl);
     } else {
       await expect(remote.installGithub()).resolves.toBe(installUrl);
     }
     // Regular task refreshes while the browser is open must not consume the pending recheck.
     await remote.refresh();
-    const registrations = outcome === 'oauth' ? 2 : 1;
+    let registrations = outcome.endsWith('oauth') ? 2 : 1;
     expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+    if (outcome.startsWith('early-')) {
+      // PR #10508: a successful status read is not installation completion.
+      // The user returns once before granting access, then returns after granting it.
+      await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: [], unavailable: ['example/project'] });
+      registrations++;
+      expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+      await remote.refresh();
+      expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+    }
     server.githubAllowedRepositories = ['example/project'];
     if (outcome === 'retry') {
       server.githubUnavailable = true;
