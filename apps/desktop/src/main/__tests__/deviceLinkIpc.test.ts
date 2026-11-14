@@ -5,16 +5,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import { createProviderGroupDirectory } from '../provider-group/directory';
+import { onProviderDirectoryDenied } from '../device-link/providerMetadataContinuity.js';
 
 const capabilities = vi.hoisted(() => ({ canUseDeviceLink: true }));
-const metadataOwner = vi.hoisted(() => ({ key: 'directory-owner-a' }));
+const metadataOwner = vi.hoisted(() => ({ key: 'directory-owner-a', generation: 0 }));
 const dataPath = vi.hoisted(() => ({ available: vi.fn<(deviceId: string) => boolean>(() => false) }));
 vi.mock('../appSessionState.js', async importOriginal => ({
-  ...await importOriginal<typeof import('../appSessionState.js')>(), activeOwnerScopeKey: () => metadataOwner.key,
+  ...await importOriginal<typeof import('../appSessionState.js')>(), activeOwnerScopeKey: () => `${metadataOwner.key}:${metadataOwner.generation}`,
 }));
 vi.mock('../clientEndpointsService.js', async importOriginal => ({
   ...await importOriginal<typeof import('../clientEndpointsService.js')>(),
   getClientEndpoint: () => 'https://continuity.test.invalid',
+}));
+
+// 中转身份:限流期限按它分桶(官方中转与自建中转是各自独立的限流桶)。
+const relayScope = vi.hoisted(() => ({ baseUrl: 'https://relay-a.test.invalid' }));
+vi.mock('../device-link/deviceLinkApi.desktop.js', () => ({
+  deviceLinkApiFetch: vi.fn(),
+  resolveDeviceLinkApiBase: () => relayScope.baseUrl,
 }));
 
 // Transport windows are outside this in-memory IPC handler harness.
@@ -34,6 +42,9 @@ vi.mock('../serverApiClient.desktop', () => {
       public readonly code: string,
       public readonly statusCode: number,
       message: string,
+      public readonly retryAt?: number,
+      // 与真身一致:真正服务了这次响应的 base URL(见 serverApiClient)。
+      public readonly servedBaseUrl?: string,
     ) {
       super(message);
     }
@@ -165,6 +176,8 @@ import { DeviceLinkError, PLUGIN_OAUTH_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL } fr
 import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
 import { invokeWithClosedLinkRecovery } from '../device-link/linkRecovery';
 import { ServerApiError } from '../serverApiClient.desktop';
+import { directoryRetryDeadline } from '../device-link/directoryThrottle';
+
 import { createIpcError } from '../../shared/ipc-errors';
 import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization';
 import {
@@ -236,6 +249,7 @@ describe('device-link IPC handlers', () => {
     refcountTesting.reset(); // 多窗口订阅引用计数:每个用例独立
     capabilities.canUseDeviceLink = true;
     metadataOwner.key = 'directory-owner-a';
+    metadataOwner.generation = 0;
     __resetDeviceListCoalescingForTests(); // /devices 合并窗口:不让上一用例的在途请求漏到下一个
     vi.restoreAllMocks();
     dataPath.available.mockReset().mockReturnValue(false);
@@ -421,6 +435,382 @@ describe('device-link IPC handlers', () => {
     await expect(handleListDevices(deps)).rejects.toThrow('temporarily unavailable');
   });
 
+  // 目录读要有期限:serverApiFetch 默认不超时,挂死的一条读会让每次重读都再开一条。
+  // 限流期限要带给调用方:否则渲染进程的退避会在限流窗口里继续追问,延长限流。
+  it('listDevices:目录读带期限，限流时把服务端的重试期限带给调用方', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockResolvedValueOnce({ devices: [{ deviceId: 'dev-1', name: 'Member', online: true }] })
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt));
+    const deps = makeDeps({ apiFetch });
+    await expect(handleListDevices(deps)).resolves.not.toHaveProperty('stale');
+    expect(apiFetch).toHaveBeenCalledWith('/api/device-link/devices', {
+      timeoutMs: expect.any(Number),
+      // 调用方的期限信号:把「fetch + 401 之后的共享登录刷新 + 重试」一起框住。
+      signal: expect.any(AbortSignal),
+    });
+    const limited = await handleListDevices(deps);
+    expect(limited).toMatchObject({ stale: true });
+    expect(limited.retryAtMs).toBe(retryAt);
+  });
+
+  // 冷启动(没有旧快照可沿用)时,限流窗口里的每次追问都会让服务端把窗口重新推后。
+  // 期限按 owner 记在 main 侧:窗口内的物理读一律不发,只回一个暂时性失败。
+  it('listDevices:限流窗口内不再发物理读,冷启动也不一路追问', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt));
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 第一次读撞上限流:没有旧快照可沿用,这次读以失败告终,期限记进共享账本。
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 「窗口内不再发物理读」由路由层的共享闸门负责(deviceLinkApi.test.ts 的
+      // directory cooldown gate),不在 IPC 预检里拦:预检挡在路由之前会把 V2 那一腿
+      // 一起挡掉(Codex review #9360)。这里的 apiFetch 是路由层的替身,所以第二次读
+      // 仍然到达它 —— 判据是「IPC 不再自己短路」。
+      await expect(handleListDevices(deps)).rejects.toThrow();
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      // 限流期限是模块级状态:留给下一个用例就等于替它限流。
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 限流期限按**中转**分桶:官方中转与自建中转是各自独立的限流桶。同一账号换中转
+  // 之后,上一个中转给的期限不该拦住新中转上的第一次读 —— 否则换中转之后目录一直读
+  // 不出去,恢复被一个已经无关的期限拖住(Codex review #9360)。
+  it('listDevices:换中转后不继承上一个中转的限流期限', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt))
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 换中转:新的限流桶,期限记在旧中转上,新中转立刻发物理读。
+      relayScope.baseUrl = 'https://relay-b.test.invalid';
+      await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 每个中转桶的期限要**各自留着**:中转 A → B → A 来回切时,只留最后一个桶的话,A 的
+  // 期限会被 B 覆盖,切回 A 之后就在 A 仍然有效的限流窗口里又发了一次物理读
+  // (Codex review #9360)。
+  it('listDevices:中转来回切后回到原中转,原中转的限流期限仍然有效', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAtA = Date.now() + 60_000;
+    const retryAtB = Date.now() + 90_000;
+    const retryAtA2 = Date.now() + 120_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtA))
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtB))
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtA2));
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 换到中转 B:B 是另一个限流桶,立刻发物理读,并记下 B 自己的期限。
+      relayScope.baseUrl = 'https://relay-b.test.invalid';
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+      // 切回中转 A 再撞一次更新的期限:A 的桶必须还在(没有被 B 覆盖),新期限落在 A 上。
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(3);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(retryAtA2);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-b.test.invalid')).toBe(retryAtB);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 限流期限要记在**真正服务了这次响应**的身份上:401 之后的共享刷新可能把会话换到
+  // 另一个区域 / 中转,那条重试是往新的端点发的。记在进请求时的身份上,新端点那个桶里
+  // 就没有冷却,下一次读直接撞进同一个限流窗口(Codex review #9360)。
+  it('listDevices:限流期限记在真正服务了这次响应的那个中转上', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn(async () => {
+      // 401 之后的共享刷新把这次重试送到了另一个中转:服务这次响应的是新中转。
+      relayScope.baseUrl = 'https://relay-b.test.invalid';
+      throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt, 'https://relay-b.test.invalid');
+    });
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 期限记在真正服务了这次响应的新中转上,发起时的旧中转桶是干净的。
+      // (窗口内不再发物理读由路由层闸门负责,见 deviceLinkApi.test.ts。)
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-b.test.invalid')).toBe(retryAt);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(0);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 反过来:用户**换了中转**之后,在途的那条请求仍然是旧线路发出去的(自建中转的 baseUrl
+  // 在发起时就定住了)。它迟到的 429 期限属于旧线路 —— 读全局会把期限记到新线路上,把
+  // 没限流的新中转也限住;两个中转是各自独立的限流桶(Codex review #9360)。
+  it('listDevices:换中转后在途请求的限流期限仍记在发起它的那个中转上', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(async () => {
+        // 请求发出去之后用户切了中转;在途请求的响应(错误没携带服务方身份时)只能
+        // 退回发起它时的线路,不能读全局。
+        relayScope.baseUrl = 'https://relay-b.test.invalid';
+        throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt);
+      })
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 期限记在发起它的旧中转 A 上,当前中转 B 的桶是干净的。
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(retryAt);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-b.test.invalid')).toBe(0);
+      // B 的桶干净:立刻发物理读。
+      await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 两条目录读同时在途:先发的那条先撞上限流记下期限,后发的那条随后才成功。成功只证明
+  // 「服务端处理**我这次**请求时没在限流」,不证明它之后没有 —— 无条件清掉会把并发请求
+  // 刚记下的期限一起抹掉,下一次读直接撞进限流窗口,把窗口越推越远
+  // (Codex review #9360「Preserve cooldowns newer than the completing request」)。
+  it('listDevices:在途请求的成功不清掉并发请求刚记下的限流期限', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const settles: Array<{ resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = <T>() =>
+      new Promise<T>((resolve, reject) => {
+        settles.push({ resolve: (value) => resolve(value as T), reject: (error) => reject(error) });
+      });
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 两次调用间隔要超过合并窗口(否则会共用同一在途请求):前两拍 Date.now 分别是
+      // 第一次的 startedAt 与第二次的合并检查。
+      vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1_000);
+      const older = handleListDevices(deps);
+      const newer = handleListDevices(deps);
+      expect(settles).toHaveLength(2);
+
+      // 先发的那条先撞上限流:期限在后发那条**已经发出之后**才被记下。
+      settles[0].reject(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt));
+      settles[1].resolve({ devices: [{ deviceId: 'dev-1', name: 'Host.local', online: true }] });
+      await expect(newer).resolves.toMatchObject({ devices: [{ name: 'Host.local' }] });
+      // 旧响应跟随新结果(既有的让位规则),不会自己再走一遍收尾。
+      await expect(older).resolves.toMatchObject({ devices: [{ name: 'Host.local' }] });
+
+      // 期限还在:后发那条的成功只清掉它发起之前的期限,并发请求刚记下的不动。
+      // (窗口内不再发物理读由路由层闸门负责;这里 apiFetch 是替身,判据直接看账本。)
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(retryAt);
+    } finally {
+      vi.restoreAllMocks();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 账号在请求在途时换过:那次响应已经不算数(then 分支也会拒),它的限流期限**整个丢弃**
+  // —— 记到新账号头上会让新账号的第一次目录读被一个它从没见过的期限拦住
+  // (Codex review #9360)。
+  it('listDevices:在途请求返回时账号已换,限流期限整个丢弃', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(async () => {
+        // 请求发出去之后换了账号。
+        metadataOwner.key = 'directory-owner-b';
+        throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt);
+      })
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 在途期间账号已换:这次响应不算数,读以「账号已换」收口。
+      await expect(handleListDevices(deps)).rejects.toThrow(/account changed/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 新账号的桶里不该有任何冷却:第一次读立刻发物理读。
+      await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      metadataOwner.key = 'directory-owner-a';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:`handleListDevices` 的限流预检(窗口内不发物理读)——
+  //   同账号只 bump 会话代次(projection 修复 / 同账号重登)之后,未过期的期限必须
+  //   仍然拦得住,`apiFetch` 不再被调用。
+  // - Bug/规则依据:Codex review #9360「Keep cooldown keys stable across same-owner
+  //   generations」—— 桶键按 `activeOwnerScopeKey()`(含代次)记时,同 owner 的
+  //   generation bump 会让旧期限不可达,另一个 `/devices` 读者直接撞进同一个服务端
+  //   限流窗口,把窗口越推越远。
+  // - 现有覆盖缺口:既有用例只覆盖换账号(整个身份换掉)与换中转,没覆盖「同账号、
+  //   只 bump 代次」这条 recovery 路径。
+  // - 最小失败输入:先撞一次 429 记下期限,再把 `metadataOwner.generation` +1(账号不变)。
+  // - tier:unit(内存 harness + 假计时无关的墙钟期限)。
+  it('listDevices:同账号只 bump 代次后,限流期限仍然拦得住', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt))
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 第一次读撞上限流:期限记进共享账本。
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 同账号只 bump 代次:服务端的限流桶没变,期限仍按账号成员记在同一个桶里。
+      metadataOwner.generation += 1;
+      expect(directoryRetryDeadline('directory-owner-a', relayScope.baseUrl)).toBe(retryAt);
+    } finally {
+      metadataOwner.generation = 0;
+      metadataOwner.key = 'directory-owner-a';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 目录读要有**总期限**:timeoutMs 只管单次 fetch,401 之后的共享登录刷新不在它里面
+  // (官方端点的刷新端点是轮换的,timeoutMs: 0 = 不超时)—— 一次目录读可以无限期挂着,
+  // 渲染侧的退避每轮都再开一条等待,越挂越多。调用方的期限信号把整条链路框住。
+  it('listDevices:整条目录读有总期限,挂死的读按暂时性失败收口', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    try {
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => no(opts.signal?.reason), { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 8 秒期限到点:整条读(含 401 之后的共享登录刷新等待)一起收口。
+      await vi.advanceTimersByTimeAsync(9_000);
+      // 超时是**暂时性**失败:statusCode 0 = 连不上,不是权威拒绝(旧快照仍可用)。
+      await expect(pending).rejects.toThrow(/设备目录读取超时/);
+    } finally {
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:`handleListDevices` 在「响应头已到、正文卡到总期限」时,
+  //   已知的非 OK 状态必须原样进到目录失效广播(`onProviderDirectoryDenied`)——
+  //   401 必须触发,200 卡住只按暂时性失败走、不触发。
+  // - Bug/规则依据:Codex review #9360「Preserve terminal status across response-body
+  //   timeouts」—— 状态被归一成 0 后 `MetadataContinuityReader.onDenied` 看不到 401/403,
+  //   缓存目录不失效,渲染侧新加的退避带着旧快照每 5–60 秒重试那个端点。
+  // - 现有覆盖缺口:上面的超时用例的 apiFetch 直接 reject,从未走到「fetch 已 resolve 出
+  //   响应、只有 json() 挂着」这条中止路径,所以没有任何用例覆盖状态保留。
+  // - 最小失败输入:apiFetch 在调用方期限到点时 reject 一个带着 httpStatus:401 的中止原因。
+  // - tier:unit(fake timers + 进程内假响应)。
+  it('listDevices:响应头已表态但正文卡到总期限,已知的 401 状态不丢', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    const denials: number[] = [];
+    const off = onProviderDirectoryDenied(() => { denials.push(Date.now()); });
+    try {
+      // 模拟 fetch 层的行为:响应头到了(401)、正文挂着,调用方期限到点时它重新抛出
+      // 中止原因,并把已知的非 OK 状态贴上去(由 serverApiClient 的测试覆盖这里怎么贴)。
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => {
+          no(Object.assign(opts.signal?.reason, { httpStatus: 401 }));
+        }, { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(9_000);
+      // 401 没有专门的 IPC code,照旧落 INTERNAL。
+      await expect(pending).rejects.toThrow();
+      // 真正的可观察结果:401 是权威拒绝,目录失效广播必须触发,渲染侧才会清掉旧快照
+      // 重读,而不是带着旧快照一直重试那个被拒的端点。
+      expect(denials).toHaveLength(1);
+    } finally {
+      off();
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 测试价值(#9360 review)
+  // - 生产入口与可观察结果:`handleListDevices` 在「响应头已表态 404、正文卡到总期限」时
+  //   抛出的是调用方自造的 TimeoutError,必须映射成 `[NOT_FOUND]` 而不是 `[INTERNAL]`。
+  // - Bug/规则依据:Codex review #9360「Preserve terminal status across response-body
+  //   timeouts」—— 只贴 statusCode 过不了 rethrowServerError 的 instanceof ServerApiError,
+  //   渲染侧不把 [INTERNAL] 当终态,按 5–60 秒一直追问一个已经不存在的端点。
+  // - 现有覆盖缺口:上面的 401 用例只断言目录失效广播,404/400/409 不走广播、只靠 IPC code,
+  //   没有任何用例覆盖这条映射。
+  // - 最小失败输入:apiFetch 在期限到点 reject 一个带 httpStatus:404 的中止原因。
+  // - 反向验证:把 ServerApiError 包装撤掉,这条用例变红。
+  // - tier:unit(fake timers + 进程内假响应)。
+  it('listDevices:响应头已表态 404 但正文卡到总期限,按 NOT_FOUND 收口而不是 INTERNAL', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    try {
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => {
+          no(Object.assign(opts.signal?.reason, { httpStatus: 404 }));
+        }, { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      await vi.advanceTimersByTimeAsync(9_000);
+      await expect(pending).rejects.toThrow('[NOT_FOUND]');
+    } finally {
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 反例:200 + 卡住的正文仍旧是暂时性失败。带了状态上去会把一次超时当成权威响应,
+  // 有界旧快照会被一起丢掉(Codex review #9360 同一处)。
+  it('listDevices:200 响应正文卡到总期限,仍按暂时性失败收口', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    const denials: number[] = [];
+    const off = onProviderDirectoryDenied(() => { denials.push(Date.now()); });
+    try {
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => {
+          // 200 不贴状态:fetch 层只带非 OK 的响应状态。
+          no(opts.signal?.reason);
+        }, { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(9_000);
+      await expect(pending).rejects.toThrow();
+      // 暂时性失败不广播失效:旧快照仍可用,不必清掉重来。
+      expect(denials).toHaveLength(0);
+    } finally {
+      off();
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
 
   // Integration: a stale REST directory row is marked online only through the
   // target's current verified data path; the real provider-group directory
@@ -570,6 +960,31 @@ describe('device-link IPC handlers', () => {
 
   // Unit: relay presence is not the group data-path state. Projection may keep
   // an authenticated path online and control-ready, but must not grant local control.
+  // 只有一条腿读到的目录(混合发现):行是新鲜的,但「缺席」证明不了另一条腿上的设备已经
+  // 不在了(配对的设备可以关掉 V2 只走 V1)。权威动作一概不做:不按缺席剪 presence 视图、
+  // 不把名字当成持久真相(Codex review #9360「Keep one-leg hybrid results
+  // non-authoritative」)。
+  // 最小失败输入:apiFetch 返回 { devices:[...], partial:true }。tier:unit(同一 harness)。
+  it('listDevices: 只有一条腿读到的目录不按权威目录处理', async () => {
+    const device = {
+      deviceId: 'dev-1', name: 'Peer', selfName: 'Host.local', platform: 'darwin', lastSeenAt: null,
+      online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+    };
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => ({ devices: [device], partial: true }) as T;
+    const deps = makeDeps({
+      apiFetch,
+      rememberLastKnownDeviceName: vi.fn(async () => true),
+      applyControllerPresenceListSnapshot: vi.fn(),
+    });
+    await expect(handleListDevices(deps)).resolves.toMatchObject({
+      partial: true,
+      devices: [{ deviceId: 'dev-1', name: 'Peer' }],
+    });
+    expect(deps.applyControllerPresenceListSnapshot).not.toHaveBeenCalled();
+    expect(deps.applyControllerDisplayNameListSnapshot).not.toHaveBeenCalled();
+    expect(deps.rememberLastKnownDeviceName).not.toHaveBeenCalled();
+  });
+
   it('listDevices: projects a retained group path as control-ready without granting local control or reviving other devices', async () => {
     const deps = makeDeps({
       apiFetch: vi.fn().mockResolvedValue({ devices: ['executor', 'explicitly-off', 'fresh-off', 'phone', 'other'].map(deviceId => ({

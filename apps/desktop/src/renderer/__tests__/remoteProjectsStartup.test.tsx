@@ -423,6 +423,49 @@ it.each(['deleted', 'refused'] as const)('handles confirmed deletion before the 
   unmount();
 });
 
+// #9360 review: an authoritative denial must not survive a genuine reconnect.
+// The stale flag made the first post-reconnect read look denied, so a transient
+// failure there suppressed the bounded retry for good (an always-online peer never
+// emits another status event, so the directory stayed unavailable).
+it('retries the directory after a reconnect when the first read fails transiently', async () => {
+  vi.useFakeTimers();
+  let onStatus!: (payload: { status: string }) => void;
+  let onInvalidated!: () => void;
+  const listen = () => () => {};
+  const listDevices = vi.fn().mockRejectedValue(new Error('directory unavailable'));
+  const api = {
+    getState: async () => ({ linkStatus: 'online' }),
+    listDevices,
+    deleteDevice: vi.fn(async () => ({ deviceId: 'peer' })),
+    subscribe: vi.fn(async () => {}),
+    unsubscribe: vi.fn(async () => {}),
+    onPresenceChanged: listen,
+    onStatusChanged: (callback: typeof onStatus) => { onStatus = callback; return () => {}; },
+    onAccessRevoked: listen,
+    onControlTargetChanged: listen,
+    onRemotePush: listen,
+    onResponsivenessChanged: listen,
+    onDeviceDirectoryInvalidated: (callback: () => void) => { onInvalidated = callback; return () => {}; },
+  };
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { deviceLink: api } });
+  const { unmount } = renderHook(() => {
+    useDeviceLinkRemoteProjects();
+  });
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  // The server authoritatively invalidated the directory.
+  await act(async () => { onInvalidated(); });
+  // An ordinary relay reconnect: connecting, then online.
+  await act(async () => { onStatus({ status: 'connecting' }); });
+  await act(async () => { onStatus({ status: 'online' }); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  const afterReconnect = listDevices.mock.calls.length;
+  // The read after the reconnect failed transiently: the bounded retry must still
+  // be scheduled (5s base), otherwise the directory stays unavailable for good.
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(listDevices.mock.calls.length).toBeGreaterThan(afterReconnect);
+  unmount();
+});
+
 it('ignores a directory snapshot started before confirmed deletion', async () => {
   vi.useFakeTimers();
   let finishDirectory!: (value: { devices: unknown[] }) => void;

@@ -48,6 +48,9 @@ agentNetRequiresEncryption: () => mocks.onlyEncrypted, agentNetSelectionKey: () 
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.scope, isAppSessionBoundaryPending: () => false }));
 
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi.desktop';
+import { __resetDeviceDirectoryUnionForTests } from '../agentNetDeviceDirectory';
+import { invalidateProviderDirectoryContinuity } from '../providerMetadataContinuity';
+import { __resetDirectoryThrottleForTests, recordDirectoryRetryDeadline, setDirectoryThrottleOwnerSource } from '../directoryThrottle';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting';
 import { remoteLocalAgentModels } from '../../local-agent/remoteCatalog.js';
 
@@ -64,9 +67,13 @@ describe('deviceLinkApiFetch', () => {
     mocks.relay = null;
     mocks.officialBase = 'https://device-link.official.invalid';
     mocks.hasV2 = false; mocks.scope = 'owner-a';
+    // 账本按账号分桶:登记 owner 源,否则账本 owner 恒为 '' ,换账号的用例测不到。
+    setDirectoryThrottleOwnerSource(() => mocks.scope);
+    __resetDirectoryThrottleForTests();
     mocks.v2Active = false; mocks.onlyEncrypted = false; mocks.selection = 'route-a';
     mocks.readV2Secrets.mockReset().mockImplementation(() => mocks.hasV2 ? { agentNet: {} } : null);
     mocks.v2Directory.mockReset(); mocks.v2Request.mockReset().mockResolvedValue({});
+    __resetDeviceDirectoryUnionForTests();
   });
   // Lazy V2 discovery is an await boundary even for a legacy-only deployment. The captured route's
   // owner generation must be checked before sending any legacy mutation (unit tier, real API adapter).
@@ -99,6 +106,137 @@ describe('deviceLinkApiFetch', () => {
     expect(mocks.v2Request).not.toHaveBeenCalled(); expect(mocks.netFetch).not.toHaveBeenCalled();
   });
 
+  // 调用方的总期限必须管住**加密那一腿**:加密目录读自带 10 秒超时,不带 signal 时调用方
+  // 到期后它还活着,下一次重试会在它还在飞的时候再发一条物理读(Codex review #9360
+  // 「Apply the caller deadline to the Agent Net directory read」)。
+  // 最小失败输入:V2 激活 + 只走加密 + 调用方 abort;修复前 V2 读拿到的是 undefined signal,
+  // abort 之后它仍要等自己的超时。tier:unit(真实 deviceLinkApi + agentNetDirectory,electron
+  // net / agent-net 运行时为进程内 fake)。
+  it('applies the caller deadline to the encrypted directory read', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = true;
+    let aborted = false;
+    mocks.v2Directory.mockImplementation((signal?: AbortSignal) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => {
+        aborted = true;
+        reject(new Error('the directory read was aborted'));
+      }, { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch('/api/device-link/devices', { signal: controller.signal })
+      .then(() => { throw new Error('the aborted directory read must not succeed'); }, (error: unknown) => error);
+    await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(1));
+    expect(mocks.v2Directory).toHaveBeenCalledWith(controller.signal);
+    controller.abort();
+    const error = await pending;
+    expect(aborted).toBe(true);
+    expect(String((error as Error)?.message ?? error)).toContain('aborted');
+  });
+
+  // 这份并集必须跟着**当前目录**走:改了名 / 删了设备(目录代次变了)之后,被删掉的设备
+  // 不能因为每次部分读都续一次 30 分钟预算而一直复活(Codex review #9360「Fence the
+  // remembered union to the active directory」)。
+  // 最小失败输入:一次完整目录 → 目录作废(改名 / 删除) → 一条腿卡住;并集里的旧设备
+  // 不该再回来。tier:unit(真实 deviceLinkApi + 真实 readCurrentDeviceDirectory)。
+  it('drops the remembered union once the directory is invalidated', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = false;
+    mocks.v2Directory.mockResolvedValue([{ certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true }]);
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({
+      devices: [{ deviceId: 'v1-peer', name: 'V1 Peer', online: true }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const complete = await deviceLinkApiFetch<{ devices: Array<{ deviceId: string }> }>('/api/device-link/devices');
+    expect(complete.devices.map((device) => device.deviceId).sort()).toEqual(['v1-peer', 'v2-peer']);
+    // 改名 / 删除设备:目录代次作废,上一次完整目录不再作数。
+    invalidateProviderDirectoryContinuity();
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => new Promise((_resolve, reject) => {
+      opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string }>; partial?: boolean }>('/api/device-link/devices', { signal: controller.signal });
+    await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(2));
+    controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+    const partial = await pending;
+    expect(partial.partial).toBe(true);
+    expect(partial.devices.map((device) => device.deviceId)).toEqual(['v2-peer']);
+  });
+
+  // 活下来的那条腿说不了另一条路的账:它可能只是因为对端关掉了 V2 才把对方列成离线。
+  // 没有当前数据通路的权威证据时,不能用「离线」覆盖记忆里「活着」的行(与完整合并
+  // 同一道护栏)(Codex review #9360「Do not downgrade live rows from a partial leg」)。
+  // 最小失败输入:完整目录里 v1-peer 在线 → 旧版腿卡住,V2 腿把 v1-peer 列成离线。
+  it('does not downgrade a live remembered row with an offline row from the surviving leg', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = false;
+    mocks.v2Directory.mockResolvedValue([{ certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true }]);
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({
+      devices: [{ deviceId: 'v1-peer', name: 'V1 Peer', online: true }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    await deviceLinkApiFetch('/api/device-link/devices');
+    // 旧版腿卡住;活下来的 V2 腿把 v1-peer 标成离线(V2 在对端关掉了)。
+    mocks.v2Directory.mockResolvedValue([
+      { certificate: { deviceId: 'v1-peer' }, name: 'V1 Peer', online: false },
+      { certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true },
+    ]);
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => new Promise((_resolve, reject) => {
+      opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string; online: boolean }>; partial?: boolean }>('/api/device-link/devices', { signal: controller.signal });
+    await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(2));
+    controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+    const partial = await pending;
+    expect(partial.partial).toBe(true);
+    expect(partial.devices.find((device) => device.deviceId === 'v1-peer')?.online).toBe(true);
+  });
+
+  // 混合发现里一条腿卡到**调用方的总期限**时,不能把另一条已经读成的腿一起拖掉:中止错误
+  // 不带 code / status,`isTemporaryProviderMetadataFailure` 认不出来,健康的那条线路会跟着
+  // 变得不可用(Codex review #9360「Classify deadline aborts before hybrid fallback」)。
+  // 最小失败输入:V2 激活 + V2 腿成立 + 旧版 REST 腿挂到调用方 abort。tier:unit(真实
+  // deviceLinkApi + 真实 readCurrentDeviceDirectory,electron net / agent-net 运行时为 fake)。
+  it('keeps the fulfilled leg when the peer leg reaches the caller deadline', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = false;
+    mocks.v2Directory.mockResolvedValue([{ certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true }]);
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => new Promise((_resolve, reject) => {
+      opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string }>; partial?: boolean }>('/api/device-link/devices', { signal: controller.signal });
+    await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(1));
+    controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+    const result = await pending;
+    expect(result.devices.map((device) => device.deviceId)).toEqual(['v2-peer']);
+    // 只有一条腿读到 = **不能证明缺席**:上层据此不把它当权威目录。
+    expect(result.partial).toBe(true);
+  });
+
+  // 一条腿读到时,它的「缺席」证明不了另一条腿上的设备已经不在了(配对的设备可以关掉
+  // V2 只走 V1):把这份缺席当权威会把那些设备从目录里抹掉(Codex review #9360
+  // 「Keep one-leg hybrid results non-authoritative」)。上一次**完整**目录里的行必须
+  // 并回来。
+  // 最小失败输入:先读一次完整目录(旧版腿有 v1-peer、V2 腿有 v2-peer),再让旧版腿挂到
+  // 调用方期限;只答 V2 那条腿。tier:unit(真实 deviceLinkApi + 真实
+  // readCurrentDeviceDirectory,electron net / agent-net 运行时为 fake)。
+  it('keeps the last complete directory when only one leg answers', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = false;
+    mocks.v2Directory.mockResolvedValue([{ certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true }]);
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({
+      devices: [{ deviceId: 'v1-peer', name: 'V1 Peer', online: true }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const complete = await deviceLinkApiFetch<{ devices: Array<{ deviceId: string }>; partial?: boolean }>('/api/device-link/devices');
+    expect(complete.devices.map((device) => device.deviceId).sort()).toEqual(['v1-peer', 'v2-peer']);
+    expect(complete.partial).toBeUndefined();
+    // 第二轮:旧版 REST 腿挂到调用方期限,只有 V2 那条腿答得上来。
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => new Promise((_resolve, reject) => {
+      opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string }>; partial?: boolean }>('/api/device-link/devices', { signal: controller.signal });
+    await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(2));
+    controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+    const partial = await pending;
+    expect(partial.partial).toBe(true);
+    expect(partial.devices.map((device) => device.deviceId).sort()).toEqual(['v1-peer', 'v2-peer']);
+  });
+
   // /models 复用真实目录读取与 API 路由；旧 caller 直接用 serverApiFetch 会把官方 token 发到自建中转。
   // 最小输入为自建路由 + 空设备目录，不能仅 mock 新 helper，否则会漏掉 caller 未迁移的问题。tier: unit。
   it('uses the relay credential when the local Agent reads its remote model directory', async () => {
@@ -110,6 +248,29 @@ describe('deviceLinkApiFetch', () => {
     await expect(remoteLocalAgentModels(() => true)).resolves.toEqual([]);
     expect(lastRequest()).toEqual({ url: 'http://192.168.1.20:47820/api/device-link/devices', authorization: 'CindyRelay relay-credential' });
     expect(mocks.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  // 目录限流是**共享账本**:读 `/devices` 的不止 IPC 那一条路(还有 relay 上线补展示名、
+  // 远程模型目录)。谁收到 429 都记账,窗口内**所有**读者都不再发物理读 —— 只在 IPC 那条
+  // 路上记账时,另外两条照发,共享的限流窗口会被它们一路推后(Codex review #9360
+  // 「Share the directory cooldown across all /devices readers」)。
+  it('shares the directory cooldown with every reader of the device directory', async () => {
+    try {
+      mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({ message: 'rate limited' }), {
+        status: 429,
+        headers: { 'Retry-After': '60' },
+      }));
+      // 第一次:远程模型目录读到 429,期限进共享账本。
+      await expect(remoteLocalAgentModels(() => true)).resolves.toEqual([]);
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+
+      // 窗口内换一个调用方:账本命中,连物理读都不发(而不是又去撞一次 429)。
+      await expect(remoteLocalAgentModels(() => true)).resolves.toEqual([]);
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      // 账本是模块级共享状态:留给下一个用例就等于替它限流。
+      __resetDirectoryThrottleForTests();
+    }
   });
 
   // 共享任务附件只存在于官方存储:走自建中转时也必须带账号 token 发往官方,不能落到中转。
@@ -178,6 +339,137 @@ describe('deviceLinkApiFetch', () => {
     ]);
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
     expect(mocks.invalidateSession).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:`deviceLinkApiFetch('/api/device-link/devices')` 经真实 `serverApiFetch`
+  //   的 401 刷新重试 —— 断言换端点后的那一跳**没有**发出物理请求、以带期限的 429 拒绝。
+  // - Bug/规则依据:Codex review #9360「Recheck cooldown after refresh changes endpoints」:
+  //   外层只查了进请求时的桶,刷新把请求换到已在限流窗口里的新端点时,那次物理重试照发,
+  //   会把新端点的限流窗口越推越远。
+  // - 现有覆盖缺口:上面的换端点用例只验证了重试**发到**新端点;账本命中新端点桶的场景从未被测。
+  // - 最小失败输入:新端点的桶已记期限 + 官方 `/devices` 首跳 401 TOKEN_EXPIRED、刷新把
+  //   `getClientEndpoint` 切到该端点。
+  // - tier:unit(electron net 与 authManager 为进程内 fake)。
+  it("rechecks the refreshed endpoint's directory cooldown before the retry hop", async () => {
+    try {
+      // 新端点的桶已在限流窗口里;进请求时的旧端点没有 —— 外层检查放行,拦得住的只有每跳复查。
+      recordDirectoryRetryDeadline('owner-a', 'https://device-link.new-region.invalid', Date.now() + 60_000);
+      mocks.netFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { code: 'TOKEN_EXPIRED' } }), { status: 401 }),
+      );
+      mocks.refresh.mockImplementationOnce(async () => {
+        mocks.officialBase = 'https://device-link.new-region.invalid';
+        return true;
+      });
+
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+
+      // 第二跳(新端点)被账本拦下:整个过程只发过一次物理读。
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      expect(mocks.refresh).toHaveBeenCalledTimes(1);
+      // 401 已被刷新接走、没拿到第二次权威 401:限流拦下不能算作会话失效。
+      expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    } finally {
+      // 账本是模块级共享状态:留给下一个用例就等于替它限流。
+      __resetDirectoryThrottleForTests();
+    }
+  });
+
+  // 测试价值(#9360 review)
+  // - 生产入口与可观察结果:`deviceLinkApiFetch('/api/device-link/devices')` 经真实
+  //   `serverApiFetch` 的 401 刷新重试 —— 刷新期间换了账号后,那一跳带的是新账号的 token,
+  //   必须按**新账号**的桶复查冷却:新账号的桶还在窗口里就以 429 拒绝,不再发第二跳。
+  // - Bug/规则依据:Codex review #9360「Recheck cooldowns after account switches」——
+  //   owner 变化分支直接放行,会用新账号的请求去撞新账号自己没过期的限流窗口,把窗口推后。
+  // - 现有覆盖缺口:上面的用例只覆盖「同一账号、换端点」;账本 owner 此前恒为 '',换账号
+  //   这条路径没有任何用例。
+  // - 最小失败输入:owner-b 的桶已记期限 + 首跳以 owner-a 发出并 401,刷新回调里把 scope
+  //   切到 owner-b。
+  // - 反向验证:把复查改回「owner 变了就放行」,这条用例变红(第二跳照发)。
+  // - tier:unit(electron net 与 authManager 为进程内 fake)。
+  it('rechecks the new account cooldown when the account changes during refresh', async () => {
+    recordDirectoryRetryDeadline('owner-b', 'https://device-link.official.invalid', Date.now() + 60_000);
+    mocks.netFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { code: 'TOKEN_EXPIRED' } }), { status: 401 }),
+    );
+    mocks.refresh.mockImplementationOnce(async () => {
+      mocks.scope = 'owner-b';
+      return true;
+    });
+
+    await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+
+    // 第二跳(新账号)被新账号自己的桶拦下:整个过程只发过一次物理读。
+    expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.invalidateSession).not.toHaveBeenCalled();
+  });
+
+  // 测试价值(#9360 review)
+  // - 生产入口与可观察结果:真实 `deviceLinkApiFetch` 的限流闸门(throttledDirectoryRead)
+  //   —— 窗口内不发物理读、按中转分桶、中转来回切后原桶仍有效、同账号只 bump 代次不失效。
+  //   这道闸门此前由 IPC 层的预检承担,预检挡在路由之前会把 V2 那一腿一起拦掉,已删除;
+  //   行为改由这里的共享闸门承担,断言跟着搬过来。
+  // - Bug/规则依据:Codex review #9360 的冷却分桶系列(换中转不继承、来回切保留、同账号
+  //   代次稳定)。
+  // - 最小失败输入:先记一次 429 的期限,再按下面四种方式发起下一次读。
+  // - tier:unit。
+  describe('directory cooldown gate (REST 腿)', () => {
+    const limited = () => new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'rate limited' } }), {
+      status: 429,
+      headers: { 'Retry-After': '60' },
+    });
+
+    it('窗口内不再发物理读', async () => {
+      mocks.netFetch.mockResolvedValueOnce(limited());
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      // 窗口内的第二次读:闸门直接拒绝,不再发物理读。
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('换中转后不继承上一个中转的限流期限', async () => {
+      mocks.relay = {
+        baseUrl: 'http://relay-a.test.invalid', credential: 'relay-credential', role: 'member',
+        relayId: 'r', name: 'Home', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43),
+      };
+      mocks.netFetch.mockResolvedValueOnce(limited()).mockResolvedValue(new Response(JSON.stringify({ devices: [] }), { status: 200 }));
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      // 换中转:新的限流桶,立刻发物理读。
+      mocks.relay = { ...mocks.relay, baseUrl: 'http://relay-b.test.invalid' };
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).resolves.toEqual({ devices: [] });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('中转来回切后回到原中转,原中转的限流期限仍然有效', async () => {
+      const relayOf = (base: string) => ({
+        baseUrl: base, credential: 'relay-credential', role: 'member' as const,
+        relayId: 'r', name: 'Home', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43),
+      });
+      mocks.relay = relayOf('http://relay-a.test.invalid');
+      mocks.netFetch.mockResolvedValueOnce(limited()).mockResolvedValueOnce(limited());
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      mocks.relay = relayOf('http://relay-b.test.invalid');
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(2);
+      // 切回 A:A 的窗口还在,不再发物理读。
+      mocks.relay = relayOf('http://relay-a.test.invalid');
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('同账号只 bump 代次后,限流期限仍然拦得住', async () => {
+      mocks.netFetch.mockResolvedValueOnce(limited());
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      // 同账号只 bump 代次(scope 的冒号后半段):桶身份不变,窗口照旧拦得住。
+      mocks.scope = 'owner-a:generation-2';
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('keeps the official relay on the account token', async () => {

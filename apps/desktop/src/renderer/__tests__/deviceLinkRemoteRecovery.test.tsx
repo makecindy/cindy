@@ -96,6 +96,7 @@ beforeEach(() => {
       'onStatusChanged',
       'onAccessRevoked',
       'onControlTargetChanged',
+      'onDeviceDirectoryInvalidated',
     ].map((name) => [
       name,
       (listener: Listener) => {
@@ -475,6 +476,264 @@ describe('multi-device recovery lifecycle', () => {
     act(() => visibility('visible'));
     await settle();
     expect(indexReads()).toBe(1);
+  });
+});
+
+// #9342: relay 重连后主进程清掉了 presence 视图,目录补齐又失败过一次 → listDevices 只
+// 返回有界旧快照,里面每台设备都是 offline。那不是 presence 证据:拿它当离线判据会把在线
+// 设备移出同步名单,而 presence 是增量流,一直在线的设备不会再发 presence —— 没有任何事件
+// 会把它加回来,只能重启 Cindy。
+describe('stale device directory', () => {
+  const stalePeers = () => peers.map((peer) => ({ ...peer, online: false }));
+
+  it('keeps an online peer in the sync list when the directory only has a stale snapshot', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    let stale = false;
+    listDevices.mockImplementation(async () => (stale
+      ? { devices: stalePeers(), stale: true }
+      : { devices: peers }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(remoteProjectsStore.hasDevice('healthy')).toBe(true);
+
+    // relay 掉线再上线:主进程的 presence 视图已被清空,目录补齐失败 → 只剩旧快照。
+    stale = true;
+    act(() => listeners.onStatusChanged({ status: 'connecting', directDataDeviceIds: [] }));
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+
+    // 设备仍在同步名单里:周期对账照常读它的会话列表(修复前它已被移出名单,不再有读取)。
+    invoke.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(
+      invoke.mock.calls.filter(([peer, channel]) => peer === 'healthy' && channel === 'local-db:sessions:list'),
+    ).not.toHaveLength(0);
+  });
+
+  // 旧快照最多 30 分钟有界,过期后连旧快照都没有。目录读不到时必须有有界重读,
+  // 否则重连后的视图永远停在「目录不可用」上,只能等重启。
+  it('re-reads the directory with backoff until a fresh directory arrives', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    let stale = true;
+    listDevices.mockImplementation(async () => (stale
+      ? { devices: stalePeers(), stale: true }
+      : { devices: peers }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+
+    // 5 秒后重读一次。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
+    // 退避翻倍:下一次在 10 秒后,不是 5 秒后。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 2);
+
+    // 拿到新目录后不再重读。
+    stale = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    const afterFresh = listDevices.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(afterFresh);
+  });
+
+  // 目录被**权威作废**(main 侧确认 401/403 后广播)后不该再按 5–60 秒的节奏追问:
+  // 每问一次都被再拒一次、再广播一次,读永远拿不到结果,只是把请求放大 —— relay 明明
+  // 在线,用户看到的却是「一直在转」。
+  it('stops re-reading the directory once it is authoritatively invalidated', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockRejectedValue(new Error('forbidden'));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    expect(initial).toBeGreaterThan(0);
+
+    // 权威作废事件 → 停掉目录重读。
+    act(() => listeners.onDeviceDirectoryInvalidated({}));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+  });
+
+  // main 侧 `rethrowServerError` 把终态 4xx 映射成 IPC 码(404→NOT_FOUND、409→ALREADY_EXISTS、
+  // 400→INVALID_PARAMS)。这种失败重问不会变好:与作废推送同一档收口,不再按 5–60 秒追问。
+  // 测试价值
+  // - 生产入口与可观察结果:useDeviceLinkRemoteProjects 的 reseed(listDevices) catch 分支 ——
+  //   断言带终态 IPC 码的拒绝之后不再定时重读,relay 重连时仍会再读一轮。
+  // - Bug/规则依据:Codex review #9360「Stop retrying terminal directory responses」:400/404
+  //   没有作废推送(main 只对 401/403 广播),目录退避会对着它一直追问到进程结束。
+  // - 现有覆盖缺口:既有用例只覆盖「作废推送」收口与**无码**瞬时失败继续退避,没覆盖按 IPC
+  //   码可判的终态失败。
+  // - 最小失败输入:listDevices 以 `[NOT_FOUND]` 拒绝、relay 在线、无作废推送,推进 120 秒。
+  // - tier:unit(electronAPI 为进程内 fake,假计时器)。
+  it('stops re-reading the directory when listDevices fails with a terminal IPC error', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockRejectedValue(
+      new Error("Error invoking remote method 'deviceLink:listDevices': Error: [NOT_FOUND] directory gone"),
+    );
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    expect(initial).toBeGreaterThan(0);
+
+    // relay 在线、也没有作废推送:仍然不再按 5–60 秒追问。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+
+    // 收口只对当前这次连接有效:relay 重连(relay 侧动过了)必须再读一轮 ——
+    // 还是终态失败就再停,不是把目录永久摁死到重启。
+    act(() => listeners.onStatusChanged({ status: 'connecting', directDataDeviceIds: [] }));
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:useDeviceLinkRemoteProjects 的目录退避 ——
+  //   `getState` 拒绝、状态仍未知时,`scheduleDirectoryRetry` 不起 5–60 秒的物理读循环;
+  //   状态 push 到 `online`(在线转换)后再读一轮。
+  // - Bug/规则依据:Codex review #9360「Pause directory retries until relay status is
+  //   known」—— 状态未知时退避只拦 `false`,一次失败的 /devices 就会在每个挂载窗口里
+  //   起循环,而 relay 可能已经停掉,且没有事件保证把它停掉。
+  // - 现有覆盖缺口:既有退避用例的 getState 都 resolve 成 `online`,没覆盖状态未知这条路径。
+  // - 最小失败输入:getState 拒绝、listDevices 拒绝,推进 120 秒后断言调用数不增长。
+  // - tier:unit(electronAPI 为进程内 fake,假计时器)。
+  it('does not arm the directory retry loop while the link status is still unknown', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockRejectedValue(new Error('directory unavailable'));
+    getState.mockRejectedValue(new Error('getState unavailable'));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    expect(initial).toBeGreaterThan(0);
+
+    // 状态未知:推进 120 秒也不该起 5–60 秒的物理读循环。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+
+    // 恢复挂在状态转换上:push 到 online 必须再读一轮(之后退避照常,状态已知)。
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+  });
+
+  // 跳过旧快照的 offline 行不能把冷缓存设备永远留在「检测中」:缓存种入时标 connecting,
+  // 而宽限计时器只在 relay 不在线时才降级 —— relay 在线时没人收口,它会一直「检测中」。
+  // 旧快照的 offline 至少能证明此刻连不上,收成离线(与跳过之前的呈现一致)。
+  it('settles a cold-cache device the stale snapshot reports as offline', async () => {
+    vi.mocked(readCachedSessionList).mockImplementation(async () => ([
+      { deviceId: 'cached', deviceName: 'cached', sessions: [{ id: 's-cached' }] },
+    ]) as never);
+    onTestFinished(() => {
+      vi.mocked(readCachedSessionList).mockImplementation(async () => []);
+    });
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockImplementation(async () => ({
+      devices: [{ deviceId: 'cached', name: 'cached', online: false, remoteControlEnabled: false, isSelf: false }],
+      stale: true,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const status = () => remoteProjectsStore.getDeviceSessions('cached')[0]?.deviceLinkConnectionStatus;
+    expect(status()).toBe('disconnected');
+  });
+
+  // 服务端限流给了重试期限:退避要让过那个期限,否则每个挂载窗口都在限流窗口里继续追问。
+  it('waits for the server retry deadline before re-reading a rate-limited directory', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 30_000;
+    listDevices.mockImplementation(async () => ({
+      devices: stalePeers(), stale: true, retryAtMs: deadline,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    // 自己的阶梯是 5 秒,但期限在 30 秒后:15 秒时不该重读。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+    // 过了期限才重读。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
+  });
+
+  // Chromium 计时器的延时是 32 位有符号毫秒:服务端给的 Retry-After 超过 ~24.8 天时,单次
+  // setTimeout 溢出成「立刻触发」,退避变成对目录读的紧追循环。超过上限的等待必须按上限
+  // 分片,每片到点按墙上时钟重新核对(Codex review #9360)。
+  it('chunks a retry deadline beyond the 32-bit timer limit instead of tight-looping', async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 3_000_000_000; // > 2^31 - 1(~24.8 天)
+    listDevices.mockImplementation(async () => ({
+      devices: stalePeers(), stale: true, retryAtMs: deadline,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    // 任何一片的延时都不该越过 32 位上限(溢出 = 立刻触发 = 紧追循环)。
+    const delays = setTimeoutSpy.mock.calls
+      .map((call) => call[1])
+      .filter((value): value is number => typeof value === 'number');
+    expect(delays.length).toBeGreaterThan(0);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(2_147_483_647);
+    const initial = listDevices.mock.calls.length;
+    // 上限之内的推进不触发重读。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+    // 分片走完、墙上期限到点之后,重读恢复(之后按自己的退避阶梯继续,这里不逐一数)。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000_000_000);
+    });
+    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+  });
+
+  // 账号边界:main 侧按 owner 记限流期限,渲染侧也得跟着清 —— 否则新账号的目录读失败时,
+  // 退避会一直等到上一个账号留下的期限。
+  it('clears the server retry deadline when the relay stops', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 60_000;
+    listDevices.mockImplementation(async () => ({
+      devices: stalePeers(), stale: true, retryAtMs: deadline,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+
+    // 登出 / relay 停止 = 账号边界。
+    act(() => listeners.onStatusChanged({ status: 'stopped', directDataDeviceIds: [] }));
+    // 新账号上线,目录读失败 → 退避按自己的阶梯(5 秒)走,不等旧期限(60 秒)。
+    listDevices.mockImplementation(async () => {
+      throw new Error('relay unavailable');
+    });
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+    const afterOnline = listDevices.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(afterOnline + 1);
   });
 });
 

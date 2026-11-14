@@ -23,6 +23,11 @@ const removalSubs = new Set<(deviceId: string) => void>();
 let started = false;
 const DEVICE_LIST_RETRY_BASE_MS = 2_000;
 const DEVICE_LIST_RETRY_MAX_MS = 30_000;
+/**
+ * setTimeout 的延时上限:32 位有符号毫秒。超过它的延时会被截断成「立刻触发」——
+ * 服务端给一个超大的 Retry-After 时,渲染进程会变成紧密的 listDevices 循环。
+ */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 export type DeviceLinkDeviceListStatus = 'loading' | 'ready' | 'error';
 export interface DeviceLinkDeviceListRequestState {
   status: DeviceLinkDeviceListStatus;
@@ -362,6 +367,11 @@ function ensureStarted(): void {
   let linkStatusRevision = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retryDelayMs = 0;
+  /**
+   * 服务端限流给出的目录重试期限(墙钟 ms):重读要让过那个期限,否则限流窗口里
+   * 每个挂载的窗口都继续追问,延长限流并放大共享目录压力。
+   */
+  let retryDeadlineMs = 0;
   let backgroundRetryGeneration: number | null = null;
   let backgroundRetryRefreshPending = false;
   let backgroundRetryReplayActive = false;
@@ -394,12 +404,27 @@ function ensureStarted(): void {
   const scheduleRetry = (): void => {
     if (retryTimer !== null || linkStatus === 'stopped') return;
     retryDelayMs = nextDeviceListRetryDelay(retryDelayMs);
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
-      // 后台恢复不能把已结算的目录重新打回 initialRequestSettled=false；否则持久化的
-      // 远端选择会在每次退避尝试时暂时恢复、遮住本地侧栏。请求仍在飞，但选择/加载态保持稳定。
-      refresh(false, true);
-    }, retryDelayMs);
+    // 服务端明确说了多久之后再问(429 的 Retry-After):退避要让过那个期限。
+    const wait = Math.max(retryDelayMs, Math.max(0, retryDeadlineMs - Date.now()));
+    // setTimeout 的延时是 32 位有符号毫秒:超过 2^31-1 会被截断成「立刻触发」——
+    // 渲染进程里就是一个紧密的 listDevices 循环(main 还会同步返回旧快照)。
+    // 拆成最大块,每块结束后按**墙上时钟**重新算还差多久(与远端项目那份同一口径)。
+    const armRetry = (remainingMs: number): void => {
+      const chunk = Math.min(Math.max(0, remainingMs), MAX_TIMER_DELAY_MS);
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        const left = Math.max(0, retryDeadlineMs - Date.now());
+        // 还有整块没走完(只有超大的服务端期限才会走到这里):接着等剩下的。
+        if (left > 0 && chunk >= MAX_TIMER_DELAY_MS) {
+          armRetry(left);
+          return;
+        }
+        // 后台恢复不能把已结算的目录重新打回 initialRequestSettled=false；否则持久化的
+        // 远端选择会在每次退避尝试时暂时恢复、遮住本地侧栏。请求仍在飞，但选择/加载态保持稳定。
+        refresh(false, true);
+      }, chunk);
+    };
+    armRetry(wait);
   };
 
   const enterLoading = (): void => {
@@ -468,12 +493,28 @@ function ensureStarted(): void {
       }
       clearRetryTimer();
       retryDelayMs = 0;
+      // 服务端限流期限:记住了就让下一次退避让过它;拿到权威目录 = 没有在限流,期限作废。
+      // A **partial** directory (only one hybrid leg answered) is fresh for the
+      // rows it carries but proves no absence: the server may still be limiting
+      // reads, and the missing leg's devices are not gone (Codex review #9360
+      // 「Keep one-leg hybrid results non-authoritative」).
+      const authoritative = result?.stale !== true && result?.partial !== true;
+      if (typeof result?.retryAtMs === 'number' && Number.isFinite(result.retryAtMs)) {
+        retryDeadlineMs = Math.max(retryDeadlineMs, result.retryAtMs);
+      } else if (authoritative) {
+        retryDeadlineMs = 0;
+      }
       const displayed = setDevices(list, result?.displayBudget
         ? { requestedAt, remainingMs: result.displayBudget.remainingMs } : undefined,
-      result?.stale !== true);
+      authoritative);
       // A source already retired cannot be refreshed into validity by another
       // stale answer. Keep the normal retry cadence instead of a tight loop.
-      if (!displayed && !directoryRetireReplayPending) scheduleRetry();
+      // A **partial** directory is displayed but still missing one leg's devices:
+      // schedule a retry even though rows were shown, so the switcher converges
+      // instead of waiting for the 30-minute budget to expire or for an unrelated
+      // push (Codex review #9360「Retry the missing leg after displaying a partial
+      // list」). The Retry-After deadline still wins over the backoff.
+      if ((!displayed || result?.partial === true) && !directoryRetireReplayPending) scheduleRetry();
     } catch (error) {
       // 只有最新请求的失败才算本轮首拉已经结算；更晚的 refresh 仍在途时继续等待它。
       if (gen !== loadGeneration) {
@@ -530,6 +571,10 @@ function ensureStarted(): void {
       // 重新登录 → relay 重连到 'online' 时下面重新拉取。
       clearRetryTimer();
       retryDelayMs = 0;
+      // 账号边界:上一个账号的限流期限不该被下一个账号继承(main 侧按 owner 记期限,
+      // 渲染侧这份模块级单例同理)。留着它,新账号的第一次目录读失败就会一直等到
+      // 旧期限 —— 换账号后的恢复被上一个账号的限流窗口拖住。
+      retryDeadlineMs = 0;
       clearDevices();
       backgroundRetryGeneration = null;
       backgroundRetryRefreshPending = false;
@@ -546,6 +591,8 @@ function ensureStarted(): void {
   window.electronAPI.deviceLink.onDeviceDirectoryInvalidated?.(() => {
     clearRetryTimer();
     retryDelayMs = 0;
+    // 目录被权威作废:上一轮的限流期限一并作废,下一次读按新的节奏来。
+    retryDeadlineMs = 0;
     backgroundRetryGeneration = null;
     backgroundRetryRefreshPending = false;
     backgroundRetryReplayActive = false;

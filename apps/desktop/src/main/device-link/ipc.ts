@@ -41,7 +41,15 @@ import {
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { ServerApiError } from '../serverApiClient.desktop';
-import { deviceLinkApiFetch } from './deviceLinkApi.desktop.js';
+import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
+import {
+  __resetDirectoryThrottleForTests,
+  clearDirectoryRetryDeadline,
+  currentDirectoryRetrySequence,
+  currentDirectoryThrottleOwner,
+  directoryRetryDeadline,
+  recordDirectoryRetryDeadline,
+} from './directoryThrottle.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
@@ -124,6 +132,12 @@ import {
   setDeviceControlEnabled,
 } from './settings-store.desktop';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
+import { setDirectoryThrottleOwnerSource } from './directoryThrottle.js';
+
+// 目录限流账本按桶身份分桶:登记 scope key 来源(桶身份 = 账号成员,见
+// directoryThrottleMembershipOf),让 deviceLinkApiFetch 的检查与 handleListDevices
+// 的记账落在同一个桶里(Codex review #9360)。
+setDirectoryThrottleOwnerSource(activeOwnerScopeKey);
 import {
   coerceCachedSession,
   getMirrorCache,
@@ -174,7 +188,8 @@ export interface DeviceLinkIpcDeps {
   getPeerLinks(): DeviceLinkPeerLinksSnapshot;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
-  apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
+  /** `signal` 是调用方的期限信号:目录读用它把「fetch + 刷新等待 + 重试」一起框住。 */
+  apiFetch<T>(path: string, opts?: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<T>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
   invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean; diagnosticSource?: 'renderer' }): Promise<InvokeResultPayload>;
@@ -425,11 +440,22 @@ type DeviceListResult = {
   /** True only when this is the bounded last-known directory, not a fresh REST answer. */
   stale?: true;
   /**
+   * Only one hybrid leg (V1 REST / V2 encrypted) answered this read. The rows it
+   * carries are fresh, but its absence proves nothing: a device that lives only on
+   * the other leg would look gone. Absence is not an authoritative removal.
+   */
+  partial?: true;
+  /**
    * Local display budget measured from the request start; never a wire
    * authorization. A missing field is an old endpoint (legacy lifecycle);
    * an explicit 0 means the source budget has already ended.
    */
   displayBudget?: { remainingMs: number };
+  /**
+   * Server-side rate-limit deadline (wall-clock ms) for the next directory read.
+   * Present only while the server is throttling this account's directory.
+   */
+  retryAtMs?: number;
 };
 
 /**
@@ -459,9 +485,33 @@ function invalidateDeviceListCoalescing(): void {
  */
 const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
 
+/**
+ * 目录 REST 读取的上限。一次目录读挂死不能无限期占住连接:重试会叠加,而
+ * `serverApiFetch` 默认没有期限(0 = 不超时),挂死的读会让后续每次重读都再开一条。
+ * 超时按暂时性失败处理(见 handleListDevices),读者仍能沿用有界旧快照。
+ */
+const DIRECTORY_READ_TIMEOUT_MS = 8_000;
+
+
+/** 当前中转身份(官方端点或自建中转地址):限流期限按它分桶。 */
+function directoryRelayScope(): string {
+  try {
+    return resolveDeviceLinkApiBase();
+  } catch {
+    return '';
+  }
+}
+
+/** fetch 被中止时抛出的错误:目录读取超时走这条(而不是当成权威拒绝)。 */
+function isAbortError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null | undefined)?.name;
+  return name === 'AbortError' || name === 'TimeoutError';
+}
+
 /** 仅测试:重置合并窗口状态,避免跨用例共用在途 promise。 */
 export function __resetDeviceListCoalescingForTests(): void {
   latestDeviceListRequest = null;
+  __resetDirectoryThrottleForTests();
   invalidateProviderDirectoryContinuity();
 }
 
@@ -469,6 +519,12 @@ export function handleListDevices(
   deps: DeviceLinkIpcDeps,
 ): Promise<DeviceListResult> {
   const owner = activeOwnerScopeKey();
+  // 限流桶的身份是**账号成员**(scope key 去掉代次),不是完整 scope key:同账号的
+  // projection 修复只 bump 代次,服务端的限流窗口没变,桶键跟着变会让未过期的期限
+  // 变得不可达(Codex review #9360「Keep cooldown keys stable across same-owner
+  // generations」)。`owner` 仍按完整 scope key 圈住在途结果(换账号 / 换代次都作废)。
+  const throttleOwner = currentDirectoryThrottleOwner();
+  const relay = directoryRelayScope();
   const inFlight = latestDeviceListRequest;
   if (inFlight && inFlight.owner === owner && inFlight.joinable && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
     return inFlight.promise;
@@ -478,9 +534,81 @@ export function handleListDevices(
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
   const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
   const directoryEpoch = providerDirectoryGeneration();
-    const request = readProviderDirectoryContinuity(() => deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
-      '/api/device-link/devices',
-    )).then(
+  /** 这一轮物理读**发起**时的账本序号:成功只清掉序号不晚于它的限流期限(见 directoryThrottle)。 */
+  let issuedSeq = 0;
+    const request = readProviderDirectoryContinuity(() => {
+      // 限流窗口内的「不再发物理读」不在这里拦:这条预检在路由之前抛,会把整条目录读
+      // (含 V2 / agent-net 那一腿)一起挡掉,而冷却只约束旧版 REST 那一腿 ——
+      // readCurrentDeviceDirectory 的 allSettled 兜底根本没机会跑(Codex review #9360)。
+      // REST 腿的窗口内短路由 deviceLinkApi.ts 的 throttledDirectoryRead 负责,它在
+      // 发任何物理请求之前就以带期限的 429 拒绝,并且只拒 REST 那一腿。
+      // 整条目录读有**总期限**:timeoutMs 只管单次 fetch,401 之后的共享登录刷新不在它
+      // 里面(官方端点的刷新端点是轮换的,timeoutMs: 0 = 不超时),于是一次目录读可以
+      // 无限期挂着 —— 渲染侧的退避每轮都再开一条这样的等待,越挂越多。用调用方的期限
+      // 信号把「fetch + 刷新等待 + 重试」一起框住:超时的按 status 0 的暂时性失败走。
+      const controller = new AbortController();
+      const deadline = setTimeout(() => {
+        controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+      }, DIRECTORY_READ_TIMEOUT_MS);
+      issuedSeq = currentDirectoryRetrySequence();
+      return deps.apiFetch<{ devices: DeviceLinkServerDeviceView[]; partial?: boolean }>(
+        '/api/device-link/devices',
+        { timeoutMs: DIRECTORY_READ_TIMEOUT_MS, signal: controller.signal },
+      ).catch((error: unknown) => {
+        // 429 的 Retry-After:服务端明确说了多久之后再问。把期限带给调用方(渲染进程的目录
+        // 退避要让过它),否则限流窗口里每个挂载的窗口都会继续追问,延长限流并放大共享
+        // 目录压力。期限按桶身份(账号成员) + 中转记:换账号不该继承上一个账号的限流期限,
+        // 换中转(两个中转是各自独立的限流桶)也不该继承。
+        const retryAt = (error as { retryAt?: unknown } | null | undefined)?.retryAt;
+        const servedBaseUrl = (error as { servedBaseUrl?: unknown } | null | undefined)?.servedBaseUrl;
+        if (typeof retryAt === 'number' && Number.isFinite(retryAt)) {
+          // 期限要记在**真正服务了这次响应**的线路的桶里 —— fetch 层把它带出来
+          // (servedBaseUrl), 不在这里读全局:
+          //  - 401 之后的共享刷新可能把请求换到另一个区域 / 中转,那条重试是往新端点
+          //    发的,期限必须记在新端点那个桶,否则下一次读直接撞进同一个限流窗口;
+          //  - 线路被换掉时(用户切了中转),在途请求仍然是**旧线路**发出去的(自建中转
+          //    的 baseUrl 在发起时就定住了):它的限流期限属于旧线路,记到新线路头上
+          //    会把新线路也限住 —— 两个中转是各自独立的限流桶(Codex review #9360)。
+          // 拿不到服务方(非本层的错误)时退回发起这条请求的线路。
+          // 换账号(成员身份变了)就整个丢弃:那次的响应已经不算数了(下面 then 也会拒)。
+          // 同账号只 bump 代次不算换 —— 服务端的窗口没变,期限照记,否则 recovery 之后
+          // 这条 429 就丢了(Codex review #9360「Keep cooldown keys stable across
+          // same-owner generations」)。
+          if (currentDirectoryThrottleOwner() === throttleOwner) {
+            const scope =
+              typeof servedBaseUrl === 'string' && servedBaseUrl !== '' ? servedBaseUrl : relay;
+            recordDirectoryRetryDeadline(throttleOwner, scope, retryAt);
+          }
+        }
+        // 读取超时是**暂时性**失败:让 continuity reader 沿用有界旧快照,而不是把快照一起
+        // 丢掉(丢掉的话渲染进程连旧设备都看不到)。statusCode 0 = 连不上,不是权威拒绝。
+        // 但响应头已经到了、服务端已经表态(401/403/404/429...)时,正文卡住**不代表**
+        // 服务端没拒绝:fetch 层把已知的非 OK 状态贴在中止原因上,这里要把它带出去 ——
+        // 否则拒绝被归一成「连不上」,目录失效广播不触发、终态也不停重读,渲染侧的退避
+        // 会带着旧快照每 5–60 秒重试那个端点(Codex review #9360「Preserve terminal
+        // status across response-body timeouts」)。200 + 卡住的正文仍然是暂时性失败。
+        if (isAbortError(error)) {
+          // 响应头已表态(400/404/409)、正文卡到总期限:抛出的是调用方自造的 TimeoutError,
+          // 只贴 statusCode 过不了 rethrowServerError 的 instanceof ServerApiError ——
+          // 终态会被报成 [INTERNAL],渲染侧把终态当暂时性失败按 5–60 秒一直追问
+          // (Codex review #9360)。包成真正的 ServerApiError,让既有映射生效
+          // (404→NOT_FOUND / 400→INVALID_PARAMS / 409→ALREADY_EXISTS / 503→UNAVAILABLE)。
+          const knownStatus = (error as { httpStatus?: unknown } | null | undefined)?.httpStatus;
+          if (typeof knownStatus === 'number' && knownStatus >= 400) {
+            const cause = error as { message?: unknown; retryAt?: unknown; servedBaseUrl?: unknown };
+            throw new ServerApiError(
+              'HTTP_' + knownStatus,
+              knownStatus,
+              typeof cause.message === 'string' ? cause.message : '设备目录读取超时',
+              typeof cause.retryAt === 'number' ? cause.retryAt : undefined,
+              typeof cause.servedBaseUrl === 'string' ? cause.servedBaseUrl : undefined,
+            );
+          }
+          throw Object.assign(new Error('设备目录读取超时'), { statusCode: 0 });
+        }
+        throw error;
+      }).finally(() => clearTimeout(deadline));
+    }).then(
     async ({ value: result, stale, remainingMs }) => {
       if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
       // A rename/delete supersedes a request that started before it, even when
@@ -488,25 +616,45 @@ export function handleListDevices(
       if (directoryEpoch !== providerDirectoryGeneration()) return handleListDevices(deps);
       let latest = latestDeviceListRequest;
       if (latest && latest.sequence > sequence) return latest.promise;
+      // 只有一条腿读到时,这份目录**证明不了缺席**:另一条腿上的设备(配对后关掉 V2 只走
+      // V1 的,或反过来)会被当成已经不在了。它也不是「服务端没在限流」的证据。
+      // (Codex review #9360「Keep one-leg hybrid results non-authoritative」)
+      const partial = result.partial === true;
+      /** 权威 = 完整且新鲜:只有这样的目录能证明缺席、能清掉限流期限。 */
+      const authoritative = !stale && !partial;
       const isLatestDirectorySnapshot = deps.isLatestControllerDisplayNameDirectoryRefresh(
         directoryRequestSequence,
       );
       let appliedEvidence = new Map<string, { online: boolean; enabled?: boolean }>();
-      if (isLatestDirectorySnapshot && !stale) {
+      if (isLatestDirectorySnapshot && authoritative) {
         deps.applyControllerDisplayNameListSnapshot(result.devices, requestEpoch);
         appliedEvidence = deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch) ?? appliedEvidence;
-      } else if (!stale) {
+      } else if (!stale && !partial) {
         await deps.waitForNewerControllerDisplayNameDirectoryRefresh(directoryRequestSequence);
         latest = latestDeviceListRequest;
         if (latest && latest.sequence > sequence) return latest.promise;
       }
+      // 拿到权威目录 = 服务端没有在限流:这一轮那个桶的限流期限作废。按**当前**中转算:
+      // 这次响应可能是 401 刷新之后由另一个中转服务的(见上面的 catch 分支)。
+      const currentRelay = directoryRelayScope();
+      if (authoritative) {
+        // 只清掉**这次读发起之前**就已记下的期限:在途期间(issuedSeq 之后)另一次 429
+        // 记下的期限比这次成功更新,抹掉它会让下一次读直接撞进限流窗口,把窗口越推越远
+        // (Codex review #9360「Preserve cooldowns newer than the completing request」)。
+        clearDirectoryRetryDeadline(throttleOwner, currentRelay, issuedSeq);
+      }
+      // 服务端限流给出的重试期限:调用方的退避要让过它(见 handleListDevices)。按当前
+      // 中转取 —— 下一次读用的就是这个身份。
+      const retryDeadlineMs = directoryRetryDeadline(throttleOwner, currentRelay);
       const reconciled = reconcileDeviceNames(
         result,
         deps,
         requestEpoch,
         // A stale snapshot may be shown within its bounded budget, but its names
-        // must not become new persistent truth for later cold starts.
-        !stale && isLatestDirectorySnapshot,
+        // must not become new persistent truth for later cold starts. A partial
+        // directory is not persistent truth either: part of it is the last
+        // complete read's rows.
+        authoritative && isLatestDirectorySnapshot,
         !isLatestDirectorySnapshot,
       );
       return {
@@ -548,9 +696,13 @@ export function handleListDevices(
           return stale ? { ...device, online: false } : device;
         }),
         ...(stale ? { stale: true as const } : {}),
+        // 一条腿读到的目录:行是新鲜的,但缺席不算数 —— 渲染侧据此不剪枝、继续追问。
+        ...(partial ? { partial: true as const } : {}),
         // Never drop an exhausted budget: absent means an old endpoint with no
         // stamp, while zero means this read is already outside its source window.
         displayBudget: { remainingMs: Math.max(0, remainingMs) },
+        // 服务端限流给出的重试期限:调用方的退避要让过它(见 handleListDevices)。
+        ...(retryDeadlineMs > 0 ? { retryAtMs: retryDeadlineMs } : {}),
       };
     },
     (err: unknown) => {

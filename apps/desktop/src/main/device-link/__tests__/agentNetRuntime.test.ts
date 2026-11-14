@@ -149,7 +149,9 @@ it('retains the live V1 directory when Node Fetch fails, except in encrypted-onl
   const legacy = { devices: [{ deviceId: 'old', name: 'Old computer', platform: null, appVersion: null,
     lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false }] };
   vi.mocked(outboundFetch).mockRejectedValueOnce(new TypeError('fetch failed')).mockRejectedValueOnce(new TypeError('fetch failed'));
-  expect(await readCurrentDeviceDirectory(async () => legacy, () => {})).toEqual(legacy);
+  // 只有旧版那条腿答得上来:目录照旧保留,但必须标成 **partial** —— 它证明不了加密那条腿
+  // 上的设备已经不在了(Codex review #9360「Keep one-leg hybrid results non-authoritative」)。
+  expect(await readCurrentDeviceDirectory(async () => legacy, () => {})).toEqual({ ...legacy, partial: true });
   state.onlyEncrypted = true;
   await expect(readCurrentDeviceDirectory(async () => legacy, () => {})).rejects.toMatchObject({ status: 0 });
 });

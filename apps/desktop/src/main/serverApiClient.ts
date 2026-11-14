@@ -8,6 +8,12 @@ export class ServerApiError extends Error {
     public readonly statusCode: number,
     message: string,
     public readonly retryAt?: number,
+    /**
+     * 真正服务了这次响应的 base URL。调用方按它分桶记限流期限:401 之后的重试可能
+     * 落在另一个区域 / 中转上,而**在途**请求的线路也可能已经被换掉 —— 期限属于服务
+     * 这次响应的那条线路,不是「读全局时的那条」。
+     */
+    public readonly servedBaseUrl?: string,
   ) {
     super(message);
     this.name = 'ServerApiError';
@@ -39,6 +45,15 @@ export interface ApiFetchOptions {
    * 读取端点，不能把新区域 token 发到首次请求的旧区域。
    */
   baseUrl: string | (() => string);
+  /**
+   * 每一跳物理请求发出前调用,入参是**这一跳**解析出的 base URL。与 `bodyFactory` 一样,
+   * 401 刷新后的重试会再跑一次:刷新可能把请求换到另一个端点(区域切换 / 中转切换),
+   * 调用方的每跳门禁(如设备目录的限流退避)必须按这一跳真正要用的端点复查 —— 只在
+   * 调用前查一次时,新端点上已记的期限拦不住那次物理重试,会把它的限流窗口越推越远
+   * (Codex review #9360「Recheck cooldown after refresh changes endpoints」)。
+   * 抛出即中止这一跳:异常原样抛给调用方,不会被归一成 status 0 的网络失败。
+   */
+  beforeHop?: (resolvedBaseUrl: string) => void;
   /** Abort the request after this many milliseconds; 0 disables the deadline. */
   timeoutMs?: number;
   /** Caller lifetime/deadline, including waiting for shared login refresh and retry. */
@@ -83,11 +98,50 @@ interface RawResponse<T> {
   status: number;
   data: T | null;
   retryAt?: number;
+  /** 这一跳真正用的 base URL(每次尝试各自解析,重试可能落在另一个端点上)。 */
+  servedBaseUrl: string;
+}
+
+/**
+ * 把这一跳已经拿到的限流期限贴到调用方的中止原因上。
+ *
+ * 期限来自**响应头**:头部到了、正文卡住时,调用方的总期限可能先到(设备目录那一路
+ * 给整条读框了 8 秒总期限,比 rawFetch 的单跳超时更早),此时抛出去的是光秃秃的中止
+ * 原因,不含任何期限 —— 上层只知道「失败了」,不知道服务端让它等多久,只能按自己的
+ * 节奏继续追问,把限流窗口越推越远(Codex review #9360)。所以在重新抛出之前把期限
+ * (以及真正服务了这次响应的线路)补上;中止本身照样成立。
+ *
+ * `httpStatus` 同理:响应头已经到了、服务端已经表态(401/403/404/429...),只是正文
+ * 卡住。把它一并带出去,调用方才能区分「服务端权威拒绝」与「连不上」;丢掉状态会把
+ * 拒绝归一成 status 0 的暂时性失败,调用方的退避就带着旧快照一直重试那个端点
+ * (Codex review #9360「Preserve terminal status across response-body timeouts」)。
+ * 只带**非 OK** 的状态:200 + 卡住的正文仍然是暂时性失败,不该被当成权威响应。
+ */
+function attachAbortMetadata(
+  signal: AbortSignal | undefined,
+  retryAt: number | undefined,
+  servedBaseUrl: string | undefined,
+  httpStatus: number | undefined,
+): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason === null || typeof reason !== 'object') return;
+  try {
+    if (retryAt !== undefined) Object.assign(reason, { retryAt });
+    if (servedBaseUrl !== undefined) Object.assign(reason, { servedBaseUrl });
+    if (httpStatus !== undefined) Object.assign(reason, { httpStatus });
+  } catch {
+    // 冻结的中止原因带不上元数据:中止本身照样成立,上层退回自己的节奏。
+  }
 }
 
 async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawResponse<T>> {
   opts.signal?.throwIfAborted();
   const baseUrl = typeof opts.baseUrl === 'function' ? opts.baseUrl() : opts.baseUrl;
+  // 每跳门禁在解析完这一跳的端点之后、发请求之前跑。必须放在下面的 try 之外:
+  // 门禁抛出的是调用方自己的错误(如限流退避的 429),进 catch 会被归一成 status 0,
+  // 调用方就分不出「服务端让我等」和「网络挂了」。
+  opts.beforeHop?.(baseUrl);
   const url = baseUrl + apiPath;
   const method = opts.method ?? 'GET';
   const headers: Record<string, string> = {
@@ -108,6 +162,12 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
   const abort = () => controller?.abort(opts.signal?.reason);
   opts.signal?.addEventListener('abort', abort, { once: true });
   const timeoutId = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  // 响应头给出的限流期限:读响应体卡住时这一跳会走下面的 catch,状态被归一成 0 ——
+  // 期限必须一起带出去,否则调用方只知道「失败了」,不知道服务端让它等多久。
+  let responseRetryAt: number | undefined;
+  // 同理:响应头已经拿到的**非 OK** 状态也要带出去(见 attachAbortMetadata),
+  // 否则「服务端已拒绝但正文卡住」会被调用方当成连不上,退避带着旧快照一直重试。
+  let responseStatus: number | undefined;
   try {
     const body = opts.bodyFactory ? opts.bodyFactory() : opts.body;
     const response = await ports.fetch(url, {
@@ -117,19 +177,42 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller?.signal,
     });
+    // 限流期限必须在**读响应体之前**从响应头取:响应体可能整个卡住(超时),那时这一跳
+    // 走的是下面的 catch,状态被归一成 0 —— 期限跟着一起丢掉,调用方就不知道服务端让它
+    // 等多久,只能按自己的节奏继续追问,把限流窗口越推越远。
+    const retryAt = response.status === 429 ? retryAfterDeadline(response) : undefined;
+    responseRetryAt = retryAt;
+    responseStatus = response.ok ? undefined : response.status;
     let data: T | null = null;
     try {
       data = (await response.json()) as T;
     } catch (error) {
+      // 调用方的总期限在这一跳到期:中止原因里要带着这一跳拿到的限流期限、
+      // 服务线路与已知的响应状态(见 attachAbortMetadata)。
+      attachAbortMetadata(opts.signal, responseRetryAt, baseUrl, responseStatus);
       opts.signal?.throwIfAborted();
+      // 自己的超时把响应体掐断了:这是**超时**,不是「服务端返回了空体」。
+      // 吞掉它会让上层拿到 200 + 空体(EMPTY_RESPONSE),被当成一次权威响应 ——
+      // 设备目录那一路会因此把有界旧快照一起丢掉(超时本该只是暂时性失败)。
+      // 保留 abort 原因,让它按 status 0 的暂时性失败走。
+      if (controller?.signal.aborted) {
+        // 但**响应头已经表态**(401/403/404/429...)时,状态是权威的:正文卡住不改变结论。
+        // 把它归一成 status 0 会让已知的 401 变成网络错 —— 刷新 / 登出路径不再触发,
+        // 400/403/404 也被当成连不上(Codex review #9360「Preserve HTTP status on
+        // internal response-body timeouts」)。只有 200 + 卡住的正文仍是暂时性失败。
+        if (responseStatus !== undefined) {
+          return { ok: false, status: responseStatus, data: null, retryAt, servedBaseUrl: baseUrl };
+        }
+        throw error;
+      }
       log.warn('response read failed', opts.logLabel ?? redactedLogPath(apiPath),
         { status: response.status },
         opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));
       data = null;
     }
-    return { ok: response.ok, status: response.status, data,
-      retryAt: response.status === 429 ? retryAfterDeadline(response) : undefined };
+    return { ok: response.ok, status: response.status, data, retryAt, servedBaseUrl: baseUrl };
   } catch (err) {
+    attachAbortMetadata(opts.signal, responseRetryAt, baseUrl, responseStatus);
     opts.signal?.throwIfAborted();
     if (opts.redactErrorDetails) {
       log.error(
@@ -140,7 +223,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     } else {
       log.error('fetch failed', opts.logLabel ?? apiPath, requestErrorMessage(err));
     }
-    return { ok: false, status: 0, data: null };
+    return { ok: false, status: 0, data: null, retryAt: responseRetryAt, servedBaseUrl: baseUrl };
   } finally {
     if (timeoutId !== null) clearTimeout(timeoutId);
     opts.signal?.removeEventListener('abort', abort);
@@ -241,6 +324,7 @@ async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions): Promis
       result.status,
       opts.redactErrorDetails ? `请求失败 (${result.status})` : errMsg,
       result.retryAt,
+      result.servedBaseUrl,
     );
   }
   if (result.data === null) {

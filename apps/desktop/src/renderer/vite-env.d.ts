@@ -4352,7 +4352,9 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }>;
     listDevices: () => Promise<{ devices: DeviceLinkDeviceView[]; stale?: boolean;
-      displayBudget?: { remainingMs: number } }>;
+      /** Only one hybrid discovery leg answered: absence is not an authoritative removal. */
+      partial?: boolean;
+      displayBudget?: { remainingMs: number }; retryAtMs?: number }>;
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
     getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
     /** 对端链路拓扑变化,payload 为全量快照 */
