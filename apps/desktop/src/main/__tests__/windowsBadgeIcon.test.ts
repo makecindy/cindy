@@ -1,5 +1,5 @@
-import path from 'node:path';
-import { createCanvas, GlobalFonts, loadImage, type FontKey } from '@napi-rs/canvas';
+import { fileURLToPath } from 'node:url';
+import { createCanvas, GlobalFonts, loadImage } from '@napi-rs/canvas';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const { addRepresentation, icon } = vi.hoisted(() => {
@@ -11,19 +11,19 @@ vi.mock('electron', () => ({ nativeImage: { createEmpty: () => icon } }));
 import { createWindowsBadgeIcon, renderWindowsBadgePng } from '../windowsBadgeIcon';
 
 describe('Windows numeric taskbar badge', () => {
-  let badgeFont: FontKey | null = null;
+  let fixtureFont: ReturnType<typeof GlobalFonts.registerFromPath> = null;
   beforeAll(() => {
-    // Linux runners may fall back to a color-emoji font for digits, which ignores
-    // fillStyle. Test the Windows white-text contract with an existing bundled
-    // monochrome font, without depending on the runner's installed fonts.
-    badgeFont = GlobalFonts.registerFromPath(
-      path.resolve(__dirname, '../../../native/menubar/BarlowCondensed-SemiBold.ttf'),
+    // Keep the PNG assertions independent of the runner's system-font fallback.
+    // This checks real badge rendering, not the Windows Segoe UI glyph shapes.
+    fixtureFont = GlobalFonts.registerFromPath(
+      fileURLToPath(new URL('../../../native/menubar/BarlowCondensed-SemiBold.ttf', import.meta.url)),
       'Segoe UI',
     );
-    expect(badgeFont).not.toBeNull();
+    expect(fixtureFont).not.toBeNull();
   });
   afterAll(() => {
-    if (badgeFont) GlobalFonts.remove(badgeFont);
+    // The native font collection is process-wide, including Vitest threads.
+    if (fixtureFont) GlobalFonts.remove(fixtureFont);
   });
 
   it.each([1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 8])(
