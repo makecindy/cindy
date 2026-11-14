@@ -32,7 +32,7 @@ describe('shared IM ordinary questions', () => {
   it('submits quoted multi-select replies through the same path as numbered replies', async () => {
     const f = fixture('rich-card', 'telegram');
     await f.open(false, [{ id: 'formats', question: 'Formats?', multiSelect: true, options: [{ label: 'PDF' }, { label: 'Text' }] }]);
-    const event = (text: string) => f.click({ channelName: 'telegram', senderId: 'group', actorId: 'alice',
+    const event = (text: string) => f.click({ channelName: 'telegram', senderId: 'group', chatId: 'group', actorId: 'alice',
       messageId: 'm1', buttonId: 'question:reply', payload: { answerText: text } });
     event('1,2');
     await vi.waitFor(() => expect(f.frames).toHaveLength(2));
