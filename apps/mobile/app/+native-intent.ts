@@ -48,6 +48,43 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     // path 可能是完整 URL('cindycn://auth?code=...')或路径('/auth?code=...'),统一取出 pathname。
     const noScheme = path.replace(/^[a-zA-Z][\w+.-]*:\/\//, '/');
     const pathname = noScheme.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
+    // Shared task links use the stable cross-client contract
+    // cindy://session/<id>?device=<deviceId>&message=<clientId>, while Expo's
+    // page route is plural and reads deviceId/focusClientId.
+    if (pathname === '/session' || pathname.startsWith('/session/')) {
+      const match = /^\/session\/([^/]+)$/.exec(pathname);
+      if (!match) return initial ? '/' : null;
+
+      let sessionId: string;
+      try {
+        sessionId = decodeURIComponent(match[1]);
+      } catch {
+        return initial ? '/' : null;
+      }
+      if (!sessionId || /[\\/\u0000-\u001f\u007f]/.test(sessionId)) return initial ? '/' : null;
+
+      const fragmentIndex = noScheme.indexOf('#');
+      const pathAndQuery = fragmentIndex < 0 ? noScheme : noScheme.slice(0, fragmentIndex);
+      const fragment = fragmentIndex < 0 ? '' : noScheme.slice(fragmentIndex);
+      const queryIndex = pathAndQuery.indexOf('?');
+      const query = queryIndex < 0 ? '' : pathAndQuery.slice(queryIndex + 1);
+      const params = new URLSearchParams(query);
+      const hasDeviceId = params.has('deviceId');
+      const hasFocusClientId = params.has('focusClientId');
+      const normalizedParams = new URLSearchParams();
+      for (const [key, value] of params) {
+        if (key === 'device') {
+          if (!hasDeviceId) normalizedParams.append('deviceId', value);
+        } else if (key === 'message') {
+          if (!hasFocusClientId) normalizedParams.append('focusClientId', value);
+        } else {
+          normalizedParams.append(key, value);
+        }
+      }
+
+      const normalizedQuery = normalizedParams.toString();
+      return `/sessions/${encodeURIComponent(sessionId)}${normalizedQuery ? `?${normalizedQuery}` : ''}${fragment}`;
+    }
     // OAuth 冷启动回首页；热回跳不导航，保留正在处理授权的页面。
     // PKCE 仍由 AuthProvider 的独立 Linking 监听处理。其余深链沿用原规则。
     if (pathname === '/auth') return initial ? '/' : null;
