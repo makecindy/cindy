@@ -1062,7 +1062,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     customApiKeyConnected: (provider) =>
       hasCustomProviderCredential(provider, readCustomProviderKey),
     getAvailableMediaModels: () => [
-      ...[...listEvaluationModels('decisions'), ...listEvaluationModels('rerank')].map(model => ({ providerId: model.provider_id, id: model.id })),
+      // Settings must keep hidden models ready so their switch can turn them back on.
+      ...[...listEvaluationModels('decisions', { includeHidden: true }), ...listEvaluationModels('rerank', { includeHidden: true })].map(model => ({ providerId: model.provider_id, id: model.id })),
       ...listReadyProviderMediaModels(),
       // Keep hidden, admitted TTS routes manageable. This is the same catalog/key
       // policy as companion voice; list visibility never grants execution access.

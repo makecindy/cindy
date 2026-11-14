@@ -8,7 +8,7 @@ import { modelManagementState } from './modelManagementState';
  *   - 列表 = 该供应商**所有 agent 的模型并集**(按 model id 合并),不再按 CLI 分 Tab。
  *   - 三个概念钉死到三种互不借用的表达上(用户裁决):
  *       · **开关 = 显示轴**:是否出现在对应模型选择面板 —— 纯陈列,全页
- *         唯一一种开关语义。隐藏的模型被显式点名 / 自动兜底时仍可用。存储 =
+ *         唯一一种开关语义。隐藏的对话模型被显式点名 / 自动兜底时仍可用。存储 =
  *         renderer modelVisibilityPrefs(不变)。
  *       · **高级设置 = 停用动作**(所有行):停用 = 准入关,不可被任何
  *         新路由选中。存储 = main 侧 model-disable-store,经 PROVIDER_LIST 的
@@ -306,7 +306,7 @@ export function buildUnionRows(provider: ProviderView,
 function rowHasVisibilitySwitch(row: UnionModelRow, userProvider: boolean): boolean {
   if (!isCapabilityRow(row, userProvider)) return true;
   return managementKindsOfRow(row, userProvider).some(
-    (kind) => kind === 'image' || kind === 'video' || kind === 'tts',
+    (kind) => kind === 'image' || kind === 'video' || kind === 'tts' || kind === 'decision' || kind === 'rerank',
   );
 }
 
@@ -411,9 +411,6 @@ export function modelVisibilityTargets(
 
 /** 普通模式的单开关显示值:任一可用 agent 开启即视为开(拨动才归一)。 */
 function rowAnyEnabled(providerId: string, row: UnionModelRow, userProvider: boolean): boolean {
-  // Evaluation endpoints have an execution-disable preference, never a chat visibility preference.
-  const category = rowCategory(row);
-  if (category === 'decision' || category === 'rerank') return true;
   return row.avail.some((a) => rowEnabled(providerId, row, a, userProvider) === true);
 }
 
@@ -1088,7 +1085,7 @@ export function UnifiedModelList({
             位置的 1M / 128K 缩写在真实数据里是歧义的(1,000,000 /
             1,048,576 / 1,050,000 都印成 1M)。 */}
         {rowAdvancedButton(row)}
-        {/* 其余音频/向量能力行没有显示开关。语音合成、图像/视频复用显示轴。 */}
+        {/* 其余音频/向量能力行没有显示开关。语音合成、图像/视频、决策/重排复用显示轴。 */}
         {capability && !rowHasVisibilitySwitch(row, provider.source === 'user') && (
           <span className="w-9 shrink-0" />
         )}

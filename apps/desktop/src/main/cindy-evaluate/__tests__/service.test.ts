@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
 import { parseGatewayMediaBillingHeader } from '../../usage/gatewayMediaBillingHeader.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
@@ -9,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: mocks.gateway }) }));
 vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ ownerGeneration: mocks.generation }) }));
-vi.mock('../../maker-host/active-catalog.js', () => ({ getXdGatewayModels: () => mocks.models }));
+vi.mock('../../maker-host/active-catalog.js', () => ({ getXdGatewayModels: () => mocks.models, getActiveCatalog: () => ({ providers: [{ id: 'xd', agents: ['claude-code'] }] }) }));
 vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => mocks.access }));
 vi.mock('../../model-access/gatewayConnection.js', () => ({
   resolveGatewayConnection: () => ({ baseUrl: 'https://gateway.invalid/v1', apiKey: 'fake-test-key', onUnauthorized: vi.fn() }),
@@ -27,6 +28,7 @@ vi.mock('../../usage/gatewayMediaBilling.js', () => ({ prepareGatewayMediaBillin
     mocks.billing(actual ? { amount: actual.cost, currency: 'CNY' } : input.estimatedBilling());
   }, { finish: vi.fn() }) }));
 import * as evaluationService from '../service.js';
+import { listEvaluationModels } from '../models.js';
 import { callEvaluate, installEvaluationRuntime } from '../runtime.js';
 // Unit contract: the new paid entry point must use local model membership, distinguish
 // known HTTP rejection from an unknown submission, and omit caller document text.
@@ -34,6 +36,7 @@ import { callEvaluate, installEvaluationRuntime } from '../runtime.js';
 // Minimal failures: empty-agent reranker, HTTP 403, transport rejection, missing price.
 const context = { assertCurrent: () => {}, readImage: vi.fn() };
 beforeEach(() => {
+  setModelVisibilityMirror({});
   installEvaluationRuntime(evaluationService);
   mocks.fetch.mockReset(); mocks.pricing.mockReset().mockResolvedValue(null); mocks.billing.mockClear();
   mocks.generation = 1; mocks.gateway = true; mocks.access.disabledProviders = {}; mocks.access.disabledModels = {};
@@ -48,6 +51,17 @@ describe('evaluate', () => {
     mocks.models[1].availability = 'available'; mocks.gateway = false;
     expect(await callEvaluate({ action: 'list_models', api: 'rerank' }, context)).toMatchObject({ models: [] });
     expect(mocks.fetch).not.toHaveBeenCalled(); expect(mocks.pricing).not.toHaveBeenCalled();
+  });
+  // Unit: the settings switch must affect both discovery and explicitly named paid calls.
+  it.each(['decisions', 'rerank'] as const)('rejects a hidden %s model before dispatch', async api => {
+    const id = api === 'decisions' ? 'example-decision' : 'example-rerank';
+    setModelVisibilityMirror({ [`claude-code:xd:${id}`]: false });
+    expect(listEvaluationModels(api, { includeHidden: true })).toMatchObject([{ id }]);
+    expect(await callEvaluate({ action: 'list_models', api }, context)).toMatchObject({ ok: true, models: [] });
+    expect(await callEvaluate({ action: api, model_id: id }, context)).toMatchObject({ errorCode: 'MODEL_NOT_AUTHORIZED', outcomeKnown: true });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    setModelVisibilityMirror({ [`claude-code:xd:${id}`]: true });
+    expect(await callEvaluate({ action: 'list_models', api }, context)).toMatchObject({ models: [{ id }] });
   });
   it('uses the root decisions path and preserves answers with missing-price null', async () => {
     mocks.fetch.mockResolvedValue(Response.json({ model: 'example-decision', answers: { q: true }, usage: { input_tokens: 4, output_tokens: 1 } }));

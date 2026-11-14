@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
-import { UnifiedModelList } from '../components/settings/UnifiedModelList';
+import { buildUnionRows, UnifiedModelList } from '../components/settings/UnifiedModelList';
 import {
   __resetForTest,
   isModelEnabled,
@@ -144,13 +144,24 @@ it('waits for the shared lock and reports asynchronous write failures', async ()
   } finally { vi.unstubAllGlobals(); }
 });
 
-// Unit: executable decision/rerank rows have only an execution-disable switch, not
-// a chat-selector visibility preference; they must not be filed as hidden chat models.
-it('keeps available non-chat evaluation models in their own groups', () => {
-  render(<UnifiedModelList provider={{ ...provider, models: {},
-    evaluationModels: [{ id: 'example-decision', name: 'Decision', mode: 'evaluation' }, { id: 'example-rerank', name: 'Rerank', mode: 'rerank' }],
-    availableMediaModelIds: ['example-decision', 'example-rerank'],
-  }} />);
-  expect(screen.queryByText('settings.providers.models.hiddenGroup')).toBeNull();
-  expect(screen.getAllByText('newChat.modelSelector.category.rerank').length).toBeGreaterThan(0);
+// Unit: real standalone entries have empty modalities and no defaultEnabled;
+// classification-only fixtures missed the absent switch and persisted OFF state.
+it.each(['evaluation', 'rerank'] as const)('toggles standalone %s models through the normal visibility store', async mode => {
+  const entry = { id: `example-${mode}`, name: 'Standalone model', mode,
+    availability: 'available' as const, modalities: { input: [], output: [] } };
+  const view = { ...provider, models: {}, evaluationModels: [entry], availableMediaModelIds: [entry.id] };
+  await setModelVisibility('claude-code', 'xd', entry.id, true);
+  render(<UnifiedModelList provider={view} focusModelId={entry.id} />);
+  const toggle = await screen.findByRole('switch', { name: entry.name });
+  expect(toggle.getAttribute('aria-checked')).toBe('true');
+  expect((toggle as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { fireEvent.click(toggle); });
+  const row = buildUnionRows(view)[0];
+  expect(isModelEnabled('claude-code', 'xd', row.byAgent['claude-code']!)).toBe(false);
+  expect(screen.getByRole('switch', { name: entry.name }).getAttribute('aria-checked')).toBe('false');
+  expect(window.electronAPI.maker.syncModelVisibility).toHaveBeenLastCalledWith(
+    'management', 1, expect.objectContaining({ [`claude-code:xd:${entry.id}`]: false }), expect.anything(),
+  );
+  await act(async () => { fireEvent.click(screen.getByRole('switch', { name: entry.name })); });
+  expect(isModelEnabled('claude-code', 'xd', row.byAgent['claude-code']!)).toBe(true);
 });

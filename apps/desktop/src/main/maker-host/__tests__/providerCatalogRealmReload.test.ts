@@ -312,6 +312,8 @@ import {
 } from '@cindy/model-providers';
 import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
+import { listEvaluationModels } from '../../cindy-evaluate/models.js';
+import { setModelVisibilityMirror, clearModelVisibilityMirror } from '../model-visibility-mirror.js';
 import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
 import {
   getActiveCatalog,
@@ -958,6 +960,30 @@ describe('provider catalog realm reload', () => {
       setActiveCatalog(previous);
     }
   });
+  // Unit: real provider-list wiring must retain channel readiness after hiding a
+  // standalone model, otherwise the user's OFF switch becomes impossible to re-enable.
+  it.each(['evaluation', 'rerank'] as const)('keeps hidden %s models manageable but excludes them from calls', async mode => {
+    const previous = getActiveCatalog();
+    const previousModels = activeCatalogForHostParity.getXdGatewayModels();
+    const id = `example-${mode}`;
+    const api = mode === 'evaluation' ? 'decisions' : 'rerank';
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      activeCatalogForHostParity.setXdGatewayModels([{ id, name: 'Standalone', mode, agents: [], availability: 'available' }]);
+      const agent = getActiveCatalog().providers.find(provider => provider.id === 'xd')!.agents[0];
+      setModelVisibilityMirror({ [`${agent}:xd:${id}`]: false });
+      const listed = await getDesktopProviderService().listProviders({ allowSideEffects: false, snapshotOnly: true });
+      expect(listed.find(provider => provider.id === 'xd')?.availableMediaModelIds).toContain(id);
+      expect(listEvaluationModels(api)).toEqual([]);
+      setModelVisibilityMirror({ [`${agent}:xd:${id}`]: true });
+      expect(listEvaluationModels(api)).toMatchObject([{ id }]);
+    } finally {
+      clearModelVisibilityMirror();
+      activeCatalogForHostParity.setXdGatewayModels([...previousModels]);
+      setActiveCatalog(previous);
+    }
+  });
+
   // #6768 unit regression: a hidden TTS route needs channel readiness in the
   // actual provider-list wiring before its management switch can be used.
   // Renderer tests inject that snapshot and could not catch missing Main wiring.
