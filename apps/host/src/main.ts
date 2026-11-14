@@ -129,9 +129,8 @@ import { executeConversationSearch } from '../../desktop/src/main/localDb/ipc/se
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../desktop/src/main/device-link/broadcast-tap.js';
 import { createInputQueue } from './agent/input-queue.mjs';
 import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
-import { contextRecoveryKind, type ContextRecoveryKind } from './agent/context-recovery.ts';
-import { createHostContextRecoveryRollover } from './agent/context-recovery-assembly.ts';
-import { createSessionStderrOptions } from '../../desktop/src/main/maker-ipc/sessionRequest.ts';
+import type { ContextRecoveryKind } from './agent/context-recovery.ts';
+import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
 import { createHostSessionUpdate } from './agent/session-update.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
@@ -945,47 +944,18 @@ const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbCli
 // Context recovery of a turn's terminal error (context-recovery-assembly.ts). A kind opens after its
 // real-engine test (release table); until then it takes the normal error path, unclaimed.
 const OPEN_CONTEXT_RECOVERY_KINDS: ReadonlySet<ContextRecoveryKind> = new Set();
-const recoveryLog = createLogger('context-recovery');
+const contextRecovery = createHostContextRecoveryWiring({
+  openKinds: OPEN_CONTEXT_RECOVERY_KINDS,
+  getGraph: () => agentGraph,
+  persistMessage: (...args) => insertSessionMessage(...args),
+  publish: event => eventHub.publish(event),
+  pendingHandoff,
+  log: createLogger('context-recovery'),
+});
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
   pendingHandoff,
-  isContextRecoveryOpen: (data: unknown) => {
-    const kind = contextRecoveryKind(data);
-    return kind !== null && OPEN_CONTEXT_RECOVERY_KINDS.has(kind);
-  },
-  createContextRecoveryRollover: (runtime: Parameters<typeof createHostContextRecoveryRollover>[1]) => createHostContextRecoveryRollover({
-    getMaker: () => {
-      if (!agentGraph) throw new Error('agent runtime is not ready');
-      return agentGraph.maker;
-    },
-    persistMessage: (...args) => insertSessionMessage(...args),
-    publish: event => eventHub.publish(event),
-    buildCreateOptsWithStderr: createSessionStderrOptions(recoveryLog),
-    readSessionExtraDirsFromDb,
-    readSessionWritableDirsFromDb,
-    resolveVerifiedWindow: (agentKind, modelId, providerId) =>
-      agentGraph?.contextRecovery.resolveVerifiedWindow(agentKind, modelId, providerId) ?? null,
-    ...(OPEN_CONTEXT_RECOVERY_KINDS.has('oversized-history') ? { codexHistory: {
-      readCodexThreadStorageReadOnly: (threadId: string) => {
-        const history = agentGraph?.contextRecovery.codexHistory;
-        if (!history) throw new Error('Codex runtime is not ready');
-        return history.readCodexThreadStorageReadOnly(threadId);
-      },
-      classifyCodexHistoryOversized: (threadId: string, located?: { rolloutPath?: string }) => {
-        const history = agentGraph?.contextRecovery.codexHistory;
-        if (!history) throw new Error('Codex runtime is not ready');
-        return history.classifyCodexHistoryOversized(threadId, located);
-      },
-    } } : {}),
-    ...(OPEN_CONTEXT_RECOVERY_KINDS.has('unsupported-request-option') ? { piCompat: {
-      read: (providerId: string, modelId: string, routeKey?: string) =>
-        agentGraph?.contextRecovery.piCompat.read(providerId, modelId, routeKey),
-      record: async (providerId: string, modelId: string, compat: Record<string, unknown>, routeKey?: string) =>
-        (await agentGraph?.contextRecovery.piCompat.record(providerId, modelId, compat, routeKey)) ?? false,
-    } } : {}),
-    pendingHandoff,
-    log: recoveryLog,
-  }, runtime),
+  ...contextRecovery,
   createAttachments: ({ assertCurrent }: { assertCurrent(): void }) => createHostAttachments({
     getOwner: getCurrentDbClientSnapshot, assertCurrent,
   }),
