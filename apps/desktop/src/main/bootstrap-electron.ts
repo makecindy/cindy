@@ -605,7 +605,8 @@ import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { readMainHeapSamplingFlag, startMainHeapSampling } from './process-monitor/heap-sampling.js';
-import { startMemoryLog } from './process-monitor/memory-log.js';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { createEventLoopDelayCounters, startMemoryLog } from './process-monitor/memory-log.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import {
   initAppBadgeService,
@@ -10767,14 +10768,18 @@ app.on('ready', async () => {
   authCredentialRecovery.request();
 
   // 各进程内存采样进 main 日志(scope memory-usage):正式版 10 分钟一次,dev 保持 30s。
+  // 事件循环延迟按采样窗口清零:每行给出这一窗口内主线程最长被占了多久。
+  const eventLoopDelayHistogram = monitorEventLoopDelay({ resolution: 20 });
+  eventLoopDelayHistogram.enable();
+  const eventLoopDelay = createEventLoopDelayCounters(eventLoopDelayHistogram);
   const stopMemoryLog = startMemoryLog({
     getMetrics: () => app.getAppMetrics(),
     memoryUsage: () => process.memoryUsage(),
-    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions() }),
+    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions(), ...eventLoopDelay.counters() }),
     log: createLogger('memory-usage'),
     intervalMs: app.isPackaged ? 10 * 60_000 : 30_000,
   });
-  onQuit('memory-usage-log', stopMemoryLog, 'sync');
+  onQuit('memory-usage-log', () => { stopMemoryLog(); eventLoopDelay.stop(); }, 'sync');
   // 主进程堆采样:只在开发版、日志目录 log-config.json 写了 mainHeapSampling 时运行。
   if (!app.isPackaged && readMainHeapSamplingFlag(getLogDir())) {
     const stopHeapSampling = startMainHeapSampling({
