@@ -67,6 +67,8 @@ export interface RemoteExecutorOptions {
    * 默认只放行这一个操作；用户明确选择会话级允许后免除后续的分享凭证确认。缺省时直接拒绝。
    */
   confirm?(action: ExecutorAction, signal: AbortSignal): Promise<ExecutorConfirmation>;
+  /** 普通操作被本机权限上限拒绝时，通过本机共享交互补问；不授予会话级凭证许可。 */
+  confirmPermission?(action: ExecutorAction, signal: AbortSignal): Promise<boolean>;
   /** 与 confirm 一起提供：git 查看内容、打出 git 配置的命令先在本机核实，读不到凭证时不弹卡。 */
   gitCredentials?: GitCredentialHistory;
   /**
@@ -184,17 +186,19 @@ export class RemoteExecutor {
 
   /**
    * 凭证类操作在本机补问一次(供应商分享的受邀者任务)；本机用户允许后登记批准，调用方再检查一次即可
-   * 放行。git 查看内容、打出 git 配置的命令在本机核实过读不到凭证时不弹卡，直接登记批准。不是凭证类、
-   * 没有确认通道或任务已结束时返回 false。
+   * 放行。git 查看内容、打出 git 配置的命令在本机核实过读不到凭证时不弹卡，直接登记批准。
+   * 普通权限拒绝通过 confirmPermission 补问；没有对应确认通道或任务已结束时返回 false。
    */
   async confirm(action: ExecutorAction, signal?: AbortSignal): Promise<boolean> {
-    if (this.closed || signal?.aborted || !this.opts.confirm || !this.gate.needsCredentialConsent(action)) return false;
+    const credential = this.gate.needsCredentialConsent(action);
+    const confirm = credential ? this.opts.confirm : this.opts.confirmPermission;
+    if (this.closed || signal?.aborted || !confirm) return false;
     signal = signal
       ? AbortSignal.any([signal, this.credentialConfirmationAbort.signal])
       : this.credentialConfirmationAbort.signal;
     const permissionGeneration = this.permissionGeneration;
     // 只有要核实的 git 命令才在弹卡前等核实结果；核实通过不弹卡，也不必排在其他确认卡后面。
-    const gitCheck = this.gitReadsCheck(action, signal);
+    const gitCheck = credential ? this.gitReadsCheck(action, signal) : null;
     if (gitCheck && await gitCheck) {
       // 核实期间任务结束、请求被取消或权限已切换：同样不放行。
       if (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration) return false;
@@ -222,13 +226,13 @@ export class RemoteExecutor {
       if (previous) await Promise.race([previous, aborted]);
       if (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration) return false;
       // 调用方仍会重新检查普通权限上限；这里只免除已授权的分享凭证确认。
-      if (!this.gate.needsCredentialConsent(action)) return true;
+      if (credential && !this.gate.needsCredentialConsent(action)) return true;
       const allowed = await Promise.race([
-        this.opts.confirm(action, signal).catch(() => false),
+        confirm(action, signal).catch(() => false),
         aborted.then(() => false as const),
       ]);
       // 等确认期间任务结束、请求被取消或权限已切换：不接受旧确认。
-      if ((allowed !== true && allowed !== 'session') || this.closed || signal?.aborted
+      if ((allowed !== true && !(credential && allowed === 'session')) || this.closed || signal?.aborted
         || permissionGeneration !== this.permissionGeneration) return false;
       if (allowed === 'session') {
         this.gate.allowCredentialsForSession();

@@ -14,7 +14,7 @@ import { execServerActions, execServerCommand } from '../controller/execServerRe
 import { collectProjectInstructionFiles } from '../controller/projectFiles';
 import { approvalActionsFor, createRemoteAgentHandle, innerShellScript, parseStartedInfo } from '../controller/proxyHandle';
 import type { RemoteAgentRunClient } from '../controller/runClient';
-import { credentialConfirmation, takeGroupSwitchState } from '../controller/startRemote';
+import { credentialConfirmation, executorPermissionConfirmation, takeGroupSwitchState } from '../controller/startRemote';
 import { EventLog, LineSplitter } from '../eventLog';
 import { ExecutorGate } from '../executor/gate';
 import { RemoteExecutor, type ExecutorConfirmation } from '../executor/executor';
@@ -576,6 +576,18 @@ describe('confirmations raised on this computer', () => {
       toolName: 'Bash',
       input: { command: 'cat .env' },
     });
+    // 普通目录外写入也必须进入同一个交互入口，且不能附带凭证的任务级授权。
+    const ordinary = executorPermissionConfirmation({ kind: 'write', path: path.join(root, '..', 'empty.txt') });
+    expect(ordinary.suggestions).toBeUndefined();
+    behavior = 'allow';
+    expect(await controller.confirm(ordinary)).toBe(true);
+    expect(seen.at(-1)).toMatchObject({
+      kind: 'permission', toolName: 'Write',
+      input: { file_path: path.join(root, '..', 'empty.txt') },
+      metadata: { hostOwnedConfirmation: 'remote_executor_permission' },
+    });
+    behavior = 'deny';
+    expect(await controller.confirm(ordinary)).toBe(false);
   });
 
   it('accepts a session grant only when offered by this computer, and ignores late answers', async () => {
