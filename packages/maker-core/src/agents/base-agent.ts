@@ -136,6 +136,8 @@ export type McpToolApprovalPolicy =
 /** Pi 内 MCP client 的 server 描述；remote 存在时直接访问外部 Streamable HTTP MCP。 */
 export interface PiMcpServerRef {
   name: string;
+  /** Optional human-readable name used by Pi MCP discovery; `name` remains the stable id. */
+  displayName?: string;
   url: string;
   remote?: {
     /** HTTP header 名 → Pi 父进程 env var 名；描述符里绝不放 header 真值。 */

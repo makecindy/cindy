@@ -637,6 +637,7 @@ async function doStart(
       }
       remoteServers.push({
         name: provider.name,
+        ...(provider.displayName ? { displayName: provider.displayName } : {}),
         url: parsedUrl.href,
         remote: {
           headerEnvVars,

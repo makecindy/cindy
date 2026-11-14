@@ -1094,7 +1094,7 @@ describe('piEnvironment per-session identity', () => {
       { id: 'other-loopback', transport: 'http' as const, url: 'http://127.0.0.2:4321/mcp' },
       { id: 'credentials', transport: 'http' as const, url: 'https://user:canary@example.test/mcp' },
       { id: 'invalid-url', transport: 'http' as const, url: 'not a url' },
-    ].map((config) => ({ ...config, name: config.id, headers: {}, updatedAt: 1 }));
+    ].map((config) => ({ ...config, name: config.id === 'https' ? 'Readable HTTPS' : config.id, headers: {}, updatedAt: 1 }));
     const builtin = makeProvider('cindy_memory');
     const sdkFactory = vi.spyOn(builtin, 'toClaudeSdkConfig');
     const providers = [builtin, ...configs.map((config) => new CustomMcpProvider(config, () => 'TOKEN_CANARY'))];
@@ -1108,6 +1108,8 @@ describe('piEnvironment per-session identity', () => {
     const config = await getPiExtraSpawnConfig(providers, noopLogger(), { workingDir: '', memoryEnabled: true });
     try {
       expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual(available);
+      expect(config?.mcpBridge?.servers.find((server) => server.name === 'https')?.displayName)
+        .toBe('Readable HTTPS');
     } finally {
       config?.disposeSessionCtx?.();
     }

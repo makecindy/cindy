@@ -63,6 +63,37 @@ function gatewayWithFetch(fetchImpl: typeof fetch) {
 afterEach(() => vi.useRealTimers());
 
 describe('Pi MCP request lifecycle', () => {
+  it('discovers and resolves a custom MCP by display name without changing its id', async () => {
+    const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } })));
+    h.gateway.add('4de87c18-f95d-4460-aeef-47aed2160c77', h.client, [{ name: 'probe' }], 'nowledge-mem');
+
+    const listed = await h.list({ query: 'nowledge' });
+    expect(listed.details.tools).toEqual([
+      expect.objectContaining({
+        server: 'nowledge-mem',
+        serverId: '4de87c18-f95d-4460-aeef-47aed2160c77',
+        name: 'probe',
+      }),
+    ]);
+    const resolved = h.gateway.resolveCall({
+      server: 'nowledge-mem', tool: 'probe', args: {},
+    }) as { tool: { serverName: string } };
+    expect(resolved.tool.serverName).toBe('4de87c18-f95d-4460-aeef-47aed2160c77');
+  });
+
+  it('rejects an ambiguous display name with the matching stable ids', async () => {
+    const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [] } })));
+    h.gateway.add('mcp_one', h.client, [{ name: 'probe' }], 'shared-name');
+    h.gateway.add('mcp_two', h.client, [{ name: 'probe' }], 'shared-name');
+
+    const result = await h.list({ server: 'shared-name' });
+    expect(result.details).toMatchObject({
+      ok: false,
+      errorCode: 'AMBIGUOUS_SERVER',
+      matchingServerIds: ['mcp_one', 'mcp_two'],
+    });
+  });
+
   // r4411121969: previous recovery tests changed definitions inside execute;
   // this unit drives the real approval hook before a preceding discovery replaces it.
   it('rejects a changed definition discovered after approval and permits a freshly approved call', async () => {
