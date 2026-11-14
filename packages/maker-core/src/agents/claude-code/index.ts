@@ -2728,7 +2728,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 审阅器故障降级来的 ask 额外发一条会话级提示:用户需要知道自己为什么
           // 突然开始被问,否则 Auto 档看起来像坏了。
           if (autoDecision.unavailable) {
-            autoReviewUnavailableNotice.notify();
+            autoReviewUnavailableNotice.notify(autoDecision);
             unavailableHandoff = true;
           } else {
             autoReviewAskReason = autoDecision.reason;
@@ -4225,7 +4225,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
               // 与本地分支同口径:故障降级来的 ask 提示一次,让用户知道为何开始被问。
               if (autoDecision.unavailable) {
-                autoReviewUnavailableNotice.notify();
+                autoReviewUnavailableNotice.notify(autoDecision);
                 remoteUnavailableHandoff = true;
               } else {
                 remoteAutoReviewAskReason = autoDecision.reason;
@@ -6712,7 +6712,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           [opts.workingDir, ...mutableWritableDirs],
           opts.remoteHostId ? 'linux' : process.platform,
         );
-        if (decision.unavailable) autoReviewUnavailableNotice.notify();
+        if (decision.unavailable) autoReviewUnavailableNotice.notify(decision);
         return decision;
       },
       get id() { return durableSdkSessionId ?? '<pending>'; },

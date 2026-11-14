@@ -5656,6 +5656,7 @@ function CCAgentSessionContent({
       remoteHostId={session?.remoteHostId ?? null}
       ownerDeviceId={rightSidebarDeviceLinkDeviceId}
       sessionSource={session?.source}
+      canConfigureAutoReview={Boolean(session) && !readOnly && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId}
       onDiagnoseError={canDiagnoseError ? handleDiagnoseError : undefined}
       // text-lightbox-trigger-extension F1/F2: cwd flows from session
       // owner down through MessageStream → AssistantMessage / UserMessage.

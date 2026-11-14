@@ -680,6 +680,7 @@
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方组中诸机今皆不能行此差事：或皆脱机、已暂停分配、方冷却，或无此模型。可于机上此供方之「远程与分享」页察组内诸机。",
     "REMOTE_DAEMON_CLOSED": "远程连接中断，或方更新。此轮已毕，请重遣。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远程差事不能访问本地之卷或图附件。请径贴其内容。",
+    "AUTO_REVIEW_NO_AVAILABLE_MODEL": "无可用之自动审批模型。请于运行 Agent 之电脑，在「模型供应商」启用并连接审批供应商，或于设置自定「辅助模型」。待审之举仍由君确认。",
     "AUTO_REVIEW_UNAVAILABLE": "自动审批暂不能决断，须审批之操作已改由君确认。欲少受打扰，可将差事切至「完全访问」，然风险更高。",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自动审批暂不能决断，须审批之操作已改由君确认。个人微信不能用「完全访问」，请径确认此次操作。",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批未竟，确认亦未送达或未被点按。此次拒绝非君所点。",

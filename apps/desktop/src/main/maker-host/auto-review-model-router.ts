@@ -24,7 +24,7 @@ type AutoReviewModelRouterDeps = Omit<AutoReviewModelRouterCoreDeps, 'candidates
 /** The Desktop router: the core with the former defaults for the candidates and their request. */
 export function createAutoReviewModelRouter(
   deps: AutoReviewModelRouterDeps,
-): (prompt: string, signal?: AbortSignal) => Promise<string | null> {
+): ReturnType<typeof createAutoReviewModelRouterCore> {
   // The spread copies deps when the router is created; the core used to read deps.logger and
   // deps.createAuxiliaryFallback at call time. Every caller passes a fresh literal it never
   // changes afterwards, so the two are the same.

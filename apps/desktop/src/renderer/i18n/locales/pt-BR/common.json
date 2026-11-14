@@ -13008,6 +13008,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "Nenhum modelo de revisão automática está disponível. No computador que executa o Agente, ative e conecte um provedor de revisão em Provedores de modelos ou personalize os modelos auxiliares nas configurações. As ações que precisam de revisão continuam exigindo sua confirmação.",
           "autoReviewUnavailable": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta maior risco.",
           "autoReviewUnavailableWechat": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. O WeChat pessoal não pode usar Acesso total. Confirme esta ação diretamente.",
           "autoReviewConfirmUndelivered": "A revisão automática não terminou e a confirmação não foi entregue ou não foi respondida. Esta recusa não foi feita por você.",
@@ -15681,6 +15682,7 @@
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente em breve.",
       "REMOTE_DAEMON_CLOSED": "A conexão remota caiu, possivelmente durante uma atualização. Este turno foi encerrado. Envie a mensagem novamente.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Anexos de arquivos/imagens locais não estão acessíveis em sessões remotas. Cole o conteúdo diretamente.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Nenhum modelo de revisão automática está disponível. No computador que executa o Agente, ative e conecte um provedor de revisão em Provedores de modelos ou personalize os modelos auxiliares nas configurações. As ações que precisam de revisão continuam exigindo sua confirmação.",
       "AUTO_REVIEW_UNAVAILABLE": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta maior risco.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "A revisão automática não chegou a uma decisão, então as ações que exigem revisão agora precisam da sua confirmação. O WeChat pessoal não pode usar Acesso total. Confirme esta ação diretamente.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "A revisão automática estava indisponível, e a solicitação de confirmação não foi concluída. Isso não é uma rejeição do usuário.",

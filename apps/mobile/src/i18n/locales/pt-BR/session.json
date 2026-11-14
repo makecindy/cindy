@@ -683,6 +683,7 @@
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo do provedor pode executar esta tarefa agora. Eles podem estar offline, pausados, em espera ou sem este modelo. Verifique o grupo na página Acesso remoto e compartilhamento deste provedor no computador.",
     "REMOTE_DAEMON_CLOSED": "A conexão remota caiu, possivelmente durante uma atualização. Este turno foi encerrado. Envie a mensagem novamente.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Anexos de arquivos/imagens locais não estão acessíveis em sessões remotas. Cole o conteúdo diretamente.",
+    "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Nenhum modelo de revisão automática está disponível. No computador que executa o Agente, ative e conecte um provedor de revisão em Provedores de modelos ou personalize os modelos auxiliares nas configurações. As ações que precisam de revisão continuam exigindo sua confirmação.",
     "AUTO_REVIEW_UNAVAILABLE": "A aprovação automática não conseguiu chegar a uma decisão, então as ações que exigem aprovação agora precisam da sua confirmação. Mude esta sessão para Acesso total se preferir não ser interrompido. Esse modo tem maior risco.",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "A aprovação automática não conseguiu chegar a uma decisão, então as ações que exigem aprovação agora precisam da sua confirmação. O WeChat pessoal não pode usar Acesso total. Confirme esta ação diretamente.",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "A aprovação automática estava indisponível e a solicitação de confirmação não foi concluída. Isso não é uma rejeição do usuário.",

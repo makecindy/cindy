@@ -148,7 +148,7 @@ export function createClusterRouter(options: { secret: string; source?: (req: In
     // A WebSocket has one bounded handshake. HTTP uploads instead have a bounded connect,
     // progress-based stream timeout, then a response-header deadline after the body is sent.
     let deadline = setTimeout(timeout, FORWARD_TIMEOUT_MS);
-    deadline.unref();
+    (deadline as unknown as { unref?: () => void }).unref?.();
     let received = false;
     const answered = () => { received = true; clearTimeout(deadline); };
     if (!upgrade) {
@@ -158,7 +158,8 @@ export function createClusterRouter(options: { secret: string; source?: (req: In
       });
       outgoing.once('finish', () => {
         if (received) return;
-        clearTimeout(deadline); deadline = setTimeout(timeout, FORWARD_TIMEOUT_MS); deadline.unref();
+        clearTimeout(deadline); deadline = setTimeout(timeout, FORWARD_TIMEOUT_MS);
+        (deadline as unknown as { unref?: () => void }).unref?.();
       });
     }
     outgoing.once('response', answered);
