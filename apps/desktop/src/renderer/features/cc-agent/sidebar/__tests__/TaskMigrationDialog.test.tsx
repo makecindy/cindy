@@ -350,8 +350,9 @@ it('reopening a running copy shows its progress at once, never the start form', 
   ).toBe(false);
 });
 // 2026-11-14: a copy dialog left open while the source computer slept failed its status read
-// every second for 11 hours. Failed reads back off; the source coming online resumes at once.
-it('backs off status reads while the source is unreachable and resumes when it comes online', async () => {
+// every second for 11 hours and showed it as a failed copy. Failed reads back off, an offline
+// source reads as a wait rather than a failure, and the source coming online resumes at once.
+it('waits for an offline source with backed-off reads and resumes when it comes online', async () => {
   vi.useFakeTimers();
   try {
     const presence = new Set<(snap: { deviceId: string; online: boolean }) => void>();
@@ -363,7 +364,8 @@ it('backs off status reads while the source is unreachable and resumes when it c
     });
     let reachable = false;
     state.request.mockImplementation(async (device: string | null, command: { action: string }) => {
-      if (command.action === 'status' && !reachable) throw new Error('MIGRATION_FAILED');
+      if (command.action === 'status' && !reachable)
+        throw new Error('[DEVICE_LINK_DEVICE_OFFLINE] target device offline');
       return { supported: true, deviceId: device ?? 'local' };
     });
     const statusReads = () =>
@@ -376,6 +378,8 @@ it('backs off status reads while the source is unreachable and resumes when it c
     await vi.advanceTimersByTimeAsync(31_000);
     // Reads at 0, 2, 6, 14 and 30 s instead of 31 once-a-second failures.
     expect(statusReads()).toBe(5);
+    expect(screen.getByText('taskMigration.waitingForSource')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
     // Another computer's presence does not end the back-off.
     for (const cb of presence) cb({ deviceId: 'B', online: true });
     await vi.advanceTimersByTimeAsync(0);
@@ -384,9 +388,10 @@ it('backs off status reads while the source is unreachable and resumes when it c
     for (const cb of presence) cb({ deviceId: 'A', online: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(statusReads()).toBe(6);
-    // Healthy reads return to once a second.
+    // Healthy reads return to once a second, and the wait notice clears.
     await vi.advanceTimersByTimeAsync(2_000);
     expect(statusReads()).toBe(8);
+    expect(screen.queryByText('taskMigration.waitingForSource')).toBeNull();
   } finally {
     vi.useRealTimers();
   }

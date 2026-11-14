@@ -264,6 +264,8 @@
     "transferProgress": "已传输 {{sent}} / {{total}} · 平均 {{speed}}/s",
     "thisComputer": "本机",
     "selectedComputer": "所选电脑",
+    "sourceComputer": "来源电脑",
+    "waitingForSource": "{{name}}已离线，上线后会继续复制。",
     "estimating": "正在统计文件数量和大小…",
     "fileSummary": "项目文件：{{count}} 个，共 {{size}}",
     "estimateNote": "复制前估算，含隐藏文件；不含另行复制的 Git 历史、任务对话及附件。文件变化可能影响最终大小。",

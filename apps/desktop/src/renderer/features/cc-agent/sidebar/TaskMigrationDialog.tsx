@@ -63,6 +63,9 @@ export function TaskMigrationDialog({
   const [readyTarget, setReadyTarget] = useState('');
   const [error, setError] = useState('');
   const [pollError, setPollError] = useState('');
+  // The relay reports the source computer offline (usually asleep). That is a wait, not a failure:
+  // the copy resumes on its own once the source is back.
+  const [sourceOffline, setSourceOffline] = useState(false);
   const [self, setSelf] = useState('');
   const [estimate, setEstimate] = useState<TaskMigrationView['estimate']>();
   const [estimateError, setEstimateError] = useState('');
@@ -78,6 +81,10 @@ export function TaskMigrationDialog({
   const errorCode = (e: unknown) =>
     /\bMIGRATION_[A-Z_]+\b/.exec(e instanceof Error ? e.message : String(e))?.[0] ??
     'MIGRATION_FAILED';
+  const isSourceOffline = (e: unknown) =>
+    /\bDEVICE(?:_LINK_DEVICE)?_OFFLINE\b/.test(
+      e instanceof Error ? e.message : String(e),
+    );
   const showError = (e: unknown) => {
     if (current()) setError(errorCode(e));
   };
@@ -110,12 +117,16 @@ export function TaskMigrationDialog({
           // A fresh menu selection starts a new copy, not the previous success screen.
           setStatus(observingCopy.current ? next : { supported: true, deviceId: next.deviceId });
           setPollError('');
+          setSourceOffline(false);
         }
         failures = 0;
       } catch (e) {
         failures += 1;
-        if (!disposed && current() && epoch === mutationEpoch.current && !pending.current)
-          setPollError(errorCode(e));
+        if (!disposed && current() && epoch === mutationEpoch.current && !pending.current) {
+          const offline = isSourceOffline(e);
+          setSourceOffline(offline);
+          setPollError(offline ? '' : errorCode(e));
+        }
       }
       inFlight = false;
       if (!disposed && current())
@@ -243,7 +254,13 @@ export function TaskMigrationDialog({
   const complete = status?.stage === 'complete' || status?.stage === 'active';
   const copying = starting || !!status?.running;
   const failure =
-    error || pollError || status?.error || (started && !copying ? 'MIGRATION_FAILED' : '');
+    error ||
+    pollError ||
+    status?.error ||
+    (started && !copying && !sourceOffline ? 'MIGRATION_FAILED' : '');
+  const sourceName =
+    devices.find((device) => device.deviceId === session.deviceLinkDeviceId)?.name ??
+    t('taskMigration.sourceComputer');
   const confirming = !started && !complete && !failure && !busy;
   useEffect(() => {
     if (!confirming) return;
@@ -507,6 +524,11 @@ export function TaskMigrationDialog({
                 </p>
               )}
             </div>
+          )}
+          {sourceOffline && !complete && !failure && (
+            <p className="mt-3 text-sm text-[var(--confirm-desc)]" role="status">
+              {t('taskMigration.waitingForSource', { name: sourceName })}
+            </p>
           )}
           {failure && (
             <p className="mt-3 text-sm text-[var(--error-fg)]" role="alert">

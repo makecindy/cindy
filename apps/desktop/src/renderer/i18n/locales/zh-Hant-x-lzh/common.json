@@ -264,6 +264,8 @@
     "transferProgress": "已傳 {{sent}} / {{total}} · 均 {{speed}}/s",
     "thisComputer": "此機",
     "selectedComputer": "所擇之機",
+    "sourceComputer": "原機",
+    "waitingForSource": "{{name}}已離線，俟其復連即續錄。",
     "estimating": "方計檔案之數與大小…",
     "fileSummary": "案中檔案：{{count}} 個，共 {{size}}",
     "estimateNote": "此乃複製前之估算，含隱藏檔案；另行複製之 Git 歷史、差事言談及附件不計在內。檔案變動或影響終值。",

@@ -264,6 +264,8 @@
     "transferProgress": "전송됨 {{sent}} / {{total}} · 평균 {{speed}}/s",
     "thisComputer": "이 컴퓨터",
     "selectedComputer": "선택한 컴퓨터",
+    "sourceComputer": "원본 컴퓨터",
+    "waitingForSource": "{{name}}이(가) 오프라인입니다. 다시 온라인이 되면 복사를 계속합니다.",
     "estimating": "파일 수와 크기 계산 중…",
     "fileSummary": "프로젝트 파일: {{count}}개, 총 {{size}}",
     "estimateNote": "숨김 파일을 포함한 복사 전 예상치입니다. 별도로 복사하는 Git 기록, 작업 대화 및 첨부 파일은 제외됩니다. 파일 변경에 따라 최종 크기가 달라질 수 있습니다.",

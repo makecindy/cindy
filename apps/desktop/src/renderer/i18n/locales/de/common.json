@@ -264,6 +264,8 @@
     "transferProgress": "{{sent}} / {{total}} übertragen · Durchschnittlich {{speed}}/s",
     "thisComputer": "dieser Computer",
     "selectedComputer": "ausgewählter Computer",
+    "sourceComputer": "der Quellcomputer",
+    "waitingForSource": "Warte, bis {{name}} wieder online ist. Danach wird der Kopiervorgang fortgesetzt.",
     "estimating": "Dateien werden gezählt und Größe berechnet…",
     "fileSummary": "Projektdateien: {{count}}, insgesamt {{size}}",
     "estimateNote": "Schätzung vor dem Kopieren, einschließlich versteckter Dateien. Git-Verlauf, Chatverlauf und Anhänge werden separat kopiert und sind in dieser Größe nicht enthalten. Dateien können sich vor dem Kopieren noch ändern.",

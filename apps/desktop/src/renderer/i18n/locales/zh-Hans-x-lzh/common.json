@@ -264,6 +264,8 @@
     "transferProgress": "已传 {{sent}} / {{total}} · 均 {{speed}}/s",
     "thisComputer": "此机",
     "selectedComputer": "所择之机",
+    "sourceComputer": "原机",
+    "waitingForSource": "{{name}}已离线，俟其复连即续录。",
     "estimating": "方计文件之数与大小…",
     "fileSummary": "案中文件：{{count}} 个，共 {{size}}",
     "estimateNote": "此乃拷贝前之估算，含隐藏文件；另行拷贝之 Git 历史、差事言谈及附件不计在内。文件变动或影响终值。",
