@@ -700,7 +700,12 @@ export class BrowserProxyAuthCoordinator {
         } catch (error) {
           // Same containment as the live attach path: a worker that cannot be
           // gated is closed alone; startup only fails if that also fails.
-          if (!isWorkerTargetType(target.type)) throw error;
+          if (!isWorkerTargetType(target.type)) {
+            // Discovery and auto-attach can await the same setup Promise.
+            // Apply the same strict disappearance proof to both callers.
+            if (await this.targetHasDisappeared(target.targetId)) continue;
+            throw error;
+          }
           this.logger.warn('browser proxy authentication could not prepare a new browser target');
           await this.closeWorkerTarget(target.targetId);
         }
