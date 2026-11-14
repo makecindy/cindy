@@ -41,4 +41,5 @@ export type {
   CindyGhostsMcpDeps,
   CindyMediaCapability,
   CindyMediaToolRequest,
+  CindyEvaluateToolRequest,
 } from './types.js';

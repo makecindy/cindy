@@ -1,3 +1,4 @@
+import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/service.js';
 import { setPluginEnabled } from './pluginEnableService.js';
 import { createRuntimePluginControl } from './runtimeControl.js';
 import { createRuntimeContextProviders } from './runtimeContext.js';
@@ -6015,6 +6016,8 @@ export function getGhostCindySlot(): GhostCindySlot {
       getOwnerScopeKey: () => activeOwnerScopeKey(),
       isOwnerBoundaryPending: () => isGhostBoundaryPending(),
       // 旧协议只适配参数/结果；付费提交、轮询和入仓全部复用 Core。
+      evaluate: (...args) => callEvaluate(...args),
+      readEvaluationImage: (...args) => readEvaluationImageFile(...args),
       invokeMedia: async ({ imagePaths, imageRefs, sessionId, assertCurrent, ...request }) => {
         assertCurrent();
         const maker = sessionId ? (await import('../maker-host/index.js')).getMakerIfReady() : undefined;

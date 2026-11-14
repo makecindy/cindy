@@ -4809,7 +4809,7 @@ function projectProviderListForShare(
             agent, Array.isArray(models) ? models.filter(allowed) : [],
           ]));
         }
-        for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels']) {
+        for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels', 'evaluationModels']) {
           if (Array.isArray(scrubbed[field])) scrubbed[field] = (scrubbed[field] as unknown[]).filter(allowed);
         }
       }

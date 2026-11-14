@@ -1190,8 +1190,16 @@ function projectXdGatewayMediaModels(
       ...(model.modalities ? { modalities: model.modalities } : {}),
       discoveredMetadata: pickModelMetadata(model),
     }));
+  const evaluationModels = gatewayModels
+    .filter(model => model.mode === 'evaluation' || model.mode === 'rerank')
+    .map(model => ({
+      ...pickModelMetadata(model), ...gatewayDisplayPricing(model),
+      id: model.id, name: model.name ?? model.id, mode: model.mode,
+      ...(model.availability ? { availability: model.availability } : {}),
+    }));
   const hasEmbeddingEntries = gatewayModels.some((model) => model.mode === 'embedding');
   const identity = { ...provider };
+  delete identity.evaluationModels;
   delete identity.imageModels;
   delete identity.imageDefaults;
   delete identity.videoModels;
@@ -1205,6 +1213,7 @@ function projectXdGatewayMediaModels(
     imageModels,
     videoModels,
     audioModels,
+    ...(evaluationModels.length ? { evaluationModels } : {}),
     ...(embeddingModels.length > 0 ? { embeddingModels } : {}),
     ...(imageModels[0] ? { imageDefaults: { standard: imageModels[0].id } } : {}),
     ...(videoModels[0] ? { videoDefaults: { standard: videoModels[0].id } } : {}),

@@ -1418,6 +1418,31 @@ export function createCindyGhostsMcpServer(
   );
 
   server.tool(
+    "evaluate",
+    "用决策模型回答结构化问题，或按查询对文档重排。先 list_models 并指定 api。决策图片放在 state 顶层数组的 image_url.url，传受管地址或本机路径，不要自行转 Base64。请求超时或 outcomeKnown=false 时不要自动重提。",
+    {
+      action: z.enum(["list_models", "decisions", "rerank"]),
+      api: z.enum(["decisions", "rerank"]).optional(),
+      model_id: z.string().max(256).optional(),
+      provider_id: z.string().max(128).optional(),
+      questions: z.record(z.string(), z.object({
+        type: z.enum(["noul", "choice", "score", "box"]).describe("问题题型；box 需要图片并且模型必须支持该题型"),
+        instructions: z.string().describe("这道问题的判断要求"),
+        criteria: z.unknown().optional().describe("可选的题型约束，按所选模型的接口要求提供"),
+      })).optional().describe("decisions 必填：以问题 ID 为键，每题提供 type 和 instructions；answers 使用相同 ID"),
+      state: z.unknown().optional().describe("decisions 必填的判断上下文：字符串、对象或数组。图片仅放在顶层数组的 {type:'image_url',image_url:{url:'本机路径或受管地址'}} 中"),
+      query: z.string().optional(),
+      documents: z.array(z.string()).optional(),
+      top_n: z.number().int().positive().optional(),
+    },
+    async (input, extra) => {
+      if (!deps.callEvaluate) return textResult({ ok: false, errorCode: "UNAVAILABLE", message: "当前主机不支持决策和重排" }, true);
+      const result = await deps.callEvaluate(input, extra.signal);
+      return textResult(result, result.ok === false);
+    },
+  );
+
+  server.tool(
     "media",
     D_MEDIA,
     {

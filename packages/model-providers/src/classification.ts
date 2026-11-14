@@ -89,7 +89,7 @@ export function exclusiveXaiCatalogModelId(model: string | null | undefined): st
 
 // 仅用于分组展示, 不参与持久化或 onModelChange 数据流。
 // 对话厂商组(anthropic..ungrouped)在前;非对话类型组(image/tts/stt/realtime/video/embedding/
-// decision/compression/other)在后——后者收纳网关多出的图像/语音/视频/向量/压缩等模型(它们默认关、
+// decision/rerank/compression/other)在后——后者收纳网关多出的图像/语音/视频/向量/压缩等模型(它们默认关、
 // 不能当 agent 用,仅分类展示,见 isChatEligible)。
 //
 // `ungrouped` = **认不出厂商的对话模型**(categorize 的兜底)。它属于对话厂商组
@@ -102,7 +102,7 @@ export function exclusiveXaiCatalogModelId(model: string | null | undefined): st
 // 产地不是 id 能可靠推断的属性,猜错的代价是把别家模型挂到「中国」下面。服务端漏标的
 // 后果是它落进「未分组」——可自愈,补 group 即归位。
 //
-// `other` = **不能当对话模型用的其它端点**(moderation / rerank / 遗留 Completions /
+// `other` = **不能当对话模型用的其它端点**(moderation / 遗留 Completions /
 // 未知 mode)。保留既有 wire 语义；认不出厂商的聊天模型使用 `ungrouped`。
 export type ModelCategory =
   | 'anthropic'
@@ -120,6 +120,7 @@ export type ModelCategory =
   | 'realtime'
   | 'embedding'
   | 'decision'
+  | 'rerank'
   | 'compression'
   | 'other';
 
@@ -140,6 +141,7 @@ export const CATEGORY_ORDER: ModelCategory[] = [
   'realtime',
   'embedding',
   'decision',
+  'rerank',
   'compression',
   'other',
 ];
@@ -179,6 +181,7 @@ export const CHAT_VENDOR_CATEGORY_ORDER: readonly ModelCategory[] = CATEGORY_ORD
 const MODE_TO_CATEGORY: Record<string, ModelCategory> = {
   embedding: 'embedding',
   evaluation: 'decision',
+  rerank: 'rerank',
   image_generation: 'image',
   image_edit: 'image',
   video_generation: 'video',
@@ -266,13 +269,10 @@ export function categorize(rawId: string): ModelCategory {
   // 发现的自定义 OAuth 供应商没有 mode,不挡的话会被 isChatEligible 误判为可聊天——
   // moderation 端点不接受聊天请求)。
   if (/moderation/.test(id)) return 'other';
-  // 遗留 Completions 端点(davinci-002/babbage-002/text-davinci-*等,OpenAI 已停售但
-  // 部分网关仍会同步)与 Rerank 端点(cohere/voyage 的 rerank-*)不接受 Chat Completions
-  // 请求,未列入 issue #882 语义类型,落 other 保留原始 id(2026-07 review:走 {id,name}
-  // 极简发现的自定义 OAuth 供应商没有 mode,靠正则兜底,否则会被 isChatEligible 误判为
-  // 可聊天)。只匹配这批已停售且无歧义的固定 id/前缀——不用 `-instruct$` 这种宽泛后缀,
-  // 因为 mistral/qwen/llama 的 "-instruct" 结尾模型是正常聊天模型,不能误杀。
-  if (/rerank/.test(id)) return 'other';
+  // 无 mode 的发现结果也将重排归入独立的非对话分类。
+  if (/rerank/.test(id)) return 'rerank';
+  // 遗留 Completions 只匹配已停售且无歧义的固定 id/前缀，不用 -instruct$
+  // 这样的宽泛后缀：mistral/qwen/llama 的 instruct 模型仍可正常对话。
   const LEGACY_COMPLETION_RE =
     /^(babbage-002|davinci-002|gpt-3\.5-turbo-instruct|text-davinci-\d{3}|text-curie-001|text-babbage-001|text-ada-001|code-davinci-002)$/;
   // 精确匹配前后都锚定,带供应商命名空间前缀(如 openai/babbage-002)会漏网,同

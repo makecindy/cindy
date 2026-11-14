@@ -67,6 +67,7 @@ export const CATEGORY_LABEL_KEY: Record<ModelCategory, string> = {
   realtime: 'newChat.modelSelector.category.realtime',
   embedding: 'newChat.modelSelector.category.embedding',
   decision: 'newChat.modelSelector.category.decision',
+  rerank: 'newChat.modelSelector.category.rerank',
   compression: 'newChat.modelSelector.category.compression',
   other: 'newChat.modelSelector.category.other',
 };

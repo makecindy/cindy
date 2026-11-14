@@ -8,20 +8,20 @@ describe('media spend transaction', () => {
     db = new Database(':memory:');
     db.exec(`
       CREATE TABLE daily_spend (
-        day TEXT, cost_amount REAL DEFAULT 0, cost_currency TEXT, updated_at INTEGER,
+        day TEXT, cost_amount REAL DEFAULT 0, cost_currency TEXT, updated_at INTEGER, cost_is_approximate INTEGER DEFAULT 0,
         PRIMARY KEY(day, cost_currency));
       CREATE TABLE daily_model_usage (
         day TEXT, agent_kind TEXT, model TEXT, cost_amount REAL DEFAULT 0,
         cost_currency TEXT, updated_at INTEGER, input_tokens INTEGER DEFAULT 0,
         output_tokens INTEGER DEFAULT 0, cache_read_tokens INTEGER DEFAULT 0,
-        cache_create_tokens INTEGER DEFAULT 0,
+        cache_create_tokens INTEGER DEFAULT 0, cost_is_approximate INTEGER DEFAULT 0,
         PRIMARY KEY(day, agent_kind, model, cost_currency));
       CREATE TABLE sessions (
         id TEXT PRIMARY KEY, total_cost_usd REAL DEFAULT 0, total_cost_amount REAL DEFAULT 0,
         total_cost_currency TEXT, total_cost_is_approximate INTEGER DEFAULT 0);
       CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, agent_meta TEXT);
       CREATE TABLE schedule_runs (id TEXT PRIMARY KEY, cost_amount REAL DEFAULT 0,
-        cost_currency TEXT, cost_attribution TEXT DEFAULT 'unavailable');
+        cost_currency TEXT, cost_is_approximate INTEGER DEFAULT 0, cost_attribution TEXT DEFAULT 'unavailable');
       INSERT INTO sessions(id, total_cost_usd, total_cost_amount, total_cost_currency)
         VALUES ('session-1', 2, 3, 'USD');
     `);
@@ -151,4 +151,16 @@ describe('media spend transaction', () => {
       total_cost_amount: 3,
     });
   });
+});
+
+// Unit regression: token-priced tools must retain an estimate flag in existing ledgers;
+// the former media-only transaction could only record exact charges.
+it('records estimated tool spend through the transaction with approximation preserved', () => {
+  const db = new Database(':memory:');
+  try {
+    db.exec(`CREATE TABLE daily_spend(day TEXT, cost_amount REAL, cost_currency TEXT, updated_at INTEGER, cost_is_approximate INTEGER DEFAULT 0, PRIMARY KEY(day,cost_currency));
+      CREATE TABLE daily_model_usage(day TEXT, agent_kind TEXT, model TEXT, cost_amount REAL, cost_currency TEXT, updated_at INTEGER, cost_is_approximate INTEGER DEFAULT 0, PRIMARY KEY(day,agent_kind,model,cost_currency));`);
+    tx(db, { name: 'usage.recordMediaSpend', args: { day: '2026-11-15', model: 'example-reranker', amount: 0.1, currency: 'CNY', approximate: true, now: 1 } });
+    expect(db.prepare('SELECT cost_amount, cost_is_approximate FROM daily_spend').get()).toEqual({ cost_amount: 0.1, cost_is_approximate: 1 });
+  } finally { db.close(); }
 });

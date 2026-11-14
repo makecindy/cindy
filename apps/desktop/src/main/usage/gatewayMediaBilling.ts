@@ -33,6 +33,7 @@ export async function prepareGatewayMediaBilling(input: {
   model: string;
   sessionId?: string;
   db?: DbClient;
+  estimatedBilling?: () => { amount: number; currency: 'USD' | 'CNY' } | null;
 }): Promise<GatewayMediaBillingRecorder> {
   const ownerScope = captureDataOwnerBroadcastScope();
   const dbOwnerId = getCurrentDbClientUserId();
@@ -52,13 +53,17 @@ export async function prepareGatewayMediaBilling(input: {
   const record = async (response: Response): Promise<void> => {
     if (!response.ok) return;
     const value = response.headers.get('X-Nova-AIGateway-Billing');
-    const billing = parseGatewayMediaBillingHeader(value);
+    const estimated = input.estimatedBilling?.();
+    const actual = parseGatewayMediaBillingHeader(value);
+    const billing = actual ?? (estimated ? { cost: estimated.amount } : null);
+    const isEstimate = !actual && estimated !== null && estimated !== undefined;
+    const billingCurrency = actual ? currency : estimated?.currency ?? currency;
     if (!billing) {
       if (value) log.warn('Ignoring invalid Gateway media billing header');
       return;
     }
     if (billing.cost === 0) return;
-    if (!db || !currency) {
+    if (!db || !billingCurrency) {
       log.warn('Media billing unavailable: account database or settlement currency missing');
       return;
     }
@@ -72,7 +77,8 @@ export async function prepareGatewayMediaBilling(input: {
           model: billing.model ?? input.model,
           ...(providerName ? { providerName } : {}),
           amount: billing.cost,
-          currency,
+          currency: billingCurrency,
+          ...(isEstimate ? { approximate: true } : {}),
           sessionId: input.sessionId,
           userClientId: userTurn?.clientId,
           now,

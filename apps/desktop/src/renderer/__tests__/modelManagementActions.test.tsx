@@ -143,3 +143,14 @@ it('waits for the shared lock and reports asynchronous write failures', async ()
     expect(enabled('pi')).toBe(true);
   } finally { vi.unstubAllGlobals(); }
 });
+
+// Unit: executable decision/rerank rows have only an execution-disable switch, not
+// a chat-selector visibility preference; they must not be filed as hidden chat models.
+it('keeps available non-chat evaluation models in their own groups', () => {
+  render(<UnifiedModelList provider={{ ...provider, models: {},
+    evaluationModels: [{ id: 'example-decision', name: 'Decision', mode: 'evaluation' }, { id: 'example-rerank', name: 'Rerank', mode: 'rerank' }],
+    availableMediaModelIds: ['example-decision', 'example-rerank'],
+  }} />);
+  expect(screen.queryByText('settings.providers.models.hiddenGroup')).toBeNull();
+  expect(screen.getAllByText('newChat.modelSelector.category.rerank').length).toBeGreaterThan(0);
+});

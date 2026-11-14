@@ -23,7 +23,7 @@ import {
 import { __resetForTest, setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
-import { BUNDLED_CATALOG, buildUserProvider, mergeDiscoveredRuntimeModels, parseModelsListResponse } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildRegistry, buildUserProvider, mergeDiscoveredRuntimeModels, parseModelsListResponse } from '@cindy/model-providers';
 
 function model(id: string, contextWindow = 100_000): CatalogModel {
   return { id, name: id, contextWindow, efforts: [], defaultEffort: null } as CatalogModel;
@@ -456,4 +456,20 @@ describe('admitted model alias management', () => {
     expect(buildUnionRows(p, () => ({}))).toHaveLength(2);
     expect(buildUnionRows(aliases(), (_, id) => ({ fast: id === 'old' }))).toHaveLength(2);
   });
+});
+
+// Unit: the new standalone fields must remain manageable without creating an Agent route.
+// Minimal gap in prior media cases: evaluation/rerank were absent from the union and disable projection.
+it('shows decision and rerank rows with the saved disable state and no chat membership', () => {
+  const catalog = { ...BUNDLED_CATALOG, providers: [{ ...BUNDLED_CATALOG.providers[0], id: 'example',
+    models: {}, evaluationModels: [
+      { id: 'example-decision', name: 'Decision', mode: 'evaluation' },
+      { id: 'example-rerank', name: 'Rerank', mode: 'rerank' },
+    ] }] };
+  const [view] = buildRegistry(catalog, { example: true }, {}, { disabledModels: { 'example:example-rerank': true }, disabledProviders: {} });
+  const rows = buildUnionRows(view);
+  expect(rows.map(row => managementKindOfRow(row, false))).toEqual(['decision', 'rerank']);
+  expect(rows.every(row => isCapabilityRow(row, false))).toBe(true);
+  expect(isRowDisabled(rows[1])).toBe(true);
+  expect(view.models).toEqual({});
 });

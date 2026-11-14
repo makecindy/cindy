@@ -369,7 +369,7 @@ describe("model access catalog contract", () => {
     }
   });
 
-  it.each(["embedding", "audio_generation", "audio_speech", "audio_transcription", "realtime"])("v4/v5 允许 provider-level %s 模型使用空 agents 且省略 contextWindow", (mode) => {
+  it.each(["embedding", "audio_generation", "audio_speech", "audio_transcription", "realtime", "evaluation", "rerank"])("v4/v5 允许 provider-level %s 模型使用空 agents 且省略 contextWindow", (mode) => {
     const embeddingModel = {
       id: "voyage/voyage-4",
       name: "Voyage 4",

@@ -121,6 +121,7 @@ const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'realtime',
   'embedding',
   'decision',
+  'rerank',
   'compression',
   'other',
 ]);
@@ -230,7 +231,7 @@ export function buildUnionRows(provider: ProviderView,
     name: string;
     disabled?: boolean;
     availability?: CatalogModel['availability'];
-    group: 'image' | 'video' | 'embedding' | 'audio' | 'tts' | 'stt' | 'realtime';
+    group: 'image' | 'video' | 'embedding' | 'audio' | 'tts' | 'stt' | 'realtime' | 'decision' | 'rerank';
     displayPricing?: CatalogModel['displayPricing'];
     currency?: CatalogModel['currency'];
     costDiscount?: number;
@@ -238,6 +239,7 @@ export function buildUnionRows(provider: ProviderView,
     modalities?: CatalogModel['modalities'];
     defaultEnabled?: boolean;
   }> = [
+    ...(provider.evaluationModels ?? []).map(m => ({ ...m, group: m.mode === 'rerank' ? 'rerank' as const : 'decision' as const })),
     ...(provider.imageModels ?? []).map((m) => ({ ...m, group: 'image' as const })),
     ...(provider.videoModels ?? []).map((m) => ({ ...m, group: 'video' as const })),
     ...(provider.audioModels ?? []).map((m) => ({
@@ -409,6 +411,9 @@ export function modelVisibilityTargets(
 
 /** 普通模式的单开关显示值:任一可用 agent 开启即视为开(拨动才归一)。 */
 function rowAnyEnabled(providerId: string, row: UnionModelRow, userProvider: boolean): boolean {
+  // Evaluation endpoints have an execution-disable preference, never a chat visibility preference.
+  const category = rowCategory(row);
+  if (category === 'decision' || category === 'rerank') return true;
   return row.avail.some((a) => rowEnabled(providerId, row, a, userProvider) === true);
 }
 

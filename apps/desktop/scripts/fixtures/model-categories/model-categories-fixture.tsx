@@ -8,15 +8,15 @@ const provider: ProviderView = {
   connected: true,
   agents: ['codex'],
   models: { codex: [
-    { id: 'typesafe/jev', name: 'Jev', mode: 'evaluation', efforts: [], defaultEffort: null },
     { id: 'demo/ocr', name: 'Document OCR', mode: 'ocr', efforts: [], defaultEffort: null },
     { id: 'demo/edit', name: 'Image Editor', mode: 'image_edit', efforts: [], defaultEffort: null },
   ] },
+  evaluationModels: [{ id: 'typesafe/jev-1.14', name: 'Jev', mode: 'evaluation' }, { id: 'demo/rerank', name: 'Reranker', mode: 'rerank' }],
   imageModels: [{ id: 'demo/seedream', name: 'Seedream', mode: 'image_generation' }],
   videoModels: [{ id: 'demo/video-tiers', name: 'Video', mode: 'video_generation' }],
   audioModels: [{ id: 'demo/tts-characters', name: 'Qwen Speech', mode: 'audio_speech' }],
   embeddingModels: [],
-  availableMediaModelIds: ['demo/seedream', 'demo/video-tiers', 'demo/tts-characters'],
+  availableMediaModelIds: ['typesafe/jev-1.14', 'demo/rerank', 'demo/seedream', 'demo/video-tiers', 'demo/tts-characters'],
 };
 
 function Fixture() {
@@ -30,7 +30,7 @@ function Fixture() {
 void mountPage({
   host: () => {
     localStorage.setItem('xdt:modelListCollapsedGroups:v3', JSON.stringify({
-      image: false, video: false, tts: false, decision: false, other: false,
+      image: false, video: false, tts: false, decision: false, rerank: false, other: false,
     }));
     return { maker: {
       onProvidersChanged: subscription('providersChanged'),

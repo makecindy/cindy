@@ -707,6 +707,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应网关的文
 
 issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。
 
+### Rerank
+
+模型分类 rerank，对查询的候选文档重新排序，不进入对话模型清单。
+
 ### Speech to Text
 
 issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。

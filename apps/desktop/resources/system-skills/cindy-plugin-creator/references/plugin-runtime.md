@@ -398,3 +398,33 @@ const r = await cindy.send({
 
 页面用 SDK onprogress 接收工具进度；文件选择、上传、下载会自动报告自身进度。
 进度值保持递增，成功、失败、取消都应结束等待。完整写法见[§4.23](plugin-interactive-pages.md)。
+
+### 决策与重排模型
+
+在 `cindy.models` 声明 `decisions` 或 `rerank` 后，可通过 `cindy.send` 同步调用。
+这些接口使用主人的 Cindy AI 模型额度，不经过媒体生成 Guide，也不创建媒体任务。
+请用 `minCindyVersion` 声明完成验收的最低客户端版本，并处理旧客户端不支持的响应。
+
+```js
+const models = await cindy.send({ type: 'cindy-request', kind: 'list_models', api: 'rerank' });
+const ranked = await cindy.send({
+  type: 'cindy-request', kind: 'rerank', model: models.models[0].model,
+  providerId: models.models[0].providerId, query: '用户的问题',
+  documents: ['候选内容一', '候选内容二'], top_n: 1,
+});
+```
+
+`list_models` 只列当前账号可用且未停用、插件已声明的接口模型。
+省略 `model` 时仅在恰好一个模型可用时自动选择，否则返回 `MODEL_REQUIRED`。
+决策请求使用 `kind: 'decisions'`、`questions`、`state`；问题按 ID 映射到
+`{ type: 'noul' | 'choice' | 'score' | 'box', instructions, criteria? }`。
+图片放在 state 顶层数组的 `{ type: 'image_url', image_url: { url } }`，url 只能使用
+图片 data URL 或本插件名下的受管媒体。每次最多 16 张、图片总大小和请求体分别不超过
+32 MiB；图片每边至少 256 像素。主机会校正方向、缩放并转成 PNG/JPEG。
+题型支持由所选模型决定，`box` 需要图片且仅支持该题型的模型可用。
+
+成功结果包含 `model`、原始 `usage`、`estimatedCost: { amount, currency } | null`，
+决策另含 `answers`，重排另含 `results: [{ index, relevance_score }]`，不重复返回文档原文。
+估算费用计入任务和当天费用；缺价时不猜测金额。失败返回
+`{ ok: false, errorCode, message }`；模型提交的失败还带 `retryable` 和 `outcomeKnown`。
+超时或断网后的 `SUBMISSION_OUTCOME_UNKNOWN` 表示结果未确认，不得自动重提付费请求。

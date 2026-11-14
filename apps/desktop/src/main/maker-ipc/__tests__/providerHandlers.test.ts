@@ -743,7 +743,7 @@ describe('model-disable:set handler', () => {
     expect(deps.setModelsDisabled).toHaveBeenCalledWith('xd', ['seedream-5', 'seedance-2'], true);
   });
 
-  it.each(['audioModels', 'embeddingModels'] as const)(
+  it.each(['audioModels', 'embeddingModels', 'evaluationModels'] as const)(
     'accepts media-only members in %s and rejects unknown IDs',
     async (field) => {
       const harness = new IpcHarness();

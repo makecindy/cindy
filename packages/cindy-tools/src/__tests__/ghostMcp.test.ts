@@ -1267,6 +1267,7 @@ describe("cindy_ghosts · server 构建", () => {
       _registeredTools: Record<string, { description?: string } | undefined>;
     };
     expect(Object.keys(server._registeredTools).sort()).toEqual([
+      "evaluate",
       "ghost_call",
       "ghost_cancel_plugin_review",
       "ghost_contribution_prepare",
@@ -2331,4 +2332,21 @@ describe('personal community author MCP transport', () => {
       expect(JSON.stringify(failed)).not.toContain('private-transport-token');
     } finally { await transport.close(); }
   });
+});
+
+// Unit: exercise the real MCP transport so evaluate's schema and cancellation handle
+// reach the Host, not merely the helper function; media transport did not cover this API.
+it('routes evaluate through MCP and returns its structured answer', async () => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+  const callEvaluate = vi.fn(async () => ({ ok: true, answers: { q: true }, estimated_cost: null }));
+  const server = createCindyGhostsMcpServer(fakeDeps({ callEvaluate }));
+  const client = new Client({ name: 'evaluation-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair(); await server.connect(st); await client.connect(ct);
+  try {
+    const args = { action: 'decisions', model_id: 'example-decision', questions: { q: { type: 'noul', instructions: 'Check' } }, state: 'text' };
+    const result = await client.callTool({ name: 'evaluate', arguments: args });
+    expect(callEvaluate).toHaveBeenCalledWith(args, expect.any(AbortSignal));
+    expect(result).toMatchObject({ content: [{ type: 'text', text: expect.stringContaining('"q":true') }] });
+  } finally { await client.close(); await server.close(); }
 });

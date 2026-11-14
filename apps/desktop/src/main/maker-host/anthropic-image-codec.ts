@@ -39,7 +39,7 @@ function strictBase64Bytes(data: string): Buffer | null {
  * the bridge package remains responsible for age tiers, request budgets, and ordering.
  */
 class DesktopAnthropicImageCodec implements AnthropicImageCodec {
-  async normalize(input: AnthropicImageCodecInput): Promise<AnthropicImageCodecOutput | null> {
+  async normalize(input: AnthropicImageCodecInput & { allowedMediaTypes?: readonly string[] }): Promise<AnthropicImageCodecOutput | null> {
     const bytes = strictBase64Bytes(input.data);
     if (!bytes) return null;
     try {
@@ -63,6 +63,8 @@ class DesktopAnthropicImageCodec implements AnthropicImageCodec {
       if (
         decodedMediaType
         && PASSTHROUGH_MEDIA_TYPES.has(decodedMediaType)
+        && (!input.allowedMediaTypes || input.allowedMediaTypes.includes(decodedMediaType))
+        && (!input.allowedMediaTypes || !metadata.orientation || metadata.orientation === 1)
         && width <= input.maxEdge
         && height <= input.maxEdge
         && input.data.length <= input.hardCap
@@ -72,6 +74,7 @@ class DesktopAnthropicImageCodec implements AnthropicImageCodec {
         return { data: input.data, mediaType: decodedMediaType };
       }
 
+      if (input.allowedMediaTypes && !input.allowedMediaTypes.includes('image/jpeg')) return null;
       const resized = source.resize({
         width: input.maxEdge,
         height: input.maxEdge,
@@ -93,5 +96,5 @@ class DesktopAnthropicImageCodec implements AnthropicImageCodec {
   }
 }
 
-export const desktopAnthropicImageCodec: AnthropicImageCodec =
+export const desktopAnthropicImageCodec =
   new DesktopAnthropicImageCodec();
