@@ -2166,8 +2166,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
           // images/documents/video and rejects MP3. Preserve the encoded path and
           // select the handler before wrapping the URL for a remote source device.
           const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
-          const src = rewriteToRemoteMediaOrigin(playable, markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined));
-          return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={props.currentSessionId} />;
+          const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
+          const src = rewriteToRemoteMediaOrigin(playable, mediaOrigin);
+          // ChatVideoView 会按 sessionId 再改写一次;不改写的来源(file://host)不能让它补上。
+          return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={mediaOrigin ? props.currentSessionId : undefined} />;
         }}
       </WorkspaceMediaSrc>
     );

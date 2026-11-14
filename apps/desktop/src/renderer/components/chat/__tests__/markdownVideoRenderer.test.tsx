@@ -7,11 +7,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 afterEach(cleanup);
 
 // 每个播放器实例一个编号：同一地址重新加载只能靠重建播放器（失败态绑在实例上）。
+// data-src 与真实播放器一样经 useRemoteMediaUrl(src, sessionId) 得出，是 <video> 实际加载的地址。
 const videoMounts = vi.hoisted(() => ({ count: 0 }));
 vi.mock('../ChatVideoView', () => ({
   ChatVideoView: ({
     src,
     filename,
+    sessionId,
   }: {
     src: string;
     filename: string;
@@ -19,7 +21,8 @@ vi.mock('../ChatVideoView', () => ({
     sessionId?: string;
   }) => {
     const [instance] = useState(() => ++videoMounts.count);
-    return <video data-testid="markdown-video" data-src={src} data-instance={instance} aria-label={filename} />;
+    const displaySrc = useRemoteMediaUrl(src, sessionId);
+    return <video data-testid="markdown-video" data-src={displaySrc} data-instance={instance} aria-label={filename} />;
   },
 }));
 
@@ -44,6 +47,7 @@ vi.mock('../ChatSessionFileContext', async (importOriginal) => ({
 }));
 
 import { parseRemoteMediaUrl } from '../../../../shared/remoteMediaUrl';
+import { useRemoteMediaUrl } from '@/hooks/useRemoteMediaUrl';
 import { _clearSmartResolveCache, toLocalFileUrl } from '@/lib/localPathResolver';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { _clearStreamingMediaKeys } from '../useWorkspaceMediaPath';
