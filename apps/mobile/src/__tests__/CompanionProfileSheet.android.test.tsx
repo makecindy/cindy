@@ -24,7 +24,8 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 })
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink }) }));
 vi.mock('@/device-link/remoteResources', async original => ({ ...await original<object>(), invokeRemoteResourceAction: (...args: unknown[]) => h.invoke(...args) }));
 vi.mock('@/components/AppText', () => ({
-  Text: ({ children }: any) => <span>{children}</span>,
+  // testID 要透传：新建伙伴表单的说明行靠它定位（#10448）。
+  Text: ({ children, testID }: any) => <span data-testid={testID}>{children}</span>,
   TextInput: (p: any) => <input aria-label={p.accessibilityLabel} value={p.value} maxLength={p.maxLength} disabled={p.editable === false} onInput={e => p.onChangeText(e.currentTarget.value)} onChange={() => {}} />,
 }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => <button disabled={!!action.disabled || !!action.busy} data-tone={action.tone} onClick={action.onPress}>{action.label}</button> }));
@@ -227,13 +228,17 @@ it('reopens normal creation and starts a fresh import after closing, while prese
   expect(byText('devices.companionImport.submit')).toBeUndefined();
 });
 
-it('gates Create like iOS and offers an explicit Cancel that guards the draft', async () => {
+it('gates Create like iOS, says why it is disabled, and offers an explicit Cancel that guards the draft', async () => {
   h.read.mockResolvedValue(createPanel());
   await renderCreate();
   const create = () => byText('devices.companionProfile.create')!;
   expect(create().disabled).toBe(true);
+  // #10448: a grey button with no reason reads as a broken feature, so the sheet names the gap.
+  expect(byTest('companionCreate.hint')?.textContent).toBe('devices.companionProfile.createNeedsDetails');
   await type('Name', 'Nova'); expect(create().disabled).toBe(false);
+  expect(byTest('companionCreate.hint')).toBeNull();
   await act(async () => h.portrait.onChange('')); expect(create().disabled).toBe(true);
+  expect(byTest('companionCreate.hint')?.textContent).toBe('devices.companionProfile.createNeedsDetails');
   await act(async () => h.portrait.onChange('portrait')); expect(create().disabled).toBe(false);
   expect(h.sheet.preventDismiss).toBe(true);
   await press(byText('devices.common.cancel'));
@@ -241,10 +246,12 @@ it('gates Create like iOS and offers an explicit Cancel that guards the draft', 
   await act(async () => h.alert.mock.calls[0][2][1].onPress()); expect(h.close).toHaveBeenCalledOnce();
 });
 
-it('keeps Create disabled for a disabled host action and cancels a clean form directly', async () => {
+it('keeps Create disabled for a disabled host action, says the computer cannot create, and cancels a clean form directly', async () => {
   h.read.mockResolvedValue(createPanel(true));
   await renderCreate(); await type('Name', 'Nova');
   expect(byText('devices.companionProfile.create')!.disabled).toBe(true);
+  // The host refuses creation; without this line the grey button explains nothing (#10448).
+  expect(byTest('companionCreate.hint')?.textContent).toBe('devices.companionProfile.createHostUnsupported');
   await type('Name', '');
   await press(byText('devices.common.cancel'));
   expect(h.alert).not.toHaveBeenCalled(); expect(h.close).toHaveBeenCalledOnce();

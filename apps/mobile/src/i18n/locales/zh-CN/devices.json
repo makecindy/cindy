@@ -738,6 +738,8 @@
     "memoryDeleteFailed": "删除失败",
     "create": "新建伙伴",
     "createFailed": "暂未确认创建结果，请重试核对。",
+    "createHostUnsupported": "这台电脑暂时不能新建伙伴，请更新电脑端的 Cindy，或在那台电脑上新建伙伴。",
+    "createNeedsDetails": "填写名字并选好头像后即可新建伙伴。",
     "title": "伙伴资料",
     "profile": "资料与性格",
     "memory": "记忆",

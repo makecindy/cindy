@@ -738,6 +738,8 @@
     "memoryDeleteFailed": "削除できませんでした",
     "create": "仲間を新規作成",
     "createFailed": "作成結果を確認できていません。再試行して確認してください。",
+    "createHostUnsupported": "このパソコンでは今は仲間を作成できません。パソコン側の Cindy を更新するか、そのパソコンで作成してください。",
+    "createNeedsDetails": "名前を入力してアイコンを選ぶと仲間を作成できます。",
     "title": "仲間",
     "profile": "プロフィールと性格",
     "memory": "記憶",

@@ -745,6 +745,8 @@
     "memoryDeleteFailed": "Não foi possível excluir a memória",
     "create": "Novo amigo",
     "createFailed": "A criação ainda não foi confirmada. Tente novamente para verificar.",
+    "createHostUnsupported": "Este computador não pode criar um amigo agora. Atualize o Cindy nele ou crie no próprio computador.",
+    "createNeedsDetails": "Digite um nome e escolha um retrato para criar um amigo.",
     "title": "Amigo",
     "profile": "Perfil e personalidade",
     "memory": "Memória",

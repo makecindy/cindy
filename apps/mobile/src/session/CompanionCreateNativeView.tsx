@@ -8,6 +8,8 @@ export interface CompanionCreateNativeViewProps {
   /** The typed name already belongs to a teammate on this computer (NFKC, case-insensitive). */
   duplicate?: boolean;
   modelMissing?: boolean;
+  /** Why the confirm button is disabled, when the form itself cannot say (host cannot create, name or portrait empty). */
+  hint?: string;
   /** The last create is unconfirmed; the retry resends exactly what was sent. */
   locked?: boolean;
 }
