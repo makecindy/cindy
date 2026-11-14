@@ -21326,8 +21326,7 @@
     "providerManagedAuth": "現在の Codex プロバイダーでは ChatGPT アカウント情報を取得できません。プロバイダーの追加時に「$t(subscriptionAccounts.signIn.anotherAccount)」を選ぶと、別のフォルダーを使用できます。",
     "signIn": {
       "checking": "ローカルアカウントを確認中…",
-      "detected": "ログイン済みのアカウントが見つかりました",
-      "useAccount": "このアカウントを使う",
+      "useAccount": "このコンピュータの {{cli}} アカウントを使う",
       "anotherAccount": "別のアカウントでログイン",
       "keepExisting": "新しいアカウントは、統合先を選ばない限り単独のプロバイダーになります。既存のログインは維持されます。",
       "checkFailed": "ローカルアカウントを確認できませんでした。再試行してください。",
@@ -21337,7 +21336,6 @@
     "title": "サブスクリプションアカウント",
     "strategy": "負荷分散",
     "add": "アカウントを追加",
-    "default": "既定フォルダー",
     "defaultTag": "既定",
     "ready": "接続済み",
     "signedOut": "ログインが必要",

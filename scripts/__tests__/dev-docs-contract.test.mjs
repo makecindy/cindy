@@ -336,9 +336,9 @@ test("current locale-aware QA artifacts cover every supported locale", () => {
 
 test("runtime versions and the docs contract are code-owned", () => {
 	const rootPackage = readJson("package.json");
-	assert.equal(rootPackage.engines.node, ">=22.12");
-	assert.equal(rootPackage.engines.pnpm, ">=10.7 <11");
-	assert.match(rootPackage.packageManager, /^pnpm@10\./);
+	assert.equal(rootPackage.engines.node, ">=22.13");
+	assert.equal(rootPackage.engines.pnpm, ">=11.25 <12");
+	assert.match(rootPackage.packageManager, /^pnpm@11\./);
 	assert.match(rootPackage.scripts["test:runner"], /scripts\/__tests__\/dev-docs-contract\.test\.mjs/);
 });
 

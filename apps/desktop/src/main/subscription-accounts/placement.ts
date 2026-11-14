@@ -149,6 +149,13 @@ export function readCreatedSubscriptionProviders(): Readonly<Record<string, Crea
   return file.read().providers ?? {};
 }
 
+/** Preserve an already-published list on an unreadable file; missing or valid empty files clear it. */
+export function readCreatedSubscriptionProvidersIfReadable(): Readonly<Record<string, CreatedSubscriptionProvider>> | null {
+  file.invalidateIfChanged();
+  if (file.isUnreadable()) return null;
+  return file.read().providers ?? {};
+}
+
 /** A provider that owns subscription accounts, with the pool kind its accounts live in. */
 export interface SubscriptionPoolProviderRef {
   kind: SubscriptionProvider;
