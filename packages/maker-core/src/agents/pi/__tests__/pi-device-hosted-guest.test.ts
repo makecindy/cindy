@@ -269,6 +269,23 @@ describe('Pi device-hosted guest sessions', () => {
     }
   });
 
+  // 边做边压的原文快照写在本机 pi 数据目录,而托管任务的文件工具经隧道回到任务所在电脑:
+  // 开关再开也不能给托管会话挂 live-compact,否则模型按卡片指针 read 读不到备份。
+  it('keeps live compact off device-hosted sessions even when the flag is on', async () => {
+    const { handle, args, extensionsDir } = await start(false, { deps: { resolvePiLiveCompactEnabled: () => true } });
+    try {
+      expect(repeatedArgValues(args, '--extension')).not.toContain(path.posix.join(extensionsDir, 'live-compact.ts'));
+      expect(existsSync(path.posix.join(extensionsDir, 'live-compact.ts'))).toBe(false);
+      // 桥与子代理扩展照常。
+      expect(repeatedArgValues(args, '--extension')).toEqual(expect.arrayContaining([
+        path.posix.join(extensionsDir, 'cindy-bridge.ts'),
+        path.posix.join(extensionsDir, 'cindy-subagent.ts'),
+      ]));
+    } finally {
+      await handle.close();
+    }
+  });
+
   // 插件工具经 MCP 桥回到受邀者电脑：花名册用它带来的快照，本机的仍不读。
   it('gives a guest the roster from its own computer', async () => {
     const { handle, args } = await start(true, { ghostRosterSnapshot: 'TASK COMPUTER GHOST ROSTER', mcpServers: ['cindy'] });

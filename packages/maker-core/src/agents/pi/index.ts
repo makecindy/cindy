@@ -3446,7 +3446,9 @@ export class PiAgent extends BaseAgent {
     // 显式 --extension 加载。与 bridge 同一形态 —— 每次 startSession 覆写,保证 pi 里跑的
     // 代码与本版本一致,不依赖用户机器上残留的旧文件。
     // 远端会话不适用:daemon 加载不到宿主机上的扩展源码。
-    const liveCompactEnabled = !opts.remoteHostId
+    // 设备托管也不适用:原文快照写在本机 pi 数据目录,而托管任务的文件工具经隧道
+    // 回到任务所在电脑,模型按卡片指针 read 读不到本机路径(同 compactionMemory 的排除理由)。
+    const liveCompactEnabled = !opts.remoteHostId && !opts.deviceHosted
       && (this.deps.resolvePiLiveCompactEnabled?.() ?? false);
     const liveCompactExtensionPath = joinRemotePosixPath(extensionsDir, 'live-compact.ts');
     if (liveCompactEnabled) {
