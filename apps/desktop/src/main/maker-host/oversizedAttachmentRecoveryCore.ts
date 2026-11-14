@@ -150,12 +150,16 @@ function createRequestSizeController(
   const controller: RequestSizeController = {
     enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
     format: ctx => ctx.url.includes('/responses') ? 'responses' : ctx.url.includes('/messages') ? 'anthropic' : ctx.url.includes('/chat/completions') ? 'chat' : null,
-    route: (ctx, body) => ({
-      endpoint: ctx.url,
-      providerId: ctx.headers['x-cindy-pi-provider-id'] ?? ctx.headers['x-cindy-provider-id'] ?? ctx.headers['x-openai-provider-id'],
-      modelId: typeof body === 'object' && body !== null && typeof (body as { model?: unknown }).model === 'string'
-        ? (body as { model: string }).model : undefined,
-    }),
+    route: (ctx, body) => {
+      const providerId = ctx.headers['x-cindy-pi-provider-id'] ?? ctx.headers['x-cindy-provider-id'] ?? ctx.headers['x-openai-provider-id'];
+      const modelId = typeof body === 'object' && body !== null && typeof (body as { model?: unknown }).model === 'string'
+        ? (body as { model: string }).model : undefined;
+      const sessionId = resolveSession(ctx.headers) ?? '';
+      const prefix = `${sessionId}|${providerId ?? ''}|${ctx.url}|${modelId ?? ''}|`;
+      const denied = new Set<string>();
+      for (const [key, mimes] of deniedRouteMimes) if (key.startsWith(prefix)) for (const mime of mimes) denied.add(mime);
+      return { endpoint: ctx.url, providerId, modelId, deniedMimeTypes: [...denied] };
+    },
     preprocessor,
     retry: async (body, error, ctx, signal) => {
       const parsedHint = (() => {
