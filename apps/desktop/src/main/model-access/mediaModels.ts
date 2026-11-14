@@ -242,6 +242,7 @@ export async function listAvailableMediaModels(
           CINDY_AI_PROVIDER_ID,
           model.id,
           'defaultEnabled' in model ? model.defaultEnabled : undefined,
+          model.mode === 'video_generation' ? 'video' : 'image',
         ),
       )
       .map((model) => ({ ...model, providerId: CINDY_AI_PROVIDER_ID }));
@@ -514,6 +515,7 @@ export async function listExecutableMediaModels(
       CINDY_AI_PROVIDER_ID,
       model.id,
       'defaultEnabled' in model ? model.defaultEnabled : undefined,
+      model.mode === 'video_generation' ? 'video' : 'image',
     );
   });
   const gatewayModels: ExecutableMediaModel[] = [];

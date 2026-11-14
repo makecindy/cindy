@@ -5082,7 +5082,10 @@ function getCatalogMediaConfig(
       kind === 'image'
         ? (providerId) => providerId === 'xd' || (imageRegistry?.isProviderEditReady(providerId) ?? false)
         : undefined,
-      kind === 'image' || kind === 'video' ? isCatalogMediaModelVisible : undefined,
+      kind === 'image' || kind === 'video'
+        ? (providerId, modelId, defaultEnabled) =>
+            isCatalogMediaModelVisible(providerId, modelId, defaultEnabled, kind)
+        : undefined,
     );
   } catch (err) {
     // 目录读取异常 = 拿不到可用性证明,同「空清单」处理(不静默顶一份旧名单)。
@@ -5172,6 +5175,7 @@ function getMediaPreferenceConfig(capability: GhostMediaCapability): CindyMediaP
         'xd',
         model.id,
         'defaultEnabled' in model ? model.defaultEnabled : undefined,
+        kind,
       ),
     ),
     kind,
@@ -5329,6 +5333,7 @@ async function getGhostConfigurableMediaModels(
           model.providerId,
           model.id,
           'defaultEnabled' in model ? model.defaultEnabled : undefined,
+          type,
         ),
       );
     const candidates = selectExecutableCoreMediaModels(allModels, type);
@@ -5788,7 +5793,7 @@ function listLocalProviderMediaModels(respectDisplaySwitch = false) {
         !getImageChannelRegistry().isProviderReady(provider.id, model.id) ||
         isModelDisabled(access, provider.id, model.id) ||
         (respectDisplaySwitch &&
-          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled))
+          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled, 'image'))
       ) {
         return [];
       }
@@ -5844,7 +5849,7 @@ function listLocalProviderVideoModels(respectDisplaySwitch = false): ProviderMed
           ? !resolveCustomVideoConnection(provider.id, model.id)
           : !registry?.hasAlias(model.id, provider.id)) ||
         (respectDisplaySwitch &&
-          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled))
+          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled, 'video'))
       ) {
         return [];
       }
