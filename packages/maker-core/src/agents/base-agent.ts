@@ -2589,6 +2589,10 @@ export interface AgentSessionHandle {
    */
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
+  /** Native descendants can outlive the root turn without producing background-task cards.
+   * Host-only activity signal; these descendants share the root account and are not extra slots. */
+  hasBackgroundWork?(): boolean;
+
   /**
    * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数
    * (awaiting + active,cancelled 不计)。listBackgroundTasks 在任务终态后

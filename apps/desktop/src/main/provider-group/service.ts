@@ -252,7 +252,7 @@ export interface ProviderGroupServiceDeps {
    * 那个账号的标记(只用来区分账号，不含身份或目录)；不是多账号、读不到、分享来的或旧版执行电脑时为 null。
    * 不提供 = 不在同一台电脑上换账号(subscription-account-pools.md「账号间自动换号」)。
    */
-  readAccountSwitch?(sessionId: string): Promise<string | null>;
+  readAccountSwitch?(sessionId: string, turnError?: unknown, isCurrent?: () => boolean): Promise<string | null>;
   /** 不换电脑时交回原有处理(额度重置后自动继续等)。 */
   fallback(sessionId: string, signals: InterruptedTurnErrorSignals, token: number, options?: UsageLimitRecoveryOptions): void;
   /** 报错里的重置时刻(unix ms)。 */
@@ -733,9 +733,9 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
    * 撞限或登录失效时，任务所在那台的账号池能否换一个账号接着跑(只读)。这一轮已经从同一个账号换下来过的不算：
    * 那次没换成，再原地换只会反复撞同一个账号。读不到按不能换，最多等一次组内电脑状态的时限。
    */
-  async function readAccountSwitch(sessionId: string): Promise<string | null> {
+  async function readAccountSwitch(sessionId: string, turnError: unknown, isCurrent: () => boolean): Promise<string | null> {
     if (!deps.readAccountSwitch) return null;
-    const token = await withTimeout(deps.readAccountSwitch(sessionId).catch(() => null), PROVIDER_GROUP_ADOPT_TIMEOUT_MS);
+    const token = await withTimeout(deps.readAccountSwitch(sessionId, turnError, isCurrent).catch(() => null), PROVIDER_GROUP_ADOPT_TIMEOUT_MS);
     if (!token) return null;
     // Also release abandoned tasks' expired rounds while processing new failures; the service
     // can outlive those tasks, so pruning only the current id would retain their account sets.
@@ -1647,7 +1647,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     // 撞限或登录失效的只是这台电脑上的一个账号：它的账号池里另一个账号此刻能接时，这台不冷却、不记试过，仍和其他
     // 电脑一起按组策略挑；挑中它就留在原电脑换账号继续(subscription-account-pools.md「账号间自动换号」)。
     const askAccounts = (cause === 'usage-limit' || cause === 'auth') && deps.readAccountSwitch !== undefined;
-    const accountSwitch = askAccounts ? await readAccountSwitch(sessionId) : null;
+    const accountSwitch = askAccounts ? await readAccountSwitch(sessionId, signals, isCurrent) : null;
     // 查询期间用户已接手：不冷却、不换电脑。
     if (askAccounts && !isCurrent()) return;
     if (askAccounts) input.setAccountSwitchChecked(true);

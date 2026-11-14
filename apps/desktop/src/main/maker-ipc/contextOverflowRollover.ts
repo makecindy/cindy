@@ -449,6 +449,7 @@ export interface ContextOverflowRolloverDeps {
     getTurnGeneration?(): number;
     isTurnRunning(): boolean;
     listBackgroundTasks?(): ReadonlyArray<unknown>;
+    hasBackgroundWork?(): boolean;
     getUsageSnapshot?(): { contextTokens: number; contextWindow: number; needsRollover?: boolean };
   } | null | undefined;
   rehydrateColdPiRuntimeForWindowVerification?(sessionId: string): Promise<void>;
@@ -663,7 +664,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
-      if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) {
+      if (live?.isTurnRunning() || live?.hasBackgroundWork?.() || (live?.listBackgroundTasks?.().length ?? 0) > 0) {
         deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
         return false;
       }
@@ -720,6 +721,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             && (!turnIdentity?.instanceId || !currentLive?.instanceId || turnIdentity.instanceId === currentLive.instanceId)
             && (turnIdentity?.generation === undefined || !currentLive?.getTurnGeneration || turnIdentity.generation === currentLive.getTurnGeneration())
             && !currentLive?.isTurnRunning()
+            && !currentLive?.hasBackgroundWork?.()
             && !(currentLive?.listBackgroundTasks?.().length);
         };
         if (!sourceUnchanged()) return false;
@@ -1077,7 +1079,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // SSH only; device-link 会话在被控桌面是本地 session,继续换窗。
     if (sessionRow.remoteHostId) return false;
     const live = deps.getLiveSession(sessionId);
-    if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) return false;
+    if (live?.isTurnRunning() || live?.hasBackgroundWork?.() || (live?.listBackgroundTasks?.().length ?? 0) > 0) return false;
     const accountHandoff = await deps.needsNativeSessionHandoff?.(sessionId, sessionRow) ?? false;
     if (!sessionRow.sdkSessionId && !accountHandoff) return false;
     // All companion lanes use the ordinary Session recovery boundary. Healthy
@@ -1214,7 +1216,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           }
           assertReady();
           const live = deps.getLiveSession(sessionId);
-          if (target && (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0)) {
+          if (target && (live?.isTurnRunning() || live?.hasBackgroundWork?.() || (live?.listBackgroundTasks?.().length ?? 0) > 0)) {
             throw new Error('Native session recovery cannot interrupt a running turn or background task');
           }
           // Manual restart closes the broken runtime without asking it to compact.

@@ -8,11 +8,13 @@ const host = vi.hoisted(() => ({
   goals: new Map<string, GoalState>(),
   row: { providerId: 'openai', model: 'gpt-6-astra', agentDeviceId: null as string | null },
   codex: vi.fn<() => Promise<CodexAccountUsagePayload | null>>(),
+  accountSwitch: vi.fn<() => Promise<string | null>>(),
 }));
 
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info() {}, warn() {}, error() {} }) }));
 vi.mock('../../maker-ipc/register.js', () => ({
   hasRestoredCodexQuota: vi.fn(),
+  readSessionSubscriptionAccountSwitch: host.accountSwitch,
   acquirePendingAgentSwitchForDirectSend: async () => () => {},
   isSessionInTurn: () => false,
   ensureGoalInputReady: async () => true,
@@ -74,7 +76,7 @@ async function start(agentKind: SessionLike['agentKind'] = 'codex') {
     return { accepted: true };
   });
   const session = {
-    id: 's1', agentKind, send,
+    id: 's1', instanceId: 'original-instance', requestSessionId: 'original-native', agentKind, send,
     onEvent(next: (event: AgentEvent) => void) {
       listener = next;
       return () => { listener = null; };
@@ -92,6 +94,7 @@ async function start(agentKind: SessionLike['agentKind'] = 'codex') {
   expect(send).toHaveBeenCalledTimes(1);
   return {
     controller, send,
+    progress() { listener?.({ type: 'tool_result_full', data: { isError: false, fullText: 'saved useful work' } } as AgentEvent); },
     finish(error?: Record<string, unknown>) {
       const emit = (event: unknown) => listener?.(event as AgentEvent);
       if (error) {
@@ -113,6 +116,7 @@ beforeEach(() => {
   const openai = getActiveCatalog().providers.find(p => p.id === 'openai')!;
   setCustomProviders([{ ...openai, id: 'work-account', auth: { ...openai.auth, native: 'codex' } }]);
   host.codex.mockReset();
+  host.accountSwitch.mockReset().mockResolvedValue(null);
   const snapshot = {
     primary: { usedPercent: 100, resetsAt: RESET / 1000 },
     credits: { hasCredits: true, unlimited: false, balance: '100' },
@@ -131,6 +135,54 @@ afterEach(async () => {
 // This unit exercises startGoalController -> real controller -> persisted state/send;
 // memory storage/session boundaries prevent live model requests or owner-data access.
 describe('ChatGPT goal admission', () => {
+  // Unit regression: ordinary auto-resume excludes Goal; a billing rejection used to block
+  // forever even with an alternate pool account. Exercise real host/controller persistence.
+  it.each(['Usage limit reached', 'Your workspace is out of credits. Ask your workspace owner to refill in order to continue.'])(
+    'continues the same goal on confirmed alternate capacity after %s', async message => {
+      host.accountSwitch.mockResolvedValue('local#openai:second');
+      const h = await start();
+      const before = await h.controller.getStatus('s1');
+      h.finish({ message });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: NOW + 2000 });
+      await vi.advanceTimersByTimeAsync(2200);
+      expect(h.send).toHaveBeenCalledTimes(2);
+      expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'active', objective: before!.objective, startedAt: before!.startedAt, turnsUsed: 1 });
+    });
+  it('leaves a workspace billing failure blocked without a confirmed alternative', async () => {
+    const h = await start();
+    h.finish({ message: 'Your workspace is out of credits. Ask your workspace owner to refill in order to continue.' });
+    await vi.advanceTimersByTimeAsync(86400000);
+    expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'blocked', usageResetAt: null });
+    expect(h.send).toHaveBeenCalledTimes(1);
+  });
+  it('bounds repeated failed account continuations and lets Clear cancel the waiting retry', async () => {
+    host.accountSwitch.mockResolvedValue('local#openai:second');
+    const h = await start();
+    const failure = { message: 'Your workspace is out of credits.' };
+    for (let attempt = 0; attempt < 4; attempt++) { h.finish(failure); await vi.advanceTimersByTimeAsync(2200); }
+    expect(h.send).toHaveBeenCalledTimes(4);
+    expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'blocked' });
+    await h.controller.resumeGoal('s1');
+    h.finish(failure);
+    await vi.advanceTimersByTimeAsync(0);
+    await h.controller.clearGoal('s1');
+    const count = h.send.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(h.send).toHaveBeenCalledTimes(count);
+    expect(await h.controller.getStatus('s1')).toBeNull();
+  });
+  it('renews the recovery budget after useful work even when that turn later hits a limit', async () => {
+    host.accountSwitch.mockResolvedValue('local#openai:second');
+    const h = await start();
+    for (let attempt = 0; attempt < 4; attempt++) {
+      h.progress();
+      h.finish({ message: 'Your workspace is out of credits.' });
+      await vi.advanceTimersByTimeAsync(2200);
+    }
+    expect(h.send).toHaveBeenCalledTimes(5);
+    expect(await h.controller.getStatus('s1')).toMatchObject({ status: 'active', objective: 'Finish the work' });
+  });
   it.each([
     { agent: 'codex', provider: 'openai' },
     { agent: 'claude-code', provider: 'openai' },

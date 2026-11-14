@@ -243,6 +243,41 @@ export function providerGroupMemberUsageState(
   return member.codexUsage ? codexUsageState(member.codexUsage, model, now, agentKind) : providerGroupUsageState(member.claudeUsage, model, now);
 }
 
+/** All fresh windows for this model, for native account load sharing. Unknown is never zero. */
+export function providerGroupMemberQuotaWindows(
+  member: { claudeUsage?: ClaudeSubscriptionUsageSnapshot | null; codexUsage?: ProviderGroupCodexUsageSnapshot | null },
+  model: string | null | undefined, now: number, agentKind?: string,
+): readonly ProviderGroupMemberQuota[] | null {
+  if (member.codexUsage) {
+    const snapshot = member.codexUsage;
+    const bucket = snapshot.nativeAccountPool
+      ? matchCodexBucketForModel(snapshot.appServerBuckets, model?.replace(/^chatgpt\//, ''), now)
+      : (agentKind !== undefined && agentKind !== 'codex') || model?.startsWith('chatgpt/')
+        ? snapshot.webSnapshot : matchCodexBucketForModel(snapshot.appServerBuckets, model, now);
+    if (!bucket || !currentSnapshot(bucket.updatedAt, now)) return null;
+    const raw = [bucket.primary, bucket.secondary].filter((w): w is CodexUsageWindow => w !== null);
+    if (raw.length === 0 || raw.some(w => w.usedPercent === undefined || w.windowMinutes === null
+      || (w.resetsAt !== null && w.resetsAt * 1000 <= now))) return null;
+    const windows = raw.filter(w => !w.resetsAt || w.resetsAt * 1000 > now).map(w => ({
+      usedPercent: w.usedPercent!, windowMs: w.windowMinutes! * 60_000,
+      resetAtMs: w.resetsAt ? w.resetsAt * 1000 : null,
+    }));
+    return windows.length ? windows : null;
+  }
+  const snapshot = providerGroupUsageSnapshot(member.claudeUsage, now);
+  if (!snapshot) return null;
+  const scoped = matchScopedWindowForModel(snapshot.scoped, model);
+  const raw = [
+    ...(snapshot.fiveHour ? [{ window: snapshot.fiveHour, ms: FIVE_HOURS_MS }] : []),
+    ...(snapshot.sevenDay ? [{ window: snapshot.sevenDay, ms: WEEK_MS }] : []),
+    ...(scoped ? [{ window: scoped, ms: WEEK_MS }] : []),
+  ];
+  const windows = raw.filter(({ window }) => !window.resetsAt || window.resetsAt * 1000 > now)
+    .map(({ window, ms }) => ({ usedPercent: window.utilization, windowMs: ms,
+      resetAtMs: window.resetsAt ? window.resetsAt * 1000 : null }));
+  return windows.length ? windows : null;
+}
+
 function windowOf(raw: unknown): ClaudeUsageWindow | null {
   const value = record(raw);
   if (!value || typeof value.utilization !== 'number' || !Number.isFinite(value.utilization) || value.utilization < 0) return null;

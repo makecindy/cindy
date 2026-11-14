@@ -1,3 +1,4 @@
+import { unleasedSubscriptionActivity, type SubscriptionRootActivity } from './activity.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -14,7 +15,8 @@ import {
 } from '../maker-host/nativeProviderAuthBinding.js';
 import { pickProviderGroupMember, providerGroupMembersFull } from '../provider-group/scheduler.js';
 import { concurrencyLimitPatch, effectiveConcurrencyLimit } from '../../shared/providerGroup.js';
-import { providerGroupMemberUsageState } from '../provider-group/usage.js';
+import { providerGroupMemberUsageState, providerGroupMemberQuotaWindows, providerGroupRebalanceTarget } from '../provider-group/usage.js';
+import { pickSubscriptionAccountMember, subscriptionWindowPressure, subscriptionWindowRoom } from './scheduler.js';
 import {
   coolingScope,
   currentCooling,
@@ -129,6 +131,8 @@ interface OwnerRuntime {
   cache: Map<string, AccountSnapshot>;
   flights: Map<string, { promise: Promise<AccountSnapshot>; forceUsage: boolean }>;
   running: Map<string, Set<string>>;
+  legacyRoots?: SubscriptionRootActivity[];
+  leaseTasks?: Map<string, string>;
   /** Pending reassignments still require admission after an abandoned reservation expires. */
   pendingStarts: Map<string, { accountId: string; token: string; until: number }>;
   /** Keyed by the provider that owns the picked accounts (subscription-account placement). */
@@ -144,6 +148,28 @@ interface OwnerRuntime {
   defaultCodexAuthEpoch: number;
 }
 let runtime: OwnerRuntime | undefined;
+let readRootActivity: (() => Promise<SubscriptionRootActivity[]>) | undefined;
+/** The launcher supplies live local roots; no process or rollout scan belongs on the dispatch path. */
+export function setSubscriptionAccountActivityReader(reader: (() => Promise<SubscriptionRootActivity[]>) | undefined): void {
+  readRootActivity = reader;
+}
+function refreshRootActivity(state: OwnerRuntime): Promise<void> | undefined {
+  if (!readRootActivity) return;
+  return readRootActivity().then(roots => {
+    assertOwner(state);
+    expirePendingStarts(state);
+    state.legacyRoots = roots;
+  });
+}
+function accountRunning(state: OwnerRuntime, provider: SubscriptionProvider, id: string): number {
+  const extra = unleasedSubscriptionActivity(state.legacyRoots ?? [], sessionId => {
+    const token = state.leaseTasks?.get(sessionId);
+    return !!token && [...state.running.values()].some(tokens => tokens.has(token))
+      || state.pendingStarts.has(keyOf(provider, `task:${sessionId}`));
+  });
+  return (state.running.get(keyOf(provider, id))?.size ?? 0) + (extra.get(`${provider}:${id}`) ?? 0);
+}
+
 const listeners = new Set<(providerId: SubscriptionProvider, resetAccountId?: string) => void>();
 const codexModelListeners = new Set<() => void>();
 /** Synchronous capability invalidation; listeners read the newly committed union. */
@@ -247,6 +273,42 @@ function accountCooling(state: OwnerRuntime, provider: SubscriptionProvider, id:
   const scope = coolingScope(provider === 'openai' ? model?.replace(/^chatgpt\//, '') : model);
   return Boolean(scopes[''] || scopes[scope]);
 }
+/** Record a real failure on a proven account; snapshots alone never establish credit admission. */
+export function observeSubscriptionAccountFailure(
+  provider: SubscriptionProvider, accountId: string, error: unknown,
+  failedModel: string | undefined, phase: 'start' | 'run' = 'run',
+): boolean {
+  const state = currentRuntime();
+  assertOwner(state);
+  const pool = readPool(provider);
+  const account = pool?.accounts.find(a => a.id === accountId);
+  if (!pool || !account || account.paused || disconnectedFor(pool, provider, accountId)) return false;
+  const key = keyOf(provider, accountId);
+  const signals = providerGroupFailureSignals(error);
+  const decision = decideProviderGroupFailure(signals, phase);
+  if (decision.action !== 'switch') return false;
+  // Same causes and durations as a group member (provider-groups.md §5 冷却): the task model
+  // until its quota resets; login or overload failures cool the whole account briefly.
+  if (!decision.cool) return true;
+  const now = Date.now();
+  const usageLimit = decision.cause === 'usage-limit';
+  const resetAt = usageLimit ? readTurnUsageResetAt(signals, now) : null;
+  const scope = usageLimit
+    ? coolingScope(provider === 'openai' ? failedModel?.replace(/^chatgpt\//, '') : failedModel)
+    : '';
+  const scopes = currentCooling(state.quotaCooling.get(key), now);
+  const until = !usageLimit
+    ? now + PROVIDER_GROUP_FAILURE_COOLDOWN_MS
+    : resetAt !== null && resetAt > now ? resetAt : now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS;
+  // Refresh the scope's insertion order and bound remembered model failures.
+  const previous = scopes[scope] ?? 0;
+  delete scopes[scope];
+  scopes[scope] = Math.max(previous, until);
+  state.quotaCooling.set(key, Object.fromEntries(Object.entries(scopes).slice(-PROVIDER_GROUP_COOLING_SCOPE_CAP)));
+  persistCooling(state);
+  return true;
+}
+
 function legacyCodexDefault(provider: SubscriptionProvider): boolean {
   if (provider !== 'openai') return false;
   const pool = readPool(provider);
@@ -1103,6 +1165,8 @@ export async function readSubscriptionPoolUsage(
   if (found.off) return null;
   const { kind: provider, pool, ref } = found;
   const state = currentRuntime();
+  const activityRefresh = refreshRootActivity(state);
+  if (activityRefresh) await activityRefresh;
   // A provider's quota comes from its own accounts only.
   const members = providerAccounts(provider, pool.accounts, ref.providerId);
   const infos = await Promise.all(members.map((a) => snapshot(state, provider, a.id)));
@@ -1122,7 +1186,7 @@ export async function readSubscriptionPoolUsage(
         ...a,
         key: a.id,
         usable: infos[i].auth.authenticated && !usage.limited,
-        running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
+        running: accountRunning(state, provider, a.id),
         // Quota reads reserve nothing: busy accounts still have quota. Only
         // acquireSubscriptionAccount applies the hard concurrency admission.
         limit: Number.POSITIVE_INFINITY,
@@ -1240,6 +1304,8 @@ async function readSubscriptionPoolView(
   forceUsage = false,
 ): Promise<SubscriptionPoolView> {
   const state = currentRuntime();
+  const activityRefresh = refreshRootActivity(state);
+  if (activityRefresh) await activityRefresh;
   const ref = resolveSubscriptionPoolProvider(providerId);
   if (!ref) throw new Error('Unknown subscription provider');
   const provider = ref.kind;
@@ -1302,7 +1368,7 @@ async function readSubscriptionPoolView(
                 : usage.limited
                   ? ('limited' as const)
                   : ('ready' as const),
-        running: state.running.get(keyOf(provider, account.id))?.size ?? 0,
+        running: accountRunning(state, provider, account.id),
         ...(!disconnectedFor(pool, provider, account.id) && info.auth.authenticated ? accountUsage(info.usage) : {}),
       };
     }),
@@ -1523,6 +1589,70 @@ export async function needsSubscriptionAccountHandoff(
   return true;
 }
 
+/** Idle old tasks participate in coverage and window relief, without interrupting native work. */
+export async function acquireSubscriptionRebalance(
+  providerId: string, model: string | undefined, currentId: string,
+): Promise<SubscriptionAccountLease | null> {
+  const ref = resolveSubscriptionPoolProvider(providerId);
+  if (!ref) return null;
+  const pool = readPool(ref.kind);
+  if (!pool || (pool.disconnected && ref.providerId === ref.kind)) return null;
+  const state = currentRuntime();
+  const activityRefresh = refreshRootActivity(state);
+  if (activityRefresh) await activityRefresh;
+  const accounts = providerAccounts(ref.kind, pool.accounts, ref.providerId);
+  const infos = await Promise.all(accounts.map(a => snapshot(state, ref.kind, a.id)));
+  assertOwner(state);
+  const now = Date.now();
+  const facts = accounts.map((account, index) => ({ account,
+    info: infos[index],
+    windows: providerGroupMemberQuotaWindows(infos[index].usage ?? {},
+      ref.kind === 'openai' ? model?.replace(/^chatgpt\//, '') : model, now,
+      ref.kind === 'openai' ? 'codex' : 'claude-code'),
+    running: accountRunning(state, ref.kind, account.id) }));
+  const source = facts.find(entry => entry.account.id === currentId);
+  if (!source) return null;
+  const candidates = facts.filter(({ account, info, windows, running }) =>
+    account.id !== currentId && !account.paused && info.auth.authenticated && !info.unavailable
+      && subscriptionWindowRoom(windows) && !accountCooling(state, ref.kind, account.id, model)
+      && running < effectiveConcurrencyLimit(account));
+  const useful = (candidate: typeof facts[number], reserved = false) => {
+    const sourceRunning = accountRunning(state, ref.kind, currentId);
+    const candidateRunning = accountRunning(state, ref.kind, candidate.account.id) - (reserved ? 1 : 0);
+    const usageModel = ref.kind === 'openai' ? model?.replace(/^chatgpt\//, '') : model;
+    const agent = ref.kind === 'openai' ? 'codex' : 'claude-code';
+    const sourceUsage = state.cache.get(keyOf(ref.kind, currentId))?.usage ?? {};
+    const candidateUsage = state.cache.get(keyOf(ref.kind, candidate.account.id))?.usage ?? {};
+    const sourceWindows = providerGroupMemberQuotaWindows(sourceUsage, usageModel, Date.now(), agent);
+    const candidateWindows = providerGroupMemberQuotaWindows(candidateUsage, usageModel, Date.now(), agent);
+    if (!subscriptionWindowRoom(candidateWindows)) return false;
+    const sourceQuota = providerGroupMemberUsageState(sourceUsage, usageModel, Date.now(), agent).quota;
+    const candidateQuota = providerGroupMemberUsageState(candidateUsage, usageModel, Date.now(), agent).quota;
+    return subscriptionWindowPressure(sourceWindows)
+    // The idle source is not counted: another root stays behind while this one supplies coverage.
+    || (sourceRunning > 0 && candidateRunning === 0)
+    || ((sourceRunning > 0 || candidateRunning === 0) && !!sourceQuota && !!candidateQuota
+      && !!providerGroupRebalanceTarget(sourceQuota, [{ key: candidate.account.id, quota: candidateQuota }], Date.now()));
+  };
+  const destinations = candidates.filter(candidate => useful(candidate));
+  if (!destinations.length) return null;
+  let lease: SubscriptionAccountLease | null;
+  try {
+    lease = await acquireSubscriptionAccount(providerId, model, [], false,
+      { exclude: new Set(accounts.filter(a => !destinations.some(d => d.account.id === a.id)).map(a => a.id)), resuming: false });
+  } catch {
+    assertOwner(state);
+    return null; // Optional balance cannot block ordinary upstream admission.
+  }
+  if (!lease) return null;
+  const picked = destinations.find(entry => entry.account.id === lease!.accountId);
+  if (!picked || !useful(picked, true)) {
+    lease.release();
+    return null;
+  }
+  return lease;
+}
+
 export interface SubscriptionAccountLease {
   account: NativeSubscriptionAccount;
   /** New turns must not reuse a disabled, renewing or unverified account. */
@@ -1568,6 +1698,8 @@ export async function acquireSubscriptionAccount(
   const pool = readPool(provider);
   if (!pool) return null;
   const state = currentRuntime();
+  const activityRefresh = refreshRootActivity(state);
+  if (activityRefresh) await activityRefresh;
   const bindings = keys.map((key) => readAccountBinding(key, provider)).filter(Boolean);
   let binding = bindings[0];
   // A stale caller may still carry the pre-switch native id. Never resume it in
@@ -1652,11 +1784,14 @@ export async function acquireSubscriptionAccount(
           remote: options.remote === true, ownComputer: options.ownComputer === true,
           newRoute: (!binding || rebind) && !options.resuming,
         }) === true),
-      running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
+      running: accountRunning(state, provider, a.id),
       // Control leases reserve no slot. Pinned tasks never re-pick, so the limit only gates new assignments.
       limit: control ? Number.POSITIVE_INFINITY : effectiveConcurrencyLimit(a),
       urgency: usage.urgency,
       fiveHourTight: usage.fiveHourTight,
+      windows: providerGroupMemberQuotaWindows(info?.usage ?? {},
+        provider === 'openai' ? model?.replace(/^chatgpt\//, '') : model, Date.now(),
+        provider === 'openai' ? 'codex' : 'claude-code'),
     };
   });
   // Reopening an old task without a recorded binding must keep its original default home.
@@ -1669,7 +1804,7 @@ export async function acquireSubscriptionAccount(
     : options.exclude;
   let choice =
     pinned ??
-    pickProviderGroupMember(members, providerStrategy(selectionProvider, provider, latest), {
+    (provider === 'openai' ? pickSubscriptionAccountMember : pickProviderGroupMember)(members, providerStrategy(selectionProvider, provider, latest), {
       lastPicked: state.lastPicked.get(selectionProvider),
       ...(exclude ? { exclude } : {}),
     });
@@ -1682,7 +1817,7 @@ export async function acquireSubscriptionAccount(
   const selected = choice;
   const member = members.find((a) => a.id === selected);
   const reserved = pending && pending.accountId === selected && state.running.get(keyOf(provider, pending.accountId))?.has(pending.token) ? 1 : 0;
-  if (pending && member && member.running - reserved >= member.limit)
+  if ((pending || options.resuming === false) && member && member.running - reserved >= member.limit)
     throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
   if (!selected && !pinned && providerGroupMembersFull(members, { exclude: options.exclude }))
     throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
@@ -1717,6 +1852,12 @@ export async function acquireSubscriptionAccount(
     state.lastPicked.set(selectionProvider, selected);
     changed(provider);
   }
+  const taskTokens = state.leaseTasks ??= new Map();
+  const representTasks = (ids: string[]) => {
+    if (control) return; // Model discovery/forks do not replace the root generation lease.
+    for (const id of ids) if (id.startsWith('task:')) taskTokens.set(id.slice(5), token);
+  };
+  representTasks(keys);
   let released = false;
   let handedOff = false;
   let currentModel = model;
@@ -1753,29 +1894,7 @@ export async function acquireSubscriptionAccount(
     pinned: pinned !== undefined,
     observeFailure(error, failedModel, phase) {
       try { assertCurrent(); } catch { return false; } // Ignore late failures after owner/account removal.
-      const signals = providerGroupFailureSignals(error);
-      const decision = decideProviderGroupFailure(signals, phase);
-      if (decision.action !== 'switch') return false;
-      // Same causes and durations as a group member (provider-groups.md §5 冷却): the task model
-      // until its quota resets; login or overload failures cool the whole account briefly.
-      if (!decision.cool) return true;
-      const now = Date.now();
-      const usageLimit = decision.cause === 'usage-limit';
-      const resetAt = usageLimit ? readTurnUsageResetAt(signals, now) : null;
-      const scope = usageLimit
-        ? coolingScope(provider === 'openai' ? failedModel?.replace(/^chatgpt\//, '') : failedModel)
-        : '';
-      const scopes = currentCooling(state.quotaCooling.get(key), now);
-      const until = !usageLimit
-        ? now + PROVIDER_GROUP_FAILURE_COOLDOWN_MS
-        : resetAt !== null && resetAt > now ? resetAt : now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS;
-      // Refresh the scope's insertion order and bound remembered model failures.
-      const previous = scopes[scope] ?? 0;
-      delete scopes[scope];
-      scopes[scope] = Math.max(previous, until);
-      state.quotaCooling.set(key, Object.fromEntries(Object.entries(scopes).slice(-PROVIDER_GROUP_COOLING_SCOPE_CAP)));
-      persistCooling(state);
-      return true;
+      return observeSubscriptionAccountFailure(provider, selected, error, failedModel, phase);
     },
     account: {
       id: `${accountOwnerPrefix()}:${provider}:${selected}`,
@@ -1852,6 +1971,7 @@ export async function acquireSubscriptionAccount(
     bind: async (ids) => {
       assertCurrent();
       await writeAccountBindings(ids, provider, selected, ref.providerId);
+      representTasks(ids);
       assertCurrent();
     },
     reserveForTask: (taskId) => {
@@ -1877,6 +1997,7 @@ export async function acquireSubscriptionAccount(
     },
     release: () => {
       released = true;
+      for (const [id, leaseToken] of taskTokens) if (leaseToken === token) taskTokens.delete(id);
       if (!handedOff && active.delete(token)) changed(provider);
     },
   };
@@ -1886,6 +2007,8 @@ export async function runSubscriptionAccountCommand(
   command: SubscriptionAccountCommand,
 ): Promise<SubscriptionPoolView> {
   const state = currentRuntime();
+  const activityRefresh = refreshRootActivity(state);
+  if (activityRefresh) await activityRefresh;
   assertOwner(state);
   const ref = resolveSubscriptionPoolProvider(command.providerId);
   if (!ref) throw new Error('Unknown subscription provider');
@@ -1943,7 +2066,7 @@ export async function runSubscriptionAccountCommand(
   } else if (command.action === 'remove') {
     if (command.accountId === 'default')
       throw new Error('The default CLI account cannot be removed');
-    if (state.running.get(keyOf(provider, command.accountId))?.size)
+    if (accountRunning(state, provider, command.accountId))
       throw new Error('Account is in use');
     if ([...state.logins.values()].some((login) => login.accountId === command.accountId))
       throw new Error('login_in_progress');
@@ -1974,7 +2097,7 @@ export async function runSubscriptionAccountCommand(
     // Native browser logins may share a callback port. Reserve before the first await.
     if ([...state.logins.keys()].some((key) => key.startsWith(provider + ':')))
       throw new Error('login_in_progress');
-    if (state.running.get(keyOf(provider, accountId))?.size) throw new Error('Account is in use');
+    if (accountRunning(state, provider, accountId)) throw new Error('Account is in use');
     const abort = new AbortController();
     const key = `${provider}:${command.loginKey}`;
     state.logins.set(key, { abort, accountId });
@@ -2000,7 +2123,7 @@ export async function runSubscriptionAccountCommand(
           accountId = 'default';
         }
         state.logins.set(key, { abort, accountId });
-        if (state.running.get(keyOf(provider, accountId))?.size)
+        if (accountRunning(state, provider, accountId))
           throw new Error('Account is in use');
       }
       // Record where a new account belongs before it joins the pool, so it never shows up in (or is
@@ -2208,7 +2331,7 @@ async function changeAccountPlacement(
   }
   // Deleting a created provider stops using its accounts; their CLI logins and histories stay.
   if (!ref.created) throw new Error('Only providers created for subscription accounts can be deleted here');
-  if (accounts.some((account) => state.running.get(keyOf(kind, account.id))?.size)) throw new Error('Account is in use');
+  if (accounts.some((account) => accountRunning(state, kind, account.id))) throw new Error('Account is in use');
   const removed = new Set(accounts.map((account) => account.id));
   await updatePool(kind, (current) => ({
     ...current, accounts: current.accounts.filter((account) => !removed.has(account.id)),

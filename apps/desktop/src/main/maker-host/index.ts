@@ -33,7 +33,10 @@ import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval
 import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.desktop.js';
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
-import { onSubscriptionPoolCodexModelsChanged } from '../subscription-accounts/runtime.js';
+import { onSubscriptionPoolCodexModelsChanged, setSubscriptionAccountActivityReader, codexSubscriptionAccountForHistoryHome } from '../subscription-accounts/runtime.js';
+import { readLiveSubscriptionActivity, createLiveSubscriptionAccountResolver, confirmedLiveOpenaiProvider } from '../subscription-accounts/liveActivity.js';
+import { readAccountBinding } from '../subscription-accounts/store.js';
+import { resolveSubscriptionPoolProvider as resolveActivityPool } from '../subscription-accounts/placement.js';
 import { readCodexThreadStorageReadOnly, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -2590,6 +2593,23 @@ export function getMaker(): Maker {
       },
     });
 
+    const resolveActivityAccount = createLiveSubscriptionAccountResolver({
+      owner: activeOwnerScopeKey,
+      binding: (id, nativeId) => {
+        const task = readAccountBinding(`task:${id}`, 'openai');
+        const native = readAccountBinding(`native:${nativeId}`, 'openai');
+        if (task && native && task.accountId !== native.accountId) throw new Error('Subscription activity account changed');
+        return (native ?? task)?.accountId;
+      },
+      historyHome: async nativeId => (await readCodexThreadStorageReadOnly(nativeId))?.historyHome,
+      accountForHome: codexSubscriptionAccountForHistoryHome,
+    });
+    setSubscriptionAccountActivityReader(() => readLiveSubscriptionActivity({
+      roots: () => _maker?.listActiveSessions() ?? [],
+      owner: activeOwnerScopeKey,
+      usesOpenai: id => !!readLiveCodexSubscriptionProvider(id),
+      accountForRoot: resolveActivityAccount,
+    }));
     _maker = new Maker({
       agents: makerAgents,
       storage: desktopSessionStorage,
@@ -3034,6 +3054,15 @@ export async function requestCodexModelBackfill(): Promise<void> {
  */
 export function resetCodexModelBackfillState(): void {
   _codexModelBackfill?.reset();
+}
+
+/** The running host's applied auth mode, rather than today's default or a null historical row. */
+export function readLiveCodexSubscriptionProvider(sessionId: string): string | undefined {
+  const session = _maker?.getSession(sessionId);
+  if (!session || session.agentKind !== 'codex' || session.remoteHostId || session.agentDeviceId) return undefined;
+  return confirmedLiveOpenaiProvider(getSessionProvider(sessionId), session.codexHostKey,
+    _codexAgent?.getLocalHostKeysForCredentialMode('oauth-bearer') ?? [],
+    id => resolveActivityPool(id)?.kind);
 }
 
 /**

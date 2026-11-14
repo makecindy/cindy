@@ -4855,6 +4855,53 @@ describe('session-agent-switch handoff injection', () => {
     expect(consumePendingHandoff).toHaveBeenCalledWith('session-1');
   });
 
+  // Unit regression: a live send may omit createOpts. Pool rebalancing retires
+  // that runtime before dispatch, so recover its trusted saved route/permissions
+  // rather than rejecting an unsent message with NOT_FOUND.
+  it('rebuilds a retired live account from saved settings when SEND has no createOpts', async () => {
+    const { deps, session } = createDeps();
+    session.hostStartupPreferences = { userPrompt: 'Keep review context', makerMemoryEnabled: false };
+    let live: MakerSendTransactionSession | undefined = session;
+    const fresh = createSession();
+    deps.getSession = vi.fn(() => live);
+    deps.prepareUnhealthySession = vi.fn(async () => { live = undefined; return true; });
+    const saved: MakerSessionCreateOpts = { agentKind: 'codex', workingDir: '/saved/project',
+      model: 'gpt-6', providerId: 'openai', permissionMode: 'ask', planMode: true,
+      title: 'Existing task', makerMemoryEnabled: true };
+    deps.readWorkingDirectoryRecoveryCreateOpts = vi.fn(async () => {
+      expect(live).toBeUndefined();
+      return saved;
+    });
+    deps.bootstrapSession = vi.fn(async () => {
+      live = fresh;
+      return { session: fresh, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+    });
+    deps.peekPendingHandoff = vi.fn(async () => 'Saved goal and completed work');
+    deps.consumePendingHandoff = vi.fn();
+    const result = await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Continue review');
+    expect(result.accepted).toBe(true);
+    expect(deps.bootstrapSession).toHaveBeenCalledExactlyOnceWith({ ...saved, id: 'session-1', userPrompt: 'Keep review context' });
+    expect(session.send).not.toHaveBeenCalled();
+    expect(fresh.send).toHaveBeenCalledOnce();
+    expect(JSON.stringify(vi.mocked(fresh.send).mock.calls[0][0])).toContain('Saved goal and completed work');
+    expect(JSON.stringify(vi.mocked(fresh.send).mock.calls[0][0])).toContain('Continue review');
+    expect(deps.consumePendingHandoff).toHaveBeenCalledOnce();
+  });
+
+  it('does not dispatch or consume the handoff when retired SEND settings cannot be recovered', async () => {
+    const { deps, session } = createDeps();
+    let live: MakerSendTransactionSession | undefined = session;
+    deps.getSession = vi.fn(() => live);
+    deps.prepareUnhealthySession = vi.fn(async () => { live = undefined; return true; });
+    deps.readWorkingDirectoryRecoveryCreateOpts = vi.fn(async () => { throw new Error('Saved task unavailable'); });
+    deps.consumePendingHandoff = vi.fn();
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Continue'))
+      .rejects.toThrow('Saved task unavailable');
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(session.send).not.toHaveBeenCalled();
+    expect(deps.consumePendingHandoff).not.toHaveBeenCalled();
+  });
+
   it('overflow prepare 在 getSession 之前；peek 不再关掉发送目标', async () => {
     const callOrder: string[] = [];
     let unhealthy = true;
