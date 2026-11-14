@@ -81,6 +81,11 @@ export function holdsOverflowBroadcast(session: Pick<Session, 'remoteHostId'>, e
  */
 export function createHostContextRecovery(deps: {
   getRollover(): Rollover | null;
+  /**
+   * Whether recovery is open for this kind of terminal error (overflow, oversized history,
+   * unsupported request option). A kind that is closed takes the normal error path, unclaimed.
+   */
+  isRecoverable?(data: unknown): boolean;
   publish(sessionId: string, event: AgentEvent, fields: Record<string, unknown>): void;
   log: { warn(message: string, fields?: Record<string, unknown>): void };
 }) {
@@ -142,6 +147,7 @@ export function createHostContextRecovery(deps: {
     claim(terminal: RecoveryTerminal): OverflowClaimResult {
       const { session, event } = terminal;
       const holds = holdsOverflowBroadcast(session, event);
+      if (holds && deps.isRecoverable && !deps.isRecoverable(event.data)) return 'idle';
       if (holds) held.set(session.id, { sessionId: session.id, event, fields: terminal.fields });
       const result = claimContextRecoveryTerminal(ports(terminal.history, deps.getRollover), input(terminal));
       // The Host has no product-turn follow-up to defer (release table).

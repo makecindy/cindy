@@ -56,6 +56,7 @@ export function createTurnExecutor(deps) {
   // Context recovery of a terminal error (context-recovery.ts); without a recovery factory the
   // listener behaves as before.
   const recovery = deps.getRecoveryRollover ? createHostContextRecovery({ getRollover: deps.getRecoveryRollover,
+    isRecoverable: deps.isContextRecoveryOpen,
     publish: (id, event, fields) => publishAgentEvent(deps.hub, id, event, fields), log }) : null;
   function historyFor(id) {
     let history = histories.get(id);
@@ -571,12 +572,51 @@ export function createTurnExecutor(deps) {
     }
   }
 
+  // A context recovery's replay of the user's message (contextRecoveryAssembly.ts
+  // replayContextRecoveryWithPorts, the desktop's sendToAgentAcceptedUnlocked): a turn of its own
+  // through the same shared transaction, with no input-queue item, no new user row and no send lock
+  // (recovery holds it). Recovery has closed the task's runtime and waited for the claimed turn's
+  // settlement before it replays; a turn of the task still running, or a live runtime, means
+  // something started since, so the replay is refused. Its Git baseline opens once before dispatch
+  // and is cancelled if the replay is refused.
+  async function replay(sessionId, message, createOpts, sendOpts = {}) {
+    if (turns.get(sessionId)?.running || deps.getMaker().getSession(sessionId)) return { accepted: false };
+    createOpts = { ...createOpts };
+    const turn = openTurn(sessionId, createOpts, sendOpts, undefined);
+    turn.preparing = (async () => {
+      await readExecutionSession(sessionId);
+      assertHostTaskExecutionSupported(createOpts);
+      deps.assertProviderExecutionSupported?.(sessionId, createOpts.providerId);
+      turn.check();
+      await startGitBaseline(sessionId, sendOpts.signal);
+      turn.check();
+    })();
+    let result;
+    try {
+      result = await dispatchTurn(sessionId, turn, message, (...args) => transaction.sendToAgentAccepted(...args));
+    } catch (error) {
+      settleGitBaseline(sessionId, turn, 'abort');
+      throw error;
+    }
+    if (!result.accepted) {
+      turn.running = false;
+      settleGitBaseline(sessionId, turn, 'abort');
+      if (deps.isCurrent()) await deps.markEnded?.(sessionId, Date.now());
+    }
+    return result;
+  }
+
   return {
     send,
     /** On shutdown, before stopping tasks: waits (bounded) for context recoveries in flight to end. */
     drainRecoveriesForShutdown: () => recovery?.drainForShutdown(),
     /** A recovery's replay was accepted (the recovery factory's onRebuilt). */
     noteRecoveryRebuilt: id => recovery?.noteRebuilt(id),
+    replay,
+    /** Writes the queued history of every task, as the desktop's drainPersistQueue. */
+    async drainHistories() { await Promise.all([...histories.values()].map(history => history.drain())); },
+    /** A rebuilt native context has seen no environment notes (contextRecoveryRebuilt). */
+    resetWireNotes: id => wireNotes.reset(id),
     async beforeDispatchUserTurn(id, item, signal) {
       const turn = turns.get(id);
       const live = deps.getMaker()?.getSession(id);

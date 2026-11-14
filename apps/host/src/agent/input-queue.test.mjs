@@ -22,6 +22,9 @@ import { createTurnExecutor } from './turn-executor.mjs';
 import { lockSessionRoute } from './session-route-lock.mjs';
 import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
 import { RECOVERY_SHUTDOWN_WAIT_MS } from './context-recovery.ts';
+import { createHostContextRecoveryRollover } from './context-recovery-assembly.ts';
+import { createAgentHandoffPendingRegistry } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
+import { createSessionStderrOptions } from '../../../desktop/src/main/maker-ipc/sessionRequest.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
@@ -2536,7 +2539,7 @@ async function recoveryDatabase(t) {
   const createTask = id => new OwnerSessionStorage({ db: () => database }).create({ id, title: 'Recovery fixture',
     agentKind: 'claude-code', model: 'stored-model', workDir: root });
   const errorRows = id => opened.db.prepare("SELECT client_id FROM messages WHERE session_id = ? AND role = 'error'").all(id);
-  return { createTask, errorRows, persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: () => {} }) };
+  return { root, db: opened.db, createTask, errorRows, persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: () => {} }) };
 }
 
 test('context recovery: at the shutdown limit the Host writes the running recovery\'s error row once; after restart the task is an unhandled error and takes new input', { timeout: 30_000 }, async t => {
@@ -2627,4 +2630,194 @@ test('context recovery: two tasks recovering at shutdown share one wait limit', 
   t.mock.timers.tick(1);
   await disposing;
   assert.equal(disposed, true, 'both recoveries share the one limit, not one each');
+});
+
+// The recovery factory assembled on the Host's ports (context-recovery-assembly.ts) over a real
+// profile database: the desktop's rollover reads the task and its messages, commits the rebuild and
+// replays the user's message through the Host's own send transaction.
+async function assembledRecovery(t, overrides = {}) {
+  const db = await recoveryDatabase(t);
+  const quiet = { info() {}, warn() {}, error() {} };
+  const handoffs = createAgentHandoffPendingRegistry(async () => null);
+  const runtimes = [];
+  let h;
+  h = createHarness({
+    persistMessage: db.persistMessage,
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+      workingDir: db.root, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }),
+    isContextRecoveryOpen: () => true,
+    createContextRecoveryRollover: runtime => {
+      runtimes.push(runtime);
+      return createHostContextRecoveryRollover({ getMaker: () => h.maker, persistMessage: db.persistMessage,
+        publish: event => h.events.push(event), buildCreateOptsWithStderr: createSessionStderrOptions(quiet),
+        readSessionExtraDirsFromDb: async () => [], readSessionWritableDirsFromDb: async () => [],
+        pendingHandoff: handoffs, log: quiet }, runtime);
+    },
+    ...overrides,
+  });
+  t.after(() => h.queue.dispose());
+  const overflow = async (sessionId, text = 'long task') => {
+    await db.createTask(sessionId);
+    await h.queue.enqueue(sessionId, { clientId: `${sessionId}-input`, text });
+    await waitFor(() => h.maker.sessions.get(sessionId)?.sent.length === 1);
+    const session = h.maker.sessions.get(sessionId);
+    session.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    return session;
+  };
+  const rows = (id, role) => db.db.prepare('SELECT client_id, content FROM messages WHERE session_id = ? AND role = ?').all(id, role);
+  return { db, h, handoffs, runtimes, overflow, rows };
+}
+
+test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  const first = await r.overflow('assembled-ok');
+  await waitFor(() => { const next = r.h.maker.sessions.get('assembled-ok'); return next && next !== first && next.sent.length === 1; });
+  const replayed = r.h.maker.sessions.get('assembled-ok');
+  assert.deepEqual(replayed.sent, ['long task'], 'the replay sends the user\'s message once on a new runtime');
+  assert.equal(replayed.options.resumeSessionId, undefined, 'the new runtime does not resume the overflowed context');
+  await waitFor(() => !r.h.queue.projection('assembled-ok').error);
+  assert.equal(r.rows('assembled-ok', 'context_rebuild').length, 1, 'the rebuild marker is committed');
+  // The client learns the task was rebuilt: no native session, no context used (commitContextRecoveryWithPorts).
+  const rebuilt = r.h.events.filter(event => event.type === 'session_changed' && event.sessionId === 'assembled-ok'
+    && event.patch && 'sdkSessionId' in event.patch);
+  assert.equal(rebuilt.length, 1);
+  assert.deepEqual(Object.keys(rebuilt[0].patch).sort(), ['contextTokens', 'sdkSessionId', 'updatedAt']);
+  assert.equal(rebuilt[0].patch.sdkSessionId, null);
+  assert.equal(rebuilt[0].patch.contextTokens, 0);
+  assert.ok(Number.isFinite(Date.parse(rebuilt[0].patch.updatedAt)), 'with the commit\'s update time');
+  assert.equal(r.rows('assembled-ok', 'user').length, 1, 'the replay writes no second user row');
+  assert.equal(r.rows('assembled-ok', 'error').length, 0, 'a recovered overflow writes no error row');
+  assert.equal(r.h.events.filter(event => event.sessionId === 'assembled-ok' && event.type === 'error').length, 0);
+  assert.equal(typeof await r.handoffs.peek('assembled-ok'), 'string', 'the rebuilt context\'s summary is pending');
+  // The runtime starts as a normal send's would. The shared replay (contextRecoveryAssembly.ts) also
+  // passes the task title, which Maker only logs and uses for a task row it creates (this one exists).
+  const comparable = options => JSON.parse(JSON.stringify(options, (_key, value) => (typeof value === 'function' ? '[function]' : value)));
+  const { title, ...replayOptions } = comparable(replayed.options);
+  assert.equal(title, 'Recovery fixture');
+  assert.deepEqual(replayOptions, comparable(first.options), 'the replay starts its runtime with a normal send\'s options');
+  assert.equal(r.h.queue.projection('assembled-ok').queuePaused, false, 'the cleared queue is not left paused');
+  replayed.emit({ type: 'done', data: {}, sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId });
+  await waitFor(() => !r.h.queue.projection('assembled-ok').running);
+});
+
+test('context recovery assembly: one rollover per input runtime, a new one after the runtime is replaced', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  assert.equal(r.runtimes.length, 1);
+  await r.h.queue.dispose();
+  assert.equal(r.runtimes.length, 2, 'a replaced runtime (owner change, shutdown) gets its own rollover');
+  assert.notEqual(r.runtimes[0], r.runtimes[1]);
+});
+
+test('context recovery assembly: the replay is refused while the task has a live runtime and opens no Git baseline', { timeout: 30_000 }, async t => {
+  const git = [];
+  const r = await assembledRecovery(t, { getGitSnapshot: () => ({ onTurnStart() { git.push('start'); },
+    onTurnAbort() { git.push('abort'); }, onTurnEnd() { git.push('end'); }, onSessionClosed() {} }) });
+  await r.db.createTask('assembled-live');
+  await r.h.queue.enqueue('assembled-live', { clientId: 'live-input', text: 'hello' });
+  const live = await (async () => { await waitFor(() => r.h.maker.sessions.get('assembled-live')?.sent.length === 1); return r.h.maker.sessions.get('assembled-live'); })();
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await waitFor(() => !r.h.queue.projection('assembled-live').running);
+  git.length = 0;
+  const result = await r.runtimes[0].replay('assembled-live', 'hello', { agentKind: 'claude-code', workingDir: r.db.root });
+  assert.deepEqual(result, { accepted: false });
+  assert.deepEqual(live.sent, ['hello'], 'nothing reaches the live runtime');
+  assert.deepEqual(git, []);
+});
+
+// onRebuilt clears the coordinator's error as the desktop does (contextRecoveryRebuilt), with no
+// execution pause: a pause would abort a steer in flight (setExecutionPaused), which the desktop never does.
+test('context recovery assembly: the replay is refused while a turn of the task is still running, even with its runtime gone', { timeout: 30_000 }, async t => {
+  const git = [];
+  const r = await assembledRecovery(t, { getGitSnapshot: () => ({ onTurnStart() { git.push('start'); },
+    onTurnAbort() { git.push('abort'); }, onTurnEnd() { git.push('end'); }, onSessionClosed() {} }) });
+  await r.db.createTask('assembled-running');
+  await r.h.queue.enqueue('assembled-running', { clientId: 'running-input', text: 'hello' });
+  await waitFor(() => r.h.maker.sessions.get('assembled-running')?.sent.length === 1);
+  // The turn has not ended; its runtime is no longer the task's live one.
+  r.h.maker.sessions.delete('assembled-running');
+  assert.equal(r.h.queue.projection('assembled-running').turnInProgress, true);
+  git.length = 0;
+  const result = await r.runtimes[0].replay('assembled-running', 'hello', { agentKind: 'claude-code', workingDir: r.db.root });
+  assert.deepEqual(result, { accepted: false });
+  assert.equal(r.h.maker.sessions.has('assembled-running'), false, 'no runtime is started');
+  assert.deepEqual(git, [], 'no Git baseline');
+});
+
+test('context recovery assembly: a steer in flight when the replay is accepted is not aborted', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  let releaseReplay, releaseSteer, steering;
+  const replayHeld = new Promise(resolve => { releaseReplay = resolve; });
+  const steerHeld = new Promise(resolve => { releaseSteer = resolve; });
+  const steerStarted = new Promise(resolve => { steering = resolve; });
+  const create = r.h.maker.createSession.bind(r.h.maker);
+  let created = 0;
+  r.h.maker.createSession = async (...args) => {
+    const session = await create(...args);
+    if ((created += 1) === 2) {
+      // The replay's runtime: its send is held after the engine took the turn, before it is accepted.
+      const send = session.send.bind(session);
+      session.send = async (...sendArgs) => { const result = await send(...sendArgs); await replayHeld; return result; };
+      const steer = session.steer.bind(session);
+      session.steer = async (text, options = {}) => steer(text, { ...options,
+        beforeProviderStart: async () => { steering(); await steerHeld; await options.beforeProviderStart?.(); } });
+    }
+    return session;
+  };
+  const first = await r.overflow('assembled-steer');
+  await waitFor(() => created === 2 && r.h.maker.sessions.get('assembled-steer')?.sent.length === 1);
+  const replayed = r.h.maker.sessions.get('assembled-steer');
+  assert.notEqual(replayed, first);
+  const steered = r.h.queue.steer('assembled-steer', { clientId: 'steer-during-replay', text: 'also this' });
+  await steerStarted;
+  releaseReplay();
+  await waitFor(() => !r.h.queue.projection('assembled-steer').error);
+  releaseSteer();
+  assert.equal(await steered, true, 'the steer is accepted');
+  assert.deepEqual(replayed.sent, ['long task', 'steer:also this']);
+});
+
+test('context recovery assembly: onRebuilt changes nothing once the runtime is closing, the task is closed or the owner changed', { timeout: 30_000 }, async t => {
+  // Recovery closed for every kind: the overflow stays the coordinator's error, as the client saw it.
+  let owner = { id: 'owner-a' };
+  const r = await assembledRecovery(t, { isContextRecoveryOpen: () => false, getOwner: () => owner });
+  const failed = async id => {
+    await r.overflow(id);
+    await waitFor(() => Boolean(r.h.queue.projection(id).error));
+  };
+  const clear = id => r.runtimes.at(-1).coordinator.clearError(id);
+  await failed('rebuilt-control');
+  clear('rebuilt-control');
+  assert.equal(r.h.queue.projection('rebuilt-control').error, null, 'otherwise it clears the error at once');
+
+  await failed('rebuilt-closed');
+  const closing = r.h.queue.disposeSession('rebuilt-closed');
+  clear('rebuilt-closed');
+  assert.match(r.h.queue.projection('rebuilt-closed').error, /prompt is too long/, 'a closed task keeps its state');
+  await closing;
+
+  await failed('rebuilt-owner');
+  owner = { id: 'owner-b' };
+  clear('rebuilt-owner');
+  assert.match(r.h.queue.projection('rebuilt-owner').error, /prompt is too long/, 'a runtime whose owner changed keeps its state');
+
+  const disposing = r.h.queue.dispose();
+  clear('rebuilt-owner');
+  owner = { id: 'owner-a' };
+  clear('rebuilt-owner');
+  assert.match(r.h.queue.projection('rebuilt-owner').error, /prompt is too long/, 'a closing runtime keeps its state');
+  await disposing;
+});
+
+test('context recovery assembly: input queued while the replayed turn runs waits for it', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  const first = await r.overflow('assembled-next');
+  await waitFor(() => { const next = r.h.maker.sessions.get('assembled-next'); return next && next !== first && next.sent.length === 1; });
+  const replayed = r.h.maker.sessions.get('assembled-next');
+  await waitFor(() => !r.h.queue.projection('assembled-next').error);
+  await r.h.queue.enqueue('assembled-next', { clientId: 'after-replay', text: 'next' });
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(replayed.sent, ['long task'], 'the queued input waits while the replay runs');
+  replayed.emit({ type: 'done', data: {}, sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId });
+  await waitFor(() => replayed.sent.length === 2);
+  assert.deepEqual(replayed.sent, ['long task', 'next']);
 });
