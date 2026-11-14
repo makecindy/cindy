@@ -8,13 +8,20 @@ function environmentPlan(html: string) {
   const offset = html.startsWith('\ufeff') ? 1 : 0;
   const document = parse(html.slice(offset), { sourceCodeLocationInfo: true });
   let insertion = offset;
+  let headEnd: number | undefined;
   const authored = new Set<string>();
   let authoredMap: { start: number; end: number; value: Record<string, unknown> } | undefined;
   const visit = (node: DefaultTreeAdapterTypes.Node) => {
     if (node.nodeName === '#documentType') insertion = (node.sourceCodeLocation?.endOffset ?? 0) + offset;
     if ('tagName' in node && node.namespaceURI === htmlNamespace) {
-      if (node.tagName === 'head' && node.sourceCodeLocation?.startTag)
-        insertion = node.sourceCodeLocation.startTag.endOffset + offset;
+      if (node.tagName === 'head') {
+        const location = node.sourceCodeLocation;
+        if (location?.startTag) insertion = location.startTag.endOffset + offset;
+        headEnd = location?.endTag ? location.endTag.startOffset + offset : insertion;
+        if (!location?.endTag) for (const child of node.childNodes) {
+          if (child.sourceCodeLocation) headEnd = Math.max(headEnd, child.sourceCodeLocation.endOffset + offset);
+        }
+      }
       if (node.tagName === 'script') {
         const type = (node.attrs.find(attr => attr.name === 'type')?.value ?? '')
           .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '').toLowerCase();
@@ -38,7 +45,7 @@ function environmentPlan(html: string) {
     if ('childNodes' in node) node.childNodes.forEach(visit);
   };
   visit(document);
-  return { insertion, authoredMap, authored };
+  return { insertion, headEnd: headEnd ?? insertion, authoredMap, authored };
 }
 
 // The default form action is always disabled by CSP. Cancel it before Chromium
@@ -76,9 +83,12 @@ const runtime = `<script data-cindy-runtime>
 </script>`;
 
 /** Prepare the App environment outside the chat contract's startup dependency graph. */
-export function withHostAppSdk(html: string, sdkUrl: string, addons?: { coreUrl: string; reactUrl: string }): string {
+export function withHostAppSdk(
+  html: string, sdkUrl: string, addons?: { coreUrl: string; reactUrl: string }, headEndMarker?: string,
+): string {
   if (!new URL(sdkUrl).hostname) throw new Error('MCP_APP_SDK_URL_REQUIRED');
-  const { insertion, authoredMap, authored } = environmentPlan(html);
+  const { insertion, authoredMap, authored, headEnd } = environmentPlan(html);
+  let markerInsertion = headEnd;
   let prefix = runtime;
   const imports: Record<string, string> = {};
   if (!authored.has(moduleName)) imports[moduleName] = sdkUrl;
@@ -89,10 +99,16 @@ export function withHostAppSdk(html: string, sdkUrl: string, addons?: { coreUrl:
       const value = { ...authoredMap.value, imports: {
         ...(authoredMap.value.imports as Record<string, unknown> | undefined), ...imports,
       } };
-      html = html.slice(0, authoredMap.start) + JSON.stringify(value).replace(/</g, '\\u003c') + html.slice(authoredMap.end);
+      const replacement = JSON.stringify(value).replace(/</g, '\\u003c');
+      html = html.slice(0, authoredMap.start) + replacement + html.slice(authoredMap.end);
+      if (authoredMap.end <= markerInsertion)
+        markerInsertion += replacement.length - (authoredMap.end - authoredMap.start);
     } else {
       prefix += '<script type="importmap">' + JSON.stringify({ imports }) + '</script>';
     }
   }
+  // The marker travels with the prepared document; callers replace it without
+  // parsing again. Insert before the SDK prefix so equal offsets retain its order.
+  if (headEndMarker) html = html.slice(0, markerInsertion) + headEndMarker + html.slice(markerInsertion);
   return html.slice(0, insertion) + prefix + html.slice(insertion);
 }

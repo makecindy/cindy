@@ -7,6 +7,7 @@ import { sharedTaskHostPeer } from '@cindy/device-link';
 const state = vi.hoisted(() => ({
   deviceId: undefined as string | undefined,
   openError: undefined as Error | undefined,
+  openDeferred: undefined as Promise<{ viewId: string; prefersBorder: boolean }> | undefined,
   originListeners: new Set<() => void>(),
   controllers: [] as Array<{
     open: ReturnType<typeof vi.fn>;
@@ -18,6 +19,7 @@ const state = vi.hoisted(() => ({
     invoke: (session: string, input: Record<string, unknown>) => Promise<unknown>;
   }>,
   intersections: new Map<Element, (entries: Array<{ isIntersecting: boolean }>) => void>(),
+  windowHiddenListeners: new Set<(hidden: boolean) => void>(),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({
   t: (key: string, values?: { title: string }) => key === 'mcpApps.cardTitle' ? values?.title : key,
@@ -36,13 +38,14 @@ vi.mock('@/components/ui/button', () => ({
   ),
 }));
 vi.mock('../McpAppPermissionPrompt', () => ({ McpAppPermissionPrompt: () => null }));
-vi.mock('@/components/ui/spinner', () => ({ Spinner: () => null }));
+vi.mock('@/components/ui/spinner', () => ({ Spinner: () => <span data-testid="spinner" /> }));
 vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
   ...await importOriginal<typeof import('@cindy/maker-shared/mcp-app-controller')>(),
   mcpAppFailureKey: () => 'mcpApps.loadFailed',
   McpAppController: class {
     open = vi.fn(async () => {
       if (state.openError) throw state.openError;
+      if (state.openDeferred) return state.openDeferred;
       return { viewId: `view-${state.controllers.length}`, prefersBorder: true };
     });
     close = vi.fn(async () => {});
@@ -120,7 +123,294 @@ afterEach(async () => {
   state.intersections.clear();
   state.deviceId = undefined;
   state.openError = undefined;
+  state.openDeferred = undefined;
   state.originListeners.clear();
+  state.windowHiddenListeners.clear();
+  delete (window as Window & { __xdtHiddenAnimationGateLastHidden?: boolean }).__xdtHiddenAnimationGateLastHidden;
+});
+
+// Window visibility regression: document.visibilityState remains visible when
+// Electron disables background throttling. The existing controller cleanup is
+// the observable stop point for both local and remote cards.
+it('treats a hidden main window as offscreen for local and remote cards, then rebuilds on restore', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('electronAPI', {
+    onWindowHiddenChange: (callback: (hidden: boolean) => void) => {
+      state.windowHiddenListeners.add(callback);
+      return () => state.windowHiddenListeners.delete(callback);
+    },
+  });
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const hiddenWindow = window as Window & { __xdtHiddenAnimationGateLastHidden?: boolean };
+  hiddenWindow.__xdtHiddenAnimationGateLastHidden = true;
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  state.deviceId = 'remote-device';
+  try {
+    await act(async () => root.render(<><McpAppCard sessionId={null} clientId="local-card" title="Local" />
+      <McpAppCard sessionId="hidden-task" clientId="remote-card" title="Remote" /></>));
+    const callbacks = [...state.intersections.values()];
+    await act(async () => callbacks.forEach(callback => callback([{ isIntersecting: true }])));
+    expect(state.controllers).toHaveLength(0);
+    await act(async () => state.windowHiddenListeners.forEach(callback => callback(false)));
+    expect(state.controllers).toHaveLength(2);
+    const firstControllers = [...state.controllers];
+    await act(async () => state.windowHiddenListeners.forEach(callback => callback(true)));
+    expect(firstControllers.every(controller => controller.close.mock.calls.length === 1)).toBe(true);
+    expect(container.querySelectorAll('iframe')).toHaveLength(0);
+    await act(async () => state.windowHiddenListeners.forEach(callback => callback(false)));
+    expect(state.controllers).toHaveLength(4);
+    expect(container.querySelectorAll('iframe')).toHaveLength(2);
+  } finally { hiddenWindow.__xdtHiddenAnimationGateLastHidden = undefined; await act(async () => root.unmount()); container.remove(); }
+});
+
+// 测试价值
+// - 生产入口与结果：真实 McpAppCard iframe 生命周期；观察 opacity、pointer-events、aria-busy 和高度。
+// - Bug／规则依据：PR-A 闪屏规划与 engineering-conventions §7/§8；旧卡片在重建时立即暴露空框。
+// - 现有缺口：原有测试只验证 iframe 创建/销毁和高度回调，没有验证就绪前的可见性门。
+// - 最小输入与 tier：一次初始化、结果标记、尺寸通知和 150ms 假时钟；renderer unit。
+// PR-A readiness contract: the real card owns iframe visibility while the
+// sandbox supplies host-owned handshake/result markers. This prevents an empty
+// reconnect frame from being exposed without adding a second transport.
+it('keeps a reconnecting iframe inert until initialization, result, and size are ready', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="reveal-task" clientId="reveal-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0]; const frame = container.querySelector('iframe')!;
+    expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+    expect(frame.style.opacity).toBe('0'); expect(frame.style.pointerEvents).toBe('none');
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(() => vi.advanceTimersByTimeAsync(149));
+    expect(frame.style.opacity).toBe('0');
+    await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 420 } }));
+    expect(frame.style.opacity).toBe('1'); expect(frame.style.pointerEvents).toBe('auto');
+    expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('shows delayed loading feedback for a slow open without flashing on a fast one', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  let resolveOpen!: (document: { viewId: string; prefersBorder: boolean }) => void;
+  state.openDeferred = new Promise(resolve => { resolveOpen = resolve; });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="loading-task" clientId="loading-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    await act(() => vi.advanceTimersByTimeAsync(399));
+    expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(container.querySelector('[data-testid="spinner"]')).not.toBeNull();
+    resolveOpen({ viewId: 'delayed-view', prefersBorder: true });
+    await act(async () => { await Promise.resolve(); });
+    const controller = state.controllers[0];
+    await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 400 } }));
+    expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('removes delayed loading feedback when the open fails', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="error-loading-task" clientId="error-loading-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    await act(() => vi.advanceTimersByTimeAsync(400));
+    expect(container.querySelector('[data-testid="spinner"]')).not.toBeNull();
+    await act(async () => state.controllers[0].fail(new Error('MCP_APP_FAILED')));
+    expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('waits for a size change after result delivery instead of revealing on an earlier size', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="ordered-task" clientId="ordered-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0]; const frame = container.querySelector('iframe')!;
+    await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 360 } }));
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    expect(frame.style.opacity).toBe('0'); expect(frame.style.pointerEvents).toBe('none');
+    await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 380 } }));
+    expect(frame.style.opacity).toBe('1'); expect(frame.style.pointerEvents).toBe('auto');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('reveals static pages quickly and enforces the total reveal deadline', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="static-task" clientId="static-card" title="Static" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const frame = container.querySelector('iframe')!;
+    await act(async () => frame.dispatchEvent(new Event('load')));
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    expect(frame.style.opacity).toBe('1');
+    await act(async () => root.render(<McpAppCard sessionId="deadline-task" clientId="deadline-card" title="Deadline" />));
+    await act(() => vi.advanceTimersByTimeAsync(1_500));
+    expect(container.querySelector('iframe')!.style.opacity).toBe('1');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('restores remembered heights and evicts the oldest cards at the cache limit', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    for (let index = 0; index <= 100; index++) {
+      await act(async () => root.render(<McpAppCard sessionId="height-task" clientId={`height-${index}`} title="App" />));
+      await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+      const controller = state.controllers.at(-1)!;
+      await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+      await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+      await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 400 + index } }));
+    }
+    await act(async () => root.render(<McpAppCard sessionId="height-task" clientId="height-100" title="App" />));
+    expect(container.querySelector('iframe')?.parentElement?.style.height).toBe('500px');
+    await act(async () => root.render(<McpAppCard sessionId="height-task" clientId="height-0" title="App" />));
+    expect(container.querySelector('iframe')?.parentElement?.style.height).toBe('320px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// Regression for Windows reconnects: a pre-result size is a transient loading
+// layout and must not replace the remembered outer height or enter the cache.
+it('keeps the remembered height through pre-result sizes and remembers the ready height', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="height-reconnect-task" clientId="height-reconnect-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const first = state.controllers[0];
+    await act(async () => first.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => first.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(async () => first.message({ method: 'ui/notifications/size-changed', params: { height: 331 } }));
+    expect(container.querySelector('iframe')?.parentElement?.style.height).toBe('331px');
+    await act(async () => root.render(null));
+    state.intersections.clear();
+    await act(async () => root.render(<McpAppCard sessionId="height-reconnect-task" clientId="height-reconnect-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const second = state.controllers[1];
+    const frameRoot = container.querySelector('iframe')!.parentElement!;
+    expect(frameRoot.style.height).toBe('331px');
+    await act(async () => second.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 320 } }));
+    expect(frameRoot.style.height).toBe('331px');
+    await act(async () => second.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    expect(frameRoot.style.height).toBe('331px');
+    await act(() => vi.advanceTimersByTimeAsync(210));
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 331 } }));
+    expect(frameRoot.style.height).toBe('331px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('applies a pending height after reveal when no post-result size arrives', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="height-first-render-task" clientId="height-first-render-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    const frame = container.querySelector('iframe')!;
+    const frameRoot = frame.parentElement!;
+    await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 420 } }));
+    expect(frameRoot.style.height).toBe('320px');
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    expect(frameRoot.style.height).toBe('320px');
+    await act(() => vi.advanceTimersByTimeAsync(499));
+    expect(frameRoot.style.height).toBe('320px');
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(frameRoot.style.height).toBe('420px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('applies a real post-result height immediately and replaces the remembered value', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="height-post-result-task" clientId="height-post-result-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const first = state.controllers[0];
+    await act(async () => first.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => first.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(async () => first.message({ method: 'ui/notifications/size-changed', params: { height: 331 } }));
+    await act(async () => root.render(null));
+    state.intersections.clear();
+    await act(async () => root.render(<McpAppCard sessionId="height-post-result-task" clientId="height-post-result-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const second = state.controllers[1]; const frameRoot = container.querySelector('iframe')!.parentElement!;
+    await act(async () => second.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 320 } }));
+    expect(frameRoot.style.height).toBe('331px');
+    await act(async () => second.message({ method: 'ui/notifications/sandbox-result-delivered' }));
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 280 } }));
+    expect(frameRoot.style.height).toBe('280px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// A card without a tool result still uses initialized as its readiness gate.
+it('applies initialized sizes immediately when no result is required', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId={null} clientId="height-no-result-card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0]; const frameRoot = container.querySelector('iframe')!.parentElement!;
+    await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 410 } }));
+    expect(frameRoot.style.height).toBe('410px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
 // #6432: the real card must release a mounted View without letting cleanup
@@ -433,6 +723,8 @@ it.each(['rising', 'oscillating'])('follows %s sizes without echoing height-only
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const controller = state.controllers[0];
     expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 0, maxHeight: 5000 } }));
+    await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
     for (let i = 0; i < 10; i++) await act(async () => {
       controller.message({ method: 'ui/notifications/size-changed', params: { height: pattern === 'rising' ? 400 + i * 30 : 400 + (i % 2) * 30 } }); resize();
     });
