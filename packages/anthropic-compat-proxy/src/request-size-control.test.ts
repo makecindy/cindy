@@ -148,3 +148,80 @@ it('allows replayed history to grow above the target without crossing the trigge
   expect(result?.body.length).toBeGreaterThan(140_000);
   expect(result?.parsedBody).toEqual(JSON.parse(result!.body.toString()));
 });
+
+// Developer's production-code simulation: compression updated only one of the
+// byte counters, and whole-request image counts trimmed every appended image.
+// Unit tier, 40 x 4 KiB encoded images scales the 40 x 1 MiB reproduction.
+const replayHistory = (count: number, encodedBytes: number | ((index: number) => number) = 4096) => Buffer.from(JSON.stringify({
+  input: Array.from({ length: count }, (_, index) => ({ id: index, role: 'user', content: [
+    { type: 'input_image', image_url: `data:image/png;base64,${imageData(index, (typeof encodedBytes === 'function' ? encodedBytes(index) : encodedBytes) * 3 / 4)}` },
+  ] })),
+}));
+const shrinkForReplay: InlineImagePreprocessor = {
+  async prepare({ bytes }) {
+    return { bytes: bytes.subarray(0, Math.floor(bytes.length * 0.34)), mimeType: 'image/webp',
+      width: 10, height: 10, changed: true, cacheKey: 'replay-fixture' };
+  },
+};
+const inlineCount = (body: Buffer) => (body.toString().match(/"type":"(?:input_image|image|image_url)"/g) ?? []).length;
+
+it.each([['responses', 40], ['responses', 80], ['anthropic', 40], ['anthropic', 80], ['chat', 40], ['chat', 80]] as const)(
+  'replays the same compressed bytes regardless of preprocessing order (%s, %i images)', async (format, count) => {
+  let raw = replayHistory(count, count === 40 ? 4096 : index => index < 51 ? 4 : 16384);
+  if (format !== 'responses') {
+    const input = JSON.parse(raw.toString()).input as Array<{ id: number; role: string; content: Array<{ image_url: string }> }>;
+    raw = Buffer.from(JSON.stringify({ messages: input.map(item => ({ ...item, content: item.content.map(image => format === 'chat'
+      ? { type: 'image_url', image_url: { url: image.image_url } }
+      : { type: 'image', source: { type: 'base64', media_type: 'image/png', data: image.image_url.split(',')[1] } }) })) }));
+  }
+  const compressed = await controlRequestSize(raw, format, { preprocessor: shrinkForReplay, allowRemoval: false }, preserve);
+  const policy = { triggerBytes: 32 * 4096, targetBytes: 14 * 4096, modelFamily: 'gpt' as const };
+  const removedInline: number[] = [];
+  const removedBefore: number[] = [];
+  const withPreprocessor = await controlRequestSize(raw, format, { ...policy, preprocessor: shrinkForReplay }, async (bytes, mime, index) => {
+    removedInline.push(index); return preserve(bytes, mime, index);
+  });
+  const precompressed = await controlRequestSize(compressed!.body, format, policy, async (bytes, mime, index) => {
+    removedBefore.push(index); return preserve(bytes, mime, index);
+  });
+  expect(removedInline).toEqual(removedBefore);
+  expect(withPreprocessor!.body).toEqual(precompressed?.body ?? compressed!.body);
+  expect(withPreprocessor!.body.length).toBeLessThanOrEqual(policy.triggerBytes);
+  if (count === 40) {
+    expect(removedInline).toEqual([]);
+    expect(inlineCount(withPreprocessor!.body)).toBe(40);
+  } else {
+    // First 51 tiny images cross the count cap; the later large images cross
+    // the byte budget even after compression. Both removals share one replay.
+    expect(removedInline.length).toBeGreaterThan(29);
+    expect(withPreprocessor!.body).not.toEqual(compressed!.body);
+  }
+});
+
+it.each([
+  ['gpt', [[51, 22], [52, 23], [53, 24], [79, 50], [80, 22]]],
+  ['claude', [[101, 44], [102, 45]]],
+] as const)('replays %s count crossings without rewriting the prefix on every append', async (modelFamily, sequence) => {
+  let previous: Buffer | undefined;
+  let removedPrefix: Buffer | undefined;
+  for (const [count, expected] of sequence) {
+    const raw = replayHistory(count, 4);
+    const result = await controlRequestSize(raw, 'responses', { modelFamily }, preserve);
+    const body = result?.body ?? raw;
+    expect(inlineCount(body), `history with ${count} images`).toBe(expected);
+    if (previous && count !== 80) {
+      // Both frames have the same already-emitted input items; only the closing
+      // array/object delimiters move when another item is appended.
+      expect(body.subarray(0, previous.length - 2)).toEqual(previous.subarray(0, -2));
+    }
+    if (!removedPrefix) {
+      const boundary = body.indexOf(Buffer.from(`{"id":${count - expected},`));
+      expect(boundary).toBeGreaterThan(0);
+      removedPrefix = body.subarray(0, boundary);
+    }
+    // The second count crossing can replace more images, but must preserve the
+    // bytes of placeholders already emitted at the first crossing.
+    expect(body.subarray(0, removedPrefix.length)).toEqual(removedPrefix);
+    previous = body;
+  }
+});

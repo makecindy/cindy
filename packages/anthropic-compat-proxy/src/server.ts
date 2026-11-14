@@ -15,7 +15,7 @@
 
 import { installResponseGuard } from './response-guard.js';
 import { collectRecoverableBody } from './oversized-attachments.js';
-import { countInlineRequestImages } from './request-size-control.js';
+import { countInlineRequestImages, type WireFormat } from './request-size-control.js';
 import { classifyRequestSizeError } from './request-size-errors.js';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -2021,6 +2021,46 @@ function forward(
   upstreamReq.end(body);
 }
 
+// Spooling must not change route identity when `model` follows a large input.
+// Skip JSON strings in the byte buffer; only decode short keys and the top-level
+// model value, without parsing or materializing the whole request again.
+function requestModelHint(body: Buffer): { model?: string } {
+  const whitespace = (byte: number) => byte === 32 || byte === 9 || byte === 10 || byte === 13;
+  const stringEnd = (start: number): number => {
+    let end = body.indexOf(34, start + 1);
+    while (end !== -1) {
+      let slash = end - 1;
+      while (slash > start && body[slash] === 92) slash--;
+      if ((end - slash - 1) % 2 === 0) return end;
+      end = body.indexOf(34, end + 1);
+    }
+    throw new SyntaxError('Unterminated JSON string');
+  };
+  let depth = 0;
+  let model: string | undefined;
+  for (let offset = 0; offset < body.length; offset++) {
+    const byte = body[offset];
+    if (byte === 34) {
+      const end = stringEnd(offset);
+      if (depth === 1 && end - offset <= 32) {
+        let colon = end + 1;
+        while (whitespace(body[colon])) colon++;
+        if (body[colon] === 58) {
+          const key = body.toString('utf8', offset, end + 1);
+          if (key === '"model"' || (key.includes('\\') && JSON.parse(key) === 'model')) {
+            let value = colon + 1;
+            while (whitespace(body[value])) value++;
+            model = body[value] === 34 ? JSON.parse(body.toString('utf8', value, stringEnd(value) + 1)) as string : undefined;
+          }
+        }
+      }
+      offset = end;
+    } else if (byte === 123 || byte === 91) depth++;
+    else if (byte === 125 || byte === 93) depth--;
+  }
+  return model === undefined ? {} : { model };
+}
+
 /**
  * 启动代理。返回 ProxyHandle —— url 给 host 用作 ANTHROPIC_BASE_URL。
  */
@@ -2320,6 +2360,18 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // Freeze the kill switch for this request. Compression still runs below, but
     // disabled size control must retain the original disk-backed overflow recovery.
     const sizeControlEnabled = Boolean(requestSizeController) && requestSizeController?.enabled?.() !== false;
+    // Keep route identity, learned limits and controller inputs identical for
+    // buffered bodies and bodies collected through the disk spool.
+    const controlRequestBody = async (body: Buffer, parsed: unknown, format: WireFormat, signal: AbortSignal) => {
+      if (!requestSizeController) return null;
+      const route = requestSizeController.route?.(requestCtx, parsed) ?? {};
+      const learned = sizeControlEnabled
+        ? learnedRequestSizeRoutes.get(requestSizeRouteKey(requestCtx, parsed, format)) : undefined;
+      return requestSizeController.control(body, format, {
+        route, signal, context: requestCtx, allowRemoval: sizeControlEnabled,
+        ...(learned ? { triggerBytes: learned.trigger, targetBytes: learned.target, reason: 'learned' } : {}),
+      });
+    };
     let sizeControlledAtIngress = false;
     let ingressParsedBody: unknown;
     // Request-size control owns the pre-dispatch 32 MiB budget. Above that threshold use the
@@ -2329,16 +2381,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         let raw: Buffer | undefined;
         try {
           raw = await readFile(body.filePath);
-          const modelMatch = /"model"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw.toString('utf8', 0, Math.min(raw.length, 64 * 1024)));
-          const parsedHint = modelMatch ? { model: JSON.parse(`"${modelMatch[1]}"`) } : {};
+          const parsedHint = requestModelHint(raw);
           const format = requestSizeController.format?.(requestCtx, parsedHint);
           if (!format) { logRequestSizeSkip('format-unknown', raw); return null; }
-          const controlled = await requestSizeController.control(raw, format, {
-            route: requestSizeController.route?.(requestCtx, parsedHint) ?? {},
-            signal: body.signal,
-            context: requestCtx,
-            allowRemoval: sizeControlEnabled,
-          });
+          const controlled = await controlRequestBody(raw, parsedHint, format, body.signal);
           if (!controlled) return null;
           sizeControlledAtIngress = true;
           ingressParsedBody = controlled.parsedBody;
@@ -2597,16 +2643,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       if (format) {
         const sizeStartedAt = Date.now();
         try {
-          const route = requestSizeController.route?.(requestCtx, sizeParsed) ?? {};
-          const learned = sizeControlEnabled
-            ? learnedRequestSizeRoutes.get(requestSizeRouteKey(requestCtx, sizeParsed, format)) : undefined;
-          const controlled = await requestSizeController.control(rawBody, format, {
-            route,
-            signal: recoveryAbort.signal,
-            context: requestCtx,
-            allowRemoval: sizeControlEnabled,
-            ...(learned ? { triggerBytes: learned.trigger, targetBytes: learned.target, reason: 'learned' } : {}),
-          });
+          const controlled = await controlRequestBody(rawBody, sizeParsed, format, recoveryAbort.signal);
           if (controlled) {
             rawBody = controlled.body;
             rawParsed = controlled.parsedBody ?? readParsedBody();

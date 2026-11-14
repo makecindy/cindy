@@ -56,6 +56,7 @@ import {
   createInstructionsRegistry,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
+  countInlineRequestImages,
   createVllmResponsesCompatibilityRule,
   sanitizeXaiModelInputBody,
   sanitizeXaiModelInputFromBody,
@@ -239,11 +240,15 @@ const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 8 * 1024 * 1024;
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
 
+function isFullCodexWebSocketReplay(body: unknown): boolean {
+  return isPlainObject(body) && !Object.prototype.hasOwnProperty.call(body, 'previous_response_id');
+}
+
 export function shouldCompactCodexWebSocketFrame(message: Buffer, limitBytes = CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES): boolean {
   if (message.length <= limitBytes) return false;
   try {
     const body: unknown = JSON.parse(message.toString('utf8'));
-    return isPlainObject(body) && !Object.prototype.hasOwnProperty.call(body, 'previous_response_id');
+    return isFullCodexWebSocketReplay(body);
   } catch {
     return false;
   }
@@ -3574,11 +3579,38 @@ async function createCodexProxyHandle(
     return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
   };
   const attachmentRecovery = createAttachmentRecovery(sessionIdFromHeaders);
+  const requestSizeController = createRequestSizeController(sessionIdFromHeaders, undefined, (headers, model) =>
+      providerContextForRequest(headers, model).providerId ?? guestProviderId
+        ?? gatewayProviderIdForRewrittenModel(model)
+        ?? ((frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : 'xd'));
   const fitWebSocketRequest = async (
     request: Buffer,
+    parsed: unknown,
+    fullReplay: boolean,
     ctx: { url: string; headers: Readonly<Record<string, string>> },
     signal: AbortSignal,
   ): Promise<Buffer> => {
+    const context = { reqId: 0, method: 'POST', url: ctx.url, headers: ctx.headers };
+    try {
+      const controlled = await requestSizeController.control(request, 'responses', {
+        context, signal, route: requestSizeController.route?.(context, parsed) ?? {},
+        allowRemoval: fullReplay && requestSizeController.enabled?.() !== false,
+        triggerBytes: CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES,
+        targetBytes: CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES,
+      });
+      if (controlled) {
+        request = controlled.body;
+        log.info('request size control applied', { reqId: 0, transport: 'websocket',
+          originalBytes: controlled.originalBytes, bytes: controlled.bytes,
+          removedImages: controlled.removedImages, reason: controlled.reason });
+      }
+    } catch (error) {
+      log.info('request size control skipped', { reqId: 0, reason: 'error', originalBytes: request.length,
+        imageCount: countInlineRequestImages(request, 'responses'), errorType: error instanceof Error ? 'Error' : typeof error });
+    }
+    // Incremental frames only preprocess. Disabled/unavailable controllers keep
+    // the existing oversized-frame recovery as their fallback.
+    if (!fullReplay || request.length <= CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES) return request;
     const recover = attachmentRecovery({ reqId: 0, method: 'POST', url: ctx.url, headers: ctx.headers });
     let recovered: Buffer | null = null;
     try {
@@ -3647,8 +3679,8 @@ async function createCodexProxyHandle(
       const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
       const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
       const request = next ? Buffer.from(JSON.stringify(next)) : message;
-      return shouldCompactCodexWebSocketFrame(message)
-        ? fitWebSocketRequest(request, ctx, signal) : request;
+      const fullReplay = isFullCodexWebSocketReplay(body);
+      return fitWebSocketRequest(request, next ?? body, fullReplay, ctx, signal);
     }),
     transformResponse: (ctx) => {
       const response = {
@@ -3705,10 +3737,7 @@ async function createCodexProxyHandle(
     ),
     maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
     oversizedRequestRecovery: attachmentRecovery,
-    requestSizeController: createRequestSizeController(sessionIdFromHeaders, undefined, (headers, model) =>
-      providerContextForRequest(headers, model).providerId ?? guestProviderId
-        ?? gatewayProviderIdForRewrittenModel(model)
-        ?? ((frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : 'xd')),
+    requestSizeController,
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
     recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
     logger: log,

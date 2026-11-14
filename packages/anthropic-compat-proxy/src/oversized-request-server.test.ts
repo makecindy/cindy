@@ -289,3 +289,61 @@ it.each(['format-unknown', 'error'] as const)('logs %s without changing the forw
   expect(JSON.stringify([info.mock.calls, warn.mock.calls])).not.toContain('bearer-secret');
   if (reason === 'format-unknown') expect(control).not.toHaveBeenCalled();
 });
+
+// Real ingress + upstream 413 + media recovery: the learned route budget was
+// missing from the spool branch. An 8 KiB ingress window reproduces CC/Pi's
+// 32 MiB path without a large fixture; unit tier, ephemeral loopback servers.
+it.each(['anthropic', 'chat', 'responses'] as const)('reuses a learned 413 budget on the next spooled %s request', async format => {
+  const received: Buffer[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    received.push(Buffer.concat(chunks));
+    res.statusCode = received.length === 1 ? 413 : 200;
+    res.end(received.length === 1 ? 'request too large' : 'ok');
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const routePath = format === 'anthropic' ? '/v1/messages' : format === 'chat' ? '/v1/chat/completions' : '/v1/responses';
+  const wire = (count: number) => Buffer.from(JSON.stringify({ metadata: { model: 'nested-decoy', note: 'a "quote" and a brace {' }, [format === 'responses' ? 'input' : 'messages']:
+    Array.from({ length: count }, (_, index) => {
+      const data = Buffer.alloc(count > 2 && index === 0 ? 60_000 : 2400, index + 1).toString('base64');
+      const image = format === 'anthropic' ? { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }
+        : format === 'chat' ? { type: 'image_url', image_url: { url: `data:image/png;base64,${data}` } }
+        : { type: 'input_image', image_url: `data:image/png;base64,${data}` };
+      return { role: 'user', content: [image] };
+    }), model: 'gpt-test' }));
+  const policies: unknown[] = [];
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${port}`, transformRequest: [], maxRequestBodyBytes: 8192,
+    oversizedRequestRecovery: () => (body, target) => recoverInlineAttachments(body, target, async () => '/tmp/kept.png'),
+    requestSizeController: {
+      format: () => format,
+      route: (ctx, body) => ({ endpoint: ctx.url, providerId: 'test-provider', modelId: (body as { model: string }).model, deniedMimeTypes: ['image/webp'] }),
+      control: (body, wireFormat, policy) => {
+        policies.push(Object.fromEntries(Object.entries(policy).filter(([key]) => key !== 'signal' && key !== 'context')));
+        return controlRequestSize(body, wireFormat, { ...policy, triggerBytes: policy.triggerBytes ?? 8192, targetBytes: policy.targetBytes ?? 6000 },
+          async () => '/tmp/kept.png');
+      },
+    },
+  });
+  cleanup.push(() => proxy.dispose());
+  const send = async (body: Buffer) => {
+    const response = await fetch(`${proxy.url}${routePath}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer test-only' }, body });
+    expect(response.status).toBe(200);
+    await response.text();
+  };
+  const initial = wire(2);
+  const followup = wire(4);
+  expect(initial.length).toBeLessThan(8192);
+  expect(followup.lastIndexOf(Buffer.from('"model"'))).toBeGreaterThan(64 * 1024);
+  await send(initial);
+  const learnedTarget = Math.floor(received[0].length * 0.44);
+  await send(followup);
+  expect(received).toHaveLength(3);
+  expect(received[2].length).toBeLessThanOrEqual(learnedTarget);
+  const spooledPolicy = policies.at(-1);
+  expect(spooledPolicy).toMatchObject({ triggerBytes: received[0].length, targetBytes: learnedTarget, reason: 'learned', allowRemoval: true,
+    route: { providerId: 'test-provider', modelId: 'gpt-test', deniedMimeTypes: ['image/webp'] } });
+  await send(initial);
+  expect(policies.at(-1)).toEqual(spooledPolicy); // Same route/policy through the memory path.
+});

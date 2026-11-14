@@ -171,7 +171,7 @@ vi.mock('../oversized-attachment-recovery.js', async () => {
   const createRequestSizeController: typeof import('../oversized-attachment-recovery.js').createRequestSizeController = (_resolveSession, preprocessor) => ({
     enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
     format: ctx => ctx.url.includes('/responses') ? 'responses' : ctx.url.includes('/messages') ? 'anthropic' : ctx.url.includes('/chat/completions') ? 'chat' : null,
-    control: (body, format, policy) => controlRequestSize(body, format, { ...policy, preprocessor }, async () => '/tmp/preserved.png'),
+    control: (body, format, policy) => controlRequestSize(body, format, { ...policy, preprocessor, modelFamily: 'gpt' }, async () => '/tmp/preserved.png'),
   });
   return {
     createRequestSizeController,
@@ -3540,8 +3540,8 @@ describe('codex proxy host', () => {
       webSocketTransforms: (ctx: { url: string; headers: Readonly<Record<string, string>> }) => { outbound: Transform };
     };
     const { createWebSocketMessageTransform } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
-    const send = async (input: unknown[]): Promise<Buffer> => {
-      const payload = Buffer.from(JSON.stringify({ type: 'response.create', model: 'gpt-5.4', input }));
+    const send = async (input: unknown[], previous_response_id?: string): Promise<Buffer> => {
+      const payload = Buffer.from(JSON.stringify({ ...(previous_response_id ? { previous_response_id } : {}), type: 'response.create', model: 'gpt-5.4', input }));
       const header = Buffer.alloc(14);
       header[0] = 129; header[1] = 128 | 127; header.writeBigUInt64BE(BigInt(payload.length), 2);
       const { outbound } = proxyOpts.webSocketTransforms({ url: '/backend-api/codex/responses', headers: {} });
@@ -3565,6 +3565,16 @@ describe('codex proxy host', () => {
     const input = JSON.parse(oversized.toString()).input;
     expect(input[0]).toMatchObject({ type: 'input_text', text: expect.stringContaining('/tmp/preserved.png') });
     expect(input.at(-1)).toEqual(image);
+
+    // Count crossings use the same replay even for frames below the byte limit.
+    const tiny = { type: 'input_image', image_url: 'data:image/png;base64,YQ==' };
+    const first = await send(Array.from({ length: 51 }, () => tiny));
+    const extended = await send(Array.from({ length: 52 }, () => tiny));
+    expect(JSON.parse(first.toString()).input.filter((item: { type: string }) => item.type === 'input_image')).toHaveLength(22);
+    expect(JSON.parse(extended.toString()).input.filter((item: { type: string }) => item.type === 'input_image')).toHaveLength(23);
+    expect(extended.subarray(0, first.length - 2)).toEqual(first.subarray(0, -2));
+    const incremental = await send(Array.from({ length: 52 }, () => tiny), 'prior-response');
+    expect(JSON.parse(incremental.toString()).input).toEqual(Array.from({ length: 52 }, () => tiny));
   });
 
   it('only resolves the websocket upstream for the oauth-bearer spawn identity', async () => {

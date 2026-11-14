@@ -252,7 +252,6 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   const trigger = disableRemoval ? Number.MAX_SAFE_INTEGER : policy.triggerBytes ?? DEFAULT_REQUEST_SIZE_TRIGGER;
   let target = disableRemoval ? Number.MAX_SAFE_INTEGER : policy.targetBytes ?? DEFAULT_REQUEST_SIZE_TARGET;
   const forceBudget = policy.reason === 'learned' || policy.reason?.startsWith('retry') === true;
-  if (forceBudget && !disableRemoval) target = Math.min(target, Math.floor(body.length * 0.44));
   const familyPolicy = disableRemoval ? undefined : familyLimit(policy.modelFamily);
   const quickLimit = Math.min(trigger, DEFAULT_QUICK_PATH_BYTES);
   if (body.length <= quickLimit) {
@@ -288,83 +287,73 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
     prepared.set(index, next);
   }
 
-  let total = body.length;
-  let count = occurrences.length;
-  const remove = new Set<number>();
-  const removalSeenAssistant = new Map<number, boolean>();
-  const cap = familyPolicy?.keep;
-  const countCapActive = familyPolicy !== undefined && occurrences.length > familyPolicy.trigger;
-  let removedPrefixBytes = 0;
-  let prefixEnd = 0;
-  let originalPrefixBytes = 0;
-  // Re-run the historical crossings. This makes the same prefix produce the same removals.
-  for (let index = 0; index < occurrences.length; index++) {
+  // Serialize only prepared image blocks. All byte ledgers use these exact wire
+  // bytes (including MIME/JSON overhead), as if preprocessing ran before replay.
+  const rewrites = new Map<number, { start: number; end: number; text: string }>();
+  const inlineBytes: number[] = [];
+  let preparedBytes = body.length;
+  for (const [index, occurrence] of occurrences.entries()) {
     const item = prepared.get(index)!;
-    const originalLength = Buffer.byteLength(occurrences[index].raw);
-    if (item.changed) total += 4 * Math.ceil(item.bytes.length / 3) - originalLength;
-    originalPrefixBytes += Buffer.byteLength(text.slice(prefixEnd, occurrences[index].node.end));
-    prefixEnd = occurrences[index].node.end;
-    let prefixBytes = originalPrefixBytes - removedPrefixBytes;
-    if (prefixBytes <= trigger && !forceBudget) continue;
-    while (prefixBytes > target && remove.size < occurrences.length) {
-      const candidate = [...occurrences.keys()].find(i => !remove.has(i));
-      if (candidate === undefined) break;
-      const old = Buffer.byteLength(occurrences[candidate].raw);
-      const replacement = replacementText('', occurrences[candidate].seenAssistant);
-      const savings = old - Buffer.byteLength(JSON.stringify({ type: occurrences[candidate].textType, text: replacement }));
-      total -= savings;
-      removedPrefixBytes += savings;
-      prefixBytes -= savings;
-      count--;
-      remove.add(candidate);
-      removalSeenAssistant.set(candidate, occurrences[candidate].assistantCount < occurrences[index].assistantCount);
-      if (total <= target && (cap === undefined || count <= cap)) break;
+    const originalBytes = Buffer.byteLength(text.slice(occurrence.node.start, occurrence.node.end));
+    let bytes = originalBytes;
+    if (item.changed) {
+      const encoded = item.bytes.toString('base64');
+      const block = occurrence.node.value as Record<string, unknown>;
+      if (format === 'anthropic' && record(block.source)) { block.source.data = encoded; block.source.media_type = item.mimeType; }
+      else if (format === 'chat') {
+        if (record(block.image_url)) block.image_url.url = `data:${item.mimeType};base64,${encoded}`;
+        else block.image_url = `data:${item.mimeType};base64,${encoded}`;
+      } else if (format === 'responses') block[block.type === 'input_file' ? 'file_data' : 'image_url'] = `data:${item.mimeType};base64,${encoded}`;
+      const replacement = JSON.stringify(block);
+      bytes = Buffer.byteLength(replacement);
+      rewrites.set(index, { start: occurrence.node.start, end: occurrence.node.end, text: replacement });
     }
+    inlineBytes.push(bytes);
+    preparedBytes += bytes - originalBytes;
   }
-  // Text/tool fields after the last image still count toward the request budget. Replay the
-  // final crossing at the end of the model-visible history so the oldest image is removed even
-  // when the overflow comes from a trailing instruction or tool definition.
-  let finalPrefixBytes = body.length - removedPrefixBytes;
-  const finalByteCrossing = finalPrefixBytes > trigger || forceBudget;
-  while (((finalByteCrossing && finalPrefixBytes > target) || (countCapActive && count > cap!)) && remove.size < occurrences.length) {
-    const candidate = [...occurrences.keys()].find(i => !remove.has(i));
-    if (candidate === undefined) break;
-    const old = Buffer.byteLength(occurrences[candidate].raw);
-    const replacement = replacementText('', occurrences[candidate].seenAssistant);
-    const savings = old - Buffer.byteLength(JSON.stringify({ type: occurrences[candidate].textType, text: replacement }));
-    finalPrefixBytes -= savings;
-    total -= savings;
-    removedPrefixBytes += savings;
-    count--;
-    remove.add(candidate);
-    removalSeenAssistant.set(candidate, occurrences[candidate].assistantCount < assistantState.count);
-    if (finalPrefixBytes <= target && (!countCapActive || count <= cap!)) break;
-  }
-  if (remove.size === 0 && !preparedHasChange(prepared)) return null;
-  if (total > target && remove.size === occurrences.length) throw new Error('REQUEST_TEXT_TOO_LARGE');
+  if (forceBudget && !disableRemoval) target = Math.min(target, Math.floor(preparedBytes * 0.44));
 
-  const replacements: Array<{ start: number; end: number; text: string }> = [];
-  for (const index of occurrences.keys()) {
-    const occurrence = occurrences[index];
-    const preparedImage = prepared.get(index)!;
-    if (remove.has(index)) {
-      const localPath = await preserve(preparedImage.bytes, preparedImage.mimeType, index);
-      const replacement = { type: occurrence.textType, text: replacementText(localPath, removalSeenAssistant.get(index) ?? false) };
+  let prefixBytes = 0;
+  let prefixEnd = 0;
+  const retained: number[] = [];
+  let oldest = 0;
+  const removed = new Set<number>();
+  const compactPrefix = async (assistantCount: number) => {
+    const byteCrossing = prefixBytes > trigger || (forceBudget && !disableRemoval);
+    const countCrossing = familyPolicy !== undefined && retained.length - oldest > familyPolicy.trigger;
+    while (oldest < retained.length && (
+      (byteCrossing && prefixBytes > target) ||
+      (countCrossing && retained.length - oldest > familyPolicy!.keep)
+    )) {
+      const index = retained[oldest++];
+      const occurrence = occurrences[index];
+      const item = prepared.get(index)!;
+      const localPath = await preserve(item.bytes, item.mimeType, index);
+      const replacement = { type: occurrence.textType,
+        text: replacementText(localPath, occurrence.assistantCount < assistantCount) };
+      const replacementJson = JSON.stringify(replacement);
+      prefixBytes += Buffer.byteLength(replacementJson) - inlineBytes[index];
       const block = occurrence.node.value as Record<string, unknown>;
       for (const key of Object.keys(block)) delete block[key];
       Object.assign(block, replacement);
-      replacements.push({ start: occurrence.node.start, end: occurrence.node.end, text: JSON.stringify(replacement) });
-    } else if (preparedImage.changed) {
-      // The preprocessor result is represented in the original block with identical shape.
-      const encoded = preparedImage.bytes.toString('base64');
-      const block = occurrence.node.value as Record<string, unknown>;
-      if (format === 'anthropic' && record(block.source)) { block.source.data = encoded; block.source.media_type = preparedImage.mimeType; }
-      else if (format === 'chat' && record(block.image_url)) block.image_url.url = `data:${preparedImage.mimeType};base64,${encoded}`;
-      else if (format === 'responses') block[block.type === 'input_file' ? 'file_data' : 'image_url'] = `data:${preparedImage.mimeType};base64,${encoded}`;
-      replacements.push({ start: occurrence.node.start, end: occurrence.node.end, text: JSON.stringify(block) });
+      rewrites.set(index, { start: occurrence.node.start, end: occurrence.node.end, text: replacementJson });
+      removed.add(index);
     }
+  };
+  // Both limits cross at their historical positions. Appending another image
+  // consumes the remaining window; it does not reapply a final-request count cap.
+  for (const [index, occurrence] of occurrences.entries()) {
+    prefixBytes += Buffer.byteLength(text.slice(prefixEnd, occurrence.node.start)) + inlineBytes[index];
+    prefixEnd = occurrence.node.end;
+    retained.push(index);
+    await compactPrefix(occurrence.assistantCount);
   }
-  replacements.sort((a, b) => a.start - b.start);
+  prefixBytes += Buffer.byteLength(text.slice(prefixEnd));
+  await compactPrefix(assistantState.count);
+  if (prefixBytes > trigger) throw new Error('REQUEST_TEXT_TOO_LARGE');
+  if (rewrites.size === 0) return null;
+
+  const replacements = [...rewrites.values()].sort((a, b) => a.start - b.start);
   const segments: string[] = [];
   let cursor = 0;
   for (const replacement of replacements) {
@@ -376,12 +365,7 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   if (result.length > trigger) {
     throw new Error('REQUEST_TEXT_TOO_LARGE');
   }
-  return { body: result, parsedBody: root.value, changed: result.compare(body) !== 0, originalBytes: body.length, bytes: result.length, removedImages: remove.size, imageCount: occurrences.length, reason: policy.reason ?? (remove.size ? 'budget' : 'preprocessed') };
-}
-
-function preparedHasChange(prepared: Map<number, { changed: boolean }>): boolean {
-  for (const item of prepared.values()) if (item.changed) return true;
-  return false;
+  return { body: result, parsedBody: root.value, changed: result.compare(body) !== 0, originalBytes: body.length, bytes: result.length, removedImages: removed.size, imageCount: occurrences.length, reason: policy.reason ?? (removed.size ? 'budget' : 'preprocessed') };
 }
 
 export function routeInfoFor(model: string, endpoint?: string): ImageRouteInfo {
