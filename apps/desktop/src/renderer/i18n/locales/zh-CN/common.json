@@ -14058,7 +14058,7 @@
       "notGitRepo": "当前目录不是 git 仓库",
       "alreadyInWorktree": "已在 worktree 中，禁止嵌套",
       "toggleAria": "启用 worktree 隔离",
-      "chipTooltip": "在独立 worktree 中开始此任务，不影响当前分支"
+      "chipTooltip": "在项目的独立副本里开始，你现在的文件和改动都不动"
     },
     "branchChip": {
       "label": "分支",
@@ -14430,7 +14430,7 @@
     },
     "checkout": {
       "useWorktree": "改用 worktree",
-      "worktreeDefault": "之后新建任务也会默认勾选 worktree，可随时取消",
+      "worktreeDefault": "这次任务会在独立副本里进行，当前目录不动；之后新建任务也默认这样，可以随时取消勾选",
       "switched": "已切到 {{branch}}",
       "stashed": " · 改动已保存",
       "carried": " · 改动已带过来",
@@ -14470,7 +14470,21 @@
       "dialogSessions": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
       "dialogSessions_one": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
       "dialogSessions_other": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
-      "dialogSessions_many": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续"
+      "dialogSessions_many": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
+      "help": {
+        "label": "这是什么？",
+        "title": "worktree 是什么？",
+        "whatTitle": "是什么",
+        "what": "给这次任务准备一份独立的项目副本，从你选的版本开始。任务在副本里修改文件。",
+        "benefitsTitle": "好处",
+        "benefits": "你现在的文件、没提交的改动和正在跑的其他任务都不受影响；几个任务可以同时改同一个项目。",
+        "cautionsTitle": "要注意",
+        "changes": "通常不会带上还没提交的改动；项目指定的本地文件和配置可能会复制过去。",
+        "dependencies": "运行项目需要的依赖可能要重新安装。",
+        "tools": "你开着的编辑器和本地服务仍然使用原来那份项目。",
+        "results": "成果留在副本里，不会自动回到原项目；需要时再把改动合并回去。",
+        "recycle": "任务归档后，Cindy 会尝试在副本不再使用时清理它，先保存改动和新文件；依赖等被项目排除的文件，以及里面的其他项目不会保存。"
+      }
     }
   },
   "onboarding": {

@@ -612,6 +612,22 @@ export function BranchWorktreeChip({
   const [activeBranchIndex, setActiveBranchIndex] = useState(0);
   const listboxId = useId();
   const listboxRef = useRef<HTMLDivElement>(null);
+  // Focus only when the search input mounts. Re-renders must not steal focus
+  // from a nested help popover (or its Escape would close the outer menu).
+  const focusBranchSearch = useCallback((el: HTMLInputElement | null) => {
+    if (!el) return;
+    const menu = el.closest('[role="dialog"]');
+    const focused = document.activeElement;
+    // A slow branch response can mount this input while nested help is open.
+    // Only take focus from this menu or its trigger, never from another layer.
+    if (
+      focused === document.body ||
+      menu?.contains(focused) ||
+      (menu?.id && focused?.getAttribute('aria-controls') === menu.id)
+    ) {
+      el.focus({ preventScroll: true });
+    }
+  }, []);
   const noticesRef = useRef<HTMLDivElement>(null);
   const autoLocate = useRef(true);
   const keyboardLocate = useRef(false);
@@ -833,13 +849,7 @@ export function BranchWorktreeChip({
                   className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
                 />
                 <input
-                  // 打开菜单的下一个动作几乎总是输入过滤:等 Radix 的 open autofocus
-                  // 落定后再补一次聚焦;已聚焦时(用户在输入)不重抢。
-                  ref={(el) => {
-                    if (el && document.activeElement !== el) {
-                      requestAnimationFrame(() => el.focus());
-                    }
-                  }}
+                  ref={focusBranchSearch}
                   role="combobox"
                   aria-expanded
                   aria-autocomplete="list"
@@ -996,7 +1006,12 @@ export function BranchWorktreeChip({
     ) : checkboxDisabled ? (
       checkboxSegment
     ) : (
-      <Tip text={t('newChat.worktree.chipTooltip')}>{checkboxSegment}</Tip>
+      <Tip
+        text={t('newChat.worktree.chipTooltip')}
+        contentClassName="max-w-[min(360px,calc(100vw-32px))] break-words"
+      >
+        {checkboxSegment}
+      </Tip>
     );
 
   return (

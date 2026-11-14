@@ -14227,7 +14227,7 @@
       "notGitRepo": "O diretório atual não é um repositório git",
       "alreadyInWorktree": "Já se encontra num worktree; não é permitido criar worktrees aninhados",
       "toggleAria": "Utilizar isolamento com worktree",
-      "chipTooltip": "Iniciar esta conversa num worktree isolado sem alterar a branch atual"
+      "chipTooltip": "Comece numa cópia separada do projeto, sem alterar os seus ficheiros e alterações atuais"
     },
     "branchChip": {
       "label": "Branch",
@@ -14612,7 +14612,7 @@
     },
     "checkout": {
       "useWorktree": "Usar worktree",
-      "worktreeDefault": "As novas sessões também usarão worktree por predefinição. Pode desativar a qualquer momento.",
+      "worktreeDefault": "Esta sessão usará uma cópia separada, sem alterar este diretório. As novas sessões também usarão esta opção por predefinição; pode desmarcá-la quando quiser.",
       "switched": "Mudou para {{branch}}",
       "stashed": " · Alterações guardadas",
       "carried": " · Alterações transferidas",
@@ -14652,7 +14652,21 @@
       "dialogSessions": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
       "dialogSessions_one": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
       "dialogSessions_other": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
-      "dialogSessions_many": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}"
+      "dialogSessions_many": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
+      "help": {
+        "label": "O que é isto?",
+        "title": "O que é worktree?",
+        "whatTitle": "O que é",
+        "what": "Uma cópia separada do projeto para esta sessão, a partir da versão escolhida. A sessão edita os ficheiros dessa cópia.",
+        "benefitsTitle": "Vantagens",
+        "benefits": "Os seus ficheiros atuais, alterações ainda não confirmadas e outras sessões em execução não são afetados. Várias sessões podem trabalhar no mesmo projeto ao mesmo tempo.",
+        "cautionsTitle": "A ter em conta",
+        "changes": "As alterações ainda não confirmadas ficam normalmente no original. Os ficheiros e definições locais indicados pelo projeto podem ser copiados.",
+        "dependencies": "Poderá ser necessário reinstalar as dependências do projeto.",
+        "tools": "O editor aberto e os serviços locais continuam a usar o projeto original.",
+        "results": "Os resultados ficam na cópia e não voltam automaticamente ao projeto original. Incorpore as alterações quando precisar.",
+        "recycle": "Após o arquivo, a Cindy tenta limpar a cópia quando já não estiver em uso. As alterações e novos ficheiros são guardados primeiro, exceto ficheiros excluídos pelo projeto, como dependências, e outros projetos dentro da cópia."
+      }
     }
   },
   "onboarding": {

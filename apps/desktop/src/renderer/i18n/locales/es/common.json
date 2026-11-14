@@ -14227,7 +14227,7 @@
       "notGitRepo": "El directorio actual no es un repositorio de git",
       "alreadyInWorktree": "Ya estás dentro de un worktree. No se permite crear otro dentro.",
       "toggleAria": "Usar aislamiento con worktree",
-      "chipTooltip": "Inicia este chat en un worktree aislado sin modificar la rama actual"
+      "chipTooltip": "Empieza en una copia independiente del proyecto, sin tocar tus archivos ni cambios actuales"
     },
     "branchChip": {
       "label": "Rama",
@@ -14612,7 +14612,7 @@
     },
     "checkout": {
       "useWorktree": "Usar worktree",
-      "worktreeDefault": "Las nuevas sesiones también usarán worktree de forma predeterminada. Puedes desactivarlo cuando quieras.",
+      "worktreeDefault": "Esta sesión usará una copia independiente sin modificar este directorio. Las sesiones nuevas también lo harán por defecto; puedes desmarcar la casilla cuando quieras.",
       "switched": "Se cambió a {{branch}}",
       "stashed": " · Cambios guardados",
       "carried": " · Cambios trasladados",
@@ -14652,7 +14652,21 @@
       "dialogSessions": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
       "dialogSessions_one": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
       "dialogSessions_other": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
-      "dialogSessions_many": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}"
+      "dialogSessions_many": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
+      "help": {
+        "label": "¿Qué es esto?",
+        "title": "¿Qué es worktree?",
+        "whatTitle": "Qué es",
+        "what": "Una copia independiente del proyecto para esta sesión, a partir de la versión elegida. La sesión modifica los archivos de esa copia.",
+        "benefitsTitle": "Ventajas",
+        "benefits": "Tus archivos actuales, cambios sin confirmar y otras sesiones en curso no se ven afectados. Varias sesiones pueden trabajar en el mismo proyecto a la vez.",
+        "cautionsTitle": "Ten en cuenta",
+        "changes": "Los cambios sin confirmar normalmente se quedan en el original. Los archivos y ajustes locales que indique el proyecto pueden copiarse.",
+        "dependencies": "Puede ser necesario volver a instalar las dependencias del proyecto.",
+        "tools": "El editor abierto y los servicios locales siguen usando el proyecto original.",
+        "results": "Los resultados se quedan en la copia y no vuelven automáticamente al proyecto original. Incorpora los cambios cuando los necesites.",
+        "recycle": "Tras archivar, Cindy intenta limpiar la copia cuando ya no se usa. Antes guarda los cambios y archivos nuevos, excepto los archivos excluidos por el proyecto, como las dependencias, y otros proyectos dentro de la copia."
+      }
     }
   },
   "onboarding": {

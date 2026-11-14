@@ -142,7 +142,9 @@ void mountPage({
             head: 'fixture-head',
             fingerprint: 'fixture-fingerprint',
             files:
-              ['dirty', 'conflict', 'many-files', 'dirty-idle', 'stashed'].includes(ctx.case) ||
+              ['dirty', 'conflict', 'many-files', 'dirty-idle', 'stashed', 'help-dialog'].includes(
+                ctx.case,
+              ) ||
               (ctx.case === 'carried' && current === 'main')
                 ? Array.from({ length: ctx.case === 'many-files' ? 60 : 3 }, (_, i) =>
                     ctx.case === 'many-files' && i === 3
@@ -155,12 +157,12 @@ void mountPage({
               'src/components/example-1.tsx': { kind: 'new' },
               'src/components/example-2.tsx': { kind: 'deleted' },
             },
-            sessions: ['busy', 'idle', 'dirty-idle', 'worktree'].includes(ctx.case)
+            sessions: ['busy', 'idle', 'dirty-idle', 'worktree', 'help-menu'].includes(ctx.case)
               ? [
                   {
                     id: 'task-a',
                     name: '修复登录页面',
-                    running: ['busy', 'worktree'].includes(ctx.case),
+                    running: ['busy', 'worktree', 'help-menu'].includes(ctx.case),
                   },
                 ]
               : [],
@@ -171,7 +173,7 @@ void mountPage({
               ? { blocked: ctx.case.slice(6) }
               : {}),
             ...(ctx.case === 'operation' ? { blocked: 'operation' } : {}),
-            ...(['busy', 'worktree'].includes(ctx.case) ? { blocked: 'busy' } : {}),
+            ...(['busy', 'worktree', 'help-menu'].includes(ctx.case) ? { blocked: 'busy' } : {}),
             ...(ctx.case === 'occupied' && req.branch === 'release' ? { blocked: 'occupied' } : {}),
             ...(ctx.case === 'ignored' && req.branch === 'feature'
               ? {

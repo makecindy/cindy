@@ -14112,7 +14112,7 @@
       "notGitRepo": "Current directory is not a git repository",
       "alreadyInWorktree": "Already inside a worktree; nesting isn't allowed",
       "toggleAria": "Use worktree isolation",
-      "chipTooltip": "Start this session in an isolated worktree without touching the current branch"
+      "chipTooltip": "Start in a separate copy of the project, leaving your current files and changes untouched"
     },
     "branchChip": {
       "label": "Branch",
@@ -14490,7 +14490,7 @@
     },
     "checkout": {
       "useWorktree": "Use worktree",
-      "worktreeDefault": "New sessions will also use worktree by default. You can turn it off anytime.",
+      "worktreeDefault": "This session will use a separate copy, leaving this directory untouched. New sessions will use this by default too; you can uncheck it anytime.",
       "switched": "Switched to {{branch}}",
       "stashed": " · Changes saved for later",
       "carried": " · Changes brought along",
@@ -14530,7 +14530,21 @@
       "dialogSessions": "Other sessions in this directory: {{count}}. Work will continue on {{branch}}",
       "dialogSessions_one": "Other sessions in this directory: {{count}}. Work will continue on {{branch}}",
       "dialogSessions_other": "Other sessions in this directory: {{count}}. Work will continue on {{branch}}",
-      "dialogSessions_many": "Other sessions in this directory: {{count}}. Work will continue on {{branch}}"
+      "dialogSessions_many": "Other sessions in this directory: {{count}}. Work will continue on {{branch}}",
+      "help": {
+        "label": "What is this?",
+        "title": "What is worktree?",
+        "whatTitle": "What it is",
+        "what": "A separate copy of the project for this session, starting from the version you select. The session edits files in that copy.",
+        "benefitsTitle": "Why use it",
+        "benefits": "Your current files, uncommitted changes and other running sessions stay untouched. Several sessions can work on the same project at once.",
+        "cautionsTitle": "Things to know",
+        "changes": "Uncommitted changes are usually left behind. Local files and settings selected by the project may be copied over.",
+        "dependencies": "Dependencies needed to run the project may need to be installed again.",
+        "tools": "Your open editor and local services still use the original project.",
+        "results": "Results stay in the copy and do not automatically return to the original project. Bring the changes back when needed.",
+        "recycle": "After archiving, Cindy tries to clean up the copy once it is no longer in use. Changes and new files are saved first, except files excluded by the project (such as dependencies) and other projects inside it."
+      }
     }
   },
   "onboarding": {

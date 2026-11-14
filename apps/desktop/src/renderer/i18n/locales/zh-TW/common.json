@@ -14057,7 +14057,7 @@
       "notGitRepo": "目前目錄不是 git 儲存庫",
       "alreadyInWorktree": "已在 worktree 中，禁止巢狀",
       "toggleAria": "啟用 worktree 隔離",
-      "chipTooltip": "在獨立 worktree 中開始這次對話，不影響當前分支",
+      "chipTooltip": "在專案的獨立副本裡開始，你現在的檔案和變更都不動",
       "detectFailed": "環境偵測失敗，暫時無法使用 worktree"
     },
     "branchChip": {
@@ -14430,7 +14430,7 @@
     },
     "checkout": {
       "useWorktree": "改用 worktree",
-      "worktreeDefault": "之後新建任務也會預設勾選 worktree，可隨時取消",
+      "worktreeDefault": "這次任務會在獨立副本裡進行，目前目錄不動；之後新建任務也預設如此，可隨時取消勾選",
       "switched": "已切換到 {{branch}}",
       "stashed": " · 變更已儲存",
       "carried": " · 變更已一併帶過來",
@@ -14470,7 +14470,21 @@
       "dialogSessions": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
       "dialogSessions_one": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
       "dialogSessions_other": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
-      "dialogSessions_many": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續"
+      "dialogSessions_many": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
+      "help": {
+        "label": "這是什麼？",
+        "title": "worktree 是什麼？",
+        "whatTitle": "是什麼",
+        "what": "為這次任務準備一份獨立的專案副本，從你選的版本開始。任務在副本裡修改檔案。",
+        "benefitsTitle": "好處",
+        "benefits": "你現在的檔案、尚未提交的變更和其他執行中的任務都不受影響；幾個任務可以同時修改同一個專案。",
+        "cautionsTitle": "要注意",
+        "changes": "通常不會帶入尚未提交的變更；專案指定的本機檔案和設定可能會複製過去。",
+        "dependencies": "執行專案所需的相依套件可能要重新安裝。",
+        "tools": "你開啟的編輯器和本機服務仍然使用原本那份專案。",
+        "results": "成果留在副本裡，不會自動回到原專案；需要時再把變更合併回去。",
+        "recycle": "任務封存後，Cindy 會嘗試在副本不再使用時清理它，先保存變更和新檔案；相依套件等被專案排除的檔案，以及其中的其他專案不會保存。"
+      }
     }
   },
   "onboarding": {

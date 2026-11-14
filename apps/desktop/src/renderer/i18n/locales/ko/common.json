@@ -14058,7 +14058,7 @@
       "notGitRepo": "현재 디렉터리는 git 리포지토리가 아닙니다",
       "alreadyInWorktree": "이미 worktree 안에 있어 중첩이 금지됩니다",
       "toggleAria": "worktree 격리 사용",
-      "chipTooltip": "독립된 worktree에서 이 대화를 시작하며 현재 브랜치에는 영향을 주지 않습니다"
+      "chipTooltip": "프로젝트의 별도 사본에서 시작하며 현재 파일과 변경 사항은 그대로 둡니다"
     },
     "branchChip": {
       "label": "브랜치",
@@ -14430,7 +14430,7 @@
     },
     "checkout": {
       "useWorktree": "worktree 사용",
-      "worktreeDefault": "이후 새 세션에서도 worktree가 기본으로 선택됩니다. 언제든 해제할 수 있습니다.",
+      "worktreeDefault": "이 세션은 별도 사본에서 진행되며 현재 디렉터리는 그대로 유지됩니다. 새 세션에도 기본으로 적용되며 언제든 선택을 해제할 수 있습니다.",
       "switched": "{{branch}}(으)로 전환했습니다",
       "stashed": " · 변경 사항 저장됨",
       "carried": " · 변경 사항을 가져왔습니다",
@@ -14470,7 +14470,21 @@
       "dialogSessions": "이 디렉터리에 다른 세션 {{count}}개가 있습니다. 전환 후 {{branch}}에서 계속됩니다",
       "dialogSessions_one": "이 디렉터리에 다른 세션 {{count}}개가 있습니다. 전환 후 {{branch}}에서 계속됩니다",
       "dialogSessions_other": "이 디렉터리에 다른 세션 {{count}}개가 있습니다. 전환 후 {{branch}}에서 계속됩니다",
-      "dialogSessions_many": "이 디렉터리에 다른 세션 {{count}}개가 있습니다. 전환 후 {{branch}}에서 계속됩니다"
+      "dialogSessions_many": "이 디렉터리에 다른 세션 {{count}}개가 있습니다. 전환 후 {{branch}}에서 계속됩니다",
+      "help": {
+        "label": "무엇인가요?",
+        "title": "worktree란?",
+        "whatTitle": "무엇인가요",
+        "what": "선택한 버전에서 이 세션을 위한 프로젝트 사본을 만듭니다. 세션은 사본 안의 파일을 수정합니다.",
+        "benefitsTitle": "장점",
+        "benefits": "현재 파일, 커밋하지 않은 변경 사항, 실행 중인 다른 세션에 영향을 주지 않습니다. 여러 세션이 같은 프로젝트에서 동시에 작업할 수 있습니다.",
+        "cautionsTitle": "알아둘 점",
+        "changes": "커밋하지 않은 변경 사항은 보통 가져오지 않습니다. 프로젝트가 지정한 로컬 파일과 설정은 복사될 수 있습니다.",
+        "dependencies": "프로젝트 실행에 필요한 의존성 패키지를 다시 설치해야 할 수 있습니다.",
+        "tools": "열려 있는 편집기와 로컬 서비스는 계속 원래 프로젝트를 사용합니다.",
+        "results": "결과는 사본에 남으며 원래 프로젝트에 자동으로 반영되지 않습니다. 필요할 때 변경 사항을 가져오세요.",
+        "recycle": "보관 후 사본을 더 이상 사용하지 않으면 Cindy가 정리를 시도합니다. 변경 사항과 새 파일을 먼저 저장하지만, 의존성 등 프로젝트에서 제외한 파일과 내부의 다른 프로젝트는 저장하지 않습니다."
+      }
     }
   },
   "onboarding": {

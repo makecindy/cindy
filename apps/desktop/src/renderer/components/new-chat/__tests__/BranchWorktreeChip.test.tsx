@@ -1068,3 +1068,50 @@ it('places one busy notice outside the scrollable branch list', async () => {
   );
   expect(option.textContent).toBe('feature');
 });
+
+// Guidance regression: nested help must not dismiss the dirty-changes decision.
+// Unit tier, real popover/dialog and keyboard dismissal; no Git mutation.
+it.each([false, true])(
+  'opens worktree help and closes only that card (inDialog=%s)',
+  async (inDialog) => {
+    setupCheckout(true, inDialog ? { files: ['file.txt'] } : { blocked: 'busy' });
+    let resolveBranches: (value: object) => void = () => {};
+    if (!inDialog) {
+      window.electronAPI.worktreeListBranches = vi.fn().mockReturnValue(
+        new Promise((resolve) => {
+          resolveBranches = resolve;
+        }),
+      );
+    }
+    render(<CheckoutRow />);
+    await waitFor(() => expect(branchButton().textContent).toBe('main'));
+    fireEvent.click(branchButton());
+    if (inDialog) {
+      await screen.findByRole('option', { name: 'feature' });
+      fireEvent.click(screen.getByRole('option', { name: 'feature' }));
+      await screen.findByRole('dialog');
+    }
+    fireEvent.click(await screen.findByRole('button', { name: 'newChat.checkout.help.label' }));
+    const card = await screen.findByRole('dialog', { name: 'newChat.checkout.help.title' });
+    await waitFor(() => expect(card.contains(document.activeElement)).toBe(true));
+    if (!inDialog) {
+      await act(async () => {
+        resolveBranches({ current: 'main', branches: ['main', 'feature'] });
+      });
+      await screen.findByRole('listbox');
+      expect(card.contains(document.activeElement)).toBe(true);
+    }
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'newChat.checkout.help.title' })).toBeNull(),
+    );
+    if (inDialog) expect(screen.getByRole('dialog')).toBeTruthy();
+    else expect(screen.getByRole('listbox')).toBeTruthy();
+  },
+);
+
+it('explains the worktree checkbox with the shared short description', async () => {
+  render(<BranchWorktreeChip {...props} />);
+  fireEvent.focus(screen.getByRole('checkbox'));
+  expect((await screen.findByRole('tooltip')).textContent).toBe('newChat.worktree.chipTooltip');
+});

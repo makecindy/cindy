@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Info } from 'lucide-react';
+import { AlertTriangle, CircleHelp, Info } from 'lucide-react';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
@@ -17,9 +18,70 @@ export function UseWorktreeButton({
 }) {
   const { t } = useTranslation();
   return (
-    <Button compact size="sm" variant="secondary" disabled={disabled} onClick={onClick}>
-      {t('newChat.checkout.useWorktree')}
-    </Button>
+    <div className="basis-full space-y-2 text-left">
+      <p className="text-12 text-muted-foreground">{t('newChat.worktree.chipTooltip')}</p>
+      <div className="flex items-center gap-1">
+        <Button compact size="sm" variant="secondary" disabled={disabled} onClick={onClick}>
+          {t('newChat.checkout.useWorktree')}
+        </Button>
+        <WorktreeHelp />
+      </div>
+    </div>
+  );
+}
+
+/** Shared, non-modal explanation beside the explicit worktree alternatives. */
+export function WorktreeHelp() {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const titleId = useId();
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Tip text={t('newChat.checkout.help.label')} contentClassName="z-[10001]">
+          <Button
+            size="sm"
+            variant="secondary"
+            tone="quiet"
+            className="w-7 px-0"
+            aria-label={t('newChat.checkout.help.label')}
+          >
+            <CircleHelp size={16} aria-hidden />
+          </Button>
+        </Tip>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        collisionPadding={16}
+        aria-labelledby={titleId}
+        onEscapeKeyDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen(false);
+        }}
+        className="z-[10001] w-[360px] max-w-[calc(100vw-32px)] max-h-[min(480px,var(--radix-popover-content-available-height))] overflow-y-auto space-y-3 text-left text-13"
+      >
+        <h2 id={titleId} className="font-medium">
+          {t('newChat.checkout.help.title')}
+        </h2>
+        <section className="space-y-1">
+          <h3 className="font-medium">{t('newChat.checkout.help.whatTitle')}</h3>
+          <p className="text-muted-foreground">{t('newChat.checkout.help.what')}</p>
+        </section>
+        <section className="space-y-1">
+          <h3 className="font-medium">{t('newChat.checkout.help.benefitsTitle')}</h3>
+          <p className="text-muted-foreground">{t('newChat.checkout.help.benefits')}</p>
+        </section>
+        <section className="space-y-1">
+          <h3 className="font-medium">{t('newChat.checkout.help.cautionsTitle')}</h3>
+          <ul className="list-disc space-y-2 pl-4 text-muted-foreground">
+            {(['changes', 'dependencies', 'tools', 'results', 'recycle'] as const).map((key) => (
+              <li key={key}>{t(`newChat.checkout.help.${key}`)}</li>
+            ))}
+          </ul>
+        </section>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -225,18 +287,24 @@ export function CheckoutDialog({
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             {onUseWorktree && (
-              <Tip text={t('newChat.checkout.worktreeHint', vars)} contentClassName="z-[10001]">
-                <Button
-                  compact
-                  variant="secondary"
-                  tone="quiet"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => onUseWorktree(dialog?.branch)}
+              <div className="flex items-center gap-1">
+                <Tip
+                  text={t('newChat.worktree.chipTooltip')}
+                  contentClassName="z-[10001] max-w-[min(360px,calc(100vw-32px))] break-words"
                 >
-                  {t('newChat.checkout.useWorktree')}
-                </Button>
-              </Tip>
+                  <Button
+                    compact
+                    variant="secondary"
+                    tone="quiet"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => onUseWorktree(dialog?.branch)}
+                  >
+                    {t('newChat.checkout.useWorktree')}
+                  </Button>
+                </Tip>
+                <WorktreeHelp />
+              </div>
             )}
             <div className="ml-auto flex flex-row-reverse gap-2">
               <Button

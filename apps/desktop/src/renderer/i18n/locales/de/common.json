@@ -14112,7 +14112,7 @@
       "notGitRepo": "Das aktuelle Verzeichnis ist kein Git-Repository",
       "alreadyInWorktree": "Bereits in einem Worktree; Verschachtelung ist nicht erlaubt",
       "toggleAria": "Worktree-Isolierung verwenden",
-      "chipTooltip": "Starte diesen Chat in einem isolierten Worktree, ohne den aktuellen Branch zu verändern"
+      "chipTooltip": "In einer separaten Kopie des Projekts starten; deine aktuellen Dateien und Änderungen bleiben unberührt"
     },
     "branchChip": {
       "label": "Branch",
@@ -14490,7 +14490,7 @@
     },
     "checkout": {
       "useWorktree": "worktree verwenden",
-      "worktreeDefault": "Neue Sitzungen verwenden ebenfalls standardmäßig worktree. Du kannst es jederzeit ausschalten.",
+      "worktreeDefault": "Diese Sitzung arbeitet in einer separaten Kopie. Dieses Verzeichnis bleibt unverändert. Neue Sitzungen nutzen das ebenfalls standardmäßig; du kannst das Häkchen jederzeit entfernen.",
       "switched": "Zu {{branch}} gewechselt",
       "stashed": " · Änderungen gespeichert",
       "carried": " · Änderungen übernommen",
@@ -14530,7 +14530,21 @@
       "dialogSessions": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
       "dialogSessions_one": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
       "dialogSessions_other": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
-      "dialogSessions_many": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter"
+      "dialogSessions_many": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
+      "help": {
+        "label": "Was ist das?",
+        "title": "Was ist worktree?",
+        "whatTitle": "Was es ist",
+        "what": "Eine eigene Projektkopie für diese Sitzung, ausgehend von der gewählten Version. Die Sitzung bearbeitet Dateien in dieser Kopie.",
+        "benefitsTitle": "Vorteile",
+        "benefits": "Deine aktuellen Dateien, noch nicht übernommenen Änderungen und andere laufende Sitzungen bleiben unberührt. Mehrere Sitzungen können gleichzeitig am selben Projekt arbeiten.",
+        "cautionsTitle": "Gut zu wissen",
+        "changes": "Noch nicht übernommene Änderungen bleiben normalerweise zurück. Vom Projekt ausgewählte lokale Dateien und Einstellungen können kopiert werden.",
+        "dependencies": "Benötigte Abhängigkeiten müssen eventuell erneut installiert werden.",
+        "tools": "Dein geöffneter Editor und lokale Dienste verwenden weiterhin das ursprüngliche Projekt.",
+        "results": "Ergebnisse bleiben in der Kopie und werden nicht automatisch ins ursprüngliche Projekt übernommen. Übertrage die Änderungen bei Bedarf.",
+        "recycle": "Nach dem Archivieren versucht Cindy, die Kopie aufzuräumen, sobald sie nicht mehr verwendet wird. Änderungen und neue Dateien werden vorher gesichert; ausgeschlossene Dateien wie Abhängigkeiten und darin enthaltene andere Projekte werden nicht gesichert."
+      }
     }
   },
   "onboarding": {

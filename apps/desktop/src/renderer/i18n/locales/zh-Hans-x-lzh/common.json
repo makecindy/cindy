@@ -14057,7 +14057,7 @@
       "notGitRepo": "今之目录非 git 仓库",
       "alreadyInWorktree": "已在 worktree 中，禁止嵌套",
       "toggleAria": "启 worktree 隔离",
-      "chipTooltip": "于独立 worktree 另起炉灶，始此言谈，不扰今之分支",
+      "chipTooltip": "于项目独立副本起事，原有文件与改动不变",
       "detectFailed": "环境侦测未成，暂不能用 worktree"
     },
     "branchChip": {
@@ -14430,7 +14430,7 @@
     },
     "checkout": {
       "useWorktree": "改用 worktree",
-      "worktreeDefault": "之后新建任务也会默认勾选 worktree，可随时取消",
+      "worktreeDefault": "此差事于独立副本中行，原目录不动；后建差事亦默认如此，可随时去勾",
       "switched": "已切到 {{branch}}",
       "stashed": " · 改动已存",
       "carried": " · 改动已带过来",
@@ -14470,7 +14470,21 @@
       "dialogSessions": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
       "dialogSessions_one": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
       "dialogSessions_other": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
-      "dialogSessions_many": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行"
+      "dialogSessions_many": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
+      "help": {
+        "label": "此为何物？",
+        "title": "worktree 为何物？",
+        "whatTitle": "其为何物",
+        "what": "为此差事备项目副本，自所选版本始。差事于副本中改文件。",
+        "benefitsTitle": "其益",
+        "benefits": "原有文件、未提交之改动及正行差事皆不受扰；数差事可同改一项目。",
+        "cautionsTitle": "所当知",
+        "changes": "未提交之改动通常不随副本而来；项目指定之本地文件与配置或会复制。",
+        "dependencies": "运行项目所需依赖或须重装。",
+        "tools": "已开编辑器与本地服务仍用原项目。",
+        "results": "成果存于副本，不自归原项目；有需再合其改动。",
+        "recycle": "差事归档后，副本无人用时 Cindy 将尝试清理，先存改动及新文件；项目所排除之依赖等文件与其中别的项目不存。"
+      }
     }
   },
   "onboarding": {
