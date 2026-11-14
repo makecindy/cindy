@@ -4,6 +4,8 @@ import { createId } from '@paralleldrive/cuid2';
 import { orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
 import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
+import type { OrcaStructuredWorkerReport } from '@cindy/orca-workflow';
+import { ORCA_WORKER_REPORT_STATES } from '@cindy/orca-workflow';
 
 import { getDbClient, getCurrentDbClientSnapshot, type CurrentDbClientSnapshot } from './client/current.js';
 import type { OrcaRemoteWorkerProxySessionSeed } from './client/tx/types.js';
@@ -52,6 +54,8 @@ export interface OrcaWorkerRecord {
   role: string;
   focused: boolean;
   idleSince: string | null;
+  /** 最新一份结构化回报；null = 从未结构化回报（旧自由文本路径）。 */
+  latestReport: OrcaStructuredWorkerReport | null;
   createdAt: string;
   updatedAt: string;
   session: {
@@ -617,6 +621,7 @@ export async function getRemoteOrcaSession(sessionId: string) {
 export async function updateWorkerStatus(
   workerId: string,
   status: OrcaWorkerStatus,
+  latestReport?: OrcaStructuredWorkerReport | null,
 ): Promise<void> {
   const db = getDbClient().drizzle;
   await db
@@ -625,6 +630,22 @@ export async function updateWorkerStatus(
       status,
       updatedAt: Date.now(),
       ...(status === 'running' ? { idleSince: null } : {}),
+      ...(latestReport === undefined ? {} : { latestReport: latestReport ? JSON.stringify(latestReport) : null }),
+    })
+    .where(eq(orcaWorkers.id, workerId));
+}
+
+/** 只记最新一份结构化回报，不改 worker 状态（progress 与已结算的终态都走这里）。 */
+export async function setWorkerLatestReport(
+  workerId: string,
+  latestReport: OrcaStructuredWorkerReport | null,
+): Promise<void> {
+  const db = getDbClient().drizzle;
+  await db
+    .update(orcaWorkers)
+    .set({
+      latestReport: latestReport ? JSON.stringify(latestReport) : null,
+      updatedAt: Date.now(),
     })
     .where(eq(orcaWorkers.id, workerId));
 }
@@ -775,6 +796,19 @@ function teamToRecord(row: typeof orcaTeams.$inferSelect): OrcaTeamRecord {
   };
 }
 
+function parseLatestReport(raw: string | null): OrcaStructuredWorkerReport | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as OrcaStructuredWorkerReport;
+    const state = value?.state;
+    if (typeof state !== 'string') return null;
+    if (!(ORCA_WORKER_REPORT_STATES as readonly string[]).includes(state)) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
 function workerToRecord(
   worker: typeof orcaWorkers.$inferSelect,
   team: typeof orcaTeams.$inferSelect,
@@ -791,6 +825,7 @@ function workerToRecord(
     role: worker.role,
     focused: worker.focused,
     idleSince: msToIso(worker.idleSince),
+    latestReport: parseLatestReport(worker.latestReport),
     createdAt: new Date(worker.createdAt).toISOString(),
     updatedAt: new Date(worker.updatedAt).toISOString(),
     session: {

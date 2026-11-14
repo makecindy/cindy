@@ -628,6 +628,7 @@ import {
   setWorkerFocus,
   updateWorkerIdentity,
   updateWorkerStatus,
+  setWorkerLatestReport,
 } from '../localDb/orcaTeamStore.js';
 import {
   botLifecycleEvents,
@@ -1098,6 +1099,7 @@ import {
   createOrcaUiAssignmentHistoryGate,
 } from './orcaUiAssignmentHistoryGate.js';
 import { orcaModelDiscoveryFailure, throwOrcaServiceFailure } from './orcaServiceFailure.js';
+import type { OrcaStructuredWorkerReport } from '@cindy/orca-workflow';
 import {
   captureOrcaDeliveryBaselines,
   createOrcaTeamService,
@@ -3279,6 +3281,18 @@ export function captureLocalWorkerReport(
 ): (accepted: boolean, receipt?: WorkerReportReceipt) => Promise<void> {
   if (!orcaTeamServiceForEvents) throw new Error('Orca team service is not initialized');
   return orcaTeamServiceForEvents.captureLocalWorkerReport(sessionId);
+}
+
+/**
+ * 只落库、不派发、不结算的结构化进度回报。progress 走这里，因此不占 Lead 的 turn 或队列。
+ * 身份已由 bridge 的 resolveWorkerLink 核实，这里只按 sessionId 找归属 worker。
+ */
+export async function recordWorkerReport(
+  sessionId: string,
+  report: OrcaStructuredWorkerReport,
+): Promise<void> {
+  if (!orcaTeamServiceForEvents) throw new Error('Orca team service is not initialized');
+  await orcaTeamServiceForEvents.recordWorkerReport(sessionId, report);
 }
 
 /** Worker 管理自己排在 Lead 队列里的回报；bridge 核实 Worker 身份后经这里进入宿主队列。 */
@@ -16385,6 +16399,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 归档 / 显式 idle 会释放 runtime；先取消未落地的后台预热，避免释放后被重新拉起。
     cancelWorkerResume: (sessionId) => orcaWorkerResumeScheduler.cancel(sessionId),
     updateWorkerStatus,
+    setWorkerLatestReport,
     updateWorkerIdentity,
     markWorkerIdle: async (workerId) => {
       const now = Date.now();
@@ -16578,6 +16593,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     reportWithdrawalStanding: (workerSessionId, queuedMessageId) =>
       orcaTeamService.workerReportWithdrawalStanding(workerSessionId, queuedMessageId),
+    onReportContentMutated: (workerSessionId, queuedMessageIds) =>
+      orcaTeamService.workerReportQueuedContentMutated(workerSessionId, queuedMessageIds),
     adoptQueuedReport: (workerSessionId, queuedMessageId) =>
       orcaTeamService.adoptWorkerQueuedReport(workerSessionId, queuedMessageId),
     log,

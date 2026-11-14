@@ -637,6 +637,7 @@ describe('wrapTeamDeps', () => {
       updateWorkerStatus: vi.fn(async (_id: string, status: OrcaWorkerRecordSnapshot['status']) => {
         worker = { ...worker, status };
       }),
+      setWorkerLatestReport: vi.fn(async () => {}),
       broadcastOrcaWorkerChanged: vi.fn(),
       onLeadWorkerReportsSettled: vi.fn(),
       sendAutoBridgeToLead: vi.fn(async () => ({ accepted: true })),

@@ -18941,6 +18941,12 @@
     }
   },
   "orca": {
+    "workerReport": {
+      "dropped": "无需处理",
+      "failed": "已失败",
+      "awaitingAnswer": "等回复",
+      "awaitingReview": "待验收"
+    },
     "createWorker": {
       "title": "创建新 Worker",
       "submit": "创建 Worker",

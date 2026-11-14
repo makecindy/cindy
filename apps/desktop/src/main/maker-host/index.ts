@@ -138,6 +138,7 @@ import {
   dispatchInterAgentMessage,
   captureRemoteWorkerReportSettlement,
   captureLocalWorkerReport,
+  recordWorkerReport,
   getOrcaWorkerReportQueue,
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
@@ -1356,6 +1357,7 @@ export function getMaker(): Maker {
       },
       dispatchInterAgentMessage,
       captureLocalWorkerReport,
+      recordWorkerReport: (sessionId, report) => recordWorkerReport(sessionId, report),
       // 宿主队列服务在 IPC 注册时创建(晚于本 deps 构造, 早于任何 bridge 回调), 调用时再取。
       workerReportQueue: {
         list: (identity) => getOrcaWorkerReportQueue().list(identity),

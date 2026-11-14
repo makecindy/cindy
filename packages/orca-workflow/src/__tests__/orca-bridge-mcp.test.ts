@@ -10,6 +10,7 @@ import type {
   SessionSendResult,
 } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import {
   authorizeSendToLeadCaller,
@@ -22,10 +23,11 @@ import {
   type OrcaWorkerReportQueueStatus,
   type OrcaWorkerReportReceipt,
 } from '../orca-bridge-mcp';
+import { ORCA_WORKER_REPORT_STATES, ORCA_WORKER_SETTLING_REPORT_STATES } from '../orca-bridge-mcp';
 import { renderOrcaWorkerSystemPrompt } from '../orca-bridge-prompt';
 
 const WORKER_BRIDGE_TOOLS = [
-  'send_to_lead', 'read_lead_history', 'read_lead', 'lead_status',
+  'report_progress', 'send_to_lead', 'read_lead_history', 'read_lead', 'lead_status',
   'get_lead_queue_status', 'update_queued_report', 'cancel_queued_report', 'merge_queued_reports',
 ];
 
@@ -544,6 +546,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     lead: FakeSession,
     dispatchInterAgentMessage?: OrcaBridgeMcpDeps['dispatchInterAgentMessage'],
     workerReportQueue?: OrcaWorkerReportQueueBridge,
+    extraDeps: Partial<OrcaBridgeMcpDeps> = {},
   ) {
     const logger = makeLogger();
     const workerLink: OrcaWorkerLink = {
@@ -569,6 +572,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       captureLocalWorkerReport,
       dispatchInterAgentMessage,
       workerReportQueue,
+      ...extraDeps,
       getMaker: () => base.maker as unknown as Maker,
       logger: logger as never,
       persistUserMessage: async (sessionId, message) => {
@@ -652,6 +656,131 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(statusUpdates).toEqual([]);
   });
 
+  // 2026-11-10 Super-agent 机制吸收：Worker 回报带六态结构化字段时，Host 拿到的回执必须
+  // 原样带上它（否则 Main 侧无法区分无操作/等人工/待验收），而 blocked 缺问题时不能发出。
+  // 生产入口：工具 handler + 注入的 captureLocalWorkerReport 回执；unit tier 同本文件其余用例。
+  it('forwards a structured report into the host receipt', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const report = {
+      state: 'ready' as const,
+      summary: '已修好登录超时',
+      verification: 'vitest 通过',
+      risk: '未覆盖移动端',
+    };
+    const json = parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '已修好登录超时',
+      report,
+    }));
+
+    expect(json).toMatchObject({ ok: true });
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { delivered: true, report },
+    );
+  });
+
+  it('refuses a blocked report without one concrete question', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const result = await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '需要你定方案 A 还是 B',
+      report: { state: 'blocked' },
+    });
+
+    const json = expectToolError(result);
+    expect(json).toMatchObject({ error: expect.stringContaining('report.question') });
+    // 无问题就不派发：Lead 不会收到一条无法回答的“等人工”，也不需要结算任何欠回报。
+    expect(h.finishReport).not.toHaveBeenCalled();
+    expect(lead.sent).toEqual([]);
+  });
+
+  // 2026-11-10 结构化回报的交付语义：report 是 Lead 要读的内容，不是宿主私货回执。
+  // 生产入口：send_to_lead 公开 tool handler；unit tier 同本文件其余用例。
+  it('delivers the structured evidence and question to the Lead, not only to the receipt', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '需要你定方案',
+      report: {
+        state: 'blocked',
+        question: '选方案 A 还是 B',
+        summary: '两条路径都验证过',
+        verification: 'node --test 447 pass',
+      },
+    });
+
+    expect(lead.sent).toHaveLength(1);
+    const delivered = lead.sent[0] as { content?: string } | string;
+    const text = typeof delivered === 'string' ? delivered : String(delivered.content ?? '');
+    expect(text).toContain('需要你定方案');
+    expect(text).toContain('选方案 A 还是 B');
+    expect(text).toContain('node --test 447 pass');
+    expect(text).toContain('blocked');
+  });
+
+  // 遥测与结论从工具层分家：progress 走独立工具，结构上不派发、不 rehydrate、不结算、不带问题。
+  it('records progress via report_progress without touching the Lead', async () => {
+    const lead = makeSession('lead-1');
+    const recordWorkerReport = vi.fn(async () => {});
+    const h = makeWorkerBridgeLeadHarness(lead, undefined, undefined, { recordWorkerReport });
+    const json = parseToolJson(await h.server._registeredTools.report_progress.handler({
+      worker_id: 'worker-1',
+      summary: '已完成一半',
+    }));
+
+    expect(json).toMatchObject({ ok: true, recorded: 'progress' });
+    expect(lead.sent).toEqual([]);
+    expect(recordWorkerReport).toHaveBeenCalledWith('worker-session-1', expect.objectContaining({ state: 'progress' }));
+    expect(h.finishReport).not.toHaveBeenCalled();
+  });
+
+  // 旧提示词/旧模型仍可能把 progress 塞进 send_to_lead：枚举已收窄到五个终段状态，
+  // schema 层拒收 progress（存储侧仍认六态，供 latest_report 面板读旧数据）。
+  it('narrows send_to_lead to the settling states so progress cannot ride it', () => {
+    // 契约：send_to_lead 的枚举 = 五个终段状态；progress 只存在于存储/消费侧六态集合。
+    expect([...ORCA_WORKER_SETTLING_REPORT_STATES]).not.toContain('progress');
+    expect([...ORCA_WORKER_SETTLING_REPORT_STATES]).toEqual(
+      ORCA_WORKER_REPORT_STATES.filter((state) => state !== 'progress'),
+    );
+    // 与生产 schema 同源断言：send_to_lead 的 state 枚举正是 SETTLING 集合。
+    const settlingSchema = z.enum(ORCA_WORKER_SETTLING_REPORT_STATES as unknown as [string, ...string[]]);
+    expect(() => settlingSchema.parse('progress')).toThrow();
+    expect(settlingSchema.parse('waiting')).toBe('waiting');
+  });
+
+  // 2026-11-11 progress 拆独立工具后的通道收口：结论通道 schema 不再接受 progress。
+  it('rejects progress in send_to_lead and points at report_progress', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const json = expectToolError(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '做到一半',
+      report: { state: 'progress', summary: '已完成一半' },
+    }));
+
+    expect(json).toMatchObject({ error: expect.stringContaining('progress is telemetry') });
+    expect(lead.sent).toEqual([]);
+    expect(h.captureLocalWorkerReport).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blocked report without a question before dispatch', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const json = expectToolError(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '卡住了',
+      report: { state: 'blocked' },
+    }));
+
+    expect(json).toMatchObject({ error: expect.stringContaining('blocked report must carry one concrete question') });
+    expect(lead.sent).toEqual([]);
+    expect(h.captureLocalWorkerReport).not.toHaveBeenCalled();
+  });
+
   it('persists the report without completing the still-running Worker', async () => {
     const lead = makeSession('lead-1');
     const { server, persisted, statusUpdates } = makeWorkerBridgeLeadHarness(lead);
@@ -673,8 +802,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(lead.sent).toHaveLength(1);
   });
 
-  it.each(['dispatched', 'queued', 'steered'] as const)('settles host-owned %s reports without waiting for lead completion', async mode => {
-    const lead = makeSession('lead-1');
+  it.each(['dispatched', 'queued', 'steered'] as const)('settles host-owned %s reports without waiting for lead completion', async mode => {    const lead = makeSession('lead-1');
     lead.turnRunning = true;
     let accepted: (() => void | Promise<void>) | undefined;
     const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async params => {

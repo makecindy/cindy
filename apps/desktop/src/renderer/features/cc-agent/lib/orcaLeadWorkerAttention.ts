@@ -224,14 +224,51 @@ export function getSessionAttentionKindsWithOrcaLeads(): ReadonlyMap<string, Att
 }
 
 /**
+ * 只有等人回答/失败的状态，其问题才该出现在用户通知里。
+ * progress / waiting / ready / dropped 的问题（历史数据或旧端写下的）一律不外显。
+ */
+export function actionableWorkerReportQuestion(
+  report: { state: string; question?: string } | null | undefined,
+): string | null {
+  if (!report || (report.state !== 'blocked' && report.state !== 'failed')) return null;
+  const question = report.question?.trim();
+  return question || null;
+}
+
+/** Worker 最新结构化回报里的问题，最多 60 字；把「等回复」具体化到通知标题。 */
+export function findOrcaWorkerReportQuestion(workerSessionId: string): string | null {
+  for (const [, snapshot] of listRetainedWorkerProjections()) {
+    const worker = snapshot.workers.find((item) => item.sessionId === workerSessionId);
+    if (!worker) continue;
+    const question = actionableWorkerReportQuestion(worker.latestReport);
+    if (!question) return null;
+    const chars = Array.from(question);
+    return chars.length > 60 ? `${chars.slice(0, 60).join('')}…` : question;
+  }
+  return null;
+}
+
+/**
  * Worker 自身事件是否单独发通知:只放行本机 Worker 的出错与需要确认;完成仍不单独通知,
  * 等 Lead 被回报唤起的那一轮以 Lead 名义统一通知。远程控制另一台电脑的 Worker 不在范围内。
  */
 export function shouldNotifyOrcaWorkerEvent(
   kind: 'done' | 'error' | 'needs-reply',
   worker: { deviceLinkDeviceId?: string | null },
+  latestReportState?: string | null,
 ): boolean {
+  // dropped 结论 = 本轮无需用户行动：迟到的 error 事件不再单独响铃，完成语义同 done。
+  if (kind !== 'done' && latestReportState === 'dropped') return false;
   return kind !== 'done' && !worker.deviceLinkDeviceId;
+}
+
+/** Worker 投影上最新回报的 state；找不到投影时返回 null。 */
+export function findOrcaWorkerLatestReportState(workerSessionId: string): string | null {
+  for (const [, snapshot] of listRetainedWorkerProjections()) {
+    const worker = snapshot.workers.find((item) => item.sessionId === workerSessionId);
+    if (worker) return worker.latestReport?.state ?? null;
+  }
+  return null;
 }
 
 /** Worker 通知标题:「Lead 标题 · Worker 标题」;找不到 Lead 时退回 Worker 标题。 */

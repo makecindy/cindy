@@ -14,16 +14,67 @@ function worker(
   workerId: string,
   status: OrcaWorkerStatus,
   focused = false,
+  reportState?: WorkerAttentionRecord['reportState'],
 ): WorkerAttentionRecord {
   return {
     workerId,
     leadSessionId: LEAD_ID,
     status,
     focused,
+    ...(reportState ? { reportState } : {}),
   };
 }
 
 describe('computeWorkerAttentionUpdates', () => {
+  // 结构化回报 dropped = 无需人工处理，不该亮「完成未读」绿点。
+  it('does not mark attention for a worker that reported nothing to act on', () => {
+    const result = computeWorkerAttentionUpdates(
+      new Map([[WORKER_ID, 'running']]),
+      [worker(WORKER_ID, 'done', false, 'dropped')],
+      LEAD_ID,
+    );
+
+    expect(result.toMark).toEqual([]);
+  });
+
+  // 终止事件先广播、dropped 回执后到：状态不会再进入 done，必须由回报变化撤掉已亮的点。
+  it('clears a mark when a late report turns out to be dropped', () => {
+    const lit = computeWorkerAttentionUpdates(
+      new Map([[WORKER_ID, 'running']]),
+      [worker(WORKER_ID, 'done', false, 'ready')],
+      LEAD_ID,
+    );
+    expect(lit.toMark).toEqual([WORKER_ID]);
+
+    const corrected = computeWorkerAttentionUpdates(
+      lit.nextStatusByWorkerId,
+      [worker(WORKER_ID, 'done', false, 'dropped')],
+      LEAD_ID,
+    );
+    expect(corrected.toClear).toEqual([WORKER_ID]);
+  });
+
+  // 一轮 dropped 之后的新一轮不能再被旧回报判成「无需处理」（宿主任新 turn 起点清空回报）。
+  it('does not treat a fresh done as dropped once the new round cleared the report', () => {
+    const result = computeWorkerAttentionUpdates(
+      new Map([[WORKER_ID, 'running']]),
+      [worker(WORKER_ID, 'done')],
+      LEAD_ID,
+    );
+    expect(result.toMark).toEqual([WORKER_ID]);
+    expect(result.toClear).toEqual([]);
+  });
+
+  it('still marks attention for ready and blocked reports that need a person', () => {
+    const ready = computeWorkerAttentionUpdates(
+      new Map([[WORKER_ID, 'running'], [OTHER_WORKER_ID, 'running']]),
+      [worker(WORKER_ID, 'done', false, 'ready'), worker(OTHER_WORKER_ID, 'done', false, 'blocked')],
+      LEAD_ID,
+    );
+
+    expect(ready.toMark).toEqual([WORKER_ID, OTHER_WORKER_ID]);
+  });
+
   it('marks attention on running to done transition', () => {
     const result = computeWorkerAttentionUpdates(
       new Map([[WORKER_ID, 'running']]),

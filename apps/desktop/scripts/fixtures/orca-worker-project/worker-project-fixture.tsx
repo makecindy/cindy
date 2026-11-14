@@ -54,6 +54,12 @@ function Fixture() {
     </main>
   );
 }
+const reported = (state: 'ready' | 'blocked' | 'failed' | 'dropped'): WorkerInfo[] =>
+  workers.map((worker, index) =>
+    index === 1
+      ? { ...worker, status: 'done', latestReport: { state, question: '选方案 A 还是 B', summary: '两条路径都验过' } }
+      : worker,
+  );
 const workers: WorkerInfo[] = ['frontend', 'reviewer'].map((role, index) => ({
   workerId: role,
   sessionId: role,
@@ -81,6 +87,23 @@ function WorkersFixture() {
   );
 }
 /** 真实 store 驱动提醒，Worker 运行状态始终 idle，以覆盖原来的漏报。 */
+function ReportFixture({ state }: { state: 'ready' | 'blocked' | 'failed' | 'dropped' }) {
+  const list = reported(state);
+  return (
+    <main className="mx-auto w-full max-w-[480px] space-y-12 p-5">
+      <section data-testid="report-dropdown">
+        <RolePillDropdown
+          worker={list[0]}
+          workers={list}
+          selectedWorkerId="frontend"
+          activeWorkerCount={2}
+          onSwitchFocus={() => {}}
+          onArchiveWorker={() => {}}
+        />
+      </section>
+    </main>
+  );
+}
 function AttentionFixture({ kind }: { kind: 'error' | 'awaiting' | 'done' }) {
   useEffect(() => {
     if (kind === 'done') markWorkerAttention('reviewer');
@@ -236,6 +259,13 @@ void mountPage({
           }
         />
       );
+    }
+    if (ctx.case.startsWith('report-')) {
+      const state = ctx.case === 'report-ready' ? 'ready'
+        : ctx.case === 'report-blocked' ? 'blocked'
+        : ctx.case === 'report-failed' ? 'failed'
+        : 'dropped';
+      return <ReportFixture state={state} />;
     }
     return ctx.case === 'workers' ? <WorkersFixture /> : <Fixture />;
   },

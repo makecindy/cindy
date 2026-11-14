@@ -18941,6 +18941,12 @@
     }
   },
   "orca": {
+    "workerReport": {
+      "dropped": "対応不要",
+      "failed": "失敗",
+      "awaitingAnswer": "回答待ち",
+      "awaitingReview": "確認待ち"
+    },
     "createWorker": {
       "title": "新しい Worker を作成",
       "submit": "Worker を作成",

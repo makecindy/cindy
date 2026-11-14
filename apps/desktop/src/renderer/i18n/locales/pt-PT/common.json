@@ -19198,6 +19198,12 @@
     }
   },
   "orca": {
+    "workerReport": {
+      "dropped": "Sem ação necessária",
+      "failed": "Falhou",
+      "awaitingAnswer": "Resposta necessária",
+      "awaitingReview": "A rever"
+    },
     "createWorker": {
       "title": "Criar novo Worker",
       "submit": "Criar Worker",

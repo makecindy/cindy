@@ -10,6 +10,18 @@ import {
 } from '@/lib/makerTransport';
 import { isActiveWorkerStatus, type OrcaWorkerStatus } from '../../../../shared/orca-worker-status';
 
+/** 结构化回报六态（与 orca-workflow 的 ORCA_WORKER_REPORT_STATES 一致）。 */
+export type WorkerReportState =
+  | 'progress' | 'waiting' | 'ready' | 'blocked' | 'failed' | 'dropped';
+
+export interface WorkerLatestReport {
+  state: WorkerReportState;
+  question?: string;
+  summary?: string;
+  verification?: string;
+  risk?: string;
+}
+
 const log = createLogger('workerProjectionStore');
 
 export interface WorkerInfo {
@@ -23,20 +35,37 @@ export interface WorkerInfo {
   status: OrcaWorkerStatus;
   focused: boolean;
   idleSince: string | null;
+  /** 最新一份结构化回报（六态）；缺省 = 旧自由文本回报，行为不变。 */
+  latestReport?: WorkerLatestReport | null;
   /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)；Agent 在任务所在电脑时无此字段。 */
   agentDeviceId?: string;
   /** 在同账号另一台电脑运行的 Worker；本机 Worker 无此字段。 */
   executionDevice?: WorkerExecutionDevice;
 }
 
-export interface WorkerExecutionDevice {
-  deviceId: string;
+export interface WorkerExecutionDevice {  deviceId: string;
   /** 运行设备上的真实任务 id；sessionId 是本机不跑 Agent 的代理任务。 */
   remoteSessionId: string;
   deviceName: string | null;
   /** false = 暂时无法获取状态；null = 尚未探测。 */
   reachable: boolean | null;
   workingDir: string | null;
+}
+
+function mapWorkerLatestReport(raw: unknown): WorkerLatestReport | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const state = value.state;
+  if (state !== 'progress' && state !== 'waiting' && state !== 'ready'
+    && state !== 'blocked' && state !== 'failed' && state !== 'dropped') return null;
+  const text = (input: unknown) => (typeof input === 'string' && input ? input : undefined);
+  return {
+    state,
+    ...(text(value.question) ? { question: text(value.question)! } : {}),
+    ...(text(value.summary) ? { summary: text(value.summary)! } : {}),
+    ...(text(value.verification) ? { verification: text(value.verification)! } : {}),
+    ...(text(value.risk) ? { risk: text(value.risk)! } : {}),
+  };
 }
 
 function mapExecutionDevice(raw: unknown): WorkerExecutionDevice | undefined {
@@ -195,6 +224,7 @@ function mapWorkerRecord(raw: Record<string, unknown>): WorkerInfo {
     status: (raw.status as WorkerInfo['status']) ?? 'idle',
     focused: (raw.focused as boolean) ?? false,
     idleSince: (raw.idleSince as string | null) ?? null,
+    ...(mapWorkerLatestReport(raw.latestReport) ? { latestReport: mapWorkerLatestReport(raw.latestReport) } : {}),
     ...(typeof session?.agentDeviceId === 'string' && session.agentDeviceId
       ? { agentDeviceId: session.agentDeviceId }
       : {}),

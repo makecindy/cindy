@@ -855,6 +855,12 @@ export const orcaWorkers = sqliteTable(
     pendingRemoteReport: text('pending_remote_report'),
     /** 停止已确认后只补发 release，不能误停用户后续的普通任务。 */
     remoteStopConfirmedAt: integer('remote_stop_confirmed_at'),
+    /**
+     * 最新一份结构化回报（JSON：state / question / summary / verification / risk）。
+     * NULL = 该 Worker 从未结构化回报，行为与旧自由文本回报完全一致。
+     * 面板与通知据此区分「完成待确认」与「无需处理」(dropped) 等终态语义。
+     */
+    latestReport: text('latest_report'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

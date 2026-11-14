@@ -1363,6 +1363,7 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       updateWorkerStatus: async (_id, status) => {
         worker = { ...worker, status };
       },
+      setWorkerLatestReport: async () => {},
       markWorkerIdle: async () => {
         worker = { ...worker, status: 'idle' };
       },

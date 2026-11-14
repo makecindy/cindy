@@ -18941,6 +18941,12 @@
     }
   },
   "orca": {
+    "workerReport": {
+      "dropped": "無需處理",
+      "failed": "已敗",
+      "awaitingAnswer": "候答",
+      "awaitingReview": "待勘"
+    },
     "createWorker": {
       "title": "立新 Worker",
       "submit": "立 Worker",

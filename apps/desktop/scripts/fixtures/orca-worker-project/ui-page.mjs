@@ -33,6 +33,10 @@ export default {
     },
     workers: { about: 'Worker project badge appears only for the other project' },
     dialogue: { about: 'Dialogue Lead hides checkbox until a Git project is selected' },
+    'report-ready': { about: 'A ready Worker report shows the awaiting-review chip' },
+    'report-blocked': { about: 'A blocked Worker report shows the awaiting-answer chip with its question' },
+    'report-failed': { about: 'A failed Worker report shows its own chip in the error tone, not the answer chip' },
+    'report-dropped': { about: 'A dropped Worker report shows the no-action chip' },
   },
   async ready(page) {
     await page.getByRole('button').first().waitFor();
@@ -62,6 +66,28 @@ export default {
       await page.keyboard.press('Escape');
       await page.getByRole('button', { name: await ui.t('orca.rolePill.layoutMenuLabel') }).click();
       await ui.capture('layout-menu-list');
+      return;
+    }
+    if (ui.case.startsWith('report-')) {
+      const key =
+        ui.case === 'report-ready'
+          ? 'awaitingReview'
+          : ui.case === 'report-blocked'
+            ? 'awaitingAnswer'
+            : ui.case === 'report-failed'
+              ? 'failed'
+              : 'dropped';
+      const label = await ui.t(`orca.workerReport.${key}`);
+      const dropdown = page.getByTestId('report-dropdown');
+      await dropdown.getByRole('button', { name: /frontend/ }).click();
+      const row = dropdown.getByRole('button', { name: /reviewer/ });
+      await row.getByText(label, { exact: true }).waitFor();
+      // 结构化问题作为行内标记的 tooltip，而不是新的一行文字。
+      if (ui.case === 'report-blocked') {
+        // 问题是行内标记的 tooltip，不占额外一行。
+        assert.equal(await row.getByText(label, { exact: true }).getAttribute('title'), '选方案 A 还是 B');
+      }
+      await ui.capture('report-chip');
       return;
     }
     if (ui.case === 'workers') {
