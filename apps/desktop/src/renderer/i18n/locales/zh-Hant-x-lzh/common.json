@@ -264,6 +264,8 @@
     "transferProgress": "已傳 {{sent}} / {{total}} · 均 {{speed}}/s",
     "thisComputer": "此機",
     "selectedComputer": "所擇之機",
+    "sourceComputer": "原機",
+    "waitingForSource": "{{name}}已離線，俟其復連即續錄。",
     "estimating": "方計檔案之數與大小…",
     "fileSummary": "案中檔案：{{count}} 個，共 {{size}}",
     "estimateNote": "此乃複製前之估算，含隱藏檔案；另行複製之 Git 歷史、差事言談及附件不計在內。檔案變動或影響終值。",
@@ -1359,7 +1361,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定已存，然 Cindy 重整未成。請重載 SSH 設定。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 不能安全管理此 SSH 設定。請重載，並確認 Cindy 所有權標記尚存且主機別名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 不能安全重現此主機之部分 SSH 設定規則。終端 SSH 或仍可成；請察 Match、條件式 Include、IdentityAgent、IdentitiesOnly 與公開金鑰設定。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent 今不可用。請啟 SSH Agent，並以 ssh-add 載入相應私密金鑰，而後再試。",
+    "SSH_AGENT_UNAVAILABLE": "本機 SSH 密鑰之代理（ssh-agent）不可用。請察其已啟，並以 ssh-add -l 驗所需之鑰已載；排障之法見「管理密鑰」。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主機仍已存，然顯示名稱或 Agent Proxy 設定未能存。請察此機儲存權限而後再試。",
     "REMOTE_WORKDIR_INVALID": "遠端案目錄無效，請重擇案目錄。",
     "REMOTE_WORKDIR_NOT_FOUND": "遠端案目錄不存，請重擇案目錄。",
@@ -1454,6 +1456,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "待覽",
+      "summaryInProgress": "方行",
+      "summaryPending": "待君處置",
+      "summaryUnread": "未閱之果",
       "markRead": "標為已閱",
       "archive": "封存",
       "actionFailed": "操作未竟，提醒已留，請再試。",
@@ -1890,6 +1896,12 @@
       "footnote": "初版僅支援 SSH 連線管理；於遠端行 Agent 之能，將於後續版本增之。",
       "viaAuth": "經 {{label}} 認證",
       "readOnlyFromSshConfig": "連線資訊出自 SSH 設定",
+      "importedAgentHint": "由本機 SSH 密鑰代理（ssh-agent）驗身。終端 ssh 雖可通，未必代理已備。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent 所引環境變數，Cindy 尚未設。請為 Cindy 設之，或正 SSH 設定之 IdentityAgent",
+        "endpointEmpty": "IdentityAgent 解析之端點為空。請正 SSH 設定之 IdentityAgent",
+        "endpointUnavailable": "IdentityAgent 所定 SSH 密鑰代理端點不可用。請察該端點及其代理；預設 ssh-agent 或用別端點"
+      },
       "configWarning": "SSH 設定中有若干規則 Cindy 無法解析，主機列表或連線資訊或與終端 SSH 不一。",
       "configDiagnostic": {
         "io": "Cindy 無法讀取 SSH 設定。此處仍顯上次讀取成功之主機；請查卷之權柄，再重新載入。",
@@ -1987,7 +1999,7 @@
           "tryThis": "於君之終端試此諸命令",
           "close": "闔",
           "fallbackTitle": "或逕不經 agent",
-          "fallbackBody": "增 host 時可改用「Identity file」之法，{{appName}} 將金鑰卷徑交 ssh，每次連線由君輸密碼，全不依 agent。安全之權衡：每連必輸密碼，然記憶體中亦不留金鑰快取，安危自負。",
+          "fallbackBody": "新增主機亦可選「私鑰卷」：{{appName}} 直讀私鑰入行程記憶體，不倚 ssh-agent。今僅容未加密私鑰，連線時不詢鑰之密語；加密私鑰請託 ssh-agent。",
           "reason": {
             "agent_unavailable": "ssh-add 尋不得可用之 ssh-agent(或 ssh-add 未裝、agent 未啟，或 SSH_AUTH_SOCK 未設)。",
             "bad_passphrase": "ssh-add 拒此密碼。",
@@ -13434,6 +13446,15 @@
           "askNoQuestion": "Agent 待君之答，然無問可示。請覆「續」。",
           "askQuestion": "Agent 待君作答：\n{{question}}\n{{options}}\n請覆選項之序，或逕書君之答。"
         }
+      },
+      "questions": {
+        "cardHint": "唯提問者可答。點選所答，多問多擇畢而呈之。亦可回此訊補述。多問以「題號：答案」作答，如「2：中文」，填畢呈之。",
+        "submitLabel": "呈答",
+        "multiSelectHint": "（可多擇）",
+        "resolved": "✅ 已擇：{{option}}",
+        "expired": "此卡已逾期",
+        "textHint": "唯提問者可答。以 {{code}} 接所答；多問用「{{code}} 2：所答」，畢則回 {{code}} OK 呈之。",
+        "replyHint": "唯提問者可答。點選所答，多問多擇畢而呈之。\n以 {{code}} 接所答；多問用「{{code}} 2：所答」，畢則回 {{code}} OK 呈之。"
       }
     }
   },
@@ -15965,6 +15986,8 @@
       "claudeSubscriptionWorkspaceOverride": "此工作目錄之 .claude 設定改易 Claude 之上游位址或驗證方式，故此處不可用 Claude 訂閱。請除此諸設定，或擇閘道器或 API Key 模型",
       "deviceStillLoading": "遠端裝置猶方載，請稍候",
       "remoteDefaultsLoadFailed": "不能讀遠端裝置之配置。請察連線，Cindy 方再試。",
+      "branchRequiresWorktree": "所選分支與目前分支不同。請勾選 worktree，或選目前分支。",
+      "branchCheckFailed": "未能確認目前分支。請勾選 worktree 以用所選分支，或查驗專案後重試。",
       "worktreeMissingRepo": "不能開 worktree：今之目錄缺倉庫之根",
       "worktreeRepoHint": "可再擇一次工作目錄，待右下角卷匣標識更新後再試",
       "sessionInactive": "差事已不復活躍",
@@ -16540,6 +16563,8 @@
             "title": "倉庫之變",
             "description": "連 Cindy GitHub App，評審或 CI 有變，則更新所隨之 PR。",
             "connected": "已連 {{login}} · 所察倉庫 {{count}} 個",
+            "syncing": "正同步倉庫…",
+            "finishInBrowser": "請於 GitHub 設妥倉庫，再返 Cindy。",
             "missing": "請核此倉之 App 安裝及存取權限：{{repositories}}",
             "error": "未能驗其連接，請重試。",
             "repositories": "擇倉庫",
@@ -21326,8 +21351,7 @@
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 帳號資訊。請於新增供方時選「$t(subscriptionAccounts.signIn.anotherAccount)」，另用獨立目錄",
     "signIn": {
       "checking": "正察本機帳號…",
-      "detected": "已有帳號登入",
-      "useAccount": "用此帳號",
+      "useAccount": "用此機 {{cli}} 之帳號",
       "anotherAccount": "另登一號",
       "keepExisting": "新號默自成一供方，亦可擇而併之。原號登入如故。",
       "checkFailed": "未能讀取本機帳號，請重試。",
@@ -21337,7 +21361,6 @@
     "title": "訂閱帳號",
     "strategy": "負載平衡",
     "add": "新增帳號",
-    "default": "預設目錄",
     "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "須登入",

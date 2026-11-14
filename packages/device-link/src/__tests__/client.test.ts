@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto';
 import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-protocol';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
-import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_WAIT_MS } from '../remoteAgent.js';
+import { DeviceLinkClient, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -226,6 +227,32 @@ describe('outbound invoke admission', () => {
         expect(records).toContainEqual(expect.objectContaining({ stage: 'request', channel: 'maker:remote-resources:invoke',
           operation: actionId === 'PRIVATE_ACTION' ? 'other-resource-action' : actionId }));
         expect(JSON.stringify(info.mock.calls)).not.toContain('PRIVATE_');
+      } finally { h.client.stop(); vi.useRealTimers(); }
+    },
+  );
+
+  // Unit, 2026-11-14 logs: the 10s remote-agent long poll produced ~47k "request slow" debug
+  // lines and ~30k INFO request diagnostics in five days. Its intended hold is not slowness;
+  // time beyond the hold still is.
+  it.each([[REMOTE_AGENT_READ_WAIT_MS, false], [REMOTE_AGENT_READ_WAIT_MS + 1_500, true]] as const)(
+    'remote-agent poll answered after %ims records slow evidence: %s', async (elapsedMs, slow) => {
+      vi.useFakeTimers();
+      const info = vi.fn(); const debug = vi.fn();
+      const h = makeHarness({ logger: { info, debug, warn: vi.fn(), error: vi.fn() },
+        timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+      try {
+        h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+        const request = h.client.invoke('abcdef12', { channel: REMOTE_AGENT_CHANNEL,
+          args: [{ op: 'poll', runs: [{ runId: 'run-1', cursor: 0 }] }] });
+        const sent = h.current().sent.find(frame => frame.kind === 'invoke')!;
+        await vi.advanceTimersByTimeAsync(elapsedMs);
+        h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: sent.id, src: sent.dst,
+          payload: { ok: true, result: { runs: [] } } });
+        await expect(request).resolves.toMatchObject({ ok: true });
+        const diagnostics = info.mock.calls.filter(([line]) => String(line).startsWith('device-link diagnostic {"stage":"request"'));
+        const slowLines = debug.mock.calls.filter(([line]) => String(line).startsWith('device-link request slow'));
+        expect(diagnostics.length > 0).toBe(slow);
+        expect(slowLines.length > 0).toBe(slow);
       } finally { h.client.stop(); vi.useRealTimers(); }
     },
   );
@@ -1354,6 +1381,180 @@ function makeRelayClient(
 }
 
 describe('DeviceLinkClient', () => {
+  // Unit: sendInvokeResult must reach the caller when live replies fill a ready
+  // window whose head was retransmitted without ACK. Existing recovery tests
+  // cover link-down or discardable pushes, not this ready/live-only deadlock.
+  it('delivers a new result through a stalled full window without evicting old replies or resetting another peer', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const host = makeRelayClient(relay, 'desktop', { transportRetryIntervalMs: 2_000 });
+    const a = makeRelayClient(relay, 'viewer-a');
+    const b = makeRelayClient(relay, 'viewer-b');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const route = relay.route.bind(relay);
+    let blockOldReplies = true;
+    const routing = vi.spyOn(relay, 'route').mockImplementation((sender, ws, env) => {
+      if (blockOldReplies && sender === 'desktop' && env.dst === 'viewer-a'
+        && parseTransportPayload(env.payload)) return;
+      route(sender, ws, env);
+    });
+    const requests: Envelope[] = [];
+    host.onFrame(env => {
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') requests.push(env);
+    });
+    try {
+      for (const client of [host, a, b]) client.start();
+      await pump();
+      for (const client of [a, b]) {
+        const opening = client.openLink('desktop', { controllerName: 'Viewer', protocolVersion: 1, appVersion: '1' });
+        await pump(); await opening;
+      }
+      for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+        host.sendInvokeResult('viewer-a', `old-${i}`, { ok: true, result: i });
+      }
+      await vi.advanceTimersByTimeAsync(2_001);
+      await pump();
+      const hostSocket = sockets.mock.results.find(entry => entry.value.ownerId === 'desktop')!.value;
+      expect(hostSocket.sent.filter((env: Envelope) => env.id === 'old-0')).toHaveLength(2);
+      // Fresh foreground traffic from the stuck peer and a healthy neighbor must
+      // not disguise the missing ACK on this peer's send window.
+      const pending = [a, b].map(client => client.invoke('desktop', { channel: 'maker:send', args: [] }));
+      for (const request of pending) void request.catch(() => {});
+      await pump();
+      for (const request of requests) {
+        host.sendInvokeResult(request.src!, request.id!, { ok: true, result: request.src });
+      }
+      await pump();
+      await expect(pending[0]).resolves.toEqual({ ok: true, result: 'viewer-a' });
+      await expect(pending[1]).resolves.toEqual({ ok: true, result: 'viewer-b' });
+      expect(hostSocket.sent.find((env: Envelope) => env.id === requests[0].id)?.payload)
+        .toEqual({ ok: true, result: 'viewer-a' });
+      expect(() => host.sendPush('viewer-a', 'non-discardable-event', {})).toThrow(/buffer is full/);
+
+      blockOldReplies = false;
+      await vi.advanceTimersByTimeAsync(4_001);
+      await pump();
+      const delivered = relay.deliveredTo.get('viewer-a') ?? [];
+      expect(new Set(delivered.filter(env => env.id?.startsWith('old-')).map(env => env.id)).size)
+        .toBe(MAX_TRANSPORT_PENDING_MESSAGES);
+      host.sendInvokeResult('viewer-a', 'after-drain', { ok: true, result: null });
+      const after = hostSocket.sent.find((env: Envelope) => env.id === 'after-drain')!;
+      expect(parseTransportPayload(after.payload)?.meta).toMatchObject({ seq: 65, baseSeq: 65 });
+      expect(requests).toHaveLength(2);
+      expect(sockets).toHaveBeenCalledTimes(3);
+      expect(hostSocket.closed).toBeNull();
+      expect(b.isLinkReady('desktop')).toBe(true);
+    } finally {
+      for (const client of [host, a, b]) client.stop();
+      routing.mockRestore(); sockets.mockRestore(); vi.useRealTimers();
+    }
+  });
+
+  it.each([1, 8])('keeps fresh full windows backpressured with retry limit %i', async transportMaxRetryAttempts => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 2_000, transportMaxRetryAttempts } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      const opening = establishInboundReliableLink(h, 'fresh-full');
+      await vi.advanceTimersByTimeAsync(1); await opening;
+      for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) h.client.sendInvokeResult('dev-b', `old-${i}`, { ok: true, result: null });
+      expect(() => h.client.sendInvokeResult('dev-b', 'new-result', { ok: true, result: null }))
+        .toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+      expect(h.current().sent.some(env => env.id === 'new-result')).toBe(false);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('preserves size, socket and transport-policy errors on a stalled full window', async () => {
+    vi.useFakeTimers();
+    let allowed = true;
+    let challengeReady = true;
+    const signingSession = {};
+    const h = makeHarness({ transportAllowed: () => allowed,
+      frameAuth: () => ({ sign: () => ({ signature: 'unit' }), verify: () => true,
+        peerChallenge: { session: signingSession, state: () => challengeReady ? 'ready' : 'needed' } }),
+      timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 2_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      const opening = establishInboundReliableLink(h, 'stalled-errors');
+      await vi.advanceTimersByTimeAsync(1); await opening;
+      for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) h.client.sendInvokeResult('dev-b', `old-${i}`, { ok: true, result: null });
+      await vi.advanceTimersByTimeAsync(2_001);
+      const ws = h.current();
+      const before = ws.sent.length;
+      for (const [mb, code] of [[3, 'BACKPRESSURE'], [5, 'PAYLOAD_TOO_LARGE']] as const) {
+        expect(() => h.client.sendInvokeResult('dev-b', 'large', { ok: true, result: 'x'.repeat(mb * 1024 * 1024) }))
+          .toThrow(expect.objectContaining({ code }));
+      }
+      // Both the hard socket cap and its soft data watermark still apply.
+      for (const bytes of [MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES, 512 * 1024]) {
+        ws.bufferedAmount = bytes;
+        expect(() => h.client.sendInvokeResult('dev-b', 'blocked', { ok: true, result: null }))
+          .toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+      }
+      ws.bufferedAmount = 0;
+      allowed = false;
+      expect(() => h.client.sendInvokeResult('dev-b', 'blocked', { ok: true, result: null }))
+        .toThrow(expect.objectContaining({ code: 'CHANNEL_NOT_ALLOWED' }));
+      allowed = true;
+      const sending = vi.spyOn(ws, 'send').mockImplementationOnce(() => { throw new Error('write failed'); });
+      expect(() => h.client.sendInvokeResult('dev-b', 'blocked', { ok: true, result: null })).toThrow('write failed');
+      sending.mockRestore();
+      expect(ws.sent).toHaveLength(before);
+      h.client.sendInvokeResult('dev-b', 'after-drain', { ok: true, result: null });
+      expect(ws.sent.at(-1)).toMatchObject({ id: 'after-drain', payload: { ok: true, result: null } });
+      challengeReady = false;
+      expect(() => h.client.sendInvokeResult('dev-b', 'needs-auth', { ok: true, result: null }))
+        .toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+      const challenge = ws.sent.at(-1)!;
+      expect(challenge.payload).toMatchObject({ channel: RELAY_AUTH_CHANNEL });
+      challengeReady = true;
+      ws.push({ v: 1, kind: 'push', src: 'dev-b', id: challenge.id,
+        payload: { channel: RELAY_AUTH_CHANNEL, payload: { type: 'response' } } });
+      await vi.advanceTimersByTimeAsync(1);
+      // Failed admission must not secretly enqueue an unretained result.
+      expect(ws.sent.some(env => env.id === 'needs-auth')).toBe(false);
+      h.client.sendInvokeResult('dev-b', 'needs-auth', { ok: true, result: null });
+      expect(ws.sent.at(-1)).toMatchObject({ id: 'needs-auth', auth: { signature: 'unit' } });
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('charges stalled-window replies to the shared relay congestion budget and refunds failed writes', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 2_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(5_001); h.current().ack();
+      for (const peer of ['stalled', 'healthy']) {
+        const opening = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(1); await opening;
+      }
+      for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) h.client.sendInvokeResult('stalled', `old-${i}`, { ok: true, result: null });
+      // Keep a second peer in the shared budget without ACKing its one live reply.
+      h.client.sendInvokeResult('healthy', 'healthy-old', { ok: true, result: null });
+      await vi.advanceTimersByTimeAsync(2_001);
+      const ws = h.current();
+      expect(ws.sent.filter(env => env.id === 'old-0').length).toBeGreaterThanOrEqual(2);
+      // Let the already-sent receive window finish its early retries. The next
+      // budget window is quiet; failed writes must return its four peer credits.
+      await vi.advanceTimersByTimeAsync(1_001);
+      const before = ws.sent.length;
+      const sending = vi.spyOn(ws, 'send').mockImplementationOnce(() => { throw new Error('write failed'); });
+      expect(() => h.client.sendInvokeResult('stalled', 'retry-result', { ok: true, result: null })).toThrow('write failed');
+      sending.mockRestore();
+      for (let i = 0; i < 4; i++) h.client.sendInvokeResult('stalled', `escape-${i}`, { ok: true, result: null });
+      expect(() => h.client.sendInvokeResult('stalled', 'over-budget', { ok: true, result: null }))
+        .toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+      h.client.sendInvokeResult('healthy', 'healthy-new', { ok: true, result: null });
+      expect(ws.sent.slice(before).filter(env => env.id?.startsWith('escape-'))).toHaveLength(4);
+      expect(ws.sent.slice(before).some(env => env.id === 'healthy-new')).toBe(true);
+      expect(ws.closed).toBeNull();
+      expect(h.client.isLinkReady('healthy')).toBe(true);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('retains a result completed after the controller disconnects while another controller stays usable', async () => {
     vi.useFakeTimers();
     const relay = new MemoryRelay();
@@ -5360,6 +5561,51 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  // 2026-11-14 个人版日志：对端整夜离线，侧栏/Git/子代理轮询每笔 invoke 都触网，relay 每小时
+  // 回 DEVICE_OFFLINE 上百次。relay 判定离线后本地按退避窗口回绝，只放行探测；上线信号立即开闸。
+  it('DEVICE_OFFLINE 之后本地回绝同一对端的调用，按窗口放行探测，presence 上线立即恢复', async () => {
+    const h = makeHarness();
+    let now = 1_000_000;
+    vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const invokesTo = (dst: string) => h.current().sent.filter((e) => e.kind === 'invoke' && e.dst === dst).length;
+
+    const first = h.client.invoke('dev-b', { channel: 'x', args: [] });
+    const sent = h.current().sent.find((e) => e.kind === 'invoke')!;
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'relay-error', id: sent.id, payload: { code: 'DEVICE_OFFLINE', message: 'offline' } });
+    await expect(first).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+
+    // 窗口内：与 relay 回绝同码，不再写出任何帧；其它对端不受影响。
+    await expect(h.client.invoke('dev-b', { channel: 'y', args: [] })).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    expect(invokesTo('dev-b')).toBe(1);
+    void h.client.invoke('dev-c', { channel: 'x', args: [] }).catch(() => {});
+    await tick();
+    expect(invokesTo('dev-c')).toBe(1);
+
+    // 窗口到期只放行一笔探测，同一时刻的其它调用仍在本地结束。
+    now += 15_000;
+    const probe = h.client.invoke('dev-b', { channel: 'probe', args: [] });
+    await expect(h.client.invoke('dev-b', { channel: 'z', args: [] })).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    await tick();
+    expect(invokesTo('dev-b')).toBe(2);
+    const probeFrame = h.current().sent.filter((e) => e.kind === 'invoke' && e.dst === 'dev-b').at(-1)!;
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'relay-error', id: probeFrame.id, payload: { code: 'DEVICE_OFFLINE', message: 'offline' } });
+    await expect(probe).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    // 探测失败后窗口翻倍：15 s 后仍在本地回绝。
+    now += 15_000;
+    await expect(h.client.invoke('dev-b', { channel: 'y', args: [] })).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    expect(invokesTo('dev-b')).toBe(2);
+
+    // 对端上线：不等窗口，下一笔立即触网。
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId: 'dev-b', online: true, remoteControlEnabled: true } });
+    void h.client.invoke('dev-b', { channel: 'after-online', args: [] }).catch(() => {});
+    await tick();
+    expect(invokesTo('dev-b')).toBe(3);
+    h.client.stop();
+  });
+
   it('无 pending 的 DEVICE_OFFLINE 也发出单次 peer route offline 事件', async () => {
     const h = makeHarness();
     const routeChanges: unknown[] = [];
@@ -5456,6 +5702,11 @@ describe('DeviceLinkClient', () => {
       linkGeneration: oldGeneration,
     });
     expect(h.client.isLinkReady('dev-b')).toBe(true);
+    // Unit regression #10537: link readiness alone missed the new offline gate.
+    // A late old-generation error must still allow the next public invoke to send.
+    const beforeInvoke = h.current().sent.length;
+    const nextInvoke = h.client.invoke('dev-b', { channel: 'maker:get-capabilities', args: [] }).catch(e => e);
+    expect(h.current().sent.slice(beforeInvoke).some(env => env.kind === 'invoke')).toBe(true);
 
     h.current().push({
       v: PROTOCOL_VERSION,
@@ -5475,6 +5726,7 @@ describe('DeviceLinkClient', () => {
     });
     expect(h.client.isLinkReady('dev-b')).toBe(false);
     h.client.stop();
+    await nextInvoke;
   });
 
   it('路由账本按 peer 限流且不淘汰仍未决的旧代归属', async () => {
@@ -7300,6 +7552,37 @@ describe('DeviceLinkClient', () => {
     await tick(20);
     expect(h.sockets.length).toBe(count); // 生命周期仍归 start/stop 管
     expect(h.client.getStatus()).toBe('stopped');
+  });
+
+  // Unit, 2026-11-14 logs: a sleeping laptop stayed "online" to its peers for ~1.5 min per
+  // sleep (ACK timeout, link reset, abandoned frames), every ~15 min DarkWake cycle. Suspend
+  // must close the relay connection normally and hold reconnects until resume.
+  it('suspendConnectionsForSystemSleep 正常关闭 relay、保持期内不重连，唤醒或清醒满保持期后重连', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10, pingIntervalMs: 600_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      expect(h.client.getStatus()).toBe('online');
+      const asleep = h.current();
+      h.client.suspendConnectionsForSystemSleep('system-suspend');
+      expect(asleep.closed).toEqual({ code: 1001, reason: 'system-suspend' });
+      expect(h.client.getStatus()).toBe('connecting');
+      const count = h.sockets.length;
+      await vi.advanceTimersByTimeAsync(SYSTEM_SUSPEND_RECONNECT_HOLD_MS - 1);
+      expect(h.sockets.length).toBe(count);
+
+      h.client.restartConnections('system-resume');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.sockets.length).toBe(count + 1);
+      h.current().ack();
+      expect(h.client.getStatus()).toBe('online');
+
+      // Sleep vetoed / no resume event: the awake-time hold restores the connection itself.
+      h.client.suspendConnectionsForSystemSleep('system-suspend');
+      const held = h.sockets.length;
+      await vi.advanceTimersByTimeAsync(SYSTEM_SUSPEND_RECONNECT_HOLD_MS);
+      expect(h.sockets.length).toBe(held + 1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
   it('stop 后不再重连', async () => {
@@ -13231,4 +13514,59 @@ describe('可靠层 ACK 编码（ack-v2）', () => {
       vi.useRealTimers();
     }
   });
+});
+
+// Unit: MCP open IDs/cursors must not evict a cached history page from the shared
+// client. Exercise real invoke/encoding/decoding through the existing relay harness.
+it('keeps history validators across twelve uncached MCP opens and polls while retaining gzip', async () => {
+  const codec = {
+    gzipBase64: (text: string) => gzipSync(Buffer.from(text)).toString('base64'),
+    gunzipBase64: (text: string, maxChars: number) => gunzipSync(Buffer.from(text, 'base64'), { maxOutputLength: maxChars }).toString(),
+    contentTag: (text: string) => createHash('sha256').update(text).digest('hex'),
+  };
+  const relay = new MemoryRelay();
+  const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: codec });
+  const metrics = vi.fn();
+  const viewer = makeRelayClient(relay, 'ios', undefined, { transferCodec: codec, invokeMetrics: { enabled: () => true, record: metrics } });
+  const history = { version: 1, items: [{ type: 'messages', key: 'm1', messages: [{
+    id: 'm1', clientId: 'm1', role: 'user', content: 'history'.repeat(100_000), createdAt: '2026-11-14T00:00:00.000Z',
+  }] }], hasMore: false, nextCursor: null };
+  const app = { viewId: 'view', html: '<body>App', sdk: { source: 'sdk'.repeat(120_000) } };
+  const handled: InvokePayload[] = [];
+  const off = host.onFrame(env => {
+    if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+    if (env.kind === 'invoke' && env.src && env.id) {
+      const input = env.payload as InvokePayload;
+      handled.push(input);
+      host.sendInvokeResult(env.src, env.id, { ok: true, result: input.channel === 'maker:mcp-apps:v1' ? app : history });
+    }
+  });
+  try {
+    host.start(); viewer.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && viewer.getStatus() === 'online');
+    await Promise.all([viewer.openLink('desktop', { controllerName: 'viewer', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    const call = async (payload: InvokePayload, noResultCache?: boolean) => {
+      const pending = viewer.invoke('desktop', payload, 1_000, { noResultCache });
+      await relay.settle();
+      return pending;
+    };
+    const page = { channel: 'local-db:messages:view', args: ['task', { before: 'older' }] };
+    await expect(call(page)).resolves.toMatchObject({ ok: true, result: history });
+    const open = { channel: 'maker:mcp-apps:v1', args: ['task', { op: 'open', openId: 'cached' }] };
+    await call(open); // Defaults still cache, including on this channel.
+    await call(open, false);
+    expect(handled.at(-1)!.transfer?.ifNoneMatch).toEqual(expect.any(String));
+    await call(open, true); // Explicit bypass must not use an existing entry either.
+    expect(handled.at(-1)!.transfer).toEqual({ gzip: 1 });
+    for (let i = 0; i < 12; i++) for (const op of ['open', 'poll']) {
+      await expect(call({ channel: 'maker:mcp-apps:v1', args: ['task', { op, openId: `open-${i}`, after: i }] }, true))
+        .resolves.toEqual({ ok: true, result: app });
+      expect(handled.at(-1)!.transfer).toEqual({ gzip: 1 });
+      expect(handled.at(-1)).not.toHaveProperty('noResultCache');
+      expect(metrics.mock.calls.filter(([event]) => event.phase === 'result').at(-1)![0].gzip).toBe(true);
+    }
+    await expect(call(page)).resolves.toMatchObject({ ok: true, result: history });
+    expect(handled.at(-1)!.transfer?.ifNoneMatch).toEqual(expect.any(String));
+    expect(metrics.mock.calls.filter(([event]) => event.phase === 'result').at(-1)![0].notModified).toBe(true);
+  } finally { off(); viewer.stop(); host.stop(); }
 });

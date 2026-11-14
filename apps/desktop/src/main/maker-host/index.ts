@@ -34,7 +34,7 @@ import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } 
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.desktop.js';
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
 import { onSubscriptionPoolCodexModelsChanged } from '../subscription-accounts/runtime.js';
-import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
+import { readCodexThreadStorageReadOnly, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { setSessionArchiveSyncRequester } from '../localDb/sessionArchiveSync.js';
@@ -398,7 +398,6 @@ import {
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import { attachAgentsToMakerMemory, createDesktopMakerMemoryManager } from './maker-memory-host.js';
 import { createMemoryReviewOneShot } from './memory-review-one-shot.js';
-import { prepareExternalCodexSessionForResume } from './codex-local-sessions.js';
 import {
   rehydrateCloseSuppression,
   shouldSkipOnCloseSideEffects,
@@ -1927,22 +1926,11 @@ export function getMaker(): Maker {
       },
       unregisterCodexMcpThreadContext,
       prepareCodexMcpToolCancellation,
-      prepareCodexResumeSession: async (threadId) => {
-        if (!getActiveAppSession().dataOwnerId) return prepareExternalCodexSessionForResume(threadId);
-        return ownerCodexThreadLocations().prepareResume(threadId, prepareExternalCodexSessionForResume);
-      },
-      resolveCodexThreadStorage: async (threadId, options) => {
-        if (!getActiveAppSession().dataOwnerId) return options?.readOnly ? readCodexThreadStorageReadOnly(threadId) : undefined;
-        const ownerScope = activeOwnerScopeKey();
-        const storage = options?.readOnly
-          ? await readCodexThreadStorageReadOnly(threadId)
-          : await ownerCodexThreadLocations().readStorage(threadId, {
-          home: getCodexHome(),
-          prepare: prepareExternalCodexSessionForResume,
-        });
-        if (activeOwnerScopeKey() !== ownerScope) throw new Error('Codex history owner changed during preparation');
-        return storage;
-      },
+      // codexAuthTokenReaderBoundary.test.ts and hostCodexAuthTokenReaderParity.test.ts
+      // use createCodexAuthTokenReader and recordCodexThreadLocation as extraction bounds.
+      // Keep storage keys explicit; the record binding follows the token-reader callback.
+      prepareCodexResumeSession: prepareCodexResumeSession,
+      resolveCodexThreadStorage: resolveCodexThreadStorage,
       createCodexAuthTokenReader: (providerId) => {
         const owner = getActiveAppSession();
         const authRealm = getActiveAuthRealm();
@@ -1968,10 +1956,7 @@ export function getMaker(): Maker {
           return { accessToken: credentials.accessToken, chatgptAccountId: credentials.accountId };
         };
       },
-      recordCodexThreadLocation: async (threadId, storageHome, rolloutPath) => {
-        if (!rolloutPath || !getActiveAppSession().dataOwnerId) return;
-        await ownerCodexThreadLocations().record(threadId, rolloutPath, storageHome);
-      },
+      recordCodexThreadLocation: recordCodexThreadLocation,
       registerCodexSystemPromptForThread: ({
         sessionId,
         threadId,
@@ -2155,7 +2140,9 @@ export function getMaker(): Maker {
         // 只是这条路径从没让那个校验生效过。退役即补齐对称性，不需要在写入侧再加一层闸门。
         await codexAgent.forceDisposeLocalHostForAuthChange(
           `Codex credential invalidated: ${reason}`,
-          { preserveExternalAuth: true },
+          // Pool accounts read their own native directory and have their own admission checks.
+          // This adapter's unproven child failure cannot revoke another account's live host.
+          { preserveExternalAuth: true, preserveSubscriptionAccounts: true },
         );
         clearChatgptBridgeCredentialCache();
         await refreshDiscoveredCodexModels(false);

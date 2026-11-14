@@ -8,6 +8,7 @@ import { providerShareGuestPeer } from '@cindy/device-link';
 import { describe, expect, it, vi } from 'vitest';
 
 import * as activeCatalogForHostParity from '../active-catalog.js';
+import { readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
 import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
 import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
 import { createHostModelContext } from '../../../../../host/src/agent/model-context.js';
@@ -48,6 +49,7 @@ const h = vi.hoisted(() => ({
   /** `${kind}:${accountId}` -> provider the account belongs to (placement.ts); absent = built-in. */
   placement: {} as Record<string, string>,
   restoreLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
+  copyAccountOverrides: vi.fn(),
   /** Providers Cindy created for subscription accounts, and the providers whose accounts were read. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   refreshed: new Set<string>(),
@@ -83,9 +85,15 @@ vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
     readMergedLegacyCodexAccountId: merged,
     readMergedProviderAccount: merged,
     restoreAutoMergedLegacyCodexAccounts: h.restoreLegacy,
+    restoreUnplacedSubscriptionAccounts: (options: Parameters<typeof actual.restoreUnplacedSubscriptionAccounts>[0]) =>
+      h.actualPlacement ? actual.restoreUnplacedSubscriptionAccounts(options) : Promise.resolve(false),
     readCreatedSubscriptionProviders: () => {
       if (h.placementError) throw h.placementError;
       return h.actualPlacement ? actual.readCreatedSubscriptionProviders() : h.created;
+    },
+    readCreatedSubscriptionProvidersIfReadable: () => {
+      if (h.placementError) throw h.placementError;
+      return h.actualPlacement ? actual.readCreatedSubscriptionProvidersIfReadable() : h.created;
     },
   };
 });
@@ -116,6 +124,7 @@ vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
 vi.mock('../model-disable-store.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../model-disable-store.js')>(),
   readModelDisableOverrides: () => ({ disabledModels: h.disabledModels, disabledProviders: {} }),
+  copyProviderDisableOverrides: h.copyAccountOverrides,
 }));
 
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
@@ -732,19 +741,98 @@ describe('provider catalog realm reload', () => {
       await fsp.writeFile(file, '{unreadable-placement');
       publish.mockClear();
       await refreshCustomProvidersIntoCatalog(); await config.list();
-      // The real file reader returns default-empty on malformed JSON; preserve
-      // those existing semantics and the user's bytes in both launchers.
-      expect(publish.mock.calls).toEqual([[[]], [[]]]);
-      expect(getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd')).toBe(false);
+      // Publication preserves the current list; other readers keep default-empty semantics.
+      expect(publish).not.toHaveBeenCalled();
+      expect(getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd')).toBe(true);
       expect(await fsp.readFile(file, 'utf8')).toBe('{unreadable-placement');
-      await fsp.writeFile(file, contents);
+      expect(readCreatedSubscriptionProviders()).toEqual({});
+      await fsp.writeFile(file, contents.replace('Fixture', 'Renamed'));
       publish.mockClear();
       await refreshCustomProvidersIntoCatalog(); await config.list();
-      expect(publish.mock.calls).toEqual([desktopArgs, desktopArgs]);
-      expect(getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd')).toBe(true);
+      const renamed = [[{ id: 'openai-sub-1234abcd', kind: 'openai', name: 'Renamed' }]];
+      expect(publish.mock.calls).toEqual([renamed, renamed]);
+      expect(getActiveCatalog().providers.find(p => p.id === 'openai-sub-1234abcd')?.name).toBe('Renamed');
     } finally {
       publish.mockRestore(); await config.close(); setCustomProviders([]);
       h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false; h.customProviderRead.mockReset();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Unit: real owner-scoped placement file through both launchers. Publication
+  // must distinguish missing/valid-empty from unreadable without sharing old-owner state.
+  it.each(['valid-empty', 'missing', 'cold-and-new-owner'] as const)('publishes %s placement consistently in both launchers', async state => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-placement-states-'));
+    const previousOwner = h.owner;
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    const file = () => path.join(root, h.owner, 'subscription-account-placement.json');
+    const contents = JSON.stringify({ providers: { 'openai-sub-1234abcd': { kind: 'openai', name: 'Fixture',
+      account: 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc' } } });
+    const createConfig = () => createHostProviderConfig({ profileDir: root, ownerId: h.owner, openExternal: async () => {},
+      credentials: { decrypt: () => { throw Error('no credential IO'); }, read: () => null, write: () => { throw Error('no credential IO'); }, remove: () => {} } });
+    let config = createConfig();
+    const exists = () => getActiveCatalog().providers.some(p => p.id === 'openai-sub-1234abcd');
+    try {
+      h.customProviderRead.mockResolvedValue([]);
+      await fsp.mkdir(path.dirname(file()), { recursive: true });
+      if (state === 'cold-and-new-owner') {
+        setCustomProviders([]);
+        await fsp.writeFile(file(), '{cold-damage');
+        await refreshCustomProvidersIntoCatalog(); await config.list();
+        expect(exists()).toBe(false);
+        await fsp.writeFile(file(), contents);
+        await refreshCustomProvidersIntoCatalog(); await config.list();
+        expect(exists()).toBe(true);
+        await config.close();
+        h.owner = randomUUID(); setCustomProviders([]); config = createConfig();
+        await fsp.mkdir(path.dirname(file()), { recursive: true }); await fsp.writeFile(file(), '{new-owner-damage');
+        await refreshCustomProvidersIntoCatalog(); await config.list();
+        expect(exists()).toBe(false);
+        expect(await fsp.readFile(file(), 'utf8')).toBe('{new-owner-damage');
+      } else {
+        for (const launcher of ['desktop', 'host']) {
+          await fsp.writeFile(file(), contents);
+          await (launcher === 'desktop' ? refreshCustomProvidersIntoCatalog() : config.list());
+          expect(exists()).toBe(true);
+          if (state === 'missing') await fsp.unlink(file()); else await fsp.writeFile(file(), '{}');
+          await (launcher === 'desktop' ? refreshCustomProvidersIntoCatalog() : config.list());
+          expect(exists()).toBe(false);
+        }
+      }
+    } finally {
+      await config.close(); setCustomProviders([]); h.profileRoot = null; h.owner = previousOwner;
+      h.actualPlacement = false; h.customProviderRead.mockReset(); await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // 2026-11-14 user correction: old wizard/pool additions must also become separate providers.
+  // Unit, real catalog refresh + placement file; prior restoration covered only legacy connections.
+  // Minimal failure: default + one unplaced account, no custom-provider connection to restore.
+  it('publishes a separate provider for an old pooled account on catalog refresh and keeps it on reload', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-pooled-account-restore-'));
+    const previous = getActiveCatalog();
+    const previousOwner = h.owner;
+    const accountId = 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc';
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    h.pool = { strategy: 'least', accounts: ['default', accountId].map(id => ({ id, paused: false, limit: 4, weight: 1 })) };
+    h.customProviderRead.mockResolvedValue([]);
+    h.copyAccountOverrides.mockClear();
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      await refreshCustomProvidersIntoCatalog();
+      const created = getActiveCatalog().providers.filter(p => p.id.startsWith('openai-sub-'));
+      expect(created).toHaveLength(1);
+      expect(h.copyAccountOverrides).toHaveBeenCalledExactlyOnceWith('openai', created[0].id);
+      const file = path.join(root, h.owner, 'subscription-account-placement.json');
+      const persisted = await fsp.readFile(file, 'utf8');
+      expect(JSON.parse(persisted).accounts).toEqual({ [`openai:${accountId}`]: created[0].id });
+      await refreshCustomProvidersIntoCatalog();
+      expect(getActiveCatalog().providers.filter(p => p.id.startsWith('openai-sub-')).map(p => p.id)).toEqual([created[0].id]);
+      expect(await fsp.readFile(file, 'utf8')).toBe(persisted);
+    } finally {
+      setCustomProviders([]); setActiveCatalog(previous);
+      h.pool = null; h.profileRoot = null; h.owner = previousOwner;
+      h.actualPlacement = false; h.customProviderRead.mockReset();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });

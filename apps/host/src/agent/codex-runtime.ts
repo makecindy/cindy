@@ -26,6 +26,7 @@ import { createAnthropicResponsesBridgeHost } from '../../../desktop/src/main/ma
 import { createPiSubscriptionWebSocket } from '../../../desktop/src/main/maker-host/piSubscriptionWebSocketCore.js';
 import { chatgptAccountIdFromTokens } from '../../../desktop/src/main/maker-host/codexCredentialRead.js';
 import { createHostCodexCredentials } from './codex-credentials.js';
+import { createHostCodexThreadStorage } from './codex-thread-storage.js';
 import { invalidateHostCodexLogin } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { createCodexAuthBoundary } from './codex-auth-boundary.js';
@@ -149,9 +150,9 @@ export function createHostCodexRuntime(options: {
   });
   // The desktop's Codex auth-boundary hooks (maker-host/index.ts) for this runtime: login,
   // logout and server-side invalidation of the profile's native login.
-  let retireLocalHosts: ((reason: string) => Promise<void>) | null = null;
+  let retireLocalHosts: ((reason: string, preserveSubscriptionAccounts?: boolean) => Promise<void>) | null = null;
   const authBoundary = createCodexAuthBoundary({
-    retireLocalHosts: async reason => { await retireLocalHosts?.(reason); },
+    retireLocalHosts: async (reason, preserveSubscriptionAccounts) => { await retireLocalHosts?.(reason, preserveSubscriptionAccounts); },
     clearProxyAuthInjection: () => proxy.clearCodexProxyAuthInjection(),
     publishRuntimeRoute: () => publish(MAKER_PUSH.CODEX_RUNTIME_ROUTE_CHANGED, readRoute()),
     clearBridgeCredentialCache: () => bridge.clearChatgptBridgeCredentialCache(),
@@ -202,7 +203,9 @@ export function createHostCodexRuntime(options: {
     readSubagentOAuth: (...args) => bridge.getChatgptBridgeAuthForDispatch(...args),
     prepareRemote: async () => { throw new Error('SSH Codex transport is not configured in this Host'); },
   });
+  const threadStorage = createHostCodexThreadStorage({ profileDir: options.profileDir, accounts, check });
   const deps: Partial<AgentDeps> = {
+    ...threadStorage.deps,
     prepareCodexExtraSpawnConfig: async (...args) => { check(); const value = inbound.withToken(await prepare(...args)); check(); return value; },
     disableCodexPluginRuntime: true,
     onCodexLocalModelsListed: createCodexLocalModelSink(options.config.list),
@@ -252,7 +255,7 @@ export function createHostCodexRuntime(options: {
     /** What this runtime's Codex processes carry to its proxies (tests; never logged). */
     inboundToken: () => inbound.token(),
     /** How this runtime retires the local Codex hosts (the agent graph's CodexAgent). */
-    setLocalHostRetirement(handler: (reason: string) => Promise<void>) { retireLocalHosts = handler; },
+    setLocalHostRetirement(handler: (reason: string, preserveSubscriptionAccounts?: boolean) => Promise<void>) { retireLocalHosts = handler; },
     /** For the Claude and Pi proxy; also cleared on every Codex login and logout, as on the desktop. */
     subscriptions: { bridge, piWebSocket },
     async close() { closed = true; await proxy.disposeCodexProxy(); },

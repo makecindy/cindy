@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { startHostProjectOrderLoad } from '@/session/remoteProjectOrder';
 import {
   mergeVisibleReorder,
   moveVisibleProjectOrder,
@@ -96,5 +97,61 @@ describe('resolveVirtualizedDropIndex', () => {
 
   it('aborts (null) when the dragged row itself was not measured', () => {
     expect(resolveVirtualizedDropIndex(visible, ['a', 'b'], 'e', 0)).toBeNull();
+  });
+});
+
+
+// Production loader completion is the refresh barrier (PR #10550 / r4573293672).
+// Existing pure reorder cases do not cover backoff or cancellation; fake timers keep
+// these unit cases deterministic without network requests or real sleeps.
+describe('host project order refresh completion', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('stays pending through both the retry delay and a slow successful retry', async () => {
+    vi.useFakeTimers();
+    let finishRetry!: (retry: boolean) => void;
+    const attempt = vi.fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => new Promise(resolve => { finishRetry = resolve; }));
+    const load = startHostProjectOrderLoad(attempt);
+    let settled = false;
+    void load.completion.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(attempt).toHaveBeenCalledTimes(2);
+    expect(settled).toBe(false);
+    finishRetry(false);
+    await load.completion;
+    expect(settled).toBe(true);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(attempt).toHaveBeenCalledTimes(2);
+  });
+
+  it('settles after the existing three attempts when every read is transient', async () => {
+    vi.useFakeTimers();
+    const attempt = vi.fn().mockResolvedValue(true);
+    const load = startHostProjectOrderLoad(attempt);
+    await vi.advanceTimersByTimeAsync(4000);
+    await load.completion;
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(attempt).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['backoff', 'request'])('cancels during %s without starting another attempt', async phase => {
+    vi.useFakeTimers();
+    let finishRequest!: (retry: boolean) => void;
+    const attempt = vi.fn(() => phase === 'backoff' ? Promise.resolve(true)
+      : new Promise<boolean>(resolve => { finishRequest = resolve; }));
+    const load = startHostProjectOrderLoad(attempt);
+    await vi.advanceTimersByTimeAsync(0);
+    load.cancel();
+    if (phase === 'request') finishRequest(true);
+    await load.completion;
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

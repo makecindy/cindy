@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, UserRound } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -50,10 +50,12 @@ export function SubscriptionSignInChoices({
       .then((result) => {
         if (!current) return;
         setView(result);
+        // Once the CLI login is in Cindy its state no longer matters here.
         setFailed(
-          !result.accounts.some(
-            (account) => account.id === 'default' && account.status !== 'unavailable',
-          ),
+          result.defaultAdded !== true &&
+            !result.accounts.some(
+              (account) => account.id === 'default' && account.status !== 'unavailable',
+            ),
         );
       })
       .catch(() => {
@@ -63,11 +65,16 @@ export function SubscriptionSignInChoices({
       current = false;
     };
   }, [providerId, attempt]);
-  const account = view?.accounts.find((item) => item.id === 'default');
+  // Only the CLI's own login can be connected without signing in, and only while it is not in
+  // Cindy yet; accounts already added are not listed or counted here (2026-11-14 user decision).
+  const added = view?.defaultAdded === true;
+  const account = added ? undefined : view?.accounts.find((item) => item.id === 'default');
   const detected = account?.status === 'ready' || account?.status === 'limited';
   const providerManagedAuth = account?.authIssue === 'codex-provider-managed-auth';
   const hasOtherAccounts = view?.accounts.some((item) => item.id !== 'default');
   const loading = !view && !failed;
+  const offerDefault = !loading && !failed && !providerManagedAuth && !added;
+  const cli = providerId === 'anthropic' ? 'Claude Code' : 'Codex';
   if (placing && !busy && !targets?.length)
     return (
       <div role="status" className="flex items-center gap-2 text-12 text-[var(--text-tertiary)]">
@@ -89,29 +96,6 @@ export function SubscriptionSignInChoices({
         <div role="status" className="flex items-center gap-2 text-12 text-[var(--text-tertiary)]">
           <Spinner size={13} />
           {t('subscriptionAccounts.signIn.checking')}
-        </div>
-      )}
-      {detected && (
-        <div className="flex flex-col gap-3 rounded-xl border border-[var(--border-default)] p-4">
-          <span className="text-12 text-[var(--text-secondary)]">
-            {t('subscriptionAccounts.signIn.detected')}
-          </span>
-          <div className="flex items-center gap-3">
-            <UserRound
-              size={20}
-              className="shrink-0 text-[var(--text-tertiary)]"
-              aria-hidden="true"
-            />
-            <div className="flex min-w-0 flex-col gap-1">
-              <span className="break-all text-14 font-medium text-[var(--text-primary)]">
-                {account.identity || t('subscriptionAccounts.default')}
-              </span>
-              <span className="text-12 text-[var(--text-tertiary)]">
-                {providerId === 'anthropic' ? 'Claude Code' : 'Codex'}
-                {account.plan ? ` · ${account.plan}` : ''}
-              </span>
-            </div>
-          </div>
         </div>
       )}
       {providerManagedAuth && (
@@ -150,27 +134,43 @@ export function SubscriptionSignInChoices({
           </Button>
         ) : (
           <>
-            {!loading && !failed && !providerManagedAuth && (
+            {offerDefault && (
               <Button
                 data-settings-search-action="Connect the detected default subscription account"
                 variant="primary"
                 size="lg"
                 type="button"
+                className="max-w-full"
                 onClick={() => onConnect({ target: 'default' })}
               >
-                {t(
-                  detected
-                    ? 'subscriptionAccounts.signIn.useAccount'
-                    : providerId === 'anthropic'
+                {detected ? (
+                  <>
+                    <span className="shrink-0">
+                      {t('subscriptionAccounts.signIn.useAccount', { cli })}
+                    </span>
+                    {account.identity && (
+                      // Native title only reveals the truncated identity (DESIGN.md §14.6 exception).
+                      <span
+                        className="min-w-0 truncate font-normal text-[var(--text-secondary)]"
+                        title={account.identity}
+                      >
+                        {account.identity}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  t(
+                    providerId === 'anthropic'
                       ? 'settings.providers.localAccount.useClaude'
                       : 'subscriptionAccounts.signIn.useCodex',
+                  )
                 )}
               </Button>
             )}
-            {(detected || hasOtherAccounts || loading || failed || providerManagedAuth) && (
+            {(detected || hasOtherAccounts || loading || failed || providerManagedAuth || added) && (
               <Button
                 data-settings-search-action="Sign in to another subscription account"
-                variant="secondary"
+                variant={offerDefault || loading ? 'secondary' : 'primary'}
                 size="lg"
                 type="button"
                 onClick={signInAnother}
@@ -181,7 +181,7 @@ export function SubscriptionSignInChoices({
           </>
         )}
       </div>
-      {(detected || hasOtherAccounts) && (
+      {(detected || hasOtherAccounts || added) && (
         <p className="text-12 text-[var(--text-tertiary)]">
           {t('subscriptionAccounts.signIn.keepExisting')}
         </p>

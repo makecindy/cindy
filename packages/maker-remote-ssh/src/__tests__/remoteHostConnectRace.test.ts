@@ -252,6 +252,66 @@ describe('RemoteHost arm/disconnect race', () => {
     }
   });
 
+  // Field logs (2026-11): a LAN host that dropped exhausted its 5 reconnects
+  // within ~31 s and stayed failed until something touched it again. Exhaustion
+  // must stay quiet, but a network change / wake gets one more bounded round.
+  it('an exhausted dropped connection retries once after a network change, not in the background', async () => {
+    const host = new RemoteHost(HOST_CONFIG, { logger: noopLogger });
+    const connecting = host.connect();
+    await flush();
+    h.client!.emit('ready');
+    await connecting;
+    vi.useFakeTimers();
+    const unreachable = () => Object.assign(new Error('connect EHOSTUNREACH 10.0.0.1:22'), {
+      code: 'EHOSTUNREACH', address: '10.0.0.1',
+    });
+    const failEachAttempt = async () => {
+      // Each scheduled attempt creates a client after resolveAuth; fail it.
+      const before = h.client;
+      for (let i = 0; i < 20 && h.client === before; i += 1) await vi.advanceTimersByTimeAsync(1000);
+      const client = h.client!;
+      client.emit('error', unreachable());
+      client.emit('close');
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    try {
+      h.client!.emit('close');
+      for (let attempt = 0; attempt < 5; attempt += 1) await failEachAttempt();
+      expect(host.getStatus()).toBe('failed');
+      const exhausted = h.client;
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(h.client).toBe(exhausted);
+
+      expect(host.retryAfterNetworkChange()).toBe(true);
+      expect(host.getStatus()).toBe('reconnecting');
+      expect(host.retryAfterNetworkChange()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(h.client).not.toBe(exhausted);
+      h.client!.emit('ready');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(host.getStatus()).toBe('ready');
+      expect(host.retryAfterNetworkChange()).toBe(false);
+
+      await host.disconnect();
+      expect(host.retryAfterNetworkChange()).toBe(false);
+      expect(host.getStatus()).toBe('disconnected');
+
+      // A probe that never connected (e.g. a machine list) is not recovered later.
+      const probe = host.connect();
+      const probeRejected = expect(probe).rejects.toThrow(/EHOSTUNREACH/);
+      await vi.advanceTimersByTimeAsync(0);
+      h.client!.emit('error', unreachable());
+      h.client!.emit('close');
+      await probeRejected;
+      for (let attempt = 0; attempt < 5 && host.getStatus() !== 'failed'; attempt += 1) await failEachAttempt();
+      expect(host.getStatus()).toBe('failed');
+      expect(host.retryAfterNetworkChange()).toBe(false);
+    } finally {
+      await host.disconnect();
+      vi.useRealTimers();
+    }
+  });
+
   it('a stale host verifier cannot persist trust or write errors for a replacement endpoint', async () => {
     let finishGet!: (fingerprint: string | null) => void;
     const store: HostKeyStore = {

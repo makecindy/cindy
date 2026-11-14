@@ -1,0 +1,62 @@
+diff --git a/build/swift-ui/Form/index.d.ts b/build/swift-ui/Form/index.d.ts
+index ffb1625eab94ffa958414b7ba29e1c983bf84eb7..aed4b13e54ace44e6610e65270493e359ea29d59 100644
+--- a/build/swift-ui/Form/index.d.ts
++++ b/build/swift-ui/Form/index.d.ts
+@@ -1,5 +1,7 @@
+ import { type CommonViewModifierProps } from '../types';
+ export interface FormProps extends CommonViewModifierProps {
++  /** Scroll to this view id once per presentation, including when data arrives later. */
++  initialScrollTargetId?: string;
+     /**
+      * The content of the form.
+      */
+diff --git a/ios/FormView.swift b/ios/FormView.swift
+index aadb0c9b56c8f8b5d9f05a233497b3739408c5e3..afb4639349131bcef9bdc34901f8c9a837f42465 100644
+--- a/ios/FormView.swift
++++ b/ios/FormView.swift
+@@ -4,14 +4,30 @@ import SwiftUI
+ import ExpoModulesCore
+ 
+ internal final class FormViewProps: UIBaseViewProps {
++  @Field var initialScrollTargetId: String?
+ }
+ 
+ internal struct FormView: ExpoSwiftUI.View {
+   @ObservedObject var props: FormViewProps
++  @State private var didScrollToInitialTarget = false
+ 
+   var body: some View {
+-    Form {
+-      Children()
++    ScrollViewReader { proxy in
++      Form {
++        Children()
++      }
++      .onAppear { scrollToInitialTarget(proxy) }
++      .onChange(of: props.initialScrollTargetId) { _ in scrollToInitialTarget(proxy) }
++      .onDisappear { didScrollToInitialTarget = false }
++    }
++  }
++
++  private func scrollToInitialTarget(_ proxy: ScrollViewProxy) {
++    guard !didScrollToInitialTarget, let target = props.initialScrollTargetId else { return }
++    didScrollToInitialTarget = true
++    // Wait until newly supplied children have joined the Form's layout.
++    DispatchQueue.main.async {
++      proxy.scrollTo(target, anchor: .center)
+     }
+   }
+ }
+diff --git a/src/swift-ui/Form/index.tsx b/src/swift-ui/Form/index.tsx
+index 937e24066948fbdc6d2831eaf43f6149ec467c60..a25b10a14204167936ec8efb6c09c0cc18467757 100644
+--- a/src/swift-ui/Form/index.tsx
++++ b/src/swift-ui/Form/index.tsx
+@@ -4,6 +4,8 @@ import { createViewModifierEventListener } from '../modifiers/utils';
+ import { type CommonViewModifierProps } from '../types';
+ 
+ export interface FormProps extends CommonViewModifierProps {
++  /** Scroll to this view id once per presentation, including when data arrives later. */
++  initialScrollTargetId?: string;
+   /**
+    * The content of the form.
+    */

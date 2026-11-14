@@ -444,8 +444,8 @@ describe('authorized file peer source', () => {
       await expect(open(connection)).resolves.toMatchObject({ mimeType, size: 5 });
     },
   );
-  const read = (connection: string, ticket: string, offset: number) =>
-    mock.handlers.get('file-peer:host:read')!({}, connection, ticket, offset);
+  const read = (connection: string, ticket: string, offset: number, requestedBytes?: number) =>
+    mock.handlers.get('file-peer:host:read')!({}, connection, ticket, offset, requestedBytes);
   it('keeps negotiated connections until release, isolates transport failure and still expires stalled files', async () => {
     vi.useFakeTimers();
     try {
@@ -1115,18 +1115,65 @@ describe('authorized file peer source', () => {
   });
   // Unit: seek reads must return only the requested bytes and reject stale metadata.
   it('serves a version-bound range through the existing file read endpoint', async () => {
-    const { connection } = await connect();
-    const initial = await open(connection);
-    await read(connection, initial.ticket, 0); await read(connection, initial.ticket, 5);
-    const request = { action: 'open', connection, url: 'xdt-file://test',
-      range: { start: 1, end: 3, version: initial.version } };
-    const part = await requestFilePeer('device-a', request) as { ticket: string; size: number };
-    expect(part.size).toBe(3);
-    expect(Buffer.from(await read(connection, part.ticket, 0), 'base64').toString()).toBe('ell');
-    expect(await read(connection, part.ticket, 3)).toBe('');
-    await expect(requestFilePeer('device-a', { ...request, range: { ...request.range, end: 5 } })).rejects.toThrow('CHANGED');
-    await writeFile(file, 'world');
-    await expect(requestFilePeer('device-a', request)).rejects.toThrow('CHANGED');
+    // Windows can report identical metadata even with bigint timestamps after a
+    // same-length rewrite. Freeze only stat; exercise real descriptor reads.
+    const metadata = await fsPromises.stat(file);
+    const openFile = fsPromises.open.bind(fsPromises);
+    const opened = vi.spyOn(fsPromises, 'open').mockImplementation(async (...args) => {
+      const handle = await openFile(...args);
+      vi.spyOn(handle, 'stat').mockResolvedValue(metadata);
+      return handle;
+    });
+    try {
+      const { connection } = await connect();
+      const initial = await open(connection);
+      await read(connection, initial.ticket, 0); await read(connection, initial.ticket, 5);
+      const request = { action: 'open', connection, url: 'xdt-file://test',
+        range: { start: 1, end: 3, version: initial.version } };
+      const part = await requestFilePeer('device-a', request) as { ticket: string; size: number };
+      expect(part.size).toBe(3);
+      expect(Buffer.from(await read(connection, part.ticket, 0), 'base64').toString()).toBe('ell');
+      expect(await read(connection, part.ticket, 3)).toBe('');
+      await expect(requestFilePeer('device-a', { ...request, range: { ...request.range, end: 5 } })).rejects.toThrow('CHANGED');
+      await writeFile(file, 'world');
+      await expect(requestFilePeer('device-a', request)).rejects.toThrow('CHANGED');
+      const updated = await open(connection);
+      expect(updated.version).not.toBe(initial.version);
+      await writeFile(file, 'hello');
+      await expect(read(connection, updated.ticket, 0)).rejects.toThrow('CHANGED');
+    } finally {
+      opened.mockRestore();
+    }
+  });
+  // Unit: a range on a large file must not scan content to produce its version.
+  // The 64 KiB boundary is shared with inline reads; older coverage used 5 bytes.
+  it.each([65_536, 65_537])('bounds content version reads at the inline limit (%s bytes)', async (size) => {
+    await truncate(file, size);
+    mock.resolve.mockResolvedValue({ absPath: file, maxBytes: size });
+    const openFile = fsPromises.open.bind(fsPromises);
+    const handles: Awaited<ReturnType<typeof fsPromises.open>>[] = [];
+    const opened = vi.spyOn(fsPromises, 'open').mockImplementation(async (...args) => {
+      const handle = await openFile(...args);
+      vi.spyOn(handle, 'read');
+      handles.push(handle);
+      return handle;
+    });
+    try {
+      const { connection } = await connect();
+      const initial = await open(connection);
+      if (size === 65_537) expect(handles[0].read).not.toHaveBeenCalled();
+      else expect(handles[0].read).toHaveBeenCalledOnce();
+      await read(connection, initial.ticket, 0, size);
+      await read(connection, initial.ticket, size);
+      const part = await requestFilePeer('device-a', { action: 'open', connection,
+        url: 'xdt-file://test', range: { start: 1, end: 3, version: initial.version },
+      }) as { ticket: string };
+      if (size === 65_537) expect(handles[1].read).not.toHaveBeenCalled();
+      expect(Buffer.from(await read(connection, part.ticket, 0), 'base64').toString()).toBe('ell');
+      if (size === 65_537) expect(handles[1].read).toHaveBeenCalledWith(expect.any(Buffer), 0, 3, 1);
+    } finally {
+      opened.mockRestore();
+    }
   });
   it('rejects changed files and subsequent reads on the stopped connection', async () => {
     const { connection } = await connect(),

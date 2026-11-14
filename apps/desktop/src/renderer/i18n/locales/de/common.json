@@ -264,6 +264,8 @@
     "transferProgress": "{{sent}} / {{total}} übertragen · Durchschnittlich {{speed}}/s",
     "thisComputer": "dieser Computer",
     "selectedComputer": "ausgewählter Computer",
+    "sourceComputer": "der Quellcomputer",
+    "waitingForSource": "Warte, bis {{name}} wieder online ist. Danach wird der Kopiervorgang fortgesetzt.",
     "estimating": "Dateien werden gezählt und Größe berechnet…",
     "fileSummary": "Projektdateien: {{count}}, insgesamt {{size}}",
     "estimateNote": "Schätzung vor dem Kopieren, einschließlich versteckter Dateien. Git-Verlauf, Chatverlauf und Anhänge werden separat kopiert und sind in dieser Größe nicht enthalten. Dateien können sich vor dem Kopieren noch ändern.",
@@ -1376,7 +1378,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "Die SSH-Konfiguration wurde gespeichert, aber Cindy konnte sie nicht aktualisieren. Lade die SSH-Konfiguration neu.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy kann diese SSH-Konfiguration nicht sicher verwalten. Lade sie neu und prüfe dann die Cindy-Eigentumsmarkierung sowie die Eindeutigkeit des Host-Alias.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy kann einige SSH-Konfigurationsregeln für diesen Host nicht sicher nachbilden. SSH im Terminal funktioniert möglicherweise weiterhin. Überprüfe Match, bedingte Include-Regeln, IdentityAgent, IdentitiesOnly und die Einstellungen für öffentliche Schlüssel.",
-    "SSH_AGENT_UNAVAILABLE": "Der SSH-Agent ist nicht verfügbar. Starte ihn, lade den passenden privaten Schlüssel mit ssh-add und versuch es erneut.",
+    "SSH_AGENT_UNAVAILABLE": "Der lokale SSH-Schlüsselagent (ssh-agent) ist nicht verfügbar. Prüfe, ob er läuft und ob ssh-add -l den benötigten Schlüssel auflistet. Hinweise findest du unter Schlüssel verwalten.",
     "SSH_HOST_PREFS_WRITE_FAILED": "Der Host ist weiterhin gespeichert, aber sein Anzeigename oder seine Agent-Proxy-Einstellungen konnten nicht gespeichert werden. Prüfe die lokalen Speicherberechtigungen und versuch es erneut.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Diese Aufgabe hat ihr Tab-Limit erreicht. Schließe zuerst einige Tabs",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Tab-Inhalt ist zu groß zum Hinzufügen",
@@ -1467,6 +1469,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "Zu prüfen",
+      "summaryInProgress": "In Bearbeitung",
+      "summaryPending": "Aktion erforderlich",
+      "summaryUnread": "Ungelesene Ergebnisse",
       "markRead": "Als gelesen markieren",
       "archive": "Archivieren",
       "actionFailed": "Die Aktion konnte nicht abgeschlossen werden. Die Benachrichtigung wurde beibehalten. Versuch es erneut.",
@@ -1920,6 +1926,12 @@
       "footnote": "Phase A: nur SSH-Verbindungsverwaltung. Das Ausführen von Agents auf dem Remote-Rechner folgt in einem späteren Update.",
       "viaAuth": "über {{label}}",
       "readOnlyFromSshConfig": "Verbindungsdetails stammen aus der SSH-Konfiguration",
+      "importedAgentHint": "Authentifiziert über den lokalen SSH-Schlüsselagenten (ssh-agent). Eine erfolgreiche ssh-Verbindung im Terminal bedeutet nicht, dass der Agent bereit ist.",
+      "agentError": {
+        "environmentUnset": "Die von IdentityAgent referenzierte Umgebungsvariable ist für Cindy nicht gesetzt. Setze sie oder korrigiere IdentityAgent in deiner SSH-Konfiguration.",
+        "endpointEmpty": "IdentityAgent ergibt einen leeren Endpunkt. Korrigiere IdentityAgent in deiner SSH-Konfiguration.",
+        "endpointUnavailable": "Der durch IdentityAgent konfigurierte SSH-Schlüsselagent-Endpunkt ist nicht verfügbar. Prüfe diesen Endpunkt und seinen Agenten; der Standard-ssh-agent verwendet möglicherweise einen anderen Endpunkt."
+      },
       "configWarning": "Cindy kann einige SSH-Konfigurationsregeln nicht auswerten. Die Hostliste bzw. Verbindungsdetails können von SSH im Terminal abweichen.",
       "configDiagnostic": {
         "io": "Cindy konnte deine SSH-Konfiguration nicht lesen. Die zuletzt erfolgreich geladenen Hosts werden weiterhin angezeigt. Prüfe die Dateiberechtigungen und lade neu.",
@@ -2017,7 +2029,7 @@
           "tryThis": "In deinem Terminal versuchen",
           "close": "Schließen",
           "fallbackTitle": "Oder ssh-agent ganz überspringen",
-          "fallbackBody": "Du kannst diesen Host stattdessen mit der Authentifizierung „Identitätsdatei“ hinzufügen – {{appName}} übergibt die Schlüsseldatei direkt an ssh, und du wirst bei jeder Verbindung nach der Passphrase gefragt. Kein ssh-agent nötig. Sicherheitsabwägung: Eingabe der Passphrase bei jeder Verbindung, dafür kein Schlüssel-Cache im Arbeitsspeicher.",
+          "fallbackBody": "Beim Hinzufügen eines Hosts kannst du auch „Identitätsdatei“ wählen. {{appName}} liest den privaten Schlüssel ohne ssh-agent in den Prozessspeicher. Derzeit werden nur unverschlüsselte private Schlüssel unterstützt; beim Verbinden wird keine Passphrase abgefragt. Nutze ssh-agent für verschlüsselte Schlüssel.",
           "reason": {
             "agent_unavailable": "ssh-add konnte deinen ssh-agent nicht erreichen (Programm fehlt, ssh-agent läuft nicht oder SSH_AUTH_SOCK ist nicht gesetzt).",
             "bad_passphrase": "ssh-add hat die Passphrase abgelehnt.",
@@ -13488,6 +13500,15 @@
           "askNoQuestion": "Der Agent wartet auf deine Antwort, aber es gibt keine Frage zum Anzeigen. Antworte mit „weiter“.",
           "askQuestion": "Der Agent braucht deine Antwort:\n{{question}}\n{{options}}\nAntworte mit der Nummer einer Option oder gib deine Antwort direkt ein."
         }
+      },
+      "questions": {
+        "cardHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden. Du kannst auch auf diese Nachricht mit Text antworten. Antworte bei mehreren Fragen mit „Fragennummer: Antwort“ (z. B. „2: Deutsch“) und sende anschließend ab.",
+        "submitLabel": "Antworten senden",
+        "multiSelectHint": " (Mehrfachauswahl möglich)",
+        "resolved": "✅ Gewählt: {{option}}",
+        "expired": "Diese Karte ist abgelaufen",
+        "textHint": "Nur die fragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
+        "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden."
       }
     }
   },
@@ -16039,6 +16060,8 @@
       "claudeSubscriptionWorkspaceOverride": "Die .claude-Einstellungen dieses Ordners ändern, wohin Claude Anfragen sendet oder wie die Anmeldung erfolgt. Daher kann das Claude-Abo hier nicht genutzt werden. Entferne diese Einstellungen oder wähle ein Gateway oder ein Modell mit API-Schlüssel",
       "deviceStillLoading": "Remotegerät wird noch geladen. Bitte warte",
       "remoteDefaultsLoadFailed": "Die Einstellungen des Remotegeräts konnten nicht geladen werden. Prüfe die Verbindung; Cindy versucht es erneut.",
+      "branchRequiresWorktree": "Der ausgewählte Branch ist nicht der aktuelle Branch. Aktiviere Worktree oder wähle den aktuellen Branch.",
+      "branchCheckFailed": "Der aktuelle Branch konnte nicht geprüft werden. Aktiviere Worktree, um den ausgewählten Branch zu verwenden, oder prüfe das Projekt und versuche es erneut.",
       "worktreeMissingRepo": "Worktree kann nicht erstellt werden: Das Repository-Stammverzeichnis des aktuellen Verzeichnisses fehlt",
       "worktreeRepoHint": "Wähle das Arbeitsverzeichnis erneut aus und versuche es noch einmal, sobald die Ordneranzeige unten rechts aktualisiert wurde",
       "sessionInactive": "Sitzung ist nicht mehr aktiv",
@@ -16614,6 +16637,8 @@
             "title": "Repository-Ereignisse",
             "description": "Verbinde die Cindy GitHub App, um verfolgte PRs bei Änderungen an Reviews oder CI zu aktualisieren.",
             "connected": "Verbunden als {{login}} · Beobachtete Repositorys: {{count}}",
+            "syncing": "Repositorys werden synchronisiert…",
+            "finishInBrowser": "Schließe die Einrichtung der Repositorys auf GitHub ab und kehre zu Cindy zurück.",
             "missing": "App-Installation und Zugriff prüfen: {{repositories}}",
             "error": "Verbindung konnte nicht geprüft werden. Versuche es erneut.",
             "repositories": "Repositorys auswählen",
@@ -21407,8 +21432,7 @@
     "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
-      "detected": "Angemeldetes Konto gefunden",
-      "useAccount": "Dieses Konto verwenden",
+      "useAccount": "{{cli}}-Konto auf diesem Computer verwenden",
       "anotherAccount": "Mit anderem Konto anmelden",
       "keepExisting": "Das neue Konto wird ein eigener Anbieter, sofern du keinen zum Hinzufügen auswählst. Bestehende Anmeldungen bleiben erhalten.",
       "checkFailed": "Das lokale Konto konnte nicht geprüft werden. Bitte erneut versuchen.",
@@ -21418,7 +21442,6 @@
     "title": "Abonnementkonten",
     "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
-    "default": "Standardordner",
     "defaultTag": "Standard",
     "ready": "Verbunden",
     "signedOut": "Anmeldung erforderlich",

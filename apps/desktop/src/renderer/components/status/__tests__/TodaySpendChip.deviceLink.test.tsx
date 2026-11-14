@@ -817,6 +817,15 @@ describe('TodaySpendChip on a subscription account pool', () => {
     expect(container.textContent).not.toContain('10%');
     expect(invoke).toHaveBeenCalledWith('mac-mini', channel,
       [claude ? providerId : 'codex', claude ? false : providerId, { subscriptionSessionId: 'sdk-on-mac' }]);
+    // 2026-11 field logs: the refused task-account query was re-sent every refresh (~1500 times in
+    // two days). Once refused as unknown, later refreshes go straight to the native-session read.
+    const accountQueries = () => invoke.mock.calls.filter(([, requested]) => requested === 'maker:subscription-accounts').length;
+    const legacyReads = () => invoke.mock.calls.filter(([, requested]) => requested === channel).length;
+    const queriesBefore = accountQueries(), readsBefore = legacyReads();
+    expect(queriesBefore).toBeLessThanOrEqual(1);
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    expect(accountQueries()).toBe(queriesBefore);
+    expect(legacyReads()).toBeGreaterThan(readsBefore);
     // The default account's name is not shown for an account it could not name.
     fireEvent.mouseEnter(screen.getAllByRole('button')[0]);
     act(() => vi.advanceTimersByTime(300));

@@ -7,6 +7,21 @@
 - Node.js 与 pnpm 版本以根 `package.json` 的 `engines` 和 `packageManager` 为准。
 - Git 与 Git LFS。
 
+仓库使用 pnpm 11，Node.js 最低为 22.13。pnpm 11 不再读取 `package.json` 的
+`pnpm` 配置或 `.npmrc` 中的非 registry / auth 设置；hoisted 布局、冻结锁文件、
+架构列表、依赖覆盖与补丁统一保存在 `pnpm-workspace.yaml`。安装脚本使用显式
+`allowBuilds` 白名单，迁移不新增可执行安装脚本的依赖。
+
+pnpm 11.25 起修复了 hoisted 依赖构建后的目录替换竞态（上游
+[pnpm#14242](https://github.com/pnpm/pnpm/pull/14242)）。保持默认依赖构建并发，
+不通过串行安装掩盖该问题；升级时仍须验证冻结安装、原生模块加载及已有补丁。
+
+Cindy Make 的环境诊断和托管 pnpm 同步到上述版本。Intel Mac 使用经过哈希校验的
+官方 Node 包（保留相邻模块，并将入口暴露为 `pnpm`）；其它平台使用官方归档。
+未验证源码的安装和缓存预热同时屏蔽 npm 与 pnpm 11 的用户凭证、全局 YAML 配置；
+每次调用使用独立的临时空配置目录，位于内容无法控制的位置，并在成功或失败后清理。
+worktree 原有的安装路径与链接检查保持不变。
+
 先核对实际版本：
 
 ```bash
@@ -106,6 +121,14 @@ test -t 0 && test -t 1 &&
 只说明 Desktop 启动就绪，不能单独证明菜单栏功能已通过验收。编译入口与失败处理见
 [`MacMenubarNativeHost.ts`](../../apps/desktop/src/main/menubar/MacMenubarNativeHost.ts)，
 隔离与启动参数见 [`desktop-development.md`](desktop-development.md)。
+
+## Mobile 原生编译：Rust 版本
+
+编译手机端原生部分需要 **Rust 1.88 或更高版本**。`packages/agent-net-core` 使用了
+Rust 2024 edition 的 let-chain 写法和 `slice_as_chunks`（`as_chunks` 方法），两者在
+[Rust 1.88](https://blog.rust-lang.org/2025/06/26/Rust-1.88.0/) 才稳定；Rust 1.85 虽支持
+2024 edition，仍会编译失败。仓库目前没有 `rust-toolchain` / `rust-toolchain.toml` 固定版本，
+原生编译前应在实际执行构建的终端用 `rustc --version` 核对生效版本，不能只看已安装版本列表。
 
 ## macOS：iOS 模拟器构建工具链
 

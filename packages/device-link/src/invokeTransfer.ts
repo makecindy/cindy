@@ -280,8 +280,8 @@ export class InvokeResultCache {
 
   constructor(private readonly codec: DeviceLinkTransferCodec | undefined) {}
 
-  prepare(dst: string, payload: InvokePayload): PreparedInvokeTransfer {
-    const key = cacheKey(dst, payload);
+  prepare(dst: string, payload: InvokePayload, noResultCache = false): PreparedInvokeTransfer {
+    const key = noResultCache ? null : cacheKey(dst, payload);
     const epoch = this.epoch;
     // 请求时固定快照：结果回来前即使被淘汰，notModified 仍能还原。
     const cached = key ? this.entries.get(key) : undefined;
