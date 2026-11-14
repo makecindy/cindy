@@ -13,6 +13,26 @@
 
 ## 凭证不入仓
 
+### 本地模式首次云登录的凭证交接
+
+`localProfileAssetsMigration.ts` 只接受 `localProfileDataMigration` 已持久提交的首个
+cloud owner，在账号切换隔离区内、旧插件运行已停止后交接；后续账号不能继承。
+自定义 Provider API key 与 headers 仅在目标数据库尚不存在或有真实本地库采用证明时复制。
+插件只带走原批准清单中 `network.secrets` 的用户填写静态凭证、无 `oauthSecret` 的
+`node.secretBindings` 手填凭证及对应 hint；登录令牌、OAuth 账号及刷新令牌、
+动态连接授权、Library 绑定、目录授权均不在此交接范围。不得扩大为整个保险库复制。
+
+同机交接只复制现有 `safeStorage` 密文，不解密、不输出内容，不覆盖目标已有值，保留
+本地源文件。插件内容、原批准及技能快照、实例记录、市场账本与偏好作为同一采用单元；
+目标已有插件状态时不自动混合。首次复制写入持久计划后才发布，失败保留可恢复快照与
+首账号认领，成功后清理临时副本并记录完成，重启不得复活用户之后删除的凭证。
+已有插件安装事务未恢复、源不独占、链接或不稳定文件均阻止交接，不发布账号就绪。
+回退代码仍可读取原本地资料及已采用的原格式；无需、也不得改写历史数据库 migration。
+生产入口与回归见 `authManager.withCloudOwnerCommit`、
+`localProfileAssetsMigration.test.ts` 和 `authPostCommitStartup.test.ts`。
+
+### 通用存储要求
+
 - 用户凭证、OAuth 授权、API key、访问令牌、刷新令牌、私钥和 Agent 授权文件不得以
   复制、链接、fixture、日志或生成物等形式进入仓库工作区或任何可能被 Git 跟踪的路径。
 - `.gitignore` 只是误操作兜底，不是凭证存储方案。发现凭证曾进入 Git 历史时，应立即
