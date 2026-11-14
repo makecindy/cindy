@@ -38,7 +38,7 @@ const DEFAULT_WIRE: Wire = {
 function installElectronApi(initial: Wire) {
   let current = { ...initial };
   const getCollaborationSettings = vi.fn(async () => current);
-  const setCollaborationSetting = vi.fn(async (key: string, value: number) => {
+  const setCollaborationSetting = vi.fn(async (key: string, value: number | boolean) => {
     current = { ...current, [key]: value, isCustomized: true };
     return current;
   });
