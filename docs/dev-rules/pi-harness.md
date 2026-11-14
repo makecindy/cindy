@@ -71,6 +71,14 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
   展示层通过共享 `parseMessageToolUse` 将网关调用还原为既有 MCP 工具名与参数；实时事件、
   Pi 分支历史和旧持久化消息共用此解析，保留 toolUseId，不改变 Pi 原生 transcript 或授权路径。
+  调用包装器只接受 `{server, tool, args?: object}`：`args` 对象原样作为 MCP
+  `tools/call.arguments`，并与 Host 审批参数一致；省略 `args` 时仍发送 `{}`，保持无参工具可用；
+  但所选 schema 明确声明顶层 `required` 非空时，省略 `args` 会在审批和网络调用前被拒绝。
+  顶层 `arguments`、平铺参数、混合包装器及非对象 `args`（含 JSON 字符串、null、数组）不猜测、
+  不转换、不静默变成 `{}`；在审批和网络调用前返回正确包装形状，模型修正后再调。
+  内层工具的参数验证仍归 MCP 服务端，不重造 JSON Schema validator；参数名恰好是
+  `name`／`args`／`arguments` 的合法对象保持原值。回归见
+  `pi-mcp-client.test.ts` 与 `pi-mcp-bridge.integration.test.ts`。
   MCP 请求接入 Pi 的取消信号；Bun fetch 的独立空闲计时关闭，由既有请求期限统一约束响应头与
   正文。取消会中止本次 HTTP 等待，并通过独立、限时的请求尽力发送 `notifications/cancelled`；
   不重放调用，也不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，

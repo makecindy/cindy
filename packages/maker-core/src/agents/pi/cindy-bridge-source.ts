@@ -3232,6 +3232,7 @@ function recordInput(value: unknown): Record<string, unknown> {
     : {};
 }
 
+
 function schemaHint(schema: Record<string, unknown>): string {
   let rendered = '{}';
   try {
@@ -3429,7 +3430,34 @@ class CindyMcpGateway {
     });
   }
 
+  // Only omission denotes a parameterless call. Share the boundary between the
+  // approval hook and execute; never approve or dispatch silently erased args.
+  private callInputError(input: unknown): string | null {
+    const expected = 'Invalid cindy_mcp_call_tool input. Use {"server": <server>, "tool": <tool>, "args": {<tool parameters>}}; omit args only for tools that take none. ';
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      return expected + 'The gateway input must be a JSON object.';
+    }
+    const record = input as Record<string, unknown>;
+    if (Object.keys(record).some((key) => key !== 'server' && key !== 'tool' && key !== 'args')) {
+      return expected + 'Only server, tool and args belong at the top level; put the selected tool parameters inside args, not arguments or flattened fields.';
+    }
+    if (Object.prototype.hasOwnProperty.call(record, 'args')) {
+      if (!record.args || typeof record.args !== 'object' || Array.isArray(record.args)) {
+        return expected + 'args must be a JSON object, not null, an array, a scalar or a JSON-encoded string.';
+      }
+    } else if (typeof record.server === 'string' && typeof record.tool === 'string') {
+      const schema = this.tools.get(mcpGatewayKey(record.server, record.tool))?.inputSchema;
+      // This is only a definitive omission check, not a JSON Schema validator.
+      // Composed/optional schemas and object contents remain the server's job.
+      if (Array.isArray(schema?.required) && schema.required.length > 0) {
+        return expected + 'The selected tool declares required parameters. Inspect its schema with cindy_mcp_list_tools and provide them inside args.';
+      }
+    }
+    return null;
+  }
+
   resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
+    if (this.callInputError(input)) return null;
     const record = recordInput(input);
     const serverName = typeof record.server === 'string' ? record.server : '';
     const toolName = typeof record.tool === 'string' ? record.tool : '';
@@ -3439,7 +3467,7 @@ class CindyMcpGateway {
     if (!tool) return null;
     return {
       qualifiedName: 'mcp__' + serverName + '__' + toolName,
-      args: recordInput(record.args),
+      args: (record.args as Record<string, unknown> | undefined) ?? {},
       tool,
     };
   }
@@ -3876,7 +3904,7 @@ class CindyMcpGateway {
     const approvedDefinition = toolCallId ? this.approvedDefinitions.get(toolCallId) : undefined;
     if (toolCallId) this.approvedDefinitions.delete(toolCallId);
     const resolved = this.resolveCall(params);
-    if (!resolved) throw new Error(this.unknownCallMessage(params));
+    if (!resolved) throw new Error(this.callInputError(params) ?? this.unknownCallMessage(params));
     if (approvedDefinition !== undefined && this.approvalDefinition(resolved) !== approvedDefinition) {
       throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
     }
