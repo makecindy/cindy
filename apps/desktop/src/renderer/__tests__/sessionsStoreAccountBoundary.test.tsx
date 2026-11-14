@@ -136,6 +136,37 @@ describe('sessionsStore account boundaries', () => {
     dataOwnerTesting.reset();
   });
 
+  // 新建通知只说明列表有变化：重拉期间已显示的任务仍要查得到，否则正在显示它的对话会被
+  // 卸载（协同侧栏给 Worker 发消息时整块清空再出现）。
+  it.each(['bus', 'created push'])('keeps cached tasks visible while a %s refresh is pending', async (source) => {
+    setDataOwnerGeneration('owner-a', 1);
+    const worker = session('worker', { status: 'active' });
+    mocks.list.mockResolvedValueOnce([worker]);
+    await sessionsStore.ensureByFilter('active');
+    const freshRead = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(freshRead.promise);
+    if (source === 'bus') emitRefresh();
+    else mocks.emitSessionCreated('worker', { dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    expect(mocks.list).toHaveBeenLastCalledWith(1000, 'active', { fresh: true });
+    expect(sessionsStore.findById('worker')).toEqual(worker);
+    expect(sessionsStore.getByFilter('active')).toEqual([worker]);
+    const created = session('new', { status: 'active' });
+    await act(async () => { freshRead.resolve([created, worker]); });
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['new', 'worker']);
+  });
+
+  it('drops a pending notification refresh after the data owner changes', async () => {
+    setDataOwnerGeneration('owner-a', 1);
+    mocks.list.mockResolvedValueOnce([session('a', { status: 'active' })]);
+    await sessionsStore.ensureByFilter('active');
+    const freshRead = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(freshRead.promise);
+    emitRefresh();
+    setDataOwnerGeneration('owner-b', 2);
+    await act(async () => { freshRead.resolve([session('a-only', { status: 'active' })]); });
+    expect(sessionsStore.findById('a-only')).toBeNull();
+  });
+
   // TD-2, unit: real bus / preload listener -> store -> useCCSessions. Existing
   // owner tests do not cover creation during an initial read or refresh. Delay
   // the old A snapshot, deliver a notification for B, then finish out of order.

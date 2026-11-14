@@ -1126,7 +1126,7 @@ describe('automation-generated sessions', () => {
 
     expect(source).toContain('maker?.schedule');
     expect(source).toContain("event.type === 'session-bound'");
-    expect(source).toContain('sessionsStore.forceRefreshAll()');
+    expect(source).toContain('sessionsStore.forceRefreshAll(');
   });
 
   it('does not clear automation conversation attention just by browsing schedules', () => {

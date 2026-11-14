@@ -16780,6 +16780,8 @@
             "title": "Eventos del repositorio",
             "description": "Conecta la GitHub App de Cindy para actualizar los PR en seguimiento cuando cambien las revisiones o CI.",
             "connected": "Conectado como {{login}} · Repositorios en seguimiento: {{count}}",
+            "syncing": "Sincronizando repositorios…",
+            "finishInBrowser": "Completa la configuración de los repositorios en GitHub y vuelve a Cindy.",
             "missing": "Comprueba la instalación de la App y el acceso a: {{repositories}}",
             "error": "No se pudo comprobar la conexión. Inténtalo de nuevo.",
             "repositories": "Elegir repositorios",
