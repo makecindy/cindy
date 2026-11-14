@@ -24,7 +24,7 @@ import { TaskMigrationStatus } from './TaskMigrationStatus';
  * 输入的控件挖 no-drag 洞，避免标题和 git 信息整块变成不可拖区域。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowLeft, Ellipsis, Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -63,6 +63,7 @@ import { revalidateWorkersProjection } from './hooks/workerProjectionStore';
 import { GitContextBadge } from './GitContextBadge';
 import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
 import { BotTaskOwnerChip } from '@/features/bots/BotTaskOwnerChip';
+import { ProjectTaskSwitcher } from './ProjectTaskSwitcher';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import {
@@ -78,7 +79,8 @@ import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardErr
 import { NewProjectFromTaskDialog } from './sidebar/NewProjectFromTaskDialog';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
-import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
+import { remoteProjectsStore, useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
@@ -199,6 +201,10 @@ export function SessionContentHeader({
   // 会停留在旧值(Codex review P2)。prop 兜底覆盖 archived 等不在
   // active 桶里的会话。
   const session = routeSessionById.get(sessionProp.id) ?? sessionProp;
+  // A remote route may already own this ID before its mirrored session arrives.
+  const remoteTaskOrigin = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
+    getStickySessionDeviceId(sessionProp.id),
+  ) ?? sessionProp.deviceLinkDeviceId ?? sessionProp.remoteHostId;
   const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const { runningSessionIds } = useSessionRunningStatus(session.id);
   // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
@@ -681,6 +687,10 @@ export function SessionContentHeader({
         >
           {displayTitle}
         </span>
+      )}
+
+      {!isEditing && !readOnly && !isEmpty && !remoteTaskOrigin && (
+        <ProjectTaskSwitcher key={session.id} session={session} runningSessionIds={runningSessionIds} />
       )}
 
       {remoteSyncing && (

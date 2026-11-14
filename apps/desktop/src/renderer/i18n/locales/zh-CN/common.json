@@ -16439,6 +16439,7 @@
       "file": "文件"
     },
     "sessionHeader": {
+      "switchProjectTask": "切换项目任务",
       "untitled": "未命名任务",
       "moreActions": "更多操作",
       "agentDevice": "Agent 在 {{device}} 上运行",

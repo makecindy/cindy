@@ -16675,6 +16675,7 @@
       "file": "Fichier"
     },
     "sessionHeader": {
+      "switchProjectTask": "Changer de tâche dans le projet",
       "untitled": "Session sans titre",
       "moreActions": "Plus d'actions",
       "agentDevice": "L'Agent s'exécute sur {{device}}",

@@ -16439,6 +16439,7 @@
       "file": "파일"
     },
     "sessionHeader": {
+      "switchProjectTask": "프로젝트 작업 전환",
       "untitled": "제목 없는 세션",
       "moreActions": "더 보기",
       "agentDevice": "Agent가 {{device}}에서 실행 중",
