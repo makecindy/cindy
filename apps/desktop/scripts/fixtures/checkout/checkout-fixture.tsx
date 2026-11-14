@@ -58,7 +58,7 @@ function Page({
 void mountPage({
   host: (ctx) => {
     let current = 'main';
-    let saved = false;
+    let saved = ['recover', 'restored'].includes(ctx.case);
     return {
       worktreeDetectCwd: async () => ({
         gitInstalled: true,
@@ -70,7 +70,14 @@ void mountPage({
       }),
       worktreeListBranches: async () => ({
         current,
-        branches: ['main', 'feature', 'release'],
+        branches: [
+          'main',
+          'feature',
+          'release',
+          ...(['busy', 'operation', 'idle', 'recover'].includes(ctx.case)
+            ? Array.from({ length: 60 }, (_, i) => `branch-${i}`)
+            : []),
+        ],
         remoteDefaultBranch: 'refs/remotes/origin/main',
       }),
       worktreeSuggestName: async () => ({ name: 'fixture' }),
@@ -104,11 +111,15 @@ void mountPage({
         if (req.action === 'switch' && ctx.case === 'switching') return new Promise(() => {});
         if (
           req.action === 'switch' &&
-          ['success', 'saved', 'ordinary', 'carried'].includes(ctx.case)
+          ['success', 'saved', 'ordinary', 'carried', 'fetched', 'stashed', 'undone'].includes(
+            ctx.case,
+          )
         ) {
           current = req.branch!;
           saved = ctx.case === 'saved';
-        } else if (req.action !== 'status') return forbid('unexpected fixture mutation')();
+        } else if (req.action === 'restore' && ctx.case === 'restored') saved = false;
+        else if (req.action === 'undo' && ctx.case === 'undone') current = 'main';
+        else if (req.action !== 'status') return forbid('unexpected fixture mutation')();
         return {
           ...(req.action === 'switch'
             ? {
@@ -116,9 +127,10 @@ void mountPage({
                   id: 'fixture-receipt',
                   from: 'main',
                   to: current,
-                  strategy: 'carry',
-                  hadChanges: ctx.case === 'carried',
-                  sessions: ['success', 'saved'].includes(ctx.case)
+                  strategy: ctx.case === 'stashed' ? 'stash' : 'carry',
+                  hadChanges: ['carried', 'stashed'].includes(ctx.case),
+                  ...(ctx.case === 'fetched' ? { fetchedCommits: 3 } : {}),
+                  sessions: ['success', 'saved', 'undone'].includes(ctx.case)
                     ? [{ id: 'idle', name: '修复登录页面', running: false }]
                     : [],
                 },
@@ -129,11 +141,20 @@ void mountPage({
             head: 'fixture-head',
             fingerprint: 'fixture-fingerprint',
             files:
-              ['dirty', 'conflict'].includes(ctx.case) ||
+              ['dirty', 'conflict', 'many-files', 'dirty-idle', 'stashed'].includes(ctx.case) ||
               (ctx.case === 'carried' && current === 'main')
-                ? Array.from({ length: 30 }, (_, i) => `src/components/example-${i}.tsx`)
+                ? Array.from({ length: ctx.case === 'many-files' ? 60 : 3 }, (_, i) =>
+                    ctx.case === 'many-files' && i === 3
+                      ? `src/${'long-directory/'.repeat(12)}component.tsx`
+                      : `src/components/example-${i}.tsx`,
+                  )
                 : [],
-            sessions: ['busy', 'idle', 'dirty', 'worktree'].includes(ctx.case)
+            fileDetails: {
+              'src/components/example-0.tsx': { added: 1, removed: 1 },
+              'src/components/example-1.tsx': { kind: 'new' },
+              'src/components/example-2.tsx': { kind: 'deleted' },
+            },
+            sessions: ['busy', 'idle', 'dirty-idle', 'worktree'].includes(ctx.case)
               ? [
                   {
                     id: 'task-a',
@@ -145,6 +166,10 @@ void mountPage({
             occupied: ['release'],
             carryAllowed: ctx.case !== 'conflict',
             stashes: saved ? [{ id: 'saved', branch: current }] : [],
+            ...(ctx.case.startsWith('error-') && req.branch === 'feature'
+              ? { blocked: ctx.case.slice(6) }
+              : {}),
+            ...(ctx.case === 'operation' ? { blocked: 'operation' } : {}),
             ...(['busy', 'worktree'].includes(ctx.case) ? { blocked: 'busy' } : {}),
             ...(ctx.case === 'occupied' && req.branch === 'release' ? { blocked: 'occupied' } : {}),
             ...(ctx.case === 'ignored' && req.branch === 'feature'

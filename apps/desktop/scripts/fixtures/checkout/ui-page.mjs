@@ -10,6 +10,20 @@ export default {
   cases: {
     'default-source': { about: 'Worktree without a saved source defaults to origin/main' },
     'sync-off': { about: 'Unchecked worktree still exposes remote branch refresh' },
+    restored: { about: 'Restore completion toast' },
+    undone: { about: 'Undo completion toast' },
+    ...Object.fromEntries(
+      ['git', 'changed', 'missing', 'dirty', 'diverged', 'conflict'].map((code) => [
+        'error-' + code,
+        { about: code + ' error toast' },
+      ]),
+    ),
+    'many-files': { about: 'Dialog with 60 changed files' },
+    'dirty-idle': { about: 'Dialog with idle sessions' },
+    recover: { about: 'Saved changes recovery notice' },
+    operation: { about: 'Merge in progress notice' },
+    fetched: { about: 'New commits toast' },
+    stashed: { about: 'Saved changes toast' },
     default: { about: 'Actual branch while unchecked and an occupied branch in the menu' },
     busy: { about: 'Running session blocks checkout with an explicit worktree alternative' },
     idle: { about: 'Idle sessions are named without blocking branch choices' },
@@ -60,10 +74,7 @@ export default {
         .getByTestId('create-agent-branch-chip')
         .filter({ hasText: 'origin/main' })
         .waitFor();
-      assert.equal(
-        await page.getByTestId('create-agent-worktree-chip').getAttribute('aria-pressed'),
-        'true',
-      );
+      assert.equal(await page.getByRole('checkbox').isChecked(), true);
       assert.equal(await page.locator('[data-toast-id]').count(), 0);
       return;
     }
@@ -95,22 +106,46 @@ export default {
     }
     await page.getByTestId('create-agent-branch-chip').click();
     await page.getByRole('option', { name: /^feature/ }).waitFor();
-    if (ui.case === 'ordinary') {
+    if (ui.case === 'restored') {
+      await page
+        .getByTestId('checkout-menu-notices')
+        .getByRole('button', { name: await ui.t('newChat.checkout.restore'), exact: true })
+        .click();
+      await page
+        .getByRole('status')
+        .filter({ hasText: await ui.t('newChat.checkout.restored') })
+        .waitFor();
+    } else if (ui.case === 'undone') {
+      await page.getByRole('option', { name: 'feature', exact: true }).click();
+      await page
+        .getByRole('button', { name: await ui.t('newChat.checkout.undo'), exact: true })
+        .click();
+      await page
+        .getByRole('status')
+        .filter({ hasText: await ui.t('newChat.checkout.undone') })
+        .waitFor();
+    } else if (ui.case.startsWith('error-')) {
+      await page.getByRole('option', { name: 'feature', exact: true }).click();
+      await page
+        .getByRole('alert')
+        .filter({ hasText: await ui.t('newChat.checkout.errors.' + ui.case.slice(6)) })
+        .waitFor();
+    } else if (ui.case === 'ordinary') {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
       await page.getByTestId('create-agent-branch-chip').filter({ hasText: 'feature' }).waitFor();
       assert.equal(await page.locator('[data-toast-id]').count(), 0);
-    } else if (ui.case === 'carried') {
+    } else if (['carried', 'stashed', 'fetched'].includes(ui.case)) {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
-      await page.getByRole('dialog').waitFor();
-      await page
-        .getByRole('button', {
-          name: await ui.t('newChat.checkout.carry', { branch: 'feature' }),
-          exact: true,
-        })
-        .click();
+      if (ui.case !== 'fetched') {
+        await page.getByRole('dialog').waitFor();
+        if (ui.case === 'stashed') await page.getByRole('radio').nth(1).check();
+        await page
+          .getByRole('button', { name: await ui.t('newChat.checkout.confirmSwitch'), exact: true })
+          .click();
+      }
       const feedback = page.getByRole('status');
       await feedback.waitFor();
-      assert.ok((await feedback.innerText()).includes(await ui.t('newChat.checkout.carried')));
+      assert.ok((await feedback.innerText()).length > 0);
       assert.equal(
         await feedback
           .getByRole('button', { name: await ui.t('newChat.checkout.undo'), exact: true })
@@ -174,14 +209,25 @@ export default {
         .waitFor();
       assert.equal(await page.getByRole('listbox').isVisible(), true);
       await page.keyboard.press('Escape');
-    } else if (['dirty', 'conflict'].includes(ui.case)) {
+    } else if (['dirty', 'conflict', 'many-files', 'dirty-idle'].includes(ui.case)) {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
       await page.getByRole('dialog').waitFor();
-      const carry = page.getByRole('button', {
+      const carry = page.getByRole('radio', {
         name: await ui.t('newChat.checkout.carry', { branch: 'feature' }),
         exact: true,
       });
       assert.equal(await carry.isDisabled(), ui.case === 'conflict');
+      const leave = page.getByRole('radio').nth(1);
+      assert.equal(await leave.isChecked(), ui.case === 'conflict');
+      if (ui.case !== 'conflict') {
+        await carry.focus();
+        await page.keyboard.press('ArrowDown');
+        assert.equal(await leave.isChecked(), true);
+        await page.keyboard.press('ArrowUp');
+        assert.equal(await carry.isChecked(), true);
+      }
+      const dialog = page.getByRole('dialog');
+      assert.equal(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth), true);
       assert.equal(
         await page
           .getByRole('button', { name: await ui.t('commonUi.confirmDialog.cancel'), exact: true })
@@ -191,12 +237,20 @@ export default {
     } else {
       assert.equal(
         await page.getByRole('option', { name: /^feature/ }).getAttribute('aria-disabled'),
-        String(ui.case === 'busy'),
+        String(['busy', 'operation'].includes(ui.case)),
       );
       assert.equal(
         await page.getByRole('option', { name: /^release/ }).getAttribute('aria-disabled'),
-        String(ui.case === 'busy'),
+        String(['busy', 'operation'].includes(ui.case)),
       );
+    }
+    if (['busy', 'operation', 'idle', 'recover'].includes(ui.case)) {
+      const notice = page.getByTestId('checkout-menu-notices');
+      const oldBox = await notice.boundingBox();
+      await page.getByRole('listbox').evaluate((el) => {
+        el.scrollTop = 1000;
+      });
+      assert.deepEqual(await notice.boundingBox(), oldBox);
     }
     const after = await geometry();
     assert.deepEqual(after, before, 'Feedback must not move or resize the controls row or input');

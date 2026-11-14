@@ -1,3 +1,6 @@
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { AlertTriangle, Info } from 'lucide-react';
+import { Tip } from '@/components/ui/tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -14,7 +17,14 @@ export function UseWorktreeButton({
 }) {
   const { t } = useTranslation();
   return (
-    <Button size="sm" variant="secondary" disabled={disabled} onClick={onClick}>
+    <Button
+      compact
+      size="sm"
+      variant="secondary"
+      tone="quiet"
+      disabled={disabled}
+      onClick={onClick}
+    >
       {t('newChat.checkout.useWorktree')}
     </Button>
   );
@@ -40,11 +50,13 @@ export function CheckoutStashes({ checkout }: { checkout: ReturnType<typeof useC
   return checkout.status?.stashes.length ? (
     <div className="space-y-2 px-3 py-2 text-12 text-muted-foreground">
       {checkout.status.stashes.map((stash) => (
-        <div key={stash.id} className="space-y-1 break-words">
+        <CheckoutNotice key={stash.id}>
           <p>{t('newChat.checkout.savedChanges', { branch: stash.branch })}</p>
           <Button
+            compact
             size="sm"
             variant="secondary"
+            tone="quiet"
             disabled={
               checkout.busy || !!checkout.status?.blocked || !!checkout.status?.files.length
             }
@@ -52,10 +64,42 @@ export function CheckoutStashes({ checkout }: { checkout: ReturnType<typeof useC
           >
             {t('newChat.checkout.restore')}
           </Button>
-        </div>
+        </CheckoutNotice>
       ))}
     </div>
   ) : null;
+}
+
+export function CheckoutNotice({
+  children,
+  action,
+  warning = false,
+}: {
+  children: ReactNode;
+  action?: ReactNode;
+  warning?: boolean;
+}) {
+  const Icon = warning ? AlertTriangle : Info;
+  return (
+    <div
+      className="flex max-w-[320px] items-start gap-2 px-3 py-2 text-12 text-foreground"
+      role={warning ? 'alert' : 'status'}
+    >
+      <Icon
+        size={14}
+        aria-hidden
+        className={
+          warning
+            ? 'mt-0.5 shrink-0 text-[var(--warning-fg)]'
+            : 'mt-0.5 shrink-0 text-muted-foreground'
+        }
+      />
+      <div className="min-w-0 flex-1 break-words">
+        <div>{children}</div>
+        {action}
+      </div>
+    </div>
+  );
 }
 
 export function CheckoutDialog({
@@ -66,107 +110,172 @@ export function CheckoutDialog({
   onUseWorktree?: (branch?: string) => void;
 }) {
   const { t } = useTranslation();
-  const { dialog, status, busy } = checkout;
+  const { dialog, busy } = checkout;
+  const [strategy, setStrategy] = useState<'carry' | 'stash'>('carry');
+  const cancel = useRef<HTMLButtonElement>(null);
+  const descriptionId = useId();
+  useEffect(() => {
+    setStrategy(dialog?.status.carryAllowed ? 'carry' : 'stash');
+  }, [dialog]);
   const target = dialog?.branch.replace(/^refs\/remotes\//, '') ?? '';
-  const count = dialog?.status.sessions.length ?? 0;
+  const vars = { branch: target, current: dialog?.status.current };
+  const idle = dialog?.status.sessions.filter((s) => !s.running) ?? [];
   return (
-    <>
-      <Dialog.Root
-        open={!!dialog}
-        onOpenChange={(open) => {
-          if (!open && !busy) checkout.closeDialog();
-        }}
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
-          <Dialog.Content
-            onPointerDownOutside={(event) => event.preventDefault()}
-            onEscapeKeyDown={(event) => {
-              if (busy) event.preventDefault();
-            }}
-            className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
-          >
-            <Dialog.Title className="break-words text-16 font-medium text-[var(--confirm-title)]">
-              {t('newChat.checkout.title', { branch: target })}
-            </Dialog.Title>
-            <Dialog.Description className="break-words text-13 text-[var(--confirm-desc)]">
+    <Dialog.Root
+      open={!!dialog}
+      onOpenChange={(open) => {
+        if (!open && !busy) checkout.closeDialog();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Content
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            cancel.current?.focus();
+          }}
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => {
+            if (busy) e.preventDefault();
+          }}
+          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
+        >
+          <Dialog.Title className="break-words text-18 font-medium text-[var(--confirm-title)]">
+            {t('newChat.checkout.title', vars)}
+          </Dialog.Title>
+          <div className="min-h-0 overflow-y-auto space-y-4 text-13">
+            <Dialog.Description className="break-words text-[var(--confirm-desc)]">
               {t('newChat.checkout.dirtyDescription', {
                 branch: dialog?.status.current,
                 count: dialog?.status.files.length,
               })}
             </Dialog.Description>
-            <div className="min-h-0 overflow-y-auto text-13">
-              <ul className="max-h-40 overflow-y-auto border-y border-border py-2 font-mono text-12 text-muted-foreground">
-                {dialog?.status.files.map((file) => (
-                  <li key={file} className="break-all">
-                    {file}
+            {!!idle.length && (
+              <p className="text-muted-foreground">
+                {t('newChat.checkout.dialogSessions', { count: idle.length, branch: target })}
+              </p>
+            )}
+            <ul className="max-h-[140px] overflow-y-auto border-y border-border py-1 text-12">
+              {dialog?.status.files.map((file) => {
+                const detail = dialog.status.fileDetails?.[file];
+                return (
+                  <li key={file} className="flex min-h-7 items-center gap-3" title={file}>
+                    <span className="flex min-w-0 flex-1 font-mono" aria-label={file}>
+                      <span className="min-w-0 overflow-hidden whitespace-nowrap">
+                        {file.slice(0, Math.ceil(file.length / 2))}
+                      </span>
+                      <span dir="rtl" className="max-w-[50%] shrink-0 truncate text-left">
+                        <bdi dir="ltr">{file.slice(Math.ceil(file.length / 2))}</bdi>
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-muted-foreground">
+                      {detail?.kind === 'new'
+                        ? t('newChat.checkout.newFile')
+                        : detail?.kind === 'deleted'
+                          ? t('newChat.checkout.deletedFile')
+                          : detail?.added !== undefined && detail.removed !== undefined
+                            ? `+${detail.added} −${detail.removed}`
+                            : ''}
+                    </span>
                   </li>
-                ))}
-              </ul>
-              {!dialog?.status.carryAllowed && !dialog?.status.ignoredCollision && (
-                <p className="mt-2 text-muted-foreground">
-                  {t('newChat.checkout.errors.conflict')}
-                </p>
-              )}
-              {checkout.error && (
-                <p className="mt-2 text-muted-foreground">
-                  <CheckoutError code={checkout.error} status={status} branch={dialog?.branch} />
-                </p>
-              )}
-              {onUseWorktree && (
-                <div className="mt-3 space-y-2 rounded-xl border border-border p-3 text-muted-foreground">
-                  <p>
-                    {t(
-                      count
-                        ? 'newChat.checkout.worktreeGuideSessions'
-                        : 'newChat.checkout.worktreeGuide',
-                      { branch: target, count },
-                    )}
-                  </p>
-                  <UseWorktreeButton
-                    disabled={busy}
-                    onClick={() => onUseWorktree(dialog?.branch)}
-                  />
-                </div>
-              )}
+                );
+              })}
+            </ul>
+            <div
+              role="radiogroup"
+              aria-label={t('newChat.checkout.title', vars)}
+              className="space-y-2"
+            >
+              {(['carry', 'stash'] as const).map((choice) => {
+                const disabled = !!busy || (choice === 'carry' && !dialog?.status.carryAllowed);
+                return (
+                  <label
+                    key={choice}
+                    className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 focus-within:ring-2 focus-within:ring-[var(--focus-ring)] ${disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-accent'} ${strategy === choice ? 'border-foreground bg-accent' : 'border-border'}`}
+                  >
+                    <input
+                      type="radio"
+                      aria-label={t(`newChat.checkout.${choice}`, {
+                        branch: choice === 'carry' ? target : dialog?.status.current,
+                      })}
+                      aria-describedby={`${descriptionId}-${choice}`}
+                      name="checkout-strategy"
+                      value={choice}
+                      checked={strategy === choice}
+                      disabled={disabled}
+                      onChange={() => setStrategy(choice)}
+                      className="mt-0.5 size-4 shrink-0 accent-[var(--text-primary)]"
+                    />
+                    <span className="min-w-0 break-words">
+                      <span className="block font-medium">
+                        {t(`newChat.checkout.${choice}`, {
+                          branch: choice === 'carry' ? target : dialog?.status.current,
+                        })}
+                      </span>
+                      <span
+                        id={`${descriptionId}-${choice}`}
+                        className="mt-1 block text-12 text-muted-foreground"
+                      >
+                        {t(
+                          `newChat.checkout.${choice === 'carry' && !dialog?.status.carryAllowed ? 'carryConflict' : choice + 'Description'}`,
+                          vars,
+                        )}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
             </div>
-            <div className="flex shrink-0 flex-wrap justify-end gap-2">
-              <Button
-                variant="primary"
-                size="sm"
-                className="min-w-0 max-w-full"
-                disabled={busy || !dialog?.status.carryAllowed || !!dialog?.status.blocked}
-                onClick={() =>
-                  dialog && void checkout.performSwitch(dialog.branch, dialog.status, 'carry')
-                }
-              >
-                <span className="truncate" title={t('newChat.checkout.carry', { branch: target })}>
-                  {t('newChat.checkout.carry', { branch: target })}
-                </span>
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="min-w-0 max-w-full"
-                disabled={busy || !!dialog?.status.blocked}
-                onClick={() =>
-                  dialog && void checkout.performSwitch(dialog.branch, dialog.status, 'stash')
-                }
-              >
-                <span
-                  className="truncate"
-                  title={t('newChat.checkout.stash', { branch: dialog?.status.current })}
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {onUseWorktree && (
+              <Tip text={t('newChat.checkout.worktreeHint', vars)} contentClassName="z-[10001]">
+                <Button
+                  compact
+                  variant="secondary"
+                  tone="quiet"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => onUseWorktree(dialog?.branch)}
                 >
-                  {t('newChat.checkout.stash', { branch: dialog?.status.current })}
-                </span>
+                  {t('newChat.checkout.useWorktree')}
+                </Button>
+              </Tip>
+            )}
+            <div className="ml-auto flex flex-row-reverse gap-2">
+              <Button
+                compact
+                size="sm"
+                palette="confirmation"
+                variant="primary"
+                className="min-h-9"
+                disabled={
+                  busy ||
+                  !!dialog?.status.blocked ||
+                  (strategy === 'carry' && !dialog?.status.carryAllowed)
+                }
+                onClick={() =>
+                  dialog && void checkout.performSwitch(dialog.branch, dialog.status, strategy)
+                }
+              >
+                {t('newChat.checkout.confirmSwitch')}
               </Button>
-              <Button variant="secondary" size="sm" disabled={busy} onClick={checkout.closeDialog}>
+              <Button
+                compact
+                ref={cancel}
+                size="sm"
+                palette="confirmation"
+                variant="secondary"
+                className="min-h-9"
+                disabled={busy}
+                onClick={checkout.closeDialog}
+              >
                 {t('commonUi.confirmDialog.cancel')}
               </Button>
             </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-    </>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

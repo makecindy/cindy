@@ -14614,7 +14614,7 @@
       "useWorktree": "Usar worktree",
       "worktreeDefault": "As novas sessões também usarão worktree por predefinição. Pode desativar a qualquer momento.",
       "switched": "Mudou para {{branch}}",
-      "stashed": " · Alterações guardadas temporariamente",
+      "stashed": " · Alterações guardadas",
       "carried": " · Alterações transferidas",
       "fetched": "{{count}} novos commits obtidos de {{branch}}",
       "sessionsContinue": "{{names}} também continuará em {{branch}} da próxima vez.",
@@ -14626,7 +14626,7 @@
       "title": "Mudar para {{branch}}",
       "dirtyDescription": "{{branch}} tem {{count}} alterações por submeter. Escolha como as tratar antes de mudar. Ambas as opções preservam as alterações.",
       "carry": "Levar as alterações para {{branch}}",
-      "stash": "Guardá-las para {{branch}}",
+      "stash": "Deixar em {{branch}}",
       "worktreeGuide": "Prefere manter este diretório? Use worktree para começar a partir de {{branch}} num diretório separado. As alterações atuais não serão afetadas nem copiadas.",
       "worktreeGuideSessions": "Prefere manter este diretório? Use worktree para começar a partir de {{branch}} num diretório separado. As alterações e as {{count}} sessões atuais não serão afetadas. As alterações não serão copiadas.",
       "idleSessions": "Este diretório tem outras {{count}} sessões ({{names}}). Também continuarão no novo ramo.",
@@ -14640,8 +14640,19 @@
         "dirty": "Há novas alterações por submeter. Trate-as antes de restaurar.",
         "diverged": "Os ramos local e remoto divergiram. Resolva a situação antes de mudar.",
         "missing": "O ramo selecionado já não existe. Atualize a lista.",
-        "git": "Não foi possível concluir a operação. Verifique o ramo atual e git stash list antes de tentar novamente."
-      }
+        "git": "Não foi possível concluir. Verifique o branch atual e as alterações guardadas antes de tentar novamente"
+      },
+      "confirmSwitch": "Mudar",
+      "carryDescription": "Levar as alterações e continuar a editar em {{branch}}",
+      "stashDescription": "Guardar as alterações para deixar {{branch}} limpo; restaurá-las ao voltar a {{current}}",
+      "carryConflict": "As alterações entram em conflito com {{branch}} e não podem ser levadas",
+      "worktreeHint": "Começar de {{branch}} noutro diretório, sem alterar este diretório ou as suas alterações",
+      "newFile": "Novo ficheiro",
+      "deletedFile": "Eliminado",
+      "dialogSessions": "Este diretório tem mais {{count}} sessões que continuarão em {{branch}}.",
+      "dialogSessions_one": "Este diretório tem mais {{count}} sessões que continuarão em {{branch}}.",
+      "dialogSessions_other": "Este diretório tem mais {{count}} sessões que continuarão em {{branch}}.",
+      "dialogSessions_many": "Este diretório tem mais {{count}} sessões que continuarão em {{branch}}."
     }
   },
   "onboarding": {

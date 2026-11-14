@@ -818,7 +818,10 @@ it.each(['plain', 'carry', 'stash', 'idle', 'fetched'])(
           ? 'newChat.checkout.stash{"branch":"main"}'
           : 'newChat.checkout.carry{"branch":"feature"}';
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: choice }));
+        fireEvent.click(screen.getByRole('radio', { name: choice }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.confirmSwitch' }));
       });
     }
     await waitFor(() =>
@@ -895,3 +898,42 @@ it.each([
     expect(onSourceChange).not.toHaveBeenCalled();
   },
 );
+
+// Redesign regression: selection has no Git side effect until explicit confirmation.
+it.each([true, false])(
+  'defaults dirty checkout to a usable choice (carry=%s)',
+  async (carryAllowed) => {
+    const checkout = setupCheckout(true, { files: ['file.txt'], carryAllowed });
+    render(<CheckoutRow />);
+    await waitFor(() => expect(branchButton().textContent).toBe('main'));
+    fireEvent.click(branchButton());
+    fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+    await screen.findByRole('dialog');
+    const radios = screen.getAllByRole('radio') as HTMLInputElement[];
+    expect(radios[0].checked).toBe(carryAllowed);
+    expect(radios[0].disabled).toBe(!carryAllowed);
+    expect(radios[1].checked).toBe(!carryAllowed);
+    expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.confirmSwitch' }));
+    await waitFor(() =>
+      expect(checkout).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'switch', strategy: carryAllowed ? 'carry' : 'stash' }),
+      ),
+    );
+  },
+);
+
+// Busy is a menu-level reason, not a description duplicated on each branch.
+it('places one busy notice outside the scrollable branch list', async () => {
+  setupCheckout(true, { blocked: 'busy' });
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  fireEvent.click(branchButton());
+  const option = await screen.findByRole('option', { name: 'feature' });
+  expect(option.getAttribute('aria-disabled')).toBe('true');
+  expect(screen.getAllByText('newChat.checkout.errors.busy')).toHaveLength(1);
+  expect(screen.getByRole('listbox').contains(screen.getByTestId('checkout-menu-notices'))).toBe(
+    false,
+  );
+  expect(option.textContent).toBe('feature');
+});

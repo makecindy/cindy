@@ -18,6 +18,8 @@ export interface CheckoutStatus {
   current: string;
   head: string;
   files: string[];
+  /** Optional display details; older hosts omit them. */
+  fileDetails?: Record<string, { kind?: 'new' | 'deleted'; added?: number; removed?: number }>;
   fingerprint: string;
   sessions: CheckoutSession[];
   occupied: string[];

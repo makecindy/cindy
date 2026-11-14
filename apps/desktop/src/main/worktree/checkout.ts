@@ -109,6 +109,34 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
       files.push(fields[i].slice(3));
       if (/[RC]/.test(fields[i].slice(0, 2))) i++;
     }
+    const fileDetails: NonNullable<CheckoutStatus['fileDetails']> = Object.create(null);
+    for (let i = 0; i < fields.length; i++) {
+      const row = fields[i];
+      if (!row) continue;
+      const code = row.slice(0, 2);
+      if (code === '??' || code.includes('A')) fileDetails[row.slice(3)] = { kind: 'new' };
+      else if (code.includes('D')) fileDetails[row.slice(3)] = { kind: 'deleted' };
+      if (/[RC]/.test(code)) i++;
+    }
+    // Display-only: unavailable counts must not block a switch. Disable renames so
+    // the NUL records remain path-safe (including tabs and newlines in names).
+    if (target && files.length)
+      try {
+        const stats = (
+          await gitExec(['diff', '--numstat', '-z', '--no-renames', 'HEAD', '--'], repo, readOpts)
+        ).stdout;
+        for (const row of stats.split('\0')) {
+          const match = /^(\d+)\t(\d+)\t([\s\S]+)$/.exec(row);
+          if (match)
+            fileDetails[match[3]] = {
+              ...fileDetails[match[3]],
+              added: Number(match[1]),
+              removed: Number(match[2]),
+            };
+        }
+      } catch {
+        /* Old/unavailable details render paths only. */
+      }
     const hash = createHash('sha256').update(head).update(porcelain);
     hash.update(
       (await gitExec(['diff', '--cached', '--raw', '-z', 'HEAD', '--'], repo, readOpts)).stdout,
@@ -211,6 +239,7 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
       current,
       head,
       files,
+      ...(target ? { fileDetails } : {}),
       fingerprint: hash.digest('hex'),
       sessions,
       occupied,

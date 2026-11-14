@@ -14432,7 +14432,7 @@
       "useWorktree": "worktree を使う",
       "worktreeDefault": "今後の新規セッションでも worktree が既定で有効になります。いつでも解除できます。",
       "switched": "{{branch}} に切り替えました",
-      "stashed": " · 変更を一時保存しました",
+      "stashed": " · 変更を保存しました",
       "carried": " · 変更を引き継ぎました",
       "fetched": "{{branch}} から新しいコミットを {{count}} 件取得しました",
       "sessionsContinue": "{{names}} も次回から {{branch}} で続行します。",
@@ -14444,7 +14444,7 @@
       "title": "{{branch}} に切り替える",
       "dirtyDescription": "{{branch}} には未コミットの変更が {{count}} 件あります。切り替える前に扱いを選んでください。どちらを選んでも変更は失われません。",
       "carry": "変更を {{branch}} に引き継ぐ",
-      "stash": "{{branch}} 用に一時保存",
+      "stash": "{{branch}} に残す",
       "worktreeGuide": "このディレクトリをそのままにしますか？ worktree を使うと、別のディレクトリで {{branch}} から開始できます。現在の変更には影響せず、変更は引き継がれません。",
       "worktreeGuideSessions": "このディレクトリをそのままにしますか？ worktree を使うと、別のディレクトリで {{branch}} から開始できます。現在の変更と {{count}} 件のセッションには影響せず、変更は引き継がれません。",
       "idleSessions": "このディレクトリには他に {{count}} 件のセッション（{{names}}）があります。切り替えると、それらも新しいブランチで続行します。",
@@ -14458,8 +14458,19 @@
         "dirty": "新しい未コミットの変更があります。処理してから復元してください。",
         "diverged": "ローカルとリモートのブランチが分岐しています。解決してから切り替えてください。",
         "missing": "選択したブランチは存在しません。一覧を更新してください。",
-        "git": "操作を完了できませんでした。現在のブランチと git stash list を確認してから再試行してください。"
-      }
+        "git": "操作を完了できませんでした。現在のブランチと保存した変更を確認してから再試行してください"
+      },
+      "confirmSwitch": "切り替え",
+      "carryDescription": "変更を引き継ぎ、{{branch}} で編集を続けます",
+      "stashDescription": "変更を保存し、{{branch}} を変更のない状態にします。{{current}} に戻ると復元できます",
+      "carryConflict": "変更が {{branch}} の内容と競合するため、引き継げません",
+      "worktreeHint": "別のディレクトリで {{branch}} から開始し、現在のディレクトリと変更はそのままにします",
+      "newFile": "新しいファイル",
+      "deletedFile": "削除済み",
+      "dialogSessions": "このディレクトリには他に {{count}} 件のタスクがあります。切り替え後は {{branch}} で続行します。",
+      "dialogSessions_one": "このディレクトリには他に {{count}} 件のタスクがあります。切り替え後は {{branch}} で続行します。",
+      "dialogSessions_other": "このディレクトリには他に {{count}} 件のタスクがあります。切り替え後は {{branch}} で続行します。",
+      "dialogSessions_many": "このディレクトリには他に {{count}} 件のタスクがあります。切り替え後は {{branch}} で続行します。"
     }
   },
   "onboarding": {

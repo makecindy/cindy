@@ -235,3 +235,18 @@ it('fetches origin/main, fast-forwards local main, and undo retains fetched comm
   const unchanged = await switchTo(f, 'refs/remotes/origin/main');
   expect(unchanged.receipt?.fetchedCommits ?? 0).toBe(0);
 });
+
+// Dialog details must describe the actual staged + unstaged diff, not just paths.
+it('reports optional text counts and new/deleted file kinds for the dialog', async () => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.repo, 'base'), 'replacement\n');
+  git(f.repo, 'add', 'base');
+  fs.appendFileSync(path.join(f.repo, 'base'), 'more\n');
+  fs.writeFileSync(path.join(f.repo, 'new-file'), 'new\n');
+  const status = await f.service.status(f.repo, 'feature');
+  expect(status.fileDetails?.base).toEqual({ added: 2, removed: 1 });
+  expect(status.fileDetails?.['new-file']).toEqual({ kind: 'new' });
+  expect((await f.service.status(f.repo)).fileDetails).toBeUndefined();
+  fs.unlinkSync(path.join(f.repo, 'base'));
+  expect((await f.service.status(f.repo, 'feature')).fileDetails?.base?.kind).toBe('deleted');
+});

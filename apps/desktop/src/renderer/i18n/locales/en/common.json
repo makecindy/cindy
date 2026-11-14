@@ -14492,7 +14492,7 @@
       "useWorktree": "Use worktree",
       "worktreeDefault": "New sessions will also use worktree by default. You can turn it off anytime.",
       "switched": "Switched to {{branch}}",
-      "stashed": " · Changes saved in stash",
+      "stashed": " · Changes saved for later",
       "carried": " · Changes brought along",
       "fetched": "Fetched {{count}} new commits from {{branch}}",
       "sessionsContinue": "{{names}} will also continue on {{branch}} next time.",
@@ -14504,10 +14504,10 @@
       "title": "Switch to {{branch}}",
       "dirtyDescription": "{{branch}} has {{count}} uncommitted changes. Choose how to handle them before switching. Both options keep your changes.",
       "carry": "Bring changes to {{branch}}",
-      "stash": "Save them for {{branch}}",
+      "stash": "Leave on {{branch}}",
       "worktreeGuide": "Prefer to keep this directory as it is? Use worktree to start from {{branch}} in a separate directory. Your changes stay here and will not be copied over.",
       "worktreeGuideSessions": "Prefer to keep this directory as it is? Use worktree to start from {{branch}} in a separate directory. Your changes and the {{count}} sessions here stay as they are. Changes will not be copied over.",
-      "idleSessions": "This directory has {{count}} other sessions ({{names}}). They will also continue on the new branch after switching.",
+      "idleSessions": "Other sessions in this directory: {{count}} ({{names}}). They will also continue on the new branch.",
       "errors": {
         "busy": "A session in this directory is running or has background activity. Wait for it to finish or use worktree.",
         "operation": "Finish the merge, rebase or other Git operation before switching.",
@@ -14518,8 +14518,19 @@
         "dirty": "There are new uncommitted changes. Handle them before restoring.",
         "diverged": "The local and remote branches have diverged. Resolve them before switching.",
         "missing": "The selected branch no longer exists. Refresh the list.",
-        "git": "Could not finish the operation. Check the current branch and git stash list before trying again."
-      }
+        "git": "Could not finish the operation. Check the current branch and saved changes before trying again"
+      },
+      "confirmSwitch": "Switch",
+      "carryDescription": "Take the changes with you and keep editing on {{branch}}",
+      "stashDescription": "Save the changes first so {{branch}} is clean; restore them when you return to {{current}}",
+      "carryConflict": "These changes conflict with {{branch}} and cannot be brought along",
+      "worktreeHint": "Start from {{branch}} in a separate directory, leaving this directory and its changes untouched",
+      "newFile": "New file",
+      "deletedFile": "Deleted",
+      "dialogSessions": "This directory has {{count}} other sessions. They will also continue on {{branch}} after switching.",
+      "dialogSessions_one": "This directory has {{count}} other session. They will also continue on {{branch}} after switching.",
+      "dialogSessions_other": "This directory has {{count}} other sessions. They will also continue on {{branch}} after switching.",
+      "dialogSessions_many": "This directory has {{count}} other sessions. They will also continue on {{branch}} after switching."
     }
   },
   "onboarding": {

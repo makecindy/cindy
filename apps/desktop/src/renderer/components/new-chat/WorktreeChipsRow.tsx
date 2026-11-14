@@ -60,6 +60,7 @@ import { resolveBranchPick } from './branchPick';
 import { useCheckout } from '@/hooks/useCheckout';
 import {
   CheckoutError,
+  CheckoutNotice,
   CheckoutDialog,
   CheckoutStashes,
   UseWorktreeButton,
@@ -365,27 +366,28 @@ export function WorktreeChipsRow({
           menuHeader={
             <>
               <CheckoutStashes checkout={checkout} />
-              {!effectiveWorktreeEnabled && (
-                <div className="max-w-[320px] space-y-2 px-3 py-2 text-12 text-muted-foreground">
-                  {menuStatus?.blocked && menuStatus.blocked !== 'occupied' && (
-                    <p>
-                      <CheckoutError code={menuStatus.blocked} status={menuStatus} />
-                    </p>
-                  )}
-                  {!!menuStatus?.sessions.length && !menuStatus.blocked && (
-                    <p>
-                      {t('newChat.checkout.idleSessions', {
-                        count: menuStatus.sessions.length,
-                        names: menuStatus.sessions.map((session) => session.name).join(', '),
-                      })}
-                    </p>
-                  )}
-                  {canUseWorktree &&
-                    (menuStatus?.blocked === 'busy' || !!menuStatus?.sessions.length) && (
-                      <UseWorktreeButton onClick={() => useWorktree()} />
+              {!effectiveWorktreeEnabled &&
+                (menuStatus?.blocked || !!menuStatus?.sessions.length) && (
+                  <CheckoutNotice warning={!!menuStatus?.blocked}>
+                    {menuStatus?.blocked && menuStatus.blocked !== 'occupied' && (
+                      <p>
+                        <CheckoutError code={menuStatus.blocked} status={menuStatus} />
+                      </p>
                     )}
-                </div>
-              )}
+                    {!!menuStatus?.sessions.length && !menuStatus.blocked && (
+                      <p>
+                        {t('newChat.checkout.idleSessions', {
+                          count: menuStatus.sessions.length,
+                          names: menuStatus.sessions.map((session) => session.name).join(', '),
+                        })}
+                      </p>
+                    )}
+                    {canUseWorktree &&
+                      (menuStatus?.blocked === 'busy' || !!menuStatus?.sessions.length) && (
+                        <UseWorktreeButton onClick={() => useWorktree()} />
+                      )}
+                  </CheckoutNotice>
+                )}
             </>
           }
           compact={compact}
@@ -745,9 +747,11 @@ export function BranchWorktreeChip({
         onEscapeKeyDown={(e) => {
           if (e.isComposing) e.preventDefault();
         }}
-        className="max-h-[280px] w-auto min-w-[200px] max-w-[calc(100vw-32px)] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-[shadow:var(--shadow-menu)]"
+        className="flex max-h-[min(480px,var(--radix-popover-content-available-height))] flex-col w-auto min-w-[200px] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-[shadow:var(--shadow-menu)]"
       >
-        {menuHeader}
+        <div className="shrink-0" data-testid="checkout-menu-notices">
+          {menuHeader}
+        </div>
         {branchesLoading ? (
           <div className="px-3 py-1.5 text-13 text-muted-foreground">
             {t('newChat.branchChip.loading')}
@@ -767,7 +771,7 @@ export function BranchWorktreeChip({
           </button>
         ) : (
           <>
-            <div className="sticky top-0 z-10 bg-popover pb-1">
+            <div className="shrink-0 bg-popover pb-1">
               <div className="relative">
                 <Search
                   size={12}
@@ -811,7 +815,12 @@ export function BranchWorktreeChip({
                 />
               </div>
             </div>
-            <div role="listbox" id={listboxId} aria-label={t('newChat.branchChip.label')}>
+            <div
+              className="min-h-0 overflow-y-auto"
+              role="listbox"
+              id={listboxId}
+              aria-label={t('newChat.branchChip.label')}
+            >
               {['remote', 'local'].map((group) => {
                 const values = visibleBranches.filter(
                   (b) => (b === remoteDefaultBranch) === (group === 'remote'),
@@ -847,11 +856,6 @@ export function BranchWorktreeChip({
                           )}
                         >
                           {displayBranch(b)}
-                          {optionDisabledReason?.(b) && (
-                            <div className="text-12 text-muted-foreground">
-                              {optionDisabledReason(b)}
-                            </div>
-                          )}
                           {b === branchLabel && sync.details && (
                             <div className="text-12 text-muted-foreground">{sync.details}</div>
                           )}
