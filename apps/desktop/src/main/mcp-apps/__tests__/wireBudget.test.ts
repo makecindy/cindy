@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { McpAppSdkCache, type McpAppDocument } from '../../../shared/mcpApps.js';
+import { handleMcpAppOperation } from '../operations.js';
 import { gzipSync } from 'node:zlib';
 import { hostAppSdkAsset } from '../hostSdk.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -125,6 +128,17 @@ describe('MCP Apps serialized remote result budgets', () => {
     expect(document.sdk).toBeUndefined();
     expect(Buffer.byteLength(JSON.stringify(document))).toBe(MCP_APPS_MAX_REMOTE_BYTES);
     expect(() => encodeReliableFrames(wire(document), 'stream', 1)).not.toThrow();
+    // Even the small reference must not reduce the legacy SDK-less page limit.
+    const hash = createHash('sha256').update(JSON.stringify([empty.sdk!.source,
+      empty.sdk!.addons?.['cindy/view-state']?.source ?? null,
+      empty.sdk!.addons?.['cindy/view-state']?.reactSource ?? null])).digest('hex');
+    const referenced = await handleMcpAppOperation(f.host, 'device:phone', 'task', {
+      op: 'open', clientId: 'card', sdkCacheHashes: [hash],
+    }) as McpAppDocument;
+    expect(referenced.sdk).toBeUndefined();
+    expect(referenced.sdkRef).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(referenced))).toBe(MCP_APPS_MAX_REMOTE_BYTES);
+
     f.resource.mockResolvedValue({ result: f.contents(html + 'x') });
     await expect(f.host.open('device:phone', 'task', 'card', {})).rejects.toThrow(
       'MCP_APP_RESOURCE_TOO_LARGE',
@@ -147,15 +161,65 @@ describe('MCP Apps serialized remote result budgets', () => {
     expect(() => encodeReliableFrames(wire(document), 'wire-id', 1)).not.toThrow();
   });
 
+  // Regression: the real operation/Host budget used to discard a warm SDK before
+  // reference negotiation. Unit tier: a controlled resource just below the wire
+  // cap must hydrate on the viewer; cold/mismatched declarations retain omission.
+  it('negotiates a warm SDK reference before applying the large-page wire budget', async () => {
+    const f = fixture();
+    const cache = new McpAppSdkCache(text => createHash('sha256').update(text).digest('hex'));
+    const owner = {};
+    const replies: McpAppDocument[] = [];
+    const send = async (input: Record<string, unknown>) => {
+      const reply = await handleMcpAppOperation(f.host, 'device:phone', 'task', input) as McpAppDocument;
+      if (input.op === 'open') replies.push(reply);
+      return reply;
+    };
+    const input = { op: 'open', clientId: 'card', context: {} };
+    const small = await cache.open(owner, 'host', input, send, () => {});
+    await send({ op: 'teardown', viewId: small.viewId });
+    const html = '<script type="module">import "@modelcontextprotocol/ext-apps";</script>' + 'x'.repeat(MCP_APPS_MAX_REMOTE_BYTES - 4096);
+    f.resource.mockResolvedValue({ result: f.contents(html) });
+    expect(Buffer.byteLength(JSON.stringify({ ...small, html }))).toBeGreaterThan(MCP_APPS_MAX_REMOTE_BYTES);
+    const warm = await cache.open(owner, 'host', input, send, () => {});
+    expect(replies.at(-1)?.sdkRef).toMatch(/^[a-f0-9]{64}$/);
+    expect(replies.at(-1)?.sdk).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(replies.at(-1)))).toBeLessThan(MCP_APPS_MAX_REMOTE_BYTES);
+    expect(warm.sdk).toEqual(small.sdk);
+    expect(warm.html).toBe(html);
+    for (const sdkCacheHashes of [undefined, ['0'.repeat(64)]]) {
+      const cold = await send({ ...input, sdkCacheHashes });
+      expect(cold.html).toBe(html);
+      expect(cold.sdk).toBeUndefined();
+      expect(cold.sdkRef).toBeUndefined();
+    }
+  });
+
   // Addons must not consume the SDK budget of an otherwise valid installed page.
-  it('drops only addons at the original SDK boundary and does not mutate later opens', async () => {
+  it('reuses the reduced SDK on a second boundary-page open without mutating later opens', async () => {
     const f = fixture(); const local = await f.host.open('renderer:local', 'task', 'card', {});
     const base = { ...local, html: '', sdk: { source: local.sdk!.source } };
     const html = 'x'.repeat(MCP_APPS_MAX_REMOTE_BYTES - Buffer.byteLength(JSON.stringify(base)));
     f.resource.mockResolvedValue({ result: f.contents(html) });
-    const remote = await f.host.open('device:phone', 'task', 'card', {});
+    // Real operation/Host/cache regression: the first response fits only without
+    // addons; the next must recognize that cached variant (unit tier).
+    const cache = new McpAppSdkCache(text => createHash('sha256').update(text).digest('hex'));
+    const owner = {};
+    let wireDocument!: McpAppDocument;
+    const send = async (input: Record<string, unknown>) => {
+      wireDocument = await handleMcpAppOperation(f.host, 'device:phone', 'task', input) as McpAppDocument;
+      return wireDocument;
+    };
+    const input = { op: 'open', clientId: 'card', context: {} };
+    const remote = await cache.open(owner, 'host', input, send, () => {});
+    expect(wireDocument.sdk).toEqual(remote.sdk);
+    expect(wireDocument.sdkRef).toBeUndefined();
     expect(remote.sdk).toEqual({ source: local.sdk!.source });
     expect(Buffer.byteLength(JSON.stringify(remote))).toBe(MCP_APPS_MAX_REMOTE_BYTES);
+    const second = await cache.open(owner, 'host', input, send, () => {});
+    expect(wireDocument.sdkRef).toMatch(/^[a-f0-9]{64}$/);
+    expect(wireDocument.sdk).toBeUndefined();
+    expect(second.sdk).toEqual(remote.sdk);
+    expect(second.html).toBe(html);
     f.resource.mockResolvedValue({ result: f.contents('small') });
     const next = await f.host.open('device:phone', 'task', 'card', {});
     expect(next.sdk?.addons?.['cindy/view-state']).toEqual(local.sdk?.addons?.['cindy/view-state']);

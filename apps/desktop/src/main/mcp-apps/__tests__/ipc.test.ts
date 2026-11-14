@@ -402,14 +402,19 @@ describe('MCP App persistence and IPC wiring', () => {
       ['task', { op: 'message', viewId: 'remote-view', message }], { preSend: expect.any(Function) });
 
     state.open.mockResolvedValue(document);
-    expect(await state.handle!({ sender: { id: 1 } }, 'task', { op: 'open', clientId: 'card' }))
+    const sdkCacheHashes = ['0'.repeat(64)];
+    expect(await state.handle!({ sender: { id: 1 } }, 'task', { op: 'open', clientId: 'card', sdkCacheHashes }))
       .toEqual({ viewId: 'remote-view', transport: 'sandbox', prefersBorder: true });
+
+    expect(state.open).toHaveBeenLastCalledWith('renderer:1', 'task', 'card', {}, undefined, undefined);
 
     // Mobile still reaches the execution Host over the existing same-account channel.
     state.remote = { controllerDeviceId: 'phone' };
     state.open.mockResolvedValue(document);
     expect(await state.handle!({}, 'task', { op: 'open', clientId: 'card' })).toEqual(document);
-    expect(state.open).toHaveBeenCalledWith('device:phone', 'task', 'card', {}, undefined);
+    expect(state.open).toHaveBeenLastCalledWith('device:phone', 'task', 'card', {}, undefined, undefined);
+    expect(await state.handle!({}, 'task', { op: 'open', clientId: 'card', sdkCacheHashes })).toEqual(document);
+    expect(state.open).toHaveBeenLastCalledWith('device:phone', 'task', 'card', {}, undefined, expect.any(Function));
     await state.handle!({}, 'task', { op: 'message', viewId: 'remote-view', message });
     expect(state.dispatch).toHaveBeenCalledWith('device:phone', 'task', 'remote-view', message);
   });
