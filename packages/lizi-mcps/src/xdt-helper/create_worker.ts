@@ -189,6 +189,20 @@ export const createWorkerSpecSchema = z.object({
 
 export type CreateWorkerSpec = z.infer<typeof createWorkerSpecSchema>;
 
+/** 满载时可行动作：批量与单条创建共用同一份建议，避免两套口径。 */
+export function hardLimitSuggestions(): string[] {
+  return [
+    '在协同设置中提高 Worker hard limit 后，只重试未创建项。',
+    '复用已有 Worker，通过 send_to_worker 继续派发任务。',
+    '归档不再需要的 Worker 释放名额，或把剩余任务分批执行。',
+  ];
+}
+
+/** 满载创建失败时给用户的现成句子：既有 Worker 不受影响，说明剩余与可行动作。 */
+export function hardLimitUserReport(limit: WorkerLimitSnapshot): string {
+  return `已到 Worker 数量上限 ${limit.workerHardLimit}（已占用 ${limit.occupiedSlots} 个槽位，剩余 ${limit.remainingSlots} 个）。既有 Worker 不受影响，可以继续通过 send_to_worker 派活；要再加 Worker，需在协同设置里提高上限，或归档不再需要的 Worker 释放名额。`;
+}
+
 /** MCP payload 使用 snake_case，host 内部继续使用 camelCase。 */
 export function toWorkerLimitPayload(limit: WorkerLimitSnapshot | undefined): Record<string, number> | undefined {
   if (!limit) return undefined;
@@ -224,7 +238,7 @@ const DESCRIPTION = [
   '',
   '【硬边界】',
   '- worker 数量达软上限 → 创建仍成功, payload.warning = WORKER_LIMIT_SOFT_EXCEEDED',
-  '- worker 数量达硬上限 → 返 WORKER_LIMIT_HARD_EXCEEDED (拒绝创建)',
+  '- worker 数量达硬上限 → 返 WORKER_LIMIT_HARD_EXCEEDED (拒绝创建)；payload.user_report 是面向用户的现成句子（含剩余槽位与可行动作），逐字转告，不要只报错误码',
   '- label 与团队里现有的 worker 重复 → 返 DUPLICATE_LABEL（已归档 worker 的名字可以直接重新使用）',
   '- 同 label 的另一个 Worker 正在创建 → 返 WORKER_CREATION_IN_PROGRESS',
   '- 当前 lead session 不存在或没有 active team → 返 NOT_FOUND',
@@ -277,6 +291,12 @@ export function registerCreateWorkerTool(
         }
         return errorPayload(result.errorCode, result.message, {
           ...(result.limit ? { limit: toWorkerLimitPayload(result.limit) } : {}),
+          ...(result.errorCode === 'WORKER_LIMIT_HARD_EXCEEDED' && result.limit
+            ? {
+                user_report: hardLimitUserReport(result.limit),
+                suggestions: hardLimitSuggestions(),
+              }
+            : {}),
         });
       }
       return okPayload({

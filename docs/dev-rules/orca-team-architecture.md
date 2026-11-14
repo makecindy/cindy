@@ -686,6 +686,24 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 3a. **focus 切换不等待 worker 冷启动（状态：不变量）**<br>
    `switch_focus` 是纯 UI focus 操作：`setWorkerFocus` 成功并广播 `ORCA_WORKER_CHANGED` 后必须立即返回，不得同步 `await` 冷会话的 resume / `bootstrapSession`（Pi 冷启实测 2~3s，会阻塞面板切换）。idle worker 的 runtime 预热转后台，并与发送/派活路径共享同一套 per-session 去重 + `sendToSession` 锁：并发 focus / 派活只 bootstrap 一次；发送先取得锁完成懒恢复时，后台 resume 在锁内重查 live 并跳过；预热失败只告警，不改变 `switch_focus` 结果。worker 历史来自 DB，展示不需要 live runtime。后台预热必须可取消：关闭协同 / 归档 / 显式 idle 在释放 runtime 前先取消未落地的唤醒；冷启动前与 `bootstrapSession` 返回后都要复核会话仍为 active，失效则关掉刚拉起的 runtime，不得把已归档 worker 留在运行态。实现指针：`register.ts` 的 `resumeOrcaWorkerSessionIfMissing` / `disableOrcaInternal` / `orcaWorkerResumeScheduler.ts`、`orcaTeamService.ts` 的 `cancelWorkerResume`。
 
+3b. **Worker 上限只约束新建，发送与唤醒不得排到用户直发前面（状态：不变量，2026-11-14）**<br>
+   起因：团队满载（达到 hard limit）时，用户发给既有 Worker 的请求仍必须成功，而 Lead 派单、唤醒与预热会与
+   用户直发争用同一条会话。三条约束：
+   - **上限只约束新建**：`workerHardLimit` / `workerSoftLimit` 只在 `orcaWorkerCreationService` 的创建闸里判定
+     （`register.ts` 只是把设置投影给界面）。桌面直发、steer、手机远程、运行设备 agent、`send_to_worker` 派发、
+     唤醒与预热都不查上限——既有 Worker 的交互不受满载影响，也就不该被静默排队或丢弃。
+   - **顺序是 用户直发 > Lead 派发 > 系统动作**：三者共用同一把 per-session 发送锁与同一个 durable 队列
+     （不变量 3a），队列 FIFO 保证用户已入队的消息不会被后到系统动作插队；预热 / 唤醒
+     （`orcaWorkerResumeScheduler`）在发送已持锁或排队时直接让路。跳过一次预热只少一次加速，
+     那次发送自己会 lazy resume，不丢东西。
+   - **满载要给出路**：单条 `create_worker` 与批量 `create_workers` 撞硬上限时，payload 的 `user_report`
+     说明上限、已占用、剩余与「既有 Worker 不受影响」，`suggestions` 给出提高上限 / 复用 Worker /
+     归档释放三件事（两处共用 `hardLimitSuggestions`），协同提示词要求逐字转告，不要只报错误码。
+   实现指针：`orcaWorkerCreationService.ts`、`orcaWorkerResumeScheduler.ts` 的 `request`、
+   `sendToSessionLock.ts` 的 `hasSendToSessionLock`、`packages/lizi-mcps/src/xdt-helper/create_worker.ts`
+   的 `hardLimitUserReport`；回归见 `workerLimitScope.contract.test.ts`、`orcaWorkerResumeScheduler.test.ts`、
+   `createWorkerTool.test.ts`。
+
 4. **worker 状态变更必须广播给 renderer（状态：不变量）**
    创建 worker、`enableOrca` 创建首个 worker、任意真实 worker turn 开始后的 running、idle、archive、terminal done/error 都必须广播 `ORCA_WORKER_CHANGED`。worker DB `status` 跟随真实 turn 生命周期：Lead 派活或用户直接对话 worker 时，只有真实 turn 开始才置 `running`，**产品** terminal 才置 `done/error`（auto-resume 仍 pending/deferred 的 vendor 终态不是产品终态，见消息派发与 auto-bridge 5a）；`switch_focus` / resume / restore 只能恢复可访问性，不能凭空置 `running`。实现指针：`orcaLifecycleService.ts` 的 `createWorker` / `enableTeam`、`orcaWorkerCreationService.ts` 的 `createWorkerInTeam`、`orcaTeamService.ts` 的 `dispatchWorkerTask` / `handleWorkerTurnStarted` / `handleWorkerTerminalTurn`、`register.ts` 的 status event adapter、`useWorkers.ts` 的 `useWorkers`。
 

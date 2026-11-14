@@ -47,7 +47,8 @@ it.each(['none', 'ready', 'auto-only', 'ready-auto', 'real', 'real-auto', 'ready
   const bindings = {...deps, asc, gte, PluginTaskError, readPluginTaskPlanReceipt:JSON.parse, readPluginWorkerCompletion:read,
     service:{get:async()=>({})},inputCoordinator:{ensureQueueRestored:async()=>{},isQueueRestored:()=>true,getQueueControlSnapshot:()=>({pendingQueue:[]})},
     getOrcaWorkspaceInfoReadOnly:async()=>({ok:true,workers:[{session_id:'worker',status}]}),
-    maker:{getSession:()=>undefined},createPluginTaskStore:()=>({get:async()=>({payload:'{}'})}),readCollaborationSettings:()=>({workerHardLimit:4})};
+    maker:{getSession:()=>undefined},createPluginTaskStore:()=>({get:async()=>({payload:'{}'})}),readCollaborationSettings:()=>({workerHardLimit:4}),
+    workerCapacitySnapshot:(limit:{workerHardLimit:number})=>({...limit,occupiedSlots:0,remainingSlots:limit.workerHardLimit})};
   const getTeam = new Function(...Object.keys(bindings),ts.transpileModule(`return async function(pluginId,request){switch(request.kind){${branch}}}`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(...Object.values(bindings));
   const view = await getTeam('plugin',{kind:'getTeam',taskId:'lead'});
   expect(view.workers[0]).toMatchObject({status:completed?'done':'idle',completedAt:completed?200:null,lastTurnEndedAt:200});

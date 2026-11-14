@@ -209,6 +209,13 @@ describe('create_worker tool', () => {
         limit: { hard_limit: 3, occupied_slots: 3, remaining_slots: 0 },
       },
     });
+
+    // 满载只是不能新建：面向用户的句子要说清剩余额度、既有 Worker 照常可用、下一步怎么做。
+    const data = (parse(result) as { data: { user_report: string; suggestions: string[] } }).data;
+    expect(data.user_report).toContain('上限 3');
+    expect(data.user_report).toContain('剩余 0');
+    expect(data.user_report).toContain('既有 Worker 不受影响');
+    expect(data.suggestions).toContain('复用已有 Worker，通过 send_to_worker 继续派发任务。');
   });
 
   it('rejects non-slug labels at schema boundary before calling host', async () => {
