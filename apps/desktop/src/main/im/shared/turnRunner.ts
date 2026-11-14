@@ -3374,7 +3374,8 @@ export function createTurnRunner(
             // silenced run must still report it.
             void finalizeTranspond(
               state,
-              reason === 'exhausted' ? terminalErrorText({ reason: 'silent-stop-exhausted' }) : null,
+              reason === 'exhausted' || reason === 'send-failed'
+                ? terminalErrorText({ reason: 'silent-stop-exhausted' }) : null,
             );
           });
           return;

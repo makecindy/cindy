@@ -1986,6 +1986,67 @@ describe('pi translator', () => {
     disposePiTranslateContext(ctx);
   });
 
+  // #10479: a successful tool is progress, not proof that an empty answer was
+  // intentional. Only an acknowledged, explicit completion closes silent work.
+  // Unit tier; existing empty-after-tools tests above protect the opposite branch.
+  it.each([
+    'completed', 'notification-only', 'wrong-server', 'failed-tool', 'pending-tool',
+    'unpaired-result', 'malformed-receipt', 'missing-receipt', 'later-tool', 'steered',
+    'provider-error', 'output-limit', 'cancelled', 'missing-final-message',
+  ] as const)('classifies scheduled silent completion evidence: %s', (scenario) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const emit = (frame: Record<string, unknown>) => translatePiEvent(ev(frame), queue, ctx);
+    emit({ type: 'agent_start' });
+    emit({ type: 'tool_execution_start', toolCallId: 'check', toolName: 'read', args: {} });
+    if (scenario !== 'pending-tool') {
+      emit({ type: 'tool_execution_end', toolCallId: 'check', toolName: 'read',
+        isError: scenario === 'failed-tool', result: { content: [{ type: 'text', text: 'checked' }] } });
+    }
+    if (scenario === 'unpaired-result') {
+      emit({ type: 'tool_execution_end', toolCallId: 'unknown', toolName: 'read', isError: false });
+    }
+    emit({ type: 'tool_execution_start', toolCallId: 'finish', toolName: 'cindy_mcp_call_tool',
+      args: { server: scenario === 'wrong-server' ? 'external' : 'cindy_scheduler', tool: 'call_tool',
+        args: { name: 'schedule_silence_current_run',
+          args: scenario === 'notification-only' ? {} : { completed: true } } } });
+    if (scenario !== 'missing-receipt') {
+      emit({ type: 'tool_execution_end', toolCallId: 'finish', toolName: 'cindy_mcp_call_tool', isError: false,
+        result: { content: [{ type: 'text', text: scenario === 'malformed-receipt' ? 'unknown'
+          : JSON.stringify({ ok: true, data: { runId: 'run-1', silenced: true, completed: true } }) }] } });
+    }
+    if (scenario === 'later-tool') {
+      emit({ type: 'tool_execution_start', toolCallId: 'later', toolName: 'read', args: {} });
+      emit({ type: 'tool_execution_end', toolCallId: 'later', toolName: 'read', isError: false });
+    }
+    if (scenario === 'steered') emit({ type: 'message_start', message: { role: 'user', content: 'New question' } });
+    if (scenario !== 'missing-final-message') {
+      emit({ type: 'message_end', message: { role: 'assistant', content: [],
+        stopReason: scenario === 'output-limit' ? 'length' : scenario === 'cancelled' ? 'aborted'
+          : scenario === 'provider-error' ? 'error' : 'stop',
+        ...(scenario === 'provider-error' ? { errorMessage: 'Request failed' } : {}),
+        usage: { input: 20, output: 0 } } });
+    }
+    emit({ type: 'agent_settled' });
+    const done = events.find((event) => event.type === 'done')!;
+    if (['provider-error', 'output-limit', 'cancelled'].includes(scenario)) {
+      expect(done.data).toMatchObject({ status: scenario === 'cancelled' ? 'cancelled' : 'failed' });
+      expect(done.data).not.toHaveProperty('silentStop');
+    } else if (scenario === 'completed') {
+      expect(done.data).toMatchObject({ result: '', status: 'completed', usage: { inputTokens: 20 } });
+      expect(done.data).not.toHaveProperty('silentStop');
+      expect(events.some((event) => event.type === 'error')).toBe(false);
+      events.length = 0;
+      emit({ type: 'agent_start' });
+      emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop' } });
+      emit({ type: 'agent_settled' });
+      expect(events.find((event) => event.type === 'done')?.data).toHaveProperty('silentStop', true);
+    } else {
+      expect(done.data).toMatchObject({ result: '', status: 'completed', silentStop: true });
+    }
+    disposePiTranslateContext(ctx);
+  });
+
   it('resets turn usage counters on the next agent_start', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue } = makeQueue();

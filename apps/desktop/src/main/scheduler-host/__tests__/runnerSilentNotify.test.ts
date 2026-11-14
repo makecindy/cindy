@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   resolveWorkingDir: vi.fn(),
   backfillSessionMeta: vi.fn(),
   ownerCurrent: vi.fn(() => true),
+  onSilentStopSettled: vi.fn(() => () => {}),
 }));
 
 vi.mock('../../device-link/broadcast-tap.js', () => ({
@@ -42,7 +43,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   wireSessionToIpc: mocks.wireSessionToIpc,
   isSessionInTurn: () => false,
   noteSilentStopUserSend: vi.fn(),
-  onSilentStopSettled: vi.fn(() => () => {}),
+  onSilentStopSettled: mocks.onSilentStopSettled,
 }));
 
 vi.mock('../workdir-resolver', () => ({
@@ -55,6 +56,12 @@ vi.mock('../runners/_shared', () => ({
 
 import { MakerScheduleRunner } from '../runner.desktop';
 import { projectQuietScheduledOutput, revealScheduledOutput, hasVisibleScheduledOutput } from '../silent-output.js';
+import { Session as RuntimeSession } from '../../../../../../packages/maker-core/src/session.js';
+import type { AgentSessionHandle } from '../../../../../../packages/maker-core/src/agents/base-agent.js';
+import { createAsyncQueue } from '../../../../../../packages/maker-core/src/agents/shared/async-queue.js';
+import { createPiTranslateContext, disposePiTranslateContext, translatePiEvent } from '../../../../../../packages/maker-core/src/agents/pi/translator.js';
+import { SchedulerToolRegistry } from '../../../../../../packages/lizi-mcps/src/cindy_schedulerToolRegistry.js';
+import { registerScheduleSilenceCurrentRunTool } from '../../../../../../packages/lizi-mcps/src/scheduler/silenceCurrentRun.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -196,6 +203,86 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/repo/project' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
   });
+
+  // #10479, unit: real scheduler tool -> Pi translator -> Session -> runner.
+  // Existing notification tests inject done directly and miss silent-stop recovery.
+  // Minimal failure: a successful check, explicit completed silence and empty stop.
+  it.each(['completed', 'empty', 'dispatch-failed', 'failed-tool', 'cancelled', 'output-limit'] as const)(
+    'keeps Pi session and scheduled-run outcomes consistent: %s', async (scenario) => {
+      const logger = {
+        trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {},
+        child() { return this; },
+      };
+      const queue = createAsyncQueue<AgentEvent>();
+      const ctx = createPiTranslateContext(logger);
+      const send = vi.fn(async () => {});
+      const handle = {
+        id: 'pi-scheduled', agentKind: 'pi', model: 'test-model', send,
+        events: () => queue, setInteractionResolver() {},
+        isTurnRunning: () => ctx.isStreaming,
+        close: async () => { disposePiTranslateContext(ctx); queue.end(); },
+      } as unknown as AgentSessionHandle;
+      const session = new RuntimeSession({ id: 'scheduler-session', agentKind: 'pi',
+        workDir: '/repo/project', handle, capabilities: {} as never, logger, turnStallMs: 0 });
+      const received: AgentEvent[] = [];
+      session.onEvent(event => received.push(event));
+      const { runner, notifier } = createRunnerHarness(session, { silenced: true });
+      const registry = new SchedulerToolRegistry();
+      registerScheduleSilenceCurrentRunTool(registry, {
+        getScheduler: () => ({
+          resolveInflightRunForSession: () => 'run-1', silenceRun: () => true,
+        }) as never,
+      }, () => ({ agentKind: 'pi', workingDir: '/repo/project', sessionId: session.id }));
+      const pending = runner.fire(baseSchedule({ agentKind: 'pi', silentWhenIdle: true }), createFireContext());
+      // Attach rejection handling before emitting a terminal error.
+      const outcome = pending.then(value => ({ value, error: null }), error => ({ value: null, error }));
+      try {
+        await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+        const emit = (frame: Parameters<typeof translatePiEvent>[0]) => translatePiEvent(frame, queue, ctx);
+        emit({ type: 'agent_start' });
+        emit({ type: 'tool_execution_start', toolCallId: 'check', toolName: 'read', args: {} });
+        emit({ type: 'tool_execution_end', toolCallId: 'check', toolName: 'read',
+          result: { content: [{ type: 'text', text: 'checkpoint saved' }] }, isError: scenario === 'failed-tool' });
+        const completed = scenario !== 'empty' && scenario !== 'dispatch-failed';
+        const args = completed ? { completed: true } : {};
+        emit({ type: 'tool_execution_start', toolCallId: 'finish', toolName: 'cindy_mcp_call_tool',
+          args: { server: 'cindy_scheduler', tool: 'call_tool',
+            args: { name: 'schedule_silence_current_run', args } } });
+        const receipt = await registry.call('schedule_silence_current_run', args);
+        emit({ type: 'tool_execution_end', toolCallId: 'finish', toolName: 'cindy_mcp_call_tool',
+          result: receipt, isError: false });
+        emit({ type: 'message_end', message: { role: 'assistant', content: [],
+          stopReason: scenario === 'cancelled' ? 'aborted' : scenario === 'output-limit' ? 'length' : 'stop',
+          usage: { input: 20, output: 0 } } });
+        emit({ type: 'agent_settled' });
+        await vi.waitFor(() => expect(received.some(event => event.type === 'done')).toBe(true));
+        if (['empty', 'dispatch-failed', 'failed-tool'].includes(scenario)) {
+          await vi.waitFor(() => expect(mocks.onSilentStopSettled).toHaveBeenCalledOnce());
+          const settle = mocks.onSilentStopSettled.mock.calls[0] as unknown as [
+            string, (sessionId: string, reason: string) => void,
+          ];
+          settle[1](session.id, scenario === 'dispatch-failed' ? 'send-failed' : 'exhausted');
+        }
+        const result = await outcome;
+        expect(session.isTurnRunning()).toBe(false);
+        expect(send).toHaveBeenCalledOnce();
+        if (scenario === 'completed') {
+          expect(result.error).toBeNull();
+          expect(result.value).toMatchObject({ sessionId: session.id });
+          expect(notifier.notify).not.toHaveBeenCalled();
+          expect(mocks.onSilentStopSettled).not.toHaveBeenCalled();
+          expect(received.find(event => event.type === 'done')?.data).not.toHaveProperty('silentStop');
+        } else {
+          expect(result.error).toBeInstanceOf(Error);
+          expect(notifier.notify).toHaveBeenCalledWith(expect.anything(),
+            expect.objectContaining({ status: 'failed', sessionId: session.id }));
+          if (scenario === 'dispatch-failed') expect(result.error.message).toContain('dispatch failed');
+        }
+      } finally {
+        await session.close();
+      }
+    },
+  );
 
   it.each([true, false])('adds the checkpoint guidance only to recurring teammate work (%s)', async (recurring) => {
     const h = createSessionHarness(acceptingSend());

@@ -1027,6 +1027,26 @@ describe('schedule_silence_current_run — runId resolution branches', () => {
     expect(fake.silencedArg).toBe('run-fallback');
   });
 
+  // #10479, unit: explicit completion is acknowledged only by the current
+  // session's live run; ordinary notification silence must not acquire it.
+  it.each([undefined, false, true])('acknowledges explicit completion only when requested (%s)', async (completed) => {
+    const { registry } = setup({ sessionId: 'sess-1', inflightRunForSession: 'run-owned' });
+    const env = await callSilence(registry, completed === undefined ? {} : { completed });
+    expect(env.ok).toBe(true);
+    expect(env.data).toEqual({ silenced: true, runId: 'run-owned',
+      ...(completed === true ? { completed: true } : {}) });
+  });
+
+  it.each([
+    { sessionId: 'sess-1', inflightRunForSession: undefined },
+    { sessionId: undefined, inflightRunForSession: undefined },
+  ])('does not acknowledge completion without an owned live run: %j', async (opts) => {
+    const { registry, fake } = setup(opts);
+    const env = await callSilence(registry, { runId: 'run-other', completed: true });
+    expect(env).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    expect(fake.silencedArg).toBeUndefined();
+  });
+
   it('sessionId 未知 + 未传 runId → NOT_FOUND', async () => {
     const { registry } = setup({ sessionId: undefined });
     const env = await callSilence(registry, {});

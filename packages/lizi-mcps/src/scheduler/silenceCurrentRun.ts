@@ -17,6 +17,8 @@
  *  - 仅对 success 终态生效;run 失败/被中止时标记被忽略,通知照发(fail-safe)
  *  - 标记只存内存,进程重启丢失 → 通知照发,安全方向正确
  *  - 解析不到 in-flight run(轮已结束/会话无进行中的 run)时返回 ok:false NOT_FOUND
+ *  - completed:true 另确认已完成且无需最终正文；只有已识别的调用任务可获该回执。
+ *    Pi 按工具调用/结果配对消费，不将普通静默通知或任意成功工具当作完成证明。
  */
 
 import { z } from 'zod';
@@ -43,17 +45,23 @@ export function registerScheduleSilenceCurrentRunTool(
         .describe(
           '可选,通常不传。仅当工具无法从会话上下文识别本轮 run 时,才回退使用此显式 runId。',
         ),
+      completed: z.boolean().optional().describe(
+        '仅在本轮工作已经全部完成、无需报告且打算不输出最终文字时设为 true。Pi 用成功回执区分主动静默完成与模型空响应；省略或 false 仍只关闭通知。不要用它掩盖失败、未完成或仍在运行的工作。',
+      ),
     },
-    handler: async ({ runId }) =>
+    handler: async ({ runId, completed }) =>
       withScheduler(deps, async (scheduler) => {
         const { sessionId, runIds } = resolveSchedulerRunIdCandidates(
           scheduler,
           getSessionContext?.(),
           runId,
         );
+        if (completed === true && !sessionId) {
+          throw new Error('current session not found — silent completion requires this session’s in-flight run');
+        }
         for (const targetRunId of runIds) {
           if (scheduler.silenceRun(targetRunId)) {
-            return { silenced: true, runId: targetRunId };
+            return { silenced: true, runId: targetRunId, ...(completed === true ? { completed: true } : {}) };
           }
         }
         if (sessionId) {

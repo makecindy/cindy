@@ -860,15 +860,17 @@ describe('turnRunner 渠道任务后台结果回传', () => {
       await vi.waitFor(() => expect(delivered()).toHaveLength(2));
       expect(delivered()[1]).toContain(slackUi.agent.runtimeError('failed'));
 
-      // Exhausted silent-stop auto-resume is a failure too, even though it settles without an error event.
-      let settle!: (sessionId: string, reason: string) => void;
-      mocks.onSilentStopSettled.mockImplementationOnce((_id, cb) => { settle = cb as typeof settle; return vi.fn(); });
-      silencedRuns.add('exhausted');
-      h.emit({ type: 'text', data: { text: '半截', isFinal: true }, turnOrigin: origin('exhausted') });
-      h.emit({ type: 'done', data: { silentStop: true }, turnOrigin: origin('exhausted') });
-      settle(h.session.id, 'exhausted');
-      await vi.waitFor(() => expect(delivered()).toHaveLength(3));
-      expect(delivered()[2]).toContain(slackUi.agent.runtimeError('模型连续多次返回空响应，自动续跑已暂停。'));
+      // #10479: exhausted budgets and failed dispatch both remain visible failures.
+      for (const [index, reason] of ['exhausted', 'send-failed'].entries()) {
+        let settle!: (sessionId: string, reason: string) => void;
+        mocks.onSilentStopSettled.mockImplementationOnce((_id, cb) => { settle = cb as typeof settle; return vi.fn(); });
+        silencedRuns.add(reason);
+        h.emit({ type: 'text', data: { text: '半截', isFinal: true }, turnOrigin: origin(reason) });
+        h.emit({ type: 'done', data: { silentStop: true }, turnOrigin: origin(reason) });
+        settle(h.session.id, reason);
+        await vi.waitFor(() => expect(delivered()).toHaveLength(3 + index));
+        expect(delivered()[2 + index]).toContain(slackUi.agent.runtimeError('模型连续多次返回空响应，自动续跑已暂停。'));
+      }
     } finally {
       setSilencedRunProbe(null);
       await runner.disposeAllSessions();

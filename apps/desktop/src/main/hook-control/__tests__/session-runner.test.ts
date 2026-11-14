@@ -4320,6 +4320,21 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     );
   });
 
+  // #10479, unit: a rejected silent-stop continuation is not completed work.
+  it.each(['exhausted', 'send-failed'])('fails the hook observer when silent-stop recovery ends: %s', async (reason) => {
+    const session = makeManualSession('sess-silent-recovery');
+    let settle!: (sessionId: string, reason: string) => void;
+    const observer = observeHookTurn(session as never, {
+      onSilentStopSettled: (_id, cb) => { settle = cb; return () => {}; },
+      log,
+    });
+    h.eventCbs.get('sess-silent-recovery')!({ type: 'done', data: { silentStop: true } });
+    const failed = expect(observer.finished).rejects.toThrow('silent-stop auto-resume exhausted');
+    settle('sess-silent-recovery', reason);
+    await failed;
+    expect(h.eventCbs.has('sess-silent-recovery')).toBe(false);
+  });
+
   it('交互边界会把交互前短旁白折叠，不与交互后的最终答复连成一段', async () => {
     const session = makeManualSession('sess-interaction-boundary');
     const observer = observeHookTurn(session as never, {

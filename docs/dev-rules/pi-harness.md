@@ -474,6 +474,20 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   Pi 二进制、版本或原生重试上限；原生分类兼容需由 Pi 上游独立修正。
 - SDK 成功与正文入库／交付分开取证。只见 JSONL 成功但 SQLite 缺正文时，不能自动重跑
   已成功的工作；应沿 RPC → translator → Session → persistence 查丢失边界。
+- **自动化主动静默与空响应分开**（#10479）：`silentWhenIdle` 和普通
+  `schedule_silence_current_run` 仍只是通知策略，不证明工作完成，也不豁免空响应。
+  Pi 的静默自动化只有在工作已全部成功完成后，显式调用
+  `schedule_silence_current_run({ completed: true })`，并收到绑定当前任务进行中 run 的
+  成功回执，才可在后续正常 `stop` 时不输出最终正文。每轮输入末尾说明此约定，
+  不修改 system prompt、保存的用户指令或 Pi 原生行为。
+  translator 按准确工具调用 ID 配对回执；失败／未配对／未完成工具、后续工具或新用户输入、
+  provider 错误、取消、输出上限和下一轮均不能沿用该完成证据。没有证据的工具后空响应
+  继续走原有有界续跑，不重放用户输入或工具副作用。
+  保护耗尽和派发失败仍为失败；持久错误保留兼容的 `silent-stop-exhausted` reason，
+  另以 `silentStopFailureCause` 区分 `budget`、`rate-limit`、`session-breaker`、
+  `dispatch-failed`。派发失败按 `send-failed` 结算，调度／IM／hook 不得记为成功。
+  回归见 `pi-translator.test.ts`、`runnerSilentNotify.test.ts` 与
+  `cindy_schedulerMcpServer.test.ts`。
 
 - 代输入 askpass(2026-10-13):Pi 本机任务的 Agent 进程 env 合入 `runtimeConfig.taskShellEnv`,
   只在 `!remote && !hosted && !reviewMode` 时合入,且按 sessionId 确定(respawn 字节一致)。这只是给
