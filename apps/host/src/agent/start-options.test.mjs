@@ -53,6 +53,27 @@ function setup(t, ownerId, ensureProviderCatalog, refreshModels) {
   return { start, modelContext, policies, warnings };
 }
 
+// The desktop's start hook (maker-host/index.ts onBeforeStart): a local Codex session runs the
+// pending restart of the shared Codex runtime before it joins it, once per start; other engines
+// and remote sessions never do, and a failed restart fails the start as it does there.
+test('only a local Codex start runs the pending Codex runtime restart, once per start', { timeout: TEST_TIMEOUT_MS }, async t => {
+  const { modelContext } = setup(t, 'owner-restart');
+  const restarts = [];
+  let failure = null;
+  const start = createHostStartOptions({ modelContext, logger: { warn() {} },
+    beforeLocalCodexSessionStart: async () => { restarts.push('restart'); if (failure) throw failure; } });
+  await start.onBeforeStart({ agentKind: 'codex' });
+  assert.deepEqual(restarts, ['restart']);
+  await start.onBeforeStart({ agentKind: 'codex' });
+  assert.equal(restarts.length, 2, 'each start runs it once');
+  await start.onBeforeStart({ agentKind: 'codex', remoteHostId: 'remote-1' });
+  await start.onBeforeStart({ agentKind: 'claude-code' });
+  await start.onBeforeStart({ agentKind: 'pi' });
+  assert.equal(restarts.length, 2, 'remote Codex, Claude and Pi starts do not');
+  failure = new Error('restart failed');
+  await assert.rejects(start.onBeforeStart({ agentKind: 'codex' }), /restart failed/);
+});
+
 test('a Codex start freezes its provider, gets the Fast policy and a price-tier reader', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { start, policies } = setup(t, 'start-options-codex');
   const opts = { agentKind: 'codex', providerId: 'openai', model: 'fixture-model', fastMode: true };

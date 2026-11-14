@@ -483,7 +483,6 @@ export function createTurnExecutor(deps) {
       createOpts.planMode = queuedPlan;
       createOpts.workingDir = stored.workingDir || '';
       turn.dbKind = dbKind(createOpts.agentKind);
-      await deps.beforeSessionStart?.(sessionId, createOpts.agentKind);
       check();
       assertHostTaskExecutionSupported(createOpts);
       deps.assertProviderExecutionSupported?.(sessionId, createOpts.providerId);

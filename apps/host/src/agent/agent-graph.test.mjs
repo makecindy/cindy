@@ -148,6 +148,15 @@ test('every engine the Host assembles resolves per-model context the way the des
   // The desktop start hook's Host steps run for every start (start-options.ts, tested there).
   assert.equal(typeof graph.maker.lifecycleHooks?.prepareStartOptions, 'function');
   assert.equal(typeof graph.maker.lifecycleHooks?.onBeforeStart, 'function');
+  // A local Codex start runs the pending gateway restart of the shared Codex runtime (start-options.ts).
+  const flush = graph.gatewayRestart.flushBeforeLocalCodexSessionStart;
+  let flushed = 0;
+  graph.gatewayRestart.flushBeforeLocalCodexSessionStart = async () => { flushed += 1; };
+  try {
+    await graph.maker.lifecycleHooks.onBeforeStart({ agentKind: 'codex' });
+    await graph.maker.lifecycleHooks.onBeforeStart({ agentKind: 'codex', remoteHostId: 'remote-1' });
+    assert.equal(flushed, 1);
+  } finally { graph.gatewayRestart.flushBeforeLocalCodexSessionStart = flush; }
 
   // Model lists derived from the selectable catalog, and the desktop's capability routing.
   const { deriveAvailableModels } = await import('../../../desktop/src/main/maker-host/catalog-to-descriptors.ts');
