@@ -120,6 +120,27 @@ describe('Bot Skill config', () => {
 });
 
 describe('Bot MCP config', () => {
+  it.each([
+    { selected: true, available: true, catalogued: true, allowed: true },
+    { selected: false, available: true, catalogued: true, allowed: false },
+    { selected: true, available: false, catalogued: true, allowed: false },
+    { selected: true, available: true, catalogued: false, allowed: false },
+  ])('honors the selected collaboration capability ($selected, $available, $catalogued)', ({ selected, available, catalogued, allowed }) => {
+    const config = buildCodexBotMcpConfigOverrides({
+      mode: 'allowlist',
+      configured: selected ? ['cindy_orca', 'cindy_group_history'] : [],
+      catalog: [
+        ...(catalogued ? [{ name: 'cindy_orca', source: 'builtin' as const, available }] : []),
+        { name: 'cindy_group_history', source: 'builtin' },
+      ],
+    }, new Set(['cindy_orca', 'cindy_group_history']));
+
+    if (allowed) expect(config).not.toHaveProperty('mcp_servers.cindy_orca.enabled');
+    else expect(config).toHaveProperty('mcp_servers.cindy_orca.enabled', false);
+    // Group history remains restricted even when explicitly selected.
+    expect(config).toHaveProperty('mcp_servers.cindy_group_history.enabled', false);
+  });
+
   it('keeps shared plugin discovery and explicitly selected MCP servers', () => {
     expect(buildCodexBotMcpConfigOverrides({
       mode: 'allowlist',
