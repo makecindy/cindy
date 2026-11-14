@@ -565,3 +565,69 @@ it('sends background PR reads to one remote computer one at a time', async () =>
   expect(pending.map((p) => p.sessionId)).toEqual(['a', 'b', 'c']);
   unmount();
 });
+
+// Unit regression #10537: serialization tests kept every row mounted and one owner.
+// Queue refs and statuses behind one read, then remove consumers or switch identity;
+// the production provider must discard the queued work before invoking the device.
+it.each(['leave', 'owner'])('discards queued remote reads after %s', async (change) => {
+  mocks.dataOwnerId = 'queue-old-owner';
+  const sentOwners: Array<string | null> = [];
+  let finish!: (value: unknown[]) => void;
+  const invoke = vi.fn((_device: string, channel: string, args: unknown[]) => {
+    sentOwners.push(mocks.dataOwnerId);
+    if (channel === 'git-context:pr-refs:list' && args[0] === 'a') {
+      return new Promise<unknown[]>((resolve) => {
+        finish = resolve;
+      });
+    }
+    return Promise.resolve([]);
+  });
+  const ref = {
+    id: 'b-pr',
+    sessionId: 'b',
+    owner: 'a',
+    repo: 'b',
+    prNumber: 1,
+    url: '',
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  };
+  window.electronAPI = {
+    gitContext: { listAllPrRefs: async () => [ref], onPrRefsChanged: () => () => {} },
+    deviceLink: { invoke },
+  } as unknown as typeof window.electronAPI;
+  function Rows() {
+    const { registerPrConsumer } = usePrActions();
+    useEffect(() => {
+      const offA = registerPrConsumer('a', 'home');
+      const offB = registerPrConsumer('b', 'home');
+      return () => {
+        offA();
+        offB();
+      };
+    }, [registerPrConsumer]);
+    return null;
+  }
+  const view = render(
+    <PrRefsProvider>
+      <Rows />
+    </PrRefsProvider>,
+  );
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledTimes(1);
+  if (change === 'leave') view.rerender(<PrRefsProvider />);
+  else {
+    mocks.dataOwnerId = 'queue-new-owner';
+    view.rerender(
+      <PrRefsProvider>
+        <Rows />
+      </PrRefsProvider>,
+    );
+  }
+  await act(async () => finish([]));
+  // New-owner work may run, but the old queued refs + statuses must never send.
+  expect(sentOwners.filter((owner) => owner === 'queue-old-owner')).toHaveLength(1);
+  expect(invoke).toHaveBeenCalledTimes(change === 'leave' ? 1 : 2);
+  if (change === 'owner') expect(invoke.mock.calls[1][1]).toBe('git-context:pr-status');
+  view.unmount();
+});

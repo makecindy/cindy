@@ -5528,6 +5528,11 @@ describe('DeviceLinkClient', () => {
       linkGeneration: oldGeneration,
     });
     expect(h.client.isLinkReady('dev-b')).toBe(true);
+    // Unit regression #10537: link readiness alone missed the new offline gate.
+    // A late old-generation error must still allow the next public invoke to send.
+    const beforeInvoke = h.current().sent.length;
+    const nextInvoke = h.client.invoke('dev-b', { channel: 'maker:get-capabilities', args: [] }).catch(e => e);
+    expect(h.current().sent.slice(beforeInvoke).some(env => env.kind === 'invoke')).toBe(true);
 
     h.current().push({
       v: PROTOCOL_VERSION,
@@ -5547,6 +5552,7 @@ describe('DeviceLinkClient', () => {
     });
     expect(h.client.isLinkReady('dev-b')).toBe(false);
     h.client.stop();
+    await nextInvoke;
   });
 
   it('路由账本按 peer 限流且不淘汰仍未决的旧代归属', async () => {

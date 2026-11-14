@@ -304,6 +304,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   const localRefsFetchedAt = useRef(new Map<string, number>());
   const remoteDeviceBySession = useRef(new Map<string, string>());
   // Background PR reads to one remote computer run one at a time (see deviceLane).
+  // Recheck owner and consumers inside each queued callback, including provider subreads.
   const [remoteLanes] = useState(createDeviceLanes);
   // 正在展示 PR 信息的会话(sessionId → {deviceId?, count})。顶栏(打开的会话)
   // 与侧栏行(勾选 pr)都注册到这里;引用计数支持同一会话多处并存。refs 异步
@@ -433,15 +434,19 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         for (let i = 0; i < queries.length; i += MAX_STATUS_BATCH) {
           const batch = queries.slice(i, i + MAX_STATUS_BATCH);
           const part = deviceId
-            ? await remoteLanes.run(deviceId, () =>
-                remotePrStatuses(
+            ? await remoteLanes.run(deviceId, async () => {
+                if (gen !== ownerGenRef.current || !prConsumers.current.has(sessionId)) return;
+                return remotePrStatuses(
                   batch,
                   sessionId,
-                  (channel, args) => window.electronAPI.deviceLink.invoke(deviceId, channel, args),
+                  (channel, args) =>
+                    gen === ownerGenRef.current && prConsumers.current.has(sessionId)
+                      ? window.electronAPI.deviceLink.invoke(deviceId, channel, args)
+                      : Promise.resolve([]),
                   (error) =>
                     log.warn('remote MR statuses fetch failed', redactSensitiveText(String(error))),
-                ),
-              )
+                );
+              })
             : await window.electronAPI.gitContext.getPrStatuses(batch);
           if (!Array.isArray(part)) return;
           results.push(...part);
@@ -495,9 +500,13 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     remoteRefsInFlight.current.set(sessionId, gen);
     void (async () => {
       try {
-        const refs = (await remoteLanes.run(deviceId, () =>
-          window.electronAPI.deviceLink.invoke(deviceId, 'git-context:pr-refs:list', [sessionId]),
-        )) as SessionPrRef[];
+        const refs = (await remoteLanes.run(deviceId, async () => {
+          if (gen !== ownerGenRef.current || !prConsumers.current.has(sessionId)) return;
+          return window.electronAPI.deviceLink.invoke(deviceId, 'git-context:pr-refs:list', [
+            sessionId,
+          ]);
+        })) as SessionPrRef[] | undefined;
+        if (!refs) return;
         // owner 已切换:结果与簿记(时间戳会抑制新 owner 的重查)都不能落。
         if (gen !== ownerGenRef.current) return;
         if (remoteRefsInvalidated.current.has(sessionId)) return;

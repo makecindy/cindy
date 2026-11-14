@@ -1845,7 +1845,9 @@ export class DeviceLinkClient {
 
   private notifyPeerRouteOffline(deviceId: string, linkGeneration: number): void {
     // 关闸放在去重之前：同一代次的重复信号不再通知 host，但仍要维持本地闸门。
-    if (!isScopedPeer(deviceId)) this.peerOfflineGate.markOffline(deviceId);
+    if (!isScopedPeer(deviceId) && linkGeneration === this.getPeerLinkGeneration(deviceId)) {
+      this.peerOfflineGate.markOffline(deviceId);
+    }
     const notified = this.peerOfflineNotifiedGeneration.get(deviceId);
     if (
       notified?.connectionEpoch === this.connEpoch
