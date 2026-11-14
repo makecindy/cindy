@@ -73,6 +73,17 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 
 `mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
 
+`agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`。每组独立确认并记录批准，未知组保留但不授权；新增组视为权限增加。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
+
+可选 `mcpApps.host` 声明具名视图、原生位置、命令、补全与附件处理提供者、普通设置字段和宿主能力，见[插件界面扩展](plugin-host-ui.md)。
+只激活用户已批准的已知声明；未知扩展保留为数据，原页面批准不会自动授予新增宿主能力。
+
+`systemPrompt` 可选，声明包内静态系统提示词片段：
+`[{ "id": "style", "text": "Use the documented terminology.", "order": 100, "scope": "selected-task", "agentKinds": ["cc", "codex", "pi"] }]`。
+安装确认展示完整原文，用户在任务设置中选择后才生效；不进入其它任务或全局提示词。
+顺序、作用范围、引擎支持与大小限制见[静态系统提示词片段](plugin-control-points.md#静态系统提示词片段)。
+该能力尚未发布，开发示例不能作为正式版版本下限的依据。
+
 ### whenToUse:只写发现线索,不写使用规则
 
 在作者契约里,`whenToUse` 是专门给模型做插件发现与判断的唯一字段;
@@ -192,7 +203,7 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
-`browserExtension`、`skill`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
+`browserExtension`、`skill`、`systemPrompt`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
 `library`、`deviceSync`、`sessionContext`、`pick`、`workspace`、`liveScreen`(需同时声明 `node`,见 [§4.22.1](plugin-task-view.md#4221-在手机上查看与操作设备画面livescreen-能力))。不用的字段直接省略。
 `deviceSync` 的声明与调用约定见 [§4.10.2 资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`

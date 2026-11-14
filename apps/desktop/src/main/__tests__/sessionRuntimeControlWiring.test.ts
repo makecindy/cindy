@@ -283,7 +283,7 @@ describe('session runtime control wiring', () => {
     const body = handlerBody(
       bootstrapSource,
       "mainWindow.once('ready-to-show'",
-      'void runComputerUseSmokeIfRequested();',
+      'void runComputerUseSmokeIfRequested(',
     );
     const shown = body.indexOf('showMainWindowAndRestoreFullscreen(');
     const badge = body.indexOf('refreshWindowsAppBadge();');
@@ -303,6 +303,8 @@ describe('session runtime control wiring', () => {
     expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
     // Controllers only offer moving a controlled Orca Lead / local Worker's Agent when this is declared.
     expect(capabilities).toContain('supportsOrcaAgentRelocation: true');
+    // Same for an execution-device Worker whose Lead is on another computer.
+    expect(capabilities).toContain('supportsOrcaRemoteWorkerAgentRelocation: true');
   });
 
   it('authenticates Desktop package-command entry points before minting Main context', () => {
@@ -317,11 +319,8 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('persisted?.autoResume === true');
     expect(registerSource).toContain('persisted?.origin !== undefined');
 
-    const steerDispatch = handlerBody(
-      registerSource,
-      'const steerToAgentAccepted = async (',
-      'registerMakerSessionSendHandler(',
-    );
+    const steerDispatch = readFileSync(resolve(mainRoot, 'maker-ipc/makerSteerTransaction.ts'), 'utf8');
+    expect(registerSource).toContain('const steerToAgentAccepted = createMakerSteerTransaction(');
     expect(steerDispatch).toContain('[MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT]');
     expect(registerSource).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
     expect(registerSource).toContain(
@@ -1798,5 +1797,45 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain(
       'if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||',
     );
+  });
+});
+
+// Guard tier: the scheduled startup owner assertion protects an asynchronous account switch.
+// Start before the automation preference holder: the buggy snapshot lived just
+// above the bootstrap holder assignment, so a block anchored on that assignment
+// would have skipped the exact line the guard is meant to catch.
+const WIRING_START = 'prepareScheduledModelPreferencesHolder = async';
+const WIRING_ANCHOR = 'scheduledSessionBootstrapHolder = createScheduledSessionBootstrap(';
+const WIRING_END = 'let recoverRenamedSessionModelOnSend';
+
+describe('scheduled session bootstrap wiring', () => {
+  function wiringBlock(): string {
+    const start = registerSource.indexOf(WIRING_START);
+    expect(start).toBeGreaterThan(-1);
+    const end = registerSource.indexOf(WIRING_END, start);
+    expect(end).toBeGreaterThan(start);
+    return registerSource.slice(start, end);
+  }
+
+  it('builds the automation bootstrap holder from the per-fire factory', () => {
+    expect(wiringBlock()).toContain(WIRING_ANCHOR);
+  });
+
+  it('forwards the owner assertion into the startup funnel', () => {
+    // Losing this forwarder would silently downgrade the guard to the single
+    // entry check, so an account switch inside the funnel could create the task
+    // under the new owner instead of aborting.
+    expect(wiringBlock()).toContain(
+      'bootstrapSession(options as MakerSessionCreateOpts, assertAccess)',
+    );
+  });
+
+  it('never snapshots the data owner for automations at registration time', () => {
+    // A snapshot evaluated once while the handlers register is the bug: the app
+    // session commit that restores the account can land later, so it stays stale
+    // and every automation fails until the app restarts. Assert on the wiring
+    // block, not on a variable name: any `const`/`let` shape that captures the
+    // scope here reintroduces the same failure.
+    expect(wiringBlock()).not.toContain('captureDataOwnerBroadcastScope');
   });
 });

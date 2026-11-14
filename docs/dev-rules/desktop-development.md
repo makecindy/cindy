@@ -17,8 +17,8 @@ Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），�
 
 只为检查界面改动（样式、布局、文案、深浅色、多语言）时不必启动 Desktop，先用下文
 「单页 UI 快速验证」；需要真实 IPC、登录、数据库或跨设备行为时再按本节启动。
-需要完整主界面但不想登录或碰真实数据时，加 `--mock` 用免登录的模拟数据启动，见
-[UI 模拟数据](ui-mock-data.md)。
+需要完整主界面但不想登录 Cindy 账号或碰正式数据时，加 `--mock` 用免登录的模拟数据启动，见
+[UI 模拟数据](ui-mock-data.md)。它不阻止真实模型调用：下面说的命令行登录沿用同样适用于模拟沙箱。
 
 Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域。restart
 命令默认使用固定的 `dev` 命名隔离沙箱（等价于自动附加 `--isolated=dev`），
@@ -100,6 +100,11 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 不要为只替换设备互联服务而启动完整 `local` 模式：它会把两个账号区域固定到同一套
 本机服务，不能承载真实双区企业 SSO。
 
+只调试本机 Webhook/GitHub App 时，使用相同的 remote 隔离启动方式，并设置 `XDT_WEBHOOK_GLOBAL_LOCAL_URL=http://127.0.0.1:8793`（中国大陆账号用 `XDT_WEBHOOK_CN_LOCAL_URL`）。只替换本区 Webhook API，保留真实认证；只接受带端口的回环地址，正式版忽略此覆盖。
+
+个人版与普通开发版默认使用端点清单，`CINDY_PERSONAL_FIXED_APP` 不改变 Webhook 地址。内部 GitHub App 测试必须显式设置上述本区开发覆盖；它会替换该隔离实例的整个 Webhook 服务，不能将仅开放 `/github/*` 的临时代理当作普通 Webhook 的公网接收入口。正式包始终忽略开发覆盖。
+
+
 两个 restart 命令都支持下列参数。不加任何模式旗标时默认走固定的 `--isolated=dev`
 命名沙箱；要回到旧的共库行为必须显式加 `--shared`。这些参数只对 dev 生效，不影响
 用户机器上的正式版。
@@ -126,6 +131,7 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
   把正式版踢下线（2026-08-16）。
 - `--mock`：免登录的 UI 模拟数据。未指定沙箱时使用独立的 `--isolated=ui-mock`，首次启动直接
   进入「未登录」模式并写入两端共用的模拟任务；不能与 `--shared`、`--preserve-running` 组合。
+  它只换界面数据，不关模型：本机命令行登录照样沿用，发送消息或伙伴运行会调用真实模型。
   细节见 [UI 模拟数据](ui-mock-data.md)。
 - `--passive`：定时任务被动模式，本实例不自动触发 schedule。多开导致定时任务重复、
   需要让位给 primary 时用。它可以和 `--isolated` 组合（隔离沙箱只看 UI、不跑定时任务
@@ -222,6 +228,31 @@ Windows）。把默认处理程序设为 stock `Electron.app` 后，冷启动它
 - 浏览器点击、冷启动和运行中唤起须用 packaged macOS / Windows 验证。运行 dev 时直接
   点击系统链接仍交给原有安装版，不能把它当作当前 checkout 的验收。
 
+Windows 提权实例的深链交接使用 `windowsDeepLinkHandoff.ts` 和同包 Windows shell
+原生模块（历史产物名仍为 `cindy-windows-taskbar.node`）。普通实例保留 Electron 单实例
+入口；普通权限的第二进程向提权实例补交同一次启动的链接，接收端按启动 ID 去重，并复用
+原有深链解析、登录前保留和窗口聚焦。退出的第二进程不再执行冷启动 argv。
+管道按当前 Windows 用户、登录会话与单实例锁域隔离，拒绝远程客户端；双方验证对端的账号、
+登录会话与可执行文件。监听端启动时检查自身提权；发送端从同一已连接管道的显式 owner 核对账号，
+并结合内核提供的进程身份，不读取 Electron 限制访问的高权限进程令牌。消息最多 32 KiB、各次 IO 有超时，邀请和密钥不落盘或进日志。
+不关闭沙箱，不开放命令行、任意文件或进程执行入口。只有打包版启用这条补偿路径。
+
+交接模块只负责传输与同次启动去重；链接解析、登录前保留和导航继续由 `deepLink.ts` 统一处理，
+业务和浏览器不另建交接或恢复流程。主实例冷启动取得 Electron 锁到同步建立管道之间仍有
+极短窗口，此时到达的第二次启动不保证补交；按 [Review 边界](../../REVIEW.md#4-重点看机器查不到的部分)
+登记这一限制，不为它给普通成功路径增加等待或重放机制。
+
+原生集成验证可在 Windows 提权开发终端运行：先用 Cargo 构建
+`apps/desktop/native/windows-taskbar/Cargo.toml`，再运行
+`node apps/desktop/scripts/check-windows-deep-link-handoff.mjs --addon=<产物 DLL 或 node 文件>`，
+再加 `--electron` 跑真实 Electron 进程矩阵（其高权限 token 查询限制不能由 Node 矩阵代替）。
+管道 owner 的拒绝边界在同一提权终端运行
+`cargo test --manifest-path apps/desktop/native/windows-taskbar/Cargo.toml -- --include-ignored`；
+该 integration 用例用可连接但 owner 不匹配的真实管道，验证发送前拒绝。
+脚本用独立权限夹具构造普通发送端与提权接收端，通过生产交接代码检查交接、
+去重和锁域隔离；不修改安装版、正式 profile 或系统协议关联。它不代替打包版从浏览器点击
+共享邀请、OAuth 返回，以及最小化/托盘状态下前台唤起的验收。
+
 已被旧开发版覆盖关联时，先正常关闭那份旧 dev。保存正式版中的工作后，从安装位置
 （macOS 通常为 `/Applications/Cindy.app`，按实际区域/版本选择）正常退出并重新启动
 对应的打包版，再重试链接；打包版启动会重新注册其协议。仅切换到已经运行的窗口不会
@@ -277,6 +308,49 @@ Codex / Pi 进程数起落，持续上涨说明有客户端退出后会话没被
 「最近一帧应用代码」和「分配帧」两种口径列出仍存活的采样内存。对比前后几份摘要，持续
 变大的那几行就是泄漏点。不要在用户正在用的 GB 级主进程上拍完整堆快照：会冻结一两分钟
 并额外占用同等内存。正式版不读这个开关。
+
+## macOS 菜单栏位置保存
+
+菜单栏 helper 的 `NSStatusItem.autosaveName` 只标识条目；AppKit 还需要稳定的应用偏好域。
+`native/menubar/Info.plist` 在编译时嵌入 Mach-O 的 `__TEXT/__info_plist`，正式构建使用
+当前区域 appId 的 `.menubar` 子标识，随后沿用 tools 目录的签名流程。开发构建再附加
+userData 路径的摘要，使同一沙箱跨重启保持身份、不同沙箱与正式版互不覆盖位置；编译缓存
+同时包含 Swift 源码和最终 plist。偏好由 AppKit 管理，不自行写入或迁移系统位置键。
+
+验收需真实 ⌘ 拖动图标，保持分辨率不变并重启客户端，核对其相对位置、折叠后的可见性
+和菜单点击。仅看到 `autosaveName`、构建成功或偏好键存在不能证明恢复成功。嵌入 plist
+不是把 helper 改成 `.app` bundle，也不据此声称完成第三方菜单栏工具的所有身份兼容。
+
+## Computer Use 的窗口与桌面目标
+
+普通控件继续使用 `get_window_state` 和窗口内元素／坐标。macOS 菜单栏、状态栏图标不属于
+设置窗口：不能删除 `window_id` 或关闭驱动的窗口归属检查来让窗口 token 越界操作。
+经用户允许占用前台键鼠后，先通过 `cindy_computer.get_desktop_state` 取得桌面截图，再以
+`click`／`drag` 的 `target: { kind: "desktop", display_id: "primary" }`、该截图的
+`capture_id` 和 `delivery_mode: "foreground"` 操作。坐标来自这次截图，不混用窗口截图、
+AX token 或 zoom；操作后重新截图核实。窗口失败不会自动转成桌面输入。
+
+桌面输入沿用 Computer Use 总开关、任务归属、输入队列和用户操作保护；旧驱动未声明
+桌面目标时明确返回不兼容，不降级为窗口输入。CUA 0.47 的 drag 不接收 capture_id，
+由 Cindy 在输入队列内验证最新、未使用的截图后，转换为同一驱动任务的桌面拖动；click 保留驱动凭据。新任务、用户输入、其他任务的
+操作或失败的桌面读取之后，都需要新的桌面观察。新字段只用于本机 CUA 调用，无新增
+device-link 帧、IPC 或服务端接口。
+
+桌面截图记录读取开始时间，并在输入排队前、取得队列及派发前核对系统 HID 空闲时钟。
+截图后出现输入，即使用户已停顿超过忙碌保护窗口，旧截图仍失效；读取期间的输入同样失效。
+系统空闲时钟只有整秒精度，输入时间与截图重叠或无法读取时要求重新观察，不使用上次 Agent
+输入的归因宽限期放行。连续桌面操作应在上一动作的输入落定后重新截图。
+
+未指定 `screenshot_out_file` 的桌面截图属于当前读取的私有临时目录：下一次桌面读取、
+失败／取消或任务结束时清理；并发的旧读取在返回后清理自己的文件，不影响新截图。
+显式指定的输出路径由调用方保留，不参与宿主自动清理。这里不扫描或删除旧版本遗留的
+共享临时目录，也不承诺进程被强杀后的回收；需要长期留存的截图应显式保存或导入附件。
+
+原生接入回归可用 `CINDY_CUA_SMOKE=desktop-pointer pnpm restart:desktop:remote -- --mock --region=global --isolated=cua-desktop-test`。
+它通过真实 Cindy MCP → host → CUA 在自己的临时窗口点击计数按钮，验证旧截图拒绝和
+新截图精确点击、桌面滑块拖动、临时截图替换和任务结束清理，并确认显式导出保留；
+结果写入该隔离沙箱的 `computer-use-smoke.json`，测试窗口、截图及驱动
+任务会自动收尾。开发客户端仍需按本任务的进程归属关闭。这是接入测试，不替代实际产品场景验收。
 
 ## 分层验证
 
@@ -484,7 +558,7 @@ node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
 
 展开／收起时 `sidebarPresentation` 暂时固定内容区旧宽度并保留旧侧栏状态；主进程
 回传实际增量后，等待 renderer 观察到对应 viewport 宽度，再在同一帧释放旧宽并切换
-侧栏。原生窗口有尺寸变化时不叠加侧栏的 250ms 宽度动画，避免聊天消息先压缩或
+侧栏。原生窗口有尺寸变化时不叠加侧栏的宽度动画，避免聊天消息先压缩或
 拉宽再恢复；无可用空间时保留窗口内动画。快速反向操作丢弃迟到回包。
 
 侧栏开关归聊天区所有，点击展开、再次点击收起；展开后仍留在聊天区原来的角上

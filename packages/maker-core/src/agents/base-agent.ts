@@ -618,7 +618,7 @@ export function projectPiManagedCommandFailure(value: unknown): import('./pi/man
     phase: data.phase as import('./pi/managed-command.js').PiManagedCommandFailure['phase'],
     packagesUpdated: data.packagesUpdated,
     recovery: data.recovery as import('./pi/managed-command.js').PiManagedCommandFailure['recovery'],
-    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish'].includes(data.hostStage)
+    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish', 'unsupported'].includes(data.hostStage)
       ? { hostStage: data.hostStage as import('./pi/managed-command.js').PiBinaryUpdateFailureStage } : {}),
   };
 }
@@ -700,9 +700,9 @@ export interface AgentDeps {
   auth: AuthAdapter;
   runtimeConfig: AgentRuntimeConfig;
   /**
-   * Agent CLI 二进制绝对路径。host 在构造 agent 前必须已经把二进制 provisioned 好
-   * (splash 阶段下载/解压); maker-core 自己不下载、不解析 manifest, 拿到就用。
-   * 缺省 / 空串 → BaseAgent 构造期立即抛错, 不让 session 进半就绪状态。
+   * Agent CLI 的绝对路径，由 host 准备，maker-core 不下载或解析 manifest。
+   * 可由 getter 延迟解析，使缺少运行环境时仍能构造本地服务；getter 必须在
+   * 实际使用时返回已准备好的路径或抛错。普通空值仍在构造期拒绝。
    */
   binaryPath: string;
   logger: Logger;
@@ -807,6 +807,10 @@ export interface AgentDeps {
    * interaction surfaces, so maker-core never hard-codes one UI language.
    */
   getPiExtensionUiStrings?: () => PiExtensionUiStrings;
+  /** Localized recovery hint for a confirmed dataless context-file candidate.
+   * The supplied path is already redacted and escaped for display, not execution.
+   */
+  formatPiStartupCloudFileHint?: (displayPath: string) => string;
 
   /**
    * Pi-only: start a durable Subagent runner through a host-supported Node
@@ -1954,7 +1958,12 @@ export interface LocalAgentClient {
   storageDirectory?: string;
 }
 
+export const TASK_SYSTEM_PROMPT = Symbol('cindy.task-system-prompt');
+export interface HostSessionSkill { name: string; description: string; path: string; filePath: string; pluginRoot: string }
+
 export interface StartSessionOptions {
+  /** Host-owned task instructions, appended after the native fixed prompt. */
+  readonly [TASK_SYSTEM_PROMPT]?: string;
   [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   [LOCAL_AGENT_CLIENT]?: LocalAgentClient;
   /**
@@ -2069,6 +2078,13 @@ export interface StartSessionOptions {
    */
   botRuntimeProfile?: BotRuntimeProfile;
   /**
+   * Host-owned Skills mounted for this session only, such as Cindy's 「群协作」 Skill for the task of a
+   * group's Cindy. Each is a versioned directory Cindy manages (`path` holds `SKILL.md`, `pluginRoot`
+   * is its Claude Code local plugin). Never written to user or project discovery directories; local,
+   * non-Review sessions only.
+   */
+  hostSkills?: HostSessionSkill[];
+  /**
    * 是否启用 Maker Memory (本次 session 内). 跟 userPrompt 同模式 — renderer 启 session
    * 时透传当前 memoryMode='maker' → true, 'native' / 'off' → false。main 不持久化。
    *
@@ -2098,6 +2114,8 @@ export interface StartSessionOptions {
    * can observe different memory generations.
    */
   makerMemoryIndexSnapshot?: string;
+  /** Project-local Markdown memory on the task's computer; load on demand, never as an index snapshot. */
+  makerMemoryProjectDir?: string;
   /**
    * 设备托管：任务所在电脑在打开任务时按真实工作目录生成的插件花名册段。插件工具经隧道
    * 回到那台电脑，花名册也必须来自那台；Agent 所在电脑不读自己的已装插件。
@@ -2210,7 +2228,29 @@ export interface MainOwnedSendContext {
  */
 export const PI_CACHE_RECOVERY_EXPECTATION = Symbol('pi-cache-recovery-expectation');
 
+/** Host-owned, call-local model request interception. Never accepted from wire options. */
+export { assembleSystemPromptSections, type SystemPromptSection } from './shared/system-prompt-sections.js';
+export const MODEL_REQUEST_CONTROL = Symbol('cindy.model-request-control');
+export interface ModelRequestRoute {
+  model: string;
+  providerId: string;
+  effort?: string;
+  fastMode?: boolean | 'ultrafast';
+}
+export interface ModelRequestInput extends ModelRequestRoute {
+  phase: 'select' | 'payload';
+  request?: Record<string, unknown>;
+  /** Host transport failed before plugin delivery; no partial request is exposed. */
+  failure?: 'request-too-large';
+}
+export type ModelRequestControl = (input: ModelRequestInput) => Promise<{
+  skip?: true;
+  route?: ModelRequestRoute;
+  request?: Record<string, unknown>;
+}>;
+
 export interface SendOptions {
+  readonly [MODEL_REQUEST_CONTROL]?: ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('./pi/cache-compatibility.js').PiCacheCompatibility;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
   readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
@@ -2779,7 +2819,9 @@ export abstract class BaseAgent {
   protected memoryOverride: boolean | undefined;
 
   constructor(protected deps: AgentDeps) {
-    if (!deps.binaryPath) {
+    // Hosts may supply a live getter: local browsing must work before an
+    // optional runtime is installed. The getter validates on actual use.
+    if (!Object.getOwnPropertyDescriptor(deps, 'binaryPath')?.get && !deps.binaryPath) {
       throw new Error(
         `${this.constructor.name}: binaryPath is required at construction (host must provision binary before instantiating agent)`,
       );

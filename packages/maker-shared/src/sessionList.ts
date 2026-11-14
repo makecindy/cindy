@@ -8,7 +8,7 @@ import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeSchedul
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
 import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
-import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from './worktreePaths.js';
+import { collapseWorktreeDirForGrouping, sessionTaskProjectDirectory } from './worktreePaths.js';
 import { normalizeProjectOrderPath } from './projectOrderSync.js';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from './projectAliasSync.js';
 
@@ -52,6 +52,7 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   workspaceKind?: 'project' | 'dialogue' | string | null;
   workingDir: string | null;
   projectDir?: string | null;
+  companion?: { taskProjectDir?: string | null } | null;
   remoteHostId?: string | null;
   deviceLinkDeviceId?: string | null;
   worktreePath?: string | null;
@@ -261,7 +262,7 @@ export function summarizeRemoteSessionOverview(
     if (session.pinnedAt) pinned += 1;
     // 与 buildProjectSections 同一把折叠口径:worktree 会话算进它所属主仓,
     // 否则概览里的项目数会比列表里的项目分区多出来。
-    const projectDir = sessionProjectDirectory(session);
+    const projectDir = sessionTaskProjectDirectory(session);
     if (projectDir) projects.add(normalizeProjectOrderPath(projectDir));
     if ((pendingInteractionIndex.get(session.id) ?? 0) > 0) waiting += 1;
     if (isAutomationSession(session, scheduleIndex)) automation += 1;
@@ -402,7 +403,7 @@ function remoteSessionListHint(statusFilter: RemoteSessionStatusFilter, searchQu
  * `C:\Repo\App` 与 `c:/repo/app` 落成两个分区，概览的 projectCount 也会重复计数。
  */
 function projectGroupKey(session: RemoteSession): string {
-  return normalizeProjectOrderPath(sessionProjectDirectory(session) ?? 'unknown');
+  return normalizeProjectOrderPath(sessionTaskProjectDirectory(session) ?? 'unknown');
 }
 
 function buildProjectSections(
@@ -445,7 +446,7 @@ function buildProjectSections(
     // 标题用组内首条会话的原始目录(只折 worktree),保留用户自己的大小写与分隔符风格。
     // 折叠前先去掉外围空白:分组键按 trim 后的路径归一,若标题仍用原串,
     // ` /repo/app/ ` 这种受支持的输入会让 projectTitle() 只剩一个空格,分区标题变成空白。
-    const displayDir = collapseWorktreeDirForGrouping((sessionProjectDirectory(data[0].session) ?? workingDir).trim());
+    const displayDir = collapseWorktreeDirForGrouping((sessionTaskProjectDirectory(data[0].session) ?? workingDir).trim());
     sections.push({
       key: `project:${workingDir}`,
       title: resolveProjectAliasForSessions(projectMembers.get(workingDir) ?? [], options.projectAliases, options.projectAliasDeviceId)
@@ -837,7 +838,7 @@ function normalizeSearchQuery(value: string | undefined): string {
 }
 
 function isDialogueSession(session: RemoteSession): boolean {
-  return session.workspaceKind === 'dialogue' || !session.workingDir;
+  return !session.companion?.taskProjectDir && (session.workspaceKind === 'dialogue' || !session.workingDir);
 }
 
 function lastActivity(session: RemoteSession): string {
@@ -937,7 +938,7 @@ export function automationGroupKey(item: RemoteSessionListItem): string | null {
   const scheduleInfo = item.scheduleInfo;
   if (scheduleInfo?.scheduleId) return `schedule:${scheduleInfo.scheduleId}`;
   const workspace = item.session.workspaceKind ?? 'project';
-  const dir = sessionProjectDirectory(item.session) ?? '__no_working_dir__';
+  const dir = sessionTaskProjectDirectory(item.session) ?? '__no_working_dir__';
   return `fallback:${workspace}:${dir}:${item.title}`;
 }
 

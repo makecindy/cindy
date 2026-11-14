@@ -156,7 +156,7 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
     botId: string,
   ): Promise<{ store: MakerMemoryStore; owner: BotMemoryOwner }> {
     const owner = await deps.readBot(botId);
-    if (!owner) throwIpcError('NOT_FOUND', 'Teammate not found');
+    if (!owner) throwIpcError('NOT_FOUND', 'Buddy not found');
     try {
       owner.assertCurrent?.();
       const store = await deps.getStore(owner.scopeKey ?? buildBotMemoryScopeKey(botId));
@@ -326,7 +326,8 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
           if (error instanceof MemoryError && error.code === 'not-found') return null;
           throw error;
         });
-        await store.write({ type: type as BotMemoryType, name: name!, title, description, body,
+        // 传完整文件名: 恢复要原样重建旧分片 (可能带 <type>- 前缀), 不能当成新 slug
+        await store.write({ type: type as BotMemoryType, name: filename, title, description, body,
           mode: existing ? 'update' : 'create', preserveBody: exact }).catch(translateStoreError);
         owner.assertCurrent?.();
       });

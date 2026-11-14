@@ -396,6 +396,15 @@ it('serves the executor SDK and importmap without widening CSP', async () => {
   const asset = await request('__cindy/sdk/ext-apps/app.js');
   expect(asset.headers.get('Content-Type')).toContain('text/javascript');
   expect(await asset.text()).toBe(sdk.source);
+  for (const [path, bytes] of [
+    ['__cindy/sdk/cindy/view-state.js', sdk.addons['cindy/view-state'].source],
+    ['__cindy/sdk/cindy/view-state-react.js', sdk.addons['cindy/view-state'].reactSource],
+  ]) {
+    expect(await (await request(path)).text()).toBe(bytes);
+    expect((await request(path + '?invalid=1')).status).toBe(404);
+    expect((await handler(new Request('cindy-mcp-app://' + id + '-view/' + path, { method: 'POST' }))).status).toBe(404);
+    expect((await handler(new Request('cindy-mcp-app://' + legacyId + '-view/' + path))).status).toBe(404);
+  }
   expect((await request('__cindy/sdk/ext-apps/app.js?version=1')).status).toBe(404);
   expect((await handler(new Request('cindy-mcp-app://' + id + '/__cindy/sdk/ext-apps/app.js'))).status).toBe(404);
   unmountRemoteAppDocument(id, 'renderer:1');
@@ -414,4 +423,22 @@ it('prepares each supplied document once for repeated resource requests', async 
   supplyMcpAppDocument({ ...document, html: '<script type="module">import "@modelcontextprotocol/ext-apps"</script>', sdk: hostAppSdkAsset });
   for (let i = 0; i < 2; i++) expect((await handler(new Request('cindy-mcp-app://untrusted-id-view/resource'))).status).toBe(200);
   expect(prepare).toHaveBeenCalledTimes(1);
+});
+
+it('reuses parsed preparation across views while replacing each view URL', async () => {
+  const sdk = await import('@cindy/maker-shared/mcp-app-sdk');
+  const prepare = vi.spyOn(sdk, 'withHostAppSdk');
+  let handler!: (request: Request) => Promise<Response> | Response;
+  vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+  registerMcpAppProtocol();
+  const authoredLiteral = '__CINDY_VIEW_ID__';
+  supplyMcpAppDocument({ ...document, viewId: 'first-view', html: `<p>${authoredLiteral}</p>`, sdk: hostAppSdkAsset });
+  supplyMcpAppDocument({ ...document, viewId: 'second-view', html: `<p>${authoredLiteral}</p>`, sdk: hostAppSdkAsset });
+  expect(prepare).toHaveBeenCalledOnce();
+  const first = await (await handler(new Request('cindy-mcp-app://first-view-view/resource'))).text();
+  const second = await (await handler(new Request('cindy-mcp-app://second-view-view/resource'))).text();
+  expect(first).toContain(authoredLiteral);
+  expect(second).toContain(authoredLiteral);
+  expect(first).toContain('cindy-mcp-app://first-view-view/__cindy/sdk/ext-apps/app.js');
+  expect(second).toContain('cindy-mcp-app://second-view-view/__cindy/sdk/ext-apps/app.js');
 });

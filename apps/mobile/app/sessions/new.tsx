@@ -1,3 +1,4 @@
+import { playHaptic } from '@/platform/haptics';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { useComposerDragOpen } from '@/session/useComposerDragOpen';
 import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
@@ -1286,9 +1287,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     modelSections,
   });
 
-  // 目录就绪后的来源终检(codex review P1):自动默认/恢复在目录加载期信任的来源可能已失效
-  // (provider 被删/断开/模型下架),就绪后必须复核——联合回退整对 (model, providerId)
-  // (其他来源顶替 / 首项 / 留空),不留裸模型回落默认网关(codex review P2)。
+  // 目录就绪后复核草稿：已选来源失效时保留选择，提交要求重选，不能换到同名模型的其他账号。
+  // 未指定来源的默认推荐及 Cindy Auto 的合法来源迁移仍由公共校准逻辑处理。
   // 无变化时返回原引用,不触发额外渲染。
   useEffect(() => {
     if (!deviceProviders.ready) return;
@@ -3177,6 +3177,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         onStateChanged: (next) => {
           // 旧 controller 的取消可晚于新启动完成,只允许本次启动交接 UI 状态。
           if (voiceStartupSeqRef.current !== startupSeq) return;
+          if (next === 'listening') playHaptic('commit');
           setVoiceState(next);
         },
         onError: (message) => {
@@ -3403,7 +3404,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       }}
       disabled={!canCreate}
       hitSlop={10}
-      onPress={() => void create()}
+      onPress={() => { playHaptic('commit'); void create(); }}
       style={({ pressed }) => [
         styles.sendButton,
         !canCreate && styles.sendButtonDisabled,

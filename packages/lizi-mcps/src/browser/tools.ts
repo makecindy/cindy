@@ -6,7 +6,7 @@ import {
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
 import { z } from 'zod';
-import { LOGIN_WALL_FN } from '@cindy/browser-control-runtime/dom-read';
+import { LOGIN_WALL_FN, buildPageTextFnSource, type PageText, type PageTextSpec } from '@cindy/browser-control-runtime/dom-read';
 
 import {
   INLINE_IMAGE_TARGET_BYTES,
@@ -106,6 +106,7 @@ const ACTIONS = [
   'readResult',
   'batch',
   'cdp',
+  'read',
 ] as const;
 
 /**
@@ -115,10 +116,16 @@ const ACTIONS = [
  */
 const BATCH_ACTIONS = new Set([
   'open', 'navigate', 'snapshot', 'screenshot', 'act', 'extract', 'requests', 'responseBody',
-  'tabs', 'focus', 'close', 'dialog', 'console', 'cdp',
+  'tabs', 'focus', 'close', 'dialog', 'console', 'cdp', 'read',
 ]);
 /** Batch steps that act on a tab and so follow the batch's current tab when they name none. */
 const BATCH_TAB_ACTIONS = new Set([...BATCH_ACTIONS].filter((action) => action !== 'open' && action !== 'tabs'));
+/** A `read` that names addresses opens its own tabs; only a `read` without them is about the current tab. */
+const stepUsesCurrentTab = (step: { action: string; url?: unknown; pages?: unknown }): boolean =>
+  BATCH_TAB_ACTIONS.has(step.action) && !(step.action === 'read' && (step.url !== undefined || step.pages !== undefined));
+const READ_MAX_PAGES = 8;
+const READ_DEFAULT_CHARS = 8000;
+const READ_MAX_CHARS = 20_000;
 const BATCH_MAX_STEPS = 12;
 const BATCH_MAX_IMAGES = 3;
 
@@ -294,6 +301,144 @@ async function listSameSiteTabs(
 function readTargetId(result: { data?: unknown }): string | undefined {
   const id = (result.data as { targetId?: unknown } | undefined)?.targetId;
   return typeof id === 'string' && id ? id : undefined;
+}
+
+const PAGE_CONTENT_TIMEOUT_MS = 5000;
+const PAGE_CONTENT_POLL_MS = 250;
+/**
+ * A finished document with at least this much text is taken as is; less has to stop changing first. Measured:
+ * a page that renders from scripts shows its header and footer (a few hundred characters) well before its
+ * content, and a short finished page costs one more probe.
+ */
+const PAGE_CONTENT_ENOUGH_CHARS = 1500;
+/**
+ * In a document that is still loading, text shorter than this is usually a frame around content that has not
+ * arrived (seen: 114 characters of menu on a search page 0.5 s before its results), so it has to hold still
+ * for this many probes, not two. A finished document that short is simply a short page.
+ */
+const PAGE_CONTENT_SPARSE_CHARS = 200;
+const PAGE_CONTENT_SPARSE_PROBES = 4;
+/** How long a finished document may stay without text before it is treated as a page that has none. */
+const PAGE_CONTENT_BLANK_MS = 2000;
+/**
+ * A few words that say the content is still on its way ("Loading assignments…", "Just a moment..."). Such a
+ * page is finished and holds still, so nothing else tells it from a short page; it is given this long to
+ * turn into something else.
+ */
+const PAGE_CONTENT_LOADING_TEXT = /loading|please wait|just a moment|redirecting|加载|載入|请稍|請稍|正在|読み込み|(?:…|\.\.\.)\s*$/i;
+const PAGE_CONTENT_LOADING_MS = 3000;
+/** What a new tab shows before the requested document arrives: finished, empty and not what was asked for. */
+const PAGE_CONTENT_PLACEHOLDER = /^(about|chrome|chrome-search|edge|brave|devtools):/;
+/** A probe fails while a navigation replaces the document; this many in a row is a page that cannot be probed. */
+const PAGE_CONTENT_MAX_PROBE_FAILURES = 6;
+
+type PageTextRead = { state: 'ok'; page: PageText } | { state: 'failed'; message: string } | { state: 'unsupported' };
+
+/**
+ * One read of what a tab shows as text. It goes through the runtime's fixed DOM reader where the backend
+ * has one (no interaction, so none of the waiting that follows a page script there) and is a plain page
+ * script elsewhere. `unsupported` is a backend that can do neither (My browser with an older extension).
+ */
+async function readPageText(
+  runtime: BrowserControlRuntime,
+  profile: string | undefined,
+  targetId: string | undefined,
+  spec: PageTextSpec,
+  timeoutMs?: number,
+): Promise<PageTextRead> {
+  let result: BrowserControlResult;
+  try {
+    result = await runtime.call({
+      action: 'act',
+      profile,
+      targetId,
+      request: { kind: 'evaluate', fn: buildPageTextFnSource(spec), domRead: { kind: 'text', text: spec }, ...(timeoutMs ? { timeoutMs } : {}) },
+    } as BrowserControlRequest);
+  } catch (err) {
+    return { state: 'failed', message: err instanceof Error ? err.message : String(err) };
+  }
+  if (!result.ok) {
+    return result.errorCode === 'BROWSER_RUNTIME_INVALID_REQUEST'
+      ? { state: 'unsupported' }
+      : { state: 'failed', message: result.message ?? 'the page could not be read' };
+  }
+  const data = result.data as { result?: Partial<PageText>; url?: unknown } | undefined;
+  const page = data?.result;
+  if (!page || typeof page.length !== 'number' || typeof page.text !== 'string') {
+    return { state: 'failed', message: 'the page could not be read' };
+  }
+  return { state: 'ok', page: {
+    ok: page.ok !== false,
+    ...(typeof page.error === 'string' ? { error: page.error } : {}),
+    url: typeof page.url === 'string' ? page.url : typeof data?.url === 'string' ? data.url : '',
+    title: typeof page.title === 'string' ? page.title : '',
+    readyState: typeof page.readyState === 'string' ? page.readyState : 'complete',
+    found: page.found !== false,
+    length: page.length,
+    ...(page.capped === true ? { capped: true } : {}),
+    text: page.text,
+  } };
+}
+
+/**
+ * `open` returns as soon as the tab exists and `navigate` as soon as the document loaded, which for a page
+ * that renders from scripts is before it shows anything. A read in the same call then comes back empty and
+ * costs the model another round. Wait, bounded, until the page shows text that has stopped growing.
+ *
+ * After `navigate` the requested document is already there, so any text settles it. A tab that was just
+ * opened still shows its placeholder (the new tab page), whose snapshot is not empty and whose load state
+ * is "complete" while the tab already reports the requested address; only the page itself can tell which
+ * document it is, so the probe asks the page for its own address. Best effort: when the page cannot be
+ * probed, or nothing appears in time, the caller reads what is there.
+ */
+async function waitForPageContent(
+  runtime: BrowserControlRuntime,
+  profile: string | undefined,
+  targetId: string | undefined,
+  opened: boolean,
+): Promise<void> {
+  const deadline = Date.now() + PAGE_CONTENT_TIMEOUT_MS;
+  let previousLength = -1;
+  let sameLength = 0;
+  let blankSince: number | undefined;
+  let loadingSince: number | undefined;
+  let failures = 0;
+  for (;;) {
+    const probedAt = Date.now();
+    // A probe waits for the document it lands in; it must not outlast the whole wait (seen: 6 s on a slow page).
+    const probe = await readPageText(runtime, profile, targetId, { maxChars: PAGE_CONTENT_SPARSE_CHARS }, Math.max(deadline - probedAt, PAGE_CONTENT_POLL_MS));
+    if (probe.state === 'unsupported') return;
+    if (probe.state === 'ok') {
+      failures = 0;
+      const { url, readyState, length } = probe.page;
+      const loading = length > 0 && length < PAGE_CONTENT_SPARSE_CHARS && PAGE_CONTENT_LOADING_TEXT.test(probe.page.text);
+      if (loading && Date.now() - (loadingSince ??= Date.now()) < PAGE_CONTENT_LOADING_MS) {
+        // Still announcing its content: keep looking.
+      } else if (!PAGE_CONTENT_PLACEHOLDER.test(url) && readyState !== 'loading') {
+        if (!opened && length > 0) return;
+        if (length >= PAGE_CONTENT_ENOUGH_CHARS) return;
+        sameLength = length === previousLength ? sameLength + 1 : 1;
+        if (length > 0 && sameLength >= (readyState !== 'complete' && length < PAGE_CONTENT_SPARSE_CHARS ? PAGE_CONTENT_SPARSE_PROBES : 2)) return;
+        if (length === 0 && readyState === 'complete') {
+          blankSince ??= Date.now();
+          if (Date.now() - blankSince >= PAGE_CONTENT_BLANK_MS) return;
+        } else {
+          blankSince = undefined;
+        }
+        previousLength = length;
+      } else {
+        // Not the requested document yet, or it is still arriving: nothing seen so far counts.
+        previousLength = -1;
+        sameLength = 0;
+        blankSince = undefined;
+      }
+    } else if (++failures >= PAGE_CONTENT_MAX_PROBE_FAILURES) {
+      return;
+    }
+    const rest = PAGE_CONTENT_POLL_MS - (Date.now() - probedAt);
+    if (Date.now() + Math.max(rest, 0) >= deadline) return;
+    if (rest > 0) await new Promise<void>((resolve) => setTimeout(resolve, rest));
+  }
 }
 
 /** Some runtime role snapshots ignore maxChars; bound the advertised observation here. */
@@ -631,6 +776,15 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     name: 'browser',
     // Agents of every backend often write extract's fields/from/multiple next to it instead of inside it.
     normalizeArgs: (raw) => {
+      // A wait that names a condition and gives `timeMs` means "until then, at most this long" (seen: 20 s
+      // spent standing still before the condition was looked at). `timeMs` alone stays a fixed pause.
+      const request = raw.request as Record<string, unknown> | undefined;
+      if (raw.action === 'act' && request && typeof request === 'object' && request.kind === 'wait'
+        && request.timeMs !== undefined && request.timeoutMs === undefined
+        && ['text', 'textGone', 'selector', 'url', 'loadState', 'fn'].some((key) => request[key] !== undefined)) {
+        const { timeMs, ...condition } = request;
+        return { ...raw, request: { ...condition, timeoutMs: timeMs } };
+      }
       if (raw.action !== 'extract' || raw.extract !== undefined || raw.fields === undefined) return raw;
       const { fields, from, multiple, ...rest } = raw;
       return { ...rest, extract: { fields, ...(from !== undefined ? { from } : {}), ...(multiple !== undefined ? { multiple } : {}) } };
@@ -639,6 +793,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     description:
       '浏览器自动化统一入口。通过 action 选择 status/start/tabs/navigate/snapshot/screenshot/act 等操作; ' +
       'status 返回实际浏览器模式; setBackend 切换并保存全局浏览器模式(内置 rsb-webview / 外置 external / 用户自己的浏览器 user-browser,即「我的浏览器」)。' +
+      '只要页面上的文字时用 read:{action:"read",url} 或 pages:[…] 打开、等内容出现、返回可见文字后关闭;{action:"read",targetId} 读已打开的页面。' +
       '优先使用 snapshot 返回的 ref 执行 click/type/press,不要猜测 CSS selector。' +
       'act/open/navigate/upload 可带 afterSnapshot:{}，一次返回动作结果和精简快照；可用 selector 限定区域。' +
       '已经确定的连续几步用 action=batch + steps:[…] 一次做完(每步是本工具的一份普通参数,顺序执行,失败即停)。' +
@@ -649,7 +804,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
       intent: z.string().max(120).optional().describe('open/navigate/siteguide: 可选操作意图，用于本地匹配配方；不会自动执行'),
       deferValidation: z.boolean().optional().describe('saveRecipe: 仅明确读取步骤的新流程可存候选，下次真实任务校验；交互和任意脚本须当次验证，不为测试重放写操作'),
       steps: z.array(z.record(z.string(), z.unknown())).min(1).max(BATCH_MAX_STEPS).optional().describe(
-        'action=batch: 按顺序执行的步骤,每步是本工具的一份普通参数(open/navigate/snapshot/screenshot/act/extract/requests/responseBody/tabs/focus/close/dialog/console/cdp)。' +
+        'action=batch: 按顺序执行的步骤,每步是本工具的一份普通参数(open/navigate/snapshot/screenshot/act/extract/read/requests/responseBody/tabs/focus/close/dialog/console/cdp)。' +
           '任一步失败即停,返回已完成各步的结果,后面的不执行;执行中浏览器模式被切换也会停。screenshot 步骤最多 3 个。没写 targetId 的步骤沿用 batch 的 targetId,或本次 batch 里 open/navigate 刚得到的标签页。' +
           '例:[{action:"act",request:{kind:"type",ref:"e12",text:"Ada"}},{action:"act",request:{kind:"click",ref:"e20"},afterSnapshot:{}}]',
       ),
@@ -662,7 +817,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           '也可发白名单内的原始命令(DOM.* / Input.* / Page.getFrameTree / Runtime.callFunctionOn 等)。',
       ),
       resultId: z.string().optional().describe('readResult: 大结果返回的 fullResult.id'),
-      offset: z.number().int().nonnegative().optional().describe('readResult: 原始 JSON 字符偏移'),
+      offset: z.number().int().nonnegative().optional().describe('readResult: 原始 JSON 字符偏移;read: 从正文第几个字符开始(接着上次的 nextOffset 读)'),
       backend: z
         .enum(['external', 'rsb-webview', 'user-browser'])
         .optional()
@@ -681,6 +836,10 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
       node: z.string().optional(),
       targetUrl: z.string().optional(),
       url: z.string().optional().describe('navigate/open/wait 等操作使用的 URL'),
+      pages: z.array(z.string()).min(1).max(READ_MAX_PAGES).optional().describe(
+        'action=read: 要读的几个地址(最多 8 个),同时打开,各自读完即关闭',
+      ),
+      keep: z.boolean().optional().describe('action=read 带 url/pages 时: true 则读完不关标签页,结果里带 targetId,可继续在上面操作'),
       targetId: z.string().optional().describe('tab 引用;优先使用 tabs/open 返回的 suggestedTargetId/tabId/label'),
       label: z.string().optional().describe('tab label'),
       limit: z.number().int().positive().optional(),
@@ -777,7 +936,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     // Named so a batch can run each step through this same path (same checks, hints and bounds).
     // `checkOnly` stops right before anything is dispatched: a batch uses it to ask every step the very
     // question the real call would ask, so the two can never disagree about what is a bad step.
-    handler: async function handle(args, onTarget?: (targetId: string) => void, checkOnly = false): Promise<BrowserToolResult> {
+    // `readFollows` is set by a batch for a step that has more steps after it.
+    handler: async function handle(args, onTarget?: (targetId: string) => void, checkOnly = false, readFollows = false): Promise<BrowserToolResult> {
       try {
         if (args.target === 'user-browser' || args.target === 'external' || args.target === 'rsb-webview') {
           const { target: _browserName, ...rest } = args;
@@ -811,7 +971,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
             });
             if (!checked.ok) return errorResult('batch', `steps[${index}] 参数不合法:${checked.issues.join('; ')}。整批未执行。`);
             const stepArgs = checked.data as typeof args;
-            const needsTab = BATCH_TAB_ACTIONS.has(action) && stepArgs.targetId === undefined && stepArgs.request?.targetId === undefined;
+            const needsTab = stepUsesCurrentTab(stepArgs) && stepArgs.targetId === undefined && stepArgs.request?.targetId === undefined;
             const probe = await handle(needsTab && hasTarget ? { ...stepArgs, targetId: '(batch)' } : stepArgs, undefined, true);
             if (probe.isError) return errorResult('batch', `steps[${index}] ${messageOf(probe)} 整批未执行。`);
             steps.push(stepArgs);
@@ -829,7 +989,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           const done: unknown[] = [];
           const images: BrowserToolContentBlock[] = [];
           let failed = false;
-          for (const step of steps) {
+          for (const [index, step] of steps.entries()) {
             if (syncBackendScope() !== batchScope) {
               done.push({ ok: false, action: 'batch', errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST',
                 message: '浏览器后端在批量执行中途被切换,这一步和后面的都没有执行。先 status 确认当前模式并重新观察页面,不要整批重放。' });
@@ -837,8 +997,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               break;
             }
             const inherits = current !== undefined && step.targetId === undefined && step.request?.targetId === undefined
-              && BATCH_TAB_ACTIONS.has(step.action);
-            const ran = await handle(inherits ? { ...step, targetId: current } : step, (targetId) => { current = targetId; });
+              && stepUsesCurrentTab(step);
+            const ran = await handle(inherits ? { ...step, targetId: current } : step, (targetId) => { current = targetId; }, false, index < steps.length - 1);
             const text = ran.content.find((block): block is { type: 'text'; text: string } => block.type === 'text')?.text;
             let parsed: unknown = text ?? null;
             try { if (text !== undefined) parsed = JSON.parse(text); } catch { /* Keep the raw text. */ }
@@ -1329,7 +1489,123 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           const issue = cdpCommandIssue(args.commands);
           if (issue) return errorResult('cdp', issue);
         }
+        if (args.action === 'read') {
+          if (args.url !== undefined && args.pages !== undefined) return errorResult('read', 'read 的 url 和 pages 只能给一个');
+          const addresses = args.pages ?? (args.url !== undefined ? [args.url] : []);
+          if (!addresses.length && !args.targetId) return errorResult('read', 'read requires url、pages(要读的地址)或 targetId(已打开的标签页)');
+          const bad = addresses.find((address) => !isHttpUrl(address));
+          if (bad !== undefined) return errorResult('read', `url 必须是 http(s);不支持 file:// / chrome:// / data: 等协议(收到 "${bad}")`);
+          if (!addresses.length && (args.keep !== undefined || args.label !== undefined)) return errorResult('read', 'keep / label 只在 read 带 url 或 pages 时有意义');
+          if (args.label !== undefined && addresses.length > 1) return errorResult('read', 'label 只能配一个 url;多个地址用返回的 targetId');
+          // Like extract: a frame would silently read the main document and report success.
+          if (args.frame) return errorResult('read', 'read 暂不支持 frame:它读的是主文档的文字。要看嵌入页面里的内容,先用 snapshot 的 frame 参数。');
+        } else if (args.pages !== undefined || args.keep !== undefined) {
+          return errorResult(args.action, 'pages / keep 仅用于 action=read');
+        }
         if (checkOnly) return { content: [{ type: 'text', text: resultText({ ok: true, action: args.action, checked: true }) }] };
+
+        if (args.action === 'read') {
+          const spec: PageTextSpec = {
+            ...(args.selector ? { selector: args.selector } : {}),
+            offset: args.offset ?? 0,
+            maxChars: Math.max(1, Math.min(args.maxChars || READ_DEFAULT_CHARS, READ_MAX_CHARS)),
+          };
+          const addresses = args.pages ?? (args.url !== undefined ? [args.url] : []);
+          type ReadPage = Record<string, unknown> & { ok: boolean };
+          const readTab = async (targetId: string | undefined, opened: boolean, kept: boolean): Promise<ReadPage> => {
+            await waitForPageContent(runtime, args.profile, targetId, opened);
+            let read = await readPageText(runtime, args.profile, targetId, spec, args.timeoutMs);
+            if (read.state === 'unsupported') {
+              // No page scripts on this backend: its declarative extract returns textContent, which also
+              // carries what the page hides. Still the page's text, cut the same way.
+              const extract: ExtractSpec = { fields: { text: spec.selector ?? 'body' } };
+              const fallback = await runtime.call({
+                action: 'act', profile: args.profile, targetId,
+                request: { kind: 'evaluate', fn: buildExtractFnSource(extract), domRead: { kind: 'extract', extract }, ...(args.timeoutMs ? { timeoutMs: args.timeoutMs } : {}) },
+              } as BrowserControlRequest).catch((err: unknown) => ({ ok: false, message: err instanceof Error ? err.message : String(err) }) as BrowserControlResult);
+              const data = fallback.data as { url?: unknown; truncated?: unknown; result?: { ok?: boolean; records?: Array<{ text?: unknown }> } } | undefined;
+              const raw = data?.result?.records?.[0]?.text;
+              if (!fallback.ok || data?.result?.ok === false) {
+                read = { state: 'failed', message: fallback.message ?? 'the page could not be read' };
+              } else {
+                const text = typeof raw === 'string' ? raw.replace(/[ \t\u00a0]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim() : '';
+                read = { state: 'ok', page: { ok: true, url: typeof data?.url === 'string' ? data.url : '', title: '', readyState: 'complete',
+                  found: typeof raw === 'string', length: text.length, ...(data?.truncated === true ? { capped: true } : {}),
+                  text: text.slice(spec.offset ?? 0, (spec.offset ?? 0) + (spec.maxChars ?? READ_DEFAULT_CHARS)) } };
+              }
+            }
+            // A selector that matches nothing is a guess about the page: answer with the page instead of
+            // an empty read that costs another round.
+            let unmatched = false;
+            if (read.state === 'ok' && read.page.ok && !read.page.found && spec.selector) {
+              unmatched = true;
+              const whole = await readPageText(runtime, args.profile, targetId, { offset: spec.offset, maxChars: spec.maxChars }, args.timeoutMs);
+              if (whole.state === 'ok') read = whole;
+            }
+            if (read.state !== 'ok') return { ok: false, message: read.state === 'failed' ? read.message : 'the page could not be read' };
+            const page = read.page;
+            if (!page.ok) return { ok: false, url: page.url, message: page.error ?? 'the page could not be read' };
+            const end = (spec.offset ?? 0) + page.text.length;
+            const loginWall = kept ? await detectLoginWall(runtime, args.profile, targetId) : null;
+            return {
+              ok: true,
+              url: page.url,
+              ...(page.title ? { title: page.title } : {}),
+              ...(loginWall ? { loginWall } : {}),
+              text: page.text,
+              chars: page.length,
+              // `capped`: the backend could only fetch a prefix and has nothing past it, so no nextOffset.
+              ...(end < page.length ? { truncated: true, nextOffset: end } : page.capped ? { truncated: true } : {}),
+              ...(unmatched || page.capped || page.length === 0
+                ? { hint: [
+                  unmatched ? `selector "${spec.selector}" 没有匹配到元素,这是整页的文字。` : '',
+                  page.capped ? `这个浏览器在页面禁止脚本时只能读到开头约 ${page.length} 个字符,后面的读不到,chars 也不是整页长度;要读页面的其它部分,请用 selector 指向具体区域。` : '',
+                  !unmatched && !page.capped && page.length === 0 ? '页面没有可见文字(可能是图片、画布或仍在加载):需要看画面用 screenshot,需要结构用 snapshot。' : '',
+                ].filter(Boolean).join(' ') } : {}),
+            };
+          };
+          const out: ReadPage[] = [];
+          if (!addresses.length) {
+            out.push({ targetId: args.targetId, ...await readTab(args.targetId, false, true) });
+            if (args.targetId) onTarget?.(args.targetId);
+          } else {
+            // Open every tab first so the pages load side by side; the whole read then costs about as long
+            // as the slowest one, not their sum.
+            const opened: Array<{ url: string; targetId?: string; message?: string }> = [];
+            for (const address of addresses) {
+              const tab = await runtime.call({ action: 'open', profile: args.profile, url: address, ...(args.label ? { label: args.label } : {}) })
+                .catch((err: unknown) => ({ ok: false, message: err instanceof Error ? err.message : String(err) }) as BrowserControlResult);
+              const targetId = tab.ok ? readTargetId(tab) : undefined;
+              opened.push(targetId ? { url: address, targetId } : { url: address, message: tab.message ?? 'the page could not be opened' });
+            }
+            try {
+              // Each tab is waited for and read on its own; none of them holds up another.
+              out.push(...await Promise.all(opened.map(async (tab): Promise<ReadPage> => {
+                if (!tab.targetId) return { ok: false, requested: tab.url, message: tab.message };
+                const page = await readTab(tab.targetId, true, args.keep === true)
+                  .catch((err: unknown): ReadPage => ({ ok: false, message: err instanceof Error ? err.message : String(err) }));
+                return { requested: tab.url, ...(args.keep ? { targetId: tab.targetId, ...(args.label ? { label: args.label } : {}) } : {}), ...page };
+              })));
+            } finally {
+              if (args.keep) {
+                const last = opened.findLast((tab) => tab.targetId)?.targetId;
+                if (last) onTarget?.(last);
+              } else {
+                for (const tab of opened) {
+                  if (tab.targetId) await runtime.call({ action: 'close', profile: args.profile, targetId: tab.targetId }).catch(() => undefined);
+                }
+              }
+            }
+          }
+          for (const page of out) if (page.requested === page.url) delete page.requested;
+          const failed = out.filter((page) => !page.ok).length;
+          const ok = failed < out.length;
+          return {
+            content: [{ type: 'text', text: resultText({ ok, action: 'read', ...(failed && ok ? { failed } : {}), pages: out,
+              ...(!ok && out.length === 1 && typeof out[0]!.message === 'string' ? { message: out[0]!.message } : {}) }) }],
+            isError: !ok,
+          };
+        }
 
         let result;
         if (args.action === 'extract') {
@@ -1385,6 +1661,11 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
                 : '这个网站已有打开的页面(往往已在正确的账号和位置):优先在它们上面继续,不要从入口重新找;新开的页面不需要时可以 close。',
             } as typeof result;
           }
+        }
+        // Every backend: whatever reads the page next in this same call (the snapshot asked for below, or the
+        // next step of a batch) must not find a page that has not shown anything yet.
+        if ((args.action === 'open' || args.action === 'navigate') && result.ok && (args.afterSnapshot || readFollows)) {
+          await waitForPageContent(runtime, args.profile, readTargetId(result) ?? args.targetId, args.action === 'open');
         }
         if (args.action === 'snapshot' && result.ok) {
           const loginWall = await detectLoginWall(runtime, args.profile, readTargetId(result) ?? args.targetId);

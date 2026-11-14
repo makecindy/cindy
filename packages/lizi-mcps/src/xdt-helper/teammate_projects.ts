@@ -36,7 +36,7 @@ export function registerTeammateProjectTools(registry: XdtHelperToolRegistry, de
   });
   registry.register({
     name: 'set_teammate_project', category: 'bots',
-    description: 'Link or unlink one project in your own teammate settings when the owner requests it. Use the project_id from list_teammate_projects(include_available=true). Unlinking preserves files, project registration, memory and task history. Linking is context only, not authorization to edit a repository, contact tasks or scan in the background.',
+    description: 'Link or unlink one project in your own buddy settings when the user requests it. Use the project_id from list_teammate_projects(include_available=true). Unlinking preserves files, project registration, memory and task history. Linking is context only, not authorization to edit a repository, contact tasks or scan in the background.',
     inputShape: { project_id: z.string().regex(/^[a-f0-9]{64}$/), linked: z.boolean() },
     handler: async ({ project_id, linked }) => {
       const id = callerSessionId(); if (!id) return missingSession();

@@ -43,7 +43,7 @@ async function probeReadyTool(command: string): Promise<DoctorProbeResult> {
       : command === 'node'
         ? 'v24.16.0'
         : command === 'pnpm'
-          ? '10.33.2'
+          ? '11.28.9'
           : command === 'python3'
             ? 'Python 3.12.10'
             : '';
@@ -177,6 +177,11 @@ describe('Source and dependency preparation', () => {
         {
           npm_config_userconfig: os.devNull,
           npm_config_globalconfig: os.devNull,
+          XDG_CONFIG_HOME: expect.any(String),
+          pnpm_config_npmrc_auth_file: os.devNull,
+          pnpm_config_userconfig: os.devNull,
+          pnpm_config_globalconfig: os.devNull,
+          pnpm_config_manage_package_manager_versions: 'false',
           COREPACK_ENV_FILE: '0',
           COREPACK_ENABLE_PROJECT_SPEC: '0',
           COREPACK_ENABLE_UNSAFE_CUSTOM_URLS: '0',

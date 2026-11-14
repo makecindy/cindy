@@ -1,9 +1,10 @@
+import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 import { ProviderNameSearch } from './ProviderNameSearch';
 import { providerSearchChoices, type ProviderSearchTarget } from './providerSearch';
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata } from '@cindy/model-providers';
+import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata, type ProviderVideoApi } from '@cindy/model-providers';
 import { matchOfficialProviders, bindDetectedProvider, isAgentSelectableModel, isLoopbackProviderUrl } from '@cindy/model-providers';
 import type { ProviderConnectionTestResult } from '../../../shared/providerConnectionTest';
 import type { DetectedProviderDraft, DetectionCatalog } from '../../../shared/providerDetection';
@@ -234,7 +235,7 @@ interface RuntimeFields extends RuntimeFillDraft {
   supportsImageGeneration: boolean;
   /** Standalone Images API, independent of the Codex Responses hosted tool. */
   imageApi?: 'openai-images';
-  videoApi?: 'xai-videos';
+  videoApi?: ProviderVideoApi;
 }
 
 function followsDefaultConnection(agent: DialogAgentKind, value: RuntimeFields, source: RuntimeFields): boolean {
@@ -288,6 +289,8 @@ interface TestState {
   status: 'idle' | 'testing' | 'ok' | 'fail';
   /** 失败分类码（providerError.<code> i18n 键）。 */
   code?: string;
+  /** 本次实际被测的模型 ID，失败时展示，避免用户把它当成别的模型的结果。 */
+  modelId?: string;
   latencyMs?: number;
   decision?: ProviderConnectionTestResult['decision'];
   attempts?: ProviderConnectionTestResult['attempts'];
@@ -488,8 +491,15 @@ export function ProviderConnectionDialog({
   const dialog = useDialogExit(returnFocusRef);
   const suspendedRef = useRef(suspended);
   useLayoutEffect(() => { suspendedRef.current = suspended; }, [suspended]);
-  const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
-  const onSaved = useCallback(() => dialog.close(notifySaved), [dialog.close, notifySaved]);
+  const { complete: completeGuideConnection, cancel: cancelGuideConnection } = useFirstRunGuideConnectionDialog();
+  const onClose = useCallback(() => dialog.close(() => {
+    cancelGuideConnection();
+    notifyClosed();
+  }), [cancelGuideConnection, dialog.close, notifyClosed]);
+  const onSaved = useCallback(() => dialog.close(() => {
+    completeGuideConnection();
+    notifySaved();
+  }), [completeGuideConnection, dialog.close, notifySaved]);
   const editing = !!initial;
   const simpleAdding = !editing && !!onDetected;
   const [manualOpen, setManualOpen] = useState(false);
@@ -1624,7 +1634,7 @@ export function ProviderConnectionDialog({
         ...prev,
         [agent]: result.ok
           ? { status: 'ok', latencyMs: result.latencyMs }
-          : { status: 'fail', code: result.code ?? 'UNKNOWN', decision: result.decision, attempts: result.attempts },
+          : { status: 'fail', code: result.code ?? 'UNKNOWN', modelId: result.modelId ?? firstModel, decision: result.decision, attempts: result.attempts },
       }));
     } catch (e) {
       if (requestId && connectionTestRef.current?.id !== requestId) return;
@@ -1637,7 +1647,10 @@ export function ProviderConnectionDialog({
         return;
       if (requestId) connectionTestRef.current = null;
       const ipc = extractIpcError(e);
-      setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
+      setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN',
+        // 只有 adhoc 请求的被测模型由本窗口决定；saved 请求由 Main 挑选，抛错时拿不到，
+        // 表单当前的首个模型可能不是它实际测的那个，宁可不标也不标错。
+        ...(useSaved ? {} : { modelId: firstModel }) } }));
       if (ipc?.message) toast.error(ipc.message);
     }
   }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets, matchesEndpointTemplate, catalogModels, simpleAdding, setRtSynced, picker, draft]);
@@ -2477,7 +2490,7 @@ export function ProviderConnectionDialog({
             <Sparkles size={20} className="text-[var(--settings-section-title)]" />
             <Dialog.Title asChild><h2
               id="custom-provider-dialog-title"
-              className="text-18 font-semibold text-[var(--settings-section-title)]"
+              className="text-18 font-medium text-[var(--settings-section-title)]"
             >
               {editing
                 ? t('settings.providers.custom.dialog.editTitle')
@@ -3108,32 +3121,41 @@ export function ProviderConnectionDialog({
 
                 {!simpleAdding && authMode !== 'oauth' && (
                   <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-3">
-                    <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
-                      <Checkbox data-settings-search-action="Make this runtime the xAI Videos connection of the provider draft"
-                        id={fieldId(`${activeTab}:video-api`)}
-                        aria-describedby={fieldId(`${activeTab}:video-api-hint`)}
-                        checked={f.videoApi === 'xai-videos'}
-                        onChange={(event) => {
-                          const enabled = event.currentTarget.checked;
-                          // One explicit media owner per provider; other chat routes and keys stay intact.
-                          setRtSynced((prev) => Object.fromEntries(
-                            Object.entries(prev).map(([agent, runtime]) => [agent, {
-                              ...runtime,
-                              videoApi: agent === activeTab && enabled
-                                ? 'xai-videos'
-                                : enabled || agent === activeTab ? undefined : runtime.videoApi,
-                            }]),
-                          ) as Record<DialogAgentKind, RuntimeFields>);
-                        }}
-                      />
-                      {t('settings.providers.custom.fields.xaiVideos')}
-                    </label>
-                    <p
-                      id={fieldId(`${activeTab}:video-api-hint`)}
-                      className="text-12 leading-5 text-[var(--settings-section-desc)]"
-                    >
-                      {t('settings.providers.custom.fields.xaiVideosHint')}
-                    </p>
+                    {([
+                      ['xai-videos', 'video-api', t('settings.providers.custom.fields.xaiVideos'), t('settings.providers.custom.fields.xaiVideosHint')],
+                      ['minimax-videos', 'minimax-video-api', t('settings.providers.custom.fields.minimaxVideos'), t('settings.providers.custom.fields.minimaxVideosHint')],
+                      ['openai-videos', 'openai-video-api', t('settings.providers.custom.fields.openaiVideos'), t('settings.providers.custom.fields.openaiVideosHint')],
+                    ] as const).map(([api, idSuffix, label, hint]) => (
+                      <div key={api} className="flex flex-col gap-1.5">
+                        <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
+                          <Checkbox
+                            data-settings-search-action="Choose this connection's video API inside the provider dialog; search entry providers.videoApi opens the providers panel"
+                            id={fieldId(`${activeTab}:${idSuffix}`)}
+                            aria-describedby={fieldId(`${activeTab}:${idSuffix}-hint`)}
+                            checked={f.videoApi === api}
+                            onChange={(event) => {
+                              const enabled = event.currentTarget.checked;
+                              // One explicit media owner and one video API per provider; other chat routes and keys stay intact.
+                              setRtSynced((prev) => Object.fromEntries(
+                                Object.entries(prev).map(([agent, runtime]) => [agent, {
+                                  ...runtime,
+                                  videoApi: agent === activeTab && enabled
+                                    ? api
+                                    : enabled || agent === activeTab ? undefined : runtime.videoApi,
+                                }]),
+                              ) as Record<DialogAgentKind, RuntimeFields>);
+                            }}
+                          />
+                          {label}
+                        </label>
+                        <p
+                          id={fieldId(`${activeTab}:${idSuffix}-hint`)}
+                          className="text-12 leading-5 text-[var(--settings-section-desc)]"
+                        >
+                          {hint}
+                        </p>
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -3310,6 +3332,11 @@ export function ProviderConnectionDialog({
                       : test[activeTab].decision === 'next'
                         ? t('settings.providers.custom.test.exhausted')
                         : t(`providerError.${test[activeTab].code ?? 'UNKNOWN'}`)}
+                    {test[activeTab].modelId && (
+                      <span className="block break-all text-[var(--text-secondary)]">
+                        {t('settings.providers.custom.test.model', { model: test[activeTab].modelId })}
+                      </span>
+                    )}
                   </span>
                 )}
                 {!mediaOnly && test[activeTab].status === 'testing' && (
@@ -3564,7 +3591,7 @@ export function ModelPickerOverlay({
           {/* Header */}
           <div className="flex items-center px-5 pb-1 pt-4">
             <div className="flex min-w-0 flex-col gap-0.5">
-              <Dialog.Title className="text-15 font-semibold text-[var(--settings-section-title)]">
+              <Dialog.Title className="text-15 font-medium text-[var(--settings-section-title)]">
                 {t('settings.providers.custom.fetch.pickerTitle', {
                   runtime: t(TAB_META[picker.agent].labelKey),
                 })}

@@ -32,7 +32,15 @@ vi.mock('../agentNetOfficial.js', () => ({ officialAgentNetBase: () => state.off
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Unit device' }));
 import { ensureOwnerAgentNetBootstrap, currentAgentNetClient, agentNetAllowsLegacy, createAgentNetOrLegacySocket,
   createAgentNetAppSocket, agentNetPeerSnapshot } from '../agentNetRuntime.js';
-import { readCurrentDeviceDirectory } from '../agentNetDeviceDirectory.js';
+import { projectAgentNetDevice, readCurrentDeviceDirectory } from '../agentNetDeviceDirectory.js';
+
+// App routing, unit: real directory projection; previous route/cache cases had
+// no foreign App metadata. One offline Friend must retain both app and platform.
+it('projects offline App labels without changing the device name or control flags', () => {
+  const peer = projectAgentNetDevice({ certificate: { deviceId: 'friend' } as any, name: 'Mac', platform: 'darwin',
+    app: 'cindy-friend', online: false, remoteControlEnabled: false, capabilities: [] }, 'self');
+  expect(peer).toMatchObject({ deviceId: 'friend', name: 'Mac', platform: 'darwin', app: 'cindy-friend', online: false, remoteControlEnabled: false });
+});
 const relayId = '11111111-1111-4111-8111-111111111111';
 beforeEach(() => { state.owner = 'membership-a'; state.pending = false; state.enabled = true; state.onlyEncrypted = false; state.writes = [];
   state.official = false; state.officialApi = null; state.officialEnsure.mockReset(); });
@@ -107,6 +115,32 @@ it('keeps the newest completed transport when an older factory finishes late', a
   newer.close();
 });
 
+// Unit: production /info → transport wiring. HTTPS and UDP may be published on
+// separate load balancers; relays without a valid stunHost keep the API host.
+it.each([
+  [{ udpPort: 3479, stunHost: 'agent-net-stun.example.test' }, 'agent-net-stun.example.test:3479'],
+  [{ udpPort: 3479 }, 'api'],
+  [{ udpPort: 3479, stunHost: 'agent-net-stun.example.test:9' }, 'api'],
+  [{ stunHost: 'agent-net-stun.example.test' }, null],
+])('queries STUN at the host advertised by /info: %j', async (info, expected) => {
+  state.secrets = { credential: 'unit', seed: generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  const base = currentAgentNetClient()!.base;
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('unit-cache-absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  vi.mocked(outboundFetch).mockImplementation(async (url) => Response.json(String(url) === base + '/api/agent-net/info' ? info : {}));
+  const socket = Object.assign(new EventEmitter(), { close: vi.fn() });
+  socket.close.mockImplementation(() => socket.emit('close', 1000));
+  const open = vi.spyOn(AgentNetWorkerSocket, 'open')
+    .mockResolvedValue(socket as unknown as Awaited<ReturnType<typeof AgentNetWorkerSocket.open>>);
+  try {
+    expect(await createAgentNetAppSocket()).toBe(socket);
+    const server = expected === 'api' ? new URL(base).hostname + ':3479' : expected;
+    expect(open.mock.calls[0][0].stunServers).toEqual(server ? [server] : []);
+  } finally { socket.close(); vi.mocked(outboundFetch).mockReset(); }
+});
+
 // Unit: real Node SDK Fetch boundary + production mixed-directory adapter.
 // Runtime identity tests did not exercise a raw network failure after V1 succeeds.
 it('retains the live V1 directory when Node Fetch fails, except in encrypted-only mode', async () => {
@@ -118,6 +152,20 @@ it('retains the live V1 directory when Node Fetch fails, except in encrypted-onl
   expect(await readCurrentDeviceDirectory(async () => legacy, () => {})).toEqual(legacy);
   state.onlyEncrypted = true;
   await expect(readCurrentDeviceDirectory(async () => legacy, () => {})).rejects.toMatchObject({ status: 0 });
+});
+
+// Mixed directory, unit: retain V1 liveness without dropping persisted V2 App
+// metadata. The old fallback tests only varied connection state, never App.
+it('retains offline V2 App identity when V1 still reports the node online', async () => {
+  state.secrets = { credential: 'unit', seed: generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  vi.spyOn(AgentNetClient.prototype, 'directory').mockResolvedValueOnce([{ certificate: { deviceId: 'friend' } as any,
+    name: 'Mac', platform: 'darwin', app: 'cindy-friend', online: false, remoteControlEnabled: false, capabilities: [] }]);
+  const legacy = { devices: [{ deviceId: 'friend', name: 'Mac', platform: 'darwin', appVersion: '1',
+    lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false }] };
+  expect(await readCurrentDeviceDirectory(async () => legacy, () => {})).toMatchObject({ devices: [
+    { deviceId: 'friend', online: true, remoteControlEnabled: true, app: 'cindy-friend' },
+  ] });
 });
 
 it('keeps directory certificate denial and late owner changes terminal even with a live V1 result', async () => {

@@ -41,6 +41,8 @@ export interface ConnectionReadOptions {
   allowSideEffects: boolean;
   /** Host-only snapshot read: never refresh CLI status or load account presentation. */
   snapshotOnly?: boolean;
+  /** Derived only from a host-provided full catalog, for existing bound task routes. */
+  includeBoundAccounts?: boolean;
   /**
    * Wait for post-claim model discovery before materializing this snapshot.
    * This is an internal readiness hint for routing callers; ordinary provider reads
@@ -79,11 +81,15 @@ export interface ProviderServiceDeps {
   /** Read once per view; exact agent/provider/model keys, never written into the catalog. */
   getModelContextLimits?: () => Readonly<Record<string, number>>;
   projectProvider?: (provider: ProviderView) => ProviderView;
+  /** Organization branding only; local name/removal preferences must not leak into managed providers. */
+  getOrganizationProviderLogoKind?: (provider: ProviderView) => ProviderView['logoKind'];
   getProviderPresentation?: (providerId: string) => { name?: string; removed?: boolean; logoKind?: ProviderView['logoKind'] };
   /** Exact-route user budget/price overrides keep independent rows. */
   hasModelAliasOverride?: (providerId: string, agent: AgentKind, modelId: string) => boolean;
   /** 返回当前生效目录（同步）。桌面端注入 active-catalog 的 getActiveCatalog。 */
   getCatalog: () => Catalog;
+  /** Live membership precedes access overrides. Explicit/lazy routing reads retain history-only models. */
+  projectCatalog?: (catalog: Catalog, routingCatalog: boolean) => Catalog;
   /** 连接状态判定器。 */
   connection: ProviderConnectionReaders;
   /**
@@ -91,8 +97,11 @@ export interface ProviderServiceDeps {
    * （生产 = generic-oauth 的 hasGenericOAuthLogin）。缺省 = 一律未连接。
    */
   genericOAuthConnected?: (providerId: string) => boolean;
-  codexAccountConnected?: (providerId: string) => boolean;
+  codexAccountConnected?: (providerId: string, options?: { includeBoundAccounts?: boolean }) => boolean;
+  /** A provider Cindy created for subscription accounts: one of its own accounts is signed in. */
+  subscriptionPoolConnected?: (providerId: string, options?: { includeBoundAccounts?: boolean }) => boolean;
   subscriptionAccountConnected?: (providerId: string) => boolean;
+  subscriptionReadUnavailable?: (providerId: string) => boolean;
   subscriptionAccountInfo?: (providerId: string) => Promise<ProviderView['subscriptionAccount']>;
   openAiAccountInfo?: (providerId: string) => Promise<ProviderView['openAiAccount']>;
   /**
@@ -151,6 +160,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       allowSideEffects: opts?.allowSideEffects === true && opts?.snapshotOnly !== true,
       snapshotOnly: opts?.snapshotOnly === true,
       waitForDiscovery: opts?.waitForDiscovery === true,
+      ...(opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : {}),
     };
     const [xd, anthropic, openai, xai] = await Promise.all([
       Promise.resolve(deps.connection.xd(readOpts)),
@@ -158,7 +168,8 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       Promise.resolve(deps.connection.openai(readOpts)),
       Promise.resolve(deps.connection.xai(readOpts)),
     ]);
-    const catalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
+    const sourceCatalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
+    const catalog = deps.projectCatalog?.(sourceCatalog, !!(opts?.getCatalog || opts?.catalog)) ?? sourceCatalog;
     const connected: ConnectionState = { xd, anthropic, openai, xai };
     for (const p of catalog.providers) {
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
@@ -169,12 +180,18 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
           return routing !== undefined && routing.disabled !== true;
         });
       }
+      // 为订阅账号新建的供应商（2026-11-13）：自己名下有已登录的账号才算连接。
+      else if (p.subscriptionPool) {
+        connected[p.id] = deps.subscriptionPoolConnected?.(p.id,
+          opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : undefined) ?? false;
+      }
       // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
       // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
       else if (p.auth.native === 'claude' || p.auth.native === 'xai') {
         connected[p.id] = deps.subscriptionAccountConnected?.(p.id) ?? false;
       } else if (p.auth.native === 'codex') {
-        connected[p.id] = deps.codexAccountConnected?.(p.id) ?? false;
+        connected[p.id] = deps.codexAccountConnected?.(p.id,
+          opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : undefined) ?? false;
       } else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
         connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
       } else if (isCustomRoutedProvider(p)) {
@@ -241,9 +258,12 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     }).map((provider) => ({
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
       ...provider, ...(provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) ?? {} : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+      ...(provider.source === 'organization' ? { logoKind: deps.getOrganizationProviderLogoKind?.(provider) } : {}),
       // Deletion disconnects first. A live binding wins over a stale removed flag if
       // restoring display preferences failed after authentication was committed.
       ...(provider.connected ? { removed: false } : {}),
+      ...(deps.subscriptionReadUnavailable?.(provider.id)
+        ? { subscriptionReadUnavailable: true as const } : {}),
     })).map(
       (provider) =>
         media === undefined

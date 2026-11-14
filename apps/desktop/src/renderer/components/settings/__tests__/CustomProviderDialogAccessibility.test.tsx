@@ -23,10 +23,11 @@ vi.mock('@/lib/customProviders', async (importOriginal) => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, values?: { count?: number }) => {
+    t: (key: string, values?: { count?: number; model?: string }) => {
       if (key === 'settings.providers.custom.fetch.selectedCount' || key === 'settings.providers.custom.fetch.availableCount') {
         return `${key}:${values?.count}`;
       }
+      if (key === 'settings.providers.custom.test.model') return `${key}:${(values as { model?: string } | undefined)?.model}`;
       if (key === 'settings.providers.custom.imageGenerationReload.interrupt') {
         return '保存并停止';
       }
@@ -650,6 +651,55 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(edited.models[0].route.baseUrl).toBe(finalBase);
     expect(edited.models[1].route.baseUrl).toBe('http://127.0.0.1:9000/special');
   });
+
+
+  // #8679: the failure line alone ("upstream 5xx") never said which model the probe used. The saved
+  // provider's probe model is chosen by Main, so the label must follow the result, not the form's first row.
+  it('测试连接失败时标明主进程返回的被测模型', async () => {
+    window.electronAPI.maker.testProviderConnection = vi.fn(async () => ({
+      ok: false, code: 'UNKNOWN' as const, latencyMs: 1, modelId: 'probed-by-main',
+    }));
+    await openFailingTest();
+    expect(await screen.findByText('settings.providers.custom.test.model:probed-by-main')).toBeTruthy();
+  });
+
+  // The probe can throw after the response headers (first stream frame lost); Main rethrows unchanged and
+  // the IPC rejection carries no result. An adhoc request was built from the form, so its model is known.
+  it('探测抛错(无结果)时 adhoc 请求仍标明发出的模型', async () => {
+    const test = vi.fn(async () => { throw new Error('first frame interrupted'); });
+    window.electronAPI.maker.testProviderConnection = test;
+    await openFailingTest({ editedForm: true });
+    expect(await screen.findByText('settings.providers.custom.test.model:chat')).toBeTruthy();
+    expect(test).toHaveBeenCalledWith(expect.objectContaining({ kind: 'adhoc' }));
+  });
+
+  // A saved request is probed with whatever model Main picks, which can differ from the unsaved form's
+  // first row. With no result to say which, naming the form's model could blame the wrong one.
+  it('探测抛错(无结果)时 saved 请求不猜测被测模型', async () => {
+    const test = vi.fn(async () => { throw new Error('first frame interrupted'); });
+    window.electronAPI.maker.testProviderConnection = test;
+    await openFailingTest();
+    expect(await screen.findByText('providerError.UNKNOWN')).toBeTruthy();
+    expect(test).toHaveBeenCalledWith(expect.objectContaining({ kind: 'saved' }));
+    expect(screen.queryByText(/settings\.providers\.custom\.test\.model/)).toBeNull();
+  });
+
+  async function openFailingTest(opts: { editedForm?: boolean } = {}) {
+    const route = { baseUrl: 'https://host.example/v1', wireProtocol: 'openai-chat' as const };
+    const initial: CustomProviderConfig = {
+      id: 'test-model-label', name: 'Test model label', auth: { method: 'apiKey' },
+      runtimes: { pi: { ...route, models: [{ id: 'chat', name: 'Chat', route }, { id: 'other', name: 'Other' }] } },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('saved-key');
+    const user = userEvent.setup();
+    render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    if (opts.editedForm) {
+      // An unsaved edit makes the saved record stale, so the dialog tests the form values (adhoc).
+      fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'), { target: { value: 'https://edited.example/v1' } });
+    }
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+  }
 
   it('probes the rebased route instead of the saved route after filling only models', async () => {
     const chat = { id: 'chat', name: 'Chat', route: {
@@ -2859,6 +2909,28 @@ function renderExpandedConnection(...args: Parameters<typeof render>) {
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.manualAdd' }));
   return result;
 }
+
+it.each([
+  ['minimaxVideos', 'minimax-videos'], ['openaiVideos', 'openai-videos'],
+] as const)('保存 %s 视频接口时保留模型，且与原 xAI 选项互斥', async (label, videoApi) => {
+  const initial: CustomProviderConfig = { id: 'video-connection', name: 'Video connection', auth: { method: 'none' },
+    runtimes: { pi: { baseUrl: 'http://127.0.0.1:1234/v1', wireProtocol: 'openai-chat', videoApi: 'xai-videos',
+      models: [{ id: 'MiniMax-H3', name: 'MiniMax-H3', mode: 'video_generation', modalities: { input: ['text', 'image'], output: ['video'] } }] } },
+  };
+  renderExpandedConnection(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+  await waitForInitialDialogFocus();
+  const xai = screen.getByRole('checkbox', { name: 'settings.providers.custom.fields.xaiVideos' }) as HTMLInputElement;
+  expect(xai.checked).toBe(true);
+  const chosen = screen.getByRole('checkbox', { name: `settings.providers.custom.fields.${label}` }) as HTMLInputElement;
+  fireEvent.click(chosen);
+  expect(chosen.checked).toBe(true);
+  expect(xai.checked).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  const saved = customProviderMocks.updateCustomProvider.mock.calls[0][0] as CustomProviderConfig;
+  expect(saved.runtimes.pi?.videoApi).toBe(videoApi);
+  expect(saved.runtimes.pi?.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'MiniMax-H3', mode: 'video_generation' })]));
+});
 
 // Standard: connection fields remain usable while optional editors start closed.
 it('starts manual models and advanced fields closed without hiding model discovery', async () => {

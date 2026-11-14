@@ -6,16 +6,17 @@
  */
 import { useSyncExternalStore } from 'react';
 import { ChevronDown, ChevronRight, CornerDownLeft, CornerDownRight } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import type { ChatMessage } from '@/hooks/useCCAgentChat';
-import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
-import { remoteProjectsStore, useRemoteSessionTitle } from '@/features/device-link/remoteProjectsStore';
+import { useRemoteSessionTitle } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { cn } from '@/lib/utils';
-import { isCrossDeviceSourceSessionId } from '@cindy/maker-shared/message-source';
+import { buildSessionDeepLink } from '@/lib/deepLink';
+import { toast } from '@/lib/toast';
+import { useSessionLinkTarget } from './SessionLinkChip';
+import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_FOCUS_CLASS } from './chatChrome';
 import type { RenderItem } from './messageWorkGroups';
@@ -88,14 +89,16 @@ export function useLinkedTaskTitle(sessionId: string | undefined, hostSessionId:
 
 /** Opens a task this chat refers to, or null where the chat cannot navigate there. */
 export function useOpenLinkedTask(sessionId: string | undefined, hostSessionId: string | undefined): (() => void) | null {
-  const navigate = useNavigate();
-  const navigationMode = useSessionNavigationMode();
-  if (!sessionId || navigationMode === 'sidebar-embedded' || isCrossDeviceSourceSessionId(sessionId)) return null;
+  const { t } = useTranslation();
+  const target = parseSourceSessionTarget(sessionId);
+  // An explicit receipt device wins over the computer hosting the teammate chat.
+  const deviceId = target?.deviceId ?? getStickySessionDeviceId(hostSessionId);
+  const { openTarget, navigationMode } = useSessionLinkTarget(
+    target ? buildSessionDeepLink(target.sessionId, { deviceId }) : '',
+  );
+  if (!target || navigationMode === 'sidebar-embedded') return null;
   return () => {
-    // A remote chat's tasks live on that computer, like the message source labels.
-    const hostDeviceId = getStickySessionDeviceId(hostSessionId);
-    if (hostDeviceId) remoteProjectsStore.pinSessionOrigin(hostDeviceId, sessionId);
-    navigate(`/cc-agent/${encodeURIComponent(sessionId)}`);
+    void openTarget(false).catch(() => toast.error(t('chat.markdownRenderer.openLinkFailed')));
   };
 }
 

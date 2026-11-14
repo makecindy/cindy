@@ -5,6 +5,19 @@ This inventory applies to Cindy Headless `0.4.3`, based on Cindy upstream commit
 only when the Headless CLI or Harbor adapter can exercise it; vendored source
 alone is not sufficient.
 
+## Pi runtime pin alignment: 2026-11-11
+
+Pi example and smoke profiles follow `tools/pi/latest.json` at `1.5.2`, with
+the production Pi profile lock regenerated via `pnpm profiles:freeze`.
+Pi's message-scoped Anthropic effort keeps a fixed top-level `low` default;
+per-reply markers preserve the selected effort and its history. The real-binary
+PiAgent integration test checks both markers and ordinary relay requests.
+Pi 1.5.1 also changes native cache warming from `streaming` to `idle`; Cindy
+does not override it. Eligible caches may incur refresh costs for up to 30 minutes
+between runs. Anthropic message threads default on only for the `anthropic`
+provider at the official endpoint; ordinary gateways require explicit opt-in.
+This is a runtime pin update, not a Headless release or live-model validation.
+
 ## Runtime pin alignment: 2026-11-10
 
 Claude example and smoke profiles now follow Claude Code `2.1.321` (from
@@ -63,6 +76,19 @@ and the directly affected Maker Core agent/Memory tests. Formal archive and Linu
 binary checks run through `package:release`; no live model benchmark is implied.
 
 ## Available in Headless
+
+The host prompt now owns user-facing plan guidance for all three harnesses;
+the Claude/Codex supplement files are empty. Pi's frozen prompt includes the
+shared plan guidance and its MCP gateway instructions. All three frozen prompts
+and their profile digests remove commit attribution and application-update
+procedures: attribution belongs to the GitHub plugin's PR Skill, and update
+instructions belong to Desktop tool discovery and receipts. This focused prompt
+sync does not add Desktop settings tools to Headless or advance the broader
+upstream baseline.
+
+The host prompt also carries one paragraph asking for tappable options on
+questions to the user (2026-11-12). All three frozen prompts and their profile
+digests include it; no Headless tool or runtime behavior changes.
 
 | Cindy capability | Claude Code | Codex | Pi | Headless evidence |
 |---|---:|---:|---:|---|

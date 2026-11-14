@@ -264,6 +264,43 @@ it.each(['inactive', 'parent-unmount'])('keeps the same live WebView until teard
     .toEqual([expect.objectContaining({ alreadyNotified: true })]);
 });
 
+it('delivers the final view-state save through device invoke during native close', async () => {
+  let deliverPoll!: (events: unknown[]) => void;
+  const close = vi.fn(async () => {});
+  state.prepare.mockResolvedValue({ ...nativeDocument, close });
+  state.invoke.mockImplementation(async (_device, _channel, [, input]) => {
+    if (input.op === 'open') return { ...doc };
+    if (input.op === 'poll') return new Promise((resolve) => { deliverPoll = resolve; });
+    return {};
+  });
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
+  const props = state.props;
+  const key = state.prepare.mock.calls[0][1];
+  await act(async () => props.onMessage({ nativeEvent: { data: JSON.stringify({ key,
+    message: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready' } }) } }));
+  state.inject.mockClear();
+  await act(async () => render(null));
+  const dispatchEvent = vi.fn();
+  new Script(state.inject.mock.calls[0][0]).runInNewContext({
+    window: { dispatchEvent },
+    MessageEvent: class { data: unknown; constructor(_type: string, init: any) { this.data = init.data; } },
+  });
+  const teardown = dispatchEvent.mock.calls[0][0].data;
+  const save = { jsonrpc: '2.0', id: 'save', method: 'cindy/view-state/set', params: { state: { version: 1, draft: 'latest' } } };
+  await act(async () => props.onMessage({ nativeEvent: { data: JSON.stringify({ key, message: save }) } }));
+  await act(async () => { await Promise.resolve(); });
+  const messageCall = state.invoke.mock.calls.find(([, , [, input]]) => input.op === 'message' && input.message?.id === save.id);
+  expect(messageCall?.[2][1]).toMatchObject({ op: 'message', message: save });
+  deliverPoll([{ seq: 1, message: { jsonrpc: '2.0', id: save.id, result: {} } }]);
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => props.onMessage({ nativeEvent: { data: JSON.stringify({ key,
+    message: { jsonrpc: '2.0', id: teardown.id, result: {} } }) } }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(899); });
+  expect(close).toHaveBeenCalledOnce();
+  const operations = state.invoke.mock.calls.map(([, , [, input]]) => input.op);
+  expect(operations.indexOf('message')).toBeLessThan(operations.indexOf('teardown'));
+});
+
 it('disposes at one second even when App teardown and remote teardown never return', async () => {
   const close = vi.fn(async () => {});
   state.prepare.mockResolvedValue({ ...nativeDocument, close });

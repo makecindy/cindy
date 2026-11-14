@@ -36,7 +36,8 @@ it('strips Fast control paths from shell environments without mutating the runne
   const compiled = ts.transpileModule(source.slice(start, end) + '\nresult = withoutPiSecrets(input);', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const input = { PATH: '/fixture/bin', CINDY_PI_MODEL_REQUEST_PREFS_FILE: '/fixture/prefs.json' };
+  const input = { PATH: '/fixture/bin', CINDY_PI_MODEL_REQUEST_PREFS_FILE: '/fixture/prefs.json',
+    CINDY_PI_TASK_SYSTEM_PROMPT_FILE: '/fixture/task-system-prompt.md' };
   const sandbox = {
     process: { env: {} }, input, result: undefined,
     PI_PACKAGE_MANAGEMENT_ENV: 'CINDY_PI_PACKAGE_MANAGEMENT',
@@ -47,6 +48,7 @@ it('strips Fast control paths from shell environments without mutating the runne
   runInNewContext(compiled, sandbox);
   expect(sandbox.result).toEqual({ PATH: '/fixture/bin' });
   expect(input.CINDY_PI_MODEL_REQUEST_PREFS_FILE).toBe('/fixture/prefs.json');
+  expect(input.CINDY_PI_TASK_SYSTEM_PROMPT_FILE).toBe('/fixture/task-system-prompt.md');
 });
 
 it('keeps text-only policy local and ordinary tools independent of host UI failures', async () => {
@@ -103,6 +105,41 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
   expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
   handlers.get('agent_settled')!({}, ctx);
   expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+});
+
+// Performance contract, unit: execute the generated production bridge helper.
+// A plugin-free native turn must not gain an awaited before_agent_start handler;
+// the existing real-Pi request tests cannot observe native handler registration.
+it('registers model routing only after the first selected RPC input', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('let textOnlyTurnActive = false');
+  const end = source.indexOf('function currentPermissionState', start);
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
+  const compiled = ts.transpileModule(source.slice(start, end)
+    + '\nconst runtime = installRuntimeModelControl(pi);\ninstallTextOnlyTurnPolicy(pi, runtime.prepare);',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const physical = { provider: 'fixture', id: 'original' };
+  const router = { provider: 'cindy-runtime-router', id: 'selected-task' };
+  const setModel = vi.fn(async () => true);
+  const registerVirtualModel = vi.fn();
+  runInNewContext(compiled, { process: { env: { CINDY_PI_TURN_TOOL_POLICY: 'runtime-token' } },
+    pi: { on: (name: string, handler: (event: any, ctx: any) => any) => handlers.set(name, handler),
+      setModel, registerVirtualModel, setThinkingLevel: vi.fn() } });
+  const input = handlers.get('input')!;
+  const ctx = { isIdle: () => true, model: physical, modelRegistry: { find: () => router } };
+  expect(input({ source: 'rpc', text: 'Ordinary input' }, ctx)).toBeUndefined();
+  expect(handlers.has('before_agent_start')).toBe(false);
+  expect(setModel).not.toHaveBeenCalled();
+  expect(await input({ source: 'rpc', text: '[CINDY_MODEL_REQUEST]:runtime-token\nSelected input' }, ctx))
+    .toEqual({ action: 'transform', text: 'Selected input', images: undefined });
+  expect(setModel).toHaveBeenCalledWith(router);
+  expect(registerVirtualModel).toHaveBeenCalledOnce();
+  expect(handlers.has('before_agent_start')).toBe(false);
+  await input({ source: 'rpc', text: 'Deselected input' }, { ...ctx, model: router });
+  expect(setModel).toHaveBeenLastCalledWith(physical);
+  setModel.mockClear();
+  expect(input({ source: 'rpc', text: 'Next ordinary input' }, ctx)).toBeUndefined();
+  expect(setModel).not.toHaveBeenCalled();
 });
 
 it('lets a shared user\'s Pi call only tools that Cindy extensions registered', async () => {

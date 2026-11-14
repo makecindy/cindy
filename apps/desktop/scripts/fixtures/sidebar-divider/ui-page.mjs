@@ -20,8 +20,9 @@ export default {
     'src/renderer/features/cc-agent/sidebar/conversationSearchContext': 'export const ConversationSearchProvider = ({ children }) => children;',
   },
   cases: {
-    default: { about: 'No wallpaper, 0% desktop visibility: border must retain its tinted backing' },
-    transparent: { about: '100% desktop visibility retains the independent sidebar tint' },
+    default: { about: 'No wallpaper, 0% desktop visibility keeps the original backdrop: border must retain its tinted backing' },
+    half: { about: '50% desktop visibility: the sidebar keeps its own tint at 85% of the main veil, separated only by its divider' },
+    transparent: { about: '100% desktop visibility: both tints are clear; on macOS only the native sidebar frost remains' },
     wallpaper: { about: 'Wallpaper canvas and tint adjustment remain continuous at the border' },
     rail: { about: 'Narrow sidebar has the same backed hairline' },
     hidden: { about: 'Fully collapsed sidebar leaves no residual line' },

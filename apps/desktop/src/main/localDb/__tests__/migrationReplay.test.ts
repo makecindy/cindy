@@ -97,7 +97,10 @@ describeMigrationReplay('explicit PR association upgrade', () => {
           copyFileSync(migration.tsScriptPath, path.join(staged, 'scripts', path.basename(migration.tsScriptPath)));
         }
       }
-      runMigrationReplay(db, { drizzleDir: staged });
+      // Historical fixture setup need not fsync every old migration separately.
+      // CI #10413 spent >40s here, starving Vitest's worker RPC. Keep the actual
+      // upgrade and reopen below unwrapped so their commit boundaries stay real.
+      db.transaction(() => runMigrationReplay(db, { drizzleDir: staged }))();
       db.prepare('INSERT INTO sessions (id,created_at,updated_at) VALUES (?,1,1)').run('fixture');
       const insert = db.prepare(`INSERT INTO session_pr_refs
         (id,session_id,owner,repo,pr_number,url,first_seen_at,last_seen_at,pinned,priority,manually_added,removed_at)
@@ -190,7 +193,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148,
+          143, 144, 145, 146, 147, 148, 149,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -368,7 +371,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

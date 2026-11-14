@@ -7,8 +7,9 @@ export type AppRpc = {
   params?: Record<string, unknown>;
   [key: string]: unknown;
 };
-export type AppInvoker = (sessionId: string, input: Record<string, unknown>) => Promise<unknown>;
+export type AppInvoker = (sessionId: string | null, input: Record<string, unknown>) => Promise<unknown>;
 let nextOpenId = 0;
+const closeSafeMethods = new Set(['cindy/view-state/set', 'ui/set-view-state']);
 
 /** The UI is a transport only; official negotiation, schemas and permissions live on the Host. */
 export class McpAppController {
@@ -30,17 +31,19 @@ export class McpAppController {
   private readonly openId = `${Date.now()}:${++nextOpenId}`;
   constructor(
     private readonly invoke: AppInvoker,
-    readonly sessionId: string,
+    readonly sessionId: string | null,
     readonly clientId: string,
     private readonly post: (message: AppRpc) => void,
     private readonly onState: (message: AppRpc) => void,
     private readonly onError: (error: unknown) => void,
     private readonly openLink?: (url: string) => Promise<void>,
+    private readonly resourceSource?: { instanceId: string; viewId: string },
   ) {}
 
   async open(context: Record<string, unknown>): Promise<McpAppOpenResult | undefined> {
     const document = (await this.invoke(this.sessionId, {
-      op: 'open',
+      op: this.resourceSource ? 'open-resource' : 'open',
+      ...(this.resourceSource ? { source: this.resourceSource } : {}),
       openId: this.openId,
       clientId: this.clientId,
       context,
@@ -105,7 +108,7 @@ export class McpAppController {
       return;
     }
     if (message.method?.startsWith('ui/notifications/sandbox-')) return;
-    if (this.closing && message.method) return;
+    if (this.closing && message.method && !closeSafeMethods.has(message.method)) return;
     if (message.method === 'ui/initialize') {
       if (this.initialized) {
         this.generation++;
@@ -125,7 +128,7 @@ export class McpAppController {
     const generation = this.generation;
     const handshake = message.method === 'ui/initialize' || message.method === 'ui/notifications/initialized';
     const send = async () => {
-      if (this.stopped || (this.closing && message.method)) return;
+      if (this.stopped || (this.closing && message.method && !closeSafeMethods.has(message.method))) return;
       if (!handshake && this.generation !== generation) return;
       await this.invoke(this.sessionId, { op: 'message', viewId, message });
     };

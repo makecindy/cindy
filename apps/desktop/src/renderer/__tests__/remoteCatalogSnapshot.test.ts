@@ -109,14 +109,22 @@ describe('remote catalog refresh scheduling', () => {
     expect(invoke).toHaveBeenCalledTimes(12);
   });
 
-  it.each([false, true])(
-    'coalesces a burst and rejects stale results (disconnect: %s)',
-    async (disconnect) => {
+  // Unit: source-change recovery must discard the old read's rejection as well as
+  // its success. Existing coverage only resolved old reads; a delayed scope error
+  // must not replace the latest catalog or multiply the coalesced trailing read.
+  it.each(['success', 'scope-change', 'disconnect'])(
+    'coalesces a burst and rejects stale results (%s)',
+    async (outcome) => {
+      const disconnect = outcome === 'disconnect';
       const first = deferred();
       let revision = 'old';
       const invoke = vi.fn(async (_device: string, channel: string) => {
         const value = revision;
-        if (value === 'old') await first.promise;
+        if (value === 'old') {
+          await first.promise;
+          // Main invalidates a read already in flight when a source-change push arrives.
+          if (outcome === 'scope-change') throw new Error('Metadata scope changed');
+        }
         return channel === 'maker:provider:list'
           ? { providers: [] }
           : {
@@ -136,7 +144,9 @@ describe('remote catalog refresh scheduling', () => {
       });
       vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
       const events = vi.fn();
-      capabilities.subscribeDeviceCapabilities('test', 'codex', events);
+      const offCapabilities = capabilities.subscribeDeviceCapabilities('test', 'codex', events);
+      const providerEvents = vi.fn();
+      const offProviders = providers.subscribeDeviceProviders('test', providerEvents);
       const initial = refreshRemoteCatalogSnapshot('test');
       await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(4));
       revision = 'new';
@@ -149,6 +159,8 @@ describe('remote catalog refresh scheduling', () => {
       first.resolve();
       await Promise.all([initial, ...burst]);
       expect(invoke).toHaveBeenCalledTimes(disconnect ? 4 : 8);
+      expect(events.mock.calls.some(([event]) => event.status === 'error')).toBe(false);
+      expect(providerEvents.mock.calls.some(([event]) => event.status === 'error')).toBe(false);
       const ready = events.mock.calls
         .map(([event]) => event)
         .filter((event) => event.status === 'ready');
@@ -157,6 +169,9 @@ describe('remote catalog refresh scheduling', () => {
       // The completed coordinator does not cache results or suppress a later refresh.
       await refreshRemoteCatalogSnapshot('test');
       expect(invoke).toHaveBeenCalledTimes(disconnect ? 8 : 12);
+      expect(providers.getCachedDeviceProviders('test')?.providers).toEqual([]);
+      offCapabilities();
+      offProviders();
     },
   );
 });

@@ -41,7 +41,8 @@ import {
   inboundToggleState,
   resolveActiveConnectionIssue,
 } from './myDevicesModel';
-import { platformLabel, relativeTime } from './deviceLabels';
+import { appLabel, deviceLabel, platformLabel, relativeTime } from './deviceLabels';
+import appI18n from 'i18next';
 
 function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): string | null {
   const label = deviceInfo?.modelLabel?.trim() || deviceInfo?.cpuLabel?.trim();
@@ -50,7 +51,7 @@ function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): str
 
 function memoryLabel(memoryGb: number | null | undefined): string | null {
   if (typeof memoryGb !== 'number' || !Number.isFinite(memoryGb) || memoryGb <= 0) return null;
-  const formatted = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(memoryGb);
+  const formatted = new Intl.NumberFormat(appI18n.language, { maximumFractionDigits: 1 }).format(memoryGb);
   return `${formatted} GB`;
 }
 
@@ -71,7 +72,7 @@ function deviceSubtitle(
 ): string {
   const parts = [
     platformLabel(device.platform),
-    device.appVersion?.trim() ? `Cindy ${device.appVersion.trim()}` : null,
+    device.appVersion?.trim() ? `${appLabel(device.app, t)} ${device.appVersion.trim()}` : null,
     hardwareLabel(device.deviceInfo),
     memoryLabel(device.deviceInfo?.memoryGb),
     opts.statusOverride ?? deviceStatusLabel(device, t),
@@ -80,12 +81,8 @@ function deviceSubtitle(
   return parts.join(' · ');
 }
 
-/** 与设置搜索命中同款的短暂高亮(globals.css),时长也一致。 */
-const FOCUS_HIGHLIGHT_CLASS = 'settings-search-target-highlight';
-const FOCUS_HIGHLIGHT_MS = 1600;
-
 /**
- * 深链聚焦某台设备:行渲染出来后滚入视野并短暂高亮。等两帧再滚 —— 设置页自己的
+ * 深链聚焦某台设备:行渲染出来后滚入视野。等两帧再滚 —— 设置页自己的
  * section 深链滚动(父组件 effect,同帧 rAF)会先把容器滚到「我的设备」顶部,
  * 这里要排在它之后,否则被它盖掉。每个 focusRequestKey 只聚焦一次。
  */
@@ -99,27 +96,21 @@ function useFocusDeviceRow(
   useEffect(() => {
     if (!focusDeviceId || !focusRequestKey || !rowRendered) return;
     if (handledKeyRef.current === focusRequestKey) return;
-    let row: HTMLLIElement | undefined;
-    let timer: number | undefined;
     let second = 0;
     const first = window.requestAnimationFrame(() => {
       second = window.requestAnimationFrame(() => {
-        row = rowRefs.current.get(focusDeviceId);
+        const row = rowRefs.current.get(focusDeviceId);
         if (!row) return;
-        // 真正滚到并高亮后才记为已处理:列表刷新等让 effect 在两帧之间被清理时,
+        // 真正滚到后才记为已处理:列表刷新等让 effect 在两帧之间被清理时,
         // 重新运行仍会再定位一次,不会因提前记账而永远跳过。
         handledKeyRef.current = focusRequestKey;
         const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
         row.scrollIntoView?.({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-        row.classList.add(FOCUS_HIGHLIGHT_CLASS);
-        timer = window.setTimeout(() => row?.classList.remove(FOCUS_HIGHLIGHT_CLASS), FOCUS_HIGHLIGHT_MS);
       });
     });
     return () => {
       window.cancelAnimationFrame(first);
       window.cancelAnimationFrame(second);
-      if (timer !== undefined) window.clearTimeout(timer);
-      row?.classList.remove(FOCUS_HIGHLIGHT_CLASS);
     };
   }, [focusDeviceId, focusRequestKey, rowRefs, rowRendered]);
 }
@@ -446,6 +437,7 @@ export function MyDevicesPanel({
           </li>
         ) : (
           others.map((d) => {
+            const displayName = deviceLabel({ ...d, name: deviceDisplayName(d.deviceId, d.name, s.devices ?? []) }, t);
             const peerRevoked = revokedByPeer.has(d.deviceId);
             const control = controlToggleState(d);
             const inbound = inboundToggleState(s.enabled, revokedControllers.has(d.deviceId));
@@ -507,7 +499,7 @@ export function MyDevicesPanel({
                       </div>
                     ) : (
                       <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-                        {deviceDisplayName(d.deviceId, d.name, s.devices ?? [])}
+                        {displayName}
                       </span>
                     )}
                     <span className="break-words text-11 text-[var(--text-tertiary)]">
@@ -516,7 +508,7 @@ export function MyDevicesPanel({
                   </div>
                   {editingId !== d.deviceId && (
                     <div className="flex shrink-0 items-center gap-1">
-                      {canBeControlledPlatform(d.platform) && !peerRevoked && (
+                      {canBeControlledPlatform(d.platform, d.app) && !peerRevoked && (
                         <button data-settings-search-action="Open a remote desktop session for this device" type="button" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full text-[var(--text-primary)] hover:bg-[var(--surface-chip)] disabled:opacity-40"
                           disabled={!d.online || !d.remoteControlEnabled || !d.controlEnabled}
                           title={t('remoteDesktop.title')} aria-label={t('remoteDesktop.title')}
@@ -551,7 +543,7 @@ export function MyDevicesPanel({
                 {/* 两个方向各一行。手机等「不可被控」的设备、以及对方已拒绝本机的设备,都不展示「我可以」行
                     (前者永远控不了;后者避免让用户看到一个控不了的选中态而纠结)。 */}
                 <div className="mt-3 grid grid-cols-[max-content_minmax(0,1fr)] items-start gap-x-4 gap-y-2 border-t border-[var(--border-default)] pt-3">
-                  {canBeControlledPlatform(d.platform) && !peerRevoked && (
+                  {canBeControlledPlatform(d.platform, d.app) && !peerRevoked && (
                     <AccessRow label={t('settings.remoteControl.myDevices.iCan')} reason={controlReason}>
                       <AccessPill
                         label={t('settings.remoteControl.myDevices.controlIt')}
@@ -594,7 +586,6 @@ export function MyDevicesPanel({
         onOpenChange={(open) => {
           if (!open && !deletePending.current) setDeleteTarget(null);
         }}
-        presentation="standard"
         title={t('settings.devices.deleteTitle', { name: deleteTarget?.name ?? '' })}
         description={t('settings.devices.deleteMessage')}
         confirmText={t('settings.devices.delete')}

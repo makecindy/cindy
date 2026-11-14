@@ -125,7 +125,10 @@
     "./remote-desktop-scripts": "./src/remote-desktop/viewerScripts.ts",
     "./teammate-status": "./src/teammateStatus.ts",
     "./host-channel-contract": "./src/hostChannelContract.ts",
-    "./host-event-stream": "./src/hostEventStream.ts"
+    "./host-event-stream": "./src/hostEventStream.ts",
+    "./host-ipc-registry": "./src/hostIpcRegistry.ts",
+    "./subscription-selection": "./src/subscriptionSelection.ts",
+    "./host-platform-rpc": "./src/hostPlatformRpc.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

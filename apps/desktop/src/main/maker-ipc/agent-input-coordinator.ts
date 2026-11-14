@@ -41,6 +41,7 @@ import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 import type { UsageLimitRecoverySnapshot } from './usageLimitRecoveryStore.js';
 import { createLogger } from '../logger.js';
+import { AUTO_BRIDGE_BATCH_HEADER_RESERVE, AUTO_BRIDGE_BATCH_MAX_CHARS, AUTO_BRIDGE_BATCH_MAX_ITEMS, AUTO_BRIDGE_BATCH_SEPARATOR, autoBridgeReportCount, buildOrcaAutoBridgeBatch, isOrcaAutoBridgeQueueItem, sameAutoBridgeDispatchOptions } from './orcaAutoBridgeBatch.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText } from './autoReviewUserIntent.js';
 import type { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
@@ -764,6 +765,8 @@ type AgentInputSendFailure = Extract<
 interface SessionInputState {
   /** Runtime courtesy clock; never persisted or used for list ordering. */
   lastUserActionAt: number | null;
+  /** Last committed route while a crash snapshot may still be loading. */
+  queuedRoute: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'> | null;
   pendingQueue: AgentInputQueuedMessage[];
   pendingCompacts: PendingCompactRequest[];
   steeringQueueClientIds: string[];
@@ -924,6 +927,7 @@ function createInitialInputState(
 ): SessionInputState {
   return {
     lastUserActionAt: null,
+    queuedRoute: null,
     pendingQueue: [],
     pendingCompacts: [],
     steeringQueueClientIds: [],
@@ -1296,6 +1300,20 @@ function isHostGeneratedSteerItem(item: AgentInputQueuedMessage): boolean {
     || isSyntheticTriggerText((item.persistedContent ?? '').trimStart());
 }
 
+function rebaseQueuedItemRoute(
+  item: AgentInputQueuedMessage,
+  route: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'>,
+): void {
+  // A scheduled run can select its own route for this one execution.
+  if (item.origin?.kind === 'scheduler') return;
+  item.model = route.model;
+  item.createOpts.model = route.model;
+  item.createOpts.providerId = route.providerId;
+  item.createOpts.effort = route.effort;
+  item.createOpts.fastMode = route.fastMode;
+  if (route.effort) item.effort = route.effort;
+}
+
 export class AgentInputCoordinator {
   private readonly states = new Map<string, SessionInputState>();
   /** 账号限额等待计划的单调令牌（跨会话唯一，迟到的 host 定时器据此失效）。 */
@@ -1423,8 +1441,9 @@ export class AgentInputCoordinator {
 
   /**
    * Teammate principal only: an automatic resume/retry of the owner's own accepted input
-   * still speaks for that owner request. It is never fresh owner input for owner-only
-   * Host actions such as app update.
+   * still speaks for that owner request, and so does a host envelope (a companion group
+   * round) carrying the owner's words the host verified. Neither is fresh owner input for
+   * owner-only Host actions such as app update.
    */
   isActiveInputOwnerContinuation(sessionId: string): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
@@ -1432,12 +1451,12 @@ export class AgentInputCoordinator {
     // still use isActiveInputOwnerAuthored), but task actions retain its scope.
     const relayed = !!item && !item.sourcePlugin && !item.sharedTaskAuthor
       && verifiedOwnerRequestText(item.autoReviewUserText) !== undefined;
-    return relayed || this.activeInputHasOwnerAuthor(sessionId, true);
+    return relayed || this.activeInputHasOwnerAuthor(sessionId, true, true);
   }
 
-  private activeInputHasOwnerAuthor(sessionId: string, allowContinuation: boolean): boolean {
+  private activeInputHasOwnerAuthor(sessionId: string, allowContinuation: boolean, allowHostEnvelope = false): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
-    return this.inputHasOwnerAuthor(item, allowContinuation);
+    return this.inputHasOwnerAuthor(item, allowContinuation, allowHostEnvelope);
   }
 
   /** Only the exact input held by this coordinator may use companion group recovery. */
@@ -1465,7 +1484,8 @@ export class AgentInputCoordinator {
     return this.inputHasOwnerAuthor(item, true);
   }
 
-  private inputHasOwnerAuthor(item: AgentInputQueuedMessage | null | undefined, allowContinuation: boolean): boolean {
+  private inputHasOwnerAuthor(item: AgentInputQueuedMessage | null | undefined, allowContinuation: boolean,
+    allowHostEnvelope = false): boolean {
     // A trusted Desktop receipt (`origin.kind === 'desktop'`) is still owner input.
     const originKind = (item?.origin as { kind?: unknown } | undefined)?.kind;
     if (!item || (originKind !== undefined && originKind !== 'desktop')) return false;
@@ -1473,8 +1493,15 @@ export class AgentInputCoordinator {
     // A continuation keeps its source's author only when it names that source; the
     // host-generated "continue" text is never fresh owner input.
     const continuation = allowContinuation && !!item.retrySourceClientId;
+    // The host wrapped the input in a model-only envelope (`agentOmitsTriggerPrefix`, never
+    // accepted from renderer or device-link input) and kept beside it only the owner words it
+    // verified (a companion group round the owner started). The words below decide; an
+    // envelope without them, e.g. another member's message, has no owner author.
+    const hostEnvelope = allowHostEnvelope && item.agentOmitsTriggerPrefix === true
+      && item.originalSyntheticTrigger === 'generic';
     if (item.clientId.startsWith('plugin-task:')) return false;
-    if (item.originalSyntheticTrigger && !(continuation && item.originalSyntheticTrigger === 'continue')) return false;
+    if (item.originalSyntheticTrigger && !hostEnvelope
+      && !(continuation && item.originalSyntheticTrigger === 'continue')) return false;
     // Automatic continuations and zero-output retries are never fresh owner input.
     if (item.autoResume && !continuation) return false;
     const text = item.autoReviewUserText;
@@ -1750,6 +1777,11 @@ export class AgentInputCoordinator {
       item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId) && isUnrestorableMcpAppMessage(item));
     const restored = restorable.filter((item) =>
       item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId) && !isUnrestorableMcpAppMessage(item));
+    // set-model can finish while loadQueueSnapshot is still awaiting storage.
+    // Apply that committed route before publishing or persisting restored rows.
+    if (state.queuedRoute) {
+      for (const item of restored) rebaseQueuedItemRoute(item, state.queuedRoute);
+    }
     for (const item of staleAppItems) {
       this.deps.onDiscardedQueuedMessage?.(sessionId, item);
     }
@@ -4462,7 +4494,8 @@ export class AgentInputCoordinator {
   }
 
   /**
-   * @param opts.preserveInputBoundary 为 true 时跳过 abortInputBoundary。
+   * @param opts.preserveInputBoundary 为 true 时跳过 abortInputBoundary。发送准备中尚未预留
+   * vendor turn 时，旧运行时的关闭不作为这条新输入的 done；由发送自身的成功／失败收口。
    * @param opts.preserveAutoResumeIntent 为 true 时保留当前自动续跑接管态。
    *   用于 provider rebuild / unexpected close 交棒：waiting timer、in-flight
    *   callback、已因 SESSION_RUNNING 回队、以及已进入 drain 但尚未 vendor
@@ -4515,7 +4548,7 @@ export class AgentInputCoordinator {
     if (preserveUndispatchedAutoResume && active?.sendStarted) {
       // sendToAgent 已在飞：status=closed 可能早于 send promise。vendor 已
       // accept 时再入队会二次 CONTINUE；等 outcome 再决定 commit 还是交回。
-      this.recordActiveTurnClosedBeforeSendOutcome(state, active);
+      this.recordActiveTurnClosedBeforeSendOutcome(state, active, opts?.preserveInputBoundary === true);
       state.queueAbortPending = false;
       state.abortBoundaryToken = null;
       this.clearAllSteeringMarkers(state);
@@ -4526,7 +4559,7 @@ export class AgentInputCoordinator {
       this.requeuePreservedUndispatchedAutoResume(sessionId, state, active);
     } else if (active && !isActiveTurnDispatched(active)) {
       if (active.sendStarted) {
-        this.recordActiveTurnClosedBeforeSendOutcome(state, active);
+        this.recordActiveTurnClosedBeforeSendOutcome(state, active, opts?.preserveInputBoundary === true);
       } else {
         this.handleActiveTurnClosedBeforeDispatch(sessionId, state, active);
       }
@@ -5107,6 +5140,36 @@ export class AgentInputCoordinator {
     return null;
   }
 
+  /** Lead drain 前只合并队首连续的系统兜底回报；失败/异常来源保留原条目逐条派发。 */
+  private coalesceAutoBridgeHead(
+    sessionId: string,
+    state: SessionInputState,
+    head: AgentInputQueuedMessage,
+  ): AgentInputQueuedMessage {
+    if (!isOrcaAutoBridgeQueueItem(head)) return head;
+    const targets = [head];
+    let batchReports = autoBridgeReportCount(head);
+    // 预估最终正文长度：计入批次头与分隔符，避免包装把字符预算撑破。
+    let projectedChars = AUTO_BRIDGE_BATCH_HEADER_RESERVE + head.text.length;
+    for (const item of state.pendingQueue.slice(1)) {
+      if (!isOrcaAutoBridgeQueueItem(item) || !sameAutoBridgeDispatchOptions(head, item)) break;
+      // 上限双闸：按真实报告数累计（已合批项按其 count，而非队列行数）+ 含包装的字符预算；超出的留到下一轮 drain。队首必发，不在此拦截。
+      if (batchReports + autoBridgeReportCount(item) > AUTO_BRIDGE_BATCH_MAX_ITEMS) break;
+      if (projectedChars + AUTO_BRIDGE_BATCH_SEPARATOR.length + item.text.length > AUTO_BRIDGE_BATCH_MAX_CHARS) break;
+      targets.push(item);
+      batchReports += autoBridgeReportCount(item);
+      projectedChars += AUTO_BRIDGE_BATCH_SEPARATOR.length + item.text.length;
+    }
+    if (targets.length < 2) return head;
+    if (targets.some((item) => state.queueEditLocks.includes(item.clientId))) return head;
+    const result = this.mergeQueuedMessagesAtomically(
+      sessionId,
+      targets.map((item) => item.clientId),
+      buildOrcaAutoBridgeBatch,
+    );
+    return result.merged ? state.pendingQueue[0] ?? head : head;
+  }
+
   private getDrainableHead(
     sessionId: string,
     state: SessionInputState,
@@ -5188,8 +5251,8 @@ export class AgentInputCoordinator {
       await this.dispatchCompact(sessionId, compact, reason);
       return;
     }
-    const head = this.getDrainableHead(sessionId, state);
-    if (!head) {
+    const drainHead = this.getDrainableHead(sessionId, state);
+    if (!drainHead) {
       const hasRunnableWork =
         state.pendingQueue.length > 0 ||
         state.pendingCompacts.some((item) => item.waitForClientIds.length === 0);
@@ -5235,6 +5298,7 @@ export class AgentInputCoordinator {
       this.scheduleExternalTurnRetryIfNeeded(sessionId, state, `drain-blocked:${reason}`);
       return;
     }
+    const head = this.coalesceAutoBridgeHead(sessionId, state, drainHead);
     state.staleLiveIdleSinceMs = null;
     state.pendingQueue = state.pendingQueue.slice(1);
     this.removePendingCompactWaitClientId(state, head.clientId);
@@ -5711,6 +5775,16 @@ export class AgentInputCoordinator {
     // 会重试的分支同理:重试的是**新** turn,旧 error 不会再被接管。
     this.discardDeferredResumableCandidate(sessionId, active);
     const latest = this.getState(sessionId);
+    if (result.kind === 'host-send' && result.code === 'PLUGIN_TURN_SKIPPED') {
+      latest.activeTurn = null;
+      this.notifyRejectedUserTurn(sessionId, item);
+      if (active.persisted) this.notifyUndispatchedUserTurn(sessionId, item, 'cancelled');
+      else this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+      this.emit(sessionId);
+      this.scheduleDrain(sessionId, 'runtime-plugin-skipped');
+      this.deps.onQueueEmptied?.(sessionId);
+      return;
+    }
     if (this.requeuePreservedAutoResumeIfAttemptCurrent(sessionId, latest, active, result)) {
       return;
     }
@@ -5904,6 +5978,28 @@ export class AgentInputCoordinator {
       }
       this.scheduleDrain(sessionId, 'credential-switch-blocker-settled');
     }
+  }
+
+  /** Rebase unsent inputs after a committed user route selection, including the crash snapshot. */
+  refreshQueuedRoute(
+    sessionId: string,
+    route: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'>,
+  ): void {
+    const state = this.getState(sessionId);
+    state.queuedRoute = { ...route };
+    for (const item of state.pendingQueue) rebaseQueuedItemRoute(item, route);
+    // A head may already have left pendingQueue while pre-dispatch checks run.
+    const active = state.activeTurn;
+    // sendStarted may already be true while sendToAgent waits for the same
+    // session lock held by set-model; no vendor dispatch has happened yet.
+    if (active?.item && !active.persisted) rebaseQueuedItemRoute(active.item, route);
+    for (const compact of state.pendingCompacts) {
+      compact.createOpts.model = route.model;
+      compact.createOpts.providerId = route.providerId;
+      compact.createOpts.effort = route.effort;
+      compact.createOpts.fastMode = route.fastMode;
+    }
+    this.emit(sessionId);
   }
 
   /** host 侧异步边界(pending 凭证切换 apply 完成等)后恢复该会话的队列派发。 */
@@ -6227,7 +6323,14 @@ export class AgentInputCoordinator {
   private recordActiveTurnClosedBeforeSendOutcome(
     state: SessionInputState,
     active: ActiveTurn,
+    preserveInputBoundary: boolean,
   ): void {
+    // A planned close/rebuild inside send preparation belongs to the old
+    // runtime, not this input: the replacement has not reserved its turn yet.
+    // Synthesizing done here would retire the new input as soon as send
+    // succeeds, losing both manual retry and quota waiting on a later error.
+    // Once reserved (or for an explicit close), retain normal close handling.
+    if (preserveInputBoundary && active.vendorTurnGeneration === null) return;
     recordPendingTerminalEvent(active, { type: 'done' });
     state.error = null;
     clearErrorProjectionSignals(state);
@@ -6883,9 +6986,13 @@ export class AgentInputCoordinator {
     preferProviderGroup = true,
   ): AutoResumeInfo | null {
     if (!this.deps.onResumableTurnError) return null;
-    // 容量错误已经走到终态：组能接管时直接交接，不再叠加主进程的同机重试。
+    // 容量/额度错误到达终态时先交给供应商组；组异步拒绝后，
+    // resumeAfterProviderGroupDeclined 以 preferProviderGroup=false 回到原有恢复。
     // 其他中断仍先走自愈(如断线后在原电脑恢复)；不能交给组的输入也保持原有处理。
-    if (preferProviderGroup && this.getProviderGroupSwitchCandidate(sessionId, item, message, signals) === 'overload') return null;
+    if (preferProviderGroup) {
+      const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals);
+      if (cause === 'overload' || cause === 'usage-limit') return null;
+    }
     try {
       return (
         this.deps.onResumableTurnError(sessionId, { ...(signals ?? {}), message }, item) ?? null

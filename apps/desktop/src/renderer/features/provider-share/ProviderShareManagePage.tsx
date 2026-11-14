@@ -309,7 +309,6 @@ export function ProviderShareManagePage({
   const removeMember = useCallback(
     async (member: ProviderShareMemberView) => {
       const ok = await confirm({
-        presentation: 'standard',
         title: t('providerShare.manage.removeConfirm.title', { name: providerShareMemberName(member) }),
         description: t('providerShare.manage.removeConfirm.description', {
           name: providerShareMemberName(member),
@@ -514,7 +513,11 @@ export function ProviderShareManagePage({
         </SettingsSection>
       )}
 
-      {providerForApproval?.subscriptionFastPolicy && <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />}
+      {deviceId && providerForApproval?.subscriptionFastPolicy && (
+        <div className="mt-6 shrink-0">
+          <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />
+        </div>
+      )}
       <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
 
       <ProviderGroupSection

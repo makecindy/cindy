@@ -162,6 +162,8 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Host and desktop source contracts: lines the Node Host copies or wires as the desktop does.
+  'src/main/maker-host/__tests__/hostDesktopSourceContracts.guard.test.ts',
   // Build fuses and Node worker entrypoints are a cross-file packaging contract.
   'src/main/cindy-brain/__tests__/nodeRuntimePackaging.test.ts',
   'src/renderer/components/settings/__tests__/settingsSearchCatalog.guard.test.ts',
@@ -175,13 +177,17 @@ const desktopGuardInclude = [
   'src/main/__tests__/sessionRuntimeControlWiring.test.ts',
   // Orca queued acceptance must keep using delivery-scoped authority, not the round guard.
   'src/main/maker-ipc/__tests__/orcaDeliveryWiring.contract.test.ts',
+  // Orca auto-bridge batching: host-only stamping and wire-mark stripping are trust boundaries.
+  'src/main/maker-ipc/__tests__/orcaAutoBridgeBatch.contract.test.ts',
   'src/main/localDb/ipc/__tests__/sessionCreatedBroadcast.test.ts',
   'src/renderer/__tests__/promptRecommendationBadge.test.ts',
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
   'src/renderer/__tests__/typographyDiscipline.test.ts',
   'src/renderer/__tests__/designEffectsDiscipline.test.ts',
+  'src/renderer/__tests__/motionDiscipline.test.ts',
   'src/renderer/__tests__/windowBackdropAcrylic.test.ts',
   // Existing credential/permission/protocol contracts, separated from runtime units.
+  'src/main/__tests__/providerImportWiring.test.ts',
   'src/main/__tests__/analyticsConsentMigrationGuards.test.ts',
   'src/main/__tests__/authAccountDeletionLifecycle.test.ts',
   'src/main/__tests__/authLegacyTokenMirror.test.ts',
@@ -247,7 +253,6 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/markdownTargetRendererContract.test.ts',
   'src/renderer/__tests__/bulkSessionStatusRouting.test.ts',
   'src/renderer/__tests__/homeUsageDashboardSource.test.ts',
-  'src/renderer/features/plugin/__tests__/unreadDotMotion.test.ts',
   'src/renderer/__tests__/workdirBrowseRemoteSafety.test.ts',
   'src/renderer/__tests__/remoteAgentRelocationWiring.test.ts',
   'src/renderer/features/bots/__tests__/botPermissionSwitch.test.ts',
@@ -392,11 +397,15 @@ export default {
         },
         integration: {
           status: 'manual',
-          reason: 'Local Agent protocol tests use real sockets; Skill archive size regressions perform large encrypted disk transfers.',
+          reason: 'Local Agent protocol tests use real sockets; Skill archive size regressions perform large encrypted disk transfers; the Host Pi package parity runs the bundled Pi binary.',
           execution: 'exclusive',
           coverage: 'allowlist',
           command: vitestBin('run', '--maxWorkers=2'),
-          include: ['src/main/local-agent/__tests__/*.integration.test.ts', 'src/main/bot-import/__tests__/skillArchive.integration.test.ts'],
+          include: [
+            'src/main/local-agent/__tests__/*.integration.test.ts',
+            'src/main/bot-import/__tests__/skillArchive.integration.test.ts',
+            'src/main/maker-host/__tests__/hostPiPackagesParity.integration.test.ts',
+          ],
         },
         'git-integration': {
           status: 'manual',

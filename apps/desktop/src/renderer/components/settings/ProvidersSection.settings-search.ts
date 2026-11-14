@@ -3,6 +3,24 @@ import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes
 
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
 export const providersSettings = defineSettings({
+  localImport: {
+    id: 'providers.localImport',
+    tab: 'providers',
+    targetId: 'settings-provider-local-import',
+    fallbackTargetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.import.local.title',
+    descriptionKey: 'settings.providers.import.local.note',
+    sectionKey: 'settings.tabs.providers',
+    keywordKeys: [
+      'settings.providers.import.local.edit',
+      'settings.providers.import.local.editNote',
+      'settings.providers.import.local.name',
+      'settings.providers.import.local.baseUrl',
+      'settings.providers.import.local.protocol',
+      'settings.providers.import.local.apiKey',
+    ],
+    aliases: ['Alma', 'CC Switch', 'Claude Code', 'Codex', 'OpenCode', 'local API import'],
+  },
   subscriptionAccounts: {
     id: 'providers.subscriptionAccounts',
     tab: 'providers',
@@ -73,6 +91,22 @@ export const providersSettings = defineSettings({
     targetId: 'settings-panel-providers',
     titleKey: TAB_LABEL_KEY['providers'],
     sectionKey: 'settings.sections.providers',
+    keywordKeys: ['settings.providers.remote.modelsTitle'],
+  },
+  videoApi: {
+    id: 'providers.videoApi',
+    tab: 'providers',
+    targetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.custom.fields.openaiVideos',
+    sectionKey: 'settings.tabs.providers',
+    keywordKeys: [
+      'settings.providers.custom.fields.openaiVideosHint',
+      'settings.providers.custom.fields.minimaxVideos',
+      'settings.providers.custom.fields.minimaxVideosHint',
+      'settings.providers.custom.fields.xaiVideos',
+      'settings.providers.custom.fields.xaiVideosHint',
+    ],
+    aliases: ['视频接口', '视频生成', 'MiniMax-H3', '/v1/videos', 'video API', 'video generation'],
   },
   addProvider: {
     id: 'settings.providers.addProvider',

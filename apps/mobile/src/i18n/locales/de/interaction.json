@@ -45,7 +45,7 @@
   "panel": {
     "questionUnanswered": "Unbeantwortet",
     "questionWithdrawn": "Keine Antwort mehr nötig",
-    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nDein Entwurf bleibt erhalten; du kannst ihn als Ergänzung senden.",
     "sendSupplement": "Ergänzung senden",
     "readOnlyKind": "Ausstehend",
     "readOnlyTitle": "Warten auf Bestätigung auf deinem Computer",
@@ -92,7 +92,7 @@
     "sendAndContinue": "Senden und fortfahren",
     "closeAnswer": "Schließen",
     "planReviewTitle": "Claudes Plan prüfen",
-    "planExpand": "Plan erweitern",
+    "planExpand": "Plan aufklappen",
     "planEditHint": "Passe den Plan im Bearbeitungsmodus an",
     "planBrowseHint": "Tippe auf einen Abschnitt, um dorthin zu springen",
     "planEditToggle": "Plan bearbeiten",
@@ -113,10 +113,10 @@
     "planFeedbackSubmit": "Feedback zum Plan senden",
     "planFeedbackAccessibility": "Gib Feedback, um den Plan zu ändern",
     "validation": {
-      "required": "Füllen Sie dieses Pflichtfeld aus.",
-      "choice": "Wählen Sie eine der aufgeführten Optionen.",
-      "tooShort": "Geben Sie mindestens {{count}} Zeichen ein.",
-      "tooLong": "Geben Sie höchstens {{count}} Zeichen ein."
+      "required": "Fülle dieses Pflichtfeld aus.",
+      "choice": "Wähle eine der aufgeführten Optionen.",
+      "tooShort": "Gib mindestens {{count}} Zeichen ein.",
+      "tooLong": "Gib höchstens {{count}} Zeichen ein."
     },
     "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
@@ -134,7 +134,7 @@
       "label": "Plan"
     },
     "issue_confirm": {
-      "title": "Problem muss bestätigt werden",
+      "title": "Issue muss bestätigt werden",
       "label": "Issue"
     },
     "rename_sessions_confirm": {
@@ -193,6 +193,7 @@
     "fromLead": "Nachricht vom Lead",
     "fromWorkerNamed": "Nachricht von Worker „{{role}}“",
     "fromWorker": "Nachricht vom Worker",
+    "fromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
     "emptyMessageBody": "(Leere Nachricht)"
   },
   "contextSheet": {
@@ -241,7 +242,7 @@
     "phase": {
       "pending": "Ausstehend",
       "action_running": "In Bearbeitung…",
-      "waiting_external": "Warte auf Autorisierung…",
+      "waiting_external": "Wartet auf Autorisierung…",
       "verifying": "Wird überprüft…",
       "satisfied": "Abgeschlossen",
       "failed": "Fehlgeschlagen",
@@ -281,7 +282,7 @@
       "embedded-frame": "Diese Felder befinden sich auf einer anderen Website, die in die Seite eingebettet ist. Prüfe, ob die Quelle vertrauenswürdig ist."
     },
     "agentControlled": "Der Agent hat diesen Bildschirm geöffnet. Prüfe vor dem Ausfüllen, ob du dich wirklich hier anmelden möchtest.",
-    "agentPicture": "Dieser Code stammt aus einem Screenshot des Agent, daher kann Cindy den ursprünglichen Bildschirm nicht sehen oder erkennen, wann du fertig bist. Prüfe, ob er zur gewünschten Anmeldeseite führt, und wähle nach dem Scannen „An Agent zurückgeben“.",
+    "agentPicture": "Dieser Code stammt aus einem Screenshot des Agents, daher kann Cindy den ursprünglichen Bildschirm nicht sehen oder erkennen, wann du fertig bist. Prüfe, ob er zur gewünschten Anmeldeseite führt, und wähle nach dem Scannen „An Agent zurückgeben“.",
     "error": {
       "decision": "Das hat nicht geklappt. Versuch es erneut.",
       "stale": "Der Bildschirm hat sich geändert. Verwende die neueste Version.",
