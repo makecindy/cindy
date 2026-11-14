@@ -21,7 +21,12 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { getDirExportStatus, startDirExport, type DirExportDeps } from '../dir-export';
+import {
+  __dirExportTesting,
+  getDirExportStatus,
+  startDirExport,
+  type DirExportDeps,
+} from '../dir-export';
 
 let tmp: string;
 beforeEach(async () => {
@@ -32,12 +37,15 @@ afterEach(async () => {
 });
 
 async function waitTerminal(id: string) {
-  for (let i = 0; i < 200; i++) {
-    const status = getDirExportStatus(id);
-    if (status?.state === 'done' || status?.state === 'error') return status;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  throw new Error('timeout');
+  // Await the real transfer and cleanup, rather than impose a second, short
+  // polling deadline on filesystem work (Windows CI can exhaust 200 polls).
+  // A hung job still fails through Vitest's existing test timeout.
+  const job = __dirExportTesting.jobs.get(id);
+  if (!job?.settled) throw new Error(`missing export completion: ${id}`);
+  await job.settled;
+  const status = getDirExportStatus(id);
+  if (!status) throw new Error(`missing export status: ${id}`);
+  return status;
 }
 
 function makeDeps(overrides: Partial<DirExportDeps> = {}): DirExportDeps & { temps: string } {

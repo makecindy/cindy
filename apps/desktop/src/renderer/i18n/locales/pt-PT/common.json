@@ -21611,8 +21611,7 @@
     "providerManagedAuth": "O fornecedor atual do Codex não disponibiliza informações da conta ChatGPT. Ao adicionar o fornecedor, selecione «$t(subscriptionAccounts.signIn.anotherAccount)» para usar uma pasta separada.",
     "signIn": {
       "checking": "A verificar a conta local…",
-      "detected": "Conta com sessão iniciada encontrada",
-      "useAccount": "Usar esta conta",
+      "useAccount": "Usar a conta do {{cli}} neste computador",
       "anotherAccount": "Iniciar sessão noutra conta",
       "keepExisting": "A nova conta passa a ser um fornecedor separado, a menos que escolha um para a juntar. As sessões existentes serão mantidas.",
       "checkFailed": "Não foi possível verificar a conta local. Tente novamente.",
@@ -21622,7 +21621,6 @@
     "title": "Contas de subscrição",
     "strategy": "Distribuição de carga",
     "add": "Adicionar conta",
-    "default": "Pasta predefinida",
     "defaultTag": "Predefinida",
     "ready": "Ligada",
     "signedOut": "É necessário iniciar sessão",

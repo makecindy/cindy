@@ -31,6 +31,7 @@ export default {
     'appearance-desktop-hidden': { about: 'Hidden desktop retains blur 12 with a disabled slider', data: { tab: 'appearance', hiddenBackground: 'none' } },
     'appearance-wallpaper-hidden': { about: 'Hidden wallpaper retains blur 12 with a disabled slider', data: { tab: 'appearance', hiddenBackground: 'cindy-window' } },
     'personalization-custom': { about: 'Custom auxiliary slots forward search IDs to real model selector buttons', data: { tab: 'personalization', customAuxiliary: true } },
+    'tab-switch': { about: 'Committed settings tabs paint at full opacity with normal motion enabled', data: { tab: 'personalization', tabSwitch: true } },
     'remote-signed-in': { about: 'Signed-in device controls and relay section with searchable targets', data: { tab: 'remote-control', cloud: true } },
     ...Object.fromEntries([
     'general', 'appearance', 'personalization', 'voice-input', 'shortcuts',
@@ -41,6 +42,24 @@ export default {
     const panel = page.getByRole('tabpanel');
     await panel.waitFor();
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
+    // 2026-11-14 recording: settled screenshots missed a blank frame caused by each tab's fade-in.
+    // Exercise real SettingsView navigation and Chromium paint, with normal motion, on the first
+    // committed frame. This browser scenario covers the animation gap beside the Suspense unit tests.
+    if (ui.data.tabSwitch) {
+      await panel.locator('textarea').first().waitFor();
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      for (const tab of ['general', 'personalization']) {
+        await page.getByRole('tab', { name: await ui.t(`settings.tabs.${tab}`), exact: true }).click();
+        const destination = page.locator(`#settings-panel-${tab}`);
+        await destination.waitFor();
+        const opacity = await destination.evaluate(element => new Promise(resolve => {
+          requestAnimationFrame(() => resolve(Number(getComputedStyle(element.parentElement).opacity)));
+        }));
+        assert.equal(opacity, 1, `${tab} must paint at full opacity on its first frame`);
+        await ui.capture(`${tab}-first-frame`);
+      }
+      return;
+    }
     if (ui.data.previewBackground) {
       const label = ui.data.previewBackground === 'none' ? 'desktopVisibilityLabel' : 'visibilityLabel';
       const slider = panel.getByRole('slider', { name: await ui.t(`settings.appearance.wallpaper.${label}`) });

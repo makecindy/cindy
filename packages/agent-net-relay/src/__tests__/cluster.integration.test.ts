@@ -406,9 +406,13 @@ describe('replicated official relay', () => {
   // A sharing request authenticated by an account identity has no device routing key; a guest on the
   // host's replica must still lose access the moment another replica commits the revocation.
   it('applies a sharing revocation made on another replica to the live guest session and reports host presence', async () => {
+    // CI #10446: independent requestedAt/expiresAt clock reads could exceed
+    // the protocol's 30-minute maximum by 1ms and make the host reject its directory.
+    // Advance on every read to expose that boundary without a real-time race.
+    let at = Date.now();
     const actors = { 'Bearer unit-owner': { accountId: 'owner-account', deviceId: 'owner' },
       'Bearer unit-guest': { accountId: 'guest-account', deviceId: 'external-visitor' } };
-    const set = await replicaSet({ sharing: {
+    const set = await replicaSet({ now: () => at++, sharing: {
       async authenticate(req) { const actor = actors[req.headers.authorization as keyof typeof actors];
         if (!actor) throw new AppError('UNAUTHORIZED', 401, 'Unit auth rejected'); return { ...actor, networkId: NETWORK }; },
       providers: { hostCapability: 'provider-share-v1', identityCards: {

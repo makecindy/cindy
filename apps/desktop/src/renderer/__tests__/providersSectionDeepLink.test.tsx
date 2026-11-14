@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
+import type { SubscriptionPoolView } from '../../shared/subscriptionAccounts';
 
 const {
   wizardSpy,
@@ -236,6 +237,38 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
+  // 2026-11-14 recording, unit: the account list can finish reading before its header.
+  // Existing reconnect tests only inspected the settled page, missing the header's later
+  // legacy-to-pool remount that erased already-visible rows and flashed a loading spinner.
+  // The catalog already identifies the pool. Defer the header read and assert DOM continuity.
+  // Targeted run: 11.47s wall time, 486ms assertions; the existing page graph and jsdom dominate startup.
+  it.each(['openai', 'anthropic'] as const)('keeps loaded %s accounts mounted when the header confirms the catalog pool', async kind => {
+    providersState.providers = [makeProvider(kind, {
+      name: kind, connected: true, subscriptionAccountPool: kind,
+      auth: { method: 'oauth', native: kind === 'openai' ? 'codex' : 'claude' },
+      agents: kind === 'openai' ? ['codex'] : ['claude-code'],
+    })];
+    const pool: SubscriptionPoolView = {
+      providerId: kind, configured: true, strategy: 'least',
+      accounts: [{ id: 'default', identity: 'member@example.test', status: 'ready',
+        paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/account' }],
+    };
+    let completeHeader!: (view: SubscriptionPoolView) => void;
+    const headerRead = new Promise<SubscriptionPoolView>(resolve => { completeHeader = resolve; });
+    let reads = 0;
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async () =>
+      ++reads === 2 ? headerRead : pool);
+    renderAt(`?tab=providers&connect=${kind}`);
+    const row = await screen.findByTestId('subscription-account');
+    expect(within(row).getByText('member@example.test')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.providers.button.disconnect' })).toBeTruthy();
+
+    await act(async () => { completeHeader(pool); });
+
+    expect(screen.getByTestId('subscription-account')).toBe(row);
+    expect(row.isConnected).toBe(true);
+  });
+
   // #9517 review, unit: exercise the real provider header's default-account
   // reconnect. Wizard/account-list tests do not cover this independent catch.
   it.each([
@@ -545,7 +578,9 @@ describe('ProvidersSection — 深链定位', () => {
 
   it('a cancelled login cannot clear a newer login on the same account', async () => {
     const completions: ((result: { ok: boolean }) => void)[] = [];
-    const login = vi.fn((_id: string, _options?: { ownerId?: string }) => new Promise<{ ok: boolean }>((resolve) => completions.push(resolve)));
+    const login = vi.fn<typeof window.electronAPI.maker.providerOAuthLogin>(
+      () => new Promise<{ ok: boolean }>((resolve) => completions.push(resolve)),
+    );
     let progress!: Parameters<typeof window.electronAPI.maker.onProviderOAuthProgress>[0];
     const openExternal = vi.fn(async () => ({ success: true }));
     window.electronAPI.openExternal = openExternal;

@@ -17,7 +17,16 @@ try {
   const target = path.join(root, 'auth.json');
   fs.writeFileSync(source, 'fake-local-token');
   fs.writeFileSync(target, 'fake-new-system-token');
-  await assert.rejects(moveCodexAuthFile(source, target), { code: 'EEXIST' });
+  // A known collision must not depend on a cold/available PowerShell process.
+  // CI #10413 returned EIO after shell startup hit 15s instead of EEXIST.
+  const systemRoot = process.env.SystemRoot;
+  try {
+    process.env.SystemRoot = path.join(root, 'no-powershell');
+    await assert.rejects(moveCodexAuthFile(source, target), { code: 'EEXIST' });
+  } finally {
+    if (systemRoot === undefined) delete process.env.SystemRoot;
+    else process.env.SystemRoot = systemRoot;
+  }
   assert.equal(fs.readFileSync(target, 'utf8'), 'fake-new-system-token');
   assert.equal(fs.readFileSync(source, 'utf8'), 'fake-local-token');
 
@@ -28,6 +37,25 @@ try {
   assert.equal(fs.statSync(target).nlink, 1, 'publication must not create a hardlink');
   await assert.rejects(moveCodexAuthFile(source, target), { code: 'ENOENT' });
   assert.equal(fs.readFileSync(target, 'utf8'), 'fake-local-token');
+  // The early collision check is only an optimization: a concurrent winner
+  // after lstat must still survive the real atomic File.Move unchanged.
+  fs.writeFileSync(source, 'fake-late-token');
+  const lateTarget = path.join(root, 'late-auth.json');
+  const lstat = fs.promises.lstat;
+  fs.promises.lstat = async function (filename, ...options) {
+    try { return await lstat.call(this, filename, ...options); }
+    catch (error) {
+      if (filename === lateTarget && error.code === 'ENOENT') {
+        fs.writeFileSync(lateTarget, 'fake-concurrent-winner');
+      }
+      throw error;
+    }
+  };
+  try {
+    await assert.rejects(moveCodexAuthFile(source, lateTarget), { code: 'EEXIST' });
+  } finally { fs.promises.lstat = lstat; }
+  assert.equal(fs.readFileSync(lateTarget, 'utf8'), 'fake-concurrent-winner');
+  assert.equal(fs.readFileSync(source, 'utf8'), 'fake-late-token');
   const linked = path.join(root, 'auth.json.linktmp');
   const published = path.join(root, 'shared-auth.json');
   let canSymlink = true;

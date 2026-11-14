@@ -48,10 +48,21 @@ export function normalizeRelPath(value) {
 }
 
 export function parseWorkspacePatterns(text) {
-	return text
-		.split(/\r?\n/)
-		.map((line) => line.trim().match(/^-\s+["']?([^"']+)["']?$/)?.[1])
-		.filter(Boolean);
+	const patterns = [];
+	let inPackages = false;
+	for (const line of text.split(/\r?\n/)) {
+		if (!inPackages) {
+			if (/^packages:\s*(?:#.*)?$/.test(line)) inPackages = true;
+			continue;
+		}
+		if (!line.trim() || /^\s*#/.test(line)) continue;
+		// Only the packages block defines workspaces; other pnpm settings also
+		// contain YAML sequences (for example supportedArchitectures.os).
+		if (/^\S/.test(line) && !/^-\s/.test(line)) break;
+		const pattern = line.trim().match(/^-\s+["']?([^"']+)["']?$/)?.[1];
+		if (pattern) patterns.push(pattern);
+	}
+	return patterns;
 }
 
 export function parseCliOptions(args) {

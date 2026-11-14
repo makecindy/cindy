@@ -195,9 +195,10 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
         const scope = { memberId, guestSubject: actor.accountId, memberVersion: member.version };
         const existing = host.requests().find(r => r.networkId === actor.networkId && r.kind === kind && r.resourceId === resourceId && r.guestDeviceId === actor.deviceId
           && r.scope.memberId === memberId && r.scope.memberVersion === member.version && r.guestSigningKey === signingKey && r.guestTransportKey === transportKey);
+        const requestedAt = host.now();
         request = { id: existing && !host.grant(existing).revoked ? existing.id : randomUUID(), kind, resourceId, hostDeviceId: row.hostDeviceId,
           networkId: binding.networkId, scope, guestDeviceId: actor.deviceId, guestSigningKey: signingKey, guestTransportKey: transportKey,
-          requestedAt: host.now(), expiresAt: host.now() + MAX_GRANT_LIFETIME_MS };
+          requestedAt, expiresAt: requestedAt + MAX_GRANT_LIFETIME_MS };
         if (!check(request, state)) throw notFound();
         await host.saveRequest(request); host.changed([binding.networkId]);
       }

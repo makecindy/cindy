@@ -110,7 +110,7 @@ describe('AddProviderWizard — explicit subscription account choice', () => {
         screen.getByRole('button', {
           name:
             target === 'default'
-              ? 'subscriptionAccounts.signIn.useAccount'
+              ? /subscriptionAccounts\.signIn\.useAccount/
               : 'subscriptionAccounts.signIn.anotherAccount',
         }),
       );
@@ -156,6 +156,35 @@ describe('AddProviderWizard — explicit subscription account choice', () => {
       );
     },
   );
+  // 2026-11-14 user decision: a CLI login already in Cindy (built-in provider, or the same identity
+  // under another provider) is neither listed nor offered again; only a new sign-in remains.
+  it.each(['ready', 'signed-out'] as const)(
+    'offers only a new sign-in once the CLI login is already added (CLI %s)',
+    async (status) => {
+      vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+        ...preview,
+        defaultAdded: true,
+        accounts: [{ ...preview.accounts[0], status }],
+      });
+      renderWizard('openai');
+      const another = await screen.findByRole('button', {
+        name: 'subscriptionAccounts.signIn.anotherAccount',
+      });
+      expect(screen.queryByText('existing@example.com')).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
+      for (const name of [/subscriptionAccounts\.signIn\.useAccount/, 'subscriptionAccounts.signIn.useCodex'])
+        expect(screen.queryByRole('button', { name })).toBeNull();
+      // No connected provider to join here, so it goes straight to a separate provider.
+      fireEvent.click(another);
+      await waitFor(() =>
+        expect(window.electronAPI.subscriptionAccounts.command).toHaveBeenCalledWith({
+          action: 'create',
+          providerId: 'openai',
+          loginKey: expect.any(String),
+        }),
+      );
+    },
+  );
   it('keeps detection failures visible and retries without granting authorization', async () => {
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockRejectedValueOnce(
       new Error('unavailable'),
@@ -164,7 +193,7 @@ describe('AddProviderWizard — explicit subscription account choice', () => {
     renderWizard('openai', onDone);
     await screen.findByRole('alert');
     expect(
-      screen.queryByRole('button', { name: 'subscriptionAccounts.signIn.useAccount' }),
+      screen.queryByRole('button', { name: /subscriptionAccounts\.signIn\.useAccount/ }),
     ).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.signIn.retry' }));
     await screen.findByText('existing@example.com');

@@ -1,9 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { create as tarCreate, Header, list as tarList } from 'tar';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { withUnverifiedPnpmEnv } from '../sourcePnpm';
 
 import {
   createCindyMakeWorktree,
@@ -142,6 +144,11 @@ describe('prepareCindyMakeWorkspace', () => {
         PATH: '',
         npm_config_userconfig: os.devNull,
         npm_config_globalconfig: os.devNull,
+        XDG_CONFIG_HOME: expect.any(String),
+        pnpm_config_npmrc_auth_file: os.devNull,
+        pnpm_config_userconfig: os.devNull,
+        pnpm_config_globalconfig: os.devNull,
+        pnpm_config_manage_package_manager_versions: 'false',
         COREPACK_ENV_FILE: '0',
         COREPACK_ENABLE_PROJECT_SPEC: '0',
         COREPACK_ENABLE_UNSAFE_CUSTOM_URLS: '0',
@@ -163,6 +170,23 @@ describe('prepareCindyMakeWorkspace', () => {
     );
   });
 
+  // pnpm 11 globals must never be prepopulated by content or inherited profile settings.
+  // The production helper owns a fresh empty config for both install and fetch;
+  // success and failure share the same cleanup. Unit, no child process or real wait.
+  it.each([false, true])('isolates and cleans the config of an unverified invocation (failure=%s)', async fail => {
+    let configRoot = '';
+    const invocation = withUnverifiedPnpmEnv({ XDG_CONFIG_HOME: userData }, async environment => {
+      configRoot = environment.XDG_CONFIG_HOME!;
+      expect(path.relative(userData, configRoot).startsWith('..')).toBe(true);
+      expect(await readdir(configRoot)).toEqual([]);
+      if (fail) throw new Error('install failed');
+      return 'completed';
+    });
+    if (fail) await expect(invocation).rejects.toThrow('install failed');
+    else await expect(invocation).resolves.toBe('completed');
+    await expect(access(configRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('keeps inherited secrets out of an unverified install environment', async () => {
     let seen: NodeJS.ProcessEnv | undefined;
     const pnpm = vi.fn(async (env: NodeJS.ProcessEnv) => {
@@ -176,6 +200,9 @@ describe('prepareCindyMakeWorkspace', () => {
         HOME: '/home/me',
         npm_config_python: '/tools/python',
         npm_config_manage_package_manager_versions: 'false',
+        pnpm_config_config_dir: '/attacker/config',
+        PNPM_CONFIG_NPMRC_AUTH_FILE: '/attacker/auth.ini',
+        pnpm_config_manage_package_manager_versions: 'true',
         // How Cindy was launched must not reach a content `.npmrc`: its `${VAR}`
         // expansion would send these to a registry the content chooses.
         NPM_TOKEN: 'gho_secret-token',
@@ -209,6 +236,11 @@ describe('prepareCindyMakeWorkspace', () => {
       COREPACK_ENABLE: '0',
       npm_config_userconfig: os.devNull,
       npm_config_globalconfig: os.devNull,
+      XDG_CONFIG_HOME: expect.any(String),
+      pnpm_config_npmrc_auth_file: os.devNull,
+      pnpm_config_userconfig: os.devNull,
+      pnpm_config_globalconfig: os.devNull,
+      pnpm_config_manage_package_manager_versions: 'false',
       COREPACK_ENV_FILE: '0',
       COREPACK_ENABLE_PROJECT_SPEC: '0',
       COREPACK_ENABLE_UNSAFE_CUSTOM_URLS: '0',

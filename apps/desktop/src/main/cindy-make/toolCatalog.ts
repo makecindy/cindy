@@ -18,11 +18,11 @@ const nodeHashes: Record<string, string> = {
   'linux-x64': 'b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a',
 };
 const pnpmHashes: Record<string, string> = {
-  'win32-x64': '3d1af71e9da7081efd58f95942e1f7e2107bf8fcdae03eb2331c0b6cea59510b',
-  'darwin-arm64': 'a99a4d5d0e6bd3728949c24ff74a2f2f2d07f73bc48fd308e4eea75d8e72acdc',
-  'darwin-x64': '3b66abb865f4e7a82393861f0f3784d67a704a31a4021739874d4b7910793dca',
-  'linux-arm64': '0828e5ee23be89d22bd53cc36e93c181ce9d5c47d75f9fe9bf4bdc7a65c66322',
-  'linux-x64': '39d7b6600239712bc9581ea219b17ffef46ba60998779cb717be2e068be029ef',
+  'win32-x64': 'd4e81b5e957bd0a46e154eb68c1139eae61a9697e818d9cc138dfa2eed29ab38',
+  'darwin-arm64': '93efa89cca09006a3dec7c5e5b902a6679e1e7dd21400007b738f8cb3e802e5e',
+  'darwin-x64': 'e54b07e5634b7bf4352153e0c8c25bcef2930a29e3d1bdc42a9eaf2ffd4436df',
+  'linux-arm64': '2da5106f94a6b34b8ed59c8a9b8223c0f32621f4494b4d7644b672b8aac1ba4f',
+  'linux-x64': '44588952c6e0e2c25f5b3363c5736d7a176ce8dc6200ae8179bd688e60a212a7',
 };
 const lfsHashes: Record<string, string> = {
   'win32-x64': 'b62e7b8ceddee635f691233d77de8eaa4b213e9209e0173811d8cfa77f7882c1',
@@ -60,7 +60,9 @@ export function makeToolCatalog(platform: string, arch: string): MakeToolArtifac
   const windows = platform === 'win32';
   const nodeDir = `node-v22.23.2-${windows ? 'win' : platform}-${arch}`;
   const nodeFormat = windows ? 'zip' : 'tar.gz';
-  const pnpmPlatform = windows ? 'win' : platform === 'darwin' ? 'macos' : 'linux';
+  // The publisher no longer ships an Intel Mac standalone executable.
+  // Its official Node package runs under the same managed Node as the build.
+  const pnpmNodePackage = platform === 'darwin' && arch === 'x64';
   const lfsPlatform = windows ? 'windows' : platform;
   const lfsFormat = platform === 'linux' ? 'tar.gz' : 'zip';
   const [pythonTriple, pythonHash] = pythonAssets[host];
@@ -76,12 +78,14 @@ export function makeToolCatalog(platform: string, arch: string): MakeToolArtifac
     },
     {
       id: 'pnpm',
-      version: '10.33.2',
+      version: '11.28.9',
       host,
       sha256: pnpmHashes[host],
-      format: 'binary',
-      url: `https://github.com/pnpm/pnpm/releases/download/v10.33.2/pnpm-${pnpmPlatform}-${arch}${windows ? '.exe' : ''}`,
-      executable: windows ? 'pnpm.exe' : 'pnpm',
+      format: windows ? 'zip' : 'tar.gz',
+      url: pnpmNodePackage
+        ? 'https://registry.npmjs.org/pnpm/-/pnpm-11.28.9.tgz'
+        : `https://github.com/pnpm/pnpm/releases/download/v11.28.9/pnpm-${platform}-${arch}.${windows ? 'zip' : 'tar.gz'}`,
+      executable: pnpmNodePackage ? 'package/bin/pnpm' : windows ? 'pnpm.exe' : 'pnpm',
     },
     {
       id: 'python',

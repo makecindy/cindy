@@ -2,6 +2,7 @@ export { startAgentNetRelay, AgentNetError, type RelayHandle, type RelayOptions,
 export { Store, type NetworkRecord, type DeviceRecord, type RelayStore } from './store.js';
 export { clusterOwner, checkMemberUrl, RELAY_CLUSTER_COMPAT, type RelayClusterBackend, type RelayClusterMember, type RelayClusterOptions, type RelayStateEntry, type RelayStateCommit } from './cluster.js';
 export { RelayStateUnavailableError } from './clusterStore.js';
+export { createLocalMediaStorage, DIRECT_GRANT_MAX_MS, guardMediaStorage, RelayMediaStorageError, RelayMediaStorageUnavailableError, type RelayMediaStorage, type RelayDirectMedia } from './mediaStorage.js';
 export { createMemoryRelayCluster } from './memoryCluster.js';
 export * from './identity.js';
 export { createPrivateNetwork } from './bootstrap.js';

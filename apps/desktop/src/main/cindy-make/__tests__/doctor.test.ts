@@ -13,8 +13,8 @@ function environment(overrides: Partial<MakeDoctorEnvironment> = {}): MakeDoctor
   const versions: Record<string, string> = {
     'git --version': 'git version 2.55.0.windows.1',
     'git lfs version': 'git-lfs/3.7.1 (GitHub)',
-    'node --version': 'v22.12.0',
-    'pnpm --version': '10.33.2',
+    'node --version': 'v22.13.0',
+    'pnpm --version': '11.28.9',
     'python3 --version': 'Python 3.13.0',
   };
   return {
@@ -96,11 +96,15 @@ describe('read-only personal-build diagnostics', () => {
 
   it.each([
     ['node', 'v22.11.0', 'incompatible'],
-    ['node', 'v22.12.0', 'passed'],
+    ['node', 'v22.12.0', 'incompatible'],
+    ['node', 'v22.13.0', 'passed'],
     ['node', 'v24.1.0', 'passed'],
     ['node', 'v22.12.0-rc.1', 'failed'],
     ['pnpm', '10.6.9', 'incompatible'],
-    ['pnpm', '10.7.0', 'passed'],
+    ['pnpm', '10.7.0', 'incompatible'],
+    ['pnpm', '11.24.0', 'incompatible'],
+    ['pnpm', '11.25.0', 'passed'],
+    ['pnpm', '12.0.0', 'incompatible'],
     ['pnpm', '11.0.0', 'incompatible'],
     ['pnpm', 'download failed; secret=hidden', 'failed'],
   ])('checks the executable version: %s %s → %s', async (command, stdout, status) => {
@@ -117,8 +121,8 @@ describe('read-only personal-build diagnostics', () => {
     const manifest = JSON.parse(
       readFileSync(new URL('../../../../../../package.json', import.meta.url), 'utf8'),
     );
-    expect(manifest.engines).toMatchObject({ node: '>=22.12', pnpm: '>=10.7 <11' });
-    expect(manifest.packageManager.split('+')[0]).toBe('pnpm@10.33.2');
+    expect(manifest.engines).toMatchObject({ node: '>=22.13', pnpm: '>=11.25 <12' });
+    expect(manifest.packageManager.split('+')[0]).toBe('pnpm@11.28.9');
   });
 
   it('reports missing Git, skips dependent LFS, and continues other checks', async () => {

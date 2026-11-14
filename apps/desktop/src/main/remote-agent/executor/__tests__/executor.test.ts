@@ -11,7 +11,7 @@ import { RemoteExecutor, type ExecutorConfirmation, type RemoteExecutorOptions }
 import { EXECUTOR_APPROVAL_TTL_MS, ExecutorGate, executorGateModeFor, type ExecutorAction } from '../gate';
 import type { PdfTextExtractor } from '../files';
 import type { GitCredentialHistory } from '../gitCredentials';
-import { findWindowsGitBash, truncateOutput } from '../shell';
+import { findWindowsGitBash, runOnce, truncateOutput } from '../shell';
 import type { GuardedFetch } from '../webFetch';
 import { ExecutorWorkspace } from '../workspace';
 
@@ -479,6 +479,21 @@ describe('raw operations for Pi', () => {
     expect(await executor.handle('pi.grep', { params: { pattern: 'zzz' } })).toEqual({ text: 'No matches found' });
   });
 
+  // CI #10327: cancellation during asynchronous script preparation was lost.
+  // Unit, actual runOnce: abort at the write boundary without sleeping or spawning a sleeper.
+  it('does not launch a command cancelled while its script is being written', async () => {
+    const controller = new AbortController();
+    const writeFile = fs.promises.writeFile.bind(fs.promises);
+    const write = vi.spyOn(fs.promises, 'writeFile').mockImplementationOnce(async (...args) => {
+      await writeFile(...args);
+      controller.abort();
+    });
+    try {
+      expect(await runOnce('echo should-not-run', { cwd: project, signal: controller.signal }))
+        .toMatchObject({ aborted: true, output: Buffer.alloc(0), exitCode: null });
+    } finally { write.mockRestore(); }
+  });
+
   it.runIf(posix)('runs commands once with timeout and abort semantics', async () => {
     const { executor } = makeExecutor();
     const ok = (await executor.handle('exec.run', { command: 'echo hi; pwd', cwd: project })) as { output: string; exitCode: number };
@@ -488,8 +503,13 @@ describe('raw operations for Pi', () => {
     expect(timedOut.timedOut).toBe(true);
     const controller = new AbortController();
     const pending = executor.handle('exec.run', { command: 'sleep 20' }, controller.signal);
-    setTimeout(() => controller.abort(), 100);
+    controller.abort();
     expect(await pending).toMatchObject({ aborted: true });
+    // Also cancel a running child, using its output as the readiness signal.
+    const running = new AbortController();
+    expect(await runOnce('echo ready; exec sleep 20', {
+      cwd: project, signal: running.signal, onData: () => running.abort(),
+    })).toMatchObject({ aborted: true });
   });
 
   it('refuses everything after the task has ended', async () => {

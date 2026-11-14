@@ -4,7 +4,7 @@ import type { CindyMakeTaskPreparation, MakeTaskWorkspace } from '../../shared/c
 import { runSourceGit } from './sourceGit.js';
 import { contentRef, snapshotContent, applyContent, taskContentRef } from './sourceContent.js';
 import { assertPnpmInstallContained, assertPnpmInstallLinksContained } from './pnpmWriteRoots.js';
-import { runSourcePnpm, unverifiedPnpmEnv } from './sourcePnpm.js';
+import { runSourcePnpm, withUnverifiedPnpmEnv } from './sourcePnpm.js';
 import {
   CINDY_MAKE_RUN_ID_PATTERN,
   CINDY_PERSONAL_BRANCH,
@@ -176,16 +176,8 @@ export async function installCindyMakeWorktree(
     // worktree (see `pnpmWriteRoots`).
     await assertPnpmInstallContained(workspace.path);
   }
-  await pnpm(
-    options.ignoreScripts
-      ? // Unverified synced content runs no install-time code and sees only the
-        // credential-free environment (see `unverifiedPnpmEnv`): no lifecycle
-        // scripts, no `.pnpmfile.cjs` hooks (which `--ignore-scripts` alone would
-        // still execute), the write roots pinned over any `.npmrc` of the
-        // content's own, and no inherited variable to expand into a credential
-        // sent to a registry the content chooses.
-        unverifiedPnpmEnv(deps.processEnvironment)
-      : deps.processEnvironment,
+  const install = (environment: NodeJS.ProcessEnv) => pnpm(
+    environment,
     [
       'install',
       '--frozen-lockfile',
@@ -206,6 +198,8 @@ export async function installCindyMakeWorktree(
     signal,
     ...(onProgress ? [onProgress] : []),
   );
+  if (options.ignoreScripts) await withUnverifiedPnpmEnv(deps.processEnvironment, install);
+  else await install(deps.processEnvironment);
   signal.throwIfAborted();
   // The install populated the write roots the pre-install scan could not see
   // into: whatever it linked must resolve inside the worktree (see

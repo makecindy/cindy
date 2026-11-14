@@ -101,9 +101,9 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
-import { SubscriptionAccountsSection } from './SubscriptionAccountsSection';
+import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from './SubscriptionAccountsSection';
 import { placementErrorKey } from './SubscriptionPlacement';
-import { isSubscriptionProvider } from '../../../shared/subscriptionAccounts';
+import { isSubscriptionProvider, type SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
 import type { SubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { ProviderAccountUsageModule } from './ProviderAccountUsageModule';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
@@ -966,6 +966,7 @@ function DetailHeader({
             providerName={provider?.name}
             defaultUsage={usageCard}
             dashboard={dashboard ?? undefined}
+            expectAccounts={provider?.connected === true}
           />
         )}
         {assetModule ??
@@ -996,8 +997,9 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const [pooled, setPooled] = useState(false);
-  const [poolConnected, setPoolConnected] = useState(false);
+  // The catalog already identifies saved pools. Match that layout while refreshing its accounts.
+  const [pooled, setPooled] = useState(provider?.subscriptionAccountPool === providerId);
+  const [poolConnected, setPoolConnected] = useState(provider?.connected === true);
   const [busy, setBusy] = useState(false);
   const login = useRef<string | null>(null);
   useEffect(() => {
@@ -2630,6 +2632,8 @@ export function ProvidersSection() {
   const onOpenaiPoolConnectionChange = useCallback((connected: boolean | null) => {
     setOpenaiPoolState(connected === null ? null : { dataOwnerId, connected });
   }, [dataOwnerId]);
+  // Memory only, while this page is open. A new owner starts empty, never seeing these accounts.
+  const subscriptionPoolViews = useMemo(() => new Map<string, SubscriptionPoolView>(), [dataOwnerId]);
   const remoteControlEnabled = useRemoteControlEnabled();
   // 供应商分享：入口提示点读待审批申请与待处理的转分享请求；管理页是本页的子页面(返回回到供应商详情)。
   // 带 hostDeviceId 的申请在另一台电脑的分享里(那台的供应商 id 可能与本机重名)，只计入那台的组入口。
@@ -3078,13 +3082,15 @@ export function ProvidersSection() {
   // 选中项:默认第一行;所选供应商被删除/消失时回退第一行(不留空详情)。
   const effectiveSelected = useMemo(() => {
     const selected = listProviders.find((p) => p.id === selectedId) ?? listProviders[0] ?? null;
-    // Match the connection header immediately, including auth invalidation before catalog refresh.
+    // Pool connection state covers all its accounts; native auth only describes the legacy default login.
     return selected?.id === 'openai'
       ? {
           ...selected,
           connected: openaiPoolState && openaiPoolState.dataOwnerId === dataOwnerId
             ? openaiPoolState.connected
-            : isChatGptConnectionConnected(codexAuth.state, selected.connected),
+            : selected.subscriptionAccountPool === 'openai'
+              ? selected.connected
+              : isChatGptConnectionConnected(codexAuth.state, selected.connected),
         }
       : selected;
   }, [selectedId, listProviders, codexAuth.state, openaiPoolState, dataOwnerId]);
@@ -3391,6 +3397,7 @@ export function ProvidersSection() {
   );
 
   return (
+    <SubscriptionPoolViewCache.Provider value={subscriptionPoolViews}>
     <div className="flex h-full min-h-0 flex-col gap-6">
       {shareManagePage ?? (<>
       <div className="shrink-0">
@@ -3850,5 +3857,6 @@ export function ProvidersSection() {
         />
       )}
     </div>
+    </SubscriptionPoolViewCache.Provider>
   );
 }

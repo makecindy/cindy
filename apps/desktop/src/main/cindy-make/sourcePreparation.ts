@@ -9,7 +9,7 @@ import {
 } from './toolchainEnvironment.js';
 import type { MakeSourceGitProgress, MakeSourceStatus } from '../../shared/cindyMakeDoctor.js';
 import { runSourceGit } from './sourceGit.js';
-import { runSourcePnpm, unverifiedPnpmEnv } from './sourcePnpm.js';
+import { runSourcePnpm, withUnverifiedPnpmEnv } from './sourcePnpm.js';
 import { assertPnpmConfigContained } from './pnpmWriteRoots.js';
 import { readSourceRevisions, type SourceRevisions } from './sourceRevisions.js';
 import { CINDY_PERSONAL_BRANCH } from './sourcePaths.js';
@@ -674,8 +674,8 @@ async function prepareCindySourceInternal(
     // and cache each time, filling changed or evicted packages without trusting a
     // stale ready marker. The personal baseline needs no installed dependencies.
     if (warmable)
-      await runSourcePnpm(
-      unverifiedPnpmEnv(processEnvironment),
+      await withUnverifiedPnpmEnv(processEnvironment, (environment) => runSourcePnpm(
+      environment,
       [
         'fetch',
         '--frozen-lockfile',
@@ -707,7 +707,7 @@ async function prepareCindySourceInternal(
           phase: 'caching',
           dependencies,
         }),
-    );
+    ));
     signal.throwIfAborted();
     const result: SourcePreparationResult = {
       status: 'ready',

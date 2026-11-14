@@ -97,7 +97,10 @@ describeMigrationReplay('explicit PR association upgrade', () => {
           copyFileSync(migration.tsScriptPath, path.join(staged, 'scripts', path.basename(migration.tsScriptPath)));
         }
       }
-      runMigrationReplay(db, { drizzleDir: staged });
+      // Historical fixture setup need not fsync every old migration separately.
+      // CI #10413 spent >40s here, starving Vitest's worker RPC. Keep the actual
+      // upgrade and reopen below unwrapped so their commit boundaries stay real.
+      db.transaction(() => runMigrationReplay(db, { drizzleDir: staged }))();
       db.prepare('INSERT INTO sessions (id,created_at,updated_at) VALUES (?,1,1)').run('fixture');
       const insert = db.prepare(`INSERT INTO session_pr_refs
         (id,session_id,owner,repo,pr_number,url,first_seen_at,last_seen_at,pinned,priority,manually_added,removed_at)

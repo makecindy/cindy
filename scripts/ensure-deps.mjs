@@ -11,7 +11,7 @@
  * `--electron-binary` 只跑第 3 道，由根 postinstall 调用，让任何 `pnpm install` 结束时
  * Electron 都是完整的。
  *
- * 关于 hoisted 模式：项目 .npmrc 指定 node-linker=hoisted，绝大多数依赖被平铺到根
+ * 关于 hoisted 模式：项目 pnpm-workspace.yaml 指定 nodeLinker: hoisted，绝大多数依赖被平铺到根
  * node_modules，但原生二进制包（electron、protobufjs 等）必须留
  * 在子包 node_modules 下。如果这些子包目录只剩 postinstall 产物（例如
  * apps/desktop/node_modules/electron 只剩 dist/ 而缺 package.json），pnpm install
@@ -44,7 +44,7 @@ const err = (msg) => console.error(`\x1b[31m[ensure-deps]\x1b[0m ${msg}`);
 
 // 关键依赖清单 —— 损坏会直接让 dev/release 挂掉
 // checkPath 是相对仓库根目录的 package.json 位置
-// pnpm 10 的 hoisted 模式下，这些核心包都 hoist 到根 node_modules（包括 electron）
+// pnpm 的 hoisted 模式下，这些核心包都 hoist 到根 node_modules（包括 electron）
 const CRITICAL_DEPS = [
   {
     name: '@cindy/device-link-protocol',
@@ -263,7 +263,7 @@ function runInstall(args = ['install']) {
     // frozen-lockfile 模式下，改了依赖声明（package.json）却没更新 lock 会让 install
     // 直接失败。给出针对性指引，避免把 frozen 失败误当成环境 / 网络问题。
     if (isFrozenLockfileEnabled()) {
-      warn('提示：.npmrc 已启用 frozen-lockfile。若你刚改过依赖（package.json），lock 不会自动更新。');
+      warn('提示：pnpm-workspace.yaml 已启用 frozenLockfile。若你刚改过依赖（package.json），lock 不会自动更新。');
       warn('      请改用 pnpm add <pkg> / pnpm remove <pkg>，或先 pnpm install --no-frozen-lockfile 再重试。');
     }
     process.exit(1);
@@ -466,16 +466,16 @@ function ensureElectronBinaryAfterInstall() {
   ensureElectronBinaryComplete();
 }
 
-// 检测 frozen-lockfile 是否生效（根 .npmrc 显式配置，或环境变量覆盖）。
-// 仅用于在 install 失败时判断要不要给出 frozen 专属的修复指引。
+// 检测 pnpm 11 的 frozenLockfile 配置，仅用于安装失败后的修复指引。
 function isFrozenLockfileEnabled() {
-  if (process.env.npm_config_frozen_lockfile === 'true') return true;
-  const npmrc = path.join(ROOT, '.npmrc');
-  if (!fs.existsSync(npmrc)) return false;
+  const override = process.env.pnpm_config_frozen_lockfile;
+  if (override !== undefined) return override === 'true';
+  const workspace = path.join(ROOT, 'pnpm-workspace.yaml');
+  if (!fs.existsSync(workspace)) return false;
   return fs
-    .readFileSync(npmrc, 'utf8')
+    .readFileSync(workspace, 'utf8')
     .split(/\r?\n/)
-    .some((line) => !line.trim().startsWith('#') && /^\s*frozen-lockfile\s*=\s*true\s*$/i.test(line));
+    .some((line) => /^frozenLockfile:\s*true\s*(?:#.*)?$/.test(line));
 }
 
 function removeBrokenDirs(broken) {

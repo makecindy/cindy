@@ -308,6 +308,12 @@ test("parseWorkspacePatterns reads pnpm-workspace.yaml package globs", () => {
 		parseWorkspacePatterns('packages:\n  - "apps/*"\n  - "packages/*"\n'),
 		["apps/*", "packages/*"],
 	);
+	// pnpm 11 keeps architecture/build settings in this same YAML file. Their
+	// sequences are not workspace selectors and must never enter the test plan.
+	assert.deepEqual(
+		parseWorkspacePatterns('minimumReleaseAgeExclude:\n  - linux\npackages:\n  - "apps/*"\n  - "packages/*"\nnodeLinker: hoisted\nsupportedArchitectures:\n  os:\n    - win32\n  cpu:\n    - x64\n'),
+		["apps/*", "packages/*"],
+	);
 });
 
 test("root unit and all scripts run runner self-tests before workspace sweep", () => {

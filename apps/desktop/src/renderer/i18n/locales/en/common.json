@@ -21407,8 +21407,7 @@
     "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
-      "detected": "Signed-in account found",
-      "useAccount": "Use this account",
+      "useAccount": "Use the {{cli}} account on this computer",
       "anotherAccount": "Sign in to another account",
       "keepExisting": "The new account becomes its own provider unless you choose one to join. Existing sign-ins stay unchanged.",
       "checkFailed": "Couldn’t check the local account. Try again.",
@@ -21418,7 +21417,6 @@
     "title": "Subscription accounts",
     "strategy": "Load balancing",
     "add": "Add account",
-    "default": "Default folder",
     "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",

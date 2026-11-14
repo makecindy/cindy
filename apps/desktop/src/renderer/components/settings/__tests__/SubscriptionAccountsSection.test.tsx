@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
 import type { SubscriptionPoolView } from '../../../../shared/subscriptionAccounts';
@@ -18,7 +18,7 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn() }),
 }));
 
-import { SubscriptionAccountsSection } from '../SubscriptionAccountsSection';
+import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from '../SubscriptionAccountsSection';
 
 /* 测试价值：多账号设置页曾给每个账号另画一条周用量条，又在底部重复原用量卡，且漏掉
  * 5 小时与分模型周窗口。经真实组件验证：默认账号行放原用量卡，其他账号用同一张卡显示
@@ -207,13 +207,36 @@ describe('SubscriptionAccountsSection usage', () => {
       accounts: [{ ...view.accounts[0], identity: undefined, status: 'signed-out' }],
     });
     render(<SubscriptionAccountsSection providerId="anthropic" />);
-    // The loading spinner goes once the read lands.
-    await vi.waitFor(() => expect(document.querySelector('.animate-spinner')).toBeNull());
+    // The loading placeholder goes once the read lands.
+    await vi.waitFor(() => expect(screen.queryByTestId('subscription-accounts-loading')).toBeNull());
     expect(screen.queryAllByTestId('subscription-account')).toHaveLength(0);
     expect(screen.queryByRole('radiogroup')).toBeNull();
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.queryByText('1')).toBeNull();
     expect(screen.getByRole('button', { name: 'subscriptionAccounts.add' })).toBeTruthy();
+  });
+  // Regression (2026-11-14): switching back to a subscription provider emptied its list into a
+  // spinner, then pushed the page down again when the read landed. Within one providers page the
+  // last list stays on screen while the fresh read replaces it. Minimal input: remount with the
+  // read still pending (before the fix: no rows, only the spinner).
+  it('shows the last list at once when the providers page switches back to it', async () => {
+    const page = (
+      <SubscriptionPoolViewCache.Provider value={new Map()}>
+        <SubscriptionAccountsSection providerId="anthropic" />
+      </SubscriptionPoolViewCache.Provider>
+    );
+    const { unmount } = render(page);
+    expect(await screen.findAllByTestId('subscription-account')).toHaveLength(2);
+    unmount();
+    let land: (next: SubscriptionPoolView) => void = () => {};
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(
+      () => new Promise<SubscriptionPoolView>((resolve) => { land = resolve; }),
+    );
+    render(page);
+    expect(screen.getAllByTestId('subscription-account')).toHaveLength(2);
+    expect(screen.queryByTestId('subscription-accounts-loading')).toBeNull();
+    await act(async () => { land({ ...view, accounts: [view.accounts[1]] }); });
+    expect(screen.getAllByTestId('subscription-account')).toHaveLength(1);
   });
   // An account that needs signing in again is still an account: known, busy, or beside another.
   const unknown = { ...view.accounts[0], identity: undefined, status: 'signed-out' as const };
