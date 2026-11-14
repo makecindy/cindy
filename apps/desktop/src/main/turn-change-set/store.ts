@@ -995,7 +995,8 @@ export function noteTurnDiffEvent(sessionId: string, event: AgentEvent, remote =
   pending.incompleteReasons.delete('sensitive-file');
   pending.incompleteReasons.delete('diff-too-large');
   const safeDiff = filterSensitiveDiffBlocks(pending, data.diff);
-  if (byteLength(safeDiff) > TURN_CHANGE_SET_MAX_DIFF_BYTES) {
+  // A diff the host dropped at the app-server line limit is always above this limit too.
+  if (data.omitted === 'oversized' || byteLength(safeDiff) > TURN_CHANGE_SET_MAX_DIFF_BYTES) {
     pending.nativeDiff = null;
     // Without the immutable detail payload, showing file rows would imply that they
     // can be reviewed exactly. Keep only an explicit partial-coverage card instead.

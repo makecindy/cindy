@@ -621,6 +621,61 @@ export function translateItemNotification(
   }
 }
 
+const OMITTED_ITEM_RESULT = 'Result omitted: too large to display.';
+
+/**
+ * item/* 通知超过单行上限、正文已被宿主丢弃时的翻译收尾 (见 AppServerHost 的
+ * ITEM_OMITTED_METHOD)。生成计时照常按 started / completed 暂停与恢复。completed 时,
+ * started 已 emit 过 tool_use 的工具要配一个不含正文的 tool_result: 否则 Session 会一直
+ * 把它算作在跑, 优雅停止卡在 waiting-for-safe-point。completion-only 的类型 (fileChange 等)
+ * 从未 emit 过 tool_use, 不凭空补卡。按 item.id 记的翻译状态一并清掉。
+ */
+export function translateOmittedItem(
+  phase: ItemPhase,
+  notification: { threadId: string; turnId: string; item: { id?: string; type?: string } },
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  const { item } = notification;
+  noteCodexGenerationBoundary(ctx.rt, phase, item, notification);
+  if (phase !== 'completed' || !item.id) return;
+  const id = item.id;
+  // Same acceptance rule as translateItemNotification: a completed tool proves
+  // the earlier sampling output was accepted, even when its body was omitted.
+  let accepted: string[] | undefined;
+  if (item.type && SAMPLING_ACCEPTED_TOOL_TYPES.has(item.type)) {
+    const key = JSON.stringify([notification.threadId, notification.turnId]);
+    const segment = ctx.rt.samplingSegments.get(key);
+    if (segment?.itemIds.size) accepted = [...segment.itemIds];
+    ctx.rt.samplingSegments.delete(key);
+  }
+  for (const byItem of [
+    ctx.rt.itemTextLen,
+    ctx.rt.itemRawText,
+    ctx.rt.itemDeltaText,
+    ctx.rt.itemSnapshotText,
+    ctx.rt.itemMessagePhase,
+    ctx.rt.reasoningStartedAt,
+    ctx.rt.reasoningTextLen,
+    ctx.rt.pendingWebSearchInput,
+    ctx.rt.emittedWebSearchInput,
+  ]) {
+    byItem.delete(id);
+  }
+  if (!ctx.rt.emittedToolUse.delete(id)) return;
+  queue.push({
+    type: 'tool_result_full',
+    data: { toolUseId: id, fullText: OMITTED_ITEM_RESULT, isError: false,
+      ...(accepted ? { assistantSamplingAccepted: { agentMessageIds: accepted } } : {}) },
+    source: 'codex',
+  });
+  queue.push({
+    type: 'tool_result',
+    data: { summary: OMITTED_ITEM_RESULT, toolUseIds: [id] },
+    source: 'codex',
+  });
+}
+
 /**
  * auth 缺失 (401/Unauthorized/Missing bearer) 判定 — daemon 怎么 retry 也不可能
  * 自愈, 必须用户介入。收紧 pattern: 避开非 HTTP-auth 错误误伤 (eg. 工具执行报错

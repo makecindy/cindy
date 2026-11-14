@@ -15,7 +15,7 @@
  * 性能纪律 (plan 强制要求):
  *  - 全部异步 IO (transport 内部本来就 async)
  *  - readline 增量按行喂, 不 buffer 整个 stdout (在 transport 实现里)
- *  - JSON.parse 单行有 maxMessageSize 守卫, 超限 close session
+ *  - JSON.parse 单行有 maxLineBytes 守卫, 超限只处置这一条消息 (见 handleOversizedLine)
  *  - 主线程不被任何同步操作卡 — handler 全是 async fn
  */
 
@@ -34,12 +34,173 @@ import {
 import type { Transport } from './transport.js';
 
 /**
- * 单条 NDJSON line 的最大字节数 (UTF-16 字符近似)。
- * Codex 单 notification 正常 < 1MB; 设 16MB 给极端 reasoning text 留余量,
- * 超限直接 close session — 避免主线程在 JSON.parse 上卡几百 ms。
+ * 单条 NDJSON line 的上限, 按 JS 字符串长度 (UTF-16 code unit) 计, 不是字节。
+ * Codex 单 notification 正常 < 1MB; 设 16Mi 给极端 reasoning text 留余量。超限的行不做
+ * JSON.parse (避免主线程卡几百 ms), 只读开头的信封决定怎么处置这一条, 见 handleOversizedLine。
  */
 const DEFAULT_MAX_LINE_BYTES = 16 * 1024 * 1024;
+/** 识别超限行信封时, 行首和行尾各最多读这么多字符; diff / 文件内容这类大字段不在读取范围内。 */
+const OVERSIZED_ENVELOPE_PEEK_CHARS = 4_096;
 const MAX_STDERR_LOG_CHARS = 2_000;
+
+/** 响应超过单行上限被丢弃: 只有对应的这一个请求失败, 连接继续可用。 */
+export class AppServerMessageTooLargeError extends Error {
+  constructor(
+    public readonly method: string,
+    public readonly length: number,
+    public readonly limit: number,
+  ) {
+    super(`codex app-server ${method} response exceeds maxLineBytes (${length} > ${limit})`);
+    this.name = 'AppServerMessageTooLargeError';
+  }
+}
+
+/**
+ * 超限通知的信封, 正文已丢弃。字段从行首或行尾读取, 读不到时为空: turn/diff/updated 的
+ * threadId / turnId 排在 diff 之前, item/* 的排在 item 之后; itemId / itemType 是 item 里
+ * 排在大字段之前的标量。turn/completed 的 turnId 取 turn.id, turn 是 turn 在大字段 (items)
+ * 之后的成员 (status / error / 时间戳)。
+ */
+export interface OversizedNotification {
+  method: string;
+  threadId?: string;
+  turnId?: string;
+  itemId?: string;
+  itemType?: string;
+  turn?: Record<string, unknown>;
+  /** 原始行长度 (UTF-16 code unit)。 */
+  length: number;
+}
+
+interface OversizedEnvelope extends Partial<Omit<OversizedNotification, 'length'>> {
+  id?: JsonRpcId;
+}
+
+/** 信封读取只进入 message → params → params.item / params.turn 这几层。 */
+type EnvelopeScope = 'message' | 'params' | 'item' | 'turn';
+
+const ENVELOPE_MEMBER_RE = /\s*"((?:[^"\\]|\\.)*)"\s*:\s*/y;
+const ENVELOPE_SCALAR_RE = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y;
+const ENVELOPE_SEPARATOR_RE = /\s*([,}])/y;
+
+function recordEnvelopeMember(
+  envelope: OversizedEnvelope,
+  scope: EnvelopeScope,
+  key: string,
+  raw: string,
+): void {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (scope === 'message') {
+    if (key === 'id' && (typeof value === 'number' || typeof value === 'string')) envelope.id = value;
+    else if (key === 'method' && typeof value === 'string') envelope.method = value;
+    return;
+  }
+  if (typeof value !== 'string') return;
+  if (scope === 'params') {
+    if (key === 'threadId') envelope.threadId ??= value;
+    else if (key === 'turnId') envelope.turnId ??= value;
+  } else if (scope === 'turn') {
+    if (key === 'id') envelope.turnId ??= value;
+  } else if (key === 'id') {
+    envelope.itemId = value;
+  } else if (key === 'type') {
+    envelope.itemType = value;
+  }
+}
+
+/**
+ * 从 `{` 起顺序读标量成员; 遇到路径之外的对象、数组, 或读不完的长字符串 (大字段) 就停。
+ */
+function readEnvelopeMembers(text: string, envelope: OversizedEnvelope): void {
+  let pos = text.search(/\S/);
+  if (pos < 0 || text[pos] !== '{') return;
+  pos += 1;
+  const scopes: EnvelopeScope[] = ['message'];
+  for (;;) {
+    const current = scopes[scopes.length - 1]!;
+    ENVELOPE_MEMBER_RE.lastIndex = pos;
+    const member = ENVELOPE_MEMBER_RE.exec(text);
+    if (!member) return;
+    pos = ENVELOPE_MEMBER_RE.lastIndex;
+    const key = member[1]!;
+    const nested = current === 'message' && key === 'params'
+      ? 'params'
+      : current === 'params' && (key === 'item' || key === 'turn')
+        ? key
+        : null;
+    if (nested && text[pos] === '{') {
+      scopes.push(nested);
+      if (nested === 'turn') envelope.turn ??= {};
+      pos += 1;
+      continue;
+    }
+    ENVELOPE_SCALAR_RE.lastIndex = pos;
+    const scalar = ENVELOPE_SCALAR_RE.exec(text);
+    if (!scalar) return;
+    // 标量后面必须紧跟分隔符, 防止把截在读取边界上的半个数字当成完整值。
+    ENVELOPE_SEPARATOR_RE.lastIndex = ENVELOPE_SCALAR_RE.lastIndex;
+    let separator = ENVELOPE_SEPARATOR_RE.exec(text);
+    if (!separator) return;
+    pos = ENVELOPE_SEPARATOR_RE.lastIndex;
+    recordEnvelopeMember(envelope, current, key, scalar[0]);
+    // `}` 关闭当前对象, 回到外层继续读; 外层同样必须紧跟分隔符。
+    while (separator[1] === '}') {
+      scopes.pop();
+      if (scopes.length === 0) return;
+      ENVELOPE_SEPARATOR_RE.lastIndex = pos;
+      separator = ENVELOPE_SEPARATOR_RE.exec(text);
+      if (!separator) return;
+      pos = ENVELOPE_SEPARATOR_RE.lastIndex;
+    }
+  }
+}
+
+/**
+ * 从行尾读出某一层对象收尾处的成员 (可以含 turn.error 这样的嵌套对象), 不碰前面的大字段。
+ * `closers` 是这一层连同外层要关闭的右括号总数: params 为 2, params.turn 为 3。取能解析成
+ * JSON 的最长成员序列: 起点落在大字段内部或更深的嵌套里时, 剩余部分括号不配平, 解析不了。
+ */
+function readTrailingMembers(line: string, closers: number): Record<string, unknown> | null {
+  const tail = line.slice(-OVERSIZED_ENVELOPE_PEEK_CHARS);
+  const closing = new RegExp(String.raw`(?:\s*\}){${closers}}\s*$`).exec(tail);
+  if (!closing) return null;
+  const body = tail.slice(0, closing.index);
+  for (let pos = body.indexOf(',"'); pos !== -1; pos = body.indexOf(',"', pos + 1)) {
+    try {
+      const members: unknown = JSON.parse(`{${body.slice(pos + 1)}}`);
+      if (members && typeof members === 'object') return members as Record<string, unknown>;
+    } catch {
+      // 起点不在这一层的成员边界上, 换下一个。
+    }
+  }
+  return null;
+}
+
+/**
+ * 只读超限行两端, 不碰中间的大字段。app-server 由 serde 按结构体声明顺序输出:
+ *  - id / method 在最前;
+ *  - turn/diff/updated 的 threadId / turnId 在 diff 之前, 从行首读到;
+ *  - item/* 的 threadId / turnId 在 item 之后, 从行尾读到, item 自身的 type / id 在大字段之前;
+ *  - turn/completed 的 turn.id 在 items 之前, status / error 等在 items 之后, 分别从两端读到。
+ * 两端都读不到的字段留空, 由调用方按「认不出」保守处理。
+ */
+function peekOversizedEnvelope(line: string): OversizedEnvelope {
+  const envelope: OversizedEnvelope = {};
+  readEnvelopeMembers(line.slice(0, OVERSIZED_ENVELOPE_PEEK_CHARS), envelope);
+  if (envelope.turn) {
+    Object.assign(envelope.turn, readTrailingMembers(line, 3));
+  } else if (envelope.threadId === undefined || envelope.turnId === undefined) {
+    const params = readTrailingMembers(line, 2);
+    if (typeof params?.threadId === 'string') envelope.threadId ??= params.threadId;
+    if (typeof params?.turnId === 'string') envelope.turnId ??= params.turnId;
+  }
+  return envelope;
+}
 
 export class AppServerRequestTimeoutError extends Error {
   constructor(
@@ -193,8 +354,13 @@ export interface AppServerClientOptions {
    */
   createTransport: () => Transport;
   logger: Logger;
-  /** 单行 NDJSON 上限, 缺省 16MB。超限触发 onProtocolError 并 close。 */
+  /** 单行 NDJSON 上限 (UTF-16 code unit), 缺省 16Mi。超限的处置见 handleOversizedLine。 */
   maxLineBytes?: number;
+  /**
+   * 已注册 handler 的通知超过单行上限时调用, 正文已丢弃。返回 true 表示上层已安全降级;
+   * 返回 false 或未提供时沿用整连接退役 —— 只有上层知道丢掉哪种通知不会卡住任务。
+   */
+  onOversizedNotification?: (notification: OversizedNotification) => boolean;
   /**
    * Transport 异常退出 / IO 错误时调用; 上层 (CodexAgent) 用它 emit
    * `error` AgentEvent + end event queue。
@@ -235,6 +401,7 @@ interface PendingRequest {
 export class AppServerClient {
   private readonly logger: Logger;
   private readonly maxLineBytes: number;
+  private readonly onOversizedNotification?: AppServerClientOptions['onOversizedNotification'];
   private readonly onTransportError?: (err: Error) => void;
   private readonly onAuthInvalidated?: AppServerClientOptions['onAuthInvalidated'];
   private readonly captureCredentialGeneration?: () => string | null;
@@ -271,6 +438,7 @@ export class AppServerClient {
     this.createTransport = opts.createTransport;
     this.logger = opts.logger.child('codex-app-server');
     this.maxLineBytes = opts.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
+    this.onOversizedNotification = opts.onOversizedNotification;
     this.onTransportError = opts.onTransportError;
     this.onAuthInvalidated = opts.onAuthInvalidated;
     this.captureCredentialGeneration = opts.captureCredentialGeneration;
@@ -484,11 +652,7 @@ export class AppServerClient {
   private handleLine(line: string): void {
     if (!line) return;
     if (line.length > this.maxLineBytes) {
-      const err = new Error(
-        `codex app-server NDJSON line exceeds maxLineBytes (${line.length} > ${this.maxLineBytes})`,
-      );
-      this.logger.error(err.message);
-      this.handleTransportFailure(err);
+      this.handleOversizedLine(line);
       return;
     }
 
@@ -526,6 +690,63 @@ export class AppServerClient {
       return;
     }
     this.logger.warn('unrecognized incoming message', { preview: line.slice(0, 200) });
+  }
+
+  /**
+   * 超限的一行只影响它自己。一个 host 由多个会话共享, 整连接退役会把挂在上面的全部在飞任务
+   * 一起打断, 所以按信封分别处置:
+   *  - 我们请求的响应: 只让对应请求失败;
+   *  - server 发来的请求: 回 JSON-RPC error, 免得 server 一直等;
+   *  - 没人订阅的通知: 本来就会被忽略, 直接丢;
+   *  - 已订阅的通知: 交给 onOversizedNotification, 它确认能安全降级才丢。
+   * 认不出信封, 或上层不能丢这条通知 (turn/completed 之类状态机消息, 丢了任务永远等不到终态)
+   * 时, 沿用整连接退役。
+   */
+  private handleOversizedLine(line: string): void {
+    const length = line.length;
+    const limit = this.maxLineBytes;
+    const { id, method, ...scope } = peekOversizedEnvelope(line);
+    if (id !== undefined && method !== undefined) {
+      this.logger.warn('oversized server request rejected', { method, id, length, limit });
+      this.sendErrorResponse(id, {
+        code: JSONRPC_ERROR_CODE.INVALID_REQUEST,
+        message: `${method} request exceeds client line limit (${length} > ${limit})`,
+      });
+      return;
+    }
+    if (id !== undefined) {
+      const pending = this.pending.get(id);
+      this.logger.warn('oversized response dropped', { id, method: pending?.method, length, limit });
+      this.writeFailureTombstones.delete(id);
+      if (!pending) return;
+      this.pending.delete(id);
+      if (pending.timeoutId) clearTimeout(pending.timeoutId);
+      pending.reject(new AppServerMessageTooLargeError(pending.method, length, limit));
+      return;
+    }
+    if (method !== undefined && this.dropOversizedNotification({ method, ...scope, length })) {
+      // 只记路由字段; turn 里的 error 文案等内容不进日志。
+      const { threadId, turnId, itemId, itemType } = scope;
+      this.logger.warn('oversized notification dropped', { method, threadId, turnId, itemId, itemType, length, limit });
+      return;
+    }
+    const err = new Error(`codex app-server NDJSON line exceeds maxLineBytes (${length} > ${limit})`);
+    this.logger.error(err.message, { method, length });
+    this.handleTransportFailure(err);
+  }
+
+  private dropOversizedNotification(notification: OversizedNotification): boolean {
+    if (!this.notificationHandlers.has(notification.method)) return true;
+    if (!this.onOversizedNotification) return false;
+    try {
+      return this.onOversizedNotification(notification) === true;
+    } catch (e) {
+      this.logger.error('onOversizedNotification handler threw', {
+        method: notification.method,
+        message: (e as Error).message,
+      });
+      return false;
+    }
   }
 
   private handleStderrLine(line: string): void {
