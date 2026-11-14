@@ -14264,7 +14264,15 @@
       "editCancelAria": "Annuler la modification (Esc)",
       "syntheticContinueLabel": "Poursuivre la tâche inachevée (instruction système)",
       "syntheticTriggerLabel": "Instruction système",
-      "showMore_many": "{{count}} de plus"
+      "showMore_many": "{{count}} de plus",
+      "holdAria": "Mettre en pause ici",
+      "holdTip": "Suspendre ce message et tous les suivants",
+      "heldRowAria": "Point d'arrêt : ce message et les suivants ne seront pas envoyés automatiquement. La tâche en cours se termine normalement.",
+      "releaseHoldTip": "En pause ici — reprenez pour continuer l'envoi",
+      "releaseHoldAria": "Reprendre l'envoi automatique à partir de ce message",
+      "holdAction": "S'arrêter ici",
+      "releaseHoldAction": "Reprendre l'envoi",
+      "heldRowLabel": "La file s'arrête ici"
     },
     "newChatView": {
       "missing": {

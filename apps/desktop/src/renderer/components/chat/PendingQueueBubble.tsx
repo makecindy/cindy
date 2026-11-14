@@ -1,6 +1,6 @@
 import { buildQueueRowPresentation } from '@cindy/maker-shared/queue';
 import { useEffect, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, ListEnd, Pencil, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ListEnd, Pause, Pencil, Play, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { QueuedMessage } from '@/lib/makerChatStore';
 import {
@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Spinner } from '@/components/ui/spinner';
 import { getPendingQueueRowPresentation } from '../new-chat/pendingQueueRowPresentation';
+import { resolveQueueHoldRow } from '../new-chat/pendingQueueHold';
 import { UserMessage } from './UserMessage';
 
 export interface PendingQueueBubbleProps {
@@ -24,6 +25,10 @@ export interface PendingQueueBubbleProps {
   steeringClientIds: readonly string[];
   editLocks: readonly string[];
   interactionLocks: readonly string[];
+  /** 用户停点在可见队列里的下标;-1 = 没有停点。 */
+  stopIndex?: number;
+  onHold?(clientId: string): void;
+  onReleaseHold?(): void;
   readOnly?: boolean;
   localSend?: boolean;
   simplifiedBotConversation?: boolean;
@@ -44,6 +49,9 @@ export function PendingQueueBubble({
   steeringClientIds,
   editLocks,
   interactionLocks,
+  stopIndex = -1,
+  onHold,
+  onReleaseHold,
   readOnly,
   localSend,
   simplifiedBotConversation = false,
@@ -69,6 +77,11 @@ export function PendingQueueBubble({
     },
   });
   const busy = Object.values(availability.actions).every((action) => action.disabled);
+  // 停点:它和它之后的排队消息都不会自动发送,这条推导与 main 的派发闸门同口径。
+  const holdRow = resolveQueueHoldRow(stopIndex, index);
+  const holdAvailable = Boolean(onHold) && !readOnly && holdRow.canHold && !busy;
+  const releaseAvailable = Boolean(onReleaseHold) && !readOnly && holdRow.canRelease && !busy;
+  const movableRow = holdRow.movable;
   const [open, setOpen] = useState(false);
   const sentAt = new Date(entry.chatMessage.createdAt ?? 0).getTime();
   const [statusShown, setStatusShown] = useState(!localSend || Date.now() - sentAt >= 600);
@@ -121,7 +134,29 @@ export function PendingQueueBubble({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {!availability.actions.steer.disabled && (
+            {holdAvailable && (
+              <DropdownMenuItem
+                className="gap-2"
+                onSelect={() => {
+                  if (!busy) onHold?.(entry.clientId);
+                }}
+              >
+                <Pause size={16} className="shrink-0" />
+                {t('newChat.pendingQueue.holdAction')}
+              </DropdownMenuItem>
+            )}
+            {releaseAvailable && (
+              <DropdownMenuItem
+                className="gap-2"
+                onSelect={() => {
+                  if (!busy) onReleaseHold?.();
+                }}
+              >
+                <Play size={16} className="shrink-0" />
+                {t('newChat.pendingQueue.releaseHoldAction')}
+              </DropdownMenuItem>
+            )}
+            {!availability.actions.steer.disabled && holdRow.canSteer && (
               <DropdownMenuItem
                 className="gap-2"
                 onSelect={() => {
@@ -143,7 +178,7 @@ export function PendingQueueBubble({
                 {t('newChat.pendingQueue.editAction')}
               </DropdownMenuItem>
             )}
-            {!availability.actions.moveUp.disabled && (
+            {!availability.actions.moveUp.disabled && movableRow && (
               <DropdownMenuItem
                 className="gap-2"
                 onSelect={() => {
@@ -154,7 +189,7 @@ export function PendingQueueBubble({
                 {t('newChat.pendingQueue.moveUp')}
               </DropdownMenuItem>
             )}
-            {!availability.actions.moveDown.disabled && (
+            {!availability.actions.moveDown.disabled && movableRow && (
               <DropdownMenuItem
                 className="gap-2"
                 onSelect={() => {
@@ -182,7 +217,17 @@ export function PendingQueueBubble({
     </div>
   );
   return (
-    <div data-pending-queue-message={entry.clientId}>
+    <div
+      data-pending-queue-message={entry.clientId}
+      data-queue-hold={holdRow.isHeld ? 'stop' : holdRow.isAfterStop ? 'after-stop' : undefined}
+      className={holdRow.dimmed && !editing ? 'opacity-45' : undefined}
+    >
+      {holdRow.isHeld && (
+        <div className="mb-1 flex items-center justify-end gap-1 text-12 text-[var(--text-secondary)]">
+          <Pause size={13} aria-hidden />
+          <span>{t('newChat.pendingQueue.heldRowLabel')}</span>
+        </div>
+      )}
       {senderLabel && (
         <div className="mb-1 text-right text-12 text-[var(--text-secondary)]">{senderLabel}</div>
       )}

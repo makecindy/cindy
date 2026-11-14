@@ -14094,7 +14094,15 @@
       "editSaveAria": "存所修（Enter）",
       "editCancelAria": "罷修（Esc）",
       "syntheticContinueLabel": "續未竟之差事（系統指令）",
-      "syntheticTriggerLabel": "系統之令"
+      "syntheticTriggerLabel": "系統之令",
+      "holdAria": "止此則",
+      "holdTip": "止此則及其後之排隊訊",
+      "heldRowAria": "停點：此則及其後之排隊訊不自動發；當下之務照常畢",
+      "releaseHoldTip": "止於此矣，復則續發",
+      "releaseHoldAria": "復此則之自發",
+      "holdAction": "止於此",
+      "releaseHoldAction": "復自發",
+      "heldRowLabel": "佇列止於此"
     },
     "newChatView": {
       "missing": {

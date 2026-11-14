@@ -159,6 +159,8 @@ export function getDrainableQueueHead(state: SessionChatState): QueuedMessage | 
   if (state.queueInteractionLocks.length > 0) return null;
   const head = state.pendingQueue[0];
   if (!head) return null;
+  // 与 main 的 queue-head-held 闸门同口径:停点上的条目永远不可自动派发。
+  if (head.held === true) return null;
   if (state.queueEditLocks.includes(head.clientId)) return null;
   // Same-turn 插话进行中时暂停 drain。否则当前 turn 刚结束的 done 事件会启动
   // 下一条队列消息，迟到的 maker:steer 可能被 Claude/Codex 接到新 turn 上。

@@ -57,6 +57,7 @@ import {
   type SessionChatState,
 } from '@/lib/makerChatStore';
 import type { ChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
+import { clampReorderAcrossStop } from '@/components/new-chat/pendingQueueHold';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
@@ -112,6 +113,8 @@ interface UseCCAgentChatReturn {
   /** F-QUEUE-DEFER: 切换队列面板的展开 / 折叠态，仅影响展示。 */
   setQueueExpanded: (expanded: boolean) => void;
   /** Resume a queue paused by Stop. */
+  /** 设置/清除队列停点:被挂起的条目及其之后的排队消息都不再自动派发。 */
+  setQueueHold: (clientId: string | null) => void;
   resumeQueue: () => void;
   /** Reorder a queued row by moving it to the requested insertion index. */
   moveQueueItem: (clientId: string, targetIndex: number) => void;
@@ -823,12 +826,27 @@ export function useCCAgentChat(
     makerChatStore.resumeQueue(sessionId);
   }, [sessionId]);
 
+  /** 设置/清除队列停点:被挂起的条目及其之后的排队消息都不再自动派发。 */
+  const setQueueHold = useCallback(
+    (clientId: string | null) => {
+      if (!sessionId) return;
+      makerChatStore.setQueueHold(sessionId, clientId);
+    },
+    [sessionId],
+  );
+
   const moveQueueItem = useCallback(
     (clientId: string, targetIndex: number) => {
       if (!sessionId) return;
-      makerChatStore.moveQueueItem(sessionId, clientId, targetIndex);
+      // 桌面排序入口统一收口：停点之前的条目不允许被顶到停点之后，
+      // 否则原本应执行的条目不再自动发送（协同侧另有停点检查，这里不依赖它）。
+      makerChatStore.moveQueueItem(
+        sessionId,
+        clientId,
+        clampReorderAcrossStop(lightState.pendingQueue, clientId, targetIndex),
+      );
     },
-    [sessionId],
+    [sessionId, lightState.pendingQueue],
   );
 
   const setQueueInteractionLock = useCallback(
@@ -880,6 +898,7 @@ export function useCCAgentChat(
     queueExpanded: lightState.queueExpanded,
     setQueueExpanded,
     resumeQueue,
+    setQueueHold,
     moveQueueItem,
     setQueueInteractionLock,
     setQueueEditLock,

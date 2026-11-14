@@ -311,6 +311,12 @@ export interface AgentInputQueuedMessage {
   clientId: string;
   /** Opt-in: a cancelled delivery ID must never become a fresh enqueue on reconnect. */
   durableDelivery?: true;
+  /**
+   * 用户设置的停点: 这一条及其之后的排队消息不再自动派发(queue-head-held),
+   * 当前轮照常执行完。队列里至多一条,由 coordinator 的 hold/release 原子维护;
+   * 随队列快照持久化,旧快照没有该字段即视为未挂起。
+   */
+  held?: true;
   text: string;
   /**
    * Host-owned receipt for the first acceptance boundary.  The controlled

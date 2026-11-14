@@ -44,6 +44,7 @@ function inspectionEntry(queuedMessageId: string): SessionQueueInspectionEntry {
     enqueuedAtMs: null,
     content: queuedMessageId,
     consuming: false,
+    held: false,
   };
 }
 
@@ -85,6 +86,7 @@ describe('projectSessionQueueForInspection', () => {
         enqueuedAtMs: Date.parse('2026-08-16T01:02:04.000Z'),
         content: 'raw worker update',
         consuming: false,
+        held: false,
       },
       {
         queuedMessageId: 'q-user',
@@ -94,6 +96,7 @@ describe('projectSessionQueueForInspection', () => {
         enqueuedAtMs: Date.parse('2026-08-16T01:02:03.000Z'),
         content: 'text-q-user',
         consuming: true,
+        held: false,
       },
       {
         queuedMessageId: 'q-scheduler',
@@ -103,6 +106,7 @@ describe('projectSessionQueueForInspection', () => {
         enqueuedAtMs: null,
         content: 'text-q-scheduler',
         consuming: false,
+        held: false,
       },
       {
         queuedMessageId: 'q-session',
@@ -112,6 +116,7 @@ describe('projectSessionQueueForInspection', () => {
         enqueuedAtMs: Date.parse('2026-08-16T01:02:03.000Z'),
         content: 'safe session summary',
         consuming: false,
+        held: false,
       },
     ]);
   });

@@ -8373,6 +8373,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         opts?: { expectedClearBoundaryMs?: number | null },
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:set-expanded', sessionId, expanded, opts),
+      setHold: (
+        sessionId: string,
+        clientId: string | null,
+        opts?: { expectedClearBoundaryMs?: number | null },
+      ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
+        ipcRenderer.invoke('maker:input:set-hold', sessionId, clientId, opts),
       setInteractionLock: (
         sessionId: string,
         lockId: string,

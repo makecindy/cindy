@@ -14148,7 +14148,15 @@
       "editSaveAria": "Save edit (Enter)",
       "editCancelAria": "Cancel edit (Esc)",
       "syntheticContinueLabel": "Continue the unfinished task (system instruction)",
-      "syntheticTriggerLabel": "System instruction"
+      "syntheticTriggerLabel": "System instruction",
+      "holdAria": "Pause here",
+      "holdTip": "Hold this message and everything after it",
+      "heldRowAria": "Stop point: this message and everything after it will not send automatically. The current task finishes normally.",
+      "releaseHoldTip": "Held here — resume to keep sending",
+      "releaseHoldAria": "Resume automatic sending from this message",
+      "holdAction": "Stop here",
+      "releaseHoldAction": "Resume sending",
+      "heldRowLabel": "Queue stops here"
     },
     "newChatView": {
       "missing": {
