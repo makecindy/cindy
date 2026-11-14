@@ -13515,3 +13515,58 @@ describe('可靠层 ACK 编码（ack-v2）', () => {
     }
   });
 });
+
+// Unit: MCP open IDs/cursors must not evict a cached history page from the shared
+// client. Exercise real invoke/encoding/decoding through the existing relay harness.
+it('keeps history validators across twelve uncached MCP opens and polls while retaining gzip', async () => {
+  const codec = {
+    gzipBase64: (text: string) => gzipSync(Buffer.from(text)).toString('base64'),
+    gunzipBase64: (text: string, maxChars: number) => gunzipSync(Buffer.from(text, 'base64'), { maxOutputLength: maxChars }).toString(),
+    contentTag: (text: string) => createHash('sha256').update(text).digest('hex'),
+  };
+  const relay = new MemoryRelay();
+  const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: codec });
+  const metrics = vi.fn();
+  const viewer = makeRelayClient(relay, 'ios', undefined, { transferCodec: codec, invokeMetrics: { enabled: () => true, record: metrics } });
+  const history = { version: 1, items: [{ type: 'messages', key: 'm1', messages: [{
+    id: 'm1', clientId: 'm1', role: 'user', content: 'history'.repeat(100_000), createdAt: '2026-11-14T00:00:00.000Z',
+  }] }], hasMore: false, nextCursor: null };
+  const app = { viewId: 'view', html: '<body>App', sdk: { source: 'sdk'.repeat(120_000) } };
+  const handled: InvokePayload[] = [];
+  const off = host.onFrame(env => {
+    if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+    if (env.kind === 'invoke' && env.src && env.id) {
+      const input = env.payload as InvokePayload;
+      handled.push(input);
+      host.sendInvokeResult(env.src, env.id, { ok: true, result: input.channel === 'maker:mcp-apps:v1' ? app : history });
+    }
+  });
+  try {
+    host.start(); viewer.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && viewer.getStatus() === 'online');
+    await Promise.all([viewer.openLink('desktop', { controllerName: 'viewer', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    const call = async (payload: InvokePayload, noResultCache?: boolean) => {
+      const pending = viewer.invoke('desktop', payload, 1_000, { noResultCache });
+      await relay.settle();
+      return pending;
+    };
+    const page = { channel: 'local-db:messages:view', args: ['task', { before: 'older' }] };
+    await expect(call(page)).resolves.toMatchObject({ ok: true, result: history });
+    const open = { channel: 'maker:mcp-apps:v1', args: ['task', { op: 'open', openId: 'cached' }] };
+    await call(open); // Defaults still cache, including on this channel.
+    await call(open, false);
+    expect(handled.at(-1)!.transfer?.ifNoneMatch).toEqual(expect.any(String));
+    await call(open, true); // Explicit bypass must not use an existing entry either.
+    expect(handled.at(-1)!.transfer).toEqual({ gzip: 1 });
+    for (let i = 0; i < 12; i++) for (const op of ['open', 'poll']) {
+      await expect(call({ channel: 'maker:mcp-apps:v1', args: ['task', { op, openId: `open-${i}`, after: i }] }, true))
+        .resolves.toEqual({ ok: true, result: app });
+      expect(handled.at(-1)!.transfer).toEqual({ gzip: 1 });
+      expect(handled.at(-1)).not.toHaveProperty('noResultCache');
+      expect(metrics.mock.calls.filter(([event]) => event.phase === 'result').at(-1)![0].gzip).toBe(true);
+    }
+    await expect(call(page)).resolves.toMatchObject({ ok: true, result: history });
+    expect(handled.at(-1)!.transfer?.ifNoneMatch).toEqual(expect.any(String));
+    expect(metrics.mock.calls.filter(([event]) => event.phase === 'result').at(-1)![0].notModified).toBe(true);
+  } finally { off(); viewer.stop(); host.stop(); }
+});

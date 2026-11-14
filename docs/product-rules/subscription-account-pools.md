@@ -67,6 +67,15 @@
   旧记录无法区分两种添加入口，因此统一按本次裁决拆分；账号池或归属文件读不了、切换 owner 或设置复制失败时不发布未完成结果，
   下次加载再试。实现与回归见 `subscription-accounts/placement.ts`、`__tests__/ipc.test.ts` 和
   `maker-host/__tests__/providerCatalogRealmReload.test.ts`。
+- **拆出账号后的旧任务不显示断开（2026-11-14 回归修复）**：拆分后内置供应商可能只剩未登录的默认账号，选择列表把它算作
+  未连接；选了内置供应商的旧任务因此显示「模型来源已断开」并被禁止发送，尽管执行端仍按任务绑定的账号续上原生会话。
+  修复后，本机任务账号查询在账号已不在任务来源里时附带它现在所在的供应商（`ownerProviderId`，只给本机界面，不经设备互联
+  回包）；输入框和模型选择器只为这一个已建立的任务，把原来源显示为已连接，只补任务已生效的引擎与型号，发送仍带原来源 ID。
+  型号资料优先保留原来源的条目，缺失时才借账号所在供应商的该条；不借出其他型号或引擎，不跟随待生效选择，避免重新开放旧来源停用的模型。
+  只放开、不收紧：原来源本来已连接或被停用、账号已暂停／未登录／不可用、账号所在供应商未连接或被停用时一律不改；新任务、
+  草稿、远程与 SSH 任务不受影响，不改写任务记录。手机端暂未接入，这类任务在手机上仍把来源标红，但可以照常发送。
+  回归见 `subscription-accounts/__tests__/runtime.test.ts`、`renderer/__tests__/sourceSwitch.test.ts`、
+  `renderer/__tests__/modelSelectorProviderGroups.test.tsx` 与 `new-chat/__tests__/chatInputModelLoading.test.tsx`。
 - **Claude 单独供应商**：以前单独添加的 Claude 连接用的是 Cindy 自己保存的登录凭证，已于 2026-09-24 停用（只能查看和删除），
   不复活、不并入、不迁移凭证。新的 Claude 单独供应商与账号池账号一样只经官方 CLI 登录，每个账号一个独立的
   `CLAUDE_CONFIG_DIR` 目录，Cindy 不读取、不复制 Claude 凭证（见[凭证与本地存储](../dev-rules/credentials-and-local-storage.md)）。
@@ -182,6 +191,7 @@
 - 旧 Codex 任务可能来自 Cindy 私有目录，不能假定为 `~/.codex`。旧 Codex 续聊、分叉的账号归属先于默认登录校验解析（含未保存来源的旧任务）；已有绑定优先，没有绑定时只读查询当前 owner 的历史目录。隐式来源仍先排除网关、其它连接与 SSH 路由；目录唯一对应已有账号（含旧独立连接映射）时固定该账号，启动成功后补记绑定，不按池顺序换号。已移出的映射保留为拒绝依据，暂停、登录失效与断开仍走账号池原有校验；目录未知时保持原路径，查找失败或切 owner 时终止，不猜默认账号。新建任务进入账号池。旧私有登录不自动授权系统默认目录。旧独立连接的元数据与 CLI 目录保留，归并仅改变管理与新任务来源的展示；回退不支持映射的旧客户端时，仍可经保留的独立连接使用原账号。
 - Codex 正常执行与登录使用 CLI 原生凭证存储；跨历史目录的 external-auth、Claude Code 使用 OpenAI 模型及 Pi 的 HTTP/WebSocket 请求复用现有 host-only bridge，只读选定账号的 `auth.json`。仅钥匙串存储而没有该文件时明确失败，不能拿默认账号 token 顶替。Anthropic 订阅不使用此 bridge。
 - OpenAI 账号选择贯穿三种引擎；Pi 将账号能力绑定到已鉴权的运行令牌，Claude Code 通过已有原生会话到业务会话的映射取回。关闭清理对应登记；换供应商重建并重新选账号。同一账号的上游认证作废不会断开其它账号。
+- Codex 默认控制连接的认证失效只清理默认适配器管理的连接，不退役由订阅账号能力创建的运行中或启动中 host；账号自身的子进程认证错误只结束报错的 host，不写入默认适配器的失效状态。迟到清理同时核对 host 对象与代次，不能关闭替换后的连接。显式登录、登出及账号撤权仍沿用原有清理与派发检查。实现与回归见 `packages/maker-core/src/agents/codex/index.ts`、`index.test.ts` 与 Desktop `maker-host/index.ts`。
 - Helper 的 `configure_model_provider` 提供 `subscriptionAccounts` 操作（本机任务范围），与 UI 共用校验及执行服务；登录仍在执行电脑的官方浏览器流程完成。
 
 验证：不接触真实账号的 CLI 管道模拟覆盖目录分离、取消和错误脱敏；实际 SDK fork 验证自定义目录；账号池、远程组、Core host 隔离和 UI 多语言/主题场景分别测试。真实两个订阅账号、macOS 钥匙串登录需在安装后的客户端验收。

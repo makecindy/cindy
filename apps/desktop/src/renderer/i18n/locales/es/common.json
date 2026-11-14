@@ -1396,7 +1396,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "La configuración de SSH se guardó, pero Cindy no pudo actualizarla. Vuelve a cargar la configuración de SSH.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy no puede gestionar de forma segura esta configuración de SSH. Vuelve a cargarla y luego comprueba el marcador de propiedad de Cindy y que el alias del host sea único.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy no puede reproducir de forma segura algunas reglas de configuración SSH de este servidor. La conexión SSH desde la terminal podría funcionar. Revisa Match, Include condicional, IdentityAgent, IdentitiesOnly y la configuración de claves públicas.",
-    "SSH_AGENT_UNAVAILABLE": "El SSH Agent no está disponible. Inícialo, carga la clave privada correspondiente con ssh-add y vuelve a intentarlo.",
+    "SSH_AGENT_UNAVAILABLE": "El agente local de claves SSH (ssh-agent) no está disponible. Comprueba que esté en ejecución y que ssh-add -l muestre la clave necesaria. Consulta Administrar claves para resolver el problema.",
     "SSH_HOST_PREFS_WRITE_FAILED": "El host sigue guardado, pero no se pudo guardar su nombre para mostrar ni la configuración del proxy Agent. Revisa los permisos de almacenamiento local e inténtalo de nuevo.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Esta tarea ha alcanzado su límite de pestañas. Cierra algunas pestañas primero",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "El contenido de la pestaña es demasiado grande para agregarlo",
@@ -1964,6 +1964,12 @@
       "footnote": "Fase A: solo administración de conexiones SSH. Una actualización posterior permitirá ejecutar Agents en la computadora remota.",
       "viaAuth": "vía {{label}}",
       "readOnlyFromSshConfig": "Los detalles de conexión provienen de la configuración SSH.",
+      "importedAgentHint": "Se autentica mediante el agente local de claves SSH (ssh-agent). Poder conectar con ssh desde la terminal no garantiza que el agente esté listo.",
+      "agentError": {
+        "environmentUnset": "La variable de entorno indicada por IdentityAgent no está definida para Cindy. Defínela o corrige IdentityAgent en la configuración SSH.",
+        "endpointEmpty": "IdentityAgent se resuelve como un destino vacío. Corrige IdentityAgent en la configuración SSH.",
+        "endpointUnavailable": "El destino del agente de claves SSH configurado mediante IdentityAgent no está disponible. Revisa ese destino y su agente; el ssh-agent predeterminado puede usar otro destino."
+      },
       "configWarning": "Cindy no puede evaluar algunas reglas de configuración de SSH. La lista de hosts o los detalles de conexión pueden diferir del terminal SSH.",
       "configDiagnostic": {
         "io": "Cindy no pudo leer tu configuración de SSH. Aún se muestran los últimos hosts cargados correctamente. Revisa los permisos del archivo y vuelve a cargarla.",
@@ -2061,7 +2067,7 @@
           "tryThis": "Prueba esto desde tu terminal",
           "close": "Cerrar",
           "fallbackTitle": "O prescindir de ssh-agent",
-          "fallbackBody": "También puedes agregar este servidor con la autenticación «Archivo de identidad». {{appName}} pasará el archivo de clave directamente a ssh y te pedirá la frase de contraseña en cada conexión. No requiere ssh-agent. Deberás escribir la frase cada vez, pero la clave no se guardará en la memoria caché.",
+          "fallbackBody": "También puedes elegir «Archivo de identidad» al añadir un host. {{appName}} lee la clave privada en la memoria del proceso sin ssh-agent. Actualmente solo se admiten claves privadas sin cifrar; no se solicita la frase de contraseña al conectar. Usa ssh-agent para claves cifradas.",
           "reason": {
             "agent_unavailable": "ssh-add no pudo comunicarse con ssh-agent. Puede que falte el ejecutable, que ssh-agent no esté en ejecución o que SSH_AUTH_SOCK no esté configurado.",
             "bad_passphrase": "ssh-add rechazó la frase de contraseña.",

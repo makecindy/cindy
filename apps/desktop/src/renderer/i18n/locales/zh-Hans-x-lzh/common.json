@@ -1361,7 +1361,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 设置已存，然 Cindy 重整未成。请重载 SSH 设置。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 不能安全管理此 SSH 设置。请重载，并确认 Cindy 所有权标记尚存且主机别名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 不能安全重现此主机之部分 SSH 设置规则。终端 SSH 或仍可成；请察 Match、条件式 Include、IdentityAgent、IdentitiesOnly 与公开密钥设置。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent 今不可用。请启 SSH Agent，并以 ssh-add 加载相应私钥，而后再试。",
+    "SSH_AGENT_UNAVAILABLE": "本机 SSH 密钥之代理（ssh-agent）不可用。请察其已启，并以 ssh-add -l 验所需之钥已载；排障之法见「管理密钥」。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主机仍已存，然显示名称或 Agent Proxy 设置未能存。请察此机存储权限而后再试。",
     "REMOTE_WORKDIR_INVALID": "远程案目录无效，请重择案目录。",
     "REMOTE_WORKDIR_NOT_FOUND": "远程案目录不存，请重择案目录。",
@@ -1896,6 +1896,12 @@
       "footnote": "初版仅支持 SSH 连接管理；于远程行 Agent 之能，将于后续版本增之。",
       "viaAuth": "经 {{label}} 认证",
       "readOnlyFromSshConfig": "连接信息出自 SSH 设置",
+      "importedAgentHint": "由本机 SSH 密钥代理（ssh-agent）验身。终端 ssh 虽可通，未必代理已备。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent 所引环境变量，Cindy 尚未设。请为 Cindy 设之，或正 SSH 配置之 IdentityAgent",
+        "endpointEmpty": "IdentityAgent 解析之端点为空。请正 SSH 配置之 IdentityAgent",
+        "endpointUnavailable": "IdentityAgent 所定 SSH 密钥代理端点不可用。请察该端点及其代理；默认 ssh-agent 或用别端点"
+      },
       "configWarning": "SSH 设置中有若干规则 Cindy 无法解析，主机列表或连接信息或与终端 SSH 不一。",
       "configDiagnostic": {
         "io": "Cindy 无法读取 SSH 设置。此处仍显上次读取成功之主机；请查卷之权柄，再重新加载。",
@@ -1993,7 +1999,7 @@
           "tryThis": "于君之终端试此诸命令",
           "close": "阖",
           "fallbackTitle": "或径不经 agent",
-          "fallbackBody": "增 host 时可改用「Identity file」之法，{{appName}} 将密钥卷径交 ssh，每次连接由君输密码，全不依 agent。安全之权衡：每连必输密码，然内存中亦不留密钥缓存，安危自负。",
+          "fallbackBody": "新增主机亦可选「私钥卷」：{{appName}} 直读私钥入进程内存，不倚 ssh-agent。今仅容未加密私钥，连线时不询钥之密语；加密私钥请托 ssh-agent。",
           "reason": {
             "agent_unavailable": "ssh-add 寻不得可用之 ssh-agent(或 ssh-add 未装、agent 未启，或 SSH_AUTH_SOCK 未设)。",
             "bad_passphrase": "ssh-add 拒此密码。",

@@ -70,8 +70,11 @@ export function createCodexSpawnConfig(ports: {
         let buildSessionMcpConfig:
           | ((sessionInstanceId: string) => Record<string, unknown>)
           | undefined;
-        // Review hosts and native-storage-only (archive) hosts never expose Cindy MCP tools.
-        if (!isReview && !ctx.nativeStorageOnly) {
+        // Guests use only the controller's tunnel, installed by CodexAgent at
+        // thread creation. Injecting this computer's MCPs here makes the earlier
+        // process-level isolation check wait for unrelated local MCP startup.
+        // Keep that check; do not provision the local connections or credentials.
+        if (!isReview && !ctx.nativeStorageOnly && !guestProviderId) {
           try {
             const cfg = await getCodexExtraSpawnConfig({
               mcpProviders: providers,
@@ -88,7 +91,7 @@ export function createCodexSpawnConfig(ports: {
             });
           }
         }
-        const browserCompanion = isControlPlane || isReview
+        const browserCompanion = isControlPlane || isReview || guestProviderId
           ? null
           : await prepareCodexBrowserCompanion({ codexHome: ctx.runtimeCodexHome ?? effectiveCodexHome });
         const browserCompanionSpawnConfig =
