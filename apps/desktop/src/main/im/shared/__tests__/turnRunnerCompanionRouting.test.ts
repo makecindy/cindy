@@ -600,6 +600,65 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(companion.prepareSend).toHaveBeenCalledWith('mimi-main');
   });
 
+  // Regression: a companion's private notification topic was answered in the main DM.
+  // Production runner; prior companion tests never supplied a per-turn private reply root.
+  // Unit: repeated/queued topics and the following main-DM turn share the canonical task,
+  // keep companion guards, and send each streamed/final answer to its own destination.
+  it('keeps companion notification replies in their own topics across queued turns', async () => {
+    const roots = ['om_notification_a', 'om_notification_a', 'om_notification_b', undefined];
+    for (const [index, root] of roots.entries()) {
+      await runner.runAgentTurn({
+        botContextId: BOT_CONTEXT, userId: OWNER, userMessageId: `reply-${index}`,
+        text: `continue ${index}`, attachments: [], requesterIsOwner: true,
+        replyThreadRootMessageId: root,
+      });
+    }
+    const h = harnesses.get('mimi-main')!;
+    expect(h.send).toHaveBeenCalledTimes(1);
+    for (const [index, root] of roots.entries()) {
+      h.emit({ type: 'text', data: { text: `answer ${index}` } } as AgentEvent);
+      await vi.waitFor(() => expect(mocks.im.startStreamingText).toHaveBeenCalledTimes(index + 1));
+      expect(mocks.im.startStreamingText).toHaveBeenNthCalledWith(index + 1, OWNER, undefined, { threadTs: root });
+      h.emit({ type: 'done' } as AgentEvent);
+      if (index + 1 < roots.length) await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(index + 2));
+    }
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+    expect(fakeRepo.findActiveSession).not.toHaveBeenCalled();
+    expect(createSessionArgs).toHaveLength(1);
+    expect(createSessionArgs[0]).toMatchObject({ id: 'mimi-main', model: 'bot-model', permissionMode: 'ask' });
+    expect(createSessionArgs[0]!.vendorOptions).toBeUndefined();
+    expect(companion.prepareSend).toHaveBeenCalledWith('mimi-main');
+    expect(previewSwitchTarget).not.toHaveBeenCalled();
+  });
+
+  it('keeps a companion topic reply in its topic when streaming cannot start', async () => {
+    mocks.im.startStreamingText.mockRejectedValueOnce(new Error('stream unavailable'));
+    await runner.runAgentTurn({
+      botContextId: BOT_CONTEXT, userId: OWNER, userMessageId: 'reply-fallback',
+      text: 'continue', attachments: [], requesterIsOwner: true,
+      replyThreadRootMessageId: 'om_notification',
+    });
+    const h = harnesses.get('mimi-main')!;
+    h.emit({ type: 'text', data: { text: 'fallback answer' } } as AgentEvent);
+    h.emit({ type: 'done' } as AgentEvent);
+    await vi.waitFor(() => expect(mocks.im.sendText).toHaveBeenCalledWith(
+      OWNER, expect.stringContaining('fallback answer'), { threadTs: 'om_notification' },
+    ));
+  });
+
+  it('keeps the companion pause guard and its notice in the notification topic', async () => {
+    companion.prepareSend.mockResolvedValue('paused');
+    await runner.runAgentTurn({
+      botContextId: BOT_CONTEXT, userId: OWNER, userMessageId: 'reply-paused',
+      text: 'continue', attachments: [], requesterIsOwner: true,
+      replyThreadRootMessageId: 'om_notification',
+    });
+    expect(createSessionArgs).toHaveLength(0);
+    expect(mocks.im.sendText).toHaveBeenCalledWith(
+      OWNER, expect.stringContaining('paused'), { threadTs: 'om_notification' },
+    );
+  });
+
   it('routes a group and a topic into their own channel lanes with channel tools mounted', async () => {
     await runTurn('g/-100123');
     await runTurn('g/-100123/9');

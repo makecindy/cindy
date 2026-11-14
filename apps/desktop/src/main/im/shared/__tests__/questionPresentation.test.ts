@@ -16,8 +16,8 @@ function fixture(kind: 'rich-card' | 'chunked-text', name: string) {
   } as unknown as TextChannelIM;
   const controls = { answer: vi.fn(), settled: new Promise<InteractionDecision>(resolve => { finish = resolve; }) };
   let current = true;
-  const open = (multi = false, questions?: QuestionRequest['questions']) => presentImQuestion({ output: { kind, im } as ImOutputDriver,
-    lane: 'group', respondent: 'alice', request: { kind: 'ask_user_question', requestId: 'q', delivery: 'async',
+  const open = (multi = false, questions?: QuestionRequest['questions'], scope?: string) => presentImQuestion({ output: { kind, im } as ImOutputDriver,
+    lane: 'group', respondent: 'alice', scope, request: { kind: 'ask_user_question', requestId: 'q', delivery: 'async',
       questions: questions ?? (multi ? [{ id: 'a', question: 'First?' }, { id: 'b', question: 'Second?' }] : [{ id: 'a', question: 'Answer?' }]) },
     controls, current: () => current, warn: vi.fn() });
   const reply = (text: string, actor = 'alice', lane = 'group') => findImQuestionReply(im,
@@ -71,6 +71,24 @@ describe('shared IM ordinary questions', () => {
     await reply!();
     f.finish(f.controls.answer.mock.calls[0][0]);
     await vi.waitFor(() => expect((f.im as any).updateInteractiveCard).toHaveBeenCalledWith('m1', expect.anything(), { questionRespondentId: 'alice', questionClosed: true }));
+  });
+  // Companion DM topics carry replyThread, not a task-routing scopeKey.
+  // Unit: exercise the real presenter/matcher; existing cases have no topic scope.
+  it.each(['coded', 'quoted'])('accepts %s answers only in the original Feishu private topic', async mode => {
+    const f = fixture('rich-card', 'feishu');
+    await f.open(false, undefined, 'om_root');
+    const answer = (root?: string) => findImQuestionReply(f.im, {
+      channelName: 'feishu', senderId: 'group', speaker: { id: 'alice', name: 'Alice', isOwner: true },
+      text: mode === 'coded' ? `${f.code()} answer` : 'answer',
+      ...(mode === 'quoted' ? { replyContext: { messageId: 'm1', author: 'Cindy', text: '', isBot: true } } : {}),
+      ...(root ? { replyThread: { rootMessageId: root, threadId: 'omt_topic' } } : {}),
+    });
+    expect(await answer('om_other')!()).toBe(false);
+    expect(await answer()!()).toBe(false);
+    expect(f.controls.answer).not.toHaveBeenCalled();
+    expect(await answer('om_root')!()).toBe(true);
+    expect(f.controls.answer).toHaveBeenCalledExactlyOnceWith({ kind: 'ask_user_question', answers: { a: 'answer' } });
+    f.finish(f.controls.answer.mock.calls[0][0]);
   });
   it('rejects a delayed answer after the session is replaced', async () => {
     const f = fixture('chunked-text', 'dingtalk'); await f.open(); f.invalidate();
