@@ -440,6 +440,8 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
       error: (...args) => log.error(...args),
     },
     timing: { pingIntervalMs: 15_000 },
+    // RoutedDeviceLinkClient forwards resets to Main's per-peer recovery loop.
+    peerFailurePolicy: 'isolate-outbound',
   });
   client.onFrame?.(frame => {
     if (!current(rt) || state.client !== client || frame.kind !== 'push' || !frame.src) return;
