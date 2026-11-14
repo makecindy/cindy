@@ -136,6 +136,42 @@ it.each(['/v1/responses', '/v1/responses/compact', '/v1/messages', '/v1/chat/com
   }
 });
 
+it('falls back to the hard limit when the headroom target is unreachable, and prefers headroom when it is reachable', async () => {
+  const bodies: Buffer[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    bodies.push(Buffer.concat(chunks));
+    res.end('{"ok":true}');
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const targets: number[] = [];
+  const keep = vi.fn(async () => '/tmp/kept-image.png');
+  const proxy = await createAnthropicCompatProxy({
+    upstream: `http://127.0.0.1:${port}`, maxRequestBodyBytes: 2000,
+    oversizedRequestRecovery: () => (body, limit) => { targets.push(limit); return recoverInlineAttachments(body, limit, keep); },
+  });
+  cleanup.push(() => proxy.dispose());
+  const post = (text: string) => fetch(`${proxy.url}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ messages: [{ role: 'user', content: [
+      { type: 'text', text },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: Buffer.alloc(9000, 2).toString('base64') } },
+    ] }] }),
+  });
+  // Text alone sits between the headroom target (1000) and the hard limit (2000).
+  expect((await post('x'.repeat(1500))).status).toBe(200);
+  expect(targets).toEqual([1000, 2000]);
+  expect(Buffer.byteLength(bodies[0])).toBeGreaterThan(1000);
+  expect(Buffer.byteLength(bodies[0])).toBeLessThanOrEqual(2000);
+  // Text small enough that the headroom target is reachable: one attempt only.
+  targets.length = 0;
+  expect((await post('x'.repeat(100))).status).toBe(200);
+  expect(targets).toEqual([1000]);
+  expect(Buffer.byteLength(bodies[1])).toBeLessThanOrEqual(1000);
+});
+
 it('uses the same recovered body for local provider handlers, and does not dispatch when preservation fails', async () => {
   const local = vi.fn<LocalRequestHandler>(async ({ rawBody, res }) => { res.end(rawBody); });
   let fail = false;
