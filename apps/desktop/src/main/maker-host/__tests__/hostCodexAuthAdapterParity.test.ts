@@ -647,8 +647,13 @@ describe.each(ASSEMBLIES)(`Host and desktop Codex adapters (${environment.label}
   });
 });
 
+// On CI the comparison may not be skipped silently: an environment without a recorded table fails
+// there. A developer machine skips it visibly instead.
+const onCi = Boolean(process.env.CI) && process.env.CI !== 'false';
 if (!environment.table) {
-  it.skip(`has no recorded table for this environment (${environment.label}): the groups above still check that the Host gives no diagnostics and that final environments are equal`, () => {});
+  (onCi ? it : it.skip)(`has no recorded table for this environment (${environment.label}): the groups above still check that the Host gives no diagnostics and that final environments are equal`, () => {
+    expect.fail(`CI has no recorded table for this environment (${environment.label}); the difference table was not compared`);
+  });
 }
 
 it('covers every cell, and every recorded difference belongs to exactly one assembly and source', () => {
