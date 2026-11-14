@@ -1,14 +1,9 @@
-import { compressImageBuffer, imageCompressionCacheKey, isCompressedImageOutput, rememberCompressedImage, type ImageCompressionResult } from '@cindy/maker-core/image-compressor';
+import { compressImageBuffer, imageCompressionCacheKey, isCompressedImageOutput, rememberCompressedImage } from '@cindy/maker-core/image-compressor';
 import { acceptsWebpImageInput } from '@cindy/model-providers';
 
-// Temporary structural contract until PR 1 exports these types. No wire changes.
-export type ImageRouteInfo = { providerId?: string; modelId?: string; endpoint?: string; deniedMimeTypes?: string[] };
-export type PreparedImage = ImageCompressionResult;
+import type { ImageRouteInfo, InlineImagePreprocessor, PreparedImage } from '@cindy/anthropic-compat-proxy';
+export type { ImageRouteInfo, InlineImagePreprocessor, PreparedImage } from '@cindy/anthropic-compat-proxy';
 type Input = { bytes: Buffer; mimeType: string; route: ImageRouteInfo; signal: AbortSignal };
-export interface InlineImagePreprocessor {
-  prepare(input: Input): Promise<PreparedImage | null>;
-  tighten(input: Input & { maxBytes: number }): Promise<PreparedImage | null>;
-}
 
 /** Hidden runtime override: XDT_IMAGE_COMPRESSION_DISABLE=1 disables compression;
  * Unset enables the current default. No preferences are written; removing
@@ -28,7 +23,7 @@ export function createInlineImagePreprocessor(
   const run = async (input: Input, maxBytes?: number): Promise<PreparedImage | null> => {
     if (!enabled() || input.signal.aborted) return null;
     const denied = input.route.deniedMimeTypes ?? [];
-    const acceptsWebp = !denied.includes('image/webp') && acceptsWebpImageInput(input.route);
+    const acceptsWebp = Boolean(input.route.providerId?.trim()) && !denied.includes('image/webp') && acceptsWebpImageInput(input.route);
     const request = { bytes: input.bytes, mimeType: input.mimeType, route: { acceptsWebp }, budget: maxBytes === undefined ? undefined : { maxBytes } };
     const key = imageCompressionCacheKey(input.bytes, request) + ':' + [...denied].sort().join(',');
     // A result fed back through a later request must never be JPEG-recompressed.

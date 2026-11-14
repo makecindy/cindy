@@ -14,7 +14,7 @@ describe('inline image preprocessor', () => {
   const source = () => sharp({ create: { width: 128, height: 128, channels: 3, background: 'white' } }).png({ compressionLevel: 0 }).toBuffer();
   it('caches stable output and honors learned WebP denial on the same input', async () => {
     const bytes = await source();
-    const input = { bytes, mimeType: 'image/png', route: { modelId: 'gpt-6-astra' }, signal: new AbortController().signal };
+    const input = { bytes, mimeType: 'image/png', route: { providerId: 'openai', modelId: 'gpt-6-astra' }, signal: new AbortController().signal };
     const processor = createInlineImagePreprocessor();
     const first = await processor.prepare(input);
     expect(first?.mimeType).toBe('image/webp');
@@ -38,10 +38,10 @@ describe('inline image preprocessor', () => {
   it('tighten only returns a candidate meeting the exact byte limit', async () => {
     const processor = createInlineImagePreprocessor();
     const input = { bytes: await source(), mimeType: 'image/png', route: {}, signal: new AbortController().signal };
-    const result = await processor.tighten({ ...input, maxBytes: 1500 });
+    const result = await processor.tighten!({ ...input, maxBytes: 1500 });
     expect(result).not.toBeNull();
     expect(result!.bytes.length).toBeLessThanOrEqual(1500);
-    expect(await processor.tighten({ ...input, maxBytes: 1 })).toBeNull();
+    expect(await processor.tighten!({ ...input, maxBytes: 1 })).toBeNull();
   });
 });
 
@@ -83,7 +83,7 @@ it('does not encode a JPEG again after the user-attachment resizer', async () =>
     expect((await sharp(bytes).metadata()).format).toBe('jpeg');
     const encode = vi.fn(compressImageBuffer);
     const processor = createInlineImagePreprocessor(() => true, encode);
-    expect(await processor.prepare({ bytes, mimeType: 'image/jpeg', route: { modelId: 'gpt-6-astra' }, signal: new AbortController().signal })).toBeNull();
+    expect(await processor.prepare({ bytes, mimeType: 'image/jpeg', route: { providerId: 'openai', modelId: 'gpt-6-astra' }, signal: new AbortController().signal })).toBeNull();
     expect(encode).not.toHaveBeenCalled();
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -106,4 +106,21 @@ it('reads the XDT disable override on every call without clearing other settings
     if (original === undefined) delete process.env.XDT_IMAGE_COMPRESSION_DISABLE;
     else process.env.XDT_IMAGE_COMPRESSION_DISABLE = original;
   }
+});
+
+it('bypasses encoding while disabled and reuses the result after reenabling', async () => {
+  let enabled = true;
+  const encode = vi.fn(compressImageBuffer);
+  const processor = createInlineImagePreprocessor(() => enabled, encode);
+  const bytes = await sharp({ create: { width: 150, height: 80, channels: 3, background: '#135724' } }).png({ compressionLevel: 0 }).toBuffer();
+  const input = { bytes, mimeType: 'image/png', route: { providerId: 'openai', modelId: 'gpt-6-astra' }, signal: new AbortController().signal };
+  const first = await processor.prepare(input);
+  expect(first?.changed).toBe(true);
+  expect(encode).toHaveBeenCalledOnce();
+  enabled = false;
+  expect(await processor.prepare(input)).toBeNull();
+  expect(encode).toHaveBeenCalledOnce();
+  enabled = true;
+  expect(await processor.prepare(input)).toBe(first);
+  expect(encode).toHaveBeenCalledOnce();
 });

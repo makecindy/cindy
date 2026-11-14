@@ -30,6 +30,7 @@ const ports = (): CodexProxyHostPorts => ({
   bearerKeyFromHeaders: () => null,
   reportCindyGatewayKeyRejected: () => {},
   createAttachmentRecovery: () => null,
+  createRequestSizeController: (_resolve: unknown, preprocessor: import('@cindy/anthropic-compat-proxy').InlineImagePreprocessor) => ({ preprocessor, control: async () => null }),
   restrictSubscriptionRequest: (decision: unknown) => decision,
   withSubscriptionFastRequestPolicy: (decision: unknown) => decision,
   peekGrokAccessToken: () => null,
@@ -77,6 +78,8 @@ describe('the optional inbound check port of the Codex proxy core', () => {
       expect(without[index], kind).toHaveLength(1);
       expect(withGate[index], kind).toHaveLength(1);
       const a = without[index]![0]!.options;
+      // PR 2: every proxy kind forwards a real prepare/tighten adapter.
+      expect(a.requestSizeController).toMatchObject({ preprocessor: { prepare: expect.any(Function), tighten: expect.any(Function) } });
       const b = withGate[index]![0]!.options;
       expect('authorizeInbound' in a, kind).toBe(false);
       expect(b.authorizeInbound, kind).toBe(gate);

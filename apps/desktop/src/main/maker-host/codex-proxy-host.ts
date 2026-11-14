@@ -1,3 +1,4 @@
+import { createInlineImagePreprocessor } from './inlineImagePreprocessor.js';
 
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import { rewriteFastModel } from './model-fast-mode.js';
@@ -255,6 +256,7 @@ export function shouldCompactCodexWebSocketFrame(message: Buffer, limitBytes = C
 }
 
 export function createCodexProxyHost(ports: CodexProxyHostPorts) {
+const imagePreprocessor = createInlineImagePreprocessor();
 const { bearerKeyFromHeaders, reportCindyGatewayKeyRejected, createAttachmentRecovery, createRequestSizeController, restrictSubscriptionRequest, withSubscriptionFastRequestPolicy, peekGrokAccessToken, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM, claudeUpstreamEndpoint, isOpenAiSubscriptionProviderId, createXaiProxyAuthInvalidationObserver, resolveDesktopOutboundProxy, outboundFetch, readSilentEncryptedRetrySettings, recordXaiRateLimitSnapshot, CODEX_IMAGE_GENERATION_ACTOR_HEADER, codexCustomProviderRoutesSignature, findCodexAppliedCustomProviderRoute, isCodexCustomProviderNamespacePath, parseCodexCustomProviderPath, relativeProviderRequestPath, setAppliedCustomProviderRoutes } = ports;
 
 
@@ -3576,7 +3578,7 @@ async function createCodexProxyHandle(
     return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
   };
   const attachmentRecovery = createAttachmentRecovery(sessionIdFromHeaders);
-  const requestSizeController = createRequestSizeController(sessionIdFromHeaders, undefined, (headers, model) =>
+  const requestSizeController = createRequestSizeController(sessionIdFromHeaders, imagePreprocessor, (headers, model) =>
       providerContextForRequest(headers, model).providerId ?? guestProviderId
         ?? gatewayProviderIdForRewrittenModel(model)
         ?? ((frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : 'xd'));
