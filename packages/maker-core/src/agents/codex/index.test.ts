@@ -13,6 +13,7 @@ import {
 import { CodexForkError } from './fork-error.js';
 import { MANUAL_ABORT_RECOVERY_GRACE_MS, Session } from '../../session.js';
 import { withFastModePolicy } from '../shared/fast-mode-policy.js';
+import { LIBRARY_READ_ROOT } from '../shared/library-native-read.js';
 import { AUTO_REVIEW_CONTINUATION_POLICY } from '../shared/continuation-policy.js';
 import { assembleSystemPromptSections } from '../shared/system-prompt-sections.js';
 import { Method, type CodexErrorInfo, type TurnStartParams } from './app-server/protocol.js';
@@ -8911,6 +8912,98 @@ describe('CodexAgent MCP thread context hooks', () => {
       await handle.close();
     },
   );
+
+  it('dispatches a pinned Skill when the host prepends a UI-language note', async () => {
+    const pinnedPath = '/cindy/system-skills/v10/learn/SKILL.md';
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-pinned-learn-ui-note' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-pinned-learn-ui-note',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await handle.send(
+      {
+        type: 'user',
+        content: '[UI language] System note appended each turn. This is not a user message.\n\n/learn release flow',
+      },
+      {
+        [PINNED_SKILL_INVOCATION]: { name: 'learn', path: pinnedPath },
+        [AUTO_REVIEW_SOURCE_CONTENT]: '/learn release flow',
+      },
+    );
+
+    const turnStart = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    )?.[1] as { input?: unknown[] };
+    expect(turnStart.input).toEqual([
+      { type: 'skill', name: 'learn', path: pinnedPath },
+      { type: 'text', text: 'release flow' },
+    ]);
+
+    await handle.close();
+  });
+
+  it('keeps the library read context when dispatching a pinned Skill', async () => {
+    const libraryRoot = path.join(os.tmpdir(), 'cindy-library-pinned-skill');
+    const assetHash = 'a'.repeat(64);
+    const pinnedPath = '/cindy/system-skills/v10/learn/SKILL.md';
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-pinned-learn-library' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-pinned-learn-library',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: [libraryRoot],
+      [LIBRARY_READ_ROOT]: libraryRoot,
+    });
+
+    await handle.send(
+      { type: 'user', content: `/learn summarize library:assets/ab/${assetHash}/blob.md` },
+      { [PINNED_SKILL_INVOCATION]: { name: 'learn', path: pinnedPath } },
+    );
+
+    const turnStart = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    )?.[1] as { input?: Array<{ type: string; text?: string }> };
+    expect(turnStart.input?.[0]).toEqual({ type: 'skill', name: 'learn', path: pinnedPath });
+    // 命令校验走原始命令，但模型输入必须带上 withLibraryNativeReadContext 追加的
+    // 资料库说明：否则模型只收到 library: 别名，拿不到 libraryRoot 与真实文件路径。
+    const text = turnStart.input?.[1]?.text ?? '';
+    expect(text).toContain('summarize library:assets/ab/');
+    expect(text).toContain('<cindy-library-native-read>');
+    // 上下文块是 JSON 行，Windows 路径里的反斜杠会被转义。
+    expect(text).toContain(JSON.stringify(libraryRoot).slice(1, -1));
+
+    await handle.close();
+  });
+
+  it('does not resolve a pinned Skill from an embedded command in host-owned text', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-pinned-learn-embedded-command',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await expect(handle.send(
+      { type: 'user', content: 'Please read this note: /learn release flow' },
+      {
+        [PINNED_SKILL_INVOCATION]: { name: 'learn', path: '/cindy/system-skills/v10/learn/SKILL.md' },
+        [AUTO_REVIEW_SOURCE_CONTENT]: 'Please read this note: /learn release flow',
+      },
+    )).rejects.toThrow('The pinned Skill does not match the dispatched command');
+
+    await handle.close();
+  });
 
   it.each(['system', 'admin'] as const)(
     'keeps a palette-hidden %s Skill directly invocable',

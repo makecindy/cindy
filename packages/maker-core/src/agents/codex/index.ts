@@ -48,6 +48,7 @@ import { CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS, readAccountRateLimitsWithRefresh 
 import {
   BaseAgent,
   LOCAL_AGENT_CLIENT,
+  AUTO_REVIEW_SOURCE_CONTENT,
   INHERITED_CAPABILITY_SELECTION,
   PINNED_SKILL_INVOCATION,
   CodexResumePreparationBlockedError,
@@ -6894,6 +6895,7 @@ assertRouteCurrent();
     const toTurnInput = async (
       content: UserMessage['content'],
       pinnedSkill?: PinnedSkillInvocation,
+      sourceContent?: UserMessage['content'],
     ): Promise<UserInput[]> => {
       if (reviewMode) {
         if (pinnedSkill) {
@@ -6911,7 +6913,13 @@ assertRouteCurrent();
         return toAppServerInput(content, opts.workingDir);
       }
 
-      const slash = parseLeadingSlashToken(content.trim());
+      const slash = parseLeadingSlashToken(
+        (pinnedSkill && typeof sourceContent === 'string' ? sourceContent : content).trim(),
+      );
+      // 组装模型输入时改用追加过资料库说明的正文：命令校验必须只看用户原始命令，
+      // 但 `library:assets/...` 这类别名要靠 `withLibraryNativeReadContext` 追加的
+      // libraryRoot / 文件路才能落到真实路径，只发原始 slash.rest 会丢掉它。
+      const libraryAugmentedSlash = parseLeadingSlashToken(content.trim());
       if (pinnedSkill) {
         const normalizedSlashName = slash?.name.toLowerCase();
         const normalizedSkillName = pinnedSkill.name.toLowerCase();
@@ -6927,7 +6935,7 @@ assertRouteCurrent();
           name: pinnedSkill.name,
           path: pinnedSkill.path,
         }];
-        const prompt = slash.rest.trim();
+        const prompt = (libraryAugmentedSlash?.rest ?? slash.rest).trim();
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       }
@@ -13678,6 +13686,7 @@ assertRouteCurrent();
           turnInput = await toTurnInput(
             withLibraryNativeReadContext(message.content, mutableLibraryRoot, mutableExtraDirs),
             sendOpts?.[PINNED_SKILL_INVOCATION],
+            sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT],
           );
         } catch (e) {
           isTurnStartPending = false;
