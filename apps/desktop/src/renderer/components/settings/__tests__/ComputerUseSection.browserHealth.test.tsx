@@ -137,6 +137,31 @@ afterEach(() => {
 });
 
 describe('ComputerUseSection browser backend health loading', () => {
+  // PR #7037: retain the slow-success transition through the real component.
+  // Main covers never-settling/timeout reads; this case also verifies that a
+  // delayed successful detection reveals login without a missing-browser flash.
+  // Tier: unit/jsdom; controlled IPC promise, no native process or wall-clock wait.
+  it('keeps Automation usable while browser availability is pending', async () => {
+    const initialBrowser = deferred<BrowserAvailability>();
+    api.getBrowserStatus.mockReturnValueOnce(initialBrowser.promise);
+    api.getBackendState.mockResolvedValue({ active: 'external' });
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
+    expect(await screen.findByText('settings.computerUse.android.title')).toBeTruthy();
+    expect(screen.getByText('settings.computerUse.configurationRead.loading')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browser.notDetected')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.browser.download')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.browser.openForLogin')).toBeNull();
+    expect((screen.getByRole('radio', {
+      name: 'settings.computerUse.browserBackend.rsbWebview.title',
+    }) as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => { initialBrowser.resolve({
+      detected: true, browserKind: 'chrome', executablePath: '/test/chrome',
+    }); });
+    expect(await screen.findByText('settings.computerUse.browser.openForLogin')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.configurationRead.loading')).toBeNull();
+  });
+
   // Regression: the four base reads used to gate the entire page via Promise.all.
   // Existing tests cover slow runtime probes only. A never-settling base read
   // must leave the other cards and their loaded controls usable (unit/jsdom).
@@ -321,8 +346,8 @@ describe('ComputerUseSection browser backend health loading', () => {
     const { rerender } = render(<ComputerUseSection workingDir="/tmp/project" />);
 
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
-    expect(screen.getByText('settings.computerUse.android.title')).toBeTruthy();
-    const computerToggle = screen.getByRole('switch', {
+    expect(await screen.findByText('settings.computerUse.android.title')).toBeTruthy();
+    const computerToggle = await screen.findByRole('switch', {
       name: 'settings.computerUse.directControl.toggleAria',
     });
     expect((computerToggle as HTMLButtonElement).disabled).toBe(true);
@@ -451,7 +476,7 @@ describe('ComputerUseSection browser backend health loading', () => {
 
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
     expect(
-      screen.getByRole('radio', {
+      await screen.findByRole('radio', {
         name: 'settings.computerUse.browserBackend.rsbWebview.title',
       }),
     ).toBeTruthy();
