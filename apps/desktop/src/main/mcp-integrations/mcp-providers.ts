@@ -36,7 +36,13 @@ import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
 import { listProjects, renameProject, removeProject, readCurrentSessionProject } from './projectManagement.js';
-import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
+import {
+  activeOwnerScopeKey,
+  getActiveAppSession,
+  getActiveDataOwnerPushStamp,
+  isAppSessionBoundaryPending,
+  ownerScopedUserDataPath,
+} from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
 import { join as pathJoin } from 'node:path';
@@ -154,10 +160,17 @@ import { getLearnController } from '../learn-host/index.js';
 import { HELP_KNOWLEDGE } from '../maker-ipc/helpKnowledge.generated.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
+import { createLocalSkillLibraryTools, type LocalSkillLibraryCoordinator } from '../skillhub/localSkillLibrary.js';
+import { createLocalSkillEmbeddingAdapter } from '../skillhub/localSkillEmbedding.js';
+import { isKnownEmbeddingModel } from '@cindy/embedding-client';
+import { ensureEmbeddingServiceForPluginVector } from '../embedding-host/index.js';
+import { getDesktopSelectableCatalog } from '../maker-host/createDesktopProviderService.js';
+import { isCindyEmbeddingModelAvailable } from '../maker-host/provider-access-policy.js';
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
 import { resolveSessionTeammate } from '../maker-ipc/sessionTeammate.js';
 
 export interface DesktopMcpProvidersDeps {
+  localSkillLibraryCoordinator: LocalSkillLibraryCoordinator;
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
   manageUserQuestions?: XdtHelperMcpDeps['manageUserQuestions'];
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
@@ -1407,6 +1420,23 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         isCurrentSession: (context) => !!context.sessionId
           && deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId) === true,
         authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
+      }),
+      localSkillLibrary: createLocalSkillLibraryTools({
+        coordinator: deps.localSkillLibraryCoordinator,
+        ownerScope: () => getActiveAppSession().dataOwnerId && !isAppSessionBoundaryPending() ? activeOwnerScopeKey() : null,
+        storageRoot: () => ownerScopedUserDataPath('skill-libraries'),
+        homeDir: homedir,
+        isCurrentSession: (context) => !!context.sessionId
+          && !isAppSessionBoundaryPending()
+          && deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId) === true,
+        isOrdinaryTask: async (context) => {
+          const db = tryGetDbClient();
+          return !!db && await resolveHelperSurface(db, context.sessionId!) === 'default';
+        },
+        embedding: (model, checkCurrent) => {
+          if (!isKnownEmbeddingModel(model) || !isCindyEmbeddingModelAvailable(getDesktopSelectableCatalog(), model)) return undefined;
+          return createLocalSkillEmbeddingAdapter(model, ensureEmbeddingServiceForPluginVector, checkCurrent);
+        },
       }),
       history: {
         ...createHistoryToolCallbacks({ authorizeCall: authorizeTaskToolCall, invokeRemote: deps.invokeRemote }),

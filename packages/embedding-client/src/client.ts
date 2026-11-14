@@ -31,6 +31,7 @@ import {
   type EmbedDocumentsResponse,
   type EmbedRequest,
   type EmbedResponse,
+  type OpenAiCompatibleEmbedRequest,
   type EmbeddingClientOptions,
   type EmbeddingInputType,
   type EmbeddingLogger,
@@ -59,6 +60,8 @@ const INPUT_TYPE_WIRE: Record<
 const DEFAULT_CACHE_SIZE = 1000;
 // 重试间隔 (ms): 1s / 5s / 15s. 共最多 4 次尝试 (initial + 3 retries)。
 const RETRY_DELAYS_MS = [1_000, 5_000, 15_000];
+
+type FlatEmbedRequest = Omit<EmbedRequest, 'model'> & { model: string };
 
 interface OpenAiEmbeddingsResponse {
   object: 'list';
@@ -352,6 +355,7 @@ interface CachedVector {
 
 export class EmbeddingClient {
   private readonly resolveBaseUrl: () => string;
+  private readonly embeddingsPath: string;
   private readonly getApiKey: () => string | undefined | null;
   private readonly fetchImpl: typeof fetch;
   private readonly cache: LruCache<string, CachedVector>;
@@ -370,6 +374,7 @@ export class EmbeddingClient {
       typeof rawBaseUrl === 'function' ? () => normalize(rawBaseUrl()) : () => normalize(rawBaseUrl);
     this.getApiKey = opts.getApiKey;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    this.embeddingsPath = opts.embeddingsPath ?? '/v1/embeddings';
     this.cache = new LruCache<string, CachedVector>(opts.cacheSize ?? DEFAULT_CACHE_SIZE);
     this.log = opts.logger ?? {};
     if (typeof this.fetchImpl !== 'function') {
@@ -393,6 +398,21 @@ export class EmbeddingClient {
         'INVALID_MODEL',
       );
     }
+    return this.embedFlat(req);
+  }
+
+  /** Opt-in custom endpoint contract; catalog consumers retain embed() validation. */
+  async embedOpenAICompatible(req: OpenAiCompatibleEmbedRequest): Promise<EmbedResponse> {
+    if (!req.model.trim()) throw new EmbeddingError('model must not be empty', 'INVALID_MODEL');
+    return this.embedFlat({
+      texts: req.texts,
+      model: req.model,
+      dimensions: req.dimensions,
+      timeoutMs: req.timeoutMs,
+    });
+  }
+
+  private async embedFlat(req: FlatEmbedRequest): Promise<EmbedResponse> {
     if (req.texts.length === 0) {
       return { embeddings: [], modelUsed: req.model, tokensUsed: 0, cacheHits: 0 };
     }
@@ -413,7 +433,7 @@ export class EmbeddingClient {
     const hitModels = new Set<string>();
     for (let i = 0; i < req.texts.length; i++) {
       const key = cacheKey(req.model, req.texts[i], variant);
-      const cached = this.cache.get(key);
+      const cached = req.bypassCache ? undefined : this.cache.get(key);
       if (cached) {
         result[i] = cached.vector;
         hitModels.add(cached.model);
@@ -495,7 +515,7 @@ export class EmbeddingClient {
       }
       const targetIdx = missIdx[j];
       result[targetIdx] = vec;
-      this.cache.set(cacheKey(req.model, missTexts[j], variant), { vector: vec, model: freshModel });
+      if (!req.bypassCache) this.cache.set(cacheKey(req.model, missTexts[j], variant), { vector: vec, model: freshModel });
     }
 
     // 组装后再校验一次"整批自洽" —— 上面那次只看了**新取回的**那部分。
@@ -552,7 +572,7 @@ export class EmbeddingClient {
    * 混合分支的 `cacheHits > 0` 也不成立)。
    */
   private async refetchAfterCacheReset(
-    req: EmbedRequest,
+    req: FlatEmbedRequest,
     startedAt: number,
     why: string,
   ): Promise<EmbedResponse> {
@@ -570,7 +590,7 @@ export class EmbeddingClient {
         );
       }
     }
-    return this.embed({
+    return this.embedFlat({
       ...req,
       ...(remaining !== undefined ? { timeoutMs: remaining } : {}),
     });
@@ -629,7 +649,7 @@ export class EmbeddingClient {
     model: string,
     // string[][] = 上下文化的按文档分组输入(见 embedDocuments);wire 上原样发。
     inputs: string[] | string[][],
-    opts: Pick<EmbedRequest, 'inputType' | 'dimensions' | 'timeoutMs'>,
+    opts: Pick<EmbedRequest, 'inputType' | 'dimensions' | 'timeoutMs' | 'assertActive'>,
   ): Promise<OpenAiEmbeddingsResponse> {
     let attempt = 0;
     // initial + retries
@@ -638,6 +658,8 @@ export class EmbeddingClient {
     const deadline = opts.timeoutMs !== undefined ? Date.now() + opts.timeoutMs : null;
 
     while (attempt < maxAttempts) {
+      // Consumer cancellation is not a transport failure and must bypass retry classification.
+      opts.assertActive?.();
       try {
         let remaining: number | undefined;
         if (deadline !== null) {
@@ -651,6 +673,7 @@ export class EmbeddingClient {
         }
         return await this.callOnce(apiKey, model, inputs, opts, remaining);
       } catch (err) {
+        opts.assertActive?.();
         if (!(err instanceof EmbeddingError)) {
           // 防御性: 任何非 EmbeddingError 都视作 SERVER_ERROR 走重试
           lastErr = new EmbeddingError(
@@ -703,7 +726,7 @@ export class EmbeddingClient {
     opts: Pick<EmbedRequest, 'inputType' | 'dimensions'>,
     budgetMs?: number,
   ): Promise<OpenAiEmbeddingsResponse> {
-    const url = `${this.resolveBaseUrl()}/v1/embeddings`;
+    const url = `${this.resolveBaseUrl()}${this.embeddingsPath}`;
     // inputType 按 provider 翻成该家的 wire 值(不支持的家不发这个字段);
     // dimensions 统一用 OpenAI 的名字 —— 三家经网关都认它, Voyage 自己的
     // output_dimension 只对 voyage 生效。

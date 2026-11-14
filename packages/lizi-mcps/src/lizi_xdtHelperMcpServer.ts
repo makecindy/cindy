@@ -98,10 +98,12 @@ import {
   registerSubmitGithubIssueTool,
   registerStartSkillLearningTool,
   registerSkillhubTools,
+  registerLocalSkillLibraryTools,
 } from './xdt-helper/index.js';
 import type { SubmitGithubIssueDeps } from './xdt-helper/submit_github_issue.js';
 import type { AppUpdateCallbacks } from './xdt-helper/app_update.js';
 import type { SkillhubAgentCallback } from './xdt-helper/skillhub.js';
+import type { LocalSkillLibraryCallback } from './xdt-helper/local_skills.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
@@ -528,6 +530,8 @@ export interface XdtHelperMcpDeps {
   skillLearning?: StartSkillLearningCallback;
   /** Search catalogs and publish the current user's Skills through the host's SkillHub service. */
   skillhub?: SkillhubAgentCallback;
+  /** Search/read explicitly registered local libraries through their host-owned index. */
+  localSkillLibrary?: LocalSkillLibraryCallback;
   /** Host-owned, one-shot authorization for the current direct Learn invocation. */
   authorizeSkillLearning?: AuthorizeSkillLearningCallback;
   /** Register an existing local directory as a Cindy project without starting a task. */
@@ -810,6 +814,12 @@ export function createXdtHelperMcpServer(
     registerSkillhubTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       execute: deps.skillhub,
+    });
+  }
+  if (deps.localSkillLibrary) {
+    registerLocalSkillLibraryTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      execute: deps.localSkillLibrary,
     });
   }
   // 伙伴消息与 Session 任务控制统一进入 bots 类目，由调用时的任务身份限制发现与执行。

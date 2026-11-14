@@ -496,6 +496,25 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
   });
 
+  it('reviews local library registration once through the normal tool policy', () => {
+    const name = 'configure_local_skill_library';
+    for (const action of ['register', 'refresh', 'remove']) {
+      const params = { action, library_id: 'methods', sources: ['/methods'], gateway_path: '/skills/library' };
+      const expected = action === 'register' ? 'prompt-each-time' : 'auto-approve';
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: name, toolParams: params })).toBe(expected);
+      for (const args of [params, JSON.stringify(params)]) {
+        for (const toolName of ['call_tool', undefined]) {
+          expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName, toolParams: { name, args } })).toBe(expected);
+        }
+      }
+    }
+    for (const name of ['search_local_skills', 'read_local_skill']) {
+      const args = { library_id: 'methods', query: 'task', id: 'selected-id' };
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: name, toolParams: args })).toBe('auto-approve');
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool', toolParams: { name, args } })).toBe('auto-approve');
+    }
+  });
+
   it('reviews each move across progressive payload representations', () => {
     for (const working_dir of ['/project', null]) {
       for (const args of [

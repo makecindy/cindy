@@ -209,6 +209,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     detail: [
       '入口:主界面侧边栏「技能」页(与「插件」同一管理界面),含本地技能(全局 + 项目级)与 Skill Hub 市场;可导入 .zip 或 SKILL.md、安装、停用、卸载、发布与更新。',
       'Skill 是一个带 SKILL.md 的文件夹(同目录文件 agent 也能读),Claude Code / Codex / Pi 共用同一份,出现在输入框的 / 建议里。',
+      '本机共享技能库用 configure_local_skill_library 登记来源与短发现入口；按当前任务用 search_local_skills 检索，再用 read_local_skill 分段读原文。库源保持原位，全库简介留在索引中；可选 Cindy embedding 型号做语义检索。',
       'agent 工具(cindy_helper skills 类):search_skills(搜公开市场 / 所在组织)、publish_skill(仅在用户要求时上传或发新版本,首次发布须用户选可见范围)、get_skill_publish_status(扫描 / 审核状态,人工审核中如实告知、不要反复发布或轮询)、list_my_published_skills;start_skill_learning 对应 /learn,从当前任务提炼可复用 Skill。',
     ].join(' '),
   },

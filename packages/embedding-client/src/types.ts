@@ -57,6 +57,8 @@ export interface EmbeddingClientOptions {
    * 服务端下发网关地址)。
    */
   baseUrl: string | (() => string);
+  /** Request path relative to baseUrl; defaults to /v1/embeddings for Cindy's gateway. */
+  embeddingsPath?: string;
   /** 动态读 API key (避免写死, 切账号生效)。返 undefined / 空字符串 = 未登录。 */
   getApiKey: () => string | undefined | null;
   /** 可注入用于单元测试; 缺省走全局 fetch。 */
@@ -78,6 +80,10 @@ export interface EmbedRequest {
   texts: string[];
   /** 必传。EmbedRequest 不预设 default,让 consumer 显式声明使用的模型。 */
   model: EmbeddingModelId;
+  /** Skip both LRU reads and writes when the consumer owns vector freshness/persistence. */
+  bypassCache?: boolean;
+  /** Consumer lifecycle assertion before each HTTP attempt and retry wait. Exceptions stop retries. */
+  assertActive?: () => void;
   /**
    * 检索用途档 (可选)。缺省 = 不发该参数 = 上游不加任何检索前缀。
    *
@@ -120,6 +126,16 @@ export interface EmbedResponse {
   tokensUsed: number;
   /** 本次调用中走 LRU 缓存命中的 texts 数量。 */
   cacheHits: number;
+}
+
+/** Explicit caller-configured OpenAI-compatible model, outside Cindy's catalog.
+ * No provider-specific input_type is inferred from the model name.
+ */
+export interface OpenAiCompatibleEmbedRequest {
+  texts: string[];
+  model: string;
+  dimensions?: number;
+  timeoutMs?: number;
 }
 
 /**

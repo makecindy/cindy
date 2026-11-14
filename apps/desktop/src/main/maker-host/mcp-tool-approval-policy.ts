@@ -300,6 +300,9 @@ export function getDesktopMcpToolApprovalPolicy(
     if (action === 'move_session' || action === 'publish_skill' || action === 'create_task_worktree') {
       return 'prompt-each-time';
     }
+    // Registering explicit source folders and a gateway is one normal tool approval.
+    // Searches, reads and refreshes use the already registered account-local library.
+    if (action === 'configure_local_skill_library' && args?.action === 'register') return 'prompt-each-time';
     // Moving a teammate hands its running to another computer: the task's permission mode decides.
     if (action === 'manage_session_prs' && args?.action !== 'list') return 'prompt-each-time';
     if (action === 'move_teammate_home') return 'prompt-each-time';
