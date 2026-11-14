@@ -492,9 +492,9 @@ export class AppServerClient {
       return;
     }
 
-    let msg: IncomingMessage;
+    let parsed: unknown;
     try {
-      msg = JSON.parse(line) as IncomingMessage;
+      parsed = JSON.parse(line);
     } catch (e) {
       // 非法 JSON: 单行错误不杀 session (server 可能偶尔吐 banner), warn 跳过。
       this.logger.warn('invalid JSON line', {
@@ -503,6 +503,17 @@ export class AppServerClient {
       });
       return;
     }
+
+    // Valid JSON may still be a primitive or array, not a JSON-RPC envelope.
+    // Match malformed-JSON handling: ignore the bad line and keep this transport alive.
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      this.logger.warn('invalid JSON-RPC envelope', {
+        type: parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed,
+      });
+      return;
+    }
+
+    const msg = parsed as IncomingMessage;
 
     // 三类区分 (jsonrpc_lite.rs untagged enum 顺序: Request → Notification → Response → Error)
     // - id 存在 + method 存在 → ServerRequest
