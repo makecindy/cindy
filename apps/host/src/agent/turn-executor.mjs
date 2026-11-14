@@ -15,6 +15,7 @@ import { DEFAULT_CLASSICAL_REPLY_STYLE } from '@cindy/maker-shared/classical-rep
 import { assertHostTaskExecutionSupported, prepareHostUserMessage } from './send-preflight.ts';
 import { createHostLearnInvocationCapture } from './learn-capture.ts';
 import { createHostEventPersistence } from './event-persistence.ts';
+import { createHostContextRecovery } from './context-recovery.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
 import { clearPendingTurnChangeSets, finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
@@ -52,6 +53,10 @@ export function createTurnExecutor(deps) {
   const bindings = new Map();
   const wireNotes = createWireNoteMemory();
   const log = createLogger('host-input');
+  // Context recovery of a terminal error (context-recovery.ts); without a recovery factory the
+  // listener behaves as before.
+  const recovery = deps.getRecoveryRollover ? createHostContextRecovery({ getRollover: deps.getRecoveryRollover,
+    publish: (id, event, fields) => publishAgentEvent(deps.hub, id, event, fields), log }) : null;
   function historyFor(id) {
     let history = histories.get(id);
     if (!history) {
@@ -102,7 +107,8 @@ export function createTurnExecutor(deps) {
     return snapshot.onTurnStart(sessionId, signal);
   }
 
-  function finish(sessionId, turn, error, event) {
+  // recoveryOwnsError: context recovery claimed this terminal error and writes its row if it fails.
+  function finish(sessionId, turn, error, event, recoveryOwnsError = false) {
     if (turn.terminal) return turn.settlement;
     turn.terminal = true;
     // A stop the engine acknowledged without a terminal event: the engines' stop paths end in a
@@ -113,7 +119,7 @@ export function createTurnExecutor(deps) {
     const history = historyFor(sessionId);
     history.flushAssistantBlock(sessionId);
     history.flushOrphanToolResults(sessionId, event?.agentMeta ?? null);
-    if (error) history.onTurnErrorEvent(sessionId, { ...event?.data, message: error }, event?.agentMeta ?? null);
+    if (error && !recoveryOwnsError) history.onTurnErrorEvent(sessionId, { ...event?.data, message: error }, event?.agentMeta ?? null);
     if (error) history.persistCodexPlanOnTerminalError(sessionId);
     else if (event) history.persistCodexPlanOnDone(sessionId, event.data);
     history.preserveTurnPersistStateForBackground(sessionId);
@@ -187,10 +193,17 @@ export function createTurnExecutor(deps) {
       const stream = history.event(session, event);
       // As the desktop (sessionEventDelivery.ts): a turn that ended on a rejected Cindy AI Key
       // reports the current key, which resynchronizes the credentials.
-      if (isGatewayProxyTokenRecoveryErrorEventForProvider(getSessionProvider(sessionId), event)) {
-        deps.reportAgentCindyGatewayKeyRejected?.();
-      }
-      publishAgentEvent(deps.hub, sessionId, event, { ...stream, inputClientId: turn.clientId });
+      const gatewayKeyRejected = isGatewayProxyTokenRecoveryErrorEventForProvider(getSessionProvider(sessionId), event);
+      if (gatewayKeyRejected) deps.reportAgentCindyGatewayKeyRejected?.();
+      const fields = { ...stream, inputClientId: turn.clientId };
+      // Recovery claims a turn's terminal error synchronously, before finish hands it to the
+      // coordinator (the desktop's coordinator receives it first; the order differs, release table).
+      const recoveryTerminal = recovery && event.type === 'error' && isTerminalTurnErrorEvent(event)
+        && event.turnScope !== 'background'
+        ? { session, event, history, fields, isStopping: deps.isStoppingRuntime(), isGatewayProxyTokenRecovery: gatewayKeyRejected }
+        : null;
+      const claim = recoveryTerminal ? recovery.claim(recoveryTerminal) : 'idle';
+      if (claim === 'idle') publishAgentEvent(deps.hub, sessionId, event, fields);
       // Desktop takes the after-edit savepoint once the event is delivered (sessionEventDelivery.ts).
       if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) settleGitBaseline(sessionId, turn, 'end');
       if (isTerminalTurnErrorEvent(event)) settleGitBaseline(sessionId, turn, 'abort');
@@ -201,7 +214,8 @@ export function createTurnExecutor(deps) {
         const error = event.type === 'error'
           ? event.data?.message || event.message || (typeof event.data === 'string' ? event.data : 'Agent error')
           : undefined;
-        void finish(sessionId, turn, error, event);
+        void finish(sessionId, turn, error, event, claim !== 'idle');
+        if (claim !== 'idle') recovery.settle(recoveryTerminal, claim, () => turn.settlement);
       }
     });
     const unsubscribeStatus = session.onStatusChange?.(status => {
@@ -559,6 +573,10 @@ export function createTurnExecutor(deps) {
 
   return {
     send,
+    /** On shutdown, before stopping tasks: waits (bounded) for context recoveries in flight to end. */
+    drainRecoveriesForShutdown: () => recovery?.drainForShutdown(),
+    /** A recovery's replay was accepted (the recovery factory's onRebuilt). */
+    noteRecoveryRebuilt: id => recovery?.noteRebuilt(id),
     async beforeDispatchUserTurn(id, item, signal) {
       const turn = turns.get(id);
       const live = deps.getMaker()?.getSession(id);
