@@ -9680,6 +9680,7 @@
     "tokenLine": "Tokens：共 {{total}} · 入 {{input}} · 出 {{output}}",
     "cacheLine": "快取分項：讀 {{read}} · 寫 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "快取分項：讀 {{read}} · 寫 {{create}}",
+    "stepsLine": "本輪共請 {{steps}} 次 · 每請約 {{context}} 上下文",
     "modelLine": "模型：{{model}}",
     "multipleModels": "{{count}} 個模型",
     "costBreakdownHeader": "依模型分之：",

@@ -9680,6 +9680,7 @@
     "tokenLine": "トークン: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",
     "cacheLine": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}} · ヒット率 {{rate}}",
     "cacheLineNoRate": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}}",
+    "stepsLine": "このターンのリクエスト {{steps}} 回 · 1 回あたり約 {{context}} のコンテキスト",
     "modelLine": "モデル: {{model}}",
     "multipleModels": "{{count}} 個のモデル",
     "costBreakdownHeader": "モデル別:",

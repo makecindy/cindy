@@ -9723,6 +9723,7 @@
     "tokenLine": "Tokens: {{total}} gesamt · Eingabe {{input}} · Ausgabe {{output}}",
     "cacheLine": "Cache-Aufschlüsselung: Lesen {{read}} · Schreiben {{create}} · Trefferquote {{rate}}",
     "cacheLineNoRate": "Cache-Aufschlüsselung: Lesen {{read}} · Schreiben {{create}}",
+    "stepsLine": "Anfragen in dieser Runde: {{steps}} · je ca. {{context}} Kontext",
     "modelLine": "Modell: {{model}}",
     "multipleModels": "{{count}} Modelle",
     "costBreakdownHeader": "Nach Modell:",

@@ -9680,6 +9680,7 @@
     "tokenLine": "토큰: 총 {{total}} · 입력 {{input}} · 출력 {{output}}",
     "cacheLine": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}} · 적중률 {{rate}}",
     "cacheLineNoRate": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}}",
+    "stepsLine": "이번 턴 요청 {{steps}}회 · 요청당 약 {{context}} 컨텍스트",
     "modelLine": "모델: {{model}}",
     "multipleModels": "모델 {{count}}개",
     "costBreakdownHeader": "모델별:",

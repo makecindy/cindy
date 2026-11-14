@@ -9795,6 +9795,7 @@
     "tokenLine": "Jetons : {{total}} au total · entrée {{input}} · sortie {{output}}",
     "cacheLine": "Détail du cache : lecture {{read}} · écriture {{create}} · taux de succès {{rate}}",
     "cacheLineNoRate": "Détail du cache : lecture {{read}} · écriture {{create}}",
+    "stepsLine": "Requêtes ce tour : {{steps}} · env. {{context}} de contexte chacune",
     "modelLine": "Modèle : {{model}}",
     "multipleModels": "{{count}} modèles",
     "costBreakdownHeader": "Par modèle :",
