@@ -1714,6 +1714,86 @@ describe('app update forward-only policy', () => {
     }
   });
 
+  it('discards a withdrawn staged patch when apply aborts before spawn', async () => {
+    vi.useFakeTimers();
+    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+    let finishReclaim: ((stopped: boolean) => void) | undefined;
+    let markReclaimStarted: (() => void) | undefined;
+    const reclaimStarted = new Promise<void>((resolveStarted) => {
+      markReclaimStarted = resolveStarted;
+    });
+    vi.doMock('@cindy/maker-core/pi-subagent-runs', () => ({
+      acquirePiSubagentLaunchFence: async () => vi.fn(async () => undefined),
+      hasActivePiSubagentRunsSync: () => false,
+      requestStopAllPiSubagentRunsSync: vi.fn(),
+      stopAllPiSubagentRunsForExit: () =>
+        new Promise<boolean>((resolveReclaim) => {
+          markReclaimStarted?.();
+          finishReclaim = resolveReclaim;
+        }),
+    }));
+
+    const service = await freshUpdateService('darwin');
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(updateManifest('0.0.65'))).resolves.toBe('ready');
+      const stagedFile = path.join(
+        TEST_USER_DATA,
+        'updates',
+        path.basename(updateManifest('0.0.65').app.hotfix.file),
+      );
+      const patchInfoPath = path.join(TEST_USER_DATA, 'updates', 'patch-info.json');
+      expect(fs.existsSync(stagedFile)).toBe(true);
+
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await reclaimStarted;
+
+      // 回收还没返回,apply 已提交。清单此时撤回该版本,只能记下作废,不能立刻删文件。
+      await expect(service.checkForUpdate(updateManifest('0.0.63'))).resolves.toBe('idle');
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(fs.existsSync(stagedFile)).toBe(true);
+      expect(fs.existsSync(patchInfoPath)).toBe(true);
+      expect(logInfo.mock.calls.map((call) => String(call[0]))).toContain(
+        'skipping staged patch discard — update apply already in flight',
+      );
+
+      const statusBroadcasts: { status: string; version?: string; errorCode?: string }[] = [];
+      browserWindowGetAllWindows.mockReturnValue([{
+        isDestroyed: () => false,
+        webContents: {
+          send: (channel: string, payload: { status: string; version?: string; errorCode?: string }) => {
+            if (channel === 'update-status') statusBroadcasts.push(payload);
+          },
+        },
+      } as never]);
+
+      finishReclaim?.(false);
+      await vi.waitFor(() => {
+        expect(service.getUpdateStatus()).toBe('idle');
+      });
+      expect(fs.existsSync(stagedFile)).toBe(false);
+      expect(fs.existsSync(patchInfoPath)).toBe(false);
+      expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        status: 'idle',
+        errorCode: 'update_apply_aborted',
+      });
+      expect(statusBroadcasts.at(-1)).toEqual({
+        status: 'idle',
+        errorCode: 'update_apply_aborted',
+      });
+      expect(spawnProcess).not.toHaveBeenCalled();
+    } finally {
+      finishReclaim?.(false);
+      vi.doUnmock('@cindy/maker-core/pi-subagent-runs');
+      service.stopUpdateService();
+    }
+  });
+
   it('defers manifest-driven discard while auto-relaunch eligibility is pending', async () => {
     vi.useFakeTimers();
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
@@ -2795,7 +2875,13 @@ describe('Windows updater prerequisites', () => {
 describe('splash 启动下载 0% 显式广播', () => {
   interface SentIpc {
     channel: string;
-    payload: { progress?: number; received?: number; total?: number };
+    payload: {
+      status?: string;
+      version?: string;
+      progress?: number;
+      received?: number;
+      total?: number;
+    };
   }
 
   function makeProgressCollector() {
@@ -2826,6 +2912,44 @@ describe('splash 启动下载 0% 显式广播', () => {
     // setStatus('ready') 会触发 evaluateAutoRelaunch;关掉无人值守开关,
     // 避免测试进程里真的走到 executeRelaunch(spawn + process.exit)。
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：checkForUpdate → update-status IPC。渲染端先收到 downloading，
+  //   下载完成后必须再收到 { status: 'ready', version }，手动安装入口才会出现。
+  // - Bug／规则依据：PR #9667 Codex P2（线程 PRRT_kwDOTgdRUs61odlb）。进度广播不走 setStatus，
+  //   内存 currentStatus 仍可能是冷启动快路径写下的 ready，终态 ready 被当成没变化而丢掉。
+  // - 现有覆盖缺口：相邻用例只看进度通道的 0% / 100%，没有覆盖「广播过 downloading 之后 ready 仍要再发」。
+  // - 最小失败输入：下载回调里先推一条 50% 进度，再让 download 成功。旧去重会把终态 ready 丢掉。
+  // - tier：unit。走生产 checkForUpdate 入口，不启 Electron。
+  it('进度广播 downloading 之后仍然把终态 ready 推给渲染端', async () => {
+    const { sends } = makeProgressCollector();
+    download.mockImplementation(async ({
+      targetPath,
+      onProgress,
+    }: {
+      targetPath: string;
+      onProgress?: (event: { loaded: number; total: number | null; percent: number | null; speedBps: number }) => void;
+    }) => {
+      // flush() 只重发最后一次真正上升过的进度。先推一条中间值，下载完成前渲染端才会看到 downloading。
+      onProgress?.({ loaded: 50, total: 123, percent: 50, speedBps: 0 });
+      fs.mkdirSync(path.join(TEST_USER_DATA, 'updates'), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+
+    const { checkForUpdate, stopUpdateService } = await freshUpdateService('darwin');
+    try {
+      expect(await checkForUpdate(updateManifest())).toBe('ready');
+      const statuses = sends
+        .filter((entry) => entry.channel === 'update-status')
+        .map((entry) => entry.payload);
+      const lastDownloading = statuses.findLast((payload) => payload.status === 'downloading');
+      expect(lastDownloading).toMatchObject({ status: 'downloading', version: '0.0.65' });
+      expect(statuses[statuses.length - 1]).toEqual({ status: 'ready', version: '0.0.65' });
+    } finally {
+      stopUpdateService();
+    }
   });
 
   it('启动(非 wasReady)路径:download() 之前恰好广播一次 progress:0', async () => {
@@ -2866,6 +2990,296 @@ describe('splash 启动下载 0% 显式广播', () => {
     // 此时用户在主界面,启动 splash 早已结束;0% 广播只属于启动态。
     expect(await service.checkForUpdate(updateManifest('0.0.66'))).toBe('ready');
     expect(progressCountWhenDownloadStarted).toBe(0);
+  });
+});
+
+describe('apply exit keeps a staged patch until the updater actually starts', () => {
+  const reclaimRuns = vi.hoisted(() => vi.fn(async () => true));
+  const fenceAcquired = vi.hoisted(() => vi.fn(async () => vi.fn(async () => undefined)));
+
+  function collectStatus(): { status: string; version?: string; errorCode?: string }[] {
+    const sent: { status: string; version?: string; errorCode?: string }[] = [];
+    browserWindowGetAllWindows.mockReturnValue([{
+      isDestroyed: () => false,
+      webContents: {
+        send: (channel: string, payload: { status: string; version?: string; errorCode?: string }) => {
+          if (channel === 'update-status') sent.push(payload);
+        },
+      },
+    } as never]);
+    return sent;
+  }
+
+  beforeEach(() => {
+    // 模块重载交给 freshUpdateService()（它每次 import 前都会 resetModules），
+    // 这里再 reload 一次只是多出一处 beforeEach 内的模块重载。
+    reclaimRuns.mockReset();
+    reclaimRuns.mockResolvedValue(true);
+    fenceAcquired.mockReset();
+    fenceAcquired.mockImplementation(async () => vi.fn(async () => undefined));
+    // 关掉无人值守,staged 之后由测试自己触发 update-relaunch。
+    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+    vi.doMock('@cindy/maker-core/pi-subagent-runs', () => ({
+      acquirePiSubagentLaunchFence: fenceAcquired,
+      hasActivePiSubagentRunsSync: () => false,
+      requestStopAllPiSubagentRunsSync: vi.fn(),
+      stopAllPiSubagentRunsForExit: reclaimRuns,
+    }));
+  });
+
+  afterEach(() => {
+    vi.doUnmock('@cindy/maker-core/pi-subagent-runs');
+  });
+
+  async function stagePatch() {
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('darwin');
+    service.initUpdateService();
+    expect(await service.checkForUpdate(updateManifest('0.0.65'))).toBe('ready');
+    return service;
+  }
+
+  it('keeps patch-info and the staged file when a Subagent cannot be confirmed stopped', async () => {
+    reclaimRuns.mockResolvedValue(false);
+    const service = await stagePatch();
+    const patchInfoPath = path.join(TEST_USER_DATA, 'updates', 'patch-info.json');
+    const stagedPath = JSON.parse(fs.readFileSync(patchInfoPath, 'utf8')).fileName as string;
+    const stagedFile = path.join(TEST_USER_DATA, 'updates', stagedPath);
+    try {
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => {
+        expect(logInfo).toHaveBeenCalledWith(
+          expect.stringContaining('staged candidate kept'),
+          'subagent_reclaim_unconfirmed',
+        );
+      });
+      expect(fs.existsSync(patchInfoPath)).toBe(true);
+      expect(fs.existsSync(stagedFile)).toBe(true);
+      // 子任务回收未确认:状态回到 ready,但带 update_apply_aborted,补丁文件仍在。
+      // 错误码挡住这一轮自动重启,所以 isUpdateRelaunchImminent 也不能再当成立即重启。
+      expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        status: 'ready',
+        version: '0.0.65',
+        errorCode: 'update_apply_aborted',
+      });
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+      expect(spawnProcess).not.toHaveBeenCalled();
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  // 回归:后台轮询正在下新版 B 时,abort 不能把状态打回 ready 并清掉 downloadingVersion,
+  // 否则用户重试会在 B 还没下完时装上旧包 A。生产入口是 update-relaunch → abortApply。
+  it('keeps superseding and the in-flight version when apply is aborted mid-download', async () => {
+    reclaimRuns.mockResolvedValue(false);
+    let releaseDownload: (() => void) | undefined;
+    download.mockImplementation(({ targetPath }: { targetPath: string }) => {
+      const write = () => {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, 'update');
+        return { path: targetPath, size: 123 };
+      };
+      if (download.mock.calls.length === 1) return Promise.resolve(write());
+      return new Promise((resolve) => { releaseDownload = () => resolve(write()); });
+    });
+    const service = await freshUpdateService('darwin');
+    service.initUpdateService();
+    try {
+      expect(await service.checkForUpdate(updateManifest('0.0.65'))).toBe('ready');
+      const newer = service.checkForUpdate(updateManifest('0.0.66'));
+      await vi.waitFor(() => { expect(service.getUpdateStatus()).toBe('superseding'); });
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => {
+        expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+          status: 'superseding',
+          errorCode: 'update_apply_aborted',
+        });
+      });
+      // downloadingVersion 不在状态广播里,用 Agent 查询入口观察它有没有被清掉。
+      expect(await service.checkAppUpdateForAgent()).toMatchObject({
+        status: 'downloading',
+        targetVersion: '0.0.66',
+      });
+      expect(spawnProcess).not.toHaveBeenCalled();
+      releaseDownload?.();
+      await newer;
+    } finally {
+      releaseDownload?.();
+      service.stopUpdateService();
+    }
+  });
+
+  // 回归:abort 之后启动页 / 空闲轮询不能立刻再重启,否则启动页停在「等待自动重启」。
+  it('does not accept another automatic relaunch after an apply abort', async () => {
+    reclaimRuns.mockResolvedValue(false);
+    const service = await stagePatch();
+    try {
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => {
+        expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+          errorCode: 'update_apply_aborted',
+        });
+      });
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
+      await expect(ipcHandlers.get('update-relaunch-auto')?.({}, 'dark')).resolves.toMatchObject({
+        accepted: false,
+        blockReason: 'not-ready',
+      });
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(service.getUpdateStatus()).toBe('ready');
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('does not relaunch when an abort lands while the busy probe is pending', async () => {
+    let pendingReclaim: ((stopped: boolean) => void) | undefined;
+    reclaimRuns.mockImplementation(
+      () =>
+        new Promise<boolean>((resolveReclaim) => {
+          pendingReclaim = resolveReclaim;
+        }),
+    );
+    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+    const service = await stagePatch();
+    const pending: Array<(busy: boolean) => void> = [];
+    let probeCalls = 0;
+    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
+    service.setUpdateAutoRelaunchBusyProbe(
+      () =>
+        new Promise<boolean>((resolveProbe) => {
+          probeCalls += 1;
+          pending.push(resolveProbe);
+        }),
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(probeCalls).toBeGreaterThanOrEqual(1);
+      });
+      // 先放掉挂探针触发的那一轮,它发生在安装之前。
+      pending.shift()?.(false);
+      await vi.waitFor(() => {
+        expect(probeCalls).toBe(1);
+        expect(pending).toHaveLength(0);
+      });
+      // 再开一轮,让它停在探针上,然后才开始安装。
+      service.setUpdateAutoRelaunchBusyProbe(
+        () =>
+          new Promise<boolean>((resolveProbe) => {
+            probeCalls += 1;
+            pending.push(resolveProbe);
+          }),
+      );
+      await vi.waitFor(() => {
+        expect(probeCalls).toBe(2);
+      });
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => {
+        expect(pendingReclaim).toBeTypeOf('function');
+      });
+
+      // 回收先失败,中止码写下。探针还没返回,所以探针前的检查是旧的。
+      pendingReclaim?.(false);
+      await vi.waitFor(() => {
+        expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+          errorCode: 'update_apply_aborted',
+        });
+      });
+      // 探针现在才返回。返回后的快照和提交边界都要再读一次中止码。
+      pending.shift()?.(false);
+      await vi.waitFor(() => {
+        expect(logInfo.mock.calls.map((call) => String(call[0]))).toContain(
+          'auto relaunch aborted — apply was aborted during eligibility check',
+        );
+      });
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+      expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        errorCode: 'update_apply_aborted',
+      });
+    } finally {
+      pendingReclaim?.(false);
+      while (pending.length > 0) pending.shift()?.(true);
+      service.stopUpdateService();
+    }
+  });
+
+  it('clears patch-info when the updater process fails to start', async () => {
+    const service = await stagePatch();
+    const patchInfoPath = path.join(TEST_USER_DATA, 'updates', 'patch-info.json');
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const child = {
+      unref: vi.fn(),
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => { listeners.set(event, listener); }),
+    };
+    spawnProcess.mockImplementationOnce(() => child);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    try {
+      // darwin 的执行器一 spawn 就 forceQuit,改走会登记 error 回调的 Windows。
+      setPlatform('win32');
+      const resourcesPath = path.join(TEST_ROOT, 'resources');
+      fs.mkdirSync(resourcesPath, { recursive: true });
+      fs.writeFileSync(path.join(resourcesPath, 'cindy-updater.exe'), 'updater');
+      const resourcesDescriptor = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+      Object.defineProperty(process, 'resourcesPath', { value: resourcesPath, configurable: true });
+      const tmpdirSpy = vi.spyOn(os, 'tmpdir').mockReturnValue(TEST_ROOT);
+      try {
+        ipcListeners.get('update-relaunch')?.({}, 'dark');
+        await vi.waitFor(() => { expect(listeners.has('error')).toBe(true); });
+        listeners.get('error')?.(Object.assign(new Error('spawn denied'), { code: 'EACCES' }));
+        await vi.waitFor(() => { expect(service.getUpdateStatus()).toBe('error'); });
+        expect(fs.existsSync(patchInfoPath)).toBe(false);
+        expect(service.isUpdateRelaunchImminent()).toBe(false);
+      } finally {
+        tmpdirSpy.mockRestore();
+        if (resourcesDescriptor) Object.defineProperty(process, 'resourcesPath', resourcesDescriptor);
+        else Reflect.deleteProperty(process, 'resourcesPath');
+      }
+    } finally {
+      exitSpy.mockRestore();
+      service.stopUpdateService();
+    }
+  });
+
+  it('a second abort neither stacks relaunch state nor notifies the renderer again', async () => {
+    reclaimRuns.mockResolvedValue(false);
+    const sent = collectStatus();
+    const service = await stagePatch();
+    try {
+      const relaunch = ipcListeners.get('update-relaunch');
+      relaunch?.({}, 'dark');
+      await vi.waitFor(() => { expect(service.isUpdateRelaunchImminent()).toBe(false); });
+      const afterFirst = sent.length;
+      expect(afterFirst).toBeGreaterThan(0);
+      expect(sent[afterFirst - 1]).toMatchObject({
+        status: 'ready',
+        version: '0.0.65',
+        errorCode: 'update_apply_aborted',
+      });
+
+      relaunch?.({}, 'dark');
+      await vi.waitFor(() => {
+        expect(logInfo.mock.calls.filter((call) => String(call[0]).includes('staged candidate kept'))).toHaveLength(2);
+      });
+      // executeRelaunch 在 isRelaunching 抬起之后会清掉上一次的 update_apply_aborted,
+      // 这次 abort 再写回同一个错误码,渲染端必须收到这一次,否则横幅会丢错误态。
+      // 两次 abort 之间只多这一条,不能再叠其它状态。
+      expect(sent.slice(afterFirst)).toEqual([
+        { status: 'ready', version: '0.0.65', errorCode: 'update_apply_aborted' },
+      ]);
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(true);
+    } finally {
+      service.stopUpdateService();
+    }
   });
 });
 });

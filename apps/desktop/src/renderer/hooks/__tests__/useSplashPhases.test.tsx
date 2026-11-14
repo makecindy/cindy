@@ -81,7 +81,8 @@ describe('useSplash phase 表', () => {
     ).electronAPI = {
       clientEndpoints: { websiteUrl: 'https://cindy.example/download' },
       authHasPersistedSessionHintSync: () => mocks.hasPersistedSession,
-    };
+      autoRelaunchToUpdate: async () => ({ accepted: true }),
+    } as never;
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
       addEventListener: () => {},
@@ -123,6 +124,16 @@ describe('useSplash phase 表', () => {
     const { result } = renderHook(() => useSplash());
     expect(result.current.phase).toBe('splash_spawn_failed');
     expect(result.current.showSpawnFailedDialog).toBe(true);
+  });
+
+  // 回归:安装还没开始就放弃时,启动页不能停在「等待自动重启」,要重新走启动检查。
+  it('update_done + update_apply_aborted 重新检查环境,不进入 splash_spawn_failed', () => {
+    mocks.envStatus = 'update_done';
+    mocks.updateErrorCode = 'update_apply_aborted';
+    const { result } = renderHook(() => useSplash());
+    expect(result.current.phase).toBe('splash_update_done');
+    expect(result.current.showSpawnFailedDialog).toBe(false);
+    expect(mocks.checkEnvironment).toHaveBeenCalled();
   });
 
   it('fade-out 触发:passed ∧ 3s 地板 ∧ auth 初始化完成 → fading_out → 500ms fallback → splash_done', () => {
