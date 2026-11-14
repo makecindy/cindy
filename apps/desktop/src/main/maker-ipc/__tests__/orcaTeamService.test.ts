@@ -2096,6 +2096,9 @@ describe('OrcaTeamService', () => {
     });
     expect(getWorker().latestReport).toMatchObject({ state: 'blocked' });
 
+    // 结束第一轮：终态结算会清掉 autoBridge 条目，来源只能靠独立保存的映射找回。
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '结果' });
+
     // 第二轮派活被接受后发送失败：回滚恢复上一轮状态与来源。
     await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第二轮' });
     expect(getWorker().latestReport).toMatchObject({ state: 'blocked', question: '选 A 还是 B' });
