@@ -15,6 +15,7 @@ export const IMPORT_SOURCE_IDS = [
   'factory',
   'workbuddy',
   'deepseek',
+  'trae',
 ] as const;
 
 export type ImportSourceId = (typeof IMPORT_SOURCE_IDS)[number];
