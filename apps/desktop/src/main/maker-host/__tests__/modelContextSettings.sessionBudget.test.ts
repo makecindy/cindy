@@ -216,6 +216,8 @@ describe('resolveSessionContextWindowBounds', () => {
       // 物理上限 = contextWindowMax（1M）。
       maxEffectiveWindow: 1_000_000,
       effectiveWindowsReported: true,
+      // 任务未设预算：实际窗口 = 默认档。
+      effectiveWindow: 800_000,
     });
   });
 
@@ -237,6 +239,8 @@ describe('resolveSessionContextWindowBounds', () => {
       defaultEffectiveWindow: 200_000,
       maxEffectiveWindow: 1_000_000,
       effectiveWindowsReported: true,
+      // 实际窗口带这条预算：发送边界校验 confirmedContextWindow 用的就是它。
+      effectiveWindow: 262_144,
     });
   });
 
@@ -299,7 +303,22 @@ describe('resolveSessionContextWindowBounds', () => {
       // 未核实路由没有「物理上限」这道夹（预算就是工作上限）。
       maxEffectiveWindow: null,
       effectiveWindowsReported: true,
+      effectiveWindow: 1_000_000,
     });
+  });
+
+  it('reports the window the send boundary verifies when a model cap and task budget apply', () => {
+    // 用户实测报障（2026-11-10）：目录 1M 的路由，模型级上限 400K、任务预算 500K。选择器按目录
+    // 1M 确认，发送边界按 400K 校验，切模永远报 confirmedContextWindow does not match。
+    mockModelLimit = 400_000;
+    const bounds = resolveSessionContextWindowBounds({
+      catalog, agent: 'claude-code', providerId: 'xd', modelId: 'long-window-model',
+      budget: 500_000, budgetCustomized: true,
+    });
+    expect(bounds.effectiveWindow).toBe(400_000);
+    expect(bounds.effectiveWindow).toBe(
+      resolveConfiguredContextWindow(catalog, 'claude-code', 'xd', 'long-window-model', 500_000),
+    );
   });
 });
 

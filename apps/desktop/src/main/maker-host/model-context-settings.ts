@@ -122,6 +122,10 @@ export function resolveSessionContextWindowBounds(input: {
       ? modelLimit : null,
     budget,
     budgetCustomized: input.budgetCustomized === true,
+    // 发送边界校验 confirmedContextWindow 用的就是这一支（带任务预算），切模确认必须与它同值。
+    effectiveWindow: resolveConfiguredContextWindow(
+      input.catalog, input.agent, source, input.modelId, budget,
+    ),
   };
 }
 
