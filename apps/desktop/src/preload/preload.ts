@@ -123,12 +123,15 @@ import {
   WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
   WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
+  WINDOW_BEHAVIOR_REQUEST_QUIT_CHANNEL,
+  WINDOW_BEHAVIOR_RESOLVE_QUIT_CONFIRMATION_CHANNEL,
   WINDOW_BEHAVIOR_SET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL,
   WINDOW_BEHAVIOR_SET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
   type LinuxCloseBehavior,
+  type TitleBarQuitOutcome,
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior';
 import {
@@ -1324,9 +1327,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   windowCloseSelf: () => ipcRenderer.send('window-close-self'),
   /**
-   * 查询当前是否有 session 在 turn 中。WindowControls 用它决定关闭按钮是否弹确认框。
-   * splash / login 阶段 maker-ipc handler 还没注册时,invoke 会 reject — 由调用方
-   * catch 后兜底当作 false (那个阶段本来就不可能有 in-flight)。
+   * 查询当前是否有 session 在 turn 中(maker IPC,splash 之后才注册,之前 invoke 会 reject)。
+   * 关闭 / 退出不要先用它探测再关窗,用 windowBehavior.requestQuit(由 main 判定并执行)。
    */
   anySessionInTurn: (): Promise<boolean> => ipcRenderer.invoke('maker:any-session-in-turn'),
   pageZoomIn: (): Promise<{ ok: true; zoomFactor: number }> => ipcRenderer.invoke('page-zoom:in'),
@@ -2159,6 +2161,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // swallow 的即时开关由 renderer 本地读 localStorage 完成。
     setSwallowActivationClick: (enabled: boolean): Promise<{ ok: true }> =>
       ipcRenderer.invoke(WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL, enabled),
+    /**
+     * 主窗标题栏 X 请求退出:main 自己判定有无 turn 并当场执行。'quitting' = 已开始退出;
+     * 'confirm' = 需要 renderer 自绘确认(main 记下了这次确认);'none' = 无需展示。
+     */
+    requestQuit: (): Promise<TitleBarQuitOutcome> =>
+      ipcRenderer.invoke(WINDOW_BEHAVIOR_REQUEST_QUIT_CHANNEL),
+    /** 回报 requestQuit 自绘确认的结果(确认 / 取消);main 只认自己记下的那次确认。 */
+    resolveQuitConfirmation: (confirmed: boolean): Promise<TitleBarQuitOutcome> =>
+      ipcRenderer.invoke(WINDOW_BEHAVIOR_RESOLVE_QUIT_CONFIRMATION_CHANNEL, confirmed),
     getWindowsCloseBehavior: (): Promise<WindowsCloseBehavior | null> =>
       ipcRenderer.invoke(WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL),
     setWindowsCloseBehavior: (behavior: WindowsCloseBehavior): Promise<WindowsCloseBehavior> =>

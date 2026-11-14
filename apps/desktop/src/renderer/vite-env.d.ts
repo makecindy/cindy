@@ -2045,6 +2045,10 @@ interface ElectronAPI {
     ) => Promise<import('../shared/awayGuard').AwayGuardState>;
     previewAwayGuard: () => Promise<import('../shared/awayGuard').AwayGuardPreviewResult>;
     setSwallowActivationClick: (enabled: boolean) => Promise<{ ok: true }>;
+    requestQuit: () => Promise<import('../shared/windowBehavior').TitleBarQuitOutcome>;
+    resolveQuitConfirmation: (
+      confirmed: boolean,
+    ) => Promise<import('../shared/windowBehavior').TitleBarQuitOutcome>;
     getWindowsCloseBehavior: () => Promise<'quit' | 'tray' | null>;
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
     onWindowsCloseBehaviorRequested: (callback: () => void) => () => void;
