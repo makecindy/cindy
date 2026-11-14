@@ -656,6 +656,10 @@ describe('feishu group lane adapter hooks', () => {
   it('channelNoteSourceFor: 私聊给 chat_id; 群 lane 给群 id、群名与发言人 open_id; 都点名本轮可用的渠道工具', async () => {
     const toolsHint = feishuToolsHint('feishu');
     expect(toolsHint).toContain('cindy_feishu_bot');
+    expect(toolsHint).toContain('ghost_info');
+    expect(toolsHint).toContain('cindy-contacts');
+    expect(toolsHint).toContain('namespace');
+    expect(toolsHint).toContain('不是写入授权');
     expect(feishuToolsHint('lark')).toContain('Lark Open API');
     expect(
       await adapter.channelNoteSourceFor?.(
