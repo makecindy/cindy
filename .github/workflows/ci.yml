@@ -330,28 +330,17 @@ jobs:
 
       # 托管 Windows runner 的工作区在 D 盘，TEMP 默认在 C 盘，而 C 盘 IO 明显更慢。
       # Desktop 单测有 700 多个文件创建临时目录(electron stub 的 userData 也在 TEMP
-      # 下)，所以把 TEMP/TMP 放到工作区所在盘的 RUNNER_TEMP 下，只影响本 job 后续步骤。
-      # 同时打印 Defender 实时扫描状态；开启时排除工作区与临时目录。查询或排除失败
-      # 只记录日志，不改变测试结论。
+      # 下)，所以把 TEMP/TMP 放到工作区所在盘，只影响本 job 后续步骤。不能用
+      # RUNNER_TEMP(D:\a\_temp)：路径写进 Markdown 链接后 `\_` 会被当成转义，回复附件
+      # 测试因此找不到文件。目录名的每一段都不要以 ASCII 标点开头。
       - name: Keep temp files on the workspace drive
         shell: pwsh
         run: |
-          "Before: TEMP=$env:TEMP TMP=$env:TMP RUNNER_TEMP=$env:RUNNER_TEMP"
-          $temp = Join-Path $env:RUNNER_TEMP 'tmp'
+          $temp = Join-Path (Split-Path -Qualifier $env:GITHUB_WORKSPACE) 'cindy-tmp'
           New-Item -ItemType Directory -Force -Path $temp | Out-Null
           "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "After: TEMP=$temp"
-          try {
-            $status = Get-MpComputerStatus -ErrorAction Stop
-            "Defender: RealTimeProtectionEnabled=$($status.RealTimeProtectionEnabled) AMRunningMode=$($status.AMRunningMode)"
-            if ($status.RealTimeProtectionEnabled) {
-              Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP -ErrorAction Stop
-              "Defender: excluded $env:GITHUB_WORKSPACE and $env:RUNNER_TEMP"
-            }
-          } catch {
-            "Defender: status or exclusion unavailable: $($_.Exception.Message)"
-          }
+          "TEMP: $env:TEMP -> $temp"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6

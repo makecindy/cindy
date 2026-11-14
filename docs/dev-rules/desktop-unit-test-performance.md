@@ -29,10 +29,22 @@ pnpm benchmark:desktop-workers -- --workers 1,2,4,8 --runs 1 --output <report.js
 
 - 托管 Windows runner 的工作区在 `D:\a\<repo>\<repo>`，pnpm store 已默认放在同盘
   `D:\.pnpm-store`（pnpm 在项目盘根目录建 store），store 位置不是瓶颈。
-- TEMP 默认在 C 盘。Desktop 有 700 多个测试文件创建临时目录，electron stub 的 userData
-  也建在 `os.tmpdir()` 下，所以分片 job 把 TEMP/TMP 指到 `RUNNER_TEMP\tmp`（同在 D 盘）。
-- 同一步打印 Defender 实时扫描状态；开启时把工作区与 `RUNNER_TEMP` 加入排除。查询失败只记日志。
-- Windows unit 从 4 片改为 8 片。并集仍是完整 unit tier，由 `Windows unit tests` 汇总阻断；
+- TEMP 默认是 `C:\Users\RUNNER~1\AppData\Local\Temp`。Desktop 有 700 多个测试文件创建临时目录，
+  electron stub 的 userData 也建在 `os.tmpdir()` 下，所以分片 job 把 TEMP/TMP 指到工作区所在盘的
+  `D:\cindy-tmp`。
+  - 不能用 `RUNNER_TEMP`（`D:\a\_temp`）：回复附件测试把路径写进 Markdown 链接，`\_` 被当成转义，
+    `taskImageDelivery.test.ts` 与 `chatServerReplyFiles.test.ts` 共 52 条用例报
+    `ATTACHMENT_UNAVAILABLE`（试跑 run 43556031905；本机把 TEMP 放进 `_temp` 目录可原样复现）。
+    临时目录的每一段都不要以 ASCII 标点开头。
+  - 这些用例走的是生产 `prepareChatReplyFiles`：真实 Windows 路径含 `\_` 时同样找不到文件（已实测
+    `\_`；CommonMark 对其余 ASCII 标点也按转义处理，如 `\.config`），是否需要在生产解析里保留
+    原样另行判断。
+- 2026-11-14 托管 Windows 镜像（windows-2025-vs2026 20261103）的 Defender 实时扫描为关闭
+  （`RealTimeProtectionEnabled=False`），不需要额外排除目录。
+- Windows unit 从 4 片改为 8 片。改片数会重排每片的文件组合，可能暴露文件之间的隐藏依赖：
+  `ptyManager.test.ts` 的 `HostTerminalService` 用例曾以 POSIX `/tmp` 作为 cwd 并 `realpath`，在
+  Windows 上解析为 `<盘符>:\tmp`，只在同片更早的测试碰巧建过该目录时才通过（8 片后第 3 片
+  10 条 ENOENT），现改用 `os.tmpdir()` 的真实路径。并集仍是完整 unit tier，由 `Windows unit tests` 汇总阻断；
   `dev-docs-contract.test.mjs` 按矩阵长度校验 1..N 与 `XDT_UNIT_TEST_SHARD` 一致。
   公开仓标准 runner 不计费，但会占用组织的并发额度；调整片数后要确认没有出现排队。
 - Desktop 分片设置 `XDT_VITEST_FILE_TIMINGS` 时，`src/test/vitest/fileTimingReporter.ts`
@@ -184,6 +196,7 @@ named 与 namespace wrapper、短等待、常量内层等待和参数／fixture 
   会漏跑或重复，落地时要有「各片并集恰好覆盖全部文件一次」的回归。
 - 把 Windows checkout 与临时目录放到 Dev Drive（ReFS），降低大量小文件 IO 的开销。2026-11-14
   先把 TEMP 移到工作区所在的 D 盘（见上文）；Dev Drive 是否另有收益仍需同 runner 对照。
+  路径同样要避开以 ASCII 标点开头的目录段。
 - 基线中逐用例重置最多的 `modelVisibilityPrefs.test.ts`（18 处）、
   `pi-package-store-security.test.ts`（余 `beforeEach` 1 处，其余 16 处是写明理由的重启边界；去掉它需要
   生产侧的 reset 接口）按 `codexProxyHost` 的方式改。`newMakerDraft.test.ts`
