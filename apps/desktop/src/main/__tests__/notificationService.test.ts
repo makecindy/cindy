@@ -23,6 +23,7 @@
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import type { Session } from '@cindy/maker-core';
 import type { BrowserWindow } from 'electron';
 
@@ -42,30 +43,36 @@ const registeredHandlers = new Map<string, IpcHandler>();
 // Notification 构造调用计数(每条 toast 一次)。
 const notificationCtor = vi.fn();
 const notificationClicks: Array<() => void> = [];
+const notificationInstances: FakeNotification[] = [];
+let keepNotificationsOpen = false;
 // Notification.isSupported() — 默认 true; 单独用例需改成 false 时,setMock 之前覆盖。
 let notificationSupported = true;
 
 /**
  * Fake Notification 桩:
  *   - constructor 计数,验通道分发
- *   - on('close', cb) / on('click', cb) 缓存 cb,show() 时同步触发 close 让
- *     被测代码里的 `liveNotifications` Set 释放,避免后续如果加"同 module 多
- *     invoke"的用例时 Set 无限增长
+ *   - 默认在微任务里关闭；替换通知的回归用例可保留通知并手动投递生命周期事件。
+ *   - close() 撤掉系统记录，但不保证触发 close 事件，与 Electron 的契约一致。
  */
-class FakeNotification {
-  private closeCb?: () => void;
-  constructor(opts: unknown) {
-    notificationCtor(opts);
+class FakeNotification extends EventEmitter {
+  visible = false;
+  readonly close = vi.fn(() => { this.visible = false; });
+  constructor(readonly options: { body?: string }) {
+    super();
+    notificationInstances.push(this);
+    notificationCtor(options);
   }
-  on(evt: string, cb: (...args: unknown[]) => void): this {
-    if (evt === 'close') this.closeCb = cb;
+  override on(evt: string, cb: (...args: unknown[]) => void): this {
     if (evt === 'click') notificationClicks.push(cb);
-    return this;
+    return super.on(evt, cb);
   }
   show(): void {
-    // 真实场景里 close 是 OS toast 消失后异步触发的,这里同步 fire 一下就够,
-    // 单纯让 main 代码里 liveNotifications.delete(notif) 跑到。
-    queueMicrotask(() => this.closeCb?.());
+    this.visible = true;
+    this.emit('show');
+    if (!keepNotificationsOpen) queueMicrotask(() => {
+      this.visible = false;
+      this.emit('close');
+    });
   }
 }
 
@@ -1750,6 +1757,228 @@ describe('notificationService — channels 分发', () => {
   });
 });
 
+
+// #9944 / unit: exercise the public desktop delivery entry and IPC with notifications
+// still in Notification Center. The existing fake immediately closed every toast,
+// so two completed replies could never expose accumulation or late cleanup races.
+describe('macOS latest session reply notification', () => {
+  let service: typeof import('../notificationService');
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  const bodies = () => notificationInstances.filter(n => n.visible).map(n => n.options.body);
+  const deliver = (body: string, extra: Partial<Parameters<typeof service.showDesktopSessionEvent>[1]> = {}) =>
+    service.showDesktopSessionEvent(() => null, {
+      sessionId: 'reply-session', title: 'Task', kind: 'done', body, ...extra,
+    });
+
+  beforeAll(async () => {
+    service = await import('../notificationService');
+  });
+
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'darwin' });
+    keepNotificationsOpen = true;
+    notificationInstances.length = 0;
+    notificationSupported = true;
+    ownerScopeKey = 'reply-account:1';
+    ownerScopeCurrent = true;
+    isSessionNotificationsMutedSync.mockReturnValue(false);
+    getSessionNotificationTurnSignal.mockReturnValue(undefined);
+    readSessionNotificationPreview.mockReset().mockResolvedValue({});
+    service.initNotificationService(baseDeps(makeFeishuIm(null)));
+  });
+
+  afterEach(() => {
+    for (const notification of notificationInstances) notification.emit('close');
+    keepNotificationsOpen = false;
+    Object.defineProperty(process, 'platform', platformDescriptor);
+  });
+
+  it('replaces the previous reply and ignores its delayed close and failed events', () => {
+    deliver('First reply');
+    const first = notificationInstances.at(-1)!;
+    deliver('Second reply');
+    const second = notificationInstances.at(-1)!;
+    expect(bodies()).toEqual(['Second reply']);
+
+    first.emit('close');
+    first.emit('failed', {}, 'late failure');
+    first.show(); // A native delivery that finishes after replacement must dismiss itself.
+    expect(bodies()).toEqual(['Second reply']);
+    deliver('Third reply');
+    expect(second.close).toHaveBeenCalledOnce();
+    expect(bodies()).toEqual(['Third reply']);
+  });
+
+  it.each(['session', 'device', 'owner'] as const)('isolates replacement by %s', (scope) => {
+    deliver('Original reply');
+    if (scope === 'owner') ownerScopeKey = 'another-account:1';
+    const extra = scope === 'session' ? { sessionId: 'another-session' }
+      : scope === 'device' ? { deviceId: 'another-device', markAttention: false } : {};
+    deliver('Other reply', extra);
+    expect(bodies()).toEqual(['Original reply', 'Other reply']);
+
+    ownerScopeKey = 'reply-account:1';
+    deliver('Latest original reply');
+    expect(bodies()).toEqual(['Other reply', 'Latest original reply']);
+  });
+
+  it.each([
+    ['darwin', 'error', 'reply-session'],
+    ['darwin', 'needs-reply', 'reply-session'],
+    ['darwin', 'done', ''],
+    ['win32', 'done', 'reply-session'],
+    ['linux', 'done', 'reply-session'],
+  ] as const)('preserves existing behavior for %s / %s / session=%s', (platform, kind, sessionId) => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+    deliver('First notice', { kind, sessionId });
+    deliver('Second notice', { kind, sessionId });
+    expect(bodies()).toEqual(['First notice', 'Second notice']);
+  });
+
+  it('keeps the previous reply when the replacement is muted or unsupported', () => {
+    deliver('Previous reply');
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+    expect(deliver('Muted reply')).toBe(false);
+    isSessionNotificationsMutedSync.mockReturnValue(false);
+    notificationSupported = false;
+    expect(deliver('Unsupported reply')).toBe(false);
+    expect(bodies()).toEqual(['Previous reply']);
+  });
+
+  // #9944 review / unit: native delivery can fail after admission. Keep the
+  // previously displayed reminder until its replacement actually emits show.
+  it.each(['throw', 'failed'] as const)('keeps the previous reply when replacement delivery reports %s', (failure) => {
+    deliver('Previous reply');
+    const previous = notificationInstances.at(-1)!;
+    const show = vi.spyOn(FakeNotification.prototype, 'show').mockImplementationOnce(function (this: FakeNotification) {
+      if (failure === 'throw') throw new Error('native delivery failed');
+      this.emit('failed', {}, 'native delivery failed');
+    });
+    try {
+      if (failure === 'throw') expect(() => deliver('Failed reply')).toThrow('native delivery failed');
+      else deliver('Failed reply');
+    } finally {
+      show.mockRestore();
+    }
+    expect(previous.close).not.toHaveBeenCalled();
+    expect(bodies()).toEqual(['Previous reply']);
+    deliver('Next successful reply');
+    expect(previous.close).toHaveBeenCalledOnce();
+    expect(bodies()).toEqual(['Next successful reply']);
+  });
+
+  it('waits for native show confirmation before replacing a visible reply', () => {
+    deliver('Previous reply');
+    const previous = notificationInstances.at(-1)!;
+    const show = vi.spyOn(FakeNotification.prototype, 'show').mockImplementationOnce(() => {});
+    deliver('Pending reply');
+    const pending = notificationInstances.at(-1)!;
+    show.mockRestore();
+    expect(previous.close).not.toHaveBeenCalled();
+    expect(bodies()).toEqual(['Previous reply']);
+    pending.show();
+    expect(previous.close).toHaveBeenCalledOnce();
+    expect(bodies()).toEqual(['Pending reply']);
+  });
+
+  it('does not resurrect an older pending reply after a newer shown reply closes', () => {
+    deliver('Original reply');
+    const show = vi.spyOn(FakeNotification.prototype, 'show').mockImplementation(() => {});
+    deliver('Older pending reply');
+    const older = notificationInstances.at(-1)!;
+    deliver('Newer pending reply');
+    const newer = notificationInstances.at(-1)!;
+    show.mockRestore();
+    newer.show();
+    expect(bodies()).toEqual(['Newer pending reply']);
+    newer.visible = false;
+    newer.emit('close');
+    older.show();
+    expect(bodies()).toEqual([]);
+    deliver('Latest reply');
+    older.emit('close');
+    expect(bodies()).toEqual(['Latest reply']);
+  });
+
+  // #9944 patch / unit: previously only native close/click could retire an
+  // actionable toast. A handled choice/input must also retire it, including a
+  // delivery still waiting for preview enrichment; ordinary replies stay visible.
+  it('dismisses only the current task interaction notices and permits the next request', () => {
+    deliver('Reply');
+    deliver('Error', { kind: 'error' });
+    deliver('Question', { kind: 'needs-reply' });
+    const question = notificationInstances.at(-1)!;
+    deliver('Permission', { kind: 'needs-reply' });
+    deliver('Other task', { kind: 'needs-reply', sessionId: 'other-task' });
+    deliver('Other device', { kind: 'needs-reply', deviceId: 'other-device', markAttention: false });
+    ownerScopeKey = 'other-owner:1';
+    deliver('Other owner', { kind: 'needs-reply' });
+    ownerScopeKey = 'reply-account:1';
+
+    service.dismissSessionInteractionNotifications('reply-session');
+    expect(bodies()).toEqual(['Reply', 'Error', 'Other task', 'Other device', 'Other owner']);
+    question.show(); // A late native show must not restore a handled request.
+    expect(question.visible).toBe(false);
+    service.dismissSessionInteractionNotifications('reply-session');
+    expect(notificationInstances[3]!.close).toHaveBeenCalledOnce();
+    deliver('Next question', { kind: 'needs-reply' });
+    expect(bodies()).toContain('Next question');
+  });
+
+  it('cancels an interaction notice handled while its preview is pending', async () => {
+    let finishPreview!: () => void;
+    readSessionNotificationPreview.mockImplementationOnce(() => new Promise(resolve => { finishPreview = () => resolve({}); }));
+    const payload = { sessionId: 'pending-question', title: 'Task', kind: 'needs-reply', channels: { desktop: true } };
+    await invokeHandler(payload);
+    service.dismissSessionInteractionNotifications('pending-question');
+    finishPreview();
+    await flushAsync();
+    expect(notificationInstances).toHaveLength(0);
+
+    await invokeHandler(payload);
+    expect(notificationInstances).toHaveLength(1);
+    expect(notificationInstances[0]!.visible).toBe(true);
+  });
+
+  it.each(['close', 'failed'])('does not close an interaction notification again after %s', (event) => {
+    deliver('Question', { kind: 'needs-reply' });
+    const question = notificationInstances.at(-1)!;
+    question.visible = false;
+    question.emit(event, {}, 'test failure');
+    service.dismissSessionInteractionNotifications('reply-session');
+    expect(question.close).not.toHaveBeenCalled();
+  });
+
+  it.each(['click', 'close', 'failed'])('releases a reply after %s without closing it again', (event) => {
+    deliver('Finished reply');
+    const previous = notificationInstances.at(-1)!;
+    previous.visible = false;
+    previous.emit(event, {}, 'test failure');
+    deliver('Next reply');
+    expect(previous.close).not.toHaveBeenCalled();
+    expect(bodies()).toEqual(['Next reply']);
+  });
+
+  it('routes the latest IPC reply to its source device and does not replace another device', async () => {
+    const { openMainWindowSession } = await import('../deepLink');
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const payload = { sessionId: 'remote-reply', title: 'Remote task', kind: 'done', markAttention: false, channels };
+    readSessionNotificationPreview.mockResolvedValue({ eventId: 'reply-a1', reply: { clientId: 'message-a1', text: 'A1' } });
+    await invokeHandler({ ...payload, remoteDeviceId: 'device-a' });
+    readSessionNotificationPreview.mockResolvedValue({ eventId: 'reply-b1', reply: { clientId: 'message-b1', text: 'B1' } });
+    await invokeHandler({ ...payload, remoteDeviceId: 'device-b' });
+    expect(notificationInstances[0]!.close).not.toHaveBeenCalled();
+
+    readSessionNotificationPreview.mockResolvedValue({ eventId: 'reply-a2', reply: { clientId: 'message-a2', text: 'A2' } });
+    await invokeHandler({ ...payload, remoteDeviceId: 'device-a' });
+    expect(notificationInstances[0]!.close).toHaveBeenCalledOnce();
+    expect(notificationInstances[1]!.close).not.toHaveBeenCalled();
+    notificationInstances[2]!.emit('click');
+    expect(openMainWindowSession).toHaveBeenLastCalledWith('remote-reply', {
+      deviceId: 'device-a', messageClientId: 'message-a2',
+    });
+  });
+});
 
 describe('teammate reply previews', () => {
   it('drops a completion whose preview wait spans a later completed turn', async () => {
