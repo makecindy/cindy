@@ -14595,7 +14595,8 @@
     },
     "workGroup": {
       "working": "方劳作…",
-      "worked": "已劳 {{duration}}",
+      "worked": "本段耗时 {{duration}}",
+      "durationDescription": "此段所历，含等候之时；非全轮历时，亦非净作业之时。",
       "workDetails": "劳作始末",
       "exploration": {
         "read_one": "阅卷 {{count}} 份",
@@ -14697,6 +14698,8 @@
       "turnCostEstimatedValue": "值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "本轮细目",
+      "turnElapsed": "全轮历时 {{duration}}",
+      "turnElapsedDescription": "自本轮受命至此答所记之时，含等候之时；非净作业之时。",
       "relative": {
         "justNow": "方才",
         "minutesAgo_other": "{{count}} 分前",

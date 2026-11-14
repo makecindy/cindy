@@ -43,6 +43,7 @@ import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
 
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
@@ -628,9 +629,12 @@ function ActivityWorkGroupBlock({
               <Layers size={14} className="text-[var(--msg-tool-card-chevron)]" />
             )}
           </span>
-          <span className="text-14 text-[var(--msg-tool-card-chevron)] truncate min-w-0 translate-y-[1px]">
-            {summaryText}
-          </span>
+          <Tip text={t('chat.workGroup.durationDescription')}
+            contentClassName="max-w-[min(420px,calc(100vw-24px))]">
+            <span className="text-14 text-[var(--msg-tool-card-chevron)] truncate min-w-0 translate-y-[1px]">
+              {summaryText}
+            </span>
+          </Tip>
           {!fitHeader && <div className="flex-1" />}
           {!compact && isStreaming && startedAtMs !== undefined && (
             <span className="font-mono text-12 text-[var(--msg-tool-card-chevron)]">

@@ -439,7 +439,7 @@ export function isScrollNavigationKey(key: string): boolean {
 }
 import { suppressScrollbarActivation } from '@/lib/scrollbarAutoHide';
 import { useAutomaticHistoryLoadBudget } from './useAutomaticHistoryLoadBudget';
-import { collectAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
+import { collectAssistantTurnElapsedMs, collectAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
@@ -2821,6 +2821,7 @@ function renderWorkGroupChild(
     turnFinalAssistantClientIds: ReadonlySet<string>;
     subagentModelByToolUseId: ReadonlyMap<string, string>;
     userTurnUsageDetailsByAssistantId: ReadonlyMap<string, TurnUsageDetails>;
+    userTurnElapsedMsByAssistantId: ReadonlyMap<string, number>;
   },
 ): ReactNode {
   if (item.type === 'agent_task') {
@@ -2865,6 +2866,7 @@ function renderWorkGroupChild(
         )}
         assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
         userTurnUsageDetails={props.userTurnUsageDetailsByAssistantId.get(item.message.clientId)}
+        userTurnElapsedMs={props.userTurnElapsedMsByAssistantId.get(item.message.clientId)}
         isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
         isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
         isLastUserInput={item.message.clientId === props.lastUserInputClientId}
@@ -6345,6 +6347,13 @@ export function MessageStream({
   const userTurnUsageDetailsByAssistantId = useMemo(() => {
     return collectAssistantTurnUsageDetails(metadataMessages, turnFinalAssistantClientIds);
   }, [metadataMessages, turnFinalAssistantClientIds]);
+  const userTurnElapsedMsByAssistantId = useMemo(() => {
+    // Disjoint history windows may hide a newer user boundary. Do not present a
+    // duration as a whole turn until the loaded interval is contiguous.
+    return historyWindowHasIsland
+      ? new Map<string, number>()
+      : collectAssistantTurnElapsedMs(visibleMetadataMessages, turnFinalAssistantClientIds);
+  }, [visibleMetadataMessages, turnFinalAssistantClientIds, historyWindowHasIsland]);
 
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
   // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,
@@ -6397,6 +6406,7 @@ export function MessageStream({
       turnFinalAssistantClientIds,
       subagentModelByToolUseId,
       userTurnUsageDetailsByAssistantId,
+      userTurnElapsedMsByAssistantId,
     }),
     [
       pluginUi,
@@ -6419,6 +6429,7 @@ export function MessageStream({
       turnFinalAssistantClientIds,
       subagentModelByToolUseId,
       userTurnUsageDetailsByAssistantId,
+      userTurnElapsedMsByAssistantId,
     ],
   );
 
@@ -6825,6 +6836,7 @@ export function MessageStream({
                         )}
                         assistantIsTurnFinal={turnFinalAssistantClientIds.has(msg.clientId)}
                         userTurnUsageDetails={userTurnUsageDetailsByAssistantId.get(msg.clientId)}
+                        userTurnElapsedMs={userTurnElapsedMsByAssistantId.get(msg.clientId)}
                         isFirstUserMessage={msg.clientId === firstUserMessageClientId}
                         isLastUserMessage={msg.clientId === lastUserMessageClientId}
                         isLastUserInput={msg.clientId === lastUserInputClientId}
@@ -7016,6 +7028,7 @@ const MessageItem = memo(function MessageItem({
   assistantForkBlocked,
   assistantIsTurnFinal,
   userTurnUsageDetails,
+  userTurnElapsedMs,
   isFirstUserMessage,
   isLastUserMessage,
   isLastUserInput,
@@ -7055,6 +7068,7 @@ const MessageItem = memo(function MessageItem({
   assistantIsTurnFinal?: boolean;
   /** Aggregated token/cache/model details for this assistant's visible user turn. */
   userTurnUsageDetails?: TurnUsageDetails;
+  userTurnElapsedMs?: number;
   /** True iff this message is the first user message in the visible list.
    *  UserMessage hides the Rewind button for it (no prior assistant to
    *  resumeSessionAt anchor on — backend would throw NO_PRIOR_ASSISTANT). */
@@ -7220,6 +7234,7 @@ const MessageItem = memo(function MessageItem({
             userTurnCostIsEstimate={message.userTurnCostIsEstimate}
             turnUsageDetails={message.turnUsageDetails}
             userTurnUsageDetails={userTurnUsageDetails}
+            userTurnElapsedMs={userTurnElapsedMs}
             modelMismatch={message.modelMismatch}
             failedSamplingAttempt={message.failedSamplingAttempt}
             ghostReplyPending={message.ghostReplyPending}

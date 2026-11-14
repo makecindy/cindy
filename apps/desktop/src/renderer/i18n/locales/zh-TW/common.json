@@ -14603,7 +14603,8 @@
     },
     "workGroup": {
       "working": "正在工作…",
-      "worked": "已工作 {{duration}}",
+      "worked": "本段耗時 {{duration}}",
+      "durationDescription": "僅此段工作過程的歷時，包含等待；不代表整輪歷時或淨工作時間。",
       "workDetails": "工作過程",
       "exploration": {
         "read_one": "讀取 {{count}} 個檔案",
@@ -14705,6 +14706,8 @@
       "turnCostEstimatedValue": "價值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "本輪明細",
+      "turnElapsed": "整輪歷時 {{duration}}",
+      "turnElapsedDescription": "從本輪指令到這則回覆記錄的歷時，包含等待；不代表淨工作時間。",
       "relative": {
         "justNow": "剛剛",
         "minutesAgo_other": "{{count}} 分鐘前",

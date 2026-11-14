@@ -14665,7 +14665,8 @@
     },
     "workGroup": {
       "working": "Working…",
-      "worked": "Worked for {{duration}}",
+      "worked": "This segment took {{duration}}",
+      "durationDescription": "Elapsed time for this work segment, including waits. Not the whole request or net working time.",
       "workDetails": "Work details",
       "exploration": {
         "read_one": "Read 1 file",
@@ -14767,6 +14768,8 @@
       "turnCostEstimatedValue": "Worth {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "Request details",
+      "turnElapsed": "Total elapsed {{duration}}",
+      "turnElapsedDescription": "From the input starting this request to this reply’s recorded time, including waits. Not net working time.",
       "relative": {
         "justNow": "just now",
         "minutesAgo_one": "{{count}} minute ago",

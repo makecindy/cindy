@@ -14750,7 +14750,8 @@
     },
     "workGroup": {
       "working": "Trabajando…",
-      "worked": "Trabajó durante {{duration}}",
+      "worked": "Este tramo duró {{duration}}",
+      "durationDescription": "Tiempo transcurrido en este tramo de trabajo, incluidas las esperas. No es la duración de toda la solicitud ni el tiempo de trabajo efectivo.",
       "workDetails": "Detalles del trabajo",
       "exploration": {
         "read_one": "Leyó 1 archivo",
@@ -14859,6 +14860,8 @@
       "turnCostEstimatedValue": "Valor: {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "Detalles de la solicitud",
+      "turnElapsed": "Tiempo total {{duration}}",
+      "turnElapsedDescription": "Desde la entrada que inició esta solicitud hasta la hora registrada de esta respuesta, incluidas las esperas. No es tiempo de trabajo efectivo.",
       "relative": {
         "justNow": "justo ahora",
         "minutesAgo_one": "hace {{count}} minuto",

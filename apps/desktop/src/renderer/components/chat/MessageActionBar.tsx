@@ -68,6 +68,7 @@ import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
 import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { splitUsageCost } from '@cindy/maker-shared/usage-cost-details';
 import { UsageCostPopover } from '@/components/status/UsageCostPopover';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
@@ -150,6 +151,8 @@ interface MessageActionBarProps {
   userTurnCostIsEstimate?: boolean;
   /** Per-turn token/cache 明细。旧消息没有时 tooltip 保持旧文案。 */
   turnUsageDetails?: TurnUsageDetails;
+  /** User input to this reply's recorded timestamp, including waits. */
+  userTurnElapsedMs?: number;
 }
 
 // Total time the bar lingers after hover-leave before opacity drops to 0.
@@ -197,6 +200,7 @@ export function MessageActionBar({
   userTurnCostUsd,
   userTurnCostIsEstimate = false,
   turnUsageDetails,
+  userTurnElapsedMs,
   sessionId,
   clientId,
 }: MessageActionBarProps) {
@@ -592,6 +596,16 @@ export function MessageActionBar({
       className={metaTextClassName} label={costLabel} fallback={turnCostTooltipNode} />
   );
 
+  const elapsedText = typeof userTurnElapsedMs === 'number' &&
+    Number.isFinite(userTurnElapsedMs) && userTurnElapsedMs >= 0 && (
+      <Tip key="elapsed" text={t('chat.messageActionBar.turnElapsedDescription')}
+        contentClassName="max-w-[min(420px,calc(100vw-24px))]">
+        <span className={metaTextClassName}>
+          {t('chat.messageActionBar.turnElapsed', { duration: formatSessionDuration(userTurnElapsedMs, t) })}
+        </span>
+      </Tip>
+    );
+
   // 金额缺席时的回退:显示本轮 token 总量。成因可能是网关目录整体不下发价格、
   // 模型不在价表、或订阅估值也 miss —— 对用户都一样,这一格不该因此空着。
   // 钱算不出来不代表用量算不出来:明细由 main 在 turn 结束时落库,与金额同源。
@@ -892,6 +906,7 @@ export function MessageActionBar({
           editBtn,
           moreMenu,
           timeText,
+          simplifiedBotConversation ? null : elapsedText,
           simplifiedBotConversation ? null : costText || tokensText,
         ]
       : [timeText, copyBtn, shareBtn, forkBtn, quoteBtn, replyBtn, readAloudBtn, reactionBtn, editBtn, moreMenu];
