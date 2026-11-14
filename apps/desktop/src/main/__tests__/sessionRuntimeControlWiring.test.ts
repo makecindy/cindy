@@ -1888,7 +1888,7 @@ function recoveryFixture() {
   const query = { from: () => query, leftJoin: () => query, where: () => query,
     limit: vi.fn(async () => { order.push('read'); return [row]; }) };
   const db = { clientEpoch: 1, client: { drizzle: { select: () => query } } };
-  const coordinator = { clearError: vi.fn(() => { order.push('clear'); }),
+  const coordinator = { clearError: vi.fn(() => { order.push('clear'); return { status: 'idle' }; }),
     hasPendingQueuedWork: vi.fn(() => false), getInputAbortSignal: () => new AbortController().signal };
   const bindings: Record<string, unknown> = {
     createContextOverflowRollover: (deps: unknown) => deps,
@@ -1965,14 +1965,21 @@ describe('Desktop recovery assembly ordering and fences', () => {
     expect(h.order).toEqual(['read', 'read', 'commit']);
   });
 
-  it('keeps queued input in control and clears old recovery before resetting wire notes', async () => {
+  // clearError returns a projection object in the real Desktop coordinator.
+  // The void callback contract must ignore it rather than treating it as a Promise.
+  it.each(['rebuild', 'queued-input'])('keeps %s synchronous when clearError returns a projection', async (entry) => {
     const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
-    deps.onRebuilt('s'); expect(h.order).toEqual(['clear', 'reset']);
-    h.order.length = 0;
-    expect((deps.getRecoveryAbortSignal('s') as AbortSignal).aborted).toBe(false);
-    h.coordinator.hasPendingQueuedWork.mockReturnValue(true);
-    expect((deps.getRecoveryAbortSignal('s') as AbortSignal).aborted).toBe(true);
-    expect(h.order).toEqual(['clear']);
+    if (entry === 'rebuild') {
+      expect(deps.onRebuilt('s')).toBeUndefined();
+      expect(h.order).toEqual(['clear', 'reset']);
+    } else {
+      expect((deps.getRecoveryAbortSignal('s') as AbortSignal).aborted).toBe(false);
+      h.coordinator.hasPendingQueuedWork.mockReturnValue(true);
+      const signal = deps.getRecoveryAbortSignal('s');
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect((signal as AbortSignal).aborted).toBe(true);
+      expect(h.order).toEqual(['clear']);
+    }
   });
 
   it('rechecks continuation ownership before sending and preserves authored recovery intent', async () => {

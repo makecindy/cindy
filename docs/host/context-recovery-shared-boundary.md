@@ -16,6 +16,8 @@
 
 桌面原有导出与装配入口保留。函数端口使用调用时转调；表、符号键和平台对象通过 getter
 读取，不在模块加载时捕获当前 owner、数据库、恢复器或队列。新增文件只有类型依赖。
+抽取自查中，声明返回 `void` 的端口只作为语句调用，不读取其实际返回值；TypeScript
+允许返回对象的实现满足 `void` 合同，不能据此推断返回的是 Promise。
 
 终态处理分两段：先在原事件栈内同步 claim 并暂扣失败，再启动异步结算，事件管线不等待
 恢复完成。失败通知的两个局部闭包仍由桌面持有，因为其他终态路径也会使用它们。
@@ -43,9 +45,10 @@ SDK 会话已清空与零用量投影。派生交接卡失败只记日志，不�
 
 ## 后续 Host 装配前必须确定的事项
 
-- Host 的 `clearError` 外部接口经 command 排队、返回 Promise。共用回调允许等待清理，
-  桌面的同步实现仍在同一调用栈内完成。Host 必须先确定锁内的调用位置，不能直接把
-  排队 API 当作同步端口，也不能形成 command 嵌套重入。
+- `onRebuilt` 与 `getRecoveryAbortSignal` 保持同步合同，忽略 `clearError` 的返回值。
+  Host 的 `clearError` 外部接口经 command 排队、返回 Promise，不能直接接入。
+  Host 装配前应先确定内存清理与排队落盘的边界，并提出方案；不能形成 command 嵌套重入，
+  也不能给不等待回调的恢复工厂返回 Promise。
 - 恢复与普通发送应共用互斥域；`withSessionLock` 不能另建一个与发送无关的锁。
 - Host 接入 `prepareModelWindowSwitch` 时，逐项对应它的结果。需要确认时沿用桌面对
   Device Link 的 `PRECONDITION_FAILED` 及原原因文本，保留原路线；不接受额外的

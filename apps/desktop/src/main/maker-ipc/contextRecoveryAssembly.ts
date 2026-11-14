@@ -268,36 +268,33 @@ export async function replayContextRecoveryWithPorts(ports: ReplayContextRecover
       return { accepted: result.accepted === true };
 }
 
-/** Sync Desktop ports stay synchronous; a Host queue may supply awaited clearing. */
-export interface RecoveryCallbackPorts<Clear extends void | Promise<void>> {
+export interface RecoveryCallbackPorts {
   getCoordinator(): {
-    clearError(sessionId: string): Clear;
+    clearError(sessionId: string): void;
     hasPendingQueuedWork(sessionId: string): boolean;
     getInputAbortSignal(sessionId: string): AbortSignal;
   } | null;
   resetWireNotes(sessionId: string): void;
 }
 
-export function contextRecoveryRebuilt<Clear extends void | Promise<void>>(
-  ports: RecoveryCallbackPorts<Clear>, sessionId: string,
-): void | Promise<void> {
-  // Clear the old terminal's recovery before resending environment notes.
-  const cleared = ports.getCoordinator()?.clearError(sessionId);
-  if (cleared) return cleared.then(() => ports.resetWireNotes(sessionId));
+export function contextRecoveryRebuilt(
+  ports: RecoveryCallbackPorts, sessionId: string,
+): void {
+  // overflow 终态已先走 coordinator onTurnEvent('error')，会留下 active-turn
+  // recovery 和错误横幅。重放绕开 coordinator，随后的 done 会被 recovery 吃掉。
+  ports.getCoordinator()?.clearError(sessionId);
+  // 新原生上下文没看过任何环境说明:下一轮整体重发(重放路径不经 send 事务)。
   ports.resetWireNotes(sessionId);
 }
 
-export function contextRecoveryAbortSignal<Clear extends void | Promise<void>>(
-  ports: RecoveryCallbackPorts<Clear>, sessionId: string,
-): Clear extends Promise<void> ? Promise<AbortSignal> | AbortSignal : AbortSignal;
 export function contextRecoveryAbortSignal(
-  ports: RecoveryCallbackPorts<void | Promise<void>>, sessionId: string,
-): AbortSignal | Promise<AbortSignal> {
+  ports: RecoveryCallbackPorts, sessionId: string,
+): AbortSignal {
   const coordinator = ports.getCoordinator()!;
   if (coordinator.hasPendingQueuedWork(sessionId)) {
-    // Release the previous error so already-queued user input can drain.
-    const cleared = coordinator.clearError(sessionId);
-    if (cleared) return cleared.then(() => AbortSignal.abort());
+    // The terminal error may have installed recovery after this input was
+    // queued. Release that old error so the queued input can actually drain.
+    coordinator.clearError(sessionId);
     return AbortSignal.abort();
   }
   return coordinator.getInputAbortSignal(sessionId);
