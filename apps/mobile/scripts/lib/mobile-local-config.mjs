@@ -63,7 +63,7 @@ export function ensureMobileLocalRegionConfig(options = {}) {
     : '';
 
   // 任何 worktree 都没有可用配置时,不再阻断:从空白模板自动创建并打警告。
-  // 空白模板在 local 校验模式下合法——app 身份回落内置默认,统计/Google 登录关闭。
+  // 空白模板在 local 校验模式下合法——app 身份回落内置默认,统计关闭;Global 的 Google 登录改走浏览器(CN 不提供 Google)。
   const examplePath = path.join(mobileDir, 'scripts', 'self-host-regions.json.example');
   if (fs.existsSync(examplePath)) {
     validateConfig(examplePath);
@@ -71,7 +71,7 @@ export function ensureMobileLocalRegionConfig(options = {}) {
     validateConfig(configPath);
     console.warn(
       `[cindy] Missing ${configPath}; created it from the blank template ` +
-        '(built-in app identity, analytics/Google sign-in disabled). ' +
+        '(built-in app identity, analytics disabled, Google sign-in through the browser on Global only). ' +
         `Edit the file to customize.${invalidHint}`,
     );
     return { configPath, copiedFrom: published ? examplePath : null, createdFromExample: true };
@@ -103,7 +103,7 @@ function publishValidatedConfig(sourcePath, configPath, validateConfig) {
 
 export function formatMobileLocalConfigStatus(result, worktreeRoot) {
   if (result.createdFromExample) {
-    return '==> Created mobile local config from the blank template (built-in app identity, analytics/Google sign-in disabled); edit apps/mobile/scripts/self-host-regions.json to customize';
+    return '==> Created mobile local config from the blank template (built-in app identity, analytics disabled, Google sign-in through the browser on Global only); edit apps/mobile/scripts/self-host-regions.json to customize';
   }
   if (!result.copiedFrom) return null;
   return `==> Reused validated mobile local config from ${path.relative(path.dirname(worktreeRoot), result.copiedFrom)} (values hidden)`;

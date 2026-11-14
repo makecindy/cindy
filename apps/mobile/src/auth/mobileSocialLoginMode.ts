@@ -6,8 +6,10 @@ export const MOBILE_WECHAT_LOGIN_ENABLED = true;
 
 /**
  * Chooses the credential path for a provider advertised by auth-server.
- * Native support remains the default; Global Android falls back to the
- * existing browser PKCE flow for Apple instead of hiding the provider.
+ * Native support remains the default. On Global, providers without a usable
+ * native path fall back to the existing browser PKCE flow instead of being
+ * hidden: Apple on Android, and Google when the build carries no Google
+ * client IDs (local and self-built packages).
  */
 export function resolveMobileSocialLoginMode(input: {
   provider: SocialProvider;
@@ -29,6 +31,13 @@ export function resolveMobileSocialLoginMode(input: {
     input.provider === 'apple' &&
     input.region === 'global' &&
     input.platform === 'android'
+  ) {
+    return 'browser';
+  }
+  if (
+    input.provider === 'google' &&
+    input.region === 'global' &&
+    (input.platform === 'android' || input.platform === 'ios')
   ) {
     return 'browser';
   }
