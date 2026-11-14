@@ -230,7 +230,64 @@ describe('cindy_feishu_bot 轮次内直通工具', () => {
     expect((await dm.call('call_api', {
       method: 'GET', path: '/open-apis/im/v1/messages', params: { container_id_type: 'chat', container_id: 'oc_other' },
     })).payload.ok).toBe(true);
+    expect((await dm.call('call_api', {
+      method: 'GET', path: '/open-apis/im/v1/messages', params: { container_id_type: 'thread', container_id: 'omt_other' },
+    })).payload.ok).toBe(true);
     await dm.close();
+  });
+
+  // 回归(2026-10-23): 真实 call_api 入口把可信 scope.threadId 对应的话题也当成跨群读取拦下。
+  // 旧用例只有空 threadId, 未覆盖话题内读取。最小输入是 GET messages + 当前 thread 容器;
+  // unit tier 使用内存 MCP, 验证回复正文和分页参数, 不访问飞书或用户账号。
+  it.each([false, true])('call_api: 当前话题回复和分页可读(requesterIsOwner=%s)', async (requesterIsOwner) => {
+    const response = { code: 0, data: { items: [{ message_id: 'om_reply', body: { content: '{"text":"话题回复"}' } }] } };
+    const im = fakeTransport({ callApi: vi.fn(async () => response) });
+    const h = await harness(() => scopeOf(im, { requesterIsOwner, threadId: 'omt_here' }));
+    try {
+      for (const pageToken of [undefined, 'next-page']) {
+        const params = {
+          container_id_type: 'thread', container_id: 'omt_here', page_size: 20,
+          sort_type: 'ByCreateTimeDesc', ...(pageToken ? { page_token: pageToken } : {}),
+        };
+        expect((await h.call('call_api', { method: 'GET', path: '/open-apis/im/v1/messages', params })).payload)
+          .toMatchObject({ ok: true, response });
+        expect(im.callApi).toHaveBeenLastCalledWith(expect.objectContaining({
+          method: 'GET', path: '/open-apis/im/v1/messages', params: expect.objectContaining(params),
+        }));
+      }
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('call_api: 当前话题例外不能用于其他容器、请求体、接口或写入; 每轮重新校验', async () => {
+    const im = fakeTransport();
+    let scope = scopeOf(im, { threadId: 'omt_here' });
+    const h = await harness(() => scope);
+    const thread = { container_id_type: 'thread', container_id: 'omt_here' };
+    const base = { method: 'GET', path: '/open-apis/im/v1/messages', params: thread };
+    try {
+      for (const args of [
+        { ...base, params: { ...thread, container_id: 'omt_other', page_token: 'next-page' } },
+        { ...base, params: { ...thread, container_id: '' } },
+        { ...base, params: { container_id_type: 'thread' } },
+        { ...base, params: { ...thread, container_id_type: 'unknown' } },
+        { ...base, params: { ...thread, chat_id: 'oc_other' } },
+        { ...base, data: { container_id: 'oc_other' } },
+        { ...base, params: {}, data: thread },
+        { ...base, path: '/open-apis/im/v1/chats/oc_here' },
+        { ...base, method: 'POST' },
+      ]) {
+        expect((await h.call('call_api', args)).payload.errorCode).toBe('PERMISSION_DENIED');
+      }
+      for (const threadId of ['', 'omt_next']) {
+        scope = scopeOf(im, { threadId });
+        expect((await h.call('call_api', base)).payload.errorCode).toBe('PERMISSION_DENIED');
+      }
+      expect(im.callApi).not.toHaveBeenCalled();
+    } finally {
+      await h.close();
+    }
   });
 
   // 回归(PR #6289 review): send_file 之前把任意本机路径交给 transport, 群成员可借 bot 把
