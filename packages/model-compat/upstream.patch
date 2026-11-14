@@ -315,7 +315,54 @@
 -}
 --- a/src/responses/custom-tool-compat.ts
 +++ b/src/responses/custom-tool-compat.ts
-@@ -153,7 +153,9 @@
+@@ -67,14 +67,45 @@
+ }
+ 
+ /** Resolve a provider-emitted wire name to the routed custom tool the client declared. */
++/**
++ * Wire names a namespace flattening pass moved away from their preferred spelling.
++ *
++ * `bareCustomNames` separates a bare declaration that genuinely is a custom tool from a name that
++ * only looks custom because a displaced child used to own it; `displacedKinds` says what the child
++ * itself was declared as. Together they keep the custom restore from claiming a call that belongs
++ * to the bare declaration or from turning an ordinary function into a custom-tool call.
++ */
++export interface CustomRestoreDisplacement {
++  bareCustomNames: ReadonlySet<string>;
++  displacedKinds: ReadonlyMap<string, "function" | "custom">;
++}
++
+ export function routedCustomToolTargetName(
+   value: unknown,
+   names: ReadonlySet<string>,
+   declaredNames?: ReadonlySet<string>,
++  displacement?: CustomRestoreDisplacement,
+ ): string | undefined {
+   const wireName = routedCustomToolWireName(value);
+   if (wireName === undefined) return undefined;
+-  if (names.has(wireName)) return wireName;
++  if (names.has(wireName)) {
++    if (displacement) {
++      const carriesNamespace = isPlainObject(value) && typeof value.namespace === "string";
++      if (carriesNamespace) {
++        // Restoring the child is what puts the namespace on the item; an ordinary function child
++        // must stay a function call rather than come back as a custom-tool call.
++        if (displacement.displacedKinds.get(wireName) === "function") return undefined;
++      } else if (
++        displacement.displacedKinds.has(wireName)
++        && !displacement.bareCustomNames.has(wireName)
++      ) {
++        // The bare declaration that claimed this name is not a custom tool, so its own call is not
++        // a custom-tool call.
++        return undefined;
++      }
++    }
++    return wireName;
++  }
+   if (!isPlainObject(value) || typeof value.namespace === "string") return undefined;
+   const normalized = normalizeDeclaredToolName(wireName, declaredNames);
+   return normalized !== wireName && names.has(normalized) ? normalized : undefined;
+@@ -153,7 +184,9 @@
      ) {
        names.add(value.name);
      }
@@ -326,7 +373,7 @@
    };
    visit(body);
    return names;
-@@ -173,7 +175,7 @@
+@@ -173,7 +206,7 @@
    ) {
      out.add(value.call_id);
    }
@@ -335,7 +382,7 @@
  }
  
  function rewriteForUpstream(
-@@ -234,7 +236,8 @@
+@@ -234,7 +267,8 @@
    let changed = false;
    const next: Record<string, unknown> = {};
    for (const [key, entry] of Object.entries(value)) {
@@ -345,6 +392,48 @@
      next[key] = rewritten;
      changed ||= rewritten !== entry;
    }
+@@ -266,13 +300,14 @@
+   names: ReadonlySet<string>,
+   repairNames: ReadonlySet<string> = new Set(),
+   declaredNames?: ReadonlySet<string>,
++  displacement?: CustomRestoreDisplacement,
+ ): { value: unknown; changed: boolean } {
+   if (!isPlainObject(value)) return { value, changed: false };
+ 
+   const restoreItem = (item: unknown): { value: unknown; changed: boolean } => {
+     if (!isPlainObject(item)) return { value: item, changed: false };
+     const wireName = routedCustomToolWireName(item);
+-    const targetName = routedCustomToolTargetName(item, names, declaredNames);
++    const targetName = routedCustomToolTargetName(item, names, declaredNames, displacement);
+     if (
+       (item.type === "function_call" || item.type === "custom_tool_call")
+       && typeof item.name === "string"
+@@ -362,7 +397,7 @@
+     && value.type.startsWith("response.")
+     && isPlainObject(value.response)
+   ) {
+-    const response = restoreRoutedCustomCalls(value.response, names, repairNames, declaredNames);
++    const response = restoreRoutedCustomCalls(value.response, names, repairNames, declaredNames, displacement);
+     if (response.changed) {
+       restored.response = response.value;
+       changed = true;
+@@ -377,6 +412,7 @@
+   names: ReadonlySet<string>,
+   repairNames: ReadonlySet<string> = new Set(),
+   declaredNames?: ReadonlySet<string>,
++  displacement?: CustomRestoreDisplacement,
+ ): string {
+   if (names.size === 0 && repairNames.size === 0) return text;
+   let payload: unknown;
+@@ -385,7 +421,7 @@
+   } catch {
+     return text;
+   }
+-  const restored = restoreRoutedCustomCalls(payload, names, repairNames, declaredNames);
++  const restored = restoreRoutedCustomCalls(payload, names, repairNames, declaredNames, displacement);
+   return restored.changed ? JSON.stringify(restored.value) : text;
+ }
+ 
 --- a/src/server/relay.ts
 +++ b/src/server/relay.ts
 @@ -1,1484 +1,2 @@
@@ -1959,3 +2048,527 @@
 -} from "./types/accounts";
 +export * from "./types/tools";
 +export type * from "./types/provider";
+--- a/src/responses/namespace-tool-compat.ts
++++ b/src/responses/namespace-tool-compat.ts
+@@ -102,10 +102,59 @@
+   bareWireNames: Set<string>;
+   identities: Map<string, string>;
+   selectors: Map<string, string | null>;
++  /**
++   * Preferred wire name -> allocated name, for children displaced by a bare declaration. The
++   * custom-tool layer records wire names before this pass runs, so a displaced custom child has to
++   * move its record too: the preferred name now belongs to the bare declaration, and leaving it in
++   * that set would restore the bare tool's ordinary call as a custom-tool call.
++   */
++  renamedWireNames: Map<string, string>;
++  /** Displaced children with the declaration type the flattening pass actually saw. */
++  renamedChildren: { preferred: string; declaredType: unknown }[];
+ };
+ 
+ /** Two distinct logical tools would occupy one wire name; the caller maps this to a 400. */
+ export class NamespaceToolCollisionError extends Error {}
++
++/**
++ * Upper bound for the disambiguating suffix. A catalog still colliding after this many candidates
++ * is malformed rather than merely unlucky, and the request keeps failing closed.
++ */
++const MAX_WIRE_NAME_SUFFIX = 64;
++
++/**
++ * Pick a wire name for a namespace child whose flattened form a bare declaration already claims.
++ *
++ * Codex emits both shapes when one of its own code-mode tools is spelled like a namespace child:
++ * the flat declaration `collaboration__followup_task` alongside the group `collaboration` holding
++ * `followup_task`. These are distinct logical tools, so one of them has to move. Failing the
++ * request costs the entire turn — the strict gateway rejects the request, not the single tool —
++ * while renaming the child keeps both reachable.
++ *
++ * Renaming stays request-local: `aliases` maps the new wire name back to `{namespace, name}`, so
++ * replay and response restoration are unchanged, and the renamed entry is authorized by
++ * `tool_choice` through exactly the same path as an unrenamed one.
++ */
++function allocateLoweredWireName(
++  wireOwners: ReadonlyMap<string, string>,
++  preferred: string,
++): string {
++  for (let suffix = 2; suffix <= MAX_WIRE_NAME_SUFFIX; suffix += 1) {
++    const candidate = `${preferred}_${suffix}`;
++    if (!wireOwners.has(candidate)) return candidate;
++  }
++  throw new NamespaceToolCollisionError(
++    `namespace tool wire-name collision for "${preferred}"; no free disambiguated name`,
++  );
++}
++
++type LoweredNamespaceChild = {
++  namespace: string;
++  child: Record<string, unknown>;
++  childName: string;
++  identity: string;
++  preferred: string;
++};
+ 
+ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
+   const aliases = new Map<string, RoutedNamespaceToolIdentity>();
+@@ -113,6 +162,8 @@
+   const identities = new Map<string, string>();
+   const selectors = new Map<string, string | null>();
+   const wireOwners = new Map<string, string>();
++  const renamedWireNames = new Map<string, string>();
++  const renamedChildren: { preferred: string; declaredType: unknown }[] = [];
+ 
+   for (const group of groups) {
+     for (const tool of group) {
+@@ -127,6 +178,10 @@
+     }
+   }
+ 
++  const children: LoweredNamespaceChild[] = [];
++  // Which identities want each preferred wire name. The same logical tool may be declared in
++  // several containers, so identity — not declaration — is what makes a name contested.
++  const wantedBy = new Map<string, Set<string>>();
+   for (const group of groups) {
+     for (const tool of group) {
+       const parsed = parseNamespaceGroup(tool);
+@@ -134,29 +189,61 @@
+       for (const child of parsed.children) {
+         const childName = child.name as string;
+         const identity = loweredIdentity(parsed.namespace, childName);
+-        const wireName = loweredWireName(parsed.namespace, childName);
+-        const owner = wireOwners.get(wireName);
+-        if (owner !== undefined && owner !== identity) {
+-          throw new NamespaceToolCollisionError(
+-            `namespace tool wire-name collision for "${wireName}"; rename one of the colliding tools`,
+-          );
+-        }
+-        wireOwners.set(wireName, identity);
+-        identities.set(identity, wireName);
+-        addSelector(selectors, wireName, wireName);
+-        addSelector(selectors, `${parsed.namespace}.${childName}`, wireName);
+-        addSelector(selectors, childName, wireName);
+-        if (parsed.namespace !== BUILTIN_FUNCTIONS_NAMESPACE) {
+-          // A child declared `custom` stays custom; everything else lowers to a
+-          // function, which is how `buildTools` flattens it upstream.
+-          const kind = child.type === "custom" ? "custom" : "function";
+-          aliases.set(wireName, { namespace: parsed.namespace, name: childName, kind });
+-        }
++        const preferred = loweredWireName(parsed.namespace, childName);
++        children.push({ namespace: parsed.namespace, child, childName, identity, preferred });
++        const wanted = wantedBy.get(preferred);
++        if (wanted) wanted.add(identity);
++        else wantedBy.set(preferred, new Set([identity]));
+       }
+     }
+   }
+ 
+-  return { aliases, bareWireNames, identities, selectors };
++  // Two different logical tools that both want one wire name are a declaration ambiguity: their
++  // dotted spellings alias each other, so restoration would depend on which container happened to
++  // be rewritten first. Reject it before any suffix is handed out.
++  for (const [preferred, wanted] of wantedBy) {
++    if (wanted.size > 1) {
++      throw new NamespaceToolCollisionError(
++        `namespace tool wire-name collision for "${preferred}"; rename one of the colliding tools`,
++      );
++    }
++  }
++
++  // Reserve every name a child legitimately owns before allocating any suffix. Deciding this in a
++  // second pass keeps a disambiguated name from stealing a sibling's real name: given a bare
++  // `workspace__read` plus children `read` and `read_2`, `read` must not take `workspace__read_2`.
++  for (const entry of children) {
++    if (identities.has(entry.identity)) continue;
++    const owner = wireOwners.get(entry.preferred);
++    if (owner !== undefined && owner !== entry.identity) continue;
++    identities.set(entry.identity, entry.preferred);
++    wireOwners.set(entry.preferred, entry.identity);
++  }
++
++  // Only a bare declaration displaces a child; every remaining child takes the first free suffix
++  // after all real names are reserved.
++  for (const entry of children) {
++    if (identities.has(entry.identity)) continue;
++    const allocated = allocateLoweredWireName(wireOwners, entry.preferred);
++    identities.set(entry.identity, allocated);
++    wireOwners.set(allocated, entry.identity);
++    renamedWireNames.set(entry.preferred, allocated);
++    renamedChildren.push({ preferred: entry.preferred, declaredType: entry.child.type });
++  }
++
++  for (const entry of children) {
++    const wireName = identities.get(entry.identity)!;
++    addSelector(selectors, wireName, wireName);
++    addSelector(selectors, `${entry.namespace}.${entry.childName}`, wireName);
++    addSelector(selectors, entry.childName, wireName);
++    if (entry.namespace === BUILTIN_FUNCTIONS_NAMESPACE) continue;
++    // A child declared `custom` stays custom; everything else lowers to a function, which is how
++    // `buildTools` flattens it upstream.
++    const kind = entry.child.type === "custom" ? "custom" : "function";
++    aliases.set(wireName, { namespace: entry.namespace, name: entry.childName, kind });
++  }
++
++  return { aliases, bareWireNames, identities, selectors, renamedWireNames, renamedChildren };
+ }
+ 
+ /**
+@@ -344,11 +431,23 @@
+ export function rewriteRoutedNamespaceToolsForUpstream(
+   body: unknown,
+   convertedCustomToolNames?: ReadonlySet<string>,
++  bareCustomNames?: ReadonlySet<string>,
++  namespaceCustomToolNames?: ReadonlySet<string>,
+ ): {
+   body: unknown;
+   aliases: Map<string, RoutedNamespaceToolIdentity>;
++  /** Preferred wire name -> allocated name, for children a bare declaration displaced. */
++  renamedWireNames: Map<string, string>;
++  /**
++   * Preferred wire name -> declared kind for every displaced child. Derived from the whole rename
++   * set rather than the authorized aliases: `tool_choice` can narrow aliases down to the bare
++   * declaration, and the custom restore still has to know what the displaced child was.
++   */
++  renamedKinds: Map<string, "function" | "custom">;
+ } {
+-  if (!isPlainObject(body)) return { body, aliases: new Map() };
++  if (!isPlainObject(body)) {
++    return { body, aliases: new Map(), renamedWireNames: new Map(), renamedKinds: new Map() };
++  }
+   const groups = collectResponsesToolGroups(body);
+   const plan = buildRewritePlan(groups);
+ 
+@@ -379,10 +478,30 @@
+       && !ambiguousDotted.has(dotted) && !plan.bareWireNames.has(dotted)
+       && !aliases.has(dotted)) aliases.set(dotted, identity);
+   }
+-  // The adapter lowers custom tools before namespaces. Preserve their declared
+-  // kind only in already-authorized response aliases; wire selectors remain lowered.
+-  for (const identity of aliases.values()) {
+-    if (convertedCustomToolNames?.has(namespacedToolName(identity.namespace, identity.name))) identity.kind = "custom";
++  // The adapter lowers custom tools before namespaces, which rewrites a `custom` child declaration
++  // into a `function` one, so the declaration type left in the body no longer says what this child
++  // was. `namespaceCustomToolNames` carries that knowledge from before the lowering pass; it also
++  // keeps a custom child custom when a bare custom tool happens to share its wire name.
++  const renamedKinds = new Map<string, "function" | "custom">();
++  for (const entry of plan.renamedChildren) {
++    const custom = entry.declaredType === "custom"
++      || namespaceCustomToolNames?.has(entry.preferred) === true
++      || (
++        convertedCustomToolNames?.has(entry.preferred) === true
++        && bareCustomNames?.has(entry.preferred) !== true
++      );
++    renamedKinds.set(entry.preferred, custom ? "custom" : "function");
++  }
++  for (const [wireName, identity] of aliases) {
++    const preferred = namespacedToolName(identity.namespace, identity.name);
++    if (wireName !== preferred) {
++      const displacedKind = renamedKinds.get(preferred);
++      if (displacedKind) identity.kind = displacedKind;
++      continue;
++    }
++    if (!convertedCustomToolNames?.has(preferred)) continue;
++    if (bareCustomNames?.has(preferred)) continue;
++    identity.kind = "custom";
+   }
+   return {
+     body: {
+@@ -392,6 +511,8 @@
+       ...(toolChoice !== body.tool_choice ? { tool_choice: toolChoice } : {}),
+     },
+     aliases,
++    renamedWireNames: plan.renamedWireNames,
++    renamedKinds,
+   };
+ }
+ 
+--- a/src/server/responses-custom-tool-repair.ts
++++ b/src/server/responses-custom-tool-repair.ts
+@@ -8,6 +8,7 @@
+   routedCustomToolTargetName,
+   routedCustomToolWireName,
+   unwrapRoutedCustomToolArguments,
++  type CustomRestoreDisplacement,
+ } from "../responses/custom-tool-compat";
+ import {
+   replaceSseDataPayload,
+@@ -91,6 +92,7 @@
+   budget?: TranslatorBudget,
+   repairNames: ReadonlySet<string> = new Set(),
+   declaredNames?: ReadonlySet<string>,
++  displacement?: CustomRestoreDisplacement,
+ ): SseBlockRewrite {
+   const itemNames = new Map<string, { name: string; aliased: boolean; namespace?: string }>();
+   // Native helper aliases and genuine bare code-mode exec calls share completion repair.
+@@ -194,7 +196,7 @@
+     ) {
+       const upstreamItemId = typeof parsed.item.id === "string" ? parsed.item.id : undefined;
+       const wireName = routedCustomToolWireName(parsed.item);
+-      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames);
++      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames, displacement);
+       const aliased = targetName !== undefined && targetName !== wireName;
+       const codeModeExec = targetName === "exec" && parsed.item.name === "exec"
+         && parsed.item.namespace === undefined && declaresCodeModeExec(declaredNames);
+@@ -207,7 +209,7 @@
+       const repairable = wireName !== undefined && repairNames.has(wireName);
+       if (upstreamItemId && repairable) repairItemNames.set(upstreamItemId, parsed.item.name);
+       const restored = repairable || aliased || codeModeExec
+-        ? restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames)
++        ? restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, displacement)
+         : { value: parsed, changed: false };
+       if (type === "response.output_item.done" && upstreamItemId) releaseCall(upstreamItemId);
+       return restored.changed
+@@ -221,7 +223,7 @@
+       && typeof parsed.item.name === "string"
+     ) {
+       const upstreamItemId = typeof parsed.item.id === "string" ? parsed.item.id : undefined;
+-      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames);
++      const targetName = routedCustomToolTargetName(parsed.item, names, declaredNames, displacement);
+       const routed = targetName !== undefined;
+       const wireName = routedCustomToolWireName(parsed.item);
+       if (upstreamItemId) {
+@@ -247,7 +249,7 @@
+       if (upstreamItemId && pending.length > 0 && !openCalls.has(upstreamItemId)) {
+         openCalls.set(upstreamItemId, { argumentsText: "", emittedInput: "", retainedBytes: 0 });
+       }
+-      const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames);
++      const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, displacement);
+       const restoredBlock = restored.changed
+         ? replaceSseDataPayload(block, JSON.stringify(restored.value))
+         : block;
+@@ -387,7 +389,7 @@
+       return [replaceSseDataPayload(replaceSseEventName(block, nextType), JSON.stringify(next))];
+     }
+ 
+-    const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames);
++    const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, displacement);
+     const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
+     if (terminal) releaseAll();
+     return restored.changed
+--- a/src/responses/function-call-compat.ts
++++ b/src/responses/function-call-compat.ts
+@@ -48,50 +48,93 @@
+ }
+ 
+ /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
+-export function collectFunctionCallRepairSchemas(body: unknown): Map<string, FunctionCallRepairSchema> {
++export interface FunctionCallRepairPlan {
++  /** Wire names the live request allocated for displaced namespace children. */
++  renamedWireNames: ReadonlyMap<string, string>;
++  /** `tool_choice` after the request's own lowering, so selectors match the forwarded body. */
++  loweredToolChoice?: unknown;
++}
++
++export function collectFunctionCallRepairSchemas(
++  body: unknown,
++  plan?: FunctionCallRepairPlan,
++): Map<string, FunctionCallRepairSchema> {
+   const schemas = new Map<string, FunctionCallRepairSchema>();
+   if (!isObject(body)) return schemas;
+-  const groups = collectResponsesToolGroups(body);
++  const liveGroups: unknown[][] = [];
++  if (Array.isArray(body.tools)) liveGroups.push(body.tools);
++  const replayedGroups: unknown[][] = [];
+   if (Array.isArray(body.input)) {
+     for (const entry of body.input) {
+-      if (isObject(entry) && entry.type === "tool_search_output" && Array.isArray(entry.tools)) groups.push(entry.tools);
+-    }
+-  }
+-  // Reuse namespace selector resolution, retaining schemas from the original objects below.
+-  // This local catalog view includes loaded definitions without revisiting replay history or
+-  // teaching the shared tool-group collector a new transport-wide interpretation.
+-  const lowered = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] }).body;
++      if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
++      if (entry.type === "tool_search_output") replayedGroups.push(entry.tools);
++      else if (entry.type === "additional_tools") liveGroups.push(entry.tools);
++    }
++  }
++  // The forwarded request owns both the wire names and the lowered selector. Rebuilding them from
++  // a combined catalog would let replayed history change either, which the request itself never
++  // did; only a caller without a plan falls back to the local view.
++  let loweredChoice: unknown;
++  let renamedWireNames: ReadonlyMap<string, string>;
++  if (plan) {
++    loweredChoice = plan.loweredToolChoice;
++    renamedWireNames = plan.renamedWireNames;
++  } else {
++    const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: [...liveGroups, ...replayedGroups].flat(), input: [] });
++    loweredChoice = isObject(derived.body) ? derived.body.tool_choice : undefined;
++    renamedWireNames = derived.renamedWireNames;
++  }
+   const choice = body.tool_choice;
+-  const loweredChoice = isObject(lowered) ? lowered.tool_choice : undefined;
+-  const occupied = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema } | null>();
+-  const register = (tool: unknown, namespace?: string): void => {
++  const occupied = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema; live: boolean } | null>();
++  const register = (tool: unknown, namespace: string | undefined, live: boolean): void => {
+     if (!isObject(tool) || typeof tool.name !== "string" || tool.name.length === 0) return;
+     const identity: FunctionCallRepairSchema = {
+       name: tool.name,
+       ...(namespace ? { namespace } : {}),
+       ...(isObject(tool.parameters) ? { parameters: tool.parameters } : {}),
+     };
+-    const key = namespacedToolName(namespace, tool.name);
++    const preferred = namespacedToolName(namespace, tool.name);
++    // Only a namespace child can be displaced; a bare declaration keeps its own name even when it
++    // happens to spell the same preferred wire name.
++    const key = namespace ? (renamedWireNames.get(preferred) ?? preferred) : preferred;
+     if (occupied.has(key)) {
+       const previous = occupied.get(key);
+-      // Conflicting duplicate declarations cannot choose a schema by insertion order.
+-      if (!previous || previous.kind !== tool.type
+-        || previous.identity.namespace !== namespace
+-        || previous.identity.name !== tool.name
+-        || !sameSchemaValue(previous.identity.parameters, identity.parameters)) {
+-        occupied.set(key, null);
++      if (!previous) return;
++      const sameIdentity = previous.identity.namespace === namespace
++        && previous.identity.name === tool.name;
++      if (sameIdentity) {
++        // One tool declared twice: identical declarations collapse, contradictory ones cannot be
++        // ordered by which catalog happened to carry them.
++        const same = previous.kind === tool.type
++          && sameSchemaValue(previous.identity.parameters, identity.parameters);
++        if (!same) occupied.set(key, null);
++        return;
+       }
+-    } else occupied.set(key, { kind: tool.type, identity });
++      // Two different tools want one wire name. The live catalog owns it; replayed history —
++      // which never took part in the allocation — steps aside. Two tools from the same source
++      // cannot be ordered, so that stays ambiguous.
++      if (previous.live !== live) {
++        if (live) occupied.set(key, { kind: tool.type, identity, live });
++        return;
++      }
++      occupied.set(key, null);
++      return;
++    }
++    occupied.set(key, { kind: tool.type, identity, live });
+   };
+-  for (const group of groups) {
++  const groups: [unknown[], boolean][] = [
++    ...liveGroups.map(group => [group, true] as [unknown[], boolean]),
++    ...replayedGroups.map(group => [group, false] as [unknown[], boolean]),
++  ];
++  for (const [group, live] of groups) {
+     for (const tool of group) {
+       if (!isObject(tool)) continue;
+       if (tool.type === "namespace") {
+         if (typeof tool.name !== "string" || !tool.name || !Array.isArray(tool.tools)) continue;
+-        for (const child of tool.tools) register(child, namespaceOf(tool.name));
++        for (const child of tool.tools) register(child, namespaceOf(tool.name), live);
+       } else if (tool.type === "function" && isObject(tool.function)) {
+-        register({ ...tool.function, type: "function" });
+-      } else register(tool);
++        register({ ...tool.function, type: "function" }, undefined, live);
++      } else register(tool, undefined, live);
+     }
+   }
+   for (const [key, entry] of occupied) {
+@@ -108,13 +151,22 @@
+   return schemas;
+ }
+ 
+-function repairItem(item: unknown, schemas: FunctionCallRepairSchemas, completed: boolean): unknown {
++function repairItem(
++  item: unknown,
++  schemas: FunctionCallRepairSchemas,
++  completed: boolean,
++  renamedWireNames?: ReadonlyMap<string, string>,
++): unknown {
+   if (!isObject(item) || item.type !== "function_call" || typeof item.name !== "string"
+     || typeof item.arguments !== "string") return item;
+   if (item.status !== "completed" && !(item.status === undefined && completed)) return item;
+   if ("namespace" in item && (typeof item.namespace !== "string" || !item.namespace)) return item;
+   const namespace = namespaceOf(item.namespace);
+-  const schema = schemas.get(namespacedToolName(namespace, item.name));
++  const preferred = namespacedToolName(namespace, item.name);
++  // A restored namespace coordinate names the declaration, not the allocated wire name; only an
++  // item that actually carries the namespace is mapped, so the bare declaration keeps its own key.
++  const key = "namespace" in item ? (renamedWireNames?.get(preferred) ?? preferred) : preferred;
++  const schema = schemas.get(key);
+   if (!schema) return item;
+   // An explicit namespace is an identity coordinate, not another spelling to guess at.
+   if ("namespace" in item && (schema.namespace !== namespace || schema.name !== item.name)) return item;
+@@ -139,35 +191,40 @@
+ export function repairFunctionCalls(
+   value: unknown,
+   schemas: FunctionCallRepairSchemas,
++  renamedWireNames?: ReadonlyMap<string, string>,
+ ): { value: unknown; changed: boolean } {
+   if (schemas.size === 0 || !isObject(value)) return { value, changed: false };
+   if (typeof value.status === "string" && ["failed", "incomplete", "cancelled", "in_progress", "queued"].includes(value.status)) return { value, changed: false };
+   let next: unknown = value;
+-  if (value.type === "function_call") next = repairItem(value, schemas, false);
++  if (value.type === "function_call") next = repairItem(value, schemas, false, renamedWireNames);
+   else if (value.type === "response.output_item.done") {
+-    const item = repairItem(value.item, schemas, true);
++    const item = repairItem(value.item, schemas, true, renamedWireNames);
+     if (item !== value.item) next = { ...value, item };
+   } else if (value.type === "response.completed" && isObject(value.response)) {
+     const response = value.response;
+     if ((response.status === undefined || response.status === "completed") && Array.isArray(response.output)) {
+       const original = response.output;
+-      const output = original.map(item => repairItem(item, schemas, true));
++      const output = original.map(item => repairItem(item, schemas, true, renamedWireNames));
+       if (output.some((item, index) => item !== original[index])) next = { ...value, response: { ...response, output } };
+     }
+   } else if (typeof value.type !== "string" || !value.type.startsWith("response.")) {
+     if (Array.isArray(value.output)) {
+       const original = value.output;
+-      const output = original.map(item => repairItem(item, schemas, value.status === "completed"));
++      const output = original.map(item => repairItem(item, schemas, value.status === "completed", renamedWireNames));
+       if (output.some((item, index) => item !== original[index])) next = { ...value, output };
+     }
+   }
+   return { value: next, changed: next !== value };
+ }
+ 
+-export function repairFunctionCallsInJson(text: string, schemas: FunctionCallRepairSchemas): string {
++export function repairFunctionCallsInJson(
++  text: string,
++  schemas: FunctionCallRepairSchemas,
++  renamedWireNames?: ReadonlyMap<string, string>,
++): string {
+   if (schemas.size === 0) return text;
+   let payload: unknown;
+   try { payload = JSON.parse(text); } catch { return text; }
+-  const repaired = repairFunctionCalls(payload, schemas);
++  const repaired = repairFunctionCalls(payload, schemas, renamedWireNames);
+   return repaired.changed ? JSON.stringify(repaired.value) : text;
+ }
+--- a/src/server/responses-function-tool-repair.ts
++++ b/src/server/responses-function-tool-repair.ts
+@@ -32,6 +32,7 @@
+ export function createResponsesFunctionToolRepairBlockRewrite(
+   schemas: FunctionCallRepairSchemas,
+   budget?: TranslatorBudget,
++  renamedWireNames?: ReadonlyMap<string, string>,
+ ): SseBlockRewrite {
+   if (schemas.size === 0) return block => [block];
+   const byId = new Map<string, Identity>();
+@@ -96,7 +97,7 @@
+     const resolved = (typeof event.item_id !== "string" || event.item_id === "") && identity.itemId !== undefined
+       ? { ...event, item_id: identity.itemId }
+       : event;
+-    const repaired = repairFunctionCalls({ ...identity.item, status: identity.item.status ?? "completed", arguments: event.arguments }, schemas);
++    const repaired = repairFunctionCalls({ ...identity.item, status: identity.item.status ?? "completed", arguments: event.arguments }, schemas, renamedWireNames);
+     if (repaired.changed && isObject(repaired.value)) {
+       return replaceSseDataPayload(block, JSON.stringify({ ...resolved, arguments: repaired.value.arguments }));
+     }
+@@ -138,7 +139,7 @@
+       if ((event.type === "response.output_item.added" || event.type === "response.output_item.done") && isObject(event.item)) {
+         const identity = register(event.item, index);
+         const replayed = identity ? flushPending(identity) : [];
+-        const repaired = repairFunctionCalls(event, schemas);
++        const repaired = repairFunctionCalls(event, schemas, renamedWireNames);
+         const output = repaired.changed ? replaceSseDataPayload(block, JSON.stringify(repaired.value)) : block;
+         if (identity && (event.type === "response.output_item.done" || replayed.length > 0)) releaseIdentity(identity);
+         return event.type === "response.output_item.added" ? [output, ...replayed] : [...replayed, output];
+@@ -168,7 +169,7 @@
+           }
+         }
+         replayed.push(...pending.map(entry => entry.block));
+-        const repaired = repairFunctionCalls(event, schemas);
++        const repaired = repairFunctionCalls(event, schemas, renamedWireNames);
+         dispose();
+         return [...replayed, repaired.changed ? replaceSseDataPayload(block, JSON.stringify(repaired.value)) : block];
+       }

@@ -78,19 +78,19 @@
       "source": "src/responses/custom-tool-compat.ts",
       "target": "src/upstream/responses/custom-tool-compat.ts",
       "upstreamSha256": "1545dee0ee7f29d0c489dc4bf3975984fd9648dbca5de50effc97f7df9adc024",
-      "portedSha256": "d223fcb889bf3e529dcc4b7535edd0605f7068c37af5ae0a78482bfe65940500"
+      "portedSha256": "66c85b83d7782b50d9ac8840629c821c29e056c70a0065aa20da65a80a731ce9"
     },
     {
       "source": "src/responses/function-call-compat.ts",
       "target": "src/upstream/responses/function-call-compat.ts",
       "upstreamSha256": "642c72c2d9aeaad9c6840059eaab33e3729733447ac746197ad122e3c18b779b",
-      "portedSha256": "642c72c2d9aeaad9c6840059eaab33e3729733447ac746197ad122e3c18b779b"
+      "portedSha256": "6a37b2649ec1bd1a09e3c8d55b54ca2db8db3d1f71029abd0019bed490a09638"
     },
     {
       "source": "src/responses/namespace-tool-compat.ts",
       "target": "src/upstream/responses/namespace-tool-compat.ts",
       "upstreamSha256": "29ab7614e0757cde8bf81ad86da407afc8cb6d05027da22375fcca9a95de63b0",
-      "portedSha256": "29ab7614e0757cde8bf81ad86da407afc8cb6d05027da22375fcca9a95de63b0"
+      "portedSha256": "3d8d67a4d0a5714cd24352b01520022bfb04c8cadf4c10ff39f9004a31fc9c71"
     },
     {
       "source": "src/responses/tool-groups.ts",
@@ -120,13 +120,13 @@
       "source": "src/server/responses-custom-tool-repair.ts",
       "target": "src/upstream/server/responses-custom-tool-repair.ts",
       "upstreamSha256": "9b29bc429d83cd5ab46b358eed46356514b88f9508716afa8080b93dca848f84",
-      "portedSha256": "9b29bc429d83cd5ab46b358eed46356514b88f9508716afa8080b93dca848f84"
+      "portedSha256": "99e0367d70f26b520aa0006eec79671da5ba28f55e55cdfbbabb45650d9c35b7"
     },
     {
       "source": "src/server/responses-function-tool-repair.ts",
       "target": "src/upstream/server/responses-function-tool-repair.ts",
       "upstreamSha256": "e32fc0a7669cc6c085c3a6287f3382bfc12223dc78ff96cea90927fc3bbaa0a6",
-      "portedSha256": "e32fc0a7669cc6c085c3a6287f3382bfc12223dc78ff96cea90927fc3bbaa0a6"
+      "portedSha256": "c65732e878a6696ccabf931410d7915138e1255903b9b5512efe563a4da33f25"
     },
     {
       "source": "src/server/responses-item-id-repair.ts",
@@ -308,13 +308,6 @@
       "target": "src/__tests__/upstream/responses/legacy-shell-compat.test.js",
       "upstreamSha256": "76c49010d3b1f7afc9bfe9411d3fdebcbc4af777b1de2ea0f24f06700c65ebf3",
       "portedSha256": "e7e06a465f953bb6b252a764bde8013a7d75c997d8b31f189cba2d1fe2f52540",
-      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
-    },
-    {
-      "source": "tests/responses/namespace-tool-compat.test.ts",
-      "target": "src/__tests__/upstream/responses/namespace-tool-compat.test.js",
-      "upstreamSha256": "3ab46d5c76aade93ea82758e68d732bcc4eb53ac4ff8307fb48cdaad4750573e",
-      "portedSha256": "6c92dfa1dbcfe24f2eddd4415e1dc718e45c6563ad7788dda6265874e12bb0a6",
       "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
     },
     {
