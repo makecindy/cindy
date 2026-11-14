@@ -2048,7 +2048,7 @@ export class DeviceLinkClient {
     dst: string,
     payload: InvokePayload,
     timeoutMs?: number,
-    options?: { preSend?: () => void; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' },
+    options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' },
   ): Promise<InvokeResultPayload> {
     if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) {
       throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
@@ -2078,7 +2078,7 @@ export class DeviceLinkClient {
         const reuse = this.messageReuse.prepare(dst, payload);
         const delta = isScopedPeer(dst) ? null : this.historyViewDelta.prepare(dst, reuse.payload, fullHistory);
         const tagged = requestSessionTagCatalog(delta?.payload ?? reuse.payload);
-        const transfer = isScopedPeer(dst) ? null : this.invokeResultCache.prepare(dst, tagged);
+        const transfer = isScopedPeer(dst) ? null : this.invokeResultCache.prepare(dst, tagged, options?.noResultCache);
         const env = await this.request(
           { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: transfer?.payload ?? tagged },
           'invoke-result',

@@ -9,7 +9,7 @@ export interface McpAppViewState {
   filesUnavailable?: boolean;
   error?: ReturnType<typeof mcpAppFailureKey> | 'mcpApps.mobileUpdateRequired';
 }
-type Invoke = (device: string, channel: string, args: unknown[]) => Promise<unknown>;
+type Invoke = (device: string, channel: string, args: unknown[], options?: { noResultCache?: boolean }) => Promise<unknown>;
 
 export const MCP_APP_DEFAULT_HEIGHT = 320;
 const MCP_APP_HEIGHT_CACHE_LIMIT = 100;
@@ -58,7 +58,9 @@ export class McpAppView {
     this.heightCacheKey = heightKey(ownerGeneration, deviceId, sessionId, clientId);
     this.state = { loading: true, height: getMcpAppHeight(ownerGeneration, deviceId, sessionId, clientId) ?? MCP_APP_DEFAULT_HEIGHT };
     this.controller = new McpAppController(
-      (id, input) => invoke(deviceId, MCP_APPS_INVOKE, [id, input]), sessionId, clientId,
+      (id, input) => input.op === 'open' || input.op === 'poll'
+        ? invoke(deviceId, MCP_APPS_INVOKE, [id, input], { noResultCache: true })
+        : invoke(deviceId, MCP_APPS_INVOKE, [id, input]), sessionId, clientId,
       (message) => {
         if (this.disposed) return;
         if (!this.closing && hasExecutionComputerFile(message)) {

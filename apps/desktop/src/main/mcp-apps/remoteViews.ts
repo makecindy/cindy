@@ -26,7 +26,7 @@ const documentSchema = z.object({
 interface RemoteViewDeps {
   owner(): object | null | undefined;
   closeEpoch(deviceId: string): number;
-  invoke(deviceId: string, sessionId: string, input: Record<string, unknown>, preSend: () => void): Promise<unknown>;
+  invoke(deviceId: string, sessionId: string, input: Record<string, unknown>, preSend: () => void, options?: { noResultCache?: boolean }): Promise<unknown>;
   openLink(url: string): Promise<void>;
 }
 interface Opening {
@@ -54,6 +54,8 @@ export class RemoteMcpAppViews {
       assertCurrent();
     };
     preSend();
+    if (input.op === 'open' || input.op === 'poll')
+      return this.deps.invoke(entry.deviceId, entry.sessionId, input, preSend, { noResultCache: true });
     return this.deps.invoke(entry.deviceId, entry.sessionId, input, preSend);
   }
   private assertView(view: RemoteView): void {

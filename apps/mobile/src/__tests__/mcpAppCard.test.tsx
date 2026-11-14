@@ -575,3 +575,17 @@ it.each(['MCP_APP_FILES_LOCAL_ONLY', '[PRECONDITION_FAILED] MCP_APP_FILES_LOCAL_
   expect(container.textContent).toContain('Report');
   expect(container.querySelector('button, [data-testid="mcp-webview"]')).toBeNull();
 });
+
+it('bypasses result caching only for mobile App open and poll', async () => {
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
+  for (const op of ['open', 'poll']) {
+    const call = state.invoke.mock.calls.find(([, , [, input]]) => input.op === op)!;
+    expect(call).toBeDefined();
+    expect(call[3]).toEqual({ noResultCache: true });
+    expect(call[2][1]).not.toHaveProperty('noResultCache');
+  }
+  await act(async () => render(null));
+  const teardown = state.invoke.mock.calls.find(([, , [, input]]) => input.op === 'teardown')!;
+  expect(teardown).toBeDefined();
+  expect(teardown[3]).toBeUndefined();
+});

@@ -2348,7 +2348,7 @@ export async function remoteInvoke(
   deviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; diagnosticSource?: 'renderer' | 'main'; liveProviderMetadata?: true },
+  options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main'; liveProviderMetadata?: true },
 ): Promise<InvokeResultPayload> {
   if (options?.liveProviderMetadata) return remoteInvokeLive(deviceId, channel, args, options);
   const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
@@ -2362,7 +2362,7 @@ export async function remoteInvoke(
 
 async function remoteInvokeLive(
   deviceId: string, channel: string, args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; diagnosticSource?: 'renderer' | 'main' },
+  options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' },
 ): Promise<InvokeResultPayload> {
   options?.preSend?.();
   assertNotStandby();

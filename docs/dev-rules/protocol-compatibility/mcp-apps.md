@@ -120,3 +120,11 @@ allowlist、签名或 relay 解析。官方和自建中转均透明转发既有�
 服务端不参与模块解析。执行端与查看端可独立升级，完整模块使用需要双方支持。
 Mobile 只增加现有原生 startApp manifest 的两个 JS 文件和共享 importmap，原生 API 不变；
 发版判断仍以同环境 fingerprint 对比为准。PAGE-GENERATION 的 CDN 随对应客户端发版更新。
+
+## 共享结果缓存
+
+反复读取的大内容不要和每次都变的随机值放在一起；确实需要随机值时，这类结果不进共享结果缓存。
+远程 MCP App 的 open（随机 openId）和 poll（推进的 after）在 Desktop/Mobile 控制端显式传入
+本地 noResultCache 选项：不发送 ifNoneMatch、不记入 InvokeResultCache，但保留 gzip。
+默认调用以及会话列表、历史页的缓存、notModified 和增量逻辑不变。选项不进入 wire，
+不改变 channel、allowlist 或 relay，自建中转继续透明转发既有帧。

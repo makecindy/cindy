@@ -142,8 +142,11 @@ describe('Main-bound remote MCP App Views', () => {
     const f = fixture();
     const local = await f.open();
     expect(local).toEqual({ viewId: 'local-1', transport: 'sandbox', prefersBorder: true });
+    expect(f.invoke).toHaveBeenLastCalledWith('device-a', 'task', expect.objectContaining({ op: 'open' }), expect.any(Function), { noResultCache: true });
     expect(state.mounts.get(local.viewId)?.document).toEqual(document);
     const frame = state.mounts.get(local.viewId)!.frame;
+    await frame({ op: 'poll' });
+    expect(f.invoke).toHaveBeenLastCalledWith('device-a', 'task', expect.objectContaining({ op: 'poll' }), expect.any(Function), { noResultCache: true });
     const message = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'app-only' } };
     await frame({ op: 'message', viewId: 'forged', deviceId: 'forged', sessionId: 'forged', message });
     expect(f.invoke).toHaveBeenLastCalledWith('device-a', 'task',

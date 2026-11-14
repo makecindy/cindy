@@ -404,7 +404,7 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     dst: string,
     payload: InvokePayload,
     timeoutMs?: number,
-    options?: { preSend?: () => void; background?: boolean },
+    options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
   ): Promise<InvokeResultPayload> {
     return this.routed(dst)?.invoke(dst, payload, timeoutMs, options) ?? super.invoke(dst, payload, timeoutMs, options);
   }
