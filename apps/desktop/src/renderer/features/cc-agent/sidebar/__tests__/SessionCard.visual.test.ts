@@ -177,6 +177,8 @@ vi.mock('@/lib/sessionAttentionStore', () => ({
   useSessionAttentionKind: (sessionId: string) => mocks.attentionKindBySession.get(sessionId),
   getSessionAttentionKinds: () => mocks.attentionKindBySession,
   subscribeSessionAttention: () => () => undefined,
+  hasSessionAttention: (sessionId: string) => mocks.attentionKindBySession.has(sessionId),
+  clearSessionAttention: vi.fn(),
 }));
 
 vi.mock('@/lib/toast', () => ({

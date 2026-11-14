@@ -241,9 +241,10 @@ function parseTimeOfDayResetAt(
   opts?: UsageLimitRecoveryParseOptions,
 ): number | null {
   // Claude: "resets 1:20am (Pacific/Auckland)".
+  // Claude: "resets Nov 12 at 5pm (Asia/Shanghai)".
   // Codex: "try again at 3:05 PM." / "try again at Oct 8, 2026 3:05 PM." (local time).
   const match = text.match(
-    /\b(?:resets?(?:\s+at)?|try\s+again\s+at)\s+(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2}),\s*(\d{4})\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([^)]+)\))?/i,
+    /\b(?:resets?(?:\s+at)?|try\s+again\s+at)\s+(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:\s*,\s*(\d{4}))?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([^)]+)\))?/i,
   );
   if (!match) return null;
   let hour = Number(match[4]);
@@ -260,10 +261,26 @@ function parseTimeOfDayResetAt(
   if (match[1]) {
     const month = MONTH_INDEX[match[1].toLowerCase()];
     const day = Number(match[2]);
-    const year = Number(match[3]);
     if (!month || day < 1 || day > 31) return null;
-    const candidate = zonedDateTimeToMs({ year, month, day, hour, minute }, timeZone);
-    return candidate !== null && candidate > nowMs ? candidate : null;
+    if (match[3]) {
+      const candidate = zonedDateTimeToMs(
+        { year: Number(match[3]), month, day, hour, minute },
+        timeZone,
+      );
+      return candidate !== null && candidate > nowMs ? candidate : null;
+    }
+    // 省略年份时先按目标时区的“当前年”理解（跨年边界上 UTC 年可能已经翻篇，
+    // 例如 UTC 已进入 1 月 1 日而 America/Los_Angeles 仍是 12 月 31 日）。
+    const localYear = partsInTimeZone(nowMs, timeZone)?.year ?? new Date(nowMs).getUTCFullYear();
+    const sameYear = zonedDateTimeToMs({ year: localYear, month, day, hour, minute }, timeZone);
+    if (sameYear !== null && sameYear > nowMs) return sameYear;
+    // 只有当“下一年那次重置”比刚才那个已经过去的时刻更近时（例如 12 月底收到
+    // "resets Jan 2"），才把它当作真正的跨年重置；否则这条提示只是刚刚过期，
+    // 不能把它推成一整年后的周期（会让恢复被推迟约一年）。
+    const nextYear = zonedDateTimeToMs({ year: localYear + 1, month, day, hour, minute }, timeZone);
+    if (nextYear === null || nextYear <= nowMs) return null;
+    if (sameYear !== null && nowMs - sameYear < nextYear - nowMs) return null;
+    return nextYear;
   }
 
   const current = partsInTimeZone(nowMs, timeZone);

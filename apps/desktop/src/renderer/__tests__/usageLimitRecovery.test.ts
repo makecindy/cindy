@@ -173,6 +173,59 @@ describe('usage limit recovery detection', () => {
     ).toEqual({ resetAtMs: Date.parse('2026-01-25T00:00:00.000Z') });
   });
 
+  it('parses Claude weekly limit resets with date and timezone without year', () => {
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          sdkError: 'rate_limit',
+          message: "You've hit your weekly limit · resets Nov 12 at 5pm (Asia/Shanghai)",
+        },
+        Date.parse('2026-11-10T12:00:00.000Z'),
+      ),
+    ).toEqual({ resetAtMs: Date.parse('2026-11-12T09:00:00.000Z') });
+  });
+
+  it('uses target timezone year across year boundary when year is omitted', () => {
+    // When now is 2027-01-01T00:30:00Z, Los Angeles is still 2026-12-31 16:30.
+    // Reset at Dec 31 5pm should resolve to 2026-12-31 17:00 (i.e. 2027-01-01T01:00:00Z).
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          sdkError: 'rate_limit',
+          message: 'resets Dec 31 at 5pm (America/Los_Angeles)',
+        },
+        Date.parse('2027-01-01T00:30:00.000Z'),
+      ),
+    ).toEqual({ resetAtMs: Date.parse('2027-01-01T01:00:00.000Z') });
+  });
+
+  it('does not push an already elapsed year-less reset a full year forward', () => {
+    // 2026-11-12 17:00:10 Asia/Shanghai: the banner's reset minute just passed.
+    // It must not be read as the annual cycle of 2027-11-12.
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          sdkError: 'rate_limit',
+          message: "You've hit your weekly limit · resets Nov 12 at 5pm (Asia/Shanghai)",
+        },
+        Date.parse('2026-11-12T09:00:10.000Z'),
+      ),
+    ).toEqual({ resetAtMs: null });
+  });
+
+  it('rolls a year-less reset into next year only when that occurrence is closer', () => {
+    // 2026-12-30 08:00 Asia/Shanghai: "resets Jan 2" belongs to 2027-01-02.
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          sdkError: 'rate_limit',
+          message: "You've hit your weekly limit · resets Jan 2 at 5pm (Asia/Shanghai)",
+        },
+        Date.parse('2026-12-30T00:00:00.000Z'),
+      ),
+    ).toEqual({ resetAtMs: Date.parse('2027-01-02T09:00:00.000Z') });
+  });
+
   it('keeps weekly limits actionable without guessing an unsupported weekday reset time', () => {
     expect(
       extractUsageLimitRecoveryHint(
