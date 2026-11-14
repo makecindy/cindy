@@ -1,3 +1,5 @@
+import sharp from 'sharp';
+import { createInlineImagePreprocessor } from '../inlineImagePreprocessor.js';
 import { mkdtemp, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
@@ -11,13 +13,13 @@ const state = vi.hoisted(() => ({
   existing: undefined as any, resolved: 'test-session' as string | null, invalidOwner: false,
   getSnapshot: vi.fn(), info: vi.fn(), ingest: vi.fn(), query: vi.fn(), addRef: vi.fn(), removeRef: vi.fn(),
 }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, mkdtemp: vi.fn(actual.mkdtemp), writeFile: vi.fn(actual.writeFile), rm: vi.fn(actual.rm) };
+});
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: state.info }) }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => state.getSnapshot() }));
-vi.mock('node:fs/promises', async importOriginal => {
-  const fs = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...fs, mkdtemp: vi.fn(fs.mkdtemp), rm: vi.fn(fs.rm) };
-});
 vi.mock('../../cindy-media/refCompensationJournal.desktop.js', () => ({
   captureMediaRefCompensationScope: () => ({ assertStillValid: () => { if (state.invalidOwner) throw new Error('owner changed'); } }),
   withMediaRefCompensation: async ({ perform, compensate, refIds }: any) => {
@@ -481,3 +483,36 @@ it('uses a learned byte trigger for later text-only requests without DB or disk 
     await proxy.dispose(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
   }
 });
+// Unit, PR 2: existing ownership tests replace prepare with a fake encoder.
+// Real Desktop controller + real adapter + sharp must compress a valid PNG at
+// default request thresholds without allocating staging files or media refs.
+it.each(['no-db', 'no-session', 'session-missing', 'remote-session'] as const)(
+  'uses the real image adapter without disk writes for %s', async reason => {
+    if (reason === 'no-db') state.snapshot = null;
+    if (reason === 'no-session') state.resolved = null;
+    if (reason === 'session-missing') state.session = null;
+    if (reason === 'remote-session') state.session.remoteHostId = 'remote';
+    const png = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#235681' } })
+      .png({ compressionLevel: 0 }).toBuffer();
+    const controller = createRequestSizeController(() => state.resolved, createInlineImagePreprocessor(() => true), () => 'openai');
+    const context = { reqId: 81, method: 'POST', url: '/v1/responses', headers: {} };
+    const body = { model: 'gpt-6-astra', input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${png.toString('base64')}` }] }] };
+    const raw = Buffer.from(JSON.stringify(body));
+    vi.mocked(mkdtemp).mockClear();
+    vi.mocked(writeFile).mockClear();
+    const result = await controller.control(raw, 'responses', { context, route: controller.route!(context, body), signal: new AbortController().signal });
+    expect(result?.removedImages).toBe(0);
+    const image = JSON.parse(result!.body.toString()).input[0].content[0].image_url as string;
+    expect(image.startsWith('data:image/webp;base64,')).toBe(true);
+    const compressed = Buffer.from(image.slice(image.indexOf(',') + 1), 'base64');
+    expect(compressed.length).toBeLessThanOrEqual(png.length * 0.85);
+    expect(await sharp(compressed).metadata()).toMatchObject({ format: 'webp', width: 64, height: 48 });
+    expect(await sharp(compressed).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
+    expect(mkdtemp).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(state.ingest).not.toHaveBeenCalled();
+    expect(state.addRef).not.toHaveBeenCalled();
+    expect(await readdir(state.root)).toEqual([]);
+    expect(state.info).toHaveBeenCalledWith('request size control skipped', expect.objectContaining({ reason, imageCount: 1 }));
+  },
+);
