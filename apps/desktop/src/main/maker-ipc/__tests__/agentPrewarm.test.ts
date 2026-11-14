@@ -132,9 +132,16 @@ describe('Agent prewarm lifecycle', () => {
       { workingDir: null },
       { remoteHostId: 'ssh-1' },
       { agentDeviceId: 'other-computer' },
-      { orcaRole: 'worker' },
     ])('skips %o', (patch) => {
       expect(isAgentPrewarmEligible(row(patch))).toBe(false);
+    });
+
+    // 测试价值：用户驱动与否分工。Orca lead 是用户直接打字的会话，应与普通任务一样预热；
+    // worker 由 orcaWorkerResumeScheduler 负责，必须继续排除。最小失败输入 = orcaRole 'lead'
+    // 期望 true / 'worker' 期望 false；改回 !orcaRole 时第一条断言会红。tier: unit。
+    it('prewarms an Orca lead session but not a worker', () => {
+      expect(isAgentPrewarmEligible(row({ orcaRole: 'lead' }))).toBe(true);
+      expect(isAgentPrewarmEligible(row({ orcaRole: 'worker' }))).toBe(false);
     });
 
     it('skips a missing task', () => {

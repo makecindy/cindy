@@ -19062,8 +19062,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // 输入框开始输入（打字、粘贴、开始语音输入）时预热 Agent（本机与 device-link 控制端共用）。只覆盖用户自己的普通
-  // 任务、且 Agent 在本机运行；Bot / IM / 定时 / 审查 / 共享 / 协同 / 远程主机等任务的
-  // 启动另有专门的路由与权限检查，仍由真实发送处理。启动走发送路径的同一个懒创建，
+  // 任务、且 Agent 在本机运行；Bot / IM / 定时 / 审查 / 共享 / 协同 worker / 远程主机等任务的
+  // 启动另有专门的路由与权限检查，仍由真实发送处理。协同 lead 由用户直接操作，与普通任务同性质，
+  // 因此一并预热；协同 worker 由 orcaWorkerResumeScheduler 负责，不在此列。启动走发送路径的同一个懒创建，
   // 并在同一把会话发送锁里执行，真实发送不会与预热并发重复启动。
   const agentPrewarmer = createAgentPrewarmer({
     start: (sessionId, createOpts) => withSendToSessionLock(sessionId, async () => {
