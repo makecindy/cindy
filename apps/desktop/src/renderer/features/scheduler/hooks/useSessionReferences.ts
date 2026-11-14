@@ -10,6 +10,9 @@ import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import * as sessionService from '@/lib/sessionService';
 import type { SessionReference } from '../../../../shared/sessionReference';
 
+/** `local-db:sessions:resolve-references` 单次最多 200 条;超出的分批,避免整批被 IPC 拒绝。 */
+const RESOLVE_BATCH = 200;
+
 export function useSessionReferences(
   sessionIds: readonly string[],
 ): ReadonlyMap<string, SessionReference> {
@@ -36,7 +39,13 @@ export function useSessionReferences(
       return;
     }
     try {
-      const resolved = await sessionService.resolveReferences(requestedIds);
+      const resolved: SessionReference[] = [];
+      for (let i = 0; i < requestedIds.length; i += RESOLVE_BATCH) {
+        const batch = await sessionService.resolveReferences(
+          requestedIds.slice(i, i + RESOLVE_BATCH),
+        );
+        resolved.push(...batch);
+      }
       if (requestRevisionRef.current !== revision) return;
       setReferences(new Map(resolved.map((reference) => [reference.sessionId, reference])));
     } catch {
