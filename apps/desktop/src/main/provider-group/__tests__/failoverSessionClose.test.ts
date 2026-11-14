@@ -199,7 +199,11 @@ function setup(options: { bComesBack?: boolean } = {}) {
         hasQueuedAutoResume: coordinator.hasQueuedAutoResume(session.id),
         isContinuationOnly: coordinator.isContinuationOnlyAutoResume(session.id),
       });
-      const context = { closeReason: session.closeReason, preserveAutoResumeIntent };
+      const context = {
+        closeReason: session.closeReason,
+        preserveAutoResumeIntent: preserveAutoResumeIntent ||
+          (session.closeReason === 'agent-switch' && coordinator.hasProviderGroupSwitchHold(session.id)),
+      };
       closeContexts.push(context);
       return context;
     },
@@ -524,6 +528,7 @@ describe('provider group failover vs. the terminal-error drain close (#5880)', (
     expect(h.router.coolingUntil('anthropic', MAC_B.key, MODEL)).not.toBeNull();
     expect(h.markTried).toHaveBeenCalledWith(SID, MAC_B.key);
     expectSwitchedToLocalAndContinued(h);
+    expect(h.closeContexts.at(-1)).toEqual({ closeReason: 'agent-switch', preserveAutoResumeIntent: true });
   });
 
   it('a new message sent while the checks are pending stops before cooling or marking B tried', async () => {

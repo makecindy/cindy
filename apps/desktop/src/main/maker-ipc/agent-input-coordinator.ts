@@ -7304,6 +7304,12 @@ export class AgentInputCoordinator {
     return state && isProviderGroupSwitchHoldLive(state) ? state.providerGroupSwitchHold!.id : null;
   }
 
+  /** Whether an automatic provider-group relocation currently owns the recovery hold. */
+  hasProviderGroupSwitchHold(sessionId: string): boolean {
+    const state = this.states.get(sessionId);
+    return Boolean(state && isProviderGroupSwitchHoldLive(state));
+  }
+
   /** A synchronous group candidate was declined by its async configuration/eligibility check. */
   resumeAfterProviderGroupDeclined(
     sessionId: string,

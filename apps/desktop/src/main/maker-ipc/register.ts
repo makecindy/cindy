@@ -6173,8 +6173,15 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
       shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason) ||
       (closeReason === 'unexpected' && session.wasClosedByRuntime() &&
         agentInputCoordinatorHolder?.hasUsageLimitRecovery(session.id) === true);
+    const preserveProviderGroupRecovery =
+      closeReason === 'agent-switch' &&
+      agentInputCoordinatorHolder?.hasProviderGroupSwitchHold(session.id) === true;
     pendingContinuationOnlyAutoResumeRebuilds.delete(session);
-    return { closeReason, closedDirectAbortBoundary, preserveAutoResumeIntent };
+    return {
+      closeReason,
+      closedDirectAbortBoundary,
+      preserveAutoResumeIntent: preserveAutoResumeIntent || preserveProviderGroupRecovery,
+    };
   },
   cleanupClosedSession: (session: WiredSession, context) => {
     if ((context.closeReason === 'requested' || context.closeReason === 'unexpected')
