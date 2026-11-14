@@ -47,7 +47,6 @@ import { RemoteDesktopController, type DesktopControllerDeps } from './controlle
 import { getInputHandoffService } from '../input-handoff/service';
 import { ClipboardCounter } from './clipboardCounter';
 import { onQuit } from '../lifecycle';
-import { createLogger } from '../logger';
 import {
   createViewerDisplay,
   viewerDisplaySupported,
