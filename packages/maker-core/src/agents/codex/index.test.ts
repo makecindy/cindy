@@ -32,6 +32,7 @@ import {
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
+import { ACCOUNT_PROVIDER_ID, CODEX_AUTH_ADAPTER_ENTRY_INPUTS, CODEX_AUTH_ADAPTER_INPUTS_BY_PATH } from './__tests__/authAdapterEntryInputs.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent as CoreAgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
@@ -8623,6 +8624,55 @@ describe('CodexAgent MCP thread context hooks', () => {
       await expect(agent.startSession({ sessionId: 'requires-auth', model: 'gpt-5.4', workingDir: cwd })).rejects.toBeInstanceOf(AgentNotAuthenticatedError);
       expect(createdTransports).toHaveLength(1);
     } finally { await agent.dispose(); }
+  });
+
+  // The inputs the Host and desktop adapter comparison treats as reachable
+  // (hostCodexAuthAdapterParity.test.ts). Every path must complete, and each
+  // records its own inputs on its own agent, so one path cannot hide behind another.
+  it('the auth adapter sees only these inputs on the session, model refresh, rate limit and discovery paths', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-entry-inputs-'));
+    tempRoots.push(home);
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.AccountRateLimitsRead, { result: { rateLimits: null, rateLimitsByLimitId: null } });
+    };
+    // A fresh agent per path: none of them reuses a host another path started.
+    const inputsOf = async (run: (agent: CodexAgent) => Promise<unknown>) => {
+      const seen = new Set<string>();
+      const note = (options?: Parameters<AuthAdapter['getState']>[0]) => {
+        seen.add(`${options?.providerId ?? '-'} | ${options?.credentialMode ?? '-'}`);
+      };
+      const deps = createDeps();
+      deps.auth = { ...deps.auth,
+        getState: async (options) => { note(options); return { authenticated: true }; },
+        getAuthEnv: async (options) => { note(options); return { CODEX_HOME: home }; } };
+      deps.isCodexAccountProvider = (providerId) => providerId === ACCOUNT_PROVIDER_ID;
+      const agent = new CodexAgent(deps);
+      try { await run(agent); } finally { await agent.dispose(); }
+      return [...seen].sort();
+    };
+    const session = (providerId?: string) => async (agent: CodexAgent) => {
+      const handle = await agent.startSession({ sessionId: `entry-${providerId ?? 'none'}`, model: 'gpt-5.4',
+        workingDir: home, ...(providerId ? { providerId } : {}) });
+      await handle.close();
+    };
+    const observed: Record<string, string[]> = {
+      'session (none)': await inputsOf(session()),
+      'session xd': await inputsOf(session('xd')),
+      'session cindy': await inputsOf(session('cindy')),
+      'session openai': await inputsOf(session('openai')),
+      'session xai': await inputsOf(session('xai')),
+      'session cprov-custom': await inputsOf(session('cprov-custom')),
+      'session account': await inputsOf(session(ACCOUNT_PROVIDER_ID)),
+      // As the hosts call it: after a login, for an account after its login, and for API models.
+      'refresh after login': await inputsOf(agent => agent.refreshLocalModels({ credentialMode: 'oauth-bearer' })),
+      'refresh for an account': await inputsOf(agent => agent.refreshLocalModels({ credentialMode: 'oauth-bearer', providerId: ACCOUNT_PROVIDER_ID })),
+      'refresh for API models': await inputsOf(agent => agent.refreshLocalModels({ credentialMode: 'provider-oauth' })),
+      'rate limits': await inputsOf(agent => agent.readAccountRateLimits()),
+      'rate limits for an account': await inputsOf(agent => agent.readAccountRateLimits(ACCOUNT_PROVIDER_ID)),
+      'skill discovery': await inputsOf(agent => agent.listAgentSkills({ workingDir: home })),
+    };
+    expect(observed).toEqual(CODEX_AUTH_ADAPTER_INPUTS_BY_PATH);
+    expect([...new Set(Object.values(observed).flat())].sort()).toEqual([...CODEX_AUTH_ADAPTER_ENTRY_INPUTS].sort());
   });
 
   it('closes credential-free skill discovery after a native RPC failure', async () => {

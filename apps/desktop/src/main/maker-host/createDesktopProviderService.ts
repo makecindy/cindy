@@ -36,8 +36,10 @@ import { readPool, readProviderBoundAccountIds } from '../subscription-accounts/
 import {
   accountProviderId,
   readCreatedSubscriptionProviders,
+  readCreatedSubscriptionProvidersIfReadable,
   readMergedProviderAccount,
   restoreAutoMergedLegacyCodexAccounts,
+  restoreUnplacedSubscriptionAccounts,
   resolveSubscriptionPoolProvider,
 } from '../subscription-accounts/placement.js';
 import {
@@ -103,7 +105,7 @@ import {
   refreshXaiModelsFromHttp,
 } from './model-discovery/xai.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
-import { readModelDisableOverrides, setProviderDisabled } from './model-disable-store.js';
+import { copyProviderDisableOverrides, readModelDisableOverrides, setProviderDisabled } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
@@ -720,9 +722,14 @@ export async function refreshCustomProvidersIntoCatalog(
           isCurrent,
         },
       );
+      await restoreUnplacedSubscriptionAccounts({
+        prepare: copyProviderDisableOverrides,
+        disable: providerId => setProviderDisabled(providerId, true),
+        isCurrent,
+      });
     } catch {
       // The merged view stays as it was; the next refresh retries.
-      log.warn('restoring merged legacy Codex connections did not complete');
+      log.warn('restoring pooled subscription accounts did not complete');
     }
     if (!isCurrent()) return;
     publishSubscriptionPoolProviders();
@@ -875,7 +882,7 @@ function getDesktopSelectableBaseCatalog(): Catalog {
  * stay in the catalog so old tasks keep resolving; the provider view marks them as merged.
  */
 export function publishSubscriptionPoolProviders(): void {
-  publishSubscriptionPoolProvidersWith({ readCreatedSubscriptionProviders, setSubscriptionPoolProviders, log });
+  publishSubscriptionPoolProvidersWith({ readCreatedSubscriptionProvidersIfReadable, setSubscriptionPoolProviders, log });
 }
 
 /**
@@ -889,7 +896,7 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
     created = Object.entries(readCreatedSubscriptionProviders())
       .filter(([, entry]) => entry.kind === kind).map(([id]) => id);
   } catch {
-    // An unreadable placement file leaves created providers as they were; the next read retries.
+    // Unreadable files return an empty list; thrown reads also skip created providers this round.
   }
   await refreshSubscriptionPool(kind);
   const legacy = kind === 'openai' ? Object.keys(readPool(kind)?.legacyCodexAccounts ?? {}) : [];

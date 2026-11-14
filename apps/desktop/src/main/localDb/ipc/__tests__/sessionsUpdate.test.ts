@@ -1,5 +1,6 @@
 import { configureUserDataDir } from '../../../userDataPath.js';
 import { configureOwnerContext } from '../../../ownerContext.js';
+import { _setStoreForTests } from '../../../worktree/worktreeStore.js';
 import { registerMakerSessionCreateHandler } from '../../../maker-ipc/sessionCreateHandler';
 import { MAKER_INVOKE } from '../../../maker-ipc/channels';
 import { withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
@@ -373,6 +374,13 @@ async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
 }
 
 beforeEach(() => {
+  // Exercise the real worktree lookup without constructing electron-store in this Node fixture.
+  // Each case owns its registry; the separate safe-directory cleanup store is never used here.
+  const memory = new Map<string, unknown>([['worktrees', {}]]);
+  _setStoreForTests({
+    get: (key: string, fallback: unknown) => memory.get(key) ?? fallback,
+    set: (key: string, value: unknown) => { memory.set(key, value); },
+  } as unknown as NonNullable<Parameters<typeof _setStoreForTests>[0]>);
   clearAllSessionAttention();
   setSessionOpeningModelAdmission(async body => body);
   vi.clearAllMocks();
@@ -417,6 +425,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  _setStoreForTests(null);
   setSessionRuntimeCleanup(null);
   setSessionWorktreeBindingLookup(null);
   setSessionWorktreeRecycle(null);

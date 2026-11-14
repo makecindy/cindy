@@ -1467,6 +1467,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "To review",
+      "summaryInProgress": "In progress",
+      "summaryPending": "Needs your action",
+      "summaryUnread": "Unread results",
       "markRead": "Mark as read",
       "archive": "Archive",
       "actionFailed": "Could not complete the action. The notification has been kept. Try again.",
@@ -13489,6 +13493,15 @@
           "askNoQuestion": "The Agent is waiting for your answer, but there's no question to show. Reply “continue”.",
           "askQuestion": "The Agent needs your answer:\n{{question}}\n{{options}}\nReply with an option number, or type your answer."
         }
+      },
+      "questions": {
+        "cardHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections. You can also reply to this message with text. For multiple questions, reply with “question number: answer” (e.g. “2: English”), then submit.",
+        "submitLabel": "Submit answers",
+        "multiSelectHint": " (select all that apply)",
+        "resolved": "✅ Selected: {{option}}",
+        "expired": "This card has expired",
+        "textHint": "Only the original requester can answer. Reply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all.",
+        "replyHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections.\nReply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all."
       }
     }
   },
@@ -16041,6 +16054,8 @@
       "claudeSubscriptionWorkspaceOverride": "This folder's .claude settings change where Claude sends requests or how it signs in, so the Claude subscription can't be used here. Remove those settings, or pick a gateway or API key model",
       "deviceStillLoading": "The remote device is still loading. Wait a moment.",
       "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
+      "branchRequiresWorktree": "The selected branch is not the current branch. Enable worktree or select the current branch.",
+      "branchCheckFailed": "Could not verify the current branch. Enable worktree to use the selected branch, or check the project and try again.",
       "worktreeMissingRepo": "Can't create a worktree: the current directory's repo root is missing",
       "worktreeRepoHint": "Try picking the working directory again, and retry once the folder badge at the bottom right refreshes",
       "sessionInactive": "Session is no longer active",
@@ -16616,6 +16631,8 @@
             "title": "Repository events",
             "description": "Connect the Cindy GitHub App to update followed PRs when reviews or CI change.",
             "connected": "Connected as {{login}} · Repositories watched: {{count}}",
+            "syncing": "Syncing repositories…",
+            "finishInBrowser": "Finish repository setup in GitHub, then return to Cindy.",
             "missing": "Check App installation and access for: {{repositories}}",
             "error": "Could not check the connection. Try again.",
             "repositories": "Choose repositories",
@@ -21409,8 +21426,7 @@
     "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
-      "detected": "Signed-in account found",
-      "useAccount": "Use this account",
+      "useAccount": "Use the {{cli}} account on this computer",
       "anotherAccount": "Sign in to another account",
       "keepExisting": "The new account becomes its own provider unless you choose one to join. Existing sign-ins stay unchanged.",
       "checkFailed": "Couldn’t check the local account. Try again.",
@@ -21420,7 +21436,6 @@
     "title": "Subscription accounts",
     "strategy": "Load balancing",
     "add": "Add account",
-    "default": "Default folder",
     "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",

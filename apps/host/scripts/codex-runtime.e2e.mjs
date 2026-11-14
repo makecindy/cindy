@@ -1,6 +1,10 @@
 // Real native Codex process + production Host assembly + real HTTP proxy.
 // The upstream is a local fixture, not a model or an OAuth provider.
 import assert from 'node:assert/strict';
+import console from 'node:console';
+import process from 'node:process';
+import { setTimeout, clearTimeout } from 'node:timers';
+import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,7 +12,7 @@ import { createServer } from 'node:http';
 
 const binary = process.env.CINDY_TEST_CODEX_BINARY;
 if (!binary || !path.isAbsolute(binary)) throw new Error('Set CINDY_TEST_CODEX_BINARY to the native Codex binary');
-const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-host-codex-e2e-')));
+const root = realpathSync.native(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-host-codex-e2e-')));
 process.env.HOME = path.join(root, 'home'); // Isolated process, never the user's CLI home.
 process.env.USERPROFILE = process.env.HOME;
 await fs.mkdir(process.env.HOME);
@@ -137,6 +141,9 @@ let database, config, modelAccess, mcp, runtime, graph, queue, chatServer, memor
 let releaseBlockedResponse;
 let stripProxyToken = false;
 const handles = [];
+const threadRegistrations = [];
+const historyOperations = [];
+const { NATIVE_SUBSCRIPTION_ACCOUNT } = await import('@cindy/maker-core');
 try {
   await fs.mkdir(profile, { recursive: true });
   configureHostOwner({ userDataDir: profile, ownerId });
@@ -182,6 +189,15 @@ try {
     const { [CODEX_PROXY_TOKEN_ENV]: _withheld, ...extraEnv } = value.extraEnv ?? {};
     return { ...value, extraArgs, extraEnv };
   };
+  for (const name of ['resolveCodexThreadStorage', 'prepareCodexResumeSession']) {
+    const original = runtime.deps[name];
+    runtime.deps[name] = (...args) => { historyOperations.push([name, ...args]); return original(...args); };
+  }
+  const recordLocation = runtime.deps.recordCodexThreadLocation;
+  runtime.deps.recordCodexThreadLocation = async (...args) => {
+    await recordLocation(...args);
+    threadRegistrations.push(args);
+  };
   graph = createHostAgentGraph({ userDataDir: profile, providerConfig: config, gateway: modelAccess.gateway,
     codexBinaryPath: binary, codexRuntime: runtime, mcpRuntime: mcp, makerMemory: memory,
     mcpProviders: createHostMemoryMcpProviders(memory),
@@ -225,6 +241,130 @@ try {
     clearSessionProvider(sessionId);
     graph.gatewayRestart.onSessionSettled();
   }
+  // Native storage capability fixture, as minted by the executing host after
+  // owner checks. It selects two synthetic account homes, never a real login.
+  // Model traffic still goes to this script's local upstream through the real graph.
+  const accountHomeA = path.join(root, 'native-account-a');
+  const accountHomeB = path.join(root, 'native-account-b');
+  const account = (id, configDir) => ({
+    id, configDir, assertCurrent() { assert.ok(runtime.isCurrent()); },
+    async readState() { return { authenticated: true, authSource: 'api-key', identity: id }; },
+    async readCodexTokens() { return { accessToken: 'synthetic-native-token', chatgptAccountId: id }; },
+  });
+  const runStorageTurn = async handle => {
+    const completed = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'error') throw Error(`Storage turn failed: ${JSON.stringify(event.data)}`);
+        if (event.type === 'done') return;
+      }
+      throw Error('Storage turn ended without done');
+    })();
+    void completed.catch(() => {});
+    let timer;
+    try {
+      await Promise.race([(async () => { await handle.send({ type: 'user', content: 'return synthetic complete' }, { throwOnStartFailure: true }); await completed; })(),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Storage turn timed out')), 45_000); })]);
+    } finally { clearTimeout(timer); }
+  };
+  // The local mock provider requires this synthetic API env key; this step
+  // verifies directory capabilities, not subscription login/allocation (M2).
+  process.env.XDT_CODEX_API_KEY = 'synthetic-custom-key';
+  const firstStorageHandle = await graph.codex.startSession({ sessionId: 'storage-account-a', providerId: 'cprov-fixture',
+    model: 'fixture-model', workingDir: root, [NATIVE_SUBSCRIPTION_ACCOUNT]: account('storage-a', accountHomeA) });
+  handles.push(firstStorageHandle);
+  await runStorageTurn(firstStorageHandle);
+  const originalThread = firstStorageHandle.id;
+  const originalStorage = await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true });
+  assert.equal(originalStorage.historyHome, accountHomeA);
+  assert.equal(originalStorage.sqliteHome, accountHomeA);
+  await firstStorageHandle.close();
+  const resumedStorageHandle = await graph.codex.startSession({ sessionId: 'storage-account-b', providerId: 'cprov-fixture',
+    model: 'fixture-model', workingDir: root, resumeSessionId: originalThread,
+    [NATIVE_SUBSCRIPTION_ACCOUNT]: account('storage-b', accountHomeB) });
+  handles.push(resumedStorageHandle);
+  await runStorageTurn(resumedStorageHandle);
+  assert.equal(resumedStorageHandle.id, originalThread);
+  assert.deepEqual(await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true }), originalStorage);
+  assert.ok(threadRegistrations.some(([id, sqlite, file]) => id === originalThread && sqlite === accountHomeA && file === originalStorage.rolloutPath));
+  await resumedStorageHandle.close();
+  const assertCurrent = () => assert.ok(runtime.isCurrent());
+  await graph.codex.syncThreadArchiveState({ threadId: originalThread, archived: true, assertCurrent });
+  const archived = await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true });
+  assert.equal(archived.historyHome, accountHomeA);assert.equal(archived.sqliteHome, accountHomeA);
+  assert.ok(archived.rolloutPath.includes(path.sep + 'archived_sessions' + path.sep));
+  await graph.codex.syncThreadArchiveState({ threadId: originalThread, archived: false, assertCurrent });
+  const restored = await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true });
+  assert.equal(restored.historyHome, accountHomeA);assert.equal(restored.sqliteHome, accountHomeA);
+  assert.ok(restored.rolloutPath.includes(path.sep + 'sessions' + path.sep));
+  // A real route handoff also retains the canonical storage, not just the
+  // transfer predicate: the resumed process now uses the gateway route.
+  await graph.codex.requiresCodexThreadHostTransfer({ threadId: originalThread, sessionId: 'storage-route',
+    providerId: 'xd', model: 'fixture-model' });
+  const routedStorageHandle = await graph.codex.startSession({ sessionId: 'storage-route', providerId: 'xd',
+    model: 'fixture-model', workingDir: root, resumeSessionId: originalThread });
+  handles.push(routedStorageHandle);
+  await runStorageTurn(routedStorageHandle);
+  assert.equal(routedStorageHandle.id, originalThread);
+  assert.deepEqual(await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true }), restored);
+  assert.ok(threadRegistrations.some(([id, sqlite, file]) => id === originalThread && sqlite === accountHomeA && file === restored.rolloutPath));
+  await routedStorageHandle.close();
+  const nativeTurns = [...new Set((await fs.readFile(restored.rolloutPath, 'utf8')).trim().split('\n')
+    .map(line => JSON.parse(line)).filter(row => row.type === 'turn_context').map(row => row.payload.turn_id).filter(Boolean))];
+  assert.ok(nativeTurns.length >= 2, 'both native turns have persisted fork anchors');
+  for (const tailTurnsToDrop of [0, 1]) {
+    const fork = await graph.codex.forkSdkSession({ sourceSdkSessionId: originalThread, providerId: 'cprov-fixture',
+      model: 'fixture-model', workingDir: root, upToMessageId: undefined, tailTurnsToDrop, lastTurnId: nativeTurns.at(-1 - tailTurnsToDrop),
+      [NATIVE_SUBSCRIPTION_ACCOUNT]: account('storage-b', accountHomeB) });
+    const forkStorage = await runtime.deps.resolveCodexThreadStorage(fork.newSdkSessionId, { readOnly: true });
+    assert.equal(forkStorage.historyHome, accountHomeA);assert.equal(forkStorage.sqliteHome, accountHomeA);
+    assert.ok(threadRegistrations.some(([id, sqlite, file]) => id === fork.newSdkSessionId && sqlite === accountHomeA && file === forkStorage.rolloutPath));
+  }
+  // Route handoff still resolves the old storage before selecting a new host.
+  await graph.codex.requiresCodexThreadHostTransfer({ threadId: originalThread, sessionId: 'storage-route',
+    providerId: 'xd', model: 'fixture-model' });
+  assert.deepEqual(await runtime.deps.resolveCodexThreadStorage(originalThread, { readOnly: true }), restored);
+  const localHistoryCalls = historyOperations.length;
+  assert.equal(await graph.codex.requiresCodexThreadHostTransfer({ threadId: originalThread, sessionId: 'remote-storage',
+    remoteHostId: 'unconfigured-fixture', providerId: 'xd', model: 'fixture-model' }), false);
+  await assert.rejects(graph.codex.syncThreadArchiveState({ threadId: originalThread, archived: true,
+    remoteHostId: 'unconfigured-fixture', assertCurrent }), /host did not provide getRemoteCodexTransport/);
+  await fs.mkdir(path.join(root, 'isolated-guest', 'codex'), { recursive: true });
+  await assert.rejects(graph.codex.forkSdkSession({ sourceSdkSessionId: originalThread, providerId: 'cprov-fixture',
+    model: 'fixture-model', workingDir: root, upToMessageId: undefined, lastTurnId: nativeTurns.at(-1),
+    hostedGuestHome: path.join(root, 'isolated-guest') }), /not found|no rollout|does not exist/i);
+  assert.equal(historyOperations.length, localHistoryCalls, 'remote/guest paths never consult the local history resolver or preparer');
+  delete process.env.XDT_CODEX_API_KEY;
+  console.log('PASS native cross-account resume, archive/unarchive, fork/tail rollback and route storage');
+
+  // An independent Codex account (a user-added native Codex source with its own login): the task
+  // the Host starts on it runs in the account's own home, never in the profile's codex-home
+  // (desktop getAuthEnv order; m1-cp19). The login is synthetic; no model request is made.
+  {
+    const { legacyCodexAccountHome } = await import('../../desktop/src/main/maker-host/codex-account-path.ts');
+    const { createHash } = await import('node:crypto');
+    const accountId = 'cxacct-fixture';
+    await createCustomProvider({ id: accountId, name: 'OpenAI · fixture', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', wireProtocol: 'openai-responses', models: [] } } });
+    await config.list();
+    const accountHome = legacyCodexAccountHome(profile, ownerId, accountId);
+    await fs.mkdir(accountHome, { recursive: true });
+    const claims = Buffer.from(JSON.stringify({ sub: 'fixture-subject', email: 'fixture@example.invalid' })).toString('base64url');
+    const jwt = `header.${claims}.signature`;
+    await fs.writeFile(path.join(accountHome, 'auth.json'), JSON.stringify({ tokens: { access_token: jwt, id_token: jwt,
+      refresh_token: 'synthetic-refresh', account_id: 'fixture-workspace' } }), { mode: 0o600 });
+    await fs.writeFile(path.join(accountHome, 'account.json'), JSON.stringify({
+      principal: createHash('sha256').update('fixture-subject\0fixture-workspace').digest('hex'), label: 'fixture@example.invalid' }));
+    assert.equal(config.codexAccounts.codexAccountState(accountId).authenticated, true, 'the fixture account is logged in');
+    const accountHandle = await graph.codex.startSession({ sessionId: 'independent-account', providerId: accountId,
+      model: 'gpt-5.4', workingDir: root });
+    handles.push(accountHandle);
+    const accountStorage = await runtime.deps.resolveCodexThreadStorage(accountHandle.id, { readOnly: true });
+    assert.equal(accountStorage.historyHome, accountHome);
+    assert.equal(accountStorage.sqliteHome, accountHome);
+    await accountHandle.close();
+    console.log('PASS an independent Codex account task starts on the Host in the account\'s own home, not the profile codex-home');
+  }
+
   // Shared-send integration: earlier checks bypass the queue. Use the real
   // HTTP/queue/Maker pipeline, isolated SQLite and a synthetic local upstream.
   const sessionId = 'queued-native-fixture';

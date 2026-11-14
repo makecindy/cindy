@@ -148,6 +148,7 @@ import {
   SHARE_SESSION_ATTR,
 } from '@/lib/shareConversationImage';
 import { ShareMessageCheckbox } from './ShareMessageCheckbox';
+import { CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS } from './chatChrome';
 import {
   isShareableMessage,
   isShareableToolMedia,
@@ -6850,7 +6851,7 @@ export function MessageStream({
                     );
                     const highlightClass =
                       highlightMessageClientId === msg.clientId
-                        ? 'rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]'
+                        ? CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS
                         : undefined;
                     const shareAttributes = shareable
                       ? {
@@ -6870,7 +6871,7 @@ export function MessageStream({
                           key={item.key}
                           data-render-item-key={item.key}
                           data-message-client-id={msg.clientId}
-                          className={cn('scroll-mt-20 rounded-xl transition-[background-color,box-shadow]', highlightClass)}
+                          className={cn('scroll-mt-20 rounded-xl', CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, highlightClass)}
                         >
                           {startsUnread || groupTimestamp !== undefined ? (
                             <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
@@ -6894,7 +6895,7 @@ export function MessageStream({
                         data-message-client-id={msg.clientId}
                         {...shareAttributes}
                         className={cn(
-                          'scroll-mt-20 rounded-xl transition-[background-color,box-shadow]',
+                          'scroll-mt-20 rounded-xl', CHAT_MESSAGE_LOCATE_TRANSITION_CLASS,
                           shareable && 'relative',
                           highlightClass,
                         )}

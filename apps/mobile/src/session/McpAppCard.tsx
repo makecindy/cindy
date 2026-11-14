@@ -7,6 +7,8 @@ import { Text } from '@/components/AppText';
 import { useTheme, textStyles, fontWeight, radius, spacing } from '@/theme';
 import { useMcpAppViews, NativeMcpAppSlot, mcpAppSurfaceAvailable } from './McpAppViews';
 import type { McpAppView, McpAppViewState } from './mcpAppView';
+import { MCP_APP_DEFAULT_HEIGHT, getMcpAppHeight } from './mcpAppView';
+import { getMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
 interface McpAppCardProps {
   deviceId?: string; sessionId: string; clientId: string; title: string; active?: boolean; fallbackText?: string;
@@ -34,7 +36,10 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   const { t, i18n } = useTranslation();
   const [attempt, setAttempt] = useState(0);
   const [view, setView] = useState<McpAppView>();
-  const [state, setState] = useState<McpAppViewState>({ loading: true, height: 320 });
+  // Only the initial state needs the remembered height; avoid re-reading it on every render.
+  const [state, setState] = useState<McpAppViewState>(() => ({ loading: true,
+    height: (deviceId ? getMcpAppHeight(getMobileAuthOwner().generation, deviceId, sessionId, clientId) : undefined)
+      ?? MCP_APP_DEFAULT_HEIGHT }));
   const width = useRef(1);
   const context = useMemo(() => ({
     platform: 'mobile', theme: mode, locale: i18n.resolvedLanguage ?? i18n.language,

@@ -1454,6 +1454,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "확인 필요",
+      "summaryInProgress": "진행 중",
+      "summaryPending": "사용자 처리 대기",
+      "summaryUnread": "읽지 않은 결과",
       "markRead": "읽음으로 표시",
       "archive": "보관",
       "actionFailed": "작업을 완료하지 못했습니다. 알림은 유지됩니다. 다시 시도해 주세요.",
@@ -13435,6 +13439,15 @@
           "askNoQuestion": "Agent가 답변을 기다리고 있지만 표시할 질문이 없습니다. “계속”이라고 답해 주세요.",
           "askQuestion": "Agent가 답변을 기다리고 있습니다:\n{{question}}\n{{options}}\n선택지 번호로 답하거나 답변을 직접 입력해 주세요."
         }
+      },
+      "questions": {
+        "cardHint": "요청한 사람만 답할 수 있습니다. 선택지를 누르고 여러 질문이나 복수 선택은 선택 후 제출하세요. 이 메시지에 텍스트로 답할 수도 있습니다. 여러 질문에는 “질문 번호: 답변”(예: “2: 한국어”)으로 답하고 입력 후 제출하세요.",
+        "submitLabel": "답변 제출",
+        "multiSelectHint": " (복수 선택 가능)",
+        "resolved": "✅ 선택함: {{option}}",
+        "expired": "만료된 카드입니다",
+        "textHint": "질문한 사람만 답할 수 있습니다. {{code}} 뒤에 답을 쓰세요. 여러 질문은 {{code}} 2: 답변 형식으로 작성하고 {{code}} OK로 제출하세요.",
+        "replyHint": "요청한 사람만 답할 수 있습니다. 선택지를 누르고 여러 질문이나 복수 선택은 선택 후 제출하세요.\n{{code}} 뒤에 답을 쓰세요. 여러 질문은 {{code}} 2: 답변 형식으로 작성하고 {{code}} OK로 제출하세요."
       }
     }
   },
@@ -15967,6 +15980,8 @@
       "claudeSubscriptionWorkspaceOverride": "이 폴더의 .claude 설정이 Claude의 연결 대상이나 인증 방식을 변경하므로 여기서는 Claude 구독을 사용할 수 없습니다. 해당 설정을 제거하거나 게이트웨이 또는 API 키 모델을 선택하세요",
       "deviceStillLoading": "원격 기기가 아직 로딩 중입니다. 잠시 기다려 주세요",
       "remoteDefaultsLoadFailed": "원격 기기 설정을 불러오지 못했습니다. 연결을 확인하세요. Cindy가 다시 시도하고 있습니다.",
+      "branchRequiresWorktree": "선택한 브랜치가 현재 브랜치와 다릅니다. worktree를 활성화하거나 현재 브랜치를 선택하세요.",
+      "branchCheckFailed": "현재 브랜치를 확인할 수 없습니다. worktree를 활성화하여 선택한 브랜치를 사용하거나 프로젝트를 확인한 후 다시 시도하세요.",
       "worktreeMissingRepo": "worktree를 만들 수 없습니다: 현재 디렉터리의 리포지토리 루트가 없습니다",
       "worktreeRepoHint": "작업 디렉터리를 다시 선택한 뒤 오른쪽 아래 폴더 표시가 갱신되면 다시 시도하세요",
       "sessionInactive": "세션이 더 이상 활성 상태가 아닙니다",
@@ -16542,6 +16557,8 @@
             "title": "저장소 이벤트",
             "description": "Cindy GitHub App을 연결하면 리뷰나 CI가 변경될 때 추적 중인 PR이 업데이트됩니다.",
             "connected": "{{login}} 계정으로 연결됨 · 저장소 {{count}}개 추적 중",
+            "syncing": "저장소 동기화 중…",
+            "finishInBrowser": "GitHub에서 저장소 설정을 완료한 후 Cindy로 돌아오세요.",
             "missing": "다음 저장소의 App 설치 및 접근 권한을 확인하세요: {{repositories}}",
             "error": "연결을 확인하지 못했습니다. 다시 시도하세요.",
             "repositories": "저장소 선택",
@@ -21328,8 +21345,7 @@
     "providerManagedAuth": "현재 Codex 제공자에서는 ChatGPT 계정 정보를 확인할 수 없습니다. 제공자를 추가할 때 ‘$t(subscriptionAccounts.signIn.anotherAccount)’를 선택하면 별도 폴더를 사용할 수 있습니다.",
     "signIn": {
       "checking": "로컬 계정 확인 중…",
-      "detected": "로그인된 계정을 찾았습니다",
-      "useAccount": "이 계정 사용",
+      "useAccount": "이 컴퓨터의 {{cli}} 계정 사용",
       "anotherAccount": "다른 계정으로 로그인",
       "keepExisting": "합칠 제공자를 고르지 않으면 새 계정은 별도 제공자가 됩니다. 기존 로그인은 유지됩니다.",
       "checkFailed": "로컬 계정을 확인하지 못했습니다. 다시 시도해 주세요.",
@@ -21339,7 +21355,6 @@
     "title": "구독 계정",
     "strategy": "부하 분산",
     "add": "계정 추가",
-    "default": "기본 폴더",
     "defaultTag": "기본",
     "ready": "연결됨",
     "signedOut": "로그인 필요",

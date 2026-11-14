@@ -1467,6 +1467,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "Zu prüfen",
+      "summaryInProgress": "In Bearbeitung",
+      "summaryPending": "Aktion erforderlich",
+      "summaryUnread": "Ungelesene Ergebnisse",
       "markRead": "Als gelesen markieren",
       "archive": "Archivieren",
       "actionFailed": "Die Aktion konnte nicht abgeschlossen werden. Die Benachrichtigung wurde beibehalten. Versuch es erneut.",
@@ -13489,6 +13493,15 @@
           "askNoQuestion": "Der Agent wartet auf deine Antwort, aber es gibt keine Frage zum Anzeigen. Antworte mit „weiter“.",
           "askQuestion": "Der Agent braucht deine Antwort:\n{{question}}\n{{options}}\nAntworte mit der Nummer einer Option oder gib deine Antwort direkt ein."
         }
+      },
+      "questions": {
+        "cardHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden. Du kannst auch auf diese Nachricht mit Text antworten. Antworte bei mehreren Fragen mit „Fragennummer: Antwort“ (z. B. „2: Deutsch“) und sende anschließend ab.",
+        "submitLabel": "Antworten senden",
+        "multiSelectHint": " (Mehrfachauswahl möglich)",
+        "resolved": "✅ Gewählt: {{option}}",
+        "expired": "Diese Karte ist abgelaufen",
+        "textHint": "Nur die fragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
+        "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden."
       }
     }
   },
@@ -16041,6 +16054,8 @@
       "claudeSubscriptionWorkspaceOverride": "Die .claude-Einstellungen dieses Ordners ändern, wohin Claude Anfragen sendet oder wie die Anmeldung erfolgt. Daher kann das Claude-Abo hier nicht genutzt werden. Entferne diese Einstellungen oder wähle ein Gateway oder ein Modell mit API-Schlüssel",
       "deviceStillLoading": "Remotegerät wird noch geladen. Bitte warte",
       "remoteDefaultsLoadFailed": "Die Einstellungen des Remotegeräts konnten nicht geladen werden. Prüfe die Verbindung; Cindy versucht es erneut.",
+      "branchRequiresWorktree": "Der ausgewählte Branch ist nicht der aktuelle Branch. Aktiviere Worktree oder wähle den aktuellen Branch.",
+      "branchCheckFailed": "Der aktuelle Branch konnte nicht geprüft werden. Aktiviere Worktree, um den ausgewählten Branch zu verwenden, oder prüfe das Projekt und versuche es erneut.",
       "worktreeMissingRepo": "Worktree kann nicht erstellt werden: Das Repository-Stammverzeichnis des aktuellen Verzeichnisses fehlt",
       "worktreeRepoHint": "Wähle das Arbeitsverzeichnis erneut aus und versuche es noch einmal, sobald die Ordneranzeige unten rechts aktualisiert wurde",
       "sessionInactive": "Sitzung ist nicht mehr aktiv",
@@ -16616,6 +16631,8 @@
             "title": "Repository-Ereignisse",
             "description": "Verbinde die Cindy GitHub App, um verfolgte PRs bei Änderungen an Reviews oder CI zu aktualisieren.",
             "connected": "Verbunden als {{login}} · Beobachtete Repositorys: {{count}}",
+            "syncing": "Repositorys werden synchronisiert…",
+            "finishInBrowser": "Schließe die Einrichtung der Repositorys auf GitHub ab und kehre zu Cindy zurück.",
             "missing": "App-Installation und Zugriff prüfen: {{repositories}}",
             "error": "Verbindung konnte nicht geprüft werden. Versuche es erneut.",
             "repositories": "Repositorys auswählen",
@@ -21409,8 +21426,7 @@
     "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
-      "detected": "Angemeldetes Konto gefunden",
-      "useAccount": "Dieses Konto verwenden",
+      "useAccount": "{{cli}}-Konto auf diesem Computer verwenden",
       "anotherAccount": "Mit anderem Konto anmelden",
       "keepExisting": "Das neue Konto wird ein eigener Anbieter, sofern du keinen zum Hinzufügen auswählst. Bestehende Anmeldungen bleiben erhalten.",
       "checkFailed": "Das lokale Konto konnte nicht geprüft werden. Bitte erneut versuchen.",
@@ -21420,7 +21436,6 @@
     "title": "Abonnementkonten",
     "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
-    "default": "Standardordner",
     "defaultTag": "Standard",
     "ready": "Verbunden",
     "signedOut": "Anmeldung erforderlich",

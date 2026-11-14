@@ -1485,6 +1485,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "Por rever",
+      "summaryInProgress": "Em curso",
+      "summaryPending": "Requer a tua atenção",
+      "summaryUnread": "Resultados por ler",
       "markRead": "Marcar como lida",
       "archive": "Arquivar",
       "actionFailed": "Não foi possível concluir a ação. A notificação foi mantida. Tente novamente.",
@@ -13604,6 +13608,15 @@
           "askNoQuestion": "O Agent está à espera da sua resposta, mas não há nenhuma pergunta para mostrar. Responda “continuar”.",
           "askQuestion": "O Agent precisa da sua resposta:\n{{question}}\n{{options}}\nResponda com o número de uma opção ou escreva diretamente a sua resposta."
         }
+      },
+      "questions": {
+        "cardHint": "Só quem fez o pedido pode responder. Toque numa opção; para várias perguntas ou seleções, envie ao terminar. Também pode responder a esta mensagem com texto. Para várias perguntas, responda «número: resposta» (ex.: «2: Português») e depois envie.",
+        "submitLabel": "Enviar respostas",
+        "multiSelectHint": " (escolha múltipla)",
+        "resolved": "✅ Selecionado: {{option}}",
+        "expired": "Este cartão expirou",
+        "textHint": "Só quem fez a consulta pode responder. Envie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar.",
+        "replyHint": "Só quem fez o pedido pode responder. Toque numa opção; para várias perguntas ou seleções, envie ao terminar.\nEnvie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar."
       }
     }
   },
@@ -16196,6 +16209,8 @@
       "claudeSubscriptionWorkspaceOverride": "As definições .claude desta pasta alteram o destino dos pedidos do Claude ou a forma como inicia sessão, pelo que a subscrição Claude não pode ser usada aqui. Remova essas definições ou escolha um modelo de gateway ou de chave API",
       "deviceStillLoading": "O dispositivo remoto ainda está a carregar. Aguarde",
       "remoteDefaultsLoadFailed": "Não foi possível carregar as definições do dispositivo remoto. Verifique a ligação; a Cindy está a tentar novamente.",
+      "branchRequiresWorktree": "O ramo selecionado não é o ramo atual. Ativa worktree ou seleciona o ramo atual.",
+      "branchCheckFailed": "Não foi possível verificar o ramo atual. Ativa worktree para usar o ramo selecionado ou verifica o projeto e tenta novamente.",
       "worktreeMissingRepo": "Não é possível criar um worktree: falta a raiz do repositório do diretório atual",
       "worktreeRepoHint": "Experimente selecionar novamente o diretório de trabalho e volte a tentar quando o indicador de pasta no canto inferior direito for atualizado",
       "sessionInactive": "A sessão já não está ativa",
@@ -16778,6 +16793,8 @@
             "title": "Eventos dos repositórios",
             "description": "Liga a GitHub App da Cindy para atualizar os PR acompanhados quando as revisões ou a CI mudarem.",
             "connected": "Ligado como {{login}} · Repositórios acompanhados: {{count}}",
+            "syncing": "A sincronizar repositórios…",
+            "finishInBrowser": "Conclua a configuração dos repositórios no GitHub e regresse ao Cindy.",
             "missing": "Verifique a instalação da App e o acesso a: {{repositories}}",
             "error": "Não foi possível verificar a ligação. Tenta novamente.",
             "repositories": "Escolher repositórios",
@@ -21613,8 +21630,7 @@
     "providerManagedAuth": "O fornecedor atual do Codex não disponibiliza informações da conta ChatGPT. Ao adicionar o fornecedor, selecione «$t(subscriptionAccounts.signIn.anotherAccount)» para usar uma pasta separada.",
     "signIn": {
       "checking": "A verificar a conta local…",
-      "detected": "Conta com sessão iniciada encontrada",
-      "useAccount": "Usar esta conta",
+      "useAccount": "Usar a conta do {{cli}} neste computador",
       "anotherAccount": "Iniciar sessão noutra conta",
       "keepExisting": "A nova conta passa a ser um fornecedor separado, a menos que escolha um para a juntar. As sessões existentes serão mantidas.",
       "checkFailed": "Não foi possível verificar a conta local. Tente novamente.",
@@ -21624,7 +21640,6 @@
     "title": "Contas de subscrição",
     "strategy": "Distribuição de carga",
     "add": "Adicionar conta",
-    "default": "Pasta predefinida",
     "defaultTag": "Predefinida",
     "ready": "Ligada",
     "signedOut": "É necessário iniciar sessão",

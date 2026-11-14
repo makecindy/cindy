@@ -63,8 +63,7 @@ vi.mock('../placement.js', () => {
       && h.pools[ref.kind]?.accounts.some((a) => a.id === ref.ownAccount)
       ? ref.ownAccount : undefined;
   const place = (kind: string, accountId: string, providerId: string) => {
-    if (providerId === kind) delete h.placement[`${kind}:${accountId}`];
-    else h.placement[`${kind}:${accountId}`] = providerId;
+    h.placement[`${kind}:${accountId}`] = providerId;
   };
   return {
     accountProviderId: owner,
@@ -1801,10 +1800,41 @@ describe('native account assignment on the executing computer', () => {
         identity: 'account',
         status: 'ready',
       });
+      expect(preview.defaultAdded).toBe(false);
       expect(h.pools).toEqual({});
       expect(h.login).not.toHaveBeenCalled();
       expect((await readSubscriptionPool(providerId)).accounts[0].status).toBe('signed-out');
       expect(await acquireSubscriptionAccount(providerId, undefined, [])).toBeNull();
+    },
+  );
+  // PR #10473: a retained same-identity account in a disconnected built-in pool must not hide
+  // the shortcut. An account placed in its own provider stays connected when the built-in is off.
+  it.each(['anthropic', 'openai'] as const)(
+    'restores the %s shortcut after disconnecting the same-identity built-in account',
+    async (providerId) => {
+      h.bound = false;
+      h.pools[providerId] = { strategy: 'least', accounts: [account('default'), account('second')] };
+      h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.com' });
+      const preview = () => runSubscriptionAccountCommand({ action: 'preview', providerId });
+      expect((await preview()).defaultAdded).toBe(true);
+      await disconnectSubscriptionPool(providerId);
+      expect((await preview()).defaultAdded).toBe(false);
+      h.placement[`${providerId}:second`] = `${providerId}-sub-12345678`;
+      expect((await preview()).defaultAdded).toBe(true);
+    },
+  );
+  // Unit: old native connections already used the default login before a pool file existed.
+  // The wizard must hide that shortcut without creating a pool; an explicitly removed slot stays removed.
+  it.each(['anthropic', 'openai'] as const)(
+    'recognizes an implicit %s default login already connected before account pools',
+    async (providerId) => {
+      h.bound = true;
+      h.pools = {};
+      expect((await runSubscriptionAccountCommand({ action: 'preview', providerId })).defaultAdded).toBe(true);
+      expect(h.pools).toEqual({});
+      h.pools[providerId] = { strategy: 'least', accounts: [] };
+      expect((await runSubscriptionAccountCommand({ action: 'preview', providerId })).defaultAdded).toBe(false);
+      expect(h.login).not.toHaveBeenCalled();
     },
   );
   it.each(
@@ -1828,11 +1858,21 @@ describe('native account assignment on the executing computer', () => {
       });
       const ids = h.pools[providerId]!.accounts.map((a) => a.id);
       expect(ids).toEqual(['default', expect.stringMatching(/^cindy-/)]);
+      expect(h.placement[`${providerId}:${ids[1]}`]).toBe(providerId);
       expect(h.login).toHaveBeenCalledExactlyOnceWith(
         providerId,
         `${providerId}/${ids[1]}`,
         expect.any(AbortSignal),
       );
+      // Wizard shortcut (2026-11-14): the CLI login counts as added once the built-in provider uses
+      // it, or once the same identity is already signed in as another account.
+      const preview = () => runSubscriptionAccountCommand({ action: 'preview', providerId });
+      expect((await preview()).defaultAdded).toBe(bound);
+      h.read.mockImplementation(async (_provider, directory) => ({
+        authenticated: true,
+        identity: directory.endsWith('default') ? 'New@Example.com' : 'new@example.com',
+      }));
+      expect((await preview()).defaultAdded).toBe(true);
     },
   );
   it.each(['anthropic', 'openai'].flatMap(providerId =>
@@ -1849,6 +1889,10 @@ describe('native account assignment on the executing computer', () => {
       } as SubscriptionAccountCommand);
       expect(h.pools[providerId]!.accounts.map((a) => a.id)).toEqual(['default']);
       expect(h.login).not.toHaveBeenCalled();
+      // Turning the built-in provider off offers the CLI login in the wizard again.
+      h.bound = true;
+      h.pools[providerId]!.disconnected = true;
+      expect((await runSubscriptionAccountCommand({ action: 'preview', providerId })).defaultAdded).toBe(false);
     },
   );
   it('keeps the private legacy Codex default when the wizard connects it', async () => {
@@ -2371,6 +2415,7 @@ describe('native account assignment on the executing computer', () => {
       }),
     ).rejects.toThrow('login_cancelled');
     expect(h.pools.openai?.legacyCodexDefault).toBe(true);
+    expect(h.placement).toEqual({});
     const after = await readSubscriptionPool('openai');
     expect(after.accounts.map((a) => a.status)).toEqual(['ready']);
     const original = await acquireSubscriptionAccount('openai', undefined, []);
@@ -2385,6 +2430,8 @@ describe('native account assignment on the executing computer', () => {
       loginKey: 'retry-second',
     });
     const addedId = h.pools.openai!.accounts[1].id;
+    // Explicit additions to the built-in provider must survive the old-pool restoration.
+    expect(h.placement[`openai:${addedId}`]).toBe('openai');
     await runSubscriptionAccountCommand({
       action: 'configure',
       providerId: 'openai',

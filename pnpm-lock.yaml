@@ -19,45 +19,19 @@ overrides:
   builder-util-runtime: ^9.7.0
 
 patchedDependencies:
-  '@expo/cli@58.1.19':
-    hash: bf44a5f353700b074164286e0005bf9d5f218a067b6639b5c6a6fb8a1e056298
-    path: dependency-patches/@expo__cli@58.1.19.patch
-  '@terrazzo/parser@2.7.1':
-    hash: c79c6d6f1161668e6081ada2140d622114beeede90e0d53883a0661c0e10138e
-    path: dependency-patches/@terrazzo__parser@2.7.1.patch
-  expo-image@58.0.18:
-    hash: 46725ea274130be1df9de144759f1febf5a92bbf85cd36919059c16de2f7469c
-    path: dependency-patches/expo-image@58.0.18.patch
-  expo-modules-core@58.0.30:
-    hash: 1a53965ceba6ed84ab514b4de51ccbaab45a9492be23de1f14843dd11826c353
-    path: dependency-patches/expo-modules-core@58.0.30.patch
-  expo-paste-input@0.2.2:
-    hash: 7125922aa9772f1ac949d034fe120e8837c3708fe6912e1aec5db0d3c5ed91ae
-    path: dependency-patches/expo-paste-input@0.2.2.patch
-  expo-router@58.0.30:
-    hash: 611a9b0644099d0a9725be517184f1b9e7d96ad5058c8445d90cc106012afebe
-    path: dependency-patches/expo-router@58.0.30.patch
-  harmonyos-sans-sc-webfont-splitted:
-    hash: 272e3ded46880ee2f9eaff39327b8465de6df4072271de03caf73950e6e57822
-    path: dependency-patches/harmonyos-sans-sc-webfont-splitted.patch
-  react-native-gesture-handler@3.3.0:
-    hash: 39510e7ffb1eb4c4bac3104f55f7df20a870df790af35c9773f309e3308dca63
-    path: dependency-patches/react-native-gesture-handler@3.3.0.patch
-  react-native-screens@4.30.1:
-    hash: 476334336418f46357c772c57f5fc6b535f76092a64beb479b1c833e64ae40f2
-    path: dependency-patches/react-native-screens@4.30.1.patch
-  react-native-uitextview@2.2.0:
-    hash: 0fd5ae94e21c0ec89ce719a90730f2660957ba45260d4ceaba10dd49c22d1909
-    path: dependency-patches/react-native-uitextview@2.2.0.patch
-  react-native-webview@14.0.1:
-    hash: a5418ce60809f2cb171596780f5fd8f3399172512bec33f6cf6238fdfff3142f
-    path: dependency-patches/react-native-webview@14.0.1.patch
-  react-native@0.85.3:
-    hash: 9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d
-    path: dependency-patches/react-native@0.85.3.patch
-  rollup@4.62.2:
-    hash: 7ef53ca5a7e44d41cdbc0e10ea0475c928bddf13ad769cf15628579d0c4bfc98
-    path: dependency-patches/rollup@4.62.2.patch
+  '@expo/cli@58.1.19': bf44a5f353700b074164286e0005bf9d5f218a067b6639b5c6a6fb8a1e056298
+  '@terrazzo/parser@2.7.1': c79c6d6f1161668e6081ada2140d622114beeede90e0d53883a0661c0e10138e
+  expo-image@58.0.18: 46725ea274130be1df9de144759f1febf5a92bbf85cd36919059c16de2f7469c
+  expo-modules-core@58.0.30: 1a53965ceba6ed84ab514b4de51ccbaab45a9492be23de1f14843dd11826c353
+  expo-paste-input@0.2.2: 7125922aa9772f1ac949d034fe120e8837c3708fe6912e1aec5db0d3c5ed91ae
+  expo-router@58.0.30: 611a9b0644099d0a9725be517184f1b9e7d96ad5058c8445d90cc106012afebe
+  harmonyos-sans-sc-webfont-splitted: 272e3ded46880ee2f9eaff39327b8465de6df4072271de03caf73950e6e57822
+  react-native-gesture-handler@3.3.0: 39510e7ffb1eb4c4bac3104f55f7df20a870df790af35c9773f309e3308dca63
+  react-native-screens@4.30.1: 476334336418f46357c772c57f5fc6b535f76092a64beb479b1c833e64ae40f2
+  react-native-uitextview@2.2.0: 0fd5ae94e21c0ec89ce719a90730f2660957ba45260d4ceaba10dd49c22d1909
+  react-native-webview@14.0.1: a5418ce60809f2cb171596780f5fd8f3399172512bec33f6cf6238fdfff3142f
+  react-native@0.85.3: 9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d
+  rollup@4.62.2: 7ef53ca5a7e44d41cdbc0e10ea0475c928bddf13ad769cf15628579d0c4bfc98
 
 importers:
 
@@ -70,6 +44,9 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      js-yaml:
+        specifier: ^4.3.0
+        version: 4.3.0
       react:
         specifier: 19.2.3
         version: 19.2.3

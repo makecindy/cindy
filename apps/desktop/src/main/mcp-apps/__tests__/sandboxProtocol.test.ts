@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app, protocol, session, type WebContents } from 'electron';
 import { EventEmitter } from 'node:events';
+import { parse, type DefaultTreeAdapterTypes } from 'parse5';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { withHostAppSdk } from '@cindy/maker-shared/mcp-app-sdk';
+import { HOST_APP_SDK_PATH } from '../../../shared/mcpApps.js';
 import { hostAppSdkAsset } from '../hostSdk.js';
 import type { McpAppsHost } from '../host.js';
 import { setMcpAppsHost } from '../runtime.js';
@@ -423,4 +426,204 @@ it('prepares each supplied document once for repeated resource requests', async 
   supplyMcpAppDocument({ ...document, html: '<script type="module">import "@modelcontextprotocol/ext-apps"</script>', sdk: hostAppSdkAsset });
   for (let i = 0; i < 2; i++) expect((await handler(new Request('cindy-mcp-app://untrusted-id-view/resource'))).status).toBe(200);
   expect(prepare).toHaveBeenCalledTimes(1);
+});
+
+it('reuses parsed preparation while applying each view URL and current theme at the parsed head end', async () => {
+  const sdk = await import('@cindy/maker-shared/mcp-app-sdk');
+  const prepare = vi.spyOn(sdk, 'withHostAppSdk');
+  let handler!: (request: Request) => Promise<Response> | Response;
+  vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+  registerMcpAppProtocol();
+  const authoredLiteral = '__CINDY_VIEW_ID__';
+  const authoredScript = "const end = '</head>';";
+  const html = `<!doctype html><head><meta name="color-scheme" content="light dark"><script>${authoredScript}</script></head><body><p>${authoredLiteral}</p>`;
+  for (const [viewId, theme] of [['first-view', 'dark'], ['second-view', 'light']]) {
+    supplyMcpAppDocument({ ...document, viewId, html, sdk: hostAppSdkAsset },
+      undefined, undefined, undefined, { theme });
+    // The second supply must use the cache, including its preparation marker.
+    expect(prepare).toHaveBeenCalledOnce();
+    const result = await (await handler(new Request(`cindy-mcp-app://${viewId}-view/resource`))).text();
+    const parsed = parse(result);
+    expect(parsed.mode).toBe('no-quirks');
+    const root = documentElement(parsed);
+    const head = root.childNodes.find(node => node.nodeName === 'head') as DefaultTreeAdapterTypes.Element;
+    const themes = themeNodes(parsed);
+    expect(themes).toHaveLength(1);
+    expect(head.childNodes.at(-1)).toBe(themes[0]);
+    const text = (node: DefaultTreeAdapterTypes.Element) => node.childNodes.map(child => 'value' in child ? child.value : '').join('');
+    const scripts = head.childNodes.filter((node): node is DefaultTreeAdapterTypes.Element => 'tagName' in node && node.tagName === 'script');
+    expect(scripts.map(text)).toContain(authoredScript);
+    const map = scripts.find(node => node.attrs.some(attr => attr.name === 'type' && attr.value === 'importmap'))!;
+    expect(JSON.parse(text(map)).imports['@modelcontextprotocol/ext-apps'])
+      .toBe(`cindy-mcp-app://${viewId}-view/__cindy/sdk/ext-apps/app.js`);
+    const style = { colorScheme: '', setProperty() {} };
+    new Function('document', 'getComputedStyle', 'addEventListener', 'parent', text(themes[0]))(
+      { documentElement: { style } }, () => ({ colorScheme: 'light dark' }), () => {}, {},
+    );
+    expect(style.colorScheme).toBe(theme);
+    const body = root.childNodes.find(node => node.nodeName === 'body') as DefaultTreeAdapterTypes.Element;
+    expect(text(body.childNodes[0] as DefaultTreeAdapterTypes.Element)).toBe(authoredLiteral);
+  }
+  expect(prepare).toHaveBeenCalledOnce();
+});
+it('preheats Cindy theme variables for dual-scheme pages and leaves single-scheme pages alone', async () => {
+  let handler!: (request: Request) => Promise<Response> | Response;
+  vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+  registerMcpAppProtocol();
+  const context = {
+    theme: 'dark',
+    styles: { variables: {
+      '--color-background-primary': '#111', '--color-text-primary': '#eee',
+      '--font-sans': 'Author Font',
+    } },
+  };
+  const dual = mountRemoteAppDocument({ ...document,
+    html: '<!doctype html><html><head><meta name="color-scheme" content="light dark"><style>:root{--color-background-primary:#author}</style></head><body>App</body></html>',
+  }, 'renderer:1', undefined, undefined, context);
+  const dualResponse = await handler(new Request(`cindy-mcp-app://${dual}-view/resource`));
+  const dualHtml = await dualResponse.text();
+  expect(dualHtml).toContain('data-cindy-theme');
+  expect(dualHtml).toContain('"theme":"dark"');
+  expect(dualHtml).toContain('"--color-background-primary":"#111"');
+  expect(dualHtml).not.toContain('--font-sans');
+  expect(dualHtml.indexOf('data-cindy-theme')).toBeLessThan(dualHtml.indexOf('</head>'));
+  expect(dualResponse.headers.get('Content-Security-Policy')).toContain("script-src 'self' 'unsafe-inline'");
+
+  const singleSource = '<!doctype html><html><head><style>:root{color-scheme:light}</style></head><body>App</body></html>';
+  const single = mountRemoteAppDocument({ ...document, viewId: 'single', html: singleSource }, 'renderer:1', undefined, undefined, context);
+  const singleHtml = await (await handler(new Request(`cindy-mcp-app://${single}-view/resource`))).text();
+  expect(singleHtml.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, '').replace(/<script type="importmap">[\s\S]*?<\/script>/, '')).toBe(singleSource);
+
+  const style = { colorScheme: '', values: new Map<string, string>(),
+    setProperty(name: string, value: string) { this.values.set(name, value); } };
+  const authored = new Map([['--color-background-primary', '#author']]);
+  const listeners: ((event: { data: unknown; source?: unknown }) => void)[] = [];
+  const fakeDocument = { documentElement: { style }, querySelectorAll: () => [{
+    getAttribute: () => 'light dark',
+  }] };
+  const themeSource = dualHtml.match(/<script data-cindy-theme>([\s\S]*?)<\/script>/)?.[1];
+  expect(themeSource).toBeDefined();
+  const parent = {};
+  new Function('document', 'getComputedStyle', 'addEventListener', 'parent', themeSource!)(
+    fakeDocument, () => ({
+      colorScheme: style.colorScheme || 'light dark',
+      getPropertyValue: (name: string) => style.values.get(name) ?? authored.get(name) ?? '',
+    }), (_name: string, listener: (event: { data: unknown; source?: unknown }) => void) => listeners.push(listener), parent,
+  );
+  expect(style.colorScheme).toBe('dark');
+  expect(style.values.has('--color-background-primary')).toBe(false);
+  expect(authored.get('--color-background-primary')).toBe('#author');
+  listeners[0]({ source: parent, data: {
+    jsonrpc: '2.0', method: 'ui/notifications/host-context-changed',
+    params: { theme: 'light', styles: { variables: {
+      '--color-background-primary': '#updated-author', '--color-text-primary': '#111', '--font-sans': 'Updated Font',
+    } } },
+  } });
+  expect(style.colorScheme).toBe('light');
+  expect(style.values.get('--color-text-primary')).toBe('#111');
+  expect(style.values.has('--color-background-primary')).toBe(false);
+  expect(style.values.has('--font-sans')).toBe(false);
+  listeners[0]({ source: {}, data: {
+    jsonrpc: '2.0', method: 'ui/notifications/host-context-changed',
+    params: { theme: 'dark', styles: { variables: { '--color-text-primary': '#evil' } } },
+  } });
+  expect(style.values.get('--color-text-primary')).toBe('#111');
+});
+
+// Unit regression for #10481: serving a headless document with a theme must not
+// turn standards-mode content into quirks mode. Existing theme cases have a head.
+it.each(['', ' \n\t', '<!-- before document -->', '\uFEFF \n<!-- <!doctype html> is only a comment -->\n'])(
+  'preserves the doctype and parsing mode of headless documents with prefix %j', async (prefix) => {
+    let handler!: (request: Request) => Promise<Response> | Response;
+    vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+    registerMcpAppProtocol();
+    supplyMcpAppDocument({ ...document, html: prefix + '<!doctype html><body>App' },
+      undefined, undefined, undefined, { theme: 'dark' });
+    const response = await handler(new Request('cindy-mcp-app://untrusted-id-view/resource'));
+    const html = await response.text();
+    const parsed = parse(html, { sourceCodeLocationInfo: true });
+    expect(parsed.mode).toBe('no-quirks');
+    // Leading comments are valid before a doctype; no element may precede it.
+    const first = parsed.childNodes.find((node) => node.nodeName !== '#comment');
+    expect(first?.nodeName).toBe('#documentType');
+    const doctypeEnd = first!.sourceCodeLocation!.endOffset;
+    expect(themeNodes(parsed)).toHaveLength(1);
+    expect(themeNodes(parsed)[0].sourceCodeLocation!.startOffset).toBeGreaterThanOrEqual(doctypeEnd);
+  },
+);
+
+// Regression for the synchronous Main-process prefix scan: repeated comments
+// must finish even when no doctype follows. Test the post-preparation entry
+// through document supply so the prepared marker and replacement run together.
+it.each([false, true])('handles 5000 leading comments with doctype=%s', async (hasDoctype) => {
+  const prefix = '<!--x-->'.repeat(5000);
+  const html = prefix + (hasDoctype ? '<!doctype html>' : '') + '<body>App';
+  const parsed = parse(await suppliedThemeHtml(html));
+  expect(parsed.mode).toBe(hasDoctype ? 'no-quirks' : 'quirks');
+  expect(themeNodes(parsed)).toHaveLength(1);
+  const body = documentElement(parsed).childNodes.find(node => node.nodeName === 'body') as DefaultTreeAdapterTypes.Element;
+  expect(body.childNodes).toEqual([expect.objectContaining({ nodeName: '#text', value: 'App' })]);
+});
+
+it.each([
+  ['unclosed comment', '<!-- no end <!doctype html>'],
+  ['unclosed meta tags', '<meta '.repeat(5000)],
+  ['unclosed head tags', '<head '.repeat(5000)],
+])('keeps the leading insertion fallback for %s', async (_name, html) => {
+  const parsed = parse(await suppliedThemeHtml(html));
+  expect(parsed.mode).toBe('quirks');
+  expect(themeNodes(parsed)).toHaveLength(1);
+});
+
+// The first theme implementation searched raw HTML, corrupting inline bundles
+// containing head-like text. Verify the served DOM, not a source-text pattern.
+it.each([
+  ['script', "window.ok=1;const tpl='<html><head></head><body>';window.tplLen=tpl.length;"],
+  ['style', ':root{--example:"</head><head>";color-scheme:light dark}'],
+  ['comment', ' </head><head> '],
+])('keeps head-like text inside an authored %s intact', async (kind, content) => {
+  let handler!: (request: Request) => Promise<Response> | Response;
+  vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+  registerMcpAppProtocol();
+  const authored = kind === 'comment' ? `<!--${content}-->` : `<${kind} id="author">${content}</${kind}>`;
+  const html = `<!doctype html><html><head><meta name="color-scheme" content="light dark">${authored}</head><body><div id="x">App</div></body></html>`;
+  supplyMcpAppDocument({ ...document, html }, undefined, undefined, undefined, { theme: 'dark' });
+  const result = parse(await (await handler(new Request('cindy-mcp-app://untrusted-id-view/resource'))).text());
+  expect(result.mode).toBe('no-quirks');
+  const root = result.childNodes.find(node => node.nodeName === 'html') as DefaultTreeAdapterTypes.Element;
+  const head = root.childNodes.find(node => node.nodeName === 'head') as DefaultTreeAdapterTypes.Element;
+  const author = head.childNodes.find(node => kind === 'comment'
+    ? node.nodeName === '#comment'
+    : 'attrs' in node && node.attrs.some(attr => attr.name === 'id' && attr.value === 'author'))!;
+  expect('data' in author ? author.data : 'childNodes' in author
+    ? author.childNodes.map(node => 'value' in node ? node.value : '').join('') : undefined).toBe(content);
+  const themes = head.childNodes.filter(node => 'attrs' in node && node.tagName === 'script'
+    && node.attrs.some(attr => attr.name === 'data-cindy-theme'));
+  expect(themes).toHaveLength(1);
+  const body = root.childNodes.find(node => node.nodeName === 'body') as DefaultTreeAdapterTypes.Element;
+  expect(body.childNodes.map(node => node.nodeName)).toEqual(['div']);
+});
+
+function documentElement(parsed: DefaultTreeAdapterTypes.Document): DefaultTreeAdapterTypes.Element {
+  return parsed.childNodes.find(node => node.nodeName === 'html') as DefaultTreeAdapterTypes.Element;
+}
+function themeNodes(parsed: DefaultTreeAdapterTypes.Document): DefaultTreeAdapterTypes.Element[] {
+  const head = documentElement(parsed).childNodes.find(node => node.nodeName === 'head') as DefaultTreeAdapterTypes.Element;
+  return head.childNodes.filter((node): node is DefaultTreeAdapterTypes.Element => 'attrs' in node
+    && node.tagName === 'script' && node.attrs.some(attr => attr.name === 'data-cindy-theme'));
+}
+async function suppliedThemeHtml(html: string, context: { theme?: string } = { theme: 'dark' }): Promise<string> {
+  let handler!: (request: Request) => Promise<Response> | Response;
+  vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+  registerMcpAppProtocol();
+  supplyMcpAppDocument({ ...document, html }, undefined, undefined, undefined, context);
+  return (await handler(new Request('cindy-mcp-app://untrusted-id-view/resource'))).text();
+}
+it.each([{}, { theme: 'dark' }])('removes the prepared marker without changing single-theme output for context %j', async (context) => {
+  const html = '<!doctype html><head><style>:root{color-scheme:light}</style></head><body>App';
+  const supplied = await suppliedThemeHtml(html, context);
+  expect(supplied).toBe(withHostAppSdk(html, 'cindy-mcp-app://untrusted-id-view' + HOST_APP_SDK_PATH));
+  const parsed = parse(supplied);
+  expect(parsed.mode).toBe('no-quirks');
+  expect(themeNodes(parsed)).toHaveLength(0);
 });

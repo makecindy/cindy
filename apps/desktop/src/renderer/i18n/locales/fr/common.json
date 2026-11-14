@@ -1485,6 +1485,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "À consulter",
+      "summaryInProgress": "En cours",
+      "summaryPending": "Action requise",
+      "summaryUnread": "Résultats non lus",
       "markRead": "Marquer comme lu",
       "archive": "Archiver",
       "actionFailed": "Impossible d'effectuer l'action. La notification a été conservée. Réessayez.",
@@ -13604,6 +13608,15 @@
           "askNoQuestion": "L'Agent attend votre réponse, mais aucune question n'est à afficher. Répondez « continuer ».",
           "askQuestion": "L'Agent a besoin de votre réponse :\n{{question}}\n{{options}}\nRépondez avec le numéro d'une option, ou saisissez directement votre réponse."
         }
+      },
+      "questions": {
+        "cardHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ; pour plusieurs questions ou choix, envoyez après sélection. Vous pouvez aussi répondre à ce message par écrit. Pour plusieurs questions, répondez « numéro : réponse » (ex. « 2: Français »), puis envoyez.",
+        "submitLabel": "Envoyer les réponses",
+        "multiSelectHint": " (plusieurs choix possibles)",
+        "resolved": "✅ Choix : {{option}}",
+        "expired": "Cette carte a expiré",
+        "textHint": "Seule la personne ayant posé la question peut répondre. Écrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer.",
+        "replyHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ; pour plusieurs questions ou choix, envoyez après sélection.\nÉcrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer."
       }
     }
   },
@@ -16196,6 +16209,8 @@
       "claudeSubscriptionWorkspaceOverride": "Les paramètres .claude de ce dossier modifient la destination des requêtes de Claude ou sa méthode de connexion : l'abonnement Claude ne peut donc pas être utilisé ici. Supprimez ces paramètres, ou choisissez une passerelle ou un modèle avec clé API",
       "deviceStillLoading": "L'appareil distant est encore en cours de chargement, veuillez patienter",
       "remoteDefaultsLoadFailed": "Impossible de charger les paramètres de l'appareil distant. Vérifiez la connexion ; Cindy réessaie.",
+      "branchRequiresWorktree": "La branche sélectionnée n’est pas la branche actuelle. Activez Worktree ou sélectionnez la branche actuelle.",
+      "branchCheckFailed": "Impossible de vérifier la branche actuelle. Activez Worktree pour utiliser la branche sélectionnée, ou vérifiez le projet et réessayez.",
       "worktreeMissingRepo": "Impossible de créer un worktree : la racine du dépôt du répertoire actuel est introuvable",
       "worktreeRepoHint": "Essayez de sélectionner à nouveau le répertoire de travail, puis réessayez une fois le badge du dossier en bas à droite actualisé",
       "sessionInactive": "La session n'est plus active",
@@ -16778,6 +16793,8 @@
             "title": "Événements des dépôts",
             "description": "Connectez la GitHub App de Cindy pour actualiser les PR suivies lorsque les revues ou la CI changent.",
             "connected": "Connecté en tant que {{login}} · Dépôts suivis : {{count}}",
+            "syncing": "Synchronisation des dépôts…",
+            "finishInBrowser": "Terminez la configuration des dépôts sur GitHub, puis revenez à Cindy.",
             "missing": "Vérifiez l’installation de l’App et les droits d’accès à : {{repositories}}",
             "error": "Impossible de vérifier la connexion. Réessayez.",
             "repositories": "Choisir les dépôts",
@@ -21613,8 +21630,7 @@
     "providerManagedAuth": "Le fournisseur actuel de Codex ne permet pas de consulter le compte ChatGPT. Lors de l’ajout du fournisseur, choisissez « $t(subscriptionAccounts.signIn.anotherAccount) » pour utiliser un dossier séparé.",
     "signIn": {
       "checking": "Vérification du compte local…",
-      "detected": "Compte connecté détecté",
-      "useAccount": "Utiliser ce compte",
+      "useAccount": "Utiliser le compte {{cli}} de cet ordinateur",
       "anotherAccount": "Se connecter à un autre compte",
       "keepExisting": "Le nouveau compte devient un fournisseur distinct, sauf si vous en choisissez un à rejoindre. Les connexions existantes sont conservées.",
       "checkFailed": "Impossible de vérifier le compte local. Réessayez.",
@@ -21624,7 +21640,6 @@
     "title": "Comptes d’abonnement",
     "strategy": "Répartition de charge",
     "add": "Ajouter un compte",
-    "default": "Dossier par défaut",
     "defaultTag": "Par défaut",
     "ready": "Connecté",
     "signedOut": "Connexion requise",

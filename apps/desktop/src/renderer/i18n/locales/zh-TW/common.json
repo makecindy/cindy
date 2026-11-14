@@ -1454,6 +1454,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "待查看",
+      "summaryInProgress": "進行中",
+      "summaryPending": "等你處理",
+      "summaryUnread": "未讀結果",
       "markRead": "標為已讀",
       "archive": "歸檔",
       "actionFailed": "操作未完成，提醒已保留，請重試。",
@@ -13435,6 +13439,15 @@
           "askNoQuestion": "Agent 正在等你的回答，但沒有可顯示的問題。請回覆「繼續」。",
           "askQuestion": "Agent 需要你的回答：\n{{question}}\n{{options}}\n請回覆選項編號，或直接輸入你的回答。"
         }
+      },
+      "questions": {
+        "cardHint": "僅提問者可作答。點選選項；多題或複選選好後送出。也可回覆這則訊息補充文字。多題文字回答請寫「題號：答案」（如「2：用中文」），填好後送出。",
+        "submitLabel": "送出答案",
+        "multiSelectHint": "（可複選）",
+        "resolved": "✅ 已選：{{option}}",
+        "expired": "卡片已過期",
+        "textHint": "僅提問者可作答。回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。",
+        "replyHint": "僅提問者可作答。點選選項；多題或複選選好後送出。\n回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。"
       }
     }
   },
@@ -15967,6 +15980,8 @@
       "claudeSubscriptionWorkspaceOverride": "這個工作目錄的 .claude 設定修改了 Claude 的上游位址或驗證方式，不能在這裡使用 Claude 訂閱。請移除這些設定，或選擇閘道器或 API Key 模型",
       "deviceStillLoading": "遠端裝置仍在載入中，請稍候",
       "remoteDefaultsLoadFailed": "無法讀取遠端裝置設定。請檢查連線，Cindy 正在重試。",
+      "branchRequiresWorktree": "所選分支與目前分支不同。請勾選 worktree，或選擇目前分支。",
+      "branchCheckFailed": "無法確認目前分支。請勾選 worktree 使用所選分支，或檢查專案後重試。",
       "worktreeMissingRepo": "無法建立 worktree：找不到目前目錄的儲存庫根目錄",
       "worktreeRepoHint": "可嘗試重新選一次工作目錄，等右下角資料夾標識重新整理後再試",
       "sessionInactive": "任務已不再處於活躍狀態",
@@ -16542,6 +16557,8 @@
             "title": "儲存庫事件",
             "description": "連接 Cindy GitHub App，在審查或 CI 變更時更新正在跟進的 PR。",
             "connected": "已連接 {{login}} · 正在關注 {{count}} 個儲存庫",
+            "syncing": "正在同步儲存庫…",
+            "finishInBrowser": "請在 GitHub 完成儲存庫設定後返回 Cindy。",
             "missing": "請檢查這些儲存庫的 App 安裝與存取權限：{{repositories}}",
             "error": "無法檢查連線，請重試。",
             "repositories": "選擇儲存庫",
@@ -21328,8 +21345,7 @@
     "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄。",
     "signIn": {
       "checking": "正在偵測本機帳號…",
-      "detected": "偵測到已登入帳號",
-      "useAccount": "使用此帳號",
+      "useAccount": "使用這台電腦上的 {{cli}} 帳號",
       "anotherAccount": "登入另一個帳號",
       "keepExisting": "新帳號預設作為單獨的供應商，也可以選擇併入現有的供應商。現有帳號的登入保持不變。",
       "checkFailed": "無法讀取本機帳號狀態，請重試。",
@@ -21339,7 +21355,6 @@
     "title": "訂閱帳號",
     "strategy": "負載平衡",
     "add": "新增帳號",
-    "default": "預設目錄",
     "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "需要登入",

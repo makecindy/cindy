@@ -1454,6 +1454,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "待覽",
+      "summaryInProgress": "方行",
+      "summaryPending": "待君處置",
+      "summaryUnread": "未閱之果",
       "markRead": "標為已閱",
       "archive": "封存",
       "actionFailed": "操作未竟，提醒已留，請再試。",
@@ -13435,6 +13439,15 @@
           "askNoQuestion": "Agent 待君之答，然無問可示。請覆「續」。",
           "askQuestion": "Agent 待君作答：\n{{question}}\n{{options}}\n請覆選項之序，或逕書君之答。"
         }
+      },
+      "questions": {
+        "cardHint": "唯提問者可答。點選所答，多問多擇畢而呈之。亦可回此訊補述。多問以「題號：答案」作答，如「2：中文」，填畢呈之。",
+        "submitLabel": "呈答",
+        "multiSelectHint": "（可多擇）",
+        "resolved": "✅ 已擇：{{option}}",
+        "expired": "此卡已逾期",
+        "textHint": "唯提問者可答。以 {{code}} 接所答；多問用「{{code}} 2：所答」，畢則回 {{code}} OK 呈之。",
+        "replyHint": "唯提問者可答。點選所答，多問多擇畢而呈之。\n以 {{code}} 接所答；多問用「{{code}} 2：所答」，畢則回 {{code}} OK 呈之。"
       }
     }
   },
@@ -15967,6 +15980,8 @@
       "claudeSubscriptionWorkspaceOverride": "此工作目錄之 .claude 設定改易 Claude 之上游位址或驗證方式，故此處不可用 Claude 訂閱。請除此諸設定，或擇閘道器或 API Key 模型",
       "deviceStillLoading": "遠端裝置猶方載，請稍候",
       "remoteDefaultsLoadFailed": "不能讀遠端裝置之配置。請察連線，Cindy 方再試。",
+      "branchRequiresWorktree": "所選分支與目前分支不同。請勾選 worktree，或選目前分支。",
+      "branchCheckFailed": "未能確認目前分支。請勾選 worktree 以用所選分支，或查驗專案後重試。",
       "worktreeMissingRepo": "不能開 worktree：今之目錄缺倉庫之根",
       "worktreeRepoHint": "可再擇一次工作目錄，待右下角卷匣標識更新後再試",
       "sessionInactive": "差事已不復活躍",
@@ -16542,6 +16557,8 @@
             "title": "倉庫之變",
             "description": "連 Cindy GitHub App，評審或 CI 有變，則更新所隨之 PR。",
             "connected": "已連 {{login}} · 所察倉庫 {{count}} 個",
+            "syncing": "正同步倉庫…",
+            "finishInBrowser": "請於 GitHub 設妥倉庫，再返 Cindy。",
             "missing": "請核此倉之 App 安裝及存取權限：{{repositories}}",
             "error": "未能驗其連接，請重試。",
             "repositories": "擇倉庫",
@@ -21328,8 +21345,7 @@
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 帳號資訊。請於新增供方時選「$t(subscriptionAccounts.signIn.anotherAccount)」，另用獨立目錄",
     "signIn": {
       "checking": "正察本機帳號…",
-      "detected": "已有帳號登入",
-      "useAccount": "用此帳號",
+      "useAccount": "用此機 {{cli}} 之帳號",
       "anotherAccount": "另登一號",
       "keepExisting": "新號默自成一供方，亦可擇而併之。原號登入如故。",
       "checkFailed": "未能讀取本機帳號，請重試。",
@@ -21339,7 +21355,6 @@
     "title": "訂閱帳號",
     "strategy": "負載平衡",
     "add": "新增帳號",
-    "default": "預設目錄",
     "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "須登入",

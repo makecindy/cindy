@@ -4150,6 +4150,9 @@ export class DeviceLinkClient {
     }
     if (!hasPendingCapacity()) {
       this.warnSendBacklog(env.dst, peer, 'full');
+      if (routedEnv.kind === 'invoke-result' && this.trySendResultPastStalledWindow(routedEnv, peer)) {
+        return false;
+      }
       throw new DeviceLinkError(
         'BACKPRESSURE',
         `reliable transport buffer is full for peer ${shortDeviceRef(env.dst)}`,
@@ -4204,6 +4207,52 @@ export class DeviceLinkClient {
       this.ensureRetryTimer(env.dst);
     }
     return true;
+  }
+
+  /** A full live window cannot evict its head. Only completed replies may bypass
+   * it, using the existing legacy result format that callers pair by request id.
+   * Never infer a stalled window from unrelated peer traffic or local pacing. */
+  private trySendResultPastStalledWindow(env: Envelope, peer: PeerTransportState): boolean {
+    const head = peer.pending.values().next().value;
+    if (this.status !== 'online' || !this.isPeerSendReady(peer)
+      || !head?.sent || head.firstSentAt === undefined || head.attempts < 2) return false;
+
+    const dst = env.dst!;
+    const bytes = this.measureReliableFrames([env]);
+    // Large replies must stay retryable in the caller's outbox until reliable
+    // fragmentation has room; this path must not turn congestion into data loss.
+    if (bytes > MAX_FRAME_BYTES || !this.canWriteReliableBytes(bytes)) return false;
+    const peers = this.getReadyReliablePeers(dst);
+    const now = this.monotonicNow();
+    const congestionBudget = this.congestionCloseStreak > 0 ? this.congestionSendBudget : null;
+    const localBudget = this.localSendPressure ? this.localSendBudget : null;
+    const credits = Math.ceil(bytes / SOCKET_SEND_CREDIT_BYTES);
+    if (congestionBudget && !congestionBudget.canTake(dst, 1, peers, now)) return false;
+    if (localBudget && !localBudget.canTake(dst, credits, peers, now)) return false;
+    if (congestionBudget && !congestionBudget.take(dst, 1, peers, now)) return false;
+    if (localBudget && !localBudget.take(dst, credits, peers, now)) {
+      congestionBudget?.refund(dst, 1);
+      return false;
+    }
+    let written = false;
+    try {
+      // No reliable slot is retained here, so authentication queuing must not
+      // count as delivery. Keep signing, scoped routing and socket hard caps.
+      const id = this.sendRoutedEnvelope(env, peer.linkGeneration, true);
+      written = true;
+      if (id) this.settleOutboundRouteAttemptsForId(dst, id);
+      peer.lastBusinessSentAt = this.monotonicNow();
+      return true;
+    } catch (error) {
+      // Signing may push a near-limit bare frame over MAX_FRAME_BYTES too.
+      if (error instanceof DeviceLinkError && error.code === 'PAYLOAD_TOO_LARGE') return false;
+      throw error;
+    } finally {
+      if (!written) {
+        congestionBudget?.refund(dst, 1);
+        localBudget?.refund(dst, credits);
+      }
+    }
   }
 
   /**

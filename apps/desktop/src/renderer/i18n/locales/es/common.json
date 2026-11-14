@@ -1485,6 +1485,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "Por revisar",
+      "summaryInProgress": "En curso",
+      "summaryPending": "Requiere tu atención",
+      "summaryUnread": "Resultados sin leer",
       "markRead": "Marcar como leído",
       "archive": "Archivar",
       "actionFailed": "No se pudo completar la acción. Se conservó la notificación. Inténtalo de nuevo.",
@@ -13604,6 +13608,15 @@
           "askNoQuestion": "El Agent está esperando tu respuesta, pero no hay ninguna pregunta que mostrar. Responde “continuar”.",
           "askQuestion": "El Agent necesita tu respuesta:\n{{question}}\n{{options}}\nResponde con el número de una opción o escribe tu respuesta."
         }
+      },
+      "questions": {
+        "cardHint": "Solo quien hizo la solicitud puede responder. Toca una opción; para varias preguntas o selecciones, envía al terminar. También puedes responder a este mensaje con texto. Para varias preguntas, responde «número: respuesta» (p. ej., «2: Español») y luego envía.",
+        "submitLabel": "Enviar respuestas",
+        "multiSelectHint": " (puedes elegir varias)",
+        "resolved": "✅ Elegido: {{option}}",
+        "expired": "Esta tarjeta ha caducado",
+        "textHint": "Solo puede responder quien hizo la consulta. Escribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar.",
+        "replyHint": "Solo quien hizo la solicitud puede responder. Toca una opción; para varias preguntas o selecciones, envía al terminar.\nEscribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar."
       }
     }
   },
@@ -16196,6 +16209,8 @@
       "claudeSubscriptionWorkspaceOverride": "La configuración de .claude de esta carpeta cambia adónde envía solicitudes Claude o cómo inicia sesión, por lo que no se puede usar la suscripción de Claude aquí. Elimina esa configuración o elige un modelo con puerta de enlace o clave de API",
       "deviceStillLoading": "El dispositivo remoto aún se está cargando. Espera",
       "remoteDefaultsLoadFailed": "No se pudo cargar la configuración del dispositivo remoto. Revisa la conexión; Cindy lo está reintentando.",
+      "branchRequiresWorktree": "La rama seleccionada no es la rama actual. Activa worktree o selecciona la rama actual.",
+      "branchCheckFailed": "No se pudo verificar la rama actual. Activa worktree para usar la rama seleccionada o revisa el proyecto e inténtalo de nuevo.",
       "worktreeMissingRepo": "No se puede crear un worktree: falta la raíz del repositorio del directorio actual",
       "worktreeRepoHint": "Vuelve a seleccionar el directorio de trabajo e inténtalo de nuevo cuando se actualice el indicador de carpeta de la esquina inferior derecha",
       "sessionInactive": "La sesión ya no está activa",
@@ -16778,6 +16793,8 @@
             "title": "Eventos del repositorio",
             "description": "Conecta la GitHub App de Cindy para actualizar los PR en seguimiento cuando cambien las revisiones o CI.",
             "connected": "Conectado como {{login}} · Repositorios en seguimiento: {{count}}",
+            "syncing": "Sincronizando repositorios…",
+            "finishInBrowser": "Completa la configuración de los repositorios en GitHub y vuelve a Cindy.",
             "missing": "Comprueba la instalación de la App y el acceso a: {{repositories}}",
             "error": "No se pudo comprobar la conexión. Inténtalo de nuevo.",
             "repositories": "Elegir repositorios",
@@ -21613,8 +21630,7 @@
     "providerManagedAuth": "El proveedor actual de Codex no permite consultar la cuenta de ChatGPT. Al añadir el proveedor, elige «$t(subscriptionAccounts.signIn.anotherAccount)» para usar una carpeta independiente.",
     "signIn": {
       "checking": "Comprobando la cuenta local…",
-      "detected": "Se encontró una cuenta conectada",
-      "useAccount": "Usar esta cuenta",
+      "useAccount": "Usar la cuenta de {{cli}} de esta computadora",
       "anotherAccount": "Iniciar sesión con otra cuenta",
       "keepExisting": "La cuenta nueva será un proveedor independiente salvo que elijas uno al que unirla. Las sesiones existentes se conservan.",
       "checkFailed": "No se pudo comprobar la cuenta local. Inténtalo de nuevo.",
@@ -21624,7 +21640,6 @@
     "title": "Cuentas de suscripción",
     "strategy": "Equilibrio de carga",
     "add": "Añadir cuenta",
-    "default": "Carpeta predeterminada",
     "defaultTag": "Predeterminada",
     "ready": "Conectada",
     "signedOut": "Requiere iniciar sesión",

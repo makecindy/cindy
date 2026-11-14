@@ -1454,6 +1454,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "待查看",
+      "summaryInProgress": "进行中",
+      "summaryPending": "等你处理",
+      "summaryUnread": "未读结果",
       "markRead": "标为已读",
       "archive": "归档",
       "actionFailed": "操作未完成，提醒已保留，请重试。",
@@ -13435,6 +13439,15 @@
           "askNoQuestion": "Agent 正在等待你的回答，但没有可显示的问题。请回复“继续”。",
           "askQuestion": "Agent 需要你的回答：\n{{question}}\n{{options}}\n请回复选项序号，或直接输入你的回答。"
         }
+      },
+      "questions": {
+        "cardHint": "仅提问者可作答。点击选项；多题或多选选好后提交。也可回复这条消息补充文字。多题文字回答请写“题号：答案”（如“2：用中文”），填好后提交。",
+        "submitLabel": "提交答案",
+        "multiSelectHint": "（可多选）",
+        "resolved": "✅ 已选：{{option}}",
+        "expired": "卡片已过期",
+        "textHint": "仅提问者可作答。回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。",
+        "replyHint": "仅提问者可作答。点击选项；多题或多选选好后提交。\n回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。"
       }
     }
   },
@@ -15967,6 +15980,8 @@
       "claudeSubscriptionWorkspaceOverride": "这个工作目录的 .claude 设置修改了 Claude 的上游地址或鉴权方式，不能在这里使用 Claude 订阅。请移除这些设置，或选择网关或 API Key 模型",
       "deviceStillLoading": "远程设备仍在加载中，请稍候",
       "remoteDefaultsLoadFailed": "无法读取远程设备配置。请检查连接，Cindy 正在重试。",
+      "branchRequiresWorktree": "所选分支与当前分支不同。请勾选 worktree，或选择当前分支。",
+      "branchCheckFailed": "无法确认当前分支。请勾选 worktree 使用所选分支，或检查项目后重试。",
       "worktreeMissingRepo": "无法创建 worktree：找不到当前目录的仓库根目录",
       "worktreeRepoHint": "可尝试重新选一次工作目录，等右下角文件夹标识刷新后再试",
       "sessionInactive": "任务已不再处于活跃状态",
@@ -16542,6 +16557,8 @@
             "title": "仓库事件",
             "description": "连接 Cindy GitHub App，在评审或 CI 变化时更新正在跟进的 PR。",
             "connected": "已连接 {{login}} · 正在关注 {{count}} 个仓库",
+            "syncing": "正在同步仓库…",
+            "finishInBrowser": "请在 GitHub 完成仓库设置后返回 Cindy。",
             "missing": "请检查这些仓库的 App 安装与访问权限：{{repositories}}",
             "error": "无法检查连接，请重试。",
             "repositories": "选择仓库",
@@ -21328,8 +21345,7 @@
     "providerManagedAuth": "当前 Codex 供应商未提供 ChatGPT 账号信息。请在添加供应商时选择「$t(subscriptionAccounts.signIn.anotherAccount)」，以使用独立目录。",
     "signIn": {
       "checking": "正在检测本机账号…",
-      "detected": "检测到已登录账号",
-      "useAccount": "使用此账号",
+      "useAccount": "使用这台电脑上的 {{cli}} 账号",
       "anotherAccount": "登录另一个账号",
       "keepExisting": "新账号默认作为单独的供应商，也可以选择并入已有的供应商。现有账号的登录保持不变。",
       "checkFailed": "无法读取本机账号状态，请重试。",
@@ -21339,7 +21355,6 @@
     "title": "订阅账号",
     "strategy": "负载均衡",
     "add": "添加账号",
-    "default": "默认目录",
     "defaultTag": "默认",
     "ready": "已连接",
     "signedOut": "需要登录",
