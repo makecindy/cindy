@@ -1147,6 +1147,8 @@ export function UnifiedModelPickerSheet(
         if (reset) delete engines[key];
         else engines[key] = config.agent;
         await prefs.save({ ...prefs.value, engines });
+        // 会话里的档位 / Fast 要写到被控电脑:等它收下才算保存。
+        const writes: (void | Promise<void>)[] = [];
         if (reset) {
           // Reset the model's overrides, including the previous engine's
           // parameters. Other models and saved favorite copies stay intact.
@@ -1159,32 +1161,50 @@ export function UnifiedModelPickerSheet(
             if (p.modelMemory?.clearEffort)
               p.modelMemory.clearEffort(agent, config.providerId, modelId);
             else if (effort)
-              p.modelMemory?.setEffort(
-                agent,
-                config.providerId,
-                modelId,
-                effort,
+              writes.push(
+                p.modelMemory?.setEffort(
+                  agent,
+                  config.providerId,
+                  modelId,
+                  effort,
+                ),
               );
             if (p.modelMemory?.clearFast)
               p.modelMemory.clearFast(agent, config.providerId, modelId);
             else
-              p.modelMemory?.setFast(agent, config.providerId, modelId, false);
+              writes.push(
+                p.modelMemory?.setFast(agent, config.providerId, modelId, false),
+              );
           }
         } else {
           if (config.effort)
-            p.modelMemory?.setEffort(
+            writes.push(
+              p.modelMemory?.setEffort(
+                config.agent,
+                config.providerId,
+                config.modelId,
+                config.effort,
+              ),
+            );
+          writes.push(
+            p.modelMemory?.setFast(
               config.agent,
               config.providerId,
               config.modelId,
-              config.effort,
-            );
-          p.modelMemory?.setFast(
-            config.agent,
-            config.providerId,
-            config.modelId,
-            config.fast,
+              config.fast,
+            ),
           );
         }
+        // 全部落定后再判断:没写到的值已被撤回,这里只负责不提示「已保存」。
+        const landed = await Promise.all(
+          writes.map((write) =>
+            Promise.resolve(write).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        );
+        if (landed.includes(false)) throw new Error("Model parameters not saved");
         if (!isCurrent()) return;
         if (target?.config) setTarget({ ...target, config });
         setNotice(

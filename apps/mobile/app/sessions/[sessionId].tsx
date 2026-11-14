@@ -3004,7 +3004,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const deviceApiKeyStatus = useDeviceApiKeyStatus(deviceId || undefined);
   // 会话「非选中模型」effort/fast 的镜像 accessors:乐观写本地镜像 + 双写穿被控端
   // (set-session-model-pref 写真实会话记忆 / apply-new-maker-draft-pref 同步草稿默认,
-  // 对齐桌面 CCAgentSessionView 的 device-link 分支;旧被控端 CHANNEL_NOT_ALLOWED 静默降级)。
+  // 对齐桌面 CCAgentSessionView 的 device-link 分支;被控端收下任一条即写到,两条都没收下时
+  // 镜像撤回乐观值,选择器提示无法保存)。
   // 发送前鉴权提示(对齐 new.tsx 的门禁判定,但不拦截发送:会话内消息走排队,
   // 用户在电脑端配好 key 后可直接「重试发送」,拦死反而丢掉这条恢复路径)。
   const composerAgentAuthHint = useMemo(() => {
@@ -3027,10 +3028,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     sessionAgentKind,
   ]);
   const sessionMirrorAccessors = useMemo(
-    () => makeSessionMirrorAccessors(sessionId, (agent, providerId, model, patch) => {
-      void maker.setSessionModelPref({ sessionId, agent, providerId, model, ...patch }).catch(() => undefined);
-      void maker.applyNewMakerDraftPref({ agent, providerId, modelId: model, active: false, ...patch }).catch(() => undefined);
-    }),
+    () => makeSessionMirrorAccessors(sessionId, (agent, providerId, model, patch) => [
+      maker.setSessionModelPref({ sessionId, agent, providerId, model, ...patch }),
+      maker.applyNewMakerDraftPref({ agent, providerId, modelId: model, active: false, ...patch }),
+    ]),
     [maker, sessionId],
   );
   useEffect(() => () => clearSessionMirror(sessionId), [sessionId]);

@@ -29,9 +29,14 @@ export interface MobileModelMemoryAccessors {
   clearEffort?(agent: AgentKind, providerId: string, modelId: string): void;
   clearFast?(agent: AgentKind, providerId: string, modelId: string): void;
   getEffort(agent: AgentKind, providerId: string, modelId: string): string | undefined;
-  setEffort(agent: AgentKind, providerId: string, modelId: string, effort: string): void;
+  /**
+   * 写到别处的存储(会话镜像写穿被控电脑)返回 Promise:没写到时 reject,且已撤回乐观值。
+   * 要告诉用户「已保存」的调用方必须等它;不等也不会产生未处理的拒绝。本机存储返回 void。
+   */
+  setEffort(agent: AgentKind, providerId: string, modelId: string, effort: string): void | Promise<void>;
   getFast(agent: AgentKind, providerId: string, modelId: string): boolean | 'ultrafast' | undefined;
-  setFast(agent: AgentKind, providerId: string, modelId: string, enabled: boolean | 'ultrafast'): void;
+  /** 返回值含义同 setEffort。 */
+  setFast(agent: AgentKind, providerId: string, modelId: string, enabled: boolean | 'ultrafast'): void | Promise<void>;
 }
 
 /** 单槽:某 (device, agent, 来源) 下每个模型的 effort/fast。 */
