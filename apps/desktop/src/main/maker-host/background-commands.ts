@@ -16,11 +16,15 @@
  *    其后代（`&`/`start /b`）的治理照旧到硬顶——POSIX 上 detached 进程组到点随组
  *    被杀；Windows 上 shell 退出后宿主不再按 PID 查杀（仓库既有约定，防 PID 复用
  *    误杀），到点只日志留痕。工具描述已把「不要自行后台化」写成使用约束。
+ *  - 解释器点名（2026-11-14）：shell 参数与前台 bash/powershell 工具同一份菜单
+ *    （默认 bash=Git Bash），模型用什么语法写就由什么解释。此前 spawn(shell:true)
+ *    落宿主 cmd，前台口径（cd /e、$()、裸 bash→WSL）整类秒败——同一命令前台能跑
+ *    后台必死，才有这条收敛。
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { closeSync, mkdirSync, openSync, readSync, statSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from 'node:fs';
 import { readdir, stat, truncate, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -53,8 +57,69 @@ export interface BackgroundCommandStartInput {
   /** 调用时的会话实例;由工具层传入、宿主层用于拒绝过期实例,服务本身不消费。 */
   sessionInstanceId?: string;
   command: string;
+  /** 解释命令的 shell;缺省 bash。与前台 bash/powershell 工具同一份菜单。 */
+  shell?: BackgroundCommandShell;
   cwd: string;
   timeoutMs?: number;
+}
+
+/** 后台命令的解释器菜单;与工具层(lizi-mcps)的字面量联合保持一致。 */
+export type BackgroundCommandShell = 'bash' | 'powershell';
+
+/** Git Bash 解析(win32):只认常见安装位置的完整路径。PATH 里的裸 `bash` 会落到
+ * WSL(E: 盘不可见、gh 不在),正是口径事故的根;POSIX 固定 /bin/bash。 */
+function resolveGitBash(): string {
+  if (process.platform !== 'win32') return '/bin/bash';
+  const roots = [
+    process.env['ProgramFiles'],
+    process.env['ProgramFiles(x86)'],
+    process.env['LOCALAPPDATA'] && path.join(process.env['LOCALAPPDATA'], 'Programs'),
+  ];
+  for (const root of roots) {
+    if (!root) continue;
+    const candidate = path.join(root, 'Git', 'bin', 'bash.exe');
+    if (existsSync(candidate)) return candidate;
+  }
+  return '';
+}
+
+function buildShellInvocation(
+  shell: BackgroundCommandShell,
+  command: string,
+): { file: string; args: string[] } | { error: string } {
+  if (shell === 'powershell') {
+    // pwsh(MSI 默认路径)优先,缺了落系统自带的 powershell.exe;EncodedCommand 以
+    // UTF-16LE base64 整体传入,命令不经两层引号转义(Node Windows argv 转义 ×
+    // PS 解析规则不同)。PS 5.1 重定向输出的编码跟随 OEM 代码页(本机 cp936),
+    // 开头统一钉 UTF-8,报告按 UTF-8 读尾部才不乱码;对 pwsh 无害。
+    let file = 'pwsh';
+    if (process.platform === 'win32') {
+      const pwsh = path.join(
+        process.env['ProgramFiles'] ?? 'C:\\Program Files',
+        'PowerShell',
+        '7',
+        'pwsh.exe',
+      );
+      file = existsSync(pwsh) ? pwsh : 'powershell.exe';
+    }
+    const text = `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ${command}`;
+    return {
+      file,
+      args: [
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        Buffer.from(text, 'utf16le').toString('base64'),
+      ],
+    };
+  }
+  const bash = resolveGitBash();
+  if (!bash) {
+    return {
+      error: '未找到 Git Bash(Git for Windows 未安装?):请安装后重试,或改用 shell:"powershell"',
+    };
+  }
+  return { file: bash, args: ['-lc', command] };
 }
 
 export type BackgroundCommandStartResult =
@@ -267,6 +332,15 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
           message: 'command, sessionId and cwd are required',
         };
       }
+      const shell = input.shell ?? 'bash';
+      if (shell !== 'bash' && shell !== 'powershell') {
+        return { ok: false, errorCode: 'INVALID_ARGS', message: `unknown shell: ${shell}` };
+      }
+      // 解释器在名额/日志之前解析:点名的 shell 不存在时立即拒绝,不占名额不建目录。
+      const invocation = buildShellInvocation(shell, command);
+      if ('error' in invocation) {
+        return { ok: false, errorCode: 'SPAWN_FAILED', message: invocation.error };
+      }
       // 桌面键鼠只走 cindy_computer：后台命令是独立执行入口（不经过 Bash 的 PreToolUse
       // 守卫），完全访问档也不会在这里再弹审批，必须在宿主入口复用同一份判定，
       // 否则 osascript keystroke / cliclick 可绕过键鼠保护（CU-014 同类事故）。
@@ -316,7 +390,10 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }
       let logFd: number;
       try {
-        logFd = openSync(logPath, 'a');
+        // 必须用 'w' 而非 'a':libuv 对 O_APPEND 开出的 FILE_APPEND_DATA 句柄,
+        // MSYS bash(即 Git Bash)无法写入——命令 exit 1 且零输出(2026-11-14 实测;
+        // powershell/cmd 不受影响)。每次 run 本就是独立新文件,'w' 语义也更准。
+        logFd = openSync(logPath, 'w');
       } catch {
         return {
           ok: false,
@@ -335,8 +412,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
 
       let child: ChildProcess;
       try {
-        child = spawn(command, {
-          shell: true,
+        child = spawn(invocation.file, invocation.args, {
           cwd: input.cwd,
           windowsHide: true,
           // stdio 直接接日志文件 fd:子进程及其后代都写同一文件,宿主重启无感。

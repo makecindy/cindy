@@ -419,11 +419,21 @@ describe("cindy_helper MCP server", () => {
         sessionId: 'current-task', sessionInstanceId: 'instance-1',
         command: 'pnpm test', cwd: '/repo', timeoutMs: 600_000,
       });
+      // shell 参数必须原样穿透到宿主服务(解释器点名是模型与前台工具同源的契约);
+      // 丢了会静默回落 bash,PowerShell 语法的命令在后台换解释器必坏。
+      await client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'run_command_background', args: { command: 'Get-Content x', shell: 'powershell' } },
+      });
+      expect(start).toHaveBeenLastCalledWith({
+        sessionId: 'current-task', sessionInstanceId: 'instance-1',
+        command: 'Get-Content x', shell: 'powershell', cwd: '/repo',
+      });
       context = { agentKind: 'pi', workingDir: '/remote', sessionId: 'ssh-task', remoteHostId: 'host-1' };
       expect(parsePayload(await call())).toMatchObject({ ok: false, errorCode: 'REMOTE_SESSION_NOT_SUPPORTED' });
       context = undefined;
       expect(parsePayload(await call())).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
-      expect(start).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(2);
     } finally { await client.close(); await server.close(); }
   });
 

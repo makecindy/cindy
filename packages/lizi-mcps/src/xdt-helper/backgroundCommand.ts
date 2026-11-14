@@ -21,6 +21,8 @@ export interface BackgroundCommandStartRequest {
   /** 调用时的会话实例;宿主用它拒绝过期实例的启动请求。 */
   sessionInstanceId?: string;
   command: string;
+  /** 解释命令的 shell;缺省 bash。与桌面侧 BackgroundCommandShell 字面量对齐。 */
+  shell?: "bash" | "powershell";
   cwd: string;
   timeoutMs?: number;
 }
@@ -40,9 +42,9 @@ const DESCRIPTION =
   "把一条长耗时 shell 命令交给宿主在本机后台运行,调用立即返回 run_id 与 log_path,本回合可以结束或继续做别的;" +
   "命令结束时宿主会自动向本任务发来一条「后台命令完成」消息(退出码 + 日志尾部 + 完整日志路径),无需轮询等待。" +
   "适用:预计超过一两分钟的测试、构建、门禁、`gh run watch --exit-status` 等;短命令仍用普通 bash。" +
-  "注意:命令以当前任务工作目录为 cwd 在本机执行(远程/SSH 会话不可用);日志文件保留 14 天、单条输出上限 5MB(超过即终止命令树,完成报告会标记超限并附终止前的日志尾部——预估输出很大的命令请自行分步或重定向);应用重启会丢失完成回报,但日志文件保留;并发上限 8 条,命令自行脱离的后代(`&`/`start /b`)同样计入名额。" +
+  "注意:命令以当前任务工作目录为 cwd 在本机执行(远程/SSH 会话不可用),由 shell 参数点名的解释器执行——bash(Git Bash -lc,默认)或 powershell(pwsh 优先、Windows PowerShell 兜底),与前台 bash/powershell 工具同一份菜单:用什么语法写就报什么,不需要为后台改写口径;日志文件保留 14 天、单条输出上限 5MB(超过即终止命令树,完成报告会标记超限并附终止前的日志尾部——预估输出很大的命令请自行分步或重定向);应用重启会丢失完成回报,但日志文件保留;并发上限 8 条,命令自行脱离的后代(`&`/`start /b`)同样计入名额。" +
   "不要让命令自行后台化:请让命令自身持续运行,宿主会在 24h 硬顶到点时连同子进程树一起结束它。POSIX 上同进程组的后代随硬顶一并清理;Windows 上 shell 退出后宿主不再按 PID 查杀后代(防 PID 复用误杀),这类自行脱离的后代不受硬顶治理。" +
-  "启动成功后不要 sleep 或反复查看,直接向主人说明会在完成时汇报,然后结束回合。" +
+  "启动成功后不要 sleep 或反复查看;完成报告在本回合边界之后才投递(会话正忙时排队,回合结束后派发),依赖本结果的步骤在受理成功后即可结束回合,不依赖的可以继续做别的。" +
   "分工:若本任务已启用 /pr 后台跟进(PR 心跳门),CI、bot review、维护者动作等外部事件的等待不要再起本工具,直接结束回合交由门唤醒(含 PR 状态变化即触发);本工具留给本地长命令(测试/构建/门禁)和未启用跟进时的等待。";
 
 export function registerBackgroundCommandTool(
@@ -59,6 +61,12 @@ export function registerBackgroundCommandTool(
         .min(1)
         .describe(
           "要后台运行的 shell 命令(整条命令行,stdout/stderr 会写入日志文件)",
+        ),
+      shell: z
+        .enum(["bash", "powershell"])
+        .optional()
+        .describe(
+          "解释 command 的 shell:bash(Git Bash -lc,默认)或 powershell(pwsh 优先、Windows PowerShell 兜底)。与前台 bash/powershell 工具同一份菜单——用什么语法写就报什么。",
         ),
       timeout_seconds: z
         .number()
@@ -88,6 +96,7 @@ export function registerBackgroundCommandTool(
           ? { sessionInstanceId: context.sessionInstanceId }
           : {}),
         command: args.command,
+        ...(args.shell ? { shell: args.shell } : {}),
         cwd: context.workingDir,
         ...(args.timeout_seconds
           ? { timeoutMs: args.timeout_seconds * 1000 }

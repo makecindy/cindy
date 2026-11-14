@@ -15,7 +15,11 @@
  *   输出超过 64KB 尾窗的命令（验报告尾部取自文件末尾，长输出的结论不丢）；
  *   日志目录不可建（验拒绝启动不静默无日志）；命令退出后名额立即让出（2026-11-13
  *   事故：win32 名额占到硬顶，秒死命令堵满全局 8 槽），治理计时器不随名额失效。
- * - 实测耗时：本机 < 8s（6 用例，含 5MB 输出用例与名额让出等待）。
+ * - 最小失败输入还包括：默认 bash 在 Windows 上必须落 Git Bash 而非 WSL（2026-11-14
+ *   口径事故回归：旧实现 spawn(shell:true) 落 cmd，裸 bash 解析到 WSL，前台能跑的
+ *   命令后台必死）；shell=powershell 时命令由 PowerShell 解释（EncodedCommand 免
+ *   转义）。shell 菜单与前台 bash/powershell 工具同源。
+ * - 实测耗时：本机 < 20s（13 用例，含 5MB 输出用例、名额让出等待与两个 shell 用例）。
  */
 
 import { spawn } from 'node:child_process';
@@ -344,3 +348,36 @@ it('重启后孤儿日志:巡检把不在册的超限日志截回上限(体量�
   writer.kill();
   closeSync(fd);
 }, 40_000);
+
+const isWindows = process.platform === 'win32';
+
+(isWindows ? it : it.skip)('默认 bash 落在 Git Bash 而非 WSL(2026-11-14 口径事故回归)', async () => {
+  const capture = vi.fn();
+  const service = buildService(capture);
+  const result = service.start({ sessionId: 'sess-bash', command: 'uname -s', cwd: logDir });
+  expect(result.ok).toBe(true);
+
+  await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+  const logText = await readFile((result as { ok: true; logPath: string }).logPath, 'utf8');
+  // Git Bash 的 uname 是 MINGW*;WSL 里是 Linux——这条就是「后台口径与前台 bash
+  // 工具同源」的可观察判据。
+  expect(logText).toContain('MINGW');
+});
+
+(isWindows ? it : it.skip)('shell=powershell:命令由 PowerShell 解释,退出码与输出如实回注', async () => {
+  const capture = vi.fn();
+  const service = buildService(capture);
+  const result = service.start({
+    sessionId: 'sess-ps',
+    shell: 'powershell',
+    // EncodedCommand 通道:分号/引号不经 Node argv 转义,写什么执行什么。
+    command: 'Write-Output ps-shell-line; exit 3',
+    cwd: logDir,
+  });
+  expect(result.ok).toBe(true);
+
+  await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+  expect(firstReport(capture).text).toContain('失败（exit 3）');
+  const logText = await readFile((result as { ok: true; logPath: string }).logPath, 'utf8');
+  expect(logText).toContain('ps-shell-line');
+});
