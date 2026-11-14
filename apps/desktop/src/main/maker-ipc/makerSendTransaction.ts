@@ -1136,8 +1136,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ),
         );
       }
-      await deps.prepareUnhealthySession?.(sessionId);
+      // An existing live SEND can omit createOpts. Account balancing/rollover
+      // may retire that handle here, so retain launch-only preferences before
+      // close and recover the authoritative route/permissions after handoff.
+      const beforeRecovery = !createOpts && deps.prepareUnhealthySession ? deps.getSession(sessionId) : undefined;
+      const startupPreferences = { ...beforeRecovery?.hostStartupPreferences };
+      const recovered = await deps.prepareUnhealthySession?.(sessionId);
       let sess = deps.getSession(sessionId);
+      if (recovered && beforeRecovery && !sess && !createOpts) {
+        const saved = await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
+        const preferences = Object.fromEntries(Object.entries(startupPreferences)
+          .filter(([key]) => saved[key as keyof typeof startupPreferences] === undefined));
+        createOpts = deps.buildCreateOptsWithStderr({ ...saved, ...preferences, id: sessionId });
+      }
       // Maker keeps a failed Session registered until its real handle cleanup
       // succeeds. It is not a reusable send target: route it through the
       // existing lazy bootstrap path so Maker.createSession() can retry close
