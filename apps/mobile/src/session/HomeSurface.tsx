@@ -229,6 +229,7 @@ import {
   fetchHostProjectOrder,
   rememberRemoteProjectOrderStamp,
   subscribeRemoteProjectOrderChanged,
+  startHostProjectOrderLoad,
 } from '@/session/remoteProjectOrder';
 import {
   createProjectOrderFetchFence,
@@ -1477,7 +1478,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     void loadHome({ visible: true }).then(async () => {
       // A refresh queued behind startup must wait for that queued batch too.
       while (syncInFlightRef.current) await syncInFlightRef.current;
-      await hostProjectOrderLoadRef.current;
+      // Scope reconciliation can replace a cancelled load while refresh is waiting.
+      while (hostProjectOrderLoadRef.current) {
+        const pending = hostProjectOrderLoadRef.current;
+        await pending;
+        if (hostProjectOrderLoadRef.current === pending) break;
+      }
       if (homeAccountGenerationRef.current === owner && displayOrderScopeRef.current === scope) resetDisplayOrder();
     });
     if (!homeRoster) return;
@@ -2141,16 +2147,15 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const ids = homeSyncDeviceIds;
     if (ids.length === 0) return undefined;
     let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const fence = createProjectOrderFetchFence();
     projectOrderFetchFenceRef.current = fence;
-    const load = async (attempt: number) => {
+    const loadAttempt = async () => {
       // Project ordering is secondary Home metadata. Let the bounded sessions-list batch
       // finish first so cold start/reconnect does not create a second overlapping six-device
       // fan-out. A queued refresh is included as well; live pushes remain fenced below.
       while (syncInFlightRef.current) {
         await syncInFlightRef.current;
-        if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+        if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
       }
       const tokens = new Map(ids.map((deviceId) => [deviceId, fence.begin(deviceId)]));
       const entries = await runHomeDeviceSyncBatch(ids, async (deviceId) => {
@@ -2164,7 +2169,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         });
         return [deviceId, result] as const;
       });
-      if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+      if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
       for (const [deviceId, result] of entries) {
         if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
         if (result.kind === 'ok') rememberRemoteProjectOrderStamp(deviceId, result.snapshot.ownerStamp);
@@ -2178,14 +2183,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         }
         return next;
       });
-      if (attempt < 3 && entries.some(([, result]) => result.kind === 'transient')) {
-        retryTimer = setTimeout(() => {
-          void load(attempt + 1);
-        }, 2000);
-      }
+      return entries.some(([, result]) => result.kind === 'transient');
     };
-    const initialLoad = load(1);
-    hostProjectOrderLoadRef.current = initialLoad;
+    const load = startHostProjectOrderLoad(loadAttempt);
+    hostProjectOrderLoadRef.current = load.completion;
     const unsubscribe = subscribeRemoteProjectOrderChanged((deviceId, snapshot) => {
       if (
         cancelled
@@ -2201,8 +2202,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     });
     return () => {
       cancelled = true;
-      if (retryTimer) clearTimeout(retryTimer);
-      if (hostProjectOrderLoadRef.current === initialLoad) hostProjectOrderLoadRef.current = null;
+      load.cancel();
+      if (hostProjectOrderLoadRef.current === load.completion) hostProjectOrderLoadRef.current = null;
       unsubscribe();
     };
   }, [accountGeneration, homeSyncDeviceIds, invoke]);

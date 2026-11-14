@@ -27,8 +27,13 @@ function setup(seed: HomeDisplayOrder | null = null) {
     session: new HomeViewSession(), seed, onCommit: vi.fn() };
   function View() { result = useStableHomeSections(input); return null; }
   const render = (patch: Partial<typeof input> = {}) => { input = { ...input, ...patch }; act(() => root.render(<View />)); };
+  const remount = () => {
+    act(() => root.unmount());
+    root = createRoot(node);
+    render();
+  };
   render();
-  return { render, keys: () => result.find(s => s.key === 'main')?.data.map(row => row.key) ?? [],
+  return { render, remount, keys: () => result.find(s => s.key === 'main')?.data.map(row => row.key) ?? [],
     result: () => result, input: () => input };
 }
 const keys = (...ids: string[]) => projects(...ids)[0].data.map(row => row.key);
@@ -86,6 +91,19 @@ describe('Home display order during incremental loading', () => {
     expect(app.keys()).toEqual(keys('b', 'a'));
     app.render({ session: new HomeViewSession(), sections: projects('a', 'b'), seed: null });
     expect(app.keys()).toEqual(keys('a', 'b'));
+  });
+
+  it('applies current candidates after a drawer unmount/remount, but restores a cold-start seed', () => {
+    const app = setup({ scope: 'all', keys: keys('b', 'a') });
+    expect(app.keys()).toEqual(keys('b', 'a'));
+    app.remount();
+    expect(app.keys()).toEqual(keys('a', 'b'));
+    app.render({ sections: projects('b', 'a') });
+    expect(app.keys()).toEqual(keys('a', 'b'));
+    app.render({ sections: [] });
+    app.remount();
+    app.render({ sections: projects('a', 'b') });
+    expect(app.keys()).toEqual(keys('a', 'b')); // an empty warm mount must not revive the disk seed
   });
 
   it('keeps pinned sections independent and does not persist again on content-only updates', () => {

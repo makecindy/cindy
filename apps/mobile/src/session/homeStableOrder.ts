@@ -37,9 +37,12 @@ export function useStableHomeSections(input: {
   } | null>(null);
   const previous = committed.current?.session === input.session ? committed.current : null;
   const returning = previous && !previous.visible && input.visible;
-  const reset = previous && (previous.revision !== input.revision || returning);
-  const baseline = reset ? null : previous?.order
-    ?? (input.session.has('displayOrder') ? input.session.read<HomeDisplayOrder | null>('displayOrder', null) : null) ?? input.seed;
+  // A remounted drawer is a new visit too. Only a genuinely cold view session
+  // restores the disk seed; the retained order marks that a visit already rendered.
+  const reset = previous
+    ? previous.revision !== input.revision || returning
+    : input.session.has('displayOrder');
+  const baseline = reset ? null : previous?.order ?? input.seed;
   const sections = useMemo(() => input.ready
     ? stabilizeHomeSections(input.sections, baseline, input.scope) : [],
   [input.ready, input.sections, baseline, input.scope]);
@@ -49,7 +52,12 @@ export function useStableHomeSections(input: {
     // Local cache and identity reads settle independently. An empty projection before
     // the first network result must not erase the restored order.
     if (keys.length === 0 && !input.settled) {
-      committed.current = { session: input.session, order: baseline, revision: input.revision, visible: input.visible };
+      committed.current = {
+        session: input.session,
+        order: baseline ?? (reset ? { scope: input.scope, keys: [] } : null),
+        revision: input.revision,
+        visible: input.visible,
+      };
       return;
     }
     const order = previous?.order?.scope === input.scope
