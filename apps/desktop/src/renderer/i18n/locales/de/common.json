@@ -16039,6 +16039,8 @@
       "claudeSubscriptionWorkspaceOverride": "Die .claude-Einstellungen dieses Ordners ändern, wohin Claude Anfragen sendet oder wie die Anmeldung erfolgt. Daher kann das Claude-Abo hier nicht genutzt werden. Entferne diese Einstellungen oder wähle ein Gateway oder ein Modell mit API-Schlüssel",
       "deviceStillLoading": "Remotegerät wird noch geladen. Bitte warte",
       "remoteDefaultsLoadFailed": "Die Einstellungen des Remotegeräts konnten nicht geladen werden. Prüfe die Verbindung; Cindy versucht es erneut.",
+      "branchRequiresWorktree": "Der ausgewählte Branch ist nicht der aktuelle Branch. Aktiviere Worktree oder wähle den aktuellen Branch.",
+      "branchCheckFailed": "Der aktuelle Branch konnte nicht geprüft werden. Aktiviere Worktree, um den ausgewählten Branch zu verwenden, oder prüfe das Projekt und versuche es erneut.",
       "worktreeMissingRepo": "Worktree kann nicht erstellt werden: Das Repository-Stammverzeichnis des aktuellen Verzeichnisses fehlt",
       "worktreeRepoHint": "Wähle das Arbeitsverzeichnis erneut aus und versuche es noch einmal, sobald die Ordneranzeige unten rechts aktualisiert wurde",
       "sessionInactive": "Sitzung ist nicht mehr aktiv",

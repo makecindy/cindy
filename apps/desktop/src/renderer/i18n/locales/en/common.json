@@ -16039,6 +16039,8 @@
       "claudeSubscriptionWorkspaceOverride": "This folder's .claude settings change where Claude sends requests or how it signs in, so the Claude subscription can't be used here. Remove those settings, or pick a gateway or API key model",
       "deviceStillLoading": "The remote device is still loading. Wait a moment.",
       "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
+      "branchRequiresWorktree": "The selected branch is not the current branch. Enable worktree or select the current branch.",
+      "branchCheckFailed": "Could not verify the current branch. Enable worktree to use the selected branch, or check the project and try again.",
       "worktreeMissingRepo": "Can't create a worktree: the current directory's repo root is missing",
       "worktreeRepoHint": "Try picking the working directory again, and retry once the folder badge at the bottom right refreshes",
       "sessionInactive": "Session is no longer active",

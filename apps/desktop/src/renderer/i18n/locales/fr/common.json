@@ -16194,6 +16194,8 @@
       "claudeSubscriptionWorkspaceOverride": "Les paramètres .claude de ce dossier modifient la destination des requêtes de Claude ou sa méthode de connexion : l'abonnement Claude ne peut donc pas être utilisé ici. Supprimez ces paramètres, ou choisissez une passerelle ou un modèle avec clé API",
       "deviceStillLoading": "L'appareil distant est encore en cours de chargement, veuillez patienter",
       "remoteDefaultsLoadFailed": "Impossible de charger les paramètres de l'appareil distant. Vérifiez la connexion ; Cindy réessaie.",
+      "branchRequiresWorktree": "La branche sélectionnée n’est pas la branche actuelle. Activez Worktree ou sélectionnez la branche actuelle.",
+      "branchCheckFailed": "Impossible de vérifier la branche actuelle. Activez Worktree pour utiliser la branche sélectionnée, ou vérifiez le projet et réessayez.",
       "worktreeMissingRepo": "Impossible de créer un worktree : la racine du dépôt du répertoire actuel est introuvable",
       "worktreeRepoHint": "Essayez de sélectionner à nouveau le répertoire de travail, puis réessayez une fois le badge du dossier en bas à droite actualisé",
       "sessionInactive": "La session n'est plus active",
