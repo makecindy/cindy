@@ -671,8 +671,9 @@ function isRoutablePopupUrl(url: string): boolean {
 let popupHostResolver: ((capturedHost: WebContents) => WebContents | null) | null = null;
 
 /**
- * 解析函数收到捕获时的 hostContents:弹出到独立窗口的页签,其 guest 就挂在那扇窗口的 renderer
- * 上,popup 必须回到同一个 renderer(原生 popup surface 的 owner 校验也认它),解析函数据此放行。
+ * 解析函数收到捕获时的 hostContents:弹出到独立窗口的页签与「在新窗口打开」的会话副窗,
+ * 其 guest 就挂在那扇窗口的 renderer 上,popup 必须回到同一个 renderer(原生 popup surface
+ * 的 owner 校验也认它),解析函数据此放行。
  */
 export function setRsbPopupHostResolver(
   resolver: ((capturedHost: WebContents) => WebContents | null) | null,

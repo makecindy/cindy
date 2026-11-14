@@ -18,6 +18,7 @@ import { setWindowsWindowDarkMode } from './windowsWindowDarkMode';
  */
 
 import { BrowserWindow, app, nativeTheme, screen, shell } from 'electron';
+import type { WebContents } from 'electron';
 import path from 'node:path';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
@@ -295,6 +296,23 @@ export function openSessionInNewWindowIfDroppedOutside(
  */
 export function isSecondaryAppWindow(win: BrowserWindow | null | undefined): boolean {
   return Boolean(win && !win.isDestroyed() && secondaryWindows.has(win));
+}
+
+/**
+ * RSB popup 路由的宿主判定(bootstrap 的 setRsbPopupHostResolver 接线用)。
+ *
+ * capturedHost 是页签弹出窗口或本模块的会话副窗时,popup / guest 快捷键转发必须
+ * 回到 capturedHost 自己的 renderer —— 原生弹窗面的 owner 校验只认挂载 webview
+ * 的那扇窗口,改投主窗会让 claimSurface 收到 PERMISSION_DENIED,登录弹窗在哪个
+ * 窗口都出不来(副窗 webview 的 window.open 由此打不开)。其余宿主返回 false,
+ * 由调用方转投 RSB 宿主(主窗或独立侧栏窗)。
+ */
+export function shouldKeepCapturedPopupHost(
+  capturedHost: WebContents,
+  isTabWindowHost: unknown,
+): boolean {
+  if (isTabWindowHost) return true;
+  return isSecondaryAppWindow(BrowserWindow.fromWebContents(capturedHost));
 }
 
 // 开关 vibrancy(仅 CINDY 透壁纸)。副窗 renderer 首帧/切 family 时 IPC theme:apply-vibrancy
