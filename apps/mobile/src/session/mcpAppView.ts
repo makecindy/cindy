@@ -11,6 +11,27 @@ export interface McpAppViewState {
 }
 type Invoke = (device: string, channel: string, args: unknown[]) => Promise<unknown>;
 
+export const MCP_APP_DEFAULT_HEIGHT = 320;
+const MCP_APP_HEIGHT_CACHE_LIMIT = 100;
+const heightCache = new Map<string, number>();
+function heightKey(ownerGeneration: number, deviceId: string, sessionId: string, clientId: string): string {
+  return JSON.stringify([ownerGeneration, deviceId, sessionId, clientId]);
+}
+export function getMcpAppHeight(ownerGeneration: number, deviceId: string, sessionId: string, clientId: string): number | undefined {
+  const key = heightKey(ownerGeneration, deviceId, sessionId, clientId);
+  const value = heightCache.get(key);
+  if (value !== undefined) {
+    heightCache.delete(key);
+    heightCache.set(key, value);
+  }
+  return value;
+}
+function rememberMcpAppHeight(key: string, height: number): void {
+  heightCache.delete(key);
+  heightCache.set(key, height);
+  while (heightCache.size > MCP_APP_HEIGHT_CACHE_LIMIT) heightCache.delete(heightCache.keys().next().value!);
+}
+
 /** Owned by the persistent native host, not by a virtualized message/route. */
 export class McpAppView {
   readonly id = Array.from(getRandomBytes(24), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -19,11 +40,12 @@ export class McpAppView {
   document?: McpAppDocument;
   nativeDocument?: McpAppNativeDocument;
   width = 1;
-  state: McpAppViewState = { loading: true, height: 320 };
+  state: McpAppViewState;
   closing = false;
   disposed = false;
   inject?: (script: string) => void;
   private listeners = new Set<(state: McpAppViewState) => void>();
+  private readonly heightCacheKey: string;
   private readonly heightGuard = new McpAppHeightGuard(() => console.warn('[mcp-apps] App height feedback loop bounded'));
   private closePromise?: Promise<void>;
 
@@ -31,8 +53,10 @@ export class McpAppView {
     invoke: Invoke, deviceId: string, sessionId: string, clientId: string,
     private readonly changed: () => void,
     private readonly removed: () => void,
-    openLink: (url: string) => Promise<void>,
+    openLink: (url: string) => Promise<void>, ownerGeneration: number,
   ) {
+    this.heightCacheKey = heightKey(ownerGeneration, deviceId, sessionId, clientId);
+    this.state = { loading: true, height: getMcpAppHeight(ownerGeneration, deviceId, sessionId, clientId) ?? MCP_APP_DEFAULT_HEIGHT };
     this.controller = new McpAppController(
       (id, input) => invoke(deviceId, MCP_APPS_INVOKE, [id, input]), sessionId, clientId,
       (message) => {
@@ -69,6 +93,7 @@ export class McpAppView {
   }
   private update(value: Partial<McpAppViewState>): void {
     if (this.disposed) return;
+    if (value.height !== undefined) rememberMcpAppHeight(this.heightCacheKey, value.height);
     this.state = { ...this.state, ...value };
     this.listeners.forEach((listener) => listener(this.state));
     this.changed();
