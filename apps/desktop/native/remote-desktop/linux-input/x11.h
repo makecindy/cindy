@@ -5,6 +5,7 @@
 #include <X11/XKBlib.h>
 #include <X11/extensions/XTest.h>
 #include <limits.h>
+#include <X11/keysym.h>
 
 static Display *xdisplay;
 static int xorigin, yorigin, xwidth, xheight;
@@ -57,48 +58,4 @@ static void x11_scroll(double dx, double dy) {
   x11_wheel(&xwheel, dx, 6, 7);
   x11_wheel(&ywheel, dy, 4, 5);
 }
-static bool x11_text(const char *text) {
-  /* Reserve an unused, unpressed key only for this commit, restoring the exact
-   * mapping before acknowledging. Unlike Ctrl+V this never replaces clipboard
-   * contents. All levels carry the same symbol (no synthetic Shift shortcuts). */
-  int min, max, per;
-  XDisplayKeycodes(xdisplay, &min, &max);
-  KeySym *map = XGetKeyboardMapping(xdisplay, min, max - min + 1, &per);
-  if (!map) return false;
-  char held[32];
-  XQueryKeymap(xdisplay, held);
-  int spare = 0;
-  for (int k = max; k >= min && !spare; k--) {
-    bool empty = !(held[k / 8] & (1 << (k % 8)));
-    for (int j = 0; j < per; j++)
-      if (map[(k - min) * per + j] != NoSymbol) empty = false;
-    if (empty) spare = k;
-  }
-  if (!spare) { XFree(map); return false; }
-  KeySym *symbols = calloc((size_t)per, sizeof(KeySym));
-  if (!symbols) { XFree(map); return false; }
-  const unsigned char *p = (const unsigned char *)text;
-  while (*p && !stopping) {
-    uint32_t c = *p++;
-    int rest = c < 0x80 ? 0 : c < 0xe0 ? 1 : c < 0xf0 ? 2 : 3;
-    if (rest) c &= (1u << (6 - rest)) - 1;
-    while (rest--) c = (c << 6) | (*p++ & 63);
-    KeySym sym = c == '\n' || c == '\r' ? 0xff0d : c == '\t' ? 0xff09 :
-      c < 256 ? c : 0x01000000u | c;
-    for (int j = 0; j < per; j++) symbols[j] = sym;
-    XChangeKeyboardMapping(xdisplay, spare, per, symbols, 1);
-    XSync(xdisplay, False);
-    /* Allow clients to consume MappingNotify and each edge before remapping.
-     * The main process limits commits to 64 characters on this backend. */
-    XTestFakeKeyEvent(xdisplay, spare, True, 10);
-    XTestFakeKeyEvent(xdisplay, spare, False, 10);
-    XSync(xdisplay, False);
-    struct timespec pace = {.tv_nsec = 10000000};
-    nanosleep(&pace, NULL);
-  }
-  XChangeKeyboardMapping(xdisplay, spare, per, map + (spare - min) * per, 1);
-  XSync(xdisplay, False);
-  free(symbols);
-  XFree(map);
-  return !stopping;
-}
+#include "x11-text.h"

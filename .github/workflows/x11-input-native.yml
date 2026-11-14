@@ -1,0 +1,58 @@
+name: X11 native input
+
+on:
+  pull_request:
+    paths:
+      - 'apps/desktop/native/remote-desktop/linux-input/**'
+      - '.github/workflows/x11-input-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  x11-input:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libwayland-dev libwayland-bin libxkbcommon-dev libjson-c-dev libx11-dev libxtst-dev xvfb x11-xkb-utils python3
+      - name: Compile and test production input with a private X server
+        shell: bash
+        run: |
+          set -euo pipefail
+          source=apps/desktop/native/remote-desktop/linux-input
+          node --test "$source/test.mjs"
+          output=$(mktemp -d)
+          trap 'rm -rf "$output"' EXIT
+          node "$source/build.mjs" "$output"
+          python3 "$source/x11-test.py" "$output/cindy-linux-desktop-input"
+      - name: Compare delayed-consumption regression against PR base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source=apps/desktop/native/remote-desktop/linux-input
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          baseline=$(mktemp -d)
+          trap 'rm -rf "$baseline"' EXIT
+          git archive "$BASE_SHA" "$source" | tar -x -C "$baseline"
+          node "$baseline/$source/build.mjs" "$baseline/bin"
+          # Run the same receiving client against the base helper. Keep this
+          # diagnostic after the required fixed-helper pass: future bases may
+          # already contain the fix, so baseline success is not a CI failure.
+          if python3 "$source/x11-test.py" "$baseline/bin/cindy-linux-desktop-input"; then
+            echo 'PR base also passes the delayed-consumption regression'
+          else
+            echo 'PR base fails the regression; fixed helper passed above'
+          fi
