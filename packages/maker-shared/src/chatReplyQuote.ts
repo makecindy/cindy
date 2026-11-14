@@ -17,9 +17,12 @@ export const CHAT_REPLY_QUOTE_EXCERPT_MAX = 280;
 
 export function chatReplyQuoteExcerpt(text: string): string {
   const line = text.replace(/\s+/g, ' ').trim();
-  return line.length > CHAT_REPLY_QUOTE_EXCERPT_MAX
-    ? `${line.slice(0, CHAT_REPLY_QUOTE_EXCERPT_MAX - 1)}…`
-    : line;
+  if (line.length <= CHAT_REPLY_QUOTE_EXCERPT_MAX) return line;
+  let end = CHAT_REPLY_QUOTE_EXCERPT_MAX - 1;
+  const high = line.charCodeAt(end - 1);
+  const low = line.charCodeAt(end);
+  if (high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff) end -= 1;
+  return `${line.slice(0, end)}…`;
 }
 
 /** Field-by-field validation of a persisted or received quote; anything malformed is no quote. */
