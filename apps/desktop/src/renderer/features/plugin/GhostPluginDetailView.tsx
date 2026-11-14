@@ -1,9 +1,11 @@
-import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups, getPluginToolUi } from '@cindy/plugin-protocol';
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
 import { PluginShareButton } from './PluginShareButton';
 import { PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
+import { permissionItemDetail } from '../../../shared/ghostPermissionDetail';
 import { Button } from '@/components/ui/button';
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -61,6 +63,7 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
   declaredGhostControlPoints,
+  declaredGhostTaskEventTopics,
   ghostDeclaresHiddenTasks,
   ghostHostUiNeedsApproval,
   ghostToolDeclaresHandoff,
@@ -494,9 +497,10 @@ export function GhostPluginDetailView({
                       reloadKey={githubConnectionVersion}
                       account={
                         hasGithubConnection ? (
-                          <GithubAccountCard
-                            onConnected={() => setGithubConnectionVersion((version) => version + 1)}
-                          />
+                          <div>
+                            <GithubAccountCard onConnected={() => setGithubConnectionVersion((version) => version + 1)} />
+                            {ghost.manifest.id === 'cindy-github' && ghost.namespace === null && <GithubAppCard />}
+                          </div>
                         ) : undefined
                       }
                       ghost={ghost}
@@ -614,6 +618,32 @@ export function GhostPluginDetailView({
             {t('settings.ghosts.perm.agentCompanionsRequest')}
           </Button>
         ) : null}
+
+        {!remote && enabled && ghost ? declaredGhostHostToolGroups(ghost.manifest).filter(group => !ghost.approvedHostToolGroups?.includes(group)).map(group => (
+          <Button key={group} variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try {
+              await window.electronAPI.ghosts.requestTaskApproval(detail.id, `host-tools:${group}`);
+            } catch {
+              toast.error(t('settings.ghosts.errors.generic'));
+            } finally {
+              setTaskApprovalPending(false);
+            }
+          }}>
+            {t('settings.ghosts.perm.hostToolsRequest', { group: t(`settings.ghosts.perm.hostTools_${group}`) })}
+          </Button>
+        )) : null}
+
+        {!remote && enabled && ghost ? declaredGhostTaskEventTopics(ghost.manifest).filter(topic => !ghost.approvedEventTopics?.includes(topic)).map(topic => (
+          <Button key={topic} variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try { await window.electronAPI.ghosts.requestTaskApproval(detail.id, `event:${topic}`); }
+            catch { toast.error(t('settings.ghosts.errors.generic')); }
+            finally { setTaskApprovalPending(false); }
+          }}>
+            {t('settings.ghosts.perm.hostToolsRequest', { group: t(`settings.ghosts.perm.${topic === 'message' ? 'subscribeMessage' : 'subscribeTaskState'}`) })}
+          </Button>
+        )) : null}
 
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
         {!remote ? (
@@ -935,7 +965,7 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
           key: item.key,
           title: t('settings.ghosts.perm.' + item.labelKey, item.labelArgs),
           descriptions: [
-            item.detailKey ? t('settings.ghosts.perm.' + item.detailKey, item.detailArgs) : '',
+            permissionItemDetail(item, t) ?? '',
             item.detail ?? '',
           ].filter(Boolean),
           icon: permissionItemIcon(item),

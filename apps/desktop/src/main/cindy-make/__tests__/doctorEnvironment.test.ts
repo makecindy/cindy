@@ -111,9 +111,9 @@ describe('bounded diagnostic probes', () => {
       },
     });
     expect(options).not.toHaveProperty('shell', true);
-    spawned.stdout.emit('data', Buffer.from('10.33.2\n'));
+    spawned.stdout.emit('data', Buffer.from('11.28.9\n'));
     spawned.emit('close', 0);
-    await expect(checking).resolves.toMatchObject({ status: 'ok', stdout: '10.33.2' });
+    await expect(checking).resolves.toMatchObject({ status: 'ok', stdout: '11.28.9' });
     expect(process.env).toEqual(processEnv);
   });
 

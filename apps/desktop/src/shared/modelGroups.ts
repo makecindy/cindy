@@ -8,6 +8,7 @@ export const MODEL_GROUPS_IPC = {
   GET: 'model-groups:get',
   SET: 'model-groups:set',
   RESOLVE: 'model-groups:resolve',
+  COMMIT: 'model-groups:commit',
   /** 记下这个任务是经哪条路线建的、用着哪个候选(撞配额时据此提议换来源)。 */
   BIND_SESSION: 'model-groups:bind-session',
   /** 撞配额时同一条路线里还能接着用的下一个来源；没有为 null。 */
@@ -28,6 +29,11 @@ export interface ModelGroupCandidate {
   agentKind: ModelGroupAgentKind;
   providerId: string;
   model: string;
+  /**
+   * 运行位置：另一台电脑的设备 id，或分享来的供应商(`share:<id>`)。省略 = 本机。
+   * 选中它的新任务，Agent 在这个位置运行；供应商与模型属于那里的目录。
+   */
+  agentDeviceId?: string;
   /** 用户暂时不让这条路线用它；保留在列表里。 */
   off?: boolean;
 }
@@ -89,6 +95,8 @@ export interface ModelGroupTraceEntry {
   agentKind: ModelGroupAgentKind;
   providerId: string;
   model: string;
+  /** 运行位置；本机省略。 */
+  agentDeviceId?: string;
   modelName: string;
   sourceName: string;
   state: ModelGroupTraceState;
@@ -103,6 +111,8 @@ export interface ModelGroupResolvedRoute {
   agentKind: ModelGroupAgentKind;
   providerId: string;
   model: string;
+  /** 选中的来源在另一台电脑或是分享来的：新任务的 Agent 在那里运行。本机省略。 */
+  agentDeviceId?: string;
   effort?: string;
 }
 
@@ -115,7 +125,10 @@ export interface ModelGroupAppliedException {
   viaRouteName?: string;
 }
 
-export type ModelGroupResolveResult =
+export type ModelGroupResolveResult = {
+  /** 本机选路凭据：实际采用后提交；预览没有凭据。 */
+  decisionId?: string;
+} & (
   | {
       outcome: 'routed';
       groupName: string;
@@ -129,9 +142,9 @@ export type ModelGroupResolveResult =
       exceptions?: ModelGroupAppliedException[];
     }
   /** missing = 这条路线已被删除；unavailable = 里面没有现在能用的模型。两者都沿用用户原来选的模型。 */
-  | { outcome: 'missing' | 'unavailable'; groupName: string; trace: ModelGroupTraceEntry[] };
+  | { outcome: 'missing' | 'unavailable'; groupName: string; trace: ModelGroupTraceEntry[] });
 
-/** 撞配额时「换到下一个来源继续」的提议(model-groups.md §6.1)。 */
+/** 撞配额时「换到下一个来源继续」的提议(model-groups.md §6.1)。只提议与任务同一运行位置(本机)的来源。 */
 export interface ModelGroupSwitchOffer {
   groupName: string;
   /** 换过去之后记回去时用：任务仍属于同一个组。 */
@@ -151,6 +164,11 @@ export interface ModelGroupResolveRequest {
   dryRun?: boolean;
   /** 第一条消息的情况；时间由主进程自己取，不信界面传来的。 */
   context?: { hasImages?: boolean };
+  /**
+   * 只在这个运行位置的来源里选(agentDeviceId null = 本机)：进行中的任务里选模式时用，任务换不了电脑。
+   * 省略 = 不限(新任务)。
+   */
+  location?: { agentDeviceId: string | null };
 }
 
 function text(value: unknown, max: number): string {
@@ -168,11 +186,35 @@ function candidate(raw: unknown): ModelGroupCandidate | null {
   const providerId = text(value.providerId, MODEL_GROUP_LIMITS.field);
   const model = text(value.model, MODEL_GROUP_LIMITS.field);
   if (!kind || !providerId || !model) return null;
-  return { agentKind: kind, providerId, model, ...(value.off === true ? { off: true } : {}) };
+  // 运行位置截断后会指到别处：格式不对的整条丢弃，不悄悄变成本机。
+  let agentDeviceId: string | undefined;
+  if (value.agentDeviceId !== undefined && value.agentDeviceId !== null) {
+    agentDeviceId = modelGroupAgentDeviceId(value.agentDeviceId) ?? undefined;
+    if (!agentDeviceId) return null;
+  }
+  return {
+    agentKind: kind, providerId, model,
+    ...(agentDeviceId ? { agentDeviceId } : {}),
+    ...(value.off === true ? { off: true } : {}),
+  };
 }
 
-export function modelGroupCandidateKey(value: Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model'>): string {
-  return `${value.agentKind}\u0000${value.providerId}\u0000${value.model}`;
+/** 运行位置 id：非空、不超过与供应商 id 相同的长度上限；否则为 null。 */
+export function modelGroupAgentDeviceId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const id = value.trim();
+  return id && id.length <= MODEL_GROUP_LIMITS.field ? id : null;
+}
+
+/**
+ * 候选的身份：引擎 + 供应商连接 + 模型，在另一台电脑或分享来的再加上运行位置——同一个模型在两台电脑上是两个来源。
+ * 本机的键不带位置，与旧版存下的轮流位置和任务记录一致。
+ */
+export function modelGroupCandidateKey(
+  value: Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model'> & { agentDeviceId?: string | null },
+): string {
+  const base = `${value.agentKind}\u0000${value.providerId}\u0000${value.model}`;
+  return value.agentDeviceId ? `${base}\u0000${value.agentDeviceId}` : base;
 }
 
 function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {

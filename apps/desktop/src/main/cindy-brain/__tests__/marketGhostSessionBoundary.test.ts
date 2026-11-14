@@ -14,6 +14,10 @@ describe('market Ghost session boundary', () => {
     resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const availabilitySource = readFileSync(
+    resolve(process.cwd(), 'src/main/cindy-brain/ghostAvailability.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
   const marketServiceSource = readFileSync(
     resolve(process.cwd(), 'src/main/plugin-market/service.ts'),
     'utf8',
@@ -148,17 +152,23 @@ describe('market Ghost session boundary', () => {
   });
 
   it('fails owner-scoped plugin reads closed while an account boundary is pending', () => {
-    const start = source.indexOf('function availableGhosts(): InstalledGhost[] {');
-    const end = source.indexOf('\n}', start);
-    const body = source.slice(start, end);
+    // availableGhosts and findGhostForInstanceId delegate to ghostAvailability.ts
+    // (shared with the Node Host); their bodies are checked there.
+    expect(source).toContain('return availableGhostsIn(getGhostManager);');
+    expect(source).toContain(
+      'return findGhostForInstanceIdIn({ getGhostManager, isGhostAvailableForActiveSession, availableGhosts }, id, namespace);',
+    );
+    const start = availabilitySource.indexOf('export function availableGhostsIn(');
+    const end = availabilitySource.indexOf('\n}', start);
+    const body = availabilitySource.slice(start, end);
     expect(body).toContain('if (isAppSessionBoundaryPending()) return [];');
     expect(source).toContain(
       'const resolved = resolveInstalledGhost(availableGhosts(), id, namespace);',
     );
-    const resolverStart = source.indexOf('export function findGhostForInstanceId(');
-    const resolverBody = source.slice(resolverStart, source.indexOf('\n}', resolverStart));
+    const resolverStart = availabilitySource.indexOf('export function findGhostForInstanceIdIn(');
+    const resolverBody = availabilitySource.slice(resolverStart, availabilitySource.indexOf('\n}', resolverStart));
     expect(resolverBody.match(/availableGhosts\(\)/g)).toHaveLength(1);
-    expect(resolverBody).toContain('resolvePluginInstanceQuery(availableGhosts(), id, namespace)');
+    expect(resolverBody).toContain('resolvePluginInstanceQuery(lookup.availableGhosts(), id, namespace)');
     expect(resolverBody).not.toContain('findInstalledGhostByInstanceId');
     // The exact-key fast path fails closed at an account boundary and keeps the
     // active-session availability filter that availableGhosts() applies.
@@ -219,7 +229,7 @@ describe('market Ghost session boundary', () => {
     )({
       hasPendingGhostCalls: () => false, hasRunningGhostErrand: () => false, hasRunningGhostCindyWork: () => false,
       fsSlotSingleton: null, networkSlotSingleton: null,
-      handoffStoreSingleton: { isBusy: (part: string) => part === 'busy' },
+      isGhostHandoffBusy: (part: string) => part === 'busy',
     });
     expect(() => assertGhostRelocationIdle('busy')).toThrow('Ghost relocation is waiting for active work to finish');
     expect(() => assertGhostRelocationIdle('idle')).not.toThrow();
@@ -344,6 +354,9 @@ describe('market Ghost session boundary', () => {
     expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
     expect(helperBody).toContain('marketLedger.restoreInstallation(');
     expect(helperBody).toContain('...deliveryNamespaceFields(previousGhost)');
+    expect(helperBody).toContain('expectedInstalledInstanceId: instanceId,');
+    expect(helperBody.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost)'))
+      .toBeGreaterThan(helperBody.indexOf('manager.update(cindyFilePath,'));
     expect(helperBody).not.toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(helperBody).not.toContain('marketInstallSubject');
     expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');
@@ -396,6 +409,10 @@ describe('market Ghost session boundary', () => {
       'await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));',
     );
     expect(body).toContain('runtime.resetFuse(installedGhostStoragePart(result.ghost));');
+    expect(body).toContain('...(!previousRelId ? { expectedInstalledInstanceId: installedGhostStoragePart(installed) } : {}),');
+    const confirmNamespace = body.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost,');
+    expect(confirmNamespace).toBeGreaterThan(body.indexOf('await expected.afterCommitInLock?.(result.ghost, commitEvidence)'));
+    expect(confirmNamespace).toBeLessThan(body.indexOf('spawnIfResident(result.ghost)'));
     expect(body).not.toContain(
       'pluginStoragePart(createPluginLogicalIdentity(expected.namespace ?? null, expected.ghostId))',
     );

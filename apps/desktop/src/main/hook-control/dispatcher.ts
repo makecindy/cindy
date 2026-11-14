@@ -1,3 +1,4 @@
+import { createHookQuestionPublisher } from './questionPublisher';
 /**
  * hook-control/dispatcher.ts
  * ---------------------------------------------------------------------------
@@ -49,6 +50,8 @@ import {
   makeTurnProgress,
   makeTurnReopen,
   HOOK_FEATURE_TELEGRAM_CARD_OPS,
+  HOOK_FEATURE_TELEGRAM_QUESTION_OPS,
+  HOOK_FEATURE_IM_QUESTIONS,
   HOOK_FEATURE_TELEGRAM_COMMANDS,
   HOOK_FEATURE_FEISHU_FINAL_OPS,
   HOOK_FEATURE_FEISHU_PROGRESS_OPS,
@@ -91,7 +94,8 @@ import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
 import { hookReplyTarget } from '../im/shared/autoReviewReferences.js';
-import { QUOTA_FAILURE_NOTICE_PREFIX } from '../im/shared/turnRetryNotice.js';
+import { quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
+import { imText } from '../im/shared/imText.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
 import { createAckReactions, type AckReactionTask } from './ackReactions.js';
@@ -108,6 +112,9 @@ import {
   type OfficialTelegramCardPublisher,
   type OfficialTelegramCardPublisherDeps,
 } from './telegramCardOps.js';
+import { createTelegramNoticePublisher } from './telegramNoticeOps';
+import type { QuestionControls } from '../maker-ipc/interactionRouter';
+import type { QuestionRequest } from '../im/shared/questionCard';
 import type { HookConnectionConfig } from './store.js';
 import type { HookBindingStore } from './bindings.js';
 import { terminalDeliveryExpired } from './requestLedger.js';
@@ -283,6 +290,8 @@ export interface HookRunRequest {
    * retirement failures and the fixed 代输入 pointer.
    */
   onRuntimeRecovery?: (text: string) => Promise<boolean>;
+  /** Only supplied when the channel can deliver requester-bound questions to this task's lane. */
+  onQuestion?: (request: QuestionRequest, controls: QuestionControls) => Promise<void>;
   /**
    * 执行中交互卡回调(interaction.request 链路)。runner 把 maker 的
    * InteractionRequest 合成渠道无关卡片后经此发出; 连接不在线时丢弃
@@ -526,7 +535,7 @@ export const HOOK_ROUTE_UNAVAILABLE_PREFIX = 'hook session route unavailable:';
 function hookFailureReasonForLog(errorMessage: string | null | undefined): string {
   const message = errorMessage ?? '';
   // 额度说明里带供应商名与上游原文, 日志只记类别。
-  if (message.startsWith(QUOTA_FAILURE_NOTICE_PREFIX)) return 'provider-quota-exhausted';
+  if (message.startsWith(quotaFailureNoticePrefix())) return 'provider-quota-exhausted';
   if (!message.startsWith(HOOK_ROUTE_UNAVAILABLE_PREFIX)) return 'unclassified';
   return message.replace(/\s+/g, ' ').slice(0, 300);
 }
@@ -960,11 +969,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   /** 仍在驱动消息的轮次载体与卡片发布器(账号切换 / dispose 时统一停下)。 */
   const activeTurnCarriers = new Set<OfficialTelegramTurnCarrier>();
   const activeCardPublishers = new Set<OfficialTelegramCardPublisher>();
+  const questionActions = new Map<string, {
+    connectionId: string; requestId: string; generation: number;
+    click(button: string, text?: string): Promise<boolean>;
+  }>();
   const closeTelegramTurnOps = (): void => {
     for (const carrier of [...activeTurnCarriers]) carrier.close();
     activeTurnCarriers.clear();
     for (const publisher of [...activeCardPublishers]) publisher.dispose();
     activeCardPublishers.clear();
+    questionActions.clear();
     telegramOpRouter.failAll();
   };
   /** 只有声明分块转传的 X server 才走这条路; 否则继续内联 10 MiB 以内的视频。 */
@@ -1990,6 +2004,39 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       (cards ?? legacyCards).close(interactionId, reason);
     };
 
+    const notices = task.run.source?.im === 'telegram'
+      && telegramOpsNegotiated(task.connectionId, HOOK_FEATURE_TELEGRAM_QUESTION_OPS) === true
+      ? createTelegramNoticePublisher({
+          connectionId: task.connectionId, requestId: task.requestId, externalKey: task.externalKey,
+          router: telegramOpRouter,
+          register: (id, click) => {
+            questionActions.set(id, { connectionId: task.connectionId,
+              requestId: task.requestId, generation: task.accountGeneration, click });
+            return () => { questionActions.delete(id); };
+          },
+          getSend: () => {
+            if (!isCurrentGeneration(task.accountGeneration)
+              || !dirStillAllowed(task.connectionId, task.run.workingDir, task.run.sessionId)
+              || telegramOpsNegotiated(task.connectionId, HOOK_FEATURE_TELEGRAM_QUESTION_OPS) !== true) return undefined;
+            return sendForGeneration(task.connectionId, task.accountGeneration);
+          },
+        })
+      : (['slack', 'feishu', 'lark'].includes(task.run.source?.im ?? '')
+        && serverFeatures.get(task.connectionId)?.includes(HOOK_FEATURE_IM_QUESTIONS))
+        ? createHookQuestionPublisher({ requestId: task.requestId,
+            register: (id, click) => {
+              questionActions.set(id, { connectionId: task.connectionId, requestId: task.requestId,
+                generation: task.accountGeneration, click });
+              return () => { questionActions.delete(id); };
+            },
+            send: frame => {
+              if (!isCurrentGeneration(task.accountGeneration)
+                || !dirStillAllowed(task.connectionId, task.run.workingDir, task.run.sessionId)
+                || !serverFeatures.get(task.connectionId)?.includes(HOOK_FEATURE_IM_QUESTIONS)) return false;
+              return sendForGeneration(task.connectionId, task.accountGeneration)?.(frame) ?? false;
+            },
+          }) : null;
+
     let outcome: HookRunOutcome;
     let runnerThrew = false;
     /**
@@ -2013,8 +2060,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       outcome = {
         status: 'error',
         finalText: '',
-        errorMessage:
-          '这个任务所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
+        errorMessage: imText('imBot.text.hook.dispatch.dirUnmapped'),
         durationMs: 0,
       };
     } else {
@@ -2056,6 +2102,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
               });
             },
           } : {}),
+          ...(notices ? { onQuestion: notices.open } : {}),
           onInteraction,
           onInteractionCancel,
           ...(task.commitContextCursor
@@ -2119,6 +2166,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // outbox path. A late progress callback from the observer must never write
     // over the answer after this point.
     const finalIntent = messageLifecycle?.beginFinal() ?? null;
+    // Questions must arrive before this turn is terminal on the server.
+    await notices?.drain();
     const terminalRecord = {
       connectionId: task.connectionId,
       requestId: task.requestId,
@@ -2382,9 +2431,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         .some((root) => isPathWithin(root, dir));
     const workspaceAliasFor = (dir: string): { workspaceAlias?: string } => {
       if (inDialogueRoot(dir)) return { workspaceAlias: HOOK_CHAT_WORKSPACE_ALIAS };
-      const alias = Object.entries(getConnection(connectionId)?.workspaces ?? config.workspaces)
+      const connection = getConnection(connectionId) ?? config;
+      // 同一个目录可能同时有现用名称和改名前的旧名称: 偏好按现用名称存, 所以现用的优先。
+      const retiredNames = new Set(connection.retiredWorkspaceNames ?? []);
+      const alias = Object.entries(connection.workspaces)
         .filter(([, root]) => isPathWithin(root, dir))
-        .sort(([, left], [, right]) => path.resolve(right).length - path.resolve(left).length)[0]?.[0];
+        .sort(
+          ([leftName, left], [rightName, right]) =>
+            path.resolve(right).length - path.resolve(left).length ||
+            Number(retiredNames.has(leftName)) - Number(retiredNames.has(rightName)),
+        )[0]?.[0];
       return alias !== undefined ? { workspaceAlias: alias } : {};
     };
     // 显式接管的目标失效时会从旧目录 / 本次别名提示里挑一个安全落点, 然后
@@ -2533,6 +2589,33 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         : undefined;
     if (!dir && !isChat) return { reject: 'unknown_workspace' };
 
+    /**
+     * 目录是否就在这次要去的项目里(「对话」按对话根判)。
+     *
+     * 只判「仍在清单内」不够: 清单里有 A、B 两个项目时, 用户在 IM 里把这条会话从 A 切到 B,
+     * 服务端带着同一个 externalKey 派发过来, 绑定着的旧任务还在 A 里、也还在清单内, 于是
+     * 新消息照旧进了 A 的旧任务 —— 而机器人刚回过「已切换到 B, 之后的任务在这里执行」。
+     * 所以复用要求任务所在的项目就是这次点名的项目; 对不上按「移出」处理, 静默换新任务。
+     * 同一个项目里换目录(子目录、任务自己的 worktree)仍然无感跟随。
+     * 每次按当前清单现算(理由同 inWhitelistNow), 改名前的旧名称与现用名称指向同一个目录,
+     * 按目录比较所以不受改名影响。
+     */
+    const sameDirectory = (left: string, right: string): boolean => {
+      const normalize = (value: string): string => {
+        const resolved = path.resolve(value);
+        return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+      };
+      return normalize(left) === normalize(right);
+    };
+    const inRequestedProject = (target: string | null): boolean => {
+      if (target === null) return false;
+      if (isChat) return inDialogueRoot(target);
+      if (dir === undefined) return false;
+      const root = Object.values(getConnection(connectionId)?.workspaces ?? config.workspaces)
+        .filter((candidate) => isPathWithin(candidate, target))
+        .sort((left, right) => path.resolve(right).length - path.resolve(left).length)[0];
+      return root !== undefined && sameDirectory(root, dir);
+    };
     const legacyBound =
       namespacedBound === null && legacyNamespace !== null
         ? bindings.get(legacyNamespace, payload.externalKey)
@@ -2569,8 +2652,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const pendingDir = awaitingPersist.get(bound) ?? null;
       // 同下方的 inAllowedRoot: 用当前映射而不是入口快照 —— inspect 期间用户可能
       // 刚把这个目录加回来(PR #733 review 指出)。
-      const pendingStillAllowed =
-        pendingDir !== null && (isChat ? inDialogueRoot(pendingDir) : inWhitelistNow(pendingDir));
+      const pendingStillAllowed = inRequestedProject(pendingDir);
       /**
        * 关键竞态防护: 绑定的 session 是本 dispatcher 刚建、**尚未落库**的
        * (inspect 查不到)且正在跑/排队时直接复用 —— 否则同 key 的后续消息会各开
@@ -2616,9 +2698,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // chat 伪目录的会话住在 dialogues 根下, 按对话根校验
       // 用 inWhitelistNow 而不是入口快照: 见其定义处 —— inspect 期间映射可能刚
       // 被改回来, 拿旧快照判撤权会误杀一条此刻合法的绑定。
-      const inAllowedRoot =
-        info !== null &&
-        (isChat ? inDialogueRoot(info.workingDir) : inWhitelistNow(info.workingDir));
+      const inAllowedRoot = info !== null && inRequestedProject(info.workingDir);
       const usable = info?.usable === true && info.workingDir !== null;
       /**
        * 复用与否只看这一条: 会话当前的工作目录仍落在工作目录映射(或内置对话根)
@@ -2665,7 +2745,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       }
       log.info(
         `hook binding for ${payload.externalKey} dropped: session ${bound} ${
-          info?.usable ? 'left the workspace map' : 'is gone or archived'
+          info?.usable ? 'is not in the requested project' : 'is gone or archived'
         }`,
       );
     }
@@ -2756,7 +2836,13 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         effort,
         permissionMode,
         ...(isChat ? { workspaceKind: 'dialogue' as const } : {}),
-        ...(effectiveWorkspace ? { workspaceAlias: effectiveWorkspace } : {}),
+        // 偏好按项目现在的名称存。服务端可能还带着改名前的旧名称来派发(它按名称记会话
+        // 选的项目), 所以这里按目录找回现用名称, 找不到才用带来的那个。
+        ...(isChat || dir === undefined
+          ? effectiveWorkspace
+            ? { workspaceAlias: effectiveWorkspace }
+            : {}
+          : { workspaceAlias: workspaceAliasFor(dir).workspaceAlias ?? (effectiveWorkspace as string) }),
         title: buildHookSessionTitle(
           providerName,
           titleText,
@@ -3284,6 +3370,14 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     },
     handleInteractionDecision(connectionId, payload) {
       if (!accountActive) return;
+      const question = questionActions.get(payload.interactionId);
+      if (question) {
+        if (question.connectionId === connectionId && question.requestId === payload.requestId
+          && isCurrentGeneration(question.generation)) {
+          void question.click(payload.buttonId, payload.answerText).catch(() => log.warn('Telegram question update failed'));
+        }
+        return;
+      }
       // 归属校验: requestId 必须是本连接正在执行的任务(排队中的任务不可能有
       // 未决交互 —— 交互只在 turn 执行期产生)
       const runningEntry = runningByRequest.get(ackKey(connectionId, payload.requestId));

@@ -21,7 +21,7 @@ export const TEAMMATE_MEMORY_MOVE_RECEIPT_FILE = 'project-memory-move.json';
 export const TEAMMATE_PROJECT_MEMORY_SEGMENTS = ['.cindy', 'memory'] as const;
 
 /** Derived files beside the records: USER.md travels inside the profile, MEMORY.md is a rebuilt index. */
-const DERIVED_MEMORY_FILES = new Set(['USER.md', 'MEMORY.md']);
+const DERIVED_MEMORY_FILES = new Set(['USER.md', 'MEMORY.md', 'README.md']);
 
 export function teammateWorkspaceDir(ownerRoot: string, botId: string): string {
   return path.join(botProfileDir(ownerRoot, botId), 'workspace');
@@ -69,7 +69,7 @@ export function unlinkedTeammateProjectMemoryDir(workspace: string): string {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    if (linked) throw new MemoryError('not-ready', 'the teammate memory folder is a link; refusing to use it');
+    if (linked) throw new MemoryError('not-ready', 'the buddy memory folder is a link; refusing to use it');
   }
   return memory;
 }

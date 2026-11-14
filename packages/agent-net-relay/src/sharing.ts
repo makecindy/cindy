@@ -10,7 +10,8 @@ import { verifyRequestProof } from './identity.js';
 export interface SharingActor { accountId: string; deviceId: string; networkId: string; }
 export interface SharingAuthenticationContext {
   rootPublicKey(networkId: string): string;
-  remember(account: string, device: string, nonce: string): void;
+  /** Throws on replay. Asynchronous when replicas share the replay window. */
+  remember(account: string, device: string, nonce: string): void | Promise<void>;
 }
 export interface AgentNetSharingOptions {
   /** A separate, audience-bound account identity surface. Full account access
@@ -30,14 +31,16 @@ export function sameAccount(member: { subject: string; tenant?: boolean }, accou
 }
 export interface SharingHost {
   storage: SharingStorage;
+  /** Refresh the authenticated actor's network before reading authorization documents. */
+  synchronize?(req: IncomingMessage, networkId: string): Promise<void>;
   /** `tenant`: the network another account owns on this relay. */
   member(req: IncomingMessage, bytes: Buffer): Promise<{ networkId: string; deviceId: string; subject: string; tenant?: boolean }>;
-  hostStatus(deviceId: string, networkId: string): { online: boolean; capabilities: readonly string[] };
+  hostStatus(deviceId: string, networkId: string): { online: boolean; capabilities: readonly string[] } | Promise<{ online: boolean; capabilities: readonly string[] }>;
   changed(networkIds: readonly string[]): void;
   requests(): DelegationRequest[];
   saveRequest(request: DelegationRequest): Promise<void>;
   grant(request: DelegationRequest): { rootPublicKey: string; certificate: DeviceCertificate; delegation?: Delegation; revoked?: boolean };
-  remember(account: string, device: string, nonce: string): void;
+  remember(account: string, device: string, nonce: string): void | Promise<void>;
   rootPublicKey(networkId: string): string;
   now(): number;
   grants?(networkId: string): Delegation[];
@@ -52,15 +55,25 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
   let cachedRevision: unknown;
   let authority: ReturnType<SharingStorage['read']> | undefined;
   const admissions = new Map<string, boolean>();
-  const services = (networkId?: string) => {
+  const services = (scope: string, networkId?: string) => {
     const repo = createSharingRepositories(host.storage, networkId);
+    const state = host.storage.read();
+    const bindings = new Map(state.bindings.filter(b => b.kind === 'provider-share' && b.networkId === scope)
+      .map(b => [b.resourceId, b]));
+    // Filter before the domain service starts live host queries, not after receiving its results.
+    const listReceived = repo.providers.listReceived;
+    repo.providers.listReceived = async guest => (await listReceived(guest)).filter(share => bindings.has(share.shareId));
+    const statuses = new Map<string, Promise<{ online: boolean; capabilities: readonly string[] }>>();
     return { tasks: createSharedTaskService(repo.tasks, host.now),
       providers: createProviderShareService(repo.providers, { ...options.providers, now: host.now,
         async hostStatus(_account, deviceId) {
-          const bindings = host.storage.read().bindings.filter(b => b.kind === 'provider-share');
-          const share = host.storage.read().shares.find(s => s.hostDeviceId === deviceId && s.ownerAccountId === _account);
-          const binding = share && bindings.find(b => b.resourceId === share.shareId);
-          return binding ? host.hostStatus(deviceId, binding.networkId) : { online: false, capabilities: [] };
+          const share = state.shares.find(s => s.hostDeviceId === deviceId && s.ownerAccountId === _account && bindings.has(s.shareId));
+          const binding = share && bindings.get(share.shareId);
+          if (!binding) return { online: false, capabilities: [] };
+          const key = binding.networkId + '\0' + deviceId;
+          let status = statuses.get(key);
+          if (!status) { status = Promise.resolve(host.hostStatus(deviceId, binding.networkId)); statuses.set(key, status); }
+          return status;
         } }) };
   };
   function authorized(d: Delegation): boolean {
@@ -99,6 +112,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
     if (!actor || typeof actor.accountId !== 'string' || typeof actor.deviceId !== 'string'
       || !actor.accountId || !actor.deviceId || typeof actor.networkId !== 'string' || !ID_PATTERN.test(actor.networkId))
       throw new AppError('UNAUTHORIZED', 401, 'Verified network/device identity required');
+    await host.synchronize?.(req, actor.networkId);
     let input: Record<string, unknown> = {};
     if (bytes.length) {
       try { input = JSON.parse(bytes.toString('utf8')); } catch { throw invalidParams('Invalid JSON'); }
@@ -116,9 +130,9 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
     const certified = async () => {
       const member = await host.member(req, bytes);
       if (member.deviceId !== actor.deviceId || member.networkId !== actor.networkId || !sameAccount(member, actor.accountId)) throw permissionDenied('Network/account/device identity mismatch');
-      networkId = member.networkId; return services(networkId);
+      networkId = member.networkId; return services(actor.networkId, networkId);
     };
-    const ordinary = services();
+    const ordinary = services(actor.networkId);
     let result: unknown;
     if ((path === '/provider-shares/delegations/prepare' || path === '/provider-shares/delegations/check') && method === 'POST') {
       body(['shareId', 'memberId', 'guestDeviceId', 'executorDeviceId']);
@@ -155,7 +169,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
       try { if (typeof header !== 'string' || header.length > 1024) throw new Error();
         proof = JSON.parse(Buffer.from(header, 'base64url').toString('utf8')); } catch { throw permissionDenied('Applicant proof required'); }
       if (!verifyRequestProof(signingKey, proof, method, req.url ?? '/', bytes, host.now())) throw permissionDenied('Invalid applicant proof');
-      host.remember(actor.accountId, actor.deviceId, proof.nonce);
+      await host.remember(actor.accountId, actor.deviceId, proof.nonce);
       let request: DelegationRequest | undefined;
       if (status) {
         request = host.requests().find(r => r.id === text(input.id) && r.guestDeviceId === actor.deviceId
@@ -181,9 +195,10 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
         const scope = { memberId, guestSubject: actor.accountId, memberVersion: member.version };
         const existing = host.requests().find(r => r.networkId === actor.networkId && r.kind === kind && r.resourceId === resourceId && r.guestDeviceId === actor.deviceId
           && r.scope.memberId === memberId && r.scope.memberVersion === member.version && r.guestSigningKey === signingKey && r.guestTransportKey === transportKey);
+        const requestedAt = host.now();
         request = { id: existing && !host.grant(existing).revoked ? existing.id : randomUUID(), kind, resourceId, hostDeviceId: row.hostDeviceId,
           networkId: binding.networkId, scope, guestDeviceId: actor.deviceId, guestSigningKey: signingKey, guestTransportKey: transportKey,
-          requestedAt: host.now(), expiresAt: host.now() + MAX_GRANT_LIFETIME_MS };
+          requestedAt, expiresAt: requestedAt + MAX_GRANT_LIFETIME_MS };
         if (!check(request, state)) throw notFound();
         await host.saveRequest(request); host.changed([binding.networkId]);
       }
@@ -222,7 +237,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
     } else if (path === '/provider-shares/requests' && method === 'POST') {
       body(['invitation', 'identityCard']); scoped('provider-share', (await repositories.providers.findLink(digest(input.invitation)))?.shareId);
       result = await ordinary.providers.createRequest(actor, input.invitation, input.identityCard);
-    } else if (path === '/provider-shares/received' && method === 'GET') result = { shares: (await ordinary.providers.listReceived(actor)).filter(row => inNetwork('provider-share', row.shareId)) };
+    } else if (path === '/provider-shares/received' && method === 'GET') result = { shares: await ordinary.providers.listReceived(actor) };
     else {
       const parts = path.split('/').slice(1).map(decodeURIComponent);
       if (parts[0] !== 'provider-shares') throw notFound();

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CindyMakeSessionGate } from '../CindyMakeSessionGate';
 import { SessionRouteOriginGate } from '../SessionRouteOriginGate';
 import { sideChatTaskRoute } from '../../right-sidebar/plugins/side-chat/state';
-import { StrictMode } from 'react';
+import { StrictMode, useEffect } from 'react';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -175,6 +175,31 @@ describe('old Cindy Make links', () => {
     state.localSource = 'desktop';
     mount();
     expect(screen.getByText('Composer')).toBeTruthy();
+    expect(state.getSession).not.toHaveBeenCalled();
+  });
+
+  // 协同侧栏给 Worker 发消息时，主进程会发新建通知，任务列表随即重拉。重拉期间任务短暂
+  // 不在缓存里，对话不能被卸载再重新挂载（用户看到整块清空后重新出现）。
+  it('keeps an open task mounted while it briefly leaves the cached list', () => {
+    state.localSource = 'desktop';
+    let mounts = 0;
+    function Composer() {
+      useEffect(() => { mounts += 1; }, []);
+      return <div>Composer</div>;
+    }
+    mount(<Composer />);
+    expect(mounts).toBe(1);
+    act(() => {
+      state.localSource = undefined;
+      for (const listener of state.localListeners) listener();
+    });
+    expect(screen.getByText('Composer')).toBeTruthy();
+    act(() => {
+      state.localSource = 'desktop';
+      for (const listener of state.localListeners) listener();
+    });
+    expect(screen.getByText('Composer')).toBeTruthy();
+    expect(mounts).toBe(1);
     expect(state.getSession).not.toHaveBeenCalled();
   });
 

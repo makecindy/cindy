@@ -27,7 +27,6 @@ export interface ModelGroupSwitchOfferSessionRow {
 
 export interface ModelGroupSwitchOfferDeps {
   readBinding(sessionId: string): ModelGroupSessionBinding | null;
-  clearBinding(sessionId: string): void;
   readSession(sessionId: string): Promise<ModelGroupSwitchOfferSessionRow | null>;
   /** 正在共享给别的账号。 */
   isShared(sessionId: string): boolean;
@@ -59,10 +58,12 @@ export async function computeModelGroupSwitchOffer(
   const row = await deps.readSession(sessionId);
   if (!row || !isPlainLocalTask(row) || deps.isShared(sessionId) || await deps.hasGoal(sessionId)) return null;
   if (!isModelGroupAgentKind(row.agentKind) || !row.providerId || !row.model) return null;
-  const current = { agentKind: row.agentKind, providerId: row.providerId, model: row.model };
+  // 任务此刻的运行位置(只给本机任务提议，所以这里总是本机)；记录里的候选键同样带位置。
+  const location = row.agentDeviceId || undefined;
+  const current = { agentKind: row.agentKind, providerId: row.providerId, model: row.model, agentDeviceId: location };
   if (modelGroupCandidateKey(current) !== binding.pickedKey) {
-    // 模型或来源已被换过(用户自己换的，或别处换的)：这个任务不再按模型组走。
-    deps.clearBinding(sessionId);
+    // 模型或来源此刻不是记下的这个(用户自己换了，或别处换了)：不提议。记录不删 —— 跨引擎的换模型
+    // 可能只是登记了「下一条消息再换」，任务还在旧模型上跑；等真换过去时记录要照样有效。
     return null;
   }
   const now = deps.now();
@@ -70,14 +71,16 @@ export async function computeModelGroupSwitchOffer(
   if (target.outcome === 'missing') return null;
   const { route } = target;
   // 同一个供应商连接是同一个账号、同一份配额：一并跳过，连同正在用的这个。
+  // 在别的位置运行的来源也跳过：把运行中的任务挪到另一台电脑不是这个提议做的事。
   const eligible: ModelGroupRoute = {
     ...route,
-    candidates: route.candidates.map((candidate) => (candidate.providerId === current.providerId
+    candidates: route.candidates.map((candidate) => (candidate.agentDeviceId !== location || candidate.providerId === current.providerId
       ? { ...candidate, off: true }
       : candidate)),
   };
   if (!eligible.candidates.some((candidate) => !candidate.off)) return null;
-  const facts = await deps.candidateFacts(route);
+  // 跳过的来源(含别的位置上的)已标成停用，不为它们去读别处的目录。
+  const facts = await deps.candidateFacts(eligible);
   // 「轮流」从正在用的这个往后数；不读也不改新任务用的轮流位置。
   const picked = pickModelGroupCandidate(eligible, facts, { now, lastPickedKey: binding.pickedKey });
   if (picked.index === null) return null;

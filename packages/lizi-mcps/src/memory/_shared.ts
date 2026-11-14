@@ -13,6 +13,8 @@
  * thread 的真实 workingDir。
  */
 
+import { z } from 'zod';
+
 import {
   resolveMemoryScopeKey,
   type MakerMemoryManager,
@@ -22,6 +24,17 @@ import {
 import type { MemoryToolResult } from '../cindy_memoryToolRegistry.js';
 import type { MemoryMcpDeps } from '../types.js';
 import { classifyMemoryError } from './errors.js';
+
+/**
+ * memory_write / memory_consolidate 的 name: 裸 slug, 或 MEMORY.md 索引里的文件名。
+ * 只描述形状, 不重复 storage 的 slug 规则 (字符集 / 长度 / type 前缀 / .md):
+ * 那些规则依赖 type 与存量分片, 声明式 schema 无法表达, 抄一份必然与 storage 漂移。
+ * 非法 name 由 storage 拒绝, 错误信息里带着可直接重发的正确写法。
+ */
+export const shardNameSchema = z
+  .string()
+  .min(1)
+  .describe('分片 slug；也可直接粘贴 MEMORY.md 索引里的文件名');
 
 export function buildJsonResult(payload: unknown, isError = false): MemoryToolResult {
   return {

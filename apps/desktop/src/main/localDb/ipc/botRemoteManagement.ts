@@ -4,7 +4,7 @@ import { botRemoteResourceFromSource } from './botRemoteResourceProjection.js';
 import { resolveAvailableTaskModels } from '../../maker-ipc/appDefaultModelControl.js';
 import type { BotModelRoute } from '../../../shared/botModelChain.js';
 import { createBotRemoteSettingsResource } from './botRemoteSettingsResource.js';
-import { createBotProfile, createBotCanonicalSession, getBotMemoryService, getBotRemoteResourceSource, getBotRemoteSettingsSource, readBotSettingsProfile, searchBotHistory, setBotProfileAvatar, updateBotProfile } from './bots.js';
+import { botProjectRepository, createBotProfile, createBotCanonicalSession, getBotMemoryService, getBotRemoteResourceSource, getBotRemoteSettingsSource, readBotSettingsProfile, searchBotHistory, setBotProfileAvatar, updateBotProfile } from './bots.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../../appSessionState.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { listBotSkillsForBot, readBotSkillForBot, deleteBotSkillForBot } from '../../maker-ipc/botSkillService.js';
@@ -105,7 +105,7 @@ const getEditor = createBotRemoteEditors({ ...deps,
       source = await getBotRemoteResourceSource(input.id);
     }
     deps.assertOwner(owner);
-    if (source.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Teammate unavailable');
+    if (source.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Buddy unavailable');
     if (!source.canonicalSessionId && (!source.invitation || source.invitation.stage === 'ready')) await createBotCanonicalSession({ botId: source.id, expectedCanonicalSessionId: null, expectedProfileVersion: source.currentVersion });
     deps.assertOwner(owner);
   },
@@ -180,6 +180,7 @@ const settingsHost = createBotRemoteSettingsHost({
   },
   botVisible: async botId => (await readRemoteBotSessionAccess(botId, 'bot')) === 'visible',
   ops: createBotRemoteSettingsOps({
+    projectRepository: botProjectRepository,
     readProfile: readBotSettingsProfile,
     updateProfile: input => updateBotProfile(input, undefined, validateBotCapabilityAdditions),
     async setAvatar(botId, avatarImageBase64) {

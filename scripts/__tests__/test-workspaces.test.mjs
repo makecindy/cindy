@@ -308,6 +308,12 @@ test("parseWorkspacePatterns reads pnpm-workspace.yaml package globs", () => {
 		parseWorkspacePatterns('packages:\n  - "apps/*"\n  - "packages/*"\n'),
 		["apps/*", "packages/*"],
 	);
+	// pnpm 11 keeps architecture/build settings in this same YAML file. Their
+	// sequences are not workspace selectors and must never enter the test plan.
+	assert.deepEqual(
+		parseWorkspacePatterns('minimumReleaseAgeExclude:\n  - linux\npackages:\n  - "apps/*"\n  - "packages/*"\nnodeLinker: hoisted\nsupportedArchitectures:\n  os:\n    - win32\n  cpu:\n    - x64\n'),
+		["apps/*", "packages/*"],
+	);
 });
 
 test("root unit and all scripts run runner self-tests before workspace sweep", () => {
@@ -2428,6 +2434,22 @@ test("buildPnpmArgs switches vitest to related mode when related files are provi
 	assert.equal(args.includes("src/main/foo.ts"), true);
 	assert.equal(args.includes("src/main/foo.test.ts"), false);
 	assert.deepEqual(args.slice(-2), ["--exclude", "**/*.bench.ts"]);
+});
+
+test("related Vitest shards include passWithNoTests exactly once", () => {
+	const root = "F:/repo";
+	const workspace = { cwd: "packages/example" };
+	const selectedFiles = ["packages/example/src/only.test.ts"];
+	for (const shard of ["1/16", "16/16"]) {
+		const args = buildPnpmArgs(
+			root, workspace,
+			{ type: "packageBin", bin: "vitest", args: ["run", `--shard=${shard}`] },
+			{}, selectedFiles, ["packages/example/src/entry.ts"],
+		);
+		assert.equal(args.filter((arg) => arg === "--passWithNoTests").length, 1);
+		assert.ok(args.includes(`--shard=${shard}`));
+		assert.ok(args.includes("src/entry.ts"));
+	}
 });
 
 test("buildPnpmArgs only loosens Vitest sharding for undersized workspaces", () => {

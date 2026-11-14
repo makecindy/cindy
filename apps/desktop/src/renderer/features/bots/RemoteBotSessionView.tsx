@@ -14,7 +14,7 @@ import { parseRemoteBots, type RemoteBot } from './remoteBotRoster';
 import { markRemoteBotRead, useRemoteBots } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
 import { cloudCompanionAt, homeControlOff } from './companionCloudPresentation';
-import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
+import { useDeviceLinkDeviceList, useDeviceLinkDeviceListRequestState } from '@/features/device-link/useDeviceLinkDeviceList';
 import { useDelayedFlag } from '@/features/cc-agent/workdir-browse/hooks/useDelayedFlag';
 // Loaded only when a main computer is offline; keeps the live remote path light.
 const CloudCompanionOfflineView = lazy(() => import('./CloudCompanionOfflineView')
@@ -40,6 +40,11 @@ function RemoteBotSessionGate() {
   const cloud = useCompanionCloud();
   const deviceList = useDeviceLinkDeviceList();
   const cloudActor = cloudCompanionAt(cloud, deviceId, botId);
+  const homeActor = cloud.enabled ? cloud.actors.find(actor => actor.externalId === botId) : undefined;
+  const rejectedHere = homeActor?.homeDeviceId === cloud.selfDeviceId && !!homeActor?.profileFailure;
+  const deviceListState = useDeviceLinkDeviceListRequestState();
+  const recoveringHere = useRef(false);
+  if (rejectedHere) recoveringHere.current = true;
   const [ready, setReady] = useState<(RemoteBot & { sessionId: string; canonicalChat: true }) | null>(() => {
     if (!bot?.sessionId || !deviceId || (requestedSessionId && requestedSessionId !== bot.sessionId)
       || remoteProjectsStore.getSessionDeviceId(bot.sessionId) !== deviceId) return null;
@@ -138,6 +143,18 @@ function RemoteBotSessionGate() {
     && !!bot && !!ready?.sessionId && ready.id === botId && ready.deviceId === deviceId;
   const homeAway = !!cloudActor && !!deviceId && !!botId && cloudActor.homeDeviceId !== cloud.selfDeviceId
     && (!bot || (!bot.online && bot.connectionKnown !== false));
+  const homeDevice = cloudActor?.homeDeviceId
+    ? deviceList?.find((device) => device.deviceId === cloudActor.homeDeviceId)
+    : undefined;
+  // A missing teammate row is not evidence that its home computer is offline. Only
+  // classify it as offline when the live device directory says so, or when a settled
+  // directory has no row and the cloud snapshot itself carries an explicit offline state.
+  const homeOffline = !!cloudActor && (
+    bot ? (!bot.online && bot.connectionKnown !== false)
+      : homeDevice ? !homeDevice.online
+        : deviceListState.status === 'ready' && cloudActor.homeDevice?.online === false
+  );
+  const controlOff = !bot && homeControlOff(cloudActor ?? undefined, deviceList);
   // Like IM, a brief drop keeps the open chat in place (cloud-companions.md §3.1).
   const homeAwayLong = useDelayedFlag(homeAway && liveChat, CLOUD_HOME_GRACE_MS);
   if (requestedSessionId && deviceId && (originalTask || failed || !bot?.online || bot.sessionId !== requestedSessionId)) {
@@ -145,20 +162,26 @@ function RemoteBotSessionGate() {
     query.set('device', deviceId);
     return <Navigate to={`${standardSessionRoute(requestedSessionId)}?${query}`} state={location.state} replace />;
   }
+  if (!requestedSessionId && recoveringHere.current && homeActor?.homeDeviceId === cloud.selfDeviceId
+    && !rejectedHere && !cloud.demotedBotIds.includes(botId!)) {
+    return <Navigate to={`/bots/${encodeURIComponent(botId!)}`} replace />;
+  }
+  const offlineActor = !requestedSessionId && rejectedHere ? homeActor : cloudActor;
   // Its main computer is offline (or never reachable here): read the cloud conversation
   // and offer to continue on this computer instead of a stale read-only mirror.
-  if (cloudActor && deviceId && botId && homeAway && (!liveChat || homeAwayLong)) {
+  if (offlineActor && deviceId && botId && (rejectedHere || (homeAway && (homeOffline || controlOff) && (!liveChat || homeAwayLong)))) {
     return (
       <Suspense fallback={<main className="flex h-full items-center justify-center bg-[var(--surface)]"><Spinner size={18} /></main>}>
       <CloudCompanionOfflineView
         key={`${deviceId}:${botId}`}
         botId={botId}
         deviceId={deviceId}
-        name={bot?.name || cloudActor.name}
-        avatar={bot?.avatar || cloudActor.avatar}
+        name={bot?.name || offlineActor.name}
+        avatar={bot?.avatar || offlineActor.avatar}
         avatarColor={bot?.avatarColor}
-        deviceName={bot?.deviceName || cloudActor.homeDevice?.name || ''}
-        controlOff={!bot && homeControlOff(cloudActor, deviceList)}
+        deviceName={bot?.deviceName || offlineActor.homeDevice?.name || ''}
+        controlOff={controlOff}
+        profileFailure={offlineActor.profileFailure}
       />
       </Suspense>
     );

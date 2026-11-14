@@ -1,10 +1,10 @@
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
-import { Settings, type LucideIcon } from 'lucide-react';
+import { Copy, Settings, type LucideIcon } from 'lucide-react';
 import { isGhostCardIconName, type GhostCardIconName } from '../../shared/ghost';
 
 /** 卡内图标位用的就是 App 里的同名 Lucide 图标,不另画一份。 */
-const ICONS = { settings: Settings } satisfies Record<GhostCardIconName, LucideIcon>;
+const ICONS = { settings: Settings, copy: Copy } satisfies Record<GhostCardIconName, LucideIcon>;
 const markup = new Map<LucideIcon, string>();
 
 /**

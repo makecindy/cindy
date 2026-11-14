@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import os from 'node:os';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { app } from 'electron';
+import { app, powerMonitor } from 'electron';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -10,6 +10,7 @@ import { COMPUTER_TOOLS } from '@cindy/mcps/computer';
 import { readForRecovery } from '../../../../../../packages/lizi-mcps/src/computer/recovery';
 import { HumanDesktopInput, HUMAN_INPUT_QUIET_MS } from '../../remote-desktop/inputOwnership';
 import * as inputOwnership from '../../remote-desktop/inputOwnership';
+import { runPluginHostToolCall } from '../hostToolCaller.js';
 
 const {
   existsSyncMock,
@@ -139,6 +140,7 @@ import {
   resetAtMentionWindowCacheForTests,
   resetDesktopInputGuardStateForTests,
   seedDesktopScreenLocked,
+  setPhysicalInputShielded,
   resetComputerDriverUpdateStateForTests,
   runProcessWithActivityTimeout,
   sampleInstallProcessTree,
@@ -431,7 +433,7 @@ describe('computer mcp integration', () => {
       duringCapture = false;
       await callComputerDriverTool('get_desktop_state', {}, context);
       powerMonitorState.idleSeconds = Number.NaN;
-      await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
       expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(0);
     } finally {
       powerMonitorState.idleSeconds = 3600;
@@ -1219,6 +1221,26 @@ describe('computer mcp integration', () => {
 
     expect(mcpConnectMock).not.toHaveBeenCalled();
     expect(mcpCallToolMock).not.toHaveBeenCalled();
+  });
+
+  // Item 26, unit: the real driver adapter previously required a task even
+  // after the public plugin gateway approved computer access. MCP-only fakes
+  // missed this boundary. One attested plugin must get its own native connection.
+  it('binds an approved plugin to its own driver connection and closes that connection', async () => {
+    const caller = { kind: 'plugin' as const, pluginId: 'driver-plugin', dataOwnerId: 'owner', ownerGeneration: 3 };
+    const context = { hostCaller: caller, agentKind: 'claude-code' };
+    const deps = getComputerMcpDeps();
+    mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true,"windows":[]}' }] });
+    await expect(deps.callTool('list_windows', {}, context)).rejects.toThrow('PERMISSION_DENIED');
+    const run = () => runPluginHostToolCall({ caller, server: 'cindy_computer', tool: 'list_windows', argsJson: '{}', assertCurrent() {} },
+      () => deps.callTool('list_windows', {}, context));
+    await expect(run()).resolves.toEqual({ ok: true, windows: [] });
+    await expect(run()).resolves.toEqual({ ok: true, windows: [] });
+    expect(mcpConnectMock).toHaveBeenCalledOnce();
+    await deps.closeContext?.(context);
+    expect(mcpCloseMock).toHaveBeenCalledOnce();
+    await expect(run()).resolves.toEqual({ ok: true, windows: [] });
+    expect(mcpConnectMock).toHaveBeenCalledTimes(2);
   });
 
   it('writes get_window_state screenshots to a temp file by default', async () => {
@@ -4595,6 +4617,10 @@ describe('foreground input while the person is using this computer', () => {
   beforeEach(async () => {
     await cleanupAllComputerDriverSessions();
     resetDesktopInputGuardStateForTests();
+    mcpConnectMock.mockReset().mockResolvedValue(undefined);
+    mcpListToolsMock.mockReset().mockResolvedValue({ tools: COMPUTER_TOOLS.map(({ name }) => ({
+      name, inputSchema: { type: 'object', additionalProperties: true },
+    })) });
     mcpCallToolMock.mockReset().mockResolvedValue({ structuredContent: { ok: true, effect: 'confirmed' } });
     powerMonitorState.idleSeconds = 3600;
     powerMonitorState.idleState = 'active';
@@ -4614,29 +4640,69 @@ describe('foreground input while the person is using this computer', () => {
     await expect(callComputerDriverTool('get_window_state', target, context)).resolves.toBeDefined();
   });
 
-  it('attributes input right after its own dispatch to the Agent, not the person', async () => {
-    vi.useFakeTimers();
-    try {
+  // Mouse drift regression: the idle clock cannot distinguish physical input
+  // from CUA events. The former test explicitly permitted the unsafe delivery
+  // tail. Exercise real dispatch refusal (unit), including the in-flight path.
+  it('does not let an Agent dispatch mask recent input before the next foreground click', async () => {
+    await callComputerDriverTool('get_window_state', target, context);
+    await callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'background' }, context);
+    mcpCallToolMock.mockClear();
+    powerMonitorState.idleSeconds = 0;
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+      .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+    expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(0);
+    powerMonitorState.idleSeconds = 3;
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+      .resolves.toBeDefined();
+  });
+
+  it('stops foreground text at the next chunk when input arrives during dispatch without replaying the prefix', async () => {
+    await callComputerDriverTool('get_window_state', target, context);
+    mcpCallToolMock.mockImplementation(async (call) => {
+      if (call.name === 'type_text') powerMonitorState.idleSeconds = 0;
+      return { structuredContent: { ok: true, effect: 'confirmed' } };
+    });
+    await expect(callComputerDriverTool('type_text', {
+      ...target, text: 'a'.repeat(401), delivery_mode: 'foreground',
+    }, context)).rejects.toMatchObject({
+      code: 'USER_INPUT_ACTIVE',
+      inputProgress: { completed_chars: 400, attempted_chars: 0, remaining_chars: 1 },
+    });
+    expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'type_text')).toHaveLength(1);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 'throws'])(
+    'refuses foreground input when the idle probe is unavailable (%s), retaining background input', async (idle) => {
       await callComputerDriverTool('get_window_state', target, context);
-      await expect(callComputerDriverTool('type_text', { ...target, text: 'hi', delivery_mode: 'foreground' }, context))
-        .resolves.toBeDefined();
-      // The driver's own keystrokes reset the system idle clock; the clock is
-      // floored, so "1 s ago" read 2.2 s after our dispatch is still ours.
-      powerMonitorState.idleSeconds = 0;
+      const probe = vi.spyOn(powerMonitor, 'getSystemIdleTime').mockImplementation(() => {
+        if (idle === 'throws') throw new Error('probe unavailable');
+        return idle as number;
+      });
+      try {
+        await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+          .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+        expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(0);
+        await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'background' }, context))
+          .resolves.toBeDefined();
+      } finally {
+        probe.mockRestore();
+      }
+    },
+  );
+
+  it('retains foreground operation under the existing physical input shield', async () => {
+    await callComputerDriverTool('get_window_state', target, context);
+    powerMonitorState.idleSeconds = 0;
+    setPhysicalInputShielded(() => true);
+    try {
       await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
         .resolves.toBeDefined();
-      vi.advanceTimersByTime(2_200);
-      powerMonitorState.idleSeconds = 1;
-      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
-        .resolves.toBeDefined();
-      // Input well after the last dispatch is a person again.
-      vi.advanceTimersByTime(10_000);
-      powerMonitorState.idleSeconds = 1;
-      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
-        .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
     } finally {
-      vi.useRealTimers();
+      setPhysicalInputShielded(() => false);
     }
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
+      .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+    expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(1);
   });
 
   // Review (#8227): an AX write or app launch sends no HID event, so it must not take

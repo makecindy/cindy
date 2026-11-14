@@ -1,3 +1,5 @@
+import { getScope } from './moduleScope.js';
+import { canAnswerQuestion } from './outbound.js';
 /**
  * feishu/cardActionParser.ts
  * ---------------------------------------------------------------------------
@@ -58,7 +60,6 @@ export function parseCardAction(input: ParseCardActionInput): IMCardActionEvent 
   const chatId = data.context?.open_chat_id ?? data.open_chat_id;
   if (!senderId || !messageId || !chatId) return null;
 
-  if (!inWhitelist(senderId)) return null;
 
   const valueRaw = data.action?.value;
   if (!valueRaw || typeof valueRaw !== 'object') return null;
@@ -66,12 +67,14 @@ export function parseCardAction(input: ParseCardActionInput): IMCardActionEvent 
 
   const id = typeof value.id === 'string' ? value.id : '';
   if (!id) return null;
+  if (id.startsWith('aq:') ? (!canAnswerQuestion(messageId, senderId) || (!inWhitelist(senderId) && !getScope().guests)) : !inWhitelist(senderId)) return null;
 
   const { id: _id, ...payload } = value;
   void _id; // silence unused
 
   return {
     channelName: 'feishu',
+    actorId: senderId,
     senderId,
     chatId,
     messageId,

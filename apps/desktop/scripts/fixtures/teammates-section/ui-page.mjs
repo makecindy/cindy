@@ -15,9 +15,10 @@ export default {
   real: 'TeammatesSection rows, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
   notCovered: 'Roster loading, cloud/device connections, create/delete menus and message delivery',
   stubs: {
+    'src/renderer/features/cc-agent/sidebar/sessionWorktreeInfo': { partial: 'export const useTaskInfoWorktree=()=>null;' },
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
     'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{});` },
-    'src/renderer/features/bots/useRemoteBots': `export const useRemoteBots=()=>${data}.remoteBots;`,
+    'src/renderer/features/bots/useRemoteBots': { partial: `export const useRemoteBots=()=>${data}.remoteBots;` },
     'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
     'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
     'src/renderer/features/device-link/useDeviceLinkDeviceList': 'export const useDeviceLinkDeviceList=()=>[];',
@@ -26,6 +27,14 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'collapse-attention': {
+      about: 'Independent icon/list choice; collapsed sections keep unread and pending feedback only',
+      data: { showPinned: true, profiles: [
+        { ...profiles[0], lastMessageAt: Date.now() - 180000, name: '日程助手', avatar: 'cindy://avatar/preset/cindy', lastMessagePreview: '今天的安排已同步' },
+        { ...profiles[1], lastMessageAt: Date.now() - 120000, name: '写作伙伴', avatar: 'cindy://avatar/preset/dash', lastMessageRole: 'assistant', lastMessagePreview: '周报已整理好，请查看' },
+        { ...profiles[2], lastMessageAt: Date.now() - 60000, name: '研究伙伴', avatar: 'cindy://avatar/preset/lizi', lastMessagePreview: '请选择接下来要研究的方向' },
+      ], unread: { 'mate-2': 1 }, activities: [['chat-2', { sessionId: 'chat-2', phase: 'needs-interaction' }]], remoteBots: [], route: '/bots' },
+    },
     'remote-running-snapshot': {
       about: 'Standalone remote running snapshot keeps the processing subtitle without an expanded orange dot',
       data: { profiles: [], route: '/bots/remote/studio/writer', remoteBots: [{
@@ -199,6 +208,30 @@ export default {
     },
   },
   async check(page, ui) {
+    const showIcons = async () => {
+      const section = page.locator('[data-sidebar-section="teammates"]');
+      await section.getByRole('button', { name: await ui.t('bots.title'), exact: true }).hover();
+      await section.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('bots.list.viewIcons') }).click();
+    };
+    if (ui.case === 'collapse-attention') {
+      const header = page.getByRole('button', { name: await ui.t('bots.title'), exact: true });
+      await ui.capture('expanded-list');
+      await header.click();
+      await page.getByRole('button', { name: await ui.t('ccAgent.sidebar.pinned'), exact: true }).click();
+      assert.equal(await page.getByText('版本发布', { exact: true }).count(), 0);
+      assert.ok(await page.getByText('周报整理', { exact: true }).count() > 0);
+      assert.equal(await page.getByText('日程助手', { exact: true }).count(), 0);
+      assert.equal(await page.getByText('写作伙伴', { exact: true }).count(), 1);
+      assert.equal(await page.getByText('研究伙伴', { exact: true }).count(), 1);
+      await ui.capture('collapsed-list');
+      await showIcons();
+      assert.equal(await header.getAttribute('aria-expanded'), 'false');
+      await ui.capture('collapsed-icons');
+      await header.click();
+      await ui.capture('expanded-icons');
+      return;
+    }
     // Time and status coexist in the existing trailing column, without overlap.
     for (const time of await page.locator('[data-teammate-timestamp]:visible').all()) {
       assert.equal(await time.evaluate(node => getComputedStyle(node).visibility), 'visible');
@@ -216,7 +249,7 @@ export default {
       assert.equal(await row.getByText('Previous reply', { exact: true }).count(), 0);
       assert.equal(await row.locator('[data-teammate-status="running"]').count(), 0);
       await ui.capture('expanded-remote-running-snapshot');
-      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await showIcons();
       assert.equal(await page.locator('[data-teammate-status="running"]:visible').count(), 1);
       await ui.capture('collapsed-remote-running-snapshot');
       return;
@@ -268,7 +301,7 @@ export default {
       assert.equal(await plain.locator('[data-teammate-unread-count]').innerText(), '12');
       assert.equal(await plain.locator('[data-teammate-status]').count(), 0);
       await ui.capture('expanded-completed-and-ordinary');
-      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await showIcons();
       const avatar = page.getByRole('button', { name: /^完成未读 ·/ });
       assert.equal(await avatar.locator('[data-teammate-status="done"] > span').evaluate(node => node.style.backgroundColor), 'var(--card-status-done)');
       assert.equal(await page.getByRole('button', { name: /^普通未读 ·/ }).locator('[data-teammate-status] > span').evaluate(node => node.style.backgroundColor), 'var(--bot-unread-bg)');
@@ -288,7 +321,7 @@ export default {
       assert.equal(await page.locator('[data-bot-group-id="attention-2"] [data-teammate-unread-count]').innerText(), '2');
       assert.equal(await page.locator('[data-bot-group-id="attention-3"] [data-teammate-status="error"]').count(), 1);
       await ui.capture('expanded-message-kinds');
-      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await showIcons();
       const ordinary = page.getByRole('button', { name: /^普通群消息 ·/ });
       assert.equal(await ordinary.locator('[data-teammate-status] > span').evaluate(node => node.style.backgroundColor), 'var(--bot-unread-bg)');
       assert.equal(await page.locator('[data-teammate-mention]:visible').count(), 3);
@@ -305,7 +338,7 @@ export default {
       const selectedDevice = localWorking ? 'Studio' : await ui.t('bots.devicePicker.local');
       assert.equal(await row.getByRole('button', { name: `Cindy · ${selectedDevice}`, exact: true }).getAttribute('aria-current'), 'page');
       await ui.capture('other-computer-working');
-      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await showIcons();
       await row.waitFor({ state: 'hidden' });
       assert.equal(await page.locator('[data-teammate-status="running"]:visible').count(), 1);
       await ui.capture('collapsed-working');
@@ -319,7 +352,7 @@ export default {
       assert.equal(await section.getByText('单伙伴群', { exact: true }).count(), 1);
       const expandedTypeMarks = await section.locator('[data-bot-group-id] svg.lucide-users').count();
       await ui.capture('expanded-group-private');
-      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await showIcons();
       await section.locator('[data-bot-group-id]').first().waitFor({ state: 'hidden' });
       assert.equal(await section.locator('[data-teammate-mention]:visible').count(), 2);
       await ui.capture('collapsed-group-private');
@@ -329,7 +362,7 @@ export default {
     }
     if (ui.case === 'group-avatars') {
       await ui.capture('expanded-groups');
-      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await showIcons();
       await ui.capture('collapsed-groups');
       for (const count of [1, 2, 3, 4, 5]) {
         const button = page.getByRole('button', { name: new RegExp(`^Group ${count}(?: ·|$)`) });
@@ -376,7 +409,7 @@ export default {
         assert.equal((await dot.locator('span').boundingBox()).width, 8, 'expanded core matches Session');
       }
       await ui.capture('expanded-states');
-      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await showIcons();
       await page.locator('[data-teammate-status="running"]').first().waitFor();
       const selected = page.locator('[data-sidebar-section="teammates"]').first().locator('button[aria-current="page"]').first();
       const dot = selected.locator('[data-teammate-status="awaiting"]');
@@ -395,7 +428,7 @@ export default {
       return;
     }
     if (ui.case === 'collapsed-plain') {
-      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await showIcons();
       const plate = page.locator('button[aria-current="page"] > [data-teammate-selected]');
       await plate.waitFor();
       const box = await plate.boundingBox();
@@ -405,7 +438,7 @@ export default {
       return;
     }
     if (ui.case === 'collapsed-mention') {
-      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await showIcons();
       const badge = page.locator('[data-teammate-mention]:visible');
       await badge.first().waitFor();
       assert.equal(await badge.count(), 2, 'only the groups that mention the user are marked');
@@ -455,19 +488,12 @@ export default {
     await showAll().click();
     const header = page.getByRole('button', { name: await ui.t('bots.title'), exact: true });
     await header.click();
-    await rows.first().waitFor({ state: 'detached' });
-    await ui.capture('avatars');
-    const overflow = page.getByRole('button', { name: new RegExp(`^${await ui.t('bots.list.sectionExpand')} · \\+`) });
-    if (await overflow.count()) {
-      const circle = await overflow.locator('span').first().boundingBox();
-      assert.equal(circle.width, 36, '+N circle matches portrait size');
-      assert.equal(circle.height, 36);
-      await overflow.focus();
-      await page.keyboard.press('Enter');
-      assert.equal(await rows.count(), 6, '+N opens the full roster');
-      await header.click();
+    if (ui.case === 'merged-cindy') {
+      assert.equal(await rows.count(), 1, 'unread merged Cindy remains visible while collapsed');
+    } else {
       await rows.first().waitFor({ state: 'detached' });
     }
+    await ui.capture('collapsed');
     await header.click();
     assert.equal(await rows.count(), 5, 'reopening the section restores its compact preview');
   },

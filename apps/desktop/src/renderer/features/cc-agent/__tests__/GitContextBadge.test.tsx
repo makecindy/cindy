@@ -5,6 +5,8 @@ import { useRef, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Tooltip } from '@/components/ui/tooltip';
+import { toast } from '@/lib/toast';
+import { copyTextToClipboard } from '../../../../main/textClipboard';
 import type { PrStatusResult, SessionPrRef, SessionPrRefAction } from '@cindy/maker-shared';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
@@ -191,6 +193,67 @@ describe('GitContextBadge', () => {
     ]);
   });
 
+  // Unit regression #10146: real GitContextBadge copies unissued PR/MR URLs.
+  // Existing hover/navigation tests never clicked Copy. The previous Main-only
+  // bridge rejects these URLs; keep that boundary real and verify local clipboard
+  // contents plus success/failure feedback through the production button.
+  it.each([
+    { provider: 'github', fails: false },
+    { provider: 'gitlab', fails: false },
+    { provider: 'github', fails: true },
+  ])('copies $provider links locally (write fails: $fails)', async ({ provider, fails }) => {
+    const { context, rerender } = renderHeader();
+    const ref = provider === 'gitlab'
+      ? { ...context.prRefs[0], provider: 'gitlab' as const, host: 'git.example.com', owner: 'group/sub' }
+      : context.prRefs[0];
+    const url = provider === 'gitlab'
+      ? 'https://git.example.com/group/sub/repo/-/merge_requests/7'
+      : 'https://github.com/octo/repo/pull/7';
+    let clipboardText = 'previous clipboard';
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const writeText = vi.fn(async (text: string) => {
+      if (fails) throw new Error('clipboard unavailable');
+      clipboardText = text;
+    });
+    const nativeWrite = vi.fn();
+    const copyIssuedText = (params: { text: string }) => copyTextToClipboard(
+      {} as Parameters<typeof copyTextToClipboard>[0], params, {
+        assertTrustedSender: () => {}, assertFocusedSender: () => {},
+        write: nativeWrite, read: () => clipboardText,
+      },
+    );
+    Object.assign(window.electronAPI, { copyTextToClipboard: copyIssuedText });
+    // Unregistered PR/MR links stay rejected by the Main-issued-text API.
+    await act(async () => {
+      await expect(copyIssuedText({ text: url })).rejects.toThrow('PERMISSION_DENIED');
+    });
+    const success = vi.spyOn(toast, 'success');
+    const error = vi.spyOn(toast, 'error');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      gitContextMock.mockReturnValue({ ...context, prRefs: [ref], prStatuses: new Map() });
+      rerender(<Tooltip.Provider><GitContextBadge session={dialogueSession} /></Tooltip.Provider>);
+      fireEvent.click(screen.getByRole('button', { name: /summaryAria/ }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'sharing.copyLink' }));
+      });
+      expect(clipboardText).toBe(fails ? 'previous clipboard' : url);
+      expect(nativeWrite).not.toHaveBeenCalled();
+      if (fails) {
+        expect(error).toHaveBeenCalledWith('ccAgent.sidebar.deepLink.copyFailed');
+        expect(success).not.toHaveBeenCalled();
+      } else {
+        expect(success).toHaveBeenCalledWith('ccAgent.sidebar.deepLink.copied');
+        expect(error).not.toHaveBeenCalled();
+      }
+    } finally {
+      if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+      success.mockRestore();
+      error.mockRestore();
+    }
+  });
+
   // Unit: clicking the production header must keep its existing summary open;
   // only its link navigates. Previous coverage required direct navigation.
   // Minimal regression: click a chip, leave for 300ms, then click the panel link.
@@ -318,7 +381,7 @@ describe('GitContextBadge', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('点击PR、评论或检查区域固定浮窗，再点收起；只有浮窗内链接跳转', () => {
+  it('点击PR、评论或检查区域固定浮窗，固定后再点标识或点浮窗内链接打开PR', () => {
     const {
       triggers: [trigger],
       openExternal,
@@ -340,7 +403,9 @@ describe('GitContextBadge', () => {
       expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/7');
       openExternal.mockClear();
       fireEvent.click(trigger);
+      expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/7');
       expect(screen.queryByRole('dialog')).toBeNull();
+      openExternal.mockClear();
     }
   });
 
@@ -387,7 +452,7 @@ describe('GitContextBadge', () => {
     matches.mockRestore();
   });
 
-  it('触屏和笔点击打开浮窗，不触发悬停或直接跳转', () => {
+  it('触屏和笔首次点击只打开浮窗，再点标识打开PR', () => {
     const {
       triggers: [trigger],
       openExternal,
@@ -402,7 +467,9 @@ describe('GitContextBadge', () => {
       expect(screen.getByRole('dialog')).toBeTruthy();
       expect(openExternal).not.toHaveBeenCalled();
       fireEvent.click(trigger);
+      expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/7');
       expect(screen.queryByRole('dialog')).toBeNull();
+      openExternal.mockClear();
       fireEvent.blur(trigger);
       pointer(trigger, 'out', type);
     }

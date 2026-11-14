@@ -96,6 +96,13 @@ describe('decodeRemoteErrorMessage', () => {
     expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED'));
   });
 
+  // #9855, unit: keep the metadata diagnostic marker through the real store's
+  // decoder so ErrorBanner can show recovery before raw details are expanded.
+  it('preserves the Pi cloud-file startup diagnostic through lazy-create decoding', () => {
+    const raw = 'LAZY_CREATE_FAILED: [PI_STARTUP_CLOUD_CONTEXT_FILE] Download ~/Desktop/AGENTS.md in Finder.\npi rpc timeout after 30000ms: set_thinking_level';
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
+  });
+
   it('maps a missing auto-review confirmation to i18n text, not a user rejection', () => {
     expect(
       decodeRemoteErrorMessage(
@@ -113,4 +120,23 @@ describe('remote session limit guidance', () => {
     expect(decodeRemoteErrorMessage(message)).toBe(i18n.t('chat.remoteError.REMOTE_AGENT_' + reason));
     expect(remoteErrorMessageForBanner(message)).toBe(message);
   });
+});
+
+// #10187: exercise the actual queue rejection projection. The old code kept
+// reporting a communication/update error and never offered shared-task recovery.
+it('preserves rejected shared history and exposes context handoff recovery', async () => {
+  const raw = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+  const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+  vi.stubGlobal('window', { dispatchEvent: vi.fn(), electronAPI: { maker: { input: { enqueue },
+    autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } } });
+  try {
+    const id = 'shared-history-10187';
+    expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+    expect(makerChatStore.getSnapshot(id).error).toBe(raw);
+    expect(sharedTaskRecoveryFor(raw, 'share:provider')).toBe('history');
+    expect(sharedTaskRecoveryFor(raw, 'same-account-device')).toBeUndefined();
+    expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'));
+    expect(decodeRemoteErrorMessage(raw)).not.toBe(i18n.t('chat.remoteError.REMOTE_AGENT_INVALID'));
+    expect(enqueue).toHaveBeenCalledOnce();
+  } finally { vi.unstubAllGlobals(); }
 });

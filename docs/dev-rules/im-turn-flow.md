@@ -37,6 +37,45 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 设置页在自动模式下随目录更新重读实际模型，加载、刷新与保存共用请求代次，迟到刷新不得
 覆盖用户刚固定的模型或切换后的渠道。
 
+## 0. 项目清单（2026-11-13）
+
+**侧栏的本机项目就是 IM 机器人用的项目**，不另设「工作目录映射」这一层概念；界面与机器人文案一律叫
+「项目」，「工作目录」只指 Agent 实际干活的那个目录（术语表）。
+
+- **官方机器人**（Slack / Telegram / X / 飞书）：可选项目 = 侧栏的本机项目（登记过的目录减去侧栏里
+  移除的；不含远程电脑上的项目与伙伴自己的项目），外加内置「对话」。`hook-control/projectWorkspaces.ts`
+  把项目列表投影成协议里的「名称 → 目录」表，名称跟随侧栏；`projectWorkspaceSync.ts` 在账号就绪、
+  项目列表变化（`projectCatalogEvents.ts`）、打开设置页与 IM 里查询项目之前各整理一次。设置页只列出
+  这些项目并提供「添加项目」（登记进侧栏），改名与移除在侧栏做。升级前手动配置的目录在第一次整理时
+  登记成项目，原别名改为侧栏名字，旧别名留作查找；按名称存的偏好与默认项目跟着改名。这份表同时是
+  「IM 能驱动哪些目录」的边界：一个项目要被执行，仍须由主人在 IM 里用 `/project` 选中，或在设置里设为
+  默认项目。协议约定见 [`protocol-compatibility/hook-project-names.md`](protocol-compatibility/hook-project-names.md)。
+- **官方机器人共用一套项目配置**：每个项目的 Agent、模型、思考强度、权限档与模型来源只有一份
+  （`hook-control/sharedProjectPrefs.ts`，存在本机偏好文件里渠道键为 `shared` 的行），飞书、Telegram、
+  Slack、X 用到同一个项目时都按它跑；默认项目同样只有一个（Telegram / 飞书 / X 共用，Slack 仍在每个
+  频道里各自选项目）。设置页只有一处「项目与模型」，不按机器人重复。各渠道自己的行不再是正本，只是给
+  各自服务端 `/model`、`/settings` 卡看的镜像：共用那份变了就投影到已连接的渠道行，再由
+  `workspacePrefsMirror.ts` 推给服务端；在 IM 里用 `/model` 卡改的值并回共用那份，再投影到其他渠道
+  （快照里明确带着的全空行算「清回默认」；整行不在快照里不算改动，不会据此清空）。升级时各渠道原有配置一次性并入，顺序固定为
+  飞书 → Telegram → Slack → X：模型取第一个配置过该项目的渠道，权限档取各渠道显式填过的里面最严的
+  一档，合并不放宽任何项目；某个渠道还没连上过服务端时，它的旧配置等第一次连上后再并入（仍按上述
+  顺序：排在前面的渠道会顶替先并入、之后没被改过的行，结果与哪个机器人先连上无关），在那之前它
+  继续按自己的行跑。服务端协议与存储不变。没单独配置过的字段按「IM 新任务默认」里全局那份解析，四个
+  官方机器人都读这一份（官方 Slack 以前另读 `slack` 那份，现已并到全局）。这两份都没有界面入口：
+  旧版「新对话配置」留在盘上的值，升级后第一次启动时清掉一次（`clearLegacyGlobalDefaultsOnce`，
+  只做一次并记下），此后这些项目按内置默认跑；设置页不再有让用户自己「恢复默认」的提示。项目从
+  侧栏移除、或它的名称转给了另一个目录时，按这个名称存的模型、权限与来源一并清掉
+  （`releasedProjectNames` → `clearWorkspacePrefsFor`），同名的新项目不会继承；IM 里按名称记着的
+  旧会话不另做处理，名称现在指哪个项目就落进哪个项目。设置页里这块排在各机器人卡片之后，每个
+  项目一行，卡片展开后末尾有一行指向它。
+- **换项目后的任务归属**：复用绑定的任务要求它就在这次点名的项目里（同一项目内换目录、任务自己的
+  worktree 照旧跟随）。在 IM 里把会话从项目 A 切到 B 后，下一条消息在 B 里新建任务，不再进 A 的旧任务；
+  桌面端把任务移到别的项目同理，原会话下一条消息在它点名的项目里新建。
+- **个人机器人**：`/ctr` 第一步与 `/project` 切换卡列的也是侧栏项目（`im/shared/controlProjects.ts`，
+  名字跟随侧栏、含没有任务的项目、不含已移除的）；`/ctr` 另带不在任何项目里的对话任务目录。
+  `/project` 在个人 Telegram 与个人飞书可用；用它切进项目的会话，启动时的托管目录归一与分组补写
+  （`im/index.ts`、`feishu/legacySessionBackfill.ts`）都不得把它改回去。
+
 ## 1. 入口账本
 
 每一行是一轮任务的一个步骤。「现状」列写真正干活的函数；「目标」列写合并后的归属：
@@ -47,7 +86,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 |---|---|---|---|
 | 入站 | 各渠道 adapter → `im/shared/messageHandler.ts`（微信经 `WechatTaskStore` 持久队列） | `hook-control/manager.ts` 收 `task.dispatch` → `dispatcher.handleDispatch` | 渠道适配（入站来源各自保留） |
 | 幂等与重投 | 无（个人连接无重投） | `ackHistory` / `inflightRequests` / `terminalLedger` | 渠道适配（服务端重投是 hook 的传输语义） |
-| 找任务 | `turnRunner.resolveRouteTarget`：通知回复 → `/ctr` 绑定 → 确定性 id 通道行（`sessionRepo.findActiveSession` 复活归档行） | `dispatcher.resolveTarget`：接管 sessionId → 绑定复用（每条消息按工作目录映射现场重算）→ 失效则换任务并交接 | 共用流程的「定位」骨架 + 渠道策略（台账第三节「绑定的任务失效后怎么接续」有意不同） |
+| 找任务 | `turnRunner.resolveRouteTarget`：通知回复 → `/ctr` 绑定 → 确定性 id 通道行（`sessionRepo.findActiveSession` 复活归档行） | `dispatcher.resolveTarget`：接管 sessionId → 绑定复用（每条消息按项目清单现场重算：任务必须就在这次点名的项目里）→ 失效则换任务并交接 | 共用流程的「定位」骨架 + 渠道策略（台账第三节「绑定的任务失效后怎么接续」有意不同） |
 | 建任务 | `sessionRepo.createSession` 确定性 id upsert；`createFreshSession`（`/new` 轮换事务）；随后 `maker.createSession` —— 2026-10 起两处建行都经 `openChannelSession` → **`openSession`**（模型准入） | `session-runner` 新任务的 `maker.createSession`、`/new` 的 `desktopSessionStorage.create` —— 同样经 `openChannelSession` → **`openSession`** | **公共入口 `openSession`**（已完成，批次 2）；渠道专属建行在 commit 回调里。live session 仍各自 `maker.createSession`，未改用 register 内部的 `bootstrapSession`（会新增项目上下文 / Orca 指令注入等行为，见 §6） |
 | 默认配置 | `resolveImSessionDefaults(channel)` + 跟随渠道默认（`channelDefaultRouteSync`） | `resolveNewSessionConfig`（目录偏好 > 全局 IM 默认 > 清单首项；权限档规则见 `defaults.ts`）+ 共用 `createDefaultRouteFollower` 跟随默认 | 渠道策略（台账第三节「新会话的默认…从哪读」有意不同） |
 | 命令 | `messageHandler.processOne` → `slashCommands`（注册表 `botCommands.ts`） | 服务端分发命令，桌面只收 `query.*` | 渠道适配（官方命令分发在服务端） |
@@ -349,3 +388,65 @@ Dispatcher 只接受宿主解析的专线 ID 和精确工作目录，忽略入�
 | X | 只沿当前帖的祖先回复链，近祖先优先；仍受原有付费读取预算约束 | 保留现有媒体读取能力，不扩大月度读取额度 |
 
 本上限只管每次注入，不修改历史存储保留策略或显式历史检索。模型输入与展示复用同一截断结果；展示可去掉内部身份标记，不能另取一批消息。游标仍只在实际受理后提交，拒绝/失败不吞掉下一轮历史。
+
+
+## Telegram 统一提问与生命周期（2026-11-13）
+
+普通中断式与异步提问共用 `presentQuestion`，同时拿到
+结构化问题、通过 desktopDecide 的答题入口和最终 settled Promise；先登记 App 题卡再发送。
+router 统一使用桌面处理器与 desktopDecide，避免注册第二个答案 resolver。中断式保留 route
+token、等待状态与原渠道超时（官方 30 分钟），停止/释放/超时同时清理 App pending；异步
+不绑定轮次 token、等待状态或渠道超时，保留 Session 原有撤回/新输入规则。
+`questionCard.ts` 是两条 Telegram 链路共用的选择模型：稳定 question id、完整多题提交、
+多选 JSON 数组、选择版本防旧按钮、App 先回答的仲裁；提交后不再接受第二次点击，最终
+settled 才标记完成，执行暂停时不能绕过既有答案闸门。发布失败不合成默认答案，App 仍可答。
+
+个人 Telegram 从入站 `speaker.id` 捕获本轮提问者，透传 `questionRespondentId` 到传输层；
+卡片发在原 lane，并按实际 messageId 绑定提问者。仅 `aq:` 按钮使用这个例外，其他按钮仍
+走既有账号身份校验；引用题卡的其他成员消息在进入模型前被拒绝。换配置/下线清理映射。
+按钮订阅不随本轮结束关闭，而随题卡 settled 释放；换 session 后不再写旧卡。
+
+官方双方协商 `telegram-question-ops-v1` + `msg-op-v1`，以 `turn-notice` 发/改卡，
+不复用普通 DM send，也不复用 turn-scoped interaction-card。dispatcher 保留独立按钮路由，
+回调核验连接、账号代次、requestId；取消账号清理全部路由。发送前重验目录授权、连接和能力。
+每次 op 等回执最多 10 秒；turn.end 前最多 10 秒 drain 新卡及中断式题卡的最终关闭，
+不等待未答的异步题卡。异步卡结束后仍可编辑。
+未知发送不重试，未知编辑保留 App 答题入口。Telegram 布局与普通卡片共用正文/按钮尺寸限制。
+
+服务端用原任务、绑定和 externalKey 校验首次发送；后续编辑凭卡片身份再次校验绑定。
+message route 的 requestId=null、terminal=false，externalKey 保留，因此不被当作进度、终稿
+或重跑输出回收。回调 token 绑定原 principal、卡片/键盘代际、绑定 id 和设备，并在答题前
+核验当前 lane generation。`questionMode` 在首次发送时固定：blocking 卡在 turn.end 清理，
+async 卡跨轮存活、最长 24 小时。重启后旧卡安全失效。
+引用活卡的原提问者文字转换为 `question:reply` + `answerText`，两条链路均不进入普通发送
+队列；单题直接提交，多题要求显式「题号: 答案」，与选项混合后提交。传输层先校验身份、
+群准入、卡片是否关闭，服务端另校验绑定和 lane generation；不把文字用于其他按钮。
+关闭卡片的文字回复回到正常输入路径。权限确认与敏感代输入不改变；其他 IM 普通提问见下一节。
+
+回归入口：`questionCard.test.ts`、`interactionRouter.test.ts`、`telegramNoticeOps.test.ts`、
+`dispatcher.test.ts`、`turnRunnerThreadRouting.test.ts` 和传输层 `telegramIM.test.ts`。
+
+### 所有 IM 的普通提问（2026-11-13）
+
+`questionCard.ts` 是普通中断式／异步提问的共同答案模型，`questionPresentation.ts`
+负责个人 IM 展示与回答归属；权限、计划审阅、代输入沿用各自入口。原提问者只能回答
+自己在原聊天／话题中触发的问题，不能替其他人作答，也不会因此获得工具批准权限。
+
+- Telegram、飞书／Lark、Discord 使用各自原生按钮卡；文字可用问题编号回答。
+- 微信、企业微信、钉钉、iMessage 使用同一模型的文字投影，每题选项完整列出。
+  使用 `Q… 答案`，多题使用 `Q… 2: 答案`，全部填好后以 `Q… OK` 提交；单题单选直接提交。
+  多选可写选项序号，如 `1,2`。不能编辑消息的渠道另发当前状态／最终结果。
+- 支持引用消息 ID 的渠道也可直接引用问题卡回复。普通文字不隐式回答异步问题，
+  编号、真实发言人、原 lane／scope 和有效 Session 都必须匹配。
+- `messageHandler` 在用户队列前消费这些回答；微信在 poll 批次持久确认后、普通任务
+  入队前消费。否则中断式提问会占着执行轮次，答案排在其后导致互等。
+- 中断式普通问题统一 30 分钟等待，停止／轮次释放也会清理；异步问题不因原轮结束
+  清理，仍由 App 的请求生命周期最终收口。两端共享原有 App 答案与暂停闸门。
+- 卡片注册在实际消息 ID 上。账号替换、明确下线、渠道访问撤销和 Session 替换后旧入口
+  不再接收答案。任何回调 payload 自报的身份都不参与授权。
+
+官方 Slack、飞书／Lark 双向协商 `im-question-cards-v1`，经 `interaction.request`
+可选 `questionMode`、`questionCode` 发送／更新同一问题，`interaction.cancel` 收口；
+`interaction.decision` 的 `question:reply`＋`answerText` 回传文字。未协商时沿用旧入口。
+Telegram 继续使用已协商的 `telegram-question-ops-v1`，展示模型与其余 IM 同源。
+本实现不新增 X 的公开帖问答入口，不改变各渠道原有消息触发／成员准入规则。

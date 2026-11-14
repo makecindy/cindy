@@ -32,6 +32,7 @@ export class SpeechSynthesisSession {
   constructor(
     private readonly deps: {
       connection(): SpeechConnection;
+      prepareConnection?(): Promise<void>;
       assertCurrent(): void;
       fetch: typeof fetch;
       diagnostic?(event: SpeechDiagnostic): void;
@@ -70,6 +71,11 @@ export class SpeechSynthesisSession {
     const open = async (index: number): Promise<ReadableStream<Uint8Array>> => {
       this.deps.assertCurrent();
       if (epoch !== this.epoch || controller.signal.aborted) throw new SpeechError('cancelled');
+      if (this.deps.prepareConnection) {
+        await this.deps.prepareConnection();
+        this.deps.assertCurrent();
+        if (epoch !== this.epoch || controller.signal.aborted) throw new SpeechError('cancelled');
+      }
       const { url, body, headers } = requests[index];
       let timedOut = false;
       const timer = setTimeout(() => {
@@ -83,7 +89,7 @@ export class SpeechSynthesisSession {
           method: 'POST',
           redirect: 'error',
           signal: controller.signal,
-          headers: { ...connection.headers, 'Content-Type': 'application/json', ...headers },
+          headers: { ...this.deps.connection().headers, 'Content-Type': 'application/json', ...headers },
           body,
         });
         this.deps.assertCurrent();

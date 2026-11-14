@@ -73,6 +73,145 @@ function pcmChunk(amplitude: number): ArrayBuffer {
 describe('VoiceInputController', () => {
   afterEach(() => vi.useRealTimers());
 
+  // #10105: a refiner can remain pending while its transport receives only
+  // heartbeats. Existing tests settle every refinement; exercise stop() itself
+  // with a pending refiner and fake time, including late results (unit tier).
+  it('finishes with the submitted original when refinement makes no progress', async () => {
+    vi.useFakeTimers();
+    const asr = new FakeAsrProvider();
+    const submitted = vi.fn(acceptSubmission);
+    const applyRefinement = vi.fn(() => true);
+    const preview = vi.fn();
+    let finish!: (result: RefinementResult) => void;
+    let partial!: (text: string) => void;
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger(),
+      refiner: { refine: (input) => {
+        partial = input.onPartial!;
+        return new Promise((resolve) => { finish = resolve; });
+      } },
+      callbacks: { onDraftChanged: () => {}, onSubmitted: submitted, applyRefinement, onRefinementPreview: preview },
+    });
+    await controller.start();
+    asr.emit({ type: 'stable', text: 'Original words', at: Date.now() });
+    await controller.stop();
+    expect(controller.currentState).toBe('refining');
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(controller.currentState).toBe('done');
+    expect(submitted).toHaveBeenCalledTimes(1);
+    expect(submitted.mock.calls[0][0]).toBe('Original words');
+    partial('Late preview');
+    finish({ accepted: true, basedOnText: 'Original words', refinedText: 'Late replacement', sourceSegmentIds: [], elapsedMs: 9_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(preview).not.toHaveBeenCalled();
+    expect(applyRefinement).not.toHaveBeenCalled();
+    expect(controller.currentState).toBe('done');
+  });
+
+  it.each([false, true])('extends the refinement wait only for changed text (repeated: %s)', async (repeated) => {
+    vi.useFakeTimers();
+    const asr = new FakeAsrProvider();
+    const applied = vi.fn(() => true);
+    let finish!: (result: RefinementResult) => void;
+    let partial!: (text: string) => void;
+    const controller = new VoiceInputController({
+      asr, logger: new VoiceTimelineLogger(),
+      refiner: { refine: (input) => {
+        partial = input.onPartial!;
+        return new Promise((resolve) => { finish = resolve; });
+      } },
+      callbacks: { onDraftChanged: () => {}, onSubmitted: acceptSubmission, applyRefinement: applied },
+    });
+    await controller.start();
+    asr.emit({ type: 'stable', text: 'Original words', at: Date.now() });
+    await controller.stop();
+    for (let i = 1; i <= 3; i++) {
+      await vi.advanceTimersByTimeAsync(4_000);
+      partial(repeated ? 'Same preview' : `Growing preview ${i}`);
+    }
+    expect(controller.currentState).toBe(repeated ? 'done' : 'refining');
+    finish({ accepted: true, basedOnText: 'Original words', refinedText: 'Finished words', sourceSegmentIds: [], elapsedMs: 12_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(applied).toHaveBeenCalledTimes(repeated ? 0 : 1);
+    expect(controller.currentState).toBe('done');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('clears the pending refinement wait on cancellation and isolates the next run', async () => {
+    vi.useFakeTimers();
+    const asr = new FakeAsrProvider();
+    const preview = vi.fn();
+    const applied = vi.fn(() => true);
+    let finish!: (result: RefinementResult) => void;
+    let partial!: (text: string) => void;
+    const controller = new VoiceInputController({
+      asr, logger: new VoiceTimelineLogger(),
+      refiner: { refine: (input) => {
+        partial = input.onPartial!;
+        return new Promise((resolve) => { finish = resolve; });
+      } },
+      callbacks: { onDraftChanged: () => {}, onSubmitted: acceptSubmission, onRefinementPreview: preview, applyRefinement: applied },
+    });
+    await controller.start();
+    asr.emit({ type: 'stable', text: 'Old words', at: Date.now() });
+    await controller.stop();
+    await controller.cancel();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    await controller.start();
+    partial('Late preview');
+    finish({ accepted: true, basedOnText: 'Old words', refinedText: 'Late words', sourceSegmentIds: [], elapsedMs: 9_000 });
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(controller.currentState).toBe('listening');
+    expect(preview).not.toHaveBeenCalled();
+    expect(applied).not.toHaveBeenCalled();
+    await controller.cancel();
+  });
+
+  // The new wait must preserve host edits both when refinement wins the race
+  // and when its idle budget expires. No existing case edits the accepted range.
+  it.each([false, true])('keeps edits made during pending refinement (timeout: %s)', async (timeout) => {
+    vi.useFakeTimers();
+    const asr = new FakeAsrProvider();
+    let editorText = '';
+    let userEdited = false;
+    let finish!: (result: RefinementResult) => void;
+    let partial!: (text: string) => void;
+    const submitted = vi.fn((text: string, segment: SpeechSegment) => {
+      editorText = text;
+      return acceptSubmission(text, segment);
+    });
+    const preview = vi.fn((text: string) => { editorText = text; });
+    const applied = vi.fn((_range: EditableRange, text: string) => { editorText = text; return true; });
+    const controller = new VoiceInputController({
+      asr, logger: new VoiceTimelineLogger(),
+      refiner: { refine: (input) => {
+        partial = input.onPartial!;
+        return new Promise((resolve) => { finish = resolve; });
+      } },
+      callbacks: {
+        onDraftChanged: () => {}, onSubmitted: submitted,
+        isRangeUserTouched: () => userEdited, onRefinementPreview: preview, applyRefinement: applied,
+      },
+    });
+    await controller.start();
+    asr.emit({ type: 'stable', text: 'Original words', at: Date.now() });
+    await controller.stop();
+    editorText = 'The user edited these words';
+    userEdited = true;
+    partial('Unwanted model preview');
+    await vi.advanceTimersByTimeAsync(timeout ? 8_000 : 1_000);
+    finish({ accepted: true, basedOnText: 'Original words', refinedText: 'Unwanted model result', sourceSegmentIds: [], elapsedMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(editorText).toBe('The user edited these words');
+    expect(submitted).toHaveBeenCalledTimes(1);
+    expect(preview).not.toHaveBeenCalled();
+    expect(applied).not.toHaveBeenCalled();
+    expect(controller.currentState).toBe('done');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each(['silent', 'partial', 'opted_out', 'provider_error'] as const)('does not replay a recording when %s', async (scenario) => {
     const asr = new FakeAsrProvider();
     asr.recover = vi.fn(async () => {});

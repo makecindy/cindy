@@ -5,7 +5,6 @@ import type {
   ProviderShareQuotaAccountResult,
 } from '../../shared/providerShareInsights.js';
 import {
-  isSubscriptionProvider,
   MAX_SUBSCRIPTION_ACCOUNTS,
 } from '../../shared/subscriptionAccounts.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
@@ -179,11 +178,9 @@ export async function readProviderShareQuotaAccounts(
   providerId: string,
 ): Promise<ProviderShareQuotaAccount[]> {
   const assertCurrent = captureProviderManagementScope();
-  const pooled = isSubscriptionProvider(providerId)
-    ? await readSubscriptionPoolAccountUsages(providerId)
-    : undefined;
+  const pooled = await readSubscriptionPoolAccountUsages(providerId);
   assertCurrent();
-  if (!pooled?.length || (pooled.length === 1 && pooled[0].isDefault))
+  if (pooled === undefined || (pooled.length === 1 && pooled[0].isDefault))
     return [await readProviderShareQuotaAccount(providerId)];
   const provider = (
     await getDesktopProviderService().listProviders({ allowSideEffects: false })
@@ -191,13 +188,15 @@ export async function readProviderShareQuotaAccounts(
   assertCurrent();
   if (!provider?.connected || provider.removed || provider.suspended)
     return [empty('unavailable')];
+  if (pooled.length === 0) return provider.subscriptionPoolAlias
+    ? [await readProviderShareQuotaAccount(providerId)] : [empty('unavailable')];
   const now = Date.now();
   return Promise.all(
     pooled.map(async ({ isDefault, usage }) =>
       isDefault
         ? readProviderShareQuotaAccount(providerId)
         : windowsAccount(
-            providerId === 'anthropic'
+            providerWeeklyQuotaSource(provider) === 'claude'
               ? claudeSource(provider, usage?.claudeUsage ?? null, now)
               : // Pool buckets omit windows without a percentage; codexSource skips those.
                 codexSource(

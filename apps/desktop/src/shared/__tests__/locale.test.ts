@@ -3,6 +3,15 @@ import { describe, expect, it } from 'vitest';
 import { resolvePreferredSystemLocale, resolveSystemLocale } from '../locale';
 
 describe('desktop locale resolution', () => {
+  // Unit regression: removing the codeset before validation must not turn an
+  // invalid multiline tag into the selected locale. Existing suffix tests only
+  // covered valid input; the first invalid preference must fall through.
+  it('keeps malformed multiline codesets invalid', () => {
+    for (const separator of ['\n', '\r', '\u2028', '\u2029']) {
+      expect(resolvePreferredSystemLocale([`ja_JP.UTF-8${separator}invalid`, 'de-DE'])).toBe('de');
+    }
+  });
+
   it('routes simplified and traditional Chinese tags separately', () => {
     for (const tag of ['zh', 'zh-CN', 'zh-Hans', 'zh-Hans-HK', 'zh-SG']) {
       expect(resolveSystemLocale(tag), tag).toBe('zh-CN');

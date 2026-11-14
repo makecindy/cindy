@@ -751,7 +751,7 @@ export function ScheduleFormDialog({
         >
           <header className="flex min-h-[72px] shrink-0 items-center gap-4 pt-[18px] pr-4 pb-[14px] pl-6">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <Dialog.Title className="text-24 font-normal leading-[1.33] text-[var(--msg-assistant-text)]">
+              <Dialog.Title className="text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
                 {isProjectAutomationMode
                   ? isEdit
                     ? t('scheduler.editor.promptDialog.titleProjectEdit')
@@ -1185,13 +1185,15 @@ export function ScheduleFormDialog({
                         )}
                       </div>
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
-                      {webhookSettingsVisible && <WebhookAccountManager allowOpenSchedule={false} />}
+                      {webhookSettingsVisible && form.webhookPreset !== 'github-app' && <WebhookAccountManager allowOpenSchedule={false} />}
                       {webhookSettingsVisible && (
                           <WebhookSourceFields
                             preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
                             signed={form.webhookSigned !== false}
                             formatText={form.webhookFormat ?? ''}
                             events={form.webhookEvents ?? ''}
+                            repositories={form.webhookRepositories ?? ''}
+                            onRepositoriesChange={(value) => setField('webhookRepositories', value)}
                             onEventsChange={(value) => setField('webhookEvents', value)}
                             onPresetChange={(value) => {
                               // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。

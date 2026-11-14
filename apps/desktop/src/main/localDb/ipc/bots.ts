@@ -1,4 +1,5 @@
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
+import { readBotProfileSource } from '../../../shared/botProfileSources.js';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
 import { loadBotReadState, loadAcknowledgedBotReadState, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { registerBotReadStateIpc } from '../../maker-ipc/botReadStateIpc.js';
@@ -64,7 +65,6 @@ import {
 } from './botProfileVersioning.js';
 import {
   botProfileDir,
-  ensureBotChatOnlyWorkspaceDir,
   ensureBotWorkspaceDir,
   migrateBotProfileFolder,
   readBotProfileFolder,
@@ -74,7 +74,7 @@ import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.j
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
-import { ensureBotProjectAutomations, nameBotProject, prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
+import { ensureBotProjectAutomations, ensureWorkspaceRepository, readWorkspaceRepositoryStatus, nameBotProject, prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
 import { normalizeRecentWorkdirPath } from './recentWorkdirs.js';
 import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
 import { readBotProjectMode } from '../../../shared/botProjectMode.js';
@@ -311,13 +311,13 @@ export async function createBotCanonicalSession(
 }
 
 export type EnsureBotGroupLaneResult =
-  | { ok: true; sessionId: string; created: boolean }
+  | { ok: true; sessionId: string; created: boolean; replacedSessionId?: string }
   | { ok: false; errorCode: 'MEMBER_UNAVAILABLE' | 'NO_MODEL'; message: string };
 
 /**
- * The Bot's hidden lane for one group chat (docs/product-rules/bot-group-chat.md).
+ * The Bot's isolated lane for one group chat (docs/product-rules/bot-group-chat.md).
  * Same Profile, Home workspace and model chain as the canonical Chat; never a
- * second canonical Session and never visible in the task list.
+ * second canonical Session. Group work is listed under its companion project.
  *
  * With `plan`, the Bot's 分工 Session for that plan instead (§7.4): same Profile and
  * model chain, but it works in the plan's recorded work directory. A worktree plan
@@ -328,6 +328,11 @@ export type EnsureBotGroupLaneResult =
  *
  * With `talkPlanId` (server groups only), the Bot's own lane for that queue: like a Thread
  * lane, it talks in the group lane's place with its own context; no project folder.
+ *
+ * With `projectDir` (the group's project folder on this computer), a V2 teammate's group and
+ * Thread lanes that answer its owner work in that folder instead of the Home workspace, like an
+ * ordinary task there (bot-group-chat.md §7.5). The lane follows the folder: one created
+ * elsewhere is archived and replaced.
  */
 export async function ensureBotGroupLaneSession(input: {
   botId: string;
@@ -338,6 +343,7 @@ export async function ensureBotGroupLaneSession(input: {
   threadRootId?: string;
   talkPlanId?: string;
   personalDigest?: boolean;
+  projectDir?: string;
 }): Promise<EnsureBotGroupLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
@@ -350,7 +356,7 @@ export async function ensureBotGroupLaneSession(input: {
     : input.chatAccess && input.threadRootId ? chatGroupThreadRouteKey(input.groupId, input.chatAccess, input.threadRootId)
     : input.chatAccess ? chatGroupLaneRouteKey(input.groupId, input.chatAccess) : botGroupLaneRouteKey(input.groupId);
   const [existing] = await db
-    .select({ sessionId: botSessionLinks.sessionId })
+    .select({ sessionId: botSessionLinks.sessionId, workingDir: sessions.workingDir, projectDir: sessions.projectDir })
     .from(botSessionLinks)
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(and(
@@ -362,7 +368,10 @@ export async function ensureBotGroupLaneSession(input: {
       eq(sessions.status, 'active'),
     ))
     .limit(1);
-  if (existing) {
+  // All group contexts share the resolved folder; access is enforced independently.
+  const wantedProject = input.projectDir ?? null;
+  const moves = !!existing && !!wantedProject && !input.plan && existing.workingDir !== wantedProject;
+  if (existing && !moves) {
     await syncBotLanePermission(existing.sessionId);
     owner.assertCurrent();
     return { ok: true, sessionId: existing.sessionId, created: false };
@@ -383,10 +392,8 @@ export async function ensureBotGroupLaneSession(input: {
   const config = parseJson(profileVersion.capabilitiesJson);
   const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
-  const workspaceKind = input.plan && input.chatAccess?.mode !== 'chat' ? ('project' as const) : ('dialogue' as const);
-  const workingDir = input.chatAccess?.mode === 'chat'
-    ? await ensureBotChatOnlyWorkspaceDir(owner.userDataDir, input.botId, groupLaneOfRouteKey(routeKey))
-    : input.plan ? input.plan.workDir : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspaceKind = input.plan || wantedProject ? ('project' as const) : ('dialogue' as const);
+  const workingDir = input.plan ? input.plan.workDir : wantedProject ?? await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(input.plan?.sessionId);
   const row = {
@@ -395,6 +402,7 @@ export async function ensureBotGroupLaneSession(input: {
       {
         workspaceKind,
         workingDir,
+        ...(wantedProject ? { projectDir: wantedProject } : {}),
         ...botSessionRouteFields(config, primaryRoute),
         remoteHostId: undefined,
         source: 'bot',
@@ -418,10 +426,12 @@ export async function ensureBotGroupLaneSession(input: {
     botId: input.botId,
     groupId: input.groupId,
     routeKey,
+    ...(moves ? { replaceOtherWorkingDir: true } : {}),
     session: {
       id: row.id,
       title: row.title,
       workingDir: row.workingDir ?? null,
+      ...(row.projectDir ? { projectDir: row.projectDir } : {}),
       workspaceKind: row.workspaceKind,
       model: row.model,
       effort: row.effort,
@@ -442,7 +452,10 @@ export async function ensureBotGroupLaneSession(input: {
     await syncBotLinkedLanePermissions(result.permissionRepairCanonicalSessionId);
     owner.assertCurrent();
   }
-  return { ok: true, sessionId: result.sessionId, created: result.created };
+  if (result.created) emitSessionCreated(result.sessionId);
+  if (result.replacedSessionId) broadcastSessionPatched(result.replacedSessionId, { status: 'archived' });
+  return { ok: true, sessionId: result.sessionId, created: result.created,
+    ...(result.replacedSessionId ? { replacedSessionId: result.replacedSessionId } : {}) };
 }
 
 export type EnsureBotChannelLaneResult =
@@ -504,7 +517,7 @@ async function resumeArchivedBotOwnedLaneSession(
  * The Bot's hidden lane for one personal-IM group / topic (or an admitted guest
  * DM) once the whole connection is handed to the Bot. Same Profile, Home
  * workspace, model chain and permission profile as the canonical Chat; never a
- * second canonical Session and never visible in the task list. Route keys:
+ * second canonical Session. Channel work retains its ordinary task-list entry. Route keys:
  * `im:<channel>:<botContextId>:g:<chatId>[:t:<threadId>]` / `…:dm:<userId>`.
  */
 export async function ensureBotChannelLaneSession(input: {
@@ -1426,6 +1439,28 @@ export async function readBotSettingsProfile(botId: string) {
   return readProfile(getDbClient(), botId);
 }
 
+/** Same service for local settings and authorized same-account remote settings. */
+export async function botProjectRepository(botId: string, retry: boolean, assertExternal: () => void = () => {}) {
+  const owner = captureBotOperationOwner();
+  const [profile] = await getDbClient().drizzle.select({ id: botProfiles.id })
+    .from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
+  owner.assertCurrent();
+  assertExternal();
+  if (!profile) throwIpcError('NOT_FOUND', 'Bot does not exist');
+  const workspace = path.join(botProfileDir(owner.userDataDir, botId), 'workspace');
+  if (retry) {
+    await ensureWorkspaceRepository(workspace).catch((error) => {
+      log.warn('buddy project repository retry failed', { botId, error: String(error) });
+    });
+    owner.assertCurrent();
+    assertExternal();
+  }
+  const status = await readWorkspaceRepositoryStatus(workspace);
+  owner.assertCurrent();
+  assertExternal();
+  return status;
+}
+
 /**
  * Device-link only needs enough Bot metadata to render the Mobile directory and
  * open the canonical task. Keep this projection main-side so profile prompts,
@@ -1813,7 +1848,7 @@ export async function recoverActiveTeammateInvitations(): Promise<void> {
     owner.assertCurrent();
     for (const { id } of profiles) queueBotInvitation(id);
   } catch (cause) {
-    log.warn('recover pending teammate invitations failed', {
+    log.warn('recover pending buddy invitations failed', {
       error: cause instanceof Error ? cause.name : typeof cause,
     });
   }
@@ -1827,7 +1862,7 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
   const db = client.drizzle;
     const [current] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
     if (!current) throwIpcError('NOT_FOUND', 'Bot 不存在');
-    if (expectedVersion !== undefined && current.currentVersion !== expectedVersion) throwIpcError('PRECONDITION_FAILED', 'Teammate changed');
+    if (expectedVersion !== undefined && current.currentVersion !== expectedVersion) throwIpcError('PRECONDITION_FAILED', 'Buddy changed');
     if (current.status === 'archived') {
       throwIpcError('PRECONDITION_FAILED', '已停止的 Bot 不能修改头像');
     }
@@ -1902,7 +1937,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   const avatarImage = decodeBotAvatarImage(body.avatarImageBase64);
   const avatarColor = readText(body.avatarColor, 'avatarColor', 32) || 'violet';
   const identitySource =
-    (draftEntry ? `${draftEntry.draft.background}\n\n${draftEntry.draft.conversationStyle}\n\nCurrent profile:\n${name}\n${description}` : readText(body.identitySource, 'identitySource', 12000)) || buildDefaultBotIdentity(name, description);
+    (draftEntry ? `${draftEntry.draft.background}\n\n${draftEntry.draft.conversationStyle}\n\nCurrent profile:\n${name}\n${description}` : readBotProfileSource(body.identitySource, 'identitySource')) || buildDefaultBotIdentity(name, description);
   const skills = draftEntry ? draftEntry.draft.skillRefs : Array.isArray(body.skills)
     ? body.skills.filter((item): item is string => typeof item === 'string').slice(0, 100)
     : [];
@@ -1913,7 +1948,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   const requestedCapabilities = hasRequestedCapabilities
     ? (body.capabilities as Record<string, unknown>)
     : {};
-  const userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+  const userContextSource = readBotProfileSource(body.userContextSource, 'userContextSource');
   const gender = readBotGender(body.gender);
   // Old clients may still submit retired template ids with a complete profile.
   // Accept those as ordinary teammates, without installing or reconstructing a template.
@@ -2018,7 +2053,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   try {
     await newTeammateSetup?.(id, creationOwnerBoundary.userDataDir, assertCreationOwnerStillCurrent);
   } catch (error) {
-    log.warn('new teammate V2 setup failed; retries on next start', { botId: id, error: String(error) });
+    log.warn('new buddy V2 setup failed; retries on next start', { botId: id, error: String(error) });
   }
   assertCreationOwnerStillCurrent();
   if (prepareInvitation) {
@@ -2191,7 +2226,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   if (restored?.avatarFallback ?? (previous.cloudAvatarFallback === true)) nextConfig.cloudAvatarFallback = true;
   else delete nextConfig.cloudAvatarFallback;
   if (Object.prototype.hasOwnProperty.call(body, 'userContextSource')) {
-    nextConfig.userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+    nextConfig.userContextSource = readBotProfileSource(body.userContextSource, 'userContextSource');
   }
   // 没显式传就保持原值(mergeBotProfileCapabilities 已经把 previous 整份带过来了),
   // 显式传脏值则清掉 —— 与 readBotGender 的口径一致。
@@ -2217,7 +2252,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   }
   const nextIdentitySource =
     body.identitySource !== undefined
-      ? readText(body.identitySource, 'identitySource', 12000) ||
+      ? readBotProfileSource(body.identitySource, 'identitySource') ||
         buildDefaultBotIdentity(patch.displayName ?? current.displayName, patch.description ?? current.description)
       : (version?.identitySource ?? '');
   const profileContentChanged = botProfileContentChanged({
@@ -2330,7 +2365,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       ownerRoot: owner.userDataDir,
       legacyUserDataDir: app.getPath('userData'),
     }).catch((error) => {
-      log.warn('teammate project preparation failed', { botId: id, error: String(error) });
+      log.warn('buddy project preparation failed', { botId: id, error: String(error) });
       return null;
     });
     owner.assertCurrent();
@@ -2338,7 +2373,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (prepared) {
       const [route] = await readEffectiveBotModelChain(normalizedNextConfig).catch(() => []);
       await ensureBotProjectAutomations({ botId: id, displayName, workingDir: prepared.workingDir, route })
-        .catch((error) => log.warn('teammate project automations failed', { botId: id, error: String(error) }));
+        .catch((error) => log.warn('buddy project automations failed', { botId: id, error: String(error) }));
       owner.assertCurrent();
     }
   } else if (readBotProjectMode(normalizedNextConfig) && patch.displayName !== undefined
@@ -2389,14 +2424,13 @@ export async function searchBotHistory(botId: string, query: string, limit: numb
     .where(eq(botProfiles.id, botId))
     .limit(1);
   if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
-  // Group / IM channel lanes only hold hidden channel turns; the group chat or
-  // the IM conversation itself is the user's record.
+  // All group work, including private catch-up reports, belongs in the owner's
+  // history. IM channel history keeps its existing dedicated entry.
   const links = await db
     .select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks)
     .where(and(
       eq(botSessionLinks.botId, botId),
-      ne(botSessionLinks.role, 'group'),
       ne(botSessionLinks.role, 'channel'),
     ));
   return searchConversations(
@@ -2505,6 +2539,12 @@ export function registerBotIpc(): void {
     const profile = await readRemoteBotProfile(client, botId);
     if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
     return profile;
+  });
+
+  ipcMain.handle('local-db:bots:project-repository', async (event, rawId: unknown, retry: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof retry !== 'boolean') throwIpcError('INVALID_PARAMS', 'Retry must be a boolean');
+    return botProjectRepository(requireString(rawId, 'botId'), retry);
   });
 
   // Source preparation is local-only and account-independent, including for a

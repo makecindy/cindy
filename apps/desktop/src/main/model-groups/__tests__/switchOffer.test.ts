@@ -6,7 +6,8 @@
  *   (按账号存放、有上限、损坏不阻断)。
  * - 现有覆盖缺口：pick.test.ts 只覆盖新任务选谁，不覆盖「排除正在用的账号后还剩谁」与哪些任务不该提议。
  * - 最小失败输入：同一供应商连接的另一个模型(同一份配额)被提议；配额已用完、停用或不可选的被提议；
- *   用户已自己换过模型仍提议；目标 / 定时 / 远程 / 共享任务被提议；记录文件不是 JSON；旧版经模式留下的记录；第 2001 条记录。
+ *   用户已自己换过模型仍提议；目标 / 定时 / 远程 / 共享任务被提议；另一台电脑上的来源被提议(会把运行中的任务挪走)；
+ *   记录文件不是 JSON；旧版经模式留下的记录；第 2001 条记录。
  * - tier：unit，注入依赖的纯函数；记录用临时目录里的真实文件，账号目录经 mock 指过去。
  * - 实测耗时：单独运行约 1 秒（pnpm exec vitest run src/main/model-groups/__tests__/switchOffer.test.ts）。
  */
@@ -79,12 +80,11 @@ function deps(overrides: {
   const pickedKey = overrides.pickedKey === undefined ? CURRENT : overrides.pickedKey;
   return {
     readBinding: vi.fn(() => (pickedKey ? { selection: { type: 'route' as const, id: 'r1' }, pickedKey, at: 1 } : null)),
-    clearBinding: vi.fn(),
     readSession: vi.fn(async () => ({ ...ROW, ...overrides.row })),
     isShared: () => overrides.shared === true,
     hasGoal: async () => overrides.goal === true,
     config: () => overrides.config ?? { routes: [route('order')] },
-    candidateFacts: vi.fn(async () => overrides.facts ?? FACTS),
+    candidateFacts: vi.fn(async (_route: ModelGroupRoute) => overrides.facts ?? FACTS),
     now: () => NOW,
   };
 }
@@ -105,6 +105,17 @@ describe('computeModelGroupSwitchOffer', () => {
     expect(offer).toMatchObject({ groupName: '主力编程', selection: { type: 'route', id: 'r1' }, ...expected });
   });
 
+  it('silently skips sources that run on another computer and does not read their catalogs', async () => {
+    // 1 在另一台电脑上、还有配额，按顺序本该先提议它。
+    const remote: ModelGroupCandidate = { agentKind: 'codex', providerId: 'acct-c', model: 'gpt', agentDeviceId: 'dev-2' };
+    const candidates = [CANDIDATES[0], remote, CANDIDATES[3]];
+    const d = deps({ config: { routes: [{ ...route('order'), candidates }] }, facts: [FACTS[0], fact('C', used(10)), FACTS[3]] });
+    expect(await computeModelGroupSwitchOffer(d, 's1')).toMatchObject({ providerId: 'acct-b', crossEngine: false });
+    expect(d.candidateFacts.mock.calls[0]?.[0]?.candidates[1]).toMatchObject({ agentDeviceId: 'dev-2', off: true });
+    const onlyRemote = deps({ config: { routes: [{ ...route('order'), candidates: [CANDIDATES[0], remote] }] }, facts: [FACTS[0], fact('C', used(10))] });
+    expect(await computeModelGroupSwitchOffer(onlyRemote, 's1')).toBeNull();
+  });
+
   it('gives the same answer when asked again (no rotate cursor or decision is advanced)', async () => {
     const d = deps({ config: { routes: [route('rotate')] } });
     const first = await computeModelGroupSwitchOffer(d, 's1');
@@ -122,10 +133,9 @@ describe('computeModelGroupSwitchOffer', () => {
     ['an SSH task', { row: { remoteHostId: 'host-1' } }],
     ['an Agent running on another computer', { row: { agentDeviceId: 'dev-2' } }],
     ['a collaboration lead', { row: { orcaRole: 'lead' } }],
-  ] as const)('offers nothing for %s and keeps the record', async (_name, input) => {
+  ] as const)('offers nothing for %s', async (_name, input) => {
     const d = deps(input as Parameters<typeof deps>[0]);
     expect(await computeModelGroupSwitchOffer(d, 's1')).toBeNull();
-    expect(d.clearBinding).not.toHaveBeenCalled();
   });
 
   it('offers nothing without a record and does not read the task', async () => {
@@ -134,11 +144,12 @@ describe('computeModelGroupSwitchOffer', () => {
     expect(d.readSession).not.toHaveBeenCalled();
   });
 
-  it('drops the record once the task model was changed some other way', async () => {
-    const d = deps({ row: { providerId: 'acct-b' } });
-    expect(await computeModelGroupSwitchOffer(d, 's1')).toBeNull();
-    expect(d.clearBinding).toHaveBeenCalledWith('s1');
-    expect(d.candidateFacts).not.toHaveBeenCalled();
+  it('offers nothing while the task is on another model, and offers again once it is on the recorded one', async () => {
+    // 跨引擎的换模型只登记了「下一条消息再换」时，任务行还是旧模型；记录不能因此丢掉。
+    const elsewhere = deps({ row: { providerId: 'acct-b' } });
+    expect(await computeModelGroupSwitchOffer(elsewhere, 's1')).toBeNull();
+    expect(elsewhere.candidateFacts).not.toHaveBeenCalled();
+    expect(await computeModelGroupSwitchOffer(deps(), 's1')).not.toBeNull();
   });
 });
 

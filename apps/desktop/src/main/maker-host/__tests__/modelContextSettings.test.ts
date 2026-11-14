@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, type AgentKind, type Catalog } from '@cindy/model-providers';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BUNDLED_CATALOG, type AgentKind, type Catalog, type CustomProviderConfig } from '@cindy/model-providers';
 
 const state = vi.hoisted(() => ({
   claudeOAuth: false, codexOAuth: false, gateway: true,
@@ -19,6 +19,7 @@ vi.mock('../model-context-limit-store.js', () => ({
 }));
 
 import { resolveConfiguredContextWindow, resolveDesktopModelContextProviderId, resolveDesktopModelEfforts } from '../model-context-settings.js';
+import { getActiveCatalog, setActiveCatalog, setCustomProviderConfigs, setCustomProviders } from '../active-catalog.js';
 import { shouldRebuildForModelWindowSwitch } from '../../maker-ipc/contextOverflowRollover.js';
 
 function dualCatalog(agent: AgentKind): Catalog {
@@ -135,5 +136,47 @@ describe('route efforts follow the session source', () => {
     expect(resolveDesktopModelEfforts(catalog, 'claude-code', null, 'shared-model'))
       .toEqual(['low', 'medium', 'high', 'max']);
     expect(resolveDesktopModelEfforts(catalog, 'claude-code', 'missing', 'shared-model')).toBeNull();
+  });
+});
+
+// Exercise the real catalog projection before applying task budgets; no network or credentials.
+describe('custom fallback capacity provenance through the active catalog', () => {
+  afterEach(() => {
+    setCustomProviders([]);
+    setActiveCatalog(BUNDLED_CATALOG);
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('%s does not turn an unknown working fallback into a physical cap', (agent) => {
+    const models = [
+      { id: 'gpt-private-next', name: 'Unknown' },
+      { id: 'gpt-declared-window', name: 'Reported window', discoveredMetadata: { contextWindow: 800_000 } },
+      { id: 'gpt-declared-max', name: 'Reported maximum', discoveredMetadata: { contextWindowMax: 600_000 } },
+    ];
+    const config: CustomProviderConfig = {
+      id: 'custom:capacity-fixture', name: 'Capacity fixture',
+      runtimes: Object.fromEntries(['claude-code', 'codex', 'pi'].map(kind => [kind, {
+        baseUrl: 'https://relay.example/v1', wireProtocol: 'openai-responses', models,
+      }])),
+    };
+    setActiveCatalog(BUNDLED_CATALOG);
+    setCustomProviderConfigs([config]);
+    const catalog = getActiveCatalog();
+    const rows = catalog.providers.find(provider => provider.id === config.id)!.models[agent]!;
+    const unknown = rows.find(model => model.id === 'gpt-private-next')!;
+    expect(unknown.contextWindow).toBe(272_000);
+    expect(unknown.contextWindowVerified).not.toBe(true);
+    for (const budget of [800_000, 1_000_000]) {
+      expect(resolveConfiguredContextWindow(catalog, agent, config.id, unknown.id, budget)).toBe(budget);
+    }
+    expect(unknown.contextWindowMax).toBeUndefined();
+    const reported = rows.find(model => model.id === 'gpt-declared-window')!;
+    expect(reported.contextWindow).toBe(272_000);
+    expect(reported.contextWindowVerified).toBe(true);
+    expect(reported.contextWindowMax).toBe(800_000);
+    expect(resolveConfiguredContextWindow(catalog, agent, config.id, reported.id, 1_000_000)).toBe(800_000);
+    const maximumOnly = rows.find(model => model.id === 'gpt-declared-max')!;
+    expect(maximumOnly.contextWindowVerified).toBe(false);
+    expect(maximumOnly.contextWindowMax).toBe(600_000);
+    expect(resolveConfiguredContextWindow(catalog, agent, config.id, maximumOnly.id, 1_000_000)).toBe(600_000);
   });
 });

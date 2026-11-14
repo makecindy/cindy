@@ -219,6 +219,9 @@ export function ProviderGroupAddDialog({
               )}
             </div>
             <ProviderShareDialogFooter>
+              <Button variant="secondary" size="md" disabled={saving} onClick={onClose}>
+                {t('providerGroup.add.cancel')}
+              </Button>
               <Button
                 variant="cta"
                 size="md"
@@ -227,9 +230,6 @@ export function ProviderGroupAddDialog({
                 onClick={() => void submit()}
               >
                 {t('providerGroup.add.confirm')}
-              </Button>
-              <Button variant="secondary" size="md" disabled={saving} onClick={onClose}>
-                {t('providerGroup.add.cancel')}
               </Button>
             </ProviderShareDialogFooter>
           </>
@@ -241,11 +241,11 @@ export function ProviderGroupAddDialog({
                 : t('providerGroup.add.linkDescription', { provider: providerName })}
             </p>
             <ProviderShareDialogFooter>
-              <Button variant="cta" size="md" disabled={Boolean(deviceId)} onClick={() => setPasteOpen(true)}>
-                {t('providerGroup.add.pasteLink')}
-              </Button>
               <Button variant="secondary" size="md" onClick={onClose}>
                 {t('providerGroup.add.cancel')}
+              </Button>
+              <Button variant="cta" size="md" disabled={Boolean(deviceId)} onClick={() => setPasteOpen(true)}>
+                {t('providerGroup.add.pasteLink')}
               </Button>
             </ProviderShareDialogFooter>
           </>

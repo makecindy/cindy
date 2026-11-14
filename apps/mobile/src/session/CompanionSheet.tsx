@@ -20,7 +20,7 @@ export type CompanionSheetProps = ComposerSheetProps & {
  * unsaved or a submit is in flight, the backdrop, the grabber and the system back key neither close
  * nor prompt. The system back key stays the in-page Back when a secondary page offers one.
  */
-export function CompanionSheet({ visible, title, onClose, onClosed, onShow, onBack, children, footer, testID, preventDismiss, leadingAction, trailingAction, initialSnap = 'half', keyboardAvoidingBehavior = 'height' }: CompanionSheetProps) {
+export function CompanionSheet({ visible, title, onClose, onClosed, onShow, onBack, children, footer, testID, preventDismiss, leadingAction, trailingAction, initialSnap = 'half', keyboardAvoidingBehavior = 'padding' }: CompanionSheetProps) {
   const { colors } = useTheme();
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();

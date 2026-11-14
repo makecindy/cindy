@@ -189,6 +189,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
   'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+  'CINDY_PI_TASK_SYSTEM_PROMPT_FILE',
   'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
@@ -4055,7 +4056,11 @@ class CindyMcpGateway {
             query: { type: 'string', description: 'Required for search.' },
             type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference'] },
             limit: { type: 'integer', minimum: 1, maximum: 50 },
-            name: { type: 'string', pattern: '^[a-z0-9_-]{1,64}$', description: 'Filename slug required for write.' },
+            name: {
+              type: 'string',
+              description:
+                'Slug or a MEMORY.md index filename (may end with .md) required for write; both name the same record. A type prefix must match the selected type.',
+            },
             title: { type: 'string', description: 'Required for write.' },
             description: { type: 'string', description: 'One-line index hook required for write.' },
             body: { type: 'string', description: 'Memory content required for write.' },
@@ -4609,7 +4614,8 @@ export default async function cindyBridge(piApi: any) {
     : null;
   const pi = guestToolGate ? guestToolGate.pi : piApi;
   const taskSystemPromptFile = process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE;
-  delete process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE;
+  // switch_session reloads extensions. Keep the launch path in this Pi only;
+  // shell environments and independent subagents strip it before spawning.
   const taskSystemPrompt = taskSystemPromptFile ? readFileSync(taskSystemPromptFile, 'utf8') : '';
   if (taskSystemPrompt) pi.on('before_agent_start', (event: any) => ({
     systemPrompt: event.systemPrompt + '\n\n' + taskSystemPrompt,

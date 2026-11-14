@@ -6,7 +6,7 @@
  *   （按账号存放、有上限、损坏不阻断）。
  * - 现有覆盖缺口：pick.test.ts 只覆盖选谁，不覆盖选完后的记录。
  * - 最小失败输入：连记 51 次（第 1 条应被挤掉、最新在前）；文件内容不是 JSON；组已被删除（missing）；
- *   旧版经模式留下的条目（2026-11-11 模式并入路线）。
+ *   旧版经模式留下的条目（2026-11-11 模式并入路线）；选中另一台电脑上的来源时漏记运行位置。
  * - tier：unit，临时目录里的真实文件读写，账号目录经 mock 指过去。
  * - 实测耗时：单独运行约 1.2 秒（pnpm exec vitest run src/main/model-groups/__tests__/decisionLog.test.ts）。
  */
@@ -76,5 +76,12 @@ describe('model group decision log', () => {
     expect(readModelGroupDecisions()).toEqual([]);
     recordModelGroupDecision({ type: 'route', id: 'r1' }, routed(1), 3);
     expect(readModelGroupDecisions().map((item) => item.groupId)).toEqual(['r1']);
+  });
+
+  it('keeps where a picked source runs when it is on another computer', () => {
+    const remote = routed(1);
+    if (remote.outcome === 'routed') remote.route = { ...remote.route, agentDeviceId: 'dev-2' };
+    recordModelGroupDecision({ type: 'route', id: 'r1' }, remote, 1);
+    expect(readModelGroupDecisions()[0]).toMatchObject({ providerId: 'chatgpt-work', agentDeviceId: 'dev-2' });
   });
 });
