@@ -44,7 +44,7 @@ describe('MCP App transport lifecycle', () => {
     f.controller.receive({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} });
     f.controller.receive({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
     f.controller.receive({ jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 420 } });
-    expect(f.invoke.mock.calls.map(([, input]) => input.op)).toEqual(['open']);
+    expect(f.invoke.mock.calls.map(([, input]) => (input as { op: string }).op)).toEqual(['open']);
     expect(f.post).not.toHaveBeenCalled();
     expect(f.state.mock.calls.map(([message]) => message.method)).toEqual([
       'ui/notifications/initialized', 'ui/notifications/size-changed',
@@ -52,6 +52,31 @@ describe('MCP App transport lifecycle', () => {
     f.controller.prepareNativeClose();
     await f.controller.close();
     expect(f.invoke).toHaveBeenLastCalledWith('task', { op: 'teardown', viewId: 'view', alreadyNotified: false });
+  });
+  // PR-E, unit: only an explicitly suspended Desktop sandbox uses local controls.
+  // Observe invoke order and context suppression through the public controller.
+  it('serializes local suspension and resume without polling or reopening', async () => {
+    const f = fixture();
+    f.invoke.mockImplementation(async (_session, input) => input.op === 'open'
+      ? { viewId: 'view', transport: 'sandbox', prefersBorder: true } : {});
+    await f.controller.open({});
+    const suspended = f.controller.suspend();
+    await f.controller.context({ theme: 'dark' });
+    const resumed = f.controller.resume();
+    const suspendedAgain = f.controller.suspend();
+    await Promise.all([suspended, resumed, suspendedAgain]);
+    await f.controller.suspend();
+    expect(f.invoke.mock.calls.map(([, input]) => input.op)).toEqual(['open', 'suspend', 'resume', 'suspend']);
+    await f.controller.close();
+    await f.controller.resume();
+    expect(f.invoke.mock.calls.map(([, input]) => input.op)).toEqual(['open', 'suspend', 'resume', 'suspend', 'teardown']);
+  });
+  it('does not send local retention operations for native/device-link Views', async () => {
+    const f = fixture();
+    await f.controller.open({});
+    await f.controller.suspend(); await f.controller.resume();
+    expect(f.invoke.mock.calls.map(([, input]) => (input as { op: string }).op)).toEqual(['open', 'poll']);
+    await f.controller.close();
   });
   it('relays initialization and complete HTML only after sandbox ready', async () => {
     const f = fixture();

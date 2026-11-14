@@ -17,6 +17,8 @@ export const mcpAppOperationSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('poll'), viewId: id, after: z.number().int().nonnegative().default(0) }),
   z.object({ op: z.literal('context'), viewId: id, context: McpUiHostContextSchema }),
   z.object({ op: z.literal('teardown'), viewId: id, alreadyNotified: z.boolean().default(false) }),
+  z.object({ op: z.literal('suspend'), viewId: id }),
+  z.object({ op: z.literal('resume'), viewId: id }),
   z.object({
     op: z.literal('display-mode'),
     viewId: id,
@@ -114,6 +116,14 @@ export async function handleMcpAppOperation(
       return {};
     case 'teardown':
       await host.teardown(caller, sessionId, input.viewId, input.alreadyNotified);
+      return {};
+    case 'suspend':
+      if (!local) throw new Error('MCP_APP_OWNER_ONLY');
+      await host.setSuspended(caller, sessionId, input.viewId, true);
+      return {};
+    case 'resume':
+      if (!local) throw new Error('MCP_APP_OWNER_ONLY');
+      await host.setSuspended(caller, sessionId, input.viewId, false);
       return {};
     case 'display-mode':
       host.displayMode(caller, sessionId, input.viewId, input.mode);
