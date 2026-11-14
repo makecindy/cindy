@@ -93,6 +93,94 @@ function pushEmptyThinkingMessage(queue: ReturnType<typeof createAsyncQueue<Agen
   );
 }
 
+/**
+ * 派发类工具的一次完整往返：tool_use + tool_result。
+ * 回执正文按 lizi-mcps okPayload 的真实形状传（JSON 文本），toolName 可换成
+ * create_workers / interrupt_worker / send_to_worker。
+ */
+function pushWorkerToolResult(
+  queue: ReturnType<typeof createAsyncQueue<AgentEvent>>,
+  ctx: ReturnType<typeof createCtx>,
+  options: { name?: string; payload?: Record<string, unknown>; isError?: boolean } = {},
+): void {
+  const name = options.name ?? 'mcp__cindy_orca__create_worker';
+  const payload = options.payload ?? { ok: true, worker_id: 'w-1', dispatched: true, queued_message_id: 'm-1' };
+  translateSdkMessage(
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 'worker-1', name, input: { label: 'worker' } }] },
+    },
+    queue,
+    ctx,
+  );
+  translateSdkMessage(
+    {
+      type: 'user',
+      message: {
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'worker-1',
+          content: JSON.stringify(payload),
+          ...(options.isError ? { is_error: true } : {}),
+        }],
+      },
+    },
+    queue,
+    ctx,
+  );
+}
+
+/** 同一轮并行派单：一条 assistant 消息里挂多个 tool_use，回执同批返回。 */
+function pushWorkerToolBatch(
+  queue: ReturnType<typeof createAsyncQueue<AgentEvent>>,
+  ctx: ReturnType<typeof createCtx>,
+  calls: { name: string; payload: Record<string, unknown>; isError?: boolean }[],
+): void {
+  translateSdkMessage(
+    {
+      type: 'assistant',
+      message: {
+        content: calls.map((call, index) => ({
+          type: 'tool_use',
+          id: `worker-${index}`,
+          name: call.name,
+          input: { label: `worker-${index}` },
+        })),
+      },
+    },
+    queue,
+    ctx,
+  );
+  translateSdkMessage(
+    {
+      type: 'user',
+      message: {
+        content: calls.map((call, index) => ({
+          type: 'tool_result',
+          tool_use_id: `worker-${index}`,
+          content: JSON.stringify(call.payload),
+          ...(call.isError ? { is_error: true } : {}),
+        })),
+      },
+    },
+    queue,
+    ctx,
+  );
+}
+
+/** 派发回执之后的正常收口形态：空 thinking + end_turn。 */
+function finishWithEmptyThinking(
+  queue: ReturnType<typeof createAsyncQueue<AgentEvent>>,
+  ctx: ReturnType<typeof createCtx>,
+): void {
+  pushEmptyThinkingMessage(queue, ctx);
+  translateSdkMessage(
+    { type: 'result', stop_reason: 'end_turn', total_cost_usd: 0.1, usage: NON_EMPTY_USAGE },
+    queue,
+    ctx,
+  );
+}
+
 const NON_EMPTY_USAGE = { input_tokens: 1000, output_tokens: 2 };
 
 describe('Claude Code translator silent-stop observation (log only)', () => {
@@ -201,6 +289,236 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
 
     await drain(queue);
     expect(silentStopWarned(ctx)).toBe(false);
+  });
+
+  it('does NOT mark a successful Worker dispatch as a silent stop', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolResult(queue, ctx);
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+  });
+
+  it('keeps silent-stop detection for a failed Worker dispatch', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolResult(queue, ctx, { payload: { ok: false, errorCode: 'BUSY' }, isError: true });
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  /**
+   * create_worker 没传 initial_task、或 Worker 建好但首条任务没送达时，
+   * lizi-mcps 仍返回 ok=true（只带 dispatched=false / dispatch_outcome 失败）。
+   * 这种回执不会有 Worker 回报，把空 thinking 收口当正常完成就会永久停摆。
+   */
+  it('keeps silent-stop detection when create_worker succeeded but dispatched nothing', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolResult(queue, ctx, {
+      payload: {
+        ok: true,
+        worker_id: 'w-1',
+        dispatched: false,
+        dispatch_outcome: { kind: 'host-send', accepted: false, wakeKind: 'idle' },
+      },
+    });
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  it('accepts dispatch_outcome session-dispatch as a real dispatch', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolResult(queue, ctx, {
+      payload: { ok: true, worker_id: 'w-1', dispatch_outcome: { kind: 'session-dispatch', dispatched: true, wakeKind: 'queued' } },
+    });
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+  });
+
+  it('treats a queued interrupt_worker replacement as a real dispatch', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolResult(queue, ctx, {
+      name: 'mcp__cindy_orca__interrupt_worker',
+      payload: { ok: true, target_session_id: 's-1', queued_message_id: 'm-9', stop_outcome: 'unsupported', queue_paused: false },
+    });
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+  });
+
+  it('keeps silent-stop detection when interrupt_worker queued nothing', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolResult(queue, ctx, {
+      name: 'mcp__cindy_orca__interrupt_worker',
+      payload: { ok: true, target_session_id: 's-1', stop_outcome: 'unsupported' },
+    });
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  /**
+   * create_workers 批量派发即使全部成功也带 user_report / 逐项结果，提示词要求
+   * 先转告用户再收口，所以不能复用单 Worker 的「零正文即正常完成」豁免。
+   */
+  it('keeps silent-stop detection for a create_workers batch that must be reported', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolResult(queue, ctx, {
+      name: 'mcp__cindy_orca__create_workers',
+      payload: {
+        ok: true,
+        request_count: 2,
+        success_count: 1,
+        failure_count: 1,
+        user_report: '已创建 developer/w-1，reviewer 创建失败：DUPLICATE_LABEL',
+      },
+    });
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  /**
+   * 并行派单里只要有一项没派出去，主 Agent 就必须先报告失败项；
+   * 成功项不能替整批拿到「零正文收口」豁免（两种回执顺序都验一遍）。
+   */
+  it.each([
+    ['success first', { dispatched: true, worker_id: 'w-1' }, { ok: false, errorCode: 'BUSY' }],
+    ['failure first', { ok: false, errorCode: 'BUSY' }, { dispatched: true, worker_id: 'w-1' }],
+  ])('keeps silent-stop detection for a mixed dispatch batch (%s)', async (_label, first, second) => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolBatch(queue, ctx, [
+      { name: 'mcp__cindy_orca__create_worker', payload: first as Record<string, unknown>, isError: (first as { ok?: boolean }).ok === false },
+      { name: 'mcp__cindy_orca__send_to_worker', payload: second as Record<string, unknown>, isError: (second as { ok?: boolean }).ok === false },
+    ]);
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  it('keeps silent-stop detection when a non-dispatch tool in the dispatch batch failed', async () => {
+    // 并行批次 = 真实 send_to_worker 派发 + 非 Orca 工具报错(如 Read 失败)。
+    // 失败项的名字不匹配派发工具,不能因此丢掉汇报义务:模型只回 thinking 收尾时,
+    // 派发成功项的豁免会把失败静默吞掉(用户既不知道派发结果也不知道失败原因)。
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolBatch(queue, ctx, [
+      { name: 'mcp__cindy_orca__send_to_worker', payload: { ok: true, target_session_id: 's-1', queued_message_id: 'm-1' } },
+      { name: 'Read', payload: { error: 'ENOENT: no such file /tmp/a' }, isError: true },
+    ]);
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  it('keeps the zero-body exemption when a non-dispatch tool in the batch succeeded', async () => {
+    // 对照: 非 Orca 工具成功完成时不改变豁免判定 —— 干净派发批次仍可零正文收口。
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolBatch(queue, ctx, [
+      { name: 'mcp__cindy_orca__send_to_worker', payload: { ok: true, target_session_id: 's-1', queued_message_id: 'm-2' } },
+      { name: 'Read', payload: { content: 'file body' } },
+    ]);
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+  });
+
+  it('keeps the zero-body exemption when every dispatch in the batch landed', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolBatch(queue, ctx, [
+      { name: 'mcp__cindy_orca__create_worker', payload: { ok: true, worker_id: 'w-1', dispatched: true } },
+      { name: 'mcp__cindy_orca__send_to_worker', payload: { ok: true, target_session_id: 's-1', queued_message_id: 'm-2' } },
+    ]);
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+  });
+
+  it('keeps silent-stop detection when a send_to_worker steer fell back to the queue', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolResult(queue, ctx, {
+      name: 'mcp__cindy_orca__send_to_worker',
+      payload: { ok: true, target_session_id: 's-1', wake_kind: 'queued', queued_message_id: 'm-3', steer_fallback_reason: 'INPUT_BOUNDARY_BUSY' },
+    });
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    // steer 没插成时主 Agent 还要做队列提升，这一轮零正文收口不算正常完成。
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  it('resets the dispatch flag at turn end so the next turn keeps silent-stop detection', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolResult(queue, ctx);
+    expect(ctx.turn.completedWorkerDispatch).toBe(true);
+    finishWithEmptyThinking(queue, ctx);
+
+    await drain(queue);
+    // turn 收尾必须清掉，否则下一条普通任务的真正 thinking-only 中断不再恢复。
+    expect(ctx.turn.completedWorkerDispatch).toBe(false);
   });
 
   it('does NOT log on an is_error result (error path owns that turn)', async () => {

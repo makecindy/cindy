@@ -64,6 +64,13 @@ import {
 export interface TurnState {
   text: string;
   toolUses: number;
+  /** 本 turn 是否成功派发了 Orca Worker；合法的无正文收口不应触发 silent-stop 续跑。 */
+  completedWorkerDispatch?: boolean;
+  /**
+   * 本 turn 的派发批次里还有必须转告用户的结果（失败项、没有派发信号的项、
+   * 或要求逐项汇报的 create_workers 批量）。存在时即使派发成功也不能零正文收口。
+   */
+  workerDispatchNeedsReport?: boolean;
   /** 本 turn 内真实 Claude API call 次数；message_start 触发时递增。 */
   apiCalls: number;
   /** 本 turn 是否已收到 compact_boundary；收到后 result usage 不应覆盖 compact 后 context。 */
@@ -364,6 +371,8 @@ function ccLiveStatus(
 function resetTurnState(turn: TurnState): void {
   turn.text = '';
   turn.toolUses = 0;
+  turn.completedWorkerDispatch = false;
+  turn.workerDispatchNeedsReport = false;
   turn.apiCalls = 0;
   turn.sawCompactBoundary = false;
   turn.hasEmittedText = false;
@@ -373,6 +382,121 @@ function resetTurnState(turn: TurnState): void {
   turn.lastAssistantMsgHadSubstance = true;
   turn.lastAssistantRequestId = undefined;
   // generation / interruptGeneration 刻意不清: 代际跨 turn 单调递增(见字段注释)。
+}
+
+/**
+ * Worker 派发入口与「真实派发」判定。契约见
+ * packages/orca-workflow/src/orca-bridge-prompt.ts 的 concrete dispatch signals：
+ * 单次派发成功后主 Agent 按 Orca 约定直接 end_turn 且不输出正文，该收口是正常完成，
+ * 不是需要 host 续跑的静默中断。
+ *
+ * 只按「工具没报错」判定不够：create_worker 未传 initial_task、或 Worker 建好但首条
+ * 任务没送达时仍返回 ok=true（packages/lizi-mcps/src/xdt-helper/create_worker.ts），
+ * 这类回执不会产生 Worker 回报，若当成正常收口就再也没人叫醒 Lead。
+ */
+type OrcaDispatchTool = { kind: 'single' | 'batch'; name: string };
+
+function parseOrcaDispatchTool(toolName: string | undefined): OrcaDispatchTool | null {
+  if (!toolName) return null;
+  const normalized = toolName.replace(/^mcp__/, 'mcp:').replace(/__/g, ':');
+  const matched = /(?:^|:)(create_worker|create_workers|send_to_worker|interrupt_worker)$/.exec(normalized);
+  if (!matched) return null;
+  const name = matched[1]!;
+  return { kind: name === 'create_workers' ? 'batch' : 'single', name };
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasIdentifier(value: unknown): boolean {
+  return (typeof value === 'string' && value.length > 0) || typeof value === 'number';
+}
+
+/** 回执正文是 okPayload 的 JSON 文本；SDK 可能附带前后说明，宽松取首个完整对象。 */
+function readOrcaPayload(fullText: string): Record<string, unknown> | null {
+  const text = fullText.trim();
+  if (!text) return null;
+  const tryParse = (raw: string): Record<string, unknown> | null => {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return isRecordValue(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const direct = tryParse(text);
+  if (direct) return direct;
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  return tryParse(text.slice(start, end + 1));
+}
+
+/**
+ * 单次派发回执里是否带 concrete dispatch signal。
+ * - create_worker / send_to_worker：dispatched=true、queued_message_id、
+ *   或 dispatch_outcome（session-dispatch 且 dispatched=true / host-send 且 accepted=true）。
+ * - interrupt_worker：必须真的把替换指令排上队（queued_message_id）；ok=true 但没排上队
+ *   说明替换没成功，主 Agent 仍有话要对用户说。
+ */
+function hasOrcaDispatchSignal(toolName: string, payload: Record<string, unknown>): boolean {
+  if (payload.ok === false) return false;
+  // steer 未插成时消息只是落进了队列，主 Agent 还要按提示词做队列提升，这一轮不能算收口完成。
+  if (toolName === 'send_to_worker' && hasIdentifier(payload.steer_fallback_reason)) return false;
+  if (hasIdentifier(payload.queued_message_id) || hasIdentifier(payload.queuedMessageId)) return true;
+  if (payload.dispatched === true) return true;
+  const outcome = payload.dispatch_outcome ?? payload.dispatchOutcome;
+  if (isRecordValue(outcome)) {
+    if (outcome.kind === 'session-dispatch' && outcome.dispatched === true) return true;
+    if (outcome.kind === 'host-send' && outcome.accepted === true) return true;
+    if (outcome.wakeKind === 'queued' && outcome.dispatched !== false) return true;
+  }
+  if (toolName === 'send_to_worker') {
+    const wakeKind = payload.wake_kind;
+    return wakeKind === 'already-active' || wakeKind === 'queued' || wakeKind === 'steered';
+  }
+  return false;
+}
+
+/**
+ * 把一批工具回执折算成 turn 上的派发状态。
+ *
+ * 只有「整批都可零正文收口」才置位 `completedWorkerDispatch`；同批里出现失败项、
+ * 没有派发信号的项、或要求逐项汇报的 create_workers 时，先记 `workerDispatchNeedsReport`，
+ * 让 silent-stop 恢复保留（否则主 Agent 在必须报告失败时零正文收口，用户什么都收不到）。
+ */
+function observeWorkerDispatchBatch(
+  turn: TurnState,
+  results: readonly { toolName: string | undefined; payloadText: string; isError: boolean }[],
+): void {
+  for (const result of results) {
+    const tool = parseOrcaDispatchTool(result.toolName);
+    if (!tool) {
+      // 同批里非派发工具的失败项（如 Read / Bash 报错）也必须有人汇报：
+      // 派发项已成功时，「零正文收口」豁免会把整批当作干净收口，若模型只回
+      // thinking 收尾，失败原因就无声丢失了。失败项置位 needsReport，让
+      // silent-stop 恢复保留（无派发的轮次该标志本就不影响豁免判定）。
+      if (result.isError) turn.workerDispatchNeedsReport = true;
+      continue;
+    }
+    if (tool.kind === 'batch') {
+      // 批量派发要求逐项转告 user_report / 失败项，不能当作正常收口。
+      turn.workerDispatchNeedsReport = true;
+      continue;
+    }
+    if (result.isError) {
+      turn.workerDispatchNeedsReport = true;
+      continue;
+    }
+    const payload = readOrcaPayload(result.payloadText);
+    // 解析不出回执就当作无法确认派发：宁可多一次续跑，也不要静默停在没人干活的 turn 上。
+    if (!payload || !hasOrcaDispatchSignal(tool.name, payload)) {
+      turn.workerDispatchNeedsReport = true;
+      continue;
+    }
+    turn.completedWorkerDispatch = true;
+  }
 }
 
 type ResultUsageAggregate = {
@@ -885,6 +1009,19 @@ export function translateSdkMessage(
       }
       // 单独遍历: 不能复用 extractToolResultFullText, 见 onToolResultDone JSDoc。
       const completedToolUseIds = new Set(fullPairs.map((pair) => pair.toolUseId));
+      if (Array.isArray(content)) {
+        const dispatchResults: { toolName: string | undefined; payloadText: string; isError: boolean }[] = [];
+        for (const blockRaw of content as unknown[]) {
+          const pair = readToolResultFullText(blockRaw);
+          if (!pair) continue;
+          dispatchResults.push({
+            toolName: ctx.rt.toolUseIdToName.get(pair.toolUseId),
+            payloadText: pair.fullText,
+            isError: pair.isError,
+          });
+        }
+        observeWorkerDispatchBatch(ctx.turn, dispatchResults);
+      }
       if (ctx.onToolResultDone) {
         if (Array.isArray(content)) {
           for (const blockRaw of content as unknown[]) {
@@ -2396,6 +2533,7 @@ function handleResult(
     !ctx.turn.sawCompactBoundary &&
     !isEmptyResponseTurn &&
     ctx.turn.uiEmittedText.length === 0 &&
+    !(ctx.turn.completedWorkerDispatch && !ctx.turn.workerDispatchNeedsReport) &&
     !ctx.turn.lastAssistantMsgHadSubstance &&
     fallbackTail.length === 0;
   if (isSilentStopTurn) {
