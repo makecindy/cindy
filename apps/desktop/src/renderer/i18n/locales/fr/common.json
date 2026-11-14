@@ -14656,16 +14656,13 @@
       "help": {
         "label": "Qu’est-ce que c’est ?",
         "title": "Qu’est-ce que worktree ?",
-        "whatTitle": "Le principe",
-        "what": "Une copie distincte du projet pour cette session, à partir de la version choisie. La session modifie les fichiers dans cette copie.",
+        "what": "Une copie du projet pour cette session, depuis la branche choisie. Seule cette copie est modifiée.",
         "benefitsTitle": "Les avantages",
-        "benefits": "Vos fichiers actuels, vos modifications non validées et les autres sessions en cours restent intacts. Plusieurs sessions peuvent travailler sur le même projet en parallèle.",
+        "benefits": "Vos fichiers, modifications non validées et autres sessions en cours restent intacts.",
         "cautionsTitle": "À savoir",
-        "changes": "Les modifications non validées restent généralement dans le projet d’origine. Les fichiers et réglages locaux sélectionnés par le projet peuvent être copiés.",
-        "dependencies": "Les dépendances nécessaires au projet devront peut-être être réinstallées.",
-        "tools": "Votre éditeur ouvert et vos services locaux continuent d’utiliser le projet d’origine.",
-        "results": "Les résultats restent dans la copie et ne reviennent pas automatiquement dans le projet d’origine. Récupérez les modifications lorsque vous en avez besoin.",
-        "recycle": "Après archivage, Cindy essaie de nettoyer la copie dès qu’elle n’est plus utilisée. Les modifications et nouveaux fichiers sont d’abord sauvegardés, sauf les fichiers exclus par le projet, comme les dépendances, et les autres projets contenus dans la copie."
+        "changes": "Les modifications non validées restent généralement dans l’original",
+        "dependencies": "Les dépendances devront peut-être être réinstallées dans la copie",
+        "results": "Les résultats restent dans la copie ; récupérez-les au besoin"
       }
     }
   },

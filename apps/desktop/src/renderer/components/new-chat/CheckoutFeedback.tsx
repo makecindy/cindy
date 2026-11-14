@@ -59,13 +59,12 @@ export function WorktreeHelp() {
           event.stopPropagation();
           setOpen(false);
         }}
-        className="z-[10001] w-[360px] max-w-[calc(100vw-32px)] max-h-[min(480px,var(--radix-popover-content-available-height))] overflow-y-auto space-y-3 text-left text-13"
+        className="z-[10001] w-[360px] max-w-[calc(100vw-32px)] max-h-[min(480px,var(--radix-popover-content-available-height))] overflow-y-auto space-y-2 p-3 text-left text-13"
       >
-        <h2 id={titleId} className="font-medium">
-          {t('newChat.checkout.help.title')}
-        </h2>
         <section className="space-y-1">
-          <h3 className="font-medium">{t('newChat.checkout.help.whatTitle')}</h3>
+          <h2 id={titleId} className="font-medium">
+            {t('newChat.checkout.help.title')}
+          </h2>
           <p className="text-muted-foreground">{t('newChat.checkout.help.what')}</p>
         </section>
         <section className="space-y-1">
@@ -74,8 +73,8 @@ export function WorktreeHelp() {
         </section>
         <section className="space-y-1">
           <h3 className="font-medium">{t('newChat.checkout.help.cautionsTitle')}</h3>
-          <ul className="list-disc space-y-2 pl-4 text-muted-foreground">
-            {(['changes', 'dependencies', 'tools', 'results', 'recycle'] as const).map((key) => (
+          <ul className="list-disc space-y-1 pl-4 text-muted-foreground">
+            {(['changes', 'dependencies', 'results'] as const).map((key) => (
               <li key={key}>{t(`newChat.checkout.help.${key}`)}</li>
             ))}
           </ul>

@@ -150,13 +150,31 @@ export default {
       await page.keyboard.press('Enter');
       await card.waitFor();
       assert.equal(await card.evaluate((el) => el.scrollWidth <= el.clientWidth), true);
-      await card.evaluate((el) => {
-        el.scrollTop = el.scrollHeight;
-      });
-      await ui.capture('help-details-bottom');
-      await card.evaluate((el) => {
-        el.scrollTop = 0;
-      });
+      assert.equal(
+        await card.evaluate((el) => el.scrollHeight <= el.clientHeight),
+        true,
+        'Help must fit without scrolling',
+      );
+      const box = await card.boundingBox();
+      const trigger = await help.boundingBox();
+      const viewport = await page.evaluate(() => ({
+        width: globalThis.innerWidth,
+        height: globalThis.innerHeight,
+      }));
+      assert.ok(
+        box.x >= 0 &&
+          box.y >= 0 &&
+          box.x + box.width <= viewport.width &&
+          box.y + box.height <= viewport.height,
+        'Help must stay within the window',
+      );
+      assert.ok(
+        box.y + box.height <= trigger.y ||
+          box.y >= trigger.y + trigger.height ||
+          box.x + box.width <= trigger.x ||
+          box.x >= trigger.x + trigger.width,
+        'Help must not cover its trigger',
+      );
       return;
     }
     if (ui.case === 'restored') {

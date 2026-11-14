@@ -14534,16 +14534,13 @@
       "help": {
         "label": "Was ist das?",
         "title": "Was ist worktree?",
-        "whatTitle": "Was es ist",
-        "what": "Eine eigene Projektkopie für diese Sitzung, ausgehend von der gewählten Version. Die Sitzung bearbeitet Dateien in dieser Kopie.",
+        "what": "Eine Projektkopie für diese Sitzung, ausgehend vom gewählten Branch. Die Sitzung bearbeitet nur diese Kopie.",
         "benefitsTitle": "Vorteile",
-        "benefits": "Deine aktuellen Dateien, noch nicht übernommenen Änderungen und andere laufende Sitzungen bleiben unberührt. Mehrere Sitzungen können gleichzeitig am selben Projekt arbeiten.",
+        "benefits": "Deine Dateien, noch nicht übernommenen Änderungen und andere laufende Sitzungen bleiben unberührt.",
         "cautionsTitle": "Gut zu wissen",
-        "changes": "Noch nicht übernommene Änderungen bleiben normalerweise zurück. Vom Projekt ausgewählte lokale Dateien und Einstellungen können kopiert werden.",
-        "dependencies": "Benötigte Abhängigkeiten müssen eventuell erneut installiert werden.",
-        "tools": "Dein geöffneter Editor und lokale Dienste verwenden weiterhin das ursprüngliche Projekt.",
-        "results": "Ergebnisse bleiben in der Kopie und werden nicht automatisch ins ursprüngliche Projekt übernommen. Übertrage die Änderungen bei Bedarf.",
-        "recycle": "Nach dem Archivieren versucht Cindy, die Kopie aufzuräumen, sobald sie nicht mehr verwendet wird. Änderungen und neue Dateien werden vorher gesichert; ausgeschlossene Dateien wie Abhängigkeiten und darin enthaltene andere Projekte werden nicht gesichert."
+        "changes": "Noch nicht übernommene Änderungen bleiben meist zurück",
+        "dependencies": "Abhängigkeiten müssen in der Kopie eventuell neu installiert werden",
+        "results": "Ergebnisse bleiben in der Kopie; übertrage sie bei Bedarf zurück"
       }
     }
   },

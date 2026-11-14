@@ -14534,16 +14534,13 @@
       "help": {
         "label": "What is this?",
         "title": "What is worktree?",
-        "whatTitle": "What it is",
-        "what": "A separate copy of the project for this session, starting from the version you select. The session edits files in that copy.",
+        "what": "A project copy for this session, from your chosen branch. The session edits only this copy.",
         "benefitsTitle": "Why use it",
-        "benefits": "Your current files, uncommitted changes and other running sessions stay untouched. Several sessions can work on the same project at once.",
+        "benefits": "Your current files, uncommitted changes and other running sessions stay untouched.",
         "cautionsTitle": "Things to know",
-        "changes": "Uncommitted changes are usually left behind. Local files and settings selected by the project may be copied over.",
-        "dependencies": "Dependencies needed to run the project may need to be installed again.",
-        "tools": "Your open editor and local services still use the original project.",
-        "results": "Results stay in the copy and do not automatically return to the original project. Bring the changes back when needed.",
-        "recycle": "After archiving, Cindy tries to clean up the copy once it is no longer in use. Changes and new files are saved first, except files excluded by the project (such as dependencies) and other projects inside it."
+        "changes": "Uncommitted changes usually stay behind",
+        "dependencies": "Dependencies may need reinstalling in the copy",
+        "results": "Results stay in the copy; merge back as needed"
       }
     }
   },

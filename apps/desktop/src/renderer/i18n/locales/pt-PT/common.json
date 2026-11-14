@@ -14656,16 +14656,13 @@
       "help": {
         "label": "O que é isto?",
         "title": "O que é worktree?",
-        "whatTitle": "O que é",
-        "what": "Uma cópia separada do projeto para esta sessão, a partir da versão escolhida. A sessão edita os ficheiros dessa cópia.",
+        "what": "Uma cópia do projeto para esta sessão, a partir do ramo escolhido. A sessão só modifica esta cópia.",
         "benefitsTitle": "Vantagens",
-        "benefits": "Os seus ficheiros atuais, alterações ainda não confirmadas e outras sessões em execução não são afetados. Várias sessões podem trabalhar no mesmo projeto ao mesmo tempo.",
+        "benefits": "Os seus ficheiros, alterações não confirmadas e outras sessões em execução não são afetados.",
         "cautionsTitle": "A ter em conta",
-        "changes": "As alterações ainda não confirmadas ficam normalmente no original. Os ficheiros e definições locais indicados pelo projeto podem ser copiados.",
-        "dependencies": "Poderá ser necessário reinstalar as dependências do projeto.",
-        "tools": "O editor aberto e os serviços locais continuam a usar o projeto original.",
-        "results": "Os resultados ficam na cópia e não voltam automaticamente ao projeto original. Incorpore as alterações quando precisar.",
-        "recycle": "Após o arquivo, a Cindy tenta limpar a cópia quando já não estiver em uso. As alterações e novos ficheiros são guardados primeiro, exceto ficheiros excluídos pelo projeto, como dependências, e outros projetos dentro da cópia."
+        "changes": "As alterações não confirmadas ficam geralmente no original",
+        "dependencies": "Poderá ter de reinstalar as dependências na cópia",
+        "results": "Os resultados ficam na cópia; incorpore-os no original quando precisar"
       }
     }
   },
