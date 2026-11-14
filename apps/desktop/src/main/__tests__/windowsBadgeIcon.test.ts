@@ -1,5 +1,6 @@
-import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
+import { createCanvas, GlobalFonts, loadImage, type FontKey } from '@napi-rs/canvas';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const { addRepresentation, icon } = vi.hoisted(() => {
   const addRepresentation = vi.fn();
@@ -10,6 +11,21 @@ vi.mock('electron', () => ({ nativeImage: { createEmpty: () => icon } }));
 import { createWindowsBadgeIcon, renderWindowsBadgePng } from '../windowsBadgeIcon';
 
 describe('Windows numeric taskbar badge', () => {
+  let badgeFont: FontKey | null = null;
+  beforeAll(() => {
+    // Linux runners may fall back to a color-emoji font for digits, which ignores
+    // fillStyle. Test the Windows white-text contract with an existing bundled
+    // monochrome font, without depending on the runner's installed fonts.
+    badgeFont = GlobalFonts.registerFromPath(
+      path.resolve(__dirname, '../../../native/menubar/BarlowCondensed-SemiBold.ttf'),
+      'Segoe UI',
+    );
+    expect(badgeFont).not.toBeNull();
+  });
+  afterAll(() => {
+    if (badgeFont) GlobalFonts.remove(badgeFont);
+  });
+
   it.each([1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 8])(
     'renders exact physical dimensions at %s scale for the native Shell bridge',
     (scale) => {
