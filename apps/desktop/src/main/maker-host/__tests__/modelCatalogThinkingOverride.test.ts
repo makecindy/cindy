@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Effort } from '@cindy/model-providers';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-catalog-thinking-test-'));
-const owner = { current: 'owner-a' };
+const owner = { current: 'owner-a', generation: 7 };
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
 vi.mock('../logger-adapter.js', () => ({
