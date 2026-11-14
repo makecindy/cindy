@@ -461,18 +461,48 @@ export function createTurnExecutor(deps) {
     });
   }
 
-  async function send(sessionId, message, createOpts, sendOpts) {
-    createOpts = { ...createOpts };
+  // The record a dispatched turn runs under. The listener only accepts events of the record's
+  // instance and generation (listen), and the shared transaction's hooks read it (turns.get), so
+  // every dispatch, an input's send or a context recovery's replay, opens one.
+  function openTurn(sessionId, createOpts, sendOpts, clientId) {
     // Until this turn reserves its own generation, events of the previous one are recognised by theirs.
     const turn = { running: true, terminal: false, dbKind: dbKind(createOpts.agentKind),
-      createOpts, sendOpts, clientId: sendOpts.persistUserMessage?.clientId, previousGeneration: turns.get(sessionId)?.generation };
+      createOpts, sendOpts, clientId, previousGeneration: turns.get(sessionId)?.generation };
     turns.set(sessionId, turn);
-    const check = () => {
+    turn.check = () => {
       deps.assertCurrent();
       sendOpts.signal?.throwIfAborted();
       if (turns.get(sessionId) !== turn) throw new Error('input runtime was replaced');
     };
-    turn.check = check;
+    return turn;
+  }
+
+  // Runs the shared send transaction for a turn once it is prepared, binding the instance and
+  // generation it reserves (bindTurnSession listens to that instance). A dispatch that throws
+  // leaves the record not running.
+  async function dispatchTurn(sessionId, turn, message, dispatch) {
+    try {
+      await turn.preparing;
+      turn.check();
+      return await dispatch(sessionId, message, turn.createOpts, {
+        ...turn.sendOpts,
+        onVendorTurnReserved: generation => {
+          turn.check();
+          bindTurnSession(sessionId, deps.getMaker().getSession(sessionId));
+          turn.generation = generation;
+          turn.sendOpts.onVendorTurnReserved?.(generation);
+        },
+      });
+    } catch (error) {
+      turn.running = false;
+      throw error;
+    }
+  }
+
+  async function send(sessionId, message, createOpts, sendOpts) {
+    createOpts = { ...createOpts };
+    const turn = openTurn(sessionId, createOpts, sendOpts, sendOpts.persistUserMessage?.clientId);
+    const check = turn.check;
     turn.preparing = (async () => {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
       const stored = await readExecutionSession(sessionId);
@@ -500,18 +530,9 @@ export function createTurnExecutor(deps) {
       }
       setSessionProvider(sessionId, createOpts.providerId ?? null);
     })();
+    const result = await dispatchTurn(sessionId, turn, message,
+      (...args) => transaction.sendToAgentAccepted(...args));
     try {
-      await turn.preparing;
-      check();
-      const result = await transaction.sendToAgentAccepted(sessionId, message, createOpts, {
-        ...sendOpts,
-        onVendorTurnReserved: generation => {
-          check();
-          bindTurnSession(sessionId, deps.getMaker().getSession(sessionId));
-          turn.generation = generation;
-          sendOpts.onVendorTurnReserved?.(generation);
-        },
-      });
       if (!result.accepted) {
         turn.running = false;
         if (deps.isCurrent()) await deps.markEnded?.(sessionId, Date.now());
