@@ -95,6 +95,10 @@ export async function resolveCompanionSkillFiles(values: CompanionPreferenceValu
         } catch (error) {
           // A server without file storage refuses every file; asking once per pass is enough.
           if (chatRejection(error, 503, 'MEDIA_STORAGE_UNAVAILABLE')) storageMissing = true;
+          // Media prepare already tried one stable recovery ID. A remaining operation
+          // conflict is not evidence that the file is unsendable: keep the cloud list
+          // and cached receipts intact, and let the existing sync cadence retry it.
+          else if (chatRejection(error, 409, 'OPERATION_CONFLICT')) { retry = true; break; }
           else if (isTransientAttachmentFailure(error)) { retry = true; break; }
           deps.log?.warn('Companion skill file not uploaded', { code: errorCode(error) });
         }
