@@ -6,6 +6,7 @@ import {
   USAGE_LIMIT_RESUME_BUFFER_MS,
   UsageLimitAutoResume,
   isAccountUsageLimitError,
+  isAccountFailoverCandidateError,
   type UsageLimitAutoResumeDeps,
 } from '../usageLimitAutoResume';
 import { readTurnUsageResetAt } from '../../goal-host/usageLimit';
@@ -75,6 +76,23 @@ describe('isAccountUsageLimitError', () => {
 });
 
 describe('UsageLimitAutoResume', () => {
+  // Unit regression: the actual workspace-credit error was neither cooled nor resumed on
+  // another native account. Unlike a periodic limit, billing must never arm a reset wait.
+  it('continues workspace-credit failure only with a verified alternate subscription account', async () => {
+    const error = { message: 'Your workspace is out of credits. Ask your workspace owner to refill in order to continue.' };
+    expect(isAccountFailoverCandidateError(error)).toBe(true);
+    expect(isAccountUsageLimitError(error)).toBe(false);
+    const available = harness({ canSwitchAccount: async () => true });
+    expect(await available.guard.onTurnError('task', error)).toBe(true);
+    expect(available.timers.at(-1)?.delayMs).toBe(USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS);
+    expect(available.deps.resolveResetAt).not.toHaveBeenCalled();
+    await available.fireLast();
+    expect(available.deps.continueSession).toHaveBeenCalledOnce();
+    const unavailable = harness({ canSwitchAccount: async () => false });
+    expect(await unavailable.guard.onTurnError('task', error)).toBe(false);
+    expect(unavailable.deps.resolveResetAt).not.toHaveBeenCalled();
+    expect(unavailable.timers).toHaveLength(0);
+  });
   // Unit regression: real classifier + reset parser + timer. Earlier cases supplied
   // sdkError; text-only Claude limits never armed automatic continuation.
   it('schedules and continues a text-only five-hour limit at the stated reset time', async () => {

@@ -26,6 +26,21 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('Session close lifecycle', () => {
+  // Unit regression: Codex descendants have no BackgroundTaskSnapshot. An idle root must not
+  // close while its native children still run; previous close tests only modeled foreground turns.
+  it('keeps native child work alive until the shared account root is actually idle', async () => {
+    let childRunning = true;
+    const { session, handle } = liveTurn();
+    handle.hasBackgroundWork = () => childRunning;
+    expect(session.listBackgroundTasks()).toEqual([]);
+    expect(session.hasBackgroundWork()).toBe(true);
+    expect(await session.closeIfIdle()).toBe(false);
+    expect(handle.close).not.toHaveBeenCalled();
+    childRunning = false;
+    expect(await session.closeIfIdle()).toBe(true);
+    expect(session.hasBackgroundWork()).toBe(false);
+    expect(handle.close).toHaveBeenCalledOnce();
+  });
   function liveTurn(hostContinuation = true, terminalGate?: Promise<void>) {
     const queue = createAsyncQueue<AgentEvent>();
     let running = false;

@@ -13531,6 +13531,7 @@ assertRouteCurrent();
     };
 
     const handle: AgentSessionHandle = {
+      hasBackgroundWork: () => subagentLiveCards.hasRunning,
       disabledSkillPaths: disabledSkillSnapshot,
       getAutoReviewOwner: () => currentApprovalConfig().approvalsReviewer === 'auto_review' ? 'native' : 'cindy',
       reviewAutoPermissionAction: async (action) => {

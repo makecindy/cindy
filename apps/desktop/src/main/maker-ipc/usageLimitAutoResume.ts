@@ -17,6 +17,7 @@
 import type { AutoResumeInfo } from '../../shared/agentInputQueue.js';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../shared/agentInputQueue.js';
 import { classifyTurnOverload, classifyTurnUsageLimit } from '../goal-host/usageLimit.js';
+import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 
 /** 重置后再等一会儿：上游各窗口的重置有秒级偏差，过早会再撞一次。 */
@@ -51,7 +52,7 @@ export interface UsageLimitAutoResumeDeps {
   /** 会话所用账号的重置时刻（unix ms）：结构化错误 → 订阅窗口 → 报错原文；拿不到为 null。 */
   resolveResetAt(sessionId: string, signals: InterruptedTurnErrorSignals): Promise<number | null>;
   /** 同一供应商里另一个订阅账号此刻能接这个任务：不等重置，短暂停顿后续跑并在发送前换号。 */
-  canSwitchAccount?(sessionId: string): Promise<boolean>;
+  canSwitchAccount?(sessionId: string, signals: InterruptedTurnErrorSignals, isCurrent: () => boolean): Promise<boolean>;
   /** 用终态错误时 coordinator 下发的候选令牌挂上等待；false = 那次错误已不是当前状态。 */
   arm(sessionId: string, token: number, resumeAt: number): boolean;
   isCurrent(sessionId: string, token: number): boolean;
@@ -71,6 +72,11 @@ export function isAccountUsageLimitError(signals: InterruptedTurnErrorSignals): 
   return classifyTurnUsageLimit(signals) && !classifyTurnOverload(signals);
 }
 
+/** Billing failure can recover only by a proven different account, never by a reset timer. */
+export function isAccountFailoverCandidateError(signals: InterruptedTurnErrorSignals): boolean {
+  return isAccountUsageLimitError(signals) || isBillingDepletionError(signals);
+}
+
 export class UsageLimitAutoResume {
   private readonly timers = new Map<string, { token: number; handle: unknown; groupQuota: boolean }>();
   private readonly consecutive = new Map<string, number>();
@@ -86,7 +92,7 @@ export class UsageLimitAutoResume {
     candidateToken: number,
     options: UsageLimitRecoveryOptions = {},
   ): Promise<boolean> {
-    if (this.disposed || !isAccountUsageLimitError(signals)) return false;
+    if (this.disposed || !isAccountFailoverCandidateError(signals)) return false;
     const used = this.consecutive.get(sessionId) ?? 0;
     if (used >= USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES) {
       this.deps.log('usage-limit auto-resume exhausted', { sessionId, used });
@@ -125,7 +131,9 @@ export class UsageLimitAutoResume {
     // A group-verified limit already covers every member; only an ordinary account task switches here.
     const switchAccount = signals.providerGroupUsageLimit === undefined
       && !options.accountSwitchChecked
-      && (await this.deps.canSwitchAccount?.(sessionId).catch(() => false) ?? false);
+      && (await this.deps.canSwitchAccount?.(sessionId, signals, () => !this.disposed
+        && this.generations.get(sessionId) === generation && this.deps.isCurrent(sessionId, token)).catch(() => false) ?? false);
+    if (isBillingDepletionError(signals) && !switchAccount) return false;
     const resetAt = switchAccount ? null : await this.deps.resolveResetAt(sessionId, signals);
     if (this.disposed || this.generations.get(sessionId) !== generation) return false;
     const now = this.deps.now();
