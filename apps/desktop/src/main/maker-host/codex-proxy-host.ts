@@ -458,6 +458,16 @@ const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
 const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 12 * 1024 * 1024;
 const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 8 * 1024 * 1024;
 
+export function shouldCompactCodexWebSocketFrame(message: Buffer, limitBytes = CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES): boolean {
+  if (message.length <= limitBytes) return false;
+  try {
+    const body: unknown = JSON.parse(message.toString('utf8'));
+    return isPlainObject(body) && !Object.prototype.hasOwnProperty.call(body, 'previous_response_id');
+  } catch {
+    return false;
+  }
+}
+
 // proxy 路线 spawn 鉴权模式: codex 当前带的是 OAuth token(requires_openai_auth)还是 gateway key(env_key)。
 // index.ts prepareCodexExtraSpawnConfig 在每次 spawn 前按本次会话 credentialMode set; routingTransform 据此决策。
 // null 表示当前还没有本地 Codex app-server route 被 spawn 冻结;renderer 读 runtime route 时会按当前
@@ -3635,8 +3645,7 @@ async function createCodexProxyHandle(
       const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
       const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
       const request = next ? Buffer.from(JSON.stringify(next)) : message;
-      const fullReplay = isPlainObject(next) && !Object.prototype.hasOwnProperty.call(next, 'previous_response_id');
-      return fullReplay && request.length > CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES
+      return shouldCompactCodexWebSocketFrame(message)
         ? fitWebSocketRequest(request, ctx, signal) : request;
     }),
     transformResponse: (ctx) => {

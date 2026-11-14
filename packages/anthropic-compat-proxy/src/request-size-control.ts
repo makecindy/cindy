@@ -149,6 +149,7 @@ interface ImageOccurrence {
   textType: 'text' | 'input_text';
   roleIndex: number;
   seenAssistant: boolean;
+  assistantCount: number;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -199,7 +200,7 @@ function walkImages(node: JsonNode, format: WireFormat, out: ImageOccurrence[], 
   const assistant = role === 'assistant' || (format === 'responses' && ['reasoning', 'function_call', 'custom_tool_call'].includes(String(objectType)));
   if (assistant) assistants.count++;
   const image = imageFromNode(node, format);
-  if (image) out.push({ node, ...image, roleIndex, seenAssistant: assistants.count > 0 });
+  if (image) out.push({ node, ...image, roleIndex, seenAssistant: false, assistantCount: assistants.count });
   for (const [key, child] of node.fields ?? []) {
     // Do not inspect arbitrary serialized JSON strings or tool definitions. Tool results are
     // explicit content arrays and are traversed by this normal schema walk.
@@ -207,9 +208,9 @@ function walkImages(node: JsonNode, format: WireFormat, out: ImageOccurrence[], 
   }
 }
 
-function familyLimit(family: RequestSizePolicy['modelFamily']): number | undefined {
-  if (family === 'gpt') return 22;
-  if (family === 'claude') return 44;
+function familyLimit(family: RequestSizePolicy['modelFamily']): { trigger: number; keep: number } | undefined {
+  if (family === 'gpt') return { trigger: 50, keep: 22 };
+  if (family === 'claude') return { trigger: 100, keep: 44 };
   return undefined;
 }
 
@@ -231,7 +232,7 @@ function decodeBase64(value: string): Buffer {
 export async function controlRequestSize(body: Buffer, format: WireFormat, policy: RequestSizePolicy = {}, preserve: (bytes: Buffer, mimeType: string, occurrence: number) => Promise<string>): Promise<RequestSizeResult | null> {
   const trigger = policy.triggerBytes ?? DEFAULT_REQUEST_SIZE_TRIGGER;
   const target = policy.targetBytes ?? DEFAULT_REQUEST_SIZE_TARGET;
-  const familyMax = familyLimit(policy.modelFamily);
+  const familyPolicy = familyLimit(policy.modelFamily);
   const quickLimit = Math.min(trigger, DEFAULT_QUICK_PATH_BYTES);
   if (body.length <= quickLimit) {
     const hint = (body.toString('utf8').match(/"type"\s*:\s*"(?:input_image|image|document|image_url)"/g) ?? []).length;
@@ -267,24 +268,49 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   let total = body.length;
   let count = occurrences.length;
   const remove = new Set<number>();
-  const cap = familyMax;
+  const removalSeenAssistant = new Map<number, boolean>();
+  const cap = familyPolicy?.keep;
+  const countCapActive = familyPolicy !== undefined && occurrences.length > familyPolicy.trigger;
+  let removedPrefixBytes = 0;
   // Re-run the historical crossings. This makes the same prefix produce the same removals.
   for (let index = 0; index < occurrences.length; index++) {
     const item = prepared.get(index)!;
     const originalLength = Buffer.byteLength(occurrences[index].raw);
     if (item.changed) total += Buffer.byteLength(item.bytes.toString('base64')) - originalLength;
-    const overCount = cap !== undefined && count > cap;
-    if (total <= trigger && !overCount) continue;
-    while ((total > target || (cap !== undefined && count > cap)) && remove.size < occurrences.length) {
+    let prefixBytes = Buffer.byteLength(text.slice(0, occurrences[index].node.end)) - removedPrefixBytes;
+    if (prefixBytes <= trigger) continue;
+    while (prefixBytes > target && remove.size < occurrences.length) {
       const candidate = [...occurrences.keys()].find(i => !remove.has(i));
       if (candidate === undefined) break;
       const old = Buffer.byteLength(occurrences[candidate].raw);
       const replacement = replacementText('', occurrences[candidate].seenAssistant);
-      total -= old - Buffer.byteLength(JSON.stringify({ type: occurrences[candidate].textType, text: replacement }));
+      const savings = old - Buffer.byteLength(JSON.stringify({ type: occurrences[candidate].textType, text: replacement }));
+      total -= savings;
+      removedPrefixBytes += savings;
+      prefixBytes -= savings;
       count--;
       remove.add(candidate);
+      removalSeenAssistant.set(candidate, occurrences[candidate].assistantCount < occurrences[index].assistantCount);
       if (total <= target && (cap === undefined || count <= cap)) break;
     }
+  }
+  // Text/tool fields after the last image still count toward the request budget. Replay the
+  // final crossing at the end of the model-visible history so the oldest image is removed even
+  // when the overflow comes from a trailing instruction or tool definition.
+  let finalPrefixBytes = body.length - removedPrefixBytes;
+  while ((finalPrefixBytes > trigger || (countCapActive && count > cap!)) && remove.size < occurrences.length) {
+    const candidate = [...occurrences.keys()].find(i => !remove.has(i));
+    if (candidate === undefined) break;
+    const old = Buffer.byteLength(occurrences[candidate].raw);
+    const replacement = replacementText('', occurrences[candidate].seenAssistant);
+    const savings = old - Buffer.byteLength(JSON.stringify({ type: occurrences[candidate].textType, text: replacement }));
+    finalPrefixBytes -= savings;
+    total -= savings;
+    removedPrefixBytes += savings;
+    count--;
+    remove.add(candidate);
+    removalSeenAssistant.set(candidate, occurrences[candidate].assistantCount < assistantState.count);
+    if (finalPrefixBytes <= target && (!countCapActive || count <= cap!)) break;
   }
   if (remove.size === 0 && !preparedHasChange(prepared)) return null;
   if (total > target && remove.size === occurrences.length) throw new Error('REQUEST_TEXT_TOO_LARGE');
@@ -295,7 +321,7 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
     const preparedImage = prepared.get(index)!;
     if (remove.has(index)) {
       const localPath = await preserve(preparedImage.bytes, preparedImage.mimeType, index);
-      const replacement = { type: occurrence.textType, text: replacementText(localPath, occurrence.seenAssistant) };
+    const replacement = { type: occurrence.textType, text: replacementText(localPath, removalSeenAssistant.get(index) ?? false) };
       replacements.push({ start: occurrence.node.start, end: occurrence.node.end, text: JSON.stringify(replacement) });
     } else if (preparedImage.changed) {
       // The preprocessor result is represented in the original block with identical shape.
@@ -311,7 +337,7 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   let output = text;
   for (const replacement of replacements) output = output.slice(0, replacement.start) + replacement.text + output.slice(replacement.end);
   const result = Buffer.from(output);
-  if ((body.length > trigger || (familyMax !== undefined && occurrences.length > familyMax)) && result.length > target) {
+  if ((body.length > trigger || (familyPolicy !== undefined && occurrences.length > familyPolicy.trigger)) && result.length > target) {
     throw new Error('REQUEST_TEXT_TOO_LARGE');
   }
   return { body: result, changed: result.compare(body) !== 0, originalBytes: body.length, bytes: result.length, removedImages: remove.size, imageCount: occurrences.length, reason: policy.reason ?? (remove.size ? 'budget' : 'preprocessed') };

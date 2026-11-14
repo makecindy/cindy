@@ -61,10 +61,32 @@ describe('request size control', () => {
     const input = Array.from({ length: 51 }, (_, i) => ({ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(i, 1)}` }] }));
     const raw = Buffer.from(JSON.stringify({ input }));
     const result = await controlRequestSize(raw, 'responses', { modelFamily: 'gpt', triggerBytes: raw.length + 1, targetBytes: raw.length + 10_000 }, preserve);
-    expect(result?.removedImages).toBe(29);
     const parsed = JSON.parse(result!.body.toString()) as { input: Array<{ content: Array<{ type: string }> }> };
+    expect(parsed.input.filter(item => item.content[0].type === 'input_image')).toHaveLength(22);
     expect(parsed.input.at(-1)?.content[0].type).toBe('input_image');
     expect(parsed.input[0]?.content[0].type).toBe('input_text');
+  });
+
+  it.each([
+    ['gpt', 50, 50],
+    ['claude', 100, 100],
+  ] as const)('does not trim at the family boundary: %s', async (modelFamily, count, expected) => {
+    const input = Array.from({ length: count }, (_, i) => ({ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(i, 1)}` }] }));
+    const raw = Buffer.from(JSON.stringify({ input }));
+    const result = await controlRequestSize(raw, 'responses', { modelFamily, triggerBytes: raw.length + 1, targetBytes: raw.length + 10_000 }, preserve);
+    expect(result).toBeNull();
+    expect(input).toHaveLength(expected);
+  });
+
+  it('uses the reply order before the removal point in the placeholder', async () => {
+    const body = { input: [
+      { role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(1)}` }] },
+      { role: 'assistant', content: [{ type: 'output_text', text: 'seen' }] },
+      { role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(2)}` }] },
+    ] };
+    const raw = Buffer.from(JSON.stringify(body));
+    const result = await controlRequestSize(raw, 'responses', { triggerBytes: raw.length - 1, targetBytes: raw.length - 150 }, preserve);
+    expect(result?.body.toString()).toContain('An assistant response occurred before this media was removed.');
   });
 
   it('uses compressed bytes for the budget through the injected preprocessor', async () => {
