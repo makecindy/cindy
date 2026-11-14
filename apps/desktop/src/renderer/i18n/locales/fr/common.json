@@ -19502,7 +19502,7 @@
     "review": {
       "ariaLabel": "Panneau de revue de la proposition de skill",
       "title": "Proposition de skill : {{name}}",
-      "errorTitle": "Impossible de charger la proposition",
+      "errorTitle": "La proposition n’est pas encore chargée et ne peut donc pas être appliquée",
       "redactionWarning": "Contenu potentiellement sensible détecté dans la sortie ({{categories}}). Veuillez examiner attentivement le diff avant de l'appliquer.",
       "overwriteWarning": "Un skill local portant le même nom existe déjà. L'appliquer l'écrasera (l'ancienne version est sauvegardée automatiquement).",
       "apply": "Appliquer aux skills locaux",

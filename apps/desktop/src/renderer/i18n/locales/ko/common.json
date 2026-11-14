@@ -19243,7 +19243,7 @@
     "review": {
       "ariaLabel": "스킬 제안 검토 패널",
       "title": "스킬 제안: {{name}}",
-      "errorTitle": "제안을 불러오지 못했습니다",
+      "errorTitle": "제안 내용을 아직 불러오지 못해 적용할 수 없습니다",
       "redactionWarning": "결과물에서 민감할 수 있는 내용이 감지되었습니다({{categories}}). 적용하기 전에 diff를 꼼꼼히 확인해 주세요.",
       "overwriteWarning": "같은 이름의 로컬 스킬이 이미 존재합니다. 적용하면 기존 버전을 덮어씁니다(이전 버전은 자동으로 백업됩니다).",
       "apply": "로컬 스킬에 적용",

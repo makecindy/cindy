@@ -19319,7 +19319,7 @@
     "review": {
       "ariaLabel": "Prüfbereich für Skill-Vorschläge",
       "title": "Skill-Vorschlag: {{name}}",
-      "errorTitle": "Vorschlag konnte nicht geladen werden",
+      "errorTitle": "Der Vorschlag ist noch nicht geladen und kann daher noch nicht übernommen werden",
       "redactionWarning": "Potenziell sensible Inhalte in der Ausgabe erkannt ({{categories}}). Prüfe den Diff sorgfältig, bevor du die Änderungen übernimmst.",
       "overwriteWarning": "Ein lokaler Skill mit demselben Namen ist bereits vorhanden. Beim Übernehmen wird er überschrieben (die alte Version wird automatisch gesichert).",
       "apply": "In lokale Skills übernehmen",

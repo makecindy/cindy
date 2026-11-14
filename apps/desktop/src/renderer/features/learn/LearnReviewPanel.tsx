@@ -42,6 +42,9 @@ export function LearnReviewPanel({ open, onClose, run, contextSessionId }: Learn
   const [state, setState] = useState<LoadState>({ kind: 'idle' });
   const [acting, setActing] = useState<'apply' | 'discard' | null>(null);
 
+  // 加载失败时的「重试」:递增即重跑下面的拉取 effect。
+  const [reloadKey, setReloadKey] = useState(0);
+
   // 打开时拉 diff;关闭清空(重开重新拉,保证最新)
   useEffect(() => {
     if (!open) {
@@ -68,7 +71,7 @@ export function LearnReviewPanel({ open, onClose, run, contextSessionId }: Learn
     // 不能依赖 run.updatedAt:getProposalDiff 本身会登记 reviewed 指纹并 bump
     // updatedAt + 广播,依赖它会"读→更新→再读"无限循环(Codex review #548 P1);
     // 指纹只在提案内容真变时才变。contextSessionId:device-link 路由上下文变化时重拉。
-  }, [open, run.runId, run.proposalFingerprint, contextSessionId]);
+  }, [open, run.runId, run.proposalFingerprint, contextSessionId, reloadKey]);
 
   const totals = useMemo(() => {
     if (state.kind !== 'ready') return null;
@@ -157,8 +160,18 @@ export function LearnReviewPanel({ open, onClose, run, contextSessionId }: Learn
           {state.kind === 'error' && (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
               <FileDiffIcon size={28} className="text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">{t('learn.review.errorTitle')}</p>
-              <p className="max-w-xs break-all text-xs text-muted-foreground">{state.message}</p>
+              {/* 主文案说清"为什么不能应用";原始错误只作次要详情。不承诺重开就能恢复。 */}
+              <p className="text-sm text-[var(--text-primary)]">{t('learn.review.errorTitle')}</p>
+              <Button
+                variant="secondary"
+                size="md"
+                compact
+                type="button"
+                onClick={() => setReloadKey((key) => key + 1)}
+              >
+                {t('commonUi.retry')}
+              </Button>
+              <p className="max-w-xs break-all text-xs text-[var(--text-tertiary)]">{state.message}</p>
             </div>
           )}
           {state.kind === 'ready' && (
