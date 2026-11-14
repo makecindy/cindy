@@ -1084,6 +1084,7 @@ import {
   isSecondaryAppWindow,
   openSessionInNewWindow,
   openSessionInNewWindowIfDroppedOutside,
+  shouldKeepCapturedPopupHost,
 } from './secondary-windows.js';
 import {
   beginSessionDragPreview,
@@ -2922,10 +2923,12 @@ setRsbPopupOpenerReportSubscriber((listener) =>
 // popup 路由目标 host 动态解析:异步等待(归属反查 / deferred URL 捕获)期间用户
 // detach 侧边栏或切视图后,捕获时的 hostContents 已过时 —— 发送时刻按当前宿主
 // 形态解析(与 tab-op bridge 同一来源),消息才能落到活着的订阅者。
-// 弹出到独立页签窗口的浏览器页签,guest 挂在那扇窗口的 renderer 上:popup 与快捷键转发
-// 回到它(捕获时的 host 仍是页签窗口就保持),不被改投给整栏侧栏宿主。
+// 弹出到独立页签窗口的浏览器页签,以及会话副窗(「在新窗口打开」)自带的 webview,
+// guest 挂在那扇窗口的 renderer 上:popup 与快捷键转发回到它(捕获时的 host 仍是
+// 页签窗口 / 副窗就保持),不被改投给整栏侧栏宿主 —— 原生弹窗面的 owner 校验只认
+// 原宿主,改投会让副窗的登录弹窗 claim 收到 PERMISSION_DENIED。
 setRsbPopupHostResolver((capturedHost) =>
-  sidebarTabWindowsController.slotForSender(capturedHost)
+  shouldKeepCapturedPopupHost(capturedHost, sidebarTabWindowsController.slotForSender(capturedHost))
     ? capturedHost
     : rsbWindowController.getHostWebContents(),
 );
