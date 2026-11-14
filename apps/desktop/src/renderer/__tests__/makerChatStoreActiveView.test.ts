@@ -252,6 +252,55 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(b.id).messages).toBe(b.messages);
   });
 
+  // 持续挂载的 view（Orca worker 面板）没有 leaveView 时机，trim 原本永远轮不到它：
+  // 30s 维护拍必须把贴底读者的窗口裁回 TRIM_TARGET；上翻阅读中仍然不裁。
+  it('trims a continuously mounted near-bottom view on the maintenance tick', async () => {
+    const view = await readingWindow('mounted-tail');
+    saveSessionScroll(view.id, { windowAnchorKey: null, viewportTopKey: 'msg-client-0',
+      messageClientId: 'client-0', offset: 0, isNearBottom: true });
+    vi.advanceTimersByTime(31_000);
+    expect(makerChatStore.getSnapshot(view.id).messages).toHaveLength(200);
+    view.leave();
+  });
+
+  it('keeps a mounted scrolled-up reading view untrimmed on the maintenance tick', async () => {
+    const view = await readingWindow('mounted-reading');
+    vi.advanceTimersByTime(31_000);
+    expect(makerChatStore.getSnapshot(view.id).messages).toHaveLength(350);
+    view.leave();
+  });
+
+  it('bounds a busy session above its in-flight turn floor on the maintenance tick', async () => {
+    // 300 行完成轮 + user 触发行 + 200 行运行轮：501 行窗口在 leaveView / 维护拍上
+    // 都必须收敛到整段在途轮（触发行 + 200 行 = 201 行），不砍进运行轮 —— 首行是
+    // user 触发行。
+    const busyId = sid('busy-worker');
+    const leaveBusy = enter(busyId);
+    const at = (i: number) => new Date(BASE_TIME.getTime() + i * 1000).toISOString();
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      ...Array.from({ length: 300 }, (_, i) => dbMessage(busyId, `old-${i}`, 'x', at(i))),
+      { ...dbMessage(busyId, 'trigger', 'dispatch', at(300)), role: 'user' },
+      ...Array.from({ length: 200 }, (_, i) => dbMessage(busyId, `run-${i}`, 'y', at(401 + i))),
+    ]);
+    makerChatStore.ensureInitialMessages(busyId);
+    await flushPromises();
+    saveSessionScroll(busyId, { windowAnchorKey: null, viewportTopKey: 'msg-client-0', offset: 0, isNearBottom: true });
+    makerChatStore.__activeViewTest.setStreamingForTest(busyId, true);
+    leaveBusy();
+    vi.advanceTimersByTime(31_000);
+    const busyMessages = makerChatStore.getSnapshot(busyId).messages;
+    expect(busyMessages).toHaveLength(201);
+    expect(busyMessages[0]?.clientId).toBe('client-trigger');
+
+    // 没有任何 user 行 → 轮边界定位不到，维持豁免不裁。
+    const noUser = await readingWindow('busy-no-user');
+    saveSessionScroll(noUser.id, { windowAnchorKey: null, viewportTopKey: 'msg-client-0', offset: 0, isNearBottom: true });
+    makerChatStore.__activeViewTest.setStreamingForTest(noUser.id, true);
+    noUser.leave();
+    vi.advanceTimersByTime(31_000);
+    expect(makerChatStore.getSnapshot(noUser.id).messages).toHaveLength(350);
+  });
+
   it('enterView marks a session active and clears lastViewedAt', () => {
     const sessionId = sid('enter');
     const dispose = enter(sessionId);

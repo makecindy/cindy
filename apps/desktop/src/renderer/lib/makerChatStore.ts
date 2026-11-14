@@ -4125,8 +4125,31 @@ function _trimMessagesIfNeeded(): void {
 function _trimSessionMessages(sessionId: string): void {
   const state = sessions.get(sessionId);
   if (!state || state.messages.length <= TRIM_THRESHOLD) return;
-  if (_isSessionBusy(sessionId, state)) return;
-  if (_activeViewSessions.has(sessionId)) return;
+  // 正在被看：贴底读者（含还没存过快照的新挂视图）的视口在窗口尾部，头部早已滚出
+  // 屏幕，裁掉不可见；上翻阅读中不裁 —— 视口里的行不能删，锚点复位兜不住视口内
+  // 内容的消失。
+  if (_activeViewSessions.has(sessionId) && readSessionScroll(sessionId)?.isNearBottom === false) {
+    return;
+  }
+  // 正在忙：不再整窗豁免，改为以「在途轮起始行」（最后一条 user 行）为地板 ——
+  // 完成轮照裁，运行轮整体保留（pending 交互、running 快照、远端乐观气泡都
+  // 住在当前轮里）。找不到 user 行就无法定位轮边界，维持原豁免。此前 busy +
+  // 挂载双豁免叠加时窗口只增不减：长协作（Orca worker 连续派活）攒出几千行，
+  // 切任务迟滞、提问导航条堆成刻度墙。
+  let floor = -1;
+  if (_isSessionBusy(sessionId, state)) {
+    for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+      if (state.messages[i].role === 'user') {
+        floor = i;
+        break;
+      }
+    }
+    if (floor < 0) return;
+  }
+  const start = floor >= 0
+    ? Math.min(state.messages.length - TRIM_TARGET, floor)
+    : state.messages.length - TRIM_TARGET;
+  if (start <= 0) return;
 
   // 裁剪等于一次代际重置:它砍掉窗口中段。in-flight 的翻页 / 跳转补齐若仍按 pre-trim
   // 游标提交,就会把更老的一页直接接到保留的尾部上 —— 中间被裁掉的区间成了新的空洞,
@@ -4140,7 +4163,12 @@ function _trimSessionMessages(sessionId: string): void {
     if (s.messages.length <= TRIM_THRESHOLD) {
       return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     }
-    const retained = s.messages.slice(-TRIM_TARGET);
+    // floor 与外层守卫同源（setState 同步拿到同一份 state，见上）。busy 长轮地板
+    // 下保留行数可以超过 TRIM_TARGET —— 那是还在跑的整轮，砍它才出问题。
+    const start = floor >= 0
+      ? Math.min(s.messages.length - TRIM_TARGET, floor)
+      : s.messages.length - TRIM_TARGET;
+    const retained = start > 0 ? s.messages.slice(start) : s.messages;
     // 连续尾段被裁短、孤岛已不在保留窗口里:游标清成 null,loadOlderMessages 走
     // beforeTs(messages[0]),从新的窗口下沿接着往更早翻。
     // 保留窗口里还夹着孤岛(最新连续尾段不足 200 行):必须留下「最新连续段最老一行」
@@ -4687,7 +4715,13 @@ function _softEvictSession(sessionId: string): void {
 
 function _ensureSoftEvictionTimer(): void {
   if (_softEvictionTimerHandle) return;
-  _softEvictionTimerHandle = setInterval(_softEvictIdleSessions, SOFT_EVICTION_CHECK_INTERVAL_MS);
+  // 30s 维护拍：软淘汰之外顺带跑一次窗口裁剪。trim 原本只有 leaveView 一个触发
+  // 点，持续挂载的 view（Orca worker 面板）和常驻 busy 的会话没有离开时机，窗口
+  // 只增不减 —— 在这里补上；贴底/地板规则见 _trimSessionMessages。
+  _softEvictionTimerHandle = setInterval(() => {
+    _trimMessagesIfNeeded();
+    _softEvictIdleSessions();
+  }, SOFT_EVICTION_CHECK_INTERVAL_MS);
 }
 
 function _stopSoftEvictionTimer(): void {
@@ -19448,6 +19482,11 @@ export const makerChatStore = {
   __activeViewTest: {
     getActiveSessionIds: () => [..._activeViewSessions.keys()],
     getLastViewedAt: (sessionId: string) => _lastViewedAt.get(sessionId),
+    // 单测注入 busy 态（isStreaming）：trim 依赖 _isSessionBusy，生产入口是 IPC 流
+    // 事件链，测试里直接置位避免整条 mock；断言仍是可观察的窗口行数。
+    setStreamingForTest: (sessionId: string, isStreaming: boolean) => {
+      setState(sessionId, (s) => ({ ...s, isStreaming }));
+    },
     setSoftEvictionBudget: (budget: { messages: number; characters: number } | null) => {
       softEvictionBudget = budget ?? SOFT_EVICTION_DEFAULT_BUDGET;
     },
