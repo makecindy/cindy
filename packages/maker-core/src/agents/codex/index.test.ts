@@ -9694,6 +9694,123 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  // Regression: a default control 401 fanned out to unrelated pooled account hosts.
+  // Real entry: account RPC/startSession + auth-boundary retirement. Existing isolation tests
+  // only closed one session; they did not run the default adapter's invalidation callback.
+  // Unit tier, fake transport/auth only; no production credentials or reset-credit consumption.
+  it.each([false, true])('preserves subscription hosts across default control invalidation (starting=%s)', async (starting) => {
+    const deps = createDeps();
+    const agent = new CodexAgent(deps);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const entered = vi.fn();
+    const profile = (id: string): NativeSubscriptionAccount => ({
+      id, configDir: `/fixture/.codex-${id}`, defaultProfile: id === 'default',
+      assertCurrent() {}, readState: async () => ({ authenticated: true }),
+    });
+    const initialGetState = deps.auth.getState;
+    deps.auth.getState = async options => {
+      if (starting && options?.nativeSubscriptionAccount?.id === 'second') {
+        entered();
+        await gate;
+      }
+      return initialGetState(options);
+    };
+    deps.auth.invalidate = async reason => {
+      await agent.forceDisposeLocalHostForAuthChange(reason, {
+        preserveExternalAuth: true, preserveSubscriptionAccounts: true,
+      });
+    };
+    const start = (id: string) => agent.startSession({
+      sessionId: `pooled-${id}`, providerId: 'openai', model: 'gpt-5.4',
+      workingDir: '/repo', [NATIVE_SUBSCRIPTION_ACCOUNT]: profile(id),
+    });
+    const first = await start('default');
+    createdTransports[0].emitMockLine({ method: 'turn/started',
+      params: { threadId: first.id, turn: { id: 'active-account-turn' } } });
+    await waitForExpectation(() => expect(first.isTurnRunning?.()).toBe(true));
+    const secondPromise = start('second');
+    // Attach rejection immediately so a regressed retirement does not produce an unhandled error.
+    const secondResult = secondPromise.then(handle => ({ handle }), error => ({ error }));
+    if (starting) await waitForExpectation(() => expect(entered).toHaveBeenCalled());
+    else await secondPromise;
+    MockCodexTransport.onCreate = transport => transport.setMockResponse(Method.AccountRateLimitsRead, {
+      error: { code: -32603, message: 'failed to fetch codex rate limits: 401 Unauthorized token_revoked' },
+    });
+    try {
+      await expect(agent.readAccountRateLimits()).rejects.toThrow();
+      await waitForExpectation(() => expect(createdTransports.at(-1)?.closed).toBe(true));
+      expect(createdTransports[0].closed).toBe(false);
+      expect(first.isTurnRunning?.()).toBe(true);
+      release();
+      const second = await secondResult;
+      if (!('handle' in second)) throw second.error;
+      expect(createdTransports.filter(transport => !transport.closed)).toHaveLength(2);
+      createdTransports[0].emitMockLine({ method: 'turn/completed',
+        params: { threadId: first.id, turn: { id: 'active-account-turn', status: 'completed' } } });
+      await waitForExpectation(() => expect(first.isTurnRunning?.()).toBe(false));
+      await first.send({ type: 'user', content: 'first account remains usable' });
+      await second.handle.send({ type: 'user', content: 'second account remains usable' });
+      // Explicit complete cleanup still closes every account; preservation is not an auth bypass.
+      await agent.forceDisposeLocalHostForAuthChange('explicit boundary');
+      expect(createdTransports.every(transport => transport.closed)).toBe(true);
+      await first.close(); await second.handle.close();
+    } finally {
+      release(); await secondResult; await agent.dispose();
+    }
+  });
+
+  it('keeps an account child rejection out of the default adapter and other subscriptions', async () => {
+    const deps = createDeps();
+    const invalidate = vi.fn(async () => undefined);
+    deps.auth.invalidate = invalidate;
+    const agent = new CodexAgent(deps);
+    const start = (id: string) => agent.startSession({
+      sessionId: id, providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo',
+      [NATIVE_SUBSCRIPTION_ACCOUNT]: { id, configDir: `/fixture/${id}`,
+        assertCurrent() {}, readState: async () => ({ authenticated: true }) },
+    });
+    const failed = await start('failed');
+    const healthy = await start('healthy');
+    try {
+      createdTransports[0].setMockResponse(Method.TurnStart, {
+        error: { code: -32000, message: 'token_revoked',
+          data: { reason: 'cloudRequirements', errorCode: 'Auth' } },
+      });
+      await expect(failed.send({ type: 'user', content: 'fail' }, { throwOnStartFailure: true })).rejects.toThrow();
+      await waitForExpectation(() => expect(createdTransports[0].closed).toBe(true));
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(createdTransports[1].closed).toBe(false);
+      await healthy.send({ type: 'user', content: 'still healthy' });
+    } finally { await failed.close(); await healthy.close(); await agent.dispose(); }
+  });
+
+  it('does not retire a replacement host after an old invalidation callback completes', async () => {
+    const deps = createDeps();
+    let finishInvalidation!: () => void;
+    const invalidation = new Promise<void>(resolve => { finishInvalidation = resolve; });
+    const invalidate = vi.fn(() => invalidation);
+    deps.auth.invalidate = invalidate;
+    const agent = new CodexAgent(deps);
+    const old = await agent.startSession({ sessionId: 'old', model: 'gpt-5.4', workingDir: '/repo' });
+    createdTransports[0].setMockResponse(Method.TurnStart, {
+      error: { code: -32000, message: 'token_revoked',
+        data: { reason: 'cloudRequirements', errorCode: 'Auth' } },
+    });
+    await expect(old.send({ type: 'user', content: 'fail' }, { throwOnStartFailure: true })).rejects.toThrow();
+    await waitForExpectation(() => expect(invalidate).toHaveBeenCalled());
+    await agent.forceDisposeLocalHostForAuthChange('login replaced old host');
+    const replacement = await agent.startSession({ sessionId: 'replacement', model: 'gpt-5.4', workingDir: '/repo' });
+    try {
+      finishInvalidation();
+      await invalidation;
+      // Drain the invalidation continuation before dispatching on the same-key replacement.
+      await Promise.resolve(); await Promise.resolve();
+      expect(createdTransports[1].closed).toBe(false);
+      await replacement.send({ type: 'user', content: 'current generation remains usable' });
+    } finally { finishInvalidation(); await old.close(); await replacement.close(); await agent.dispose(); }
+  });
+
   it('retires only the local host when local Codex auth is invalidated', async () => {
     const invalidate = vi.fn(async () => undefined);
     const captureCredentialGeneration = vi.fn(() => 'host-f1-generation');

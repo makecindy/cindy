@@ -492,9 +492,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       afterLogout: () => options.codexRuntime!.authBoundary.afterLogout(),
       systemLogin: options.codexRuntime!.systemLogin,
     } : undefined);
-  // The desktop retires every local Codex host at an auth boundary (maker-host/index.ts).
-  options.codexRuntime?.setLocalHostRetirement(async reason => {
-    await codex?.forceDisposeLocalHostForAuthChange(reason, { preserveExternalAuth: true });
+  // Match Desktop: default-auth invalidation preserves separately selected subscription accounts.
+  options.codexRuntime?.setLocalHostRetirement(async (reason, preserveSubscriptionAccounts) => {
+    await codex?.forceDisposeLocalHostForAuthChange(reason, { preserveExternalAuth: true, preserveSubscriptionAccounts });
   });
   const config = options.providerConfig;
   // The desktop's Auto-review and tool-loop review (maker-host/index.ts), handed to the same

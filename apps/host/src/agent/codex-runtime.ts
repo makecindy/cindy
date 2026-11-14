@@ -150,9 +150,9 @@ export function createHostCodexRuntime(options: {
   });
   // The desktop's Codex auth-boundary hooks (maker-host/index.ts) for this runtime: login,
   // logout and server-side invalidation of the profile's native login.
-  let retireLocalHosts: ((reason: string) => Promise<void>) | null = null;
+  let retireLocalHosts: ((reason: string, preserveSubscriptionAccounts?: boolean) => Promise<void>) | null = null;
   const authBoundary = createCodexAuthBoundary({
-    retireLocalHosts: async reason => { await retireLocalHosts?.(reason); },
+    retireLocalHosts: async (reason, preserveSubscriptionAccounts) => { await retireLocalHosts?.(reason, preserveSubscriptionAccounts); },
     clearProxyAuthInjection: () => proxy.clearCodexProxyAuthInjection(),
     publishRuntimeRoute: () => publish(MAKER_PUSH.CODEX_RUNTIME_ROUTE_CHANGED, readRoute()),
     clearBridgeCredentialCache: () => bridge.clearChatgptBridgeCredentialCache(),
@@ -255,7 +255,7 @@ export function createHostCodexRuntime(options: {
     /** What this runtime's Codex processes carry to its proxies (tests; never logged). */
     inboundToken: () => inbound.token(),
     /** How this runtime retires the local Codex hosts (the agent graph's CodexAgent). */
-    setLocalHostRetirement(handler: (reason: string) => Promise<void>) { retireLocalHosts = handler; },
+    setLocalHostRetirement(handler: (reason: string, preserveSubscriptionAccounts?: boolean) => Promise<void>) { retireLocalHosts = handler; },
     /** For the Claude and Pi proxy; also cleared on every Codex login and logout, as on the desktop. */
     subscriptions: { bridge, piWebSocket },
     async close() { closed = true; await proxy.disposeCodexProxy(); },
