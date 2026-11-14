@@ -143,6 +143,44 @@ describe('provider computer session limits', () => {
     await host.handle('a', request());
     expect(host.limitUsage().total).toBe(1);
   });
+  // Unit regression: open ACKs before startHosted completes. Closing during
+  // startup must not free capacity while that native process is still starting
+  // or closing; the existing close test only covers an installed handle.
+  it('retains capacity through cancelled startup and the late native close', async () => {
+    limits = { perDevice: 1, total: 1 };
+    const entered = whenStarted(1);
+    const closingNative = whenStarted(1);
+    let releaseStart!: () => void;
+    let releaseClose!: () => void;
+    const startGate = new Promise<void>(resolve => { releaseStart = resolve; });
+    const closeGate = new Promise<void>(resolve => { releaseClose = resolve; });
+    const host = makeHost({ startHosted: async input => {
+      entered.onStarted();
+      await startGate;
+      return {
+        id: input.hostSessionId, agentKind: input.kind, model: input.options.model,
+        close: async () => { closingNative.onStarted(); await closeGate; },
+      } as AgentSessionHandle;
+    } });
+    const first = request();
+    try {
+      await host.handle('a', first);
+      await entered.promise;
+      await host.handle('a', { op: 'close', runId: first.runId, mode: 'close', reason: 'navigation' });
+      expect(host.limitUsage()).toEqual({ total: 1, devices: 1, largestDevice: 1 });
+      await expect(host.handle('b', request())).rejects.toThrow('[TOTAL_LIMIT]');
+      releaseStart();
+      await closingNative.promise;
+      await expect(host.handle('b', request())).rejects.toThrow('[TOTAL_LIMIT]');
+      releaseClose();
+      await vi.waitFor(() => expect(host.limitUsage().total).toBe(0));
+      await expect(host.handle('b', request())).resolves.toEqual({});
+    } finally {
+      releaseStart();
+      releaseClose();
+      await host.dispose();
+    }
+  });
   it('returns a slot after agent startup failure', async () => {
     limits = { perDevice: 1, total: 1 };
     const entered = whenStarted(1);
