@@ -381,6 +381,10 @@ export function createTurnExecutor(deps) {
       deps.assertProviderExecutionSupported?.(id, turn.createOpts.providerId);
     },
     ackInterruptedTurnDispatched: deps.ackInterruptedTurnDispatched,
+    // The pending handoff summary (handoff-pending.ts): sent once with the next accepted send, as
+    // on the desktop (register.ts peekPendingHandoff / consumePendingHandoff).
+    peekPendingHandoff: deps.pendingHandoff ? id => deps.pendingHandoff.peek(id) : undefined,
+    consumePendingHandoff: deps.pendingHandoff ? id => deps.pendingHandoff.consume(id) : undefined,
     isClearBoundaryCurrent: deps.isClearBoundaryCurrent,
     rewindPersistedUserMessageAfterClear: deps.rewindPersistedUserMessageAfterClear,
     readPiUserEntry: deps.readPiUserEntry ? async (id, clientId) => {

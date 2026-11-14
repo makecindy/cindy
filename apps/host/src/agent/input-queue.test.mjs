@@ -23,7 +23,7 @@ import { lockSessionRoute } from './session-route-lock.mjs';
 import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
 import { RECOVERY_SHUTDOWN_WAIT_MS } from './context-recovery.ts';
 import { createHostContextRecoveryRollover } from './context-recovery-assembly.ts';
-import { createAgentHandoffPendingRegistry } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
+import { createHostAgentHandoffPending } from './handoff-pending.ts';
 import { createSessionStderrOptions } from '../../../desktop/src/main/maker-ipc/sessionRequest.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { configureHostOwner } from './claude-auth.mjs';
@@ -2635,14 +2635,17 @@ test('context recovery: two tasks recovering at shutdown share one wait limit', 
 // The recovery factory assembled on the Host's ports (context-recovery-assembly.ts) over a real
 // profile database: the desktop's rollover reads the task and its messages, commits the rebuild and
 // replays the user's message through the Host's own send transaction.
-async function assembledRecovery(t, overrides = {}) {
-  const db = await recoveryDatabase(t);
-  const quiet = { info() {}, warn() {}, error() {} };
-  const handoffs = createAgentHandoffPendingRegistry(async () => null);
+const quiet = { info() {}, warn() {}, error() {} };
+// One Host runtime over a profile database: the input queue, its recovery rollover and the Host's
+// pending handoff registry (handoff-pending.ts), as main.ts assembles them.
+function assembledRuntime(t, db, overrides = {}) {
   const runtimes = [];
   let h;
+  const handoffs = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
+    publish: event => h.events.push(event), log: quiet });
   h = createHarness({
     persistMessage: db.persistMessage,
+    pendingHandoff: handoffs,
     readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
       workingDir: db.root, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }),
     isContextRecoveryOpen: () => true,
@@ -2656,6 +2659,12 @@ async function assembledRecovery(t, overrides = {}) {
     ...overrides,
   });
   t.after(() => h.queue.dispose());
+  return { h, handoffs, runtimes };
+}
+
+async function assembledRecovery(t, overrides = {}) {
+  const db = await recoveryDatabase(t);
+  const { h, handoffs, runtimes } = assembledRuntime(t, db, overrides);
   const overflow = async (sessionId, text = 'long task') => {
     await db.createTask(sessionId);
     await h.queue.enqueue(sessionId, { clientId: `${sessionId}-input`, text });
@@ -2665,7 +2674,8 @@ async function assembledRecovery(t, overrides = {}) {
     return session;
   };
   const rows = (id, role) => db.db.prepare('SELECT client_id, content FROM messages WHERE session_id = ? AND role = ?').all(id, role);
-  return { db, h, handoffs, runtimes, overflow, rows };
+  const marker = id => JSON.parse(rows(id, 'context_rebuild').at(-1).content);
+  return { db, h, handoffs, runtimes, overflow, rows, marker };
 }
 
 test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {
@@ -2673,7 +2683,9 @@ test('context recovery assembly: an overflow rebuilds the task and replays the m
   const first = await r.overflow('assembled-ok');
   await waitFor(() => { const next = r.h.maker.sessions.get('assembled-ok'); return next && next !== first && next.sent.length === 1; });
   const replayed = r.h.maker.sessions.get('assembled-ok');
-  assert.deepEqual(replayed.sent, ['long task'], 'the replay sends the user\'s message once on a new runtime');
+  // The replay is the first send after the rebuild: it carries the rebuilt context's summary.
+  const { handoff } = r.marker('assembled-ok');
+  assert.deepEqual(replayed.sent, [`${handoff}\n\nlong task`], 'the replay sends the user\'s message once, after the summary');
   assert.equal(replayed.options.resumeSessionId, undefined, 'the new runtime does not resume the overflowed context');
   await waitFor(() => !r.h.queue.projection('assembled-ok').error);
   assert.equal(r.rows('assembled-ok', 'context_rebuild').length, 1, 'the rebuild marker is committed');
@@ -2688,7 +2700,8 @@ test('context recovery assembly: an overflow rebuilds the task and replays the m
   assert.equal(r.rows('assembled-ok', 'user').length, 1, 'the replay writes no second user row');
   assert.equal(r.rows('assembled-ok', 'error').length, 0, 'a recovered overflow writes no error row');
   assert.equal(r.h.events.filter(event => event.sessionId === 'assembled-ok' && event.type === 'error').length, 0);
-  assert.equal(typeof await r.handoffs.peek('assembled-ok'), 'string', 'the rebuilt context\'s summary is pending');
+  await waitFor(() => r.marker('assembled-ok').consumed === true);
+  assert.equal(await r.handoffs.peek('assembled-ok'), null, 'the summary is sent once, and the database knows it');
   // The runtime starts as a normal send's would. The shared replay (contextRecoveryAssembly.ts) also
   // passes the task title, which Maker only logs and uses for a task row it creates (this one exists).
   const comparable = options => JSON.parse(JSON.stringify(options, (_key, value) => (typeof value === 'function' ? '[function]' : value)));
@@ -2773,7 +2786,7 @@ test('context recovery assembly: a steer in flight when the replay is accepted i
   await waitFor(() => !r.h.queue.projection('assembled-steer').error);
   releaseSteer();
   assert.equal(await steered, true, 'the steer is accepted');
-  assert.deepEqual(replayed.sent, ['long task', 'steer:also this']);
+  assert.deepEqual(replayed.sent, [`${r.marker('assembled-steer').handoff}\n\nlong task`, 'steer:also this']);
 });
 
 test('context recovery assembly: onRebuilt changes nothing once the runtime is closing, the task is closed or the owner changed', { timeout: 30_000 }, async t => {
@@ -2816,8 +2829,55 @@ test('context recovery assembly: input queued while the replayed turn runs waits
   await waitFor(() => !r.h.queue.projection('assembled-next').error);
   await r.h.queue.enqueue('assembled-next', { clientId: 'after-replay', text: 'next' });
   for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(replayed.sent, ['long task'], 'the queued input waits while the replay runs');
+  const replay = `${r.marker('assembled-next').handoff}\n\nlong task`;
+  assert.deepEqual(replayed.sent, [replay], 'the queued input waits while the replay runs');
   replayed.emit({ type: 'done', data: {}, sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId });
   await waitFor(() => replayed.sent.length === 2);
-  assert.deepEqual(replayed.sent, ['long task', 'next']);
+  assert.deepEqual(replayed.sent, [replay, 'next'], 'the summary went with the replay only');
+});
+
+test('context recovery assembly: a summary not yet sent when the Host restarts goes with the next send, once', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  // The replay's runtime cannot start: the rebuild is committed, its summary never sent.
+  const create = r.h.maker.createSession.bind(r.h.maker);
+  let created = 0;
+  r.h.maker.createSession = async (...args) => {
+    if ((created += 1) === 2) throw new Error('engine unavailable');
+    return create(...args);
+  };
+  await r.overflow('assembled-restart');
+  await waitFor(() => r.rows('assembled-restart', 'error').length === 1);
+  const { handoff, consumed } = r.marker('assembled-restart');
+  assert.equal(consumed, false);
+  await r.h.queue.dispose();
+  // A new Host process: a new queue and a new registry on the same database.
+  const restarted = assembledRuntime(t, r.db);
+  await restarted.h.queue.enqueue('assembled-restart', { clientId: 'after-restart', text: 'continue' });
+  await waitFor(() => restarted.h.maker.sessions.get('assembled-restart')?.sent.length === 1);
+  const session = restarted.h.maker.sessions.get('assembled-restart');
+  assert.deepEqual(session.sent, [`${handoff}\n\ncontinue`]);
+  await waitFor(() => r.marker('assembled-restart').consumed === true);
+  session.emit({ type: 'done', data: {}, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+  await waitFor(() => !restarted.h.queue.projection('assembled-restart').running);
+  await restarted.h.queue.enqueue('assembled-restart', { clientId: 'after-restart-2', text: 'and again' });
+  await waitFor(() => session.sent.length === 2);
+  assert.equal(session.sent[1], 'and again', 'sent once');
+});
+
+test('context recovery assembly: an engine switch summary left by the desktop goes with the Host\'s next send and its boundary is shown consumed', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  await db.createTask('host-switch');
+  db.db.prepare(`INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+    VALUES ('switch-row', 'switch-boundary', 'host-switch', 'agent_switch', ?, ?)`)
+    .run(JSON.stringify({ handoff: 'SWITCH SUMMARY', consumed: false, fromAgentKind: 'codex' }), Date.now());
+  const { h } = assembledRuntime(t, db);
+  await h.queue.enqueue('host-switch', { clientId: 'host-switch-input', text: 'hello' });
+  await waitFor(() => h.maker.sessions.get('host-switch')?.sent.length === 1);
+  assert.deepEqual(h.maker.sessions.get('host-switch').sent, ['SWITCH SUMMARY\n\nhello']);
+  await waitFor(() => h.events.some(event => event.type === 'message_created' && event.message?.clientId === 'switch-boundary'));
+  const shown = h.events.filter(event => event.type === 'message_created' && event.message?.clientId === 'switch-boundary');
+  assert.equal(shown.length, 1);
+  assert.deepEqual(shown[0].message.content, { handoff: 'SWITCH SUMMARY', consumed: true, fromAgentKind: 'codex' });
+  const stored = JSON.parse(db.db.prepare("SELECT content FROM messages WHERE client_id = 'switch-boundary'").get().content);
+  assert.equal(stored.consumed, true);
 });
