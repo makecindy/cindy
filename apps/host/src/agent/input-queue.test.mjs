@@ -1,7 +1,7 @@
 import { runDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -20,6 +20,17 @@ import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActive
 import { createInputQueue } from './input-queue.mjs';
 import { createTurnExecutor } from './turn-executor.mjs';
 import { lockSessionRoute } from './session-route-lock.mjs';
+import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
+import { RECOVERY_SHUTDOWN_WAIT_MS } from './context-recovery.ts';
+import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
+import { configureHostOwner } from './claude-auth.mjs';
+import { hostRuntimeLayout } from '../runtime-layout.mjs';
+import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore.ts';
+import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
+import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
+import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
+import { createHostMessageStore } from '../message-store.ts';
+import { listErrorTailPendingRows } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { createEventHub } from '../events.mjs';
 import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
@@ -2379,4 +2390,241 @@ test('a holder of the task send lock passes straight through a route of the same
     order.push('holder');
   });
   assert.deepEqual(order, ['route', 'holder']);
+});
+
+// Context recovery claims a turn's terminal error (context-recovery.ts, contextRecoveryTerminal.ts).
+// The recovery factory is a stub here; its assembly comes with the next checkpoint.
+const OVERFLOW = { message: 'prompt is too long: 210000 tokens > 200000 maximum', reason: CONTEXT_OVERFLOW_REASON, isTerminal: true };
+
+function recoveryHarness(t, rollover, overrides = {}) {
+  const git = [];
+  const h = createHarness({ getRecoveryRollover: () => rollover,
+    getGitSnapshot: () => ({ onTurnStart() { git.push('start'); }, onTurnAbort() { git.push('abort'); },
+      onTurnEnd() { git.push('end'); }, onSessionClosed() {} }), ...overrides });
+  t.after(() => h.queue.dispose());
+  const run = async (sessionId, data = OVERFLOW) => {
+    await h.queue.enqueue(sessionId, { clientId: `${sessionId}-input`, text: 'long task' });
+    await waitFor(() => h.maker.sessions.get(sessionId)?.sent.length === 1);
+    const session = h.maker.sessions.get(sessionId);
+    session.emit({ type: 'error', data, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    return session;
+  };
+  const clientErrors = sessionId => h.events.filter(event => event.sessionId === sessionId && event.type === 'error');
+  const errorRows = sessionId => h.persisted.filter(row => row.sessionId === sessionId && row.role === 'error');
+  return { h, git, run, clientErrors, errorRows };
+}
+
+// The claim x recovery result matrix (plan table C), cell by cell: what the client sees, the error
+// row, what the coordinator holds, and the Git baseline. Usage: the Host records none yet (release
+// table, usage before 2e), so recovery changes nothing there.
+for (const cell of [
+  { name: 'an overflow error nobody claims', claim: 'idle', recovered: null, client: 1, rows: 1 },
+  { name: 'a claimed overflow error that recovers', claim: 'claimed', recovered: true, client: 0, rows: 0 },
+  { name: 'a claimed overflow error whose recovery fails', claim: 'claimed', recovered: false, client: 1, rows: 1 },
+  { name: 'a claimed overflow error whose recovery throws', claim: 'claimed', recovered: 'throw', client: 1, rows: 1 },
+  { name: 'a duplicate overflow error while its recovery is in flight', claim: 'in-flight', recovered: null, client: 0, rows: 0 },
+]) {
+  test(`context recovery: ${cell.name}`, { timeout: 10_000 }, async t => {
+    const id = `recovery-${cell.claim}-${String(cell.recovered)}`;
+    const seen = [];
+    let coordinatorErrorAtRecovery;
+    let recoveryEnded;
+    const ended = new Promise(resolve => { recoveryEnded = resolve; });
+    const rollover = {
+      claim: (_id, _turn, recoverable) => (recoverable ? cell.claim : 'idle'),
+      tryRecover: async () => {
+        seen.push('recover');
+        coordinatorErrorAtRecovery = r.h.queue.projection(id).error;
+        try {
+          if (cell.recovered === 'throw') throw new Error('recovery failed');
+          return cell.recovered;
+        } finally { recoveryEnded(); }
+      },
+    };
+    const r = recoveryHarness(t, rollover);
+    await r.run(id);
+    await waitFor(() => Boolean(r.h.queue.projection(id).error));
+    if (cell.claim === 'claimed') {
+      await ended;
+      await waitFor(() => r.errorRows(id).length === cell.rows);
+      assert.deepEqual(seen, ['recover']);
+      assert.ok(coordinatorErrorAtRecovery, 'recovery starts after the coordinator holds the claimed input\'s error');
+    } else {
+      await waitFor(() => r.errorRows(id).length === cell.rows);
+      assert.deepEqual(seen, [], 'only a claim starts recovery');
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(r.clientErrors(id).length, cell.client, 'error events the client sees');
+    assert.equal(r.errorRows(id).length, cell.rows, 'error rows written');
+    assert.match(r.h.queue.projection(id).error, /prompt is too long/, 'the coordinator holds the error');
+    assert.deepEqual(r.git, ['start', 'abort'], 'the claimed turn cancels its baseline either way');
+    if (cell.client && cell.claim === 'claimed') {
+      assert.equal(typeof r.clientErrors(id)[0].persistId, 'string', 'a failed recovery shows the error with its row id');
+    }
+  });
+}
+
+test('context recovery: an error that is not overflow-class takes the normal path with recovery assembled', { timeout: 10_000 }, async t => {
+  let claimed = 0;
+  const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => { if (recoverable) claimed += 1; return recoverable ? 'claimed' : 'idle'; },
+    tryRecover: async () => { throw new Error('must not recover'); } });
+  await r.run('recovery-other', { message: 'upstream unavailable', isTerminal: true });
+  await waitFor(() => r.errorRows('recovery-other').length === 1);
+  assert.equal(claimed, 0);
+  assert.equal(r.clientErrors('recovery-other').length, 1);
+  assert.deepEqual(r.git, ['start', 'abort']);
+});
+
+test('context recovery: an overflow error arriving after the Host settled a stop is not claimed', { timeout: 10_000 }, async t => {
+  let claims = 0;
+  const r = recoveryHarness(t, { claim: () => { claims += 1; return 'claimed'; }, tryRecover: async () => true });
+  await r.h.queue.enqueue('recovery-stopped', { clientId: 'stopped-input', text: 'long task' });
+  await waitFor(() => r.h.maker.sessions.get('recovery-stopped')?.sent.length === 1);
+  const session = r.h.maker.sessions.get('recovery-stopped');
+  await r.h.queue.stop('recovery-stopped');
+  session.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(claims, 0, 'the stopped turn is already settled; its late terminal is dropped before any claim');
+  assert.equal(r.clientErrors('recovery-stopped').length, 0);
+});
+
+// Host shutdown while a recovery is in flight: recoveries end as failures and write their rows first,
+// all together within RECOVERY_SHUTDOWN_WAIT_MS; then the tasks are stopped as before.
+test('context recovery: a recovery that ends within the shutdown limit writes its error row before the stop', { timeout: 10_000 }, async t => {
+  const order = [];
+  let fail;
+  const failed = new Promise(resolve => { fail = resolve; });
+  let started;
+  const recovering = new Promise(resolve => { started = resolve; });
+  const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'),
+    tryRecover: async () => { started(); await failed; return false; } },
+  { persistMessage: async (sessionId, input) => { if (input.role === 'error') order.push('error row'); } });
+  const session = await r.run('recovery-shutdown');
+  await recovering;
+  const abort = session.abort.bind(session);
+  session.abort = async () => { order.push('stop'); await abort(); };
+  const disposing = r.h.queue.dispose();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(order, [], 'the shutdown waits for the recovery before stopping');
+  fail();
+  await disposing;
+  assert.deepEqual(order, ['error row', 'stop']);
+});
+
+// A real migrated profile database: the Host's message store writes the rows and the desktop's
+// error-tail query reads them, as after a restart.
+async function recoveryDatabase(t) {
+  // The development build refuses to migrate a database it takes for the official shared profile
+  // (XDT_OFFICIAL_SHARED_PROFILE=1, set when this process runs inside a Cindy task; migrate.ts).
+  // This is a fixture profile, so the flag is cleared for this test only. t.after runs whether the
+  // test passes or fails, so the flag is always restored; node:test runs this file's tests one at
+  // a time, so no other test reads the cleared value.
+  const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  t.after(() => { if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile; });
+  const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-recovery-db-'));
+  const profile = path.join(root, 'profile');
+  mkdirSync(profile, { recursive: true });
+  configureHostOwner({ userDataDir: profile, ownerId: 'owner-recovery' });
+  configureAppDataDir(path.join(root, 'app-data'));
+  const layout = hostRuntimeLayout();
+  const opened = await openOwnerDatabase({ userDataDir: profile, ownerId: 'owner-recovery',
+    isPackaged: false, drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
+  const database = createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
+  setCurrentDbClient(database, 'owner-recovery');
+  t.after(async () => { clearCurrentDbClient(); await database.dispose(); rmSync(root, { recursive: true, force: true }); });
+  const createTask = id => new OwnerSessionStorage({ db: () => database }).create({ id, title: 'Recovery fixture',
+    agentKind: 'claude-code', model: 'stored-model', workDir: root });
+  const errorRows = id => opened.db.prepare("SELECT client_id FROM messages WHERE session_id = ? AND role = 'error'").all(id);
+  return { createTask, errorRows, persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: () => {} }) };
+}
+
+test('context recovery: at the shutdown limit the Host writes the running recovery\'s error row once; after restart the task is an unhandled error and takes new input', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  await db.createTask('recovery-timeout');
+  let started;
+  const recovering = new Promise(resolve => { started = resolve; });
+  const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'),
+    tryRecover: () => { started(); return new Promise(() => {}); } }, { persistMessage: db.persistMessage });
+  const session = await r.run('recovery-timeout');
+  await recovering;
+  await waitFor(() => Boolean(r.h.queue.projection('recovery-timeout').error));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let disposed = false;
+  const disposing = r.h.queue.dispose().then(() => { disposed = true; });
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(RECOVERY_SHUTDOWN_WAIT_MS - 1);
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(disposed, false, 'the shutdown waits up to the limit');
+  assert.equal(db.errorRows('recovery-timeout').length, 0);
+  t.mock.timers.tick(1);
+  await disposing;
+  t.mock.timers.reset();
+  assert.equal(session.aborted, 1, 'the task is stopped after the limit');
+  assert.equal(db.errorRows('recovery-timeout').length, 1, 'exactly one error row, on disk before the stop');
+  assert.equal(r.clientErrors('recovery-timeout').length, 0, 'not shown: the Host is closing');
+  assert.ok((await listErrorTailPendingRows()).some(row => row.sessionId === 'recovery-timeout'),
+    'after restart the task is listed as an unhandled error');
+  const restarted = createHarness({ persistMessage: db.persistMessage });
+  t.after(() => restarted.queue.dispose());
+  await restarted.queue.enqueue('recovery-timeout', { clientId: 'after-restart', text: 'continue' });
+  await waitFor(() => restarted.maker.getSession('recovery-timeout')?.sent.length === 1);
+});
+
+test('context recovery: a recovery that fails after the shutdown wrote its row writes no second row', { timeout: 10_000 }, async t => {
+  let started, fail;
+  const recovering = new Promise(resolve => { started = resolve; });
+  const late = new Promise(resolve => { fail = resolve; });
+  const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'),
+    tryRecover: async () => { started(); await late; return false; } });
+  await r.run('recovery-late');
+  await recovering;
+  await waitFor(() => Boolean(r.h.queue.projection('recovery-late').error));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const disposing = r.h.queue.dispose();
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(RECOVERY_SHUTDOWN_WAIT_MS);
+  await disposing;
+  t.mock.timers.reset();
+  assert.equal(r.errorRows('recovery-late').length, 1);
+  fail();
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(r.errorRows('recovery-late').length, 1, 'the late failure path writes no second row');
+  assert.equal(r.clientErrors('recovery-late').length, 0, 'and shows nothing');
+});
+
+test('context recovery: a recovery whose replay was accepted is neither awaited nor given an error row at shutdown', { timeout: 10_000 }, async t => {
+  let started;
+  const recovering = new Promise(resolve => { started = resolve; });
+  const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'),
+    tryRecover: () => {
+      // The factory calls onRebuilt once the replay is accepted, then may still await.
+      r.h.queue.noteContextRecoveryRebuilt('recovery-rebuilt');
+      started();
+      return new Promise(() => {});
+    } });
+  await r.run('recovery-rebuilt');
+  await recovering;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await r.h.queue.dispose();
+  assert.equal(r.errorRows('recovery-rebuilt').length, 0, 'no error row for a recovery that succeeded');
+});
+
+test('context recovery: two tasks recovering at shutdown share one wait limit', { timeout: 10_000 }, async t => {
+  const rollover = { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'), tryRecover: () => new Promise(() => {}) };
+  const r = recoveryHarness(t, rollover);
+  await r.run('recovery-a');
+  await r.run('recovery-b');
+  await waitFor(() => Boolean(r.h.queue.projection('recovery-a').error && r.h.queue.projection('recovery-b').error));
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let disposed = false;
+  const disposing = r.h.queue.dispose().then(() => { disposed = true; });
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(RECOVERY_SHUTDOWN_WAIT_MS - 1);
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(disposed, false);
+  t.mock.timers.tick(1);
+  await disposing;
+  assert.equal(disposed, true, 'both recoveries share the one limit, not one each');
 });

@@ -336,6 +336,8 @@ export function createInputQueue(deps) {
         getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
       }),
       isTurnRunning: executor.isRunning,
+      /** A context recovery's replay was accepted (the recovery factory's onRebuilt). */
+      noteContextRecoveryRebuilt: id => executor.noteRecoveryRebuilt(id),
       wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
       restoreSession: (id, check) => command(id, async () => {
         await check(); assertCurrent();
@@ -468,6 +470,9 @@ export function createInputQueue(deps) {
       },
       async dispose() {
         closing = true;
+        // Recoveries in flight end as failures and write their error rows first (bounded),
+        // before their tasks are stopped; a stop would read as the user's and drop the error.
+        await executor.drainRecoveriesForShutdown();
         const settled = await Promise.allSettled([...states.keys()].map(async id => {
           try { await stop(id); }
           finally {
