@@ -10129,14 +10129,28 @@
       }
     },
     "terminal": {
+      "closeFailed": "Impossible de fermer le terminal. L’onglet reste ouvert.",
+      "remote": {
+        "selectAgain": "Sélectionnez à nouveau la connexion dans la liste, ou modifiez l’hôte ou le nom d’utilisateur.",
+        "setupDescription": "Connectez-vous via un hôte ou un alias SSH. Cette connexion sera enregistrée pour cette cible.",
+        "host": "Hôte ou alias SSH",
+        "user": "Nom d’utilisateur",
+        "optional": "Facultatif",
+        "connect": "Se connecter au terminal",
+        "selectedHost": "Choisir une connexion SSH existante",
+        "targetUnavailable": "Impossible de vérifier le répertoire ou l’appartenance de la session distante",
+        "hostInvalid": "Saisissez un hôte ou un alias SSH valide sans espaces",
+        "userInvalid": "Saisissez un nom d’utilisateur valide sans espaces",
+        "editConnection": "Modifier la connexion"
+      },
       "defaultTitle": "Terminal",
       "processExited": "Processus terminé (code {{code}})",
       "processKilled": "Processus tué (signal {{signal}})",
       "restart": "Redémarrer",
       "shellNotFound": "Shell introuvable : {{detail}}",
       "spawnFailed": "Impossible de démarrer le terminal : {{detail}}",
-      "remoteUnavailableTitle": "Indisponible pour les sessions à distance",
-      "remoteUnavailableDescription": "Le terminal n'est actuellement disponible que pour les sessions exécutées sur cet appareil."
+      "remoteUnavailableTitle": "Vérification de l’emplacement du terminal",
+      "remoteUnavailableDescription": "En attente de confirmation de l’emplacement de cette session."
     },
     "review": {
       "turn": {

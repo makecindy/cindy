@@ -736,6 +736,7 @@ import { registerSidebarSettingsIpc, loadSidebarSettingsSnapshot, setLocalMainVi
 import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibility-owner-claim.js';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
+import { createRemoteTerminalRuntime } from './terminal/remoteTerminalRuntime';
 import { registerLocalThemesIpc } from './local-themes/register';
 import { registerCindyFileIpc } from './cindy-files/register';
 import {
@@ -10562,6 +10563,7 @@ app.on('ready', async () => {
   //   - 主窗销毁(app 退出)→ fallback 解析不到活 webContents,PtyManager 回落 dispose,
   //     无需在这里手动 wire shutdown 钩子。
   registerTerminalHandlers({
+    remote: createRemoteTerminalRuntime(),
     getFallbackOwner: () =>
       mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef.webContents : null,
   });

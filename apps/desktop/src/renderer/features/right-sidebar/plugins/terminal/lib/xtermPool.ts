@@ -26,6 +26,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SerializeAddon } from '@xterm/addon-serialize';
 
 import { createLogger } from '@/lib/logger';
+import { registerClosing, unregisterClosing } from '../../../lib/tabClosingSignal';
 import { extractIpcError } from '@/utils/ipcError';
 import {
   DEFAULT_APPEARANCE_SETTINGS,
@@ -65,6 +66,11 @@ const DEFAULT_OPTIONS: ITerminalOptions = {
   },
 };
 
+/** Read existing close context without creating a terminal for an unmounted tab. */
+export function getXterm(tabId: string) {
+  return pool.get(tabId) ?? snapshots.get(tabId);
+}
+
 /** 获取或创建某个 tabId 的 xterm 实例。重复调用同 id 返回同一个。 */
 export function getOrCreateXterm(tabId: string): XtermEntry {
   detachedStreams.get(tabId)?.();
@@ -89,11 +95,26 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
     fitAddon,
     lastSize: { cols: 80, rows: 24 },
     ptyAttached: false,
+    closing: false,
+    pendingTransitions: 0,
+    closeCancelledListeners: new Set(),
   };
   pool.set(tabId, entry);
+  const registeredEntry = entry;
+  registerClosing(tabId, (closing) => {
+    const wasClosing = registeredEntry.closing;
+    registeredEntry.closing = closing;
+    if (wasClosing && !closing) {
+      registeredEntry.closeCancelledListeners.forEach(listener => listener());
+    }
+  }, () => disposeXterm(tabId));
   const snapshot = snapshots.get(tabId);
   if (snapshot) {
     snapshots.delete(tabId);
+    // Continue the snapshot's close lifetime, including native disposal in flight.
+    entry.closeCancelledListeners = snapshot.closeCancelledListeners;
+    entry.remoteContext = snapshot.remoteContext;
+    entry.remoteDraft = snapshot.remoteDraft;
     entry.lastSize = snapshot.lastSize;
     entry.ptyAttached = snapshot.ptyAttached;
     terminal.resize(snapshot.lastSize.cols, snapshot.lastSize.rows);
@@ -138,7 +159,7 @@ export function needsXtermAttach(tabId: string): boolean {
 }
 
 /** Clear the old exit before IPC so an unmount keeps receiving the new shell's events. */
-export function restartXterm(params: TerminalCreateParams): Promise<TerminalCreateResult> {
+export function restartXterm(params: TerminalCreateParams, canRetry = () => true): Promise<TerminalCreateResult> {
   const entry = pool.get(params.id);
   return transitionXterm(params.id, async () => {
     try {
@@ -146,7 +167,7 @@ export function restartXterm(params: TerminalCreateParams): Promise<TerminalCrea
     } catch (error) {
       // A failed native restart can already have disposed the old PTY. Do not
       // reuse its attachment marker or recreate a tab closed while IPC waited.
-      if (!entry || pool.get(params.id) !== entry) throw error;
+      if (!entry || pool.get(params.id) !== entry || entry.closing) throw error;
       const code = extractIpcError(error)?.code;
       if (code === 'TERMINAL_SPAWN_FAILED' || code === 'TERMINAL_SHELL_NOT_FOUND'
         || code === 'TERMINAL_NOT_FOUND' || code === 'TERMINAL_ALREADY_DISPOSED') {
@@ -155,6 +176,7 @@ export function restartXterm(params: TerminalCreateParams): Promise<TerminalCrea
       if (code !== 'TERMINAL_NOT_FOUND' && code !== 'TERMINAL_ALREADY_DISPOSED') throw error;
       // Retry is an explicit user action. Only a confirmed missing session
       // falls back to create; a still-running PTY is never restarted implicitly.
+      if (params.remote || !canRetry()) throw error;
       return window.electronAPI.terminal.create(params);
     }
   });
@@ -164,14 +186,27 @@ export function attachXterm(params: TerminalCreateParams): Promise<TerminalCreat
   return transitionXterm(params.id, () => window.electronAPI.terminal.create(params));
 }
 
-async function transitionXterm(tabId: string, invoke: () => Promise<TerminalCreateResult>): Promise<TerminalCreateResult> {
+/** Edit uses the same transition lifetime as attach/restart; commit intent only on release. */
+export function releaseXtermConnection(tabId: string, onReleased: () => void): Promise<void> {
+  return transitionXterm(tabId, () => window.electronAPI.terminal.dispose(tabId), entry => {
+    entry.ptyAttached = false;
+    if (!entry.closing) onReleased();
+  });
+}
+
+async function transitionXterm<T>(
+  tabId: string,
+  invoke: () => Promise<T>,
+  onSuccess = (entry: XtermEntry) => { if (!entry.closing) entry.ptyAttached = true; },
+): Promise<T> {
   const entry = pool.get(tabId);
   const previousExit = getXtermExit(tabId);
+  if (entry) entry.pendingTransitions = (entry.pendingTransitions ?? 0) + 1;
   pendingSuspensions.get(tabId)?.cancel();
   setXtermExit(tabId, null);
   try {
     const result = await invoke();
-    if (entry && pool.get(tabId) === entry) entry.ptyAttached = true;
+    if (entry && pool.get(tabId) === entry) onSuccess(entry);
     return result;
   } catch (error) {
     // Closing the tab or a newer native exit must win over this stale request.
@@ -181,27 +216,38 @@ async function transitionXterm(tabId: string, invoke: () => Promise<TerminalCrea
       if (previousExit && detachedStreams.has(tabId)) detachXterm(tabId);
     }
     throw error;
+  } finally {
+    if (entry) {
+      entry.pendingTransitions = (entry.pendingTransitions ?? 1) - 1;
+      if (pool.get(tabId) === entry && entry.pendingTransitions === 0 && detachedStreams.has(tabId) && getXtermExit(tabId)) {
+        detachXterm(tabId);
+      }
+    }
   }
 }
 
 /** Keep receiving output while a running tab's body is unmounted. */
 export function detachXterm(tabId: string): void {
   detachedStreams.get(tabId)?.();
-  if (!pool.has(tabId)) return;
-  if (getXtermExit(tabId)) {
+  const entry = pool.get(tabId);
+  if (!entry) return;
+  if (getXtermExit(tabId) && !entry.pendingTransitions) {
     void suspendExitedXterm(tabId);
     return;
   }
+  let subscribed = true;
   const offData = window.electronAPI.terminal.onData((event: TerminalDataEvent) => {
-    if (event.id === tabId) pool.get(tabId)?.terminal.write(event.chunk);
+    if (subscribed && pool.get(tabId) === entry && event.id === tabId) entry.terminal.write(event.chunk);
   });
   const offExit = window.electronAPI.terminal.onExit((event: TerminalExitEvent) => {
-    if (event.id !== tabId) return;
+    if (!subscribed || pool.get(tabId) !== entry || event.id !== tabId) return;
     setXtermExit(tabId, event.exit);
+    if (pool.get(tabId)?.pendingTransitions) return;
     stop();
     void suspendExitedXterm(tabId);
   });
   const stop = () => {
+    subscribed = false;
     offData();
     offExit();
     detachedStreams.delete(tabId);
@@ -212,7 +258,7 @@ export function detachXterm(tabId: string): void {
 /** Only call for an exited, hidden terminal. Keep ANSI history, release its renderer. */
 export function suspendExitedXterm(tabId: string): Promise<boolean> {
   const entry = pool.get(tabId);
-  if (!entry) return Promise.resolve(false);
+  if (!entry || entry.pendingTransitions) return Promise.resolve(false);
   pendingSuspensions.get(tabId)?.cancel();
   return new Promise((resolve) => {
     const request = { cancel() { pendingSuspensions.delete(tabId); resolve(false); } };
@@ -224,6 +270,7 @@ export function suspendExitedXterm(tabId: string): Promise<boolean> {
         return;
       }
       pendingSuspensions.delete(tabId);
+      if (entry.closing || entry.pendingTransitions) { resolve(false); return; }
       try {
         snapshots.set(tabId, {
           // Store compact UTF-8 bytes, not the serializer's per-cell string ropes.
@@ -231,6 +278,10 @@ export function suspendExitedXterm(tabId: string): Promise<boolean> {
           lastSize: { cols: entry.terminal.cols, rows: entry.terminal.rows },
           ptyAttached: entry.ptyAttached,
           viewportY: entry.terminal.buffer.active.viewportY,
+          remoteContext: entry.remoteContext,
+          remoteDraft: entry.remoteDraft,
+          closing: false,
+          closeCancelledListeners: new Set(),
         });
       } catch {
         // Retain the live view if serialization fails; never discard history.
@@ -239,6 +290,9 @@ export function suspendExitedXterm(tabId: string): Promise<boolean> {
         return;
       }
       pool.delete(tabId);
+      entry.closeCancelledListeners.clear();
+      const snapshot = snapshots.get(tabId)!;
+      registerClosing(tabId, closing => { snapshot.closing = closing; }, () => disposeXterm(tabId));
       try { entry.terminal.dispose(); } catch { /* Snapshot remains recoverable. */ }
       resolve(true);
     });
@@ -266,15 +320,18 @@ export function openTerminalExternalLink(_event: MouseEvent, uri: string): void 
     });
 }
 
-/** 仅供 plugin.onBeforeClose 调用：真正销毁实例 + 释放 GPU/DOM 资源。 */
+/** Committed tab removal: discard the draft and release renderer resources. */
 export function disposeXterm(tabId: string): void {
   detachedStreams.get(tabId)?.();
   exits.delete(tabId);
   snapshots.delete(tabId);
   pendingSuspensions.get(tabId)?.cancel();
+  unregisterClosing(tabId);
   const entry = pool.get(tabId);
   if (!entry) return;
   pool.delete(tabId);
+  entry.remoteDraft = undefined;
+  entry.closeCancelledListeners.clear();
   try {
     entry.terminal.dispose();
   } catch {

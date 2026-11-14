@@ -37,6 +37,27 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 vi.mock('../plugins', () => ({}));
+const terminalEntry = vi.hoisted(() => ({
+  terminal: {
+    options: { fontFamily: '', fontSize: 13 }, cols: 80, rows: 24,
+    element: undefined,
+    open: vi.fn(), onData: vi.fn(() => ({ dispose: vi.fn() })),
+    write: vi.fn(), focus: vi.fn(),
+  },
+  fitAddon: { fit: vi.fn() }, lastSize: { cols: 80, rows: 24 }, ptyAttached: false,
+  closing: false, closeCancelledListeners: new Set<() => void>(), pendingTransitions: 0,
+}));
+vi.mock('../plugins/terminal/lib/xtermPool', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../plugins/terminal/lib/xtermPool')>()),
+  // Keep the production attachment/exit bookkeeping; only the xterm DOM is fake.
+  detachXterm: vi.fn(),
+  getOrCreateXterm: (tabId: string) => {
+    xtermEntries.set(tabId, terminalEntry as unknown as XtermEntry);
+    return terminalEntry;
+  },
+}));
+import { xtermEntries, type XtermEntry } from '../plugins/terminal/lib/xtermEntries';
+import { __resetPoolForTesting } from '../plugins/terminal/lib/xtermPool';
 
 const installedGhostsMock = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
@@ -75,7 +96,7 @@ import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
 import type { WebBrowserState } from '../plugins/web-browser';
 import type { TabKindBodyProps } from '../types';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
-import { registerTabKind, unregisterTabKind } from '../registry';
+import { getTabKind, registerTabKind, unregisterTabKind } from '../registry';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
 import { _resetPopupRouterForTests } from '../lib/popupRouter';
 import { _resetNativePopupTabsForTests } from '../lib/nativePopupTabs';
@@ -292,8 +313,11 @@ function dispatchShortcut(
 
 describe('RightSidebarShell empty state', () => {
   let tabsIpc: RightSidebarTabsIpcStub;
+  let terminalPlugin: ReturnType<typeof getTabKind>;
 
   beforeEach(() => {
+    __resetPoolForTesting();
+    terminalEntry.pendingTransitions = 0;
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
       value: vi.fn(),
@@ -324,6 +348,102 @@ describe('RightSidebarShell empty state', () => {
     window.localStorage.clear();
     installedGhostsMock.list = [];
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  // Real Shell -> hydrateTabState -> terminal body -> patchTabState regression:
+  // repeated render-time hydration used to erase created/exited patches. A stale
+  // renderer marker must still require a fresh attach after restart. Unit tier;
+  // minimal input is one persisted terminal followed by a live exit event.
+  // PR8881 discussion_r4476561074: the existing hydration case misses a failed
+  // created=true upsert. One SQLITE_BUSY rollback must not reattach a live body
+  // or write created=true again. Real Shell/host/store; only IPC and xterm are
+  // faked, in the unit tier. Defer rejection until the optimistic render commits.
+  // PR8881 discussion_r4476762727: continue after DB recovery through a real
+  // exit and explicit restart. PR8881 discussion_r4535095939 adds failure of
+  // that exit write too: runtime attachment must still permit a real restart.
+  it.each([
+    { busy: false, remoteHostId: null, busyExit: false },
+    { busy: true, remoteHostId: null, busyExit: false },
+    { busy: true, remoteHostId: 'ssh-host', busyExit: false },
+    { busy: true, remoteHostId: 'ssh-host', busyExit: true },
+  ])('preserves terminal lifecycle through hydration ($busy, $remoteHostId, $busyExit)', async ({ busy, remoteHostId, busyExit }) => {
+    await import('../plugins/terminal');
+    terminalPlugin ??= getTabKind('terminal');
+    if (!getTabKind('terminal')) registerTabKind(terminalPlugin!);
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1; });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    let exitListener!: (event: { id: string; exit: { code: number | null; signal: string | null } }) => void;
+    const create = vi.fn(async () => ({ shellId: 'sh', shellDisplayName: 'sh', pid: 1 }));
+    const restart = vi.fn(async () => ({ shellId: 'sh', shellDisplayName: 'sh', pid: 2 }));
+    const describeRemote = vi.fn();
+    const exitListeners = new Set<typeof exitListener>();
+    Object.assign(window.electronAPI, { terminal: {
+      create, restart, describeRemote, dispose: vi.fn(async () => undefined), write: vi.fn(async () => undefined), resize: vi.fn(async () => undefined),
+      onData: vi.fn(() => vi.fn()),
+      onExit: vi.fn((listener: typeof exitListener) => {
+        exitListener = listener;
+        exitListeners.add(listener);
+        return () => { exitListeners.delete(listener); };
+      }),
+    } });
+    terminalEntry.ptyAttached = false;
+    let rejectUpsert!: (error: Error) => void;
+    if (busy) tabsIpc.upsert.mockImplementationOnce(() => new Promise((_, reject) => { rejectUpsert = reject; }));
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'terminal-live', kind: 'terminal', state: { rendererInstanceId: 'previous-renderer', created: !remoteHostId, exited: { code: 255, signal: null } } }],
+      activeTabId: 'terminal-live',
+    });
+    try {
+      const props = {
+        sessionId: 'terminal-task', workdir: '/workspace', remoteHostId, deviceLinkDeviceId: null,
+        isMac: true, unifiedTopbar: true,
+      };
+      const view = render(createElement(RightSidebarShell, props));
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect((getBucket('terminal-task').tabs[0].state as { created: boolean }).created).toBe(true));
+      if (busy) {
+        expect(tabsIpc.upsert).toHaveBeenCalledOnce();
+        await act(async () => { rejectUpsert(new Error('SQLITE_BUSY: database is locked')); });
+        expect(create).toHaveBeenCalledOnce();
+        expect(tabsIpc.upsert).toHaveBeenCalledOnce();
+        // Host hydration turns this restored old-renderer marker into false.
+        expect(getBucket('terminal-task').tabs[0].state).toMatchObject({
+          rendererInstanceId: 'previous-renderer', created: !remoteHostId,
+        });
+        expect(terminalEntry.ptyAttached).toBe(true);
+      }
+      expect(create).toHaveBeenCalledWith(expect.objectContaining(remoteHostId
+        ? { remote: { sessionId: 'terminal-task' } }
+        : { id: 'terminal-live' }));
+      const writesBeforeExit = tabsIpc.upsert.mock.calls.length;
+      act(() => exitListener({ id: 'another-terminal', exit: { code: 99, signal: null } }));
+      expect(tabsIpc.upsert).toHaveBeenCalledTimes(writesBeforeExit);
+      if (busyExit) tabsIpc.upsert.mockRejectedValue(new Error('SQLITE_BUSY: database is locked'));
+      await act(async () => exitListener({ id: 'terminal-live', exit: { code: 17, signal: null } }));
+      if (busyExit) expect(getBucket('terminal-task').tabs[0].state).toMatchObject({ created: false });
+      expect(await screen.findByText('rightSidebar.terminal.processExited')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.terminal.restart' }));
+      await waitFor(() => expect(restart).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.queryByText('rightSidebar.terminal.processExited')).toBeNull());
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(describeRemote).not.toHaveBeenCalled();
+      // A changed host context replaces the subscription. A queued callback
+      // from the old subscription must not stamp the current renderer identity.
+      const staleExit = exitListener;
+      view.rerender(createElement(RightSidebarShell, { ...props, workdir: '/workspace/next' }));
+      expect(exitListeners.size).toBe(1);
+      expect(exitListeners.has(staleExit)).toBe(false);
+      const writesAfterRestart = tabsIpc.upsert.mock.calls.length;
+      act(() => staleExit({ id: 'terminal-live', exit: { code: 99, signal: null } }));
+      expect(tabsIpc.upsert).toHaveBeenCalledTimes(writesAfterRestart);
+      expect(screen.queryByText('rightSidebar.terminal.processExited')).toBeNull();
+    } finally {
+      cleanup();
+      expect(exitListeners.size).toBe(0);
+      unregisterTabKind('terminal');
+      vi.unstubAllGlobals();
+    }
   });
 
   // 测试价值

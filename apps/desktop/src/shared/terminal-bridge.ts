@@ -25,6 +25,35 @@ export interface AvailableShell {
   isAutoDetectTarget: boolean;
 }
 
+/** Task location; omitted deviceId means a task stored on this desktop. */
+export interface RemoteTerminalContext {
+  sessionId: string;
+  deviceId?: string | null;
+}
+
+/** Prepare a tab's launch; an explicit connection submits and saves its non-secret binding. */
+export interface TerminalDescribeRemoteParams extends RemoteTerminalContext {
+  id: string;
+  connection?: RemoteTerminalConnection;
+}
+
+/** Non-secret OpenSSH settings. Authentication happens inside the terminal. */
+export interface RemoteTerminalConnection {
+  host: string;
+  user?: string;
+  port?: number;
+  /** Opaque main-issued reference; credential paths never cross this bridge. */
+  hostRef?: string;
+}
+
+/** Main resolves the task's directory and suggests controller-local SSH aliases. */
+export interface RemoteTerminalDescription {
+  context: RemoteTerminalContext;
+  target: { key: string; label: string; cwd: string };
+  connection: RemoteTerminalConnection | null;
+  candidates: RemoteTerminalConnection[];
+}
+
 export interface TerminalCreateParams {
   /** 跟 RSB tabId 一致（1:1 关系）。 */
   id: string;
@@ -33,6 +62,8 @@ export interface TerminalCreateParams {
   rows?: number;
   /** Settings 用户偏好；不传走 main 端的 GET_DEFAULT_SHELL_PREF。 */
   shellPref?: ShellId | null;
+  /** Uses the task's authoritative remote cwd; cwd above is never used locally. */
+  remote?: RemoteTerminalContext & { ticket?: string };
 }
 
 export interface TerminalCreateResult {
@@ -60,10 +91,14 @@ export interface TerminalExitEvent {
 
 /** preload 暴露给 renderer 的 terminal API 形状。 */
 export interface TerminalBridge {
+  /** Async preparation; explicit connection saves a binding. Tickets expire after 30 seconds. */
+  describeRemote(params: TerminalDescribeRemoteParams): Promise<RemoteTerminalDescription & { ticket?: string }>;
+  /** Main attaches by id and original remote context, or consumes this window/tab's launch ticket. */
   create(params: TerminalCreateParams): Promise<TerminalCreateResult>;
   write(id: string, data: string): Promise<void>;
   resize(id: string, cols: number, rows: number): Promise<void>;
-  dispose(id: string): Promise<void>;
+  /** Closing from another window requires the original task/device context. */
+  dispose(id: string, context?: RemoteTerminalContext): Promise<void>;
   restart(id: string): Promise<TerminalCreateResult>;
   listAvailableShells(): Promise<AvailableShell[]>;
   getDefaultShellPref(): Promise<ShellId>;

@@ -10129,14 +10129,28 @@
       }
     },
     "terminal": {
+      "closeFailed": "Não foi possível fechar o terminal. O separador continua aberto.",
+      "remote": {
+        "selectAgain": "Selecione novamente a ligação na lista ou altere o anfitrião ou o nome de utilizador.",
+        "setupDescription": "Ligue através de um anfitrião ou alias SSH. Esta ligação será guardada para este destino.",
+        "host": "Anfitrião ou alias SSH",
+        "user": "Nome de utilizador",
+        "optional": "Opcional",
+        "connect": "Ligar ao terminal",
+        "selectedHost": "Escolher uma ligação SSH existente",
+        "targetUnavailable": "Não foi possível confirmar o diretório ou a pertença da sessão remota",
+        "hostInvalid": "Introduza um anfitrião ou alias SSH válido sem espaços",
+        "userInvalid": "Introduza um nome de utilizador válido sem espaços",
+        "editConnection": "Editar ligação"
+      },
       "defaultTitle": "Terminal",
       "processExited": "O processo terminou (código {{code}})",
       "processKilled": "O processo foi terminado (sinal {{signal}})",
       "restart": "Reiniciar",
       "shellNotFound": "Shell não encontrada: {{detail}}",
       "spawnFailed": "Falha ao iniciar o terminal: {{detail}}",
-      "remoteUnavailableTitle": "Indisponível para sessões remotas",
-      "remoteUnavailableDescription": "O terminal está atualmente disponível apenas para sessões em execução neste dispositivo."
+      "remoteUnavailableTitle": "A verificar a localização do terminal",
+      "remoteUnavailableDescription": "A aguardar a confirmação de onde esta sessão é executada."
     },
     "review": {
       "turn": {

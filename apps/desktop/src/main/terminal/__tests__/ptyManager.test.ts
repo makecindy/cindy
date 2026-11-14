@@ -239,12 +239,43 @@ describe('PtyManager.create', () => {
     expect(dataPayloads[0].target).toBe(ownerNew);
   });
 
+  // Limit new SSH exit handling to remote launches; local semantics stay unchanged.
+  it('仅 SSH 将 signal=0 视为正常退出，保留本地历史信号行为', () => {
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'local', cwd: '/tmp', owner });
+    lastSpawn!.__triggerExit({ exitCode: 0, signal: 0 });
+    mgr.create({ id: 'remote', cwd: '/tmp', owner, launch: { id: 'sh', command: 'ssh', args: ['example'], displayName: 'SSH' } });
+    lastSpawn!.__triggerExit({ exitCode: 0, signal: 0 });
+    expect(exitPayloads.map(({ payload }) => payload)).toEqual([
+      { id: 'local', exit: { code: 0, signal: '0' } },
+      { id: 'remote', exit: { code: 0, signal: null } },
+    ]);
+  });
+
   it('同 id 已 exit 时再 create 抛错(需走显式 restart)', () => {
     const mgr = makeManager();
     const owner = makeFakeWebContents() as unknown as WebContents;
     mgr.create({ id: 't1', cwd: '/tmp', owner });
     lastSpawn!.__triggerExit({ exitCode: 0 });
     expect(() => mgr.create({ id: 't1', cwd: '/tmp', owner })).toThrow(/already exists/);
+  });
+
+  // A new renderer has no exit snapshot. Idempotent attach must restore that
+  // observable state while leaving shell creation to an explicit restart (unit).
+  // Standalone file wall time: 1.11s on Node 22.22.3 / macOS arm64.
+  it('SSH 同 id 已 exit 时接管并补发退出状态，显式 restart 前不新建进程', () => {
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    const next = makeFakeWebContents() as unknown as WebContents;
+    const first = mgr.create({ id: 't1', cwd: '/tmp', owner, launch: { id: 'sh', command: 'ssh', args: ['example'], displayName: 'SSH' } });
+    lastSpawn!.__triggerExit({ exitCode: 255, signal: 15 });
+    exitPayloads = [];
+    expect(mgr.create({ id: 't1', cwd: '/other', owner: next })).toEqual(first);
+    expect(allSpawns).toHaveLength(1);
+    expect(exitPayloads).toEqual([{ target: next, payload: { id: 't1', exit: { code: 255, signal: '15' } } }]);
+    mgr.write('t1', 'ignored');
+    expect(lastSpawn!.__writes).toEqual([]);
   });
 });
 

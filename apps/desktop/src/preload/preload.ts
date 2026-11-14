@@ -1,6 +1,7 @@
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
+import type { RemoteTerminalContext, RemoteTerminalDescription, TerminalDescribeRemoteParams } from '../shared/terminal-bridge';
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { createLiveScreenEmbedBridge, createLiveScreenRelayBridge } from './liveScreenEmbed';
@@ -1416,11 +1417,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // - listAvailableShells / get|setDefaultShellPref: Settings 个性化下拉用
   // - onData / onExit: main → renderer 推送(fanOut 内部一次绑定多订阅,每个 tab 自己按 id filter)
   terminal: {
+    describeRemote: (params: TerminalDescribeRemoteParams): Promise<RemoteTerminalDescription & { ticket?: string }> => ipcRenderer.invoke('terminal:describe-remote', params),
     create: (params: unknown) => ipcRenderer.invoke('terminal:create', params),
     write: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),
     resize: (id: string, cols: number, rows: number) =>
       ipcRenderer.invoke('terminal:resize', id, cols, rows),
-    dispose: (id: string) => ipcRenderer.invoke('terminal:dispose', id),
+    dispose: (id: string, context?: RemoteTerminalContext) => ipcRenderer.invoke('terminal:dispose', id, context),
     restart: (id: string) => ipcRenderer.invoke('terminal:restart', id),
     listAvailableShells: () => ipcRenderer.invoke('terminal:list-available-shells'),
     getDefaultShellPref: () => ipcRenderer.invoke('terminal:get-default-shell-pref'),

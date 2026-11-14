@@ -10129,14 +10129,28 @@
       }
     },
     "terminal": {
+      "closeFailed": "Não foi possível fechar o terminal. A aba continua aberta.",
+      "remote": {
+        "selectAgain": "Selecione a conexão novamente na lista ou altere o host ou o nome de usuário.",
+        "setupDescription": "Conecte usando um host ou alias SSH. Esta conexão será salva para este destino.",
+        "host": "Host ou alias SSH",
+        "user": "Nome de usuário",
+        "optional": "Opcional",
+        "connect": "Conectar ao terminal",
+        "selectedHost": "Escolher uma conexão SSH existente",
+        "targetUnavailable": "Não foi possível confirmar o diretório ou a titularidade da sessão remota",
+        "hostInvalid": "Insira um host ou alias SSH válido sem espaços",
+        "userInvalid": "Insira um nome de usuário válido sem espaços",
+        "editConnection": "Editar conexão"
+      },
       "defaultTitle": "Terminal",
       "processExited": "Processo encerrado (código {{code}})",
       "processKilled": "Processo finalizado (sinal {{signal}})",
       "restart": "Reiniciar",
       "shellNotFound": "Shell não encontrado: {{detail}}",
       "spawnFailed": "Falha ao iniciar o terminal: {{detail}}",
-      "remoteUnavailableTitle": "Indisponível para sessões remotas",
-      "remoteUnavailableDescription": "O terminal está disponível no momento apenas para sessões em execução neste dispositivo."
+      "remoteUnavailableTitle": "Verificando a localização do terminal",
+      "remoteUnavailableDescription": "Aguardando a confirmação de onde esta sessão é executada."
     },
     "review": {
       "turn": {

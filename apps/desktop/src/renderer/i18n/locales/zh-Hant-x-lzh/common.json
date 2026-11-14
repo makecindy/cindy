@@ -10013,14 +10013,28 @@
       }
     },
     "terminal": {
+      "closeFailed": "終端未能關閉，頁籤仍留",
+      "remote": {
+        "selectAgain": "請於列表重選連線，或改主機、用戶名而後再連",
+        "setupDescription": "以 SSH 主機或別名連線，存之以供同一目標沿用。",
+        "host": "SSH 主機或別名",
+        "user": "使用者名稱",
+        "optional": "選填",
+        "connect": "連線至終端",
+        "selectedHost": "選既有 SSH 連線",
+        "targetUnavailable": "無法確認遠端任務的目錄或歸屬",
+        "hostInvalid": "請輸入不含空格的有效 SSH 主機或別名",
+        "userInvalid": "請輸入不含空格的有效使用者名稱",
+        "editConnection": "修改連線"
+      },
       "defaultTitle": "終端",
       "processExited": "處理程序已退（退出碼 {{code}}）",
       "processKilled": "處理程序已止（訊號 {{signal}}）",
       "restart": "復啟",
       "shellNotFound": "未得可用之 shell：{{detail}}",
       "spawnFailed": "終端不能啟：{{detail}}",
-      "remoteUnavailableTitle": "遠端差事暫不可用",
-      "remoteUnavailableDescription": "終端今僅適於此裝置上所行之本機差事。"
+      "remoteUnavailableTitle": "正確認終端位置",
+      "remoteUnavailableDescription": "正確認此差事於何機執行。"
     },
     "review": {
       "turn": {

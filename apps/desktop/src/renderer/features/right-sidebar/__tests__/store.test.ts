@@ -20,6 +20,7 @@ import {
   markPopupSpawnedTab,
 } from '../lib/popupTabs';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
+import { markClosing, registerClosing, unregisterClosing } from '../lib/tabClosingSignal';
 import type { TabKindPlugin } from '../types';
 
 // device-link origin 注册表桩:'remote-' 前缀的 sessionId 视为远程会话。
@@ -100,6 +101,27 @@ describe('RSB store', () => {
     _resetTabKindRegistry();
     _resetPopupTabsForTests();
     vi.restoreAllMocks();
+  });
+
+  it('releases terminal closing signals after a failed close rolls the tab back', async () => {
+    registerTabKind({
+      kind: 'terminal',
+      menu: { kind: 'terminal', labelKey: 'terminal', icon: (() => null) as never, order: 1, enabled: true },
+      TabPillTitle: () => null, TabBody: () => null, defaultState: () => ({}),
+      onBeforeClose: async (_state, ctx) => { markClosing(ctx.tabId); },
+    } as TabKindPlugin);
+    await store.ensureHydrated('s1');
+    const tab = await store.addTab('s1', 'terminal');
+    ipc.close.mockRejectedValueOnce(new Error('db down'));
+    let closing = false;
+    registerClosing(tab.id, (value) => { closing = value; });
+    try {
+      await expect(store.closeTab('s1', tab.id)).rejects.toThrow('db down');
+      expect(closing).toBe(false);
+      expect(store.getBucket('s1').tabs.some((item) => item.id === tab.id)).toBe(true);
+    } finally {
+      unregisterClosing(tab.id);
+    }
   });
 
   describe('getBucket', () => {
@@ -596,6 +618,10 @@ describe('RSB store', () => {
     });
 
     it('创建失败时并发的 closeTab 不发 close,不留幽灵 tab', async () => {
+      // PRRT_kwDOTgdRUs62sDlx / unit: orphan cleanup uses the same committed
+      // removal notification, only after its IPC settles (normal-close tests miss it).
+      let finishCleanup!: () => void;
+      ipc.close.mockImplementationOnce(() => new Promise<void>(resolve => { finishCleanup = resolve; }));
       // 创建失败 = DB 里从来没有这行,addTab 已把它从 cache 回滚掉。此时若照样发
       // close 必然 NOT_FOUND,closeTab 的回滚分支会把这个幽灵 tab 写回 cache。
       let rejectUpsert: ((err: Error) => void) | null = null;
@@ -617,7 +643,13 @@ describe('RSB store', () => {
 
       rejectUpsert!(new Error('db down'));
       await expect(pendingAdd).rejects.toThrow('db down');
+      await vi.waitFor(() => expect(ipc.close).toHaveBeenCalledWith({ id: createdId }));
+      const committed = vi.fn();
+      registerClosing(createdId, () => undefined, committed);
+      expect(committed).not.toHaveBeenCalled();
+      finishCleanup();
       await expect(pendingClose).resolves.toBeUndefined();
+      expect(committed).toHaveBeenCalledOnce();
 
       // best-effort close(state 写队列同样走 upsert,可能反倒把行写进 DB);
       // 它必须**吞掉**失败,不能像正常分支那样回滚出一个幽灵 tab。

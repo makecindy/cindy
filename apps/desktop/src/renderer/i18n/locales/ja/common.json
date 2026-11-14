@@ -10013,14 +10013,28 @@
       }
     },
     "terminal": {
+      "closeFailed": "ターミナルを閉じられませんでした。タブは開いたままです。",
+      "remote": {
+        "selectAgain": "一覧から接続先を選び直すか、ホストまたはユーザー名を変更してから接続してください。",
+        "setupDescription": "SSH ホストまたはエイリアスで接続します。この接続設定は同じ接続先で再利用されます。",
+        "host": "SSH ホストまたはエイリアス",
+        "user": "ユーザー名",
+        "optional": "任意",
+        "connect": "ターミナルに接続",
+        "selectedHost": "既存の SSH 接続を選択",
+        "targetUnavailable": "リモートセッションのディレクトリまたは帰属を確認できません",
+        "hostInvalid": "スペースを含まない有効な SSH ホストまたはエイリアスを入力してください",
+        "userInvalid": "スペースを含まない有効なユーザー名を入力してください",
+        "editConnection": "接続を編集"
+      },
       "defaultTitle": "ターミナル",
       "processExited": "プロセスが終了しました (コード {{code}})",
       "processKilled": "プロセスが強制終了されました (シグナル {{signal}})",
       "restart": "再起動",
       "shellNotFound": "シェルが見つかりません: {{detail}}",
       "spawnFailed": "ターミナルを起動できません: {{detail}}",
-      "remoteUnavailableTitle": "リモートセッションでは利用できません",
-      "remoteUnavailableDescription": "ターミナルは現在、このデバイスでローカル実行されるセッションでのみ利用できます。"
+      "remoteUnavailableTitle": "ターミナルの場所を確認中",
+      "remoteUnavailableDescription": "このセッションの実行場所を確認しています。"
     },
     "review": {
       "turn": {
