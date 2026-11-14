@@ -1,17 +1,23 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { providerShareGuestPeer, type ProviderShareOwned } from '@cindy/device-link';
 const f = vi.hoisted(() => ({
-  endpoint: 'https://fake.invalid', usage: null as any, connected: true, scope: 'owner', self: 'owner-pc', remote: true, budget: false,
-  invoke: vi.fn(), netFetch: vi.fn(), log: { warn: vi.fn(), error: vi.fn(), debug: vi.fn() }, request: vi.fn(), remember: vi.fn(), reconcile: vi.fn(), apply: vi.fn(), invalidate: vi.fn(),
+  root: '', endpoint: 'https://fake.invalid', usage: null as any, connected: true, scope: 'owner', self: 'owner-pc', remote: true, budget: false,
+  invoke: vi.fn(), netFetch: vi.fn(), log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }, request: vi.fn(), remember: vi.fn(), reconcile: vi.fn(), apply: vi.fn(), invalidate: vi.fn(),
   members: [] as any[], leases: [] as any[],
 }));
 vi.mock('electron', () => ({ net: { fetch: (...args: any[]) => f.netFetch(...args) } }));
 vi.mock('../../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'zh-CN' }));
 vi.mock('../../logger.js', () => ({ createLogger: () => f.log }));
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => f.self, getAccessToken: () => null }));
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => f.root,
+  isAppSessionBoundaryPending: () => false,
+  ownerScopedUserDataPath: (...parts: string[]) => path.join(f.root, ...parts),
+}));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => f.endpoint }));
 vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: (...args: any[]) => f.request(...args) }));
 vi.mock('../../provider-group/managementScope.js', () => ({ captureProviderManagementScope: () => {
@@ -34,20 +40,23 @@ vi.mock('../providerShareDelegatedAccess.js', () => ({ applyProviderShareDelegat
 vi.mock('../../maker-host/subscription-fast-policy.js', () => ({ notifySubscriptionFastPolicyChanged: async () => {} }));
 vi.mock('../providerShareUsageStore.js', async importOriginal => ({ ...await importOriginal<object>(), getProviderShareUsageStore: () => f.usage }));
 import { createProviderShareUsageStore } from '../providerShareUsageStore.js';
+import { createRemoteAgentHost } from '../../remote-agent/host/runHost.js';
 import { publishShareAvailability, prepareShareAvailability, allocateShareAvailability, readShareAvailabilityCatalog, beginShareAvailabilityTurn } from '../providerShareAvailability.js';
 import { readDeviceProviderCatalog, readRemoteProviderRoute } from '../../remote-agent/controller/deviceCatalog.js';
 import { remoteAgentProviders } from '../../../renderer/components/new-chat/unifiedModelSelection.js';
 vi.mock('../../device-link', () => ({ remoteBackgroundInvoke: (...args: unknown[]) => f.invoke(...args) }));
 const realApi = await vi.importActual<typeof import('../../serverApiClient.desktop.js')>('../../serverApiClient.desktop.js');
 const realDelegation = await vi.importActual<typeof import('../providerShareDelegatedAccess.js')>('../providerShareDelegatedAccess.js');
+const realGuests = await vi.importActual<typeof import('../providerShareAvailabilityGuests.js')>('../providerShareAvailabilityGuests.js');
 let dir: string;
 const model = { id: 'allowed', name: 'Fake model', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' };
 const owned = { shareId: 'share', hostDeviceId: 'owner-pc', providerId: 'group', members: [{ memberId: 'member', status: 'active', joinedAt: '2026-11-08T00:00:00Z' }] } as ProviderShareOwned;
 beforeEach(async () => {
   vi.clearAllMocks();
-  realDelegation.clearProviderShareDelegations(); f.apply.mockReset(); f.reconcile.mockReset();
+  realDelegation.clearProviderShareDelegations(); f.apply.mockReset(); f.reconcile.mockReset(); f.invalidate.mockReset();
   f.endpoint = 'https://fake.invalid';
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-availability-'));
+  f.root = dir;
   f.usage = createProviderShareUsageStore(path.join(dir, 'usage.json'));
   await f.usage.reconcileMemberGenerations('owner', 'owner-pc', [owned]);
   f.connected = true; f.scope = 'owner'; f.self = 'owner-pc'; f.remote = true; f.budget = false; f.leases = [];
@@ -56,17 +65,64 @@ beforeEach(async () => {
 });
 afterEach(() => { realDelegation.clearProviderShareDelegations(); fs.rmSync(dir, { recursive: true, force: true }); });
 describe('standby client production entry points (all identities/providers are local fakes)', () => {
-  // Unit: 4505241076; the previous mocked API bypassed redaction and hid the
-  // lost NOT_FOUND code. Exercise preparation through the real HTTP wrapper.
-  it('cleans revoked standby grants through a redacted real HTTP error', async () => {
+  // Unit: NOT_FOUND is not proof of membership removal. The old mock-only
+  // assertion required purging history shared by owner-direct and standby runs.
+  // Real HTTP error + durable membership + runHost purge expose that data loss.
+  it('revokes only standby grants on NOT_FOUND and retains history until verified reapproval', async () => {
+    f.self = 'standby';
     const peer = providerShareGuestPeer('share', 'member', 'guest');
-    f.leases = [{ peer, sessionId: 'task', lease: { availability: true, nonce: 'nonce' } }];
+    const digest = createHash('sha256').update(peer).digest('hex').slice(0, 32);
+    const runsRoot = path.join(dir, 'remote-agent');
+    const home = path.join(runsRoot, 'guest-homes', digest.slice(0, 16));
+    const history = path.join(home, 'history');
+    const index = path.join(runsRoot, 'guest-sessions.json');
+    const memberFile = path.join(dir, 'provider-share-standby-members.json');
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(history, 'fake native history');
+    fs.writeFileSync(index, JSON.stringify({ [digest]: { controller: peer, hostSessionIds: [], nativeIds: ['fake-native'] } }));
+    const purge = vi.fn(async () => {});
+    const host = createRemoteAgentHost({
+      startHosted: async () => { throw new Error('no engine in cleanup regression'); },
+      isAgentAvailable: () => true, isControllerAuthorized: () => false,
+      captureOwner: () => f.scope, isOwnerCurrent: owner => owner === f.scope,
+      runsRoot, purgeHostedTranscripts: purge,
+    });
+    realGuests.configureStandbyGuestCleanup(controller => host.purgeControllers(value => value === controller, true));
+    f.reconcile.mockImplementation(realGuests.reconcileStandbyGuest);
+    f.invalidate.mockImplementation(realDelegation.invalidateProviderShareDelegation);
+    await realGuests.reconcileStandbyGuest(peer, 1);
+    for (const availability of [false, true]) {
+      await realDelegation.applyProviderShareDelegation('owner-pc', {
+        op: 'delegate', action: 'grant', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+        sessionId: availability ? 'standby-task' : 'direct-task', providerId: 'local', model: 'allowed', generation: 'generation',
+      }, async () => ({ active: true, ownerDeviceId: 'owner-pc', generation: 'generation', expiresAt: Date.now() + 60000 }), availability);
+    }
+    f.leases = realDelegation.delegatedProviderShareLeases();
     f.netFetch.mockResolvedValue(new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'private member details' } }), { status: 404 }));
     f.request.mockImplementation(realApi.serverApiFetch);
-    await expect(prepareShareAvailability(peer)).rejects.toMatchObject({ code: 'NOT_FOUND', message: '请求失败 (404)' });
-    expect(f.invalidate).toHaveBeenCalledWith(peer, 'task', 'nonce');
-    expect(f.reconcile).toHaveBeenCalledWith(peer, null);
-    expect(JSON.stringify(f.log.warn.mock.calls)).not.toContain('private member details');
+    try {
+      await expect(prepareShareAvailability(peer)).rejects.toMatchObject({ code: 'NOT_FOUND', message: '请求失败 (404)' });
+      expect(fs.existsSync(history)).toBe(true);
+      expect(JSON.parse(fs.readFileSync(index, 'utf8'))[digest].nativeIds).toEqual(['fake-native']);
+      expect(JSON.parse(fs.readFileSync(memberFile, 'utf8')).members[peer]).toEqual({ joinedAt: 1 });
+      expect(realDelegation.delegatedProviderShareSessionAllowed(peer, 'standby-task')).toBe(false);
+      expect(realDelegation.delegatedProviderShareSessionAllowed(peer, 'direct-task')).toBe(true);
+      expect(f.apply).not.toHaveBeenCalled();
+      expect(JSON.stringify(f.log.warn.mock.calls)).not.toContain('private member details');
+
+      // Recovery at the same approval retains the native ID. A confirmed new
+      // approval still purges it before installing any new-generation grants.
+      f.request.mockResolvedValue({ joinedAt: 1, assignments: [] });
+      await prepareShareAvailability(peer);
+      expect(fs.readFileSync(history, 'utf8')).toBe('fake native history');
+      expect(purge).not.toHaveBeenCalled();
+      f.request.mockResolvedValue({ joinedAt: 2, assignments: [] });
+      await prepareShareAvailability(peer);
+      expect(fs.existsSync(home)).toBe(false);
+      expect(JSON.parse(fs.readFileSync(index, 'utf8'))).toEqual({});
+      expect(JSON.parse(fs.readFileSync(memberFile, 'utf8')).members[peer]).toEqual({ joinedAt: 2 });
+      expect(purge).toHaveBeenCalledWith([], ['fake-native']);
+    } finally { await host.dispose(); }
   });
   it('does not clean the new account when an old-scope NOT_FOUND arrives late', async () => {
     const peer = providerShareGuestPeer('share', 'member', 'guest');
@@ -316,6 +372,7 @@ describe('standby client production entry points (all identities/providers are l
     f.request.mockRejectedValue(Object.assign(new Error('removed'), { code: 'NOT_FOUND' }));
     await expect(prepareShareAvailability(peer)).rejects.toThrow('removed');
     expect(f.invalidate).toHaveBeenCalledWith(peer, 'task', 'nonce');
-    expect(f.reconcile).toHaveBeenLastCalledWith(peer, null);
+    expect(f.reconcile).toHaveBeenCalledTimes(1);
+    expect(f.reconcile).toHaveBeenLastCalledWith(peer, 1);
   });
 });
