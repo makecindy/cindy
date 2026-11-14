@@ -118,6 +118,12 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
             message: 'The user declined this plugin installation. Do not retry unless the user asks for it again.',
           };
         }
+        if (isIpcError(error) && error.code === 'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED') {
+          return {
+            ok: false, errorCode: error.code,
+            message: 'The plugin download authorization expired. Check the system date and time before starting a new installation attempt. This attempt stopped before downloading the package.',
+          };
+        }
         // The service raises catalog-level outages as IPC errors; detail/download
         // failures arrive as server errors. Both carry the same fixed codes.
         const accessCode =

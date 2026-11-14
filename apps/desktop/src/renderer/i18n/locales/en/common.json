@@ -7938,6 +7938,7 @@
           "accessDenied": "This plugin operation is not permitted or was cancelled.",
           "notConfigured": "The plugin market is not available in this environment.",
           "invalidPackage": "This plugin package is invalid and cannot be installed. Contact the publisher.",
+          "downloadAuthorizationExpired": "The plugin download authorization expired. Check the system date and time before starting a new installation attempt.",
           "downloadTimeout": "The plugin download timed out. Try again later.",
           "downloadFailed": "The plugin download failed. Check your connection and try again.",
           "brokerRedirectPortRequired": "This plugin declares an authorization broker but is missing redirectPort in the same OAuth configuration, so it cannot be installed from the plugin marketplace. Contact the publisher to add the field and publish a new release.",
