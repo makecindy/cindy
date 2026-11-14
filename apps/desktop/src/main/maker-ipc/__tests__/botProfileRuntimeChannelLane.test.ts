@@ -33,6 +33,22 @@ function prompt(opts: MakerSessionCreateOpts): string {
 }
 
 describe('IM channel lanes hydrate the full Bot profile', () => {
+  // PR #10294: project AGENTS remains enabled when the memory setting is off. Hydrate the
+  // production options for each harness: runtime denial must override the native file route.
+  it.each(['claude-code', 'codex', 'pi'] as const)('overrides project memory instructions when disabled on %s', async agentKind => {
+    const deps = { readProfileFolder: async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' }) };
+    seed('canonical', null, { projectMode: true, memory: false });
+    const opts = { id: 'off', agentKind, workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(opts, deps, { persistSnapshot: false });
+    expect(opts.makerMemoryEnabled).toBe(false);
+    expect(prompt(opts)).toContain('Memory is disabled for this Cindy task');
+    expect(prompt(opts)).toContain('Do not read, search, save or maintain memories');
+    expect(prompt(opts)).toContain('overrides the project');
+    seed('canonical', null, { projectMode: true, memory: true });
+    await hydrateBotProfileRuntime(opts, deps, { persistSnapshot: false });
+    expect(opts.makerMemoryEnabled).toBe(true);
+    expect(prompt(opts)).not.toContain('Memory is disabled for this Cindy task');
+  });
   // Unit: account names reach private chats without relabeling visitors or changing stored profiles.
   it.each(['canonical', 'thread', 'routine', 'channel'])('supplies the account name only to its own chat (%s)', async role => {
     seed(role, role === 'channel' ? 'im:telegram:777:dm:555' : null);

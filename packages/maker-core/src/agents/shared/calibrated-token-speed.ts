@@ -130,6 +130,11 @@ export interface TokenSpeedMeterOptions {
    * Left out, thinking is not counted until one request has shown its ratio.
    */
   thinkingScale?: number;
+  /**
+   * Whether streamed thinking arrives as bursty summaries (e.g. Claude) rather than
+   * continuous verbatim reasoning tokens. Defaults to `summaryLeadTokens > 0`.
+   */
+  summarizedThinking?: boolean;
 }
 
 /** Real tokens per estimated token, weighted towards the latest requests. */
@@ -171,6 +176,7 @@ export class CalibratedTokenSpeedMeter {
   private silentTokensMs = 0;
   private readonly estimate: (text: string) => number;
   private readonly summaryLeadTokens: number;
+  private summarizedThinking: boolean;
 
   private started = false;
   private stopped = false;
@@ -223,6 +229,7 @@ export class CalibratedTokenSpeedMeter {
   constructor(options: TokenSpeedMeterOptions = {}) {
     this.estimate = options.estimate ?? estimateStreamTokens;
     this.summaryLeadTokens = options.summaryLeadTokens ?? 0;
+    this.summarizedThinking = options.summarizedThinking ?? this.summaryLeadTokens > 0;
     if (options.thinkingScale !== undefined) this.thinkingTextScale.assume(options.thinkingScale);
     this.visibleScale.assume(1);
     this.thinkingCountScale.assume(1);
@@ -260,8 +267,14 @@ export class CalibratedTokenSpeedMeter {
   }
 
   /** Use `scale` for thinking summaries until this task has measured its own ratio. */
-  assumeThinkingSummaryScale(scale: number): void {
+  assumeThinkingSummaryScale(scale: number, summarized = scale > 1): void {
+    this.summarizedThinking = summarized;
     this.thinkingTextScale.assume(scale);
+  }
+
+  /** Explicitly configures whether streamed thinking arrives as bursty summaries or verbatim tokens. */
+  setSummarizedThinking(summarized: boolean): void {
+    this.summarizedThinking = summarized;
   }
 
   /** The clock is wrong for the rest of this turn (host suspended, time went backwards). */
@@ -486,6 +499,7 @@ export class CalibratedTokenSpeedMeter {
 
   /** A request's first block: what follows was generated from here on, bar the backlog. */
   private openRequest(): void {
+    this.tps = 0;
     this.backlogUntilClock = this.clockMs + BACKLOG_MS;
     this.bound(this.flowMs);
     this.boundaryUntil = this.flowMs + BACKLOG_MS;
@@ -497,8 +511,8 @@ export class CalibratedTokenSpeedMeter {
     if (kind !== this.blockKind) this.bound(this.flowMs);
     this.blockKind = kind;
     if (kind === 'thinking') this.sawThinking = true;
-    this.awaitingSummary = kind === 'thinking';
-    this.summaryLeadLeft = kind === 'thinking' ? this.summaryLeadTokens : 0;
+    this.awaitingSummary = kind === 'thinking' && this.summarizedThinking;
+    this.summaryLeadLeft = kind === 'thinking' && this.summarizedThinking ? this.summaryLeadTokens : 0;
     this.undecidedMs = 0;
     // Thinking that streams nothing is time without output: it only counts once output shows.
     this.measuring = kind === 'visible' ? 'yes' : 'undecided';
@@ -524,7 +538,7 @@ export class CalibratedTokenSpeedMeter {
     if (!this.started || this.paused) this.start(now, kind);
     else this.tick(now);
     if (kind !== this.blockKind) this.enterBlock(kind);
-    const summary = kind === 'thinking' && !counted;
+    const summary = kind === 'thinking' && !counted && this.summarizedThinking;
     const lead = summary ? Math.min(raw, this.summaryLeadLeft) : 0;
     if (kind === 'visible') this.rawVisible += raw;
     else if (counted) this.rawThinkingCount += raw;

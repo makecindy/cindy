@@ -27,7 +27,8 @@ import {
 import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
-  readCachedGenericOAuthAccessToken,
+  readGenericOAuthAccessToken,
+  getGenericOAuthLoginGeneration,
   refreshGenericOAuthIfNeeded,
   type GenericOAuthRefreshResult,
 } from './generic-oauth.desktop.js';
@@ -142,14 +143,17 @@ export async function fetchSavedOAuthProviderModels(
   if (provider?.source !== 'user' || provider.auth.method !== 'oauth' || !oauth || !route || route.disabled || !isCurrent()) {
     return { ok: false, code: 'AUTH_INVALID' };
   }
-  let refreshResult: void | GenericOAuthRefreshResult;
+  const loginGeneration = getGenericOAuthLoginGeneration(storageProviderId);
+  let refreshResult: void | GenericOAuthRefreshResult = undefined;
   try {
     const refresh = async () => {
-      if (options.sourceRecovery && !isCurrent()) throw new ModelSourceRecoveryCanceled();
+      if (options.sourceRecovery && (!isCurrent() || loginGeneration !== getGenericOAuthLoginGeneration(storageProviderId))) {
+        throw new ModelSourceRecoveryCanceled();
+      }
       return refreshGenericOAuthIfNeeded(storageProviderId, oauth);
     };
     if (options.sourceRecovery && options.scheduleSourceRecovery) {
-      const signature = modelSourceRequestSignature(JSON.stringify([options.sourceRecoveryScope, storageProviderId, oauth]), {});
+      const signature = modelSourceRequestSignature(JSON.stringify([options.sourceRecoveryScope, storageProviderId, loginGeneration, oauth]), {});
       // An absent owner scope cannot authorize sharing across callers.
       if (!options.sourceRecoveryScope) refreshResult = await options.scheduleSourceRecovery(refresh);
       else {
@@ -162,7 +166,7 @@ export async function fetchSavedOAuthProviderModels(
           if (sourceRecoveryOAuthRefreshes.get(signature) === pending) sourceRecoveryOAuthRefreshes.delete(signature);
         }
       }
-    } else refreshResult = await refresh();
+    } else if (options.sourceRecovery) refreshResult = await refresh();
   } catch (error) {
     if (error instanceof ModelSourceRecoveryCanceled) throw error;
     return { ok: false, code: 'UNKNOWN' };
@@ -174,13 +178,16 @@ export async function fetchSavedOAuthProviderModels(
   }
   // A token refresh can outlive logout, account switching, or edits to this connection.
   // Never use the old endpoint snapshot with credentials from the new owner/configuration.
-  if (!isCurrent()) {
+  if (!isCurrent() || loginGeneration !== getGenericOAuthLoginGeneration(storageProviderId)) {
     if (options.sourceRecovery) throw new ModelSourceRecoveryCanceled();
     return { ok: false, code: 'AUTH_INVALID' };
   }
-  // Recovery already awaited its bounded refresh. A failed refresh must not
-  // trigger another unscheduled attempt through the ordinary hot-path reader.
-  const token = readCachedGenericOAuthAccessToken(storageProviderId, options.sourceRecovery ? undefined : oauth);
+  // Recovery already awaited its bounded refresh; validate expiry without
+  // starting a second refresh outside the semaphore. Manual reads await refresh.
+  let token: string | null;
+  try { token = await readGenericOAuthAccessToken(storageProviderId, options.sourceRecovery ? undefined : oauth); }
+  catch { return { ok: false, code: 'AUTH_INVALID' }; }
+  if (!isCurrent() || loginGeneration !== getGenericOAuthLoginGeneration(storageProviderId)) return { ok: false, code: 'AUTH_INVALID' };
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
   const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
@@ -199,10 +206,12 @@ export async function fetchSavedOAuthProviderModels(
   }, async (url, init) => {
     // Pagination and the separate speech catalog may run after the first reply.
     // Revoke the captured credentials before another request if ownership changed.
-    if (!isCurrent()) throw new Error('Provider model refresh is no longer current');
+    if (!isCurrent() || loginGeneration !== getGenericOAuthLoginGeneration(storageProviderId)) {
+      throw new Error('Provider model refresh is no longer current');
+    }
     return fetchImpl(url, init);
   });
-  if (isCurrent()) return result;
+  if (isCurrent() && loginGeneration === getGenericOAuthLoginGeneration(storageProviderId)) return result;
   // Never accept stale models. A failed recovery can still carry a server
   // deadline; the revalidator separately checks owner, request and credentials.
   return { ok: false, code: 'AUTH_INVALID',

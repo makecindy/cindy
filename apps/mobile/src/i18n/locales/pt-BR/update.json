@@ -13,7 +13,7 @@
   "upToDateBody": "Você já tem o pacote mais recente do aplicativo.",
   "checkFailedTitle": "Falha na verificação",
   "checkFailedBody": "Não foi possível acessar o servidor de atualização. Tente novamente mais tarde.",
-  "latestRequestFailed": "a última solicitação falhou: HTTP {{status}}",
+  "latestRequestFailed": "falha na solicitação da versão mais recente: HTTP {{status}}",
   "android": {
     "versionChange": "{{current}} → {{version}}",
     "version": "Versão {{version}}",

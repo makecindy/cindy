@@ -14,6 +14,7 @@ import path from 'node:path';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
+import type { Socket } from 'node:net';
 import WebSocket from 'ws';
 import { API, encodeDatagrams, sharingOriginsPayload, delegationPayload, MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { startAgentNetRelay, type Bootstrap, type RelayHandle, type RelayOptions } from '../server.js';
@@ -144,6 +145,28 @@ function nextPacket(uplink: AgentNetUplink): Promise<[string, Uint8Array]> {
 }
 
 describe('independent V2 relay', () => {
+  // App metadata is deliberately not certificate authority. Real WS/HTTP/store:
+  // reject malformed labels, allow future labels and retain them after restart.
+  // Existing presence integration only sent platform/appVersion. Tier: integration.
+  it('validates self-reported App labels without restricting unknown Apps or old clients', async () => {
+    const f = await fixture();
+    for (const app of [null, 42, {}, '', '-bad', 'bad app', 'a'.repeat(65)]) {
+      const uplink = await f.client.connect(); f.uplinks.push(uplink);
+      const closed = once(uplink, 'close');
+      uplink.presence(false, [], { app: app as string });
+      expect((await closed)[0]).toBe(1008);
+      expect((await f.client.directory())[0].app).toBeUndefined();
+    }
+    const app = 'A'.repeat(55) + '._:@/-001'; // 64 chars; same alphabet as ID_PATTERN.
+    const uplink = await f.client.connect(); f.uplinks.push(uplink);
+    uplink.presence(false, [], { platform: 'darwin', app });
+    await vi.waitFor(async () => expect((await f.client.directory())[0].app).toBe(app));
+    await f.restart();
+    expect((await f.client.directory())[0]).toMatchObject({ online: false, app });
+    const legacy = await f.client.connect(); f.uplinks.push(legacy);
+    legacy.presence(false, [], { platform: 'darwin' });
+    await vi.waitFor(async () => expect((await f.client.directory())[0]).toMatchObject({ online: true, platform: 'darwin', app }));
+  });
   // Executor endorsements carry certificates. The old fixed grant-count limit
   // could publish a >1 MiB directory and disconnect every existing Host peer.
   // Real admission/storage/HTTP integration; unit signature tests lack this budget.
@@ -397,9 +420,14 @@ describe('independent V2 relay', () => {
     a.send('member', opaque);
     expect(await received).toEqual(['owner', opaque]);
     a.presence(false, [], { platform: 'win32', deviceName: 'My workstation' });
-    b.presence(true, ['remote-control', 'files', 'tasks'], { platform: 'ios', appVersion: 'unit', busy: true, deviceName: 'My phone' });
+    b.presence(true, ['remote-control', 'files', 'tasks'], { platform: 'ios', app: 'cindy-friend', appVersion: 'unit', busy: true, deviceName: 'My phone' });
     await vi.waitFor(async () => expect((await f.client.directory()).find((d) => d.certificate.deviceId === 'member')).toMatchObject({
-      online: true, remoteControlEnabled: true, platform: 'ios', appVersion: 'unit', busy: true }));
+      online: true, remoteControlEnabled: true, platform: 'ios', app: 'cindy-friend', appVersion: 'unit', busy: true }));
+    // App identity is metadata, independent of capabilities and certificate fields.
+    // Integration: both SDK uplink serialization and durable relay storage are real.
+    b.close();
+    await vi.waitFor(async () => expect((await f.client.directory()).find(d => d.certificate.deviceId === 'member'))
+      .toMatchObject({ online: false, app: 'cindy-friend', capabilities: [] }));
     // V1 lets a paired member edit aliases, while removal remains owner-only.
     await m.client.request('PATCH', '/devices/owner', { name: 'Work desk' });
     expect((await f.client.directory()).find(d => d.certificate.deviceId === 'owner')).toMatchObject({ name: 'Work desk', selfName: 'My workstation' });
@@ -408,12 +436,50 @@ describe('independent V2 relay', () => {
     await f.restart();
     const client = new AgentNetClient(f.relay.url, m.identity, m.certificate, f.rootPublicKey);
     expect((await client.directory()).map((d) => d.online)).toEqual([false, false]);
-    expect((await client.directory()).find(d => d.certificate.deviceId === 'member')).toMatchObject({ platform: 'ios', appVersion: 'unit', busy: false });
+    expect((await client.directory()).find(d => d.certificate.deviceId === 'member')).toMatchObject({ platform: 'ios', app: 'cindy-friend', appVersion: 'unit', busy: false });
     expect((await client.directory()).find(d => d.certificate.deviceId === 'owner')).toMatchObject({ name: 'Work desk', selfName: 'My workstation' });
     expect(await client.request('PATCH', '/devices/owner', { name: null })).toMatchObject({ name: 'My workstation' });
     const recoveredOwner = await f.client.connect(); const recoveredMember = await client.connect(); f.uplinks.push(recoveredOwner, recoveredMember);
     const after = nextPacket(recoveredOwner); recoveredMember.send('owner', opaque);
     expect(await after).toEqual(['member', opaque]);
+  });
+
+  // 2026-11-13: TCP toward a slow device only queues, so forwarded datagrams arrived minutes late.
+  // Real relay sockets: the member stops reading; once the relay's oldest write to it is older than the
+  // limit, newer datagrams are dropped (never delivered after it resumes) and its session stays open.
+  // Previously only a 1 MiB byte cap applied; each round below stays under it. Tier: integration.
+  it('drops datagrams toward a device whose connection stopped moving, without disconnecting it', async () => {
+    const warnings: string[] = [];
+    let movedAgain!: () => void;
+    const moved = new Promise<void>((resolve) => { movedAgain = resolve; });
+    const f = await fixture({ datagramQueueDelayMs: 30, logger: { error() {}, warn: (_fields, message) => { warnings.push(message); },
+      info: (_fields, message) => { if (message.includes('moving again')) movedAgain(); } } });
+    const m = await f.join();
+    let memberSocket!: Socket;
+    const member = new AgentNetClient(f.relay.url, m.identity, m.certificate, f.rootPublicKey, undefined, {
+      createWebSocket: (url, options) => {
+        const ws = new WebSocket(url, options);
+        ws.once('upgrade', (response) => { memberSocket = response.socket as Socket; });
+        return ws;
+      } });
+    const a = await f.client.connect(); const b = await member.connect(); f.uplinks.push(a, b);
+    const tags = new Map<number, number>();
+    b.onDatagram((_source, packet) => { tags.set(packet[0], (tags.get(packet[0]) ?? 0) + 1); });
+    const send = (tag: number, count: number, size: number) => {
+      for (let i = 0; i < count; i++) { const packet = new Uint8Array(size); packet[0] = tag; a.send('member', packet); }
+    };
+    const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+    memberSocket.pause();
+    for (let i = 0; i < 80 && warnings.length === 0; i++) { send(1, 4, 60_000); await sleep(35); }
+    expect(warnings).toEqual(['agent-net session send queue has not moved; dropping datagrams to it until it does']);
+    send(2, 8, 1_000);
+    await sleep(20);
+    memberSocket.resume();
+    await moved;
+    send(3, 1, 1_000);
+    await vi.waitFor(() => expect(tags.has(3)).toBe(true));
+    expect(tags.has(2)).toBe(false);
   });
 
   it.each(['provider-share', 'shared-task'] as const)('keeps %s independent and prevents a guest from accessing other devices', async (kind) => {

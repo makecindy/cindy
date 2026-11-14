@@ -5,6 +5,7 @@ import path from 'node:path';
 
 const state = vi.hoisted(() => ({ root: '', userData: '' }));
 vi.mock('electron', () => ({ app: { getPath: (name: string) => name === 'appData' ? path.join(state.root, 'app-data') : (state.userData || state.root) } }));
+vi.mock('../userDataPath', () => ({ getUserDataDir: () => state.userData || state.root, getAppDataDir: () => path.join(state.root, 'app-data') }));
 import { newRecycleRecord, recycleJournalRoot, watchRecycleJournal, writeRecycleRecord } from '../worktree/recycleJournal';
 import { withWorktreeResourceLock } from '../worktree/resourceLock';
 

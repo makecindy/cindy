@@ -97,6 +97,8 @@ interface Runtime {
   shares: ProviderShareOwned[];
   unavailable: ReadonlySet<string>;
   fetchedAt: number;
+  /** 最近一次本机分享读取是否完整(各分享服务都读到了)。 */
+  complete: boolean;
   hotUntil: number;
   timer: ReturnType<typeof setTimeout> | null;
   refreshing: Promise<void> | null;
@@ -292,6 +294,15 @@ export function getProviderShareHostLoadedSnapshot(): readonly ProviderShareOwne
 }
 
 /**
+ * 与 {@link getProviderShareHostLoadedSnapshot} 相同，但只在最近一次读取完整时返回：有分享服务暂时
+ * 读不到时为 null，供只能做一次、漏读就无法补救的判断使用。
+ */
+export function getProviderShareHostCompleteSnapshot(): readonly ProviderShareOwned[] | null {
+  const rt = runtime;
+  return rt && rt.complete ? getProviderShareHostLoadedSnapshot() : null;
+}
+
+/**
  * 同账号其他电脑上的分享：窗口期内关注的那条分享出现的申请由本机弹窗；已关注的申请从快照里消失
  * (在任一台电脑上处理、撤回或过期)时移除。只用于弹窗，不进入本机快照，不影响受邀者准入。
  */
@@ -350,6 +361,7 @@ export function startProviderShareHost(events: ProviderShareHostEvents, options:
     shares: [],
     unavailable: new Set(),
     fetchedAt: 0,
+    complete: false,
     hotUntil: 0,
     timer: null,
     refreshing: null,
@@ -401,6 +413,7 @@ export function refreshProviderShareHost(reason: string): Promise<void> {
       }
       await rt.events.prepareSnapshot?.(next);
       if (!current(rt) || rt.shares !== before) return;
+      rt.complete = !shares.authorityIncomplete;
       applySnapshot(rt, next, !!rt.events.prepareSnapshot);
       rt.blockedMembers.clear();
       if (!rt.reconciled && !shares.authorityIncomplete) {

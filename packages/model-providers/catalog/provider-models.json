@@ -19174,6 +19174,28 @@
         }
       },
       {
+        "id": "gemini-4-carbon",
+        "name": "Gemini 4 Carbon",
+        "upstream": "https://api.individual.githubcopilot.com",
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "headers": {
+              "User-Agent": "GitHubCopilotChat/0.35.0",
+              "Editor-Version": "vscode/1.107.0",
+              "Editor-Plugin-Version": "copilot-chat/0.35.0",
+              "Copilot-Integration-Id": "vscode-chat"
+            },
+            "compat": {
+              "supportsStrictMode": true,
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsReasoningEffort": false
+            }
+          }
+        }
+      },
+      {
         "id": "gpt-5-mini",
         "name": "GPT-5 Mini",
         "upstream": "https://api.individual.githubcopilot.com",
@@ -22163,7 +22185,7 @@
         "cost": {
           "input": 0.075,
           "output": 0.3,
-          "cacheRead": 0,
+          "cacheRead": 0.0375,
           "cacheWrite": 0
         },
         "execution": {
@@ -22227,7 +22249,7 @@
         "id": "qwen/qwen3.8-27b",
         "name": "Qwen3.8 27B",
         "upstream": "https://api.groq.com/openai/v1",
-        "contextWindow": 131042,
+        "contextWindow": 131072,
         "maxOutput": 16384,
         "modalities": {
           "input": [
@@ -75957,6 +75979,14 @@
       "source": "pi",
       "generatedAt": "2026-11-10T13:56:48.000Z",
       "scope": "New model IDs at existing provider endpoints; existing records and connection defaults preserved"
+    },
+    {
+      "url": "https://github.com/makecindy/cindy/issues/10269",
+      "modelIds": [
+        "gemini-4-carbon"
+      ],
+      "checkedAt": "2026-11-13",
+      "scope": "Copilot Chat transport only; shared Argon IDE headers and compatibility. No capacity, pricing or input capability claims."
     }
   ]
 }

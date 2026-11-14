@@ -19,12 +19,17 @@ import { sha256, verifySignature, verifyCertificate, verifyDelegation, verifyJoi
 import { Store, type NetworkRecord } from './store.js';
 import { AppError as SharingError } from '@cindy/device-link-sharing/errors';
 import { createAgentNetSharing, type AgentNetSharingOptions } from './sharing.js';
+import { DatagramSendQueue } from './datagramQueue.js';
 import { agentNetInvitationAsset } from '@cindy/device-link-sharing/pages';
 
 export class AgentNetError extends Error {
   constructor(readonly status: number, readonly code: string, message = code) { super(message); }
 }
 const fail = (status: number, code: string): never => { throw new AgentNetError(status, code); };
+// React Native checks the public package's types with numeric timer handles.
+function unrefTimer(timer: number | { unref(): void }): void {
+  if (typeof timer !== 'number') timer.unref();
+}
 const record = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : fail(400, 'BAD_REQUEST');
 const own = <T>(values: Record<string, T>, key: string): T | undefined => Object.hasOwn(values, key) ? values[key] : undefined;
 const string = (value: unknown, limit = 128): string => typeof value === 'string' && value.length > 0 && value.length <= limit ? value : fail(400, 'BAD_REQUEST');
@@ -51,6 +56,8 @@ export interface RelayOptions {
   notify?: (input: { networkId: string; from: string; to: string; registration: PushRegistration; ciphertext: string }) => Promise<void | { invalidToken?: boolean; apnsEnv?: 'prod' | 'sandbox' }>;
   logger?: RelayLogger; now?: () => number;
   sharing?: AgentNetSharingOptions;
+  /** See MAX_DATAGRAM_QUEUE_DELAY_MS; only tests shorten it. */
+  datagramQueueDelayMs?: number;
 }
 export interface RelayHandle {
   url: string; udpAddress: AddressInfo | null;
@@ -58,7 +65,9 @@ export interface RelayHandle {
 }
 interface Principal { networkId: string; deviceId: string; certificate?: DeviceCertificate; delegation?: Delegation; }
 interface Session { principal: Principal; ws: WebSocket; lastPong: number; remoteControlEnabled: boolean; capabilities: string[];
-  metadata?: DeviceMetadata; metadataWritten?: boolean; }
+  metadata?: DeviceMetadata; metadataWritten?: boolean;
+  /** Datagrams forwarded to this device; a queue that stops moving drops new ones (see datagramQueue.ts). */
+  datagrams: DatagramSendQueue; }
 const silent: RelayLogger = { info() {}, warn() {}, error() {} };
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
@@ -788,7 +797,13 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       wss.handleUpgrade(req, socket, head, (ws) => {
         const id = key(principal.networkId, principal.deviceId);
         sessions.get(id)?.ws.close(4409, 'replaced');
-        const session: Session = { principal, ws, lastPong: now(), remoteControlEnabled: false, capabilities: [] };
+        const session: Session = { principal, ws, lastPong: now(), remoteControlEnabled: false, capabilities: [],
+          datagrams: new DatagramSendQueue(ws, {
+            stalled: (waitedMs, bufferedBytes) => logger.warn({ waitedMs: Math.round(waitedMs), bufferedBytes },
+              'agent-net session send queue has not moved; dropping datagrams to it until it does'),
+            moving: (dropped, droppedBytes, bufferedBytes) => logger.info({ dropped, droppedBytes, bufferedBytes },
+              'agent-net session send queue moving again'),
+          }, options.datagramQueueDelayMs) };
         sessions.set(id, session);
         ws.on('error', () => undefined);
         ws.on('pong', () => { session.lastPong = now(); });
@@ -806,12 +821,14 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
               session.remoteControlEnabled = control.remoteControlEnabled;
               session.capabilities = control.capabilities as string[];
               if ((control.platform !== undefined && (typeof control.platform !== 'string' || control.platform.length > 64))
+                || (control.app !== undefined && (typeof control.app !== 'string' || control.app.length > 64 || !ID_PATTERN.test(control.app)))
                 || (control.appVersion !== undefined && (typeof control.appVersion !== 'string' || control.appVersion.length > 64))
                 || (control.deviceName !== undefined && (typeof control.deviceName !== 'string' || !control.deviceName.trim() || control.deviceName.length > 64))
                 || (control.busy !== undefined && typeof control.busy !== 'boolean')) throw new Error('invalid');
               // Additive V2 metadata preserves offline device management. An old
               // client can omit it without erasing the last known platform.
               const metadata = { ...(typeof control.platform === 'string' ? { platform: control.platform } : {}),
+                ...(typeof control.app === 'string' ? { app: control.app } : {}),
                 ...(typeof control.deviceName === 'string' ? { deviceName: control.deviceName.trim() } : {}),
                 ...(typeof control.appVersion === 'string' ? { appVersion: control.appVersion } : {}),
                 ...(typeof control.busy === 'boolean' ? { busy: control.busy } : {}) };
@@ -821,7 +838,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
               if (!session.metadataWritten) { session.metadataWritten = true; void store.transaction(state => {
                 const device = state.networks[principal.networkId]?.devices[principal.deviceId];
                 if (device && device.revokedAt === null) { device.metadata = { ...device.metadata,
-                  platform: metadata.platform ?? device.metadata?.platform, appVersion: metadata.appVersion ?? device.metadata?.appVersion };
+                  platform: metadata.platform ?? device.metadata?.platform, app: metadata.app ?? device.metadata?.app,
+                  appVersion: metadata.appVersion ?? device.metadata?.appVersion };
                   if (metadata.deviceName) device.reportedName = metadata.deviceName;
                   device.lastSeenAt = now(); }
               }).catch(() => ws.close(1011, 'storage unavailable')); }
@@ -841,7 +859,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
           if (!target || !active(target.principal) || target.ws.readyState !== WebSocket.OPEN || target.ws.bufferedAmount > 1024 * 1024) return;
           try {
             const encoded = encodeDatagrams(principal.deviceId, frame.datagrams);
-            target.ws.send(encoded, { binary: true });
+            target.datagrams.sendDatagram(encoded);
           } catch { /* The rewritten source may be longer: drop oversized batches like UDP. */ }
         });
         ws.on('close', () => {
@@ -915,7 +933,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       }).catch(() => logger.error({}, 'agent-net state cleanup failed')).finally(() => { sweeping = false; });
     }
   }, 30_000);
-  sweep.unref();
+  unrefTimer(sweep);
   const address = server.address() as AddressInfo;
   const publicHost = address.address === '::' ? '[::1]' : address.address === '0.0.0.0' ? '127.0.0.1' : isIP(address.address) === 6 ? '[' + address.address + ']' : address.address;
   let closeOperation: Promise<void> | undefined;

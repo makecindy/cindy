@@ -81,6 +81,7 @@ class FakeServer {
   suspended = false;
   unavailable = false;
   rejectDeletes = false;
+  rejectUpsert = false;
   dropNextUpsertResponse = false;
   private readonly created = new Map<string, number>();
   validToken = 'token-1';
@@ -166,6 +167,7 @@ class FakeServer {
         const scheduleId = upsert[1];
         if (this.releases.has(scheduleId)) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_RELEASED' } });
         const { events, format } = body() as { events: string[]; format: unknown };
+        if (this.rejectUpsert) return reply(400, { error: { code: 'BAD_REQUEST' } });
         const existing = this.endpoints.get(scheduleId);
         if (!existing && this.endpoints.size >= this.endpointLimit) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_LIMIT' } });
         const serial = this.created.get(scheduleId) ?? 0;
@@ -706,8 +708,15 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await start([schedule('s1', ['push'], future), schedule('s2', [], future)]);
     await vi.waitFor(() => expect(server.endpoints.get('s1')?.events).toEqual(['push']));
     expect(server.endpoints.get('s1')?.format).toEqual(custom);
-    await vi.waitFor(() => expect(host.status(schedule('s2'))?.problem).toBe('failed'));
+    await vi.waitFor(() => expect(host.status(schedule('s2'))?.problem).toBe('unsupported'));
     expect(server.endpoints.has('s2')).toBe(false);
+  });
+
+  // 服务器版本落后于客户端时，它拒绝的是格式本身：这不是暂时性的，不能显示成“暂时不可用”。
+  it('服务器不认发送方格式时不显示成暂时不可用', async () => {
+    server.rejectUpsert = true;
+    await start([schedule('s1', ['push'])]);
+    await vi.waitFor(() => expect(host.status(schedule('s1'))?.problem).toBe('unsupported'));
   });
 
   it('没有任务需要接收时不保持连接', async () => {
