@@ -531,6 +531,9 @@ harness + provider + model + effort + fastMode
   候选耗尽、切换失败或需要换窗确认时交还错误，不继续重试失效路由；复用现有恢复额度和退避，
   不覆盖用户的新选择。没有其它可用路由（单项候选链、自动化显式模型）时不存在“候选耗尽”：
   过载、空响应等普通任务会原路由续跑的错误照常原路由续跑，其余错误交还用户。
+  网关返回 `503 No available accounts` 或 `No available OAuth accounts` 时，按账号池不可用处理：
+  仍可切换到已配置的下一候选，但不原路线自动续跑。未配置备用、候选耗尽或切换失败时保留真实错误，
+  不用反复重试将其掩盖为运行中；SDK 未提供结构化 HTTP 状态码时同样适用。
   实现与回归见 `maker-ipc/botCandidateRecovery.ts`、
   `maker-ipc/__tests__/botCandidateRecovery.test.ts` 和 `sessionRuntimeFallbackIntent.test.ts`。
   跨 harness 路由已提交但新引擎启动失败时停止自动恢复并显示错误；不使用提交前的路由代次继续推进候选。
