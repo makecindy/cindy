@@ -3,7 +3,7 @@
 //
 // Field order: minute hour dayOfMonth month dayOfWeek
 // Supports: '*', 'N', 'N-M', 'N-M/S', '*/S', 'N,M,O' (combination), dayOfWeek 7=Sun.
-// Vixie-cron day matching: when both DOM and DOW are restricted, OR; else only the restricted one.
+// Vixie-cron day matching: OR unless either day field starts with '*', then AND.
 
 export type CronField = readonly number[];
 
@@ -45,8 +45,8 @@ export function parseCron(expr: string): ParsedCron {
     dayOfMonth: parseField(dom, RANGES.dayOfMonth),
     month: parseField(mo, RANGES.month),
     dayOfWeek: dowField,
-    domRestricted: dom !== '*',
-    dowRestricted: dow !== '*',
+    domRestricted: !dom.startsWith('*'),
+    dowRestricted: !dow.startsWith('*'),
     expr: trimmed,
   };
 }
@@ -331,9 +331,7 @@ function matchesDay(cron: ParsedCron, w: WallClock): boolean {
   const domMatch = cron.dayOfMonth.includes(w.d);
   const dowMatch = cron.dayOfWeek.includes(w.dow);
   if (cron.domRestricted && cron.dowRestricted) return domMatch || dowMatch;
-  if (cron.domRestricted) return domMatch;
-  if (cron.dowRestricted) return dowMatch;
-  return true;
+  return domMatch && dowMatch;
 }
 
 function nextOrWrap(list: CronField, current: number): number {
@@ -394,10 +392,11 @@ export function cronToHuman(expr: string): string {
     }
   }
 
-  if (cron.dowRestricted) {
+  const [, , dom, , dow] = trimmed.split(/\s+/);
+  if (dow !== '*') {
     parts.push(`on ${cron.dayOfWeek.map((d) => DOW_NAMES[d]).join(',')}`);
   }
-  if (cron.domRestricted) {
+  if (dom !== '*') {
     parts.push(`on day-of-month ${formatList(cron.dayOfMonth)}`);
   }
   if (cron.month.length !== 12) {
