@@ -1,3 +1,4 @@
+import { findImQuestionReply } from './questionPresentation';
 /**
  * main/im/shared/messageHandler.ts
  * ---------------------------------------------------------------------------
@@ -509,6 +510,7 @@ export function createMessageHandler(
         userMessageId: event.messageId,
         sourceDescription: describeInteractionSource(event),
         requesterIsOwner,
+        questionRespondentId: event.speaker?.id ?? event.senderId,
         ...(channelNoteSource ? { channelNoteSource } : {}),
         ...(messageOrigin ? { messageOrigin } : {}),
         text: event.text,
@@ -632,6 +634,11 @@ export function createMessageHandler(
       if (accountGeneration === null) {
         log.info(`drop inbound message after account boundary closed channel=${channel}`);
         return;
+      }
+      const answer = findImQuestionReply(im, event);
+      if (answer) {
+        event.delivery?.accept();
+        return answer().catch(() => log.warn('IM question reply failed'));
       }
       // threadScoped 渠道: 同 thread 串行、跨 thread 并行(scopeKey 进锁键);
       // feishu scopeKey 恒 undefined — 键多一个冒号后缀, 行为不变。

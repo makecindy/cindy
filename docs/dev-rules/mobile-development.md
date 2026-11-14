@@ -157,6 +157,12 @@ Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务
 
 WidgetKit 的收起、最小、展开与锁屏视图在 `plugins/usage-widgets/CindyAgentActivityWidget.swift`，
 复用已有扩展；ActivityAttributes 从原生模块复制到扩展编译，避免两份 schema 漂移。
+收起／最小态头像为 27pt，右侧仍保持原有「待处理＋未读结果 · 运行中」数字和颜色。
+长按展开时，两组数字下方用扩展的 `Localizable.strings` 标注「待查看／进行中」，
+任务状态下另列「等你处理 N · 未读结果 M」；等你处理包括提问和授权，未读结果也可能是失败结果。
+零项不显示，过期活动不显示这条细分，沿用上次更新时间提示；锁屏与 Apple Watch 版式不变。
+说明只读取已有 `count`、`runningCount`、`attentionCount`，不增加 ActivityKit / APNs 字段。
+头像与标签属于 WidgetKit 原生布局，须随下一次 iOS 原生包交付，不能仅靠 OTA 更新。
 收起／最小／展开灵动岛点击只唤回 App，保留退到后台前的页面；不设置 `widgetURL` 或
 任务 `Link`，由 iOS 默认启动行为处理，不因计数、最近一次推送或内容过期而跳首页／任务页。
 App 已被系统终止时沿用正常冷启动行为，不额外承诺恢复已销毁的页面状态。

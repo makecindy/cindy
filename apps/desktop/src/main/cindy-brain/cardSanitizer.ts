@@ -20,6 +20,7 @@ import {
   GHOST_CARD_PROMPT_PLACEHOLDER_MAX_LEN,
   isGhostCardIconName,
   isGhostCardModelSelection,
+  isGhostCardCopyLinkAllowed,
   isGhostCardLinkAllowed,
 } from '../../shared/ghost.js';
 
@@ -379,6 +380,13 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
       if (state === 'merged' || state === 'closed') parts.push(` data-ghost-task-archive-state="${state}"`);
       if (attrs['data-ghost-task-archive-auto'] !== undefined) parts.push(' data-ghost-task-archive-auto=""');
     }
+  }
+  // 复制链接按钮(data-ghost-copy-link="https://…"):只挂没有动作、外链和归档标记的 button。
+  // 点击不回传插件,由宿主把这串链接写进剪贴板;插件写 display:none,宿主认得才露出来,
+  // 旧版宿主丢掉属性后按钮一直藏着,不会留一颗点不动的按钮。值只认整串 http/https。
+  if (tag === 'button' && !actionValid && !parts.some(p => p.startsWith(' data-ghost-link=') || p.startsWith(' data-ghost-task-archive='))) {
+    const copyLink = (attrs['data-ghost-copy-link'] ?? '').trim();
+    if (isGhostCardCopyLinkAllowed(copyLink)) parts.push(` data-ghost-copy-link="${escapeAttr(copyLink)}"`);
   }
   if (tag === 'button') {
     // type 强制 button(挡 submit 语义);可选无障碍名与禁用态。

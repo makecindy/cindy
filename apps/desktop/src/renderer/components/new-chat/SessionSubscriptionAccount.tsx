@@ -122,6 +122,30 @@ export function sessionSubscriptionPoolProvider(
 // 切回同一个任务时先显示上次读到的账号，再在后台刷新。
 const lastKnown = new Map<string, { owner: DataOwnerGeneration; view: ReadResult }>();
 
+/**
+ * 执行端明确不认识账号查询(旧版本回 `Invalid account command`，或通道不在它的允许清单里)时记下来，
+ * 在那台电脑重连(升级必然重连)或 30 分钟内不再发这条注定失败的查询，直接走旧版本兼容读取。
+ * 2026-11 实测：新版控制端每分钟向 0.1.136 执行端重发，两天约 1500 次被拒。
+ */
+const UNSUPPORTED_QUERY_TTL_MS = 30 * 60_000;
+const unsupportedSessionQuery = new Map<string, number>();
+const unsupportedQueryKey = (deviceId: string, reconnectEpoch: unknown) => `${deviceId}\n${String(reconnectEpoch)}`;
+function isUnsupportedSessionAccountQuery(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /\[INVALID_PARAMS\] Invalid account command|CHANNEL_NOT_ALLOWED|not allowed remotely/.test(message);
+}
+function sessionQueryKnownUnsupported(key: string): boolean {
+  const until = unsupportedSessionQuery.get(key);
+  if (until === undefined) return false;
+  if (until > Date.now()) return true;
+  unsupportedSessionQuery.delete(key);
+  return false;
+}
+function rememberUnsupportedSessionQuery(key: string): void {
+  if (unsupportedSessionQuery.size >= 64) unsupportedSessionQuery.clear();
+  unsupportedSessionQuery.set(key, Date.now() + UNSUPPORTED_QUERY_TTL_MS);
+}
+
 export function SessionSubscriptionAccountProvider({
   providerId,
   deviceId,
@@ -175,17 +199,22 @@ export function SessionSubscriptionAccountProvider({
     const refresh = async () => {
       const request = ++latest;
       let view: ReadResult | null = null;
-      try {
-        const raw = remoteDeviceId
-          ? await window.electronAPI.deviceLink.invoke(
-              remoteDeviceId,
-              SUBSCRIPTION_ACCOUNTS_CHANNEL,
-              [query],
-            )
-          : await window.electronAPI.subscriptionAccounts?.sessionAccount?.(query);
-        view = parseSubscriptionSessionAccountView(raw, pool);
-      } catch {
-        // 旧执行端或临时读取失败，先尝试已有的原生会话查询。
+      const unsupportedKey = remoteDeviceId ? unsupportedQueryKey(remoteDeviceId, reconnectEpoch) : '';
+      if (!remoteDeviceId || !sessionQueryKnownUnsupported(unsupportedKey)) {
+        try {
+          const raw = remoteDeviceId
+            ? await window.electronAPI.deviceLink.invoke(
+                remoteDeviceId,
+                SUBSCRIPTION_ACCOUNTS_CHANNEL,
+                [query],
+              )
+            : await window.electronAPI.subscriptionAccounts?.sessionAccount?.(query);
+          view = parseSubscriptionSessionAccountView(raw, pool);
+        } catch (error) {
+          // 旧执行端或临时读取失败，先尝试已有的原生会话查询；明确不支持的记下，不再重发。
+          if (remoteDeviceId && isUnsupportedSessionAccountQuery(error))
+            rememberUnsupportedSessionQuery(unsupportedKey);
+        }
       }
       // 旧版本仍能按原生会话读出这个任务所在账号的用量；原来的读取只读那台的默认账号，不能沿用。
       if (!view && remoteDeviceId && nativeSessionId)

@@ -87,6 +87,7 @@ import {
   GHOST_CARD_HEIGHT_MAX,
   GHOST_CARD_HEIGHT_MIN,
   isFullWidthGhostCardHtml,
+  isGhostCardCopyLinkAllowed,
   isGhostCardLinkAllowed,
   isGhostCardModelSelection,
   type GhostCardModelSelection,
@@ -381,6 +382,13 @@ function GhostCardCanvas({
   const autoArchiveStateRef = useRef(autoArchiveState);
   autoArchiveStateRef.current = autoArchiveState;
   const fillPrStatus = useCallback((doc: Document) => {
+    // Establish the host-supported display before open-only captures its fallback.
+    // Later refreshes leave display exclusively under the PR visibility rules.
+    doc.querySelectorAll<HTMLElement>('button[data-ghost-copy-link]').forEach((el) => {
+      if (el.dataset.xdtCopyRevealed === '1' || !isGhostCardCopyLinkAllowed(el.dataset.ghostCopyLink ?? '')) return;
+      el.dataset.xdtCopyRevealed = '1';
+      el.style.setProperty('display', 'inline-flex', 'important');
+    });
     if (!prSlotKey) return;
     setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(`github:github.com/${key}`) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
     fillGhostCardTaskAutoArchiveHint(doc, taskArchiveEligible ? autoArchiveStateRef.current : 'inactive', {
@@ -767,6 +775,24 @@ function GhostCardCanvas({
         requestGhostCardTaskArchive(sessionId);
       });
     });
+    // 复制链接按钮:插件写成 display:none,宿主认得才露出;点击不回传插件,由宿主写剪贴板,
+    // 提示与任务顶栏 PR 浮窗的复制按钮一致。净化器保证它没有动作 / 外链 / 归档标记。
+    doc.querySelectorAll<HTMLElement>('button[data-ghost-copy-link]').forEach((el) => {
+      const url = el.dataset.ghostCopyLink ?? '';
+      if (!isGhostCardCopyLinkAllowed(url)) return;
+      el.setAttribute('aria-label', t('sharing.copyLink'));
+      el.title = t('sharing.copyLink');
+      if (el.dataset.xdtCopyBridged === '1') return;
+      el.dataset.xdtCopyBridged = '1';
+      el.style.cursor = 'pointer';
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void navigator.clipboard.writeText(url).then(
+          () => toast.success(t('ccAgent.sidebar.deepLink.copied')),
+          () => toast.error(t('ccAgent.sidebar.deepLink.copyFailed')),
+        );
+      });
+    });
     // 卡内外链(v3):data-ghost-link 元素点击 → 宿主确认框 → openExternal。
     // 净化器已白名单校验(整串 http/https 或导航专用任务链接);此处再验协议一次作纵深,并让
     // 动作声明优先(净化器已互斥,同为纵深)。
@@ -808,7 +834,7 @@ function GhostCardCanvas({
     });
     setSessionLinks(previous => previous.length === taskLinks.length && previous.every((el, i) => el === taskLinks[i]) ? previous : taskLinks);
     measureHeight();
-  }, [measureHeight, callId, lockActionEl, bindAudioSlot, allowExternalLinks, html, sessionId, fillPrStatus]);
+  }, [measureHeight, callId, lockActionEl, bindAudioSlot, allowExternalLinks, html, sessionId, fillPrStatus, t]);
 
   const cardSrcDoc = buildCardSrcDoc(renderedCardHtml, themeVars);
   const initialMailDocument = useRef(cardSrcDoc);

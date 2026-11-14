@@ -252,6 +252,28 @@ V2 内核修复递增到 `0.5.1`，让已部署 `0.5.0` 的主人能看到升级
 Desktop worker 里的代理 socket，那里没有完成回调）、device-link 在 Agent-Net 上的重复可靠层
 （每次重发都把整条消息再写进本来就可靠的加密流，见 `agent-net-plan.md` 第 2 阶段）。
 
+### 离线对端的出站调用闸门
+
+2026-11-14：一台笔记本整夜休眠，另一台电脑的侧栏、Git 状态、子代理、资源列表等轮询仍对它
+逐笔 invoke，每笔先发 link-open、relay 回 DEVICE_OFFLINE，每小时一百多轮；打开着的任务复制
+对话框每秒读一次复制状态，每次等满 10–30 秒失败，11 小时里报错 140 多次。
+
+`packages/device-link/src/peerOfflineGate.ts`：relay 明确判定离线（DEVICE_OFFLINE 路由信号，或
+presence `online=false` 且没有保留的直连）后，控制端对该同账号对端的 `invoke()` 在本地以同一个
+`DEVICE_OFFLINE` 错误结束，不触网；每个窗口只放行一笔真实请求作探测，窗口 15 秒起倍增、最长
+120 秒。presence 上线、收到该对端任何路由帧、已有直连、relay 重连都立即开闸。共享任务与供应商
+分享对端不经过这道闸。Desktop 复制对话框的状态读取失败后同样退避（1 秒起倍增、最长 30 秒），
+来源电脑上线的 presence 立即恢复。迁移 IPC 保留已知的离线错误码，避免通用
+`MIGRATION_FAILED` 转换吞掉等待原因；超时仍沿用 `MIGRATION_TIMEOUT`。
+同一 WebSocket 内旧 link 代次的迟到离线信号不得关闭当前代次的调用闸门。
+
+故障半径三问：① 证据只认 relay 的明确离线判定；单次超时、背压、无响应、ACK 超时都不关闸；
+② 只作用于这一个对端的新出站调用，已建立的直连、其它对端、入站方向、可靠 pending 与重放都不变，
+调用方拿到的错误码与原来 relay 回绝完全一致；presence 推送丢失时最坏 120 秒内由探测恢复；
+③ `client.test.ts`「DEVICE_OFFLINE 之后本地回绝同一对端的调用」验证窗口内不写帧、其它对端照常、
+探测只放行一笔、presence 上线立即触网；`TaskMigrationDialog.test.tsx` 验证读取退避与上线恢复。
+只改控制端本地行为，不改 wire 协议，旧版对端与自建中转无需同步。
+
 ### 共享连接静默与请求隔离
 
 2026-10-30：Desktop 在业务超时时先检查共享 relay 最近是否仍有入站活动；整条连接
@@ -296,6 +318,25 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 单测全绿、多轮 review 通过，上线后一台休眠手机反复把同账号所有设备（含桌面↔桌面）
 一起打掉线，由 #1405 收窄止损半径修复。协议兼容、allowlist、单测三层防线对这类问题
 全部免疫，只有 review 时点名问「半径」才拦得住。
+
+### 账号级状态快照的出站整流（2026-11-14）
+
+2026-11-10~14 被控端日志：手机网络一卡，调度运行诊断（`maker:schedule:event` 的
+`runtime-state`，每帧约 1 KB、零点多条自动化同时认领时一次几十帧）和同账号用量快照
+（`usage:*-changed`，同内容最多 13 帧）逐帧占满对端的可靠窗口，控制端在等的
+invoke-result 被拒为 `reliable transport buffer is full`（iPhone 345 次）。
+
+Desktop dispatch 对这类「整帧替换、无副作用、控制端可重读自愈」的快照按
+channel + 键（运行诊断单键；带 `providerId` 的用量按账号）做 latest-wins 暂存，
+窗口占用达到会话活动同一软上限时停止灌入并退避，见
+`apps/desktop/src/main/device-link/latestStatePushStage.ts`。驱动刷新与未读的调度事件
+（fired、completed、read 等）、增量补丁和通知类推送不进暂存，保持逐帧与顺序。
+新增条目须论证上述三点；只在发送侧调度，不改 wire 格式，旧端与自建中转无感。
+
+故障半径三问：① 证据是单个控制端的可靠窗口占用；② 动作只作用于该控制端的暂存，
+同键新值替换旧值、终态保留到写出或该端退订／离线，不重置 peer 或连接；
+③ `dispatchWeakNetwork.test.ts`「账号级状态快照」用两个控制端验证一端窗口占满时
+另一端在 250 ms 合并窗口后照常收到最新快照，恢复后每键只补发最新一帧。
 
 ### 直连优先、中继兜底(同账号设备)
 
@@ -363,6 +404,23 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   iOS/Android 和两台真实电脑的跨设备验收。
   `node scripts/direct-link-electron-smoke.mjs` 另外启动两个临时 Electron 进程，验证生产
   Main/preload/隔离 renderer 的真实 IPC、WebRTC 与中继回退；账号和 userData 均为独立 fixture。
+
+### 系统睡眠前主动离线（2026-11-14）
+
+2026-11-10～14 日志：一台合盖笔记本的直连约 300 次「接上就断」，其中 93% 在 3 分钟内伴随对端离线——
+是 macOS DarkWake 约 15 分钟一次的短暂唤醒，不是直连本身抖动(其余约 20 次仍由 `directNegotiation.ts`
+既有 5s→60s 退避处理)。睡眠中的设备对对端仍显示在线约 1.5 分钟：直连 ACK 超时、回落中继再 ACK 超时、
+重置链路、60 秒后弃帧，期间推送和请求全部白等。
+
+Desktop 收到 `powerMonitor` 的 `suspend` 即调用 `suspendConnectionsForSystemSleep`：以 1001 正常关闭本机
+各条 relay 连接，relay 随即广播离线；保持期内不排重连，`resume` 的 `restartConnections`、`connectNow`
+解除，进程清醒满 `SYSTEM_SUSPEND_RECONNECT_HOLD_MS`(60s，计时器睡眠中暂停)仍未解除时自行重连。
+
+故障半径：① 平台 suspend 只说明本机即将不可达，不推断任何对端状态；② 只关本机自己的 relay 连接，
+可靠层 pending 按普通断线保留、唤醒后重放，不改 wire 协议(官方与自建中转对正常关闭都立即广播离线，
+自建中转无需修改，`device-link-relay` interop 通过)；③ 不碰对端链路、不影响其他设备，睡眠被取消或
+缺少唤醒事件时由清醒时间兜底恢复，不会把本机永久留在离线。验证：`client.test.ts`
+「suspendConnectionsForSystemSleep …」。
 
 ## 远程 Agent 的拉取与恢复(`maker:remote-agent:v1`)
 

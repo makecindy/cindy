@@ -10,6 +10,24 @@ import { withPageScopedCdpClient } from "../_generated/extension/src/browser/pw-
 import { normalizeTimeoutMs } from "../_generated/extension/src/browser/pw-tools-core.shared.js";
 import { buildDomReadSource } from "../dom-read.js";
 
+function raceAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    pending.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /** Fixed DOM queries run in an isolated world: page-overridden getters and
  * querySelector cannot turn a read into an interaction. Never accepts JS source
  * or grants cross-origin access. Navigation policy is checked before and after. */
@@ -27,17 +45,28 @@ export async function readBrowserDom(opts: {
 > {
   const source = buildDomReadSource(opts.spec);
   opts.signal?.throwIfAborted();
-  const page = await getPageForTargetId(opts);
-  const dialog = createObservedDialogAbortSignalForPage({
-    page,
-    parentSignal: opts.signal,
-  });
+  // The time limit covers finding the page too: that lookup talks to every tab
+  // and must not leave the read without a deadline.
   const deadline = new AbortController();
   const timeoutMs = normalizeTimeoutMs(opts.timeoutMs, 20000);
   const timer = setTimeout(
     () => deadline.abort(new Error("DOM read timed out")),
     timeoutMs,
   );
+  let page: Awaited<ReturnType<typeof getPageForTargetId>>;
+  try {
+    page = await raceAbort(
+      getPageForTargetId(opts),
+      opts.signal ? AbortSignal.any([opts.signal, deadline.signal]) : deadline.signal,
+    );
+  } catch (error) {
+    clearTimeout(timer);
+    throw error;
+  }
+  const dialog = createObservedDialogAbortSignalForPage({
+    page,
+    parentSignal: opts.signal,
+  });
   const signal = AbortSignal.any([dialog.signal, deadline.signal]);
   let onAbort: () => void;
   const aborted = new Promise<never>((_, reject) => {

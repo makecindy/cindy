@@ -1,3 +1,4 @@
+import { createHookQuestionPublisher } from './questionPublisher';
 /**
  * hook-control/dispatcher.ts
  * ---------------------------------------------------------------------------
@@ -49,6 +50,8 @@ import {
   makeTurnProgress,
   makeTurnReopen,
   HOOK_FEATURE_TELEGRAM_CARD_OPS,
+  HOOK_FEATURE_TELEGRAM_QUESTION_OPS,
+  HOOK_FEATURE_IM_QUESTIONS,
   HOOK_FEATURE_TELEGRAM_COMMANDS,
   HOOK_FEATURE_FEISHU_FINAL_OPS,
   HOOK_FEATURE_FEISHU_PROGRESS_OPS,
@@ -109,6 +112,9 @@ import {
   type OfficialTelegramCardPublisher,
   type OfficialTelegramCardPublisherDeps,
 } from './telegramCardOps.js';
+import { createTelegramNoticePublisher } from './telegramNoticeOps';
+import type { QuestionControls } from '../maker-ipc/interactionRouter';
+import type { QuestionRequest } from '../im/shared/questionCard';
 import type { HookConnectionConfig } from './store.js';
 import type { HookBindingStore } from './bindings.js';
 import { terminalDeliveryExpired } from './requestLedger.js';
@@ -284,6 +290,8 @@ export interface HookRunRequest {
    * retirement failures and the fixed 代输入 pointer.
    */
   onRuntimeRecovery?: (text: string) => Promise<boolean>;
+  /** Only supplied when the channel can deliver requester-bound questions to this task's lane. */
+  onQuestion?: (request: QuestionRequest, controls: QuestionControls) => Promise<void>;
   /**
    * 执行中交互卡回调(interaction.request 链路)。runner 把 maker 的
    * InteractionRequest 合成渠道无关卡片后经此发出; 连接不在线时丢弃
@@ -961,11 +969,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   /** 仍在驱动消息的轮次载体与卡片发布器(账号切换 / dispose 时统一停下)。 */
   const activeTurnCarriers = new Set<OfficialTelegramTurnCarrier>();
   const activeCardPublishers = new Set<OfficialTelegramCardPublisher>();
+  const questionActions = new Map<string, {
+    connectionId: string; requestId: string; generation: number;
+    click(button: string, text?: string): Promise<boolean>;
+  }>();
   const closeTelegramTurnOps = (): void => {
     for (const carrier of [...activeTurnCarriers]) carrier.close();
     activeTurnCarriers.clear();
     for (const publisher of [...activeCardPublishers]) publisher.dispose();
     activeCardPublishers.clear();
+    questionActions.clear();
     telegramOpRouter.failAll();
   };
   /** 只有声明分块转传的 X server 才走这条路; 否则继续内联 10 MiB 以内的视频。 */
@@ -1991,6 +2004,39 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       (cards ?? legacyCards).close(interactionId, reason);
     };
 
+    const notices = task.run.source?.im === 'telegram'
+      && telegramOpsNegotiated(task.connectionId, HOOK_FEATURE_TELEGRAM_QUESTION_OPS) === true
+      ? createTelegramNoticePublisher({
+          connectionId: task.connectionId, requestId: task.requestId, externalKey: task.externalKey,
+          router: telegramOpRouter,
+          register: (id, click) => {
+            questionActions.set(id, { connectionId: task.connectionId,
+              requestId: task.requestId, generation: task.accountGeneration, click });
+            return () => { questionActions.delete(id); };
+          },
+          getSend: () => {
+            if (!isCurrentGeneration(task.accountGeneration)
+              || !dirStillAllowed(task.connectionId, task.run.workingDir, task.run.sessionId)
+              || telegramOpsNegotiated(task.connectionId, HOOK_FEATURE_TELEGRAM_QUESTION_OPS) !== true) return undefined;
+            return sendForGeneration(task.connectionId, task.accountGeneration);
+          },
+        })
+      : (['slack', 'feishu', 'lark'].includes(task.run.source?.im ?? '')
+        && serverFeatures.get(task.connectionId)?.includes(HOOK_FEATURE_IM_QUESTIONS))
+        ? createHookQuestionPublisher({ requestId: task.requestId,
+            register: (id, click) => {
+              questionActions.set(id, { connectionId: task.connectionId, requestId: task.requestId,
+                generation: task.accountGeneration, click });
+              return () => { questionActions.delete(id); };
+            },
+            send: frame => {
+              if (!isCurrentGeneration(task.accountGeneration)
+                || !dirStillAllowed(task.connectionId, task.run.workingDir, task.run.sessionId)
+                || !serverFeatures.get(task.connectionId)?.includes(HOOK_FEATURE_IM_QUESTIONS)) return false;
+              return sendForGeneration(task.connectionId, task.accountGeneration)?.(frame) ?? false;
+            },
+          }) : null;
+
     let outcome: HookRunOutcome;
     let runnerThrew = false;
     /**
@@ -2056,6 +2102,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
               });
             },
           } : {}),
+          ...(notices ? { onQuestion: notices.open } : {}),
           onInteraction,
           onInteractionCancel,
           ...(task.commitContextCursor
@@ -2119,6 +2166,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // outbox path. A late progress callback from the observer must never write
     // over the answer after this point.
     const finalIntent = messageLifecycle?.beginFinal() ?? null;
+    // Questions must arrive before this turn is terminal on the server.
+    await notices?.drain();
     const terminalRecord = {
       connectionId: task.connectionId,
       requestId: task.requestId,
@@ -3321,6 +3370,14 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     },
     handleInteractionDecision(connectionId, payload) {
       if (!accountActive) return;
+      const question = questionActions.get(payload.interactionId);
+      if (question) {
+        if (question.connectionId === connectionId && question.requestId === payload.requestId
+          && isCurrentGeneration(question.generation)) {
+          void question.click(payload.buttonId, payload.answerText).catch(() => log.warn('Telegram question update failed'));
+        }
+        return;
+      }
       // 归属校验: requestId 必须是本连接正在执行的任务(排队中的任务不可能有
       // 未决交互 —— 交互只在 turn 执行期产生)
       const runningEntry = runningByRequest.get(ackKey(connectionId, payload.requestId));

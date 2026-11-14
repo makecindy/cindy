@@ -264,6 +264,8 @@
     "transferProgress": "전송됨 {{sent}} / {{total}} · 평균 {{speed}}/s",
     "thisComputer": "이 컴퓨터",
     "selectedComputer": "선택한 컴퓨터",
+    "sourceComputer": "원본 컴퓨터",
+    "waitingForSource": "{{name}}이(가) 오프라인입니다. 다시 온라인이 되면 복사를 계속합니다.",
     "estimating": "파일 수와 크기 계산 중…",
     "fileSummary": "프로젝트 파일: {{count}}개, 총 {{size}}",
     "estimateNote": "숨김 파일을 포함한 복사 전 예상치입니다. 별도로 복사하는 Git 기록, 작업 대화 및 첨부 파일은 제외됩니다. 파일 변경에 따라 최종 크기가 달라질 수 있습니다.",
@@ -1363,7 +1365,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 설정은 저장되었지만 Cindy에서 새로 고치지 못했습니다. SSH 설정을 다시 불러오세요.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy가 이 SSH 구성을 안전하게 관리할 수 없습니다. 다시 불러온 후 Cindy 소유권 표시와 호스트 별칭의 고유성을 확인하세요.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy가 이 호스트의 일부 SSH 설정 규칙을 안전하게 재현할 수 없습니다. 터미널 SSH는 계속 작동할 수 있으니 Match, 조건부 Include, IdentityAgent, IdentitiesOnly 및 공개 키 설정을 확인하세요.",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent를 사용할 수 없습니다. SSH Agent를 시작하고 ssh-add로 해당 개인 키를 불러온 뒤 다시 시도하세요.",
+    "SSH_AGENT_UNAVAILABLE": "이 컴퓨터의 SSH 키 에이전트(ssh-agent)를 사용할 수 없습니다. 실행 중인지 확인하고 ssh-add -l로 필요한 키가 로드되었는지 확인하세요. 키 관리에서 문제 해결 안내를 볼 수 있습니다.",
     "SSH_HOST_PREFS_WRITE_FAILED": "호스트는 저장되었지만 표시 이름 또는 Agent Proxy 설정을 저장하지 못했습니다. 로컬 저장소 권한을 확인한 후 다시 시도하세요.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "이 작업의 탭 한도에 도달했습니다. 일부 탭을 닫아 주세요",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "탭 내용이 너무 커서 추가할 수 없습니다",
@@ -1454,6 +1456,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "확인 필요",
+      "summaryInProgress": "진행 중",
+      "summaryPending": "사용자 처리 대기",
+      "summaryUnread": "읽지 않은 결과",
       "markRead": "읽음으로 표시",
       "archive": "보관",
       "actionFailed": "작업을 완료하지 못했습니다. 알림은 유지됩니다. 다시 시도해 주세요.",
@@ -1890,6 +1896,12 @@
       "footnote": "Phase A는 SSH 연결 관리만 지원합니다. 원격에서 에이전트를 실행하는 기능은 이후 업데이트에서 제공됩니다.",
       "viaAuth": "{{label}}(으)로 인증",
       "readOnlyFromSshConfig": "연결 정보는 SSH 설정에서 가져옵니다",
+      "importedAgentHint": "이 컴퓨터의 SSH 키 에이전트(ssh-agent)를 통해 인증합니다. 터미널 ssh 연결에 성공해도 에이전트가 준비되었다는 뜻은 아닙니다.",
+      "agentError": {
+        "environmentUnset": "IdentityAgent가 참조하는 환경 변수가 Cindy에 설정되어 있지 않습니다. Cindy에 해당 변수를 설정하거나 SSH 설정의 IdentityAgent를 수정하세요.",
+        "endpointEmpty": "IdentityAgent를 해석한 엔드포인트가 비어 있습니다. SSH 설정의 IdentityAgent를 수정하세요.",
+        "endpointUnavailable": "IdentityAgent에 설정된 SSH 키 에이전트 엔드포인트를 사용할 수 없습니다. 해당 엔드포인트와 에이전트를 확인하세요. 기본 ssh-agent는 다른 엔드포인트를 사용할 수 있습니다."
+      },
       "configWarning": "Cindy에서 일부 SSH 설정 규칙을 해석할 수 없습니다. 호스트 목록이나 연결 정보가 터미널 SSH와 다를 수 있습니다.",
       "configDiagnostic": {
         "io": "Cindy에서 SSH 설정을 읽을 수 없습니다. 마지막으로 정상적으로 불러온 호스트를 계속 표시합니다. 파일 권한을 확인한 후 다시 불러오세요.",
@@ -1987,7 +1999,7 @@
           "tryThis": "터미널에서 다음을 시도해 보세요",
           "close": "닫기",
           "fallbackTitle": "또는 agent를 건너뛰기",
-          "fallbackBody": "호스트를 추가할 때 「Identity file」 인증으로 전환하면, {{appName}}이(가) 키 파일을 직접 ssh에 전달하고 매 연결마다 암호를 입력받습니다. agent가 필요 없습니다. 트레이드오프: 매 연결마다 암호 입력이 필요하지만 메모리에 키 캐시가 남지 않습니다(보안은 사용자 책임).",
+          "fallbackBody": "호스트를 추가할 때 \"개인 키 파일\"을 선택할 수도 있습니다. {{appName}}이 ssh-agent 없이 개인 키를 프로세스 메모리로 읽습니다. 현재 암호화되지 않은 개인 키만 지원하며 연결 시 키 암호를 묻지 않습니다. 암호화된 키는 ssh-agent를 사용하세요.",
           "reason": {
             "agent_unavailable": "ssh-add가 ssh-agent에 도달할 수 없습니다(ssh-add 미설치, agent 미실행, 또는 SSH_AUTH_SOCK 미설정).",
             "bad_passphrase": "ssh-add가 암호를 거부했습니다.",
@@ -13434,6 +13446,15 @@
           "askNoQuestion": "Agent가 답변을 기다리고 있지만 표시할 질문이 없습니다. “계속”이라고 답해 주세요.",
           "askQuestion": "Agent가 답변을 기다리고 있습니다:\n{{question}}\n{{options}}\n선택지 번호로 답하거나 답변을 직접 입력해 주세요."
         }
+      },
+      "questions": {
+        "cardHint": "요청한 사람만 답할 수 있습니다. 선택지를 누르고 여러 질문이나 복수 선택은 선택 후 제출하세요. 이 메시지에 텍스트로 답할 수도 있습니다. 여러 질문에는 “질문 번호: 답변”(예: “2: 한국어”)으로 답하고 입력 후 제출하세요.",
+        "submitLabel": "답변 제출",
+        "multiSelectHint": " (복수 선택 가능)",
+        "resolved": "✅ 선택함: {{option}}",
+        "expired": "만료된 카드입니다",
+        "textHint": "질문한 사람만 답할 수 있습니다. {{code}} 뒤에 답을 쓰세요. 여러 질문은 {{code}} 2: 답변 형식으로 작성하고 {{code}} OK로 제출하세요.",
+        "replyHint": "요청한 사람만 답할 수 있습니다. 선택지를 누르고 여러 질문이나 복수 선택은 선택 후 제출하세요.\n{{code}} 뒤에 답을 쓰세요. 여러 질문은 {{code}} 2: 답변 형식으로 작성하고 {{code}} OK로 제출하세요."
       }
     }
   },
@@ -15965,6 +15986,8 @@
       "claudeSubscriptionWorkspaceOverride": "이 폴더의 .claude 설정이 Claude의 연결 대상이나 인증 방식을 변경하므로 여기서는 Claude 구독을 사용할 수 없습니다. 해당 설정을 제거하거나 게이트웨이 또는 API 키 모델을 선택하세요",
       "deviceStillLoading": "원격 기기가 아직 로딩 중입니다. 잠시 기다려 주세요",
       "remoteDefaultsLoadFailed": "원격 기기 설정을 불러오지 못했습니다. 연결을 확인하세요. Cindy가 다시 시도하고 있습니다.",
+      "branchRequiresWorktree": "선택한 브랜치가 현재 브랜치와 다릅니다. worktree를 활성화하거나 현재 브랜치를 선택하세요.",
+      "branchCheckFailed": "현재 브랜치를 확인할 수 없습니다. worktree를 활성화하여 선택한 브랜치를 사용하거나 프로젝트를 확인한 후 다시 시도하세요.",
       "worktreeMissingRepo": "worktree를 만들 수 없습니다: 현재 디렉터리의 리포지토리 루트가 없습니다",
       "worktreeRepoHint": "작업 디렉터리를 다시 선택한 뒤 오른쪽 아래 폴더 표시가 갱신되면 다시 시도하세요",
       "sessionInactive": "세션이 더 이상 활성 상태가 아닙니다",

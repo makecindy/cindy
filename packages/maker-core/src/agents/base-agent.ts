@@ -2606,6 +2606,16 @@ export interface AgentSessionHandle {
   hasPendingHostOperation?(): boolean;
 
   /**
+   * Conservative probe for provider-owned work that can outlive a product turn
+   * but is not represented by listBackgroundTasks (for example Codex native
+   * child agents, yielded exec cells and background terminals). Idle runtime
+   * reclamation calls it before closing; true means busy *or unknown*, so a
+   * failed or unsupported probe keeps the runtime. Not for UI hydration.
+   * Agents whose background work is fully covered by listBackgroundTasks omit it.
+   */
+  hasLiveBackgroundWork?(): Promise<boolean>;
+
+  /**
    * Resolve the provider claim attached atomically to a specific `done` event.
    * Returns null when that event has no matching continuation boundary.
    */

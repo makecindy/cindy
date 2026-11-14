@@ -464,3 +464,33 @@ it('preserves valid task tags across offline cache reads and drops invalid color
   ]);
   expect((await getCachedHomeListSnapshot(USER_ID))[0].sessions[0].tags).toEqual([tag]);
 });
+
+
+describe('cached Home display order', () => {
+  it('round-trips order with the same account snapshot and drops it on logout', async () => {
+    const { rememberHomeDisplayOrder, cacheHomeListSnapshot, getCachedHomeListState, clearCachedHomeListSnapshot } =
+      await import('@/session/mobileHomeListCache');
+    const order = { scope: 'device-a/activity', keys: ['project:b', 'project:a'] };
+    rememberHomeDisplayOrder(USER_ID, order);
+    await cacheHomeListSnapshot(USER_ID, [makeSession('s1', 'dev-a')]);
+    expect((await getCachedHomeListState(USER_ID)).displayOrder).toEqual(order);
+    await cacheHomeListSnapshot('other-account', [makeSession('s2', 'dev-b')]);
+    expect((await getCachedHomeListState('other-account')).displayOrder).toBeNull();
+    await clearCachedHomeListSnapshot();
+    await cacheHomeListSnapshot(USER_ID, [makeSession('s1', 'dev-a')]);
+    expect((await getCachedHomeListState(USER_ID)).displayOrder).toBeNull();
+  });
+
+  it('keeps old snapshots readable and ignores malformed or oversized order metadata', async () => {
+    const { __testing, cacheHomeListSnapshot, getCachedHomeListState } = await import('@/session/mobileHomeListCache');
+    await cacheHomeListSnapshot(USER_ID, [makeSession('s1', 'dev-a')]);
+    const key = __testing.storageKeyForUser(USER_ID);
+    const base = JSON.parse(store.get(key)!);
+    for (const displayOrder of [undefined, { scope: 'all', keys: [42] }, { scope: 'all', keys: Array(1001).fill('a') }]) {
+      store.set(key, JSON.stringify({ ...base, displayOrder }));
+      const restored = await getCachedHomeListState(USER_ID);
+      expect(restored.devices[0].sessions[0].id).toBe('s1');
+      expect(restored.displayOrder).toBeNull();
+    }
+  });
+});

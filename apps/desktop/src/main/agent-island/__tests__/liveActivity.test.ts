@@ -102,6 +102,26 @@ describe('AgentIslandLiveActivity', () => {
     expect(agentIslandLiveActivityStateFromPill(createEmptyAgentIslandPillSnapshot(), 'cindy', strings)).toBeNull();
   });
 
+  // Regression: expanded system activity labels must survive projection and a locale-only
+  // change must reach ActivityKit even when both badge numbers stay the same (unit tier).
+  it('publishes expanded count meanings and updates them when only the language changes', async () => {
+    const labels = { attention: '待查看', inProgress: '进行中', pending: '等你处理', unread: '未读结果' };
+    const pill = { ...createEmptyAgentIslandPillSnapshot(), priorityStatus: 'needs-interaction' as const,
+      attentionCount: 3, pendingInteractionCount: 1, unreadCompletedCount: 2, runningSessionCount: 5 };
+    const projected = agentIslandLiveActivityStateFromPill(pill, 'cindy', { ...strings, countLabels: labels });
+    expect(projected).toMatchObject({ attentionTotal: 3, attentionCount: 1, runningCount: 5, countLabels: labels });
+    const fake = fakeAddon();
+    const live = controller(fake.addon);
+    live.sync(projected);
+    await vi.advanceTimersByTimeAsync(0);
+    live.sync({ ...projected!, countLabels: { ...labels, attention: 'To review' } });
+    await vi.advanceTimersByTimeAsync(1000);
+    const updates = fake.calls.filter((call) => call.action === 'sync');
+    expect(updates).toHaveLength(2);
+    expect(updates[1].state?.countLabels?.attention).toBe('To review');
+    expect(updates[1].alert).toBeUndefined();
+  });
+
   it('updates unread badges independently without treating them as new questions', async () => {
     const fake = fakeAddon();
     const live = controller(fake.addon);

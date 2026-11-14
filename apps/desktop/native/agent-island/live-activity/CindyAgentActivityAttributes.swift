@@ -28,6 +28,15 @@ struct CindyAgentActivityAttributes: ActivityAttributes {
     var companion: Companion?
     /// Agent Island mascot skin id; the extension falls back to `cindy`.
     var mascot: String
+    /// Optional presentation labels; old saved activities keep their original layout.
+    var countLabels: CountLabels?
+  }
+
+  struct CountLabels: Codable, Hashable {
+    var attention: String
+    var inProgress: String
+    var pending: String
+    var unread: String
   }
 
   var appName: String
