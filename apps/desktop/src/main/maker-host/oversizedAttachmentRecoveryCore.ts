@@ -30,6 +30,8 @@ async function hashFile(file: string): Promise<string> {
 
 // A retry must not reuse another recovery's uncommitted file or reference.
 const recoveryLocks = new Map<string, Promise<unknown>>();
+const learnedRequestBudgets = new Map<string, { trigger: number; target: number }>();
+const deniedRouteMimes = new Map<string, Set<string>>();
 async function serializeRecovery<T>(key: string, run: () => Promise<T>): Promise<T> {
   const previous = recoveryLocks.get(key) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(run);
@@ -145,7 +147,7 @@ function createRequestSizeController(
   resolveSession: (headers: Record<string, string>) => string | null | undefined,
   preprocessor: InlineImagePreprocessor = { prepare: async () => null },
 ): RequestSizeController {
-  return {
+  const controller: RequestSizeController = {
     enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
     format: ctx => ctx.url.includes('/responses') ? 'responses' : ctx.url.includes('/messages') ? 'anthropic' : ctx.url.includes('/chat/completions') ? 'chat' : null,
     route: (ctx, body) => ({
@@ -155,6 +157,39 @@ function createRequestSizeController(
         ? (body as { model: string }).model : undefined,
     }),
     preprocessor,
+    retry: async (body, error, ctx, signal) => {
+      const parsedHint = (() => {
+        const match = /"model"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(body.toString('utf8', 0, Math.min(body.length, 64 * 1024)));
+        return match ? { model: JSON.parse(`"${match[1]}"`) } : {};
+      })();
+      const format = controller.format?.(ctx, parsedHint);
+      if (!format) return null;
+      const route = controller.route?.(ctx, parsedHint) ?? {};
+      const sessionId = resolveSession(ctx.headers) ?? '';
+      const routeKey = `${sessionId}|${route.providerId ?? ''}|${route.endpoint ?? ''}|${route.modelId ?? ''}|${format}`;
+      route.deniedMimeTypes = [...(deniedRouteMimes.get(routeKey) ?? [])];
+      const limit = error.limitBytes ?? body.length;
+      const result = await controller.control(body, format, {
+        route,
+        signal,
+        context: ctx,
+        triggerBytes: limit,
+        targetBytes: Math.max(1, Math.floor(limit * 0.44)),
+        singleImageMaxBytes: error.kind === 'single-image-too-large' ? error.limitBytes : undefined,
+        reason: error.kind,
+      });
+      if (result) {
+        const model = typeof parsedHint.model === 'string' ? parsedHint.model : '';
+        const key = `${sessionId}|${route.providerId ?? ''}|${route.endpoint ?? ''}|${model}|${format}`;
+        learnedRequestBudgets.set(key, { trigger: limit, target: Math.max(1, Math.floor(limit * 0.44)) });
+      }
+      if (error.kind === 'unsupported-image-format') {
+        const denied = deniedRouteMimes.get(routeKey) ?? new Set<string>();
+        denied.add('image/webp');
+        deniedRouteMimes.set(routeKey, denied);
+      }
+      return result;
+    },
     control: async (body, format, policy) => {
       // Session resolution is performed by the existing recovery callback. The size controller
       // keeps persistence scoped to the current DB owner and never exposes a path to the model.
@@ -180,8 +215,11 @@ function createRequestSizeController(
         const model = route.modelId?.toLowerCase() ?? '';
         const modelFamily = /(?:^|[/_-])(?:gpt|o[1-9]|codex)(?:[/_.-]|$)/.test(model)
           ? 'gpt' : model.includes('claude') ? 'claude' : 'other';
+        const modelKey = route.modelId ?? '';
+        const budgetKey = `${sessionId}|${route.providerId ?? ''}|${route.endpoint ?? ''}|${modelKey}|${format}`;
+        const learned = learnedRequestBudgets.get(budgetKey);
         const result = await serializeRecovery(`${scope.ownerStorageKey}/${sessionId}`, async () => controlRequestSize(
-          body, format, { route, modelFamily, signal: policy.signal, preprocessor, singleImageMaxBytes: policy.singleImageMaxBytes },
+          body, format, { route, modelFamily, signal: policy.signal, preprocessor, singleImageMaxBytes: policy.singleImageMaxBytes, triggerBytes: policy.triggerBytes ?? learned?.trigger, targetBytes: policy.targetBytes ?? learned?.target, reason: policy.reason },
           async (bytes, mimeType, index) => {
             const hash = createHash('sha256').update(bytes).digest('hex');
             const ext = extForMime(mimeType) ?? '.bin';
@@ -208,6 +246,7 @@ function createRequestSizeController(
       } finally { await rm(directory, { recursive: true, force: true }); }
     },
   };
+  return controller;
 }
 
 return { createAttachmentRecovery, createRequestSizeController };

@@ -977,7 +977,8 @@ function forward(
   // Optional request-local operational observer. It never receives raw request/response data.
   forwardLifecycle?: ForwardLifecycleObserver | null,
   recoverUpstreamOversized?: (body: Buffer, signal: AbortSignal) => Promise<Buffer>,
-  recoverRequestSize?: (body: Buffer, error: ReturnType<typeof classifyRequestSizeError>, signal: AbortSignal) => Promise<Buffer | null>,
+  recoverRequestSize?: (body: Buffer, error: ReturnType<typeof classifyRequestSizeError>, signal: AbortSignal, ctx?: RequestTransformCtx) => Promise<Buffer | null>,
+  requestContext?: RequestTransformCtx,
 ): void {
   // Diagnostics are a strict side channel: callback failures must never change forwarding.
   const notifyForwardLifecycle = (notify: () => void): void => {
@@ -1275,7 +1276,7 @@ function forward(
             const abortRetry = (): void => retryAbort.abort();
             clientRes.once('close', abortRetry);
             let recovered: Buffer | null = null;
-            try { recovered = await recoverRequestSize(body, sizeError, retryAbort.signal); }
+            try { recovered = await recoverRequestSize(body, sizeError, retryAbort.signal, requestContext); }
             catch { recovered = null; }
             finally { clientRes.off('close', abortRetry); }
             if (clientRes.destroyed || clientRes.writableEnded) return;
@@ -2909,7 +2910,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
             signal,
           )
         : undefined,
-      opts.requestSizeRetry,
+      opts.requestSizeRetry ?? (requestSizeController?.retry
+        ? (body, error, signal, ctx) => requestSizeController.retry!(body, error, ctx ?? requestCtx, signal)
+        : undefined),
+      requestCtx,
     );
   });
 

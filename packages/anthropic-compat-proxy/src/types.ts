@@ -45,12 +45,15 @@ export interface RequestSizeController {
   format?: (ctx: RequestTransformCtx, body: unknown) => WireFormat | null;
   route?: (ctx: RequestTransformCtx, body: unknown) => ImageRouteInfo;
   preprocessor?: InlineImagePreprocessor;
+  retry?: (body: Buffer, error: RequestSizeError, ctx: RequestTransformCtx, signal: AbortSignal) => Promise<Buffer | null>;
   control: (body: Buffer, format: WireFormat, policy: {
     route: ImageRouteInfo;
     signal: AbortSignal;
     reason?: string;
     context?: RequestTransformCtx;
     singleImageMaxBytes?: number;
+    triggerBytes?: number;
+    targetBytes?: number;
   }) => Promise<RequestSizeResult | null>;
 }
 
