@@ -19,6 +19,8 @@ pnpm mobile:sim:up            # 只看界面加 -- --mock
 运行并等完成通知，不要重复启动。失败时按 `next` 处理，再看
 [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md#截图与当前版本测试)。
 
+原生编译的 Rust 版本要求见[环境准备](environment-setup.md#mobile-原生编译rust-版本)。
+
 判断手机版无法启动或编译，须以本轮运行返回的 `code` 为据；之前的对话、其他任务的结论、手动运行
 `pod --version` 都不算证据（Agent 进程的 `PATH` 常常不含已安装的 CocoaPods）。
 
@@ -823,9 +825,24 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
   逐条核对:是否确实必须冷更(同样效果能用不动指纹的写法达成时,要求改写),PR Description
   是否写全上面三件事。冷更 PR 可以保持 Ready 并正常进入自动审查,不因冷更要求新建讨论
   issue 或转为 draft。若同时命中其他独立的讨论、草稿或确认门禁,仍按对应规则处理。
-- 提交前自查:在改动前后各跑一次
+- 提交前自查：按下方[指纹前后对比](#指纹前后对比)使用同一个干净检出，在改动前后各跑一次
   `node apps/mobile/scripts/ci-fingerprint.mjs compute --output <file>` 并比对 hash。PR 上
   出现 fingerprint guard 的 sticky comment 时,以它给出的 base(main) vs 合并结果对比为准。
+
+### 指纹前后对比
+
+**跑过原生编译的检出不能用来做 iOS 指纹前后对比。** 应在同一个干净检出里
+（未跑过 prebuild 或 Rust 编译），只替换待验证的改动文件，前后各算一次；不要直接比较
+不同检出算出的绝对 hash。指纹输出放在检出目录外，避免诊断文件进入指纹输入。
+
+受控实验已确认：在干净临时检出中，仅向被 Git 忽略的 `packages/agent-net-native/dist/`
+加入一个诊断文件，iOS 指纹就变化，`sources` 中唯一变化项是整个
+`../../packages/agent-net-native` 目录；Android 指纹不变。iOS 的 Expo autolinking 会把
+该包目录整体纳入指纹，**Git 忽略不等于指纹忽略**。
+
+这说明被忽略的文件也可能干扰 iOS 对比；但“prebuild 或 Rust 编译留下的产物字节不同，
+导致两个检出的 iOS 指纹不同”仍是强候选解释，不能仅凭这次实验就认定为某次差异的原因。
+CI 指纹门禁在干净环境中计算，不受本地检出残留产物影响。
 
 ### 判断哪些改动会动指纹
 

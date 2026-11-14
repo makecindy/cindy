@@ -122,6 +122,14 @@ test -t 0 && test -t 1 &&
 [`MacMenubarNativeHost.ts`](../../apps/desktop/src/main/menubar/MacMenubarNativeHost.ts)，
 隔离与启动参数见 [`desktop-development.md`](desktop-development.md)。
 
+## Mobile 原生编译：Rust 版本
+
+编译手机端原生部分需要 **Rust 1.88 或更高版本**。`packages/agent-net-core` 使用了
+Rust 2024 edition 的 let-chain 写法和 `slice_as_chunks`（`as_chunks` 方法），两者在
+[Rust 1.88](https://blog.rust-lang.org/2025/06/26/Rust-1.88.0/) 才稳定；Rust 1.85 虽支持
+2024 edition，仍会编译失败。仓库目前没有 `rust-toolchain` / `rust-toolchain.toml` 固定版本，
+原生编译前应在实际执行构建的终端用 `rustc --version` 核对生效版本，不能只看已安装版本列表。
+
 ## macOS：iOS 模拟器构建工具链
 
 首次安装开发包不等于首次完整编译。先按 [Mobile 模拟器流程](../../apps/mobile/docs/simulator-debugging.md#截图与当前版本测试)
