@@ -85,6 +85,17 @@
       "reset": "恢复默认",
       "apply": "应用",
       "hex": "颜色值"
+    },
+    "appIcon": {
+      "label": "应用图标",
+      "rowLabel": "样式",
+      "hint": "切换后主屏幕图标会立即更新，只在这台手机上生效。",
+      "options": {
+        "default": "默认",
+        "wordmark": "Cindy 字标"
+      },
+      "setFailed": "图标没有切换成功，请稍后重试。",
+      "saveFailed": "图标已切换，但没能保存选择。"
     }
   },
   "language": {

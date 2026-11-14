@@ -85,6 +85,17 @@
       "reset": "复预设",
       "apply": "用之",
       "hex": "颜色值"
+    },
+    "appIcon": {
+      "label": "应用之图标",
+      "rowLabel": "样式",
+      "hint": "易之，则主屏之图标立更，唯此机是从。",
+      "options": {
+        "default": "常例",
+        "wordmark": "Cindy 字标"
+      },
+      "setFailed": "图标未易，请少迟再试。",
+      "saveFailed": "图标已易，然未存所择。"
     }
   },
   "language": {

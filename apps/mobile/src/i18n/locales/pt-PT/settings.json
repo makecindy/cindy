@@ -85,6 +85,17 @@
       "reset": "Repor predefinição",
       "apply": "Aplicar",
       "hex": "Valor da cor"
+    },
+    "appIcon": {
+      "label": "Ícone da app",
+      "rowLabel": "Estilo",
+      "hint": "O ícone do ecrã principal é atualizado de imediato. Aplica-se apenas a este iPhone.",
+      "options": {
+        "default": "Predefinido",
+        "wordmark": "Logótipo Cindy"
+      },
+      "setFailed": "Não foi possível mudar o ícone. Tenta novamente.",
+      "saveFailed": "O ícone mudou, mas a escolha não foi guardada."
     }
   },
   "language": {

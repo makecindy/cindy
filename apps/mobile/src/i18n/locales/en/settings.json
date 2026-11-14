@@ -85,6 +85,17 @@
       "reset": "Reset to default",
       "apply": "Apply",
       "hex": "Color value"
+    },
+    "appIcon": {
+      "label": "App icon",
+      "rowLabel": "Style",
+      "hint": "The Home Screen icon updates immediately. Only this phone is affected.",
+      "options": {
+        "default": "Default",
+        "wordmark": "Cindy wordmark"
+      },
+      "setFailed": "Couldn't switch the icon. Try again.",
+      "saveFailed": "The icon changed, but the choice wasn't saved."
     }
   },
   "language": {

@@ -1089,6 +1089,10 @@ Desktop appearance setting for an in-app visual background layer.
 
 用户在 X 上让 Cindy 删掉它那条公开回帖的动作：原提问者在目标回帖下回复 `@askmycindy /delete`，正文中须手动带上 @askmycindy。中文说明也可展示 `/删除`，但命令本身不翻译为 `/刪除`。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 五语只有这一处用例, 等更多用例出现后再定 decided。
 
+### Cindy wordmark
+
+应用图标设置里对 Cindy 字标的称呼，沿用桌面 Dock 图标已发布的叫法（「Cindy 字标」），与符号形态（mark）区分。
+
 ### Work split
 
 伙伴群聊第二阶段：负责人把一件事分成几步派给群里的伙伴，用户点「开始」后伙伴一位接一位做，每做完一步停下等用户点「继续」（docs/product-rules/bot-group-chat.md §7）。英文动作说法 split the work（输入框「+」菜单「安排分工」= Split the Work），名词 work split；句中小写，故 checkCase 为 false。**不得**译作「协同 / 協同 / Collaboration」（Orca 多 Agent 协同的功能名，见 collaboration 条目）、「协作」（共享任务）或「接力」。分工里的每一步叫「一步 / step」，不叫「任务」（见 task-and-conversation-naming）；负责人出的方案叫「安排 / plan」。先登记为 proposed：第二阶段刚落地，等 UI 走查后再定。

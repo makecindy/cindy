@@ -82,6 +82,7 @@ import {
 } from '@/session/mobileVoiceDictionaryCache';
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
 import { UserBubbleSettings } from '@/settings/UserBubbleSettings';
+import { AppIconSettings } from '@/settings/AppIconSettings';
 import { PromptRecommendationSettings } from '@/settings/PromptRecommendationSettings';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
 import { isGooglePlayInstallation } from '@/update/androidInstallSource';
@@ -962,6 +963,9 @@ export default function SettingsScreen() {
           </NativePullDownMenu>
           <UserBubbleSettings />
         </SettingsGroup>
+
+        {/* 应用图标:只在 iOS 出现;切换由系统备选图标完成,选择只存本机。 */}
+        <AppIconSettings />
 
         {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
         <SettingsGroup
