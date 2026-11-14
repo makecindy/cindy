@@ -1131,7 +1131,10 @@ function piManagedCommandFailureReceipt(strings: PiExtensionUiStrings, error: un
         : 'Keep the current runtime. Check the official asset and retry pi update --self after the unpacking or verification problem is resolved.';
   const message = (details.packagesUpdated ? 'Pi packages updated successfully. ' : '')
     + (details.phase === 'host-binary-update'
-      ? `Cindy Host Pi update failed (${details.hostStage ?? 'unknown stage'}). ${hostRecovery}`
+      ? details.hostStage === 'unsupported'
+        // A host that cannot install a new Pi core says so; there is nothing to retry.
+        ? 'Updating the Pi core is not available here yet; package install, update and remove still work.'
+        : `Cindy Host Pi update failed (${details.hostStage ?? 'unknown stage'}). ${hostRecovery}`
       : details.packagesUpdated
         ? 'Pi core update failed. Retry pi update --self; do not repeat the completed package phase.'
         : 'Pi native command failed. Inspect the current state before retrying.');
@@ -3877,7 +3880,8 @@ export class PiAgent extends BaseAgent {
       const body = truncateToByteBudget(summary, PI_DIGEST_MAX_BODY_BYTES);
       const seq = ++digestSeq;
       // slug 唯一:sessionId 片段 + 递增序号;resume/跨会话用 Date.now 防撞名(create 模式撞名会抛)。
-      const slug = slugifyForMemory(`digest-${digestSlugBase}-${Date.now()}-${seq}`, 64);
+      // 不再带 `digest-` 前缀:文件名已由 storage 加 `digest_`, 重复前缀会被前缀校验拒绝。
+      const slug = slugifyForMemory(`${digestSlugBase}-${Date.now()}-${seq}`, 64);
       try {
         await manager.write(memoryScopeKey, {
           type: 'digest',

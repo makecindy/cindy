@@ -3958,6 +3958,7 @@
           "unsupportedProtocol": "Dieses Modellprotokoll wird vom Verbindungstest nicht unterstützt",
           "inconclusive": "Verbindung konnte nicht bestätigt werden. Prüfe vor einem erneuten Versuch die Adresse oder das Netzwerk; die vorherige Anfrage wurde möglicherweise ausgeführt.",
           "exhausted": "Alle möglichen Schnittstellen wurden getestet. Keine funktionierende Verbindung gefunden.",
+          "model": "Getestetes Modell: {{model}}",
           "costHint": "Der Test sendet kurze Generierungsanfragen und kann geringe Kosten verursachen.",
           "details": "Versuche anzeigen",
           "stop": "Test stoppen"
@@ -6440,7 +6441,7 @@
         "hook": "Cindy-IM-Bots"
       },
       "hook": {
-        "description": "Verbinde Slack, Telegram, Feishu / Lark und weitere Kanäle mit derselben Cindy. Nachrichten werden an dieses Gerät weitergeleitet und nutzen dessen Projektliste und Sitzungsausführung; jeder Anbieter behält sein eigenes Konto und seine Einstellungen.",
+        "description": "Verbinde Slack, Telegram, Feishu / Lark und weitere Kanäle mit derselben Cindy. Nachrichten werden an dieses Gerät weitergeleitet und nutzen dessen Projektliste und Sitzungsausführung; Modell und Berechtigungen eines Projekts gelten für alle Kanäle gemeinsam, nur die Kontoverknüpfung bleibt je Kanal getrennt.",
         "slackDescription": "Verknüpfe Slack-Workspaces und übergib Cindy Aufgaben aus Slack.",
         "slackDisabledHint": "Aktiviere den Schalter, um die Slack-Autorisierung zu starten. Nach der Verknüpfung kannst du Aufgaben aus Slack übermitteln.",
         "slackBoundHint": "Verknüpfung abgeschlossen. Durch Ausschalten des Schalters wird die Verknüpfung dieses Geräts aufgehoben. Zum Wiedereinschalten ist eine erneute Autorisierung erforderlich.",
@@ -6459,32 +6460,20 @@
           "error": "Verbindung fehlgeschlagen"
         },
         "form": {
-          "workspacesCardTitle": "Arbeitsverzeichnis-Zuordnungen",
-          "workspacesCardDescription": "Alias → lokaler absoluter Pfad; die Verzeichnisliste wird kanalübergreifend gemeinsam genutzt, die Ausführungseinstellungen gelten dagegen pro Kanal separat.",
-          "workspacesBoundCount_one": "{{count}} lokales Arbeitsverzeichnis verknüpft",
-          "workspacesBoundCount_other": "{{count}} lokale Arbeitsverzeichnisse verknüpft",
+          "workspacesCardTitle": "Projekte und Modelle",
+          "workspacesCardDescription": "Gilt für alle offiziellen Bots gemeinsam. Die Projekte stammen aus der Seitenleiste – dort erstellst, benennst oder entfernst du sie. Änderungen über /model in einem Chat erscheinen auch hier.",
+          "workspacesBoundCount_one": "{{count}} Projekt",
+          "workspacesBoundCount_other": "{{count}} Projekte",
           "aliasPlaceholder": "Alias, z. B. my-server",
-          "addWorkspace": "Arbeitsverzeichnis hinzufügen",
-          "removeWorkspace": "Dieses Arbeitsverzeichnis entfernen",
-          "changeDir": "Zum Ändern des Verzeichnisses klicken (Alias und Einstellungen bleiben erhalten)",
+          "addProject": "Projekt hinzufügen",
           "defaultWorkspaceChip": "Standard: {{name}}",
-          "defaultWorkspaceAria": "Wähle das Standardarbeitsverzeichnis für übermittelte Aufgaben",
-          "defaultWorkspaceRadioAria": "„{{name}}“ als Standardarbeitsverzeichnis festlegen",
-          "defaultWorkspaceRowHint": "Das ausgewählte Verzeichnis ist das Standardarbeitsverzeichnis: Jede Telegram-Direktnachricht sowie jede Gruppen- oder Themenunterhaltung ohne eigenes ausgewähltes Projekt führt ihre Aufgaben dort aus (Unterhaltungen, die über /workspace eines ausgewählt haben, behalten dieses). Beachte den Berechtigungsmodus in der Zeile des ausgewählten Verzeichnisses: Bei „Vollzugriff“ wird eine @Erwähnung aus jeder beliebigen Gruppe mit vollem Zugriff innerhalb dieses Repositorys ausgeführt.",
-          "legacyDefaultsTitle": "Die bisherigen Standardeinstellungen für „Neue Unterhaltung“ gelten weiterhin",
-          "legacyDefaultsDescription": "Auf diesem Gerät sind ältere Standardeinstellungen des offiziellen Bots gespeichert, die weiterhin als Fallback für Verzeichnisse ohne eigene Einstellungen dienen (die offiziellen Bots für Telegram und X teilen sich eine Kopie). Diese Werte werden jetzt pro Verzeichnis festgelegt. Durch das Wiederherstellen der Standardeinstellungen wird Folgendes vollständig gelöscht:",
-          "legacyDefaultsRow": {
-            "agentKind": "Standard-Agent: {{current}} → {{fallback}}",
-            "permissionMode": "Berechtigungsmodus: {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsRowAgent": "{{agent}}: {{fields}}",
-          "legacyDefaultsField": {
-            "model": "Modell {{current}} → {{fallback}}",
-            "effort": "Denkintensität {{current}} → {{fallback}}",
-            "source": "Modellquelle {{current}} → {{fallback}}"
-          },
-          "legacyDefaultsFieldSeparator": ", ",
-          "legacyDefaultsSourceFollowsGlobal": "folgt den globalen Einstellungen"
+          "defaultWorkspaceAria": "Wähle das Standardprojekt für übermittelte Aufgaben",
+          "defaultWorkspaceRadioAria": "„{{name}}“ als Standardprojekt festlegen",
+          "defaultWorkspaceRowHint": "Das ausgewählte Projekt ist das Standardprojekt: Unterhaltungen in Telegram, Feishu / Lark und X ohne eigenes Projekt führen ihre Aufgaben dort aus.",
+          "defaultProjectTag": "Standard",
+          "defaultProjectFullAccessWarning": "Das Standardprojekt „{{name}}“ hat Vollzugriff: Eine @Erwähnung aus jeder beliebigen Gruppe wird darin mit vollem Zugriff ausgeführt.",
+          "sharedSettingsPointer": "Projekte, Modelle und Berechtigungen gelten für alle offiziellen Bots gemeinsam.",
+          "sharedSettingsPointerAction": "Einstellungen öffnen"
         },
         "binding": {
           "copyLink": "Link kopieren",
@@ -6502,7 +6491,8 @@
         "toast": {
           "saveFailed": "Speichern fehlgeschlagen",
           "toggleFailed": "Umschalten fehlgeschlagen",
-          "actionFailed": "Vorgang fehlgeschlagen"
+          "actionFailed": "Vorgang fehlgeschlagen",
+          "addProjectFailed": "Projekt konnte nicht hinzugefügt werden"
         },
         "loginRequired": "Melde dich zuerst bei deinem {{appName}}-Konto an. Die Verbindung wird nach der Anmeldung automatisch fortgesetzt.",
         "standbyHint": "Eine andere Cindy-Instanz auf diesem Computer verwendet die Slack-Verbindung. Schließe sie und aktiviere diesen Schalter erneut, um die Verbindung zu übernehmen.",
@@ -6633,7 +6623,7 @@
             "usageBody": "Erwähne @askmycindy in einem Beitrag auf X – die Aufgabe wird dann an dieses Gerät gesendet und hier ausgeführt; das Ergebnis kommt als Antwort zurück.",
             "riskLabel": "Antworten sind öffentlich",
             "riskPublicBody": "Antworten sind öffentlich und für alle sichtbar. Nutze diese Funktion für öffentliche Fragen und Probleme, nicht für private Angelegenheiten, die deine Privatsphäre gefährden könnten.",
-            "riskWorkdirBody": "Jede X-Aufgabe wird im Standardarbeitsverzeichnis ausgeführt, das in den X-Verbindungseinstellungen festgelegt ist. Der Agent kann dort Dateien lesen und schreiben. Sein Ergebnis wird öffentlich gepostet – wenn dieses Verzeichnis auf ein privates Repository verweist, können dabei auch Dateiinhalte öffentlich werden.",
+            "riskWorkdirBody": "Jede X-Aufgabe wird im Standardprojekt ausgeführt, das in den X-Verbindungseinstellungen festgelegt ist. Der Agent kann dort Dateien lesen und schreiben. Sein Ergebnis wird öffentlich gepostet – wenn dieses Projekt auf ein privates Repository verweist, können dabei auch Dateiinhalte öffentlich werden.",
             "withdrawLabel": "Antwort zurückziehen",
             "withdrawBody": "Die fragende Person kann die Antwort löschen, indem sie darauf mit „@askmycindy /delete“ antwortet. Füge @askmycindy in den Antworttext ein. Nur die öffentliche Antwort wird gelöscht; der lokale Aufgabeneintrag bleibt erhalten.",
             "ackTitle": "X ist verknüpft – so funktioniert’s und darauf solltest du achten",
@@ -6713,8 +6703,8 @@
           "botFallback": "Cindy-Bot",
           "bridgeTitle": "Feishu-/Lark-Bots",
           "bridgeDescription": "Bots leiten deine Feishu-/Lark-Nachrichten nur an Cindy weiter. Die Nachrichten jedes verknüpften Kontos gehen an dessen Arbeitscomputer; Sitzungen bleiben je Bot und Konto getrennt.",
-          "settingsTitle": "Arbeitsverzeichnisse und Modelle",
-          "settingsDescription": "Sie gehören zu deinem Cindy-Konto auf diesem Computer, nicht zu einem Bot oder Feishu-/Lark-Konto. Alle Feishu-/Lark-Bots verwenden dieselben. Die Verzeichnisliste wird auch mit anderen Kanälen geteilt.",
+          "settingsTitle": "Projekte und Modelle",
+          "settingsDescription": "Sie gehören zu deinem Cindy-Konto auf diesem Computer, nicht zu einem Bot oder Feishu-/Lark-Konto. Alle Feishu-/Lark-Bots verwenden dieselben. Die Projekte sind die lokalen Projekte aus der Seitenleiste und werden auch mit anderen Kanälen geteilt.",
           "workingDeviceLabel": "Arbeitscomputer: {{name}}",
           "workingDeviceThisComputer": "Dieser Computer",
           "workingDeviceUnknown": "Arbeitscomputer noch nicht synchronisiert",
@@ -6928,9 +6918,10 @@
         "offlineLocal": "{{provider}} ist offline. Änderungen werden auf diesem Computer gespeichert und bei erneuter Verbindung mit der Chat-Modellkarte synchronisiert.",
         "requireBinding": "Schließe zuerst die Kontoverknüpfung mit {{provider}} ab.",
         "serverUnsupported": "Der Server ist zu alt oder antwortet nicht; die Einstellungen können nicht geladen werden.",
+        "loadFailed": "Die Projekteinstellungen konnten nicht geladen werden.",
         "retry": "Erneut versuchen",
         "toast": {
-          "saveFailed": "Verzeichniseinstellungen konnten nicht gespeichert werden"
+          "saveFailed": "Projekteinstellungen konnten nicht gespeichert werden"
         },
         "teamChipAria": "Wähle den Slack-Workspace, zu dem diese Einstellungen gehören"
       }
@@ -11189,6 +11180,9 @@
         "step": "Schritt {{step}}/{{total}}",
         "speaking": "{{name}} antwortet…",
         "elapsed": "Bisher {{time}}",
+        "onDevice": "auf {{device}}",
+        "onOtherComputer": "auf einem anderen Computer",
+        "onThisComputer": "auf diesem Computer",
         "viewProcess": "Arbeit anzeigen",
         "hideProcess": "Arbeit ausblenden",
         "stop": "Stoppen",
@@ -11494,10 +11488,12 @@
         "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
         "actingFor": "{{name}} · für {{person}}",
         "checkout": {
+          "preparing": "(Cindy) Das Projekt {{repo}} dieser Gruppe wird gerade in diesen Ordner auf diesem Computer heruntergeladen und sollte in wenigen Minuten bereit sein. Bis dahin kann der Ordner leer sein: Beantworte reine Gesprächsfragen sofort; Arbeit, die den Code braucht, erst wenn die Projektdateien da sind.",
           "gitMissing": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: git ist hier nicht installiert. {{guide}} Danach @Cindy erneut, dann lädt Cindy das Projekt herunter und arbeitet darin.",
           "signInOpened": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: Verbinde zuerst dein GitHub-Konto. Cindy hat die GitHub-Anmeldung auf diesem Computer geöffnet; nach der Anmeldung @Cindy erneut, dann lädt Cindy das Projekt herunter.",
           "signIn": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: Verbinde zuerst dein GitHub-Konto. Melde dich in Cindy auf diesem Computer bei GitHub an und @Cindy dann erneut.",
           "unavailable": "(Cindy) Das Projekt {{repo}} der Gruppe konnte nicht auf diesen Computer geladen werden: Dein GitHub-Konto hat eventuell keinen Zugriff darauf, oder das Netzwerk ist nicht erreichbar. Prüfe, ob du das Repository auf GitHub öffnen kannst, und @Cindy dann erneut.",
+          "accessRequired": "(Cindy) Das Projekt {{repo}} der Gruppe konnte nicht auf diesen Computer geladen werden: git auf diesem Computer hat noch keinen Zugriff auf {{host}}. Klone das Repository einmal mit git auf diesem Computer (oder richte ein Zugriffstoken ein) und erwähne dann erneut @Cindy.",
           "installGit": {
             "darwin": "Führe im Terminal xcode-select --install aus und folge den Hinweisen.",
             "win32": "Lade Git von https://git-scm.com/download/win herunter und installiere es mit den Standardoptionen.",
@@ -11707,7 +11703,12 @@
           "projectCaption": "Freunde antworten und arbeiten bei Arbeitsteilungen in diesem Projekt. Das Repository teilt die ganze Gruppe; der Ordner bleibt auf diesem Computer.",
           "githubRepo": "GitHub-Repository",
           "githubRepoHint": "owner/name eingeben. Computer ohne gewählten Ordner verwenden ihre eigene Kopie dieses Projekts oder laden eine herunter.",
+          "repository": "Repository",
+          "repositoryHint": "GitHub: owner/name eingeben. GitLab (auch selbst gehostet), CNB und andere: den Repository-Link einfügen. Computer ohne gewählten Ordner nutzen ihre eigene Kopie dieses Projekts oder laden eine herunter.",
+          "repositoryPlaceholder": "owner/name oder Repository-Link",
           "githubRepoSaveFailed": "Das Repository wurde nicht gespeichert. Bitte prüfen und erneut versuchen.",
+          "folderRepoFilled": "Das Repository {{repo}} wurde aus diesem Ordner übernommen. Die Computer der anderen Mitglieder verwenden es ebenfalls.",
+          "folderRepoDiffers": "Dieser Ordner ist ein Projekt von {{repo}} und nicht das Repository der Gruppe. Dieser Computer arbeitet weiterhin in diesem Ordner.",
           "projectFolder": "Ordner auf diesem Computer",
           "projectDirAutoHint": "Anhand des Repositorys unter deinen Projekten gefunden.",
           "organizerHint": "Legt fest, wer die einzelnen Schritte übernimmt. Standardmäßig der erste Freund.",
@@ -12554,7 +12555,7 @@
         "expiredCardNotice": "Diese Karte ist abgelaufen",
         "slash": {
           "new": "🌱 Neustart – der bisherige Chat ist gelöscht. Wir fangen ganz von vorn an.",
-          "help": "🤖 Das kann ich für dich tun:\n\n/new         Neu anfangen (löscht den Kontext des aktuellen Chats)\n/model       Modell wechseln\n/permission  Berechtigungsmodus anpassen (auto / bypass / ask usw.)\n/ctr         Einen Arbeitsbereich auf dem Desktop fernsteuern (während der Steuerung erneut senden, um die Sitzung zu wechseln)\n/exctr       Fernsteuerung beenden und zurück zu unseren Discord-DMs\n/help        Anzeigen, was ich kann\n\nLäuft etwas, das du stoppen willst? Sende einfach `!stop` – ich breche die aktuelle Ausführung sofort ab und verwerfe auch die Nachrichten in der Warteschlange. Die Sitzung bleibt erhalten, du kannst später weitermachen.\n\nAnsonsten schreib mir einfach. Ich höre zu.",
+          "help": "🤖 Das kann ich für dich tun:\n\n/new         Neu anfangen (löscht den Kontext des aktuellen Chats)\n/model       Modell wechseln\n/permission  Berechtigungsmodus anpassen (auto / bypass / ask usw.)\n/ctr         Ein Projekt auf dem Desktop fernsteuern (während der Steuerung erneut senden, um die Sitzung zu wechseln)\n/exctr       Fernsteuerung beenden und zurück zu unseren Discord-DMs\n/help        Anzeigen, was ich kann\n\nLäuft etwas, das du stoppen willst? Sende einfach `!stop` – ich breche die aktuelle Ausführung sofort ab und verwerfe auch die Nachrichten in der Warteschlange. Die Sitzung bleibt erhalten, du kannst später weitermachen.\n\nAnsonsten schreib mir einfach. Ich höre zu.",
           "unknownCommand": "Den Befehl `{{cmd}}` kenne ich nicht 🤔\nDiese Befehle verstehe ich: /new, /model, /permission, /ctr, /exctr, /help",
           "localTaskAccessUnavailable": "🔒 `{{cmd}}` ist in Serverkanälen nicht verfügbar – damit würden private Sitzungen / Projekte auf deinem Desktop öffentlich sichtbar. Wenn du ihn nutzen willst, schick ihn mir per Direktnachricht.",
           "detachedBySlash": "🚪 Fernsteuerung beendet – wir sind zurück in unseren Discord-DMs. Wenn du den Desktop wieder steuern willst, sende /ctr.",
@@ -12633,15 +12634,15 @@
             "fullAccessCancelled": "Abgebrochen – die aktuellen Berechtigungen bleiben bestehen"
           },
           "control": {
-            "title": "🎮 Arbeitsbereich wählen",
-            "emptyBody": "_Noch keine Arbeitsbereiche zum Steuern. Öffne oder erstelle auf dem Desktop eine Sitzung und komm dann wieder._",
-            "hint": "Wähle einen Arbeitsbereich, um fortzufahren; 🚪 Beenden bricht ab.",
+            "title": "🎮 Projekt wählen",
+            "emptyBody": "_Noch keine Projekte zum Steuern. Öffne oder erstelle auf dem Desktop eine Sitzung und komm dann wieder._",
+            "hint": "Wähle ein Projekt, um fortzufahren; 🚪 Beenden bricht ab.",
             "attachedSwitchHint": "🎮 Aktuell gesteuert: **{{sessionTitle}}**\nWähle eine neue Sitzung, um direkt zu wechseln; 🚪 Beenden lässt alles, wie es ist.",
             "btnExit": "🚪 Beenden",
             "resolvedExit": "🚪 Beendet. Wenn du wieder fernsteuern willst, sende /ctr.",
             "sessionPickerTitle": "🎮 Sitzungen in {{displayName}}",
-            "sessionPickerHint": "Wähle eine Sitzung zum Weitermachen · ➕ Neu startet eine neue · ↩️ Zurück wechselt den Arbeitsbereich · 🚪 Beenden bricht ab",
-            "sessionPickerEmptyBody": "_Im Arbeitsbereich **{{displayName}}** gibt es noch keine aktiven Sitzungen. Wie wäre es, mit ➕ Neu eine zu starten?_",
+            "sessionPickerHint": "Wähle eine Sitzung zum Weitermachen · ➕ Neu startet eine neue · ↩️ Zurück wechselt das Projekt · 🚪 Beenden bricht ab",
+            "sessionPickerEmptyBody": "_Im Projekt **{{displayName}}** gibt es noch keine aktiven Sitzungen. Wie wäre es, mit ➕ Neu eine zu starten?_",
             "btnNew": "➕ Neu",
             "btnBack": "↩️ Zurück",
             "resolvedSessionPick": "🎯 Verbunden: **{{sessionTitle}}** ({{workspaceName}})\nDeine Nachrichten gehen jetzt direkt in diese Sitzung. Zum Verlassen jederzeit `/exctr` senden.",
@@ -12751,7 +12752,7 @@
         "slash": {
           "start": "👋 Hallo, ich bin dein persönlicher Cindy-Assistent!\n\nIm Direktchat schreibst du mir einfach. In Gruppen reagiere ich nur, wenn du mich mit @ erwähnst oder auf eine meiner Nachrichten antwortest. Mit /help siehst du alle Befehle.",
           "new": "🌱 Neue Sitzung erstellt — sie steht jetzt in deiner Sitzungsliste. Auf zu einem frischen Start!",
-          "help": "🤖 Das kann ich für dich tun:\n\n/new         Neue Sitzung erstellen (alte bleiben erhalten; in Gruppen pro aktuellem Gruppenthema)\n/project     In einem Projektordner arbeiten (läuft hier im Bot, übernimmt nicht den Desktop)\n/session     Letzte Desktop-Sitzungen anzeigen; tippe auf eine, um sie zu übernehmen und weiterzumachen\n/model       Ein anderes Modell einwechseln\n/permission  Berechtigungsmodus ändern (auto / bypass / ask usw.)\n/settings    Aktuelles Projekt, Agent, Modell, Denkintensität und Berechtigungen anzeigen\n/ctr         Einen Arbeitsbereich auf dem Desktop fernsteuern (während der Übernahme erneut senden, um die Sitzung zu wechseln)\n/exctr       Übernahme beenden und zum Telegram-Chat zurückkehren\n/help        Zeigen, was ich kann\n\nLäuft gerade etwas, das du stoppen willst? Sende /stop (oder `!stop`) — ich breche die aktuelle Ausführung sofort ab und verwerfe auch die wartenden Nachrichten. Die Sitzung bleibt erhalten, du kannst also weitermachen.\n\nIm Direktchat schreibst du mir einfach. In Gruppen reagiere ich nur, wenn du mich mit @ erwähnst oder auf eine meiner Nachrichten antwortest — die letzten Gruppennachrichten merke ich mir als Kontext.",
+          "help": "🤖 Das kann ich für dich tun:\n\n/new         Neue Sitzung erstellen (alte bleiben erhalten; in Gruppen pro aktuellem Gruppenthema)\n/project     In einem Projektordner arbeiten (läuft hier im Bot, übernimmt nicht den Desktop)\n/session     Letzte Desktop-Sitzungen anzeigen; tippe auf eine, um sie zu übernehmen und weiterzumachen\n/model       Ein anderes Modell einwechseln\n/permission  Berechtigungsmodus ändern (auto / bypass / ask usw.)\n/settings    Aktuelles Projekt, Agent, Modell, Denkintensität und Berechtigungen anzeigen\n/ctr         Ein Projekt auf dem Desktop fernsteuern (während der Übernahme erneut senden, um die Sitzung zu wechseln)\n/exctr       Übernahme beenden und zum Telegram-Chat zurückkehren\n/help        Zeigen, was ich kann\n\nLäuft gerade etwas, das du stoppen willst? Sende /stop (oder `!stop`) — ich breche die aktuelle Ausführung sofort ab und verwerfe auch die wartenden Nachrichten. Die Sitzung bleibt erhalten, du kannst also weitermachen.\n\nIm Direktchat schreibst du mir einfach. In Gruppen reagiere ich nur, wenn du mich mit @ erwähnst oder auf eine meiner Nachrichten antwortest — die letzten Gruppennachrichten merke ich mir als Kontext.",
           "unknownCommand": "Den Befehl `{{cmd}}` kenne ich nicht 🤔\nDiese Befehle verstehe ich: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Aktuelle Einstellungen\n\nProjekt: {{workspace}}\nAgent: {{agent}}\nModell: {{model}}\nDenkintensität: {{effort}}\nBerechtigungen: {{permission}}\n\nÄndern kannst du sie mit /project, /model oder /permission.",
           "settingsCompanion": "⚙️ Aktuelle Einstellungen (Teammitglied)\n\nProjekt: {{workspace}}\nAgent: {{agent}}\nModell: {{model}}\nDenkintensität: {{effort}}\nBerechtigungen: {{permission}}\n\nModell, Berechtigungen und Arbeitsverzeichnis folgen den Einstellungen des Teammitglieds. Ändere sie in Cindy in den Einstellungen des Teammitglieds.",
@@ -12853,15 +12854,15 @@
             "dialogueName": "Chat (verwalteter Ordner)"
           },
           "control": {
-            "title": "🎮 Arbeitsbereich wählen",
-            "emptyBody": "_Noch kein Arbeitsbereich zum Übernehmen. Öffne oder erstelle am Desktop eine Sitzung und komm dann wieder._",
-            "hint": "Tippe auf einen Arbeitsbereich, um weiterzugehen; tippe auf 🚪 Beenden, um abzubrechen",
+            "title": "🎮 Projekt wählen",
+            "emptyBody": "_Noch kein Projekt zum Übernehmen. Öffne oder erstelle am Desktop eine Sitzung und komm dann wieder._",
+            "hint": "Tippe auf ein Projekt, um weiterzugehen; tippe auf 🚪 Beenden, um abzubrechen",
             "attachedSwitchHint": "🎮 Aktuell übernommen: **{{title}}**\nWähle eine andere Sitzung, um direkt umzusteigen; tippe auf 🚪 Beenden, um alles so zu lassen",
             "btnExit": "🚪 Beenden",
             "resolvedExit": "🚪 Bin raus. Wenn du wieder fernsteuern willst, sende /ctr",
             "sessionPickerTitle": "🎮 Sitzungen in {{name}}",
-            "sessionPickerHint": "Sitzung wählen und weitermachen · ➕ Neu für eine neue Sitzung · ↩️ Zurück zum Wechseln des Arbeitsbereichs · 🚪 Beenden zum Abbrechen",
-            "sessionPickerEmptyBody": "_Im Arbeitsbereich **{{name}}** gibt es noch keine aktive Sitzung. Wie wäre es mit ➕ Neu?_",
+            "sessionPickerHint": "Sitzung wählen und weitermachen · ➕ Neu für eine neue Sitzung · ↩️ Zurück zum Wechseln des Projekts · 🚪 Beenden zum Abbrechen",
+            "sessionPickerEmptyBody": "_Im Projekt **{{name}}** gibt es noch keine aktive Sitzung. Wie wäre es mit ➕ Neu?_",
             "btnNew": "➕ Neu",
             "btnBack": "↩️ Zurück",
             "resolvedSessionPick": "🎯 Du bist drin: **{{title}}** ({{workspace}})\nDeine Nachrichten gehen ab jetzt direkt in diese Sitzung; raus jederzeit mit `/exctr`",
@@ -12870,7 +12871,7 @@
             "sessionBusyOldCardPlaceholder": "⏳ Diese Sitzung läuft noch — unten gibt es eine neue Karte, wähle bitte erneut",
             "recentSessions": {
               "title": "🕑 Letzte Sitzungen",
-              "hint": "Tippe auf eine, um sie zu übernehmen und weiterzumachen (über alle Arbeitsbereiche nach Zeit sortiert) · Nach Arbeitsbereich wählen mit /ctr · 🚪 Beenden zum Abbrechen",
+              "hint": "Tippe auf eine, um sie zu übernehmen und weiterzumachen (über alle Projekte nach Zeit sortiert) · Nach Projekt wählen mit /ctr · 🚪 Beenden zum Abbrechen",
               "emptyBody": "_Am Desktop gibt es noch keine aktive Sitzung. Starte dort zuerst eine und komm dann wieder._"
             },
             "sessionBusyPrompts": {
@@ -13024,18 +13025,18 @@
           "permissionTimeout": "Zeitüberschreitung beim Warten auf die Freigabe. Die Berechtigungsanfrage wurde abgelehnt."
         },
         "run": {
-          "routeReselectHint": ". Wähle unter Einstellungen → IM-Bots erneut ein Modell für das Arbeitsverzeichnis dieses Kanals.",
+          "routeReselectHint": ". Wähle unter Einstellungen → IM-Bots erneut ein Modell für das Projekt dieses Kanals.",
           "awaitingPermission": "Wartet auf Freigabe · deine Bestätigung ist nötig",
           "awaitingAnswer": "Wartet auf Antwort · deine Auswahl ist nötig",
           "awaitingPlan": "Wartet auf Prüfung · du musst den Plan bestätigen",
           "awaitingFallback": "Wartet auf deine Bestätigung",
           "cancelledBeforeRun": "Die Aufgabe wurde vom Nutzer gestoppt, daher wurde diese Nachricht nicht ausgeführt.",
-          "liveSessionDirUnmapped": "Diese Aufgabe läuft in einem Verzeichnis, das nicht mehr in den Arbeitsverzeichnis-Zuordnungen steht, daher wurde diese Nachricht nicht ausgeführt. Füge das Verzeichnis unter Einstellungen → Remote-Verbindung → Arbeitsverzeichnis-Zuordnungen hinzu oder schließe diese Aufgabe in der Desktop-App und sende die Nachricht erneut.",
+          "liveSessionDirUnmapped": "Diese Aufgabe läuft in einem Verzeichnis, das zu keinem Projekt mehr gehört, daher wurde diese Nachricht nicht ausgeführt. Füge das Verzeichnis in der Seitenleiste als Projekt hinzu oder schließe diese Aufgabe in der Desktop-App und sende die Nachricht erneut.",
           "interactionExpired": "Die Aufgabe ist beendet, diese Interaktion ist nicht mehr gültig.",
           "telegramOfficialBot": "offizieller Telegram-Bot"
         },
         "dispatch": {
-          "dirUnmapped": "Das Verzeichnis dieser Aufgabe steht nicht mehr in den Arbeitsverzeichnis-Zuordnungen, daher wurde diese Nachricht nicht ausgeführt. Füge das Verzeichnis unter Einstellungen → Remote-Verbindung → Arbeitsverzeichnis-Zuordnungen hinzu und sende die Nachricht dann erneut."
+          "dirUnmapped": "Das Verzeichnis dieser Aufgabe gehört zu keinem Projekt mehr, daher wurde diese Nachricht nicht ausgeführt. Füge das Verzeichnis in der Seitenleiste als Projekt hinzu und sende die Nachricht dann erneut."
         }
       },
       "wecom": {
@@ -13120,9 +13121,9 @@
             "fullAccessCancelled": "Abgebrochen. Die aktuellen Berechtigungen bleiben bestehen"
           },
           "control": {
-            "title": "🎮 Arbeitsbereich auswählen",
-            "emptyBody": "_Noch kein Arbeitsbereich zum Fernsteuern verfügbar. Erstelle zuerst eine Aufgabe in Cindy Desktop._",
-            "hint": "Wähle einen Arbeitsbereich, um fortzufahren, oder beende den Vorgang.",
+            "title": "🎮 Projekt auswählen",
+            "emptyBody": "_Noch kein Projekt zum Fernsteuern verfügbar. Erstelle zuerst eine Aufgabe in Cindy Desktop._",
+            "hint": "Wähle ein Projekt, um fortzufahren, oder beende den Vorgang.",
             "attachedSwitchHint": "Aktuell ferngesteuert: **{{sessionTitle}}**",
             "btnExit": "🚪 Beenden",
             "resolvedExit": "🚪 Fernsteuerung beendet",
@@ -13184,7 +13185,7 @@
       "feishu": {
         "slash": {
           "new": "🌱 Neustart — ich habe unsere bisherige Unterhaltung gelöscht. Lass uns von vorn anfangen!",
-          "help": "🤖 Das kann ich für dich tun:\n\n/new         Neu anfangen (löscht den aktuellen Gesprächskontext)\n/model       Modell wechseln\n/permission  Berechtigungsmodus anpassen (auto / bypass / ask usw.)\n/ctr         Einen Arbeitsbereich der Desktop-App fernsteuern (während der Steuerung erneut senden, um die Sitzung zu wechseln)\n/exctr       Fernsteuerung beenden und zu unserem Privatchat zurückkehren\n/help        Anzeigen, was ich kann\n\nLäuft etwas, das du stoppen willst? Sende einfach `!stop` – ich breche die aktuelle Ausführung sofort ab und verwerfe auch wartende Nachrichten. Die Sitzung bleibt erhalten, du kannst sie fortsetzen.\n\nAnsonsten schreib mir einfach – ich höre zu~",
+          "help": "🤖 Das kann ich für dich tun:\n\n/new         Neu anfangen (löscht den aktuellen Gesprächskontext)\n/project     In einem Projektordner arbeiten (läuft hier im Bot, übernimmt nicht den Desktop)\n/model       Modell wechseln\n/permission  Berechtigungsmodus anpassen (auto / bypass / ask usw.)\n/ctr         Ein Projekt der Desktop-App fernsteuern (während der Steuerung erneut senden, um die Sitzung zu wechseln)\n/exctr       Fernsteuerung beenden und zu unserem Privatchat zurückkehren\n/help        Anzeigen, was ich kann\n\nLäuft etwas, das du stoppen willst? Sende einfach `!stop` – ich breche die aktuelle Ausführung sofort ab und verwerfe auch wartende Nachrichten. Die Sitzung bleibt erhalten, du kannst sie fortsetzen.\n\nAnsonsten schreib mir einfach – ich höre zu~",
           "unknownCommand": "Den Befehl `{{cmd}}` kenne ich nicht 🤔\nDiese Befehle verstehe ich: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Fernsteuerung beendet – wir sind zurück in unserem Privatchat. Sende /ctr, wenn du die Desktop-App wieder steuern willst",
           "detachedByRevoke": "⚠️ Du hast die Fernsteuerung in der Desktop-App beendet. Neue Nachrichten landen wieder in unserem Privatchat.",
@@ -13281,15 +13282,28 @@
             "resolved": "✅ Auf „Automatische Prüfung“ umgestellt – schreib einfach in der Gruppe weiter~",
             "failed": "❌ Umstellen fehlgeschlagen: {{reason}}. Du kannst /permission auto senden, um manuell umzustellen"
           },
+          "project": {
+            "title": "📂 Projektordner wechseln",
+            "hint": "**Aktuell**: {{name}}\nWähle ein Projekt, dann arbeiten die nächsten Nachrichten in diesem Ordner (der Kontext beginnt neu, Modell- und Berechtigungseinstellungen bleiben erhalten)",
+            "emptyBody": "_Am Desktop gibt es noch keinen aktiven Projektarbeitsbereich. Öffne dort zuerst ein Projekt und komm dann wieder._",
+            "btnDialogue": "💬 Zurück zum Chat",
+            "btnCancel": "🚪 Doch nicht",
+            "resolvedPick": "📂 Zu **{{name}}** gewechselt — der neue Kontext steht bereit, schick einfach eine Anweisung. Zurück zum normalen Chat: /project senden und „Zurück zum Chat“ wählen",
+            "resolvedDialogue": "💬 Zurück im Chat-Ordner, der Kontext beginnt neu.",
+            "resolvedCancel": "🚪 Nicht gewechselt, alles bleibt, wie es ist",
+            "switchFailed": "❌ Wechsel fehlgeschlagen: {{reason}} (der Ordner wurde möglicherweise verschoben oder gelöscht)",
+            "attachedUnsupported": "🎮 Du übernimmst gerade per /ctr eine Desktop-Sitzung — während der Übernahme gehen Nachrichten direkt in diese Sitzung, /project ist also nicht nötig. Um das Projekt zu wechseln, beende die Übernahme zuerst mit `/exctr`",
+            "dialogueName": "Chat (verwalteter Ordner)"
+          },
           "control": {
-            "title": "🎮 Wähle einen Arbeitsbereich",
-            "emptyBody": "_Noch keine Arbeitsbereiche zum Steuern~ Öffne oder erstelle eine Sitzung in der Desktop-App und komm dann wieder_",
-            "hint": "Tippe auf einen Arbeitsbereich, um weiterzumachen; 🚪 Beenden bricht ab",
+            "title": "🎮 Wähle ein Projekt",
+            "emptyBody": "_Noch keine Projekte zum Steuern~ Öffne oder erstelle eine Sitzung in der Desktop-App und komm dann wieder_",
+            "hint": "Tippe auf ein Projekt, um weiterzumachen; 🚪 Beenden bricht ab",
             "attachedSwitchHint": "🎮 Aktuell gesteuert: **{{title}}**\nWähle eine andere Sitzung, um direkt zu wechseln; 🚪 Beenden lässt alles, wie es ist",
             "btnExit": "🚪 Beenden",
             "resolvedExit": "🚪 Bin raus. Sende /ctr, wenn du wieder fernsteuern willst",
             "sessionPickerTitle": "🎮 Sitzungen in {{workspace}}",
-            "sessionPickerHint": "Wähle eine Sitzung zum Weitermachen · ➕ Neu für eine neue · ↩️ Zurück zum Wechseln des Arbeitsbereichs · 🚪 Beenden zum Abbrechen",
+            "sessionPickerHint": "Wähle eine Sitzung zum Weitermachen · ➕ Neu für eine neue · ↩️ Zurück zum Wechseln des Projekts · 🚪 Beenden zum Abbrechen",
             "sessionPickerEmptyBody": "_In **{{workspace}}** gibt es noch keine aktiven Sitzungen~ Tippe doch auf ➕ Neu, um eine zu starten_",
             "btnNew": "➕ Neu",
             "btnBack": "↩️ Zurück",
@@ -13334,7 +13348,7 @@
       "wechat": {
         "slash": {
           "new": "🌱 Neustart — die bisherige Unterhaltung ist gelöscht. Wir fangen von vorn an~",
-          "help": "🤖 Das kann ich für dich tun:\n\n/new         Neu anfangen (löscht den Kontext der aktuellen Unterhaltung)\n/model       Modell wechseln\n/permission  Berechtigungsmodus anpassen (auto / bypass / ask usw.)\n/ctr         Einen Arbeitsbereich in der Desktop-App fernsteuern (während der Übernahme erneut senden, um die Sitzung zu wechseln)\n/exctr       Übernahme beenden und zurück in unseren WeChat-Privatchat\n/help        Zeigen, was ich kann\n\nLäuft gerade etwas, das du stoppen willst? Sende einfach `!stop` – ich breche die aktuelle Ausführung sofort ab und verwerfe wartende Nachrichten. Die Sitzung bleibt erhalten, du kannst weitermachen.\n\nAnsonsten schreib mir einfach, ich höre zu~",
+          "help": "🤖 Das kann ich für dich tun:\n\n/new         Neu anfangen (löscht den Kontext der aktuellen Unterhaltung)\n/model       Modell wechseln\n/permission  Berechtigungsmodus anpassen (auto / bypass / ask usw.)\n/ctr         Ein Projekt in der Desktop-App fernsteuern (während der Übernahme erneut senden, um die Sitzung zu wechseln)\n/exctr       Übernahme beenden und zurück in unseren WeChat-Privatchat\n/help        Zeigen, was ich kann\n\nLäuft gerade etwas, das du stoppen willst? Sende einfach `!stop` – ich breche die aktuelle Ausführung sofort ab und verwerfe wartende Nachrichten. Die Sitzung bleibt erhalten, du kannst weitermachen.\n\nAnsonsten schreib mir einfach, ich höre zu~",
           "unknownCommand": "Den Befehl `{{cmd}}` kenne ich nicht 🤔\nDiese Befehle verstehe ich: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Übernahme beendet – wir sind zurück in unserem WeChat-Privatchat. Wenn du die Desktop-App wieder fernsteuern willst, sende /ctr",
           "detachedByRevoke": "⚠️ Du hast die Übernahme in der Desktop-App zurückgenommen. Weitere Nachrichten landen wieder in unserem WeChat-Privatchat.",
@@ -13417,14 +13431,14 @@
             "fullAccessCancelled": "Abgebrochen, die aktuellen Berechtigungen bleiben"
           },
           "control": {
-            "title": "🎮 Arbeitsbereich wählen",
-            "emptyBody": "_Noch keine Arbeitsbereiche zum Übernehmen~ Öffne oder erstelle eine Sitzung in der Desktop-App und komm dann wieder_",
-            "hint": "Tippe auf einen Arbeitsbereich, um weiterzumachen; tippe auf 🚪 Beenden, um abzubrechen",
+            "title": "🎮 Projekt wählen",
+            "emptyBody": "_Noch keine Projekte zum Übernehmen~ Öffne oder erstelle eine Sitzung in der Desktop-App und komm dann wieder_",
+            "hint": "Tippe auf ein Projekt, um weiterzumachen; tippe auf 🚪 Beenden, um abzubrechen",
             "attachedSwitchHint": "🎮 Aktuell übernommen: **{{sessionTitle}}**\nWähle eine neue Sitzung, um direkt zu wechseln; tippe auf 🚪 Beenden, um alles so zu lassen",
             "btnExit": "🚪 Beenden",
             "resolvedExit": "🚪 Beendet. Sende /ctr, wenn du wieder fernsteuern willst",
             "sessionPickerTitle": "🎮 Sitzungen in {{displayName}}",
-            "sessionPickerHint": "Wähle eine Sitzung zum Weitermachen · ➕ Neu für eine neue · ↩️ Zurück zum Wechseln des Arbeitsbereichs · 🚪 Beenden zum Abbrechen",
+            "sessionPickerHint": "Wähle eine Sitzung zum Weitermachen · ➕ Neu für eine neue · ↩️ Zurück zum Wechseln des Projekts · 🚪 Beenden zum Abbrechen",
             "sessionPickerEmptyBody": "_In **{{displayName}}** gibt es noch keine aktive Sitzung~ Wie wäre es mit ➕ Neu?_",
             "btnNew": "➕ Neu",
             "btnBack": "↩️ Zurück",
@@ -21355,6 +21369,30 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "placement": {
+      "needsUpdate": "Auf dem ausführenden Computer muss Cindy aktualisiert werden, bevor Konten so verschoben werden können.",
+      "moveTo": "Verschieben nach…",
+      "separate": "Eigener Anbieter",
+      "moveTitle": "{{name}} nach {{target}} verschieben?",
+      "takeOutTitle": "{{name}} zu einem eigenen Anbieter machen?",
+      "moveDescription": "Nur der Anbieter, zu dem dieses Konto gehört, ändert sich. Anmeldung und Verlauf bleiben erhalten, und bestehende Aufgaben nutzen weiter dieses Konto.",
+      "moveConfirm": "Verschieben",
+      "failed": "Die Zuordnung des Kontos konnte nicht geändert werden. Versuche es später erneut.",
+      "mergeInto": "Zusammenführen mit…",
+      "mergeTitle": "{{name}} mit {{target}} zusammenführen?",
+      "mergeDescription": "Alle Konten dieses Anbieters wechseln zum anderen Anbieter. Dieser Anbieter erscheint dann nicht mehr in der Anbieterliste und für neue Aufgaben. Bestehende Aufgaben behalten ihre Konten.",
+      "mergeConfirm": "Zusammenführen",
+      "deleteTitle": "{{name}} löschen?",
+      "deleteDescription": "Cindy nutzt die Konten dieses Anbieters nicht mehr. Ihre CLI-Anmeldungen und der Gesprächsverlauf bleiben auf diesem Computer.",
+      "deleteConfirm": "Löschen",
+      "deleteInUse": "Eine Aufgabe nutzt gerade ein Konto dieses Anbieters. Lösche ihn, wenn die Aufgabe beendet ist.",
+      "signInQuestion": "Wohin soll das neue Konto?",
+      "signInSeparate": "Als eigener Anbieter",
+      "signInSeparateHint": "Wähle ihn für eine neue Aufgabe, um immer dieses Konto zu nutzen.",
+      "signInInto": "Zu {{name}} hinzufügen",
+      "signInContinue": "Weiter zur Anmeldung",
+      "signInBack": "Zurück"
+    },
     "loginIdentityUnknown": "Die ursprüngliche Identität dieses Kontos ist unbekannt. Verbinde über „Konto hinzufügen“ ein neues Konto.",
     "loginExpiresInDays": "Anmeldung läuft in etwa {{days}} Tagen ab",
     "loginExpiresSoon": "Anmeldung läuft bald ab",
@@ -21369,10 +21407,9 @@
     "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
-      "detected": "Angemeldetes Konto gefunden",
-      "useAccount": "Dieses Konto verwenden",
+      "useAccount": "{{cli}}-Konto auf diesem Computer verwenden",
       "anotherAccount": "Mit anderem Konto anmelden",
-      "keepExisting": "Das neue Konto wird diesem Anbieter hinzugefügt. Bestehende Anmeldungen bleiben erhalten.",
+      "keepExisting": "Das neue Konto wird ein eigener Anbieter, sofern du keinen zum Hinzufügen auswählst. Bestehende Anmeldungen bleiben erhalten.",
       "checkFailed": "Das lokale Konto konnte nicht geprüft werden. Bitte erneut versuchen.",
       "retry": "Erneut versuchen",
       "useCodex": "Mit Codex anmelden"
@@ -21380,7 +21417,6 @@
     "title": "Abonnementkonten",
     "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
-    "default": "Standardordner",
     "defaultTag": "Standard",
     "ready": "Verbunden",
     "signedOut": "Anmeldung erforderlich",

@@ -75,7 +75,7 @@ Bot Profile
 
 每条伙伴 Session 必须能反查唯一的 Bot owner 与 Profile 版本。伙伴开的任务是普通
 Cindy Session，只记「由这位伙伴开的」（6.1），不冒充该伙伴或另一个伙伴的主任务。
-伙伴在群聊里使用独立的群专线 Session（`role = 'group'`），与主任务共享 Profile 与 Home（群有项目文件夹时 V2 伙伴回应主人的专线在那里干活），
+伙伴在群聊里使用独立的群专线 Session（`role = 'group'`，主人任务列表归入群文件夹对应项目，见 [群任务归属与隐藏记录](bot-group-chat.md#13-个人伙伴群任务的项目归属与隐藏记录审计2026-11-13)），与主任务共享 Profile 与 Home（群有项目文件夹时 V2 伙伴回应主人的专线在那里干活），
 不进入主时间线；群里分工时的每一步由同为 `role = 'group'` 的分工 Session 完成（工作目录见下文例外）。
 规则见 [伙伴群聊](bot-group-chat.md)。
 

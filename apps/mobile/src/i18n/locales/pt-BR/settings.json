@@ -430,7 +430,11 @@
       "voice": "Segurar para falar",
       "scrollKeys": "Analógico direito",
       "scroll": "Rolar",
-      "page": "Mudar de página"
+      "page": "Mudar de página",
+      "triggerScrollKeys": "L2 / R2 + direcional cima/baixo",
+      "triggerScroll": "Rolar conteúdo visível",
+      "sendText": "Enviar texto digitado",
+      "taskHint": "Estes atalhos funcionam nas páginas de sessão. Um botão atribuído à voz tem prioridade; ao soltá-lo, o texto fica na caixa de mensagem."
     }
   }
 }

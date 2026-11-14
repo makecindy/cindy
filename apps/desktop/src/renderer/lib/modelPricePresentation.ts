@@ -44,7 +44,10 @@ export function resolveModelPricePresentation({
   referencePricing,
 }: ModelPricePresentationInput): ModelPricePresentation | null {
   const pricing = providerId === 'xd' ? gatewayPricing : referencePricing;
-  const quote = getModelPriceQuote(pricing, providerId, modelId, agent ?? undefined);
+  // A provider Cindy created for subscription accounts (2026-11-13) mirrors its built-in
+  // subscription's models and prices; the reference table only knows the built-in id.
+  const pricedAs = providers.find((item) => item.id === providerId)?.subscriptionPool ?? providerId;
+  const quote = getModelPriceQuote(pricing, pricedAs, modelId, agent ?? undefined);
   if (providerId === 'xd' && (!quote || quote.source === 'gateway')) {
     // 网关快照还没到（null）且这一行也没有 quote：什么都不画，别先画一个错的。
     if (!quote && gatewayPricing == null) return null;

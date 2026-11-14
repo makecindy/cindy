@@ -29,8 +29,19 @@ import { app, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
-import { readPool, migrateLegacyCodexAccounts, readLegacyCodexAccountId } from '../subscription-accounts/store.js';
+import { hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool,
+  refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
+  resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
+import { readPool, readProviderBoundAccountIds } from '../subscription-accounts/store.js';
+import {
+  accountProviderId,
+  readCreatedSubscriptionProviders,
+  readCreatedSubscriptionProvidersIfReadable,
+  readMergedProviderAccount,
+  restoreAutoMergedLegacyCodexAccounts,
+  restoreUnplacedSubscriptionAccounts,
+  resolveSubscriptionPoolProvider,
+} from '../subscription-accounts/placement.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -52,6 +63,7 @@ import {
 
 import { createLogger } from '../logger.js';
 import { codexAccountState } from './codex-account-auth.desktop.js';
+import { projectSubscriptionPoolCatalog as projectSubscriptionPoolCatalogWith, publishSubscriptionPoolProviders as publishSubscriptionPoolProvidersWith } from './subscriptionPoolCatalog.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { speechModels } from '../voice-conversation/models.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -67,6 +79,7 @@ import {
   commitActiveCatalogSnapshot,
   clearDiscoveredProviderModels,
   getActiveCatalog,
+  getActiveCatalogWithCodexModels,
   getXdGatewayModels,
   getModelPlaneWarnings,
   setActiveCatalog,
@@ -74,6 +87,7 @@ import {
   setCustomProviders,
   setDiscoveredCodexModels,
   setLocalCatalogOverrides,
+  setSubscriptionPoolProviders,
 } from './active-catalog.js';
 import { readModelCatalogOverrides } from './model-catalog-override-store.js';
 import {
@@ -92,7 +106,7 @@ import {
   refreshXaiModelsFromHttp,
 } from './model-discovery/xai.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
-import { readModelDisableOverrides } from './model-disable-store.js';
+import { copyProviderDisableOverrides, readModelDisableOverrides, setProviderDisabled } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { createModelSourceRevalidator } from './model-source-revalidation.js';
@@ -152,7 +166,6 @@ import {
   claimDetectedNativeProviderAuth,
   getNativeProviderAuthSource,
   isNativeProviderAuthBound,
-  isNativeProviderAuthSharedSystemCredential,
   isNativeProviderAuthRevoked,
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
@@ -622,6 +635,8 @@ export async function refreshDiscoveredCodexModels(
   authenticated = true,
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
+  if (!shouldApply()) return;
+  resetDefaultSubscriptionCodexDiscovery(authenticated);
   if (!authenticated) {
     if (shouldApply()) setDiscoveredCodexModels([]);
     return;
@@ -800,20 +815,30 @@ export async function refreshCustomProvidersIntoCatalog(
     setCustomProviderConfigs(next, { skipUnchanged: true });
     projectionPublished();
     void recoverCustomProviderModelSources(next, ownerIsCurrent);
-    // Publish old routes first: imported accounts retain these IDs for history and revocation.
-    const access = readModelDisableOverrides();
-    const nativeDefault = isNativeProviderAuthBound('openai');
+    // Publish old routes first. Accounts are never merged automatically any more (2026-11-13,
+    // subscription-account-pools.md 合并与拿出由用户决定); connections the 11-11 upgrade folded into
+    // OpenAI belong to their own connection again, keeping their account, login and task bindings.
     try {
-      await migrateLegacyCodexAccounts(
-        next.filter(config => config.auth?.method === 'oauth' && config.auth.native === 'codex')
-          .map(config => ({ providerId: config.id, paused: isProviderDisabled(access, config.id) })),
-        { preserveDefault: nativeDefault, legacyDefault: nativeDefault && !isNativeProviderAuthSharedSystemCredential('openai'), isCurrent },
+      await restoreAutoMergedLegacyCodexAccounts(
+        new Set(next.filter(config => config.auth?.method === 'oauth' && config.auth.native === 'codex')
+          .map(config => config.id)),
+        {
+          disable: providerId => setProviderDisabled(providerId, true),
+          isDisabled: providerId => readModelDisableOverrides().disabledProviders?.[providerId] === true,
+          isCurrent,
+        },
       );
+      await restoreUnplacedSubscriptionAccounts({
+        prepare: copyProviderDisableOverrides,
+        disable: providerId => setProviderDisabled(providerId, true),
+        isCurrent,
+      });
     } catch {
-      // Failed metadata writes leave every original connection available for the next refresh.
-      log.warn('legacy Codex account migration did not complete');
+      // The merged view stays as it was; the next refresh retries.
+      log.warn('restoring pooled subscription accounts did not complete');
     }
     if (!isCurrent()) return;
+    publishSubscriptionPoolProviders();
     requestCodexApiModelProbe();
     log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {
@@ -952,36 +977,46 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog());
+  return filterLegacyGptContextProfiles(projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog()));
 }
 
 function getDesktopSelectableBaseCatalog(): Catalog {
-  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
+  return filterProviderCatalogForAccount(getActiveCatalog(), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }
 
+/**
+ * Publish the providers Cindy created for this owner's subscription accounts into the catalog
+ * (subscription-account-pools.md 合并与拿出由用户决定). Hidden ones (merged away, no accounts left)
+ * stay in the catalog so old tasks keep resolving; the provider view marks them as merged.
+ */
+export function publishSubscriptionPoolProviders(): void {
+  publishSubscriptionPoolProvidersWith({ readCreatedSubscriptionProvidersIfReadable, setSubscriptionPoolProviders, log });
+}
+
+/**
+ * Read the built-in subscription together with created and legacy targets of its kind.
+ * Their connection state comes from these reads; reading only the built-in left a created provider
+ * "not connected" (missing from the model picker) until its settings page was opened.
+ */
+async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Promise<void> {
+  let created: string[] = [];
+  try {
+    created = Object.entries(readCreatedSubscriptionProviders())
+      .filter(([, entry]) => entry.kind === kind).map(([id]) => id);
+  } catch {
+    // Unreadable files return an empty list; thrown reads also skip created providers this round.
+  }
+  await refreshSubscriptionPool(kind);
+  const legacy = kind === 'openai' ? Object.keys(readPool(kind)?.legacyCodexAccounts ?? {}) : [];
+  await Promise.all([...new Set([...created, ...legacy])].map((id) => refreshSubscriptionPool(id).catch(() => undefined)));
+}
+
 /** Apply account membership to both selectable and full routing snapshots. */
-function projectSubscriptionPoolCatalog(catalog: Catalog): Catalog {
-  const pool = readPool('openai');
-  const aliases = pool?.legacyCodexAccounts;
-  if (!aliases || pool.disconnected) return catalog;
-  const accounts = new Set(pool.accounts.filter(account => !account.paused).map(account => account.id));
-  const imported = catalog.providers.filter(provider => provider.auth.native === 'codex'
-    && Object.hasOwn(aliases, provider.id) && accounts.has(aliases[provider.id])
-    && codexAccountState(provider.id).authenticated);
-  if (!imported.length) return catalog;
-  // Reuse these accounts' existing membership; do not discover an unrelated default CLI login.
-  return { ...catalog, providers: catalog.providers.map(provider => {
-    if (provider.id !== 'openai') return provider;
-    const models = Object.fromEntries(provider.agents.map(agent => {
-      const models = new Map((provider.models[agent] ?? []).map(model => [model.id, model]));
-      for (const source of imported) for (const model of source.models[agent] ?? [])
-        if (!models.has(model.id)) models.set(model.id, model);
-      return [agent, [...models.values()]];
-    }));
-    return { ...provider, models };
-  }) };
+function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false): Catalog {
+  return projectSubscriptionPoolCatalogWith(catalog, { readPool, codexAccountState, readSubscriptionPoolCodexModels,
+    getActiveCatalogWithCodexModels, readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog);
 }
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
@@ -1008,9 +1043,17 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     getModelContextLimits: readModelContextLimits,
     projectProvider: provider => {
       const projected = projectSubscriptionFastPolicy(provider);
-      return readLegacyCodexAccountId(provider.id)
-        ? { ...projected, subscriptionPoolAlias: true }
-        : projected;
+      // Only a provider whose own account belongs to another provider (and that has no accounts
+      // left) is hidden behind it: a merged legacy connection or a merged created provider.
+      const mergedAccount = readMergedProviderAccount(provider.id);
+      if (mergedAccount) {
+        const ref = resolveSubscriptionPoolProvider(provider.id);
+        return { ...projected, subscriptionPoolAlias: true,
+          ...(ref ? { subscriptionPoolTarget: accountProviderId(ref.kind, mergedAccount) } : {}) };
+      }
+      // Clients manage this provider's accounts through the account pool (2026-11-13).
+      const pool = resolveSubscriptionPoolProvider(provider.id);
+      return pool && readPool(pool.kind) ? { ...projected, subscriptionAccountPool: pool.kind } : projected;
     },
     getOrganizationProviderLogoKind: (provider) => {
       const state = getAuthState();
@@ -1027,15 +1070,18 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       };
     },
     getCatalog: getDesktopSelectableBaseCatalog,
-    projectCatalog: projectSubscriptionPoolCatalog,
+    projectCatalog: (catalog, routingCatalog) => {
+      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog);
+      return routingCatalog ? projected : filterLegacyGptContextProfiles(projected);
+    },
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
-      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly }) => {
+      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts }) => {
         if (readPool('anthropic')) {
-          if (!snapshotOnly) await refreshSubscriptionPool('anthropic');
-          return hasConnectedSubscriptionPool('anthropic');
+          if (!snapshotOnly) await refreshSubscriptionPoolsOfKind('anthropic');
+          return hasConnectedSubscriptionPool('anthropic', { includeBoundAccounts });
         }
         if (snapshotOnly) return hasClaudeNativeLogin();
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
@@ -1068,10 +1114,14 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
       // 凭证硬链进 codex-home 并为首个 owner 补写绑定 —— 判据不是「有没有发上游请求」,而是
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
-      openai: async ({ allowSideEffects, snapshotOnly }) => {
+      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts }) => {
         if (readPool('openai')) {
-          if (!snapshotOnly) await refreshSubscriptionPool('openai');
-          return hasConnectedSubscriptionPool('openai');
+          if (!snapshotOnly) {
+            // Created providers of the kind are read with it (their connection state comes from it).
+            await refreshSubscriptionPoolsOfKind('openai');
+            await refreshSubscriptionPoolCodexModels();
+          }
+          return hasConnectedSubscriptionPool('openai', { includeBoundAccounts });
         }
         return allowSideEffects ? desktopCodexAuthAdapter.hasCodexOAuthLogin() : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly();
       },
@@ -1082,9 +1132,11 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
-    codexAccountConnected: (providerId) => codexAccountState(providerId).authenticated,
+    codexAccountConnected: (providerId, options) => resolveSubscriptionPoolProvider(providerId)
+      ? hasConnectedSubscriptionPool(providerId, options) : codexAccountState(providerId).authenticated,
+    subscriptionPoolConnected: (providerId, options) => hasConnectedSubscriptionPool(providerId, options),
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
-    subscriptionReadUnavailable: (providerId) => (providerId === 'openai' || providerId === 'anthropic')
+    subscriptionReadUnavailable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
       && hasUnavailableSubscriptionPoolAccount(providerId),
     subscriptionAccountInfo: async (providerId) => {
       if (providerId === 'anthropic') {

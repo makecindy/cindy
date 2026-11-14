@@ -1,6 +1,6 @@
 import { withHostAppSdk } from '@cindy/maker-shared/mcp-app-sdk';
 import { app, protocol, session, type WebContents, type WebFrameMain } from 'electron';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { appCsp, MCP_APPS_MAX_BYTES } from './protocol.js';
 import {
@@ -12,11 +12,13 @@ import {
   type McpAppDocument,
 } from '../../shared/mcpApps.js';
 import { mcpAppDirectSandboxDocument } from './sandboxBridge.js';
+import { OwnerScopedAppResourceCache } from './appResourceCache.js';
 
 export const mcpAppSchemePrivilege = {
   scheme: 'cindy-mcp-app',
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
 };
+const headEndMarker = `<!--cindy-mcp-app-theme-${randomUUID()}-->`;
 const frameHeader = 'X-Cindy-Mcp-App-Frame';
 let fileReader: ((id: string, token: string, request: Request) => Promise<Response>) | undefined;
 export function setMcpAppFileReader(read: typeof fileReader): void { fileReader = read; }
@@ -32,6 +34,81 @@ const documents = new Map<
     bridge?: { key: string; frame?: WebFrameMain; invoke(input: unknown): Promise<unknown> };
   }
 >();
+// This value is intentionally generated per process so authored plugin content cannot
+// accidentally contain it and be rewritten during per-View URL substitution.
+const viewIdPlaceholder = `__CINDY_VIEW_ID_${randomUUID()}__`;
+const preparedHtmlCache = new OwnerScopedAppResourceCache<{ html: string }>();
+const sdkAssetHashes = new WeakMap<object, string>();
+function hashText(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+function hashSdkAsset(sdk: NonNullable<McpAppDocument['sdk']>): string {
+  const cached = sdkAssetHashes.get(sdk);
+  if (cached) return cached;
+  const addon = sdk.addons?.['cindy/view-state'];
+  const value = createHash('sha256')
+    .update(sdk.source)
+    .update('\0')
+    .update(addon?.source ?? '')
+    .update('\0')
+    .update(addon?.reactSource ?? '')
+    .digest('hex');
+  sdkAssetHashes.set(sdk, value);
+  return value;
+}
+function preparedAppHtml(document: McpAppDocument): string {
+  const owner = getCurrentDbClientSnapshot();
+  const addons = document.sdk?.addons?.['cindy/view-state'];
+  const key = `${hashText(document.html)}:${document.sdk ? hashSdkAsset(document.sdk) : 'none'}`;
+  const template = (owner && preparedHtmlCache.get(owner, key)) ?? (() => {
+    const value = withHostAppSdk(document.html, 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + HOST_APP_SDK_PATH,
+      addons ? {
+        coreUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_VIEW_STATE_SDK_PATH,
+        reactUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_VIEW_STATE_REACT_SDK_PATH,
+      } : undefined, headEndMarker);
+    if (owner) preparedHtmlCache.set(owner, key, { html: value });
+    return { html: value };
+  })();
+  return template.html.replaceAll(viewIdPlaceholder, document.viewId);
+}
+
+type McpAppThemeContext = {
+  theme?: unknown;
+  styles?: { variables?: Record<string, unknown> };
+};
+
+const themeScript = (context: McpAppThemeContext): string => {
+  const encoded = JSON.stringify({
+    theme: context.theme === 'dark' || context.theme === 'light' ? context.theme : undefined,
+    variables: Object.fromEntries(Object.entries(context.styles?.variables ?? {})
+      .filter(([name, value]) => name.startsWith('--color-') && /^--[a-zA-Z0-9_-]+$/.test(name) && typeof value === 'string')),
+  }).replace(/</g, '\\u003c');
+  return `<script data-cindy-theme>\n(()=>{\nconst initial=${encoded};\nconst root=document.documentElement;\nconst both=()=>{\n const scheme=getComputedStyle(root).colorScheme.toLowerCase().split(/\\s+/);\n if(scheme.includes('light')&&scheme.includes('dark'))return true;\n return [...document.querySelectorAll('meta[name="color-scheme"]')].some(meta=>\n  meta.getAttribute('content')?.toLowerCase().split(/\\s+/).includes('light')&&\n  meta.getAttribute('content')?.toLowerCase().split(/\\s+/).includes('dark'));\n};\nconst supportsBoth=both();\nconst colorName=/^--color-[a-zA-Z0-9_-]+$/;\nconst written=new Set();\nconst apply=context=>{\n if(!supportsBoth||(context?.theme!=='light'&&context?.theme!=='dark'))return;\n root.style.colorScheme=context.theme;\n for(const [name,value] of Object.entries(context.variables||{})){\n  if(!name.startsWith('--color-')||!colorName.test(name)||typeof value!=='string')continue;\n  if(!written.has(name)&&getComputedStyle(root).getPropertyValue(name).trim()!=='')continue;\n  root.style.setProperty(name,value);\n  written.add(name);\n }\n};\nconst context={theme:initial.theme,variables:initial.variables};\napply(context);\naddEventListener('message',event=>{\n if(event.source!==parent)return;\n const message=event.data;\n if(message?.jsonrpc==='2.0'&&message.method==='ui/notifications/host-context-changed'&&message.params){\n  if(message.params.theme!==undefined)context.theme=message.params.theme;\n  if(message.params.styles?.variables)Object.assign(context.variables,message.params.styles.variables);\n  apply(context);\n }\n});\n})();\n</script>`;
+};
+
+/** Inject the first-frame theme separately from SDK/document preparation. */
+export function withMcpAppTheme(html: string, context: McpAppThemeContext): string {
+  if (context.theme !== 'light' && context.theme !== 'dark') return html.replace(headEndMarker, '');
+  const declared = new Set<string>();
+  for (const match of html.matchAll(/color-scheme\s*:\s*([^;}"']+)/gi)) {
+    for (const value of match[1].toLowerCase().split(/\s+/))
+      if (value === 'light' || value === 'dark') declared.add(value);
+  }
+  // Find each terminator once, including for repeated, unterminated tag openers.
+  const metaTags = /<meta\b/gi;
+  for (let match = metaTags.exec(html); match; match = metaTags.exec(html)) {
+    const end = html.indexOf('>', match.index + match[0].length);
+    if (end < 0) break;
+    const tag = html.slice(match.index, end + 1);
+    metaTags.lastIndex = end + 1;
+    const name = tag.match(/\bname\s*=\s*["']color-scheme["']/i);
+    const content = tag.match(/\bcontent\s*=\s*["']([^"']+)/i)?.[1];
+    if (!name || !content) continue;
+    for (const value of content.toLowerCase().split(/\s+/))
+      if (value === 'light' || value === 'dark') declared.add(value);
+  }
+  return html.replace(headEndMarker, () => declared.size === 1 ? '' : themeScript(context));
+}
 // Electron throws this from any WebFrameMain getter (`contents.focusedFrame`, `frame.url`,
 // `frame.parent`, `event.frame`) once the render frame is gone, which is routine while an
 // App iframe is being torn down or recreated. It must not escape a WebContents event
@@ -60,14 +137,10 @@ async function readBridgeBody(request: Request): Promise<string> {
 }
 export function supplyMcpAppDocument(
   document: McpAppDocument, caller?: string, invoke?: (input: unknown) => Promise<unknown>,
-  dispose?: () => void,
+  dispose?: () => void, hostContext?: McpAppThemeContext,
 ): void {
   documents.set(document.viewId, {
-    html: withHostAppSdk(document.html, 'cindy-mcp-app://' + document.viewId + '-view' + HOST_APP_SDK_PATH,
-      document.sdk?.addons?.['cindy/view-state'] ? {
-        coreUrl: 'cindy-mcp-app://' + document.viewId + '-view' + CINDY_VIEW_STATE_SDK_PATH,
-        reactUrl: 'cindy-mcp-app://' + document.viewId + '-view' + CINDY_VIEW_STATE_REACT_SDK_PATH,
-      } : undefined),
+    html: withMcpAppTheme(preparedAppHtml(document), hostContext ?? {}),
     fileKey: randomUUID(), document, owner: getCurrentDbClientSnapshot(), caller, dispose,
     bridge: invoke ? { key: randomUUID(), invoke } : undefined,
   });
@@ -82,6 +155,7 @@ export function clearMcpAppDocuments(): void {
 }
 export function mountRemoteAppDocument(
   input: unknown, caller: string, invoke?: (input: unknown) => Promise<unknown>, dispose?: () => void,
+  hostContext?: McpAppThemeContext,
 ): string {
   const document = input as McpAppDocument;
   if (!getCurrentDbClientSnapshot()) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
@@ -95,7 +169,7 @@ export function mountRemoteAppDocument(
     throw new Error('MCP_APP_VIEW_LIMIT');
   const policy = appCsp({ csp: document.policy });
   const id = randomUUID();
-  supplyMcpAppDocument({ ...document, viewId: id, csp: policy.header, policy: policy.csp }, caller, invoke, dispose);
+  supplyMcpAppDocument({ ...document, viewId: id, csp: policy.header, policy: policy.csp }, caller, invoke, dispose, hostContext);
   return id;
 }
 export function unmountRemoteAppDocument(id: string, caller: string): void {

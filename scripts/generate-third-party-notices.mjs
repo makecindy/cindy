@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import parseSpdxExpression from "spdx-expression-parse";
+import yaml from "js-yaml";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -469,7 +470,7 @@ function mergeClosures(...closures) {
 }
 
 /**
- * 由根 package.json 的 `pnpm.supportedArchitectures` 叉乘出的目标平台集合。
+ * 由 pnpm-workspace.yaml 的 supportedArchitectures 叉乘出的目标平台集合。
  *
  * 覆盖「本仓声明支持的全部架构」而非单一发行产物的闭包必须逐个 target 收集再合并：
  * collectClosure() 判断一个平台可选依赖是否存在只看 `node_modules` 里有没有对应目录，
@@ -478,19 +479,19 @@ function mergeClosures(...closures) {
  * 架构。
  */
 function readSupportedTargets() {
-  const declared = readJson(path.join(REPO_ROOT, "package.json")).pnpm
+  const declared = yaml.load(fs.readFileSync(path.join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8"))
     ?.supportedArchitectures;
   for (const axis of ["os", "cpu", "libc"]) {
     const values = declared?.[axis];
     if (!Array.isArray(values) || values.length === 0) {
       throw new Error(
-        `pnpm.supportedArchitectures.${axis} must list explicit values in the root package.json`,
+        `supportedArchitectures.${axis} must list explicit values in pnpm-workspace.yaml`,
       );
     }
     // pnpm 支持 "current" 表示生成机器自身的架构，那会把机器差异重新带回产物。
     if (values.includes("current")) {
       throw new Error(
-        `pnpm.supportedArchitectures.${axis} must not use "current": license notices would depend on the generating machine`,
+        `supportedArchitectures.${axis} must not use "current": license notices would depend on the generating machine`,
       );
     }
   }

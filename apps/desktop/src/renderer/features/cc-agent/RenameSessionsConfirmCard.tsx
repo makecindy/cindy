@@ -55,7 +55,7 @@ export function RenameSessionsConfirmCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
+          <p className="text-15 font-medium leading-tight text-[var(--chat-input-text)]">
             {t('renameSessions.confirm.title')}
           </p>
           <p className="mt-1 text-12 leading-relaxed text-[var(--status-bar-meta)]">
