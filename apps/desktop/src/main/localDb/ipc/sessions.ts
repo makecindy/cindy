@@ -2422,10 +2422,16 @@ export async function patchSessionMetaInDb(
     } else if (patch.status === 'active' && typeof dbClient.tx === 'function') {
       // Restore through the same transaction as batch actions, including the
       // group receiver fence for archived rows written by older versions.
+      // Undo also uses this branch: persist its fresh retention before any write.
+      const assertRestoreCurrent = () => {
+        if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted)
+          throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+        options.beforeWrite?.();
+      };
+      await noteSessionsRestoring([sessionId], db);
       const { status: _status, ...nonStatusPatch } = setObj;
-      await writeSessionPatch(db, sessionId, nonStatusPatch, undefined);
-      options.beforeWrite?.();
-      if (options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+      await writeSessionPatch(db, sessionId, nonStatusPatch, undefined, assertRestoreCurrent);
+      assertRestoreCurrent();
       await dbClient.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active' });
     } else {
       // All asynchronous preparation has finished. Once this write is issued,
