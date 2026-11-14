@@ -146,14 +146,15 @@ async function serializeRecovery<T>(key: string, run: () => Promise<T>): Promise
 function createRequestSizeController(
   resolveSession: (headers: Record<string, string>) => string | null | undefined,
   preprocessor: InlineImagePreprocessor = { prepare: async () => null },
+  resolveProvider?: (headers: Record<string, string>, modelId: string) => string | null | undefined,
 ): RequestSizeController {
   const controller: RequestSizeController = {
     enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
     format: ctx => ctx.url.includes('/responses') ? 'responses' : ctx.url.includes('/messages') ? 'anthropic' : ctx.url.includes('/chat/completions') ? 'chat' : null,
     route: (ctx, body) => {
-      const providerId = ctx.headers['x-cindy-pi-provider-id'] ?? ctx.headers['x-cindy-provider-id'] ?? ctx.headers['x-openai-provider-id'];
       const modelId = typeof body === 'object' && body !== null && typeof (body as { model?: unknown }).model === 'string'
         ? (body as { model: string }).model : undefined;
+      const providerId = resolveProvider ? resolveProvider(ctx.headers, modelId ?? '') ?? undefined : ctx.headers['x-cindy-pi-provider-id'];
       const sessionId = resolveSession(ctx.headers) ?? '';
       const prefix = `${sessionId}|${providerId ?? ''}|${ctx.url}|${modelId ?? ''}|`;
       const denied = new Set<string>();

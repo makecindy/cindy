@@ -2309,6 +2309,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       catch { /* No stable owner: retain the existing bounded request path. */ }
     }
     const sizeControlEnabled = Boolean(requestSizeController);
+    let sizeControlledAtIngress = false;
+    let ingressParsedBody: unknown;
     // Request-size control owns the pre-dispatch 32 MiB budget. Above that threshold use the
     // existing disk-backed collector; only the bounded controller result returns to memory.
     const ingressRecovery = sizeControlEnabled && requestSizeController
@@ -2326,6 +2328,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
             allowRemoval: requestSizeController.enabled?.() !== false,
           });
           if (!controlled) return null;
+          sizeControlledAtIngress = true;
+          ingressParsedBody = controlled.parsedBody;
           logger.info?.('request size control applied from disk spool', {
             reqId, originalBytes: controlled.originalBytes, bytes: controlled.bytes,
             removedImages: controlled.removedImages, reason: controlled.reason,
@@ -2536,12 +2540,21 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 提前到 ▶ inbound 日志**之前**计算: 路由只依赖 rawBody / headers / contentType,与下方
     // runTransforms 的输出无关,提前是安全的; 这样 inbound 日志能直接打出本请求**最终**发往的
     // upstream(订阅直连 api.anthropic.com / 走网关 endpoint),而非静态默认上游。
-    let rawParsed: unknown = undefined;
+    let rawParsed: unknown = ingressParsedBody;
+    let parsedBodyBytes: Buffer | undefined = ingressParsedBody === undefined ? undefined : rawBody;
+    let cachedParsedBody: unknown = ingressParsedBody;
+    const readParsedBody = (): unknown => {
+      if (parsedBodyBytes === rawBody) return cachedParsedBody;
+      parsedBodyBytes = rawBody;
+      cachedParsedBody = undefined;
+      cachedParsedBody = JSON.parse(rawBody.toString('utf8'));
+      return cachedParsedBody;
+    };
     const jsonRequest = contentType.toLowerCase().startsWith('application/json');
     const routeOpaqueRequest = !jsonRequest && opts.routeOpaqueRequestBody?.(requestCtx) === true;
     if (opts.routingTransform && (jsonRequest || routeOpaqueRequest)) {
       try {
-        if (jsonRequest) rawParsed = JSON.parse(rawBody.toString('utf8'));
+        if (jsonRequest) rawParsed = readParsedBody();
       } catch {
         // Some native clients (notably PI's ChatGPT adapter) send compressed
         // JSON while keeping content-type=application/json. Header/path based
@@ -2561,10 +2574,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
 
     // Apply request-size control before either local dispatch or the normal transform chain.
     // The controller is host-injected so this package remains independent of media storage.
-    if (requestSizeController && jsonRequest) {
+    if (requestSizeController && jsonRequest && !sizeControlledAtIngress) {
       let sizeParsed = rawParsed;
       if (sizeParsed === undefined) {
-        try { sizeParsed = JSON.parse(rawBody.toString('utf8')); }
+        try { sizeParsed = rawParsed = readParsedBody(); }
         catch { sizeParsed = undefined; }
       }
       const format = sizeParsed === undefined ? null : requestSizeController.format?.(requestCtx, sizeParsed);
@@ -2582,7 +2595,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           });
           if (controlled) {
             rawBody = controlled.body;
-            rawParsed = JSON.parse(rawBody.toString('utf8'));
+            rawParsed = controlled.parsedBody ?? readParsedBody();
+            parsedBodyBytes = rawBody;
+            cachedParsedBody = rawParsed;
             logger.info?.('request size control applied', {
               reqId,
               originalBytes: controlled.originalBytes,
@@ -2620,7 +2635,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         let oversizedParsed: unknown = rawParsed;
         if (oversizedParsed === undefined && jsonRequest) {
           try {
-            oversizedParsed = JSON.parse(rawBody.toString('utf8'));
+            oversizedParsed = readParsedBody();
           } catch {
             oversizedParsed = undefined;
           }
@@ -2709,13 +2724,17 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     };
     const originalRawBodyBytes = rawBody.length;
     let bodyForTransforms = rawBody;
-    let parsedForTransforms: unknown = undefined;
+    let parsedForTransforms: unknown = rawParsed;
+    if (parsedForTransforms === undefined && jsonRequest) {
+      try { parsedForTransforms = rawParsed = readParsedBody(); }
+      catch { /* Opaque/compressed bodies keep the existing passthrough path. */ }
+    }
     if (rawBody.length > maxBodyBytes && oversizedRequestCompactor) {
       const compactStartedAt = Date.now();
       let oversizedParsed: unknown = rawParsed;
       if (oversizedParsed === undefined && jsonRequest) {
         try {
-          oversizedParsed = JSON.parse(rawBody.toString('utf8'));
+          oversizedParsed = readParsedBody();
         } catch {
           oversizedParsed = undefined;
         }
@@ -2813,7 +2832,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     let parsedForRewrite: unknown = rawParsed ?? parsedForTransforms;
     if (parsedForRewrite === undefined && jsonRequest) {
       try {
-        parsedForRewrite = JSON.parse(rawBody.toString('utf8'));
+        parsedForRewrite = readParsedBody();
       } catch {
         parsedForRewrite = undefined;
       }
@@ -2906,7 +2925,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       route.headerDelete,
       opts.responseObserver,
       opts.transformResponse,
-      extractBodyModel(rawBody),
+      isRecord(parsedForRewrite) && typeof parsedForRewrite.model === 'string' ? parsedForRewrite.model : '',
       outbound,
       route.pathOverride,
       responseToolUseIds,

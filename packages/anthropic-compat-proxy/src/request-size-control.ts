@@ -39,6 +39,8 @@ export interface RequestSizePolicy {
 }
 
 export interface RequestSizeResult {
+  /** Parsed projection of the returned bytes, for downstream routing/transforms. */
+  parsedBody?: unknown;
   body: Buffer;
   changed: boolean;
   originalBytes: number;
@@ -83,7 +85,7 @@ class JsonScanner {
     if (ch === '[') return this.array(start);
     if (ch === '"') {
       const raw = this.stringRaw();
-      return { start, end: this.offset, value: JSON.parse(raw), kind: 'string' };
+      return { start, end: this.offset, value: raw.includes('\\') ? JSON.parse(raw) : raw.slice(1, -1), kind: 'string' };
     }
     const match = /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(this.text.slice(this.offset));
     if (!match) throw new Error('invalid JSON value');
@@ -132,12 +134,13 @@ class JsonScanner {
 
   private stringRaw(): string {
     const start = this.offset++;
-    let escaped = false;
-    while (this.offset < this.text.length) {
-      const ch = this.text[this.offset++];
-      if (escaped) { escaped = false; continue; }
-      if (ch === '\\') { escaped = true; continue; }
-      if (ch === '"') return this.text.slice(start, this.offset);
+    const delimiters = /["\\]/g;
+    delimiters.lastIndex = this.offset;
+    let match: RegExpExecArray | null;
+    while ((match = delimiters.exec(this.text))) {
+      if (match[0] === '\\') { delimiters.lastIndex++; continue; }
+      this.offset = match.index + 1;
+      return this.text.slice(start, this.offset);
     }
     throw new Error('unterminated JSON string');
   }
@@ -221,9 +224,8 @@ function replacementText(path: string, seenAssistant: boolean): string {
 
 function decodeBase64(value: string): Buffer {
   if (!value || value.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw new Error('invalid image base64');
-  const result = Buffer.from(value, 'base64');
-  if (result.toString('base64') !== value) throw new Error('invalid image base64');
-  return result;
+  if (value.length % 4 !== 0) throw new Error('invalid image base64');
+  return Buffer.from(value, 'base64');
 }
 
 /**
@@ -233,8 +235,9 @@ function decodeBase64(value: string): Buffer {
 export async function controlRequestSize(body: Buffer, format: WireFormat, policy: RequestSizePolicy = {}, preserve: (bytes: Buffer, mimeType: string, occurrence: number) => Promise<string>): Promise<RequestSizeResult | null> {
   const disableRemoval = policy.allowRemoval === false;
   const trigger = disableRemoval ? Number.MAX_SAFE_INTEGER : policy.triggerBytes ?? DEFAULT_REQUEST_SIZE_TRIGGER;
-  const target = disableRemoval ? Number.MAX_SAFE_INTEGER : policy.targetBytes ?? DEFAULT_REQUEST_SIZE_TARGET;
+  let target = disableRemoval ? Number.MAX_SAFE_INTEGER : policy.targetBytes ?? DEFAULT_REQUEST_SIZE_TARGET;
   const forceBudget = policy.reason === 'learned' || policy.reason?.startsWith('retry') === true;
+  if (forceBudget && !disableRemoval) target = Math.min(target, Math.floor(body.length * 0.44));
   const familyPolicy = disableRemoval ? undefined : familyLimit(policy.modelFamily);
   const quickLimit = Math.min(trigger, DEFAULT_QUICK_PATH_BYTES);
   if (body.length <= quickLimit) {
@@ -250,9 +253,11 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
 
   const prepared = new Map<number, { bytes: Buffer; mimeType: string; changed: boolean }>();
   const preprocessor = policy.preprocessor ?? NOOP_IMAGE_PREPROCESSOR;
+  const decoded = new Map<string, Buffer>();
   for (const [index, occurrence] of occurrences.entries()) {
     policy.signal?.throwIfAborted();
-    const original = decodeBase64(occurrence.raw);
+    let original = decoded.get(occurrence.raw);
+    if (!original) { original = decodeBase64(occurrence.raw); decoded.set(occurrence.raw, original); }
     let next = { bytes: original, mimeType: occurrence.mimeType, changed: false };
     const route = policy.route ?? {};
     try {
@@ -275,12 +280,16 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   const cap = familyPolicy?.keep;
   const countCapActive = familyPolicy !== undefined && occurrences.length > familyPolicy.trigger;
   let removedPrefixBytes = 0;
+  let prefixEnd = 0;
+  let originalPrefixBytes = 0;
   // Re-run the historical crossings. This makes the same prefix produce the same removals.
   for (let index = 0; index < occurrences.length; index++) {
     const item = prepared.get(index)!;
     const originalLength = Buffer.byteLength(occurrences[index].raw);
-    if (item.changed) total += Buffer.byteLength(item.bytes.toString('base64')) - originalLength;
-    let prefixBytes = Buffer.byteLength(text.slice(0, occurrences[index].node.end)) - removedPrefixBytes;
+    if (item.changed) total += 4 * Math.ceil(item.bytes.length / 3) - originalLength;
+    originalPrefixBytes += Buffer.byteLength(text.slice(prefixEnd, occurrences[index].node.end));
+    prefixEnd = occurrences[index].node.end;
+    let prefixBytes = originalPrefixBytes - removedPrefixBytes;
     if (prefixBytes <= trigger && !forceBudget) continue;
     while (prefixBytes > target && remove.size < occurrences.length) {
       const candidate = [...occurrences.keys()].find(i => !remove.has(i));
@@ -301,7 +310,8 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   // final crossing at the end of the model-visible history so the oldest image is removed even
   // when the overflow comes from a trailing instruction or tool definition.
   let finalPrefixBytes = body.length - removedPrefixBytes;
-  while ((finalPrefixBytes > trigger || forceBudget || (countCapActive && count > cap!)) && remove.size < occurrences.length) {
+  const finalByteCrossing = finalPrefixBytes > trigger || forceBudget;
+  while (((finalByteCrossing && finalPrefixBytes > target) || (countCapActive && count > cap!)) && remove.size < occurrences.length) {
     const candidate = [...occurrences.keys()].find(i => !remove.has(i));
     if (candidate === undefined) break;
     const old = Buffer.byteLength(occurrences[candidate].raw);
@@ -324,26 +334,34 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
     const preparedImage = prepared.get(index)!;
     if (remove.has(index)) {
       const localPath = await preserve(preparedImage.bytes, preparedImage.mimeType, index);
-    const replacement = { type: occurrence.textType, text: replacementText(localPath, removalSeenAssistant.get(index) ?? false) };
+      const replacement = { type: occurrence.textType, text: replacementText(localPath, removalSeenAssistant.get(index) ?? false) };
+      const block = occurrence.node.value as Record<string, unknown>;
+      for (const key of Object.keys(block)) delete block[key];
+      Object.assign(block, replacement);
       replacements.push({ start: occurrence.node.start, end: occurrence.node.end, text: JSON.stringify(replacement) });
     } else if (preparedImage.changed) {
       // The preprocessor result is represented in the original block with identical shape.
       const encoded = preparedImage.bytes.toString('base64');
-      const block = JSON.parse(text.slice(occurrence.node.start, occurrence.node.end)) as Record<string, unknown>;
+      const block = occurrence.node.value as Record<string, unknown>;
       if (format === 'anthropic' && record(block.source)) { block.source.data = encoded; block.source.media_type = preparedImage.mimeType; }
       else if (format === 'chat' && record(block.image_url)) block.image_url.url = `data:${preparedImage.mimeType};base64,${encoded}`;
       else if (format === 'responses') block[block.type === 'input_file' ? 'file_data' : 'image_url'] = `data:${preparedImage.mimeType};base64,${encoded}`;
       replacements.push({ start: occurrence.node.start, end: occurrence.node.end, text: JSON.stringify(block) });
     }
   }
-  replacements.sort((a, b) => b.start - a.start);
-  let output = text;
-  for (const replacement of replacements) output = output.slice(0, replacement.start) + replacement.text + output.slice(replacement.end);
-  const result = Buffer.from(output);
-  if ((body.length > trigger || (familyPolicy !== undefined && occurrences.length > familyPolicy.trigger)) && result.length > target) {
+  replacements.sort((a, b) => a.start - b.start);
+  const segments: string[] = [];
+  let cursor = 0;
+  for (const replacement of replacements) {
+    segments.push(text.slice(cursor, replacement.start), replacement.text);
+    cursor = replacement.end;
+  }
+  segments.push(text.slice(cursor));
+  const result = Buffer.from(segments.join(''));
+  if (result.length > trigger) {
     throw new Error('REQUEST_TEXT_TOO_LARGE');
   }
-  return { body: result, changed: result.compare(body) !== 0, originalBytes: body.length, bytes: result.length, removedImages: remove.size, imageCount: occurrences.length, reason: policy.reason ?? (remove.size ? 'budget' : 'preprocessed') };
+  return { body: result, parsedBody: root.value, changed: result.compare(body) !== 0, originalBytes: body.length, bytes: result.length, removedImages: remove.size, imageCount: occurrences.length, reason: policy.reason ?? (remove.size ? 'budget' : 'preprocessed') };
 }
 
 function preparedHasChange(prepared: Map<number, { changed: boolean }>): boolean {

@@ -53,14 +53,14 @@ describe('request size control', () => {
     const chat = Buffer.from(JSON.stringify({ messages: [
       { role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${imageData(2)}` } }] },
     ] }));
-    expect((await controlRequestSize(anthropic, 'anthropic', { triggerBytes: 1, targetBytes: anthropic.length - 100 }, preserve))?.body.toString()).toContain('recovered-0');
-    expect((await controlRequestSize(chat, 'chat', { triggerBytes: 1, targetBytes: chat.length - 100 }, preserve))?.body.toString()).toContain('recovered-0');
+    expect((await controlRequestSize(anthropic, 'anthropic', { triggerBytes: anthropic.length - 1, targetBytes: anthropic.length - 100 }, preserve))?.body.toString()).toContain('recovered-0');
+    expect((await controlRequestSize(chat, 'chat', { triggerBytes: chat.length - 1, targetBytes: chat.length - 100 }, preserve))?.body.toString()).toContain('recovered-0');
   });
 
   it('enforces GPT and Claude image count caps and keeps the newest images', async () => {
     const input = Array.from({ length: 51 }, (_, i) => ({ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(i, 1)}` }] }));
     const raw = Buffer.from(JSON.stringify({ input }));
-    const result = await controlRequestSize(raw, 'responses', { modelFamily: 'gpt', triggerBytes: raw.length + 1, targetBytes: raw.length + 10_000 }, preserve);
+    const result = await controlRequestSize(raw, 'responses', { modelFamily: 'gpt', triggerBytes: 32 * 1024 * 1024, targetBytes: 14 * 1024 * 1024 }, preserve);
     const parsed = JSON.parse(result!.body.toString()) as { input: Array<{ content: Array<{ type: string }> }> };
     expect(parsed.input.filter(item => item.content[0].type === 'input_image')).toHaveLength(22);
     expect(parsed.input.at(-1)?.content[0].type).toBe('input_image');
@@ -73,7 +73,7 @@ describe('request size control', () => {
   ] as const)('does not trim at the family boundary: %s', async (modelFamily, count, expected) => {
     const input = Array.from({ length: count }, (_, i) => ({ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(i, 1)}` }] }));
     const raw = Buffer.from(JSON.stringify({ input }));
-    const result = await controlRequestSize(raw, 'responses', { modelFamily, triggerBytes: raw.length + 1, targetBytes: raw.length + 10_000 }, preserve);
+    const result = await controlRequestSize(raw, 'responses', { modelFamily, triggerBytes: 32 * 1024 * 1024, targetBytes: 14 * 1024 * 1024 }, preserve);
     expect(result).toBeNull();
     expect(input).toHaveLength(expected);
   });
@@ -101,6 +101,7 @@ describe('request size control', () => {
     const result = await controlRequestSize(raw, 'responses', { triggerBytes: raw.length + 1, targetBytes: raw.length + 1, preprocessor, route: { modelId: 'cache-test' } }, preserve);
     expect(result?.removedImages).toBe(0);
     expect(result?.body.toString()).toContain('image/webp');
+    expect(result?.parsedBody).toEqual(JSON.parse(result!.body.toString()));
     const repeated = await controlRequestSize(raw, 'responses', { triggerBytes: raw.length + 1, targetBytes: raw.length + 1, preprocessor, route: { modelId: 'cache-test' } }, preserve);
     expect(repeated).toBeNull();
     expect(calls).toBe(2);
@@ -122,8 +123,8 @@ describe('request size control', () => {
     const history = { input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(5)}` }] }] };
     const first = Buffer.from(JSON.stringify(history));
     const extended = Buffer.from(JSON.stringify({ ...history, input: [...history.input, { role: 'user', content: [{ type: 'input_text', text: 'new' }] }] }));
-    const firstResult = await controlRequestSize(first, 'responses', { triggerBytes: 1, targetBytes: first.length - 100 }, preserve);
-    const extendedResult = await controlRequestSize(extended, 'responses', { triggerBytes: 1, targetBytes: extended.length - 100 }, preserve);
+    const firstResult = await controlRequestSize(first, 'responses', { triggerBytes: first.length - 1, targetBytes: first.length - 100 }, preserve);
+    const extendedResult = await controlRequestSize(extended, 'responses', { triggerBytes: first.length - 1, targetBytes: first.length - 100 }, preserve);
     const stablePrefixLength = firstResult!.body.indexOf(Buffer.from('}]}')) + 3;
     expect(stablePrefixLength).toBeGreaterThan(0);
     expect(extendedResult?.body.subarray(0, stablePrefixLength)).toEqual(firstResult!.body.subarray(0, stablePrefixLength));
@@ -138,4 +139,12 @@ describe('request size control', () => {
     const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_text', text: 'x'.repeat(200) }] }] }));
     await expect(controlRequestSize(raw, 'responses', { triggerBytes: 100, targetBytes: 50 }, preserve)).rejects.toThrow('REQUEST_TEXT_TOO_LARGE');
   });
+});
+
+it('allows replayed history to grow above the target without crossing the trigger again', async () => {
+  const raw = Buffer.from(JSON.stringify({ input: Array.from({ length: 100 }, (_, i) => ({ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(i, 7680)}` }] })) }));
+  const result = await controlRequestSize(raw, 'responses', { triggerBytes: 320_000, targetBytes: 140_000 }, preserve);
+  expect(result?.body.length).toBeLessThanOrEqual(320_000);
+  expect(result?.body.length).toBeGreaterThan(140_000);
+  expect(result?.parsedBody).toEqual(JSON.parse(result!.body.toString()));
 });

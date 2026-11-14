@@ -156,6 +156,7 @@ const log = createMakerLogger('cc-proxy');
 
 let _handle: ProxyHandle | null = null;
 let _initialized = false;
+const requestSizeProviders = new WeakMap<Readonly<Record<string, string>>, string>();
 
 // gateway api key reader —— 由 host 注入(readClaudeApiKey),避免 proxy-host 直接 import
 // auth-adapters(重模块)。oauth-spawn 下走网关的请求(默认 / 选 XD)要把鉴权头换成它。
@@ -1137,6 +1138,7 @@ function createModelRoutingTransform(): RoutingTransform {
       // pending 与 activeOwnerScopeKey 合成同一条 ownerBoundDispatchUnsafe:
       // 切换在 await 里完整完成时两端 pending 都是 false。
       if (ownerBoundDispatchUnsafe(ctx)) return ownerBoundaryPendingRoute();
+      requestSizeProviders.set(ctx.headers, fastIdentities.get(ctx.headers)?.providerId ?? 'xd');
       resolved = withSubscriptionFastRequestPolicy(resolved, fastIdentities.get(ctx.headers) ?? {}, ctx);
       return withOwnerBoundaryDispatchGate(
         refuseUnsafePlaceholderPassthrough(stripGuestRouteHeader(stripInternalPiHeaders(resolved)), ctx),
@@ -1218,6 +1220,13 @@ async function ensureAnthropicCompatProxyReady(): Promise<void> {
         if (piSessionId) return authenticatePiProxySession(piSessionId, headerValue(headers, 'x-cindy-pi-session-token')) ? piSessionId : null;
         const sdkSessionId = headerValue(headers, 'x-claude-code-session-id');
         return sdkSessionId ? _resolveCcSessionId?.(sdkSessionId) : null;
+      }, undefined, (headers) => {
+        const resolved = requestSizeProviders.get(headers);
+        if (resolved) return resolved;
+        const pi = headerValue(headers, 'x-cindy-pi-session-id');
+        const sdk = headerValue(headers, 'x-claude-code-session-id');
+        const session = pi || (sdk ? _resolveCcSessionId?.(sdk) : null);
+        return (session ? getSessionProvider(session) : null) ?? 'xd';
       }),
       // 'oauth' 模式按 model 分流(claude-* → api.anthropic.com 走订阅;其余 → gateway 换 key)。
       // 'gateway' 模式恒返 null,字节级行为与扩展前一致。

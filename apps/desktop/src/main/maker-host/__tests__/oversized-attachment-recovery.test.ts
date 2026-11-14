@@ -20,7 +20,7 @@ vi.mock('../../cindy-media/refCompensationJournal.desktop.js', () => ({
 vi.mock('../../cindy-media/ledger.js', () => ({ addRef: (...args: unknown[]) => state.addRef(...args), removeRefById: (...args: unknown[]) => state.removeRef(...args) }));
 vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: (...args: unknown[]) => state.ingest(...args) }));
 vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ blobUrl: () => 'cindy-media://blobs/test.png', extForMime: () => '.png', resolveSafe: () => ({ absPath: path.join(state.root, 'saved.png') }) }));
-import { createAttachmentRecovery } from '../oversized-attachment-recovery.js';
+import { createAttachmentRecovery, createRequestSizeController } from '../oversized-attachment-recovery.js';
 import { sessions } from '../../localDb/schema.js';
 
 beforeEach(async () => {
@@ -133,4 +133,27 @@ it('compensates a media reference when a later write fails', async () => {
   state.addRef.mockImplementation(async () => { throw new Error('lost acknowledgement'); });
   await expect(factory()!(await multiBody([pngBlock()]), 1000)).rejects.toThrow('lost acknowledgement');
   expect(state.removeRef.mock.calls[0][0]).toBe(state.addRef.mock.calls[0][0].id);
+});
+
+// Production controller contract: native Codex/CC headers contain no provider ID.
+// The host resolver must reach prepare and keep denied-format records separate.
+it.each(['thread-id', 'x-claude-code-session-id'])('uses host provider resolution for %s and isolates format memory', async header => {
+  state.resolved = `provider-test-${header}`;
+  let provider = 'provider-a';
+  const prepare = vi.fn<import('@cindy/anthropic-compat-proxy').InlineImagePreprocessor['prepare']>(async () => null);
+  const controller = createRequestSizeController(() => state.resolved, { prepare }, () => provider);
+  const ctx = { reqId: 1, method: 'POST', url: '/v1/responses', headers: { [header]: 'native-session' } };
+  const input = { model: 'gpt-test', input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(8000, 7).toString('base64')}` }] }] };
+  const raw = Buffer.from(JSON.stringify(input));
+  const signal = new AbortController().signal;
+  await controller.control(raw, 'responses', { context: ctx, signal, route: controller.route!(ctx, input) });
+  expect(prepare.mock.calls[0]?.[0]).toMatchObject({ route: { providerId: 'provider-a' } });
+  await controller.retry!(raw, { kind: 'unsupported-image-format' }, ctx, signal);
+  expect(controller.route!(ctx, input).deniedMimeTypes).toContain('image/webp');
+  const extended = Buffer.from(JSON.stringify({ ...input, trailingText: 'more history' }));
+  expect(await controller.control(extended, 'responses', { context: ctx, signal, route: controller.route!(ctx, input) })).not.toBeNull();
+  provider = 'provider-b';
+  expect(controller.route!(ctx, input)).toMatchObject({ providerId: 'provider-b', deniedMimeTypes: [] });
+  expect(await controller.control(extended, 'responses', { context: ctx, signal, route: controller.route!(ctx, input) })).toBeNull();
+  expect(prepare.mock.calls.at(-1)?.[0]).toMatchObject({ route: { providerId: 'provider-b', deniedMimeTypes: [] } });
 });

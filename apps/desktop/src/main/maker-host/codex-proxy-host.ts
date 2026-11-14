@@ -3705,7 +3705,10 @@ async function createCodexProxyHandle(
     ),
     maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
     oversizedRequestRecovery: attachmentRecovery,
-    requestSizeController: createRequestSizeController(sessionIdFromHeaders),
+    requestSizeController: createRequestSizeController(sessionIdFromHeaders, undefined, (headers, model) =>
+      providerContextForRequest(headers, model).providerId ?? guestProviderId
+        ?? gatewayProviderIdForRewrittenModel(model)
+        ?? ((frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : 'xd')),
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
     recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
     logger: log,
