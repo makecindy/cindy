@@ -32,6 +32,11 @@ export interface SessionScrollSnapshot {
   itemHeights?: { width: number; byKey: Record<string, number> };
   /** 离开时是否贴在底部。true 时不需要还原,重建后正常 pin 到底即可。 */
   isNearBottom: boolean;
+  /** 当前渲染窗口覆盖的最老原始消息 clientId(窗口首 item 的首个源行)。
+   *  渲染窗口外的原始行没有 DOM —— store 裁剪活动视图的窗口时只允许裁到它
+   *  之下;折叠/隐藏让「贴底」不再等价于「前缀离屏」,必须按窗口覆盖裁。
+   *  窗口未建立或旧版快照无此字段时缺省,store 侧保守不裁。 */
+  windowFloorClientId?: string;
   /**
    * render-window-bidirectional: 锚定窗口的向后 item 上界。
    * 仅在 windowAnchorKey !== null 时写入；null 表示旧版快照（无此字段）或默认窗口。
@@ -59,6 +64,26 @@ const store = new Map<string, SessionViewMemory>();
 export function saveSessionScroll(sessionId: string, snapshot: SessionScrollSnapshot): void {
   const previous = store.get(sessionId);
   store.set(sessionId, { ...previous, scroll: snapshot });
+}
+
+/** 字段级更新裁剪地板 —— 渲染窗口推进时由 MessageStream 调用。
+ *  自动跟随(pinToBottom)的程序化滚动不走滚动保存分支,只靠 saveSessionScroll
+ *  会让一直跟随的视图永远没有地板快照;这里只 merge 该字段,不碰阅读位置
+ *  (isNearBottom/锚点),否则会把上翻读者的位置写成贴底。 */
+export function updateRenderWindowFloor(
+  sessionId: string,
+  windowFloorClientId: string,
+): void {
+  const previous = store.get(sessionId);
+  const scroll: SessionScrollSnapshot = previous?.scroll ?? {
+    // 从未存过快照的视图按默认窗口(贴底)起步;这些占位字段不会被消费 ——
+    // 地板更新不触发还原,还原只看 isNearBottom(始终为 true → pin 到底)。
+    windowAnchorKey: null,
+    viewportTopKey: '',
+    offset: 0,
+    isNearBottom: true,
+  };
+  store.set(sessionId, { ...previous, scroll: { ...scroll, windowFloorClientId } });
 }
 
 export function readSessionScroll(sessionId: string): SessionScrollSnapshot | undefined {
