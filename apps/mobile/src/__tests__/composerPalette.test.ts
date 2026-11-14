@@ -18,7 +18,7 @@ describe('composerPalette', () => {
     expect(detectComposerTrigger('open @app now')).toEqual({ kind: 'none' });
   });
 
-  it('merges slash commands with skill priority and prefix filtering', () => {
+  it('merges slash commands with skill priority and query filtering', () => {
     const commands = mergeSlashCommands([
       { kind: 'agent-builtin', name: 'compact', description: 'builtin compact' },
       { kind: 'agent-builtin', name: 'status', description: 'status' },
