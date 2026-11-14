@@ -176,7 +176,8 @@ function createRequestSizeController(
         triggerBytes: limit,
         targetBytes: Math.max(1, Math.floor(limit * 0.44)),
         singleImageMaxBytes: error.kind === 'single-image-too-large' ? error.limitBytes : undefined,
-        reason: error.kind,
+        reason: `retry:${error.kind}`,
+        allowRemoval: true,
       });
       if (result) {
         const model = typeof parsedHint.model === 'string' ? parsedHint.model : '';
@@ -219,7 +220,7 @@ function createRequestSizeController(
         const budgetKey = `${sessionId}|${route.providerId ?? ''}|${route.endpoint ?? ''}|${modelKey}|${format}`;
         const learned = learnedRequestBudgets.get(budgetKey);
         const result = await serializeRecovery(`${scope.ownerStorageKey}/${sessionId}`, async () => controlRequestSize(
-          body, format, { route, modelFamily, signal: policy.signal, preprocessor, singleImageMaxBytes: policy.singleImageMaxBytes, triggerBytes: policy.triggerBytes ?? learned?.trigger, targetBytes: policy.targetBytes ?? learned?.target, reason: policy.reason },
+          body, format, { route, modelFamily, signal: policy.signal, preprocessor, singleImageMaxBytes: policy.singleImageMaxBytes, triggerBytes: policy.triggerBytes ?? learned?.trigger, targetBytes: policy.targetBytes ?? learned?.target, reason: policy.reason, allowRemoval: policy.allowRemoval },
           async (bytes, mimeType, index) => {
             const hash = createHash('sha256').update(bytes).digest('hex');
             const ext = extForMime(mimeType) ?? '.bin';

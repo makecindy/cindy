@@ -35,6 +35,7 @@ export interface RequestSizePolicy {
   singleImageMaxBytes?: number;
   signal?: AbortSignal;
   reason?: string;
+  allowRemoval?: boolean;
 }
 
 export interface RequestSizeResult {
@@ -230,9 +231,11 @@ function decodeBase64(value: string): Buffer {
  * The function intentionally returns null for a fast-path request.
  */
 export async function controlRequestSize(body: Buffer, format: WireFormat, policy: RequestSizePolicy = {}, preserve: (bytes: Buffer, mimeType: string, occurrence: number) => Promise<string>): Promise<RequestSizeResult | null> {
-  const trigger = policy.triggerBytes ?? DEFAULT_REQUEST_SIZE_TRIGGER;
-  const target = policy.targetBytes ?? DEFAULT_REQUEST_SIZE_TARGET;
-  const familyPolicy = familyLimit(policy.modelFamily);
+  const disableRemoval = policy.allowRemoval === false;
+  const trigger = disableRemoval ? Number.MAX_SAFE_INTEGER : policy.triggerBytes ?? DEFAULT_REQUEST_SIZE_TRIGGER;
+  const target = disableRemoval ? Number.MAX_SAFE_INTEGER : policy.targetBytes ?? DEFAULT_REQUEST_SIZE_TARGET;
+  const forceBudget = policy.reason === 'learned' || policy.reason?.startsWith('retry') === true;
+  const familyPolicy = disableRemoval ? undefined : familyLimit(policy.modelFamily);
   const quickLimit = Math.min(trigger, DEFAULT_QUICK_PATH_BYTES);
   if (body.length <= quickLimit) {
     const hint = (body.toString('utf8').match(/"type"\s*:\s*"(?:input_image|image|document|image_url)"/g) ?? []).length;
@@ -278,7 +281,7 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
     const originalLength = Buffer.byteLength(occurrences[index].raw);
     if (item.changed) total += Buffer.byteLength(item.bytes.toString('base64')) - originalLength;
     let prefixBytes = Buffer.byteLength(text.slice(0, occurrences[index].node.end)) - removedPrefixBytes;
-    if (prefixBytes <= trigger) continue;
+    if (prefixBytes <= trigger && !forceBudget) continue;
     while (prefixBytes > target && remove.size < occurrences.length) {
       const candidate = [...occurrences.keys()].find(i => !remove.has(i));
       if (candidate === undefined) break;
@@ -298,7 +301,7 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   // final crossing at the end of the model-visible history so the oldest image is removed even
   // when the overflow comes from a trailing instruction or tool definition.
   let finalPrefixBytes = body.length - removedPrefixBytes;
-  while ((finalPrefixBytes > trigger || (countCapActive && count > cap!)) && remove.size < occurrences.length) {
+  while ((finalPrefixBytes > trigger || forceBudget || (countCapActive && count > cap!)) && remove.size < occurrences.length) {
     const candidate = [...occurrences.keys()].find(i => !remove.has(i));
     if (candidate === undefined) break;
     const old = Buffer.byteLength(occurrences[candidate].raw);
