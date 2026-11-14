@@ -4586,7 +4586,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await handle.close();
   });
 
-  it.each(['owner', 'desktop'] as const)('does not carry guest authorization into a later %s turn', async (source) => {
+  it.each([
+    ['owner', false], ['desktop', false], ['owner', true], ['desktop', true],
+  ] as const)('does not carry guest authorization into a later %s turn (retry exhausted: %s)', async (source, exhausted) => {
     const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
     const handle = await start('auto', review);
     const policy = (requesterAuthority: 'owner' | 'guest') => ({
@@ -4597,7 +4599,16 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     firePermissionRequest('guest-send', 'unknown_sender', { action: 'send' });
     await waitForResponse('guest-send');
     expect(review.mock.calls[0]?.[0].authorizationContext).toEqual({ requesterAuthority: 'guest', source: 'group' });
-    captured.onEvent?.({ type: 'agent_settled' });
+    captured.onEvent?.(exhausted
+      ? { type: 'auto_retry_end', success: false, finalError: '429 budget exceeded' }
+      : { type: 'agent_settled' });
+    // #10277: the old optional terminal can arrive after the next send has
+    // installed its policy but before its native agent_start. It must not erase
+    // that policy or retain the previous guest authority (unit, real PiAgent).
+    captured.onPrompt = () => {
+      if (exhausted) captured.onEvent?.({ type: 'agent_settled' });
+      captured.onEvent?.({ type: 'agent_start' });
+    };
     await handle.send({ type: 'user', content: 'Owner: inspect the status.' }, source === 'owner' ? { turnPermissionPolicy: policy('owner') } : undefined);
     firePermissionRequest('owner-inspect', 'unknown_status', { action: 'inspect' });
     await waitForResponse('owner-inspect');
