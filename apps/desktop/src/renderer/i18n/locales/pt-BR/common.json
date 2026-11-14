@@ -14639,7 +14639,9 @@
         "dirty": "Há novas alterações sem commit. Resolva-as antes de restaurar.",
         "diverged": "As branches local e remota têm alterações diferentes. Resolva as diferenças antes de mudar de branch.",
         "missing": "A branch selecionada não existe mais. Atualize a lista.",
-        "git": "Não foi possível concluir. Confira o branch atual e as alterações salvas antes de tentar novamente"
+        "git": "Não foi possível concluir. Confira o branch atual e as alterações salvas antes de tentar novamente",
+        "savedMissing": "Estas alterações salvas não estão mais disponíveis",
+        "undoUnavailable": "Esta troca de branch não pode mais ser desfeita"
       },
       "confirmSwitch": "Alternar",
       "carryDescription": "Levar as alterações e continuar editando em {{branch}}",

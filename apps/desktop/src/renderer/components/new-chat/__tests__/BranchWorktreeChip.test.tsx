@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   success: vi.fn(),
   info: vi.fn(),
   dismiss: vi.fn(),
+  update: vi.fn(),
   t: (key: string, args?: object) => key + (args ? JSON.stringify(args) : ''),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t }) }));
@@ -37,6 +38,7 @@ vi.mock('@/lib/toast', () => ({
     success: mocks.success,
     info: mocks.info,
     dismiss: mocks.dismiss,
+    update: mocks.update,
   },
 }));
 vi.mock('../FolderPickerPopover', () => ({
@@ -514,8 +516,10 @@ function CheckoutRow({
   onSourceChange,
   remembered = 'remembered-source',
   defaultSource,
+  cwd = '/repo',
 }: {
   deviceId?: string;
+  cwd?: string;
   onSourceChange?: (branch: string) => void;
   remembered?: string;
   defaultSource?: (value: { sourceBranch: string }) => void;
@@ -524,7 +528,7 @@ function CheckoutRow({
   const [source, setSource] = React.useState(remembered);
   return (
     <WorktreeChipsRow
-      cwd="/repo"
+      cwd={cwd}
       deviceLinkDeviceId={deviceId}
       enabled={enabled}
       onEnabledChange={setEnabled}
@@ -864,18 +868,38 @@ it.each(['toast', 'menu'])('restores saved changes from the %s action', async (e
   expect(screen.queryByRole('button', { name: 'newChat.checkout.restore' })).toBeNull();
 });
 
-it('dismisses the recovery toast and ignores its action after leaving the checkout', async () => {
-  const checkout = setupCheckout(true, { stashes: [{ id: 'saved', branch: 'main' }] });
-  const view = render(<CheckoutRow />);
-  await waitFor(() => expect(mocks.info).toHaveBeenCalledOnce());
-  const action = mocks.info.mock.calls[0][1].action;
-  view.unmount();
-  expect(mocks.dismiss).toHaveBeenCalledWith('checkout-info-toast');
-  await act(async () => {
-    action.onClick();
-  });
-  expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
-});
+it.each(['unmount', 'directory'])(
+  'dismisses the stale recovery toast after leaving via %s',
+  async (mode) => {
+    mocks.info.mockReturnValueOnce('checkout-info-toast').mockReturnValue('next-info-toast');
+    const checkout = setupCheckout(true, { stashes: [{ id: 'saved', branch: 'main' }] });
+    const view = render(<CheckoutRow />);
+    await waitFor(() => expect(mocks.info).toHaveBeenCalledOnce());
+    const action = mocks.info.mock.calls[0][1].action;
+    if (mode === 'unmount') view.unmount();
+    else {
+      window.electronAPI.worktreeDetectCwd = vi.fn().mockResolvedValue({
+        isGitRepo: true,
+        gitInstalled: true,
+        isInsideWorktree: false,
+        repoRoot: '/other',
+        currentBranch: 'main',
+        supportsCheckout: true,
+      });
+      await act(async () => {
+        view.rerender(<CheckoutRow cwd="/other" />);
+      });
+      await waitFor(() => expect(mocks.info).toHaveBeenCalledTimes(2));
+    }
+    expect(mocks.dismiss).toHaveBeenCalledWith('checkout-info-toast');
+    mocks.dismiss.mockClear();
+    await act(async () => {
+      action.onClick();
+    });
+    expect(mocks.dismiss).toHaveBeenCalledWith('checkout-info-toast');
+    expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
+  },
+);
 
 // Occupancy remains a write preflight rule, but no longer decorates or disables
 // the option. The clicked branch must be named, with no mutation on rejection.
@@ -1136,4 +1160,152 @@ it('previews the first three of sixty changed files and reports the remainder', 
   await screen.findByRole('dialog');
   expect(screen.getAllByRole('listitem').map((row) => row.title)).toEqual(files.slice(0, 3));
   expect(screen.getByText(mocks.t('newChat.checkout.moreFiles', { count: 57 }))).toBeTruthy();
+});
+
+// Stale recovery actions must re-read facts once, then act or explain why not.
+it.each([true, false, 'unknown'] as const)(
+  'refreshes a stale restore action and gives visible feedback (available=%s)',
+  async (available) => {
+    const checkout = setupCheckout(true, { stashes: [{ id: 'saved', branch: 'main' }] });
+    render(<CheckoutRow />);
+    await waitFor(() => expect(mocks.info).toHaveBeenCalledOnce());
+    const action = mocks.info.mock.calls[0][1].action;
+    if (available === 'unknown') checkout.mockRejectedValueOnce(new Error('offline'));
+    else checkout.mockResolvedValue({ status: checkoutStatus });
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(mocks.dismiss).toHaveBeenCalledWith('checkout-info-toast'));
+    const before = checkout.mock.calls.length;
+    checkout.mockImplementation(async (req) => ({
+      status: {
+        ...checkoutStatus,
+        stashes: req.action === 'status' && available ? [{ id: 'saved', branch: 'main' }] : [],
+      },
+    }));
+    await act(async () => {
+      action.onClick();
+    });
+    await waitFor(() =>
+      available
+        ? expect(mocks.success).toHaveBeenCalledWith('newChat.checkout.restored')
+        : expect(mocks.toast).toHaveBeenCalledWith('newChat.checkout.errors.savedMissing'),
+    );
+    expect(
+      checkout.mock.calls.slice(before).filter(([req]) => req.action === 'status'),
+    ).toHaveLength(1);
+    expect(
+      checkout.mock.calls.slice(before).filter(([req]) => req.action === 'restore'),
+    ).toHaveLength(available ? 1 : 0);
+  },
+);
+
+it('refreshes mismatched undo receipts, reports failure, and disables toast actions during a write', async () => {
+  const checkout = setupCheckout();
+  let current = 'main';
+  let sequence = 0;
+  let finish: (value: unknown) => void = () => {};
+  checkout.mockImplementation(async (req) => {
+    if (req.action === 'switch') {
+      const from = current;
+      current = req.branch;
+      return {
+        status: { ...checkoutStatus, current },
+        receipt: {
+          id: `receipt-${++sequence}`,
+          from,
+          to: current,
+          strategy: 'carry',
+          hadChanges: true,
+          sessions: [],
+        },
+      };
+    }
+    if (req.action === 'undo')
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    return { status: { ...checkoutStatus, current } };
+  });
+  const view = render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  for (const branch of ['feature', 'main']) {
+    fireEvent.click(branchButton());
+    fireEvent.click(await screen.findByRole('option', { name: branch }));
+    await waitFor(() => expect(mocks.success).toHaveBeenCalledTimes(branch === 'feature' ? 1 : 2));
+  }
+  const oldAction = mocks.success.mock.calls[0][1].action;
+  const action = mocks.success.mock.calls[1][1].action;
+  const before = checkout.mock.calls.length;
+  await act(async () => {
+    oldAction.onClick();
+  });
+  await waitFor(() =>
+    expect(mocks.toast).toHaveBeenCalledWith('newChat.checkout.errors.undoUnavailable'),
+  );
+  expect(checkout.mock.calls.slice(before).map(([req]) => req.action)).toEqual(['status']);
+  await act(async () => {
+    action.onClick();
+  });
+  await waitFor(() =>
+    expect(mocks.update).toHaveBeenCalledWith(
+      'checkout-success-toast',
+      expect.any(String),
+      expect.objectContaining({ action: expect.objectContaining({ disabled: true }) }),
+    ),
+  );
+  expect(refreshButton().hasAttribute('disabled')).toBe(true);
+  await act(async () => {
+    action.onClick();
+  });
+  expect(checkout.mock.calls.filter(([req]) => req.action === 'undo')).toHaveLength(1);
+  await act(async () => {
+    finish({ status: checkoutStatus, undoApplied: true });
+  });
+  await waitFor(() => expect(mocks.success).toHaveBeenLastCalledWith('newChat.checkout.undone'));
+  const afterUndo = checkout.mock.calls.length;
+  await act(async () => {
+    action.onClick();
+  });
+  await waitFor(() =>
+    expect(checkout.mock.calls.slice(afterUndo).map(([req]) => req.action)).toEqual(['status']),
+  );
+  expect(mocks.toast).toHaveBeenLastCalledWith('newChat.checkout.errors.undoUnavailable');
+  view.unmount();
+  mocks.dismiss.mockClear();
+  action.onClick();
+  expect(mocks.dismiss).toHaveBeenCalledWith('checkout-success-toast');
+});
+
+it('disables the restore toast while its request is running', async () => {
+  const checkout = setupCheckout(true, { stashes: [{ id: 'saved', branch: 'main' }] });
+  render(<CheckoutRow />);
+  await waitFor(() => expect(mocks.info).toHaveBeenCalledOnce());
+  const action = mocks.info.mock.calls[0][1].action;
+  let finish: (value: unknown) => void = () => {};
+  checkout.mockImplementation((req) =>
+    req.action === 'restore'
+      ? new Promise((resolve) => {
+          finish = resolve;
+        })
+      : Promise.resolve({ status: checkoutStatus }),
+  );
+  await act(async () => {
+    action.onClick();
+  });
+  await waitFor(() =>
+    expect(mocks.update).toHaveBeenCalledWith(
+      'checkout-info-toast',
+      expect.any(String),
+      expect.objectContaining({ action: expect.objectContaining({ disabled: true }) }),
+    ),
+  );
+  await act(async () => {
+    action.onClick();
+  });
+  expect(checkout.mock.calls.filter(([req]) => req.action === 'restore')).toHaveLength(1);
+  await act(async () => {
+    finish({ status: checkoutStatus });
+  });
+  await waitFor(() => expect(mocks.success).toHaveBeenCalledWith('newChat.checkout.restored'));
 });

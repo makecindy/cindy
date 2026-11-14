@@ -11,11 +11,21 @@ export default {
     'checkbox-tooltip': { about: 'Shared one-line worktree benefit' },
     'default-source': { about: 'Worktree without a saved source defaults to origin/main' },
     'sync-off': { about: 'Unchecked worktree still exposes remote branch refresh' },
+    'recover-busy': { about: 'Recovery toast action is disabled during a menu-triggered restore' },
     restored: { about: 'Restore completion toast' },
     undone: { about: 'Undo completion toast' },
     ...Object.fromEntries(
-      ['git', 'changed', 'missing', 'dirty', 'diverged', 'conflict'].map((code) => [
-        'error-' + code,
+      [
+        'git',
+        'changed',
+        'missing',
+        'dirty',
+        'diverged',
+        'conflict',
+        'savedMissing',
+        'undoUnavailable',
+      ].map((code) => [
+        'error-' + code.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase(),
         { about: code + ' error toast' },
       ]),
     ),
@@ -47,6 +57,12 @@ export default {
   },
   async check(page, ui) {
     assert.equal(await page.getByTestId('create-agent-branch-chip').innerText(), 'main');
+    assert.equal(
+      await page
+        .getByTestId('create-agent-branch-worktree')
+        .evaluate((el) => globalThis.getComputedStyle(el).getPropertyValue('-webkit-app-region')),
+      'no-drag',
+    );
     const geometry = async () => {
       const result = {};
       for (const id of [
@@ -117,7 +133,16 @@ export default {
     }
     await page.getByTestId('create-agent-branch-chip').click();
     await page.getByRole('option', { name: /^feature/ }).waitFor();
-    if (ui.case === 'restored') {
+    if (ui.case === 'recover-busy') {
+      await page
+        .getByTestId('checkout-menu-notices')
+        .getByRole('button', { name: await ui.t('newChat.checkout.restore'), exact: true })
+        .click();
+      await page
+        .getByRole('button', { name: await ui.t('newChat.checkout.restore'), exact: true })
+        .and(page.locator('[disabled]'))
+        .waitFor();
+    } else if (ui.case === 'restored') {
       await page
         .getByTestId('checkout-menu-notices')
         .getByRole('button', { name: await ui.t('newChat.checkout.restore'), exact: true })
@@ -139,7 +164,12 @@ export default {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
       await page
         .getByRole('alert')
-        .filter({ hasText: await ui.t('newChat.checkout.errors.' + ui.case.slice(6)) })
+        .filter({
+          hasText: await ui.t(
+            'newChat.checkout.errors.' +
+              ui.case.slice(6).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()),
+          ),
+        })
         .waitFor();
     } else if (ui.case === 'ordinary') {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
@@ -233,6 +263,12 @@ export default {
         el.parentElement.scrollTop = 0;
       });
       const dialog = page.getByRole('dialog');
+      assert.equal(
+        await dialog.evaluate((el) =>
+          globalThis.getComputedStyle(el).getPropertyValue('-webkit-app-region'),
+        ),
+        'no-drag',
+      );
       assert.equal(await dialog.getByRole('listitem').count(), 3);
       if (ui.case === 'many-files')
         await dialog
@@ -299,6 +335,12 @@ export default {
     }
     if (['busy', 'operation', 'idle', 'recover'].includes(ui.case)) {
       const notice = page.getByTestId('checkout-menu-notices');
+      assert.equal(
+        await notice.evaluate((el) =>
+          globalThis.getComputedStyle(el.parentElement).getPropertyValue('-webkit-app-region'),
+        ),
+        'no-drag',
+      );
       const oldBox = await notice.boundingBox();
       const list = page.getByRole('listbox');
       const current = page.getByRole('option', { name: 'main', exact: true });
@@ -341,6 +383,14 @@ export default {
       await list.evaluate((el, scroll) => {
         el.scrollTop = scroll;
       }, initialScroll);
+    }
+    for (const card of await page.locator('[aria-live][data-state]').all()) {
+      assert.equal(
+        await card.evaluate((el) =>
+          globalThis.getComputedStyle(el).getPropertyValue('-webkit-app-region'),
+        ),
+        'no-drag',
+      );
     }
     const after = await geometry();
     assert.deepEqual(after, before, 'Feedback must not move or resize the controls row or input');

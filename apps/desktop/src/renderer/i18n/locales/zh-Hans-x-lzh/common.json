@@ -14457,7 +14457,9 @@
         "dirty": "目录里有新的未提交改动，请先处理再恢复",
         "diverged": "本地与远端分支各有新改，请先理其异再切换",
         "missing": "所选分支已不存在，请刷新列表",
-        "git": "操作未成，请查当前分支及已存改动后再试"
+        "git": "操作未成，请查当前分支及已存改动后再试",
+        "savedMissing": "所存改动已不在",
+        "undoUnavailable": "此番切换已不可撤销"
       },
       "confirmSwitch": "切换",
       "carryDescription": "携改动至 {{branch}}，续修于此",

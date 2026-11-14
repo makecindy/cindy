@@ -14517,7 +14517,9 @@
         "dirty": "There are new uncommitted changes. Handle them before restoring.",
         "diverged": "The local and remote branches have different updates. Resolve the differences before switching.",
         "missing": "The selected branch no longer exists. Refresh the list.",
-        "git": "Could not finish the operation. Check the current branch and saved changes before trying again"
+        "git": "Could not finish the operation. Check the current branch and saved changes before trying again",
+        "savedMissing": "These saved changes are no longer available",
+        "undoUnavailable": "This branch switch can no longer be undone"
       },
       "confirmSwitch": "Switch",
       "carryDescription": "Take the changes with you and keep editing on {{branch}}",

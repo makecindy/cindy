@@ -14639,7 +14639,9 @@
         "dirty": "De nouvelles modifications non validées sont présentes. Traitez-les avant de restaurer.",
         "diverged": "Les branches locale et distante ont des modifications différentes. Résolvez ces différences avant de changer de branche.",
         "missing": "La branche choisie n’existe plus. Actualisez la liste.",
-        "git": "Impossible de terminer. Vérifiez la branche actuelle et les modifications enregistrées avant de réessayer"
+        "git": "Impossible de terminer. Vérifiez la branche actuelle et les modifications enregistrées avant de réessayer",
+        "savedMissing": "Ces modifications enregistrées ne sont plus disponibles",
+        "undoUnavailable": "Ce changement de branche ne peut plus être annulé"
       },
       "confirmSwitch": "Changer",
       "carryDescription": "Emporter les modifications et continuer sur {{branch}}",

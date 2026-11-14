@@ -58,7 +58,7 @@ function Page({
 void mountPage({
   host: (ctx) => {
     let current = 'main';
-    let saved = ['recover', 'restored'].includes(ctx.case);
+    let saved = ['recover', 'restored', 'recover-busy'].includes(ctx.case);
     return {
       worktreeDetectCwd: async () => ({
         gitInstalled: true,
@@ -108,6 +108,7 @@ void mountPage({
             })
           : forbid('worktreeSyncBranch'),
       worktreeCheckout: async (req: { action: string; branch?: string }) => {
+        if (ctx.case === 'recover-busy' && req.action === 'restore') return new Promise(() => {});
         // Hold only this in-memory reply so the real row stays in its pending state.
         if (req.action === 'switch' && ctx.case === 'switching') return new Promise(() => {});
         if (
@@ -168,7 +169,11 @@ void mountPage({
             carryAllowed: ctx.case !== 'conflict',
             stashes: saved ? [{ id: 'saved', branch: current }] : [],
             ...(ctx.case.startsWith('error-') && req.branch === 'feature'
-              ? { blocked: ctx.case.slice(6) }
+              ? {
+                  blocked: ctx.case
+                    .slice(6)
+                    .replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase()),
+                }
               : {}),
             ...(ctx.case === 'operation' ? { blocked: 'operation' } : {}),
             ...(['busy'].includes(ctx.case) ? { blocked: 'busy' } : {}),

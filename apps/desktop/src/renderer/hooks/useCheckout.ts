@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { toast } from '@/lib/toast';
+import { toast, type ToastAction } from '@/lib/toast';
 import type {
   CheckoutRequest,
   CheckoutReply,
@@ -56,6 +56,9 @@ export function useCheckout(
     undo?: (id: string) => Promise<void>;
     restore?: (id: string) => Promise<void>;
   }>({});
+  const notices = useRef<
+    Partial<Record<'undo' | 'saved', { id: string; message: string; action: ToastAction }>>
+  >({});
   const undoToast = useRef<string | undefined>(undefined);
   const savedToast = useRef<{ identity: string; id?: string }>({ identity: '' });
   useEffect(() => {
@@ -66,6 +69,7 @@ export function useCheckout(
       if (savedToast.current.id) toast.dismiss(savedToast.current.id);
       undoToast.current = undefined;
       savedToast.current = { identity: '' };
+      notices.current = {};
     };
   }, [key]);
   const serial = useRef(0);
@@ -218,6 +222,7 @@ export function useCheckout(
       // A new switch retires the previous undo prompt, even when this one needs no toast.
       if (undoToast.current) toast.dismiss(undoToast.current);
       undoToast.current = undefined;
+      delete notices.current.undo;
       if (reply.receipt) {
         const receipt = reply.receipt;
         const idle = receipt.sessions
@@ -241,16 +246,19 @@ export function useCheckout(
           (idle
             ? '\n' + t('newChat.checkout.sessionsContinue', { names: idle, branch: receipt.to })
             : '');
-        undoToast.current = toast.success(message, {
-          duration: 8000,
-          action: {
-            label: t('newChat.checkout.undo'),
-            onClick: () => {
-              if (mounted.current && currentKey.current === key)
-                void actions.current.undo?.(receipt.id);
-            },
+        const action: ToastAction = {
+          label: t('newChat.checkout.undo'),
+          onClick: () => {
+            if (!mounted.current || currentKey.current !== key) {
+              toast.dismiss(id);
+              return;
+            }
+            void actions.current.undo?.(receipt.id);
           },
-        });
+        };
+        const id = toast.success(message, { duration: 8000, action });
+        undoToast.current = id;
+        notices.current.undo = { id, message, action };
       }
     },
     [repo, mutate, update, key, t],
@@ -281,33 +289,55 @@ export function useCheckout(
   );
   const undo = useCallback(
     async (expectedReceiptId?: string) => {
-      const previous = stateRef.current;
-      if (
-        !repo ||
-        previous.key !== key ||
-        !previous.receipt ||
-        (expectedReceiptId && previous.receipt.id !== expectedReceiptId)
-      )
+      if (active.current || picking.current) return;
+      const matches = () =>
+        stateRef.current.key === key &&
+        !!stateRef.current.receipt &&
+        (!expectedReceiptId || stateRef.current.receipt.id === expectedReceiptId);
+      if (!repo) {
+        reportError('undoUnavailable');
         return;
+      }
+      if (!matches()) {
+        if (!(await refresh())) return;
+        if (!matches()) {
+          reportError('undoUnavailable');
+          return;
+        }
+      }
+      const previous = stateRef.current;
       const reply = await mutate({
         action: 'undo',
         baseRepo: repo,
-        receiptId: previous.receipt.id,
+        receiptId: previous.receipt!.id,
         operationId: crypto.randomUUID(),
       });
       if (reply && (reply.undoApplied || !reply.blocked)) {
         update({ receipt: undefined });
         if (undoToast.current) toast.dismiss(undoToast.current);
         undoToast.current = undefined;
+        delete notices.current.undo;
         if (!reply.blocked) toast.success(t('newChat.checkout.undone'));
       }
     },
-    [repo, key, mutate, update, t],
+    [repo, key, mutate, update, t, refresh, reportError],
   );
   const restore = useCallback(
     async (stashId: string) => {
-      const status = stateRef.current.key === key ? stateRef.current.status : undefined;
-      if (!repo || !status || !status.stashes.some((stash) => stash.id === stashId)) return;
+      if (active.current || picking.current) return;
+      let status = stateRef.current.key === key ? stateRef.current.status : undefined;
+      if (!repo) {
+        reportError('savedMissing');
+        return;
+      }
+      if (!status || !status.stashes.some((stash) => stash.id === stashId)) {
+        status = await refresh();
+        if (!status) return;
+        if (!status.stashes.some((stash) => stash.id === stashId)) {
+          reportError('savedMissing');
+          return;
+        }
+      }
       const reply = await mutate({
         action: 'restore',
         baseRepo: repo,
@@ -317,7 +347,7 @@ export function useCheckout(
       });
       if (reply && !reply.blocked) toast.success(t('newChat.checkout.restored'));
     },
-    [repo, key, mutate, t],
+    [repo, key, mutate, t, refresh, reportError],
   );
   actions.current = { undo, restore };
   const status = state.key === key ? state.status : undefined;
@@ -327,21 +357,32 @@ export function useCheckout(
     if (savedToast.current.identity === identity) return;
     if (savedToast.current.id) toast.dismiss(savedToast.current.id);
     savedToast.current = { identity };
-    if (stash)
-      savedToast.current.id = toast.info(
-        t('newChat.checkout.savedChanges', { branch: stash.branch }),
-        {
-          duration: 8000,
-          action: {
-            label: t('newChat.checkout.restore'),
-            onClick: () => {
-              if (mounted.current && currentKey.current === key)
-                void actions.current.restore?.(stash.id);
-            },
-          },
+    delete notices.current.saved;
+    if (stash) {
+      const message = t('newChat.checkout.savedChanges', { branch: stash.branch });
+      const action: ToastAction = {
+        label: t('newChat.checkout.restore'),
+        onClick: () => {
+          if (!mounted.current || currentKey.current !== key) {
+            toast.dismiss(id);
+            return;
+          }
+          void actions.current.restore?.(stash.id);
         },
-      );
+      };
+      const id = toast.info(message, { duration: 8000, action });
+      savedToast.current.id = id;
+      notices.current.saved = { id, message, action };
+    }
   }, [key, status, t]);
+  useEffect(() => {
+    for (const notice of Object.values(notices.current)) {
+      const disabled = !!state.busy;
+      if (notice.action.disabled === disabled) continue;
+      notice.action = { ...notice.action, disabled };
+      toast.update(notice.id, notice.message, { action: notice.action });
+    }
+  }, [state.busy, state.status, state.receipt]);
   return {
     ...(state.key === key ? state : { key }),
     refresh,

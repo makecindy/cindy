@@ -1,3 +1,4 @@
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Info } from 'lucide-react';
 import { Tip } from '@/components/ui/tooltip';
@@ -126,6 +127,7 @@ export function CheckoutDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
+          style={WINDOW_NO_DRAG_STYLE}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
             cancel.current?.focus();

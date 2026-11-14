@@ -1,3 +1,4 @@
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 /**
  * WorktreeChipsRow — folder chip + [分支 │ ☑ worktree] 联合控件。
  *
@@ -804,6 +805,7 @@ export function BranchWorktreeChip({
     >
       <PopoverTrigger asChild>{branchTipped}</PopoverTrigger>
       <PopoverContent
+        style={WINDOW_NO_DRAG_STYLE}
         align="end"
         sideOffset={4}
         // IME 组合中的 Escape 只是取消候选,不能关弹层(CJK 高频路径)。
@@ -1011,6 +1013,7 @@ export function BranchWorktreeChip({
   return (
     <div
       data-testid="create-agent-branch-worktree"
+      style={WINDOW_NO_DRAG_STYLE}
       className={cn(
         'group inline-flex items-stretch overflow-hidden rounded-full border transition-colors',
         compact

@@ -14517,7 +14517,9 @@
         "dirty": "Es gibt neue, nicht committete Änderungen. Bearbeite sie vor der Wiederherstellung.",
         "diverged": "Der lokale und der entfernte Branch haben unterschiedliche Änderungen. Kläre diese Unterschiede vor dem Wechsel.",
         "missing": "Der ausgewählte Branch existiert nicht mehr. Aktualisiere die Liste.",
-        "git": "Der Vorgang konnte nicht abgeschlossen werden. Prüfe den aktuellen Branch und gespeicherte Änderungen und versuche es erneut"
+        "git": "Der Vorgang konnte nicht abgeschlossen werden. Prüfe den aktuellen Branch und gespeicherte Änderungen und versuche es erneut",
+        "savedMissing": "Diese gespeicherten Änderungen sind nicht mehr verfügbar",
+        "undoUnavailable": "Dieser Branch-Wechsel lässt sich nicht mehr rückgängig machen"
       },
       "confirmSwitch": "Wechseln",
       "carryDescription": "Änderungen mitnehmen und auf {{branch}} weiterarbeiten",
