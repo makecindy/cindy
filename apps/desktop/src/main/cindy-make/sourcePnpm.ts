@@ -19,7 +19,7 @@ import { createMakeBuildLineOutput } from './buildProgress.js';
  * or point at a custom URL for the package manager Corepack runs before pnpm's
  * own guards apply, so its project env and project spec are disabled outright.
  */
-export function unverifiedPnpmEnv(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function unverifiedPnpmEnv(environment: NodeJS.ProcessEnv, workspace: string): NodeJS.ProcessEnv {
   return {
     ...Object.fromEntries(
       Object.entries(environment).filter(
@@ -36,6 +36,13 @@ export function unverifiedPnpmEnv(environment: NodeJS.ProcessEnv): NodeJS.Proces
     npm_config_userconfig: os.devNull,
     // The global config may hold registry credentials of its own.
     npm_config_globalconfig: os.devNull,
+    // pnpm 11 reads its global YAML and auth.ini independently of npm config.
+    // Keep unverified content away from both, using an already-contained write root.
+    XDG_CONFIG_HOME: path.join(workspace, 'node_modules', '.cindy-make-config'),
+    pnpm_config_npmrc_auth_file: os.devNull,
+    pnpm_config_userconfig: os.devNull,
+    pnpm_config_globalconfig: os.devNull,
+    pnpm_config_manage_package_manager_versions: 'false',
     // Corepack must not read the content's `.corepack.env` or follow its
     // `packageManager` spec: together they can make the Corepack shim execute
     // attacker-chosen code before `--ignore-scripts` applies.

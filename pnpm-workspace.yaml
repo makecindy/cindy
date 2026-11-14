@@ -1,3 +1,56 @@
 packages:
-  - "apps/*"
-  - "packages/*"
+  - apps/*
+  - packages/*
+nodeLinker: hoisted
+frozenLockfile: true
+engineStrict: true
+supportedArchitectures:
+  os:
+    - win32
+    - darwin
+    - linux
+  cpu:
+    - x64
+    - arm64
+  libc:
+    - glibc
+overrides:
+  "@electron/rebuild": ^4.0.3
+  protobufjs: 7.6.5
+  tar: ^7.5.21
+  brace-expansion@^5.0.0: ^5.0.8
+  "@anthropic-ai/sdk": 0.93.0
+  js-yaml@^4.0.0: ^4.3.0
+  zod: 4.3.6
+  tmp: ^0.2.7
+  fast-uri: ^3.1.4
+  sharp: ^0.35.0
+  "@esbuild-kit/core-utils>esbuild": ^0.25.0
+  builder-util-runtime: ^9.7.0
+patchedDependencies:
+  harmonyos-sans-sc-webfont-splitted: dependency-patches/harmonyos-sans-sc-webfont-splitted.patch
+  react-native@0.85.3: dependency-patches/react-native@0.85.3.patch
+  react-native-uitextview@2.2.0: dependency-patches/react-native-uitextview@2.2.0.patch
+  expo-paste-input@0.2.2: dependency-patches/expo-paste-input@0.2.2.patch
+  rollup@4.62.2: dependency-patches/rollup@4.62.2.patch
+  react-native-webview@14.0.1: dependency-patches/react-native-webview@14.0.1.patch
+  "@expo/cli@58.1.19": dependency-patches/@expo__cli@58.1.19.patch
+  react-native-screens@4.30.1: dependency-patches/react-native-screens@4.30.1.patch
+  expo-router@58.0.30: dependency-patches/expo-router@58.0.30.patch
+  react-native-gesture-handler@3.3.0: dependency-patches/react-native-gesture-handler@3.3.0.patch
+  expo-modules-core@58.0.30: dependency-patches/expo-modules-core@58.0.30.patch
+  "@terrazzo/parser@2.7.1": dependency-patches/@terrazzo__parser@2.7.1.patch
+  expo-image@58.0.18: dependency-patches/expo-image@58.0.18.patch
+allowUnusedPatches: true
+allowBuilds:
+  "@parcel/watcher": true
+  better-sqlite3: true
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+  node-pty: true
+  sharp: true
+  "@google/genai": false
+  cpu-features: false
+  protobufjs: false
+  ssh2: false

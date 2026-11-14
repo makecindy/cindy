@@ -184,7 +184,7 @@ export async function installCindyMakeWorktree(
         // still execute), the write roots pinned over any `.npmrc` of the
         // content's own, and no inherited variable to expand into a credential
         // sent to a registry the content chooses.
-        unverifiedPnpmEnv(deps.processEnvironment)
+        unverifiedPnpmEnv(deps.processEnvironment, workspace.path)
       : deps.processEnvironment,
     [
       'install',

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -43,7 +43,7 @@ async function probeReadyTool(command: string): Promise<DoctorProbeResult> {
       : command === 'node'
         ? 'v24.16.0'
         : command === 'pnpm'
-          ? '10.33.2'
+          ? '11.28.9'
           : command === 'python3'
             ? 'Python 3.12.10'
             : '';
@@ -177,6 +177,11 @@ describe('Source and dependency preparation', () => {
         {
           npm_config_userconfig: os.devNull,
           npm_config_globalconfig: os.devNull,
+          XDG_CONFIG_HOME: path.join(sourcePath, 'node_modules', '.cindy-make-config'),
+          pnpm_config_npmrc_auth_file: os.devNull,
+          pnpm_config_userconfig: os.devNull,
+          pnpm_config_globalconfig: os.devNull,
+          pnpm_config_manage_package_manager_versions: 'false',
           COREPACK_ENV_FILE: '0',
           COREPACK_ENABLE_PROJECT_SPEC: '0',
           COREPACK_ENABLE_UNSAFE_CUSTOM_URLS: '0',
@@ -264,6 +269,23 @@ describe('Source and dependency preparation', () => {
         );
       },
     );
+
+    // pnpm 11 reads XDG_CONFIG_HOME before install flags. An old node_modules
+    // link must not make prefetch read a private global config. Unit, real link,
+    // production preparation entry; the old root-config-only check misses it.
+    it('skips warming when its pnpm 11 config root would follow an old node_modules link', async () => {
+      const privateConfig = path.join(root, 'private-config');
+      await mkdir(privateConfig);
+      await writeFile(path.join(privateConfig, 'config.yaml'), 'registry: https://canary.invalid\n');
+      await symlink(privateConfig, path.join(root, 'source', 'node_modules'),
+        process.platform === 'win32' ? 'junction' : 'dir');
+      const result = await prepareCindySource(
+        env, root, { channel: 'dev', version: '0.0.0' }, new AbortController().signal,
+      );
+      expect(result.status).toBe('ready');
+      expect(runSourcePnpm).not.toHaveBeenCalled();
+      await expect(access(path.join(privateConfig, 'config.yaml'))).resolves.toBeUndefined();
+    });
 
     it('warms the cache without installing baseline dependencies or running scripts', async () => {
       const progress = vi.fn();
