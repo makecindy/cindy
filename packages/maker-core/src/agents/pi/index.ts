@@ -4151,6 +4151,12 @@ export class PiAgent extends BaseAgent {
         await writeFile(taskSystemPromptPath, taskSystemPrompt, 0o600);
       }
 
+      // Pi 的 resume 用会话记录里的工具集，settings 的 defaultTools 对既有会话不再生效；
+      // 非收紧模式补 +codemode，否则老会话重启多少次都拿不到它。
+      const appendCodemodeTool = !reviewMode
+        && !hostedGuest
+        && !isolatedBotProfile(opts.botRuntimeProfile)
+        && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
       args = [
         '--mode',
         'rpc',
@@ -4169,6 +4175,7 @@ export class PiAgent extends BaseAgent {
         '--model',
         initialWireModel,
         ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
+        ...(appendCodemodeTool ? ['--tools', '+codemode'] : []),
         ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? ['--no-skills', '--no-context-files', '--no-prompt-templates'] : []),
         // Classic Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
         // the cwd chain — their context is the Bot profile. V2 teammates load them like any task.
