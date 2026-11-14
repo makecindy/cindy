@@ -3975,7 +3975,9 @@ describe('plugin page audience and shared tool execution', () => {
     expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(listInstalledAsyncMock).not.toHaveBeenCalled();
-    expect(listInstalledMock).toHaveBeenCalledTimes(change === 'missing' ? 1 : 0);
+    // The initial page binding and the post-session-context recheck are two
+    // separate exact checks; each cold check may fall back once.
+    expect(listInstalledMock).toHaveBeenCalledTimes(change === 'missing' ? 2 : 0);
   });
   // C14/X01: a cold page call used to bootstrap with no business id, then leak
   // its ALS grant into long-lived MCP callbacks. Existing tests only used live

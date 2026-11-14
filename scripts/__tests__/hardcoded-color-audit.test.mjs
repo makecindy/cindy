@@ -305,8 +305,10 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   const summary = workflow.jobs.verify.steps[0];
   for (const checks of ['success','failure','cancelled','skipped']) {
     for (const shards of ['success','failure','cancelled','skipped']) {
+      // The parallel typecheck job blocks verify like the checks it was split from.
+      for (const typecheck of checks === 'success' && shards === 'success' ? ['success','failure','cancelled','skipped'] : ['success']) {
       // Host combinations only matter once the other gates pass.
-      const allGreen = checks === 'success' && shards === 'success';
+      const allGreen = checks === 'success' && shards === 'success' && typecheck === 'success';
       for (const selection of allGreen ? ['success','failure','cancelled','skipped'] : ['success']) {
       for (const required of allGreen ? ['true','false',''] : ['true']) {
       for (const hosts of allGreen ? ['success','failure','cancelled','skipped'] : ['success']) {
@@ -316,7 +318,9 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
       const aggregateScript = summary.run
         .replaceAll('$SCOPE_RESULT', 'success')
         .replaceAll('$LINUX_UNIT_REQUIRED', 'true')
+        .replaceAll('$TYPECHECK_REQUIRED', 'true')
         .replaceAll('$VERIFY_CHECKS_RESULT', checks)
+        .replaceAll('$TYPECHECK_RESULT', typecheck)
         .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards)
         .replaceAll('$HOST_CHANGES_RESULT', selection)
         .replaceAll('$HOST_REQUIRED', required)
@@ -326,7 +330,8 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
       // Host regressions may be skipped only when selection succeeded and said they are not needed.
       const hostOk = selection === 'success'
         && ((required === 'true' && hosts === 'success') || (required === 'false' && hosts === 'skipped'));
-      assert.equal(aggregate.status === 0, checks === 'success' && shards === 'success' && hostOk);
+      assert.equal(aggregate.status === 0, allGreen && hostOk);
+      }
       }
       }
       }
@@ -335,7 +340,9 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   const propagatedScript = summary.run
     .replaceAll('$SCOPE_RESULT', 'success')
     .replaceAll('$LINUX_UNIT_REQUIRED', 'true')
+        .replaceAll('$TYPECHECK_REQUIRED', 'true')
     .replaceAll('$VERIFY_CHECKS_RESULT', failed.status ? 'failure' : 'success')
+    .replaceAll('$TYPECHECK_RESULT', 'success')
     .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success')
     .replaceAll('$HOST_CHANGES_RESULT', 'success')
     .replaceAll('$HOST_REQUIRED', 'true')
@@ -442,7 +449,7 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.ok(pkg.scripts['test:runner'].includes('scripts/__tests__/hardcoded-color-audit.test.mjs'));
   assert.equal(workflow.jobs.verify.name,'verify');
   assert.match(workflow.jobs.verify.if,/always\(\)/);
-  assert.deepEqual(workflow.jobs.verify.needs,['changes','verify-checks','linux-unit-shards','host-changes','host-regressions']);
+  assert.deepEqual(workflow.jobs.verify.needs,['changes','verify-checks','typecheck','linux-unit-shards','host-changes','host-regressions']);
   const host = workflow.jobs['host-regressions'];
   assert.equal(host.needs, 'host-changes');
   assert.deepEqual(host.strategy.matrix.os, ['ubuntu-latest', 'windows-latest', 'macos-latest']);
@@ -498,6 +505,8 @@ test('CI aggregates only accept planned skips and preserve failure propagation',
   assert.equal(jobs['windows-runner-checks'].if, "needs.changes.outputs.desktop == 'true'");
   assert.equal(jobs['git-integration'].if, "needs.changes.outputs.desktop == 'true'");
   assert.equal(jobs['git-integration'].steps.at(-1).run, 'pnpm run test:workspaces --tier git-integration');
+  assert.equal(jobs.typecheck.needs, 'changes');
+  assert.equal(jobs.typecheck.if, "needs.changes.outputs.runtime == 'true'");
   const invoke = (job, values) => {
     const script = job.steps[0].run.replace(/\$([A-Z_]+)/g, (_, key) => values[key] ?? '');
     return runBash(script);
@@ -508,6 +517,7 @@ test('CI aggregates only accept planned skips and preserve failure propagation',
     const values = {
       SCOPE_RESULT: 'success', VERIFY_CHECKS_RESULT: 'success',
       HOST_CHANGES_RESULT: 'success', HOST_REQUIRED: 'false', HOST_REGRESSIONS_RESULT: 'skipped',
+      TYPECHECK_REQUIRED: String(plan.runtime), TYPECHECK_RESULT: plan.runtime ? 'success' : 'skipped',
       LINUX_UNIT_REQUIRED: String(plan.linux_unit),
       WINDOWS_UNIT_REQUIRED: String(plan.windows_unit), WINDOWS_RUNNER_REQUIRED: String(plan.desktop),
       LINUX_UNIT_SHARDS_RESULT: plan.linux_unit ? 'success' : 'skipped',
@@ -515,6 +525,7 @@ test('CI aggregates only accept planned skips and preserve failure propagation',
       WINDOWS_RUNNER_CHECKS_RESULT: plan.desktop ? 'success' : 'skipped',
     };
     for (const [job, required, result] of [
+      [jobs.verify, 'TYPECHECK_REQUIRED', 'TYPECHECK_RESULT'],
       [jobs.verify, 'LINUX_UNIT_REQUIRED', 'LINUX_UNIT_SHARDS_RESULT'],
       [jobs['windows-unit'], 'WINDOWS_UNIT_REQUIRED', 'WINDOWS_UNIT_SHARDS_RESULT'],
       [jobs['windows-unit'], 'WINDOWS_RUNNER_REQUIRED', 'WINDOWS_RUNNER_CHECKS_RESULT'],

@@ -738,6 +738,8 @@
     "memoryDeleteFailed": "删之未成",
     "create": "新立同伴",
     "createFailed": "创建之果尚未确认，请再试以核之。",
+    "createHostUnsupported": "此机暂不能新立同伴，请更新电脑端之 Cindy，或于彼机新立同伴。",
+    "createNeedsDetails": "填名并择像后即可新立同伴。",
     "title": "同伴数据",
     "profile": "资料与性情",
     "memory": "忆",
