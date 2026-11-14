@@ -26,6 +26,7 @@ import { createAnthropicResponsesBridgeHost } from '../../../desktop/src/main/ma
 import { createPiSubscriptionWebSocket } from '../../../desktop/src/main/maker-host/piSubscriptionWebSocketCore.js';
 import { chatgptAccountIdFromTokens } from '../../../desktop/src/main/maker-host/codexCredentialRead.js';
 import { createHostCodexCredentials } from './codex-credentials.js';
+import { createHostCodexThreadStorage } from './codex-thread-storage.js';
 import { invalidateHostCodexLogin } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { createCodexAuthBoundary } from './codex-auth-boundary.js';
@@ -202,7 +203,9 @@ export function createHostCodexRuntime(options: {
     readSubagentOAuth: (...args) => bridge.getChatgptBridgeAuthForDispatch(...args),
     prepareRemote: async () => { throw new Error('SSH Codex transport is not configured in this Host'); },
   });
+  const threadStorage = createHostCodexThreadStorage({ profileDir: options.profileDir, accounts, check });
   const deps: Partial<AgentDeps> = {
+    ...threadStorage.deps,
     prepareCodexExtraSpawnConfig: async (...args) => { check(); const value = inbound.withToken(await prepare(...args)); check(); return value; },
     disableCodexPluginRuntime: true,
     onCodexLocalModelsListed: createCodexLocalModelSink(options.config.list),
