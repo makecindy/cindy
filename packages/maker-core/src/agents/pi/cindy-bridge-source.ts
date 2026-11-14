@@ -3478,6 +3478,11 @@ class CindyMcpGateway {
       .map(([serverName]) => serverName);
   }
 
+  private isStableServerId(requested: string): boolean {
+    return this.clients.has(requested) || this.unavailableServers.has(requested)
+      || this.serverDisplayNames.has(requested);
+  }
+
   resolveDirectHelperTool(name: string, input: unknown): ResolvedMcpGatewayCall | null {
     const direct = this.tools.get(mcpGatewayKey('cindy_helper', name));
     const tool = direct ?? (this.botHelperFacadeEnabled && CINDY_DIRECT_BOT_TOOLS.has(name)
@@ -3773,7 +3778,8 @@ class CindyMcpGateway {
       ? input.tool
       : undefined;
     const canonicalServerName = serverName ? this.resolveServerName(serverName) : undefined;
-    const ambiguousServerNames = serverName ? this.ambiguousServerNames(serverName) : [];
+    const ambiguousServerNames = serverName && !this.isStableServerId(serverName)
+      ? this.ambiguousServerNames(serverName) : [];
     const tools = this.list(serverName);
     const unavailableReason = canonicalServerName
       ? this.unavailableServers.get(canonicalServerName)
@@ -3863,6 +3869,12 @@ class CindyMcpGateway {
   private unknownCallMessage(params: unknown): string {
     const input = recordInput(params);
     const serverName = typeof input.server === 'string' ? input.server : '';
+    const ambiguous = serverName && !this.isStableServerId(serverName)
+      ? this.ambiguousServerNames(serverName) : [];
+    if (ambiguous.length > 1) {
+      return 'Ambiguous Cindy MCP server display name. Pass one of these stable server ids: ' +
+        JSON.stringify(ambiguous);
+    }
     const scoped = this.list(serverName || undefined);
     const available = (scoped.length > 0 ? scoped : this.list()).map((tool) => ({
       server: tool.server,
@@ -4242,7 +4254,9 @@ class CindyMcpGateway {
         additionalProperties: false,
       },
       execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => {
-        const server = recordInput(params).server;
+        const requestedServer = recordInput(params).server;
+        const server = typeof requestedServer === 'string'
+          ? (this.resolveServerName(requestedServer) ?? requestedServer) : requestedServer;
         if (typeof server === 'string' && this.needsRecovery(server)) {
           try { await this.recover(server, signal); } catch (error) {
             if (signal?.aborted) throw error;

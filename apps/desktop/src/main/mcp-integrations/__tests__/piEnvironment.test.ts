@@ -137,9 +137,10 @@ function createTestServer(name: string): McpServer {
  * name 默认 'cindy_orca'(→ collab,首方内置且被策略 gate 覆盖);传非内置名(如
  * 'custom_probe')可绕过 gate,单测 ctx 流通本身不受策略阻断干扰。
  */
-function makeProvider(name = 'cindy_orca'): McpProvider {
+function makeProvider(name = 'cindy_orca', displayName?: string): McpProvider {
   return {
     name,
+    ...(displayName ? { displayName } : {}),
     toClaudeSdkConfig: () => ({ type: 'sdk', instance: createTestServer(name) }),
   };
 }
@@ -207,7 +208,7 @@ describe('piEnvironment per-session identity', () => {
   });
 
   it('registers a pi session ctx and routes it through session + instance identity', async () => {
-    const config = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+    const config = await getPiExtraSpawnConfig([makeProvider('cindy_orca', 'Readable Orca')], noopLogger(), {
       sessionId: 'pi-lead-1',
       sessionInstanceId: 'pi-instance-1',
       workingDir: '/repo',
@@ -217,6 +218,7 @@ describe('piEnvironment per-session identity', () => {
     });
     expect(config?.mcpBridge).toBeTruthy();
     const server = config!.mcpBridge!.servers[0]!;
+    expect(server.displayName).toBe('Readable Orca');
     const token = config!.mcpBridge!.token;
     const routeUrl = new URL(server.url);
     expect(routeUrl.searchParams.get('session')).toBe('pi-lead-1');

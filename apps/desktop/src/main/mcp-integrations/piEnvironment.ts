@@ -64,6 +64,7 @@ import { REMOTE_COLLAB_SERVER_NAMES } from './codexHttpBridge.js';
 interface StartedPiBridge {
   bridge: CodexHttpBridge | null;
   serverNames: string[];
+  serverDisplayNames: Record<string, string>;
   remoteServers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'];
   mcpEnv: Record<string, string>;
   generation: number;
@@ -173,7 +174,7 @@ async function getPiExtraSpawnConfig(
   if (started.retired) return getPiExtraSpawnConfig(providers, logger, sessionCtx);
   started.refs += 1;
 
-  const { bridge, serverNames, remoteServers, mcpEnv } = started;
+  const { bridge, serverNames, serverDisplayNames, remoteServers, mcpEnv } = started;
   const sessionId = sessionCtx?.sessionId?.trim();
   let disposed = false;
   const disposeLease = (): void => {
@@ -274,7 +275,11 @@ async function getPiExtraSpawnConfig(
   // 错误码(如 LEAD_NOT_SUPPORTED)—— 与改动前一致,不打 401。
   if (!sessionId) {
     const servers = capabilityGated([
-      ...(bridge ? serverNames.map((name) => ({ name, url: bridge.url(name) })) : []),
+      ...(bridge ? serverNames.map((name) => ({
+        name,
+        ...(serverDisplayNames[name] ? { displayName: serverDisplayNames[name] } : {}),
+        url: bridge.url(name),
+      })) : []),
       ...cloneRemoteServers(remoteServers),
     ]);
     return {
@@ -353,6 +358,7 @@ async function getPiExtraSpawnConfig(
     const servers = capabilityGated([
       ...serverNames.map((name) => ({
         name,
+        ...(serverDisplayNames[name] ? { displayName: serverDisplayNames[name] } : {}),
         url: withMcpRouteIdentity(bridge.url(name), {
           sessionId,
           sessionInstanceId: sessionCtx?.sessionInstanceId,
@@ -508,7 +514,7 @@ async function ensureBridge(
 async function doStart(
   providers: McpProvider[],
   logger: MakerLogger,
-): Promise<Pick<StartedPiBridge, 'bridge' | 'serverNames' | 'remoteServers' | 'mcpEnv'> | null> {
+): Promise<Pick<StartedPiBridge, 'bridge' | 'serverNames' | 'serverDisplayNames' | 'remoteServers' | 'mcpEnv'> | null> {
   // factory 阶段没有 per-session 信息,控制类工具通过 getSessionContext 在
   // tool-call 时读当前 session ctx —— 该 ctx 由 bridge 的 `?session=` 路由在
   // runWithLiziMcpSessionContext 里注入(见本文件顶部说明)。
@@ -541,6 +547,7 @@ async function doStart(
   };
 
   const serverFactories: Record<string, () => McpServer> = Object.create(null);
+  const serverDisplayNames: Record<string, string> = Object.create(null);
   const pluginIdByServerName: Record<string, string> = Object.create(null);
   const remoteServers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'] = [];
   const mcpEnv: Record<string, string> = Object.create(null);
@@ -679,6 +686,7 @@ async function doStart(
       }
       return createServer();
     };
+    if (provider.displayName?.trim()) serverDisplayNames[provider.name] = provider.displayName.trim();
     // 首方内置 provider 才带 plugin 策略;自定义 MCP 不继承(pluginIdForKnownProviderName 返 null)。
     const pluginId = pluginIdForKnownProviderName(provider.name);
     if (pluginId) pluginIdByServerName[provider.name] = pluginId;
@@ -712,7 +720,7 @@ async function doStart(
     remoteServers: remoteServers.length,
     ...(bridge ? { port: bridge.port } : {}),
   });
-  return { bridge, serverNames, remoteServers, mcpEnv };
+  return { bridge, serverNames, serverDisplayNames, remoteServers, mcpEnv };
 }
 return { getPiExtraSpawnConfig, invalidatePiEnvironment, shutdownPiEnvironment, resetPiEnvironmentForTest };
 }
