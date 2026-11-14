@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps, DeviceHostedSession, StartSessionOptions } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import { AppServerClient, type RequestProgressDeadline } from '../app-server/client.js';
+import { AppServerClient, AppServerRequestTimeoutError, type RequestProgressDeadline } from '../app-server/client.js';
 import { Method } from '../app-server/protocol.js';
 import type { CloseHandler, LineHandler, Transport } from '../app-server/transport.js';
 import { withoutCodexSpawnModelOverrides } from '../device-hosted-guest.js';
@@ -127,6 +127,8 @@ interface Fixture {
   providerId?: string;
   /** app-server 不给功能清单(旧版本或出错)。 */
   noFeatureList?: boolean;
+  /** Process-level MCP isolation must still fail closed after local provisioning is removed. */
+  mcpStatusFailure?: Error;
   /** 宿主提供的任务隧道往来记录。 */
   linkActivity?: DeviceHostedSession['linkActivity'];
   /** 任务所在电脑带来的插件花名册快照。 */
@@ -246,6 +248,7 @@ async function startHosted(fixture: Fixture) {
           },
         };
       case Method.McpServerStatusList:
+        if (fixture.mcpStatusFailure) throw fixture.mcpStatusFailure;
         return {
           data: [
             { name: 'codex_apps', tools: {} },
@@ -342,7 +345,7 @@ async function startHosted(fixture: Fixture) {
     ...(fixture.resume ? { resumeSessionId: '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000' } : {}),
   });
   return {
-    started, request, getHost, getGhostRosterPrompt, getDisabledSkillPaths,
+    started, request, getHost, host, getGhostRosterPrompt, getDisabledSkillPaths,
     prepareCodexSkills, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation,
     hostSkill, systemSkill, pluginSkill, guestSkill, hostManagedSkill, guestHome, codexHome, agent, workingDir,
   };
@@ -612,6 +615,28 @@ describe('Codex device-hosted guest sessions', () => {
     const fixture = await startHosted({ guest: true, noFeatureList: true });
     await expect(fixture.started).rejects.toThrow(/Cannot start Codex for a shared user safely/);
     expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
+  });
+
+  // Unit: the existing fixture bypasses the Desktop spawn factory. Verify that
+  // removing local MCP provisioning never makes a failed runtime inventory safe,
+  // and that failure before thread/start still retires its isolated host.
+  it('keeps MCP status timeouts fail-closed and cleans up before reporting stopped', async () => {
+    const fixture = await startHosted({
+      guest: true,
+      mcpStatusFailure: new AppServerRequestTimeoutError(Method.McpServerStatusList, 60_000),
+    });
+    await expect(fixture.started).rejects.toMatchObject({
+      name: 'AgentStartupStoppedError',
+      cause: expect.objectContaining({ message: expect.stringContaining('mcpServerStatus/list timed out') }),
+    });
+    expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
+    expect(fixture.host.subscribeThread).not.toHaveBeenCalled();
+    expect(fixture.host.retire).toHaveBeenCalled();
+    expect((fixture.agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
+    const retireCalls = fixture.host.retire.mock.calls.length;
+    await fixture.agent.dispose();
+    await fixture.agent.dispose();
+    expect(fixture.host.retire).toHaveBeenCalledTimes(retireCalls);
   });
 
   it('refuses a shared user without its own Codex home', async () => {
