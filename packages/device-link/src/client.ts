@@ -22,6 +22,7 @@ import { decodeScopedEnvelope, encodeScopedEnvelope, type ScopeSupport } from '.
 import { isProviderSharePeer, parseProviderSharePeer } from './providerSharePeer.js';
 import { isSharedTaskPeer } from './sharedTaskPeer.js';
 import { PROVIDER_SHARE_RELAY_CAPABILITY, PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY, ROUTED_KINDS, SHARED_TASK_RELAY_CAPABILITY } from '@cindy/device-link-protocol';
+import { PeerOfflineGate } from './peerOfflineGate.js';
 import {
   requestSessionTagCatalog,
   decodeSessionTagCatalog,
@@ -980,6 +981,8 @@ export class DeviceLinkClient {
   private peerTransportResetHandlers = new Set<
     (change: DeviceLinkPeerTransportReset) => void
   >();
+  /** relay 判定离线的同账号对端：本地回绝出站调用，按退避窗口放行探测（见 peerOfflineGate.ts）。 */
+  private readonly peerOfflineGate = new PeerOfflineGate(() => this.monotonicNow());
   /** Avoid emitting the same authoritative route failure once per queued frame. */
   private peerOfflineNotifiedGeneration = new Map<
     string,
@@ -1775,6 +1778,8 @@ export class DeviceLinkClient {
   }
 
   private notifyPeerRouteOffline(deviceId: string, linkGeneration: number): void {
+    // 关闸放在去重之前：同一代次的重复信号不再通知 host，但仍要维持本地闸门。
+    if (!isScopedPeer(deviceId)) this.peerOfflineGate.markOffline(deviceId);
     const notified = this.peerOfflineNotifiedGeneration.get(deviceId);
     if (
       notified?.connectionEpoch === this.connEpoch
@@ -2052,6 +2057,13 @@ export class DeviceLinkClient {
   ): Promise<InvokeResultPayload> {
     if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) {
       throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
+    }
+    if (this.peerOfflineGate.isGated(dst)) {
+      // 已有直连说明对端可达，离线判断作废；否则窗口内与 relay 回绝同码同文、不触网。
+      if (this.directPaths.has(dst)) this.peerOfflineGate.markReachable(dst);
+      else if (this.peerOfflineGate.admit(dst) === 'blocked') {
+        throw new DeviceLinkError('DEVICE_OFFLINE', 'target device offline');
+      }
     }
     const requestId = createRequestId();
     const queuedAt = this.monotonicNow();
@@ -2785,6 +2797,8 @@ export class DeviceLinkClient {
    * 随后用旧 stream 在新 socket 上发帧被对端当未建链帧丢弃(review P2)。
    */
   private resetLinkStateForReconnect(allowOrdinaryDirectGrace = true): void {
+    // 新 socket 上旧的离线判断不再成立；hello 后 relay 会重新推送在线对端的 presence。
+    this.peerOfflineGate.clear();
     // hello 会从 host 读取完整最新状态；旧连接上尚未发出的覆盖型 patch 不跨世代重放。
     this.clearPendingPresence();
     // 旧 socket 的 relay-error 已被 connection epoch 守卫隔离，不可能再合法到达；
@@ -3086,7 +3100,11 @@ export class DeviceLinkClient {
     }
     if (validForHeartbeat) {
       this.lastInboundAt = this.monotonicNow();
-      if (env.src && ROUTED_KINDS.has(env.kind)) this.lastPeerInboundAt = this.lastInboundAt;
+      if (env.src && ROUTED_KINDS.has(env.kind)) {
+        this.lastPeerInboundAt = this.lastInboundAt;
+        // 对端发来的任何路由帧都证明它在线，上线后第一笔调用不再等退避窗口。
+        this.peerOfflineGate.markReachable(env.src);
+      }
       if (this.networkProbeTimer) {
         clearTimeout(this.networkProbeTimer);
         this.networkProbeTimer = null;
@@ -3312,9 +3330,13 @@ export class DeviceLinkClient {
         }
         // A missing signaling route is not proof that the authenticated data path died.
         if (snap.online === false) {
-          if (!this.retainDirectPathOnSignalingLoss(snap.deviceId, true)) this.detachDirectPath(snap.deviceId, 'peer-offline');
+          if (!this.retainDirectPathOnSignalingLoss(snap.deviceId, true)) {
+            this.detachDirectPath(snap.deviceId, 'peer-offline');
+            if (!isScopedPeer(snap.deviceId)) this.peerOfflineGate.markOffline(snap.deviceId);
+          }
         } else {
           this.clearSameAccountDirectGrace(snap.deviceId);
+          this.peerOfflineGate.markReachable(snap.deviceId);
         }
         for (const cb of this.presenceHandlers) {
           try {

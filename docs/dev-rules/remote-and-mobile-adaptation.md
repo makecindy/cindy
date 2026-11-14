@@ -252,6 +252,26 @@ V2 内核修复递增到 `0.5.1`，让已部署 `0.5.0` 的主人能看到升级
 Desktop worker 里的代理 socket，那里没有完成回调）、device-link 在 Agent-Net 上的重复可靠层
 （每次重发都把整条消息再写进本来就可靠的加密流，见 `agent-net-plan.md` 第 2 阶段）。
 
+### 离线对端的出站调用闸门
+
+2026-11-14：一台笔记本整夜休眠，另一台电脑的侧栏、Git 状态、子代理、资源列表等轮询仍对它
+逐笔 invoke，每笔先发 link-open、relay 回 DEVICE_OFFLINE，每小时一百多轮；打开着的任务复制
+对话框每秒读一次复制状态，每次等满 10–30 秒失败，11 小时里报错 140 多次。
+
+`packages/device-link/src/peerOfflineGate.ts`：relay 明确判定离线（DEVICE_OFFLINE 路由信号，或
+presence `online=false` 且没有保留的直连）后，控制端对该同账号对端的 `invoke()` 在本地以同一个
+`DEVICE_OFFLINE` 错误结束，不触网；每个窗口只放行一笔真实请求作探测，窗口 15 秒起倍增、最长
+120 秒。presence 上线、收到该对端任何路由帧、已有直连、relay 重连都立即开闸。共享任务与供应商
+分享对端不经过这道闸。Desktop 复制对话框的状态读取失败后同样退避（1 秒起倍增、最长 30 秒），
+来源电脑上线的 presence 立即恢复。
+
+故障半径三问：① 证据只认 relay 的明确离线判定；单次超时、背压、无响应、ACK 超时都不关闸；
+② 只作用于这一个对端的新出站调用，已建立的直连、其它对端、入站方向、可靠 pending 与重放都不变，
+调用方拿到的错误码与原来 relay 回绝完全一致；presence 推送丢失时最坏 120 秒内由探测恢复；
+③ `client.test.ts`「DEVICE_OFFLINE 之后本地回绝同一对端的调用」验证窗口内不写帧、其它对端照常、
+探测只放行一笔、presence 上线立即触网；`TaskMigrationDialog.test.tsx` 验证读取退避与上线恢复。
+只改控制端本地行为，不改 wire 协议，旧版对端与自建中转无需同步。
+
 ### 共享连接静默与请求隔离
 
 2026-10-30：Desktop 在业务超时时先检查共享 relay 最近是否仍有入站活动；整条连接

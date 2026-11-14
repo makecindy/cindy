@@ -5360,6 +5360,51 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  // 2026-11-14 个人版日志：对端整夜离线，侧栏/Git/子代理轮询每笔 invoke 都触网，relay 每小时
+  // 回 DEVICE_OFFLINE 上百次。relay 判定离线后本地按退避窗口回绝，只放行探测；上线信号立即开闸。
+  it('DEVICE_OFFLINE 之后本地回绝同一对端的调用，按窗口放行探测，presence 上线立即恢复', async () => {
+    const h = makeHarness();
+    let now = 1_000_000;
+    vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const invokesTo = (dst: string) => h.current().sent.filter((e) => e.kind === 'invoke' && e.dst === dst).length;
+
+    const first = h.client.invoke('dev-b', { channel: 'x', args: [] });
+    const sent = h.current().sent.find((e) => e.kind === 'invoke')!;
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'relay-error', id: sent.id, payload: { code: 'DEVICE_OFFLINE', message: 'offline' } });
+    await expect(first).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+
+    // 窗口内：与 relay 回绝同码，不再写出任何帧；其它对端不受影响。
+    await expect(h.client.invoke('dev-b', { channel: 'y', args: [] })).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    expect(invokesTo('dev-b')).toBe(1);
+    void h.client.invoke('dev-c', { channel: 'x', args: [] }).catch(() => {});
+    await tick();
+    expect(invokesTo('dev-c')).toBe(1);
+
+    // 窗口到期只放行一笔探测，同一时刻的其它调用仍在本地结束。
+    now += 15_000;
+    const probe = h.client.invoke('dev-b', { channel: 'probe', args: [] });
+    await expect(h.client.invoke('dev-b', { channel: 'z', args: [] })).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    await tick();
+    expect(invokesTo('dev-b')).toBe(2);
+    const probeFrame = h.current().sent.filter((e) => e.kind === 'invoke' && e.dst === 'dev-b').at(-1)!;
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'relay-error', id: probeFrame.id, payload: { code: 'DEVICE_OFFLINE', message: 'offline' } });
+    await expect(probe).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    // 探测失败后窗口翻倍：15 s 后仍在本地回绝。
+    now += 15_000;
+    await expect(h.client.invoke('dev-b', { channel: 'y', args: [] })).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    expect(invokesTo('dev-b')).toBe(2);
+
+    // 对端上线：不等窗口，下一笔立即触网。
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId: 'dev-b', online: true, remoteControlEnabled: true } });
+    void h.client.invoke('dev-b', { channel: 'after-online', args: [] }).catch(() => {});
+    await tick();
+    expect(invokesTo('dev-b')).toBe(3);
+    h.client.stop();
+  });
+
   it('无 pending 的 DEVICE_OFFLINE 也发出单次 peer route offline 事件', async () => {
     const h = makeHarness();
     const routeChanges: unknown[] = [];

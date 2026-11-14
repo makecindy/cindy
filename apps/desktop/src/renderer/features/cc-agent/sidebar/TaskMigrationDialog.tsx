@@ -28,6 +28,12 @@ const actionButton = {
     'h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5',
 } as const;
 
+/** Status poll delay: every second while reads succeed, doubling after failures up to 30 s. */
+const STATUS_POLL_MS = 1000;
+const STATUS_POLL_MAX_MS = 30_000;
+const statusPollDelayMs = (failures: number) =>
+  failures === 0 ? STATUS_POLL_MS : Math.min(STATUS_POLL_MAX_MS, STATUS_POLL_MS * 2 ** failures);
+
 export function TaskMigrationDialog({
   session,
   onDismiss,
@@ -79,8 +85,13 @@ export function TaskMigrationDialog({
     live.current = true;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight = false;
+    // Consecutive failed status reads. The source computer may be asleep for hours while
+    // this dialog stays open; back off instead of asking it every second.
+    let failures = 0;
     const poll = async () => {
       const epoch = mutationEpoch.current;
+      inFlight = true;
       try {
         const next = await request({ action: 'status', sessionId: session.id });
         if (!disposed && current() && epoch === mutationEpoch.current && !pending.current) {
@@ -100,12 +111,23 @@ export function TaskMigrationDialog({
           setStatus(observingCopy.current ? next : { supported: true, deviceId: next.deviceId });
           setPollError('');
         }
+        failures = 0;
       } catch (e) {
+        failures += 1;
         if (!disposed && current() && epoch === mutationEpoch.current && !pending.current)
           setPollError(errorCode(e));
       }
-      if (!disposed && current()) timer = setTimeout(() => void poll(), 1000);
+      inFlight = false;
+      if (!disposed && current())
+        timer = setTimeout(() => void poll(), statusPollDelayMs(failures));
     };
+    // The source coming back online ends the back-off at once, so progress resumes promptly.
+    const offPresence = window.electronAPI.deviceLink.onPresenceChanged?.((snap) => {
+      if (disposed || failures === 0 || inFlight || !snap.online) return;
+      if (snap.deviceId !== session.deviceLinkDeviceId) return;
+      clearTimeout(timer);
+      void poll();
+    });
     void Promise.all([
       window.electronAPI.deviceLink.listDevices(),
       window.electronAPI.deviceLink.taskMigration(null, { action: 'caps' }),
@@ -132,6 +154,7 @@ export function TaskMigrationDialog({
     return () => {
       disposed = true;
       live.current = false;
+      offPresence?.();
       clearTimeout(timer);
     };
   }, [session.id, session.deviceLinkDeviceId]);

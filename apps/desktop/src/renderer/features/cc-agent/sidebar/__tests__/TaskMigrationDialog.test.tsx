@@ -349,6 +349,48 @@ it('reopening a running copy shows its progress at once, never the start form', 
     ),
   ).toBe(false);
 });
+// 2026-11-14: a copy dialog left open while the source computer slept failed its status read
+// every second for 11 hours. Failed reads back off; the source coming online resumes at once.
+it('backs off status reads while the source is unreachable and resumes when it comes online', async () => {
+  vi.useFakeTimers();
+  try {
+    const presence = new Set<(snap: { deviceId: string; online: boolean }) => void>();
+    Object.assign(window.electronAPI.deviceLink, {
+      onPresenceChanged: (cb: (snap: { deviceId: string; online: boolean }) => void) => {
+        presence.add(cb);
+        return () => presence.delete(cb);
+      },
+    });
+    let reachable = false;
+    state.request.mockImplementation(async (device: string | null, command: { action: string }) => {
+      if (command.action === 'status' && !reachable) throw new Error('MIGRATION_FAILED');
+      return { supported: true, deviceId: device ?? 'local' };
+    });
+    const statusReads = () =>
+      state.request.mock.calls.filter(([, command]) => (command as { action: string }).action === 'status').length;
+    render(
+      <MemoryRouter>
+        <TaskMigrationDialog session={source} onDismiss={state.dismiss} />
+      </MemoryRouter>,
+    );
+    await vi.advanceTimersByTimeAsync(31_000);
+    // Reads at 0, 2, 6, 14 and 30 s instead of 31 once-a-second failures.
+    expect(statusReads()).toBe(5);
+    // Another computer's presence does not end the back-off.
+    for (const cb of presence) cb({ deviceId: 'B', online: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusReads()).toBe(5);
+    reachable = true;
+    for (const cb of presence) cb({ deviceId: 'A', online: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusReads()).toBe(6);
+    // Healthy reads return to once a second.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(statusReads()).toBe(8);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 it('cancels a running copy and closes once the source has stopped it', async () => {
   let snapshot: Record<string, unknown> = {
     stage: 'transferring',
