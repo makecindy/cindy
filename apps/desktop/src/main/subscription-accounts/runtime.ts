@@ -2006,7 +2006,9 @@ export async function runSubscriptionAccountCommand(
           provider, accountId, providerBrandName(provider), () => randomUUID().replaceAll('-', '').slice(0, 8),
         );
         assertOwner(state);
-      } else if (command.action === 'add' && owned !== provider) {
+      } else if (adding && accountId !== 'default') {
+        // Adding inside a provider is an explicit merge, including into the built-in provider.
+        // Without this record an upgrade would mistake it for an old automatically pooled account.
         await placeSubscriptionAccount(provider, accountId, owned);
         assertOwner(state);
       }

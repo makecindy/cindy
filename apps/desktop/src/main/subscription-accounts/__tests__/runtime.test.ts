@@ -63,8 +63,7 @@ vi.mock('../placement.js', () => {
       && h.pools[ref.kind]?.accounts.some((a) => a.id === ref.ownAccount)
       ? ref.ownAccount : undefined;
   const place = (kind: string, accountId: string, providerId: string) => {
-    if (providerId === kind) delete h.placement[`${kind}:${accountId}`];
-    else h.placement[`${kind}:${accountId}`] = providerId;
+    h.placement[`${kind}:${accountId}`] = providerId;
   };
   return {
     accountProviderId: owner,
@@ -1859,6 +1858,7 @@ describe('native account assignment on the executing computer', () => {
       });
       const ids = h.pools[providerId]!.accounts.map((a) => a.id);
       expect(ids).toEqual(['default', expect.stringMatching(/^cindy-/)]);
+      expect(h.placement[`${providerId}:${ids[1]}`]).toBe(providerId);
       expect(h.login).toHaveBeenCalledExactlyOnceWith(
         providerId,
         `${providerId}/${ids[1]}`,
@@ -2415,6 +2415,7 @@ describe('native account assignment on the executing computer', () => {
       }),
     ).rejects.toThrow('login_cancelled');
     expect(h.pools.openai?.legacyCodexDefault).toBe(true);
+    expect(h.placement).toEqual({});
     const after = await readSubscriptionPool('openai');
     expect(after.accounts.map((a) => a.status)).toEqual(['ready']);
     const original = await acquireSubscriptionAccount('openai', undefined, []);
@@ -2429,6 +2430,8 @@ describe('native account assignment on the executing computer', () => {
       loginKey: 'retry-second',
     });
     const addedId = h.pools.openai!.accounts[1].id;
+    // Explicit additions to the built-in provider must survive the old-pool restoration.
+    expect(h.placement[`openai:${addedId}`]).toBe('openai');
     await runSubscriptionAccountCommand({
       action: 'configure',
       providerId: 'openai',
