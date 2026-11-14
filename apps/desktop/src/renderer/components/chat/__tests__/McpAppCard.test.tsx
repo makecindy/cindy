@@ -12,6 +12,8 @@ const state = vi.hoisted(() => ({
   controllers: [] as Array<{
     open: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
+    suspend: ReturnType<typeof vi.fn>;
+    resume: ReturnType<typeof vi.fn>;
     context: ReturnType<typeof vi.fn>;
     displayMode: ReturnType<typeof vi.fn>;
     message: (message: { method: string; params?: Record<string, unknown> }) => void;
@@ -43,12 +45,15 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
   ...await importOriginal<typeof import('@cindy/maker-shared/mcp-app-controller')>(),
   mcpAppFailureKey: () => 'mcpApps.loadFailed',
   McpAppController: class {
+    document?: { viewId: string; prefersBorder: boolean };
     open = vi.fn(async () => {
       if (state.openError) throw state.openError;
       if (state.openDeferred) return state.openDeferred;
-      return { viewId: `view-${state.controllers.length}`, prefersBorder: true };
+      return this.document = { viewId: `view-${state.controllers.length}`, prefersBorder: true };
     });
     close = vi.fn(async () => {});
+    suspend = vi.fn(async () => {});
+    resume = vi.fn(async () => {});
     context = vi.fn(async () => {});
     prepareNativeClose = vi.fn();
     displayMode = vi.fn(async (displayMode: string) => {
@@ -117,6 +122,7 @@ afterEach(async () => {
   // the next test's electronAPI spy. Drain real hashing before replacing globals.
   await Promise.all(pendingDigests);
   pendingDigests.length = 0;
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   state.controllers = [];
@@ -527,7 +533,88 @@ it('reopens when device ownership is restored but ignores unchanged ownership', 
     container.remove();
   }
 });
-it.each([undefined, 'owner-device'])('releases offscreen history and opens visible owner cards on %s', async (deviceId) => {
+it('keeps a local iframe through a short offscreen interval and resumes it without reopening', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    let changed = () => {};
+    let version = 1;
+    const contextSource = { read: vi.fn(() => ({ version })), subscribe: (callback: () => void) => { changed = callback; return () => {}; } };
+    await act(async () => root.render(<McpAppCard sessionId="keep-task" clientId="keep-card" title="App" contextSource={contextSource} />));
+    const callback = [...state.intersections.values()][0];
+    await act(async () => callback([{ isIntersecting: true }]));
+    const controller = state.controllers[0]; const frame = container.querySelector('iframe');
+    controller.resume.mockClear();
+    await act(async () => callback([{ isIntersecting: false }]));
+    expect(controller.close).not.toHaveBeenCalled();
+    expect(controller.suspend).toHaveBeenCalledOnce();
+    contextSource.read.mockClear(); controller.context.mockClear();
+    await act(async () => { version++; changed(); changed(); });
+    expect(contextSource.read).not.toHaveBeenCalled();
+    expect(controller.context).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(4_999));
+    await act(async () => callback([{ isIntersecting: true }]));
+    expect(state.controllers).toHaveLength(1);
+    expect(container.querySelector('iframe')).toBe(frame);
+    expect(controller.resume).toHaveBeenCalledOnce();
+    expect(contextSource.read).toHaveBeenCalledOnce();
+    expect(controller.context).toHaveBeenLastCalledWith(expect.objectContaining({ cindy: { version: 2 } }));
+    await act(async () => callback([{ isIntersecting: false }]));
+    await act(() => vi.advanceTimersByTimeAsync(4_999));
+    expect(controller.close).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('closes a local iframe after five seconds offscreen and rebuilds after return', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="expire-task" clientId="expire-card" title="App" />));
+    const callback = [...state.intersections.values()][0];
+    await act(async () => callback([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    await act(async () => callback([{ isIntersecting: false }]));
+    await act(() => vi.advanceTimersByTimeAsync(4_999));
+    expect(controller.close).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(controller.close).toHaveBeenCalledOnce();
+    await act(async () => callback([{ isIntersecting: true }]));
+    expect(state.controllers).toHaveLength(2);
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it('keeps at most two local offscreen views and evicts the oldest first', async () => {
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<>{[0, 1, 2].map(index => <McpAppCard key={index} sessionId="evict-task" clientId={`evict-${index}`} title="App" />)}</>));
+    const callbacks = [...state.intersections.values()];
+    await act(async () => callbacks.forEach(callback => callback([{ isIntersecting: true }])));
+    const controllers = [...state.controllers];
+    await act(async () => callbacks.forEach(callback => callback([{ isIntersecting: false }])));
+    expect(controllers[0].close).toHaveBeenCalledOnce();
+    expect(controllers[1].close).not.toHaveBeenCalled();
+    expect(controllers[2].close).not.toHaveBeenCalled();
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    expect(controllers.every(controller => controller.close.mock.calls.length === 1)).toBe(true);
+    expect(container.querySelector('iframe')).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it.each(['owner-device'])('releases remote offscreen history immediately on %s', async (deviceId) => {
   state.deviceId = deviceId;
   const invoke = vi.fn(async () => ({}));
   const generalInvoke = vi.fn();
