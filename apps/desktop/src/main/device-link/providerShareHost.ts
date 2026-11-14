@@ -577,7 +577,6 @@ export type ProviderShareGuestDenial =
   | 'host-not-running'
   | 'host-scope-stale'
   | 'not-guest-peer'
-  | 'self-device'
   | 'snapshot-not-loaded'
   | 'share-unknown'
   | 'share-on-other-device'
@@ -596,7 +595,9 @@ function checkGuestAccess(controller: string): GuestAccessCheck {
   if (!peer || peer.role !== 'guest') return { denied: 'not-guest-peer' };
   if (rt.unavailable.has(peer.shareId)) return { denied: 'snapshot-not-loaded' };
   const self = getDeviceId();
-  if (self && peer.deviceId === self) return { denied: 'self-device' };
+  // A raw device ID is not an identity across accounts: cloned Windows installs
+  // can share a MachineGuid. The relay-authored share/member scope distinguishes
+  // this guest from the host; admission still requires our active local membership.
   const share = rt.shares.find((item) => item.shareId === peer.shareId);
   if (!share) return { denied: rt.fetchedAt === 0 ? 'snapshot-not-loaded' : 'share-unknown' };
   if (self && share.hostDeviceId !== self) return { denied: 'share-on-other-device' };
