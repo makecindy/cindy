@@ -839,14 +839,15 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const state = resolved?.find((r) => r.member.key === memberKey);
       if (!state) return null;
       const cooling = router.coolingUntil(providerId, memberKey, model) !== null
-        || providerGroupMemberUsageState(state, model, deps.now(), agentKind).limited;
+        || (!state.providerContinuity?.stale && providerGroupMemberUsageState(state, model, deps.now(), agentKind).limited);
       if (state.state === 'ok' && !cooling) return false;
       return { reason: cooling ? 'cooling' : state.state };
     },
     async rebalanceTarget(providerId, config, memberKey, model, agentKind, exclude) {
       const resolved = await withTimeout(deps.directory.resolveMembers(providerId, config), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
       const current = resolved?.find((r) => r.member.key === memberKey);
-      if (!resolved || current?.state !== 'ok' || router.coolingUntil(providerId, memberKey, model) !== null) return null;
+      if (!resolved || current?.state !== 'ok' || current.providerContinuity?.stale
+        || router.coolingUntil(providerId, memberKey, model) !== null) return null;
       const now = deps.now();
       const state = providerGroupMemberUsageState(current, model, now, agentKind);
       if (state.limited || !state.quota) return null;
