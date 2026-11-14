@@ -171,3 +171,13 @@ test('model change: a cold task (no running Agent) is gated on its stored model 
   await f.update('window-cold-pi', { model: 'small' });
   assert.equal((await f.row('window-cold-pi')).model, 'small');
 });
+
+test('model change: a task that does not exist is "session not found", as before the gate, and a runtime left without its row is not changed', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await assert.rejects(f.update('window-missing', { model: 'small' }), { message: 'session not found' });
+  await assert.rejects(f.update('window-missing', { title: 'Renamed' }), { message: 'session not found' });
+  // Before the gate, the running Agent was switched and then the missing row reported.
+  const orphan = f.runtime('window-orphan');
+  await assert.rejects(f.update('window-orphan', { model: 'small' }), { message: 'session not found' });
+  assert.deepEqual(orphan.setModelCalls, []);
+});
