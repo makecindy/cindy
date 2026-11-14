@@ -11,9 +11,13 @@ export interface DbSlimmingScanInput {
   archiveAgeMonths: DbSlimmingArchiveAge;
   /** Explicit opt-in: active tasks are excluded from cleanup by default. */
   includeActiveTasks?: boolean;
+  /** Exact reviewed UUID allowlist; mutually exclusive with message cleanup. */
+  emptySessionIds?: string[];
 }
 
 export interface DbSlimmingScanResult {
+  cleanupMode?: 'empty-sessions';
+  emptySessionCount?: number;
   scanId: string;
   archiveAgeMonths: DbSlimmingArchiveAge;
   includeActiveTasks: boolean;
@@ -60,8 +64,7 @@ export interface DbSlimmingMaintenanceProgress {
 }
 
 /** Renderer-safe startup projection. It intentionally contains no database or backup path. */
-export interface DbSlimmingStartupProgress
-  extends Omit<DbSlimmingMaintenanceProgress, 'phase'> {
+export interface DbSlimmingStartupProgress extends Omit<DbSlimmingMaintenanceProgress, 'phase'> {
   requestId: string;
   phase: DbSlimmingStartupPhase;
   startedAt: number;
@@ -107,3 +110,28 @@ export type DbSlimmingResult =
       reason: DbSlimmingFailureReason;
       originalDatabaseRestored: boolean;
     };
+
+export interface DbEmptySessionPurge {
+  targets: Array<{ id: string; fingerprint: string }>;
+}
+export function isDbEmptySessionPurge(value: unknown): value is DbEmptySessionPurge {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const targets = (value as DbEmptySessionPurge).targets;
+  return (
+    Array.isArray(targets) &&
+    targets.length > 0 &&
+    targets.length <= 10_000 &&
+    targets.every(
+      (t) =>
+        !!t &&
+        typeof t.id === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(t.id) &&
+        typeof t.fingerprint === 'string' &&
+        /^[0-9a-f]{64}$/.test(t.fingerprint),
+    ) &&
+    new Set(targets.map((t) => t.id)).size === targets.length
+  );
+}
+
+/** Older workers ignore the new plan, but this cutoff leaves their message target set empty. */
+export const EMPTY_SESSION_PURGE_CUTOFF = Number.MIN_SAFE_INTEGER;

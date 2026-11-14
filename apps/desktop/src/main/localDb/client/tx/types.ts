@@ -3,6 +3,7 @@ import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'maintenance.scanEmptySessions'
   | 'mcpApps.viewState.save'
   | 'usage.recordPiUsage'
   | 'chatCache.execute'
@@ -1326,6 +1327,7 @@ export interface MediaSpendArgs {
 }
 
 export type DbTxArgsByName = {
+  'maintenance.scanEmptySessions': { ids: string[] };
   'mcpApps.viewState.save': { binding: import('../../worker/opHandlers/mcpAppViewState.js').ViewStateBinding; json: string | null; bytes: number };
   'usage.recordMediaSpend': MediaSpendArgs;
   'usage.recordPiUsage': import('../../worker/opHandlers/piUsageTx.js').PiUsageWrite[];
@@ -1416,6 +1418,7 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'maintenance.scanEmptySessions': import('../../../../shared/localDbMaintenance').DbEmptySessionPurge;
   'mcpApps.viewState.save': void;
   'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {

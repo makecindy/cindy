@@ -1,3 +1,4 @@
+import { scanEmptySessionPurge } from '../../emptySessionPurge.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState } from './mcpAppViewState.js';
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
@@ -73,6 +74,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
   const txArgs = payload.args;
 
   switch (name) {
+    case 'maintenance.scanEmptySessions':
+      return db.transaction(() => scanEmptySessionPurge(db, asRecord(txArgs, 'scan args').ids as string[]))();
     case 'usage.recordPiUsage':
       return recordPiUsage(db, txArgs as import('./piUsageTx.js').PiUsageWrite[]);
     case 'chatCache.execute':

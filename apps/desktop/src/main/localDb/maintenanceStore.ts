@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { EMPTY_SESSION_PURGE_CUTOFF, isDbEmptySessionPurge, type DbEmptySessionPurge } from '../../shared/localDbMaintenance';
 import path from 'node:path';
 
 import {
@@ -26,6 +27,7 @@ export type DbSlimmingRequestPhase =
 /** Cross-restart request owned by main. It never accepts a database path from Renderer. */
 export interface DbSlimmingRequestRecord {
   version: 1;
+  emptySessionPurge?: DbEmptySessionPurge;
   id: string;
   ownerId: string;
   createdAt: number;
@@ -236,6 +238,8 @@ function isFiniteNumber(value: unknown): value is number {
 function isDbSlimmingRequestRecord(value: unknown): value is DbSlimmingRequestRecord {
   if (!isRecord(value)) return false;
   if (
+    (value.emptySessionPurge !== undefined &&
+      (!isDbEmptySessionPurge(value.emptySessionPurge) || value.includeActiveTasks !== false || value.messageCount !== 0 || value.backupEnabled !== true || value.archivedBeforeMs !== EMPTY_SESSION_PURGE_CUTOFF)) ||
     value.version !== 1 ||
     typeof value.id !== 'string' ||
     !REQUEST_ID_PATTERN.test(value.id) ||
