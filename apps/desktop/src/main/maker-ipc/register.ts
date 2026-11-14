@@ -1118,6 +1118,7 @@ import {
   agentDeviceCatalogFailure,
   createOrcaWorkerCreationService,
   pickWorkerAgentDeviceId,
+  workerCapacitySnapshot,
 } from './orcaWorkerCreationService.js';
 import {
   resolveSendToSessionCreateRoute,
@@ -15013,9 +15014,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const occupiedSlots=workers.length+reservations.length;
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
         await service.get(pluginId,request.taskId);
-        const hardLimit = readCollaborationSettings().workerHardLimit;
         const live = maker.getSession(request.taskId);
-        return {...team, capacity:{hardLimit,occupiedSlots,remainingSlots:Math.max(0,hardLimit-occupiedSlots),advisory:true}, coordinatorUsage:{scope:'session-total',tokens:leadRow?.totalTokenUsage ?? null,costUSD:leadRow?.totalCostCurrency==='USD' && leadRow.totalCostAmount>0 ? leadRow.totalCostAmount : null, approximate:leadRow?.totalCostIsApproximate ?? false}, workers, waitingForUser:!!live && live.getTurnControlSnapshot().pendingInteractionCount > 0, leadWorking:(!!live && (live.isTurnRunning() || live.getTurnControlSnapshot().pendingInteractionCount > 0)) || inputCoordinator.getQueueControlSnapshot(request.taskId).pendingQueue.length > 0};
+        return {...team, capacity:{...workerCapacitySnapshot(readCollaborationSettings(), occupiedSlots),advisory:true}, coordinatorUsage:{scope:'session-total',tokens:leadRow?.totalTokenUsage ?? null,costUSD:leadRow?.totalCostCurrency==='USD' && leadRow.totalCostAmount>0 ? leadRow.totalCostAmount : null, approximate:leadRow?.totalCostIsApproximate ?? false}, workers, waitingForUser:!!live && live.getTurnControlSnapshot().pendingInteractionCount > 0, leadWorking:(!!live && (live.isTurnRunning() || live.getTurnControlSnapshot().pendingInteractionCount > 0)) || inputCoordinator.getQueueControlSnapshot(request.taskId).pendingQueue.length > 0};
       }
       case 'models': {
         const snapshot = getCurrentDbClientSnapshot();

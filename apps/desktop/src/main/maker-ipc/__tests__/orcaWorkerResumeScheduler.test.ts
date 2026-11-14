@@ -223,6 +223,37 @@ describe('createOrcaWorkerResumeScheduler', () => {
     expect(resume).toHaveBeenCalledTimes(1);
   });
 
+  it('shares the in-flight wake instead of yielding to its own lock', async () => {
+    // 预热自己持锁时 hasActiveSend 也为真：第二次请求必须共享第一次的 promise，
+    // 而不是立刻返回 false 让调用方以为唤醒失败了。
+    let release!: (value: boolean) => void;
+    let warmingUp = false;
+    const gate = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    const resume = vi.fn(async () => {
+      warmingUp = true;
+      return gate;
+    });
+    const scheduler = createOrcaWorkerResumeScheduler({
+      resume,
+      withSessionLock: (_sessionId, task) => task(),
+      hasActiveSend: () => warmingUp,
+    });
+
+    const first = scheduler.request({ sessionId: 'worker-1' });
+    await Promise.resolve();
+    expect(warmingUp).toBe(true);
+
+    const second = scheduler.request({ sessionId: 'worker-1' });
+    expect(resume).toHaveBeenCalledTimes(1);
+
+    release(true);
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores cancel for sessions without an in-flight resume', () => {
     const scheduler = createOrcaWorkerResumeScheduler({
       resume: async () => true,

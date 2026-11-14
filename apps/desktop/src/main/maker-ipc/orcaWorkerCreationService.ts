@@ -165,6 +165,21 @@ export interface OrcaWorkerLimitSnapshot {
   remainingSlots: number;
 }
 
+/**
+ * 团队容量投影：只把上限与占用数换算成剩余，不做任何判定。
+ * 判定只发生在创建闸（`createWorkerInTeam`），发送／派发／唤醒路径读不到上限。
+ */
+export function workerCapacitySnapshot(
+  settings: { workerHardLimit: number },
+  occupiedSlots: number,
+): { hardLimit: number; occupiedSlots: number; remainingSlots: number } {
+  return {
+    hardLimit: settings.workerHardLimit,
+    occupiedSlots,
+    remainingSlots: Math.max(0, settings.workerHardLimit - occupiedSlots),
+  };
+}
+
 /** create_worker 的稳定业务错误码，IPC 与 MCP adapter 各自翻译。 */
 export type OrcaWorkerCreationErrorCode =
   | 'INVALID_PARAMS'
