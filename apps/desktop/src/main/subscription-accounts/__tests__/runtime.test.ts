@@ -1808,6 +1808,22 @@ describe('native account assignment on the executing computer', () => {
       expect(await acquireSubscriptionAccount(providerId, undefined, [])).toBeNull();
     },
   );
+  // PR #10473: a retained same-identity account in a disconnected built-in pool must not hide
+  // the shortcut. An account placed in its own provider stays connected when the built-in is off.
+  it.each(['anthropic', 'openai'] as const)(
+    'restores the %s shortcut after disconnecting the same-identity built-in account',
+    async (providerId) => {
+      h.bound = false;
+      h.pools[providerId] = { strategy: 'least', accounts: [account('default'), account('second')] };
+      h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.com' });
+      const preview = () => runSubscriptionAccountCommand({ action: 'preview', providerId });
+      expect((await preview()).defaultAdded).toBe(true);
+      await disconnectSubscriptionPool(providerId);
+      expect((await preview()).defaultAdded).toBe(false);
+      h.placement[`${providerId}:second`] = `${providerId}-sub-12345678`;
+      expect((await preview()).defaultAdded).toBe(true);
+    },
+  );
   // Unit: old native connections already used the default login before a pool file existed.
   // The wizard must hide that shortcut without creating a pool; an explicitly removed slot stays removed.
   it.each(['anthropic', 'openai'] as const)(

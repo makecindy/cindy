@@ -1336,6 +1336,7 @@ function defaultLoginAdded(
     ? cli.identity?.trim().toLowerCase() : undefined;
   if (!identity) return false;
   return (saved?.accounts ?? []).some((account) => account.id !== 'default'
+    && !disconnectedFor(saved, provider, account.id)
     && [account.lastConfirmedIdentity, state.cache.get(keyOf(provider, account.id))?.auth.identity]
       .some((value) => value?.trim().toLowerCase() === identity));
 }
