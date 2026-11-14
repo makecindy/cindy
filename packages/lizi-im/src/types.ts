@@ -197,6 +197,8 @@ export interface IMUnsupportedEntry {
 }
 
 export interface IMMessageEvent {
+  /** In-process ingress lease. Recheck before admitting queued work; never serialize to models or clients. */
+  assertCurrent?(): void;
   /** In-process durable transport handoff; never serialized to the model or remote clients. */
   delivery?: {
     /** A queued retry was withdrawn by a later owner stop command. */

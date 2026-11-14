@@ -103,6 +103,7 @@ export function createMessageHandler(
     accountGeneration: ImAccountGeneration,
   ): Promise<void> {
     if (event.delivery?.isCancelled?.()) return;
+    event.assertCurrent?.();
     log.info(
       `processOne sender=...${event.senderId.slice(-8)} chat=...${event.chatId.slice(-8)} ` +
         `textLen=${event.text.length} att=${event.attachments.length} unsupported=${event.unsupported.length}`,
@@ -476,26 +477,29 @@ export function createMessageHandler(
       : isCommandAuthorized(event);
     // Telegram / 飞书由渠道自己登记带 transport 的作用域; 企业微信 / 钉钉 / Discord 的伙伴专线
     // 轮次登记一份不带 transport 的, 让伙伴技能等能按本轮触发者授权(否则主人也只读)。
-    const channelToolScope: ChannelToolScope | undefined =
-      adapter.channelToolScopeFor?.(event) ??
-      (isLaneTurnScopeChannel(channel) && turnRunner.companionBotIdFor?.(event.contextId)
-        ? {
-            channel,
-            botId: event.contextId,
-            laneUserId: event.senderId,
-            chatId: event.chatId?.trim() || event.senderId,
-            chatKind: channelNoteSource?.chatKind ?? (event.speaker ? 'group' : 'direct'),
-            requesterIsOwner,
-            companion: true,
-          }
-        : undefined);
-    const fallbackReplyPrefix = !adapter.prepareAgentTurnText && event.replyContext
-      ? buildImReplyContextBlock(event.replyContext)
-      : '';
-    const deliveredReply = prepared?.replyContext ??
-      (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
     try {
+      // A context failure may degrade, but it cannot renew an invalidated ingress grant.
+      event.assertCurrent?.();
+      const channelToolScope: ChannelToolScope | undefined =
+        adapter.channelToolScopeFor?.(event) ??
+        (isLaneTurnScopeChannel(channel) && turnRunner.companionBotIdFor?.(event.contextId)
+          ? {
+              channel,
+              botId: event.contextId,
+              laneUserId: event.senderId,
+              chatId: event.chatId?.trim() || event.senderId,
+              chatKind: channelNoteSource?.chatKind ?? (event.speaker ? 'group' : 'direct'),
+              requesterIsOwner,
+              companion: true,
+            }
+          : undefined);
+      const fallbackReplyPrefix = !adapter.prepareAgentTurnText && event.replyContext
+        ? buildImReplyContextBlock(event.replyContext)
+        : '';
+      const deliveredReply = prepared?.replyContext ??
+        (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
       const turnArgs: ImRunAgentTurnArgs = {
+        ...(event.assertCurrent ? { beforeProviderStart: async () => { event.assertCurrent?.(); } } : {}),
         ...(notificationSessionId ? {
           notificationSessionId,
           revalidateNotificationReply: async () => {
@@ -533,7 +537,7 @@ export function createMessageHandler(
         agentText: buildInboundMessageFacts({
           text: event.text,
           invoked: event.invoked,
-          hasReply: !!event.replyContext,
+          hasReply: !!deliveredReply,
           attachmentCount: event.attachments.length + (prepared?.contextAttachments?.length ?? 0),
           unavailable: [
             ...event.unsupported.map((entry) => `${entry.type}：${entry.label}`),
@@ -579,7 +583,7 @@ export function createMessageHandler(
         event.delivery.awaitPersistence();
         const dispatch = await turnRunner.dispatchAgentTurn({
           ...turnArgs, queueMode: 'external',
-          beforeProviderStart: async () => { event.delivery!.awaitPersistence(); },
+          beforeProviderStart: async () => { event.assertCurrent?.(); event.delivery!.awaitPersistence(); },
         });
         if (dispatch.kind === 'busy') event.delivery.defer();
         else if (dispatch.kind === 'rejected') {
@@ -600,6 +604,12 @@ export function createMessageHandler(
         await turnRunner.runAgentTurn(turnArgs);
       }
     } catch (err) {
+      try { event.assertCurrent?.(); }
+      catch {
+        const reactionId = await handedOverAck;
+        if (reactionId) await im.removeMessageReaction?.(event.messageId, reactionId).catch(() => undefined);
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`runAgentTurn threw: ${msg}`);
       // 本条消息自己开了话题(groupContextLane)时, 开场白卡还没被流式认领 —

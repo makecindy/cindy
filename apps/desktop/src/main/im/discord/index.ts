@@ -29,6 +29,7 @@ export function wireDiscordOrchestrator(
 ): ImOrchestrator {
   const orchestrator = createImOrchestrator(
     buildDiscordAdapter(discordIm, config, {
+      connectionKey: options.instanceKey ?? 'personal',
       ...(options.companionBotId ? { companionBotId: options.companionBotId } : {}),
     }),
     {

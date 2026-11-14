@@ -151,6 +151,19 @@ function scopedSecretPath(name: string): string | null {
   return path.join(safeStorageDir(), `im_owner_${ownerKey}_${name}.enc`);
 }
 
+/** Non-secret binding generation for durable IM output. Never reads or returns credential bytes. */
+export function ownerScopedImSecretRevision(name: string): string {
+  const target = scopedSecretPath(name);
+  if (!target) throw new Error('IM_ACCOUNT_SCOPE_UNAVAILABLE');
+  try {
+    const stat = fs.statSync(target, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
+    throw error;
+  }
+}
+
 function prepareSecretPath(name: string): string | null {
   const scoped = scopedSecretPath(name);
   if (!scoped) return null;

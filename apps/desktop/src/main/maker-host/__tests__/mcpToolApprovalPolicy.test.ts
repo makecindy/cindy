@@ -10,6 +10,11 @@ import {
 afterEach(() => setGhostToolApprovalResolver(null));
 
 describe('desktop Claude read-only allowlist', () => {
+  // unit: the real approval policy must not reuse a read grant for a later external Discord write.
+  it('keeps Discord discovery quiet and multiplexed operations on per-call approval', () => {
+    for (const toolName of ['status', 'list_tools']) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName })).toBe('auto-approve');
+    for (const toolName of ['call_tool', undefined]) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName, toolParams: { name: 'send_message', args: { text: 'external' } } })).toBe('prompt-each-time');
+  });
   // §21 unit: the shared files dispatcher contains both reads and destructive
   // operations. Trusted helper approval must never turn a write into a read.
   it('keeps file writes and deletions in per-call approval for direct and progressive calls', () => {

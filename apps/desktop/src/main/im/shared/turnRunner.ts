@@ -479,6 +479,8 @@ type DefaultRouteTargetResolution =
   | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: AgentKind; model: string } };
 
 export interface ImRunAgentTurnArgs {
+  /** Revalidate the ingress lease immediately before provider start, including internally queued sends. */
+  beforeProviderStart?: () => Promise<void>;
   sourceDescription?: string;
   /**
    * 本条消息的渠道来源事实。turnRunner 按 adapter 的展示渠道（飞书 / Lark …）
@@ -3990,7 +3992,18 @@ export function createTurnRunner(
       await ensureStreamingHandle(turn);
     }
     const finalView = composeStreamingView(turn);
-    if (turn.streamingHandle) {
+    if (turn.streamingOutputInvalidated) {
+      // The original identity rejected this output; do not persist it under the current identity.
+    } else if (output.kind === 'rich-card' && output.commitFinal && turn.userMessageId) {
+      turn.streamingHandle?.close();
+      try {
+        await output.commitFinal({ userId, text: finalView, terminal: turn.terminalKind,
+          inputMessageId: turn.userMessageId, progressMessageId: turn.streamingHandle?.messageId,
+          mediaAbsPaths: turn.mediaAbsPaths, allowedFileRoots: turn.allowedFileRoots, threadTs: turn.scopeKey });
+      } catch (error) {
+        log.warn(`[${channel}/turn] durable final output failed: ${error instanceof Error ? error.message : 'unknown'}`);
+      }
+    } else if (turn.streamingHandle) {
       // 正常完成: 正文保持干净, 过程区不再丢弃 —— 交给渠道收成折叠的过程记录
       // (卡片渠道支持折叠; 不支持的 handle 忽略它)。空回复没有可挂记录的正文。
       const process =
@@ -3998,8 +4011,6 @@ export function createTurnRunner(
           ? buildActivityRecord(turn.presenter.activity, Date.now())
           : null;
       await finalizeTurnStream(turn, finalView.trim() ? finalView : '', process ?? undefined);
-    } else if (turn.streamingOutputInvalidated) {
-      // 原出站身份已失效：只完成收口，不能使用当前身份重发正文或附件。
     } else if (!finalView.trim() && turn.mediaAbsPaths.length === 0) {
       try {
         if (output.kind === 'chunked-text') {
@@ -4116,12 +4127,25 @@ export function createTurnRunner(
         supportsModelCommand: richIm !== null,
       } : undefined,
     );
-    if (turn?.streamingHandle) {
+    if (turn.streamingOutputInvalidated) {
+      // Error finals have the same identity boundary as successful finals.
+    } else if (output.kind === 'rich-card' && output.commitFinal && turn.userMessageId) {
+      const view = composeStreamingView(turn, true);
+      const text = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
+      turn.streamingHandle?.close();
+      try {
+        await output.commitFinal({ userId, text, terminal: 'error', errorCode: turn.terminalErrorCode ?? 'agent_turn_error',
+          inputMessageId: turn.userMessageId, progressMessageId: turn.streamingHandle?.messageId,
+          mediaAbsPaths: turn.mediaAbsPaths, allowedFileRoots: turn.allowedFileRoots, threadTs: turn.scopeKey });
+      } catch (error) {
+        log.warn(`[${channel}/turn] durable final output failed: ${error instanceof Error ? error.message : 'unknown'}`);
+      }
+    } else if (turn?.streamingHandle) {
       const view = composeStreamingView(turn, true);
       const errorLine = imText('imBot.text.shared.turn.error', { message: msg });
       const body = view ? `${view}\n\n${errorLine}` : errorLine;
       await finalizeTurnStream(turn, body);
-    } else if (!turn.streamingOutputInvalidated) {
+    } else {
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({

@@ -64,6 +64,9 @@ export type { DownloadResult as FeishuDownloadResult } from './feishu/attachment
 
 export { DiscordIM, createDiscordIM } from './discord/index.js';
 export type { DiscordConfigState, DiscordIMOptions } from './discord/index.js';
+export { DiscordOperationError, discordOperationFailure } from './discord/operations.js';
+export type { DiscordOperations, DiscordHistoryMessage } from './discord/operations.js';
+export type { DiscordFinalTextStorage } from './discord/finalTextOutbox.js';
 export {
   decodeDiscordLaneUserId,
   encodeDiscordLaneUserId,

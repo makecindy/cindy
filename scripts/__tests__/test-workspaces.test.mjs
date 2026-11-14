@@ -154,6 +154,17 @@ test("database CI gates sources outside localDb that DB-tier tests import direct
 	const runs = databaseTestRuns(ROOT, files, os.tmpdir(), [changed]);
 	assert.deepEqual(runs.map(run => run.tier), ["migration", "db", "db-related"]);
 	assert.ok(runs[2].pnpmArgs.includes("src/main/git-context/prRefsStore.ts"));
+	// Discord cursor persistence executes real SQL; keep it out of unit and in the same CI DB graph.
+	const desktop = manifest.workspaces.find(workspace => workspace.cwd === "apps/desktop");
+	const discordTest = "apps/desktop/src/main/localDb/__tests__/discordContext.test.ts";
+	const discordSource = "apps/desktop/src/main/im/discord/context.ts";
+	assert.equal(selectFilesForTier(desktop, desktop.tiers.unit, files).includes(discordTest), false);
+	assert.equal(selectFilesForTier(desktop, desktop.tiers.db, files).includes(discordTest), true);
+	assert.equal(needsDatabaseTests([discordTest], entrypoints), true);
+	assert.equal(needsDatabaseTests([discordSource], entrypoints), true);
+	const discordRuns = databaseTestRuns(ROOT, files, os.tmpdir(), [discordSource]);
+	assert.ok(discordRuns[2].selected.includes(discordTest));
+	assert.ok(discordRuns[2].pnpmArgs.includes("src/main/im/discord/context.ts"));
 });
 
 test("database CI compares each event base to the checked-out head and preserves removed paths", () => {

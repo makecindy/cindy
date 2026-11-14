@@ -57,7 +57,11 @@ vi.mock('../../ownerNamespaceMigration.js', () => ({
   hasLegacyOwnerNamespaceClaim: () => true,
 }));
 
-import { __testing, assertOwnerScopeSettledForWrite, claimLegacyImPath, ownerScopedImSecrets } from '../ownerScopedStorage';
+import { __testing, assertOwnerScopeSettledForWrite, claimLegacyImPath, ownerScopedImSecrets, ownerScopedImSecretRevision } from '../ownerScopedStorage';
+import { discordFinalTextStorage } from '../discord/finalTextStorage';
+import { discordChannelAccessStore } from '../discord/channelAccessStore';
+import { addBotImConnectionRecord, setBotImConnectionDiscordChannelAccess, updateBotImConnectionRecord } from '../shared/botImConnectionStore';
+import { DiscordFinalTextOutbox } from '../../../../../../packages/lizi-im/src/discord/finalTextOutbox';
 
 function setSession(mode: TestSession['mode'], ownerId: string | null): void {
   mocks.session = { mode, dataOwnerId: ownerId, generation: mocks.session.generation + 1 };
@@ -71,6 +75,89 @@ function writeLegacySecret(name: string, value: string): string {
 }
 
 describe('IM owner-scoped storage', () => {
+  // #10002: restored credential bytes have new file metadata; retain text only for an unchanged grant.
+  // Unit: real credential revisions + atomic outbox persistence + process recreation, without a network.
+  it.each([false, true])('restores rollback metadata across restart without restoring revoked grants (revoked=%s)', async revoked => {
+    setSession('local', 'local-v1');
+    const access = { channels: [{ guildId: '1', channelId: '20' }] };
+    discordChannelAccessStore.write(access);
+    ownerScopedImSecrets.write('discord-bot-token', 'invalid-old-test-token');
+    const storage = discordFinalTextStorage('personal', true);
+    let ready = false;
+    const send = vi.fn(async () => 'sent');
+    const create = () => new DiscordFinalTextOutbox({ storage: () => storage, identity: () => 'bot:owner', ready: () => ready,
+      prepare: async () => ({ assertCurrent() {}, send }), warn: vi.fn() });
+    const first = create();
+    try {
+      await first.complete('accepted', 'g/1/20', 'keep after rollback');
+      const previous = storage.credentialStamp!();
+      ownerScopedImSecrets.write('discord-bot-token', 'invalid-replacement-test-token');
+      if (revoked) { discordChannelAccessStore.write({ channels: [] }); discordChannelAccessStore.write(access); }
+      ownerScopedImSecrets.write('discord-bot-token', 'invalid-old-test-token');
+      expect(storage.credentialStamp!()).not.toBe(previous);
+      first.restoreCredentialStamp(previous);
+    } finally { first.stop(); }
+    ready = true; const restarted = create();
+    try {
+      await restarted.drain();
+      expect(send).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      expect(JSON.parse(storage.read()!).entries[0].state).toBe(revoked ? 'cancelled' : 'delivered');
+    } finally { restarted.stop(); }
+  });
+  // unit: actual access-store mutations and disk-backed outbox recovery. File-wide mtime invalidation
+  // lost authorized output after an unrelated edit; target generations must preserve it and still revoke old output.
+  it.each(['personal', 'companion'] as const)('preserves %s pending text across unrelated grants, but never across target revoke/regrant', async kind => {
+    setSession('local', 'local-v1');
+    const lane = 'g/1/20/30';
+    const access = { channels: [{ guildId: '1', channelId: '20' }] };
+    const id = 'aaaaaaaaaaaa';
+    if (kind === 'companion') await addBotImConnectionRecord({ botId: 'partner', channel: 'discord' }, { id: () => id, now: () => 1 });
+    const write = async (config: typeof access) => {
+      if (kind === 'personal') discordChannelAccessStore.write(config);
+      else await setBotImConnectionDiscordChannelAccess(id, config);
+    };
+    await write(access);
+    const storage = discordFinalTextStorage(kind === 'personal' ? 'personal' : `bot-im-${id}-`, kind === 'personal');
+    let ready = false;
+    const send = vi.fn(async () => 'delivered');
+    const create = () => new DiscordFinalTextOutbox({ storage: () => storage, identity: () => 'bot:owner', ready: () => ready,
+      prepare: async () => ({ assertCurrent() {}, send }), warn: vi.fn() });
+    const first = create(); await first.complete('accepted-1', lane, 'keep'); first.stop();
+    const authorization = storage.authorizationStamp(lane);
+    if (kind === 'companion') {
+      await updateBotImConnectionRecord(id, { botContextId: 'connected-platform-id' });
+      await addBotImConnectionRecord({ botId: 'other-partner', channel: 'discord' }, { id: () => 'bbbbbbbbbbbb', now: () => 2 });
+      await setBotImConnectionDiscordChannelAccess('bbbbbbbbbbbb', { channels: [{ guildId: '9', channelId: '90' }] });
+    }
+    await write({ channels: [...access.channels, { guildId: '2', channelId: '40' }, { guildId: '1', channelId: '21' }] });
+    expect(storage.authorizationStamp(lane)).toBe(authorization);
+    ready = true; const next = create(); await next.drain(); expect(send).toHaveBeenCalledTimes(1);
+    ready = false; await next.complete('accepted-2', lane, 'revoke'); next.stop();
+    await write({ channels: [] }); await write(access);
+    expect(storage.authorizationStamp(lane)).not.toBe(authorization);
+    ready = true; const last = create(); await last.drain();
+    expect(send).toHaveBeenCalledTimes(1); expect(last.hasCompleted('accepted-2', lane)).toBe(true);
+    expect(JSON.parse(storage.read()!).entries.at(-1)).toMatchObject({ state: 'cancelled', segments: [] }); last.stop();
+  });
+  // unit: the real terminal store must survive process recreation, fail closed across owner switches,
+  // and invalidate old output when the same bot credential is replaced. Existing credential tests
+  // do not cover the metadata-only revision or atomic terminal-output file.
+  it('persists Discord terminal output under one owner and tracks credential replacement without exposing it', () => {
+    setSession('local', 'local-v1');
+    ownerScopedImSecrets.write('discord-bot-token', 'invalid-test-token');
+    const revision = ownerScopedImSecretRevision('discord-bot-token');
+    const storage = discordFinalTextStorage('personal', true);
+    const authorization = storage.authorizationStamp('g/1/20');
+    storage.write('{"version":1,"entries":[]}');
+    expect(discordFinalTextStorage('personal', true).read()).toBe('{"version":1,"entries":[]}');
+    expect(revision).not.toContain('invalid-test-token');
+    ownerScopedImSecrets.write('discord-bot-token', 'another-invalid-test-token');
+    expect(storage.authorizationStamp('g/1/20')).not.toBe(authorization);
+    mocks.ownerScopeKey = 'owner-2'; setSession('cloud', 'cloud-b');
+    expect(() => storage.read()).toThrow('DISCORD_ACCOUNT_CHANGED');
+    expect(() => storage.write('late')).toThrow('DISCORD_ACCOUNT_CHANGED');
+    expect(discordFinalTextStorage('personal', true).read()).toBeNull();
+  });
   beforeEach(() => {
     mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-im-owner-scope-'));
     mocks.ownerScopeKey = 'owner-1';

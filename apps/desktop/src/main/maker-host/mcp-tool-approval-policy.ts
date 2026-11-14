@@ -227,6 +227,10 @@ export function getDesktopMcpToolApprovalPolicy(
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
+  // Discord multiplexes reads and external writes. A history grant must never become a server-wide send grant.
+  if (serverName === 'cindy_discord') {
+    return toolName === 'status' || toolName === 'list_tools' ? 'auto-approve' : 'prompt-each-time';
+  }
   // Recipes can write through an authenticated profile or be overridden by L2.
   // Route the exact invocation through the existing session flow, never trust
   // caller-supplied access metadata or reuse a server grant. Full Access/Auto/Ask

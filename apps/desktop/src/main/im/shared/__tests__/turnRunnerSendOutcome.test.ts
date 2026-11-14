@@ -23,7 +23,7 @@ import type {
   SessionSendResult,
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
-import type { ChannelIM, DiscordIM } from '@cindy/im';
+import { DiscordIM, type ChannelIM, type DiscordIMOptions, type IMHost, type IMMessageEvent } from '@cindy/im';
 import { setMainLocale } from '../../../i18n.desktop';
 import { buildDiscordAdapter } from '../../discord/adapter';
 import { createTelegramGuestTurnPermissionPolicy } from '../../telegram/permissionPolicy';
@@ -648,6 +648,142 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     h.emit({ type: 'done', data: {} });
     await waitForAssertion(() => expect(handle.finalize).toHaveBeenCalledWith('主代理前半和最终结论'));
     expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  // unit: shared production terminal entry must use the durable sink even when initial progress failed.
+  // Existing streaming fallback tests never install a durable rich-channel sink. Minimal input: one text + done.
+  it.each(['stream', 'start-failed', 'storage-failed'] as const)('commits terminal text to the channel sink before terminal delivery: %s', async mode => {
+    const previous = fakeAdapter.output;
+    const handle = { messageId: 'progress', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    const commitFinal = vi.fn(async () => { if (mode === 'storage-failed') throw new Error('DISCORD_OUTBOX_STORAGE_UNAVAILABLE'); });
+    fakeAdapter.output = { kind: 'rich-card', im: mocks.feishuIm as unknown as ChannelIM, commitFinal };
+    if (mode === 'start-failed') mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('offline'));
+    else mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      await runDefaultTurn(vi.fn(), { userMessageId: '30|8' });
+      h.emit({ type: 'text', data: { text: 'finished', isFinal: true } });
+      await flushMicrotasks(); h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ inputMessageId: '30|8', text: 'finished', terminal: 'done' })));
+      await flushMicrotasks();
+      expect(h.send).toHaveBeenCalledTimes(1); expect(handle.finalize).not.toHaveBeenCalled(); expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+      if (mode !== 'start-failed') expect(handle.close).toHaveBeenCalled();
+    } finally { fakeAdapter.output = previous; }
+  });
+
+  // unit: terminal errors used to bypass the optional durable sink, losing both offline
+  // delivery and completed-input dedup. Cover progress present/absent and storage failure.
+  it.each(['stream', 'start-failed', 'storage-failed'] as const)('commits terminal errors once and releases the next turn: %s', async mode => {
+    const previous = fakeAdapter.output;
+    const handle = { messageId: 'progress', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    const commitFinal = vi.fn(async () => { if (mode === 'storage-failed') throw new Error('DISCORD_OUTBOX_STORAGE_UNAVAILABLE'); });
+    fakeAdapter.output = { kind: 'rich-card', im: mocks.feishuIm as unknown as ChannelIM, commitFinal };
+    if (mode === 'start-failed') mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('offline'));
+    else mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      const complete = vi.fn();
+      const args = { botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: '30|8', text: 'question', attachments: [], queueMode: 'external' as const, beforeProviderStart: async () => undefined, onTurnComplete: complete };
+      const first = await getRunner().dispatchAgentTurn(args);
+      expect(first.kind).toBe('accepted');
+      h.emit({ type: 'text', data: { text: 'partial answer', isFinal: true } });
+      await flushMicrotasks();
+      h.emit({ type: 'error', data: { message: 'terminal failure', isTerminal: true } });
+      if (first.kind === 'accepted') await expect(first.terminal).resolves.toMatchObject({ kind: 'error', errorCode: 'agent_turn_error' });
+      expect(commitFinal).toHaveBeenCalledTimes(1);
+      expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ inputMessageId: '30|8', terminal: 'error', errorCode: 'agent_turn_error', text: expect.stringContaining('terminal failure') }));
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).not.toHaveBeenCalled();
+      expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+      if (mode !== 'start-failed') expect(handle.close).toHaveBeenCalled();
+      const next = await getRunner().dispatchAgentTurn({ ...args, userMessageId: '30|9' });
+      expect(next.kind).toBe('accepted');
+      expect(h.send).toHaveBeenCalledTimes(2);
+      h.emit({ type: 'done', data: {} });
+      if (next.kind === 'accepted') await next.terminal;
+    } finally { fakeAdapter.output = previous; }
+  });
+
+  // unit: real dispatch + Discord initial lookup + adapter sink. #9709 invalidation
+  // must precede the new durable sink; the old fallback tests install no such sink.
+  // Minimal race: replace bot during first lookup (resolve/reject), then done/error.
+  it.each([
+    ['done', false], ['done', true], ['error', false], ['error', true],
+  ] as const)('does not persist or send invalidated Discord output (%s, lookup rejects=%s) and drains its queue', async (terminal, rejects) => {
+    type Factory = NonNullable<DiscordIMOptions['gatewayFactory']>;
+    let appId = '2';
+    let events!: Parameters<Factory>[0];
+    let contents: string | null = null;
+    const persist = vi.fn((value: string) => { contents = value; });
+    const channel = { id: '20', guildId: '10', type: 0, isTextBased: () => true,
+      permissionsFor: () => ({ has: () => true }), messages: {}, send: vi.fn(async () => ({ id: '91' })) };
+    const sdk = { user: { id: '2' }, rest: { post: vi.fn(async () => ({ id: '90' })) },
+      channels: { fetch: vi.fn(async () => channel), cache: new Map([['20', channel]]) } };
+    const secrets = new Map([['discord-bot-token', 'fake-not-a-token'], ['discord-owner-user-id', '1'], ['discord-bot-lifecycle-announcement', 'false']]);
+    const host: IMHost = {
+      secrets: { read: key => secrets.get(key) ?? null, write: () => true, remove() {}, isAvailable: () => true },
+      paths: { feishuMediaDir: '' }, httpPostForm: async () => ({ status: 200, body: {} }),
+      ipc: { handle() {}, broadcast() {}, throwIpcError() { throw new Error('invalid'); } },
+    };
+    const im = new DiscordIM(host, {
+      finalTextStorage: () => ({ key: 'test-owner', read: () => contents, write: persist, assertCurrent() {}, authorizationStamp: () => 'grant-1' }),
+      channelAccess: { read: () => ({ channels: [{ guildId: '10', channelId: '20' }] }) },
+      gatewayFactory: ev => {
+        events = ev;
+        return { get appId() { return appId; }, botTag: 'fake', client: sdk,
+          connect: async () => ev.onStatus({ kind: 'connected', appId: 'fake' }), destroy: async () => {} } as unknown as ReturnType<Factory>;
+      },
+    });
+    const lookupEntered = deferred<void>();
+    const lookupReleased = deferred<void>();
+    try {
+      await im.init();
+      const inbound = deferred<IMMessageEvent>();
+      im.onMessage(inbound.resolve);
+      events.onGuildMessage({ id: '8', guildId: '10', channelId: '20', channel,
+        author: { id: '1', username: 'Owner' }, content: '<@2> question', mentions: { has: () => true } } as never);
+      const event = await inbound.promise;
+      const output = buildDiscordAdapter(im, fakeAdapter.config).output;
+      const commit = vi.spyOn(im, 'commitFinalText');
+      const start = vi.spyOn(im, 'startStreamingText');
+      const h = setupSession(async () => ({ accepted: true }));
+      // Silence only the next input's queue notice so all external writes belong to this final.
+      runner = createTurnRunner({ ...fakeAdapter, channel: 'discord', im, output, silentQueue: true }, fakeRepo, fakeCards);
+      const firstComplete = vi.fn();
+      const args = { botContextId: '2', userId: event.senderId, userMessageId: event.messageId,
+        text: 'question', attachments: [], ackReactionIdPromise: null, beforeProviderStart: async () => undefined };
+      const first = await runner.dispatchAgentTurn({ ...args, queueMode: 'external', onTurnComplete: firstComplete });
+      if (first.kind !== 'accepted') throw new Error('expected accepted dispatch');
+      sdk.channels.fetch.mockImplementationOnce(async () => {
+        lookupEntered.resolve();
+        await lookupReleased.promise;
+        if (rejects) throw new Error('channel lookup failed');
+        return channel;
+      });
+      h.emit({ type: 'text', data: { text: 'old identity answer', isFinal: true } });
+      await lookupEntered.promise;
+      appId = '4';
+      const nextComplete = vi.fn();
+      await runner.runAgentTurn({ ...args, userMessageId: '20|9', onTurnComplete: nextComplete });
+      expect(h.send).toHaveBeenCalledOnce();
+      h.emit(terminal === 'done' ? { type: 'done', data: {} }
+        : { type: 'error', data: { message: 'provider failed', isTerminal: true } });
+      lookupReleased.resolve();
+      await expect(first.terminal).resolves.toMatchObject({ kind: terminal });
+      await waitForAssertion(() => expect(h.send).toHaveBeenCalledTimes(2));
+      expect(start).toHaveBeenCalledOnce();
+      expect(commit).not.toHaveBeenCalled();
+      // Empty-ledger maintenance may race dispatch; no terminal entry may ever be persisted.
+      expect(persist.mock.calls.flatMap(([value]) => (JSON.parse(value) as { entries: unknown[] }).entries)).toEqual([]);
+      expect(sdk.rest.post).not.toHaveBeenCalled();
+      expect(channel.send).not.toHaveBeenCalled();
+      expect(firstComplete).toHaveBeenCalledOnce();
+      expect(nextComplete).not.toHaveBeenCalled();
+    } finally {
+      lookupReleased.resolve();
+      await runner?.disposeAllSessions(); runner = null;
+      await im.dispose();
+    }
   });
 
   it('keeps IM persistence, ack, card, and completion exactly-once when Maker recovery is transparent', async () => {
