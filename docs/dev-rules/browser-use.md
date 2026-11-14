@@ -153,6 +153,10 @@ A 是基线提交的工具层，C 是当前工作区；两组都经生产 MCP �
 [浏览器网页任务四方实测](../benchmarks/browser-tasks-2026-11-11/README.md)。`--serve` 会打印题目原文和
 答案，可以把题目发给任何产品；`--effort` 指定命令行的推理强度。
 
+`--variants B,C` 把当前工作区和开源的 BrowserMCP 放在同一场里比（隔离环境见
+`scripts/benchmarks/browsermcp-env.mjs`）。2026-11-14 的结果、它在 Chrome 158 上的问题，以及对比中发现的
+「一个标签页让所有查找卡住」缺陷见 [BrowserMCP 对比实测](../benchmarks/browsermcp-2026-11-14/README.md)。
+
 ### 在运行中的 Cindy 里实测三种后端
 
 `--serve` 只起夹具网站并打印地址、一个 run id 与答案（`/__state?run=<id>` 可看页面实际收到的
