@@ -353,6 +353,7 @@ describe('startup auth:initialize started by main before the renderer mounts', (
       isCindyVersionLaunchPending: () => false,
       noteAuthColdStartState: vi.fn(),
       markStartupMilestone: vi.fn(),
+      hostClientMode: false,
       mainWindowRef: mainWindow,
       startupAuthStateReplayed: false,
       startupAuthInitialize,

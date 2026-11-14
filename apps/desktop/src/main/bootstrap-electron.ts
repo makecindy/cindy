@@ -10883,7 +10883,8 @@ app.on('ready', async () => {
   // 的同一个执行体,renderer 挂载后接上在途结果。必须放在 ready 处理的最后、所有
   // onAuthStateChange 订阅方(device-link 等)登记之后:createWindow 到这里没有 await,
   // renderer 的 IPC 只能在此之后被处理,所以不会比原来更早触达任何订阅方。
-  if (startupAuthInitialize.start()) markStartupMilestone('auth-initialize-started');
+  // 客户端模式下鉴权由 Host 持有、连接此时未必建立,保持由 renderer 首个调用发起。
+  if (!hostClientMode && startupAuthInitialize.start()) markStartupMilestone('auth-initialize-started');
 });
 
 // ---------------------------------------------------------------------------
