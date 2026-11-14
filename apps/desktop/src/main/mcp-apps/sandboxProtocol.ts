@@ -18,6 +18,7 @@ export const mcpAppSchemePrivilege = {
   scheme: 'cindy-mcp-app',
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
 };
+const headEndMarker = `<!--cindy-mcp-app-theme-${randomUUID()}-->`;
 const frameHeader = 'X-Cindy-Mcp-App-Frame';
 let fileReader: ((id: string, token: string, request: Request) => Promise<Response>) | undefined;
 export function setMcpAppFileReader(read: typeof fileReader): void { fileReader = read; }
@@ -64,7 +65,7 @@ function preparedAppHtml(document: McpAppDocument): string {
       addons ? {
         coreUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_VIEW_STATE_SDK_PATH,
         reactUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_VIEW_STATE_REACT_SDK_PATH,
-      } : undefined);
+      } : undefined, headEndMarker);
     if (owner) preparedHtmlCache.set(owner, key, { html: value });
     return { html: value };
   })();
@@ -87,29 +88,26 @@ const themeScript = (context: McpAppThemeContext): string => {
 
 /** Inject the first-frame theme separately from SDK/document preparation. */
 export function withMcpAppTheme(html: string, context: McpAppThemeContext): string {
-  if (context.theme !== 'light' && context.theme !== 'dark') return html;
+  if (context.theme !== 'light' && context.theme !== 'dark') return html.replace(headEndMarker, '');
   const declared = new Set<string>();
   for (const match of html.matchAll(/color-scheme\s*:\s*([^;}"']+)/gi)) {
     for (const value of match[1].toLowerCase().split(/\s+/))
       if (value === 'light' || value === 'dark') declared.add(value);
   }
-  for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {
-    const name = match[0].match(/\bname\s*=\s*["']color-scheme["']/i);
-    const content = match[0].match(/\bcontent\s*=\s*["']([^"']+)/i)?.[1];
+  // Find each terminator once, including for repeated, unterminated tag openers.
+  const metaTags = /<meta\b/gi;
+  for (let match = metaTags.exec(html); match; match = metaTags.exec(html)) {
+    const end = html.indexOf('>', match.index + match[0].length);
+    if (end < 0) break;
+    const tag = html.slice(match.index, end + 1);
+    metaTags.lastIndex = end + 1;
+    const name = tag.match(/\bname\s*=\s*["']color-scheme["']/i);
+    const content = tag.match(/\bcontent\s*=\s*["']([^"']+)/i)?.[1];
     if (!name || !content) continue;
     for (const value of content.toLowerCase().split(/\s+/))
       if (value === 'light' || value === 'dark') declared.add(value);
   }
-  if (declared.size === 1) return html;
-  const script = themeScript(context);
-  const closingHead = html.search(/<\/head\s*>/i);
-  if (closingHead >= 0) return html.slice(0, closingHead) + script + html.slice(closingHead);
-  const openingHead = html.search(/<head(?:\s[^>]*)?>/i);
-  if (openingHead >= 0) {
-    const end = html.indexOf('>', openingHead) + 1;
-    return html.slice(0, end) + script + html.slice(end);
-  }
-  return script + html;
+  return html.replace(headEndMarker, () => declared.size === 1 ? '' : themeScript(context));
 }
 // Electron throws this from any WebFrameMain getter (`contents.focusedFrame`, `frame.url`,
 // `frame.parent`, `event.frame`) once the render frame is gone, which is routine while an
