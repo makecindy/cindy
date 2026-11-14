@@ -145,7 +145,10 @@ export interface FinishSessionTerminalEventDeps {
     ReturnType<typeof createWorkerTurnStartSequencer>,
     'waitForStart'
   >;
-  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn' | 'noteWorkerProductTerminal'> | null;
+  readonly orcaTeamServiceForEvents: Pick<
+    OrcaTeamService,
+    'handleWorkerTerminalTurn' | 'noteWorkerProductTerminal' | 'handleLeadTurnSettled'
+  > | null;
 }
 
 export function finishSessionTerminalEvent(
@@ -658,6 +661,17 @@ export function finishSessionTerminalEvent(
               finalText: workerTerminalFinalText,
               diagnostic: workerTerminalDiagnostic,
               capture: workerTerminalCapture,
+            });
+          } catch {
+            /* non-fatal */
+          }
+          try {
+            // Lead 不在这个钩子里? 这里的 session 可能是 Lead 或 Worker;
+            // handleLeadTurnSettled 自己按「是否带 worker」判定，Worker 会话直接跳过。
+            await deps.orcaTeamServiceForEvents?.handleLeadTurnSettled({
+              leadSessionId: session.id,
+              turnGeneration: event.sessionTurnGeneration ?? 0,
+              finalText: workerTerminalFinalText,
             });
           } catch {
             /* non-fatal */

@@ -100,6 +100,8 @@ export async function listMessagesForAgentHandoff(
         }
       }
       if (agentMeta?.voiceCall) return null;
+      // 派发回执卡只给渲染层，不当成模型上下文里的空 assistant 轮。
+      if (agentMeta?.orcaDispatch) return null;
       if (agentMeta && typeof agentMeta.contextRebuild === 'object' && agentMeta.contextRebuild) {
         return null;
       }

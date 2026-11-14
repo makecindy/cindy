@@ -5534,7 +5534,9 @@
       "workerHardLimit": "Hartes Worker-Limit",
       "workerHardLimitHint": "Maximal zulässige Anzahl an Workern. Muss >= dem weichen Limit sein.",
       "idleRelease": "Bei Inaktivität freigeben (Minuten)",
-      "idleReleaseHint": "Setze den Wert auf 0, um die automatische Freigabe im Hintergrund zu deaktivieren. Positive Werte geben Worker nach dieser Anzahl inaktiver Minuten frei."
+      "idleReleaseHint": "Setze den Wert auf 0, um die automatische Freigabe im Hintergrund zu deaktivieren. Positive Werte geben Worker nach dieser Anzahl inaktiver Minuten frei.",
+      "dispatchClaimVerification": "Ausführungsangaben prüfen",
+      "dispatchClaimVerificationHint": "Prüft, ob der Lead wirklich einen Auftrag abgeschickt hat, bevor er eine Aufgabe als gesendet meldet. Eine unbelegte Angabe wird einmal korrigiert, danach wirst du benachrichtigt."
     },
     "agentResource": {
       "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
@@ -15186,6 +15188,11 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "sent": "An {{worker}} übergeben",
+        "queued": "Für {{worker}} eingereiht",
+        "unverified": "Versand nicht bestätigt"
+      },
       "help": {
         "title": "Verfügbare Befehle",
         "builtInCommands": "Integrierte Befehle",

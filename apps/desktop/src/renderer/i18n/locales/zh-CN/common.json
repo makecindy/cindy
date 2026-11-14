@@ -5491,7 +5491,9 @@
       "workerHardLimit": "Worker 硬上限",
       "workerHardLimitHint": "允许创建的最大 Worker 数量，必须大于等于软上限。",
       "idleRelease": "空闲释放（分钟）",
-      "idleReleaseHint": "设为 0 时关闭后台自动释放；正数表示空闲超过该时长后自动释放。"
+      "idleReleaseHint": "设为 0 时关闭后台自动释放；正数表示空闲超过该时长后自动释放。",
+      "dispatchClaimVerification": "核对派发主张",
+      "dispatchClaimVerificationHint": "Lead 声称已派给 Worker 时，按宿主派发记录核对。不实的主张先纠正一次，仍不实则提醒你。"
     },
     "agentResource": {
       "saveFailed": "保存失败，请重试。",
@@ -15158,6 +15160,11 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "sent": "已派给 {{worker}}",
+        "queued": "已排队给 {{worker}}",
+        "unverified": "派单未经核实"
+      },
       "help": {
         "title": "可用命令",
         "builtInCommands": "内置命令",

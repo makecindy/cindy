@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
+import { resetDispatchClaimState } from '../orcaDispatchClaims';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import {
@@ -324,6 +325,72 @@ describe('OrcaTeamService updateWorker', () => {
 
 });
 
+describe('lead dispatch claim verification', () => {
+  it('wakes the lead once when a claim has no dispatch record, then escalates', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 3,
+      finalText: '已派给 backend-2，进度稍后回报。',
+    });
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 5,
+      finalText: '已派给 backend-2，等它回报。',
+    });
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+    expect(deps.escalateDispatchClaim).toHaveBeenCalledWith(
+      'lead-1',
+      expect.objectContaining({ state: 'unverified', version: 1 }),
+    );
+  });
+
+  it('stays silent when the same turn really dispatched, and records a receipt', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'Take the export bug.',
+    });
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 0,
+      finalText: '已派给 backend-2，等它回报。',
+    });
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
+    expect(deps.appendDispatchReceipt).toHaveBeenCalledWith(
+      'lead-1',
+      expect.objectContaining({ version: 1, delivery: 'direct' }),
+    );
+  });
+
+  it('does nothing for planned work or when the capability is off', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps({ readDispatchClaimVerificationEnabled: () => false });
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 1,
+      finalText: '我会派给 backend-2 去改导出。',
+    });
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 2,
+      finalText: '已派给 backend-2。',
+    });
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
+  });
+});
+
 function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
   const calls: string[] = [];
   let workers = [createWorker()];
@@ -358,6 +425,9 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     listWorkersByLead: vi.fn(async (leadSessionId: string) =>
       workers.filter((worker) => worker.leadSessionId === leadSessionId),
     ),
+
+    escalateDispatchClaim: vi.fn(),
+    appendDispatchReceipt: vi.fn(),
     getLiveSession: vi.fn(() => null),
     resumeWorkerSession: vi.fn(async () => {}),
     updateWorkerStatus: vi.fn(async (workerId, status) => {

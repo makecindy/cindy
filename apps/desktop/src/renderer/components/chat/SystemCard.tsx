@@ -14,6 +14,7 @@ import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCa
 import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 import { useState, type ReactNode } from 'react';
 import type { PluginModelRouteNote } from '@/lib/ccAgent.types';
+import type { ChatMessage } from '@/lib/makerChatStore';
 import {
   ArrowLeftRight,
   ArrowRight,
@@ -65,36 +66,8 @@ import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkill
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 
 interface SystemCardProps {
-  cardType:
-    | 'plugin-model-route'
-    | 'voice-call'
-    | 'voice-call-task'
-    | 'mcp-app'
-    | 'input-handoff'
-    | 'cindy-make-doctor'
-    | 'cindy-make'
-    | 'help'
-    | 'cost'
-    | 'context'
-    | 'pwd'
-    | 'status'
-    | 'compact'
-    | 'cmd'
-    | 'goal-complete'
-    | 'goal-resumed'
-    | 'cindy-make-complete'
-    | 'learn'
-    | 'review'
-    | 'auto-resume'
-    | 'auto-resume-pending'
-    | 'agent-switch'
-    | 'bot-session-task-message'
-    | 'bot-session-task'
-    | 'bot-session-task-result'
-    | 'bot-direct-message'
-    | 'bot-authorization'
-    | 'context-rebuild'
-    | 'session-import';
+  /** 与消息流同一个来源：卡片类型由 ChatMessage 定义，避免两处联合各自漂移。 */
+  cardType: NonNullable<ChatMessage['systemCardType']>;
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
@@ -1419,6 +1392,51 @@ function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
   );
 }
 
+function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
+  const unverified = data?.state === 'unverified';
+  const worker =
+    typeof data?.workerLabel === 'string' && data.workerLabel
+      ? data.workerLabel
+      : typeof data?.workerId === 'string'
+        ? data.workerId.slice(0, 8)
+        : '';
+  const queued = data?.delivery === 'queued';
+  const summary = typeof data?.summary === 'string' ? data.summary : '';
+  const label = unverified
+    ? t('chat.systemCard.orcaDispatch.unverified')
+    : queued
+      ? t('chat.systemCard.orcaDispatch.queued', { worker })
+      : t('chat.systemCard.orcaDispatch.sent', { worker });
+  return (
+    <div
+      className="flex w-full select-none flex-col gap-1 py-2 text-center"
+      role="note"
+      aria-label={label}
+    >
+      <span
+        className={cn(
+          'inline-flex items-center justify-center gap-2 text-12 leading-[1.33]',
+          unverified ? 'text-[var(--error-fg)]' : 'text-[var(--text-tertiary)]',
+        )}
+      >
+        {label}
+      </span>
+      {summary && (
+        <span
+          className={cn(
+            'mx-auto max-w-[86%] text-11 leading-[1.33] whitespace-pre-line text-[var(--text-tertiary)]',
+            unverified ? 'text-left' : 'truncate',
+          )}
+          title={summary}
+        >
+          {summary}
+        </span>
+      )}
+    </div>
+  );
+}
+
 const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
   'no-visible-result': 'chat.systemCard.review.noResult',
   'reviewer-closed': 'chat.systemCard.review.failure.reviewerClosed',
@@ -1584,6 +1602,8 @@ export function SystemCard({
       return <ContextRebuildCard data={data} />;
     case 'session-import':
       return <SessionImportCard data={data} />;
+    case 'orca-dispatch':
+      return <OrcaDispatchCard data={data} />;
     case 'learn':
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':

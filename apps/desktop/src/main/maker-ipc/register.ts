@@ -33,6 +33,7 @@ import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
 import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
+import type { OrcaDispatchSystemRecord } from '../../shared/orcaDispatchReceipt.js';
 import { captureAgentRequest as captureRequest, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationTarget } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
@@ -702,7 +703,11 @@ import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupCha
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
-import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
+import {
+  showDesktopChatMessage,
+  getDesktopNotificationsEnabled,
+  showDesktopSessionEvent,
+} from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
@@ -2449,6 +2454,7 @@ const COLLABORATION_SETTING_KEYS = [
   'workerSoftLimit',
   'workerHardLimit',
   'workerIdleReleaseMinutes',
+  'dispatchClaimVerification',
 ] as const;
 type CollaborationSettingKey = (typeof COLLABORATION_SETTING_KEYS)[number];
 const COLLABORATION_WORKER_LIMIT_MAX = 20;
@@ -2458,14 +2464,23 @@ function isCollaborationSettingKey(key: unknown): key is CollaborationSettingKey
   return typeof key === 'string' && (COLLABORATION_SETTING_KEYS as readonly string[]).includes(key);
 }
 
-function requireInteger(value: unknown, key: CollaborationSettingKey): number {
+function requireInteger(value: unknown, key: Exclude<CollaborationSettingKey, 'dispatchClaimVerification'>): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
     throwIpcError('INVALID_PARAMS', `${key} must be an integer`);
   }
   return value;
 }
 
-function validateCollaborationSettingValue(key: CollaborationSettingKey, value: unknown): number {
+function validateCollaborationSettingValue(
+  key: CollaborationSettingKey,
+  value: unknown,
+): number | boolean {
+  if (key === 'dispatchClaimVerification') {
+    if (typeof value !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', `${key} must be a boolean`);
+    }
+    return value;
+  }
   const next = requireInteger(value, key);
   const current = readCollaborationSettings();
   if (key === 'workerIdleReleaseMinutes') {
@@ -16369,6 +16384,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputCoordinator.mergeQueuedMessagesAtomically(sessionId, clientIds, buildReplacement).merged,
   };
 
+  /** 协同系统行：回执与升级卡共用同一条落库路径（role=assistant + agentMeta 标记，正文为空）。 */
+  const appendOrcaDispatchSystemRow = (
+    leadSessionId: string,
+    clientId: string,
+    record: OrcaDispatchSystemRecord,
+  ): void => {
+    void createDbMessage(leadSessionId, {
+      clientId,
+      role: 'assistant',
+      content: '',
+      agentMeta: { orcaDispatch: record },
+    }).catch(() => undefined);
+  };
+
   const orcaTeamService = createOrcaTeamService(orcaRemoteWorkers.wrapTeamDeps({
     captureControlAuthority: async () => (await captureOrcaTaskAuthority()).assertCurrent,
     // Queued dispatch acceptance and terminal-time retries land after this turn is gone.
@@ -16546,20 +16575,50 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ...orcaQueueHostDeps,
     steerStoredQueuedMessage: steerStoredControlMessage,
     moveQueuedMessage: moveStoredControlMessage,
+    // 宿主 -> Lead 队列的唯一盖章入口：Worker 回报与派单主张纠正文都从这里进队列，
+    // 合批归属只有这一处，别的入口不得自行盖 autoBridge（见 orcaAutoBridgeBatch.contract）。
     sendAutoBridgeToLead: async (leadSessionId, message, workerId) => {
       const result = await dispatchInterAgentMessage({
         targetSessionId: leadSessionId,
         rawContent: message,
         source: 'worker',
-        senderLabel: 'Worker',
-        workerId,
+        senderLabel: workerId ? 'Worker' : 'Orca host',
+        ...(workerId ? { workerId } : {}),
         autoBridge: true,
         meta: {
           source: 'maker-ipc/auto-bridge',
-          context: `worker_auto_bridge/${leadSessionId}/${workerId}`,
+          context: `auto_bridge/${leadSessionId}/${workerId ?? 'host'}`,
         },
       });
       return { accepted: result.ok };
+    },
+    escalateDispatchClaim: (leadSessionId, notice) => {
+      // 升级只是“给主人看”的宿主记录：落系统行 + 红点 + 通知，不发队列消息、不开新 turn。
+      appendOrcaDispatchSystemRow(leadSessionId, randomUUID(), notice);
+      void (async () => {
+        let title = '';
+        try {
+          const [row] = await getDbClient()
+            .drizzle
+            .select({ title: sessions.title })
+            .from(sessions)
+            .where(eq(sessions.id, leadSessionId))
+            .limit(1);
+          title = row?.title ?? '';
+        } catch {
+          /* 标题只是装饰，读不到就留空 */
+        }
+        showDesktopSessionEvent(() => getDeepLinkMainWindow(), {
+          sessionId: leadSessionId,
+          title,
+          kind: 'error',
+        });
+      })();
+    },
+    readDispatchClaimVerificationEnabled: () => readCollaborationSettings().dispatchClaimVerification,
+    appendDispatchReceipt: (leadSessionId, receipt) => {
+      // 回执卡落库为宿主系统行：role=assistant + agentMeta 标记，正文为空，不进模型上下文。
+      appendOrcaDispatchSystemRow(leadSessionId, `orca-dispatch-${receipt.dispatchId}`, receipt);
     },
     log,
   }));

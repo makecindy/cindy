@@ -5491,7 +5491,9 @@
       "workerHardLimit": "Worker 하드 제한",
       "workerHardLimitHint": "허용되는 최대 Worker 수입니다. 소프트 제한 이상이어야 합니다.",
       "idleRelease": "유휴 해제(분)",
-      "idleReleaseHint": "0으로 설정하면 백그라운드 자동 해제를 끕니다. 양수 값은 해당 시간(분) 동안 유휴 상태인 Worker를 자동 해제합니다."
+      "idleReleaseHint": "0으로 설정하면 백그라운드 자동 해제를 끕니다. 양수 값은 해당 시간(분) 동안 유휴 상태인 Worker를 자동 해제합니다.",
+      "dispatchClaimVerification": "파견 주장 검증",
+      "dispatchClaimVerificationHint": "Lead가 작업을 보냈다고 보고하기 전에 실제로 파견했는지 대조합니다. 근거 없는 주장은 한 번 바로잡고, 그래도 그대로면 알려 드립니다."
     },
     "agentResource": {
       "saveFailed": "저장하지 못했습니다. 다시 시도해 주세요.",
@@ -15158,6 +15160,11 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "sent": "{{worker}}에게 전달했습니다",
+        "queued": "{{worker}}의 대기열에 추가했습니다",
+        "unverified": "발송이 확인되지 않았습니다"
+      },
       "help": {
         "title": "사용 가능한 명령",
         "builtInCommands": "기본 제공 명령",

@@ -5491,7 +5491,9 @@
       "workerHardLimit": "Worker 硬限",
       "workerHardLimitHint": "许创建之 Worker 最大数，须不小于软上限。",
       "idleRelease": "闲时释放（分钟）",
-      "idleReleaseHint": "设为 0 则阖后台自动释放；正数谓闲逾此时长即自释放。"
+      "idleReleaseHint": "设为 0 则阖后台自动释放；正数谓闲逾此时长即自释放。",
+      "dispatchClaimVerification": "核派發之議",
+      "dispatchClaimVerificationHint": "Lead 云已遣於 Worker 者，按主機所記核之。虛言先正一次，再虛則告。"
     },
     "agentResource": {
       "saveFailed": "存之未成，请再试。",
@@ -15149,6 +15151,11 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "sent": "已遣往 {{worker}}",
+        "queued": "已列於 {{worker}} 之隊",
+        "unverified": "遣單無據，待核"
+      },
       "help": {
         "title": "可用指令",
         "builtInCommands": "内置指令",

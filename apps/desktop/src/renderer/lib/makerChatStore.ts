@@ -662,6 +662,8 @@ export interface ChatMessage {
     | 'context-rebuild'
     /** 任务导入的时间线标记：开头的来源说明与结尾的分隔。 */
     | 'session-import'
+    /** 协同派发回执 / 升级卡；由落库的 agentMeta.orcaDispatch 派生。 */
+    | 'orca-dispatch'
     | 'mcp-app';
   mcpAppClientId?: string;
   systemCardData?: Record<string, unknown>;
@@ -19942,6 +19944,11 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (m.role === 'assistant' && m.agentMeta?.voiceCall?.version === 1) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'voice-call' as const, systemCardData: { record: m.agentMeta.voiceCall },
+      createdAt: new Date(m.createdAt).toISOString(),
+    };
+    if (m.role === 'assistant' && m.agentMeta?.orcaDispatch?.version === 1) return {
+      clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
+      systemCardType: 'orca-dispatch' as const, systemCardData: { ...m.agentMeta.orcaDispatch },
       createdAt: new Date(m.createdAt).toISOString(),
     };
     const mcpApp = m.role === 'assistant' && m.agentMeta?.mcpApp === true ? parseMcpAppHistory(m.content) : undefined;

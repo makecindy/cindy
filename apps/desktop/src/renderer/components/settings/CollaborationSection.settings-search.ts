@@ -29,6 +29,15 @@ export const collaborationSettings = defineSettings({
     sectionKey: 'settings.sections.collaboration',
     descriptionKey: 'settings.collaboration.idleReleaseHint',
   },
+  dispatchClaimVerification: {
+    id: 'settings.collaboration.dispatchClaimVerification',
+    fallbackTargetId: 'settings-collaboration',
+    tab: 'general',
+    targetId: 'settings-search-settings-collaboration-dispatchClaimVerification',
+    titleKey: 'settings.collaboration.dispatchClaimVerification',
+    sectionKey: 'settings.sections.collaboration',
+    descriptionKey: 'settings.collaboration.dispatchClaimVerificationHint',
+  },
 });
 
 export default {

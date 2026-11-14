@@ -5491,7 +5491,9 @@
       "workerHardLimit": "Worker ハード上限",
       "workerHardLimitHint": "作成できる Worker の最大数です。ソフト上限以上にしてください。",
       "idleRelease": "アイドル解放（分）",
-      "idleReleaseHint": "0 にするとバックグラウンド自動解放を無効化します。正の値では、その分数だけアイドルだった Worker を自動解放します。"
+      "idleReleaseHint": "0 にするとバックグラウンド自動解放を無効化します。正の値では、その分数だけアイドルだった Worker を自動解放します。",
+      "dispatchClaimVerification": "派遣主張を検証",
+      "dispatchClaimVerificationHint": "Lead がタスクを送信済みと報告する前に、本当に派遣したかを照合します。根拠のない主張は一度だけ訂正し、それでも直らなければ通知します。"
     },
     "agentResource": {
       "saveFailed": "保存に失敗しました。もう一度お試しください。",
@@ -15158,6 +15160,11 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "sent": "{{worker}} に派遣しました",
+        "queued": "{{worker}} のキューに追加しました",
+        "unverified": "派遣を確認できません"
+      },
       "help": {
         "title": "利用可能なコマンド",
         "builtInCommands": "組み込みコマンド",

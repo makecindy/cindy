@@ -5486,7 +5486,7 @@ interface ElectronAPI {
       getCollaborationSettings: () => Promise<unknown>;
       /** 可放 Worker 的同账号其他电脑(`{ devices: OrcaExecutionDeviceView[] }`)。 */
       listExecutionDevices: () => Promise<unknown>;
-      setCollaborationSetting: (key: string, value: number) => Promise<unknown>;
+      setCollaborationSetting: (key: string, value: number | boolean) => Promise<unknown>;
       resetCollaborationSettings: () => Promise<unknown>;
     };
     messages: {

@@ -422,6 +422,25 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `renderOrcaLeadSystemPrompt`，以及 `packages/lizi-mcps/src/xdt-helper/create_workers.ts`
    的批量结果契约。
 
+3a. **派单主张按宿主凭据对账，不按 Lead 文本采信（状态：不变量）**<br>
+   Lead 在 turn 收口时声称已派给某 Worker，宿主只认本轮的派发凭据（`send_to_worker`
+   的 accepted 回调与 `queued_message_id`、`create_worker` 的首任务派发；排队消息被撤回
+   即失效）。主张识别只取「过去完成态 + 派动词」，计划、将来说明与读文件后的推断都不算
+   主张；文本里出现真实队列编号算有据，出现不存在的编号算不实；声称给了某个 Worker，
+   就必须有发给同一个 Worker 的本轮凭据（文本匹配按该 Lead 的 Worker 名册解析，不靠猜）。
+   否定句（「没有派」「尚未派」）、引用他处原文、代码块与将来时的语法都不算主张。不一致时
+   先向该 Lead 注入一条纠正消息（附上一轮原文引用与 turn 指针，至多一次）；补派轮仍不一致
+   才升级：在会话里落一条不可撤回的宿主卡片 + 红点 + 既有通知通道提醒，卡片是系统行、不开
+   新 turn，所以升级不会自激；真派发出现前该 Lead 不再唤醒。回执卡与升级卡共用同一条落库
+   路径（`agentMeta.orcaDispatch`，`role=assistant` + 空正文，`state` 区分 sent / unverified），
+   只给渲染层，不进模型上下文。
+   实现指针：`apps/desktop/src/main/maker-ipc/orcaDispatchClaims.ts`、`orcaTeamService.ts`
+   的 `handleLeadTurnSettled`、`sessionEventTerminal.ts` 的 lead 收口钩子、
+   `localDb/agentHandoffHistory.ts` 的卡片行过滤；能力开关是协同设置里的
+   `dispatchClaimVerification`（默认开）。与不变量 3 的分工：3 管「什么时候可以静默结束
+   turn」，本条只问「声称已派时有没有本轮凭据」；补派唤醒是显式队列消息（新的 turn），
+   不改动静默结束的判据。
+
 #### 消息派发与 auto-bridge
 
 1. **忙碌目标不丢消息（状态：不变量）**<br>

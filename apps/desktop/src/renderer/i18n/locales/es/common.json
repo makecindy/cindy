@@ -5592,7 +5592,9 @@
       "workerHardLimit": "Límite máximo de Workers",
       "workerHardLimitHint": "Máximo de Workers permitidos. Debe ser mayor o igual que el umbral de advertencia.",
       "idleRelease": "Liberación por inactividad (minutos)",
-      "idleReleaseHint": "Usa 0 para no liberar Workers automáticamente en segundo plano. Un valor positivo libera los Workers tras ese número de minutos de inactividad."
+      "idleReleaseHint": "Usa 0 para no liberar Workers automáticamente en segundo plano. Un valor positivo libera los Workers tras ese número de minutos de inactividad.",
+      "dispatchClaimVerification": "Verificar los envíos declarados",
+      "dispatchClaimVerificationHint": "Comprueba que el Lead realmente envió el encargo antes de dar una tarea por enviada. Una afirmación sin respaldo se corrige una vez y después se te avisa."
     },
     "agentResource": {
       "saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
@@ -15327,6 +15329,11 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "sent": "Enviado a {{worker}}",
+        "queued": "En cola para {{worker}}",
+        "unverified": "Envío no verificado"
+      },
       "help": {
         "title": "Comandos disponibles",
         "builtInCommands": "Comandos integrados",
