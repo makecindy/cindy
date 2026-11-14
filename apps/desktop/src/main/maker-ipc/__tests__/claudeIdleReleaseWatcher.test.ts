@@ -5,24 +5,26 @@ import { makerToDbAgentKind } from '../../../shared/agentKindConversion';
 import { Maker, type AgentSessionHandle, type BaseAgent, type SessionMeta, type SessionStorage, type StartSessionOptions } from '@cindy/maker-core';
 import { createRehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL, type IdleClaudeSession } from '../claudeIdleReleaseWatcher';
+import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, type IdleClaudeSession, type IdleReleaseAgentKind } from '../claudeIdleReleaseWatcher';
 
-function fixture() {
+function fixture(agentKind: IdleReleaseAgentKind = 'claude-code') {
   let now = 0;
   let generation = 0;
   let event = () => {};
   const unsubscribe = vi.fn();
   const session: IdleClaudeSession = {
-    id: 'task', agentKind: 'claude-code', remoteHostId: null, agentDeviceId: null, sdkSessionId: 'native-history',
+    id: 'task', agentKind, remoteHostId: null, agentDeviceId: null, sdkSessionId: 'native-history',
     getStatus: () => 'active', getTurnGeneration: () => generation,
     isTurnRunning: vi.fn(() => false), listBackgroundTasks: vi.fn(() => []),
     countPendingWakeContinuations: vi.fn(() => 0),
+    hasLiveBackgroundWork: vi.fn(async () => false),
     manageAsyncUserQuestions: vi.fn(() => ({ questions: [] })),
     onEvent: vi.fn((listener) => { event = () => listener({ type: 'done', data: null }); return unsubscribe; }),
     closeIfIdle: vi.fn(async () => true), close: vi.fn(async () => {}),
   };
   let live: IdleClaudeSession[] = [session];
   const deps = {
+    agentKind,
     listSessions: () => live, getSession: (id: string) => live.find(s => s.id === id),
     readMinutes: vi.fn(() => 30), isOrdinaryTask: vi.fn(async (_id: string, _nativeId: string) => true),
     hasPendingInput: vi.fn(async () => false), isHostBusy: vi.fn(() => false),
@@ -55,12 +57,14 @@ describe('ordinary Claude idle runtime release', () => {
     f.advance(30); await f.watcher.scanNow(); expect(f.deps.close).toHaveBeenCalledTimes(2);
     f.watcher.stop();
   });
-  it.each(['turn', 'background', 'background-unavailable', 'wake', 'host', 'queue', 'scope', 'unknown', 'question', 'answer-in-flight', 'questions-unavailable'] as const)(
+  it.each(['turn', 'background', 'background-unavailable', 'live-background', 'live-background-unknown', 'wake', 'host', 'queue', 'scope', 'unknown', 'question', 'answer-in-flight', 'questions-unavailable'] as const)(
     'preserves a runtime blocked by %s', async (kind) => {
       const f = fixture(); await aged(f);
       if (kind === 'turn') vi.mocked(f.session.isTurnRunning).mockReturnValue(true);
       if (kind === 'background') vi.mocked(f.session.listBackgroundTasks).mockReturnValue([{ taskId: 'still-working' }]);
       if (kind === 'background-unavailable') vi.mocked(f.session.listBackgroundTasks).mockImplementation(() => { throw Error('unavailable'); });
+      if (kind === 'live-background') vi.mocked(f.session.hasLiveBackgroundWork!).mockResolvedValue(true);
+      if (kind === 'live-background-unknown') vi.mocked(f.session.hasLiveBackgroundWork!).mockRejectedValue(Error('probe failed'));
       if (kind === 'wake') vi.mocked(f.session.countPendingWakeContinuations).mockReturnValue(1);
       if (kind === 'question' || kind === 'answer-in-flight') vi.mocked(f.session.manageAsyncUserQuestions).mockReturnValue({
         questions: [{ request_id: 'question-1', question: 'Choose a direction', status: kind === 'question' ? 'pending' : 'answer_in_flight' }],
@@ -138,6 +142,15 @@ describe('ordinary Claude idle runtime release', () => {
     await f.watcher.scanNow(); f.deps.readMinutes.mockReturnValue(0); await f.watcher.scanNow();
     expect(f.unsubscribe).toHaveBeenCalledOnce(); f.watcher.stop();
   });
+  it('releases idle Codex tasks only once their live background work ends, leaving other engines alone', async () => {
+    const f = fixture('codex'); await aged(f);
+    vi.mocked(f.session.hasLiveBackgroundWork!).mockResolvedValueOnce(true);
+    await f.watcher.scanNow(); expect(f.deps.close).not.toHaveBeenCalled();
+    f.advance(29); await f.watcher.scanNow(); expect(f.deps.close).not.toHaveBeenCalled();
+    f.advance(1); await f.watcher.scanNow(); expect(f.deps.close).toHaveBeenCalledOnce();
+    f.replace({ ...f.session, agentKind: 'claude-code' }); await f.watcher.scanNow();
+    expect(f.session.onEvent).toHaveBeenCalledOnce(); f.watcher.stop();
+  });
   it('does not release when Session rejects atomic close, and stops interval scans', async () => {
     vi.useFakeTimers(); const f = fixture(); await aged(f);
     vi.mocked(f.session.closeIfIdle).mockResolvedValueOnce(false);
@@ -214,6 +227,18 @@ describe('ordinary Claude task eligibility in SQLite', () => {
       expect(f.deps.hasPendingInput).toHaveBeenCalledOnce();
       expect(f.deps.close).not.toHaveBeenCalled();
     } finally { f.watcher.stop(); db.close(); }
+  });
+  it('scopes the Codex query to ordinary Codex tasks with the same ownership exclusions', () => {
+    const db = database();
+    try {
+      const codex = db.prepare(ORDINARY_CODEX_TASK_SQL);
+      expect(codex.get('task', 'native-history')).toBeUndefined();
+      db.exec(`UPDATE sessions SET agent_kind = '${makerToDbAgentKind('codex')}'`);
+      expect(codex.get('task', 'native-history')).toEqual({ id: 'task' });
+      expect(db.prepare(ORDINARY_CLAUDE_TASK_SQL).get('task', 'native-history')).toBeUndefined();
+      db.exec("INSERT INTO bot_session_links VALUES ('task')");
+      expect(codex.get('task', 'native-history')).toBeUndefined();
+    } finally { db.close(); }
   });
   it('retains completed goals and other tasks while releasing only a resumable ordinary task', () => {
     const db = database();
@@ -318,6 +343,81 @@ it.each([false, true])('preserves task data and resumes native identity after re
     expect(handles[1].send).toHaveBeenCalledOnce();
     expect(handles[0].send).not.toHaveBeenCalled();
     expect(rows.get('task')?.sdkSessionId).toBe('native-history');
+  } finally {
+    watcher.stop();
+    await maker.shutdown();
+    suppression.resetForTest();
+  }
+});
+
+it('keeps a real Codex Session while native work lives, then releases and resumes its thread', async () => {
+  const rows = new Map<string, SessionMeta>();
+  const storage: SessionStorage = {
+    create: async meta => { const row = { ...meta, createdAt: 1, updatedAt: 1 }; rows.set(meta.id, row); return row; },
+    get: async id => rows.get(id) ?? null,
+    list: async () => [...rows.values()],
+    update: async (id, patch) => { const row = { ...rows.get(id)!, ...patch }; rows.set(id, row); return row; },
+    delete: vi.fn(async id => { rows.delete(id); }),
+    compareAndClearSdkSessionId: async () => false,
+  };
+  const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+  const suppression = createRehydrateCloseSuppression(log);
+  const removeAttachmentsAndWorkspace = vi.fn(async () => {});
+  let liveWork: () => Promise<boolean> = async () => true;
+  const handles: AgentSessionHandle[] = [];
+  const startSession = vi.fn(async (opts: StartSessionOptions) => {
+    let finish!: () => void;
+    const ended = new Promise<void>(resolve => { finish = resolve; });
+    const handle: AgentSessionHandle = {
+      id: opts.resumeSessionId ?? 'native-thread', agentKind: 'codex', model: 'model',
+      send: vi.fn(async () => {}), steer: async () => {}, abort: async () => {},
+      getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+      close: vi.fn(async () => { finish(); }),
+      async *events() { await ended; },
+      isTurnRunning: () => false, setInteractionResolver() {},
+      hasLiveBackgroundWork: () => liveWork(),
+    };
+    handles.push(handle);
+    return handle;
+  });
+  const agent = { kind: 'codex', capabilities: { sameTurnSteer: { supported: true } }, startSession,
+    filterActiveSkillCommands: (result: unknown) => result, dispose: async () => {} } as unknown as BaseAgent;
+  const maker = new Maker({ agents: { codex: agent }, storage, logger: log,
+    lifecycleHooks: { onClose: id => suppression.runOnCloseSideEffects(id, removeAttachmentsAndWorkspace) } });
+  const opts = { id: 'task', agentKind: 'codex' as const, workingDir: path.join(os.tmpdir(), 'codex-idle-fixture'), model: 'model' };
+  const first = await maker.createSession(opts);
+  const stored = { ...rows.get('task')! };
+  let now = 0;
+  const watcher = createClaudeIdleReleaseWatcher({
+    agentKind: 'codex',
+    listSessions: () => maker.listActiveSessions(), getSession: id => maker.getSession(id),
+    readMinutes: () => 30,
+    isOrdinaryTask: async (id, nativeId) => (await storage.get(id))?.sdkSessionId === nativeId,
+    hasPendingInput: async () => false, isHostBusy: () => false,
+    withLock: async (_id, fn) => fn(),
+    close: (session) => suppression.withSuppressed(session.id, async () =>
+      await maker.closeSessionIfCurrent(session as typeof first, 'runtime-refresh', { onlyIfIdle: true }) === 'closed'),
+    now: () => now, released: vi.fn(), warn: log.warn,
+  });
+  try {
+    await watcher.scanNow(); now = 30 * 60_000; await watcher.scanNow();
+    expect(handles[0].close).not.toHaveBeenCalled();
+    // A probe that cannot answer is treated as busy by Session itself.
+    liveWork = async () => { throw Error('terminal list unavailable'); };
+    now += 30 * 60_000; await watcher.scanNow();
+    expect(handles[0].close).not.toHaveBeenCalled();
+    liveWork = async () => false;
+    now += 30 * 60_000; await watcher.scanNow();
+    expect(handles[0].close).toHaveBeenCalledOnce();
+    expect(maker.getSessionCloseReason(first)).toBe('runtime-refresh');
+    expect(rows.get('task')).toEqual(stored);
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(removeAttachmentsAndWorkspace).not.toHaveBeenCalled();
+    const persisted = (await maker.getSessionMeta('task'))!;
+    const resumed = await maker.createSession({ ...opts, resumeSessionId: persisted.sdkSessionId });
+    expect(startSession.mock.calls[1][0].resumeSessionId).toBe('native-thread');
+    await resumed.send('continue');
+    expect(handles[1].send).toHaveBeenCalledOnce();
   } finally {
     watcher.stop();
     await maker.shutdown();

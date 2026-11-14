@@ -315,6 +315,7 @@ import {
   type ThreadForkResponse,
   type ThreadRollbackParams,
   type ThreadRollbackResponse,
+  type ThreadBackgroundTerminalsListResponse,
   type ThreadTurnsListParams,
   type ThreadTurnsListResponse,
   type ThreadResumeParams,
@@ -1030,6 +1031,8 @@ const CODEX_BROWSER_USE_READINESS_PROBE_ATTEMPTS = 2;
 // (terminal error + Done status)。注意: 超时只代表**我们不再等**, server 侧
 // 可能实际已建 thread/turn — 迟到事件按 stale turn 丢弃, 不影响 UI 复位。
 const CRITICAL_THREAD_RPC_TIMEOUT_MS = 60_000;
+/** Idle reclamation probe; a slow or failed answer keeps the runtime. */
+const BACKGROUND_TERMINALS_PROBE_TIMEOUT_MS = 10_000;
 // 设备托管会话(项目在另一台电脑)的上述 RPC 在任务隧道还有往来时顺延(#5764): 线程启动经设备
 // 互联逐个读项目说明与 Skill, 实测约 35 轮串行往返, 慢链路下合法地超过 60s。隧道连续 30s 没有
 // 往来、或从发出起等满 5 分钟, 仍按超时收口(错误里带链路计数)。
@@ -15178,6 +15181,26 @@ assertRouteCurrent();
 
       hasPendingHostOperation() {
         return manualCompact !== null;
+      },
+
+      async hasLiveBackgroundWork() {
+        if (closed) return false;
+        // Native children keep running after the parent turn completes; closing
+        // would unsubscribe their parent thread and interrupt them.
+        if (subagentLiveCards.hasRunning) return true;
+        if (yieldedExecCellsByTurnId.size > 0 || interactionContinuation !== null) return true;
+        for (const claim of yieldContinuationClaims.values()) if (!claim.settled || claim.pendingBoundaryEvents > 0) return true;
+        for (const claim of interactionContinuationClaims.values()) if (!claim.settled || claim.pendingBoundaryEvents > 0) return true;
+        if (overloadRetryPending()) return true;
+        // Unified exec processes (dev servers, watchers) can be left running on
+        // purpose and die with the thread runtime. Unknown counts as busy.
+        if (skipIfStaleHost('thread/backgroundTerminals/list')) return true;
+        const listed = await host.request<ThreadBackgroundTerminalsListResponse>(
+          Method.ThreadBackgroundTerminalsList,
+          { threadId, limit: 1 },
+          { timeoutMs: BACKGROUND_TERMINALS_PROBE_TIMEOUT_MS },
+        );
+        return !Array.isArray(listed?.data) || listed.data.length > 0;
       },
 
       isTurnRunning() {
