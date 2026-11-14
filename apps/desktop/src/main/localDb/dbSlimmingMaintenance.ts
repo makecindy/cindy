@@ -14,6 +14,7 @@ import { createBetterSqliteDatabase, restrictDbFilePermissions } from './betterS
 import {
   adoptDbSlimmingBackup,
   clearDbSlimmingRequest,
+  dbSlimmingTargetStatuses,
   readDbSlimmingResult,
   type DbSlimmingRequestRecord,
   type DbSlimmingResultRecord,
@@ -81,6 +82,18 @@ class DbSlimmingMaintenanceError extends Error {
 /** Conservative peak space: one working copy plus SQLite's VACUUM scratch copy. */
 export function dbSlimmingTemporaryBytesRequired(databaseBytes: number): number {
   return Math.max(0, Math.ceil(databaseBytes * 2 + TEMP_SPACE_MARGIN_BYTES));
+}
+
+/**
+ * Free space a run needs on the database volume. A backup written to the same
+ * volume is a full extra copy; the startup gate uses the same formula so it
+ * never schedules a run that `assertMaintenanceSpace` would refuse seconds later.
+ */
+export function dbSlimmingRequiredFreeBytes(
+  databaseBytes: number,
+  backupOnSameVolume: boolean,
+): number {
+  return dbSlimmingTemporaryBytesRequired(databaseBytes) + (backupOnSameVolume ? databaseBytes : 0);
 }
 
 export function dbVolumeFreeBytes(dbFilePath: string): number | null {
@@ -450,7 +463,6 @@ function assertMaintenanceSpace(
 ): void {
   const databaseBytes = Math.max(request.beforeBytes, estimateDbFilesBytes(dbFilePath));
   const dbDir = path.dirname(dbFilePath);
-  let required = dbSlimmingTemporaryBytesRequired(databaseBytes);
   const backupDir = paths.backupCandidate ? path.dirname(paths.backupCandidate) : null;
   if (backupDir) {
     let backupDirStat: fs.Stats;
@@ -468,9 +480,8 @@ function assertMaintenanceSpace(
       throw new DbSlimmingMaintenanceError('backup-failed', 'backup destination is not a directory');
     }
   }
-  if (backupDir && directoriesShareVolume(dbDir, backupDir)) {
-    required += databaseBytes;
-  }
+  const backupOnSameVolume = Boolean(backupDir && directoriesShareVolume(dbDir, backupDir));
+  const required = dbSlimmingRequiredFreeBytes(databaseBytes, backupOnSameVolume);
   const dbFree = directoryFreeBytes(dbDir);
   if (dbFree !== null && dbFree < required) {
     throw new DbSlimmingMaintenanceError(
@@ -478,7 +489,7 @@ function assertMaintenanceSpace(
       `database volume needs ${required} bytes but only ${dbFree} bytes are free`,
     );
   }
-  if (paths.backupCandidate && backupDir && !directoriesShareVolume(dbDir, backupDir)) {
+  if (paths.backupCandidate && backupDir && !backupOnSameVolume) {
     const backupFree = directoryFreeBytes(backupDir);
     const backupRequired = databaseBytes + TEMP_SPACE_MARGIN_BYTES;
     if (backupFree !== null && backupFree < backupRequired) {
@@ -589,18 +600,21 @@ function compactWorkingCopy(
 
     db.exec('DROP TABLE IF EXISTS temp.db_slimming_targets');
     db.exec('CREATE TEMP TABLE db_slimming_targets (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
+    const targetStatuses = new Set(dbSlimmingTargetStatuses(request));
     db.prepare(
       `INSERT INTO temp.db_slimming_targets (id, status)
        SELECT id, status
          FROM sessions
-        WHERE ((status = 'deleted' AND updated_at <= ?)
-           OR (status = 'archived' AND updated_at <= ?)
+        WHERE ((? = 1 AND status = 'deleted' AND updated_at <= ?)
+           OR (? = 1 AND status = 'archived' AND updated_at <= ?)
            OR (? = 1 AND status = 'active' AND updated_at <= ?))
           AND EXISTS (SELECT 1 FROM messages WHERE messages.session_id = sessions.id)`,
     ).run(
+      targetStatuses.has('deleted') ? 1 : 0,
       request.archivedBeforeMs,
+      targetStatuses.has('archived') ? 1 : 0,
       request.archivedBeforeMs,
-      request.includeActiveTasks === true ? 1 : 0,
+      targetStatuses.has('active') ? 1 : 0,
       request.archivedBeforeMs,
     );
 
@@ -728,7 +742,7 @@ function compactWorkingCopy(
           )
           .run(Math.floor(request.scannedAt));
       }
-      if (request.includeActiveTasks === true) {
+      if (targetStatuses.has('active')) {
         if (tableExists(activeDb, 'session_goals')) {
           activeDb.exec(
             `DELETE FROM session_goals

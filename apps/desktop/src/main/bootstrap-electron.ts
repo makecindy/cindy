@@ -528,6 +528,11 @@ import {
   DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
   getDatabaseSizeWarningSettingsFilePath,
 } from './database-size-warning-settings';
+import {
+  parseDbAutoCleanupSettingsPatch,
+  readDbAutoCleanupSettingsView,
+  writeDbAutoCleanupSettingsPatch,
+} from './db-auto-cleanup-settings';
 import { createDatabaseSizeWarningSettingsWatcher } from './database-size-warning-settings-watcher.js';
 import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
 import {
@@ -2107,6 +2112,7 @@ const updatePresentationLog = createLogger('update-presentation');
 const voicePowerBroadcastLog = createLogger('voice-input-power');
 const sessionDragPreviewLog = createLogger('session-drag-preview');
 const windowDragLog = createLogger('window-drag');
+const dbAutoCleanupSettingsLog = createLogger('db-auto-cleanup');
 const piSubagentLog = createLogger('pi-subagent');
 let rendererBootGuard: RendererBootGuard | null = null;
 
@@ -5129,6 +5135,23 @@ const registerIpcHandlers = () => {
   ipcMain.handle('database-size-warning:measure', (event) => {
     assertTrustedAppRendererEvent(event);
     return collectCurrentDatabaseSizeWarningStatus();
+  });
+
+  // Automatic cleanup of soft-deleted history (#8730). The value is read before
+  // the database opens, so it is a plain settings file, not a SQLite row.
+  ipcMain.handle('db-auto-cleanup:get-settings', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readDbAutoCleanupSettingsView(app.getPath('userData'), dbAutoCleanupSettingsLog);
+  });
+  ipcMain.handle('db-auto-cleanup:set-settings', async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const parsed = parseDbAutoCleanupSettingsPatch(payload);
+    if ('error' in parsed) throwIpcError('INVALID_PARAMS', parsed.error);
+    return writeDbAutoCleanupSettingsPatch(
+      app.getPath('userData'),
+      parsed.patch,
+      dbAutoCleanupSettingsLog,
+    );
   });
 
   // Find the primary app window, skipping transient utility BrowserWindows like

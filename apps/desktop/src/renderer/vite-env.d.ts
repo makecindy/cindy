@@ -5057,6 +5057,12 @@ interface ElectronAPI {
       measure: () => Promise<{ databaseBytes: number | null }>;
       onChanged: (callback: () => void) => () => void;
     };
+    dbAutoCleanup: {
+      getSettings: () => Promise<import('../shared/localDbMaintenance').DbAutoCleanupSettingsView>;
+      setSettings: (
+        patch: import('../shared/localDbMaintenance').DbAutoCleanupSettingsPatch,
+      ) => Promise<import('../shared/localDbMaintenance').DbAutoCleanupSettingsView>;
+    };
     maintenance: {
       scan: (
         input: import('../shared/localDbMaintenance').DbSlimmingScanInput,
