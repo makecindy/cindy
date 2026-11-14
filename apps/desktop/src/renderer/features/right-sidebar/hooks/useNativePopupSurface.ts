@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
 import { createLogger } from '@/lib/logger';
 
@@ -21,6 +21,33 @@ const EMPTY_SNAPSHOT: RsbNativePopupSnapshot = {
   crash: null,
 };
 
+/** Native child views sit above the host DOM regardless of CSS z-index. Use the
+ * host's hit test so every full-window preview (including portals outside the
+ * chat tree) can cover the native page without destroying its browsing context.
+ * Local content and the slot's own full-window ancestors are not occluders. */
+function isCoveredByGlobalOverlay(slot: HTMLElement, x: number, y: number): boolean {
+  // Preview panels have margins and are siblings of their full-window scrim.
+  // Walking only the top hit's ancestors misses the scrim beneath the panel.
+  for (const hit of document.elementsFromPoint(x, y)) {
+    // Layers below the slot do not cover it. Also stop for a slot descendant
+    // (e.g. a guest placeholder) or ancestor instead of hiding for background UI.
+    if (hit.contains(slot) || slot.contains(hit)) return false;
+    let element: Element | null = hit;
+    while (element && !element.contains(slot)) {
+      if (element === document.fullscreenElement) return true;
+      if (getComputedStyle(element).position === 'fixed') {
+        const rect = element.getBoundingClientRect();
+        if (
+          rect.left <= 0 && rect.top <= 0 &&
+          rect.right >= window.innerWidth && rect.bottom >= window.innerHeight
+        ) return true;
+      }
+      element = element.parentElement;
+    }
+  }
+  return false;
+}
+
 export interface UseNativePopupSurfaceResult extends UseBrowserWebviewResult {
   closed: boolean;
 }
@@ -31,9 +58,11 @@ export function useNativePopupSurface(
   tabId: string,
   slotRef: RefObject<HTMLDivElement | null>,
   visible: boolean,
+  focusRequest = 0,
 ): UseNativePopupSurfaceResult {
   const [snapshot, setSnapshot] = useState<RsbNativePopupSnapshot>(EMPTY_SNAPSHOT);
   const [closed, setClosed] = useState(false);
+  const consumedFocusRequest = useRef(focusRequest);
 
   useEffect(() => {
     if (!surfaceId || !sessionId) return;
@@ -69,6 +98,11 @@ export function useNativePopupSurface(
     if (!surfaceId) return;
     const slot = slotRef.current;
     let frame = 0;
+    let lastUpdate: {
+      surfaceId: string;
+      bounds: { x: number; y: number; width: number; height: number };
+      visible: boolean;
+    } | undefined;
     const sync = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
@@ -85,20 +119,47 @@ export function useNativePopupSurface(
           rect!.width > 0 &&
           rect!.height > 0 &&
           right > left &&
-          bottom > top;
+          bottom > top &&
+          !isCoveredByGlobalOverlay(slot!, (left + right) / 2, (top + bottom) / 2);
+        // Consume even when hidden/covered: a delayed show must not steal focus.
+        const focus = actuallyVisible && consumedFocusRequest.current !== focusRequest;
+        consumedFocusRequest.current = focusRequest;
+        // A streaming chat can mutate the host DOM on every frame. Only send
+        // changes in native geometry/visibility, not one IPC per text update.
+        if (
+          !focus && lastUpdate?.visible === actuallyVisible &&
+          lastUpdate.bounds.x === left && lastUpdate.bounds.y === top &&
+          lastUpdate.bounds.width === width && lastUpdate.bounds.height === height
+        ) return;
+        const update = {
+          surfaceId,
+          bounds: { x: left, y: top, width, height },
+          visible: actuallyVisible,
+          ...(focus ? { focus: true } : {}),
+        };
+        lastUpdate = update;
         void window.electronAPI.rsbNativePopup
-          .setBounds({
-            surfaceId,
-            bounds: { x: left, y: top, width, height },
-            visible: actuallyVisible,
-          })
-          .catch(() => undefined);
+          .setBounds(update)
+          .catch(() => { if (lastUpdate === update) lastUpdate = undefined; });
       });
     };
     const resizeObserver = slot ? new ResizeObserver(sync) : null;
     if (slot) resizeObserver?.observe(slot);
     const intersectionObserver = slot ? new IntersectionObserver(sync) : null;
     if (slot) intersectionObserver?.observe(slot);
+    // Overlay mount/unmount, retained previews toggling class/style, and closing
+    // animations must all update native visibility, even when the slot does not
+    // resize. Observe only in foreground; activation performs a fresh hit test.
+    const overlayObserver = visible ? new MutationObserver(sync) : null;
+    overlayObserver?.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'open', 'data-state'],
+    });
+    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('transitionend', sync, true);
+    document.addEventListener('animationend', sync, true);
     window.addEventListener('resize', sync);
     window.addEventListener('scroll', sync, true);
     sync();
@@ -106,6 +167,10 @@ export function useNativePopupSurface(
       cancelAnimationFrame(frame);
       resizeObserver?.disconnect();
       intersectionObserver?.disconnect();
+      overlayObserver?.disconnect();
+      document.removeEventListener('fullscreenchange', sync);
+      document.removeEventListener('transitionend', sync, true);
+      document.removeEventListener('animationend', sync, true);
       window.removeEventListener('resize', sync);
       window.removeEventListener('scroll', sync, true);
       void window.electronAPI.rsbNativePopup
@@ -116,7 +181,7 @@ export function useNativePopupSurface(
         })
         .catch(() => undefined);
     };
-  }, [slotRef, surfaceId, visible]);
+  }, [slotRef, surfaceId, visible, focusRequest]);
 
   const command = useCallback(
     (input: RsbNativePopupCommand) => {

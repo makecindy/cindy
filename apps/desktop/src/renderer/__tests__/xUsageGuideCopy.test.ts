@@ -84,11 +84,12 @@ describe('X 用法与风险告知的多语言文案', () => {
     }
   });
 
-  it('风险那两条都点明了公开可见与默认工作目录', () => {
+  it('风险那两条都点明了公开可见与默认项目', () => {
     // 这一节存在的理由。zh-CN 用关键词钉住, 其它语言只钉「两条都非空且互不相同」——
     // 关键词逐语言硬编码会变成翻译的枷锁, 而空/重复才是真正会丢信息的失败形态。
+    // 机器人可选的是侧栏项目, 这里说的是 X 连接设置里的「默认项目」(原「默认工作目录」)。
     expect(LOCALES['zh-CN'].riskPublicBody).toContain('公开');
-    expect(LOCALES['zh-CN'].riskWorkdirBody).toContain('默认工作目录');
+    expect(LOCALES['zh-CN'].riskWorkdirBody).toContain('默认项目');
     for (const [loc, guide] of Object.entries(LOCALES)) {
       expect(guide.riskPublicBody, `${loc} 两条风险不得相同`).not.toBe(guide.riskWorkdirBody);
     }

@@ -1,3 +1,4 @@
+import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
@@ -27,6 +28,10 @@ import {
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const viewStateCardSql = ${viewStateCardSql.toString()};
+const assertViewStateCard = ${assertViewStateCard.toString()};
+const saveMcpAppViewState = ${saveMcpAppViewState.toString()};
+const deleteDeletedSessionViewStates = ${deleteDeletedSessionViewStates.toString()};
 const sanitizeToolResultDiagnostics = ${sanitizeToolResultDiagnostics.toString()};
 const extractToolResultDiagnostics = ${extractToolResultDiagnostics.toString()};
 const compactToolCardResult = ${compactToolCardResult.toString()};
@@ -495,6 +500,8 @@ function dispatchTransaction(readyDb, payload) {
       return sessionAgentSwitchFallback(readyDb, request.args);
     case 'context.rebuild':
       return contextRebuild(readyDb, request.args);
+    case 'mcpApps.viewState.save':
+      return saveMcpAppViewState(readyDb, request.args);
     case 'message.insert':
       return messageInsert(readyDb, request.args);
     case 'message.updateContent':
@@ -762,6 +769,10 @@ function contextRebuild(readyDb, args) {
           nullableString(replacement.providerId), nullableString(replacement.effort),
           fastModeToStorage(replacement.fastMode), sessionId, expectedClearedAt,
           expectString(replacement.expectedSdkSessionId, 'replacementRoute.expectedSdkSessionId'), 'deleted')
+      : payload.expectedSdkSessionId !== undefined
+        ? readyDb.prepare(
+            'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1) AND sdk_session_id = ? AND status != ?',
+          ).run(updatedAt, sessionId, expectedClearedAt, expectString(payload.expectedSdkSessionId, 'expectedSdkSessionId'), 'deleted')
       : readyDb.prepare(
           'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
         ).run(updatedAt, sessionId, expectedClearedAt);
@@ -1084,11 +1095,13 @@ function messageDelete(readyDb, args) {
     // 保留不含正文/元数据的最小 tombstone，阻止外部 Claude/Codex transcript
     // importer 下次 messages:list 时把同一 clientId 重新导入；本地有效记录中
     // 消息内容已物理清空，普通历史读取因 rewind_at 非空完全不可见。
+    const deleteState = readyDb.prepare('DELETE FROM mcp_app_view_states WHERE message_id = ?');
     const scrubTarget = readyDb.prepare(
       "UPDATE messages SET role = 'message_tombstone', content = 'null', tool_use_id = NULL, agent_meta = NULL, agent_kind = NULL, rewind_at = ? WHERE id = ? AND session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL",
     );
     for (const target of targets) {
       const scrubbed = scrubTarget.run(updatedAt, target.id, sessionId, target.clientId);
+      deleteState.run(target.id);
       if (scrubbed.changes !== 1) {
         throw Object.assign(new Error('Message 删除竞态: ' + target.clientId), {
           code: 'PRECONDITION_FAILED',
@@ -1169,7 +1182,7 @@ function sessionsRenameTitles(readyDb, args) {
   })();
 }
 
-const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel', 'group') LIMIT 1";
 
 // ⚠️ 与 worker/opHandlers/tx.ts 的 sessionsSetStatus 必须逐字保持一致。
 function sessionsSetStatus(readyDb, args) {
@@ -1205,6 +1218,11 @@ function sessionsSetStatus(readyDb, args) {
           code: 'PRECONDITION_FAILED',
         });
       }
+      // Restoring history never makes it the live receiver again. Detach in
+      // the same transaction, before a later trigger can create its successor.
+      if (existing.source === 'bot' && (status === 'archived' || existing.status === 'archived')) {
+        readyDb.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
+      }
       const updated = updateSession.get(status, now, sessionId);
       if (closeSharedTasks && status === 'archived') {
         readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
@@ -1239,6 +1257,9 @@ function sessionsSetTerminalStatus(readyDb, args) {
     // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
     if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
+    if (existing.source === 'bot') {
+      readyDb.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
+    }
     readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = readyDb.prepare(
       'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
@@ -1250,6 +1271,9 @@ function sessionsSetTerminalStatus(readyDb, args) {
           'RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind, ' +
           'remote_host_id AS remoteHostId, source').all(now, sessionId)
       : [];
+    if (status === 'deleted') {
+      deleteDeletedSessionViewStates(readyDb, [sessionId, ...deletedSideChats.map(child => child.sessionId)]);
+    }
     for (const child of deletedSideChats) {
       readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
     }
@@ -1395,6 +1419,7 @@ function sessionImportShare(readyDb, args) {
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
       readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
+    deleteDeletedSessionViewStates(readyDb, replaceSessions.map(session => session.id));
     let count = insertSessionWithMessages(session, messages);
     if (orca) {
       const team = asRecord(orca.team, 'orca.team');

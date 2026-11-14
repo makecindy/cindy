@@ -20,6 +20,8 @@ import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
+import { publishAgentEvent } from './agent/turn-executor.mjs';
+import { redactEventForRenderer } from '../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 
 const waitFor = async condition => {
   const deadline = Date.now() + 5000;
@@ -107,18 +109,20 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(sockets.has('host'), false);
   await host.setEnabled(true);
   await waitFor(() => host.state().status === 'online');
-  for (const id of ['ios', 'android', 'desktop']) {
+  async function connect(id) {
     const client = new DeviceLinkClient({ getWsUrl: () => url, getToken: async () => `synthetic-${id}`,
       getHello: () => ({ deviceName: id, platform: id === 'desktop' ? 'darwin' : id, appVersion: 'test', remoteControlEnabled: false }),
       createWebSocket: (address, headers) => new WebSocket(address, { headers }),
     });
-    clients.push(client); client.start();
+    client.start();
     await waitFor(() => client.getStatus() === 'online');
     await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
     const reply = await client.invoke('host', { channel: 'local-db:sessions:list', args: [] });
     assert.equal(reply.ok, true, JSON.stringify(reply));
     assert.deepEqual(reply.result.map(row => row.id), ['task']);
+    return client;
   }
+  for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
   const received = clients.map(() => []);
   clients.forEach((client, i) => client.onFrame(frame => { if (frame.kind === 'push') received[i].push(frame); }));
   duplicateNext = true;
@@ -131,6 +135,37 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // Saved error rows must reach the channel desktop and mobile already listen on.
   hub.publish({ type: 'error_persisted', sessionId: 'task', persistId: 'err' });
   await waitFor(() => received.every(frames => frames.some(frame => frame.payload.channel === 'local-db:session:error-persisted')));
+  // An agent event reaches every controller as the Host publishes it for its clients: the desktop's
+  // renderer-boundary projection, without the proxy credential or Host lifecycle fields.
+  const browserEvent = { type: 'tool_use', sessionTurnGeneration: 3, sessionInstanceId: 'fixture-runtime', turnAttemptToken: 'fixture-attempt',
+    data: { toolUseId: 'browse-remote', toolName: 'mcp__cindy_browser__call_tool',
+      input: { name: 'browser', args: { action: 'open', proxyServer: 'http://fixture-user:fixture-pass@proxy.test:8080' } } } };
+  publishAgentEvent(hub, 'task', browserEvent, { inputClientId: 'single' });
+  const carries = frame => JSON.stringify(frame).includes('browse-remote');
+  await waitFor(() => received.every(frames => frames.some(carries)));
+  for (const frames of received) {
+    const pushed = frames.filter(carries);
+    assert.equal(JSON.stringify(pushed).includes('fixture-pass'), false);
+    assert.equal(JSON.stringify(pushed).includes('fixture-attempt'), false);
+    assert.ok(JSON.stringify(pushed).includes(JSON.stringify(redactEventForRenderer(browserEvent).data)));
+  }
+  // Desktop connection lifetime must not own the Host/mobile connection. Keep a
+  // mobile write admitted while the old desktop disconnects; the replacement
+  // reads the same Host without replaying the mobile operation.
+  hold = new Promise(resolve => { release = resolve; });
+  const mobileWrite = clients[0].invoke('host', { channel: 'maker:input:enqueue', args: ['task', { clientId: 'during-handoff', text: 'still connected' }] });
+  await waitFor(() => writes === 2);
+  clients[2].stop();
+  await waitFor(() => !sockets.has('desktop'));
+  release();
+  assert.equal((await mobileWrite).ok, true);
+  await waitFor(() => received[0].some(frame => frame.payload.channel === 'maker:input:projection'
+    && frame.payload.payload.pendingQueue?.[0]?.clientId === 'during-handoff'));
+  assert.equal(host.state().status, 'online');
+  assert.equal(clients[0].getStatus(), 'online');
+  clients[2] = await connect('desktop');
+  assert.equal(writes, 2, 'reattaching the desktop must not replay mobile writes');
+  hold = undefined;
   await host.revoke('ios');
   const denied = await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] }).catch(error => ({ denied: error }));
   assert.ok(denied.denied || denied.ok === false);
@@ -147,7 +182,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   await clients[1].openLink('host', { controllerName: 'android', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
   hold = new Promise(resolve => { release = resolve; });
   const inFlight = clients[1].invoke('host', { channel: 'maker:input:enqueue', args: ['task', { clientId: 'pending', text: 'wait' }] }).catch(() => null);
-  await waitFor(() => writes === 2);
+  await waitFor(() => writes === 3);
   commitVolatileAppSession('cloud', 'another-test-owner', true);
   await assert.rejects(host.setEnabled(true), /account changed/);
   let stopped = false;

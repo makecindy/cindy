@@ -10,9 +10,11 @@
  * 每条安装路径都必须显式交出一个策略：用户或 Agent 发起的安装走 `prompt`，后台自动
  * 更新走 `automatic`（需要确认就跳过，不替用户点头），只有服务端默认安装走 `exempt`。
  */
-import { pluginHasToolUi } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups, pluginHasToolUi, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 import {
   declaredAutoApproveTools,
+  declaredGhostTaskEventTopics,
+  type GhostTaskEventTopic,
   declaredGhostControlPoints,
   ghostHostUiApprovalTokens,
   ghostPermissionProjectionKey,
@@ -66,6 +68,20 @@ export type GhostInstallConsentDecision =
   | { mode: 'exempt'; reason: 'server-default-install' };
 
 const pendingPromptAborts = new Set<AbortController>();
+
+/** Only the individual group rows actually presented by this Host confer authority. */
+export function confirmedHostToolGroups(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostHostToolGroup[] {
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return declaredGhostHostToolGroups(next).filter(group => shown?.some(item => item.key === `agent:host-tools:${group}`));
+}
+export function confirmedEventTopics(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostTaskEventTopic[] {
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return declaredGhostTaskEventTopics(next).filter(topic => shown?.some(item => item.key === `subscribe:topics:${topic}`));
+}
 
 /** Use only after assertGhostInstallConsent binds the confirmed facts to this package/receiver. */
 export function confirmedTaskCapability(

@@ -385,7 +385,7 @@ describe('shared read-only insights', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'providerShare.insights.usageTitle' })); });
     expect(screen.getByText('Shared Owner')).toBeTruthy();
     command.mockImplementation(async (cmd) => cmd.action === 'insights' ? insights(false, false) : []);
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
     expect(screen.queryByText('$12.34')).toBeNull(); expect(screen.queryByText('Shared Owner')).toBeNull();
   });
   // 默认收起不挡模型；轮询不改变用户选择，切换身份不能继承展开状态。tier: unit。
@@ -397,12 +397,12 @@ describe('shared read-only insights', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByText('Shared Owner')).toBeNull();
     expect(screen.getByText('$12.34')).toBeTruthy();
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     await act(async () => { fireEvent.click(toggle); });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('Shared Owner')).toBeTruthy();
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     await act(async () => { fireEvent.click(toggle); });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
@@ -425,7 +425,7 @@ describe('shared read-only insights', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(screen.getByText('$12.34')).toBeTruthy();
     expect(screen.getByText('providerShare.insights.usageUnavailable')).toBeTruthy();
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
     expect(command.mock.lastCall?.[0].includeUsage).toBe(false);
     expect(screen.getByText('providerShare.insights.usageUnavailable')).toBeTruthy();
     fail = false;
@@ -493,7 +493,7 @@ describe('shared read-only insights', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'providerShare.insights.usageTitle' })); });
     expect(screen.getByText('Shared Owner')).toBeTruthy();
     command.mockRejectedValue(new Error(`[${code}] unavailable`));
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
     expect(screen.getByRole('status').textContent).toBe(`providerShare.insights.${message}`);
     expect(screen.queryByText('$12.34')).toBeNull();
     expect(screen.queryByText('Shared Owner')).toBeNull();
@@ -508,7 +508,7 @@ describe('shared read-only insights', () => {
     await act(async () => { listener([{ ...share, status: 'paused' }]); listener([{ ...share, status: 'active' }]); finish(insights()); });
     expect(screen.queryByText('$12.34')).toBeNull();
     command.mockImplementation(async (cmd) => cmd.action === 'insights' ? insights(true, true, cmd.includeUsage) : []);
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
     expect(screen.getByText('$12.34')).toBeTruthy();
   });
   it.each(['share', 'account', 'removed'])('discards in-flight results after %s changes', async (change) => {

@@ -34,7 +34,7 @@ import { applyCompanionRoutines } from './routines.js';
 import { applyProjectAutomations, applyProjectCarryover, applyProjectRules, mergeProjectRules, readProjectValues } from './project.js';
 import { backupTeammateProject, companionProjectIo, teammateStoreMemoryDirs, upgradeArrivedTeammate } from './projectHost.js';
 import { readTeammateMemories, readTeammateMemory, teammateMemoryDirs } from '../maker-ipc/botProjectMemory.js';
-import { companionHomes } from './homes.js';
+import { companionHomes, inactiveCompanionCopyIds } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
 import { companionHasLocalData } from './localData.js';
 import { companionCapabilitiesPatch, portableCompanionCapabilities, type CompanionArrivalNotice } from './capabilities.js';
@@ -43,6 +43,7 @@ import { replyArtifactAttachments, replyTextWithFiles } from './replyArtifacts.j
 import { mirrorColumns, readTurnImageUrls, visibleRows } from './turnImages.js';
 import type { CompanionCloudHost } from './runtime.js';
 import { createCompanionCloudState } from './state.js';
+import { CompanionProfileRepairError } from './profileRepair.js';
 import type { CompanionLog } from './types.js';
 import {
   COMPANION_AUTOMATION_PREFIX,
@@ -65,15 +66,16 @@ function profileTemplateId(capabilitiesJson: string | null, identitySource: stri
   return inferBotTemplatePresetId(identitySource);
 }
 
-/** Same singleton predicate as the profile transaction, excluding only the exact cloud id. */
+/** Same effective-local singleton predicate as the profile transaction. */
 async function findConflictingCindy(botId: string): Promise<string | null> {
   const rows = await getDbClient().drizzle
-    .select({ id: botProfiles.id, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource })
+    .select({ id: botProfiles.id, status: botProfiles.status, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource })
     .from(botProfiles).innerJoin(botProfileVersions,
       and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion)))
     .where(and(ne(botProfiles.id, botId), ne(botProfiles.status, 'archived')));
-  return rows.find(row => JSON.parse(row.config).templateId === 'cindy'
-    || inferBotTemplatePresetId(row.identity) === 'cindy')?.id ?? null;
+  const inactive = new Set(inactiveCompanionCopyIds(companionHomes.snapshot()));
+  return rows.find(row => (row.status === 'deleting' || !inactive.has(row.id))
+    && (JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'))?.id ?? null;
 }
 
 const readMcpServerNames = createMcpServerNamesReader(listCustomMcpServers, activeOwnerScopeKey);
@@ -229,13 +231,20 @@ function createMaterializer(input: {
       await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
       const restored = await restoreCloudAvatar(avatar, fence.signal);
       fence.assertCurrent();
-      await updateBotProfile({ id, name: name.slice(0, 200), enabled: true,
-        ...(description !== undefined ? { description } : {}),
-        ...(identitySource !== undefined ? { identitySource } : {}),
-        ...(userContextSource !== undefined ? { userContextSource } : {}),
-        ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined,
-      { templateId, replacesUnfinishedMeeting: true, allowSameName: true,
-        avatarFallback: 'portable' in restored ? restored.fallback === true : undefined });
+      try {
+        await updateBotProfile({ id, name: name.slice(0, 200), enabled: true,
+          ...(description !== undefined ? { description } : {}),
+          ...(identitySource !== undefined ? { identitySource } : {}),
+          ...(userContextSource !== undefined ? { userContextSource } : {}),
+          ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined,
+        { templateId, replacesUnfinishedMeeting: true, allowSameName: true,
+          avatarFallback: 'portable' in restored ? restored.fallback === true : undefined });
+      } catch (error) {
+        if ((error as { code?: unknown })?.code === 'ALREADY_EXISTS') {
+          await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
+        }
+        throw error;
+      }
       if ('imageBase64' in restored) {
         const image = decodeBotAvatarImage(restored.imageBase64);
         fence.assertCurrent();
@@ -275,6 +284,14 @@ function createMaterializer(input: {
       const root = ownerScopedUserDataPath();
       fence.assertCurrent();
       await writeBotProfileFolder(root, botId, { systemPromptOverride: text });
+    },
+    backupProfileSource: async (botId, value, fence) => {
+      const target = ownerScopedUserDataPath('companion-cloud-backups', `profile-repair-${randomUUID()}`);
+      fence.assertCurrent();
+      await fs.mkdir(target, { recursive: true, mode: 0o700 });
+      fence.assertCurrent();
+      await fs.writeFile(path.join(target, 'profile.json'), JSON.stringify({ botId, profile: value }), { flag: 'wx', mode: 0o600 });
+      fence.assertCurrent();
     },
     backupHome: async (botId, fence) => {
       const source = botProfileDir(ownerScopedUserDataPath(), botId);
@@ -445,6 +462,38 @@ export function createCompanionCloudHost(input: {
       current, log: input.log,
     }),
     readValues: botId => readCompanionValues(botId, input.selfDeviceId?.() ?? null),
+    repairProfileSources: async (botId, fields, values, fence) => {
+      fence.assertCurrent();
+      const userDataDir = ownerScopedUserDataPath();
+      const corrections = fields.map(({ field, source }) => {
+        const value = values[field];
+        if (typeof value !== 'string') throw new CompanionProfileRepairError('invalid');
+        return { field, source, value: value.trim() };
+      });
+      const readUnchanged = async () => {
+        fence.assertCurrent();
+        const folder = await readBotProfileFolder(userDataDir, botId, { strict: true });
+        fence.assertCurrent();
+        // A failed save may already have written the other field. Accept only the original
+        // or this approved correction, never a newer edit made while the draft was open.
+        if (corrections.some(({ field, source, value }) => folder[field] !== source && folder[field] !== value))
+          throw new CompanionProfileRepairError('changed');
+        return folder;
+      };
+      // Reuse the normal writer's profile-version CAS. Only the rejected fields are in the
+      // patch; later name/avatar/capability changes and all memory/skill files stay untouched.
+      await updateBotProfile({ id: botId, ...values }, undefined, async () => { await readUnchanged(); });
+      const saved = await readUnchanged();
+      // The normal writer tolerates folder I/O errors after committing the DB. On retry its
+      // DB diff can be empty, so finish only the missing file writes and propagate any error.
+      const pending = corrections.filter(({ field, value }) => saved[field] !== value);
+      if (pending.length) {
+        await writeBotProfileFolder(userDataDir, botId, Object.fromEntries(pending.map(({ field, value }) => [field, value])));
+        const verified = await readUnchanged();
+        if (corrections.some(({ field, value }) => verified[field] !== value)) throw new Error('PROFILE_REPAIR_WRITE_FAILED');
+      }
+      fence.assertCurrent();
+    },
     hasLocalData: async botId => {
       const db = getDbClient().drizzle;
       return companionHasLocalData({

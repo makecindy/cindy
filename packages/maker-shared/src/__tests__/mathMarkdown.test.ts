@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { latexToUnicodeApproximation, normalizeMathDelimiters } from '../mathMarkdown.js';
+import { latexToUnicodeApproximation, normalizeMathDelimiters, tokenizeInlineMath } from '../mathMarkdown.js';
 
 describe('normalizeMathDelimiters', () => {
   it('无定界符时返回原引用(快速通路,保住下游缓存)', () => {
@@ -271,5 +271,102 @@ describe('latexToUnicodeApproximation', () => {
 
   it('未知命令去反斜杠保留名字,永不抛错', () => {
     expect(latexToUnicodeApproximation('\\unknowncmd x')).toBe('unknowncmd x');
+  });
+});
+
+describe('tokenizeInlineMath', () => {
+  it('renders all subscript letters cleanly without falling back to raw underscores', () => {
+    expect(tokenizeInlineMath("f'_x(0,0)=f'_y(0,0)=0")).toEqual([
+      { kind: 'var', text: 'f' },
+      { kind: 'text', text: "'" },
+      { kind: 'sub', text: 'x', italic: true },
+      { kind: 'text', text: '(0,0)=' },
+      { kind: 'var', text: 'f' },
+      { kind: 'text', text: "'" },
+      { kind: 'sub', text: 'y', italic: true },
+      { kind: 'text', text: '(0,0)=0' },
+    ]);
+  });
+
+  it('keeps functions, numbers, operators and sqrt delimiters upright and avoids double parens', () => {
+    expect(tokenizeInlineMath('(\\sqrt{|x|}+\\sqrt{|y|})^2 = \\rho(\\sqrt{|\\cos\\theta|}+\\sqrt{|\\sin\\theta|})^2')).toEqual([
+      { kind: 'text', text: '(√|' },
+      { kind: 'var', text: 'x' },
+      { kind: 'text', text: '|+√|' },
+      { kind: 'var', text: 'y' },
+      { kind: 'text', text: '|)' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: ' = ' },
+      { kind: 'var', text: 'ρ' },
+      { kind: 'text', text: '(√|cos ' },
+      { kind: 'var', text: 'θ' },
+      { kind: 'text', text: '|+√|sin ' },
+      { kind: 'var', text: 'θ' },
+      { kind: 'text', text: '|)' },
+      { kind: 'sup', text: '²', italic: false },
+    ]);
+  });
+
+  it('separates variables from upright digits/operators and supports extended letter superscripts', () => {
+    expect(tokenizeInlineMath('x^4+y^4 \\le (x^2+y^2)^2 = \\rho^4')).toEqual([
+      { kind: 'var', text: 'x' },
+      { kind: 'sup', text: '⁴', italic: false },
+      { kind: 'text', text: '+' },
+      { kind: 'var', text: 'y' },
+      { kind: 'sup', text: '⁴', italic: false },
+      { kind: 'text', text: ' ≤ (' },
+      { kind: 'var', text: 'x' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: '+' },
+      { kind: 'var', text: 'y' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: ')' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: ' = ' },
+      { kind: 'var', text: 'ρ' },
+      { kind: 'sup', text: '⁴', italic: false },
+    ]);
+    expect(tokenizeInlineMath('e^z + \\|x\\|_{a,1}')).toEqual([
+      { kind: 'var', text: 'e' },
+      { kind: 'sup', text: 'ᶻ', italic: false },
+      { kind: 'text', text: ' + ‖' },
+      { kind: 'var', text: 'x' },
+      { kind: 'text', text: '‖' },
+      { kind: 'sub', text: 'a', italic: true },
+      { kind: 'sub', text: ',1', italic: false },
+    ]);
+  });
+
+  it('handles \\text / \\mathrm upright, \\frac, and deeply nested streaming inputs safely', () => {
+    expect(tokenizeInlineMath('\\text{速度} v + \\mathrm{d}x')).toEqual([
+      { kind: 'text', text: '速度 ' },
+      { kind: 'var', text: 'v' },
+      { kind: 'text', text: ' + d' },
+      { kind: 'var', text: 'x' },
+    ]);
+    expect(() => tokenizeInlineMath('\\sqrt{'.repeat(2000) + 'x')).not.toThrow();
+  });
+
+  it('ignores Object.prototype keys like \\toString and \\constructor instead of throwing', () => {
+    expect(tokenizeInlineMath('\\toString + \\constructor + \\valueOf')).toEqual([
+      { kind: 'text', text: 'toString + constructor + valueOf' },
+    ]);
+    expect(latexToUnicodeApproximation('\\toString + \\constructor')).toBe('toString + constructor');
+  });
+
+  it('keeps outer parentheses unless a single delimiter pair wraps the whole operand', () => {
+    const plain = (latex: string) => tokenizeInlineMath(latex).map((s) => s.text).join('');
+    expect(plain('\\frac{(a)+(b)}{c}')).toBe('((a)+(b))/c');
+    expect(plain('\\frac{a}{(b)+(c)}')).toBe('a/((b)+(c))');
+    expect(plain('\\sqrt{(a)+(b)}')).toBe('√((a)+(b))');
+    expect(plain('\\sqrt{|x|+|y|}')).toBe('√(|x|+|y|)');
+    expect(plain('\\sqrt{(a+b)}')).toBe('√(a+b)');
+    expect(plain('\\sqrt{|x|}')).toBe('√|x|');
+  });
+
+  it('preserves nested subscript boundaries inside superscripts', () => {
+    const plain = (latex: string) => tokenizeInlineMath(latex).map((s) => s.text).join('');
+    expect(plain('x^{a_b}')).toBe('x^(a_b)');
+    expect(plain('2^{n_1+n_2}')).toBe('2^(n₁+n₂)');
   });
 });

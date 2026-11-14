@@ -239,6 +239,8 @@ describe('CINDY · ③ 值格式按消费契约', () => {
         const isHslVal = HSL_PAT.test(val);
         if (isHslSlot) {
           expect(isHslVal, `${name}.${id} 在 HSL_FORMAT_IDS 但值非 HSL 三元组: ${val}`).toBe(true);
+        } else {
+          expect(isHslVal, `${name}.${id} 不在 HSL_FORMAT_IDS 却写成 HSL 三元组: ${val}`).toBe(false);
         }
       }
     }

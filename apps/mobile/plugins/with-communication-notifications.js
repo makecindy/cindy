@@ -34,6 +34,7 @@ function configureProject(project, config, platformRoot, projectRoot) {
   fs.mkdirSync(directory, { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'communication-notifications/NotificationService.swift'), path.join(directory, 'NotificationService.swift'));
   fs.copyFileSync(path.resolve(projectRoot, 'modules/cindy-agent-net/ios/AgentNetNotifications.swift'), path.join(directory, 'AgentNetNotifications.swift'));
+  fs.copyFileSync(path.resolve(projectRoot, 'modules/cindy-notification-state/ios/NotificationRetirement.swift'), path.join(directory, 'NotificationRetirement.swift'));
   const keychainGroup = `$(AppIdentifierPrefix)${config.ios.bundleIdentifier}.agent-net-notifications`;
   fs.writeFileSync(path.join(directory, 'Info.plist'), plist.default.build({ ...extensionInfo(), CindyAgentNetKeychainGroup: keychainGroup }));
   // Communication Notifications belongs to the containing app target. Xcode
@@ -47,13 +48,15 @@ function configureProject(project, config, platformRoot, projectRoot) {
   if (!target) {
     const added = project.addTarget(TARGET, 'app_extension', TARGET, bundleId);
     target = [added.uuid, added.pbxNativeTarget];
-    project.addBuildPhase([`${TARGET}/NotificationService.swift`, `${TARGET}/AgentNetNotifications.swift`], 'PBXSourcesBuildPhase', 'Sources', added.uuid);
+    project.addBuildPhase([`${TARGET}/NotificationService.swift`, `${TARGET}/AgentNetNotifications.swift`, `${TARGET}/NotificationRetirement.swift`], 'PBXSourcesBuildPhase', 'Sources', added.uuid);
     project.addBuildPhase([], 'PBXFrameworksBuildPhase', 'Frameworks', added.uuid);
     project.addBuildPhase(Object.keys(portraits).map(name => `${TARGET}/teammate-${name}.png`), 'PBXResourcesBuildPhase', 'Resources', added.uuid);
   }
   const [, nativeTarget] = target;
   const swiftSource = `${TARGET}/AgentNetNotifications.swift`;
   if (!project.hasFile(swiftSource)) project.addSourceFile(swiftSource, { target: target[0] });
+  const retirementSource = `${TARGET}/NotificationRetirement.swift`;
+  if (!project.hasFile(retirementSource)) project.addSourceFile(retirementSource, { target: target[0] });
   const configurations = project.pbxXCConfigurationList()[nativeTarget.buildConfigurationList].buildConfigurations;
   for (const item of configurations) {
     const settings = project.pbxXCBuildConfigurationSection()[item.value].buildSettings;
@@ -94,6 +97,7 @@ module.exports = function withCommunicationNotifications(config) {
     return mod;
   });
   config = withInfoPlist(config, mod => {
+    mod.modResults.UIBackgroundModes = [...new Set([...(mod.modResults.UIBackgroundModes ?? []), 'remote-notification'])];
     mod.modResults.CindyAgentNetKeychainGroup = `$(AppIdentifierPrefix)${config.ios.bundleIdentifier}.agent-net-notifications`;
     mod.modResults.NSUserActivityTypes = [...new Set([...(mod.modResults.NSUserActivityTypes ?? []), 'INSendMessageIntent'])];
     return mod;

@@ -33,19 +33,19 @@ import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval
 import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.desktop.js';
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
+import { onSubscriptionPoolCodexModelsChanged } from '../subscription-accounts/runtime.js';
 import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { setSessionArchiveSyncRequester } from '../localDb/sessionArchiveSync.js';
 import { getActiveAppSession, activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { remoteCodexProvider } from './ssh-codex-models.js';
-import { getActiveAuthRealm } from '../authManager.js';
+import { getActiveAuthRealm, getAuthState } from '../authManager.js';
 import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
 import { hasCodexApiConnections, setCodexApiModelProbe } from './codex-api-model-capabilities.js';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, type WorktreeRuntimeLease } from '../worktree/runtimeLeases';
 import { assertPrecreatedSessionNotCancelled } from '../worktree/precreatedCancellation';
-import { readCodexContextWindowInfo } from './codex-context-window.js';
 import { app, BrowserWindow } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -119,6 +119,7 @@ import {
   type BotProfileRuntimeSnapshot,
 } from '../maker-ipc/botProfileRuntime.js';
 import { collectBotOwnSkillMounts } from '../maker-ipc/botSkillService.js';
+import { collectGroupCollaborationSkillMount, isGroupCindyTask } from '../maker-ipc/groupCollaborationSkill.js';
 import { buildBotMcpCatalog } from './botMcpCatalog.js';
 import { createBotCapabilityService, type BotCapabilityServiceDeps, type BotCapabilityUpdate } from '../maker-ipc/botCapabilityService.js';
 import {
@@ -191,7 +192,7 @@ import {
 import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { captureCodexLocalAuthPolicy, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import { captureCodexLocalAuthPolicy, resolveConnectedDefaultProviderIdForModel, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -226,12 +227,10 @@ import {
   refreshCatalogDerivedModels,
   resolvePiRuntimeModelDescriptor,
   resolvePiGatewayDescriptorProviderId,
-  resolveVerifiedContextWindow,
-  resolveModelDefaultContextWindow,
-  resolveModelMaxOutputTokens,
 } from './catalog-to-descriptors.js';
-import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
-import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
+import { resolveDesktopModelContextProviderId, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
+import { createClaudeModelResolvers, createCodexModelResolvers } from './engineModelResolvers.js';
+import { createCodexCapabilityRouting } from './codexCapabilityRouting.js';
 import {
   prepareCodexCustomContextCatalog,
   prepareCodexGuestModelCatalog,
@@ -321,7 +320,7 @@ import {
   ESSENTIAL_PLUGIN_IDS,
   resolveBotAllowedBuiltinPluginIds,
 } from './plugins/types.js';
-import { cleanupComputerDriverSession } from '../mcp-integrations/computer.js';
+import { cleanupComputerDriverSession } from '../mcp-integrations/computer.desktop.js';
 import { createPluginRegistry, resetPluginRegistry } from './plugins/index.js';
 import {
   withCodexMcpDiscoveryContext,
@@ -420,7 +419,6 @@ import {
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
 import { prepareSharedProjectSkillLinks } from './shared-global-skills.js';
 import {
-  buildDesktopCapabilityRoutingPolicy,
   DESKTOP_CAPABILITY_ROUTING_POLICY,
 } from './capability-routing.js';
 import {
@@ -542,6 +540,13 @@ setActiveCatalogChangedListener((revision) => {
     });
     return;
   }
+});
+
+// Cold-start pool discovery completes after Maker construction. Keep the same
+// capability-before-broadcast ordering as the active catalog, including remote views.
+onSubscriptionPoolCodexModelsChanged(() => {
+  refreshSelectableModelsAndBroadcast({ providerId: 'openai' });
+  modelContextRuntimeRefreshListener?.();
 });
 
 /**
@@ -1021,26 +1026,27 @@ export function getMaker(): Maker {
   }
   if (!_maker) {
     makerStartupGate.assertComplete();
-    // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
-    // 顺序错了, 早抛比 session.start 时再炸更清晰。
-    const claudePath = getReadyBinaryPath('claude-code');
-    if (!claudePath) {
-      throw new Error(
-        'getMaker: Claude binary not provisioned (bootstrap must run agent-binaries.prepare("claude-code") before getMaker)',
-      );
-    }
-    const codexPath = getCachedBinaryStatus('codex').binaryPath;
-    if (!codexPath) {
-      throw new Error(
-        'getMaker: Codex binary not provisioned (bootstrap must run agent-binaries.prepare("codex") before getMaker)',
-      );
-    }
-    ensureCodexCliLauncher(codexPath);
-    // bundled ripgrep 检查与上面 claude/codex 二进制同层:真正的启动期 fail-fast
-    // 在 splash check-environment(Phase 2.5,缺 rg 时 splash 进失败态可重试);
-    // 这里是防御性断言 —— 走到本函数说明 bootstrap 已完成环境检查,缺 rg 即顺序
-    // 错误,早抛比 spawn 时再炸清晰(throw 会被 bootstrap 的 register catch 兜住
-    // 并留 ERROR 日志,与 claude/codex 缺失的处理一致)。
+    // Resolve paths only when an agent is used. A fresh offline install still
+    // needs Maker's local history/settings IPCs, and background installation can
+    // make an agent available without rebuilding Maker or disturbing sessions.
+    const requireBinary = (kind: 'claude-code' | 'codex'): string => {
+      const binary = getReadyBinaryPath(kind);
+      if (!binary) {
+        const name = kind === 'claude-code' ? 'Claude Code' : 'Codex';
+        throw new Error(`${name} is not installed. Connect to the network, then open Settings → About to install it.`);
+      }
+      return binary;
+    };
+    // The launcher only changes with the resolved install; avoid file IO per spawn.
+    let codexLauncherFor: string | undefined;
+    const codexPath = (): string => {
+      const binary = requireBinary('codex');
+      if (codexLauncherFor !== binary) {
+        ensureCodexCliLauncher(binary);
+        codexLauncherFor = binary;
+      }
+      return binary;
+    };
     ensureBundledRipgrepReady();
 
     // 图片送进模型前的 last-mile resize (省 vision token)。host 注入 logger
@@ -1459,7 +1465,7 @@ export function getMaker(): Maker {
       scanLocalCustomizations,
       auth: desktopClaudeAuthAdapter,
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
-      binaryPath: claudePath,
+      get binaryPath() { return requireBinary('claude-code'); },
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,
@@ -1499,26 +1505,10 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'claude-code'),
       },
-      resolveModelContextLimit: (providerId, modelId) => {
-        const catalog = getDesktopSelectableCatalog();
-        const source = resolveDesktopModelContextProviderId(catalog, 'claude-code', providerId, modelId);
-        return source ? readModelContextLimit('claude-code', source, modelId)
-          ?? resolveModelDefaultContextWindow(catalog, 'claude-code', source, modelId) : null;
-      },
-      resolveModelMaxOutputTokens: (providerId, modelId) => {
-        const catalog = getDesktopSelectableCatalog();
-        const source = resolveDesktopModelContextProviderId(catalog, 'claude-code', providerId, modelId);
-        return resolveModelMaxOutputTokens(catalog, 'claude-code', source, modelId);
-      },
-      resolveModelCompactionPct: (providerId, modelId) => {
-        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId);
-        return resolveModelCompactionPct(getDesktopSelectableCatalog(), 'claude-code', source, modelId);
-      },
-      resolveVerifiedContextWindow: (providerId, modelId) =>
-        resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code',
-          resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId), modelId),
-      resolveModelEfforts: (providerId, modelId) =>
-        resolveDesktopModelEfforts(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
+      ...createClaudeModelResolvers({
+        getCatalog: getDesktopSelectableCatalog,
+        resolveContextProviderId: resolveDesktopModelContextProviderId,
+      }),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
       // 实现 (./claude-hooks/*.ts), maker-core 不感知具体逻辑。
       //
@@ -1774,6 +1764,11 @@ export function getMaker(): Maker {
       cindyMakeProvider,
     ];
     _mcpProviders.codex = codexMcpProviders;
+    // Shared with the Node Host (codexCapabilityRouting.ts); both read on every call.
+    const codexCapabilityRouting = createCodexCapabilityRouting({
+      getBridgeServerNames: () => getActiveCodexBridgeServerNames(),
+      getDisabledRuntimePluginIds: (workingDir) => getPluginRegistry().getDisabledRuntimePluginIds(workingDir),
+    });
     const codexAgent = new CodexAgent({
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
@@ -1782,7 +1777,7 @@ export function getMaker(): Maker {
       prepareCodexSkills: prepareCindyCodexSkills,
       auth: desktopCodexAuthAdapter,
       runtimeConfig: desktopCodexRuntimeConfig,
-      binaryPath: codexPath,
+      get binaryPath() { return codexPath(); },
       logger: desktopMakerLogger,
       disableCodexPluginRuntime: true,
       registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
@@ -1794,35 +1789,9 @@ export function getMaker(): Maker {
       // The bridge snapshot is the applied capability surface; the preference
       // alone can be ahead of it while a busy Codex turn defers refresh.
       get capabilityRouting() {
-        return buildDesktopCapabilityRoutingPolicy({
-          cindyComputerAvailable:
-            getActiveCodexBridgeServerNames()?.includes('cindy_computer') === true,
-        });
+        return codexCapabilityRouting.capabilityRouting();
       },
-      resolveCapabilityRouting: async ({
-        workingDir,
-        remoteHostId,
-        vendorOptions,
-        codexBrowserUseProvisioned,
-        ensureCodexBrowserUseReady,
-      }) => {
-        const disabledPluginIds =
-          readDisabledBuiltinPluginIds(vendorOptions) ??
-          getPluginRegistry().getDisabledRuntimePluginIds(workingDir);
-        const cindyBrowserEnabled = !disabledPluginIds.includes('browser');
-        let connectedCodexBrowserUse = codexBrowserUseProvisioned;
-        if (!remoteHostId && !cindyBrowserEnabled && connectedCodexBrowserUse) {
-          connectedCodexBrowserUse = await ensureCodexBrowserUseReady();
-        }
-        return buildDesktopCapabilityRoutingPolicy({
-          cindyComputerAvailable:
-            getActiveCodexBridgeServerNames()?.includes('cindy_computer') === true,
-          cindyBrowserEnabled,
-          codexBrowserUseAvailable: connectedCodexBrowserUse,
-          codexBrowserUseProvisioned,
-          remoteHostId,
-        });
-      },
+      resolveCapabilityRouting: codexCapabilityRouting.resolveCapabilityRouting,
       makerMemory: makerMemoryManager,
       getGhostRosterPrompt,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
@@ -1832,23 +1801,16 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'codex'),
       },
-      // Resolve settings by the actual provider route. Model specifications never
-      // overwrite a native usage report; explicit settings configure the CLI itself.
-      resolveModelContextLimit: (providerId, modelId) => {
-        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
-        return source ? readModelContextLimit('codex', source, modelId) : null;
-      },
-      resolveModelCompactionPct: (providerId, modelId) => {
-        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
-        return resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, modelId);
-      },
-      resolveVerifiedContextWindow: (providerId, modelId) =>
-        resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex',
-          resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId), modelId),
-      resolveCodexContextWindowInfo: (modelId, config, reportedUsableWindow, codexHome) =>
-        readCodexContextWindowInfo({ codexHome: codexHome ?? getCodexHome(), binaryPath: codexPath, modelId, config, reportedUsableWindow }),
+      // Context limit, compaction, verified window and both Codex context-window
+      // resolvers: shared with the Node Host (engineModelResolvers.ts).
+      ...createCodexModelResolvers({
+        getCatalog: getDesktopSelectableCatalog,
+        resolveContextProviderId: resolveDesktopModelContextProviderId,
+        getCodexHome,
+        getCodexBinaryPath: codexPath,
+      }),
       prepareCodexHostToolCatalog: async (modelId, contextWindow) => {
-        let catalog = await readNativeCodexCatalog(codexPath, getCodexHome());
+        let catalog = await readNativeCodexCatalog(codexPath(), getCodexHome());
         if (!findCodexCatalogModel(catalog, modelId)) catalog.models.push(nativeCodexFallbackModel(modelId));
         if (contextWindow !== null) catalog = patchCodexModelMaxContextWindow(catalog, modelId, contextWindow);
         const restricted = { ...catalog, models: catalog.models.map(model => ({...model, apply_patch_tool_type: null, supports_search_tool: false})) };
@@ -1867,13 +1829,6 @@ export function getMaker(): Maker {
         return target;
       },
       resolveCodexLocalAuthPolicy: captureCodexLocalAuthPolicy,
-      resolveCodexThreadContextWindow: (providerId, modelId) => {
-        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
-        const override = source ? readModelContextLimit('codex', source, modelId) : null;
-        return override ?? resolveModelDefaultContextWindow(
-          getDesktopSelectableCatalog(), 'codex', source, modelId,
-        );
-      },
       isCodexAccountProvider,
       isolateCodexAccountSessions: true,
       onCodexLocalModelsListed: createCodexLocalModelSink(refreshCustomProvidersIntoCatalog),
@@ -1910,7 +1865,7 @@ export function getMaker(): Maker {
       resolveCodexSubagentRoutingSignature: createCodexRoutingSignature(() =>
         getDesktopProviderService().listProviders({ allowSideEffects: false })),
       prepareCodexExtraSpawnConfig: createCodexSpawnConfig({
-        binaryPath: codexPath,
+        get binaryPath() { return codexPath(); },
         getCodexHome, getCodexExtraSpawnConfig, broadcastCodexRuntimeRoute, readClaudeApiKey, isReplacedCindyGatewayKey, getDesktopSelectableCatalog, resolveDesktopModelContextProviderId,
         hasCodexOAuthLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLogin(),
         listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
@@ -2120,8 +2075,12 @@ export function getMaker(): Maker {
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
     // 保留同一份可变 map，供可选 Pi runtime 在 Maker 构造后动态注册。
     const makerAgents: ConstructorParameters<typeof Maker>[0]['agents'] = {
-      'claude-code': withSubscriptionAccounts(claudeAgent),
-      codex: withSubscriptionAccounts(codexAgent),
+      'claude-code': withSubscriptionAccounts(claudeAgent, desktopClaudeAuthAdapter),
+      codex: withSubscriptionAccounts(codexAgent, {
+        getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
+        resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
+        resolveDefaultProvider: model => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
+      }),
     };
     attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
     if (makerMemoryManager.isEnabled()) {
@@ -2559,6 +2518,7 @@ export function getMaker(): Maker {
     });
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
+      getUserName: () => getAuthState().user?.name,
       listSkills: async ({ agentKind, workingDir, remoteHostId }) => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
         const result = await _maker.listAgentSkills(agentKind, {
@@ -2791,6 +2751,15 @@ export function getMaker(): Maker {
           );
           if (botRuntimeSnapshot) {
             pendingBotRuntimeSnapshots.set(sessionId, botRuntimeSnapshot);
+          }
+          // A group's Cindy task starts with Cindy's 「群协作」 Skill, mounted for that task alone
+          // (bot-group-chat.md §9). A missing Skill never keeps the task from starting.
+          if (!createOpts.remoteHostId && !createOpts.botRuntimeProfile && isGroupCindyTask(sessionId)) {
+            const mount = await collectGroupCollaborationSkillMount(app.getPath('userData')).catch((error) => {
+              desktopMakerLogger.warn('Group collaboration Skill not mounted', { error: String(error) });
+              return null;
+            });
+            if (mount) createOpts.hostSkills = [mount];
           }
           if (botRuntimeSnapshot?.unavailableSkills.length) {
             desktopMakerLogger.warn('Bot configured Skills unavailable for runtime', {

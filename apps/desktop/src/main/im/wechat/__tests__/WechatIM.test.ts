@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { IMHost } from '@cindy/im';
 import {
@@ -12,6 +12,7 @@ import {
   beginInteractionRoute, installDesktopInteractionHandler, requestHostInteraction,
 } from '../../../maker-ipc/interactionRouter';
 import type { SharedPermission } from '../../../maker-ipc/sharedPermission';
+import { setMainLocale } from '../../../i18n.desktop';
 import { encryptWechatContextToken } from '../contextCrypto';
 import { __testing, sessionIdFor, WechatIM, type WechatIMDeps } from '../WechatIM';
 
@@ -26,6 +27,10 @@ vi.mock('../mediaStaging', async (importOriginal) => {
     removeReleasedWechatFiles: mediaMocks.removeReleasedWechatFiles,
   };
 });
+
+// 断言用的是中文控制文案：固定主进程语言，避免跟随测试机系统语言。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('WechatIM host boundary', () => {
   // #9486: discovery must use the credential-verified owner and current inbox

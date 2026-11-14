@@ -12,6 +12,7 @@
     "start": "node --import tsx --import ./src/loaders/register-raw.mjs src/main.ts",
     "test": "node --import tsx --import ./src/loaders/register-raw.mjs --test \"src/**/*.test.mjs\"",
     "build": "node scripts/build.mjs",
+    "test:ipc-route": "node --import tsx --import ./src/loaders/register-raw.mjs scripts/ipc-route.e2e.mjs",
     "test:lifecycle": "node scripts/lifecycle.e2e.mjs",
     "test:scheduler": "node --import tsx --import ./src/loaders/register-raw.mjs scripts/scheduler-runtime.e2e.mjs"
   },
@@ -20,17 +21,19 @@
     "tsx": "^4.19.0"
   },
   "dependencies": {
+    "@cindy/anthropic-compat-proxy": "workspace:*",
     "@cindy/auth-client": "workspace:*",
+    "@cindy/browser-control-runtime": "workspace:*",
     "@cindy/device-link": "workspace:*",
     "@cindy/maker-core": "workspace:*",
     "@cindy/maker-shared": "workspace:*",
     "@cindy/mcps": "workspace:*",
     "@cindy/model-providers": "workspace:*",
-    "cindy-tools": "workspace:*",
+    "@cindy/plugin-protocol": "workspace:*",
     "better-sqlite3": "^12.9.0",
+    "cindy-tools": "workspace:*",
     "node-machine-id": "^1.1.12",
     "playwright-core": "1.63.0",
-    "ws": "^8.18.0",
-    "@cindy/anthropic-compat-proxy": "workspace:*"
+    "ws": "^8.18.0"
   }
 }

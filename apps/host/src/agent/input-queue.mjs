@@ -8,12 +8,14 @@ import { randomUUID } from 'node:crypto';
 import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
 import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
+import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
 
 const attachmentLog = createLogger('host-attachments');
 
-function storedSessionOptions(stored) {
+/** Create options for every start from a stored task row (send, restore, resume). */
+export function storedSessionOptions(stored) {
   return { agentKind: makerKind(stored.agentKind), model: stored.model || '',
     workingDir: stored.workingDir || '', effort: stored.effort || undefined,
     permissionMode: stored.permissionMode || undefined, providerId: stored.providerId ?? undefined,
@@ -164,8 +166,9 @@ export function createInputQueue(deps) {
       isStoppingRuntime: () => closing,
       persistMessage: deps.persistMessage ?? (async () => {}),
       onPersistenceError: persistenceFailed,
-      onTerminal: (id, type, error, meta) => {
-        coordinator.onTurnEvent(id, type, error, undefined, meta);
+      onTerminal: (id, type, error, meta, direct) => {
+        if (direct) coordinator.wakeSession(id, 'host-turn-settled');
+        else coordinator.onTurnEvent(id, type, error, undefined, meta);
         deps.onSessionSettled?.(id);
       },
     });
@@ -216,6 +219,11 @@ export function createInputQueue(deps) {
       onUserMessagePersistenceFailed: (id, item, options) => {
         afterSnapshot(id, () => attachmentOwnership.markPersistenceFailed(id, item.clientId, options));
       },
+      // Desktop register.ts (AgentInputCoordinator hooks): after the user row is durable
+      // and before vendor dispatch, open the turn change record, then the Git baseline.
+      beforeDispatchUserTurn: executor.beforeDispatchUserTurn,
+      // A durable turn that never reached the vendor: drop the record, then the baseline.
+      onUndispatchedUserTurn: executor.onUndispatchedUserTurn,
       onAcceptedQueuedMessage: async (id, item) => {
         schedulePreparations.delete(item.clientId);
         scheduleDiscardWatchers.delete(item.clientId);
@@ -308,6 +316,9 @@ export function createInputQueue(deps) {
       return project(coordinator.getProjection(id));
     }
     const api = {
+      wireHostSession: session => { assertCurrent(); executor.wireHostSession(session); },
+      beginHostTurn: id => command(id, () => executor.beginHostTurn(id)),
+      taskActionInput: id => readTaskActionInput(id, sessionId => deps.getMaker()?.getSession(sessionId), coordinator),
       schedulerQueue: () => ({ ...scheduleBridge,
         ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
         isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },
@@ -444,6 +455,8 @@ export function createInputQueue(deps) {
       // This endpoint clears pending inputs, not persisted history. Only the
       // history service may advance the durable conversation clear boundary.
       clearSession: id => stop(id, { keepQueue: false }),
+      /** The running turn's accepted input, as the desktop's Auto-review context reads it. */
+      acceptedInputProvenance: id => coordinator.getAcceptedInputProvenance(id),
       async disposeSession(id) {
         stateFor(id).closed = true;
         await stop(id);

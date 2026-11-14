@@ -87,6 +87,56 @@ function supportsWindowsSystemBackdrop(options?: ResolveVibrancyConfigOptions): 
   return build !== null && build >= WINDOWS_SYSTEM_BACKDROP_MIN_BUILD;
 }
 
+// Windows: a BrowserWindow created with `transparent: true` must not carry a system backdrop.
+// Measured on Windows 11 build 26200 (2026-11-11): whenever any window on the desktop is shown
+// or hidden, DWM intermittently stops drawing what lies behind such a window, so the material
+// blurs nothing and the translucent sidebar flips to a flat dark fill. A regular frameless
+// window with the same material is stable, and so is a transparent window without a material.
+// `transparent` is fixed at creation: choose it from what the window has to show, and keep a
+// running window usable when that need changes before the next launch.
+const windowsTransparentWindows = new WeakSet<BrowserWindow>();
+
+export function markWindowsTransparentWindow(win: BrowserWindow): void {
+  windowsTransparentWindows.add(win);
+}
+
+export function isWindowsTransparentWindow(win: BrowserWindow): boolean {
+  return windowsTransparentWindows.has(win);
+}
+
+/** See-through with no system material behind it: only a transparent window can show this. */
+export function needsWindowsTransparentWindow(config: VibrancyConfig): boolean {
+  return config.backgroundMaterial === 'none' && config.backgroundColor === '#00000000';
+}
+
+/**
+ * `rememberedNeed` is the last need the main window reported (writeWindowTransparencyHint).
+ * Systems without a system backdrop have no material to conflict with, and clear desktop
+ * transparency must stay available there without a restart.
+ */
+export function resolveWindowsWindowTransparent(
+  creationConfig: VibrancyConfig,
+  rememberedNeed: boolean | undefined,
+  options?: ResolveVibrancyConfigOptions,
+): boolean {
+  if (!supportsWindowsSystemBackdrop(options)) return true;
+  return rememberedNeed === true || needsWindowsTransparentWindow(creationConfig);
+}
+
+/**
+ * A regular window cannot be clear, so it keeps the frosted desktop until the next launch
+ * creates a transparent one. A transparent window shows whatever is requested.
+ */
+export function fitWindowsBackdropToWindow(
+  config: VibrancyConfig,
+  windowIsTransparent: boolean,
+  options?: ResolveVibrancyConfigOptions,
+): VibrancyConfig {
+  if (windowIsTransparent || !needsWindowsTransparentWindow(config)) return config;
+  if (!supportsWindowsSystemBackdrop(options)) return config;
+  return { ...config, backgroundMaterial: 'acrylic' };
+}
+
 function resolveBackdropMaterial(): WindowsBackdropMaterial {
   const raw = process.env.XDT_BACKDROP_MATERIAL;
   if (!raw) return 'acrylic';

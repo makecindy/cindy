@@ -15,6 +15,11 @@ the Skill files, but cannot run the workflow without that host capability.
 
 Cindy materializes these resources into its user-data directory at startup. Do not put user-authored Skills here.
 
+`cindy-theme-creator` is authored and maintained by Cindy. It creates complete
+data-only theme packages with colors, brand images, fonts, wallpaper, reading
+styles, density and motion, applied by the shared Host appearance service. Its
+read-only checker and packager include v1 compatibility and verification guidance.
+
 ## Bundle version records
 
 The bundle version is a fixed base plus the number of `*.md` files in `_versions/`. Whenever

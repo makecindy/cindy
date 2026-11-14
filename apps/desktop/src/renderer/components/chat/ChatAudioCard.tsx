@@ -232,7 +232,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
         {/* Top row: title + copy */}
         <div className="flex items-start gap-3">
           <div
-            className="min-w-0 flex-1 truncate text-15 font-semibold text-[var(--msg-tool-card-text)]"
+            className="min-w-0 flex-1 truncate text-15 font-medium text-[var(--msg-tool-card-text)]"
             title={title}
           >
             {title}

@@ -272,9 +272,18 @@ describe('desktop auth session-expiry detection', () => {
       resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
       'utf8',
     ).replace(/\r\n/g, '\n');
+    // The availability check is shared with the Node Host (ghostAvailability.ts); the desktop
+    // export forwards to it with this process's manager.
     const start = ghostSource.indexOf('export function isGhostAvailableForActiveSession(');
     const end = ghostSource.indexOf('\n}\n', start);
-    const body = ghostSource.slice(start, end);
+    expect(ghostSource.slice(start, end)).toContain('return isGhostAvailableForSessionIn(managerSingleton, id);');
+    const availabilitySource = readFileSync(
+      resolve(process.cwd(), 'src/main/cindy-brain/ghostAvailability.ts'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    const coreStart = availabilitySource.indexOf('export function isGhostAvailableForSessionIn(');
+    expect(coreStart).toBeGreaterThan(-1);
+    const body = availabilitySource.slice(coreStart, availabilitySource.indexOf('\n}\n', coreStart));
     expect(body).toContain('isAppSessionBoundaryPending()');
     expect(body).toContain('getAppCapabilities().canUseCindyAccountServices');
     expect(body).not.toContain('isGhostSkillProjectionBoundaryStableForOwner');

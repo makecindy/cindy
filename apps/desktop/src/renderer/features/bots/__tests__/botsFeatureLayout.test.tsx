@@ -29,7 +29,7 @@ function Navigation() {
     <>
       <output data-testid="location">{location.pathname + location.search + location.hash}</output>
       <button onClick={() => navigateToView('cc-agent')}>Tasks</button>
-      <button onClick={() => navigateToView('bots')}>Teammates</button>
+      <button onClick={() => navigateToView('bots')}>Buddies</button>
       {['/bots', '/bots/roster', '/bots/roster/?step=avatar#picker', '/bots/remote/host/one', '/bots/missing'].map((path) => (
         <button key={path} onClick={() => navigate(path)}>
           {path}
@@ -85,7 +85,7 @@ it.each(['/bots/roster', '/bots/roster/?step=avatar#picker'])(
     expect(screen.getByTestId('location').textContent).toBe(creationPath);
     fireEvent.click(screen.getByRole('button', { name: 'Tasks' }));
     expect(screen.getByTestId('location').textContent).toBe('/cc-agent');
-    fireEvent.click(screen.getByRole('button', { name: 'Teammates' }));
+    fireEvent.click(screen.getByRole('button', { name: "Buddies" }));
     expect(screen.getByTestId('location').textContent).toBe('/bots');
     expect(history.current.lastBotId).toBe('one');
   },
@@ -95,7 +95,7 @@ it('uses the entry resolver after creation even without a remembered teammate', 
   const history = { current: { lastMatchedKey: 'bots', paths: {} } as MainViewHistory };
   mount(history, '/bots/roster');
   fireEvent.click(screen.getByRole('button', { name: 'Tasks' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Teammates' }));
+  fireEvent.click(screen.getByRole('button', { name: "Buddies" }));
   expect(screen.getByTestId('location').textContent).toBe('/bots');
   expect(history.current.lastBotId).toBeUndefined();
 });
@@ -105,7 +105,7 @@ it('still restores a remote teammate route when no creation page was visited', (
   mount(history);
   fireEvent.click(screen.getByRole('button', { name: '/bots/remote/host/one' }));
   fireEvent.click(screen.getByRole('button', { name: 'Tasks' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Teammates' }));
+  fireEvent.click(screen.getByRole('button', { name: "Buddies" }));
   expect(screen.getByTestId('location').textContent).toBe('/bots/remote/host/one');
   expect(history.current.lastBotId).toBe('one');
 });
