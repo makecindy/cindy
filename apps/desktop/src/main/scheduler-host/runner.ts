@@ -1681,6 +1681,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
         : {}),
       title: isHeartbeat ? undefined : `[Schedule] ${schedule.name}`,
       resumeSessionId,
+      // Scheduler-created sessions bypass the regular maker IPC fallback.
+      // Carry the current host setting so Codex mounts cindy_memory on its
+      // first turn, just like a manually created session.
+      makerMemoryEnabled: this.deps.maker.makerMemory?.isEnabled() ?? false,
       // Explicit null means Cindy's default route for Pi.
       providerId: createProviderId,
       vendorOptions: { source: 'scheduler' as const },
