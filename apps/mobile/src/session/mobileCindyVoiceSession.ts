@@ -76,6 +76,7 @@ export class MobileCindyVoiceRunContext {
   async createAsrConnection(asrProvider: string): Promise<{
     websocketUrl: string;
     authorizationToken: string;
+    sessionId: string;
   }> {
     let session: VoiceSessionResponse;
     try {
@@ -103,7 +104,7 @@ export class MobileCindyVoiceRunContext {
     }
     this.latestSessionId = session.sessionId;
     this.latestRefineRequestLimit = resolveManagedRefineRequestLimit(session.refiner?.maxRefineRequests);
-    return { websocketUrl: session.asr.websocketUrl, authorizationToken: session.ticket };
+    return { websocketUrl: session.asr.websocketUrl, authorizationToken: session.ticket, sessionId: session.sessionId };
   }
 
   private async createVoiceSession(
