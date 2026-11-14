@@ -16,8 +16,10 @@ import { isAuthorized } from './api-token.mjs';
 import { clientErrorMessage } from './client-error.mjs';
 import { createWebAuth, isLoopbackRequest, CONNECT_PAGE, CONNECT_SCRIPT } from './web-auth.mjs';
 import { buildWebShim } from './web-client-build.mjs';
+import { HOST_IPC_MANIFEST_PATH, HOST_IPC_PATH_PREFIX } from '@cindy/maker-shared/host-ipc-registry';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
+const HOST_PROMPT_BUFFER_BYTES = 1024 * 1024;
 
 function send(response, status, body, extraHeaders = {}) {
   response.writeHead(status, { ...JSON_HEADERS, ...extraHeaders });
@@ -131,6 +133,14 @@ export function createHostServer(input) {
           clientHandoffReady: health.clientHandoffReady === true });
         return;
       }
+      if (request.method === 'POST' && url.pathname === HOST_IPC_MANIFEST_PATH) {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        // Mismatches were rejected above; the manifest additionally requires the pin.
+        if (expectedInstance === undefined) { send(response, 428, { error: 'host_instance_required' }); return; }
+        if (!deps.ipcRoute) { send(response, 404, { error: 'not_found' }); return; }
+        send(response, 200, deps.ipcRoute.manifest());
+        return;
+      }
       const ownerRequest = (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/auth/') && url.pathname !== '/api/me')
         || ['/control/platform', '/control/remote', '/events', '/chat', '/sessions', '/plugins'].includes(url.pathname) || url.pathname.startsWith('/sessions/');
       if (ownerRequest) {
@@ -227,6 +237,14 @@ export function createHostServer(input) {
         }
         const caller = deps.webAuth.caller?.(request.headers.cookie)
           ?? (isAuthorized(request.headers.authorization, deps.token) ? `local-api:${deps.instanceId}` : null);
+        if (url.pathname.startsWith(HOST_IPC_PATH_PREFIX)) {
+          if (!deps.ipcRoute) { send(response, 404, { error: 'not_found' }); return; }
+          let channel;
+          try { channel = decodeURIComponent(url.pathname.slice(HOST_IPC_PATH_PREFIX.length)); } catch { channel = ''; }
+          const routed = await deps.ipcRoute.handle({ channel, caller, headers: request.headers, body });
+          send(response, routed.status, routed.body);
+          return;
+        }
         const result = await service(url.pathname, body, { caller });
         send(response, result.status, result.body);
         return;
@@ -277,6 +295,17 @@ export function createHostServer(input) {
           response.write(`${idLine}data: ${JSON.stringify(event)}\n\n`);
           response.flush?.();
         });
+        // Confirmations go to one authenticated controller and never enter the
+        // replay buffer. Disconnect cancels its pending answers; replay cannot
+        // resurrect an old permission dialog.
+        const confirmationCaller = deps.webAuth.caller?.(request.headers.cookie)
+          ?? (isAuthorized(request.headers.authorization, deps.token) ? `local-api:${deps.instanceId}` : null);
+        const disconnectController = confirmationCaller && versioned && url.searchParams.get('confirmations') === '1' ? deps.connectController?.(confirmationCaller, event => {
+          if (response.writableEnded || response.destroyed || response.writableLength > HOST_PROMPT_BUFFER_BYTES || !isWebAuthorized(request, deps)) return false;
+          const written = response.write(`data: ${JSON.stringify({ type: 'host_prompt', channel: event.channel, payload: event.payload })}\n\n`);
+          response.flush?.();
+          return written || response.writableLength === 0;
+        }) : undefined;
         const keepAlive = setInterval(() => {
           if (response.writableEnded) return;
           if (!isWebAuthorized(request, deps)) { response.end(); return; }
@@ -284,6 +313,7 @@ export function createHostServer(input) {
         }, 15_000);
         const revoke = deps.webAuth.onRevoke(() => response.end());
         request.on('close', () => {
+          disconnectController?.();
           revoke();
           clearInterval(keepAlive);
           unsubscribe();

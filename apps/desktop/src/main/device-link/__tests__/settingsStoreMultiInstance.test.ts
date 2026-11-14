@@ -155,3 +155,45 @@ describe('settings-store 多实例 mtime 失效', () => {
     expect(b).toBe(a);
   });
 });
+
+/**
+ * The process-wide default for unreadable settings files (override-settings-file.ts): the desktop
+ * never sets it and deletes an unreadable file as before; the Host sets it at boot, and then the
+ * file stays, reads as the defaults (everything off) and refuses writes until it changes.
+ */
+describe('an unreadable device-link-settings.json', () => {
+  const malformed = '{"remoteControlEnabled":true,"revokedControllers":["dev-revoked"],';
+  const file = () => path.join(userDataDir, FILE);
+
+  it('unset, as on the desktop: is deleted, reads as the defaults, and the next write replaces it', async () => {
+    externalWrite({ remoteControlEnabled: true }, 120_000);
+    fs.writeFileSync(file(), malformed, 'utf-8');
+    const t = new Date(Date.now() + 130_000);
+    fs.utimesSync(file(), t, t);
+    expect(readDeviceLinkSettings()).toMatchObject({ remoteControlEnabled: false, revokedControllers: [] });
+    expect(fs.existsSync(file())).toBe(false);
+    await writeDeviceLinkSetting('remoteControlEnabled', true);
+    expect(readDeviceLinkSettings().remoteControlEnabled).toBe(true);
+  });
+
+  it('set (the Host): is kept, reads as the defaults, refuses writes, and is read again once repaired', async () => {
+    const { setPreserveUnreadableSettingsFilesByDefault } = await import('../../maker-host/override-settings-file.js');
+    setPreserveUnreadableSettingsFilesByDefault(true);
+    try {
+      fs.writeFileSync(file(), malformed, 'utf-8');
+      const t = new Date(Date.now() + 140_000);
+      fs.utimesSync(file(), t, t);
+      expect(readDeviceLinkSettings()).toMatchObject({ remoteControlEnabled: false, revokedControllers: [] });
+      expect(fs.readFileSync(file(), 'utf-8')).toBe(malformed);
+      await expect(writeDeviceLinkSetting('remoteControlEnabled', true)).rejects.toThrow(/unreadable/);
+      await expect(updateDeviceLinkSetting('revokedControllers', (list) => [...list, 'dev-x'])).rejects.toThrow(/unreadable/);
+      expect(fs.readFileSync(file(), 'utf-8')).toBe(malformed);
+      externalWrite({ remoteControlEnabled: true, revokedControllers: ['dev-revoked'] }, 150_000);
+      expect(readDeviceLinkSettings()).toMatchObject({ remoteControlEnabled: true, revokedControllers: ['dev-revoked'] });
+      await writeDeviceLinkSetting('remoteControlEnabled', false);
+      expect(readDeviceLinkSettings()).toMatchObject({ remoteControlEnabled: false, revokedControllers: ['dev-revoked'] });
+    } finally {
+      setPreserveUnreadableSettingsFilesByDefault(false);
+    }
+  });
+});

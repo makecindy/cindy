@@ -100,6 +100,7 @@ import {
   stopProviderShareHost,
   watchProviderShareRequests,
   verifyProviderShareMemberGeneration,
+  onProviderShareHostChanged,
 } from '../providerShareHost';
 import {
   isProviderShareRefusal,
@@ -398,6 +399,52 @@ describe('delegated executor access', () => {
 });
 
 describe('provider share host snapshot', () => {
+  // Unit / real snapshot publication: access-default migration waits for all
+  // authorities, even if the recovered service contributes an empty list.
+  it('publishes completion of an unchanged partial snapshot without restarting permission repair', async () => {
+    state.owned = [share([member('m1')])];
+    state.ownedIncomplete = true;
+    const published: Array<readonly ProviderShareOwned[] | null> = [];
+    const access = vi.fn();
+    const refreshed = vi.fn();
+    const stop = onProviderShareHostChanged(() => published.push(getProviderShareHostCompleteSnapshot()));
+    const stopAccess = onProviderShareHostChanged(access, { accessOnly: true });
+    const stopRefresh = onProviderShareHostChanged(refreshed, { refreshed: true });
+    try {
+      startProviderShareHost(events());
+      await refreshProviderShareHost('partial');
+      expect(published).toEqual([null]);
+      state.ownedIncomplete = false;
+      await refreshProviderShareHost('complete');
+      expect(published).toEqual([null, state.owned]);
+      await refreshProviderShareHost('identical-complete');
+      expect(published).toHaveLength(2);
+      expect(access).toHaveBeenCalledTimes(1);
+      expect(refreshed).toHaveBeenCalledTimes(3);
+    } finally { stop(); stopAccess(); stopRefresh(); }
+  });
+  // Unit / real snapshot publication. Polling identical snapshots used to start
+  // authorization repair and reshare fanout; prior tests only checked admission.
+  it('publishes real changes once and separates permission facts from request/display refreshes', async () => {
+    state.owned = [share([member('m1'), member('m2')])];
+    const changed = vi.fn(), access = vi.fn();
+    const stop = onProviderShareHostChanged(changed);
+    const stopAccess = onProviderShareHostChanged(access, { accessOnly: true });
+    try {
+      startProviderShareHost(events());
+      await refreshProviderShareHost('first');
+      await refreshProviderShareHost('identical');
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(access).toHaveBeenCalledTimes(1);
+      state.owned = [{ ...state.owned[0], providerLabel: 'Updated', members: [...state.owned[0].members].reverse() }];
+      await refreshProviderShareHost('display');
+      expect(changed).toHaveBeenCalledTimes(2);
+      expect(access).toHaveBeenCalledTimes(1);
+      applyLocalMemberChange('m1', 'paused');
+      expect(access).toHaveBeenCalledTimes(2);
+      expect(providerShareGuestAccess(guest('m1'))).toBeNull();
+    } finally { stop(); stopAccess(); }
+  });
   // Unit tier: server grant may race a deletion after O's last poll. Its new
   // server epoch does not prove O cleaned the old guest data.
   it('rejects a post-grant incarnation mismatch and fails closed when the fresh read is offline', async () => {

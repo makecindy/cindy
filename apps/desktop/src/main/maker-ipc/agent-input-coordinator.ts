@@ -765,6 +765,8 @@ type AgentInputSendFailure = Extract<
 interface SessionInputState {
   /** Runtime courtesy clock; never persisted or used for list ordering. */
   lastUserActionAt: number | null;
+  /** Last committed route while a crash snapshot may still be loading. */
+  queuedRoute: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'> | null;
   pendingQueue: AgentInputQueuedMessage[];
   pendingCompacts: PendingCompactRequest[];
   steeringQueueClientIds: string[];
@@ -925,6 +927,7 @@ function createInitialInputState(
 ): SessionInputState {
   return {
     lastUserActionAt: null,
+    queuedRoute: null,
     pendingQueue: [],
     pendingCompacts: [],
     steeringQueueClientIds: [],
@@ -1295,6 +1298,20 @@ function isHostGeneratedSteerItem(item: AgentInputQueuedMessage): boolean {
   if (item.autoResume === true || item.agentOmitsTriggerPrefix === true) return true;
   return isSyntheticTriggerText(item.text.trimStart())
     || isSyntheticTriggerText((item.persistedContent ?? '').trimStart());
+}
+
+function rebaseQueuedItemRoute(
+  item: AgentInputQueuedMessage,
+  route: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'>,
+): void {
+  // A scheduled run can select its own route for this one execution.
+  if (item.origin?.kind === 'scheduler') return;
+  item.model = route.model;
+  item.createOpts.model = route.model;
+  item.createOpts.providerId = route.providerId;
+  item.createOpts.effort = route.effort;
+  item.createOpts.fastMode = route.fastMode;
+  if (route.effort) item.effort = route.effort;
 }
 
 export class AgentInputCoordinator {
@@ -1760,6 +1777,11 @@ export class AgentInputCoordinator {
       item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId) && isUnrestorableMcpAppMessage(item));
     const restored = restorable.filter((item) =>
       item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId) && !isUnrestorableMcpAppMessage(item));
+    // set-model can finish while loadQueueSnapshot is still awaiting storage.
+    // Apply that committed route before publishing or persisting restored rows.
+    if (state.queuedRoute) {
+      for (const item of restored) rebaseQueuedItemRoute(item, state.queuedRoute);
+    }
     for (const item of staleAppItems) {
       this.deps.onDiscardedQueuedMessage?.(sessionId, item);
     }
@@ -5956,6 +5978,28 @@ export class AgentInputCoordinator {
       }
       this.scheduleDrain(sessionId, 'credential-switch-blocker-settled');
     }
+  }
+
+  /** Rebase unsent inputs after a committed user route selection, including the crash snapshot. */
+  refreshQueuedRoute(
+    sessionId: string,
+    route: Pick<AgentInputCreateOpts, 'model' | 'providerId' | 'effort' | 'fastMode'>,
+  ): void {
+    const state = this.getState(sessionId);
+    state.queuedRoute = { ...route };
+    for (const item of state.pendingQueue) rebaseQueuedItemRoute(item, route);
+    // A head may already have left pendingQueue while pre-dispatch checks run.
+    const active = state.activeTurn;
+    // sendStarted may already be true while sendToAgent waits for the same
+    // session lock held by set-model; no vendor dispatch has happened yet.
+    if (active?.item && !active.persisted) rebaseQueuedItemRoute(active.item, route);
+    for (const compact of state.pendingCompacts) {
+      compact.createOpts.model = route.model;
+      compact.createOpts.providerId = route.providerId;
+      compact.createOpts.effort = route.effort;
+      compact.createOpts.fastMode = route.fastMode;
+    }
+    this.emit(sessionId);
   }
 
   /** host 侧异步边界(pending 凭证切换 apply 完成等)后恢复该会话的队列派发。 */

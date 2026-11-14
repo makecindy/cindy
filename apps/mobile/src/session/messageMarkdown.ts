@@ -277,7 +277,7 @@ export function parseMobileMarkdownDocument(
   let paragraph: string[] = [];
   let code: CodeFenceState | null = null;
   // display math 围栏状态($$ 与 $$ 之间;与 code fence 一样跨行收集)。
-  let math: { lines: string[]; start: number } | null = null;
+  let math: { lines: string[]; start: number; openingLine?: string } | null = null;
   // 跨块 HTML 注释状态:<!-- 与 --> 之间隔空行时会被拆成多个块,后续块自身没有注释标记,
   // 必须把"仍在注释内"的状态带给 inline 解析,否则注释里的图片标记会被当正常图渲染(review 实捉)。
   // 代码围栏内是字面代码,不参与注释状态推进。
@@ -338,8 +338,21 @@ export function parseMobileMarkdownDocument(
     }
 
     if (math) {
-      if (line.trim() === '$$') {
-        const mathText = math.lines.join('\n').trim();
+      const mathClosingTrimmed = line.trimEnd();
+      const closesMathFence = mathClosingTrimmed.trim() === '$$'
+        || (
+          mathClosingTrimmed.endsWith('$$')
+          && !mathClosingTrimmed.endsWith('\\$$')
+          && !mathClosingTrimmed.slice(0, -2).includes('$$')
+        );
+      if (closesMathFence) {
+        const trailingContent = mathClosingTrimmed.trim() === '$$'
+          ? ''
+          : mathClosingTrimmed.slice(0, -2);
+        const collectedLines = trailingContent.trim()
+          ? [...math.lines, trailingContent]
+          : math.lines;
+        const mathText = collectedLines.join('\n').trim();
         if (mathText) {
           pushBlock(
             buildMathBlock(mathText, math.start, blockNumber(), withSrc, lineOffset),
@@ -358,7 +371,7 @@ export function parseMobileMarkdownDocument(
           // 硬编码 UI 文案的 i18n 问题(规则 18,review 实捉)。
           paragraphStart = math.start;
           paragraphStartsInComment = false;
-          paragraph = ['$$', ...math.lines, '$$'];
+          paragraph = [math.openingLine ?? '$$', ...math.lines, line];
           flushParagraph(index + 1);
         }
         math = null;
@@ -383,9 +396,10 @@ export function parseMobileMarkdownDocument(
     }
 
     // display math 块:$$ 围栏(normalizeMathDelimiters 已把 \[...\] 归一成此
-    // 形态;模型也会原生输出)。单行 $$x$$ 直接成块;裸 $$ 行开围栏跨行收集。
+    // 形态;模型也会原生输出)。单行 $$x$$ 直接成块(不含内嵌 $$);
+    // 裸 $$ 或以 $$ 开头但未在同行闭合的行开围栏跨行收集。
     const mathTrimmed = line.trim();
-    const singleLineMath = mathTrimmed.match(/^\$\$(.+)\$\$$/);
+    const singleLineMath = mathTrimmed.match(/^\$\$((?:(?!\$\$).)+)\$\$$/);
     if (singleLineMath && singleLineMath[1].trim()) {
       flushParagraph(index);
       pushBlock(
@@ -395,9 +409,14 @@ export function parseMobileMarkdownDocument(
       );
       continue;
     }
-    if (mathTrimmed === '$$') {
+    if (mathTrimmed === '$$' || (mathTrimmed.startsWith('$$') && !mathTrimmed.slice(2).includes('$$'))) {
       flushParagraph(index);
-      math = { lines: [], start: index };
+      const firstBody = mathTrimmed.slice(2).trimStart();
+      math = {
+        lines: firstBody ? [firstBody] : [],
+        start: index,
+        openingLine: mathTrimmed === '$$' ? undefined : line,
+      };
       continue;
     }
 
@@ -535,7 +554,9 @@ export function parseMobileMarkdownDocument(
     // 的口径一致。
     paragraphStart = math.start;
     paragraphStartsInComment = false;
-    paragraph = ['$$', ...math.lines];
+    paragraph = math.openingLine !== undefined
+      ? [math.openingLine, ...math.lines.slice(math.lines.length > 0 && math.openingLine.trim().slice(2).trimStart() === math.lines[0] ? 1 : 0)]
+      : ['$$', ...math.lines];
   }
   flushParagraph(lines.length);
   return {

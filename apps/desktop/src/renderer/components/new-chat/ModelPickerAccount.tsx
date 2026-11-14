@@ -28,18 +28,22 @@ export interface ModelPickerAccountInfo {
   usage: SubscriptionAccountUsage | null;
 }
 interface ModelPickerAccount extends ModelPickerAccountInfo {
+  /** Account pool kind (OpenAI or Anthropic), also for providers Cindy created for accounts. */
+  kind?: SubscriptionProvider;
   /** Available quota snapshots, without claiming any account was allocated. */
   members?: ModelPickerAccountInfo[];
 }
 
 // Unknown/ambiguous selection must not fall back to the CLI default account.
 const UNASSIGNED: ModelPickerAccount = { usage: null };
-type Accounts = Partial<Record<SubscriptionProvider, ModelPickerAccount | null>>;
+// Keyed by provider id: built-in subscriptions and, since 2026-11-13, providers Cindy created for
+// subscription accounts (each shows its own accounts).
+type Accounts = Partial<Record<string, ModelPickerAccount | null>>;
 // A remote favorite and its rail can mount together. Share only the in-flight
 // read, scoped by owner/device/task; completed reads are never cached here.
 const accountFlights = new Map<
   string,
-  Promise<readonly [SubscriptionProvider, ModelPickerAccount | null]>
+  Promise<readonly [string, ModelPickerAccount | null]>
 >();
 const Context = createContext<{ deviceId: string | null; accounts: Accounts; enabled: boolean }>({
   deviceId: null,
@@ -57,7 +61,7 @@ export function ModelPickerAccountProvider({
 }: {
   enabled: boolean;
   deviceId: string | null;
-  providerIds: SubscriptionProvider[];
+  providerIds: string[];
   taskId?: string;
   children: ReactNode;
 }) {
@@ -77,7 +81,7 @@ function ScopedModelPickerAccount({
   deviceId,
 }: {
   children: ReactNode;
-  providerIds: SubscriptionProvider[];
+  providerIds: string[];
   taskId?: string;
   deviceId: string | null;
 }) {
@@ -87,7 +91,7 @@ function ScopedModelPickerAccount({
   const [result, setResult] = useState<{
     owner: DataOwnerGeneration;
     key: string;
-    preview: Partial<Record<SubscriptionProvider, ModelPickerAccount | null>>;
+    preview: Accounts;
   } | null>(null);
   useEffect(() => {
     // Clear only when the owner/directory/task scope changes. Background refreshes
@@ -114,13 +118,12 @@ function ScopedModelPickerAccount({
             if (existing) return existing;
             const flight = (async () => {
               try {
+                const builtin = isBuiltinSubscription(providerId);
                 const command = (action: 'preview' | 'read'): Promise<SubscriptionPoolView> =>
                   deviceId === null
-                    ? window.electronAPI.subscriptionAccounts.command({
-                        action,
-                        providerId,
-                        ...(action === 'read' && taskId ? { taskId } : {}),
-                      })
+                    ? window.electronAPI.subscriptionAccounts.command(action === 'preview'
+                        ? { action, providerId: providerId as SubscriptionProvider }
+                        : { action, providerId, ...(taskId ? { taskId } : {}) })
                     : window.electronAPI.deviceLink
                         .invoke(deviceId, 'maker:subscription-accounts', [
                           {
@@ -130,25 +133,32 @@ function ScopedModelPickerAccount({
                           },
                         ])
                         .then((value) => value as SubscriptionPoolView);
-                const preview = await command('preview');
-                if (preview.providerId !== providerId) return [providerId, UNASSIGNED] as const;
-                if (!preview.configured) return [providerId, null] as const;
+                // A created provider has no CLI default login to preview: read its own accounts.
+                if (builtin) {
+                  const preview = await command('preview');
+                  if (preview.providerId !== providerId) return [providerId, UNASSIGNED] as const;
+                  if (!preview.configured) return [providerId, null] as const;
+                }
                 const pool = await command('read');
                 if (pool.providerId !== providerId) return [providerId, UNASSIGNED] as const;
+                if (!builtin && !pool.configured) return [providerId, null] as const;
                 const account = selectableSubscriptionAccount(pool, !!taskId);
                 const members = subscriptionQuotaAccounts(pool);
+                const kind = pool.kind ?? (builtin ? providerId : undefined);
                 return [
                   providerId,
                   account === undefined
                     ? null
                     : account && (pool.boundAccountId || members.length <= 1)
                       ? {
+                          kind,
                           identity: account.identity?.trim() || undefined,
                           plan: account.plan,
                           usage: account.usage ?? null,
                         }
                       : {
                           ...UNASSIGNED,
+                          kind,
                           members: members.map((member) => ({
                             identity: member.identity?.trim() || undefined,
                             plan: member.plan,
@@ -183,7 +193,9 @@ function ScopedModelPickerAccount({
     const unsubscribe =
       deviceId === null
         ? window.electronAPI?.subscriptionAccounts?.onChanged?.((event) => {
-            if (providerIds.includes(event.providerId)) void refresh();
+            // Change events name the account pool kind, shared by created providers of that kind.
+            if (providerIds.includes(event.providerId) || providerIds.some((id) => !isBuiltinSubscription(id)))
+              void refresh();
           })
         : window.electronAPI?.deviceLink?.onRemotePush?.((push, stamp) => {
             if (
@@ -230,12 +242,13 @@ export function useModelPickerAccount(providerId: string, deviceId?: string | nu
   const display = preview.enabled ? sessionAccountDisplay(session, t) : null;
   if (display) {
     return {
+      kind: preview.accounts[providerId]?.kind,
       ...(display.identity ? { identity: display.identity } : {}),
       plan: display.plan,
       usage: session?.state === 'bound' ? session.account.usage ?? null : display.usage,
     };
   }
-  return (providerId === 'anthropic' || providerId === 'openai') &&
+  return providerId in preview.accounts &&
     (target === undefined || target === preview.deviceId)
     ? (preview.accounts[providerId] ?? null)
     : null;
@@ -244,10 +257,13 @@ export function useModelPickerAccount(providerId: string, deviceId?: string | nu
 /** A rail can show several computers while the main list shows only one directory. */
 export function ModelPickerAccountBoundary({
   providerId,
+  subscriptionPool = false,
   deviceId,
   children,
 }: {
   providerId: string;
+  /** A provider Cindy created for subscription accounts (2026-11-13). */
+  subscriptionPool?: boolean;
   deviceId: string | null;
   children: ReactNode;
 }) {
@@ -256,7 +272,7 @@ export function ModelPickerAccountBoundary({
   const target = deviceId === selfDeviceId ? null : deviceId;
   if (
     !parent.enabled ||
-    (providerId !== 'anthropic' && providerId !== 'openai') ||
+    (!subscriptionPool && !isBuiltinSubscription(providerId)) ||
     (parent.deviceId === target && providerId in parent.accounts)
   )
     return children;
@@ -265,4 +281,8 @@ export function ModelPickerAccountBoundary({
       {children}
     </ModelPickerAccountProvider>
   );
+}
+
+function isBuiltinSubscription(providerId: string): providerId is SubscriptionProvider {
+  return providerId === 'anthropic' || providerId === 'openai';
 }

@@ -81,6 +81,9 @@ import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botR
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { createHistoryViewReader, MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from './historyViewReader';
 import { setHistoryWorkPageReader } from '../../device-link/historyViewPush';
+import { encodeHistoryViewDelta } from '../../device-link/historyViewDelta';
+import { isScopedPeer, parseHistoryViewDeltaOptions } from '@cindy/device-link';
+import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { createMessageClearRecovery } from '../messageClearRecovery.js';
 
 export { listMessagesForAgentHandoff } from '../agentHandoffHistory.js';
@@ -478,10 +481,14 @@ export function registerMessageIpc(
     // Work lines and their patches serve same-account remote controllers only; a shared
     // guest keeps the existing projection and authorization path unchanged.
     const workLines = (opts as { workLines?: unknown } | null)?.workLines === true && !!context?.historyView && !context.sharedTask;
+    // Same-account remote readers may name the page they already hold (history-view-delta-v1).
+    const historyDelta = context && !context.sharedTask && !isScopedPeer(context.controllerDeviceId)
+      ? parseHistoryViewDeltaOptions(opts) : null;
+    const lazyDetails = (opts as { lazyDetails?: unknown } | null)?.lazyDetails === true;
     let shape: HistoryPageShape | undefined;
     const page = await historyView.page(sid, before == null ? undefined : requireString(before, 'before'),
-      (opts as { lazyDetails?: unknown } | null)?.lazyDetails === true,
-      workLines ? { workLines, onShape: (value) => { shape = value; } } : {}).catch((error) => {
+      lazyDetails,
+      workLines || historyDelta ? { workLines, onShape: (value) => { shape = value; } } : {}).catch((error) => {
       if (isHistoryViewUnavailable(error)) context?.historyView?.disable();
       throw error;
     });
@@ -490,7 +497,8 @@ export function registerMessageIpc(
         .filter((item) => item.type === 'work' && item.summary.isStreaming).map((item) => item.key);
       context?.historyView?.update(liveKeys, { workLines, shape });
     }
-    return page;
+    return historyDelta && context
+      ? encodeHistoryViewDelta(context.controllerDeviceId, sid, `${lazyDetails}:${workLines}`, historyDelta, page, shape) : page;
   });
   setHistoryWorkPageReader((sid, onShape) => historyView.page(sid, undefined, true, { workLines: true, onShape }));
   ipcMain.handle('local-db:messages:view-intent', (event, sessionId: unknown, refs: unknown) => {
@@ -906,6 +914,7 @@ export function broadcastMessageRow(
   const message = content === msg.content ? msg : { ...msg, content };
   broadcastOwnedPayload('local-db:messages:created', { sessionId, message }, ownerScope);
   if (msg.role === 'user' || msg.role === 'assistant') {
+    if (hasTaskChangeListener('message')) publishTaskChange({ kind: 'message', sessionId, message }, ownerStampForBroadcast(ownerScope));
     scheduleBotRemoteResourceChangedForSession(sessionId, ownerScope?.ownerScopeKey);
   }
 }
@@ -1212,6 +1221,7 @@ export async function commitContextRebuild(
     sourceModel?: string | null;
     sourceProviderId?: string | null;
     expectedClearedAt?: number | null;
+    expectedSdkSessionId?: string;
     replacementRoute?: ContextRebuildArgs['replacementRoute'];
   },
 ): Promise<{ updatedAt: number }> {
@@ -1225,8 +1235,8 @@ export async function commitContextRebuild(
       consumed: false,
       reason: meta.reason,
       sourceUserClientId: meta.sourceUserClientId,
-      ...(meta.replacementRoute
-        ? { sourceSdkSessionId: meta.replacementRoute.expectedSdkSessionId }
+      ...(meta.replacementRoute || meta.expectedSdkSessionId
+        ? { sourceSdkSessionId: meta.replacementRoute?.expectedSdkSessionId ?? meta.expectedSdkSessionId }
         : {}),
       ...(meta.sourceAgentKind ? { sourceAgentKind: meta.sourceAgentKind } : {}),
       ...(meta.sourceModel !== undefined ? { sourceModel: meta.sourceModel } : {}),
@@ -1236,6 +1246,7 @@ export async function commitContextRebuild(
     updatedAt: now,
     expectedClearedAt: meta.expectedClearedAt ?? null,
     ...(meta.replacementRoute ? { replacementRoute: meta.replacementRoute } : {}),
+    ...(meta.expectedSdkSessionId !== undefined ? { expectedSdkSessionId: meta.expectedSdkSessionId } : {}),
   });
   return { updatedAt: now };
 }

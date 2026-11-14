@@ -257,6 +257,8 @@ beforeEach(() => {
       onChanged: vi.fn(() => () => undefined),
     },
     maker: {
+      // Providers a subscription account may move to (2026-11-13); none here.
+      listProviders: vi.fn(async () => ({ providers: [] })),
       scanLocalCli: vi.fn(async () => scanResult),
       refreshBuiltinProviderModels: refreshBuiltinModelsSpy,
       requestProviderModelsAutoRefresh: requestAutoRefreshSpy,

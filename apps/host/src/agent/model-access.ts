@@ -1,7 +1,7 @@
 import { isProviderDisabled } from '@cindy/model-providers';
 import type { AuthRegion } from '@cindy/auth-client';
 import { createCredentialsSync, type CredentialsPayload } from '../../../desktop/src/main/model-access/credentialsSync.js';
-import { createModelAccessCredentialsStore } from '../../../desktop/src/main/model-access/credentialsStore.js';
+import { getModelAccessCredentialsStore } from '../../../desktop/src/main/model-access/credentialsStore.js';
 import { createGatewayKeyRejectionReporter, keyFingerprint } from '../../../desktop/src/main/model-access/gatewayKeyRejectionCore.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { readModelDisableOverrides } from '../../../desktop/src/main/maker-host/model-disable-store.js';
@@ -19,7 +19,9 @@ export function createHostModelAccess(options: {
 }) {
   const owner = activeOwnerScopeKey();
   const log = createLogger('host-model-access');
-  const metadata = createModelAccessCredentialsStore();
+  // The process-wide store, as the desktop's model access uses: shared readers such as
+  // effectiveXdGatewayBaseUrl (the one-shot requests) then see what this sync writes.
+  const metadata = getModelAccessCredentialsStore();
   let closed = false;
   const replaced = new Set<string>();
   const current = () => !closed && owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
@@ -60,6 +62,8 @@ export function createHostModelAccess(options: {
   };
   return {
     gateway, sync, reportRejectedKey: rejection.reportUsedKey,
+    /** An agent turn ended on a rejected Cindy AI Key without saying which key it used. */
+    reportCurrentKeyRejected: rejection.reportCurrentKey,
     isReplacedKey: (value: string) => current() && replaced.has(keyFingerprint(value)),
     async start() {
       check(); sync.handleAuthChange({ isAuthenticated: true, userId: options.ownerId, realm: options.region });

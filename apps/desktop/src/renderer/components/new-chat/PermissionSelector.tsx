@@ -249,14 +249,15 @@ export function PermissionSelector({
                   )
                 : cn(
                     'rounded-full',
-                    // 文字入口悬停显示胶囊外框；图标入口只显示轻微底色。
+                    // 图标与文字入口共用 composer 胶囊悬停反馈，与相邻的「+」一致。
                     isIconOnly
                       ? 'h-[30px] w-7 min-w-7 justify-center px-0'
                       : 'h-[30px] min-w-[72px] max-w-full shrink px-2.5',
                     'border border-transparent bg-transparent',
+                    'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
                     isIconOnly
-                      ? 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]'
-                      : 'text-[var(--text-primary)] hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
+                      ? 'text-[var(--composer-pill-icon)]'
+                      : 'text-[var(--text-primary)]',
                   ),
               disabled && 'pointer-events-none opacity-50',
             )}
@@ -434,7 +435,7 @@ export function PermissionSelector({
       panelAriaLabel={t('newChat.permissionSelector.listAria')}
       startBg="var(--composer-pill-bg)"
       startBorderColor="var(--border-default)"
-      wrapperClassName="min-w-0 shrink"
+      wrapperClassName={cn('max-w-full shrink', isIconOnly ? 'min-w-[34px]' : 'min-w-[72px]')}
       trigger={triggerButton}
     >
       {optionsList}

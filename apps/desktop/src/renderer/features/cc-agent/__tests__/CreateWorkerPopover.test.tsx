@@ -1328,6 +1328,61 @@ describe('CreateWorkerPopover', () => {
     ).toBe(true);
   });
 
+  // #10313, unit: the real form must explain a restored, unusable selection and recover
+  // after an explicit pick. Existing isolation tests only asserted the disabled submit.
+  // Minimal input: saved route + unavailable model/source, with another usable row.
+  it.each(['removed', 'disabled', 'disconnected', 'default-source', 'empty'] as const)(
+    'explains an unavailable saved selection (%s) and submits only after a manual pick',
+    async (reason) => {
+      const savedModel = reason === 'default-source' ? 'removed-model' : 'gpt-5.5';
+      const savedProvider = reason === 'default-source' ? null : 'saved-provider';
+      writeWorkerCreationPrefs({
+        ...DEFAULT_WORKER_CREATION_PREFS,
+        modelSelectionByHost: {
+          [JSON.stringify([null, 'local'])]: {
+            agent: 'codex', agentDeviceId: null, model: savedModel,
+            providerId: savedProvider, effort: 'high', fast: false,
+          },
+        },
+      });
+      mocks.modelsByAgent.codex = reason === 'empty' ? [] : [model('gpt-5.5')];
+      mocks.localProviders = [
+        { id: 'saved-provider', name: 'Saved', connected: reason !== 'disconnected', agents: ['codex'],
+          models: { codex: reason === 'removed' || reason === 'empty' ? [] : [{ ...model('gpt-5.5'), disabled: reason === 'disabled' }] } },
+        { id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'],
+          models: { codex: mocks.modelsByAgent.codex } },
+      ];
+      const onCreate = vi.fn();
+      const props = { open: true, onClose: vi.fn(), onCreate };
+      mocks.providersLoading = true;
+      const view = render(<CreateWorkerPopover {...props} />);
+      expect(screen.queryByText('orca.createWorker.savedModelUnavailable')).toBeNull();
+      mocks.providersLoading = false;
+      view.rerender(<CreateWorkerPopover {...props} />);
+
+      const warning = screen.getByRole('status');
+      expect(warning.textContent).toContain(reason === 'empty'
+        ? 'orca.createWorker.noAvailableModels' : 'orca.createWorker.savedModelUnavailable');
+      expect(screen.getByTestId('model-selector').textContent).toBe(savedModel);
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe(savedProvider ?? '');
+      const submit = screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement;
+      expect(submit.disabled).toBe(true);
+      fireEvent.click(submit);
+      expect(onCreate).not.toHaveBeenCalled();
+      if (reason === 'empty') return;
+
+      fireEvent.click(screen.getByTestId('pick-openai-row-bare'));
+      expect(screen.queryByRole('status')).toBeNull();
+      expect(submit.disabled).toBe(false);
+      fireEvent.click(submit);
+      await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'gpt-5.5', providerId: 'openai',
+      })));
+      // This local host has no location capability, so its request must omit that field.
+      expect(onCreate.mock.calls[0][0]).not.toHaveProperty('agentDeviceId');
+    },
+  );
+
   it('mounts the standard panel with provider sections for local creation', async () => {
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
     const selector = await screen.findByTestId('model-selector');
@@ -2705,7 +2760,10 @@ describe('CreateWorkerPopover remote providers', () => {
         remoteAgentDevices={change === 'old-host' ? undefined : devices} />);
       if (change === 'account') {
         expect(screen.getByTestId('model-selector').dataset.agentDevice).toBe('');
+        expect(screen.queryByText('orca.createWorker.savedModelUnavailable')).toBeNull();
       } else {
+        // #10313: blocked remote/older-host routes need an explanation too; never pick a fallback.
+        expect((await screen.findByRole('status')).textContent).toContain('orca.createWorker.savedModelUnavailable');
         expect(screen.getByTestId('model-selector').dataset.agentDevice).toBe('agent-pc');
         expect(screen.getByTestId('model-selector').dataset.effort).toBe('high');
         expect((screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement).disabled).toBe(true);

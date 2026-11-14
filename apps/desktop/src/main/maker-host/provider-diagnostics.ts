@@ -597,6 +597,16 @@ export async function testProviderConnection(
     }
     throw error;
   }
+  // 已保存供应商的探测模型由 Main 挑选（第一个聊天模型），结果必须带回去，否则用户看不出测的是哪个。
+  return { ...(await probeConnection(input, spec, fetchImpl, signal)), modelId: spec.modelId };
+}
+
+async function probeConnection(
+  input: ProviderTestInput,
+  spec: ProviderProbeSpec,
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<ProviderTestResult> {
   const portable = !spec.api || ['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai'].includes(spec.api);
   // Keep preset/saved SDK-specific authentication and legacy callers on their existing path.
   if (input.kind === 'adhoc' && input.requestId && spec.agent === 'pi' && portable && !spec.catalogPresetId) {
