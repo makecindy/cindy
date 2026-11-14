@@ -643,7 +643,9 @@ export function summarizeWorkGroupPresentation<
   item: MessageRenderWorkGroupItem<TMessage>,
   localizer?: PresentationLocalizer,
 ): WorkGroupPresentation {
-  const duration = item.durationMs !== undefined ? formatDuration(item.durationMs) : undefined;
+  const duration = item.durationMs !== undefined
+    ? (localizer?.formatDuration?.(item.durationMs) ?? formatDuration(item.durationMs))
+    : undefined;
   const title = item.isStreaming
     ? presentationText(localizer, 'chat.workGroup.working', 'Working…')
     : duration !== undefined

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import en from '../i18n/locales/en/message.json';
+import ru from '../i18n/locales/ru/message.json';
 import zhCN from '../i18n/locales/zh-CN/message.json';
 import zhTW from '../i18n/locales/zh-TW/message.json';
 import ja from '../i18n/locales/ja/message.json';
@@ -24,6 +25,7 @@ vi.mock('@/i18n', () => ({
 describe('localized task durations', () => {
   it.each([
     [en, '21h 31m', '2d 3h 4m', '1h 0m', '1d 0h 0m'],
+    [ru, '21 ч 31 мин', '2 дн 3 ч 4 мин', '1 ч 0 мин', '1 дн 0 ч 0 мин'],
     [zhCN, '21 小时 31 分', '2 天 3 小时 4 分', '1 小时 0 分', '1 天 0 小时 0 分'],
     [zhTW, '21 小時 31 分', '2 天 3 小時 4 分', '1 小時 0 分', '1 天 0 小時 0 分'],
     [ja, '21時間31分', '2日3時間4分', '1時間0分', '1日0時間0分'],
