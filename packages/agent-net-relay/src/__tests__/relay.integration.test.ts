@@ -4,8 +4,14 @@
  * - 规则依据：agent-net 产品规则「V2 自建与本机中转的完整能力」；官方服务不可成为自建模式的依赖。
  * - 覆盖缺口：旧 relay 只覆盖 V1；Rust 仿真不包含身份目录、分享授权或服务端存储。
  * - 最小失败输入：重启后下载一个附件；访客向非授权主机发一个包；重复发送同一签名请求。
+ * - 附件直传（2026-11-14）：中转注入可直传的对象存储（本地 HTTP 内存对象库，按位置追加、校验 Content-MD5 与签名、
+ *   支持 Range）时，新客户端上传和下载的密文都不经中转；新旧客户端交叉上传/下载均可用；只有所有者能取得上传地址，
+ *   偏移、MD5 与超长对象被拒；存储写成功但回复丢失时由中转按存储长度确认；缓存的下载地址失效后重新向中转申请；
+ *   中转给出的不安全存储请求被客户端拒绝；存储不可达时（含经中转下载）返回可重试的 503 MEDIA_STORAGE_UNAVAILABLE；
+ *   删除前签发、删除后才到达的写入由过期清理在授权失效后删除；客户端连不上存储时上传下载回退到中转。
+ *   最小失败输入：1 MiB + 5311 字节附件，跨 AEAD 块边界 seek；删除后再用旧地址写入第一块。
  * - tier：integration，必须经真实本地 socket 与临时磁盘，禁止用 handler mock 代替。
- * - 实测耗时：2026-11-07 integration workspace 约 1.2 秒。
+ * - 实测耗时：2026-11-14 本机整文件约 13 秒（真实 socket 与磁盘的集成用例；附件直传部分约 2 秒）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -14,7 +20,12 @@ import path from 'node:path';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
-import type { Socket } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
+import { createServer } from 'node:http';
+import { Readable } from 'node:stream';
+import { createHmac } from 'node:crypto';
+import { MEDIA_TRANSFER_DIRECT, MEDIA_TRANSFER_HEADER } from '@cindy/agent-net-protocol';
+import { DIRECT_GRANT_MAX_MS, RelayMediaStorageError, type RelayMediaStorage } from '../mediaStorage.js';
 import WebSocket from 'ws';
 import { API, encodeDatagrams, sharingOriginsPayload, delegationPayload, MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { startAgentNetRelay, type Bootstrap, type RelayHandle, type RelayOptions } from '../server.js';
@@ -79,6 +90,232 @@ it('authenticates binary uploads before accepting bytes and cleans up a changing
   const state = JSON.parse(await readFile(path.join(f.dataDir, 'agent-net-state.json'), 'utf8'));
   expect(Object.keys(state.networks['private-net'].media)).toEqual([created.id]);
 });
+
+// Direct media transfer. Production stores the ciphertext in an object store clients reach with presigned
+// requests; this stand-in enforces the same contract (position, Content-MD5, signature, expiry, ranges) over real
+// HTTP and counts which bytes passed through the relay. Integration through the real relay and clients.
+describe('direct media transfer', () => {
+  it('moves ciphertext between clients and storage without the relay, and still serves clients that cannot', async () => {
+    const direct = await directStorage();
+    const f = await fixture({ mediaStorage: direct.storage }), member = await f.join();
+    expect((await (await fetch(f.relay.url + API + '/info')).json() as { features: string[] }).features).toContain('media-direct-v1');
+    const plain = randomBytes(1024 * 1024 + 5311);
+    const uploaded = await uploadEncryptedMedia(f.client, 'member', member.identity.transportKey, plain.length,
+      async (offset, size) => plain.subarray(offset, offset + size));
+    expect(direct.counts).toMatchObject({ relayAppends: 0 });
+    expect(direct.counts.storageAppends).toBeGreaterThan(0);
+    expect(direct.objects.get(uploaded.id)!.includes(plain.subarray(100, 200))).toBe(false);
+    const whole = await openEncryptedMedia(member.client, uploaded.id, uploaded.headerSha256, undefined, 'video/mp4');
+    expect(Buffer.from(await whole.arrayBuffer())).toEqual(plain);
+    const start = 1024 * 1024 - 13, end = start + 35;
+    const seek = await openEncryptedMedia(member.client, uploaded.id, uploaded.headerSha256, `bytes=${start}-${end}`, 'video/mp4');
+    expect(seek.status).toBe(206);
+    expect(Buffer.from(await seek.arrayBuffer())).toEqual(plain.subarray(start, end + 1));
+    expect(direct.counts.relayReads).toBe(0);
+    // A client without direct transfer (no header) is served by the relay from the same storage.
+    const resource = member.client.path('/media/' + uploaded.id);
+    const legacy = await fetch(f.relay.url + resource, { headers: { authorization: member.client.header('GET', resource), range: 'bytes=0-9' } });
+    expect(legacy.status).toBe(206); expect(legacy.headers.get(MEDIA_TRANSFER_HEADER)).toBeNull();
+    expect(Buffer.from(await legacy.arrayBuffer())).toEqual(direct.objects.get(uploaded.id)!.subarray(0, 10));
+    expect(direct.counts.relayReads).toBe(1);
+    // An upload that does not offer direct transfer (an older client) goes through the relay; new clients read it directly.
+    const created = await f.client.request<{ id: string; transfer?: string }>('POST', '/media', { recipient: 'member', size: 3, chunkFormat: 'binary-v1' });
+    expect(created.transfer).toBeUndefined();
+    await expect(f.client.putMediaChunk(created.id, 0, Buffer.from('abc'))).resolves.toEqual({ received: 3, complete: true });
+    expect(direct.counts.relayAppends).toBe(1);
+    expect(Buffer.from(await (await member.client.mediaResponse(created.id)).arrayBuffer()).toString()).toBe('abc');
+    expect(direct.counts.relayReads).toBe(1);
+    // Removal reaches the storage.
+    await f.client.request('DELETE', '/media/' + uploaded.id);
+    expect(direct.objects.has(uploaded.id)).toBe(false);
+  });
+
+  it('authorizes every direct request and confirms progress from the storage, not from the client', async () => {
+    const direct = await directStorage();
+    const f = await fixture({ mediaStorage: direct.storage }), member = await f.join();
+    const created = await f.client.createMedia('member', 10);
+    const resource = '/media/' + created.id;
+    const md5 = (bytes: Buffer) => createHash('md5').update(bytes).digest('base64');
+    await expect(member.client.request('POST', resource + '/upload', { offset: 0, size: 5, md5: md5(Buffer.from('hello')) })).rejects.toThrow('FORBIDDEN');
+    await expect(f.client.request('POST', resource + '/upload', { offset: 5, size: 5, md5: md5(Buffer.from('hello')) })).rejects.toThrow('MEDIA_OFFSET_MISMATCH');
+    await expect(f.client.request('POST', resource + '/upload', { offset: 0, size: 5, md5: 'not-md5' })).rejects.toThrow('MEDIA_CHUNK_INVALID');
+    // Claiming progress without writing anything changes nothing.
+    await expect(f.client.request('POST', resource + '/commit')).resolves.toEqual({ received: 0, complete: false });
+    // The storage keeps a write whose reply never arrives; the relay confirms it from the stored length.
+    let dropReply = true;
+    const lossy = new AgentNetClient(f.relay.url, f.owner, f.certificate, f.rootPublicKey, undefined, { fetch: async (input, init) => {
+      const response = await fetch(input, init);
+      if (String(input).startsWith(direct.base) && init?.method === 'POST' && dropReply) { dropReply = false; throw new TypeError('fetch failed'); }
+      return response;
+    } });
+    const recreated = await lossy.createMedia('member', 10);
+    await expect(lossy.putMediaChunk(recreated.id, 0, Buffer.from('hello'))).resolves.toEqual({ received: 5, complete: false });
+    await expect(lossy.putMediaChunk(recreated.id, 5, Buffer.from('world'))).resolves.toEqual({ received: 10, complete: true });
+    await expect(member.client.downloadMedia(recreated.id)).resolves.toEqual(new Uint8Array(Buffer.from('helloworld')));
+    // A storage outage is a retryable 503, never an internal error or a refusal.
+    direct.flags.broken = true;
+    await expect(f.client.request('POST', resource + '/commit')).rejects.toMatchObject({ status: 503, code: 'MEDIA_STORAGE_UNAVAILABLE' });
+    // Also for a download through the relay (older clients, and clients that fell back): an answer, not a cut connection.
+    const relayed = member.client.path('/media/' + recreated.id);
+    const failed = await fetch(f.relay.url + relayed, { headers: { authorization: member.client.header('GET', relayed) } });
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).toMatchObject({ error: { code: 'MEDIA_STORAGE_UNAVAILABLE' } });
+    direct.flags.broken = false;
+    // More bytes than declared are never accepted: the object goes.
+    direct.objects.set(created.id, Buffer.alloc(11));
+    await expect(f.client.request('POST', resource + '/commit')).rejects.toThrow('MEDIA_SIZE_MISMATCH');
+    expect(direct.objects.has(created.id)).toBe(false);
+    await expect(f.client.request('POST', resource + '/commit')).rejects.toThrow('NOT_FOUND');
+  });
+
+  it('asks the relay again when a cached storage read is refused, and rejects unsafe storage requests', async () => {
+    const direct = await directStorage();
+    const f = await fixture({ mediaStorage: direct.storage }), member = await f.join();
+    const plain = randomBytes(4096);
+    const uploaded = await uploadEncryptedMedia(f.client, 'member', member.identity.transportKey, plain.length, async (offset, size) => plain.subarray(offset, offset + size));
+    const read = async () => Buffer.from(await (await openEncryptedMedia(member.client, uploaded.id, uploaded.headerSha256, undefined, 'image/png')).arrayBuffer());
+    expect(await read()).toEqual(plain);
+    direct.rotate();
+    expect(await read()).toEqual(plain);
+    const resource = member.client.path('/media/' + uploaded.id);
+    const granted = await fetch(f.relay.url + resource, { headers: { authorization: member.client.header('GET', resource), [MEDIA_TRANSFER_HEADER]: MEDIA_TRANSFER_DIRECT } });
+    expect(granted.headers.get(MEDIA_TRANSFER_HEADER)).toBe(MEDIA_TRANSFER_DIRECT);
+    expect(await granted.json()).toMatchObject({ transfer: MEDIA_TRANSFER_DIRECT, size: direct.objects.get(uploaded.id)!.length });
+    // A grant the storage refuses right away is an error, not media.
+    direct.flags.refuseReads = true;
+    const refused = new AgentNetClient(f.relay.url, member.identity, member.certificate, f.rootPublicKey);
+    await expect(refused.mediaResponse(uploaded.id)).rejects.toMatchObject({ status: 403, code: 'MEDIA_STORAGE_READ_FAILED' });
+    direct.flags.refuseReads = false;
+    direct.flags.unsafeReads = true;
+    const fresh = new AgentNetClient(f.relay.url, member.identity, member.certificate, f.rootPublicKey);
+    await expect(fresh.mediaResponse(uploaded.id)).rejects.toThrow('INVALID_DIRECT_MEDIA_REQUEST');
+  });
+
+  it('removes an object again when a write granted before its deletion lands afterwards', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      let at = Date.now();
+      const direct = await directStorage();
+      const f = await fixture({ mediaStorage: direct.storage, now: () => at }), member = await f.join();
+      const body = Buffer.from('hello'), created = await f.client.createMedia('member', body.length);
+      const { request } = await f.client.request<{ request: { method: string; url: string; headers: Record<string, string> } }>('POST',
+        '/media/' + created.id + '/upload', { offset: 0, size: body.length, md5: createHash('md5').update(body).digest('base64') });
+      await f.client.request('DELETE', '/media/' + created.id);
+      expect(direct.objects.has(created.id)).toBe(false);
+      expect((await fetch(request.url, { method: request.method, headers: request.headers, body: new Uint8Array(body) })).status).toBe(200);
+      expect(direct.objects.has(created.id)).toBe(true);
+      // Gone for both devices, and no new grant for it.
+      await expect(member.client.downloadMedia(created.id)).rejects.toThrow('NOT_FOUND');
+      await expect(f.client.request('POST', '/media/' + created.id + '/upload', { offset: 5, size: 1, md5: request.headers['content-md5'] })).rejects.toThrow('NOT_FOUND');
+      // The sweep waits until every grant has lapsed, then removes the late object too.
+      at += DIRECT_GRANT_MAX_MS - 60_000;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(direct.objects.has(created.id)).toBe(true);
+      at += 2 * 60_000;
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(direct.objects.has(created.id)).toBe(false));
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps a network that reaches the relay but not the storage working through the relay', async () => {
+    const direct = await directStorage();
+    const f = await fixture({ mediaStorage: direct.storage }), member = await f.join();
+    // A firewall that lets the relay through but not the storage.
+    let blocked = 0;
+    const transport = { fetch: (async (input, init) => {
+      if (String(input).startsWith(direct.base)) { blocked++; throw new TypeError('fetch failed'); }
+      return fetch(input, init);
+    }) as typeof fetch };
+    const owner = new AgentNetClient(f.relay.url, f.owner, f.certificate, f.rootPublicKey, undefined, transport);
+    const plain = randomBytes(1024 * 1024 + 99);
+    const uploaded = await uploadEncryptedMedia(owner, 'member', member.identity.transportKey, plain.length, async (offset, size) => plain.subarray(offset, offset + size));
+    expect(blocked).toBe(1);
+    expect(direct.counts.storageAppends).toBe(0); expect(direct.counts.relayAppends).toBe(1);
+    // Later uploads from this client go straight to the relay for a while.
+    await uploadEncryptedMedia(owner, 'member', member.identity.transportKey, 3, async (offset, size) => Buffer.from('abc').subarray(offset, offset + size));
+    expect(blocked).toBe(1);
+    const reader = new AgentNetClient(f.relay.url, member.identity, member.certificate, f.rootPublicKey, undefined, transport);
+    const read = async () => Buffer.from(await (await openEncryptedMedia(reader, uploaded.id, uploaded.headerSha256, undefined, 'video/mp4')).arrayBuffer());
+    expect(await read()).toEqual(plain);
+    expect(await read()).toEqual(plain);
+    expect(blocked).toBe(2);
+    expect(direct.counts.storageReads).toBe(0); expect(direct.counts.relayReads).toBeGreaterThan(0);
+  });
+});
+
+/** In-memory object storage over local HTTP standing in for an object store such as OSS. */
+async function directStorage() {
+  const objects = new Map<string, Buffer>();
+  const secret = randomBytes(16); let generation = 0;
+  const counts = { relayAppends: 0, relayReads: 0, storageAppends: 0, storageReads: 0 };
+  const sign = (parts: string[]) => createHmac('sha256', secret).update([generation, ...parts].join('\0')).digest('base64url');
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://storage'), id = url.pathname.slice('/objects/'.length);
+    const expires = url.searchParams.get('expires') ?? '';
+    const done = (status: number, headers: Record<string, string | number> = {}, body?: Buffer) => { res.writeHead(status, headers); res.end(body); };
+    if (!(Number(expires) > Date.now())) return done(403);
+    if (req.method === 'POST') {
+      const position = url.searchParams.get('position') ?? '', md5 = String(req.headers['content-md5'] ?? '');
+      const length = url.searchParams.get('length') ?? '';
+      if (url.searchParams.get('sig') !== sign(['append', id, position, length, md5, expires])) return done(403);
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        const body = Buffer.concat(chunks), current = objects.get(id) ?? Buffer.alloc(0);
+        if (body.length !== Number(length)) return done(403);
+        if (createHash('md5').update(body).digest('base64') !== md5) return done(400);
+        if (current.length !== Number(position)) return done(409);
+        objects.set(id, Buffer.concat([current, body])); counts.storageAppends++; done(200);
+      });
+      return;
+    }
+    if (req.method !== 'GET') return done(405);
+    if (url.searchParams.get('sig') !== sign(['read', id, expires]) || flags.refuseReads) return done(403);
+    const object = objects.get(id);
+    if (!object) return done(404);
+    counts.storageReads++;
+    const match = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range ?? ''));
+    if (!match) return done(200, { 'content-length': object.length }, object);
+    const start = Number(match[1]), end = Math.min(object.length - 1, match[2] ? Number(match[2]) : object.length - 1);
+    if (start >= object.length) return done(416);
+    done(206, { 'content-range': `bytes ${start}-${end}/${object.length}`, 'content-length': end - start + 1 }, object.subarray(start, end + 1));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  cleanups.push(() => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/objects/`;
+  const flags = { unsafeReads: false, broken: false, refuseReads: false };
+  return {
+    objects, counts, base, flags,
+    rotate() { generation++; },
+    storage: {
+      async length(id) { if (flags.broken) throw new Error('storage unreachable'); return objects.get(id)?.length ?? 0; },
+      async append(id, offset, data) {
+        counts.relayAppends++;
+        const current = objects.get(id) ?? Buffer.alloc(0);
+        if (current.length === offset + data.length) return current.length;
+        if (current.length !== offset) throw new RelayMediaStorageError('MEDIA_OFFSET_MISMATCH');
+        objects.set(id, Buffer.concat([current, Buffer.from(data)])); return offset + data.length;
+      },
+      async read(id, start, end) {
+        if (flags.broken) throw new Error('storage unreachable');
+        counts.relayReads++; return Readable.from([objects.get(id)!.subarray(start, end + 1)]);
+      },
+      async remove(id) { objects.delete(id); },
+      direct: {
+        async append(id, offset, size, contentMd5) {
+          const expiresAt = Date.now() + 60_000;
+          return { method: 'POST' as const, url: `${base}${id}?position=${offset}&length=${size}&expires=${expiresAt}&sig=${sign(['append', id, String(offset), String(size), contentMd5, String(expiresAt)])}`,
+            headers: { 'content-md5': contentMd5, 'content-type': 'application/octet-stream' }, expiresAt };
+        },
+        async read(id) {
+          const expiresAt = Date.now() + 60_000;
+          return { method: 'GET' as const, url: `${base}${id}?expires=${expiresAt}&sig=${sign(['read', id, String(expiresAt)])}`,
+            headers: (flags.unsafeReads ? { authorization: 'Bearer stolen' } : {}) as Record<string, string>, expiresAt };
+        },
+      },
+    } satisfies RelayMediaStorage,
+  };
+}
 
 const cleanups: Array<() => Promise<unknown> | void> = [];
 // A second same-account device must recover public sharing origins without an
