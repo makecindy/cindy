@@ -1,6 +1,7 @@
 import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
+import { isErrorRecord, isMessageFailureLike } from '@cindy/maker-shared/message-presentation';
 import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
 import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
@@ -34,6 +35,8 @@ const saveMcpAppViewState = ${saveMcpAppViewState.toString()};
 const deleteDeletedSessionViewStates = ${deleteDeletedSessionViewStates.toString()};
 const sanitizeToolResultDiagnostics = ${sanitizeToolResultDiagnostics.toString()};
 const extractToolResultDiagnostics = ${extractToolResultDiagnostics.toString()};
+const isErrorRecord = ${isErrorRecord.toString()};
+const isMessageFailureLike = ${isMessageFailureLike.toString()};
 const compactToolCardResult = ${compactToolCardResult.toString()};
 const createAutoReviewIntentProjection = ${createAutoReviewIntentProjection.toString()};
 const readAutoReviewProjection = ${readAutoReviewProjection.toString()};
