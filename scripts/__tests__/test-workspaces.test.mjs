@@ -362,7 +362,7 @@ test("client CI owns the complete Desktop Git integration tier", () => {
 	assert.ok(job, "client CI must define an independent git-integration job");
 	assert.match(
 		job[1],
-		/^\s{6}- name: Run Desktop Git integration tests\n\s{8}run: pnpm test:git-integration$/m,
+		/^\s{6}- name: Run Desktop Git integration tests\n\s{8}run: pnpm run test:workspaces --tier git-integration$/m,
 	);
 });
 

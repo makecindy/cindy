@@ -62,6 +62,38 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 实现见 `apps/desktop/src/main/maker-ipc/workingDirectoryRecovery.ts` 与 `register.ts`，
 回归见 `workingDirectoryRecovery.test.ts` 和 `makerSendTransaction.test.ts`。
 
+### CI 按改动范围分流
+
+`client-ci` 的 `changes` job 用事件的 base SHA 与检出的 HEAD 做完整、禁用 rename
+折叠的 Git diff；PR、merge queue 和 main push 使用同一分类器
+`scripts/ci-change-scope.mjs`。不用 PR 标题或有限条数的 API 文件列表判定。手动执行、
+无基线、空 diff 或 Git diff 不可读取时保留完整检查；分类 job 自身失败不能通过汇总门禁。
+
+- 根级已列明的说明文档、`docs/{dev-rules,product-rules,design-rules}/*.md` 与指定
+  Greptile 审查规则只跑现有静态／源码契约、文档合同及文案检查，不启动双平台 unit。
+  运行时 Skill、法律产物、设计预览、未知文件不属于这个豁免。
+  `DESIGN.md`、`login-flow.md` 含 DS-8 生成区块，轻量路径还运行
+  `@cindy/design-tokens` 的 `check:generated`，验证生成内容与边界标记；普通代码路径
+  继续由完整 unit 中的生产生成回归覆盖。
+- 纯 locale JSON（可混合上述文档）保留 Linux 完整 unit、文案及静态契约检查，跳过
+  Windows 重跑、类型检查和运行时集成。没有只挑几个翻译测试代替既有覆盖。
+  根级 `glossary-rules.test.mjs` 还会读取真实语言包验证计费文案等内容合同，纯翻译
+  路径单独执行该文件；它不属于可以一并省去的 runner 自测。
+- 纯 Mobile `app/`、`src/` 改动保留完整双平台 unit、双端类型检查、静态契约和
+  Device Link 集成，跳过 Desktop Git、Pi manager 与数据库专项。
+- 普通代码继续完整双平台 unit。两端测试存在交叉源码导入，所以不单凭 `apps/` 目录
+  跳过另一端类型检查；共享包、锁文件、脚本、构建配置与未识别输入保守执行完整检查。
+- Linux runner 自测只在 `verify-checks` 执行一次；Git 集成 job 直接运行对应 tier。
+  本地 `test:git-integration` 入口仍保留前置自测。
+
+稳定必需检查 `verify`、`Windows unit tests` 始终回报结果：分类和静态检查成功，且
+被选择的 job 成功、未选择的 job 确实跳过才通过；失败、取消、意外跳过和缺失输出均阻断。
+分片数及 workspace 分组与上述选择独立，改变分组不能改变计划跳过的含义。
+双端类型检查在独立并行 job 中执行，沿用 runtime 选择；汇总只接受所选类型检查成功、
+或文档／翻译路径下的计划内跳过，意外跳过与缺失选择仍阻断。
+Host 三平台回归继续由 `scripts/ci-host-tests.mjs` 独立选取并汇入 `verify`；
+上述文档／翻译分类不会覆盖 Host 的判断（例如 Desktop locale 仍可能触发 Host 回归）。
+
 ### 提交门禁
 
 - 本仓默认 **PR-first**：代码和文档通常从非默认分支通过 PR 进入 `main`；直推 `main` 只由
