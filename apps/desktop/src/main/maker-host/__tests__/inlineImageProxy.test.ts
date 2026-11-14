@@ -21,13 +21,18 @@ const decode = (value: string) => {
 type Body = { model: string; input: Array<{ role: string; content: Array<{ type: string; image_url?: string; text?: string }> }> };
 const bodyFor = (images: string[]): Body => ({ model: 'gpt-6-astra', input: [{ role: 'user', content: [{ type: 'input_text', text: 'keep this text' }, ...images.map(image_url => ({ type: 'input_image', image_url }))] }] });
 
-async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => Promise<Body>, encode: ReturnType<typeof vi.fn<typeof compressImageBuffer>>, prepareCalls: () => number, allowRemovals: Array<boolean | undefined>) => Promise<void>, singleImageMaxBytes?: number, oversizedRequestRecovery?: OversizedRequestRecovery, maxRequestBodyBytes?: number) {
+async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => Promise<Body>, encode: ReturnType<typeof vi.fn<typeof compressImageBuffer>>, prepareCalls: () => number, allowRemovals: Array<boolean | undefined>) => Promise<void>, singleImageMaxBytes?: number, oversizedRequestRecovery?: OversizedRequestRecovery, maxRequestBodyBytes?: number, rejectFirstImageLimit?: number) {
   const received: Body[] = [];
   const allowRemovals: Array<boolean | undefined> = [];
   const upstream = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     received.push(JSON.parse(Buffer.concat(chunks).toString()));
+    if (rejectFirstImageLimit && received.length === 1) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: `image exceeds ${rejectFirstImageLimit} bytes maximum` } }));
+      return;
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end('{}');
   });
@@ -45,7 +50,7 @@ async function throughProxy(route: ImageRouteInfo, run: (send: (body: Body) => P
       format: () => 'responses', route: ctx => ({ ...route, providerId: ctx.headers['x-cindy-pi-provider-id'] }), preprocessor,
       control: (body, format, policy) => {
         allowRemovals.push(policy.allowRemoval);
-        return controlRequestSize(body, format, { ...policy, preprocessor, singleImageMaxBytes }, async () => { throw new Error('Disabled removal must not preserve images'); });
+        return controlRequestSize(body, format, { ...policy, preprocessor, singleImageMaxBytes: singleImageMaxBytes ?? policy.singleImageMaxBytes }, async () => { throw new Error('Disabled removal must not preserve images'); });
       },
     },
   });
@@ -131,24 +136,36 @@ it('honors enable -> disable -> enable through the real proxy and its cache', as
 });
 
 
-it('tightens an oversized image from original bytes and original MIME', async () => {
-  const png = await sharp({ create: { width: 200, height: 120, channels: 3, background: '#572193' } }).png({ compressionLevel: 0 }).toBuffer();
-  await throughProxy({ providerId: 'openai', modelId: 'gpt-6-astra' }, async (send, encode) => {
-    const forwarded = await send(bodyFor([uri(png, 'image/png')]));
-    expect(encode).toHaveBeenCalledTimes(2);
-    const prepared = await encode.mock.results[0].value;
-    expect(prepared.mimeType).toBe('image/webp');
-    expect(prepared.changed).toBe(true);
-    const ordinary = encode.mock.calls[0][0];
-    const tightened = encode.mock.calls[1][0];
-    expect(ordinary.bytes).toEqual(png);
-    expect(tightened.bytes).toEqual(png);
-    expect(tightened.mimeType).toBe('image/png');
-    expect(tightened.budget).toEqual({ maxBytes: 1024 });
-    const image = decode(forwarded.input[0].content[1].image_url!);
-    expect(image.bytes.length).toBeLessThanOrEqual(1024);
-    expect(await sharp(image.bytes).metadata()).toMatchObject({ width: 200, height: 120 });
-  }, 1024); // Single-image limit only; request trigger/target stay at their defaults.
+// Regression: the 400 retry must start from the original of only the image
+// still above the learned limit, not re-encode an already-small prepared image.
+it('retries only the still-oversized image from its original bytes and MIME', async () => {
+  const raw = Buffer.alloc(128 * 96 * 3);
+  let seed = 17;
+  for (let i = 0; i < raw.length; i += 3) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    raw.fill(seed >>> 24, i, i + 3);
+  }
+  const png = await sharp(raw, { raw: { width: 128, height: 96, channels: 3 } }).png({ compressionLevel: 0 }).toBuffer();
+  const small = await sharp({ create: { width: 200, height: 120, channels: 3, background: '#572193' } }).png({ compressionLevel: 0 }).toBuffer();
+  const limit = 8192;
+  expect(small.length).toBeGreaterThan(limit); // Raw size alone must not trigger tighten.
+  await throughProxy({ providerId: 'openai', modelId: 'gpt-6-astra' }, async (send, encode, _prepareCalls, allowRemovals) => {
+    const forwarded = await send(bodyFor([uri(png, 'image/png'), uri(small, 'image/png')]));
+    expect(allowRemovals).toHaveLength(2); // Initial attempt plus the real upstream 400 retry.
+    expect(encode).toHaveBeenCalledTimes(3); // Two prepare encodes, exactly one tighten encode.
+    const largePrepared = await encode.mock.results[0].value;
+    const smallPrepared = await encode.mock.results[1].value;
+    expect(largePrepared.mimeType).toBe('image/webp');
+    expect(largePrepared.bytes.length).toBeGreaterThan(limit);
+    expect(smallPrepared.bytes.length).toBeLessThanOrEqual(limit);
+    const budgetCalls = encode.mock.calls.filter(([input]) => input.budget);
+    expect(budgetCalls).toHaveLength(1);
+    expect(budgetCalls[0][0]).toMatchObject({ bytes: png, mimeType: 'image/png', budget: { maxBytes: limit } });
+    const content = forwarded.input[0].content;
+    expect(content.filter(item => item.type === 'input_image')).toHaveLength(2);
+    expect(decode(content[1].image_url!).bytes.length).toBeLessThanOrEqual(limit);
+    expect(content[2].image_url).toBe(uri(smallPrepared.bytes, smallPrepared.mimeType));
+  }, undefined, undefined, undefined, limit);
 });
 
 
