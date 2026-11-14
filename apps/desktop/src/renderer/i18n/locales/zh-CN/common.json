@@ -3902,7 +3902,9 @@
           "contextWindowInvalid": "上下文窗口必须是合法的正整数（数字组之间可用分隔符）",
           "requestPathInvalid": "精确请求路径需以单个 / 开头，不含片段标识或 .、.. 路径段；空格和不安全字符请使用百分号编码",
           "modelRequired": "请至少添加一个模型",
-          "oauthInvalid": "OAuth 配置不完整：所有字段均必填，且两个端点必须是安全的 https 地址"
+          "oauthInvalid": "OAuth 配置不完整：所有字段均必填，且两个端点必须是安全的 https 地址",
+          "apiKeyRequiredLoopback": "请填写 API Key，或把鉴权方式改为「无鉴权」(该端点是本机地址，支持免鉴权)",
+          "apiKeyRequiredRemote": "请填写 API Key。非本机地址不支持免鉴权；若该服务不校验 Key，填任意占位值即可(例如 ollama)"
         },
         "toast": {
           "created": "已添加供应商",

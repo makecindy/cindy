@@ -3900,7 +3900,9 @@
           "contextWindowInvalid": "上下文窗口须为合法正整数（数字组间可用分隔符）",
           "requestPathInvalid": "精确请求路径须以单一 / 起首，不含片段标识或 .、.. 路径段；空格与不安全字符请以百分号编码",
           "modelRequired": "请至少增一模型",
-          "oauthInvalid": "OAuth 之设不全：诸栏皆必填，且二端点须为安全之 https 地址"
+          "oauthInvalid": "OAuth 之设不全：诸栏皆必填，且二端点须为安全之 https 地址",
+          "apiKeyRequiredLoopback": "請填 API Key，或改驗證之法為「無驗」——此端乃本機之址，可免驗也",
+          "apiKeyRequiredRemote": "請填 API Key。非本機之址，不許免驗；若此服不覈其鑰，填任一替字可也(如 ollama)"
         },
         "toast": {
           "created": "已增供方",

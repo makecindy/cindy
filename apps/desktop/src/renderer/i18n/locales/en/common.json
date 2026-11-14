@@ -3943,7 +3943,9 @@
           "contextWindowInvalid": "Context window must be a valid positive integer (separators allowed between digit groups)",
           "requestPathInvalid": "Begin the exact request path with a single /. Do not use fragments or . and .. path segments; percent-encode spaces and unsafe characters.",
           "modelRequired": "Add at least one model",
-          "oauthInvalid": "Incomplete OAuth config: all fields are required and both endpoints must be secure https URLs"
+          "oauthInvalid": "Incomplete OAuth config: all fields are required and both endpoints must be secure https URLs",
+          "apiKeyRequiredLoopback": "Enter an API key, or switch authentication to None — this endpoint is a loopback address, which allows no-auth access.",
+          "apiKeyRequiredRemote": "Enter an API key. No-auth access is limited to loopback addresses; if the service ignores the key, any placeholder works (for example ollama)."
         },
         "toast": {
           "created": "Provider added",

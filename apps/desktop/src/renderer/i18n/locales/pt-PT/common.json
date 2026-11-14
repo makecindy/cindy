@@ -3992,7 +3992,9 @@
           "requestPathInvalid": "Comece o caminho exato do pedido com uma única /. Não use fragmentos nem segmentos de caminho . e ..; codifique espaços e caracteres não seguros com codificação percentual.",
           "modelRequired": "Adicione pelo menos um modelo",
           "oauthInvalid": "Configuração OAuth incompleta: todos os campos são obrigatórios e ambos os endpoints têm de ser URLs https seguros",
-          "baseUrlRequired": "Introduza o URL base deste ambiente de execução ou reponha o protocolo predefinido"
+          "baseUrlRequired": "Introduza o URL base deste ambiente de execução ou reponha o protocolo predefinido",
+          "apiKeyRequiredLoopback": "Indique uma chave de API ou mude a autenticação para «Nenhuma» — este endpoint é um endereço de loopback e permite acesso sem autenticação.",
+          "apiKeyRequiredRemote": "Indique uma chave de API. O acesso sem autenticação só é possível em endereços de loopback; se o serviço não validar a chave, qualquer valor de preenchimento serve (por exemplo ollama)."
         },
         "toast": {
           "created": "Fornecedor adicionado",
