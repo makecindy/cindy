@@ -1,10 +1,11 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, constants } from 'node:fs';
-import { copyFile, lstat, mkdir, open, realpath, rm } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, mkdtemp, open, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
-import { recoverInlineAttachments, type OversizedRequestRecovery } from '@cindy/anthropic-compat-proxy';
+import { controlRequestSize, recoverInlineAttachments, type ImageRouteInfo, type InlineImagePreprocessor, type OversizedRequestRecovery, type RequestSizeController } from '@cindy/anthropic-compat-proxy';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions, mediaRefs } from '../localDb/schema.js';
 import { addRef, removeRefById } from '../cindy-media/ledger.js';
@@ -139,5 +140,74 @@ async function serializeRecovery<T>(key: string, run: () => Promise<T>): Promise
     });
   };
 }
-return { createAttachmentRecovery };
+
+function createRequestSizeController(
+  resolveSession: (headers: Record<string, string>) => string | null | undefined,
+  preprocessor: InlineImagePreprocessor = { prepare: async () => null },
+): RequestSizeController {
+  return {
+    enabled: () => process.env.XDT_DISABLE_REQUEST_SIZE_CONTROL !== '1',
+    format: ctx => ctx.url.includes('/responses') ? 'responses' : ctx.url.includes('/messages') ? 'anthropic' : ctx.url.includes('/chat/completions') ? 'chat' : null,
+    route: (ctx, body) => ({
+      endpoint: ctx.url,
+      modelId: typeof body === 'object' && body !== null && typeof (body as { model?: unknown }).model === 'string'
+        ? (body as { model: string }).model : undefined,
+    }),
+    preprocessor,
+    control: async (body, format, policy) => {
+      // Session resolution is performed by the existing recovery callback. The size controller
+      // keeps persistence scoped to the current DB owner and never exposes a path to the model.
+      const snapshot = getCurrentDbClientSnapshot();
+      if (!snapshot) return null;
+      const scope = captureMediaRefCompensationScope();
+      const db = snapshot.client.drizzle;
+      const sessionId = resolveSession(policy.context?.headers ?? {});
+      if (!sessionId || !/^[\w-]+$/.test(sessionId)) return null;
+      const session = await db.select({ status: sessions.status, remoteHostId: sessions.remoteHostId })
+        .from(sessions).where(eq(sessions.id, sessionId)).get();
+      if (!session || session.status === 'deleted' || session.remoteHostId) return null;
+      const assertCurrent = () => {
+        scope.assertStillValid();
+        if (getCurrentDbClientSnapshot() !== snapshot || resolveSession(policy.context?.headers ?? {}) !== sessionId) {
+          throw new Error('Attachment recovery owner changed');
+        }
+      };
+      const directory = await mkdtemp(path.join(tmpdir(), 'cindy-request-size-'));
+      const staged = new Map<string, { source: string; hash: string; mimeType: string; refId?: string }>();
+      try {
+        const route = policy.route as ImageRouteInfo;
+        const model = route.modelId?.toLowerCase() ?? '';
+        const modelFamily = /(?:^|[/_-])(?:gpt|o[1-9]|codex)(?:[/_.-]|$)/.test(model)
+          ? 'gpt' : model.includes('claude') ? 'claude' : 'other';
+        const result = await serializeRecovery(`${scope.ownerStorageKey}/${sessionId}`, async () => controlRequestSize(
+          body, format, { route, modelFamily, signal: policy.signal, preprocessor, singleImageMaxBytes: policy.singleImageMaxBytes },
+          async (bytes, mimeType, index) => {
+            const hash = createHash('sha256').update(bytes).digest('hex');
+            const ext = extForMime(mimeType) ?? '.bin';
+            const destination = resolveSafe(blobUrl(hash, ext)).absPath;
+            const source = path.join(directory, `${index}-${hash}${ext}`);
+            await writeFile(source, bytes, { flag: 'wx', mode: 0o600 });
+            if (!staged.has(destination)) {
+              const existing = await db.select({ id: mediaRefs.id }).from(mediaRefs)
+                .where(and(eq(mediaRefs.hash, hash), eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId))).get();
+              staged.set(destination, { source, hash, mimeType, refId: existing ? undefined : randomUUID() });
+            }
+            return destination;
+          },
+        ));
+        if (!result) return null;
+        for (const [destination, item] of staged) {
+          const media = await ingestMedia({ filePath: item.source, mimeType: item.mimeType, isCache: false,
+            refs: [], assertStillValid: assertCurrent, refCompensationScope: scope }, db);
+          if (resolveSafe(media.url).absPath !== destination) throw new Error('Recovered attachment path changed');
+          if (item.refId) await addRef({ id: item.refId, hash: item.hash, refKind: 'session-attachment', refId: sessionId,
+            originSessionId: sessionId, originKind: 'user' }, db);
+        }
+        return result;
+      } finally { await rm(directory, { recursive: true, force: true }); }
+    },
+  };
+}
+
+return { createAttachmentRecovery, createRequestSizeController };
 }

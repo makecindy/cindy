@@ -1,0 +1,107 @@
+import { describe, expect, it } from 'vitest';
+import { controlRequestSize, type InlineImagePreprocessor } from './request-size-control.js';
+import { classifyRequestSizeError } from './request-size-errors.js';
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：controlRequestSize，验证代理发出的 wire body、替换文本、预算错误和稳定前缀。
+ * - Bug／规则依据：长历史图片导致 413；请求大小控制的 32/14MiB、图数上限与前缀缓存契约。
+ * - 现有覆盖缺口：旧 recovery 只在溢出后顺序挪图，未覆盖三种 wire、assistant 回合、预处理和快速路径。
+ * - 最小失败输入：一张 data URL、一个 tool_result 或 51 张微图，配合小型表驱动预算；tier：unit。
+ * - 实测耗时：单独运行本文件约 0.4s（Vitest，含收集）。
+ */
+
+const imageData = (value: number, bytes = 400) => Buffer.alloc(bytes, value).toString('base64');
+const preserve = async (_bytes: Buffer, _mime: string, index: number) => `/tmp/recovered-${index}.png`;
+
+describe('request size control', () => {
+  it('classifies nested provider size errors after decoding', () => {
+    expect(classifyRequestSizeError('{"error":{"message":"Exceeded maximum number of images (50) allowed"}}')).toMatchObject({ kind: 'image-count', limitCount: 50 });
+    expect(classifyRequestSizeError('image exceeds 5 MB maximum: 7473812 bytes')).toMatchObject({ kind: 'single-image-too-large', limitBytes: 5 * 1024 * 1024 });
+    expect(classifyRequestSizeError('Request size is too large. Max size is 100 MB')).toMatchObject({ kind: 'request-too-large', limitBytes: 100 * 1024 * 1024 });
+    expect(classifyRequestSizeError('Input is too long.')).toMatchObject({ kind: 'context-too-long' });
+  });
+  it('keeps a small request byte-for-byte on the quick path', async () => {
+    const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }] }));
+    expect(await controlRequestSize(raw, 'responses', { triggerBytes: 100, targetBytes: 50 }, preserve)).toBeNull();
+  });
+
+  it('replays Responses history oldest-first and traverses tool output without rewriting the prefix', async () => {
+    const body = {
+      prefix: 'keep-this-prefix',
+      input: [
+        { role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(1)}` }] },
+        { type: 'reasoning', summary: [] },
+        { type: 'function_call_output', output: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(2)}` }] },
+        { role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(3)}` }] },
+      ],
+    };
+    const raw = Buffer.from(JSON.stringify(body));
+    const result = await controlRequestSize(raw, 'responses', { triggerBytes: raw.length - 1, targetBytes: raw.length - 250 }, preserve);
+    expect(result?.removedImages).toBeGreaterThan(0);
+    const prefixBytes = Buffer.byteLength('{"prefix":"keep-this-prefix","input":[');
+    expect(result?.body.subarray(0, prefixBytes)).toEqual(raw.subarray(0, prefixBytes));
+    const parsed = JSON.parse(result!.body.toString()) as { input: Array<{ content: Array<{ type: string; text?: string }> }> };
+    expect(parsed.input[0].content[0].type).toBe('input_text');
+    expect(parsed.input[0].content[0].text).toContain('/tmp/recovered-0.png');
+  });
+
+  it('supports Anthropic tool_result and Chat Completions image shapes', async () => {
+    const anthropic = Buffer.from(JSON.stringify({ messages: [
+      { role: 'user', content: [{ type: 'tool_result', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: imageData(1) } }] }] },
+    ] }));
+    const chat = Buffer.from(JSON.stringify({ messages: [
+      { role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${imageData(2)}` } }] },
+    ] }));
+    expect((await controlRequestSize(anthropic, 'anthropic', { triggerBytes: 1, targetBytes: anthropic.length - 100 }, preserve))?.body.toString()).toContain('recovered-0');
+    expect((await controlRequestSize(chat, 'chat', { triggerBytes: 1, targetBytes: chat.length - 100 }, preserve))?.body.toString()).toContain('recovered-0');
+  });
+
+  it('enforces GPT and Claude image count caps and keeps the newest images', async () => {
+    const input = Array.from({ length: 51 }, (_, i) => ({ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(i, 1)}` }] }));
+    const raw = Buffer.from(JSON.stringify({ input }));
+    const result = await controlRequestSize(raw, 'responses', { modelFamily: 'gpt', triggerBytes: raw.length + 1, targetBytes: raw.length + 10_000 }, preserve);
+    expect(result?.removedImages).toBe(29);
+    const parsed = JSON.parse(result!.body.toString()) as { input: Array<{ content: Array<{ type: string }> }> };
+    expect(parsed.input.at(-1)?.content[0].type).toBe('input_image');
+    expect(parsed.input[0]?.content[0].type).toBe('input_text');
+  });
+
+  it('uses compressed bytes for the budget through the injected preprocessor', async () => {
+    let calls = 0;
+    const preprocessor: InlineImagePreprocessor = {
+      async prepare({ bytes }) {
+        calls++;
+        return { bytes: bytes.subarray(0, 2), mimeType: 'image/webp', width: 1, height: 1, changed: true, cacheKey: 'fake' };
+      },
+    };
+    const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(8, 31)}` }] }] }));
+    const result = await controlRequestSize(raw, 'responses', { triggerBytes: raw.length - 1, targetBytes: raw.length - 1, preprocessor, route: { modelId: 'cache-test' } }, preserve);
+    expect(result?.removedImages).toBe(0);
+    expect(result?.body.toString()).toContain('image/webp');
+    const repeated = await controlRequestSize(raw, 'responses', { triggerBytes: raw.length - 1, targetBytes: raw.length - 1, preprocessor, route: { modelId: 'cache-test' } }, preserve);
+    expect(repeated?.body).toBeDefined();
+    expect(calls).toBe(1);
+  });
+
+  it('preserves the exact existing prefix when the same history gets a new suffix', async () => {
+    const history = { input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(5)}` }] }] };
+    const first = Buffer.from(JSON.stringify(history));
+    const extended = Buffer.from(JSON.stringify({ ...history, input: [...history.input, { role: 'user', content: [{ type: 'input_text', text: 'new' }] }] }));
+    const firstResult = await controlRequestSize(first, 'responses', { triggerBytes: 1, targetBytes: first.length - 100 }, preserve);
+    const extendedResult = await controlRequestSize(extended, 'responses', { triggerBytes: 1, targetBytes: extended.length - 100 }, preserve);
+    const stablePrefixLength = firstResult!.body.indexOf(Buffer.from('}]}')) + 3;
+    expect(stablePrefixLength).toBeGreaterThan(0);
+    expect(extendedResult?.body.subarray(0, stablePrefixLength)).toEqual(firstResult!.body.subarray(0, stablePrefixLength));
+  });
+
+  it('fails locally when text alone cannot fit after all images are removed', async () => {
+    const raw = Buffer.from(JSON.stringify({ instructions: 'x'.repeat(200), input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${imageData(1, 30)}` }] }] }));
+    await expect(controlRequestSize(raw, 'responses', { triggerBytes: 100, targetBytes: 10 }, preserve)).rejects.toThrow('REQUEST_TEXT_TOO_LARGE');
+  });
+
+  it('rejects a text-only request that crosses the trigger locally', async () => {
+    const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_text', text: 'x'.repeat(200) }] }] }));
+    await expect(controlRequestSize(raw, 'responses', { triggerBytes: 100, targetBytes: 50 }, preserve)).rejects.toThrow('REQUEST_TEXT_TOO_LARGE');
+  });
+});

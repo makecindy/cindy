@@ -63,7 +63,7 @@ it('cancels upstream 413 preservation without dispatching a retry', async () => 
   const gate = new Promise<void>(resolve => { release = resolve; });
   const upstreamCall = vi.fn();
   const upstream = createServer(async (req, res) => {
-    for await (const _ of req) { /* consume */ }
+    for await (const chunk of req) { void chunk; }
     upstreamCall();
     res.writeHead(413); res.end('too large');
   });

@@ -204,6 +204,7 @@ export interface CodexProxyHostPorts {
   bearerKeyFromHeaders: typeof import('../model-access/gatewayKeyRejection.js').bearerKeyFromHeaders;
   reportCindyGatewayKeyRejected: typeof import('../model-access/gatewayKeyRejection.js').reportCindyGatewayKeyRejected;
   createAttachmentRecovery: typeof import('./oversized-attachment-recovery.js').createAttachmentRecovery;
+  createRequestSizeController: typeof import('./oversized-attachment-recovery.js').createRequestSizeController;
   restrictSubscriptionRequest: typeof import('./subscription-fast-request-policy.js').restrictSubscriptionRequest;
   withSubscriptionFastRequestPolicy: typeof import('./subscription-fast-request-policy.js').withSubscriptionFastRequestPolicy;
   peekGrokAccessToken: typeof import('./grok-oauth-login.desktop.js').peekGrokAccessToken;
@@ -233,7 +234,7 @@ export interface CodexProxyHostPorts {
 
 /** Same protocol, routing and recovery implementation for both launchers. */
 export function createCodexProxyHost(ports: CodexProxyHostPorts) {
-const { bearerKeyFromHeaders, reportCindyGatewayKeyRejected, createAttachmentRecovery, restrictSubscriptionRequest, withSubscriptionFastRequestPolicy, peekGrokAccessToken, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM, claudeUpstreamEndpoint, isOpenAiSubscriptionProviderId, createXaiProxyAuthInvalidationObserver, resolveDesktopOutboundProxy, outboundFetch, readSilentEncryptedRetrySettings, recordXaiRateLimitSnapshot, CODEX_IMAGE_GENERATION_ACTOR_HEADER, codexCustomProviderRoutesSignature, findCodexAppliedCustomProviderRoute, isCodexCustomProviderNamespacePath, parseCodexCustomProviderPath, relativeProviderRequestPath, setAppliedCustomProviderRoutes } = ports;
+const { bearerKeyFromHeaders, reportCindyGatewayKeyRejected, createAttachmentRecovery, createRequestSizeController, restrictSubscriptionRequest, withSubscriptionFastRequestPolicy, peekGrokAccessToken, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM, claudeUpstreamEndpoint, isOpenAiSubscriptionProviderId, createXaiProxyAuthInvalidationObserver, resolveDesktopOutboundProxy, outboundFetch, readSilentEncryptedRetrySettings, recordXaiRateLimitSnapshot, CODEX_IMAGE_GENERATION_ACTOR_HEADER, codexCustomProviderRoutesSignature, findCodexAppliedCustomProviderRoute, isCodexCustomProviderNamespacePath, parseCodexCustomProviderPath, relativeProviderRequestPath, setAppliedCustomProviderRoutes } = ports;
 
 
 // scope = 'codex-proxy'。保持独立 scope,方便后续 E2E 日志脚本按 codex proxy 过滤。
@@ -452,11 +453,10 @@ function createArmedHttpRecoveryStripTransform(useUpstreamModel = false): Reques
 // 缓冲 + JSON.parse,该值同时是单请求的内存 / 解析停顿预算)。
 const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
 
-// ChatGPT 订阅后端的 WebSocket 单条消息上限约 16 MiB(2026-10 实测:12 MiB 通过,16 MiB 起
-// 回 1009 Message Too Big;HTTP 无此限制)。连接回收后 Codex 要整段重发历史,图片多的会话会
-// 每次被拒、退到 HTTP 慢传。超过时先把最早的内联附件外置为本地文件,压到目标值再发。
-const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 15 * 1024 * 1024;
-const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 12 * 1024 * 1024;
+// ChatGPT 订阅后端的 WebSocket 单条消息保守上限为 12 MiB；整段历史超过时先把最早的
+// 内联附件外置为本地文件，压到 8 MiB。增量帧（带 previous_response_id）保持原样。
+const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 12 * 1024 * 1024;
+const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 8 * 1024 * 1024;
 
 // proxy 路线 spawn 鉴权模式: codex 当前带的是 OAuth token(requires_openai_auth)还是 gateway key(env_key)。
 // index.ts prepareCodexExtraSpawnConfig 在每次 spawn 前按本次会话 credentialMode set; routingTransform 据此决策。
@@ -3635,7 +3635,9 @@ async function createCodexProxyHandle(
       const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
       const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
       const request = next ? Buffer.from(JSON.stringify(next)) : message;
-      return request.length > CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES ? fitWebSocketRequest(request, ctx, signal) : request;
+      const fullReplay = isPlainObject(next) && !Object.prototype.hasOwnProperty.call(next, 'previous_response_id');
+      return fullReplay && request.length > CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES
+        ? fitWebSocketRequest(request, ctx, signal) : request;
     }),
     transformResponse: (ctx) => {
       const response = {
@@ -3692,6 +3694,7 @@ async function createCodexProxyHandle(
     ),
     maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
     oversizedRequestRecovery: attachmentRecovery,
+    requestSizeController: createRequestSizeController(sessionIdFromHeaders),
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
     recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
     logger: log,

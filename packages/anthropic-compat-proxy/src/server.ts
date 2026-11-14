@@ -15,6 +15,7 @@
 
 import { installResponseGuard } from './response-guard.js';
 import { collectRecoverableBody } from './oversized-attachments.js';
+import { classifyRequestSizeError } from './request-size-errors.js';
 import { createHash } from 'node:crypto';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -975,6 +976,7 @@ function forward(
   // Optional request-local operational observer. It never receives raw request/response data.
   forwardLifecycle?: ForwardLifecycleObserver | null,
   recoverUpstreamOversized?: (body: Buffer, signal: AbortSignal) => Promise<Buffer>,
+  recoverRequestSize?: (body: Buffer, error: ReturnType<typeof classifyRequestSizeError>, signal: AbortSignal) => Promise<Buffer | null>,
 ): void {
   // Diagnostics are a strict side channel: callback failures must never change forwarding.
   const notifyForwardLifecycle = (notify: () => void): void => {
@@ -1170,6 +1172,53 @@ function forward(
       ? recoveryRules.filter((r) => r.enabled() && (canRetry || r.unrecoverableCode))
       : [];
     const recover413 = status === 413 && canRetry && recoverUpstreamOversized;
+    if (recover413) {
+      // A 413 is final at the HTTP status line. Start recovery immediately instead of waiting
+      // for a gateway body that may never finish (ALB commonly follows it with a 400/FIN).
+      const recoveryAbort = new AbortController();
+      const abortRecovery = (): void => recoveryAbort.abort();
+      clientRes.once('close', abortRecovery);
+      const early413Chunks: Buffer[] = [];
+      upstreamRes.on('data', (chunk: Buffer) => early413Chunks.push(chunk));
+      upstreamRes.once('error', () => undefined);
+      upstreamRes.resume();
+      // Let the already-arrived status body drain for compatibility, then close the old
+      // upload connection so a late ALB 400/FIN cannot keep it alive.
+      setImmediate(() => upstreamReq.destroy());
+      void (async () => {
+        let recovered: Buffer | undefined;
+        try { recovered = await recoverUpstreamOversized(body, recoveryAbort.signal); }
+        catch { recovered = undefined; }
+        finally { clientRes.off('close', abortRecovery); }
+        if (clientRes.destroyed || clientRes.writableEnded) return;
+        if (recovered && recovered.length < body.length) {
+          try {
+            if (beforeRetry && !(await beforeRetry())) return;
+          } catch {
+            recovered = undefined;
+          }
+          if (!recovered || clientRes.destroyed || clientRes.writableEnded) return;
+          logger.info?.('upstream 413 attachment recovery retry', {
+            reqId, originalBytes: body.length, recoveredBytes: recovered.length,
+          });
+          forward(
+            target, method, path, headers, recovered, clientRes, logger,
+            recoveryRules, reqId, false, overrideTarget, headerOverride,
+            headerDelete, responseObserver, transformResponse, clientModel,
+            outboundProxy, pathOverride, responseToolUseIds, threadMintedIdCache,
+            requestDeclaredStream, beforeRetry, forwardLifecycle,
+          );
+          return;
+        }
+        if (!clientRes.headersSent) {
+          clientRes.writeHead(413, { 'content-type': 'application/json; charset=utf-8', connection: 'close' });
+          clientRes.end(early413Chunks.length > 0
+            ? Buffer.concat(early413Chunks)
+            : JSON.stringify({ error: { type: 'request_too_large', message: 'Upstream rejected this request as too large.' } }));
+        }
+      })();
+      return;
+    }
     if (activeRules.length > 0 || recover413) {
       const chunks: Buffer[] = [];
       const failBufferedResponse = (
@@ -1218,31 +1267,20 @@ function forward(
         // (回客户端仍是原始 errBody + content-encoding 头透传, 客户端自己解压, 见下方 clientRes.end)
         const decodedErrBody = decodeBodyForLog(errBody, String(upstreamRes.headers['content-encoding'] ?? ''));
         const decodedText = decodedErrBody.toString('utf8');
-        if (recover413) {
-          const recoveryAbort = new AbortController();
-          const abortRecovery = (): void => recoveryAbort.abort();
-          clientRes.once('close', abortRecovery);
-          let recovered: Buffer | undefined;
-          try {
-            recovered = await recover413(body, recoveryAbort.signal);
-          } catch {
-            // Storage failure, unsupported content and cancellation must never
-            // replace the original 413 with an unrelated recovery error.
-            logger.info?.('upstream 413 attachment recovery unavailable', { reqId });
-          } finally {
-            clientRes.off('close', abortRecovery);
-          }
-          if (clientRes.destroyed || clientRes.writableEnded) return;
-          if (recovered && recovered.length < body.length) {
-            try {
-              if (beforeRetry && !(await beforeRetry())) return;
-            } catch {
-              recovered = undefined;
-            }
+        if (status === 400 && recoverRequestSize && canRetry) {
+          const sizeError = classifyRequestSizeError(decodedText);
+          if (sizeError.kind !== 'other' && sizeError.kind !== 'unsupported-image' && sizeError.kind !== 'context-too-long') {
+            const retryAbort = new AbortController();
+            const abortRetry = (): void => retryAbort.abort();
+            clientRes.once('close', abortRetry);
+            let recovered: Buffer | null = null;
+            try { recovered = await recoverRequestSize(body, sizeError, retryAbort.signal); }
+            catch { recovered = null; }
+            finally { clientRes.off('close', abortRetry); }
             if (clientRes.destroyed || clientRes.writableEnded) return;
-            if (recovered) {
-              logger.info?.('upstream 413 attachment recovery retry', {
-                reqId, originalBytes: body.length, recoveredBytes: recovered.length,
+            if (recovered && recovered.length < body.length) {
+              logger.info?.('upstream request size recovery retry', {
+                reqId, originalBytes: body.length, recoveredBytes: recovered.length, reason: sizeError.kind,
               });
               forward(
                 target, method, path, headers, recovered, clientRes, logger,
@@ -2006,6 +2044,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   const host = opts.host ?? '127.0.0.1';
   const maxBodyBytes = opts.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
   const oversizedRequestCompactor: OversizedRequestCompactor | undefined = opts.oversizedRequestCompactor;
+  const requestSizeController = opts.requestSizeController;
   // Treat a malformed ingress override as unset.  Letting NaN reach the
   // stream guard would make `total > NaN` false forever and turn the bounded
   // ingress into an unbounded read.
@@ -2260,6 +2299,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       try { recoverOversized = opts.oversizedRequestRecovery?.(requestCtx) ?? null; }
       catch { /* No stable owner: retain the existing bounded request path. */ }
     }
+    const sizeControlEnabled = requestSizeController?.enabled?.() !== false && Boolean(requestSizeController);
+    // Request-size control owns the pre-dispatch 32 MiB budget. Keep the legacy recovery
+    // callback for an upstream 413 retry, but do not let it rewrite the ingress body first.
+    const ingressRecovery = sizeControlEnabled ? null : recoverOversized;
     let requestGuard: ReturnType<NonNullable<ProxyOptions['requestGuard']>>;
     try {
       requestGuard = opts.requestGuard?.(requestCtx) ?? null;
@@ -2279,7 +2322,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // hard limit for other media types so enabling it cannot accidentally make
     // binary/form uploads consume the larger ingress window.
     const requestIngressBytes =
-      oversizedRequestCompactor && contentType.toLowerCase().startsWith('application/json')
+      sizeControlEnabled && contentType.toLowerCase().startsWith('application/json')
+        ? Math.max(oversizedIngressBytes, 128 * 1024 * 1024)
+        : oversizedRequestCompactor && contentType.toLowerCase().startsWith('application/json')
         ? oversizedIngressBytes
         : maxBodyBytes;
 
@@ -2394,7 +2439,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 只有 chunked 上传才落到 collectRequestBody 的流式守卫)。
     // 注意读原始 req.headers —— flattenRequestHeaders 会剥掉 content-length(转发时重算)。
     const declaredBytes = Number(req.headers['content-length'] ?? '');
-    if (!recoverOversized && Number.isFinite(declaredBytes) && declaredBytes > requestIngressBytes) {
+    if (!ingressRecovery && Number.isFinite(declaredBytes) && declaredBytes > requestIngressBytes) {
       respondRequestTooLarge({
         req, res, logger, reqId, method, url, headers,
         limitBytes: maxBodyBytes,
@@ -2409,7 +2454,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const abortRecovery = () => recoveryAbort.abort();
     res.once('close', abortRecovery);
     try {
-      rawBody = recoverOversized
+      rawBody = ingressRecovery
         ? await collectRecoverableBody(req, maxBodyBytes, async body => {
             try {
               const recovered = await recoverOversized!(body, maxBodyBytes);
@@ -2477,6 +2522,48 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       }
     }
     decision = applyDispatchGate(decision, reqId, requestCtx);
+
+    // Apply request-size control before either local dispatch or the normal transform chain.
+    // The controller is host-injected so this package remains independent of media storage.
+    if (requestSizeController && requestSizeController.enabled?.() !== false && jsonRequest) {
+      let sizeParsed = rawParsed;
+      if (sizeParsed === undefined) {
+        try { sizeParsed = JSON.parse(rawBody.toString('utf8')); }
+        catch { sizeParsed = undefined; }
+      }
+      const format = sizeParsed === undefined ? null : requestSizeController.format?.(requestCtx, sizeParsed);
+      if (format) {
+        const sizeStartedAt = Date.now();
+        try {
+          const controlled = await requestSizeController.control(rawBody, format, {
+            route: requestSizeController.route?.(requestCtx, sizeParsed) ?? {},
+            signal: recoveryAbort.signal,
+            context: requestCtx,
+          });
+          if (controlled) {
+            rawBody = controlled.body;
+            rawParsed = JSON.parse(rawBody.toString('utf8'));
+            logger.info?.('request size control applied', {
+              reqId,
+              originalBytes: controlled.originalBytes,
+              bytes: controlled.bytes,
+              removedImages: controlled.removedImages,
+              reason: controlled.reason,
+              elapsedMs: Date.now() - sizeStartedAt,
+            });
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message === 'REQUEST_TEXT_TOO_LARGE') {
+            logger.warn?.('request text exceeds local size budget', { reqId, bytes: rawBody.length });
+            res.writeHead(413, { 'content-type': 'application/json; charset=utf-8', connection: 'close' });
+            res.end(JSON.stringify({ error: { type: 'request_too_large', message: 'Request text exceeds the local 32 MiB request budget after image recovery.' } }));
+            return;
+          }
+          logger.warn?.('request size control failed; preserving original request', { reqId, err: message });
+        }
+      }
+    }
 
     // 本地 handler 命中:不转发上游、不跑 transform 链,由 handler 直接消费(协议翻译场景)。
     // parsedBody 复用路由阶段的解析结果,不二次 parse。
@@ -2790,11 +2877,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       recoverOversized
         ? (body, signal) => collectRecoverableBody(
             Readable.from([body]),
-            body.length - 1,
-            (spooled) => recoverOversized!({ ...spooled, upstreamRejected: true }, body.length - 1),
+            Math.max(1, Math.floor(body.length * 0.44)),
+            (spooled) => recoverOversized!({ ...spooled, upstreamRejected: true }, Math.max(1, Math.floor(body.length * 0.44))),
             signal,
           )
         : undefined,
+      opts.requestSizeRetry,
     );
   });
 

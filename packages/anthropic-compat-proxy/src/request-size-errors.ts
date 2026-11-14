@@ -1,0 +1,25 @@
+export type RequestSizeErrorKind = 'request-too-large' | 'image-count' | 'single-image-too-large' | 'unsupported-image-format' | 'unsupported-image' | 'context-too-long' | 'other';
+
+export interface RequestSizeError {
+  kind: RequestSizeErrorKind;
+  limitBytes?: number;
+  limitCount?: number;
+  mimeType?: string;
+}
+
+const bytes = (value: string, unit: string): number => Math.floor(Number(value.replace(/,/g, '')) * (unit.toLowerCase().startsWith('m') ? 1024 * 1024 : unit.toLowerCase().startsWith('k') ? 1024 : 1));
+
+/** Classify decoded (possibly nested JSON) upstream text without retaining its payload. */
+export function classifyRequestSizeError(input: string): RequestSizeError {
+  const text = input.toLowerCase();
+  if (/unsupported image format|image format is not supported|invalid image format/.test(text)) return { kind: 'unsupported-image-format' };
+  if (/model does not support image|does not support images|only supports text modality|image modality is not supported/.test(text)) return { kind: 'unsupported-image' };
+  if (/context (?:length|window)|prompt is too long|input is too long/.test(text)) return { kind: 'context-too-long' };
+  const count = text.match(/(?:maximum number of images|exceeded maximum number of images|too many images)[^\d]*(\d+)/);
+  if (count) return { kind: 'image-count', limitCount: Number(count[1]) };
+  const single = text.match(/image[^\d]*(?:exceeds?|maximum|limit)[^\d]*(\d+(?:[.,]\d+)?)\s*(kb|mb|bytes?)/);
+  if (single) return { kind: 'single-image-too-large', limitBytes: bytes(single[1], single[2]) };
+  const max = text.match(/(?:max(?:imum)? size is|request exceeds?[^\d]*maximum allowed size|request size)[^\d]*(\d+(?:[.,]\d+)?)\s*(kb|mb|bytes?)/);
+  if (max) return { kind: 'request-too-large', limitBytes: bytes(max[1], max[2]) };
+  return { kind: 'other' };
+}

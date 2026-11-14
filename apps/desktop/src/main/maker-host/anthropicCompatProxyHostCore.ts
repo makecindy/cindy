@@ -126,6 +126,7 @@ import { createPiResponsesVerbosityTransform } from './pi-responses-verbosity.js
 /** The Desktop-only reads, resolved by each launcher. */
 export interface AnthropicCompatProxyHostPorts {
   createAttachmentRecovery: typeof import('./oversized-attachment-recovery.js').createAttachmentRecovery;
+  createRequestSizeController: typeof import('./oversized-attachment-recovery.js').createRequestSizeController;
   outboundFetch: typeof import('./outbound-fetch.desktop.js').outboundFetch;
   isOpenAiSubscriptionProviderId: typeof import('./codex-account-auth.desktop.js').isOpenAiSubscriptionProviderId;
   createPiWebSocketRequestPreparer: typeof import('./pi-subscription-websocket.js').createPiWebSocketRequestPreparer;
@@ -147,7 +148,7 @@ export interface AnthropicCompatProxyHostPorts {
 
 /** One loopback proxy with its routing, transforms, recovery rules and observers. */
 export function createAnthropicCompatProxyHost(ports: AnthropicCompatProxyHostPorts) {
-const { createAttachmentRecovery, outboundFetch, isOpenAiSubscriptionProviderId, createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, getPiNativeSubscriptionHandler, getResponsesBridgeHandler, subscriptionRequestAllowsFast, withSubscriptionFastRequestPolicy, resolveDesktopOutboundProxy, claudeUpstreamEndpoint, readSilentEncryptedRetrySettings } = ports;
+const { createAttachmentRecovery, createRequestSizeController, outboundFetch, isOpenAiSubscriptionProviderId, createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, getPiNativeSubscriptionHandler, getResponsesBridgeHandler, subscriptionRequestAllowsFast, withSubscriptionFastRequestPolicy, resolveDesktopOutboundProxy, claudeUpstreamEndpoint, readSilentEncryptedRetrySettings } = ports;
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
 // (agent-*.ndjson, source=proxy)。child(sub) 会继续保持 'cc-proxy/sub' 前缀, routing 一致。
@@ -1209,6 +1210,12 @@ async function ensureAnthropicCompatProxyReady(): Promise<void> {
           return authenticatePiProxySession(piSessionId, headerValue(headers, 'x-cindy-pi-session-token'))
             ? piSessionId : null;
         }
+        const sdkSessionId = headerValue(headers, 'x-claude-code-session-id');
+        return sdkSessionId ? _resolveCcSessionId?.(sdkSessionId) : null;
+      }),
+      requestSizeController: createRequestSizeController(headers => {
+        const piSessionId = headerValue(headers, 'x-cindy-pi-session-id');
+        if (piSessionId) return authenticatePiProxySession(piSessionId, headerValue(headers, 'x-cindy-pi-session-token')) ? piSessionId : null;
         const sdkSessionId = headerValue(headers, 'x-claude-code-session-id');
         return sdkSessionId ? _resolveCcSessionId?.(sdkSessionId) : null;
       }),
