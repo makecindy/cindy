@@ -133,7 +133,7 @@ flowchart LR
 
 - 位置与格式不变：`<userData>/safe-storage/<key>.enc`，内容为 base64 文本，解密后前缀 `v11`。
 - Linux 参数（对真实密文实测）：keyring `application=Cindy`（schema `chrome_libsecret_os_crypt_password_v2`）；key = PBKDF2-SHA1(secret, "saltysalt", 1 轮, 16 字节)；AES-128-CBC；IV 为 16 个空格。
-- 无 Secret Service 时抛 `CREDENTIAL_STORE_UNAVAILABLE`，不回退明文、不静默失败。
+- 无 Secret Service 时抛 `CREDENTIAL_STORE_UNAVAILABLE`，不回退明文、不静默失败。部署方可以显式设置 `CINDY_HOST_CREDENTIAL_KEY_FILE`，从只有属主可读写的文件读取同一密钥（见 `docs/dev-rules/credentials-and-local-storage.md`「Linux 凭证后端」）。
 - 新写入使用 0600 与同目录临时文件 + rename 原子替换。
 - 实现：`apps/host/src/credentials/{oscrypt,linux-keyring,store}.mjs`；测试 `store.test.mjs`（9 例）。
 - 令牌续期：`apps/host/src/auth/refresh.mjs` 复用 `@cindy/auth-client` 的刷新语义，服务端轮换时原子写回同一记录，access token 只留内存。单测覆盖轮换/不轮换/缺失三种分支。

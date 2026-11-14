@@ -169,6 +169,14 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   （例如 GNOME Keyring）；此修复不安装或解锁钥匙串，也不新增明文降级。libsecret 缺失时
   Chromium 仍会回退，Cindy 继续拒绝明文。现有仅限开发版的
   `XDT_DEV_SAFE_STORAGE_BASIC=1` 调试行为保持不变。
+- 独立 Host 在没有 Secret Service 的 Linux 上（服务器、容器、NAS 应用、系统服务），可以
+  显式设置 `CINDY_HOST_CREDENTIAL_KEY_FILE`（或 `createCredentialStore` 的
+  `credentialKeyFile`）指向一个只有属主可读写的普通文件，内容是原本存放在密钥环中的密钥
+  字符串。密钥推导与 `v11` 格式不变，两种来源的记录可以互相读取。文件缺失、不是普通文件、
+  对用户组或其他用户开放、或去掉空白后为空时，返回 `CREDENTIAL_STORE_UNAVAILABLE` 并说明
+  具体原因，不回退密钥环，也不回退明文。文件中的密钥只受文件权限保护，安全级别与
+  systemd `LoadCredential=`、Docker Secrets 相同，所以只作为部署方显式开启的选项；
+  未设置时行为不变。实现与回归见 `apps/host/src/credentials/store.mjs` 与 `store.test.mjs`。
 - 不把空的桌面环境变量本身当成禁止登录的条件，也不在启动时探测钥匙串。用户发起验证码
   请求、验证码提交或浏览器登录时，才检查当前加密后端是否可用；不可用则返回既有的
   `CREDENTIAL_STORE_UNAVAILABLE`，不发送验证码、不打开浏览器、不交换授权码。凭证读取

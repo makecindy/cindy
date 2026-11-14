@@ -61,9 +61,53 @@ test('missing Secret Service fails explicitly instead of degrading to plaintext'
       userDataDir,
       keyPromise: Promise.reject(new Error('Secret Service is not available')),
     }),
-    (error) => error instanceof SafeStorageUnavailableError && error.code === 'CREDENTIAL_STORE_UNAVAILABLE',
+    (error) => error instanceof SafeStorageUnavailableError && error.code === 'CREDENTIAL_STORE_UNAVAILABLE'
+      && /Unlock the system keyring/.test(error.message),
   );
   assert.equal(fs.existsSync(path.join(userDataDir, 'safe-storage', 'session.enc')), false);
+});
+
+// Headless Linux has no Secret Service; the same keyring secret can come from an
+// owner-only file. Records must stay interchangeable with keyring-derived keys.
+function keyFile(dir, content, mode = 0o600) {
+  const file = path.join(dir, 'credential.key');
+  fs.writeFileSync(file, content);
+  fs.chmodSync(file, mode);
+  return file;
+}
+
+// The key file is a Linux-only source and its check relies on POSIX permission
+// bits, which Windows does not report: chmod there only toggles read-only.
+const posixModes = { skip: process.platform === 'win32' && 'credential key files rely on POSIX file permission bits' };
+
+test('a credential key file holding the keyring secret reads and writes the same v11 records', posixModes, async (t) => {
+  const userDataDir = tempProfile(t);
+  const credentialKeyFile = keyFile(userDataDir, `  ${TEST_SECRET}\n`);
+  const viaKeyring = await createPreparedLinuxCredentialStore({ userDataDir, keyPromise: Promise.resolve(testKey()) });
+  const viaFile = await createPreparedLinuxCredentialStore({ userDataDir, credentialKeyFile });
+
+  viaKeyring.write('session', 'from-keyring');
+  assert.equal(viaFile.read('session'), 'from-keyring');
+  viaFile.write('session', 'from-file');
+  assert.equal(viaKeyring.read('session'), 'from-file');
+});
+
+test('an unusable credential key file fails with its cause, never falling back', posixModes, async (t) => {
+  const userDataDir = tempProfile(t);
+  const cases = [
+    ['group or world readable', () => keyFile(userDataDir, TEST_SECRET, 0o644), /group or others/],
+    ['missing', () => path.join(userDataDir, 'missing.key'), /ENOENT/],
+    ['blank', () => keyFile(userDataDir, ' \n'), /is empty/],
+    ['a directory', () => userDataDir, /not a regular file/],
+  ];
+  for (const [label, file, cause] of cases) {
+    await assert.rejects(
+      createPreparedLinuxCredentialStore({ userDataDir, credentialKeyFile: file() }),
+      (error) => error instanceof SafeStorageUnavailableError && error.code === 'CREDENTIAL_STORE_UNAVAILABLE'
+        && cause.test(error.message) && !/Unlock the system keyring/.test(error.message),
+      label,
+    );
+  }
 });
 
 test('payload produced here decodes with the measured Desktop parameters', () => {
