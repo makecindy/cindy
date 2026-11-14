@@ -17089,7 +17089,9 @@
         "saveAria": "存此自運",
         "createAria": "立此自運",
         "namePlaceholder": "為此自運賜一佳名",
-        "promptPlaceholder": "例：於 Sentry 中查新崩潰，撮其要害之迴歸。"
+        "promptPlaceholder": "例：於 Sentry 中查新崩潰，撮其要害之迴歸。",
+        "expandPrompt": "展編",
+        "collapsePrompt": "收"
       },
       "executionMode": {
         "label": "行法",

@@ -17163,7 +17163,9 @@
         "saveAria": "Save automation",
         "createAria": "Create automation",
         "namePlaceholder": "Name this Automation",
-        "promptPlaceholder": "Example: Find new crashes in Sentry and summarize the top regressions."
+        "promptPlaceholder": "Example: Find new crashes in Sentry and summarize the top regressions.",
+        "expandPrompt": "Expand editor",
+        "collapsePrompt": "Collapse"
       },
       "executionMode": {
         "label": "Execution",

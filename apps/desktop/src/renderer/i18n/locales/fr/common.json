@@ -17328,7 +17328,9 @@
         "saveAria": "Enregistrer l'automatisation",
         "createAria": "Créer l'automatisation",
         "namePlaceholder": "Nommez cette automatisation",
-        "promptPlaceholder": "Exemple : Trouve les nouveaux plantages dans Sentry et résume les principales régressions."
+        "promptPlaceholder": "Exemple : Trouve les nouveaux plantages dans Sentry et résume les principales régressions.",
+        "expandPrompt": "Éditer en grand",
+        "collapsePrompt": "Réduire"
       },
       "executionMode": {
         "label": "Exécution",

@@ -11,6 +11,10 @@ const schedule: Schedule = {
   webhookTrigger: { events: ['issues.opened'], source: { preset: 'github' } },
 };
 
+// Issue #10224: automation prompts are often dozens of lines long.
+const longPrompt = Array.from({ length: 40 }, (_, index) =>
+  `${index + 1}. 检查项目的新动态，按负责人分组并总结需要跟进的事项。`).join('\n');
+
 void mountPage({
   route: '/cc-agent/scheduled',
   host: { maker: {
@@ -21,7 +25,9 @@ void mountPage({
     webhookAccount: async () => ({ used: 1, limit: 10, endpoints: [] }),
     scriptCapabilityStatus: async () => ({ statuses: [] }),
   } } },
-  render: () => <ScheduleFormDialog open initial={ctx.case === 'create' ? null : schedule}
+  render: () => <ScheduleFormDialog open
+    initial={ctx.case === 'create' ? null
+      : ctx.case === 'long-prompt' || ctx.case === 'expanded' ? { ...schedule, prompt: longPrompt } : schedule}
     initialValues={ctx.case === 'create' ? { webhookEnabled: true } : undefined}
     onOpenChange={() => {}} onSubmit={forbid('save automation')} />,
 });

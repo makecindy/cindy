@@ -17328,7 +17328,9 @@
         "saveAria": "Guardar automatización",
         "createAria": "Crear automatización",
         "namePlaceholder": "Nombre de esta automatización",
-        "promptPlaceholder": "Ejemplo: Busca nuevos fallos en Sentry y resume las principales regresiones."
+        "promptPlaceholder": "Ejemplo: Busca nuevos fallos en Sentry y resume las principales regresiones.",
+        "expandPrompt": "Ampliar edición",
+        "collapsePrompt": "Contraer"
       },
       "executionMode": {
         "label": "Ejecución",

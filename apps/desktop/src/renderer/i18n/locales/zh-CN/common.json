@@ -17089,7 +17089,9 @@
         "saveAria": "保存自动化",
         "createAria": "创建自动化",
         "namePlaceholder": "为这个自动化命名",
-        "promptPlaceholder": "示例：在 Sentry 中查找新崩溃并总结关键回归。"
+        "promptPlaceholder": "示例：在 Sentry 中查找新崩溃并总结关键回归。",
+        "expandPrompt": "展开编辑",
+        "collapsePrompt": "收起"
       },
       "executionMode": {
         "label": "执行方式",
