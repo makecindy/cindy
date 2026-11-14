@@ -39,4 +39,3 @@ Host 已把三个回调接入 CodexAgent。订阅池按历史目录认回账号�
 - 既有 `codexLocalSessions.test.ts` 与 `.native.test.ts` 保持原样；拆分前后用例名称、状态和数量逐项对照。
 - Host `scripts/codex-runtime.e2e.mjs`：真实 CodexAgent 与原生 Codex，本机模拟上游；两个内部目录能力之间恢复，归档/取消归档、分叉/尾裁、路线更换都检查原历史/SQLite 与登记位置。模拟目录能力与 API key 仅用于夹具，不代表订阅分配或登录已验收。较新的原生版本尾裁使用 turn anchor，旧版 `thread/rollback` 分支由 maker-core 既有用例保护。
 - 同一 e2e 验证远端未配置时拒绝、受邀者目录找不到本机原线程时失败，两条都不调用本机历史 resolver/preparer；不为测试增设远端产品实现。
-
