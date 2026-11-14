@@ -1805,7 +1805,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   ): Promise<void> {
     if (!m.from) return;
     const respondent = m.reply_to_message && this.questionRespondents.get(encodeMessageId(String(m.chat.id), String(m.reply_to_message.message_id)));
-    if (respondent && respondent.respondent !== String(m.from.id)) return;
+    if (respondent && !respondent.closed && respondent.respondent !== String(m.from.id)) return;
     // Recheck settled albums: membership can change while their media is buffered.
     if ((m.chat.type === 'group' || m.chat.type === 'supergroup')
       && String(m.from.id) !== this.ownerUserId && !this.groupAdmission().allows(m.chat.id)) return;

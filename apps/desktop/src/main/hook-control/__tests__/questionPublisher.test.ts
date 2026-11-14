@@ -5,6 +5,26 @@ import { createHookQuestionPublisher } from '../questionPublisher';
 
 // Exercise actual wire validation and Host reply pairing; no simulated success at the answer gate.
 describe('generic Hook question publisher', () => {
+  // PR #10511: unit, real protocol parser. 25 choices or 24 + submit used
+  // to invalidate the entire request; earlier cases only used one option.
+  it.each([1, 4])('keeps every choice reachable when %i questions overflow the wire button limit', async count => {
+    const frames: HookMessage[] = [];
+    let respond!: (button: string, text?: string) => Promise<boolean>;
+    const answer = vi.fn();
+    const publisher = createHookQuestionPublisher({ requestId: 'turn',
+      send: frame => { expect(parseHookMessage(frame).ok).toBe(true); frames.push(frame); return true; },
+      register: (_id, handler) => { respond = handler; return () => {}; },
+    });
+    await publisher.open({ kind: 'ask_user_question', requestId: 'q', delivery: 'async', questions:
+      Array.from({ length: count }, (_, i) => ({ id: `q${i}`, question: `Question ${i}`, options:
+        Array.from({ length: count === 1 ? 25 : 6 }, (_, j) => ({ label: `Choice ${j + 1}` })) })) },
+    { answer, settled: new Promise(() => {}) });
+    expect(frames[0]).toMatchObject({ payload: { body: expect.stringContaining(count === 1 ? 'Choice 25' : '4·6.') } });
+    for (let i = 0; i < count; i++) expect(await respond('question:reply', count === 1 ? '25' : `${i + 1}: 6`)).toBe(true);
+    if (count > 1) expect(await respond('question:reply', 'OK')).toBe(true);
+    expect(answer).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: Object.fromEntries(
+      Array.from({ length: count }, (_, i) => [`q${i}`, count === 1 ? 'Choice 25' : 'Choice 6'])) });
+  });
   it.each(['async', 'blocking'] as const)('%s questions reuse one card and wait for Host settlement', async mode => {
     const frames: HookMessage[] = [];
     let respond!: (button: string, text?: string) => Promise<boolean>;

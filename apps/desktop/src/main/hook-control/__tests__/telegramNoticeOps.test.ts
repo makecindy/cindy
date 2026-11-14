@@ -67,6 +67,23 @@ describe('Telegram async card delivery', () => {
     await vi.waitFor(() => expect(f.frames.at(-1)).toMatchObject({ payload: { interactionClosed: true } }));
   });
 
+  // PR #10511: unit, production msg.op callback. Existing coverage stopped at
+  // a single text answer; quoted multi-select OK must submit, not overwrite it.
+  it('submits multiple selections from quoted replies after the async turn ends', async () => {
+    const f = fixture(true);
+    await f.publisher.open({ ...question, questions: [{ ...question.questions[0], multiSelect: true }] }, f.controls);
+    await f.publisher.drain();
+    const frame = f.frames[0];
+    if (frame.type !== 'msg.op') throw new Error('missing question');
+    const reply = f.handlers.get(frame.payload.interactionId!)!;
+    expect(await reply('question:reply', '1,2')).toBe(true);
+    expect(await reply('question:reply', 'OK')).toBe(true);
+    expect(f.controls.answer).toHaveBeenCalledExactlyOnceWith({ kind: 'ask_user_question',
+      answers: { 'Which format?': '["PDF","Text"]' } });
+    f.settle(f.controls.answer.mock.calls[0][0]);
+    await vi.waitFor(() => expect(f.handlers.size).toBe(0));
+  });
+
   it('bounds an unknown send and never retries it when App settles', async () => {
     vi.useFakeTimers();
     const f = fixture(false);

@@ -26,7 +26,7 @@ export function createHookQuestionPublisher(deps: {
         if (!deps.send(frame)) throw new Error('question connection unavailable');
       }, imText('imBot.text.questions.replyHint', { code }));
       const off = deps.register(interactionId, (button, text) => button === 'question:reply' && text !== undefined
-        ? (request.questions.length > 1 || request.questions.some(q => q.multiSelect)) && text.trim().toLowerCase() === 'ok' ? card.submit() : card.replyText(text) : card.click(button));
+        ? card.replyText(text) : card.click(button));
       void controls.settled.then(off, off);
       if (request.delivery !== 'async') {
         pending.add(card.completed);

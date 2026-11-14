@@ -2628,6 +2628,13 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => expect(seen).toHaveLength(2));
     expect(messages).toHaveLength(0);
     expect(seen[1]).toMatchObject({ messageId: sent.messageId, buttonId: 'question:reply', payload: { answerText: 'PDF' } });
+    // PR #10511, unit via real inbound transport: a closed question must not
+    // swallow ordinary quoted messages from the owner or other admitted members.
+    await im.updateInteractiveCard(sent.messageId, { body: 'Answered', buttons: [] },
+      { questionRespondentId: '222', questionClosed: true });
+    api.pushUpdates([reply(111), reply(333)]);
+    await vi.waitFor(() => expect(messages).toHaveLength(2));
+    expect(seen).toHaveLength(2);
     api.pushUpdates([{ update_id: ++seq, my_chat_member: {
       chat: { id: -100200, type: 'supergroup', title: 'Ops' },
       from: { id: 111, is_bot: false, first_name: 'U' }, date: nowSec(),

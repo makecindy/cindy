@@ -22,9 +22,12 @@ export function createQuestionCard(
   let closed = false;
   let submitted = false;
   let tail = Promise.resolve();
+  const requiresSubmit = request.questions.length > 1
+    || request.questions.some(q => q.multiSelect || q.answerConstraints?.required === false);
   const answerFor = (qi: number): string => {
     const q = request.questions[qi];
     if (written.has(qi)) return encodeAskOptionAnswers(q.multiSelect === true, [written.get(qi)!]);
+    if (!selections.get(qi)?.size) return '';
     return encodeAskOptionAnswers(q.multiSelect === true,
       [...(selections.get(qi) ?? [])].sort((a, b) => a - b).map(oi => q.options![oi].label));
   };
@@ -33,19 +36,25 @@ export function createQuestionCard(
     ...(q.options ?? []).map((o, j) => `${i + 1}·${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`),
     ...(answerFor(i) ? [imText('imBot.text.questions.resolved', { option: formatAskAnswersForDisplay({ value: answerFor(i) }) })] : []),
   ].join('\n')).join('\n\n');
-  const render = (status?: string): InteractiveCardSpec => ({
-    title: '❓',
-    body: `${body()}\n\n${status ?? hint ?? imText('imBot.text.questions.cardHint')}`,
-    buttons: closed || submitted ? [] : [
-      ...request.questions.flatMap((q, qi) => (q.options ?? []).map((o, oi) => ({
-        id: `${id}:${revision}:${qi}:${oi}`,
-        label: `${selections.get(qi)?.has(oi) ? '✓ ' : ''}${qi + 1}·${oi + 1} ${o.label}`,
-      }))),
-      ...((request.questions.length > 1 || request.questions.some(q => q.multiSelect)) ? [{
-        id: `${id}:${revision}:submit`, label: imText('imBot.text.questions.submitLabel'),
-      }] : []),
-    ],
-  });
+  const render = (status?: string): InteractiveCardSpec => {
+    const choices = request.questions.flatMap((q, qi) => (q.options ?? []).map((o, oi) => ({
+      id: `${id}:${revision}:${qi}:${oi}`,
+      label: `${selections.get(qi)?.has(oi) ? '✓ ' : ''}${qi + 1}·${oi + 1} ${o.label}`,
+    })));
+    const submit = requiresSubmit ? [{
+      id: `${id}:${revision}:submit`, label: imText('imBot.text.questions.submitLabel'),
+    }] : [];
+    return {
+      title: '❓',
+      body: `${body()}\n\n${status ?? hint ?? imText('imBot.text.questions.cardHint')}`,
+      buttons: closed || submitted ? [] : [
+        // Hook interaction.request allows 24 buttons. Oversized forms retain all
+        // choices in the numbered body and the same text-answer/submit path.
+        ...(choices.length + submit.length <= 24 ? choices : []),
+        ...submit,
+      ],
+    };
+  };
   const update = (status?: string) => {
     const card = render(status);
     const isClosed = closed;
@@ -65,13 +74,19 @@ export function createQuestionCard(
     async submit(): Promise<boolean> { return this.click(`${id}:${revision}:submit`); },
     async replyText(text: string): Promise<boolean> {
       if (closed || submitted || !text.trim()) return false;
+      if (requiresSubmit && text.trim().toLowerCase() === 'ok') return this.submit();
       const numbered = /^(\d+)\s*[:：]\s*([\s\S]+)$/.exec(text.trim());
       const qi = request.questions.length === 1 ? 0 : numbered ? Number(numbered[1]) - 1 : -1;
       const value = request.questions.length === 1 ? text.trim() : numbered?.[2].trim() ?? '';
       const q = request.questions[qi];
-      if (!q || !value || askAnswerError(q, value)) return false;
+      if (!q || !value) return false;
       const indices = /^\d+(?:\s*[,，]\s*\d+)*$/.test(value) ? value.split(/[,，]/).map(v => Number(v.trim()) - 1) : [];
-      if (indices.length && (q.multiSelect || indices.length === 1) && indices.every(index => q.options?.[index])) {
+      const numberedChoice = indices.length > 0 && (q.multiSelect || indices.length === 1)
+        && indices.every(index => q.options?.[index]);
+      const answer = encodeAskOptionAnswers(q.multiSelect === true, numberedChoice
+        ? [...new Set(indices)].sort((a, b) => a - b).map(index => q.options![index].label) : [value]);
+      if (askAnswerError(q, answer)) return false;
+      if (numberedChoice) {
         written.delete(qi); selections.set(qi, new Set(indices));
       } else { written.set(qi, value); selections.delete(qi); }
       revision += 1;
@@ -89,10 +104,11 @@ export function createQuestionCard(
         const answers: Record<string, string> = {};
         request.questions.forEach((q, qi) => {
           const value = answerFor(qi);
-          if (value) answers[answerKey(q)] = value;
+          answers[answerKey(q)] = value;
         });
         if (!Object.keys(answers).length || request.questions.some(q =>
-          !answers[answerKey(q)] || askAnswerError(q, answers[answerKey(q)]!))) return false;
+          (!answers[answerKey(q)] && q.answerConstraints?.required !== false)
+            || askAnswerError(q, answers[answerKey(q)]!))) return false;
         submitted = true;
         controls.answer({ kind: 'ask_user_question', answers });
         await update();

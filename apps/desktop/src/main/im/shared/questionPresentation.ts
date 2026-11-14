@@ -63,7 +63,7 @@ export async function presentImQuestion(args: {
     }
   }, imText(output.kind === 'rich-card' ? 'imBot.text.questions.replyHint' : 'imBot.text.questions.textHint', { code }));
   const entry: Pending = { code, lane: args.lane, respondent: args.respondent, scope: args.scope,
-    messages, current, answer: text => (request.questions.length > 1 || request.questions.some(q => q.multiSelect)) && text.trim().toLowerCase() === 'ok' ? card.submit() : card.replyText(text) };
+    messages, current, answer: text => card.replyText(text) };
   entries.add(entry);
   const unsubscribe = output.kind === 'rich-card' ? output.im.onCardAction(event => {
     if (event.messageId !== messageId || event.senderId !== args.lane || !current()) return;

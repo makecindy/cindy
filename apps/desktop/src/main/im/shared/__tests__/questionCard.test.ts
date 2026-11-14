@@ -17,6 +17,31 @@ function fixture(questions: QuestionRequest['questions']) {
 }
 
 describe('async question choices', () => {
+  // PR #10511 review: unit regressions through createQuestionCard. Earlier fixtures
+  // lacked MCP constraints, optional fields and oversized option lists.
+  it('allows optional fields to stay empty, including an entirely optional form', async () => {
+    const f = fixture([{ id: 'name', question: 'Name?' },
+      { id: 'note', question: 'Note?', answerConstraints: { required: false } }]);
+    await f.card.ready;
+    await f.card.replyText('1: Cindy');
+    expect(await f.card.submit()).toBe(true);
+    expect(f.controls.answer).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { name: 'Cindy', note: '' } });
+    const optional = fixture([{ id: 'note', question: 'Note?', answerConstraints: { required: false } }]);
+    await optional.card.ready;
+    expect(optional.frames[0].card.buttons!.some(b => b.id.endsWith(':submit'))).toBe(true);
+    expect(await optional.card.replyText('OK')).toBe(true);
+    expect(optional.controls.answer).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { note: '' } });
+  });
+  it('validates the decoded option label rather than its number and preserves the previous valid answer', async () => {
+    const f = fixture([{ id: 'mode', question: 'Mode?', options: [{ label: 'Personal' }, { label: 'No' }],
+      answerConstraints: { required: true, choices: ['Personal', 'No'], minLength: 3 } },
+      { id: 'note', question: 'Note?', answerConstraints: { required: false } }]);
+    await f.card.ready;
+    expect(await f.card.replyText('1: 1')).toBe(true);
+    expect(await f.card.replyText('1: 2')).toBe(false);
+    expect(await f.card.submit()).toBe(true);
+    expect(f.controls.answer).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { mode: 'Personal', note: '' } });
+  });
   // Real locale catalogs: misplaced keys used to expose raw key names in the card.
   it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko', 'fr', 'es', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh'] as const)(
     'renders instructions and submit controls in %s', async locale => {
