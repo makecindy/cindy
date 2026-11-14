@@ -3700,6 +3700,7 @@ const USER_INPUT_ACTIVE_WINDOW_MS = 3_000;
  */
 const AGENT_INPUT_ATTRIBUTION_SLACK_MS = 1_500;
 let lastAgentInputEndedAt = 0;
+let lastObservedOwnerInputAt = 0;
 let agentInputsInFlight = 0;
 let unclassifiedInputsInFlight = 0;
 let screenLockedByEvent: boolean | undefined;
@@ -3736,6 +3737,7 @@ async function trackAgentInputDispatch<T>(name: string, run: () => Promise<T>): 
   if (knownHidInput) agentInputsInFlight += 1;
   else unclassifiedInputsInFlight += 1;
   let attributable = false;
+  let axOnlyResult = false;
   try {
     const result = await run();
     // A driver refusal comes back as a normal result (`effect: "refused"`, e.g.
@@ -3747,12 +3749,25 @@ async function trackAgentInputDispatch<T>(name: string, run: () => Promise<T>): 
     const setValueUsedInput = inputPath === 'click_type_fg' || inputPath === 'click_select_fg'
       || inputPath === 'click_type_mpx' || inputPath === 'click_select_mpx';
     attributable = !isRefusedDriverResult(result) && (!isSetValue || setValueUsedInput);
+    axOnlyResult = isSetValue && !setValueUsedInput && inputPath === 'ax' && !isRefusedDriverResult(result);
     return result;
   } catch (err) {
     // A failed set_value has no attested path: keep later user input visible.
     attributable = !isSetValue && (err as { outcomeUnknown?: unknown } | null)?.outcomeUnknown === true;
     throw err;
   } finally {
+    // A completed AX write emitted no HID events. Preserve the current idle
+    // sample before a following Agent HID action can overwrite the system clock.
+    if (axOnlyResult) {
+      try {
+        const idleSeconds = powerMonitor.getSystemIdleTime();
+        if (Number.isFinite(idleSeconds) && idleSeconds >= 0) {
+          lastObservedOwnerInputAt = Math.max(lastObservedOwnerInputAt, Date.now() - idleSeconds * 1000);
+        }
+      } catch {
+        // An unavailable idle probe leaves the previous observation intact.
+      }
+    }
     if (knownHidInput) agentInputsInFlight -= 1;
     else unclassifiedInputsInFlight -= 1;
     if (attributable) lastAgentInputEndedAt = Date.now();
@@ -3761,6 +3776,7 @@ async function trackAgentInputDispatch<T>(name: string, run: () => Promise<T>): 
 
 function resetDesktopInputGuardStateForTests(): void {
   lastAgentInputEndedAt = 0;
+  lastObservedOwnerInputAt = 0;
   agentInputsInFlight = 0;
   unclassifiedInputsInFlight = 0;
   screenLockedByEvent = undefined;
@@ -3816,14 +3832,17 @@ function msSinceForeignDesktopInput(now = Date.now()): number | null {
   // No attested route yet: neither declare the owner absent nor count possible
   // Agent keystrokes as owner input. AwayGuard already defers on unknown state.
   if (unclassifiedInputsInFlight > 0) return null;
+  const observedOwnerInputMs = lastObservedOwnerInputAt > 0
+    ? Math.max(0, now - lastObservedOwnerInputAt) : Number.POSITIVE_INFINITY;
   // Another Agent input is still being delivered: its events are ours.
-  if (agentInputsInFlight > 0) return Number.POSITIVE_INFINITY;
+  if (agentInputsInFlight > 0) return observedOwnerInputMs;
   // The idle clock is floored to whole seconds: the last input happened at or before
   // this instant, and at most a second earlier. Only when even the latest possible
   // moment lies within the Agent's delivery tail is the whole range the Agent's.
   const latestInputAt = now - idleSeconds * 1000;
-  if (latestInputAt <= lastAgentInputEndedAt + AGENT_INPUT_ATTRIBUTION_SLACK_MS) return Number.POSITIVE_INFINITY;
-  return idleSeconds * 1000;
+  if (latestInputAt <= lastAgentInputEndedAt + AGENT_INPUT_ATTRIBUTION_SLACK_MS) return observedOwnerInputMs;
+  lastObservedOwnerInputAt = Math.max(lastObservedOwnerInputAt, latestInputAt);
+  return Math.max(0, now - lastObservedOwnerInputAt);
 }
 
 let physicalInputShielded: () => boolean = () => false;

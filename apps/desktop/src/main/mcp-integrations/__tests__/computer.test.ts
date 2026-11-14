@@ -4780,6 +4780,35 @@ describe('foreground input while the person is using this computer', () => {
     }
   });
 
+  // A following Agent HID action resets the idle clock before AwayGuard's next
+  // tick. The AX completion must preserve the owner's input in that interval.
+  it('keeps owner input seen at AX completion through the next Agent click', async () => {
+    vi.useFakeTimers();
+    try {
+      await callComputerDriverTool('get_window_state', target, context);
+      const showMasks = vi.fn(async () => {});
+      const guard = new AwayGuardController({
+        enabled: () => true, screenLocked: () => false,
+        msSinceOwnerInput: () => msSinceForeignDesktopInput(),
+        awayAfterMs: () => 30_000,
+        keepDisplayAwake: vi.fn(), showMasks,
+        lockAndHideMasks: vi.fn(async () => {}), hideMasks: vi.fn(),
+        now: () => Date.now(), log: vi.fn(),
+      });
+      vi.advanceTimersByTime(29_000);
+      powerMonitorState.idleSeconds = 0;
+      mcpCallToolMock.mockResolvedValueOnce({ structuredContent: { ok: true, path: 'ax', effect: 'confirmed' } });
+      await callComputerDriverTool('set_value', { ...target, element_index: 0, value: 'hi' }, context);
+      await callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'background' }, context);
+      vi.advanceTimersByTime(2_000);
+      powerMonitorState.idleSeconds = 2;
+      await guard.tick();
+      expect(showMasks).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Linux set_value can use real keyboard input. Its actual CUA path must be
   // credited for presence detection, while foreground admission still uses
   // the raw idle clock and AX-only writes leave user input visible.
