@@ -1,3 +1,4 @@
+import { useStableHomeSections, type HomeDisplayOrder } from './homeStableOrder';
 import { playHaptic } from '@/platform/haptics';
 import { taskListSessionTarget } from './sessionDrawerNavigation';
 import type { ViewInstance } from 'react-native';
@@ -257,7 +258,8 @@ import {
 } from '@/session/homeViewPreferenceStore';
 import { homeNavigationOwner, useHomeMode } from '@/session/useHomeMode';
 import {
-  getCachedHomeListSnapshot,
+  getCachedHomeListState,
+  rememberHomeDisplayOrder,
   scheduleHomeListSnapshotPersist,
 } from '@/session/mobileHomeListCache';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
@@ -663,6 +665,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // 首次网络同步必须等设备筛选偏好恢复，否则单机用户会先按默认“全部”拉一轮所有电脑。
   const [homeViewPreferencesHydrated, setHomeViewPreferencesHydrated] = useState(restoredView);
   const [refreshing, setRefreshing] = useState(false);
+  const [homeAppActive, setHomeAppActive] = useState(AppState.currentState === 'active');
+  const displayOrderScopeRef = useRef('');
+  const [displayOrderSeed, setDisplayOrderSeed] = useState<HomeDisplayOrder | null>(null);
+  const [displayOrderRevision, setDisplayOrderRevision] = useRetainedHomeState(viewSession, 'displayOrderRevision', 0);
+  const resetDisplayOrder = useCallback(() => setDisplayOrderRevision(value => value + 1), [setDisplayOrderRevision]);
   const [error, setError] = useState<HomeConnectionError>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const clearDirectoryBudget = useCallback(() => {
@@ -775,6 +782,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [viewMode, setViewMode] = useRetainedHomeState<HomeListViewMode>(viewSession, 'viewMode', 'list');
   const [taskInfoFields, setTaskInfoFields] = useRetainedHomeState<readonly HomeTaskInfoField[]>(viewSession, 'taskInfoFields', DEFAULT_HOME_TASK_INFO_FIELDS);
   const [hostProjectOrders, setHostProjectOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
+  const hostProjectOrderLoadRef = useRef<Promise<void> | null>(null);
   const projectOrderFetchFenceRef = useRef(createProjectOrderFetchFence());
   const visualProjectKeysRef = useRef<string[]>([]);
   const homeRootRef = useRef<ViewInstance>(null);
@@ -855,6 +863,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
 
     setDevices([]);
     setHomeListCacheHydrated(false);
+    setDisplayOrderSeed(null);
     setRefreshing(false);
     setError(null);
     setLastSyncedAt(null);
@@ -1463,12 +1472,19 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // A manual refresh also recovers the teammate section: roster, group chats and cloud companions.
   const homeRoster = teammatesSectionContext.shared;
   const refreshHome = useCallback(() => {
-    void loadHome({ visible: true });
+    const owner = accountGeneration;
+    const scope = displayOrderScopeRef.current;
+    void loadHome({ visible: true }).then(async () => {
+      // A refresh queued behind startup must wait for that queued batch too.
+      while (syncInFlightRef.current) await syncInFlightRef.current;
+      await hostProjectOrderLoadRef.current;
+      if (homeAccountGenerationRef.current === owner && displayOrderScopeRef.current === scope) resetDisplayOrder();
+    });
     if (!homeRoster) return;
     void homeRoster.roster.refresh();
     if (homeRoster.groups.supported) void homeRoster.groups.refresh();
     setTeammatesRefreshKey(key => key + 1);
-  }, [homeRoster, loadHome]);
+  }, [accountGeneration, homeRoster, loadHome, resetDisplayOrder]);
   loadHomeRef.current = loadHome;
 
   // 冷启动先画缓存:上次 loadHome 成功的设备+会话快照种入 store,先把列表画出来(消除首屏强制
@@ -1484,23 +1500,24 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }
     let cancelled = false;
     const read = startBoundedStartupRead(
-      getCachedHomeListSnapshot(homeCacheUserId),
-      [],
+      getCachedHomeListState(homeCacheUserId),
+      { devices: [], displayOrder: null },
     );
-    const applySnapshot = async (snapshot: Awaited<ReturnType<typeof getCachedHomeListSnapshot>>) => {
+    const applySnapshot = async (snapshot: Awaited<ReturnType<typeof getCachedHomeListState>>) => {
       await syncInFlightRef.current;
       if (
         cancelled
         || homeAccountGenerationRef.current !== expectedAccountGeneration
         || lastSyncedAtRef.current !== null
       ) return;
-      for (const device of snapshot) {
+      setDisplayOrderSeed(snapshot.displayOrder);
+      for (const device of snapshot.devices) {
         remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
       }
     };
     void read.initial
-      .then((initial) => {
-        void applySnapshot(initial.value);
+      .then(async (initial) => {
+        await applySnapshot(initial.value);
         if (initial.timedOut) void read.completion.then((late) => {
           if (late.ok) void applySnapshot(late.value);
         });
@@ -1787,6 +1804,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   useEffect(() => {
     startSilentHomeSync();
     const subscription = AppState.addEventListener('change', (nextState) => {
+      setHomeAppActive(nextState === 'active');
       // 退后台后连接会在宽限期后停掉，期间的推送无从补齐：回前台一律按需重拉。
       if (nextState === 'background') homeListFreshnessRef.current.invalidateAll();
       if (nextState === 'active') startSilentHomeSync();
@@ -2166,7 +2184,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         }, 2000);
       }
     };
-    void load(1);
+    const initialLoad = load(1);
+    hostProjectOrderLoadRef.current = initialLoad;
     const unsubscribe = subscribeRemoteProjectOrderChanged((deviceId, snapshot) => {
       if (
         cancelled
@@ -2183,6 +2202,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
+      if (hostProjectOrderLoadRef.current === initialLoad) hostProjectOrderLoadRef.current = null;
       unsubscribe();
     };
   }, [accountGeneration, homeSyncDeviceIds, invoke]);
@@ -2362,7 +2382,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     () => applyHomeContentFilters(sharedGroup.home, contentFilters, filterTick || Date.now()),
     [contentFilters, filterTick, sharedGroup.home],
   );
-  const homeSections = useMemo(
+  const sortedHomeSections = useMemo(
     () => buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {
       dialogueTitle: t('devices.list.menu.dialogueFolder'),
       groupDialogue,
@@ -2373,6 +2393,26 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }),
     [displayedManualProjectOrder, displayedProjectOrder, filteredHome, groupByProject, groupDialogue, pinnedCollapsed, sortPriorityContext, sortBy, t],
   );
+  // Sorting metadata may arrive after rows. Only user actions or a new visit release
+  // the displayed order; live activity, priority and host-order pushes update content.
+  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, groupByProject, groupDialogue,
+    sortBy, statusFilter, projectFilter, teammateFilter, vendorFilter, lastActivityFilter, searchQuery]);
+  displayOrderScopeRef.current = displayOrderScope;
+  const commitDisplayOrder = useCallback((order: HomeDisplayOrder) => {
+    rememberHomeDisplayOrder(homeCacheUserId, order);
+    scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
+  }, [homeCacheUserId]);
+  const homeSections = useStableHomeSections({
+    sections: sortedHomeSections,
+    scope: displayOrderScope,
+    revision: displayOrderRevision,
+    ready: homeListCacheHydrated && homeViewPreferencesHydrated && deviceIdentityCacheReady,
+    settled: lastSyncedAt !== null,
+    visible: screenFocused && active && homeAppActive,
+    session: viewSession,
+    seed: displayOrderSeed,
+    onCommit: commitDisplayOrder,
+  });
   const sections = useMemo(() => {
     if (!shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) return homeSections;
     return [{
@@ -2673,6 +2713,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const applyDisplayView = useCallback((patch: HomeDisplayPatch & { manualProjectOrder?: string[] }) => {
     const expectedAccountGeneration = accountGeneration;
     viewPrefsTouchedRef.current = true;
+    resetDisplayOrder();
     let nextPatch = patch;
     if (
       !selectedDeviceId
@@ -2718,6 +2759,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       }).then((result) => {
         if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
         if (result.kind === 'unavailable') {
+          resetDisplayOrder();
           projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
           setHostProjectOrders((current) => {
             const next = new Map(current);
@@ -2732,6 +2774,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           return;
         }
         if (result.kind !== 'ok') return;
+        resetDisplayOrder();
         projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
         setHostProjectOrders((current) => {
           const next = new Map(current);
@@ -2746,7 +2789,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (nextPatch.projectOrder !== undefined) setProjectOrder(nextPatch.projectOrder);
     if (nextPatch.manualProjectOrder !== undefined) setManualProjectOrder(nextPatch.manualProjectOrder);
     void saveHomeViewPreferences(nextPatch);
-  }, [accountGeneration, home.projects, hostManualProjectOrder, hostProjectOrders, invoke, manualProjectOrder.length, projectOrder, selectedDeviceId]);
+  }, [accountGeneration, home.projects, hostManualProjectOrder, hostProjectOrders, invoke, manualProjectOrder.length, projectOrder, selectedDeviceId, resetDisplayOrder]);
 
   const beginProjectDrag = useCallback((input: {
     absoluteY: number;
@@ -2844,6 +2887,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const persistViewer = (next: string[]) => {
       if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
       viewPrefsTouchedRef.current = true;
+      resetDisplayOrder();
       setProjectOrder('custom');
       setManualProjectOrder(next);
       void saveHomeViewPreferences({ projectOrder: 'custom', manualProjectOrder: next });
@@ -2894,6 +2938,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           return;
         }
         if (result.kind !== 'ok') return;
+        resetDisplayOrder();
         projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
         setHostProjectOrders((current) => {
           const nextOrders = new Map(current);
@@ -2918,7 +2963,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     );
     if (!next) return;
     persistViewer(next);
-  }, [accountGeneration, home.projects, hostProjectOrders, invoke, manualProjectOrder, selectedDeviceId, visibleProjectKeys]);
+  }, [accountGeneration, home.projects, hostProjectOrders, invoke, manualProjectOrder, selectedDeviceId, visibleProjectKeys, resetDisplayOrder]);
   useEffect(() => {
     if (!groupDialogue) setDialogueShowAll(false);
   }, [groupDialogue]);
