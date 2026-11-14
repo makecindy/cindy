@@ -3427,6 +3427,9 @@ export class PiAgent extends BaseAgent {
     // 只放行网关);没有取回路径时截断会把全文真的丢掉 —— 这些会话不加载扩展。
     const toolFoldEnabled = this.deps.resolvePiToolFoldEnabled?.() ?? false;
     const toolFoldSupported = toolFoldEnabled && !reviewMode && !guestRoot && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
+    // 子代理会话暂不加载本扩展：子代理以 `--no-extensions` 只装 cindy-bridge，bridge 的
+    // 工具门只放行经它代理注册的工具，toolfold_read 不在其中——加载了也取不回原文，
+    // 截断会变成真丢全文。要覆盖子代理得先在 bridge 侧放行取回工具。
     const toolFoldExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_TOOL_FOLD_EXTENSION_FILENAME);
     if (toolFoldSupported) await writeFile(toolFoldExtensionPath, CINDY_TOOL_FOLD_EXTENSION_SOURCE);
     // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与
