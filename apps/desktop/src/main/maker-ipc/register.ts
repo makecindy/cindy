@@ -16571,31 +16571,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ...orcaQueueHostDeps,
     steerStoredQueuedMessage: steerStoredControlMessage,
     moveQueuedMessage: moveStoredControlMessage,
+    // 宿主 -> Lead 队列的唯一盖章入口：Worker 回报与派单主张纠正文都从这里进队列，
+    // 合批归属只有这一处，别的入口不得自行盖 autoBridge（见 orcaAutoBridgeBatch.contract）。
     sendAutoBridgeToLead: async (leadSessionId, message, workerId) => {
       const result = await dispatchInterAgentMessage({
         targetSessionId: leadSessionId,
         rawContent: message,
         source: 'worker',
-        senderLabel: 'Worker',
-        workerId,
+        senderLabel: workerId ? 'Worker' : 'Orca host',
+        ...(workerId ? { workerId } : {}),
         autoBridge: true,
         meta: {
           source: 'maker-ipc/auto-bridge',
-          context: `worker_auto_bridge/${leadSessionId}/${workerId}`,
-        },
-      });
-      return { accepted: result.ok };
-    },
-    sendHostNoticeToLead: async (leadSessionId, message) => {
-      const result = await dispatchInterAgentMessage({
-        targetSessionId: leadSessionId,
-        rawContent: message,
-        source: 'worker',
-        senderLabel: 'Orca',
-        autoBridge: true,
-        meta: {
-          source: 'maker-ipc/dispatch-claim',
-          context: `lead_dispatch_claim/${leadSessionId}`,
+          context: `auto_bridge/${leadSessionId}/${workerId ?? 'host'}`,
         },
       });
       return { accepted: result.ok };

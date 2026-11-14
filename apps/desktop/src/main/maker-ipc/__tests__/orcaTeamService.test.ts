@@ -335,7 +335,7 @@ describe('lead dispatch claim verification', () => {
       turnGeneration: 3,
       finalText: '已派给 backend-2，进度稍后回报。',
     });
-    expect(deps.sendHostNoticeToLead).toHaveBeenCalledTimes(1);
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
     expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
 
     await service.handleLeadTurnSettled({
@@ -343,7 +343,7 @@ describe('lead dispatch claim verification', () => {
       turnGeneration: 5,
       finalText: '已派给 backend-2，等它回报。',
     });
-    expect(deps.sendHostNoticeToLead).toHaveBeenCalledTimes(1);
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
     expect(deps.escalateDispatchClaim).toHaveBeenCalledWith(
       'lead-1',
       expect.objectContaining({ state: 'unverified', version: 1 }),
@@ -364,7 +364,7 @@ describe('lead dispatch claim verification', () => {
       turnGeneration: 0,
       finalText: '已派给 backend-2，等它回报。',
     });
-    expect(deps.sendHostNoticeToLead).not.toHaveBeenCalled();
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
     expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
     expect(deps.appendDispatchReceipt).toHaveBeenCalledWith(
       'lead-1',
@@ -386,7 +386,7 @@ describe('lead dispatch claim verification', () => {
       turnGeneration: 2,
       finalText: '已派给 backend-2。',
     });
-    expect(deps.sendHostNoticeToLead).not.toHaveBeenCalled();
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
     expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
   });
 });
@@ -425,7 +425,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     listWorkersByLead: vi.fn(async (leadSessionId: string) =>
       workers.filter((worker) => worker.leadSessionId === leadSessionId),
     ),
-    sendHostNoticeToLead: vi.fn(async () => ({ accepted: true as const })),
+
     escalateDispatchClaim: vi.fn(),
     appendDispatchReceipt: vi.fn(),
     getLiveSession: vi.fn(() => null),

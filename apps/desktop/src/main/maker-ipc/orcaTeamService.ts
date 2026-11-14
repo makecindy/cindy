@@ -481,15 +481,14 @@ export interface OrcaTeamServiceDeps {
   }>;
   /** Synchronous coordinator projection used when the stop adapter cannot return a result. */
   getWorkerQueuePaused(sessionId: string): boolean;
+  /**
+   * 宿主 -> Lead 队列的唯一入口：Worker 回报与派单主张纠正文都走这里。
+   * 纠正消息没有具体 Worker，`workerId` 省略时按宿主来源呈现。
+   */
   sendAutoBridgeToLead(
     leadSessionId: string,
     message: string,
-    workerId: string,
-  ): Promise<{ accepted: boolean }>;
-  /** 宿主自撰的纠正消息（非 Worker 回报），送进 Lead 队列开一轮。 */
-  sendHostNoticeToLead(
-    leadSessionId: string,
-    message: string,
+    workerId?: string,
   ): Promise<{ accepted: boolean }>;
   /** 补派一轮仍无凭据时的升级：落一张会话内纠正卡（不进模型）+ 红点 + 既有通知通道。 */
   escalateDispatchClaim?(leadSessionId: string, notice: OrcaDispatchClaimNotice): void;
@@ -2387,10 +2386,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         .join('\n');
 
     if (action === 'wake') {
-      const accepted = await deps.sendHostNoticeToLead(
+      const delivered = await deps.sendAutoBridgeToLead(
         params.leadSessionId,
-        lines('[From Orca host] Your dispatch claim is not backed by this turn\'s dispatch records.'),
+        lines("[Orca host] Your dispatch claim is not backed by this turn's dispatch records."),
       );
+      const accepted = delivered.accepted;
       deps.log.info('orca lead dispatch claim wake', {
         leadSessionId: params.leadSessionId,
         accepted,
