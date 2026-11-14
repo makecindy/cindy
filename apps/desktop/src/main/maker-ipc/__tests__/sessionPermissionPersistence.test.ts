@@ -23,8 +23,35 @@ vi.mock('../../localDb/client/current.js', () => ({
 
 import { syncBotLanePermission, syncBotLinkedLanePermissions } from '../botPermissionSync.js';
 import { persistPermissionModeWithoutRuntime, profilePermissionForSessionMode } from '../sessionPermissionPersistence.js';
-import { prepareBotPermissionDispatch, withBotPermissionChangeForBot } from '../botPermissionDispatch.js';
-import type { Session } from '@cindy/maker-core';
+import { prepareBotPermissionDispatch, retryBotWelcomePermissionDispatch, withBotPermissionChangeForBot } from '../botPermissionDispatch.js';
+import { withSendToSessionLock } from '../sendToSessionLock.js';
+import { Session, type AgentSessionHandle } from '@cindy/maker-core';
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+function welcomeRuntime() {
+  const closed = deferred();
+  const send = vi.fn(async (..._args: unknown[]) => {});
+  const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+  const session = new Session({
+    id: 'chat', agentKind: 'claude-code', workDir: process.cwd(), permissionMode: 'ask',
+    capabilities: { permissionModes: [{ id: 'ask' }, { id: 'auto' }, { id: 'bypassPermissions' }], setPermissionModeMidSession: { supported: true } } as never,
+    logger, turnStallMs: 0,
+    handle: {
+      id: 'welcome', agentKind: 'claude-code', send,
+      async *events() { await closed.promise; },
+      async abort() {}, async close() { closed.resolve(); },
+      async setPermissionMode() {}, isTurnRunning: () => false,
+      setInteractionResolver() {},
+      getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+    } as unknown as AgentSessionHandle,
+  });
+  return { session, send };
+}
 
 function createDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -179,6 +206,203 @@ describe('permission persistence without a live runtime', () => {
       await expect(prepareBotPermissionDispatch(session)).rejects.toThrow('Bot permissions are changing before dispatch');
     } finally { release(); await change; }
   });
+
+  // #10021, unit: the existing guard tests proved rejection only. Exercise real
+  // Session.send with a paused permission writer and the same welcome input:
+  // the provider must see zero stale sends, then exactly one tools-disabled send.
+  it.each(['before-preparation', 'after-preparation', 'completed-change', 'runtime-mode-changed'] as const)(
+    'recovers a welcome after %s without waiting inside the send fence', async phase => {
+      const { session, send } = welcomeRuntime();
+      const prepared = deferred();
+      const rejected = deferred();
+      const proceed = deferred();
+      const writerEntered = deferred();
+      const releaseWriter = deferred();
+      let change: Promise<void> | undefined;
+      let guard: (() => void) | undefined;
+      let attempts = 0;
+      let persisted = 0;
+      const rows = new Set<string>();
+      const writePermission = async () => {
+        writerEntered.resolve();
+        await releaseWriter.promise;
+        const persist = async () => {
+          runWorkerTx(sqlite, { name: 'bots.persistSessionPermission', args: { sessionId: 'chat', mode: 'auto' } });
+        };
+        if (phase === 'completed-change' || phase === 'runtime-mode-changed') await persist();
+        else await withSendToSessionLock('chat', persist);
+        if (phase === 'runtime-mode-changed') await session.setPermissionMode('auto');
+      };
+      // Automatic reconciliation changes the stable mode without an explicit
+      // edit revision; this is the creation-time race reported in #10021.
+      const beginChange = () => phase === 'runtime-mode-changed'
+        ? writePermission() : withBotPermissionChangeForBot('bot-1', writePermission);
+      session.setTurnLifecycleObserver({
+        beforeProviderStart: async () => {
+          guard = await prepareBotPermissionDispatch(session);
+          if (attempts === 1 && phase !== 'before-preparation') {
+            prepared.resolve();
+            await proceed.promise;
+          }
+        },
+        onDispatching: () => guard?.(),
+        onUndispatched() { rejected.resolve(); },
+        onTerminal() {},
+      });
+      if (phase === 'before-preparation') { change = beginChange(); await writerEntered.promise; }
+      const result = retryBotWelcomePermissionDispatch('chat', new AbortController().signal, async () => {
+        attempts++;
+        // The production send entry reconciles the saved authority on every attempt.
+        const mode = sqlite.prepare("SELECT permission_mode FROM sessions WHERE id = 'chat'").pluck().get();
+        await session.setPermissionMode(mode as 'ask' | 'auto');
+        return withSendToSessionLock('chat', () => session.send('Say hello.', {
+          toolsDisabled: true,
+          messageUuid: 'welcome-uuid',
+          onAccepted: async () => { rows.add('welcome-client'); persisted++; },
+        })).catch(error => { rejected.resolve(); throw error; });
+      }, () => true);
+      // Attach immediately so the red baseline cannot produce an unhandled rejection.
+      const outcome = result.then(value => ({ value }), error => ({ error }));
+      try {
+        if (phase !== 'before-preparation') {
+          await prepared.promise;
+          change = beginChange();
+          await writerEntered.promise;
+          if (phase === 'completed-change' || phase === 'runtime-mode-changed') {
+            // A completed edit can also invalidate the already prepared revision.
+            // It needs no restart in this variant, so finish outside the held fence.
+            releaseWriter.resolve();
+            await change;
+          }
+          proceed.resolve();
+        }
+        await rejected.promise;
+        expect(send).not.toHaveBeenCalled();
+        releaseWriter.resolve();
+        await change;
+        expect(await outcome).toMatchObject({ value: { accepted: true } });
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send.mock.calls[0]?.[1]).toMatchObject({ toolsDisabled: true, messageUuid: 'welcome-uuid' });
+        expect(rows.size).toBe(1);
+        expect(persisted).toBe(phase === 'before-preparation' ? 1 : 2);
+        expect(attempts).toBe(2);
+        expect(session.stablePermissionModeState?.mode).toBe('auto');
+      } finally {
+        proceed.resolve(); releaseWriter.resolve(); await change; await session.close();
+      }
+    },
+  );
+
+  // A retry is still a new dispatch decision, never permission to use the old
+  // wider snapshot. These are distinct cancellation/authority boundaries.
+  it.each(['stop', 'account', 'archive', 'missing-profile', 'welcome-ended', 'failed-write'] as const)(
+    'does not recover a pending welcome after %s', async boundary => {
+      const gate = deferred();
+      const recovering = deferred();
+      const change = withBotPermissionChangeForBot('bot-1', async () => {
+        await gate.promise;
+        if (boundary === 'failed-write') throw new Error('permission persistence failed');
+      }).catch(error => {
+        if (boundary !== 'failed-write') throw error;
+        expect(error.message).toBe('permission persistence failed');
+      });
+      const abort = new AbortController();
+      const session = { id: 'chat', stablePermissionModeState: { mode: 'ask' } } as unknown as Session;
+      let eligible = true;
+      const send = vi.fn(async () => { (await prepareBotPermissionDispatch(session))(); });
+      const result = retryBotWelcomePermissionDispatch('chat', abort.signal, send,
+        () => { recovering.resolve(); return eligible; });
+      const rejected = expect(result).rejects.toThrow('Bot permissions are changing before dispatch');
+      await recovering.promise;
+      if (boundary === 'stop') abort.abort();
+      if (boundary === 'account') h.owner = { client: {} };
+      if (boundary === 'archive') sqlite.exec("UPDATE bot_session_links SET archived_at = 1");
+      if (boundary === 'missing-profile') sqlite.exec('DELETE FROM bot_profile_versions');
+      if (boundary === 'welcome-ended') eligible = false;
+      gate.resolve();
+      await change;
+      await rejected;
+      expect(send).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('reconciles a tightened permission before recovering the welcome', async () => {
+    const { session, send } = welcomeRuntime();
+    await persistPermissionModeWithoutRuntime('chat', 'bypassPermissions');
+    await session.setPermissionMode('bypassPermissions');
+    let attempts = 0;
+    let guard!: () => void;
+    session.setTurnLifecycleObserver({
+      beforeProviderStart: async () => {
+        guard = await prepareBotPermissionDispatch(session);
+        if (attempts === 1) await persistPermissionModeWithoutRuntime('chat', 'ask');
+      },
+      onDispatching: () => guard(), onUndispatched() {}, onTerminal() {},
+    });
+    try {
+      await expect(retryBotWelcomePermissionDispatch('chat', new AbortController().signal, async () => {
+        if (attempts++) await session.setPermissionMode('ask');
+        return session.send('Say hello.', { toolsDisabled: true });
+      }, () => true)).resolves.toMatchObject({ accepted: true });
+      expect(send).toHaveBeenCalledOnce();
+      expect(session.stablePermissionModeState?.mode).toBe('ask');
+    } finally { await session.close(); }
+  });
+
+  it('does not wait under an outer send fence or retry a second permission race', async () => {
+    const gate = deferred();
+    const change = withBotPermissionChangeForBot('bot-1', () => gate.promise);
+    const runtime = { id: 'chat', stablePermissionModeState: { mode: 'ask' } } as unknown as Session;
+    const send = vi.fn(async () => { (await prepareBotPermissionDispatch(runtime))(); });
+    try {
+      await expect(withSendToSessionLock('chat', () => retryBotWelcomePermissionDispatch(
+        'chat', new AbortController().signal, send, () => true,
+      ))).rejects.toThrow('Bot permissions are changing before dispatch');
+      expect(send).toHaveBeenCalledOnce();
+    } finally { gate.resolve(); await change; }
+    let attempts = 0;
+    await expect(retryBotWelcomePermissionDispatch('chat', new AbortController().signal, async () => {
+      attempts++;
+      const guard = await prepareBotPermissionDispatch(runtime);
+      await withBotPermissionChangeForBot('bot-1', async () => {});
+      guard();
+    }, () => true)).rejects.toThrow('Bot permissions changed before dispatch');
+    expect(attempts).toBe(2);
+  });
+
+  it('bounds a stuck permission writer and removes its wait timer', async () => {
+    vi.useFakeTimers();
+    const gate = deferred();
+    const waiting = deferred();
+    const change = withBotPermissionChangeForBot('bot-1', () => gate.promise);
+    const runtime = { id: 'chat', stablePermissionModeState: { mode: 'ask' } } as unknown as Session;
+    const send = vi.fn(() => prepareBotPermissionDispatch(runtime));
+    try {
+      const result = retryBotWelcomePermissionDispatch('chat', new AbortController().signal, send,
+        () => { waiting.resolve(); return true; });
+      const rejected = expect(result).rejects.toThrow('Bot permissions are changing before dispatch');
+      await waiting.promise;
+      await vi.advanceTimersByTimeAsync(5_000);
+      await rejected;
+      expect(send).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { gate.resolve(); await change; vi.useRealTimers(); }
+  });
+
+  it.each(['accepted', 'unknown-failure', 'precondition-text'] as const)(
+    'never repeats a provider request after %s', async outcome => {
+      const { session, send } = welcomeRuntime();
+      if (outcome !== 'accepted') send.mockRejectedValueOnce(new Error(outcome === 'precondition-text'
+        ? '[PRECONDITION_FAILED] Bot permissions changed before dispatch' : 'transport disconnected'));
+      try {
+        const result = retryBotWelcomePermissionDispatch('chat', new AbortController().signal,
+          () => session.send('Say hello.', { toolsDisabled: true }), () => true);
+        if (outcome === 'accepted') await expect(result).resolves.toMatchObject({ accepted: true });
+        else await expect(result).rejects.toThrow(outcome === 'precondition-text' ? 'PRECONDITION_FAILED' : 'transport disconnected');
+        expect(send).toHaveBeenCalledOnce();
+      } finally { await session.close(); }
+    },
+  );
 
   it('does not replace a newer profile version with a stale capabilities snapshot', async () => {
     sqlite.prepare('UPDATE bot_profiles SET current_version = 3 WHERE id = ?').run('bot-1');

@@ -10,6 +10,9 @@ export function createQueuedDispatchReceipts() {
     receipt?.resolve(accepted);
   };
   return {
+    has(sessionId: string, clientId: string): boolean {
+      return pending.has(keyOf(sessionId, clientId));
+    },
     async dispatch(sessionId: string, clientId: string, enqueue: () => unknown): Promise<boolean> {
       const key = keyOf(sessionId, clientId);
       const existing = pending.get(key);

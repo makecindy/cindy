@@ -219,6 +219,8 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  /** Host-proven non-dispatch: retain this input while preparation is retried. */
+  onUndispatchedRetry?: () => void;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
   readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
   /** Main-only authorization recheck after async steer preparation, before provider dispatch. */
@@ -543,6 +545,8 @@ export interface AgentInputCoordinatorDeps {
     item: AgentInputQueuedMessage,
     signal?: AbortSignal,
   ) => void | Promise<void>;
+  /** Release completed preparation before an internally proven undispatched retry; keep its receipt pending. */
+  onRetryUndispatchedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
    * Called when a user row crossed the persistence boundary but never reached
    * vendor dispatch. `cancelled` is an explicit user lifecycle boundary;
@@ -5459,6 +5463,16 @@ export class AgentInputCoordinator {
         throwOnStartFailure: true,
         onVendorTurnReserved: (generation) =>
           this.captureReservedVendorGeneration(sessionId, active, generation),
+        onUndispatchedRetry: () => {
+          if (!this.isActiveTurnCurrent(sessionId, active)) return;
+          // A final guard can reject after onPersisted prepared file snapshots.
+          // Pair that attempt before another onPersisted reserves a baseline.
+          if (active.persisted) this.deps.onRetryUndispatchedUserTurn?.(sessionId, head);
+          // The old provider reservation has ended without dispatch. Stop must
+          // cancel this preparation even though persistence/hooks already ran.
+          active.dispatchLifecycle = 'awaiting-dispatch-hooks';
+          active.vendorTurnGeneration = null;
+        },
         ...(head.autoResume && typeof head.autoResumeInfo?.sessionTotal === 'number'
           ? { turnAttemptToken: head.autoResumeInfo.sessionTotal }
           : {}),
