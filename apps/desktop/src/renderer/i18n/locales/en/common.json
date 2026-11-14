@@ -1467,6 +1467,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "To review",
+      "summaryInProgress": "In progress",
+      "summaryPending": "Needs your action",
+      "summaryUnread": "Unread results",
       "markRead": "Mark as read",
       "archive": "Archive",
       "actionFailed": "Could not complete the action. The notification has been kept. Try again.",

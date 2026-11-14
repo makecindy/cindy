@@ -1454,6 +1454,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "확인 필요",
+      "summaryInProgress": "진행 중",
+      "summaryPending": "사용자 처리 대기",
+      "summaryUnread": "읽지 않은 결과",
       "markRead": "읽음으로 표시",
       "archive": "보관",
       "actionFailed": "작업을 완료하지 못했습니다. 알림은 유지됩니다. 다시 시도해 주세요.",

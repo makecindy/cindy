@@ -1454,6 +1454,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "待覽",
+      "summaryInProgress": "方行",
+      "summaryPending": "待君處置",
+      "summaryUnread": "未閱之果",
       "markRead": "標為已閱",
       "archive": "封存",
       "actionFailed": "操作未竟，提醒已留，請再試。",
