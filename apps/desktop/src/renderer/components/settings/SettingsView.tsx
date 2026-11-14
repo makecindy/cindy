@@ -187,6 +187,7 @@ function SettingsViewContent() {
     if (raw === 'feishu-bot' || raw === 'slack-bot') return 'im-bot';
     // legacy 别名:旧独立「Tina」(tina) 已并入「IM 机器人」(im-bot)。
     if (raw === 'tina') return 'im-bot';
+    if (raw === 'task-management') return 'storage';
     if (raw === 'billing' && !canAccessBilling) return 'general';
     if (raw === 'usage' && !canAccessUsage) return 'general';
     if (raw === 'agent-island' && !isMac) return 'general';
@@ -195,6 +196,13 @@ function SettingsViewContent() {
     return isSettingsTab(raw) ? raw : 'general';
   }, [canAccessBilling, canAccessUsage, isMac, rawSection, rawTab]);
   const previousTabRef = useRef(activeTab);
+  useEffect(() => {
+    if (rawTab !== 'task-management') return;
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', 'storage');
+    if (!next.has('section')) next.set('section', 'task-management');
+    startTransition(() => setSearchParams(next, { replace: true }));
+  }, [rawTab, searchParams, setSearchParams]);
   const refreshVoiceModelSelection = voiceModelSelection.refresh;
   useEffect(() => {
     // The shared hook outlives each tab; restore the old voice-page remount refresh.

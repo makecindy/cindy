@@ -21846,5 +21846,31 @@
     "switchOffer": {
       "action": "Continuar com {{model}}"
     }
+  },
+  "taskManagement": {
+    "scope": "Apenas para esta conta neste computador.",
+    "archive": "Arquivo automático",
+    "enabled": "Arquivar tarefas inativas automaticamente",
+    "description": "Arquive automaticamente tarefas inativas. O histórico continua disponível.",
+    "days": "Dias de inatividade",
+    "daysHint": "Desde a última mensagem enviada ou recebida, ou o fim de uma execução.",
+    "days7": "7 dias",
+    "days14": "14 dias",
+    "days30": "30 dias",
+    "customDays": "Dias personalizados",
+    "invalidDays": "Introduza um inteiro entre 1 e 365.",
+    "reset": "Repor predefinições",
+    "archiveHint": "As tarefas em utilização são mantidas. Pode restaurar as arquivadas a qualquer momento.",
+    "preview": "Pré-visualização do arquivo",
+    "loadFailed": "Não foi possível carregar as definições.",
+    "loading": "A carregar definições…",
+    "candidateCount": "Tarefas elegíveis: {{count}}",
+    "keptCount": "Mantidas: {{count}}",
+    "lastCheck": "Última verificação: {{date}}",
+    "notChecked": "Ainda não houve verificação automática",
+    "saveFailed": "As definições não foram guardadas. Tente novamente.",
+    "archivedNotice": "Tarefas inativas arquivadas automaticamente: {{count}}",
+    "undo": "Anular",
+    "undoFailed": "Não foi possível anular. Restaure as tarefas a partir do arquivo."
   }
 }

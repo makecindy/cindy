@@ -21559,5 +21559,31 @@
     "switchOffer": {
       "action": "換到 {{model}} 繼續"
     }
+  },
+  "taskManagement": {
+    "scope": "僅套用於目前帳號在這台電腦上的任務。",
+    "archive": "自動封存",
+    "enabled": "自動封存閒置任務",
+    "description": "自動收起閒置任務，歷史記錄仍可查看。",
+    "days": "閒置天數",
+    "daysHint": "從最近一次收發訊息或執行結束開始計算。",
+    "days7": "7 天",
+    "days14": "14 天",
+    "days30": "30 天",
+    "customDays": "自訂天數",
+    "invalidDays": "請輸入 1–365 之間的整數。",
+    "reset": "恢復預設",
+    "archiveHint": "使用中的任務會保留，封存後可隨時恢復。",
+    "preview": "封存預覽",
+    "loadFailed": "未能讀取設定。",
+    "loading": "正在讀取設定…",
+    "candidateCount": "可封存 {{count}} 個任務",
+    "keptCount": "保留 {{count}} 個",
+    "lastCheck": "上次檢查：{{date}}",
+    "notChecked": "尚未執行自動檢查",
+    "saveFailed": "設定未儲存，請重新操作。",
+    "archivedNotice": "已自動封存 {{count}} 個閒置任務",
+    "undo": "復原",
+    "undoFailed": "無法復原，請在已封存任務中恢復。"
   }
 }

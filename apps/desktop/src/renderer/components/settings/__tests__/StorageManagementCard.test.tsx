@@ -24,7 +24,13 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/lib/toast', () => ({ toast }));
-vi.mock('@/lib/composerDraftStore', () => ({ getAllDraftAttachmentUrls: () => [] }));
+vi.mock('@/lib/composerDraftStore', () => ({
+  getAllDraftAttachmentUrls: () => [],
+  subscribeAllDraftPresence: () => () => undefined,
+}));
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ dataOwnerId: 'storage-test-owner', dataOwnerGeneration: 1, dataOwnerRecoveryEpoch: 0 }),
+}));
 
 import { StorageManagementCard } from '../StorageManagementCard';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
@@ -127,6 +133,12 @@ beforeEach(() => {
     configurable: true,
     value: {
       cindyMediaStorage: storageApi(),
+      taskManagement: {
+        read: vi.fn(async () => ({ enabled: false, days: 7 })),
+        preview: vi.fn(async () => ({ candidateCount: 0, keptCount: 23, lastCheckAt: null })),
+        onChanged: vi.fn(() => () => undefined),
+        onArchived: vi.fn(() => () => undefined),
+      },
       localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
     },
   });
@@ -222,6 +234,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        ...window.electronAPI,
         cindyMediaStorage: api,
         localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
       },
@@ -243,6 +256,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        ...window.electronAPI,
         cindyMediaStorage: api,
         localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
       },
@@ -281,6 +295,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        ...window.electronAPI,
         cindyMediaStorage: api,
         localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
       },
@@ -311,6 +326,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        ...window.electronAPI,
         cindyMediaStorage: storageApi(),
         localDb: { maintenance: maintenanceApi(), databaseSizeWarning: warningApi },
       },
@@ -720,7 +736,10 @@ describe('StorageManagementCard database cleanup', () => {
   it('offers only 7 days, 1 month, 3 months, and 6 months, defaulting to 7 days', async () => {
     render(<StorageManagementCard />);
 
-    const threshold = screen.getByRole('combobox');
+    await waitFor(() => expect(
+      screen.getByRole('switch', { name: 'taskManagement.enabled' }).hasAttribute('disabled'),
+    ).toBe(false));
+    const threshold = screen.getByRole('combobox', { name: 'settings.about.storage.dbSlimmingArchiveAgeLabel' });
     expect(threshold.textContent).toContain(
       'settings.about.storage.dbSlimmingArchiveAgeOption7Days',
     );

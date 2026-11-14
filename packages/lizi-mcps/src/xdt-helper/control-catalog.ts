@@ -29,6 +29,7 @@ const setting = (key: string, domain: string, title: string, summary: string, se
 const helper = (key: string, domain: string, title: string, summary: string, tools: string[], aliases: string[], notes?: string): Control =>
   ({ key, domain, title, summary, tools, aliases, notes, server: 'cindy_helper' });
 export const CONTROL_CATALOG: readonly Control[] = [
+  setting('tasks.auto-archive', 'tasks', '存储空间与自动归档', '当前账号在本机的闲置任务自动归档开关、保留天数、可归档与保留的任务数量。', 'task-management', ['自动归档', '闲置任务', '存储空间', 'auto archive', 'idle tasks', 'retention']),
   helper('devices.remote-consent', 'devices', '远程控制授权请求', '请求同账号在线电脑弹出本机确认窗口，由用户开启持续有效的远程控制设置。', ['request_remote_control'], ['远程控制', '授权', '弹窗', 'remote control', 'consent'], '使用 list_machines 的精确设备 ID；只有目标电脑返回 enabled 才能继续原操作。拒绝、超时或旧版无响应不代表同意。'),
   setting('application.preferences', 'application', '语言、主题与通知', '发送快捷键、链接打开方式、动效、消息导航和首页偏好。', 'preferences', ['language', 'theme', 'notification', '语言', '主题', '通知', '快捷键', '动效', '链接'], false),
   setting('appearance.wallpaper', 'appearance', '字体与内置壁纸', '字体、字号、窗口缩放、内置壁纸及效果；自定义图片导入另查 appearance.assets。', 'appearance', ['wallpaper', 'font', '壁纸', '背景', '字体', '字号', '缩放']),

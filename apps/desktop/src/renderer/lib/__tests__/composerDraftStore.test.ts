@@ -15,6 +15,7 @@ import {
   getAllDraftAttachmentUrls,
   getDraft,
   getDraftPresence,
+  getComposerDraftSessionIds,
   getOrCreateRemoteOptimisticTransitionCheckpoint,
   isDraftDiscardTokenCurrent,
   plainTextToTiptapDoc,
@@ -28,6 +29,7 @@ import {
   setRemoteOptimisticAttachmentUrls,
   subscribeDraft,
   subscribeDraftPresence,
+  subscribeAllDraftPresence,
   tiptapDocHasContent,
   type ComposerDraft,
 } from '@/lib/composerDraftStore';
@@ -204,6 +206,24 @@ describe('draftHasContent', () => {
 });
 
 describe('owner isolation', () => {
+  // #10310, unit: the archive bridge needs current-owner identifiers and one
+  // notification per presence change, never the draft content or every keystroke.
+  it('reports draft identifiers without leaking another owner or emitting per keystroke', () => {
+    setComposerDraftOwner('archive-owner');
+    const listener = vi.fn(); const unsubscribe = subscribeAllDraftPresence(listener);
+    try {
+      saveDraft('archive-draft', draft({ text: textDoc }));
+      saveDraft('archive-draft', draft({ text: plainTextToTiptapDoc('more text') }));
+      expect(getComposerDraftSessionIds()).toEqual(['archive-draft']);
+      expect(listener).toHaveBeenCalledTimes(1);
+      setComposerDraftOwner('archive-other-owner');
+      expect(getComposerDraftSessionIds()).toEqual([]);
+      setComposerDraftOwner('archive-owner');
+      clearDraft('archive-draft');
+      expect(getComposerDraftSessionIds()).toEqual([]);
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally { unsubscribe(); clearDraft('archive-draft'); setComposerDraftOwner(null); }
+  });
   it('does not expose a New Maker draft across data-owner switches', () => {
     const key = '__new_maker_draft__';
     setComposerDraftOwner('owner-a');

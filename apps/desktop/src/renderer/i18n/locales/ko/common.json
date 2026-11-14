@@ -21559,5 +21559,31 @@
     "switchOffer": {
       "action": "{{model}}(으)로 바꿔 계속"
     }
+  },
+  "taskManagement": {
+    "scope": "이 컴퓨터의 현재 계정에만 적용됩니다.",
+    "archive": "자동 보관",
+    "enabled": "사용하지 않는 작업 자동 보관",
+    "description": "사용하지 않는 작업을 자동으로 보관합니다. 기록은 계속 확인할 수 있습니다.",
+    "days": "미사용 일수",
+    "daysHint": "마지막 메시지 송수신 또는 실행 종료부터 계산합니다.",
+    "days7": "7일",
+    "days14": "14일",
+    "days30": "30일",
+    "customDays": "일수 지정",
+    "invalidDays": "1~365 사이의 정수를 입력하세요.",
+    "reset": "기본값 복원",
+    "archiveHint": "사용 중인 작업은 유지됩니다. 보관된 작업은 언제든 복원할 수 있습니다.",
+    "preview": "보관 미리보기",
+    "loadFailed": "설정을 불러오지 못했습니다.",
+    "loading": "설정을 불러오는 중…",
+    "candidateCount": "보관 가능: {{count}}개",
+    "keptCount": "유지: {{count}}개",
+    "lastCheck": "최근 확인: {{date}}",
+    "notChecked": "아직 자동 확인하지 않았습니다",
+    "saveFailed": "설정이 저장되지 않았습니다. 다시 시도하세요.",
+    "archivedNotice": "미사용 작업 {{count}}개를 자동 보관했습니다",
+    "undo": "실행 취소",
+    "undoFailed": "취소할 수 없습니다. 보관된 작업에서 복원하세요."
   }
 }

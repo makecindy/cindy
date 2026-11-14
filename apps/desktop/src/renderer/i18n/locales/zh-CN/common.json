@@ -21559,5 +21559,31 @@
     "switchOffer": {
       "action": "换到 {{model}} 继续"
     }
+  },
+  "taskManagement": {
+    "scope": "仅应用于当前账号在这台电脑上的任务。",
+    "archive": "自动归档",
+    "enabled": "自动归档闲置任务",
+    "description": "自动收起闲置任务，历史记录仍可查看。",
+    "days": "闲置天数",
+    "daysHint": "从最近一次收发消息或运行结束开始计算。",
+    "days7": "7 天",
+    "days14": "14 天",
+    "days30": "30 天",
+    "customDays": "自定义天数",
+    "invalidDays": "请输入 1–365 之间的整数。",
+    "reset": "恢复默认",
+    "archiveHint": "正在使用的任务会保留，归档后可随时恢复。",
+    "preview": "归档预览",
+    "loadFailed": "未能读取设置。",
+    "loading": "正在读取设置…",
+    "candidateCount": "可归档 {{count}} 个任务",
+    "keptCount": "保留 {{count}} 个",
+    "lastCheck": "上次检查：{{date}}",
+    "notChecked": "尚未运行自动检查",
+    "saveFailed": "设置未保存，请重新操作。",
+    "archivedNotice": "已自动归档 {{count}} 个闲置任务",
+    "undo": "撤销",
+    "undoFailed": "未能撤销，请在已归档任务中恢复。"
   }
 }

@@ -827,6 +827,7 @@ import {
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
 import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
 import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
+import { configureTaskArchiveRuntime } from '../task-management/service.js';
 import {
   createPiIdleReleaseWatcher,
   createPiIdleReleaseClose,
@@ -3354,6 +3355,7 @@ export function stopOrcaIdleWatcher(): void {
   claudeIdleReleaseWatcher = null;
   codexIdleReleaseWatcher?.stop();
   codexIdleReleaseWatcher = null;
+  configureTaskArchiveRuntime(null);
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
 }
@@ -17071,6 +17073,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     warn: (message) => log.warn(message),
   });
   claudeIdleReleaseWatcher.start();
+  configureTaskArchiveRuntime({
+    pending: hasPendingIdleReleaseInput,
+    waiting: id => hasPendingAgentInteractionForSession(id)
+      || inputCoordinator.hasPendingQueuedWork(id)
+      || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
+      || inputCoordinator.isAutoResumePending(id) || inputCoordinator.hasQueuedAutoResume(id)
+      || inputCoordinator.getAutoResumeAttemptToken(id) !== null
+      || pendingCredentialSwitchHolder?.has(id) === true,
+    busy: id => isSessionInTurn(id) || Boolean(maker.getSession(id)?.isTurnRunning())
+      || (maker.getSession(id)?.listBackgroundTasks().length ?? 0) > 0
+      || isSessionTurnPendingCompletion(id) || Boolean(getClaudeSessionBackgroundActivity(id)),
+  });
 
   // Ordinary local Codex tasks: same scope and gates as Claude. Codex does not
   // list its native children, yielded exec cells or background terminals as
