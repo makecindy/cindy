@@ -1,4 +1,4 @@
-import { defineSettings } from './settingsSearchTypes';
+import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes';
 
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
 export const modelAdvancedSettings = defineSettings({
@@ -13,3 +13,9 @@ export const modelAdvancedSettings = defineSettings({
     aliases: ['thinking', 'reasoning', 'effort'],
   },
 });
+
+export default {
+  id: 'providers',
+  order: 5,
+  entries: Object.values(modelAdvancedSettings),
+} satisfies SettingsSearchModule;

@@ -1313,6 +1313,7 @@ export function ModelAdvancedDrawer({
                         <DropdownMenuTrigger asChild>
                           <button
                             type="button"
+                            id="settings-search-settings-providers-models-thinking-override"
                             data-settings-search-action="Declare which thinking effort tiers this model supports"
                             // xd 的能力由服务端目录决定、组织托管供应商的能力由管理员下发：两者
                             // 本机都不可覆盖，控件保留但禁用（与同抽屉其他不可改项一致）；
