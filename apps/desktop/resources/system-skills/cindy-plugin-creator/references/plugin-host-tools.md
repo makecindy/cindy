@@ -77,7 +77,7 @@ const { scope, services } = JSON.parse(result.content.find(item => item.type ===
 
 动态安装和开发迭代继续走现有 Forge 安装所选实例的流程，同版本更新亦可；不要经宿主工具入口管理其他插件。
 批准版本、启用状态和账号变化使旧调用失效。逻辑页退出和 Node Worker 显式停止走各自宿主的同一资源清理入口，
-释放文件监听、终端和电脑观察/驱动连接；旧电脑快照不能用于新一轮操作。
+释放网络连接、文件监听、终端和电脑观察/驱动连接；旧电脑快照不能用于新一轮操作。
 已注册的浏览器执行端继续由原 bridge 的 reconcile/prepareUpdate 接管，用户选择不被插件代码替代。
 持久数据仍按原卸载、换源和作品库规则处理；运行资源退出本身不删除 KV、凭证或作品。
 
@@ -240,6 +240,7 @@ Node Host 已提供的 `browser` 平台 provider 同时接入 Agent 与插件入
 Node Host 插件的 `computer` 在创建观察 runtime、确认或驱动执行之前返回 `UNSUPPORTED_CAPABILITY`，
 `host_services` 同样报告不可用：Desktop 的逐次批准身份不能从跨进程 caller 元数据重建。
 不新增跨进程授权证明；Node Agent 与 Desktop 插件的电脑调用保留原路径、快照生命周期和门禁。
+已保存凭证的既有引用可由 Node Host 通过共享管理器注入，撤回来源后拒绝；建立引用仍只在可信 Desktop 详情页完成。
 需要定时任务时使用已提供调度器的执行宿主，不循环重试不支持结果。
 
 ## 完整历史与附件

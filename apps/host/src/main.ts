@@ -578,6 +578,13 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   });
   await modelAccess.start();
   pluginManager = createHostGhostManager({ userDataDir: dataDir, ownerId,
+    onUninstallSourceState: async fromPart => {
+      const current = plugins;
+      if (!current || activeOwnerScopeKey() !== pluginOwner) throw new Error('Plugin account cleanup is unavailable');
+      const release = current.acquireMutationLease(current.captureMutationOwner());
+      try { await current.authorization.cleanupSourceReferences(fromPart); }
+      finally { release(); }
+    },
     onChanged: ghosts => {
       if (activeOwnerScopeKey() !== pluginOwner || isAppSessionBoundaryPending()) return;
       eventHub.publish({ type: 'plugin_push', channel: 'ghosts:changed', payload: { ghosts } });
@@ -639,6 +646,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       } else eventHub.publish({ type: 'plugin_push', channel, payload });
     },
   });
+
+  if (pluginManager.hasPendingMutationRecovery()) await pluginManager.retryInterruptedMutationsAfterDbReady();
 
   pluginGateway = createHostPluginGateway({ runtime: plugins, profileDir: dataDir, ownerId,
     version: layout.version, credentials, fileConfirmation,

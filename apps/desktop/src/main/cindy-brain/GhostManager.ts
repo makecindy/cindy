@@ -3,6 +3,7 @@ import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
 import { findFeatureRetirement } from '../../shared/featureRetirements.js';
 import { FeatureRetirementStore } from './featureRetirementStore.js';
 import { GhostNotificationIndex } from './ghostNotificationIndex.js';
+import { ghostDeclaredNetworkTransportRejection } from './networkOriginPolicy.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -383,6 +384,8 @@ export interface GhostManagerOptions {
   onNamespaceCommitted?: (ghostId: string, namespace: string | null) => void;
   beforeNamespaceCommit?: (ghostId: string, namespace: string | null) => void;
   onArchiveSourceState?: (fromPart: string, archivePart: string) => Promise<void>;
+  /** Revoke incoming account references while the existing uninstall journal isolates the source. */
+  onUninstallSourceState?: (fromPart: string) => Promise<void>;
   /** sourceDir 是否就是该 id 的随包只读种子目录，而非任意本机可变目录。 */
   isTrustedBundledSource?: (id: string, sourceDir: string) => boolean;
   /** Persist the user's builtin-uninstall intent before approval/content removal. */
@@ -1449,6 +1452,11 @@ export class GhostManager {
     return retry;
   }
 
+  hasPendingMutationRecovery(): boolean {
+    return this.untrustedApprovals.size > 0 || this.recoveryBlockedApprovalNamespaces.size > 0 ||
+      this.pendingRecoverySideEffects.size > 0;
+  }
+
   private currentOwnerContextKey(): string {
     return `${this.options.getOwnerContextKey?.() ?? ''}\u0000${this.resolveContentRoot()}\u0000${this.resolveStateRoot()}`;
   }
@@ -1561,7 +1569,35 @@ export class GhostManager {
             }
             this.options.recordBuiltinTombstone(parsePluginInstallRelId(id)!.ghostId);
           }
+          const fromPart = this.options.onUninstallSourceState ? this.storageKeyForContent(id) : '';
           this.receiptStore.removeSync(id);
+          if (this.options.onUninstallSourceState) {
+            const recoveryKey = this.isolationKey(id);
+            if (!this.pendingMutationRecoveries.has(recoveryKey)) {
+              const recoveryOwner = this.currentOwnerContextKey();
+              this.pendingMutationRecoveries.add(recoveryKey);
+              const recovery = this.runExclusiveMutation(async () => {
+                if (this.currentOwnerContextKey() !== recoveryOwner ||
+                    JSON.stringify(this.receiptStore.readPendingMutationSync(id)) !== JSON.stringify(markerResult)) {
+                  throw new Error('uninstall recovery transaction superseded');
+                }
+                await this.cleanupUninstallSourceState(id, fromPart);
+                if (this.recoveryEntryKind(finalDir) === 'directory') fs.rmSync(finalDir, { recursive: true, force: true });
+                this.forgetPendingNamespaceMigration(id);
+                this.receiptStore.clearPendingMutationSync(id);
+                this.untrustedApprovals.delete(recoveryKey);
+              }).catch(error => this.options.log?.warn('ghost uninstall reference cleanup failed; journal retained', {
+                id, error: error instanceof Error ? error.message : String(error),
+              }));
+              this.pendingRecoverySideEffects.add(recovery);
+              const clearRecovery = () => {
+                this.pendingRecoverySideEffects.delete(recovery);
+                this.pendingMutationRecoveries.delete(recoveryKey);
+              };
+              void recovery.then(clearRecovery, clearRecovery);
+            }
+            continue;
+          }
           if (this.recoveryEntryKind(finalDir) === 'directory') {
             fs.rmSync(finalDir, { recursive: true, force: true });
           }
@@ -3722,6 +3758,8 @@ export class GhostManager {
     if (!v.ok) {
       return { rejection: { code: 'file-invalid', reason: `清单不合格:${v.reason}` } };
     }
+    const transportError = ghostDeclaredNetworkTransportRejection(v.manifest);
+    if (transportError) return { rejection: { code: 'file-invalid', reason: `NETWORK_INSECURE_ORIGIN: ${transportError}` } };
     if (findFeatureRetirement(v.manifest)) {
       return {
         rejection: {
@@ -4427,6 +4465,8 @@ export class GhostManager {
       installOrigin?: 'manual' | 'agent-forge';
       namespace?: string | null;
       sourceStateArchiveId?: string;
+      /** Acquire the existing credential lock only after entering the mutation lane. */
+      withCredentialMutation?: <T>(operation: () => Promise<T>) => Promise<T>;
       /** Host-only official market transition; package authors cannot request this. */
       simulatorPreviousRelId?: string;
       simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
@@ -4435,7 +4475,9 @@ export class GhostManager {
       onPackagePlaced?: () => void;
     },
   ) {
-    return this.runExclusiveMutation(() => this.updateUnlocked(lizFilePath, opts));
+    return this.runExclusiveMutation(() => opts.withCredentialMutation
+      ? opts.withCredentialMutation(() => this.updateUnlocked(lizFilePath, opts))
+      : this.updateUnlocked(lizFilePath, opts));
   }
 
   private async updateUnlocked(
@@ -5090,6 +5132,8 @@ export class GhostManager {
     // v2 作者清单仍带 slots，进入运行时后则会被投影成直接能力字段。批准链只比较、
     // 持久化规范化结果，避免同一份 v2 清单因作者格式和运行时格式不同而被误判为扩权。
     const approvedManifest = expectedManifest.manifest;
+    const transportError = ghostDeclaredNetworkTransportRejection(approvedManifest);
+    if (transportError) throw Object.assign(new Error(transportError), { code: 'NETWORK_INSECURE_ORIGIN' });
     const localeResources = this.readApprovedLocaleResources(sourceDir, approvedManifest);
     const iconDataUrl = this.readInstalledIconDataUrl(sourceDir, approvedManifest) ?? undefined;
     const packageSha256 = await hashApprovedDirectory(sourceDir);
@@ -5365,6 +5409,19 @@ export class GhostManager {
     this.instanceRegistryService.release(relId);
   }
 
+  private async cleanupUninstallSourceState(relId: string, fromPart: string): Promise<void> {
+    const owner = this.currentOwnerContextKey();
+    const pending = this.receiptStore.readPendingMutationSync(relId);
+    const approval = this.receiptStore.readForRecovery(relId);
+    if (pending.state !== 'valid' || pending.mutation.kind !== 'uninstall') throw new Error('uninstall journal changed');
+    await this.options.onUninstallSourceState!(fromPart);
+    if (this.currentOwnerContextKey() !== owner ||
+        JSON.stringify(this.receiptStore.readPendingMutationSync(relId)) !== JSON.stringify(pending) ||
+        JSON.stringify(this.receiptStore.readForRecovery(relId)) !== JSON.stringify(approval)) {
+      throw new Error('uninstall recovery transaction superseded');
+    }
+  }
+
   private async uninstallUnlocked(
     id: string,
     options: GhostUninstallOptions = {},
@@ -5422,8 +5479,11 @@ export class GhostManager {
     }
     // 走同一个撤销入口:成功即清掉隔离记录,失败由该入口转进程内隔离并记日志。撤批准
     // 在删目录之前 —— 即便随后删目录失败/崩溃,也不会留下"目录在 + 旧 receipt 授权"。
+    const fromPart = this.options.onUninstallSourceState ? this.storageKeyForContent(relId) : '';
     const approvalRemoved = await this.removeInstallApprovalUnlocked(relId);
+    if (this.options.onUninstallSourceState) this.untrustedApprovals.add(this.isolationKey(relId));
     try {
+      if (this.options.onUninstallSourceState) await this.cleanupUninstallSourceState(relId, fromPart);
       await fs.promises.rm(dir, { recursive: true, force: true });
     } catch (err) {
       // 批准已撤、标记还在:插件此刻已 fail closed(list 无 receipt → legacy-unapproved),

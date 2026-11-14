@@ -17,6 +17,7 @@ export interface HostGhostManagerOptions {
   readonly userDataDir: string;
   readonly ownerId: string;
   readonly onChanged?: (ghosts: InstalledGhost[]) => void;
+  readonly onUninstallSourceState?: (fromPart: string) => Promise<void>;
 }
 
 /** One manager per process: the receipt store memoizes owner-scoped roots. */
@@ -42,6 +43,11 @@ export function createHostGhostManager(options: HostGhostManagerOptions): GhostM
     getStateDir: () => path.join(ownerRoot, 'ghost-install-state'),
     getOwnerContextKey: () => ownerKey,
     getLocale: () => 'en',
+    // A listing-only caller has no vault. Keep the existing journal isolated
+    // until the runtime can revoke references; never delete first and forget it.
+    onUninstallSourceState: options.onUninstallSourceState ?? (async () => {
+      throw new Error('Plugin account cleanup is unavailable');
+    }),
     ...(options.onChanged ? { onChanged: options.onChanged } : {}),
   });
   return manager;

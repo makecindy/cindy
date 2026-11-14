@@ -65,6 +65,8 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 
 ## 3. Ghost manifest 与 Cindy 专属界面能力
 
+- [插件复用已有账号与已保存凭证](protocol-compatibility/plugin-oauth-account-reuse.md)
+- [插件网络来源、流与 WebSocket](protocol-compatibility/plugin-network-origins-streams.md)
 - [插件授权目录与文件操作](protocol-compatibility/plugin-authorized-files.md)
 - [插件宿主工具的平台服务](protocol-compatibility/plugin-host-tools-platform.md)
 

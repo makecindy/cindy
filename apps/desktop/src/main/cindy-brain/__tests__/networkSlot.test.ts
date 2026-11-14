@@ -6,11 +6,14 @@
  */
 
 import { createHash } from 'node:crypto';
+import { WebSocketServer } from 'ws';
 
 import { afterAll, describe, it, expect, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
+import { HostNetworkConnections } from '../networkConnections';
 import { createMcpAppsManualResolver } from '../mcpAppsManualHeaders';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../../shared/pluginAccountReuse';
 import {
   GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE,
   GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES,
@@ -141,6 +144,336 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
 
 const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
 
+// #10130 / 4559022319, unit: declared direct targets previously skipped public
+// SSRF checks. Synthetic transports prove no metadata hop or WS is dispatched;
+// the same Host policy is used by Desktop and Node, without external requests.
+describe('plugin cloud metadata boundary', () => {
+  it.each(['http://169.254.169.254', 'http://100.100.100.200', 'http://[fd00:ec2::254]',
+    'https://169.254.169.254', 'https://[::ffff:6464:64c8]', 'https://[64:ff9b::6464:64c8]'])
+    ('rejects initial, redirected and WebSocket metadata origin %s', async origin => {
+      const start = 'https://start.example.test';
+      const wsOrigin = origin.replace(/^http/, 'ws');
+      const socket = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('never-open');
+      const fetch = vi.fn(async (url: string) => new Response('{}', { status: url.startsWith(start) ? 302 : 200,
+        headers: url.startsWith(start) ? { location: origin } : { 'content-type': 'application/json' } }));
+      const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: [start, origin, wsOrigin] } }),
+        fetchImpl: fetch,
+      });
+      try {
+        expect(await h.slot.handleFetchRequest('web-search', { url: origin })).toMatchObject({ ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(fetch).not.toHaveBeenCalled();
+        expect(await h.slot.handleFetchRequest('web-search', { url: start })).toMatchObject({ ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(await h.slot.handleNetworkRequest('web-search', { op: 'open', url: wsOrigin })).toMatchObject({ ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(socket).not.toHaveBeenCalled();
+      } finally { socket.mockRestore(); await h.slot.disposeAll(); }
+    });
+
+  it.each(['http://10.0.0.5', 'http://169.254.1.1', 'http://100.100.100.201', 'http://[fd00:ec2::255]'])
+    ('keeps ordinary private/link-local origin %s usable', async origin => {
+      const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: [origin] } }) });
+      try {
+        expect(await h.slot.handleFetchRequest('web-search', { url: origin })).toMatchObject({ ok: true });
+        expect(h.fetchImpl).toHaveBeenCalledOnce();
+      } finally { await h.slot.disposeAll(); }
+    });
+});
+
+// §4: saved credentials may only be injected by the Host; the existing direct
+// key cases cannot observe reference revocation or the unused-path IO budget.
+describe('saved credential Host injection', () => {
+  // Unit, #9825 / 4546557311: exact-origin consent did not prevent ordinary
+  // keys from crossing public cleartext links. Exercise the injection entry;
+  // mock only the final WS socket transport, never send a real credential.
+  it.each([
+    ['http://8.8.8.8:8080', false], ['ws://8.8.8.8:8080', false],
+    ['http://10.0.0.5:8080', false], ['ws://127.0.0.1:8080', false],
+    ['http://gitlab.internal:8080', false], ['http://127.attacker.example:8080', false],
+    ['http://localhost:8080', false], ['http://api.localhost:8080', false],
+    ['http://[fd00::1]:8080', false], ['https://api.example.com:8443', true], ['wss://api.example.com:8443', true],
+  ] as const)('injects a user key into %s only when the origin transport is allowed (%s)', async (origin, allowed) => {
+    const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+    const h = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: [origin], secrets: [{ key: 'key', label: 'Own',
+        inject: { header: 'Authorization', format: 'Bearer {value}', hosts: [origin] } }] } }),
+      readSecret: vi.fn(() => 'synthetic-host-only-key'),
+    });
+    try {
+      const webSocket = origin.startsWith('ws');
+      const result = webSocket ? await h.slot.handleNetworkRequest('web-search', { op: 'open', url: origin + '/api' })
+        : await h.slot.handleFetchRequest('web-search', { url: origin + '/api' });
+      expect(result).toMatchObject({ ok: allowed });
+      if (allowed) {
+        const init = webSocket ? open.mock.calls[0]?.[1] : h.fetchImpl.mock.calls[0]?.[1];
+        expect(init).toMatchObject({ headers: { Authorization: 'Bearer synthetic-host-only-key' } });
+      } else {
+        expect(open).not.toHaveBeenCalled();
+        expect(h.fetchImpl).not.toHaveBeenCalled();
+        expect(h.readSecret).not.toHaveBeenCalled();
+      }
+    } finally { open.mockRestore(); await h.slot.disposeAll(); }
+  });
+
+  it('resolves a reference inside the Host and rechecks it before returning', async () => {
+    let valid = true;
+    const assertCurrent = () => { if (!valid) throw new Error('CREDENTIAL_REFERENCE_CHANGED'); };
+    const resolveSavedCredential = vi.fn(() => ({ value: 'source-private-token', assertCurrent }));
+    const h = makeSlot({ readSecret: () => GHOST_SAVED_CREDENTIAL_MARKER, resolveSavedCredential });
+    expect(await h.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: true });
+    expect(h.fetchImpl.mock.calls[0]?.[1]).toMatchObject({ headers: { 'X-Subscription-Token': 'source-private-token' } });
+    expect(resolveSavedCredential).toHaveBeenCalledWith('web-search', 'brave_api_key');
+    h.fetchImpl.mockImplementationOnce(async () => { valid = false; return fakeResponse(); });
+    const revoked = await h.slot.handleFetchRequest('web-search', { url: BRAVE_URL });
+    expect(revoked).toMatchObject({ ok: false });
+    expect(JSON.stringify(revoked)).not.toContain('source-private-token');
+  });
+
+  it('rejects a marker without an approved reference and does no reference lookup for an ordinary key', async () => {
+    const resolveSavedCredential = vi.fn(() => null);
+    const unused = makeSlot({ resolveSavedCredential });
+    expect(await unused.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: true });
+    expect(unused.readSecret).toHaveBeenCalledTimes(1);
+    expect(resolveSavedCredential).not.toHaveBeenCalled();
+    const forged = makeSlot({ readSecret: () => GHOST_SAVED_CREDENTIAL_MARKER, resolveSavedCredential });
+    expect(await forged.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: false });
+    expect(forged.fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+// Tier 1: the public network entry must return before a stream ends, preserve
+// reconnect cursors, and revoke live sockets on an installation/owner boundary.
+// Existing buffered-fetch cases cannot observe these lifetime differences.
+describe('host network connections', () => {
+  // #10130 / 4547237937, unit: prior cases opened sockets serially and
+  // missed WS credential awaits racing three active HTTP requests for slot 4.
+  async function holdThreeHttp(overrides: Partial<NetworkSlotDeps> = {}) {
+    let finish!: (response: Response) => void;
+    const response = new Promise<Response>(resolve => { finish = resolve; });
+    let started!: () => void;
+    const allStarted = new Promise<void>(resolve => { started = resolve; });
+    let count = 0;
+    const h = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com', 'wss://socket.example.test'],
+        secrets: [{ key: 'key', label: 'Socket key', inject: {
+          header: 'Authorization', format: 'Bearer {value}', hosts: ['wss://socket.example.test'],
+        } }] } }),
+      readSecret: () => 'synthetic-key',
+      fetchImpl: async () => { if (++count === 3) started(); return response; },
+      ...overrides,
+    });
+    const pending = Array.from({ length: 3 }, () => h.slot.handleFetchRequest('web-search', { url: BRAVE_URL }));
+    await allStarted;
+    return { slot: h.slot, async close() {
+      finish(fakeResponse());
+      await Promise.all(pending);
+      await h.slot.disposeAll();
+    } };
+  }
+
+  it('reserves the shared fourth slot before parallel WS credential awaits', async () => {
+    const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+    const h = await holdThreeHttp();
+    try {
+      const results = await Promise.all(Array.from({ length: 4 }, () => h.slot.handleNetworkRequest('web-search', {
+        op: 'open', url: 'wss://socket.example.test/events',
+      })));
+      expect(results.filter(result => result.ok)).toHaveLength(1);
+      expect(results.filter(result => !result.ok)).toHaveLength(3);
+      expect(open).toHaveBeenCalledOnce();
+    } finally { open.mockRestore(); await h.close(); }
+    expect(h.slot.hasInFlightRequests('web-search')).toBe(false);
+  });
+
+  it.each(['missing', 'credential-revoked', 'plugin-cancelled', 'owner-cancelled', 'handshake-failed'] as const)(
+    'releases the WS reservation after %s so a fresh request fits', async failure => {
+      let epoch = 0;
+      let missing = failure === 'missing';
+      const openWebSocket = HostNetworkConnections.prototype.openWebSocket;
+      const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+      if (failure === 'handshake-failed') open.mockImplementationOnce(function (this: HostNetworkConnections, owner, input) {
+        return openWebSocket.call(this, owner, { ...input, agent: async () => { throw new Error('NETWORK_WEBSOCKET_FAILED'); } });
+      });
+      const h = await holdThreeHttp({ readSecret: () => GHOST_SAVED_CREDENTIAL_MARKER,
+        resolveSavedCredential: () => {
+          const captured = epoch;
+          return missing ? null : { value: 'synthetic-key', assertCurrent: () => {
+            if (captured !== epoch) throw new Error('CREDENTIAL_REFERENCE_CHANGED');
+          } };
+        },
+      });
+      try {
+        const pending = h.slot.handleNetworkRequest('web-search', { op: 'open', url: 'wss://socket.example.test/events' });
+        if (failure === 'credential-revoked') epoch++;
+        if (failure === 'plugin-cancelled') h.slot.disposeGhost('web-search');
+        if (failure === 'owner-cancelled') await h.slot.disposeAll();
+        expect(await pending).toMatchObject({ ok: false });
+        expect(open).toHaveBeenCalledTimes(failure === 'handshake-failed' ? 1 : 0);
+        missing = false;
+        expect(await h.slot.handleNetworkRequest('web-search', { op: 'open', url: 'wss://socket.example.test/events' }))
+          .toMatchObject({ ok: true, connectionId: 'opaque' });
+      } finally { open.mockRestore(); await h.close(); }
+      expect(h.slot.hasInFlightRequests('web-search')).toBe(false);
+    },
+  );
+
+  it('returns headers before EOF, reads UTF-8 incrementally, and retains cursors', async () => {
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller; } });
+    const { slot } = makeSlot({ fetchImpl: async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }) });
+    const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+    expect(opened).toMatchObject({ ok: true, status: 200, connectionId: expect.any(String) });
+    if (!opened.ok || !('connectionId' in opened)) return;
+    try {
+      const bytes = new TextEncoder().encode('你好');
+      source.enqueue(bytes.slice(0, 2));
+      source.enqueue(bytes.slice(2));
+      const first = await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 });
+      expect(first).toMatchObject({ ok: true, events: [{ type: 'text', data: '你好', sequence: 1 }], nextCursor: 1, resetRequired: false });
+      expect(await slot.handleNetworkRequest('other-plugin', { op: 'read', connectionId: opened.connectionId })).toMatchObject({ ok: false });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0 })).toMatchObject({ events: [{ data: '你好' }] });
+      source.close();
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 1, waitMs: 1000 })).toMatchObject({ ok: true, closed: true, events: [{ type: 'end' }] });
+    } finally { slot.disposeAll(); }
+  });
+
+  // #10130 / 4558948515, unit: the author contract promises NDJSON streams,
+  // but existing SSE cases did not cover application/x-ndjson. Exercise fetch
+  // and connection read, keeping buffered and binary response rules unchanged.
+  it.each([
+    ['application/x-ndjson; charset=utf-8', 'stream', true],
+    ['application/x-ndjson', 'text', false],
+    ['application/octet-stream', 'stream', false],
+  ] as const)('handles %s as %s without widening other response modes (%s)', async (contentType, as, accepted) => {
+    const data = '{"ok":true}\n';
+    const { slot } = makeSlot({ fetchImpl: async () => new Response(data, { headers: { 'content-type': contentType } }) });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as });
+      expect(opened).toMatchObject({ ok: accepted });
+      if (!accepted || !opened.ok || !('connectionId' in opened)) return;
+      expect(opened.connectionId).toEqual(expect.any(String));
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 }))
+        .toMatchObject({ ok: true, events: expect.arrayContaining([expect.objectContaining({ type: 'text', data })]) });
+    } finally { await slot.disposeAll(); }
+  });
+
+  it('cancels a pending stream read when its call ends and releases the guarded transport', async () => {
+    const signal = new AbortController();
+    const release = vi.fn(async () => {});
+    const cancel = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo: () => ({ ghostId: 'web-search', channel: 'session', sessionId: 's', remoteHostId: null }),
+      getCallSignal: () => signal.signal,
+      fetchPublicImpl: async () => ({ response: new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/plain' } }), release }),
+    });
+    const opened = await slot.handleFetchRequest('web-search', { url: 'https://public.example.com/events', as: 'stream', callId: 'c1' });
+    expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+    if (!opened.ok || !('connectionId' in opened)) return;
+    const reading = slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, waitMs: 1000 });
+    signal.abort();
+    expect(await reading).toMatchObject({ ok: false });
+    await slot.disposeAll();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  // §4: the existing installation guard did not cover source-credential
+  // revocation after a WebSocket handshake. Both must stop later sends.
+  it.each(['installation', 'credential'] as const)('requires an exact WS origin, exchanges real frames, and closes on %s revocation', async boundary => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>(resolve => server.once('listening', resolve));
+    const address = server.address();
+    if (typeof address !== 'object' || !address) throw new Error('missing loopback address');
+    const origin = 'wss://socket.example.test';
+    // Only replace the TLS transport: policy, injection, source guards and the
+    // connection lifetime remain real. Synthetic keys never leave loopback.
+    const open = HostNetworkConnections.prototype.openWebSocket;
+    const transport = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket')
+      .mockImplementation(function (this: HostNetworkConnections, owner, input) {
+        return open.call(this, owner, { ...input, url: `ws://127.0.0.1:${address.port}/echo` });
+      });
+    let current = true;
+    let authorization: string | undefined;
+    server.on('connection', (socket, request) => {
+      authorization = request.headers.authorization;
+      socket.on('message', (data, binary) => socket.send(data, { binary }));
+    });
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: [origin], secrets: [{ key: 'own', label: 'Own key', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: [origin] } }] } }),
+      readSecret: () => boundary === 'credential' ? GHOST_SAVED_CREDENTIAL_MARKER : 'host-only-key',
+      resolveSavedCredential: () => ({ value: 'host-only-key', assertCurrent: () => {
+        if (!current) throw new Error('CREDENTIAL_REFERENCE_CHANGED');
+      } }),
+      captureRequestGuard: () => () => { if (boundary === 'installation' && !current) throw new Error('installation changed'); },
+    });
+    try {
+      expect(await slot.handleNetworkRequest('web-search', { op: 'open', url: 'ws://127.0.0.1:1/forbidden' })).toMatchObject({ ok: false });
+      const opened = await slot.handleNetworkRequest('web-search', { op: 'open', url: `${origin}/echo`, headers: { Authorization: 'forged' } });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      expect(authorization).toBe('Bearer host-only-key');
+      expect(await slot.handleNetworkRequest('web-search', { op: 'send', connectionId: opened.connectionId, data: 'hello' })).toMatchObject({ ok: true });
+      const received = await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 });
+      expect(received).toMatchObject({ ok: true, events: [{ type: 'text', data: 'hello' }] });
+      expect(JSON.stringify(received)).not.toContain('host-only-key');
+      expect(await slot.handleNetworkRequest('web-search', { op: 'send', connectionId: opened.connectionId, data: 'AQID', binary: true })).toMatchObject({ ok: true });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 1, waitMs: 1000 })).toMatchObject({ events: [{ type: 'binary', data: 'AQID' }] });
+      current = false;
+      expect(await slot.handleNetworkRequest('web-search', { op: 'send', connectionId: opened.connectionId, data: 'late' })).toMatchObject({ ok: false });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'close', connectionId: opened.connectionId })).toMatchObject({ ok: false });
+    } finally {
+      transport.mockRestore();
+      await slot.disposeAll();
+      for (const client of server.clients) client.terminate();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
+  it('bounds stream history, reports a cursor gap, and expires abandoned connections', async () => {
+    vi.useFakeTimers();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller; }, cancel });
+    const { slot } = makeSlot({ fetchImpl: async () => new Response(body, { headers: { 'content-type': 'text/plain' } }) });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      source.enqueue(new Uint8Array(1024 * 1024 + 64 * 1024).fill(97));
+      const result = await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 });
+      expect(result).toMatchObject({ ok: true, resetRequired: true, nextCursor: 3 });
+      expect(JSON.stringify(result).length).toBeLessThan(200_000);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId })).toMatchObject({ ok: false });
+      await slot.disposeAll();
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally { await slot.disposeAll(); vi.useRealTimers(); }
+  });
+
+  it('fences a connection still preparing credentials when the plugin stops', async () => {
+    let finish!: (value: string) => void;
+    const token = new Promise<string>(resolve => { finish = resolve; });
+    let started!: () => void;
+    const exchanging = new Promise<void>(resolve => { started = resolve; });
+    const calls: string[] = [];
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: ['https://api.example.com:8443'], secrets: [{ key: 'own', label: 'Own key',
+        inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['https://api.example.com:8443'] },
+        exchange: { url: 'https://auth.example.com/token', bodyFormat: '{"key":"{value}"}', tokenPath: 'token' },
+      }] } }),
+      readSecret: () => 'synthetic-key',
+      fetchImpl: async url => { calls.push(url); started(); return new Response(JSON.stringify({ token: await token }), { headers: { 'content-type': 'application/json' } }); },
+    });
+    const pending = slot.handleFetchRequest('web-search', { url: 'https://api.example.com:8443/events', as: 'stream' });
+    await exchanging;
+    slot.disposeGhost('web-search');
+    finish('temporary');
+    expect(await pending).toMatchObject({ ok: false });
+    expect(calls).toEqual(['https://auth.example.com/token']);
+    await slot.disposeAll();
+  });
+});
+
 describe('network request installation binding', () => {
   it.each(['redirect-credential', '401-response'] as const)('does not dispatch or invalidate after replacement during %s', async (phase) => {
     for (const replaced of [false, true]) {
@@ -234,6 +567,83 @@ describe('network request installation binding', () => {
 });
 
 describe('networkSlot · 载荷与 URL 校验', () => {
+  // Unit, follow-up to #9825 / 4546786057: declared origins must not bypass
+  // the runtime transport boundary, even for old/unvalidated manifests.
+  it.each([
+    ['http://public.example:8080', false], ['http://8.8.8.8:8080', false],
+    ['http://gitlab.internal:8080', false], ['http://127.attacker.example:8080', false],
+    ['http://10.0.0.5:8080', true], ['http://localhost:8080', true],
+    ['http://127.0.0.1:8080', true], ['http://[::1]:8080', true],
+  ] as const)('checks plaintext %s before both initial and redirected dispatch (%s)', async (origin, allowed) => {
+    for (const redirected of [false, true]) {
+      const { slot, fetchImpl } = makeSlot({ getGhost: () => fakeGhost({
+        network: { hosts: ['https://start.example', origin] },
+      }) });
+      if (redirected) fetchImpl.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: origin + '/data' } }));
+      try {
+        const result = await slot.handleFetchRequest('web-search', { url: redirected ? 'https://start.example/data' : origin + '/data' });
+        expect(result).toMatchObject(allowed ? { ok: true } : { ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(fetchImpl).toHaveBeenCalledTimes((redirected ? 1 : 0) + (allowed ? 1 : 0));
+      } finally { await slot.disposeAll(); }
+    }
+  });
+
+  it.each([
+    ['ws://public.example:8080', false], ['ws://gitlab.internal:8080', false],
+    ['ws://10.0.0.5:8080', true], ['ws://127.0.0.1:8080', true], ['ws://localhost:8080', true],
+  ] as const)('checks plaintext WebSocket %s without reading credentials or opening a blocked socket (%s)', async (origin, allowed) => {
+    const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+    const { slot, readSecret } = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: [origin] } }) });
+    try {
+      expect(await slot.handleNetworkRequest('web-search', { op: 'open', url: origin + '/echo' }))
+        .toMatchObject(allowed ? { ok: true } : { ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+      expect(open).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(readSecret).not.toHaveBeenCalled();
+    } finally { open.mockRestore(); await slot.disposeAll(); }
+  });
+
+  it('never forwards or resolves a TLS credential after a redirect to a private plaintext origin', async () => {
+    const hosts = ['https://secure.example', 'http://127.0.0.1:8080'];
+    const { slot, fetchImpl, readSecret } = makeSlot({ getGhost: () => fakeGhost({ network: { hosts,
+      secrets: [{ key: 'brave_api_key', label: 'Private', inject: { header: 'Authorization', format: 'Bearer {value}', hosts } }],
+    } }) });
+    fetchImpl.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: hosts[1] + '/data' } }));
+    try {
+      expect(await slot.handleFetchRequest('web-search', { url: hosts[0] + '/data' })).toMatchObject({ ok: false });
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(readSecret).toHaveBeenCalledOnce();
+      expect(fetchImpl.mock.calls[0]?.[1].headers.Authorization).toBe('Bearer BSA-secret');
+    } finally { await slot.disposeAll(); }
+  });
+
+  // 第23项经生产网络入口验证 origin 批准与凭证隔离；旧覆盖只测试所有非443目标被拒，tier=unit。
+  it('allows declared local origins and custom ports, with credentials scoped to that exact origin', async () => {
+    const network = { hosts: ['api.search.brave.com', 'https://api.search.brave.com:8443', 'http://127.0.0.1:8080'], secrets: [
+      { key: 'brave_api_key', label: 'Default TLS key', inject: { header: 'X-Default-Key', format: '{value}' } },
+      { key: 'tavily_api_key', label: 'Custom origin key', inject: { header: 'X-Custom-Key', format: '{value}', hosts: ['https://api.search.brave.com:8443'] } },
+    ] };
+    const { slot, fetchImpl } = makeSlot({ getGhost: () => fakeGhost({ network }) });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com:8443/data' })).toMatchObject({ ok: true });
+    expect(fetchImpl.mock.calls[0]?.[1].headers).toMatchObject({ 'X-Custom-Key': 'tvly-secret' });
+    expect(fetchImpl.mock.calls[0]?.[1].headers['X-Default-Key']).toBeUndefined();
+    expect(await slot.handleFetchRequest('web-search', { url: 'http://127.0.0.1:8080/data' })).toMatchObject({ ok: true });
+    expect(fetchImpl.mock.calls[1]?.[1].headers['X-Default-Key']).toBeUndefined();
+    expect(fetchImpl.mock.calls[1]?.[1].headers['X-Custom-Key']).toBeUndefined();
+    expect(await slot.handleFetchRequest('web-search', { url: 'http://127.0.0.1:8081/data' })).toMatchObject({ ok: false });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let an Agent call expand an old domain approval to HTTP or a custom port', async () => {
+    const { slot, fetchImpl, fetchPublicImpl } = makeSlot({
+      inFlightCallInfo: () => ({ ghostId: 'web-search', sessionId: 's', remoteHostId: null, channel: 'session' }),
+    });
+    for (const url of ['http://api.search.brave.com/data', 'https://api.search.brave.com:8443/data']) {
+      expect(await slot.handleFetchRequest('web-search', { url, callId: 'call-agent' })).toMatchObject({ ok: false });
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchPublicImpl).not.toHaveBeenCalled();
+  });
+
   it('url 缺失/非 https/带端口/内嵌凭证/不是绝对地址一律拒', async () => {
     const { slot } = makeSlot();
     for (const url of [

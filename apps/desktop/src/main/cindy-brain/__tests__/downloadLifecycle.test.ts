@@ -98,6 +98,7 @@ it.each([false, true])('uninstall cannot delete private data before MCP exits (f
     run({ uninstall: async () => { events.push('package-removed'); return {}; } }) };
   const { uninstallGhostAndCleanupLocked } = createUninstall({
     beginGhostMutation: () => noop, requireGhostAvailableForActiveSession: noop,
+    withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
     findGhostForInstanceId: () => ghost, getBotAuthorizationService: () => null,
     getGhostManager: () => manager, getGhostRuntime: () => ({ stop: noop }),
     pluginDeviceSync: { beginMutation: () => noop },

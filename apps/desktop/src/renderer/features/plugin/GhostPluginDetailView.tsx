@@ -45,6 +45,7 @@ import { pluginPresentationOrigin, type PluginPresentationOrigin } from './lib/p
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostLibrarySection } from './GhostLibrarySection';
 import { GhostHandoffFilesSection } from './GhostHandoffFilesSection';
+import { GhostAccountReuseSection } from './GhostAccountReuseSection';
 import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
 import { PluginControlPointsSection } from './PluginControlPointsSection';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
@@ -645,6 +646,7 @@ export function GhostPluginDetailView({
           </Button>
         )) : null}
 
+        {!remote ? <GhostAccountReuseSection key={detail.id} ghostId={detail.id} enabled={enabled} declared={ghost?.manifest.network?.secrets?.some(secret => !secret.source || secret.source === 'user' || secret.source === 'oauth') === true} /> : null}
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
         {!remote ? (
           <GhostHandoffFilesSection
