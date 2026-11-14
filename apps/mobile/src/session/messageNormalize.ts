@@ -799,6 +799,12 @@ function parseToolUse(message: RemoteMessage): ToolUsePayload {
   return payload;
 }
 
+/** Same decoding used by user bubbles, including JSON-encoded durable rows. */
+export function remoteUserMessageIsSynthetic(content: unknown): boolean {
+  const parsed = parseMaybeJsonObject(content);
+  return isSyntheticTriggerText(typeof parsed?.text === 'string' ? parsed.text : contentToPreview(content));
+}
+
 function parseUserContent(content: unknown): {
   text: string;
   attachments: NormalizedAttachment[];
