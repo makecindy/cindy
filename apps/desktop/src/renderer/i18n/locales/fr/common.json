@@ -21611,8 +21611,7 @@
     "providerManagedAuth": "Le fournisseur actuel de Codex ne permet pas de consulter le compte ChatGPT. Lors de l’ajout du fournisseur, choisissez « $t(subscriptionAccounts.signIn.anotherAccount) » pour utiliser un dossier séparé.",
     "signIn": {
       "checking": "Vérification du compte local…",
-      "detected": "Compte connecté détecté",
-      "useAccount": "Utiliser ce compte",
+      "useAccount": "Utiliser le compte {{cli}} de cet ordinateur",
       "anotherAccount": "Se connecter à un autre compte",
       "keepExisting": "Le nouveau compte devient un fournisseur distinct, sauf si vous en choisissez un à rejoindre. Les connexions existantes sont conservées.",
       "checkFailed": "Impossible de vérifier le compte local. Réessayez.",
@@ -21622,7 +21621,6 @@
     "title": "Comptes d’abonnement",
     "strategy": "Répartition de charge",
     "add": "Ajouter un compte",
-    "default": "Dossier par défaut",
     "defaultTag": "Par défaut",
     "ready": "Connecté",
     "signedOut": "Connexion requise",

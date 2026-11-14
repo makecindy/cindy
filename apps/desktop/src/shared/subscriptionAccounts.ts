@@ -83,6 +83,11 @@ export interface SubscriptionPoolView {
   /** Present only for an explicitly task-scoped read; null means no recorded binding. */
   boundAccountId?: string | null;
   accounts: SubscriptionAccountView[];
+  /**
+   * `preview` only (2026-11-14): the CLI's own login is already in Cindy, so the add-provider wizard
+   * offers no shortcut for it. Older hosts omit it; absence keeps the shortcut as before.
+   */
+  defaultAdded?: boolean;
 }
 export type SubscriptionAccountCommand =
   | { action: 'read'; providerId: string; taskId?: string }

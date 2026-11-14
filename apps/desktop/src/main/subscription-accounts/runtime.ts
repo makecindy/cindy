@@ -1311,7 +1311,33 @@ async function readSubscriptionPoolView(
     strategy: providerStrategy(ref.providerId, provider, pool),
     ...(taskId ? { boundAccountId: bound ?? null } : {}),
     accounts,
+    ...(previewDefault
+      ? { defaultAdded: defaultLoginAdded(state, provider, accounts.find((account) => account.id === 'default')) }
+      : {}),
   };
+}
+
+/**
+ * Add-provider preview (2026-11-14 user decision): the CLI's own login is already in Cindy when the
+ * built-in provider uses it, or when the same identity is already signed in as another account of
+ * this kind. The wizard then offers no shortcut for it. Saved records and cached identities only:
+ * no extra CLI or quota reads.
+ */
+function defaultLoginAdded(
+  state: OwnerRuntime,
+  provider: SubscriptionProvider,
+  cli: SubscriptionPoolView['accounts'][number] | undefined,
+): boolean {
+  const saved = readPool(provider);
+  // Older connected providers use an implicit default slot before any pool is saved.
+  if ((!saved || saved.accounts.some((account) => account.id === 'default'))
+    && !disconnectedFor(saved, provider, 'default') && defaultAccountBound(provider)) return true;
+  const identity = cli && (cli.status === 'ready' || cli.status === 'limited')
+    ? cli.identity?.trim().toLowerCase() : undefined;
+  if (!identity) return false;
+  return (saved?.accounts ?? []).some((account) => account.id !== 'default'
+    && [account.lastConfirmedIdentity, state.cache.get(keyOf(provider, account.id))?.auth.identity]
+      .some((value) => value?.trim().toLowerCase() === identity));
 }
 
 /** Each provider assigns among its own accounts with its own policy; built-ins keep the pool's. */
