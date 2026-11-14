@@ -273,8 +273,15 @@ export class AgentNetClient {
         if (this.directReads.size >= 64) this.directReads.delete(this.directReads.keys().next().value!);
         this.directReads.set(id, { request: target, until: Math.min(target.expiresAt - 30_000, Date.now() + 10 * 60_000) });
         clearTimeout(timer);
+        const read = await this.directRead(target, range, signal);
         // Unreachable storage: the relay serves this read (and the next ones for a while) itself.
-        return await this.directRead(target, range, signal) ?? await this.mediaResponse(id, range, signal);
+        if (!read) return await this.mediaResponse(id, range, signal);
+        if (read.status === 403) {
+          // Refused although just granted: an error, never media (only a cached grant is retried).
+          await read.body?.cancel().catch(() => undefined); this.directReads.delete(id);
+          throw new AgentNetClientError(403, 'MEDIA_STORAGE_READ_FAILED');
+        }
+        return read;
       }
     } finally { clearTimeout(timer); }
     if (!response.ok) await responseBody(response);

@@ -181,6 +181,11 @@ describe('direct media transfer', () => {
     const granted = await fetch(f.relay.url + resource, { headers: { authorization: member.client.header('GET', resource), [MEDIA_TRANSFER_HEADER]: MEDIA_TRANSFER_DIRECT } });
     expect(granted.headers.get(MEDIA_TRANSFER_HEADER)).toBe(MEDIA_TRANSFER_DIRECT);
     expect(await granted.json()).toMatchObject({ transfer: MEDIA_TRANSFER_DIRECT, size: direct.objects.get(uploaded.id)!.length });
+    // A grant the storage refuses right away is an error, not media.
+    direct.flags.refuseReads = true;
+    const refused = new AgentNetClient(f.relay.url, member.identity, member.certificate, f.rootPublicKey);
+    await expect(refused.mediaResponse(uploaded.id)).rejects.toMatchObject({ status: 403, code: 'MEDIA_STORAGE_READ_FAILED' });
+    direct.flags.refuseReads = false;
     direct.flags.unsafeReads = true;
     const fresh = new AgentNetClient(f.relay.url, member.identity, member.certificate, f.rootPublicKey);
     await expect(fresh.mediaResponse(uploaded.id)).rejects.toThrow('INVALID_DIRECT_MEDIA_REQUEST');
@@ -265,7 +270,7 @@ async function directStorage() {
       return;
     }
     if (req.method !== 'GET') return done(405);
-    if (url.searchParams.get('sig') !== sign(['read', id, expires])) return done(403);
+    if (url.searchParams.get('sig') !== sign(['read', id, expires]) || flags.refuseReads) return done(403);
     const object = objects.get(id);
     if (!object) return done(404);
     counts.storageReads++;
@@ -278,7 +283,7 @@ async function directStorage() {
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   cleanups.push(() => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/objects/`;
-  const flags = { unsafeReads: false, broken: false };
+  const flags = { unsafeReads: false, broken: false, refuseReads: false };
   return {
     objects, counts, base, flags,
     rotate() { generation++; },
