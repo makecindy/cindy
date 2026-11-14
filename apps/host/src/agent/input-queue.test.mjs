@@ -2689,6 +2689,14 @@ test('context recovery assembly: an overflow rebuilds the task and replays the m
   assert.equal(replayed.options.resumeSessionId, undefined, 'the new runtime does not resume the overflowed context');
   await waitFor(() => !r.h.queue.projection('assembled-ok').error);
   assert.equal(r.rows('assembled-ok', 'context_rebuild').length, 1, 'the rebuild marker is committed');
+  // The client learns the task was rebuilt: no native session, no context used (commitContextRecoveryWithPorts).
+  const rebuilt = r.h.events.filter(event => event.type === 'session_changed' && event.sessionId === 'assembled-ok'
+    && event.patch && 'sdkSessionId' in event.patch);
+  assert.equal(rebuilt.length, 1);
+  assert.deepEqual(Object.keys(rebuilt[0].patch).sort(), ['contextTokens', 'sdkSessionId', 'updatedAt']);
+  assert.equal(rebuilt[0].patch.sdkSessionId, null);
+  assert.equal(rebuilt[0].patch.contextTokens, 0);
+  assert.ok(Number.isFinite(Date.parse(rebuilt[0].patch.updatedAt)), 'with the commit\'s update time');
   assert.equal(r.rows('assembled-ok', 'user').length, 1, 'the replay writes no second user row');
   assert.equal(r.rows('assembled-ok', 'error').length, 0, 'a recovered overflow writes no error row');
   assert.equal(r.h.events.filter(event => event.sessionId === 'assembled-ok' && event.type === 'error').length, 0);
@@ -2731,6 +2739,23 @@ test('context recovery assembly: the replay is refused while the task has a live
 
 // onRebuilt clears the coordinator's error as the desktop does (contextRecoveryRebuilt), with no
 // execution pause: a pause would abort a steer in flight (setExecutionPaused), which the desktop never does.
+test('context recovery assembly: the replay is refused while a turn of the task is still running, even with its runtime gone', { timeout: 30_000 }, async t => {
+  const git = [];
+  const r = await assembledRecovery(t, { getGitSnapshot: () => ({ onTurnStart() { git.push('start'); },
+    onTurnAbort() { git.push('abort'); }, onTurnEnd() { git.push('end'); }, onSessionClosed() {} }) });
+  await r.db.createTask('assembled-running');
+  await r.h.queue.enqueue('assembled-running', { clientId: 'running-input', text: 'hello' });
+  await waitFor(() => r.h.maker.sessions.get('assembled-running')?.sent.length === 1);
+  // The turn has not ended; its runtime is no longer the task's live one.
+  r.h.maker.sessions.delete('assembled-running');
+  assert.equal(r.h.queue.projection('assembled-running').turnInProgress, true);
+  git.length = 0;
+  const result = await r.runtimes[0].replay('assembled-running', 'hello', { agentKind: 'claude-code', workingDir: r.db.root });
+  assert.deepEqual(result, { accepted: false });
+  assert.equal(r.h.maker.sessions.has('assembled-running'), false, 'no runtime is started');
+  assert.deepEqual(git, [], 'no Git baseline');
+});
+
 test('context recovery assembly: a steer in flight when the replay is accepted is not aborted', { timeout: 30_000 }, async t => {
   const r = await assembledRecovery(t);
   let releaseReplay, releaseSteer, steering;

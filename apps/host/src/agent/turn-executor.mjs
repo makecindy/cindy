@@ -580,10 +580,11 @@ export function createTurnExecutor(deps) {
   // replayContextRecoveryWithPorts, the desktop's sendToAgentAcceptedUnlocked): a turn of its own
   // through the same shared transaction, with no input-queue item, no new user row and no send lock
   // (recovery holds it). Recovery has closed the task's runtime and waited for the claimed turn's
-  // settlement before it replays; a live runtime means something started it since, so the replay is
-  // refused. Its Git baseline opens once before dispatch and is cancelled if the replay is refused.
+  // settlement before it replays; a turn of the task still running, or a live runtime, means
+  // something started since, so the replay is refused. Its Git baseline opens once before dispatch
+  // and is cancelled if the replay is refused.
   async function replay(sessionId, message, createOpts, sendOpts = {}) {
-    if (deps.getMaker().getSession(sessionId)) return { accepted: false };
+    if (turns.get(sessionId)?.running || deps.getMaker().getSession(sessionId)) return { accepted: false };
     createOpts = { ...createOpts };
     const turn = openTurn(sessionId, createOpts, sendOpts, undefined);
     turn.preparing = (async () => {

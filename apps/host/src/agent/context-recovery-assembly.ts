@@ -79,7 +79,7 @@ export interface HostRecoveryRuntimePorts {
   drainHistories(): Promise<void>;
   resetWireNotes(sessionId: string): void;
   readAutoReviewHistory: ReplayContextRecoveryPorts['readAutoReviewHistory'];
-  /** The Host coordinator, with a clear that keeps the queue paused until its snapshot is written. */
+  /** The Host coordinator; its clear is the coordinator's, synchronous, as on the desktop (input-queue.mjs). */
   coordinator: NonNullable<ReturnType<RecoveryCallbackPorts['getCoordinator']>>;
   /** The replay was accepted: a shutdown no longer waits for this recovery (context-recovery.ts). */
   noteRebuilt(sessionId: string): void;
@@ -129,7 +129,7 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
       createDbMessage: host.persistMessage,
       createId: () => createId(),
       log: host.log,
-    } as CommitContextRecoveryPorts, sessionId, handoff, meta, signal),
+    }, sessionId, handoff, meta, signal),
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       host.pendingHandoff.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: sessionId => host.pendingHandoff.readGeneration(sessionId),
@@ -166,7 +166,7 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
       // The desktop fences Cindy Make project folders; the Host refuses Cindy Make inputs.
       withCindyMakeProjectUse: async (_userData, _workingDir, run) => run(),
       app: { getPath: () => '' },
-    } as ReplayContextRecoveryPorts, sessionId, content, agentFacingWireContent, recovery),
+    }, sessionId, content, agentFacingWireContent, recovery),
     withSessionLock: withSendToSessionLock,
     withCloseSuppressed: withRehydrateCloseSuppressed,
     log: host.log,
