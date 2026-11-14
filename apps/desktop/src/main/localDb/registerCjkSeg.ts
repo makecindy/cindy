@@ -65,6 +65,10 @@ function tableExists(db: Database.Database, name: string): boolean {
  * 连接级 TEMP 触发器：新客户端按字写入 FTS。同名 TEMP 不会覆盖持久触发器，
  * 两者都会 fire，所以持久 insert/update 必须用 `cjk_seg` 函数存在性守卫跳过。
  * TEMP 对象不进库文件，旧连接看不到它们。
+ *
+ * 写 messages_fts_rows 不能用 `INSERT OR IGNORE`：触发语句带冲突策略时（如
+ * `INSERT ... ON CONFLICT DO UPDATE` 的 ABORT），SQLite 用它覆盖触发器体内的 OR 子句，
+ * 重复 message_id 会回滚整条 upsert（#8704）。用 NOT EXISTS 判重，与外层策略无关。
  */
 export function installCjkSegTempTriggers(db: Database.Database): void {
   if (!tableExists(db, 'messages') || !tableExists(db, 'messages_fts') || !tableExists(db, 'messages_fts_rows')) {
@@ -79,7 +83,9 @@ export function installCjkSegTempTriggers(db: Database.Database): void {
     AFTER INSERT ON messages
     WHEN new.rewind_at IS NULL AND new.role IN ${FTS_ROLE_WHITELIST}
     BEGIN
-      INSERT OR IGNORE INTO messages_fts_rows(message_id) VALUES (new.id);
+      INSERT INTO messages_fts_rows(message_id)
+        SELECT new.id
+        WHERE NOT EXISTS (SELECT 1 FROM messages_fts_rows WHERE message_id = new.id);
       INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content)
         SELECT fts_rowid, new.id, new.session_id, new.role, ${CJK_SEG_SQL_FN}(new.content)
         FROM messages_fts_rows
@@ -103,9 +109,10 @@ export function installCjkSegTempTriggers(db: Database.Database): void {
       UPDATE messages_fts_rows
         SET message_id = new.id
         WHERE message_id = old.id AND old.id IS NOT new.id;
-      INSERT OR IGNORE INTO messages_fts_rows(message_id)
+      INSERT INTO messages_fts_rows(message_id)
         SELECT new.id
-        WHERE new.rewind_at IS NULL AND new.role IN ${FTS_ROLE_WHITELIST};
+        WHERE new.rewind_at IS NULL AND new.role IN ${FTS_ROLE_WHITELIST}
+          AND NOT EXISTS (SELECT 1 FROM messages_fts_rows WHERE message_id = new.id);
       INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content)
         SELECT fts_rowid, new.id, new.session_id, new.role, ${CJK_SEG_SQL_FN}(new.content)
         FROM messages_fts_rows

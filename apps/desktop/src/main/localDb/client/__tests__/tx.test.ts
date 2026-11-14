@@ -777,6 +777,56 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
+  // #8704: re-importing a changed message runs the FTS update trigger inside an UPSERT, whose
+  // ABORT policy overrides the trigger's own `INSERT OR IGNORE` on messages_fts_rows.
+  it.each([false, true])('sessionImport.execute updates indexed messages without messages_fts_rows conflicts (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (_client, reopen) => {
+      const client = await reopenWithMessagesFts(_client, reopen);
+      await seedSession(client, 's1');
+      const row = (key: string, content: string, createdAt: number) =>
+        ({ key, role: 'assistant', content: JSON.stringify(content), toolUseId: null, agentMeta: null, agentKind: null, createdAt });
+      const write = (rows: ReturnType<typeof row>[]) => client.tx('sessionImport.execute', {
+        action: 'messages', sessionId: 's1', clientIdPrefix: 'import:s1:', idPrefix: 'imp-s1-', rows,
+      });
+      await expect(write([row('a', '旧回答', 1000)])).resolves.toEqual({ changed: 1 });
+      await expect(write([row('a', '新回答', 1000), row('b', '后续一轮', 1100)])).resolves.toEqual({ changed: 2 });
+      await expect(client.query(
+        'SELECT message_id, content FROM messages_fts ORDER BY message_id',
+      )).resolves.toEqual([
+        { message_id: 'imp-s1-a', content: JSON.stringify('新 回 答') },
+        { message_id: 'imp-s1-b', content: JSON.stringify('后 续 一 轮') },
+      ]);
+      await expect(client.queryOne('SELECT count(*) AS n FROM messages_fts_rows')).resolves.toEqual({ n: 2 });
+    }, { useInlineWorker });
+  });
+
+  // Pi /tree navigation revives an earlier rewound row through the same UPSERT; its stable
+  // messages_fts_rows mapping survives the rewind and must be reused, not re-inserted.
+  it.each([false, true])('session.treeRehydrate revives indexed rows without messages_fts_rows conflicts (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (_client, reopen) => {
+      const client = await reopenWithMessagesFts(_client, reopen);
+      await seedSession(client, 's1');
+      await client.exec(
+        `INSERT INTO messages (id, client_id, session_id, role, content, agent_kind, created_at, rewind_at)
+         VALUES ('m1', 'c1', 's1', 'assistant', ?, 'pi', 100, NULL)`,
+        [JSON.stringify('branch one')],
+      );
+      const rehydrate = (content: string) => client.tx('session.treeRehydrate', {
+        sessionId: 's1', now: 1000, contextTokens: 1, contextWindow: 200000,
+        messages: [{
+          id: 'm1', clientId: 'c1', role: 'assistant', content: JSON.stringify(content),
+          toolUseId: null, agentMeta: null, agentKind: 'pi', createdAt: 100,
+        }],
+      });
+      await expect(rehydrate('branch one')).resolves.toMatchObject({ messageCount: 1 });
+      await expect(rehydrate('branch two')).resolves.toMatchObject({ messageCount: 1 });
+      await expect(client.query('SELECT message_id, content FROM messages_fts')).resolves.toEqual([
+        { message_id: 'm1', content: JSON.stringify('branch two') },
+      ]);
+      await expect(client.queryOne('SELECT count(*) AS n FROM messages_fts_rows')).resolves.toEqual({ n: 1 });
+    }, { useInlineWorker });
+  });
+
   // Two imports of the same source (desktop and phone) share one target task: a failed or
   // cancelled request must not delete the hidden task the other request is still writing.
   it.each([false, true])('sessionImport.execute abort only removes the hidden task of its own request (inline=%s)', async (useInlineWorker) => {
@@ -3931,6 +3981,19 @@ async function withTwoClients(fn: (clients: [DbClient, DbClient]) => Promise<voi
     await Promise.all(clients.map((client) => client.dispose()));
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// The shared test schema predates FTS; add the production tables and reopen so the worker
+// installs its connection-level cjk_seg TEMP triggers.
+async function reopenWithMessagesFts(client: DbClient, reopen: () => Promise<DbClient>): Promise<DbClient> {
+  await client.exec(`CREATE VIRTUAL TABLE messages_fts USING fts5(
+    message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, content, tokenize='porter unicode61'
+  )`);
+  await client.exec(`CREATE TABLE messages_fts_rows (
+    fts_rowid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, message_id TEXT NOT NULL
+  )`);
+  await client.exec('CREATE UNIQUE INDEX messages_fts_rows_message_id_idx ON messages_fts_rows (message_id)');
+  return reopen();
 }
 
 function createMigratedTxDb(dbPath: string): void {

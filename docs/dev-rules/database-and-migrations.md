@@ -234,6 +234,17 @@ UDF 是连接级的、不进 schema。持久触发器体内引用 UDF 时，任�
 守卫跳过，按字写入交给 TEMP 触发器；这个双层结构是被迫的，不要"简化"成持久触发器
 直调 UDF。
 
+### 触发器内的 `OR IGNORE` 会被触发语句的冲突策略覆盖（#8704）
+
+**规则：触发器体内需要「已存在就跳过」时，用 `WHERE NOT EXISTS (...)` 判重，不依赖
+`INSERT OR IGNORE`。**
+
+SQLite 文档：触发语句自身带冲突策略时，触发器体内语句的 `OR` 子句被它覆盖；实测
+`INSERT ... ON CONFLICT DO UPDATE`（upsert）走更新分支时按 ABORT 执行触发器，
+`messages_fts_rows` 已有同一 `message_id` 映射就报 `UNIQUE constraint failed`，整条
+upsert 连同外层事务回滚。外部历史导入和 Pi `/tree` 导航都走这条路径；回归见
+`tx.test.ts` 中 `messages_fts_rows conflicts` 两组用例。
+
 ### 通用教训
 
 - 「CREATE/写入了」≠「生效了」。凡是创建后依赖它工作的东西（触发器、函数、虚拟表
