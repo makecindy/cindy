@@ -216,14 +216,20 @@ try {
 
   // 1b. The gateway key changes while a Claude process is running. The process keeps what it was
   // started with; its next request reaches the gateway with the new key, without a restart.
+  // This process's child processes, by parent process id (`ps` has no Windows counterpart; there the
+  // same pairs come from Win32_Process). The listing process itself is left out.
   const childPids = async () => {
     const { execFile } = await import('node:child_process');
-    let ps;
+    let lister;
+    const [command, args] = process.platform === 'win32'
+      ? ['powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+        `Get-CimInstance Win32_Process -Filter "ParentProcessId=${process.pid}" | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }`]]
+      : ['ps', ['-A', '-o', 'pid=,ppid=']];
     const out = await new Promise((resolve, reject) => {
-      ps = execFile('ps', ['-A', '-o', 'pid=,ppid='], (error, stdout) => error ? reject(error) : resolve(stdout));
+      lister = execFile(command, args, (error, stdout) => error ? reject(error) : resolve(stdout));
     });
-    return out.trim().split('\n').map(line => line.trim().split(/\s+/).map(Number))
-      .filter(([pid, ppid]) => ppid === process.pid && pid !== ps.pid).map(([pid]) => pid).sort((a, b) => a - b);
+    return out.trim().split(/\r?\n/).filter(Boolean).map(line => line.trim().split(/\s+/).map(Number))
+      .filter(([pid, ppid]) => ppid === process.pid && pid !== lister.pid).map(([pid]) => pid).sort((a, b) => a - b);
   };
   setSessionProvider('claude-gateway-rotation', 'xd');
   const live = await graph.agent.startSession({ sessionId: 'claude-gateway-rotation', providerId: 'xd', model: 'claude-sonnet-4-5', workingDir: root });
