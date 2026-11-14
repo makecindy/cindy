@@ -347,3 +347,81 @@ it.each(['anthropic', 'chat', 'responses'] as const)('reuses a learned 413 budge
   await send(initial);
   expect(policies.at(-1)).toEqual(spooledPolicy); // Same route/policy through the memory path.
 });
+
+// Approved Codex HTTP fallback cap: scale MiB to KiB so all four real ingress
+// paths run cheaply. The host assembly test separately locks production 42 MiB.
+// Unit tier, real collector/replay/recovery and an ephemeral loopback upstream.
+it.each(['controlled', 'disabled', 'unowned-above', 'unowned-below'] as const)(
+  'applies the 42 MiB fallback contract through scaled ingress: %s', async mode => {
+    const received: Buffer[] = [];
+    const upstream = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk);
+      received.push(Buffer.concat(chunks));
+      res.end('ok');
+    });
+    const port = await listenOnAvailableLoopbackPort(upstream);
+    cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+    const limit = 42 * 1024;
+    const target = 14 * 1024;
+    const unowned = mode.startsWith('unowned');
+    const prepare = vi.fn<InlineImagePreprocessor['prepare']>(async ({ bytes, mimeType }) => mode === 'unowned-above'
+      ? { bytes: bytes.subarray(0, bytes.length - 64), mimeType, width: 1, height: 1, changed: true, cacheKey: 'fake' }
+      : null);
+    const preserve = vi.fn(async () => '/tmp/controlled.png');
+    const recover = vi.fn((body: Parameters<typeof recoverInlineAttachments>[0], budget: number) =>
+      recoverInlineAttachments(body, budget, async () => '/tmp/legacy.png'));
+    let controlledBytes: number | undefined;
+    const proxy = await createAnthropicCompatProxy({
+      upstream: `http://127.0.0.1:${port}`, transformRequest: [], maxRequestBodyBytes: limit,
+      oversizedRequestRecovery: () => unowned ? null : recover,
+      requestSizeController: {
+        enabled: () => mode !== 'disabled', format: () => 'responses',
+        control: async (body, format, policy) => {
+          const result = await controlRequestSize(body, format, {
+            ...policy, allowRemoval: unowned ? false : policy.allowRemoval, preprocessor: { prepare },
+            triggerBytes: 32 * 1024, targetBytes: target,
+          }, preserve);
+          controlledBytes = result?.bytes ?? body.length;
+          return result;
+        },
+      },
+    });
+    cleanup.push(() => proxy.dispose());
+    const request = { model: 'gpt-test', input: [{ role: 'user', content: [
+      { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(30_000, 7).toString('base64')}` },
+    ] }], padding: '' };
+    const bytes = mode === 'unowned-below' ? Math.floor(41.9 * 1024) : 44 * 1024;
+    request.padding = 'x'.repeat(bytes - Buffer.byteLength(JSON.stringify(request)));
+    const raw = Buffer.from(JSON.stringify(request));
+    expect(raw.length).toBe(bytes);
+    const response = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'content-length': String(bytes) }, body: raw,
+    });
+    expect(response.status).toBe(mode === 'unowned-above' ? 413 : 200);
+    await response.text();
+    if (mode === 'unowned-above') {
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(controlledBytes).toBeLessThan(bytes);
+      expect(controlledBytes).toBeGreaterThan(limit);
+      expect(preserve).not.toHaveBeenCalled();
+      expect(received).toEqual([]);
+    } else if (mode === 'unowned-below') {
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(preserve).not.toHaveBeenCalled();
+      expect(received).toEqual([raw]);
+    } else if (mode === 'disabled') {
+      expect(recover).toHaveBeenCalledOnce();
+      expect(recover.mock.calls[0][1]).toBe(limit);
+      expect(preserve).not.toHaveBeenCalled();
+      expect(received).toHaveLength(1);
+      expect(received[0].length).toBeLessThanOrEqual(limit);
+      expect(received[0].toString()).toContain('/tmp/legacy.png');
+    } else {
+      expect(recover).not.toHaveBeenCalled();
+      expect(preserve).toHaveBeenCalledOnce();
+      expect(received).toHaveLength(1);
+      expect(received[0].length).toBeLessThanOrEqual(target);
+    }
+  },
+);

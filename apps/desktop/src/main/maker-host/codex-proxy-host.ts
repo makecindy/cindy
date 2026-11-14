@@ -234,7 +234,7 @@ export interface CodexProxyHostPorts {
 }
 
 /** Same protocol, routing and recovery implementation for both launchers. */
-const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
+const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 42 * 1024 * 1024;
 const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 12 * 1024 * 1024;
 const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 8 * 1024 * 1024;
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -466,14 +466,11 @@ function createArmedHttpRecoveryStripTransform(useUpstreamModel = false): Reques
   };
 }
 
-// codex 走 Responses API,每轮**全量重发**整个 thread 历史;导入的存量长会话
-// (贴图 base64 + 加密 reasoning blob,字节数膨胀远快于 token 数)单次请求体可以
-// 轻松越过 proxy 默认的 32MB —— 原生 codex 直连上游没有这道闸,曾导致导入会话
-// 每轮报 "stream disconnected before completion" 且无日志(2026-07 实踩)。
-// 放宽到 128MB 恢复与原生 codex 的对等;仍保留上限防内存被打爆(body 会整段
-// 缓冲 + JSON.parse,该值同时是单请求的内存 / 解析停顿预算)。
-// ChatGPT 订阅后端的 WebSocket 单条消息保守上限为 12 MiB；整段历史超过时先把最早的
-// 内联附件外置为本地文件，压到 8 MiB。增量帧（带 previous_response_id）保持原样。
+// Codex 每轮全量重发历史，HTTP 兜底硬上限为 42 MiB。原始 JSON 超过这个
+// 入口窗口时先落盘，能挪图的请求仍按 32→14 MiB 重放，不因原始体积直接拒绝。
+// 关闭大小控制时，旧附件恢复也以 42 MiB 为限；无归属时仅压缩，仍超限则本地 413。
+// ChatGPT 订阅后端的 WebSocket 阈值独立：整段历史超过 12 MiB 时重放到 8 MiB，
+// 增量帧（带 previous_response_id）只预处理，不挪图。
 
 // proxy 路线 spawn 鉴权模式: codex 当前带的是 OAuth token(requires_openai_auth)还是 gateway key(env_key)。
 // index.ts prepareCodexExtraSpawnConfig 在每次 spawn 前按本次会话 credentialMode set; routingTransform 据此决策。

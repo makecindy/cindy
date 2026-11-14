@@ -3527,6 +3527,17 @@ describe('codex proxy host', () => {
     expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
   });
 
+  // The shared Desktop/Node Host production assembly must use the approved
+  // 42 MiB HTTP fallback ceiling; scaled ingress behavior lives in proxy tests.
+  it('configures the shared Codex HTTP fallback ceiling at 42 MiB', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    expect(mockState.createAnthropicCompatProxy.mock.calls[0][0].maxRequestBodyBytes).toBe(42 * 1024 * 1024);
+  });
+
   // #7055: ChatGPT closes WebSocket messages over ~16 MiB with 1009. A reconnect resends the
   // whole image-heavy history, so every retry was rejected until the turn timed out.
   it('fits an oversized WebSocket request under the upstream message limit before forwarding', async () => {
