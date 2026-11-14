@@ -290,6 +290,25 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 一起打掉线，由 #1405 收窄止损半径修复。协议兼容、allowlist、单测三层防线对这类问题
 全部免疫，只有 review 时点名问「半径」才拦得住。
 
+### 账号级状态快照的出站整流（2026-11-14）
+
+2026-11-10~14 被控端日志：手机网络一卡，调度运行诊断（`maker:schedule:event` 的
+`runtime-state`，每帧约 1 KB、零点多条自动化同时认领时一次几十帧）和同账号用量快照
+（`usage:*-changed`，同内容最多 13 帧）逐帧占满对端的可靠窗口，控制端在等的
+invoke-result 被拒为 `reliable transport buffer is full`（iPhone 345 次）。
+
+Desktop dispatch 对这类「整帧替换、无副作用、控制端可重读自愈」的快照按
+channel + 键（运行诊断单键；带 `providerId` 的用量按账号）做 latest-wins 暂存，
+窗口占用达到会话活动同一软上限时停止灌入并退避，见
+`apps/desktop/src/main/device-link/latestStatePushStage.ts`。驱动刷新与未读的调度事件
+（fired、completed、read 等）、增量补丁和通知类推送不进暂存，保持逐帧与顺序。
+新增条目须论证上述三点；只在发送侧调度，不改 wire 格式，旧端与自建中转无感。
+
+故障半径三问：① 证据是单个控制端的可靠窗口占用；② 动作只作用于该控制端的暂存，
+同键新值替换旧值、终态保留到写出或该端退订／离线，不重置 peer 或连接；
+③ `dispatchWeakNetwork.test.ts`「账号级状态快照」用两个控制端验证一端窗口占满时
+另一端在 250 ms 合并窗口后照常收到最新快照，恢复后每键只补发最新一帧。
+
 ### 直连优先、中继兜底(同账号设备)
 
 产品要求：Device Link 的设备间功能(含手机)在两端已授权、网络实际可达时优先直连，

@@ -171,6 +171,7 @@ import type {
 import type * as broadcastTap from './broadcast-tap';
 import { createOfflinePushQueue } from './offlinePushQueue';
 import { SessionPatchStage, type SessionPatch } from './sessionPatchStage';
+import { LatestStatePushStage, latestStatePushKey } from './latestStatePushStage';
 import { createPushFailureLog } from './pushFailureLog';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
@@ -2129,6 +2130,57 @@ function clearAllMakerEventBatchStages(): void {
 }
 const sessionActivityStages = new Map<string, SessionActivityStage>();
 const sessionPatchStages = new Map<string, SessionPatchStage>();
+const latestStatePushStages = new Map<string, LatestStatePushStage>();
+
+function clearLatestStatePushStage(dst: string): void {
+  latestStatePushStages.get(dst)?.dispose();
+  latestStatePushStages.delete(dst);
+}
+
+/**
+ * 账号级状态镜像(调度运行诊断、用量快照)的 latest-wins 暂存,见
+ * latestStatePushStage.ts。这些推送都在 sessions topic 上;窗口占用超过
+ * SESSION_ACTIVITY_WINDOW_SOFT_CAP 时不再灌入,同键新值替换旧值,剩余窗口留给
+ * invoke-result 与不可合并的推送。
+ */
+function stageLatestStatePush(
+  dst: string,
+  key: string,
+  channel: string,
+  payload: unknown,
+  ownerStamp?: PushOwnerStamp,
+): void {
+  let stage = latestStatePushStages.get(dst);
+  if (stage && !makerEventBatchOwnerStampEquals(stage.ownerStamp, ownerStamp)) {
+    clearLatestStatePushStage(dst);
+    stage = undefined;
+  }
+  if (!stage) {
+    const owner = broadcastTap.captureDataOwnerBroadcastScope();
+    const subscribed = () => broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)
+      && subscriptions.getControllersForTopic('sessions').includes(dst);
+    const created: LatestStatePushStage = new LatestStatePushStage(ownerStamp,
+      () => {
+        if (!subscribed()) {
+          if (latestStatePushStages.get(dst) === created) clearLatestStatePushStage(dst);
+          return false;
+        }
+        return canSendSessionState(dst);
+      },
+      async (item, isCurrent) => {
+        let failure: unknown;
+        await sendBotCheckedPush(dst, item.channel, item.payload, (projected) => {
+          if (!isCurrent() || !subscribed()) return;
+          sendSessionState(dst, item.channel, projected, ownerStamp);
+          observeRemoteSendPush(item.channel, projected);
+        }, (error) => { failure = error; });
+        if (failure) throw failure;
+      }, (item, error) => reportPushFailure(dst, item.channel, error));
+    stage = created;
+    latestStatePushStages.set(dst, stage);
+  }
+  stage.enqueue(key, { channel, payload });
+}
 
 function clearSessionPatchStage(dst: string): void {
   sessionPatchStages.get(dst)?.dispose();
@@ -2280,6 +2332,7 @@ function clearAllSessionActivityStages(): void {
   for (const dst of historyNoticeStages.keys()) clearHistoryNotices(dst);
   for (const dst of [...sessionActivityStages.keys()]) clearSessionActivityStage(dst);
   for (const dst of [...sessionPatchStages.keys()]) clearSessionPatchStage(dst);
+  for (const dst of [...latestStatePushStages.keys()]) clearLatestStatePushStage(dst);
 }
 
 /**
@@ -2486,6 +2539,8 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     return isSharedTaskPeer(dst) ? redactSharedGuestPush(channel, projected) : projected;
   };
   const historySessionId = readPushSessionId(remotePayload);
+  // 账号级状态快照:同键 latest-wins,不逐帧冲可靠窗口(见 stageLatestStatePush)。
+  const latestStateKey = latestStatePushKey(channel, remotePayload);
   const deferred = historySessionId !== null && isDeferredHistoryPush(channel, remotePayload,
     (id) => readHistoryToolName(historySessionId, id));
   const thinkingLine = deferred && historySessionId !== null && thinkingDeltaUpdatesWorkLine(historySessionId, remotePayload);
@@ -2565,6 +2620,10 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
         sendPushBestEffort(dst, channel, older
           ? { ...item, patch: { ...older.patch, ...item.patch } } : targetPayload, ownerStamp);
       }
+      continue;
+    }
+    if (latestStateKey !== null && !isSharedTaskPeer(dst) && !isProviderSharePeer(dst)) {
+      stageLatestStatePush(dst, latestStateKey, channel, targetPayload, ownerStamp);
       continue;
     }
     // agent 事件流是本条链路的帧数大头:对声明了微批能力的控制端合并成
@@ -2835,6 +2894,7 @@ function deactivateControllerState(
   clearReportedControllerName(deviceId);
   clearSessionActivityStage(deviceId);
   clearSessionPatchStage(deviceId);
+  clearLatestStatePushStage(deviceId);
   clearSessionSyncStage(deviceId);
   clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId, preservePendingOpen);
@@ -4525,6 +4585,7 @@ function handleSubscriptionFrame(
     if (topics.includes('sessions')) {
       clearSessionActivityStage(src);
       clearSessionPatchStage(src);
+      clearLatestStatePushStage(src);
     }
     // 退订 session:<id> 后该会话的待发事件批同样不应再投递(控制端已不要这条流)。
     for (const topic of topics) {
@@ -5560,6 +5621,9 @@ const __testing = {
   },
   sessionActivityStageSize(deviceId: string): number {
     return sessionActivityStages.get(deviceId)?.queue.size ?? 0;
+  },
+  latestStatePushStageSize(deviceId: string): number {
+    return latestStatePushStages.get(deviceId)?.size ?? 0;
   },
   sessionActivityWindowSoftCap: SESSION_ACTIVITY_WINDOW_SOFT_CAP,
   sessionActivityStageMaxKeys: SESSION_ACTIVITY_STAGE_MAX_KEYS,
