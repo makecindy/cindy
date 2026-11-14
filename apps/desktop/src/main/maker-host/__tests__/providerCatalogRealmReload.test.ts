@@ -48,6 +48,7 @@ const h = vi.hoisted(() => ({
   /** `${kind}:${accountId}` -> provider the account belongs to (placement.ts); absent = built-in. */
   placement: {} as Record<string, string>,
   restoreLegacy: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => false),
+  copyAccountOverrides: vi.fn(),
   /** Providers Cindy created for subscription accounts, and the providers whose accounts were read. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   refreshed: new Set<string>(),
@@ -83,6 +84,8 @@ vi.mock('../../subscription-accounts/placement.js', async (importOriginal) => {
     readMergedLegacyCodexAccountId: merged,
     readMergedProviderAccount: merged,
     restoreAutoMergedLegacyCodexAccounts: h.restoreLegacy,
+    restoreUnplacedSubscriptionAccounts: (options: Parameters<typeof actual.restoreUnplacedSubscriptionAccounts>[0]) =>
+      h.actualPlacement ? actual.restoreUnplacedSubscriptionAccounts(options) : Promise.resolve(false),
     readCreatedSubscriptionProviders: () => {
       if (h.placementError) throw h.placementError;
       return h.actualPlacement ? actual.readCreatedSubscriptionProviders() : h.created;
@@ -116,6 +119,7 @@ vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
 vi.mock('../model-disable-store.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../model-disable-store.js')>(),
   readModelDisableOverrides: () => ({ disabledModels: h.disabledModels, disabledProviders: {} }),
+  copyProviderDisableOverrides: h.copyAccountOverrides,
 }));
 
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
@@ -745,6 +749,38 @@ describe('provider catalog realm reload', () => {
     } finally {
       publish.mockRestore(); await config.close(); setCustomProviders([]);
       h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false; h.customProviderRead.mockReset();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // 2026-11-14 user correction: old wizard/pool additions must also become separate providers.
+  // Unit, real catalog refresh + placement file; prior restoration covered only legacy connections.
+  // Minimal failure: default + one unplaced account, no custom-provider connection to restore.
+  it('publishes a separate provider for an old pooled account on catalog refresh and keeps it on reload', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-pooled-account-restore-'));
+    const previous = getActiveCatalog();
+    const previousOwner = h.owner;
+    const accountId = 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc';
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    h.pool = { strategy: 'least', accounts: ['default', accountId].map(id => ({ id, paused: false, limit: 4, weight: 1 })) };
+    h.customProviderRead.mockResolvedValue([]);
+    h.copyAccountOverrides.mockClear();
+    try {
+      setActiveCatalog(BUNDLED_CATALOG);
+      await refreshCustomProvidersIntoCatalog();
+      const created = getActiveCatalog().providers.filter(p => p.id.startsWith('openai-sub-'));
+      expect(created).toHaveLength(1);
+      expect(h.copyAccountOverrides).toHaveBeenCalledExactlyOnceWith('openai', created[0].id);
+      const file = path.join(root, h.owner, 'subscription-account-placement.json');
+      const persisted = await fsp.readFile(file, 'utf8');
+      expect(JSON.parse(persisted).accounts).toEqual({ [`openai:${accountId}`]: created[0].id });
+      await refreshCustomProvidersIntoCatalog();
+      expect(getActiveCatalog().providers.filter(p => p.id.startsWith('openai-sub-')).map(p => p.id)).toEqual([created[0].id]);
+      expect(await fsp.readFile(file, 'utf8')).toBe(persisted);
+    } finally {
+      setCustomProviders([]); setActiveCatalog(previous);
+      h.pool = null; h.profileRoot = null; h.owner = previousOwner;
+      h.actualPlacement = false; h.customProviderRead.mockReset();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
