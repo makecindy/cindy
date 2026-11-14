@@ -9,6 +9,11 @@
  *   其它选项。
  * - tier：unit（代理包的创建函数换成记录选项的桩，不起端口）。
  */
+import sharp from 'sharp';
+import type { RequestSizeController } from '@cindy/anthropic-compat-proxy';
+import { createAttachmentRecoveryService } from '../oversizedAttachmentRecoveryCore.js';
+import { createAnthropicCompatProxyHost, type AnthropicCompatProxyHostPorts } from '../anthropicCompatProxyHostCore.js';
+import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
 import { describe, expect, it, vi } from 'vitest';
 
 const captured = vi.hoisted(() => [] as Array<{ kind: string; options: Record<string, unknown> }>);
@@ -86,4 +91,56 @@ describe('the optional inbound check port of the Codex proxy core', () => {
       expect(Object.keys(b).filter(key => key !== 'authorizeInbound'), kind).toEqual(Object.keys(a));
     }
   });
+});
+
+
+// Unit, PR 2 provider handoff: real shared host factory -> real controller.route
+// -> real image encoder. Proxy socket creation and storage are stubbed; this
+// does not claim account authentication or outbound routing/HTTP coverage.
+it.each(['codex', 'claude-code'] as const)('passes the selected provider to image compression for %s without Pi headers', async engine => {
+  const recovery = createAttachmentRecoveryService({
+    getUserDataDir: () => { throw new Error('Provider-only test must not touch storage'); },
+    media: {} as never, // route() uses no media ports; any accidental storage call fails.
+  });
+  const factoryPorts = { ...ports(), createRequestSizeController: recovery.createRequestSizeController };
+  const codex = engine === 'codex' ? createCodexProxyHost(factoryPorts) : undefined;
+  const claude = engine === 'claude-code' ? createAnthropicCompatProxyHost({
+    ...factoryPorts,
+    createPiWebSocketRequestPreparer: () => undefined,
+    resolvePiWebSocketUpstream: () => undefined,
+    piWebSocketTransforms: () => [],
+    getPiNativeSubscriptionHandler: () => undefined,
+    getResponsesBridgeHandler: () => undefined,
+    subscriptionRequestAllowsFast: () => true,
+  } as unknown as AnthropicCompatProxyHostPorts) : undefined;
+  const sessionId = `image-provider-${engine}`;
+  const threadId = `image-thread-${engine}`;
+  current.kind = `image-provider:${engine}`;
+  codex?.registerComposed(sessionId, threadId, '');
+  claude?.setClaudeProxySessionIdResolver(id => id);
+  try {
+    if (codex) await codex.ensureCodexProxyReady();
+    else await claude!.ensureAnthropicCompatProxyReady();
+    const controller = captured.find(entry => entry.kind === current.kind)!.options.requestSizeController as RequestSizeController;
+    const png = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#245681' } }).png({ compressionLevel: 0 }).toBuffer();
+    const headers: Record<string, string> = codex ? { 'thread-id': threadId } : { 'x-claude-code-session-id': sessionId };
+    for (const [providerId, modelId, expectedMime] of [
+      ['openai', 'gpt-6-astra', 'image/webp'],
+      ['xai', 'grok-4', 'image/png'],
+      ['zhipu', 'glm-5', 'image/png'],
+    ]) {
+      setSessionProvider(sessionId, providerId);
+      const route = controller.route!({ reqId: 1, method: 'POST', url: codex ? '/v1/responses' : '/v1/messages', headers }, { model: modelId });
+      expect(route.providerId).toBe(providerId);
+      const image = await controller.preprocessor!.prepare({ bytes: png, mimeType: 'image/png', route, signal: new AbortController().signal });
+      expect(image?.mimeType).toBe(expectedMime);
+      expect(image).toMatchObject({ width: 64, height: 48, changed: true });
+      expect(await sharp(image!.bytes).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
+    }
+  } finally {
+    clearSessionProvider(sessionId);
+    codex?.unregister(sessionId);
+    await codex?.disposeCodexProxy();
+    await claude?.disposeAnthropicCompatProxy();
+  }
 });
