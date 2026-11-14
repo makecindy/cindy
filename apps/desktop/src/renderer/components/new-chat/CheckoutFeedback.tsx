@@ -17,14 +17,7 @@ export function UseWorktreeButton({
 }) {
   const { t } = useTranslation();
   return (
-    <Button
-      compact
-      size="sm"
-      variant="secondary"
-      tone="quiet"
-      disabled={disabled}
-      onClick={onClick}
-    >
+    <Button compact size="sm" variant="secondary" disabled={disabled} onClick={onClick}>
       {t('newChat.checkout.useWorktree')}
     </Button>
   );
@@ -48,22 +41,25 @@ export function CheckoutError({
 export function CheckoutStashes({ checkout }: { checkout: ReturnType<typeof useCheckout> }) {
   const { t } = useTranslation();
   return checkout.status?.stashes.length ? (
-    <div className="space-y-2 px-3 py-2 text-12 text-muted-foreground">
+    <div className="space-y-1">
       {checkout.status.stashes.map((stash) => (
-        <CheckoutNotice key={stash.id}>
-          <p>{t('newChat.checkout.savedChanges', { branch: stash.branch })}</p>
-          <Button
-            compact
-            size="sm"
-            variant="secondary"
-            tone="quiet"
-            disabled={
-              checkout.busy || !!checkout.status?.blocked || !!checkout.status?.files.length
-            }
-            onClick={() => void checkout.restore(stash.id)}
-          >
-            {t('newChat.checkout.restore')}
-          </Button>
+        <CheckoutNotice
+          key={stash.id}
+          action={
+            <Button
+              compact
+              size="sm"
+              variant="secondary"
+              disabled={
+                checkout.busy || !!checkout.status?.blocked || !!checkout.status?.files.length
+              }
+              onClick={() => void checkout.restore(stash.id)}
+            >
+              {t('newChat.checkout.restore')}
+            </Button>
+          }
+        >
+          {t('newChat.checkout.savedChanges', { branch: stash.branch })}
         </CheckoutNotice>
       ))}
     </div>
@@ -82,7 +78,7 @@ export function CheckoutNotice({
   const Icon = warning ? AlertTriangle : Info;
   return (
     <div
-      className="flex max-w-[320px] items-start gap-2 px-3 py-2 text-12 text-foreground"
+      className="flex items-start text-left gap-2 px-3 py-2 text-12 text-foreground"
       role={warning ? 'alert' : 'status'}
     >
       <Icon
@@ -94,8 +90,8 @@ export function CheckoutNotice({
             : 'mt-0.5 shrink-0 text-muted-foreground'
         }
       />
-      <div className="min-w-0 flex-1 break-words">
-        <div>{children}</div>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2 break-words">
+        <div className="min-w-[140px] flex-1">{children}</div>
         {action}
       </div>
     </div>

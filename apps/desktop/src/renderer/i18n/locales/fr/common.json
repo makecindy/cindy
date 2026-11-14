@@ -14629,16 +14629,16 @@
       "stash": "Laisser sur {{branch}}",
       "worktreeGuide": "Vous préférez garder ce dossier tel quel ? Utilisez worktree pour partir de {{branch}} dans un dossier séparé. Vos modifications restent intactes et ne seront pas copiées.",
       "worktreeGuideSessions": "Vous préférez garder ce dossier tel quel ? Utilisez worktree pour partir de {{branch}} dans un dossier séparé. Vos modifications et les {{count}} sessions restent intactes. Les modifications ne seront pas copiées.",
-      "idleSessions": "Ce dossier contient {{count}} autres sessions ({{names}}). Elles continueront aussi sur la nouvelle branche.",
+      "idleSessions": "Autres sessions dans ce répertoire : {{count}} ({{names}}). Le travail continuera sur la nouvelle branche",
       "errors": {
-        "busy": "Une session est en cours ou active en arrière-plan dans ce dossier. Attendez la fin ou utilisez worktree.",
-        "operation": "Terminez la fusion, le rebase ou toute autre opération Git avant de changer de branche.",
-        "occupied": "{{branch}} est déjà ouverte dans un autre worktree et ne peut pas être ouverte dans le répertoire du dépôt principal",
+        "busy": "Une session est en cours ici. Le changement de branche est temporairement indisponible",
+        "operation": "Des modifications de branches sont en cours de combinaison. Terminez cette opération avant de changer",
+        "occupied": "{{branch}} est déjà ouverte dans un autre worktree ; impossible de basculer dessus ici",
         "changed": "La branche ou les modifications ont changé. Vérifiez le dossier. Vous ne pouvez annuler que si vous êtes encore sur la branche de destination.",
         "conflict": "Ces modifications sont en conflit avec la branche de destination. Mettez-les de côté ou utilisez worktree.",
-        "ignored": "Passer à {{branch}} écraserait des fichiers ou dossiers locaux ignorés par Git, dont {{file}} ({{count}} au total). Le changement a été arrêté.",
+        "ignored": "Le passage à {{branch}} écraserait des fichiers ou dossiers locaux, dont {{file}} ({{count}} au total). Le changement a été arrêté.",
         "dirty": "De nouvelles modifications non validées sont présentes. Traitez-les avant de restaurer.",
-        "diverged": "Les branches locale et distante ont divergé. Résolvez ce problème avant de changer.",
+        "diverged": "Les branches locale et distante ont des modifications différentes. Résolvez ces différences avant de changer de branche.",
         "missing": "La branche choisie n’existe plus. Actualisez la liste.",
         "git": "Impossible de terminer. Vérifiez la branche actuelle et les modifications enregistrées avant de réessayer"
       },
@@ -14649,10 +14649,10 @@
       "worktreeHint": "Démarrer depuis {{branch}} dans un répertoire séparé, sans modifier le répertoire actuel",
       "newFile": "Nouveau fichier",
       "deletedFile": "Supprimé",
-      "dialogSessions": "Ce répertoire contient {{count}} autres sessions qui continueront sur {{branch}}.",
-      "dialogSessions_one": "Ce répertoire contient {{count}} autres sessions qui continueront sur {{branch}}.",
-      "dialogSessions_other": "Ce répertoire contient {{count}} autres sessions qui continueront sur {{branch}}.",
-      "dialogSessions_many": "Ce répertoire contient {{count}} autres sessions qui continueront sur {{branch}}."
+      "dialogSessions": "Autres sessions dans ce répertoire : {{count}}. Le travail continuera sur {{branch}}",
+      "dialogSessions_one": "Autres sessions dans ce répertoire : {{count}}. Le travail continuera sur {{branch}}",
+      "dialogSessions_other": "Autres sessions dans ce répertoire : {{count}}. Le travail continuera sur {{branch}}",
+      "dialogSessions_many": "Autres sessions dans ce répertoire : {{count}}. Le travail continuera sur {{branch}}"
     }
   },
   "onboarding": {

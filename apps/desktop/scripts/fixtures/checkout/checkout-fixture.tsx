@@ -71,12 +71,13 @@ void mountPage({
       worktreeListBranches: async () => ({
         current,
         branches: [
-          'main',
+          ...(ctx.case === 'operation' ? ['main'] : []),
           'feature',
           'release',
           ...(['busy', 'operation', 'idle', 'recover'].includes(ctx.case)
             ? Array.from({ length: 60 }, (_, i) => `branch-${i}`)
             : []),
+          ...(ctx.case === 'operation' ? [] : ['main']),
         ],
         remoteDefaultBranch: 'refs/remotes/origin/main',
       }),

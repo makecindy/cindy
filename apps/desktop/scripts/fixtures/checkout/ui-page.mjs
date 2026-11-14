@@ -247,10 +247,28 @@ export default {
     if (['busy', 'operation', 'idle', 'recover'].includes(ui.case)) {
       const notice = page.getByTestId('checkout-menu-notices');
       const oldBox = await notice.boundingBox();
+      const list = page.getByRole('listbox');
+      const current = page.getByRole('option', { name: 'main', exact: true });
+      const viewport = await list.boundingBox();
+      const currentBox = await current.boundingBox();
+      assert.ok(
+        currentBox.y >= viewport.y - 1 &&
+          currentBox.y + currentBox.height <= viewport.y + viewport.height + 1,
+        'Current branch must be visible on open',
+      );
+      const initialScroll = await list.evaluate((el) => el.scrollTop);
+      if (ui.case === 'operation') {
+        assert.equal(initialScroll, 0, 'A current branch near the top must not scroll');
+      } else {
+        assert.ok(initialScroll > 0, 'A current branch near the end must scroll into view');
+      }
       await page.getByRole('listbox').evaluate((el) => {
         el.scrollTop = 1000;
       });
       assert.deepEqual(await notice.boundingBox(), oldBox);
+      await list.evaluate((el, scroll) => {
+        el.scrollTop = scroll;
+      }, initialScroll);
     }
     const after = await geometry();
     assert.deepEqual(after, before, 'Feedback must not move or resize the controls row or input');

@@ -14629,16 +14629,16 @@
       "stash": "Dejar en {{branch}}",
       "worktreeGuide": "¿Prefieres conservar este directorio? Usa worktree para empezar desde {{branch}} en un directorio independiente. Los cambios actuales no se verán afectados ni se copiarán.",
       "worktreeGuideSessions": "¿Prefieres conservar este directorio? Usa worktree para empezar desde {{branch}} en un directorio independiente. Los cambios y las {{count}} sesiones actuales no se verán afectados. Los cambios no se copiarán.",
-      "idleSessions": "Este directorio tiene otras {{count}} sesiones ({{names}}). También continuarán en la nueva rama.",
+      "idleSessions": "Otras sesiones en este directorio: {{count}} ({{names}}). El trabajo continuará en la nueva rama",
       "errors": {
-        "busy": "Hay una sesión en ejecución o con actividad en segundo plano en este directorio. Espera o usa worktree.",
-        "operation": "Completa la fusión, el rebase u otra operación de Git antes de cambiar.",
-        "occupied": "{{branch}} ya está abierta en otro worktree y no se puede abrir también en el directorio del repositorio principal",
+        "busy": "Hay una sesión en curso aquí. No se puede cambiar de rama por ahora",
+        "operation": "Se están combinando cambios de ramas. Termina esa operación antes de cambiar",
+        "occupied": "{{branch}} ya está abierta en otro worktree y no se puede cambiar a ella aquí",
         "changed": "La rama o los cambios han cambiado. Revisa el directorio. Solo puedes deshacer mientras sigas en la rama de destino.",
         "conflict": "Los cambios entran en conflicto con la rama de destino. Guárdalos primero o usa worktree.",
-        "ignored": "Cambiar a {{branch}} sobrescribiría archivos o carpetas locales ignorados por Git, como {{file}} ({{count}} en total). Se ha detenido el cambio.",
+        "ignored": "Cambiar a {{branch}} sobrescribiría archivos o carpetas locales, incluido {{file}} ({{count}} en total). Se ha detenido el cambio.",
         "dirty": "Hay nuevos cambios sin confirmar. Resuélvelos antes de restaurar.",
-        "diverged": "Las ramas local y remota han divergido. Resuélvelo antes de cambiar.",
+        "diverged": "Las ramas local y remota tienen cambios diferentes. Resuelve las diferencias antes de cambiar de rama.",
         "missing": "La rama seleccionada ya no existe. Actualiza la lista.",
         "git": "No se pudo completar la operación. Revisa la rama actual y los cambios guardados antes de reintentar"
       },
@@ -14649,10 +14649,10 @@
       "worktreeHint": "Empezar desde {{branch}} en otro directorio, sin tocar este directorio ni sus cambios",
       "newFile": "Archivo nuevo",
       "deletedFile": "Eliminado",
-      "dialogSessions": "Este directorio tiene {{count}} sesiones más que continuarán en {{branch}}.",
-      "dialogSessions_one": "Este directorio tiene {{count}} sesiones más que continuarán en {{branch}}.",
-      "dialogSessions_other": "Este directorio tiene {{count}} sesiones más que continuarán en {{branch}}.",
-      "dialogSessions_many": "Este directorio tiene {{count}} sesiones más que continuarán en {{branch}}."
+      "dialogSessions": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
+      "dialogSessions_one": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
+      "dialogSessions_other": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
+      "dialogSessions_many": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}"
     }
   },
   "onboarding": {

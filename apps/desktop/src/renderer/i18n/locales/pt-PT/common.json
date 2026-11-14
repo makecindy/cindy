@@ -14629,18 +14629,18 @@
       "stash": "Deixar em {{branch}}",
       "worktreeGuide": "Prefere manter este diretório? Use worktree para começar a partir de {{branch}} num diretório separado. As alterações atuais não serão afetadas nem copiadas.",
       "worktreeGuideSessions": "Prefere manter este diretório? Use worktree para começar a partir de {{branch}} num diretório separado. As alterações e as {{count}} sessões atuais não serão afetadas. As alterações não serão copiadas.",
-      "idleSessions": "Este diretório tem outras {{count}} sessões ({{names}}). Também continuarão no novo ramo.",
+      "idleSessions": "Outras sessões neste diretório: {{count}} ({{names}}). O trabalho continuará no novo ramo",
       "errors": {
-        "busy": "Há uma sessão em execução ou com atividade em segundo plano neste diretório. Aguarde ou use worktree.",
-        "operation": "Conclua a integração, o rebase ou outra operação Git antes de mudar.",
-        "occupied": "{{branch}} já está aberta noutro worktree e não pode ser aberta também no diretório do repositório principal",
+        "busy": "Está uma sessão em execução aqui. Não é possível mudar de ramo agora",
+        "operation": "As alterações dos ramos estão a ser combinadas. Conclua essa operação antes de mudar",
+        "occupied": "{{branch}} já está aberto noutro Worktree e não pode ser usado aqui",
         "changed": "O ramo ou as alterações mudaram. Verifique o diretório. Só pode anular enquanto estiver no ramo de destino.",
         "conflict": "Estas alterações entram em conflito com o ramo de destino. Guarde-as primeiro ou use worktree.",
-        "ignored": "Mudar para {{branch}} substituiria ficheiros ou pastas locais ignorados pelo Git, incluindo {{file}} ({{count}} no total). A mudança foi interrompida.",
+        "ignored": "Mudar para {{branch}} substituiria ficheiros ou pastas locais, incluindo {{file}} ({{count}} no total). A mudança foi interrompida.",
         "dirty": "Há novas alterações por submeter. Trate-as antes de restaurar.",
-        "diverged": "Os ramos local e remoto divergiram. Resolva a situação antes de mudar.",
+        "diverged": "Os ramos local e remoto têm alterações diferentes. Resolva as diferenças antes de mudar de ramo.",
         "missing": "O ramo selecionado já não existe. Atualize a lista.",
-        "git": "Não foi possível concluir. Verifique o branch atual e as alterações guardadas antes de tentar novamente"
+        "git": "Não foi possível concluir. Verifique o ramo atual e as alterações guardadas antes de tentar novamente"
       },
       "confirmSwitch": "Mudar",
       "carryDescription": "Levar as alterações e continuar a editar em {{branch}}",
@@ -14649,10 +14649,10 @@
       "worktreeHint": "Começar de {{branch}} noutro diretório, sem alterar este diretório ou as suas alterações",
       "newFile": "Novo ficheiro",
       "deletedFile": "Eliminado",
-      "dialogSessions": "Este diretório tem mais {{count}} sessões que continuarão em {{branch}}.",
-      "dialogSessions_one": "Este diretório tem mais {{count}} sessões que continuarão em {{branch}}.",
-      "dialogSessions_other": "Este diretório tem mais {{count}} sessões que continuarão em {{branch}}.",
-      "dialogSessions_many": "Este diretório tem mais {{count}} sessões que continuarão em {{branch}}."
+      "dialogSessions": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
+      "dialogSessions_one": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
+      "dialogSessions_other": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
+      "dialogSessions_many": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}"
     }
   },
   "onboarding": {

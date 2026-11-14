@@ -368,7 +368,15 @@ export function WorktreeChipsRow({
               <CheckoutStashes checkout={checkout} />
               {!effectiveWorktreeEnabled &&
                 (menuStatus?.blocked || !!menuStatus?.sessions.length) && (
-                  <CheckoutNotice warning={!!menuStatus?.blocked}>
+                  <CheckoutNotice
+                    warning={!!menuStatus?.blocked}
+                    action={
+                      canUseWorktree &&
+                      (menuStatus?.blocked === 'busy' || !!menuStatus?.sessions.length) ? (
+                        <UseWorktreeButton onClick={() => useWorktree()} />
+                      ) : undefined
+                    }
+                  >
                     {menuStatus?.blocked && menuStatus.blocked !== 'occupied' && (
                       <p>
                         <CheckoutError code={menuStatus.blocked} status={menuStatus} />
@@ -382,10 +390,6 @@ export function WorktreeChipsRow({
                         })}
                       </p>
                     )}
-                    {canUseWorktree &&
-                      (menuStatus?.blocked === 'busy' || !!menuStatus?.sessions.length) && (
-                        <UseWorktreeButton onClick={() => useWorktree()} />
-                      )}
                   </CheckoutNotice>
                 )}
             </>
@@ -607,6 +611,7 @@ export function BranchWorktreeChip({
   // typeahead 或焦点冒泡,可打印字符输入与选项导航各走各的,互不干扰。
   const [activeBranchIndex, setActiveBranchIndex] = useState(0);
   const listboxId = useId();
+  const listboxRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<Array<HTMLDivElement | null>>([]);
   // 过滤后列表可能变短,钳住下标避免指向已不可见的项;空列表用 -1 表示无高亮。
   const clampedActiveIndex =
@@ -614,8 +619,19 @@ export function BranchWorktreeChip({
 
   useEffect(() => {
     if (!branchMenuOpen || clampedActiveIndex < 0) return;
-    optionRefs.current[clampedActiveIndex]?.scrollIntoView({ block: 'nearest' });
-  }, [branchMenuOpen, clampedActiveIndex]);
+    // Radix mounts and sizes the portal after the trigger's render. Wait for
+    // that layout before measuring the inner viewport, not the whole panel.
+    const frame = requestAnimationFrame(() => {
+      const list = listboxRef.current;
+      const option = optionRefs.current[clampedActiveIndex];
+      if (!list || !option) return;
+      const viewport = list.getBoundingClientRect();
+      const row = option.getBoundingClientRect();
+      if (row.top < viewport.top) list.scrollTop -= viewport.top - row.top;
+      else if (row.bottom > viewport.bottom) list.scrollTop += row.bottom - viewport.bottom;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [branchMenuOpen, clampedActiveIndex, allBranches]);
 
   // 打开菜单、或菜单开着时分支列表异步到达/刷新,都要把高亮重新定位到当前源
   // 分支——不能依赖 branches 数组里恰好排第几位(该接口不保证顺序,参见
@@ -747,7 +763,7 @@ export function BranchWorktreeChip({
         onEscapeKeyDown={(e) => {
           if (e.isComposing) e.preventDefault();
         }}
-        className="flex max-h-[min(480px,var(--radix-popover-content-available-height))] flex-col w-auto min-w-[200px] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-[shadow:var(--shadow-menu)]"
+        className="flex max-h-[min(480px,var(--radix-popover-content-available-height))] flex-col w-auto min-w-[min(280px,calc(100vw-32px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-[shadow:var(--shadow-menu)]"
       >
         <div className="shrink-0" data-testid="checkout-menu-notices">
           {menuHeader}
@@ -816,6 +832,7 @@ export function BranchWorktreeChip({
               </div>
             </div>
             <div
+              ref={listboxRef}
               className="min-h-0 overflow-y-auto"
               role="listbox"
               id={listboxId}

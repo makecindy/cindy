@@ -14507,18 +14507,18 @@
       "stash": "Auf {{branch}} belassen",
       "worktreeGuide": "Soll dieses Verzeichnis unverändert bleiben? Mit worktree startest du von {{branch}} in einem eigenen Verzeichnis. Die bisherigen Änderungen bleiben erhalten und werden nicht übernommen.",
       "worktreeGuideSessions": "Soll dieses Verzeichnis unverändert bleiben? Mit worktree startest du von {{branch}} in einem eigenen Verzeichnis. Die Änderungen und {{count}} Sitzungen bleiben unberührt. Änderungen werden nicht übernommen.",
-      "idleSessions": "Dieses Verzeichnis enthält {{count}} weitere Sitzungen ({{names}}). Auch sie werden nach dem Wechsel auf dem neuen Branch fortgesetzt.",
+      "idleSessions": "Weitere Sitzungen in diesem Verzeichnis: {{count}} ({{names}}). Die Arbeit geht auf dem neuen Branch weiter",
       "errors": {
-        "busy": "In diesem Verzeichnis läuft eine Sitzung oder eine Hintergrundaktivität. Warte auf das Ende oder verwende worktree.",
-        "operation": "Beende zuerst den Merge, Rebase oder anderen Git-Vorgang.",
-        "occupied": "{{branch}} ist bereits in einem anderen Worktree geöffnet und kann nicht zusätzlich im Hauptverzeichnis des Repositorys geöffnet werden",
+        "busy": "Hier läuft eine Sitzung. Der Branch kann gerade nicht gewechselt werden",
+        "operation": "Branch-Änderungen werden zusammengeführt. Schließe diesen Vorgang vor dem Wechsel ab",
+        "occupied": "{{branch}} ist bereits in einem anderen Worktree geöffnet. Hier kann nicht dorthin gewechselt werden",
         "changed": "Der Branch oder die Änderungen haben sich geändert. Prüfe das Verzeichnis. Rückgängig ist nur möglich, solange du auf dem Zielbranch bleibst.",
         "conflict": "Diese Änderungen kollidieren mit dem Zielbranch. Speichere sie zwischen oder verwende worktree.",
-        "ignored": "Beim Wechsel zu {{branch}} würden von Git ignorierte lokale Dateien oder Ordner überschrieben, darunter {{file}} (insgesamt {{count}}). Der Wechsel wurde gestoppt.",
+        "ignored": "Der Wechsel zu {{branch}} würde lokale Dateien oder Ordner überschreiben, darunter {{file}} (insgesamt {{count}}). Der Wechsel wurde gestoppt.",
         "dirty": "Es gibt neue, nicht committete Änderungen. Bearbeite sie vor der Wiederherstellung.",
-        "diverged": "Lokaler und entfernter Branch sind auseinandergegangen. Kläre dies vor dem Wechsel.",
+        "diverged": "Der lokale und der entfernte Branch haben unterschiedliche Änderungen. Kläre diese Unterschiede vor dem Wechsel.",
         "missing": "Der ausgewählte Branch existiert nicht mehr. Aktualisiere die Liste.",
-        "git": "Der Vorgang konnte nicht abgeschlossen werden. Prüfen Sie den aktuellen Branch und gespeicherte Änderungen und versuchen Sie es erneut"
+        "git": "Der Vorgang konnte nicht abgeschlossen werden. Prüfe den aktuellen Branch und gespeicherte Änderungen und versuche es erneut"
       },
       "confirmSwitch": "Wechseln",
       "carryDescription": "Änderungen mitnehmen und auf {{branch}} weiterarbeiten",
@@ -14527,10 +14527,10 @@
       "worktreeHint": "In einem separaten Verzeichnis von {{branch}} starten; dieses Verzeichnis und seine Änderungen bleiben erhalten",
       "newFile": "Neue Datei",
       "deletedFile": "Gelöscht",
-      "dialogSessions": "Dieses Verzeichnis enthält {{count}} weitere Sitzungen. Sie werden auf {{branch}} fortgesetzt.",
-      "dialogSessions_one": "Dieses Verzeichnis enthält {{count}} weitere Sitzungen. Sie werden auf {{branch}} fortgesetzt.",
-      "dialogSessions_other": "Dieses Verzeichnis enthält {{count}} weitere Sitzungen. Sie werden auf {{branch}} fortgesetzt.",
-      "dialogSessions_many": "Dieses Verzeichnis enthält {{count}} weitere Sitzungen. Sie werden auf {{branch}} fortgesetzt."
+      "dialogSessions": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
+      "dialogSessions_one": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
+      "dialogSessions_other": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
+      "dialogSessions_many": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter"
     }
   },
   "onboarding": {

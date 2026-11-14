@@ -186,6 +186,55 @@ it('shares counts with the selected row and keeps full remote refs distinct duri
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
   expect(props.onPick).toHaveBeenLastCalledWith('origin/main');
 });
+// Regression: after separating the notices from the list viewport, locating a
+// selected row must scroll only that viewport. Unit tier with simulated geometry;
+// the browser fixture also checks real layout with main first and last.
+it.each([false, true])(
+  'keeps the current branch visible without moving notices (below=%s)',
+  async (below) => {
+    const bounds = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const top =
+          this.getAttribute('role') === 'option' &&
+          this.getAttribute('aria-selected') === 'true' &&
+          below
+            ? 300
+            : 0;
+        const height = this.getAttribute('role') === 'listbox' ? 200 : 30;
+        return {
+          x: 0,
+          y: top,
+          top,
+          bottom: top + height,
+          left: 0,
+          right: 280,
+          width: 280,
+          height,
+          toJSON: () => ({}),
+        };
+      });
+    try {
+      render(
+        <BranchWorktreeChip
+          {...props}
+          branches={below ? ['feature', 'main'] : ['main', 'feature']}
+          remoteDefaultBranch={undefined}
+          menuHeader={<p>Notice</p>}
+        />,
+      );
+      await act(async () => {
+        fireEvent.click(branchButton());
+      });
+      await waitFor(() => expect(screen.getByRole('listbox').scrollTop).toBe(below ? 130 : 0));
+      expect(screen.getByText('Notice').getBoundingClientRect().top).toBe(0);
+      expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    } finally {
+      bounds.mockRestore();
+    }
+  },
+);
+
 // Product rule: diverged branch details name the remote once and retain dirty-file counts.
 // Standard tier: exercise the real capsule with both counts positive; the existing case covers behind-only.
 it('combines diverged counts into one status segment and keeps dirty files', async () => {

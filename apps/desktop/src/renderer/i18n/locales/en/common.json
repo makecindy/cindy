@@ -14507,16 +14507,16 @@
       "stash": "Leave on {{branch}}",
       "worktreeGuide": "Prefer to keep this directory as it is? Use worktree to start from {{branch}} in a separate directory. Your changes stay here and will not be copied over.",
       "worktreeGuideSessions": "Prefer to keep this directory as it is? Use worktree to start from {{branch}} in a separate directory. Your changes and the {{count}} sessions here stay as they are. Changes will not be copied over.",
-      "idleSessions": "Other sessions in this directory: {{count}} ({{names}}). They will also continue on the new branch.",
+      "idleSessions": "Other sessions in this directory: {{count}} ({{names}}). Work will continue on the new branch",
       "errors": {
-        "busy": "A session in this directory is running or has background activity. Wait for it to finish or use worktree.",
-        "operation": "Finish the merge, rebase or other Git operation before switching.",
-        "occupied": "{{branch}} is already open in another worktree and cannot also be opened in the main repository directory",
+        "busy": "A session is running here. Branch switching is temporarily unavailable",
+        "operation": "Branch changes are being combined. Finish that operation before switching",
+        "occupied": "{{branch}} is already open in another worktree and cannot be switched to here",
         "changed": "The branch or changes have changed. Check the directory before trying again. Undo is only available while still on the branch you switched to.",
         "conflict": "These changes overlap with the target branch and cannot be brought along. Save them first or use worktree.",
-        "ignored": "Switching to {{branch}} would overwrite Git-ignored local files or folders, including {{file}} ({{count}} in total). The switch was stopped.",
+        "ignored": "Switching to {{branch}} would overwrite local files or folders, including {{file}} ({{count}} in total). The switch was stopped.",
         "dirty": "There are new uncommitted changes. Handle them before restoring.",
-        "diverged": "The local and remote branches have diverged. Resolve them before switching.",
+        "diverged": "The local and remote branches have different updates. Resolve the differences before switching.",
         "missing": "The selected branch no longer exists. Refresh the list.",
         "git": "Could not finish the operation. Check the current branch and saved changes before trying again"
       },
@@ -14527,10 +14527,10 @@
       "worktreeHint": "Start from {{branch}} in a separate directory, leaving this directory and its changes untouched",
       "newFile": "New file",
       "deletedFile": "Deleted",
-      "dialogSessions": "This directory has {{count}} other sessions. They will also continue on {{branch}} after switching.",
-      "dialogSessions_one": "This directory has {{count}} other session. They will also continue on {{branch}} after switching.",
-      "dialogSessions_other": "This directory has {{count}} other sessions. They will also continue on {{branch}} after switching.",
-      "dialogSessions_many": "This directory has {{count}} other sessions. They will also continue on {{branch}} after switching."
+      "dialogSessions": "Other sessions in this directory: {{count}}. Work will continue on {{branch}}",
+      "dialogSessions_one": "Other sessions in this directory: {{count}}. Work will continue on {{branch}}",
+      "dialogSessions_other": "Other sessions in this directory: {{count}}. Work will continue on {{branch}}",
+      "dialogSessions_many": "Other sessions in this directory: {{count}}. Work will continue on {{branch}}"
     }
   },
   "onboarding": {
