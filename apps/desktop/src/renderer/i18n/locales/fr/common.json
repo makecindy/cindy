@@ -16067,6 +16067,7 @@
       "reconnecting": "Connexion à l'appareil distant perdue : reconnexion…",
       "hostOffline": "L'appareil distant est hors ligne ; synchronisation impossible pour le moment",
       "degraded": "La connexion à l'appareil distant est instable : nouvelle tentative automatique…",
+      "proxyHint": "La liaison entre appareils de cette machine passe par un proxy ({{proxy}}) et peut être la cause de l'instabilité — vérifiez le proxy ou les paramètres réseau de cette machine",
       "actionsUnavailable": "L'appareil distant n'est pas disponible. Reconnectez-le avant de modifier cette session.",
       "resync": "Resynchroniser",
       "loading": "Chargement de la tâche…",

@@ -53,7 +53,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { createChatFolderUpload } from './chatFolderUpload';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { SELF_HOSTED_RELAY_IPC, type SelfHostedRelayApi } from '../shared/selfHostedRelay';
-import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
+import { DEVICE_LINK_INVOKE, DEVICE_LINK_PUSH, type DeviceLinkProxyVerdict } from '../shared/deviceLinkIpc';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
 import { PROVIDER_GROUP_IPC, type ProviderGroupCommand } from '../shared/providerGroup';
 import {
@@ -5233,6 +5233,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('device-link:get-peer-links'),
     /** 对端链路拓扑变化(建链 / 断链 / 直连↔relay),payload 为全量快照 */
     onPeerLinksChanged: fanOutDeviceLinkPeerLinksChanged,
+    /** 出站路径诊断(#9537):跨设备通道 origin 的当前代理判定;null = 没判定。
+     *  deviceId = 当前会话对端,用于取它实际走的 transport URL(可省略)。 */
+    getProxyVerdict: (deviceId?: string): Promise<DeviceLinkProxyVerdict | null> =>
+      ipcRenderer.invoke(DEVICE_LINK_INVOKE.GET_PROXY_VERDICT, deviceId),
     listDevices: (): Promise<{
       devices: Array<{
         deviceId: string;

@@ -32,6 +32,7 @@ type VoiceInputConnectionTestResult =
 type DesktopLoginAction = import('../shared/authIpc').DesktopLoginAction;
 type DesktopLoginActionResult = import('../shared/authIpc').DesktopLoginActionResult;
 type UtilityTextFailure = import('../shared/utilityTextResult').UtilityTextFailure;
+type DeviceLinkProxyVerdict = import('../shared/deviceLinkIpc').DeviceLinkProxyVerdict;
 type ProviderRoutingPayload = import('@cindy/model-providers').Provider['routing'];
 type MakerSessionTreeSnapshot = import('@cindy/maker-core').SessionTreeSnapshot;
 type BrowserBackendHealth = import('../shared/browserBackend').BrowserBackendHealth;
@@ -4357,6 +4358,9 @@ interface ElectronAPI {
     getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
     /** 对端链路拓扑变化,payload 为全量快照 */
     onPeerLinksChanged: (cb: (payload: DeviceLinkPeerLinksSnapshot) => void) => () => void;
+    /** 出站路径诊断(#9537):跨设备通道 origin 的当前代理判定;null = 没判定。
+     *  deviceId = 当前会话对端,用于取它实际走的 transport URL(可省略)。 */
+    getProxyVerdict: (deviceId?: string) => Promise<DeviceLinkProxyVerdict | null>;
     renameDevice: (
       deviceId: string,
       name: string | null,

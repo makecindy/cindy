@@ -236,6 +236,36 @@ function officialWsUrl(): string {
   return officialDeviceLinkApiBase().replace(/^http/, 'ws') + WS_PATH;
 }
 
+/**
+ * 某个对端的控制通道当前实际使用的 WebSocket URL(#9537 出站路径诊断用)。
+ *
+ * 诊断必须探**真实 socket 用的那个地址**:协议(ws/wss)与 path(`/api/device-link/ws`)
+ * 都会进代理解析的 key,PAC / env 规则完全可以按协议或路径给出不同答案,拿 REST base
+ * 的判定代替就是张冠李戴。自建中转选中时跨账号 peer(共享任务 / 供应商分享)走独立的
+ * 官方连接(routedClient 的 crossAccountConnection),同账号 peer 走当前中转 —— 用
+ * client 的实际承载连接判定,不靠猜。
+ *
+ * 无法静态确定时返回 null(主连接由 agent-net 承载、对端在 scoped agent-net 路由连接上、
+ * client 未就绪),调用方按「没有判定」处理:宁可不报,也不谎称走了代理。
+ */
+export function deviceLinkPeerTransportUrl(deviceId: string): string | null {
+  if (!client) return null;
+  const conn = client.connectionFor(deviceId);
+  const cross = client.crossAccountConnection();
+  if (conn === client) {
+    // 对端在主连接上:agent-net 承载时实际 URL 由节点协商决定,静态不可知。
+    return primaryUsesEncryptedTransport ? null : wsUrl();
+  }
+  if (conn === cross) {
+    // 跨账号 / 共享任务:独立的官方连接(自建中转时);无自建中转时这条连接是 legacy
+    // 连接,URL 与官方 base 相同 —— 两种情况都指向官方 base。
+    return officialWsUrl();
+  }
+  // scoped agent-net 路由连接:URL 由 route server 决定(含 /api/agent-net/guest 变体),
+  // 静态不可知 → 不给判定,宁可不报也不谎称走了代理。
+  return null;
+}
+
 /** 跨账号 peer 是否在独立连接上;官方线路下只有一条连接。 */
 function hasSeparateCrossAccountConnection(): boolean {
   return !!client && client.crossAccountConnection() !== client;

@@ -143,3 +143,42 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
   return deriveRemoteConnectionStatus(isSharedTaskPeer(deviceId) || directReady ? 'online' : linkStatus,
     hostOnline || directReady, hostUnresponsive);
 }
+
+/**
+ * 出站路径诊断(#9537):degraded(通路不稳定)时探一次本机跨设备通道 origin 的代理判定。
+ * 只回传「已确证经 Proxy 出站」这一种事实(kind='proxy' + 脱敏地址);unknown / unsupported /
+ * direct / 探测失败一律 null —— `unknown` 是「没问出判定」的 fail-open 兜底,不是「确认无
+ * 代理」,不得当事实展示。降级恢复后清空,再次降级时重新探(用户可能中途改了系统代理)。
+ * deviceId 让 main 取这个对端实际走的 transport URL(协议 + path 都与真实 socket 一致)。
+ */
+export function useOutboundProxyVerdict(
+  active: boolean,
+  deviceId?: string,
+): DeviceLinkProxyVerdict | null {
+  const [verdict, setVerdict] = useState<DeviceLinkProxyVerdict | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      setVerdict(null);
+      return;
+    }
+    // 每次探测开始前先清空:换对端(同一路由组件复用,只有 deviceId 变)时,新探测还没
+    // 回来之前不能把上一家的代理提示挂在新对端上;探测被拒时也一样 —— 不清的话上一次的
+    // 判定会一直留在界面上,新对端永远顶着别人的提示。
+    setVerdict(null);
+    let cancelled = false;
+    void window.electronAPI.deviceLink
+      .getProxyVerdict(deviceId)
+      .then((v) => {
+        if (!cancelled) setVerdict(v && v.kind === 'proxy' ? v : null);
+      })
+      .catch(() => {
+        /* 诊断不可用 → 不提示,静默失败。旧判定已在探测开始前清空,这里不必再动。 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, deviceId]);
+
+  return active ? verdict : null;
+}

@@ -230,6 +230,7 @@ import {
 } from './sessionScopedRequestGuard';
 import {
   useDeviceLinkConnectionIssue,
+  useOutboundProxyVerdict,
   useRemoteSessionConnection,
 } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 import { useSessionTurnActiveTruth } from '@/features/cc-agent/hooks/useSessionTurnActiveTruth';
@@ -1268,6 +1269,10 @@ function CCAgentSessionContent({
   // 远程会话连接健康(本机断链重连中 / 被控端离线)→ 顶部 banner 提示 + 手动重新同步。
   const remoteConn = useRemoteSessionConnection(remoteDeviceId);
   const remoteLinkIssue = useDeviceLinkConnectionIssue(!!remoteDeviceId, remoteDeviceId);
+  // #9537:degraded(通路不稳定)时探一次本机是否经 Proxy 出站,给 banner 附排查提示;
+  // 只在确证 kind='proxy' 时有值,unknown / direct 不展示(见 useOutboundProxyVerdict)。
+  // 带 remoteDeviceId:main 据此取这个对端实际走的 transport URL,而不是猜一条线路。
+  const remoteProxyVerdict = useOutboundProxyVerdict(remoteConn === 'degraded', remoteDeviceId);
   const remoteSessionUnavailable = remoteConn === 'reconnecting' || remoteConn === 'host-offline';
   const remoteWritesBlocked = remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
   const showRemoteWriteBlockedToast = useCallback(() => {
@@ -5900,6 +5905,7 @@ function CCAgentSessionContent({
                     : 'reconnecting'
             }
             issue={remoteLinkIssue}
+            proxyVerdict={remoteProxyVerdict}
             onResync={remoteSync.resync}
           />
         ) : null}

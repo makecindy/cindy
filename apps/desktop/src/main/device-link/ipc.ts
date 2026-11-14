@@ -41,7 +41,7 @@ import {
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { ServerApiError } from '../serverApiClient.desktop';
-import { deviceLinkApiFetch } from './deviceLinkApi.desktop.js';
+import { deviceLinkApiFetch, officialDeviceLinkApiBase, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
@@ -53,10 +53,16 @@ import {
   type DeviceLinkDeviceView,
   type DeviceLinkState,
   type DeviceLinkPeerLinksSnapshot,
+  type DeviceLinkProxyVerdict,
 } from '../../shared/deviceLinkIpc';
+import {
+  probeOutboundPathFor,
+  type OutboundPathSnapshot,
+} from '../maker-host/outbound-proxy-resolver.js';
 import {
   getDeviceLinkStatus,
   getDirectDataDeviceIds,
+  deviceLinkPeerTransportUrl,
   hasOfflineDirectPath,
   isDeviceDataPathAvailable,
   isPeerControlAvailable,
@@ -172,6 +178,11 @@ export interface DeviceLinkIpcDeps {
   getState(): DeviceLinkState;
   /** 远程连接拓扑:本机链路快照(只读) */
   getPeerLinks(): DeviceLinkPeerLinksSnapshot;
+  /**
+   * 出站路径诊断探针(#9537):解析跨设备通道候选 origin 的当前代理判定,不发业务请求。
+   * 收 origin 候选列表:同账号走当前中转,共享任务在自建中转下走独立官方连接。
+   */
+  probeProxyVerdict(upstreamUrls: readonly string[]): Promise<OutboundPathSnapshot | null>;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
   apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
@@ -243,6 +254,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
       };
     },
     getPeerLinks: getDeviceLinkPeerLinks,
+    probeProxyVerdict: probeOutboundPathFor,
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
@@ -349,6 +361,36 @@ function rethrowServerError(err: unknown): never {
 /** 远程连接拓扑快照:纯转发,门禁在注册处(trusted renderer + 账号能力)。 */
 export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinksSnapshot {
   return deps.getPeerLinks();
+}
+
+/**
+ * 出站路径判定(#9537):按跨设备通道 origin 解析当前系统/env 代理,给渲染侧在连接
+ * 反复失败时提示「本机可能在走代理」。null = 没判定(候选判定冲突 / 解析未落快照),
+ * 渲染侧按无提示处理;`unknown`(没问出来)照实透传,渲染侧不得当事实用。
+ *
+ * 首选探针目标是**这个对端控制通道实际使用的 WebSocket URL**(协议 + path 都与真实
+ * socket 一致,PAC / env 可按协议或路径给出不同答案)。拿不到时(无 deviceId / client
+ * 未就绪 / 主连接由 agent-net 承载)退回两条 REST 线路 origin:同账号设备走当前中转
+ * (官方或自建);自建中转选中时,共享任务走独立的官方连接(自建中转不转发跨账号帧,见
+ * routedClient crossAccountConnection),无自建中转时两者相同、退化为单候选。判定不
+ * 一致(PAC 逐 path / NO_PROXY / loopback 直连例外)时探针返回 null —— 宁可不报,
+ * 也不谎称走了代理。
+ */
+export async function handleGetProxyVerdict(
+  deps: DeviceLinkIpcDeps,
+  deviceId?: string,
+): Promise<DeviceLinkProxyVerdict | null> {
+  const transportUrl = deviceId ? deviceLinkPeerTransportUrl(deviceId) : null;
+  // 指名了设备、却查不到它实际走的 transport URL(主连接由 agent-net 承载 / 对端在
+  // scoped 路由连接上 / client 未就绪):这条对端根本不走下面那两条 REST base,探它们
+  // 得到的代理与本对端无关 —— 报出来是一条自信的假提示。宁可不给判定。
+  if (deviceId && !transportUrl) return null;
+  const candidates = transportUrl
+    ? [transportUrl]
+    : [resolveDeviceLinkApiBase(), officialDeviceLinkApiBase()];
+  const snap = await deps.probeProxyVerdict(candidates);
+  if (!snap) return null;
+  return { kind: snap.kind, proxy: snap.proxy ?? null };
 }
 
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
@@ -1816,6 +1858,14 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     // 新增的特权只读(本账号设备的链路拓扑):先拒外来 frame,再看账号能力。
     assertTrustedAppRendererEvent(e);
     return gated(() => handleGetPeerLinks(deps))();
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PROXY_VERDICT, (e, deviceId: unknown) => {
+    // 本机只读诊断(系统/env 代理判定,不进隧道):与 GET_PEER_LINKS 同门槛。
+    // deviceId = 当前会话的对端(共享任务 peer id 亦可),用来取它实际走的 transport URL。
+    assertTrustedAppRendererEvent(e);
+    return gated(() =>
+      handleGetProxyVerdict(deps, typeof deviceId === 'string' && deviceId ? deviceId : undefined),
+    )();
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();

@@ -3,11 +3,11 @@
  * remoteConnectionStatus.test.ts —— 远程会话连接状态派生(控制端 banner 依据)。
  * 本机链路非 online 优先级最高(reconnecting);本机在线但被控端离线 → host-offline;都在线 → connected。
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 
-import { deriveRemoteConnectionStatus, useRemoteSessionConnection, useDeviceLinkConnectionIssue } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
+import { deriveRemoteConnectionStatus, useRemoteSessionConnection, useDeviceLinkConnectionIssue, useOutboundProxyVerdict } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -67,5 +67,107 @@ describe('deriveRemoteConnectionStatus', () => {
   });
   it('本机 online + 被控端在线 → connected', () => {
     expect(deriveRemoteConnectionStatus('online', true)).toBe('connected');
+  });
+});
+
+describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
+  // Issue #9537:连接反复失败只说「设备无响应」,用户无法区分「对端不可达」与「本机网络 /
+  // Proxy 问题」。banner 只在 degraded 时探一次出站路径判定,且只把已确证的 kind='proxy'
+  // 当事实展示;unknown 是 fail-open 兜底(「没问出判定」≠「确认无代理」),direct / 失败
+  // 同样不提示 —— 诊断不得替用户猜。
+  it('仅确证 kind=proxy 时给出判定;unknown / 失败 / 非降级一律 null,且不降级不探测', async () => {
+    const getProxyVerdict = vi.fn(
+      async (): Promise<DeviceLinkProxyVerdict | null> => ({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' }),
+    );
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { getProxyVerdict } },
+    });
+    const hook = renderHook(
+      ({ active, deviceId }: { active: boolean; deviceId?: string }) => useOutboundProxyVerdict(active, deviceId),
+      { initialProps: { active: false, deviceId: 'peer-a' } },
+    );
+    await act(async () => {});
+    expect(getProxyVerdict).not.toHaveBeenCalled(); // 非 degraded 不探测
+    expect(hook.result.current).toBeNull();
+
+    hook.rerender({ active: true, deviceId: 'peer-a' });
+    await act(async () => {});
+    expect(getProxyVerdict).toHaveBeenCalledTimes(1);
+    // deviceId 一并下发:main 据此取这个对端实际走的 transport URL
+    expect(getProxyVerdict).toHaveBeenCalledWith('peer-a');
+    expect(hook.result.current).toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+
+    // unknown(fail-open 兜底)不得当「确认走 Proxy」展示
+    getProxyVerdict.mockResolvedValue({ kind: 'unknown', proxy: null });
+    hook.rerender({ active: false, deviceId: 'peer-a' });
+    await act(async () => {});
+    expect(hook.result.current).toBeNull(); // 降级恢复即清空
+    hook.rerender({ active: true, deviceId: 'peer-a' });
+    await act(async () => {});
+    expect(hook.result.current).toBeNull();
+
+    // 探测失败静默 → null(banner 不得因诊断自身报错打扰用户)
+    getProxyVerdict.mockRejectedValue(new Error('probe failed'));
+    hook.rerender({ active: false, deviceId: 'peer-a' });
+    await act(async () => {});
+    hook.rerender({ active: true, deviceId: 'peer-a' });
+    await act(async () => {});
+    expect(hook.result.current).toBeNull();
+  });
+
+  // 测试价值(#9537 review): 同一路由组件在 :sessionId 间复用,deviceId 变了组件没换。
+  // 换对端时必须先清掉上一家的判定 —— 新探测还没回来之前,新对端不能顶着上一家的代理
+  // 提示;探测被拒(IPC 失败)同样要清,否则上一家的判定会一直留在界面上。
+  it('换对端先清空上一家的判定,新探测回来之前不挂旧提示', async () => {
+    let resolveProbe: ((v: DeviceLinkProxyVerdict | null) => void) | null = null;
+    const getProxyVerdict = vi.fn(
+      () => new Promise<DeviceLinkProxyVerdict | null>((resolve) => { resolveProbe = resolve; }),
+    );
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { getProxyVerdict } },
+    });
+    const hook = renderHook(
+      ({ deviceId }: { deviceId: string }) => useOutboundProxyVerdict(true, deviceId),
+      { initialProps: { deviceId: 'peer-a' } },
+    );
+    await act(async () => { resolveProbe?.({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' }); });
+    expect(hook.result.current).toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+
+    // 切到 peer-b:探测还没回来,界面上不得再挂 peer-a 的提示。
+    hook.rerender({ deviceId: 'peer-b' });
+    await act(async () => {});
+    expect(hook.result.current).toBeNull();
+
+    // peer-b 的探测回来后才展示 peer-b 自己的判定。
+    await act(async () => { resolveProbe?.({ kind: 'proxy', proxy: 'http://10.0.0.1:8080' }); });
+    expect(hook.result.current).toEqual({ kind: 'proxy', proxy: 'http://10.0.0.1:8080' });
+  });
+
+  it('探测被拒时清空旧判定,不把上一次的提示留在界面上', async () => {
+    let calls = 0;
+    const getProxyVerdict = vi.fn(async (): Promise<DeviceLinkProxyVerdict | null> => {
+      calls += 1;
+      if (calls === 1) return { kind: 'proxy', proxy: 'http://127.0.0.1:7890' };
+      throw new Error('probe failed');
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { getProxyVerdict } },
+    });
+    const hook = renderHook(
+      ({ deviceId }: { deviceId?: string }) => useOutboundProxyVerdict(true, deviceId),
+      { initialProps: { deviceId: 'peer-a' as string | undefined } },
+    );
+    await act(async () => {});
+    expect(hook.result.current).toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+
+    // 先离开再回到同一对端:第二次探测被拒,界面上不得再留第一次的提示。
+    hook.rerender({ deviceId: undefined });
+    await act(async () => {});
+    hook.rerender({ deviceId: 'peer-a' });
+    await act(async () => {});
+    expect(hook.result.current).toBeNull();
   });
 });
