@@ -5850,9 +5850,9 @@ describe('AgentInputCoordinator send transaction', () => {
     const onPreparing = vi.fn(async () => { throw error; });
     const preparations = new Map([['scheduled', { onPreparing, onPreparationFailed }]]);
     const dispatched: string[] = [];
-    h.sendToAgent.mockImplementation(async (sessionId, _message, _create, opts) => {
+    h.sendToAgent.mockImplementation(async (sessionId, message, _create, opts) => {
       const clientId = opts.persistUserMessage?.clientId;
-      await runSchedulerQueuedPreparation(clientId, preparations, () => {});
+      await runSchedulerQueuedPreparation(clientId, preparations, () => {}, message);
       await persistQueuedUserMessage(sessionId, opts);
       dispatched.push(clientId!);
       return sendSuccess();

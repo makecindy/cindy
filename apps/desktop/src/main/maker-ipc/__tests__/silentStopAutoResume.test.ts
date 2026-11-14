@@ -44,7 +44,7 @@ describe('SilentStopAutoResumeGuard', () => {
     }
     // 第 3 次 → 耗尽等人。
     const doneAt = runSilentStopTurn(g);
-    expect(g.guard.onSilentStop(SID, doneAt)).toEqual({ action: 'exhausted' });
+    expect(g.guard.onSilentStop(SID, doneAt)).toEqual({ action: 'exhausted', cause: 'budget' });
   });
 
   it('auto-resume does NOT recharge the budget (the anti-loop hard guarantee)', () => {
@@ -91,7 +91,7 @@ describe('SilentStopAutoResumeGuard', () => {
     // 熔断后即使额度充满也返回 exhausted(surface UI),不再自动续跑。
     g.guard.noteUserSend(SID);
     const doneAt = runSilentStopTurn(g);
-    expect(g.guard.onSilentStop(SID, doneAt)).toEqual({ action: 'exhausted' });
+    expect(g.guard.onSilentStop(SID, doneAt)).toEqual({ action: 'exhausted', cause: 'session-breaker' });
   });
 
   it('kill switch short-circuits everything', () => {
@@ -153,7 +153,7 @@ describe('SilentStopAutoResumeGuard', () => {
     g.guard.noteTurnStarted(SID);
     g.tick(SILENT_STOP_RESUME_MIN_INTERVAL_MS - 1);
     doneAt = g.now();
-    expect(g.guard.onSilentStop(SID, doneAt)).toEqual({ action: 'exhausted' });
+    expect(g.guard.onSilentStop(SID, doneAt)).toEqual({ action: 'exhausted', cause: 'rate-limit' });
   });
 
   it('tracks sessions independently', () => {

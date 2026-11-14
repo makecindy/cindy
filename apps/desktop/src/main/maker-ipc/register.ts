@@ -1447,7 +1447,7 @@ import {
   isSupportedRuntimeEffort,
   resolveRetainedRuntimeEffort,
 } from './runtimeSelectionAxes.js';
-import { runSchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import { runSchedulerQueuedPreparation, type SchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
 import {
   acceptSessionRuntimeAxisMutation,
   acceptSessionRuntimeMutation,
@@ -1580,7 +1580,7 @@ import {
   registerSessionAutoTitleHooks,
   scheduleSessionAutoTitle,
 } from './sessionAutoTitle.js';
-import { SILENT_STOP_RESUME_PROMPT, SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
+import { SILENT_STOP_RESUME_PROMPT, SilentStopAutoResumeGuard, type SilentStopFailureCause } from './silentStopAutoResume.js';
 import {
   publishUiContinuation,
   publishUiSessionIntervention,
@@ -5379,10 +5379,7 @@ export type { SchedulerQueuedPromptRequest, SchedulerEnqueueResult } from './sch
 let schedulerQueueBridgeHolder: SchedulerQueueBridge | null = null;
 /** 排队心跳的 discard 监听(clientId → 通知 runner 收尾)。派发/丢弃后清条目。 */
 const schedulerQueuedPromptDiscardWatchers = new Map<string, () => void>();
-const schedulerQueuedPromptPreparations = new Map<string, {
-  onPreparing: () => Promise<void>;
-  onPreparationFailed?: (error: unknown) => void;
-}>();
+const schedulerQueuedPromptPreparations = new Map<string, SchedulerQueuedPreparation>();
 
 export async function ensureSchedulerQueueRestored(sessionId: string): Promise<boolean> {
   // 桥未就绪时不能把未知队列当成空闲；让 runner 沿用恢复待定的顺延路径。
@@ -5941,7 +5938,15 @@ async function settleSilentStopDone(
   productTurnUsageTargetTracker.clear(sessionId);
   sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(sessionId);
   noteClaudeSessionTurnState(sessionId, false);
-  agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
+  if (reason === 'skip') {
+    agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
+  } else {
+    agentInputCoordinatorHolder?.onTurnEvent(
+      sessionId, 'error',
+      reason === 'send-failed' ? 'silent-stop continuation dispatch failed' : 'silent-stop auto-resume exhausted',
+      { reason: 'silent-stop-exhausted' },
+    );
+  }
   settlePendingCredentialSwitch(sessionId, `silent-stop:${reason}`);
   settlePendingSessionRuntimeControlHolder?.(sessionId, `silent-stop:${reason}`);
   deferredCodexRestartHolder?.onSessionSettled();
@@ -5951,7 +5956,7 @@ async function settleSilentStopDone(
   fireSilentStopSettled(sessionId, reason);
 }
 
-async function surfaceSilentStopExhaustedBanner(sessionId: string): Promise<void> {
+async function surfaceSilentStopExhaustedBanner(sessionId: string, cause: SilentStopFailureCause): Promise<void> {
   await createDbMessage(
     sessionId,
     {
@@ -5961,6 +5966,7 @@ async function surfaceSilentStopExhaustedBanner(sessionId: string): Promise<void
         message: '模型连续多次返回空响应,自动续跑已暂停。点击「继续」恢复任务。',
         isTerminal: true,
         reason: 'silent-stop-exhausted',
+        silentStopFailureCause: cause,
       },
     },
     { shouldBroadcast: () => false },
@@ -5978,11 +5984,12 @@ async function surfaceSilentStopExhaustedBanner(sessionId: string): Promise<void
         message: '模型连续多次返回空响应,自动续跑已暂停。点击「继续」恢复任务。',
         isTerminal: true,
         reason: 'silent-stop-exhausted',
+        silentStopFailureCause: cause,
       },
       source: 'claude-code',
     },
   });
-  log.warn('silent-stop auto-resume exhausted — surfaced continue banner', { sessionId });
+  log.warn('silent-stop auto-resume stopped — surfaced continue banner', { sessionId, cause });
 }
 
 /**
@@ -6083,8 +6090,8 @@ async function handleSilentStopTurnEnd(
           sessionId: session.id,
           reason: outcome.reason,
         });
-        await surfaceSilentStopExhaustedBanner(session.id);
-        await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
+        await surfaceSilentStopExhaustedBanner(session.id, 'dispatch-failed');
+        await settleSilentStopDone(session.id, 'send-failed', turnLeaseId, session, generation);
       } else {
         // 只在供应商确认派发后丢弃原结束时间；未派发或抛出时由失败收口按原时间提交。
         discardEndedActivity();
@@ -6097,13 +6104,13 @@ async function handleSilentStopTurnEnd(
         sessionId: session.id,
         error: err instanceof Error ? err.message : String(err),
       });
-      await surfaceSilentStopExhaustedBanner(session.id);
-      await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
+      await surfaceSilentStopExhaustedBanner(session.id, 'dispatch-failed');
+      await settleSilentStopDone(session.id, 'send-failed', turnLeaseId, session, generation);
     }
     return;
   }
   if (decision.action === 'exhausted') {
-    await surfaceSilentStopExhaustedBanner(session.id);
+    await surfaceSilentStopExhaustedBanner(session.id, decision.cause);
     await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
   }
   if (decision.action === 'skip') {
@@ -19173,8 +19180,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       const queuedClientId = (args[3] as { persistUserMessage?: { clientId?: string } } | undefined)
         ?.persistUserMessage?.clientId;
-      await runSchedulerQueuedPreparation(queuedClientId, schedulerQueuedPromptPreparations,
-        () => { if (queuedClientId) schedulerQueuedPromptDiscardWatchers.delete(queuedClientId); });
+      args[1] = await runSchedulerQueuedPreparation(queuedClientId, schedulerQueuedPromptPreparations,
+        () => { if (queuedClientId) schedulerQueuedPromptDiscardWatchers.delete(queuedClientId); }, args[1]);
       return botInput?.remoteHostId ? sendToAgentAcceptedUnlocked(...args)
         : withCindyMakeProjectUse(app.getPath('userData'), botInput?.workingDir, () => sendToAgentAcceptedUnlocked(...args));
     });

@@ -176,10 +176,10 @@ export function createInputQueue(deps) {
       sendToAgent: async (id, message, createOpts, sendOpts) => {
         const clientId = sendOpts.persistUserMessage?.clientId;
         try {
-          await runSchedulerQueuedPreparation(clientId, schedulePreparations,
-            () => { scheduleDiscardWatchers.delete(clientId); acceptedCallbacks.discard(clientId); });
+          const preparedMessage = await runSchedulerQueuedPreparation(clientId, schedulePreparations,
+            () => { scheduleDiscardWatchers.delete(clientId); acceptedCallbacks.discard(clientId); }, message);
           assertCurrent();
-          const result = await executor.send(id, message, createOpts, sendOpts);
+          const result = await executor.send(id, preparedMessage, createOpts, sendOpts);
           await acceptedCallbacks.settle(id, sendOpts, result);
           return result;
         } catch (error) {
