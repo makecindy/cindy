@@ -512,7 +512,8 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     'checkEnvironment': () => {
       const harness = window.__cindyBoot?.harness ?? {};
       const entry = (ready) => (ready ? { status: 'passed' } : { status: 'failed', error: 'not installed' });
-      const allPassed = Boolean(harness['claude-code'] && harness.codex);
+      // A Host release may bundle only some agents (build --harnesses); any ready one is enough.
+      const allPassed = Boolean(harness['claude-code'] || harness.codex || harness.pi);
       return {
         claudeCode: entry(harness['claude-code']),
         codex: entry(harness.codex),
