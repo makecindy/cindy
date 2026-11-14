@@ -3568,8 +3568,8 @@ function ExpandedView({
           if (statusWriteTarget.kind === 'local') {
             patchLocal(session.id, { status: 'archived', pinnedAt: null });
           }
+          // 归档可恢复：未发送草稿保留，只有删除才丢弃。
           makerChatStore.purgeSession(session.id);
-          discardComposerDraft(session.id);
         } catch (err) {
           log.error('[bulk session archive]', err);
           failed.push(session.id);

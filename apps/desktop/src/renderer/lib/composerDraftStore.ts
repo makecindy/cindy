@@ -20,9 +20,15 @@
  *   `onUpdate` hook (every keystroke; cheap Map.set).
  * - `getDraft` is called by `useAttachments` and `ChatInput` after the
  *   sessionId switches, to restore whatever the user left in the new session.
- * - `clearDraft` is called from `dispatchSend` (after a successful send) and
- *   from the session delete/archive flow in `CCAgentSidebarUpper` (to avoid
- *   the Map holding orphan entries for sessions that no longer exist).
+ * - `clearDraft` is called from `dispatchSend` (after a successful send).
+ * - `discardDraft` is called when a session is deleted: the draft and the
+ *   staged attachment copies it owns are released, since the session can no
+ *   longer be opened.
+ * - Archive deliberately keeps the draft. Archive is reversible and asks
+ *   nothing about the draft, so Restore (or opening the archived task, whose
+ *   composer stays usable) must bring back the text and attachments. Kept
+ *   entries are bounded by the renderer lifetime like any other draft; delete
+ *   still releases them.
  *
  * Why a separate module instead of expanding `makerChatStore`:
  * - `makerChatStore` is the chat business state (messages, streaming flags,
@@ -109,8 +115,9 @@ export interface RemoteOptimisticDraftSnapshot {
  * Process-local discard boundary captured by async composer work. A successful
  * send uses `clearDraft` and deliberately does not invalidate this token:
  * files added while the send is settling are newer composer input. Explicit
- * discard (session delete/archive) advances the generation so late work can
- * recycle its files instead of resurrecting the removed draft.
+ * discard (e.g. session delete; archive keeps the draft) advances the
+ * generation so late work can recycle its files instead of resurrecting the
+ * removed draft.
  */
 export interface ComposerDraftDiscardToken {
   ownerScopedKey: string;
@@ -532,7 +539,8 @@ function saveDraftAtKey(
  *
  * Call sites:
  * - After successful send (the composer is already cleared).
- * - When a session is deleted or archived (avoid Map leak).
+ *
+ * Session delete uses `discardDraft` instead; archive keeps the draft.
  */
 export function clearDraft(sessionId: string): void {
   const key = draftKey(sessionId);

@@ -38,7 +38,6 @@ import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { fetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import {
   archiveScheduleWarning,
@@ -335,8 +334,8 @@ function WorkdirBrowseContent() {
   //   1. running / 远程接管中 → toast 阻断(同 sidebar 单条 archive 行为)。
   //   2. confirmDialog 二次确认。
   //   3. closeSessionQuery + sessionService.update(status:'archived', pinnedAt:null)
-  //      + purgeSession + clearComposerDraft + refreshSessions —— 与 sidebar
-  //      的归档副作用对齐,保证 doc 模式关 tab = sidebar 单条归档。
+  //      + purgeSession + refreshSessions —— 与 sidebar 的归档副作用对齐,保证
+  //      doc 模式关 tab = sidebar 单条归档。未发送草稿保留,恢复后照常回填。
   //   4. session 状态 → archived 后,sortedWorkdirSessions memo 重算自然剔除该 tab。
   //   5. 若关的是 active,navigate 到 neighbor;neighbor 也没有时回 /cc-agent。
   //      (上一轮约定「禁用关闭最后一个」由 bar 自身在 sessions.length<=1 时隐藏 ×
@@ -392,8 +391,8 @@ function WorkdirBrowseContent() {
         return;
       }
 
+      // 归档可恢复：未发送草稿保留在 composerDraftStore，恢复后输入框照常回填。
       makerChatStore.purgeSession(closingId);
-      discardComposerDraft(closingId);
       // 跨 bucket 同步:refreshSessions 只刷自己当前 filter 桶 ('all'),sidebar 的
       // 'active' 桶不会被刷,导致 sidebar 仍把已归档 session 当 active 渲染。
       // patchLocal 遍历所有桶就地合并字段,弥补单桶 refresh 的覆盖盲区。

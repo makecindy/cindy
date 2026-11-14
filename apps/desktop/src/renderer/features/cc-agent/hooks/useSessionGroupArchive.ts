@@ -5,7 +5,6 @@ import type { ConfirmOptions } from '@/components/ui/confirm-dialog-provider';
 import type { Session } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { countDirtyWorktreesForRemoval } from '@/lib/worktreeRemovalWarning';
 import { archiveScheduleWarningMany } from '@/features/scheduler/lib/archiveScheduleWarning';
 import { emitRefresh } from '@/lib/sessionsBus';
@@ -268,10 +267,9 @@ export function useSessionGroupArchive({
           makerChatStore.closeSessionQuery(s.id);
           await sessionService.setStatus(s.id, 'archived', statusWriteTarget);
           succeededIds.add(s.id);
-          // 写入后同步各状态桶，再清理该任务的运行视图与草稿。
+          // 写入后同步各状态桶，再清理该任务的运行视图；未发送草稿保留到恢复。
           patchLocal(s.id, { status: 'archived', pinnedAt: null });
           makerChatStore.purgeSession(s.id);
-          discardComposerDraft(s.id);
         } catch (err) {
           log.error('[archive all]', err);
           failed.push(s.id);
