@@ -36,6 +36,7 @@ import { readPool, readProviderBoundAccountIds } from '../subscription-accounts/
 import {
   accountProviderId,
   readCreatedSubscriptionProviders,
+  readCreatedSubscriptionProvidersIfReadable,
   readMergedProviderAccount,
   restoreAutoMergedLegacyCodexAccounts,
   resolveSubscriptionPoolProvider,
@@ -875,7 +876,7 @@ function getDesktopSelectableBaseCatalog(): Catalog {
  * stay in the catalog so old tasks keep resolving; the provider view marks them as merged.
  */
 export function publishSubscriptionPoolProviders(): void {
-  publishSubscriptionPoolProvidersWith({ readCreatedSubscriptionProviders, setSubscriptionPoolProviders, log });
+  publishSubscriptionPoolProvidersWith({ readCreatedSubscriptionProvidersIfReadable, setSubscriptionPoolProviders, log });
 }
 
 /**
@@ -889,7 +890,7 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
     created = Object.entries(readCreatedSubscriptionProviders())
       .filter(([, entry]) => entry.kind === kind).map(([id]) => id);
   } catch {
-    // An unreadable placement file leaves created providers as they were; the next read retries.
+    // Unreadable files return an empty list; thrown reads also skip created providers this round.
   }
   await refreshSubscriptionPool(kind);
   const legacy = kind === 'openai' ? Object.keys(readPool(kind)?.legacyCodexAccounts ?? {}) : [];
