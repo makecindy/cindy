@@ -21,7 +21,7 @@ import { createInputQueue } from './input-queue.mjs';
 import { createTurnExecutor } from './turn-executor.mjs';
 import { lockSessionRoute } from './session-route-lock.mjs';
 import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
-import { RECOVERY_SHUTDOWN_WAIT_MS } from './context-recovery.ts';
+import { RECOVERY_SHUTDOWN_WAIT_MS, contextRecoveryKind } from './context-recovery.ts';
 import { createHostContextRecoveryRollover } from './context-recovery-assembly.ts';
 import { createHostAgentHandoffPending } from './handoff-pending.ts';
 import { createSessionStderrOptions } from '../../../desktop/src/main/maker-ipc/sessionRequest.ts';
@@ -2855,4 +2855,16 @@ test('context recovery assembly: an engine switch summary left by the desktop go
   assert.deepEqual(shown[0].message.content, { handoff: 'SWITCH SUMMARY', consumed: true, fromAgentKind: 'codex' });
   const stored = JSON.parse(db.db.prepare("SELECT content FROM messages WHERE client_id = 'switch-boundary'").get().content);
   assert.equal(stored.consumed, true);
+});
+
+test('context recovery assembly: an overflow of a closed kind takes the normal error path with the rollover assembled', { timeout: 30_000 }, async t => {
+  // As main.ts: open kinds by contextRecoveryKind; here only another kind is open.
+  const r = await assembledRecovery(t, { isContextRecoveryOpen: data => contextRecoveryKind(data) === 'oversized-history' });
+  const first = await r.overflow('assembled-closed');
+  await waitFor(() => r.rows('assembled-closed', 'error').length === 1);
+  await waitFor(() => r.h.events.filter(event => event.sessionId === 'assembled-closed' && event.type === 'error').length === 1);
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(r.rows('assembled-closed', 'context_rebuild').length, 0, 'no rebuild');
+  assert.equal(r.h.maker.sessions.get('assembled-closed'), first, 'the runtime is not replaced');
+  assert.match(r.h.queue.projection('assembled-closed').error, /prompt is too long/);
 });

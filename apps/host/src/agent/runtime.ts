@@ -48,6 +48,7 @@ import type { createHostClaudeProxyRuntime } from './claude-proxy-runtime.js';
 import { createHostModelContext } from './model-context.js';
 import { readDisabledSkillPaths } from '../../../desktop/src/main/skillhub/activationPreferences.js';
 import { createHostStartOptions } from './start-options.js';
+import { dbToMakerAgentKind } from '../../../desktop/src/shared/agentKindConversion.js';
 import { createBashConcurrencyHooks, mergeClaudeHooks } from '../../../desktop/src/main/maker-host/claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from '../../../desktop/src/main/maker-host/claude-hooks/read-image-hook.js';
 import { createDesktopInputShellGuardHooks } from '../../../desktop/src/main/maker-host/claude-hooks/desktop-input-shell-guard-hook.js';
@@ -853,7 +854,20 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     logger: LOGGER,
   });
   piPackages.attachMaker(maker);
+  // What context recovery reads from this graph (context-recovery-assembly.ts): the configured
+  // window of a route, as the desktop's resolveVerifiedWindow (register.ts); the learned Pi cache
+  // compatibility of this profile; and the Codex runtime's native history.
+  const contextRecovery = {
+    resolveVerifiedWindow: (agentKind: string, modelId: string, providerId: string | null | undefined) =>
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), providerId, modelId),
+    piCompat: {
+      read: piNativeCompatOverrides.readPiNativeCompatOverride,
+      record: piNativeCompatOverrides.recordPiNativeCompatOverride,
+    },
+    codexHistory: options.codexRuntime?.codexHistory ?? null,
+  };
   return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, visionBridge, piPackages,
+    contextRecovery,
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };
 }

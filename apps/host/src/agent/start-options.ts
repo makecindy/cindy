@@ -174,6 +174,8 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
   }
 
   return {
+    /** The desktop's configured context window of a route (model-context-settings.ts), on the Host's ports. */
+    resolveConfiguredContextWindow: budget.resolveConfiguredContextWindow,
     prepareStartOptions,
     onBeforeStart,
     async onStartFailed({ sessionId, options, runtimeMayBeAlive }: SessionStartFailureContext): Promise<void> {
