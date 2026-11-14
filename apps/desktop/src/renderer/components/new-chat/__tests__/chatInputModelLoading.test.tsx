@@ -8,6 +8,8 @@ import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
 import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
 import type { UnifiedCommand } from '@/lib/slashCommands';
 import type { ProviderView } from '@cindy/model-providers';
+import type { GhostComposerEntry } from '../../../../shared/ghostComposer';
+import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { useSshCodexDraftSelection } from '@/features/cc-agent/useSshCodexDraftSelection';
@@ -37,6 +39,8 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   ghosts: [] as InstalledGhost[],
   showPluginChoices: false,
   providerCall: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ updates: [] })),
+  mentionEntry: null as ComposerSuggestionEntry | null,
+  composerGhosts: null as GhostComposerEntry[] | null,
 }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => h.ghosts, readInstalledGhostsSnapshot: () => h.ghosts }));
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
@@ -77,11 +81,20 @@ vi.mock('../ExtraDirsButton', () => ({ ExtraDirsButton: () => null }));
 vi.mock('../PermissionSelector', () => ({ PermissionSelector: () => <span data-testid="permission-selector" /> }));
 vi.mock('../NewGoalDialog', () => ({ NewGoalDialog: () => null }));
 vi.mock('../FolderPickerPopover', () => ({ FolderPickerPopover: () => null, addRecentFolder: vi.fn() }));
-vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: ({ entries, onSelect }: { entries: ComposerSuggestionEntry[]; onSelect(entry: ComposerSuggestionEntry): void }) => h.showPluginChoices
+vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: ({ entries, onSelect }: { entries: ComposerSuggestionEntry[]; onSelect(entry: ComposerSuggestionEntry): void }) => h.mentionEntry
+  ? <button data-testid="pick-mention" onClick={() => onSelect(h.mentionEntry!)}>Select mention</button>
+  : h.showPluginChoices
   ? <>{entries.filter(entry => entry.kind === 'action' && entry.action.id.startsWith('plugin-completion:')).map(entry =>
     <button key={entry.kind === 'action' ? entry.action.id : ''} onClick={() => onSelect(entry)}>Reference</button>)}</> : null }));
 vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ additionalCommands, onSelect }: { additionalCommands?: UnifiedCommand[]; onSelect(command: UnifiedCommand): void }) => h.showPluginChoices
   ? <>{additionalCommands?.map(command => <button key={command.name} onClick={() => onSelect(command)}>Reference</button>)}</> : null }));
+vi.mock('@/cindy-brain/useRemoteComposerGhosts', async (original) => {
+  const actual = await original<typeof import('@/cindy-brain/useRemoteComposerGhosts')>();
+  return { ...actual, useRemoteComposerGhosts: (...args: Parameters<typeof actual.useRemoteComposerGhosts>) => {
+    const result = actual.useRemoteComposerGhosts(...args);
+    return h.composerGhosts ? { ...result, ghosts: h.composerGhosts } : result;
+  } };
+});
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
 vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null) => {
@@ -155,6 +168,69 @@ it.each([['@', ''], ['/', ''], ['@', 'suffix'], ['/', 'suffix']] as const)('inse
   fireEvent.click(screen.getByRole('button', { name: 'Reference' }));
   expect(h.editor!.getText()).toBe(`<b>plain</b>${suffix}`);
   expect(h.editor!.getHTML()).not.toContain('<b>plain</b>');
+});
+
+it.each([
+  { input: '@|word rest', name: 'README.md', remaining: ' word rest' },
+  { input: '@fo|obar rest', name: 'folder', remaining: ' obar rest' },
+  { input: '@| word rest', name: 'README.md', remaining: '  word rest' },
+  { input: '@fo|obar rest', name: 'foobar', remaining: ' rest' },
+  { input: '@fo|obarbaz rest', name: 'foobar', remaining: ' obarbaz rest' },
+  // An agent's filename (`reviewer.md`) is one of its exact names.
+  { input: '@rev|iewer.md rest', name: 'reviewer', relPath: '.claude/agents/reviewer.md', remaining: ' rest', agent: true },
+  { input: '@fo|', name: 'folder', remaining: ' ' },
+  { input: '@fo|obar rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
+  // Drill-down keeps following draft text out of the path, with the caret still after `/`.
+  { input: '@|word rest', name: 'foobar', remaining: '@foobar/ word rest', directory: true },
+  // Re-selecting a directory whose `/` is already in the draft must not repeat the path.
+  { input: '@fo|obar/ rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
+  { input: '@foobar|/ rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
+  // A nested directory queried by its basename re-selects onto its full path.
+  { input: '@desktop|/ rest', name: 'desktop', relPath: 'apps/desktop', remaining: '@apps/desktop/ rest', directory: true },
+  { input: '@desk|top/ rest', name: 'desktop', relPath: 'apps/desktop', remaining: '@apps/desktop/ rest', directory: true },
+  // A plugin command placed at the start must not leave the typed name suffix behind.
+  // `name` is the plugin command; `plugin` is its display name. Whichever of the two is
+  // longer, the selected plugin consumes the full typed name it exactly completes.
+  { input: '@issu|es rest', name: 'issues', remaining: '$issues rest', plugin: 'Issues' },
+  { input: '@git|hub rest', name: 'github', remaining: '$github rest', plugin: 'Git' },
+  { input: '@git|hub rest', name: 'git', remaining: '$git rest', plugin: 'GitHub' },
+  // Tabs and windows are also found by URL and app name; those exact names complete too.
+  { input: '@https://exa|mple.com/docs rest', name: 'Docs', relPath: 'cindy://browser-tab/1?url=https%3A%2F%2Fexample.com%2Fdocs', remaining: ' rest', context: { type: 'browser-tab' as const, description: 'https://example.com/docs' } },
+  { input: '@Chro|me rest', name: 'Docs', relPath: 'cindy://desktop-window/42/7?app=Chrome', remaining: ' rest', context: { type: 'desktop-window' as const, description: 'Chrome' } },
+  { input: '@|word rest', name: null, remaining: 'word rest' },
+  // An action consumes the rest of its own typed label, but nothing unrelated.
+  { input: '@Col|laboration rest', name: null, label: 'Collaboration', remaining: 'rest' },
+])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, relPath, label, remaining, directory, plugin, agent, context }) => {
+  const run = vi.fn();
+  const ghost: GhostComposerEntry = { manifest: { id: name ?? 'unused', name: plugin ?? 'unused', command: name ?? undefined }, enabled: true };
+  if (plugin) h.composerGhosts = [ghost];
+  h.mentionEntry = name === null
+    ? { kind: 'action', action: { id: 'attach-files', label: label ?? 'Attach files', run } }
+    : plugin
+      ? { kind: 'resource', item: { type: 'plugin-command', name: ghost.manifest.name, relPath: name, pluginId: installedGhostStoragePart(ghost) } }
+      : context
+        ? { kind: 'resource', item: { type: context.type, name, relPath: relPath ?? name, description: context.description } }
+        : { kind: 'resource', item: { type: directory ? 'dir' : agent ? 'agent' : 'file', name, relPath: relPath ?? name } };
+  try {
+    render(<ChatInput {...props} sessionId={undefined} onSend={vi.fn()} />);
+    await waitFor(() => expect(h.editor).not.toBeNull());
+    const caret = input.indexOf('|');
+    await act(async () => {
+      h.editor!.commands.setContent({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: input.replace('|', '') }] }] });
+      h.editor!.commands.setTextSelection(caret + 1);
+    });
+    await waitFor(() => expect(screen.getByTestId('pick-mention')).toBeTruthy());
+    await act(async () => { fireEvent.click(screen.getByTestId('pick-mention')); });
+    const nodes = h.editor!.getJSON().content![0].content ?? [];
+    const doc = h.editor!.state.doc;
+    expect(doc.textBetween(0, doc.content.size, '', '')).toBe(remaining);
+    if (directory) expect(h.editor!.state.selection.from).toBe(remaining.indexOf(' ') + 1);
+    expect(nodes.filter(node => node.type === 'mentionChip')).toHaveLength(name === null || directory || plugin ? 0 : 1);
+    expect(run).toHaveBeenCalledTimes(name === null ? 1 : 0);
+  } finally {
+    h.mentionEntry = null;
+    h.composerGhosts = null;
+  }
 });
 
 // #8232, unit: the real composer Escape listener must not cancel a covered

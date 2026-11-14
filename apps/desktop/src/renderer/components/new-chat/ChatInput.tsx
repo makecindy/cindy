@@ -5413,58 +5413,44 @@ export function ChatInput({
     [editor, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger, pluginSlashChoices, pluginCompletionKey],
   );
 
-  const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
+  const resolveEffectiveAtRange = useCallback((replacementNames: readonly string[] = [], consumeFollowingWhitespace = true): { from: number; to: number } | null => {
     if (!editor || !effectiveAt) return null;
     const { from } = effectiveAt;
 
     // synthetic query 没有文档内触发符，替换范围由 transaction mapping 单独跟踪。
-    // 不能像 typed `@` 一样向后扫到空白，否则在已有单词中间激活并输入过滤词时
-    // 会把激活前就存在的单词后缀一起删除。
     if (effectiveAt.activation === 'synthetic') {
       const to = syntheticAtRangeEndRef.current;
       return to !== null && to >= from ? { from, to } : null;
     }
 
-    // Extend replace-range to the end of the complete query run (up to
-    // whitespace / chip boundary / end of paragraph). The caret may sit
-    // inside either a typed `@query` or a synthetic `query`; selecting an
-    // entry must not leave the suffix after the caret behind.
-    let $from;
-    try {
-      $from = editor.state.doc.resolve(from);
-    } catch {
-      return null;
-    }
-    const parent = $from.parent;
-    const parentStart = $from.start();
-    const triggerOffset = 1;
-    let runEnd = from + triggerOffset;
-    const offset = from - parentStart + triggerOffset;
-    let stopped = false;
-    parent.forEach((child, childOffset) => {
-      if (stopped || childOffset + child.nodeSize <= offset) return;
-      if (child.type.name === 'mentionChip' || !child.isText) {
-        stopped = true;
-        return;
-      }
-      const localStart = Math.max(0, offset - childOffset);
-      const text = child.text ?? '';
-      for (let i = localStart; i < text.length; i++) {
-        if (/\s/.test(text[i])) {
-          runEnd = parentStart + childOffset + i;
-          stopped = true;
-          return;
-        }
-      }
-      runEnd = parentStart + childOffset + text.length;
-    });
-    return { from, to: runEnd };
+    // The resolver stops at the first exact-length candidate, so try longer names
+    // first: the longest name the draft fully completes after the caret wins,
+    // whichever field (display name, command, path, `dir/`) it comes from.
+    const candidates = [...replacementNames].sort((a, b) => b.length - a.length);
+    return {
+      from,
+      to: resolveSlashCommandRunEnd(editor.state.doc, from, effectiveAt.query, candidates, { consumeFollowingWhitespace }),
+    };
   }, [editor, effectiveAt]);
 
   const insertAtResource = useCallback(
     (selectedItem: AtResourceItem) => {
       if (!editor || !effectiveAt) return;
-      const range = resolveEffectiveAtRange();
+      const directoryQuery = getAtDirectoryCompletionQuery(selectedItem);
+      // Slash-terminated directory candidates let re-selecting `@dir|/` replace the
+      // existing `/`, whether the draft holds the full path or only the basename.
+      const range = resolveEffectiveAtRange([
+        ...(directoryQuery ? [directoryQuery, `${selectedItem.name}/`] : []),
+        selectedItem.name,
+        selectedItem.name.replace(/\.md$/, ''),
+        selectedItem.relPath,
+        // An agent's filename (`reviewer.md`) is one of its exact names too.
+        ...(selectedItem.type === 'agent' ? [selectedItem.relPath.split('/').pop() ?? ''] : []),
+        // A tab is also found by its URL and a window by its app name; both are exact names.
+        ...((selectedItem.type === 'browser-tab' || selectedItem.type === 'desktop-window') && selectedItem.description
+          ? [selectedItem.description]
+          : []),
+      ], !directoryQuery);
       if (!range) return;
       const { from, to } = range;
       // `file-picker` remains in the shared AtResourceItem protocol for
@@ -5495,7 +5481,6 @@ export function ChatInput({
         closeAtPanel();
         return;
       }
-      const directoryQuery = getAtDirectoryCompletionQuery(selectedItem);
       if (directoryQuery) {
         // 合成「+」形态:查询词在面板搜索框里 —— 钻取改搜索框就行,不往编辑器正文塞
         // 路径文本(那会在选完文件后残留一段没人要的字);也不要把焦点从搜索框抢走,
@@ -5505,6 +5490,12 @@ export function ChatInput({
           setAtFocus(0);
           return;
         }
+        // Draft text right after the range stays out of the path: add a space, but keep
+        // the caret after `/` so the drill-down query stays `dir/`.
+        const after = editor.state.doc.resolve(to).nodeAfter;
+        const needsSeparator = !!after
+          && (after.isText ? !/^\s/.test(after.text ?? '') : after.type.name !== 'hardBreak');
+        const pathText = `@${directoryQuery}`;
         editor
           .chain()
           .focus()
@@ -5512,8 +5503,9 @@ export function ChatInput({
             tr.replaceWith(
               from,
               to,
-              editor.schema.text(`@${directoryQuery}`),
+              editor.schema.text(needsSeparator ? `${pathText} ` : pathText),
             );
+            if (needsSeparator) tr.setSelection(TextSelection.create(tr.doc, from + pathText.length));
             return true;
           })
           .run();
@@ -5572,7 +5564,10 @@ export function ChatInput({
         closeAtPanel();
         return;
       }
-      const range = resolveEffectiveAtRange();
+      const range = resolveEffectiveAtRange([
+        entry.action.label,
+        ...(entry.action.searchText ? [entry.action.searchText] : []),
+      ]);
       if (!range) return;
       // 打开面板下一级页面的动作不把焦点还给编辑器：TipTap 的 focus 延后执行，焦点落回
       // 编辑器时「+」弹层按焦点离开收起，刚打开的下一级页面会随之关掉。
