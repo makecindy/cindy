@@ -370,7 +370,13 @@ export function createAutoPermissionReviewer(
     // Risk-first models wave "low risk" steps through even when nothing at all was user-authored.
     // Decide that case here, after the Host attached any delegated task.
     if (!request.delegatedTask && request.action.kind !== 'read' && hasNoUserIntent(request.userIntent)) {
-      return { verdict: 'block', reason: 'No user request authorizes this action; only reads may run without one.' };
+      // 宿主写死的判定(没有调用模型):标 hostReason,让这条原因能进诊断 / UI 通道 ——
+      // 否则它会被当成模型自由文本过滤掉,用户只看到一句通用「被拦截」。
+      return {
+        verdict: 'block',
+        reason: 'No user request authorizes this action; only reads may run without one.',
+        hostReason: true,
+      };
     }
     const startedAt = Date.now();
     let prompt: string;
