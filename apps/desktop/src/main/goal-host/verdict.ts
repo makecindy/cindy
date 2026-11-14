@@ -15,7 +15,7 @@
  */
 
 /** 合法的裁决状态(与 directive.ts 里写给模型的约定一致)。 */
-export type GoalVerdictStatus = 'complete' | 'continue' | 'blocked';
+export type GoalVerdictStatus = 'complete' | 'continue' | 'blocked' | 'waiting';
 
 export interface GoalVerdict {
   status: GoalVerdictStatus;
@@ -29,7 +29,7 @@ export interface GoalVerdict {
   refinedObjective?: string;
 }
 
-const VALID_STATUS = new Set<GoalVerdictStatus>(['complete', 'continue', 'blocked']);
+const VALID_STATUS = new Set<GoalVerdictStatus>(['complete', 'continue', 'blocked', 'waiting']);
 
 /** 提取所有 fenced code block 的内部文本(```json 或裸 ```),保持出现顺序。 */
 function extractFencedBlocks(text: string): string[] {

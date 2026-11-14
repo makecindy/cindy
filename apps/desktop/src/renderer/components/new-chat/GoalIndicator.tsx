@@ -199,8 +199,11 @@ function GoalEditor({
 export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactElement | null {
   const { t } = useTranslation();
   const goal = useGoalStatus(sessionId);
-  // 实时运行时长:仅 active 时每秒 tick(非 active 冻结时长无意义,不显示也不计时)。
-  const active = goal?.status === 'active';
+  // waiting = active 的子态(模型在等会话外事件):不算"进行中",不 tick 时钟,
+  // 时长冻结在进入等待的那一刻。
+  const waiting = goal?.status === 'active' && goal?.waitingSince != null;
+  // 实时运行时长:仅 active(非 waiting)时每秒 tick(非 active 冻结时长无意义,不显示也不计时)。
+  const active = goal?.status === 'active' && !waiting;
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
@@ -215,13 +218,19 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
   // 账号从没被限流时说「用量受限 / X 点恢复」是假信息 —— 那个时刻只是"现在 + 60s 后
   // 重试", 不是任何额度重置点(review #844 codex P1)。
   const isCapacityBackoff = isGoalCapacityBackoff(goal.status, goal.lastReason);
-  const statusLabel = isCapacityBackoff
-    ? t('goal.status.capacityLimited')
-    : t(`goal.status.${goal.status}`);
+  const statusLabel = waiting
+    ? t('goal.status.waiting')
+    : isCapacityBackoff
+      ? t('goal.status.capacityLimited')
+      : t(`goal.status.${goal.status}`);
   // 只算一次: formatResetTime 内部会取 new Date()(判"是否今天"), 条件与插值各算一次不仅
   // 多余, 跨午夜那一刻两次结果还可能不一致(copilot 低置信提示; 双取是既有写法)。
   const resetTimeText = formatResetTime(goal.usageResetAt);
-  const elapsedMs = active ? Math.max(0, nowMs - goal.startedAt) : 0;
+  const elapsedMs = waiting
+    ? Math.max(0, (goal.waitingSince ?? goal.startedAt) - goal.startedAt)
+    : active
+      ? Math.max(0, nowMs - goal.startedAt)
+      : 0;
 
   return (
     <div
@@ -264,8 +273,8 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
           ? t('goal.turns', { used: goal.turnsUsed })
           : t('goal.turnsWithMax', { used: goal.turnsUsed, max: goal.maxTurns })}
       </span>
-      {/* 实时运行时长(仅 active 时每秒刷新) */}
-      {active && (
+      {/* 实时运行时长(active 每秒刷新;waiting 冻结在进入等待时刻) */}
+      {(active || waiting) && (
         <span
           className="shrink-0 tabular-nums"
           style={{ color: 'var(--text-tertiary)' }}
@@ -290,12 +299,12 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
           <Pause size={12} strokeWidth={2} />
         </button>
       )}
-      {/* 恢复(paused / blocked / usageLimited):保留计数继续推进 */}
-      {(goal.status === 'paused' || goal.status === 'blocked' || goal.status === 'usageLimited') && (
+      {/* 恢复 / 唤醒(paused / blocked / usageLimited 恢复;waiting 唤醒):保留计数继续推进 */}
+      {(goal.status === 'paused' || goal.status === 'blocked' || goal.status === 'usageLimited' || waiting) && (
         <button
           type="button"
-          aria-label={t('goal.resume')}
-          title={t('goal.resume')}
+          aria-label={t(waiting ? 'goal.wake' : 'goal.resume')}
+          title={t(waiting ? 'goal.wake' : 'goal.resume')}
           className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:opacity-80"
           style={{ color: 'var(--accent-cta-bg)' }}
           onClick={() => {
