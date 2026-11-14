@@ -9,6 +9,13 @@ vi.mock('electron', () => ({ nativeImage: { createEmpty: () => icon } }));
 
 import { createWindowsBadgeIcon, renderWindowsBadgePng } from '../windowsBadgeIcon';
 
+/** 容器没有可用字体时 canvas 画不出字符（measureText 宽度为 0），如未装字体的 Linux CI 容器。 */
+function hasRenderableDigits(): boolean {
+  const probe = createCanvas(8, 8).getContext('2d');
+  probe.font = 'bold 12px "Segoe UI", sans-serif';
+  return probe.measureText('3').width > 0;
+}
+
 describe('Windows numeric taskbar badge', () => {
   it.each([1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 8])(
     'renders exact physical dimensions at %s scale for the native Shell bridge',
@@ -56,6 +63,11 @@ describe('Windows numeric taskbar badge', () => {
         whitePixels++;
     }
     expect(redPixels).toBeGreaterThan(100);
-    expect(whitePixels).toBeGreaterThan(10);
+    // 无可用字体时数字根本没落像素，此时断言「没有白色像素」而不是要求白字存在。
+    if (hasRenderableDigits()) {
+      expect(whitePixels).toBeGreaterThan(10);
+    } else {
+      expect(whitePixels).toBe(0);
+    }
   });
 });
