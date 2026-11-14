@@ -16194,6 +16194,8 @@
       "claudeSubscriptionWorkspaceOverride": "La configuración de .claude de esta carpeta cambia adónde envía solicitudes Claude o cómo inicia sesión, por lo que no se puede usar la suscripción de Claude aquí. Elimina esa configuración o elige un modelo con puerta de enlace o clave de API",
       "deviceStillLoading": "El dispositivo remoto aún se está cargando. Espera",
       "remoteDefaultsLoadFailed": "No se pudo cargar la configuración del dispositivo remoto. Revisa la conexión; Cindy lo está reintentando.",
+      "branchRequiresWorktree": "La rama seleccionada no es la rama actual. Activa worktree o selecciona la rama actual.",
+      "branchCheckFailed": "No se pudo verificar la rama actual. Activa worktree para usar la rama seleccionada o revisa el proyecto e inténtalo de nuevo.",
       "worktreeMissingRepo": "No se puede crear un worktree: falta la raíz del repositorio del directorio actual",
       "worktreeRepoHint": "Vuelve a seleccionar el directorio de trabajo e inténtalo de nuevo cuando se actualice el indicador de carpeta de la esquina inferior derecha",
       "sessionInactive": "La sesión ya no está activa",

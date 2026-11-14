@@ -15965,6 +15965,8 @@
       "claudeSubscriptionWorkspaceOverride": "此工作目录之 .claude 设置改易 Claude 之上游地址或验证方式，故此处不可用 Claude 订阅。请除此诸设置，或择网关或 API Key 模型",
       "deviceStillLoading": "远程设备犹方载，请稍候",
       "remoteDefaultsLoadFailed": "不能读远程设备之配置。请察连接，Cindy 方再试。",
+      "branchRequiresWorktree": "所选分支与目前分支不同。请勾选 worktree，或选目前分支。",
+      "branchCheckFailed": "未能确认目前分支。请勾选 worktree 以用所选分支，或查验专案后重试。",
       "worktreeMissingRepo": "不能开 worktree：今之目录缺仓库之根",
       "worktreeRepoHint": "可再择一次工作目录，待右下角卷匣标识更新后再试",
       "sessionInactive": "差事已不复活跃",
