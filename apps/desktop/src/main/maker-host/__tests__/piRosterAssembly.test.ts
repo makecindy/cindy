@@ -51,6 +51,8 @@ vi.mock('../auth-adapters.js', () => ({
 
 vi.mock('../anthropic-compat-proxy-host.js', () => ({
   getClaudeEndpoint: () => 'http://127.0.0.1:9',
+  // This prompt-assembly fixture represents an already-running local proxy.
+  isAnthropicCompatProxyHandleReady: () => true,
 }));
 
 vi.mock('../claude-native-auth.js', () => ({
