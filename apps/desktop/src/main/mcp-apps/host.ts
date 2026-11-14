@@ -37,6 +37,7 @@ import {
   MCP_APPS_MAX_BYTES,
   MCP_APPS_MAX_REMOTE_BYTES,
 } from './protocol.js';
+import { OwnerScopedAppResourceCache } from './appResourceCache.js';
 
 // A fixed total budget: server progress may renew the View's idle timer, but
 // must not keep a Main-owned tool request alive indefinitely.
@@ -247,6 +248,10 @@ export class McpAppsHost {
     owner: object; sessionId: string; clientId: string; writer: ViewStateWriter;
   }>();
   private readonly connectionIds = new WeakMap<AppConnection, string>();
+  private readonly resourceCache = new OwnerScopedAppResourceCache<{
+    html: string; meta: import('@modelcontextprotocol/ext-apps').McpUiResourceMeta;
+    policy: ReturnType<typeof appCsp>;
+  }>();
   private sweepTimer?: ReturnType<typeof setInterval>;
   constructor(private readonly deps: McpAppsHostDeps) {}
 
@@ -465,10 +470,16 @@ export class McpAppsHost {
       const tool = record ? (await connection.tools(signal)).find((item) => item.name === record!.tool.name) : undefined;
       if (record && (!tool || uiToolUri(tool) !== resourceUri))
         throw new Error('MCP_APP_TOOL_UNAVAILABLE');
-      const loaded = await connection.resource(resourceUri, signal);
-      signal.throwIfAborted();
-      const resource = readAppResource(loaded.result, resourceUri, loaded.meta);
-      const policy = appCsp(resource.meta);
+      const resourceKey = JSON.stringify([serverId, serverRevision, config.plugin?.packageSha256, resourceUri]);
+      let resource = config.plugin ? this.resourceCache.get(owner, resourceKey) : undefined;
+      if (!resource) {
+        const loaded = await connection.resource(resourceUri, signal);
+        signal.throwIfAborted();
+        const parsed = readAppResource(loaded.result, resourceUri, loaded.meta);
+        resource = { ...parsed, policy: appCsp(parsed.meta) };
+        if (config.plugin) this.resourceCache.set(owner, resourceKey, resource);
+      }
+      const policy = resource.policy;
       if (config.plugin) {
         const allowed = new Set(config.plugin.domains);
         for (const domains of Object.values(policy.csp)) {

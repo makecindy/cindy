@@ -24,18 +24,43 @@ describe('classifyGhostVisibility namespace', () => {
 
   // BWG3 unit regression: repeated pre-dispatch checks use only the selected
   // physical installation, but removal/replacement/disable still take effect.
-  it('rechecks an exact installation without scanning unrelated plugins', () => {
+  it('rechecks an exact installation without scanning when the cache answers', () => {
     let current: InstalledGhost | undefined = enterprise;
-    const listGhosts = vi.fn(() => { throw new Error('full scan'); });
+    const listGhosts = vi.fn(() => [enterprise]);
     const exactDeps = { ...deps, listGhosts, findInstalledInstance: () => current };
     expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: true });
     current = { ...enterprise, enabled: false };
     expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
     current = { ...enterprise, approval: { state: 'approved', revision: 'replacement' } };
     expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
-    current = undefined;
-    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
     expect(listGhosts).not.toHaveBeenCalled();
+  });
+
+  // PR-F: a cold exact-instance cache must recover the same installation from
+  // one list scan; same-name copies remain subject to every identity check.
+  it('falls back to one exact list scan when the instance cache is empty', () => {
+    const listGhosts = vi.fn(() => [enterprise]);
+    const exactDeps = { ...deps, listGhosts, findInstalledInstance: () => undefined };
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: true, ghost: enterprise });
+    expect(listGhosts).toHaveBeenCalledOnce();
+  });
+
+  it('reports not found after one fallback scan when the instance is absent', () => {
+    const listGhosts = vi.fn(() => []);
+    const exactDeps = { ...deps, listGhosts, findInstalledInstance: () => undefined };
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+    expect(listGhosts).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['wrong instance key', { ...enterprise, namespace: 'other' }],
+    ['wrong directory', { ...enterprise, dir: '/tmp/replaced/helper' }],
+    ['wrong approval', { ...enterprise, approval: { state: 'approved', revision: 'replacement' } }],
+  ])('does not accept a same-name replacement after fallback (%s)', (_reason, replacement) => {
+    const listGhosts = vi.fn(() => [replacement as InstalledGhost]);
+    const exactDeps = { ...deps, listGhosts, findInstalledInstance: () => undefined };
+    expect(classifyInstalledGhostVisibility(enterprise, null, exactDeps)).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+    expect(listGhosts).toHaveBeenCalledOnce();
   });
 
   it('returns GHOST_AMBIGUOUS when the same ghostId has two instances and namespace is omitted', () => {

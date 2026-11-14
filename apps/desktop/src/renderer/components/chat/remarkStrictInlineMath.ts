@@ -41,10 +41,14 @@ const remarkStrictInlineMath: Plugin<[], Root> = () => {
       const raw = source.slice(start, end);
       // raw 形如 "$...$" / "$$...$$";剥定界符取内側原文(node.value 已被
       // remark-math strip 过 padding,判首尾空白必须用原文)。
-      const inner = raw.replace(/^\$+/, '').replace(/\$+$/, '');
+      // 双 dollar 行内(`$$ a + b $$`)没有货币歧义,对齐 mobile 允许首尾空白与后接数字,
+      // 只排除纯空白、跨行与反引号;单 dollar 沿用 Pandoc 紧贴规则。
+      const isDoubleDollar = raw.startsWith('$$') && raw.endsWith('$$') && raw.length >= 4;
+      const inner = isDoubleDollar ? raw.slice(2, -2) : raw.slice(1, -1);
       const nextChar = source[end] ?? '';
-      const loose =
-        /^\s|\s$/.test(inner) || inner.includes('\n') || inner.includes('`') || /^\d/.test(nextChar);
+      const loose = isDoubleDollar
+        ? !inner.trim() || inner.includes('\n') || inner.includes('`')
+        : /^\s|\s$/.test(inner) || inner.includes('\n') || inner.includes('`') || /^\d/.test(nextChar);
       if (!loose) return;
       const text: Text = { type: 'text', value: raw };
       parent.children[index] = text;

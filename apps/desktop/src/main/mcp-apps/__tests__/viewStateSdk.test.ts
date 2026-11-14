@@ -108,6 +108,27 @@ it('cancels a queued flush when teardown happens before its request is sent', as
   expect(f.save).not.toHaveBeenCalled();
 });
 
+it('flushes the latest debounced edit during host teardown before disposing', async () => {
+  const f = await fixture();
+  f.state.set({ version: 1, page: 8 });
+  await f.app.onteardown?.({} as never, {} as never);
+  expect(f.save).toHaveBeenCalledOnce();
+  expect(f.save).toHaveBeenCalledWith({ version: 1, page: 8 });
+  await expect(f.state.flush()).rejects.toThrow('VIEW_STATE_DISPOSED');
+});
+
+it('does not hold teardown open when the final write exceeds its bounded budget', async () => {
+  const f = await fixture();
+  const pending = gate();
+  f.save.mockImplementationOnce(async () => { await pending.promise; return {}; });
+  f.state.set({ version: 1, page: 9 });
+  const tearingDown = f.app.onteardown?.({} as never, {} as never);
+  await vi.advanceTimersByTimeAsync(900);
+  await tearingDown;
+  expect(f.save).toHaveBeenCalledOnce();
+  pending.resolve();
+});
+
 // Review regression / unit: a second caller on one App must see the confirmed
 // page-local draft, not the immutable initialization context, and share its writer.
 it('shares the current value and writer when createViewState is called again on the same App', async () => {

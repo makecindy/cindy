@@ -39,7 +39,7 @@ describe('task-bound MCP App operations', () => {
       ),
     ).toEqual({ viewId: 'view', transport: 'sandbox', prefersBorder: true });
     expect(f.api.open).toHaveBeenCalledWith('renderer:1', 'task', 'card', { theme: 'dark' }, undefined);
-    expect(f.local.supply).toHaveBeenCalledWith(f.document, 'renderer:1');
+    expect(f.local.supply).toHaveBeenCalledWith(f.document, 'renderer:1', { theme: 'dark' });
     await handleMcpAppOperation(f.host, 'device:phone', 'task', {
       op: 'poll',
       viewId: 'view',

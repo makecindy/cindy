@@ -2,9 +2,21 @@ import { defineConfig } from 'vitest/config';
 import path from 'node:path';
 import { desktopClientBuildEnv } from '../../scripts/shared/client-endpoint-build-env.mjs';
 import { parseVitestCliExclude } from './src/test/vitest/cliExclude';
+import FileTimingReporter, { FILE_TIMINGS_ENV } from './src/test/vitest/fileTimingReporter';
+import { createTimingSequencer } from './src/test/vitest/timingSequencer';
 
 const clientBuildEnv = desktopClientBuildEnv({ allowEnvOverride: false });
 const cliTestExclude = parseVitestCliExclude(process.argv.slice(2));
+// CI 设置 XDT_VITEST_FILE_TIMINGS 时额外写出每个测试文件的耗时，供之后按耗时分片。
+// 一旦显式配置 reporters,Vitest 不再自动追加 github-actions,所以这里照原样补回；
+// 未设置时不写 reporters,本地与其余入口保持 Vitest 默认输出。
+const fileTimingReporters = process.env[FILE_TIMINGS_ENV]
+  ? [
+    'default' as const,
+    ...(process.env.GITHUB_ACTIONS === 'true' ? ['github-actions' as const] : []),
+    new FileTimingReporter(),
+  ]
+  : undefined;
 const desktopTestInclude = [
   'src/main/__tests__/**/*.test.ts',
   'src/main/**/__tests__/**/*.test.ts',
@@ -69,6 +81,11 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    ...(fileTimingReporters ? { reporters: fileTimingReporters } : {}),
+    // CI 的 --shard 按已提交的逐文件耗时切分，片内顺序不变；不分片时完全不受影响。
+    sequence: {
+      sequencer: createTimingSequencer(path.resolve(__dirname, 'src/test/vitest/fileTimings.json')),
+    },
     setupFiles: ['./src/test/vitest/user-data-dir-setup.ts'],
     // Main-process tests do real IO (loopback HTTP servers, git subprocesses,
     // heavy module imports through the vite-node transform). On Windows those

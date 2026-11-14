@@ -13,6 +13,8 @@
  * 也覆盖 shellResolver 的真集成（不 mock）：要求 process.env.SHELL 兜底链能跑通。
  */
 
+import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IPty } from 'node-pty';
 import type { WebContents } from 'electron';
@@ -355,8 +357,11 @@ describe('PtyManager host process lifecycle', () => {
 
 // 需求 22 的作用域与断开恢复不能仅由 UI 推送测试覆盖；同一生产服务、fake PTY、unit。
 describe('HostTerminalService caller ownership', () => {
+  // start() realpaths the cwd. A literal POSIX tmp path resolves to <drive>:\tmp on Windows, which
+  // exists only when an earlier test in the same shard happened to create it; use a real directory.
+  const terminalCwd = realpathSync(tmpdir());
   function scope(key: string, current: () => boolean = () => true): HostTerminalScope {
-    return { key, revision: 'r1', pluginId: key, defaultCwd: '/tmp', environment: { PATH: '/usr/bin' },
+    return { key, revision: 'r1', pluginId: key, defaultCwd: terminalCwd, environment: { PATH: '/usr/bin' },
       assertCurrent: () => { if (!current()) throw new Error('TERMINAL_SCOPE_CHANGED'); } };
   }
   function service() {
@@ -497,13 +502,13 @@ describe('HostTerminalService caller ownership', () => {
       approvedHostToolGroups: ['terminal'], manifest: { agent: { hostTools: ['terminal'] } } } as InstalledGhost;
     let attested = false;
     const call = createTerminalToolExecutor({ service: host, owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
-      getGhost: () => ghost, getSession: () => undefined, pluginDirectory: () => '/tmp',
+      getGhost: () => ghost, getSession: () => undefined, pluginDirectory: () => terminalCwd,
       pluginCall: () => attested ? { caller, server: 'cindy_helper', tool: 'terminal_start', argsJson: '{}', assertCurrent() {} } : undefined });
     const context = { agentKind: 'codex', workingDir: '', hostCaller: caller };
     await expect(call.call(context, 'terminal_start', {})).rejects.toThrow('PERMISSION_DENIED');
     expect(allSpawns).toHaveLength(0);
     attested = true;
-    const result = await call.call(context, 'terminal_start', { cwd: '/tmp' });
+    const result = await call.call(context, 'terminal_start', { cwd: terminalCwd });
     expect(result).toMatchObject({ scope: 'local', job: { id: expect.any(String) } });
     const resumed = await call.call({ ...context }, 'terminal_list', {});
     expect(resumed.jobs).toMatchObject([{ id: (result.job as { id: string }).id }]);
@@ -514,14 +519,14 @@ describe('HostTerminalService caller ownership', () => {
   it('binds ordinary tasks to the live Session instance and refuses local execution for SSH contexts', async () => {
     const host = service();
     const listeners = new Set<(status: string) => void>();
-    const session = { instanceId: 'live', workDir: '/tmp',
+    const session = { instanceId: 'live', workDir: terminalCwd,
       onStatusChange: (listener: (status: string) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
     const call = createTerminalToolExecutor({ service: host, owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
-      getGhost: () => null, getSession: () => session, pluginDirectory: () => '/tmp', pluginCall: () => undefined });
-    await expect(call.call({ agentKind: 'codex', workingDir: '/tmp', sessionId: 's', sessionInstanceId: 'old' }, 'terminal_start', {})).rejects.toThrow('SESSION_REQUIRED');
+      getGhost: () => null, getSession: () => session, pluginDirectory: () => terminalCwd, pluginCall: () => undefined });
+    await expect(call.call({ agentKind: 'codex', workingDir: terminalCwd, sessionId: 's', sessionInstanceId: 'old' }, 'terminal_start', {})).rejects.toThrow('SESSION_REQUIRED');
     await expect(call.call({ agentKind: 'pi', workingDir: '/remote', sessionId: 's', remoteHostId: 'ssh' }, 'terminal_start', {})).rejects.toThrow('REMOTE_TERMINAL_UNSUPPORTED');
     expect(allSpawns).toHaveLength(0);
-    expect(await call.call({ agentKind: 'codex', workingDir: '/ignored', sessionId: 's' }, 'terminal_start', {})).toMatchObject({ job: { cwd: expect.stringMatching(/tmp$/) } });
+    expect(await call.call({ agentKind: 'codex', workingDir: '/ignored', sessionId: 's' }, 'terminal_start', {})).toMatchObject({ job: { cwd: terminalCwd } });
     for (const listener of listeners) listener('active');
     expect(lastSpawn!.__killed).toBe(false);
     for (const listener of listeners) listener('closed');

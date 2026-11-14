@@ -315,7 +315,7 @@ export function registerMcpAppsIpc(
                     throw new Error('MCP_APP_SESSION_UNAVAILABLE');
                 }, scope ? { title: scope.session.title, workingDir: scope.session.workingDir, model: scope.session.model } : undefined);
               },
-              supply: (document, boundCaller) =>
+              supply: (document, boundCaller, hostContext) =>
                 supplyMcpAppDocument(document, boundCaller, (input) =>
                   handleMcpAppFrameOperation(
                     host,
@@ -327,8 +327,7 @@ export function registerMcpAppsIpc(
                       assertMcpAppDocumentCaller(document.viewId, boundCaller);
                       await shell.openExternal(url);
                     },
-                  ),
-                ),
+                  ), undefined, hostContext),
             },
       );
     } catch (error) {

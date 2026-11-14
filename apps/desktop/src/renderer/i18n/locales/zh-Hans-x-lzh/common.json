@@ -16540,6 +16540,8 @@
             "title": "仓库之变",
             "description": "连 Cindy GitHub App，评审或 CI 有变，则更新所随之 PR。",
             "connected": "已连 {{login}} · 所察仓库 {{count}} 个",
+            "syncing": "正同步仓库…",
+            "finishInBrowser": "请于 GitHub 设妥仓库，再返 Cindy。",
             "missing": "请核此仓之 App 安装及访问权限：{{repositories}}",
             "error": "未能验其连接，请重试。",
             "repositories": "择仓库",

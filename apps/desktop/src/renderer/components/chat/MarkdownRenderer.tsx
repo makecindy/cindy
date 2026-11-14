@@ -33,6 +33,7 @@ import rehypeSlug from 'rehype-slug';
 import 'katex/dist/katex.min.css';
 import remarkTruncateCjkUrls from './remarkTruncateCjkUrls';
 import remarkStrictInlineMath from './remarkStrictInlineMath';
+import { normalizeDisplayMathFences } from './normalizeDisplayMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
@@ -275,7 +276,8 @@ export function normalizeMarkdownRendererContent(
   content: string,
   preserveLineCount = false,
 ): string {
-  return normalizeMathDelimiters(content, { preserveLineCount });
+  const normalized = normalizeMathDelimiters(content, { preserveLineCount });
+  return preserveLineCount ? normalized : normalizeDisplayMathFences(normalized);
 }
 /**
  * 聊天正文里一切「可点」的行内元素共用这一套外观:**正文色 + 常显下划线**。

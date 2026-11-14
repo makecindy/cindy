@@ -16540,6 +16540,8 @@
             "title": "저장소 이벤트",
             "description": "Cindy GitHub App을 연결하면 리뷰나 CI가 변경될 때 추적 중인 PR이 업데이트됩니다.",
             "connected": "{{login}} 계정으로 연결됨 · 저장소 {{count}}개 추적 중",
+            "syncing": "저장소 동기화 중…",
+            "finishInBrowser": "GitHub에서 저장소 설정을 완료한 후 Cindy로 돌아오세요.",
             "missing": "다음 저장소의 App 설치 및 접근 권한을 확인하세요: {{repositories}}",
             "error": "연결을 확인하지 못했습니다. 다시 시도하세요.",
             "repositories": "저장소 선택",

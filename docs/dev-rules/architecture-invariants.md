@@ -73,15 +73,29 @@ kind 隐藏）；根横排里包着 `chat-main` 的那块是唯一的弹性区�
 
 ## 5. 共用主体与两个启动器（桌面装配、Node Host）
 
-任务、账号、插件、调度等业务主体由桌面和 Node Host（`apps/host`）共用，只写一份：
+任务、账号、插件、调度等主进程逻辑由桌面和 Node Host（`apps/host`）共用一份，目标见
+[Host 文档的“目标”](../host/README.md#目标)；迁移不能改变桌面行为：
 
 - **共用主体不直接依赖 Electron。** 需要窗口、钥匙串、原生对话框等平台能力时，由主体声明
-  端口（工厂参数，例如 `createCodexProxyHost(ports)`），平台自己注入。
+  端口（工厂参数，例如 `createCodexProxyHost(ports)`），由平台注入。端口在调用时才取值：写成
+  `(...args) => fn(...args)` 这样的转调，不要在模块加载时把函数本身存下来。
 - **桌面装配放在 `*.desktop.ts`。** 这类文件可以 import `electron`，只负责把桌面实现绑定到
   端口；Host 在 `apps/host` 里绑定自己的实现。共用主体里不要再 import `*.desktop.ts`。
+- **已成对的文件一起维护。** 桌面文件与 `*Core.ts` 等共用主体成对时，新逻辑写进主体，桌面只做接线。
 - **给共用主体新增依赖或端口，两个启动器都要接。** 只改桌面装配，桌面的类型检查和测试都会
   通过，Host 却要到运行时才报错。
 - **改完共用主体运行 Host 的测试和类型检查：** `pnpm --filter @cindy/host test` 与
   `pnpm --filter @cindy/host typecheck`；CI 会在相关改动上执行同样的两项。
 
-Host 的实验范围与已知缺口见 [docs/host/headless-runtime-plan.md](../host/headless-runtime-plan.md)。
+测试不读取运行者真实的个人目录，见[凭证不入仓](./credentials-and-local-storage.md#凭证不入仓)；
+此外，取个人目录的地方给替身（如 `os.homedir()` 的替身）并在用例结束时复原，不要只改环境变量
+`HOME`：它在 vitest 的 threads 池下不改变 `os.homedir()` 的结果，测试也不要依赖某一种运行池。
+读源码的断言放 guard 层。
+
+2026-11 起，个人版迁移会调整溢出恢复、自动续跑、发送前检查与引擎切换、插件运行时钩子、
+引擎二进制等入口（迁移完成后删除本段）。在这些区域做大改前，请先开 issue 或在迁移相关的 PR
+下说明，当前在动哪些入口见个人版迁移放行表。
+
+Host 的实验范围与已知缺口见 [docs/host/headless-runtime-plan.md](../host/headless-runtime-plan.md)；
+迁移进度与差异见 [Host 文档入口](../host/README.md) 和
+[个人版迁移放行表](../host/personal-migration-release-table.md)。

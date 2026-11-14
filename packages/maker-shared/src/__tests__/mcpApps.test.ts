@@ -5,7 +5,11 @@ import { Script } from 'node:vm';
 import { mcpAppSandboxDocument, mcpAppFrameUrlAllowed, mcpAppHistoryText, parseMcpAppRecord, parseMcpAppHistory, projectMcpAppContent } from '../mcpApps.js';
 const coreParserLoads = parserLoads.count;
 let withHostAppSdk: typeof import('../mcpAppSdk.js').withHostAppSdk;
-beforeAll(async () => { ({ withHostAppSdk } = await import('../mcpAppSdk.js')); });
+let parse: typeof import('parse5').parse;
+beforeAll(async () => {
+  ({ withHostAppSdk } = await import('../mcpAppSdk.js'));
+  ({ parse } = await import('parse5'));
+});
 it('keeps the HTML parser out of the core MCP Apps import', () => { expect(coreParserLoads).toBe(0); });
 describe('MCP Apps cross-platform document contract', () => {
   function proxy(resourceUrl?: string, requestedUrl = resourceUrl) {
@@ -284,4 +288,26 @@ it.each([
     scopes: { '/page/': { '@cindy/ext-apps': '/scoped.js' } } };
   const html = '<script type="importmap">' + JSON.stringify(map) + '</script>';
   expect(withoutRuntime(withHostAppSdk(html, sdkUrl, { coreUrl: 'https://view.example/core.js', reactUrl: 'https://view.example/react.js' }))).toBe(html);
+});
+
+// Optional theme placement reuses SDK parsing. Removing the marker must leave
+// the default (including Mobile) document bytes unchanged, even after map edits.
+it.each([
+  '<!doctype html><head><script type="importmap">{"imports":{"chart":"/chart.js"}}</script><script>const tpl="</head><head>";</script></head><body>App',
+  '<!doctype html><head><style>:root{--text:"</head>"}</style><body>App',
+  '<!doctype html><script>window.ok=1</script><body>App',
+  '<!doctype html><head></head><body>App',
+  '<!doctype html><body>App',
+  '\uFEFF \n<!-- prefix --><!doctype html><body>App',
+])('places an optional marker at the parsed head end without changing default output: %s', (html) => {
+  const marker = '<!--test-head-end-->';
+  const plain = withHostAppSdk(html, sdkUrl);
+  const marked = withHostAppSdk(html, sdkUrl, undefined, marker);
+  expect(marked.replace(marker, '')).toBe(plain);
+  const parsed = parse(marked.replace(/^\uFEFF/, ''));
+  expect(parsed.mode).toBe('no-quirks');
+  const root = parsed.childNodes.find(node => node.nodeName === 'html');
+  const head = root && 'childNodes' in root ? root.childNodes.find(node => node.nodeName === 'head') : undefined;
+  expect(head && 'childNodes' in head ? head.childNodes.at(-1) : undefined)
+    .toMatchObject({ nodeName: '#comment', data: 'test-head-end' });
 });

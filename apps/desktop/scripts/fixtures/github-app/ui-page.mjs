@@ -9,6 +9,8 @@ export default {
     loading: { about: 'Initial status check does not offer reconnect', data: { loading: true } },
     default: { about: 'Connect a GitHub identity before selecting repositories', data: {} },
     connected: { about: 'Connected identity and selected repositories', data: { login: 'example-user', repositories: ['example/project'] } },
+    'installation-return': { about: 'Returning from GitHub waits for repository sync before displaying the count',
+      viewport: { width: 320, height: 320 }, data: { login: 'example-user', repositories: [], installationReturn: true } },
     missing: { about: 'A followed repository needs installation or access', viewport: { width: 320, height: 440 },
       data: { login: 'example-user', repositories: [], unavailable: ['example/' + 'longrepository'.repeat(7)] } },
     error: { about: 'Connection failure offers retry', data: { failed: true } },
@@ -18,6 +20,18 @@ export default {
   async check(page, ui) {
     const key = 'ccAgent.gitContext.pr.setup.app.';
     assert.ok(await page.getByText(await ui.t(key + 'title'), { exact: true }).isVisible());
+    if (ui.case === 'installation-return') {
+      await page.getByRole('button', { name: await ui.t(key + 'repositories'), exact: true }).click();
+      await page.getByText(await ui.t(key + 'finishInBrowser'), { exact: true }).waitFor();
+      await ui.capture('browser');
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await page.getByText(await ui.t(key + 'syncing'), { exact: true }).waitFor();
+      assert.equal(await page.getByText(await ui.t(key + 'connected', { login: 'example-user', count: 0 }), { exact: true }).count(), 0);
+      await ui.capture('syncing');
+      await page.evaluate(() => window.finishGithubAppSync());
+      await page.getByText(await ui.t(key + 'connected', { login: 'example-user', count: 1 }), { exact: true }).waitFor();
+      return;
+    }
     if (ui.case === 'failed-refresh') {
       await page.getByRole('button', { name: await ui.t(key + 'connect'), exact: true }).waitFor();
       await page.evaluate(() => window.dispatchEvent(new Event('focus')));

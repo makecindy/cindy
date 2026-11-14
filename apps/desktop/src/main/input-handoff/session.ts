@@ -215,6 +215,26 @@ const WINDOW_WATCH_MS = 2000;
 const FIELDS_GONE_READS = 3;
 const WINDOW_GONE_READS = 2;
 
+/** Which page a step is on: its window title and address (a page can keep its address and change its title). */
+const pageOf = (step: ExtractedStep): string => JSON.stringify([step.source.window ?? '', step.url ?? '']);
+
+/**
+ * A form the flow moved on to whose ordinary fields all have content already (a settings page after a
+ * passkey or a key was accepted): nothing there waits for the owner. The page the agent pointed at, and
+ * the form the owner is answering, are never judged this way: a field with content can still be replaced.
+ */
+const settledForm = (step: ExtractedStep, current: ExtractedStep | null): boolean =>
+  !!current && formFields(step) !== formFields(current) && !step.signIn && !step.deviceCode && step.shown.length > 0 &&
+  step.shown.every((control) => control.kind === 'text' && control.filled && control.contentType !== 'password' &&
+    control.contentType !== 'one-time-code');
+// Generated ids bind actions to the latest snapshot; they are not form identity. Navigation,
+// headings and field order can change without moving on from the form being answered.
+const formFields = (step: ExtractedStep): string => JSON.stringify(step.shown
+  .filter((control) => control.kind === 'text')
+  .map((control) => JSON.stringify([control.label, control.contentType]))
+  .sort());
+const askingNothing = (step: ExtractedStep): ExtractedStep => ({ ...step, shown: [] });
+
 /** What the owner would be asked, ignoring what they typed; the ids bind an open form to its fields. */
 const fieldShape = (step: ExtractedStep): string =>
   JSON.stringify(step.shown.map((control) => (control.kind === 'text'
@@ -532,12 +552,13 @@ export class InputHandoffSession {
     if (outcome !== 'origin_changed') this.submissions++;
     if (ok) this.answeredOn = actor ?? this.answeredOn;
     try {
-      const next = await this.awaitSettled(before.signature, before.windows);
+      const settled = await this.awaitSettled(before.signature, before.windows);
       if (this.ended) return true;
-      if (next === 'ended') {
+      if (settled === 'ended') {
         this.end('succeeded', 'detected');
         return true;
       }
+      const next = settledForm(settled, current) ? askingNothing(settled) : settled;
       if (outcome !== 'origin_changed') this.stepNumber++;
       if (!ok) this.failure = outcome === 'origin_changed' ? 'origin_changed' : 'action_failed';
       if (outcome === 'origin_changed' && !actionable(next)) {
@@ -1092,8 +1113,9 @@ export class InputHandoffSession {
     this.windowGoneReads = 0;
     if (window.minimized) return;
     if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
-    const step = await this.read().catch(() => null);
-    if (!step || step.pageMissing || !this.watching()) return;
+    const read = await this.read().catch(() => null);
+    if (!read || read.pageMissing || !this.watching()) return;
+    const step = settledForm(read, this.step) ? askingNothing(read) : read;
     // Answering on a picture because nothing could be read: now something can.
     if (this.picture) {
       if (actionable(step)) this.present(step, true);
@@ -1213,8 +1235,16 @@ export class InputHandoffSession {
    */
   private async readFirstStep(restored: boolean): Promise<ExtractedStep | null> {
     const deadline = this.now() + (restored ? RESTORED_PAGE_WAIT_MS : BROWSER_PAGE_WAIT_MS);
+    /** The page the agent pointed at, once it read the same twice (drawn, not still loading). */
+    let shown: ExtractedStep | null = null;
+    let previous: ExtractedStep | null = null;
     for (;;) {
       const step = await this.read().catch(() => null);
+      // The wait is for that page to draw, not for the next one: a page that moved on meanwhile
+      // (a passkey accepted, a redirect) is the agent's to read again, not the owner's step.
+      if (restored && shown && step && !step.pageMissing && pageOf(step) !== pageOf(shown)) return shown;
+      if (restored && step && !step.pageMissing && readable(step) && step.signature === previous?.signature) shown = step;
+      previous = step;
       const waiting = restored ? !step || !actionable(step) : !!step?.pageMissing;
       if (!waiting || this.ended || this.now() >= deadline) return step;
       await this.sleep(350);

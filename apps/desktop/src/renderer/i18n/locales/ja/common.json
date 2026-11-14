@@ -16540,6 +16540,8 @@
             "title": "リポジトリのイベント",
             "description": "Cindy GitHub App を接続すると、レビューや CI の変更時に追跡中の PR が更新されます。",
             "connected": "{{login}} として接続済み · {{count}} 件のリポジトリを追跡中",
+            "syncing": "リポジトリを同期しています…",
+            "finishInBrowser": "GitHub でリポジトリの設定を完了してから Cindy に戻ってください。",
             "missing": "次のリポジトリの App インストールとアクセス権を確認してください：{{repositories}}",
             "error": "接続を確認できませんでした。もう一度お試しください。",
             "repositories": "リポジトリを選択",

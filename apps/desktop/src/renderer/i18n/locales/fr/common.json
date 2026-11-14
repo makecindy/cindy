@@ -16776,6 +16776,8 @@
             "title": "Événements des dépôts",
             "description": "Connectez la GitHub App de Cindy pour actualiser les PR suivies lorsque les revues ou la CI changent.",
             "connected": "Connecté en tant que {{login}} · Dépôts suivis : {{count}}",
+            "syncing": "Synchronisation des dépôts…",
+            "finishInBrowser": "Terminez la configuration des dépôts sur GitHub, puis revenez à Cindy.",
             "missing": "Vérifiez l’installation de l’App et les droits d’accès à : {{repositories}}",
             "error": "Impossible de vérifier la connexion. Réessayez.",
             "repositories": "Choisir les dépôts",

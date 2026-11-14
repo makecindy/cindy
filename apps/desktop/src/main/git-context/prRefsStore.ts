@@ -10,7 +10,7 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
-import { and, asc, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
 
 import { getDbClient, getCurrentDbClientUserId } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
@@ -40,6 +40,21 @@ export interface SessionPrRef extends PrRef {
 
 /** 只有这两类角色的文本参与提取——tool_result 里的 PR 列表是噪音(详见 prRefExtractor)。 */
 const SCANNED_ROLES = new Set(['user', 'assistant']);
+
+/**
+ * Reorder writes small positive ordinals; older add paths wrote Unix milliseconds.
+ * Those automatic timestamps must not outrank later message mentions. Interpret
+ * them as the default priority on read so existing records recover without a
+ * data migration. A trillion entries is outside any supported reorder group.
+ */
+function manualPrPriority() {
+  return sql<number>`case when ${sessionPrRefs.priority} >= 1000000000000 then 0 else ${sessionPrRefs.priority} end`;
+}
+
+/** Export the same effective priority used by SQL ordering for clients that re-sort. */
+function prRefColumns() {
+  return { ...getTableColumns(sessionPrRefs), priority: manualPrPriority().as('priority') };
+}
 
 /** PR 引用有变化时广播 renderer 的回调,由 ipc.ts 注入(解耦 Electron)。 */
 let onRefsChanged: ((sessionId: string) => void) | null = null;
@@ -376,12 +391,12 @@ async function reconcilePrRefsForSession(
 export async function listAllPrRefs(): Promise<SessionPrRef[]> {
   const db = getDbClient().drizzle;
   const rows = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(and(isNull(sessionPrRefs.removedAt), eq(sessionPrRefs.associationSource, 'explicit')))
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(sessionPrRefs.priority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     )
     .limit(2000);
@@ -392,7 +407,7 @@ export async function listAllPrRefs(): Promise<SessionPrRef[]> {
 export async function listPrRefs(sessionId: string): Promise<SessionPrRef[]> {
   const db = getDbClient().drizzle;
   const rows = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(
       and(
@@ -403,7 +418,7 @@ export async function listPrRefs(sessionId: string): Promise<SessionPrRef[]> {
     )
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(sessionPrRefs.priority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     );
   return rows.map(rowToSessionPrRef);
@@ -484,7 +499,6 @@ async function managePrRefsWithinWrite(
     .select()
     .from(sessionPrRefs)
     .where(eq(sessionPrRefs.sessionId, sessionId));
-  const nextPriority = rows.reduce((value, row) => Math.max(value, row.priority + 1), Date.now());
   if (action.action === 'add') {
     if (action.url.length > 2048) throwIpcError('INVALID_PARAMS', 'PR URL too long');
     let url: URL;
@@ -532,7 +546,7 @@ async function managePrRefsWithinWrite(
           manuallyAdded: true,
           associationSource: 'explicit',
           associationOrigin: origin,
-          priority: nextPriority,
+          priority: 0,
         });
     }
   } else if (action.action === 'reorder') {
@@ -603,12 +617,12 @@ async function managePrRefsWithinWrite(
     await db.update(sessionPrRefs).set(patch).where(eq(sessionPrRefs.id, row.id));
   }
   const result = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(eq(sessionPrRefs.sessionId, sessionId))
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(sessionPrRefs.priority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     );
   if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement, useEffect, useImperativeHandle } from 'react';
+import { act, createElement, useEffect, useImperativeHandle, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Script } from 'node:vm';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   appStateListeners: new Set<(state: string) => void>(),
   surfaceAvailable: true,
   mounts: 0,
+  webviews: [] as Array<any>,
 }));
 vi.mock('../session/NativeMcpAppSurface', () => ({
   get mcpAppSurfaceAvailable() { return state.surfaceAvailable; },
@@ -41,8 +42,14 @@ vi.mock('react-native', () => ({
 }));
 vi.mock('react-native-webview', () => ({
   WebView: ({ ref, ...props }: any) => {
+    const index = useRef<number | undefined>(undefined);
+    if (index.current === undefined) index.current = state.webviews.length;
+    state.webviews[index.current] = props;
     state.props = props;
-    useEffect(() => { ++state.mounts; }, []);
+    useEffect(() => {
+      ++state.mounts;
+      return () => { state.webviews[index.current!] = undefined; };
+    }, []);
     useImperativeHandle(ref, () => ({ injectJavaScript: state.inject }));
     return createElement('div', { 'data-testid': 'mcp-webview' });
   },
@@ -81,6 +88,7 @@ vi.mock('@/theme', () => {
 });
 import { McpAppCard } from '../session/McpAppCard';
 import { McpAppViewsProvider } from '../session/McpAppViews';
+import { __testing as authOwnerTesting, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 const doc = {
   viewId: 'view',
   html: '<script>window.app=true</script>',
@@ -97,11 +105,15 @@ const nativeDocument = {
 };
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
+let ownerTestCounter = 0;
 const render = (children: React.ReactNode) => root.render(<McpAppViewsProvider>{children}</McpAppViewsProvider>);
 beforeEach(() => {
   vi.useFakeTimers();
+  authOwnerTesting.reset();
+  setMobileAuthOwner(`mcp-test-${++ownerTestCounter}`);
   state.random = 0;
   state.mounts = 0;
+  state.webviews = [];
   state.surfaceAvailable = true;
   state.appStateListeners.clear();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
@@ -264,6 +276,43 @@ it.each(['inactive', 'parent-unmount'])('keeps the same live WebView until teard
     .toEqual([expect.objectContaining({ alreadyNotified: true })]);
 });
 
+it('delivers the final view-state save through device invoke during native close', async () => {
+  let deliverPoll!: (events: unknown[]) => void;
+  const close = vi.fn(async () => {});
+  state.prepare.mockResolvedValue({ ...nativeDocument, close });
+  state.invoke.mockImplementation(async (_device, _channel, [, input]) => {
+    if (input.op === 'open') return { ...doc };
+    if (input.op === 'poll') return new Promise((resolve) => { deliverPoll = resolve; });
+    return {};
+  });
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
+  const props = state.props;
+  const key = state.prepare.mock.calls[0][1];
+  await act(async () => props.onMessage({ nativeEvent: { data: JSON.stringify({ key,
+    message: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready' } }) } }));
+  state.inject.mockClear();
+  await act(async () => render(null));
+  const dispatchEvent = vi.fn();
+  new Script(state.inject.mock.calls[0][0]).runInNewContext({
+    window: { dispatchEvent },
+    MessageEvent: class { data: unknown; constructor(_type: string, init: any) { this.data = init.data; } },
+  });
+  const teardown = dispatchEvent.mock.calls[0][0].data;
+  const save = { jsonrpc: '2.0', id: 'save', method: 'cindy/view-state/set', params: { state: { version: 1, draft: 'latest' } } };
+  await act(async () => props.onMessage({ nativeEvent: { data: JSON.stringify({ key, message: save }) } }));
+  await act(async () => { await Promise.resolve(); });
+  const messageCall = state.invoke.mock.calls.find(([, , [, input]]) => input.op === 'message' && input.message?.id === save.id);
+  expect(messageCall?.[2][1]).toMatchObject({ op: 'message', message: save });
+  deliverPoll([{ seq: 1, message: { jsonrpc: '2.0', id: save.id, result: {} } }]);
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => props.onMessage({ nativeEvent: { data: JSON.stringify({ key,
+    message: { jsonrpc: '2.0', id: teardown.id, result: {} } }) } }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(899); });
+  expect(close).toHaveBeenCalledOnce();
+  const operations = state.invoke.mock.calls.map(([, , [, input]]) => input.op);
+  expect(operations.indexOf('message')).toBeLessThan(operations.indexOf('teardown'));
+});
+
 it('disposes at one second even when App teardown and remote teardown never return', async () => {
   const close = vi.fn(async () => {});
   state.prepare.mockResolvedValue({ ...nativeDocument, close });
@@ -283,6 +332,61 @@ it('disposes at one second even when App teardown and remote teardown never retu
   await act(async () => { await vi.advanceTimersByTimeAsync(1); });
   expect(container.querySelector('[data-testid="mcp-webview"]')).toBeNull();
   expect(close).toHaveBeenCalledOnce();
+});
+
+/* 依据：手机 View 每次重新挂载都从 320 开始；高度缓存必须由真实卡片入口保存并复用。
+ * 缺口：已有生命周期用例只验证销毁和重开，没有验证尺寸事实跨挂载保留；tier: unit/jsdom。 */
+it('reuses a measured height on remount without mixing device, task, or card keys', async () => {
+  const size = (height: number) => act(async () => state.props.onMessage({ nativeEvent: { data: JSON.stringify({
+    key: state.prepare.mock.calls.at(-1)![1],
+    message: { jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height } },
+  }) } }));
+  const renderCard = (deviceId: string, sessionId: string, clientId: string) =>
+    render(<McpAppCard deviceId={deviceId} sessionId={sessionId} clientId={clientId} title="App" />);
+  await act(async () => renderCard('device-a', 'task-a', 'card-a'));
+  await size(640);
+  expect(state.props.style.height).toBe(640);
+  await act(async () => render(null));
+  await act(async () => renderCard('device-a', 'task-a', 'card-a'));
+  expect(state.props.style.height).toBe(640);
+  await act(async () => renderCard('device-b', 'task-a', 'card-a'));
+  expect(state.props.style.height).toBe(320);
+  await act(async () => renderCard('device-a', 'task-b', 'card-a'));
+  expect(state.props.style.height).toBe(320);
+  await act(async () => renderCard('device-a', 'task-a', 'card-b'));
+  expect(state.props.style.height).toBe(320);
+});
+
+/* 依据：高度缓存是进程内有界 LRU，不得无限保留页面身份；tier: unit/jsdom。 */
+it('evicts the oldest height after the bounded cache fills', async () => {
+  await act(async () => render(<>{Array.from({ length: 101 }, (_, index) =>
+    <McpAppCard key={index} deviceId="device" sessionId="task" clientId={`card-${index}`} title="App" />)}</>));
+  await act(async () => {
+    for (let index = 0; index < 101; index++) state.webviews[index].onMessage({ nativeEvent: { data: JSON.stringify({
+      key: state.prepare.mock.calls[index][1],
+      message: { jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 400 + index } },
+    }) } });
+  });
+  await act(async () => render(null));
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card-0" title="App" />));
+  expect(state.props.style.height).toBe(320);
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card-1" title="App" />));
+  expect(state.props.style.height).toBe(401);
+});
+
+/* 依据：owner generation 是手机账号代次；高度不可跨账号复用；tier: unit/jsdom。 */
+it('does not reuse a previous account height', async () => {
+  const size = (height: number) => act(async () => state.props.onMessage({ nativeEvent: { data: JSON.stringify({
+    key: state.prepare.mock.calls.at(-1)![1],
+    message: { jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height } },
+  }) } }));
+  setMobileAuthOwner('account-a');
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
+  await size(720);
+  await act(async () => render(null));
+  setMobileAuthOwner('account-b');
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
+  expect(state.props.style.height).toBe(320);
 });
 
 it('reopens a fresh View after background shutdown without replaying App tools', async () => {

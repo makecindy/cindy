@@ -15,6 +15,98 @@ pnpm benchmark:desktop-workers -- --workers 1,2,4,8 --runs 1 --output <report.js
 或分池前后必须使用同一 checkout、同一机器和同一测试范围比较；单次数据需同时保留稳定性
 结果，不得只挑最快的一次。
 
+## 2026-11-14 CI 提速：8 分片、临时目录、类型检查独立与按耗时分片
+
+基线来自当天 4 次成功的 PR client-ci（run 43549591409、43549471962、43547498115、43546722990）：
+整轮墙钟 22–26 分钟，关键路径都是 Windows 单测分片（14.3–26.3 分钟）。同一时段 job 启动等待
+不超过约 1.5 分钟；更长的等待都是重跑（attempt 2）从首次创建时刻起算，不是 runner 排队。
+
+| 组成（Windows 每片） | 实测 | 说明 |
+| --- | --- | --- |
+| 准备 | 约 2.8 分钟 | checkout 31 秒；setup-node 73 秒，主要是恢复约 2.2 GB 的 pnpm store 缓存；install 43 秒 |
+| Desktop unit | 814–1,077 秒 | 同一批文件在 Linux 分片为 473–583 秒，约 1.8 倍 |
+| Mobile、maker-core 与其余包 | 3.5–4.5 分钟 | Mobile 87–131 秒 |
+
+- 托管 Windows runner 的工作区在 `D:\a\<repo>\<repo>`，pnpm store 已默认放在同盘
+  `D:\.pnpm-store`（pnpm 在项目盘根目录建 store），store 位置不是瓶颈。
+- TEMP 默认是 `C:\Users\RUNNER~1\AppData\Local\Temp`。Desktop 有 700 多个测试文件创建临时目录，
+  electron stub 的 userData 也建在 `os.tmpdir()` 下，所以分片 job 把 TEMP/TMP 指到工作区所在盘的
+  `D:\cindy-tmp`。
+  - 不能用 `RUNNER_TEMP`（`D:\a\_temp`）：回复附件测试把路径写进 Markdown 链接，`\_` 被当成转义，
+    `taskImageDelivery.test.ts` 与 `chatServerReplyFiles.test.ts` 共 52 条用例报
+    `ATTACHMENT_UNAVAILABLE`（试跑 run 43556031905；本机把 TEMP 放进 `_temp` 目录可原样复现）。
+    临时目录的每一段都不要以 ASCII 标点开头。
+  - 这些用例走的是生产 `prepareChatReplyFiles`：真实 Windows 路径含 `\_` 时同样找不到文件（已实测
+    `\_`；CommonMark 对其余 ASCII 标点也按转义处理，如 `\.config`），是否需要在生产解析里保留
+    原样另行判断。
+- 2026-11-14 托管 Windows 镜像（windows-2025-vs2026 20261103）的 Defender 实时扫描为关闭
+  （`RealTimeProtectionEnabled=False`），不需要额外排除目录。
+- Windows unit 从 4 片改为 8 片。改片数会重排每片的文件组合，可能暴露文件之间的隐藏依赖：
+  `ptyManager.test.ts` 的 `HostTerminalService` 用例曾以 POSIX `/tmp` 作为 cwd 并 `realpath`，在
+  Windows 上解析为 `<盘符>:\tmp`，只在同片更早的测试碰巧建过该目录时才通过（8 片后第 3 片
+  10 条 ENOENT），现改用 `os.tmpdir()` 的真实路径。并集仍是完整 unit tier，由 `Windows unit tests` 汇总阻断；
+  `dev-docs-contract.test.mjs` 按矩阵长度校验 1..N 与 `XDT_UNIT_TEST_SHARD` 一致。
+  公开仓标准 runner 不计费，但会占用组织的并发额度；调整片数后要确认没有出现排队。
+- Desktop 分片设置 `XDT_VITEST_FILE_TIMINGS` 时，`src/test/vitest/fileTimingReporter.ts`
+  写出每个文件的环境、准备、收集、setup 与测试耗时，作为 `desktop-file-timings-windows-shard-*`
+  产物保留 14 天，供后续按耗时分片。未设置该变量时 Desktop 不覆盖 Vitest 默认 reporters；
+  设置时显式补回 GitHub Actions 下默认追加的 `github-actions` reporter。
+
+试跑结果（分支 workflow_dispatch，同一天，不含排队）：
+
+| | Windows 最慢分片 | 各片范围 | 整轮墙钟 | 整轮最慢 job |
+| --- | --- | --- | --- | --- |
+| 基线（4 片，上述 4 次） | 22.7–26.3 分钟 | 14.3–26.3 分钟 | 22–26 分钟 | Windows 分片 |
+| run 43557762427（8 片，全绿） | 14.1 分钟 | 8.8–14.1 分钟 | 18.2 分钟 | Linux 分片 18.1 分钟 |
+
+- Windows 关键路径约降 40%；整轮只降到约 18 分钟，因为 Linux 4 片（11.9–18.1 分钟）和
+  verify-checks（15.5 分钟）成为新的长板，要继续缩短需另行调整它们。
+- run 43556031905 导出的逐文件耗时：Desktop 在 Windows 上 4,063 个文件合计约 13,770 秒 worker 时间，
+  其中收集（导入模块）约 5,080 秒、执行测试约 4,240 秒；8 片之间 worker 时间差约 1.5 倍
+  （不计有失败的一片，主要来自 runner 速度差，见下文）。最慢的 `BotGroupChatView.test.tsx` 约 187 秒、
+  `CustomProviderDialogAccessibility.test.tsx` 约 158 秒，最慢 50 个文件占约 19%。
+
+### 同日第二轮：Linux 8 片、类型检查独立、按耗时分片
+
+- Linux unit 同样改为 8 片，并导出 `desktop-file-timings-linux-shard-*`。
+- Desktop 与 Mobile 的 tsc 从 verify-checks 拆到并行的 `typecheck` job，由 `verify` 汇总阻断；
+  `dev-docs-contract.test.mjs` 校验两项类型检查都在该 job，且 `verify` 依赖它。
+- Desktop 的 `--shard` 由 `src/test/vitest/timingSequencer.ts` 按已提交的
+  `src/test/vitest/fileTimings.json`（每个文件在 Windows 上的 worker 毫秒）切分：
+  - 最长的文件优先放进当前最轻的片（`scripts/shared/duration-shards.mjs`），结果只取决于文件
+    集合与耗时，不取决于输入顺序。每个分片 job 各自算出全部切分、只取自己那片，所以各片必须读
+    同一份已提交的数据；`scripts/__tests__/duration-shards.test.mjs` 校验并集恰好覆盖每个文件一次、
+    与输入顺序无关、按耗时而非文件数均衡。
+  - 只改切分，片内顺序仍是 Vitest 默认（文件大的先跑）；不带 `--shard`（本地运行）时完全不变。
+    试跑 run 43564629415 曾让片内按耗时从长到短启动：几个导入很重的文件在转换缓存还空时同时开跑，
+    `usageBroadcasterCodexAccount.test.ts` 在用例里动态 import，超过 Linux 的 5 秒用例超时，所以撤掉。
+  - 没有测量值的文件（新加的测试）按中位数计；数据文件读不到时，所有分片一起回退到 Vitest
+    的哈希切分。数据过期只影响均衡，不影响覆盖，所以不需要每个 PR 更新。
+  - 刷新：挑一到多次全绿的 client-ci run，执行
+    `pnpm update:desktop-test-timings --run <run id>[,<run id>...]`（读取 Windows 分片产物）。
+    大批增删测试或各片耗时明显不均时再刷新。
+  - 其余 workspace 仍用 Vitest 默认的哈希切分，runner 对空分片补 `--passWithNoTests` 的判断不变。
+  - 用真实 Desktop 配置在本机核对（4,378 个文件、8 片）：每个文件恰好分到一片，每片 546–548 个文件。
+- **托管 Windows runner 之间的速度差是各片耗时差距的主因。** 每个文件固定的环境、准备与 setup
+  开销本应各片相同，同一轮里却按片相差到约 1.9 倍（run 43564629415 的速度系数 0.68–1.25，
+  run 43557762427 为 0.75–1.30）；Desktop 墙钟同样相差约 1.9 倍（314 秒对 589 秒）。所以：
+  - 逐文件耗时混着所在 runner 的快慢。更新脚本先按每份报告的固定开销均值算出该 runner 的速度
+    系数，除掉后再对多次 run 取平均，当前数据来自 run 43557762427 与 43564629415。
+  - 扣除速度系数后，原哈希切分的内容不均约为最大值 / 平均值 1.07–1.11；按一轮数据切分、用另一轮
+    数据评估为 1.03–1.05。按耗时切分只能拉平这部分，抽到慢 runner 的分片仍会慢，最慢一片主要由
+    抽到哪档机器决定。
+- 单个慢文件不再决定分片下限：最慢的文件约 120–190 秒 worker 时间，每片约 1,400–1,800 秒。
+  逐个优化最慢的两个文件，摊到 8 片 × 4 worker 后每片只省几秒，本轮不做。收集（导入模块）
+  阶段约占 37%，是后续更大的空间。
+
+| 试跑（同一天，不含排队） | Windows 各片 | Linux 各片 | Typecheck | verify-checks | 整轮墙钟 |
+| --- | --- | --- | --- | --- | --- |
+| run 43557762427（Windows 8 片、Linux 4 片） | 8.8–14.1 分钟 | 11.9–18.1 分钟 | （在 verify-checks 内） | 15.5 分钟 | 18.2 分钟 |
+| run 43564629415（两者 8 片、按耗时切分） | 8.8–15.2 分钟 | 7.0–11.5 分钟 | 6.3 分钟 | 5.9 分钟（失败） | 15 分钟 |
+
+run 43564629415 的失败是两份 CI 结构合约漏同步新增的 `typecheck` job（已修），以及上文撤掉的片内排序
+导致的一次 5 秒超时；同一 head 的最终验证以该 PR 自身的 client-ci 为准。
+
 ## 2026-10-16 CI 关键路径与分片调整
 
 数据来自 main 上两次成功的 client-ci（run 38819825618、38805666371，当时为 2 个分片）：
@@ -55,7 +147,8 @@ head `1a7fe95729` 的 client-ci run `38901684967` 全部 13 个 job 通过：Win
 
 Vitest 每片切 `ceil(文件数 / 分片数)` 个文件，分片多于 2 个时，文件少的包末尾分片可能为空（6 个文件
 分 4 片是 2、2、2、0）。runner 原来只在「文件数少于分片数」时补 `--passWithNoTests`，本机 4/4 分片因此
-有 6 个包报 `NO_TESTS_REQUIRED`；现已按 Vitest 的切分方式判断空分片。
+有 6 个包报 `NO_TESTS_REQUIRED`；现已按 Vitest 的切分方式判断空分片。Desktop 自 2026-11-14 起改为
+按耗时切分（见上文），文件数远多于分片数，不会出现空片。
 
 审查恢复到 92 个 Desktop guard 文件后，Windows CI 暴露了另一个启动边界：逐项传递
 exclude 会超过 `vitest.cmd` 的 8,191 字符限制，Desktop 尚未收集测试便退出。runner 和
@@ -154,8 +247,11 @@ named 与 namespace wrapper、短等待、常量内层等待和参数／fixture 
 
 后续候选（每项都要在同一 runner、同一分片配置下实测后才能声称收益）：
 
-- 按历史耗时分配分片（自定义 Vitest sequencer），拉平哈希均分造成的不均衡。
-- 把 Windows checkout 与临时目录放到 Dev Drive（ReFS），降低大量小文件 IO 的开销。
+- 按历史耗时分配分片（自定义 Vitest sequencer），拉平哈希均分造成的不均衡。2026-11-14 已对
+  Desktop 落地（见上文「同日第二轮」）。
+- 把 Windows checkout 与临时目录放到 Dev Drive（ReFS），降低大量小文件 IO 的开销。2026-11-14
+  先把 TEMP 移到工作区所在的 D 盘（见上文）；Dev Drive 是否另有收益仍需同 runner 对照。
+  路径同样要避开以 ASCII 标点开头的目录段。
 - 基线中逐用例重置最多的 `modelVisibilityPrefs.test.ts`（18 处）、
   `pi-package-store-security.test.ts`（余 `beforeEach` 1 处，其余 16 处是写明理由的重启边界；去掉它需要
   生产侧的 reset 接口）按 `codexProxyHost` 的方式改。`newMakerDraft.test.ts`
