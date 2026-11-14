@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { layoutTelegramCard } from '@cindy/im';
 import { makeMessageOp } from '@cindy/slack-hook-protocol';
-import { TELEGRAM_OP_MARKER, type MsgOpResultRouter, type MsgOpSendFn } from './telegramMsgOp';
+import { TELEGRAM_OP_MARKER, MSG_OP_UNKNOWN_REPLAYS, isMsgOpOutcomeUnknown,
+  type MsgOpResultRouter, type MsgOpSendFn } from './telegramMsgOp';
 import { createQuestionCard, type QuestionRequest } from '../im/shared/questionCard';
 import type { QuestionControls } from '../maker-ipc/interactionRouter';
 
@@ -29,13 +30,20 @@ export function createTelegramNoticePublisher(deps: {
         const { html, rows } = layoutTelegramCard(spec);
         const opId = `${deps.requestId}${TELEGRAM_OP_MARKER.notice}${randomUUID()}`;
         attempted = true;
-        const result = await deps.router.request(deps.connectionId, send, makeMessageOp({
+        const frame = makeMessageOp({
           opId, requestId: deps.requestId, scope: { externalKey: deps.externalKey },
           purpose: 'turn-notice', interactionId, questionMode: request.delivery === 'async' ? 'async' : 'blocking',
           ...(messageId && closed ? { interactionClosed: true } : {}),
           action: { ...(messageId ? { kind: 'edit' as const, messageId } : { kind: 'send' as const }),
             text: html, tier: 'html', buttons: rows.map(row => row.map(({ button, text }) => ({ token: button.id, label: text }))) },
-        }), opId, 10_000);
+        });
+        let result = await deps.router.request(deps.connectionId, send, frame, opId, 10_000);
+        // Only edits reconcile unknown outcomes. Never duplicate an initial
+        // question, change its contents/opId, or replay onto a new connection.
+        for (let replay = 0; messageId && isMsgOpOutcomeUnknown(result)
+          && replay < MSG_OP_UNKNOWN_REPLAYS && deps.getSend() === send; replay += 1) {
+          result = await deps.router.request(deps.connectionId, send, frame, opId, 10_000);
+        }
         if (!result?.ok || !result.messageId) throw new Error('question delivery not confirmed');
         messageId = result.messageId;
       });
