@@ -1,3 +1,4 @@
+import { canLinkFile } from './codexAuthTestFs.js';
 import { configureOwnerContext } from '../../ownerContext.js';
 /**
  * dev 沙箱凭证隔离(XDT_ISOLATED_AUTH=1)回归锁。
@@ -14,7 +15,7 @@ import { configureOwnerContext } from '../../ownerContext.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getCodexAuthInvalidationMarkerPath,
   writeInvalidatedSystemCodexAuthMarker,
@@ -153,6 +154,11 @@ function trustIsolatedAuthSandbox(): void {
   vi.stubEnv('XDT_ISOLATED_AUTH_PROOF', nonce);
 }
 
+// Auth ownership is the subject; asset projection has its own boundary fixture.
+beforeEach(() => {
+  vi.spyOn(DesktopCodexAuthAdapter.prototype, 'ensureGlobalCodexAssets').mockResolvedValue();
+});
+
 afterEach(() => {
   h.isPackaged = false;
   vi.restoreAllMocks();
@@ -192,7 +198,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     );
   });
 
-  it.runIf(process.platform !== 'win32')(
+  it.skipIf(!canLinkFile)(
     '开关开:系统凭证缺失时清除悬空共享软链,恢复后仍保持隔离',
     async () => {
       const { codexHome, localAuth, systemAuth } = fixture();
@@ -245,7 +251,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     );
   });
 
-  it('开关关(默认):reconcile 照常建共享硬链', async () => {
+  it.skipIf(!canLinkFile)('开关关(默认):reconcile 使用共享软链', async () => {
     const { localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
@@ -360,7 +366,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
   // 现有覆盖只区分文件缺失、owner 和失效标记，没有过期 Release + 有效本机授权的输入。
   // 通过真实 getState/getAccessToken 验证选中的授权及落盘结果；下方矩阵保护共享目录与账号边界。
   // 整文件实测：6.65s（Windows，含既有 adapter 依赖图加载）；未新增模块重置或真实等待。
-  it('普通 Dev 在 Release 授权过期后使用同账号的有效本机授权', async () => {
+  it.skipIf(!canLinkFile)('普通 Dev 在 Release 授权过期后使用同账号的有效本机授权', async () => {
     const { localAuth, releaseAuth, systemAuth } = fixture();
     const now = Math.floor(Date.now() / 1000);
     const token = (exp: number) =>
@@ -553,7 +559,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(releaseBinding)).toBe(false);
   });
 
-  it('Release 不属于当前 owner 时不继承，回落本机 Codex', async () => {
+  it.skipIf(!canLinkFile)('Release 不属于当前 owner 时不继承，回落本机 Codex', async () => {
     const { localAuth, releaseAuth, systemAuth } = fixture();
     fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
     fs.writeFileSync(
@@ -577,7 +583,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.statSync(localAuth).ino).not.toBe(fs.statSync(releaseAuth).ino);
   });
 
-  it('Release 登录态已被标记失效时不继承，回落本机 Codex', async () => {
+  it.skipIf(!canLinkFile)('Release 登录态已被标记失效时不继承，回落本机 Codex', async () => {
     const { localAuth, releaseAuth, systemAuth } = fixture();
     fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
     fs.writeFileSync(
@@ -616,7 +622,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.readFileSync(localAuth)).not.toEqual(releaseBytes);
   });
 
-  it('dev 默认只读共享:断开只停用 Cindy，重启不复活，显式本机连接可恢复', async () => {
+  it.skipIf(!canLinkFile)('dev 默认只读共享:断开只停用 Cindy，重启不复活，显式本机连接可恢复', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
@@ -673,7 +679,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
-  it.each([false, true].flatMap(packaged => [false, true].map(failPresentation => ({ packaged, failPresentation }))))('preserves native credentials across reconnect (packaged=$packaged, display write fails=$failPresentation)', async ({ packaged, failPresentation }) => {
+  it.skipIf(!canLinkFile).each([false, true].flatMap(packaged => [false, true].map(failPresentation => ({ packaged, failPresentation }))))('preserves native credentials across reconnect (packaged=$packaged, display write fails=$failPresentation)', async ({ packaged, failPresentation }) => {
     const { codexHome, systemAuth, localAuth } = fixture();
     h.isPackaged = packaged;
     h.dataOwnerId = 'owner-a';
@@ -705,7 +711,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(bindings.selfAuthorized?.openai).toBeUndefined();
   });
 
-  it('retires the implicit gateway host before local login returns and rebuilds for OAuth', async () => {
+  it.skipIf(!canLinkFile)('retires the implicit gateway host before local login returns and rebuilds for OAuth', async () => {
     fixture();
     h.isPackaged = true;
     h.dataOwnerId = 'owner-a';
@@ -744,7 +750,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     }
   });
 
-  it.each(['success', 'failure', 'owner-change', 'cancel', 'cancel-cleanup-failure'] as const)('settles local runtime refresh with the correct credential boundary (%s)', async (outcome) => {
+  it.skipIf(!canLinkFile).each(['success', 'failure', 'owner-change', 'cancel', 'cancel-cleanup-failure'] as const)('settles local runtime refresh with the correct credential boundary (%s)', async (outcome) => {
     const { systemAuth } = fixture();
     h.isPackaged = true;
     h.dataOwnerId = 'owner-a';
@@ -797,7 +803,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     }
   });
 
-  it.each([false, true])('local reconnect shares native refresh writes instead of copying (existing=%s)', async (existing) => {
+  it.skipIf(!canLinkFile).each([false, true])('local reconnect shares native refresh writes instead of copying (existing=%s)', async (existing) => {
     const { codexHome, systemAuth, localAuth } = fixture();
     h.isPackaged = true;
     h.dataOwnerId = 'owner-a';
@@ -873,7 +879,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.readFileSync(systemAuth)).toEqual(before);
   });
 
-  it('dev 默认只读的 unproven 失效只保留内存边界', async () => {
+  it.skipIf(!canLinkFile)('dev 默认只读的 unproven 失效只保留内存边界', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
@@ -922,7 +928,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
-  it('dev 只读失效以内存指纹等待系统凭证换代,不泄漏旧 token 或写共享文件', async () => {
+  it.skipIf(!canLinkFile)('dev 只读失效以内存指纹等待系统凭证换代,不泄漏旧 token 或写共享文件', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
@@ -995,7 +1001,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
-  it('dev 只读系统换代先于迟到失效时记录本地旧代并恢复系统新代', async () => {
+  it.skipIf(!canLinkFile)('dev 只读系统换代先于迟到失效时记录本地旧代并恢复系统新代', async () => {
     const { codexHome, localAuth, systemAuth } = fixture();
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
@@ -1059,7 +1065,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
-  it('普通 isolated 的写开关不能绕过只读门禁或改写共享凭证', async () => {
+  it.skipIf(!canLinkFile)('普通 isolated 的写开关不能绕过只读门禁或改写共享凭证', async () => {
     const { localAuth, systemAuth } = fixture();
     const systemBytes = fs.readFileSync(systemAuth);
     const systemStat = fs.statSync(systemAuth);
