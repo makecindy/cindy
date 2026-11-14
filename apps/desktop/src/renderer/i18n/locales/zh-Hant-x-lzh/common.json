@@ -10495,7 +10495,46 @@
       "terminateConfirmDescription": "將強制終止此 Agent 處理程序，凡用之差事皆將中斷；其後於任一受累差事中再遣訊，即可按需重啟 Agent。",
       "terminated": "{{name}} 處理程序已止",
       "terminateFailed": "不能終止此處理程序，或已自行退出；列表將隨下次取樣自更",
-      "sessionDetail": "差事：{{title}}"
+      "sessionDetail": "差事：{{title}}",
+      "tabs": {
+        "label": "資源檢視",
+        "processes": "處理程序",
+        "hostDaemons": "背景項目"
+      }
+    },
+    "hostDaemons": {
+      "scanning": "正在掃描背景項目…",
+      "refresh": "重新整理",
+      "loadFailed": "無法讀取背景項目",
+      "refreshFailed": "重新整理失敗；此列表可能不是最新的",
+      "unsupported": "背景項目僅在 Windows 上可用",
+      "empty": "尚未有由任務建立的背景項目",
+      "owner": "建立者：{{title}}",
+      "ownerUnknown": "未知",
+      "state": {
+        "running": "執行中",
+        "ready": "閒置",
+        "disabled": "已停用",
+        "unknown": "未知"
+      },
+      "trigger": {
+        "logon": "登入時",
+        "startup": "開機時",
+        "schedule": "依排程",
+        "other": "其他觸發方式"
+      },
+      "stop": "停止",
+      "delete": "刪除",
+      "run": "啟動",
+      "started": "已啟動 {{name}}",
+      "stopTitle": "要停止「{{name}}」嗎？",
+      "stopBody": "只會結束目前這一次執行；任務仍會依其排程再次啟動。",
+      "deleteTitle": "要刪除「{{name}}」嗎？",
+      "deleteBody": "會從這台電腦永久移除這個排程任務，因此它不再自動啟動。Cindy 中的任務紀錄不受影響。",
+      "stopped": "已停止 {{name}}",
+      "deleted": "已刪除 {{name}}",
+      "actionFailed": "動作失敗，請再試一次。",
+      "unrelated_other": "已隱藏 {{count}} 個無關的背景項目"
     }
   },
   "update": {

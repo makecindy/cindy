@@ -10620,7 +10620,48 @@
       "terminated": "O processo {{name}} foi parado",
       "terminateFailed": "Não foi possível parar este processo — poderá já ter terminado. A lista será atualizada na próxima amostra.",
       "sessionDetail": "Tarefa: {{title}}",
-      "processCount_many": "Árvore de processos: {{count}} processos"
+      "processCount_many": "Árvore de processos: {{count}} processos",
+      "tabs": {
+        "label": "Vista de recursos",
+        "processes": "Processos",
+        "hostDaemons": "Elementos em segundo plano"
+      }
+    },
+    "hostDaemons": {
+      "scanning": "A procurar elementos em segundo plano…",
+      "refresh": "Atualizar",
+      "loadFailed": "Não foi possível ler os elementos em segundo plano",
+      "refreshFailed": "A atualização falhou; esta lista pode estar desatualizada",
+      "unsupported": "Os elementos em segundo plano só estão disponíveis no Windows",
+      "empty": "Ainda não existem elementos em segundo plano criados por tarefas",
+      "owner": "Criado por: {{title}}",
+      "ownerUnknown": "Desconhecido",
+      "state": {
+        "running": "Em execução",
+        "ready": "Inativo",
+        "disabled": "Desativado",
+        "unknown": "Desconhecido"
+      },
+      "trigger": {
+        "logon": "Ao iniciar sessão",
+        "startup": "Ao arrancar",
+        "schedule": "Segundo a programação",
+        "other": "Outro acionador"
+      },
+      "stop": "Parar",
+      "delete": "Eliminar",
+      "run": "Iniciar",
+      "started": "{{name}} iniciado",
+      "stopTitle": "Parar «{{name}}»?",
+      "stopBody": "Termina apenas a execução atual. A tarefa voltará a arrancar segundo a sua programação.",
+      "deleteTitle": "Eliminar «{{name}}»?",
+      "deleteBody": "Remove permanentemente esta tarefa programada deste computador, pelo que deixa de arrancar automaticamente. Os registos de tarefas no Cindy não são afetados.",
+      "stopped": "{{name}} parado",
+      "deleted": "{{name}} eliminado",
+      "actionFailed": "A ação falhou. Tente novamente.",
+      "unrelated_one": "{{count}} elemento em segundo plano não relacionado está oculto",
+      "unrelated_other": "{{count}} elementos em segundo plano não relacionados estão ocultos",
+      "unrelated_many": "{{count}} elemento em segundo plano não relacionado está oculto"
     }
   },
   "update": {

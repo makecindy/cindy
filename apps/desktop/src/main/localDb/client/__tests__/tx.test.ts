@@ -331,6 +331,7 @@ describe('db worker tx handlers', () => {
     await withClient(async client => {
       await client.exec('ALTER TABLE sessions ADD COLUMN worktree_path TEXT');
       await client.exec('ALTER TABLE sessions ADD COLUMN plan_mode_enabled INTEGER DEFAULT 0');
+      await client.exec('CREATE TABLE session_imports (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, source TEXT NOT NULL, source_session_id TEXT NOT NULL, source_fingerprint TEXT, source_version TEXT, mode TEXT NOT NULL, status TEXT NOT NULL, issue TEXT, original_cwd TEXT, request_id TEXT, imported_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)');
       for (const id of ['replaced', 'untouched']) {
         await seedSession(client, id);
         await client.exec("INSERT INTO messages (id,client_id,session_id,role,content,created_at) VALUES (?,?,?,'assistant','{}',1)", [id, id, id]);
@@ -783,11 +784,11 @@ describe('db worker tx handlers', () => {
     await withClient(async (client) => {
       // The shared test schema predates import columns; add just what abort reads.
       await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
-      await client.exec('CREATE TABLE session_imports (session_id TEXT PRIMARY KEY, request_id TEXT)');
+      await client.exec('CREATE TABLE session_imports (session_id TEXT PRIMARY KEY, source TEXT NOT NULL, source_session_id TEXT NOT NULL, source_fingerprint TEXT, source_version TEXT, mode TEXT NOT NULL, status TEXT NOT NULL, issue TEXT, original_cwd TEXT, request_id TEXT, imported_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)');
       await seedSession(client, 'imp-x');
       // The phone's request took over the source after the desktop's began.
       await client.exec("UPDATE sessions SET hidden_at = 1000 WHERE id = 'imp-x'");
-      await client.exec("INSERT INTO session_imports (session_id, request_id) VALUES ('imp-x', 'req-b')");
+      await client.exec("INSERT INTO session_imports (session_id, source, source_session_id, mode, status, request_id, imported_at, updated_at) VALUES ('imp-x', 'desktop', 'src-b', 'native', 'ready', 'req-b', 1000, 1000)");
       await expect(client.tx('sessionImport.execute', { action: 'abort', sessionId: 'imp-x', requestId: 'req-a' }))
         .resolves.toEqual({ removed: 0 });
       await expect(client.tx('sessionImport.execute', { action: 'abort', sessionId: 'imp-x', requestId: 'req-b' }))

@@ -10495,7 +10495,46 @@
       "terminateConfirmDescription": "将强制终止此 Agent 进程，凡用之差事皆将中断；其后于任一受累差事中再遣讯，即可按需重启 Agent。",
       "terminated": "{{name}} 进程已止",
       "terminateFailed": "不能终止此进程，或已自行退出；列表将随下次采样自更",
-      "sessionDetail": "差事：{{title}}"
+      "sessionDetail": "差事：{{title}}",
+      "tabs": {
+        "label": "资源视图",
+        "processes": "进程",
+        "hostDaemons": "后台项目"
+      }
+    },
+    "hostDaemons": {
+      "scanning": "正在扫描后台项目…",
+      "refresh": "刷新",
+      "loadFailed": "无法读取后台项目",
+      "refreshFailed": "刷新失败；此列表可能不是最新的",
+      "unsupported": "后台项目仅在 Windows 上可用",
+      "empty": "还没有由任务创建的后台项目",
+      "owner": "创建者：{{title}}",
+      "ownerUnknown": "未知",
+      "state": {
+        "running": "运行中",
+        "ready": "空闲",
+        "disabled": "已停用",
+        "unknown": "未知"
+      },
+      "trigger": {
+        "logon": "登录时",
+        "startup": "开机时",
+        "schedule": "按计划",
+        "other": "其他触发方式"
+      },
+      "stop": "停止",
+      "delete": "删除",
+      "run": "启动",
+      "started": "已启动 {{name}}",
+      "stopTitle": "要停止“{{name}}”吗？",
+      "stopBody": "只结束当前这一次运行；任务仍会按其计划再次启动。",
+      "deleteTitle": "要删除“{{name}}”吗？",
+      "deleteBody": "会从这台电脑永久移除这个计划任务，因此它不再自动启动。Cindy 中的任务记录不受影响。",
+      "stopped": "已停止 {{name}}",
+      "deleted": "已删除 {{name}}",
+      "actionFailed": "操作失败，请重试。",
+      "unrelated_other": "已隐藏 {{count}} 个无关的后台项目"
     }
   },
   "update": {
