@@ -14669,7 +14669,6 @@
       "showFiles": "Voir",
       "hideFiles": "Masquer",
       "running": "En cours",
-      "runningWorktree": "Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningTitle": "{{count}} sessions sont en cours ici",
       "runningTitle_one": "« {{name}} » est en cours ici",
       "runningTitle_other": "{{count}} sessions sont en cours ici",
@@ -14680,7 +14679,11 @@
       "runningWait_many": "Attendez leur fin pour changer de branche.",
       "idleSessions_one": "« {{name}} » suivra le changement de branche",
       "idleSessions_other": "{{count}} sessions suivront le changement de branche",
-      "idleSessions_many": "{{count}} sessions suivront le changement de branche"
+      "idleSessions_many": "{{count}} sessions suivront le changement de branche",
+      "runningWithWorktree": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
+      "runningWithWorktree_one": "Attendez sa fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
+      "runningWithWorktree_other": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
+      "runningWithWorktree_many": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences."
     }
   },
   "onboarding": {

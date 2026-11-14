@@ -14547,7 +14547,6 @@
       "showFiles": "Ansehen",
       "hideFiles": "Zuklappen",
       "running": "Läuft",
-      "runningWorktree": "Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
       "runningTitle": "{{count}} Sitzungen laufen hier",
       "runningTitle_one": "„{{name}}“ läuft hier",
       "runningTitle_other": "{{count}} Sitzungen laufen hier",
@@ -14558,7 +14557,11 @@
       "runningWait_many": "Vor dem Branchwechsel müssen sie fertig sein.",
       "idleSessions_one": "„{{name}}“ folgt dem Branchwechsel",
       "idleSessions_other": "{{count}} Sitzungen folgen dem Branchwechsel",
-      "idleSessions_many": "{{count}} Sitzungen folgen dem Branchwechsel"
+      "idleSessions_many": "{{count}} Sitzungen folgen dem Branchwechsel",
+      "runningWithWorktree": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
+      "runningWithWorktree_one": "Vor dem Branchwechsel muss sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
+      "runningWithWorktree_other": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
+      "runningWithWorktree_many": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören."
     }
   },
   "onboarding": {

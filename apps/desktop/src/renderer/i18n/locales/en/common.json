@@ -14547,7 +14547,6 @@
       "showFiles": "View",
       "hideFiles": "Hide",
       "running": "Running",
-      "runningWorktree": "Use worktree to start now in a separate copy without affecting each other.",
       "runningTitle": "{{count}} sessions are running here",
       "runningTitle_one": "“{{name}}” is running here",
       "runningTitle_other": "{{count}} sessions are running here",
@@ -14558,7 +14557,11 @@
       "runningWait_many": "Wait for them to finish before switching branches.",
       "idleSessions_one": "“{{name}}” switches too",
       "idleSessions_other": "{{count}} sessions switch too",
-      "idleSessions_many": "{{count}} sessions switch too"
+      "idleSessions_many": "{{count}} sessions switch too",
+      "runningWithWorktree": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
+      "runningWithWorktree_one": "Wait for it to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
+      "runningWithWorktree_other": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
+      "runningWithWorktree_many": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other."
     }
   },
   "onboarding": {

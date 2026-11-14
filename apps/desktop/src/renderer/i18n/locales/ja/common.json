@@ -14487,7 +14487,6 @@
       "showFiles": "表示",
       "hideFiles": "閉じる",
       "running": "実行中",
-      "runningWorktree": "worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningTitle": "{{count}} 件のセッションがここで実行中",
       "runningTitle_one": "「{{name}}」がここで実行中",
       "runningTitle_other": "{{count}} 件のセッションがここで実行中",
@@ -14498,7 +14497,11 @@
       "runningWait_many": "すべて完了するまでブランチは切り替えられません。",
       "idleSessions_one": "「{{name}}」も新しいブランチに移ります",
       "idleSessions_other": "{{count}} 件のセッションも新しいブランチに移ります",
-      "idleSessions_many": "{{count}} 件のセッションも新しいブランチに移ります"
+      "idleSessions_many": "{{count}} 件のセッションも新しいブランチに移ります",
+      "runningWithWorktree": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
+      "runningWithWorktree_one": "完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
+      "runningWithWorktree_other": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
+      "runningWithWorktree_many": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。"
     }
   },
   "onboarding": {

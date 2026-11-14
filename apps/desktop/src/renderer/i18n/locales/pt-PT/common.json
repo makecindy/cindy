@@ -14669,7 +14669,6 @@
       "showFiles": "Ver",
       "hideFiles": "Recolher",
       "running": "Em execução",
-      "runningWorktree": "Com worktree, comece agora numa cópia separada, sem interferências.",
       "runningTitle": "{{count}} sessões estão em execução aqui",
       "runningTitle_one": "«{{name}}» está em execução aqui",
       "runningTitle_other": "{{count}} sessões estão em execução aqui",
@@ -14680,7 +14679,11 @@
       "runningWait_many": "Espere todas terminarem para mudar de ramo.",
       "idleSessions_one": "«{{name}}» seguirá a mudança de ramo",
       "idleSessions_other": "{{count}} sessões seguirão a mudança de ramo",
-      "idleSessions_many": "{{count}} sessões seguirão a mudança de ramo"
+      "idleSessions_many": "{{count}} sessões seguirão a mudança de ramo",
+      "runningWithWorktree": "Espere todas terminarem para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências.",
+      "runningWithWorktree_one": "Espere terminar para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências.",
+      "runningWithWorktree_other": "Espere todas terminarem para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências.",
+      "runningWithWorktree_many": "Espere todas terminarem para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências."
     }
   },
   "onboarding": {

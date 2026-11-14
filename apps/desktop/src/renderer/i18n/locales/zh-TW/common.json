@@ -14487,7 +14487,6 @@
       "showFiles": "查看",
       "hideFiles": "收起",
       "running": "執行中",
-      "runningWorktree": "用 worktree 現在就能在獨立副本裡開始，互不影響",
       "runningTitle": "{{count}} 個任務正在這個目錄執行",
       "runningTitle_one": "「{{name}}」正在這個目錄執行",
       "runningTitle_other": "{{count}} 個任務正在這個目錄執行",
@@ -14498,7 +14497,11 @@
       "runningWait_many": "它們結束前不能切換分支。",
       "idleSessions_one": "「{{name}}」會跟著換到新分支",
       "idleSessions_other": "{{count}} 個任務會跟著換到新分支",
-      "idleSessions_many": "{{count}} 個任務會跟著換到新分支"
+      "idleSessions_many": "{{count}} 個任務會跟著換到新分支",
+      "runningWithWorktree": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
+      "runningWithWorktree_one": "它結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
+      "runningWithWorktree_other": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
+      "runningWithWorktree_many": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。"
     }
   },
   "onboarding": {

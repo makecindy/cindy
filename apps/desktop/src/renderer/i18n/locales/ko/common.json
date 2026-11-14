@@ -14487,7 +14487,6 @@
       "showFiles": "보기",
       "hideFiles": "접기",
       "running": "실행 중",
-      "runningWorktree": "worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
       "runningTitle": "세션 {{count}}개가 여기서 실행 중",
       "runningTitle_one": "“{{name}}”이 여기서 실행 중",
       "runningTitle_other": "세션 {{count}}개가 여기서 실행 중",
@@ -14498,7 +14497,11 @@
       "runningWait_many": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다.",
       "idleSessions_one": "“{{name}}”도 새 브랜치로 이동합니다",
       "idleSessions_other": "세션 {{count}}개도 새 브랜치로 이동합니다",
-      "idleSessions_many": "세션 {{count}}개도 새 브랜치로 이동합니다"
+      "idleSessions_many": "세션 {{count}}개도 새 브랜치로 이동합니다",
+      "runningWithWorktree": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
+      "runningWithWorktree_one": "완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
+      "runningWithWorktree_other": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
+      "runningWithWorktree_many": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다."
     }
   },
   "onboarding": {

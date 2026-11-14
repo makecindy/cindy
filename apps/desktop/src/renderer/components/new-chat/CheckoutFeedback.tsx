@@ -44,11 +44,13 @@ export function CheckoutSessions({
         </div>
         <div className="ml-[22px] mt-1 space-y-2 text-12 text-[var(--text-secondary)]">
           <p>
-            {t(`newChat.checkout.runningWait${vars.count === 1 ? '_one' : ''}`, vars)}
-            {onUseWorktree && ' ' + t('newChat.checkout.runningWorktree')}
+            {t(
+              `newChat.checkout.${onUseWorktree ? 'runningWithWorktree' : 'runningWait'}${vars.count === 1 ? '_one' : ''}`,
+              vars,
+            )}
           </p>
           {onUseWorktree && (
-            <Button compact size="sm" variant="primary" onClick={onUseWorktree}>
+            <Button compact size="sm" variant="secondary" onClick={onUseWorktree}>
               {t('newChat.checkout.startWorktree')}
             </Button>
           )}
@@ -202,7 +204,7 @@ export function CheckoutDialog({
             {t('newChat.checkout.title', vars)}
           </Dialog.Title>
           <div className="min-h-0 overflow-y-auto space-y-2 text-13">
-            <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center justify-between gap-2">
               <Dialog.Description className="break-words text-[var(--confirm-desc)]">
                 {t('newChat.checkout.dirtyDescription', {
                   branch: dialog?.status.current,
@@ -279,10 +281,10 @@ export function CheckoutDialog({
                   return (
                     <label
                       key={choice}
-                      className={`relative flex cursor-pointer items-center gap-3 px-3 py-2 focus-within:ring-2 focus-within:ring-inset focus-within:ring-[var(--focus-ring)] ${disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-[var(--surface-hover)]'} ${strategy === choice ? 'bg-[var(--surface-chip)]' : ''}`}
+                      className={`relative flex cursor-pointer items-center gap-3 px-3 py-2 focus-within:ring-2 focus-within:ring-inset focus-within:ring-[var(--focus-ring)] ${disabled ? 'cursor-not-allowed' : 'hover:bg-[var(--surface-hover)]'} ${strategy === choice ? 'bg-[var(--surface-chip)]' : ''}`}
                     >
                       <span
-                        className={`flex size-[30px] shrink-0 items-center justify-center rounded-lg ${strategy === choice ? 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]' : 'bg-[var(--surface-chip)] text-[var(--text-secondary)]'}`}
+                        className={`${disabled ? 'opacity-60' : ''} flex size-[30px] shrink-0 items-center justify-center rounded-lg ${strategy === choice ? 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]' : 'bg-[var(--surface-chip)] text-[var(--text-secondary)]'}`}
                       >
                         <Icon size={16} aria-hidden />
                       </span>
@@ -300,7 +302,7 @@ export function CheckoutDialog({
                         className="sr-only"
                       />
                       <span className="min-w-0 flex-1 break-words">
-                        <span className="block font-medium">
+                        <span className={`block font-medium ${disabled ? 'opacity-60' : ''}`}>
                           {t(`newChat.checkout.${choice}`, {
                             branch: choice === 'carry' ? target : dialog?.status.current,
                           })}
@@ -317,8 +319,12 @@ export function CheckoutDialog({
                       </span>
                       <span
                         aria-hidden
-                        className={`flex size-4 shrink-0 items-center justify-center rounded-full border-[1.5px] border-[var(--text-tertiary)] ${strategy === choice ? 'bg-[var(--text-primary)] border-[var(--text-primary)]' : ''}`}
-                      />
+                        className={`${disabled ? 'opacity-60' : ''} flex size-4 shrink-0 items-center justify-center rounded-full border-[1.5px] border-[var(--text-tertiary)] ${strategy === choice ? 'bg-[var(--text-primary)] border-[var(--text-primary)]' : ''}`}
+                      >
+                        {strategy === choice && (
+                          <span className="size-1.5 rounded-full bg-[var(--confirm-bg)]" />
+                        )}
+                      </span>
                     </label>
                   );
                 },

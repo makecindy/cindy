@@ -278,6 +278,29 @@ export default {
         exact: true,
       });
       assert.equal(await carry.isDisabled(), ui.case === 'conflict');
+      const radioPaint = await page.getByRole('radio').evaluateAll((inputs) => {
+        const selected = inputs.find((input) => input.checked);
+        const dot = selected.closest('label').querySelector('span[aria-hidden] > span');
+        return {
+          width: dot.getBoundingClientRect().width,
+          height: dot.getBoundingClientRect().height,
+          color: globalThis.getComputedStyle(dot).backgroundColor,
+          outer: globalThis.getComputedStyle(dot.parentElement).backgroundColor,
+        };
+      });
+      const alpha = radioPaint.color.startsWith('rgba')
+        ? parseFloat(radioPaint.color.split(',')[3])
+        : 1;
+      assert.ok(alpha >= 0.95, 'Radio center must not blend into its filled outer circle');
+      assert.ok(
+        radioPaint.width >= 5 && radioPaint.height >= 5,
+        'Selected radio must have a visible inner dot',
+      );
+      assert.notEqual(
+        radioPaint.color,
+        radioPaint.outer,
+        'Radio dot must contrast with its outer fill',
+      );
       const leave = page.getByRole('radio').nth(1);
       assert.equal(await leave.isChecked(), ui.case === 'conflict');
       if (ui.case !== 'conflict') {
