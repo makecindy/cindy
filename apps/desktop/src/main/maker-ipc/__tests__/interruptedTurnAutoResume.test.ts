@@ -538,6 +538,25 @@ function runInterruptedTurn(g: ReturnType<typeof createGuard>): number {
 // 额度模型的核心不变量:连续 N 次零产出会停；即使每次都有一点产出，同一次真人介入
 // 之后也受 episode 硬上限保护，绝不无限自动循环。
 describe('InterruptedTurnAutoResumeGuard', () => {
+  it('shares the same consecutive and episode budget with external recovery paths', () => {
+    const g = createGuard();
+    for (let i = 1; i <= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS; i += 1) {
+      expect(g.guard.claimExternalAutomaticRecovery(SID)).toMatchObject({
+        action: 'allow', attempt: i,
+        maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      });
+    }
+    expect(g.guard.claimExternalAutomaticRecovery(SID)).toEqual({
+      action: 'exhausted', reason: 'consecutive',
+      consecutiveAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      episodeAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+    });
+    expect(g.guard.isBudgetExhausted(SID)).toBe(true);
+    g.guard.noteUserSend(SID);
+    expect(g.guard.isBudgetExhausted(SID)).toBe(false);
+    expect(g.guard.claimExternalAutomaticRecovery(SID)).toMatchObject({ action: 'allow', attempt: 1 });
+  });
+
   it('grants up to MAX consecutive attempts, then stops and waits for the user', () => {
     const g = createGuard();
     for (let i = 1; i <= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS; i++) {
