@@ -85,6 +85,9 @@ describe('ClaudeCodeAgent.refreshLocalModels(主动读取订阅模型清单)', (
       { prompt: AsyncIterable<unknown>; options: Record<string, unknown> },
     ];
     expect(options.pathToClaudeCodeExecutable).toBe(process.execPath);
+    // 不加载用户级设置:终端 claude 配的 apiKeyHelper / 网关模型名会让清单变成网关的模型。
+    expect(options.settingSources).toEqual([]);
+    expect(options.settings).toEqual({ apiKeyHelper: '' });
     expect((options.env as Record<string, string>).DISABLE_TELEMETRY).toBeUndefined();
     // 输入队列在探测结束时关闭且从未写入:没有任何用户消息发往模型。
     const received: unknown[] = [];

@@ -156,6 +156,36 @@ describe('discoverSubagentDefinitions', () => {
     expect(found[0]).toMatchObject({ name: 'u', scope: 'user', declaredModel: 'sonnet' });
   });
 
+  // 回归(PR #8605 P1):扫描范围必须与 CLI 实际加载的设置来源同源。订阅 / 设备托管会话不读
+  // 用户级设置,`~/.claude/agents` 也就不加载 —— 那里的定义不能参与判定,而且不能被访问
+  // (否则一份旧全局定义里的 `model:` 会把「Subagent 模型」默认值压掉)。
+  it('只扫 settingSources 会加载的作用域:被排除的作用域不访问、不占预算', async () => {
+    const home = path.join(root, 'home', '.claude');
+    // 用户作用域 3 份定义;maxFiles=2 时被扫到就必然超预算。
+    for (const name of ['u1', 'u2', 'u3']) {
+      await writeAgent(path.join(home, 'agents'), `${name}.md`, `name: ${name}\nmodel: opus`);
+    }
+    await writeAgent(
+      path.join(root, 'repo', '.claude', 'agents'),
+      'p.md',
+      'name: p\nmodel: haiku',
+    );
+    const base = { workingDir: path.join(root, 'repo'), env: { CLAUDE_CONFIG_DIR: home }, maxFiles: 2 };
+
+    // 三层全读的会话照样会因用户目录超预算而显式失败(不能静默截断)。
+    await expect(discoverSubagentDefinitions({
+      ...base,
+      settingSources: ['user', 'project', 'local'],
+    })).rejects.toBeInstanceOf(SubagentScanBudgetError);
+
+    // 订阅 / 设备托管:只扫项目,用户目录整段不访问(既不报错,也不出现在结果里)。
+    const subscription = await discoverInFixture({ ...base, settingSources: ['project', 'local'] });
+    expect(subscription.map((d) => [d.name, d.scope])).toEqual([['p', 'project']]);
+
+    // 审阅 / 伙伴 / hostToolsOnly:一个目录都不扫。
+    expect(await discoverSubagentDefinitions({ ...base, settingSources: [] })).toEqual([]);
+  });
+
   // 回归:严格对齐 cc 的加载条件。cc 对缺 name 或缺 description 的文件直接 return null,
   // 我们若「宽容」地按文件名收下它,就会误判「有人声明了 model」→ 删掉 env → 用户配的默认值
   // 对所有真实 agent 静默失效(与漏认反向、但同样严重的失效模式)。

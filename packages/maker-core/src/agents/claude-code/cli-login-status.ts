@@ -9,6 +9,8 @@
 
 import { execFile } from 'node:child_process';
 
+import { CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS } from './subscription-settings-isolation.js';
+
 export interface ClaudeCliLoginStatus {
   /** CLI signed in with a Claude.ai subscription — the only shape Cindy counts. */
   loggedIn: boolean;
@@ -78,7 +80,9 @@ export interface ReadClaudeCliStatusOptions {
 /**
  * Read the status through a normal child process. The Desktop process runs the
  * same query in a worker thread to keep a blocking OS launch off its main thread;
- * both paths parse with `parseClaudeCliLoginStatus`.
+ * both paths parse with `parseClaudeCliLoginStatus` and both skip user-level
+ * settings, whose apiKeyHelper / gateway env would mask an existing subscription
+ * login (see subscription-settings-isolation).
  */
 export function readClaudeCliLoginStatusBySpawn(
   options: ReadClaudeCliStatusOptions,
@@ -86,7 +90,7 @@ export function readClaudeCliLoginStatusBySpawn(
   const { promise, resolve, reject } = Promise.withResolvers<ClaudeCliLoginStatus | null>();
   execFile(
     options.binary,
-    [...CLAUDE_CLI_STATUS_ARGS],
+    [...CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS, ...CLAUDE_CLI_STATUS_ARGS],
     {
       env: options.env,
       timeout: options.timeoutMs,

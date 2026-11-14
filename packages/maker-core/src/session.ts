@@ -1935,6 +1935,11 @@ export class Session {
     return this.handle.model;
   }
 
+  /** Claude-only: 运行时不加载用户级设置时为 true,用户级命令 / skill 不应出现在 palette。 */
+  get omitsUserSkills(): boolean {
+    return this.handle.omitsUserSkills === true;
+  }
+
   /** Codex-only: 当前会话实际绑定的本地 host 身份。 */
   get codexHostKey(): string | undefined {
     return this.handle.codexHostKey;

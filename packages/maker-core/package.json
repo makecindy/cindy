@@ -17,6 +17,10 @@
       "import": "./src/runtime-owner-lock.js",
       "default": "./src/runtime-owner-lock.js"
     },
+    "./claude-subscription-isolation": {
+      "import": "./src/agents/claude-code/subscription-settings-isolation.ts",
+      "default": "./src/agents/claude-code/subscription-settings-isolation.ts"
+    },
     "./claude-cli-login-status": {
       "import": "./src/agents/claude-code/cli-login-status.ts",
       "default": "./src/agents/claude-code/cli-login-status.ts"

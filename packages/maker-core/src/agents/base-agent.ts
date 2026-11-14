@@ -2512,6 +2512,8 @@ export interface AgentSessionHandle {
   ): () => void;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
+  /** Claude-only: 运行时不加载用户级设置(本机订阅会话),`~/.claude` 里的命令 / skill 不可用。 */
+  readonly omitsUserSkills?: boolean;
   /** Local runtime identity, never serialized to the remote wire protocol. */
   readonly codexHostKey?: string;
   /**

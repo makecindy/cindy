@@ -107,6 +107,20 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   SSH 远端的配置目录仍由远端 cc-manager 自己管理，不在此列。
   只有 Claude.ai 订阅账号的 OAuth 登录算「Claude 订阅」；CLI 用 Console 账号、API Key、
   apiKeyHelper、中转 token 或第三方云登录时按 `not_a_subscription` 处理，也不替用户改 CLI 的登录。
+- 订阅链路（登录态检查、登录、余量查询、模型探测、本机订阅会话）不加载用户级
+  `~/.claude/settings.json`：终端 `claude` 常在那里配 `apiKeyHelper`、`env.ANTHROPIC_BASE_URL` 与
+  自定义模型名走网关，CLI 加载后会盖过订阅登录（`auth status` 报 `api_key_helper`、余量读不到、
+  模型清单变成网关的、会话请求可能发往网关）。直接拉起 CLI 时（含 Desktop 状态 worker，以及 Node host 用的
+  `readClaudeCliLoginStatusBySpawn`）前置
+  `--setting-sources '' --settings '{"apiKeyHelper":""}'`，模型探测用 `settingSources: []`，本机订阅
+  会话只加载 `project` / `local`（maker-core `session-setting-sources`）。只作用于 Cindy 拉起的
+  子进程，不改用户设置文件；API 路由、SSH 远端与终端 `claude` 照旧使用用户设置，订阅判定标准不变。
+  这类会话的 `/` palette 同步不列 `~/.claude` 里的命令 / skill（运行时没加载，列出来选了也不生效），
+  项目 `.claude` 与 Cindy 托管 skill 照常列出；由 live 会话句柄 `omitsUserSkills` 决定，调用方不能覆盖。
+  启动期 subagent 定义扫描（决定「Subagent 模型」默认值要不要压过手写 `model:`）必须按同一份
+  `settingSources` 选目录（maker-core `session-setting-sources`）：订阅 / 设备托管会话排除 `user` 时
+  `~/.claude/agents` 不会被 CLI 加载，扫描也不能把它算进判定，否则一份旧全局定义就会让真会加载的
+  内置 / 项目 agent 拿不到用户配置的默认值。
 - 登录态读取不得阻塞与订阅无关的路径：启动只在已连接时等待，列表类读取用缓存并后台刷新，
   读失败有退避。
 - 订阅会话由 SDK 拉起同一个 CLI，自己读凭证、直连 Anthropic：不设 `ANTHROPIC_BASE_URL`、
@@ -123,6 +137,7 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   API 路径仍通过 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` 锁定上游和认证，远端在
   route materialization 后按最终认证形态重选入口。入口身份不改变凭证来源，普通项目
   设置、权限与 hooks 仍由 CLI 加载。SDK 模式仍没有终端的工作区信任确认，因此继续对
+
   CLI 实际加载的项目级设置（工作目录的两份文件，加上主仓库根目录的 `settings.local.json`）
   设闸作为纵深防御（maker-core `workspace-settings-guard`），不依赖上游过滤替代宿主检查：
   - 每次拉起 CLI 进程前（含会话中途重建）命中就拒绝启动；
@@ -141,7 +156,7 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 - 「断开」只撤销 Cindy 的使用许可（`nativeProviderAuthBinding`），不登出 CLI。
   旧版独立 Claude 账号已停用，但不删除其已存凭证。
 - 套餐余量由内置 CLI 的 `get_usage` 控制请求查询（CLI 用自己的登录发请求，拉起时不读
-  项目级设置、不起 MCP、不落会话记录），会话内的 SDK `rate_limit_event` 做增量刷新；
+  用户与项目级设置、不起 MCP、不落会话记录），会话内的 SDK `rate_limit_event` 做增量刷新；
   模型列表来自 SDK `supportedModels` 与 Registry；
   不得为此恢复用订阅 token 直接调用 Anthropic API。
 - 实现见 [claude-native-cli.ts](../../apps/desktop/src/main/maker-host/claude-native-cli.ts)、

@@ -120,6 +120,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+/** 写一份 cc 真会加载的 subagent 定义(name + description 齐备,见 subagent-definitions.ts)。 */
+async function writeSubagentDefinition(dir: string, name: string, model: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, `${name}.md`),
+    `---\nname: ${name}\ndescription: fixture agent\nmodel: ${model}\n---\nbody\n`,
+    'utf8',
+  );
+}
+
 async function startPlanSession(
   planMode: boolean,
   depOverrides: Partial<AgentDeps> = {},
@@ -906,6 +916,10 @@ describe('ClaudeCodeAgent plan mode', () => {
       expect(subscriptionEnv.ANTHROPIC_BASE_URL).toBeUndefined();
       expect(subscriptionEnv.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
       expect(subscriptionEnv.ANTHROPIC_API_KEY).toBeUndefined();
+      // User-level settings (a terminal claude's apiKeyHelper / gateway env) would override the subscription login.
+      expect(sdkMock.query.mock.calls.at(-1)?.[0]?.options?.settingSources).toEqual(['project', 'local']);
+      // The palette must not offer ~/.claude commands that this runtime never loads.
+      expect(handles[0]!.omitsUserSkills).toBe(true);
       await vi.waitFor(() => expect(seen).toEqual([rateLimitInfo]));
 
       handles.push(await agent.startSession({
@@ -916,12 +930,112 @@ describe('ClaudeCodeAgent plan mode', () => {
       expect(gatewayEnv.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:1');
       expect(gatewayEnv.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1');
       expect(gatewayEnv.ANTHROPIC_API_KEY).toBe('sk-must-not-reach-anthropic');
+      expect(sdkMock.query.mock.calls.at(-1)?.[0]?.options?.settingSources).toEqual(['user', 'project', 'local']);
+      expect(handles[1]!.omitsUserSkills).toBe(false);
       // Gateway sessions go through the local proxy; their rate_limit_event is not the subscription quota.
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(seen).toEqual([rateLimitInfo]);
     } finally {
       setClaudeRateLimitInfoListener(null);
       await Promise.all(handles.map(handle => handle.close()));
+    }
+  });
+
+  // 回归(PR #8605 P1):订阅会话不加载用户级设置,CLI 也就不加载 ~/.claude/agents。启动扫描
+  // 若仍看那里,一份旧全局定义里的 `model:` 会被当成「有人声明 model」,把用户配置的
+  // 「Subagent 模型」默认值静默停用,真会加载的内置 agent 反而退回主模型。
+  it('keeps the configured subagent model when only an unloaded global agent declares one', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    await writeSubagentDefinition(path.join(configDir, 'agents'), 'legacy-global', 'claude-sonnet-4-5');
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    // 订阅凭证形态:adapter 在 oauth-bearer 下报 oauth 登录。
+    const auth: AuthAdapter = {
+      ...createDeps().auth,
+      getState: vi.fn(async (options?: AuthAdapterOptions) => ({
+        authenticated: true,
+        ...(options?.credentialMode === 'oauth-bearer' ? { authSource: 'oauth' as const } : {}),
+      })),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth,
+      runtimeConfig: { subagentModel: 'claude-haiku-4-5-20251001' },
+    }));
+    const handles = [];
+    try {
+      handles.push(await agent.startSession({
+        sessionId: 'session-subagent-unloaded-global', model: 'claude-opus-4-6', providerId: 'anthropic',
+        workingDir, permissionMode: 'acceptEdits',
+      }));
+      const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options;
+      expect(options?.settingSources).toEqual(['project', 'local']);
+      const env = options?.env as Record<string, string | undefined>;
+      expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('claude-haiku-4-5-20251001');
+    } finally {
+      await Promise.all(handles.map((handle) => handle.close()));
+    }
+  });
+
+  // 同一会话会加载项目级定义,项目 agent 手写的 model 仍优先于设置里的默认值 ——
+  // 扫描收窄只能少算「CLI 不加载的定义」,不能把真会加载的声明也漏掉。
+  it('still lets a loaded project agent model suppress the configured subagent default', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    await writeSubagentDefinition(path.join(configDir, 'agents'), 'legacy-global', 'claude-sonnet-4-5');
+    await writeSubagentDefinition(
+      path.join(workingDir, '.claude', 'agents'),
+      'project-reviewer',
+      'claude-opus-4-6',
+    );
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    const auth: AuthAdapter = {
+      ...createDeps().auth,
+      getState: vi.fn(async (options?: AuthAdapterOptions) => ({
+        authenticated: true,
+        ...(options?.credentialMode === 'oauth-bearer' ? { authSource: 'oauth' as const } : {}),
+      })),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth,
+      runtimeConfig: { subagentModel: 'claude-haiku-4-5-20251001' },
+    }));
+    const handles = [];
+    try {
+      handles.push(await agent.startSession({
+        sessionId: 'session-subagent-project-declared', model: 'claude-opus-4-6', providerId: 'anthropic',
+        workingDir, permissionMode: 'acceptEdits',
+      }));
+      const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options;
+      expect(options?.settingSources).toEqual(['project', 'local']);
+      expect((options?.env as Record<string, string | undefined>).CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
+    } finally {
+      await Promise.all(handles.map((handle) => handle.close()));
+    }
+  });
+
+  // API / 网关路由照旧加载用户级设置,~/.claude/agents 里的 model 声明也照旧优先。
+  it('still honors a global agent model for gateway sessions that load user settings', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    await writeSubagentDefinition(path.join(configDir, 'agents'), 'legacy-global', 'claude-sonnet-4-5');
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { endpoint: 'http://127.0.0.1:1', subagentModel: 'claude-haiku-4-5-20251001' },
+    }));
+    const handles = [];
+    try {
+      handles.push(await agent.startSession({
+        sessionId: 'session-subagent-gateway-global', model: 'claude-opus-4-6', providerId: 'xd',
+        workingDir, permissionMode: 'acceptEdits',
+      }));
+      const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options;
+      expect(options?.settingSources).toEqual(['user', 'project', 'local']);
+      expect((options?.env as Record<string, string | undefined>).CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
+    } finally {
+      await Promise.all(handles.map((handle) => handle.close()));
     }
   });
 

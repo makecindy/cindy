@@ -46,6 +46,7 @@ import type {
   Settings,
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
+import { resolveClaudeSettingSources } from './session-setting-sources.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
 import {
@@ -144,6 +145,7 @@ import {
 } from './workspace-settings-guard.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import { materializeClaudeFlagSettings } from './flag-settings-file.js';
+import { CLAUDE_SUBSCRIPTION_FLAG_SETTINGS } from './subscription-settings-isolation.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
   buildClaudeDisallowedTools,
@@ -1116,6 +1118,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           cwd: probeDir,
           pathToClaudeCodeExecutable: this.deps.binaryPath,
           env,
+          // 订阅清单只看订阅登录:不加载用户级设置里的 apiKeyHelper / 网关与自定义模型名。
+          settingSources: [],
+          settings: { ...CLAUDE_SUBSCRIPTION_FLAG_SETTINGS },
         },
       });
       const query = q;
@@ -1171,7 +1176,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (!fileOps) throw new Error('Claude Code remote Skill discovery requires remote file operations');
       return scanRemoteClaudeSkills({ fileOps, workingDir: opts.workingDir });
     }
-    const raw = await scanClaudeSlashCommands(opts.workingDir);
+    const scanned = await scanClaudeSlashCommands(opts.workingDir);
+    // 会话不加载用户级设置时,~/.claude 里的命令 / skill 列出来也用不了,不展示。
+    const raw = opts.omitUserScopeSkills ? scanned.filter((item) => item.scope !== 'global') : scanned;
     return {
       skills: [...await this.managedSkillCommands(raw.map((item) => item.name)), ...raw.map((c) => ({
         kind: 'agent-skill' as const,
@@ -1200,8 +1207,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         }],
       };
     }
+    const items = opts.omitUserScopeSkills ? result.items.filter((item) => item.scope === 'project') : result.items;
     return {
-      skills: [...await this.managedSkillCommands(result.items.map((item) => item.name)), ...result.items.map((item) => ({
+      skills: [...await this.managedSkillCommands(items.map((item) => item.name)), ...items.map((item) => ({
         kind: 'agent-skill' as const,
         name: item.name,
         description: item.description,
@@ -1494,6 +1502,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       const override = await findWorkspaceSettingsOverride(opts.workingDir);
       if (override) throw new Error(workspaceSettingsOverrideMessage(override));
     }
+    // 本会话实际加载的设置来源:同一个值既交给 SDK 的 settingSources,也决定下面 subagent
+    // 定义的扫描范围(见 session-setting-sources.ts)。两者必须同源 —— 未加载目录里的定义
+    // 若被算进「有人声明 model」,会把「Subagent 模型」默认值静默停用。
+    const sessionSettingSources = resolveClaudeSettingSources({
+      reviewMode,
+      isolatedBotProfile: !!isolatedBotProfile(opts.botRuntimeProfile),
+      hostToolsOnly: opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly === true,
+      hosted: !!hosted,
+      nativeCliAuth,
+    });
 
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
@@ -1620,6 +1638,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           workingDir: opts.workingDir,
           // 子进程真正会用的那份 env —— CLAUDE_CONFIG_DIR 在里面。
           env,
+          // 只扫 CLI 真会加载的作用域:订阅 / 设备托管不读用户级设置,`~/.claude/agents` 里
+          // 的旧定义不能把这份默认值压掉(PR #8605 P1)。
+          settingSources: sessionSettingSources,
         });
         subagentDefault = resolveSubagentModelDefault({
           configuredDefault: configuredSubagentDefault,
@@ -4650,9 +4671,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
-          settingSources: reviewMode || !!isolatedBotProfile(opts.botRuntimeProfile) || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
-            ? []
-            : hosted ? ['project', 'local'] : ['user', 'project', 'local'],
+          // 本机订阅会话同样不加载用户级设置：其中给终端 claude 配的 API / 网关会盖过订阅登录
+          // (见 subscription-settings-isolation.ts)；API 路由照旧加载。
+          // 取值与 subagent 定义扫描同源(见上方 sessionSettingSources)。
+          settingSources: sessionSettingSources,
           // Settings (SDK "flag settings" 层, 优先级最高 — 覆盖 user/project/local 文件层):
           //  - showThinkingSummaries        : reasoning summary 展示开关
           //  - autoMemoryEnabled / autoDream: memory 联动 (host 通过 runtimeConfig.memoryEnabled 或
@@ -6719,6 +6741,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       get requestSessionId() { return sdkSessionId ?? '<pending>'; },
       agentKind: 'claude-code',
       get model() { return mutableModel; },
+      // 本机订阅会话不加载用户级设置(见 subscription-settings-isolation.ts),palette 据此隐藏 ~/.claude 条目。
+      omitsUserSkills: nativeCliAuth,
 
       validateSendOptions(sendOpts: SendOptions) {
         if (sendOpts.toolsDisabled && opts.remoteHostId) {
