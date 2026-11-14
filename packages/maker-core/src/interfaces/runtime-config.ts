@@ -32,6 +32,11 @@ export interface AgentRuntimeConfig {
    */
   endpoint?: string;
 
+  /** Resolve the local managed request endpoint before materializing launch config.
+   * May wait for startup and reject; never used for native CLI auth or remote sessions.
+   * Read-only catalog/utility consumers keep using endpoint. */
+  resolveLocalEndpoint?: () => Promise<string>;
+
   /**
    * 远端（cc-mgr daemon）会话专用接入端点。
    *

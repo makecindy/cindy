@@ -462,8 +462,10 @@ export async function buildClaudeEnv(
   // 远端模式优先用 remoteEndpoint（真上游网关）—— 本地 endpoint 是 loopback proxy URL，
   // 远端机器够不到（见 runtime-config.ts remoteEndpoint 文档 + index.ts 的 loopback guard）。
   // remoteEndpoint 未设时回落 endpoint（host 不区分远端的旧行为）。
-  const endpoint =
-    mode === 'remote' && runtimeConfig.remoteEndpoint
+  const endpoint = nativeCliAuth ? undefined
+    : mode === 'local' && runtimeConfig.resolveLocalEndpoint
+      ? await runtimeConfig.resolveLocalEndpoint()
+      : mode === 'remote' && runtimeConfig.remoteEndpoint
       ? runtimeConfig.remoteEndpoint
       : runtimeConfig.endpoint;
   if (nativeCliAuth) {

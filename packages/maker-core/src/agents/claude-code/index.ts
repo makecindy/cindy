@@ -1474,6 +1474,11 @@ export class ClaudeCodeAgent extends BaseAgent {
       : { model: opts.model };
     const nativeSubscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
     nativeSubscriptionAccount?.assertCurrent();
+    // Provider auth itself checks proxy readiness. Let a local launch join or
+    // retry warmup before that check; read-only auth status stays side-effect free.
+    if (!opts.remoteHostId && credentialMode === 'provider-oauth') {
+      await this.deps.runtimeConfig.resolveLocalEndpoint?.();
+    }
     const authState = await this.deps.auth.getState({ ...authOptions, nativeSubscriptionAccount });
     if (!authState.authenticated) {
       throw new AgentNotAuthenticatedError(
@@ -1565,6 +1570,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       nativeSubscriptionAccount,
       credentialMode,
       nativeCliAuth,
+      // Remote startup also builds this preliminary env, but must never wait
+      // for or materialize the controller's local model proxy.
+      mode: opts.remoteHostId ? 'remote' : 'local',
       authModel: opts.model,
       sessionProviderId: opts.providerId ?? null,
       activeModel: sdkModel,

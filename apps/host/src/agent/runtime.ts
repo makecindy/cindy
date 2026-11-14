@@ -589,7 +589,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     ...(options.resolveLocalMcpDuplicateChoices ? { resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices } : {}),
     claudeHooks,
     auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok),
-    runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint),
+    runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint, claudeProxy ? () => claudeProxy.resolveAgentEndpoint() : undefined),
     binaryPath: options.binaryPath,
     logger: LOGGER,
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
@@ -689,7 +689,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         runtimeConfig: buildPiRuntimeConfig({
           ripgrepPath: runtimeConfigs.getRipgrepBinaryPath(),
           userDataPath: options.userDataDir,
-          endpoint: engineEndpoint,
+          endpoint: () => claudeProxy ? (claudeProxy.isReady() ? claudeProxy.endpoint() : undefined) : hostEndpoint(),
           remoteEndpoint: () => claudeUpstreamEndpoint(),
         }),
         binaryPath: options.piBinaryPath,

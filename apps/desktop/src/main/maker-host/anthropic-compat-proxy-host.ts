@@ -94,6 +94,10 @@ export function getClaudeEndpoint(): string {
   return desktopProxy.getClaudeEndpoint();
 }
 
+export function resolveClaudeAgentEndpoint(): Promise<string> {
+  return desktopProxy.resolveClaudeAgentEndpoint();
+}
+
 export async function disposeAnthropicCompatProxy(): Promise<void> {
   return await desktopProxy.disposeAnthropicCompatProxy();
 }

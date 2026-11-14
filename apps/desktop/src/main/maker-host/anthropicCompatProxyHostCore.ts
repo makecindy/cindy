@@ -154,7 +154,9 @@ const { createAttachmentRecovery, outboundFetch, isOpenAiSubscriptionProviderId,
 const log = createMakerLogger('cc-proxy');
 
 let _handle: ProxyHandle | null = null;
-let _initialized = false;
+let _startPromise: Promise<void> | null = null;
+let _stopPromise: Promise<void> | null = null;
+let _disposeGeneration = 0;
 
 // gateway api key reader —— 由 host 注入(readClaudeApiKey),避免 proxy-host 直接 import
 // auth-adapters(重模块)。oauth-spawn 下走网关的请求(默认 / 选 XD)要把鉴权头换成它。
@@ -1185,17 +1187,25 @@ function createModelRoutingTransform(): RoutingTransform {
 }
 
 /**
- * 启动本地代理。幂等 —— 重复调用直接返回已缓存 handle。
- *
- * 即使代理启动失败,也会把 _initialized 置 true,后续 getClaudeEndpoint()
- * 直接 fallback 到真上游 URL,不会反复重试拖慢启动。
+ * Best-effort warmup: concurrent callers share one attempt. A failed attempt
+ * can be retried by the next explicit ensure, without a background retry loop.
+ * Agent launchers use resolveClaudeAgentEndpoint to require a ready handle.
  */
 async function ensureAnthropicCompatProxyReady(): Promise<void> {
-  if (_initialized) return;
-  _initialized = true;
+  if (_stopPromise) await _stopPromise;
+  if (_handle) return;
+  if (_startPromise) return _startPromise;
+  const generation = _disposeGeneration;
+  const start = Promise.resolve().then(() => startAnthropicCompatProxy(generation)).finally(() => {
+    if (_startPromise === start) _startPromise = null;
+  });
+  _startPromise = start;
+  return start;
+}
 
+async function startAnthropicCompatProxy(generation: number): Promise<void> {
   try {
-    _handle = await createAnthropicCompatProxy({
+    const handle = await createAnthropicCompatProxy({
       // 函数形态:model-access 凭据同步可能在 proxy 启动(splash)后才把 endpoint
       // 换成下发值;每请求现取才能保证与当前 key 同租户(proxy 内部按值 memoize)。
       upstream: () => claudeUpstreamEndpoint(),
@@ -1373,19 +1383,29 @@ async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 行为与之前字节级一致。见 outbound-proxy-resolver.ts。
       resolveOutboundProxy: resolveDesktopOutboundProxy,
     });
+    if (generation !== _disposeGeneration) {
+      await handle.dispose();
+      return;
+    }
+    _handle = handle;
     log.debug('proxy ready', { url: _handle.url, upstream: claudeUpstreamEndpoint() });
   } catch (err) {
     _handle = null;
-    log.error('proxy failed to start, falling back to direct upstream', {
+    log.error('proxy failed to start', {
       err: err instanceof Error ? err.message : String(err),
-      fallbackEndpoint: claudeUpstreamEndpoint(),
     });
   }
 }
 
+/** Actual local Agent configuration must never freeze the metadata fallback. */
+async function resolveClaudeAgentEndpoint(): Promise<string> {
+  await ensureAnthropicCompatProxyReady();
+  if (!_handle) throw new Error('Local model proxy is not ready; retry starting the task.');
+  return _handle.url;
+}
+
 /**
- * proxy handle 是否就绪。'oauth' 模式的 fail-closed gate 用它判定:proxy 没起来时
- * DesktopClaudeAuthAdapter.getState() 会拒绝授权(不让 OAuth token + 直连 gateway 裸奔)。
+ * proxy handle 是否就绪。依赖代理的供应商鉴权用它判定,原生 Claude CLI 订阅不依赖它。
  * 复刻 codex-proxy-host.ts:isCodexProxyHandleReady 的「显式就绪状态,不靠字符串比较」原则。
  */
 function isAnthropicCompatProxyHandleReady(): boolean {
@@ -1393,27 +1413,17 @@ function isAnthropicCompatProxyHandleReady(): boolean {
 }
 
 /**
- * 给本地 Claude Code 子进程用的 endpoint。
+ * Synchronous endpoint snapshot for metadata and auxiliary callers. Before
+ * warmup it retains the upstream fallback; reading a catalog must not start a
+ * listener or fail just because the listener is unavailable.
  *
- * 退役「XD.Inc 兼容模式」开关后, proxy 恒在链路里 —— per-model(claude-* 直连
- * api.anthropic.com、其余换 gateway key)与 per-session 供应商路由都活在 proxy 的
- * routingTransform 里, 绕过 proxy 等于绕过路由器(多供应商选择会被静默丢弃)。所以:
- *
- *   proxy ready → 返回 loopback URL(请求经 proxy 做路由 + 字段适配)
- *   proxy 没起  → fail-open 回落真上游 (claudeUpstreamEndpoint()) + 日志。
- *                 oauth-spawn 下本不该到这(getState 已 gate proxy readiness, 见
- *                 auth-adapters), 记 ERROR; gateway-spawn 记 warn。
- *
- * 注意: ANTHROPIC_BASE_URL 是子进程 spawn 时传入的 env, **已存在 session 仍走老
- * endpoint**, proxy 就绪状态变化只对新建 session 生效。调用方必须先 await
- * ensureAnthropicCompatProxyReady()。
- *
- * 远端 cc-mgr 会话不走这里 —— 它用 runtimeConfig.remoteEndpoint(真上游网关), loopback
- * 远端够不到(见 runtime-configs.ts + maker-core claude-code/index.ts 的 loopback guard)。
+ * Local Claude launch must use resolveClaudeAgentEndpoint instead: its frozen
+ * ANTHROPIC_BASE_URL must retain the proxy's per-model and per-session routing.
+ * Native CLI subscription auth and remoteEndpoint remain separate paths.
  */
 function getClaudeEndpoint(): string {
   if (_handle) return _handle.url;
-  // proxy 没起来 —— fail-open 回落真上游。
+  // Snapshot only; actual local Agent launch checks readiness asynchronously.
   if (_isOAuthSpawn()) {
     log.error('oauth-spawn but proxy not ready; falling back to direct upstream (getState 应已拦截)', {
       fallbackEndpoint: claudeUpstreamEndpoint(),
@@ -1430,16 +1440,24 @@ function getClaudeEndpoint(): string {
  * 优雅关闭。注册到 bootstrap-electron 的 onQuit('async') 阶段。
  */
 async function disposeAnthropicCompatProxy(): Promise<void> {
-  if (!_handle) return;
+  if (_stopPromise) return _stopPromise;
+  _disposeGeneration += 1;
   const h = _handle;
   _handle = null;
-  _initialized = false;
-  try {
-    await h.dispose();
-  } catch (err) {
-    log.warn('proxy dispose failed', { err: err instanceof Error ? err.message : String(err) });
-  }
+  const starting = _startPromise;
+  const stop = Promise.resolve().then(async () => {
+    await starting;
+    try {
+      await h?.dispose();
+    } catch (err) {
+      log.warn('proxy dispose failed', { err: err instanceof Error ? err.message : String(err) });
+    }
+  }).finally(() => {
+    if (_stopPromise === stop) _stopPromise = null;
+  });
+  _stopPromise = stop;
+  return stop;
 }
 
-return { setClaudeProxyGatewayKeyReader, setClaudeProxyOAuthSpawnChecker, setClaudeProxySessionIdResolver, setClaudeProxyOwnerBoundaryPendingChecker, setClaudeProxyOwnerScopeKeyReader, piGatewayRequestAgent, createModelRoutingTransform, ensureAnthropicCompatProxyReady, isAnthropicCompatProxyHandleReady, getClaudeEndpoint, disposeAnthropicCompatProxy };
+return { setClaudeProxyGatewayKeyReader, setClaudeProxyOAuthSpawnChecker, setClaudeProxySessionIdResolver, setClaudeProxyOwnerBoundaryPendingChecker, setClaudeProxyOwnerScopeKeyReader, piGatewayRequestAgent, createModelRoutingTransform, ensureAnthropicCompatProxyReady, isAnthropicCompatProxyHandleReady, getClaudeEndpoint, resolveClaudeAgentEndpoint, disposeAnthropicCompatProxy };
 }

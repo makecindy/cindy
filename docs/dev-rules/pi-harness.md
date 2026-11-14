@@ -12,8 +12,14 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 - **provider/model**:`index.ts writeModelsJson` 把 host 注入的模型清单挂在单一自建
   provider `cindy` 下,写进 `<agentHome>/models.json`。`baseUrl = runtimeConfig.endpoint`
-  —— desktop 侧是本地 anthropic-compat proxy(loopback);proxy 未起时 fail-open 直连真上游
-  (`anthropic-compat-proxy-host.ts`)。凭证走 `$CINDY_PI_API_KEY` env 插值,不落盘。
+  —— Desktop 与 Host 的本地代理路由使用 anthropic-compat proxy(loopback)。实际启动和
+  live-refresh 等待在途创建；未就绪时明确失败，不把真上游写入启动快照、静默丢失选定来源。
+  失败后的下一次显式启动可重新创建，关闭期间的旧创建结果会回收，不增加后台重试。
+  原生 API/keyless BYOM 仍使用自身端点，远程端点与目录预览不依赖本机代理。
+  同步 endpoint getter 为辅助读取保留上游回退，不能代替启动就绪检查。
+  凭证走 `$CINDY_PI_API_KEY` env 插值,不落盘。共享生命周期及启动边界回归见
+  `anthropicCompatProxyInboundPort.test.ts`、`piByomNoCindyAuth.test.ts` 与
+  `hostPiNativeProvidersParity.test.ts`。
 - **system prompt**:`--append-system-prompt` 追加 host 产品段 + 用户段,**保留 pi 默认
   prompt**(不用 `--system-prompt` 整体替换 —— 那会丢掉 pi 自己调好的工具用法/工程约定)。
   追加段的文本写在会话 `configHome/append-system-prompt.md`,命令行只传该文件路径(pi 接受
