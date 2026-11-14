@@ -19,6 +19,8 @@ import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActive
 
 import { createInputQueue } from './input-queue.mjs';
 import { createTurnExecutor } from './turn-executor.mjs';
+import { lockSessionRoute } from './session-route-lock.mjs';
+import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { createEventHub } from '../events.mjs';
 import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
@@ -2218,4 +2220,163 @@ test('the Auto-review context treats a running plugin-target input as unavailabl
   // No running turn: nothing accepted, an ordinary review.
   assert.equal(h.queue.acceptedInputProvenance('idle-task'), null);
   assert.equal((await resolve(request('idle-task'))).delegatedTask, undefined);
+});
+
+// The task send lock (table B of the context recovery plan): a send holds it until accepted, the
+// entries that change a task's runtime or route take it, queue commands and stop never do.
+function holdSendLock(sessionId) {
+  let release, acquired;
+  const ready = new Promise(resolve => { acquired = resolve; });
+  const held = withSendToSessionLock(sessionId, () => { acquired(); return new Promise(resolve => { release = resolve; }); });
+  return ready.then(() => ({ release: async () => { release(); await held; } }));
+}
+
+test('a task route without contention runs once with its arguments and returns or throws as it would unlocked', { timeout: 10_000 }, async () => {
+  const calls = [];
+  const route = lockSessionRoute(async (sessionId, ...args) => {
+    calls.push([sessionId, ...args]);
+    if (args[0] === 'fail') throw new Error('route failed');
+    return { sessionId, args };
+  });
+  assert.deepEqual(await route('lock-plain', 'patch', 2), { sessionId: 'lock-plain', args: ['patch', 2] });
+  await assert.rejects(route('lock-plain', 'fail'), /route failed/);
+  assert.deepEqual(await route('lock-plain', 'after'), { sessionId: 'lock-plain', args: ['after'] }, 'a failed route releases the lock');
+  assert.deepEqual(calls, [['lock-plain', 'patch', 2], ['lock-plain', 'fail'], ['lock-plain', 'after']]);
+});
+
+test('a task route change waits for the task\'s send to be accepted', { timeout: 10_000 }, async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  const order = [];
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const reached = new Promise(resolve => { entered = resolve; });
+  const create = h.maker.createSession.bind(h.maker);
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    const send = session.send.bind(session);
+    session.send = async (text, sendOptions) => {
+      entered();
+      await gate;
+      const result = await send(text, sendOptions);
+      order.push('send accepted');
+      return result;
+    };
+    return session;
+  };
+  await h.queue.enqueue('lock-update', { clientId: 'first', text: 'first' });
+  await reached;
+  const update = lockSessionRoute(async () => { order.push('update'); })('lock-update');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(order, [], 'the update waits while the send holds the lock');
+  release();
+  await update;
+  assert.deepEqual(order, ['send accepted', 'update']);
+});
+
+test('deleting a task under its send lock waits for its command chain, whose commands finish', { timeout: 10_000 }, async t => {
+  let releaseRead, readEntered;
+  const readGate = new Promise(resolve => { releaseRead = resolve; });
+  const readReached = new Promise(resolve => { readEntered = resolve; });
+  let gated = true;
+  const h = createHarness({ readSession: async sessionId => {
+    if (gated) { gated = false; readEntered(); await readGate; }
+    return { id: sessionId, status: 'active', agentKind: 'claude-code', model: 'stored-model', workingDir: '/tmp',
+      providerId: 'xd', permissionMode: 'ask', planModeEnabled: false };
+  } });
+  t.after(() => h.queue.dispose());
+  const enqueued = h.queue.enqueue('lock-delete', { clientId: 'pending', text: 'pending' });
+  await readReached;
+  const deleted = lockSessionRoute(sessionId => h.queue.disposeSession(sessionId))('lock-delete');
+  releaseRead();
+  const [command, deletion] = await Promise.allSettled([enqueued, deleted]);
+  assert.ok(command.status === 'fulfilled' || command.status === 'rejected', 'the queued command finished');
+  assert.equal(deletion.status, 'fulfilled');
+});
+
+test('queue commands finish while another holder has the task send lock; the queued send waits for it', { timeout: 10_000 }, async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  const lock = await holdSendLock('lock-commands');
+  await h.queue.enqueue('lock-commands', { clientId: 'waiting', text: 'waiting' });
+  await h.queue.getProjection('lock-commands');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.maker.sessions.get('lock-commands')?.sent.length ?? 0, 0, 'the send waits for the lock');
+  await lock.release();
+  await waitFor(() => h.maker.sessions.get('lock-commands')?.sent.length === 1);
+});
+
+test('stopping a task takes effect while another holder has its send lock', { timeout: 10_000 }, async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  await h.queue.enqueue('lock-stop', { clientId: 'running', text: 'running' });
+  await waitFor(() => h.maker.sessions.get('lock-stop')?.sent.length === 1);
+  const session = h.maker.sessions.get('lock-stop');
+  const lock = await holdSendLock('lock-stop');
+  await h.queue.stop('lock-stop');
+  assert.equal(session.aborted, 1, 'the stop did not wait for the lock');
+  await lock.release();
+});
+
+// A send that is never accepted holds the lock until the lock's watchdog settles its entry
+// (SEND_LOCK_BAIL_MS, five minutes, sendToSessionLock.ts); deleting that task then completes.
+test('deleting a task whose send is never accepted completes once the send lock times out', { timeout: 10_000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  let entered;
+  const reached = new Promise(resolve => { entered = resolve; });
+  const create = h.maker.createSession.bind(h.maker);
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    session.send = async () => { entered(); return new Promise(() => {}); };
+    return session;
+  };
+  await h.queue.enqueue('lock-bail', { clientId: 'stuck', text: 'stuck' });
+  await reached;
+  let deleted = false;
+  const deletion = lockSessionRoute(sessionId => h.queue.disposeSession(sessionId))('lock-bail')
+    .then(() => { deleted = true; });
+  const settle = async () => { for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve)); };
+  await settle();
+  t.mock.timers.tick(5 * 60_000 - 1);
+  await settle();
+  assert.equal(deleted, false, 'the deletion waits while the stuck send holds the lock');
+  t.mock.timers.tick(1);
+  await deletion;
+  assert.equal(h.maker.sessions.has('lock-bail'), false, 'the task runtime is closed');
+  assert.deepEqual(h.queue.projection('lock-bail').pendingQueue, []);
+});
+
+test('stopping a task whose send is not yet accepted lets its deletion run without waiting for the lock timeout', { timeout: 10_000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  let entered;
+  const reached = new Promise(resolve => { entered = resolve; });
+  const create = h.maker.createSession.bind(h.maker);
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    // Not accepted until cancelled: the input's abort signal ends the start.
+    session.send = async (_text, sendOptions = {}) => {
+      entered();
+      return new Promise((_, reject) => sendOptions.signal?.addEventListener('abort',
+        () => reject(new Error('start cancelled')), { once: true }));
+    };
+    return session;
+  };
+  await h.queue.enqueue('lock-stop-delete', { clientId: 'starting', text: 'starting' });
+  await reached;
+  await h.queue.stop('lock-stop-delete');
+  await lockSessionRoute(sessionId => h.queue.disposeSession(sessionId))('lock-stop-delete');
+  assert.equal(h.maker.sessions.has('lock-stop-delete'), false, 'deleted with no clock advance');
+});
+
+test('a holder of the task send lock passes straight through a route of the same task on its own chain', { timeout: 10_000 }, async () => {
+  const order = [];
+  await withSendToSessionLock('lock-reentry', async () => {
+    await lockSessionRoute(async () => { order.push('route'); })('lock-reentry');
+    order.push('holder');
+  });
+  assert.deepEqual(order, ['route', 'holder']);
 });

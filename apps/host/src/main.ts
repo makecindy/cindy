@@ -128,6 +128,7 @@ import { createTaskTagService } from '../../desktop/src/main/localDb/ipc/taskTag
 import { executeConversationSearch } from '../../desktop/src/main/localDb/ipc/search.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../desktop/src/main/device-link/broadcast-tap.js';
 import { createInputQueue } from './agent/input-queue.mjs';
+import { lockSessionRoute } from './agent/session-route-lock.mjs';
 import { applyLiveSessionSettings } from './agent/session-settings.mjs';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
@@ -643,7 +644,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   pluginGateway = createHostPluginGateway({ runtime: plugins, profileDir: dataDir, ownerId,
     version: layout.version, credentials, fileConfirmation,
     getSession: id => agentGraph?.maker.getSession(id),
-    restoreSession: (id, check) => inputQueue.restoreSession(id, check),
+    // Under the task's send lock, as the desktop's plugin page restore (register.ts).
+    restoreSession: lockSessionRoute((id: string, check: () => Promise<void>) => inputQueue.restoreSession(id, check)),
     requestHostPermission: async (id, instance, request, signal) => {
       const session = agentGraph?.maker.getSession(id);
       if (!session || session.instanceId !== instance) return null;
@@ -1255,7 +1257,7 @@ const serverDeps = {
       activity: row.lastToolUse?.toolName ?? null,
     }));
   },
-  updateSession: async (sessionId: string, patch: Record<string, unknown>) => {
+  updateSession: lockSessionRoute(async (sessionId: string, patch: Record<string, unknown>) => {
     const allowed: Record<string, true> = {
       title: true, status: true, pinnedAt: true, notificationsMuted: true, model: true,
       effort: true, permissionMode: true, fastMode: true, planModeEnabled: true,
@@ -1292,7 +1294,7 @@ const serverDeps = {
     if (!row) throw new Error('session not found');
     eventHub.publish({ type: 'session_changed', action: 'update', sessionId, patch, status: row.status });
     return sessionToCamel({ ...row, messageCount: 0 });
-  },
+  }),
   /**
    * Cross-engine switch: record the intent and let the next enqueue apply it.
    * Mirrors the desktop contract (`deferred: true`) so the renderer can show
@@ -1363,7 +1365,7 @@ const serverDeps = {
   getSession: async (sessionId: string) => {
     return readHostSession(getDbClient().drizzle, sessionId);
   },
-  deleteSession: async (sessionId: string) => {
+  deleteSession: lockSessionRoute(async (sessionId: string) => {
     if (!sessionStorage) throw new Error('agent runtime is not ready');
     const existing = await sessionStorage.get(sessionId);
     if (!existing) return { deleted: false, sessionId };
@@ -1379,8 +1381,8 @@ const serverDeps = {
     forgetProvisionalSession(sessionId);
     eventHub.publish({ type: 'session_changed', action: 'delete', sessionId, status: 'deleted' });
     return { deleted: true, sessionId };
-  },
-  discardProvisionalSession: async (sessionId: string) => {
+  }),
+  discardProvisionalSession: lockSessionRoute(async (sessionId: string) => {
     // Only an unsent draft may be closed: a late request for a task another
     // client already sent must leave its queue running.
     if (!isProvisionalSession(sessionId)) {
@@ -1390,7 +1392,7 @@ const serverDeps = {
     pendingAgentSwitches.delete(sessionId);
     const discarded = await discardProvisionalSessionRow(sessionId, sessionDraftPorts);
     return { discarded, remaining: Boolean(await sessionStorage?.get(sessionId)) };
-  },
+  }),
   commitProvisionalSession: async (sessionId: string) => ({
     committed: await commitProvisionalSession(sessionId, sessionDraftPorts),
   }),

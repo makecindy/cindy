@@ -10,6 +10,7 @@ import { createSessionStderrOptions, isSessionRunningError } from '../../../desk
 import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-host/rehydrateCloseSuppression.ts';
 import { createWireNoteMemory } from '../../../desktop/src/main/maker-ipc/wireNoteMemory.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
+import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { DEFAULT_CLASSICAL_REPLY_STYLE } from '@cindy/maker-shared/classical-reply';
 import { assertHostTaskExecutionSupported, prepareHostUserMessage } from './send-preflight.ts';
 import { createHostLearnInvocationCapture } from './learn-capture.ts';
@@ -499,7 +500,14 @@ export function createTurnExecutor(deps) {
     }
   }
 
-  async function send(sessionId, message, createOpts, sendOpts) {
+  // As the desktop's sendToAgentAccepted (register.ts), every send of a task runs under that
+  // task's send lock, shared with the entries that change its runtime or route
+  // (session-route-lock.mjs) and with context recovery. Held until the send is accepted or refused.
+  function send(sessionId, message, createOpts, sendOpts) {
+    return withSendToSessionLock(sessionId, () => sendUnlocked(sessionId, message, createOpts, sendOpts));
+  }
+
+  async function sendUnlocked(sessionId, message, createOpts, sendOpts) {
     createOpts = { ...createOpts };
     const turn = openTurn(sessionId, createOpts, sendOpts, sendOpts.persistUserMessage?.clientId);
     const check = turn.check;
