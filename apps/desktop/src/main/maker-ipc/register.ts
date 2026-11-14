@@ -1,3 +1,4 @@
+import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt, contextRecoveryAbortSignal } from './contextRecoveryAssembly.js';
 import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '../subscription-accounts/runtime.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
@@ -19205,58 +19206,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // Shared by pre-send pressure checks and the final automatic-continuation gate.
   // A stale/archived link must not turn a delegated or deleted companion into a direct chat.
-  const readContextRecoverySession = async (sessionId: string) => {
-    const [row] = await getDbClient()
-      .drizzle.select({
-        status: sessions.status,
-        source: sessions.source,
-        botRole: botSessionLinks.role,
-        botLinkArchivedAt: botSessionLinks.archivedAt,
-        botStatus: botProfiles.status,
-        botHiddenAt: botProfiles.hiddenAt,
-        agentKind: sessions.agentKind,
-        remoteHostId: sessions.remoteHostId,
-        agentDeviceId: sessions.agentDeviceId,
-        clearedAt: sessions.clearedAt,
-        sdkSessionId: sessions.sdkSessionId,
-        contextTokens: sessions.contextTokens,
-        contextWindow: sessions.contextWindow,
-        model: sessions.model,
-        providerId: sessions.providerId,
-        workingDir: sessions.workingDir,
-      })
-      .from(sessions)
-      .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
-      .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    if (!row) return null;
-    return {
-      ...row,
-      botRole: row.botStatus === 'active' && !row.botHiddenAt && row.botLinkArchivedAt === null
-        ? row.botRole : null,
-    };
-  };
+  const readContextRecoverySession = (sessionId: string) => readContextRecoverySessionWithPorts({
+      getDbClient: (...args) => getDbClient(...args),
+      get sessions() { return sessions; },
+      get botSessionLinks() { return botSessionLinks; },
+      get botProfiles() { return botProfiles; },
+      eq: (left, right) => eq(left, right),
+    }, sessionId);
   contextOverflowRolloverHolder = createContextOverflowRollover({
     hasExternalRecoveryOwner: (sessionId) =>
       isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: readContextRecoverySession,
     needsNativeSessionHandoff: (id, row) => needsSubscriptionAccountHandoff(id, row, remoteBackgroundInvoke),
-    classifyCodexHistory: async (threadId) => {
-      const ownerScope = captureDataOwnerBroadcastScope();
-      const dbSnapshot = getCurrentDbClientSnapshot();
-      // 多账号线程的 rollout 在 codex-accounts 下,只有 thread-index 记着位置;
-      // 记录读不出时不回退旧 HOME(可能是过期副本),按 unknown 处理。
-      const storage = await readCodexThreadStorageReadOnly(threadId).catch(() => null);
-      const result = storage === null ? 'unknown' : await classifyCodexHistoryOversized(threadId, storage);
-      if (
-        !dbSnapshot || !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
-        getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
-      ) {
-        throw new Error('Codex history owner changed during inspection');
-      }
-      return result;
-    },
+    classifyCodexHistory: (threadId) => classifyCodexHistoryWithPorts({
+      captureDataOwnerBroadcastScope: (...args) => captureDataOwnerBroadcastScope(...args),
+      getCurrentDbClientSnapshot: (...args) => getCurrentDbClientSnapshot(...args),
+      readCodexThreadStorageReadOnly: (...args) => readCodexThreadStorageReadOnly(...args),
+      classifyCodexHistoryOversized: (...args) => classifyCodexHistoryOversized(...args),
+      isDataOwnerBroadcastScopeCurrent: (...args) => isDataOwnerBroadcastScopeCurrent(...args),
+    }, threadId),
     getAutoCompactThresholdPct: () => DEFAULT_MODEL_COMPACTION_PCT,
     resolveVerifiedWindow: (agentKind, modelId, providerId) => {
       const catalog = getActiveCatalog();
@@ -19272,188 +19240,61 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     rehydrateColdPiRuntimeForWindowVerification,
     closeSession: (sessionId) => maker.closeSession(sessionId, 'runtime-refresh'),
     drainPersistQueue,
-    commitRebuild: async (sessionId, handoff, meta, signal) => {
-      // Read projection metadata before the transaction: after a successful
-      // context.rebuild there must be no fallible step before the zero-usage push.
-      const ownerScope = captureDataOwnerBroadcastScope();
-      const dbSnapshot = getCurrentDbClientSnapshot();
-      if (!dbSnapshot) throw new Error('context rebuild requires an active Profile database');
-      const [sessionKindRow] = await dbSnapshot.client.drizzle
-        .select({
-          agentKind: sessions.agentKind,
-          contextWindow: sessions.contextWindow,
-        })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      if (
-        !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
-        getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
-      ) {
-        throw new Error('context rebuild owner changed before commit');
-      }
-      signal?.throwIfAborted();
-      const { updatedAt } = await commitContextRebuild(sessionId, handoff, meta);
-      if (
-        !isDataOwnerBroadcastScopeCurrent(ownerScope) ||
-        getCurrentDbClientSnapshot()?.clientEpoch !== dbSnapshot.clientEpoch
-      ) {
-        throw new Error('context rebuild owner changed after commit');
-      }
-      const projectionContextWindow =
-        typeof sessionKindRow?.contextWindow === 'number' &&
-        Number.isFinite(sessionKindRow.contextWindow) &&
-        sessionKindRow.contextWindow > 0
-          ? sessionKindRow.contextWindow
-          : undefined;
-      const cardAgentKind =
-        sessionKindRow?.agentKind === 'codex'
-          ? 'codex'
-          : sessionKindRow?.agentKind === 'pi'
-            ? 'pi'
-            : 'cc';
-      broadcastSessionPatched(
-        sessionId,
-        {
-          sdkSessionId: null,
-          contextTokens: 0,
-          ...(meta.replacementRoute ? {
-            model: meta.replacementRoute.model,
-            providerId: meta.replacementRoute.providerId,
-            effort: meta.replacementRoute.effort,
-            fastMode: meta.replacementRoute.fastMode,
-          } : {}),
-          ...(projectionContextWindow === undefined
-            ? {}
-            : { contextWindow: projectionContextWindow }),
-          updatedAt: new Date(updatedAt).toISOString(),
-        },
-        ownerScope,
-      );
-      try {
-        await createDbMessage(
-          sessionId,
-          {
-            clientId: `context-rebuild-card:${createId()}`,
-            role: 'assistant',
-            content: '',
-            agentKind: cardAgentKind,
-            agentMeta: { contextRebuild: { reason: meta.reason, handoff } } as AgentMeta,
-          },
-          {
-            broadcastOwnerScope: ownerScope,
-            shouldBroadcast: () =>
-              isDataOwnerBroadcastScopeCurrent(ownerScope) &&
-              getCurrentDbClientSnapshot()?.clientEpoch === dbSnapshot.clientEpoch,
-          },
-        );
-      } catch (error) {
-        // The hidden marker and zero-usage session state are already committed.
-        // A derived visual card must not turn that successful rebuild into a
-        // failed switch or strand control projections on the source route.
-        log.warn('context rebuild card creation failed after commit', {
-          sessionId,
-          reason: meta.reason,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    },
+    commitRebuild: (sessionId, handoff, meta, signal) => commitContextRecoveryWithPorts({
+      captureDataOwnerBroadcastScope: (...args) => captureDataOwnerBroadcastScope(...args),
+      getCurrentDbClientSnapshot: (...args) => getCurrentDbClientSnapshot(...args),
+      get sessions() { return sessions; },
+      eq: (left, right) => eq(left, right),
+      isDataOwnerBroadcastScopeCurrent: (...args) => isDataOwnerBroadcastScopeCurrent(...args),
+      commitContextRebuild: (...args) => commitContextRebuild(...args),
+      broadcastSessionPatched: (...args) => broadcastSessionPatched(...args),
+      createDbMessage: (...args) => createDbMessage(...args),
+      createId: (...args) => createId(...args),
+      log: { info: (...args) => log.info(...args), warn: (...args) => log.warn(...args) },
+    }, sessionId, handoff, meta, signal),
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
-    onRebuilt: (sessionId) => {
-      // overflow 终态已先走 coordinator onTurnEvent('error')，会留下 active-turn
-      // recovery 和错误横幅。重放绕开 coordinator，随后的 done 会被 recovery 吃掉。
-      agentInputCoordinatorHolder?.clearError(sessionId);
-      // 新原生上下文没看过任何环境说明:下一轮整体重发(重放路径不经 send 事务)。
-      wireNoteMemory.reset(sessionId);
-    },
-    getRecoveryAbortSignal: (sessionId) => {
-      const coordinator = agentInputCoordinatorHolder!;
-      if (coordinator.hasPendingQueuedWork(sessionId)) {
-        // The terminal error may have installed recovery after this input was
-        // queued. Release that old error so the queued input can actually drain.
-        coordinator.clearError(sessionId);
-        return AbortSignal.abort();
-      }
-      return coordinator.getInputAbortSignal(sessionId);
-    },
+    onRebuilt: sessionId => contextRecoveryRebuilt<void>({
+      getCoordinator: () => agentInputCoordinatorHolder,
+      resetWireNotes: id => wireNoteMemory.reset(id),
+    }, sessionId),
+    getRecoveryAbortSignal: sessionId => contextRecoveryAbortSignal<void>({
+      getCoordinator: () => agentInputCoordinatorHolder,
+      resetWireNotes: id => wireNoteMemory.reset(id),
+    }, sessionId),
     // PI provider compat 自愈：上游拒收可选请求字段后，把「该 provider/model 关掉该字段」
     // 学进 models.json compat 的覆盖存储；重建会话时 writeModelsJson 合并它。
     readPiNativeCompatOverride: (providerId, modelId, routeKey) =>
       readPiNativeCompatOverride(providerId, modelId, routeKey),
     recordPiNativeCompatOverride: async (providerId, modelId, compat, routeKey) =>
       recordPiNativeCompatOverride(providerId, modelId, compat, routeKey),
-    replayUserMessage: async (sessionId, content, agentFacingWireContent, recovery) => {
-      const [row] = await getDbClient()
-        .drizzle.select()
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      if (!row?.workingDir) return { accepted: false };
-      if (recovery?.signal?.aborted) return { accepted: false };
-      const createOpts = buildCreateOptsWithStderr({
-        id: sessionId,
-        agentKind: dbToMakerAgentKind(row.agentKind),
-        workingDir: row.workingDir,
-        model: row.model ?? undefined,
-        providerId: row.providerId,
-        effort: (row.effort ?? undefined) as CreateOpts['effort'],
-        fastMode: (row.fastMode ?? false),
-        permissionMode: (row.permissionMode ?? 'ask') as CreateOpts['permissionMode'],
-        planMode: !!row.planModeEnabled,
-        title: row.title ?? undefined,
-        remoteHostId: row.remoteHostId ?? undefined,
-      });
-      if (createOpts.extraDirs === undefined) {
-        try {
-          const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-          if (extraDirs.length > 0) Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
-        } catch (err) {
-          log.warn('overflow replay: read extra_dirs from DB failed (non-fatal)', {
-            sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-      if (createOpts.writableDirs === undefined) {
-        const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
-        if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
-      }
-      const recoveryIntent = recovery?.continueFromHistory
-        ? restoreAutoReviewUserIntent(await readAutoReviewHistory(sessionId), {
-            clientId: recovery.sourceUserClientId,
-            content: recovery.sourceUserContent,
-          })
-        : undefined;
-      if (recovery?.continueFromHistory) {
-        const current = await readContextRecoverySession(sessionId);
-        if (!current || !canContinueContextRecovery(current) || current.status !== 'active'
-          || isHeadlessGhostSetupTurn(sessionId) || bindingStore.findByTarget(sessionId)) {
-          return { accepted: false };
-        }
-      }
-      const sendReplay = () => sendToAgentAcceptedUnlocked(
-        sessionId,
-        persistedUserContentToWireMessage(agentFacingWireContent ?? content),
-        createOpts,
-        recovery?.continueFromHistory
-          ? {
-              signal: recovery.signal,
-              [PI_CACHE_RECOVERY_EXPECTATION]: recovery.piCacheCompatibility,
-              ...(recovery.piCacheCompatibility ? { retryUserClientId: recovery.sourceUserClientId } : {}),
-              [INHERITED_CAPABILITY_SELECTION]: recovery.sourceCapabilitySelectionText,
-              // The internal continuation is not fresh user authorization. Restore
-              // intent from authored history, never attachment/quote projections.
-              [AUTO_REVIEW_SOURCE_CONTENT]: readAutoReviewUserText(recovery.sourceUserContent) ?? '',
-              [AUTO_REVIEW_USER_INTENT]: recoveryIntent,
-            }
-          : { signal: recovery?.signal },
-      );
-      const result = row.remoteHostId ? await sendReplay()
-        : await withCindyMakeProjectUse(app.getPath('userData'), row.workingDir, sendReplay);
-      return { accepted: result.accepted === true };
-    },
+    replayUserMessage: (sessionId, content, agentFacingWireContent, recovery) => replayContextRecoveryWithPorts({
+      getDbClient: (...args) => getDbClient(...args),
+      get sessions() { return sessions; },
+      eq: (left, right) => eq(left, right),
+      buildCreateOptsWithStderr: (...args) => buildCreateOptsWithStderr(...args),
+      dbToMakerAgentKind: (...args) => dbToMakerAgentKind(...args),
+      readSessionExtraDirsFromDb: (...args) => readSessionExtraDirsFromDb(...args),
+      directoryGrantsForRuntime: (...args) => directoryGrantsForRuntime(...args),
+      log: { info: (...args) => log.info(...args), warn: (...args) => log.warn(...args) },
+      readSessionWritableDirsFromDb: (...args) => readSessionWritableDirsFromDb(...args),
+      restoreAutoReviewUserIntent: (...args) => restoreAutoReviewUserIntent(...args),
+      readAutoReviewHistory: (...args) => readAutoReviewHistory(...args),
+      readContextRecoverySession: (...args) => readContextRecoverySession(...args),
+      canContinueContextRecovery: (...args) => canContinueContextRecovery(...args),
+      isHeadlessGhostSetupTurn: (...args) => isHeadlessGhostSetupTurn(...args),
+      get bindingStore() { return bindingStore; },
+      sendToAgentAcceptedUnlocked: (...args) => sendToAgentAcceptedUnlocked(...args),
+      persistedUserContentToWireMessage: (...args) => persistedUserContentToWireMessage(...args),
+      get PI_CACHE_RECOVERY_EXPECTATION(): typeof PI_CACHE_RECOVERY_EXPECTATION { return PI_CACHE_RECOVERY_EXPECTATION; },
+      get INHERITED_CAPABILITY_SELECTION(): typeof INHERITED_CAPABILITY_SELECTION { return INHERITED_CAPABILITY_SELECTION; },
+      get AUTO_REVIEW_SOURCE_CONTENT(): typeof AUTO_REVIEW_SOURCE_CONTENT { return AUTO_REVIEW_SOURCE_CONTENT; },
+      readAutoReviewUserText: (...args) => readAutoReviewUserText(...args),
+      get AUTO_REVIEW_USER_INTENT(): typeof AUTO_REVIEW_USER_INTENT { return AUTO_REVIEW_USER_INTENT; },
+      withCindyMakeProjectUse: (...args) => withCindyMakeProjectUse(...args),
+      get app() { return app; },
+    }, sessionId, content, agentFacingWireContent, recovery),
     withSessionLock: withSendToSessionLock,
     withCloseSuppressed: withRehydrateCloseSuppressed,
     log,

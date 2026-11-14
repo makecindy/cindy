@@ -868,11 +868,13 @@ describe('session runtime control wiring', () => {
   });
 
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
-    const commitRebuild = handlerBody(
-      registerSource,
-      'commitRebuild: async (sessionId, handoff, meta, signal) => {',
-      'setPendingHandoff: (sessionId, handoff, expectedGeneration)',
-    );
+    const coreSource = readFileSync(resolve(mainRoot, 'maker-ipc/contextRecoveryAssembly.ts'), 'utf8');
+    const coreAst = ts.createSourceFile('contextRecoveryAssembly.ts', coreSource, ts.ScriptTarget.Latest, true);
+    const core = coreAst.statements.find((node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'commitContextRecoveryWithPorts');
+    if (!core) throw new Error('Shared context rebuild coordination is missing');
+    const commitRebuild = core.body!.getText(coreAst).replace(/\bports\./g, '');
+    expect(registerSource).toContain('commitContextRecoveryWithPorts({');
     const query = commitRebuild.indexOf('contextWindow: sessions.contextWindow,');
     const commit = commitRebuild.indexOf('commitContextRebuild(sessionId, handoff, meta)');
     const cancellation = commitRebuild.indexOf('signal?.throwIfAborted();');

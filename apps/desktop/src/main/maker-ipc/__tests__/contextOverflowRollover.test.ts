@@ -1,3 +1,4 @@
+import { contextRecoveryRebuilt, contextRecoveryAbortSignal } from '../contextRecoveryAssembly.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -2519,4 +2520,30 @@ it.each([undefined, { instanceId: 'i1', generation: 1 }])('keeps ordinary errors
   expect(rollover.claim('s1', identity)).toBe('claimed');
   expect(rollover.claim('s1', identity, false)).toBe('idle');
   expect(rollover.claim('s1', identity)).toBe('in-flight');
+});
+
+
+// The extracted callbacks must also support a queued Host clear without
+// resetting notes or returning an aborted signal before that clear finishes.
+// The Desktop synchronous order is exercised through its assembly guard.
+it('waits for a deferred error clear before resetting recovery notes or completing cancellation', async () => {
+  let finish!: () => void;
+  const clearing = new Promise<void>(resolve => { finish = resolve; });
+  const resetWireNotes = vi.fn();
+  const ports = {
+    getCoordinator: () => ({
+      clearError: () => clearing,
+      hasPendingQueuedWork: () => true,
+      getInputAbortSignal: () => new AbortController().signal,
+    }),
+    resetWireNotes,
+  };
+  const rebuilt = contextRecoveryRebuilt(ports, 's');
+  const aborted = contextRecoveryAbortSignal(ports, 's');
+  expect(resetWireNotes).not.toHaveBeenCalled();
+  expect(aborted).toBeInstanceOf(Promise);
+  finish();
+  await rebuilt;
+  expect((await aborted).aborted).toBe(true);
+  expect(resetWireNotes).toHaveBeenCalledOnce();
 });
