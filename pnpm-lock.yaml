@@ -22,6 +22,9 @@ patchedDependencies:
   '@expo/cli@58.1.19':
     hash: bf44a5f353700b074164286e0005bf9d5f218a067b6639b5c6a6fb8a1e056298
     path: dependency-patches/@expo__cli@58.1.19.patch
+  '@terrazzo/parser@2.7.1':
+    hash: c79c6d6f1161668e6081ada2140d622114beeede90e0d53883a0661c0e10138e
+    path: dependency-patches/@terrazzo__parser@2.7.1.patch
   expo-image@58.0.18:
     hash: 46725ea274130be1df9de144759f1febf5a92bbf85cd36919059c16de2f7469c
     path: dependency-patches/expo-image@58.0.18.patch
@@ -711,6 +714,9 @@ importers:
       '@cindy/model-providers':
         specifier: workspace:*
         version: link:../../packages/model-providers
+      '@cindy/plugin-protocol':
+        specifier: workspace:*
+        version: link:../../packages/plugin-protocol
       better-sqlite3:
         specifier: ^12.9.0
         version: 12.11.1
@@ -1198,7 +1204,7 @@ importers:
         version: 2.7.1(@types/node@25.9.5)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.49.0)(tsx@4.23.1)
       '@terrazzo/parser':
         specifier: 2.7.1
-        version: 2.7.1(yaml-to-momoa@0.1.0)
+        version: 2.7.1(patch_hash=c79c6d6f1161668e6081ada2140d622114beeede90e0d53883a0661c0e10138e)(yaml-to-momoa@0.1.0)
       '@types/node':
         specifier: '*'
         version: 25.9.5
@@ -16239,7 +16245,7 @@ snapshots:
       '@clack/prompts': 1.8.0
       '@humanwhocodes/momoa': 3.3.13
       '@terrazzo/json-schema-tools': 0.3.0(@humanwhocodes/momoa@3.3.13)(yaml-to-momoa@0.1.0)
-      '@terrazzo/parser': 2.7.1(yaml-to-momoa@0.1.0)
+      '@terrazzo/parser': 2.7.1(patch_hash=c79c6d6f1161668e6081ada2140d622114beeede90e0d53883a0661c0e10138e)(yaml-to-momoa@0.1.0)
       '@terrazzo/token-tools': 2.7.1
       chokidar: 5.0.0
       detect-package-manager: 3.0.2
@@ -16273,7 +16279,7 @@ snapshots:
     optionalDependencies:
       yaml-to-momoa: 0.1.0
 
-  '@terrazzo/parser@2.7.1(yaml-to-momoa@0.1.0)':
+  '@terrazzo/parser@2.7.1(patch_hash=c79c6d6f1161668e6081ada2140d622114beeede90e0d53883a0661c0e10138e)(yaml-to-momoa@0.1.0)':
     dependencies:
       '@humanwhocodes/momoa': 3.3.13
       '@terrazzo/json-schema-tools': 0.3.0(@humanwhocodes/momoa@3.3.13)(yaml-to-momoa@0.1.0)

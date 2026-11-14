@@ -28,8 +28,15 @@ afterEach(() => { act(() => root.unmount()); });
 
 it('closes from the backdrop, the grabber and the system back key when nothing is at risk', async () => {
   await render({});
+  expect(h.modal.keyboardAvoiding).toBe(true);
+  expect(h.modal.keyboardAvoidingBehavior).toBe('padding');
   h.modal.onBackdropPress(); h.surface.onClose(); h.modal.onRequestClose();
   expect(close).toHaveBeenCalledTimes(3);
+});
+
+it('keeps an explicitly selected keyboard behavior for callers with a different layout contract', async () => {
+  await act(async () => root.render(createElement(CompanionSheet, { visible: true, title: 'Teammate', onClose: close, keyboardAvoidingBehavior: 'height', children: null })));
+  expect(h.modal.keyboardAvoidingBehavior).toBe('height');
 });
 
 it('ignores backdrop, grabber and system back without prompting while the form is protected (iOS interactiveDismissDisabled)', async () => {

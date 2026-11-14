@@ -27,6 +27,14 @@ function link(deviceId: string, path: Link['path'], rttMs: number | null, sent: 
 }
 
 function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs: number | null } {
+  if (name === 'app-nodes' || name === 'app-nodes-list') {
+    return { devices: [SELF,
+      device({ deviceId: 'friend', name: 'Friend Mac', app: 'cindy-friend', remoteControlEnabled: false }),
+      device({ deviceId: 'future', name: 'Lab Mac', app: 'future-app', remoteControlEnabled: false }),
+      device({ deviceId: 'offline-friend', name: 'Travel Mac', app: 'cindy-friend', online: false, remoteControlEnabled: false }),
+      device({ deviceId: 'legacy', name: 'Legacy Cindy', remoteControlEnabled: false }),
+    ], links: [link('friend', 'direct', 4), link('future', 'relay', 35)], relayRttMs: 18 };
+  }
   if (name === 'empty') return { devices: [SELF], links: [], relayRttMs: 18 };
   if (name === 'fleet') {
     // 与真实账号同一形状(3 直连、7 经中转、15 离线),名字是虚构的;两台正在收发。
@@ -126,11 +134,11 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
     ],
     links: [
       // 正在操作 Work PC:双向都有消息;Home server 只收到它发来的。
-      link('win', 'direct', 3, 200, 400),
+      link('win', 'direct', 3.252, 200, 400),
       link('mini', 'direct', 1),
-      link('nas', 'relay', 96, null, 600),
+      link('nas', 'relay', 96.752, null, 600),
     ],
-    relayRttMs: 24,
+    relayRttMs: 24.752,
   };
 }
 
@@ -224,7 +232,7 @@ void mountPage({
         ...(command.type === 'peer-agent-net' ? { peer: await simulatePeer(command) } : {}),
         state: {
           available: true,
-          agentNetEnabled: ctx.case !== 'legacy-off',
+          agentNetEnabled: ctx.case !== 'legacy-off' && ctx.case !== 'app-nodes-list',
           agentNetOnlyEncrypted: ctx.case === 'empty' || ctx.case === 'remote-switch-controller-strict',
           // 被切的那台电脑:开关下面写「由谁在几点远程打开」。
           agentNetChangedBy: ctx.case === 'switched-here'

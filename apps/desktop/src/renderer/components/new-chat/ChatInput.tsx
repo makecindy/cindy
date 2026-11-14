@@ -486,10 +486,12 @@ const TOOLBAR_DENSE_MAX_WIDTH = 520;
 const TOOLBAR_COMPACT_MAX_WIDTH = 448;
 const TOOLBAR_NARROW_MAX_WIDTH = 600;
 const TOOLBAR_ULTRA_COMPACT_MAX_WIDTH = 420;
+const TOOLBAR_TIGHT_MAX_WIDTH = 320;
 
-type ToolbarWidthMode = 'unmeasured' | 'wide' | 'narrow' | 'dense' | 'compact' | 'ultra';
+type ToolbarWidthMode = 'unmeasured' | 'wide' | 'narrow' | 'dense' | 'compact' | 'ultra' | 'tight';
 
 function resolveToolbarWidthMode(width: number): ToolbarWidthMode {
+  if (width < TOOLBAR_TIGHT_MAX_WIDTH) return 'tight';
   if (width < TOOLBAR_ULTRA_COMPACT_MAX_WIDTH) return 'ultra';
   if (width < TOOLBAR_COMPACT_MAX_WIDTH) return 'compact';
   if (width < TOOLBAR_DENSE_MAX_WIDTH) return 'dense';
@@ -521,7 +523,13 @@ function isPointInsideElement(
  * 在已建任务里替用户「点中选择器里的一行」：同引擎与跨引擎(含它的确认)都走选择器原有链路。
  * 返回 = 这次选择真的落到任务上了没有(取消确认、被挡下或失败都为 false)。
  */
-export type SessionModelPick = (pick: { agent: AgentKind; providerId: string; modelId: string }) => Promise<boolean>;
+export type SessionModelPick = (pick: {
+  agent: AgentKind;
+  providerId: string;
+  modelId: string;
+  /** 同时换到这一档推理强度(模型组的模式指定了时)；省略 = 按选择器原有规则。 */
+  effort?: Effort;
+}) => Promise<boolean>;
 
 interface ChatInputProps {
   /** 已建任务：ChatInput 把「按选择器的方式换到这个模型」放进来，供撞配额横幅的「换来源继续」调用。 */
@@ -1663,10 +1671,11 @@ export function ChatInput({
     toolbarWidthMode === 'narrow' ||
     toolbarWidthMode === 'dense' ||
     toolbarWidthMode === 'compact' ||
-    toolbarWidthMode === 'ultra';
+    toolbarWidthMode === 'ultra' ||
+    toolbarWidthMode === 'tight';
   const autoDenseToolbar =
-    toolbarWidthMode === 'dense' || toolbarWidthMode === 'compact' || toolbarWidthMode === 'ultra';
-  const autoCompactToolbar = toolbarWidthMode === 'compact' || toolbarWidthMode === 'ultra';
+    toolbarWidthMode === 'dense' || toolbarWidthMode === 'compact' || toolbarWidthMode === 'ultra' || toolbarWidthMode === 'tight';
+  const autoCompactToolbar = toolbarWidthMode === 'compact' || toolbarWidthMode === 'ultra' || toolbarWidthMode === 'tight';
   const effectiveDenseToolbar = denseToolbar || autoDenseToolbar;
   const effectiveCompactToolbar = compactToolbar || autoCompactToolbar;
 
@@ -2235,9 +2244,12 @@ export function ChatInput({
     (activeProviderId ?? null) === (runtimeEffective ? runtimeEffective.providerId ?? null : initialProviderId ?? null) &&
     (!activeProviderId || activeProviderId === 'openai');
   const enforceConnectedSourceGate = (!sessionId || !catalogDeviceId) && !preserveSshCodexRoute;
-  const remoteModelListBlocked =
+  // 新任务选了模型组或「让插件选」：这次用哪个模型、在哪台运行由发送时的选路决定，草稿底层模型的来源
+  // 只在选路沿用它时才用得上(由发送回调在选路后检查)。输入框不按底层模型先挡下发送(model-groups.md §5)。
+  const sendRoutesOwnModel = !sessionId && (!!modelGroups?.active || !!pluginModels?.active);
+  const remoteModelListBlocked = !sendRoutesOwnModel && (
     (!!catalogDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready') ||
-    (!!sshCodexHostId && sshCodexProviders.status !== 'ready');
+    (!!sshCodexHostId && sshCodexProviders.status !== 'ready'));
   // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
   // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
   // 会对着一个 image/embedding 端点放行,而不是显示这里的"去连接"空态。已建会话
@@ -2257,6 +2269,7 @@ export function ChatInput({
   const noConnectedSource =
     enforceConnectedSourceGate &&
     !!currentModelAgentKind &&
+    !sendRoutesOwnModel &&
     !providersLoading &&
     !remoteModelListBlocked &&
     // 老被控端明确不支持 provider:list 时只能依据 capabilities 放行；不能把缺少
@@ -6019,7 +6032,7 @@ export function ChatInput({
         // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
         if (
           enforceConnectedSourceGate && !canAttemptBaselineRecovery &&
-          currentModelAgentKind &&
+          currentModelAgentKind && !sendRoutesOwnModel &&
           // 旧被控端明确不支持 provider:list 时，控制端没有可检查的来源镜像；
           // 与模型列表一致交给 capabilities + 被控端发送链路做兼容回退。
           !(deviceLinkDeviceId && remoteProviders.unsupported)
@@ -6566,6 +6579,7 @@ export function ChatInput({
       providers,
       remoteProviders.unsupported,
       remoteModelListBlocked,
+      sendRoutesOwnModel,
       remoteModelListStatus,
       sshCodexHostId,
       sshCodexProviders.status,
@@ -9172,18 +9186,18 @@ export function ChatInput({
   // 每次渲染后换成最新闭包(与 performAgentSwitchRef 同理)；卸载时收回，横幅不会调到已离开的任务。
   useEffect(() => {
     if (!sessionModelPickRef || !sessionId) return;
-    const pick: SessionModelPick = async ({ agent, providerId, modelId }) => {
+    const pick: SessionModelPick = async ({ agent, providerId, modelId, effort }) => {
       if (!sessionEngineFilter) {
         if (agent !== runtimeAgentKind) return false;
-        return (await handleProviderChange(providerId, modelId)) !== false;
+        return (await handleProviderChange(providerId, modelId, effort)) !== false;
       }
       const runtime = sessionEngineFilter.runtimeAgent;
       const pending = sessionEngineFilter.pendingTarget;
       const crossEngine = runtime === undefined || agent !== runtime || (pending !== undefined && pending !== runtime);
       if (crossEngine) {
-        return sessionEngineFilter.onCrossEngineSelect({ providerId, modelId, targetAgent: agent, effort: '' });
+        return sessionEngineFilter.onCrossEngineSelect({ providerId, modelId, targetAgent: agent, effort: effort ?? '' });
       }
-      return (await handleProviderChange(providerId, modelId)) !== false;
+      return (await handleProviderChange(providerId, modelId, effort)) !== false;
     };
     sessionModelPickRef.current = pick;
     return () => {
@@ -9481,7 +9495,12 @@ export function ChatInput({
   const useCompactMiddleToolbar =
     isCreateAgentVariant && (toolbarWidthMeasured ? autoNarrowToolbar : narrowToolbar);
   const useUltraCompactToolbar =
-    useNarrowToolbar && (!toolbarWidthMeasured || toolbarWidthMode === 'ultra');
+    useNarrowToolbar && (!toolbarWidthMeasured || toolbarWidthMode === 'ultra' || toolbarWidthMode === 'tight');
+  // A busy voice or secondary stop action can expand the fixed controls at any
+  // width. Let the plugin lane and the other controls wrap before they overlap.
+  const allowToolbarWrap = toolbarWidthMode === 'tight' ||
+    (useUltraCompactToolbar && voiceInput.isListening) ||
+    (hasPluginToolbar && (useUltraCompactToolbar || voiceBusyOnCurrentComposer || showSecondaryStop));
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
@@ -9935,25 +9954,27 @@ export function ChatInput({
                 // "在元素上起选",从相邻可选区起拖再划入时按钮文字仍会被刷蓝
                 // (同 sortable.css 侧栏行修过的 selection bleed),容器级禁选才挡得住。
                 'mt-[2px] flex select-none items-center',
-                useNarrowToolbar
+                allowToolbarWrap
+                  ? 'min-w-0 flex-wrap justify-between gap-x-1 gap-y-1'
+                  : useNarrowToolbar
                   ? 'min-w-0 flex-nowrap justify-between gap-2 overflow-hidden'
                   : effectiveCompactToolbar
                     ? isCreateAgentVariant
                       ? 'min-w-0 flex-nowrap justify-between gap-2 overflow-hidden'
                       : 'min-w-0 flex-nowrap justify-between gap-1 overflow-hidden'
-                    : 'justify-between',
+                    : 'min-w-0 flex-nowrap justify-between gap-2 overflow-hidden',
               )}
             >
               <div
                 className={cn(
                   useNarrowToolbar
-                    ? 'flex min-w-0 shrink-0 items-center gap-1'
+                    ? 'flex min-w-min shrink items-center gap-1'
                     : effectiveCompactToolbar
                       ? isCreateAgentVariant
-                        ? 'flex min-w-0 shrink items-center gap-2'
-                        : 'flex min-w-0 shrink items-center gap-1'
-                      : 'flex items-center gap-2',
-                  // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
+                        ? 'flex min-w-min shrink items-center gap-2'
+                        : 'flex min-w-min shrink items-center gap-1'
+                      : 'flex min-w-min shrink items-center gap-2',
+                  // 子控件可以收缩文字，但左组不能小于它们的最小宽度之和，否则会与右组重叠。
                 )}
               >
                 {localAttachmentPickerEnabled && (
@@ -10057,7 +10078,17 @@ export function ChatInput({
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               {hasPluginToolbar && (
-                <div className="mx-1 min-w-0 flex-1 overflow-x-auto">
+                // Keep a scrollable share for actual controls, without reserving a fixed
+                // minimum for remote tasks or plugins that hide all their contributions.
+                <div
+                  className={cn('mx-1 w-max min-w-0 shrink-0 overflow-x-auto',
+                    allowToolbarWrap ? 'max-w-[60%]' : useNarrowToolbar ? 'max-w-[33%]' : 'max-w-[50%]')}
+                  onFocus={(event) => {
+                    if (event.target instanceof HTMLElement) {
+                      event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    }
+                  }}
+                >
                   <div className="w-max">
                     <PluginUiSlot position="composer.toolbar" sessionId={sessionId} />
                   </div>
@@ -10065,15 +10096,16 @@ export function ChatInput({
               )}
               <div
                 className={cn(
-                  useNarrowToolbar
+                  allowToolbarWrap
+                    ? cn('flex max-w-full flex-1 flex-wrap items-center justify-end gap-1',
+                        hasPluginToolbar ? 'min-w-min' : 'min-w-0')
+                    : useNarrowToolbar
                     ? 'flex min-w-0 shrink items-center justify-end gap-1'
                     : effectiveCompactToolbar
                       ? isCreateAgentVariant
                         ? 'flex min-w-0 shrink items-center justify-end gap-2'
                         : 'flex min-w-0 shrink items-center justify-end gap-1'
-                      : 'flex items-center gap-2',
-                  // compact 模式下所有输入框工具行保持单行;权限 / 模型 pill 内部截断承压,
-                  // vendor tab 与圆形操作按钮保持固定宽,避免控件重叠或掉到第二行。
+                      : 'flex min-w-0 shrink items-center justify-end gap-2',
                 )}
               >
                 {(!useNarrowToolbar || useCompactMiddleToolbar) &&
@@ -10088,16 +10120,15 @@ export function ChatInput({
                 <div
                   data-session-model-slot={sessionId ? '' : undefined}
                   // Reserve space while the model is unknown, keeping the toolbar height and
-                  // right-aligned actions stable. Once ready, wide toolbars hug the model label;
-                  // only narrow toolbars retain the fixed-width, truncating slot.
-                  className={sessionId
-                    ? cn('h-[30px] shrink',
-                        useUltraCompactToolbar
-                          ? 'w-[64px] min-w-[64px]'
-                          : useNarrowToolbar || sessionModelLoading
-                            ? 'w-[148px] min-w-[72px]'
-                            : 'min-w-0')
-                    : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
+                  // right-aligned actions stable. Once ready, the model takes its natural width
+                  // and shrinks only when its neighbours need the space. With plugins, the
+                  // width bounds the group's intrinsic minimum while flex can still grow it.
+                  className={cn(
+                    'min-w-[72px] max-w-full', sessionId && 'h-[30px]',
+                    allowToolbarWrap ? 'flex-[1_1_72px]' : 'shrink',
+                    allowToolbarWrap && hasPluginToolbar && 'w-[72px]',
+                    sessionId && sessionModelLoading && 'w-[148px]',
+                  )}
                 >
                   {!sessionModelLoading && <ModelSelector
                     openRequest={modelPickerRequest}
@@ -10214,7 +10245,7 @@ export function ChatInput({
                         : undefined
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
-                    {...(!sessionId && unifiedPanelActive && modelGroups ? { modelGroups } : {})}
+                    {...(unifiedPanelActive && modelGroups ? { modelGroups } : {})}
                     // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
                     selectedFavoriteUid={effectiveSelectedFavoriteUid}
                     // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在
@@ -10300,6 +10331,7 @@ export function ChatInput({
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                     compactToolbar={useNarrowToolbar}
                     ultraCompactToolbar={useUltraCompactToolbar}
+                    composerRef={mergedCardRef}
                     // composer 工具条(含新建对话框 create-agent)统一走脱身上浮 morph;
                     // settings/CreateWorker 不传该 prop → Radix 回退,不 morph。
                     useMorphPopover

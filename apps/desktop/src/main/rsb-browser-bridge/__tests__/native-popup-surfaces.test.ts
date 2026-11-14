@@ -76,6 +76,7 @@ function makeContents(id: number) {
     canGoForward: () => boolean;
     isCurrentlyAudible: () => boolean;
     getZoomFactor: () => number;
+    focus: ReturnType<typeof vi.fn>;
   };
   contents.id = id;
   contents.destroyed = false;
@@ -94,6 +95,7 @@ function makeContents(id: number) {
   contents.canGoForward = () => false;
   contents.isCurrentlyAudible = () => false;
   contents.getZoomFactor = () => 1;
+  contents.focus = vi.fn();
   return contents;
 }
 
@@ -101,6 +103,7 @@ function makeWindow() {
   const children = new Set<object>();
   return {
     isDestroyed: () => false,
+    isFocused: vi.fn(() => true),
     getContentBounds: () => ({ x: 0, y: 0, width: 1200, height: 800 }),
     contentView: {
       addChildView: vi.fn((view: object) => children.add(view)),
@@ -138,6 +141,27 @@ describe('main-owned RSB native popup surfaces', () => {
   afterEach(() => {
     _resetRsbNativePopupSurfacesForTests();
     vi.useRealTimers();
+  });
+
+  // Unit regression #10449: setVisible alone cannot return keyboard input to
+  // a native WebContentsView. Existing bounds tests did not exercise focus.
+  it('restores the native guest after showing, but never for hidden or background surfaces', async () => {
+    const host = makeContents(1);
+    const popup = makeContents(42);
+    const owner = makeWindow();
+    electronMocks.windows.set(host, owner);
+    const surfaceId = createRsbNativePopupSurface(host as never, popup as never);
+    const bounds = { x: 0, y: 40, width: 600, height: 400 };
+    const update = electronMocks.handlers.get(RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL)!;
+    popup.focus.mockImplementation(() => expect(electronMocks.views[0].visible).toBe(true));
+    await update({ sender: host }, { surfaceId, bounds, visible: true, focus: true });
+    expect(popup.focus).toHaveBeenCalledOnce();
+    popup.focus.mockClear();
+    await update({ sender: host }, { surfaceId, bounds, visible: true });
+    await update({ sender: host }, { surfaceId, bounds, visible: false, focus: true });
+    owner.isFocused.mockReturnValue(false);
+    await update({ sender: host }, { surfaceId, bounds, visible: true, focus: true });
+    expect(popup.focus).not.toHaveBeenCalled();
   });
 
   it('adopts the exact popup WebContents, claims it, and applies renderer bounds', async () => {

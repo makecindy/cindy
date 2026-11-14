@@ -22,15 +22,20 @@ parentSessionId、runDir 和全部 child/session/agent 身份，并确认所有�
 该回执可能在仅尝试终止子进程后就写出，不能单独证明进程退出。恢复还必须通过独立 OS
 进程清单确认 run UUID 对应的 runner 与所有 native session ID 对应的 Pi 子进程均已消失，
 包括 runner 已退出但子进程仍存活的情况。清单查询失败、超时、截断，或无法确认本账号
-进程可见性时保留未知；Windows 使用系统的当前用户过滤取得 PID 集合，再逐项核验 CIM
-命令行；若进程在两次查询之间消失或命令行不可读，必须再由 OS 独立确认该 PID 已退出。
+进程可见性时保留未知；Windows 使用 `WTSEnumerateProcessesW` 返回的主令牌 SID
+与当前 Windows 身份 SID 比较取得 PID 集合，避免 `tasklist /FI USERNAME` 解析账户名
+阻塞整个恢复预算。先核验 CIM 命令行；CIM 对同用户提权进程漏读时，用
+`PROCESS_QUERY_LIMITED_INFORMATION` 和 `NtQueryInformationProcess(ProcessCommandLineInformation)`
+补读，检查返回状态及字符串缓冲区边界。两者均不可读时，仍必须由 OS 独立确认 PID
+已退出，不能把漏读当作退出。WTS 查询失败或缺少本次查询进程自身 PID 时同样保留未知。
 仍存活但不可读或存活查询失败通常不放行。唯一系统角色例外是通过只读
 `GetProcessInformation(ProcessProtectionLevelInfo)` 确认的 `ANTIMALWARE_LIGHT` 进程：
 其代码完整性由 Windows 强制约束，不是 Cindy 启动的普通 Node/Electron/Pi 进程。
 不按 `DefenderSessionHelper.exe` 等文件名豁免；无保护、第三方 `PPL_APP`、未知级别或查询失败仍拒绝。
 该判据遵循 [Windows 保护进程合同](https://learn.microsoft.com/en-us/windows/win32/services/protecting-anti-malware-services-)；
 查询只申请 `PROCESS_QUERY_LIMITED_INFORMATION`，随后关闭句柄。
-另排除本次启动的 `tasklist` 查询进程自身 PID，避免它正常退出后使清单永久不完整。
+Windows PID 范围不依据进程名、窗口标题或账号显示名推断；SID 只用于范围筛选，
+不授予向 PID 发信号的权限。
 查询是只读核验，不向清单里的 PID 发信号。先读取本轮所有 parent-session root 的候选回执，
 再共享一次清单查询，避免历史 root 逐个查询耗尽总回收预算；下次扫描或升级终止阶段重新读取。
 续跑使用新 run UUID；复用 native session ID 的活跃子进程仍保守视为未结束。

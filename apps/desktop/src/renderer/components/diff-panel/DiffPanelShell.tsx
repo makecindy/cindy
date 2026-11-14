@@ -12,11 +12,29 @@
  *   </DiffPanelShell>
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode, type TransitionEvent } from 'react';
+import {
+  createContext, useContext, useCallback, useEffect, useRef, useState,
+  type HTMLAttributes, type ReactNode, type TransitionEvent,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { cn } from '@/lib/utils';
+
+const FloatingPanelContainer = createContext<HTMLDivElement | null>(null);
+
+/** Keep previews in their owning pane's viewport, outside its scrolling messages. */
+export function DiffPanelContainer({ children, ...props }: HTMLAttributes<HTMLDivElement>) {
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  return (
+    <div {...props} ref={setContainer}>
+      <FloatingPanelContainer.Provider value={container}>
+        {children}
+      </FloatingPanelContainer.Provider>
+    </div>
+  );
+}
 
 interface DiffPanelShellProps {
   open: boolean;
@@ -63,6 +81,7 @@ export function DiffPanelShell({
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const isFloating = variant === 'floating';
+  const floatingContainer = useContext(FloatingPanelContainer);
   const [width, setWidth] = useState<number>(() => {
     if (typeof window === 'undefined') return defaultWidth;
     const readWidth = (key: string): number | null => {
@@ -191,7 +210,7 @@ export function DiffPanelShell({
     [open],
   );
 
-  return (
+  const panel = (
     <>
       {/* 遮罩：floating 只覆盖宿主内容区，避免盖住 feature sidebar 和顶部工具条。 */}
       <div
@@ -216,7 +235,7 @@ export function DiffPanelShell({
           'transition-transform duration-200 ease-out',
           open ? 'translate-x-0' : isFloating ? 'pointer-events-none translate-x-[calc(100%+16px)]' : 'translate-x-full',
         )}
-        style={{ width: `${panelWidth}px`, maxWidth: '90vw' }}
+        style={{ width: `${panelWidth}px`, maxWidth: isFloating ? 'calc(100% - 24px)' : '90vw' }}
         onTransitionEnd={onShadowTransitionEnd}
         aria-hidden={!open}
         role={isFloating ? undefined : 'complementary'}
@@ -242,12 +261,12 @@ export function DiffPanelShell({
 
         <header
           className={cn(
-            'flex items-center justify-between border-b',
+            'flex shrink-0 items-center justify-between gap-2 border-b',
             isFloating ? 'border-[var(--cmd-palette-border)] px-4 py-3' : 'border-border px-3 py-2',
           )}
         >
           <div className="flex items-baseline gap-2 min-w-0">
-            <h2 className="text-sm font-semibold shrink-0">{title}</h2>
+            <h2 className="min-w-0 truncate text-sm font-medium">{title}</h2>
             {rightHeader}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -268,10 +287,11 @@ export function DiffPanelShell({
           </div>
         </header>
 
-        <div className={cn('flex-1 overflow-y-auto', isFloating && 'bg-[hsl(var(--content-area))]')}>
+        <div className={cn('min-h-0 flex-1 overflow-y-auto', isFloating && 'bg-[hsl(var(--content-area))]')}>
           {children}
         </div>
       </aside>
     </>
   );
+  return isFloating && floatingContainer ? createPortal(panel, floatingContainer) : panel;
 }

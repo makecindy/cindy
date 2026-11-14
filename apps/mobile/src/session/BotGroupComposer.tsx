@@ -36,6 +36,7 @@ import { useTranslation } from 'react-i18next';
 import { useConfirmLeaveWhileUploading } from '@/session/useConfirmLeaveWhileUploading';
 import { BOT_GROUP_MESSAGE_MAX_CHARS, type BotGroupMemberView, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import {
+  ambiguousBotGroupMentionLabels,
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
   insertBotGroupMention,
@@ -90,7 +91,7 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, stopPending = false, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
@@ -101,6 +102,7 @@ export function BotGroupComposer({
   deviceId: string;
   online: boolean;
   running: boolean;
+  canStop?: boolean;
   stopPending?: boolean;
   planState: BotGroupComposerPlanState | null;
   /** The active server/computer path takes attachments on send. */
@@ -188,7 +190,7 @@ export function BotGroupComposer({
   // Attachments picked while the computer said yes stay unsendable if it later says no.
   const canSend = online && (trimmed.length > 0 || hasAttachments) && !tooLong && hasMembers
     && (attachmentsSupported || !hasAttachments);
-  const showStop = running && trimmed.length === 0 && !hasAttachments;
+  const showStop = canStop && running && trimmed.length === 0 && !hasAttachments;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -246,6 +248,15 @@ export function BotGroupComposer({
     const draftText = trimmed;
     const draftTracked = tracked;
     const draftDivision = division;
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    const [ambiguousName] = ambiguousBotGroupMentionLabels(draft, {
+      members: mentionMembers.map((member) => ({ botId: member.botId, name: member.name })),
+      allLabels: [allLabel], allBotLabels, tracked: draftTracked,
+    });
+    if (ambiguousName) {
+      Alert.alert(t('groupChat.errors.mentionAmbiguous', { name: ambiguousName }));
+      return;
+    }
     sendingRef.current = true;
     setSending(true);
     // Clear at once like any chat; a failed send puts the draft back if nothing new was typed.
