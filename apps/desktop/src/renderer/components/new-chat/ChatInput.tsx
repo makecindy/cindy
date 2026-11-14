@@ -10192,6 +10192,27 @@ export function ChatInput({
                     }
                     onThinkingChange={async (enabled) => {
                       if (settingsLocked) return;
+                      // Apply to the runtime (or the next-message intent) before
+                      // confirming the preference. A rejected write must leave
+                      // the visible switch and its remembered value unchanged.
+                      if (sessionId) {
+                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+                        if (intent) {
+                          const applied = await performAgentSwitch(intent.target, intent.model, intent.providerId, {
+                            ...(intent.effort ? { effort: intent.effort as Effort } : {}),
+                            fastMode: intent.fastMode,
+                            thinking: enabled,
+                            axesOnly: true,
+                          });
+                          if (!applied) return;
+                        } else {
+                          const api = deviceLinkDeviceId
+                            ? makerApiForDevice(deviceLinkDeviceId)
+                            : window.electronAPI.maker;
+                          await api.setThinkingEnabled(sessionId, enabled);
+                        }
+                        if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) return;
+                      }
                       if (currentModelAgentKind && effectiveSourceId) {
                         if (modelMemory?.setThinking) {
                           modelMemory.setThinking(
@@ -10208,24 +10229,6 @@ export function ChatInput({
                             enabled,
                           );
                         }
-                      }
-                      // 意图期内(点选尚未发送)必须把开关写回 staged 意图：否则结算回放
-                      // 会按登记时的旧快照下发档位，把用户刚关掉的思考又打开(或反之)。
-                      if (sessionId && currentModelAgentKind) {
-                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
-                        if (intent) {
-                          await performAgentSwitch(intent.target, intent.model, intent.providerId, {
-                            ...(intent.effort ? { effort: intent.effort as Effort } : {}),
-                            fastMode: intent.fastMode,
-                            thinking: enabled,
-                          });
-                        }
-                      }
-                      if (sessionId) {
-                        const api = deviceLinkDeviceId
-                          ? makerApiForDevice(deviceLinkDeviceId)
-                          : window.electronAPI.maker;
-                        await api.setThinkingEnabled(sessionId, enabled);
                       }
                     }}
                     modelMemory={modelMemory}

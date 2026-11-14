@@ -7,7 +7,8 @@ import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../shar
 import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
 import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
 import type { UnifiedCommand } from '@/lib/slashCommands';
-import type { ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
+import { getProviderModelThinking, setProviderModelThinking } from '@/state/providerModelMemory';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { useSshCodexDraftSelection } from '@/features/cc-agent/useSshCodexDraftSelection';
@@ -29,6 +30,8 @@ import {
 const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor: null as Editor | null, listening: false, stop: vi.fn().mockResolvedValue(undefined),
   cancel: vi.fn().mockResolvedValue(undefined),
   setModel: vi.fn(), selectModel: undefined as undefined | ((id: string) => Promise<void | boolean>), selectEffort: undefined as string | null | undefined, remoteProviders: [] as ProviderView[],
+  setThinkingEnabled: vi.fn(), selectThinking: undefined as undefined | ((enabled: boolean) => void | Promise<void>), thinkingValue: undefined as boolean | undefined,
+  switchSessionAgent: vi.fn(),
   localProviders: [] as ProviderView[],
   remoteStatus: 'ready' as 'ready' | 'loading' | 'error',
   sshCatalogHosts: [] as (string | null)[],
@@ -65,10 +68,12 @@ vi.mock('@/components/sidebar/SortableList', () => ({
     </div>
   ),
 }));
-vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort, sshCodex }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null; sshCodex?: typeof h.sshCodex }) => {
+vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort, sshCodex, onThinkingChange, thinkingEnabled }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null; sshCodex?: typeof h.sshCodex; onThinkingChange?: typeof h.selectThinking; thinkingEnabled?: boolean }) => {
   h.sshCodex = sshCodex;
   h.selectModel = onModelChange;
   h.selectEffort = effort;
+  h.selectThinking = onThinkingChange;
+  h.thinkingValue = thinkingEnabled;
   return <button data-testid="model-selector" disabled={disabled}>{modelId}</button>;
 } }));
 vi.mock('@/hooks/useSshCodexProviders', () => ({ useSshCodexProviders: (hostId?: string | null) => {
@@ -108,6 +113,8 @@ const noOp = () => {};
 // External host services are inert; the editor, composer state, and send dispatch run unchanged.
 const api: typeof window.electronAPI = new Proxy({} as typeof window.electronAPI, { get: (_obj, key) => {
   if (key === 'setModel') return h.setModel;
+  if (key === 'setThinkingEnabled') return h.setThinkingEnabled;
+  if (key === 'switchSessionAgent') return h.switchSessionAgent;
   if (key === 'subscriptionAccounts' && h.subscriptionAccounts) return h.subscriptionAccounts;
   if (key === 'mcpApps') return h.providerCall;
   if (key === 'listSync') return () => ({ ghosts: [] });
@@ -133,6 +140,57 @@ const props = {
   vendorKey: 'codex' as const, deviceLinkDeviceId: 'test-host', attachmentState: attachments,
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
+
+afterEach(() => {
+  h.setThinkingEnabled.mockReset();
+  h.switchSessionAgent.mockReset();
+  h.selectThinking = undefined;
+  makerChatStore.clearAgentSwitchIntent('thinking-write-test');
+});
+
+// #10434, unit: the picker-only failure fixture used a successful-write-first
+// callback. Exercise the real composer's callback with a rejected Pi host write.
+it('confirms a thinking preference only after the real session write succeeds', async () => {
+  h.localProviders = [{ ...buildUserProvider({ id: 'mimo-thinking-test', name: 'MiMo', runtimes: { pi: {
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat',
+    models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }],
+  } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }), connected: true }];
+  setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true);
+  let reject!: (error: Error) => void;
+  h.setThinkingEnabled.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+  render(<ChatInput {...props} sessionId="thinking-write-test" deviceLinkDeviceId={null}
+    runtimeAgentKind="pi" vendorKey="pi" hideRuntimeControls={false}
+    initialModel="mimo-v2.6-pro" initialProviderId="mimo-thinking-test" onSend={vi.fn()} />);
+  await waitFor(() => expect(h.selectThinking).toBeTypeOf('function'));
+  let failed!: Promise<void>;
+  await act(async () => { failed = Promise.resolve(h.selectThinking!(false)); });
+  expect(h.setThinkingEnabled).toHaveBeenCalledWith('thinking-write-test', false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(true);
+  await act(async () => {
+    const checked = expect(failed).rejects.toThrow('host rejected thinking');
+    reject(new Error('host rejected thinking'));
+    await checked;
+  });
+  expect(h.thinkingValue).toBe(true);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(true);
+  h.setThinkingEnabled.mockResolvedValueOnce(undefined);
+  await act(async () => { await h.selectThinking!(false); });
+  expect(h.thinkingValue).toBe(false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
+  // A staged route changes only that intent; rejection must not fall through
+  // to the old runtime or confirm a new global preference.
+  await act(async () => {
+    makerChatStore.noteAgentSwitchIntent('thinking-write-test', 'pi', {
+      model: 'mimo-v2.6-pro', providerId: 'mimo-thinking-test',
+    });
+  });
+  h.switchSessionAgent.mockRejectedValueOnce(new Error('intent rejected thinking'));
+  await act(async () => { await h.selectThinking!(true); });
+  expect(h.switchSessionAgent).toHaveBeenCalled();
+  expect(h.setThinkingEnabled).toHaveBeenCalledTimes(2);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
+  await act(async () => { setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true); });
+});
 
 // New completion contract through the real editor/selection entry. The panel is
 // replaced only to select a returned candidate. Existing parser/bridge tests do

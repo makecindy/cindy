@@ -25,6 +25,7 @@ import { useTransientModelPickerPreferences } from '@/components/new-chat/modelP
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import type { ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import type { LocalCatalogFailure } from '@/lib/localCatalogLoadState';
 import { toggleModelGroupFavorite } from '@/features/model-groups/modelGroupFavorites';
 
@@ -370,6 +371,89 @@ beforeEach(() => {
   resetEnginePrefs();
   resetFavorites();
   resetRecentModels();
+});
+
+// #10434, unit: the real unified picker previously dropped thinkingToggle and
+// had no live callback. Catalog-only tests missed this user-visible dead end.
+// Minimal input: one official Pi MiMo row, empty efforts, current thinking=true.
+describe('MiMo thinking switch in the actual unified picker', () => {
+  const oldProviders = providersRef.providers;
+  beforeEach(() => {
+    providersRef.providers = [{ ...buildUserProvider({ id: 'mimo-fixture', name: 'MiMo', runtimes: { pi: {
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat',
+      models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }],
+    } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }), connected: true }];
+  });
+  afterEach(() => { providersRef.providers = oldProviders; });
+
+  it('switches live thinking off/on and leaves rejected writes and model memory unchanged', async () => {
+    const setThinking = vi.fn();
+    const write = vi.fn(async (_enabled: boolean) => {});
+    function Picker() {
+      const [enabled, setEnabled] = React.useState(true);
+      return <ModelSelectorContent remoteAgent={undefined} vendorKey="pi" unifiedAgents={['pi']}
+        modelId="mimo-v2.6-pro" currentProviderId="mimo-fixture" effort="high"
+        onModelChange={vi.fn()} onEffortChange={vi.fn()} onProviderChange={vi.fn()}
+        thinkingEnabled={enabled} onThinkingChange={async value => { await write(value); setEnabled(value); }}
+        modelMemory={{ getEffort: () => undefined, getFast: () => undefined,
+          setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => true, setThinking }} />;
+    }
+    render(<Picker />);
+    const flyout = await openRowFlyout('MiMo V2.6 Pro');
+    const toggle = within(flyout).getByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(within(flyout).queryByRole('slider')).toBeNull();
+    for (const expected of ['false', 'true']) {
+      await act(async () => fireEvent.click(toggle));
+      expect(toggle.getAttribute('aria-checked')).toBe(expected);
+    }
+    write.mockRejectedValueOnce(new Error('fixture write failed'));
+    await act(async () => fireEvent.click(toggle));
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(setThinking).not.toHaveBeenCalled();
+  });
+
+  it('edits only the non-selected model preference, without changing the active model', async () => {
+    let remembered: boolean | undefined;
+    const setThinking = vi.fn((_agent, _provider, _model, value: boolean) => { remembered = value; });
+    const onThinkingChange = vi.fn();
+    renderPanel({ vendorKey: 'pi', unifiedAgents: ['pi'], modelId: 'other-model',
+      currentProviderId: 'mimo-fixture', onThinkingChange,
+      modelMemory: { getEffort: () => undefined, getFast: () => undefined,
+        setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => remembered, setThinking } });
+    const flyout = await openRowFlyout('MiMo V2.6 Pro');
+    const toggle = within(flyout).getByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    await act(async () => fireEvent.click(toggle));
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(setThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro', false);
+    expect(onThinkingChange).not.toHaveBeenCalled();
+    expect(onProviderChange).not.toHaveBeenCalled();
+  });
+
+  it.each(['favorite', 'recent'])('does not expose a global thinking edit in an unselected %s copy', async kind => {
+    const copy = { providerId: 'mimo-fixture', modelId: 'mimo-v2.6-pro', agent: 'pi' as const };
+    const uid = kind === 'favorite' ? addModelFavorite(copy) : recordRecentModel(copy, 1000);
+    const onThinkingChange = vi.fn();
+    const setThinking = vi.fn();
+    renderPanel({ vendorKey: 'pi', unifiedAgents: ['pi'], modelId: 'mimo-v2.6-pro',
+      currentProviderId: 'mimo-fixture', onThinkingChange,
+      modelMemory: { getEffort: () => undefined, getFast: () => undefined,
+        setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => true, setThinking } });
+    if (kind === 'recent') await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    const row = document.querySelector(kind === 'favorite'
+      ? `[data-unified-anchor="fav::${uid}"]` : '[data-unified-anchor^="recent::"]') as HTMLElement;
+    if (kind === 'recent') {
+      // Recent snapshots already have no edit affordance; keep that boundary.
+      expect(within(row).queryByRole('button', { name: '自定义' })).toBeNull();
+    } else {
+      const flyout = await openFlyoutForRow(row);
+      expect(within(flyout).queryByRole('switch', { name: 'newChat.modelSelector.thinking' })).toBeNull();
+    }
+    expect(onThinkingChange).not.toHaveBeenCalled();
+    expect(setThinking).not.toHaveBeenCalled();
+  });
 });
 
 // #10207 / #10235 merge regression: local loading must not label a populated

@@ -15,6 +15,9 @@
 import { describe, expect, it } from "vitest";
 
 import { BUNDLED_CATALOG } from "../catalog.js";
+import { buildUserProvider } from "../user-provider.js";
+import { PROVIDER_MODEL_CATALOG } from "../providerModelCatalog.js";
+import type { CustomProviderConfig, ProviderRuntimeModelConfig } from "../types.js";
 import { parseModelRegistry } from "../modelAccessValidator.js";
 import {
   findBaseModel,
@@ -27,6 +30,53 @@ const rawRegistry = modelRegistryJson as unknown as ModelRegistry;
 const registry = parseModelRegistry(rawRegistry);
 const MIMO_PRESET_IDS = ["xiaomi-mimo-api-cn", "xiaomi-mimo-token-plan-cn"];
 const IMAGE_MODELS = new Set(["mimo-v2.6-pro", "mimo-v2.6-flash"]);
+
+// #10434, unit: the previous tests stopped before buildUserProvider, where the
+// native catalog's high tier replaced the Registry's empty intensity ladder.
+describe.each(['xiaomi', 'xiaomi-token-plan-cn', 'xiaomi-token-plan-ams', 'xiaomi-token-plan-sgp'])(
+  'MiMo thinking switch through the actual connection projection: %s', source => {
+    const rows = PROVIDER_MODEL_CATALOG.providers[source].filter(row => row.id.startsWith('mimo-v2.6-'));
+    const project = (model: Omit<ProviderRuntimeModelConfig, 'name'>, legacy = false, baseUrl = rows[0].upstream) => {
+      const configuredModel = { name: model.id, ...model };
+      const config: CustomProviderConfig = { id: 'mimo-connection', name: 'MiMo', runtimes: { pi: {
+        baseUrl, wireProtocol: 'openai-chat',
+        ...(legacy ? { piCatalogProviderId: source } : {}), models: [configuredModel],
+      } } };
+      const before = structuredClone(config);
+      const result = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).models.pi![0];
+      expect(config).toEqual(before);
+      expect(result.userModelConfig).toEqual(configuredModel);
+      return result;
+    };
+    it.each([false, true])('exposes the switch without fake intensity levels (legacy=%s)', legacy => {
+      for (const row of rows) {
+        expect(project({ id: row.id }, legacy)).toMatchObject({
+          thinkingToggle: true, efforts: [], defaultEffort: null, supportsImageInput: true,
+        });
+      }
+    });
+    it('exposes the same switch when creating a connection from its current preset', () => {
+      const presetId = source === 'xiaomi' ? 'xiaomi-mimo-api-cn'
+        : source === 'xiaomi-token-plan-cn' ? 'xiaomi-mimo-token-plan-cn' : source;
+      const preset = BUNDLED_CATALOG.presets!.find(preset => preset.id === presetId)!;
+      const runtime = preset.runtimes.pi!;
+      const provider = buildUserProvider({ id: 'new-mimo', name: 'MiMo', runtimes: { pi: {
+        ...runtime, catalogPresetId: preset.id,
+      } } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      for (const row of rows) expect(provider.models.pi!.find(model => model.id === row.id))
+        .toMatchObject({ thinkingToggle: true, efforts: [], defaultEffort: null });
+    });
+    it('preserves explicit user overrides and does not lend the switch to another route', () => {
+      expect(project({ id: rows[0].id, thinkingToggle: false }).thinkingToggle).not.toBe(true);
+      expect(project({ id: rows[0].id, reasoning: false }).thinkingToggle).not.toBe(true);
+      expect(project({ id: rows[0].id, reasoning: true, reasoningEfforts: ['medium'], reasoningDefaultEffort: 'medium' }))
+        .toMatchObject({ efforts: ['medium'], defaultEffort: 'medium' });
+      expect(project({ id: rows[0].id }, true, 'https://proxy.example/v1').thinkingToggle).not.toBe(true);
+      expect(project({ id: rows[0].id, piApi: 'openai-responses' }).thinkingToggle).not.toBe(true);
+      expect(project({ id: 'mimo-v2.7-pro' }).thinkingToggle).not.toBe(true);
+    });
+  },
+);
 
 /** 裸 model id → Registry 公共条目(alias 唯一匹配)。 */
 function baseModelFor(bareId: string) {

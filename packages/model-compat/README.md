@@ -91,6 +91,11 @@ identical transport policies share compatibility rules. Conflicting policies rem
 Unclassified gateways retain Cindy's existing route-specific rules; they do not inherit every
 patch for models with a familiar name.
 
+The Cindy supplement in `src/profiles.ts` maps MiMo V2.6 Pro / Flash / Pro UltraSpeed
+Chat requests to `thinking.type: enabled|disabled` on the official API and CN/AMS/SGP
+Token Plan endpoints. It does not modify the pinned upstream snapshot, native Responses
+or Anthropic requests. With no requested effort, the provider's default remains intact.
+
 Active mappings include unsupported sampling fields; Chat reasoning wire mappings/budget/toggle;
 reasoning replay/placeholder and automatic-tool-choice capabilities; Moonshot function schemas;
 Responses verbosity/reasoning policy; DeepSeek adjacency, empty result annotation, search history
