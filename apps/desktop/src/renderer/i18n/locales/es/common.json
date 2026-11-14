@@ -12850,7 +12850,10 @@
           "imagesUnresolved_many": "⚠️ No se enviaron {{count}} imágenes (ya no existen o no se pudieron leer).",
           "attachmentsFailed_other": "⚠️ No se pudieron enviar {{count}} adjuntos. Inténtalo de nuevo más tarde.",
           "attachmentsFailed_one": "⚠️ No se pudo enviar {{count}} adjunto. Inténtalo de nuevo más tarde.",
-          "attachmentsFailed_many": "⚠️ No se pudieron enviar {{count}} adjuntos. Inténtalo de nuevo más tarde."
+          "attachmentsFailed_many": "⚠️ No se pudieron enviar {{count}} adjuntos. Inténtalo de nuevo más tarde.",
+          "progressWorking": "La tarea sigue en curso.",
+          "progressContinuing": "La tarea sigue en curso. Los resultados se enviarán cuando termine. Envía !stop para detener la tarea.",
+          "progressHandoff": "La tarea sigue en curso. El progreso posterior llegará en mensajes nuevos."
         }
       },
       "telegram": {
@@ -13099,7 +13102,8 @@
           "earlierSteps_many": "… {{count}} pasos anteriores no se muestran",
           "recordTitle_one": "Registro de actividad · {{count}} paso · {{elapsed}}",
           "recordTitle_other": "Registro de actividad · {{count}} pasos · {{elapsed}}",
-          "recordTitle_many": "Registro de actividad · {{count}} pasos · {{elapsed}}"
+          "recordTitle_many": "Registro de actividad · {{count}} pasos · {{elapsed}}",
+          "drafting": "✍️ Preparando la respuesta…"
         },
         "images": {
           "notSent_one": "No se pudo enviar {{count}} imagen como archivo adjunto.",
@@ -13119,6 +13123,15 @@
           "allow": "permitir",
           "deny": "denegar",
           "approve": "aprobar"
+        },
+        "delivery": {
+          "failed": "⚠️ No se pudo entregar esta respuesta. Vuelve a intentarlo más tarde.",
+          "retrying_one": "⚠️ La entrega de {{count}} elemento sigue sin confirmarse. Se reintentará automáticamente cuando se restablezca la red.",
+          "retrying_other": "⚠️ La entrega de {{count}} elementos sigue sin confirmarse. Se reintentará automáticamente cuando se restablezca la red.",
+          "unconfirmed_one": "⚠️ La entrega de {{count}} elemento no está confirmada. No se reenviará automáticamente; envía la solicitud de nuevo si no llegó.",
+          "unconfirmed_other": "⚠️ La entrega de {{count}} elementos no está confirmada. No se reenviarán automáticamente; envía la solicitud de nuevo si no llegaron.",
+          "retrying_many": "⚠️ La entrega de {{count}} elementos sigue sin confirmarse. Se reintentará automáticamente cuando se restablezca la red.",
+          "unconfirmed_many": "⚠️ La entrega de {{count}} elementos no está confirmada. No se reenviarán automáticamente; envía la solicitud de nuevo si no llegaron."
         }
       },
       "hook": {
@@ -13167,7 +13180,7 @@
           "apiKeyMissing": "⚠️ El modelo actual aún no está autenticado. Conecta un proveedor de modelos en la configuración de Cindy Desktop y vuelve a intentarlo.",
           "controlInProgress": "🎮 Aún no terminaste de elegir qué controlar. Primero responde al mensaje interactivo anterior.",
           "credentialBusy": "⏳ El Agent local se está ejecutando, así que ahora no se puede cambiar el modo de credenciales. Inténtalo de nuevo más tarde.",
-          "queuedNoticeNext": "⏳ El turno anterior sigue en ejecución, así que este mensaje quedó en cola. Envía `!stop` para detenerlo.",
+          "queuedNoticeNext": "⏳ Recibido y en cola. La tarea anterior está en curso o espera confirmación. Responde a su tarjeta de confirmación o envía `!stop` para detenerla y vaciar la cola.",
           "queuedNoticePosition": "⏳ El turno anterior sigue en ejecución. Este mensaje está en la posición {{position}} de la cola. Envía `!stop` para detenerlo.",
           "stopDone": "⏹ Se detuvo la tarea actual.",
           "stopDoneDropped_other": "⏹ Se detuvo la tarea actual y se quitaron {{count}} mensajes en cola.",
@@ -13262,7 +13275,14 @@
           "planFooter": "Responde “{{approve}}” para continuar o “{{deny}}” para cancelar.",
           "askNoQuestion": "El Agent espera tu respuesta, pero no hay ninguna pregunta que mostrar. Responde “continuar”.",
           "askIntro": "El Agent necesita tu respuesta:",
-          "askFooter": "Responde con el número de una opción o escribe tu respuesta."
+          "askFooter": "Responde con el número de una opción o escribe tu respuesta.",
+          "stopLabel": "Detener tarea",
+          "stopHint": "Detener finaliza la tarea actual y vacía los mensajes en cola de esta conversación. Envía !stop para detener la tarea.",
+          "stopRequested": "⏹ Recibido. Deteniendo la tarea actual.",
+          "stopFailed": "No se pudo confirmar que la tarea se detuviera. Envía !stop para solicitarlo de nuevo.",
+          "planApproved": "✅ Plan aprobado",
+          "planRejected": "❌ Plan rechazado",
+          "planExpired": "⌛ Esta confirmación del plan ha caducado"
         }
       },
       "dingtalk": {

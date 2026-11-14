@@ -14,6 +14,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { messages } from '../feishu/messages.js';
 import { setTransportTextResolver, tt, type TransportTextVars } from '../transportText.js';
 import { stripXdtForStreaming } from '../xdtRefs.js';
+import { prepareWecomFinal } from '../wecom/finalDelivery.js';
+import { createWecomProgress } from '../wecom/progress.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(here, '..');
@@ -114,6 +116,29 @@ describe.skipIf(!hasDesktopLocales)('English resolver', () => {
         messages.streaming.partNote(99, 99).length,
       );
     }
+  });
+
+  // Merge regression (unit): moving final delivery into a plan must retain the host's locale.
+  it('localizes WeCom attachment notices after final delivery is split into steps', async () => {
+    setTransportTextResolver(catalogueResolver('en'));
+    const plan = await prepareWecomFinal({
+      userId: 'owner', text: '![](cindy-media://blobs/missing.png)', terminal: 'done',
+    }, { resolveMediaUrl: () => null, log: { warn: vi.fn() } });
+    expect(plan.steps[0]).toMatchObject({ kind: 'text', text: expect.stringContaining('1 image') });
+    expect(plan.steps[0]).toMatchObject({ text: expect.not.stringContaining('图片') });
+  });
+
+  // Merge regression (unit): the new expired-stream status path must also use the transport resolver.
+  it('localizes WeCom status after the stream window closes', async () => {
+    setTransportTextResolver(catalogueResolver('en'));
+    const sendStatus = vi.fn(async () => undefined);
+    const progress = createWecomProgress({
+      userId: 'owner', streamId: 'expired', now: () => 600_000, streamStartedAt: 0,
+      replyStream: vi.fn(async () => undefined), sendStatus,
+    });
+    progress.replace({ stage: 'Working', body: '' });
+    await vi.waitFor(() => expect(sendStatus).toHaveBeenCalledWith(expect.stringContaining('The task is still running')));
+    await progress.close();
   });
 
   it('every transport key used by the package exists in the zh-CN and en catalogues', () => {

@@ -11,6 +11,8 @@ import {
   WECOM_PERSONAL_GROUP_WINDOW,
 } from '../shared/channelGroupWindow';
 import { buildImReplyContextBlock } from '../shared/replyContext';
+import { imChannelNoteSourceFromEvent } from '../shared/channelNote';
+import { createChannelOutbox, attachOutboxLifecycle } from '../shared/imOutboxWiring';
 import { createLogger } from '../../logger';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { ui } from './uiText';
@@ -28,6 +30,18 @@ function sessionSafeUserId(userId: string): string {
 }
 
 const log = createLogger('im:wecom-adapter');
+
+/**
+ * 逐轮渠道事实: 回答里链接到的任务文件由**宿主自动**作为文件附件交付。
+ *
+ * 真机 2026-11-12 出现模型在正文里写「当前未提供企业微信附件发送工具，无法确认附件
+ * 已发送」, 而宿主其实已经发出文件。模型并不知道这条宿主能力, 只能按“手上没有工具”
+ * 推断 —— 这不是系统提示词问题, 而是逐轮渠道说明缺一条事实。这里只陈述:
+ *  - 不需要调用工具(自动交付);
+ *  - 不保证送达、不要替用户断言成功, 也不要声称自己缺少发送能力。
+ */
+export const WECOM_AUTO_ATTACHMENT_HINT =
+  '本渠道自动投递附件：回答里链接到的工作目录内文件（相对或绝对路径）会由宿主作为文件附件发出，不需要调用工具；不要声称自己缺少发送能力，也不要保证一定送达。';
 
 /** 群 lane 的 chatId; 私聊或坏掉的 lane 返回 null。 */
 function groupChatIdOf(userId: string): string | null {
@@ -69,20 +83,48 @@ export function buildWecomAdapter(
     const status = wecomIm.getStatus();
     return status.kind === 'connected' ? status.appId : '';
   };
+
+  // 终稿持久出箱: 连接恢复/重启后补发未完成项, 不重新调用 Agent。
+  const outbox = createChannelOutbox({
+    channel: 'wecom',
+    botId: () => {
+      const status = wecomIm.getStatus();
+      return status.kind === 'connected' ? status.appId : wecomIm.getConfigState().botId ?? '';
+    },
+    transport: () => wecomIm,
+    // 补发时按总仓地址重新解析媒体(媒体仓是内容寻址的; 地址失效则按失败处理)。
+    resolveMediaUrl: (url: string) => wecomIm.resolveOutboundMediaUrl(url),
+  });
+  attachOutboxLifecycle(wecomIm, outbox, () => !wecomIm.getConfigState().botId);
   return {
     channel: 'wecom',
     im: wecomIm,
     output: {
       kind: 'chunked-text',
       im: wecomIm,
-      beginReply: (userId) => wecomIm.beginReply(userId),
+      // 企业微信长连接支持原地刷新的流式消息: 过程反馈真的写进同一条消息,
+      // 终稿再用 finish=true 收敛它。
+      beginReply: (userId, opts) => wecomIm.beginReply(userId, opts),
+      prepareFinal: (output) => wecomIm.prepareFinal(output),
+      deliverFinal: (output, plan, opts) => wecomIm.deliverFinal(output, plan, opts),
       commitFinal: async (output) => {
-        await wecomIm.commitFinal(output);
+        // 先进持久出箱(逐副作用账本), 再尽力投递: 投递失败不会把“Agent 已完成”
+        // 报成执行失败; 返回值区分“已送达 / 已受理未送达 / 没发出去”。
+        const outcome = await outbox.commit(output);
         // 群消息本地窗口(与 Telegram 同一张表): 机器人自己发出的终稿也入窗, 下次群里
-        // @ 时作为背景; 报错文案不入窗。入窗失败只告警, 不影响已发出的回复。
+        // @ 时作为背景; 报错文案不入窗。入窗失败只告警, 不影响已发出的回复; 未确认
+        // 送达的终稿也不入窗(它不是已经发生过的对话)。
         const chatId = groupChatIdOf(output.userId);
         const botId = chatId ? botIdForLane(output.userId) : '';
-        if (!chatId || !botId || output.terminal === 'error' || !output.text.trim()) return;
+        if (
+          outcome.status !== 'sent' ||
+          !chatId ||
+          !botId ||
+          output.terminal === 'error' ||
+          !output.text.trim()
+        ) {
+          return outcome;
+        }
         await WECOM_PERSONAL_GROUP_WINDOW.record({
           botId,
           chatId,
@@ -93,6 +135,7 @@ export function buildWecomAdapter(
           text: output.text,
           sentAt: Date.now(),
         }).catch((err) => log.warn(`wecom group window outbound record failed: ${String(err)}`));
+        return outcome;
       },
     },
     config,
@@ -114,7 +157,9 @@ export function buildWecomAdapter(
       }),
     },
     processingEmoji: '',
-    silentQueue: true,
+    notifyQueued: async (userId, position) => {
+      await wecomIm.sendMarkdownText(userId, ui.agent.queuedNotice(position), { usePendingFrame: false });
+    },
     buildVendorOptions: (userId) => ({
       source: 'wecom',
       wecomConversationId: userId,
@@ -134,6 +179,13 @@ export function buildWecomAdapter(
       return owner && userId === owner ? { kind: 'owner-dm' } : { kind: 'guest-dm', userId };
     },
     handleTextInteraction: (userId, request, options) => interactions.handle(userId, request, options),
+    cancelTextInteraction: (userId, requestId, decision) => interactions.cancel(userId, requestId, decision),
+    // 逐轮渠道说明: 保留默认的来源(群/私聊、发言人)事实, 再补一条**宿主自动交付附件**
+    // 的能力说明 —— 模型据此不再推断“没有发送能力”。
+    channelNoteSourceFor: (event) => ({
+      ...imChannelNoteSourceFromEvent(event),
+      toolsHint: WECOM_AUTO_ATTACHMENT_HINT,
+    }),
     // 群(主人在群里 @ 机器人): 先把这条入窗, 再拼「自上次以来群里的消息」前缀, 游标在
     // 消息被受理后 commit(与 Telegram 同一套语义)。私聊只保留引用回复块, 与共享层的兜底一致。
     prepareAgentTurnText: async (event) => {

@@ -12744,7 +12744,10 @@
           "imagesUnresolved_other": "⚠️ {{count}} Bilder wurden nicht gesendet (existieren nicht mehr oder sind nicht lesbar).",
           "imagesUnresolved_one": "⚠️ {{count}} Bild wurde nicht gesendet (existiert nicht mehr oder ist nicht lesbar).",
           "attachmentsFailed_other": "⚠️ {{count}} Anhänge konnten nicht gesendet werden. Versuch es später noch einmal.",
-          "attachmentsFailed_one": "⚠️ {{count}} Anhang konnte nicht gesendet werden. Versuch es später noch einmal."
+          "attachmentsFailed_one": "⚠️ {{count}} Anhang konnte nicht gesendet werden. Versuch es später noch einmal.",
+          "progressWorking": "Die Aufgabe läuft noch.",
+          "progressContinuing": "Die Aufgabe läuft noch. Das Ergebnis wird nach Abschluss gesendet. Sende !stop, um die Aufgabe zu stoppen.",
+          "progressHandoff": "Die Aufgabe läuft noch. Weitere Fortschrittsmeldungen werden als neue Nachrichten gesendet."
         }
       },
       "telegram": {
@@ -12989,7 +12992,8 @@
           "earlierSteps_one": "… {{count}} früherer Schritt nicht angezeigt",
           "earlierSteps_other": "… {{count}} frühere Schritte nicht angezeigt",
           "recordTitle_one": "Verlauf · {{count}} Schritt · {{elapsed}}",
-          "recordTitle_other": "Verlauf · {{count}} Schritte · {{elapsed}}"
+          "recordTitle_other": "Verlauf · {{count}} Schritte · {{elapsed}}",
+          "drafting": "✍️ Antwort wird vorbereitet…"
         },
         "images": {
           "notSent_one": "{{count}} Bild konnte nicht als Anhang gesendet werden.",
@@ -13008,6 +13012,13 @@
           "allow": "erlauben",
           "deny": "ablehnen",
           "approve": "genehmigen"
+        },
+        "delivery": {
+          "failed": "⚠️ Diese Ausgabe konnte nicht zugestellt werden. Versuche es später erneut.",
+          "retrying_one": "⚠️ Die Zustellung von {{count}} Element ist noch unbestätigt. Nach Wiederherstellung des Netzwerks wird sie automatisch erneut versucht.",
+          "retrying_other": "⚠️ Die Zustellung von {{count}} Elementen ist noch unbestätigt. Nach Wiederherstellung des Netzwerks wird sie automatisch erneut versucht.",
+          "unconfirmed_one": "⚠️ Die Zustellung von {{count}} Element ist unbestätigt. Es wird nicht automatisch erneut gesendet; sende die Anfrage erneut, falls es nicht angekommen ist.",
+          "unconfirmed_other": "⚠️ Die Zustellung von {{count}} Elementen ist unbestätigt. Sie werden nicht automatisch erneut gesendet; sende die Anfrage erneut, falls sie nicht angekommen sind."
         }
       },
       "hook": {
@@ -13056,7 +13067,7 @@
           "apiKeyMissing": "⚠️ Das aktuelle Modell ist noch nicht authentifiziert. Verbinde in den Einstellungen von Cindy Desktop einen Modellanbieter und versuche es erneut.",
           "controlInProgress": "🎮 Die Auswahl für die Fernsteuerung ist noch nicht abgeschlossen. Kümmere dich zuerst um die vorherige interaktive Nachricht.",
           "credentialBusy": "⏳ Der lokale Agent läuft gerade, daher kann der Anmeldemodus jetzt nicht gewechselt werden. Versuche es später erneut.",
-          "queuedNoticeNext": "⏳ Die vorherige Runde läuft noch, daher wurde diese Nachricht in die Warteschlange gestellt. Sende `!stop`, um abzubrechen.",
+          "queuedNoticeNext": "⏳ Erhalten und eingereiht. Die vorherige Aufgabe läuft oder wartet auf Bestätigung. Beantworte die Bestätigungskarte oder sende `!stop`, um die Aufgabe zu stoppen und die Warteschlange zu leeren.",
           "queuedNoticePosition": "⏳ Die vorherige Runde läuft noch. Diese Nachricht steht an Position {{position}} der Warteschlange. Sende `!stop`, um abzubrechen.",
           "stopDone": "⏹ Aktuelle Aufgabe gestoppt.",
           "stopDoneDropped_other": "⏹ Aktuelle Aufgabe gestoppt und {{count}} wartende Nachrichten entfernt.",
@@ -13150,7 +13161,14 @@
           "planFooter": "Antworte mit „{{approve}}“, um fortzufahren, oder mit „{{deny}}“, um abzubrechen.",
           "askNoQuestion": "Der Agent wartet auf deine Antwort, aber es gibt keine Frage zum Anzeigen. Antworte mit „weiter“.",
           "askIntro": "Der Agent braucht deine Antwort:",
-          "askFooter": "Antworte mit der Nummer einer Option oder gib deine Antwort direkt ein."
+          "askFooter": "Antworte mit der Nummer einer Option oder gib deine Antwort direkt ein.",
+          "stopLabel": "Aufgabe stoppen",
+          "stopHint": "Das Stoppen beendet die aktuelle Aufgabe und leert die Nachrichtenwarteschlange in diesem Chat. Sende !stop, um die Aufgabe zu stoppen.",
+          "stopRequested": "⏹ Erhalten. Die aktuelle Aufgabe wird gestoppt.",
+          "stopFailed": "Es konnte nicht bestätigt werden, dass die Aufgabe gestoppt wurde. Sende erneut !stop.",
+          "planApproved": "✅ Plan genehmigt",
+          "planRejected": "❌ Plan abgelehnt",
+          "planExpired": "⌛ Diese Planbestätigung ist abgelaufen"
         }
       },
       "dingtalk": {

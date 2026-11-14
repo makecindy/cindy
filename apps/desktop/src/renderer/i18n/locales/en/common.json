@@ -12744,7 +12744,10 @@
           "imagesUnresolved_other": "⚠️ {{count}} images weren't sent (they no longer exist or couldn't be read).",
           "imagesUnresolved_one": "⚠️ {{count}} image wasn't sent (it no longer exists or couldn't be read).",
           "attachmentsFailed_other": "⚠️ {{count}} attachments failed to send. Try again later.",
-          "attachmentsFailed_one": "⚠️ {{count}} attachment failed to send. Try again later."
+          "attachmentsFailed_one": "⚠️ {{count}} attachment failed to send. Try again later.",
+          "progressWorking": "The task is still running.",
+          "progressContinuing": "The task is still running. Results will be sent when it finishes. Send !stop to stop the task.",
+          "progressHandoff": "The task is still running. Further progress will arrive in new messages."
         }
       },
       "telegram": {
@@ -12989,7 +12992,8 @@
           "earlierSteps_one": "… {{count}} earlier step not shown",
           "earlierSteps_other": "… {{count}} earlier steps not shown",
           "recordTitle_one": "Activity log · {{count}} step · {{elapsed}}",
-          "recordTitle_other": "Activity log · {{count}} steps · {{elapsed}}"
+          "recordTitle_other": "Activity log · {{count}} steps · {{elapsed}}",
+          "drafting": "✍️ Preparing the answer…"
         },
         "images": {
           "notSent_one": "{{count}} image could not be sent as an attachment.",
@@ -13008,6 +13012,13 @@
           "allow": "allow",
           "deny": "deny",
           "approve": "approve"
+        },
+        "delivery": {
+          "failed": "⚠️ This output could not be delivered. Try again later.",
+          "retrying_one": "⚠️ Delivery of {{count}} item is still unconfirmed. It will be retried automatically when the network recovers.",
+          "retrying_other": "⚠️ Delivery of {{count}} items is still unconfirmed. They will be retried automatically when the network recovers.",
+          "unconfirmed_one": "⚠️ Delivery of {{count}} item is unconfirmed. It will not be resent automatically; send the request again if it did not arrive.",
+          "unconfirmed_other": "⚠️ Delivery of {{count}} items is unconfirmed. They will not be resent automatically; send the request again if they did not arrive."
         }
       },
       "hook": {
@@ -13056,7 +13067,7 @@
           "apiKeyMissing": "⚠️ The current model isn't authenticated yet. Connect a model provider in Cindy Desktop settings, then try again.",
           "controlInProgress": "🎮 The takeover selection isn't finished yet. Handle the previous interactive message first.",
           "credentialBusy": "⏳ The local Agent is running, so the credential mode can't be switched right now. Try again later.",
-          "queuedNoticeNext": "⏳ The previous turn is still running, so this message is queued. Send `!stop` to stop it.",
+          "queuedNoticeNext": "⏳ Received and queued. The previous task is running or awaiting confirmation. Respond to its confirmation card, or send `!stop` to stop it and clear the queue.",
           "queuedNoticePosition": "⏳ The previous turn is still running. This message is #{{position}} in the queue. Send `!stop` to stop it.",
           "stopDone": "⏹ Stopped the current task.",
           "stopDoneDropped_other": "⏹ Stopped the current task and removed {{count}} queued messages.",
@@ -13150,7 +13161,14 @@
           "planFooter": "Reply “{{approve}}” to continue, or “{{deny}}” to cancel.",
           "askNoQuestion": "The Agent is waiting for your answer, but there's no question to show. Reply “continue”.",
           "askIntro": "The Agent needs your answer:",
-          "askFooter": "Reply with an option number, or type your answer."
+          "askFooter": "Reply with an option number, or type your answer.",
+          "stopLabel": "Stop task",
+          "stopHint": "Stopping ends the current task and clears queued messages in this chat. Send !stop to stop the task.",
+          "stopRequested": "⏹ Received. Stopping the current task.",
+          "stopFailed": "Could not confirm that the task stopped. Send !stop to request it again.",
+          "planApproved": "✅ Plan approved",
+          "planRejected": "❌ Plan rejected",
+          "planExpired": "⌛ This plan confirmation has expired"
         }
       },
       "dingtalk": {

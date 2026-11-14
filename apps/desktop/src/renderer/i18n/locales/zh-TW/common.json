@@ -12692,7 +12692,10 @@
           "attachmentsOmitted_other": "⚠️ 另有 {{count}} 個附件未傳送（企業微信單次最多傳送 {{max}} 個）。",
           "filesRejected_other": "⚠️ 有 {{count}} 個檔案附件未傳送（不在目前的工作目錄內或無法驗證）。",
           "imagesUnresolved_other": "⚠️ 有 {{count}} 張圖片未傳送（圖片已不存在或無法讀取）。",
-          "attachmentsFailed_other": "⚠️ 有 {{count}} 個附件傳送失敗，請稍後再試。"
+          "attachmentsFailed_other": "⚠️ 有 {{count}} 個附件傳送失敗，請稍後再試。",
+          "progressWorking": "任務仍在處理中。",
+          "progressContinuing": "任務仍在繼續，完成後會傳送結果。可傳送 !stop 終止任務。",
+          "progressHandoff": "任務仍在繼續，後續進度將以新訊息傳送。"
         }
       },
       "telegram": {
@@ -12936,7 +12939,8 @@
           "earlierSteps_one": "… 更早的 {{count}} 項未列出",
           "earlierSteps_other": "… 更早的 {{count}} 項未列出",
           "recordTitle_one": "過程記錄 · {{count}} 項 · {{elapsed}}",
-          "recordTitle_other": "過程記錄 · {{count}} 項 · {{elapsed}}"
+          "recordTitle_other": "過程記錄 · {{count}} 項 · {{elapsed}}",
+          "drafting": "✍️ 正在整理回答…"
         },
         "images": {
           "notSent_one": "有 {{count}} 張圖片未能作為附件傳送。",
@@ -12955,6 +12959,13 @@
           "allow": "允許",
           "deny": "拒絕",
           "approve": "批准"
+        },
+        "delivery": {
+          "failed": "⚠️ 本輪輸出未能送達，請稍後重試。",
+          "retrying_one": "⚠️ 有 {{count}} 項內容尚未確認送達，會在網路恢復後自動補傳。",
+          "retrying_other": "⚠️ 有 {{count}} 項內容尚未確認送達，會在網路恢復後自動補傳。",
+          "unconfirmed_one": "⚠️ 有 {{count}} 項內容未確認送達，不會自動重傳；若未收到請重新傳送。",
+          "unconfirmed_other": "⚠️ 有 {{count}} 項內容未確認送達，不會自動重傳；若未收到請重新傳送。"
         }
       },
       "hook": {
@@ -13003,7 +13014,7 @@
           "apiKeyMissing": "⚠️ 目前模型尚未完成驗證。請在 desktop 的設定中連線模型供應商後重試。",
           "controlInProgress": "🎮 接管選擇尚未完成，請先處理上一則互動訊息。",
           "credentialBusy": "⏳ 本機 Agent 正在執行，暫時無法切換憑證模式，請稍後再試。",
-          "queuedNoticeNext": "⏳ 上一輪仍在執行，這則訊息已排隊。需要中止可傳送 `!stop`。",
+          "queuedNoticeNext": "⏳ 已收到，這則訊息已排隊。上一個任務正在執行或等待確認；可處理確認卡，或傳送 `!stop` 終止並清空佇列。",
           "queuedNoticePosition": "⏳ 上一輪仍在執行，這則訊息排在第 {{position}} 位。需要中止可傳送 `!stop`。",
           "stopDone": "⏹ 已中止目前任務。",
           "stopDoneDropped_other": "⏹ 已中止目前任務，並移除 {{count}} 則排隊訊息。",
@@ -13096,7 +13107,14 @@
           "planFooter": "回覆「{{approve}}」繼續，或回覆「{{deny}}」取消。",
           "askNoQuestion": "Agent 正在等待你的回答，但沒有可顯示的問題。請回覆「繼續」。",
           "askIntro": "Agent 需要你的回答：",
-          "askFooter": "請回覆選項編號，或直接輸入你的回答。"
+          "askFooter": "請回覆選項編號，或直接輸入你的回答。",
+          "stopLabel": "終止任務",
+          "stopHint": "終止會停止目前任務，並清空本對話的排隊訊息。可傳送 !stop 終止任務。",
+          "stopRequested": "⏹ 已收到，正在終止目前任務。",
+          "stopFailed": "無法確認任務已終止，請傳送 !stop 再次要求終止。",
+          "planApproved": "✅ 已批准計畫",
+          "planRejected": "❌ 已拒絕計畫",
+          "planExpired": "⌛ 本次計畫確認已失效"
         }
       },
       "dingtalk": {

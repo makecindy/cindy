@@ -12692,7 +12692,10 @@
           "attachmentsOmitted_other": "⚠️ 另有 {{count}} 个附件未发送（企业微信单次最多发送 {{max}} 个）。",
           "filesRejected_other": "⚠️ 有 {{count}} 个文件附件未发送（不在当前工作目录内或无法验证）。",
           "imagesUnresolved_other": "⚠️ 有 {{count}} 张图片未发送（图片已不存在或无法读取）。",
-          "attachmentsFailed_other": "⚠️ 有 {{count}} 个附件发送失败，请稍后重试。"
+          "attachmentsFailed_other": "⚠️ 有 {{count}} 个附件发送失败，请稍后重试。",
+          "progressWorking": "任务仍在处理中。",
+          "progressContinuing": "任务仍在继续，完成后会发送结果。可发送 !stop 终止任务。",
+          "progressHandoff": "任务仍在继续，后续进度将以新消息发送。"
         }
       },
       "telegram": {
@@ -12936,7 +12939,8 @@
           "earlierSteps_one": "… 更早的 {{count}} 项未列出",
           "earlierSteps_other": "… 更早的 {{count}} 项未列出",
           "recordTitle_one": "过程记录 · {{count}} 项 · {{elapsed}}",
-          "recordTitle_other": "过程记录 · {{count}} 项 · {{elapsed}}"
+          "recordTitle_other": "过程记录 · {{count}} 项 · {{elapsed}}",
+          "drafting": "✍️ 正在整理回答…"
         },
         "images": {
           "notSent_one": "有 {{count}} 张图片未能作为附件发送。",
@@ -12955,6 +12959,13 @@
           "allow": "允许",
           "deny": "拒绝",
           "approve": "批准"
+        },
+        "delivery": {
+          "failed": "⚠️ 本轮输出未能送达，请稍后重试。",
+          "retrying_one": "⚠️ 有 {{count}} 项内容尚未确认送达，会在网络恢复后自动补发。",
+          "retrying_other": "⚠️ 有 {{count}} 项内容尚未确认送达，会在网络恢复后自动补发。",
+          "unconfirmed_one": "⚠️ 有 {{count}} 项内容未确认送达，不会自动重发；若未收到请重新发送。",
+          "unconfirmed_other": "⚠️ 有 {{count}} 项内容未确认送达，不会自动重发；若未收到请重新发送。"
         }
       },
       "hook": {
@@ -13003,7 +13014,7 @@
           "apiKeyMissing": "⚠️ 当前模型尚未完成认证。请在 desktop 的设置中连接模型供应商后重试。",
           "controlInProgress": "🎮 接管选择尚未完成，请先处理上一条交互消息。",
           "credentialBusy": "⏳ 本地 Agent 正在运行，暂时不能切换凭证模式，请稍后重试。",
-          "queuedNoticeNext": "⏳ 上一轮仍在运行，这条消息已排队。需要中止可发送 `!stop`。",
+          "queuedNoticeNext": "⏳ 已收到，这条消息已排队。上一任务正在运行或等待确认；可处理确认卡，或发送 `!stop` 终止并清空排队。",
           "queuedNoticePosition": "⏳ 上一轮仍在运行，这条消息排在第 {{position}} 位。需要中止可发送 `!stop`。",
           "stopDone": "⏹ 已中止当前任务。",
           "stopDoneDropped_other": "⏹ 已中止当前任务，并移除 {{count}} 条排队消息。",
@@ -13096,7 +13107,14 @@
           "planFooter": "回复“{{approve}}”继续，或回复“{{deny}}”取消。",
           "askNoQuestion": "Agent 正在等待你的回答，但没有可显示的问题。请回复“继续”。",
           "askIntro": "Agent 需要你的回答：",
-          "askFooter": "请回复选项序号，或直接输入你的回答。"
+          "askFooter": "请回复选项序号，或直接输入你的回答。",
+          "stopLabel": "终止任务",
+          "stopHint": "终止会停止当前任务，并清空本对话的排队消息。可发送 !stop 终止任务。",
+          "stopRequested": "⏹ 已收到，正在终止当前任务。",
+          "stopFailed": "未能确认任务已终止，请发送 !stop 再次请求终止。",
+          "planApproved": "✅ 已批准计划",
+          "planRejected": "❌ 已拒绝计划",
+          "planExpired": "⌛ 本次计划确认已失效"
         }
       },
       "dingtalk": {

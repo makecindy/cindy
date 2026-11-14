@@ -12850,7 +12850,10 @@
           "imagesUnresolved_many": "⚠️ Ficaram por enviar {{count}} imagens (já não existem ou não foi possível lê-las).",
           "attachmentsFailed_other": "⚠️ Não foi possível enviar {{count}} anexos. Tente novamente mais tarde.",
           "attachmentsFailed_one": "⚠️ Não foi possível enviar {{count}} anexo. Tente novamente mais tarde.",
-          "attachmentsFailed_many": "⚠️ Não foi possível enviar {{count}} anexos. Tente novamente mais tarde."
+          "attachmentsFailed_many": "⚠️ Não foi possível enviar {{count}} anexos. Tente novamente mais tarde.",
+          "progressWorking": "A tarefa continua em curso.",
+          "progressContinuing": "A tarefa continua em curso. Os resultados serão enviados quando terminar. Envie !stop para parar a tarefa.",
+          "progressHandoff": "A tarefa continua em curso. O progresso seguinte será enviado em novas mensagens."
         }
       },
       "telegram": {
@@ -13099,7 +13102,8 @@
           "earlierSteps_many": "… {{count}} passos anteriores não apresentados",
           "recordTitle_one": "Registo de atividade · {{count}} passo · {{elapsed}}",
           "recordTitle_other": "Registo de atividade · {{count}} passos · {{elapsed}}",
-          "recordTitle_many": "Registo de atividade · {{count}} passos · {{elapsed}}"
+          "recordTitle_many": "Registo de atividade · {{count}} passos · {{elapsed}}",
+          "drafting": "✍️ A preparar a resposta…"
         },
         "images": {
           "notSent_one": "Não foi possível enviar {{count}} imagem como anexo.",
@@ -13119,6 +13123,15 @@
           "allow": "permitir",
           "deny": "recusar",
           "approve": "aprovar"
+        },
+        "delivery": {
+          "failed": "⚠️ Não foi possível entregar esta resposta. Tente novamente mais tarde.",
+          "retrying_one": "⚠️ A entrega de {{count}} item continua por confirmar. Será tentada novamente de forma automática quando a rede recuperar.",
+          "retrying_other": "⚠️ A entrega de {{count}} itens continua por confirmar. Será tentada novamente de forma automática quando a rede recuperar.",
+          "unconfirmed_one": "⚠️ A entrega de {{count}} item não está confirmada. Não será reenviado automaticamente; envie o pedido novamente se não o recebeu.",
+          "unconfirmed_other": "⚠️ A entrega de {{count}} itens não está confirmada. Não serão reenviados automaticamente; envie o pedido novamente se não os recebeu.",
+          "retrying_many": "⚠️ A entrega de {{count}} itens continua por confirmar. Será tentada novamente de forma automática quando a rede recuperar.",
+          "unconfirmed_many": "⚠️ A entrega de {{count}} itens não está confirmada. Não serão reenviados automaticamente; envie o pedido novamente se não os recebeu."
         }
       },
       "hook": {
@@ -13167,7 +13180,7 @@
           "apiKeyMissing": "⚠️ O modelo atual ainda não está autenticado. Ligue um fornecedor de modelos nas definições do Cindy Desktop e tente novamente.",
           "controlInProgress": "🎮 A seleção do controlo remoto ainda não terminou. Trate primeiro da mensagem interativa anterior.",
           "credentialBusy": "⏳ O Agent local está em execução, pelo que não é possível mudar o modo de credenciais agora. Tente novamente mais tarde.",
-          "queuedNoticeNext": "⏳ O turno anterior ainda está em execução, pelo que esta mensagem ficou em fila. Envie `!stop` para parar.",
+          "queuedNoticeNext": "⏳ Recebido e colocado em espera. A tarefa anterior está em curso ou aguarda confirmação. Responda ao cartão de confirmação ou envie `!stop` para a parar e limpar a fila.",
           "queuedNoticePosition": "⏳ O turno anterior ainda está em execução. Esta mensagem está na posição {{position}} da fila. Envie `!stop` para parar.",
           "stopDone": "⏹ A tarefa atual foi parada.",
           "stopDoneDropped_other": "⏹ A tarefa atual foi parada e {{count}} mensagens em fila foram removidas.",
@@ -13262,7 +13275,14 @@
           "planFooter": "Responda «{{approve}}» para continuar ou «{{deny}}» para cancelar.",
           "askNoQuestion": "O Agent está à espera da sua resposta, mas não há nenhuma pergunta para mostrar. Responda «continuar».",
           "askIntro": "O Agent precisa da sua resposta:",
-          "askFooter": "Responda com o número de uma opção ou escreva diretamente a sua resposta."
+          "askFooter": "Responda com o número de uma opção ou escreva diretamente a sua resposta.",
+          "stopLabel": "Parar tarefa",
+          "stopHint": "Parar termina a tarefa atual e limpa as mensagens em espera nesta conversa. Envie !stop para parar a tarefa.",
+          "stopRequested": "⏹ Recebido. A parar a tarefa atual.",
+          "stopFailed": "Não foi possível confirmar que a tarefa parou. Envie !stop para o pedir novamente.",
+          "planApproved": "✅ Plano aprovado",
+          "planRejected": "❌ Plano rejeitado",
+          "planExpired": "⌛ Esta confirmação do plano expirou"
         }
       },
       "dingtalk": {

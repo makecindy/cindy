@@ -12692,7 +12692,10 @@
           "attachmentsOmitted_other": "⚠️ ほかに {{count}} 件の添付ファイルを送信していません（WeCom で一度に送信できるのは最大 {{max}} 件です）。",
           "filesRejected_other": "⚠️ {{count}} 件のファイル添付を送信していません（現在の作業ディレクトリ外にあるか、検証できませんでした）。",
           "imagesUnresolved_other": "⚠️ {{count}} 枚の画像を送信していません（画像が存在しないか、読み込めませんでした）。",
-          "attachmentsFailed_other": "⚠️ {{count}} 件の添付ファイルを送信できませんでした。しばらくしてからもう一度お試しください。"
+          "attachmentsFailed_other": "⚠️ {{count}} 件の添付ファイルを送信できませんでした。しばらくしてからもう一度お試しください。",
+          "progressWorking": "タスクは引き続き実行中です。",
+          "progressContinuing": "タスクは引き続き実行中です。完了後に結果を送信します。!stop を送信するとタスクを停止できます。",
+          "progressHandoff": "タスクは引き続き実行中です。以降の進捗は新しいメッセージで送信します。"
         }
       },
       "telegram": {
@@ -12936,7 +12939,8 @@
           "earlierSteps_one": "… それ以前の {{count}} 件は省略しています",
           "earlierSteps_other": "… それ以前の {{count}} 件は省略しています",
           "recordTitle_one": "経過記録 · {{count}} 件 · {{elapsed}}",
-          "recordTitle_other": "経過記録 · {{count}} 件 · {{elapsed}}"
+          "recordTitle_other": "経過記録 · {{count}} 件 · {{elapsed}}",
+          "drafting": "✍️ 回答をまとめています…"
         },
         "images": {
           "notSent_one": "{{count}} 枚の画像を添付ファイルとして送信できませんでした。",
@@ -12955,6 +12959,13 @@
           "allow": "許可",
           "deny": "拒否",
           "approve": "承認"
+        },
+        "delivery": {
+          "failed": "⚠️ この出力を配信できませんでした。しばらくしてから再試行してください。",
+          "retrying_one": "⚠️ {{count}} 件の配信がまだ確認できていません。ネットワークの復旧後に自動で再試行します。",
+          "retrying_other": "⚠️ {{count}} 件の配信がまだ確認できていません。ネットワークの復旧後に自動で再試行します。",
+          "unconfirmed_one": "⚠️ {{count}} 件の配信が確認できていません。自動再送は行いません。届いていない場合は、リクエストを再送してください。",
+          "unconfirmed_other": "⚠️ {{count}} 件の配信が確認できていません。自動再送は行いません。届いていない場合は、リクエストを再送してください。"
         }
       },
       "hook": {
@@ -13003,7 +13014,7 @@
           "apiKeyMissing": "⚠️ 現在のモデルはまだ認証されていません。Cindy Desktop の設定でモデルプロバイダーを接続してから、もう一度お試しください。",
           "controlInProgress": "🎮 リモート操作の選択がまだ完了していません。先に前のインタラクティブメッセージを操作してください。",
           "credentialBusy": "⏳ ローカルの Agent が実行中のため、今は認証情報モードを切り替えられません。しばらくしてからもう一度お試しください。",
-          "queuedNoticeNext": "⏳ 前のターンがまだ実行中のため、このメッセージは待機列に入りました。中止するには `!stop` を送ってください。",
+          "queuedNoticeNext": "⏳ 受信し、キューに追加しました。前のタスクは実行中か確認待ちです。確認カードに回答するか、`!stop` を送信してタスクを停止し、キューを空にできます。",
           "queuedNoticePosition": "⏳ 前のターンがまだ実行中です。このメッセージは {{position}} 番目に並んでいます。中止するには `!stop` を送ってください。",
           "stopDone": "⏹ 現在のタスクを中止しました。",
           "stopDoneDropped_other": "⏹ 現在のタスクを中止し、待機中のメッセージ {{count}} 件を削除しました。",
@@ -13096,7 +13107,14 @@
           "planFooter": "続けるには「{{approve}}」、取り消すには「{{deny}}」と返信してください。",
           "askNoQuestion": "Agent が回答を待っていますが、表示できる質問がありません。「続ける」と返信してください。",
           "askIntro": "Agent があなたの回答を必要としています:",
-          "askFooter": "選択肢の番号を返信するか、回答を直接入力してください。"
+          "askFooter": "選択肢の番号を返信するか、回答を直接入力してください。",
+          "stopLabel": "タスクを停止",
+          "stopHint": "停止すると現在のタスクが終了し、このチャットの待機中のメッセージがすべて削除されます。!stop を送信してタスクを停止できます。",
+          "stopRequested": "⏹ 受け付けました。現在のタスクを停止しています。",
+          "stopFailed": "タスクの停止を確認できませんでした。!stop を送信して再度停止を要求してください。",
+          "planApproved": "✅ 計画を承認しました",
+          "planRejected": "❌ 計画を拒否しました",
+          "planExpired": "⌛ この計画の確認は期限切れです"
         }
       },
       "dingtalk": {

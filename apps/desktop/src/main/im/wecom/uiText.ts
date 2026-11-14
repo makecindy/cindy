@@ -62,6 +62,18 @@ export const ui = {
       imText(`${K}.agent.unsupportedOnly`, { items: bulletList(entries) }),
     unsupportedNotice: (entries: IMUnsupportedEntry[]) =>
       imText(`${K}.agent.unsupportedNotice`, { items: bulletList(entries) }),
+    deliveryNotice: ({ status, unresolved, retrying }: {
+      status: 'durable' | 'failed';
+      unresolved: number;
+      retrying: number;
+    }) => {
+      if (status === 'failed') {
+        return imText('imBot.text.shared.delivery.failed');
+      }
+      return retrying > 0
+        ? imText('imBot.text.shared.delivery.retrying', { count: unresolved })
+        : imText('imBot.text.shared.delivery.unconfirmed', { count: unresolved });
+    },
   },
   cards: {
     permission: {

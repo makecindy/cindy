@@ -12692,7 +12692,10 @@
           "attachmentsOmitted_other": "⚠️ 尚有 {{count}} 件附件未遣（企業微信每次至多遣 {{max}} 件）。",
           "filesRejected_other": "⚠️ 有 {{count}} 卷附件未遣（不在當前工作目錄內，或無從核驗）。",
           "imagesUnresolved_other": "⚠️ 有 {{count}} 幅圖未遣（圖已不存，或不可讀）。",
-          "attachmentsFailed_other": "⚠️ 有 {{count}} 件附件遣送未成，請稍後再試。"
+          "attachmentsFailed_other": "⚠️ 有 {{count}} 件附件遣送未成，請稍後再試。",
+          "progressWorking": "差事仍在辦理。",
+          "progressContinuing": "差事仍行，畢後遣其結果。可遣 !stop 終止差事。",
+          "progressHandoff": "差事仍行，後續進度將另遣新訊。"
         }
       },
       "telegram": {
@@ -12936,7 +12939,8 @@
           "earlierSteps_one": "… 前此 {{count}} 項未列",
           "earlierSteps_other": "… 前此 {{count}} 項未列",
           "recordTitle_one": "行跡 · {{count}} 項 · {{elapsed}}",
-          "recordTitle_other": "行跡 · {{count}} 項 · {{elapsed}}"
+          "recordTitle_other": "行跡 · {{count}} 項 · {{elapsed}}",
+          "drafting": "✍️ 方理其答…"
         },
         "images": {
           "notSent_one": "有 {{count}} 圖未能附而遣之。",
@@ -12955,6 +12959,13 @@
           "allow": "允許",
           "deny": "拒絕",
           "approve": "批准"
+        },
+        "delivery": {
+          "failed": "⚠️ 此輪所出未能送達，請稍後再試。",
+          "retrying_one": "⚠️ 尚有 {{count}} 項未確認送達，待網路復原後自動補遣。",
+          "retrying_other": "⚠️ 尚有 {{count}} 項未確認送達，待網路復原後自動補遣。",
+          "unconfirmed_one": "⚠️ 有 {{count}} 項未確認送達，不會自動重遣；若未收到，請重遣所請。",
+          "unconfirmed_other": "⚠️ 有 {{count}} 項未確認送達，不會自動重遣；若未收到，請重遣所請。"
         }
       },
       "hook": {
@@ -13003,7 +13014,7 @@
           "apiKeyMissing": "⚠️ 今之模型尚未驗證。請於 desktop 規制中連模型供方，再試之。",
           "controlInProgress": "🎮 接管之擇未畢，請先理前一互動之訊。",
           "credentialBusy": "⏳ 此機 Agent 方行，暫不可易憑證之式，請稍後再試。",
-          "queuedNoticeNext": "⏳ 前輪方行，此訊已入列。欲止之，遣 `!stop`。",
+          "queuedNoticeNext": "⏳ 已悉，此訊已入待辦。前一差事仍行或待確認；可答確認卡，或遣 `!stop` 終止並清空待辦。",
           "queuedNoticePosition": "⏳ 前輪方行，此訊列第 {{position}}。欲止之，遣 `!stop`。",
           "stopDone": "⏹ 今之差事已止。",
           "stopDoneDropped_other": "⏹ 今之差事已止，並撤待發之訊 {{count}} 則。",
@@ -13096,7 +13107,14 @@
           "planFooter": "覆「{{approve}}」則續，覆「{{deny}}」則罷。",
           "askNoQuestion": "Agent 待君之答，然無可示之問。請覆「繼續」。",
           "askIntro": "Agent 待君之答：",
-          "askFooter": "請覆選項之序號，或徑書君之答。"
+          "askFooter": "請覆選項之序號，或徑書君之答。",
+          "stopLabel": "終止差事",
+          "stopHint": "終止則停當前差事，並清空本言談待遣之訊。可遣 !stop 終止差事。",
+          "stopRequested": "⏹ 已悉，正終止當前差事。",
+          "stopFailed": "尚未確認差事已止，請遣 !stop 再求終止。",
+          "planApproved": "✅ 計畫已准",
+          "planRejected": "❌ 計畫已拒",
+          "planExpired": "⌛ 此次計畫確認已失效"
         }
       },
       "dingtalk": {

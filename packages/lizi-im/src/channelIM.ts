@@ -176,8 +176,119 @@ export interface ImFinalOutput {
   errorCode?: string;
   /** Managed local media discovered in the terminal assistant output. */
   mediaAbsPaths?: string[];
+  /**
+   * 宿主已解析并校验过的本机普通文件（绝对路径，realpath 落在 allowedFileRoots 内）。
+   *
+   * 回答里的**相对路径/绝对路径链接**由 runner 在工作目录下解析后放这里；渠道把它
+   * 当成文件附件投递，不要求模型改用 `xdt-file://`。PDF/docx 等非媒体走文件通道，
+   * 不进媒体总仓。
+   */
+  fileAbsPaths?: string[];
   /** Host-approved roots for model-authored local file attachment links. */
   allowedFileRoots?: string[];
+  /**
+   * 稳定的一轮标识(由共享 runner 生成)。用于两件事:
+   *  - 过程反馈面只认自己那一轮, 旧轮迟到的进度不能写进新一轮;
+   *  - 持久出箱以它为幂等键 —— 同一轮重复 finalize / 重试不会生成第二条出箱记录。
+   * 可选: 未提供的渠道保持原有行为(不产生逐轮身份)。
+   */
+  turnId?: string;
+}
+
+/**
+ * 公开过程反馈视图。**只允许公开信息** —— 阶段摘要不得包含思考内容、工具名或
+ * 工具参数(这些都是任务内部实现, 不是用户可公开的进度)。body 是这一轮已经
+ * 产出的回答正文快照。
+ */
+export interface ImProgressView {
+  /** 一行公开阶段摘要; 空串表示本轮还没有值得展示的进展。 */
+  stage: string;
+  /** 公开回答正文的当前快照(可为空)。 */
+  body: string;
+}
+
+/**
+ * chunked-text 渠道的过程反馈面。
+ *
+ * 生命周期由共享 runner 持有, 一轮一个:
+ *  - `replace` 只在轮次进行中调用, 实现自己节流(事件密集时不能每条事件发一次);
+ *  - `close` 表示终稿马上交付, 之后任何迟到的 `replace` 都必须被丢弃, 不允许
+ *    覆盖终稿;
+ *  - `settle`(可选)让过程面收敛到终态, 实现可以据此撤掉"处理中"的显示。
+ */
+export interface ImProgressHandle {
+  /** 这一轮的身份; 与 ImFinalOutput.turnId 同值。 */
+  readonly turnId?: string;
+  replace(view: ImProgressView): void;
+  close(): Promise<void>;
+  settle?(result: { delivered: boolean; terminal: ImFinalOutput['terminal'] }): Promise<void>;
+}
+
+/** 一次投递尝试的结果。uncertain = 已发起但拿不到平台接受证据, 不得盲目重发。 */
+export type ImDeliveryState = 'sent' | 'uncertain' | 'failed';
+
+/** 终稿里需要单独投递、单独记录结果的一个出站副作用。 */
+export interface ImFinalStepBase {
+  /** 稳定步骤 id(计划内唯一), 持久出箱靠它记录“哪些已确认成功”。 */
+  id: string;
+  /** 受控文件通道的普通文件 / 媒体总仓的图片音视频 / 外部图片链接 / 正文。 */
+  kind: 'media' | 'file' | 'text' | 'remote';
+}
+
+export interface ImFinalTextStep extends ImFinalStepBase {
+  kind: 'text';
+  /** 一段正文(已按渠道上限切好); 一步就是一条消息。 */
+  text: string;
+}
+
+export interface ImFinalAttachmentStep extends ImFinalStepBase {
+  /** media = 媒体总仓里的图片/音视频; file = 受控文件通道里的普通文件。 */
+  kind: 'media' | 'file';
+  absPath: string;
+  displayName: string;
+  /** host 媒体总仓地址(cindy-media://), 有则在重放时优先按它重新解析。 */
+  url?: string;
+}
+
+/**
+ * 正文里的外部图片链接(模型自己写的 markdown 图)。它也要有独立账目 ——
+ * 否则正文重试会把同一张图再发一次。
+ */
+export interface ImFinalRemoteStep extends ImFinalStepBase {
+  kind: 'remote';
+  url: string;
+  displayName: string;
+}
+
+export type ImFinalStep =
+  | ImFinalTextStep
+  | ImFinalAttachmentStep
+  | ImFinalRemoteStep;
+
+/** 终稿的可重放投递计划: 每一个出站副作用一个步骤, 顺序即发送顺序。 */
+export interface ImFinalDeliveryPlan {
+  steps: ImFinalStep[];
+}
+
+export interface ImFinalDeliveryResult {
+  /** 与 plan.steps 一一对应; undefined = 本轮没有尝试该项。 */
+  states: Array<ImDeliveryState | undefined>;
+}
+
+/**
+ * 一次终稿交付的**真实边界**。渠道必须如实回答这三件事, 因为它决定了用户看到的是
+ * “已送达”、“已受理、稍后补发” 还是 “没发出去”。
+ */
+export interface ImFinalCommitOutcome {
+  /**
+   * sent = 本轮已确认全部送达; durable = 已被持久出箱受理但仍有未确认步骤;
+   * failed = 既没送达也没有被受理。
+   */
+  status: 'sent' | 'durable' | 'failed';
+  /** 仍未确认送达的步骤数。 */
+  unresolved: number;
+  /** 其中会自动重试的数量(其余为结果不明, 不会重发)。 */
+  retrying: number;
 }
 
 /**
@@ -195,7 +306,27 @@ export type ImOutputDriver =
       /**
        * Reserve an inbound reply context before a potentially long turn.
        * Transports with callback deadlines may emit a non-terminal placeholder.
+       *
+       * 返回过程反馈面(可选): 支持真正进度反馈的渠道(如企业微信流式消息)
+       * 在这里拿到属于本轮的过程面; 返回 null 表示本轮没有过程面。
        */
-      beginReply?(userId: string): Promise<void>;
-      commitFinal(output: ImFinalOutput): Promise<void>;
+      beginReply?(
+        userId: string,
+        opts?: { turnId?: string },
+      ): Promise<ImProgressHandle | null | void>;
+      commitFinal(output: ImFinalOutput): Promise<ImFinalCommitOutcome | void>;
+      /**
+       * 可选: 把终稿拆成「正文 + 逐项附件」的可重放计划。宿主据此建立持久出箱,
+       * 逐项记录发送结果、只补失败项。缺省 = 该渠道不支持分项, 宿主持久化正文。
+       */
+      prepareFinal?(output: ImFinalOutput): Promise<ImFinalDeliveryPlan>;
+      /**
+       * 可选: 按计划逐步投递。`onlySteps` 只重试这些步骤 id(已确认成功的项
+       * 不重发); 缺省 = 全部还没确认成功的步骤。
+       */
+      deliverFinal?(
+        output: ImFinalOutput,
+        plan: ImFinalDeliveryPlan,
+        opts?: { onlySteps?: string[] },
+      ): Promise<ImFinalDeliveryResult>;
     };

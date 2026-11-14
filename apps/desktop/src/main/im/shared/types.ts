@@ -188,6 +188,8 @@ export interface ImChannelAdapter {
   queuedEmoji?: string;
   /** 没有可撤销状态反馈的渠道静默排队，避免永久残留提示。 */
   silentQueue?: boolean;
+  /** 渠道专属排队回执, 不得消费留给后续任务的回复窗口。 */
+  notifyQueued?(userId: string, position: number): Promise<void>;
   /**
    * turn 终态时可将状态替换为错误表情。返回 null = 该终态不放表情(撤掉 ack);
    * 缺省 = 全部按默认撤掉。仅真正跑过的 turn 生效, pre-dispatch 失败不放。
@@ -226,7 +228,8 @@ export interface ImChannelAdapter {
   handleTextInteraction?(
     userId: string,
     request: InteractionRequest,
-    options?: { timeoutMs?: number; sharedPermission?: import('../../maker-ipc/sharedPermission').SharedPermission },
+    options?: { timeoutMs?: number; sharedPermission?: import('../../maker-ipc/sharedPermission').SharedPermission;
+      onStop?: () => Promise<{ stopped: boolean; droppedQueued: number }> },
   ): Promise<InteractionDecision>;
   /**
    * Cancel a channel-owned text interaction when the central route times out,
@@ -392,6 +395,17 @@ export interface ImUiTextPack {
     stopIdle: string;
     /** 远程控制时转播自动任务(scheduler)turn 的卡片头。name 为空时用通用文案。 */
     scheduledTaskHeader: (name: string | null) => string;
+    /**
+     * 终稿交付边界提示(可选): 部分内容未确认送达时发给用户的一句话。
+     *
+     * `durable` 表示已被持久出箱受理(会自动重试), `failed` 表示连受理都没做到。
+     * 不能把“已受理”说成“已送达”，也不是 Agent 执行失败。
+     */
+    deliveryNotice?: (args: {
+      status: 'durable' | 'failed';
+      unresolved: number;
+      retrying: number;
+    }) => string;
     unsupportedOnly: (entries: IMUnsupportedEntry[]) => string;
     unsupportedNotice: (entries: IMUnsupportedEntry[]) => string;
     /** 伙伴当前不能接消息(暂停 / 归档等)时的渠道提示。缺省用 runtimeError 包一层。 */

@@ -12850,7 +12850,10 @@
           "imagesUnresolved_many": "⚠️ {{count}} images n'ont pas été envoyées (elles n'existent plus ou sont illisibles).",
           "attachmentsFailed_other": "⚠️ {{count}} pièces jointes n'ont pas pu être envoyées. Réessayez plus tard.",
           "attachmentsFailed_one": "⚠️ {{count}} pièce jointe n'a pas pu être envoyée. Réessayez plus tard.",
-          "attachmentsFailed_many": "⚠️ {{count}} pièces jointes n'ont pas pu être envoyées. Réessayez plus tard."
+          "attachmentsFailed_many": "⚠️ {{count}} pièces jointes n'ont pas pu être envoyées. Réessayez plus tard.",
+          "progressWorking": "La tâche est toujours en cours.",
+          "progressContinuing": "La tâche est toujours en cours. Les résultats seront envoyés à la fin. Envoyez !stop pour arrêter la tâche.",
+          "progressHandoff": "La tâche est toujours en cours. La suite de la progression sera envoyée dans de nouveaux messages."
         }
       },
       "telegram": {
@@ -13099,7 +13102,8 @@
           "earlierSteps_many": "… {{count}} étapes précédentes non affichées",
           "recordTitle_one": "Journal d'activité · {{count}} étape · {{elapsed}}",
           "recordTitle_other": "Journal d'activité · {{count}} étapes · {{elapsed}}",
-          "recordTitle_many": "Journal d'activité · {{count}} étapes · {{elapsed}}"
+          "recordTitle_many": "Journal d'activité · {{count}} étapes · {{elapsed}}",
+          "drafting": "✍️ Préparation de la réponse…"
         },
         "images": {
           "notSent_one": "{{count}} image n'a pas pu être envoyée en pièce jointe.",
@@ -13119,6 +13123,15 @@
           "allow": "autoriser",
           "deny": "refuser",
           "approve": "approuver"
+        },
+        "delivery": {
+          "failed": "⚠️ Cette réponse n’a pas pu être remise. Réessayez plus tard.",
+          "retrying_one": "⚠️ La remise de {{count}} élément reste non confirmée. Une nouvelle tentative sera effectuée automatiquement au retour du réseau.",
+          "retrying_other": "⚠️ La remise de {{count}} éléments reste non confirmée. Une nouvelle tentative sera effectuée automatiquement au retour du réseau.",
+          "unconfirmed_one": "⚠️ La remise de {{count}} élément n’est pas confirmée. Il ne sera pas renvoyé automatiquement ; renvoyez la demande si vous ne l’avez pas reçu.",
+          "unconfirmed_other": "⚠️ La remise de {{count}} éléments n’est pas confirmée. Ils ne seront pas renvoyés automatiquement ; renvoyez la demande si vous ne les avez pas reçus.",
+          "retrying_many": "⚠️ La remise de {{count}} éléments reste non confirmée. Une nouvelle tentative sera effectuée automatiquement au retour du réseau.",
+          "unconfirmed_many": "⚠️ La remise de {{count}} éléments n’est pas confirmée. Ils ne seront pas renvoyés automatiquement ; renvoyez la demande si vous ne les avez pas reçus."
         }
       },
       "hook": {
@@ -13167,7 +13180,7 @@
           "apiKeyMissing": "⚠️ Le modèle actuel n'est pas encore authentifié. Connectez un fournisseur de modèles dans les paramètres de Cindy Desktop, puis réessayez.",
           "controlInProgress": "🎮 La sélection pour la prise de contrôle n'est pas terminée. Traitez d'abord le message interactif précédent.",
           "credentialBusy": "⏳ L'Agent local est en cours d'exécution ; impossible de changer le mode d'identifiants pour l'instant. Réessayez plus tard.",
-          "queuedNoticeNext": "⏳ Le tour précédent est toujours en cours : ce message a été mis en file d'attente. Envoyez `!stop` pour l'arrêter.",
+          "queuedNoticeNext": "⏳ Reçu et mis en attente. La tâche précédente est en cours ou attend une confirmation. Répondez à sa carte de confirmation ou envoyez `!stop` pour l’arrêter et vider la file d’attente.",
           "queuedNoticePosition": "⏳ Le tour précédent est toujours en cours. Ce message est en position {{position}} dans la file d'attente. Envoyez `!stop` pour l'arrêter.",
           "stopDone": "⏹ Tâche en cours arrêtée.",
           "stopDoneDropped_other": "⏹ Tâche en cours arrêtée et {{count}} messages en attente supprimés.",
@@ -13262,7 +13275,14 @@
           "planFooter": "Répondez « {{approve}} » pour continuer, ou « {{deny}} » pour annuler.",
           "askNoQuestion": "L'Agent attend votre réponse, mais aucune question n'est à afficher. Répondez « continuer ».",
           "askIntro": "L'Agent a besoin de votre réponse :",
-          "askFooter": "Répondez avec le numéro d'une option, ou saisissez votre réponse."
+          "askFooter": "Répondez avec le numéro d'une option, ou saisissez votre réponse.",
+          "stopLabel": "Arrêter la tâche",
+          "stopHint": "L’arrêt termine la tâche en cours et vide les messages en attente dans cette conversation. Envoyez !stop pour arrêter la tâche.",
+          "stopRequested": "⏹ Reçu. Arrêt de la tâche en cours.",
+          "stopFailed": "Impossible de confirmer l’arrêt de la tâche. Envoyez !stop pour le demander à nouveau.",
+          "planApproved": "✅ Plan approuvé",
+          "planRejected": "❌ Plan refusé",
+          "planExpired": "⌛ Cette confirmation du plan a expiré"
         }
       },
       "dingtalk": {
