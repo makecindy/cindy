@@ -19,6 +19,7 @@ export type { OversizedBody, RecoveredAttachment, AttachmentKeeper } from './ove
 export type { OversizedRequestRecovery } from './types.js';
 export {
   controlRequestSize,
+  countInlineRequestImages,
   hashImageBytes,
   routeInfoFor,
   DEFAULT_QUICK_PATH_BYTES,

@@ -6,8 +6,9 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   root: '', snapshot: null as any, session: { status: 'active', remoteHostId: null } as any,
   existing: undefined as any, resolved: 'test-session' as string | null, invalidOwner: false,
-  ingest: vi.fn(), query: vi.fn(), addRef: vi.fn(), removeRef: vi.fn(),
+  info: vi.fn(), ingest: vi.fn(), query: vi.fn(), addRef: vi.fn(), removeRef: vi.fn(),
 }));
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: state.info }) }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => state.snapshot }));
 vi.mock('../../cindy-media/refCompensationJournal.desktop.js', () => ({
@@ -33,6 +34,7 @@ beforeEach(async () => {
   state.snapshot = { userId: 'owner', clientEpoch: 1, client: { drizzle: {
     select: () => ({ from: (table: unknown) => ({ where: () => ({ get: () => state.query(table) }) }) }),
   } } };
+  state.info.mockReset();
   state.addRef.mockReset();
   state.removeRef.mockReset();
   state.ingest.mockReset();
@@ -156,4 +158,47 @@ it.each(['thread-id', 'x-claude-code-session-id'])('uses host provider resolutio
   expect(controller.route!(ctx, input)).toMatchObject({ providerId: 'provider-b', deniedMimeTypes: [] });
   expect(await controller.control(extended, 'responses', { context: ctx, signal, route: controller.route!(ctx, input) })).toBeNull();
   expect(prepare.mock.calls.at(-1)?.[0]).toMatchObject({ route: { providerId: 'provider-b', deniedMimeTypes: [] } });
+});
+
+// A missing local owner must disable persistence, not preprocessing. Production
+// shared controller, 8 KiB request / 1 KiB budget, unit tier; no real account data.
+it.each(['no-db', 'no-session', 'invalid-session', 'session-missing', 'session-deleted', 'remote-session'] as const)(
+  'compresses without persistence and logs the skip reason for %s', async reason => {
+    if (reason === 'no-db') state.snapshot = null;
+    if (reason === 'no-session') state.resolved = null;
+    if (reason === 'invalid-session') state.resolved = 'invalid/session';
+    if (reason === 'session-missing') state.session = null;
+    if (reason === 'session-deleted') state.session.status = 'deleted';
+    if (reason === 'remote-session') state.session.remoteHostId = 'remote';
+    const bytes = Buffer.alloc(500, 9);
+    const prepare = vi.fn(async () => ({ bytes, mimeType: 'image/webp', width: 10, height: 10, changed: true, cacheKey: 'test' }));
+    const controller = createRequestSizeController(() => state.resolved, { prepare });
+    const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [pngBlock()] }], text: 't'.repeat(2000) }));
+    const result = await controller.control(raw, 'responses', { triggerBytes: 1024, targetBytes: 512, signal: new AbortController().signal,
+      context: { reqId: 73, method: 'POST', url: '/v1/responses', headers: {} }, route: { modelId: 'gpt-test' } });
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(result?.removedImages).toBe(0);
+    expect(result!.body.length).toBeGreaterThan(1024); // No new hard cap without a local owner.
+    expect(result!.body.toString()).toContain(`data:image/webp;base64,${bytes.toString('base64')}`);
+    expect(state.ingest).not.toHaveBeenCalled();
+    expect(state.addRef).not.toHaveBeenCalled();
+    expect(await readdir(state.root)).toEqual([]);
+    expect(state.info).toHaveBeenCalledExactlyOnceWith('request size control skipped', {
+      reqId: 73, reason: reason === 'invalid-session' ? 'no-session' : reason === 'session-deleted' ? 'session-missing' : reason,
+      originalBytes: raw.length, imageCount: 1,
+    });
+  },
+);
+
+it('preserves the original request on controller errors and logs only the error type', async () => {
+  state.ingest.mockRejectedValue(new TypeError('private content /secret/path bearer-secret'));
+  const prepare = vi.fn(async () => null);
+  const controller = createRequestSizeController(() => state.resolved, { prepare });
+  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [pngBlock()] }] }));
+  expect(await controller.control(raw, 'responses', { triggerBytes: 1024, targetBytes: 512, signal: new AbortController().signal, route: {},
+    context: { reqId: 74, method: 'POST', url: '/v1/responses', headers: {} } })).toBeNull();
+  expect(prepare).toHaveBeenCalledOnce();
+  expect(state.info).toHaveBeenCalledExactlyOnceWith('request size control skipped', {
+    reqId: 74, reason: 'error', originalBytes: raw.length, imageCount: 1, errorType: 'TypeError',
+  });
 });

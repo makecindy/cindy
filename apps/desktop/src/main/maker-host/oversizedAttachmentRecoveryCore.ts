@@ -5,10 +5,11 @@ import { copyFile, lstat, mkdir, mkdtemp, open, realpath, rm, writeFile } from '
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
-import { controlRequestSize, recoverInlineAttachments, type ImageRouteInfo, type InlineImagePreprocessor, type OversizedRequestRecovery, type RequestSizeController } from '@cindy/anthropic-compat-proxy';
+import { countInlineRequestImages, controlRequestSize, recoverInlineAttachments, type ImageRouteInfo, type InlineImagePreprocessor, type OversizedRequestRecovery, type RequestSizeController } from '@cindy/anthropic-compat-proxy';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions, mediaRefs } from '../localDb/schema.js';
 import { addRef, removeRefById } from '../cindy-media/ledger.js';
+import { createLogger } from '../logger.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 
 
@@ -19,6 +20,7 @@ export function createAttachmentRecoveryService(ports: {
     & Pick<typeof import('../cindy-media/refCompensationJournal.desktop.js'), 'captureMediaRefCompensationScope' | 'withMediaRefCompensation'>;
 }) {
 const { getUserDataDir } = ports;
+const log = createLogger('request-size-control');
 const { blobUrl, extForMime, resolveSafe, ingestMedia, captureMediaRefCompensationScope, withMediaRefCompensation } = ports.media;
 
 
@@ -197,59 +199,90 @@ function createRequestSizeController(
       return result?.body ?? null;
     },
     control: async (body, format, policy) => {
-      // Session resolution is performed by the existing recovery callback. The size controller
-      // keeps persistence scoped to the current DB owner and never exposes a path to the model.
-      const snapshot = getCurrentDbClientSnapshot();
-      if (!snapshot) return null;
-      const scope = captureMediaRefCompensationScope();
-      const db = snapshot.client.drizzle;
-      const sessionId = resolveSession(policy.context?.headers ?? {});
-      if (!sessionId || !/^[\w-]+$/.test(sessionId)) return null;
-      const session = await db.select({ status: sessions.status, remoteHostId: sessions.remoteHostId })
-        .from(sessions).where(eq(sessions.id, sessionId)).get();
-      if (!session || session.status === 'deleted' || session.remoteHostId) return null;
-      const assertCurrent = () => {
-        scope.assertStillValid();
-        if (getCurrentDbClientSnapshot() !== snapshot || resolveSession(policy.context?.headers ?? {}) !== sessionId) {
-          throw new Error('Attachment recovery owner changed');
-        }
+      let imageCount = 0;
+      const countingPreprocessor: InlineImagePreprocessor = {
+        prepare: input => {
+          if (input.mimeType.startsWith('image/')) imageCount++;
+          return preprocessor.prepare(input);
+        },
+        tighten: preprocessor.tighten?.bind(preprocessor),
       };
-      const directory = await mkdtemp(path.join(tmpdir(), 'cindy-request-size-'));
-      const staged = new Map<string, { source: string; hash: string; mimeType: string; refId?: string }>();
-      try {
-        const route = policy.route as ImageRouteInfo;
-        const model = route.modelId?.toLowerCase() ?? '';
-        const modelFamily = /(?:^|[/_-])(?:gpt|o[1-9]|codex)(?:[/_.-]|$)/.test(model)
-          ? 'gpt' : model.includes('claude') ? 'claude' : 'other';
-        const modelKey = route.modelId ?? '';
-        const budgetKey = `${sessionId}|${route.providerId ?? ''}|${route.endpoint ?? ''}|${modelKey}|${format}`;
-        const learned = learnedRequestBudgets.get(budgetKey);
-        const result = await serializeRecovery(`${scope.ownerStorageKey}/${sessionId}`, async () => controlRequestSize(
-          body, format, { route, modelFamily, signal: policy.signal, preprocessor, singleImageMaxBytes: policy.singleImageMaxBytes, triggerBytes: policy.triggerBytes ?? learned?.trigger, targetBytes: policy.targetBytes ?? learned?.target, reason: policy.reason, allowRemoval: policy.allowRemoval },
-          async (bytes, mimeType, index) => {
-            const hash = createHash('sha256').update(bytes).digest('hex');
-            const ext = extForMime(mimeType) ?? '.bin';
-            const destination = resolveSafe(blobUrl(hash, ext)).absPath;
-            const source = path.join(directory, `${index}-${hash}${ext}`);
-            await writeFile(source, bytes, { flag: 'wx', mode: 0o600 });
-            if (!staged.has(destination)) {
-              const existing = await db.select({ id: mediaRefs.id }).from(mediaRefs)
-                .where(and(eq(mediaRefs.hash, hash), eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId))).get();
-              staged.set(destination, { source, hash, mimeType, refId: existing ? undefined : randomUUID() });
-            }
-            return destination;
-          },
-        ));
-        if (!result) return null;
-        for (const [destination, item] of staged) {
-          const media = await ingestMedia({ filePath: item.source, mimeType: item.mimeType, isCache: false,
-            refs: [], assertStillValid: assertCurrent, refCompensationScope: scope }, db);
-          if (resolveSafe(media.url).absPath !== destination) throw new Error('Recovered attachment path changed');
-          if (item.refId) await addRef({ id: item.refId, hash: item.hash, refKind: 'session-attachment', refId: sessionId,
-            originSessionId: sessionId, originKind: 'user' }, db);
-        }
+      const skipped = (reason: string, error?: unknown) => log.info('request size control skipped', {
+        reqId: policy.context?.reqId,
+        reason,
+        originalBytes: body.length,
+        imageCount: error === undefined ? imageCount : countInlineRequestImages(body, format),
+        ...(error === undefined ? {} : { errorType: error instanceof TypeError ? 'TypeError'
+          : error instanceof SyntaxError ? 'SyntaxError' : error instanceof RangeError ? 'RangeError'
+          : error instanceof Error ? 'Error' : typeof error }),
+      });
+      const compressOnly = async (reason: string) => {
+        const result = await controlRequestSize(body, format,
+          { ...policy, preprocessor: countingPreprocessor, allowRemoval: false },
+          async () => { throw new Error('Image preservation unavailable'); });
+        skipped(reason);
         return result;
-      } finally { await rm(directory, { recursive: true, force: true }); }
+      };
+      try {
+        // Session resolution is performed by the existing recovery callback. The size controller
+        // keeps persistence scoped to the current DB owner and never exposes a path to the model.
+        const snapshot = getCurrentDbClientSnapshot();
+        if (!snapshot) return await compressOnly('no-db');
+        const db = snapshot.client.drizzle;
+        const sessionId = resolveSession(policy.context?.headers ?? {});
+        if (!sessionId || !/^[\w-]+$/.test(sessionId)) return await compressOnly('no-session');
+        const session = await db.select({ status: sessions.status, remoteHostId: sessions.remoteHostId })
+          .from(sessions).where(eq(sessions.id, sessionId)).get();
+        if (!session || session.status === 'deleted') return await compressOnly('session-missing');
+        if (session.remoteHostId) return await compressOnly('remote-session');
+        const scope = captureMediaRefCompensationScope();
+        const assertCurrent = () => {
+          scope.assertStillValid();
+          if (getCurrentDbClientSnapshot() !== snapshot || resolveSession(policy.context?.headers ?? {}) !== sessionId) {
+            throw new Error('Attachment recovery owner changed');
+          }
+        };
+        const directory = await mkdtemp(path.join(tmpdir(), 'cindy-request-size-'));
+        const staged = new Map<string, { source: string; hash: string; mimeType: string; refId?: string }>();
+        try {
+          const route = policy.route as ImageRouteInfo;
+          const model = route.modelId?.toLowerCase() ?? '';
+          const modelFamily = /(?:^|[/_-])(?:gpt|o[1-9]|codex)(?:[/_.-]|$)/.test(model)
+            ? 'gpt' : model.includes('claude') ? 'claude' : 'other';
+          const modelKey = route.modelId ?? '';
+          const budgetKey = `${sessionId}|${route.providerId ?? ''}|${route.endpoint ?? ''}|${modelKey}|${format}`;
+          const learned = learnedRequestBudgets.get(budgetKey);
+          const result = await serializeRecovery(`${scope.ownerStorageKey}/${sessionId}`, async () => controlRequestSize(
+            body, format, { route, modelFamily, signal: policy.signal, preprocessor: countingPreprocessor, singleImageMaxBytes: policy.singleImageMaxBytes, triggerBytes: policy.triggerBytes ?? learned?.trigger, targetBytes: policy.targetBytes ?? learned?.target, reason: policy.reason, allowRemoval: policy.allowRemoval },
+            async (bytes, mimeType, index) => {
+              const hash = createHash('sha256').update(bytes).digest('hex');
+              const ext = extForMime(mimeType) ?? '.bin';
+              const destination = resolveSafe(blobUrl(hash, ext)).absPath;
+              const source = path.join(directory, `${index}-${hash}${ext}`);
+              await writeFile(source, bytes, { flag: 'wx', mode: 0o600 });
+              if (!staged.has(destination)) {
+                const existing = await db.select({ id: mediaRefs.id }).from(mediaRefs)
+                  .where(and(eq(mediaRefs.hash, hash), eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId))).get();
+                staged.set(destination, { source, hash, mimeType, refId: existing ? undefined : randomUUID() });
+              }
+              return destination;
+            },
+          ));
+          if (!result) { skipped('unchanged'); return null; }
+          for (const [destination, item] of staged) {
+            const media = await ingestMedia({ filePath: item.source, mimeType: item.mimeType, isCache: false,
+              refs: [], assertStillValid: assertCurrent, refCompensationScope: scope }, db);
+            if (resolveSafe(media.url).absPath !== destination) throw new Error('Recovered attachment path changed');
+            if (item.refId) await addRef({ id: item.refId, hash: item.hash, refKind: 'session-attachment', refId: sessionId,
+              originSessionId: sessionId, originKind: 'user' }, db);
+          }
+          return result;
+        } finally { await rm(directory, { recursive: true, force: true }); }
+      } catch (error) {
+        if (error instanceof Error && error.message === 'REQUEST_TEXT_TOO_LARGE') throw error;
+        skipped('error', error);
+        return null;
+      }
     },
   };
   return controller;

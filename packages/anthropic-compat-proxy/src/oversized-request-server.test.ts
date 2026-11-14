@@ -258,3 +258,34 @@ it.each(['ingress', 'upstream-413', 'upstream-400'] as const)(
     } else expect(sent[1]).toHaveLength(1);
   },
 );
+
+// Production HTTP entry: unknown formats and controller exceptions must preserve
+// bytes and must not leak exception messages into skip diagnostics (unit tier).
+it.each(['format-unknown', 'error'] as const)('logs %s without changing the forwarded request', async reason => {
+  let received: Buffer | undefined;
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    received = Buffer.concat(chunks);
+    res.end('ok');
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const info = vi.fn();
+  const warn = vi.fn();
+  const control = vi.fn(async () => { throw new TypeError('private content /secret/path bearer-secret'); });
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${port}`, transformRequest: [], logger: { info, warn },
+    requestSizeController: { format: () => reason === 'format-unknown' ? null : 'responses', control } });
+  cleanup.push(() => proxy.dispose());
+  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,YQ==' }] }] }));
+  const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+  expect(response.status).toBe(200);
+  await response.text();
+  expect(received).toEqual(raw);
+  expect(info).toHaveBeenCalledWith('request size control skipped', {
+    reqId: expect.any(Number), reason, originalBytes: raw.length, imageCount: 1,
+    ...(reason === 'error' ? { errorType: 'TypeError' } : {}),
+  });
+  expect(JSON.stringify([info.mock.calls, warn.mock.calls])).not.toContain('bearer-secret');
+  if (reason === 'format-unknown') expect(control).not.toHaveBeenCalled();
+});

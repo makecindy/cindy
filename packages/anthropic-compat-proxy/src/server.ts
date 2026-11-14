@@ -15,6 +15,7 @@
 
 import { installResponseGuard } from './response-guard.js';
 import { collectRecoverableBody } from './oversized-attachments.js';
+import { countInlineRequestImages } from './request-size-control.js';
 import { classifyRequestSizeError } from './request-size-errors.js';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -2299,6 +2300,14 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       return;
     }
     const requestCtx: RequestTransformCtx = { reqId, method, url, headers };
+    const logRequestSizeSkip = (reason: string, body: Buffer, error?: unknown) => {
+      logger.info?.('request size control skipped', {
+        reqId, reason, originalBytes: body.length, imageCount: countInlineRequestImages(body),
+        ...(error === undefined ? {} : { errorType: error instanceof TypeError ? 'TypeError'
+          : error instanceof SyntaxError ? 'SyntaxError' : error instanceof RangeError ? 'RangeError'
+          : error instanceof Error ? 'Error' : typeof error }),
+      });
+    };
     const threadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
     const contentType = headers['content-type'] ?? '';
     let recoverOversized: ReturnType<NonNullable<ProxyOptions['oversizedRequestRecovery']>> = null;
@@ -2317,12 +2326,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // existing disk-backed collector; only the bounded controller result returns to memory.
     const ingressRecovery = sizeControlEnabled && requestSizeController
       ? async (body: import('./oversized-attachments.js').OversizedBody): Promise<Buffer | null> => {
+        let raw: Buffer | undefined;
         try {
-          const raw = await readFile(body.filePath);
+          raw = await readFile(body.filePath);
           const modelMatch = /"model"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(raw.toString('utf8', 0, Math.min(raw.length, 64 * 1024)));
           const parsedHint = modelMatch ? { model: JSON.parse(`"${modelMatch[1]}"`) } : {};
           const format = requestSizeController.format?.(requestCtx, parsedHint);
-          if (!format) return null;
+          if (!format) { logRequestSizeSkip('format-unknown', raw); return null; }
           const controlled = await requestSizeController.control(raw, format, {
             route: requestSizeController.route?.(requestCtx, parsedHint) ?? {},
             signal: body.signal,
@@ -2338,7 +2348,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           });
           return controlled.body;
         } catch (error) {
-          logger.warn?.('request size control spool failed', { reqId, err: error instanceof Error ? error.message : String(error) });
+          if (raw) logRequestSizeSkip('error', raw, error);
+          else logger.info?.('request size control skipped', { reqId, reason: 'error', originalBytes: body.bytes, imageCount: 0, errorType: 'Error' });
           return null;
         }
       }
@@ -2618,9 +2629,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
             res.end(JSON.stringify({ error: { type: 'request_too_large', message: 'Request text exceeds the local 32 MiB request budget after image recovery.' } }));
             return;
           }
-          logger.warn?.('request size control failed; preserving original request', { reqId, err: message });
+          logRequestSizeSkip('error', rawBody, error);
         }
-      }
+      } else logRequestSizeSkip('format-unknown', rawBody);
     }
 
     // 本地 handler 命中:不转发上游、不跑 transform 链,由 handler 直接消费(协议翻译场景)。

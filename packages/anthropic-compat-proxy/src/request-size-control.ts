@@ -212,6 +212,21 @@ function walkImages(node: JsonNode, format: WireFormat, out: ImageOccurrence[], 
   }
 }
 
+/** Diagnostic fallback only: count inline media without decoding or logging its content. */
+export function countInlineRequestImages(body: Buffer, format?: WireFormat): number {
+  try {
+    const root = new JsonScanner(body.toString('utf8')).parse();
+    const formats: WireFormat[] = format ? [format] : ['responses', 'anthropic', 'chat'];
+    let count = 0;
+    for (const wire of formats) {
+      const images: ImageOccurrence[] = [];
+      for (const item of modelItems(root, wire)) walkImages(item, wire, images, { count: 0 });
+      count += images.filter(image => image.mimeType.startsWith('image/')).length;
+    }
+    return count;
+  } catch { return 0; } // A malformed body has no reliably identifiable image blocks.
+}
+
 function familyLimit(family: RequestSizePolicy['modelFamily']): { trigger: number; keep: number } | undefined {
   if (family === 'gpt') return { trigger: 50, keep: 22 };
   if (family === 'claude') return { trigger: 100, keep: 44 };
