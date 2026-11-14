@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { UnifiedModelPickerView } from '@/session/UnifiedModelPickerView';
 import { UnifiedModelPickerView as IosModelPickerView } from '@/session/UnifiedModelPickerView.ios';
-const virtualList = vi.hoisted(() => ({ scrollToOffset: vi.fn(), scrollToIndex: vi.fn() }));
+const virtualList = vi.hoisted(() => ({ scrollToOffset: vi.fn(), scrollToIndex: vi.fn(), props: null as any }));
 const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
 vi.mock('react-native', async () => {
   const { createElement: el, useImperativeHandle } = await import('react');
@@ -19,7 +19,9 @@ vi.mock('react-native', async () => {
       renderItem,
       ListHeaderComponent,
       ListEmptyComponent,
+      ...props
     }: any) => {
+      virtualList.props = props;
       useImperativeHandle(
         ref,
         () => ({ scrollToOffset: virtualList.scrollToOffset, scrollToIndex: virtualList.scrollToIndex }),
@@ -44,7 +46,7 @@ vi.mock('react-native', async () => {
 });
 vi.mock('@/components/AppText', async () => {
   const { createElement: el } = await import('react');
-  return { Text: ({ children }: any) => el('span', null, children), TextInput: () => null };
+  return { Text: ({ children }: any) => el('span', null, children), TextInput: ({ onChangeText }: any) => el('input', { 'aria-label': 'Model search', onInput: (event: any) => onChangeText(event.target.value) }) };
 });
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -96,7 +98,9 @@ vi.mock('@/theme', async () => {
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
 beforeEach(() => {
-  virtualList.scrollToOffset.mockClear();
+  virtualList.scrollToOffset.mockReset();
+  virtualList.scrollToIndex.mockReset();
+  virtualList.props = null;
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   host = document.createElement('div');
   root = createRoot(host);
@@ -397,4 +401,90 @@ it('passes the first selected row target to the iOS form after late data', () =>
   expect(host.querySelector('[data-initial-scroll]')).toBeNull();
   render([{ key: 'favorites', rows: [row] }, { key: 'provider', rows: [row] }]);
   expect(host.querySelector('[data-testid="picker.list"]')?.getAttribute('data-initial-scroll')).toBe('favorites:same-model');
+});
+
+// PR #10552 / review r4573357542: exercise the real view's native callback
+// boundary for an unmeasured target outside the first render window. Previously
+// the FlatList stub discarded failure/layout/drag callbacks, so compensation,
+// its bound, and cancellation could all break unnoticed. Unit tier; fake time.
+function mountUnmeasuredModelTarget() {
+  vi.useFakeTimers();
+  let measured = false;
+  let landedIndex: number | null = null;
+  const rows = Array.from({ length: 40 }, (_, index) => ({
+    key: `model-${index}`, selected: index === 39,
+    entry: { displayName: `Model ${index}`, capabilities: {} }, config: { agent: 'codex' },
+  }));
+  const props = {
+    visible: true, groups: [{ key: 'provider', title: 'Provider', rows }],
+    filters: [], query: '', filter: 'all', onQuery: vi.fn(),
+  };
+  const render = (visible = true) => act(() => root.render(createElement(UnifiedModelPickerView, { ...props, visible } as any)));
+  virtualList.scrollToIndex.mockImplementation(({ index }) => {
+    if (measured) landedIndex = index;
+    else virtualList.props.onScrollToIndexFailed({ index, averageItemLength: 60, highestMeasuredFrameIndex: 7 });
+  });
+  render();
+  const tick = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+  tick(20); // First animation frame: target is outside the measured window.
+  return {
+    render, tick, onQuery: props.onQuery,
+    measure: () => { measured = true; },
+    landed: () => landedIndex,
+    cleanup: () => { act(() => root.render(null)); vi.useRealTimers(); },
+  };
+}
+
+it.each(['timer', 'content-size'] as const)('reaches the initially unmeasured selected row after %s recovery', trigger => {
+  const picker = mountUnmeasuredModelTarget();
+  try {
+    expect(picker.landed()).toBeNull();
+    expect(virtualList.scrollToOffset).toHaveBeenLastCalledWith({ offset: 2400, animated: false });
+    picker.measure();
+    if (trigger === 'timer') picker.tick(50);
+    else act(() => virtualList.props.onContentSizeChange(400, 3000));
+    expect(picker.landed()).toBe(40);
+    const attempts = virtualList.scrollToIndex.mock.calls.length;
+    picker.tick(1000);
+    act(() => virtualList.props.onContentSizeChange(400, 3100));
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(attempts);
+  } finally { picker.cleanup(); }
+});
+
+it('stops compensation after five failed recovery attempts', () => {
+  const picker = mountUnmeasuredModelTarget();
+  try {
+    picker.tick(1000);
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(6); // Initial try + five recoveries.
+    expect(picker.landed()).toBeNull();
+    const offsets = virtualList.scrollToOffset.mock.calls.length;
+    picker.measure();
+    act(() => virtualList.props.onContentSizeChange(400, 3000));
+    picker.tick(1000);
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(6);
+    expect(virtualList.scrollToOffset).toHaveBeenCalledTimes(offsets);
+    expect(picker.landed()).toBeNull();
+  } finally { picker.cleanup(); }
+});
+
+it.each(['drag', 'search', 'close'] as const)('keeps pending compensation cancelled after %s', cancel => {
+  const picker = mountUnmeasuredModelTarget();
+  try {
+    if (cancel === 'drag') act(() => virtualList.props.onScrollBeginDrag());
+    else if (cancel === 'search') act(() => {
+      const search = host.querySelector('input[aria-label="Model search"]') as HTMLInputElement;
+      search.value = 'another';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    else picker.render(false);
+    if (cancel === 'search') expect(picker.onQuery).toHaveBeenCalledWith('another');
+    picker.measure();
+    const attempts = virtualList.scrollToIndex.mock.calls.length;
+    const offsets = virtualList.scrollToOffset.mock.calls.length;
+    act(() => virtualList.props.onContentSizeChange(400, 3000));
+    picker.tick(1000);
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(attempts);
+    expect(virtualList.scrollToOffset).toHaveBeenCalledTimes(offsets);
+    expect(picker.landed()).toBeNull();
+  } finally { picker.cleanup(); }
 });
