@@ -6,9 +6,10 @@
 
 - Node.js 与 pnpm 版本以根 `package.json` 的 `engines` 和 `packageManager` 为准。
 - Git 与 Git LFS。
-- Linux 单元测试需要 `fonts-dejavu-core` 作为 Canvas 的文本字体回退；只有彩色 Emoji
-  字体时，任务栏角标 PNG 的数字不会产生预期的白色像素。CI 的 Linux 分片会显式安装，
-  不依赖 `ubuntu-latest` 镜像预装的字体。
+- Linux 单元测试需要 `fonts-dejavu-core`：角标测试将 DejaVu Sans Bold 注册为仅该套件
+  使用的 `Segoe UI` 别名，结束后移除；Windows 仍验证真实系统字体。仅补装字体不能固定
+  Linux 的通用字体回退，选择彩色 Emoji 时数字不会产生预期的白色像素。CI 的 Linux
+  分片会显式安装该依赖，不依赖 `ubuntu-latest` 镜像预装的字体。
 
 先核对实际版本：
 
