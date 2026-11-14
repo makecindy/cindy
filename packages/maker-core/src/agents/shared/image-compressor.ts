@@ -37,6 +37,26 @@ export interface ImageCompressionResult {
   cacheKey: string;
 }
 
+// Process-local provenance shared by the path resizer and proxy callback.
+// Keep only 512 SHA-256 digests, never source pixels; evict least recently used.
+const compressedOutputs = new Set<string>();
+const outputDigest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+
+export function rememberCompressedImage(bytes: Buffer): void {
+  const hash = outputDigest(bytes);
+  compressedOutputs.delete(hash);
+  compressedOutputs.add(hash);
+  if (compressedOutputs.size > 512) compressedOutputs.delete(compressedOutputs.values().next().value!);
+}
+
+export function isCompressedImageOutput(bytes: Buffer): boolean {
+  const hash = outputDigest(bytes);
+  if (!compressedOutputs.has(hash)) return false;
+  compressedOutputs.delete(hash);
+  compressedOutputs.add(hash);
+  return true;
+}
+
 type SharpModule = (typeof import('sharp'))['default'];
 let sharpInstance: SharpModule | null = null;
 let sharpLoadAttempted = false;
@@ -85,7 +105,7 @@ export function imageCompressionCacheKey(
   return createHash('sha256').update(bytes).update('\0').update(params).digest('hex');
 }
 
-/** Pure encoding from original bytes; each budget attempt starts from the source. */
+/** Encoding from original bytes; each budget attempt starts from the source. */
 export async function compressImageBuffer(request: ImageCompressionRequest): Promise<ImageCompressionResult> {
   const { bytes } = request;
   const sharp = loadSharp();
@@ -133,6 +153,7 @@ export async function compressImageBuffer(request: ImageCompressionRequest): Pro
         continue;
       }
       if (!budget && !resize && output.data.length > Math.floor(bytes.length * 0.85)) return unchanged();
+      rememberCompressedImage(output.data);
       return { bytes: output.data, mimeType, width: output.info.width, height: output.info.height, changed: true, cacheKey };
     }
     return unchanged();

@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { compressImageBuffer, imageCompressionCacheKey, type ImageCompressionResult } from '@cindy/maker-core/image-compressor';
+import { compressImageBuffer, imageCompressionCacheKey, isCompressedImageOutput, rememberCompressedImage, type ImageCompressionResult } from '@cindy/maker-core/image-compressor';
 import { acceptsWebpImageInput } from '@cindy/model-providers';
 
 // Temporary structural contract until PR 1 exports these types. No wire changes.
@@ -11,36 +10,34 @@ export interface InlineImagePreprocessor {
   tighten(input: Input & { maxBytes: number }): Promise<PreparedImage | null>;
 }
 
-/** Hidden runtime override: CINDY_IMAGE_COMPRESSION_ENABLED=0 disables compression;
- * 1 or unset enables the current default. No preferences are written; removing
+/** Hidden runtime override: XDT_IMAGE_COMPRESSION_DISABLE=1 disables compression;
+ * Unset enables the current default. No preferences are written; removing
  * the environment override restores the default. Read for each call, including
  * cache hits. This switch is independent of the proxy's request-size recovery.
  * Memory-only derived cache: at most 64 MiB / 512 entries, no media disk store.
  */
 export function createInlineImagePreprocessor(
-  enabled: () => boolean = () => process.env.CINDY_IMAGE_COMPRESSION_ENABLED !== '0',
+  enabled: () => boolean = () => process.env.XDT_IMAGE_COMPRESSION_DISABLE !== '1',
   encode: typeof compressImageBuffer = compressImageBuffer,
 ): InlineImagePreprocessor {
   const cache = new Map<string, PreparedImage | null>();
   const pending = new Map<string, Promise<PreparedImage | null>>();
-  const outputHashes = new Map<string, string>();
   let cachedBytes = 0;
   let active = 0;
   const waiters: Array<() => void> = [];
-  const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
   const run = async (input: Input, maxBytes?: number): Promise<PreparedImage | null> => {
     if (!enabled() || input.signal.aborted) return null;
     const denied = input.route.deniedMimeTypes ?? [];
     const acceptsWebp = !denied.includes('image/webp') && acceptsWebpImageInput(input.route);
     const request = { bytes: input.bytes, mimeType: input.mimeType, route: { acceptsWebp }, budget: maxBytes === undefined ? undefined : { maxBytes } };
     const key = imageCompressionCacheKey(input.bytes, request) + ':' + [...denied].sort().join(',');
-    const sourceHash = digest(input.bytes);
     // A result fed back through a later request must never be JPEG-recompressed.
-    if (maxBytes === undefined && [...outputHashes.values()].includes(sourceHash)) return null;
+    if (maxBytes === undefined && isCompressedImageOutput(input.bytes)) return null;
     if (cache.has(key)) {
       const hit = cache.get(key)!;
       cache.delete(key);
       cache.set(key, hit);
+      if (hit) rememberCompressedImage(hit.bytes);
       return hit;
     }
     let work = pending.get(key);
@@ -60,12 +57,11 @@ export function createInlineImagePreprocessor(
           if (!accepted || accepted.bytes.length <= 64 * 1024 * 1024) {
             cache.set(key, accepted);
             cachedBytes += accepted?.bytes.length ?? 0;
-            if (accepted) outputHashes.set(key, digest(accepted.bytes));
+            if (accepted) rememberCompressedImage(accepted.bytes);
             while (cachedBytes > 64 * 1024 * 1024 || cache.size > 512) {
               const oldest = cache.keys().next().value!;
               cachedBytes -= cache.get(oldest)?.bytes.length ?? 0;
               cache.delete(oldest);
-              outputHashes.delete(oldest);
             }
           }
           return accepted;

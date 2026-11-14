@@ -1,3 +1,9 @@
+import { randomBytes } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { compressImageBuffer } from '@cindy/maker-core/image-compressor';
+import { ImageResizer } from '../../../../../../packages/maker-core/src/agents/shared/image-resizer.js';
 import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 import { createInlineImagePreprocessor } from '../inlineImagePreprocessor.js';
@@ -58,4 +64,46 @@ it('caps encoding at two jobs even when a running caller aborts', async () => {
   releases[1]();
   releases[2]();
   await Promise.all(jobs);
+});
+
+// Unit regression: resizer and proxy used separate provenance registries, causing
+// two lossy JPEG encodes. Real resizer output must bypass the proxy encoder.
+it('does not encode a JPEG again after the user-attachment resizer', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'image-resizer-proxy-'));
+  try {
+    const sourcePath = path.join(root, 'source.jpg');
+    const source = await sharp(randomBytes(600 * 400 * 3), { raw: { width: 600, height: 400, channels: 3 } })
+      .jpeg({ quality: 100, chromaSubsampling: '4:4:4' }).toBuffer();
+    expect(source.length).toBeGreaterThan(500_000);
+    await fs.writeFile(sourcePath, source);
+    const resizer = new ImageResizer({ cacheDir: path.join(root, 'cache') });
+    const resizedPath = await resizer.process(sourcePath);
+    expect(resizedPath).not.toBe(sourcePath);
+    const bytes = await fs.readFile(resizedPath);
+    expect((await sharp(bytes).metadata()).format).toBe('jpeg');
+    const encode = vi.fn(compressImageBuffer);
+    const processor = createInlineImagePreprocessor(() => true, encode);
+    expect(await processor.prepare({ bytes, mimeType: 'image/jpeg', route: { modelId: 'gpt-6-astra' }, signal: new AbortController().signal })).toBeNull();
+    expect(encode).not.toHaveBeenCalled();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+it('reads the XDT disable override on every call without clearing other settings', async () => {
+  const original = process.env.XDT_IMAGE_COMPRESSION_DISABLE;
+  const encode = vi.fn(compressImageBuffer);
+  const processor = createInlineImagePreprocessor(undefined, encode);
+  const input = { bytes: Buffer.from('invalid-image'), mimeType: 'image/png', route: {}, signal: new AbortController().signal };
+  try {
+    process.env.XDT_IMAGE_COMPRESSION_DISABLE = '1';
+    expect(await processor.prepare(input)).toBeNull();
+    expect(encode).not.toHaveBeenCalled();
+    delete process.env.XDT_IMAGE_COMPRESSION_DISABLE;
+    await processor.prepare(input);
+    expect(encode).toHaveBeenCalledOnce();
+  } finally {
+    if (original === undefined) delete process.env.XDT_IMAGE_COMPRESSION_DISABLE;
+    else process.env.XDT_IMAGE_COMPRESSION_DISABLE = original;
+  }
 });

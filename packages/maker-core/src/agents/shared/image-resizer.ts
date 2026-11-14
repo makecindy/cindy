@@ -32,6 +32,7 @@ import {
   compressImageBuffer,
   detectSupportedImageMime,
   imageCompressionCacheKey,
+  rememberCompressedImage,
 } from './image-compressor.js';
 
 // sharp 是可选 peerDep。host 没装时 import 会失败,我们整体降级为 noop
@@ -182,6 +183,7 @@ export class ImageResizer {
       try {
         const cached = await fs.lstat(cachedPath);
         if (!cached.isFile() || cached.isSymbolicLink()) throw new Error('unsafe cache entry');
+        rememberCompressedImage(await fs.readFile(cachedPath));
         await fs.chmod(cachedPath, 0o600);
         this.touchAtime(cachedPath).catch(() => undefined);
         return cachedPath;
