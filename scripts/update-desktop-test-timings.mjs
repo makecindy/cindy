@@ -2,12 +2,16 @@
 // Refresh apps/desktop/src/test/vitest/fileTimings.json, which the Desktop
 // timing sequencer uses to balance CI unit shards.
 //
-//   pnpm update:desktop-test-timings --run <client-ci run id>
+//   pnpm update:desktop-test-timings --run <run id>[,<run id>...]
 //   pnpm update:desktop-test-timings --dir <downloaded artifact directory>
 //
-// Use a green run: the Windows shards are the CI critical path, so their
-// per-file worker time is the weight. Files missing from the data fall back to
-// the median, so a stale file only costs balance, never coverage.
+// Use green client-ci runs; the Windows shards are the critical path, so their
+// per-file worker time is the weight. Hosted Windows runners differ in speed by
+// up to ~2x, and every file is measured on whichever runner its shard got, so
+// each report is first divided by that runner's speed factor (its mean fixed
+// per-file cost: environment + prepare + setup, relative to all reports).
+// Several runs are averaged. Files missing from the data fall back to the
+// median, so a stale file only costs balance, never coverage.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,8 +29,11 @@ function parseArgs(argv) {
 		if (arg === '--run' || arg === '--dir') options[arg.slice(2)] = argv[++index];
 		else if (arg !== '--') throw new Error(`unknown argument: ${arg}`);
 	}
-	if (!options.run === !options.dir) throw new Error('pass exactly one of --run <id> or --dir <path>');
-	if (options.run && !/^\d+$/.test(options.run)) throw new Error('--run must be a numeric run id');
+	if (!options.run === !options.dir) throw new Error('pass exactly one of --run <id>[,<id>...] or --dir <path>');
+	if (options.run) {
+		options.runs = options.run.split(',').map((id) => id.trim()).filter(Boolean);
+		if (options.runs.length === 0 || options.runs.some((id) => !/^\d+$/.test(id))) throw new Error('--run takes numeric run ids separated by commas');
+	}
 	return options;
 }
 
@@ -38,40 +45,49 @@ function listJson(dir) {
 	});
 }
 
+const fixedCost = (timing) => timing.environmentMs + timing.prepareMs + timing.setupMs;
+
+/** Machine-normalized mean worker time per file across all shard reports. */
 export function mergeShardTimings(reports) {
-	const files = {};
-	const shards = new Set();
-	for (const report of reports) {
+	const perReport = reports.map((report) => {
 		if (report?.version !== 1 || typeof report.files !== 'object') throw new Error('unexpected timing report format');
-		if (report.shard) shards.add(report.shard);
+		const timings = Object.values(report.files);
+		return { report, fixed: timings.reduce((sum, timing) => sum + fixedCost(timing), 0) / Math.max(1, timings.length) };
+	});
+	const meanFixed = perReport.reduce((sum, entry) => sum + entry.fixed, 0) / Math.max(1, perReport.length);
+	const samples = new Map();
+	for (const { report, fixed } of perReport) {
+		const speed = meanFixed > 0 && fixed > 0 ? fixed / meanFixed : 1;
 		for (const [file, timing] of Object.entries(report.files)) {
-			const total = Math.max(1, Math.round(timing.totalMs));
-			files[file] = Math.max(files[file] ?? 0, total);
+			if (!samples.has(file)) samples.set(file, []);
+			samples.get(file).push(timing.totalMs / speed);
 		}
 	}
-	const sorted = Object.fromEntries(Object.entries(files).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)));
-	return { shards: [...shards].sort(), files: sorted };
+	const entries = [...samples].map(([file, values]) =>
+		[file, Math.max(1, Math.round(values.reduce((sum, value) => sum + value, 0) / values.length))]);
+	entries.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+	return Object.fromEntries(entries);
 }
 
 function main() {
 	const options = parseArgs(process.argv.slice(2));
-	const downloadDir = options.run ? fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-test-timings-')) : null;
+	const downloadDir = options.runs ? fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-test-timings-')) : null;
 	try {
-		if (downloadDir) {
-			execFileSync('gh', ['run', 'download', options.run, '--pattern', ARTIFACT_PATTERN, '--dir', downloadDir], { cwd: ROOT, stdio: 'inherit' });
+		for (const run of options.runs ?? []) {
+			execFileSync('gh', ['run', 'download', run, '--pattern', ARTIFACT_PATTERN, '--dir', path.join(downloadDir, run)], { cwd: ROOT, stdio: 'inherit' });
 		}
 		const sourceDir = downloadDir ?? path.resolve(options.dir);
 		const reports = listJson(sourceDir).map((file) => JSON.parse(fs.readFileSync(file, 'utf8')));
 		if (reports.length === 0) throw new Error(`no timing reports under ${sourceDir}`);
-		const merged = mergeShardTimings(reports);
-		const source = options.run ? `client-ci run ${options.run}` : 'local artifact directory';
+		const files = mergeShardTimings(reports);
+		const source = options.runs ? `client-ci runs ${options.runs.join(' ')}` : 'local artifact directory';
 		fs.writeFileSync(OUTPUT, `${JSON.stringify({
 			version: 1,
-			source: `${source}, windows, shards ${merged.shards.join(' ') || 'unknown'}`,
+			source: `${source}; Windows shard reports normalized by runner speed`,
 			unit: 'ms',
-			files: merged.files,
+			files,
 		}, null, 1)}\n`);
-		console.log(`wrote ${Object.keys(merged.files).length} file timings from ${reports.length} reports to ${path.relative(ROOT, OUTPUT)}`);
+		console.log(`wrote ${Object.keys(files).length} file timings from ${reports.length} reports to ${path.relative(ROOT, OUTPUT)}`);
 	} finally {
 		if (downloadDir) fs.rmSync(downloadDir, { recursive: true, force: true });
 	}

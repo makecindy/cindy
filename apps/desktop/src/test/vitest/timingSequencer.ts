@@ -1,12 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { BaseSequencer, type TestSpecification } from 'vitest/node';
-import { assignByDuration, medianWeight, orderByDuration } from '../../../../../scripts/shared/duration-shards.mjs';
+import { assignByDuration, medianWeight } from '../../../../../scripts/shared/duration-shards.mjs';
 
 /**
  * CI shards Desktop unit tests by the committed per-file timings
  * (fileTimings.json, refreshed with `pnpm update:desktop-test-timings`).
- * Without `--shard` the default Vitest order is kept, so local runs are unchanged.
+ * Only the split changes; the order inside a shard stays Vitest's default
+ * (larger files first). Starting the slowest files first put several heavy
+ * module graphs on cold transform caches at once, and an in-test dynamic import
+ * then exceeded the 5s Linux test timeout. Without `--shard` nothing changes.
  * If the timings file cannot be read every shard falls back to Vitest's hash
  * split together, because they all read the same checkout.
  */
@@ -25,29 +28,16 @@ export function createTimingSequencer(timingsFile: string) {
   };
 
   return class TimingSequencer extends BaseSequencer {
-    private weighted(files: TestSpecification[], timings: Map<string, number>) {
-      const fallback = medianWeight(timings.values());
-      return files.map((spec) => {
-        const file = path.relative(this.ctx.config.root, spec.moduleId).replace(/\\/g, '/');
-        return { spec, key: `${spec.project.name}:${file}`, weight: timings.get(file) ?? fallback };
-      });
-    }
-
     override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
       const timings = loadTimings();
       const shard = this.ctx.config.shard;
       if (!timings || !shard) return super.shard(files);
-      const items = this.weighted(files, timings);
-      const selected = new Set(assignByDuration(items, shard.count)[shard.index - 1]);
-      return items.filter((item) => selected.has(item.key)).map((item) => item.spec);
-    }
-
-    override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
-      const timings = loadTimings();
-      if (!timings || !this.ctx.config.shard) return super.sort(files);
-      const items = this.weighted(files, timings);
-      const byKey = new Map(items.map((item) => [item.key, item.spec]));
-      return orderByDuration(items).map((key) => byKey.get(key)!);
+      const fallback = medianWeight(timings.values());
+      const items = files.map((spec) => {
+        const file = path.relative(this.ctx.config.root, spec.moduleId).replace(/\\/g, '/');
+        return { spec, key: `${spec.project.name}:${file}`, weight: timings.get(file) ?? fallback };
+      });
+      return assignByDuration(items, shard.count)[shard.index - 1].map((item) => item.spec);
     }
   };
 }

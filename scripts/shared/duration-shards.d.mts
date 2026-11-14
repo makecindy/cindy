@@ -5,6 +5,4 @@ export interface WeightedKey {
 
 export function medianWeight(weights: Iterable<number>): number;
 
-export function assignByDuration(items: readonly WeightedKey[], count: number): string[][];
-
-export function orderByDuration(items: readonly WeightedKey[]): string[];
+export function assignByDuration<T extends WeightedKey>(items: readonly T[], count: number): T[][];

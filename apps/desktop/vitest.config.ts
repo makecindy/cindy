@@ -82,7 +82,7 @@ export default defineConfig({
   test: {
     globals: true,
     ...(fileTimingReporters ? { reporters: fileTimingReporters } : {}),
-    // CI 的 --shard 按已提交的逐文件耗时切分，片内最慢的文件先跑；不分片时保持默认顺序。
+    // CI 的 --shard 按已提交的逐文件耗时切分，片内顺序不变；不分片时完全不受影响。
     sequence: {
       sequencer: createTimingSequencer(path.resolve(__dirname, 'src/test/vitest/fileTimings.json')),
     },
