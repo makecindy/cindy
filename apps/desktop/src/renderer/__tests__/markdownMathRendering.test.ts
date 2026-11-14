@@ -26,6 +26,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
+import { normalizeDisplayMathFences } from '../components/chat/normalizeDisplayMath';
 import remarkStrictInlineMath from '../components/chat/remarkStrictInlineMath';
 
 function renderMath(markdown: string): string {
@@ -33,7 +34,7 @@ function renderMath(markdown: string): string {
     createElement(ReactMarkdown, {
       remarkPlugins: [remarkGfm, remarkMath, remarkStrictInlineMath],
       rehypePlugins: [[rehypeKatex, { strict: 'ignore', errorColor: 'inherit' }]],
-      children: normalizeMathDelimiters(markdown),
+      children: normalizeDisplayMathFences(normalizeMathDelimiters(markdown)),
     }),
   );
 }
@@ -114,6 +115,99 @@ $$`);
     expect(html).toContain('style="color:inherit"');
     expect(html).not.toContain('var(--error-fg)');
   });
+
+  it('截图同形回归:首尾行带正文的跨行 $$...$$ 块不丢失首行、不吞掉后续 Markdown', () => {
+    const html = renderMath([
+      '### 1. 公式内容',
+      '对正整数 $n$，有：',
+      '$$I_n = \\begin{cases}',
+      '\\dfrac{n-1}{n} \\cdot \\dfrac{n-3}{n-2}, & n \\text{ 为正偶数} \\\\[10pt]',
+      '\\dfrac{n-1}{n}, & n \\text{ 为大于 } 1 \\text{ 的正奇数}',
+      '\\end{cases}$$ 特例：$n=0$ 时为 $\\dfrac{\\pi}{2}$。',
+      '',
+      '**记忆规律**：从头乘到尾。',
+      '',
+      '---',
+      '',
+      '### 2. 它为什么成立',
+    ].join('\n'));
+
+    expect(html).toContain('katex-display');
+    expect(html).not.toContain('katex-error');
+    expect(html).toContain('I_n = \\begin{cases}');
+    expect(html).toContain('<strong>记忆规律</strong>');
+    expect(html).toContain('<hr');
+    expect(html).toContain('<h3>2. 它为什么成立</h3>');
+  });
+
+  it.each([
+    ['开围栏同行带正文', '$$I_n = \\begin{cases}\na \\\\\nb\n\\end{cases}\n$$'],
+    ['闭围栏同行带正文', '$$\nI_n = \\begin{cases}\na \\\\\nb\n\\end{cases}$$'],
+    ['行内紧接多行公式块', '对正整数 $n$，有：$$I_n = \\begin{cases}\na \\\\\nb\n\\end{cases}$$ 后文'],
+    ['单行独立 $$x$$ (无空白)', '前文\n$$I_n = \\frac{n-1}{n} I_{n-2}$$\n后文'],
+    ['单行独立 $$ x $$ (含首尾空白)', '前文\n$$ x = 1 $$\n后文'],
+    ['引用块内非规范 $$ 块', '> $$I_n = \\begin{cases}\n> a \\\\\n> b\n> \\end{cases}$$'],
+    ['列表项内非规范 $$ 块', '- $$I_n = \\begin{cases}\n  a \\\\\n  b\n  \\end{cases}$$'],
+    ['LaTeX 换行 \\\\ 后接闭合 $$', '$$a \\\\\nb\\\\$$'],
+  ])('%s → 产出 display KaTeX 且无错误', (_label, md) => {
+    const html = renderMath(md);
+    expect(html).toContain('katex-display');
+    expect(html).not.toContain('katex-error');
+  });
+
+  it('行内双 dollar ($$ a + b $$ 含空格 / 同行多个 $$a$$ + $$b$$) 渲染为 inline KaTeX', () => {
+    const spaced = renderMath('令 $$ a + b $$ 成立');
+    expect(spaced).toContain('class="katex"');
+    expect(spaced).not.toContain('katex-display');
+
+    const pair = renderMath('$$a = 1$$ + $$b = 2$$');
+    expect(pair).toContain('class="katex"');
+    expect(pair).not.toContain('katex-display');
+  });
+
+  it('normalizeDisplayMathFences 保护规范块引用、代码区、转义与未闭合段落', () => {
+    const canonical = '$$\nx = 1\n$$';
+    expect(normalizeDisplayMathFences(canonical)).toBe(canonical);
+
+    const inCode = '```tex\n$$I_n = \\begin{cases}\na\n\\end{cases}$$\n```\n\n用 `$$a$$` 表示';
+    expect(normalizeDisplayMathFences(inCode)).toBe(inCode);
+
+    const unclosedMidline = '价格 $$50\n\n下一段 **正常**';
+    expect(normalizeDisplayMathFences(unclosedMidline)).toBe(unclosedMidline);
+
+    const escapedClose = '$$\na \\$$ b\n$$';
+    expect(normalizeDisplayMathFences(escapedClose)).toBe(escapedClose);
+
+    const extraDollars = '$$$$\n$$$x$$$';
+    expect(normalizeDisplayMathFences(extraDollars)).toBe(extraDollars);
+
+    // 流式未闭合行首 $$I_n = \begin{cases} 拆出开围栏，避免首行被 mathFlow 当 meta 吞掉
+    expect(normalizeDisplayMathFences('$$I_n = \\begin{cases}\na')).toBe(
+      '$$\nI_n = \\begin{cases}\na',
+    );
+
+    // 容器边界保护: 引用块 / 列表项内未闭合 $$ 不得跨越容器边界吞并外部公式
+    const quoteBoundary = '> $$\n> x = 1\n\n正文 $$y$$';
+    expect(normalizeDisplayMathFences(quoteBoundary)).toBe(quoteBoundary);
+    const quoteHtml = renderMath(quoteBoundary);
+    expect(quoteHtml).toContain('<blockquote>');
+    expect(quoteHtml).toContain('<p>正文 <span class="katex">');
+
+    const listBoundary = '- $$\n  x = 1\n\n正文 $$y$$';
+    expect(normalizeDisplayMathFences(listBoundary)).toBe(listBoundary);
+
+    // 容器内代码围栏保护: 引用块 / 列表内的 ~~~ 与 ``` 代码块保持原样
+    const containerCode = '> ~~~tex\n> $$x$$\n> ~~~\n\n- ```tex\n  $$y$$\n  ```';
+    expect(normalizeDisplayMathFences(containerCode)).toBe(containerCode);
+    expect(renderMath(containerCode)).not.toContain('class="katex"');
+
+    // 对抗性未闭合反引号长度序列(k 种长度各一次)必须保持 O(n) 线性完成
+    const adversarialTicks = Array.from({ length: 400 }, (_, i) => '`'.repeat(i + 1)).join('a');
+    const adversarial = `$$x$$\n${adversarialTicks}`;
+    const started = Date.now();
+    normalizeDisplayMathFences(adversarial);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
 });
 
 describe('MarkdownRenderer — math 接线 source contract', () => {
@@ -150,6 +244,7 @@ describe('MarkdownRenderer — math 接线 source contract', () => {
     // 原引用,与动效引入前的渲染路径逐位一致)。
     expect(source).toContain('normalizeMarkdownRendererContent(repairedContent, emitSourceLines)');
     expect(source).toContain('normalizeMathDelimiters(content, { preserveLineCount })');
+    expect(source).toContain('preserveLineCount ? normalized : normalizeDisplayMathFences(normalized)');
     expect(source).toContain(
       'streamFade ? repairStreamingMarkdown(throttledContent) : throttledContent',
     );
