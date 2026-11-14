@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
+import { makerChatStore } from '@/lib/makerChatStore';
+import {
+  getRemoteSessionActivity,
+  subscribeRemoteSessionActivity,
+} from '@/features/device-link/remoteSessionActivityStore';
 import { toast, type ToastAction } from '@/lib/toast';
 import type {
   CheckoutRequest,
@@ -35,6 +40,7 @@ export function useCheckout(
   deviceId: string | null | undefined,
   supported: boolean,
   onBusyChange?: (busy: boolean) => void,
+  observeSessionActivity = false,
 ) {
   const { t } = useTranslation();
   const key = JSON.stringify([repo, deviceId]);
@@ -136,6 +142,91 @@ export function useCheckout(
     window.addEventListener('focus', focus);
     return () => window.removeEventListener('focus', focus);
   }, [refresh]);
+  const sessionIds = JSON.stringify(
+    state.key === key ? (state.status?.sessions.map((session) => session.id).sort() ?? []) : [],
+  );
+  useEffect(() => {
+    if (!observeSessionActivity || !repo || !supported || state.busy) return;
+    const ids = new Set<string>(JSON.parse(sessionIds));
+    if (!ids.size) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight = false;
+    let dirty = false;
+    // Fixed 250 ms merge window: token updates do not read; bursts merge once.
+    // During a slow read retain only one trailing invalidation, never overlap reads.
+    const schedule = () => {
+      dirty = true;
+      if (disposed || inFlight || timer) return;
+      timer = setTimeout(async () => {
+        timer = undefined;
+        if (disposed) return;
+        dirty = false;
+        inFlight = true;
+        try {
+          await refresh();
+        } finally {
+          inFlight = false;
+          if (!disposed && dirty) schedule();
+        }
+      }, 250);
+    };
+    const snapshot = () => {
+      const local = deviceId ? undefined : makerChatStore.getRunningSnapshot();
+      return [...ids]
+        .map((id) =>
+          deviceId
+            ? (getRemoteSessionActivity(id, deviceId)?.phase ?? 'unknown')
+            : local?.get(id)?.isRunning === true,
+        )
+        .join('|');
+    };
+    let previous = snapshot();
+    const changed = () => {
+      const next = snapshot();
+      if (next === previous) return;
+      previous = next;
+      schedule();
+    };
+    const unsubscribers: Array<(() => void) | undefined> = [];
+    if (deviceId) {
+      unsubscribers.push(
+        subscribeRemoteSessionActivity((device, id) => {
+          if ((!device || device === deviceId) && (!id || ids.has(id))) changed();
+        }),
+      );
+    } else {
+      unsubscribers.push(makerChatStore.subscribeAll(changed));
+      const background = new Map<string, boolean>();
+      const onBackground = (kind: string) => (event: { sessionId: string; active: boolean }) => {
+        if (!ids.has(event.sessionId)) return;
+        const id = kind + event.sessionId;
+        if (background.get(id) === event.active) return;
+        background.set(id, event.active);
+        schedule();
+      };
+      const maker = window.electronAPI?.maker;
+      unsubscribers.push(maker?.onSessionBackgroundActivityChanged?.(onBackground('model')));
+      unsubscribers.push(maker?.onSessionBackgroundWorkChanged?.(onBackground('command')));
+    }
+    // Catch a known turn edge that landed while the initial status read was in flight.
+    // Unknown/unloaded sessions are not evidence; the backend remains authoritative.
+    if (!deviceId) {
+      const local = makerChatStore.getRunningSnapshot();
+      if (
+        stateRef.current.status?.sessions.some((session) => {
+          const known = local.get(session.id);
+          return known && known.isRunning !== session.running;
+        })
+      )
+        schedule();
+    }
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      for (const unsubscribe of unsubscribers) unsubscribe?.();
+    };
+  }, [observeSessionActivity, repo, supported, key, deviceId, sessionIds, state.busy, refresh]);
   const mutate = useCallback(
     async (req: CheckoutRequest) => {
       if (active.current) return;

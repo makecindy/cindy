@@ -277,6 +277,7 @@ export function WorktreeChipsRow({
     deviceLinkDeviceId,
     detect.data?.supportsCheckout === true,
     onCheckoutBusyChange,
+    !effectiveWorktreeEnabled && !environmentDisabled && !advancedHidden,
   );
   const actualBranch = checkout.status?.current || branches.current || currentBranch || 'HEAD';
   const defaultSourceBranch = branches.loading

@@ -16,12 +16,18 @@ import {
 } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BranchWorktreeChip, WorktreeChipsRow } from '../WorktreeChipsRow';
+import {
+  applyRemoteSessionActivity,
+  clearRemoteSessionActivity,
+} from '@/features/device-link/remoteSessionActivityStore';
 import { Tooltip } from '@/components/ui/tooltip';
 const render = (element: React.ReactElement) =>
   rtlRender(element, {
     wrapper: ({ children }) => <Tooltip.Provider>{children}</Tooltip.Provider>,
   });
 const mocks = vi.hoisted(() => ({
+  running: new Map<string, { isRunning: boolean }>(),
+  activityListeners: new Set<() => void>(),
   toast: vi.fn(),
   warning: vi.fn(),
   success: vi.fn(),
@@ -29,6 +35,15 @@ const mocks = vi.hoisted(() => ({
   dismiss: vi.fn(),
   update: vi.fn(),
   t: (key: string, args?: object) => key + (args ? JSON.stringify(args) : ''),
+}));
+vi.mock('@/lib/makerChatStore', () => ({
+  makerChatStore: {
+    getRunningSnapshot: () => mocks.running,
+    subscribeAll: (listener: () => void) => {
+      mocks.activityListeners.add(listener);
+      return () => mocks.activityListeners.delete(listener);
+    },
+  },
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t }) }));
 vi.mock('@/lib/toast', () => ({
@@ -84,6 +99,8 @@ beforeEach(() => {
     },
   );
   vi.clearAllMocks();
+  mocks.running.clear();
+  mocks.activityListeners.clear();
   mocks.success.mockReturnValue('checkout-success-toast');
   mocks.info.mockReturnValue('checkout-info-toast');
   mocks.toast.mockReturnValue('checkout-error-toast');
@@ -1410,4 +1427,140 @@ it('disables the restore toast while its request is running', async () => {
     finish({ status: checkoutStatus });
   });
   await waitFor(() => expect(mocks.success).toHaveBeenCalledWith('newChat.checkout.restored'));
+});
+
+// Unit regression: an open busy menu used to remain stale after task completion.
+// Drive the sidebar store notification through the real row; no polling or real waits.
+it('refreshes an open checkout menu on relevant running edges and coalesces bursts', async () => {
+  mocks.running.set('a', { isRunning: true });
+  mocks.running.set('b', { isRunning: true });
+  const checkout = setupCheckout(true, {
+    blocked: 'busy',
+    sessions: [
+      { id: 'a', name: 'Active', running: true },
+      { id: 'b', name: 'Other', running: true },
+    ],
+  });
+  const view = render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  fireEvent.click(branchButton());
+  await screen.findByRole('button', { name: 'newChat.checkout.startWorktree' });
+  const before = checkout.mock.calls.length;
+  vi.useFakeTimers();
+  try {
+    const notify = () => mocks.activityListeners.forEach((listener) => listener());
+    await act(async () => {
+      mocks.running.set('unrelated', { isRunning: true });
+      notify();
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(checkout.mock.calls).toHaveLength(before);
+    checkout.mockResolvedValue({
+      status: {
+        ...checkoutStatus,
+        sessions: [
+          { id: 'a', name: 'Active', running: false },
+          { id: 'b', name: 'Other', running: false },
+        ],
+      },
+    });
+    await act(async () => {
+      mocks.running.set('a', { isRunning: false });
+      notify();
+      mocks.running.set('b', { isRunning: false });
+      notify();
+      notify();
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(checkout.mock.calls.slice(before).map(([req]) => req.action)).toEqual(['status']);
+    expect(screen.queryByRole('button', { name: 'newChat.checkout.startWorktree' })).toBeNull();
+    expect(screen.getByRole('option', { name: 'feature' }).getAttribute('aria-disabled')).toBe(
+      'false',
+    );
+    expect(screen.getByRole('button', { name: 'newChat.checkout.useWorktree' })).toBeTruthy();
+    checkout.mockResolvedValue({
+      status: {
+        ...checkoutStatus,
+        blocked: 'busy',
+        sessions: [
+          { id: 'a', name: 'Active', running: true },
+          { id: 'b', name: 'Other', running: true },
+        ],
+      },
+    });
+    await act(async () => {
+      mocks.running.set('a', { isRunning: true });
+      mocks.running.set('b', { isRunning: true });
+      notify();
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(screen.getByRole('button', { name: 'newChat.checkout.startWorktree' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'feature' }).getAttribute('aria-disabled')).toBe(
+      'true',
+    );
+    const beforeToggle = checkout.mock.calls.length;
+    mocks.running.set('a', { isRunning: false });
+    notify(); // A queued refresh is cancelled when worktree is enabled.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'newChat.worktree.toggleAria' }));
+    expect(mocks.activityListeners.size).toBe(0);
+    await act(async () => {
+      notify();
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(checkout.mock.calls).toHaveLength(beforeToggle);
+    view.unmount();
+    expect(mocks.activityListeners.size).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Unit: remote task ids are scoped to their execution computer. An unrelated
+// device completion must not cause a relay read or unblock this directory.
+it('refreshes remote checkout status only for the matching device activity', async () => {
+  clearRemoteSessionActivity();
+  const checkout = setupCheckout(true, {
+    blocked: 'busy',
+    sessions: [{ id: 'a', name: 'Remote', running: true }],
+  });
+  invoke.mockImplementation(async (_device: string, channel: string, args: unknown[]) => {
+    if (channel === 'worktree:checkout') return checkout(args[0]);
+    if (channel === 'worktree:detect-cwd')
+      return window.electronAPI.worktreeDetectCwd({ cwd: '/repo' });
+    if (channel === 'worktree:list-branches')
+      return window.electronAPI.worktreeListBranches({ baseRepo: '/repo' });
+    if (channel === 'worktree:suggest-name') return { name: 'test' };
+    if (channel === 'worktree:branch-sync-status') return baseStatus;
+    return {};
+  });
+  applyRemoteSessionActivity('pc', { sessionId: 'a', phase: 'running' });
+  const view = render(<CheckoutRow deviceId="pc" />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  fireEvent.click(branchButton());
+  await screen.findByRole('button', { name: 'newChat.checkout.startWorktree' });
+  const before = checkout.mock.calls.length;
+  vi.useFakeTimers();
+  try {
+    checkout.mockResolvedValue({
+      status: { ...checkoutStatus, sessions: [{ id: 'a', name: 'Remote', running: false }] },
+    });
+    await act(async () => {
+      applyRemoteSessionActivity('other', { sessionId: 'a', phase: 'completed', attention: true });
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(checkout.mock.calls).toHaveLength(before);
+    await act(async () => {
+      applyRemoteSessionActivity('pc', { sessionId: 'a', phase: 'completed' });
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(checkout.mock.calls.slice(before).map(([req]) => req.action)).toEqual(['status']);
+    expect(screen.queryByRole('button', { name: 'newChat.checkout.startWorktree' })).toBeNull();
+    expect(screen.getByRole('option', { name: 'feature' }).getAttribute('aria-disabled')).toBe(
+      'false',
+    );
+  } finally {
+    view.unmount();
+    clearRemoteSessionActivity();
+    vi.useRealTimers();
+  }
 });
