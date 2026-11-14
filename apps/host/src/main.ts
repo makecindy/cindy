@@ -128,6 +128,7 @@ import { createTaskTagService } from '../../desktop/src/main/localDb/ipc/taskTag
 import { executeConversationSearch } from '../../desktop/src/main/localDb/ipc/search.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../desktop/src/main/device-link/broadcast-tap.js';
 import { createInputQueue } from './agent/input-queue.mjs';
+import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
 import { applyLiveSessionSettings } from './agent/session-settings.mjs';
 import { createInteractionBroker } from './agent/interactions.mjs';
@@ -935,8 +936,12 @@ const insertSessionMessage = createHostMessageStore({ getOwner: getCurrentDbClie
 const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot,
   publish: (event: unknown) => eventHub.publish(event) });
 
+// The pending handoff summary: one registry for the Host process, as the desktop's singleton.
+const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
+  publish: event => eventHub.publish(event), log: createLogger('agent-handoff-pending') });
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  pendingHandoff,
   createAttachments: ({ assertCurrent }: { assertCurrent(): void }) => createHostAttachments({
     getOwner: getCurrentDbClientSnapshot, assertCurrent,
   }),
