@@ -1666,6 +1666,98 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  // #8932 / unit: adapter's real onEvent entry, pending review followed by a
+  // teardown or permission change. Generic dialog tests did not exercise stale
+  // plan approval; no native process is needed to distinguish the wire result.
+  it.each(['abort', 'close', 'full-access'] as const)('never accepts a late plan approval after %s', async action => {
+    const handle = await start('ask');
+    let answer!: (decision: InteractionDecision) => void;
+    const resolver = vi.fn(() => new Promise<InteractionDecision>(resolve => { answer = resolve; }));
+    handle.setInteractionResolver!(resolver);
+    try {
+      captured.onEvent!({ type: 'extension_ui_request', id: 'plan-late', method: 'input',
+        title: 'cindy:plan-review', placeholder: JSON.stringify({ plan: 'Plan:\n1. Preserve all files.' }) });
+      await vi.waitFor(() => expect(resolver).toHaveBeenCalled());
+      if (action === 'abort') await handle.abort!();
+      else if (action === 'close') await handle.close();
+      else await handle.setPermissionMode!('bypassPermissions');
+      answer({ kind: 'plan_review', behavior: 'allow' });
+      await flush();
+      expect(captured.sent.filter(frame => frame.id === 'plan-late' && typeof frame.value === 'string')).toEqual([]);
+      if (action !== 'close') expect(captured.sent).toContainEqual({
+        type: 'extension_ui_response', id: 'plan-late', cancelled: true,
+      });
+    } finally { await handle.close(); }
+  });
+
+  // #8976 review / unit: a natural steer while the plan resolver is pending
+  // must still reach the production tool reviewer after allow/revise. Existing
+  // late-approval tests only covered teardown, not newly authored restrictions.
+  it.each(['allow', 'revise'] as const)('preserves steered restrictions after plan review %s', async action => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    let answer!: (decision: InteractionDecision) => void;
+    const resolver = vi.fn(() => new Promise<InteractionDecision>(resolve => { answer = resolve; }));
+    handle.setInteractionResolver!(resolver);
+    try {
+      await handle.send({ type: 'user', content: 'Implement the requested feature.' });
+      captured.onEvent!({ type: 'extension_ui_request', id: 'plan-steered', method: 'input',
+        title: 'cindy:plan-review', placeholder: JSON.stringify({ plan: 'Plan:\n1. Update the feature.' }) });
+      await vi.waitFor(() => expect(resolver).toHaveBeenCalled());
+      await handle.steer({ type: 'user', content: 'Do not modify test files.' });
+      answer(action === 'allow' ? { kind: 'plan_review', behavior: 'allow' }
+        : { kind: 'plan_review', behavior: 'deny', reason: 'Revise the implementation details.' });
+      const response = await waitForResponse('plan-steered');
+      expect(JSON.parse(response.value as string).action).toBe(action === 'allow' ? 'implement' : 'revise');
+      await handle.reviewAutoPermissionAction!({ kind: 'other', description: 'Modify test files.' });
+      const intent = JSON.stringify(review.mock.calls[0]?.[0].userIntent);
+      expect(intent).toContain('Do not modify test files.');
+      expect(intent).toContain(action === 'allow' ? 'Update the feature.' : 'Revise the implementation details.');
+    } finally { await handle.close(); }
+  });
+
+  it.each(['rejected-input', 'new-authority'] as const)('cancels stale plan approval after %s', async boundary => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    let answer!: (decision: InteractionDecision) => void;
+    const resolver = vi.fn(() => new Promise<InteractionDecision>(resolve => { answer = resolve; }));
+    handle.setInteractionResolver!(resolver);
+    try {
+      await handle.send({ type: 'user', content: 'Implement the original feature.' });
+      captured.onEvent!({ type: 'extension_ui_request', id: 'plan-boundary', method: 'input',
+        title: 'cindy:plan-review', placeholder: JSON.stringify({ plan: 'Plan:\n1. Update the original feature.' }) });
+      await vi.waitFor(() => expect(resolver).toHaveBeenCalled());
+      if (boundary === 'rejected-input') {
+        captured.failPrompt = true;
+        await expect(handle.send({ type: 'user', content: 'A rejected replacement request.' })).rejects.toThrow();
+      } else {
+        await handle.send({ type: 'user', content: 'Inspect the status only.' }, {
+          turnPermissionPolicy: { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel',
+            autoReviewContext: { requesterAuthority: 'guest', source: 'group' }, forceConfirmToolCall: () => true },
+        });
+      }
+      answer({ kind: 'plan_review', behavior: 'allow' });
+      expect(await waitForResponse('plan-boundary')).toMatchObject({ cancelled: true });
+      await handle.reviewAutoPermissionAction!({ kind: 'other', description: 'Modify the original feature.' });
+      if (boundary === 'rejected-input') expect(review).not.toHaveBeenCalled();
+      else expect(review.mock.calls[0]?.[0]).toMatchObject({
+        userIntent: 'Inspect the status only.', authorizationContext: { requesterAuthority: 'guest', source: 'group' },
+      });
+    } finally { await handle.close(); }
+  });
+
+  it('keeps a plan-looking ordinary extension select as a question', async () => {
+    const handle = await start('bypassPermissions');
+    const resolver = vi.fn(async () => ({ kind: 'ask_user_question' as const, answers: {} }));
+    handle.setInteractionResolver!(resolver);
+    try {
+      captured.onEvent!({ type: 'extension_ui_request', id: 'ordinary-plan-select', method: 'select',
+        title: 'Plan mode - what next?', options: ['Execute the plan (track progress)', 'Stay in plan mode', 'Refine the plan'] });
+      expect(await waitForResponse('ordinary-plan-select')).toMatchObject({ cancelled: true });
+      expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ask_user_question' }));
+    } finally { await handle.close(); }
+  });
+
   it('passes a typed custom answer for a select dialog through and keeps an empty answer as cancel (#4273)', async () => {
     const handle = await start();
     const answers: Record<string, string> = {

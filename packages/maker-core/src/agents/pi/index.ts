@@ -33,6 +33,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
+import {
+  buildPiPlanReviewExtensionSource,
+  CINDY_PLAN_REVIEW_EXTENSION_FILENAME,
+  CINDY_PLAN_REVIEW_TITLE,
+} from './cindy-plan-review-source.js';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
 import { readPiGlobalContext } from './global-context.js';
 import { findPiCloudContextFile, piCloudContextDisplayPath } from './startup-context-diagnostic.js';
@@ -159,6 +164,7 @@ import {
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   appendAutoReviewUserIntent,
+  composeAutoReviewIntentWithApprovedPlan,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
   createAutoReviewAgentTextTracker,
@@ -3964,6 +3970,11 @@ export class PiAgent extends BaseAgent {
       /* 缺失 → 不挂载 plan-mode */
     }
 
+    const planReviewExtensionSource = !reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable
+      ? buildPiPlanReviewExtensionSource(planModeExtPath) : '';
+    const planReviewExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_PLAN_REVIEW_EXTENSION_FILENAME);
+    if (planReviewExtensionSource) await writeFile(planReviewExtensionPath, planReviewExtensionSource);
+
     // Project resources have exactly one authority: the host-owned PR3 trust
     // snapshot. Freeze it once per new runtime, then assemble only its eligible
     // skills. Missing/throwing authorities and paths fail closed; never infer
@@ -4197,7 +4208,7 @@ export class PiAgent extends BaseAgent {
         '--extension',
         bridgeExtensionPath,
         ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
-        ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+        ...(planReviewExtensionSource ? ['--extension', planReviewExtensionPath] : []),
         ...(loadProjectResourcesInPlace
           ? piProjectResourceCliArgs(projectResourceCli)
           : []),
@@ -5807,6 +5818,7 @@ export class PiAgent extends BaseAgent {
           .update(CINDY_BRIDGE_EXTENSION_SOURCE)
           .update('\n')
           .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
+          .update(planReviewExtensionSource ? '\n' + planReviewExtensionSource : '')
           .digest('hex')
           .slice(0, 16);
         // 追加提示词本体在文件里，命令行不再带它；指纹进 env 才让提示词变化
@@ -5925,6 +5937,58 @@ export class PiAgent extends BaseAgent {
             }
           }
           if (event.type === 'extension_ui_request') {
+            if (event.method === 'input' && event.title === CINDY_PLAN_REVIEW_TITLE) {
+              const requestId = typeof event.id === 'string' ? event.id : '';
+              let plan: unknown;
+              try { plan = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}').plan; }
+              catch { /* Malformed requests cannot grant implementation authority. */ }
+              const resolver = interactionResolver;
+              const planAuthority = currentAutoReviewAuthority;
+              let settled = false;
+              let unregister: () => void = () => undefined;
+              const finish = (result?: { action: 'implement'; plan: string } | { action: 'revise'; feedback: string }): void => {
+                if (settled) return;
+                settled = true;
+                unregister?.();
+                if (closed || piProcessExited || proc.isClosed || accountBoundaryTeardown) return;
+                // Approval cannot revive a rejected input or cross requester
+                // boundaries. Same-requester steers remain part of live intent.
+                if (result && (currentAutoReviewAuthority === null
+                  || JSON.stringify(currentAutoReviewAuthority ?? null) !== JSON.stringify(planAuthority ?? null))) result = undefined;
+                if (result?.action === 'implement') {
+                  setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(currentAutoReviewIntent, result.plan));
+                } else if (result?.action === 'revise') {
+                  setAutoReviewIntent(appendAutoReviewUserIntent(currentAutoReviewIntent, result.feedback));
+                }
+                proc.send({ type: 'extension_ui_response', id: requestId,
+                  ...(result ? { value: JSON.stringify(result) } : { cancelled: true }) });
+              };
+              if (!requestId || typeof plan !== 'string' || !plan.trim() || !resolver
+                || closed || accountBoundaryTeardown || isCurrentTurnHostAbortRequested(ctx)) {
+                finish();
+                return;
+              }
+              const fullPlan = plan;
+              unregister = registerPendingPrompt(requestId, {
+                // Full access is never permission to approve a plan on the user's behalf.
+                forcePrompt: true,
+                settle: () => finish(),
+              });
+              void Promise.resolve().then(() => settled ? undefined : resolver({ kind: 'plan_review', requestId, plan: fullPlan }))
+                .then(decision => {
+                  if (settled) return;
+                  if (decision?.kind !== 'plan_review' || decision.dismissed || isCurrentTurnHostAbortRequested(ctx)) {
+                    finish();
+                  } else if (decision.behavior === 'allow') {
+                    finish({ action: 'implement', plan: decision.editedPlan?.trim() || fullPlan });
+                  } else {
+                    const feedback = decision.reason?.trim();
+                    finish(feedback && feedback !== 'user_rejected' && !isSystemPermissionDenialReason(feedback)
+                      ? { action: 'revise', feedback } : undefined);
+                  }
+                }).catch(() => finish());
+              return;
+            }
             if (event.method === 'input' &&
                 (event.title === 'cindy:provider-refresh' || event.title === 'cindy:provider-refresh-ack')) {
               const requestId = typeof event.id === 'string' ? event.id : '';
