@@ -26,6 +26,43 @@ function fakeResponse(status: number, body: string): Response {
   return new Response(body, { status, headers: { 'content-type': 'application/json' } });
 }
 
+describe('implicit Codex model manifests', () => {
+  it('requests the Codex capability view only for an implicit Codex Responses catalog', () => {
+    expect(buildModelsFetchRequest(spec({ agent: 'codex', wireProtocol: 'openai-responses' })).url)
+      .toBe('https://api.acme.example/anthropic/v1/models?client_version=0.147.0');
+    expect(buildModelsFetchRequest(spec({ agent: 'codex' })).url)
+      .toBe('https://api.acme.example/anthropic/v1/models?client_version=0.147.0');
+    expect(buildModelsFetchRequest(spec({ agent: 'codex', wireProtocol: 'openai-chat' })).url)
+      .toBe('https://api.acme.example/anthropic/v1/models');
+    expect(buildModelsFetchRequest(spec({ agent: 'claude-code', wireProtocol: 'openai-responses' })).url)
+      .toBe('https://api.acme.example/anthropic/v1/models');
+  });
+
+  it('does not rewrite an explicitly configured model catalog', () => {
+    expect(buildModelsFetchRequest(spec({ agent: 'codex', wireProtocol: 'openai-responses',
+      modelsUrl: 'https://api.acme.example/v1/models?tenant=test' })).url)
+      .toBe('https://api.acme.example/v1/models?tenant=test');
+  });
+
+  it('falls back to the ordinary implicit catalog when the capability view is unavailable', async () => {
+    const calls: string[] = [];
+    const result = await fetchProviderModels(
+      spec({ agent: 'codex', wireProtocol: 'openai-responses' }),
+      async url => {
+        calls.push(String(url));
+        return calls.length === 1
+          ? fakeResponse(404, '{}')
+          : fakeResponse(200, '{"data":[{"id":"gpt-6.1-sol-oneai"}]}');
+      },
+    );
+    expect(result).toMatchObject({ ok: true, models: [{ id: 'gpt-6.1-sol-oneai' }] });
+    expect(calls).toEqual([
+      'https://api.acme.example/anthropic/v1/models?client_version=0.147.0',
+      'https://api.acme.example/anthropic/v1/models',
+    ]);
+  });
+});
+
 // Unit regression: real fetch entry, legacy saved /v1/models plus three inference
 // protocols. Prior account tests passed an already-correct /models URL and missed this.
 it.each(['claude-code', 'codex', 'pi'] as const)('discovers Copilot models independently of the %s inference API', async agent => {
@@ -304,7 +341,7 @@ describe('buildModelsFetchRequest', () => {
     const result = await fetchProviderModels(spec({ agent: 'codex',
       baseUrl: 'https://sub2api.example/backend-api/codex', wireProtocol: 'openai-responses',
     }), async (url, init) => {
-      expect(url).toBe('https://sub2api.example/backend-api/codex/models');
+      expect(url).toBe('https://sub2api.example/backend-api/codex/models?client_version=0.147.0');
       expect(init?.headers).toMatchObject({ authorization: 'Bearer sk-test' });
       return fakeResponse(200, JSON.stringify({ models: [{ slug: 'gpt-6-sol',
         supported_reasoning_levels: [{ effort: 'high' }, { effort: 'max' }], default_reasoning_level: 'high',
@@ -699,17 +736,25 @@ it('does not rewrite private Google-compatible discovery or an explicit catalog'
   }
 });
 
-it.each([404, 405])('falls back from an unavailable manifest (%i) on the same authenticated endpoint', async status => {
+  it.each([404, 405])('falls back from an unavailable implicit manifest (%i) on the same authenticated endpoint', async status => {
   const fetcher = vi.fn()
     .mockResolvedValueOnce(fakeResponse(status, '{}'))
     .mockResolvedValueOnce(fakeResponse(200, '{"data":[{"id":"grok-4.7","reasoningEfforts":["low","high"]}]}'));
-  const result = await fetchProviderModels(spec({ baseUrl: 'https://relay.example/proxy/v1',
-    modelsUrl: 'https://relay.example/proxy/v1/models?client_version=0.147.0&tenant=test',
-  }), fetcher);
+    const result = await fetchProviderModels(spec({ agent: 'codex', wireProtocol: 'openai-responses', baseUrl: 'https://relay.example/proxy/v1' }), fetcher);
   expect(result).toMatchObject({ ok: true, models: [{ id: 'grok-4.7', discoveredMetadata: { efforts: ['low', 'high'] } }] });
   expect(fetcher).toHaveBeenCalledTimes(2);
-  expect(fetcher.mock.calls[1][0]).toBe('https://relay.example/proxy/v1/models?tenant=test');
+  expect(fetcher.mock.calls[1][0]).toBe('https://relay.example/proxy/v1/models');
   expect(fetcher.mock.calls[1][1].headers).toEqual(fetcher.mock.calls[0][1].headers);
+});
+
+it.each([404, 405])('does not rewrite an explicit manifest after %i', async status => {
+  const fetcher = vi.fn(async (_url: RequestInfo | URL) => fakeResponse(status, '{}'));
+  const modelsUrl = 'https://relay.example/proxy/v1/models?client_version=0.147.0&tenant=test';
+  const result = await fetchProviderModels(spec({ agent: 'codex', wireProtocol: 'openai-responses',
+    baseUrl: 'https://relay.example/proxy/v1', modelsUrl }), fetcher);
+  expect(result.ok).toBe(false);
+  expect(fetcher).toHaveBeenCalledOnce();
+  expect(String(fetcher.mock.calls[0][0])).toBe(modelsUrl);
 });
 
 it.each([401, 403, 429, 503])('does not disguise manifest authorization or availability failures (%i)', async status => {
@@ -728,6 +773,7 @@ describe('ElevenLabs catalog authentication', () => {
     expect(result.url).toBe('https://api.elevenlabs.io/v1/models');
     expect(result.init.headers).toEqual({ 'xi-api-key': 'fake-eleven-key' });
   });
+
   it('does not guess ElevenLabs authentication for a custom host or leak a stale key in no-auth mode', () => {
     const custom = buildModelsFetchRequest(spec({ agent: 'codex', baseUrl: 'https://elevenlabs.example/v1', apiKey: 'fake-key' }));
     expect(custom.init.headers).toEqual({ authorization: 'Bearer fake-key' });
