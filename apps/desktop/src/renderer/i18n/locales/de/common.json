@@ -10903,9 +10903,15 @@
     "cancel": "Abbrechen",
     "save": "Speichern",
     "autosave": {
+      "remoteUnconfirmed": "Speichern auf dem anderen Computer nicht bestätigt",
+      "remoteUnsavedDescription": "Beim Verlassen wird der Entwurf dieser Seite verworfen. Änderungen, die auf dem anderen Computer möglicherweise schon gespeichert wurden, werden dadurch nicht rückgängig gemacht. Öffne die Einstellungen erneut, um das zu prüfen.",
       "saving": "Wird gespeichert…",
       "saved": "Gespeichert",
-      "retry": "Erneut speichern"
+      "retry": "Erneut speichern",
+      "unsavedTitle": "Einstellungen des Teammitglieds nicht gespeichert",
+      "unsavedDescription": "Diese Änderungen konnten nicht gespeichert werden – möglicherweise ist ein ausgewähltes Modell nicht verfügbar. Beim Verlassen werden sie verworfen.",
+      "discard": "Änderungen verwerfen",
+      "continueEditing": "Weiter bearbeiten"
     },
     "retry": "Erneut versuchen",
     "backToBot": "Zurück zum Freund",

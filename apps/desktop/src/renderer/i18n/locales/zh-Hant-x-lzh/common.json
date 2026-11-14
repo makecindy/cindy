@@ -10858,9 +10858,15 @@
     "cancel": "罷",
     "save": "存之",
     "autosave": {
+      "remoteUnconfirmed": "彼端存否未審",
+      "remoteUnsavedDescription": "去則棄此頁之稿，然彼端或已存之改不復還。再啟規制以核之。",
       "saving": "方存…",
       "saved": "已存",
-      "retry": "再存"
+      "retry": "再存",
+      "unsavedTitle": "同僚規制未能存",
+      "unsavedDescription": "此改未能存，或所擇之模今不可用。去則棄之。",
+      "discard": "棄此改",
+      "continueEditing": "續修"
     },
     "retry": "再試",
     "backToBot": "歸同伴",

@@ -10987,9 +10987,15 @@
     "cancel": "Cancelar",
     "save": "Salvar",
     "autosave": {
+      "remoteUnconfirmed": "Salvamento no outro computador não confirmado",
+      "remoteUnsavedDescription": "Sair descarta o rascunho desta página. Isso não desfaz alterações que talvez já tenham sido salvas no outro computador. Reabra as configurações para conferir.",
       "saving": "Salvando…",
       "saved": "Salvo",
-      "retry": "Salvar novamente"
+      "retry": "Salvar novamente",
+      "unsavedTitle": "Configurações do colega não foram salvas",
+      "unsavedDescription": "Não foi possível salvar estas alterações, talvez porque um modelo selecionado não está disponível. Se você sair, elas serão descartadas.",
+      "discard": "Descartar alterações",
+      "continueEditing": "Continuar editando"
     },
     "retry": "Tentar novamente",
     "backToBot": "Voltar ao amigo",

@@ -10987,9 +10987,15 @@
     "cancel": "Cancelar",
     "save": "Guardar",
     "autosave": {
+      "remoteUnconfirmed": "Gravação no outro computador não confirmada",
+      "remoteUnsavedDescription": "Sair descarta o rascunho desta página. Isto não anula alterações que possam já ter sido guardadas no outro computador. Volte a abrir as definições para confirmar.",
       "saving": "A guardar…",
       "saved": "Guardado",
-      "retry": "Guardar novamente"
+      "retry": "Guardar novamente",
+      "unsavedTitle": "Não foi possível guardar as definições do colega",
+      "unsavedDescription": "Não foi possível guardar estas alterações, talvez porque um modelo selecionado não está disponível. Se sair, serão descartadas.",
+      "discard": "Descartar alterações",
+      "continueEditing": "Continuar a editar"
     },
     "retry": "Tentar novamente",
     "backToBot": "Voltar ao amigo",
