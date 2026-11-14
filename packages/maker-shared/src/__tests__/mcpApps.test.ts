@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { McpAppSdkCache } from '../mcpApps.js';
 const parserLoads = vi.hoisted(() => ({ count: 0 }));
 vi.mock('parse5', async original => { parserLoads.count++; return original(); });
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -310,4 +312,74 @@ it.each([
   const head = root && 'childNodes' in root ? root.childNodes.find(node => node.nodeName === 'head') : undefined;
   expect(head && 'childNodes' in head ? head.childNodes.at(-1) : undefined)
     .toMatchObject({ nodeName: '#comment', data: 'test-head-end' });
+});
+
+// SDK reference negotiation is optional. Real cache entry + controlled transport:
+// no new parser/operation in legacy clients, and no tool replay on a cache miss.
+describe('remote SDK cache negotiation', () => {
+  const sdk = { source: 'export const App = 1;', addons: { 'cindy/view-state': { source: 'core', reactSource: 'react' } } };
+  const doc = { viewId: 'view', html: '<p>App', csp: '', prefersBorder: true };
+  const hash = (text: string) => createHash('sha256').update(text).digest('hex');
+  const input = { op: 'open', clientId: 'card', openId: 'attempt', context: { theme: 'dark' } };
+  it.each(['missing', 'mismatched', 'restarted'])('falls back once to full source for a %s reference', async kind => {
+    let cache = new McpAppSdkCache(hash);
+    const owner = {};
+    if (kind !== 'missing') await cache.open(owner, 'host', input, async () => ({ ...doc, sdk }), () => {});
+    if (kind === 'restarted') cache = new McpAppSdkCache(hash);
+    let opens = 0;
+    const send = vi.fn(async (request: Record<string, unknown>) => request.op === 'teardown' ? {} :
+      ++opens === 1 ? { ...doc, sdkRef: 'f'.repeat(64) } : { ...doc, viewId: 'replacement', sdk });
+    await expect(cache.open(owner, 'host', input, send, () => {})).resolves.toEqual({ ...doc, viewId: 'replacement', sdk });
+    expect(send.mock.calls.map(([request]) => request.op)).toEqual(['open', 'teardown', 'open']);
+    expect(send.mock.calls[2][0]).toEqual({ ...input, sdkCacheHashes: [] });
+    expect(send.mock.calls[0][0].context).toEqual(input.context);
+  });
+  it('does not loop on a host that keeps returning an unusable reference', async () => {
+    const cache = new McpAppSdkCache(hash);
+    const send = vi.fn(async (request: Record<string, unknown>) => request.op === 'teardown' ? {} : { ...doc, sdkRef: 'f'.repeat(64) });
+    await expect(cache.open({}, 'host', input, send, () => {})).rejects.toThrow('MCP_APP_INVALID_DOCUMENT');
+    expect(send.mock.calls.map(([request]) => request.op)).toEqual(['open', 'teardown', 'open', 'teardown']);
+  });
+  it('isolates peers and owners and preserves the no-SDK legacy result', async () => {
+    const cache = new McpAppSdkCache(hash);
+    const owner = {};
+    await cache.open(owner, 'one', input, async () => ({ ...doc, sdk }), () => {});
+    const send = vi.fn(async (_request: Record<string, unknown>) => doc);
+    await expect(cache.open(owner, 'two', input, send, () => {})).resolves.toEqual(doc);
+    expect(send).toHaveBeenLastCalledWith({ ...input, sdkCacheHashes: [] });
+    await cache.open({}, 'one', input, send, () => {});
+    expect(send).toHaveBeenLastCalledWith({ ...input, sdkCacheHashes: [] });
+  });
+  it('bounds advertised entries and pins in-flight references through eviction', async () => {
+    const cache = new McpAppSdkCache(hash);
+    const owner = {};
+    await cache.open(owner, 'host', input, async () => ({ ...doc, sdk }), () => {});
+    let finish!: (value: unknown) => void;
+    let offered!: string[];
+    const pending = cache.open(owner, 'host', input, request => {
+      offered = request.sdkCacheHashes as string[];
+      return new Promise(resolve => { finish = resolve; });
+    }, () => {});
+    for (let i = 0; i < 9; i++) await cache.open(owner, 'host', input, async request => {
+      expect((request.sdkCacheHashes as string[]).length).toBeLessThanOrEqual(8);
+      return { ...doc, sdk: { source: `sdk-${i}` } };
+    }, () => {});
+    finish({ ...doc, sdkRef: offered[0] });
+    await expect(pending).resolves.toEqual({ ...doc, sdk });
+    const send = vi.fn(async (_request: Record<string, unknown>) => doc);
+    await cache.open(owner, 'host', input, send, () => {});
+    expect(send.mock.calls[0][0].sdkCacheHashes).not.toContain(offered[0]);
+  });
+});
+
+it('starts with an empty SDK declaration after process-local cache replacement', async () => {
+  const hash = (text: string) => createHash('sha256').update(text).digest('hex');
+  const doc = { viewId: 'one', html: '<p>App', csp: '', prefersBorder: true, sdk: { source: 'sdk' } };
+  const owner = {};
+  const input = { op: 'open', clientId: 'card' };
+  await new McpAppSdkCache(hash).open(owner, 'host', input, async () => doc, () => {});
+  const restarted = new McpAppSdkCache(hash);
+  const send = vi.fn(async (_request: Record<string, unknown>) => doc);
+  await expect(restarted.open(owner, 'host', input, send, () => {})).resolves.toEqual(doc);
+  expect(send).toHaveBeenCalledExactlyOnceWith({ ...input, sdkCacheHashes: [] });
 });
