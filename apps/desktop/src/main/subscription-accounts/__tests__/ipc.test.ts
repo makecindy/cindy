@@ -23,7 +23,9 @@ const h = vi.hoisted(() => ({
   ownComputers: false,
   remoteModels: null as string[] | null,
   placement: {} as Record<string, string>,
+  created: {} as Record<string, import('../placement.js').CreatedSubscriptionProvider>,
   placementUnreadable: false,
+  poolUnreadable: false,
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -52,15 +54,17 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
     ? {
         invalidateIfChanged: () => {},
         isUnreadable: () => h.placementUnreadable,
-        read: () => ({ accounts: h.placement }),
-        updateAtomic: async (edit: (input: { value: { accounts: Record<string, string> } }) => { accounts: Record<string, string> }) => {
+        read: () => ({ accounts: h.placement, providers: h.created, strategies: {} }),
+        updateAtomic: async (edit: (input: { value: { accounts: typeof h.placement; providers: typeof h.created; strategies: Record<string, never> } }) => { accounts?: typeof h.placement; providers?: typeof h.created }) => {
           h.beforeWrite?.();
-          h.placement = edit({ value: { accounts: h.placement } }).accounts;
+          const next = edit({ value: { accounts: h.placement, providers: h.created, strategies: {} } });
+          if (next.accounts) h.placement = next.accounts;
+          if (next.providers) h.created = next.providers;
         },
       }
     : {
         invalidateIfChanged: () => {},
-        isUnreadable: () => false,
+        isUnreadable: () => h.poolUnreadable,
         read: () => ({ bindings: h.bindings, pools: h.pools }),
         updateAtomic: async (edit: (input: { value: { pools: typeof h.pools; bindings: typeof h.bindings } }) => { pools?: typeof h.pools; bindings?: typeof h.bindings }) => {
           h.beforeWrite?.();
@@ -109,6 +113,7 @@ import {
   readMergedLegacyCodexAccountId,
   readOpenAiMergedLegacyAccountsIfReadable,
   restoreAutoMergedLegacyCodexAccounts,
+  restoreUnplacedSubscriptionAccounts,
 } from '../placement.js';
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
@@ -135,7 +140,9 @@ beforeEach(() => {
   h.ownComputers = false;
   h.remoteModels = null;
   h.placement = {};
+  h.created = {};
   h.placementUnreadable = false;
+  h.poolUnreadable = false;
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
   h.availability.mockReset().mockResolvedValue(true);
   h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
@@ -314,6 +321,79 @@ describe('legacy Codex account upgrade', () => {
     } })).toEqual({ accounts: { [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {} });
   });
 });
+describe('old automatically pooled account restoration', () => {
+  const account = (id: string) => ({ id, paused: false, limit: 4, weight: 1 });
+  const pooledId = () => `cindy-${accountOwnerPrefix()}-12345678-1234-1234-1234-123456789abc`;
+  const options = () => ({ prepare: vi.fn(), disable: vi.fn() });
+
+  // 2026-11-14 user correction, unit: real restoration/path/binding entries. Prior coverage only
+  // restored old independent Codex connections, leaving wizard/pool additions merged forever.
+  // Minimal input: one unplaced non-default account; both kinds must split without moving homes,
+  // changing bindings/settings, re-enabling a disconnected pool or undoing a recorded user merge.
+  it.each(['openai', 'anthropic'] as const)('splits old %s additions while preserving explicit merges, bindings and account settings', async kind => {
+    const id = pooledId();
+    const chosen = id.replace('123456789abc', '123456789abd');
+    const legacy = id.replace('123456789abc', '123456789abe');
+    h.pools[kind] = { strategy: 'round', disconnected: true, accounts: [account('default'),
+      { ...account(id), paused: true, limit: 2, weight: 3 }, account(chosen)],
+    };
+    if (kind === 'openai') {
+      h.pools.openai!.accounts.push(account(legacy));
+      h.pools.openai!.legacyCodexAccounts = { 'openai-missing-connection': legacy };
+    }
+    h.placement[`${kind}:${chosen}`] = kind;
+    await writeAccountBindings(['task:saved', 'native:saved'], kind, id);
+    const before = JSON.stringify([h.pools, h.bindings]);
+    const directory = accountDirectory(kind, id);
+    const callbacks = options();
+
+    expect(await restoreUnplacedSubscriptionAccounts(callbacks)).toBe(true);
+    const providerId = h.placement[`${kind}:${id}`];
+    expect(providerId).toMatch(new RegExp(`^${kind}-sub-[a-f0-9]{8}$`));
+    expect(h.created[providerId]).toMatchObject({ kind, account: id });
+    expect(Object.keys(h.created)).toEqual([providerId]);
+    expect(h.placement[`${kind}:${chosen}`]).toBe(kind);
+    expect(h.placement[`${kind}:default`]).toBeUndefined();
+    expect(callbacks.prepare).toHaveBeenCalledExactlyOnceWith(kind, providerId);
+    expect(callbacks.disable).toHaveBeenCalledExactlyOnceWith(providerId);
+    expect(JSON.stringify([h.pools, h.bindings])).toBe(before);
+    expect(accountDirectory(kind, id)).toBe(directory);
+    const settled = JSON.stringify([h.placement, h.created]);
+    expect(await restoreUnplacedSubscriptionAccounts(callbacks)).toBe(false);
+    expect(JSON.stringify([h.placement, h.created])).toBe(settled);
+  });
+
+  it.each(['placement', 'pool'] as const)('leaves accounts untouched while the %s file is unreadable and retries later', async file => {
+    h.pools.openai = { strategy: 'least', accounts: [account(pooledId())] };
+    if (file === 'placement') h.placementUnreadable = true; else h.poolUnreadable = true;
+    const callbacks = options();
+    expect(await restoreUnplacedSubscriptionAccounts(callbacks)).toBe(false);
+    expect(callbacks.prepare).not.toHaveBeenCalled();
+    expect(h.placement).toEqual({});
+    h.placementUnreadable = false; h.poolUnreadable = false;
+    expect(await restoreUnplacedSubscriptionAccounts(callbacks)).toBe(true);
+  });
+
+  it.each(['owner', 'generation', 'move', 'remove', 'settings'] as const)('does not publish a stale or incomplete restoration after %s changes', async change => {
+    const id = pooledId();
+    h.pools.openai = { strategy: 'least', accounts: [account(id)] };
+    const callbacks = options();
+    let current = true;
+    h.beforeWrite = () => {
+      if (change === 'owner') h.owner = 'owner-b';
+      if (change === 'generation') current = false;
+      if (change === 'move') h.placement[`openai:${id}`] = 'openai';
+      if (change === 'remove') h.pools.openai!.accounts = [];
+    };
+    if (change === 'settings') callbacks.prepare.mockImplementation(() => { throw Error('settings unavailable'); });
+    const pending = restoreUnplacedSubscriptionAccounts({ ...callbacks, isCurrent: () => current });
+    if (change === 'move' || change === 'remove') expect(await pending).toBe(false);
+    else await expect(pending).rejects.toThrow();
+    expect(h.created).toEqual({});
+    expect(h.placement).toEqual(change === 'move' ? { [`openai:${id}`]: 'openai' } : {});
+  });
+});
+
 describe('subscription management boundary', () => {
   // #9833, unit: new optional model query keeps old caller shape and the
   // owner-only boundary. An aggregate/guest reply cannot authorize recovery.
