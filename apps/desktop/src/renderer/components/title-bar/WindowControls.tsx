@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Minus, Square, X } from 'lucide-react';
+import { Copy, Minus, Square, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
@@ -45,6 +45,42 @@ function isHostServedWebClient(): boolean {
   return Boolean((window as unknown as { __CINDY_HOST_WEB__?: boolean }).__CINDY_HOST_WEB__);
 }
 
+/**
+ * Whether this renderer's own window is currently maximized. Drives the
+ * title-bar maximize⇄restore icon; the initial state is queried on mount
+ * because window-state restore can maximize before the renderer subscribes.
+ * Auxiliary preloads / the host-web shim may not expose the bridge (and
+ * splash-phase handler registration can reject the query) — fall back to the
+ * plain maximize icon in those cases.
+ */
+function useWindowMaximized(): boolean {
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (
+      typeof api.getMaximizeState !== 'function' ||
+      typeof api.onMaximizeStateChange !== 'function'
+    ) {
+      return;
+    }
+    let subscribed = true;
+    void api
+      .getMaximizeState()
+      .then((value) => {
+        if (subscribed) setMaximized(value === true);
+      })
+      .catch(() => {});
+    const unsubscribe = api.onMaximizeStateChange((value) => setMaximized(value === true));
+    return () => {
+      subscribed = false;
+      unsubscribe();
+    };
+  }, []);
+
+  return maximized;
+}
+
 export function WindowControls({
   iconClassName = DEFAULT_ICON_CLASS,
   onMinimize,
@@ -65,6 +101,7 @@ export function WindowControls({
   const [closing, setClosing] = useState(false);
   const closingRef = useRef(false);
   const { t } = useTranslation();
+  const maximized = useWindowMaximized();
 
   useEffect(() => {
     if (
@@ -253,7 +290,8 @@ export function WindowControls({
           aria-label={t('titleBar.maximizeOrRestore')}
           data-tooltip-exempt="windows-system-control"
         >
-          <Square size={14} />
+          {/* Windows 惯例:最大化态显示「还原」双方块;点击仍走 windowMaximize 切换。 */}
+          {maximized ? <Copy size={14} /> : <Square size={14} />}
         </button>
         {closing ? (
           <span

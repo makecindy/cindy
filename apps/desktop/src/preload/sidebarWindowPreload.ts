@@ -105,6 +105,8 @@ const appearanceSnapshot = createAppearanceSnapshotBridge({ wallpaperAssets: tru
 
 const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => void) =>
   onPayload('fullscreen-change', cb);
+const fanOutMaximizeStateChange = (cb: (maximized: boolean) => void): (() => void) =>
+  onPayload('window-maximize-state-changed', cb);
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
@@ -119,6 +121,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   preferredSystemLocale: readPreferredSystemLocale(),
   windowMinimize: (): void => ipcRenderer.send('window-minimize'),
   windowMaximize: (): void => ipcRenderer.send('window-maximize'),
+  getMaximizeState: (): Promise<boolean> => ipcRenderer.invoke('get-maximize-state'),
+  onMaximizeStateChange: fanOutMaximizeStateChange,
   windowClose: (): void => ipcRenderer.send('window-close'),
   logToMain: (
     level: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal',

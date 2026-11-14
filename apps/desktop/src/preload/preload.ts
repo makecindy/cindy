@@ -659,6 +659,7 @@ const fanOutAuthSessionExpired = createIpcFanOut('auth:session-expired');
 // 使用统计(TapDB)的同意状态 / 开关变化;renderer 据此即时 init 或 opt-out
 const fanOutAnalyticsSettingsChange = createIpcFanOut(ANALYTICS_SETTINGS_CHANGE_CHANNEL);
 const fanOutFullscreenChange = createIpcFanOut('fullscreen-change');
+const fanOutMaximizeStateChange = createIpcFanOut('window-maximize-state-changed');
 // 窗口是否对用户不可见(最小化 / hide)。装饰动画闸门用它兜底 —— backgroundThrottling
 // 关闭时 Renderer 的 document.visibilityState 会一直停在 visible,见 main 侧注释。
 const fanOutWindowHiddenChange = createIpcFanOut('window-hidden-change');
@@ -1310,6 +1311,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   windowMinimize: () => ipcRenderer.send('window-minimize'),
   windowMaximize: () => ipcRenderer.send('window-maximize'),
+  // 标题栏最大化/还原图标状态:挂载时查询 + 窗口级推送(main/windowMaximizeState.ts)。
+  getMaximizeState: (): Promise<boolean> => ipcRenderer.invoke('get-maximize-state'),
+  onMaximizeStateChange: fanOutMaximizeStateChange,
   windowExitFullscreen: () => ipcRenderer.send('window-exit-fullscreen'),
   windowClose: () => ipcRenderer.send('window-close'),
   /**

@@ -18,6 +18,7 @@ import path from 'node:path';
 
 import { createLogger } from '../logger.js';
 import { installWindowFullscreenStateBroadcast } from '../mainWindowFullscreenStartup.js';
+import { installWindowMaximizeStateBroadcast } from '../windowMaximizeState.js';
 import { installWindowHiddenBroadcast } from '../windowHiddenBroadcast.js';
 import { markAppContentWindow } from '../windowFocusClassifier.js';
 import { installExternalLinkGuards } from '../secondary-windows.js';
@@ -77,6 +78,7 @@ export function createResourceUsageWindow(parent?: BrowserWindow, surface?: {
   installWindowFullscreenStateBroadcast(win, {
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
   });
+  installWindowMaximizeStateBroadcast(win);
   installWindowHiddenBroadcast(win);
   (surface?.register ?? markResourceUsageWebContentsId)(win.webContents.id);
   markAppContentWindow(win);

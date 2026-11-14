@@ -148,6 +148,7 @@ import {
   manageWindowStatePreservingNormalBounds,
   planWindowRestore,
 } from './mainWindowWorkAreaBounds';
+import { installWindowMaximizeStateBroadcast } from './windowMaximizeState';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
@@ -4744,6 +4745,7 @@ const createWindow = () => {
     // animation start so traffic-light padding returns before the end event.
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
   });
+  installWindowMaximizeStateBroadcast(mainWindow);
 
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
@@ -6230,6 +6232,13 @@ const registerIpcHandlers = () => {
     } else {
       win.maximize();
     }
+  });
+  // Maximize state query — the renderer calls this on mount so the title-bar
+  // maximize button can show the restore affordance when the window starts
+  // maximized (window-state restore) or misses an early state push.
+  ipcMain.handle('get-maximize-state', (event): boolean => {
+    assertTrustedAppRendererEvent(event);
+    return Boolean(BrowserWindow.fromWebContents(event.sender)?.isMaximized());
   });
   // Exit-only fallback for macOS native fullscreen. Resolve the target from
   // the trusted sender so a secondary window can never manipulate the main window.
