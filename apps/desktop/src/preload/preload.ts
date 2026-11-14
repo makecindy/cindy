@@ -2773,6 +2773,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       id: string;
     }): Promise<import('../shared/botImConnection').BotImConnectionRemoveResult> =>
       ipcRenderer.invoke('botImConnection:remove', payload),
+    approveOwnerPairing: (
+      payload: import('../shared/botImConnection').BotImOwnerPairingApproveInput,
+    ): Promise<import('../shared/botImConnection').BotImConnectionListPayload> =>
+      ipcRenderer.invoke('botImConnection:approve-owner-pairing', payload),
+    dismissOwnerPairing: (
+      payload: import('../shared/botImConnection').BotImOwnerPairingDismissInput,
+    ): Promise<import('../shared/botImConnection').BotImConnectionListPayload> =>
+      ipcRenderer.invoke('botImConnection:dismiss-owner-pairing', payload),
     listGroups: (payload: {
       id: string;
     }): Promise<import('../shared/botImConnection').BotImConnectionGroupsPayload> =>

@@ -87,6 +87,26 @@ export function removeBotImConnection(api: BotImConnectionApi | null, id: string
   return api.remove({ id });
 }
 
+/** 本机 preload 才有配对确认; 远程设置目标没有, 界面提示到那台电脑上确认。 */
+export function botImConnectionOwnerPairingSupported(api: BotImConnectionApi | null = botImConnectionApi()): boolean {
+  return typeof api?.approveOwnerPairing === 'function' && typeof api.dismissOwnerPairing === 'function';
+}
+
+export function approveBotImConnectionOwnerPairing(
+  api: BotImConnectionApi | null,
+  id: string,
+  userId: string,
+  code: string,
+): Promise<BotImConnectionListPayload> {
+  if (!api?.approveOwnerPairing) return Promise.reject(new Error('botImConnection IPC unavailable'));
+  return api.approveOwnerPairing({ id, userId, code });
+}
+
+export function dismissBotImConnectionOwnerPairing(api: BotImConnectionApi | null, id: string, userId: string): Promise<BotImConnectionListPayload> {
+  if (!api?.dismissOwnerPairing) return Promise.reject(new Error('botImConnection IPC unavailable'));
+  return api.dismissOwnerPairing({ id, userId });
+}
+
 /** 旧 preload 没有群聊接口时整个「群聊」小节不显示。 */
 export function botImConnectionGroupsSupported(api: BotImConnectionApi | null = botImConnectionApi()): boolean {
   return !!api && typeof api.listGroups === 'function' && typeof api.setGroupActivation === 'function';

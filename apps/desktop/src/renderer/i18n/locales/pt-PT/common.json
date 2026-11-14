@@ -5245,7 +5245,9 @@
           "mention": "Apenas @",
           "always": "Ativo"
         }
-      }
+      },
+      "ownerPairingNotice": "🔐 Código de emparelhamento: {{code}}\nVolte ao Cindy e introduza este código na ligação do bot para passar a ser o proprietário. O código é válido durante {{minutes}} minutos.",
+      "ownerPairingBusyNotice": "⏳ Não é possível emparelhar agora. Tente novamente mais tarde."
     },
     "dingtalkBot": {
       "serviceName": "DingTalk",
@@ -12275,7 +12277,8 @@
         "offline": "Offline",
         "conflict": "Outro dispositivo está a utilizar este bot",
         "error": "Erro",
-        "idle": "Sem ligação"
+        "idle": "Sem ligação",
+        "awaitingPairing": "A aguardar emparelhamento"
       },
       "remove": "Remover",
       "removeAria": "Remover {{platform}}",
@@ -12339,8 +12342,10 @@
           "tokenLabel": "Token do bot",
           "tokenPlaceholder": "Cole o token de @BotFather",
           "ownerLabel": "O seu ID de utilizador do Telegram",
+          "ownerOptionalLabel": "O seu ID de utilizador do Telegram (opcional)",
           "ownerPlaceholder": "ID numérico (pergunte a @userinfobot)",
-          "ownerHint": "As mensagens deste ID são executadas com as permissões próprias de {{name}}. Todas as outras pessoas são tratadas como convidados."
+          "ownerHint": "As mensagens deste ID são executadas com as permissões próprias de {{name}}. Todas as outras pessoas são tratadas como convidados.",
+          "ownerOptionalHint": "Deixe vazio para emparelhar em vez disso: depois de guardar, envie uma mensagem a este bot a partir da sua própria conta do Telegram. Para o introduzir diretamente, use o seu ID numérico; envie uma mensagem a @userinfobot no Telegram para o obter. As mensagens deste ID são executadas com as permissões próprias de {{name}}; todas as outras pessoas são tratadas como convidados."
         },
         "feishu": {
           "serviceLabel": "Serviço",
@@ -12393,7 +12398,8 @@
           "botUnavailable": "{{name}} está indisponível neste momento. Tente novamente quando regressar.",
           "connectFailed": "Não foi possível ligar: {{reason}}",
           "failed": "Não foi possível concluir. Tente novamente mais tarde.",
-          "personalBotGone": "Este bot já não está configurado em Definições → Bots de mensagens instantâneas. Introduza as credenciais."
+          "personalBotGone": "Este bot já não está configurado em Definições → Bots de mensagens instantâneas. Introduza as credenciais.",
+          "ownerIsHandle": "Introduza o seu ID de utilizador numérico, não um @nome de utilizador. Envie uma mensagem a @userinfobot no Telegram para o obter, ou deixe vazio e emparelhe enviando uma mensagem ao bot depois de guardar."
         },
         "source": {
           "label": "Como ligar",
@@ -12438,6 +12444,33 @@
         "unbound": "Permitir que {{name}} trate das suas perguntas ao bot oficial @askmycindy.",
         "managed": "Um amigo trata das perguntas do X. Altere a atribuição nas definições de plataformas de mensagens desse amigo.",
         "riskBody": "As perguntas do X usam a memória partilhada, as ferramentas e o espaço de trabalho do amigo, e as respostas são públicas. Não use o X para informações privadas. O tópico do X não usa diretamente o seu histórico de conversas privadas."
+      },
+      "pairing": {
+        "thisBot": "este bot",
+        "hint": "Envie uma mensagem (ou /start) a {{bot}} a partir da sua própria conta do Telegram. Ele responde com um código de emparelhamento; introduza esse código aqui para passar a ser o proprietário de {{name}}.",
+        "listLabel": "Pedidos de emparelhamento",
+        "request": "{{who}} quer ser o proprietário",
+        "userIdLine": "ID do Telegram {{userId}}",
+        "codeLabel": "Código de emparelhamento do Telegram",
+        "codePlaceholder": "Código de 6 caracteres",
+        "approve": "Confirmar",
+        "approveAria": "Confirmar {{who}} como proprietário",
+        "dismiss": "Ignorar",
+        "dismissAria": "Ignorar o pedido de {{who}}",
+        "confirmOnHost": "Confirme o emparelhamento em {{device}}.",
+        "confirmOnHostUnnamed": "Confirme o emparelhamento no computador onde este amigo é executado.",
+        "confirm": {
+          "title": "Tornar {{who}} o proprietário?",
+          "description": "Confirme apenas se acabou de enviar uma mensagem ao bot a partir da sua própria conta do Telegram. Depois disso, as mensagens do ID do Telegram {{userId}} serão executadas com as permissões próprias de {{name}}, incluindo neste computador.",
+          "confirm": "Confirmar",
+          "cancel": "Cancelar"
+        },
+        "errors": {
+          "locked": "Demasiados códigos errados. Tente novamente daqui a {{minutes}} minutos.",
+          "invalid": "O código não corresponde. Verifique o código que o bot enviou no Telegram.",
+          "expired": "Este pedido expirou. Envie outra mensagem ao bot para obter um código novo.",
+          "failed": "Não foi possível concluir. Tente novamente mais tarde."
+        }
       }
     },
     "voiceMode": {

@@ -5146,7 +5146,9 @@
           "mention": "@ のみ",
           "always": "アクティブ"
         }
-      }
+      },
+      "ownerPairingNotice": "🔐 ペアリングコード：{{code}}\nCindy に戻り、このボットの接続にこのコードを入力すると、あなたがオーナーになります。コードの有効期限は {{minutes}} 分です。",
+      "ownerPairingBusyNotice": "⏳ 現在ペアリングできません。しばらくしてからもう一度お試しください。"
     },
     "dingtalkBot": {
       "serviceName": "DingTalk",
@@ -12131,7 +12133,8 @@
         "offline": "オフライン",
         "conflict": "別のデバイスがこのボットを使用中",
         "error": "エラー",
-        "idle": "未接続"
+        "idle": "未接続",
+        "awaitingPairing": "ペアリング待ち"
       },
       "remove": "削除",
       "removeAria": "{{platform}} を削除",
@@ -12193,8 +12196,10 @@
           "tokenLabel": "Bot Token",
           "tokenPlaceholder": "@BotFather が発行した Token を貼り付け",
           "ownerLabel": "あなたの Telegram ユーザー ID",
+          "ownerOptionalLabel": "あなたの Telegram ユーザー ID（任意）",
           "ownerPlaceholder": "数字のみの ID（@userinfobot で確認）",
-          "ownerHint": "この ID からのメッセージは {{name}} 自身の権限で実行されます。それ以外の人はゲストとして扱われます。"
+          "ownerHint": "この ID からのメッセージは {{name}} 自身の権限で実行されます。それ以外の人はゲストとして扱われます。",
+          "ownerOptionalHint": "空欄のままでも保存できます。保存後、ご自身の Telegram アカウントからこのボットにメッセージを送るとペアリングできます。直接入力する場合は数字の ID が必要です。Telegram で @userinfobot にメッセージを送ると確認できます。この ID からのメッセージは {{name}} 自身の権限で実行され、それ以外の人はゲストとして扱われます。"
         },
         "feishu": {
           "serviceLabel": "サービス",
@@ -12247,7 +12252,8 @@
           "botUnavailable": "{{name}} は現在利用できません。復帰後にもう一度お試しください。",
           "connectFailed": "接続できませんでした：{{reason}}",
           "failed": "完了できませんでした。しばらくしてからもう一度お試しください。",
-          "personalBotGone": "設定 → IM ボット にこのボットはもうありません。認証情報を入力してください。"
+          "personalBotGone": "設定 → IM ボット にこのボットはもうありません。認証情報を入力してください。",
+          "ownerIsHandle": "@ユーザー名ではなく数字の ID を入力してください。Telegram で @userinfobot にメッセージを送ると確認できます。空欄のまま保存し、ボットにメッセージを送ってペアリングすることもできます。"
         },
         "source": {
           "label": "接続方法",
@@ -12292,6 +12298,33 @@
         "unbound": "公式 @askmycindy への質問を {{name}} に任せられます。",
         "managed": "X の質問は仲間が担当しています。その仲間のメッセージプラットフォーム設定で変更できます。",
         "riskBody": "X の質問には仲間の共有メモリ、ツール、作業フォルダーを使用し、返信は公開されます。個人情報を扱う用途には使用しないでください。プライベートチャットの履歴は直接使用しません。"
+      },
+      "pairing": {
+        "thisBot": "このボット",
+        "hint": "ご自身の Telegram アカウントから {{bot}} にメッセージ（または /start）を送ってください。ペアリングコードが返信されるので、そのコードをここに入力すると {{name}} のオーナーになります。",
+        "listLabel": "ペアリングのリクエスト",
+        "request": "{{who}} がオーナーになることをリクエストしています",
+        "userIdLine": "Telegram ID {{userId}}",
+        "codeLabel": "Telegram で受け取ったペアリングコード",
+        "codePlaceholder": "6 文字のコード",
+        "approve": "承認",
+        "approveAria": "{{who}} をオーナーとして承認",
+        "dismiss": "無視",
+        "dismissAria": "{{who}} のリクエストを無視",
+        "confirmOnHost": "{{device}} でペアリングを承認してください。",
+        "confirmOnHostUnnamed": "この仲間が動いているコンピュータでペアリングを承認してください。",
+        "confirm": {
+          "title": "{{who}} をオーナーにしますか？",
+          "description": "ご自身の Telegram アカウントからボットにメッセージを送った直後の場合のみ承認してください。承認すると、Telegram ID {{userId}} からのメッセージは {{name}} 自身の権限で実行され、このコンピュータ上の操作も含まれます。",
+          "confirm": "承認",
+          "cancel": "キャンセル"
+        },
+        "errors": {
+          "locked": "コードの誤りが多すぎます。{{minutes}} 分後にもう一度お試しください。",
+          "invalid": "コードが一致しません。ボットが Telegram で送ったコードを確認してください。",
+          "expired": "このリクエストは期限切れです。ボットにもう一度メッセージを送って新しいコードを受け取ってください。",
+          "failed": "完了できませんでした。しばらくしてからもう一度お試しください。"
+        }
       }
     },
     "voiceMode": {

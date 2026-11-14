@@ -5245,7 +5245,9 @@
           "mention": "Solo @",
           "always": "Activo"
         }
-      }
+      },
+      "ownerPairingNotice": "🔐 Código de vinculación: {{code}}\nVuelve a Cindy y escribe este código en la conexión del bot para convertirte en su propietario. El código es válido durante {{minutes}} minutos.",
+      "ownerPairingBusyNotice": "⏳ Ahora no se puede vincular. Vuelve a intentarlo más tarde."
     },
     "dingtalkBot": {
       "serviceName": "DingTalk",
@@ -12275,7 +12277,8 @@
         "offline": "Sin conexión",
         "conflict": "Otro dispositivo está usando este bot",
         "error": "Error",
-        "idle": "No conectado"
+        "idle": "No conectado",
+        "awaitingPairing": "Esperando vinculación"
       },
       "remove": "Quitar",
       "removeAria": "Quitar {{platform}}",
@@ -12339,8 +12342,10 @@
           "tokenLabel": "Token del bot",
           "tokenPlaceholder": "Pega el token de @BotFather",
           "ownerLabel": "Tu ID de usuario de Telegram",
+          "ownerOptionalLabel": "Tu ID de usuario de Telegram (opcional)",
           "ownerPlaceholder": "ID numérico (pregúntale a @userinfobot)",
-          "ownerHint": "Los mensajes de este ID se procesan con los permisos propios de {{name}}. Todos los demás se tratan como invitados."
+          "ownerHint": "Los mensajes de este ID se procesan con los permisos propios de {{name}}. Todos los demás se tratan como invitados.",
+          "ownerOptionalHint": "Déjalo vacío para vincular en su lugar: después de guardar, envía un mensaje a este bot desde tu propia cuenta de Telegram. Para escribirlo directamente, usa tu ID numérico; envía un mensaje a @userinfobot en Telegram para obtenerlo. Los mensajes de este ID se procesan con los permisos propios de {{name}}; todos los demás se tratan como invitados."
         },
         "feishu": {
           "serviceLabel": "Servicio",
@@ -12393,7 +12398,8 @@
           "botUnavailable": "{{name}} no está disponible en este momento. Inténtalo cuando vuelva.",
           "connectFailed": "No se pudo conectar: {{reason}}",
           "failed": "No se pudo terminar. Inténtalo más tarde.",
-          "personalBotGone": "Este bot ya no está configurado en Configuración → Bots de mensajería instantánea. Ingresa sus credenciales."
+          "personalBotGone": "Este bot ya no está configurado en Configuración → Bots de mensajería instantánea. Ingresa sus credenciales.",
+          "ownerIsHandle": "Escribe tu ID de usuario numérico, no un @nombre de usuario. Envía un mensaje a @userinfobot en Telegram para obtenerlo, o déjalo vacío y vincula enviando un mensaje al bot después de guardar."
         },
         "source": {
           "label": "Cómo conectar",
@@ -12438,6 +12444,33 @@
         "unbound": "Deja que {{name}} atienda tus preguntas al bot oficial @askmycindy.",
         "managed": "Un amigo atiende las preguntas de X. Cambia la asignación en la configuración de plataformas de mensajes de ese amigo.",
         "riskBody": "Las preguntas de X usan la memoria compartida, las herramientas y el espacio de trabajo del amigo, y las respuestas son públicas. No uses X para información privada. El hilo de X no usa directamente tu historial de chat privado."
+      },
+      "pairing": {
+        "thisBot": "este bot",
+        "hint": "Envía un mensaje (o /start) a {{bot}} desde tu propia cuenta de Telegram. Te responderá con un código de vinculación; escríbelo aquí para convertirte en el propietario de {{name}}.",
+        "listLabel": "Solicitudes de vinculación",
+        "request": "{{who}} quiere ser el propietario",
+        "userIdLine": "ID de Telegram {{userId}}",
+        "codeLabel": "Código de vinculación de Telegram",
+        "codePlaceholder": "Código de 6 caracteres",
+        "approve": "Confirmar",
+        "approveAria": "Confirmar a {{who}} como propietario",
+        "dismiss": "Ignorar",
+        "dismissAria": "Ignorar la solicitud de {{who}}",
+        "confirmOnHost": "Confirma la vinculación en {{device}}.",
+        "confirmOnHostUnnamed": "Confirma la vinculación en el ordenador donde se ejecuta este amigo.",
+        "confirm": {
+          "title": "¿Hacer a {{who}} propietario?",
+          "description": "Confirma solo si acabas de enviar un mensaje al bot desde tu propia cuenta de Telegram. Después, los mensajes del ID de Telegram {{userId}} se procesarán con los permisos propios de {{name}}, también en este ordenador.",
+          "confirm": "Confirmar",
+          "cancel": "Cancelar"
+        },
+        "errors": {
+          "locked": "Demasiados códigos incorrectos. Vuelve a intentarlo en {{minutes}} minutos.",
+          "invalid": "El código no coincide. Revisa el código que te envió el bot en Telegram.",
+          "expired": "Esta solicitud ha caducado. Envía otro mensaje al bot para obtener un código nuevo.",
+          "failed": "No se pudo completar. Inténtalo de nuevo más tarde."
+        }
       }
     },
     "voiceMode": {

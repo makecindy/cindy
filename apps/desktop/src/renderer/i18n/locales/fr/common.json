@@ -5245,7 +5245,9 @@
           "mention": "@ uniquement",
           "always": "Actif"
         }
-      }
+      },
+      "ownerPairingNotice": "🔐 Code d’appairage : {{code}}\nRevenez dans Cindy et saisissez ce code sur la connexion du bot pour en devenir le propriétaire. Le code est valable {{minutes}} minutes.",
+      "ownerPairingBusyNotice": "⏳ L’appairage n’est pas possible pour le moment. Réessayez plus tard."
     },
     "dingtalkBot": {
       "serviceName": "DingTalk",
@@ -12275,7 +12277,8 @@
         "offline": "Hors ligne",
         "conflict": "Un autre appareil utilise ce bot",
         "error": "Erreur",
-        "idle": "Non connecté"
+        "idle": "Non connecté",
+        "awaitingPairing": "En attente d’appairage"
       },
       "remove": "Retirer",
       "removeAria": "Retirer {{platform}}",
@@ -12339,8 +12342,10 @@
           "tokenLabel": "Jeton du bot",
           "tokenPlaceholder": "Collez le jeton fourni par @BotFather",
           "ownerLabel": "Votre ID d'utilisateur Telegram",
+          "ownerOptionalLabel": "Votre ID d'utilisateur Telegram (facultatif)",
           "ownerPlaceholder": "ID numérique (demandez à @userinfobot)",
-          "ownerHint": "Les messages provenant de cet ID s'exécutent avec les autorisations propres à {{name}}. Toutes les autres personnes sont traitées comme des invités."
+          "ownerHint": "Les messages provenant de cet ID s'exécutent avec les autorisations propres à {{name}}. Toutes les autres personnes sont traitées comme des invités.",
+          "ownerOptionalHint": "Laissez vide pour appairer à la place : après l’enregistrement, envoyez un message à ce bot depuis votre propre compte Telegram. Pour le saisir directement, utilisez votre ID numérique ; envoyez un message à @userinfobot sur Telegram pour l’obtenir. Les messages provenant de cet ID s'exécutent avec les autorisations propres à {{name}} ; toutes les autres personnes sont traitées comme des invités."
         },
         "feishu": {
           "serviceLabel": "Service",
@@ -12393,7 +12398,8 @@
           "botUnavailable": "{{name}} n'est pas disponible pour le moment. Réessayez lorsqu'il sera de retour.",
           "connectFailed": "Connexion impossible : {{reason}}",
           "failed": "Impossible de terminer. Réessayez plus tard.",
-          "personalBotGone": "Ce bot n'est plus configuré dans Paramètres → Bots de messagerie. Saisissez plutôt ses identifiants."
+          "personalBotGone": "Ce bot n'est plus configuré dans Paramètres → Bots de messagerie. Saisissez plutôt ses identifiants.",
+          "ownerIsHandle": "Saisissez votre ID d’utilisateur numérique, pas un @nom d’utilisateur. Envoyez un message à @userinfobot sur Telegram pour l’obtenir, ou laissez vide et appairez en écrivant au bot après l’enregistrement."
         },
         "source": {
           "label": "Mode de connexion",
@@ -12438,6 +12444,33 @@
         "unbound": "Laissez {{name}} traiter vos questions adressées au bot officiel @askmycindy.",
         "managed": "Un ami traite les questions X. Modifiez l'attribution dans les paramètres de plateforme de messagerie de cet ami.",
         "riskBody": "Les questions X utilisent la mémoire partagée, les outils et l'espace de travail de l’ami, et les réponses sont publiques. N'utilisez pas X pour des informations privées. Le fil X n'utilise pas directement votre historique de conversation privé."
+      },
+      "pairing": {
+        "thisBot": "ce bot",
+        "hint": "Envoyez un message (ou /start) à {{bot}} depuis votre propre compte Telegram. Il répondra avec un code d’appairage ; saisissez ce code ici pour devenir le propriétaire de {{name}}.",
+        "listLabel": "Demandes d’appairage",
+        "request": "{{who}} souhaite devenir le propriétaire",
+        "userIdLine": "ID Telegram {{userId}}",
+        "codeLabel": "Code d’appairage reçu sur Telegram",
+        "codePlaceholder": "Code à 6 caractères",
+        "approve": "Confirmer",
+        "approveAria": "Confirmer {{who}} comme propriétaire",
+        "dismiss": "Ignorer",
+        "dismissAria": "Ignorer la demande de {{who}}",
+        "confirmOnHost": "Confirmez l’appairage sur {{device}}.",
+        "confirmOnHostUnnamed": "Confirmez l’appairage sur l’ordinateur où s’exécute cet ami.",
+        "confirm": {
+          "title": "Faire de {{who}} le propriétaire ?",
+          "description": "Ne confirmez que si vous venez d’écrire au bot depuis votre propre compte Telegram. Ensuite, les messages de l’ID Telegram {{userId}} s’exécuteront avec les autorisations propres à {{name}}, y compris sur cet ordinateur.",
+          "confirm": "Confirmer",
+          "cancel": "Annuler"
+        },
+        "errors": {
+          "locked": "Trop de codes incorrects. Réessayez dans {{minutes}} minutes.",
+          "invalid": "Ce code ne correspond pas. Vérifiez le code envoyé par le bot sur Telegram.",
+          "expired": "Cette demande a expiré. Envoyez un autre message au bot pour obtenir un nouveau code.",
+          "failed": "Impossible de terminer. Réessayez plus tard."
+        }
       }
     },
     "voiceMode": {

@@ -2524,6 +2524,18 @@ interface ElectronAPI {
     remove: (payload: {
       id: string;
     }) => Promise<import('../shared/botImConnection').BotImConnectionRemoveResult>;
+    /**
+     * 本机确认 Telegram 主人配对(只有本机 preload 提供; 远程设置目标没有)。码不对 / 过期 →
+     * PRECONDITION_FAILED(OWNER_PAIRING_INVALID); 输错太多次 → OWNER_PAIRING_LOCKED;
+     * 已有主人 → OWNER_ALREADY_PAIRED。
+     */
+    approveOwnerPairing?: (
+      payload: import('../shared/botImConnection').BotImOwnerPairingApproveInput,
+    ) => Promise<import('../shared/botImConnection').BotImConnectionListPayload>;
+    /** 忽略一条配对请求(对方一段时间内不再拿到新码)。 */
+    dismissOwnerPairing?: (
+      payload: import('../shared/botImConnection').BotImOwnerPairingDismissInput,
+    ) => Promise<import('../shared/botImConnection').BotImConnectionListPayload>;
     /** 这条(Telegram)连接进过的群 + 每群参与模式; 渠道没有群参与模式时 groups 为空。 */
     listGroups: (payload: {
       id: string;

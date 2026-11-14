@@ -5189,7 +5189,9 @@
           "mention": "@ only",
           "always": "Active"
         }
-      }
+      },
+      "ownerPairingNotice": "🔐 Pairing code: {{code}}\nGo back to Cindy and enter this code on the bot's connection to become its owner. The code is valid for {{minutes}} minutes.",
+      "ownerPairingBusyNotice": "⏳ Pairing isn’t available right now. Try again later."
     },
     "dingtalkBot": {
       "serviceName": "DingTalk",
@@ -12167,7 +12169,8 @@
         "offline": "Offline",
         "conflict": "Another device is using this bot",
         "error": "Error",
-        "idle": "Not connected"
+        "idle": "Not connected",
+        "awaitingPairing": "Waiting for pairing"
       },
       "remove": "Remove",
       "removeAria": "Remove {{platform}}",
@@ -12230,8 +12233,10 @@
           "tokenLabel": "Bot token",
           "tokenPlaceholder": "Paste the token from @BotFather",
           "ownerLabel": "Your Telegram user ID",
+          "ownerOptionalLabel": "Your Telegram user ID (optional)",
           "ownerPlaceholder": "Numeric ID (ask @userinfobot)",
-          "ownerHint": "Messages from this ID run with {{name}}’s own permissions. Everyone else is treated as a guest."
+          "ownerHint": "Messages from this ID run with {{name}}’s own permissions. Everyone else is treated as a guest.",
+          "ownerOptionalHint": "Leave it empty to pair instead: after saving, send this bot a message from your own Telegram account. To enter it directly, use your numeric ID — message @userinfobot on Telegram to get it. Messages from this ID run with {{name}}’s own permissions; everyone else is treated as a guest."
         },
         "feishu": {
           "serviceLabel": "Service",
@@ -12284,7 +12289,8 @@
           "botUnavailable": "{{name}} is unavailable right now. Try again once it’s back.",
           "connectFailed": "Couldn’t connect: {{reason}}",
           "failed": "Couldn’t finish. Try again later.",
-          "personalBotGone": "This bot is no longer set up in Settings → IM bots. Enter its credentials instead."
+          "personalBotGone": "This bot is no longer set up in Settings → IM bots. Enter its credentials instead.",
+          "ownerIsHandle": "Enter your numeric user ID, not an @username. Message @userinfobot on Telegram to get it, or leave this empty and pair by messaging the bot after saving."
         },
         "source": {
           "label": "How to connect",
@@ -12329,6 +12335,33 @@
         "unbound": "Let {{name}} handle your questions to the official @askmycindy bot.",
         "managed": "A buddy handles X questions. Change the assignment in that buddy’s message platform settings.",
         "riskBody": "X questions use the buddy’s shared memory, tools and workspace, and replies are public. Do not use X for private information. The X thread does not directly use your private chat history."
+      },
+      "pairing": {
+        "thisBot": "this bot",
+        "hint": "Send {{bot}} a message (or /start) from your own Telegram account. It will reply with a pairing code; enter that code here to become {{name}}’s owner.",
+        "listLabel": "Pairing requests",
+        "request": "{{who}} wants to become the owner",
+        "userIdLine": "Telegram ID {{userId}}",
+        "codeLabel": "Pairing code from Telegram",
+        "codePlaceholder": "6-character code",
+        "approve": "Confirm code",
+        "approveAria": "Confirm {{who}} as the owner",
+        "dismiss": "Ignore",
+        "dismissAria": "Ignore the request from {{who}}",
+        "confirmOnHost": "Confirm pairing on {{device}}.",
+        "confirmOnHostUnnamed": "Confirm pairing on the computer this buddy runs on.",
+        "confirm": {
+          "title": "Make {{who}} the owner?",
+          "description": "Only confirm if you just messaged the bot from your own Telegram account. After this, messages from Telegram ID {{userId}} run with {{name}}’s own permissions, including on this computer.",
+          "confirm": "Make owner",
+          "cancel": "Cancel"
+        },
+        "errors": {
+          "locked": "Too many wrong codes. Try again in {{minutes}} minutes.",
+          "invalid": "That code doesn’t match. Check the code the bot sent in Telegram.",
+          "expired": "This request has expired. Send the bot another message to get a new code.",
+          "failed": "Couldn’t finish. Try again later."
+        }
       },
       "edit": {
         "button": "Edit",
