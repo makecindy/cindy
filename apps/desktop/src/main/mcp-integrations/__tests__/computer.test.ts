@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { app, powerMonitor } from 'electron';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { AwayGuardController } from '../../remote-desktop/awayGuard';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { COMPUTER_TOOLS } from '@cindy/mcps/computer';
 import { readForRecovery } from '../../../../../../packages/lizi-mcps/src/computer/recovery';
@@ -138,6 +139,7 @@ import {
   pickLatestCuaDriverVersion,
   resetComputerDriverPermissionProbeCacheForTests,
   resetAtMentionWindowCacheForTests,
+  msSinceForeignDesktopInput,
   resetDesktopInputGuardStateForTests,
   seedDesktopScreenLocked,
   setPhysicalInputShielded,
@@ -4617,7 +4619,11 @@ describe('foreground input while the person is using this computer', () => {
   beforeEach(async () => {
     await cleanupAllComputerDriverSessions();
     resetDesktopInputGuardStateForTests();
+    // This group must also run alone, without mocks initialized by earlier tests.
     mcpConnectMock.mockReset().mockResolvedValue(undefined);
+    mcpCloseMock.mockReset().mockResolvedValue(undefined);
+    transportCloseMock.mockReset().mockResolvedValue(undefined);
+    resolveDesktopOutboundProxyMock.mockReset().mockResolvedValue(null);
     mcpListToolsMock.mockReset().mockResolvedValue({ tools: COMPUTER_TOOLS.map(({ name }) => ({
       name, inputSchema: { type: 'object', additionalProperties: true },
     })) });
@@ -4632,6 +4638,10 @@ describe('foreground input while the person is using this computer', () => {
     await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
       .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
     expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(0);
+    await expect(callComputerDriverTool('set_value', {
+      ...target, element_index: 0, value: 'hi', delivery_mode: 'foreground',
+    }, context)).rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+    expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'set_value')).toHaveLength(0);
     await expect(callComputerDriverTool('click', {
       target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'capture-1', x: 1, y: 1, delivery_mode: 'foreground',
     }, context)).rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
@@ -4709,11 +4719,15 @@ describe('foreground input while the person is using this computer', () => {
   // the credit for the person's typing that follows it.
   it.each([
     ['set_value', { element_token: 'x:1', value: 'hi' }],
+    ['set_value', { element_token: 'x:1', value: 'hi', delivery_mode: 'foreground' }],
     ['launch_app', { name: 'Notes' }],
-  ] as const)('does not attribute later input to a %s that synthesized none', async (tool, extra) => {
+  ] as const)('does not attribute later input to a %s (%j) that synthesized none', async (tool, extra) => {
     vi.useFakeTimers();
     try {
       await callComputerDriverTool('get_window_state', target, context);
+      if (tool === 'set_value') {
+        mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: true, effect: 'confirmed', path: 'ax' } });
+      }
       await callComputerDriverTool(tool, tool === 'launch_app' ? { ...extra } : { ...target, ...extra }, context).catch(() => undefined);
       powerMonitorState.idleSeconds = 1;
       await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
@@ -4726,6 +4740,126 @@ describe('foreground input while the person is using this computer', () => {
       vi.useRealTimers();
     }
   });
+
+  // PR #10121 P1: a pending AX write was counted as active HID input, hiding
+  // real owner activity from AwayGuard. Exercise both production entry points;
+  // completed-write tests did not cover this in-flight state. Tier: unit.
+  it.each([
+    { outcome: 'AX completion', path: 'ax', mode: 'background', idleAfter: 0, coversAfter: 0 },
+    { outcome: 'keyboard completion', path: 'click_type_fg', mode: 'foreground', idleAfter: Number.POSITIVE_INFINITY, coversAfter: 1 },
+    { outcome: 'driver failure', path: undefined, mode: 'background', idleAfter: 0, coversAfter: 0 },
+  ] as const)('defers owner attribution until set_value ends: $outcome', async (input) => {
+    vi.useFakeTimers();
+    const started = createDeferred<void>();
+    const pending = createDeferred<unknown>();
+    let write: Promise<unknown> | undefined;
+    try {
+      await callComputerDriverTool('get_window_state', target, context);
+      const showMasks = vi.fn(async () => {});
+      const guard = new AwayGuardController({
+        enabled: () => true, screenLocked: () => false,
+        msSinceOwnerInput: () => msSinceForeignDesktopInput(),
+        awayAfterMs: () => 30_000,
+        keepDisplayAwake: vi.fn(), showMasks,
+        lockAndHideMasks: vi.fn(async () => {}), hideMasks: vi.fn(),
+        now: () => Date.now(), log: vi.fn(),
+      });
+      vi.advanceTimersByTime(29_000);
+      mcpCallToolMock.mockImplementation(async ({ name }) => {
+        if (name === 'set_value') {
+          started.resolve();
+          return pending.promise;
+        }
+        return { structuredContent: { ok: true, effect: 'confirmed' } };
+      });
+      write = callComputerDriverTool('set_value', {
+        ...target, element_index: 0, value: 'hi', delivery_mode: input.mode,
+      }, context);
+      await started.promise;
+      vi.advanceTimersByTime(1_001);
+      // An AX write has real owner input here; a keyboard fallback has its own
+      // HID events. The host cannot distinguish them until the result arrives.
+      powerMonitorState.idleSeconds = 0;
+      expect(msSinceForeignDesktopInput()).toBeNull();
+      await guard.tick();
+      expect(showMasks).not.toHaveBeenCalled();
+
+      if (input.path === undefined) {
+        pending.reject(new Error('AX write failed'));
+        await expect(write).rejects.toThrow('AX write failed');
+      } else {
+        pending.resolve({ structuredContent: { ok: true, path: input.path, effect: 'confirmed' } });
+        await write;
+      }
+      expect(msSinceForeignDesktopInput()).toBe(input.idleAfter);
+      await guard.tick();
+      expect(showMasks).toHaveBeenCalledTimes(input.coversAfter);
+    } finally {
+      pending.resolve({ structuredContent: { ok: true, path: input.path, effect: 'confirmed' } });
+      if (write) await write.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  // A following Agent HID action resets the idle clock before AwayGuard's next
+  // tick. The AX completion must preserve the owner's input in that interval.
+  it('keeps owner input seen at AX completion through the next Agent click', async () => {
+    vi.useFakeTimers();
+    try {
+      await callComputerDriverTool('get_window_state', target, context);
+      const showMasks = vi.fn(async () => {});
+      const guard = new AwayGuardController({
+        enabled: () => true, screenLocked: () => false,
+        msSinceOwnerInput: () => msSinceForeignDesktopInput(),
+        awayAfterMs: () => 30_000,
+        keepDisplayAwake: vi.fn(), showMasks,
+        lockAndHideMasks: vi.fn(async () => {}), hideMasks: vi.fn(),
+        now: () => Date.now(), log: vi.fn(),
+      });
+      vi.advanceTimersByTime(29_000);
+      powerMonitorState.idleSeconds = 0;
+      mcpCallToolMock.mockResolvedValueOnce({ structuredContent: { ok: true, path: 'ax', effect: 'confirmed' } });
+      await callComputerDriverTool('set_value', { ...target, element_index: 0, value: 'hi' }, context);
+      await callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'background' }, context);
+      vi.advanceTimersByTime(2_000);
+      powerMonitorState.idleSeconds = 2;
+      await guard.tick();
+      expect(showMasks).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Linux set_value can use real keyboard input. Its actual CUA path must be
+  // credited for presence detection, while foreground admission still uses
+  // the raw idle clock and AX-only writes leave user input visible.
+  it.each(['click_type_fg', 'click_select_fg', 'click_type_mpx', 'click_select_mpx'])(
+    'attributes keyboard fallback %s without masking foreground activity', async (inputPath) => {
+      vi.useFakeTimers();
+      try {
+        await callComputerDriverTool('get_window_state', target, context);
+        mcpCallToolMock.mockResolvedValueOnce({ structuredContent: {
+          ok: true, effect: 'confirmed', path: inputPath,
+        } });
+        await callComputerDriverTool('set_value', {
+          ...target, element_index: 0, value: 'hi',
+          delivery_mode: inputPath.endsWith('_fg') ? 'foreground' : 'background',
+        }, context);
+        powerMonitorState.idleSeconds = 0;
+        expect(msSinceForeignDesktopInput()).toBe(Number.POSITIVE_INFINITY);
+        await expect(callComputerDriverTool('click', {
+          ...target, x: 1, y: 1, delivery_mode: 'foreground',
+        }, context)).rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+        vi.advanceTimersByTime(10_000);
+        powerMonitorState.idleSeconds = 1;
+        await expect(callComputerDriverTool('click', {
+          ...target, x: 1, y: 1, delivery_mode: 'foreground',
+        }, context)).rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   // Review (#8227 round 8): input that follows an Agent action by more than the delivery
   // tail is a person's, however recent the action was.
