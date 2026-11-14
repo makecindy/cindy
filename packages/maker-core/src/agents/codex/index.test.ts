@@ -36521,3 +36521,51 @@ describe('Codex native manual compaction', () => {
     }
   });
 });
+
+describe('Codex idle reclamation probe', () => {
+  // Idle reclamation closes the thread runtime; work that survives the turn
+  // (native children, background terminals) must keep it, and unknown is busy.
+  async function setup(terminals: () => unknown) {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      if (method === Method.ThreadBackgroundTerminalsList) return terminals();
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'idle-probe', model: 'gpt-5.4', workingDir: '/repo' });
+    void (async () => { for await (const _ of handle.events()) { /* drain */ } })();
+    return { host, handle };
+  }
+
+  it('reports idle only when the thread has no live terminals or native children', async () => {
+    let listed: unknown = { data: [], nextCursor: null };
+    const { host, handle } = await setup(() => listed);
+    await expect(handle.hasLiveBackgroundWork!()).resolves.toBe(false);
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadBackgroundTerminalsList,
+      { threadId: handle.id, limit: 1 }, expect.objectContaining({ timeoutMs: expect.any(Number) }));
+    listed = { data: [{ itemId: 'dev-server', processId: '7' }], nextCursor: null };
+    await expect(handle.hasLiveBackgroundWork!()).resolves.toBe(true);
+    listed = {};
+    await expect(handle.hasLiveBackgroundWork!()).resolves.toBe(true);
+
+    listed = { data: [], nextCursor: null };
+    await handle.send({ type: 'user', content: 'Start a child' });
+    const h = host.getThreadHandlers()!;
+    h.turnStarted!({ threadId: handle.id, turn: { id: 'turn-1', status: 'inProgress' } });
+    h.itemStarted!({ threadId: handle.id, turnId: 'turn-1', item: {
+      type: 'collabAgentToolCall', id: 'spawn-child', tool: 'spawnAgent', status: 'inProgress',
+      senderThreadId: handle.id, receiverThreadIds: ['child-thread'], prompt: 'Keep working', agentsStates: {},
+    } });
+    h.turnCompleted!({ threadId: handle.id, turn: { id: 'turn-1', status: 'completed' } });
+    await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+    await expect(handle.hasLiveBackgroundWork!()).resolves.toBe(true);
+    await handle.close();
+    await expect(handle.hasLiveBackgroundWork!()).resolves.toBe(false);
+  });
+
+  it('surfaces a failed terminal probe so Session keeps the runtime', async () => {
+    const { handle } = await setup(() => { throw new Error('method not found'); });
+    await expect(handle.hasLiveBackgroundWork!()).rejects.toThrow('method not found');
+    await handle.close();
+  });
+});
