@@ -64,6 +64,17 @@ export interface RecoveryTerminal {
 export type HostContextRecovery = ReturnType<typeof createHostContextRecovery>;
 
 /**
+ * The terminal errors whose broadcast is held for recovery: an overflow-class terminal error of a
+ * local task, as the desktop's delivery holds them (sessionEventDelivery.ts). Desktop parity is
+ * checked by sessionEventPipeline.test.ts.
+ */
+export function holdsOverflowBroadcast(session: Pick<Session, 'remoteHostId'>, event: AgentEvent): boolean {
+  return !session.remoteHostId && event.type === 'error' && isTerminalTurnErrorEvent(event)
+    && (isContextOverflowErrorData(event.data) || isOversizedHistoryErrorData(event.data)
+      || isUnsupportedRequestOptionErrorData(event.data));
+}
+
+/**
  * The desktop's claim, defer and settle of a context recovery terminal (contextRecoveryTerminal.ts)
  * on the Host's ports. The Host has no automatic resume, remote auth retry or product-turn
  * follow-up owner, so those inputs are constant (release table, context recovery).
@@ -130,9 +141,7 @@ export function createHostContextRecovery(deps: {
      */
     claim(terminal: RecoveryTerminal): OverflowClaimResult {
       const { session, event } = terminal;
-      const holds = !session.remoteHostId && event.type === 'error' && isTerminalTurnErrorEvent(event)
-        && (isContextOverflowErrorData(event.data) || isOversizedHistoryErrorData(event.data)
-          || isUnsupportedRequestOptionErrorData(event.data));
+      const holds = holdsOverflowBroadcast(session, event);
       if (holds) held.set(session.id, { sessionId: session.id, event, fields: terminal.fields });
       const result = claimContextRecoveryTerminal(ports(terminal.history, deps.getRollover), input(terminal));
       // The Host has no product-turn follow-up to defer (release table).

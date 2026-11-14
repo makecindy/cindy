@@ -2514,7 +2514,11 @@ test('context recovery: a recovery that ends within the shutdown limit writes it
 // A real migrated profile database: the Host's message store writes the rows and the desktop's
 // error-tail query reads them, as after a restart.
 async function recoveryDatabase(t) {
-  // A fixture profile, never the shared one this process may have been started for.
+  // The development build refuses to migrate a database it takes for the official shared profile
+  // (XDT_OFFICIAL_SHARED_PROFILE=1, set when this process runs inside a Cindy task; migrate.ts).
+  // This is a fixture profile, so the flag is cleared for this test only. t.after runs whether the
+  // test passes or fails, so the flag is always restored; node:test runs this file's tests one at
+  // a time, so no other test reads the cleared value.
   const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
   delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
   t.after(() => { if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile; });
