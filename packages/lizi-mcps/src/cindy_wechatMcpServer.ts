@@ -12,6 +12,8 @@ const MAX_DISPLAY_NAME_CHARS = 180;
 type WechatMcpDeps = WechatBotMcpHostDeps & {
   getPeerId: () => Promise<string | null> | string | null;
   workingDir?: string;
+  /** Authoritative per-call directory for shared Pi/Codex bridges. */
+  getWorkingDir?: () => string | undefined;
 };
 
 /**
@@ -109,7 +111,13 @@ async function sendFileToUser(deps: WechatMcpDeps, args: Record<string, unknown>
 
   let safePath: string;
   try {
-    safePath = await resolveFileWithinWorkingDir(parsed.data.absPath, deps.workingDir);
+    const workingDir = deps.getWorkingDir ? deps.getWorkingDir() : deps.workingDir;
+    // An authoritative resolver may reject a non-local context. Do this before
+    // even probing the path: the image exception must not read an SSH path locally.
+    if (deps.getWorkingDir && workingDir === undefined) {
+      throw new WechatFilePathError('WORKING_DIR_UNAVAILABLE');
+    }
+    safePath = await resolveFileWithinWorkingDir(parsed.data.absPath, workingDir);
   } catch (error) {
     const errorCode =
       error instanceof WechatFilePathError

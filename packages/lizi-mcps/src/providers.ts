@@ -287,7 +287,11 @@ export function createLiziMcpProviders(
               (await opts.wechatBot!.getMostRecentPeerId())
             );
           },
-          workingDir: ctx.workingDir,
+          getWorkingDir: () => {
+            const current = resolveLiziMcpSessionContext(ctx);
+            // SSH paths belong to the remote host, never to this local filesystem.
+            return current.remoteHostId ? undefined : current.workingDir;
+          },
         }),
       }),
     });

@@ -533,35 +533,81 @@ describe('WeChat reliable worker transactions', () => {
     expect(readTaskStatus(db, 'task-1')).toBe('accepted_running');
   });
 
-  it('commits a pre-dispatch rejection without crossing the accepted barrier', () => {
+  // Regression: beforeProviderStart marks accepted before Pi rejects image input.
+  // Exercise the real worker transaction (db tier); the old dispatching-only CAS
+  // silently left accepted_running blocking all later messages in this session.
+  it.each(['dispatching', 'accepted_running', 'waiting_desktop'] as const)(
+    'settles a rejected send from %s exactly once and releases the session queue', (status) => {
+      const db = createDb();
+      activate(db, 'epoch-1', null);
+      commitBatch(db, {
+        bindingEpoch: 'epoch-1',
+        expectedCursor: '',
+        nextCursor: 'cursor-1',
+        messages: [message('task-1', 'platform-1', 'session-1')],
+      });
+      lease(db, 'epoch-1', 200);
+      if (status !== 'dispatching') {
+        runTx(db, 'wechatMarkAccepted', { bindingEpoch: 'epoch-1', taskId: 'task-1' });
+      }
+      if (status === 'waiting_desktop') {
+        runTx(db, 'wechatSetWaitingDesktop', { bindingEpoch: 'epoch-1', taskId: 'task-1', waiting: true });
+      }
+
+      expect(
+        runTx(db, 'wechatCommitPreDispatchFailure', {
+          bindingEpoch: 'epoch-1',
+          taskId: 'task-1',
+          now: 201,
+          errorCode: 'UNSUPPORTED_PERMISSION_MODE',
+          outbox: [
+            {
+              ...outbox('outbox-error', 'client-error', 0, '请修改权限模式。'),
+              kind: 'error',
+            },
+          ],
+        }),
+      ).toBe(true);
+      expect(readTaskStatus(db, 'task-1')).toBe('delivery_pending');
+      expect(
+        db.prepare('SELECT kind, text FROM wechat_outbox WHERE task_id = ?').get('task-1'),
+      ).toEqual({ kind: 'error', text: '请修改权限模式。' });
+      expect(runTx(db, 'wechatCommitPreDispatchFailure', {
+        bindingEpoch: 'epoch-1', taskId: 'task-1', now: 202,
+        errorCode: 'PIIMAGEINPUTUNSUPPORTEDERROR',
+        outbox: [{ ...outbox('duplicate-error', 'duplicate-client', 0, 'duplicate'), kind: 'error' }],
+      })).toBe(false);
+      expect(count(db, 'wechat_outbox')).toBe(1);
+      runTx(db, 'wechatMarkOutboxDelivered', {
+        bindingEpoch: 'epoch-1', outboxId: 'outbox-error', deliveredAt: 203,
+      });
+      expect(readTaskStatus(db, 'task-1')).toBe('completed');
+      commitBatch(db, {
+        bindingEpoch: 'epoch-1', expectedCursor: 'cursor-1', nextCursor: 'cursor-2',
+        messages: [message('task-2', 'platform-2', 'session-1')],
+      });
+      expect(lease(db, 'epoch-1', 204)).toMatchObject({ id: 'task-2' });
+    },
+  );
+
+  it('does not overwrite an interrupted task with a late send rejection', () => {
     const db = createDb();
     activate(db, 'epoch-1', null);
     commitBatch(db, {
-      bindingEpoch: 'epoch-1',
-      expectedCursor: '',
-      nextCursor: 'cursor-1',
+      bindingEpoch: 'epoch-1', expectedCursor: '', nextCursor: 'cursor-1',
       messages: [message('task-1', 'platform-1', 'session-1')],
     });
     lease(db, 'epoch-1', 200);
-
-    expect(
-      runTx(db, 'wechatCommitPreDispatchFailure', {
-        bindingEpoch: 'epoch-1',
-        taskId: 'task-1',
-        now: 201,
-        errorCode: 'UNSUPPORTED_PERMISSION_MODE',
-        outbox: [
-          {
-            ...outbox('outbox-error', 'client-error', 0, '请修改权限模式。'),
-            kind: 'error',
-          },
-        ],
-      }),
-    ).toBe(true);
-    expect(readTaskStatus(db, 'task-1')).toBe('delivery_pending');
-    expect(
-      db.prepare('SELECT kind, text FROM wechat_outbox WHERE task_id = ?').get('task-1'),
-    ).toEqual({ kind: 'error', text: '请修改权限模式。' });
+    runTx(db, 'wechatMarkAccepted', { bindingEpoch: 'epoch-1', taskId: 'task-1' });
+    runTx(db, 'wechatCommitInterrupted', {
+      bindingEpoch: 'epoch-1', taskId: 'task-1', now: 201, errorCode: 'STOPPED_BY_USER',
+    });
+    expect(runTx(db, 'wechatCommitPreDispatchFailure', {
+      bindingEpoch: 'epoch-1', taskId: 'task-1', now: 202, errorCode: 'SEND_REJECTED',
+      outbox: [{ ...outbox('late-error', 'late-client', 0, 'late'), kind: 'error' }],
+    })).toBe(false);
+    expect(readTaskStatus(db, 'task-1')).toBe('interrupted');
+    expect(count(db, 'wechat_outbox')).toBe(0);
   });
 
   it('lets a stop command interrupt its peer without consuming the command task', () => {
