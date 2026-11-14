@@ -399,6 +399,33 @@ describe('delegated executor access', () => {
 });
 
 describe('provider share host snapshot', () => {
+  // Unit: a list started before a successful pause/removal must not reopen access.
+  // Existing revocation tests only refreshed after the local change had settled.
+  it.each(['paused', 'removed'] as const)('does not revive a %s member from an in-flight snapshot', async (status) => {
+    state.owned = [share([member('m1'), member('m2')])];
+    const ev = { ...events(), prepareSnapshot: vi.fn(async () => undefined) };
+    startProviderShareHost(ev);
+    await refreshProviderShareHost('loaded');
+    const old = state.owned;
+    let finish!: (value: ProviderShareOwned[]) => void;
+    const list = vi.spyOn(providerShareApi, 'listOwned').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    try {
+      const polling = refreshProviderShareHost('poll');
+      applyLocalMemberChange('m1', status);
+      state.owned = [share(status === 'removed' ? [member('m2')] : [member('m1', status), member('m2')])];
+      ev.changed.mockClear();
+      ev.prepareSnapshot.mockClear();
+      const readers = Array.from({ length: 80 }, () => refreshProviderShareHost('member'));
+      finish(old);
+      await Promise.all([polling, ...readers]);
+      expect(providerShareGuestAccess(guest('m1'))).toBeNull();
+      expect(providerShareGuestAccess(guest('m2'))).not.toBeNull();
+      expect(ev.prepareSnapshot).toHaveBeenCalledExactlyOnceWith(state.owned);
+      expect(ev.changed).toHaveBeenCalledExactlyOnceWith(state.owned);
+      expect(list).toHaveBeenCalledTimes(2);
+    } finally { list.mockRestore(); }
+  });
+
   // Unit / real snapshot publication: access-default migration waits for all
   // authorities, even if the recovered service contributes an empty list.
   it('publishes completion of an unchanged partial snapshot without restarting permission repair', async () => {
@@ -876,6 +903,36 @@ describe('provider share guest routing', () => {
     shareId: 'share-1', memberId: 'm1', providerId: 'anthropic', providerLabel: 'Anthropic', hostDeviceId: 'owner-mac',
     deviceName: "Magi's Mac Mini", owner: { displayName: 'Magi', avatarUrl: null, region: 'global' }, status,
     hostOnline: true, hostCapable: true,
+  });
+
+  // Unit: successful leave is authoritative even if its follow-up list fails.
+  // Previous tests checked preference cleanup, not the stale list/routing race.
+  it('removes a departed share before a pending list settles and retains its neighbour', async () => {
+    const neighbour = { ...received('active'), shareId: 'share-2', memberId: 'm2' };
+    state.received = [received('active'), neighbour];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('loaded');
+    const old = state.received;
+    let finish!: (value: ProviderShareReceived[]) => void;
+    const list = vi.spyOn(providerShareApi, 'listReceived').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const leaveDone = Promise.withResolvers<void>();
+    vi.mocked(providerShareApi.leave).mockImplementationOnce(async () => {
+      state.received = [neighbour];
+      state.receivedError = true;
+      leaveDone.resolve();
+    });
+    try {
+      const polling = refreshReceivedShares('poll');
+      const leaving = leaveProviderShare('m1');
+      await leaveDone.promise;
+      await Promise.resolve();
+      expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+      finish(old);
+      await Promise.all([polling, leaving]);
+      expect(getReceivedSharesSnapshot().received).toEqual([neighbour]);
+      expect(resolveRemoteAgentTarget('share:share-2')).toBe(providerShareHostPeer('share-2', 'owner-mac'));
+      expect(list).toHaveBeenCalledTimes(2);
+    } finally { finish(old); list.mockRestore(); }
   });
 
   it.each(['account', 'logout', 'boundary', 'stopped'])('does not expose a loaded snapshot after %s invalidation', async (reason) => {

@@ -24,6 +24,7 @@ import { agentNetSelectionKey, isAgentNetActive, agentNetAllowsLegacy, agentNetO
 import { agentNetSharingAlias, agentNetSharingInvitation, agentNetSharingInvitationRoute, agentNetSharingRoute,
   listAgentNetProviderShares, rememberAgentNetSharingAliases, rememberAgentNetSharingGuest, rememberAgentNetSharingHost,
   rememberAgentNetSharingService, requestAgentNetSharing, retireAgentNetSharingGuest, selectedAgentNetSharingRoute,
+  forgetAgentNetProviderShareMember,
   type AgentNetSharingRoute } from './agentNetSharing.js';
 import { grantAgentNetProviderExecutor, revokeAgentNetProviderExecutor, checkAgentNetProviderExecutor } from './agentNetSharing.js';
 
@@ -158,6 +159,7 @@ export const providerShareApi: ProviderShareApi = {
   setMember: (id, action) => aliasApi('members', id).api.setMember(id, action),
   async leave(id) {
     const { route, api } = aliasApi('members', id); await api.leave(id);
+    forgetAgentNetProviderShareMember(id, route);
     if (route) retireAgentNetSharingGuest('provider-share', route.resourceId);
   },
 };

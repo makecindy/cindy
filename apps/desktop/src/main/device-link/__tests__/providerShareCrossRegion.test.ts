@@ -120,6 +120,7 @@ import {
   __testing,
   crossRegionOfIntent,
   crossRegionInvoke,
+  crossRegionLeave,
   crossRegionSendRequest,
   getCrossRegionReceived,
   getConfirmedCrossRegionRegionBudgets,
@@ -212,6 +213,43 @@ afterEach(() => {
 });
 
 describe('cross-region provider share', () => {
+  // Unit: leave must fence an earlier /session response without closing another
+  // share's client. Prior coverage only fenced new applications/account changes.
+  it.each([
+    { fails: false, hasNeighbour: true },
+    { fails: true, hasNeighbour: true },
+    { fails: true, hasNeighbour: false },
+  ])('retires a departed share despite a stale session reply ($fails, $hasNeighbour)', async ({ fails, hasNeighbour }) => {
+    const neighbour = { ...share, shareId: 'share-y', memberId: 'member-y' };
+    const remaining = hasNeighbour ? [neighbour] : [];
+    const old = { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share, ...remaining] };
+    state.responses.set('/session', old);
+    startProviderShareCrossRegion({ changed: vi.fn() }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    const client = state.clients[0];
+    const response = deferred<unknown>();
+    state.responses.set('/session', response.promise);
+    const polling = refreshProviderShareCrossRegion('global');
+    await vi.waitFor(() => expect(state.calls.filter(call => call.path.endsWith('/session'))).toHaveLength(2));
+    state.responses.set('/received/member-x/leave', {});
+    state.responses.set('/session', fails ? new Error('temporarily unavailable') : { ...old, shares: remaining });
+    const leaving = crossRegionLeave('member-x');
+    try {
+      await vi.waitFor(() => expect(getCrossRegionReceived()).toEqual(remaining));
+      response.resolve(old);
+      await Promise.all([polling, leaving]);
+      expect(getCrossRegionReceived()).toEqual(remaining);
+      expect(state.calls.filter(call => call.path.endsWith('/session'))).toHaveLength(3);
+      expect(client.stopped).toBe(!hasNeighbour);
+      await expect(crossRegionInvoke(providerShareHostPeer('share-x', 'owner-pc'), 'maker:provider:list', []))
+        .rejects.toThrow();
+      if (hasNeighbour) {
+        await expect(crossRegionInvoke(providerShareHostPeer('share-y', 'owner-pc'), 'maker:provider:list', []))
+          .resolves.toMatchObject({ ok: true });
+      }
+    } finally { response.resolve(old); await Promise.all([polling, leaving]); }
+  });
+
   // Regression 2026-10-30, provider-sharing.md §8: membership belongs to the
   // account, not the accepting computer. Unit: real guest startup must publish
   // existing peer shares without an invitation, a group or a local region marker.

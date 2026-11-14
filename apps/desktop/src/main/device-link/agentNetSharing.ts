@@ -39,6 +39,7 @@ export interface AgentNetSharingRoute extends Omit<AgentNetSharingInvitation, 'i
   aliases?: { members?: string[]; requests?: string[]; invitations?: string[] };
 }
 interface Vault { version: 2; seed: string; routes: AgentNetSharingRoute[]; services?: AgentNetSharingRoute[]; }
+interface ProviderListRead { key: string; departedMembers: Set<string>; }
 interface Session {
   key: string;
   file: string;
@@ -49,6 +50,7 @@ interface Session {
   committed: Map<string, { route: AgentNetSharingRoute; member: AgentNetClient }>;
   sockets: Map<string, { api: AgentNetClient; socket: import('@cindy/agent-net').AgentNetAppSocket }>;
   lists: Map<string, unknown[]>;
+  providerListReads: Set<ProviderListRead>;
   originSync?: Promise<void>;
   originDigest?: string;
   originSyncedAt?: number;
@@ -59,6 +61,9 @@ type ScopedConnectionOptions = Omit<DeviceLinkClientOptions, 'getWsUrl' | 'getTo
 let binding: { client: RoutedDeviceLinkClient; options: ScopedConnectionOptions; session: Session;
   selection: string; pins: Map<string, () => void>; stop(): void } | null = null;
 const keyOf = (kind: Kind, id: string) => kind + ':' + id;
+const originKey = (route: AgentNetSharingRoute) => JSON.stringify([route.server, route.networkId, route.rootPublicKey]);
+const providerListKey = (received: boolean, route?: AgentNetSharingRoute | null) =>
+  '/api/device-link/provider-shares' + (received ? '/received' : '') + (route ? originKey(route) : ':legacy');
 /** A listing origin may be any pinned route or a discovery placeholder on that
  * authority: carry only the authority, never another resource's host, member or aliases. */
 const resourceRoute = (origin: AgentNetSharingRoute, kind: Kind, resourceId: string, hostDeviceId: string): AgentNetSharingRoute =>
@@ -102,7 +107,7 @@ function owner(): Session {
       || isAppSessionBoundaryPending() || getClientEndpoint('authApiBaseUrl') !== auth) throw new Error('AGENT_NET_OWNER_CHANGED');
   };
   const { file, vault } = readVault();
-  session = { key, file, vault, guard, clients: new Map(), connections: new Map(), leases: new Set(), committed: new Map(), sockets: new Map(), lists: new Map() };
+  session = { key, file, vault, guard, clients: new Map(), connections: new Map(), leases: new Set(), committed: new Map(), sockets: new Map(), lists: new Map(), providerListReads: new Set() };
   return session;
 }
 /** Reads the current owner's sharing vault; never writes or publishes a session.
@@ -286,6 +291,13 @@ export function retireAgentNetSharingGuest(kind: Kind, resourceId: string): void
   const route = agentNetSharingRoute(kind, resourceId);
   if (route?.memberId && !route.retired) remember(owner(), { ...route, retired: true });
 }
+/** A confirmed leave overrides this origin's display cache and reads already in
+ * flight. Fences live only with those reads, so a later admission is not hidden. */
+export function forgetAgentNetProviderShareMember(memberId: string, route: AgentNetSharingRoute | null): void {
+  const state = owner(), key = providerListKey(true, route), cached = state.lists.get(key);
+  if (cached) state.lists.set(key, cached.filter(row => (row as { memberId?: string })?.memberId !== memberId));
+  for (const read of state.providerListReads) if (read.key === key) read.departedMembers.add(memberId);
+}
 /** Save the origin before a mutation: an uncertain create still needs cleanup
  * there after a relay switch or a cold restart, even without its committed ID. */
 export function rememberAgentNetSharingService(selected: AgentNetSharingRoute): void {
@@ -426,15 +438,16 @@ export async function listAgentNetProviderShares(received: boolean, legacy: () =
   await syncOrigins(state);
   const known = state.vault.routes.filter(r => r.kind === 'provider-share');
   const origins = new Map<string, AgentNetSharingRoute>();
-  const originKey = (r: AgentNetSharingRoute) => JSON.stringify([r.server, r.networkId, r.rootPublicKey]);
   for (const route of [...(selected ? [selected] : []), ...known, ...(state.vault.services ?? []).map(r => ({ ...r, kind: 'provider-share' as const }))]) {
     if (received || !route.memberId && hostClient(route)) origins.set(originKey(route), route);
   }
   if (!selected && known.length === 0 && origins.size === 0) return null;
   const path = '/api/device-link/provider-shares' + (received ? '/received' : '');
-  const sources = [...origins.values()].map(route => ({ route, key: path + originKey(route),
+  const sources = [...origins.values()].map(route => ({ route, key: providerListKey(received, route), departedMembers: new Set<string>(),
     work: (signal: AbortSignal) => business(state, route).request(path, { method: 'GET', signal }) }));
-  if (agentNetAllowsLegacy()) sources.push({ route: undefined as unknown as AgentNetSharingRoute, key: path + ':legacy', work: () => legacy() });
+  if (agentNetAllowsLegacy()) sources.push({ route: undefined as unknown as AgentNetSharingRoute, key: providerListKey(received),
+    departedMembers: new Set<string>(), work: () => legacy() });
+  if (received) for (const source of sources) state.providerListReads.add(source);
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12_000);
   const values: PromiseSettledResult<unknown>[] = new Array(sources.length); let cursor = 0;
   try {
@@ -448,13 +461,18 @@ export async function listAgentNetProviderShares(received: boolean, legacy: () =
         catch (reason) { values[i] = { status: 'rejected', reason }; }
       }
     }));
-  } finally { clearTimeout(timer); controller.abort(); }
+  } finally {
+    clearTimeout(timer); controller.abort();
+    for (const source of sources) state.providerListReads.delete(source);
+  }
   state.guard();
   if (values.length === 0 || values.every(v => v.status === 'rejected')) throw new Error('AGENT_NET_SHARING_SERVICES_UNAVAILABLE');
   const rows = new Map<string, unknown>(), unavailable = new Set<string>();
   for (let i = 0; i < sources.length; i++) {
     const source = sources[i], result = values[i];
-    const items = result.status === 'fulfilled' ? result.value as unknown[] : state.lists.get(source.key) ?? [];
+    const listed = result.status === 'fulfilled' ? result.value as unknown[] : state.lists.get(source.key) ?? [];
+    const items = source.departedMembers.size
+      ? listed.filter(row => !source.departedMembers.has((row as { memberId?: string })?.memberId ?? '')) : listed;
     if (result.status === 'fulfilled') state.lists.set(source.key, items);
     else if (source.route) for (const route of known.filter(r => originKey(r) === originKey(source.route))) unavailable.add(route.resourceId);
     for (const item of items) {
