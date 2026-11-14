@@ -205,6 +205,24 @@ describe('createOrcaWorkerResumeScheduler', () => {
     expect(scheduler.pendingCount()).toBe(0);
   });
 
+  it('yields to a send that is already using the session', async () => {
+    const resume = vi.fn(async () => true);
+    const scheduler = createOrcaWorkerResumeScheduler({
+      resume,
+      withSessionLock: (_sessionId, task) => task(),
+      // 用户直发已拿到 / 已排队同一会话锁。
+      hasActiveSend: (sessionId) => sessionId === 'worker-1',
+    });
+
+    await expect(scheduler.request({ sessionId: 'worker-1' })).resolves.toBe(false);
+    expect(resume).not.toHaveBeenCalled();
+    expect(scheduler.pendingCount()).toBe(0);
+
+    // 别的会话不受影响。
+    await expect(scheduler.request({ sessionId: 'worker-2' })).resolves.toBe(true);
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores cancel for sessions without an in-flight resume', () => {
     const scheduler = createOrcaWorkerResumeScheduler({
       resume: async () => true,

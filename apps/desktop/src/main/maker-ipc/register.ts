@@ -10199,6 +10199,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     withSessionLock: (sessionId, task) =>
       withSendToSessionLock(sessionId, task, () => 'orca-worker-resume'),
+    // 让路给发送：该会话上已有发送在临界区 / 等待中时跳过本次预热（不变量见
+    // docs/dev-rules/orca-team-architecture.md「发送优先于系统动作」）。
+    hasActiveSend: (sessionId) => hasSendToSessionLock(sessionId),
   });
 
   // sessionId → remoteHostId 的进程内缓存 reader(lazy resume 路径每次 send 都

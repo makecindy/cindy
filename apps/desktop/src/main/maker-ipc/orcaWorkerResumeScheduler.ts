@@ -16,6 +16,9 @@
  *  3. 可取消：关闭协同 / 归档 / 显式 idle 等释放路径通过 `cancel` 取消尚未落地的唤醒。
  *     等锁中的唤醒直接放弃；已经在冷启动的由 `resume` 实现按 `isCancelled` 在
  *     bootstrap 返回后关掉刚起的 session，避免把已归档 worker 重新拉活。
+ *  4. 让路给发送：唤醒 / 预热只是加速，不产生内容。该会话上已有发送在途或排队时
+ *     （`hasActiveSend`）直接跳过本次唤醒——否则用户直发会排到冷启动后面；跳过不丢东西，
+ *     那次发送自己会 lazy resume。
  *
  * 唤醒实现与锁都由调用方注入，逻辑本身可单测。
  */
@@ -39,6 +42,8 @@ export interface OrcaWorkerResumeSchedulerDeps<Target extends OrcaWorkerResumeTa
   ): Promise<boolean>;
   /** per-session 串行锁；必须与发送路径共用同一把。 */
   withSessionLock<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
+  /** 该会话上是否有发送在临界区或等待中；有则本次唤醒让路（不排队）。 */
+  hasActiveSend?(sessionId: string): boolean;
 }
 
 /** 单次唤醒请求的附加守卫；去重期间以首个请求的 options 为准。 */
@@ -79,6 +84,9 @@ export function createOrcaWorkerResumeScheduler<Target extends OrcaWorkerResumeT
   const inFlight = new Map<string, InFlightResume>();
 
   function request(target: Target, opts?: OrcaWorkerResumeRequestOptions): Promise<boolean> {
+    // 让路给发送：用户直发 / 派发 / auto-resume 已在用这条会话时，唤醒只会把冷启动
+    // 排到它们前面。跳过一次预热没有副作用——那次发送自己会 lazy resume。
+    if (deps.hasActiveSend?.(target.sessionId)) return Promise.resolve(false);
     const existing = inFlight.get(target.sessionId);
     if (existing) return existing.promise;
     const entry: InFlightResume = {
