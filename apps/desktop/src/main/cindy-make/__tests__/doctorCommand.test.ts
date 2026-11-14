@@ -772,9 +772,9 @@ describe('Make source preparation action', () => {
           : command === 'git'
             ? 'git version 2.45.0'
             : command === 'node'
-              ? 'v22.12.0'
+              ? 'v22.13.0'
               : command === 'pnpm'
-                ? '10.7.0'
+                ? '11.25.0'
                 : 'Python 3.9.0';
       return { status: 'ok', stdout, path: `C:\\tools\\${command}.exe` };
     },

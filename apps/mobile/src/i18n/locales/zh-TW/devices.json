@@ -738,6 +738,8 @@
     "memoryDeleteFailed": "刪除失敗",
     "create": "新增夥伴",
     "createFailed": "尚未確認建立結果，請重試核對。",
+    "createHostUnsupported": "這台電腦暫時不能新增夥伴，請更新電腦端的 Cindy，或在那台電腦上新增夥伴。",
+    "createNeedsDetails": "填寫名字並選好頭像後即可新增夥伴。",
     "title": "夥伴資料",
     "profile": "資料與性格",
     "memory": "記憶",

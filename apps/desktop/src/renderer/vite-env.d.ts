@@ -1360,6 +1360,7 @@ interface ElectronAPI {
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
   /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
   modelGroups: {
+    commit: (decisionId: string) => Promise<boolean>;
     get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
@@ -3194,6 +3195,8 @@ interface ElectronAPI {
       surfaceId: string;
       bounds: import('../shared/rsbNativePopup').RsbNativePopupBounds;
       visible: boolean;
+      /** One-shot restoration after the native view has been shown. */
+      focus?: boolean;
     }) => Promise<{ ok: true }>;
     command: (
       input: { surfaceId: string } & import('../shared/rsbNativePopup').RsbNativePopupCommand,

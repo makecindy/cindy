@@ -1468,6 +1468,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 面板同帧注册进布局引擎(规则 7 无跳变);目录扫描极小,同步读不卡启动。
   /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
   modelGroups: {
+    commit: (decisionId: string): Promise<boolean> => ipcRenderer.invoke('model-groups:commit', decisionId),
     get: (): Promise<import('../shared/modelGroups').ModelGroupsConfig> => ipcRenderer.invoke('model-groups:get'),
     set: (config: import('../shared/modelGroups').ModelGroupsConfig): Promise<import('../shared/modelGroups').ModelGroupsConfig> =>
       ipcRenderer.invoke('model-groups:set', config),
@@ -6614,6 +6615,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       surfaceId: string;
       bounds: RsbNativePopupBounds;
       visible: boolean;
+      /** One-shot restoration after the native view has been shown. */
+      focus?: boolean;
     }): Promise<{ ok: true }> => ipcRenderer.invoke(RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL, input),
     command: (input: { surfaceId: string } & RsbNativePopupCommand): Promise<{ ok: true }> =>
       ipcRenderer.invoke(RSB_NATIVE_POPUP_COMMAND_CHANNEL, input),

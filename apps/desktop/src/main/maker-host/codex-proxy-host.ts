@@ -225,6 +225,10 @@ export interface CodexProxyHostPorts {
   parseCodexCustomProviderPath: typeof import('./codex-custom-provider-route.js').parseCodexCustomProviderPath;
   relativeProviderRequestPath: typeof import('./codex-custom-provider-route.js').relativeProviderRequestPath;
   setAppliedCustomProviderRoutes: typeof import('./codex-custom-provider-route.js').setCodexAppliedCustomProviderRoutes;
+  /** Optional inbound admission for every Codex proxy this core starts, checked before all
+   * routing (the Node Host requires inbound credentials on its loopback proxy). Not set: no
+   * check, as before. */
+  authorizeInbound?: import('@cindy/anthropic-compat-proxy').ProxyOptions['authorizeInbound'];
 }
 
 /** Same protocol, routing and recovery implementation for both launchers. */
@@ -3570,6 +3574,7 @@ async function createCodexProxyHandle(
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
+    ...(ports.authorizeInbound ? { authorizeInbound: ports.authorizeInbound } : {}),
     transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined).map(
       (transform): RequestTransform => {
         // Namespaced Responses use a frozen Provider route. Preserve its native

@@ -443,15 +443,14 @@ function SettingsViewContent() {
               : 'overflow-y-auto',
           )}
         >
-          {/* key={activeTab}:切分区时 wrapper 重挂跑 150ms 淡入(面板内容本就
-              按 activeTab 条件卸载重挂,key 不额外丢状态;滚动容器在外层不重挂)。 */}
+          {/* The resolved tab replaces the previous content atomically, at full opacity. */}
           {/* Keep the boundary outside the keyed panel: replacing it on each tab
               forces a fresh fallback and React delays revealing even cached-fast loads. */}
           <Suspense fallback={<div role="status" className="py-6 text-sm text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
           <div
             key={`${activeTab}:${selectedPluginPage?.id ?? (piExtensionsPanelOpen ? 'pi-extensions' : 'root')}`}
             className={cn(
-              'mx-auto w-full min-w-0 max-w-[920px] px-1 animate-fade-in',
+              'mx-auto w-full min-w-0 max-w-[920px] px-1',
               activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers'
                 ? 'h-full min-h-0'
                 : 'pb-32',

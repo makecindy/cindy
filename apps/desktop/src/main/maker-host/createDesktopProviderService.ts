@@ -38,6 +38,7 @@ import {
   readCreatedSubscriptionProviders,
   readMergedProviderAccount,
   restoreAutoMergedLegacyCodexAccounts,
+  restoreUnplacedSubscriptionAccounts,
   resolveSubscriptionPoolProvider,
 } from '../subscription-accounts/placement.js';
 import {
@@ -60,6 +61,7 @@ import {
 
 import { createLogger } from '../logger.js';
 import { codexAccountState } from './codex-account-auth.desktop.js';
+import { projectSubscriptionPoolCatalog as projectSubscriptionPoolCatalogWith, publishSubscriptionPoolProviders as publishSubscriptionPoolProvidersWith } from './subscriptionPoolCatalog.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { speechModels } from '../voice-conversation/models.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -102,7 +104,7 @@ import {
   refreshXaiModelsFromHttp,
 } from './model-discovery/xai.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
-import { readModelDisableOverrides, setProviderDisabled } from './model-disable-store.js';
+import { copyProviderDisableOverrides, readModelDisableOverrides, setProviderDisabled } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
@@ -719,9 +721,14 @@ export async function refreshCustomProvidersIntoCatalog(
           isCurrent,
         },
       );
+      await restoreUnplacedSubscriptionAccounts({
+        prepare: copyProviderDisableOverrides,
+        disable: providerId => setProviderDisabled(providerId, true),
+        isCurrent,
+      });
     } catch {
       // The merged view stays as it was; the next refresh retries.
-      log.warn('restoring merged legacy Codex connections did not complete');
+      log.warn('restoring pooled subscription accounts did not complete');
     }
     if (!isCurrent()) return;
     publishSubscriptionPoolProviders();
@@ -874,13 +881,7 @@ function getDesktopSelectableBaseCatalog(): Catalog {
  * stay in the catalog so old tasks keep resolving; the provider view marks them as merged.
  */
 export function publishSubscriptionPoolProviders(): void {
-  try {
-    setSubscriptionPoolProviders(Object.entries(readCreatedSubscriptionProviders())
-      .map(([id, entry]) => ({ id, kind: entry.kind, name: entry.name })));
-  } catch (err) {
-    // An unreadable placement file keeps the previous list; the next refresh retries.
-    log.warn('publishing subscription providers failed', { err: String(err) });
-  }
+  publishSubscriptionPoolProvidersWith({ readCreatedSubscriptionProviders, setSubscriptionPoolProviders, log });
 }
 
 /**
@@ -903,67 +904,8 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
 
 /** Apply account membership to both selectable and full routing snapshots. */
 function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false): Catalog {
-  const pool = readPool('openai');
-  const aliases = pool?.legacyCodexAccounts;
-  const originalProviders = catalog.providers;
-  catalog = { ...catalog, providers: catalog.providers.map(provider => {
-    const legacy = provider.auth.native === 'codex' && aliases && Object.hasOwn(aliases, provider.id);
-    if (provider.id !== 'openai' && provider.subscriptionPool !== 'openai' && !legacy) return provider;
-    const pooledModels = readSubscriptionPoolCodexModels(provider.id, routingCatalog ? { includeBoundAccounts: true } : undefined);
-    if (pooledModels === null) return provider;
-    const openai = getActiveCatalogWithCodexModels(pooledModels).providers.find(entry => entry.id === 'openai');
-    if (!openai) return provider;
-    if (provider.id === 'openai') return openai;
-    if (provider.subscriptionPool === 'openai') return { ...provider, models: openai.models };
-    // Preserve the imported login's configured membership only while it belongs here,
-    // or while this old id is a compatibility route for that login after a merge.
-    const originalAccount = pool?.accounts.find(account => account.id === aliases![provider.id]);
-    const keepOriginal = !!readMergedProviderAccount(provider.id) || (
-      accountProviderId('openai', aliases![provider.id]) === provider.id
-      && (routingCatalog || (!!originalAccount && !originalAccount.paused && codexAccountState(provider.id).authenticated))
-    );
-    return { ...provider, models: Object.fromEntries(provider.agents.map(agent => {
-      const models = new Map((keepOriginal ? provider.models[agent] ?? [] : []).map(model => [model.id, model]));
-      for (const model of openai.models[agent] ?? []) if (!models.has(model.id)) models.set(model.id, model);
-      return [agent, [...models.values()]];
-    })) };
-  }) };
-  if (!aliases) return catalog;
-  // A merged legacy connection lends its model membership to the provider its account belongs to
-  // now (OpenAI or another provider of the user's choice), while that provider can use it.
-  const lenders = new Map<string, Catalog['providers']>();
-  const historicalAccounts = routingCatalog ? new Map(catalog.providers
-    .filter(provider => provider.id === 'openai' || provider.subscriptionPool === 'openai' || Object.hasOwn(aliases, provider.id))
-    .map(provider => [provider.id, readProviderBoundAccountIds('openai', provider.id)])) : null;
-  for (const provider of originalProviders) {
-    const accountId = provider.auth.native === 'codex' && Object.hasOwn(aliases, provider.id) ? aliases[provider.id] : undefined;
-    const account = accountId ? pool.accounts.find(entry => entry.id === accountId) : undefined;
-    if (!account) continue;
-    const owner = accountProviderId('openai', account.id);
-    if (owner === 'openai' && pool.disconnected) continue;
-    if (!codexAccountState(provider.id).authenticated) continue;
-    if (!account.paused && owner !== provider.id) lenders.set(owner, [...(lenders.get(owner) ?? []), provider]);
-    // Full routing keeps bound model metadata even while paused, so saved routes
-    // can reach the pre-send handoff. Allocation still rejects paused accounts;
-    // only the bound imported account lends membership, never the destination's pool.
-    for (const [target, bound] of historicalAccounts ?? []) {
-      if (target !== provider.id && target !== owner && bound.has(account.id))
-        lenders.set(target, [...(lenders.get(target) ?? []), provider]);
-    }
-  }
-  if (!lenders.size) return catalog;
-  // Reuse these accounts' existing membership; do not discover an unrelated default CLI login.
-  return { ...catalog, providers: catalog.providers.map(provider => {
-    const imported = lenders.get(provider.id);
-    if (!imported) return provider;
-    const models = Object.fromEntries(provider.agents.map(agent => {
-      const models = new Map((provider.models[agent] ?? []).map(model => [model.id, model]));
-      for (const source of imported) for (const model of source.models[agent] ?? [])
-        if (!models.has(model.id)) models.set(model.id, model);
-      return [agent, [...models.values()]];
-    }));
-    return { ...provider, models };
-  }) };
+  return projectSubscriptionPoolCatalogWith(catalog, { readPool, codexAccountState, readSubscriptionPoolCodexModels,
+    getActiveCatalogWithCodexModels, readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog);
 }
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
