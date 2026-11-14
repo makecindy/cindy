@@ -47,6 +47,17 @@ export {
   type ImageResizerLogger,
 } from './shared/image-resizer.js';
 export {
+  compressImageBuffer,
+  processBuffer,
+  detectSupportedImageMime,
+  imageCompressionCacheKey,
+  type ImageCompressionBudget,
+  type ImageCompressionRequest,
+  type ImageCompressionResult,
+  type ImageCompressionRoute,
+  type SupportedImageMime,
+} from './shared/image-compressor.js';
+export {
   parseReconnectAttemptMessage,
   type ReconnectAttempt,
 } from './shared/network-error.js';

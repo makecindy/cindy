@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -25,6 +26,24 @@ afterEach(async () => {
 });
 
 describe("ImageResizer private cache", () => {
+  it("keeps PNG/JPEG output formats while applying the existing size rule", async () => {
+    const root = await tempDir();
+    const cacheDir = path.join(root, "cache");
+    const png = path.join(root, "source.png");
+    const jpeg = path.join(root, "source.jpg");
+    const raw = Buffer.alloc(900 * 700 * 3);
+    for (let i = 0; i < raw.length; i++) raw[i] = (i * 37) & 255;
+    await sharp(raw, { raw: { width: 900, height: 700, channels: 3 } }).png().toFile(png);
+    await sharp(raw, { raw: { width: 900, height: 700, channels: 3 } }).jpeg({ quality: 100 }).toFile(jpeg);
+    const resizer = new ImageResizer({ cacheDir, skipUnderBytes: 0 });
+    const pngResult = await resizer.process(png);
+    const jpegResult = await resizer.process(jpeg);
+    expect(path.extname(pngResult)).toBe(".png");
+    expect(path.extname(jpegResult)).toBe(".jpg");
+    expect((await sharp(pngResult).metadata()).format).toBe("png");
+    expect((await sharp(jpegResult).metadata()).format).toBe("jpeg");
+  });
+
   it("hardens an existing cache directory and files before using them", async () => {
     if (process.platform === "win32") return;
     const root = await tempDir();
