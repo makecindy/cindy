@@ -59,6 +59,10 @@ import type {
 } from '../../shared/modelPriceOverride.js';
 import type { MoneyCurrency } from '../../shared/regionalMoney.js';
 import {
+  MAX_MODEL_COMPACTION_PCT,
+  MIN_MODEL_COMPACTION_PCT,
+} from '../../shared/modelContextLimit.js';
+import {
   MAX_PROVIDER_ORDER_ID_LENGTH,
   MAX_PROVIDER_ORDER_ITEMS,
 } from '../../shared/providerOrder.js';
@@ -2256,8 +2260,17 @@ export function registerProviderHandlers(
   const modelSettingsSetCompaction = async (input: unknown, pctInput: unknown, ownerInput: unknown) => {
       assertContextOwner(ownerInput);
       const targets = parseContextTargets(input);
-      if (pctInput !== null && (typeof pctInput !== 'number' || !Number.isInteger(pctInput) || pctInput < 50 || pctInput > 90)) {
-        throwIpcError('INVALID_PARAMS', 'compaction percentage must be 50–90 or null');
+      if (
+        pctInput !== null &&
+        (typeof pctInput !== 'number' ||
+          !Number.isInteger(pctInput) ||
+          pctInput < MIN_MODEL_COMPACTION_PCT ||
+          pctInput > MAX_MODEL_COMPACTION_PCT)
+      ) {
+        throwIpcError(
+          'INVALID_PARAMS',
+          `compaction percentage must be ${MIN_MODEL_COMPACTION_PCT}–${MAX_MODEL_COMPACTION_PCT} or null`,
+        );
       }
       if (!deps.writeModelCompaction) throwIpcError('INTERNAL', 'model compaction settings unavailable');
       const ownerAtIngress = captureProviderOwnerSession();

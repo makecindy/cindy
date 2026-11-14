@@ -4129,8 +4129,10 @@
           "compaction": {
             "title": "自縮",
             "hint": "佔用達所擇比例時整理上下文。比例愈低，壓縮愈早；實際時機仍受引擎所限。",
-            "default": "{{pct}}%（常例）",
-            "timing": "施於此來源下該模型諸可用引擎。後續執行生效，不斷方生之內容。"
+            "timing": "施於此來源下該模型諸可用引擎。後續執行生效，不斷方生之內容。",
+            "defaultBadge": "預設",
+            "sliderAria": "調整自動壓縮門檻",
+            "restoreAria": "還原自動壓縮的預設比例"
           },
           "contextLimitRoute": "今 {{tokens}} tokens",
           "contextLimitOverWindow": "已逾上游所宣之長度，請求或將未成。",

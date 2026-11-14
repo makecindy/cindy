@@ -4225,8 +4225,10 @@
           "compaction": {
             "title": "Compactage automatique",
             "hint": "Compacter le contexte au pourcentage d'utilisation sélectionné. Une valeur plus basse compacte plus tôt ; les limites du moteur s'appliquent toujours.",
-            "default": "{{pct}} % (par défaut)",
-            "timing": "S'applique à tous les moteurs disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse."
+            "timing": "S'applique à tous les moteurs disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse.",
+            "defaultBadge": "Par défaut",
+            "sliderAria": "Ajuster le seuil de compactage automatique",
+            "restoreAria": "Rétablir le ratio de compactage automatique par défaut"
           },
           "contextLimitRoute": "Actuellement {{tokens}} jetons",
           "contextLimitOverWindow": "Supérieur à la fenêtre déclarée par le fournisseur ; les requêtes peuvent échouer.",

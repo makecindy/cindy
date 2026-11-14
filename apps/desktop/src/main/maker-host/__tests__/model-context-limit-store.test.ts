@@ -80,6 +80,38 @@ describe('model context limit store', () => {
     expect(readModelCompactionPct('openai', 'gpt')).toBeNull();
     expect(readModelContextLimit('codex', 'openai', 'gpt')).toBe(272_000);
   });
+  // Owner ruling 2026-10-29: the per-model ratio is back to the full 50–95 range with 1% granularity.
+  it('accepts the full 50–95 ratio range and drops out-of-range stored values', async () => {
+    const targets = [{ providerId: 'openai', modelId: 'gpt' }];
+    await writeModelCompactionWithRefresh(targets, 95, async () => {}, async () => {});
+    expect(readModelCompactionPct('openai', 'gpt')).toBe(95);
+    for (const invalid of [49, 96, 80.5]) {
+      await expect(
+        writeModelCompactionWithRefresh(targets, invalid, async () => {}, async () => {}),
+      ).rejects.toThrow('invalid compaction percentage');
+    }
+    writeRawPrefs({ limits: {}, compactionPcts: { '["openai","gpt"]': 96, '["openai","other"]': 73 } });
+    expect(readModelCompactionPct('openai', 'gpt')).toBeNull();
+    expect(readModelCompactionPct('openai', 'other')).toBe(73);
+  });
+
+  // The default ratio is not an override: setting it back must read as "not customized".
+  it('treats the default ratio as no override', async () => {
+    const targets = [{ providerId: 'openai', modelId: 'gpt' }];
+    await writeModelCompactionWithRefresh(targets, 73, async () => {}, async () => {});
+    expect(readModelCompactionPct('openai', 'gpt')).toBe(73);
+    await writeModelCompactionWithRefresh(targets, 90, async () => {}, async () => {});
+    expect(readModelCompactionPct('openai', 'gpt')).toBeNull();
+    // 删掉最后一条覆盖后偏好文件会被重置（不再残留 compactionPcts）。
+    const stored = fs.existsSync(PREFS)
+      ? JSON.parse(fs.readFileSync(PREFS, 'utf8')).compactionPcts
+      : undefined;
+    expect(stored?.['["openai","gpt"]']).toBeUndefined();
+    // A stored default left by an older build reads as no override too.
+    writeRawPrefs({ limits: {}, compactionPcts: { '["openai","gpt"]': 90 } });
+    expect(readModelCompactionPct('openai', 'gpt')).toBeNull();
+  });
+
   beforeEach(() => {
     ownerId = 'test-owner';
     fs.mkdirSync(path.dirname(PREFS), { recursive: true });

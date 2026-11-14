@@ -4129,8 +4129,10 @@
           "compaction": {
             "title": "自动压缩",
             "hint": "占用达到所选比例时压缩上下文。比例越低，越早压缩；实际时机仍受引擎限制。",
-            "default": "{{pct}}%（默认）",
-            "timing": "用于此来源下该模型的所有可用引擎。后续运行生效，不中断正在生成的内容。"
+            "timing": "用于此来源下该模型的所有可用引擎。后续运行生效，不中断正在生成的内容。",
+            "defaultBadge": "默认",
+            "sliderAria": "调整自动压缩触发阈值",
+            "restoreAria": "恢复自动压缩比例的默认设置"
           },
           "contextLimitRoute": "当前 {{tokens}} tokens",
           "contextLimitOverWindow": "已超过供应商声明的上下文窗口，请求可能失败。",
