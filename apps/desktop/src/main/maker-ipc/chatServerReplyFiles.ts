@@ -4,11 +4,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
-import { unified } from 'unified';
-import remarkParse from 'remark-parse';
-import remarkGfm from 'remark-gfm';
-import { visit } from 'unist-util-visit';
-import type { Definition } from 'mdast';
 import { messages, sessions } from '../localDb/schema.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { visibleMessageText } from '../localDb/conversationSearch.pure.js';
@@ -17,84 +12,10 @@ import { isPathWithin, localTaskImagePath, taskImageReferences } from '../cindy-
 import { isNetworkOrDevicePath } from './chatServerReplyAttachments.js';
 import { BOT_GROUP_ATTACHMENTS_MAX } from '../../shared/botGroupChat.js';
 import type { ChatUploadAttachment } from './chatServerMedia.js';
+import { replyFileLinks, withoutLineLocator } from './chatServerReplyFallback.js';
 
-const parser = unified().use(remarkParse).use(remarkGfm);
 const MAX_BYTES = 100 * 1024 * 1024;
 const unavailable = () => new Error('ATTACHMENT_UNAVAILABLE');
-
-// Local Markdown line locators follow sharedTaskFileReferences/markdownTarget.
-// Query-based URLs carry an explicit path; do not rewrite its literal filename.
-function withoutLineLocator(value: string): string {
-  return value.includes('?') ? value : value.replace(/(?::\d+(?::\d+|-\d+)?|#L\d+(?:-L\d+)?)$/, '');
-}
-
-// Match local references, not arbitrary URI schemes or in-message anchors.
-function isFileTarget(value: string): boolean {
-  if (!value || /^[#?]/.test(value)) return false;
-  value = withoutLineLocator(value);
-  if (/^(?:file|xdt-file|sandbox):/i.test(value) || /^[A-Za-z]:[\\/]/.test(value)) return true;
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)) return false;
-  // Match the renderer's local-path shape; `about` is navigation, while
-  // `./README`, `documents/report.pdf` and `report.pdf` are explicit files.
-  return /[\\/]/.test(value) || /\.[a-z0-9]{1,10}(\?.*)?$/i.test(value);
-}
-
-/** Only actual Markdown file links are deliveries; code, images and remote URLs are not. */
-export function replyFileLinks(text: string) {
-  // The reported reply HTML-escaped the angle brackets around paths with spaces.
-  // Recover only these file links in prose, never examples inside code or HTML.
-  const escaped: Array<{ start: number; end: number; text: string }> = [];
-  visit(parser.parse(text), 'text', node => {
-    const start = node.position?.start.offset, end = node.position?.end.offset;
-    if (start === undefined || end === undefined) return;
-    const raw = text.slice(start, end);
-    // The closing label delimiter can follow a separate image AST node.
-    // Definitions with escaped space-containing targets are text until reparsed.
-    const normalized = raw.replace(/(\]\(|(?:^|\n)[ \t]{0,3}\[[^\]\n]+\]:[ \t]*)&lt;([^\n]*?)&gt;/g,
-      (match, before, target) => isFileTarget(target) ? `${before}<${target}>` : match);
-    if (normalized !== raw) escaped.push({ start, end, text: normalized });
-  });
-  for (const edit of escaped.sort((a, b) => b.start - a.start))
-    text = text.slice(0, edit.start) + edit.text + text.slice(edit.end);
-  const tree = parser.parse(text);
-  const definitions = new Map<string, Definition>();
-  visit(tree, 'definition', node => {
-    if (!definitions.has(node.identifier)) definitions.set(node.identifier, node);
-  });
-  const links: Array<{ url: string; start: number; end: number; label: string }> = [];
-  const usedDefinitions = new Set<string>();
-  const imageDefinitions = new Set<string>();
-  visit(tree, 'imageReference', node => { imageDefinitions.add(node.identifier); });
-  visit(tree, node => {
-    if (node.type !== 'link' && node.type !== 'linkReference') return;
-    const target = node.type === 'link' ? node : definitions.get(node.identifier);
-    if (!target || !isFileTarget(target.url)) return;
-    const start = node.position?.start.offset, end = node.position?.end.offset;
-    const first = node.children[0]?.position?.start.offset, last = node.children.at(-1)?.position?.end.offset;
-    // Keep nested image markup as the label for the later image-delivery pass;
-    // the outer explicit file target still needs its own attachment.
-    if (start === undefined || end === undefined || first === undefined || last === undefined) return;
-    links.push({ url: target.url, start, end, label: text.slice(first, last) });
-    if (node.type === 'linkReference') usedDefinitions.add(node.identifier);
-  });
-  const edits = links.map(link => ({ start: link.start, end: link.end, text: link.label }));
-  for (const identifier of usedDefinitions) {
-    // The image pass decides from authorized bytes whether a shared target is
-    // an image or a file-only preview. Keep its definition until then.
-    if (imageDefinitions.has(identifier)) continue;
-    const node = definitions.get(identifier)!;
-    if (node.position?.start.offset !== undefined && node.position.end.offset !== undefined)
-      edits.push({ start: node.position.start.offset, end: node.position.end.offset, text: '' });
-  }
-  let deliveredText = text;
-  for (const edit of edits.sort((a, b) => b.start - a.start))
-    deliveredText = deliveredText.slice(0, edit.start) + edit.text + deliveredText.slice(edit.end);
-  // Image preparation sees deliveredText, so both attachment kinds use its offsets.
-  const positionedLinks = links.map(link => ({ ...link, outputStart: link.start + edits
-    .filter(edit => edit.end <= link.start)
-    .reduce((delta, edit) => delta + edit.text.length - (edit.end - edit.start), 0) }));
-  return { links: positionedLinks, text: deliveredText };
-}
 
 function localPath(url: string, workDir: string): string {
   url = withoutLineLocator(url);
@@ -181,8 +102,10 @@ export async function readReplyFile(source: string, root: string, assertCurrent:
   } finally { await handle.close(); }
 }
 
+type ReplyFiles = { text: string; attachments: ChatUploadAttachment[]; refusal?: 'outside-working-dir' };
+
 /** Files stay outside the media store; the existing group uploader receives authorized bytes. */
-export async function prepareChatReplyFiles(text: string, sessionId: string, assertExecution: () => void, fallbackMessageClientId?: string | null) {
+export async function prepareChatReplyFiles(text: string, sessionId: string, assertExecution: () => void, fallbackMessageClientId?: string | null): Promise<ReplyFiles> {
   const snapshot = getCurrentDbClientSnapshot();
   let markdown = text;
   if (fallbackMessageClientId) {
@@ -213,6 +136,12 @@ export async function prepareChatReplyFiles(text: string, sessionId: string, ass
   const scope = await readSession();
   const root = await fs.realpath(scope.workingDir!);
   assertCurrent();
+  // Only this expected path refusal permits a text-only settlement. Preserve the
+  // exact Markdown we inspected, including saved replies with original whitespace.
+  const outside = (): ReplyFiles => {
+    assertCurrent();
+    return { text: markdown, attachments: [], refusal: 'outside-working-dir' };
+  };
   const attachments: ChatUploadAttachment[] = [];
   const seen = new Set<string>();
   const imageSources = new Set<string>();
@@ -237,10 +166,10 @@ export async function prepareChatReplyFiles(text: string, sessionId: string, ass
       // Case aliases depend on the actual volume. Only an existing canonical
       // target within this task can override the lexical precheck.
       if (!isPathWithin(lexicalRoot.toLowerCase(), source.toLowerCase())
-        && !isPathWithin(root.toLowerCase(), source.toLowerCase())) throw unavailable();
+        && !isPathWithin(root.toLowerCase(), source.toLowerCase())) return outside();
       canonicalSource = await fs.realpath(source).catch(() => { throw unavailable(); });
       assertCurrent();
-      if (!isPathWithin(root, canonicalSource)) throw unavailable();
+      if (!isPathWithin(root, canonicalSource)) return outside();
     } else canonicalSource = isPathWithin(root, source) ? source : path.resolve(root, path.relative(lexicalRoot, source));
     // Use the actual volume's inode identity (including case-insensitive APFS),
     // not a platform-wide casing assumption. Never follow the named symlink;

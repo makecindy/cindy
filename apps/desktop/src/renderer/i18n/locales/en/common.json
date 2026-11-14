@@ -11503,6 +11503,7 @@
       },
       "files": {
         "openFailed": "Couldn’t open the file. It may have been moved or deleted.",
+        "omitted": "Attachments could not be included.",
         "untitled": "Attachment",
         "loading": "Loading…",
         "unavailable": "Unavailable right now"

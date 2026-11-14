@@ -2,6 +2,7 @@ import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } fro
 import { extractPlainText } from './agentHandoff.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
+import { replyWithoutAttachments } from './chatServerReplyFallback.js';
 import type { ChatUploadAttachment } from './chatServerMedia.js';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 /** Production chat transport. The server owns messages and execution leases;
@@ -2602,7 +2603,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           const ordinaryReply = !run.plan || run.plan.kind === 'talk';
           const validateUpload = async () => {
             assertCurrent();
-            if (pending.fileReply?.attachments.length) {
+            if (pending.fileReply?.attachments.length || pending.fileReply?.refusal) {
               try { await validateExecutionAuthority(run); }
               catch (error) {
                 // Definitive revocation ends delivery; transport failures retain
@@ -2620,17 +2621,26 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                   assertCurrent();
                   if (run.execution.access_mode === 'chat') throw new Error('ATTACHMENT_UNAVAILABLE');
                 }, !terminal.resultText.trim() ? terminal.resultMessageClientId : undefined);
-                // Shared reference classification reads file bytes before image import.
-                // Retain the later upload/seal checks and authorize this read as well.
-                if (!pending.reply && pending.fileReply.attachments.length) await validateUpload();
-                pending.reply ??= { sourceText: text, ...await prepareChatReplyImages(pending.fileReply.text, run.sessionId, assertCurrent,
-                  pending.fileReply.attachments) };
+                if (pending.fileReply.refusal) {
+                  if (run.execution.mask_owner_id || pending.cancelled || terminal.outcome !== 'done')
+                    throw new Error('ATTACHMENT_UNAVAILABLE');
+                  pending.reply ??= { sourceText: text, text: replyWithoutAttachments(pending.fileReply.text,
+                    t('bots.groupChat.files.omitted'), t('bots.groupChat.files.untitled')), attachments: [] };
+                } else {
+                  // Shared reference classification reads file bytes before image import.
+                  // Retain the later upload/seal checks and authorize this read as well.
+                  if (!pending.reply && pending.fileReply.attachments.length) await validateUpload();
+                  pending.reply ??= { sourceText: text, ...await prepareChatReplyImages(pending.fileReply.text, run.sessionId, assertCurrent,
+                    pending.fileReply.attachments) };
+                }
                 contentText = pending.reply.text;
                 produced.push(...mergeChatReplyAttachments(pending.reply.attachments, pending.fileReply.attachments));
                 if (produced.length > BOT_GROUP_ATTACHMENTS_MAX) throw new Error('ATTACHMENT_UNAVAILABLE');
               }
               if (ordinaryReply) await validateUpload();
-              files = await media.upload(run.execution.conversation_id, `step:${run.execution.id}:${run.execution.epoch}`,
+              // A refused reply omits all attachments, including image previews.
+              // Authority was still rechecked above even though no bytes are uploaded.
+              if (!pending.fileReply?.refusal) files = await media.upload(run.execution.conversation_id, `step:${run.execution.id}:${run.execution.epoch}`,
                 produced, run.execution.bot_id, ordinaryReply ? validateUpload : undefined);
               assertCurrent();
             }
@@ -2649,15 +2659,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             failureCodes.set(`${run.execution.id}:${run.execution.epoch}`, terminal.failureCode ?? 'RUNTIME_ERROR');
             if (failureCodes.size > 1000) failureCodes.delete(failureCodes.keys().next().value!);
           }
+          const hasFallback = pending.fileReply?.refusal === 'outside-working-dir';
           pending.payload = terminal.outcome === 'error' ? { detail: botGroupRuntimeFailureDetail(terminal.failureCode ?? 'RUNTIME_ERROR') }
-            : { ...(isBotGroupNoReplyText(text) && !files.length ? {} : {
+            : { ...(isBotGroupNoReplyText(text) && !files.length && !hasFallback ? {} : {
               ...(() => {
                 const named = run.mentionable?.length ? resolveBotGroupMentions(contentText, { members: run.mentionable, allLabels: [] }).botIds.filter(target => target !== run.execution.bot_id) : [];
                 return named.length ? { mentions: named } : {};
               })(),
               content: [{ type: 'text', text: contentText.slice(0, 16000) || '已完成' }, ...files, botGroupProcessCard({ groupId: run.execution.conversation_id, executionId: run.execution.id, sessionId: run.sessionId, clientId: run.clientId, durationMs: run.durationMs, ...(selfDeviceId ? { deviceId: selfDeviceId } : {}) })] }),
               // A single-speaker server never chains rounds, so there is nothing to continue.
-              ...(singleSpeaker || run.execution.mask_owner_id ? {} : { continueDiscussion: !run.plan && !isBotGroupNoReplyText(text) }) };
+              ...(singleSpeaker || run.execution.mask_owner_id ? {} : { continueDiscussion: !run.plan && (!isBotGroupNoReplyText(text) || hasFallback) }) };
         }
         if (!current() || running.get(run.execution.id) !== run || run.settlement !== pending) return;
         const action = pending.cancelled ? 'cancel' : pending.terminal.outcome === 'error' ? 'fail' : 'complete';

@@ -11594,6 +11594,7 @@
       },
       "files": {
         "openFailed": "Não foi possível abrir o ficheiro. Pode ter sido movido ou eliminado.",
+        "omitted": "Não foi possível incluir os anexos.",
         "untitled": "Anexo",
         "loading": "A carregar…",
         "unavailable": "Indisponível neste momento"

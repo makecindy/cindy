@@ -11503,6 +11503,7 @@
       },
       "files": {
         "openFailed": "Datei konnte nicht geöffnet werden. Sie wurde möglicherweise verschoben oder gelöscht.",
+        "omitted": "Die Anhänge konnten nicht beigefügt werden.",
         "untitled": "Anhang",
         "loading": "Wird geladen…",
         "unavailable": "Derzeit nicht verfügbar"

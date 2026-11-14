@@ -38,6 +38,11 @@ export default {
   notCovered:
     'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
+    'attachment-omitted': {
+      about: '#9185: production fallback text in the real group timeline, with a visible notice and no dead attachment links',
+      viewport: { width: 720, height: 600 },
+      data: { ...base, sidebar: false, attachmentOmitted: true },
+    },
     'reply-composer': {
       about: 'Real thread reply composer with microphone and editable draft at narrow width',
       viewport: { width: 420, height: 600 },
@@ -405,6 +410,16 @@ export default {
         assert.equal(await stop.isEnabled(), true, 'another running execution must remain stoppable');
       }
       await ui.capture('work');
+      return;
+    }
+    if (ui.case === 'attachment-omitted') {
+      const timeline = page.getByTestId('bot-group-timeline');
+      await timeline.getByText(await ui.t('bots.groupChat.files.omitted'), { exact: true }).waitFor();
+      const text = await timeline.innerText();
+      assert.ok(text.includes('目录边界保持不变') && text.includes('设计说明') && text.includes('流程图'));
+      assert.ok(!text.includes('../private/') && !text.includes('cindy-media://'));
+      assert.equal(await timeline.locator('a').count(), 0, 'no omitted attachment is presented as a download');
+      await ui.capture('attachment-omitted');
       return;
     }
     if (ui.case === 'body-answer') {

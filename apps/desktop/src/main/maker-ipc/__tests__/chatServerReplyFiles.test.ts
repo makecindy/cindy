@@ -9,6 +9,88 @@ const scope = vi.hoisted(() => ({ snapshot: null as unknown, row: {} as Record<s
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => scope.snapshot }));
 import { messages } from '../../localDb/schema.js';
 import { prepareChatReplyFiles, readReplyFile } from '../chatServerReplyFiles.js';
+import { replyWithoutAttachments } from '../chatServerReplyFallback.js';
+
+// #9185 / unit: production text projection must preserve meaning without implying
+// that refused attachments were delivered. These inputs cover the missing Markdown,
+// final component state and wire-length branches, with no filesystem or network I/O.
+describe('reply without attachments', () => {
+  const project = (source: string) => replyWithoutAttachments(source, '附件未能附上。', '附件');
+
+  // #9193 review / unit: the existing projection cases missed bare-space image
+  // destinations, escaped path labels and decoded table pipes. These minimal
+  // inputs call the production projection and assert the delivered Markdown;
+  // paths here are message content, not host filesystem paths. Standalone run:
+  // 79 tests, 1.64s wall time on macOS (2026-11-13).
+  it('omits bare-space local images alongside a refused file but preserves code examples', () => {
+    const image = '![图表](/Users/example/Project Files/chart.png)';
+    const source = `[报告](../private.md) ${image}\n\n\`${image}\`\n\n\`\`\`md\n${image}\n\`\`\``;
+    expect(project(source)).toBe(`附件未能附上。\n\n报告 图表\n\n\`${image}\`\n\n\`\`\`md\n${image}\n\`\`\``);
+  });
+
+  it('keeps the complete image filename and escapes it only after removing its directory', () => {
+    expect(project('[报告](../private.md) ![/private/chart_final.png](cindy-media://blobs/a.png)'))
+      .toBe('附件未能附上。\n\n报告 chart\\_final.png');
+  });
+
+  it('keeps image alt text in its original table cell', () => {
+    const header = '| 图表 | 状态 |\n| --- | --- |\n';
+    expect(project('[报告](../private.md)\n\n' + header + '| ![before\\|after](./chart.png) | APPROVED |'))
+      .toBe('附件未能附上。\n\n报告\n\n' + header + '| before\\|after | APPROVED |');
+  });
+
+  it('keeps labels and code while removing shared local definitions and nested image references', () => {
+    const source = '**Analysis** [![preview][r]](../private.pdf) [download][r]\n\n[r]: /private/preview.png\n\n'
+      + '[web](https://example.test/report) `![example](./code.png)`\n\n```md\n[example](../code.pdf)\n```\n\n'
+      + '[![public preview](https://example.test/chart.png)](https://example.test/gallery)';
+    const result = project(source);
+    expect(result).toContain('**Analysis** preview download');
+    expect(result).not.toContain('/private/');
+    expect(result).not.toContain('../private.pdf');
+    expect(result).not.toContain('[r]:');
+    expect(result).toContain('[web](https://example.test/report) `![example](./code.png)`');
+    expect(result).toContain('```md\n[example](../code.pdf)\n```');
+    expect(result).toContain('[public preview](https://example.test/gallery)');
+  });
+
+  it('projects only final component media and preserves captions and public media access', () => {
+    const operations = [
+      { seq: 1, version: 1, op: 'create', id: 'caption', kind: 'text', props: { text: 'Findings' } },
+      { seq: 2, op: 'create', id: 'local', kind: 'image', props: { src: '/private/old.png', alt: 'old' } },
+      { seq: 3, op: 'patch', id: 'local', props: { src: 'cindy-media://blobs/private.png', alt: 'chart', caption: 'Chart caption' } },
+      { seq: 4, op: 'create', id: 'removed', kind: 'image', props: { src: '/private/removed.png', alt: 'removed' } },
+      { seq: 5, op: 'remove', id: 'removed' },
+      { seq: 6, op: 'create', id: 'video', kind: 'video', props: { src: 'https://example.test/watch?v=1', alt: 'Video', caption: 'Public caption' } },
+    ];
+    const result = project('```cindy-ui\n' + operations.map(op => JSON.stringify(op)).join('\n') + '\n```');
+    expect(result).toContain('Findings');
+    expect(result).toContain('chart\nChart caption');
+    expect(result).toContain('[Video](<https://example.test/watch?v=1>)\nPublic caption');
+    expect(result).not.toMatch(/private|old|removed|cindy-ui|"seq"/);
+  });
+
+  it('replaces path-only labels and opaque internal addresses without damaging prose labels', () => {
+    const source = '[/private/report.md](/private/report.md) [`C:\\private\\report.md`](../private.md) '
+      + '[cindy-media://blobs/opaque.png](cindy-media://blobs/opaque.png) '
+      + '[API / UI analysis](../private.md) ![](/private/preview.png) '
+      + '[Audio](xdt-audio://local?path=%2Fprivate%2Fclip.wav) [Remote](cindy-remote-media://fixture/clip.png)';
+    expect(project(source)).toBe('附件未能附上。\n\nreport.md report.md 附件 API / UI analysis 附件 Audio Remote');
+  });
+
+  it('places the notice before an unclosed fence and truncates without splitting an emoji', () => {
+    const prefix = '附件未能附上。\n\n';
+    const body = '```text\n' + 'x'.repeat(16000 - prefix.length - 9) + '😀tail';
+    const result = project(body);
+    expect(result.startsWith(prefix + '```text\n')).toBe(true);
+    expect(result.length).toBeLessThanOrEqual(16000);
+    expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(result).not.toContain('tail');
+  });
+
+  it('sends only the notice when no readable body remains', () => {
+    expect(project('\n[r]: /private/report.pdf\n')).toBe('附件未能附上。');
+  });
+});
 
 // #6761: production file preparation and descriptor reading. Group adapter tests mock
 // this boundary; these unit cases verify real scope, bytes and Markdown (small temp files).
@@ -118,7 +200,8 @@ describe('group reply file delivery', () => {
       await fs.mkdir(alias);
       try {
         await fs.writeFile(target, 'outside');
-        await expect(prepareChatReplyFiles(`[report](<${target}>)`, 'lane', () => {})).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
+        expect(await prepareChatReplyFiles(`[report](<${target}>)`, 'lane', () => {}))
+          .toMatchObject({ refusal: 'outside-working-dir', attachments: [] });
       } finally { await fs.rm(alias, { recursive: true }); }
     }
   });
@@ -247,7 +330,8 @@ describe('group reply file delivery', () => {
   it('handles escaped relative links but still rejects traversal and missing files', async () => {
     const result = await prepareChatReplyFiles('[report](&lt;report 中文.pdf&gt;)', 'lane', () => {});
     expect((await result.attachments[0]!.readBytes!()).toString()).toContain('%PDF');
-    await expect(prepareChatReplyFiles('[private](documents/../../private.pdf)', 'lane', () => {})).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
+    expect(await prepareChatReplyFiles('[private](documents/../../private.pdf)', 'lane', () => {}))
+      .toMatchObject({ refusal: 'outside-working-dir', attachments: [] });
     const missing = await prepareChatReplyFiles('[missing](documents/missing.pdf)', 'lane', () => {});
     await expect(missing.attachments[0]!.readBytes!()).rejects.toThrow();
   });
@@ -258,7 +342,18 @@ describe('group reply file delivery', () => {
     expect(await prepareChatReplyFiles(text, 'lane', () => { throw new Error('unexpected'); })).toEqual({ text, attachments: [] });
   });
 
-  it.each(['../private.pdf', 'file://server/private.pdf', 'file://server/100% done.pdf', 'file://user:secret@localhost/100% done.pdf', '//server/private.pdf'])('refuses an out-of-scope or network file %s', async url => {
+  it('returns the exact saved Markdown when an outside file cannot be attached', async () => {
+    const markdown = 'Analysis\n\n[private](../private.pdf)';
+    scope.reply = { content: JSON.stringify([{ type: 'text', text: markdown }]) };
+    const read = vi.spyOn(fs, 'open');
+    try {
+      expect(await prepareChatReplyFiles('Analysis private', 'lane', () => {}, 'reply-client'))
+        .toEqual({ refusal: 'outside-working-dir', text: markdown, attachments: [] });
+      expect(read).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); }
+  });
+
+  it.each(['file://server/private.pdf', 'file://server/100% done.pdf', 'file://user:secret@localhost/100% done.pdf', '//server/private.pdf'])('refuses a network file without permitting text fallback: %s', async url => {
     await expect(prepareChatReplyFiles(`[file](<${url}>)`, 'lane', () => {})).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
   });
 

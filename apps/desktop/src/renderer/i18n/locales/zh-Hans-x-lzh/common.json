@@ -11458,6 +11458,7 @@
       },
       "files": {
         "openFailed": "卷未能启，或已移动或删除",
+        "omitted": "附卷未能随送。",
         "untitled": "附件",
         "loading": "方载…",
         "unavailable": "暂不能载"
