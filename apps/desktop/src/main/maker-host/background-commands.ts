@@ -684,7 +684,9 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       child.once('exit', (code, signal) => {
         // 命令已退出即让出并发名额：报告跟着回注，新命令不被死名额堵住。
         releaseSlot();
-        settle({ code, signal, timedOut: false, outputCapped });
+        // timedOut 必须穿透:超时杀树后的 exit 也走这里,硬编码 false 会把
+        // 「超过时限被强制终止」吞成普通失败(2026-11-14 review 回归)。
+        settle({ code, signal, timedOut, outputCapped });
       });
       child.once('error', (error) => {
         deps.logger.warn?.('[background-command] spawn error', { runId, error: error.message });

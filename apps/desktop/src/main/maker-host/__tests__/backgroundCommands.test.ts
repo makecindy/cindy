@@ -22,7 +22,7 @@
  * - 最小失败输入还包括：受理宽限窗内退出的命令（秒败/短命令）——结果作为工具结果
  *   同步返回且不再回注（2026-11-14 回投时机收口：病态短尾巴走前台语义，秒败不占
  *   轮次），窗口后仍运行的转后台照旧回注。
- * - 实测耗时：本机 < 30s（14 用例，含 5MB 输出用例、名额让出等待、宽限窗与两个 shell 用例）。
+ * - 实测耗时：本机 < 30s（16 用例，含 5MB 输出用例、名额让出等待、宽限窗（同步完成/超限/超时）与两个 shell 用例）。
  */
 
 import { spawn } from 'node:child_process';
@@ -150,6 +150,25 @@ it('受理宽限窗内被体量巡检杀树：同步结果带 outputCapped，不
   expect(result.completed.outputCapped).toBe(true);
   expect(result.completed.code === 0).toBe(false);
   expect(result.completed.tail.length).toBeGreaterThan(0);
+  // 同步消费即报告：不再回注。
+  expect(capture).not.toHaveBeenCalled();
+});
+
+it('受理宽限窗内被超时硬顶杀树：timedOut 原因随同步结果带回，不回注', async () => {
+  const capture = vi.fn();
+  const service = buildService(capture, undefined, { startGraceMs: 2_000 });
+  const result = await service.start({
+    sessionId: 'sess-grace-timeout',
+    command: `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 10_000)"`,
+    cwd: logDir,
+    timeoutMs: 300,
+  });
+  // 最小失败输入：超时硬顶的 exit 也走同一条 settle 通道——
+  // timedOut 硬编码 false 会把超时原因吞成普通失败（2026-11-14 review 回归）。
+  if (!result.ok || !result.completed) throw new Error('expected in-grace completion');
+  expect(result.completed.timedOut).toBe(true);
+  expect(result.completed.outputCapped).toBe(false);
+  expect(result.completed.code === 0).toBe(false);
   // 同步消费即报告：不再回注。
   expect(capture).not.toHaveBeenCalled();
 });
