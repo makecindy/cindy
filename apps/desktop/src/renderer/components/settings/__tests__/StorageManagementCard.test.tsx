@@ -45,6 +45,8 @@ function storageApi() {
     openLegacyImagesDir: vi.fn(async () => ({ opened: true })),
     clearLegacyImagesDir: vi.fn(async () => ({ cleared: true })),
     openChatAttachmentsDir: vi.fn(async () => ({ opened: true })),
+    openSpineDir: vi.fn(async () => ({ opened: true })),
+    clearSpineDir: vi.fn(async () => ({ cleared: true })),
     clearChatAttachmentsDir: vi.fn(async () => ({ cleared: true })),
     stats: vi.fn(async (): Promise<StorageStatsResult> => ({
       success: true,

@@ -475,6 +475,16 @@ export const MAKER_INVOKE = {
   LSP_MODE_GET: 'maker:lsp-mode:get',
   LSP_MODE_SET: 'maker:lsp-mode:set',
   /**
+   * 边做边压 (Live Compact) 实验开关 ——
+   *  - GET: renderer 启动期同步本地镜像
+   *  - SET: 用户 toggle 时落 <userData>/live-compact-settings.json, 仅对**新 session** 生效
+   *         (pi 进程启动时一次性加载扩展, 已开 session 不变)
+   * 默认 false。打开后 maker-core 把内置 live-compact 扩展写进会话
+   * internal-extensions 并显式 --extension 加载。
+   */
+  LIVE_COMPACT_GET: 'maker:live-compact:get',
+  LIVE_COMPACT_SET: 'maker:live-compact:set',
+  /**
    * 对话语义索引开关 (chat-history-embedder) ——
    *  - GET: 启动期及账号切换时同步 owner-scoped renderer 镜像
    *  - SET: 用户 toggle 时写入当前 owner 的明确 override，并立即 reconcile runtime；

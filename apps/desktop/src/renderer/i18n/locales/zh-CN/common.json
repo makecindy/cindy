@@ -4610,6 +4610,34 @@
         "toggleFailed": "切换 LSP 开关失败"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "边做边压 · Live Compact",
+        "description": "每轮结束时把已完成的一段对话压成本地卡片：模型仍能看到要点与原文路径，上下文增长更慢。对之后启动的 Pi 任务生效（重新打开的历史任务也算），已在运行的任务不受影响；只对这台电脑上的 Pi 任务生效，远程电脑上的任务不受影响。策略与 Pi 原生压缩不同。",
+        "sourceLabel": "原仓：MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "已开启，之后启动的 Pi 任务生效",
+        "disabled": "已关闭，之后启动的 Pi 任务生效",
+        "toggleFailed": "切换边做边压开关失败",
+        "readFailed": "读取边做边压开关失败"
+      },
+      "openFailed": "打开链接失败",
+      "toggleAria": "边做边压 Live Compact",
+      "shadow": {
+        "label": "影子原文",
+        "description": "被压缩段落的原文存于此，清理后旧摘要将无法再展开。",
+        "openButton": "打开目录",
+        "clearButton": "清理",
+        "directoryMissing": "没有找到边做边压的影子原文目录",
+        "openFailed": "打不开边做边压的影子原文目录，请重试。",
+        "clearConfirmTitle": "清理边做边压的影子原文？",
+        "clearConfirmDescription": "只会删除影子原文目录里的文件，对话和摘要本身不受影响。已经指向这些文件的摘要将无法再展开原文，且无法撤销。",
+        "clearConfirmButton": "清理影子原文",
+        "cleared": "边做边压的影子原文已清理",
+        "clearFailed": "清理边做边压的影子原文失败，请重试。"
+      }
+    },
     "betaChannel": {
       "title": "Beta 测试渠道",
       "badge": "Beta",

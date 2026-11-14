@@ -1027,6 +1027,7 @@ import {
 } from './vision-bridge/vision-bridge-settings-store.js';
 import type { VisionBridgeSettings } from '../shared/visionBridgeSettings.js';
 import { readLspModeSettings, writeLspModeEnabled } from './maker-host/lsp-mode-store.js';
+import { readLiveCompactSettings, writeLiveCompactEnabled } from './maker-host/live-compact-store.js';
 import {
   readChatEmbeddingSettings,
   readChatEmbeddingSettingsState,
@@ -5869,6 +5870,19 @@ const registerIpcHandlers = () => {
     return { effective: 'next-session' as const };
   });
 
+  // 边做边压 (Live Compact) 开关 IPC —— 同 LSP 口径:
+  // pi 进程启动时一次性决定是否 --extension,已开 session 不变。
+  ipcMain.handle(MAKER_IPC_INVOKE.LIVE_COMPACT_GET, async () => {
+    return readLiveCompactSettings();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.LIVE_COMPACT_SET, async (_e, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'live compact enabled required (boolean)');
+    }
+    writeLiveCompactEnabled(enabled);
+    return { effective: 'next-session' as const };
+  });
+
   // 聊天嵌入开关 IPC —— 与 compat-mode 同理提前注册:
   // renderer 启动 bootstrap 同步 localStorage 镜像, 远早于 splash 完成。
   // SET 路径既落 JSON 也立即把 chat-history-embedder 的运行时 enabled 切换 ——
@@ -9316,6 +9330,29 @@ const registerIpcHandlers = () => {
       registerWindowDraftUrls(event.sender, urls);
     });
 
+    // 「边做边压」的备份里是会话正文,属于账号私有数据:目录与设置页操作都必须按当前
+    // 账号解析,切账号后既看不到也清不掉上一个账号的备份(与 chat attachments 同口径)。
+    const captureSpineDir = () => {
+      const ownerScopeKey = activeOwnerScopeKey();
+      if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
+        throwIpcError('PRECONDITION_FAILED', 'live compact directory requires a stable data owner');
+      }
+      return {
+        spineDir: ownerScopedUserDataPath('pi-agent-home', 'compaction-spine'),
+        isCurrentOwner: () => activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending(),
+      };
+    };
+    const withSpineDir = async <T>(
+      action: (spineDir: string, isCurrentOwner: () => boolean) => Promise<T>,
+      options: { allowOwnerChangeAfterAction?: boolean } = {},
+    ): Promise<T> => {
+      const { spineDir, isCurrentOwner } = captureSpineDir();
+      const result = await action(spineDir, isCurrentOwner);
+      if (!options.allowOwnerChangeAfterAction && !isCurrentOwner()) {
+        throwIpcError('PRECONDITION_FAILED', 'live compact directory owner changed');
+      }
+      return result;
+    };
     const storageHandlers = createStorageIpcHandlers({
       clearRemoteMediaMemory: clearLocalEntries,
       getQueueScanTexts: collectAgentInputQueueScanTexts,
@@ -9337,6 +9374,28 @@ const registerIpcHandlers = () => {
         !getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()
           ? Promise.resolve({ bytes: 0, fileCount: 0 })
           : withActiveChatAttachmentRoot((rootDir) => getFixedDirectoryStats(rootDir)),
+      // 「边做边压」扩展把被切走的原文写在这里(spine.log + shadow/)。目录不存在时
+      // 报数为 0、清理为无操作,无需先判断开关状态。
+      // 打开目录一律走 Electron shell + 统一的目标解析:目录由本机拼出来、不接受
+      // renderer 传路径,仍过一次 resolveShellOpenPathTarget,保证这条调用面永远不碰命令执行。
+      openSpineDir: () =>
+        withSpineDir(async (spineDir, isCurrentOwner) => {
+          const target = resolveShellOpenPathTarget(spineDir);
+          if (!target) return false;
+          // canOpen 在 mkdir/lstat 的 await 之后、真正 shell.openPath 之前再核一次归属:
+          // 账号在文件系统等待期间切换时,不再打开上一个账号的私有备份目录
+          // (allowOwnerChangeAfterAction 只豁免「打开之后」的复检,打开本身必须过门)。
+          return openOrCreateFixedDirectory(target, {
+            canOpen: isCurrentOwner,
+            openPath: (filePath) => shell.openPath(filePath),
+          });
+        }, { allowOwnerChangeAfterAction: true }),
+      clearSpineDir: () => withSpineDir((spineDir) => clearFixedDirectory(spineDir)),
+      // 未登录/账号边界未稳定时没有归属:按 0 报数,不读任何账号的目录。
+      getSpineDirStats: () =>
+        !getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()
+          ? Promise.resolve({ bytes: 0, fileCount: 0 })
+          : withSpineDir((spineDir) => getFixedDirectoryStats(spineDir)),
     });
     registerLocalAgentConfirmationIpc(() => mainWindowRef);
     ipcMain.handle('local-agent:connections', (event) => {
@@ -9419,6 +9478,36 @@ const registerIpcHandlers = () => {
           );
         }
         await storageHandlers.clearChatAttachmentsDir();
+        return { cleared: true };
+      }),
+    );
+    ipcMain.handle('cindy-media:spine-stats', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.spineStats();
+    });
+    ipcMain.handle('cindy-media:spine-open-dir', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.openSpineDir();
+    });
+    ipcMain.handle('cindy-media:spine-clear', (event) =>
+      runFixedDirectoryIpcAction('spine-clear', async () => {
+        assertTrustedAppRendererEvent(event);
+        // 确认框可能开着很久:账号在确认期间切走的话,直接删就会删掉新账号的备份。
+        // 与 chat attachments 同口径 —— 弹框前抓住归属,确认后、删除前复核。
+        const ownerScope = captureSpineDir();
+        const confirmed = await confirmFixedDirectoryClear(event, {
+          title: t('settings.liveCompact.shadow.clearConfirmTitle'),
+          message: t('settings.liveCompact.shadow.clearConfirmDescription'),
+          confirmButton: t('settings.liveCompact.shadow.clearConfirmButton'),
+        });
+        if (!confirmed) return { cleared: false };
+        if (!ownerScope.isCurrentOwner()) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'live compact directory owner changed before cleanup',
+          );
+        }
+        await storageHandlers.clearSpineDir();
         return { cleared: true };
       }),
     );

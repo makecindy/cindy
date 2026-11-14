@@ -7,6 +7,8 @@ import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.desktop.js';
 import { providerPresetModelRecord, providerModelAdapterId, providerBaseUrlForApi } from '@cindy/model-providers';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
+import { readLiveCompactSettings } from './live-compact-store.js';
+import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { subscriptionAccountKind, subscriptionAccountState } from './subscription-account-auth.js';
 /**
  * pi agent 的 desktop host 装配 —— auth / runtimeConfig / 二进制解析 / 构造,
@@ -243,6 +245,11 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     getManagedSkills: listCindyManagedSkills,
     scanLocalCustomizations,
     ...createPiModelResolvers({ getCatalog: getActiveCatalog, resolveContextProviderId: resolveModelContextProviderId }),
+    // 实验开关:打开时新会话加载内置 live-compact 扩展(边做边压)。
+    // 每次 startSession 现读 —— 与 LSP Beta 同一口径(toggle 后新会话生效)。
+    resolvePiLiveCompactEnabled: () => readLiveCompactSettings().enabled,
+    // 备份按账号隔离:扩展写入与设置页的打开/统计/清理必须指向同一个目录。
+    resolvePiLiveCompactShadowDir: () => ownerScopedUserDataPath('pi-agent-home', 'compaction-spine'),
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
     get binaryPath() { return resolvePiBinaryPath() ?? binaryPath; },

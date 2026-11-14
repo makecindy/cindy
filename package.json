@@ -110,6 +110,8 @@
     "ci:scheduler-guard": "node scripts/scheduler-ci-guard.mjs",
     "pctx": "node packages/project-context/dist/cli.js",
     "pctx:build": "pnpm --filter project-context build",
+    "check:live-compact-source": "node packages/maker-core/scripts/generate-live-compact-source.mjs --check",
+    "generate:live-compact-source": "node packages/maker-core/scripts/generate-live-compact-source.mjs",
     "dev:host": "node scripts/dev-with-host.mjs",
     "personal:build": "node scripts/personal-build.mjs"
   },

@@ -4653,6 +4653,34 @@
         "toggleFailed": "LSP konnte nicht umgeschaltet werden"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "Live Compact · Beta",
+        "description": "Faltet am Ende jeder Runde einen abgeschlossenen Gesprächsabschnitt in eine lokale Karte: Das Modell behält Kernpunkte und einen Pfad zum Volltext, der Kontext wächst langsamer. Gilt für Pi-Tasks, die ab jetzt starten (auch ein erneut geöffneter Task zählt); bereits laufende Tasks bleiben unverändert. Gilt nur für Pi-Tasks auf diesem Computer; Tasks auf einem entfernten Computer sind nicht betroffen. Die Strategie weicht von der nativen ab.",
+        "sourceLabel": "Ursprung: MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "Aktiviert – wirkt in Pi-Tasks, die ab jetzt starten",
+        "disabled": "Deaktiviert – wirkt in Pi-Tasks, die ab jetzt starten",
+        "toggleFailed": "Live-Compact-Einstellung konnte nicht geändert werden",
+        "readFailed": "Live-Compact-Einstellung konnte nicht gelesen werden"
+      },
+      "openFailed": "Link konnte nicht geöffnet werden",
+      "toggleAria": "Live Compact",
+      "shadow": {
+        "label": "Schattentext",
+        "description": "Ausschnitt-Text; Leeren bricht alte Zusammenfassungen.",
+        "openButton": "Verzeichnis öffnen",
+        "clearButton": "Leeren",
+        "directoryMissing": "Das Live-Compact-Schattenverzeichnis wurde nicht gefunden",
+        "openFailed": "Das Live-Compact-Schattenverzeichnis konnte nicht geöffnet werden. Bitte erneut versuchen.",
+        "clearConfirmTitle": "Live-Compact-Schatten leeren?",
+        "clearConfirmDescription": "Gelöscht werden nur Dateien im Live-Compact-Schattenverzeichnis; Gespräche und Zusammenfassungen bleiben unberührt. Zusammenfassungen, die auf diese Dateien verweisen, können den Originaltext nicht mehr anzeigen. Das lässt sich nicht rückgängig machen.",
+        "clearConfirmButton": "Schatten leeren",
+        "cleared": "Live-Compact-Schatten geleert",
+        "clearFailed": "Der Live-Compact-Schatten konnte nicht geleert werden. Bitte erneut versuchen."
+      }
+    },
     "betaChannel": {
       "title": "Beta-Kanal",
       "badge": "Beta",
