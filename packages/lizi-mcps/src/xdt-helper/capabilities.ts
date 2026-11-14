@@ -158,7 +158,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【入口】cindy_helper 的 history 类 list_sessions / list_session_queue 提供 queuedCount、队列位置、来源、入队时间、正文摘要与 consuming 状态；control 类提供 update_session_queued_message、cancel_session_queued_message、steer_session_queued_message、move_session_queued_message、steer_session、stop_session_turn、get_session_runtime。',
       '【伙伴入口】伙伴可发现通用 control 类；主人请求沿用普通权限流程，自动轮次的实际写入须通过 Host 行动授权。',
       '【队列所有权】只能修改或撤回当前调用 session 自己通过 send_to_session 投递、且尚未进入 consuming 的消息；Orca、scheduler、用户或其它 session 的消息都会 fail-closed 拒绝。Orca worker 队列控制与这里复用同一底层生命周期实现。steer_session_queued_message / move_session_queued_message 把排队消息转为插话或调整顺序,可操作范围另含自己任务队列里由其它任务 / 协同成员发来的机器消息;没插成时消息留在队列并返回 reason。',
-      '【插话】steer_session 只对正在运行且支持 same-turn steer 的 session 生效，在 provider 的下一个输入间隙注入当前 turn；若 turn 已结束会明确失败，不会退化成下一 turn。',
+      '【插话】steer_session 只对正在运行且支持 same-turn steer 的 session 生效，在 provider 的下一个输入间隙注入当前 turn；若 turn 已结束会明确失败，不会退化成下一 turn。发给已有任务时也可直接用 handoff 类 send_to_session 的 delivery=steer：一次调用投递并尝试插进当前 turn，没插成时消息照常排队并返回 steer_fallback_reason，不要重发(仅本机任务)。',
       '【停止】stop_session_turn 是请求式优雅停止：当前并行工具全部收尾后才发送 provider 软中断；不关闭 transport、不重建 session、不硬杀进程，超时未确认会返回 unconfirmed。',
       '【探针】get_session_runtime 返回统一 phase、记录状态、标题工作流语义、turn generation、开始时间、最后活动时间、当前动作摘要和停止状态；动作摘要有界且不包含提示词正文、工具参数或凭证。',
     ].join(' '),

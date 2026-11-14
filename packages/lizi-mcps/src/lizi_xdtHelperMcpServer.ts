@@ -797,6 +797,8 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       sendToSession: deps.sendToSession,
       ...(deps.sendToRemoteSession ? { sendToRemoteSession: deps.sendToRemoteSession } : {}),
+      // delivery=steer 复用 steer_session_queued_message 的同一宿主实现与授权范围。
+      ...(deps.sessionControl ? { steerQueuedMessage: deps.sessionControl.steerQueuedMessage } : {}),
     });
   }
   if (deps.skillLearning && deps.authorizeSkillLearning) {
