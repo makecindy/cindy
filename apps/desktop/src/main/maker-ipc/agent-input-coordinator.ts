@@ -373,6 +373,8 @@ export interface AgentInputCoordinatorDeps {
     sdkError?: string;
     errorStatus?: number;
     toolLoop?: AgentInputToolLoopDetails;
+    /** Codex app-server 的结构化错误 tag（如 `responseTooManyFailedAttempts`）。 */
+    codexErrorInfo?: string;
     outputLimit?: OutputLimitDetails;
   } | undefined;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
@@ -4427,6 +4429,9 @@ export class AgentInputCoordinator {
                 ? { errorStatus: observed.errorStatus }
                 : {}),
               ...(observed.toolLoop ? { toolLoop: observed.toolLoop } : {}),
+              // 结构化 Codex tag 随终端快照一起补收：丢掉它，
+              // `isInterruptedTurnError` 的「采样重试预算已耗尽」排除条件就失效。
+              ...(observed.codexErrorInfo ? { codexErrorInfo: observed.codexErrorInfo } : {}),
               ...(observed.outputLimit ? { outputLimit: observed.outputLimit } : {}),
             };
             // Codex/Claude 失败收尾是 terminal error 后再补 done。漏掉的 error
@@ -4954,6 +4959,10 @@ export class AgentInputCoordinator {
       ...(observed.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
       ...(typeof observed.errorStatus === 'number' ? { errorStatus: observed.errorStatus } : {}),
       ...(observed.toolLoop ? { toolLoop: observed.toolLoop } : {}),
+      // 结构化 Codex tag 必须随终端快照一起补收：丢掉它，
+      // `isInterruptedTurnError` 的「采样重试预算已耗尽」排除条件就失效，
+      // 503/529 之类的过载状态反而会命中自动续跑白名单再跑一整轮。
+      ...(observed.codexErrorInfo ? { codexErrorInfo: observed.codexErrorInfo } : {}),
       ...(observed.outputLimit ? { outputLimit: observed.outputLimit } : {}),
     };
     return {
@@ -5074,6 +5083,7 @@ export class AgentInputCoordinator {
         ...(observed?.reason ? { reason: observed.reason } : {}),
         ...(observed?.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
         ...(typeof observed?.errorStatus === 'number' ? { errorStatus: observed.errorStatus } : {}),
+        ...(observed?.codexErrorInfo ? { codexErrorInfo: observed.codexErrorInfo } : {}),
       };
       // Apply recovery before fencing. A same-generation meta would make
       // onTurnEvent treat this synthesized error as the leftover we just fenced.

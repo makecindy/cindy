@@ -736,18 +736,40 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined): C
     );
   const message = redactSensitiveText(rawMessage);
   const signals = extractNonSecretErrorSignals(rawMessage);
+  // Codex nests the upstream HTTP status inside `codexErrorInfo` (first entry);
+  // a 503/529 that never reaches the message text must still classify as overload.
+  const codexInfoDetails =
+    error?.codexErrorInfo && typeof error.codexErrorInfo === 'object' && !Array.isArray(error.codexErrorInfo)
+      ? Object.values(error.codexErrorInfo)[0]
+      : undefined;
+  const codexInfoStatus =
+    codexInfoDetails && typeof codexInfoDetails === 'object' && !Array.isArray(codexInfoDetails)
+      && typeof (codexInfoDetails as { httpStatusCode?: unknown }).httpStatusCode === 'number'
+      ? (codexInfoDetails as { httpStatusCode: number }).httpStatusCode
+      : undefined;
   const errorStatus =
-    signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
-  const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
-  const isCapacityError = overload?.kind === 'capacity';
+    signals.errorStatus ?? codexInfoStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
+  const additionalDetails =
+    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const overload = parseOverloadError(message, errorStatus, errorInfoTag);
+  // Codex's nested serverOverloaded response uses these 503 codes (see app-server/protocol.ts).
+  const nestedCapacityMarker =
+    /\b(?:server[_\s-]+is[_\s-]+overloaded|server[_\s-]+overloaded|serveroverloaded|selected model is at capacity|slow[_\s-]+down)\b/i.test(
+      additionalDetails,
+    );
+  const nestedOverloadMarker = nestedCapacityMarker || /\boverloaded_error\b/i.test(additionalDetails);
+  // responseTooManyFailedAttempts means app-server has already exhausted its own sampling
+  // retry budget. Preserve the overload classification for the UI, but do not start another
+  // Codex turn replay on top of those five attempts.
+  const samplingRetriesExhausted = errorInfoTag === 'responseTooManyFailedAttempts';
+  const isCapacityError = !samplingRetriesExhausted && (overload?.kind === 'capacity' || nestedCapacityMarker);
+  const isUpstreamOverload = overload !== null || nestedOverloadMarker;
   // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
   // engine is currently overloaded`）。那是容量问题，不是账号用量上限：保留
   // usageLimit 会让续跑判定拒掉这一轮，也让限额自动继续误接管。
-  const usageLimit = signals.usageLimit && overload === null;
-  const additionalDetails =
-    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const usageLimit = signals.usageLimit && !isUpstreamOverload;
   const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
-  const reason = isCapacityError
+  const reason = isUpstreamOverload
     ? UPSTREAM_OVERLOAD_REASON
     : isRemoteCompactEncryptedContentError(compactClassifyText)
       ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON

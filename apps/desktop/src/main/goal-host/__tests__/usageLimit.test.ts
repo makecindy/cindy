@@ -39,6 +39,18 @@ describe('classifyTurnUsageLimit', () => {
     expect(classifyTurnUsageLimit({ message: 'tool failed: file not found' })).toBe(false);
   });
 
+  it('does NOT treat exhausted Codex sampling retries as a periodic limit', () => {
+    // 采样重试预算耗尽的报错常带嵌套 429：重投同一请求只会重开一整个采样周期，
+    // 应保持 blocked 交回用户，而不是等一个并不存在的额度重置。
+    expect(
+      classifyTurnUsageLimit({
+        message: 'Too many failed attempts',
+        errorStatus: 429,
+        codexErrorInfo: 'responseTooManyFailedAttempts',
+      }),
+    ).toBe(false);
+  });
+
   it('handles non-object / empty input', () => {
     expect(classifyTurnUsageLimit(null)).toBe(false);
     expect(classifyTurnUsageLimit(undefined)).toBe(false);
@@ -116,6 +128,19 @@ describe('classifyTurnOverload', () => {
     expect(classifyTurnOverload({ message: 'boom', codexErrorInfo: 'contextWindowExceeded' })).toBe(false);
     expect(
       classifyTurnOverload({ message: 'stream gone', codexErrorInfo: 'responseStreamDisconnected' }),
+    ).toBe(false);
+  });
+
+  it('does NOT resume a goal whose Codex sampling budget is already exhausted', () => {
+    // 目标模式直接 `Session.send()`，不经过 interruptedTurnAutoResume 的
+    // `isInterruptedTurnError` 排除条件；耗尽标记必须在这条分类里也挡一次，
+    // 否则嵌套的 529 会把它判成容量抖动，一分钟后重开整轮采样。
+    expect(
+      classifyTurnOverload({
+        message: 'Selected model is at capacity. Please try a different model.',
+        errorStatus: 529,
+        codexErrorInfo: 'responseTooManyFailedAttempts',
+      }),
     ).toBe(false);
   });
 
