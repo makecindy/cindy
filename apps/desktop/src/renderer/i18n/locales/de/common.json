@@ -13428,6 +13428,15 @@
           "askNoQuestion": "Der Agent wartet auf deine Antwort, aber es gibt keine Frage zum Anzeigen. Antworte mit „weiter“.",
           "askQuestion": "Der Agent braucht deine Antwort:\n{{question}}\n{{options}}\nAntworte mit der Nummer einer Option oder gib deine Antwort direkt ein."
         }
+      },
+      "questions": {
+        "cardHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden. Du kannst auch auf diese Nachricht mit Text antworten. Antworte bei mehreren Fragen mit „Fragennummer: Antwort“ (z. B. „2: Deutsch“) und sende anschließend ab.",
+        "submitLabel": "Antworten senden",
+        "multiSelectHint": " (Mehrfachauswahl möglich)",
+        "resolved": "✅ Gewählt: {{option}}",
+        "expired": "Diese Karte ist abgelaufen",
+        "textHint": "Nur die fragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
+        "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden."
       }
     }
   },

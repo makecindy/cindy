@@ -28,8 +28,10 @@ import { setMainLocale } from '../../i18n.desktop';
 
 import {
   HOOK_FEATURE_MESSAGE_OPS,
+  HOOK_FEATURE_IM_QUESTIONS,
   HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_TELEGRAM_CARD_OPS,
+  HOOK_FEATURE_TELEGRAM_QUESTION_OPS,
   HOOK_FEATURE_TELEGRAM_COMMANDS,
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
@@ -5437,6 +5439,47 @@ describe('官方 Telegram 进度消息由客户端渲染(telegram-progress-ops-v
   });
 });
 
+describe('official IM question capability', () => {
+  it.each(['slack', 'feishu', 'lark'])('%s keeps an async question answerable after turn.end', async im => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_IM_QUESTIONS]);
+    d.handleDispatch('conn-1', dispatch({ source: { im, userText: 'hello' } }), c.send);
+    await tick();
+    let settle!: (value: import('@cindy/maker-core').InteractionDecision) => void;
+    const answer = vi.fn();
+    await fr.calls[0].onQuestion!({ kind: 'ask_user_question', requestId: 'question', delivery: 'async',
+      questions: [{ question: 'Which format?', options: [{ label: 'PDF' }] }] },
+    { answer, settled: new Promise(resolve => { settle = resolve; }) });
+    fr.finish();
+    await tick(40);
+    const card = c.ofType('interaction.request')[0];
+    expect(card.payload.questionMode).toBe('async');
+    expect(c.sent.indexOf(card)).toBeLessThan(c.sent.findIndex(m => m.type === 'turn.end'));
+    d.handleInteractionDecision('conn-1', { requestId: card.payload.requestId,
+      interactionId: card.payload.interactionId, buttonId: card.payload.buttons[0].id });
+    await tick();
+    expect(answer).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { 'Which format?': 'PDF' } });
+    settle(answer.mock.calls[0][0]);
+    await tick();
+    expect(c.ofType('interaction.cancel')[0]?.payload.interactionId).toBe(card.payload.interactionId);
+  });
+
+  it('keeps generic questions disabled for a server without the capability', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, []);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'slack' } }), c.send);
+    await tick();
+    expect(fr.calls[0].onQuestion).toBeUndefined();
+    fr.finish();
+    await tick();
+    expect(c.ofType('interaction.request')).toHaveLength(0);
+  });
+});
+
 describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', () => {
   type OpMessage = Extract<HookMessage, { type: 'msg.op' }>;
   const ALL_FEATURES = [
@@ -5475,6 +5518,69 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
     };
     return { ...c, send };
   }
+
+  // Real dispatcher lifecycle: buttons remain routed after turn.end.
+  it('keeps question buttons usable after draining and turn.end', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, [...ALL_FEATURES, HOOK_FEATURE_TELEGRAM_QUESTION_OPS]);
+    d.handleDispatch('conn-1', telegramDispatch(), c.send);
+    await tick();
+    let settle!: (value: import('@cindy/maker-core').InteractionDecision) => void;
+    const answer = vi.fn();
+    const controls = { answer, settled: new Promise<import('@cindy/maker-core').InteractionDecision>(r => { settle = r; }) };
+    const request = { kind: 'ask_user_question' as const, requestId: 'question', delivery: 'async' as const,
+      questions: [{ question: 'Which format?', options: [{ label: 'PDF' }] }] };
+    const sent = fr.calls[0].onQuestion!(request, controls);
+    fr.finish({ finalText: 'Other work is done' });
+    await sent;
+    await tick(40);
+    const notice = ops(c.sent, 'turn-notice')[0];
+    expect(notice.payload).toMatchObject({ requestId: 'req-1',
+      scope: { externalKey: telegramDispatch().externalKey }, action: { kind: 'send', tier: 'html' } });
+    expect(c.sent.indexOf(notice)).toBeLessThan(c.sent.findIndex(m => m.type === 'turn.end'));
+    const buttonId = (notice.payload.action as { buttons: { token: string }[][] }).buttons[0][0].token;
+    d.handleInteractionDecision('conn-1', { requestId: 'req-1', interactionId: notice.payload.interactionId!, buttonId });
+    await tick();
+    expect(answer).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { 'Which format?': 'PDF' } });
+    settle(answer.mock.calls[0][0]);
+    await tick();
+    expect(ops(c.sent, 'turn-notice').at(-1)?.payload).toMatchObject({ interactionClosed: true, action: { kind: 'edit', buttons: [] } });
+    const count = ops(c.sent, 'turn-notice').length;
+    await fr.calls[0].onQuestion!(request, controls);
+    expect(ops(c.sent, 'turn-notice')).toHaveLength(count);
+  });
+
+  it('does not publish a queued async question after the account changes', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, [...ALL_FEATURES, HOOK_FEATURE_TELEGRAM_QUESTION_OPS]);
+    d.handleDispatch('conn-1', telegramDispatch(), c.send);
+    await tick();
+    const sent = fr.calls[0].onQuestion!({ kind: 'ask_user_question', requestId: 'question',
+      questions: [{ question: 'Private question' }] }, { answer: vi.fn(), settled: new Promise(() => {}) });
+    const rejected = expect(sent).rejects.toThrow('channel unavailable');
+    const drained = d.deactivateAccount();
+    fr.finish();
+    await drained;
+    await rejected;
+    expect(ops(c.sent, 'turn-notice')).toHaveLength(0);
+  });
+
+  it('does not enable asynchronous notice sends on a legacy server', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, ALL_FEATURES);
+    d.handleDispatch('conn-1', telegramDispatch(), c.send);
+    await tick();
+    expect(fr.calls[0].onQuestion).toBeUndefined();
+    fr.finish();
+    await tick(40);
+    expect(ops(c.sent, 'turn-notice')).toHaveLength(0);
+  });
 
   it('协商终稿: 先写持久出箱、再经 msg.op 发布, 最后 turn.end 带 clientFinal.complete', async () => {
     const ledger = memoryTerminalLedger();

@@ -24,12 +24,19 @@ export type TurnOrigin = TurnPermissionOrigin;
 export type InteractionSurface = 'desktop' | 'channel-card' | 'headless';
 export type InteractionRouteState = 'waiting' | 'resolved' | 'cancelled';
 
+export interface QuestionControls {
+  answer(decision: Extract<InteractionDecision, { kind: 'ask_user_question' }>): void;
+  settled: Promise<InteractionDecision>;
+}
+
 export interface InteractionRoute {
   sessionId: string;
   turnId: string;
   origin: TurnOrigin;
   interactionSurface: InteractionSurface;
   timeoutMs?: number;
+  /** Blocking question timeout, independent of permission/plan presentation. */
+  questionTimeoutMs?: number;
   /** Main-owned source text, shared by Desktop and channel presentations. */
   sourceDescription?: string;
   /**
@@ -38,6 +45,8 @@ export interface InteractionRoute {
    */
   requesterAuthority?: 'owner' | 'guest' | 'unknown';
   onStateChange?(state: InteractionRouteState): void;
+  /** Telegram question cards share the App answer gate; delivery determines their lifetime. */
+  presentQuestion?(request: Extract<InteractionRequest, { kind: 'ask_user_question' }>, controls: QuestionControls): Promise<void>;
 }
 
 export type InteractionHandler = (
@@ -81,6 +90,7 @@ type ActiveRoute = RouteRegistration & {
 
 interface PendingRequest {
   shared?: SharedPermission;
+  desktopQuestion?: boolean;
   routeToken: symbol | null;
   request: InteractionRequest;
   cancel(decision: InteractionDecision): void;
@@ -191,6 +201,11 @@ class SessionInteractionRouter {
         for (const [requestId, pending] of this.pending) {
           if (pending.routeToken !== active.token) continue;
           const decision = safeDecision(pending.request, reason);
+          if (pending.desktopQuestion) {
+            callSafely(() => this.desktopCancel?.(requestId, decision));
+            pending.cancel(decision);
+            continue;
+          }
           if (pending.shared) pending.cancel(decision);
           const handledBySurface = callSafely(
             () => active.onCancel?.(requestId, decision) === true,
@@ -226,14 +241,22 @@ class SessionInteractionRouter {
       }
     }
 
-    const active = this.activeRoute;
+    const channelRoute = this.activeRoute;
+    const questionPresentation = request.kind === 'ask_user_question'
+      && this.desktopHandler && channelRoute?.route.presentQuestion;
+    if (questionPresentation && request.kind === 'ask_user_question' && request.questions.length === 0) {
+      return { kind: 'ask_user_question', answers: {} };
+    }
+    // Both modes use the App answer gate. Only async questions detach from turn cleanup.
+    const active = questionPresentation && request.kind === 'ask_user_question' && request.delivery === 'async'
+      ? null : channelRoute;
     if (request.kind === 'permission' && active?.route.sourceDescription) {
       request = { ...request,
         metadata: { ...request.metadata, imSourceDescription: active.route.sourceDescription },
         description: [active.route.sourceDescription, request.description].filter(Boolean).join('\n\n'),
       };
     }
-    const handler =
+    const handler = questionPresentation ? this.desktopHandler :
       active?.route.interactionSurface === 'desktop'
         ? this.desktopHandler
         : active?.handle ?? this.desktopHandler;
@@ -263,6 +286,7 @@ class SessionInteractionRouter {
     });
     this.pending.set(request.requestId, {
       shared,
+      desktopQuestion: !!questionPresentation,
       routeToken: active?.token ?? null,
       request,
       cancel,
@@ -276,7 +300,7 @@ class SessionInteractionRouter {
     const abort = () => {
       const decision = safeDecision(request, 'session_aborted');
       cancel(decision);
-      if (active?.route.interactionSurface === 'channel-card' || active?.route.interactionSurface === 'headless') {
+      if (!questionPresentation && (active?.route.interactionSurface === 'channel-card' || active?.route.interactionSurface === 'headless')) {
         callSafely(() => active.onCancel?.(request.requestId, decision));
       } else {
         callSafely(() => this.desktopCancel?.(request.requestId, decision));
@@ -285,11 +309,17 @@ class SessionInteractionRouter {
     signal?.addEventListener('abort', abort, { once: true });
     this.notifyLifecycle('onStart', request, active?.route);
     this.notifyState(active?.route, 'waiting');
-    const timeoutMs = active?.route.timeoutMs;
+    const timeoutMs = questionPresentation
+      ? active?.route.questionTimeoutMs ?? active?.route.timeoutMs : active?.route.timeoutMs;
     const timeout =
       timeoutMs && timeoutMs > 0
         ? setTimeout(() => {
             const decision = safeDecision(request, 'interaction_timeout');
+            if (questionPresentation) {
+              callSafely(() => this.desktopCancel?.(request.requestId, decision));
+              cancel(decision);
+              return;
+            }
             if (shared) {
               shared.decide(decision);
               return;
@@ -319,7 +349,18 @@ class SessionInteractionRouter {
         handled = handler(request);
       }
       if (signal?.aborted) abort();
-      const decision = await Promise.race([shared?.result ?? handled, cancelled]);
+      const result = Promise.race([shared?.result ?? handled, cancelled]);
+      if (questionPresentation && request.kind === 'ask_user_question') {
+        try {
+          void questionPresentation(request, {
+            answer: decision => {
+              if (this.pending.has(request.requestId)) this.desktopDecide?.(request.requestId, decision);
+            },
+            settled: result,
+          }).catch(() => undefined);
+        } catch { /* The App answer surface remains available. */ }
+      }
+      const decision = await result;
       this.notifyState(
         active?.route,
         !cancelledByRouter && this.activeRoute?.token === active?.token

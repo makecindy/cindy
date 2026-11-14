@@ -13374,6 +13374,15 @@
           "askNoQuestion": "Agent 正在等你的回答，但沒有可顯示的問題。請回覆「繼續」。",
           "askQuestion": "Agent 需要你的回答：\n{{question}}\n{{options}}\n請回覆選項編號，或直接輸入你的回答。"
         }
+      },
+      "questions": {
+        "cardHint": "僅提問者可作答。點選選項；多題或複選選好後送出。也可回覆這則訊息補充文字。多題文字回答請寫「題號：答案」（如「2：用中文」），填好後送出。",
+        "submitLabel": "送出答案",
+        "multiSelectHint": "（可複選）",
+        "resolved": "✅ 已選：{{option}}",
+        "expired": "卡片已過期",
+        "textHint": "僅提問者可作答。回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。",
+        "replyHint": "僅提問者可作答。點選選項；多題或複選選好後送出。\n回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。"
       }
     }
   },

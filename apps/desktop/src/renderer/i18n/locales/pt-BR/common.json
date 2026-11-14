@@ -13543,6 +13543,15 @@
           "askNoQuestion": "O Agent está esperando sua resposta, mas não há nenhuma pergunta para mostrar. Responda “continuar”.",
           "askQuestion": "O Agent precisa da sua resposta:\n{{question}}\n{{options}}\nResponda com o número de uma opção ou digite sua resposta."
         }
+      },
+      "questions": {
+        "cardHint": "Só quem fez o pedido pode responder. Toque em uma opção; para várias perguntas ou seleções, envie ao terminar. Você também pode responder a esta mensagem com texto. Para várias perguntas, responda “número: resposta” (ex.: “2: Português”) e depois envie.",
+        "submitLabel": "Enviar respostas",
+        "multiSelectHint": " (pode escolher mais de uma)",
+        "resolved": "✅ Selecionado: {{option}}",
+        "expired": "Este cartão expirou",
+        "textHint": "Só quem fez a consulta pode responder. Envie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar.",
+        "replyHint": "Só quem fez o pedido pode responder. Toque em uma opção; para várias perguntas ou seleções, envie ao terminar.\nEnvie {{code}} seguido da resposta. Para várias perguntas: {{code}} 2: resposta; depois {{code}} OK para enviar."
       }
     }
   },

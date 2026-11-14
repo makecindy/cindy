@@ -44,3 +44,30 @@ bot 同一份过程载体与渲染（见 `docs/product-rules/telegram-bot-parity
 
 新增拒绝码 `TURN_UNAVAILABLE`（终稿 / 卡片 op 时这一轮已收口或不属于该设备）。`msg.op`
 各 purpose 允许的动作与附属字段由 parse 强制联动，放错位置一律拒收。
+
+
+## 统一普通提问（`telegram-question-ops-v1`）
+
+另行双向协商并要求 `msg-op-v1`。`purpose=turn-notice` 必须带 requestId、interactionId 和 questionMode（blocking/async），
+支持 `send` / `edit`，tier 为 html/plain，buttons 必填（关闭用空数组）。interactionClosed
+只准用于 edit。禁止 delivery、replyToMessageId、effectId、silent、finalPart；位置由服务端
+按原 lane 决定，客户端不可任意指定群或私聊。两仓 `protocol-notice.test.ts` 使用同一 fixture。
+服务端每段最多 4096 字符、100 个按钮；客户端复用 Telegram 卡片布局与截断规则。
+
+首次发卡需活跃任务，turn.end 与发送共用请求串行队列；结束后中断式卡片清理，异步卡片保留。questionMode 不允许在编辑时改变。
+路由 requestId=null、terminal=false，externalKey 保留，避免最终片段/重跑回收。
+路由保存失败重试一次，仍失败尝试撤回并返回 PERSIST_FAILED；删除未确认为 unknown。
+初始发送确认后注册独立卡片，原群或 topic 不转 owner DM。按钮 token 绑定原 principal，
+以及卡片、绑定、设备、键盘版本；回调复用 interaction.decision；仅异步卡片不要求原轮次仍在执行。
+回调还核验当前 conversation generation；最长 24 小时，重启/解绑后安全失效。
+已消费的旧按钮再次点按不会清掉同卡的新键盘；他人点按不消费提问者的 token。
+
+客户端初始发送 drain 最多 10 秒，每次 op 回执最多 10 秒。未知发送/编辑均不自动重放，
+避免重复问题或恢复旧键盘；已知回执幂等、指纹冲突与绑定撤销检查沿用网关。
+账号切换清理客户端回调；App 题卡最终结束后更新卡片并清按钮。原提问者引用活卡的文字
+以 interaction.decision 的可选 answerText 回传；只能配 buttonId=question:reply，非空且
+≤4096 字符。旧按钮不允许附带文字；服务端验证卡片/提问者/绑定/generation 后发送。
+客户端复用同一答题入口，避免中断式文字回复在运行任务后排队。关闭卡片回复走正常输入。
+
+不改数据库、环境变量或 Mobile 原生。两端任意发布顺序安全，双方都升级且重新握手后启用。
+旧端保持旧交互卡路径。本协议只处理普通问答，权限审批与敏感代输入继续使用原有流程。

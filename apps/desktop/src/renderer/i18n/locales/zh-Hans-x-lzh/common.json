@@ -13374,6 +13374,15 @@
           "askNoQuestion": "Agent 待君之答，然无问可示。请复「续」。",
           "askQuestion": "Agent 待君作答：\n{{question}}\n{{options}}\n请复选项之序，或径书君之答。"
         }
+      },
+      "questions": {
+        "cardHint": "唯提问者可答。点选所答，多问多择毕而呈之。亦可回此讯补述。多问以「题号：答案」作答，如「2：中文」，填毕呈之。",
+        "submitLabel": "呈答",
+        "multiSelectHint": "（可多择）",
+        "resolved": "✅ 已择：{{option}}",
+        "expired": "此卡已逾期",
+        "textHint": "唯提问者可答。以 {{code}} 接所答；多问用「{{code}} 2：所答」，毕则回 {{code}} OK 呈之。",
+        "replyHint": "唯提问者可答。点选所答，多问多择毕而呈之。\n以 {{code}} 接所答；多问用「{{code}} 2：所答」，毕则回 {{code}} OK 呈之。"
       }
     }
   },
