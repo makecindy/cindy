@@ -1,3 +1,5 @@
+// 测试价值：unit；生产入口 ImageResizer.process。依据 PR 2 保留附件格式合同。
+// 原覆盖只有文件权限；最小输入 PNG/JPEG 附件。验证缓存文件真实 MIME 与后缀；本机执行 0.257s。
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";

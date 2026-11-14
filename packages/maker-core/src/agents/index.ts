@@ -48,7 +48,6 @@ export {
 } from './shared/image-resizer.js';
 export {
   compressImageBuffer,
-  processBuffer,
   detectSupportedImageMime,
   imageCompressionCacheKey,
   type ImageCompressionBudget,

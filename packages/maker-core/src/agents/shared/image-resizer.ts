@@ -24,6 +24,7 @@
  * session-tied 清理反而会破坏跨 session 缓存命中。
  */
 
+import { createRequire } from 'node:module';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,10 +45,7 @@ function loadSharp(): SharpModule | null {
   try {
     // 用 require 而非 import 是为了在 sharp 装不上的环境(如纯 type-check 跑测试)
     // 不让顶层 import 把整个模块 boom 掉。
-    const req: NodeJS.Require =
-      typeof require !== 'undefined'
-        ? require
-        : (eval('require') as NodeJS.Require);
+    const req = createRequire(import.meta.url);
     sharpInstance = req('sharp') as SharpModule;
   } catch {
     sharpInstance = null;
@@ -146,6 +144,7 @@ export class ImageResizer {
   async process(absPath: string): Promise<string> {
     if (!(await this.cacheDirReady)) return absPath;
     if (!absPath || typeof absPath !== 'string') return absPath;
+    if (path.dirname(absPath) === this.cfg.cacheDir) return absPath;
 
     let stat: Awaited<ReturnType<typeof fs.stat>>;
     try {
@@ -269,21 +268,24 @@ export class ImageResizer {
     source: Buffer,
     key: string,
   ): Promise<string> {
-    return this.acquireSlot(async () => {
-      const work = this.doResize(absPath, source, key);
+    // Keep the encoding slot until native work finishes, even if the caller
+    // has already timed out and returned its original path.
+    const work = this.acquireSlot(() => this.doResize(absPath, source, key));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
       const timeout = new Promise<'timeout'>((resolve) => {
-        setTimeout(() => resolve('timeout'), this.cfg.timeoutMs).unref?.();
+        timer = setTimeout(() => resolve('timeout'), this.cfg.timeoutMs);
+        timer.unref?.();
       });
       const result = await Promise.race([work, timeout]);
       if (result === 'timeout') {
-        this.cfg.logger?.warn('image-resizer: resize timeout, returning original', {
-          absPath,
-          timeoutMs: this.cfg.timeoutMs,
-        });
+        this.cfg.logger?.warn('image-resizer: resize timeout, returning original', { timeoutMs: this.cfg.timeoutMs });
         return absPath;
       }
       return result;
-    });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async doResize(

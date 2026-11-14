@@ -1,3 +1,6 @@
+// 测试价值：unit；生产入口 compressImageBuffer。依据 PR 2 压缩合同及 Lead 缩图回归审查。
+// 原覆盖仅断言缓存权限；最小失败输入为 1600×2 PNG、单/多帧图片、EXIF 6 JPEG。
+// 验证真实输出格式、像素、尺寸和预算失败；本机定向文件执行 3.148s（含编码）。
 import { existsSync } from 'node:fs';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
@@ -82,8 +85,43 @@ describe('compressImageBuffer', () => {
       create: { width: 32, height: 32, channels: 3, background: { r: 240, g: 80, b: 40 } },
     }).withMetadata({ icc: profile }).png().toBuffer();
     const result = await compressImageBuffer({ bytes: source, mimeType: 'image/png', route: { providerId: 'openai', acceptsWebp: true } });
+    expect(result.changed).toBe(true);
     const before = await sharp(source).toColourspace('srgb').raw().toBuffer();
     const after = await sharp(result.bytes).toColourspace('srgb').raw().toBuffer();
     expect(after).toEqual(before);
+  });
+});
+
+// Regression: PR 2 review. Real encoder previously reverted required resizing
+// via the byte-saving gate, or flattened animations. Unit; synthetic tiny inputs.
+describe('required resizing and byte budgets', () => {
+  it.each(['png', 'webp', 'gif'] as const)('resizes single-frame %s even without 15 percent savings', async format => {
+    const bytes = await sharp({ create: { width: 1600, height: 2, channels: 3, background: 'white' } })[format]().toBuffer();
+    const result = await compressImageBuffer({ bytes, mimeType: `image/${format}`, budget: { maxEdgePx: 1568 } });
+    expect(result.changed).toBe(true);
+    expect(result.width).toBe(1568);
+    expect(result.mimeType).toBe(format === 'gif' ? 'image/png' : `image/${format}`);
+  });
+  it('keeps multi-frame GIF bytes intact even under a resize budget', async () => {
+    const bytes = await sharp(Buffer.concat([Buffer.alloc(20 * 10 * 3, 200), Buffer.alloc(20 * 10 * 3, 40)]), { raw: { width: 20, height: 20, channels: 3, pageHeight: 10 } }).gif().toBuffer();
+    expect((await sharp(bytes).metadata()).pages).toBe(2);
+    const result = await compressImageBuffer({ bytes, mimeType: 'image/gif', budget: { maxEdgePx: 5 } });
+    expect(result.bytes).toEqual(bytes);
+    expect(result.changed).toBe(false);
+  });
+  it('reports an unreachable byte budget without returning an oversized candidate', async () => {
+    const bytes = await pngBuffer();
+    const result = await compressImageBuffer({ bytes, mimeType: 'image/png', budget: { maxBytes: 1 } });
+    expect(result.changed).toBe(false);
+    expect(result.bytes).toEqual(bytes);
+  });
+  it('bakes orientation and removes metadata on accepted output', async () => {
+    const bytes = await sharp({ create: { width: 400, height: 300, channels: 3, background: 'white' } }).withMetadata({ orientation: 6 }).jpeg({ quality: 100 }).toBuffer();
+    const result = await compressImageBuffer({ bytes, mimeType: 'image/jpeg' });
+    expect(result.changed).toBe(true);
+    const meta = await sharp(result.bytes).metadata();
+    expect([meta.width, meta.height]).toEqual([300, 400]);
+    expect(meta.exif).toBeUndefined();
+    expect(meta.orientation).toBeUndefined();
   });
 });

@@ -4,6 +4,7 @@
  * guesses a remote capability from an image MIME type.
  */
 
+import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 
 export type SupportedImageMime = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
@@ -44,7 +45,7 @@ function loadSharp(): SharpModule | null {
   if (sharpLoadAttempted) return sharpInstance;
   sharpLoadAttempted = true;
   try {
-    const req: NodeJS.Require = typeof require !== 'undefined' ? require : (eval('require') as NodeJS.Require);
+    const req = createRequire(import.meta.url);
     sharpInstance = req('sharp') as SharpModule;
   } catch {
     sharpInstance = null;
@@ -77,99 +78,68 @@ export function imageCompressionCacheKey(
       modelId: request.route?.modelId ?? null,
       acceptsWebp: request.route?.acceptsWebp === true,
     },
-    budget: request.budget ?? null,
+    budget: { maxBytes: request.budget?.maxBytes ?? null, maxEdgePx: request.budget?.maxEdgePx ?? null },
+    policy: { revision: 2, quality: 90, mozjpeg: true, chromaSubsampling: '4:4:4', pngLevel: 9, adaptiveFiltering: true, palette: false, colourspace: 'srgb', autoOrient: true, minSaving: 0.15, scale: 0.75, steps: 4 },
     versions: versions(sharp),
   });
   return createHash('sha256').update(bytes).update('\0').update(params).digest('hex');
 }
 
-/**
- * Encode one image. A result is replaced only when it saves at least 15%.
- * GIF and WebP are intentionally returned byte-for-byte unchanged so animated
- * GIFs cannot accidentally become a single still frame.
- */
+/** Pure encoding from original bytes; each budget attempt starts from the source. */
 export async function compressImageBuffer(request: ImageCompressionRequest): Promise<ImageCompressionResult> {
-  const bytes = request.bytes;
+  const { bytes } = request;
   const sharp = loadSharp();
   const cacheKey = imageCompressionCacheKey(bytes, request, sharp);
-  const originalMime = normalizeMime(request.mimeType) ?? request.mimeType;
-  if (!Buffer.isBuffer(bytes) || bytes.length === 0 || !sharp) {
-    return { bytes, mimeType: originalMime, width: 0, height: 0, changed: false, cacheKey };
-  }
-
+  const originalMime = detectSupportedImageMime(bytes) ?? request.mimeType;
+  let width = 0;
+  let height = 0;
+  const unchanged = (): ImageCompressionResult => ({ bytes, mimeType: originalMime, width, height, changed: false, cacheKey });
+  if (!bytes.length || !sharp || !detectSupportedImageMime(bytes)) return unchanged();
   try {
-    const input = sharp(bytes, { failOn: 'none' });
-    const metadata = await input.metadata();
-    const detected = metadata.format === 'png' ? 'image/png'
-    : metadata.format === 'jpeg' ? 'image/jpeg'
-      : metadata.format === 'webp' ? 'image/webp'
-        : metadata.format === 'gif' ? 'image/gif' : normalizeMime(request.mimeType);
-    const width = metadata.width ?? 0;
-    const height = metadata.height ?? 0;
-    if (!detected || detected === 'image/gif' || detected === 'image/webp') {
-      return { bytes, mimeType: detected ?? originalMime, width, height, changed: false, cacheKey };
-    }
-
+    const meta = await sharp(bytes, { failOn: 'error', limitInputPixels: 100_000_000 }).metadata();
+    const rotated = (meta.orientation ?? 0) >= 5;
+    width = (rotated ? meta.height : meta.width) ?? 0;
+    height = (rotated ? meta.width : meta.height) ?? 0;
+    // Never flatten any animated container, including APNG/animated WebP.
+    if ((meta.pages ?? 1) > 1) return unchanged();
     const maxBytes = request.budget?.maxBytes;
-    const maxEdgePx = request.budget?.maxEdgePx;
-    const needsBudget = Number.isFinite(maxBytes) && (maxBytes as number) > 0 && bytes.length > (maxBytes as number);
-    const wantsResize = Number.isFinite(maxEdgePx) && (maxEdgePx as number) > 0;
-    const alpha = metadata.hasAlpha === true;
-    const acceptsWebp = request.route?.acceptsWebp === true;
-
-    const encode = async (quality: number | undefined, edge: number | undefined): Promise<{ bytes: Buffer; mimeType: SupportedImageMime }> => {
-    let pipeline = sharp(bytes, { failOn: 'none' }).rotate().toColourspace('srgb');
-    if (edge && width > 0 && height > 0 && Math.max(width, height) > edge) {
-      pipeline = pipeline.resize({ width: edge, height: edge, fit: 'inside', withoutEnlargement: true });
-    }
-    if (detected === 'image/png') {
-      if (acceptsWebp) {
-        return quality === undefined
-          ? { bytes: await pipeline.webp({ lossless: true }).toBuffer(), mimeType: 'image/webp' }
-          : { bytes: await pipeline.webp({ quality, lossless: false }).toBuffer(), mimeType: 'image/webp' };
+    const budget = maxBytes !== undefined;
+    if (budget && (!Number.isFinite(maxBytes) || maxBytes <= 0)) return unchanged();
+    const maxEdge = request.budget?.maxEdgePx;
+    const resize = maxEdge !== undefined && Number.isFinite(maxEdge) && maxEdge > 0 && Math.max(width, height) > maxEdge;
+    if (!budget && !resize && (originalMime === 'image/webp' || originalMime === 'image/gif')) return unchanged();
+    if (budget && bytes.length <= maxBytes) return unchanged();
+    const webp = request.route?.acceptsWebp === true;
+    let edge = resize && !budget ? Math.floor(maxEdge) : Math.max(width, height);
+    for (let step = 0; step <= (budget ? 4 : 0); step++) {
+      let pipeline = sharp(bytes, { failOn: 'error', limitInputPixels: 100_000_000 }).rotate().toColourspace('srgb');
+      if (edge < Math.max(width, height)) pipeline = pipeline.resize({ width: edge, height: edge, fit: 'inside', withoutEnlargement: true });
+      let mimeType: SupportedImageMime;
+      if (originalMime === 'image/jpeg') {
+        mimeType = 'image/jpeg';
+      } else if (originalMime === 'image/webp' && !budget) {
+        mimeType = 'image/webp';
+      } else if (webp && originalMime !== 'image/gif') {
+        mimeType = 'image/webp';
+      } else {
+        mimeType = budget && !meta.hasAlpha ? 'image/jpeg' : 'image/png';
       }
-      // Budget mode may use lossy JPEG for opaque PNGs when the route does not
-      // accept WebP. Normal mode always remains lossless PNG.
-      if (quality !== undefined && !alpha) {
-        return { bytes: await pipeline.jpeg({ quality, mozjpeg: true, chromaSubsampling: '4:4:4' }).toBuffer(), mimeType: 'image/jpeg' };
+      if (mimeType === 'image/jpeg') pipeline = pipeline.jpeg({ quality: 90, mozjpeg: true, chromaSubsampling: '4:4:4' });
+      else if (mimeType === 'image/webp') pipeline = pipeline.webp(budget || originalMime === 'image/webp' ? { quality: 90 } : { lossless: true });
+      else pipeline = pipeline.png({ compressionLevel: 9, adaptiveFiltering: true, palette: false });
+      const output = await pipeline.toBuffer({ resolveWithObject: true });
+      if (budget && output.data.length > maxBytes) {
+        edge = Math.max(1, Math.floor(edge * 0.75));
+        continue;
       }
-      return { bytes: await pipeline.png({ compressionLevel: 9, adaptiveFiltering: true, palette: false }).toBuffer(), mimeType: 'image/png' };
+      if (!budget && !resize && output.data.length > Math.floor(bytes.length * 0.85)) return unchanged();
+      return { bytes: output.data, mimeType, width: output.info.width, height: output.info.height, changed: true, cacheKey };
     }
-    if (alpha) {
-      return { bytes: await pipeline.png({ compressionLevel: 9, adaptiveFiltering: true, palette: false }).toBuffer(), mimeType: 'image/png' };
-    }
-    return { bytes: await pipeline.jpeg({ quality: quality ?? 90, mozjpeg: true, chromaSubsampling: '4:4:4' }).toBuffer(), mimeType: 'image/jpeg' };
-    };
-
-    let output = await encode(needsBudget ? 90 : undefined, wantsResize ? maxEdgePx : undefined);
-    if (needsBudget && maxBytes && output.bytes.length > maxBytes) {
-    const edge = maxEdgePx ?? Math.max(width, height);
-    output = await encode(90, edge);
-    if (output.bytes.length > maxBytes && edge > 1) {
-      output = await encode(90, Math.max(1, Math.floor(edge * 0.75)));
-    }
-    }
-  // A normal path must not increase bytes. The 15% threshold is deliberately
-  // strict because recompressing history repeatedly is worse than a cache miss.
-    if (output.bytes.length >= Math.ceil(bytes.length * 0.85)) {
-      return { bytes, mimeType: originalMime, width, height, changed: false, cacheKey };
-    }
-    const outMeta = await sharp(output.bytes, { failOn: 'none' }).metadata();
-    return {
-      bytes: output.bytes,
-      mimeType: output.mimeType,
-      width: outMeta.width ?? width,
-      height: outMeta.height ?? height,
-      changed: true,
-      cacheKey,
-    };
+    return unchanged();
   } catch {
-    return { bytes, mimeType: originalMime, width: 0, height: 0, changed: false, cacheKey };
+    return unchanged();
   }
 }
-
-/** Stable name used by proxy hosts; kept separate from the lower-level helper name. */
-export const processBuffer = compressImageBuffer;
 
 export function detectSupportedImageMime(bytes: Buffer): SupportedImageMime | null {
   if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';

@@ -13,30 +13,31 @@ export interface ImageRouteIdentity {
 
 type ImageInputCapability = 'webp' | 'png-jpeg';
 
+// Add provider declarations here in key order; model-family rules below cover
+// gateways and BYOK names without registering every gateway as a provider.
 const PROVIDER_CAPABILITIES: Readonly<Record<string, ImageInputCapability>> = {
-  anthropic: 'webp',
-  deepseek: 'webp',
-  google: 'webp',
-  gemini: 'webp',
-  kimi: 'webp',
-  moonshot: 'webp',
-  moonshotai: 'webp',
-  minimax: 'webp',
-  mistral: 'webp',
-  openai: 'webp',
-  qwen: 'webp',
-  seed: 'webp',
-  doubao: 'webp',
+  'anthropic': 'webp',
+  'bytedance': 'webp',
+  'deepseek': 'webp',
+  'doubao': 'webp',
+  'gemini': 'webp',
+  'google': 'webp',
+  'kimi': 'webp',
+  'minimax': 'webp',
+  'mistral': 'webp',
+  'moonshot': 'webp',
+  'moonshotai': 'webp',
+  'openai': 'webp',
+  'qwen': 'webp',
+  'seed': 'webp',
+  'xai': 'png-jpeg',
+  'z-ai': 'png-jpeg',
+  'zai': 'png-jpeg',
+  'zhipu': 'png-jpeg',
+  'zhipu-coding-plan-cn': 'png-jpeg',
   'zhipu-glm-cn': 'png-jpeg',
   'zhipu-glm-global': 'png-jpeg',
-  'zhipu-coding-plan-cn': 'png-jpeg',
-  xai: 'png-jpeg',
 };
-
-const WEBP_PROVIDER_PREFIXES = [
-  'anthropic', 'deepseek', 'google', 'gemini', 'kimi', 'moonshot', 'minimax',
-  'mistral', 'openai', 'qwen', 'seed', 'doubao', 'bytedance',
-] as const;
 
 function normalize(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase().replace(/^\//, '');
@@ -48,15 +49,13 @@ export function acceptsWebpImageInput(route: ImageRouteIdentity): boolean {
   const model = normalize(route.modelId);
   if (!provider && !model) return false;
 
-  // Explicitly rejected vendors win even when a gateway prefixes their model.
-  if (provider === 'xai' || provider.startsWith('zhipu') || provider === 'z-ai'
-    || model.startsWith('xai/') || model.startsWith('z-ai/')) return false;
-  const declared = PROVIDER_CAPABILITIES[provider];
-  if (declared) return declared === 'webp';
-  if (WEBP_PROVIDER_PREFIXES.some((prefix) => provider.startsWith(prefix))) return true;
-
-  // Direct model references retain the provider namespace after custom routes.
-  const prefix = model.split('/', 1)[0];
-  return prefix.length > 0 && PROVIDER_CAPABILITIES[prefix] === 'webp';
+  const family = model.split('/').at(-1) ?? '';
+  if (/^(?:glm-|grok-)/.test(family)) return false;
+  if (/^(?:gpt-|o\d+(?:$|[-.])|chatgpt|claude-|gemini-|deepseek|qwen|kimi|moonshot|minimax|abab|doubao|seed|mistral|pixtral)/.test(family)) return true;
+  // Exact identity or a delimiter-separated preset suffix, never arbitrary
+  // startsWith ("openai-impostor" is still only a heuristic, not authorization).
+  const namespace = model.split('/').at(-2);
+  if (namespace && PROVIDER_CAPABILITIES[namespace]) return PROVIDER_CAPABILITIES[namespace] === 'webp';
+  const identity = Object.keys(PROVIDER_CAPABILITIES).find((key) => provider === key || provider.startsWith(`${key}-`));
+  return identity !== undefined && PROVIDER_CAPABILITIES[identity] === 'webp';
 }
-
