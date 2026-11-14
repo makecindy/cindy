@@ -624,6 +624,66 @@ describe('LayoutRoot sidebar window growth', () => {
     rendered.rerender(view(false));
     expect(expand).not.toHaveBeenCalled();
   });
+  // Bug: 来源和落地任务分两次提交时，切到记忆状态相反的任务会按上一个任务的来源
+  // 多调一次原生 resize；这里从布局入口确认两者一起到达时窗口不动。
+  it('applies the reveal source together with the landed session', () => {
+    const expand = vi.fn(async () => undefined);
+    window.electronAPI.windowSidebarExpansion = expand;
+    const view = (collapsed: boolean, userToggle: boolean, session: string) => (
+      <BuiltinPanelBridgeProvider value={bridge}>
+        <LayoutRoot rightTabsCollapsed={collapsed} rightTabsUserToggle={userToggle}
+          rightTabsSessionKey={session} />
+      </BuiltinPanelBridgeProvider>
+    );
+    const rendered = render(view(true, true, 'task-a'));
+    vi.spyOn(screen.getByTestId('layout-root-content'), 'getBoundingClientRect')
+      .mockReturnValue({ width: 800 } as DOMRect);
+    // 用户在 task-a 亲手开栏。
+    rendered.rerender(view(false, true, 'task-a'));
+    expect(expand).toHaveBeenLastCalledWith(802);
+    expand.mockClear();
+    // 落到记忆为收起的 task-b：来源随落地一起变成 false，窗口保持不动。
+    rendered.rerender(view(true, false, 'task-b'));
+    expect(expand).not.toHaveBeenCalled();
+    // 跨任务用户开栏落到 task-c：来源与落地同时为 true，照常展开。
+    rendered.rerender(view(false, true, 'task-c'));
+    expect(expand).toHaveBeenLastCalledWith(802);
+  });
+  // Bug: 首帧由视图强制的展示（Orca workers）以前和「存档恢复展开」走同一条路径，
+  // 把窗口宽度也一起占了；布局入口要把它作为被动展开传下去。
+  it('keeps the window width for a first-frame reveal forced by the view', () => {
+    const expand = vi.fn(async () => undefined);
+    window.electronAPI.windowSidebarExpansion = expand;
+    const view = (ready: boolean) => (
+      <BuiltinPanelBridgeProvider value={bridge}>
+        <LayoutRoot rightTabsCollapsed={false} sidebarExpansionReady={ready}
+          rightTabsUserToggle={false} rightTabsPassiveReveal />
+      </BuiltinPanelBridgeProvider>
+    );
+    const rendered = render(view(false));
+    vi.spyOn(screen.getByTestId('layout-root-content'), 'getBoundingClientRect')
+      .mockReturnValue({ width: 800 } as DOMRect);
+    rendered.rerender(view(true));
+    expect(expand).not.toHaveBeenCalled();
+  });
+  // Bug: opening a task from the system island restores that task's remembered
+  // sidebar state, and the session switch restored the standalone window width.
+  it('keeps the window width when a session switch restores a collapsed sidebar', () => {
+    const expand = vi.fn(async () => undefined);
+    window.electronAPI.windowSidebarExpansion = expand;
+    const view = (collapsed: boolean) => (
+      <BuiltinPanelBridgeProvider value={bridge}>
+        <LayoutRoot rightTabsCollapsed={collapsed} rightTabsUserToggle={false} />
+      </BuiltinPanelBridgeProvider>
+    );
+    const rendered = render(view(true));
+    vi.spyOn(screen.getByTestId('layout-root-content'), 'getBoundingClientRect')
+      .mockReturnValue({ width: 800 } as DOMRect);
+    rendered.rerender(view(false));
+    expect(expand).not.toHaveBeenCalled();
+    rendered.rerender(view(true));
+    expect(expand).not.toHaveBeenCalled();
+  });
 });
 
 
@@ -640,4 +700,30 @@ it('expands the saved standalone window when the initial session restores an ope
     .mockReturnValue({ width: 800 } as DOMRect);
   await act(async () => { rendered.rerender(view(true)); });
   expect(expand).toHaveBeenCalledExactlyOnceWith(802);
+});
+
+// Bug: a Settings takeover hides the sidebar without a session change; reading it as a
+// session restore skipped the route-exit retraction, so each round trip re-expanded from
+// the already expanded bounds.
+it('retracts on a Settings takeover and expands again on return', () => {
+  const expand = vi.fn(async (_width: number) => undefined);
+  window.electronAPI.windowSidebarExpansion = expand;
+  // 启动恢复的展开确实占用过窗口宽度；退回时才有东西可以收回、再展开。
+  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    .mockReturnValue({ width: 800 } as DOMRect);
+  const view = (suppress: boolean, ready: boolean) => (
+    <BuiltinPanelBridgeProvider value={bridge}>
+      <LayoutRoot rightTabsCollapsed={false} rightTabsUserToggle={false}
+        suppressNonChatPanels={suppress} sidebarExpansionReady={ready} />
+    </BuiltinPanelBridgeProvider>
+  );
+  const rendered = render(view(false, true));
+  expect(expand).toHaveBeenCalledTimes(1);
+  rendered.rerender(view(true, true));
+  expect(expand).toHaveBeenLastCalledWith(0);
+  rendered.rerender(view(true, false));
+  expect(expand).toHaveBeenCalledTimes(2);
+  rendered.rerender(view(false, true));
+  expect(expand.mock.lastCall![0]).toBeGreaterThan(0);
+  rect.mockRestore();
 });

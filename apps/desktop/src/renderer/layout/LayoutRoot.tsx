@@ -962,6 +962,12 @@ interface LayoutRootProps {
   rightTabsCollapsed?: boolean;
   /** Wait for the initial route/session restoration before observing open transitions. */
   sidebarExpansionReady?: boolean;
+  /** The latest visibility change came from the sidebar toggle; session switches keep the window width. */
+  rightTabsUserToggle?: boolean;
+  /** The current open state was forced by the view (first-frame reveal), not restored or user-driven. */
+  rightTabsPassiveReveal?: boolean;
+  /** 侧栏当前所属的任务（全局为 ''）：就绪空档前后换任务时不当成用户开栏。 */
+  rightTabsSessionKey?: string;
 }
 
 export function LayoutRoot({
@@ -969,6 +975,9 @@ export function LayoutRoot({
   suppressNonChatPanels = false,
   rightTabsCollapsed = false,
   sidebarExpansionReady = true,
+  rightTabsUserToggle = true,
+  rightTabsPassiveReveal = false,
+  rightTabsSessionKey = '',
 }: LayoutRootProps = {}): ReactNode {
   // 幂等注册内置面板 —— 放组件体而非模块副作用:HMR / 测试 reset 后再渲染也能自愈。
   registerBuiltinPanels();
@@ -1001,13 +1010,18 @@ export function LayoutRoot({
   const sidebarPresentation = useSidebarPresentation(
     layoutRootRef,
     rightTabsCollapsed || suppressNonChatPanels,
-    sidebarExpansionReady && expandsRight,
+    // A Settings takeover hides the sidebar without a session change: treat it as a
+    // route exit so the expansion retracts instead of settling the expanded rect.
+    sidebarExpansionReady && expandsRight && !suppressNonChatPanels,
     () => sidebarExpansionWidth(layoutRootRef.current?.getBoundingClientRect().width ?? 0,
       expansionEntries.filter((entry) => !containsChat(entry.node)).map((entry) => ({
         share: entry.share, min: paneMinPx(entry.node),
         sidebar: entry.node.type === 'pane' && entry.node.panelKind === 'right-tabs',
         preferredWidth: entry.node.type === 'pane' ? entry.node.preferredWidth : undefined,
       }))),
+    rightTabsUserToggle,
+    rightTabsSessionKey,
+    rightTabsPassiveReveal,
   );
   const rememberSidebarWidth = useRef<() => void>(() => undefined);
   rememberSidebarWidth.current = () => {

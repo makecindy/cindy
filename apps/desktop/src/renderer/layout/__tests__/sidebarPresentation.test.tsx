@@ -83,6 +83,32 @@ it('expands a restored-open sidebar and closes without a renderer-derived shrink
   expect(result.current.collapsed).toBe(true);
 });
 
+// Bug: opening a task from the system island restores that task's remembered sidebar
+// state; the session switch then restored the standalone window and narrowed it.
+it('keeps the window width when a session switch restores the sidebar state', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : -401));
+  const settle = vi.fn(async () => undefined);
+  window.electronAPI = { windowSidebarExpansion: resize, windowSidebarSettle: settle } as never;
+  const { result, rerender } = renderHook(
+    ({ collapsed, userToggle }) => useSidebarPresentation(root, collapsed, true, () => 400, userToggle),
+    { initialProps: { collapsed: true, userToggle: true } },
+  );
+  await act(async () => { rerender({ collapsed: false, userToggle: true }); });
+  window.innerWidth = 1401;
+  frame();
+  expect(resize).toHaveBeenCalledExactlyOnceWith(400);
+  expect(settle).not.toHaveBeenCalled();
+  resize.mockClear();
+  await act(async () => { rerender({ collapsed: true, userToggle: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(settle).toHaveBeenCalledOnce();
+  expect(result.current).toEqual({ collapsed: true, instant: true });
+  await act(async () => { rerender({ collapsed: false, userToggle: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(settle).toHaveBeenCalledOnce();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+});
+
 // Bug: leaving the chat route retracts the expansion; returning must expand again
 // instead of adopting the shrunken window (repeated navigation narrowed it 1800 → 1399 → 998).
 it('re-expands when returning to a sidebar route after it was retracted', async () => {
@@ -97,4 +123,89 @@ it('re-expands when returning to a sidebar route after it was retracted', async 
   await act(async () => { rerender({ ready: true }); });
   expect(resize).toHaveBeenLastCalledWith(400);
   expect(resize.mock.calls.some((call) => call[2] === true)).toBe(false);
+});
+
+// Bug: 程序展开（agent / 插件动作，userToggle=false）本来就不拉宽窗口；进设置页再回来
+// 曾因基线丢失被当成启动恢复，一次往返就把自动展示变成手点开标。
+it('keeps a programmatic reveal unexpanded across a route gap', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { result, rerender } = renderHook(
+    ({ ready, collapsed }) => useSidebarPresentation(root, collapsed, ready, () => 400, false),
+    { initialProps: { ready: true, collapsed: true } },
+  );
+  await act(async () => { rerender({ ready: true, collapsed: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+  await act(async () => { rerender({ ready: false, collapsed: false }); });
+  expect(resize).toHaveBeenLastCalledWith(0);
+  resize.mockClear();
+  await act(async () => { rerender({ ready: true, collapsed: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+});
+
+// Bug: 就绪空档里换了任务（例如在设置页从系统岛跳到另一个任务），落到的那个任务的
+// 记忆状态不是用户这次要开栏，不能拉宽窗口；用户直接点名展开的落回仍要展开。
+it('keeps the standalone width when a readiness gap lands on another task passively', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { result, rerender } = renderHook(
+    ({ ready, session, userToggle }) => useSidebarPresentation(root, false, ready, () => 400, userToggle, session),
+    { initialProps: { ready: true, session: 'task-a', userToggle: true } },
+  );
+  await act(async () => undefined);
+  expect(resize).toHaveBeenCalledExactlyOnceWith(400);
+  // 设置页接管：收回窗口，sessionKey 在这期间会被清空。
+  await act(async () => { rerender({ ready: false, session: '', userToggle: true }); });
+  expect(resize).toHaveBeenLastCalledWith(0);
+  resize.mockClear();
+  // 空档里由系统岛跳到任务 B：被动落回，窗口保持独立宽度。
+  await act(async () => { rerender({ ready: true, session: 'task-b', userToggle: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+});
+
+// Bug: 空档里被清空的 sessionKey 不能顶替原任务；同一任务从设置页回来仍要重新展开。
+it('keeps the pre-gap task when the readiness gap clears the session key', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { rerender } = renderHook(
+    ({ ready, session }) => useSidebarPresentation(root, false, ready, () => 400, false, session),
+    { initialProps: { ready: true, session: 'task-a' } },
+  );
+  await act(async () => undefined);
+  expect(resize).toHaveBeenCalledExactlyOnceWith(400);
+  await act(async () => { rerender({ ready: false, session: '' }); });
+  expect(resize).toHaveBeenLastCalledWith(0);
+  resize.mockClear();
+  await act(async () => { rerender({ ready: true, session: 'task-a' }); });
+  expect(resize).toHaveBeenLastCalledWith(400);
+});
+
+// Bug: 空档期间用户直接点名展开（userToggle=true）时，落回哪台任务都要展开。
+it('expands when a readiness gap ends in a direct reveal', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { rerender } = renderHook(
+    ({ ready, session, userToggle }) => useSidebarPresentation(root, false, ready, () => 400, userToggle, session),
+    { initialProps: { ready: true, session: 'task-a', userToggle: true } },
+  );
+  await act(async () => undefined);
+  await act(async () => { rerender({ ready: false, session: '', userToggle: true }); });
+  resize.mockClear();
+  await act(async () => { rerender({ ready: true, session: 'task-b', userToggle: true }); });
+  expect(resize).toHaveBeenLastCalledWith(400);
+});
+
+// Bug: 首帧由视图强制的程序展示（Orca workers）在启动时和「存档恢复展开」走了同一条
+// 路径，把窗口宽度也一起占了；程序展示只该把面板放出来。
+it('keeps the window width when the first frame reveal is forced by the view', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { result } = renderHook(() =>
+    useSidebarPresentation(root, false, true, () => 400, false, 'task-a', true));
+  await act(async () => undefined);
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
 });

@@ -626,3 +626,8 @@ Windows 的贴边／贴满判断仍读真实窗口（程序自己的展开不算
 若打开期间显示器被拔掉或分辨率变小，收起时旧矩形改放回当前工作区内。
 实现见 `main/sidebarWindowExpansion.ts`、`renderer/layout/sidebarPresentation.ts`；
 回归见 `sidebarWindowExpansion.test.ts` 和 `sidebarPresentation.test.tsx`。
+
+只有用户亲手开／关侧栏才调整主窗口矩形：切换任务时按各任务记忆恢复右栏开合（新任务
+默认收起）不改窗口，否则从灵动岛或通知打开任务时窗口会随右栏宽度变窄。关掉最后一个
+页签引起的间接收起同理不改窗口。这类不改矩形的收起会把当时的窗口矩形设为新的独立
+基准（`window-sidebar-settle`），窗口状态持久化与下次手动展开都从它出发。

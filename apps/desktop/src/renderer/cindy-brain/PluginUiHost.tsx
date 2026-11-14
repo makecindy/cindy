@@ -89,8 +89,10 @@ export function PluginUiHost() {
           } else if (action.kind === 'draft-read' && typeof action.sessionId === 'string') {
             result = readPluginUiDraftDocument(action.sessionId, action.offset as number | undefined, action.revision as string | undefined);
           } else if (action.kind === 'open' && typeof action.instanceId === 'string' && typeof action.viewId === 'string') {
+            // App 自己请求开页，不是用户手势：只落页签与可见性，不拉宽主窗口（userInitiated:false）。
             await openPluginUiView(action.instanceId, action.viewId, typeof action.sessionId === 'string' ? action.sessionId : null,
-              action.input && typeof action.input === 'object' && !Array.isArray(action.input) ? action.input as Record<string, unknown> : undefined);
+              action.input && typeof action.input === 'object' && !Array.isArray(action.input) ? action.input as Record<string, unknown> : undefined,
+              { userInitiated: false });
             result = { opened: true };
           } else if (action.kind === 'draft' && typeof action.sessionId === 'string' && typeof action.text === 'string') {
             assertPluginUiDraftWritable(action.sessionId);

@@ -3218,6 +3218,8 @@ function CCAgentSessionContent({
             focusWorkerSessionId,
             ...(workerSearchJump ? { searchJump: workerSearchJump } : {}),
             ...(shouldFirstFrameRevealOrcaWorkers ? { animate: false } : {}),
+            // 自动展示（首帧 / 异步补上身份）不是用户点开栏：只展开侧栏，不拉宽主窗口。
+            userInitiated: hasExplicitOrcaWorkersReveal,
           })
         : await ensureOrcaWorkersTab(sessionId).then(() => 'attached' as const);
       if (cancelled) return;
@@ -3339,8 +3341,10 @@ function CCAgentSessionContent({
 
     // false → true 边沿:外部 MCP/team 刚开启协同，属于新的显式意图；即使该会话
     // 历史上收起过右栏，也应重新展开并聚焦协同 tab。mount 与切任务时只记基线，不会走到这里。
+    // 这条边沿是程序来的（不是用户点开栏），带 userInitiated:false：只展开侧栏，
+    // 不把主窗口当成用户手势拉宽。
     if (edge === 'enabled') {
-      void revealOrcaWorkersTab(collabSessionId).catch((err) => {
+      void revealOrcaWorkersTab(collabSessionId, { userInitiated: false }).catch((err) => {
         log.warn('revealOrcaWorkersTab after external enable failed', err);
       });
       return;
