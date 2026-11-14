@@ -1485,6 +1485,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "Para revisar",
+      "summaryInProgress": "Em andamento",
+      "summaryPending": "Requer sua atenção",
+      "summaryUnread": "Resultados não lidos",
       "markRead": "Marcar como lida",
       "archive": "Arquivar",
       "actionFailed": "Não foi possível concluir a ação. A notificação foi mantida. Tente novamente.",

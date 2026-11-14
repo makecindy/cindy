@@ -47,6 +47,7 @@ export interface AgentIslandLiveActivityState {
   /** The companion the surfaced task speaks for, while it needs the user or has replied. */
   companion?: AgentIslandLiveActivityCompanion;
   mascot: string;
+  countLabels?: AgentIslandLiveActivityCountLabels;
 }
 
 /** Mirrors `CindyAgentActivityAttributes.Companion`. */
@@ -57,7 +58,15 @@ export interface AgentIslandLiveActivityCompanion {
   imageJpeg?: string;
 }
 
+export interface AgentIslandLiveActivityCountLabels {
+  attention: string;
+  inProgress: string;
+  pending: string;
+  unread: string;
+}
+
 export interface AgentIslandLiveActivityStrings {
+  countLabels?: AgentIslandLiveActivityCountLabels;
   needsInput: string;
   running: string;
   completed: string;
@@ -114,6 +123,7 @@ function liveActivityStatusFromPill(
     mascot,
     completedCount: pill.unreadCompletedCount,
     completedLabel,
+    ...(strings.countLabels ? { countLabels: strings.countLabels } : {}),
   };
   if (pill.priorityStatus === 'needs-interaction') {
     const summary = running > 0
@@ -197,6 +207,10 @@ function sameState(a: AgentIslandLiveActivityState | null, b: AgentIslandLiveAct
     && a.summary === b.summary
     && a.completedCount === b.completedCount
     && a.completedLabel === b.completedLabel
+    && a.countLabels?.attention === b.countLabels?.attention
+    && a.countLabels?.inProgress === b.countLabels?.inProgress
+    && a.countLabels?.pending === b.countLabels?.pending
+    && a.countLabels?.unread === b.countLabels?.unread
     && a.companion?.hue === b.companion?.hue
     && a.companion?.glyph === b.companion?.glyph
     && a.companion?.glyphIsInitial === b.companion?.glyphIsInitial

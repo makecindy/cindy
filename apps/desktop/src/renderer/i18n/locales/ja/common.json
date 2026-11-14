@@ -1454,6 +1454,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "要確認",
+      "summaryInProgress": "進行中",
+      "summaryPending": "対応待ち",
+      "summaryUnread": "未読の結果",
       "markRead": "既読にする",
       "archive": "アーカイブ",
       "actionFailed": "操作を完了できませんでした。通知は保持されています。もう一度お試しください。",

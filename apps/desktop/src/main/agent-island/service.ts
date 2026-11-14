@@ -2281,7 +2281,19 @@ export class AgentIslandService {
       pillSnapshot,
       this.mascotSkin,
       {
-        needsInput: t('agentIsland.native.needsInput'),
+        countLabels: {
+          attention: t('agentIsland.native.summaryAttention'),
+          inProgress: t('agentIsland.native.summaryInProgress'),
+          pending: t('agentIsland.native.summaryPending'),
+          unread: t('agentIsland.native.summaryUnread'),
+        },
+        needsInput: t(prioritySession?.interactionKind === 'permission'
+          ? 'agentIsland.native.awaitingPermission'
+          : prioritySession?.interactionKind === 'ask_user_question'
+            ? 'agentIsland.native.awaitingQuestion'
+            : prioritySession?.interactionKind === 'plan_review'
+              ? 'agentIsland.native.awaitingPlan'
+              : 'agentIsland.native.needsInput'),
         running: t('agentIsland.native.running'),
         completed: t('agentIsland.native.completed'),
         error: t('agentIsland.native.error'),

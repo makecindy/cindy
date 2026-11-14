@@ -10,3 +10,8 @@
 
 "activity.waitingForUpdate" = "업데이트 대기 중";
 "activity.lastUpdated" = "마지막 업데이트";
+
+"activity.toReview" = "확인 필요";
+"activity.inProgress" = "진행 중";
+"activity.pendingCount %lld" = "사용자 처리 대기 %lld";
+"activity.unreadCount %lld" = "읽지 않은 결과 %lld";
