@@ -943,7 +943,11 @@ const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbCli
   publish: event => eventHub.publish(event), log: createLogger('agent-handoff-pending') });
 // Context recovery of a turn's terminal error (context-recovery-assembly.ts). A kind opens after its
 // real-engine test (release table); until then it takes the normal error path, unclaimed.
-const OPEN_CONTEXT_RECOVERY_KINDS: ReadonlySet<ContextRecoveryKind> = new Set();
+// - context-overflow: open (codex-runtime and claude-proxy e2e).
+// - oversized-history: closed; no engine emits this error now (maker-core Codex).
+// - unsupported-request-option: closed; Pi's own cache recovery handles it in the turn (pi-native e2e),
+//   so this fallback has no real-engine test.
+const OPEN_CONTEXT_RECOVERY_KINDS: ReadonlySet<ContextRecoveryKind> = new Set(['context-overflow']);
 const contextRecovery = createHostContextRecoveryWiring({
   openKinds: OPEN_CONTEXT_RECOVERY_KINDS,
   getGraph: () => agentGraph,
