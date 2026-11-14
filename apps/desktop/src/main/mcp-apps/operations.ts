@@ -76,17 +76,13 @@ export async function handleMcpAppOperation(
   switch (input.op) {
     case 'open': {
       if (sessionId === null) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
-      const document = await host.open(caller, sessionId, input.clientId, input.context, input.openId);
-      if (!local) {
-        if (document.sdk && input.sdkCacheHashes?.length) {
-          const hash = createHash('sha256').update(mcpAppSdkCacheText(document.sdk)).digest('hex');
-          if (input.sdkCacheHashes.includes(hash)) {
-            const { sdk: _sdk, ...rest } = document;
-            return { ...rest, sdkRef: hash } satisfies McpAppDocument;
-          }
-        }
-        return document;
-      }
+      const resolveSdkRef = !local && input.sdkCacheHashes?.length
+        ? (sdk: NonNullable<McpAppDocument['sdk']>) => {
+          const hash = createHash('sha256').update(mcpAppSdkCacheText(sdk)).digest('hex');
+          return input.sdkCacheHashes!.includes(hash) ? hash : undefined;
+        } : undefined;
+      const document = await host.open(caller, sessionId, input.clientId, input.context, input.openId, resolveSdkRef);
+      if (!local) return document;
       local.supply(document, caller, input.context as Record<string, unknown>);
       // Main supplies the private document directly to the isolated frame.
       return { viewId: document.viewId, transport: 'sandbox',
