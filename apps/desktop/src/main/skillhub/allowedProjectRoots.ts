@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForGrouping, normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
@@ -21,17 +21,17 @@ export function deriveAllowedSkillhubProjectRoots(
  */
 export async function listAllowedSkillhubProjectRoots(): Promise<string[]> {
   const rows = await getDbClient().drizzle
-    .select({ workingDir: sessions.workingDir })
+    .select({ projectDir: sessions.projectDir, workingDir: sessions.workingDir })
     .from(sessions)
     .where(
       and(
         inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
         eq(sessions.status, 'active'),
         eq(sessions.workspaceKind, 'project'),
-        isNotNull(sessions.workingDir),
         isNull(sessions.remoteHostId),
       ),
     );
 
-  return deriveAllowedSkillhubProjectRoots(rows.map((row) => row.workingDir));
+  // The renderer scans both explicit project membership and the session cwd.
+  return deriveAllowedSkillhubProjectRoots(rows.flatMap((row) => [row.projectDir, row.workingDir]));
 }
