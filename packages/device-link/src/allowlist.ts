@@ -26,6 +26,7 @@
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
 import { MACHINE_STATUS_CHANNEL } from './machineStatus.js';
+import { AGENT_NET_SWITCH_CHANNEL, AGENT_NET_SWITCH_TIMEOUT_MS } from './agentNetSwitch.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import {
@@ -288,6 +289,12 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:get-new-maker-defaults',
   'maker:model-favorites:get',
   'maker:model-favorites:apply',
+  // 协同创建 Worker 的角色清单与每个角色的记忆(任务文字、权限、模型路线):真相在被控端当前账号,
+  // 手机与远程控制的电脑只读写这一份。get 读被控端 renderer 镜像给 main 的快照;apply 只接受
+  // 「记下一次创建 / 移除一个角色」两种操作,由被控端转给自身 renderer 写回真源(无 sender 依赖、
+  // 无本机 UI 副作用)。老被控端无此 handler → 控制端收 CHANNEL_NOT_ALLOWED → 只显示内置角色、不记忆。
+  'maker:worker-roles:get',
+  'maker:worker-roles:apply',
   // device-link 草稿「每个模型 effort/fast」写穿(控制端 → 被控端):控制端在远程项目草稿里改
   // 选中 / 非选中模型的 effort/fast 时通知被控端,被控端调它原来的本地 setter(setEffortForModel /
   // setFastModeForModel)写真实草稿;被控端 newMakerDraft 变更自动经既有 maker:sync-new-maker-draft
@@ -404,6 +411,12 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 在这台电脑能连上的服务器上授权。被控端必须由人在本机确认(显示请求电脑、逐项名称与校验码)
   // 后才执行;密钥只以本次请求的临时公钥加密返回。OAuth 登录与私钥不经此通道。同样只给同账号电脑。
   SETUP_TRANSFER_CHANNEL,
+  // 远程切换连接方式(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」,2026-11-12 用户确认):
+  // 同账号电脑问这台电脑能不能打开 Agent-Net,并请它打开 / 关闭自己的「Agent-Net (Beta)」开关。
+  // 开了远程控制的电脑本来就能被远程跑 Agent,不多给权限;「仅使用 Agent-Net」从不远程改。被控端 dispatch
+  // 拦截执行，只给同账号电脑(共享任务访客与供应商分享受邀者再拒一次)。打开后必须在期限内经 Agent-Net
+  // 收到同一发起端的确认，否则被控端自己退回。老版本无 handler → CHANNEL_NOT_ALLOWED,发起端显示需要更新。
+  AGENT_NET_SWITCH_CHANNEL,
   // 远程 Agent(被控端 dispatch 拦截执行，不落 ipcMain handler)：在被控端用它自己的登录与
   // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
   // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
@@ -649,8 +662,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 放行标准：① 只读 ② 同账号已授权控制端本就能经 maker:list-active / sessions:get-many 看到
   // 同样的任务标题与状态 ③ 没有任何写入或本机特权动作。设置读写（settings-*）不放行。
   'local-db:bots:autonomy:glance',
-  // Same-account opted-in controllers may inspect and stop a companion's own
-  // child task and read a participant-checked private thread. No profile mutation.
+  // Same-account opted-in controllers read a companion's old task cards (read-only; cancel stays
+  // for older controllers and answers UNSUPPORTED_CAPABILITY) and a participant-checked private
+  // thread. No profile mutation.
   'maker:bot-delegations:list',
   'maker:bot-delegation:cancel',
   'maker:bot-direct-message-thread:get',
@@ -800,6 +814,7 @@ export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
  * 命中这些 channel 的事件才会经 link 转发给控制端。
  */
 export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
+  // Older hosts still push task-card changes; this host no longer emits it.
   'maker:bot-delegation:changed',
   // 伙伴自主跟进状态变化（payload 只有 { botIds? }，节流 ≤1 次/秒），控制端据此重读「一眼」。
   'maker:bot-autonomy:changed',
@@ -965,6 +980,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   [SETUP_SNAPSHOT_CHANNEL]: SETUP_SNAPSHOT_TIMEOUT_MS,
   // 要等那台电脑上的人确认(最多 2 分钟),再逐台连接 SSH 服务器授权新公钥。
   [SETUP_TRANSFER_CHANNEL]: SETUP_TRANSFER_TIMEOUT_MS,
+  [AGENT_NET_SWITCH_CHANNEL]: AGENT_NET_SWITCH_TIMEOUT_MS,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

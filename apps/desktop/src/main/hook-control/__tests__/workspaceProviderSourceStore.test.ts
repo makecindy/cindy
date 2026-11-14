@@ -80,7 +80,7 @@ describe('workspaceProviderSourceStore', () => {
       JSON.stringify({
         entries: [
           { channel: 'telegram', teamId: null, workspace: 'chat', providerId: 'anthropic' },
-          { channel: 'telegram', teamId: null, workspace: 'bad alias!', providerId: 'x' },
+          { channel: 'telegram', teamId: null, workspace: '/not/a/name', providerId: 'x' },
           { channel: 'telegram', teamId: null, workspace: 'ok', providerId: 'p'.repeat(200) },
         ],
       }),

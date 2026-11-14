@@ -19,14 +19,16 @@ const discovered = (id: string, metadata = {}) => mergeDiscoveredRuntimeModels([
 describe('new model generation defaults', () => {
   it('imports future GPT generations across all engines without requiring the old model in the account', () => {
     for (const id of ['gpt-7-sol', 'gpt-8-sol', 'openai/gpt-9-luna']) {
-      const oldId = id.includes('luna') ? 'gpt-6-luna' : 'gpt-6-sol';
+      const oldId = id.includes('luna') ? 'gpt-6-luna' : 'gpt-6.1-sol';
       const previous = build(discovered(oldId)).models.codex![0]!;
       const saved = discovered(id);
       const provider = build(saved);
       for (const agent of ['codex', 'pi', 'claude-code'] as const) {
         const model = provider.models[agent]![0]!;
         expect(model).toMatchObject({ id, name: id, efforts: previous.efforts,
-          defaultEffort: previous.defaultEffort, contextWindow: previous.contextWindow,
+          // New upstream 6/6.1 API records declare a 272K working window; the
+          // Registry's exact-model 1M override is not a promise for future IDs.
+          defaultEffort: previous.defaultEffort, contextWindow: 272000,
           maxOutput: previous.maxOutput, supportsImageInput: true, contextWindowVerified: false });
         expect(model.cost).toBeUndefined();
         expect(model.userModelConfig).toEqual(saved[0]);
@@ -270,14 +272,51 @@ describe('new model generation defaults', () => {
   });
 
   it('reuses serializer mappings without copying the predecessor identity, prices, endpoint or headers', () => {
-    const source = providerModelRecord('gpt-5.6-sol', 'https://api.openai.com/v1', 'openai-responses')!;
+    const source = providerModelRecord('gpt-6.1-sol', 'https://api.openai.com/v1', 'openai-responses')!;
     const inherited = providerModelGenerationRecord('gpt-9-sol', 'https://relay.example/v1', 'openai-responses')!;
-    expect(inherited).toMatchObject({ id: 'gpt-9-sol', name: 'gpt-9-sol', upstream: 'https://relay.example/v1', inheritedFrom: 'gpt-5.6-sol' });
+    expect(inherited).toMatchObject({ id: 'gpt-9-sol', name: 'gpt-9-sol', upstream: 'https://relay.example/v1', inheritedFrom: 'gpt-6.1-sol' });
     expect(inherited.execution.pi.thinkingLevelMap).toEqual(source.execution.pi.thinkingLevelMap);
     expect(inherited.execution.pi.compat).toEqual(source.execution.pi.compat);
     expect(inherited.cost).toBeUndefined();
     expect(inherited.execution.pi.headers).toBeUndefined();
     expect(providerModelGenerationRecord('gpt-9-sol', 'https://relay.example/v1', 'anthropic-messages')).toBeUndefined();
+  });
+
+  // #9808: a strict OpenAI-compatible gateway rejects DeepSeek's top-level `thinking`
+  // object. Official rows keep the dialect; an unmatched custom endpoint must not.
+  it('does not lend a vendor thinking dialect to an unmatched custom chat endpoint (#9808)', () => {
+    const upstream = 'https://developer.amd.example/v1';
+    for (const id of ['DeepSeek-V4.1-Flash', 'deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash']) {
+      const inherited = providerModelGenerationRecord(id, upstream, 'openai-completions');
+      expect(inherited, id).toBeDefined();
+      expect(inherited!.execution.pi.compat?.thinkingFormat, id).toBeUndefined();
+      expect(inherited!.execution.pi.thinkingLevelMap, id).toBeDefined();
+    }
+    const official = providerModelRecord('deepseek-v4-flash', 'https://api.deepseek.com', 'openai-completions')!;
+    expect(official.execution.pi.compat?.thinkingFormat).toBe('deepseek');
+    const sameHost = providerModelGenerationRecord('DeepSeek-V4.1-Flash', 'https://api.deepseek.com/v1', 'openai-completions')!;
+    expect(sameHost.execution.pi.compat?.thinkingFormat).toBe('deepseek');
+  });
+
+  // #9808 review: an account-pinned template (Cloudflare account/gateway path) still names
+  // one vendor host. A new generation added through that preset must keep the dialect,
+  // while the self-hosted `{endpoint}` template must not.
+  it('keeps the dialect for an account-pinned template but not for a self-hosted one (#9808)', () => {
+    const cloudflare = providerModelGenerationRecord(
+      'workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017',
+      'https://gateway.ai.cloudflare.com/v1/account-id/gateway-id/compat',
+      'openai-completions',
+      'cloudflare-ai-gateway',
+    )!;
+    expect(cloudflare.execution.pi.compat?.thinkingFormat).toBe('deepseek');
+    expect(cloudflare.execution.pi.compat?.supportsReasoningEffort).toBe(false);
+
+    const selfHosted = providerModelGenerationRecord(
+      'deepseek-v4.1-flash',
+      'https://developer.amd.example/v1',
+      'openai-completions',
+    )!;
+    expect(selfHosted.execution.pi.compat?.thinkingFormat).toBeUndefined();
   });
 });
 

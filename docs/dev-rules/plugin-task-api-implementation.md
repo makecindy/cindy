@@ -44,7 +44,8 @@ getRun/listRuns/readMessages 复用本机回执和历史、按原插件/账号�
 
 伙伴任务完成后向伙伴自己的时间线回报，是伙伴的业务流程。插件新建任务不默认附带该流程；
 普通任务创建入口不发送完成回叫。插件根据需要读取回执和结果，无需模拟一个伙伴。
-当前没有任务事件订阅接口，请查询持久回执；不要把「已创建」或「已接受输入」显示成「执行完成」。
+任务事件通过独立声明并批准的 `subscribe.topics: ['message','task-state']` 投递；持久执行事实仍查询回执。
+不要把「已创建」或「已接受输入」显示成「执行完成」。
 
 ### 作者使用示例
 
@@ -128,6 +129,7 @@ Host 每次调用都重新读取本插件的模型设置，复用创建任务的
 `localDb/sessionOpening.openSession` 是普通新建任务的公共入口：模型准入、目录准备、Session 行构造与提交。
 普通新建任务 UI、`send_to_session` 新建、伙伴普通任务、插件普通任务和工作区创建均使用该入口。
 伙伴通过提交回调把 Session 与原有委派回执保存在同一个事务中；伙伴信号、卡片、超时及完成回报留在伙伴层。
+（2026-11-08 起 V2 不再适用：V1 委派已移除，伙伴用普通 `send_to_session` 开任务，宿主只另记「由这位伙伴开的」，见 [伙伴运行时](../product-rules/cindy-bots-runtime.md) §6.1。）
 插件继续使用自己的持久操作回执。公共入口不认识伙伴／插件身份，不创建回叫任务。
 `sessionExecutionSelection` 复用普通模型能力及供应商校验；显式目录选项沿用 `appDefaultModelControl`。
 已有任务改模复用 `sessionControlService`，不另造运行时或供应商选择器。
@@ -267,9 +269,9 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 
 ## 与伙伴的共用和隔离
 
-`sessionExecutionOwnership.ts` 提供执行身份比较、锁内二次核对、按归属撤回排队输入。伙伴委派与插件任务均使用这套函数。
+`sessionExecutionOwnership.ts` 提供执行身份比较、锁内二次核对、按归属撤回排队输入。插件任务使用这套函数（V1 伙伴委派曾共用，2026-11-08 已移除）。
 
-插件继续复用现有普通 Session 创建、输入协调器、停止服务及产品终态边界。没有创建假伙伴，没有另建模型执行器。伙伴的身份、父子委派规则及专有配置仍由伙伴服务管理。
+插件继续复用现有普通 Session 创建、输入协调器、停止服务及产品终态边界。没有创建假伙伴，没有另建模型执行器。伙伴的身份及专有配置仍由伙伴服务管理。
 
 ## 当前限制与后续工作
 
@@ -422,6 +424,17 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 ### 消息图片附件
 
 `tasks.send` 与 `targets.send` 支持 `attachments?: Array<{base64:string,name?:string}>`。
+
+账号范围历史与附件读取使用独立声明的 `agent.hostTools:['history']` 和共用的 `cindy.host.call`。
+`list_teammates` 返回伙伴及保存的任务关系，`read_session_attachment` 按明确的本机任务、消息和附件序号读取已有宿主授权的 Cindy 媒体，或取用既有 grant / deposit / handoff 引用。
+历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`；不从历史路径创建新授权或交接副本，返回分块字节与摘要，不暴露宿主路径。
+媒体后续请求带回 `mediaHash`，复核当前插件的既有 grant 后，从总仓安全文件句柄只读取指定范围，不重复读取来源、计算整图摘要或入仓；未获 grant 的指纹不提供字节。
+完整历史导出由插件基于 `get_chat_history` 游标页组装。作者说明见[宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
+消息与任务状态订阅使用 `subscribe.topics` 中的 `message` / `task-state`，receipt 可选 `approvedEventTopics` 只记录明确批准。
+宿主消息保存和生命周期状态变化走同一事件源；`task-state` 不发高频进度、活动或仅隐藏状态的变化。
+花名册变化时重建 `GhostTaskEventIndex`；热路径只访问该 topic 的订阅者，零订阅不读目录、投影正文或唤醒进程。
+沿用逐事件投递、100 条熄灯队列和 `dropped`，不新增 timer 或进度折叠。
+投递与缓冲补投均核对当前安装、批准和 owner；断线补拉复用历史游标，不新增持久事件账本。
 插件先核对 `tasks.capabilities().messageAttachments`，无此能力时停止发送截图，不能静默丢图或回退文件路径。
 只接受插件自己提供的字节；不接受 Host 路径、URL、其他会话的媒体 URI 或自报 MIME。
 Host 校验规范 base64，嗅探 PNG/JPEG/WebP，最多 4 张、合计 20 MiB；附件字节指纹和名称参与幂等签名，回执不保存 base64。

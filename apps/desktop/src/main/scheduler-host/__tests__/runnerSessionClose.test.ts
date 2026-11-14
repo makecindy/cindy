@@ -61,6 +61,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner.desktop';
+import type { MakerScheduleRunnerDeps } from '../runner';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -156,7 +157,7 @@ function createFireContext(): FireContext {
   };
 }
 
-function createRunnerHarness(session: Session) {
+function createRunnerHarness(session: Session, extraDeps: Partial<MakerScheduleRunnerDeps> = {}) {
   const notifier: Notifier = { notify: vi.fn(async () => undefined) };
   const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
   const closeSession = vi.fn(async () => undefined);
@@ -165,12 +166,14 @@ function createRunnerHarness(session: Session) {
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession,
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
     getDb: () => ({}) as never,
     notifier,
     logger,
+    ...extraDeps,
   });
   const schedulerUpdate = vi.fn(async () => ({}) as never);
   runner.attachScheduler({
@@ -203,6 +206,24 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/wt/dir' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
     mocks.isSessionInTurn.mockReturnValue(false);
+  });
+
+  it('keeps the fire-entry owner guard until session creation', async () => {
+    const h = createSessionHarness();
+    let owner = 'a';
+    const bootstrapSession = vi.fn(async (_opts, _signal, assertOwner) => {
+      assertOwner?.();
+      return h.session;
+    });
+    const context = createFireContext();
+    const captured = owner;
+    context.assertFireContext = () => { if (owner !== captured) throw new Error('owner changed'); };
+    const { runner } = createRunnerHarness(h.session, {
+      findUsageLimitWait: async () => { owner = 'b'; return null; },
+      bootstrapSession,
+    });
+    await expect(runner.fire(baseSchedule(), context)).rejects.toThrow('owner changed');
+    expect(bootstrapSession).toHaveBeenCalledOnce();
   });
 
   it('ephemeral dialogue 任务:run 成功后关闭会话', async () => {

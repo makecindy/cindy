@@ -22,13 +22,20 @@
     "allowOnceAccessibility": "권한 요청 한 번 허용",
     "allowOnceConfirm": "한 번 허용 확인",
     "highRisk": "고위험",
-    "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요.",
+    "autoReviewUnavailable": "자동 승인 검토를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요.",
     "autoReviewReason": "자동 승인이 판단을 요청했어요: {{reason}}",
     "fullAccessConfirm": {
       "title": "전체 접근을 활성화할까요?",
       "description": "전체 접근은 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. {{appName}}가 작업 공간 밖의 파일을 수정하고 네트워크 명령을 묻지 않고 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",
       "confirm": "전체 접근 활성화",
       "cancel": "현재 권한 유지"
+    },
+    "description": {
+      "default": "필요한 경우 사용자가 작업을 승인합니다.",
+      "acceptEdits": "파일 편집은 바로 허용하고, 다른 작업은 필요한 경우 사용자가 승인합니다.",
+      "auto": "AI 모델이 작업을 승인하므로 추가 대기 시간이 생길 수 있습니다. 필요한 경우 사용자가 확인합니다.",
+      "bypass": "일반 작업은 바로 허용하며, 작업 공간 밖의 파일과 네트워크 명령도 사용할 수 있습니다.",
+      "plan": "파일을 변경하지 않고 분석과 계획만 합니다."
     }
   },
   "planMode": {
@@ -40,7 +47,6 @@
     "questionWithdrawn": "더 이상 답변이 필요하지 않습니다",
     "withdrawnDraft": "이 질문에 더 이상 답변할 필요가 없습니다.\n{{reason}}\n초안은 보관되며 추가 정보로 보낼 수 있습니다.",
     "sendSupplement": "추가 정보 보내기",
-
     "readOnlyKind": "확인 대기",
     "readOnlyTitle": "컴퓨터에서 확인을 기다리는 중",
     "pendingRequests": "대기 중인 요청",
@@ -120,7 +126,7 @@
       "label": "권한"
     },
     "ask_user_question": {
-      "title": "에이전트가 답변을 기다립니다",
+      "title": "Agent가 답변을 기다립니다",
       "label": "질문"
     },
     "plan_review": {
@@ -187,6 +193,7 @@
     "fromLead": "Lead에서 온 메시지",
     "fromWorkerNamed": "Worker 「{{role}}」에서 온 메시지",
     "fromWorker": "Worker에서 온 메시지",
+    "fromWorkerBatch": "시스템이 반환한 Worker 결과 {{count}}개",
     "emptyMessageBody": "(빈 메시지)"
   },
   "contextSheet": {
@@ -202,12 +209,12 @@
     },
     "goalLabel": "목표",
     "goalObjectiveAccessibility": "목표 내용",
-    "goalPlaceholder": "무엇을 달성하고 싶나요? 에이전트가 완료하거나 한도에 도달할 때까지 이 목표를 중심으로 자동으로 계속 진행합니다.",
+    "goalPlaceholder": "무엇을 달성하고 싶나요? Agent가 완료하거나 한도에 도달할 때까지 이 목표를 중심으로 자동으로 계속 진행합니다.",
     "advancedSettings": "고급 설정",
     "limitsHint": "변경하지 않으면 원격 컴퓨터의 기본 한도를 따릅니다. 한도 중 하나에 도달하면 목표가 자동으로 중지되며 언제든지 수동으로 종료할 수 있습니다. \"무제한\"은 해당 한도를 설정하지 않음을 의미합니다.",
     "maxTurns": "최대 턴 수",
     "tokenBudget": "토큰 예산",
-    "noProgressLimit": "무진전 한도",
+    "noProgressLimit": "진전 없음 한도",
     "startGoal": "목표 시작",
     "goalMeta": "{{turns}} 턴 · {{tokens}} token",
     "goalCapacityHint": "상위 서비스에 여유 용량이 없습니다. 시간이 되면 자동으로 다시 시도합니다",
@@ -295,7 +302,7 @@
       "timeout": "대기 시간이 너무 길어 대리 입력이 종료되었습니다.",
       "unsupported": "이 컴퓨터는 아직 대리 입력을 지원하지 않습니다.",
       "origin_changed": "입력하기 전에 페이지가 바뀌어 아무것도 입력하지 않았습니다. 현재 페이지를 확인한 후 다시 입력하세요.",
-      "picture_unavailable": "이 단계의 화면을 표시하지 못했습니다. 시스템 설정에서 Cindy의 화면 기록을 허용하고 윈도우가 최소화되지 않았는지 확인하세요.",
+      "picture_unavailable": "이 단계의 화면을 표시하지 못했습니다. 시스템 설정에서 Cindy의 화면 기록을 허용하고 창이 최소화되지 않았는지 확인하세요.",
       "screen_locked": "이 컴퓨터의 화면이 잠겨 있습니다(디스플레이가 잠자기 상태가 되어도 잠깁니다). 화면을 깨우고 잠금을 해제한 후 Agent에게 다시 시도하도록 요청하세요.",
       "nothing_to_fill": "이 화면에는 입력할 내용이 없어 Agent가 이어서 진행합니다."
     },
@@ -328,7 +335,7 @@
     },
     "remoteUnavailable": "이 컴퓨터는 원격으로 입력을 받을 수 없습니다. 호스트 컴퓨터에서 이 단계를 완료한 뒤 Agent에게 넘기세요.",
     "unnamedField": "입력란",
-    "passwordField": "비밀번호",
+    "passwordField": "암호",
     "codeField": "인증 코드",
     "filledHint": "이미 내용이 있습니다. 비워 두면 그대로 유지됩니다.",
     "record": {
@@ -357,7 +364,7 @@
       "hint": "화면에서 위치를 탭하면 Cindy가 호스트 컴퓨터의 같은 위치를 클릭합니다.",
       "open": "이 단계 화면 보기",
       "openHint": "이 단계는 양식으로 정리할 수 없습니다. 화면은 이 기기로만 암호화되어 전송되며 저장되지 않습니다.",
-      "alt": "대상 윈도우의 화면",
+      "alt": "대상 창의 화면",
       "loading": "화면을 가져오는 중…",
       "error": "화면을 가져오지 못했습니다. 다시 시도하세요.",
       "field": "선택된 입력란",
@@ -372,9 +379,9 @@
       "copyFailed": "복사하지 못했습니다",
       "open": "이 기기에서 열기",
       "openFailed": "링크를 열지 못했습니다",
-      "then": "열린 페이지에 코드를 입력해 로그인을 마친 뒤 「Agent에게 넘기기」를 선택하세요."
+      "then": "열린 페이지에 코드를 입력해 로그인을 마친 뒤 \"Agent에게 넘기기\"를 선택하세요."
     },
-    "sheetNote": "컴퓨터의 이 위치에만 입력됩니다. 에이전트에게 전달되거나 저장되지 않습니다.",
+    "sheetNote": "컴퓨터의 이 위치에만 입력됩니다. Agent에게 전달되거나 저장되지 않습니다.",
     "nothingLeft": "여기에는 입력할 항목이 없습니다.",
     "qr": {
       "open": "이 기기에서 {{site}} 열기",
@@ -455,5 +462,39 @@
       "ghost_id": "플러그인",
       "tool": "도구"
     }
+  },
+  "issueConfirm": {
+    "title": "{{appName}} 피드백 제출 확인",
+    "typeBug": "버그",
+    "typeFeature": "기능 제안",
+    "titleLabel": "제목",
+    "bodyLabel": "본문(Markdown)",
+    "privacyHint": "Issue 제목과 본문은 공개되며 검색되거나 캐시될 수 있습니다. 자동 가림은 일부 일반적인 형식만 처리하며 문맥상 민감한 정보를 모두 감지할 수는 없습니다.",
+    "relatedLogsHint": "이 제출에는 위에 표시된 관련 클라이언트 로그가 포함됩니다. 공개 전에 출처 및 필드 필터링, 가림, 길이 제한이 적용됩니다.",
+    "privacyConfirm": "위 공개 내용을 검토했으며 비공개로 유지해야 할 개인, 대화 또는 업무 정보가 포함되지 않았음을 확인했습니다",
+    "submissionMethodLabel": "제출 계정",
+    "identityGithubUser": "내 GitHub 계정 @{{login}}",
+    "identityGithubUserHint": "GitHub의 Issue 작성자가 되며 직접 수정하거나 닫을 수 있습니다",
+    "identityPlatform": "Cindy 공식 봇 @{{login}} (기본값)",
+    "identityPlatformHint": "GitHub 계정 설정 없이 사용할 수 있습니다. Issue는 공식 봇이 만들며 본문에 공개 서명을 표시할 수 있습니다",
+    "publicNameLabel": "공개 서명",
+    "publicNameHint": "이 서명은 Issue 본문에 공개적으로 표시됩니다",
+    "anonymous": "익명",
+    "useAnonymous": "익명 서명 사용",
+    "envLine": "제출 클라이언트 환경(제출 시 자동 첨부): 클라이언트 {{appVersion}} · {{platform}} {{arch}}({{osVersion}}) · 표시 언어 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (지금 이 세션)",
+    "regionLine": "빌드 지역: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "피드백 제출",
+    "cancel": "취소",
+    "previewLabel": "GitHub · 공개 피드백",
+    "edit": "수정",
+    "doneEditing": "수정 완료",
+    "publicSubmit": "공개 제출",
+    "publicationNotice": "내용과 작성자 이름이 GitHub에 공개됩니다.",
+    "attribution": "작성자: {{name}}",
+    "environment": "실행 환경 포함",
+    "identitySettings": "이름 및 계정"
   }
 }

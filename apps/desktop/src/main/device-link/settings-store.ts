@@ -9,6 +9,9 @@ import type { withAvailabilityPolicyMutation } from './providerShareAvailability
  *    开关打开即授权,同账号设备无需逐次批准;详见 device-link 设计稿)
  *  - revokedControllers: 逐设备访问黑名单(被撤销访问权限的控制端 deviceId 列表)。
  *    全局开着时,名单内的设备单独被挡;持久化,被控端重启 / 离线后仍生效(恢复才解除)。
+ *  - modelUseRevokedControllers: 被单独关掉「用本机模型」的同账号控制端 deviceId 列表。
+ *    「用本机模型」跟着「控制本机」：控制本机开着时默认可用，名单内的设备借不到本机的模型
+ *    (远程 Agent)，其余远程控制不受影响。
  *  - disabledControlDeviceIds: 本机不再主动控制的目标设备 deviceId 列表。它只影响本机
  *    控制其它设备的镜像 / 入口,不改变对方的被控授权。
  *  - lastKnownDeviceNames: 本机最后一次看见的有效设备名缓存。relay 离线后 Redis presence
@@ -27,9 +30,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createLogger } from '../logger';
+import { isPreservingUnreadableSettingsFilesByDefault } from '../maker-host/override-settings-file.js';
 
 
 export interface DeviceLinkSettings {
+  /** Device-local V2 preference; absent in existing files means V1. */
+  agentNetEnabled?: boolean;
+  agentNetOnlyEncrypted?: boolean;
+  /** 同账号另一台电脑最近一次远程打开 / 关闭 Agent-Net(开关下面写「由谁在几点」);本机再改后清除。 */
+  agentNetChangedBy?: { deviceId: string; deviceName: string; at: number; enabled: boolean } | null;
+  /** 远程打开 Agent-Net 后等待确认的那一次;没确认前由被切的电脑自己兜底退回(agentNetRemoteSwitch.ts)。 */
+  agentNetPendingSwitch?: { switchId: string; controllerId: string; previous: boolean; deadlineAt: number; pid: number; restoring?: boolean } | null;
   /** Full desktop viewing/input is a separate, local opt-in. */
   remoteDesktopEnabled: boolean;
   remoteControlEnabled: boolean;
@@ -41,6 +52,8 @@ export interface DeviceLinkSettings {
   keepAwake: boolean;
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单)。 */
   revokedControllers: string[];
+  /** 单独关掉「用本机模型」的同账号控制端 deviceId 列表(远程 Agent 拒绝它们)。 */
+  modelUseRevokedControllers: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   /** deviceId → last known non-placeholder display name, local-only cache. */
@@ -57,10 +70,13 @@ const { getUserDataDir, withAvailabilityPolicyMutation } = ports;
 const log = createLogger('device-link-settings');
 
 const DEFAULTS: DeviceLinkSettings = {
+  agentNetEnabled: false,
+  agentNetOnlyEncrypted: false,
   remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
+  modelUseRevokedControllers: [],
   disabledControlDeviceIds: [],
   lastKnownDeviceNames: {},
 };
@@ -73,15 +89,41 @@ function normalize(raw: unknown): DeviceLinkSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
   const r = raw as Record<string, unknown>;
   return {
+    agentNetEnabled: r.agentNetEnabled === true,
+    agentNetOnlyEncrypted: r.agentNetOnlyEncrypted === true,
+    // 远程切换的两条记录只在发生过时出现，旧文件与默认值的形状不变。
+    ...optional('agentNetChangedBy', normalizeAgentNetChange(r.agentNetChangedBy)),
+    ...optional('agentNetPendingSwitch', normalizeAgentNetPendingSwitch(r.agentNetPendingSwitch)),
     remoteDesktopEnabled: r.remoteDesktopEnabled === true,
     remoteControlEnabled: r.remoteControlEnabled === true,
     keepAwake: r.keepAwake === true,
     revokedControllers: Array.isArray(r.revokedControllers)
       ? r.revokedControllers.filter((x): x is string => typeof x === 'string')
       : [],
+    modelUseRevokedControllers: normalizeStringList(r.modelUseRevokedControllers),
     disabledControlDeviceIds: normalizeStringList(r.disabledControlDeviceIds),
     lastKnownDeviceNames: normalizeDeviceNameMap(r.lastKnownDeviceNames),
   };
+}
+
+function optional<K extends 'agentNetChangedBy' | 'agentNetPendingSwitch'>(key: K, value: DeviceLinkSettings[K]): Partial<Pick<DeviceLinkSettings, K>> {
+  return value ? { [key]: value } as Partial<Pick<DeviceLinkSettings, K>> : {};
+}
+
+function normalizeAgentNetChange(raw: unknown): DeviceLinkSettings['agentNetChangedBy'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.deviceId !== 'string' || typeof r.deviceName !== 'string' || typeof r.at !== 'number' || typeof r.enabled !== 'boolean') return null;
+  return { deviceId: r.deviceId, deviceName: r.deviceName.slice(0, 120), at: r.at, enabled: r.enabled };
+}
+
+function normalizeAgentNetPendingSwitch(raw: unknown): DeviceLinkSettings['agentNetPendingSwitch'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.switchId !== 'string' || typeof r.controllerId !== 'string' || typeof r.previous !== 'boolean'
+    || typeof r.deadlineAt !== 'number' || typeof r.pid !== 'number') return null;
+  return { switchId: r.switchId, controllerId: r.controllerId, previous: r.previous, deadlineAt: r.deadlineAt, pid: r.pid,
+    ...(r.restoring === true ? { restoring: true } : {}) };
 }
 
 function normalizeStringList(raw: unknown): string[] {
@@ -113,6 +155,12 @@ function normalizeDeviceNameMap(raw: unknown): Record<string, string> {
 let cached: DeviceLinkSettings | null = null;
 /** 缓存对应的文件 mtimeMs;文件不存在时为 null。mtime 变化 → 缓存失效重载(跨实例写入可见)。 */
 let cachedMtimeMs: number | null = null;
+/**
+ * The process keeps settings files it cannot read (override-settings-file.ts, set by the Host
+ * only): the unreadable file stays, reads as the defaults (everything off) until it changes, and
+ * refuses writes, as createOverrideSettingsFile does. Never set on the desktop.
+ */
+let cachedUnreadable = false;
 
 function statMtimeMs(file: string): number | null {
   try {
@@ -130,6 +178,7 @@ function readDeviceLinkSettings(): DeviceLinkSettings {
     if (mtimeMs !== null) {
       cached = normalize(JSON.parse(fs.readFileSync(file, 'utf-8')));
       cachedMtimeMs = mtimeMs;
+      cachedUnreadable = false;
       return cached;
     }
   } catch (err) {
@@ -137,10 +186,17 @@ function readDeviceLinkSettings(): DeviceLinkSettings {
       error: err instanceof Error ? err.message : String(err),
       path: file,
     });
+    if (isPreservingUnreadableSettingsFilesByDefault()) {
+      cached = { ...DEFAULTS };
+      cachedMtimeMs = mtimeMs;
+      cachedUnreadable = true;
+      return cached;
+    }
     try { fs.unlinkSync(file); } catch { /* no-op */ }
   }
   cached = { ...DEFAULTS };
   cachedMtimeMs = null;
+  cachedUnreadable = false;
   return cached;
 }
 
@@ -236,6 +292,7 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
   cached = null;
   cachedMtimeMs = null;
   const current = readDeviceLinkSettings();
+  if (cachedUnreadable) throw new Error('device-link settings file is unreadable; refusing to overwrite it');
   const nextValue = updater(current[key]);
   const next = { ...current, [key]: nextValue };
   const tmp = `${file}.${process.pid}.${tag}.tmp`;
@@ -250,7 +307,7 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
 
 /**
  * 以 updater 形式更新某个 key:updater 在写锁内基于盘上最新值执行。
- * 数组 / map 类 key(revokedControllers / disabledControlDeviceIds /
+ * 数组 / map 类 key(revokedControllers / modelUseRevokedControllers / disabledControlDeviceIds /
  * lastKnownDeviceNames)的增删改**必须**走本函数,不要在锁外算好整值再
  * writeDeviceLinkSetting(见 writeMergedOnce 注释)。返回最终写入的值。
  */

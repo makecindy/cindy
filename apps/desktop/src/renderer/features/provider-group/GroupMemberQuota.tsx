@@ -30,6 +30,8 @@ export type GroupMemberQuotaTarget =
 
 /** 读了这么久还没有额度就不再写「正在读取」：那台可能较旧或这个账号暂时没有额度数据。 */
 const LOADING_GRACE_MS = 8_000;
+/** 快速读取不闪过加载文字；慢读取仍及时反馈。 */
+const LOADING_REVEAL_MS = 200;
 type QuotaRelayStatus = 'stopped' | 'connecting' | 'online';
 
 export function GroupMemberQuota({
@@ -259,7 +261,7 @@ export function GroupMemberQuota({
     { live: true, active: !quotaOffline && !!provider },
   );
   // 这台电脑上的账号：两个及以上分别列出；只有一个时不加账号名，默认账号继续用原来的卡。
-  const accounts = useGroupMemberAccounts(
+  const { accounts, loading: accountsLoading } = useGroupMemberAccounts(
     target.kind === 'share' ? null : target.providerId,
     remoteDeviceId,
     // 枚举账号不要求已有登录有效，否则全部掉登录时连「需要登录」也看不到。
@@ -269,36 +271,47 @@ export function GroupMemberQuota({
   const listedAccounts = accounts && (accounts.length > 1 ||
     (accounts.length === 1 && accounts[0].account.id !== 'default')) ? accounts : null;
   const [waitedOut, setWaitedOut] = useState(false);
+  const [loadingVisible, setLoadingVisible] = useState(false);
   const waitKey = target.kind === 'share' ? '' : `${remoteDeviceId ?? ''}\n${target.providerId}`;
   useEffect(() => {
     setWaitedOut(false);
+    setLoadingVisible(false);
+    const reveal = window.setTimeout(() => setLoadingVisible(true), LOADING_REVEAL_MS);
     const timer = window.setTimeout(() => setWaitedOut(true), LOADING_GRACE_MS);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(reveal);
+      window.clearTimeout(timer);
+    };
   }, [waitKey]);
+  // 先确定账号列表，避免先显示默认账号，随后整块换成多账号布局。沿用原来的等待上限，
+  // 旧电脑不支持列表或长时间不回包时，仍可查看已有的默认账号额度。
+  const visibleCard = (accountsLoading && !waitedOut) || accounts?.length === 0 ? null : card;
 
   let note: string | null = null;
   if (target.kind === 'share') note = t('providerGroup.member.quota.share');
   else if (quotaOffline) note = t('providerGroup.member.quota.offline');
-  else if (!card && !listedAccounts) {
-    if (provider && !providerWeeklyQuotaSource({ ...provider, suspended: false })) {
+  else if (accounts?.length === 0) note = t('providerGroup.member.quota.unavailable');
+  else if (!visibleCard && !listedAccounts) {
+    if (!accountsLoading && provider && !providerWeeklyQuotaSource({ ...provider, suspended: false })) {
       note = t('providerGroup.member.quota.none');
     } else if (waitedOut || (target.kind === 'device' && deviceCatalog.error)) {
       note = t('providerGroup.member.quota.unavailable');
-    } else {
+    } else if (loadingVisible) {
       note = t('providerGroup.member.quota.loading');
     }
   }
 
   return (
     // 紧贴在电脑这一行下面：行本身已说明是哪台电脑，卡片不再出「Claude · 套餐」标题行。
-    <div id={id} data-testid="provider-group-member-quota" className={cn('-mt-1', inset)}>
+    // 空内容不能带负边距，否则它会折叠到外层，把点击的格子先拉矮 4px。
+    <div id={id} data-testid="provider-group-member-quota" className={cn((listedAccounts || visibleCard || note) && '-mt-1', inset)}>
       {listedAccounts ? (
         <GroupMemberAccountList accounts={listedAccounts} defaultCard={card} hideAccountNames={listedAccounts.length === 1} />
-      ) : card ? (
-        <QuotaHoverCard variant="embedded" hideIdentity account={card} />
-      ) : (
+      ) : visibleCard ? (
+        <QuotaHoverCard variant="embedded" hideIdentity account={visibleCard} />
+      ) : note ? (
         <p className="px-4 pb-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">{note}</p>
-      )}
+      ) : null}
     </div>
   );
 }

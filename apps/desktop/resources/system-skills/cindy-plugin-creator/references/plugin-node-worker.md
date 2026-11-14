@@ -12,8 +12,9 @@
 Node worker ↔ JSON-RPC stdio ↔ 你的 main.js ↔ Cindy 主机能力
 ```
 
-Node 不能直接拿到 `cindy`、Electron IPC 或 Agent 会话。它向主机发反向 JSON-RPC
-请求时，主机会固定返回 `-32601`；需要 Cindy 能力时，Node 先把数据回给 `main.js`，
+Node 不持有 Electron IPC 或 Agent 会话。宿主提供的 `cindy.host.call` 可通过私有通道调用
+与 Agent 共用的宿主工具，须声明并批准 `agent.hostTools`，详见[宿主工具调用](plugin-host-tools.md)。
+其它反向 JSON-RPC 请求仍返回 `-32601`；需要其它 Cindy 能力时，Node 先把数据回给 `main.js`，
 再由 `main.js` 调 Cindy 通道。插件自主调用继续按 manifest 验权；当前
 Agent tool-call 内的网络与 workdir 操作按 §4.2 复用 Agent 授权。
 
@@ -211,6 +212,9 @@ MCP server 的 sampling / elicitation / roots 等 server→client 反向请求�
 这类能力时仍按“结果回 main.js，再由 main.js 申请 Cindy 能力”的链路设计。
 
 ### 4.12.3 打包和生命周期红线
+
+宿主服务依赖使用 `agent.hostTools` 并在调用时解析；能力查询与资源退出规则见
+[宿主服务依赖与生命周期](plugin-host-tools.md#服务依赖与生命周期)。服务不可用不代替安装批准，也不授予管理其他插件的能力。
 
 - 用户不需要安装 Node、npm、CLI 或 MCP。运行时由 Cindy 随包提供；你必须在制作阶段
   把依赖打成单个 worker 文件或连同静态资源放进目录；**禁止**在安装/首次运行时执行

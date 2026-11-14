@@ -144,6 +144,11 @@ export interface AgentCapabilities {
    */
   supportsOrcaAgentRelocation?: boolean;
   /**
+   * 被控端接受给它上面的运行设备 Worker(Lead 在另一台电脑)换 Agent 所在电脑。
+   * 老被控端无此字段 → undefined：控制端对这类 Worker 不列其他电脑与分享(老端会拒绝)。
+   */
+  supportsOrcaRemoteWorkerAgentRelocation?: boolean;
+  /**
    * 手动压缩会话上下文能力(pi 原生 compact)。与 maker-core Capabilities.manualCompact
    * 同形；device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
    * 上下文环压缩入口据此判定(见 resolveManualCompactChannel),不再硬编码 agentKind 列表。
@@ -177,9 +182,9 @@ export function canExposeWritableDirsChange(options: {
 /**
  * 手动压缩调用通道判定 —— 上下文环压缩入口与请求分流的唯一判据(#1927 / #1933 review):
  *   - 真实 Claude Code 会话 → `claude-input`(输入协调器 maker:input:compact,SDK 斜杠命令通道);
- *   - 其余 agent 声明 manualCompact.supported(当前仅 pi)→ `compact-session`
+ *   - 其余 agent 声明 manualCompact.supported(Pi / Codex)→ `compact-session`
  *     (capability-aware 通用通道 maker:compact-session,本地 IPC / device-link 隧道均可路由);
- *   - 其余(Codex 等无手动压缩能力)→ null = 无入口。
+ *   - 其余(未声明手动压缩能力)→ null = 无入口。
  * 刻意不按 agentKind 扩排除列表:新 agent 只需在 maker-core 声明能力即可自动接入。
  */
 export type CompactChannel = 'claude-input' | 'compact-session';
@@ -313,6 +318,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
     !isOptionalBoolean(value.supportsOrcaWorkerAgentDevice) ||
     !isOptionalBoolean(value.supportsOrcaAgentRelocation) ||
+    !isOptionalBoolean(value.supportsOrcaRemoteWorkerAgentRelocation) ||
     !isOptionalCapabilityStatus(value.writableDirs) ||
     !isOptionalCapabilityStatus(value.manualCompact)
   ) {

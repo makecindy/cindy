@@ -1,3 +1,4 @@
+import { setSessionEffort, setSessionFastMode } from '../../../desktop/src/main/maker-host/session-effort-store.js';
 const appliedSettings = new WeakMap();
 
 /** Initial facts come from the same options that constructed the live Session. */
@@ -6,20 +7,20 @@ export function rememberLiveSessionSettings(live, options) {
     planModeEnabled: options.planMode });
 }
 
-/** Reused sessions must apply the next input's settings, not keep the first
+/** Reused sessions must apply current task settings, not keep the first
  * turn's model. Skip unchanged options so unsupported live switches are not
  * invoked for an ordinary continuation. Direct settings edits update this same
- * snapshot below, so a queued choice cannot be mistaken for the current one. */
+ * snapshot below. Plan is per-message intent at dispatch, not an instruction
+ * to overwrite the runtime's armed state; only direct picker edits do that. */
 export async function applyQueuedSessionSettings(live, options, stored) {
   const previous = appliedSettings.get(live) ?? stored;
-  const desired = { ...options, providerId: options.providerId ?? null, planModeEnabled: options.planMode };
+  const desired = { ...options, providerId: options.providerId ?? null };
   const current = { ...previous,
     ...(typeof live.model === 'string' ? { model: live.model } : {}),
     ...(live.stablePermissionModeState?.mode ? { permissionMode: live.stablePermissionModeState.mode } : {}),
-    ...(live.stablePlanModeState ? { planModeEnabled: live.stablePlanModeState.enabled } : {}),
   };
   const patch = {};
-  for (const key of ['model', 'providerId', 'permissionMode', 'effort', 'fastMode', 'planModeEnabled']) {
+  for (const key of ['model', 'providerId', 'permissionMode', 'effort', 'fastMode']) {
     if (desired[key] !== undefined && desired[key] !== current[key]) patch[key] = desired[key];
   }
   await applyLiveSessionSettings(live, patch, stored);
@@ -41,12 +42,17 @@ export async function applyLiveSessionSettings(live, patch, stored) {
     remember({ model: patch.model ?? stored.model,
       ...(Object.hasOwn(patch, 'providerId') ? { providerId: patch.providerId } : {}),
       ...(typeof patch.effort === 'string' ? { effort: patch.effort } : {}) });
+    // The proxy's provider bridges read this store, as on the desktop (register.ts).
+    if (typeof patch.effort === 'string' && typeof live.id === 'string') setSessionEffort(live.id, patch.effort);
   } else if (typeof patch.effort === 'string') {
     await live.setEffort(patch.effort);
+    if (typeof live.id === 'string') setSessionEffort(live.id, patch.effort);
     remember({ effort: patch.effort });
   }
   if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') {
     await live.setFastMode(patch.fastMode);
+    // Pi's price tier reads this store, as on the desktop (start-options.ts).
+    if (typeof live.id === 'string') setSessionFastMode(live.id, patch.fastMode);
     remember({ fastMode: patch.fastMode });
   }
   if (typeof patch.planModeEnabled === 'boolean') {

@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "Open",
+      "draft": "Draft",
+      "merged": "Merged",
+      "closed": "Closed"
+    },
+    "statusUnavailable": "Status not loaded yet",
     "title": "Manage PR Links",
     "hint": "Up to 3 in the header; pinned PRs appear first",
     "empty": "Paste a GitHub PR or GitLab MR URL to add it",
@@ -19,7 +26,7 @@
       "duplicate": "This PR is already linked; restore removed links from the list",
       "notFound": "PR not found or access denied",
       "invalidUrl": "Enter a valid GitHub PR or GitLab MR URL",
-      "reorderFailed": "The order was not saved. Please try again.",
+      "reorderFailed": "The order was not saved. Try again.",
       "verifyFailed": "Could not verify the PR; check GitHub or GitLab sign-in and access",
       "unsupported": "This computer’s version does not support managing PR links",
       "failed": "Could not update PR links"
@@ -197,10 +204,22 @@
         "deleted": "Deleted"
       },
       "actions": {
-        "settings": { "label": "Settings", "a11y": "Open session settings" },
-        "usage": { "label": "Usage", "a11y": "View session usage" },
-        "files": { "label": "Files", "a11y": "Browse remote files" },
-        "queue": { "label": "Queue", "a11y": "Open queue panel" },
+        "settings": {
+          "label": "Settings",
+          "a11y": "Open session settings"
+        },
+        "usage": {
+          "label": "Usage",
+          "a11y": "View session usage"
+        },
+        "files": {
+          "label": "Files",
+          "a11y": "Browse remote files"
+        },
+        "queue": {
+          "label": "Queue",
+          "a11y": "Open queue panel"
+        },
         "search": {
           "label": "Search",
           "openA11y": "Search messages",
@@ -241,7 +260,7 @@
           "plugins": "Plugin catalogue",
           "memoryRules": "Memory instructions",
           "memoryIndex": "Memory index",
-          "profile": "Teammate profile",
+          "profile": "Buddy profile",
           "user": "User instructions",
           "directories": "Additional directories",
           "native": "Pi instructions",
@@ -298,21 +317,21 @@
     "backToEdit": "Back to Edit",
     "retry": "Retry",
     "firstMessageNotSent": "The first message wasn't sent; its content has been restored to the input box.",
-    "attachmentsNotCarriedBack": "{{count}} attachment(s) couldn't be brought back — please add them again.",
-    "pendingAttachmentsNotCarriedBack": "Attachments still being selected or uploaded couldn't be brought back. Please add them again.",
-    "localStorageFull": "Cindy's local storage on this phone is full, so the message couldn't be saved. Please try again.",
-    "commandWaitsForSession": "The session is still being created — this command needs the session to be ready. Please try again shortly.",
+    "attachmentsNotCarriedBack": "{{count}} attachment(s) couldn't be brought back. Add them again.",
+    "pendingAttachmentsNotCarriedBack": "Attachments still being selected or uploaded couldn't be brought back. Add them again.",
+    "localStorageFull": "Cindy's local storage on this phone is full, so the message couldn't be saved. Try again.",
+    "commandWaitsForSession": "The session is still being created — this command needs the session to be ready. Try again shortly.",
     "locateMessageNotFound": "Couldn't find the message to jump to.",
     "shareNoLocalImage": "Couldn't get the local image file",
     "shareFailedTitle": "Share Failed",
-    "shareImageFailed": "Couldn't create or open the share image. Please try again.",
+    "shareImageFailed": "Couldn't create or open the share image. Try again.",
     "shareUnsupported": "This app version doesn't support sharing yet; update to the latest version and try again.",
     "downloadFailed": "Download failed",
     "voiceNoRemoteDevice": "No remote device available; can't start voice input.",
     "voiceSenderNotReady": "Messages can't be sent right now. Go back and reopen the session.",
     "voiceStopAndSend": "End voice input and send",
     "sendMessage": "Send remote message",
-    "inputSyncFailed": "Couldn't read the complete input. Your text is still here; please try again.",
+    "inputSyncFailed": "Couldn't read the complete input. Your text is still here; try again.",
     "voiceStartInput": "Start voice input",
     "stopSession": "Stop remote session",
     "sessionNotFoundResync": "Couldn't find the current remote session; sync again before sending.",
@@ -390,7 +409,7 @@
     "selectProject": "Select a project",
     "composerPlaceholder": "What should we work on today?",
     "voiceSelectDeviceFirst": "Select a device before using voice input.",
-    "creatingSession": "Creating session",
+    "creatingSession": "Creating session…",
     "slowSend": {
       "preparing": "Preparing to send…",
       "uploading": "Uploading attachments…",
@@ -462,7 +481,7 @@
     "worktreeRecovering": "Reconnecting and retrying automatically…",
     "worktreeGitMissing": "git not detected — install it first",
     "worktreeNotGitRepo": "Current directory is not a git repository",
-    "worktreeAlreadyInWorktree": "Already inside a worktree, nesting is not allowed",
+    "worktreeAlreadyInWorktree": "Already inside a worktree; nesting isn't allowed",
     "worktreeDetectFailed": "Could not check this directory — reselect it later and try again",
     "worktreeUnsupported": "Cindy on your computer can't safely create worktrees. Turn worktree off to continue, or update Cindy on your computer.",
     "worktreeCreateFailed": "Failed to create worktree: {{message}}",
@@ -470,6 +489,11 @@
     "worktreeCleanupPending": "The previous worktree is still awaiting cleanup. Reconnect the device and try again."
   },
   "menu": {
+    "moveToProject": "Move task",
+    "moveFailed": "Failed to move task",
+    "moveRunning": "This task is running. Move it after it finishes.",
+    "moveWorktree": "This task's working directory is a worktree, so it can't be moved to another project yet",
+    "moveUnsupported": "Update the connected computer to move tasks.",
     "details": "Session details",
     "chipPinned": "Pinned",
     "chipArchived": "Archived",
@@ -647,6 +671,8 @@
     "taskAlreadyCreated": "This task already exists on the computer. Its saved messages will resume there."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
     "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
     "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
@@ -661,7 +687,7 @@
     "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Try again shortly. If this persists, check the Cindy AI status in Settings → Model Providers.",
     "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
     "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
-    "DEVICE_LINK_BUSY": "The remote computer is busy. Please try again shortly.",
+    "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
     "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again.",
     "MCP_APPROVAL_AUTO_BLOCKED": "Auto approve blocked this tool call. No manual rejection was received.",
@@ -684,11 +710,14 @@
     "REMOTE_AGENT_TOTAL_LIMIT": "The provider computer has reached its total remote session limit. Ask the owner to release unused sessions or raise the limit in Remote & sharing.",
     "REMOTE_AGENT_RESUME_LOST": "The earlier conversation on the other computer could not be reconnected, so the agent continues without that context.",
     "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
+    "REMOTE_AGENT_RESUME_UNAVAILABLE": "This computer cannot resume the task’s previous runtime state. Select a model from another computer or provider to continue with a context handoff. Existing messages are kept.",
     "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
+    "REMOTE_AGENT_RESUME_REJECTED": "The computer running the model cannot resume this session. Create a new session from the session list and copy over the content you need to continue. The original session and queued messages are kept.",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t allowed remote use of this provider. On that computer, turn on “Allow remote use” in Settings → Providers, or pick another model.",
     "REMOTE_AGENT_FORK_FAILED": "The computer running the Agent couldn’t start a new session from here. Try again, or try a different message.",
     "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "This is a legacy share, and it can't be used while “Use Only Agent-Net” is on. Turn that switch off to continue, or switch to another model.",
     "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue."
   },
@@ -714,21 +743,34 @@
     "remoteDirPathHint": "The folder is checked on the execution device. A missing folder causes an error; the Lead's folder is never used instead.",
     "remoteDirInvalid": "Enter an absolute path on the execution device.",
     "roleLabel": "Role name",
-    "roleHint": "Just a name to tell collaborators apart. It doesn't change capabilities.",
-    "customRole": "Custom",
-    "customRolePlaceholder": "Custom role name",
-    "customRolePredefinedError": "A custom role name can't match a preset role",
+    "taskLabel": "What the Worker does",
+    "enableHint": "This task becomes the Lead: it assigns work and checks the results. The Worker is a separate Agent that does the work and reports back.",
+    "roles": {
+      "reviewer": {
+        "name": "Review",
+        "task": "Take a look at the Lead’s work and give some suggestions."
+      },
+      "developer": {
+        "name": "Develop"
+      },
+      "tester": {
+        "name": "Test",
+        "task": "Test the Lead’s work so far and report what failed, with steps to reproduce."
+      }
+    },
+    "addRole": "Add role",
+    "removeRoleHint": "Touch and hold to remove",
+    "removeRoleConfirmTitle": "Remove “{{role}}”?",
+    "removeRoleConfirmDesc": "You can add it back anytime with Add role.",
+    "removeRoleConfirm": "Remove role",
+    "moreSettings": "More settings",
     "agentLabel": "Agent",
-    "modelLabel": "Model",
     "modelDefault": "Default",
     "modelDefaultHint": "Uses the computer's default Worker model",
-    "permissionLabel": "Permission mode",
     "permissionAuto": "Auto-review",
     "permissionFull": "Full access",
-    "permissionAutoHint": "Reads and writes inside the workspace and auto-reviews elevation requests. High-risk actions may be denied or need confirmation.",
-    "permissionFullHint": "Can change any file and run networked commands without asking again. Highest risk; use only for trusted tasks.",
     "initialTaskLabel": "Initial task (optional)",
-    "initialTaskPlaceholder": "An optional first task for this Worker",
+    "initialTaskPlaceholder": "Write the first thing to hand it, or leave blank and let the Lead assign work",
     "workerCountSummary_one": "{{count}} Worker · {{running}} running",
     "workerCountSummary_other": "{{count}} Workers · {{running}} running",
     "loading": "Loading Workers…",
@@ -742,7 +784,7 @@
     "limitSummary": "Soft limit {{soft}} Workers, hard limit {{hard}}. Change collaboration settings on your computer.",
     "stop": "End collaboration",
     "stopConfirmTitle": "End collaboration?",
-    "stopConfirmDesc": "Worker sessions will be destroyed. Any running task stops immediately and its results are lost. End collaboration?",
+    "stopConfirmDesc": "All Workers will be archived. Any running work stops immediately and its results are lost. End collaboration?",
     "cancel": "Cancel",
     "archive": "Archive",
     "archiveConfirm": "Archive Worker",
@@ -800,15 +842,9 @@
     "leadTime": "Use how early",
     "minutes": "{{count}} minutes before expiry",
     "hours": "{{count}} hours before expiry",
-    "hint": "Either rule uses the earliest-expiring card. Skip when all quotas are full. Runs on this computer while Cindy is running.",
+    "hint": "Either rule uses the earliest-expiring card and skips when all quotas are full. Runs on this computer while Cindy is running.",
     "failed": "Could not save. Try again.",
     "restore": "Restore defaults"
-  },
-  "followUp": {
-    "title": "Would you like me to follow up on your sessions?",
-    "start": "Start Following Up",
-    "notNow": "Not Now",
-    "saveFailed": "Couldn't save. Try again."
   },
   "providerGroupRebalance": {
     "title": "Continue on {{label}}?",
@@ -825,10 +861,10 @@
   "messageEdit": {
     "editing": "Editing message",
     "discard": "Discard message edit",
-    "stopTimeout": "Timed out waiting for the task to stop — please try again",
+    "stopTimeout": "Timed out waiting for the task to stop — try again",
     "queueNotEmpty": "This session has queued messages — send or remove them before editing",
     "notLast": "A newer message exists in this session — this one is no longer the latest and cannot be edited",
-    "failed": "Failed to edit and resend, please try again",
+    "failed": "Couldn't edit and resend. Try again.",
     "noPriorAssistant": "There is no AI reply before this message, and the Cindy version on the computer can't edit it yet. Update Cindy on the computer and try again.",
     "uploadsPending": "Attachments are still uploading. Wait for them to finish before editing the message.",
     "rollbackHint": "Sending will undo changes to {{count}} file(s) from the last turn",

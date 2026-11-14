@@ -278,38 +278,36 @@ export function getDesktopMcpToolApprovalPolicy(
     const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
     const args = progressive ? readJsonObject(params?.args) : params;
     // Codex can omit tool_name when same-server calls overlap. A direct tool's
-    // input may also have a `name` field (routine_save does), so only treat an
+    // input may also have a `name` field, so only treat an
     // exact name/args envelope as a progressive call without the outer name.
     if (!toolName && (!params || !innerName || !args ||
       Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) {
       return 'prompt-each-time';
     }
     const action = progressive ? innerName : toolName;
-    // Registering explicit source folders and a gateway is one normal tool approval.
-    // Searches, reads and refreshes use the already registered account-local library.
-    if (action === 'configure_local_skill_library' && args?.action === 'register') return 'prompt-each-time';
+    if (action === 'file_request' && (!args || !['read', 'list', 'watch', 'changes', 'unwatch'].includes(String(args.op)))) return 'prompt-each-time';
+    if (action && ['terminal_start', 'terminal_write', 'terminal_resize', 'terminal_stop', 'terminal_forget'].includes(action)) return 'prompt-each-time';
     // Use the normal runtime permission flow once: Full Access bypasses approval,
     // Auto reviews the call, and Ask requests confirmation. Host guards retain scope checks.
-    if (action && (TASK_ACTION_TOOLS.has(action) || action === 'routine_delete')) return 'prompt-each-time';
+    // delete_session / rewind_session are unconditional task actions: no local-device,
+    // conversation-only or stopped-target shortcut can turn them into auto-approved reads.
+    if (action && TASK_ACTION_TOOLS.has(action)) return 'prompt-each-time';
     if (toolName === 'call_tool' && (!innerName || !args)) return 'prompt-each-time';
     // Installing or saving a host command uses the session's existing approval flow.
-    if (action === 'schedule_set_pre_run_hook' || (action === 'routine_save' && args?.preRunHook != null)) {
-      return 'prompt-each-time';
-    }
+    if (action === 'schedule_set_pre_run_hook') return 'prompt-each-time';
     // Creating a task worktree adds a branch and directory to the repository and binds them
     // to the task, like `git worktree add`; the task's permission mode decides.
     if (action === 'move_session' || action === 'publish_skill' || action === 'create_task_worktree') {
       return 'prompt-each-time';
     }
+    // Registering explicit source folders and a gateway is one normal tool approval.
+    // Searches, reads and refreshes use the already registered account-local library.
+    if (action === 'configure_local_skill_library' && args?.action === 'register') return 'prompt-each-time';
     // Moving a teammate hands its running to another computer: the task's permission mode decides.
     if (action === 'manage_session_prs' && args?.action !== 'list') return 'prompt-each-time';
     if (action === 'move_teammate_home') return 'prompt-each-time';
     // 发给另一台电脑上的任务：作用范围越出本机，交给当前任务的权限档，不走可信 server 的静默放行。
     if (action === 'send_to_session' && targetsAnotherComputer(sessionIdDevice(args?.target_session_id))) {
-      return 'prompt-each-time';
-    }
-    // 伙伴跟进另一台电脑上的任务(只有总调度伙伴可以)同样是跨电脑写入,口径与 send_to_session 一致。
-    if (action === 'continue_workbench_task' && targetsAnotherComputer(sessionIdDevice(args?.task_id))) {
       return 'prompt-each-time';
     }
     if ((action === 'archive_sessions' || action === 'unarchive_sessions') &&
@@ -320,7 +318,7 @@ export function getDesktopMcpToolApprovalPolicy(
   }
   // 改动另一台电脑上的定时任务（可改写并触发那台电脑上的命令）同样交给权限档：Full Access
   // 免审批，Auto 走统一审阅，Ask 由用户确认。本机删除同样走普通审批，不再依赖额外自主确认。
-  if (serverName === 'cindy_scheduler' && (toolName === 'schedule_delete' || toolName === 'routine_delete' ||
+  if (serverName === 'cindy_scheduler' && (toolName === 'schedule_delete' ||
     toolName === 'schedule_webhook_release' || toolName === 'schedule_webhook_restore')) return 'prompt-each-time';
   if (serverName === 'cindy_scheduler' && (toolName === 'call_tool' || !toolName)) {
     const params = readJsonObject(toolParams);
@@ -330,7 +328,7 @@ export function getDesktopMcpToolApprovalPolicy(
     // a direct deletion's bare id must not inherit trusted-server approval.
     if (!toolName && (!params || !innerName || !args ||
       Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) return 'prompt-each-time';
-    if (innerName === 'schedule_delete' || innerName === 'routine_delete' ||
+    if (innerName === 'schedule_delete' ||
       innerName === 'schedule_webhook_release' || innerName === 'schedule_webhook_restore') return 'prompt-each-time';
     if (SCHEDULER_CROSS_DEVICE_WRITE_TOOLS.has(innerName) && targetsAnotherComputer(args?.device)) {
       return 'prompt-each-time';

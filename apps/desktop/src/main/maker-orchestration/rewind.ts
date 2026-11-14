@@ -27,6 +27,7 @@ import { and, asc, desc, eq, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../localDb/client/current';
+import { assertTaskActionCurrent, runTaskActionRewindBoundary } from '../maker-ipc/taskActionAuthorization.js';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { listMessagesForAgentHandoff, type MessageDeletedPayload } from '../localDb/ipc/messages.js';
@@ -38,6 +39,7 @@ import {
 } from '../device-link/broadcast-tap.js';
 import type { RewindCommitArgs } from '../localDb/client/tx/types';
 import { getMaker, withRehydrateCloseSuppressed } from '../maker-host/index.js';
+import { syncBackgroundCommandWork } from '../maker-host/claude-background-command-work-sync.js';
 import { buildHandoffText } from '../maker-ipc/agentHandoff.js';
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
 import { ownerScopedUserDataPath } from '../appSessionState';
@@ -247,7 +249,7 @@ async function loadRewindContext(
     if (row?.agentKind !== 'cc' || activeSdkSessionId(row.sdkSessionId ?? undefined)) {
       throw rewindError(
         'NO_LIVE_QUERY',
-        '会话未激活——请先发送任意一条消息（即使是 "ok"），让 SDK 起来后再 rewind',
+        '任务运行环境未能恢复，无法回退',
       );
     }
     detached = true;
@@ -829,8 +831,9 @@ async function buildNativeContextReset(
 }
 
 /** 与消息删除同口径：关闭期间抑制 onClose 副作用(worktree 收尾等)，任务本身仍在继续。 */
-async function closeSessionForNativeRestart(sessionId: string): Promise<undefined> {
-  await withRehydrateCloseSuppressed(sessionId, () => getMaker().closeSession(sessionId));
+async function closeSessionForNativeRestart(sessionId: string, clientId: string): Promise<undefined> {
+  await runTaskActionRewindBoundary(sessionId, clientId, 'native-close', () =>
+    withRehydrateCloseSuppressed(sessionId, () => getMaker().closeSession(sessionId)));
   return undefined;
 }
 
@@ -845,8 +848,11 @@ export async function commitRewindAtMessage(
   clientId: string,
   opts?: RewindCommitOptions,
 ): Promise<Session> {
+  await assertTaskActionCurrent(sessionId, clientId);
+  const dbClient = getDbClient();
   const ownerScope = opts?.ownerScope ?? captureDataOwnerBroadcastScope();
   const ctx = await loadRewindContext(sessionId, clientId, opts);
+  await assertTaskActionCurrent();
 
   // makerSession 必有 (loadRewindContext 已 guard); 这里只为类型收紧。
   const makerSession = getMaker().getSession(sessionId);
@@ -882,8 +888,10 @@ export async function commitRewindAtMessage(
     // /clear 可能在读完时间线之后、SDK 换空线程之前落库。副作用前再核一次代次,
     // 最终 rewind.commit 事务再 CAS 同一值(#4994 review P1)。
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
-    const commitThreadRollback = () =>
-      makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop, ...nativeBoundary });
+    const commitThreadRollback = async () => {
+      await assertTaskActionCurrent();
+      return makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop, ...nativeBoundary });
+    };
     const logCompensationError = (compErr: unknown, rollbackCommit: string | null) => {
       log.error(`[rewind commit] ${ctx.agentKind} file rewind compensation failed`, {
         sessionId,
@@ -898,6 +906,7 @@ export async function commitRewindAtMessage(
     } else {
       const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession);
       // shadow 保存点走文件恢复执行器,legacy 保存点走原 revert 执行器;
+      await assertTaskActionCurrent();
       // conversation-only 计划两个执行器都会直接透传 thread rollback。
       const result =
         filePlan.mode === 'file-restore'
@@ -932,13 +941,15 @@ export async function commitRewindAtMessage(
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
     if (!ctx.assistantUuid) nativeContextReset = await buildNativeContextReset(sessionId, ctx.targetClientId);
     const priorAssistantUuid = ctx.assistantUuid;
-    const commitConversationRewind = priorAssistantUuid
-      ? () => makerSession.commitRewindFiles('', priorAssistantUuid)
-      : () => closeSessionForNativeRestart(sessionId);
+    const commitConversationRewind = async () => {
+      await assertTaskActionCurrent();
+      return priorAssistantUuid ? makerSession.commitRewindFiles('', priorAssistantUuid) : closeSessionForNativeRestart(sessionId, clientId);
+    };
     if (opts?.allowFileRestore === false) {
       rewindResult = await commitConversationRewind();
     } else {
       const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession);
+      await assertTaskActionCurrent();
       const onCompensationError = (compErr: unknown, execution: { rollbackCommit: string | null }) => {
         log.error('[rewind commit] claude-code (other computer) file rewind compensation failed', {
           sessionId,
@@ -964,13 +975,15 @@ export async function commitRewindAtMessage(
     expectedClearedAt = await rereadSessionClearedAt(sessionId);
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
     nativeContextReset = await buildNativeContextReset(sessionId, ctx.targetClientId);
+    await assertTaskActionCurrent();
     if (ctx.userUuid && opts?.allowFileRestore !== false) {
       await makerSession.commitRewindFiles(ctx.userUuid, '', { rewindsToNativeThreadStart: true });
     }
-    await closeSessionForNativeRestart(sessionId);
+    await closeSessionForNativeRestart(sessionId, clientId);
   } else {
     expectedClearedAt = await rereadSessionClearedAt(sessionId);
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
+    await assertTaskActionCurrent();
     if (ctx.userUuid && opts?.allowFileRestore !== false) {
       rewindResult = await makerSession.commitRewindFiles(ctx.userUuid, ctx.assistantUuid!);
     } else {
@@ -986,6 +999,10 @@ export async function commitRewindAtMessage(
     }
   }
 
+  // 回退提交会关闭旧 Query,连同它的后台命令一起终止,任务表被不带事件地清空:
+  // 刷新「后台命令仍在工作」,任务列表才不会一直显示已不存在的命令在跑。
+  if (makerSession) syncBackgroundCommandWork(makerSession);
+
   // ── 段 2：SQLite 事务（软删消息 + 同步写回 replacement sdk_session_id）──
   // edit-last-message 的第二道最新校验直接下沉进 worker 事务临界区(payload 带
   // requireLatestUser 标志,worker 在软删同一同步临界区内断言"target 之后无
@@ -996,7 +1013,8 @@ export async function commitRewindAtMessage(
   const now = Date.now();
   let rewoundClientIds: string[];
   try {
-    rewoundClientIds = await getDbClient().tx('rewind.commit', {
+    await assertTaskActionCurrent();
+    rewoundClientIds = await dbClient.tx('rewind.commit', {
       sessionId,
       targetCreatedAt: ctx.targetCreatedAt,
       targetMessageId: ctx.targetMessageId,

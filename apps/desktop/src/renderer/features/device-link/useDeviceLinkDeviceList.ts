@@ -100,6 +100,7 @@ function relevantEqual(a: DeviceLinkDeviceView[] | null, b: DeviceLinkDeviceView
       // platform 决定移动端过滤(buildSwitcherDevices 用 isMobilePlatform):若首次上报 null
       // 后变 'ios',不比较 platform 会让快照不刷新、该手机继续留在切换栏。
       x.platform !== y.platform ||
+      (x.app ?? 'cindy') !== (y.app ?? 'cindy') ||
       x.online !== y.online ||
       x.remoteControlEnabled !== y.remoteControlEnabled ||
       x.controlEnabled !== y.controlEnabled ||
@@ -158,6 +159,7 @@ export function shouldRefreshForPresence(
     row.online !== snap.online ||
     row.remoteControlEnabled !== snap.remoteControlEnabled ||
     normalizePlatform(row.platform) !== normalizePlatform(snap.platform) ||
+    (row.app ?? 'cindy') !== (snap.app ?? 'cindy') ||
     row.name.trim() !== snap.deviceName.trim()
   );
 }

@@ -1,4 +1,5 @@
 import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
+import { pluginPreviewFixture } from './pluginPreviewFixture';
 import { groupExecutionVisualFixture } from './groupExecutionVisualFixture';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
@@ -29,6 +30,7 @@ import type {
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
 import { prCardVisualFixture } from '@/debug/prCardVisualFixture';
 import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
@@ -129,6 +131,10 @@ let preparedContextPromise: Promise<DeviceLinkContextValue> | null = null;
 let didWarnRealDataLoad = false;
 const deletedDeviceIds = new Set<string>();
 const renamedDevices = new Map<string, string>();
+// 模拟电脑上的协同角色清单：最近使用在前，增删只在本次进程内生效。
+let workerRoles: Array<{ role: string; [key: string]: unknown }> = [
+  { role: 'reviewer' }, { role: 'developer' }, { role: 'tester' },
+];
 
 export function visualMockDevices(): DeviceView[] {
   const realData = realDataSnapshot;
@@ -169,6 +175,13 @@ export function visualMockDevices(): DeviceView[] {
       remoteControlEnabled: true,
       isSelf: false,
     },
+    // Opt-in six-computer glance scene; regular mocks and imported data stay unchanged.
+    ...(!realData && !awaitingRealData && process.env.EXPO_PUBLIC_CINDY_GLANCE_MULTI_DEVICE_DEMO === '1'
+      ? ['Studio', 'MacBook Pro', 'Windows PC', 'Mac mini', 'Linux Desktop'].map((name, index) => ({
+        deviceId: `visual-glance-computer-${index}`, name: `Demo ${name}`,
+        platform: 'darwin', appVersion: '0.0.0-visual-mock', lastSeenAt: ISO_NOW,
+        online: true, busy: false, remoteControlEnabled: true, isSelf: false,
+      })) : []),
     {
       deviceId: VISUAL_MOCK_OFFLINE_DEVICE_ID,
       name: 'CINDY Offline Mock Mac',
@@ -190,6 +203,10 @@ export function seedVisualMockStore(): void {
   const seededRealData = seedRealDataStore(realDataSnapshot);
   if (seededRealData) return;
 
+  // The mock auth owner is generation zero. Establish its empty in-memory roster cache
+  // before the six-host scene's ordinary roster replies populate it.
+  if (process.env.EXPO_PUBLIC_CINDY_GLANCE_MULTI_DEVICE_DEMO === '1')
+    readRemoteCollectionCache(`${visualMockUser.id}:0`, 'teammates');
   const sessions = visualMockSessions();
   remoteSessionStore.setDeviceIdentity(visualMockDevices().map((device) => ({
     deviceId: device.deviceId,
@@ -249,7 +266,8 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       lastSeenAt: NOW,
     },
     getPresenceAvailability: (candidateDeviceId: string) =>
-      candidateDeviceId === deviceId ? true : null,
+      candidateDeviceId === deviceId ? true
+        : visualMockDevices().find(device => device.deviceId === candidateDeviceId)?.online === true ? true : null,
     openLink: async (): Promise<LinkAcceptPayload> => ({
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',
@@ -272,6 +290,12 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  // The extra computers have no recent work; sample tasks belong to their original host.
+  if (_deviceId.startsWith('visual-glance-computer-')) {
+    if (channel === 'local-db:sessions:list') return [] as T;
+    if (channel === 'local-db:history:query') return { ok: true, sessions: [], hasMore: false } as T;
+    if (channel === 'maker:bot-delegations:list') return { ok: true, delegations: [] } as T;
+  }
   if (channel === 'local-db:messages:around-client-id' && typeof args[0] === 'string' && args[0].startsWith('qa-process-')) {
     if (args[0] === 'qa-process-unavailable') throw new Error('Process unavailable');
     return [
@@ -346,6 +370,8 @@ async function visualMockInvoke<T = unknown>(
     return { accepted: true } as T;
   }
   const realData = await loadVisualRealDataSnapshot();
+  const previewResult = realData ? undefined : pluginPreviewFixture(channel, args);
+  if (previewResult !== undefined) return previewResult as T;
   const mailResult = realData ? undefined : (mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args));
   if (mailResult !== undefined) return mailResult as T;
   const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
@@ -495,6 +521,17 @@ async function visualMockInvoke<T = unknown>(
       return { success: true, items: [{ type: 'file', name: 'README.md', relPath: 'README.md' }] } as T;
     case 'maker:goal:get-status':
       return null as T;
+    case 'maker:plugins:get-state':
+      // 协同插件在模拟电脑上是开着的(项目与对话任务都可用)。
+      return (args[0] === 'collab' ? { effectiveEnabled: true, collabWorkspaceKind: args[2] } : {}) as T;
+    case 'maker:worker-roles:get':
+      return { roles: workerRoles } as T;
+    case 'maker:worker-roles:apply': {
+      const { kind, ...entry } = args[0] as { kind: string; role: string };
+      const rest = workerRoles.filter((item) => item.role !== entry.role);
+      workerRoles = kind === 'remember' ? [entry, ...rest] : rest;
+      return { ok: true } as T;
+    }
     default:
       return {} as T;
   }
@@ -759,6 +796,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'fixture-read', 'tool_use', { toolName: 'Read', input: { file_path: '/repo/tasks.md' }, toolUseId: 'fixture-read' }, -65000),
     message(sessionId, 'fixture-read-result', 'tool_result', 'Error: file not found', -64000, { toolUseId: 'fixture-read' }),
     message(sessionId, 'fixture-note2', 'assistant', '刚才的读取没有完成。我会保留已有记录，换一种方式继续核对。', -60000, { agentMeta: { assistantPhase: 'commentary' } }),
+    message(sessionId, 'fixture-model-switch', 'agent_switch', { fromAgentKind: 'pi', toAgentKind: 'codex', fromModel: 'quota-test', toModel: 'gpt-6.1-sol' }, -55000),
     message(sessionId, 'fixture-second-work', 'thinking', { text: '继续核对当前状态', durationMs: 1000 }, -50000),
     message(sessionId, 'fixture-search', 'tool_use', { toolName: 'Grep', input: { pattern: 'task', path: '/repo' }, toolUseId: 'fixture-search' }, -45000),
     message(sessionId, 'fixture-search-result', 'tool_result', 'Found task records', -44000, { toolUseId: 'fixture-search' }),
@@ -862,6 +900,15 @@ function message(
 }
 
 function visualMockPendingInteractions(sessionId: string): PendingInteraction[] {
+  if (sessionId === 'visual-issue-confirm') return [{ request: {
+    kind: 'issue_confirm', requestId: 'visual-issue-confirm-request', remoteConfirmSupported: true,
+    draft: { title: '手机无法完成问题反馈确认', type: 'bug',
+      body: '## 问题描述\n在 iPhone 上反馈问题时，确认卡提示只能回电脑处理。\n\n## 预期行为\n可以直接在手机上检查内容、确认并提交反馈。' },
+    env: { appVersion: '开发预览', platform: 'darwin', arch: 'arm64', osVersion: 'macOS',
+      harness: 'Claude Code', modelId: 'claude-sonnet-5', region: 'global' },
+    submissionIdentity: { kind: 'platform', login: 'cindy-bot' },
+    githubUserIdentity: { kind: 'github-user', login: 'demo-user' }, suggestedPublicName: '匿名用户',
+  } }];
   if (sessionId === codexFormSession) return codexFormAnswers === null ? [{ request: {
     kind: 'ask_user_question', requestId: 'visual-codex-form-request', questions: codexFormQuestions(),
   } }] : [];
@@ -970,8 +1017,12 @@ function visualMockCapabilities(): unknown {
     permissionModes: [
       { id: 'ask', displayName: 'Ask' },
       { id: 'acceptEdits', displayName: 'Accept Edits' },
+      { id: 'auto', displayName: 'Auto Approval' },
+      { id: 'bypassPermissions', displayName: 'Full Access' },
       { id: 'plan', displayName: 'Plan' },
     ],
+    // 模拟电脑支持协同：+ 面板里的「协同模式」表单可以直接看，不显示「版本过旧」。
+    supportsOrcaWorkerPermissionMode: true,
   };
 }
 

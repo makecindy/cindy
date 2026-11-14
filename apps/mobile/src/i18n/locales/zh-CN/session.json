@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "开放中",
+      "draft": "草稿",
+      "merged": "已合并",
+      "closed": "已关闭"
+    },
+    "statusUnavailable": "暂未获取到状态",
     "title": "管理 PR 链接",
     "hint": "顶栏最多显示 3 个，固定的 PR 优先显示",
     "empty": "粘贴 GitHub PR 或 GitLab MR 链接即可添加",
@@ -42,7 +49,7 @@
     "commandAttachments": "请先处理当前附件，再用 /side 发起追问。",
     "unavailable": "当前任务暂不支持侧边追问。",
     "title": "侧边追问",
-    "ask": "在追问中询问",
+    "ask": "在侧边追问中提问",
     "create": "新建追问",
     "returnMain": "返回主任务",
     "item": "追问 {{index}}",
@@ -56,7 +63,7 @@
   },
   "leaveWhileUploading": {
     "title": "放弃发送？",
-    "body": "附件还没上传完，现在离开这条消息就不会发送。",
+    "body": "附件还没上传完，现在离开的话，这条消息不会发送。",
     "stay": "继续等待",
     "discard": "放弃发送"
   },
@@ -191,12 +198,28 @@
       "pendingCount": "待处理 {{count}}",
       "readOnly": "只读",
       "queuePaused": "队列暂停",
-      "status": { "active": "活跃", "archived": "已归档", "deleted": "已删除" },
+      "status": {
+        "active": "活跃",
+        "archived": "已归档",
+        "deleted": "已删除"
+      },
       "actions": {
-        "settings": { "label": "设置", "a11y": "打开任务设置" },
-        "usage": { "label": "用量", "a11y": "查看任务用量" },
-        "files": { "label": "文件", "a11y": "浏览远程文件" },
-        "queue": { "label": "队列", "a11y": "打开队列面板" },
+        "settings": {
+          "label": "设置",
+          "a11y": "打开任务设置"
+        },
+        "usage": {
+          "label": "用量",
+          "a11y": "查看任务用量"
+        },
+        "files": {
+          "label": "文件",
+          "a11y": "浏览远程文件"
+        },
+        "queue": {
+          "label": "队列",
+          "a11y": "打开队列面板"
+        },
         "search": {
           "label": "搜索",
           "openA11y": "搜索消息",
@@ -257,12 +280,12 @@
         "status": "状态",
         "reached": "已触发账号限额",
         "account": "账号",
-        "availableResets": "可用重置",
+        "availableResets": "可用重置次数",
         "resetCount": "{{count}} 次",
         "earliestExpiry": "最早过期",
         "window": {
           "default": "限额",
-          "days": "{{count}}天",
+          "days": "{{count}} 天",
           "week": "周"
         }
       }
@@ -463,9 +486,14 @@
     "worktreeUnsupported": "电脑端当前的 Cindy 无法安全创建 worktree，请关闭 worktree 后继续，或更新电脑上的 Cindy。",
     "worktreeCreateFailed": "worktree 创建失败：{{message}}",
     "worktreeRecoveryStateFailed": "无法保存 worktree 恢复状态，请重试。",
-    "worktreeCleanupPending": "上一次 worktree 仍待回收，请重新连接设备后再试。"
+    "worktreeCleanupPending": "上一个 worktree 仍待清理，请重新连接设备后再试。"
   },
   "menu": {
+    "moveToProject": "移动任务",
+    "moveFailed": "移动任务失败",
+    "moveRunning": "任务正在运行，结束后再移动",
+    "moveWorktree": "该任务的工作目录是 worktree，暂不支持移动到其他项目",
+    "moveUnsupported": "请更新所连接电脑上的 Cindy 后再移动任务。",
     "details": "任务详情",
     "chipPinned": "已置顶",
     "chipArchived": "已归档",
@@ -621,7 +649,7 @@
     "encryptedContentInvalid": "由于更换供应商导致加密不可用，本任务只能在原供应商下使用；请回到电脑端处理（可以用「从这里开启新任务」丢弃协议加密内容，在新任务里继续）。"
   },
   "row": {
-    "markRead": "已读",
+    "markRead": "标为已读",
     "moreOptions": "更多选项",
     "archiveConversation": "归档任务",
     "closeActionMenu": "关闭任务操作菜单",
@@ -643,6 +671,8 @@
     "taskAlreadyCreated": "电脑上已创建这个任务，已保存的消息会在原任务中继续发送。"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "能运行这个任务的账号或电脑都已达到并发上限。等正在运行的任务结束，或在供应商设置里调高上限。",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "能运行这个任务的账号或电脑都已达到并发上限。等正在运行的任务结束，或在供应商设置里调高上限。",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
     "MODEL_SELECTION_UNAVAILABLE": "所选模型在该供应商下已不可用。请在设置中检查连接，或重新选择可用模型。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切换。请查看错误详情，待 Harness 就绪后重试。",
@@ -652,14 +682,14 @@
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远程任务无法访问本地文件或图片附件。请直接粘贴内容。",
     "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。想少被打断，可以把任务切到「完全访问」，但风险更高。",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。个人微信不能使用「完全访问」，请直接确认这次操作。",
-    "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。",
+    "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批不可用，确认请求也未完成。这次拒绝不是你手动操作的。",
     "REMOTE_COMPAT_MODE_UNSUPPORTED": "远程任务不能使用本机兼容通道。请改用 Cindy AI，或在本机任务里继续。",
     "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪（登录后由服务端自动下发）。请稍候重试；若持续出现，请到「设置 → 模型供应商」检查 Cindy AI 连接状态。",
     "REMOTE_LOCAL_ONLY_PROVIDER": "该模型供应商是本机专属服务（如 Ollama），SSH 远程任务无法访问本机地址。请改用 Cindy AI 网关，或选择远程主机可达的模型供应商。",
     "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
     "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
     "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 无法读取源附件，消息未发送。请将文件另存到“下载”或其他可访问的文件夹，移除原附件，再用附件按钮添加副本后发送。",
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 无法读取源附件，消息未发送。请将文件另存到「下载」或其他可访问的文件夹，移除原附件，再用附件按钮添加副本后发送。",
     "MCP_APPROVAL_AUTO_BLOCKED": "这次工具调用被自动审批拦截，未收到你手动拒绝的记录。",
     "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "权限确认超时，未收到有效的确认结果。仅凭超时无法判断你是否点过按钮。",
     "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "这次权限确认未完成，未收到你手动拒绝的记录。",
@@ -676,15 +706,18 @@
     "REMOTE_AGENT_EXPIRED": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",
     "REMOTE_AGENT_NOT_FOUND": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",
     "REMOTE_AGENT_BUSY": "那台电脑上同时运行的任务太多。先结束一些任务后再试。",
-    "REMOTE_AGENT_DEVICE_LIMIT": "这台设备保留的远程任务数已达上限。可归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。",
-    "REMOTE_AGENT_TOTAL_LIMIT": "远程电脑保留的任务总数已达上限。请那台电脑的主人释放暂时不用的任务，或在“远程与分享”中提高上限。",
+    "REMOTE_AGENT_DEVICE_LIMIT": "这台设备保留的远程任务数已达上限。可归档暂时不用的任务，或请远程电脑的主人在「远程与分享」中提高上限。",
+    "REMOTE_AGENT_TOTAL_LIMIT": "远程电脑保留的任务总数已达上限。请那台电脑的主人释放暂时不用的任务，或在「远程与分享」中提高上限。",
     "REMOTE_AGENT_RESUME_LOST": "之前在那台电脑上的对话没能接上，Agent 会在没有之前上下文的情况下继续。",
     "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
+    "REMOTE_AGENT_RESUME_UNAVAILABLE": "这台电脑无法恢复任务原来的运行状态。请选择其他电脑或供应商的模型，通过上下文交接继续；原消息会保留。",
     "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
+    "REMOTE_AGENT_RESUME_REJECTED": "运行模型的电脑无法恢复这个任务。请从任务列表新建任务，将需要继续的内容复制过去。原任务和排队消息会保留。",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
     "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
     "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "这是旧版分享，开启「仅使用 Agent-Net」后暂时不能用。关闭这个开关就能继续，也可以换成其他模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。"
   },
@@ -710,21 +743,34 @@
     "remoteDirPathHint": "在运行设备上检查目录；不存在时报错，不会改用 Lead 所在电脑的目录。",
     "remoteDirInvalid": "请输入运行设备上的绝对路径。",
     "roleLabel": "角色名",
-    "roleHint": "只是一个名字，方便多个协作者时分辨角色，不改变能力",
-    "customRole": "自定义",
-    "customRolePlaceholder": "自定义角色名",
-    "customRolePredefinedError": "自定义角色名不能使用预设角色名",
+    "taskLabel": "让 Worker 做什么",
+    "enableHint": "当前任务作为 Lead 分派和验收，另一个 Agent 作为 Worker 执行并回报。",
+    "roles": {
+      "reviewer": {
+        "name": "审查",
+        "task": "看一下 Lead 的工作，给出一些建议。"
+      },
+      "developer": {
+        "name": "开发"
+      },
+      "tester": {
+        "name": "测试",
+        "task": "测试 Lead 目前的成果，报告没通过的地方和复现步骤。"
+      }
+    },
+    "addRole": "添加角色",
+    "removeRoleHint": "长按可移除",
+    "removeRoleConfirmTitle": "移除「{{role}}」？",
+    "removeRoleConfirmDesc": "随时可以用「添加角色」加回来。",
+    "removeRoleConfirm": "移除角色",
+    "moreSettings": "更多设置",
     "agentLabel": "Agent",
-    "modelLabel": "模型",
     "modelDefault": "默认",
     "modelDefaultHint": "跟随电脑端的 Worker 默认模型",
-    "permissionLabel": "权限模式",
     "permissionAuto": "自动审批",
     "permissionFull": "完全访问",
-    "permissionAutoHint": "允许在工作区内读写，并自动审批提权请求；高风险操作可能被拒绝或要求确认。",
-    "permissionFullHint": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。",
     "initialTaskLabel": "初始任务（可选）",
-    "initialTaskPlaceholder": "给这个 Worker 的可选第一条任务",
+    "initialTaskPlaceholder": "写下交给它的第一件事；留空则先待命，由 Lead 分派",
     "workerCountSummary_one": "{{count}} 个 Worker · {{running}} 运行中",
     "workerCountSummary_other": "{{count}} 个 Worker · {{running}} 运行中",
     "loading": "正在读取 Worker…",
@@ -784,7 +830,7 @@
   "resetAutoUse": {
     "label": "自动使用",
     "rules": "自动使用规则",
-    "lowQuota": "每周剩余低于 1% 时自动用",
+    "lowQuota": "每周配额剩余低于 1% 时自动用",
     "resetDistance": "距离配额重置还剩",
     "days": "{{count}} 天以上",
     "unlimited": "不限",
@@ -799,12 +845,6 @@
     "hint": "任一条件满足时，优先用最早到期的卡。配额全满时跳过。由这台电脑执行，需保持 Cindy 运行。",
     "failed": "保存失败，请重试。",
     "restore": "恢复默认"
-  },
-  "followUp": {
-    "title": "要我帮你跟进任务吗？",
-    "start": "开始跟进",
-    "notNow": "暂不开启",
-    "saveFailed": "没能保存，请重试"
   },
   "providerGroupRebalance": {
     "title": "换到 {{label}} 继续？",

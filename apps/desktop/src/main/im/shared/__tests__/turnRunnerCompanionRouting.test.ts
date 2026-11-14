@@ -9,7 +9,11 @@
  *  - 发送前伙伴守卫拒绝 → 回一句提示, 不发送;
  *  - 停止 / `/new` 走同一解析, 停止不建行。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
+import { acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch, clearSessionRuntimeControlState,
+  getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider } from '../../../maker-ipc/sessionRuntimeControl';
+afterEach(() => clearSessionRuntimeControlState('mimi-main'));
 
 import type { AgentEvent, MakerEvent, Session, SessionSendResult, TurnPermissionPolicy } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
@@ -255,6 +259,7 @@ beforeEach(() => {
   mocks.getMaker.mockReturnValue({
     getSession: vi.fn((id: string) => harnesses.get(id)?.session),
     on: vi.fn(() => () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
     createSession: vi.fn(async (args: { id?: string }) => {
       createSessionArgs.push(args as Record<string, unknown>);
       const id = args.id ?? 'anon';
@@ -302,7 +307,84 @@ async function runTurn(userId: string, text = 'hello'): Promise<void> {
   });
 }
 
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
+
 describe('turnRunner: connection handed to a companion bot', () => {
+  // PR #10271, unit: cold wiring used to start the exhausted legacy source before the shared
+  // pre-send recovery could run. A real runner input must use the recovered row on its first startup.
+  it.each([false, true])('prepares a cold legacy task before wiring its first channel message (temporary settings: %s)', async temporary => {
+    const id = 'mimi-main';
+    botRows.set(id, rowFor(id, { providerId: 'openai-old', model: temporary ? 'saved-model' : 'bot-model', sdkSessionId: 'old-native' }));
+    if (temporary) acceptSessionRuntimeMutation({ sessionId: id, source: 'agent', deferred: false,
+      profile: { agentKind: 'claude-code', model: 'bot-model', providerId: 'openai-old', effort: 'max', fastMode: true } });
+    const providers = await mocks.listProviders();
+    mocks.listProviders.mockResolvedValue([
+      ...providers,
+      { ...providers[0], id: 'openai-old' },
+      { ...providers[0], id: 'openai' },
+    ]);
+    const maker = mocks.getMaker();
+    const create = maker.createSession.getMockImplementation();
+    maker.createSession.mockImplementation(async (args: { id: string; providerId: string; resumeSessionId?: string }) => {
+      expect(args.providerId).toBe('openai');
+      expect(args.resumeSessionId).toBeUndefined();
+      if (temporary) expect(args).toMatchObject({ model: 'bot-model', effort: 'max', fastMode: true });
+      return create(args);
+    });
+    const release = vi.fn();
+    acquirePendingAgentSwitch.mockImplementation(async () => {
+      botRows.set(id, rowFor(id, { providerId: 'openai', model: temporary ? 'saved-model' : 'bot-model', sdkSessionId: null }));
+      remapSessionRuntimeProvider({ sessionId: id, fromProviderId: 'openai-old', toProviderId: 'openai',
+        expectedOwnerEpoch: captureSessionRuntimeControlOwnerEpoch(), expectedGeneration: getSessionRuntimeControlSnapshot(id).generation });
+      return release;
+    });
+    mocks.dbSelect.mockImplementation(() => ({ from: () => ({ where: () => ({
+      limit: async () => [{ ...botRows.get(id), status: 'active' }],
+    }) }) }));
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: companion as unknown as ImCompanionRouteDeps, acquirePendingAgentSwitch,
+      prepareUnhealthySession: vi.fn(async () => undefined),
+    });
+    await runTurn(OWNER);
+    expect(harnesses.get(id)?.send).toHaveBeenCalledOnce();
+    expect(acquirePendingAgentSwitch.mock.invocationCallOrder[0]!).toBeLessThan(maker.createSession.mock.invocationCallOrder[0]!);
+    expect(release.mock.invocationCallOrder[0]!).toBeGreaterThan(maker.createSession.mock.invocationCallOrder[0]!);
+    clearSessionRuntimeControlState(id);
+  });
+
+  // Cold subscription admission has the same early-rejection contract, before TurnState exists.
+  it.each([{ failure: 'acquire', external: false }, { failure: 'read', external: true }])(
+    'settles cold account preparation failure without leaving a processing reaction: %j', async ({ failure, external }) => {
+      const release = vi.fn();
+      acquirePendingAgentSwitch.mockImplementation(async () => {
+        if (failure === 'acquire') throw new Error('ACCOUNT_UNAVAILABLE');
+        vi.mocked(fakeRepo.peekSessionById).mockRejectedValueOnce(new Error('DB_READ_FAILED'));
+        return release;
+      });
+      runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+        companion: companion as unknown as ImCompanionRouteDeps, acquirePendingAgentSwitch,
+        prepareUnhealthySession: vi.fn(async () => undefined),
+      });
+      const onEarlyReject = vi.fn(() => true);
+      const args = { botContextId: BOT_CONTEXT, userId: OWNER, requesterIsOwner: true,
+        text: 'continue', attachments: [], userMessageId: 'cold-account-error',
+        ackReactionIdPromise: Promise.resolve('ack'), onEarlyReject };
+      if (external) {
+        await expect(runner.dispatchAgentTurn({ ...args, queueMode: 'external', beforeProviderStart: vi.fn() }))
+          .resolves.toMatchObject({ kind: 'rejected' });
+        expect(onEarlyReject).not.toHaveBeenCalled();
+      } else {
+        await expect(runner.runAgentTurn(args)).resolves.toBeUndefined();
+        expect(onEarlyReject).toHaveBeenCalledOnce();
+      }
+      expect(mocks.im.removeMessageReaction).toHaveBeenCalled();
+      expect(release).toHaveBeenCalledTimes(failure === 'read' ? 1 : 0);
+      expect(createSessionArgs).toHaveLength(0);
+    });
+
   // Durable transports settle receipts only from dispatch outcomes. Preparation
   // must reject before provider start even when there is no TurnState to clean up.
   it.each([
@@ -578,6 +660,7 @@ describe('turnRunner: connection handed to a companion bot', () => {
     };
     mocks.getMaker.mockReturnValue({
       createSession: base.createSession,
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn((id: string) => live ?? harnesses.get(id)?.session),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         listeners.push(listener);
@@ -616,6 +699,8 @@ describe('turnRunner: connection handed to a companion bot', () => {
     // prepareUnhealthySessionForSend closes the live handle with reason 'runtime-refresh'
     // (idle-gap / pressure rebuild). The runner must keep the task, recreate the session from
     // the DB row and send this message to the new handle.
+    // This case exercises the already-running handle; cold wiring has its own recovery test.
+    harnesses.set('mimi-main', makeSessionHarness('mimi-main'));
     const listeners: Array<(event: MakerEvent) => void> = [];
     const rebuilt = makeSessionHarness('mimi-main');
     let live: Session | undefined;
@@ -623,6 +708,7 @@ describe('turnRunner: connection handed to a companion bot', () => {
       createSession: (args: { id?: string }) => Promise<Session>;
     };
     mocks.getMaker.mockReturnValue({
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       createSession: vi.fn(async (args: { id?: string }) => {
         if (args.id === 'mimi-main' && live === null) {
           live = rebuilt.session;

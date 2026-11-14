@@ -1,0 +1,26 @@
+CMD ['cargo', 'test', '--profile', 'sim', '-p', 'agent-net-sim', '--test', 'reliability', 'repeated_outages_recover_fast', '--locked', '--offline']
+
+running 1 test
+test repeated_outages_recover_fast ... FAILED
+
+failures:
+
+---- repeated_outages_recover_fast stdout ----
+
+thread 'repeated_outages_recover_fast' (9086319) panicked at sim/tests/reliability.rs:298:5:
+p99 2035.801
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    repeated_outages_recover_fast
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.42s
+
+   Compiling agent-net-core v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression)
+   Compiling agent-net-sim v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression/sim)
+    Finished `sim` profile [optimized] target(s) in 2.49s
+     Running tests/reliability.rs (/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression-target/sim/deps/reliability-2b52743125a82e3e)
+error: test failed, to rerun pass `-p agent-net-sim --test reliability`
+
+EXIT 101

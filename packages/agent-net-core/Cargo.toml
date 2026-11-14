@@ -1,0 +1,28 @@
+[package]
+name = "agent-net-core"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "agent-net 自研传输核心：不碰网络和时钟的纯状态机，零第三方依赖。"
+
+# 这里必须保持为空：产品核心不引入任何第三方 crate。
+[dependencies]
+
+[workspace]
+members = [".", "sim", "udp", "wasm"]
+
+[profile.release]
+strip = true
+lto = "thin"
+panic = "abort"
+
+# 所有验证都用这个配置：速度接近 release，但算术溢出会直接报错。
+# 普通 release 下 `in_flight -= 1` 减到负数只会静默回绕，这类 bug 测试看不见。
+[profile.sim]
+inherits = "release"
+strip = false
+lto = false
+panic = "unwind"
+overflow-checks = true
+debug-assertions = true

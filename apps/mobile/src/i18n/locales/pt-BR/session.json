@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "Aberto",
+      "draft": "Rascunho",
+      "merged": "Mesclado",
+      "closed": "Fechado"
+    },
+    "statusUnavailable": "Status ainda não carregado",
     "title": "Gerenciar links de PRs",
     "hint": "Até 3 no cabeçalho; PRs fixados aparecem primeiro",
     "empty": "Cole um link de PR do GitHub ou MR do GitLab para adicioná-lo",
@@ -117,7 +124,7 @@
     "collaboration": {
       "labelLead": "Lead de colaboração",
       "labelWorker": "Worker de colaboração",
-      "labelRole": "Colaboração {{role}}"
+      "labelRole": "{{role}} de colaboração"
     },
     "composer": {
       "voice": {
@@ -193,7 +200,7 @@
       "queuePaused": "Fila pausada",
       "status": {
         "active": "Ativo",
-        "archived": "Arquivadas",
+        "archived": "Arquivado",
         "deleted": "Excluído"
       },
       "actions": {
@@ -253,7 +260,7 @@
           "plugins": "Catálogo de plugins",
           "memoryRules": "Instruções de memória",
           "memoryIndex": "Índice de memória",
-          "profile": "Perfil do colega",
+          "profile": "Perfil do amigo",
           "user": "Instruções do usuário",
           "directories": "Diretórios adicionais",
           "native": "Instruções do Pi",
@@ -262,7 +269,7 @@
           "tools": "Definições das ferramentas",
           "messages": "Texto da conversa",
           "other": "Outras instruções",
-          "note": "Estimativa do texto atual, sem a tokenização do modelo. Exclui imagens e formatação do fornecedor; a soma difere do total nativo."
+          "note": "Estimativa baseada no texto atual, não na tokenização do modelo. Exclui imagens e a formatação do provedor; a soma não corresponde ao total nativo."
         }
       },
       "rateLimit": {
@@ -375,7 +382,7 @@
     "accessRevoked": "O dispositivo revogou o acesso",
     "syncing": "Sincronizando",
     "pendingCount": "{{num}} pendentes",
-    "archived": "Arquivadas",
+    "archived": "Arquivada",
     "queuePausedNotice": "Fila pausada",
     "forkConfirmTitle": "Iniciar uma nova sessão a partir daqui?",
     "forkConfirmDescription": "Uma sessão separada será criada usando o contexto deste ponto. A sessão original permanecerá inalterada, e mensagens futuras em uma sessão não afetarão a outra.",
@@ -422,8 +429,8 @@
     "enterFirstMessageOrAttachment": "Digite uma primeira mensagem ou adicione um anexo.",
     "noSessionIdReturned": "Não foi possível confirmar a criação da nova sessão no computador remoto. Sincronize novamente para verificar.",
     "sessionIdNotAdopted": "A versão do Cindy no computador remoto é incompatível. Atualize e tente novamente.",
-    "firstMessageMissingConfirm": "A primeira mensagem não foi enviada; seu conteúdo foi restaurado na caixa de entrada. Antes de enviar, verifique se ela já está na sessão.",
-    "firstMessageUnconfirmed": "O status de envio da primeira mensagem não foi confirmado; seu conteúdo foi restaurado na caixa de entrada. Verifique se ela já está na sessão antes de enviar.",
+    "firstMessageMissingConfirm": "A primeira mensagem não foi enviada; seu conteúdo foi restaurado na caixa de texto. Antes de enviar, verifique se ela já está na sessão.",
+    "firstMessageUnconfirmed": "O status de envio da primeira mensagem não foi confirmado; seu conteúdo foi restaurado na caixa de texto. Verifique se ela já está na sessão antes de enviar.",
     "selectControlledDevice": "Selecione o dispositivo remoto",
     "selectDeviceNamed": "Selecionar dispositivo {{name}}",
     "selectAgent": "Selecionar Agent",
@@ -483,9 +490,14 @@
     "worktreeCleanupPending": "O worktree anterior ainda aguarda limpeza. Reconecte o dispositivo e tente novamente."
   },
   "menu": {
+    "moveToProject": "Mover tarefa",
+    "moveFailed": "Falha ao mover a tarefa",
+    "moveRunning": "Esta tarefa está em execução. Mova-a quando terminar.",
+    "moveWorktree": "O diretório de trabalho desta tarefa é um worktree, então ainda não é possível movê-la para outro projeto",
+    "moveUnsupported": "Atualize o Cindy no computador conectado para mover tarefas.",
     "details": "Detalhes da sessão",
-    "chipPinned": "Fixadas",
-    "chipArchived": "Arquivadas",
+    "chipPinned": "Fixada",
+    "chipArchived": "Arquivada",
     "titleFallback": "Sessão remota",
     "unnamedTitle": "Sessão sem título",
     "openSection": "Abrir",
@@ -579,7 +591,7 @@
     "noSessionSpend": "Ainda não há dados de uso da sessão",
     "contextLabel": "Contexto",
     "accountLimits": "Limites da conta",
-    "quotaExhaustedResettable": "Sua cota se esgotou. A redefinição usa 1 redefinição imediatamente e não pode ser desfeita.",
+    "quotaExhaustedResettable": "Sua cota se esgotou. A redefinição consome imediatamente 1 crédito de redefinição e não pode ser desfeita.",
     "resetCodexUsage": "Redefinir uso do Codex",
     "quotaExhaustedNoCredit": "Sua cota se esgotou, mas você não tem créditos de redefinição disponíveis.",
     "openDir": "Abrir diretório",
@@ -623,7 +635,7 @@
     "interrupted": "O aplicativo foi fechado durante a tarefa, que foi interrompida.",
     "continueTask": "Continuar tarefa",
     "retry": "Tentar novamente",
-    "dismissNotice": "Dispensar aviso",
+    "dismissNotice": "Fechar aviso",
     "ignore": "Ignorar",
     "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
     "outputLimit": "O modelo atingiu o limite de saída, então esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isso se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
@@ -658,10 +670,12 @@
     "confirmationRequired": "Este computador não pode confirmar se a mensagem foi recebida. Verifique o histórico ou atualize o Cindy antes de tentar novamente.",
     "taskCleared": "Esta tarefa foi limpa após você enviar a mensagem. A mensagem salva foi mantida para sua revisão.",
     "restoreFailed": "Não foi possível restaurar as mensagens salvas. Elas não foram excluídas. Reinicie o aplicativo e tente novamente.",
-    "recoveryTarget": "Mantenha o computador original durante a recuperação desta tarefa. As mensagens posteriores ainda estão salvas nele.",
+    "recoveryTarget": "Mantenha o computador original durante a recuperação desta tarefa. As mensagens posteriores dela continuam salvas.",
     "taskAlreadyCreated": "Esta tarefa já existe no computador. Suas mensagens salvas serão retomadas lá."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode trocar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness necessário.",
     "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado não está mais disponível no provedor. Verifique a conexão em Configurações ou escolha outro modelo disponível.",
     "HARNESS_SWITCH_NOT_READY": "A troca de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
@@ -699,11 +713,14 @@
     "REMOTE_AGENT_TOTAL_LIMIT": "O computador do provedor atingiu o limite total de sessões remotas. Peça ao proprietário para liberar sessões não utilizadas ou aumentar o limite em Acesso remoto e compartilhamento.",
     "REMOTE_AGENT_RESUME_LOST": "Não foi possível reconectar a conversa anterior no outro computador, então o Agent continua sem esse contexto.",
     "REMOTE_AGENT_UNSUPPORTED": "Este Agent não está disponível no outro computador. Instale-o ou entre na conta dele lá, ou escolha outro Agent.",
+    "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este computador não consegue restaurar o estado anterior da sessão. Selecione um modelo de outro computador ou provedor para continuar com uma transferência de contexto. As mensagens existentes são mantidas.",
     "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy nos dois computadores.",
+    "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Crie uma nova sessão pela lista de sessões e copie o conteúdo necessário para continuar. A sessão original e as mensagens na fila são mantidas.",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de compartilhamento definido pelo proprietário. Escolha outro modelo disponível para continuar.",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não permitiu o uso remoto deste provedor. Nesse computador, ative “Permitir uso remoto” em Configurações → Provedores ou escolha outro modelo.",
     "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tente novamente ou tente outra mensagem.",
     "REMOTE_AGENT_SHARE_PAUSED": "O proprietário pausou este compartilhamento para você, então estes modelos não podem ser usados até que ele seja retomado. Troque para outro modelo para continuar.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este é um compartilhamento antigo e não pode ser usado enquanto “Usar apenas Agent-Net” estiver ativado. Desative essa opção para continuar ou troque para outro modelo.",
     "REMOTE_AGENT_SHARE_REMOVED": "Este compartilhamento não está mais disponível (o proprietário o removeu ou você saiu). Troque para outro modelo para continuar.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "O provedor compartilhado está temporariamente indisponível. O computador do proprietário pode estar offline ou o compartilhamento está desativado no momento. Tente novamente mais tarde ou troque para outro modelo para continuar."
   },
@@ -729,21 +746,34 @@
     "remoteDirPathHint": "A pasta é verificada no dispositivo de execução. Uma pasta inexistente causa um erro; a pasta do Lead nunca é usada como alternativa.",
     "remoteDirInvalid": "Insira um caminho absoluto no dispositivo de execução.",
     "roleLabel": "Nome da função",
-    "roleHint": "Apenas um nome para diferenciar os colaboradores. Não altera os recursos.",
-    "customRole": "Personalizado",
-    "customRolePlaceholder": "Nome de função personalizado",
-    "customRolePredefinedError": "Um nome de função personalizado não pode ser igual a uma função predefinida",
+    "taskLabel": "O que o Worker faz",
+    "enableHint": "Esta tarefa passa a ser o Lead: distribui o trabalho e confere os resultados. O Worker é outro Agent independente, que executa o trabalho e relata o resultado.",
+    "roles": {
+      "reviewer": {
+        "name": "Revisar",
+        "task": "Dê uma olhada no trabalho do Lead e faça algumas sugestões."
+      },
+      "developer": {
+        "name": "Desenvolver"
+      },
+      "tester": {
+        "name": "Testar",
+        "task": "Teste o trabalho do Lead até agora e relate as falhas com os passos para reproduzi-las."
+      }
+    },
+    "addRole": "Adicionar função",
+    "removeRoleHint": "Toque e segure para remover",
+    "removeRoleConfirmTitle": "Remover “{{role}}”?",
+    "removeRoleConfirmDesc": "Você pode adicioná-la de novo quando quiser em “Adicionar função”.",
+    "removeRoleConfirm": "Remover função",
+    "moreSettings": "Mais configurações",
     "agentLabel": "Agent",
-    "modelLabel": "Modelo",
     "modelDefault": "Padrão",
     "modelDefaultHint": "Usa o modelo padrão de Worker do computador",
-    "permissionLabel": "Modo de permissão",
     "permissionAuto": "Revisão automática",
     "permissionFull": "Acesso total",
-    "permissionAutoHint": "Lê e grava no espaço de trabalho e revisa automaticamente solicitações de elevação. Ações de alto risco podem ser negadas ou exigir confirmação.",
-    "permissionFullHint": "Pode alterar qualquer arquivo e executar comandos com acesso à rede sem perguntar novamente. Risco máximo; use apenas para tarefas confiáveis.",
     "initialTaskLabel": "Tarefa inicial (opcional)",
-    "initialTaskPlaceholder": "Uma primeira tarefa opcional para este Worker",
+    "initialTaskPlaceholder": "Escreva a primeira coisa a passar para ele ou deixe em branco para o Lead distribuir o trabalho",
     "workerCountSummary_one": "{{count}} Worker · {{running}} em execução",
     "workerCountSummary_other": "{{count}} Workers · {{running}} em execução",
     "loading": "Carregando Workers…",
@@ -817,15 +847,9 @@
     "leadTime": "Antecedência de uso",
     "minutes": "{{count}} minutos antes de expirar",
     "hours": "{{count}} horas antes de expirar",
-    "hint": "Ambas as regras usam o cartão que expira primeiro. Ignora quando todas as cotas estão cheias. Executado neste computador enquanto o Cindy está aberto.",
+    "hint": "Qualquer uma das regras usa o cartão que expira primeiro. Não é usado quando todas as cotas estão cheias. Executado neste computador enquanto o Cindy está aberto.",
     "failed": "Não foi possível salvar. Tente novamente.",
     "restore": "Restaurar padrões"
-  },
-  "followUp": {
-    "title": "Quer que eu acompanhe suas sessões?",
-    "start": "Começar acompanhamento",
-    "notNow": "Agora não",
-    "saveFailed": "Não foi possível salvar. Tente novamente."
   },
   "providerGroupRebalance": {
     "title": "Continuar em {{label}}?",

@@ -7,8 +7,10 @@ const receipts = new Map<
   {
     deviceId: string;
     sessionId: string;
-    senderSessionId: string;
+    senderSessionId?: string;
+    senderPluginId?: string;
     message: string;
+    operation?: string;
     expiresAt: number;
     assertCurrent(): Promise<void>;
   }
@@ -16,7 +18,8 @@ const receipts = new Map<
 const RECEIPT_LIFETIME_MS = 60 * 60_000;
 
 export function issueRemoteTaskActionReceipt(
-  input: { deviceId: string; sessionId: string; senderSessionId: string; message: string },
+  input: { deviceId: string; sessionId: string; message: string; operation?: string } &
+    ({ senderSessionId: string; senderPluginId?: never } | { senderPluginId: string; senderSessionId?: never }),
   assertAccount: () => void,
 ): string {
   for (const [id, receipt] of receipts) if (receipt.expiresAt <= Date.now()) receipts.delete(id);
@@ -40,10 +43,12 @@ export async function validateRemoteTaskActionReceipt(
   deviceId: string,
   input: {
     receiptId: string;
-    sessionId: string;
+    sessionId?: string;
+    pluginId?: string;
     targetSessionId: string;
     message: string;
     release?: boolean;
+    operation?: string;
   },
 ): Promise<boolean> {
   const receipt = receipts.get(input.receiptId);
@@ -52,8 +57,10 @@ export async function validateRemoteTaskActionReceipt(
     receipt.expiresAt <= Date.now() ||
     receipt.deviceId !== deviceId ||
     receipt.senderSessionId !== input.sessionId ||
+    receipt.senderPluginId !== input.pluginId ||
     receipt.sessionId !== input.targetSessionId ||
-    receipt.message !== input.message
+    receipt.message !== input.message ||
+    receipt.operation !== input.operation
   )
     return false;
   try {

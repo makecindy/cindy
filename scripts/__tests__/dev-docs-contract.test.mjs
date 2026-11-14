@@ -189,6 +189,37 @@ test("developer documentation links resolve", () => {
 	}
 });
 
+// 规则依据：docs/dev-rules/protocol-compatibility.md「本页与协议记录的分工」。
+// 失效后果：逐项协议记录重新堆进必读页，通用规则与 Review 清单被埋掉——拆分前该页
+// 555 KB、194 节，文档抬头在第 1290 行，Review 清单在第 3967 行，没有 Agent 能先读完再动手。
+test("protocol compatibility keeps rules on the front page and one record per file", () => {
+	const frontPage = "docs/dev-rules/protocol-compatibility.md";
+	const recordsDir = "docs/dev-rules/protocol-compatibility";
+	const frontPageMaxBytes = 16 * 1024;
+	const frontPageBytes = Buffer.byteLength(readText(frontPage));
+	assert.ok(
+		frontPageBytes <= frontPageMaxBytes,
+		`${frontPage} is the must-read rules page (${frontPageBytes} bytes > ${frontPageMaxBytes}). ` +
+			`Put per-capability protocol records in ${recordsDir}/<area>-<topic>.md instead of appending here.`,
+	);
+	const records = fs.readdirSync(path.join(ROOT, recordsDir));
+	assert.ok(records.length, `${recordsDir} must hold the protocol records`);
+	for (const name of records) {
+		const relativePath = `${recordsDir}/${name}`;
+		assert.match(
+			name,
+			/^[a-z0-9]+(?:-[a-z0-9]+)*\.md$/,
+			`${relativePath}: record files are flat, lower-case <area>-<topic>.md`,
+		);
+		const text = readText(relativePath);
+		const titles = text.replace(/^[ \t]*```[\s\S]*?^[ \t]*```/gm, "").match(/^# .+$/gm) ?? [];
+		assert.ok(
+			text.startsWith("# ") && titles.length === 1,
+			`${relativePath}: one record per file, starting with its level-1 title`,
+		);
+	}
+});
+
 test("login-all-hifi embeds generated truth as a script-safe static literal", () => {
 	const html = readText("docs/design-previews/login-all-hifi/index.html");
 	const match = html.match(/<script id="qa-truth">const RAW = ([\s\S]*?)<\/script>/);

@@ -2,6 +2,7 @@
 
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import { sharedTaskHostPeer } from '@cindy/device-link';
@@ -75,7 +76,12 @@ function deferred<T>() {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
-    i18n: { language: 'en', exists: (key: string) => key === 'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT' },
+    i18n: { language: 'en', exists: (key: string) => [
+      'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT',
+      'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE',
+      'chat.remoteError.REMOTE_AGENT_INVALID',
+      'chat.remoteError.REMOTE_AGENT_OFFLINE',
+    ].includes(key) },
   }),
 }));
 
@@ -94,6 +100,90 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 describe('ErrorBanner OpenAI connection recovery', () => {
+  // #10187: both live and restored tail errors keep the existing recovery action
+  // and hide unchanged retry, even when the failed input has a retryText (unit).
+  it.each(['live', 'tail'] as const)('offers a route change for %s rejected shared history', surface => {
+    const raw = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+    const recover = vi.fn();
+    const retry = vi.fn();
+    render(surface === 'live'
+      ? <ErrorBanner error={raw} agentKind="codex" agentDeviceId="share:one" retryText="original"
+          onRetry={retry} onChooseComputer={recover} />
+      : <ErrorTailErrorBanner errorText={raw} agentKind="codex" agentDeviceId="share:one"
+          onContinue={retry} onDismiss={vi.fn()} onChooseComputer={recover} />);
+    expect(screen.getByText('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'sharedTaskRecovery.choose' }));
+    expect(recover).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
+  });
+  // #10187, unit: the real banner must replace communication/update guidance
+  // and suppress both original-input retry and hidden continuation for this refusal.
+  it.each([['original input', false], [null, false], ['original input', true], [null, true]] as const)(
+    'explains rejected guest resume with retry text %s (Pi refusal=%s)', (retryText, piRefusal) => {
+    const retry = vi.fn();
+    const continueAfterError = vi.fn();
+    const error = piRefusal
+      ? '[REMOTE_AGENT_INVALID] This conversation cannot be resumed on this computer.'
+      : 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+    render(<ErrorBanner error={error} retryText={retryText} onRetry={retry}
+      onContinueAfterError={continueAfterError} agentKind="codex" agentDeviceId="shared-computer" />);
+    expect(screen.getByText('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE')).toBeTruthy();
+    expect(screen.queryByText('chat.remoteError.REMOTE_AGENT_INVALID')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    expect(retry).not.toHaveBeenCalled();
+    expect(continueAfterError).not.toHaveBeenCalled();
+  });
+  it.each([
+    '[REMOTE_AGENT_INVALID] invalid request',
+    '[REMOTE_AGENT_OFFLINE] connection timed out',
+  ])('keeps existing guidance and retry for %s', error => {
+    render(<ErrorBanner error={error} retryText="original input" onRetry={vi.fn()} />);
+    expect(screen.queryByText('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE')).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+  });
+  // #9855, unit/jsdom: startup details used to hide the only actionable cloud
+  // file hint. Exercise the real ErrorBanner/ErrorNotice before expanding it.
+  it.each(['', 'LAZY_CREATE_FAILED: ', "Error invoking remote method 'send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: "])(
+    'shows the Pi cloud-file recovery hint without expanding details through %s', (prefix) => {
+      const hint = 'Download ~/Desktop/AGENTS.md in Finder; this cloud-only file may delay Pi startup.';
+      const timeout = 'pi rpc timeout after 30000ms: set_thinking_level';
+      render(<ErrorBanner agentKind="pi" error={`${prefix}[PI_STARTUP_CLOUD_CONTEXT_FILE] ${hint}\n${timeout}`} onRetry={vi.fn()} />);
+      expect(screen.getByText(hint)).toBeDefined();
+      expect(screen.queryByText(timeout)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
+      expect(screen.getByText((text) => text.includes(timeout))).toBeDefined();
+    },
+  );
+
+  // PR #10049: ordinary OpenAI 401 recovery must unlock the original input only
+  // after the existing account probe verifies it, including after remounting.
+  it.each([false, true])('restores generic authentication retry after verification (remount=%s)', async remount => {
+    const retry = vi.fn();
+    mocks.getState.mockResolvedValue({ authenticated: false });
+    const banner = <MemoryRouter><ErrorBanner error="401 Unauthorized" agentKind="codex"
+      providerId="openai" retryText="original input" onRetry={retry} /></MemoryRouter>;
+    const view = render(banner);
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    const verification = deferred<unknown>();
+    mocks.getCodexRateLimits.mockImplementationOnce(() => verification.promise);
+    const restored = { authenticated: true, authSource: 'oauth' as const };
+    mocks.getState.mockResolvedValue(restored);
+    if (remount) {
+      view.unmount();
+      render(banner);
+    } else {
+      await act(async () => emitCodexStateChanged(restored));
+    }
+    await waitFor(() => expect(mocks.getCodexRateLimits).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    await act(async () => verification.resolve({ rateLimits: null }));
+    fireEvent.click(await screen.findByRole('button', { name: 'chat.errorBanner.retry' }));
+    expect(retry).toHaveBeenCalledExactlyOnceWith('original input');
+    expect(screen.getByText('chatgptAuthRecovery.recovered')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'logic.confirm.goToSettings' })).toBeNull();
+  });
   const streamClosed = 'stream disconnected before completion: stream closed before response.completed';
   it.each([undefined, 'controlled-device'])('offers manual recovery and keeps retry on device %s', async deviceLinkDeviceId => {
     const recover = vi.fn();
@@ -307,6 +397,18 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     rerender(banner);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(dismiss).toHaveBeenCalledOnce();
+  });
+
+  // Unit regression: startup account errors need actionable copy, not replyFailed.
+  it.each([
+    ['[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic', 'limited'],
+    ['[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] diagnostic', 'loginRequired'],
+    ['The task subscription account requires login or quota reset', 'legacy'],
+  ])('localizes subscription startup failure %s', (message, key) => {
+    const error = `LAZY_CREATE_FAILED: ${message}`;
+    render(<ErrorBanner error={error} retryText="original" onRetry={vi.fn()} agentKind="cc" />);
+    expect(screen.getByText(`chat.subscriptionAccountError.${key}`)).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
   });
 
   it('localizes the Codex resume preflight marker without exposing the host envelope', () => {
@@ -1148,6 +1250,21 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(
       screen.queryByRole('button', { name: 'chat.errorBanner.usageLimitAutoContinueCancel' }),
     ).toBeNull();
+  });
+
+  // model-groups.md §6.1：换来源继续只在用户点了、且真的换成了之后才走原有的重试；取消确认则什么都不动。
+  it.each([[true, 1], [false, 0]] as const)('retries through the existing path only after a model group switch applied=%s', async (applied, retries) => {
+    const retry = vi.fn();
+    const onSwitch = vi.fn(async () => applied);
+    render(<ErrorBanner error="usageLimitExceeded" retryText="retry this turn" onRetry={retry} agentKind="cc"
+      usageLimitWait={{ resumeAt: Date.now() + 60 * 60 * 1000 }} onCancelUsageLimitWait={vi.fn()}
+      usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }}
+      modelGroupSwitch={{ label: 'modelGroups.switchOffer.action', onSwitch }} />);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'modelGroups.switchOffer.action' })));
+    expect(onSwitch).toHaveBeenCalledOnce();
+    expect(retry).toHaveBeenCalledTimes(retries);
+    if (retries) expect(retry).toHaveBeenCalledWith('retry this turn');
+    expect(screen.getByText('chat.errorBanner.usageLimitAutoContinueAt')).toBeTruthy();
   });
 
   it('offers a confirmed reset at a local ChatGPT limit without retrying the turn', async () => {

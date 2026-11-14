@@ -1,3 +1,4 @@
+import { retireReadMobileNotifications, retireAnsweredMobileNotifications } from '../device-link/notificationDismissalHost.js';
 import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -173,7 +174,8 @@ import { getActiveAppSession } from '../appSessionState.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
+import { hasTaskChangeListener, publishTaskChange } from '../localDb/taskEvents.js';
 import {
   beginProtectedFolderCheck,
   detectProtectedFolderEperm,
@@ -232,7 +234,6 @@ interface AgentIslandUserPromptDebugMeta {
 }
 
 export interface AgentIslandServiceDeps {
-  isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   getMainWindow: () => BrowserWindow | null;
   nativeHost?: AgentIslandNativeRenderer;
   /** macOS Live Activity mirror of the island state; production passes one on macOS. */
@@ -498,7 +499,7 @@ export class AgentIslandService {
   constructor(private readonly deps: AgentIslandServiceDeps) {
     this.sessionActivityRelay = new SessionActivityRelay((payload) => {
       tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
-    }, { isCompletionHandledByTeammate: deps.isCompletionHandledByTeammate });
+    });
     // lazy t() 闭包跟随 locale 运行时切换,注入一次即可(strings 仍每次 publish 重建)。
     setAgentIslandToolWording(this.state, createLocalizedToolRowWording());
     this.layoutPreferencesByDisplayId = readAgentIslandLayoutPreferences();
@@ -680,7 +681,10 @@ export class AgentIslandService {
       for (const visibleSessionId of getVisibleSessionIdsForReadAck(nextSessionId)) {
         // passive:仅凭「路由停在该会话 + 窗口聚焦」不足以证明用户看到了报错,
         // 未读 error 会话在 state 层对被动 ack 免疫(见 acknowledgeAgentIslandSessionRead)。
-        changed = acknowledgeAgentIslandSessionRead(this.state, visibleSessionId, now, { source: 'passive' }) === 'cleared' || changed;
+        if (acknowledgeAgentIslandSessionRead(this.state, visibleSessionId, now, { source: 'passive' }) === 'cleared') {
+          if (!isAgentIslandDeviceSession(this.state, visibleSessionId)) retireReadMobileNotifications(visibleSessionId);
+          changed = true;
+        }
       }
       if (changed) {
         this.publish();
@@ -1055,10 +1059,6 @@ export class AgentIslandService {
     });
   }
 
-  waitForCompletionNotification(sessionId: string): Promise<boolean> | undefined {
-    return this.sessionActivityRelay.waitForCompletionNotification(sessionId);
-  }
-
   resetRuntimeState(): void {
     this.clearPublishTimer();
     this.clearStreamingPreviewPublishTimer();
@@ -1231,9 +1231,6 @@ export class AgentIslandService {
       }
     }
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
-    if (isCompletionDoneEvent(event) && event.type === 'status') {
-      this.sessionActivityRelay.awaitCompletionTerminal(hydrated.sessionId);
-    }
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
       // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
@@ -1249,9 +1246,6 @@ export class AgentIslandService {
     });
     if (suppressCompletionAttention) {
       this.mutedCompletionSoundSessionIds.add(hydrated.sessionId);
-    }
-    if (isCompletionDoneEvent(event) && event.type === 'done') {
-      this.sessionActivityRelay.completeTerminal(hydrated.sessionId);
     }
     if (!changed) return;
     this.ensureMetadata(hydrated.sessionId);
@@ -1462,6 +1456,7 @@ export class AgentIslandService {
   }
 
   handleInteractionDismissed(sessionId: string, requestId: string): void {
+    retireAnsweredMobileNotifications(sessionId, requestId);
     this.permissionRequests.delete(requestId);
     const now = Date.now();
     applyAgentIslandInteractionDismissed(this.state, sessionId, requestId, now);
@@ -1528,6 +1523,7 @@ export class AgentIslandService {
     for (const requestId of permissionRequestIdsFromAgentEvent(event)) {
       const entry = this.permissionRequests.get(requestId);
       if (entry?.sessionId === sessionId) {
+        retireAnsweredMobileNotifications(sessionId, requestId);
         this.permissionRequests.delete(requestId);
       }
     }
@@ -1680,6 +1676,7 @@ export class AgentIslandService {
             log.debug(`session read ack: session=${sessionId} source=${source} state=not-found; no local row, withheld`);
             return;
           }
+          retireReadMobileNotifications(sessionId);
           this.sessionActivityRelay.ensureSessionTerminalClear(sessionId);
           log.debug(`session read ack: session=${sessionId} source=${source} state=not-found; local row found, terminal clear ensured`);
         })
@@ -1693,7 +1690,7 @@ export class AgentIslandService {
     // 收尾包兜底必须在 publish() **之前**。ensure 只在 relay 没有该会话条目时补发;
     // 已有 entry(live 或刚发出的未读终态)不动,由 publish() 把账本投影出去。
     this.sessionActivityRelay.ensureSessionTerminalClear(sessionId);
-    if (ack === 'cleared') this.publish();
+    if (ack === 'cleared') { retireReadMobileNotifications(sessionId); this.publish(); }
     log.debug(`session read ack: session=${sessionId} source=${source} state=${ack}`);
   }
 
@@ -2083,6 +2080,10 @@ export class AgentIslandService {
   }
 
   /** Complete owned-host list, including unread results past the island's display TTL. */
+  getNotificationRequestIds(sessionId: string): string[] {
+    return [...(this.state.sessions.get(sessionId)?.pendingInteractionIds ?? [])];
+  }
+
   getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
     return buildAllSessionActivitySnapshots(this.state);
   }
@@ -2174,6 +2175,17 @@ export class AgentIslandService {
       const previous = this.sessionActivitySubscriptionCursor.get(sessionId) ?? null;
       const current = next.get(sessionId) ?? null;
       if (previous && current && sessionActivitySnapshotsEqual(previous, current)) continue;
+      // The plugin topic contains lifecycle edges only. Activity/progress and
+      // display changes stay on existing consumers, without plugin timers.
+      if (hasTaskChangeListener('state') && (!previous || !current
+        || previous.phase !== current.phase || previous.currentTurnActive !== current.currentTurnActive
+        || previous.turnGeneration !== current.turnGeneration || previous.startedAtMs !== current.startedAtMs
+        || previous.recordStatus !== current.recordStatus || previous.gracefulStopState !== current.gracefulStopState
+        || previous.interactionKind !== current.interactionKind)) {
+        publishTaskChange({ kind: 'state', sessionId, state: {
+          activity: current ? canonicalSessionActivity(current) : null, changedAtMs,
+        } }, getSafeDataOwnerPushStamp());
+      }
       for (const listener of this.sessionActivityListeners) {
         try {
           listener({

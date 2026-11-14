@@ -3,6 +3,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  MessageType,
   Partials,
 } from 'discord.js';
 import type { ButtonInteraction, Message } from 'discord.js';
@@ -16,6 +17,8 @@ const log = defaultLogger('im:discord:gateway');
 export interface DiscordGatewayEvents {
   onStatus(s: IMStatus): void;
   onDmMessage(m: Message): void;
+  /** 服务器文字频道 / thread 里的用户消息；是否被 @、是否在白名单由上层判定。 */
+  onGuildMessage(m: Message): void;
   onButtonInteraction(i: ButtonInteraction): void;
 }
 
@@ -29,6 +32,23 @@ export interface DiscordGateway {
 
 export function createDiscordGateway(ev: DiscordGatewayEvents): DiscordGateway {
   return new DiscordJsGateway(ev);
+}
+
+/** 只接文字频道和已存在的文字 thread；语音 / 论坛 / 公告等频道类型一律不收。 */
+const GUILD_MESSAGE_CHANNEL_TYPES: ReadonlySet<number> = new Set([
+  ChannelType.GuildText,
+  ChannelType.PublicThread,
+  ChannelType.PrivateThread,
+  ChannelType.AnnouncementThread,
+]);
+
+export function isGuildMessageChannelType(type: number): boolean {
+  return GUILD_MESSAGE_CHANNEL_TYPES.has(type);
+}
+
+/** 普通消息与回复才算用户发言；入群、置顶、斜杠命令回执等系统类消息不起轮次。 */
+export function isUserAuthoredMessageType(type: number): boolean {
+  return type === MessageType.Default || type === MessageType.Reply;
 }
 
 export function createDedup(cap: number): { seen(id: string): boolean } {
@@ -101,8 +121,16 @@ class DiscordJsGateway implements DiscordGateway {
 
     this.ev.onStatus({ kind: 'connecting' });
     const client = new Client({
-      intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
+      // GuildMessages 是标准 intent（不要 MessageContent 特权 intent）：服务器里只有
+      // @ 到机器人的消息才带正文，正好对应「@ 召唤」，其余消息不会被收集。
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.DirectMessages,
+      ],
       partials: [Partials.Channel],
+      // 频道里是公共场合：模型或用户文本里的 @everyone / @here / 角色 / 用户都不得真的提醒别人。
+      allowedMentions: { parse: [], repliedUser: false },
     });
     this.#client = client;
     this.#dedup = createDedup(DEDUP_CAPACITY);
@@ -151,9 +179,20 @@ class DiscordJsGateway implements DiscordGateway {
     client.on(Events.MessageCreate, (message) => {
       if (this.#client !== client) return;
       if (message.author.id === client.user?.id || message.author.bot) return;
-      if (message.channel.type !== ChannelType.DM) return;
+      const channelType = message.channel.type;
+      if (channelType === ChannelType.DM) {
+        if (this.#dedup.seen(message.id)) return;
+        this.ev.onDmMessage(message);
+        return;
+      }
+      if (!message.guildId || !isGuildMessageChannelType(channelType)) return;
+      if (
+        channelType !== ChannelType.GuildText &&
+        (!('parent' in message.channel) || message.channel.parent?.type !== ChannelType.GuildText)
+      ) return;
+      if (message.system || message.webhookId || !isUserAuthoredMessageType(message.type)) return;
       if (this.#dedup.seen(message.id)) return;
-      this.ev.onDmMessage(message);
+      this.ev.onGuildMessage(message);
     });
 
     client.on(Events.InteractionCreate, async (interaction) => {
@@ -164,6 +203,7 @@ class DiscordJsGateway implements DiscordGateway {
       } catch {
         // The 3s ACK may already be gone; keep the gateway alive either way.
       }
+      if (this.#client !== client) return;
       this.ev.onButtonInteraction(interaction);
     });
 

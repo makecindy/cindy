@@ -143,8 +143,13 @@ function createSearchDb(): Database.Database {
       id TEXT PRIMARY KEY, display_name TEXT NOT NULL, status TEXT NOT NULL, hidden_at INTEGER
     );
     CREATE TABLE bot_session_links (
-      session_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, role TEXT NOT NULL
+      session_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, role TEXT NOT NULL, route_key TEXT
     );
+    CREATE TABLE task_tags (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, name_customized INTEGER NOT NULL DEFAULT 0,
+      color TEXT NOT NULL, favorite_order INTEGER, sort_order INTEGER, revision INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE session_task_tags (session_id TEXT NOT NULL, tag_id TEXT NOT NULL);
     CREATE TABLE project_aliases (
       project_key TEXT PRIMARY KEY, alias TEXT NOT NULL, updated_at INTEGER NOT NULL
     );
@@ -379,7 +384,7 @@ describe('conversationSearch personal companion chats', () => {
       ]) {
         insertSearchSession(db, id!, 10, null);
         db.prepare('UPDATE sessions SET source = ?, status = ? WHERE id = ?').run(source, status, id);
-        if (role) db.prepare('INSERT INTO bot_session_links VALUES (?, ?, ?)').run(id, 'bot', role);
+        if (role) db.prepare('INSERT INTO bot_session_links (session_id, bot_id, role) VALUES (?, ?, ?)').run(id, 'bot', role);
       }
       const result = await searchConversations({ query: 'needle', semanticMode: 'keyword' });
       const localIds = ['channel', 'feishu-channel', 'group', 'imported', 'main', 'old', 'old-channel', 'review', 'task'];
@@ -401,6 +406,25 @@ describe('conversationSearch personal companion chats', () => {
       db.exec("UPDATE bot_profiles SET hidden_at = NULL");
       const visibleRemote = await searchConversations({ query: 'needle', filters: { status: 'archived' } }, { remoteVisibleOnly: true });
       expect(visibleRemote.results.map(item => item.session.id).sort()).toEqual(['imported', 'old', 'old-channel']);
+
+      // Old group rows retain their execution directory. Project search and remote
+      // alias matching must use the same Buddy ownership projection as the list.
+      db.exec("UPDATE sessions SET working_dir = '/buddy', project_dir = '/buddy' WHERE id = 'main'");
+      db.exec("UPDATE sessions SET working_dir = '/group-repo', project_dir = '/group-repo', workspace_kind = 'dialogue' WHERE id = 'group'");
+      db.prepare('INSERT INTO project_aliases VALUES (?, ?, ?)').run('local:/group-repo', 'Group Melody', 10);
+      for (const remoteVisibleOnly of [false, true]) {
+        const scoped = await searchConversations({ query: 'needle', filters: { workingDirs: ['/group-repo'] } }, { remoteVisibleOnly });
+        expect(scoped.results.map(item => item.session.id).sort()).toEqual(['group']);
+        expect(scoped.results.find(item => item.session.id === 'group')?.session).toMatchObject({
+          workingDir: '/group-repo', projectDir: '/group-repo',
+        });
+      }
+      const alias = await searchConversations({ query: 'Melody' }, { remoteVisibleOnly: true });
+      expect(alias.results.map(item => item.session.id).sort()).toEqual(['group']);
+      db.exec("UPDATE bot_session_links SET route_key = 'group:qa:personal-digest' WHERE session_id = 'group'");
+      const privateScoped = await searchConversations({ query: 'needle', filters: { workingDirs: ['/group-repo'] } });
+      expect(privateScoped.results.map(item => item.session.id).sort()).toEqual(['group']);
+      db.exec("UPDATE bot_session_links SET route_key = NULL WHERE session_id = 'group'");
 
       // A content-only hit must retain its client id and read-only owner so the
       // existing result handler can open history at the exact message.
@@ -463,6 +487,36 @@ it('projects forwarded search hits only with their persisted session origin', as
     }
     expect(db.prepare('SELECT content FROM messages WHERE id = ?').get('forwarded')).toEqual({ content });
     expect(mocks.searchChatHistoryHybrid.mock.calls[0][0].query).toBe('needle');
+  } finally {
+    clearCurrentDbClient(client);
+    db.close();
+  }
+});
+
+// Search dropped labels even though the ordinary task list showed them. Existing
+// fixtures had no tags. Unit: real search + in-memory SQLite, two tagged hits and
+// one untagged hit verify association and display order without touching user data.
+it('returns each search hit with its own ordered task tags', async () => {
+  const db = createSearchDb();
+  const client = makeSearchDbClient(db);
+  setCurrentDbClient(client, 'test-user');
+  mocks.searchChatHistoryHybrid.mockResolvedValue({
+    hits: [], sessions: {}, vectorUsed: false, vectorSkipReason: null,
+    nextOffset: null, hasMore: false, poolSize: 0, poolCapped: false,
+  });
+  try {
+    for (const id of ['a', 'b', 'untagged']) insertSearchSession(db, id, 1000, null);
+    db.exec(`INSERT INTO task_tags (id,name,color,sort_order,name_customized) VALUES
+      ('red','Important','red',1,1), ('blue','Later','blue',0,1);
+      INSERT INTO session_task_tags VALUES ('a','red'),('a','blue'),('b','red');`);
+    const response = await searchConversations({ query: 'needle', semanticMode: 'keyword' });
+    const tags = Object.fromEntries(response.results.map(item => [item.session.id, item.session.tags]));
+    expect(tags.a).toMatchObject([
+      { id: 'blue', name: 'Later', color: 'blue', nameCustomized: true },
+      { id: 'red', name: 'Important', color: 'red', nameCustomized: true },
+    ]);
+    expect(tags.b).toMatchObject([{ id: 'red' }]);
+    expect(tags.untagged).toEqual([]);
   } finally {
     clearCurrentDbClient(client);
     db.close();

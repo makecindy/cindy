@@ -24,7 +24,7 @@
  * 来源路由到被控端。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelRight } from 'lucide-react';
 
@@ -36,8 +36,10 @@ import { onRequestRightSidebarVisibility } from '@/features/right-sidebar/lib/si
 import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSidebarCommand';
 import { mergeSidebarWindowBack } from '@/features/right-sidebar/lib/mergeSidebarWindowBack';
 import { closeTab, getBucket, importTabSnapshot } from '@/features/right-sidebar/store';
+import { getGlobalTabs, type PluginViewTabState } from '@/features/right-sidebar/globalTabs';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
+import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import { useLocale } from '@/hooks/useLocale';
@@ -77,6 +79,11 @@ export function SidebarWindowLayout() {
   }, []);
   const isMac = window.electronAPI?.platform === 'darwin';
   const [ctx, setCtx] = useState<SidebarWindowContext | null>(null);
+  const [activeNamedView, setActiveNamedView] = useState(false);
+  const handleActiveTabChange = useCallback((id: string | null) => {
+    setActiveNamedView(getGlobalTabs().some(tab => tab.id === id &&
+      Boolean((tab.state as PluginViewTabState | null)?.resourceViewId)));
+  }, []);
   // 预热窗口初始隐藏；由 main 的 visibility push 驱动 Shell 内各子面板暂停/恢复。
   const [windowVisible, setWindowVisible] = useState(false);
   useDeviceLinkRemoteProjects(windowVisible, 'sidebar');
@@ -264,6 +271,7 @@ export function SidebarWindowLayout() {
     return true;
   });
 
+  const pluginTitlebarEntries = readPluginUiEntries('window.titlebar');
   return (
     <div className="flex h-screen flex-col bg-content-area text-foreground">
       {/* 46px 自绘 chrome(与主窗 ContentHeader 行高一致,红绿灯心 y=23 同轴):
@@ -286,6 +294,8 @@ export function SidebarWindowLayout() {
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           {/* 合并回主窗口:关偏好 + 关本窗,主窗恢复内嵌展开 */}
+          {pluginTitlebarEntries.length > 0 && <PluginUiSlotControls entries={pluginTitlebarEntries}
+            sessionId={interactiveSessionId} appearance="titlebar" />}
           <ChromeIconButton
             onClick={() => {
               void mergeSidebarWindowBack(interactiveSessionId).catch((err) => {
@@ -314,15 +324,15 @@ export function SidebarWindowLayout() {
         )}
       </div>
 
-      {/* 内容区:Shell 零改动复用。sessionId=null(主窗不在会话视图 / 尚无上报)
-          时 Shell 自渲染空白,叠一层"跟随主窗口会话"占位文案;窗口不自动关
-          (避免主窗路由抖动导致窗口闪没)。 */}
+      {/* 只有新增命名全局页免去无任务占位；旧 main/panel 页保持原行为。
+          隐藏窗口仍由覆盖层阻隔交互，窗口不随主窗路由抖动自动关闭。 */}
       <div className="relative flex flex-1 flex-col overflow-hidden">
         <DetachedBotMenuOwnerContext.Provider value={sessionId && ctx?.botOwner
           ? { sessionId, botId: ctx.botOwner.botId,
               canonical: ctx.botOwner.canonical && !ctx.remoteHostId && !ctx.deviceLinkDeviceId }
           : null}>
           <RightSidebarShell
+            onActiveTabChange={handleActiveTabChange}
             sessionId={sessionId}
             workdir={ctx?.workdir ?? ''}
             remoteHostId={ctx?.remoteHostId ?? null}
@@ -332,7 +342,7 @@ export function SidebarWindowLayout() {
             isMac={isMac}
           />
         </DetachedBotMenuOwnerContext.Provider>
-        {(!windowVisible || !sessionId) && (
+        {(!windowVisible || (!sessionId && !activeNamedView)) && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--panel-bg)]">
             <span className="text-13 text-[var(--text-tertiary)]">
               {t('rightSidebar.window.followPlaceholder')}

@@ -283,7 +283,11 @@ function parseStep(value: unknown): BotGroupPlanStepView | null {
   const task = text(record?.task, 4_096);
   if (!record || position === null || !botId || !status || task === null) return null;
   return { position, botId, botName: text(record.botName, MAX_NAME) ?? '', task, status,
-    ...(id(record.resultMessageId) ? { resultMessageId: id(record.resultMessageId)! } : {}),
+    // An explicit null means the turn published nothing (NO_REPLY); a missing field is an older
+    // projection that never reported it. Keeping them apart is what lets the queue show a skipped
+    // turn instead of claiming it spoke (#9909).
+    ...(record.resultMessageId === null ? { resultMessageId: null }
+      : id(record.resultMessageId) ? { resultMessageId: id(record.resultMessageId)! } : {}),
     ...(id(record.executionId) ? { executionId: id(record.executionId)! } : {}),
     ...(typeof record.executionStatus === 'string' ? { executionStatus: record.executionStatus } : {}) };
 }
@@ -343,9 +347,12 @@ function parseRound(value: unknown): BotGroupRoundView {
       if (!speaker || !botId) return [];
       return [{
         botId,
+        ...(id(speaker.sourceMessageId) ? { sourceMessageId: id(speaker.sourceMessageId)! } : {}),
+        ...(speaker.threadRootId === null ? { threadRootId: null } : id(speaker.threadRootId) ? { threadRootId: id(speaker.threadRootId)! } : {}),
         sessionId: optionalId(speaker.sessionId),
         activity: enumOf(speaker.activity, SPEAKER_ACTIVITIES) ?? 'reply',
         ...(id(speaker.executionId) ? { executionId: id(speaker.executionId)! } : {}),
+        ...(typeof speaker.timelineAt === 'number' && Number.isFinite(speaker.timelineAt) ? { timelineAt: speaker.timelineAt } : {}),
         ...(typeof speaker.startedAt === 'number' && Number.isFinite(speaker.startedAt) ? { startedAt: speaker.startedAt } : {}),
         ...(speaker.stopping === true ? { stopping: true } : {}),
         ...(['queued', 'running', 'needs_input', 'stopping'].includes(String(speaker.executionStatus))
@@ -357,6 +364,7 @@ function parseRound(value: unknown): BotGroupRoundView {
     status: record?.status === 'running' ? 'running' : 'idle',
     speakers,
     canContinue: record?.canContinue === true,
+    ...(typeof record?.canStop === 'boolean' ? { canStop: record.canStop } : {}),
     ...(record?.othersActive === true ? { othersActive: true } : {}),
   };
 }

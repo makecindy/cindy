@@ -19,6 +19,8 @@ export default {
     'src/renderer/features/provider-share/providerShareStore': { partial: 'export const useProviderShareReceived = () => window.providerSourcesFixture.received;' },
   },
   cases: {
+    'legacy-upgrade': { about: 'Old connection IDs remain in the host snapshot, while the actual settings rail shows one OpenAI supplier and both migrated accounts' },
+    'legacy-upgrade-shared': { about: 'A migrated connection with an existing share keeps its selective revocation entry even when disconnected and paused, without duplicating unshared connections' },
     'subscription-claude-choice': { about: 'An existing Claude Code login is shown before choosing it or another account' },
     'subscription-codex-choice': { about: 'An existing Codex login is shown before choosing it or another account' },
     'subscription-login': { about: 'OpenAI browser login adds an account inside the existing provider' },
@@ -34,6 +36,23 @@ export default {
     await page.getByTestId('provider-share-received').waitFor();
   },
   async check(page, ui) {
+    if (ui.case.startsWith('legacy-upgrade')) {
+      await page.getByRole('button', { name: /^OpenAI/ }).first().click();
+      const accounts = page.getByTestId('subscription-accounts');
+      await accounts.getByText('alex@example.com', { exact: true }).waitFor();
+      await accounts.getByText('work@example.com', { exact: true }).waitFor();
+      const shared = ui.case === 'legacy-upgrade-shared';
+      assert.equal(await page.getByText('Old login one', { exact: true }).count(), shared ? 1 : 0);
+      assert.equal(await page.getByText('Old login two', { exact: true }).count(), 0);
+      await ui.capture('upgraded-accounts');
+      if (shared) {
+        const owned = page.getByTestId('provider-share-owned');
+        await owned.getByText('Old login one', { exact: true }).click();
+        await page.getByTestId('provider-share-entry').waitFor();
+        await ui.capture('legacy-share-controls');
+      }
+      return;
+    }
     if (ui.case === 'subscription-claude-choice' || ui.case === 'subscription-codex-choice') {
       await page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true }).click();
       const dialog = page.getByRole('dialog');
@@ -69,7 +88,7 @@ export default {
       assert.equal(await accounts.getByRole('switch').count(), 2);
       // Each account shows every window of its own quota once; no provider-level copy repeats one account.
       for (const identity of ['alex@example.com', 'work@example.com']) {
-        const row = accounts.locator('div.py-4').filter({ hasText: identity });
+        const row = accounts.getByTestId('subscription-account').filter({ hasText: identity });
         for (const name of [await ui.t('quotaCard.fiveHourLabel'), await ui.t('quotaCard.weeklyLabel'), await ui.t('quotaCard.modelWeeklyLabel', { model: 'Fable' })])
           // High-usage bars append a screen-reader severity note to their accessible name.
           assert.equal(await row.getByRole('progressbar', { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).count(), 1, `${identity}: ${name}`);
@@ -94,7 +113,7 @@ export default {
       await ui.capture('builtin-save-pending');
       await page.evaluate(() => window.providerSourcesFixture.keySaveControl.release());
       await page.getByRole('dialog').waitFor({ state: 'hidden' });
-      assert.equal(await page.getByRole('combobox').count(), 0, 'success must complete without restoring the draft');
+      assert.equal(await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.namePlaceholder')).count(), 0, 'success must complete without restoring the draft');
       return;
     }
     if (ui.case === 'wizard-reopen') {
@@ -102,7 +121,7 @@ export default {
       const dialog = page.getByRole('dialog');
       await add.click();
       await dialog.waitFor();
-      await dialog.getByRole('button', { name: /^Ollama/ }).click();
+      await dialog.getByTitle('Ollama', { exact: true }).click();
       await page.waitForFunction(() => window.providerSourcesFixture.refreshControl.pending);
       await dialog.waitFor({ state: 'hidden' });
       await add.click();

@@ -1,7 +1,7 @@
 {
   "permission": {
     "mcpComplete": "已毕",
-    "mcpCancel": "取消",
+    "mcpCancel": "罢",
     "mode": {
       "default": "常例权柄",
       "acceptEdits": "许修",
@@ -17,7 +17,7 @@
     "denyAccessibility": "拒此权柄之请",
     "alwaysAllow": "本差事常许",
     "alwaysAllowAccessibility": "本差事常许权柄之请",
-    "alwaysAllowConfirm": "确本差事许",
+    "alwaysAllowConfirm": "确许本差事",
     "allowOnce": "许一次",
     "allowOnceAccessibility": "许权柄之请一次",
     "allowOnceConfirm": "确许一次",
@@ -29,6 +29,13 @@
       "description": "完全访问将关工作区沙箱，并略过常规审批。{{appName}} 可改工作区外之卷、行联网命令而不复相询；内置高险之举仍须确认。慎之。",
       "confirm": "启完全访问",
       "cancel": "守今之权柄"
+    },
+    "description": {
+      "default": "操作须批者，由君裁可。",
+      "acceptEdits": "修卷径许，余事按需请君裁可。",
+      "auto": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。",
+      "bypass": "常规操作径许，可访工作区外之卷、联网执行命令。",
+      "plan": "惟析事定策，不改卷。"
     }
   },
   "planMode": {
@@ -40,7 +47,6 @@
     "questionWithdrawn": "无须再答",
     "withdrawnDraft": "此问无须再答。\n{{reason}}\n草稿尚存，可另作补充发送。",
     "sendSupplement": "发送补充",
-
     "readOnlyKind": "待确",
     "readOnlyTitle": "机上方待确认",
     "pendingRequests": "待理之请",
@@ -187,6 +193,7 @@
     "fromLead": "Lead 之讯",
     "fromWorkerNamed": "Worker「{{role}}」之讯",
     "fromWorker": "Worker 之讯",
+    "fromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
     "emptyMessageBody": "（空讯）"
   },
   "contextSheet": {
@@ -288,7 +295,7 @@
       "expired": "候之过久，代书已终。"
     },
     "failure": {
-      "permission": "Cindy 无读此机界面之权柄。请于系统设置之辅助使用中许 Cindy。",
+      "permission": "Cindy 无读此机界面之权柄。请于系统设置之辅助功能中许 Cindy。",
       "target_gone": "目标之窗已阖。",
       "unreadable": "此界面不可读。可于主机之上径自竟之，再交还 Agent。",
       "action_failed": "方才之举未生效，请察界面后再试。",
@@ -379,7 +386,7 @@
     "qr": {
       "open": "于此器启 {{site}}",
       "openApp": "于此器启 {{site}} 链接",
-      "share": "存图或分与",
+      "share": "存图或分享",
       "copyLink": "录链接",
       "copyText": "录内容",
       "copied": "已录。",
@@ -402,12 +409,12 @@
       "titleStdin": "可向终端输入乎？",
       "titleMcpUrl": "应 {{server}} 之请",
       "highRiskTitle": "高险之授权须再确认",
-      "highRiskDetail": "先核指令内容，再点一次确许；不确则拒之。",
+      "highRiskDetail": "先核指令内容，再点一次以确认许之；未有把握则拒之。",
       "sessionAllowTitle": "可唯许一次，亦可本差事常许",
       "allowTitle": "许之，则机上续行",
       "tool": "工具：{{tool}}",
       "title": "许用 {{tool}} 乎？",
-      "risk": "此指令或改系统、仓库或外部服务之状。许之前，请确君信今之差事与指令内容。",
+      "risk": "此指令或改系统、仓库或外部服务之状。许之前，请确认君信任今之差事与指令内容。",
       "titleCommand": "许行此指令乎？",
       "titleFileRead": "许读卷乎？",
       "titleFileWrite": "许改卷乎？",
@@ -455,5 +462,39 @@
       "ghost_id": "法器",
       "tool": "工具"
     }
+  },
+  "issueConfirm": {
+    "title": "确呈反馈至 {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "功能之议",
+    "titleLabel": "题",
+    "bodyLabel": "正文(Markdown)",
+    "privacyHint": "Issue 之题与正文将公开示人，且或被搜索、缓存。系统仅能屏蔽部分常见之敏感信息，未能辨一切语意之隐私。",
+    "relatedLogsHint": "此呈含上方所示之相关客户端日志；日志于公开前已经来源与字段筛选、去敏及长度之限。",
+    "privacyConfirm": "吾已察上方公开之内容，无不宜公开之个人、言谈或业务信息",
+    "submissionMethodLabel": "呈送身分",
+    "identityGithubUser": "以 GitHub 名籍 @{{login}} 径发",
+    "identityGithubUserHint": "君将为此 Issue 之 GitHub 作者，可于 GitHub 修之或阖之",
+    "identityPlatform": "Cindy 官方 Bot @{{login}}（默认）",
+    "identityPlatformHint": "无需设 GitHub 名籍；Issue 由官方 Bot 立之，君可于正文中择公开署名",
+    "publicNameLabel": "公署其名",
+    "publicNameHint": "此署名将公开示于 Issue 正文",
+    "anonymous": "匿名",
+    "useAnonymous": "用匿名署名",
+    "envLine": "所呈客户端之环境（呈时自附）：客户端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 界面语言 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（今之差事）",
+    "regionLine": "版本区域：{{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "呈反馈",
+    "cancel": "罢",
+    "previewLabel": "GitHub · 公开反馈",
+    "edit": "修改",
+    "doneEditing": "改毕",
+    "publicSubmit": "公开呈送",
+    "publicationNotice": "呈送后，正文与署名皆公开于 GitHub。",
+    "attribution": "署名：{{name}}",
+    "environment": "附执行环境",
+    "identitySettings": "署名与账号"
   }
 }

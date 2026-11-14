@@ -2,6 +2,7 @@ import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-for
 import {
   tryMobilePeerFile,
   peerMediaUri,
+  peerMediaPlayback,
   releasePeerMedia,
 } from "./peerFileRegistry";
 import { withTransientRemoteRetry } from "./remoteRetry";
@@ -39,6 +40,8 @@ import {
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   ORCA_EXECUTION_DEVICES_CHANNEL,
+  ORCA_WORKER_ROLES_APPLY,
+  ORCA_WORKER_ROLES_GET,
   isSharedTaskPeer,
   readDeviceFile,
   FILE_PEER_MAX_BYTES,
@@ -47,6 +50,7 @@ import {
   assertFileReadActive,
   validFileVersion,
   type DeviceFileResult,
+  type OrcaWorkerRolesMutation,
 } from "@cindy/device-link";
 import { errorText, mediaExtOf, nextFileTrace } from "@/debug/fileDiagnostics";
 import { mobileDebugLog } from "@/debug/mobileDebugLog";
@@ -792,6 +796,12 @@ export interface MobileMakerTransport {
     acknowledgeDone(leadSessionId: string, workerId: string): Promise<unknown>;
     archiveWorker(leadSessionId: string, workerId: string): Promise<unknown>;
     getCollaborationSettings(): Promise<unknown>;
+    /**
+     * 创建 Worker 的角色清单与每个角色记的任务、权限、模型：只存在任务所在的电脑上，手机不留副本。
+     * 旧电脑没有这两个通道(CHANNEL_NOT_ALLOWED)，调用方按「只有内置角色、不记忆」处理。
+     */
+    getWorkerRoles(): Promise<unknown>;
+    applyWorkerRoles(mutation: OrcaWorkerRolesMutation): Promise<unknown>;
   };
   /**
    * 会话未读已读回执:手机端真实展示会话内容后,清掉被控端该会话的未读态
@@ -1162,6 +1172,10 @@ export function createMobileMakerTransport({
             retain: async (result) => { await opts?.retainBackground?.(withDownload(result), fileIsCurrent); },
           },
           stream,
+          peerStream: opts?.playback && !isSharedTaskPeer(deviceId) ? async metadata => {
+            const { openPeerMediaStream } = await import("./peerMediaStream");
+            return openPeerMediaStream(deviceId, url, metadata, fileIsCurrent, opts?.signal);
+          } : undefined,
           inline: () => fetch(true),
           revalidate: () => fetch(true, true),
           inlineCache: opts?.thumbnail ? undefined : {
@@ -1181,6 +1195,8 @@ export function createMobileMakerTransport({
           peerResultIsTransient: true,
           isCurrent,
           discard: (result) => {
+            const playback = peerMediaPlayback(result);
+            if (playback) { void playback.close(); return; }
             const uri = peerMediaUri(result);
             if (uri) releasePeerMedia(uri);
             else if (
@@ -1495,6 +1511,8 @@ export function createMobileMakerTransport({
       archiveWorker: (leadSessionId, workerId) =>
         call("maker:worker:archive", [{ leadSessionId, workerId }]),
       getCollaborationSettings: () => call("maker:collaboration-settings:get"),
+      getWorkerRoles: () => call(ORCA_WORKER_ROLES_GET),
+      applyWorkerRoles: (mutation) => call(ORCA_WORKER_ROLES_APPLY, [mutation]),
     },
     clearSessionAttention: (sessionId, intent) =>
       call("notification:clear-session-attention", [sessionId, intent]),

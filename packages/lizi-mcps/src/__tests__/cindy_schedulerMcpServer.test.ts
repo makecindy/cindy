@@ -44,6 +44,7 @@ import { registerScheduleCreateTool } from '../scheduler/create.js';
 import { registerScheduleUpdateTool } from '../scheduler/update.js';
 import { registerScheduleSetPreRunHookTool } from '../scheduler/setPreRunHook.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
+import type { HostToolRuntime } from '../host-tool-runtime.js';
 
 // ── In-memory ScheduleStorage / Runner / Clock (same shape as Phase 1 tests) ──
 
@@ -151,6 +152,7 @@ const baseCreate: CreateScheduleInput = {
 
 interface Harness {
   client: Client;
+  hostTools: HostToolRuntime;
   scheduler: Scheduler;
   storage: InMemoryStorage;
   cleanup: () => Promise<void>;
@@ -159,6 +161,7 @@ interface Harness {
 async function makeHarness(opts?: {
   schedulerNotReady?: boolean;
   webhookManagement?: SchedulerMcpDeps['webhookManagement'];
+  context?: Parameters<typeof createSchedulerMcpServer>[1];
 }): Promise<Harness> {
   const storage = new InMemoryStorage();
   const clock = new FakeClock();
@@ -180,7 +183,7 @@ async function makeHarness(opts?: {
       }
       return scheduler;
     },
-  });
+  }, opts?.context);
 
   const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'phase5-smoke-client', version: '0.0.0' });
@@ -192,6 +195,7 @@ async function makeHarness(opts?: {
 
   return {
     client,
+    hostTools: server.hostTools,
     scheduler,
     storage,
     cleanup: async () => {
@@ -225,6 +229,39 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
 
   beforeEach(async () => {
     h = await makeHarness();
+  });
+
+  // Unit, parity #18: the plugin entry must manage the real Scheduler without a
+  // Session. Existing MCP tests cover task calls, not the in-process plugin caller.
+  // Minimal input: explicit schedule fields and a plugin context with no sessionId.
+  it('manages a schedule through the shared Host handlers without a current task', async () => {
+    await h.cleanup();
+    h = await makeHarness({ context: { agentKind: 'codex', workingDir: '', hostCaller: {
+      kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1,
+    } } });
+    const call = async (tool: string, args: Record<string, unknown> = {}) => {
+      const { envelope, isError } = parseToolResult(await h.hostTools.call(tool, args));
+      expect(isError).toBe(false);
+      expect(envelope.ok).toBe(true);
+      if (!envelope.ok) throw new Error(envelope.code);
+      return envelope.data;
+    };
+    try {
+      const created = await call('schedule_create', { ...baseCreate }) as Schedule;
+      const id = created.id;
+      expect(await call('schedule_list')).toEqual([created]);
+      expect(await call('schedule_update', { id, name: 'updated' })).toMatchObject({ id, name: 'updated' });
+      expect(await call('schedule_pause', { id })).toMatchObject({ id, status: 'paused' });
+      expect(await call('schedule_resume', { id })).toMatchObject({ id, status: 'active' });
+      const run = await call('schedule_run_now', { id }) as { runId: string };
+      expect(await call('schedule_list_runs', { scheduleId: id })).toEqual([
+        expect.objectContaining({ id: run.runId, scheduleId: id, status: 'success' }),
+      ]);
+      const nativeRead = await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_get', args: { id } } });
+      expect(parseToolResult(nativeRead as { content: unknown[] }).envelope).toMatchObject({ ok: true, data: { id, name: 'updated', status: 'active' } });
+      expect(await call('schedule_delete', { id })).toEqual({ deleted: id });
+      expect(await call('schedule_list')).toEqual([]);
+    } finally { await h.cleanup(); }
   });
 
   // Unit integration: account management must be discoverable and reachable through
@@ -334,16 +371,6 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       'schedule_silence_current_run',
       'schedule_update',
     ]);
-    await h.cleanup();
-  });
-
-  it('rejects arbitrary-bot routine management on the general scheduler surface', async () => {
-    for (const name of ['routine_list', 'routine_sources', 'routine_save', 'routine_history', 'routine_delete', 'routine_run_now']) {
-      const result = await h.client.callTool({
-        name: 'call_tool', arguments: { name, args: { botId: 'another-bot', id: 'routine' } },
-      });
-      expect(result.isError).toBe(true);
-    }
     await h.cleanup();
   });
 

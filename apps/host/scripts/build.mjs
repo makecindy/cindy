@@ -12,14 +12,19 @@ import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { build } from 'esbuild';
 import { chromium } from 'playwright-core';
+import { clientMigrationContract } from '../src/client-migration-contract.mjs';
+import { selectReleaseHarnesses } from '../src/release-harnesses.mjs';
 
 const repo = fileURLToPath(new URL('../../..', import.meta.url));
 const host = path.join(repo, 'apps/host');
 const desktop = path.join(repo, 'apps/desktop');
 const { values } = parseArgs({ options: {
-  output: { type: 'string' }, 'web-dir': { type: 'string' },
+  output: { type: 'string' }, 'web-dir': { type: 'string' }, harnesses: { type: 'string' },
 } });
-if (!values.output) throw new Error('Usage: pnpm --filter @cindy/host build --output <new-directory> [--web-dir <renderer-build>]');
+if (!values.output) throw new Error('Usage: pnpm --filter @cindy/host build --output <new-directory> [--web-dir <renderer-build>] [--harnesses <name,...>]');
+// Resolved before any build work so an invalid selection fails immediately.
+const harnessSelection = selectReleaseHarnesses({ option: values.harnesses });
+for (const warning of harnessSelection.warnings) console.warn(`Warning: ${warning}`);
 const output = path.resolve(values.output);
 if (syncFs.existsSync(output)) throw new Error(`Output already exists; choose a new directory: ${output}`);
 await fs.mkdir(path.dirname(output), { recursive: true });
@@ -183,7 +188,9 @@ try {
 
   // Copy the verified checkout runtimes with their own support files. A missing
   // harness is a build error, never a release claiming an unavailable agent.
-  for (const name of ['claude-code-bin', 'codex-package-bin', 'pi-bin', 'ripgrep-bin']) {
+  // The selection is recorded so a release states which agents it can run.
+  metadata.harnesses = harnessSelection.harnesses;
+  for (const name of harnessSelection.harnesses) {
     await fs.cp(path.join(repo, 'apps', name, platformKey), path.join(resources, 'harnesses', name, platformKey), {
       recursive: true, dereference: true,
     });
@@ -212,6 +219,8 @@ try {
     await fs.cp(electronRoot, path.join(resources, 'credential-runtime'), { recursive: true, dereference: true });
     metadata.electronBinary = path.join('resources', 'credential-runtime', path.relative(electronRoot, executable));
     await fs.copyFile(path.join(host, 'src/credentials/electron-codec.cjs'), path.join(bin, 'electron-codec.cjs'));
+    await build({ absWorkingDir: repo, entryPoints: ['apps/desktop/src/main/host-platform/power-worker.desktop.ts'],
+      outfile: path.join(bin, 'power-worker.cjs'), bundle: true, platform: 'node', format: 'cjs', target: 'node22', external: ['electron'] });
   }
   const common = { absWorkingDir: repo, bundle: true, platform: 'node', target: 'node22',
     plugins: nodePlugins, define: { __CINDY_HOST_RELEASE__: JSON.stringify(metadata) }, logLevel: 'warning' };
@@ -222,6 +231,7 @@ try {
     ['apps/host/src/plugins/node-worker.ts', 'node-worker.cjs'],
     ['apps/desktop/src/main/cindy-brain/libraryDbWorker.ts', 'library-worker.mjs'],
     ['apps/desktop/src/main/cindy-brain/ghostSnapshotWorkerProcess.ts', 'snapshot-worker.cjs'],
+    ['apps/host/src/agent/pi-subagent-runner-process.cts', 'pi-subagent-runner.cjs'],
   ]) await build({ ...common, entryPoints: [entry], outfile: path.join(bin, name), format: name.endsWith('.mjs') ? 'esm' : 'cjs' });
   await build({ absWorkingDir: repo, entryPoints: ['apps/web/shim.js'], outfile: path.join(resources, 'web/shim.js'),
     bundle: true, platform: 'browser', format: 'iife', target: 'es2022', nodePaths: [path.join(host, 'node_modules')] });
@@ -230,6 +240,7 @@ try {
     format: 'iife', globalName: 'CindyPluginBridge', target: 'es2022' });
   // The machine ID module is loaded through createRequire in both login paths.
   packages.set('node-machine-id', packageRoot('node-machine-id', hostRequire));
+  packages.set('node-pty', packageRoot('node-pty', desktopRequire));
   packages.set('sharp', packageRoot('sharp', desktopRequire));
   packages.set('playwright-core', packageRoot('playwright-core', hostRequire));
   for (const [name, source] of packages) {
@@ -245,6 +256,7 @@ try {
     : '#!/bin/sh\nset -eu\nHOST_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$HOST_ROOT/bin/node" "$HOST_ROOT/bin/host.mjs" "$@"\n';
   await fs.writeFile(path.join(staging, process.platform === 'win32' ? 'cindy-host.cmd' : 'cindy-host'), launcher, { mode: 0o755 });
   await fs.writeFile(path.join(staging, 'runtime-dependencies.json'), JSON.stringify(Object.fromEntries(dependencyRecords), null, 2) + '\n');
+  await fs.writeFile(path.join(staging, 'client-migration.json'), JSON.stringify(clientMigrationContract) + '\n');
   await fs.writeFile(path.join(staging, 'release.json'), JSON.stringify(metadata, null, 2) + '\n');
   // A checksum inventory supports verification after copying or distributing;
   // signing and publishing remain separate explicit release operations.

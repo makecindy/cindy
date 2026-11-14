@@ -289,17 +289,6 @@ export interface SlackHookMcpDeps {
   logger?: LiziMcpLogger;
 }
 
-/** Native routine service; only caller-bound companion tools expose it to agents. */
-export interface RoutineToolService {
-  deliveryTargets?(botId: string): Promise<import('@cindy/maker-scheduler').RoutineDeliveryTarget[]>;
-  list(botId: string): Promise<import('@cindy/maker-scheduler').Routine[]>;
-  sources(): Promise<import('@cindy/maker-scheduler').RoutineSource[]>;
-  save(botId: string, input: import('@cindy/maker-scheduler').RoutineInput, id?: string): Promise<import('@cindy/maker-scheduler').Routine>;
-  history(botId: string, id: string): Promise<import('@cindy/maker-scheduler').RoutineRun[]>;
-  remove(botId: string, id: string): Promise<void>;
-  runNow(botId: string, id: string): Promise<void>;
-}
-
 /**
  * Host injects a `getScheduler()` accessor — the cindy_scheduler MCP server
  * never holds a long-lived Scheduler reference because the host may
@@ -416,6 +405,9 @@ export interface SchedulerHookScriptService {
  *    缺省, session_search tool 注册时跳过。
  */
 export interface MemoryMcpDeps {
+  /** Optional runtime providers. Undefined means no provider was selected for the caller. */
+  searchProviders?: (query: string, opts: { type?: 'user' | 'feedback' | 'project' | 'reference'; limit?: number },
+    context: LiziMcpSessionContext | undefined) => Promise<MemoryProviderHit[] | MemoryProviderSearchResult> | undefined;
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   /** Host captures the source turn before storage; invoked only for a successful write. */
   beginWrite?: (context: LiziMcpSessionContext | undefined) => ((receipt: { key: string; title: string; action: 'created' | 'updated' }) => void);
@@ -430,6 +422,18 @@ export interface MemoryMcpDeps {
   searchSessions?: SessionSearchFn;
   logger?: LiziMcpLogger;
 }
+
+/** Inline provider content: no invented local filename and no memory_read round trip. */
+export interface MemoryProviderHit {
+  id: string;
+  title: string;
+  content: string;
+  type?: 'user' | 'feedback' | 'project' | 'reference';
+  sourcePlugin: { id: string; name: string };
+  truncated?: boolean;
+}
+
+export interface MemoryProviderSearchResult { hits: MemoryProviderHit[]; truncated?: boolean }
 
 export interface LspMcpDeps {
   workdir: string;
@@ -743,6 +747,7 @@ export type ComputerMcpToolName =
   | 'list_apps'
   | 'list_windows'
   | 'get_window_state'
+  | 'get_desktop_state'
   | 'verify_state'
   | 'click'
   | 'double_click'
@@ -796,6 +801,10 @@ export interface ComputerDriverPermissionState {
 
 export interface ComputerMcpCallContext {
   sessionId?: string;
+  /** Another attested Host caller; this is not an Agent task identity. */
+  hostCaller?: Extract<import('./tool-call-authority.js').HostToolCaller, { kind: 'plugin' }>;
+  /** Recheck the Host invocation before driver dispatch, including queued input. */
+  assertCurrent?: () => void;
   /** Host-only observation origin; automatic reads must not authorize resumed input. */
   observationPurpose?: 'recovery';
   /** Request cancellation stays on the host side; never serialized to the driver. */
@@ -806,6 +815,8 @@ export interface ComputerMcpCallContext {
 
 export interface ComputerMcpDeps {
   getStatus(): Promise<ComputerDriverStatus>;
+  /** Release the native connection owned by this Host caller. */
+  closeContext?(context?: ComputerMcpCallContext): Promise<void>;
   callTool(
     name: ComputerMcpToolName,
     args: Record<string, unknown>,
@@ -957,6 +968,8 @@ export type LiziMcpCallerKind = 'root' | 'descendant' | 'unknown';
 export interface LiziMcpSessionContext {
   agentKind: string;
   workingDir: string;
+  /** Host-attested plugin caller. This never supplies or inherits a Session identity. */
+  hostCaller?: Extract<import('./tool-call-authority.js').HostToolCaller, { kind: 'plugin' }>;
   /** Host-owned memory namespace override shared with the agent prompt path. */
   memoryScopeKey?: string;
   /**
@@ -1017,6 +1030,8 @@ export interface LiziMcpProvider {
   };
   isEnabled?(context: LiziMcpSessionContext): boolean;
   toClaudeSdkConfig(context: LiziMcpSessionContext): unknown | null;
+  /** Same registered tool handlers, for another attested in-process caller. */
+  toHostTools?(context: LiziMcpSessionContext): import('./host-tool-runtime.js').HostToolRuntime;
   /** Remote MCP config for Codex app-server; SDK instance providers use the host HTTP bridge instead. */
   toCodexMcpConfig?(context: LiziMcpSessionContext): CodexHttpMcpConfig | null;
   /** Extra env required by remote MCP configs, e.g. bearer tokens. */

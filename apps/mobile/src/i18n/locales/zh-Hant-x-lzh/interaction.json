@@ -1,7 +1,7 @@
 {
   "permission": {
     "mcpComplete": "已畢",
-    "mcpCancel": "取消",
+    "mcpCancel": "罷",
     "mode": {
       "default": "常例權柄",
       "acceptEdits": "許修",
@@ -17,7 +17,7 @@
     "denyAccessibility": "拒此權柄之請",
     "alwaysAllow": "本差事常許",
     "alwaysAllowAccessibility": "本差事常許權柄之請",
-    "alwaysAllowConfirm": "確本差事許",
+    "alwaysAllowConfirm": "確許本差事",
     "allowOnce": "許一次",
     "allowOnceAccessibility": "許權柄之請一次",
     "allowOnceConfirm": "確許一次",
@@ -29,6 +29,13 @@
       "description": "完全存取將關工作區沙箱，並略過常規審批。{{appName}} 可改工作區外之卷、行聯網命令而不復相詢；內建高險之舉仍須確認。慎之。",
       "confirm": "啟完全存取",
       "cancel": "守今之權柄"
+    },
+    "description": {
+      "default": "操作須批者，由君裁可。",
+      "acceptEdits": "修卷徑許，餘事按需請君裁可。",
+      "auto": "操作由 AI 模型裁可，審之或須多候；必要時仍請君確認。",
+      "bypass": "常規操作徑許，可訪工作區外之卷、聯網執行命令。",
+      "plan": "惟析事定策，不改卷。"
     }
   },
   "planMode": {
@@ -40,7 +47,6 @@
     "questionWithdrawn": "無須再答",
     "withdrawnDraft": "此問無須再答。\n{{reason}}\n草稿尚存，可另作補充傳送。",
     "sendSupplement": "傳送補充",
-
     "readOnlyKind": "待確",
     "readOnlyTitle": "機上方待確認",
     "pendingRequests": "待理之請",
@@ -187,6 +193,7 @@
     "fromLead": "Lead 之訊",
     "fromWorkerNamed": "Worker「{{role}}」之訊",
     "fromWorker": "Worker 之訊",
+    "fromWorkerBatch": "系統所報 Worker 結果凡 {{count}}",
     "emptyMessageBody": "（空訊）"
   },
   "contextSheet": {
@@ -379,7 +386,7 @@
     "qr": {
       "open": "於此器啟 {{site}}",
       "openApp": "於此器啟 {{site}} 連結",
-      "share": "存圖或分與",
+      "share": "存圖或分享",
       "copyLink": "錄連結",
       "copyText": "錄內容",
       "copied": "已錄。",
@@ -402,12 +409,12 @@
       "titleStdin": "可向終端輸入乎？",
       "titleMcpUrl": "應 {{server}} 之請",
       "highRiskTitle": "高險之授權須再確認",
-      "highRiskDetail": "先核指令內容，再點一次確許；不確則拒之。",
+      "highRiskDetail": "先核指令內容，再點一次以確認許之；未有把握則拒之。",
       "sessionAllowTitle": "可唯許一次，亦可本差事常許",
       "allowTitle": "許之，則機上續行",
       "tool": "工具：{{tool}}",
       "title": "許用 {{tool}} 乎？",
-      "risk": "此指令或改系統、倉庫或外部服務之狀。許之前，請確君信今之差事與指令內容。",
+      "risk": "此指令或改系統、倉庫或外部服務之狀。許之前，請確認君信任今之差事與指令內容。",
       "titleCommand": "許行此指令乎？",
       "titleFileRead": "許讀卷乎？",
       "titleFileWrite": "許改卷乎？",
@@ -455,5 +462,39 @@
       "ghost_id": "法器",
       "tool": "工具"
     }
+  },
+  "issueConfirm": {
+    "title": "確呈反饋至 {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "功能之議",
+    "titleLabel": "題",
+    "bodyLabel": "正文(Markdown)",
+    "privacyHint": "Issue 之題與正文將公開示人，且或被搜尋、快取。系統僅能遮蔽部分常見之敏感資訊，未能辨一切語意之隱私。",
+    "relatedLogsHint": "此呈含上方所示之相關客戶端日誌；日誌於公開前已經來源與欄位篩選、去敏及長度之限。",
+    "privacyConfirm": "吾已察上方公開之內容，無不宜公開之個人、言談或業務資訊",
+    "submissionMethodLabel": "呈送身分",
+    "identityGithubUser": "以 GitHub 名籍 @{{login}} 徑發",
+    "identityGithubUserHint": "君將為此 Issue 之 GitHub 作者，可於 GitHub 修之或闔之",
+    "identityPlatform": "Cindy 官方 Bot @{{login}}（預設）",
+    "identityPlatformHint": "無需設 GitHub 名籍；Issue 由官方 Bot 立之，君可於正文中擇公開署名",
+    "publicNameLabel": "公署其名",
+    "publicNameHint": "此署名將公開示於 Issue 正文",
+    "anonymous": "匿名",
+    "useAnonymous": "用匿名署名",
+    "envLine": "所呈客戶端之環境（呈時自附）：客戶端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 界面語言 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（今之差事）",
+    "regionLine": "版本區域：{{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "呈反饋",
+    "cancel": "罷",
+    "previewLabel": "GitHub · 公開回饋",
+    "edit": "修改",
+    "doneEditing": "改畢",
+    "publicSubmit": "公開呈送",
+    "publicationNotice": "呈送後，正文與署名皆公開於 GitHub。",
+    "attribution": "署名：{{name}}",
+    "environment": "附執行環境",
+    "identitySettings": "署名與帳號"
   }
 }

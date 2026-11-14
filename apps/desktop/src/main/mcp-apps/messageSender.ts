@@ -1,5 +1,6 @@
 import { buildMakerUserMessage, type AgentInputQueuedMessage, type AgentInputSerializedFile } from '../../shared/agentInputQueue.js';
 import type { McpAppRecord } from '../../shared/mcpApps.js';
+import type { McpAppMessageSource } from './message.js';
 import type { MakerSendTransaction } from '../maker-ipc/makerSendTransaction.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../maker-ipc/autoReviewUserIntent.js';
 import { appMessageInput, MCP_APP_MESSAGE_CLIENT_PREFIX, MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from './message.js';
@@ -37,7 +38,7 @@ type AppMessageSenderDeps<Meta> = AppMessageQueueDeps<Meta> & ({
 export function createAppMessageSender<Meta>(deps: AppMessageSenderDeps<Meta>) {
   return async (
     sessionId: string,
-    record: McpAppRecord,
+    record: McpAppRecord | McpAppMessageSource,
     content: unknown[],
     assertViewCurrent: McpAppMessageGuard,
     files?: AgentInputSerializedFile[],
@@ -58,9 +59,9 @@ export function createAppMessageSender<Meta>(deps: AppMessageSenderDeps<Meta>) {
     const { blocks, text, persistedContent } = appMessageInput(content);
     // Plugin cards already carry the Host-stamped title used by their header.
     // Custom MCP services retain their server name and the same external-source id.
-    const plugin = (record.tool._meta as Record<string, unknown> | undefined)?.['cindy/plugin'] as { name?: unknown } | undefined;
+    const plugin = ('tool' in record ? record.tool._meta as Record<string, unknown> | undefined : undefined)?.['cindy/plugin'] as { name?: unknown } | undefined;
     const sourcePlugin = { pluginId: `mcp-app:${record.serverId}`,
-      name: typeof plugin?.name === 'string' ? plugin.name : record.serverId };
+      name: typeof plugin?.name === 'string' ? plugin.name : 'title' in record ? record.title : record.serverId };
     const clientId = `${MCP_APP_MESSAGE_CLIENT_PREFIX}${deps.createClientId()}`;
     if (deps.queueOnly || deps.shouldQueue(sessionId)) {
       const meta = await deps.getSessionMeta(sessionId);

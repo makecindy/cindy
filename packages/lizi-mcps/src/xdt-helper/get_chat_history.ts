@@ -188,7 +188,7 @@ export function registerGetChatHistoryTool(
       ) {
         return errorPayload(
           'HISTORY_SCOPE_DENIED',
-          '请求的任务不在当前伙伴可读取的历史范围内。不要把空结果解释成对方没有回复；请改用伙伴状态或可追踪委派结果。',
+          '请求的任务不在当前伙伴可读取的历史范围内。不要把空结果解释成对方没有回复；请改用伙伴状态或任务摘要（get_task_digest）。',
           { denied_session_ids: scope.deniedSessionIds },
         );
       }
@@ -284,6 +284,7 @@ export function registerGetChatHistoryTool(
           createdAt: new Date(m.createdAt).toISOString(),
         };
         if (m.toolUseId !== null) out.toolUseId = m.toolUseId;
+        if (m.clientId !== undefined) out.clientId = m.clientId;
         if (m.agentMeta !== null && m.agentMeta !== undefined) out.agentMeta = m.agentMeta;
         if (m.rewindAt !== null) out.rewindAt = new Date(m.rewindAt).toISOString();
         return out;

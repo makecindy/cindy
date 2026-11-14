@@ -23,6 +23,8 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { eq } from 'drizzle-orm';
+import { parseGhostModelRoute, parseGhostContextBlocks, parseGhostMemoryEntries, type GhostContextBlock, type GhostMemoryEntry } from '@cindy/plugin-protocol';
+import { isRuntimePluginPoint } from '../../shared/pluginRuntime.js';
 
 import {
   GHOST_ASSISTANT_HOOK_TIMEOUT_MS,
@@ -31,13 +33,15 @@ import {
   GHOST_HOOK_TIMEOUT_MS,
   GHOST_SUB_QUEUE_MAX,
   GHOST_CONTROL_POINTS,
+  GHOST_MODEL_REQUEST_MAX_CHARS,
   ghostControlPointActive,
   ghostInstallApprovalToken,
+  ghostTaskEventApproved,
   type GhostActivityEventName,
   type GhostControlPointData,
   type GhostControlPointFailureAction,
   type GhostControlPointId,
-  type GhostControlPointResult,
+  type GhostRuntimeControlPointResult,
   type GhostModelRoute,
   type GhostDidEventData,
   type GhostDidEventName,
@@ -55,30 +59,18 @@ import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope
 import { getDbClient } from '../localDb/client/current.js';
 import * as localDbSchema from '../localDb/schema.js';
 import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
-
-/** 插件回传的模型路由：只取已知字段并限长，是否可用由宿主按用户已连接的模型另行校验。 */
-function parseModelRoute(value: unknown): GhostModelRoute | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const r = value as Record<string, unknown>;
-  const text = (v: unknown) => (typeof v === 'string' && v.trim() && v.length <= 256 ? v.trim() : undefined);
-  const agentKind = r.agentKind === 'cc' || r.agentKind === 'codex' || r.agentKind === 'pi' ? r.agentKind : undefined;
-  const model = text(r.model);
-  const providerId = text(r.providerId);
-  if (!agentKind || !model || !providerId) return undefined;
-  // A malformed explicit location must never become a local route.
-  const agentDeviceId = text(r.agentDeviceId);
-  if (r.agentDeviceId !== undefined && (!agentDeviceId || agentDeviceId.length > 128)) return undefined;
-  const effort = text(r.effort);
-  return { agentKind, model, providerId, ...(agentDeviceId ? { agentDeviceId } : {}), ...(effort ? { effort } : {}) };
-}
+import { RUNTIME_PLUGIN_RESULT_CURRENT, type RuntimePluginControlResult } from './runtimeControl.js';
 
 /** block 理由展示上限(超长截断,防意识用理由塞小作文)。 */
 const BLOCK_REASON_MAX_CHARS = 200;
 
 /** 单意识裁决(askOne 归一化产物;null = 本轮失败已计熔断)。 */
 type HookVerdict = {
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories';
+  blocks?: GhostContextBlock[];
+  entries?: GhostMemoryEntry[];
   route?: GhostModelRoute;
+  request?: Record<string, unknown>;
   reason?: string;
   text?: string;
   html?: string;
@@ -217,6 +209,7 @@ export class GhostSubscriptionGateway {
   private readonly entries = new Map<string, SubEntry>();
   private readonly pendingHooks = new Map<string, PendingHook>();
   private discovery: { owner: unknown; promise: Promise<InstalledGhost[]> } | null = null;
+  private readonly contentRecipients = new WeakMap<GhostPipeEventPush, InstalledGhost>();
 
   constructor(private readonly deps: GhostSubscriptionGatewayDeps) {}
 
@@ -264,6 +257,11 @@ export class GhostSubscriptionGateway {
     this.publishTo(this.deps.listGhosts(), topic, name, data);
   }
 
+  /** Indexed content/state subscribers; avoids discovery on every message or state event. */
+  publishIndexed(ghosts: InstalledGhost[], topic: GhostSubscribeTopic, name: GhostDidEventName, data: GhostDidEventData): void {
+    this.publishTo(ghosts, topic, name, data);
+  }
+
   private publishTo(
     ghosts: InstalledGhost[],
     topic: GhostSubscribeTopic,
@@ -276,7 +274,7 @@ export class GhostSubscriptionGateway {
         ? this.deps.findGhostForDelivery(installedGhostStoragePart(candidate))
         : candidate;
       if (!ghost || ghostInstallApprovalToken(ghost.approval) !== ghostInstallApprovalToken(candidate.approval)) continue;
-      if (!ghost.enabled) continue;
+      if (!ghost.enabled || !ghostTaskEventApproved(ghost, topic)) continue;
       if (!ghost.manifest.subscribe?.topics?.includes(topic)) continue;
       this.dispatchTo(ghost, topic, name, data);
     }
@@ -326,6 +324,7 @@ export class GhostSubscriptionGateway {
       ts: this.deps.now(),
       data,
     };
+    if (topic === 'message' || topic === 'task-state') this.contentRecipients.set(evt, ghost);
 
     // 直投条件:在跑 + 缓冲已清 + 无唤醒在途——三者缺一都排队,否则新事件
     // 会插到缓冲里旧事件前面(seq 乱序)。投递失败(刚崩窗口期)同样回落缓冲。
@@ -346,6 +345,13 @@ export class GhostSubscriptionGateway {
     if (!this.ownerScopeUsable(ownerScope)) {
       this.invalidateOwner(ghostId, e);
       return false;
+    }
+    const recipient = this.contentRecipients.get(evt);
+    if (recipient && 'topic' in evt) {
+      const live = this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient;
+      // A queue belongs to the exact approved install. Drop stale events instead of retrying into an update.
+      if (!live?.enabled || ghostInstallApprovalToken(live.approval) !== ghostInstallApprovalToken(recipient.approval)
+        || !live.manifest.subscribe?.topics?.includes(evt.topic) || !ghostTaskEventApproved(live, evt.topic)) return true;
     }
     const payload = e.pendingDropped > 0 ? { ...evt, dropped: e.pendingDropped } : evt;
     try {
@@ -592,12 +598,19 @@ export class GhostSubscriptionGateway {
     point: GhostControlPointId,
     data: GhostControlPointData,
     target: { pluginId: string; onFailure: GhostControlPointFailureAction },
-  ): Promise<GhostControlPointResult> {
+    timeoutMs?: number,
+  ): Promise<RuntimePluginControlResult> {
     const ownerScope = this.captureOwnerScope();
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     const spec = GHOST_CONTROL_POINTS[point];
-    const ghost = findInstalledGhostByInstanceId(this.deps.listGhosts(), target.pluginId);
-    const failed = (ghostId: string, ghostName: string, why: string): GhostControlPointResult => {
+    const runtimePoint = isRuntimePluginPoint(point);
+    // Reuse the fresh exact-instance authorization lookup; per-request runtime
+    // control must not rescan unrelated installs. Legacy points keep their path.
+    const findTarget = () => runtimePoint && this.deps.findGhostForDelivery
+      ? this.deps.findGhostForDelivery(target.pluginId)
+      : findInstalledGhostByInstanceId(this.deps.listGhosts(), target.pluginId);
+    const ghost = findTarget();
+    const failed = (ghostId: string, ghostName: string, why: string): GhostRuntimeControlPointResult => {
       this.deps.log?.warn('control point unanswered', { ghostId, point, onFailure: target.onFailure, why });
       if (target.onFailure === 'allow') return { action: 'allow' };
       return { action: target.onFailure, ghostId, ghostName, reason: '', failure: true };
@@ -607,32 +620,62 @@ export class GhostSubscriptionGateway {
     }
     const ghostId = installedGhostStoragePart(ghost);
     const e = this.entry(ghostId);
-    const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data, spec.timeoutMs, ownerScope);
+    const controlApproval = ghostInstallApprovalToken(ghost.approval);
+    const currentTarget = () => {
+      const current = findTarget();
+      return this.ownerScopeUsable(ownerScope) && !!current && ghostControlPointActive(current, point)
+        && ghostInstallApprovalToken(current.approval) === controlApproval;
+    };
+    const checked = (result: GhostRuntimeControlPointResult): RuntimePluginControlResult => {
+      // Keep the original wire/JSON shape. Parallel collection and asynchronous
+      // host effects must recheck this same exact installation before use.
+      if (runtimePoint) Object.defineProperty(result, RUNTIME_PLUGIN_RESULT_CURRENT, { value: currentTarget });
+      return result;
+    };
+    const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data,
+      Math.min(spec.timeoutMs, timeoutMs ?? spec.timeoutMs), ownerScope);
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     if (verdict === null) return failed(ghostId, ghost.manifest.name, e.pointFused ? 'fused' : 'unanswered');
+    if (runtimePoint && !currentTarget()) return failed(ghostId, ghost.manifest.name, 'changed');
     if (verdict.action === 'route' && verdict.route && (spec.actions as readonly string[]).includes('route')) {
+      if (point === 'will-model-request' && 'phase' in data && data.phase !== 'select') {
+        return failed(ghostId, ghost.manifest.name, 'route-after-selection');
+      }
+      // Existing new-task selectors keep their original request-preference contract.
+      const { fastMode: _fast, ...legacyRoute } = verdict.route;
       this.deps.log?.info('control point routed', { ghostId, point, agentKind: verdict.route.agentKind, model: verdict.route.model });
-      return {
+      return checked({
         action: 'route',
         ghostId,
         ghostName: ghost.manifest.name,
-        route: verdict.route,
+        route: point === 'will-start-task' ? legacyRoute : verdict.route,
         reason: (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS),
-      };
+      });
+    }
+    if (point === 'will-model-request' && verdict.action === 'transform' && verdict.request
+      && 'phase' in data && data.phase === 'payload') {
+      return checked({ action: 'transform', ghostId, ghostName: ghost.manifest.name, request: verdict.request });
+    }
+    if (point === 'will-compose-context' && verdict.action === 'context' && verdict.blocks) {
+      return checked({ action: 'context', ghostId, ghostName: ghost.manifest.name, blocks: verdict.blocks });
+    }
+    if (point === 'will-search-memory' && verdict.action === 'memories' && verdict.entries) {
+      return checked({ action: 'memories', ghostId, ghostName: ghost.manifest.name, entries: verdict.entries });
     }
     if ((verdict.action === 'skip' || verdict.action === 'block') &&
         (spec.actions as readonly string[]).includes(verdict.action)) {
       this.deps.log?.info('control point stopped', { ghostId, point, action: verdict.action });
-      return {
+      return checked({
         action: verdict.action,
         ghostId,
         ghostName: ghost.manifest.name,
         reason: (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS),
         failure: false,
-      };
+      });
     }
-    // allow、格式不对的 route 与本节点不支持的动作都只算不反对。
-    return { action: 'allow' };
+    if (runtimePoint && verdict.action !== 'allow') return failed(ghostId, ghost.manifest.name, 'invalid-verdict');
+    // Legacy points retain their fail-open handling of unsupported answers.
+    return checked({ action: 'allow' });
   }
 
   private async askControlPoint(
@@ -822,10 +865,17 @@ export class GhostSubscriptionGateway {
     if (typeof payload !== 'object' || payload === null) return;
     const p = payload as Record<string, unknown>;
     if (p.type !== 'event-verdict' || typeof p.hookId !== 'string') return;
-    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip' && p.action !== 'route') return;
-    const route = p.action === 'route' ? parseModelRoute(p.route) : undefined;
     const pending = this.pendingHooks.get(p.hookId);
     if (!pending || pending.ghostId !== ghostId) return;
+    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip' && p.action !== 'route' && p.action !== 'transform' && p.action !== 'context' && p.action !== 'memories') return;
+    const route = p.action === 'route' ? parseGhostModelRoute(p.route) : undefined;
+    let request: Record<string, unknown> | undefined;
+    if (p.action === 'transform' && p.request && typeof p.request === 'object' && !Array.isArray(p.request)) {
+      try {
+        const json = JSON.stringify(p.request);
+        if (json.length <= GHOST_MODEL_REQUEST_MAX_CHARS) request = JSON.parse(json);
+      } catch { /* Cycles and BigInts are not provider JSON requests. */ }
+    }
     this.pendingHooks.delete(p.hookId);
     pending.resolve({
       action: p.action,
@@ -834,13 +884,18 @@ export class GhostSubscriptionGateway {
       ...(typeof p.html === 'string' ? { html: p.html } : {}),
       ...(typeof p.height === 'number' ? { height: p.height } : {}),
       ...(route ? { route } : {}),
+      ...(request ? { request } : {}),
+      ...(p.action === 'context' ? { blocks: parseGhostContextBlocks(p.blocks) } : {}),
+      ...(p.action === 'memories' ? { entries: parseGhostMemoryEntries(p.entries) } : {}),
     });
   }
 
   /** 意识停用/抽离时清态(缓冲、熔断、seq 全部归零;待决钩子按超时自然收口)。 */
   dropGhost(ghostId: string): void {
     const entry = this.entries.get(ghostId);
-    if (entry) entry.buffer.length = 0;
+    if (entry) {
+      entry.buffer.length = 0;
+    }
     for (const [hookId, pending] of this.pendingHooks) {
       if (pending.ghostId !== ghostId) continue;
       this.pendingHooks.delete(hookId);

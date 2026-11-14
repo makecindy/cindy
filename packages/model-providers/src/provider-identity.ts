@@ -18,21 +18,29 @@ export function isLocalOnlyProviderForAgent(
   return false;
 }
 
+type SubscriptionIdentity = Pick<Provider, 'id' | 'auth'> & Pick<Partial<Provider>, 'subscriptionPool'>;
+
 /** Provider identity is separate from the account entry's stable id. */
-export function isOpenAiSubscriptionProvider(provider: Pick<Provider, 'id' | 'auth'> | null | undefined): boolean {
+export function isOpenAiSubscriptionProvider(provider: SubscriptionIdentity | null | undefined): boolean {
   return !!provider && provider.auth?.method === 'oauth'
-    && (provider.id === 'openai' || provider.auth.native === 'codex');
+    && (provider.id === 'openai' || provider.auth.native === 'codex' || provider.subscriptionPool === 'openai');
+}
+
+/** A Claude subscription provider: the built-in one or one Cindy created for subscription accounts. */
+export function isClaudeSubscriptionProvider(provider: SubscriptionIdentity | null | undefined): boolean {
+  return !!provider && provider.auth?.method === 'oauth'
+    && (provider.id === 'anthropic' || provider.subscriptionPool === 'anthropic');
 }
 
 /** Account policy, never inferred from a display name, endpoint or model family. */
-export function supportsSubscriptionFastPolicy(provider: Pick<Provider, 'id' | 'auth'> | null | undefined): boolean {
-  return isOpenAiSubscriptionProvider(provider) || !!provider && provider.auth?.method === 'oauth'
-    && (provider.id === 'anthropic' || provider.auth.native === 'claude');
+export function supportsSubscriptionFastPolicy(provider: SubscriptionIdentity | null | undefined): boolean {
+  return isOpenAiSubscriptionProvider(provider) || isClaudeSubscriptionProvider(provider)
+    || (!!provider && provider.auth?.method === 'oauth' && provider.auth.native === 'claude');
 }
 
 /** Public catalog identity; never use this key to look up credentials or preferences. */
-export function providerCatalogId(provider: Pick<Provider, 'id' | 'auth'>): string {
-  return provider.auth.native === 'claude' ? 'anthropic'
+export function providerCatalogId(provider: SubscriptionIdentity): string {
+  return provider.auth.native === 'claude' || provider.subscriptionPool === 'anthropic' ? 'anthropic'
     : provider.auth.native === 'xai' ? 'xai'
     : isOpenAiSubscriptionProvider(provider) ? 'openai' : provider.id;
 }

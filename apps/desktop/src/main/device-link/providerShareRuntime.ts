@@ -1,7 +1,8 @@
 import { flushStandbyUsage, importStandbyUsage } from './providerShareAvailabilityUsage.js';
 import { publishShareAvailability, refreshStandbyGuests } from './providerShareAvailability.js';
 import { onProviderGroupChanged } from '../provider-group/store.js';
-import { onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
+import { keepSharedProvidersOpen, onRemoteProviderAccessChanged, sharedProviderIdsForRevert } from '../maker-host/remote-provider-access-store.js';
+import { readOpenAiLegacyAccountsIfReadable } from '../subscription-accounts/store.js';
 import { onDeviceLinkSettingChanged } from './settings-store.desktop.js';
 import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
@@ -30,9 +31,11 @@ import {
   isProviderAccessDeniedError,
   parseProviderSharePeer,
   providerShareGuestPeer,
+  providerShareFavoriteSource,
   scrubProviderShareLabel,
   scrubSharedProviderCatalog,
   type InvokeResultPayload,
+  type ProviderShareFavoriteSource,
   type ProviderShareReceived,
   type ProviderShareReceivedCatalog,
 } from '@cindy/device-link';
@@ -124,6 +127,8 @@ import {
   clearProviderShareRequestQuiet,
   ensureProviderSharePeerKnown,
   getProviderShareHostSnapshot,
+  getProviderShareHostCompleteSnapshot,
+  onProviderShareHostChanged,
   getProviderShareQuietRequestIds,
   getProviderShareWatchedRequests,
   markProviderShareHostActive,
@@ -364,6 +369,24 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   const stopModels = remoteModelAccess.subscribe(queueAvailabilityPublish);
   const stopAccess = onRemoteProviderAccessChanged(queueAvailabilityPublish);
   const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
+  // 撤回 11-10 的默认开放：等拿到本账号完整的分享快照，那段时间里用户建过分享的供应商补记为打开。
+  // 补记只做一次，有分享服务暂时读不到、或账号池文件读不了时不做，等下一次再试。
+  let accessDefaultMigrated = false;
+  let accessDefaultMigrating = false;
+  const migrateAccessDefault = () => {
+    if (accessDefaultMigrated || accessDefaultMigrating) return;
+    const loaded = getProviderShareHostCompleteSnapshot();
+    if (!loaded) return;
+    const ids = sharedProviderIdsForRevert(loaded, readOpenAiLegacyAccountsIfReadable);
+    if (!ids) return;
+    accessDefaultMigrating = true;
+    void keepSharedProvidersOpen(ids)
+      .then(() => { accessDefaultMigrated = true; })
+      .catch((error) => log.warn('remote provider access default revert failed', { error: String(error) }))
+      .finally(() => { accessDefaultMigrating = false; });
+  };
+  const stopAccessDefault = onProviderShareHostChanged(migrateAccessDefault, { refreshed: true });
+  migrateAccessDefault();
   const timer = setInterval(queueAvailabilityPublish, 60_000);
   timer.unref?.();
   availabilitySnapshot = undefined;
@@ -371,7 +394,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   stopAvailabilityPublisher = () => {
     availabilityPublisherEpoch += 1;
     availabilityPublishPending = false;
-    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopSettings();
+    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopSettings(); stopAccessDefault();
   };
 
   // 启动仲裁可能早于 IPC 注册；必须在 host 的第一轮快照前配置持久归属。
@@ -1229,6 +1252,22 @@ export async function executeProviderShareManagementCommand(command: ProviderSha
   return result;
 }
 
+/** 收藏身份与 Desktop 本机收藏同一套键。编不进去就不附带，手机不会另找成员身份。 */
+function receivedFavoriteSource(share: ProviderShareReceived): ProviderShareFavoriteSource | undefined {
+  const favoriteSource: ProviderShareFavoriteSource = {
+    shareId: share.shareId,
+    memberId: share.memberId,
+    providerId: share.providerId,
+    owner: { region: share.owner.region },
+  };
+  try {
+    providerShareFavoriteSource(favoriteSource);
+    return favoriteSource;
+  } catch {
+    return undefined;
+  }
+}
+
 const CATALOG_READ_TIMEOUT_MS = 10_000;
 const LINK_TTL_SAFETY_MS = 5_000;
 
@@ -1267,6 +1306,7 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
     ready: isReceivedSharesReady(),
     shares: await Promise.all(shares.map(async (share): Promise<ProviderShareReceivedCatalog> => {
       const agentDeviceId = `share:${share.shareId}`;
+      const favoriteSource = receivedFavoriteSource(share);
       let catalog: unknown = null;
       if (includeCatalog && invoke && share.status === 'active') {
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1293,6 +1333,7 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
         owner: { displayName: share.owner.displayName, avatarUrl: share.owner.avatarUrl },
         status: share.status,
         hostOnline: share.hostOnline,
+        ...(favoriteSource ? { favoriteSource } : {}),
         catalog,
       };
     })),

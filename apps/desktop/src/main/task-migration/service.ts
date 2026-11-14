@@ -34,7 +34,8 @@ import { getDeviceLinkInvokeContext } from '../device-link/invoke-context';
 import { readDeviceLinkSettings } from '../device-link/settings-store.desktop';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { tryUploadPeerAttachment } from '../device-link/filePeer';
-import { uploadLocalFile, removeRemote, MAX_MEDIA_BYTES } from '../device-link/mediaTransfer';
+import { uploadLocalFile, removeRemote, MAX_MEDIA_BYTES } from '../device-link/mediaTransfer.desktop';
+import { withAgentNetMediaTarget } from '../device-link/agentNetMediaRouting';
 import {
   materializeRemoteAttachment,
   parseRemoteAttachmentRef,
@@ -667,11 +668,12 @@ async function sendPart(
     return { ref: peer, size: result.size, sha256: result.sha256 };
   }
   onProgress?.(0); // OSS fallback starts this part again, not a second completed part.
-  const result = await uploadLocalFile(file, {
+  const result = await withAgentNetMediaTarget(device, async () => uploadLocalFile(file, {
     maxBytes: (await fs.stat(file)).size,
     onProgress,
     signal,
-  });
+    assertCurrent: scope.assertCurrent,
+  }));
   // Record the upload before the checkpoint so a cancelled copy still deletes it.
   const keysFile = path.join(artifacts, 'transfer-keys.json');
   const keys = JSON.parse(readAtomicFileSync(keysFile) ?? '[]') as string[];

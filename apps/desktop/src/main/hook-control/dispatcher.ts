@@ -50,6 +50,8 @@ import {
   makeTurnReopen,
   HOOK_FEATURE_TELEGRAM_CARD_OPS,
   HOOK_FEATURE_TELEGRAM_COMMANDS,
+  HOOK_FEATURE_FEISHU_FINAL_OPS,
+  HOOK_FEATURE_FEISHU_PROGRESS_OPS,
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
@@ -76,7 +78,11 @@ import {
   CHANNEL_HISTORY_ENTRY_MAX_CHARS,
   CHANNEL_HISTORY_ATTACHMENT_TEXT_MAX_CHARS,
 } from '@cindy/slack-hook-protocol';
-import { createTelegramMessageLifecycle, type TelegramMessageLifecycle } from '@cindy/im';
+import {
+  createTelegramMessageLifecycle,
+  type StreamingProcessRecord,
+  type TelegramMessageLifecycle,
+} from '@cindy/im';
 import type { SendOrigin } from '@cindy/maker-core';
 import type { ChannelTurnSource } from '../maker-ipc/channelTurnSignal.js';
 import type { AutoReviewQuotedMessage } from '@cindy/maker-shared/auto-review-intent';
@@ -85,11 +91,13 @@ import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
 import { hookReplyTarget } from '../im/shared/autoReviewReferences.js';
-import { QUOTA_FAILURE_NOTICE_PREFIX } from '../im/shared/turnRetryNotice.js';
+import { quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
+import { imText } from '../im/shared/imText.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
 import { createAckReactions, type AckReactionTask } from './ackReactions.js';
 import { createMsgOpResultRouter, isTelegramTurnOpId } from './telegramMsgOp.js';
+import { createOfficialFeishuTurnCarrier } from './feishuTurnCarrier.js';
 import {
   createOfficialTelegramTurnCarrier,
   isClientFinalEligible,
@@ -187,6 +195,12 @@ export interface HookContinuationWatchRequest {
 export interface HookRunRequest {
   /** Host-resolved companion channel lane; never accepted from the wire. */
   companionBotId?: string;
+  /**
+   * 取消探针(dispatcher 侧 task.cancel 账本):runner 在回收/重建等长窗口后、
+   * 发送前查询 —— 喊停若落在窗口内, 中止信号对旧实例无目标、对新实例未登记,
+   * 只有这个账本能告诉 runner「用户已喊停」。未注入 = 无取消通道。
+   */
+  isCancelRequested?: () => boolean;
   /** Untruncated user body for persistence; source.userText is only a bounded display preview. */
   userText?: string;
   /** Local display snapshot; not part of the server wire protocol. */
@@ -303,6 +317,11 @@ export interface HookRunOutcome {
   attachments?: TaskAttachment[];
   /** 已分块转传到 X 的媒体, 随 turn.end 回传。 */
   xMediaIds?: string[];
+  /**
+   * 这一轮的过程记录(成功轮次才有)。只交给本端排版的终稿载体(官方飞书把它折叠在答案
+   * 上方), 不进 turn.end, 也不落持久出箱。
+   */
+  process?: StreamingProcessRecord;
 }
 
 /** 为新会话预建独立 worktree 的结果(成功时调用方必须用返回的 sessionId 建会话)。 */
@@ -508,7 +527,7 @@ export const HOOK_ROUTE_UNAVAILABLE_PREFIX = 'hook session route unavailable:';
 function hookFailureReasonForLog(errorMessage: string | null | undefined): string {
   const message = errorMessage ?? '';
   // 额度说明里带供应商名与上游原文, 日志只记类别。
-  if (message.startsWith(QUOTA_FAILURE_NOTICE_PREFIX)) return 'provider-quota-exhausted';
+  if (message.startsWith(quotaFailureNoticePrefix())) return 'provider-quota-exhausted';
   if (!message.startsWith(HOOK_ROUTE_UNAVAILABLE_PREFIX)) return 'unclassified';
   return message.replace(/\s+/g, ' ').slice(0, 300);
 }
@@ -997,6 +1016,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     requestId: string,
     externalKey: string,
     accountGeneration: number,
+    channel: 'telegram' | 'feishu' = 'telegram',
   ): {
     update(markdown: string): void;
     /** 不由本端发布终稿时的收口: 冲刷最后一帧进度后停下(wire 上先于 turn.end)。 */
@@ -1016,17 +1036,29 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     let carrier: OfficialTelegramTurnCarrier | null = null;
     let progressLost = false;
     let stopped = false;
+    // 官方飞书 / Lark 走同一套协商与收口, 只是能力名和排版实现不同(个人飞书 bot 的
+    // 卡片排版, 见 feishuTurnCarrier.ts)。
+    const progressFeature =
+      channel === 'feishu' ? HOOK_FEATURE_FEISHU_PROGRESS_OPS : HOOK_FEATURE_TELEGRAM_PROGRESS_OPS;
+    const finalFeature =
+      channel === 'feishu' ? HOOK_FEATURE_FEISHU_FINAL_OPS : HOOK_FEATURE_TELEGRAM_FINAL_OPS;
     const ensureCarrier = (): OfficialTelegramTurnCarrier => {
       if (!carrier) {
-        carrier = createOfficialTelegramTurnCarrier({
+        const common = {
           connectionId,
           requestId,
           externalKey,
-          directMessage: deriveLaneKind(externalKey) === 'dm',
           getSend: () => sendForGeneration(connectionId, accountGeneration),
           router: telegramOpRouter,
           log,
-        });
+        };
+        carrier =
+          channel === 'feishu'
+            ? createOfficialFeishuTurnCarrier(common)
+            : createOfficialTelegramTurnCarrier({
+                ...common,
+                directMessage: deriveLaneKind(externalKey) === 'dm',
+              });
         activeTurnCarriers.add(carrier);
       }
       return carrier;
@@ -1038,7 +1070,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     return {
       update(markdown) {
         if (stopped || progressLost) return;
-        const negotiated = telegramOpsNegotiated(connectionId, HOOK_FEATURE_TELEGRAM_PROGRESS_OPS);
+        const negotiated = telegramOpsNegotiated(connectionId, progressFeature);
         if (negotiated === undefined) return;
         if (!negotiated) {
           // 已经由本端建过进度消息: 新节点不认这份能力, 本轮进度到此为止(旧节点自己渲染)。
@@ -1054,7 +1086,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       async publishFinal(input, beforePublish) {
         if (stopped) return null;
         const negotiated =
-          telegramOpsNegotiated(connectionId, HOOK_FEATURE_TELEGRAM_FINAL_OPS) === true;
+          telegramOpsNegotiated(connectionId, finalFeature) === true;
         if (!negotiated || !isClientFinalEligible(input)) {
           carrier?.finish();
           stop();
@@ -1891,6 +1923,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       task.requestId,
       task.run.source,
     );
+    // 官方 Telegram 与官方飞书 / Lark 的进度与成功终稿由本端排版(各自协商后才生效)。
     const turnCarrier = messageLifecycle
       ? telegramTurnCarrier(
           task.connectionId,
@@ -1898,7 +1931,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           task.externalKey,
           task.accountGeneration,
         )
-      : null;
+      : task.run.source?.im === 'feishu'
+        ? telegramTurnCarrier(
+            task.connectionId,
+            task.requestId,
+            task.externalKey,
+            task.accountGeneration,
+            'feishu',
+          )
+        : null;
 
     // 进度快照直发不缓存: 断线期间的中间帧没有补发价值(turn.end 会带最终
     // 结果), 发送失败静默丢弃即可。协商了客户端进度时 turn.progress 仍照发
@@ -1973,8 +2014,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       outcome = {
         status: 'error',
         finalText: '',
-        errorMessage:
-          '这个任务所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
+        errorMessage: imText('imBot.text.hook.dispatch.dirUnmapped'),
         durationMs: 0,
       };
     } else {
@@ -1982,6 +2022,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         outcome = await runner.run({
           ...task.run,
           ...xVideoRelayOption(task, runningEntry),
+          // 取消探针:runner 在回收/重建窗口后发送前查询,喊停不落进新进程执行。
+          isCancelRequested: () => cancelRequested.has(requestKey),
           onTurnTerminal: () => { runningEntry.observing = false; },
           onProgress,
           ...(task.run.source?.im === 'telegram' ? {
@@ -2090,7 +2132,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 发布前先把不带 clientFinal 的 turn.end 写进持久出箱: 中途崩溃时重启重放的是
       // 「交回服务端」那一版, 服务端删掉已落地的客户端终稿段并自己发布, 终稿必达不降级。
       const clientFinal = await turnCarrier.publishFinal(
-        { status, finalText: turnEnd.finalText, attachments: turnEnd.attachments },
+        {
+          status,
+          finalText: turnEnd.finalText,
+          attachments: turnEnd.attachments,
+          ...(outcome.process ? { process: outcome.process } : {}),
+        },
         () => {
           persistedBeforePublish = persistTerminal({
             ...terminalRecord,
@@ -2335,9 +2382,16 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         .some((root) => isPathWithin(root, dir));
     const workspaceAliasFor = (dir: string): { workspaceAlias?: string } => {
       if (inDialogueRoot(dir)) return { workspaceAlias: HOOK_CHAT_WORKSPACE_ALIAS };
-      const alias = Object.entries(getConnection(connectionId)?.workspaces ?? config.workspaces)
+      const connection = getConnection(connectionId) ?? config;
+      // 同一个目录可能同时有现用名称和改名前的旧名称: 偏好按现用名称存, 所以现用的优先。
+      const retiredNames = new Set(connection.retiredWorkspaceNames ?? []);
+      const alias = Object.entries(connection.workspaces)
         .filter(([, root]) => isPathWithin(root, dir))
-        .sort(([, left], [, right]) => path.resolve(right).length - path.resolve(left).length)[0]?.[0];
+        .sort(
+          ([leftName, left], [rightName, right]) =>
+            path.resolve(right).length - path.resolve(left).length ||
+            Number(retiredNames.has(leftName)) - Number(retiredNames.has(rightName)),
+        )[0]?.[0];
       return alias !== undefined ? { workspaceAlias: alias } : {};
     };
     // 显式接管的目标失效时会从旧目录 / 本次别名提示里挑一个安全落点, 然后
@@ -2486,6 +2540,33 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         : undefined;
     if (!dir && !isChat) return { reject: 'unknown_workspace' };
 
+    /**
+     * 目录是否就在这次要去的项目里(「对话」按对话根判)。
+     *
+     * 只判「仍在清单内」不够: 清单里有 A、B 两个项目时, 用户在 IM 里把这条会话从 A 切到 B,
+     * 服务端带着同一个 externalKey 派发过来, 绑定着的旧任务还在 A 里、也还在清单内, 于是
+     * 新消息照旧进了 A 的旧任务 —— 而机器人刚回过「已切换到 B, 之后的任务在这里执行」。
+     * 所以复用要求任务所在的项目就是这次点名的项目; 对不上按「移出」处理, 静默换新任务。
+     * 同一个项目里换目录(子目录、任务自己的 worktree)仍然无感跟随。
+     * 每次按当前清单现算(理由同 inWhitelistNow), 改名前的旧名称与现用名称指向同一个目录,
+     * 按目录比较所以不受改名影响。
+     */
+    const sameDirectory = (left: string, right: string): boolean => {
+      const normalize = (value: string): string => {
+        const resolved = path.resolve(value);
+        return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+      };
+      return normalize(left) === normalize(right);
+    };
+    const inRequestedProject = (target: string | null): boolean => {
+      if (target === null) return false;
+      if (isChat) return inDialogueRoot(target);
+      if (dir === undefined) return false;
+      const root = Object.values(getConnection(connectionId)?.workspaces ?? config.workspaces)
+        .filter((candidate) => isPathWithin(candidate, target))
+        .sort((left, right) => path.resolve(right).length - path.resolve(left).length)[0];
+      return root !== undefined && sameDirectory(root, dir);
+    };
     const legacyBound =
       namespacedBound === null && legacyNamespace !== null
         ? bindings.get(legacyNamespace, payload.externalKey)
@@ -2522,8 +2603,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const pendingDir = awaitingPersist.get(bound) ?? null;
       // 同下方的 inAllowedRoot: 用当前映射而不是入口快照 —— inspect 期间用户可能
       // 刚把这个目录加回来(PR #733 review 指出)。
-      const pendingStillAllowed =
-        pendingDir !== null && (isChat ? inDialogueRoot(pendingDir) : inWhitelistNow(pendingDir));
+      const pendingStillAllowed = inRequestedProject(pendingDir);
       /**
        * 关键竞态防护: 绑定的 session 是本 dispatcher 刚建、**尚未落库**的
        * (inspect 查不到)且正在跑/排队时直接复用 —— 否则同 key 的后续消息会各开
@@ -2569,9 +2649,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // chat 伪目录的会话住在 dialogues 根下, 按对话根校验
       // 用 inWhitelistNow 而不是入口快照: 见其定义处 —— inspect 期间映射可能刚
       // 被改回来, 拿旧快照判撤权会误杀一条此刻合法的绑定。
-      const inAllowedRoot =
-        info !== null &&
-        (isChat ? inDialogueRoot(info.workingDir) : inWhitelistNow(info.workingDir));
+      const inAllowedRoot = info !== null && inRequestedProject(info.workingDir);
       const usable = info?.usable === true && info.workingDir !== null;
       /**
        * 复用与否只看这一条: 会话当前的工作目录仍落在工作目录映射(或内置对话根)
@@ -2618,7 +2696,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       }
       log.info(
         `hook binding for ${payload.externalKey} dropped: session ${bound} ${
-          info?.usable ? 'left the workspace map' : 'is gone or archived'
+          info?.usable ? 'is not in the requested project' : 'is gone or archived'
         }`,
       );
     }
@@ -2709,7 +2787,13 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         effort,
         permissionMode,
         ...(isChat ? { workspaceKind: 'dialogue' as const } : {}),
-        ...(effectiveWorkspace ? { workspaceAlias: effectiveWorkspace } : {}),
+        // 偏好按项目现在的名称存。服务端可能还带着改名前的旧名称来派发(它按名称记会话
+        // 选的项目), 所以这里按目录找回现用名称, 找不到才用带来的那个。
+        ...(isChat || dir === undefined
+          ? effectiveWorkspace
+            ? { workspaceAlias: effectiveWorkspace }
+            : {}
+          : { workspaceAlias: workspaceAliasFor(dir).workspaceAlias ?? (effectiveWorkspace as string) }),
         title: buildHookSessionTitle(
           providerName,
           titleText,

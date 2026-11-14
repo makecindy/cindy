@@ -20,11 +20,14 @@ export interface AppUpdateCallbacks {
   setAutoUpdate?(caller: AppUpdateCaller, enabled: boolean): Promise<HostResult>;
 }
 
-function hostPayload(result: HostResult) {
+const updateGuidance = '向用户说明返回的状态和原因。没有可安装的更新或不支持安装时，不要自行下载替换应用；工具不可用时，引导用户在运行 Cindy 的电脑上打开设置中的“检查更新”。';
+
+function hostPayload(result: HostResult, guidance?: string) {
+  const extra = guidance ? { guidance } : {};
   if (result.ok === false && typeof result.errorCode === 'string') {
-    return errorPayload(result.errorCode, typeof result.message === 'string' ? result.message : result.errorCode);
+    return errorPayload(result.errorCode, typeof result.message === 'string' ? result.message : result.errorCode, extra);
   }
-  return okPayload(result);
+  return okPayload({ ...result, ...extra });
 }
 
 export function registerAppUpdateTools(
@@ -47,15 +50,15 @@ export function registerAppUpdateTools(
   registry.register({
     name: 'check_app_update',
     category: 'app_update',
-    description: `仅读取当前渠道更新版本信息，检查当前运行的 ${BRAND_NAME} 是否有可通过应用内更新器安装的新版本，不会下载、安装或重启应用。用户要更新时调用 install_app_update。结果含 autoUpdateHint=true 时，可顺带提醒一句可以开启空闲时自动安装更新（set_app_auto_update）。不要用 GitHub Release 文件替换正在运行的应用。`,
+    description: `仅读取当前渠道更新版本信息，检查当前运行的 ${BRAND_NAME} 是否有可通过应用内更新器安装的新版本，不会下载、安装或重启应用。用户要更新时调用 install_app_update。没有可安装更新或不支持安装时说明返回原因；安装工具不可用时，引导用户在运行 ${BRAND_NAME} 的电脑上使用设置中的“检查更新”。结果含 autoUpdateHint=true 时，可顺带提醒一句可以开启空闲时自动安装更新（set_app_auto_update）。不要用 GitHub Release 文件替换正在运行的应用。`,
     inputShape: {},
     handler: async () => {
       const resolved = resolveCaller();
       if ('error' in resolved) return resolved.error;
       try {
-        return okPayload(await deps.callbacks.check(resolved.caller));
+        return hostPayload(await deps.callbacks.check(resolved.caller), updateGuidance);
       } catch (cause) {
-        return errorPayload('UPDATE_CHECK_FAILED', String(cause));
+        return errorPayload('UPDATE_CHECK_FAILED', String(cause), { guidance: updateGuidance });
       }
     },
   });
@@ -65,15 +68,15 @@ export function registerAppUpdateTools(
     registry.register({
       name: 'install_app_update',
       category: 'app_update',
-      description: `用户要求更新 ${BRAND_NAME} 时调用。宿主会向用户弹出确认卡（目标版本、会重启、会中断哪些任务），用户确认后才由内置更新器下载、安装并重启；拒绝或超时则不做任何更改。确认由宿主完成，不要先用文字向用户确认。不要用 shell 下载、替换应用或创建重启任务。`,
+      description: `用户要求更新 ${BRAND_NAME} 时调用；check_app_update 仅检查版本。宿主会向用户弹出确认卡（目标版本、会重启、会中断哪些任务），用户确认后才由内置更新器下载、安装并重启；拒绝或超时则不做任何更改。确认由宿主完成，不要先用文字向用户确认。没有可安装更新或不支持安装时说明返回原因；工具不可用时，引导用户在运行 ${BRAND_NAME} 的电脑上使用设置中的“检查更新”。除非用户明确要求其他方式，否则不要用 shell 下载或替换应用，也不要终止或重启应用来更新；绝不要注册持久重启任务（如 launchctl submit）。`,
       inputShape: {},
       handler: async () => {
         const resolved = resolveCaller();
         if ('error' in resolved) return resolved.error;
         try {
-          return hostPayload(await install(resolved.caller));
+          return hostPayload(await install(resolved.caller), updateGuidance);
         } catch (cause) {
-          return errorPayload('UPDATE_INSTALL_FAILED', String(cause));
+          return errorPayload('UPDATE_INSTALL_FAILED', String(cause), { guidance: updateGuidance });
         }
       },
     });
