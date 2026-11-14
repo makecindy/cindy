@@ -19,7 +19,7 @@ describe('Orca auto-bridge batch trust-boundary wiring', () => {
 
   it('stamps autoBridge only at the host auto-bridge entry', () => {
     expect(register).toMatch(
-      /sendAutoBridgeToLead:[\s\S]*?autoBridge:\s*true[\s\S]*?return \{ accepted: result\.ok \};/,
+      /sendAutoBridgeToLead:[\s\S]*?autoBridge:\s*true[\s\S]*?return \{ accepted: result\.ok, \.\.\.\(!result\.ok && result\.reportRejected \? \{ reportRejected: true as const \} : \{\}\) \};/,
     );
     // 唯一盖章点：register 里 `autoBridge: true` 只允许出现一次，防止别的入口偷偷加盖。
     expect(register.match(/autoBridge:\s*true/g)).toHaveLength(1);

@@ -81,8 +81,23 @@ export function canRetrySharedTaskRecovery(error: unknown): boolean {
   return ['timeout', 'relay'].includes(sharedTaskFailureReason(error));
 }
 
-/** Recovery is bounded to one retry of an idempotent probe, never open/send/allocate. */
+/** Only an unaccepted report's preparation may be repeated. An allocation or
+ * authorization timeout is not proof that the grant write did not happen. */
+export function canRecoverUndeliveredOrcaReport(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  const stage = /\[SHARED_TASK_STAGE_([a-z]+)\]/.exec(message)?.[1];
+  const reason = sharedTaskFailureReason(error);
+  // Executor/capability failures may follow a committed allocation. Recover
+  // those probes in place below, not by replaying the whole startup pipeline.
+  if (stage && stage !== 'owner') return false;
+  return ['offline', 'relay'].includes(reason)
+    || (!!stage && reason === 'timeout');
+}
+
+/** Retry only the same idempotent probe, keeping its grant and cancellation fence.
+ * The immediate retry preserves the fast path; later retries allow a brief reconnect. */
 export async function probeSharedTask<T>(stage: SharedTaskRecoveryStage, probe: () => Promise<T>, assertCurrent: () => void): Promise<T> {
+  const delays = [0, 1_000, 3_000];
   for (let attempt = 0; ; attempt++) {
     assertCurrent();
     try {
@@ -91,7 +106,10 @@ export async function probeSharedTask<T>(stage: SharedTaskRecoveryStage, probe: 
       return value;
     } catch (error) {
       assertCurrent();
-      if (attempt === 0 && canRetrySharedTaskRecovery(error)) continue;
+      if (attempt < delays.length && canRetrySharedTaskRecovery(error)) {
+        if (delays[attempt]) await new Promise<void>(resolve => setTimeout(resolve, delays[attempt]));
+        continue;
+      }
       throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);
     }
   }

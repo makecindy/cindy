@@ -1081,7 +1081,14 @@ for (const invalidation of ['owner', 'turn', 'app-context']) {
         if (!valid) throw new Error('APP_CONTEXT_REVOKED');
       }, consume() { consumed++; } };
     } });
-    t.after(() => h.queue.dispose());
+    t.after(async () => {
+      // The intentionally invalidated owner must also fence teardown writes;
+      // do not restore its authority or hide any unrelated persistence error.
+      if (invalidation === 'owner') await assert.rejects(h.queue.dispose(), error =>
+        error instanceof AggregateError && error.errors.length > 0 && error.errors.every(cause =>
+          cause instanceof Error && cause.message === 'input runtime owner changed'));
+      else await h.queue.dispose();
+    });
     await enqueue(h, 'steer-race', { clientId: 'first', text: 'start' });
     const session = h.maker.getSession('steer-race');
     preparing = true;

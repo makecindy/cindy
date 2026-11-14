@@ -7,6 +7,7 @@ import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQu
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
+import { prepareRestoredOrcaReportAcceptance } from '../maker-host/index.js';
 import { createTaskRuntimePlugins } from './runtimePlugins.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 import { readRuntimePluginSettings, writeRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
@@ -16,6 +17,7 @@ import { assembleSystemPromptSections, TASK_SYSTEM_PROMPT } from '@cindy/maker-c
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
+import { canRecoverUndeliveredOrcaReport } from '../../shared/sharedTaskRecovery.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
 import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
@@ -479,9 +481,10 @@ import { statWorkingDirectory, mkdirWorkingDirectory, realpathWorkingDirectory, 
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence as awaitQueuedSnapshotWrite,
-  loadAgentInputQueueSnapshot,
+  loadAgentInputQueueSnapshotState,
   getPersistedInputClientIds,
   loadAgentInputQueueSnapshotCounts,
+  listQueuedOrcaReportSessionIds,
   saveAgentInputQueueSnapshot,
   saveCancelledInputDelivery,
   readInputDeliveryReceipts,
@@ -963,7 +966,7 @@ import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindCo
 import { normalizeSessionContextWindowBoundsRoute } from '../../shared/sessionContextWindowBounds.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { readSessionBackgroundTaskOutputTail } from '../background-task-output/reader.js';
-import { AgentInputCoordinator, markManualSchedulerContinuation } from './agent-input-coordinator.desktop.js';
+import { AgentInputCoordinator, markManualSchedulerContinuation, SESSION_REWIND_INPUT_LOCK_ID } from './agent-input-coordinator.desktop.js';
 import { createAutomaticContinueEligibility, isActiveCompanionFailoverSession } from './automaticContinueEligibility.js';
 import { bindSilentStopContinuationGeneration } from './silentStopContinuationBinding.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
@@ -1905,8 +1908,11 @@ async function restoreSavedUsageLimitWait(sessionId: string): Promise<void> {
   const scope = activeOwnerScopeKey();
   const generation = coordinator.getGeneration(sessionId);
   const valid = await isSavedUsageLimitWaitValid(record) && await isUsageLimitAutoResumeEligible(sessionId);
-  if (scope !== activeOwnerScopeKey() || usageLimitRecoverySuspended) return;
+  if (scope !== activeOwnerScopeKey() || usageLimitRecoverySuspended || savedUsageLimitWaits.has(sessionId)) return;
   if (!valid) { await usageLimitRecoveryStore.take(sessionId, record.id); return; }
+  // A Stop or a newer wait may have replaced the durable owner while the
+  // validation awaited. Resume cannot make a cancelled record current again.
+  if (!usageLimitRecoveryStore.readAll().some(wait => wait.sessionId === sessionId && wait.id === record.id)) return;
   const pending = { token: 0, record };
   savedUsageLimitWaits.set(sessionId, pending);
   const token = coordinator.restoreUsageLimitRecovery(sessionId, record, generation);
@@ -3233,11 +3239,20 @@ function companionFailureCode(code: string): CompanionCloudFailureCode {
 export async function restoreOrcaRemoteWorkersForCurrentOwner(): Promise<void> {
   const remote = orcaRemoteWorkersForHost;
   if (!remote || !tryGetDbClient()) return;
+  const owner = activeOwnerScopeKey();
   await remote.start().catch((err) =>
     log.warn('orca remote workers: restore failed', {
       err: err instanceof Error ? err.message : String(err),
     }),
   );
+  try {
+    for (const sessionId of await listQueuedOrcaReportSessionIds()) {
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return;
+      await agentInputCoordinatorHolder?.ensureQueueRestored(sessionId);
+    }
+  } catch {
+    log.warn('orca report queue restore deferred');
+  }
 }
 
 /** 账号边界：停掉上一账号远端 Worker 的轮询与补发，避免写进下一个账号的数据库。 */
@@ -3250,6 +3265,14 @@ export function captureRemoteWorkerReportSettlement(
 ): () => Promise<void> {
   return orcaRemoteWorkersForHost?.captureReportSettlement(sessionId, reportedInputClientIds)
     ?? (async () => {});
+}
+
+export function deliverRemoteWorkerReport<T>(
+  sessionId: string, inputClientIds: readonly string[], send: (clientId: string, onRejected: () => void) => Promise<T>,
+  isAccepted: (result: T) => boolean,
+): Promise<T> {
+  if (!orcaRemoteWorkersForHost) throw new Error('remote worker runtime unavailable');
+  return orcaRemoteWorkersForHost.runReportDelivery(sessionId, inputClientIds, send, isAccepted);
 }
 
 function markWorkerManualInterruptIfKnown(
@@ -4730,7 +4753,6 @@ export function stopActiveGoalTurnForClear(sessionId: string): void {
 }
 
 const rewindInputSessions = new Set<string>();
-const SESSION_REWIND_INPUT_LOCK_ID = 'session-rewind';
 const SESSION_REWIND_STOP_TIMEOUT_MS = 15_000;
 let pendingCredentialSwitchHolder: PendingCredentialSwitchService | null = null;
 function settlePendingCredentialSwitch(sessionId: string, source: string): void {
@@ -15694,6 +15716,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const orcaInterAgentDispatcher: OrcaInterAgentDispatcher = createOrcaInterAgentDispatcher({
+    prepareRestoredReportAcceptance: prepareRestoredOrcaReportAcceptance,
     onDirectInputDispatched: sessionId => touchSessionActivityInDb(sessionId),
     readAutoReviewHistory: sessionId => readAutoReviewHistory(sessionId),
     createId,
@@ -15744,7 +15767,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasPendingAgentSwitch: (sessionId) => !!agentSwitchPending.get(sessionId),
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
-    shouldQueueNewTurn: (sessionId): boolean => inputCoordinator.shouldQueueNewTurn(sessionId),
+    shouldQueueNewTurn: (sessionId, orcaReport): boolean => inputCoordinator.shouldQueueNewTurn(sessionId, orcaReport),
     steerControlInput: (sessionId, item, expectedTurn) =>
       inputCoordinator.steerControlInput(sessionId, { item }, expectedTurn),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
@@ -15758,13 +15781,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await hydrateActiveOrcaSession(sessionId, createOpts as CreateOpts);
     },
     buildCreateOptsForQueuedSession,
-    enqueueQueuedMessage: (sessionId, item) => {
+    enqueueQueuedMessage: async (sessionId, item, onQueueOwned) => {
       // 先 await 恢复再 enqueue:确保恢复的排队 prompt 在新消息之前,且恢复后
       // 队列处于 paused 态不会被新消息的 getDrainableHead 立刻 drain。
-      void (async () => {
-        await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
-        inputCoordinator.enqueue(sessionId, item);
-      })();
+      const owner = activeOwnerScopeKey();
+      const current = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
+      await inputCoordinator.ensureQueueRestored(sessionId);
+      if (!current()) throw new Error('Orca input owner changed');
+      if (item.orcaReportDelivery) await inputCoordinator.enqueueDurably(sessionId, item, current, onQueueOwned);
+      else inputCoordinator.enqueue(sessionId, item);
     },
     reserveNextQueuedMessage: async (sessionId, item, onReserved, beforeReserve) => {
       await inputCoordinator.ensureQueueRestored(sessionId);
@@ -16546,9 +16571,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ...orcaQueueHostDeps,
     steerStoredQueuedMessage: steerStoredControlMessage,
     moveQueuedMessage: moveStoredControlMessage,
-    sendAutoBridgeToLead: async (leadSessionId, message, workerId) => {
+    sendAutoBridgeToLead: async (leadSessionId, message, workerId, _report, reportClientId) => {
       const result = await dispatchInterAgentMessage({
         targetSessionId: leadSessionId,
+        ...(reportClientId ? { reportClientId } : {}),
         rawContent: message,
         source: 'worker',
         senderLabel: 'Worker',
@@ -16559,7 +16585,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           context: `worker_auto_bridge/${leadSessionId}/${workerId}`,
         },
       });
-      return { accepted: result.ok };
+      return { accepted: result.ok, ...(!result.ok && result.reportRejected ? { reportRejected: true as const } : {}) };
     },
     log,
   }));
@@ -19152,8 +19178,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // The fallback transaction still rechecks the authoritative Bot link and chain.
   const botFallbackInputs = new WeakSet<object>();
   const canRecoverTurn = (signals: InterruptedTurnErrorSignals, item?: AgentInputQueuedMessage | null) =>
-    isInterruptedTurnError(signals) ||
-    (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
+    signals.reason === 'orca-report-preparation'
+      ? !!item?.orcaReportDelivery && item.origin?.kind === 'orca' && canRecoverUndeliveredOrcaReport(signals.message)
+      : isInterruptedTurnError(signals) ||
+        (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
 
   const sendToAgentAccepted: typeof sendToAgentAcceptedUnlocked = async (...args) => {
     const [sessionId] = args;
@@ -20299,7 +20327,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
       const botInput = botFallbackInputs.has(item.createOpts);
       const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
-      const sameRouteRetryable = isInterruptedTurnError(signals);
+      const reportPreparation = signals.reason === 'orca-report-preparation';
+      const sameRouteRetryable = reportPreparation || isInterruptedTurnError(signals);
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
       if (decision.action !== 'resume') {
@@ -20376,6 +20405,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),
               // autoRetryLastError 内部复核后会 no-op 并返回非 resumed —— 此时必须回滚
               // pendingResume。
+              // A queue-head retry keeps its original input ID and has no
+              // replacement turn to release the guard. Retain the attempt budget.
+              if (reportPreparation) interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
               const outcome = await inputCoordinator.autoRetryLastError(
                 sessionId,
                 decision.attemptToken,
@@ -20568,7 +20600,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       schedulerQueuedPromptPreparations.delete(item.clientId);
       // 返回 promise 让 coordinator 在 onPersisted 链路里 await —— worker 运行态与
       // pending auto-bridge 副作用必须先于 turn 启动完成；失败仍吞错落日志，不拦派发。
-      await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item);
+      await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item, restoredFromSnapshot);
       const pluginTaskSession = maker.getSession(sessionId);
       if (pluginTaskSession && pluginTaskServiceForCurrentOwner) {
         await pluginTaskServiceForCurrentOwner().accept(sessionId, item, { instanceId: pluginTaskSession.instanceId, generation: pluginTaskSession.getTurnGeneration() });
@@ -20751,11 +20783,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     describeQueueBehindDispatch: (_sessionId, item, pendingQueue) =>
       buildOrcaQueueDispatchNote(item, pendingQueue),
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
-    onDiscardedQueuedMessage: (sessionId, item) => {
+    onDiscardedQueuedMessage: (sessionId, item, opts) => {
       void settleTaskActionInput(item).catch(() => undefined);
       notePluginTaskLifecycle(service => service.discard(sessionId, item, 'cancelled'));
-      if (item.durableDelivery === true) {
-        void saveCancelledInputDelivery(sessionId, item.clientId).catch((error) => {
+      if (item.durableDelivery === true && !opts?.mergedInto && !opts?.admissionFailed) {
+        const clientIds = new Set([item.clientId, ...(item.mergedDeliveryClientIds ?? [])]);
+        for (const clientId of clientIds) void saveCancelledInputDelivery(sessionId, clientId).catch((error) => {
           log.warn('input delivery cancellation persistence failed', { sessionId, error: String(error) });
         });
       }
@@ -20878,12 +20911,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 排队输入崩溃恢复(issue #761):快照写入 fire-and-forget(模块内 per-session
     // 写链保序 + 失败落日志),读回由 ensureQueueRestored 懒触发。恢复前先严格
     // 水合 durable /clear 边界，所有入口共用，避免仅 projection 路径安全。
-    persistQueueSnapshot: (sessionId, items) => saveAgentInputQueueSnapshot(sessionId, items),
+    persistQueueSnapshot: (sessionId, items, stopped) => saveAgentInputQueueSnapshot(sessionId, items, stopped),
+    awaitQueuePersistence: awaitAgentInputQueueSnapshotPersistence,
+    canRestoreOrcaReport: async (sessionId, item) => {
+      const owner = activeOwnerScopeKey();
+      if (!owner || isAppSessionBoundaryPending() || !item.orcaReportDelivery || item.origin?.kind !== 'orca') return false;
+      const workers = await listWorkersByLead(sessionId);
+      const evidence = item.orcaReportDelivery.members ?? [{ clientId: item.clientId,
+        workerId: item.orcaReportDelivery.workerId, senderSessionId: item.origin.senderSessionId }];
+      if (!Array.isArray(evidence) || evidence.length === 0 || evidence.length > 8
+        || evidence.length !== (item.origin.autoBridgeBatchCount ?? 1)
+        || new Set(evidence.map(member => member?.clientId)).size !== evidence.length
+        || evidence[0]?.clientId !== item.clientId || evidence[0]?.workerId !== item.orcaReportDelivery.workerId
+        || evidence[0]?.senderSessionId !== item.origin.senderSessionId) return false;
+      const row = await getSessionRowSnapshotStrict(sessionId);
+      return owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()
+        && evidence.every(member => member && typeof member.clientId === 'string' && !!member.clientId
+          && typeof member.senderSessionId === 'string' && !!member.senderSessionId
+          && workers.some(worker => worker.id === member.workerId && worker.sessionId === member.senderSessionId))
+        && row?.status === 'active';
+    },
     loadClearBoundary: async (sessionId) =>
       (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
     loadQueueSnapshot: async (sessionId) => {
       await restoreSavedUsageLimitWait(sessionId);
-      return (await loadAgentInputQueueSnapshot(sessionId)).filter(item => !isRetiredGroupWelcomeInput(item));
+      const snapshot = await loadAgentInputQueueSnapshotState(sessionId);
+      return {
+        ...snapshot,
+        items: snapshot.items.filter(item => !isRetiredGroupWelcomeInput(item)),
+      };
     },
     getPersistedClientIds: getPersistedInputClientIds,
   });
@@ -21359,6 +21415,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     delete normalized.sharedTaskAuthor;
     delete normalized.autoReviewUserText;
     delete normalized.botTaskCoordination;
+    delete normalized.orcaReportDelivery;
+    delete normalized.mergedDeliveryClientIds;
     if (normalized.durableDelivery !== true) delete normalized.durableDelivery;
     // Only Main-created welcomes and restored host snapshots may carry this policy.
     delete normalized.toolsDisabled;
@@ -22247,7 +22305,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // pauseGoal 调用同步 detach listener/timer，持久化可以与 vendor abort 并行；真正的
     // turn/interrupt 先启动，IPC 回执再等待 paused 落盘。
     const goalPause = pauseGoalBeforeExplicitStop(sid);
-    const result = inputCoordinator.stop(
+    inputCoordinator.stop(
       sid,
       opts && typeof opts === 'object'
         ? (opts as {
@@ -22263,8 +22321,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!inputCoordinator.hasPendingQueuedWork(sid)) {
       getAgentIslandService()?.notifyQueueEmptied(sid);
     }
-    await Promise.all([goalPause, makeInterrupted]);
-    return result;
+    // Stop must cancel synchronously above, including a cold session. Restore
+    // before writing its latch so an empty in-memory queue cannot erase older
+    // saved inputs; the same restore promise also fences concurrent readers.
+    const savedStop = (async () => {
+      // The loader also restores quota waits. Cancel the exact old record
+      // durably first; a later wait has a different id and must be preserved.
+      const oldWait = usageLimitRecoveryStore.readAllStrict().find(wait => wait.sessionId === sid);
+      if (oldWait) await usageLimitRecoveryStore.take(sid, oldWait.id);
+      await inputCoordinator.ensureQueueRestored(sid);
+      await awaitAgentInputQueueSnapshotPersistence(sid);
+    })();
+    try {
+      await Promise.all([goalPause, makeInterrupted, savedStop]);
+    } catch {
+      throwIpcError('INTERNAL', 'Could not persist stopped task state');
+    }
+    return inputCoordinator.getProjection(sid);
   });
 
   ipcMain.handle(MAKER_INVOKE.INPUT_RESUME, async (_e, sessionId: unknown, opts?: unknown) => {

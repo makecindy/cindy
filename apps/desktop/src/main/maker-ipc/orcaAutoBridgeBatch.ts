@@ -9,6 +9,7 @@ type OrcaQueueOrigin = Extract<NonNullable<AgentInputQueuedMessage['origin']>, {
 export function isOrcaAutoBridgeQueueItem(item: AgentInputQueuedMessage): boolean {
   const origin = item.origin;
   if (!origin || origin.kind !== 'orca' || origin.autoBridge !== true) return false;
+  if (item.orcaReportDelivery?.recoveryBlocked) return false;
   if (!isOrcaCollaborationMessage(item)) return false;
   if (item.files?.length || item.mentions?.length || item.sessionRefs?.length || item.agentReferences?.length) return false;
   return batchCount(origin) > 0;
@@ -31,6 +32,7 @@ export function autoBridgeReportCount(item: AgentInputQueuedMessage): number {
 /** 不跨派发配置合批，避免后到条目的权限/模型/目录被首条静默覆盖；不确定时逐条派发。 */
 export function sameAutoBridgeDispatchOptions(a: AgentInputQueuedMessage, b: AgentInputQueuedMessage): boolean {
   return a.model === b.model && a.effort === b.effort && a.permissionMode === b.permissionMode
+    && Boolean(a.orcaReportDelivery) === Boolean(b.orcaReportDelivery)
     && a.workingDir === b.workingDir
     && JSON.stringify(a.createOpts) === JSON.stringify(b.createOpts)
     && JSON.stringify(a.vendorOptions) === JSON.stringify(b.vendorOptions);
@@ -77,11 +79,23 @@ export function buildOrcaAutoBridgeBatch(
   const modelSections: string[] = [];
   const visibleSections: string[] = [];
   let count = 0;
+  const members: NonNullable<NonNullable<AgentInputQueuedMessage['orcaReportDelivery']>['members']> = [];
   for (const target of targets) {
     if (!isOrcaAutoBridgeQueueItem(target) || target.origin?.kind !== 'orca') return null;
     if (!sameAutoBridgeDispatchOptions(survivor, target)) return null;
     const currentCount = batchCount(target.origin);
     if (currentCount <= 0) return null;
+    if (target.orcaReportDelivery) {
+      const evidence = target.orcaReportDelivery.members ?? [{ clientId: target.clientId,
+        workerId: target.orcaReportDelivery.workerId, senderSessionId: target.origin.senderSessionId }];
+      if (!Array.isArray(evidence) || evidence.length !== currentCount
+        || evidence[0]?.clientId !== target.clientId || evidence[0]?.workerId !== target.orcaReportDelivery.workerId
+        || evidence[0]?.senderSessionId !== target.origin.senderSessionId
+        || evidence.some(member => !member || typeof member.clientId !== 'string' || !member.clientId
+          || typeof member.workerId !== 'string' || !member.workerId
+          || typeof member.senderSessionId !== 'string' || !member.senderSessionId)) return null;
+      members.push(...evidence as typeof members);
+    }
     try {
       const parsed = JSON.parse(target.persistedContent) as unknown;
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
@@ -98,6 +112,7 @@ export function buildOrcaAutoBridgeBatch(
     }
   }
   if (!Number.isSafeInteger(count)) return null;
+  if (new Set(members.map(member => member.clientId)).size !== members.length) return null;
   const survivorOrigin = survivor.origin;
   if (!survivorOrigin || survivorOrigin.kind !== 'orca') return null;
   const displayText = `[Auto-bridged batch: ${count} worker reports]\n\n${modelSections.join(AUTO_BRIDGE_BATCH_SEPARATOR)}`;
@@ -110,6 +125,9 @@ export function buildOrcaAutoBridgeBatch(
   const persistedContent = formatOrcaCommunicationMessage('worker', visibleText);
   return {
     ...survivor,
+    ...(members.length ? { mergedDeliveryClientIds: members.filter(member => member.clientId !== survivor.clientId)
+      .map(member => member.clientId) } : {}),
+    ...(survivor.orcaReportDelivery ? { orcaReportDelivery: { ...survivor.orcaReportDelivery, members } } : {}),
     text: displayText,
     persistedContent,
     chatMessage: { ...survivor.chatMessage, content: persistedContent },

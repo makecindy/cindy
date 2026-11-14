@@ -311,6 +311,15 @@ export interface AgentInputQueuedMessage {
   clientId: string;
   /** Opt-in: a cancelled delivery ID must never become a fresh enqueue on reconnect. */
   durableDelivery?: true;
+  /** Host-owned merged delivery identities survive edits without granting recovery. */
+  mergedDeliveryClientIds?: string[];
+  /** Main-authored Worker report receipt. Kept in snapshots, never accepted from input IPC. */
+  orcaReportDelivery?: {
+    workerId: string;
+    recoveryBlocked?: true;
+    /** Host-coalesced reports retain every delivery and relationship identity. */
+    members?: Array<{ clientId: string; workerId: string; senderSessionId: string }>;
+  };
   text: string;
   /**
    * Host-owned receipt for the first acceptance boundary.  The controlled

@@ -12332,7 +12332,7 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
-  it('replays a partially written large head while an older relay tail is still in flight', async () => {
+  it('records migrated pending paths before replaying a partially written direct head over relay', async () => {
     vi.useFakeTimers();
     const info = vi.fn();
     const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() }, timing: { pingIntervalMs: 1_000_000, transportRetryIntervalMs: 1_000 } });
@@ -12348,6 +12348,7 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       });
       const initial = h.current().sent.slice();
       const initialHead = initial.filter(env => env.id === 'head');
+      const initialTail = initial.filter(env => env.id === 'tail');
       let writes = 0;
       h.client.attachDirectPath('dev-b', {
         send() { if (++writes > TRANSPORT_RETRY_PASS_BUDGET) throw new Error('direct write interrupted'); },
@@ -12374,8 +12375,14 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       // interrupted direct write instead.
       const pathRows = rows.filter(row => row.stage === 'path');
       expect(pathRows[0]).toMatchObject({ reason: 'send-failed' });
-      expect(headOf(pathRows[0])).toEqual(expect.arrayContaining([expect.objectContaining({
-        path: 'direct', sent: true, attempts: expect.any(Number) })]));
+      // After migration the partial head is direct, while the tail has not been
+      // written yet. Assert this before detach resets the pending entries.
+      expect(headOf(pathRows[0])).toEqual([
+        expect.objectContaining({ seq: parseTransportPayload(initialHead[0].payload)?.meta.seq,
+          bytes: expect.any(Number), path: 'direct', sent: true, attempts: expect.any(Number) }),
+        expect.objectContaining({ seq: parseTransportPayload(initialTail[0].payload)?.meta.seq,
+          bytes: expect.any(Number), path: 'unsent', sent: false }),
+      ]);
       const fallbackHead = h.current().sent.slice(initial.length).filter(env => env.id === 'head');
       expect(fallbackHead).toHaveLength(initialHead.length);
       // Reuse the original sequence and every fragment; the receiver can assemble and deduplicate it.

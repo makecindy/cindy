@@ -16,6 +16,8 @@ export interface OverrideSettingsState<T> {
 
 export interface OverrideSettingsFile<T> {
   read(): T;
+  /** Fresh read for durable decisions: only ENOENT counts as absence. */
+  readStrict(): T;
   readState(): OverrideSettingsState<T>;
   writePatch(patch: Partial<T>, options?: { preserveDefaults?: boolean }): void;
   /** 跨进程锁内强制现读盘上 overrides，再合并 patch 并原子替换文件。 */
@@ -110,16 +112,27 @@ export function createOverrideSettingsFile<T>(options: {
     }
   }
 
-  function readState(): OverrideSettingsState<T> {
+  function readState(strict = false): OverrideSettingsState<T> {
     invalidateIfPathChanged();
+    if (strict) {
+      cached = null;
+      cachedFileIdentity = null;
+    }
     if (cached) return toPublicState(cached);
     const file = options.filePath();
     cachedResolvedPath = file;
     let readStatus: CachedState<T>['readStatus'] = 'missing';
     const preserveUnreadableFile = options.preserveUnreadableFile ?? preserveUnreadableFilesByDefault;
     try {
-      if (fs.existsSync(file)) {
-        const stat = fs.statSync(file, { bigint: true });
+      let stat: fs.BigIntStats | null;
+      if (strict) {
+        try { stat = fs.statSync(file, { bigint: true }); }
+        catch (err) {
+          if ((err as { code?: string })?.code !== 'ENOENT') throw err;
+          stat = null;
+        }
+      } else stat = fs.existsSync(file) ? fs.statSync(file, { bigint: true }) : null;
+      if (stat) {
         if (options.maxBytes !== undefined && Number(stat.size) > options.maxBytes) {
           throw new Error(`file exceeds ${options.maxBytes} byte limit`);
         }
@@ -150,6 +163,7 @@ export function createOverrideSettingsFile<T>(options: {
         return toPublicState(cached);
       }
     } catch (err) {
+      if (strict) throw new Error(`${options.label} settings file is unavailable`);
       if (preserveUnreadableFile) readStatus = 'unreadable';
       options.log.warn(`${options.label} settings read failed; falling back to defaults`, {
         ...(options.logReadErrorDetails === false
@@ -348,6 +362,7 @@ export function createOverrideSettingsFile<T>(options: {
 
   return {
     read: () => readState().value,
+    readStrict: () => readState(true).value,
     readState,
     writePatch,
     writePatchAtomic,

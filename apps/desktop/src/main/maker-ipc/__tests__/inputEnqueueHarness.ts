@@ -6,6 +6,7 @@ import { stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin } f
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import { isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import type { SchedulerQueuedPromptRequest } from '../register.js';
+import type { SavedUsageLimitWait } from '../usageLimitRecoveryStore.js';
 
 // Execute the production IPC handler while injecting only its host services.
 // Shared by queue tests and the real scheduler-runner continuation regression.
@@ -18,6 +19,79 @@ const handler = source.slice(handlerStart, handlerEnd).trim().replace(/,$/, '');
 const compiled = transpileModule(`return (${handler});`, {
   compilerOptions: { target: ScriptTarget.ES2022 },
 }).outputText;
+
+const stopStart = source.indexOf('  ipcMain.handle(MAKER_INVOKE.INPUT_STOP,');
+const stopEnd = source.indexOf('  ipcMain.handle(MAKER_INVOKE.INPUT_RESUME,', stopStart);
+if (stopStart < 0 || stopEnd < stopStart) throw new Error('INPUT_STOP handler not found');
+const compiledStop = transpileModule(source.slice(stopStart, stopEnd), {
+  compilerOptions: { target: ScriptTarget.ES2022 },
+}).outputText;
+
+const quotaStart = source.indexOf('async function restoreSavedUsageLimitWait(');
+const quotaEnd = source.indexOf('/** Run after account/DB readiness', quotaStart);
+if (quotaStart < 0 || quotaEnd < quotaStart) throw new Error('Quota restore entry not found');
+const compiledQuotaRestore = transpileModule(`${source.slice(quotaStart, quotaEnd)}\nreturn restoreSavedUsageLimitWait;`, {
+  compilerOptions: { target: ScriptTarget.ES2022 },
+}).outputText;
+
+export function createSavedQuotaRestoreHarness(coordinator: AgentInputCoordinator, options: {
+  readAll: () => SavedUsageLimitWait[];
+  validate: () => Promise<boolean>;
+}) {
+  const bindings = {
+    agentInputCoordinatorHolder: coordinator,
+    usageLimitRecoverySuspended: false,
+    savedUsageLimitWaits: new Map(),
+    app: { isPackaged: true },
+    usageLimitRecoveryStore: { readAll: options.readAll, take: async () => true },
+    activeOwnerScopeKey: () => 'owner',
+    isSavedUsageLimitWaitValid: options.validate,
+    isUsageLimitAutoResumeEligible: async () => true,
+    forgetSavedUsageLimitWait: () => {},
+    usageLimitAutoResume: { restore: () => true },
+  };
+  return new Function(...Object.keys(bindings), compiledQuotaRestore)(...Object.values(bindings)) as
+    (sid: string) => Promise<void>;
+}
+
+export function createInputStopHarness(coordinator: AgentInputCoordinator, options: {
+  remote?: boolean;
+  awaitQueuePersistence?: (sid: string) => Promise<void>;
+  savedQuotaWait?: { id: string; sessionId: string };
+  cancelQuotaWait?: (sid: string, id: string) => Promise<boolean>;
+  quotaReadError?: Error;
+} = {}) {
+  let stop!: (event: object, sid: string, opts?: unknown) => Promise<AgentInputProjection>;
+  const noop = () => undefined;
+  const bindings = {
+    ipcMain: { handle: (_name: string, fn: typeof stop) => { stop = fn; } },
+    MAKER_INVOKE: { INPUT_STOP: 'maker:input:stop' },
+    inputCoordinator: coordinator,
+    requireSessionId: (sid: string) => sid,
+    isDeviceLinkInvoke: () => options.remote ?? true,
+    assertRemoteInputControlBoundary: async () => {},
+    interruptUpstreamMergeTurn: async () => {},
+    reviewRunControl: { noteReviewerStopRequested: noop },
+    notePromptPredictionSessionStopped: noop,
+    getGhostPipeDispatcher: () => ({ cancelSessionCalls: noop }),
+    resetAutomaticRecoveryForExplicitStop: noop,
+    pauseGoalBeforeExplicitStop: async () => {},
+    getAgentIslandService: () => null,
+    awaitAgentInputQueueSnapshotPersistence: options.awaitQueuePersistence ?? (async () => {}),
+    usageLimitRecoveryStore: {
+      readAll: () => options.savedQuotaWait ? [options.savedQuotaWait] : [],
+      readAllStrict: () => {
+        if (options.quotaReadError) throw options.quotaReadError;
+        return options.savedQuotaWait ? [options.savedQuotaWait] : [];
+      },
+      take: options.cancelQuotaWait ?? (async () => true),
+    },
+    throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
+    log: { warn: noop },
+  };
+  new Function(...Object.keys(bindings), compiledStop)(...Object.values(bindings));
+  return (sid: string, opts?: unknown) => stop({}, sid, opts);
+}
 
 export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, options: {
   remote?: boolean;
