@@ -14112,7 +14112,7 @@
       "notGitRepo": "Das aktuelle Verzeichnis ist kein Git-Repository",
       "alreadyInWorktree": "Bereits in einem Worktree; Verschachtelung ist nicht erlaubt",
       "toggleAria": "Worktree-Isolierung verwenden",
-      "chipTooltip": "In einer separaten Kopie des Projekts starten; deine aktuellen Dateien und Änderungen bleiben unberührt"
+      "chipTooltip": "In einer separaten Projektkopie starten, ohne deine aktuellen Dateien, Änderungen oder andere Sitzungen zu beeinflussen"
     },
     "branchChip": {
       "label": "Branch",
@@ -14530,18 +14530,7 @@
       "dialogSessions": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
       "dialogSessions_one": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
       "dialogSessions_other": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
-      "dialogSessions_many": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
-      "help": {
-        "label": "Was ist das?",
-        "title": "Was ist worktree?",
-        "what": "Eine Projektkopie für diese Sitzung, ausgehend vom gewählten Branch. Die Sitzung bearbeitet nur diese Kopie.",
-        "benefitsTitle": "Vorteile",
-        "benefits": "Deine Dateien, noch nicht übernommenen Änderungen und andere laufende Sitzungen bleiben unberührt.",
-        "cautionsTitle": "Gut zu wissen",
-        "changes": "Noch nicht übernommene Änderungen bleiben meist zurück",
-        "dependencies": "Abhängigkeiten müssen in der Kopie eventuell neu installiert werden",
-        "results": "Ergebnisse bleiben in der Kopie; übertrage sie bei Bedarf zurück"
-      }
+      "dialogSessions_many": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter"
     }
   },
   "onboarding": {

@@ -8,9 +8,7 @@ export default {
   notCovered:
     'Real Git and remote devices; switch responses are simulated in memory, no Git executes',
   cases: {
-    'help-menu': { about: 'Worktree explanation from the branch menu' },
-    'help-dialog': { about: 'Non-modal explanation above the changes dialog' },
-    'checkbox-tooltip': { about: 'Shared short explanation on the worktree checkbox' },
+    'checkbox-tooltip': { about: 'Shared one-line worktree benefit' },
     'default-source': { about: 'Worktree without a saved source defaults to origin/main' },
     'sync-off': { about: 'Unchecked worktree still exposes remote branch refresh' },
     restored: { about: 'Restore completion toast' },
@@ -109,74 +107,17 @@ export default {
     }
     if (ui.case === 'checkbox-tooltip') {
       await page.getByTestId('create-agent-worktree-chip').hover();
-      await page.getByRole('tooltip').waitFor();
-      const box = await page.getByRole('tooltip').boundingBox();
+      const tooltip = page.getByRole('tooltip');
+      await tooltip.waitFor();
+      assert.equal(await tooltip.innerText(), await ui.t('newChat.worktree.chipTooltip'));
+      const box = await tooltip.boundingBox();
       assert.ok(
         box.x >= 0 && box.x + box.width <= (await page.evaluate(() => globalThis.innerWidth)),
-      );
-      assert.equal(
-        await page.getByRole('tooltip').innerText(),
-        await ui.t('newChat.worktree.chipTooltip'),
       );
       return;
     }
     await page.getByTestId('create-agent-branch-chip').click();
     await page.getByRole('option', { name: /^feature/ }).waitFor();
-    assert.equal(
-      await page.getByRole('combobox').evaluate((el) => el === globalThis.document.activeElement),
-      true,
-    );
-    if (['help-menu', 'help-dialog'].includes(ui.case)) {
-      if (ui.case === 'help-dialog') {
-        await page.getByRole('option', { name: 'feature', exact: true }).click();
-        await page.getByRole('dialog').waitFor();
-      }
-      const help = page.getByRole('button', {
-        name: await ui.t('newChat.checkout.help.label'),
-        exact: true,
-      });
-      await help.focus();
-      await page.keyboard.press('Enter');
-      const card = page.getByRole('dialog', {
-        name: await ui.t('newChat.checkout.help.title'),
-        exact: true,
-      });
-      await card.waitFor();
-      await page.keyboard.press('Escape');
-      await card.waitFor({ state: 'hidden' });
-      if (ui.case === 'help-dialog') assert.equal(await page.getByRole('dialog').count(), 1);
-      else assert.equal(await page.getByRole('listbox').isVisible(), true);
-      await help.focus();
-      await page.keyboard.press('Enter');
-      await card.waitFor();
-      assert.equal(await card.evaluate((el) => el.scrollWidth <= el.clientWidth), true);
-      assert.equal(
-        await card.evaluate((el) => el.scrollHeight <= el.clientHeight),
-        true,
-        'Help must fit without scrolling',
-      );
-      const box = await card.boundingBox();
-      const trigger = await help.boundingBox();
-      const viewport = await page.evaluate(() => ({
-        width: globalThis.innerWidth,
-        height: globalThis.innerHeight,
-      }));
-      assert.ok(
-        box.x >= 0 &&
-          box.y >= 0 &&
-          box.x + box.width <= viewport.width &&
-          box.y + box.height <= viewport.height,
-        'Help must stay within the window',
-      );
-      assert.ok(
-        box.y + box.height <= trigger.y ||
-          box.y >= trigger.y + trigger.height ||
-          box.x + box.width <= trigger.x ||
-          box.x >= trigger.x + trigger.width,
-        'Help must not cover its trigger',
-      );
-      return;
-    }
     if (ui.case === 'restored') {
       await page
         .getByTestId('checkout-menu-notices')
@@ -280,7 +221,6 @@ export default {
         .waitFor();
       assert.equal(await page.getByRole('listbox').isVisible(), true);
       await page.keyboard.press('Escape');
-      await page.getByTestId('checkout-input').focus();
     } else if (['dirty', 'conflict', 'many-files', 'dirty-idle'].includes(ui.case)) {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
       await page.getByRole('dialog').waitFor();

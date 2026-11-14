@@ -14057,7 +14057,7 @@
       "notGitRepo": "今之目录非 git 仓库",
       "alreadyInWorktree": "已在 worktree 中，禁止嵌套",
       "toggleAria": "启 worktree 隔离",
-      "chipTooltip": "于项目独立副本起事，原有文件与改动不变",
+      "chipTooltip": "于项目独立副本起事，不扰原有文件、改动及其余差事",
       "detectFailed": "环境侦测未成，暂不能用 worktree"
     },
     "branchChip": {
@@ -14470,18 +14470,7 @@
       "dialogSessions": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
       "dialogSessions_one": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
       "dialogSessions_other": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
-      "dialogSessions_many": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
-      "help": {
-        "label": "此为何物？",
-        "title": "worktree 为何物？",
-        "what": "为此差事另备项目副本，自所选分支始，只改此副本。",
-        "benefitsTitle": "其益",
-        "benefits": "原有文件、未提交之改动及其余正行差事皆不受扰。",
-        "cautionsTitle": "所当知",
-        "changes": "未提交之改动通常不随副本而来",
-        "dependencies": "副本所需依赖或须重装",
-        "results": "成果留于副本，有需再合回"
-      }
+      "dialogSessions_many": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行"
     }
   },
   "onboarding": {

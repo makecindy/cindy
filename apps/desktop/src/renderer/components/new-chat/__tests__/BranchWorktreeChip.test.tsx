@@ -1069,44 +1069,51 @@ it('places one busy notice outside the scrollable branch list', async () => {
   expect(option.textContent).toBe('feature');
 });
 
-// Guidance regression: nested help must not dismiss the dirty-changes decision.
-// Unit tier, real popover/dialog and keyboard dismissal; no Git mutation.
-it.each([false, true])(
-  'opens worktree help and closes only that card (inDialog=%s)',
-  async (inDialog) => {
-    setupCheckout(true, inDialog ? { files: ['file.txt'] } : { blocked: 'busy' });
-    let resolveBranches: (value: object) => void = () => {};
-    if (!inDialog) {
-      window.electronAPI.worktreeListBranches = vi.fn().mockReturnValue(
-        new Promise((resolve) => {
-          resolveBranches = resolve;
-        }),
-      );
-    }
+// A late sync-status response must not steal keyboard focus from notice actions.
+// Unit tier, real row and delayed bridge response; covers the two surviving actions.
+it.each(['busy', 'recover'])(
+  'keeps keyboard focus on the %s notice action after refresh',
+  async (kind) => {
+    const checkout = setupCheckout(
+      true,
+      kind === 'busy' ? { blocked: 'busy' } : { stashes: [{ id: 'saved', branch: 'main' }] },
+    );
     render(<CheckoutRow />);
     await waitFor(() => expect(branchButton().textContent).toBe('main'));
-    fireEvent.click(branchButton());
-    if (inDialog) {
-      await screen.findByRole('option', { name: 'feature' });
-      fireEvent.click(screen.getByRole('option', { name: 'feature' }));
-      await screen.findByRole('dialog');
-    }
-    fireEvent.click(await screen.findByRole('button', { name: 'newChat.checkout.help.label' }));
-    const card = await screen.findByRole('dialog', { name: 'newChat.checkout.help.title' });
-    await waitFor(() => expect(card.contains(document.activeElement)).toBe(true));
-    if (!inDialog) {
-      await act(async () => {
-        resolveBranches({ current: 'main', branches: ['main', 'feature'] });
-      });
-      await screen.findByRole('listbox');
-      expect(card.contains(document.activeElement)).toBe(true);
-    }
-    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'newChat.checkout.help.title' })).toBeNull(),
+    await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
+    let resolveStatus: (value: object) => void = () => {};
+    status.mockReturnValue(
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      }),
     );
-    if (inDialog) expect(screen.getByRole('dialog')).toBeTruthy();
-    else expect(screen.getByRole('listbox')).toBeTruthy();
+    fireEvent.click(branchButton());
+    await screen.findByRole('option', { name: 'feature' });
+    await act(async () => {
+      await new Promise(requestAnimationFrame);
+    });
+    const action = screen.getByRole('button', {
+      name: kind === 'busy' ? 'newChat.checkout.useWorktree' : 'newChat.checkout.restore',
+    });
+    act(() => action.focus());
+    await act(async () => {
+      resolveStatus({ ...baseStatus, behind: 1 });
+    });
+    await act(async () => {
+      await new Promise(requestAnimationFrame);
+    });
+    expect(document.activeElement).toBe(action);
+    await act(async () => {
+      fireEvent.click(action);
+    });
+    if (kind === 'busy')
+      expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+    else
+      await waitFor(() =>
+        expect(checkout).toHaveBeenCalledWith(
+          expect.objectContaining({ action: 'restore', stashId: 'saved' }),
+        ),
+      );
   },
 );
 

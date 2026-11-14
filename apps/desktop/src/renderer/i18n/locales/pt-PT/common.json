@@ -14227,7 +14227,7 @@
       "notGitRepo": "O diretório atual não é um repositório git",
       "alreadyInWorktree": "Já se encontra num worktree; não é permitido criar worktrees aninhados",
       "toggleAria": "Utilizar isolamento com worktree",
-      "chipTooltip": "Comece numa cópia separada do projeto, sem alterar os seus ficheiros e alterações atuais"
+      "chipTooltip": "Comece numa cópia separada do projeto sem afetar os seus ficheiros, alterações ou outras sessões"
     },
     "branchChip": {
       "label": "Branch",
@@ -14652,18 +14652,7 @@
       "dialogSessions": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
       "dialogSessions_one": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
       "dialogSessions_other": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
-      "dialogSessions_many": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
-      "help": {
-        "label": "O que é isto?",
-        "title": "O que é worktree?",
-        "what": "Uma cópia do projeto para esta sessão, a partir do ramo escolhido. A sessão só modifica esta cópia.",
-        "benefitsTitle": "Vantagens",
-        "benefits": "Os seus ficheiros, alterações não confirmadas e outras sessões em execução não são afetados.",
-        "cautionsTitle": "A ter em conta",
-        "changes": "As alterações não confirmadas ficam geralmente no original",
-        "dependencies": "Poderá ter de reinstalar as dependências na cópia",
-        "results": "Os resultados ficam na cópia; incorpore-os no original quando precisar"
-      }
+      "dialogSessions_many": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}"
     }
   },
   "onboarding": {

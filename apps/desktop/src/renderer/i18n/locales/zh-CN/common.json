@@ -14058,7 +14058,7 @@
       "notGitRepo": "当前目录不是 git 仓库",
       "alreadyInWorktree": "已在 worktree 中，禁止嵌套",
       "toggleAria": "启用 worktree 隔离",
-      "chipTooltip": "在项目的独立副本里开始，你现在的文件和改动都不动"
+      "chipTooltip": "在项目的独立副本里开始，不影响你现在的文件、改动和其他任务"
     },
     "branchChip": {
       "label": "分支",
@@ -14470,18 +14470,7 @@
       "dialogSessions": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
       "dialogSessions_one": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
       "dialogSessions_other": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
-      "dialogSessions_many": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
-      "help": {
-        "label": "这是什么？",
-        "title": "worktree 是什么？",
-        "what": "给这次任务单独复制一份项目，从你选的分支开始，任务只改这份副本。",
-        "benefitsTitle": "好处",
-        "benefits": "你现在的文件、没提交的改动和其他正在跑的任务都不受影响。",
-        "cautionsTitle": "要注意",
-        "changes": "你还没提交的改动一般不会跟过去",
-        "dependencies": "副本里可能要重新安装依赖",
-        "results": "改完的结果在副本里，需要时再合并回来"
-      }
+      "dialogSessions_many": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续"
     }
   },
   "onboarding": {

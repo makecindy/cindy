@@ -14227,7 +14227,7 @@
       "notGitRepo": "El directorio actual no es un repositorio de git",
       "alreadyInWorktree": "Ya estás dentro de un worktree. No se permite crear otro dentro.",
       "toggleAria": "Usar aislamiento con worktree",
-      "chipTooltip": "Empieza en una copia independiente del proyecto, sin tocar tus archivos ni cambios actuales"
+      "chipTooltip": "Empieza en una copia independiente del proyecto sin afectar tus archivos, cambios ni otras sesiones"
     },
     "branchChip": {
       "label": "Rama",
@@ -14652,18 +14652,7 @@
       "dialogSessions": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
       "dialogSessions_one": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
       "dialogSessions_other": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
-      "dialogSessions_many": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}",
-      "help": {
-        "label": "¿Qué es esto?",
-        "title": "¿Qué es worktree?",
-        "what": "Una copia del proyecto para esta sesión, desde la rama elegida. La sesión solo modifica esta copia.",
-        "benefitsTitle": "Ventajas",
-        "benefits": "Tus archivos, cambios sin confirmar y otras sesiones en curso no se ven afectados.",
-        "cautionsTitle": "Ten en cuenta",
-        "changes": "Los cambios sin confirmar suelen quedarse en el original",
-        "dependencies": "Quizá debas reinstalar las dependencias en la copia",
-        "results": "Los resultados quedan en la copia; incorpóralos al original cuando los necesites"
-      }
+      "dialogSessions_many": "Otras sesiones en este directorio: {{count}}. El trabajo continuará en {{branch}}"
     }
   },
   "onboarding": {

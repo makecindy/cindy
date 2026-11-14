@@ -14057,7 +14057,7 @@
       "notGitRepo": "目前目錄不是 git 儲存庫",
       "alreadyInWorktree": "已在 worktree 中，禁止巢狀",
       "toggleAria": "啟用 worktree 隔離",
-      "chipTooltip": "在專案的獨立副本裡開始，你現在的檔案和變更都不動",
+      "chipTooltip": "在專案的獨立副本裡開始，不影響你現在的檔案、變更和其他任務",
       "detectFailed": "環境偵測失敗，暫時無法使用 worktree"
     },
     "branchChip": {
@@ -14470,18 +14470,7 @@
       "dialogSessions": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
       "dialogSessions_one": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
       "dialogSessions_other": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
-      "dialogSessions_many": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
-      "help": {
-        "label": "這是什麼？",
-        "title": "worktree 是什麼？",
-        "what": "為這次任務單獨複製一份專案，從你選的分支開始，任務只修改這份副本。",
-        "benefitsTitle": "好處",
-        "benefits": "你現在的檔案、尚未提交的變更和其他執行中的任務都不受影響。",
-        "cautionsTitle": "要注意",
-        "changes": "尚未提交的變更通常不會帶過去",
-        "dependencies": "副本裡可能要重新安裝相依套件",
-        "results": "成果留在副本裡，需要時再合併回來"
-      }
+      "dialogSessions_many": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續"
     }
   },
   "onboarding": {

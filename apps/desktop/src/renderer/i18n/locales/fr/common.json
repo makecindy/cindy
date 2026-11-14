@@ -14227,7 +14227,7 @@
       "notGitRepo": "Le répertoire actuel n'est pas un dépôt git",
       "alreadyInWorktree": "Déjà dans un worktree, l'imbrication n'est pas autorisée",
       "toggleAria": "Utiliser l'isolation par worktree",
-      "chipTooltip": "Commencez dans une copie séparée du projet, sans toucher à vos fichiers ni à vos modifications actuels"
+      "chipTooltip": "Commencez dans une copie séparée du projet, sans affecter vos fichiers, vos modifications ni les autres sessions"
     },
     "branchChip": {
       "label": "Branche",
@@ -14652,18 +14652,7 @@
       "dialogSessions": "Autres sessions dans ce répertoire : {{count}}. Le travail continuera sur {{branch}}",
       "dialogSessions_one": "Autres sessions dans ce répertoire : {{count}}. Le travail continuera sur {{branch}}",
       "dialogSessions_other": "Autres sessions dans ce répertoire : {{count}}. Le travail continuera sur {{branch}}",
-      "dialogSessions_many": "Autres sessions dans ce répertoire : {{count}}. Le travail continuera sur {{branch}}",
-      "help": {
-        "label": "Qu’est-ce que c’est ?",
-        "title": "Qu’est-ce que worktree ?",
-        "what": "Une copie du projet pour cette session, depuis la branche choisie. Seule cette copie est modifiée.",
-        "benefitsTitle": "Les avantages",
-        "benefits": "Vos fichiers, modifications non validées et autres sessions en cours restent intacts.",
-        "cautionsTitle": "À savoir",
-        "changes": "Les modifications non validées restent généralement dans l’original",
-        "dependencies": "Les dépendances devront peut-être être réinstallées dans la copie",
-        "results": "Les résultats restent dans la copie ; récupérez-les au besoin"
-      }
+      "dialogSessions_many": "Autres sessions dans ce répertoire : {{count}}. Le travail continuera sur {{branch}}"
     }
   },
   "onboarding": {

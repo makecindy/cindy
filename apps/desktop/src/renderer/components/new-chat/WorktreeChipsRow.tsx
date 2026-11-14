@@ -390,6 +390,12 @@ export function WorktreeChipsRow({
                         })}
                       </p>
                     )}
+                    {canUseWorktree &&
+                      (menuStatus?.blocked === 'busy' || !!menuStatus?.sessions.length) && (
+                        <p className="mt-1 text-muted-foreground">
+                          {t('newChat.worktree.chipTooltip')}
+                        </p>
+                      )}
                   </CheckoutNotice>
                 )}
             </>
@@ -612,21 +618,9 @@ export function BranchWorktreeChip({
   const [activeBranchIndex, setActiveBranchIndex] = useState(0);
   const listboxId = useId();
   const listboxRef = useRef<HTMLDivElement>(null);
-  // Focus only when the search input mounts. Re-renders must not steal focus
-  // from a nested help popover (or its Escape would close the outer menu).
+  // Refreshes must not steal keyboard focus from the menu's existing actions.
   const focusBranchSearch = useCallback((el: HTMLInputElement | null) => {
-    if (!el) return;
-    const menu = el.closest('[role="dialog"]');
-    const focused = document.activeElement;
-    // A slow branch response can mount this input while nested help is open.
-    // Only take focus from this menu or its trigger, never from another layer.
-    if (
-      focused === document.body ||
-      menu?.contains(focused) ||
-      (menu?.id && focused?.getAttribute('aria-controls') === menu.id)
-    ) {
-      el.focus({ preventScroll: true });
-    }
+    el?.focus({ preventScroll: true });
   }, []);
   const noticesRef = useRef<HTMLDivElement>(null);
   const autoLocate = useRef(true);
