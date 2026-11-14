@@ -185,6 +185,20 @@ export function recordSessionPiTurnUsage(
           groupedSegments.set(pricingModel, { segments: [], tokens, sdkCostUsd: 0 });
         }
 
+        // 一次主 agent 请求 = 一步（子代理 pi-child: 与未归因段不数）。每步上下文取
+        // 该次请求实际重发的输入侧，用来判断「合并 N 步」是否划算。
+        const mainSegments = effectiveSegments.filter((segment) => segment.id?.startsWith('pi:'));
+        const steps = mainSegments.length;
+        const stepContextTokens =
+          steps > 0
+            ? Math.round(
+                mainSegments.reduce(
+                  (sum, segment) =>
+                    sum + segment.inputTokens + segment.cacheReadTokens + segment.cacheCreateTokens,
+                  0,
+                ) / steps,
+              )
+            : undefined;
         const durationMs =
           typeof (rawUsage as { durationMs?: unknown }).durationMs === 'number'
             ? (rawUsage as { durationMs: number }).durationMs
@@ -200,6 +214,8 @@ export function recordSessionPiTurnUsage(
           models: [...groupedSegments.keys()],
           durationMs,
           turnDurationMs,
+          steps,
+          stepContextTokens,
         });
 
         // 每个模型组的用量行只写一次:catch 只补写正常分支尚未发起的组。后续消息 /
@@ -294,6 +310,8 @@ export function recordSessionPiTurnUsage(
             perModelCost,
             durationMs,
             turnDurationMs,
+            steps,
+            stepContextTokens,
           });
           if (actualMoney && !identified) {
             await recordTurnSpend(actualMoney);

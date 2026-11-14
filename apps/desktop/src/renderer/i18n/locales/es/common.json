@@ -9795,6 +9795,7 @@
     "tokenLine": "Tokens: {{total}} en total · entrada {{input}} · salida {{output}}",
     "cacheLine": "Desglose de caché: lectura {{read}} · escritura {{create}} · tasa de aciertos {{rate}}",
     "cacheLineNoRate": "Desglose de caché: lectura {{read}} · escritura {{create}}",
+    "stepsLine": "Solicitudes este turno: {{steps}} · ~{{context}} de contexto cada una",
     "modelLine": "Modelo: {{model}}",
     "multipleModels": "{{count}} modelos",
     "costBreakdownHeader": "Por modelo:",

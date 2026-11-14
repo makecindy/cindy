@@ -176,6 +176,14 @@ export function buildTurnUsageTooltipLines({
     create: formatTokens(details.cacheCreateTokens),
     rate: hitRate ?? '',
   }));
+  // 步数行放在速度行上面，在线成本与缓存行之后：一次请求重发一遍上下文，
+  // 用来说明本轮为什么贵/省；单步回合没有可解释的重复开销，不显示。
+  if (details.steps && details.steps >= 2 && details.stepContextTokens) {
+    lines.push(t('usageDetails.stepsLine', {
+      steps: details.steps,
+      context: formatTokens(details.stepContextTokens),
+    }));
+  }
   const outputRate = formatOutputTokenRate(details);
   const turnDuration = typeof details.turnDurationMs === 'number'
     ? formatTurnDuration(details.turnDurationMs, t)

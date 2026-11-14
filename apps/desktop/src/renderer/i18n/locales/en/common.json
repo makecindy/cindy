@@ -9723,6 +9723,7 @@
     "tokenLine": "Tokens: {{total}} total · input {{input}} · output {{output}}",
     "cacheLine": "Cache breakdown: read {{read}} · write {{create}} · hit rate {{rate}}",
     "cacheLineNoRate": "Cache breakdown: read {{read}} · write {{create}}",
+    "stepsLine": "Requests this turn: {{steps}} · ~{{context}} context each",
     "modelLine": "Model: {{model}}",
     "multipleModels": "{{count}} models",
     "costBreakdownHeader": "By model:",
