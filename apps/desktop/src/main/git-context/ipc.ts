@@ -70,6 +70,7 @@ import {
 import {
   filterPrStatusQueriesForRefs,
   PrStatusService,
+  withoutPrMetadata,
   type PrStatusQuery,
   type PrStatusResult,
   type PrRemoteState,
@@ -498,7 +499,8 @@ export function registerGitContextIpc(): void {
         return [];
       }
     }
-    return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
+    const statuses = await prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
+    return statuses.map(withoutPrMetadata);
   };
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, statusHandler);
   ipcMain.handle('git-context:mr-status', statusHandler);

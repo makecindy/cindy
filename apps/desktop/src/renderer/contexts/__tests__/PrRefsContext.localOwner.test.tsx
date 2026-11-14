@@ -525,3 +525,43 @@ it('fetches statuses for every associated PR beyond the displayed three', async 
   expect(getPrStatuses.mock.calls.flatMap(([queries]) => queries)).toHaveLength(5);
   unmount();
 });
+
+// Regression (unit): every refresh tick sent one PR read per visible row of the same remote
+// computer at once (logs: 3-4 concurrent ~1.3 s reads per tick to one MacBook), filling the
+// background invoke slots. Reads to one device must wait for the previous one; a failed
+// read must not hold the lane.
+it('sends background PR reads to one remote computer one at a time', async () => {
+  const pending: Array<{ sessionId: string; settle: (fail: boolean) => void }> = [];
+  const invoke = vi.fn((_device: string, channel: string, args: unknown[]) => {
+    if (channel !== 'git-context:pr-refs:list') return Promise.resolve([]);
+    return new Promise((resolve, reject) => {
+      pending.push({
+        sessionId: String(args[0]),
+        settle: (fail) => (fail ? reject(new Error('DEVICE_LINK_TIMEOUT')) : resolve([])),
+      });
+    });
+  });
+  window.electronAPI = {
+    gitContext: { listAllPrRefs: async () => [], onPrRefsChanged: () => () => {} },
+    deviceLink: { invoke },
+  } as unknown as typeof window.electronAPI;
+  function Row({ sessionId }: { sessionId: string }) {
+    const { registerPrConsumer } = usePrActions();
+    useEffect(() => registerPrConsumer(sessionId, 'home'), [registerPrConsumer, sessionId]);
+    return null;
+  }
+  const { unmount } = render(
+    <PrRefsProvider>
+      <Row sessionId="a" />
+      <Row sessionId="b" />
+      <Row sessionId="c" />
+    </PrRefsProvider>,
+  );
+  await act(async () => {});
+  expect(pending.map((p) => p.sessionId)).toEqual(['a']);
+  await act(async () => pending[0].settle(true));
+  expect(pending.map((p) => p.sessionId)).toEqual(['a', 'b']);
+  await act(async () => pending[1].settle(false));
+  expect(pending.map((p) => p.sessionId)).toEqual(['a', 'b', 'c']);
+  unmount();
+});
