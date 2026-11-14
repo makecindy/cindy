@@ -21559,5 +21559,31 @@
     "switchOffer": {
       "action": "易用 {{model}} 續之"
     }
+  },
+  "taskManagement": {
+    "scope": "僅用於本機當前名籍之差事。",
+    "archive": "自動封存",
+    "enabled": "自動封存閒置差事",
+    "description": "閒置差事自動封存，舊錄仍可閱。",
+    "days": "閒置日數",
+    "daysHint": "自末次收遣訊或行畢時計起。",
+    "days7": "7 天",
+    "days14": "14 天",
+    "days30": "30 天",
+    "customDays": "自定日數",
+    "invalidDays": "請填 1–365 間之整數。",
+    "reset": "復其預設",
+    "archiveHint": "正用之差事仍留，封存後隨時可復。",
+    "preview": "封存先覽",
+    "loadFailed": "未能讀取封存規制或先覽，請重開此頁。",
+    "loading": "方查差事…",
+    "candidateCount": "可封存 {{count}} 件差事",
+    "keptCount": "保留 {{count}} 件",
+    "lastCheck": "前次查驗：{{date}}",
+    "notChecked": "尚未自動查驗",
+    "saveFailed": "規制未存，請重行之。",
+    "archivedNotice": "已自動封存 {{count}} 件閒置差事",
+    "undo": "復原",
+    "undoFailed": "未能復原，請於已封存差事中恢復。"
   }
 }

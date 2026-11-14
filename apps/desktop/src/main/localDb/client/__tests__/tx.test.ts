@@ -391,6 +391,38 @@ describe('db worker tx handlers', () => {
     workerScriptPath = await buildDbWorkerBundle(path.join(workerBundleDir, 'build'));
   });
 
+  // #10310, DB tier: ordinary terminal writes do not guard against fresh activity
+  // or a concurrently enabled automation. Exercise both production transports.
+  it.each([false, true])('rechecks idle eligibility in the archive transaction (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await client.exec('ALTER TABLE sessions ADD COLUMN last_activity_at INTEGER');
+      await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
+      await client.exec('ALTER TABLE sessions ADD COLUMN worktree_path TEXT');
+      await client.exec('ALTER TABLE sessions ADD COLUMN orca_remote_lead TEXT');
+      await client.exec('CREATE TABLE schedules (target_session_id TEXT, status TEXT)');
+      await client.exec('CREATE TABLE session_goals (session_id TEXT, status TEXT)');
+      await client.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT)');
+      await seedSession(client, 'idle', { status: 'active' });
+      await client.exec("UPDATE sessions SET last_activity_at = 100 WHERE id = 'idle'");
+      const archive = () => client.tx('sessions.setTerminalStatus', { sessionId: 'idle', status: 'archived', idleArchiveCutoff: 200 });
+      await client.exec("UPDATE sessions SET last_activity_at = 300 WHERE id = 'idle'");
+      await expect(archive()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await client.exec("UPDATE sessions SET last_activity_at = 100 WHERE id = 'idle'");
+      await client.exec("INSERT INTO schedules VALUES ('idle', 'active')");
+      await expect(archive()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await client.exec("UPDATE schedules SET status = 'paused'");
+      await client.exec("UPDATE sessions SET pinned_at = 50 WHERE id = 'idle'");
+      await expect(archive()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(await client.queryOne("SELECT status FROM sessions WHERE id = 'idle'")).toEqual({ status: 'active' });
+      await client.exec("UPDATE sessions SET pinned_at = NULL WHERE id = 'idle'");
+      await expect(archive()).resolves.toMatchObject({ sessionId: 'idle', status: 'archived' });
+      // A manual archive continues to use the existing flow, without idle guards.
+      await seedSession(client, 'manual', { status: 'active', pinnedAt: 50 });
+      await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'manual', status: 'archived' }))
+        .resolves.toMatchObject({ sessionId: 'manual', status: 'archived' });
+    }, { useInlineWorker });
+  });
+
   afterAll(() => {
     if (workerBundleDir) {
       fs.rmSync(workerBundleDir, { recursive: true, force: true });

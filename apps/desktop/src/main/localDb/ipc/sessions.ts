@@ -142,6 +142,7 @@ import {
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
+import { noteSessionsRestoring } from '../sessionRestoreRetention.js';
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
 import { requestSessionArchiveSync } from '../sessionArchiveSync.js';
 import { cindyMakeManager } from '../../cindy-make/manager.js';
@@ -263,9 +264,11 @@ async function withStatusWriteLock<T>(
   task: () => Promise<T>,
   alreadyLocked = false,
   beforeWrite?: () => void,
+  requireNoWorktree = false,
 ): Promise<T> {
   const write = async () => {
     const resources = status === undefined ? [] : await readSessionWorktreeResources(db, sessionId);
+    if (requireNoWorktree && resources.length > 0) throwIpcError('PRECONDITION_FAILED', 'Task has a worktree');
     const physicalResources = await Promise.all(resources.map(physicalWorktreeKey));
     const mutate = async () => {
       beforeWrite?.();
@@ -362,8 +365,11 @@ async function writeSessionPatch(
   sessionId: string,
   setObj: ReturnType<typeof sessionPatchToRow>,
   status: unknown,
+  beforeWrite?: () => void,
 ): Promise<void> {
   if (Object.keys(setObj).length === 0) return;
+  if (status === 'active') await noteSessionsRestoring([sessionId], db);
+  beforeWrite?.();
   const deletedIsTerminal = status === 'active' || status === 'archived';
   const result = await db
     .update(sessions)
@@ -388,9 +394,11 @@ async function setTerminalSessionStatus(
   dbClient: DbClient,
   sessionId: string,
   status: 'archived' | 'deleted',
+  idleArchiveCutoff?: number,
 ): Promise<SessionsSetTerminalStatusResult['deletedSideChats']> {
   try {
-    const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status });
+    const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status,
+      ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}) });
     return result.deletedSideChats;
   } catch (error) {
     const code = (error as { code?: string }).code;
@@ -1724,6 +1732,10 @@ export function registerSessionIpc(
       const updated = await withStatusWriteLock(db, sid, 'active', async () => {
         if (!isOwnerScopeCurrent(ownerScope)) return null;
         await assertGenericSessionLifecycleAllowed(db, sid);
+        // Bulk restore uses this CAS path instead of writeSessionPatch. Persist
+        // the same retention before activation, then fence the async owner boundary.
+        await noteSessionsRestoring([sid], db);
+        if (!isOwnerScopeCurrent(ownerScope)) return null;
         // 显式 .run() 才能从生产 DbClient.drizzle proxy 拿到 changes；隐式 await
         // 会丢弃写结果。CAS 是否命中必须以该原子 UPDATE 的 changes 判定。
         const writeResult = await db
@@ -2129,7 +2141,10 @@ export async function updateSessionInDb(
             await finalizeSharedTaskClosure(dbClient, prepared);
           }
         } else {
-          await writeSessionPatch(db, sid, setObj, p.status);
+          await writeSessionPatch(db, sid, setObj, p.status, () => {
+            moveGuard?.assertCurrent();
+            if (!isOwnerScopeCurrent(ownerScope)) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+          });
         }
         cleanupSessionRuntimeForTerminalStatus(sid, p.status);
         if (terminal) {
@@ -2351,7 +2366,7 @@ export async function patchSessionMetaInDb(
     title?: string;
     pinnedAt?: string | null;
   },
-  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void } = {},
+  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   for (const k of Object.keys(patch)) {
@@ -2392,7 +2407,7 @@ export async function patchSessionMetaInDb(
         const { status: _status, ...nonTerminalPatch } = setObj;
         await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
         options.beforeWrite?.();
-        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted');
+        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', options.idleArchiveCutoff);
       } else {
         const prepared = await prepareSharedTaskClosure(sessionId, dbClient);
         try {
@@ -2416,7 +2431,10 @@ export async function patchSessionMetaInDb(
       // All asynchronous preparation has finished. Once this write is issued,
       // cancellation does not roll back a committed lifecycle transition.
       if (options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
-      await writeSessionPatch(db, sessionId, setObj, patch.status);
+      await writeSessionPatch(db, sessionId, setObj, patch.status, () => {
+        if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+        options.beforeWrite?.();
+      });
     }
     const row = await selectSessionWithCount(db, sessionId);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
@@ -2430,7 +2448,7 @@ export async function patchSessionMetaInDb(
       await closeSharedTaskForTask(sessionId, dbClient);
     }
     return sessionToCamel(row);
-  }, options.routeLockHeld, options.beforeWrite);
+  }, options.routeLockHeld, options.beforeWrite, options.idleArchiveCutoff !== undefined);
   if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
     clearSessionAttention(sessionId, 'explicit');
   }
@@ -2639,6 +2657,10 @@ export async function setSessionsStatusInDb(
         }
       }
       await beforeMutation?.();
+      if (status === 'active') {
+        await noteSessionsRestoring(sessionIds, dbClient.drizzle);
+        await beforeMutation?.();
+      }
       const rows = await dbClient.tx('sessions.setStatus', status === 'archived'
         ? { sessionIds, status, closeSharedTasks: true }
         : { sessionIds, status }).catch((err) => {

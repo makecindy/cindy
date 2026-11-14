@@ -100,6 +100,7 @@ import {
   setSessionsStatusInDb,
 } from '../localDb/ipc/sessions.js';
 import { setSessionRouteLockImplementation } from '../localDb/sessionRouteLock.js';
+import { setSessionRestoreObserver } from '../localDb/sessionRestoreRetention.js';
 import { queueSessionWorktreeRecycle } from '../worktree/recycleQueue';
 import { admitTaskAction, assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 
@@ -126,6 +127,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setSessionRestoreObserver(null);
   // Finish queued cleanup before removing its hooks or resetting the next test's mocks.
   await queueSessionWorktreeRecycle(async () => {});
   setSessionWorktreeRecycle(null);
@@ -135,6 +137,18 @@ afterEach(async () => {
 });
 
 describe('setSessionsStatusInDb', () => {
+  // #10310, unit: restored retention introduces an asynchronous boundary before
+  // activation. Revocation at that boundary must prevent the status write.
+  it('rechecks authorization after persisting restore retention', async () => {
+    let current = true;
+    setSessionRestoreObserver(async () => { current = false; });
+    await expect(setSessionsStatusInDb(['target'], 'active', async () => {
+      if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    })).rejects.toThrow('PRECONDITION_FAILED');
+    expect(current).toBe(false);
+    expect(h.tx).not.toHaveBeenCalled();
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
   // #6399, unit: existing lifecycle tests do not revoke the admitted input while
   // route/resource preparation or recycle intent waits. No status write may follow.
   it.each([

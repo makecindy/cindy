@@ -21641,5 +21641,31 @@
     "switchOffer": {
       "action": "Mit {{model}} fortfahren"
     }
+  },
+  "taskManagement": {
+    "scope": "Nur für dieses Konto auf diesem Computer.",
+    "archive": "Automatisch archivieren",
+    "enabled": "Inaktive Aufgaben automatisch archivieren",
+    "description": "Inaktive Aufgaben automatisch archivieren. Ihr Verlauf bleibt verfügbar.",
+    "days": "Inaktive Tage",
+    "daysHint": "Ab der letzten gesendeten oder empfangenen Nachricht oder dem Ende eines Laufs.",
+    "days7": "7 Tage",
+    "days14": "14 Tage",
+    "days30": "30 Tage",
+    "customDays": "Eigene Tageszahl",
+    "invalidDays": "Gib eine ganze Zahl von 1 bis 365 ein.",
+    "reset": "Standard wiederherstellen",
+    "archiveHint": "Genutzte Aufgaben bleiben erhalten. Archivierte Aufgaben kannst du jederzeit wiederherstellen.",
+    "preview": "Archivvorschau",
+    "loadFailed": "Einstellungen oder Vorschau konnten nicht geladen werden. Öffne diese Seite erneut.",
+    "loading": "Aufgaben werden geprüft…",
+    "candidateCount": "Geeignete Aufgaben: {{count}}",
+    "keptCount": "Beibehalten: {{count}}",
+    "lastCheck": "Letzte Prüfung: {{date}}",
+    "notChecked": "Noch keine automatische Prüfung",
+    "saveFailed": "Einstellungen nicht gespeichert. Versuche es erneut.",
+    "archivedNotice": "Automatisch archivierte inaktive Aufgaben: {{count}}",
+    "undo": "Rückgängig",
+    "undoFailed": "Rücknahme fehlgeschlagen. Stelle die Aufgaben im Archiv wieder her."
   }
 }

@@ -21641,5 +21641,31 @@
     "switchOffer": {
       "action": "Continue with {{model}}"
     }
+  },
+  "taskManagement": {
+    "scope": "Applies to this account on this computer only.",
+    "archive": "Auto-archive",
+    "enabled": "Automatically archive idle tasks",
+    "description": "Automatically archive idle tasks. Their history stays available.",
+    "days": "Idle days",
+    "daysHint": "Measured from the last message sent or received, or the end of a run.",
+    "days7": "7 days",
+    "days14": "14 days",
+    "days30": "30 days",
+    "customDays": "Custom days",
+    "invalidDays": "Enter a whole number from 1 to 365.",
+    "reset": "Restore defaults",
+    "archiveHint": "Tasks in use are kept. Archived tasks can be restored anytime.",
+    "preview": "Archive preview",
+    "loadFailed": "Could not load settings or preview. Reopen this page.",
+    "loading": "Checking tasks…",
+    "candidateCount": "Eligible tasks: {{count}}",
+    "keptCount": "Kept: {{count}}",
+    "lastCheck": "Last check: {{date}}",
+    "notChecked": "No automatic check yet",
+    "saveFailed": "Settings were not saved. Try again.",
+    "archivedNotice": "Automatically archived idle tasks: {{count}}",
+    "undo": "Undo",
+    "undoFailed": "Could not undo. Restore the tasks from Archived."
   }
 }

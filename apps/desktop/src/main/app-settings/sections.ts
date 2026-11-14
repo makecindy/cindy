@@ -11,11 +11,21 @@ import { appPreferenceSchema } from '../../shared/appPreferenceControl.js';
 import { z } from 'zod';
 import { APP_ICONS, APPEARANCE_LIMITS, WALLPAPER_IDS } from '../../shared/appearanceSettings.js';
 import { createAppSettingsService, type AppSettingsSection } from './service.js';
+import { taskManagementStore } from '../task-management/store.js';
+import { taskArchiveEngine, updateTaskArchiveSettings } from '../task-management/service.js';
+import { DEFAULT_TASK_ARCHIVE_SETTINGS } from '../../shared/taskManagement.js';
 
 const numberIn = (range: { min: number; max: number }) => z.number().min(range.min).max(range.max);
 
 /** Shared host operations; discovery only serializes their registered metadata. */
 export const appSettingsSections: AppSettingsSection[] = [{
+  id: 'task-management', title: '存储空间与自动归档',
+  description: '当前账号在本机的闲置任务自动归档；默认关闭，保留 1–365 天。读取含可归档与保留的任务数量；复用普通归档。', effective: 'immediate',
+  schema: z.strictObject({ enabled: z.boolean().optional(), days: z.number().int().min(1).max(365).optional() }),
+  read: async () => ({ value: taskManagementStore.read(), defaults: DEFAULT_TASK_ARCHIVE_SETTINGS, preview: await taskArchiveEngine.preview() }),
+  update: async patch => { await updateTaskArchiveSettings(patch); },
+  reset: async () => { await updateTaskArchiveSettings(null); },
+}, {
   id: 'preferences', title: '语言、主题与使用偏好',
   description: '界面语言、明暗主题、主题家族、通知、发送快捷键、链接打开方式、流式动效、消息导航、文件显示和首页偏好。', effective: 'immediate',
   schema: appPreferenceSchema,
