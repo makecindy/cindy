@@ -85,6 +85,17 @@
       "reset": "Réinitialiser",
       "apply": "Appliquer",
       "hex": "Valeur de couleur"
+    },
+    "appIcon": {
+      "label": "Icône de l’app",
+      "rowLabel": "Style",
+      "hint": "L’icône de l’écran d’accueil est mise à jour immédiatement. S’applique uniquement à cet iPhone.",
+      "options": {
+        "default": "Par défaut",
+        "wordmark": "Logo Cindy"
+      },
+      "setFailed": "Impossible de changer l’icône. Réessayez.",
+      "saveFailed": "L’icône a changé, mais le choix n’a pas été enregistré."
     }
   },
   "language": {

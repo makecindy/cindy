@@ -85,6 +85,17 @@
       "reset": "復預設",
       "apply": "用之",
       "hex": "色碼"
+    },
+    "appIcon": {
+      "label": "應用之圖示",
+      "rowLabel": "樣式",
+      "hint": "易之，則主屏之圖示立更，唯此機是從。",
+      "options": {
+        "default": "常例",
+        "wordmark": "Cindy 字標"
+      },
+      "setFailed": "圖示未易，請少遲再試。",
+      "saveFailed": "圖示已易，然未存所擇。"
     }
   },
   "language": {

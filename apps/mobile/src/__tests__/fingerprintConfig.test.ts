@@ -233,3 +233,13 @@ it("changes the native fingerprint when incoming-share resources change", () => 
     rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+it("hashes alternate app icon artwork as a native input", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const config = require(CONFIG_PATH);
+  expect(config.extraSources).toContainEqual({
+    type: "dir",
+    filePath: "assets/app-icons",
+    reasons: ["alternate app icon artwork"],
+  });
+});

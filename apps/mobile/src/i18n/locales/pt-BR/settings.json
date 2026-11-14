@@ -85,6 +85,17 @@
       "reset": "Restaurar padrão",
       "apply": "Aplicar",
       "hex": "Valor da cor"
+    },
+    "appIcon": {
+      "label": "Ícone do app",
+      "rowLabel": "Estilo",
+      "hint": "O ícone da tela de início é atualizado na hora. Vale só para este iPhone.",
+      "options": {
+        "default": "Padrão",
+        "wordmark": "Logotipo Cindy"
+      },
+      "setFailed": "Não foi possível trocar o ícone. Tente de novo.",
+      "saveFailed": "O ícone mudou, mas a escolha não foi salva."
     }
   },
   "language": {

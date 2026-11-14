@@ -85,6 +85,17 @@
       "reset": "Auf Standard zurücksetzen",
       "apply": "Anwenden",
       "hex": "Farbwert"
+    },
+    "appIcon": {
+      "label": "App-Symbol",
+      "rowLabel": "Stil",
+      "hint": "Das Symbol auf dem Home-Bildschirm wird sofort aktualisiert. Gilt nur für dieses iPhone.",
+      "options": {
+        "default": "Standard",
+        "wordmark": "Cindy-Schriftzug"
+      },
+      "setFailed": "Das Symbol konnte nicht gewechselt werden. Versuche es erneut.",
+      "saveFailed": "Das Symbol wurde gewechselt, die Auswahl aber nicht gespeichert."
     }
   },
   "language": {

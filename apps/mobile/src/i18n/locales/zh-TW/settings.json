@@ -85,6 +85,17 @@
       "reset": "恢復預設",
       "apply": "套用",
       "hex": "色碼"
+    },
+    "appIcon": {
+      "label": "應用程式圖示",
+      "rowLabel": "樣式",
+      "hint": "切換後主畫面圖示會立即更新，只在這個手機上生效。",
+      "options": {
+        "default": "預設",
+        "wordmark": "Cindy 字標"
+      },
+      "setFailed": "圖示沒有切換成功，請稍後再試。",
+      "saveFailed": "圖示已切換，但沒能儲存選擇。"
     }
   },
   "language": {

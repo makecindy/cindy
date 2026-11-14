@@ -46,5 +46,6 @@
 | [auth-realm-routing.md](./auth-realm-routing.md) | 跨仓契约 | 参考 | 组织 SSO 双区域发现、会话区域持久化与 token 消费端点路由 | — |
 | [client-log-upload-requirements.md](./client-log-upload-requirements.md) | 需求文档 | 参考 | Desktop 客户端日志上报（手动 + 崩溃自动）的目标、数据边界、同意闸与可靠性要求 | — |
 | [client-log-upload-implementation-plan.md](./client-log-upload-implementation-plan.md) | 实现方案 | 参考 | 上述需求的落地方案：模块布局、四层收窄管道、定位读取与锚点裁剪、标记代次、分期 | — |
+| [ios-app-icon-switch.md](./plans/ios-app-icon-switch.md) | 实现方案 | 参考 | iOS 备选应用图标（wordmark）的资源、config plugin、原生模块、设置页与冷更边界；尚未实现 | — |
 | [legal/README.md](./legal/README.md) | 法律/合规索引 | authoritative | 法律合规资料归档边界与固定路径例外 | — |
 | [legal/notices/README.md](./legal/notices/README.md) | 第三方许可/SBOM | generated | `pnpm licenses:generate`、Desktop/Mobile 随包声明 | — |

@@ -4356,6 +4356,18 @@
       "note": "用户在 X 上让 Cindy 删掉它那条公开回帖的动作：原提问者在目标回帖下回复 `@askmycindy /delete`，正文中须手动带上 @askmycindy。中文说明也可展示 `/删除`，但命令本身不翻译为 `/刪除`。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 五语只有这一处用例, 等更多用例出现后再定 decided。"
     },
     {
+      "id": "wordmark",
+      "status": "proposed",
+      "en": "Cindy wordmark",
+      "translations": {
+        "zh-CN": "Cindy 字标",
+        "zh-TW": "Cindy 字標",
+        "ja": "Cindy ワードマーク",
+        "ko": "Cindy 워드마크"
+      },
+      "note": "应用图标设置里对 Cindy 字标的称呼，沿用桌面 Dock 图标已发布的叫法（「Cindy 字标」），与符号形态（mark）区分。"
+    },
+    {
       "id": "work-split",
       "status": "proposed",
       "en": "Work split",
