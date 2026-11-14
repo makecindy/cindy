@@ -213,9 +213,11 @@ it('persists count recovery media without learning a rule during body generation
   const ctx = { reqId: 91, method: 'POST', url: '/v1/responses', headers: {} };
   const signal = new AbortController().signal;
   const retried = await controller.retry!(raw, { kind: 'image-count', limitCount: 50 }, ctx, signal);
-  const input = JSON.parse(retried!.toString()).input;
-  expect(input.filter((item: any) => item.content[0].type === 'input_image')).toHaveLength(31);
-  expect(input[0].content[0].text).toContain(path.join(state.root, 'saved.png'));
+  const { input } = JSON.parse(retried!.toString()) as { input: Array<{
+    role: 'user'; content: Array<{ type: 'input_image'; image_url: string } | { type: 'input_text'; text: string }>;
+  }> };
+  expect(input.filter(item => item.content[0].type === 'input_image')).toHaveLength(31);
+  expect(input[0].content[0]).toMatchObject({ type: 'input_text', text: expect.stringContaining(path.join(state.root, 'saved.png')) });
   expect(state.ingest).toHaveBeenCalled();
   expect(state.addRef).toHaveBeenCalled();
   expect(await controller.control(raw, 'responses', { context: ctx, signal, route: controller.route!(ctx, parsed) })).toBeNull();
