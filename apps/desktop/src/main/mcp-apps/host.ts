@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { VIEW_STATE_KEY, VIEW_STATE_METHOD, VIEW_STATE_CAPABILITY, ViewStateWriter, viewStateError, type ViewStateStorage } from './viewState.js';
+import { VIEW_STATE_KEY, VIEW_STATE_METHOD, VIEW_STATE_CAPABILITY, ViewStateWriter, viewStateError, viewStateSnapshot, type ViewStateStorage } from './viewState.js';
 import { createLogger } from '../logger.js';
 import { hostAppSdkAsset } from './hostSdk.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS } from '../../shared/ghost.js';
@@ -190,10 +190,12 @@ interface View {
   resuming?: boolean;
   closing: boolean;
   closingSave?: boolean;
+  contextDirty?: boolean;
   closingState?: { id: string | number; aliases: Array<string | number>; complete(): void };
+  closingStateInvalid?: JSONRPCMessage[];
   suspendedMessages: JSONRPCMessage[];
   suspendedBytes: number;
-  resumeWaiters: Set<() => void>;
+  resumeWaiters: Set<{ resolve(): void; reject(error: unknown): void }>;
   deferredNotifications: Map<string, import('@modelcontextprotocol/sdk/types.js').Notification>;
 
   files?: PluginAppFiles;
@@ -577,7 +579,7 @@ export class McpAppsHost {
       );
       const bridge = createBridge();
       const view: View = {
-        suspended: false, closing: false, suspendedMessages: [], suspendedBytes: 0,
+        suspended: false, closing: false, contextDirty: false, suspendedMessages: [], suspendedBytes: 0,
         resumeWaiters: new Set(), deferredNotifications: new Map(),
         openId,
         owner,
@@ -1121,7 +1123,12 @@ export class McpAppsHost {
       return;
     }
     if (!view.record || view.sessionId === null) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
-    const latest = await this.deps.readCard(view.sessionId, view.clientId);
+    let latest: McpAppRecord;
+    try { latest = await this.deps.readCard(view.sessionId, view.clientId); }
+    catch (error) {
+      if (this.views.get(id) !== view) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+      throw error;
+    }
     this.view(view.caller, view.sessionId, id);
     if (
       latest.serverId !== view.record.serverId ||
@@ -1198,7 +1205,9 @@ export class McpAppsHost {
         await this.disposeView(id, view);
         throw new Error('MCP_APP_BACKPRESSURE');
       }
-      await new Promise<void>(resolve => view.resumeWaiters.add(resolve));
+      const pending = new Promise<void>((resolve, reject) => view.resumeWaiters.add({ resolve, reject }));
+      pending.catch(() => {});
+      await pending;
     }
     if (this.views.get(id) !== view || view.owner !== this.deps.owner() || view.closing && !closingPoll && !view.closingSave) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
   }
@@ -1215,7 +1224,7 @@ export class McpAppsHost {
     try { await this.assertCurrentView(id, view); }
     catch (error) { await this.disposeView(id, view); throw error; }
     view.suspended = false;
-    view.resumeWaiters.forEach(resolve => resolve()); view.resumeWaiters.clear();
+    view.resumeWaiters.forEach(waiter => waiter.resolve()); view.resumeWaiters.clear();
     try {
     while (!view.suspended && !view.closing && this.views.get(id) === view && view.suspendedMessages.length) {
       const message = view.suspendedMessages.shift()!;
@@ -1229,6 +1238,10 @@ export class McpAppsHost {
       if (message.method === 'notifications/tools/list_changed') await view.bridge.sendToolListChanged(message.params);
       if (message.method === 'notifications/resources/list_changed') await view.bridge.sendResourceListChanged(message.params);
       if (message.method === 'notifications/prompts/list_changed') await view.bridge.sendPromptListChanged(message.params);
+    }
+    if (view.contextDirty) {
+      view.contextDirty = false;
+      if (view.initialized) view.bridge.setHostContext(view.context);
     }
     await this.sendResult(id, view);
   }
@@ -1322,8 +1335,7 @@ export class McpAppsHost {
 
   context(caller: string, sessionId: string | null, id: string, patch: McpUiHostContext): void {
     const view = this.ownedView(caller, sessionId, id);
-    if (view.suspended || view.resuming) return;
-    this.view(caller, sessionId, id);
+    if (!view.suspended && !view.resuming) this.view(caller, sessionId, id);
     const old = view.context;
     // Tool identity and granted capabilities are host-owned, never renderer overrides.
     const allowed = [
@@ -1340,7 +1352,11 @@ export class McpAppsHost {
     );
     if (view.resourceBinding?.projectContext && Object.hasOwn(patch, 'cindy'))
       update.cindy = view.resourceBinding.projectContext(patch);
-    view.context = { ...old, ...update };
+    const next = { ...old, ...update };
+    const changed = JSON.stringify(next) !== JSON.stringify(old);
+    view.context = next;
+    if (!changed) return;
+    if (view.suspended || view.resuming) { view.contextDirty = true; return; }
     if (view.initialized) view.bridge.setHostContext(view.context);
   }
 
@@ -1400,29 +1416,44 @@ export class McpAppsHost {
     if (view.suspended || view.resuming) {
       view.closing = true;
       view.resuming = false;
-      const saves = view.suspendedMessages.filter(message => isViewStateSave(message) && 'id' in message);
-      finalSave = saves.at(-1);
+      const saves = view.suspendedMessages.filter(message => isViewStateSave(message) && 'id' in message && message.id !== undefined);
+      const validSaves: JSONRPCMessage[] = [];
+      const invalidSaves: JSONRPCMessage[] = [];
+      for (const message of saves) {
+        const params = 'params' in message && message.params && typeof message.params === 'object' ? message.params as Record<string, unknown> : undefined;
+        try {
+          if (!params || !Object.hasOwn(params, 'state')) throw viewStateError('CINDY_VIEW_STATE_INVALID');
+          viewStateSnapshot(params.state);
+          validSaves.push(message);
+        } catch {
+          invalidSaves.push(message);
+        }
+      }
+      finalSave = validSaves.at(-1);
       if (finalSave && 'id' in finalSave && finalSave.id !== undefined) {
         view.closingSave = true;
         const saveId = finalSave.id;
-        const aliases = saves.slice(0, -1).flatMap(message =>
+        const aliases = validSaves.slice(0, -1).flatMap(message =>
           'id' in message && message.id !== undefined ? [message.id] : [],
         );
         saved = new Promise(resolve => {
           view.closingState = { id: saveId, aliases, complete: resolve };
         });
       }
+      view.closingStateInvalid = invalidSaves;
       // Normal closure preserves only the last private snapshot. Revocation uses
       // disposeView directly and never releases queued writes or tool requests.
       view.suspendedMessages = []; view.suspendedBytes = 0;
       view.suspended = false;
-      view.resumeWaiters.forEach(resolve => resolve()); view.resumeWaiters.clear();
+      view.resumeWaiters.forEach(waiter => waiter.reject(new Error('MCP_APP_VIEW_UNAVAILABLE'))); view.resumeWaiters.clear();
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
     // Final save and the existing handshake share ONE deadline, not two waits.
     try {
       await Promise.race([
         (async () => {
+          for (const invalid of view.closingStateInvalid ?? []) await this.dispatch(caller, sessionId, id, invalid);
+          view.closingStateInvalid = undefined;
           if (finalSave) { await this.dispatch(caller, sessionId, id, finalSave); await saved; view.closingSave = false; }
           if (this.views.get(id) !== view || Date.now() >= deadline) return;
           if (view.initialized && !alreadyNotified)
@@ -1434,6 +1465,7 @@ export class McpAppsHost {
       /* A failed save or unresponsive App must not block leaving a task. */
     } finally {
       view.closingSave = false;
+      view.closingStateInvalid = undefined;
       clearTimeout(timer);
       await this.disposeView(id, view);
     }
@@ -1452,7 +1484,7 @@ export class McpAppsHost {
     view.closingState?.complete(); view.closingState = undefined;
     view.suspendedMessages = []; view.suspendedBytes = 0;
     view.deferredNotifications.clear();
-    view.resumeWaiters.forEach(resolve => resolve()); view.resumeWaiters.clear();
+    view.resumeWaiters.forEach(waiter => waiter.reject(new Error('MCP_APP_VIEW_UNAVAILABLE'))); view.resumeWaiters.clear();
     view.stopContext?.();
     view.files?.close();
     if (!this.views.size) {

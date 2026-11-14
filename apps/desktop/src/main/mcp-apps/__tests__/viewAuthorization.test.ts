@@ -1048,3 +1048,45 @@ it('bounds deferred page messages and denies nonlocal and foreign View suspensio
   await expect(f.dispatch({ jsonrpc: '2.0', id: 600, method: 'tools/list' })).rejects.toThrow('MCP_APP_BACKPRESSURE');
   await expect(f.poll(0)).rejects.toThrow('MCP_APP_VIEW_UNAVAILABLE');
 });
+
+it('replays one latest host context after a suspended draft changes', async () => {
+  const f = await fixture('renderer:1', true);
+  f.outgoing.length = 0;
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+  f.host.context('renderer:1', 'task', f.viewId, {
+    theme: 'dark',
+    containerDimensions: { width: 420, height: 280 },
+  });
+  expect(f.outgoing).toEqual([]);
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, false);
+  const updates = f.outgoing.filter(
+    (message) => 'method' in message && message.method === 'ui/notifications/host-context-changed',
+  );
+  expect(updates).toHaveLength(1);
+  expect(updates[0]).toMatchObject({
+    params: { theme: 'dark', containerDimensions: { width: 420, height: 280 } },
+  });
+});
+
+it('does not send a context update after resume when suspended context did not change', async () => {
+  const f = await fixture('renderer:1', true);
+  f.outgoing.length = 0;
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, false);
+  expect(
+    f.outgoing.filter(
+      (message) =>
+        'method' in message && message.method === 'ui/notifications/host-context-changed',
+    ),
+  ).toHaveLength(0);
+});
+
+it('rejects a waiting poll when normal close drops queued work', async () => {
+  const f = await fixture('renderer:1', true);
+  const initial = await f.poll(0);
+  await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+  const waiting = f.poll(initial.at(-1)!.seq);
+  await f.host.teardown('renderer:1', 'task', f.viewId, true);
+  await expect(waiting).rejects.toThrow('MCP_APP_VIEW_UNAVAILABLE');
+  expect(f.methods.callTool).not.toHaveBeenCalled();
+});

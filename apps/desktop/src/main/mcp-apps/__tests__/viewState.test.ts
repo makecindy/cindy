@@ -298,3 +298,14 @@ async function retainedInvalidation(reason: 'account' | 'disabled' | 'permission
   expect(tools).not.toHaveBeenCalled();
   await expect(f.host.setSuspended('renderer:1', 'task', f.doc.viewId, false)).rejects.toThrow();
 }
+
+it('retained close writes the last valid state when a later queued state is oversized', async () => {
+  const f = await fixture(undefined, 'renderer:1');
+  await f.initialize();
+  await f.host.setSuspended('renderer:1', 'task', f.doc.viewId, true);
+  await f.set(2, { version: 1, draft: 'valid' });
+  await f.set(3, { version: 1, draft: 'x'.repeat(70_000) });
+  await f.host.teardown('renderer:1', 'task', f.doc.viewId, true);
+  expect(f.save).toHaveBeenCalledOnce();
+  expect(f.save.mock.calls[0][0].json).toBe(JSON.stringify({ version: 1, draft: 'valid' }));
+});
