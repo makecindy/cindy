@@ -520,6 +520,9 @@ export class McpAppsHost {
       if (remote && document.sdk && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
         // Optional addons never displace an official SDK that would fit on its own.
         document.sdk = { source: document.sdk.source };
+        // A previous boundary-sized page may have cached this reduced variant.
+        const reducedSdkRef = resolveSdkRef?.(document.sdk);
+        if (reducedSdkRef) { document.sdkRef = reducedSdkRef; delete document.sdk; }
       }
       if (remote && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
         delete document.sdk;

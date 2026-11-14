@@ -195,14 +195,31 @@ describe('MCP Apps serialized remote result budgets', () => {
   });
 
   // Addons must not consume the SDK budget of an otherwise valid installed page.
-  it('drops only addons at the original SDK boundary and does not mutate later opens', async () => {
+  it('reuses the reduced SDK on a second boundary-page open without mutating later opens', async () => {
     const f = fixture(); const local = await f.host.open('renderer:local', 'task', 'card', {});
     const base = { ...local, html: '', sdk: { source: local.sdk!.source } };
     const html = 'x'.repeat(MCP_APPS_MAX_REMOTE_BYTES - Buffer.byteLength(JSON.stringify(base)));
     f.resource.mockResolvedValue({ result: f.contents(html) });
-    const remote = await f.host.open('device:phone', 'task', 'card', {});
+    // Real operation/Host/cache regression: the first response fits only without
+    // addons; the next must recognize that cached variant (unit tier).
+    const cache = new McpAppSdkCache(text => createHash('sha256').update(text).digest('hex'));
+    const owner = {};
+    let wireDocument!: McpAppDocument;
+    const send = async (input: Record<string, unknown>) => {
+      wireDocument = await handleMcpAppOperation(f.host, 'device:phone', 'task', input) as McpAppDocument;
+      return wireDocument;
+    };
+    const input = { op: 'open', clientId: 'card', context: {} };
+    const remote = await cache.open(owner, 'host', input, send, () => {});
+    expect(wireDocument.sdk).toEqual(remote.sdk);
+    expect(wireDocument.sdkRef).toBeUndefined();
     expect(remote.sdk).toEqual({ source: local.sdk!.source });
     expect(Buffer.byteLength(JSON.stringify(remote))).toBe(MCP_APPS_MAX_REMOTE_BYTES);
+    const second = await cache.open(owner, 'host', input, send, () => {});
+    expect(wireDocument.sdkRef).toMatch(/^[a-f0-9]{64}$/);
+    expect(wireDocument.sdk).toBeUndefined();
+    expect(second.sdk).toEqual(remote.sdk);
+    expect(second.html).toBe(html);
     f.resource.mockResolvedValue({ result: f.contents('small') });
     const next = await f.host.open('device:phone', 'task', 'card', {});
     expect(next.sdk?.addons?.['cindy/view-state']).toEqual(local.sdk?.addons?.['cindy/view-state']);
