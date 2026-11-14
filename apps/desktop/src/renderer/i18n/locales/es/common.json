@@ -15310,7 +15310,8 @@
     "systemCard": {
       "orcaDispatch": {
         "sent": "Enviado a {{worker}}",
-        "queued": "En cola para {{worker}}"
+        "queued": "En cola para {{worker}}",
+        "unverified": "Envío no verificado"
       },
       "help": {
         "title": "Comandos disponibles",

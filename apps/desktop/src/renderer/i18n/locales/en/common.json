@@ -15206,7 +15206,8 @@
     "systemCard": {
       "orcaDispatch": {
         "sent": "Dispatched to {{worker}}",
-        "queued": "Queued for {{worker}}"
+        "queued": "Queued for {{worker}}",
+        "unverified": "Dispatch not verified"
       },
       "help": {
         "title": "Available Commands",

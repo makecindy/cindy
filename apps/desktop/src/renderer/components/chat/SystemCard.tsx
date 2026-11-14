@@ -1422,6 +1422,7 @@ function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
 
 function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
   const { t } = useTranslation();
+  const unverified = data?.state === 'unverified';
   const worker =
     typeof data?.workerLabel === 'string' && data.workerLabel
       ? data.workerLabel
@@ -1430,21 +1431,31 @@ function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
         : '';
   const queued = data?.delivery === 'queued';
   const summary = typeof data?.summary === 'string' ? data.summary : '';
-  const label = queued
-    ? t('chat.systemCard.orcaDispatch.queued', { worker })
-    : t('chat.systemCard.orcaDispatch.sent', { worker });
+  const label = unverified
+    ? t('chat.systemCard.orcaDispatch.unverified')
+    : queued
+      ? t('chat.systemCard.orcaDispatch.queued', { worker })
+      : t('chat.systemCard.orcaDispatch.sent', { worker });
   return (
     <div
       className="flex w-full select-none flex-col gap-1 py-2 text-center"
       role="note"
       aria-label={label}
     >
-      <span className="inline-flex items-center justify-center gap-2 text-12 leading-[1.33] text-[var(--text-tertiary)]">
+      <span
+        className={cn(
+          'inline-flex items-center justify-center gap-2 text-12 leading-[1.33]',
+          unverified ? 'text-[var(--error-fg)]' : 'text-[var(--text-tertiary)]',
+        )}
+      >
         {label}
       </span>
       {summary && (
         <span
-          className="mx-auto max-w-[86%] truncate text-11 leading-[1.33] text-[var(--text-tertiary)]"
+          className={cn(
+            'mx-auto max-w-[86%] text-11 leading-[1.33] whitespace-pre-line text-[var(--text-tertiary)]',
+            unverified ? 'text-left' : 'truncate',
+          )}
           title={summary}
         >
           {summary}

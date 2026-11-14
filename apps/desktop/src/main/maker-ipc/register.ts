@@ -32,6 +32,7 @@ import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
 import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
+import type { OrcaDispatchSystemRecord } from '../../shared/orcaDispatchReceipt.js';
 import { captureAgentRequest as captureRequest, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationTarget } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
@@ -16379,6 +16380,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputCoordinator.mergeQueuedMessagesAtomically(sessionId, clientIds, buildReplacement).merged,
   };
 
+  /** 协同系统行：回执与升级卡共用同一条落库路径（role=assistant + agentMeta 标记，正文为空）。 */
+  const appendOrcaDispatchSystemRow = (
+    leadSessionId: string,
+    clientId: string,
+    record: OrcaDispatchSystemRecord,
+  ): void => {
+    void createDbMessage(leadSessionId, {
+      clientId,
+      role: 'assistant',
+      content: '',
+      agentMeta: { orcaDispatch: record },
+    }).catch(() => undefined);
+  };
+
   const orcaTeamService = createOrcaTeamService(orcaRemoteWorkers.wrapTeamDeps({
     captureControlAuthority: async () => (await captureOrcaTaskAuthority()).assertCurrent,
     // Queued dispatch acceptance and terminal-time retries land after this turn is gone.
@@ -16585,20 +16600,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       return { accepted: result.ok };
     },
-    notifyLeadDispatchClaimEscalation: (leadSessionId, message) => {
+    escalateDispatchClaim: (leadSessionId, notice) => {
+      // 升级只是“给主人看”的宿主记录：落系统行 + 红点 + 通知，不发队列消息、不开新 turn。
+      appendOrcaDispatchSystemRow(leadSessionId, randomUUID(), notice);
       void (async () => {
-        // 升级 = 会话内纠正文本（主人看得见）+ 红点 + 通知；发送失败一律静默降级。
-        await dispatchInterAgentMessage({
-          targetSessionId: leadSessionId,
-          rawContent: message,
-          source: 'worker',
-          senderLabel: 'Orca',
-          autoBridge: true,
-          meta: {
-            source: 'maker-ipc/dispatch-claim',
-            context: `lead_dispatch_claim_escalation/${leadSessionId}`,
-          },
-        }).catch(() => ({ ok: false }));
         let title = '';
         try {
           const [row] = await getDbClient()
@@ -16621,12 +16626,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readDispatchClaimVerificationEnabled: () => readCollaborationSettings().dispatchClaimVerification,
     appendDispatchReceipt: (leadSessionId, receipt) => {
       // 回执卡落库为宿主系统行：role=assistant + agentMeta 标记，正文为空，不进模型上下文。
-      void createDbMessage(leadSessionId, {
-        clientId: `orca-dispatch-${receipt.queuedMessageId ?? receipt.at}`,
-        role: 'assistant',
-        content: '',
-        agentMeta: { orcaDispatch: receipt },
-      }).catch(() => undefined);
+      appendOrcaDispatchSystemRow(leadSessionId, `orca-dispatch-${receipt.dispatchId}`, receipt);
     },
     log,
   }));

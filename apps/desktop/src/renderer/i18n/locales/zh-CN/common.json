@@ -15141,7 +15141,8 @@
     "systemCard": {
       "orcaDispatch": {
         "sent": "已派给 {{worker}}",
-        "queued": "已排队给 {{worker}}"
+        "queued": "已排队给 {{worker}}",
+        "unverified": "派单未经核实"
       },
       "help": {
         "title": "可用命令",

@@ -15169,7 +15169,8 @@
     "systemCard": {
       "orcaDispatch": {
         "sent": "An {{worker}} übergeben",
-        "queued": "Für {{worker}} eingereiht"
+        "queued": "Für {{worker}} eingereiht",
+        "unverified": "Versand nicht bestätigt"
       },
       "help": {
         "title": "Verfügbare Befehle",

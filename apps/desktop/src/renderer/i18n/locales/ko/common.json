@@ -15141,7 +15141,8 @@
     "systemCard": {
       "orcaDispatch": {
         "sent": "{{worker}}에게 전달했습니다",
-        "queued": "{{worker}}의 대기열에 추가했습니다"
+        "queued": "{{worker}}의 대기열에 추가했습니다",
+        "unverified": "발송이 확인되지 않았습니다"
       },
       "help": {
         "title": "사용 가능한 명령",

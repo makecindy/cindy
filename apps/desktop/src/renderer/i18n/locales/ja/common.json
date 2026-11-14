@@ -15141,7 +15141,8 @@
     "systemCard": {
       "orcaDispatch": {
         "sent": "{{worker}} に派遣しました",
-        "queued": "{{worker}} のキューに追加しました"
+        "queued": "{{worker}} のキューに追加しました",
+        "unverified": "派遣を確認できません"
       },
       "help": {
         "title": "利用可能なコマンド",

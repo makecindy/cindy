@@ -336,7 +336,7 @@ describe('lead dispatch claim verification', () => {
       finalText: '已派给 backend-2，进度稍后回报。',
     });
     expect(deps.sendHostNoticeToLead).toHaveBeenCalledTimes(1);
-    expect(deps.notifyLeadDispatchClaimEscalation).not.toHaveBeenCalled();
+    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
 
     await service.handleLeadTurnSettled({
       leadSessionId: 'lead-1',
@@ -344,7 +344,10 @@ describe('lead dispatch claim verification', () => {
       finalText: '已派给 backend-2，等它回报。',
     });
     expect(deps.sendHostNoticeToLead).toHaveBeenCalledTimes(1);
-    expect(deps.notifyLeadDispatchClaimEscalation).toHaveBeenCalledTimes(1);
+    expect(deps.escalateDispatchClaim).toHaveBeenCalledWith(
+      'lead-1',
+      expect.objectContaining({ state: 'unverified', version: 1 }),
+    );
   });
 
   it('stays silent when the same turn really dispatched, and records a receipt', async () => {
@@ -362,7 +365,7 @@ describe('lead dispatch claim verification', () => {
       finalText: '已派给 backend-2，等它回报。',
     });
     expect(deps.sendHostNoticeToLead).not.toHaveBeenCalled();
-    expect(deps.notifyLeadDispatchClaimEscalation).not.toHaveBeenCalled();
+    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
     expect(deps.appendDispatchReceipt).toHaveBeenCalledWith(
       'lead-1',
       expect.objectContaining({ version: 1, delivery: 'direct' }),
@@ -384,7 +387,7 @@ describe('lead dispatch claim verification', () => {
       finalText: '已派给 backend-2。',
     });
     expect(deps.sendHostNoticeToLead).not.toHaveBeenCalled();
-    expect(deps.notifyLeadDispatchClaimEscalation).not.toHaveBeenCalled();
+    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
   });
 });
 
@@ -423,7 +426,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       workers.filter((worker) => worker.leadSessionId === leadSessionId),
     ),
     sendHostNoticeToLead: vi.fn(async () => ({ accepted: true as const })),
-    notifyLeadDispatchClaimEscalation: vi.fn(),
+    escalateDispatchClaim: vi.fn(),
     appendDispatchReceipt: vi.fn(),
     getLiveSession: vi.fn(() => null),
     resumeWorkerSession: vi.fn(async () => {}),

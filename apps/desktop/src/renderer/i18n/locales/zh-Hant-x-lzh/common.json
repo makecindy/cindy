@@ -15131,8 +15131,9 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "sent": "Dispatched to {{worker}}",
-        "queued": "Queued for {{worker}}"
+        "sent": "已遣往 {{worker}}",
+        "queued": "已列於 {{worker}} 之隊",
+        "unverified": "遣單無據，待核"
       },
       "help": {
         "title": "可用指令",

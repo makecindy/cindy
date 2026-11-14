@@ -426,10 +426,14 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    Lead 在 turn 收口时声称已派给某 Worker，宿主只认本轮的派发凭据（`send_to_worker`
    的 accepted 回调与 `queued_message_id`、`create_worker` 的首任务派发；排队消息被撤回
    即失效）。主张识别只取「过去完成态 + 派动词」，计划、将来说明与读文件后的推断都不算
-   主张；文本里出现真实队列编号算有据，出现不存在的编号算不实。不一致时先向该 Lead 注入
-   一条纠正消息（附上一轮原文引用与 turn 指针，至多一次）；补派轮仍不一致才升级为红点 +
-   既有通知通道提醒，并在真派发出现前不再唤醒，避免自激。回执卡以宿主系统行落库
-   （`agentMeta.orcaDispatch`，`role=assistant` + 空正文），只给渲染层，不进模型上下文。
+   主张；文本里出现真实队列编号算有据，出现不存在的编号算不实；声称给了某个 Worker，
+   就必须有发给同一个 Worker 的本轮凭据（文本匹配按该 Lead 的 Worker 名册解析，不靠猜）。
+   否定句（「没有派」「尚未派」）、引用他处原文、代码块与将来时的语法都不算主张。不一致时
+   先向该 Lead 注入一条纠正消息（附上一轮原文引用与 turn 指针，至多一次）；补派轮仍不一致
+   才升级：在会话里落一条不可撤回的宿主卡片 + 红点 + 既有通知通道提醒，卡片是系统行、不开
+   新 turn，所以升级不会自激；真派发出现前该 Lead 不再唤醒。回执卡与升级卡共用同一条落库
+   路径（`agentMeta.orcaDispatch`，`role=assistant` + 空正文，`state` 区分 sent / unverified），
+   只给渲染层，不进模型上下文。
    实现指针：`apps/desktop/src/main/maker-ipc/orcaDispatchClaims.ts`、`orcaTeamService.ts`
    的 `handleLeadTurnSettled`、`sessionEventTerminal.ts` 的 lead 收口钩子、
    `localDb/agentHandoffHistory.ts` 的卡片行过滤；能力开关是协同设置里的

@@ -15309,8 +15309,9 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "sent": "Dispatched to {{worker}}",
-        "queued": "Queued for {{worker}}"
+        "sent": "Enviado para {{worker}}",
+        "queued": "Na fila para {{worker}}",
+        "unverified": "Envio não verificado"
       },
       "help": {
         "title": "Comandos disponíveis",

@@ -5,6 +5,9 @@
 
 export interface OrcaDispatchReceipt {
   version: 1;
+  state: 'sent';
+  /** 宿主这次投递的唯一 id（直发与排队都有），回执行主键用它，避免同毫秒派单被去重。 */
+  dispatchId: string;
   /** Worker 会话 id。 */
   workerId: string;
   /** 展示用 Worker 名（角色名，缺省回落到 id 前缀）。 */
@@ -16,6 +19,22 @@ export interface OrcaDispatchReceipt {
   summary: string;
   at: number;
 }
+
+/**
+ * 升级卡：补派一轮后主张仍无凭据。同样落成系统行，不进模型上下文，
+ * 因此它不会像队列消息那样再开一轮。
+ */
+export interface OrcaDispatchClaimNotice {
+  version: 1;
+  state: 'unverified';
+  /** 给主人看的纠正正文（含原句引用与判定依据）。 */
+  summary: string;
+  reason: string;
+  quote: string;
+  at: number;
+}
+
+export type OrcaDispatchSystemRecord = OrcaDispatchReceipt | OrcaDispatchClaimNotice;
 
 /** 回执摘要长度上限，避免把整段派单正文塞进卡片。 */
 export const ORCA_DISPATCH_RECEIPT_SUMMARY_MAX = 240;
