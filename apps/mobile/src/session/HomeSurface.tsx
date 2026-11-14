@@ -4192,7 +4192,8 @@ function ProjectRow({
     // fields here so registering a drag never copies all project task data.
     const { key: projectKey, sessionCount } = project;
     return Gesture.Pan()
-      .activateAfterLongPress(600)
+      // Require a deliberate hold so pauses while scrolling do not start reordering.
+      .activateAfterLongPress(1000)
       .activeOffsetY([-8, 8])
       .failOffsetX([-12, 12])
       .onStart((event) => {
