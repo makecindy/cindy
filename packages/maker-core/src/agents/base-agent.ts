@@ -2187,7 +2187,8 @@ export const ASYNC_QUESTION_ANSWER = Symbol('cindy.async-question-answer');
 /** Host-classified ordinary user input only; absent on automation and question replies. Not an authorization grant. */
 export const SUPERSEDE_ASYNC_QUESTIONS = Symbol('cindy.supersede-async-questions');
 
-/** Call-local user content before Session replaces images with generated descriptions. */
+/** Call-local user content before Host context and Session image descriptions.
+ * Also retains explicit Skill intent when the wire text has been decorated. */
 export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-content');
 
 /** Host-restored user authorization for this send; never accepted from wire options. */
