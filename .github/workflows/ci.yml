@@ -305,19 +305,20 @@ jobs:
             *) echo "Host selection or regressions did not pass"; exit 1 ;;
           esac
 
-  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。四个
+  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。八个
   # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
   # 只需执行一次的检查放在 windows-runner-checks，不压在任一分片的关键路径上。
+  # 分片数与实测依据见 docs/dev-rules/desktop-unit-test-performance.md。
   windows-unit-shards:
-    name: Windows unit tests (${{ matrix.shard }}/4)
+    name: Windows unit tests (${{ matrix.shard }}/8)
     runs-on: windows-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
-      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/4
+      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/8
 
     steps:
       - name: Checkout client
@@ -326,6 +327,31 @@ jobs:
         # branch cost ~0.5 min per shard (verify, runner and Git jobs keep depth 0).
         with:
           lfs: true
+
+      # 托管 Windows runner 的工作区在 D 盘，TEMP 默认在 C 盘，而 C 盘 IO 明显更慢。
+      # Desktop 单测有 700 多个文件创建临时目录(electron stub 的 userData 也在 TEMP
+      # 下)，所以把 TEMP/TMP 放到工作区所在盘的 RUNNER_TEMP 下，只影响本 job 后续步骤。
+      # 同时打印 Defender 实时扫描状态；开启时排除工作区与临时目录。查询或排除失败
+      # 只记录日志，不改变测试结论。
+      - name: Keep temp files on the workspace drive
+        shell: pwsh
+        run: |
+          "Before: TEMP=$env:TEMP TMP=$env:TMP RUNNER_TEMP=$env:RUNNER_TEMP"
+          $temp = Join-Path $env:RUNNER_TEMP 'tmp'
+          New-Item -ItemType Directory -Force -Path $temp | Out-Null
+          "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "After: TEMP=$temp"
+          try {
+            $status = Get-MpComputerStatus -ErrorAction Stop
+            "Defender: RealTimeProtectionEnabled=$($status.RealTimeProtectionEnabled) AMRunningMode=$($status.AMRunningMode)"
+            if ($status.RealTimeProtectionEnabled) {
+              Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP -ErrorAction Stop
+              "Defender: excluded $env:GITHUB_WORKSPACE and $env:RUNNER_TEMP"
+            }
+          } catch {
+            "Defender: status or exclusion unavailable: $($_.Exception.Message)"
+          }
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -358,7 +384,19 @@ jobs:
       - name: Run client and package unit tests
         # 通过 package script 传递
         # npm_execpath，避免 Windows 子进程退回 PATH 上的 pnpm.cmd。
+        # XDT_VITEST_FILE_TIMINGS 让 Desktop 额外写出每个测试文件的耗时，供按耗时分片。
+        env:
+          XDT_VITEST_FILE_TIMINGS: ${{ runner.temp }}/vitest-file-timings/desktop-windows-shard-${{ matrix.shard }}.json
         run: pnpm run test:workspaces --tier unit
+
+      - name: Upload Desktop file timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-file-timings-windows-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/vitest-file-timings/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Windows runner 自测和伴侣数据库回归各只需执行一次。单独并行运行，避免给
   # 某一个 unit 分片额外叠加约 4 分钟、拖长整条关键路径。

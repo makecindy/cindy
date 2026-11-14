@@ -15,6 +15,31 @@ pnpm benchmark:desktop-workers -- --workers 1,2,4,8 --runs 1 --output <report.js
 或分池前后必须使用同一 checkout、同一机器和同一测试范围比较；单次数据需同时保留稳定性
 结果，不得只挑最快的一次。
 
+## 2026-11-14 Windows 分片 4 → 8、临时目录与文件耗时导出
+
+基线来自当天 4 次成功的 PR client-ci（run 43549591409、43549471962、43547498115、43546722990）：
+整轮墙钟 22–26 分钟，关键路径都是 Windows 单测分片（14.3–26.3 分钟）。同一时段 job 启动等待
+不超过约 1.5 分钟；更长的等待都是重跑（attempt 2）从首次创建时刻起算，不是 runner 排队。
+
+| 组成（Windows 每片） | 实测 | 说明 |
+| --- | --- | --- |
+| 准备 | 约 2.8 分钟 | checkout 31 秒；setup-node 73 秒，主要是恢复约 2.2 GB 的 pnpm store 缓存；install 43 秒 |
+| Desktop unit | 814–1,077 秒 | 同一批文件在 Linux 分片为 473–583 秒，约 1.8 倍 |
+| Mobile、maker-core 与其余包 | 3.5–4.5 分钟 | Mobile 87–131 秒 |
+
+- 托管 Windows runner 的工作区在 `D:\a\<repo>\<repo>`，pnpm store 已默认放在同盘
+  `D:\.pnpm-store`（pnpm 在项目盘根目录建 store），store 位置不是瓶颈。
+- TEMP 默认在 C 盘。Desktop 有 700 多个测试文件创建临时目录，electron stub 的 userData
+  也建在 `os.tmpdir()` 下，所以分片 job 把 TEMP/TMP 指到 `RUNNER_TEMP\tmp`（同在 D 盘）。
+- 同一步打印 Defender 实时扫描状态；开启时把工作区与 `RUNNER_TEMP` 加入排除。查询失败只记日志。
+- Windows unit 从 4 片改为 8 片。并集仍是完整 unit tier，由 `Windows unit tests` 汇总阻断；
+  `dev-docs-contract.test.mjs` 按矩阵长度校验 1..N 与 `XDT_UNIT_TEST_SHARD` 一致。
+  公开仓标准 runner 不计费，但会占用组织的并发额度；调整片数后要确认没有出现排队。
+- Desktop 分片设置 `XDT_VITEST_FILE_TIMINGS` 时，`src/test/vitest/fileTimingReporter.ts`
+  写出每个文件的环境、准备、收集、setup 与测试耗时，作为 `desktop-file-timings-windows-shard-*`
+  产物保留 14 天，供后续按耗时分片。未设置该变量时 Desktop 不覆盖 Vitest 默认 reporters；
+  设置时显式补回 GitHub Actions 下默认追加的 `github-actions` reporter。
+
 ## 2026-10-16 CI 关键路径与分片调整
 
 数据来自 main 上两次成功的 client-ci（run 38819825618、38805666371，当时为 2 个分片）：
@@ -154,8 +179,11 @@ named 与 namespace wrapper、短等待、常量内层等待和参数／fixture 
 
 后续候选（每项都要在同一 runner、同一分片配置下实测后才能声称收益）：
 
-- 按历史耗时分配分片（自定义 Vitest sequencer），拉平哈希均分造成的不均衡。
-- 把 Windows checkout 与临时目录放到 Dev Drive（ReFS），降低大量小文件 IO 的开销。
+- 按历史耗时分配分片（自定义 Vitest sequencer），拉平哈希均分造成的不均衡。2026-11-14 起
+  Windows 分片已导出逐文件耗时（见上文）；所有分片必须读取同一份耗时数据，否则切分结果不一致
+  会漏跑或重复，落地时要有「各片并集恰好覆盖全部文件一次」的回归。
+- 把 Windows checkout 与临时目录放到 Dev Drive（ReFS），降低大量小文件 IO 的开销。2026-11-14
+  先把 TEMP 移到工作区所在的 D 盘（见上文）；Dev Drive 是否另有收益仍需同 runner 对照。
 - 基线中逐用例重置最多的 `modelVisibilityPrefs.test.ts`（18 处）、
   `pi-package-store-security.test.ts`（余 `beforeEach` 1 处，其余 16 处是写明理由的重启边界；去掉它需要
   生产侧的 reset 接口）按 `codexProxyHost` 的方式改。`newMakerDraft.test.ts`
