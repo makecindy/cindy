@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { messages, sessions } from '../../schema';
 import * as taskImages from '../../../cindy-media/taskImageDelivery';
@@ -16,6 +16,10 @@ const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
   sqlite: null as Database.Database | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  // Renderer windows a broadcast reaches; empty unless a test opens one.
+  windows: [] as Array<{ isDestroyed(): boolean; webContents: { send(...args: unknown[]): void } }>,
+  // When set, broadcasts are scoped to a test-controlled owner generation; otherwise the real tap.
+  ownerGeneration: null as number | null,
   query: vi.fn(
     async (query: string, params: unknown[] = []): Promise<Array<Record<string, unknown>>> => {
       if (!h.sqlite) throw new Error('test sqlite not initialized');
@@ -55,8 +59,20 @@ vi.mock('electron', () => ({
       h.handlers.set(channel, handler);
     }),
   },
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: { getAllWindows: () => h.windows },
 }));
+vi.mock('../../../device-link/broadcast-tap', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../device-link/broadcast-tap')>();
+  const key = () => `owner:${h.ownerGeneration}`;
+  return {
+    ...actual,
+    captureDataOwnerBroadcastScope: () => (h.ownerGeneration === null
+      ? actual.captureDataOwnerBroadcastScope()
+      : { ownerScopeKey: key(), ownerStamp: undefined }),
+    isDataOwnerBroadcastScopeCurrent: (scope: Parameters<typeof actual.isDataOwnerBroadcastScopeCurrent>[0]) => (
+      h.ownerGeneration === null ? actual.isDataOwnerBroadcastScopeCurrent(scope) : scope.ownerScopeKey === key()),
+  };
+});
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -1108,6 +1124,79 @@ describe('findPendingAgentHandoff 持久消费位', () => {
       consumed: true,
     });
     expect(stored.rewind_at).toBe(3000);
+  });
+});
+
+// The consumption of an engine switch boundary rewrites its row and shows it again to the renderer
+// windows; a hidden context rebuild marker is only rewritten.
+describe('markLatestAgentHandoffConsumed boundary broadcast', () => {
+  function open(content: Record<string, unknown>, role = 'agent_switch') {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES ('sw', 'sw', 's1', ?, ?, NULL, NULL, 'cc', 1000, NULL)
+    `,
+      )
+      .run(role, JSON.stringify(content));
+    const sends: Array<{ args: unknown[]; storedAtSend: unknown }> = [];
+    const stored = () => JSON.parse((sqlite.prepare('SELECT content FROM messages WHERE id = ?').get('sw') as { content: string }).content);
+    h.windows = [{ isDestroyed: () => false, webContents: { send: (...args) => sends.push({ args, storedAtSend: stored() }) } }];
+    h.ownerGeneration = 1;
+    // The database worker's content update (client/tx), on this file's in-memory database.
+    h.tx.mockImplementation(async (name: string, input: Record<string, unknown>) => {
+      if (name !== 'message.updateContent') return deletion!(name, input as never);
+      const { changes } = sqlite.prepare('UPDATE messages SET content = ? WHERE session_id = ? AND client_id = ?')
+        .run(input.content, input.sessionId, input.clientId);
+      return { changes } as never;
+    });
+    return { sends, stored };
+  }
+  const deletion = h.tx.getMockImplementation();
+  afterEach(() => {
+    h.windows = [];
+    h.ownerGeneration = null;
+    h.tx.mockImplementation(deletion!);
+  });
+
+  it('writes the consumed engine switch boundary, then shows the written row to each window once', async () => {
+    const { sends, stored } = open({ handoff: 'HANDOFF', consumed: false, fromAgentKind: 'cc' });
+    await markLatestAgentHandoffConsumed('s1');
+    expect(stored()).toEqual({ handoff: 'HANDOFF', consumed: true, fromAgentKind: 'cc' });
+    expect(sends).toHaveLength(1);
+    const [{ args, storedAtSend }] = sends;
+    expect(args[0]).toBe('local-db:messages:created');
+    expect(args[1]).toMatchObject({ sessionId: 's1', message: { clientId: 'sw', role: 'agent_switch',
+      content: { handoff: 'HANDOFF', consumed: true, fromAgentKind: 'cc' } } });
+    expect(args).toHaveLength(3);
+    expect(storedAtSend).toEqual({ handoff: 'HANDOFF', consumed: true, fromAgentKind: 'cc' });
+  });
+
+  it('keeps the owner of the moment it was called: after an owner change the row is written but not shown', async () => {
+    const { sends, stored } = open({ handoff: 'HANDOFF', consumed: false });
+    const consuming = markLatestAgentHandoffConsumed('s1');
+    h.ownerGeneration = 2;
+    await consuming;
+    expect(stored()).toEqual({ handoff: 'HANDOFF', consumed: true });
+    expect(sends).toHaveLength(0);
+  });
+
+  it('neither writes nor shows a boundary already consumed', async () => {
+    const { sends, stored } = open({ handoff: 'HANDOFF', consumed: true, extra: 1 });
+    await markLatestAgentHandoffConsumed('s1');
+    expect(stored()).toEqual({ handoff: 'HANDOFF', consumed: true, extra: 1 });
+    expect(sends).toHaveLength(0);
+  });
+
+  it('writes a hidden context rebuild marker without showing it', async () => {
+    const { sends, stored } = open({ handoff: 'FILTERED', consumed: false }, 'context_rebuild');
+    await markLatestAgentHandoffConsumed('s1');
+    expect(stored()).toEqual({ handoff: 'FILTERED', consumed: true });
+    expect(sends).toHaveLength(0);
   });
 });
 
