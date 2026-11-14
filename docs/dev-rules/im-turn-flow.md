@@ -125,6 +125,14 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 | `channelToolScope.activeBySession`（`cindy_telegram_bot` / `cindy_feishu_bot` 轮次内工具的逐轮作用域） | `im/shared` | sessionId | 个人渠道能力；与群历史租约同一生命周期（`beforeProviderStart` 登记、`releaseTurnInteractionRoute` 释放）。Telegram、飞书 / Lark 各一种作用域，带着触发本轮那条连接自己的 transport；企业微信 / 钉钉 / Discord 没有渠道直通工具，伙伴专线轮次由 `messageHandler` 登记不带 transport 的 `LaneTurnScope`（只给触发者身份与当前对话）；`cindy_feishu_bot` 的 `send_*_to_user` 优先按它选出站 bot，无租约时按下述主人通知规则解析 |
 | Telegram 传输层（`chatQueues` / `typingLoops` / 回挂目标） | `packages/lizi-im/src/telegram/index.ts` | chat | 保留（个人出站载体） |
 
+**伙伴飞书 / Lark 私聊话题的回复位置**：主人在伙伴通知的话题内追问时，入站的
+`replyThread.rootMessageId` 作为本轮出站目标传给 runner；连续追问和排队轮次各自保留自己的根消息。
+找任务、`/ctr` 绑定、伙伴模型与暂停检查仍走原路由，不把话题根用作任务键，也不依赖个人 bot 的
+`im_notification_origins`。流式首卡、终稿、交互卡与文本降级沿用该轮目标；主会话的新消息没有这个
+目标，不会继承上一轮的话题。已发出的伙伴通知同样适用；个人 bot 已关联通知的回原任务机制不变。
+问题卡的编号／引用回答同样按入站私聊话题根校验回复位置，不把根写入任务路由；派发失败回执也保留原话题。
+回归见 `earlyUserMessagePersist.test.ts`、`turnRunnerCompanionRouting.test.ts` 与 `questionPresentation.test.ts`。
+
 **飞书主人通知的无租约路径**：`send_message_to_user` / `send_file_to_user` 在伙伴 canonical
 主任务的后台回报、心跳或桌面轮次中可主动通知主人。无飞书逐轮作用域时，宿主异步查询当前账号的
 `bot_session_links`（`role='canonical'`，关联 `sessions.source='bot'`），确认伙伴 Profile 为 `active`，

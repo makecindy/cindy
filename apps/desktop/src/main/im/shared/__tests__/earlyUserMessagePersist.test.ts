@@ -78,6 +78,7 @@ function wire(
     withPrepare: boolean;
     channel?: string;
     notificationSessionId?: string;
+    channelToolScopeFor?: ImChannelAdapter['channelToolScopeFor'];
     ambientTurnGate?: ImChannelAdapter['ambientTurnGate'];
   } = { withPrepare: true },
 ): Harness {
@@ -118,6 +119,7 @@ function wire(
     im,
     ui: slackUi,
     threadScoped: false,
+    ...(opts.channelToolScopeFor ? { channelToolScopeFor: opts.channelToolScopeFor } : {}),
     processingEmoji: 'Eyes',
     ...(prepareAgentTurnText ? { prepareAgentTurnText } : {}),
     ...(opts.ambientTurnGate ? { ambientTurnGate: opts.ambientTurnGate } : {}),
@@ -348,6 +350,49 @@ describe('messageHandler early user-message persist', () => {
     expect(h.persistEarly).not.toHaveBeenCalled();
     expect(turnArgs(h.runAgentTurn).prePersistedUserMessage).toBeUndefined();
   });
+});
+
+// Regression: companion notification topic replies lost their root before dispatch.
+// Production message handler; existing tests cover only origin-linked personal notifications.
+// Unit: an owner DM topic must carry an output-only root without changing task routing.
+it.each([
+  { companion: true, chatKind: 'direct' as const, requesterIsOwner: true, expected: 'om_notification' },
+  { companion: false, chatKind: 'direct' as const, requesterIsOwner: true, expected: undefined },
+  { companion: true, chatKind: 'group' as const, requesterIsOwner: true, expected: undefined },
+  { companion: true, chatKind: 'direct' as const, requesterIsOwner: false, expected: undefined },
+])('keeps companion topic output separate from the session route: %j', async ({ expected, ...scope }) => {
+  const h = wire({
+    withPrepare: true,
+    channelToolScopeFor: () => ({
+      channel: 'feishu', im: {} as never, botId: 'cli_bot', laneUserId: 'ou_owner',
+      chatId: 'oc_chat', threadId: '', triggerMessageId: 'om_msg', ...scope,
+    }),
+  });
+  h.deliver(makeEvent({ senderId: 'ou_owner', replyThread: {
+    rootMessageId: 'om_notification', threadId: 'omt_topic',
+  } }));
+  await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledOnce());
+  expect(turnArgs(h.runAgentTurn).replyThreadRootMessageId).toBe(expected);
+  expect(turnArgs(h.runAgentTurn).scopeKey).toBeUndefined();
+  expect(turnArgs(h.runAgentTurn).notificationSessionId).toBeUndefined();
+  expect(h.persistEarly).toHaveBeenCalledWith(expect.objectContaining({ scopeKey: undefined }));
+});
+
+// Outer failures must use the same output topic as successful companion dispatch.
+it.each(['throw', 'rejected'])('keeps %s dispatch failure notices in the companion topic', async mode => {
+  const h = wire({ withPrepare: true, channelToolScopeFor: () => ({
+    channel: 'feishu', im: {} as never, botId: 'cli_bot', laneUserId: 'ou_owner',
+    chatId: 'oc_chat', threadId: '', triggerMessageId: 'om_msg',
+    companion: true, chatKind: 'direct', requesterIsOwner: true,
+  }) });
+  h.runAgentTurn.mockRejectedValueOnce(new Error('runner failed'));
+  h.dispatchAgentTurn.mockResolvedValueOnce({ kind: 'rejected', reason: 'companion_unavailable' });
+  h.deliver(makeEvent({ senderId: 'ou_owner', replyThread: { rootMessageId: 'om_notification', threadId: 'omt_topic' },
+    ...(mode === 'rejected' ? { delivery: { awaitPersistence: vi.fn(), accept: vi.fn(), defer: vi.fn() } } : {}),
+  }));
+  await vi.waitFor(() => expect(h.sendText).toHaveBeenCalledWith(
+    'ou_owner', expect.any(String), expect.objectContaining({ threadTs: 'om_notification' }),
+  ));
 });
 
 it('does not persist a notification reply into the default IM session before dispatch', async () => {
