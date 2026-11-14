@@ -167,10 +167,21 @@ export function useCheckout(
           if (!reply || 'pending' in reply) throw error;
         }
         if ('pending' in reply || currentKey.current !== key || !mounted.current) return;
-        update({ status: reply.status, error: reply.blocked });
-        if (reply.blocked)
+        let error: string | undefined = reply.blocked;
+        if (reply.blocked === 'changed') {
+          if (req.action === 'restore') {
+            // The write preflight is authoritative; the cached saved entry may be stale.
+            error =
+              reply.status.current === req.expected &&
+              !reply.status.stashes.some((stash) => stash.id === req.stashId)
+                ? 'savedMissing'
+                : 'restoreChanged';
+          } else if (req.action === 'undo') error = 'undoChanged';
+        }
+        update({ status: reply.status, error });
+        if (error)
           reportError(
-            reply.blocked,
+            error,
             reply.status,
             req.action === 'switch'
               ? req.branch

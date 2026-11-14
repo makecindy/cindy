@@ -58,7 +58,13 @@ function Page({
 void mountPage({
   host: (ctx) => {
     let current = 'main';
-    let saved = ['recover', 'restored', 'recover-busy'].includes(ctx.case);
+    let saved = [
+      'recover',
+      'restored',
+      'recover-busy',
+      'recover-missing',
+      'recover-changed',
+    ].includes(ctx.case);
     return {
       worktreeDetectCwd: async () => ({
         gitInstalled: true,
@@ -109,6 +115,10 @@ void mountPage({
           : forbid('worktreeSyncBranch'),
       worktreeCheckout: async (req: { action: string; branch?: string }) => {
         if (ctx.case === 'recover-busy' && req.action === 'restore') return new Promise(() => {});
+        if (['recover-missing', 'recover-changed'].includes(ctx.case) && req.action === 'restore') {
+          saved = false;
+          if (ctx.case === 'recover-changed') current = 'feature';
+        }
         // Hold only this in-memory reply so the real row stays in its pending state.
         if (req.action === 'switch' && ctx.case === 'switching') return new Promise(() => {});
         if (
@@ -121,8 +131,15 @@ void mountPage({
           saved = ctx.case === 'saved';
         } else if (req.action === 'restore' && ctx.case === 'restored') saved = false;
         else if (req.action === 'undo' && ctx.case === 'undone') current = 'main';
-        else if (req.action !== 'status') return forbid('unexpected fixture mutation')();
+        else if (
+          req.action !== 'status' &&
+          !(['recover-missing', 'recover-changed'].includes(ctx.case) && req.action === 'restore')
+        )
+          return forbid('unexpected fixture mutation')();
         return {
+          ...(['recover-missing', 'recover-changed'].includes(ctx.case) && req.action === 'restore'
+            ? { blocked: 'changed' }
+            : {}),
           ...(req.action === 'switch'
             ? {
                 receipt: {

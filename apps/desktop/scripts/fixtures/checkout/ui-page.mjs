@@ -12,6 +12,8 @@ export default {
     'default-source': { about: 'Worktree without a saved source defaults to origin/main' },
     'sync-off': { about: 'Unchecked worktree still exposes remote branch refresh' },
     'recover-busy': { about: 'Recovery toast action is disabled during a menu-triggered restore' },
+    'recover-missing': { about: 'Restore reply reports saved changes deleted outside Cindy' },
+    'recover-changed': { about: 'Restore reply reports the current branch changed outside Cindy' },
     restored: { about: 'Restore completion toast' },
     undone: { about: 'Undo completion toast' },
     ...Object.fromEntries(
@@ -133,7 +135,27 @@ export default {
     }
     await page.getByTestId('create-agent-branch-chip').click();
     await page.getByRole('option', { name: /^feature/ }).waitFor();
-    if (ui.case === 'recover-busy') {
+    if (['recover-missing', 'recover-changed'].includes(ui.case)) {
+      await page
+        .locator('[aria-live][data-state]')
+        .getByRole('button', {
+          name: await ui.t('newChat.checkout.restore'),
+          exact: true,
+        })
+        .click();
+      await page
+        .getByRole('alert')
+        .filter({
+          hasText: await ui.t(
+            'newChat.checkout.errors.' +
+              (ui.case === 'recover-missing' ? 'savedMissing' : 'restoreChanged'),
+          ),
+        })
+        .waitFor();
+      await page
+        .getByRole('button', { name: await ui.t('newChat.checkout.restore'), exact: true })
+        .waitFor({ state: 'hidden' });
+    } else if (ui.case === 'recover-busy') {
       await page
         .getByTestId('checkout-menu-notices')
         .getByRole('button', { name: await ui.t('newChat.checkout.restore'), exact: true })

@@ -1162,6 +1162,61 @@ it('previews the first three of sixty changed files and reports the remainder', 
   expect(screen.getByText(mocks.t('newChat.checkout.moreFiles', { count: 57 }))).toBeTruthy();
 });
 
+// Unit regression: a cached saved change may disappear before restore's authoritative
+// reply. Existing stale-action tests only cover absence from the renderer cache.
+it.each([
+  ['main', 'savedMissing'],
+  ['feature', 'restoreChanged'],
+])('uses restore reply facts when the current branch is %s', async (current, error) => {
+  const checkout = setupCheckout(true, { stashes: [{ id: 'saved', branch: 'main' }] });
+  render(<CheckoutRow />);
+  await waitFor(() => expect(mocks.info).toHaveBeenCalledOnce());
+  const action = mocks.info.mock.calls[0][1].action;
+  checkout.mockClear();
+  checkout.mockResolvedValue({ blocked: 'changed', status: { ...checkoutStatus, current } });
+  await act(async () => {
+    action.onClick();
+  });
+  await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(`newChat.checkout.errors.${error}`));
+  expect(mocks.toast).toHaveBeenCalledOnce();
+  expect(checkout.mock.calls.map(([req]) => req.action)).toEqual(['restore']);
+  expect(checkout.mock.calls[0][0]).toEqual(
+    expect.objectContaining({ expected: 'main', stashId: 'saved' }),
+  );
+  expect(mocks.dismiss).toHaveBeenCalledWith('checkout-info-toast');
+  expect(mocks.success).not.toHaveBeenCalled();
+});
+
+// The same changed reply must retain undo guidance for an undo request.
+it('keeps undo-specific guidance when undo is rejected after an external branch change', async () => {
+  const checkout = setupCheckout();
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  fireEvent.click(branchButton());
+  await screen.findByRole('option', { name: 'feature' });
+  checkout.mockResolvedValue({
+    status: { ...checkoutStatus, current: 'feature' },
+    receipt: {
+      id: 'receipt',
+      from: 'main',
+      to: 'feature',
+      strategy: 'carry',
+      hadChanges: true,
+      sessions: [],
+    },
+  });
+  fireEvent.click(screen.getByRole('option', { name: 'feature' }));
+  await waitFor(() => expect(mocks.success).toHaveBeenCalledOnce());
+  checkout.mockResolvedValue({ blocked: 'changed', status: checkoutStatus });
+  await act(async () => {
+    mocks.success.mock.calls[0][1].action.onClick();
+  });
+  await waitFor(() =>
+    expect(mocks.toast).toHaveBeenCalledWith('newChat.checkout.errors.undoChanged'),
+  );
+  expect(mocks.toast).toHaveBeenCalledOnce();
+});
+
 // Stale recovery actions must re-read facts once, then act or explain why not.
 it.each([true, false, 'unknown'] as const)(
   'refreshes a stale restore action and gives visible feedback (available=%s)',
