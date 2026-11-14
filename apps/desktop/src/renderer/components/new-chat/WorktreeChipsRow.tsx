@@ -46,6 +46,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
@@ -64,7 +65,7 @@ import {
   CheckoutNotice,
   CheckoutDialog,
   CheckoutStashes,
-  UseWorktreeButton,
+  CheckoutSessions,
 } from './CheckoutFeedback';
 import type { ReactNode } from 'react';
 import { useBranches, useDetectCwd, useSuggestName } from '@/hooks/useWorktreeQueries';
@@ -364,41 +365,52 @@ export function WorktreeChipsRow({
                   return undefined;
                 }
           }
+          currentBranchRunning={
+            !effectiveWorktreeEnabled &&
+            menuStatus?.blocked === 'busy' &&
+            menuStatus.sessions.some((s) => s.running)
+          }
           menuHeader={
             <>
               <CheckoutStashes checkout={checkout} />
-              {!effectiveWorktreeEnabled &&
-                (menuStatus?.blocked || !!menuStatus?.sessions.length) && (
-                  <CheckoutNotice
-                    warning={!!menuStatus?.blocked}
-                    action={
-                      canUseWorktree &&
-                      (menuStatus?.blocked === 'busy' || !!menuStatus?.sessions.length) ? (
-                        <UseWorktreeButton onClick={() => useWorktree()} />
-                      ) : undefined
-                    }
-                  >
-                    {menuStatus?.blocked && menuStatus.blocked !== 'occupied' && (
-                      <p>
+              {!effectiveWorktreeEnabled && menuStatus && (
+                <>
+                  {(menuStatus.blocked === 'busy' && menuStatus.sessions.some((s) => s.running)) ||
+                  !menuStatus.blocked ? (
+                    <CheckoutSessions
+                      status={menuStatus}
+                      onUseWorktree={canUseWorktree ? () => useWorktree() : undefined}
+                    />
+                  ) : (
+                    menuStatus.blocked !== 'occupied' && (
+                      <CheckoutNotice
+                        warning
+                        action={
+                          canUseWorktree &&
+                          (menuStatus.blocked === 'busy' || !!menuStatus.sessions.length) ? (
+                            <Button
+                              compact
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => useWorktree()}
+                            >
+                              {t('newChat.checkout.useWorktree')}
+                            </Button>
+                          ) : undefined
+                        }
+                      >
                         <CheckoutError code={menuStatus.blocked} status={menuStatus} />
-                      </p>
-                    )}
-                    {!!menuStatus?.sessions.length && !menuStatus.blocked && (
-                      <p>
-                        {t('newChat.checkout.idleSessions', {
-                          count: menuStatus.sessions.length,
-                          names: menuStatus.sessions.map((session) => session.name).join(', '),
-                        })}
-                      </p>
-                    )}
-                    {canUseWorktree &&
-                      (menuStatus?.blocked === 'busy' || !!menuStatus?.sessions.length) && (
-                        <p className="mt-1 text-muted-foreground">
-                          {t('newChat.worktree.chipTooltip')}
-                        </p>
-                      )}
-                  </CheckoutNotice>
-                )}
+                        {canUseWorktree &&
+                          (menuStatus.blocked === 'busy' || !!menuStatus.sessions.length) && (
+                            <p className="mt-1 text-muted-foreground">
+                              {t('newChat.worktree.chipTooltip')}
+                            </p>
+                          )}
+                      </CheckoutNotice>
+                    )
+                  )}
+                </>
+              )}
             </>
           }
           compact={compact}
@@ -560,9 +572,11 @@ export function BranchWorktreeChip({
   onToggle,
   compact,
   menuHeader,
+  currentBranchRunning,
   optionDisabledReason,
 }: {
   menuHeader?: ReactNode;
+  currentBranchRunning?: boolean;
   optionDisabledReason?: (branch: string) => string | undefined;
   baseRepo?: string;
   deviceId?: string | null;
@@ -927,7 +941,16 @@ export function BranchWorktreeChip({
                               : b === branchLabel && 'bg-accent/60',
                           )}
                         >
-                          {displayBranch(b)}
+                          {currentBranchRunning && b === branchLabel ? (
+                            <span className="flex items-center justify-between gap-2">
+                              <span className="min-w-0 break-words">{displayBranch(b)}</span>
+                              <span className="shrink-0 text-11 text-[var(--text-tertiary)]">
+                                ● {t('newChat.checkout.running')}
+                              </span>
+                            </span>
+                          ) : (
+                            displayBranch(b)
+                          )}
                           {b === branchLabel && sync.details && (
                             <div className="text-12 text-muted-foreground">{sync.details}</div>
                           )}

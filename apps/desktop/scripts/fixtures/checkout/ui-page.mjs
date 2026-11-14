@@ -38,6 +38,8 @@ export default {
     fetched: { about: 'New commits toast' },
     stashed: { about: 'Saved changes toast' },
     default: { about: 'Actual branch while unchecked and an occupied branch in the menu' },
+    'busy-two': { about: 'Two running sessions' },
+    'idle-menu': { about: 'Idle sessions in one quiet line' },
     busy: { about: 'Running session blocks checkout with an explicit worktree alternative' },
     idle: { about: 'Idle sessions are named without blocking branch choices' },
     dirty: { about: 'Scrollable dirty file list with fixed actions and worktree alternative' },
@@ -203,7 +205,12 @@ export default {
         await page.getByRole('dialog').waitFor();
         if (ui.case === 'stashed') await page.getByRole('radio').nth(1).check();
         await page
-          .getByRole('button', { name: await ui.t('newChat.checkout.confirmSwitch'), exact: true })
+          .getByRole('button', {
+            name: await ui.t(
+              'newChat.checkout.' + (ui.case === 'stashed' ? 'stashConfirm' : 'carryConfirm'),
+            ),
+            exact: true,
+          })
           .click();
       }
       const feedback = page.getByRole('status');
@@ -291,6 +298,15 @@ export default {
         ),
         'no-drag',
       );
+      assert.equal(await dialog.getByRole('listitem').count(), 0);
+      await ui.capture('collapsed');
+      await dialog
+        .getByRole('button', { name: await ui.t('newChat.checkout.showFiles'), exact: true })
+        .click();
+      await dialog.getByRole('listitem').first().waitFor();
+      await dialog.evaluate((el) =>
+        Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)),
+      );
       assert.equal(await dialog.getByRole('listitem').count(), 3);
       if (ui.case === 'many-files')
         await dialog
@@ -348,14 +364,14 @@ export default {
     } else {
       assert.equal(
         await page.getByRole('option', { name: /^feature/ }).getAttribute('aria-disabled'),
-        String(['busy', 'operation'].includes(ui.case)),
+        String(['busy', 'busy-two', 'operation'].includes(ui.case)),
       );
       assert.equal(
         await page.getByRole('option', { name: /^release/ }).getAttribute('aria-disabled'),
-        String(['busy', 'operation'].includes(ui.case)),
+        String(['busy', 'busy-two', 'operation'].includes(ui.case)),
       );
     }
-    if (['busy', 'operation', 'idle', 'recover'].includes(ui.case)) {
+    if (['busy', 'busy-two', 'operation', 'idle', 'idle-menu', 'recover'].includes(ui.case)) {
       const notice = page.getByTestId('checkout-menu-notices');
       assert.equal(
         await notice.evaluate((el) =>
@@ -365,7 +381,10 @@ export default {
       );
       const oldBox = await notice.boundingBox();
       const list = page.getByRole('listbox');
-      const current = page.getByRole('option', { name: 'main', exact: true });
+      const current = page.getByRole('option', {
+        name: ui.case.startsWith('busy') ? /^main/ : 'main',
+        exact: true,
+      });
       const viewport = await list.boundingBox();
       const currentBox = await current.boundingBox();
       assert.ok(

@@ -653,9 +653,12 @@ it('disables checkout choices while a task is running; explicit worktree keeps t
   await act(async () => {
     fireEvent.click(screen.getByRole('option', { name: /feature/ }));
   });
+  expect(
+    screen.getByText(mocks.t('newChat.checkout.runningTitle_one', { count: 1, name: 'Active' })),
+  ).toBeTruthy();
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.useWorktree' }));
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.startWorktree' }));
   });
   expect(screen.getByRole('listbox')).toBeTruthy();
   expect(branchButton().textContent).toBe('remembered-source');
@@ -690,8 +693,11 @@ it('lets the user cancel dirty checkout or choose worktree without any Git mutat
     fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
   });
   await screen.findByRole('dialog');
+  fireEvent.click(
+    screen.getByRole('radio', { name: 'newChat.checkout.worktree{"branch":"main"}' }),
+  );
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.useWorktree' }));
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.startWorktree' }));
   });
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(branchButton().textContent).toBe('feature');
@@ -1007,7 +1013,11 @@ it.each(['plain', 'carry', 'stash', 'idle', 'fetched'])(
         fireEvent.click(screen.getByRole('radio', { name: choice }));
       });
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.confirmSwitch' }));
+        fireEvent.click(
+          screen.getByRole('button', {
+            name: `newChat.checkout.${mode === 'stash' ? 'stashConfirm' : 'carryConfirm'}`,
+          }),
+        );
       });
     }
     await waitFor(() =>
@@ -1100,7 +1110,11 @@ it.each([true, false])(
     expect(radios[0].disabled).toBe(!carryAllowed);
     expect(radios[1].checked).toBe(!carryAllowed);
     expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.confirmSwitch' }));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: `newChat.checkout.${carryAllowed ? 'carryConfirm' : 'stashConfirm'}`,
+      }),
+    );
     await waitFor(() =>
       expect(checkout).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'switch', strategy: carryAllowed ? 'carry' : 'stash' }),
@@ -1131,7 +1145,9 @@ it.each(['busy', 'recover'])(
   async (kind) => {
     const checkout = setupCheckout(
       true,
-      kind === 'busy' ? { blocked: 'busy' } : { stashes: [{ id: 'saved', branch: 'main' }] },
+      kind === 'busy'
+        ? { blocked: 'busy', sessions: [{ id: 'running', name: 'Active', running: true }] }
+        : { stashes: [{ id: 'saved', branch: 'main' }] },
     );
     render(<CheckoutRow />);
     await waitFor(() => expect(branchButton().textContent).toBe('main'));
@@ -1148,7 +1164,7 @@ it.each(['busy', 'recover'])(
       await new Promise(requestAnimationFrame);
     });
     const action = screen.getByRole('button', {
-      name: kind === 'busy' ? 'newChat.checkout.useWorktree' : 'newChat.checkout.restore',
+      name: kind === 'busy' ? 'newChat.checkout.startWorktree' : 'newChat.checkout.restore',
     });
     act(() => action.focus());
     await act(async () => {
@@ -1187,6 +1203,8 @@ it('previews the first three of sixty changed files and reports the remainder', 
   fireEvent.click(branchButton());
   fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
   await screen.findByRole('dialog');
+  fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.showFiles' }));
+  await screen.findAllByRole('listitem');
   expect(screen.getAllByRole('listitem').map((row) => row.title)).toEqual(files.slice(0, 3));
   expect(screen.getByText(mocks.t('newChat.checkout.moreFiles', { count: 57 }))).toBeTruthy();
 });

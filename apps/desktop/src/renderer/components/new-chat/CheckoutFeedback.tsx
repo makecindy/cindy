@@ -1,26 +1,79 @@
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Info } from 'lucide-react';
-import { Tip } from '@/components/ui/tooltip';
+import {
+  AlertTriangle,
+  Info,
+  ArrowRight,
+  Archive,
+  Copy,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
+import { Collapse } from '@/components/ui/collapse';
+import { Spinner } from '@/components/ui/spinner';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { formatCheckoutError, type useCheckout } from '@/hooks/useCheckout';
 import type { CheckoutStatus } from '../../../shared/worktreeCheckout';
 
-/** Every explicit worktree alternative uses the checkbox's existing preference callback. */
-export function UseWorktreeButton({
-  onClick,
-  disabled,
+export function CheckoutSessions({
+  status,
+  onUseWorktree,
 }: {
-  onClick: () => void;
-  disabled?: boolean;
+  status: CheckoutStatus;
+  onUseWorktree?: () => void;
 }) {
   const { t } = useTranslation();
+  const running = status.sessions.filter((s) => s.running);
+  const vars = {
+    count: running.length || status.sessions.length,
+    name: (running[0] || status.sessions[0])?.name,
+  };
+  if (status.blocked === 'busy' && running.length)
+    return (
+      <div className="m-1 rounded-lg bg-[var(--surface-chip)] p-3" role="status">
+        <div className="flex items-center gap-2">
+          <Spinner size={14} aria-hidden />
+          <span
+            className="min-w-0 truncate text-13 font-medium"
+            title={t(`newChat.checkout.runningTitle${vars.count === 1 ? '_one' : ''}`, vars)}
+          >
+            {t(`newChat.checkout.runningTitle${vars.count === 1 ? '_one' : ''}`, vars)}
+          </span>
+        </div>
+        <div className="ml-[22px] mt-1 space-y-2 text-12 text-[var(--text-secondary)]">
+          <p>
+            {t(`newChat.checkout.runningWait${vars.count === 1 ? '_one' : ''}`, vars)}
+            {onUseWorktree && ' ' + t('newChat.checkout.runningWorktree')}
+          </p>
+          {onUseWorktree && (
+            <Button compact size="sm" variant="primary" onClick={onUseWorktree}>
+              {t('newChat.checkout.startWorktree')}
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  if (status.blocked || !status.sessions.length) return null;
   return (
-    <Button compact size="sm" variant="secondary" disabled={disabled} onClick={onClick}>
-      {t('newChat.checkout.useWorktree')}
-    </Button>
+    <div
+      className="flex items-center gap-1 px-2 py-2 text-12 text-[var(--text-secondary)]"
+      role="status"
+    >
+      <Info size={14} className="shrink-0" aria-hidden />
+      <span
+        className="min-w-0 flex-1 truncate"
+        title={t(`newChat.checkout.idleSessions${vars.count === 1 ? '_one' : ''}`, vars)}
+      >
+        {t(`newChat.checkout.idleSessions${vars.count === 1 ? '_one' : ''}`, vars)}
+      </span>
+      {onUseWorktree && (
+        <Button compact tone="quiet" size="sm" className="px-1" onClick={onUseWorktree}>
+          {t('newChat.checkout.useWorktree')}
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -108,12 +161,19 @@ export function CheckoutDialog({
 }) {
   const { t } = useTranslation();
   const { dialog, busy } = checkout;
-  const [strategy, setStrategy] = useState<'carry' | 'stash'>('carry');
+  const [strategy, setStrategy] = useState<'carry' | 'stash' | 'worktree'>('carry');
+  const [filesOpen, setFilesOpen] = useState(false);
+  const filesId = useId();
   const cancel = useRef<HTMLButtonElement>(null);
   const descriptionId = useId();
   useEffect(() => {
     setStrategy(dialog?.status.carryAllowed ? 'carry' : 'stash');
+    setFilesOpen(false);
   }, [dialog]);
+  useEffect(() => {
+    if (strategy === 'worktree' && !onUseWorktree)
+      setStrategy(dialog?.status.carryAllowed ? 'carry' : 'stash');
+  }, [strategy, onUseWorktree, dialog]);
   const target = dialog?.branch.replace(/^refs\/remotes\//, '') ?? '';
   const vars = { branch: target, current: dialog?.status.current };
   const idle = dialog?.status.sessions.filter((s) => !s.running) ?? [];
@@ -136,119 +196,148 @@ export function CheckoutDialog({
           onEscapeKeyDown={(e) => {
             if (busy) e.preventDefault();
           }}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 p-4"
+          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col gap-2 p-4"
         >
           <Dialog.Title className="break-words text-18 font-medium text-[var(--confirm-title)]">
             {t('newChat.checkout.title', vars)}
           </Dialog.Title>
           <div className="min-h-0 overflow-y-auto space-y-2 text-13">
-            <Dialog.Description className="break-words text-[var(--confirm-desc)]">
-              {t('newChat.checkout.dirtyDescription', {
-                branch: dialog?.status.current,
-                count: dialog?.status.files.length,
-              })}
-            </Dialog.Description>
-            {!!idle.length && (
-              <p className="text-muted-foreground">
-                {t('newChat.checkout.dialogSessions', { count: idle.length, branch: target })}
-              </p>
-            )}
-            <ul className="border-y border-border py-1 text-12">
-              {dialog?.status.files.slice(0, 3).map((file) => {
-                const detail = dialog.status.fileDetails?.[file];
-                return (
-                  <li key={file} className="flex min-h-7 items-center gap-3" title={file}>
-                    <span className="flex min-w-0 flex-1 font-mono" aria-label={file}>
-                      <span className="min-w-0 overflow-hidden whitespace-nowrap">
-                        {file.slice(0, Math.ceil(file.length / 2))}
-                      </span>
-                      <span dir="rtl" className="max-w-[50%] shrink-0 truncate text-left">
-                        <bdi dir="ltr">{file.slice(Math.ceil(file.length / 2))}</bdi>
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-muted-foreground">
-                      {detail?.kind === 'new'
-                        ? t('newChat.checkout.newFile')
-                        : detail?.kind === 'deleted'
-                          ? t('newChat.checkout.deletedFile')
-                          : detail?.added !== undefined && detail.removed !== undefined
-                            ? `+${detail.added} −${detail.removed}`
-                            : ''}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-            {dialog && dialog.status.files.length > 3 && (
-              <p className="text-12 text-muted-foreground">
-                {t('newChat.checkout.moreFiles', { count: dialog.status.files.length - 3 })}
-              </p>
-            )}
+            <div className="flex items-start justify-between gap-2">
+              <Dialog.Description className="break-words text-[var(--confirm-desc)]">
+                {t('newChat.checkout.dirtyDescription', {
+                  branch: dialog?.status.current,
+                  count: dialog?.status.files.length,
+                })}
+              </Dialog.Description>
+              <Button
+                compact
+                tone="quiet"
+                size="sm"
+                aria-expanded={filesOpen}
+                aria-controls={filesId}
+                onClick={() => setFilesOpen(!filesOpen)}
+              >
+                {t(`newChat.checkout.${filesOpen ? 'hideFiles' : 'showFiles'}`)}
+                {filesOpen ? (
+                  <ChevronUp size={14} aria-hidden />
+                ) : (
+                  <ChevronDown size={14} aria-hidden />
+                )}
+              </Button>
+            </div>
+            <Collapse open={filesOpen} id={filesId}>
+              <div className="rounded-lg bg-[var(--surface-chip)] px-3 py-1">
+                <ul className="text-12">
+                  {dialog?.status.files.slice(0, 3).map((file) => {
+                    const detail = dialog.status.fileDetails?.[file];
+                    return (
+                      <li key={file} className="flex min-h-6 items-center gap-3" title={file}>
+                        <span className="flex min-w-0 flex-1 font-mono" aria-label={file}>
+                          <span className="min-w-0 overflow-hidden whitespace-nowrap">
+                            {file.slice(0, Math.ceil(file.length / 2))}
+                          </span>
+                          <span dir="rtl" className="max-w-[50%] shrink-0 truncate text-left">
+                            <bdi dir="ltr">{file.slice(Math.ceil(file.length / 2))}</bdi>
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-muted-foreground">
+                          {detail?.kind === 'new'
+                            ? t('newChat.checkout.newFile')
+                            : detail?.kind === 'deleted'
+                              ? t('newChat.checkout.deletedFile')
+                              : detail?.added !== undefined && detail.removed !== undefined
+                                ? `+${detail.added} −${detail.removed}`
+                                : ''}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {dialog && dialog.status.files.length > 3 && (
+                  <p className="text-12 text-muted-foreground">
+                    {t('newChat.checkout.moreFiles', { count: dialog.status.files.length - 3 })}
+                  </p>
+                )}
+              </div>
+            </Collapse>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-13 font-medium">{t('newChat.checkout.question')}</span>
+              <span className="text-12 text-[var(--text-tertiary)]">
+                {t('newChat.checkout.noLoss')}
+              </span>
+            </div>
             <div
               role="radiogroup"
-              aria-label={t('newChat.checkout.title', vars)}
-              className="space-y-2"
+              aria-label={t('newChat.checkout.question')}
+              className="overflow-hidden rounded-xl border border-[var(--border-default)] divide-y divide-[var(--border-default)]"
             >
-              {(['carry', 'stash'] as const).map((choice) => {
-                const disabled = !!busy || (choice === 'carry' && !dialog?.status.carryAllowed);
-                return (
-                  <label
-                    key={choice}
-                    className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 focus-within:ring-2 focus-within:ring-[var(--focus-ring)] ${disabled ? 'cursor-not-allowed' : 'hover:bg-accent'} ${strategy === choice ? 'border-foreground bg-accent' : 'border-border'}`}
-                  >
-                    <input
-                      type="radio"
-                      aria-label={t(`newChat.checkout.${choice}`, {
-                        branch: choice === 'carry' ? target : dialog?.status.current,
-                      })}
-                      aria-describedby={`${descriptionId}-${choice}`}
-                      name="checkout-strategy"
-                      value={choice}
-                      checked={strategy === choice}
-                      disabled={disabled}
-                      onChange={() => setStrategy(choice)}
-                      className={`mt-0.5 size-4 shrink-0 accent-[var(--text-primary)] ${disabled ? 'opacity-50' : ''}`}
-                    />
-                    <span className="min-w-0 break-words">
-                      <span className={`block font-medium ${disabled ? 'opacity-50' : ''}`}>
-                        {t(`newChat.checkout.${choice}`, {
+              {(['carry', 'stash', ...(onUseWorktree ? (['worktree'] as const) : [])] as const).map(
+                (choice) => {
+                  const disabled = !!busy || (choice === 'carry' && !dialog?.status.carryAllowed);
+                  const Icon =
+                    choice === 'carry' ? ArrowRight : choice === 'stash' ? Archive : Copy;
+                  return (
+                    <label
+                      key={choice}
+                      className={`relative flex cursor-pointer items-center gap-3 px-3 py-2 focus-within:ring-2 focus-within:ring-inset focus-within:ring-[var(--focus-ring)] ${disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-[var(--surface-hover)]'} ${strategy === choice ? 'bg-[var(--surface-chip)]' : ''}`}
+                    >
+                      <span
+                        className={`flex size-[30px] shrink-0 items-center justify-center rounded-lg ${strategy === choice ? 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]' : 'bg-[var(--surface-chip)] text-[var(--text-secondary)]'}`}
+                      >
+                        <Icon size={16} aria-hidden />
+                      </span>
+                      <input
+                        type="radio"
+                        aria-label={t(`newChat.checkout.${choice}`, {
                           branch: choice === 'carry' ? target : dialog?.status.current,
                         })}
+                        aria-describedby={`${descriptionId}-${choice}`}
+                        name="checkout-strategy"
+                        value={choice}
+                        checked={strategy === choice}
+                        disabled={disabled}
+                        onChange={() => setStrategy(choice)}
+                        className="sr-only"
+                      />
+                      <span className="min-w-0 flex-1 break-words">
+                        <span className="block font-medium">
+                          {t(`newChat.checkout.${choice}`, {
+                            branch: choice === 'carry' ? target : dialog?.status.current,
+                          })}
+                        </span>
+                        <span
+                          id={`${descriptionId}-${choice}`}
+                          className="block text-12 text-[var(--text-secondary)]"
+                        >
+                          {t(
+                            `newChat.checkout.${choice === 'carry' && !dialog?.status.carryAllowed ? 'carryConflict' : choice + 'Description'}`,
+                            vars,
+                          )}
+                        </span>
                       </span>
                       <span
-                        id={`${descriptionId}-${choice}`}
-                        className="mt-1 block text-12 text-muted-foreground"
-                      >
-                        {t(
-                          `newChat.checkout.${choice === 'carry' && !dialog?.status.carryAllowed ? 'carryConflict' : choice + 'Description'}`,
-                          vars,
-                        )}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })}
+                        aria-hidden
+                        className={`flex size-4 shrink-0 items-center justify-center rounded-full border-[1.5px] border-[var(--text-tertiary)] ${strategy === choice ? 'bg-[var(--text-primary)] border-[var(--text-primary)]' : ''}`}
+                      />
+                    </label>
+                  );
+                },
+              )}
             </div>
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            {onUseWorktree && (
-              <Tip
-                text={t('newChat.worktree.chipTooltip')}
-                contentClassName="z-[10001] max-w-[min(360px,calc(100vw-32px))] break-words"
-              >
-                <Button
-                  compact
-                  variant="secondary"
-                  palette="confirmation"
-                  size="sm"
-                  className="min-h-9"
-                  disabled={busy}
-                  onClick={() => onUseWorktree(dialog?.branch)}
-                >
-                  {t('newChat.checkout.useWorktree')}
-                </Button>
-              </Tip>
-            )}
+          {!!idle.length && (
+            <div className="flex items-start gap-2 text-12 text-[var(--text-secondary)]">
+              <Info size={14} className="shrink-0 mt-0.5" aria-hidden />
+              <span>
+                {t(`newChat.checkout.dialogSessions${idle.length === 1 ? '_one' : ''}`, {
+                  count: idle.length,
+                  name: idle[0].name,
+                  branch: target,
+                })}
+              </span>
+            </div>
+          )}
+          <div className="flex shrink-0 justify-end gap-2">
             <div className="ml-auto flex flex-row-reverse gap-2">
               <Button
                 compact
@@ -258,14 +347,19 @@ export function CheckoutDialog({
                 className="min-h-9"
                 disabled={
                   busy ||
-                  !!dialog?.status.blocked ||
+                  (strategy !== 'worktree' && !!dialog?.status.blocked) ||
                   (strategy === 'carry' && !dialog?.status.carryAllowed)
                 }
                 onClick={() =>
-                  dialog && void checkout.performSwitch(dialog.branch, dialog.status, strategy)
+                  dialog &&
+                  (strategy === 'worktree'
+                    ? onUseWorktree?.(dialog.branch)
+                    : void checkout.performSwitch(dialog.branch, dialog.status, strategy))
                 }
               >
-                {t('newChat.checkout.confirmSwitch')}
+                {t(
+                  `newChat.checkout.${strategy === 'worktree' ? 'startWorktree' : strategy + 'Confirm'}`,
+                )}
               </Button>
               <Button
                 compact

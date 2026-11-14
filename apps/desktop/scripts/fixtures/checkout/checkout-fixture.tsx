@@ -80,7 +80,7 @@ void mountPage({
           ...(ctx.case === 'operation' ? ['main'] : []),
           'feature',
           'release',
-          ...(['busy', 'operation', 'idle', 'recover'].includes(ctx.case)
+          ...(['busy', 'busy-two', 'operation', 'idle', 'idle-menu', 'recover'].includes(ctx.case)
             ? Array.from({ length: 60 }, (_, i) => `branch-${i}`)
             : []),
           ...(ctx.case === 'operation' ? [] : ['main']),
@@ -173,13 +173,16 @@ void mountPage({
               'src/components/example-1.tsx': { kind: 'new' },
               'src/components/example-2.tsx': { kind: 'deleted' },
             },
-            sessions: ['busy', 'idle', 'dirty-idle'].includes(ctx.case)
+            sessions: ['busy', 'busy-two', 'idle', 'idle-menu', 'dirty-idle'].includes(ctx.case)
               ? [
                   {
                     id: 'task-a',
                     name: '修复登录页面',
-                    running: ['busy'].includes(ctx.case),
+                    running: ['busy', 'busy-two'].includes(ctx.case),
                   },
+                  ...(ctx.case === 'busy-two'
+                    ? [{ id: 'task-b', name: 'Update tests', running: true }]
+                    : []),
                 ]
               : [],
             occupied: ['release'],
@@ -193,7 +196,7 @@ void mountPage({
                 }
               : {}),
             ...(ctx.case === 'operation' ? { blocked: 'operation' } : {}),
-            ...(['busy'].includes(ctx.case) ? { blocked: 'busy' } : {}),
+            ...(['busy', 'busy-two'].includes(ctx.case) ? { blocked: 'busy' } : {}),
             ...(ctx.case === 'occupied' && req.branch === 'release' ? { blocked: 'occupied' } : {}),
             ...(ctx.case === 'ignored' && req.branch === 'feature'
               ? {
