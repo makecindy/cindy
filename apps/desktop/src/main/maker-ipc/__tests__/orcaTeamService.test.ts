@@ -2053,6 +2053,58 @@ describe('OrcaTeamService', () => {
     expect(getWorker().latestReport).toMatchObject({ state: 'blocked', question: '选 A 还是 B' });
   });
 
+  // 派活回滚时，排队回报的来源也要还回去：否则改写那条排队消息会跳过清理，面板继续显示失效的「等回复」。
+  it('restores the queued report source when a dispatch fails after acceptance', async () => {
+    let calls = 0;
+    const { deps, getWorker, service } = createDeps({
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        calls += 1;
+        await params.onAccepted?.();
+        if (calls === 1) {
+          return {
+            ok: true,
+            mode: 'dispatched',
+            clientId: 'first',
+            dispatchOutcome: {
+              kind: 'session-dispatch',
+              source: 'test-source',
+              dispatched: true,
+            },
+            targetTitle: 'Worker',
+            targetLastUserSendAt: null,
+          } satisfies DispatchWorkerMessageResult;
+        }
+        return {
+          ok: false,
+          dispatchOutcome: {
+            kind: 'session-dispatch',
+            source: 'test-source',
+            dispatched: false,
+            reason: 'cancelled-before-dispatch',
+            context: 'rollback-source',
+            message: 'cancelled',
+          },
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第一轮' });
+    // 第一轮回报进队列，来源即这条排队消息。
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: false,
+      queuedMessageId: 'queued-1',
+      report: { state: 'blocked', question: '选 A 还是 B' },
+    });
+    expect(getWorker().latestReport).toMatchObject({ state: 'blocked' });
+
+    // 第二轮派活被接受后发送失败：回滚恢复上一轮状态与来源。
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第二轮' });
+    expect(getWorker().latestReport).toMatchObject({ state: 'blocked', question: '选 A 还是 B' });
+
+    // 改写那条排队消息：回滚后来源仍在，投影必须失效。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    expect(getWorker().latestReport).toBeNull();
+  });
+
   // progress 在 await 期间被新派活替换时，不能把旧进度写进新一轮。
   it('drops a progress report whose assignment was replaced mid-await', async () => {
     const { deps, service } = createDeps();

@@ -1113,6 +1113,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     worker: OrcaWorkerRecordSnapshot;
     previousStatus: OrcaWorkerStatus;
     previousLatestReport: OrcaStructuredWorkerReport | null;
+    previousPendingReportSource: string | undefined;
     currentPending: AutoBridgeState | undefined;
     previousPending: AutoBridgeState | undefined;
     previousManualInterrupt: OrcaManualInterruptSnapshot | null;
@@ -1138,6 +1139,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     // 恢复状态时一并把派活清掉的旧回报还回去，否则标记与问题会从面板上消失。
     await deps.updateWorkerStatus(params.worker.id, params.previousStatus);
     await deps.setWorkerLatestReport(params.worker.id, params.previousLatestReport);
+    // 排队回报的来源同样要还回去：否则改写那条排队消息会跳过清理，面板继续显示失效的「等回复」。
+    if (params.previousPendingReportSource) {
+      pendingReportSourceBySession.set(params.sessionId, params.previousPendingReportSource);
+    }
     deps.broadcastOrcaWorkerChanged(params.worker.leadSessionId);
     return true;
   }
@@ -1306,6 +1311,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             previousManualInterrupt: OrcaManualInterruptSnapshot | null;
             /** 派活会清空上一轮的回报标记；发送失败回滚时必须把用户看过的结论还回去。 */
             previousLatestReport: OrcaStructuredWorkerReport | null;
+            /** 派活会作废上一轮排队回报的来源；回滚必须一起还回去，否则改写旧消息会跳过清理。 */
+            previousPendingReportSource: string | undefined;
           }
         | undefined;
       let currentPending: AutoBridgeState | undefined;
@@ -1329,6 +1336,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
                 worker: target,
                 previousStatus: snapshot.previousStatus,
                 previousLatestReport: snapshot.previousLatestReport,
+                previousPendingReportSource: snapshot.previousPendingReportSource,
                 currentPending,
                 previousPending: snapshot.previousPending,
                 previousManualInterrupt: snapshot.previousManualInterrupt,
@@ -1383,6 +1391,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               previousPending: autoBridge.get(target.sessionId),
               previousManualInterrupt: deps.getManualInterrupt(target.sessionId),
               previousLatestReport: currentWorker.latestReport ?? null,
+              previousPendingReportSource: pendingReportSourceBySession.get(target.sessionId),
             };
             deps.clearManualInterrupt(target.sessionId);
             currentPending = setPending(target.sessionId, {
