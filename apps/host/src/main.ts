@@ -133,7 +133,7 @@ import { contextRecoveryKind, type ContextRecoveryKind } from './agent/context-r
 import { createHostContextRecoveryRollover } from './agent/context-recovery-assembly.ts';
 import { createSessionStderrOptions } from '../../desktop/src/main/maker-ipc/sessionRequest.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
-import { applyLiveSessionSettings } from './agent/session-settings.mjs';
+import { createHostSessionUpdate } from './agent/session-update.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
@@ -1306,44 +1306,12 @@ const serverDeps = {
       activity: row.lastToolUse?.toolName ?? null,
     }));
   },
-  updateSession: lockSessionRoute(async (sessionId: string, patch: Record<string, unknown>) => {
-    const allowed: Record<string, true> = {
-      title: true, status: true, pinnedAt: true, notificationsMuted: true, model: true,
-      effort: true, permissionMode: true, fastMode: true, planModeEnabled: true,
-      providerId: true, agentKind: true,
-    };
-    if (Object.keys(patch).some((key) => allowed[key] !== true)) {
-      throw new Error('unsupported session field');
-    }
-    // A live Session keeps its own permission mode and model route. Apply the
-    // change there first so the stored value and the running Agent cannot
-    // disagree (a tighter mode must bind the very next tool call). An engine
-    // switch is left to the input queue, which recreates the Session.
-    const live = patch.agentKind === undefined ? agentGraph?.maker.getSession(sessionId) : undefined;
-    const stored = live && patch.model === undefined && Object.hasOwn(patch, 'providerId')
-      ? await readSessionForRun(sessionId) : null;
-    await applyLiveSessionSettings(live, patch, stored);
-    const update: Record<string, unknown> = { updatedAt: Date.now() };
-    if (typeof patch.title === 'string') update.title = patch.title;
-    if (patch.status === 'active' || patch.status === 'archived') update.status = patch.status;
-    if (patch.pinnedAt === null) update.pinnedAt = null;
-    else if (typeof patch.pinnedAt === 'string') update.pinnedAt = Date.parse(patch.pinnedAt) || null;
-    if (typeof patch.notificationsMuted === 'boolean') update.notificationsMuted = patch.notificationsMuted;
-    if (typeof patch.model === 'string') update.model = patch.model;
-    if (typeof patch.effort === 'string') update.effort = patch.effort;
-    if (typeof patch.permissionMode === 'string') update.permissionMode = patch.permissionMode;
-    if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') update.fastMode = patch.fastMode;
-    if (typeof patch.planModeEnabled === 'boolean') update.planModeEnabled = patch.planModeEnabled;
-    if (patch.providerId === null || typeof patch.providerId === 'string') update.providerId = patch.providerId;
-    if (typeof patch.agentKind === 'string') update.agentKind = patch.agentKind === 'claude-code' ? 'cc' : patch.agentKind;
-    await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
-    const rows = await getDbClient().drizzle.select().from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const row = rows[0];
-    if (!row) throw new Error('session not found');
-    eventHub.publish({ type: 'session_changed', action: 'update', sessionId, patch, status: row.status });
-    return sessionToCamel({ ...row, messageCount: 0 });
-  }),
+  updateSession: lockSessionRoute(createHostSessionUpdate({
+    getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
+    readSessionForRun,
+    publish: event => eventHub.publish(event),
+    modelWindow: () => agentGraph?.modelWindow ?? null,
+  })),
   /**
    * Cross-engine switch: record the intent and let the next enqueue apply it.
    * Mirrors the desktop contract (`deferred: true`) so the renderer can show
