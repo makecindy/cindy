@@ -64,6 +64,14 @@ describe('lead dispatch claim reading', () => {
     const labelled = readDispatchClaim(`已派给研究员，queued_message_id: ${QUEUE_ID}`, ROSTER);
     expect(labelled.messageIds).toEqual([QUEUE_ID]);
   });
+
+  it('keeps a labelled queue id that is written as inline code', () => {
+    const reading = readDispatchClaim(
+      `已派给研究员，queued_message_id: \`${QUEUE_ID}\``,
+      ROSTER,
+    );
+    expect(reading.messageIds).toEqual([QUEUE_ID]);
+  });
 });
 
 describe('lead dispatch claim verification', () => {
@@ -92,6 +100,18 @@ describe('lead dispatch claim verification', () => {
     expect(verifyDispatchClaim(reading, dispatchFactsForTurn(LEAD, 3))).toMatchObject({
       consistent: false,
       reason: 'no-dispatch',
+    });
+  });
+
+  it('rejects a fabricated queue id even when it is written as inline code', () => {
+    noteLeadDispatchFact(LEAD, fact({ turnGeneration: 3 }));
+    const reading = readDispatchClaim(
+      `已派给研究员，queued_message_id: \`${QUEUE_ID}\``,
+      ROSTER,
+    );
+    expect(verifyDispatchClaim(reading, dispatchFactsForTurn(LEAD, 3))).toMatchObject({
+      consistent: false,
+      reason: 'unknown-message-id',
     });
   });
 

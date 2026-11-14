@@ -87,6 +87,7 @@ const LABELED_MESSAGE_ID_PATTERN =
   /(?:queued_message_id|queue[_ ](?:message[_ ])?id|队列编号|排队编号|排队号)\s*[:：=]?\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
 
 const FENCED_CODE_PATTERN = /```[\s\S]*?```/g;
+const BLOCKQUOTE_LINE_PATTERN = /^\s*>.*$/gm;
 
 function emptyLedger(): LeadLedger {
   return { epoch: 0, lastGeneration: null, facts: [], woke: false, escalated: false };
@@ -155,6 +156,11 @@ function stripQuotedSegments(sentence: string): string {
     .replace(/「[^」]{0,200}」/g, ' ');
 }
 
+/** 编号常被写成行内代码，核对前要拆掉反引号，否则假编号会在提取前丢掉。 */
+function readMessageIdText(sentence: string): string {
+  return sentence.replace(/`/g, '');
+}
+
 function hasClaimWord(sentence: string): boolean {
   return DISPATCH_CLAIM_PATTERNS.some((pattern) => pattern.test(sentence));
 }
@@ -188,7 +194,7 @@ export function readDispatchClaim(
   text: string,
   roster: readonly OrcaDispatchRosterEntry[] = [],
 ): DispatchClaimReading {
-  const body = (text ?? '').replace(FENCED_CODE_PATTERN, ' ');
+  const body = (text ?? '').replace(FENCED_CODE_PATTERN, ' ').replace(BLOCKQUOTE_LINE_PATTERN, ' ');
   const targets: OrcaDispatchRosterEntry[] = [];
   const messageIds: string[] = [];
   let quote = '';
@@ -199,7 +205,7 @@ export function readDispatchClaim(
     for (const entry of resolveTargets(own, roster)) {
       if (!targets.some((item) => item.id === entry.id)) targets.push(entry);
     }
-    for (const id of extractLabeledMessageIds(own)) {
+    for (const id of extractLabeledMessageIds(readMessageIdText(sentence))) {
       if (!messageIds.includes(id)) messageIds.push(id);
     }
     quote ||= own;
