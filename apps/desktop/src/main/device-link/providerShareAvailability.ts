@@ -146,7 +146,9 @@ export async function prepareShareAvailability(controller: string): Promise<void
         for (const item of delegatedProviderShareLeases()) if (item.peer === controller && item.lease.availability) {
           invalidateProviderShareDelegation(item.peer, item.sessionId, item.lease.nonce);
         }
-        await reconcileStandbyGuest(controller, null);
+        // An absent standby policy/endpoint does not prove that the share member
+        // was removed. Direct owner grants use the same guest history: retain it
+        // until verified membership reapproval or an authenticated owner forget.
       }
       throw error;
     }
