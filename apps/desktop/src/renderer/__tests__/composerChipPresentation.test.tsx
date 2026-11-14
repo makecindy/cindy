@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import type { Editor } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
+import History from '@tiptap/extension-history';
 import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
 import { EditorContent, useEditor } from '@tiptap/react';
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, waitFor } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,6 +15,22 @@ import { MentionChipNode } from '@/components/new-chat/MentionChipNode';
 import { PastedTextChipNode } from '@/components/new-chat/PastedTextChipNode';
 
 const globalsSource = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
+
+// jsdom 不实现 Range 上的几何方法，而 ProseMirror 在 focus/scrollIntoView 的
+// coordsAtPos 路径上会按内部时序（requestAnimationFrame 刷新）调用它们——CI 上
+// 曾因此出现 `target.getClientRects/getBoundingClientRect is not a function`
+// 的闪红。给单零矩形的最小实现，让滚动定位走兜底路径，行为与真实浏览器的
+// 空视口一致。
+if (typeof Range !== 'undefined') {
+  const zeroRect = { bottom: 0, height: 0, left: 0, right: 0, top: 0, width: 0, x: 0, y: 0 };
+  const rangeProto = Range.prototype as unknown as Record<string, unknown>;
+  if (!rangeProto.getClientRects) {
+    rangeProto.getClientRects = () => ({ 0: zeroRect, length: 1, item: () => zeroRect });
+  }
+  if (!rangeProto.getBoundingClientRect) {
+    rangeProto.getBoundingClientRect = () => zeroRect;
+  }
+}
 
 afterEach(() => {
   cleanup();
@@ -148,7 +165,14 @@ describe('composer atomic chip presentation', () => {
       expect(atom?.querySelector('[data-inline-reference-chip]')?.className).toContain(
         'text-[var(--text-primary)]',
       );
-      expect(atom?.querySelector('button')).toBeNull();
+      if (atom?.hasAttribute('data-composer-quote')) {
+        // 引用胶囊是唯一带删除控件的 atom：真实 <button>，带本地化 aria-label。
+        const removeButton = atom.querySelector('button');
+        expect(removeButton?.getAttribute('type')).toBe('button');
+        expect(removeButton?.getAttribute('aria-label') ?? '').toBeTruthy();
+      } else {
+        expect(atom?.querySelector('button')).toBeNull();
+      }
     }
     expect(container.querySelector('[data-mention-chip][data-kind="slash"]')).toBeNull();
     expect(
@@ -257,5 +281,249 @@ describe('composer atomic chip presentation', () => {
       'composerQuote',
       'mentionChip:file',
     ]);
+  });
+});
+
+function countComposerQuotes(editor: Editor): number {
+  let count = 0;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === 'composerQuote') count += 1;
+  });
+  return count;
+}
+
+function QuoteRemoveHarness({ onEditor }: { onEditor?: (editor: Editor) => void }) {
+  const editor = useEditor({
+    extensions: [Document, Paragraph, Text, History, ComposerQuoteNode],
+    content: {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'before ' },
+            {
+              type: 'composerQuote',
+              attrs: { text: 'same', sourcePath: 'src/a.ts', startLine: 1, endLine: 2 },
+            },
+            { type: 'text', text: ' mid ' },
+            {
+              type: 'composerQuote',
+              attrs: { text: 'same', sourcePath: 'src/a.ts', startLine: 1, endLine: 2 },
+            },
+            { type: 'text', text: ' after' },
+          ],
+        },
+      ],
+    },
+    onCreate: ({ editor: createdEditor }) => onEditor?.(createdEditor),
+  });
+
+  return <EditorContent editor={editor} />;
+}
+
+describe('composer quote remove control', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function renderQuoteHarness() {
+    let activeEditor: Editor | null = null;
+    const view = render(
+      <QuoteRemoveHarness
+        onEditor={(editor) => {
+          activeEditor = editor;
+        }}
+      />,
+    );
+    const editor = await waitFor(() => {
+      if (!activeEditor) throw new Error('Composer editor was not created');
+      return activeEditor;
+    });
+    await waitFor(() =>
+      expect(view.container.querySelectorAll('[data-composer-quote]').length).toBe(2),
+    );
+    return { editor, ...view };
+  }
+
+  it('uses a real button with a localized accessible name and a shared Tip, not native title', async () => {
+    const { container } = await renderQuoteHarness();
+    const wrapper = container.querySelector<HTMLElement>('[data-composer-quote]');
+    expect(wrapper).not.toBeNull();
+    // 外层 wrapper 必须 relative，absolute 定位的 × 才锚定在本颗胶囊上，
+    // 多条引用的关闭钮不会叠到同一处。
+    expect(wrapper?.className).toContain('relative');
+
+    const button = wrapper?.querySelector('button');
+    expect(button?.getAttribute('type')).toBe('button');
+    const label = button?.getAttribute('aria-label') ?? '';
+    expect(label).toBeTruthy();
+    // 无障碍名走 chat.quote.remove，而不是把整段引用正文塞进去。
+    expect(label).not.toContain('same');
+    // DESIGN.md §14.6 禁止用 native title 替代共享 Tip。
+    expect(button?.hasAttribute('title')).toBe(false);
+    expect(button?.querySelector('svg')).not.toBeNull();
+
+    // hover / focus 显隐契约：默认 opacity-0，group hover 与 focus-visible 显示。
+    expect(button?.className).toContain('opacity-0');
+    expect(button?.className).toContain('group-hover/quote:opacity-100');
+    expect(button?.className).toContain('focus-visible:opacity-100');
+  });
+
+  it('removes only the clicked quote when two identical quotes exist', async () => {
+    const { editor, container } = await renderQuoteHarness();
+    expect(countComposerQuotes(editor)).toBe(2);
+
+    const buttons = container.querySelectorAll<HTMLElement>('[data-composer-quote] button');
+    expect(buttons.length).toBe(2);
+
+    fireEvent.click(buttons[0]);
+    await waitFor(() => expect(countComposerQuotes(editor)).toBe(1));
+    await waitFor(() =>
+      expect(container.querySelectorAll('[data-composer-quote]').length).toBe(1),
+    );
+    // 只删了被点的那颗，两侧正文与另一颗引用保持原位。
+    expect(container.textContent).toContain('before');
+    expect(container.textContent).toContain('after');
+    expect(container.textContent).toContain('same');
+  });
+
+  it('restores the quote through undo and redo after removal', async () => {
+    const { editor, container } = await renderQuoteHarness();
+    const button = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('[data-composer-quote] button');
+      if (!element) throw new Error('Remove control was not rendered');
+      return element;
+    });
+
+    fireEvent.click(button);
+    await waitFor(() => expect(countComposerQuotes(editor)).toBe(1));
+
+    await act(async () => {
+      editor.commands.undo();
+    });
+    expect(countComposerQuotes(editor)).toBe(2);
+    await waitFor(() =>
+      expect(container.querySelectorAll('[data-composer-quote]').length).toBe(2),
+    );
+
+    await act(async () => {
+      editor.commands.redo();
+    });
+    expect(countComposerQuotes(editor)).toBe(1);
+  });
+
+  it.each(['Enter', ' '] as const)(
+    'deletes via %s without bubbling the key event toward send',
+    async (key) => {
+      const { editor, container } = await renderQuoteHarness();
+
+      // stopPropagation 的目的：Enter/Space 不能冒泡到 ChatInput.handleKeyDown
+      // 触发发送。document 上还能听到该 keydown 就说明冒泡没拦住。
+      const bubbledKeys: string[] = [];
+      const listener = (event: KeyboardEvent) => bubbledKeys.push(event.key);
+      document.addEventListener('keydown', listener);
+
+      try {
+        const button = await waitFor(() => {
+          const element = container.querySelector<HTMLElement>('[data-composer-quote] button');
+          if (!element) throw new Error('Remove control was not rendered');
+          return element;
+        });
+
+        fireEvent.keyDown(button, { key });
+        expect(bubbledKeys).not.toContain(key);
+        await waitFor(() => expect(countComposerQuotes(editor)).toBe(1));
+      } finally {
+        document.removeEventListener('keydown', listener);
+      }
+    },
+  );
+
+  it('does not remove the quote while the editor is locked (not editable)', async () => {
+    const { editor, container } = await renderQuoteHarness();
+    const button = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('[data-composer-quote] button');
+      if (!element) throw new Error('Remove control was not rendered');
+      return element;
+    });
+
+    await act(async () => {
+      editor.setEditable(false);
+    });
+    fireEvent.click(button);
+    expect(countComposerQuotes(editor)).toBe(2);
+
+    await act(async () => {
+      editor.setEditable(true);
+    });
+    fireEvent.click(button);
+    await waitFor(() => expect(countComposerQuotes(editor)).toBe(1));
+  });
+
+  it('keeps the 24px hit target inside the composer scroll clip by never extending upward', async () => {
+    const { container } = await renderQuoteHarness();
+    const button = container.querySelector<HTMLElement>('[data-composer-quote] button');
+    expect(button).not.toBeNull();
+
+    // DESIGN.md §5 要求命中区 ≥24×24，且不得改变可见几何（右上角 14px 圆）。
+    // 四周各外扩 5px 时命中框顶部会伸到 .ProseMirror 的 overflow 裁剪边界之外，
+    // 首行最上面约 5px 实际点不到；改成左右各 5px、向上 0、向下 10px 后，
+    // 命中框顶边与可见圆顶边齐平，永远落在裁剪范围内。
+    expect(button?.className).toContain('after:-inset-x-[5px]');
+    expect(button?.className).toContain('after:top-0');
+    expect(button?.className).toContain('after:bottom-[-10px]');
+    // 对称外扩是这次要修掉的写法，回归时会重新出现。
+    expect(button?.className).not.toContain('after:inset-[-5px]');
+  });
+
+  it('does not inherit the quote node native drag, so a drag from the button cannot swallow the click', async () => {
+    const { editor, container } = await renderQuoteHarness();
+    const button = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('[data-composer-quote] button');
+      if (!element) throw new Error('Remove control was not rendered');
+      return element;
+    });
+
+    // 按钮自身不能是原生拖拽源：按住 X 拖动时不能就地启动引用拖拽，否则
+    // 拖拽会吞掉随后的 click。这是 HTML 规范里「向上找最近的 draggable
+    // 祖先」算法的正规拦截点，jsdom 可观测。
+    expect(button.draggable).toBe(false);
+
+    // onDragStart 兜底：dragstart 被 preventDefault 且不再冒泡到引用节点，
+    // ProseMirror 不会把它当成引用节点的拖拽接管。
+    // 用 createEvent + fireEvent 拿到原始事件对象，才能观察 defaultPrevented。
+    // （不断言「不冒泡到 [data-composer-quote]」：React 17+ 把监听挂在根容器上，
+    // 祖先上的原生监听器一定先于 React 的合成事件处理收到该事件，这个断言
+    // 测不到 stopPropagation；stopPropagation 挡的是 ProseMirror / ChatInput
+    // 的 React 侧处理，不在本测试的观测范围内。）
+    const dragStart = createEvent.dragStart(button, {
+      dataTransfer: new TestDataTransfer(),
+    });
+    fireEvent(button, dragStart);
+    expect(dragStart.defaultPrevented).toBe(true);
+
+    // 拖拽被拦住后，按钮仍能正常删除。
+    fireEvent.click(button);
+    await waitFor(() => expect(countComposerQuotes(editor)).toBe(1));
+  });
+
+  it('turns the inherited -webkit-user-drag back off for the remove button', () => {
+    // cssstyle(jsdom 的 CSS 实现)不认识带前缀的 -webkit-user-drag，DOM 上
+    // 观测不到该声明，所以照 globalsSource 的既有做法直接校验样式表源码。
+    // 两件事都必须成立：
+    // ① 按钮带 data-quote-remove，才能被下面的覆盖规则选中；
+    // ② 该规则的优先级必须高于把整棵子树恢复成 element 的那条（0-2-0），
+    //    否则 Chromium 仍会从按钮起手拖动整颗引用。
+    const removeRule = /\.ProseMirror \[data-composer-quote\] button\[data-quote-remove\]\s*\{[^}]*-webkit-user-drag:\s*none;/;
+    expect(removeRule.test(globalsSource)).toBe(true);
+  });
+
+  it('tags the remove button so the -webkit-user-drag override can select it', async () => {
+    const { container } = await renderQuoteHarness();
+    const button = container.querySelector('[data-composer-quote] button');
+    expect(button).not.toBeNull();
+    // 没有这个属性，globals.css 里针对性关闭 element drag 的规则不会命中。
+    expect(button?.hasAttribute('data-quote-remove')).toBe(true);
   });
 });
