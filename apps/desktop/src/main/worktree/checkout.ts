@@ -109,7 +109,7 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
       files.push(fields[i].slice(3));
       if (/[RC]/.test(fields[i].slice(0, 2))) i++;
     }
-    const previewFiles = files.slice(0, 5);
+    const previewFiles = files.slice(0, 3);
     const fileDetails: NonNullable<CheckoutStatus['fileDetails']> = Object.create(null);
     for (let i = 0, count = 0; i < fields.length && count < previewFiles.length; i++) {
       const row = fields[i];

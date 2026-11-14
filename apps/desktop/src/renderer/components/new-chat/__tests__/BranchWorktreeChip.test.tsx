@@ -1126,7 +1126,7 @@ it('explains the worktree checkbox with the shared short description', async () 
 });
 
 // Large dirty checkouts show a stable sample, not a scrollable full file list.
-it('previews the first five of sixty changed files and reports the remainder', async () => {
+it('previews the first three of sixty changed files and reports the remainder', async () => {
   const files = Array.from({ length: 60 }, (_, i) => `file-${i}.txt`);
   setupCheckout(true, { files });
   render(<CheckoutRow />);
@@ -1134,6 +1134,6 @@ it('previews the first five of sixty changed files and reports the remainder', a
   fireEvent.click(branchButton());
   fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
   await screen.findByRole('dialog');
-  expect(screen.getAllByRole('listitem').map((row) => row.title)).toEqual(files.slice(0, 5));
-  expect(screen.getByText(mocks.t('newChat.checkout.moreFiles', { count: 55 }))).toBeTruthy();
+  expect(screen.getAllByRole('listitem').map((row) => row.title)).toEqual(files.slice(0, 3));
+  expect(screen.getByText(mocks.t('newChat.checkout.moreFiles', { count: 57 }))).toBeTruthy();
 });

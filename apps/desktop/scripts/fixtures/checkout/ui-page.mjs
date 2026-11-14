@@ -233,12 +233,54 @@ export default {
         el.parentElement.scrollTop = 0;
       });
       const dialog = page.getByRole('dialog');
-      assert.equal(await dialog.getByRole('listitem').count(), ui.case === 'many-files' ? 5 : 3);
+      assert.equal(await dialog.getByRole('listitem').count(), 3);
       if (ui.case === 'many-files')
         await dialog
-          .getByText(await ui.t('newChat.checkout.moreFiles', { count: 55 }), { exact: true })
+          .getByText(await ui.t('newChat.checkout.moreFiles', { count: 57 }), { exact: true })
           .waitFor();
       assert.equal(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth), true);
+      const body = await page.getByRole('radiogroup').evaluate((el) => {
+        const parent = el.parentElement;
+        const box = parent.getBoundingClientRect();
+        return {
+          top: box.top,
+          bottom: box.bottom,
+          scrollHeight: parent.scrollHeight,
+          clientHeight: parent.clientHeight,
+        };
+      });
+      const viewport = await page.evaluate(() => ({
+        width: globalThis.innerWidth,
+        height: globalThis.innerHeight,
+      }));
+      if (viewport.width >= 760)
+        assert.ok(
+          body.scrollHeight <= body.clientHeight,
+          'Desktop dialog must fit without body scrolling',
+        );
+      const choices = await dialog.getByRole('radio').evaluateAll((inputs) =>
+        inputs.map((input) => {
+          const box = input.closest('label').getBoundingClientRect();
+          return { top: box.top, bottom: box.bottom };
+        }),
+      );
+      for (const choice of choices)
+        assert.ok(
+          choice.top >= body.top - 1 && choice.bottom <= body.bottom + 1,
+          'Both options must be fully visible',
+        );
+      const panel = await dialog.boundingBox();
+      for (const button of await dialog.getByRole('button').all()) {
+        const box = await button.boundingBox();
+        assert.ok(
+          box.x >= panel.x &&
+            box.x + box.width <= panel.x + panel.width &&
+            box.y >= panel.y &&
+            box.y + box.height <= Math.min(panel.y + panel.height, viewport.height),
+          'Footer buttons must be fully visible',
+        );
+      }
+
       assert.equal(
         await page
           .getByRole('button', { name: await ui.t('commonUi.confirmDialog.cancel'), exact: true })

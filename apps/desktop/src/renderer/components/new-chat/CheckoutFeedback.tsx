@@ -134,12 +134,12 @@ export function CheckoutDialog({
           onEscapeKeyDown={(e) => {
             if (busy) e.preventDefault();
           }}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
+          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 p-4"
         >
           <Dialog.Title className="break-words text-18 font-medium text-[var(--confirm-title)]">
             {t('newChat.checkout.title', vars)}
           </Dialog.Title>
-          <div className="min-h-0 overflow-y-auto space-y-4 text-13">
+          <div className="min-h-0 overflow-y-auto space-y-2 text-13">
             <Dialog.Description className="break-words text-[var(--confirm-desc)]">
               {t('newChat.checkout.dirtyDescription', {
                 branch: dialog?.status.current,
@@ -152,7 +152,7 @@ export function CheckoutDialog({
               </p>
             )}
             <ul className="border-y border-border py-1 text-12">
-              {dialog?.status.files.slice(0, 5).map((file) => {
+              {dialog?.status.files.slice(0, 3).map((file) => {
                 const detail = dialog.status.fileDetails?.[file];
                 return (
                   <li key={file} className="flex min-h-7 items-center gap-3" title={file}>
@@ -177,9 +177,9 @@ export function CheckoutDialog({
                 );
               })}
             </ul>
-            {dialog && dialog.status.files.length > 5 && (
+            {dialog && dialog.status.files.length > 3 && (
               <p className="text-12 text-muted-foreground">
-                {t('newChat.checkout.moreFiles', { count: dialog.status.files.length - 5 })}
+                {t('newChat.checkout.moreFiles', { count: dialog.status.files.length - 3 })}
               </p>
             )}
             <div
@@ -192,7 +192,7 @@ export function CheckoutDialog({
                 return (
                   <label
                     key={choice}
-                    className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 focus-within:ring-2 focus-within:ring-[var(--focus-ring)] ${disabled ? 'cursor-not-allowed' : 'hover:bg-accent'} ${strategy === choice ? 'border-foreground bg-accent' : 'border-border'}`}
+                    className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 focus-within:ring-2 focus-within:ring-[var(--focus-ring)] ${disabled ? 'cursor-not-allowed' : 'hover:bg-accent'} ${strategy === choice ? 'border-foreground bg-accent' : 'border-border'}`}
                   >
                     <input
                       type="radio"
