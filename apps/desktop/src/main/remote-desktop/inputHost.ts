@@ -9,6 +9,7 @@ import type {
   DesktopPermissionStatus,
   RemoteDesktopDisplayMode,
 } from '@cindy/device-link';
+import { createLogger } from '../logger';
 import { HumanDesktopInput } from './inputOwnership';
 import { resolveLinuxInputBinary, isX11Desktop, x11InputGeometry } from './linuxInput';
 import { readLinuxUnlockState } from './linuxCredentials';
@@ -28,6 +29,7 @@ import {
 } from './windowsHost';
 
 const exec = promisify(execFile);
+const log = createLogger('remote-desktop:input');
 const inputBinaryName = () =>
   process.platform === 'darwin' ? 'cindy-macos-desktop-input' : 'cindy-windows-desktop-input.exe';
 let build: Promise<string> | null = null;
@@ -200,16 +202,18 @@ export async function lockDesktopScreen(
     throw new Error('DESKTOP_LOCK_UNAVAILABLE');
   const binary = await resolveBinary();
   if (signal.aborted || !isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
+  let stdout = '';
   try {
-    const { stdout } = await exec(binary, ['--lock-screen'], {
-      timeout: 5000,
-      maxBuffer: 1024,
-      signal,
-    });
-    if (stdout.trim() !== 'locked') throw new Error('DESKTOP_LOCK_FAILED');
-  } catch {
-    throw new Error('DESKTOP_LOCK_FAILED');
+    // macOS tries the system lock, then the shortcut: about 5 s at worst.
+    ({ stdout } = await exec(binary, ['--lock-screen'], { timeout: 7000, maxBuffer: 1024, signal }));
+  } catch (error) {
+    stdout = String((error as { stdout?: unknown }).stdout ?? '');
   }
+  if (stdout.trim() === 'locked') return;
+  // Only the helper's fixed word is logged (session, caller, permission, timeout).
+  const reason = /^lock-failed ([a-z-]{1,16})$/m.exec(stdout)?.[1] ?? (signal.aborted ? 'aborted' : 'unknown');
+  log.warn('screen lock not confirmed', { reason });
+  throw new Error('DESKTOP_LOCK_FAILED');
 }
 
 export async function requestDesktopInputPermission(

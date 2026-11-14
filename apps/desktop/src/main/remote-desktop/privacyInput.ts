@@ -107,7 +107,8 @@ export interface AwayGuardInputMonitor extends PrivacyInputMonitor {
  * as the lock is up and then exits.
  */
 export async function watchAwayGuardInput(
-  ended: (locked: boolean) => void,
+  /** `failure` is the helper's fixed word when it reported an unconfirmed lock. */
+  ended: (locked: boolean, failure?: string) => void,
   /** Fixed word naming what made the helper lock (key, click, heartbeat, …), for logs. */
   lockingBecause: (reason: string) => void = () => {},
   runtime = {
@@ -119,6 +120,7 @@ export async function watchAwayGuardInput(
   const child = runtime.spawn(await runtime.resolveBinary());
   const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
   let locked = false;
+  let failure: string | undefined;
   let ready = false;
   let reported = false;
   let lockedNow: (() => void) | undefined;
@@ -129,7 +131,8 @@ export async function watchAwayGuardInput(
     if (reported || !ready) return;
     reported = true;
     clearInterval(heartbeat);
-    ended(locked);
+    if (!locked && failure) ended(false, failure);
+    else ended(locked);
   };
   let buffer = '';
   let settleReady: ((error?: Error) => void) | undefined;
@@ -165,6 +168,8 @@ export async function watchAwayGuardInput(
         settleReady?.();
       } else if (/^reason [a-z-]{1,16}$/.test(line)) {
         lockingBecause(line.slice('reason '.length));
+      } else if (/^lock-failed( [a-z-]{1,16})?$/.test(line)) {
+        failure = line.slice('lock-failed '.length) || 'unknown';
       } else if (line === 'locked') {
         locked = true;
         lockedNow?.();
@@ -209,7 +214,8 @@ export async function watchAwayGuardInput(
     stop: () => finish('release', 2000),
     lock: async () => {
       // A timeout returns failure; Windows keeps its hooks until confirmed lock.
-      await finish('lock', 6000);
+      // macOS tries the system lock, then the shortcut: about 5 s at worst.
+      await finish('lock', 8000);
       return locked;
     },
     lockOnExit: () => write('lock'),

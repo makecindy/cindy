@@ -953,27 +953,61 @@ func ownedConsoleSession() -> [String: Any]? {
     state[kCGSessionLoginDoneKey as String] as? Bool == true else { return nil }
   return state
 }
-/// Locks this user's own console session and waits until the OS reports it.
-/// `requireCaller` is false only for the away guard's orphan path: once Main is
+/// Why a lock was not confirmed. Fixed words for Main's log, never session contents.
+enum SessionLockFailure: String {
+  /// Not this user's logged-in console session (fast user switching, login window).
+  case session
+  /// Main's identity check failed while locking.
+  case caller
+  /// No system lock entry point and no Accessibility for the shortcut.
+  case permission
+  /// Requested, but the OS never reported the lock.
+  case timeout
+}
+/// loginwindow's own immediate lock (login.framework). Unlike Control-Command-Q it does
+/// not depend on the frontmost app handling the Apple menu's key equivalent: a hung app,
+/// a full-screen game or a VM / remote client that captures keys swallowed the shortcut,
+/// and the away cover leaves whatever app was frontmost in front. The entry point is
+/// private, so it is resolved at run time; a missing symbol only means the shortcut.
+func systemLockScreen() -> (@convention(c) () -> Int32)? {
+  guard let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_LAZY),
+    let symbol = dlsym(handle, "SACLockScreenImmediate") else { return nil }
+  return unsafeBitCast(symbol, to: (@convention(c) () -> Int32).self)
+}
+/// Locks this user's own console session and waits until the OS reports it; nil once
+/// locked. `requireCaller` is false only for the away guard's orphan path: once Main is
 /// gone the only remaining action is locking, which never needs Main's authority.
-func lockOwnedSession(requireCaller: Bool) -> Bool {
-  guard let state = ownedConsoleSession(), !requireCaller || inputCaller.code() != nil else { return false }
-  if state["CGSSessionScreenIsLocked"] as? Bool == true { return true }
-  guard AXIsProcessTrusted(), ownedConsoleSession() != nil else { return false }
-  // Fixed system lock shortcut. No password, shell command or caller-provided key.
+func lockOwnedSession(requireCaller: Bool) -> SessionLockFailure? {
+  func awaitLock(_ seconds: TimeInterval) -> SessionLockFailure? {
+    let deadline = Date().addingTimeInterval(seconds)
+    repeat {
+      guard let current = ownedConsoleSession() else { return .session }
+      guard !requireCaller || inputCaller.code() != nil else { return .caller }
+      if current["CGSSessionScreenIsLocked"] as? Bool == true { return nil }
+      usleep(50_000)
+    } while Date() < deadline
+    return .timeout
+  }
+  // Already locked, or not ours to lock: nothing is requested.
+  let initial = awaitLock(0)
+  if initial != .timeout { return initial }
+  let system = systemLockScreen()
+  if let lockNow = system {
+    _ = lockNow()
+    let failure = awaitLock(1.5)
+    if failure != .timeout { return failure }
+  }
+  guard AXIsProcessTrusted() else { return system == nil ? .permission : .timeout }
+  // Fallback: the fixed system lock shortcut. No password, shell command or caller key.
   key(59, true); key(55, true); key(12, true)
   key(12, false); key(55, false); key(59, false)
-  let deadline = Date().addingTimeInterval(3)
-  while Date() < deadline {
-    guard let current = ownedConsoleSession(), !requireCaller || inputCaller.code() != nil else { return false }
-    if current["CGSSessionScreenIsLocked"] as? Bool == true { return true }
-    usleep(50_000)
-  }
-  return false
+  return awaitLock(3)
 }
 if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-screen" {
-  if lockOwnedSession(requireCaller: true) { print("locked"); exit(0) }
-  exit(2)
+  if let failure = lockOwnedSession(requireCaller: true) {
+    print("lock-failed \(failure.rawValue)"); exit(2)
+  }
+  print("locked"); exit(0)
 }
 guard AXIsProcessTrusted() else { print("permission"); fflush(stdout); exit(2) }
 if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
@@ -1076,8 +1110,8 @@ final class AwayGuard {
   var tap: CFMachPort?
   var gate = AwayInputGate()
   private var ended = false
-  private let lockSession: () -> Bool
-  init(lockSession: @escaping () -> Bool) { self.lockSession = lockSession }
+  private let lockSession: () -> SessionLockFailure?
+  init(lockSession: @escaping () -> SessionLockFailure?) { self.lockSession = lockSession }
   /// `reason` is a fixed word for Main's log; it never carries event contents.
   func finish(lock: Bool, reason: String) {
     if ended { return }
@@ -1085,7 +1119,7 @@ final class AwayGuard {
     if lock { print("reason \(reason)"); fflush(stdout) }
     DispatchQueue.global().async { [self] in
       if !lock { print("released"); fflush(stdout); exit(0) }
-      guard lockSession() else { print("lock-failed"); fflush(stdout); exit(3) }
+      if let failure = lockSession() { print("lock-failed \(failure.rawValue)"); fflush(stdout); exit(3) }
       // The lock screen owns input now; never hold the owner's keys or clicks after unlock.
       DispatchQueue.main.sync { if let tap = tap { CGEvent.tapEnable(tap: tap, enable: false) } }
       print("locked"); fflush(stdout); exit(0)

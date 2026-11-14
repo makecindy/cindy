@@ -62,7 +62,11 @@ local deliberate input (click, key press or meaningful scroll) triggers the syst
 lock, while pointer drift is swallowed. Reconnecting does not remove the cover.
 
 Explicit local exit from the in-session privacy screen and quitting Cindy still
-lock immediately. Existing fail-safe locks (mask/helper failure and newly attached
+lock immediately. If that local-exit lock is not confirmed, the host takes the same
+persistent cover with the lock-failed note instead of uncovering an unlocked desktop
+(user decision 2026-11-14), and drops it once the OS locks; the in-session local exit
+keeps its "Disconnect?" confirmation, because the phone may still be in use. Quitting
+cannot outlive the app and relies on the helper's EOF lock. Existing fail-safe locks (mask/helper failure and newly attached
 displays) remain. Failed cover startup or an unsupported platform falls back to the
 existing native lock where available. No path unlocks an already locked computer. The wire fields
 `lockOnExit` and `stop.lockScreen` stay compatible: old hosts still lock immediately.
@@ -101,7 +105,7 @@ off; Agents keep working behind it: masks ignore mouse events and the
 
 The helper consumes all physical input; only a deliberate press (key down, mouse
 button down, a modifier going down, or a real scroll of 30+ points within a second)
-turns into the fixed system lock shortcut. Releases, pointer drift, Caps Lock and stray
+turns into the system lock. Releases, pointer drift, Caps Lock and stray
 scroll ticks are swallowed without locking, because idle mice, wireless receivers and
 some keypads emit them on their own (`AwayInputGate`). The owner unlocks with
 Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
@@ -117,7 +121,7 @@ stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a lock
 screen rather than an uncovered desktop. Main locks before removing masks when the
 setting is turned off, a display is added (including while the masks are still going
 up), or a mask window fails, and removes them only once the lock is confirmed. If it
-cannot lock (e.g. Accessibility was revoked), the masks stay up with a "press
+cannot lock, the masks stay up with a "press
 Control-Command-Q" note, the display assertion is released and the masks go when macOS
 locks. Agent input skips the person-at-the-Mac check only after every mask is up and
 the helper is consuming physical input. Remote desktop sessions do not end the cover:
@@ -135,6 +139,22 @@ in this path unlocks the screen, edits authorization rules or stores a password;
 screen that was already locked when the setting was turned on stays locked. Logic lives in
 `apps/desktop/src/main/remote-desktop/awayGuard.ts` (unit-tested state machine) and
 `awayGuardService.ts`; shared-userData passive instances do not run it.
+
+### macOS lock method (2026-11-14)
+
+Every macOS lock in this document (away cover, exit cover, local privacy exit, idle
+and disconnect protection) goes through the input helper's `lockOwnedSession`. It
+first calls loginwindow's immediate lock (`SACLockScreenImmediate` in the private
+`login.framework`, resolved at run time) and waits up to 1.5 s for the console session
+to report the lock; only then does it post Control-Command-Q (needs Accessibility) and
+wait 3 s more. The shortcut alone depended on the frontmost app handling the Apple
+menu's key equivalent: the away cover is non-activating, so a hung app, a full-screen
+game or a VM / remote client that captures keys left the desktop unlocked behind a
+"could not lock" cover. Success is still only the OS lock state, never the call's
+return value. A failure prints `lock-failed <reason>` with a fixed word (`session`,
+`caller`, `permission`, `timeout`); Main logs that word only (`screen lock not
+confirmed`, `away guard helper lock not confirmed`). Main's waits allow for both
+steps (`--lock-screen` 7 s, away helper `lock` 8 s).
 
 ## Desktop viewer
 

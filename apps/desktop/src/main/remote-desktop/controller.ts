@@ -196,6 +196,11 @@ export interface DesktopControllerDeps {
   /** Cover an unattended desktop; the host falls back to a lock if unavailable. */
   protectOnExit?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
   lockScreen?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
+  /**
+   * A local privacy exit asked for a lock that was not confirmed: keep the desktop
+   * covered, noting the failure, until the OS locks. Rejects when no cover is possible.
+   */
+  coverLockFailure?(): Promise<void>;
   offer(
     lease: RemoteDesktopLease,
     sdp: string,
@@ -496,9 +501,11 @@ export class RemoteDesktopController {
     // Local privacy exit and process shutdown need the actual OS lock. All other
     // protected ends may leave a persistent cover so background work can continue.
     const protect =
-      reason === 'privacy-exit' || reason === 'shutdown'
-        ? this.deps.lockScreen
-        : this.deps.protectOnExit ?? this.deps.lockScreen;
+      reason === 'privacy-exit'
+        ? this.lockOrCover()
+        : reason === 'shutdown'
+          ? this.deps.lockScreen
+          : this.deps.protectOnExit ?? this.deps.lockScreen;
     if (active && lockScreen && protect) {
       // A protected connection that ends on loss of contact must not recover
       // unattended and automatically unlock the computer again.
@@ -554,6 +561,23 @@ export class RemoteDesktopController {
     this.viewerGeometryManaged = false;
     this.deps.changed();
     return restoring;
+  }
+  /** Someone at this computer ended privacy: lock, and never uncover an unlocked desktop. */
+  private lockOrCover(): DesktopControllerDeps['lockScreen'] {
+    const { lockScreen, coverLockFailure } = this.deps;
+    if (!lockScreen || !coverLockFailure) return lockScreen;
+    return async (isCurrent, signal) => {
+      try {
+        await lockScreen(isCurrent, signal);
+      } catch (error) {
+        log.warn('Privacy exit lock not confirmed; keeping the desktop covered', error);
+        // The persistent cover outlives this lease; if it cannot start either, the
+        // original lock failure is reported as before.
+        await coverLockFailure().catch(() => {
+          throw error;
+        });
+      }
+    };
   }
   private exitLockEnabled(): boolean {
     return (

@@ -708,6 +708,44 @@ describe('remote desktop authority and lifecycle', () => {
     await expect(h.controller.stopPrivacyByUser()).rejects.toThrow('LOCK_FAILED');
     expect(h.controller.state).toBeNull();
   });
+  // User decision 2026-11-14: a failed lock after "Disconnect" at this computer used to
+  // uncover an unlocked desktop. With a persistent cover the lock failure is held
+  // covered instead; shutdown cannot outlive the app and keeps the plain lock result,
+  // and an unavailable cover still reports the original failure.
+  it.each([
+    ['local-privacy', 'covered', undefined, 1],
+    ['local-privacy', 'unavailable', 'LOCK_FAILED', 1],
+    ['shutdown', 'covered', undefined, 0],
+  ] as const)(
+    'holds a %s exit covered when locking fails (cover %s)',
+    async (reason, cover, rejects, covers) => {
+      const h = harness();
+      h.deps.privacyScreen = vi.fn(async () => {});
+      h.deps.stopPrivacyScreen = vi.fn();
+      h.deps.lockScreen = vi.fn(async () => {
+        throw new Error('LOCK_FAILED');
+      });
+      h.deps.coverLockFailure = vi.fn(async () => {
+        // The persistent cover is up before the session masks go.
+        expect(h.deps.stopPrivacyScreen).not.toHaveBeenCalled();
+        if (cover === 'unavailable') throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+      });
+      const { lease } = await h.start();
+      await h.controller.request('phone', { op: 'control', lease, enabled: true });
+      await h.controller.request('phone', {
+        op: 'privacyScreen',
+        lease,
+        enabled: true,
+        lockOnExit: true,
+      });
+      const ending =
+        reason === 'local-privacy' ? h.controller.stopPrivacyByUser() : h.controller.stopAndRestore();
+      if (rejects) await expect(ending).rejects.toThrow(rejects);
+      else await ending.catch(() => {});
+      expect(h.deps.coverLockFailure).toHaveBeenCalledTimes(covers);
+      expect(h.controller.state).toBeNull();
+    },
+  );
   it('requires owner control and opt-in for synchronization and invalidates a delayed read on disable', async () => {
     const h = harness(),
       { lease } = await h.start();

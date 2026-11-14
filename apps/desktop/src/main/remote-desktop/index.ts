@@ -76,7 +76,11 @@ import {
 import { readLinuxCursorSupport } from './linuxCapture';
 import { LinuxDesktopMute, supportsLinuxMute } from './linuxMute';
 import { PrivacyScreen } from './privacyScreen';
-import { coverRemoteDesktopExit, supportsRemoteExitPrivacy } from './awayGuardService';
+import {
+  coverDesktopLockFailure,
+  coverRemoteDesktopExit,
+  supportsRemoteExitPrivacy,
+} from './awayGuardService';
 import { ControlledOverlay } from './controlledOverlay';
 import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
@@ -1102,6 +1106,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
         },
       }
     : {}),
+  ...(supportsRemoteExitPrivacy() ? { coverLockFailure: coverDesktopLockFailure } : {}),
   ...(supportsRemoteExitPrivacy() || nativeWayland()
     ? {
         protectOnExit: async (isCurrent: () => boolean, signal: AbortSignal) => {

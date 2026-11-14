@@ -103,11 +103,14 @@ it('waits for actual process close after EOF or fallback kill, including repeate
 
 // Away guard (Settings → Keep working while away): Main may remove the masks only
 // after the helper itself confirmed the OS lock; a release never claims a lock.
+// The fixed lock-failed word reaches Main's log so a failed lock can be diagnosed
+// (2026-11-14: the away cover reported failures with no cause); Windows sends none.
 it.each([
-  ['lock', 'locked', true],
-  ['lock', 'lock-failed', false],
-  ['release', 'released', false],
-] as const)('away guard %s reports %s as locked=%s', async (command, reply, locked) => {
+  ['lock', 'locked', true, undefined],
+  ['lock', 'lock-failed timeout', false, 'timeout'],
+  ['lock', 'lock-failed', false, 'unknown'],
+  ['release', 'released', false, undefined],
+] as const)('away guard %s reports %s as locked=%s', async (command, reply, locked, failure) => {
   const f = fixture();
   Object.assign(f.child.stdin, { writable: true });
   const ended = vi.fn();
@@ -122,7 +125,8 @@ it.each([
   // Main must not wait for (or kill) it before removing masks.
   if (!locked) f.child.emit('close');
   await expect(finishing).resolves.toBe(locked);
-  expect(ended).toHaveBeenCalledExactlyOnceWith(locked);
+  if (failure) expect(ended).toHaveBeenCalledExactlyOnceWith(locked, failure);
+  else expect(ended).toHaveBeenCalledExactlyOnceWith(locked);
   await monitor.stop();
   f.child.emit('close');
   expect(f.child.kill).not.toHaveBeenCalled();
@@ -168,7 +172,7 @@ it('keeps Windows away helper alive when lock confirmation times out', async () 
   f.line('away-ready\n');
   const monitor = await starting;
   const locking = monitor.lock();
-  await vi.advanceTimersByTimeAsync(6000);
+  await vi.advanceTimersByTimeAsync(8000);
   expect(await locking).toBe(false);
   expect(f.child.kill).not.toHaveBeenCalled();
   expect(f.local).not.toHaveBeenCalled();

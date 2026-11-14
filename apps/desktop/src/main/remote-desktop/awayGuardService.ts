@@ -77,6 +77,20 @@ export async function coverRemoteDesktopExit(): Promise<void> {
   await controller.coverRemoteExit();
 }
 
+let holdLockFailure: (() => void) | null = null;
+/**
+ * A lock someone at this computer asked for was not confirmed (local privacy exit):
+ * take the same persistent cover, show the lock-failed note and keep it until the OS
+ * locks, exactly as when the away cover itself cannot lock.
+ */
+export async function coverDesktopLockFailure(): Promise<void> {
+  const target = controller;
+  if (!target || !holdLockFailure) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+  await target.coverRemoteExit();
+  // coverRemoteExit returns without masks only when the screen is already locked.
+  if (target.inputShielded) holdLockFailure();
+}
+
 export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   if (controller || !supportsRemoteExitPrivacy()) return;
   let monitor: AwayGuardInputMonitor | null = null;
@@ -137,7 +151,8 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   const lockNow = async (): Promise<boolean> => {
     if (deps.screenLocked()) return true;
     try {
-      await lockDesktopScreen(() => true, AbortSignal.timeout(6000));
+      // The helper tries the system lock, then the shortcut (about 5 s at worst).
+      await lockDesktopScreen(() => true, AbortSignal.timeout(9000));
       return true;
     } catch (error) {
       log.error('away guard lock failed', error);
@@ -165,6 +180,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     masks.stop();
   };
   powerMonitor.on('lock-screen', releaseHeld);
+  holdLockFailure = holdUntilLocked;
 
   const masks = new PrivacyScreen(
     // Persistent covers must also be excluded when a viewer reconnects.
@@ -182,8 +198,9 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     async (_localInput, failed) => {
       helperLocked = false;
       const watched = await watchAwayGuardInput(
-        (locked) => {
+        (locked, failure) => {
           helperLocked = locked;
+          if (failure) log.warn('away guard helper lock not confirmed', { reason: failure });
           if (monitor === watched) monitor = null;
           failed();
         },
