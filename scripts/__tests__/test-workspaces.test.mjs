@@ -564,10 +564,13 @@ test("nodeWebstorageEnabled detects the globals that force the webstorage flag",
 	);
 });
 
-test("desktop unit uses forks on Node 24+ to avoid native finalizer crashes", () => {
+test("desktop unit isolates native finalizers on macOS, Windows and Node 24+", () => {
 	assert.equal(desktopUnitPool("darwin", "24.18.0", false), "forks");
-	assert.equal(desktopUnitPool("darwin", "22.23.0", false), "threads");
+	assert.equal(desktopUnitPool("darwin", "22.22.3", false), "forks");
+	assert.equal(desktopUnitPool("darwin", "22.23.0", false), "forks");
 	assert.equal(desktopUnitPool("win32", "22.23.0", false), "forks");
+	assert.equal(desktopUnitPool("linux", "22.23.0", false), "threads");
+	assert.equal(desktopUnitPool("linux", "24.18.0", false), "forks");
 	assert.equal(desktopUnitPool("darwin", "25.0.0", true), "forks");
 });
 

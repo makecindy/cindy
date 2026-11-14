@@ -502,7 +502,7 @@ function PrChip({
                   event.preventDefault();
                   void window.electronAPI.openExternal(sessionPrUrl(prRef));
                 }}
-                className="group block min-w-0 flex-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                className="group block min-w-0 flex-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 <span className="flex items-center gap-1 text-12 text-[var(--text-secondary)]">
                   <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />
