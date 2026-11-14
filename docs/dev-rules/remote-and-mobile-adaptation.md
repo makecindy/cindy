@@ -321,8 +321,9 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 
 Desktop 的纯出站链路同样遵守该边界（2026-11-14）：使用 `isolate-outbound` 本地策略，
 单台执行电脑不回可靠 ACK 时，仅复位它的 link；Main 将 reset 接入已有的
-`transportTimeoutReopen`，每次重开仍复核出站意图、持有者与授权。跨区分享连接使用相同策略，
-由 `RoutedDeviceLinkClient` 将事件交给同一恢复入口。请求沿原可靠 stream/seq 续传，不另行重放业务操作。
+`transportTimeoutReopen`，每次重开仍复核出站意图、持有者与授权。该策略只用于 Main 已接入恢复的
+连接；独立的跨区分享客户端尚未接入此循环，继续保留默认恢复策略。请求沿原可靠 stream/seq
+续传，不另行重放业务操作。
 故障半径三问：① 证据仅是一个出站 peer 不回 ACK；② 只重开该 peer，不使共享 relay 上的
 受邀者和其它执行电脑掉线；③ `client.test.ts` 覆盖 80 个出站 peer 超时后逐一续传，两个健康入站
 控制端保持 ready，其中一个的在途请求正常完成。全连接静默仍要求每个就绪 peer 的卡死证据；
