@@ -10442,6 +10442,32 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       )}
     </>
   );
+  // Goal 状态条:活动态在活动行之后贴着输入框;待处理交互占据输入区时同样保留入口。
+  const goalStatusBar = !shareSelectionActive && !isSharedTaskPeer(deviceId) && !sessionManagedByHost && goalStatus ? (
+    <Pressable
+      accessibilityLabel={`${t('session.common.goalMode')} · ${goalStatusLabel(goalStatus.status, goalStatus.lastReason)}`}
+      accessibilityRole="button"
+      onPress={() => {
+        setModelSheetOpen(false);
+        setContextSheetView('goal');
+        setContextSheetOpen(true);
+      }}
+      style={({ pressed }) => [
+        styles.queueEditBar,
+        { minHeight: 44, marginHorizontal: composerTouchLayout.composerPaddingHorizontal },
+        pressed && styles.collabBarPressed,
+      ]}
+      testID="session.goalStatusBar"
+    >
+      <Target color={goalStatus.status === 'active' ? colors.statusAccent : colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      <Text numberOfLines={2} style={styles.queueEditBarText}>
+        {t('session.common.goalMode')} ·{" "}
+                  {goalStatusLabel(goalStatus.status, goalStatus.lastReason)}
+      </Text>
+      <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+    </Pressable>
+  ) : null;
+
   return (
     <GestureDetector gesture={sessionListDrawerPullGesture}>
     <View style={styles.safeArea} testID="session.screen">
@@ -11301,30 +11327,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             selectComposerPlugin={selectComposerPlugin}
             selectAtResource={selectAtResource}
           />
-          {!shareSelectionActive && !isSharedTaskPeer(deviceId) && !sessionManagedByHost && goalStatus ? (
-            <Pressable
-              accessibilityLabel={`${t('session.common.goalMode')} · ${goalStatusLabel(goalStatus.status, goalStatus.lastReason)}`}
-              accessibilityRole="button"
-              onPress={() => {
-                setModelSheetOpen(false);
-                setContextSheetView('goal');
-                setContextSheetOpen(true);
-              }}
-              style={({ pressed }) => [
-                styles.queueEditBar,
-                { minHeight: 44, marginHorizontal: composerTouchLayout.composerPaddingHorizontal },
-                pressed && styles.collabBarPressed,
-              ]}
-              testID="session.goalStatusBar"
-            >
-              <Target color={goalStatus.status === 'active' ? colors.statusAccent : colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-              <Text numberOfLines={2} style={styles.queueEditBarText}>
-                {t('session.common.goalMode')} ·{" "}
-                          {goalStatusLabel(goalStatus.status, goalStatus.lastReason)}
-              </Text>
-              <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-            </Pressable>
-          ) : null}
           <PluginUiEnablePrompt deviceId={deviceId} deviceName={deviceName} sessionId={sessionId}
             online={!remoteRealtimeControlsUnavailable} active={creationScreenFocused && !shareSelectionActive} />
           {/*
@@ -11363,6 +11365,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             </View>
           ) : null}
 
+          {sessionOperationLayout.composerSlot === 'pending-interaction' ? goalStatusBar : null}
           {shareSelectionActive ? null : sessionOperationLayout.composerSlot === 'pending-interaction' ? (
             companionInlineInteraction ? null : (
             <View
@@ -11511,6 +11514,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                 </Pressable>
               ) : null}
+              {goalStatusBar}
               {/* 协同状态条:Lead 显示 Worker 概况并打开协同面板;Worker 回到所属 Lead。 */}
               {!companionChat && !shareSelectionActive
                 && (collab.isLead || (collab.isWorker && collab.workerLeadSessionId)) ? (
