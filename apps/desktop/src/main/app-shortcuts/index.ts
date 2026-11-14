@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
+import { release } from 'node:os';
 
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { AppShortcutId, AppShortcutOverrides } from '../../shared/appShortcuts.js';
@@ -29,10 +30,16 @@ import {
 let storeSingleton: AppShortcutStore | null = null;
 let ipcRegistered = false;
 let globalFailures: AppShortcutId[] = [];
+const globalFailuresBySource = new Map<string, readonly AppShortcutId[]>();
 
 /** 注册方上报当前注册失败的 global 条目; 变化时连同 overrides 一起广播。 */
-export function setGlobalShortcutRegistrationFailures(ids: readonly AppShortcutId[]): void {
-  const next = [...new Set(ids)].sort();
+export function setGlobalShortcutRegistrationFailures(
+  ids: readonly AppShortcutId[],
+  source = 'region-screenshot',
+): void {
+  // 每个注册方只更新自己的结果，不能清掉另一个全局快捷键的失败提示。
+  globalFailuresBySource.set(source, ids);
+  const next = [...new Set([...globalFailuresBySource.values()].flat())].sort();
   if (next.length === globalFailures.length && next.every((id, i) => id === globalFailures[i])) {
     return;
   }
@@ -70,6 +77,7 @@ export function getAppShortcutStore(): AppShortcutStore {
     storeSingleton = new AppShortcutStore({
       getFilePath: () => path.join(app.getPath('userData'), APP_SHORTCUTS_FILE_NAME),
       platform: process.platform,
+      osRelease: release(),
       onChanged: broadcastAppShortcutsChanged,
     });
   }

@@ -7467,6 +7467,10 @@
         "globalOccupied": "Already in use by another app. Choose a different combination."
       },
       "items": {
+        "away-guard": {
+          "label": "Keep working while you're away",
+          "description": "Cover the displays so work can continue while you are away. Starts after 3 seconds; local input locks the Mac. macOS 14+."
+        },
         "region-screenshot": {
           "label": "Screenshot",
           "description": "Take a screenshot in any app, then annotate it, pin it to the screen, or send it to {{appName}}"

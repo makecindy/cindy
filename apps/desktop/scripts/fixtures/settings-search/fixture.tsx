@@ -36,7 +36,7 @@ void mountPage({
           : forbid('appearance.setPatch'),
       },
     } : {}),
-    platform: ctx.data.tab === 'agent-island' ? 'darwin' : ctx.platform, osRelease: '24.0.0',
+    platform: ctx.data.tab === 'agent-island' ? 'darwin' : ctx.platform, osRelease: ctx.data.osRelease ?? '24.0.0',
     agentIsland: { getDisplayOptions: read([]) },
     appVersion: '0.0.0', appDisplayVersion: 'UI fixture', supportsBetaUpdateChannel: true,
     windowBehavior: { getWindowsCloseBehavior: read('minimize'), getLinuxCloseBehavior: read('minimize') },
@@ -49,7 +49,7 @@ void mountPage({
     onLogUploadSettingsChange: subscription('logUpload'),
     ccSetDebugNet: read(undefined),
     localThemes: { list: read({ success: true, themes: [] }), listSync: () => ({ success: true, themes: [] }) },
-    appShortcuts: { getState: async () => ({ platform: ctx.platform, overrides: {}, globalFailures: [] }), onChanged: subscription('shortcuts') },
+    appShortcuts: { getState: () => ({ platform: ctx.platform, overrides: {}, globalFailures: [] }), onChanged: subscription('shortcuts') },
     localDb: {
       orcaWorkflows: { getCollaborationSettings: read({ workerSoftLimit: 4, workerHardLimit: 16, isCustomized: false }) },
       sessions: { list: read([]) },

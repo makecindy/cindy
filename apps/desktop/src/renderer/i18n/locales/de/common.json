@@ -7467,6 +7467,10 @@
         "globalOccupied": "Bereits von einer anderen App verwendet. Wähle eine andere Kombination."
       },
       "items": {
+        "away-guard": {
+          "label": "Weiterarbeiten, während du weg bist",
+          "description": "Verdeckt die Bildschirme nach 3 Sekunden, damit die Arbeit während deiner Abwesenheit weitergeht. Lokale Eingaben sperren den Mac. Ab macOS 14."
+        },
         "region-screenshot": {
           "label": "Screenshot",
           "description": "Erstelle in einer beliebigen App einen Screenshot, füge Anmerkungen hinzu, hefte ihn auf dem Bildschirm an oder sende ihn an {{appName}}"

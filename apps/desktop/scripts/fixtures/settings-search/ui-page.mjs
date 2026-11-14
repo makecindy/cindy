@@ -30,6 +30,7 @@ export default {
     ]))),
     'appearance-desktop-hidden': { about: 'Hidden desktop retains blur 12 with a disabled slider', data: { tab: 'appearance', hiddenBackground: 'none' } },
     'appearance-wallpaper-hidden': { about: 'Hidden wallpaper retains blur 12 with a disabled slider', data: { tab: 'appearance', hiddenBackground: 'cindy-window' } },
+    'shortcuts-unsupported-macos': { about: 'macOS 13 neither exposes nor indexes the unsupported away shortcut', data: { tab: 'shortcuts', osRelease: '22.6.0' } },
     'personalization-custom': { about: 'Custom auxiliary slots forward search IDs to real model selector buttons', data: { tab: 'personalization', customAuxiliary: true } },
     'tab-switch': { about: 'Committed settings tabs paint at full opacity with normal motion enabled', data: { tab: 'personalization', tabSwitch: true } },
     'remote-signed-in': { about: 'Signed-in device controls and relay section with searchable targets', data: { tab: 'remote-control', cloud: true } },
@@ -41,6 +42,7 @@ export default {
   async check(page, ui) {
     const panel = page.getByRole('tabpanel');
     await panel.waitFor();
+    if (ui.data.osRelease === '22.6.0') assert.equal(await page.locator('#settings-shortcut-away-guard').count(), 0);
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
     // 2026-11-14 recording: settled screenshots missed a blank frame caused by each tab's fade-in.
     // Exercise real SettingsView navigation and Chromium paint, with normal motion, on the first

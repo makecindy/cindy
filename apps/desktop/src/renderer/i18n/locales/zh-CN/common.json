@@ -7418,6 +7418,10 @@
         "globalOccupied": "已被其他应用占用，请换一个组合键"
       },
       "items": {
+        "away-guard": {
+          "label": "离开时继续工作",
+          "description": "3 秒后遮住屏幕，让工作在离开后继续。本机输入会触发系统锁屏。需要 macOS 14 或更高版本。"
+        },
         "region-screenshot": {
           "label": "截图",
           "description": "在任意应用中截图，可以标注、贴到屏幕，或交给 {{appName}} 处理"

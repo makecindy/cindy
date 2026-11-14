@@ -7534,6 +7534,10 @@
         "globalOccupied": "Déjà utilisée par une autre application. Choisissez une autre combinaison."
       },
       "items": {
+        "away-guard": {
+          "label": "Continuer à travailler en votre absence",
+          "description": "Masque les écrans après 3 secondes pour poursuivre le travail en votre absence. Une saisie locale verrouille le Mac. macOS 14 ou ultérieur requis."
+        },
         "region-screenshot": {
           "label": "Capture d'écran",
           "description": "Faites une capture d'écran dans n'importe quelle application, puis annotez-la, épinglez-la à l'écran ou envoyez-la à {{appName}}"

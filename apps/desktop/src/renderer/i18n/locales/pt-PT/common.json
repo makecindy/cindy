@@ -7534,6 +7534,10 @@
         "globalOccupied": "Já está a ser utilizada por outra aplicação. Escolha uma combinação diferente."
       },
       "items": {
+        "away-guard": {
+          "label": "Continuar a trabalhar quando se ausenta",
+          "description": "Oculta os ecrãs após 3 segundos para continuar a trabalhar na sua ausência. A entrada local bloqueia o Mac. Requer macOS 14 ou posterior."
+        },
         "region-screenshot": {
           "label": "Captura de ecrã",
           "description": "Capturar o ecrã em qualquer aplicação e depois anotar a captura, fixá-la no ecrã ou enviá-la para {{appName}}"
