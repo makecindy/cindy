@@ -1,4 +1,5 @@
-import { createCanvas, GlobalFonts, loadImage, type FontKey } from '@napi-rs/canvas';
+import { fileURLToPath } from 'node:url';
+import { createCanvas, GlobalFonts, loadImage } from '@napi-rs/canvas';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const { addRepresentation, icon } = vi.hoisted(() => {
@@ -10,20 +11,19 @@ vi.mock('electron', () => ({ nativeImage: { createEmpty: () => icon } }));
 import { createWindowsBadgeIcon, renderWindowsBadgePng } from '../windowsBadgeIcon';
 
 describe('Windows numeric taskbar badge', () => {
-  let linuxFont: FontKey | null = null;
+  let fixtureFont: ReturnType<typeof GlobalFonts.registerFromPath> = null;
   beforeAll(() => {
-    if (process.platform !== 'linux') return;
-    // Linux has no Segoe UI; its generic fallback can choose color emoji even
-    // with DejaVu installed. Keep the PNG assertions on a real text font while
-    // Windows continues to exercise its actual system font.
-    linuxFont = GlobalFonts.registerFromPath(
-      '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    // Keep the PNG assertions independent of the runner's system-font fallback.
+    // This checks real badge rendering, not the Windows Segoe UI glyph shapes.
+    fixtureFont = GlobalFonts.registerFromPath(
+      fileURLToPath(new URL('../../../native/menubar/BarlowCondensed-SemiBold.ttf', import.meta.url)),
       'Segoe UI',
     );
-    if (!linuxFont) throw new Error('Linux badge tests require fonts-dejavu-core');
+    expect(fixtureFont).not.toBeNull();
   });
   afterAll(() => {
-    if (linuxFont) GlobalFonts.remove(linuxFont);
+    // The native font collection is process-wide, including Vitest threads.
+    if (fixtureFont) GlobalFonts.remove(fixtureFont);
   });
 
   it.each([1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 8])(
