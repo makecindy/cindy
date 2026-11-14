@@ -84,11 +84,13 @@ export function createOrcaWorkerResumeScheduler<Target extends OrcaWorkerResumeT
   const inFlight = new Map<string, InFlightResume>();
 
   function request(target: Target, opts?: OrcaWorkerResumeRequestOptions): Promise<boolean> {
+    // 已有唤醒时先共享它：预热自己持锁期间 hasActiveSend 也为真，先让路会把自己的
+    // 请求判成「被发送挡住」，等结果的调用方就拿不到那次唤醒的结论。
+    const existing = inFlight.get(target.sessionId);
+    if (existing) return existing.promise;
     // 让路给发送：用户直发 / 派发 / auto-resume 已在用这条会话时，唤醒只会把冷启动
     // 排到它们前面。跳过一次预热没有副作用——那次发送自己会 lazy resume。
     if (deps.hasActiveSend?.(target.sessionId)) return Promise.resolve(false);
-    const existing = inFlight.get(target.sessionId);
-    if (existing) return existing.promise;
     const entry: InFlightResume = {
       cancelled: false,
       promise: Promise.resolve(false),
