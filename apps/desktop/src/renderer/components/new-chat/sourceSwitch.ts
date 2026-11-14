@@ -222,7 +222,8 @@ export interface FollowedTaskAccount {
  * 但选择列表只按来源「自己名下」的账号算连接，原来源(如内置 OpenAI)只剩未登录的默认账号时，旧任务会被
  * 判成「模型来源已断开」并禁止发送(2026-11-14 拆分旧账号池后的回归)。
  *
- * 这里只为**这一个任务**把原来源补成「已连接、模型取自账号现在所在的供应商」；新任务、草稿和其他任务仍看
+ * 这里只为**这一个任务已生效的引擎和型号**把原来源补成已连接；缺少该条目时从账号所在的供应商借用。
+ * 不借出完整清单，避免覆盖原来源的逐模型停用，也不把待生效选择当成既有路由。新任务、草稿和其他任务仍看
  * 原列表。只放开、不收紧：原来源本来已连接(结果本就正常)、被停用或移除，账号仍在原来源、已暂停、未登录或
  * 不可用，或账号现在所在的供应商不在列表里、未连接、被停用时，一律返回 null，与改动前完全一致。
  * 发送仍带原来源 id，由 main 按任务绑定的账号校验。
@@ -231,9 +232,11 @@ export function followedAccountSourceProvider(args: {
   providers: readonly ProviderView[];
   providerId: string | null | undefined;
   account: FollowedTaskAccount | null | undefined;
+  agent: AgentKind | null | undefined;
+  modelId: string | null | undefined;
 }): ProviderView | null {
-  const { providers, providerId, account } = args;
-  if (!providerId || account?.state !== 'bound' || !account.account) return null;
+  const { providers, providerId, account, agent, modelId } = args;
+  if (!providerId || !agent || !modelId || account?.state !== 'bound' || !account.account) return null;
   const { paused, status, ownerProviderId } = account.account;
   if (!ownerProviderId || ownerProviderId === providerId || paused) return null;
   if (status !== 'ready' && status !== 'limited') return null;
@@ -241,7 +244,9 @@ export function followedAccountSourceProvider(args: {
   if (!source || source.connected || source.suspended || source.removed) return null;
   const owner = providers.find((p) => p.id === ownerProviderId);
   if (!owner || !owner.connected || owner.suspended || owner.removed) return null;
-  return { ...source, connected: true, models: owner.models };
+  const model = getModel(source, modelId, agent) ?? getModel(owner, modelId, agent);
+  if (!model) return null;
+  return { ...source, connected: true, models: { [agent]: [model] } };
 }
 
 /** 用上面的任务视图替换同 id 的来源；没有替换时原样返回同一个数组(保持 memo 引用稳定)。 */
