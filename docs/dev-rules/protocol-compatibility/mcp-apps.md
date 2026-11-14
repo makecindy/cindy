@@ -11,7 +11,7 @@
 McpAppDocument 增量增加可选的 sdk: { source }，由执行电脑从与 AppBridge 同版本的
 官方依赖提供，随临时 View 转发，不写入卡片。新查看端为所有页面准备表单前置代码和 SDK importmap，
 无须检测初始 HTML 的 JavaScript；作者已有的 imports、前缀及 null 映射优先，BOM/doctype 保持正确位置。
-本机 SDK 从内存按同源地址供给，远程/Mobile 沿用 sdk.source，不新增缓存、操作或传输字段；
+本机 SDK 从内存按同源地址供给，远程/Mobile 默认沿用 sdk.source；可选引用协商见下节。
 open 结果沿用现有 invokeTransfer gzip 协商，自建中转继续透明转发既有 invoke/invoke-result。
 旧查看端忽略 sdk，旧 Host 缺字段时新查看端照常打开文档；此时 SDK 地址不可用，只使对应 import 失败，
 不影响自带 SDK、作者映射或不用 SDK 的页面。显式或隐式整页替换、外部模块和计算 import 均无需源码探测。
@@ -128,3 +128,43 @@ Mobile 只增加现有原生 startApp manifest 的两个 JS 文件和共享 impo
 本地 noResultCache 选项：不发送 ifNoneMatch、不记入 InvokeResultCache，但保留 gzip。
 默认调用以及会话列表、历史页的缓存、notModified 和增量逻辑不变。选项不进入 wire，
 不改变 channel、allowlist 或 relay，自建中转继续透明转发既有帧。
+
+## 远程 SDK 引用协商
+
+open 增加独立可选字段 `sdkCacheHashes: string[]`（最多 8 个小写 SHA-256 hex），
+不放进 context，不交给页面的 hostContext。哈希是 UTF-8 编码的固定 JSON 元组
+`[sdk.source, sdk.addons?.['cindy/view-state']?.source ?? null, sdk.addons?.['cindy/view-state']?.reactSource ?? null]`
+的 SHA-256，覆盖官方模块与两个辅助模块的实际字节，不只比较应用版本号。
+执行端在原有授权/open 流程完成后，只有当前 SDK 哈希被查看端明确声明时，才省略 sdk、
+返回可选的 `sdkRef: string`。未声明、未命中或原预算已省略 SDK 时，沿用原有结果。
+这不改变原有 `sdk.source` 类型，不增加 channel、allowlist、relay 帧或新操作。
+
+查看端只声明本地确实持有的模块，缓存按账号代次和执行设备隔离，进程内最多 8 项、
+总计 4 Mi 字符，重启丢弃。请求发出时固定所声明的模块引用，途中淘汰不会使它失效。
+引用未知/不匹配时，先 teardown 尚未挂载的 View，再以空哈希列表最多重新 open 一次；
+不得重放页面工具或重启 peer/relay。仍返回无来源引用则关闭它并按无效文档失败。
+哈希计算失败时保留完整来源路径，不因缓存优化阻断有效页面。
+
+| 执行端 | 查看端 | 行为 |
+| --- | --- | --- |
+| 旧 | 旧 | 原完整 source 流程 |
+| 旧 | 新 | 旧 open schema 丢弃未知字段，继续完整 source |
+| 新 | 旧 | 无哈希声明，继续完整 source |
+| 新 | 新 | 首次/重启/未命中回完整 source；命中只回 sdkRef，由本地模块还原 |
+
+Desktop Main 和 Mobile JS 复用同一个引用缓存实现；Mobile 用已有的 SHA-256 能力，
+不改原生配置。自建中转仍只转发既有签名 invoke/invoke-result，不解析应用字段，
+无需升级中转；新旧请求合同与双控制端隔离通过真实自建中转互通验证。
+历史二进制及真实设备的大页面、后台切换仍需单独实机验收，合同夹具不能替代这些证据。
+
+## 长轮询与大文档的容量约束
+
+后续调度设计必须让长轮询不占前台操作名额，功能上限不能等于通道上限；
+控制端发往同一执行端的总在途量须同时满足执行端对每台控制端的上限，并为用户操作留余量。
+不能只提高控制端名额，也不能把所有 poll 塞进很小的共享后台池。当前每 View poll 的
+既有调度在本次传输优化中保持不变，是否增加独立名额须先实测 4 张可见卡的前台排队和事件延迟。
+
+单份远程文档上限与同时在途总量必须分别核对：不得降低既有约 4 MiB 单份上限来缓解并发，
+否则已能打开的页面会退化；缓存/压缩后的大小不能代表解码后内存。验收用约 3.9 MiB 难压缩
+页面同时打开 4 张，记录两端内存、传输量、排队和失败半径。冷缓存并发请求可能各传一份 SDK，
+不能把“后续串行命中省字节”写成“并发首次只传一份”；长轮询合并仍留待独立方案。

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
@@ -404,4 +405,35 @@ it('drops invalid addon metadata independently of the official SDK', async () =>
   f.invoke.mockResolvedValueOnce({ ...document, sdk: { source: 'sdk', addons: { 'cindy/view-state': { source: 7 } } } });
   const local = await f.open();
   expect(state.mounts.get(local.viewId)!.document.sdk).toEqual({ source: 'sdk' });
+});
+
+it('restores a warm SDK reference from local bytes without putting hashes in host context', async () => {
+  const f = fixture();
+  const sdk = { source: 'export const App = 1;' };
+  const hash = createHash('sha256').update(JSON.stringify([sdk.source, null, null])).digest('hex');
+  f.invoke.mockResolvedValueOnce({ ...document, sdk });
+  await f.open();
+  f.invoke.mockResolvedValueOnce({ ...document, viewId: 'second-remote', sdkRef: hash });
+  const second = await f.control({ op: 'open', clientId: 'card-2', context: { theme: 'light' } }) as McpAppSandboxView;
+  const request = f.invoke.mock.calls.filter(call => call[2].op === 'open').at(-1)![2];
+  expect(request.sdkCacheHashes).toEqual([hash]);
+  expect(request.context).toEqual({ theme: 'light' });
+  expect(state.mounts.get(second.viewId)!.document.sdk).toEqual(sdk);
+  expect(state.mounts.get(second.viewId)!.document).not.toHaveProperty('sdkRef');
+});
+
+it('retires an unresolved SDK reference before a single source fallback and binds the replacement View', async () => {
+  const f = fixture();
+  const sdk = { source: 'export const App = 2;' };
+  f.invoke.mockResolvedValueOnce({ ...document, viewId: 'unknown-ref', sdkRef: 'f'.repeat(64) })
+    .mockResolvedValueOnce({})
+    .mockResolvedValueOnce({ ...document, viewId: 'full-source', sdk });
+  const local = await f.open();
+  expect(f.invoke.mock.calls.map(call => call[2].op)).toEqual(['open', 'teardown', 'open']);
+  expect(f.invoke.mock.calls[1][2]).toEqual({ op: 'teardown', viewId: 'unknown-ref' });
+  expect(f.invoke.mock.calls[2][2].sdkCacheHashes).toEqual([]);
+  const mounted = state.mounts.get(local.viewId)!;
+  expect(mounted.document.sdk).toEqual(sdk);
+  await mounted.frame({ op: 'poll' });
+  expect(f.invoke.mock.calls.at(-1)![2].viewId).toBe('full-source');
 });

@@ -1,3 +1,14 @@
+import { encodeInvokeResultTransfer } from '../../packages/device-link/src/invokeTransfer';
+import { createHash } from 'node:crypto';
+import { gzipSync, gunzipSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { z } from 'zod';
+import { McpAppSdkCache } from '../../packages/maker-shared/src/mcpApps';
+import { handleMcpAppOperation } from '../../apps/desktop/src/main/mcp-apps/operations';
+import type { McpAppsHost } from '../../apps/desktop/src/main/mcp-apps/host';
+import type { McpAppDocument } from '../../packages/maker-shared/src/mcpApps';
+import type { InvokePayload } from '../../packages/device-link/src/protocol';
 import { expect, it, vi } from "vitest";
 import { nodeRelayAuthCrypto } from "../../packages/device-link/src/nodeRelayCrypto";
 import { RelayFrameAuthenticator } from "../../packages/device-link/src/selfHostedRelayAuth";
@@ -15,18 +26,19 @@ interface FrameAuthSpec {
   certs: unknown[];
   host: { deviceId: string; seed: string };
   controller: { deviceId: string; seed: string };
+  observer?: { deviceId: string; seed: string };
 }
 
 /**
  * 自建中转的设备签名(可选,由 run-interop 提供测试密钥):主机与控制端都核对全部对端帧,
  * 与 Desktop / Mobile 一致。任何绕过签名的发送路径都会让接收端丢帧、恢复流程超时。
  */
-function frameAuthFor(spec: FrameAuthSpec, role: "host" | "controller", rejected: string[]) {
+function frameAuthFor(spec: FrameAuthSpec, role: "host" | "controller" | "observer", rejected: string[]) {
   const auth = new RelayFrameAuthenticator({
     crypto: nodeRelayAuthCrypto,
     relayId: spec.relayId,
-    deviceId: spec[role].deviceId,
-    seed: spec[role].seed,
+    deviceId: spec[role]!.deviceId,
+    seed: spec[role]!.seed,
     ownerPublicKey: spec.ownerPublicKey,
   });
   auth.setCertificates(spec.certs);
@@ -184,5 +196,137 @@ it("interoperates with an explicitly provisioned isolated relay and automaticall
     data.close();
     controller.close();
     host.close();
+  }
+}, 40_000);
+
+// Network integration: production clients and MCP operation/cache entry points,
+// against a real signed self-hosted relay. Legacy endpoints retain their v1
+// request/response contract; no historical binary or GUI is emulated here.
+it.skipIf(!process.env.CINDY_TEST_OBSERVER_TOKEN)('interoperates across the SDK version matrix and isolates a second controller from held App polls', async () => {
+  const url = process.env.CINDY_TEST_RELAY_URL!;
+  const spec = JSON.parse(process.env.CINDY_TEST_FRAME_AUTH ?? 'null') as FrameAuthSpec | null;
+  const observerToken = process.env.CINDY_TEST_OBSERVER_TOKEN;
+  if (!spec?.observer || !observerToken) throw new Error('This SDK interop case requires the provisioned two-controller self-hosted relay');
+  const rejected: string[] = [];
+  const hash = (text: string) => createHash('sha256').update(text).digest('hex');
+  const codec = {
+    contentTag: hash,
+    gzipBase64: (text: string) => gzipSync(Buffer.from(text)).toString('base64'),
+    gunzipBase64: (text: string, maxChars: number) => gunzipSync(Buffer.from(text, 'base64'), { maxOutputLength: maxChars }).toString(),
+  };
+  const opts = { authorizationScheme: 'CindyRelay' as const, transferCodec: codec, timing: { requestTimeoutMs: 10_000, pingIntervalMs: 5_000 } };
+  const host = createClient(url, 'sdk-host', true, { ...opts, token: process.env.CINDY_TEST_HOST_TOKEN, frameAuth: frameAuthFor(spec, 'host', rejected) });
+  const viewer = createClient(url, 'sdk-viewer', false, { ...opts, token: process.env.CINDY_TEST_CONTROLLER_TOKEN, frameAuth: frameAuthFor(spec, 'controller', rejected) });
+  const other = createClient(url, 'sdk-other', false, { ...opts, token: observerToken, frameAuth: frameAuthFor(spec, 'observer', rejected) });
+  const requireDesktop = createRequire(new URL('../../apps/desktop/package.json', import.meta.url));
+  const sdk = { source: readFileSync(requireDesktop.resolve('@modelcontextprotocol/ext-apps/app-with-deps'), 'utf8') };
+  let serial = 0;
+  let modernHost = true;
+  const active = new Map<string, string>();
+  const polls = new Map<string, () => void>();
+  const replies: McpAppDocument[] = [];
+  const receivedActions: Array<{ caller: string; channel: string }> = [];
+  const api = {
+    open: async (caller: string) => {
+      const viewId = `view-${++serial}`; active.set(viewId, caller);
+      return { viewId, html: '<!doctype html><p>App', csp: "default-src 'none'", prefersBorder: true, sdk };
+    },
+    teardown: async (caller: string, _session: string, viewId: string) => {
+      if (active.get(viewId) !== caller) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+      polls.get(viewId)?.(); polls.delete(viewId); active.delete(viewId);
+    },
+    poll: async (caller: string, _session: string, viewId: string) => {
+      if (active.get(viewId) !== caller) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+      return new Promise(resolve => polls.set(viewId, () => resolve([])));
+    },
+  } as unknown as McpAppsHost;
+  // Frozen legacy open contract: normal z.object strips unknown optional fields.
+  const legacyOpen = z.object({ op: z.literal('open'), clientId: z.string(), openId: z.string().optional(), context: z.record(z.string(), z.unknown()).default({}) });
+  const off = host.client.onFrame(frame => {
+    if (!frame.src || !frame.id) return;
+    if (frame.kind === 'link-open') {
+      host.client.sendLinkAccept(frame.src, frame.id, { appVersion: 'fixture', allowlistHash: 'fixture' }); return;
+    }
+    if (frame.kind !== 'invoke') return;
+    const { channel, args } = frame.payload as InvokePayload;
+    const caller = frame.src; const id = frame.id;
+    void (async () => {
+      try {
+        let result: unknown;
+        if (channel === 'maker:mcp-apps:v1') {
+          let input = args[1] as Record<string, unknown>;
+          if (!modernHost && input.op === 'open') input = legacyOpen.parse(input);
+          result = await handleMcpAppOperation(api, caller, args[0] as string, input);
+          if (input.op === 'open') replies.push(result as McpAppDocument);
+        } else {
+          receivedActions.push({ caller, channel }); result = { accepted: true };
+        }
+        host.client.sendInvokeResult(caller, id, { ok: true, result });
+      } catch {
+        host.client.sendInvokeResult(caller, id, { ok: false, error: { code: 'IPC_ERROR', message: 'fixture operation failed' } });
+      }
+    })();
+  });
+  try {
+    for (const connection of [host, viewer, other]) connection.client.start();
+    await vi.waitFor(() => { for (const connection of [host, viewer, other]) expect(connection.client.getStatus()).toBe('online'); }, { timeout: 10_000 });
+    const hostId = host.client.getSelfDeviceId()!;
+    for (const connection of [viewer, other]) await connection.client.openLink(hostId, { controllerName: 'Viewer', protocolVersion: 1, appVersion: 'fixture' });
+    const send = async (input: Record<string, unknown>) => {
+      const result = await viewer.client.invoke(hostId, { channel: 'maker:mcp-apps:v1', args: ['task', input] }, undefined, { noResultCache: input.op === 'open' || input.op === 'poll' });
+      if (!result.ok) throw new Error(result.error.code);
+      return result.result;
+    };
+    for (const executor of [false, true]) for (const control of [false, true]) {
+      modernHost = executor;
+      const cache = new McpAppSdkCache(hash);
+      const owner = {};
+      const start = replies.length;
+      for (let i = 0; i < 2; i++) {
+        const input = { op: 'open', clientId: 'card', openId: `attempt-${serial}`, context: {} };
+        const doc = (control ? await cache.open(owner, hostId, input, send, () => {}) : await send(input)) as McpAppDocument;
+        expect(doc.sdk).toEqual(sdk);
+        await send({ op: 'teardown', viewId: doc.viewId });
+      }
+      const [cold, warm] = replies.slice(start);
+      expect(cold.sdk).toEqual(sdk);
+      expect(Boolean(warm.sdkRef)).toBe(executor && control);
+      expect(Boolean(warm.sdk)).toBe(!(executor && control));
+      const bytes = (doc: McpAppDocument) => ({ raw: Buffer.byteLength(JSON.stringify(doc)),
+        encodedPayload: Buffer.byteLength(JSON.stringify(encodeInvokeResultTransfer({ gzip: 1 }, { ok: true, result: doc }, codec))) });
+      console.log('[mcp-sdk-interop]', JSON.stringify({ executor: executor ? 'new' : 'legacy-contract', viewer: control ? 'new' : 'legacy-contract', cold: bytes(cold), warm: bytes(warm) }));
+    }
+    modernHost = true;
+    for (const release of ['teardown', 'background']) {
+      const views: string[] = [];
+      const pending: Promise<unknown>[] = [];
+      for (let i = 0; i < 4; i++) {
+        const doc = await send({ op: 'open', clientId: `poll-${i}`, openId: `poll-${serial}`, context: {} }) as McpAppDocument;
+        views.push(doc.viewId);
+        pending.push(send({ op: 'poll', viewId: doc.viewId, after: 0 }).catch(error => error));
+      }
+      await vi.waitFor(() => expect(polls.size).toBe(4));
+      const statuses = [...other.statuses];
+      const hostSockets = host.sockets.length;
+      const otherSockets = other.sockets.length;
+      for (const channel of ['maker:send', 'maker:answer', 'maker:stop']) {
+        await expect(other.client.invoke(hostId, { channel, args: ['other-task'] })).resolves.toMatchObject({ ok: true, result: { accepted: true } });
+        expect(polls.size).toBe(4); // B completes while all A reads are still held.
+      }
+      if (release === 'teardown') for (const viewId of views) await send({ op: 'teardown', viewId });
+      else { viewer.client.stop(); for (const resolve of polls.values()) resolve(); polls.clear(); }
+      await Promise.all(pending);
+      await expect(other.client.invoke(hostId, { channel: 'maker:send', args: ['other-task'] })).resolves.toMatchObject({ ok: true });
+      expect(other.client.getStatus()).toBe('online');
+      expect(other.statuses).toEqual(statuses);
+      expect(host.sockets).toHaveLength(hostSockets);
+      expect(other.sockets).toHaveLength(otherSockets);
+    }
+    expect(receivedActions).toHaveLength(8);
+    expect(receivedActions.every(action => action.caller === other.client.getSelfDeviceId())).toBe(true);
+    expect(rejected).toEqual([]);
+  } finally {
+    for (const resolve of polls.values()) resolve();
+    off(); viewer.close(); other.close(); host.close();
   }
 }, 40_000);
