@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { UnifiedModelPickerView } from '@/session/UnifiedModelPickerView';
 import { UnifiedModelPickerView as IosModelPickerView } from '@/session/UnifiedModelPickerView.ios';
-const virtualList = vi.hoisted(() => ({ scrollToOffset: vi.fn() }));
+const virtualList = vi.hoisted(() => ({ scrollToOffset: vi.fn(), scrollToIndex: vi.fn() }));
 const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
 vi.mock('react-native', async () => {
   const { createElement: el, useImperativeHandle } = await import('react');
@@ -22,7 +22,7 @@ vi.mock('react-native', async () => {
     }: any) => {
       useImperativeHandle(
         ref,
-        () => ({ scrollToOffset: virtualList.scrollToOffset }),
+        () => ({ scrollToOffset: virtualList.scrollToOffset, scrollToIndex: virtualList.scrollToIndex }),
         [],
       );
       return el(
@@ -58,8 +58,8 @@ vi.mock('react-native-svg', () => ({
 }));
 vi.mock('@expo/ui/swift-ui', async () => {
   const { useRef } = await import('react');
-  const Container = ({ children, modifiers, testID }: any) => createElement('div', {
-    'data-testid': testID, 'data-modifiers': JSON.stringify(modifiers),
+  const Container = ({ children, modifiers, testID, initialScrollTargetId }: any) => createElement('div', {
+    'data-testid': testID, 'data-modifiers': JSON.stringify(modifiers), 'data-initial-scroll': initialScrollTargetId,
     'aria-hidden': modifiers?.some((m:any) => m.accessibilityHidden === true),
   }, children);
   return {
@@ -69,7 +69,7 @@ vi.mock('@expo/ui/swift-ui', async () => {
   };
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({...Object.fromEntries(
-  ['containerRelativeFrame', 'onGeometryChange'].map(key => [key, (value: any) => ({ [key]: value })]),
+  ['id', 'containerRelativeFrame', 'onGeometryChange'].map(key => [key, (value: any) => ({ [key]: value })]),
 ), ...Object.fromEntries(
   ['background', 'fixedSize', 'accessibilityElement', 'accessibilityHidden', 'opacity', 'scrollDisabled', 'scrollContentBackground', 'presentationDetents', 'presentationDragIndicator', 'interactiveDismissDisabled', 'contentShape', 'accessibilityLabel', 'buttonStyle', 'disabled', 'font', 'foregroundStyle', 'frame', 'pickerStyle', 'progressViewStyle', 'tint', 'tag', 'padding', 'autocorrectionDisabled', 'textInputAutocapitalization', 'lineLimit'].map(key => [key, (value: any) => ({ [key]: value })]),
 ), shapes:{rectangle:()=>({}), roundedRectangle:(value: any)=>value}}));
@@ -354,3 +354,47 @@ it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as co
     expect(onFilter).not.toHaveBeenCalled();
   },
 );
+
+// Regression: opening a long catalog used to leave the selected model offscreen.
+// Existing view tests only exercised row contents. Unit tier: late rows, refresh,
+// and reopen through the production view, asserting the native list scroll command.
+it('locates a late selected model once per opening without snapping back on refresh', async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; });
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+  virtualList.scrollToIndex.mockClear();
+  const row = { key: 'selected', selected: true, entry: { displayName: 'Selected', capabilities: {} }, config: { agent: 'codex' } };
+  const render = (visible: boolean, rows: any[]) => act(() => root.render(createElement(UnifiedModelPickerView, {
+    visible, groups: [{ key: 'provider', title: 'Provider', rows }], filters: [], query: '', filter: 'all',
+  } as any)));
+  const flush = () => act(() => { frames.splice(0).forEach(callback => callback(0)); });
+  try {
+    render(true, []);
+    flush();
+    expect(virtualList.scrollToIndex).not.toHaveBeenCalled();
+    render(true, [{ ...row, key: 'first', selected: false }, row]);
+    flush();
+    expect(virtualList.scrollToIndex).toHaveBeenLastCalledWith({ index: 2, viewPosition: 0.5, animated: false });
+    render(true, [{ ...row, key: 'first', selected: false }, { ...row }]);
+    flush();
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(1);
+    render(false, [row]);
+    flush();
+    render(true, [row]);
+    flush();
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(2);
+  } finally { vi.unstubAllGlobals(); }
+});
+
+// Native boundary: the Form must receive a unique group + row target, even
+// when a favorite and provider entry share a model key. Native motion needs device verification.
+it('passes the first selected row target to the iOS form after late data', () => {
+  const row = { key: 'same-model', selected: true, entry: { displayName: 'Selected', capabilities: {} }, config: { agent: 'codex' } };
+  const render = (groups: any[]) => act(() => root.render(createElement(IosModelPickerView, {
+    visible: true, testID: 'picker', groups, filters: [], query: '',
+  } as any)));
+  render([]);
+  expect(host.querySelector('[data-initial-scroll]')).toBeNull();
+  render([{ key: 'favorites', rows: [row] }, { key: 'provider', rows: [row] }]);
+  expect(host.querySelector('[data-testid="picker.list"]')?.getAttribute('data-initial-scroll')).toBe('favorites:same-model');
+});
