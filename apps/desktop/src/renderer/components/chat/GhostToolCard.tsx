@@ -382,6 +382,13 @@ function GhostCardCanvas({
   const autoArchiveStateRef = useRef(autoArchiveState);
   autoArchiveStateRef.current = autoArchiveState;
   const fillPrStatus = useCallback((doc: Document) => {
+    // Establish the host-supported display before open-only captures its fallback.
+    // Later refreshes leave display exclusively under the PR visibility rules.
+    doc.querySelectorAll<HTMLElement>('button[data-ghost-copy-link]').forEach((el) => {
+      if (el.dataset.xdtCopyRevealed === '1' || !isGhostCardCopyLinkAllowed(el.dataset.ghostCopyLink ?? '')) return;
+      el.dataset.xdtCopyRevealed = '1';
+      el.style.setProperty('display', 'inline-flex', 'important');
+    });
     if (!prSlotKey) return;
     setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(`github:github.com/${key}`) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
     fillGhostCardTaskAutoArchiveHint(doc, taskArchiveEligible ? autoArchiveStateRef.current : 'inactive', {
@@ -771,13 +778,12 @@ function GhostCardCanvas({
     // 复制链接按钮:插件写成 display:none,宿主认得才露出;点击不回传插件,由宿主写剪贴板,
     // 提示与任务顶栏 PR 浮窗的复制按钮一致。净化器保证它没有动作 / 外链 / 归档标记。
     doc.querySelectorAll<HTMLElement>('button[data-ghost-copy-link]').forEach((el) => {
-      if (el.dataset.xdtCopyBridged === '1') return;
       const url = el.dataset.ghostCopyLink ?? '';
       if (!isGhostCardCopyLinkAllowed(url)) return;
-      el.dataset.xdtCopyBridged = '1';
       el.setAttribute('aria-label', t('sharing.copyLink'));
       el.title = t('sharing.copyLink');
-      el.style.setProperty('display', 'inline-flex', 'important');
+      if (el.dataset.xdtCopyBridged === '1') return;
+      el.dataset.xdtCopyBridged = '1';
       el.style.cursor = 'pointer';
       el.addEventListener('click', (e) => {
         e.stopPropagation();

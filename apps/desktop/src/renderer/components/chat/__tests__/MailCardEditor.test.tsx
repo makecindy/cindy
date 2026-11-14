@@ -8,7 +8,8 @@ import type { MailCardData } from '@cindy/maker-shared/ghost-card-form';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import { enableGhostCardTaskAutoArchive, isGhostCardTaskAutoArchivePending } from '@/cindy-brain/ghostCardTaskArchive';
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+const labels = vi.hoisted(() => ({ t: (key: string) => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: labels.t }) }));
 vi.mock('@/cindy-brain/useGhostCardThemeVars', () => ({ useGhostCardThemeVars: () => '' }));
 vi.mock('@/features/right-sidebar/lib/mailPreview', () => ({ openMailCard: vi.fn() }));
 const prStatuses = vi.hoisted(() => new Map<string, unknown>());
@@ -220,4 +221,40 @@ it('reveals the copy-link button and copies its link without dispatching a card 
   await act(async () => {});
   expect(writeText).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/9');
   expect(dispatch).not.toHaveBeenCalled();
+});
+
+// PR #10521 regression (unit): existing copy coverage never combined open-only with copy-link
+// or changed the language on a live iframe. The real editor must preserve visibility across
+// merged/closed → open → merged and update accessible labels without duplicating copy events.
+it.each(['merged', 'closed'])('keeps copy visibility under PR status control (%s) and refreshes labels', async (ended) => {
+  const props = { callId: 'copy-status', sessionId: 'copy-status-session', height: 80,
+    html: '<button data-ghost-pr-open-only="octo/repo#9" data-ghost-copy-link="https://github.com/octo/repo/pull/9" style="display:none"></button>' };
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+  const originalT = labels.t;
+  prStatuses.set('octo/repo#9', { ok: true, status: ended });
+  const view = render(<MailCardEditor {...props} />);
+  try {
+    const frame = screen.getByTitle('mailReader.title') as HTMLIFrameElement;
+    frame.contentDocument!.open(); frame.contentDocument!.write(frame.srcdoc); frame.contentDocument!.close();
+    fireEvent.load(frame);
+    const button = frame.contentDocument!.querySelector('button')!;
+    expect(button.style.display).toBe('none');
+    prStatuses.set('octo/repo#9', { ok: true, status: 'open' });
+    labels.t = (key: string) => key === 'sharing.copyLink' ? '复制链接' : key;
+    view.rerender(<MailCardEditor {...props} />);
+    expect(button.style.display).toBe('inline-flex');
+    expect(button.getAttribute('aria-label')).toBe('复制链接');
+    expect(button.title).toBe('复制链接');
+    fireEvent.click(button);
+    await act(async () => {});
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/9');
+    prStatuses.set('octo/repo#9', { ok: true, status: ended });
+    labels.t = originalT;
+    view.rerender(<MailCardEditor {...props} />);
+    expect(button.style.display).toBe('none');
+  } finally {
+    labels.t = originalT;
+    prStatuses.clear();
+  }
 });
