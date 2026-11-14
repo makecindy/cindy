@@ -32,6 +32,7 @@ describe('decideProviderGroupFailure — the account on that computer', () => {
     ['usage limit (Claude tag)', { sdkError: 'rate_limit' }, switchTo('usage-limit')],
     ['usage limit (Codex tag)', { codexErrorInfo: 'usageLimitExceeded' }, switchTo('usage-limit')],
     ['billing depleted', { sdkError: 'billing_error' }, switchTo('usage-limit')],
+    ['workspace credits depleted', { message: 'Your workspace is out of credits. Ask your workspace owner to refill in order to continue.' }, switchTo('usage-limit')],
     ['HTTP 429', { errorStatus: 429, message: 'rate limited' }, switchTo('usage-limit')],
     ['signed out (tag)', { sdkError: 'authentication_failed' }, switchTo('auth')],
     ['signed out (401)', { errorStatus: 401 }, switchTo('auth')],
