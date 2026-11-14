@@ -4242,6 +4242,14 @@
           "thinkingCapability": {
             "on": "Unterstützt Denken",
             "off": "Kein Denken"
+          },
+          "imageInputOverride": {
+            "label": "Bildeingabefähigkeit",
+            "inherit": "Anbieter folgen",
+            "declaredTrue": "Unterstützt Bild Eingabe",
+            "declaredFalse": "Keine Bildeingabe",
+            "saveFailed": "Speichern der Bildeingabefähigkeit fehlgeschlagen",
+            "saveFailedWithReason": "Speichern der Bildeingabefähigkeit fehlgeschlagen: {{message}}"
           }
         },
         "kindFilter": {

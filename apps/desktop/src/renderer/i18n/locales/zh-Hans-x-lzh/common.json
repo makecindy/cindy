@@ -4200,6 +4200,14 @@
           "thinkingCapability": {
             "on": "能思虑",
             "off": "不能思虑"
+          },
+          "imageInputOverride": {
+            "label": "图片输入之能",
+            "inherit": "循供应商之定",
+            "declaredTrue": "能入图片",
+            "declaredFalse": "不能入图片",
+            "saveFailed": "图片输入之能未能存",
+            "saveFailedWithReason": "图片输入之能未能存：{{message}}"
           }
         },
         "kindFilter": {

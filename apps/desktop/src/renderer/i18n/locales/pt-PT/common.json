@@ -4296,6 +4296,14 @@
           "thinkingCapability": {
             "on": "Suporta raciocínio",
             "off": "Sem raciocínio"
+          },
+          "imageInputOverride": {
+            "label": "Capacidade de entrada de imagens",
+            "inherit": "Seguir o fornecedor",
+            "declaredTrue": "Suporta entrada de imagens",
+            "declaredFalse": "Sem entrada de imagens",
+            "saveFailed": "Falha ao guardar a capacidade de entrada de imagens",
+            "saveFailedWithReason": "Falha ao guardar a capacidade de entrada de imagens: {{message}}"
           }
         },
         "kindFilter": {
