@@ -216,3 +216,26 @@ it('compresses the retained image after legacy ingress recovery with removal dis
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+// Unit: regression for budgeting original bytes after prepare. Forty repeated
+// screenshots cross the real 32 MiB threshold before encoding; one cached encode
+// keeps this minimal fixture inexpensive without lowering production limits.
+it('budgets forty PNG images after real compression and preserves all of them', async () => {
+  const png = await sharp({ create: { width: 512, height: 416, channels: 3, background: '#315678' } })
+    .png({ compressionLevel: 0 }).toBuffer();
+  const body = Buffer.from(JSON.stringify(bodyFor(Array(40).fill(uri(png, 'image/png')))));
+  expect(body.length).toBeGreaterThan(32 << 20);
+  const preserve = vi.fn(async () => { throw new Error('Compressed images fit without persistence'); });
+  const result = await controlRequestSize(body, 'responses', {
+    route: { providerId: 'openai', modelId: 'gpt-6-astra' },
+    signal: new AbortController().signal,
+    preprocessor: createInlineImagePreprocessor(() => true),
+  }, preserve);
+  expect(result!.bytes).toBeLessThan(32 << 20);
+  expect(result!.removedImages).toBe(0);
+  expect(preserve).not.toHaveBeenCalled();
+  const images = (JSON.parse(result!.body.toString()) as Body).input[0].content.filter(item => item.type === 'input_image');
+  expect(images).toHaveLength(40);
+  for (const item of images) expect(decode(item.image_url!).mime).toBe('image/webp');
+  expect(await sharp(decode(images[0].image_url!).bytes).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
+});
