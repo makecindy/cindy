@@ -35,6 +35,7 @@ const FETCH_TIMEOUT_MS = 10_000;
 /** 失败响应体最多读取的字节数（分类只看前几 KB）。 */
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
 const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without embedded credentials';
+const CODEX_MODELS_CLIENT_VERSION = '0.147.0';
 
 // Share only an in-flight Hinoki HTTP read, not parsed models or agent-bound
 // provenance receipts. Every caller keeps its own parsing/error policy below.
@@ -203,7 +204,16 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
     ? `${baseUrl.origin}${baseUrl.pathname.replace(/\/openai\/?$/, '').replace(/\/+$/, '')}/models`
     : explicit && modelsUrl?.origin === baseUrl.origin
     ? explicit : spec.wireProtocol === 'google-generative-ai'
-      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
+      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(
+        spec.baseUrl,
+        !explicit && spec.agent === 'codex'
+          && (spec.wireProtocol ?? 'openai-responses') === 'openai-responses'
+          && !isLoopbackProviderUrl(spec.baseUrl)
+          && baseUrl.origin !== 'https://api.elevenlabs.io'
+          && !isOpenRouterModelsUrl(deriveModelsDiscoveryUrl(spec.baseUrl))
+          ? { clientVersion: CODEX_MODELS_CLIENT_VERSION }
+          : undefined,
+      );
   const copilot = copilotModelsRequest(configuredDiscoveryUrl);
   const discoveryUrl = copilot?.url ?? configuredDiscoveryUrl;
   const mustStripCredentialHeaders =
@@ -332,7 +342,7 @@ export async function fetchProviderModels(
     // A configured Codex manifest may be unavailable on older compatible gateways.
     // Retry only the same endpoint without its manifest selector; never retry auth failures.
     const ordinaryUrl = new URL(url);
-    if ((res.status === 404 || res.status === 405) && ordinaryUrl.searchParams.has('client_version')) {
+    if (!spec.modelsUrl?.trim() && (res.status === 404 || res.status === 405) && ordinaryUrl.searchParams.has('client_version')) {
       await res.body?.cancel().catch(() => undefined);
       ordinaryUrl.searchParams.delete('client_version');
       return fetchProviderModels({ ...spec, modelsUrl: ordinaryUrl.toString() }, fetchImpl);
