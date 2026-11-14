@@ -52,6 +52,20 @@ pnpm benchmark:desktop-workers -- --workers 1,2,4,8 --runs 1 --output <report.js
   产物保留 14 天，供后续按耗时分片。未设置该变量时 Desktop 不覆盖 Vitest 默认 reporters；
   设置时显式补回 GitHub Actions 下默认追加的 `github-actions` reporter。
 
+试跑结果（分支 workflow_dispatch，同一天，不含排队）：
+
+| | Windows 最慢分片 | 各片范围 | 整轮墙钟 | 整轮最慢 job |
+| --- | --- | --- | --- | --- |
+| 基线（4 片，上述 4 次） | 22.7–26.3 分钟 | 14.3–26.3 分钟 | 22–26 分钟 | Windows 分片 |
+| run 43557762427（8 片，全绿） | 14.1 分钟 | 8.8–14.1 分钟 | 18.2 分钟 | Linux 分片 18.1 分钟 |
+
+- Windows 关键路径约降 40%；整轮只降到约 18 分钟，因为 Linux 4 片（11.9–18.1 分钟）和
+  verify-checks（15.5 分钟）成为新的长板，要继续缩短需另行调整它们。
+- run 43556031905 导出的逐文件耗时：Desktop 在 Windows 上 4,063 个文件合计约 13,770 秒 worker 时间，
+  其中收集（导入模块）约 5,080 秒、执行测试约 4,240 秒；8 片之间 worker 时间差约 1.5 倍
+  （不计有失败的一片）。最慢的 `BotGroupChatView.test.tsx` 约 187 秒、
+  `CustomProviderDialogAccessibility.test.tsx` 约 158 秒，最慢 50 个文件占约 19%。
+
 ## 2026-10-16 CI 关键路径与分片调整
 
 数据来自 main 上两次成功的 client-ci（run 38819825618、38805666371，当时为 2 个分片）：
