@@ -16540,6 +16540,8 @@
             "title": "儲存庫事件",
             "description": "連接 Cindy GitHub App，在審查或 CI 變更時更新正在跟進的 PR。",
             "connected": "已連接 {{login}} · 正在關注 {{count}} 個儲存庫",
+            "syncing": "正在同步儲存庫…",
+            "finishInBrowser": "請在 GitHub 完成儲存庫設定後返回 Cindy。",
             "missing": "請檢查這些儲存庫的 App 安裝與存取權限：{{repositories}}",
             "error": "無法檢查連線，請重試。",
             "repositories": "選擇儲存庫",

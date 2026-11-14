@@ -63,17 +63,28 @@ it('keeps the last connected account during an outage and recovers on focus', as
   await waitFor(() => expect((screen.getByText(prefix + 'repositories') as HTMLButtonElement).disabled).toBe(false));
 });
 
-it('opens installation only on an explicit click and refreshes when the user returns', async () => {
-  const connectGithubApp = vi.fn(async () => {});
-  const githubAppStatus = vi.fn(async () => ({ available: true, login: null as string | null }));
-  window.electronAPI = { gitContext: { githubAppStatus, connectGithubApp } } as unknown as typeof window.electronAPI;
+it.each(['connect', 'repositories'])('waits for the browser return after %s and hides the stale repository count', async (action) => {
+  const openBrowser = vi.fn(async () => {});
+  let complete!: (state: GithubAppConnectionState) => void;
+  const githubAppStatus = vi.fn<() => Promise<GithubAppConnectionState>>()
+    .mockResolvedValueOnce({ available: true, login: action === 'connect' ? null : 'example-user', repositories: [] })
+    .mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+  window.electronAPI = { gitContext: { githubAppStatus, connectGithubApp: openBrowser, installGithubApp: openBrowser } } as unknown as typeof window.electronAPI;
   render(<GithubAppCard />);
-  fireEvent.click(await screen.findByText(prefix + 'connect'));
-  await waitFor(() => expect(connectGithubApp).toHaveBeenCalledOnce());
-  githubAppStatus.mockResolvedValue({ available: true, login: 'example-user' });
+  fireEvent.click(await screen.findByText(prefix + action));
+  await screen.findByText(prefix + 'finishInBrowser');
+  expect(openBrowser).toHaveBeenCalledOnce();
+  expect(githubAppStatus).toHaveBeenCalledOnce(); // Opening the browser does not finish installation.
+  expect(screen.queryByText(prefix + 'connected')).toBeNull();
   fireEvent(window, new Event('focus'));
-  expect(await screen.findByText(prefix + 'connected')).toBeTruthy();
+  fireEvent(window, new Event('focus'));
+  expect(githubAppStatus).toHaveBeenCalledTimes(2);
+  expect(screen.getByText(action === 'connect' ? checking : prefix + 'syncing')).toBeTruthy();
+  expect(screen.queryByText(prefix + 'connected')).toBeNull();
+  await act(async () => complete({ available: true, login: 'example-user', repositories: ['example/project'] }));
+  expect(screen.getByText(prefix + 'connected')).toBeTruthy();
   expect(screen.queryByText(prefix + 'connect')).toBeNull();
+  expect(screen.queryByRole('status')).toBeNull();
 });
 it('hides unconfigured service but makes a connection failure visible', async () => {
   const githubAppStatus = vi.fn(async () => ({ available: false }));
