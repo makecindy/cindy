@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -45,6 +45,7 @@ function renderPicker(projectOptions: readonly FolderPickerOption[]) {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe('filterFolderPickerOptions', () => {
@@ -99,7 +100,7 @@ describe('FolderPickerPopover project search', () => {
     expect(document.activeElement).toBe(screen.getByPlaceholderText(SEARCH));
   });
 
-  it('filters projects, picks the first match on Enter, and shows an empty result', () => {
+  it('filters projects, picks the first match on Enter, and shows an empty result', async () => {
     const { onSelect } = renderPicker(manyProjects);
     const input = screen.getByPlaceholderText(SEARCH);
     expect(document.activeElement).toBe(input);
@@ -112,7 +113,9 @@ describe('FolderPickerPopover project search', () => {
     expect(screen.getByText('newChat.folderPicker.noMatchingProjects')).toBeTruthy();
 
     fireEvent.change(input, { target: { value: 'slg' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' });
+    });
     expect(onSelect).toHaveBeenCalledWith(manyProjects[4].path, 'project', manyProjects[4]);
   });
 
@@ -133,6 +136,101 @@ describe('FolderPickerPopover project search', () => {
       height.mockRestore();
       client.mockRestore();
     }
+  });
+
+  it('keeps fading the list itself while it scrolls independently in the ample state', () => {
+    // 保留 main 的 Portal 挂载后测量、滚动时切换边缘渐隐的回归覆盖。
+    // 上半区放得下(scrollHeight 300 < clientHeight 400),列表自身可滚(392 > 252),
+    // 通过真实组件的 scroll 事件验证充足态列表的渐隐切换。
+    const height = vi
+      .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
+      .mockImplementation(function (this: HTMLElement) {
+        return this.hasAttribute('data-folder-picker-list') ? 392 : 300;
+      });
+    const client = vi
+      .spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+      .mockImplementation(function (this: HTMLElement) {
+        return this.hasAttribute('data-folder-picker-list') ? 252 : 400;
+      });
+    try {
+      renderPicker(manyProjects);
+      const list = document.querySelector('[data-folder-picker-list]') as HTMLElement;
+      // 上半区放得下:列表保留独立滚动标记与自滚动契约。
+      expect(list.hasAttribute('data-folder-picker-scroll')).toBe(true);
+      expect(list.className).toContain('folder-picker-fade-bottom');
+      expect(list.className).not.toContain('folder-picker-fade-top');
+
+      list.scrollTop = 140;
+      fireEvent.scroll(list);
+      expect(list.className).toContain('folder-picker-fade-top');
+      expect(list.className).not.toContain('folder-picker-fade-bottom');
+    } finally {
+      height.mockRestore();
+      client.mockRestore();
+    }
+  });
+
+  // PR #9334: production wheel/search handlers must move the active scroller.
+  // Existing filtering tests never scrolled; class snapshots could pass with broken handlers.
+  // Unit tier: inject DOM measurements (jsdom has no layout), dispatch real DOM events,
+  // and assert scroll positions. Browser layout/footer visibility is checked separately.
+  it.each(['title', 'search', 'footer'] as const)(
+    'forwards wheel events over %s to the independent list in an ample window',
+    (target) => {
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.hasAttribute('data-folder-picker-list') ? 560 : 396;
+      });
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.hasAttribute('data-folder-picker-list') ? 252 : 400;
+      });
+      renderPicker(manyProjects);
+      const list = document.querySelector('[data-folder-picker-list]') as HTMLElement;
+      const targets = {
+        title: screen.getByText('newChat.folderPicker.projects'),
+        search: screen.getByPlaceholderText(SEARCH),
+        footer: screen.getByText('newChat.folderPicker.browseProjectFolder'),
+      };
+      fireEvent.wheel(targets[target], { deltaY: 48 });
+      expect(list.scrollTop).toBe(48);
+      fireEvent.wheel(targets[target], { deltaY: -1, deltaMode: WheelEvent.DOM_DELTA_LINE });
+      expect(list.scrollTop).toBe(32);
+    },
+  );
+
+  it('returns to the first result below a pinned search box after scrolling a short window', async () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(704);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute('data-folder-picker-list') ? 560 : 180;
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const upper = document.querySelector('[data-folder-picker-search]')?.parentElement;
+      const scrollTop = upper?.scrollTop ?? 0;
+      if (this.hasAttribute('data-folder-picker-list')) {
+        return new DOMRect(0, 244 - scrollTop, 300, 560);
+      }
+      if (this.hasAttribute('data-folder-picker-search')) {
+        return new DOMRect(0, Math.max(100, 208 - scrollTop), 300, 36);
+      }
+      return new DOMRect(0, 100, 300, 180);
+    });
+    const options = Array.from({ length: 10 }, (_, i) => project(`cindy-${i}`));
+    const { onSelect } = renderPicker(options);
+    const input = screen.getByPlaceholderText(SEARCH);
+    const upper = input.closest('[data-folder-picker-search]')!.parentElement!;
+    const list = document.querySelector('[data-folder-picker-list]') as HTMLElement;
+    upper.scrollTop = 248;
+    fireEvent.wheel(input, { deltaY: 32 });
+    expect(upper.scrollTop).toBe(280);
+    expect(list.scrollTop).toBe(0);
+    fireEvent.change(input, { target: { value: 'cindy' } });
+    expect(upper.scrollTop).toBe(108);
+    expect(list.getBoundingClientRect().top).toBe(
+      input.closest('[data-folder-picker-search]')!.getBoundingClientRect().bottom,
+    );
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' });
+    });
+    expect(onSelect).toHaveBeenCalledWith(options[0].path, 'project', options[0]);
   });
 
   it('clears the query on Escape before closing', () => {
