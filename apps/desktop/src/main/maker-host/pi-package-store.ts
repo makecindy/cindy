@@ -4,6 +4,7 @@ import { getReadyBinaryPath, updateReadyPiBinary } from '../agent-binaries/index
 import { piBinaryUpdateFailureStage } from '../agent-binaries/pi-self-update.js';
 import { createPiPackageStore } from './piPackageStoreCore.js';
 export type { PiPackagesChangeOrigin, PiManagedPackageSkill, PiManagedPackageResources, PiPackageSnapshotLimits, PiPackageRuntimeInvalidationPhase, PiPackageMutationHooks } from './piPackageStoreCore.js';
+export { PALETTE_INSPECTION_REUSE_MS } from './piPackageStoreCore.js';
 export { piPackageMutationFailureCategory } from './pi-package-diagnostic.js';
 
 /**

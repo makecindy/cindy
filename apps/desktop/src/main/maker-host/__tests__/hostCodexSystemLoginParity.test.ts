@@ -330,7 +330,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
 
   it('a spawn environment read reconciles only where getAuthEnv does', async () => {
     // getAuthEnv first prepares the Codex runtime assets, which this fixture does not provide.
-    vi.spyOn(DesktopCodexAuthAdapter.prototype, 'ensureGlobalCodexAssets').mockResolvedValue(undefined);
+    vi.spyOn(DesktopCodexAuthAdapter.prototype, 'ensureGlobalCodexAssets').mockResolvedValue(true);
     for (const mode of ['oauth-bearer', 'gateway-key', 'provider-oauth'] as const) {
       const results: unknown[] = [];
       for (const side of ['desktop', 'host'] as const) {

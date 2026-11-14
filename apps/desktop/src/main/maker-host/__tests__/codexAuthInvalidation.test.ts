@@ -3339,6 +3339,7 @@ it.each([
       expect(fs.statSync(systemAuth).nlink).toBe(initial === 'hardlink-locked' ? 2 : 1);
       vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockImplementation(async () => {
         if (initial === 'late-hardlink') fs.linkSync(systemAuth, localAuth);
+        return true;
       });
       const binaryPath = path.join(root, 'fake-codex.exe');
       vi.spyOn(binaries, 'getCachedBinaryStatus').mockReturnValue({

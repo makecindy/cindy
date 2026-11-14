@@ -135,7 +135,7 @@ beforeAll(async () => {
   fs.mkdirSync(path.dirname(h.piBinary));
   writeFakePi(h.piBinary);
   configureSessionModelInterfaceStorage(() => path.join(h.userDataDir, 'model-interface-snapshots'));
-  vi.spyOn(desktopClaudeAuthAdapter, 'ensureSharedGlobalSkills').mockImplementation(async () => { h.globalSkillRefreshes += 1; });
+  vi.spyOn(desktopClaudeAuthAdapter, 'ensureSharedGlobalSkills').mockImplementation(async () => { h.globalSkillRefreshes += 1; return true; });
   const previous = getActiveCatalog();
   setActiveCatalog(previous);
   restoreCatalog = () => setActiveCatalog(previous);

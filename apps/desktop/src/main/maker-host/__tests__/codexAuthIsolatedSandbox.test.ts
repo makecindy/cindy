@@ -273,7 +273,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
     // This fixture owns credentials only; asset preparation has separate boundary tests.
-    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue(true);
 
     await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
       authenticated: true,
@@ -342,7 +342,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const releaseStat = fs.statSync(releaseAuth);
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
-    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue(true);
 
     await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
       authenticated: true,
@@ -1149,7 +1149,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
     let finishLogout!: () => void;
-    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue(true);
     const logoutOperation = new Promise<void>((resolve) => {
       finishLogout = resolve;
     });

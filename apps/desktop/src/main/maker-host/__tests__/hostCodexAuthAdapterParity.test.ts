@@ -614,7 +614,7 @@ describe.each(ASSEMBLIES)(`Host and desktop Codex adapters (${environment.label}
         const reachable = CODEX_AUTH_ADAPTER_ENTRY_INPUTS.includes(`${providerId ?? '-'} | ${credentialMode ?? '-'}`);
         const desktop = new DesktopCodexAuthAdapter();
         // The desktop's global Codex skills, rules and plugins preparation (row 25); the Host has none.
-        vi.spyOn(desktop, 'ensureGlobalCodexAssets').mockResolvedValue();
+        vi.spyOn(desktop, 'ensureGlobalCodexAssets').mockResolvedValue(true);
         const dp = profile(f);
         const d = await read(desktop, dp.codexHome, opts);
         const hp = profile(f);
