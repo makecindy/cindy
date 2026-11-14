@@ -56,7 +56,7 @@ export async function uploadEncryptedMedia(api: AgentNetClient, recipient: strin
     } finally { wrapping.fill(0); }
   }
   const headerSha256 = createHash('sha256').update(header).digest('hex');
-    const created = await api.request<{ id: string; chunkBytes: number }>('POST', '/media', { recipient, size: encryptedSize(size), chunkFormat: 'binary-v1' }, { signal: options.signal });
+    const created = await api.createMedia(recipient, encryptedSize(size), options.signal);
     id = created.id; check();
     if (!Number.isSafeInteger(created.chunkBytes) || created.chunkBytes < BLOCK + tagBytes || created.chunkBytes > MAX_MEDIA_BINARY_CHUNK_BYTES) throw new Error('MEDIA_STREAM_UNSUPPORTED');
     let batch: Buffer[] = [header], bytes = header.length, written = 0;

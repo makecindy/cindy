@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createAppMessageSender } from '../messageSender.js';
 import { queuedAppMessageGuard } from '../message.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -13,6 +14,7 @@ import type { McpAppRecord } from '../../../shared/mcpApps.js';
 import { AppConnection, type AppServerConfig } from '../connection.js';
 import { McpAppsHost, appServerRevision } from '../host.js';
 import { handleMcpAppFrameOperation, handleMcpAppOperation } from '../operations.js';
+import { OwnerScopedAppResourceCache } from '../appResourceCache.js';
 
 const hosts: McpAppsHost[] = [];
 
@@ -52,6 +54,41 @@ it.each([true, false])('enforces plugin CSP subset and revokes opened Views (dec
     await expect(host.poll('renderer:1', 'task', document.viewId, 0)).rejects.toThrow();
     expect(connection.isClosed).toBe(true);
   }
+});
+it('reuses prepared resources for a version and owner, then invalidates both boundaries', async () => {
+  let owner = {};
+  const config: AppServerConfig = { id: 'cached-plugin', url: '', transport: 'in-process', plugin: {
+    instance: 'cached', revision: 'one', packageSha256: 'hash-one', directory: '/fixture', title: 'Fixture',
+    trust: 'unverified', domains: [], assertCurrent() {}, createTransport() { throw new Error('unused'); },
+  } };
+  const tool = { name: 'form', inputSchema: { type: 'object' as const }, _meta: { ui: { resourceUri: 'ui://form' } } };
+  const record = () => ({ version: 1 as const, serverId: config.id, serverRevision: appServerRevision(config), resourceUri: 'ui://form', tool, arguments: {}, result: { content: [] } });
+  const resource = vi.fn(async () => ({ result: { contents: [{ uri: 'ui://form', mimeType: 'text/html;profile=mcp-app', text: '<p>cached</p>' }] } }));
+  const connection = { getClient: async () => ({ getServerCapabilities: () => ({}) }), tools: async () => [tool], resource,
+    listen: () => () => {}, close: async () => {} } as unknown as AppConnection;
+  const host = new McpAppsHost({ owner: () => owner, config: () => config, connection: () => connection,
+    readCard: async () => record(), writeCard: async () => {}, authorizeTool: async () => {}, sendMessage: async () => {} });
+  hosts.push(host);
+  await host.open('renderer:cache', 'task', 'card-one', {});
+  await host.open('renderer:cache', 'task', 'card-two', {});
+  expect(resource).toHaveBeenCalledOnce();
+  config.plugin!.revision = 'two'; config.plugin!.packageSha256 = 'hash-two';
+  await host.open('renderer:cache', 'task', 'card-three', {});
+  expect(resource).toHaveBeenCalledTimes(2);
+  owner = {};
+  await host.open('renderer:cache', 'task', 'card-four', {});
+  expect(resource).toHaveBeenCalledTimes(3);
+});
+
+it('bounds owner-scoped prepared resource cache entries and bytes', () => {
+  const cache = new OwnerScopedAppResourceCache<{ html: string }>(2, 10);
+  const first = {}, second = {};
+  // The key is retained by Map too, so its bytes must count against the bound.
+  cache.set(first, 'long-key', { html: '1' }); cache.set(first, 'other-key', { html: '2' });
+  expect(cache.get(first, 'long-key')).toBeUndefined();
+  expect(cache.get(first, 'other-key')).toBeDefined();
+  cache.set(second, 'a', { html: '1234' });
+  expect(cache.get(second, 'a')).toBeDefined();
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -917,4 +954,27 @@ it('cancels a ui/message still preparing when its document is replaced', async (
   metadata.resolve({});
   await vi.waitFor(() => expect(finished).toBe(true));
   expect(enqueue).not.toHaveBeenCalled();
+});
+
+it('keeps SDK negotiation hashes out of the initialized page hostContext', async () => {
+  const f = await fixture('device:viewer');
+  const sdk = f.document.sdk!;
+  const addon = sdk.addons?.['cindy/view-state'];
+  const hash = createHash('sha256').update(JSON.stringify([sdk.source, addon?.source ?? null, addon?.reactSource ?? null])).digest('hex');
+  const doc = await handleMcpAppOperation(f.host, 'device:viewer', 'task', {
+    op: 'open', clientId: 'second', sdkCacheHashes: [hash], context: { theme: 'dark' },
+  }) as { viewId: string; sdkRef?: string };
+  expect(doc.sdkRef).toBe(hash);
+  await f.host.dispatch('device:viewer', 'task', doc.viewId, {
+    jsonrpc: '2.0', id: 777, method: 'ui/initialize', params: {
+      protocolVersion: '2026-01-26', appInfo: { name: 'Fixture', version: '1' }, appCapabilities: {},
+    },
+  });
+  await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 777, result: expect.anything() })));
+  const reply = f.outgoing.find(message => 'id' in message && message.id === 777);
+  if (!reply || !('result' in reply)) throw new Error('Missing initialize result');
+  expect(reply.result.hostContext).toMatchObject({ theme: 'dark' });
+  expect(reply.result.hostContext).not.toHaveProperty('sdkCacheHashes');
+  expect(reply.result.hostContext).not.toHaveProperty('sdkRef');
+  expect(JSON.stringify(reply.result.hostContext)).not.toContain(hash);
 });

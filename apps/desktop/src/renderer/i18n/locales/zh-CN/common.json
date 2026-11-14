@@ -264,6 +264,8 @@
     "transferProgress": "已传输 {{sent}} / {{total}} · 平均 {{speed}}/s",
     "thisComputer": "本机",
     "selectedComputer": "所选电脑",
+    "sourceComputer": "来源电脑",
+    "waitingForSource": "{{name}}已离线，上线后会继续复制。",
     "estimating": "正在统计文件数量和大小…",
     "fileSummary": "项目文件：{{count}} 个，共 {{size}}",
     "estimateNote": "复制前估算，含隐藏文件；不含另行复制的 Git 历史、任务对话及附件。文件变化可能影响最终大小。",
@@ -1359,7 +1361,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 配置已保存，但 Cindy 刷新失败。请重新加载 SSH 配置。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 无法安全管理此 SSH 配置。请重新加载，并确认 Cindy 所有权标记存在且主机别名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 无法安全复现此主机的部分 SSH 配置规则。终端 SSH 仍可能成功；请检查 Match、条件 Include、IdentityAgent、IdentitiesOnly 和公钥设置。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent 当前不可用。请启动 SSH Agent，并用 ssh-add 加载对应私钥后重试。",
+    "SSH_AGENT_UNAVAILABLE": "本机 SSH 密钥代理（ssh-agent）不可用。请确认代理已启动，并用 ssh-add -l 检查所需密钥是否已加载；可在「管理密钥」中查看排查指引。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主机仍已保存，但显示名称或 Agent Proxy 设置未能保存。请检查本地存储权限后重试。",
     "REMOTE_WORKDIR_INVALID": "远程项目目录无效，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_FOUND": "远程项目目录不存在，请重新选择项目目录。",
@@ -1454,6 +1456,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "待查看",
+      "summaryInProgress": "进行中",
+      "summaryPending": "等你处理",
+      "summaryUnread": "未读结果",
       "markRead": "标为已读",
       "archive": "归档",
       "actionFailed": "操作未完成，提醒已保留，请重试。",
@@ -1890,6 +1896,12 @@
       "footnote": "第一版仅支持 SSH 连接管理。在远端运行 Agent 的能力将在后续版本中加入。",
       "viaAuth": "通过 {{label}} 认证",
       "readOnlyFromSshConfig": "连接信息来自 SSH 配置",
+      "importedAgentHint": "使用本机 SSH 密钥代理（ssh-agent）完成认证。终端 ssh 能连接，不代表代理已就绪。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent 引用的环境变量未在 Cindy 中设置。请为 Cindy 设置该变量，或修正 SSH 配置中的 IdentityAgent",
+        "endpointEmpty": "IdentityAgent 解析后的端点为空。请修正 SSH 配置中的 IdentityAgent",
+        "endpointUnavailable": "IdentityAgent 配置的 SSH 密钥代理端点不可用。请检查该端点及其代理；默认 ssh-agent 可能使用不同端点"
+      },
       "configWarning": "部分 SSH 配置规则 Cindy 无法解析，主机列表或连接信息可能与终端 SSH 不一致。",
       "configDiagnostic": {
         "io": "Cindy 无法读取 SSH 配置。这里仍显示上次成功读取的主机；请检查文件权限，然后重新加载。",
@@ -1987,7 +1999,7 @@
           "tryThis": "在你的终端里试一下这些命令",
           "close": "关闭",
           "fallbackTitle": "或者干脆不走 agent",
-          "fallbackBody": "你可以在添加主机时改用「Identity file」认证方式，{{appName}} 会把密钥文件直接交给 ssh，每次连接时都会提示你输入 passphrase，完全不依赖 agent。安全上的取舍：每次连接都要输入 passphrase，但内存中不会缓存密钥。",
+          "fallbackBody": "添加主机时也可选择「私钥文件」：{{appName}} 会将私钥读入进程内存，不依赖 ssh-agent。目前仅支持未加密的私钥，不会在连接时询问密钥密码；加密私钥请通过 ssh-agent 使用。",
           "reason": {
             "agent_unavailable": "ssh-add 找不到可用的 ssh-agent（可能是 ssh-add 没装、agent 没启动，或 SSH_AUTH_SOCK 没设置）。",
             "bad_passphrase": "ssh-add 拒绝了这个 passphrase。",
@@ -11135,6 +11147,9 @@
         "step": "第 {{step}}/{{total}} 步",
         "speaking": "{{name}} 正在说…",
         "elapsed": "已做 {{time}}",
+        "onDevice": "在 {{device}} 上",
+        "onOtherComputer": "在另一台电脑上",
+        "onThisComputer": "在这台电脑上",
         "viewProcess": "看过程",
         "hideProcess": "收起过程",
         "stop": "停止",
@@ -11440,10 +11455,12 @@
         "earlierOmitted": "（更早的消息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
+          "preparing": "（Cindy）这个群的项目 {{repo}} 正在下载到这台电脑的当前目录，几分钟内会好。下载完成前目录可能是空的：只是闲谈、提问就直接回答；要用到代码时，等目录里出现项目文件再做。",
           "gitMissing": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：这台电脑还没有安装 git。{{guide}}装好后再 @Cindy，Cindy 会自动下载项目并在里面干活。",
           "signInOpened": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：需要先连接你的 GitHub 账号。Cindy 已在这台电脑上打开 GitHub 登录，登录好后再 @Cindy，Cindy 会自动下载项目。",
           "signIn": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：需要先连接你的 GitHub 账号。请在这台电脑的 Cindy 里登录 GitHub，然后再 @Cindy。",
           "unavailable": "（Cindy）这个群的项目 {{repo}} 没能下载到这台电脑：你的 GitHub 账号可能没有这个仓库的权限，或者网络不通。确认能在 GitHub 上打开这个仓库后再 @Cindy。",
+          "accessRequired": "（Cindy）这个群的项目 {{repo}} 没能下载到这台电脑：这台电脑的 git 还不能访问 {{host}}。先在这台电脑上用 git 克隆过一次这个仓库（或配置好访问令牌），再 @Cindy。",
           "installGit": {
             "darwin": "在「终端」里运行 xcode-select --install，按提示装好即可。",
             "win32": "从 https://git-scm.com/download/win 下载 Git 安装，一路默认即可。",
@@ -11664,7 +11681,12 @@
           "projectCaption": "伙伴在群里回复和分工都在这个项目里做。仓库全群共享，文件夹只存在这台电脑上。",
           "githubRepo": "GitHub 仓库",
           "githubRepoHint": "填 owner/name。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
+          "repository": "代码仓库",
+          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等粘贴仓库链接。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
+          "repositoryPlaceholder": "owner/name 或仓库链接",
           "githubRepoSaveFailed": "仓库没有保存，请检查后再试。",
+          "folderRepoFilled": "已按这个文件夹填好仓库 {{repo}}，群里其他人的电脑也会用它。",
+          "folderRepoDiffers": "这个文件夹是 {{repo}} 的项目，和群里填的仓库不同。这台电脑仍在这个文件夹里干活。",
           "projectFolder": "这台电脑上的文件夹",
           "projectDirAutoHint": "按仓库自动找到的本机项目。",
           "organizerHint": "安排谁做哪一步；默认是第一位伙伴。",
@@ -13424,6 +13446,15 @@
           "askNoQuestion": "Agent 正在等待你的回答，但没有可显示的问题。请回复“继续”。",
           "askQuestion": "Agent 需要你的回答：\n{{question}}\n{{options}}\n请回复选项序号，或直接输入你的回答。"
         }
+      },
+      "questions": {
+        "cardHint": "仅提问者可作答。点击选项；多题或多选选好后提交。也可回复这条消息补充文字。多题文字回答请写“题号：答案”（如“2：用中文”），填好后提交。",
+        "submitLabel": "提交答案",
+        "multiSelectHint": "（可多选）",
+        "resolved": "✅ 已选：{{option}}",
+        "expired": "卡片已过期",
+        "textHint": "仅提问者可作答。回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。",
+        "replyHint": "仅提问者可作答。点击选项；多题或多选选好后提交。\n回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。"
       }
     }
   },
@@ -15955,6 +15986,8 @@
       "claudeSubscriptionWorkspaceOverride": "这个工作目录的 .claude 设置修改了 Claude 的上游地址或鉴权方式，不能在这里使用 Claude 订阅。请移除这些设置，或选择网关或 API Key 模型",
       "deviceStillLoading": "远程设备仍在加载中，请稍候",
       "remoteDefaultsLoadFailed": "无法读取远程设备配置。请检查连接，Cindy 正在重试。",
+      "branchRequiresWorktree": "所选分支与当前分支不同。请勾选 worktree，或选择当前分支。",
+      "branchCheckFailed": "无法确认当前分支。请勾选 worktree 使用所选分支，或检查项目后重试。",
       "worktreeMissingRepo": "无法创建 worktree：找不到当前目录的仓库根目录",
       "worktreeRepoHint": "可尝试重新选一次工作目录，等右下角文件夹标识刷新后再试",
       "sessionInactive": "任务已不再处于活跃状态",
@@ -16530,6 +16563,8 @@
             "title": "仓库事件",
             "description": "连接 Cindy GitHub App，在评审或 CI 变化时更新正在跟进的 PR。",
             "connected": "已连接 {{login}} · 正在关注 {{count}} 个仓库",
+            "syncing": "正在同步仓库…",
+            "finishInBrowser": "请在 GitHub 完成仓库设置后返回 Cindy。",
             "missing": "请检查这些仓库的 App 安装与访问权限：{{repositories}}",
             "error": "无法检查连接，请重试。",
             "repositories": "选择仓库",
@@ -21278,6 +21313,30 @@
     "lineNumbers": "行号"
   },
   "subscriptionAccounts": {
+    "placement": {
+      "needsUpdate": "执行这项操作的电脑需要先更新 Cindy，才能这样调整账号。",
+      "moveTo": "移到…",
+      "separate": "作为单独的供应商",
+      "moveTitle": "把 {{name}} 移到 {{target}}？",
+      "takeOutTitle": "把 {{name}} 拿出来作为单独的供应商？",
+      "moveDescription": "只改这个账号所在的供应商。登录和对话记录不变，已有任务继续用这个账号。",
+      "moveConfirm": "移动",
+      "failed": "没能调整账号所在的供应商，请稍后再试。",
+      "mergeInto": "并入其他供应商",
+      "mergeTitle": "把 {{name}} 并入 {{target}}？",
+      "mergeDescription": "这个供应商的所有账号会移到对方，它不再出现在供应商列表和新任务里。已有任务继续用原来的账号。",
+      "mergeConfirm": "并入",
+      "deleteTitle": "删除 {{name}}？",
+      "deleteDescription": "Cindy 不再使用这个供应商里的账号。账号在这台电脑上的命令行登录和对话记录会保留。",
+      "deleteConfirm": "删除",
+      "deleteInUse": "有任务正在使用这个供应商的账号，请等任务结束后再删除。",
+      "signInQuestion": "新账号放在哪里？",
+      "signInSeparate": "作为单独的供应商",
+      "signInSeparateHint": "新建任务时选它，就固定用这个账号。",
+      "signInInto": "并入 {{name}}",
+      "signInContinue": "继续登录",
+      "signInBack": "返回"
+    },
     "loginIdentityUnknown": "无法确认此账号的原身份，请通过「添加账号」重新连接",
     "loginExpiresInDays": "登录预计 {{days}} 天后到期",
     "loginExpiresSoon": "登录即将到期",
@@ -21292,10 +21351,9 @@
     "providerManagedAuth": "当前 Codex 供应商未提供 ChatGPT 账号信息。请在添加供应商时选择「$t(subscriptionAccounts.signIn.anotherAccount)」，以使用独立目录。",
     "signIn": {
       "checking": "正在检测本机账号…",
-      "detected": "检测到已登录账号",
-      "useAccount": "使用此账号",
+      "useAccount": "使用这台电脑上的 {{cli}} 账号",
       "anotherAccount": "登录另一个账号",
-      "keepExisting": "新账号会添加到此供应商，现有账号的登录保持不变。",
+      "keepExisting": "新账号默认作为单独的供应商，也可以选择并入已有的供应商。现有账号的登录保持不变。",
       "checkFailed": "无法读取本机账号状态，请重试。",
       "retry": "重试",
       "useCodex": "使用 Codex 登录"
@@ -21303,7 +21361,6 @@
     "title": "订阅账号",
     "strategy": "负载均衡",
     "add": "添加账号",
-    "default": "默认目录",
     "defaultTag": "默认",
     "ready": "已连接",
     "signedOut": "需要登录",

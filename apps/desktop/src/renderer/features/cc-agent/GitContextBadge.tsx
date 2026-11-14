@@ -8,7 +8,8 @@ import { prNumberLabel } from '@cindy/maker-shared';
  *     worktree 已删时兜底)→ working_dir HEAD(低信任,仅在无 PR 时最后兜底)。
  *     HEAD 变化(用户/agent 切分支)由 useSessionGitContext 实时推送刷新。
  *   - PR chip(最多 MAX_STATUS_QUERIES 条，固定与手动优先级在前):
- *     整组悬停显示 PR 信息，点击固定浮窗；浮窗内链接打开 PR，右上角齿轮进入设置与关联管理(共享访客除外)。
+ *     整组悬停显示 PR 信息，点击固定浮窗；浮窗已固定时再次点击标识，或点浮窗内链接，打开 PR 网页；
+ *     右上角齿轮进入设置与关联管理(共享访客除外)。
  *
  * PR 状态视觉:用 lucide 图标形状区分四态(色弱友好),颜色只用已注册 token:
  *   open   GitPullRequest        --diff-add-fg(语义绿,规则 16 豁免色)
@@ -282,8 +283,10 @@ function PrChip({
   );
 
   const handleClick = () => {
+    // A second click on an already pinned panel opens the PR page.
     if (summaryOpen && clickedOpen.current) {
       closeSummary();
+      void window.electronAPI.openExternal(sessionPrUrl(prRef));
       return;
     }
     if (managerOpen) return;

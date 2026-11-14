@@ -692,17 +692,21 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     spec: InteractiveCardSpec,
     opts?: {
       threadTs?: string;
+      questionRespondentId?: string;
       fallbackOpenerId?: string;
       deliverToOwnerDm?: boolean;
       ownerDmNote?: string;
     },
   ): Promise<{ messageId: string }> {
-    return this.sendWithDeferredOpenerConsume(
+    const epoch = outbound.getAccountEpoch();
+    const result = await this.sendWithDeferredOpenerConsume(
       userId,
       'spec',
       () => outbound.sendInteractive(userId, spec, opts),
       opts?.fallbackOpenerId,
     );
+    if (opts?.questionRespondentId && epoch === outbound.getAccountEpoch()) outbound.registerQuestion(result.messageId, opts.questionRespondentId);
+    return result;
   }
 
   /**
@@ -815,7 +819,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     }
   }
 
-  updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void> {
+  updateInteractiveCard(messageId: string, spec: InteractiveCardSpec, opts?: { questionRespondentId?: string; questionClosed?: boolean }): Promise<void> {
+    if (opts?.questionRespondentId && !outbound.canAnswerQuestion(messageId, opts.questionRespondentId)) return Promise.reject(new Error('stale question'));
+    if (opts?.questionClosed) outbound.closeQuestion(messageId);
     return outbound.updateInteractive(messageId, spec);
   }
 

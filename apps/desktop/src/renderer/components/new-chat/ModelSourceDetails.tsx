@@ -93,11 +93,13 @@ export function ModelSourceUsageProvider({
   const accountProviders = (enabled ? providers : [])
     .filter(
       (provider) =>
-        (provider.id === 'anthropic' || provider.id === 'openai') &&
+        // Built-in subscriptions and providers Cindy created for subscription accounts
+        // (2026-11-13): each shows the quota of its own accounts.
+        (provider.id === 'anthropic' || provider.id === 'openai' || !!provider.subscriptionPool || !!provider.subscriptionAccountPool) &&
         provider.auth?.method === 'oauth' &&
         !provider.subscriptionAccount?.reconnectRequired,
     )
-    .map((provider) => provider.id as 'anthropic' | 'openai');
+    .map((provider) => provider.id);
   // A shared directory has no private pool, but its rail may also contain an
   // explicitly owned computer. Each rail boundary checks its own source.
   const previewPool = scope !== null;
@@ -256,10 +258,12 @@ export function ModelSourceDetails({
   const usages = useContext(UsageContext);
   const nowMs = useContext(ClockContext);
   const pickerAccount = useModelPickerAccount(providerId);
+  // Created subscription providers (2026-11-13) report their pool kind; built-ins are their own.
+  const codex = (pickerAccount?.kind ?? providerId) === 'openai';
   const poolParts = pickerAccount?.members?.map((account, index) => {
     const view = modelSourceQuota(
       {
-        source: providerId === 'openai' ? 'codex' : 'claude',
+        source: codex ? 'codex' : 'claude',
         codex: {
           buckets: poolCodexBuckets(account.usage),
           planType: account.plan ?? null,
@@ -298,7 +302,7 @@ export function ModelSourceDetails({
       )
       .join(' · ');
     const memberPlan =
-      providerId === 'openai'
+      codex
         ? formatCodexPlanLabel(account.plan)
         : formatClaudeSubscriptionPlanLabel(account.plan);
     return { percent, title: [name, memberPlan, detail || '—'].filter(Boolean).join(' · ') };
@@ -306,7 +310,7 @@ export function ModelSourceDetails({
   const quota = modelSourceQuota(usages.get(providerId), modelId, nowMs);
   const { windows } = quota;
   const plan = pickerAccount
-    ? providerId === 'openai'
+    ? codex
       ? formatCodexPlanLabel(pickerAccount.plan)
       : formatClaudeSubscriptionPlanLabel(pickerAccount.plan)
     : quota.plan;

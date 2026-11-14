@@ -1228,6 +1228,12 @@ export type ServerNotification =
   | WarningNotification
   | ErrorNotification;
 
+/** v2 ThreadBackgroundTerminalsListResponse — only the field idle reclamation reads. */
+export interface ThreadBackgroundTerminalsListResponse {
+  data: Array<{ itemId: string; processId: string }>;
+  nextCursor: string | null;
+}
+
 // ── 方法名常量 (避免 string typo) ────────────────────────────────────────────
 
 export const Method = {
@@ -1243,6 +1249,8 @@ export const Method = {
   ThreadCompactStart: 'thread/compact/start',
   ThreadTurnsList: 'thread/turns/list',
   ThreadUnsubscribe: 'thread/unsubscribe',
+  /** EXPERIMENTAL (experimentalApi is always on). Lists unified-exec processes still alive for a thread. */
+  ThreadBackgroundTerminalsList: 'thread/backgroundTerminals/list',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',
   TurnSteer: 'turn/steer',

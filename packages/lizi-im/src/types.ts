@@ -307,6 +307,8 @@ export interface IMMessageEvent {
 }
 
 export interface IMCardActionEvent {
+  /** Authenticated platform actor, before group lane normalization. */
+  actorId?: string;
   channelName: string;
   /**
    * Identity of the user who pressed the button. For group cards on lane

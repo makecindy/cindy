@@ -264,6 +264,8 @@
     "transferProgress": "已傳輸 {{sent}} / {{total}} · 平均 {{speed}}/s",
     "thisComputer": "本機",
     "selectedComputer": "所選電腦",
+    "sourceComputer": "來源電腦",
+    "waitingForSource": "{{name}}已離線，上線後會繼續複製。",
     "estimating": "正在統計檔案數量和大小…",
     "fileSummary": "專案檔案：{{count}} 個，共 {{size}}",
     "estimateNote": "複製前估算，含隱藏檔案；不含另行複製的 Git 歷史、任務對話及附件。檔案變化可能影響最終大小。",
@@ -1359,7 +1361,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定已儲存，但 Cindy 重新整理失敗。請重新載入 SSH 設定。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 無法安全管理此 SSH 設定。請重新載入，並確認 Cindy 所有權標記存在且主機別名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 無法安全重現此主機的部分 SSH 設定規則。終端 SSH 仍可能成功；請檢查 Match、條件式 Include、IdentityAgent、IdentitiesOnly 與公開金鑰設定。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent 目前無法使用。請啟動 SSH Agent，並用 ssh-add 載入對應私密金鑰後再試。",
+    "SSH_AGENT_UNAVAILABLE": "本機 SSH 金鑰代理程式（ssh-agent）無法使用。請確認代理程式已啟動，並用 ssh-add -l 檢查所需金鑰是否已載入；可在「管理金鑰」中查看疑難排解指引。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主機仍已儲存，但顯示名稱或 Agent Proxy 設定未能儲存。請檢查本機儲存權限後再試。",
     "REMOTE_WORKDIR_INVALID": "遠端專案目錄無效，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_FOUND": "遠端專案目錄不存在，請重新選擇專案目錄。",
@@ -1454,6 +1456,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "待查看",
+      "summaryInProgress": "進行中",
+      "summaryPending": "等你處理",
+      "summaryUnread": "未讀結果",
       "markRead": "標為已讀",
       "archive": "歸檔",
       "actionFailed": "操作未完成，提醒已保留，請重試。",
@@ -1890,6 +1896,12 @@
       "footnote": "第一版僅支援 SSH 連線管理。在遠端執行 Agent 的能力將在後續版本中加入。",
       "viaAuth": "透過 {{label}} 認證",
       "readOnlyFromSshConfig": "連線資訊來自 SSH 設定",
+      "importedAgentHint": "使用本機 SSH 金鑰代理程式（ssh-agent）完成驗證。終端機 ssh 能連線，不代表代理程式已就緒。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent 引用的環境變數未在 Cindy 中設定。請為 Cindy 設定該變數，或修正 SSH 設定中的 IdentityAgent",
+        "endpointEmpty": "IdentityAgent 解析後的端點為空。請修正 SSH 設定中的 IdentityAgent",
+        "endpointUnavailable": "IdentityAgent 設定的 SSH 金鑰代理程式端點無法使用。請檢查該端點及其代理程式；預設 ssh-agent 可能使用不同端點"
+      },
       "configWarning": "部分 SSH 設定規則 Cindy 無法解析，主機列表或連線資訊可能與終端 SSH 不一致。",
       "configDiagnostic": {
         "io": "Cindy 無法讀取 SSH 設定。這裡仍顯示上次成功讀取的主機；請檢查檔案權限，然後重新載入。",
@@ -1987,7 +1999,7 @@
           "tryThis": "在你的終端裡試一下這些命令",
           "close": "關閉",
           "fallbackTitle": "或者乾脆不走 agent",
-          "fallbackBody": "你可以在新增 host 時改用「私鑰檔案」方式，{{appName}} 會把金鑰檔案直接交給 ssh，每次連線時由你輸入 passphrase。完全不依賴 agent。安全權衡：每次連線都要輸入 passphrase，但記憶體裡不會留任何金鑰快取。",
+          "fallbackBody": "新增主機時也可選擇「私鑰檔案」：{{appName}} 會將私鑰讀入程序記憶體，不依賴 ssh-agent。目前僅支援未加密的私鑰，不會在連線時詢問金鑰密碼；加密私鑰請透過 ssh-agent 使用。",
           "reason": {
             "agent_unavailable": "ssh-add 找不到可用的 ssh-agent(可能是 ssh-add 沒裝、agent 沒啟動，或 SSH_AUTH_SOCK 沒設定)。",
             "bad_passphrase": "ssh-add 拒絕了這個密碼。",
@@ -11135,6 +11147,9 @@
         "step": "第 {{step}}/{{total}} 步",
         "speaking": "{{name}} 正在說…",
         "elapsed": "已做 {{time}}",
+        "onDevice": "在 {{device}} 上",
+        "onOtherComputer": "在另一台電腦上",
+        "onThisComputer": "在這台電腦上",
         "viewProcess": "看過程",
         "hideProcess": "收起過程",
         "stop": "停止",
@@ -11440,10 +11455,12 @@
         "earlierOmitted": "（更早的訊息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
+          "preparing": "（Cindy）這個群組的專案 {{repo}} 正在下載到這台電腦的目前目錄，幾分鐘內會好。下載完成前目錄可能是空的：只是閒談、提問就直接回答；要用到程式碼時，等目錄裡出現專案檔案再做。",
           "gitMissing": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：這台電腦還沒有安裝 git。{{guide}}裝好後再 @Cindy，Cindy 會自動下載專案並在裡面工作。",
           "signInOpened": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。Cindy 已在這台電腦上開啟 GitHub 登入，登入後再 @Cindy，Cindy 會自動下載專案。",
           "signIn": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。請在這台電腦的 Cindy 裡登入 GitHub，然後再 @Cindy。",
           "unavailable": "（Cindy）這個群的專案 {{repo}} 沒能下載到這台電腦：你的 GitHub 帳號可能沒有這個儲存庫的權限，或者網路不通。確認能在 GitHub 上開啟這個儲存庫後再 @Cindy。",
+          "accessRequired": "（Cindy）這個群的專案 {{repo}} 沒能下載到這台電腦：這台電腦的 git 還不能存取 {{host}}。先在這台電腦上用 git 複製過一次這個儲存庫（或設定好存取權杖），再 @Cindy。",
           "installGit": {
             "darwin": "在「終端機」裡執行 xcode-select --install，依提示安裝即可。",
             "win32": "從 https://git-scm.com/download/win 下載 Git 安裝，全部使用預設選項即可。",
@@ -11664,7 +11681,12 @@
           "projectCaption": "夥伴在群裡回覆和分工都在這個專案裡做。儲存庫全群共用，資料夾只存在這台電腦上。",
           "githubRepo": "GitHub 儲存庫",
           "githubRepoHint": "填 owner/name。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
+          "repository": "程式碼儲存庫",
+          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等貼上儲存庫連結。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
+          "repositoryPlaceholder": "owner/name 或儲存庫連結",
           "githubRepoSaveFailed": "儲存庫沒有儲存，請檢查後再試。",
+          "folderRepoFilled": "已依這個資料夾填好儲存庫 {{repo}}，群裡其他人的電腦也會使用它。",
+          "folderRepoDiffers": "這個資料夾是 {{repo}} 的專案，和群裡填的儲存庫不同。這台電腦仍在這個資料夾裡工作。",
           "projectFolder": "這台電腦上的資料夾",
           "projectDirAutoHint": "依儲存庫自動找到的本機專案。",
           "organizerHint": "安排誰做哪一步；預設是第一位夥伴。",
@@ -13424,6 +13446,15 @@
           "askNoQuestion": "Agent 正在等你的回答，但沒有可顯示的問題。請回覆「繼續」。",
           "askQuestion": "Agent 需要你的回答：\n{{question}}\n{{options}}\n請回覆選項編號，或直接輸入你的回答。"
         }
+      },
+      "questions": {
+        "cardHint": "僅提問者可作答。點選選項；多題或複選選好後送出。也可回覆這則訊息補充文字。多題文字回答請寫「題號：答案」（如「2：用中文」），填好後送出。",
+        "submitLabel": "送出答案",
+        "multiSelectHint": "（可複選）",
+        "resolved": "✅ 已選：{{option}}",
+        "expired": "卡片已過期",
+        "textHint": "僅提問者可作答。回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。",
+        "replyHint": "僅提問者可作答。點選選項；多題或複選選好後送出。\n回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。"
       }
     }
   },
@@ -15955,6 +15986,8 @@
       "claudeSubscriptionWorkspaceOverride": "這個工作目錄的 .claude 設定修改了 Claude 的上游位址或驗證方式，不能在這裡使用 Claude 訂閱。請移除這些設定，或選擇閘道器或 API Key 模型",
       "deviceStillLoading": "遠端裝置仍在載入中，請稍候",
       "remoteDefaultsLoadFailed": "無法讀取遠端裝置設定。請檢查連線，Cindy 正在重試。",
+      "branchRequiresWorktree": "所選分支與目前分支不同。請勾選 worktree，或選擇目前分支。",
+      "branchCheckFailed": "無法確認目前分支。請勾選 worktree 使用所選分支，或檢查專案後重試。",
       "worktreeMissingRepo": "無法建立 worktree：找不到目前目錄的儲存庫根目錄",
       "worktreeRepoHint": "可嘗試重新選一次工作目錄，等右下角資料夾標識重新整理後再試",
       "sessionInactive": "任務已不再處於活躍狀態",
@@ -16530,6 +16563,8 @@
             "title": "儲存庫事件",
             "description": "連接 Cindy GitHub App，在審查或 CI 變更時更新正在跟進的 PR。",
             "connected": "已連接 {{login}} · 正在關注 {{count}} 個儲存庫",
+            "syncing": "正在同步儲存庫…",
+            "finishInBrowser": "請在 GitHub 完成儲存庫設定後返回 Cindy。",
             "missing": "請檢查這些儲存庫的 App 安裝與存取權限：{{repositories}}",
             "error": "無法檢查連線，請重試。",
             "repositories": "選擇儲存庫",
@@ -21278,6 +21313,30 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "placement": {
+      "needsUpdate": "執行這項操作的電腦需要先更新 Cindy，才能這樣調整帳號。",
+      "moveTo": "移到…",
+      "separate": "作為單獨的供應商",
+      "moveTitle": "把 {{name}} 移到 {{target}}？",
+      "takeOutTitle": "把 {{name}} 拿出來作為單獨的供應商？",
+      "moveDescription": "只改這個帳號所在的供應商。登入和對話紀錄不變，現有任務繼續使用這個帳號。",
+      "moveConfirm": "移動",
+      "failed": "無法調整帳號所在的供應商，請稍後再試。",
+      "mergeInto": "併入其他供應商",
+      "mergeTitle": "把 {{name}} 併入 {{target}}？",
+      "mergeDescription": "這個供應商的所有帳號會移到對方，它不再出現在供應商列表和新任務中。現有任務繼續使用原來的帳號。",
+      "mergeConfirm": "併入",
+      "deleteTitle": "刪除 {{name}}？",
+      "deleteDescription": "Cindy 不再使用這個供應商裡的帳號。帳號在這台電腦上的命令列登入和對話紀錄會保留。",
+      "deleteConfirm": "刪除",
+      "deleteInUse": "有任務正在使用這個供應商的帳號，請等任務結束後再刪除。",
+      "signInQuestion": "新帳號要放在哪裡？",
+      "signInSeparate": "作為單獨的供應商",
+      "signInSeparateHint": "建立新任務時選擇它，就固定使用這個帳號。",
+      "signInInto": "併入 {{name}}",
+      "signInContinue": "繼續登入",
+      "signInBack": "返回"
+    },
     "loginIdentityUnknown": "無法確認此帳號的原身分，請透過「新增帳號」重新連線",
     "loginExpiresInDays": "登入預計 {{days}} 天後到期",
     "loginExpiresSoon": "登入即將到期",
@@ -21292,10 +21351,9 @@
     "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄。",
     "signIn": {
       "checking": "正在偵測本機帳號…",
-      "detected": "偵測到已登入帳號",
-      "useAccount": "使用此帳號",
+      "useAccount": "使用這台電腦上的 {{cli}} 帳號",
       "anotherAccount": "登入另一個帳號",
-      "keepExisting": "新帳號會加入此供應商，現有帳號的登入保持不變。",
+      "keepExisting": "新帳號預設作為單獨的供應商，也可以選擇併入現有的供應商。現有帳號的登入保持不變。",
       "checkFailed": "無法讀取本機帳號狀態，請重試。",
       "retry": "重試",
       "useCodex": "使用 Codex 登入"
@@ -21303,7 +21361,6 @@
     "title": "訂閱帳號",
     "strategy": "負載平衡",
     "add": "新增帳號",
-    "default": "預設目錄",
     "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "需要登入",

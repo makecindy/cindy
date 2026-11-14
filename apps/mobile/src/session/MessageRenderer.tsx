@@ -434,7 +434,7 @@ import {
   recordMobileMarkdownParse,
   recordMobileMessageRenderItem,
 } from '@/session/mobileMarkdownRenderMetrics';
-import { latexToUnicodeApproximation } from '@cindy/maker-shared/math-markdown';
+import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
 import type { RemoteTextFilePreviewResult } from '@/device-link/mobileMakerTransport';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { iconSize, iconStroke, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -6444,7 +6444,7 @@ function MarkdownBodyBase({
           style={headingStyle}
           testID="message.markdownHeading"
         >
-          {renderInlines(block.inlines, singleBlockSpanFor(headingSelectable))}
+          {renderInlines(block.inlines, singleBlockSpanFor(headingSelectable), headingStyle)}
         </MarkdownSelectableText>
       );
     }
@@ -6517,7 +6517,7 @@ function MarkdownBodyBase({
                       styles.markdownTableHeaderCell,
                     ]}
                   >
-                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
+                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), [styles.markdownTableCell, styles.markdownTableHeaderCell])}
                   </MarkdownSelectableText>
                 );
               })}
@@ -6534,7 +6534,7 @@ function MarkdownBodyBase({
                       selectable={inlinesSelectable(cell)}
                       style={[styles.markdownTableCell, { width: columnWidth }]}
                     >
-                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
+                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), styles.markdownTableCell)}
                     </MarkdownSelectableText>
                   );
                 })}
@@ -6868,15 +6868,38 @@ function renderInline(
       );
     case 'strikethrough':
       return <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`strike:${index}`)} style={[ctx.baseStyle, styles.markdownStrike]}>{inline.text}</StaticSpan>;
-    case 'math':
-      // inline 公式:原生 Text 流内嵌不了 KaTeX,用 Unicode 近似(上标 ²、
-      // 希腊字母、√ 等)保持文本流/选择/性能;复杂公式的精确渲染走 display
-      // 块的 WebView KaTeX。
+    case 'math': {
+      const mathSegments = tokenizeInlineMath(inline.text);
+      const baseFontSize = StyleSheet.flatten(ctx.baseStyle)?.fontSize ?? typeScale.bodyLarge;
+      const subFontSize =
+        baseFontSize <= typeScale.bodySmall
+          ? typeScale.micro
+          : baseFontSize <= typeScale.subtitle
+            ? typeScale.caption
+            : typeScale.footnote;
       return (
-        <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`math:${index}`)} style={[ctx.baseStyle, styles.markdownMathInline]}>
-          {latexToUnicodeApproximation(inline.text)}
+        <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`math:${index}`)} style={ctx.baseStyle}>
+          {mathSegments.map((segment, segIndex) => (
+            <StaticSpan
+              maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
+              key={spanKey(`math:${index}:${segIndex}`)}
+              style={[
+                ctx.baseStyle,
+                segment.kind === 'var'
+                  ? styles.markdownMathVar
+                  : segment.kind === 'sup'
+                    ? styles.markdownMathSup
+                    : segment.kind === 'sub'
+                      ? [segment.italic ? styles.markdownMathVar : styles.markdownMathText, { fontSize: subFontSize }]
+                      : styles.markdownMathText,
+              ]}
+            >
+              {segment.text}
+            </StaticSpan>
+          ))}
         </StaticSpan>
       );
+    }
     case 'image': {
       const managedPreview = ctx.renderManagedImage?.(inline);
       if (managedPreview) {
@@ -9514,9 +9537,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // 对齐桌面聊天 markdown:<strong> 走浏览器默认 700,与 400 正文拉开明显对比。
   markdownStrong: { fontWeight: fontWeight.bold },
   markdownEmphasis: { fontStyle: 'italic' },
-  // inline 公式:Unicode 近似文本以斜体呈现(数学正文的传统排版形态),
-  // 与普通强调的区别只在语义,视觉上沿用 italic 已足够。
-  markdownMathInline: { fontStyle: 'italic' },
+  // inline 公式:按数学排版规则区分变量斜体与符号/数字/函数正体,衬线体对齐 KaTeX
+  // 气质,上标改走西文字体避免中文字体把 ¹²³ 放大成全角尺寸,下标走缩小字号统一基线。
+  markdownMathVar: {
+    fontFamily: Platform.select({ ios: 'Times New Roman', android: 'serif', default: 'serif' }),
+    fontStyle: 'italic',
+  },
+  markdownMathText: {
+    fontFamily: Platform.select({ ios: 'Times New Roman', android: 'serif', default: 'serif' }),
+    fontStyle: 'normal',
+  },
+  markdownMathSup: {
+    fontFamily: Platform.select({ ios: 'Helvetica Neue', android: 'sans-serif', default: undefined }),
+    fontStyle: 'normal',
+  },
   markdownStrike: { textDecorationLine: 'line-through' },
   markdownUnderlineStrike: { textDecorationLine: 'underline line-through' },
   // 行内 code:零底色 + 等宽字体 + 文字压暗(参照 Codex 客户端)。

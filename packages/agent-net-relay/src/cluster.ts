@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { request as httpRequest, STATUS_CODES, type ClientRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { ID_PATTERN } from '@cindy/agent-net-protocol';
 
@@ -14,6 +15,14 @@ import { ID_PATTERN } from '@cindy/agent-net-protocol';
  * replicated through the backend with optimistic commits; when a replica leaves, only the networks it
  * owned move, and their devices reconnect to the new owner.
  */
+
+/**
+ * What every replica of one cluster must agree on: the shapes of the shared state documents, the hop
+ * between replicas (headers, `/_agent-net-cluster/*`) and the ownership function. A backend admits a
+ * replica only when the live members advertise the same value, so a build that changes any of these
+ * is rolled out by stopping the old replicas first instead of a rolling update. Bump it in that change.
+ */
+export const RELAY_CLUSTER_COMPAT = 1;
 
 /** A replica as the other replicas reach it. `url` is an internal base URL, never the public one. */
 export interface RelayClusterMember { id: string; url: string; }
@@ -43,7 +52,9 @@ export interface RelayClusterBackend {
   withMediaLock<T>(networkKey: string, mediaId: string, work: (network: RelayStateEntry) => Promise<T>): Promise<T>;
   join(member: RelayClusterMember): Promise<void>;
   leave(id: string): Promise<void>;
-  /** Live replicas. A replica that stops without leaving must drop out after a short liveness timeout. */
+  /** Live replicas. A replica that stops without leaving must drop out after a short liveness timeout; a replica
+   * that can no longer renew its own liveness must leave itself out. Once joined, a replica serves no network
+   * that has no owner in this list (an empty list means it serves nothing). */
   members(): readonly RelayClusterMember[];
   onMembers(listener: (members: readonly RelayClusterMember[]) => void): () => void;
 }
@@ -72,8 +83,9 @@ export function checkClusterOptions(options: RelayClusterOptions): RelayClusterO
   if (options.drainMs !== undefined && (!Number.isSafeInteger(options.drainMs) || options.drainMs < 0 || options.drainMs > 120_000)) throw new Error('INVALID_CLUSTER_DRAIN');
   return options;
 }
-function checkMemberUrl(value: string): URL {
-  const url = new URL(value);
+export function checkMemberUrl(value: string): URL {
+  let url: URL;
+  try { url = new URL(value); } catch { throw new Error('INVALID_CLUSTER_URL'); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
     throw new Error('INVALID_CLUSTER_URL');
   }
@@ -109,8 +121,11 @@ export function routingNetwork(req: IncomingMessage, header: unknown = req.heade
   return typeof id === 'string' && ID_PATTERN.test(id) ? id : undefined;
 }
 
-/** Passes requests and WebSocket upgrades to the owning replica byte for byte. */
-export function createClusterRouter(options: { secret: string }) {
+/**
+ * Passes requests and WebSocket upgrades to the owning replica byte for byte. `source` resolves the
+ * client address of a request that did not come from another replica (e.g. a trusted local proxy).
+ */
+export function createClusterRouter(options: { secret: string; source?: (req: IncomingMessage) => string }) {
   const secret = Buffer.from(options.secret);
   const sockets = new Set<Duplex>();
   const requests = new Set<ClientRequest>();
@@ -122,7 +137,7 @@ export function createClusterRouter(options: { secret: string }) {
   };
   const clientAddress = (req: IncomingMessage): string => {
     const forwarded = req.headers[CLIENT_HEADER];
-    return trusted(req) && typeof forwarded === 'string' && forwarded.length <= 64 ? forwarded : req.socket.remoteAddress ?? 'unknown';
+    return trusted(req) && typeof forwarded === 'string' && forwarded.length <= 64 ? forwarded : options.source?.(req) ?? req.socket.remoteAddress ?? 'unknown';
   };
   const send = (target: RelayClusterMember, path: string, method: string, headers: Record<string, string | string[] | undefined>, upgrade = false): ClientRequest => {
     const url = checkMemberUrl(target.url);
@@ -188,6 +203,9 @@ export function createClusterRouter(options: { secret: string }) {
       outgoing.on('upgrade', (response, backend, buffered) => {
         sockets.add(backend); backend.once('close', () => sockets.delete(backend));
         if (socket.destroyed) { backend.destroy(); return; }
+        // Datagrams are small and latency-bound; keepalive notices an owner host that vanished without closing.
+        (backend as Socket).setNoDelay?.(true);
+        (backend as Socket).setKeepAlive?.(true, 15_000);
         backend.on('error', () => socket.destroy());
         backend.once('close', () => socket.destroy());
         socket.once('close', () => backend.destroy());
@@ -210,7 +228,8 @@ export function createClusterRouter(options: { secret: string }) {
         outgoing.on('error', reject);
         outgoing.on('response', (response) => {
           const chunks: Buffer[] = [];
-          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          let size = 0;
+          response.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 16_384) { outgoing.destroy(new Error('CLUSTER_RESPONSE_INVALID')); return; } chunks.push(chunk); });
           response.on('error', reject);
           response.on('end', () => {
             try {

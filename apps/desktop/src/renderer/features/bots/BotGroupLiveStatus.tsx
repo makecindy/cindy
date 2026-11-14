@@ -37,6 +37,8 @@ export interface BotGroupLiveSpeaker {
   stopping?: boolean;
   executionId?: string;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
+  /** The group's Cindy for the member who asked: where it runs (computer name, empty for this one) and with which model. */
+  executor?: { deviceName: string; here?: boolean; model?: string };
 }
 
 function useSpeakerActivity(speaker: BotGroupLiveSpeaker | undefined) {
@@ -203,6 +205,11 @@ function BotGroupSingleProgressStrip({
       : waiting ? t('bots.groupChat.waitingConfirm', { name: '' })
       : since !== undefined ? t('chat.teammateProcess.elapsed', { duration: formatBotGroupElapsed(Math.max(0, now - since), t) })
       : t('chat.teammateProcess.processing')}</span>
+    {lead?.executor ? <span data-testid="bot-group-executor" className="min-w-0 text-[var(--text-secondary)]">
+      {[lead.executor.here ? t('bots.groupChat.progress.onThisComputer') : lead.executor.deviceName
+        ? t('bots.groupChat.progress.onDevice', { device: lead.executor.deviceName }) : t('bots.groupChat.progress.onOtherComputer'),
+      lead.executor.model].filter(Boolean).join(' · ')}
+    </span> : null}
   </span>;
   return <div data-testid="bot-group-work" className="mt-3 flex min-w-0 items-start gap-2.5">
     {member ? <div className="flex h-8 w-7 shrink-0 items-center"><BotAvatar bot={member} size="sm" /></div> : null}

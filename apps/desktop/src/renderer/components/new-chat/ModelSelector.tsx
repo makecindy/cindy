@@ -164,7 +164,7 @@ import { compactEnglishEffortLabel } from '@cindy/maker-shared/agent-capabilitie
 import type { ModelAccessAccountTier } from '../../../shared/modelAccess';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
-import { buildProviderSections } from './sourceSwitch';
+import { buildProviderSections, withFollowedAccountSource } from './sourceSwitch';
 import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import { mergeSshCodexCatalog, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
 
@@ -758,6 +758,11 @@ export interface ModelSelectorBaseProps {
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
   /**
+   * 已建立的本机任务跟着账号走时的原来源视图(sourceSwitch.ts followedAccountSourceProvider)：
+   * 只替换本机目录里同 id 的那一项；远程目录、SSH 与外部注入目录不受影响。
+   */
+  taskSourceProvider?: ProviderView;
+  /**
    * SSH project: Codex models come from the host (see mergeSshCodexCatalog), Claude Code
    * and Pi keep the local catalog. `idle` = not read yet; opening the picker calls refresh.
    */
@@ -984,6 +989,7 @@ export interface ModelSelectorContentBaseProps {
   modelGroups?: ModelGroupsPickerProps;
   providersOverride?: ProviderView[];
   providersOverrideState?: ModelSelectorProps['providersOverrideState'];
+  taskSourceProvider?: ModelSelectorProps['taskSourceProvider'];
   sshCodex?: SshCodexCatalog;
   modelId: string;
   effort: Effort;
@@ -1262,6 +1268,7 @@ function ModelSelectorContentView({
   modelGroups,
   providersOverride,
   providersOverrideState,
+  taskSourceProvider,
   sshCodex,
   modelId,
   effort,
@@ -1468,9 +1475,13 @@ function ModelSelectorContentView({
     () => (sshCodexProviders ? mergeSshCodexCatalog(localProviders.providers, sshCodexProviders) : null),
     [localProviders.providers, sshCodexProviders],
   );
+  const localTaskProviders = useMemo(
+    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider ?? null),
+    [localProviders.providers, taskSourceProvider],
+  );
   const providers = deviceId
     ? remoteCatalogProviders
-    : providersOverride ?? sshCatalogProviders ?? localProviders.providers;
+    : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
   // SSH 目录里 Codex 来自远端主机：本机账号用量、本机供应商组都不能代表它。
   const sshCodexActive = sshCodex !== undefined;
   const mixedCatalog = !!providersOverride || sshCodexActive;
@@ -4197,6 +4208,7 @@ export function ModelSelector({
   modelGroups,
   providersOverride,
   providersOverrideState,
+  taskSourceProvider,
   sshCodex,
   modelId,
   currentSelection,
@@ -4437,9 +4449,13 @@ export function ModelSelector({
     () => (sshCodexProviders ? mergeSshCodexCatalog(localProviders.providers, sshCodexProviders) : null),
     [localProviders.providers, sshCodexProviders],
   );
+  const localTaskProviders = useMemo(
+    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider ?? null),
+    [localProviders.providers, taskSourceProvider],
+  );
   const providers = deviceId
     ? remoteProviders.providers
-    : providersOverride ?? sshCatalogProviders ?? localProviders.providers;
+    : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
   // 当前是 SSH Codex 时 trigger 的加载 / 失败 / 来源都以远端清单为准;其余引擎仍看本机目录。
   const sshCodexCurrent = sshCodex !== undefined && agentKind === 'codex';
   // Old device-link hosts expose capabilities only. Never substitute local routes.
@@ -4494,17 +4510,37 @@ export function ModelSelector({
   const displayProvider = agentKind
     ? modelDisplayProvider(providers, currentProviderId, modelId, agentKind, actualRoute)
     : undefined;
-  const resolvedModelName = (agentKind ? findCatalogModel(displayProvider, modelId, agentKind)?.name : undefined)
+  // 目标目录(另一台电脑 / 共享供应商)已就绪却没有这个模型:新建草稿此刻回落到本机默认
+  // 模型(PR #9369 review),名称也回本机目录取 —— trigger 显示真实名字而不是
+  // 「模型信息暂不可用」。仅显示口径:路由 / 能力 / 面板候选仍只看目标目录;加载中与
+  // 读取失败保持原有提示(失败态有重试入口,不做名称回退)。
+  // 只限新建草稿(!actualRoute):已建会话的模型身份由目标目录决定,目标目录里没有这个
+  // 模型时不能用本机同名模型的名字顶替 —— 路由与候选仍指向远端目标,名字却来自本机,
+  // 会显示成一个「看着正常但其实不对」的模型。
+  const localFallbackName = !actualRoute && deviceId && remoteModelListStatus === 'ready' && agentKind
+    ? localProviders.providers
+        .map((provider) => findCatalogModel(provider, modelId, agentKind, { exact: true })?.name)
+        .find((name) => name !== undefined)
+    : undefined;
+  const catalogName = (agentKind ? findCatalogModel(displayProvider, modelId, agentKind)?.name : undefined)
     ?? currentModel?.displayName;
   const labelKey = JSON.stringify([deviceId ?? null, currentProviderId ?? null, agentKind, modelId]);
   const lastModelName = useRef<{ key: string; name: string | undefined } | null>(null);
-  const modelName = resolvedModelName
+  const modelName = catalogName
+    ?? localFallbackName
     ?? (lastModelName.current?.key === labelKey ? lastModelName.current.name : undefined);
   useEffect(() => {
     // Retain only this selection's label through catalog refresh/failure. Never
     // borrow the previous model, source, engine or device's name for a new choice.
-    lastModelName.current = { key: labelKey, name: modelName };
-  }, [labelKey, modelName]);
+    // 只有**目录里查到的**名字进缓存:本机目录回退出来的名字不能进 —— 目录后来读失败时
+    // 它会消失,而缓存里那份还在,trigger 就继续显示一个「看着可用」的本机型号,失败状态
+    // (重试入口)被藏起来(Codex review #9369)。
+    if (catalogName !== undefined) {
+      lastModelName.current = { key: labelKey, name: catalogName };
+    } else if (lastModelName.current?.key !== labelKey) {
+      lastModelName.current = { key: labelKey, name: undefined };
+    }
+  }, [labelKey, catalogName]);
   const localizedName = modelName ? localizedModelName(modelName, t) : undefined;
   // Explicit diagnostic fields can supply unknownModelLabel; ordinary triggers
   // must not expose internal wire IDs when no display metadata is available.
@@ -5127,6 +5163,7 @@ export function ModelSelector({
       fastModeConfigurable={fastModeConfigurable}
       providersOverride={providersOverride}
       providersOverrideState={providersOverrideState}
+      {...(taskSourceProvider ? { taskSourceProvider } : {})}
       sshCodex={sshCodex}
       unifiedPanel={unifiedPanel}
       sessionEngineFilter={contentSessionEngineFilter}

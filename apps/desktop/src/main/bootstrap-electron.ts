@@ -486,6 +486,7 @@ import {
   startHostEventBridge,
   type HostDelegationConfig,
 } from './host-delegation';
+import { createHostIpcProxy, registerHostIpcProxies } from './host-ipc-proxy';
 import { createIpcChannelUsage, registeredIpcChannels, tapIpcChannelUsage } from './ipcChannelUsage';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
@@ -604,7 +605,8 @@ import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { readMainHeapSamplingFlag, startMainHeapSampling } from './process-monitor/heap-sampling.js';
-import { startMemoryLog } from './process-monitor/memory-log.js';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { createEventLoopDelayCounters, startMemoryLog } from './process-monitor/memory-log.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import {
   initAppBadgeService,
@@ -686,6 +688,7 @@ import {
   waitForSharedTaskRelay,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
+  handleDeviceLinkSystemSuspend,
   getControllerName,
   revokeController,
 } from './device-link';
@@ -875,6 +878,7 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
+  registerComputerUseIpc,
   restoreOrcaRemoteWorkersForCurrentOwner,
   stopOrcaRemoteWorkersForOwnerBoundary,
   isSessionTurnPendingCompletion,
@@ -1358,11 +1362,30 @@ function installHostClientMode(): boolean {
         && pending.channel === (channel === 'ghosts:confirm:resolve' ? 'ghosts:confirm-request' : 'ghosts:install-consent:request');
     },
   });
+  // Registered channels (host-ipc-registry) use the Host's generic route, pinned
+  // to the Host instance and to the account the windows show.
+  const hostIpcLog = createLogger('host-ipc');
+  const ipcProxy = createHostIpcProxy({
+    baseUrl: delegation.baseUrl,
+    token: delegation.token,
+    instanceId: delegation.instanceId,
+    readOwner: () => {
+      const state = authManager.getAuthState();
+      return { dataOwnerId: state.dataOwnerId, ownerGeneration: state.ownerGeneration, canEnterApp: state.canEnterApp };
+    },
+    applyAuthState: (state) => authManager.receiveHostAuthState(state as authManager.AuthState),
+    log: (message, meta) => hostIpcLog.warn(message, meta ?? {}),
+  });
+  const routed = registerHostIpcProxies({
+    ipcMain,
+    proxy: ipcProxy,
+    admit: { 'trusted-app-renderer': assertTrustedAppRendererEvent },
+  });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {
     console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
-  });
+  }, routed);
   const channelUsage = createIpcChannelUsage({
     mode: 'client',
     file: ipcUsageReportFile,
@@ -1380,6 +1403,7 @@ function installHostClientMode(): boolean {
   });
   console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
   console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
+  console.log(`[bootstrap-electron] client mode routed channels: ${routed.join(', ')}`);
   void registerHostDelegatedSync({
     channel: 'ghosts:list',
     path: '/api/ghosts',
@@ -1424,6 +1448,8 @@ function installHostClientMode(): boolean {
     token: delegation.token,
     instanceId: delegation.instanceId,
     beforeEvents: async (signal) => {
+      // A (re)connected stream may face another Host build: negotiate again on next use.
+      ipcProxy.invalidate();
       const auth = await hostClient.request('/api/auth/state', null, signal) as authManager.AuthState;
       if (!signal.aborted) {
         authManager.receiveHostAuthState(auth);
@@ -7017,6 +7043,13 @@ const registerIpcHandlers = () => {
     // never register competing handlers.
     if (hostClientMode) {
       makerIpcsRegistered = true;
+      // Computer Use settings manage this machine's CuaDriver, which keeps serving
+      // Host-run agents through the window, so they stay window-local.
+      try {
+        registerComputerUseIpc();
+      } catch (err) {
+        console.error('[bootstrap-electron] failed to register computer-use IPC', err);
+      }
       return;
     }
     // Compose here: IM runtime and hook IPC depend on maker-host, so the host
@@ -10693,6 +10726,8 @@ app.on('ready', async () => {
   // 「上次意外退出」(issue #10071)。
   powerMonitor.on('suspend', noteSystemSuspend);
   powerMonitor.on('resume', noteSystemResume);
+  // device-link:睡前主动断开 relay,对端立即看到离线(唤醒重建见下方 resume)。
+  powerMonitor.on('suspend', handleDeviceLinkSystemSuspend);
 
   // 挂起/锁屏时通知 renderer 释放语音输入的保活麦克风(用户已离开,再占着采集
   // 设备只剩隐私指示灯常亮和 idle-sleep assertion 的代价)。
@@ -10733,14 +10768,18 @@ app.on('ready', async () => {
   authCredentialRecovery.request();
 
   // 各进程内存采样进 main 日志(scope memory-usage):正式版 10 分钟一次,dev 保持 30s。
+  // 事件循环延迟按采样窗口清零:每行给出这一窗口内主线程最长被占了多久。
+  const eventLoopDelayHistogram = monitorEventLoopDelay({ resolution: 20 });
+  eventLoopDelayHistogram.enable();
+  const eventLoopDelay = createEventLoopDelayCounters(eventLoopDelayHistogram);
   const stopMemoryLog = startMemoryLog({
     getMetrics: () => app.getAppMetrics(),
     memoryUsage: () => process.memoryUsage(),
-    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions() }),
+    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions(), ...eventLoopDelay.counters() }),
     log: createLogger('memory-usage'),
     intervalMs: app.isPackaged ? 10 * 60_000 : 30_000,
   });
-  onQuit('memory-usage-log', stopMemoryLog, 'sync');
+  onQuit('memory-usage-log', () => { stopMemoryLog(); eventLoopDelay.stop(); }, 'sync');
   // 主进程堆采样:只在开发版、日志目录 log-config.json 写了 mainHeapSampling 时运行。
   if (!app.isPackaged && readMainHeapSamplingFlag(getLogDir())) {
     const stopHeapSampling = startMainHeapSampling({

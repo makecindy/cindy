@@ -29,6 +29,7 @@ function createLocalDb(): Database.Database {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL DEFAULT 'New Maker',
       working_dir TEXT,
+      project_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       scheduled_model_baseline TEXT,

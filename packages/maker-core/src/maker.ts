@@ -1060,6 +1060,7 @@ export class Maker {
           workDir: opts.workingDir,
           title: opts.title ?? DEFAULT_DRAFT_SESSION_TITLE,
           model: opts.model,
+          providerId: startOpts.providerId,
           workspaceKind: opts.workspaceKind,
           projectDir: opts.projectDir,
           effort: opts.effort,

@@ -503,6 +503,13 @@ Desktop「设置 → 模型供应商」的左栏(2026-10-08 用户裁决)：
    实现：Claude Code 用 SDK `tools` 白名单，Codex 按功能清单关闭白名单之外的功能，Pi 只放行 Cindy
    扩展注册的工具（`packages/maker-core/src/agents/{shared/device-hosted,codex/device-hosted-guest,pi/cindy-bridge-source}.ts`）；
    受邀者电脑上的 WebFetch 见 `apps/desktop/src/main/remote-agent/executor/webFetch.ts`。
+   Codex 受邀者的独立进程在 spawn 阶段就不注入分享者的 Cindy MCP、对应凭证或本机浏览器 companion，
+   避免启动前的 MCP 清单检查等待无关的本机服务；受邀者的工具仍在线程创建时经隧道接入。
+   线程里的 Maker Memory MCP 也只以受邀者隧道为准；分享者的记忆 provider 不能为受邀者
+   生成没有传输配置的禁用条目，也不能覆盖受邀者的隧道开关。
+   原有 Skill／配置／运行期 MCP 与功能清单检查全部保留，读不到清单仍拒绝启动。
+   实现与回归见 `maker-host/codexSpawnConfigCore.ts` 及其同名单测、
+   `packages/maker-core/src/agents/codex/__tests__/device-hosted-guest.test.ts`。
    **重建同样保持隔离**（2026-10-27）：Codex 原生 `thread/fork` 会重新加载进程默认配置，不能
    假定它继承源线程的覆盖项。回退／编辑重发必须和正常启动、恢复一样带上任务的执行环境、远程 MCP
    路由与完整能力隔离配置。受邀者复制历史的一次性 fork 不接入任何本机 MCP 或连接器，不能检查

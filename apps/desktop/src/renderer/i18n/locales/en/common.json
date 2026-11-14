@@ -264,6 +264,8 @@
     "transferProgress": "Transferred {{sent}} / {{total}} · Average {{speed}}/s",
     "thisComputer": "this computer",
     "selectedComputer": "selected computer",
+    "sourceComputer": "the source computer",
+    "waitingForSource": "Waiting for {{name}} to come back online. Copying will continue then.",
     "estimating": "Counting files and calculating size…",
     "fileSummary": "Project files: {{count}}, totaling {{size}}",
     "estimateNote": "Pre-copy estimate including hidden files. Git history, conversation and attachments are copied separately and excluded from this size. Files may change before copying.",
@@ -1376,7 +1378,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "The SSH config was saved, but Cindy could not refresh it. Reload the SSH configuration.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy cannot safely manage this SSH configuration. Reload it, then verify the Cindy ownership marker and that the host alias is unique.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy cannot safely reproduce some SSH configuration rules for this host. Terminal SSH may still work; review Match, conditional Include, IdentityAgent, IdentitiesOnly, and public-key settings.",
-    "SSH_AGENT_UNAVAILABLE": "The SSH Agent is unavailable. Start it, load the matching private key with ssh-add, and try again.",
+    "SSH_AGENT_UNAVAILABLE": "The local SSH key agent (ssh-agent) is unavailable. Check that it is running and that ssh-add -l lists the required key. See Manage keys for troubleshooting.",
     "SSH_HOST_PREFS_WRITE_FAILED": "The host is still saved, but its display name or Agent Proxy settings could not be saved. Check local storage permissions and try again.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "This task has reached its tab limit. Close some tabs first",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Tab content is too large to add",
@@ -1467,6 +1469,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "To review",
+      "summaryInProgress": "In progress",
+      "summaryPending": "Needs your action",
+      "summaryUnread": "Unread results",
       "markRead": "Mark as read",
       "archive": "Archive",
       "actionFailed": "Could not complete the action. The notification has been kept. Try again.",
@@ -1920,6 +1926,12 @@
       "footnote": "Only SSH connection management is available for now. Running agents on remote machines is coming in a later update.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Connection details come from SSH configuration",
+      "importedAgentHint": "Authenticates through the local SSH key agent (ssh-agent). A successful terminal ssh connection does not mean the agent is ready.",
+      "agentError": {
+        "environmentUnset": "The environment variable referenced by IdentityAgent is not set for Cindy. Set it or correct IdentityAgent in your SSH config.",
+        "endpointEmpty": "IdentityAgent resolves to an empty endpoint. Correct IdentityAgent in your SSH config.",
+        "endpointUnavailable": "The SSH key agent endpoint configured by IdentityAgent is unavailable. Check that endpoint and its agent; the default ssh-agent may use a different endpoint."
+      },
       "configWarning": "Cindy cannot evaluate some SSH configuration rules. The host list or connection details may differ from terminal SSH.",
       "configDiagnostic": {
         "io": "Cindy could not read your SSH configuration. The last successfully loaded hosts are still shown. Check file permissions and reload.",
@@ -2017,7 +2029,7 @@
           "tryThis": "Try this from your terminal",
           "close": "Close",
           "fallbackTitle": "Or skip the agent entirely",
-          "fallbackBody": "You can add this host with “Identity file” auth instead — {{appName}} will pass the key file to ssh directly and you’ll be prompted for the passphrase on each connection. No agent needed. Security tradeoff: you type the passphrase for every connection, but no key is cached in memory.",
+          "fallbackBody": "You can also choose “Identity file” when adding a host. {{appName}} reads the private key into process memory without ssh-agent. Only unencrypted private keys are currently supported; connections do not prompt for a key passphrase. Use ssh-agent for encrypted keys.",
           "reason": {
             "agent_unavailable": "ssh-add couldn't reach your ssh-agent (binary missing, agent not running, or SSH_AUTH_SOCK unset).",
             "bad_passphrase": "ssh-add rejected the passphrase.",
@@ -11180,6 +11192,9 @@
         "step": "Step {{step}}/{{total}}",
         "speaking": "{{name}} is replying…",
         "elapsed": "{{time}} so far",
+        "onDevice": "on {{device}}",
+        "onOtherComputer": "on another computer",
+        "onThisComputer": "on this computer",
         "viewProcess": "Show work",
         "hideProcess": "Hide work",
         "stop": "Stop",
@@ -11485,10 +11500,12 @@
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {
+          "preparing": "(Cindy) The group's project {{repo}} is being downloaded into this folder on this computer and should be ready within a few minutes. Until then the folder may be empty: answer right away when it is just a conversation; when the work needs the code, wait until the project's files are here.",
           "gitMissing": "(Cindy) The group's project {{repo}} is not on this computer yet: git is not installed here. {{guide}} Once it is installed, @Cindy again and Cindy will download the project and work in it.",
           "signInOpened": "(Cindy) The group's project {{repo}} is not on this computer yet: connect your GitHub account first. Cindy opened GitHub sign-in on this computer; once you are signed in, @Cindy again and Cindy will download the project.",
           "signIn": "(Cindy) The group's project {{repo}} is not on this computer yet: connect your GitHub account first. Sign in to GitHub in Cindy on this computer, then @Cindy again.",
           "unavailable": "(Cindy) The group's project {{repo}} could not be downloaded to this computer: your GitHub account may not have access to it, or the network is unavailable. Make sure you can open the repository on GitHub, then @Cindy again.",
+          "accessRequired": "(Cindy) The group's project {{repo}} could not be downloaded to this computer: git on this computer cannot access {{host}} yet. Clone the repository once with git on this computer (or set up an access token), then @Cindy again.",
           "installGit": {
             "darwin": "In Terminal, run xcode-select --install and follow the prompts.",
             "win32": "Download and install Git from https://git-scm.com/download/win with the default options.",
@@ -11709,7 +11726,12 @@
           "projectCaption": "Buddies reply and do work splits in this project. The repository is shared with the group; the folder stays on this computer.",
           "githubRepo": "GitHub repository",
           "githubRepoHint": "Enter owner/name. Computers without a chosen folder use their own copy of this project, or download one.",
+          "repository": "Repository",
+          "repositoryHint": "GitHub: enter owner/name. GitLab (self-hosted too), CNB and others: paste the repository link. Computers without a chosen folder use their own copy of this project, or download one.",
+          "repositoryPlaceholder": "owner/name or repository link",
           "githubRepoSaveFailed": "The repository wasn’t saved. Check it and try again.",
+          "folderRepoFilled": "Filled in the repository {{repo}} from this folder. Other members’ computers will use it too.",
+          "folderRepoDiffers": "This folder is a checkout of {{repo}}, not the group’s repository. This computer still works in this folder.",
           "projectFolder": "Folder on this computer",
           "projectDirAutoHint": "Found from the repository among your projects.",
           "organizerHint": "Decides who does each step. Defaults to the first buddy.",
@@ -13478,6 +13500,15 @@
           "askNoQuestion": "The Agent is waiting for your answer, but there's no question to show. Reply “continue”.",
           "askQuestion": "The Agent needs your answer:\n{{question}}\n{{options}}\nReply with an option number, or type your answer."
         }
+      },
+      "questions": {
+        "cardHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections. You can also reply to this message with text. For multiple questions, reply with “question number: answer” (e.g. “2: English”), then submit.",
+        "submitLabel": "Submit answers",
+        "multiSelectHint": " (select all that apply)",
+        "resolved": "✅ Selected: {{option}}",
+        "expired": "This card has expired",
+        "textHint": "Only the original requester can answer. Reply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all.",
+        "replyHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections.\nReply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all."
       }
     }
   },
@@ -16029,6 +16060,8 @@
       "claudeSubscriptionWorkspaceOverride": "This folder's .claude settings change where Claude sends requests or how it signs in, so the Claude subscription can't be used here. Remove those settings, or pick a gateway or API key model",
       "deviceStillLoading": "The remote device is still loading. Wait a moment.",
       "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
+      "branchRequiresWorktree": "The selected branch is not the current branch. Enable worktree or select the current branch.",
+      "branchCheckFailed": "Could not verify the current branch. Enable worktree to use the selected branch, or check the project and try again.",
       "worktreeMissingRepo": "Can't create a worktree: the current directory's repo root is missing",
       "worktreeRepoHint": "Try picking the working directory again, and retry once the folder badge at the bottom right refreshes",
       "sessionInactive": "Session is no longer active",
@@ -16604,6 +16637,8 @@
             "title": "Repository events",
             "description": "Connect the Cindy GitHub App to update followed PRs when reviews or CI change.",
             "connected": "Connected as {{login}} · Repositories watched: {{count}}",
+            "syncing": "Syncing repositories…",
+            "finishInBrowser": "Finish repository setup in GitHub, then return to Cindy.",
             "missing": "Check App installation and access for: {{repositories}}",
             "error": "Could not check the connection. Try again.",
             "repositories": "Choose repositories",
@@ -21359,6 +21394,30 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "placement": {
+      "needsUpdate": "The computer running this needs a Cindy update before accounts can be moved this way.",
+      "moveTo": "Move to…",
+      "separate": "Its own provider",
+      "moveTitle": "Move {{name}} to {{target}}?",
+      "takeOutTitle": "Make {{name}} its own provider?",
+      "moveDescription": "Only the provider this account belongs to changes. Its sign-in and history stay, and existing tasks keep using this account.",
+      "moveConfirm": "Move",
+      "failed": "Couldn't change where the account belongs. Try again later.",
+      "mergeInto": "Merge into…",
+      "mergeTitle": "Merge {{name}} into {{target}}?",
+      "mergeDescription": "All accounts of this provider move to the other provider, and this provider no longer appears in the provider list or for new tasks. Existing tasks keep their accounts.",
+      "mergeConfirm": "Merge",
+      "deleteTitle": "Delete {{name}}?",
+      "deleteDescription": "Cindy stops using this provider's accounts. Their CLI logins and conversation history stay on this computer.",
+      "deleteConfirm": "Delete",
+      "deleteInUse": "A task is using this provider's account. Delete it after the task finishes.",
+      "signInQuestion": "Where should the new account go?",
+      "signInSeparate": "As its own provider",
+      "signInSeparateHint": "Choose it for a new task to always use this account.",
+      "signInInto": "Add to {{name}}",
+      "signInContinue": "Continue to sign in",
+      "signInBack": "Back"
+    },
     "loginIdentityUnknown": "The original identity of this account is unknown. Use Add Account to connect a new account.",
     "loginExpiresInDays": "Sign-in expires in about {{days}} days",
     "loginExpiresSoon": "Sign-in expires soon",
@@ -21373,10 +21432,9 @@
     "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
-      "detected": "Signed-in account found",
-      "useAccount": "Use this account",
+      "useAccount": "Use the {{cli}} account on this computer",
       "anotherAccount": "Sign in to another account",
-      "keepExisting": "The new account joins this provider. Existing sign-ins stay unchanged.",
+      "keepExisting": "The new account becomes its own provider unless you choose one to join. Existing sign-ins stay unchanged.",
       "checkFailed": "Couldn’t check the local account. Try again.",
       "retry": "Retry",
       "useCodex": "Sign in with Codex"
@@ -21384,7 +21442,6 @@
     "title": "Subscription accounts",
     "strategy": "Load balancing",
     "add": "Add account",
-    "default": "Default folder",
     "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",

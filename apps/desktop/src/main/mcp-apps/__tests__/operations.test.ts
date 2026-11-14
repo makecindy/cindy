@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { handleMcpAppOperation, handleMcpAppFrameOperation } from '../operations.js';
 import type { McpAppsHost } from '../host.js';
@@ -39,7 +40,7 @@ describe('task-bound MCP App operations', () => {
       ),
     ).toEqual({ viewId: 'view', transport: 'sandbox', prefersBorder: true });
     expect(f.api.open).toHaveBeenCalledWith('renderer:1', 'task', 'card', { theme: 'dark' }, undefined);
-    expect(f.local.supply).toHaveBeenCalledWith(f.document, 'renderer:1');
+    expect(f.local.supply).toHaveBeenCalledWith(f.document, 'renderer:1', { theme: 'dark' });
     await handleMcpAppOperation(f.host, 'device:phone', 'task', {
       op: 'poll',
       viewId: 'view',
@@ -116,4 +117,21 @@ describe('task-bound MCP App operations', () => {
         'MCP_APP_INVALID_REQUEST',
       );
   });
+});
+
+it('returns an SDK reference only when the viewer advertises its exact content hash', async () => {
+  const f = fixture();
+  const sdk = { source: 'export const App = 1;', addons: { 'cindy/view-state': { source: 'core-v1', reactSource: 'react-v1' } } };
+  const hash = createHash('sha256').update(JSON.stringify([sdk.source, 'core-v1', 'react-v1'])).digest('hex');
+  f.api.open.mockResolvedValue({ ...f.document, sdk } as typeof f.document);
+  const result = await handleMcpAppOperation(f.host, 'device:viewer', 'task', {
+    op: 'open', clientId: 'card', context: { theme: 'dark' }, sdkCacheHashes: [hash],
+  });
+  expect(result).toEqual({ ...f.document, sdkRef: hash });
+  expect(f.api.open).toHaveBeenCalledWith('device:viewer', 'task', 'card', { theme: 'dark' }, undefined);
+  for (const hashes of [undefined, [], ['0'.repeat(64)]]) {
+    await expect(handleMcpAppOperation(f.host, 'device:viewer', 'task', {
+      op: 'open', clientId: 'card', sdkCacheHashes: hashes,
+    })).resolves.toEqual({ ...f.document, sdk });
+  }
 });

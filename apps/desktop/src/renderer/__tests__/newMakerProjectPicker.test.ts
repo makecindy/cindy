@@ -382,14 +382,12 @@ describe('Shared create project picker', () => {
     const send = newMakerDraftRouteSource.slice(sendStart, goalStart);
     const goal = newMakerDraftRouteSource.slice(goalStart);
 
-    // Checkbox APPLY is a bidirectional gate. Branch APPLY only gates when the
-    // current checkbox intent is ON, so OFF can still create a base-repo task.
+    // Both APPLY transactions must settle before consuming the displayed choice.
+    // OFF mismatch and draft preservation are exercised by newMakerDraftSubmission.
     for (const flow of [send, goal]) {
       expect(flow).toContain('wtPreferenceSavingRef.current');
       expect(flow).toContain('wtPreferenceAuthorityUnknownRef.current');
-      expect(flow).toContain(
-        'selectedWorktree.enabled && wtBranchPreferenceSavingRef.current',
-      );
+      expect(flow).toContain('wtBranchPreferenceSavingRef.current');
     }
     expect(newMakerDraftRouteSource).toContain('wtPreferenceWriteChainRef.current');
     expect(newMakerDraftRouteSource).toContain('wtBranchWriteChainRef.current');
@@ -1744,12 +1742,21 @@ describe('Shared create project picker', () => {
     // 远程分支按**模型目录所在电脑**的目录 + 草稿当前模型复算,用与 main 同源的解析函数。
     // 目录通常就是被控端的;Agent 在另一台电脑运行时只取那台开放了远程调用的供应商(2026-10-09)。
     expect(body).toContain('effectiveSourceIdForModel(');
-    expect(body).toContain('agentCatalogProviders,');
+    // 目标目录里**可选**的型号清单(新路由准入 + 被控端自己的显示/隐藏过滤):
+    // 被退役 / 要付费 / 被藏起来的型号不能被选成来源(Codex review #9369)。
+    expect(body).toContain('targetSelectableProviders,');
     expect(newMakerDraftRouteSource).toContain(
       '() => (effectiveAgentDeviceId ? remoteAgentProviders(deviceProviders) : deviceProviders),',
     );
     expect(body).toContain('draftInitialModel,');
-    expect(body).toContain('return deviceLinkInitial?.providerId || effectiveSourceIdForModel(');
+    // 播种来源只有在**最终型号**上还能路由时才保留:播种型号被换成目录里的别的型号后,
+    // 那个来源往往不提供新型号,显式带上它会让发送侧对着一个路由不出该型号的来源建任务。
+    expect(body).toContain('const seedProviderId = resolveDraftProviderForModel(');
+    // 播种来源按**显式选择**(explicitDraftProviderId)取,不直接读 holder 里播进去的
+    // providerId:自动默认(applySuggestedDefaultTuple)也会把 providerId 落进快照,把它
+    // 当显式选择保留,首条消息会被钉在断连 / 失败的来源上(Codex review #9369 第十二轮)。
+    expect(body).toContain('explicitDraftProviderId,');
+    expect(body).toContain('return seedProviderId || effectiveSourceIdForModel(');
   });
 
   it('keeps recent-folder storage out of project-option selection', () => {

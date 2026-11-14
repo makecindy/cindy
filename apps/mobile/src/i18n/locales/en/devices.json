@@ -738,6 +738,8 @@
     "memoryDeleteFailed": "The memory couldn’t be deleted",
     "create": "New Buddy",
     "createFailed": "Creation is not confirmed yet. Retry to check.",
+    "createHostUnsupported": "This computer can't create a buddy right now. Update Cindy there, or create one on that computer.",
+    "createNeedsDetails": "Add a name and pick a portrait to create a buddy.",
     "title": "Buddy",
     "profile": "Profile & Personality",
     "memory": "Memory",

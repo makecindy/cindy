@@ -85,6 +85,11 @@ Codex 共享登录使用文件软链接，不创建硬链接。Windows 无文件
 判断时展开父目录别名，不能仅比较路径字符串，也不能将不同名字的硬链接视为
 同一目录项；同一目录项直接复用，不执行迁移、快照覆盖或失效时的文件删除。
 
+Windows 的共享链接替换需要先删除本实例的目标。对同一目标目录项的 `relink`
+在进程内串行至恢复和临时文件清理结束，目录别名共用队列，不同 home 互不等待。
+队列完成后释放；POSIX 仍直接原子覆盖。这不提供跨进程锁，也不阻止原生 Codex
+刷新凭证；目标已被外部重建时仍按现有恢复规则保留，不能覆盖其新一代字节。
+
 实现与回归见 `maker-host/codex-auth-link.ts`、`auth-adapters.ts`、
 `codexAuthLink.test.ts` 和 `codexAuthInvalidation.test.ts`。
 
@@ -100,6 +105,8 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
   使用官方多账号方式：只在该账号的 CLI 子进程设置 `CLAUDE_CONFIG_DIR=~/.claude-cindy-<owner摘要>-<随机id>`，
   登录、状态、用量、任务及分叉始终使用同一目录。目录不含邮箱，不接受外部传入路径。
+  2026-11-13 裁决的 Claude 单独供应商同样如此（账号放在哪个供应商记在 `subscription-account-placement.json`，不含凭证）：账号并入、移动或拿出只改它属于哪个供应商，目录与官方登录不动；
+  不复用 09-24 已停用的旧 Claude 连接及其 Cindy 自存凭证。
   Cindy 从不设置 `CLAUDE_SECURESTORAGE_CONFIG_DIR`，并在启动与每次调起 CLI 时剥掉继承值：
   CLI 用它（优先于 `CLAUDE_CONFIG_DIR`）决定读哪条钥匙串登录，空值会退回默认登录。
   SSH 远端的配置目录仍由远端 cc-manager 自己管理，不在此列。

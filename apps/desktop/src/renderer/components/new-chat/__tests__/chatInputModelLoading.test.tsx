@@ -13,6 +13,7 @@ import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { useSshCodexDraftSelection } from '@/features/cc-agent/useSshCodexDraftSelection';
 import { ChatInput } from '../ChatInput';
+import { SessionSubscriptionAccountProvider } from '../SessionSubscriptionAccount';
 import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
 import { getEffortChangeCoordinator } from '../effortChangeQueue';
@@ -40,6 +41,7 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   ghosts: [] as InstalledGhost[],
   showPluginChoices: false,
   providerCall: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ updates: [] })),
+  subscriptionAccounts: undefined as undefined | { sessionAccount: ReturnType<typeof vi.fn>; onChanged: () => () => void },
 }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => h.ghosts, readInstalledGhostsSnapshot: () => h.ghosts }));
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
@@ -113,6 +115,7 @@ const api: typeof window.electronAPI = new Proxy({} as typeof window.electronAPI
   if (key === 'setModel') return h.setModel;
   if (key === 'setThinkingEnabled') return h.setThinkingEnabled;
   if (key === 'switchSessionAgent') return h.switchSessionAgent;
+  if (key === 'subscriptionAccounts' && h.subscriptionAccounts) return h.subscriptionAccounts;
   if (key === 'mcpApps') return h.providerCall;
   if (key === 'listSync') return () => ({ ghosts: [] });
   if (key === 'getDataSnapshot') return () => { throw new Error('test bridge unavailable'); };
@@ -130,7 +133,7 @@ const attachments: ComponentProps<typeof ChatInput>['attachmentState'] = {
   removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles: noOp, restoreFiles: (files) => [...files],
 };
 beforeEach(() => { h.platform = 'darwin'; h.listening = false; h.processing = null; h.stop.mockClear(); h.cancel.mockClear(); h.selectEffort = undefined; window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
-afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.sshCatalogHosts = []; h.sshCodex = undefined; h.setModel.mockReset(); h.confirm.mockReset(); h.ghosts = []; h.showPluginChoices = false; h.providerCall.mockReset(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.sshCatalogHosts = []; h.sshCodex = undefined; h.setModel.mockReset(); h.confirm.mockReset(); h.ghosts = []; h.showPluginChoices = false; h.providerCall.mockReset(); h.subscriptionAccounts = undefined; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const props = {
   sessionId: 'loading-test', initialWorkingDir: '/workspace', runtimeAgentKind: 'codex' as const,
@@ -274,6 +277,47 @@ it.each([false, undefined])('keeps disconnected ordinary sessions blocked withou
   expect((send as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(send);
   expect(onSend).not.toHaveBeenCalled();
+});
+
+// 2026-11-14 regression (subscription-account-pools.md 旧版直接加入账号池的账号也拆开 / 任务跟着账号走), unit:
+// splitting the old pool left the built-in OpenAI with only a signed-out default login, so the real
+// composer disabled Send for old tasks bound to a split-out account. Goes through the task-account
+// read and its reply parser; the helper table in sourceSwitch.test.ts covers every other guard.
+// Minimal input: built-in source disconnected with no models, task account ready in its own provider.
+it.each([
+  ['ready', false],
+  ['signed-out', true],
+] as const)('lets an old built-in task follow its split-out %s account', async (status, blocked) => {
+  const model = 'gpt-6';
+  h.localProviders = [
+    { ...sshNativeCodexProvider([]), connected: false },
+    { ...sshNativeCodexProvider([sshModel(model)]), id: 'openai-sub-1a2b3c4d' },
+  ];
+  const sessionAccount = vi.fn(async () => ({ providerId: 'openai', state: 'bound', account: {
+    isDefault: false, number: 1, paused: false, status, ownerProviderId: 'openai-sub-1a2b3c4d',
+  } }));
+  h.subscriptionAccounts = { sessionAccount, onChanged: () => noOp };
+  const onSend = vi.fn().mockResolvedValue(true);
+  const route = { agentKind: 'codex' as const, model, providerId: 'openai', effort: null, fastMode: false };
+  render(
+    <SessionSubscriptionAccountProvider providerId="openai" deviceId={null} sessionId={`split-${status}`} nativeSessionId="native-old">
+      <ChatInput {...props} sessionId={`split-${status}`} deviceLinkDeviceId={null} initialModel={model}
+        initialProviderId="openai" runtimeEffective={route} onSend={onSend} />
+    </SessionSubscriptionAccountProvider>,
+  );
+  await act(async () => { h.editor!.commands.setContent('<p>Continue on my account</p>'); });
+  await waitFor(() => expect(sessionAccount).toHaveBeenCalled());
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
+  await waitFor(() => expect(send.disabled).toBe(blocked));
+  await act(async () => { fireEvent.click(send); });
+  if (blocked) {
+    expect(onSend).not.toHaveBeenCalled();
+    return;
+  }
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  // Sending keeps the task's own source; main resumes it on the bound account.
+  expect(onSend.mock.calls[0][6]).toMatchObject({ providerId: 'openai' });
+  expect(h.confirm).not.toHaveBeenCalled();
 });
 
 it('does not use baseline recovery to bypass a pending selection source check', async () => {

@@ -618,7 +618,7 @@ export function projectPiManagedCommandFailure(value: unknown): import('./pi/man
     phase: data.phase as import('./pi/managed-command.js').PiManagedCommandFailure['phase'],
     packagesUpdated: data.packagesUpdated,
     recovery: data.recovery as import('./pi/managed-command.js').PiManagedCommandFailure['recovery'],
-    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish'].includes(data.hostStage)
+    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish', 'unsupported'].includes(data.hostStage)
       ? { hostStage: data.hostStage as import('./pi/managed-command.js').PiBinaryUpdateFailureStage } : {}),
   };
 }
@@ -2604,6 +2604,16 @@ export interface AgentSessionHandle {
    * 不能把进程关在操作中间。不支持的 agent 留空(Session 层回退 false)。
    */
   hasPendingHostOperation?(): boolean;
+
+  /**
+   * Conservative probe for provider-owned work that can outlive a product turn
+   * but is not represented by listBackgroundTasks (for example Codex native
+   * child agents, yielded exec cells and background terminals). Idle runtime
+   * reclamation calls it before closing; true means busy *or unknown*, so a
+   * failed or unsupported probe keeps the runtime. Not for UI hydration.
+   * Agents whose background work is fully covered by listBackgroundTasks omit it.
+   */
+  hasLiveBackgroundWork?(): Promise<boolean>;
 
   /**
    * Resolve the provider claim attached atomically to a specific `done` event.

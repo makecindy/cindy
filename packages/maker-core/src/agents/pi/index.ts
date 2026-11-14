@@ -1131,7 +1131,10 @@ function piManagedCommandFailureReceipt(strings: PiExtensionUiStrings, error: un
         : 'Keep the current runtime. Check the official asset and retry pi update --self after the unpacking or verification problem is resolved.';
   const message = (details.packagesUpdated ? 'Pi packages updated successfully. ' : '')
     + (details.phase === 'host-binary-update'
-      ? `Cindy Host Pi update failed (${details.hostStage ?? 'unknown stage'}). ${hostRecovery}`
+      ? details.hostStage === 'unsupported'
+        // A host that cannot install a new Pi core says so; there is nothing to retry.
+        ? 'Updating the Pi core is not available here yet; package install, update and remove still work.'
+        : `Cindy Host Pi update failed (${details.hostStage ?? 'unknown stage'}). ${hostRecovery}`
       : details.packagesUpdated
         ? 'Pi core update failed. Retry pi update --self; do not repeat the completed package phase.'
         : 'Pi native command failed. Inspect the current state before retrying.');

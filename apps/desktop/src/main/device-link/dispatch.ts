@@ -63,7 +63,7 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
  * 本地 settings(第二道),server 缓存陈旧 / 被绕过时兜底。
  */
 
-import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef } from '@cindy/device-link';
+import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef, invokeIntendedHoldMs } from '@cindy/device-link';
 import { RemoteInvokeTiming, observeRemoteInvoke } from './remoteInvokeTiming.js';
 import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
@@ -171,6 +171,7 @@ import type {
 import type * as broadcastTap from './broadcast-tap';
 import { createOfflinePushQueue } from './offlinePushQueue';
 import { SessionPatchStage, type SessionPatch } from './sessionPatchStage';
+import { LatestStatePushStage, latestStatePushKey } from './latestStatePushStage';
 import { createPushFailureLog } from './pushFailureLog';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
@@ -1142,6 +1143,7 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    if (!sameAccountController) delete rest.subscriptionPoolTarget;
     // 「允许被远程调用」只是标记、不裁剪目录：远程控制与手机仍要看到全部供应商，
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;
@@ -1210,14 +1212,18 @@ function projectInvokeResultForTunnel(
  * Mutates the projected entries in place.
  */
 function foldSubscriptionPoolAliases(providers: Record<string, unknown>[]): void {
-  const pool = providers.find(provider => provider.id === 'openai' && provider.remoteInvocationEnabled === true);
-  const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
   for (const provider of providers) {
     if (!provider.subscriptionPoolAlias) continue;
+    const target = typeof provider.subscriptionPoolTarget === 'string' ? provider.subscriptionPoolTarget : 'openai';
+    const pool = providers.find(entry => entry.id === target && entry.remoteInvocationEnabled === true);
+    const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
     const models = remoteInvocationModels(provider as unknown as ProviderView).models;
     const covered = poolModels && Object.entries(models ?? {}).every(([agent, rows]) =>
       (rows ?? []).every(model => poolModels[agent as keyof typeof poolModels]?.some(candidate => candidate.id === model.id)));
-    if (!covered) delete provider.subscriptionPoolAlias;
+    if (!covered) {
+      delete provider.subscriptionPoolAlias;
+      delete provider.subscriptionPoolTarget;
+    }
   }
 }
 
@@ -2124,6 +2130,57 @@ function clearAllMakerEventBatchStages(): void {
 }
 const sessionActivityStages = new Map<string, SessionActivityStage>();
 const sessionPatchStages = new Map<string, SessionPatchStage>();
+const latestStatePushStages = new Map<string, LatestStatePushStage>();
+
+function clearLatestStatePushStage(dst: string): void {
+  latestStatePushStages.get(dst)?.dispose();
+  latestStatePushStages.delete(dst);
+}
+
+/**
+ * 账号级状态镜像(调度运行诊断、用量快照)的 latest-wins 暂存,见
+ * latestStatePushStage.ts。这些推送都在 sessions topic 上;窗口占用超过
+ * SESSION_ACTIVITY_WINDOW_SOFT_CAP 时不再灌入,同键新值替换旧值,剩余窗口留给
+ * invoke-result 与不可合并的推送。
+ */
+function stageLatestStatePush(
+  dst: string,
+  key: string,
+  channel: string,
+  payload: unknown,
+  ownerStamp?: PushOwnerStamp,
+): void {
+  let stage = latestStatePushStages.get(dst);
+  if (stage && !makerEventBatchOwnerStampEquals(stage.ownerStamp, ownerStamp)) {
+    clearLatestStatePushStage(dst);
+    stage = undefined;
+  }
+  if (!stage) {
+    const owner = broadcastTap.captureDataOwnerBroadcastScope();
+    const subscribed = () => broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)
+      && subscriptions.getControllersForTopic('sessions').includes(dst);
+    const created: LatestStatePushStage = new LatestStatePushStage(ownerStamp,
+      () => {
+        if (!subscribed()) {
+          if (latestStatePushStages.get(dst) === created) clearLatestStatePushStage(dst);
+          return false;
+        }
+        return canSendSessionState(dst);
+      },
+      async (item, isCurrent) => {
+        let failure: unknown;
+        await sendBotCheckedPush(dst, item.channel, item.payload, (projected) => {
+          if (!isCurrent() || !subscribed()) return;
+          sendSessionState(dst, item.channel, projected, ownerStamp);
+          observeRemoteSendPush(item.channel, projected);
+        }, (error) => { failure = error; });
+        if (failure) throw failure;
+      }, (item, error) => reportPushFailure(dst, item.channel, error));
+    stage = created;
+    latestStatePushStages.set(dst, stage);
+  }
+  stage.enqueue(key, { channel, payload });
+}
 
 function clearSessionPatchStage(dst: string): void {
   sessionPatchStages.get(dst)?.dispose();
@@ -2275,6 +2332,7 @@ function clearAllSessionActivityStages(): void {
   for (const dst of historyNoticeStages.keys()) clearHistoryNotices(dst);
   for (const dst of [...sessionActivityStages.keys()]) clearSessionActivityStage(dst);
   for (const dst of [...sessionPatchStages.keys()]) clearSessionPatchStage(dst);
+  for (const dst of [...latestStatePushStages.keys()]) clearLatestStatePushStage(dst);
 }
 
 /**
@@ -2481,6 +2539,8 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     return isSharedTaskPeer(dst) ? redactSharedGuestPush(channel, projected) : projected;
   };
   const historySessionId = readPushSessionId(remotePayload);
+  // 账号级状态快照:同键 latest-wins,不逐帧冲可靠窗口(见 stageLatestStatePush)。
+  const latestStateKey = latestStatePushKey(channel, remotePayload);
   const deferred = historySessionId !== null && isDeferredHistoryPush(channel, remotePayload,
     (id) => readHistoryToolName(historySessionId, id));
   const thinkingLine = deferred && historySessionId !== null && thinkingDeltaUpdatesWorkLine(historySessionId, remotePayload);
@@ -2560,6 +2620,10 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
         sendPushBestEffort(dst, channel, older
           ? { ...item, patch: { ...older.patch, ...item.patch } } : targetPayload, ownerStamp);
       }
+      continue;
+    }
+    if (latestStateKey !== null && !isSharedTaskPeer(dst) && !isProviderSharePeer(dst)) {
+      stageLatestStatePush(dst, latestStateKey, channel, targetPayload, ownerStamp);
       continue;
     }
     // agent 事件流是本条链路的帧数大头:对声明了微批能力的控制端合并成
@@ -2830,6 +2894,7 @@ function deactivateControllerState(
   clearReportedControllerName(deviceId);
   clearSessionActivityStage(deviceId);
   clearSessionPatchStage(deviceId);
+  clearLatestStatePushStage(deviceId);
   clearSessionSyncStage(deviceId);
   clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId, preservePendingOpen);
@@ -3441,10 +3506,12 @@ async function handleInvoke(
     : () => undefined;
   const handlerStartedAt = performance.now();
   const timing = new RemoteInvokeTiming();
+  // 长轮询(远程 Agent poll)按协议挂起的时长不算慢执行。
+  const intendedHoldMs = payload ? invokeIntendedHoldMs(payload.channel, payload.args) : 0;
   const finishDiagnostic = observeRemoteInvoke(timing, fields => executionDiagnostics.record('execution', {
     request: diagnosticRef(requestId), src: diagnosticRef(src), channel: diagnosticChannel(payload?.channel ?? 'unknown'),
     operation: payload ? diagnosticOperation(payload) : 'unknown', ...fields,
-  }));
+  }), undefined, intendedHoldMs);
   const executionPromise = Promise.resolve()
     .then(() => executeInvoke(src, payload, timing))
     .catch((err): InvokeResultPayload => {
@@ -3487,7 +3554,7 @@ async function handleInvoke(
     result = normalizeInvokeResultForWire(await resultPromise);
     const executionWaitMs = Math.round(performance.now() - handlerStartedAt);
     // debug only: 300ms already shows up as a visible send delay over the relay.
-    if (executionWaitMs >= 300) {
+    if (executionWaitMs >= 300 + intendedHoldMs) {
       log.debug(`remote invoke slow execution request=${shortId(requestId)} from=${shortId(src)}`
         + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`
         + ` executionWaitMs=${executionWaitMs} ok=${result.ok} stagesMs=${JSON.stringify(timing.stages)}`);
@@ -4520,6 +4587,7 @@ function handleSubscriptionFrame(
     if (topics.includes('sessions')) {
       clearSessionActivityStage(src);
       clearSessionPatchStage(src);
+      clearLatestStatePushStage(src);
     }
     // 退订 session:<id> 后该会话的待发事件批同样不应再投递(控制端已不要这条流)。
     for (const topic of topics) {
@@ -4865,14 +4933,17 @@ function restoreGroupedOwnComputerModelUse(original: unknown, decorated: unknown
  * 选择器出现重复入口，菜单栏还会为已在池里的账号多读一次配额。
  */
 function refoldOwnComputerPoolAliases(source: unknown, final: unknown): unknown {
-  const aliases = new Map<string, unknown>();
+  const aliases = new Map<string, { subscriptionPoolAlias: unknown; subscriptionPoolTarget?: unknown }>();
   mapProviderEntries(source, (entry) => {
-    if (typeof entry.id === 'string' && entry.subscriptionPoolAlias) aliases.set(entry.id, entry.subscriptionPoolAlias);
+    if (typeof entry.id === 'string' && entry.subscriptionPoolAlias) aliases.set(entry.id, {
+      subscriptionPoolAlias: entry.subscriptionPoolAlias,
+      ...(typeof entry.subscriptionPoolTarget === 'string' ? { subscriptionPoolTarget: entry.subscriptionPoolTarget } : {}),
+    });
     return entry;
   });
   if (aliases.size === 0) return final;
   const restored = mapProviderEntries(final, (entry) => typeof entry.id === 'string' && aliases.has(entry.id)
-    ? { ...entry, subscriptionPoolAlias: aliases.get(entry.id) }
+    ? { ...entry, ...aliases.get(entry.id) }
     : entry);
   const providers = (restored as { providers?: unknown }).providers;
   if (Array.isArray(providers)) {
@@ -5552,6 +5623,9 @@ const __testing = {
   },
   sessionActivityStageSize(deviceId: string): number {
     return sessionActivityStages.get(deviceId)?.queue.size ?? 0;
+  },
+  latestStatePushStageSize(deviceId: string): number {
+    return latestStatePushStages.get(deviceId)?.size ?? 0;
   },
   sessionActivityWindowSoftCap: SESSION_ACTIVITY_WINDOW_SOFT_CAP,
   sessionActivityStageMaxKeys: SESSION_ACTIVITY_STAGE_MAX_KEYS,

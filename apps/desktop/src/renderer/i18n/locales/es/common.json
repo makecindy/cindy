@@ -266,6 +266,8 @@
     "transferProgress": "Transferido {{sent}} / {{total}} · Promedio {{speed}}/s",
     "thisComputer": "esta computadora",
     "selectedComputer": "computadora seleccionada",
+    "sourceComputer": "la computadora de origen",
+    "waitingForSource": "Esperando a que {{name}} vuelva a estar en línea. La copia continuará entonces.",
     "estimating": "Contando archivos y calculando el tamaño…",
     "fileSummary": "Archivos del proyecto: {{count}}, con un total de {{size}}",
     "estimateNote": "Estimación previa a la copia, incluidos los archivos ocultos. El historial de Git, la conversación y los archivos adjuntos se copian por separado y se excluyen de este tamaño. Los archivos pueden cambiar antes de copiarlos.",
@@ -1394,7 +1396,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "La configuración de SSH se guardó, pero Cindy no pudo actualizarla. Vuelve a cargar la configuración de SSH.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy no puede gestionar de forma segura esta configuración de SSH. Vuelve a cargarla y luego comprueba el marcador de propiedad de Cindy y que el alias del host sea único.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy no puede reproducir de forma segura algunas reglas de configuración SSH de este servidor. La conexión SSH desde la terminal podría funcionar. Revisa Match, Include condicional, IdentityAgent, IdentitiesOnly y la configuración de claves públicas.",
-    "SSH_AGENT_UNAVAILABLE": "El SSH Agent no está disponible. Inícialo, carga la clave privada correspondiente con ssh-add y vuelve a intentarlo.",
+    "SSH_AGENT_UNAVAILABLE": "El agente local de claves SSH (ssh-agent) no está disponible. Comprueba que esté en ejecución y que ssh-add -l muestre la clave necesaria. Consulta Administrar claves para resolver el problema.",
     "SSH_HOST_PREFS_WRITE_FAILED": "El host sigue guardado, pero no se pudo guardar su nombre para mostrar ni la configuración del proxy Agent. Revisa los permisos de almacenamiento local e inténtalo de nuevo.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Esta tarea ha alcanzado su límite de pestañas. Cierra algunas pestañas primero",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "El contenido de la pestaña es demasiado grande para agregarlo",
@@ -1485,6 +1487,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "Por revisar",
+      "summaryInProgress": "En curso",
+      "summaryPending": "Requiere tu atención",
+      "summaryUnread": "Resultados sin leer",
       "markRead": "Marcar como leído",
       "archive": "Archivar",
       "actionFailed": "No se pudo completar la acción. Se conservó la notificación. Inténtalo de nuevo.",
@@ -1958,6 +1964,12 @@
       "footnote": "Fase A: solo administración de conexiones SSH. Una actualización posterior permitirá ejecutar Agents en la computadora remota.",
       "viaAuth": "vía {{label}}",
       "readOnlyFromSshConfig": "Los detalles de conexión provienen de la configuración SSH.",
+      "importedAgentHint": "Se autentica mediante el agente local de claves SSH (ssh-agent). Poder conectar con ssh desde la terminal no garantiza que el agente esté listo.",
+      "agentError": {
+        "environmentUnset": "La variable de entorno indicada por IdentityAgent no está definida para Cindy. Defínela o corrige IdentityAgent en la configuración SSH.",
+        "endpointEmpty": "IdentityAgent se resuelve como un destino vacío. Corrige IdentityAgent en la configuración SSH.",
+        "endpointUnavailable": "El destino del agente de claves SSH configurado mediante IdentityAgent no está disponible. Revisa ese destino y su agente; el ssh-agent predeterminado puede usar otro destino."
+      },
       "configWarning": "Cindy no puede evaluar algunas reglas de configuración de SSH. La lista de hosts o los detalles de conexión pueden diferir del terminal SSH.",
       "configDiagnostic": {
         "io": "Cindy no pudo leer tu configuración de SSH. Aún se muestran los últimos hosts cargados correctamente. Revisa los permisos del archivo y vuelve a cargarla.",
@@ -2055,7 +2067,7 @@
           "tryThis": "Prueba esto desde tu terminal",
           "close": "Cerrar",
           "fallbackTitle": "O prescindir de ssh-agent",
-          "fallbackBody": "También puedes agregar este servidor con la autenticación «Archivo de identidad». {{appName}} pasará el archivo de clave directamente a ssh y te pedirá la frase de contraseña en cada conexión. No requiere ssh-agent. Deberás escribir la frase cada vez, pero la clave no se guardará en la memoria caché.",
+          "fallbackBody": "También puedes elegir «Archivo de identidad» al añadir un host. {{appName}} lee la clave privada en la memoria del proceso sin ssh-agent. Actualmente solo se admiten claves privadas sin cifrar; no se solicita la frase de contraseña al conectar. Usa ssh-agent para claves cifradas.",
           "reason": {
             "agent_unavailable": "ssh-add no pudo comunicarse con ssh-agent. Puede que falte el ejecutable, que ssh-agent no esté en ejecución o que SSH_AUTH_SOCK no esté configurado.",
             "bad_passphrase": "ssh-add rechazó la frase de contraseña.",
@@ -11267,6 +11279,9 @@
         "step": "Paso {{step}}/{{total}}",
         "speaking": "{{name}} está respondiendo…",
         "elapsed": "{{time}} hasta ahora",
+        "onDevice": "en {{device}}",
+        "onOtherComputer": "en otro ordenador",
+        "onThisComputer": "en este ordenador",
         "viewProcess": "Mostrar trabajo",
         "hideProcess": "Ocultar trabajo",
         "stop": "Detener",
@@ -11576,10 +11591,12 @@
         "earlierOmitted": "(Mensajes anteriores omitidos)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
+          "preparing": "(Cindy) El proyecto {{repo}} de este grupo se está descargando en esta carpeta de este ordenador y estará listo en unos minutos. Hasta entonces la carpeta puede estar vacía: responde enseguida si solo es una conversación; para trabajo que necesite el código, espera a que estén los archivos del proyecto.",
           "gitMissing": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: git no está instalado. {{guide}} Cuando esté instalado, vuelve a mencionar a @Cindy y Cindy descargará el proyecto y trabajará en él.",
           "signInOpened": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: primero conecta tu cuenta de GitHub. Cindy abrió el inicio de sesión de GitHub en este ordenador; cuando hayas iniciado sesión, vuelve a mencionar a @Cindy y descargará el proyecto.",
           "signIn": "(Cindy) El proyecto {{repo}} del grupo todavía no está en este ordenador: primero conecta tu cuenta de GitHub. Inicia sesión en GitHub desde Cindy en este ordenador y vuelve a mencionar a @Cindy.",
           "unavailable": "(Cindy) No se pudo descargar el proyecto {{repo}} del grupo en este ordenador: puede que tu cuenta de GitHub no tenga acceso o que no haya conexión. Comprueba que puedes abrir el repositorio en GitHub y vuelve a mencionar a @Cindy.",
+          "accessRequired": "(Cindy) No se pudo descargar el proyecto del grupo {{repo}} a este ordenador: git en este ordenador aún no puede acceder a {{host}}. Clona el repositorio una vez con git en este ordenador (o configura un token de acceso) y vuelve a @Cindy.",
           "installGit": {
             "darwin": "En Terminal, ejecuta xcode-select --install y sigue las indicaciones.",
             "win32": "Descarga Git desde https://git-scm.com/download/win e instálalo con las opciones predeterminadas.",
@@ -11793,7 +11810,12 @@
           "projectCaption": "Los amigos responden y hacen los repartos de trabajo en este proyecto. El repositorio se comparte con el grupo; la carpeta se queda en este ordenador.",
           "githubRepo": "Repositorio de GitHub",
           "githubRepoHint": "Escribe owner/name. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
+          "repository": "Repositorio",
+          "repositoryHint": "GitHub: escribe owner/name. GitLab (también propio de tu empresa), CNB y otros: pega el enlace del repositorio. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
+          "repositoryPlaceholder": "owner/name o enlace del repositorio",
           "githubRepoSaveFailed": "No se guardó el repositorio. Revísalo e inténtalo de nuevo.",
+          "folderRepoFilled": "Se completó el repositorio {{repo}} a partir de esta carpeta. Los ordenadores de los demás miembros también lo usarán.",
+          "folderRepoDiffers": "Esta carpeta es un proyecto de {{repo}}, distinto del repositorio del grupo. Este ordenador seguirá trabajando en esta carpeta.",
           "projectFolder": "Carpeta en este ordenador",
           "projectDirAutoHint": "Encontrada entre tus proyectos a partir del repositorio.",
           "organizerHint": "Decide quién realiza cada paso. De forma predeterminada, es el primer amigo.",
@@ -13593,6 +13615,15 @@
           "askNoQuestion": "El Agent está esperando tu respuesta, pero no hay ninguna pregunta que mostrar. Responde “continuar”.",
           "askQuestion": "El Agent necesita tu respuesta:\n{{question}}\n{{options}}\nResponde con el número de una opción o escribe tu respuesta."
         }
+      },
+      "questions": {
+        "cardHint": "Solo quien hizo la solicitud puede responder. Toca una opción; para varias preguntas o selecciones, envía al terminar. También puedes responder a este mensaje con texto. Para varias preguntas, responde «número: respuesta» (p. ej., «2: Español») y luego envía.",
+        "submitLabel": "Enviar respuestas",
+        "multiSelectHint": " (puedes elegir varias)",
+        "resolved": "✅ Elegido: {{option}}",
+        "expired": "Esta tarjeta ha caducado",
+        "textHint": "Solo puede responder quien hizo la consulta. Escribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar.",
+        "replyHint": "Solo quien hizo la solicitud puede responder. Toca una opción; para varias preguntas o selecciones, envía al terminar.\nEscribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar."
       }
     }
   },
@@ -16184,6 +16215,8 @@
       "claudeSubscriptionWorkspaceOverride": "La configuración de .claude de esta carpeta cambia adónde envía solicitudes Claude o cómo inicia sesión, por lo que no se puede usar la suscripción de Claude aquí. Elimina esa configuración o elige un modelo con puerta de enlace o clave de API",
       "deviceStillLoading": "El dispositivo remoto aún se está cargando. Espera",
       "remoteDefaultsLoadFailed": "No se pudo cargar la configuración del dispositivo remoto. Revisa la conexión; Cindy lo está reintentando.",
+      "branchRequiresWorktree": "La rama seleccionada no es la rama actual. Activa worktree o selecciona la rama actual.",
+      "branchCheckFailed": "No se pudo verificar la rama actual. Activa worktree para usar la rama seleccionada o revisa el proyecto e inténtalo de nuevo.",
       "worktreeMissingRepo": "No se puede crear un worktree: falta la raíz del repositorio del directorio actual",
       "worktreeRepoHint": "Vuelve a seleccionar el directorio de trabajo e inténtalo de nuevo cuando se actualice el indicador de carpeta de la esquina inferior derecha",
       "sessionInactive": "La sesión ya no está activa",
@@ -16766,6 +16799,8 @@
             "title": "Eventos del repositorio",
             "description": "Conecta la GitHub App de Cindy para actualizar los PR en seguimiento cuando cambien las revisiones o CI.",
             "connected": "Conectado como {{login}} · Repositorios en seguimiento: {{count}}",
+            "syncing": "Sincronizando repositorios…",
+            "finishInBrowser": "Completa la configuración de los repositorios en GitHub y vuelve a Cindy.",
             "missing": "Comprueba la instalación de la App y el acceso a: {{repositories}}",
             "error": "No se pudo comprobar la conexión. Inténtalo de nuevo.",
             "repositories": "Elegir repositorios",
@@ -21563,6 +21598,30 @@
     "lineNumbers": "Números de línea"
   },
   "subscriptionAccounts": {
+    "placement": {
+      "needsUpdate": "Hay que actualizar Cindy en el equipo que realiza esta operación para mover cuentas así.",
+      "moveTo": "Mover a…",
+      "separate": "Proveedor independiente",
+      "moveTitle": "¿Mover {{name}} a {{target}}?",
+      "takeOutTitle": "¿Convertir {{name}} en un proveedor independiente?",
+      "moveDescription": "Solo cambia el proveedor al que pertenece esta cuenta. El inicio de sesión y el historial se conservan, y las tareas existentes siguen usando esta cuenta.",
+      "moveConfirm": "Mover",
+      "failed": "No se pudo cambiar el proveedor de la cuenta. Inténtalo más tarde.",
+      "mergeInto": "Combinar con…",
+      "mergeTitle": "¿Combinar {{name}} con {{target}}?",
+      "mergeDescription": "Todas las cuentas de este proveedor pasan al otro proveedor, y este deja de aparecer en la lista de proveedores y para tareas nuevas. Las tareas existentes conservan sus cuentas.",
+      "mergeConfirm": "Combinar",
+      "deleteTitle": "¿Eliminar {{name}}?",
+      "deleteDescription": "Cindy deja de usar las cuentas de este proveedor. Sus inicios de sesión de la CLI y el historial de conversaciones se conservan en este equipo.",
+      "deleteConfirm": "Eliminar",
+      "deleteInUse": "Una tarea está usando una cuenta de este proveedor. Elimínalo cuando termine la tarea.",
+      "signInQuestion": "¿Dónde quieres poner la cuenta nueva?",
+      "signInSeparate": "Como proveedor independiente",
+      "signInSeparateHint": "Elígelo para una tarea nueva y siempre usará esta cuenta.",
+      "signInInto": "Añadir a {{name}}",
+      "signInContinue": "Continuar al inicio de sesión",
+      "signInBack": "Volver"
+    },
     "loginIdentityUnknown": "No se puede confirmar la identidad original de esta cuenta. Usa Añadir cuenta para conectar una cuenta nueva.",
     "loginExpiresInDays": "El inicio de sesión vence en unos {{days}} días",
     "loginExpiresSoon": "El inicio de sesión vence pronto",
@@ -21577,10 +21636,9 @@
     "providerManagedAuth": "El proveedor actual de Codex no permite consultar la cuenta de ChatGPT. Al añadir el proveedor, elige «$t(subscriptionAccounts.signIn.anotherAccount)» para usar una carpeta independiente.",
     "signIn": {
       "checking": "Comprobando la cuenta local…",
-      "detected": "Se encontró una cuenta conectada",
-      "useAccount": "Usar esta cuenta",
+      "useAccount": "Usar la cuenta de {{cli}} de esta computadora",
       "anotherAccount": "Iniciar sesión con otra cuenta",
-      "keepExisting": "La cuenta nueva se añade a este proveedor. Las sesiones existentes se conservan.",
+      "keepExisting": "La cuenta nueva será un proveedor independiente salvo que elijas uno al que unirla. Las sesiones existentes se conservan.",
       "checkFailed": "No se pudo comprobar la cuenta local. Inténtalo de nuevo.",
       "retry": "Reintentar",
       "useCodex": "Iniciar sesión con Codex"
@@ -21588,7 +21646,6 @@
     "title": "Cuentas de suscripción",
     "strategy": "Equilibrio de carga",
     "add": "Añadir cuenta",
-    "default": "Carpeta predeterminada",
     "defaultTag": "Predeterminada",
     "ready": "Conectada",
     "signedOut": "Requiere iniciar sesión",

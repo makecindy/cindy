@@ -181,7 +181,9 @@ import {
   tryBeginAgentSendDispatch,
 } from '@/lib/agentSwitchCoordinator';
 import {
+  followedAccountSourceProvider,
   isSelectedSourceDisconnected,
+  withFollowedAccountSource,
   resolveEffort,
   resolveRequestedEffort,
   resolveRemoteSwitchEffort,
@@ -189,6 +191,7 @@ import {
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
 } from './sourceSwitch';
+import { useSessionSubscriptionAccount } from './SessionSubscriptionAccount';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
 import { PluginWriteAccessRecovery } from './PluginWriteAccessRecovery';
@@ -2185,8 +2188,33 @@ export function ChatInput({
     () => sshHostId ? mergeSshCodexCatalog(localProviders.providers, sshCodexProviders.providers) : null,
     [sshHostId, localProviders.providers, sshCodexProviders.providers],
   );
+  // 已建立的本机任务跟着账号走：账号被拆出 / 移走后，原来源在这个任务里按账号现在所在的供应商显示和放行
+  // (sourceSwitch.ts followedAccountSourceProvider)。草稿、远程、SSH 与其他任务不受影响。
+  const taskAccount = useSessionSubscriptionAccount(
+    sessionId && !catalogDeviceId && !sshHostId ? activeProviderId : null,
+    null,
+  );
+  const taskSourceProvider = useMemo(
+    () => sessionId && !catalogDeviceId && !sshHostId
+      && activeProviderId === (runtimeEffective ? runtimeEffective.providerId : initialProviderId)
+      ? followedAccountSourceProvider({
+          providers: localProviders.providers,
+          providerId: activeProviderId,
+          account: taskAccount,
+          // 只恢复已生效路由；乐观选择的新型号不能借此绕过来源校验。
+          agent: runtimeEffective ? runtimeEffective.agentKind : runtimeAgentKind,
+          modelId: runtimeEffective ? runtimeEffective.model : initialModel,
+        })
+      : null,
+    [sessionId, catalogDeviceId, sshHostId, localProviders.providers, activeProviderId, taskAccount,
+      runtimeEffective, runtimeAgentKind, initialModel, initialProviderId],
+  );
+  const localTaskProviders = useMemo(
+    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider),
+    [localProviders.providers, taskSourceProvider],
+  );
   const providers = catalogDeviceId ? remoteProviders.providers
-    : sshCatalogProviders ?? localProviders.providers;
+    : sshCatalogProviders ?? localTaskProviders;
   const sendProviders = filterChatBridgedCodexProviders(
     providers,
     currentModelAgentKind ?? 'codex',
@@ -10313,6 +10341,8 @@ export function ChatInput({
                     // 无意图才回到会话 runtime 的 selectedProviderId。
                     currentProviderId={activeProviderId}
                     sourceDisconnected={selectedSourceDisconnected}
+                    // 与上面 providers 同一份任务视图：账号被拆出后原来源在这个任务里按账号所在的供应商显示。
+                    {...(taskSourceProvider ? { taskSourceProvider } : {})}
                     // 断开来源回落到默认来源后,面板会高亮同模型的回落行;点击该行必须重新
                     // 发出来源选择,把显示中的默认来源钉回会话的显式来源。
                     reselectEmitsChange={selectedSourceDisconnected}

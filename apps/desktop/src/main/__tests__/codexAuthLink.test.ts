@@ -24,6 +24,8 @@ vi.mock('../maker-host/codex-auth-file-move', () => ({
   },
 }));
 
+import * as authFileMove from '../maker-host/codex-auth-file-move';
+
 import {
   copyCodexAuthSnapshot,
   codexAuthLinkAcceptanceFor,
@@ -276,6 +278,69 @@ describe('relinkSharedCodexAuth', () => {
     expect(sameInode(systemAuth, myAuth)).toBe(true);
     expect(leftoverSidecars()).toEqual([]);
   });
+
+  // Unit / Windows CI #10548: the stress test above does not control the
+  // delete→move window. Hold one real relink there, then relink the same entry
+  // through a directory alias. Neither publication nor recovery may overlap;
+  // a different home must still make progress. Only fake fixture bytes are used.
+  it.skipIf(!canLinkFile).each([false, true])(
+    'Windows serializes same-entry relinks through publication/recovery (move fails: %s)',
+    async (failFirstMove) => {
+      fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+      fs.writeFileSync(myAuth, MY_CONTENT);
+      const aliasDir = path.join(tmpRoot, 'home-alias');
+      fs.symlinkSync(path.dirname(myAuth), aliasDir, 'junction');
+      const aliasAuth = path.join(aliasDir, 'auth.json');
+      const otherAuth = path.join(tmpRoot, 'other-home', 'auth.json');
+      fs.mkdirSync(path.dirname(otherAuth));
+
+      // Complete fixture syscalls synchronously behind their async interfaces,
+      // so the second relink advances before the independent-home checkpoint.
+      // This selects an interleaving without sleeps or filesystem timing guesses.
+      vi.spyOn(fs.promises, 'stat').mockImplementation(async (file, opts) =>
+        fs.statSync(file, opts as never) as never,
+      );
+      vi.spyOn(fs.promises, 'symlink').mockImplementation(async (target, file, type) => {
+        fs.symlinkSync(target, file, type as Parameters<typeof fs.symlinkSync>[2]);
+      });
+      vi.spyOn(fs.promises, 'rm').mockImplementation(async (file, opts) => {
+        fs.rmSync(file, opts);
+      });
+      let entered!: () => void;
+      const firstEntered = new Promise<void>((resolve) => { entered = resolve; });
+      let release!: () => void;
+      const firstReleased = new Promise<void>((resolve) => { release = resolve; });
+      const originalMove = authFileMove.moveCodexAuthFile;
+      vi.spyOn(authFileMove, 'moveCodexAuthFile').mockImplementationOnce(async (from, to) => {
+        entered();
+        await firstReleased;
+        if (failFirstMove) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+        await originalMove(from, to);
+      });
+
+      const first = relinkSharedCodexAuth(systemAuth, myAuth, 'win32');
+      let second: ReturnType<typeof relinkSharedCodexAuth> | undefined;
+      try {
+        await firstEntered;
+        second = relinkSharedCodexAuth(systemAuth, aliasAuth, 'win32');
+        await expect(relinkSharedCodexAuth(systemAuth, otherAuth, 'win32'))
+          .resolves.toMatchObject({ kind: 'linked' });
+      } finally {
+        release();
+        await Promise.all([first, second]);
+      }
+      if (!failFirstMove) expect((await first).error).toBeUndefined();
+      expect((await first).kind).toBe(failFirstMove ? 'recovered' : 'linked');
+      expect((await second)?.kind).toBe('linked');
+      expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+      expect(sameInode(systemAuth, myAuth)).toBe(true);
+      expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+      expect(leftoverSidecars()).toEqual([]);
+      // A completed (including recovered) operation must release its queue entry.
+      await expect(relinkSharedCodexAuth(systemAuth, myAuth, 'win32'))
+        .resolves.toMatchObject({ kind: 'linked' });
+    },
+  );
 });
 
 describe('copyCodexAuthSnapshot', () => {
