@@ -430,10 +430,13 @@ describe('independent V2 relay', () => {
   // invitation/approval authority. A persisted pause/removal must invalidate
   // an existing guest socket and reject the old signed lease after restart.
   it.each(['shared-task', 'provider-share'] as const)('persists %s membership and immediately fences revoked transport credentials', async kind => {
+    // Exercise the request lifetime boundary for both sharing kinds: separate
+    // clock reads must not accidentally mint a lease longer than the protocol allows.
+    let at = Date.now();
     const actors = { 'Bearer unit-owner': { accountId: 'owner-account', deviceId: 'owner' },
       'Bearer unit-guest': { accountId: 'guest-account', deviceId: 'external-visitor' } };
     let identityNetwork = '';
-    const f = await fixture({ sharing: {
+    const f = await fixture({ now: () => at++, sharing: {
       async authenticate(req) { const actor = actors[req.headers.authorization as keyof typeof actors];
         if (!actor) throw new AppError('UNAUTHORIZED', 401, 'Unit auth rejected'); return { ...actor, networkId: identityNetwork }; },
       providers: { hostCapability: 'provider-share-v1', identityCards: {
