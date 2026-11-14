@@ -208,6 +208,40 @@ export interface ExecStreamHandle {
   kill(signal?: string): void;
 }
 
+function errnoFields(err: unknown): { code?: string; address?: string } {
+  for (let current: unknown = err, depth = 0; current && typeof current === 'object' && depth < 3; depth += 1) {
+    const row = current as { code?: unknown; address?: unknown; cause?: unknown };
+    if (typeof row.code === 'string') {
+      return { code: row.code, ...(typeof row.address === 'string' ? { address: row.address } : {}) };
+    }
+    current = row.cause;
+  }
+  return {};
+}
+
+function isPrivateLanAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  if (/^(10\.|192\.168\.|169\.254\.)/.test(address)) return true;
+  const second = /^172\.(\d+)\./.exec(address);
+  if (second && Number(second[1]) >= 16 && Number(second[1]) <= 31) return true;
+  return /^(fe80|fc|fd)/i.test(address);
+}
+
+/**
+ * Log-only classification (no user-facing text). macOS reports both an
+ * asleep/powered-off LAN host and a denied Local Network privacy permission as
+ * EHOSTUNREACH ("No route to host"); when even the gateway fails the same way,
+ * the app's Local Network permission is the likely cause.
+ */
+export function connectFailureHint(err: unknown): { hint?: string } {
+  const { code, address } = errnoFields(err);
+  if ((code === 'EHOSTUNREACH' || code === 'ENETUNREACH') && process.platform === 'darwin'
+    && (address === undefined || isPrivateLanAddress(address))) {
+    return { hint: 'lan-unreachable: host asleep/offline, or macOS Local Network permission denied for this app' };
+  }
+  return {};
+}
+
 /**
  * Heuristic — does this ssh2 error message indicate an auth failure
  * (as opposed to network / DNS / handshake)? Auth failures are
@@ -370,6 +404,14 @@ export class RemoteHost {
   private inFlightConnect: Promise<void> | null = null;
   /** true = user explicitly asked to disconnect; suppress auto-reconnect. */
   private userDisconnected = false;
+  /**
+   * A previously ready connection exhausted its bounded automatic reconnect.
+   * It stays failed (no background loop) until the next use, or one more
+   * bounded round after the system network changes / the machine wakes.
+   */
+  private networkRecoveryArmed = false;
+  /** This connect cycle reached ready at least once (a probe that never connected is not recovered). */
+  private readySinceConnect = false;
   private events = new EventEmitter();
   private readonly log: RemoteHostDeps['logger'];
   private readonly hostKeys?: HostKeyStore;
@@ -467,8 +509,27 @@ export class RemoteHost {
     // status/channel 事件。必须在 doConnect() 前显式清掉 timer 才安全。
     this.clearReconnectTimer();
     this.userDisconnected = false;
+    this.networkRecoveryArmed = false;
+    this.readySinceConnect = false;
     this.reconnectAttempts = 0;
     await this.startConnectAttempt();
+  }
+
+  /**
+   * One more bounded reconnect round for a connection that was ready, dropped
+   * and exhausted its automatic retries. Called on a system network change or
+   * wake; never for user-disconnected, auth or host-key failures, and at most
+   * once per exhaustion (a new exhaustion re-arms it). Returns true if started.
+   */
+  retryAfterNetworkChange(): boolean {
+    if (!this.networkRecoveryArmed || this.status !== 'failed' || this.userDisconnected || this.hostKeyError) {
+      return false;
+    }
+    this.networkRecoveryArmed = false;
+    this.reconnectAttempts = 0;
+    this.log.info('ssh retrying after network change', { id: this.id });
+    this.scheduleReconnect();
+    return true;
   }
 
   /**
@@ -477,6 +538,7 @@ export class RemoteHost {
    */
   async disconnect(): Promise<void> {
     this.userDisconnected = true;
+    this.networkRecoveryArmed = false;
     this.connectionEpoch += 1;
     this.clearReconnectTimer();
     this.markForwardsDisarmed();
@@ -1312,6 +1374,8 @@ export class RemoteHost {
         this.lastError = undefined;
         this.lastAuthLabel = auth.label;
         this.reconnectAttempts = 0;
+        this.networkRecoveryArmed = false;
+        this.readySinceConnect = true;
         this.setStatus('ready');
         this.log.info('ssh ready', { id: this.id, auth: auth.label });
         // 后台重挂已登记的 remote forwards; 不阻塞 connect 返回 (session
@@ -1346,7 +1410,7 @@ export class RemoteHost {
             : err.message;
         this.client = null;
         this.setStatus('failed');
-        this.log.warn('ssh connect failed', { id: this.id, error: err.message });
+        this.log.warn('ssh connect failed', { id: this.id, error: err.message, ...connectFailureHint(err) });
         // Reject with the friendly message so IPC layer's toast also gets
         // the actionable copy (it pulls from `.message`).
         const rejectErr = new Error(this.lastError);
@@ -1444,6 +1508,7 @@ export class RemoteHost {
       return;
     }
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.networkRecoveryArmed = this.readySinceConnect;
       this.setStatus('failed');
       return;
     }
@@ -1472,8 +1537,17 @@ export class RemoteHost {
         if (this.userDisconnected || this.hostKeyError) return;
         if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           this.scheduleReconnect();
+        } else if (!(this.lastError && isAuthFailure(this.lastError))) {
+          // Stay failed without a background loop; the next use, a network
+          // change or wake gets one more bounded round.
+          this.networkRecoveryArmed = this.readySinceConnect;
+          this.log.warn('ssh reconnect exhausted', {
+            id: this.id,
+            error: (err as Error).message,
+            ...connectFailureHint(err),
+          });
         } else {
-          this.log.error('ssh reconnect exhausted', { id: this.id, error: (err as Error).message });
+          this.log.warn('ssh reconnect exhausted', { id: this.id, error: (err as Error).message });
         }
       });
     }, delay);

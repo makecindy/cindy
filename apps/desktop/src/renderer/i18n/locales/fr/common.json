@@ -266,6 +266,8 @@
     "transferProgress": "Transféré {{sent}} / {{total}} · Moyenne {{speed}}/s",
     "thisComputer": "cet ordinateur",
     "selectedComputer": "ordinateur sélectionné",
+    "sourceComputer": "l'ordinateur source",
+    "waitingForSource": "En attente du retour en ligne de {{name}}. La copie reprendra à ce moment-là.",
     "estimating": "Comptage des fichiers et calcul de la taille…",
     "fileSummary": "Fichiers du projet : {{count}}, pour un total de {{size}}",
     "estimateNote": "Estimation avant copie, fichiers masqués compris. L'historique Git, la conversation et les pièces jointes sont copiés séparément et ne sont pas inclus dans cette taille. Les fichiers peuvent changer avant la copie.",

@@ -117,7 +117,10 @@ const logTargetFailure =
   };
 const errorCode = (error: unknown): string => {
   if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') return 'MIGRATION_NO_SPACE';
+  // Preserve only the known transport reason, never arbitrary remote error text.
+  if (error instanceof DeviceLinkError && error.code === 'DEVICE_OFFLINE') return 'DEVICE_OFFLINE';
   const message = error instanceof Error ? error.message : '';
+  if (/\bDEVICE_LINK_DEVICE_OFFLINE\b/.test(message)) return 'DEVICE_LINK_DEVICE_OFFLINE';
   return /\bMIGRATION_[A-Z_]+\b/.exec(message)?.[0] ?? 'MIGRATION_FAILED';
 };
 function selfId(): string {

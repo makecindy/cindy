@@ -1915,6 +1915,20 @@ export function handleDeviceLinkSystemResume(): void {
   client.restartConnections('system-resume');
 }
 
+/**
+ * 系统即将睡眠:主动、正常地断开 relay,让对端立即看到本机离线，而不是各自等
+ * 可靠层 ACK 超时 + 链路判死 + 弃帧(合计约 1.5 分钟)才发现。睡眠期间不重连，
+ * 唤醒由 handleDeviceLinkSystemResume 重建；平台没发唤醒事件时 client 自带清醒
+ * 时间兜底(SYSTEM_SUSPEND_RECONNECT_HOLD_MS)。持有权 / 登录闸与唤醒一致。
+ */
+export function handleDeviceLinkSystemSuspend(): void {
+  if (!client || linkTornDown) return;
+  if (arbiter && !arbiter.isOwner()) return;
+  if (!authManager.getAuthState().isAuthenticated) return;
+  log.info('system suspend: closing device-link connection until resume');
+  client.suspendConnectionsForSystemSleep('system-suspend');
+}
+
 export function getDeviceLinkConnectionIssue(): DeviceLinkConnectionIssue | null {
   return client?.getConnectionIssue() ?? null;
 }

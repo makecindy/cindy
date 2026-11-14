@@ -264,6 +264,8 @@
     "transferProgress": "転送済み {{sent}} / {{total}} · 平均 {{speed}}/s",
     "thisComputer": "このコンピューター",
     "selectedComputer": "選択したコンピューター",
+    "sourceComputer": "コピー元のコンピューター",
+    "waitingForSource": "{{name}}はオフラインです。オンラインに戻るとコピーを続行します。",
     "estimating": "ファイル数とサイズを計算中…",
     "fileSummary": "プロジェクトファイル：{{count}} 個、合計 {{size}}",
     "estimateNote": "隠しファイルを含むコピー前の推定値です。別途コピーする Git 履歴、タスクの会話と添付ファイルは含みません。コピーまでにファイルが変更されると、最終サイズが変わる場合があります。",
