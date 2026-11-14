@@ -615,7 +615,7 @@ it.each(['leave', 'owner'])('discards queued remote reads after %s', async (chan
   );
   await act(async () => {});
   expect(invoke).toHaveBeenCalledTimes(1);
-  if (change === 'leave') view.rerender(<PrRefsProvider />);
+  if (change === 'leave') view.rerender(<PrRefsProvider>{null}</PrRefsProvider>);
   else {
     mocks.dataOwnerId = 'queue-new-owner';
     view.rerender(
