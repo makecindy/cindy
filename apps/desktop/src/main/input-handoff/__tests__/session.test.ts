@@ -179,6 +179,39 @@ describe('InputHandoffSession', () => {
     expect(await session.decide({ kind: 'input_handoff', action: 'cancel', expectedRevision: latest().revision })).toBe(false);
   });
 
+  // 2026-11-14: once a key was accepted, a settings form whose fields all had content must not become the next step;
+  // the field the agent pointed at keeps its card even with content in it, so the owner can replace it or leave it.
+  it('asks for a field with content on the page it was asked about, and hands back on a filled form after it', async () => {
+    let saved = false;
+    const field = (ref: string, title: string) => ({ ref, role: 'AXTextField', depth: 1, fp: `f|${title}`, title, hasValue: true, frame: [10, 10, 200, 30] });
+    const button = { ref: '9', role: 'AXButton', depth: 1, fp: 'b|Save', title: 'Save', frame: [10, 60, 80, 30] };
+    const app = { pid: 42, app: 'Example', bundleId: 'com.example.app' };
+    const driver: HandoffDriver = {
+      permission: async () => 'granted',
+      requestPermission: async () => undefined,
+      windows: async () => ({ frontmost: 42, apps: [{ ...app, windows: [{ index: 0, title: 'Settings', frame: [0, 0, 800, 600], focused: true, minimized: false }] }] }),
+      snapshot: async () => ({
+        ...app,
+        frontmost: true,
+        window: { index: 0, title: 'Settings', frame: [0, 0, 800, 600] },
+        nodes: saved ? [field('0', 'Name'), field('1', 'Homepage URL'), button] : [field('0', 'API key'), button],
+      }),
+      commandLine: async () => '',
+      act: async (request) => {
+        if (request.kind !== 'text') saved = true;
+        return { ok: true };
+      },
+      capture: async () => ({ error: 'unavailable' }),
+    };
+    const { session, finished, latest } = harness(driver, { finishingDelayMs: 60_000 });
+    await session.start();
+    const step = latest();
+    expect(step.controls).toEqual([expect.objectContaining({ kind: 'text', label: 'API key', filled: true })]);
+    await session.submit({ expectedRevision: step.revision, values: { [step.controls[0].id]: 'synthetic-key' }, action: { kind: 'submit' } });
+    expect(latest()).toMatchObject({ phase: 'finishing', controls: [] });
+    expect(finished).toHaveLength(0);
+  });
+
   it('hands back once only a search box is left', async () => {
     const desktop = fakeDesktop({ start: 'done' });
     const { session, finished } = harness(desktop.driver);
