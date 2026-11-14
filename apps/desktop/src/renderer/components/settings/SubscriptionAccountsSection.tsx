@@ -7,7 +7,15 @@ import {
   Plus,
   UserRound,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
@@ -58,6 +66,12 @@ import { codexResetScope } from '../../../shared/subscriptionAccounts';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { CodexResetCredits } from '../status/CodexResetCredits';
+import {
+  MergeProviderButton,
+  MoveAccountMenu,
+  useMoveSubscriptionAccount,
+  useSubscriptionPlacementTargets,
+} from './SubscriptionPlacement';
 
 function AccountResetCredits({ scope }: { scope: string }) {
   const { snapshot, refresh } = useCodexRateLimits(true, scope);
@@ -80,6 +94,57 @@ function isUnusedDefaultSlot(accounts: SubscriptionAccountView[]): boolean {
   return accounts.length === 1 && isUnusedDefaultAccount(accounts[0]);
 }
 
+/**
+ * Account lists already read while the providers page stays open, by provider id. Switching back
+ * shows the last list at once and the fresh read replaces it in place, instead of an empty list
+ * that loads and then pushes the rest of the page down. The page owns it, per data owner.
+ */
+export const SubscriptionPoolViewCache = createContext<Map<string, SubscriptionPoolView> | null>(null);
+
+// A read that lands sooner shows no placeholder at all (the same threshold as provider groups).
+const LOADING_REVEAL_MS = 200;
+
+/**
+ * Stands in for one account row while the first read is pending. With `reserve`, it holds the
+ * row's space from the first frame (invisible until the reveal), so a quick read changes only
+ * the contents, not the page height; static, without shimmer.
+ */
+function AccountListPlaceholder({ reserve, label }: { reserve: boolean; label: string }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setVisible(true), LOADING_REVEAL_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+  if (!reserve && !visible) return null;
+  const block = 'rounded-full bg-[var(--surface-chip)]';
+  return (
+    <div
+      role="status"
+      aria-label={label}
+      data-testid="subscription-accounts-loading"
+      // Spaced like a signed-in account with one usage window and its reset line.
+      className="mt-4 border-t border-[var(--border-default)] pb-7 pt-4"
+    >
+      <div aria-hidden="true" className={visible ? 'animate-fade-in' : 'invisible'}>
+        <div className="flex items-center gap-3">
+          <span className={cn('size-8 shrink-0', block)} />
+          <div className="min-w-0 flex-1">
+            <div className={cn('h-3 w-44 max-w-full', block)} />
+            <div className={cn('mt-2 h-2.5 w-20', block)} />
+          </div>
+          <span className={cn('h-7 w-28 shrink-0', block)} />
+        </div>
+        <div className="mt-6 flex items-center gap-4 [@container(min-width:440px)]:ml-11">
+          <span className={cn('h-2.5 w-8 shrink-0', block)} />
+          <span className={cn('h-1.5 flex-1', block)} />
+          <span className={cn('h-2.5 w-16 shrink-0', block)} />
+        </div>
+        <div className={cn('mt-6 h-2.5 w-36 max-w-full [@container(min-width:440px)]:ml-11', block)} />
+      </div>
+    </div>
+  );
+}
+
 function AccountTag({ children }: { children: ReactNode }) {
   return (
     <span className="flex h-[18px] shrink-0 items-center rounded-full border border-[var(--settings-integration-avatar-border)] px-2 text-11 font-medium text-[var(--text-tertiary)]">
@@ -94,18 +159,28 @@ function AccountTag({ children }: { children: ReactNode }) {
  */
 export function SubscriptionAccountsSection({
   providerId,
+  kind = providerId as SubscriptionProvider,
+  providerName,
   defaultUsage,
   dashboard,
+  expectAccounts = true,
 }: {
-  providerId: SubscriptionProvider;
+  /** The provider whose accounts are listed: built-in, created or a legacy Codex connection. */
+  providerId: string;
+  /** The account pool it uses (2026-11-13); defaults to the built-in provider id. */
+  kind?: SubscriptionProvider;
+  providerName?: string;
   defaultUsage?: ReactNode;
   dashboard?: { label: string; onOpen: () => void };
+  /** Whether the first read is likely to list an account, so its row's space is held meanwhile. */
+  expectAccounts?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const accountSetting = useSettingDefinition(providersSettings.subscriptionAccounts);
   const { confirm } = useConfirmDialog();
-  const [view, setView] = useState<SubscriptionPoolView | null>(null);
+  const cache = useContext(SubscriptionPoolViewCache);
+  const [view, setView] = useState<SubscriptionPoolView | null>(() => cache?.get(providerId) ?? null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const login = useRef<string | null>(null);
@@ -119,17 +194,19 @@ export function SubscriptionAccountsSection({
         providerId,
       });
       if (current === epoch.current) {
+        cache?.set(providerId, next);
         setView(next);
         setFailed(false);
       }
     } catch {
       if (current === epoch.current) setFailed(true);
     }
-  }, [providerId]);
+  }, [providerId, cache]);
   useEffect(() => {
     void refresh();
+    // Change notifications name the account pool (kind), shared by every provider of that kind.
     const unsubscribe = window.electronAPI.subscriptionAccounts.onChanged((event) => {
-      if (event.providerId === providerId) void refresh();
+      if (event.providerId === kind) void refresh();
     });
     const focus = () => {
       void refresh();
@@ -147,7 +224,9 @@ export function SubscriptionAccountsSection({
           .command({ action: 'cancel', providerId, loginKey: login.current })
           .catch(() => {});
     };
-  }, [providerId, refresh]);
+  }, [providerId, kind, refresh]);
+  const placementTargets = useSubscriptionPlacementTargets(kind, providerId);
+  const moveAccount = useMoveSubscriptionAccount(providerId, () => void refresh());
   const run = async (command: SubscriptionAccountCommand) => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -198,6 +277,16 @@ export function SubscriptionAccountsSection({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
+          {/* A built-in provider holds the CLI default login and is never merged away as a whole. */}
+          {providerId !== kind && accounts.length > 0 && (
+            <MergeProviderButton
+              kind={kind}
+              providerId={providerId}
+              providerName={providerName ?? providerId}
+              disabled={busy}
+              onDone={() => void refresh()}
+            />
+          )}
           {dashboard && (
             <Button
               data-settings-search-action="Open the provider usage page"
@@ -234,9 +323,7 @@ export function SubscriptionAccountsSection({
         </p>
       )}
       {!view && !failed && (
-        <div className="py-6">
-          <Spinner size={16} />
-        </div>
+        <AccountListPlaceholder reserve={expectAccounts} label={t('ccAgent.common.loading')} />
       )}
       {/* A failed refresh keeps the loaded list, whose default row already holds the card. */}
       {defaultUsage && (view ? accounts.every((account) => account.id !== 'default') : failed) && (
@@ -287,7 +374,7 @@ export function SubscriptionAccountsSection({
                   account.identity ||
                   t('providerGroup.member.accountFallback', { index: index + 1 });
                 const plan =
-                  providerId === 'openai'
+                  kind === 'openai'
                     ? formatCodexPlanLabel(account.plan)
                     : formatClaudeSubscriptionPlanLabel(account.plan);
                 const usage = buildSubscriptionAccountUsageCard(
@@ -336,7 +423,7 @@ export function SubscriptionAccountsSection({
                 const resetScope = account.codexResetProviderId ?? codexResetScope(account.id);
                 // Reset settings do not depend on a successful usage read. A replaced
                 // identity remounts the reader; ordinary running-count changes do not.
-                const resetNode = providerId === 'openai' && connected ? (
+                const resetNode = kind === 'openai' && connected ? (
                   <AccountResetCredits key={`${resetScope}:${account.identity ?? ''}`} scope={resetScope} />
                 ) : null;
                 const usageNode =
@@ -396,14 +483,14 @@ export function SubscriptionAccountsSection({
                               />
                               <span title={status} className="min-w-0 truncate">{status}</span>
                             </span>
-                            {providerId === 'anthropic' && connected && (
+                            {kind === 'anthropic' && connected && (
                               <Tip text={expiryDetail}>
                                 <span className={cn('min-w-0', expiring && 'text-[var(--warning-fg)]')}>
                                   {expiryText}
                                 </span>
                               </Tip>
                             )}
-                            {providerId === 'anthropic' && ((connected && expiring) || account.status === 'signed-out') && (
+                            {kind === 'anthropic' && ((connected && expiring) || account.status === 'signed-out') && (
                               <Button
                                 data-settings-search-action="Sign in again to this Claude account"
                                 variant="secondary"
@@ -519,6 +606,15 @@ export function SubscriptionAccountsSection({
                               <FolderOpen size={18} className="mr-2.5" />
                               {t('subscriptionAccounts.openDirectory')}
                             </DropdownMenuItem>
+                            {/* The CLI default login always stays with the built-in provider. */}
+                            {account.id !== 'default' && (
+                              <MoveAccountMenu
+                                targets={placementTargets}
+                                canTakeOut={providerId === kind || accounts.length > 1}
+                                disabled={busy}
+                                onMove={(target) => void moveAccount({ id: account.id, name }, target)}
+                              />
+                            )}
                             {account.id !== 'default' && (
                               <>
                                 <DropdownMenuSeparator />

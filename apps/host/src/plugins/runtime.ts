@@ -40,6 +40,14 @@ import { setPluginEnabled } from '../../../desktop/src/main/cindy-brain/pluginEn
 import { ghostInstallApprovalToken, type InstalledGhost, type GhostAppContextResult } from '../../../desktop/src/shared/ghost.js';
 import { installedGhostStoragePart, findInstalledGhostByInstanceId } from '../../../desktop/src/shared/pluginIdentity.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, type ActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
+import {
+  availableGhostsIn,
+  findGhostForInstanceIdIn,
+  isGhostAvailableForSessionIn,
+  listAvailableGhostsFrom,
+  listInstalledGhostsForOwner,
+} from '../../../desktop/src/main/cindy-brain/ghostAvailability.js';
+import { createManagedSkills } from '../../../desktop/src/main/maker-host/managedSkillsCore.js';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 import { hostBlobStore, hostMediaIngest } from '../media-store.js';
@@ -117,8 +125,37 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const secret = createHostPluginSecrets(options.profileDir, options.ownerId, options.credentials);
   const kv = createGhostKvStore({ getRootDir: () => root('ghost-kv'), log });
   const models = createGhostKvStore({ getRootDir: () => root('ghost-published-models'), log });
-  const identity = createHostPluginIdentity({ manager: options.manager, root, getGhost,
+  // Desktop's findGhostForInstanceId over this owner's manager (ghostAvailability.ts),
+  // including its account-availability check. Identity reads use it; the runtime's
+  // getGhost keeps its suspension overlay for everything else.
+  const identityLookup = {
+    getGhostManager: () => options.manager,
+    isGhostAvailableForActiveSession: (id: string) => isGhostAvailableForSessionIn(options.manager, id),
+    availableGhosts: () => availableGhostsIn(() => options.manager),
+  };
+  const identity = createHostPluginIdentity({ manager: options.manager, root,
+    findGhost: id => (current() ? findGhostForInstanceIdIn(identityLookup, id) : null),
     getUser: options.getUser ?? (() => null), assertCurrent });
+  // Desktop ghostOwnerScope (cindy-brain/index.ts): capture fails during an account
+  // boundary; owner and generation must still match after the scan. The Host also
+  // requires this runtime to be current.
+  const sameAppSession = (a: ActiveAppSession, b: ActiveAppSession) =>
+    a.mode === b.mode && a.dataOwnerId === b.dataOwnerId && a.generation === b.generation;
+  const listingScope = {
+    capture: () => {
+      if (isAppSessionBoundaryPending()) throw new Error('账号切换中，已取消本次 Plugin 操作');
+      return getActiveAppSession();
+    },
+    isCurrent: (scope: unknown) => current() && !!scope && sameAppSession(scope as ActiveAppSession, getActiveAppSession()),
+    isStable: (scope: unknown) => current() && !!scope && !isAppSessionBoundaryPending()
+      && sameAppSession(scope as ActiveAppSession, getActiveAppSession()),
+  };
+  // The desktop managed Skill catalog (managedSkillsCore.ts) over this owner's plugins.
+  const managedSkills = createManagedSkills({
+    listAvailableGhosts: () => listAvailableGhostsFrom(() => listInstalledGhostsForOwner(listingScope, () => options.manager)),
+    getGhostManager: () => options.manager,
+    loadGhostFirstPartyFactsForGhost: (id, purpose) => identity.loadFirstPartyFacts(id, purpose),
+  });
   const unavailable = () => { throw new Error('PLUGIN_ACCOUNT_SERVICE_UNAVAILABLE'); };
   const authorization = createHostPluginAuthorization({ owner, root, current, assertCurrent,
     getGhost, list: () => options.manager.list(), secret, kv, identity,
@@ -394,6 +431,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, storage, network, secret, node, authorization,
     browserExtensions,
     manager: options.manager, getGhost, current, assertCurrent, dispatcher, handoff, files,
+    /** Built-in and approved plugin Skills, as Desktop's listCindyManagedSkills. */
+    listManagedSkills: () => managedSkills.listCindyManagedSkills(),
+    identity,
     captureMutationOwner() { assertCurrent(); return getActiveAppSession(); },
     acquireMutationLease(expected: ActiveAppSession) {
       assertCurrent();

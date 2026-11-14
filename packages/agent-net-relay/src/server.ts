@@ -4,8 +4,6 @@ import { createSocket, type RemoteInfo } from 'node:dgram';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isIP, type AddressInfo } from 'node:net';
 import path from 'node:path';
-import { mkdir, open, rm } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import type { Duplex } from 'node:stream';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
@@ -17,13 +15,15 @@ import {
 } from '@cindy/agent-net-protocol';
 import { sha256, verifySignature, verifyCertificate, verifyDelegation, verifyJoinRequest, verifyRequestProof, verifyRequestDigestProof, verifyTenantJoinRequest } from './identity.js';
 import { Store, type NetworkRecord, type RelayStore } from './store.js';
-import { ClusterStore, type RelayStoreChange } from './clusterStore.js';
+import { ClusterStore, RelayStateUnavailableError, type RelayStoreChange } from './clusterStore.js';
 import { CLUSTER_PATH, checkClusterOptions, clusterOwner, createClusterRouter, routingNetwork, type RelayClusterMember, type RelayClusterOptions } from './cluster.js';
 import type { SharingState } from '@cindy/device-link-sharing/repositories';
 import type { DelegationRequest } from '@cindy/agent-net-protocol';
 import { AppError as SharingError } from '@cindy/device-link-sharing/errors';
 import { createAgentNetSharing, type AgentNetSharingOptions } from './sharing.js';
 import { DatagramSendQueue } from './datagramQueue.js';
+import { MEDIA_TRANSFER_DIRECT, MEDIA_TRANSFER_HEADER, type DirectMediaRequest } from '@cindy/agent-net-protocol';
+import { createLocalMediaStorage, DIRECT_GRANT_MAX_MS, guardMediaStorage, RelayMediaStorageError, RelayMediaStorageUnavailableError, type RelayMediaStorage } from './mediaStorage.js';
 import { agentNetInvitationAsset } from '@cindy/device-link-sharing/pages';
 
 export class AgentNetError extends Error {
@@ -66,6 +66,8 @@ export interface RelayOptions {
   cluster?: RelayClusterOptions;
   /** Attachment bytes; defaults to `<dataDir>/media`. Replicas of one cluster must share it. */
   mediaDir?: string;
+  /** Attachment storage in place of mediaDir; one with `direct` lets clients move the ciphertext themselves. */
+  mediaStorage?: RelayMediaStorage;
 }
 export interface RelayHandle {
   url: string; udpAddress: AddressInfo | null;
@@ -153,6 +155,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   // Self-hosted relays stay one process: tenants and the owner bootstrap assume a single writer.
   if (options.cluster && mode !== 'official') throw new Error('CLUSTER_REQUIRES_OFFICIAL_MODE');
   const cluster = options.cluster ? checkClusterOptions(options.cluster) : undefined;
+  // Replicas share the attachment storage; a per-replica default directory would lose files on handover.
+  if (cluster && options.mediaDir === undefined && options.mediaStorage === undefined) throw new Error('CLUSTER_MEDIA_DIR_REQUIRED');
   const store: RelayStore = cluster ? await ClusterStore.open(cluster.backend, cluster.replicaId) : await Store.open(options.dataDir);
   if (options.bootstrap) {
     const bootstrap = options.bootstrap;
@@ -190,9 +194,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     mediaQueues.set(id, operation);
     try { return await operation; } finally { if (mediaQueues.get(id) === operation) mediaQueues.delete(id); }
   }
-  const mediaDir = options.mediaDir ?? path.join(options.dataDir, 'media');
-  if (!path.isAbsolute(mediaDir)) throw new Error('MEDIA_DIR_MUST_BE_ABSOLUTE');
-  await mkdir(mediaDir, { recursive: true, mode: 0o700 });
+  const storage = guardMediaStorage(options.mediaStorage ?? await createLocalMediaStorage(options.mediaDir ?? path.join(options.dataDir, 'media')));
   const key = (network: string, device: string) => network + '\0' + device;
   const network = (id: string) => store.network(id) ?? fail(401, 'NETWORK_UNKNOWN');
   const synchronized = new WeakMap<IncomingMessage, Set<string>>();
@@ -210,6 +212,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   const router = cluster ? createClusterRouter(cluster) : undefined;
   let members: readonly RelayClusterMember[] = cluster ? cluster.backend.members() : [];
   let draining = false;
+  // Set once this replica is in the member list; from then on a list without an owner means "own nothing".
+  let joined = false;
   const owners = new Map<string, RelayClusterMember | undefined>();
   function ownerOf(networkId: string): RelayClusterMember | undefined {
     if (!cluster) return undefined;
@@ -219,8 +223,22 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     return owners.get(networkId);
   }
-  /** Without a live member list (startup, backend outage) a replica serves what reaches it. */
-  const owns = (networkId: string) => !cluster || (ownerOf(networkId)?.id ?? cluster.replicaId) === cluster.replicaId;
+  /**
+   * Before joining (startup) a replica serves what reaches it. Once joined, a member list with no owner for
+   * the network (this replica fenced itself after losing its lease, or every member dropped out) means it
+   * owns nothing: falling back to single-process behaviour would let it keep sessions a new owner also serves.
+   */
+  const owns = (networkId: string) => {
+    if (!cluster) return true;
+    const owner = ownerOf(networkId);
+    return owner ? owner.id === cluster.replicaId : !joined;
+  };
+  /** A request for a network that currently has no owner anywhere (see owns); hops are judged by their target. */
+  const ownerless = (req: IncomingMessage) => {
+    if (!cluster || !joined || router?.trusted(req)) return false;
+    const networkId = routingNetwork(req);
+    return networkId !== undefined && ownerOf(networkId) === undefined;
+  };
   const clientAddress = (req: IncomingMessage) => router?.clientAddress(req) ?? req.socket.remoteAddress ?? 'unknown';
   function allow(source: string, maximum = 60): boolean {
     const at = now();
@@ -456,6 +474,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       res.end(asset.body); return;
     }
     if (url.pathname === '/health' && method === 'GET') return writeJson(res, 200, { status: 'ok', protocolVersion: AGENT_NET_VERSION, udp: options.udpPort === undefined ? 'disabled' : 'ok' });
+    // Readiness for load balancers: a leaving replica stops receiving new connections; liveness stays /health.
+    if (url.pathname === '/ready' && method === 'GET') return draining ? writeJson(res, 503, { status: 'draining' }) : writeJson(res, 200, { status: 'ready' });
     if (url.pathname.startsWith(CLUSTER_PATH + '/')) {
       // Between replicas only; the hop secret never reaches clients.
       if (!router?.trusted(req)) return fail(404, 'NOT_FOUND');
@@ -466,7 +486,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     if (url.pathname === API + '/info' && method === 'GET') return writeJson(res, 200, {
       protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort,
-      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', 'notification-keys-v2', ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
+      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
         ...(mode === 'self-hosted' && store.primaryNetworkId() !== undefined ? ['tenants-v1'] : [])],
     });
     if (url.pathname.startsWith(API + '/sharing/')) {
@@ -570,7 +590,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (!active(principal)) return fail(401, 'DEVICE_REVOKED');
     if (principal.delegation) {
       const resource = url.pathname.slice((API + '/guest').length);
-      if (!/^\/(directory|notify|push-token|media(?:\/[A-Za-z0-9-]+)?)$/.test(resource)) return fail(403, 'FORBIDDEN');
+      if (!/^\/(directory|notify|push-token|media(?:\/[A-Za-z0-9-]+(?:\/(?:upload|commit))?)?)$/.test(resource)) return fail(403, 'FORBIDDEN');
       url.pathname = API + resource;
     }
     const body: Record<string, unknown> = binaryUpload ? { offset: /^\d+$/.test(url.searchParams.get('offset') ?? '') ? Number(url.searchParams.get('offset')) : NaN } : bytes.length ? jsonBody(bytes) : {};
@@ -688,7 +708,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         return Object.keys(removed.media);
       });
       for (const [id, session] of sessions) if (session.principal.networkId === target) { sessions.delete(id); session.ws.close(4410, 'access revoked'); }
-      for (const id of media) void mediaOperation(target, id, () => rm(path.join(mediaDir, id), { force: true }))
+      for (const id of media) void mediaOperation(target, id, () => storage.remove(id))
         .catch(() => logger.error({}, 'agent-net tenant media cleanup failed'));
       return writeJson(res, 200, { ok: true });
     }
@@ -836,19 +856,47 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         if (uploads.length >= 1024 || uploads.reduce((s, u) => s + u.size, 0) + size > MEDIA_NETWORK_QUOTA_BYTES) return fail(429, 'MEDIA_QUOTA');
         current.media[id] = { owner: principal.deviceId, recipient, size, received: 0, expiresAt: now() + 24 * 60 * 60 * 1000 };
       });
-      return writeJson(res, 201, { id, chunkBytes: body.chunkFormat === 'binary-v1' ? MAX_MEDIA_BINARY_CHUNK_BYTES : 32_768 });
+      return writeJson(res, 201, { id, chunkBytes: body.chunkFormat === 'binary-v1' ? MAX_MEDIA_BINARY_CHUNK_BYTES : 32_768,
+        ...(body.transfer === MEDIA_TRANSFER_DIRECT && storage.direct ? { transfer: MEDIA_TRANSFER_DIRECT } : {}) });
     }
-    const media = url.pathname.match(/^\/api\/agent-net\/media\/([A-Za-z0-9-]+)$/);
+    const media = url.pathname.match(/^\/api\/agent-net\/media\/([A-Za-z0-9-]+)(?:\/(upload|commit))?$/);
     if (media) {
       return mediaOperation(n.id, media[1], async () => {
         const item = own(network(n.id).media, media[1]);
         if (!item || item.expiresAt <= now()) return fail(404, 'NOT_FOUND');
         if (principal.deviceId !== item.owner && principal.deviceId !== item.recipient) return fail(403, 'FORBIDDEN');
         const other = principal.deviceId === item.owner ? item.recipient : item.owner;
-        if (!active(principal) || (principal.delegation || method === 'PUT') && !permitted(principal, other)) return fail(403, 'FORBIDDEN');
-        const filename = path.join(mediaDir, media[1]);
+        if (!active(principal) || (principal.delegation || method === 'PUT' || media[2]) && !permitted(principal, other)) return fail(403, 'FORBIDDEN');
+        if (media[2]) {
+          // Direct transfer: the owner writes the chunks to the storage itself. The relay authorizes each one and
+          // takes the stored length from the storage, never from the client.
+          if (!storage.direct) return fail(404, 'NOT_FOUND');
+          if (method !== 'POST') return fail(405, 'METHOD_NOT_ALLOWED');
+          if (principal.deviceId !== item.owner) return fail(403, 'FORBIDDEN');
+          const stored = await storage.length(media[1]);
+          if (stored < item.received) return fail(409, 'MEDIA_DATA_MISSING');
+          if (stored > item.size) {
+            await storage.remove(media[1]);
+            await store.transaction((state) => { retireMedia(state.networks[n.id], media[1]); });
+            return fail(409, 'MEDIA_SIZE_MISMATCH');
+          }
+          if (stored !== item.received) await store.transaction((state) => { state.networks[n.id].media[media[1]].received = stored; });
+          if (media[2] === 'commit') return writeJson(res, 200, { received: stored, complete: stored === item.size });
+          if (stored === item.size) return fail(403, 'FORBIDDEN');
+          const offset = Number(body.offset), size = Number(body.size), md5 = body.md5;
+          if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_MEDIA_BINARY_CHUNK_BYTES
+            || typeof md5 !== 'string' || !/^[A-Za-z0-9+/]{22}==$/.test(md5)) return fail(400, 'MEDIA_CHUNK_INVALID');
+          if (!Number.isSafeInteger(offset) || offset !== stored || stored + size > item.size) return fail(409, 'MEDIA_OFFSET_MISMATCH');
+          return writeJson(res, 200, { request: boundedGrant(await storage.direct.append(media[1], offset, size, md5)) });
+        }
         if (method === 'GET') {
           if (item.received !== item.size) return fail(409, 'MEDIA_INCOMPLETE');
+          // A client that can reach the storage reads the ciphertext there; the relay only authorizes the read.
+          if (storage.direct && req.headers[MEDIA_TRANSFER_HEADER] === MEDIA_TRANSFER_DIRECT) {
+            const request = boundedGrant(await storage.direct.read(media[1]));
+            res.setHeader(MEDIA_TRANSFER_HEADER, MEDIA_TRANSFER_DIRECT);
+            return writeJson(res, 200, { transfer: MEDIA_TRANSFER_DIRECT, size: item.size, request });
+          }
           let start = 0, end = item.size - 1;
           const range = req.headers.range;
           if (range) {
@@ -858,13 +906,15 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
             else { start = Number(match[1]); if (match[2]) end = Math.min(end, Number(match[2])); }
             if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= item.size) return fail(416, 'INVALID_MEDIA_RANGE');
           }
+          // Open the stream first: a storage failure must still be answered with a 503, impossible once headers are out.
+          const stream = await storage.read(media[1], start, end);
           res.writeHead(range ? 206 : 200, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store',
             'accept-ranges': 'bytes', 'content-length': end - start + 1, ...(range ? { 'content-range': 'bytes ' + start + '-' + end + '/' + item.size } : {}) });
-          await pipeline(createReadStream(filename, { start, end }), res); return;
+          await pipeline(stream, res); return;
         }
         if (method === 'DELETE') {
-          await rm(filename, { force: true });
-          await store.transaction((state) => { delete state.networks[n.id].media[media[1]]; });
+          await storage.remove(media[1]);
+          await store.transaction((state) => { retireMedia(state.networks[n.id], media[1]); });
           return writeJson(res, 200, { deleted: true });
         }
         if (method !== 'PUT') return fail(405, 'METHOD_NOT_ALLOWED');
@@ -874,16 +924,10 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         const offset = Number(body.offset);
         if ((!binaryUpload && (data.toString('base64url') !== encoded || data.length > 32_768)) || data.length === 0) return fail(400, 'MEDIA_CHUNK_INVALID');
         if (!Number.isSafeInteger(offset) || offset !== item.received || item.received + data.length > item.size) return fail(409, 'MEDIA_OFFSET_MISMATCH');
-        const file = await open(filename, 'r+').catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' && item.received === 0 ? open(filename, 'wx+', 0o600) : Promise.reject(error));
-        try {
-          if ((await file.stat()).size < item.received) return fail(409, 'MEDIA_DATA_MISSING');
-          // Discard bytes from a write whose metadata commit was interrupted. Never recopy previous chunks.
-          await file.truncate(item.received);
-          let written = 0;
-          while (written < data.length) written += (await file.write(data, written, data.length - written, item.received + written)).bytesWritten;
-          await file.sync();
-        } finally { await file.close(); }
-        const received = item.received + data.length;
+        let received: number;
+        try { received = await storage.append(media[1], item.received, data); }
+        catch (error) { if (error instanceof RelayMediaStorageError) return fail(409, error.code); throw error; }
+        if (received !== item.received + data.length) return fail(409, 'MEDIA_OFFSET_MISMATCH');
         await store.transaction((state) => { state.networks[n.id].media[media[1]].received = received; });
         return writeJson(res, 200, { received, complete: received === item.size });
       });
@@ -898,14 +942,46 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     const owner = networkId === undefined ? undefined : ownerOf(networkId);
     return owner && owner.id !== cluster.replicaId ? owner : undefined;
   }
+  /**
+   * A direct write granted before a removal can still land and recreate the object. With direct storage a removed
+   * upload therefore stays as an expired record (it reads as gone and counts against no quota) until every grant
+   * has lapsed, and the expiry sweep, which waits as long, removes the object again.
+   */
+  const retainExpiredMs = storage.direct ? DIRECT_GRANT_MAX_MS : 0;
+  function retireMedia(network: NetworkRecord, id: string): void {
+    const item = network.media[id];
+    if (!item) return;
+    if (retainExpiredMs) item.expiresAt = Math.min(item.expiresAt, now()); else delete network.media[id];
+  }
+  function boundedGrant(request: DirectMediaRequest): DirectMediaRequest {
+    if (!(request.expiresAt <= now() + DIRECT_GRANT_MAX_MS)) throw new RelayMediaStorageUnavailableError('DIRECT_GRANT_TOO_LONG');
+    return request;
+  }
+  let stateWarnedAt = -Infinity, storageWarnedAt = -Infinity;
+  function storageUnavailable(): void {
+    if (now() - storageWarnedAt < 10_000) return;
+    storageWarnedAt = now();
+    logger.warn({}, 'agent-net media storage unavailable');
+  }
+  function stateUnavailable(error: RelayStateUnavailableError): void {
+    // An outage fails every write; one line per interval is enough to alert on.
+    if (now() - stateWarnedAt < 10_000) return;
+    stateWarnedAt = now();
+    logger.warn({ code: error.code }, 'agent-net shared state unavailable');
+  }
   const onRequest = (req: IncomingMessage, res: ServerResponse) => {
     if (closing) { writeJson(res, 503, { error: { code: 'SERVER_CLOSING', message: 'Server closing' } }); return; }
     const target = forwardTarget(req);
     if (target) { router!.http(req, res, target); return; }
+    if (ownerless(req)) { writeJson(res, 503, { error: { code: 'REPLICA_UNAVAILABLE', message: 'Replica unavailable' } }); return; }
     const operation = handle(req, res).catch((error: unknown) => {
       if (res.headersSent || res.destroyed) { res.destroy(); return; }
       if (error instanceof AgentNetError) writeJson(res, error.status, { error: { code: error.code, message: error.message } });
       else if (error instanceof SharingError) writeJson(res, error.statusCode, { error: { code: error.code, message: error.message } });
+      // Shared state unreachable or contended: retryable, never an authorization result.
+      else if (error instanceof RelayStateUnavailableError) { stateUnavailable(error); writeJson(res, 503, { error: { code: 'CLUSTER_STATE_UNAVAILABLE', message: 'Shared state unavailable' } }); }
+      // Attachment storage down: retryable, like the shared state.
+      else if (error instanceof RelayMediaStorageUnavailableError) { storageUnavailable(); writeJson(res, 503, { error: { code: 'MEDIA_STORAGE_UNAVAILABLE', message: 'Attachment storage unavailable' } }); }
       else { logger.error({ name: error instanceof Error ? error.name : 'Unknown' }, 'agent-net request failed'); writeJson(res, 500, { error: { code: 'INTERNAL_ERROR', message: 'Internal error' } }); }
     });
     pendingRequests.add(operation);
@@ -917,6 +993,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (closing) { socket.destroy(); return; }
     const target = forwardTarget(req);
     if (target) { router!.upgrade(req, socket, head, target); return; }
+    if (ownerless(req)) { socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return; }
     // A leaving replica accepts no new sessions; the client retries and reaches a remaining one.
     if (draining) { socket.destroy(); return; }
     pendingUpgrades.add(socket);
@@ -1037,6 +1114,15 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     advertisedUdpPort = (udp.address() as AddressInfo).port;
   }
   let sweeping = false;
+  const expiredEntries = (n: NetworkRecord, at: number) => {
+    for (const [id, join] of Object.entries(n.joins)) if (join.expiresAt <= at) delete n.joins[id];
+    for (const [id, code] of Object.entries(n.joinCodes)) if (code.expiresAt <= at) delete n.joinCodes[id];
+    for (const [id, grant] of Object.entries(n.grants)) if (grant.delegation.expiresAt <= at
+      && (grant.revokedAt === null || grant.revokedAt + MAX_GRANT_LIFETIME_MS <= at)) delete n.grants[id];
+  };
+  const hasExpiredEntries = (n: NetworkRecord, at: number) => Object.values(n.joins).some(join => join.expiresAt <= at)
+    || Object.values(n.joinCodes).some(code => code.expiresAt <= at)
+    || Object.values(n.grants).some(grant => grant.delegation.expiresAt <= at && (grant.revokedAt === null || grant.revokedAt + MAX_GRANT_LIFETIME_MS <= at));
   const sweep = setInterval(() => {
     const at = now();
     for (const [nonce, until] of nonces) if (until <= at) nonces.delete(nonce);
@@ -1050,26 +1136,31 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     // Replicas share state; each cleans only the networks it owns.
     const ownedIds = store instanceof ClusterStore ? store.networkIds().filter(owns) : undefined;
     const swept = ownedIds ? ownedIds.flatMap(id => store.network(id) ?? []) : store.networks();
-    for (const n of swept) for (const [id, upload] of Object.entries(n.media)) if (upload.expiresAt <= at) {
+    for (const n of swept) for (const [id, upload] of Object.entries(n.media)) if (upload.expiresAt + retainExpiredMs <= at) {
       void mediaOperation(n.id, id, async () => {
         const current = store.network(n.id)?.media[id];
-        if (!current || current.expiresAt > now()) return;
-        await rm(path.join(mediaDir, id), { force: true });
+        if (!current || current.expiresAt + retainExpiredMs > now()) return;
+        await storage.remove(id);
         await store.transaction((state) => { if (state.networks[n.id]) delete state.networks[n.id].media[id]; });
       }).catch(() => logger.error({}, 'agent-net media cleanup failed'));
     }
     if (!sweeping) {
       sweeping = true;
-      void store.transaction((state) => {
-        for (const n of ownedIds ? ownedIds.flatMap(id => state.networks[id] ?? []) : Object.values(state.networks)) {
-          for (const [id, join] of Object.entries(n.joins)) if (join.expiresAt <= at) delete n.joins[id];
-          for (const [id, code] of Object.entries(n.joinCodes)) if (code.expiresAt <= at) delete n.joinCodes[id];
-          for (const [id, grant] of Object.entries(n.grants)) if (grant.delegation.expiresAt <= at
-            && (grant.revokedAt === null || grant.revokedAt + MAX_GRANT_LIFETIME_MS <= at)) delete n.grants[id];
-        }
-        for (const [id, invite] of Object.entries(state.tenantInvites ?? {})) if (invite.expiresAt <= at) delete state.tenantInvites![id];
-        for (const [id, r] of Object.entries(state.tenantRequests ?? {})) if (r.expiresAt <= at) delete state.tenantRequests![id];
-      }).catch(() => logger.error({}, 'agent-net state cleanup failed')).finally(() => { sweeping = false; });
+      const cleanup = ownedIds
+        // One small commit per owned network with expired entries: a transaction over every owned
+        // network would conflict with each write any other replica makes to any of them.
+        ? (async () => {
+          for (const n of swept) if (hasExpiredEntries(n, at)) await store.transaction((state) => {
+            const current = state.networks[n.id];
+            if (current) expiredEntries(current, at);
+          });
+        })()
+        : store.transaction((state) => {
+          for (const n of Object.values(state.networks)) expiredEntries(n, at);
+          for (const [id, invite] of Object.entries(state.tenantInvites ?? {})) if (invite.expiresAt <= at) delete state.tenantInvites![id];
+          for (const [id, r] of Object.entries(state.tenantRequests ?? {})) if (r.expiresAt <= at) delete state.tenantRequests![id];
+        });
+      void cleanup.catch(() => logger.error({}, 'agent-net state cleanup failed')).finally(() => { sweeping = false; });
     }
   }, 30_000);
   unrefTimer(sweep);
@@ -1098,7 +1189,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       store.close(); clearInterval(sweep); server.closeAllConnections(); server.close(); udp?.close();
       throw error;
     }
-    members = cluster.backend.members(); owners.clear();
+    members = cluster.backend.members(); owners.clear(); joined = true;
   }
   /** Leave first so the others take this replica's networks, then send its devices there. */
   async function leaveCluster(): Promise<void> {

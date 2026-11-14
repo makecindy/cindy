@@ -130,6 +130,11 @@ function cancelCodexAccountLogin(providerId: string): void {
   logins.get(codexAccountHome(providerId))?.cancel();
 }
 
+/** Whether a login for this connection is between its start and its final commit. */
+function isCodexAccountLoginActive(providerId: string): boolean {
+  return logins.has(codexAccountHome(providerId));
+}
+
 async function loginCodexAccount(
   providerId: string,
   isCurrent: () => boolean,
@@ -359,5 +364,5 @@ async function close(): Promise<void> {
   for (const login of active) login.cancel();
   await Promise.allSettled(active.map(login => login.done));
 }
-return { isCodexAccountProvider, isOpenAiSubscriptionProviderId, invalidateCodexAccount, codexAccountOwnerDir, codexAccountHome, codexAccountLoginName, codexAccountState, prepareCodexAccountHome, setCodexAccountRetirement, cancelCodexAccountLogin, loginCodexAccount, logoutCodexAccount, retireCodexAccount, removeCodexAccountCredentialsReversibly, close };
+return { isCodexAccountProvider, isOpenAiSubscriptionProviderId, invalidateCodexAccount, codexAccountOwnerDir, codexAccountHome, codexAccountLoginName, codexAccountState, prepareCodexAccountHome, setCodexAccountRetirement, cancelCodexAccountLogin, isCodexAccountLoginActive, loginCodexAccount, logoutCodexAccount, retireCodexAccount, removeCodexAccountCredentialsReversibly, close };
 }

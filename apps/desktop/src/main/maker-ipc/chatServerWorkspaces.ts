@@ -10,7 +10,7 @@ import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 const workspace = z.object({ workDir: z.string(), branch: z.string().nullable(), ownerSessionId: z.string().nullable() });
 // autoContinue: 分工 started here (startedHere, the latest 50) go on to the next step by themselves (bot-group-chat.md §7.4).
-const record = z.object({ projectDir: z.string().nullable(), plans: z.record(z.string(), workspace), autoContinue: z.boolean().optional(),
+const record = z.object({ projectDir: z.string().nullable(), fallbackDir: z.string().optional(), plans: z.record(z.string(), workspace), autoContinue: z.boolean().optional(),
   startedHere: z.array(z.string()).max(50).optional(),
   // Successful attachment progress belongs to the exact authorization/Thread Session.
   // Optional for existing files; sequence strings must remain precise beyond Number.MAX_SAFE_INTEGER.

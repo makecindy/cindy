@@ -71,18 +71,29 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   usage?: SubscriptionAccountUsage;
 }
 export interface SubscriptionPoolView {
-  providerId: SubscriptionProvider;
+  /**
+   * The provider these accounts belong to: a built-in provider, or (2026-11-13) a provider Cindy
+   * created for subscription accounts or a legacy Codex connection. Older hosts only report built-ins.
+   */
+  providerId: string;
+  /** Pool kind of the provider (optional; older hosts omit it and only serve built-in providers). */
+  kind?: SubscriptionProvider;
   configured: boolean;
   strategy: ProviderGroupStrategy;
   /** Present only for an explicitly task-scoped read; null means no recorded binding. */
   boundAccountId?: string | null;
   accounts: SubscriptionAccountView[];
+  /**
+   * `preview` only (2026-11-14): the CLI's own login is already in Cindy, so the add-provider wizard
+   * offers no shortcut for it. Older hosts omit it; absence keeps the shortcut as before.
+   */
+  defaultAdded?: boolean;
 }
 export type SubscriptionAccountCommand =
-  | { action: 'read'; providerId: SubscriptionProvider; taskId?: string }
+  | { action: 'read'; providerId: string; taskId?: string }
   /** Advisory login presentation only; never binds detected system credentials. */
   | { action: 'preview'; providerId: SubscriptionProvider }
-  | { action: 'add'; providerId: SubscriptionProvider; loginKey: string }
+  | { action: 'add'; providerId: string; loginKey: string }
   /** Explicit wizard intent. Older hosts reject this action instead of reusing a different account. */
   | {
       action: 'connect';
@@ -90,12 +101,23 @@ export type SubscriptionAccountCommand =
       target: 'default' | 'new';
       loginKey: string;
     }
-  | { action: 'login'; providerId: SubscriptionProvider; accountId: string; loginKey: string }
-  | { action: 'cancel'; providerId: SubscriptionProvider; loginKey: string }
-  | { action: 'remove'; providerId: SubscriptionProvider; accountId: string }
+  /**
+   * 2026-11-13: sign in another account as a separate provider (the wizard's default). Older hosts
+   * reject the action instead of adding the account to the built-in provider.
+   */
+  | { action: 'create'; providerId: SubscriptionProvider; loginKey: string }
+  /** 2026-11-13: move one account to another provider of the same kind, or out on its own (`target: null`). */
+  | { action: 'place'; providerId: string; accountId: string; target: string | null }
+  /** 2026-11-13: move every account of a provider into another provider of the same kind. */
+  | { action: 'merge'; providerId: string; target: string }
+  /** 2026-11-13: delete a provider Cindy created; its accounts stop being used (logins stay). */
+  | { action: 'remove-provider'; providerId: string }
+  | { action: 'login'; providerId: string; accountId: string; loginKey: string }
+  | { action: 'cancel'; providerId: string; loginKey: string }
+  | { action: 'remove'; providerId: string; accountId: string }
   | {
       action: 'configure';
-      providerId: SubscriptionProvider;
+      providerId: string;
       strategy?: ProviderGroupStrategy;
       accountId?: string;
       paused?: boolean;
@@ -122,6 +144,8 @@ export interface SubscriptionSessionAccountQuery {
   model?: string;
   /** Optional: the executor's old Codex connection id; can stand alone before a native session exists. */
   legacyProviderId?: string;
+  /** Actual task source, resolved on the executing computer; echoed before a new controller acts. */
+  routeProviderId?: string;
 }
 export interface SubscriptionSessionAccount {
   isDefault: boolean;
@@ -151,7 +175,9 @@ export type SubscriptionSessionAccountView = (
   | { providerId: SubscriptionProvider; state: 'bound'; account: SubscriptionSessionAccount }
 ) & {
   /** Explicit executor admission for handing an own-computer legacy task to the merged route. */
-  replacementProviderId?: 'openai';
+  replacementProviderId?: string;
+  /** Confirms that the executor understood the task's actual provider rather than only its kind. */
+  routeProviderId?: string;
 };
 
 const SESSION_ACCOUNT_STATUSES: ReadonlySet<unknown> = new Set([
@@ -168,10 +194,13 @@ export function parseSubscriptionSessionAccountView(
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const view = raw as Record<string, unknown>;
   if (view.providerId !== providerId) return null;
-  const replacement = providerId === 'openai' && view.replacementProviderId === 'openai'
-    ? { replacementProviderId: 'openai' as const } : {};
+  const route = isSubscriptionPoolProviderIdShape(view.routeProviderId)
+    ? { routeProviderId: view.routeProviderId } : {};
+  const replacement = isSubscriptionPoolProviderIdShape(view.replacementProviderId)
+    && (route.routeProviderId !== undefined || (providerId === 'openai' && view.replacementProviderId === 'openai'))
+    ? { replacementProviderId: view.replacementProviderId } : {};
   if (view.state === 'legacy' || view.state === 'unassigned' || view.state === 'unavailable')
-    return { providerId, state: view.state, ...replacement };
+    return { providerId, state: view.state, ...route, ...replacement };
   if (view.state !== 'bound') return null;
   const account = view.account as Record<string, unknown> | null | undefined;
   if (!account || typeof account !== 'object' || Array.isArray(account)) return null;
@@ -183,6 +212,7 @@ export function parseSubscriptionSessionAccountView(
   return {
     providerId,
     state: 'bound',
+    ...route,
     ...replacement,
     account: {
       isDefault: account.isDefault,
@@ -195,7 +225,7 @@ export function parseSubscriptionSessionAccountView(
         ? { usage: usage as SubscriptionAccountUsage }
         : {}),
       ...(account.blocked === true && account.paused !== true ? { blocked: true as const } : {}),
-      ...(account.blocked === true && account.paused !== true && typeof account.switchAvailable === 'boolean'
+      ...((account.blocked === true || (route.routeProviderId && account.paused === true)) && typeof account.switchAvailable === 'boolean'
         ? { switchAvailable: account.switchAvailable } : {}),
     },
   };
@@ -223,4 +253,11 @@ export function isUnusedDefaultAccount(account: SubscriptionAccountView): boolea
 }
 export function isSubscriptionProvider(value: unknown): value is SubscriptionProvider {
   return value === 'anthropic' || value === 'openai';
+}
+/**
+ * Shape check for a provider that may own subscription accounts (built-in, created or a legacy
+ * Codex connection). The executing host still resolves it against its own records.
+ */
+export function isSubscriptionPoolProviderIdShape(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9_-]{1,40}$/.test(value);
 }

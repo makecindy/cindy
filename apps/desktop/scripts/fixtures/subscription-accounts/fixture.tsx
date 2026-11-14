@@ -156,7 +156,8 @@ void mountPage({
       };
     return {
       openPath: async () => ({ success: true }),
-      maker: { usage: {
+      // Providers an account may move to; none of the same kind in these cases.
+      maker: { listProviders: async () => ({ providers: [] }), usage: {
         getCodexRateLimits: async (providerId = 'openai'): Promise<MobileCodexRateLimitsResult> => ({
           providerId, account: { email: 'ac***@example.com', accountId: '…account', planType: 'pro' },
           rateLimits: {}, rateLimitsByLimitId: null, resetOffer: null,
@@ -170,6 +171,8 @@ void mountPage({
         onChanged: subscription('subscriptionAccounts'),
         command: async (command: SubscriptionAccountCommand) => {
           if (ctx.case === 'error') throw new Error('Fixture read failure');
+          // The first read never lands, so the placeholder stays for the capture.
+          if (ctx.case === 'loading' && command.action === 'read') return new Promise<never>(() => {});
           if (ctx.case === 'provider-auth-preview' && command.action === 'preview')
             return {
               ...view,
