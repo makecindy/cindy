@@ -155,12 +155,12 @@ void mountPage({
               'src/components/example-1.tsx': { kind: 'new' },
               'src/components/example-2.tsx': { kind: 'deleted' },
             },
-            sessions: ['busy', 'idle', 'dirty-idle', 'worktree'].includes(ctx.case)
+            sessions: ['busy', 'idle', 'dirty-idle'].includes(ctx.case)
               ? [
                   {
                     id: 'task-a',
                     name: '修复登录页面',
-                    running: ['busy', 'worktree'].includes(ctx.case),
+                    running: ['busy'].includes(ctx.case),
                   },
                 ]
               : [],
@@ -171,7 +171,7 @@ void mountPage({
               ? { blocked: ctx.case.slice(6) }
               : {}),
             ...(ctx.case === 'operation' ? { blocked: 'operation' } : {}),
-            ...(['busy', 'worktree'].includes(ctx.case) ? { blocked: 'busy' } : {}),
+            ...(['busy'].includes(ctx.case) ? { blocked: 'busy' } : {}),
             ...(ctx.case === 'occupied' && req.branch === 'release' ? { blocked: 'occupied' } : {}),
             ...(ctx.case === 'ignored' && req.branch === 'feature'
               ? {

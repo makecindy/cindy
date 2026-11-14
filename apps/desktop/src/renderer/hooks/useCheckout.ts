@@ -352,7 +352,6 @@ export function useCheckout(
     closeDialog: () => update({ dialog: undefined }),
     usedWorktree: () => {
       update({ dialog: undefined, error: undefined });
-      toast.info(t('newChat.checkout.worktreeDefault'), { duration: 8000 });
     },
   };
 }

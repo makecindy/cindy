@@ -14612,7 +14612,6 @@
     },
     "checkout": {
       "useWorktree": "Usar worktree",
-      "worktreeDefault": "Esta sessão usará uma cópia separada, sem alterar este diretório. Novas sessões também usarão essa opção por padrão; você pode desmarcá-la quando quiser.",
       "switched": "Alterado para {{branch}}",
       "stashed": " · Alterações salvas",
       "carried": " · Alterações transferidas",
@@ -14652,7 +14651,11 @@
       "dialogSessions": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
       "dialogSessions_one": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
       "dialogSessions_other": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
-      "dialogSessions_many": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}"
+      "dialogSessions_many": "Outras sessões neste diretório: {{count}}. O trabalho continuará em {{branch}}",
+      "moreFiles": "Mais {{count}} arquivos",
+      "moreFiles_one": "Mais {{count}} arquivo",
+      "moreFiles_other": "Mais {{count}} arquivos",
+      "moreFiles_many": "Mais {{count}} arquivos"
     }
   },
   "onboarding": {

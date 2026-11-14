@@ -14490,7 +14490,6 @@
     },
     "checkout": {
       "useWorktree": "worktree verwenden",
-      "worktreeDefault": "Diese Sitzung arbeitet in einer separaten Kopie. Dieses Verzeichnis bleibt unverändert. Neue Sitzungen nutzen das ebenfalls standardmäßig; du kannst das Häkchen jederzeit entfernen.",
       "switched": "Zu {{branch}} gewechselt",
       "stashed": " · Änderungen gespeichert",
       "carried": " · Änderungen übernommen",
@@ -14530,7 +14529,11 @@
       "dialogSessions": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
       "dialogSessions_one": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
       "dialogSessions_other": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
-      "dialogSessions_many": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter"
+      "dialogSessions_many": "Weitere Sitzungen in diesem Verzeichnis: {{count}}. Die Arbeit geht auf {{branch}} weiter",
+      "moreFiles": "{{count}} weitere Dateien",
+      "moreFiles_one": "{{count}} weitere Datei",
+      "moreFiles_other": "{{count}} weitere Dateien",
+      "moreFiles_many": "{{count}} weitere Dateien"
     }
   },
   "onboarding": {

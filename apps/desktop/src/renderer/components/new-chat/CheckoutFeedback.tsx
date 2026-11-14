@@ -151,8 +151,8 @@ export function CheckoutDialog({
                 {t('newChat.checkout.dialogSessions', { count: idle.length, branch: target })}
               </p>
             )}
-            <ul className="max-h-[140px] overflow-y-auto border-y border-border py-1 text-12">
-              {dialog?.status.files.map((file) => {
+            <ul className="border-y border-border py-1 text-12">
+              {dialog?.status.files.slice(0, 5).map((file) => {
                 const detail = dialog.status.fileDetails?.[file];
                 return (
                   <li key={file} className="flex min-h-7 items-center gap-3" title={file}>
@@ -177,6 +177,11 @@ export function CheckoutDialog({
                 );
               })}
             </ul>
+            {dialog && dialog.status.files.length > 5 && (
+              <p className="text-12 text-muted-foreground">
+                {t('newChat.checkout.moreFiles', { count: dialog.status.files.length - 5 })}
+              </p>
+            )}
             <div
               role="radiogroup"
               aria-label={t('newChat.checkout.title', vars)}
@@ -232,8 +237,9 @@ export function CheckoutDialog({
                 <Button
                   compact
                   variant="secondary"
-                  tone="quiet"
+                  palette="confirmation"
                   size="sm"
+                  className="min-h-9"
                   disabled={busy}
                   onClick={() => onUseWorktree(dialog?.branch)}
                 >

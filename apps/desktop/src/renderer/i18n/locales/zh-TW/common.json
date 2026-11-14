@@ -14430,7 +14430,6 @@
     },
     "checkout": {
       "useWorktree": "改用 worktree",
-      "worktreeDefault": "這次任務會在獨立副本裡進行，目前目錄不動；之後新建任務也預設如此，可隨時取消勾選",
       "switched": "已切換到 {{branch}}",
       "stashed": " · 變更已儲存",
       "carried": " · 變更已一併帶過來",
@@ -14470,7 +14469,11 @@
       "dialogSessions": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
       "dialogSessions_one": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
       "dialogSessions_other": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
-      "dialogSessions_many": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續"
+      "dialogSessions_many": "這個目錄還有 {{count}} 個任務，切換後也會在 {{branch}} 上繼續",
+      "moreFiles": "還有 {{count}} 個檔案",
+      "moreFiles_one": "還有 {{count}} 個檔案",
+      "moreFiles_other": "還有 {{count}} 個檔案",
+      "moreFiles_many": "還有 {{count}} 個檔案"
     }
   },
   "onboarding": {

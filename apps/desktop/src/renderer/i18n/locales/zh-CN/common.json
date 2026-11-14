@@ -14430,7 +14430,6 @@
     },
     "checkout": {
       "useWorktree": "改用 worktree",
-      "worktreeDefault": "这次任务会在独立副本里进行，当前目录不动；之后新建任务也默认这样，可以随时取消勾选",
       "switched": "已切到 {{branch}}",
       "stashed": " · 改动已保存",
       "carried": " · 改动已带过来",
@@ -14470,7 +14469,11 @@
       "dialogSessions": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
       "dialogSessions_one": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
       "dialogSessions_other": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
-      "dialogSessions_many": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续"
+      "dialogSessions_many": "这个目录还有 {{count}} 个任务，切换后也会在 {{branch}} 上继续",
+      "moreFiles": "还有 {{count}} 个文件",
+      "moreFiles_one": "还有 {{count}} 个文件",
+      "moreFiles_other": "还有 {{count}} 个文件",
+      "moreFiles_many": "还有 {{count}} 个文件"
     }
   },
   "onboarding": {

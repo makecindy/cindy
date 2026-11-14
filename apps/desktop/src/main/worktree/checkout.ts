@@ -109,10 +109,12 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
       files.push(fields[i].slice(3));
       if (/[RC]/.test(fields[i].slice(0, 2))) i++;
     }
+    const previewFiles = files.slice(0, 5);
     const fileDetails: NonNullable<CheckoutStatus['fileDetails']> = Object.create(null);
-    for (let i = 0; i < fields.length; i++) {
+    for (let i = 0, count = 0; i < fields.length && count < previewFiles.length; i++) {
       const row = fields[i];
       if (!row) continue;
+      count++;
       const code = row.slice(0, 2);
       if (code === '??' || code.includes('A')) fileDetails[row.slice(3)] = { kind: 'new' };
       else if (code.includes('D')) fileDetails[row.slice(3)] = { kind: 'deleted' };
@@ -123,7 +125,20 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
     if (target && files.length)
       try {
         const stats = (
-          await gitExec(['diff', '--numstat', '-z', '--no-renames', 'HEAD', '--'], repo, readOpts)
+          await gitExec(
+            [
+              '--literal-pathspecs',
+              'diff',
+              '--numstat',
+              '-z',
+              '--no-renames',
+              'HEAD',
+              '--',
+              ...previewFiles,
+            ],
+            repo,
+            readOpts,
+          )
         ).stdout;
         for (const row of stats.split('\0')) {
           const match = /^(\d+)\t(\d+)\t([\s\S]+)$/.exec(row);

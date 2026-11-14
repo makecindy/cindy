@@ -14430,7 +14430,6 @@
     },
     "checkout": {
       "useWorktree": "worktree を使う",
-      "worktreeDefault": "このセッションは別コピーで進み、現在のディレクトリはそのままです。次の新しいセッションでも既定で使われますが、いつでもチェックを外せます。",
       "switched": "{{branch}} に切り替えました",
       "stashed": " · 変更を保存しました",
       "carried": " · 変更を引き継ぎました",
@@ -14470,7 +14469,11 @@
       "dialogSessions": "このディレクトリには他に {{count}} 件のセッションがあります。切り替え後は {{branch}} で続行します",
       "dialogSessions_one": "このディレクトリには他に {{count}} 件のセッションがあります。切り替え後は {{branch}} で続行します",
       "dialogSessions_other": "このディレクトリには他に {{count}} 件のセッションがあります。切り替え後は {{branch}} で続行します",
-      "dialogSessions_many": "このディレクトリには他に {{count}} 件のセッションがあります。切り替え後は {{branch}} で続行します"
+      "dialogSessions_many": "このディレクトリには他に {{count}} 件のセッションがあります。切り替え後は {{branch}} で続行します",
+      "moreFiles": "ほか {{count}} 件のファイル",
+      "moreFiles_one": "ほか {{count}} 件のファイル",
+      "moreFiles_other": "ほか {{count}} 件のファイル",
+      "moreFiles_many": "ほか {{count}} 件のファイル"
     }
   },
   "onboarding": {

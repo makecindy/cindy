@@ -654,6 +654,7 @@ it('disables checkout choices while a task is running; explicit worktree keeps t
   });
   expect(screen.getByRole('listbox')).toBeTruthy();
   expect(branchButton().textContent).toBe('remembered-source');
+  expect(mocks.info).not.toHaveBeenCalled();
   expect(
     (screen.getByRole('checkbox', { name: 'newChat.worktree.toggleAria' }) as HTMLInputElement)
       .checked,
@@ -689,6 +690,7 @@ it('lets the user cancel dirty checkout or choose worktree without any Git mutat
   });
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(branchButton().textContent).toBe('feature');
+  expect(mocks.info).not.toHaveBeenCalled();
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
 });
 // A clean porcelain status can still hide ignored files that the target would overwrite.
@@ -1121,4 +1123,17 @@ it('explains the worktree checkbox with the shared short description', async () 
   render(<BranchWorktreeChip {...props} />);
   fireEvent.focus(screen.getByRole('checkbox'));
   expect((await screen.findByRole('tooltip')).textContent).toBe('newChat.worktree.chipTooltip');
+});
+
+// Large dirty checkouts show a stable sample, not a scrollable full file list.
+it('previews the first five of sixty changed files and reports the remainder', async () => {
+  const files = Array.from({ length: 60 }, (_, i) => `file-${i}.txt`);
+  setupCheckout(true, { files });
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  fireEvent.click(branchButton());
+  fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+  await screen.findByRole('dialog');
+  expect(screen.getAllByRole('listitem').map((row) => row.title)).toEqual(files.slice(0, 5));
+  expect(screen.getByText(mocks.t('newChat.checkout.moreFiles', { count: 55 }))).toBeTruthy();
 });

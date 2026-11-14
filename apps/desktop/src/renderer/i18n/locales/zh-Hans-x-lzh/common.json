@@ -14430,7 +14430,6 @@
     },
     "checkout": {
       "useWorktree": "改用 worktree",
-      "worktreeDefault": "此差事于独立副本中行，原目录不动；后建差事亦默认如此，可随时去勾",
       "switched": "已切到 {{branch}}",
       "stashed": " · 改动已存",
       "carried": " · 改动已带过来",
@@ -14470,7 +14469,11 @@
       "dialogSessions": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
       "dialogSessions_one": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
       "dialogSessions_other": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
-      "dialogSessions_many": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行"
+      "dialogSessions_many": "此目录尚有 {{count}} 项差事，切换后亦于 {{branch}} 续行",
+      "moreFiles": "尚有 {{count}} 个文件",
+      "moreFiles_one": "尚有 {{count}} 个文件",
+      "moreFiles_other": "尚有 {{count}} 个文件",
+      "moreFiles_many": "尚有 {{count}} 个文件"
     }
   },
   "onboarding": {

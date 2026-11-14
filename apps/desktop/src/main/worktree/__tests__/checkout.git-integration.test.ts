@@ -250,3 +250,18 @@ it('reports optional text counts and new/deleted file kinds for the dialog', asy
   fs.unlinkSync(path.join(f.repo, 'base'));
   expect((await f.service.status(f.repo, 'feature')).fileDetails?.base?.kind).toBe('deleted');
 });
+
+// The preview is bounded even for path names that are also Git pathspec patterns.
+it('limits line counts to the first five dirty files using literal paths', async () => {
+  const f = fixture();
+  const names = ['[a-z]', ...Array.from({ length: 9 }, (_, i) => String.fromCharCode(97 + i))];
+  for (const name of names) fs.writeFileSync(path.join(f.repo, name), 'before\n');
+  git(f.repo, 'add', '.');
+  git(f.repo, 'commit', '-m', 'preview files');
+  for (const name of names) fs.writeFileSync(path.join(f.repo, name), 'after\nextra\n');
+  const status = await f.service.status(f.repo, 'feature');
+  expect(status.files).toHaveLength(10);
+  expect(Object.keys(status.fileDetails ?? {}).sort()).toEqual(status.files.slice(0, 5).sort());
+  for (const detail of Object.values(status.fileDetails ?? {}))
+    expect(detail).toEqual({ added: 2, removed: 1 });
+});

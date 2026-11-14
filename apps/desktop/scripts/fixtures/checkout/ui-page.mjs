@@ -40,7 +40,6 @@ export default {
     switching: {
       about: 'Pending checkout keeps the right-aligned branch button width and position',
     },
-    worktree: { about: 'Explicit worktree info toast leaves the controls aligned' },
     saved: { about: 'Saved changes toast and persistent menu entry leave the controls aligned' },
   },
   async ready(page) {
@@ -212,15 +211,6 @@ export default {
         await ui.capture('saved-menu');
         await page.keyboard.press('Escape');
       }
-    } else if (ui.case === 'worktree') {
-      await page
-        .getByRole('button', { name: await ui.t('newChat.checkout.useWorktree'), exact: true })
-        .click();
-      await page
-        .getByText(await ui.t('newChat.checkout.worktreeDefault'), { exact: true })
-        .waitFor();
-      assert.equal(await page.getByRole('listbox').isVisible(), true);
-      await page.keyboard.press('Escape');
     } else if (['dirty', 'conflict', 'many-files', 'dirty-idle'].includes(ui.case)) {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
       await page.getByRole('dialog').waitFor();
@@ -238,7 +228,16 @@ export default {
         await page.keyboard.press('ArrowUp');
         assert.equal(await carry.isChecked(), true);
       }
+      // Keyboard checks can scroll the dialog body; capture its initial view.
+      await page.getByRole('radiogroup').evaluate((el) => {
+        el.parentElement.scrollTop = 0;
+      });
       const dialog = page.getByRole('dialog');
+      assert.equal(await dialog.getByRole('listitem').count(), ui.case === 'many-files' ? 5 : 3);
+      if (ui.case === 'many-files')
+        await dialog
+          .getByText(await ui.t('newChat.checkout.moreFiles', { count: 55 }), { exact: true })
+          .waitFor();
       assert.equal(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth), true);
       assert.equal(
         await page
