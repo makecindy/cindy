@@ -639,7 +639,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.args).not.toContain('--system-prompt');
     expect(captured.args).toContain('--append-system-prompt');
     expect(readAppendedSystemPrompt()).toBe('You are Cindy.');
-    expect(captured.args).not.toContain('--tools');
+    // +codemode 是追加项，不构成工具白名单；plain name 才会限制工具面。
+    expect(captured.args).toContain('--tools');
+    expect(captured.args[captured.args.indexOf('--tools') + 1]).toBe('+codemode');
     expect(captured.env.PI_OFFLINE).toBe('1');
     expect(captured.env.PI_CACHE_RETENTION).toBe('long');
     const privateRgPath = captured.env.CINDY_PI_MANAGED_RG_PATH;
@@ -718,6 +720,22 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     // A remote computer's prompts must not reach this computer's owner.
     expect(captured.env.CINDY_INPUT_HANDOFF_ROUTE).toBe(mode === 'local' ? 'route-askpass' : undefined);
     await handle.close();
+  });
+
+  it('passes +codemode so resumed sessions pick up the built-in tool', async () => {
+    const deps = buildDeps();
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'codemode-resume',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      const toolsIndex = captured.args.indexOf('--tools');
+      expect(toolsIndex).toBeGreaterThan(-1);
+      expect(captured.args[toolsIndex + 1]).toBe('+codemode');
+    } finally {
+      await handle.close();
+    }
   });
 
   it('lets Pi discover user-installed packages natively instead of gating them on Cindy metadata', async () => {
@@ -3234,6 +3252,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(captured.args[toolsIndex + 1]).toBe('read,grep,find,ls');
       expect(captured.args).toContain('--no-approve');
       expect(captured.args).toContain('--no-extensions');
+      // codemode 是内置扩展，--no-extensions 会关掉它；缺了这一项功能会静默失效。
+      expect(captured.args).toContain('builtin:codemode');
       expect(captured.args).not.toContain('--skill');
       expect(captured.env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
       expect(captured.mcpVendorOptions).toBeUndefined();

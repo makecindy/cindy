@@ -48,8 +48,8 @@ describe('mergePiUserSettingsPassthrough (#3643)', () => {
     });
     const merged = JSON.parse(mergePiUserSettingsPassthrough(built, existing));
     expect(merged.shellPath).toBeUndefined();
-    // 白名单之外的键(defaultTools 会与 bridge 工具面冲突)不透传。
-    expect(merged.defaultTools).toBeUndefined();
+    // 用户写的 defaultTools(会与 bridge 工具面冲突)不透传;Cindy 只按 +name 追加 codemode。
+    expect(merged.defaultTools).toEqual(['+codemode']);
     // Cindy 自有 compaction 以新生成内容为准。
     expect(merged.compaction).toEqual(JSON.parse(built).compaction);
   });

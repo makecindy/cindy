@@ -1784,6 +1784,8 @@ export function buildPiSettingsJsonContent(
     ? undefined
     : Math.max(1, Math.ceil(effectiveContextWindow - budget * ((piCompactionPct ?? 90) / 100)));
   return JSON.stringify({
+    // Native codemode is opt-in upstream; `+name` keeps the inherited tool set and only adds it.
+    defaultTools: ['+codemode'],
     transport: 'sse',
     retry: {
       enabled: true,
@@ -4161,6 +4163,12 @@ export class PiAgent extends BaseAgent {
         await writeFile(taskSystemPromptPath, taskSystemPrompt, 0o600);
       }
 
+      // Pi 的 resume 用会话记录里的工具集，settings 的 defaultTools 对既有会话不再生效；
+      // 非收紧模式补 +codemode，否则老会话重启多少次都拿不到它。
+      const appendCodemodeTool = !reviewMode
+        && !hostedGuest
+        && !isolatedBotProfile(opts.botRuntimeProfile)
+        && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
       args = [
         '--mode',
         'rpc',
@@ -4168,7 +4176,10 @@ export class PiAgent extends BaseAgent {
         // --prompt-template / --extension pass original in-repo paths without
         // trusting `.pi/settings.json` or auto-installing project packages.
         '--no-approve',
-        ...(nativePackagePaths.length === 0 ? ['--no-extensions'] : []),
+        // codemode 是 pi 的内置扩展：--no-extensions 会连它一起关掉，须显式补回。
+        ...(nativePackagePaths.length === 0
+          ? ['--no-extensions', '-e', 'builtin:codemode']
+          : []),
         '--session-dir',
         sessionDir,
         '--provider',
@@ -4176,6 +4187,7 @@ export class PiAgent extends BaseAgent {
         '--model',
         initialWireModel,
         ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
+        ...(appendCodemodeTool ? ['--tools', '+codemode'] : []),
         ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? ['--no-skills', '--no-context-files', '--no-prompt-templates'] : []),
         // Classic Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
         // the cwd chain — their context is the Bot profile. V2 teammates load them like any task.

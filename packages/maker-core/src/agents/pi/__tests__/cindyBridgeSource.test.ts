@@ -2448,6 +2448,47 @@ it('re-surfaces the disclosure set once after compaction instead of editing ever
   expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
 });
 
+it('injects the parallel-vs-codemode split only when codemode is active', () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('  // Tool-efficiency policy');
+  const end = source.indexOf('  installTextOnlyTurnPolicy(pi', start);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  const handlers = new Map<string, (event: any) => any>();
+  const sandbox: any = {
+    activeTools: [],
+    guestToolGate: null,
+    pi: {
+      on: (name: string, callback: (event: any) => any) => handlers.set(name, callback),
+      getActiveTools: () => sandbox.activeTools,
+    },
+  };
+  runInNewContext(
+    ts.transpileModule(source.slice(start, end), {
+      compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
+    }).outputText,
+    sandbox,
+  );
+  const event = { systemPromptOptions: { promptGuidelines: ['base rule'] } };
+
+  // Without codemode the advice would point at a tool the run cannot use.
+  handlers.get('before_agent_start')!(event);
+  expect(event.systemPromptOptions.promptGuidelines).toEqual(['base rule']);
+
+  // A duplicate would grow the cached prefix on every turn.
+  sandbox.activeTools = ['codemode'];
+  handlers.get('before_agent_start')!(event);
+  handlers.get('before_agent_start')!(event);
+  expect(event.systemPromptOptions.promptGuidelines).toEqual([
+    'base rule',
+    'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip.',
+    'A codemode script pays off when the calls are already known and their raw output needs filtering or cross-checking; return only the fields you need, never the raw output; when each result decides the next call, or for one or two small calls, issue the calls directly.',
+  ]);
+
+  // Runs without prompt options stay untouched instead of throwing.
+  expect(handlers.get('before_agent_start')!({})).toBeUndefined();
+});
+
 // Regression: optional questions need the same direct discoverability as sync questions.
 // Unit: execute the production gateway and verify real MCP routing and permission identity.
 it.each(['list_machines', 'ask_user_question_async', 'manage_user_questions'])('registers %s directly without MCP discovery', async (name) => {
