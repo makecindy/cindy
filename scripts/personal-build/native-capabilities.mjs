@@ -71,8 +71,11 @@ export function preparePersonalInput(root, app, run) {
   try {
     const main = path.join(temporary, 'main.swift');
     fs.writeFileSync(main, caller + '\n' + input);
+    // The linked Info.plist names Cindy in the owner-verification prompt; identifier unchanged.
     run('xcrun', ['swiftc', '-D', 'DESKTOP_INPUT_PERSONAL', '-O', main,
-      '-o', path.join(directory, 'cindy-macos-desktop-input')]);
+      '-o', path.join(directory, 'cindy-macos-desktop-input'),
+      '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+      '-Xlinker', path.join(root, 'apps/desktop/native/remote-desktop/macos-input-Info.plist')]);
   } finally { fs.rmSync(temporary, {recursive:true,force:true}); }
 }
 
@@ -201,6 +204,7 @@ export function prepareStableNativeCapabilities(root, options = {}) {
   const names = execFileSync('git',['ls-files','-z','--','apps/desktop/native/agent-island'],{cwd:root,encoding:'utf8'}).split('\0').filter(Boolean);
   names.push('apps/desktop/resources/icon.icns',
     'apps/desktop/native/remote-desktop/macos-input.swift',
+    'apps/desktop/native/remote-desktop/macos-input-Info.plist',
     'packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift');
   const toolchain = resolveNativeToolchain();
   const inputs = {protocol:1, platform:process.platform, arch:process.arch, node:process.versions.node,

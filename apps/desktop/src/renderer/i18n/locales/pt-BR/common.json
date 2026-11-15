@@ -1131,19 +1131,23 @@
   },
   "privacyExit": {
     "status": "Este computador está sendo controlado remotamente pelo Cindy",
-    "hint": "Para mostrar esta tela, desative Tela de privacidade do computador em Segurança no dispositivo que o controla. Ou clique ou pressione qualquer tecla neste computador e selecione Desconectar.",
+    "hint": "Para mostrar esta tela, desative “Tela de privacidade durante a conexão” em Segurança no dispositivo que está controlando. Ou clique ou pressione qualquer tecla neste computador e escolha Desconectar.",
     "title": "Desconectar a área de trabalho remota?",
-    "detail": "Isso encerrará o controle remoto e restaurará a tela deste computador. O computador será bloqueado se a opção de bloquear ao sair estiver ativada.",
+    "detail": "Isso encerra o controle remoto e remove a tela de privacidade. Se “Proteger computador ao sair” estiver ativado, o computador também é bloqueado.",
     "cancel": "Manter conectado",
     "disconnect": "Desconectar"
   },
   "awayGuard": {
     "status": "O Cindy está trabalhando",
-    "hint": "Pressione qualquer tecla para bloquear e desbloqueie com Touch ID ou sua senha.",
+    "hint": "Pressione qualquer tecla ou a tecla Touch ID para bloquear e depois desbloqueie com a digital ou a senha",
     "lockFailed": {
       "status": "O Cindy não conseguiu bloquear este Mac",
-      "hint": "Pressione Control-Command-Q para bloquear. A tela também será bloqueada sozinha depois de um tempo."
-    }
+      "hint": "Toque no computador para tentar bloquear de novo. Se ainda não bloquear, confirme com Touch ID ou sua senha para remover a tela. Você também pode fechar a tampa ou apertar o botão de energia.",
+      "hintWindows": "Toque no computador para tentar bloquear de novo. Se ainda não bloquear, confirme com o Windows Hello ou seu PIN para remover a tela. Você também pode pressionar a tecla do logotipo do Windows + L."
+    },
+    "hintWindows": "Pressione qualquer tecla para bloquear; desbloqueie com o Windows Hello ou sua senha",
+    "hintLinux": "Pressione qualquer tecla para bloquear; desbloqueie com sua senha",
+    "verifyReason": "remover a tela de privacidade"
   },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
@@ -1294,10 +1298,10 @@
       "resolutionHint": "As alterações de resolução afetam o monitor físico remoto."
     },
     "settingUnsupported": "Este computador ainda não oferece suporte a esta configuração",
-    "privacyScreen": "Tela de privacidade do computador",
-    "privacyScreenHint": "Oculte as telas do computador. Clique ou pressione uma tecla no computador e confirme para desconectar. O bloqueio ao sair será aplicado se estiver ativado.",
-    "privacyActive": "A tela de privacidade está ativada. Clique ou pressione uma tecla no computador e confirme para desconectar. O bloqueio ao sair será aplicado se estiver ativado.",
-    "privacyFailed": "Não foi possível ativar a tela de privacidade. As telas do computador ainda podem estar visíveis.",
+    "privacyScreen": "Tela de privacidade durante a conexão",
+    "privacyScreenHint": "Cobre a tela deste computador durante o controle remoto. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
+    "privacyActive": "A tela de privacidade está ativada. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
+    "privacyFailed": "Não foi possível ativar a tela de privacidade. A tela do computador ainda pode estar visível.",
     "hostMute": "Silenciar computador controlado",
     "hostMuteHint": "Silenciar o computador controlado enquanto estiver conectado",
     "hostMuteFailed": "Não foi possível alterar o estado de áudio do computador controlado",
@@ -1313,7 +1317,7 @@
     "idleMinutes_one": "{{count}} minuto",
     "idleMinutes_other": "{{count}} minutos",
     "idleDisconnected": "Desconectado por inatividade. Reconecte quando estiver pronto.",
-    "lockOnExit": "Bloquear computador ao sair",
+    "lockOnExit": "Proteger computador ao sair",
     "lockOnExitHint": "Bloqueia o computador ao sair da área de trabalho remota.",
     "lockOnExitFailed": "Não foi possível confirmar que o computador foi bloqueado. Verifique o computador antes de deixá-lo sem supervisão.",
     "nativeResolution": "Nativa",
@@ -1357,7 +1361,9 @@
         "body": "Esta tarefa está com {{device}} aberto em outro computador. Atualize o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
         "action": "Atualizar"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "Mostra a tela de privacidade ao sair, para a IA continuar trabalhando; tocar no computador o bloqueia.",
+    "lockedEnablePrivacyHint": "Para a IA continuar usando este computador enquanto você está fora, ative a tela de privacidade nas Configurações dele → Geral → Quando você está fora."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1942,7 +1948,8 @@
       "windowBehavior": "Comportamento do aplicativo",
       "shortcuts": "Atalhos de teclado",
       "mcpServers": "MCP personalizado",
-      "bots": "Amigos"
+      "bots": "Amigos",
+      "awayFromComputer": "Quando você está fora"
     },
     "remote": {
       "title": "Máquinas remotas",
@@ -2502,21 +2509,23 @@
       "swallowActivationClickAria": "Ativar ou desativar proteção contra cliques acidentais ao retornar à janela",
       "macRestartNote": "No macOS, reinicie o app para aplicar as alterações.",
       "awayGuard": {
-        "label": "Continuar trabalhando enquanto você está fora",
-        "hint": "Quando ativado, este Mac não desliga a tela nem bloqueia sozinho, para que a IA possa usá-lo a qualquer momento. Depois de um tempo longe, uma camada preta cobre a tela e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com Touch ID ou sua senha.",
+        "label": "Usar tela de privacidade em vez de bloquear",
+        "hint": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com Touch ID ou sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
         "permission": "Permita o Cindy em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade para que ele bloqueie a tela assim que alguém tocar neste Mac. Até lá, a tela apaga e é bloqueada normalmente.",
         "preview": "Testar agora",
-        "previewStarting": "Solte o mouse e o teclado. A tela será coberta em 3 segundos; pressione qualquer tecla para bloqueá-la e depois desbloqueie.",
-        "previewUnavailable": "Não foi possível cobrir a tela. Reinicie o Cindy e tente novamente.",
+        "previewStarting": "Solte o mouse e o teclado. Em 3 segundos a tela de privacidade aparece; pressione qualquer tecla para bloquear e depois desbloqueie para testar.",
+        "previewUnavailable": "Não foi possível mostrar a tela de privacidade. Reinicie o Cindy e tente de novo.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
-          "label": "Cobrir a tela após",
-          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
+          "label": "Mostrar tela de privacidade após",
+          "hint": "Tempo sem tocar no teclado ou no mouse enquanto a IA trabalha. Por padrão, o tempo em que o sistema desliga a tela.",
           "system": "Sistema"
-        }
+        },
+        "hintWindows": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com o Windows Hello ou sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
+        "hintLinux": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador."
       }
     },
     "agentIsland": {
@@ -7065,7 +7074,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "Incluído na tela de privacidade: este computador não entra em repouso."
     },
     "imBot": {
       "beta": "Beta",
@@ -9322,6 +9332,9 @@
         "failed": "Não foi possível concluir a limpeza",
         "pending": "Na fila"
       }
+    },
+    "awayFromComputer": {
+      "title": "Quando você está fora"
     }
   },
   "remoteDevice": {

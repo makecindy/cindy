@@ -79,8 +79,24 @@ import {
 import { readLinuxCursorSupport } from './linuxCapture';
 import { LinuxDesktopMute, supportsLinuxMute } from './linuxMute';
 import { PrivacyScreen } from './privacyScreen';
+import {
+  coverDesktopLockFailure,
+  coverRemoteDesktopExit,
+  displayNeededForWork,
+  hostAwayAfterMs,
+  privacyScreenAvailable,
+  privacyScreenEnabled,
+  setLinuxPrivacyAvailable,
+  supportsRemoteExitPrivacy,
+  WINDOWS_PRIVACY_SCREEN_ENABLED,
+} from './awayGuardService';
 import { ControlledOverlay } from './controlledOverlay';
-import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
+import {
+  LinuxPrivacyScreen,
+  prepareLinuxPrivacy,
+  readLinuxPhysicalIdleMs,
+  supportsLinuxPrivacy,
+} from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
 import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
 import {
@@ -105,6 +121,8 @@ import {
   MAC_ACCESSIBILITY_SETTINGS_URL,
   MAC_SCREEN_RECORDING_SETTINGS_URL,
 } from '../computer-permission-guide/request';
+
+const log = createLogger('remote-desktop');
 
 const permissions = new RemoteDesktopPermissionsService({
   required: process.platform === 'darwin',
@@ -210,8 +228,13 @@ function warnIfXWaylandCapture(): void {
 // Privacy masks and the controlled-desktop overlay share one capture filter.
 let privacyExcluded: number[] = [];
 let overlayExcluded: number[] = [];
+let awayExcluded: number[] = [];
 const applyExcludedWindows = () =>
-  nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded]);
+  nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded, ...awayExcluded]);
+export function setAwayCaptureExcludedWindows(ids: number[]): void {
+  awayExcluded = ids;
+  applyExcludedWindows();
+}
 // While the phone shows picture-in-picture the input helper is stopped on purpose;
 // the local exit confirmation then has nothing to pause, and cancelling it must not
 // bring remote control back.
@@ -229,10 +252,26 @@ const privacyScreen = new PrivacyScreen(
   },
   pauseInputForPrivacy,
 );
+let linuxAwayAwake: number | null = null;
+const setLinuxAwayAwake = (awake: boolean) => {
+  if (awake && linuxAwayAwake === null)
+    linuxAwayAwake = powerSaveBlocker.start('prevent-display-sleep');
+  else if (!awake && linuxAwayAwake !== null) {
+    powerSaveBlocker.stop(linuxAwayAwake);
+    linuxAwayAwake = null;
+  }
+};
 const linuxPrivacy = new LinuxPrivacyScreen(
   () => remoteDesktop.stopPrivacyByUser(),
   pauseInputForPrivacy,
+  undefined,
+  setLinuxAwayAwake,
+  displayNeededForWork,
 );
+export function isLinuxAwayCoverUp(): boolean {
+  return linuxPrivacy.inputShielded;
+}
+
 const supportsPrivacyScreen =
   (process.platform === 'darwin' &&
     typeof process.getSystemVersion === 'function' &&
@@ -879,7 +918,10 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
         process.platform === 'darwin' ||
         (process.platform === 'win32' && windowsAvailable) ||
         Boolean(enabled && nativeWayland() && (await readLinuxCursorSupport())),
-      lockOnExit: process.platform === 'darwin' || supportsLinuxLock(),
+      lockOnExit:
+        process.platform === 'darwin' ||
+        (process.platform === 'win32' && WINDOWS_PRIVACY_SCREEN_ENABLED) ||
+        supportsLinuxLock(),
       clipboardContent:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
@@ -1028,7 +1070,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   },
   stopPrivacyScreen: () => {
     privacyScreen.stop();
-    linuxPrivacy.stop();
+    linuxPrivacy.stopSession();
     privacyRequested = false;
     // Called from inside lease teardown; read controller state afterwards.
     queueMicrotask(syncControlledOverlay);
@@ -1112,11 +1154,45 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   releaseInput: () => input.release(),
   pauseVideo,
   resumeVideo,
-  ...(process.platform === 'darwin' || supportsLinuxLock()
+  // Windows locking is implemented but off until verified on Windows hardware.
+  ...(process.platform === 'darwin' ||
+  (process.platform === 'win32' && WINDOWS_PRIVACY_SCREEN_ENABLED) ||
+  supportsLinuxLock()
     ? {
         lockScreen: async (isCurrent: () => boolean, signal: AbortSignal) => {
           await input.release();
           await lockDesktopScreen(isCurrent, signal);
+        },
+      }
+    : {}),
+  ...(supportsRemoteExitPrivacy() ? { coverLockFailure: coverDesktopLockFailure } : {}),
+  // Idle viewers follow this computer's own away time (docs/product-rules/privacy-screen.md).
+  ...(supportsRemoteExitPrivacy() || nativeWayland()
+    ? {
+        // Checked per call: Hyprland's backend becomes available asynchronously.
+        hostIdle: () => (!privacyScreenAvailable() ? null : {
+            // Before the away guard reads the system times, use its own fallback.
+            awayAfterMs: hostAwayAfterMs() ?? 10 * 60_000,
+            keepWhileWorking: privacyScreenEnabled() && displayNeededForWork(),
+          }),
+        exitProtection: (): 'privacy-screen' | 'lock' | undefined =>
+          !privacyScreenAvailable() ? undefined : privacyScreenEnabled() ? 'privacy-screen' : 'lock',
+      }
+    : {}),
+  ...(supportsRemoteExitPrivacy() || nativeWayland()
+    ? {
+        protectOnExit: async (isCurrent: () => boolean, signal: AbortSignal) => {
+          await input.release();
+          if (!isCurrent() || signal.aborted) throw new Error('DESKTOP_LEASE_EXPIRED');
+          try {
+            // 「用隐私屏代替锁屏」 off on this computer: a protected exit is a real lock.
+            if (!privacyScreenEnabled()) return await lockDesktopScreen(isCurrent, signal);
+            if (process.platform === 'linux') await linuxPrivacy.coverOnExit(isCurrent);
+            else await coverRemoteDesktopExit();
+          } catch (error) {
+            log.warn('Exit privacy cover unavailable; falling back to screen lock', error);
+            await lockDesktopScreen(isCurrent, signal);
+          }
         },
       }
     : {}),
@@ -1156,6 +1232,7 @@ export function registerRemoteDesktopIpc(
     permissions.dismiss();
     remoteDesktop.stop(undefined, undefined, 'shutdown');
   });
+  onQuit('linux-privacy-lock', () => linuxPrivacy.lockOnExit(), 'async');
   onQuit('remote-desktop-restore', () => remoteDesktop.stopAndRestore(), 'async');
   const linuxLayoutChanged = () => {
     if (remoteDesktop.changingDisplay || !remoteDesktop.displayId || liveSession) return;
@@ -1599,4 +1676,47 @@ function desktopErrorCode(error: unknown): string {
     message.match(/\b(?:DESKTOP|CREDENTIAL|REMOTE|ACCESS)_[A-Z_]{1,56}\b/)?.[0] ??
     'DESKTOP_REQUEST_FAILED'
   );
+}
+
+/**
+ * Hyprland's automatic privacy screen (docs/product-rules/privacy-screen.md): with
+ * 「用隐私屏代替锁屏」 on and work needing the screen, keep it awake and, once nobody has
+ * touched this computer for its away time (the compositor's idle time), adopt the same
+ * persistent compositor cover a remote exit uses. Touching it locks through the
+ * compositor. Without work, nothing is held and the system idles and locks by itself.
+ * Not verified on a real Hyprland session yet.
+ */
+export function startLinuxAwayCover(): void {
+  if (process.platform !== 'linux' || !nativeWayland()) return;
+  let loaded = false;
+  let busy = false;
+  const tick = async () => {
+    // A live session owns the compositor masks; its end decides the protection.
+    if (busy || linuxPrivacy.active || remoteDesktop.state) return;
+    const working = privacyScreenEnabled() && displayNeededForWork();
+    setLinuxAwayAwake(working);
+    if (!working) return;
+    busy = true;
+    try {
+      if (!loaded) {
+        await prepareLinuxPrivacy(() => true, true);
+        loaded = true;
+      }
+      const idle = await readLinuxPhysicalIdleMs();
+      if (idle === null || idle < (hostAwayAfterMs() ?? 10 * 60_000)) return;
+      await linuxPrivacy.coverOnExit(() => true);
+    } catch (error) {
+      log.warn('Hyprland away cover unavailable', error);
+      loaded = false;
+    } finally {
+      busy = false;
+    }
+  };
+  void supportsLinuxPrivacy().then((available) => {
+    setLinuxPrivacyAvailable(available);
+    if (!available) return;
+    const timer = setInterval(() => void tick(), 2000);
+    timer.unref();
+    onQuit('linux-away-cover', () => clearInterval(timer));
+  });
 }

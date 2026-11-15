@@ -1131,19 +1131,23 @@
   },
   "privacyExit": {
     "status": "Cet ordinateur est contrôlé à distance via Cindy",
-    "hint": "Pour afficher cet écran, désactivez « Écran de confidentialité » dans Sécurité, sur l'appareil qui le contrôle. Ou cliquez ou appuyez sur une touche de cet ordinateur, puis choisissez Déconnecter.",
+    "hint": "Pour afficher cet écran, désactivez « Écran de confidentialité pendant la connexion » dans Sécurité sur l'appareil qui le contrôle. Ou cliquez ou appuyez sur une touche sur cet ordinateur, puis choisissez Déconnecter.",
     "title": "Déconnecter le bureau à distance ?",
-    "detail": "Cela mettra fin au contrôle à distance et rétablira l'écran de cet ordinateur. L'ordinateur se verrouillera si le verrouillage à la sortie est activé.",
+    "detail": "Cela met fin à la prise en main à distance et retire l'écran de confidentialité. Si « Protéger l'ordinateur à la sortie » est activé, l'ordinateur se verrouille aussi.",
     "cancel": "Rester connecté",
     "disconnect": "Déconnecter"
   },
   "awayGuard": {
     "status": "Cindy travaille",
-    "hint": "Appuyez sur une touche pour verrouiller, puis déverrouillez avec Touch ID ou votre mot de passe.",
+    "hint": "Appuyez sur une touche ou sur la touche Touch ID pour verrouiller, puis déverrouillez avec votre empreinte ou votre mot de passe",
     "lockFailed": {
       "status": "Cindy n'a pas pu verrouiller ce Mac",
-      "hint": "Appuyez sur Contrôle-Commande-Q pour le verrouiller. L'écran se verrouillera aussi de lui-même au bout d'un moment."
-    }
+      "hint": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec Touch ID ou votre mot de passe pour retirer l'écran. Vous pouvez aussi fermer le capot ou appuyer sur le bouton d'alimentation.",
+      "hintWindows": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec Windows Hello ou votre code PIN pour retirer l'écran. Vous pouvez aussi appuyer sur la touche du logo Windows + L."
+    },
+    "hintWindows": "Appuyez sur une touche pour verrouiller ; déverrouillez avec Windows Hello ou votre mot de passe",
+    "hintLinux": "Appuyez sur une touche pour verrouiller ; déverrouillez avec votre mot de passe",
+    "verifyReason": "retirer l'écran de confidentialité"
   },
   "appBadge": {
     "attentionCount": "Tâches nécessitant votre attention : {{count}}"
@@ -1294,10 +1298,10 @@
       "resolutionHint": "Les changements de résolution s'appliquent au moniteur distant réel."
     },
     "settingUnsupported": "Cet ordinateur ne prend pas encore en charge ce paramètre",
-    "privacyScreen": "Écran de confidentialité",
-    "privacyScreenHint": "Masque les écrans de l'ordinateur. Cliquez ou appuyez sur une touche de l'ordinateur, puis confirmez pour vous déconnecter. Le verrouillage à la sortie s'applique s'il est activé.",
-    "privacyActive": "L'écran de confidentialité est activé. Cliquez ou appuyez sur une touche de l'ordinateur, puis confirmez pour vous déconnecter. Le verrouillage à la sortie s'applique s'il est activé.",
-    "privacyFailed": "Impossible d'activer l'écran de confidentialité. Les écrans de l'ordinateur sont peut-être encore visibles.",
+    "privacyScreen": "Écran de confidentialité pendant la connexion",
+    "privacyScreenHint": "Masque l'écran de cet ordinateur pendant la prise en main à distance. Si quelqu'un clique ou appuie sur une touche devant l'ordinateur, une confirmation est demandée avant de se déconnecter.",
+    "privacyActive": "L'écran de confidentialité est activé. Si quelqu'un clique ou appuie sur une touche devant l'ordinateur, une confirmation est demandée avant de se déconnecter.",
+    "privacyFailed": "Impossible d'activer l'écran de confidentialité. L'écran de l'ordinateur est peut-être encore visible.",
     "hostMute": "Couper le son de l'ordinateur contrôlé",
     "hostMuteHint": "Couper le son de l'ordinateur contrôlé pendant la connexion",
     "hostMuteFailed": "Impossible de modifier le son de l'ordinateur contrôlé",
@@ -1313,8 +1317,8 @@
     "idleMinutes_one": "{{count}} minute",
     "idleMinutes_other": "{{count}} minutes",
     "idleDisconnected": "Déconnecté pour inactivité. Reconnectez-vous quand vous êtes prêt.",
-    "lockOnExit": "Verrouiller à la sortie",
-    "lockOnExitHint": "Verrouille l'ordinateur lorsque vous quittez le bureau à distance.",
+    "lockOnExit": "Protéger l'ordinateur à la sortie",
+    "lockOnExitHint": "Verrouille l'ordinateur quand vous quittez le bureau à distance.",
     "lockOnExitFailed": "Impossible de confirmer le verrouillage de l'ordinateur. Vérifiez-le avant de le laisser sans surveillance.",
     "nativeResolution": "Native",
     "autoUnlock": "Déverrouiller automatiquement l'ordinateur",
@@ -1357,7 +1361,9 @@
         "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Mettez à jour le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
         "action": "Mettre à jour"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "Affiche l'écran de confidentialité à la sortie pour que l'IA continue de travailler ; toucher l'ordinateur le verrouille.",
+    "lockedEnablePrivacyHint": "Pour que l'IA continue d'utiliser cet ordinateur en votre absence, activez l'écran de confidentialité dans ses Paramètres → Général → En votre absence."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1942,7 +1948,8 @@
       "windowBehavior": "Comportement de l'app",
       "shortcuts": "Raccourcis clavier",
       "mcpServers": "MCP personnalisé",
-      "bots": "Amis"
+      "bots": "Amis",
+      "awayFromComputer": "En votre absence"
     },
     "remote": {
       "title": "Machines distantes",
@@ -2502,21 +2509,23 @@
       "swallowActivationClickAria": "Activer ou désactiver la protection contre les clics accidentels au retour dans la fenêtre",
       "macRestartNote": "Sous macOS, redémarrez l'application pour appliquer les modifications.",
       "awayGuard": {
-        "label": "Continuer à travailler en votre absence",
-        "hint": "Quand c'est activé, ce Mac ne met plus son écran en veille et ne se verrouille plus tout seul, pour que l'IA puisse l'utiliser à tout moment. Après un moment d'absence, un cache noir masque l'écran et l'IA continue derrière. Appuyer sur une touche ou cliquer le verrouille aussitôt ; déverrouillez avec Touch ID ou votre mot de passe.",
+        "label": "Utiliser l'écran de confidentialité au lieu du verrouillage",
+        "hint": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec Touch ID ou votre mot de passe. Sans tâche en cours, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
         "permission": "Autorisez Cindy dans Réglages Système > Confidentialité et sécurité > Accessibilité pour qu'elle verrouille l'écran dès que quelqu'un touche ce Mac. En attendant, l'écran se met en veille et se verrouille comme d'habitude.",
         "preview": "Essayer maintenant",
-        "previewStarting": "Lâchez la souris et le clavier. L'écran est masqué dans 3 secondes ; appuyez sur une touche pour le verrouiller, puis déverrouillez-le.",
-        "previewUnavailable": "Impossible de masquer l'écran. Redémarrez Cindy et réessayez.",
+        "previewStarting": "Lâchez la souris et le clavier. Dans 3 secondes, l'écran de confidentialité apparaît ; appuyez sur une touche pour verrouiller, puis déverrouillez pour essayer.",
+        "previewUnavailable": "Impossible d'afficher l'écran de confidentialité. Redémarrez Cindy et réessayez.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
-          "label": "Masquer l'écran après",
-          "hint": "Durée sans toucher le clavier ni la souris avant que le cache n'apparaisse. Par défaut, la même que la mise en veille de l'écran.",
+          "label": "Afficher l'écran de confidentialité après",
+          "hint": "Durée sans toucher au clavier ni à la souris pendant que l'IA travaille. Par défaut, le délai d'extinction de l'écran du système.",
           "system": "Système"
-        }
+        },
+        "hintWindows": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec Windows Hello ou votre mot de passe. Sans tâche en cours, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
+        "hintLinux": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec votre mot de passe. Sans tâche en cours, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur."
       }
     },
     "agentIsland": {
@@ -7065,7 +7074,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "Inclus dans l'écran de confidentialité : cet ordinateur ne se met pas en veille."
     },
     "imBot": {
       "beta": "Bêta",
@@ -9322,6 +9332,9 @@
         "failed": "Le nettoyage n'a pas pu aboutir",
         "pending": "En file d'attente"
       }
+    },
+    "awayFromComputer": {
+      "title": "En votre absence"
     }
   },
   "remoteDevice": {

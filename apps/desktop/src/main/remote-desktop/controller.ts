@@ -41,6 +41,7 @@ export type DesktopStopReason =
   | 'capture-stop'
   | 'user-stop'
   | 'remote-stop'
+  | 'privacy-exit'
   | 'takeover'
   | 'resume-replaced'
   | 'shutdown'
@@ -192,7 +193,24 @@ export interface DesktopControllerDeps {
    * capture confirms a live stream follows it (e.g. not browser capture).
    */
   resumeVideo?(display: RemoteDesktopDisplay): Promise<boolean>;
+  /** Cover an unattended desktop; the host falls back to a lock if unavailable. */
+  protectOnExit?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
   lockScreen?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
+  /**
+   * A local privacy exit asked for a lock that was not confirmed: keep the desktop
+   * covered, noting the failure, until the OS locks. Rejects when no cover is possible.
+   */
+  coverLockFailure?(): Promise<void>;
+  /**
+   * This computer's own away rule for idle viewers (docs/product-rules/privacy-screen.md
+   * 「远程连接中没人操作」). When present the host ignores the viewer's idleTimeoutMinutes:
+   * remote input counts as someone using the computer; once nobody has for `awayAfterMs`,
+   * the lease ends with a real lock, unless `keepWhileWorking` (the privacy screen is on and
+   * an Agent is working), which keeps the lease while the work lasts.
+   */
+  hostIdle?(): { awayAfterMs: number; keepWhileWorking: boolean } | null;
+  /** How a protected end leaves this computer, for the viewer's wording; undefined without a privacy screen. */
+  exitProtection?(): 'privacy-screen' | 'lock' | undefined;
   offer(
     lease: RemoteDesktopLease,
     sdp: string,
@@ -258,6 +276,8 @@ export class RemoteDesktopController {
         expires: number;
         lastInputAt: number;
         idleTimeoutMinutes?: number;
+        /** The host's own away rule governs this lease (see DesktopControllerDeps.hostIdle). */
+        hostIdle?: boolean;
         diagnostics: {
           id: string;
           startedAt: number;
@@ -429,17 +449,30 @@ export class RemoteDesktopController {
     } else if (active.handoff && this.deps.handoffCurrent?.(active.handoff.requestId) === false) {
       // The 代输入 request finished: nothing is left to show.
       void this.stop(undefined, false, 'handoff-ended');
-    } else if (
-      !this.locking &&
-      active.idleTimeoutMinutes &&
-      this.idleNow() - active.lastInputAt >= active.idleTimeoutMinutes * 60_000
-    ) {
+    } else if (!this.locking && this.idleExpired(active)) {
       this.idleStopped.add(active.peer);
       this.userStopped.set(active.peer, active.lease);
       void this.stop(active.peer, true, 'idle-timeout');
     } else if (!this.locking && active.expires <= this.now()) {
       void this.stop(undefined, undefined, 'heartbeat-expired');
     }
+  }
+  private idleExpired(active: NonNullable<RemoteDesktopController['active']>): boolean {
+    if (!active.hostIdle) {
+      return Boolean(
+        active.idleTimeoutMinutes &&
+          this.idleNow() - active.lastInputAt >= active.idleTimeoutMinutes * 60_000,
+      );
+    }
+    // The rule was in force when the lease began; if it is gone now, still protect.
+    const policy = this.deps.hostIdle?.() ?? { awayAfterMs: 10 * 60_000, keepWhileWorking: false };
+    // The privacy screen covers while an Agent works; the viewer may keep watching.
+    // Absence restarts when the work ends.
+    if (policy.keepWhileWorking) {
+      active.lastInputAt = this.idleNow();
+      return false;
+    }
+    return this.idleNow() - active.lastInputAt >= policy.awayAfterMs;
   }
   /** Losing the signaling socket is expected while the phone shows PiP.
    * Only an authorized, view-only presentation may outlive it, and only while
@@ -490,10 +523,21 @@ export class RemoteDesktopController {
         /* Diagnostics must never prevent revocation or cleanup. */
       }
     }
-    if (active && lockScreen && this.deps.lockScreen) {
+    // Local privacy exit and process shutdown need the actual OS lock. All other
+    // protected ends may leave a persistent cover so background work can continue.
+    const protect =
+      reason === 'privacy-exit'
+        ? this.lockOrCover()
+        : reason === 'shutdown' || (reason === 'idle-timeout' && active?.hostIdle)
+          ? // Nobody used this computer for its away time: Cindy locks it itself rather than
+            // waiting for the system, which may never sleep or may delay the password.
+            this.deps.lockScreen
+          : this.deps.protectOnExit ?? this.deps.lockScreen;
+    if (active && lockScreen && protect) {
       // A protected connection that ends on loss of contact must not recover
       // unattended and automatically unlock the computer again.
-      if (active.idleTimeoutMinutes) this.userStopped.set(active.peer, active.lease);
+      if (active.idleTimeoutMinutes || active.hostIdle)
+        this.userStopped.set(active.peer, active.lease);
       this.locking = true;
       const cancellation = new AbortController();
       this.lockAbort = cancellation;
@@ -504,7 +548,7 @@ export class RemoteDesktopController {
       // another stop must not cancel an accepted lock; revocation still can.
       const pending = Promise.resolve()
         .then(() =>
-          this.deps.lockScreen!(
+          protect(
             () =>
               this.active === active &&
               !cancellation.signal.aborted &&
@@ -546,10 +590,27 @@ export class RemoteDesktopController {
     this.deps.changed();
     return restoring;
   }
+  /** Someone at this computer ended privacy: lock, and never uncover an unlocked desktop. */
+  private lockOrCover(): DesktopControllerDeps['lockScreen'] {
+    const { lockScreen, coverLockFailure } = this.deps;
+    if (!lockScreen || !coverLockFailure) return lockScreen;
+    return async (isCurrent, signal) => {
+      try {
+        await lockScreen(isCurrent, signal);
+      } catch (error) {
+        log.warn('Privacy exit lock not confirmed; keeping the desktop covered', error);
+        // The persistent cover outlives this lease; if it cannot start either, the
+        // original lock failure is reported as before.
+        await coverLockFailure().catch(() => {
+          throw error;
+        });
+      }
+    };
+  }
   private exitLockEnabled(): boolean {
     return (
       (this.active?.lockOnExit ?? this.active?.privacyLockOnExit) === true ||
-      Boolean(this.active?.idleTimeoutMinutes)
+      Boolean(this.active?.idleTimeoutMinutes || this.active?.hostIdle)
     );
   }
   /** A display change keeps the viewer's video only when it asked and capture can follow. */
@@ -819,7 +880,7 @@ export class RemoteDesktopController {
     }
     // Enter the existing lock/stop path before marking the lease stopped:
     // subsequent phone input and recovery must be rejected while locking.
-    const ending = this.request(active.peer, { op: 'stop', lease: active.lease, lockScreen: true });
+    const ending = this.stop(active.peer, true, 'privacy-exit');
     this.userStopped.set(active.peer, active.lease);
     try {
       await ending;
@@ -900,6 +961,12 @@ export class RemoteDesktopController {
         displays: publicDisplays,
         automaticReconnect: true,
         idleLock: Boolean(this.deps.lockScreen),
+        ...(this.deps.lockScreen && this.deps.hostIdle?.() ? { hostIdle: true } : {}),
+        // Only hosts that offer a privacy screen say how they protect, so viewers can
+        // suggest turning it on; others keep the plain lock wording.
+        ...(this.deps.lockScreen && this.deps.exitProtection?.()
+          ? { exitProtection: this.deps.exitProtection() }
+          : {}),
         connectionTakeover: true,
         autoControl: caps.canControl === true,
         resolutionRestore: Boolean(
@@ -1045,7 +1112,11 @@ export class RemoteDesktopController {
         expires: this.now() + REMOTE_DESKTOP_LEASE_MS,
         lastInputAt,
         idleTimeoutMinutes:
-          !handoff && this.deps.lockScreen ? request.idleTimeoutMinutes : undefined,
+          !handoff && this.deps.lockScreen && !this.deps.hostIdle?.()
+            ? request.idleTimeoutMinutes
+            : undefined,
+        // Only when the host's own rule is in force now; otherwise the viewer's minutes apply.
+        hostIdle: !handoff && Boolean(this.deps.lockScreen && this.deps.hostIdle?.()),
         diagnostics: {
           id: createHash('sha256').update(lease.lease).digest('hex').slice(0, 16),
           startedAt: this.now(),
@@ -1389,6 +1460,7 @@ export class RemoteDesktopController {
           request.idleTimeoutMinutes !== undefined &&
           !active.handoff &&
           !active.screen &&
+          !active.hostIdle &&
           this.deps.lockScreen
         ) {
           if (active.idleTimeoutMinutes !== request.idleTimeoutMinutes)

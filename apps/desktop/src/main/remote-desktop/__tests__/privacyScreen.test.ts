@@ -240,6 +240,36 @@ it('ends the lease instead of leaving an inescapable mask when its native watche
   expect(state.windows[0].destroyed).toBe(true);
 });
 
+// docs/product-rules/privacy-screen.md (2026-11-14): when the lock cannot be confirmed the
+// masks stay. Before this, clicks passed through to apps nobody could see, and the owner
+// had no way out short of quitting Cindy. Held masks catch clicks; releasing input for the
+// system's owner verification is not a failure (no second lock attempt); re-arming lets
+// the next touch retry the lock on the same masks.
+it('holds masks without click-through, releases input quietly and re-arms the watcher', async () => {
+  const f = fixture();
+  f.stopped.mockResolvedValue(false);
+  await f.masks.set(true, () => true);
+  const window = state.windows[0];
+  f.failed();
+  await settle();
+  expect(f.stopped).toHaveBeenCalledOnce();
+  expect(window.destroyed).toBe(false);
+  f.masks.holdInput();
+  expect(window.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+  await f.masks.rearmInput();
+  await f.masks.releaseInput();
+  expect(f.monitor.stop).toHaveBeenCalled();
+  // The released watcher reporting its end must not count as a failure.
+  f.failed();
+  await settle();
+  expect(f.stopped).toHaveBeenCalledOnce();
+  await f.masks.rearmInput();
+  f.failed();
+  await settle();
+  expect(f.stopped).toHaveBeenCalledTimes(2);
+  expect(window.destroyed).toBe(false);
+});
+
 it.each(['confirmed', 'watcher', 'renderer'] as const)(
   'retains masks and capture exclusions while %s disconnect waits for locking',
   async (reason) => {

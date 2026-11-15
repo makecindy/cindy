@@ -524,8 +524,10 @@ export function RemoteDesktopSession({
     return () => clearTimeout(timer);
   }, [frameReady, showConnectionStatus, deviceId]);
   const connectionLabel = t(
-    showExitLockStatus
+    showExitLockStatus && caps?.exitProtection !== "privacy-screen"
       ? "remoteDesktop.lockingOnExit"
+      : showExitLockStatus
+        ? "remoteDesktop.protectingOnExit"
       : recovery.current.at || status === "reconnecting"
         ? screenPlugin
           ? "remoteDesktop.liveScreenReconnecting"
@@ -4347,6 +4349,8 @@ export function RemoteDesktopSession({
                             idleTimeoutAvailable:
                               idleTimeoutLoaded && caps?.idleLock === true,
                             onIdleTimeout: updateIdleTimeout,
+                            hostIdle: caps?.hostIdle === true,
+                            exitProtection: caps?.exitProtection,
                           }
                     }
                     connected={Boolean(lease) && !connectionPending}

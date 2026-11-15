@@ -1102,19 +1102,23 @@
   },
   "privacyExit": {
     "status": "此機方經 Cindy 受遠端控制",
-    "hint": "欲闔隱私畫面，可於遠端控制端之「安全」中閉「機屏防窺」。亦可於此機點擊滑鼠或按任一鍵，再擇「斷連」。",
+    "hint": "欲闔隱私畫面，可於遠端控制端之「安全」中閉「連時啟隱私畫面」。亦可於此機點擊滑鼠或按任一鍵，再擇「斷連」。",
     "title": "斷遠端桌面之連線乎？",
-    "detail": "此舉將終遠端控制，並復此機螢幕。若已啟結束時鎖定螢幕，此機亦將鎖定。",
+    "detail": "此將終遠端控制，撤隱私畫面。若啟「退出後護機」，此機亦鎖。",
     "cancel": "保連線",
     "disconnect": "斷連"
   },
   "awayGuard": {
     "status": "Cindy 正勞作",
-    "hint": "按任一鍵即鎖屏，以 Touch ID 或密碼解之",
+    "hint": "按任一鍵或 Touch ID 鍵即鎖屏，再以指紋或密碼解之",
     "lockFailed": {
       "status": "Cindy 未能鎖此機",
-      "hint": "按 Control-Command-Q 鎖屏，少頃系統亦將自鎖"
-    }
+      "hint": "觸機則再試鎖屏；仍不能鎖，以 Touch ID 或密碼驗之，乃可撤。亦可闔蓋或按電源鍵以鎖。",
+      "hintWindows": "觸機則再試鎖屏；仍不能鎖，以 Windows Hello 或 PIN 驗之，乃可撤。亦可按 Windows 徽鍵 + L 以鎖。"
+    },
+    "hintWindows": "按任一鍵即鎖屏，以 Windows Hello 或密碼解之",
+    "hintLinux": "按任一鍵即鎖屏，以密碼解之",
+    "verifyReason": "撤隱私畫面"
   },
   "appBadge": {
     "attentionCount": "待察之差事：{{count}}"
@@ -1265,10 +1269,10 @@
       "resolutionHint": "改解析度，將及遠端之實際顯示器。"
     },
     "settingUnsupported": "此機端尚不支援此設定",
-    "privacyScreen": "機屏防窺",
-    "privacyScreenHint": "遮此機之螢幕。於機上點擊滑鼠或按鍵，確認後斷連，並依設定鎖定螢幕。",
-    "privacyActive": "防窺已啟。於機上點擊滑鼠或按鍵，確認後斷連，並依設定鎖定螢幕。",
-    "privacyFailed": "防窺未能啟，此機螢幕或仍可見。",
+    "privacyScreen": "連時啟隱私畫面",
+    "privacyScreenHint": "遠端控制時覆此機之屏。有人於機前點按或按鍵，先問斷連與否。",
+    "privacyActive": "隱私畫面已啟。有人於機前點按或按鍵，先問斷連與否。",
+    "privacyFailed": "未能啟隱私畫面，機屏或仍可見。",
     "hostMute": "受控者噤聲",
     "hostMuteHint": "連線之間令被控之機靜音",
     "hostMuteFailed": "不能改被控端之靜音",
@@ -1283,8 +1287,8 @@
     "idleNever": "永不",
     "idleMinutes_other": "{{count}} 分鐘",
     "idleDisconnected": "久無操作，已斷，請重連。",
-    "lockOnExit": "退出後鎖機",
-    "lockOnExitHint": "主動離遠端桌面時鎖定螢幕。",
+    "lockOnExit": "退出後護機",
+    "lockOnExitHint": "退出遠端桌面後鎖機。",
     "lockOnExitFailed": "不能確知此機已鎖定螢幕，請察此機之狀。",
     "nativeResolution": "本然",
     "autoUnlock": "自動解鎖此機",
@@ -1326,7 +1330,9 @@
         "body": "此務於他機開 {{device}}。更本機「{{plugin}}」法器至新版，即可於右欄觀之、操之。",
         "action": "往更"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "退出遠端桌面後覆以隱私畫面，AI 可續作；有人觸機即鎖屏。",
+    "lockedEnablePrivacyHint": "欲令 AI 於君離座時續用此機，可於其「規制 → 通則 → 離座之時」中啟隱私畫面。"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1874,7 +1880,8 @@
       "windowBehavior": "應用行止",
       "shortcuts": "快捷鍵",
       "mcpServers": "自訂 MCP",
-      "bots": "同伴"
+      "bots": "同伴",
+      "awayFromComputer": "離座之時"
     },
     "remote": {
       "title": "遠方之機",
@@ -2434,21 +2441,23 @@
       "swallowActivationClickAria": "切換歸視窗時之誤觸防護",
       "macRestartNote": "macOS 上須重啟應用方生效。",
       "awayGuard": {
-        "label": "離席續作",
-        "hint": "開之，此機無人操作亦不熄屏、不自鎖，AI 可隨時用之。君離座稍久，玄幕覆屏，AI 於其後續作；有人按鍵或點按即鎖屏，以 Touch ID 或密碼解之。",
+        "label": "以隱私畫面代鎖屏",
+        "hint": "AI 需用屏時，此機不熄屏、不自鎖，以隱私畫面覆之，AI 於其後續作；有人按鍵或點按即鎖屏，以 Touch ID 或密碼解之。無事之時，熄屏鎖屏如常。遠端控制既畢，亦以隱私畫面護此機。",
         "permission": "須於「系統設定 → 隱私權與安全性 → 輔助使用」許 Cindy，方能於有人觸機時即鎖屏。未許之前，屏照常熄而鎖。",
         "preview": "即試之",
-        "previewStarting": "請釋滑鼠與鍵盤，3 秒後屏將覆；按任一鍵即鎖屏，再解之以試。",
-        "previewUnavailable": "未能覆屏，請重啟 Cindy 再試。",
+        "previewStarting": "請釋滑鼠鍵盤，三秒後覆以隱私畫面；按任一鍵即鎖屏，再解之以試。",
+        "previewUnavailable": "未能啟隱私畫面，請重啟 Cindy 再試。",
         "delay": {
           "30": "30 秒",
           "60": "1 分",
           "120": "2 分",
           "300": "5 分",
-          "label": "離座幾時而覆屏",
-          "hint": "鍵盤滑鼠無人觸及逾此時，即覆以玄幕。預設同系統熄屏之時。",
+          "label": "離座幾時啟隱私畫面",
+          "hint": "AI 作業之際，鍵鼠無人觸及滿此時，乃覆隱私畫面。默與系統熄屏之時同。",
           "system": "隨系統"
-        }
+        },
+        "hintWindows": "AI 需用屏時，此機不熄屏、不自鎖，以隱私畫面覆之，AI 於其後續作；有人按鍵或點按即鎖屏，以 Windows Hello 或密碼解之。無事之時，熄屏鎖屏如常。遠端控制既畢，亦以隱私畫面護此機。",
+        "hintLinux": "AI 需用屏時，此機不熄屏、不自鎖，以隱私畫面覆之，AI 於其後續作；有人按鍵或點按即鎖屏，以密碼解之。無事之時，熄屏鎖屏如常。遠端控制既畢，亦以隱私畫面護此機。"
       }
     },
     "agentIsland": {
@@ -6955,7 +6964,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "已含於隱私畫面：此機不眠。"
     },
     "imBot": {
       "beta": "Beta",
@@ -9207,6 +9217,9 @@
         "failed": "回收未能畢",
         "pending": "已入佇列"
       }
+    },
+    "awayFromComputer": {
+      "title": "離座之時"
     }
   },
   "remoteDevice": {

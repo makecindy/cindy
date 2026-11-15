@@ -708,6 +708,44 @@ describe('remote desktop authority and lifecycle', () => {
     await expect(h.controller.stopPrivacyByUser()).rejects.toThrow('LOCK_FAILED');
     expect(h.controller.state).toBeNull();
   });
+  // User decision 2026-11-14: a failed lock after "Disconnect" at this computer used to
+  // uncover an unlocked desktop. With a persistent cover the lock failure is held
+  // covered instead; shutdown cannot outlive the app and keeps the plain lock result,
+  // and an unavailable cover still reports the original failure.
+  it.each([
+    ['local-privacy', 'covered', undefined, 1],
+    ['local-privacy', 'unavailable', 'LOCK_FAILED', 1],
+    ['shutdown', 'covered', undefined, 0],
+  ] as const)(
+    'holds a %s exit covered when locking fails (cover %s)',
+    async (reason, cover, rejects, covers) => {
+      const h = harness();
+      h.deps.privacyScreen = vi.fn(async () => {});
+      h.deps.stopPrivacyScreen = vi.fn();
+      h.deps.lockScreen = vi.fn(async () => {
+        throw new Error('LOCK_FAILED');
+      });
+      h.deps.coverLockFailure = vi.fn(async () => {
+        // The persistent cover is up before the session masks go.
+        expect(h.deps.stopPrivacyScreen).not.toHaveBeenCalled();
+        if (cover === 'unavailable') throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+      });
+      const { lease } = await h.start();
+      await h.controller.request('phone', { op: 'control', lease, enabled: true });
+      await h.controller.request('phone', {
+        op: 'privacyScreen',
+        lease,
+        enabled: true,
+        lockOnExit: true,
+      });
+      const ending =
+        reason === 'local-privacy' ? h.controller.stopPrivacyByUser() : h.controller.stopAndRestore();
+      if (rejects) await expect(ending).rejects.toThrow(rejects);
+      else await ending.catch(() => {});
+      expect(h.deps.coverLockFailure).toHaveBeenCalledTimes(covers);
+      expect(h.controller.state).toBeNull();
+    },
+  );
   it('requires owner control and opt-in for synchronization and invalidates a delayed read on disable', async () => {
     const h = harness(),
       { lease } = await h.start();
@@ -861,15 +899,54 @@ describe('remote desktop authority and lifecycle', () => {
       expect(h.controller.state).toBeNull();
     },
   );
-  it.each(['expiry', 'disconnect', 'stop'])(
-    'locks locally after %s and keeps locking through further network loss',
+  // User request 2026-11-11: protected exits cover instead of immediately locking.
+  // Existing tests exercise only hosts without a persistent cover. These unit cases
+  // drive the real stop/request/tick entries and distinguish local from remote exit.
+  // Standalone vitest duration: 1.83 s on 2026-11-11.
+  it.each(['remote', 'disconnect', 'expiry', 'idle', 'local-privacy', 'shutdown', 'plain'])(
+    'selects persistent privacy versus actual lock for %s',
     async (reason) => {
+      const h = harness();
+      h.deps.lockScreen = vi.fn(async () => {});
+      h.deps.protectOnExit = vi.fn(async (current) => {
+        expect(current()).toBe(true);
+      });
+      const { lease } = (await h.controller.request('phone', {
+        op: 'start',
+        displayId: '1',
+        lockOnExit: true,
+        ...(reason === 'idle' ? { idleTimeoutMinutes: 1 } : {}),
+      })) as RemoteDesktopLease;
+      if (reason === 'remote' || reason === 'plain')
+        await h.controller.request('phone', { op: 'stop', lease, lockScreen: reason === 'remote' });
+      if (reason === 'disconnect') h.controller.signalingLost('phone');
+      if (reason === 'expiry' || reason === 'idle') {
+        h.advance(reason === 'idle' ? 60_000 : 13_000);
+        h.controller.tick();
+      }
+      if (reason === 'local-privacy') await h.controller.stopPrivacyByUser();
+      if (reason === 'shutdown') await h.controller.stopAndRestore();
+      await h.controller.stop('phone');
+      const locks = reason === 'local-privacy' || reason === 'shutdown';
+      expect(h.deps.lockScreen).toHaveBeenCalledTimes(locks ? 1 : 0);
+      expect(h.deps.protectOnExit).toHaveBeenCalledTimes(!locks && reason !== 'plain' ? 1 : 0);
+      expect(h.controller.state).toBeNull();
+    },
+  );
+  it.each([
+    ['expiry', 'lockScreen'],
+    ['disconnect', 'lockScreen'],
+    ['stop', 'lockScreen'],
+    ['disconnect', 'protectOnExit'],
+  ] as const)(
+    'awaits %s / %s through network loss before removing session privacy masks',
+    async (reason, protection) => {
       const h = harness();
       let finish!: () => void;
       let current!: () => boolean;
       let signal!: AbortSignal;
       h.deps.stopPrivacyScreen = vi.fn();
-      h.deps.lockScreen = vi.fn((check, cancellation) => {
+      h.deps[protection] = vi.fn((check, cancellation) => {
         current = check;
         signal = cancellation;
         return new Promise<void>((resolve) => {
@@ -884,7 +961,7 @@ describe('remote desktop authority and lifecycle', () => {
       })) as RemoteDesktopLease;
       h.controller.signalingLost('other');
       expect(h.controller.state).toEqual({ peer: 'phone', controlling: true });
-      expect(h.deps.lockScreen).not.toHaveBeenCalled();
+      expect(h.deps[protection]).not.toHaveBeenCalled();
       if (reason === 'expiry') {
         h.advance(13000);
         h.controller.tick();
@@ -900,7 +977,7 @@ describe('remote desktop authority and lifecycle', () => {
       h.controller.signalingLost('phone');
       expect(signal.aborted).toBe(false);
       expect(current()).toBe(true);
-      expect(h.deps.lockScreen).toHaveBeenCalledOnce();
+      expect(h.deps[protection]).toHaveBeenCalledOnce();
       expect(() =>
         h.controller.input(lease, 1, [{ kind: 'key', code: 'KeyA', down: true }]),
       ).toThrow('DESKTOP_VIEW_ONLY');
@@ -2097,6 +2174,51 @@ describe('host-enforced idle lock', () => {
     }
     expect(h.deps.lockScreen).not.toHaveBeenCalled();
     expect(h.controller.state).not.toBeNull();
+  });
+  // User decision 2026-11-14 (docs/product-rules/privacy-screen.md 「远程连接中没人操作」):
+  // viewers no longer set their own idle time; the host's away time applies. While the
+  // privacy screen covers an Agent's work the viewer may keep watching; otherwise Cindy
+  // really locks (never the cover) and ends the lease.
+  it('follows the host away time, keeps the lease while covered work runs, then really locks', async () => {
+    const h = harness();
+    const policy = { awayAfterMs: 120_000, keepWhileWorking: false };
+    h.deps.lockScreen = vi.fn(async () => {});
+    h.deps.protectOnExit = vi.fn(async () => {});
+    h.deps.hostIdle = () => policy;
+    h.deps.exitProtection = () => 'privacy-screen';
+    expect(await h.controller.request('phone', { op: 'capabilities' })).toMatchObject({
+      hostIdle: true,
+      exitProtection: 'privacy-screen',
+    });
+    // The viewer's own minute is ignored.
+    const { lease } = (await h.controller.request('phone', {
+      op: 'start', displayId: '1', control: true, idleTimeoutMinutes: 1,
+    })) as RemoteDesktopLease;
+    const keepAlive = async (ms: number) => {
+      for (let elapsed = 0; elapsed < ms; elapsed += 3000) {
+        h.advance(3000);
+        await h.controller.request('phone', { op: 'heartbeat', lease, idleTimeoutMinutes: 1 });
+      }
+    };
+    await keepAlive(90_000);
+    h.controller.input(lease, 1, [{ kind: 'move', x: 0.5, y: 0.5 }]);
+    // An Agent works behind the privacy screen: no expiry however long it runs.
+    policy.keepWhileWorking = true;
+    await keepAlive(300_000);
+    // Work ends: absence restarts from then.
+    policy.keepWhileWorking = false;
+    await keepAlive(117_000);
+    expect(h.deps.lockScreen).not.toHaveBeenCalled();
+    h.advance(3000);
+    await expect(h.controller.request('phone', { op: 'heartbeat', lease })).rejects.toThrow(
+      'DESKTOP_IDLE_TIMEOUT',
+    );
+    await h.controller.stop();
+    expect(h.deps.lockScreen).toHaveBeenCalledOnce();
+    expect(h.deps.protectOnExit).not.toHaveBeenCalled();
+    await expect(
+      h.controller.request('phone', { op: 'start', displayId: '1', resume: true }),
+    ).rejects.toThrow('DESKTOP_IDLE_TIMEOUT');
   });
   it('starts a fresh countdown when enabling a policy on an existing connection', async () => {
     const h = await setup(0);

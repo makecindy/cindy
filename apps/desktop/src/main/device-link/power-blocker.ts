@@ -32,6 +32,13 @@ export interface PowerSaveBlockerBackend {
  */
 export class KeepAwakeController {
   private blockerId: number | null = null;
+  /** 用户自己的「保持电脑唤醒」。 */
+  private userEnabled = false;
+  /**
+   * 「用隐私屏代替锁屏」开着时电脑也不能休眠(AI 随时要用;见 privacy-screen.md),
+   * 与用户自己的选择取并集;关掉隐私屏后恢复用户原来的选择。
+   */
+  private privacyScreen = false;
 
   constructor(private readonly backend: PowerSaveBlockerBackend = powerSaveBlocker) {}
 
@@ -40,8 +47,20 @@ export class KeepAwakeController {
     return this.blockerId !== null && this.backend.isStarted(this.blockerId);
   }
 
-  /** 开启 / 关闭保持唤醒;幂等。 */
+  /** 用户的「保持电脑唤醒」开关;幂等。 */
   apply(enabled: boolean): void {
+    this.userEnabled = enabled;
+    this.sync();
+  }
+
+  /** 「用隐私屏代替锁屏」是否开着;幂等。 */
+  setPrivacyScreen(enabled: boolean): void {
+    this.privacyScreen = enabled;
+    this.sync();
+  }
+
+  private sync(): void {
+    const enabled = this.userEnabled || this.privacyScreen;
     if (enabled) {
       if (this.active) return; // 已在生效,免重复 start
       this.blockerId = this.backend.start('prevent-app-suspension');

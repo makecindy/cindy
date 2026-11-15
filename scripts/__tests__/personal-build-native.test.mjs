@@ -170,7 +170,9 @@ test('personal preparation embeds the input helper and propagates build failure'
   preparePersonalInput(root,app,(cmd,args)=>{
    assert.equal(cmd,'xcrun');assert.deepEqual(args.slice(0,4),['swiftc','-D','DESKTOP_INPUT_PERSONAL','-O']);
    temporary=path.dirname(args[4]);assert.equal(fs.readFileSync(args[4],'utf8'),'caller fixture\ninput fixture');
-   fs.writeFileSync(args.at(-1),'compiled fixture');
+   // The owner-verification prompt must name Cindy (docs/product-rules/privacy-screen.md).
+   assert.ok(args.at(-1).endsWith('apps/desktop/native/remote-desktop/macos-input-Info.plist'));
+   fs.writeFileSync(args[args.indexOf('-o')+1],'compiled fixture');
   });
   assert.equal(fs.readFileSync(path.join(app,'Contents/Resources/tools/remote-desktop/cindy-macos-desktop-input'),'utf8'),'compiled fixture');
   assert.equal(fs.existsSync(temporary),false);
