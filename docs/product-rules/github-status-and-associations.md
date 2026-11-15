@@ -103,14 +103,14 @@ PR 状态变化只触发引用该 PR 的定时任务、首见不触发、失败�
 电脑端藏起、手机端不投影（`ghostCardPrStatus.test.ts`、`cardRemoteResource.test.ts`）；gh-cli 插件的连接请求打开
 GitHub 登录框或回报 ready（`ghostWorkdirGate.test.ts`、`githubSetupIpc.test.ts`）。
 
-真实工具发现和调用、读无关联副作用；明确管理及移除优先；非空旧库升级并再次启动；消息写入、导入和故障期间的历史补扫能关联，清空、rewind 与助手校正重算且保留手动关系；head 不匹配和分页失败显式未知；多读取者、重启、游标过期；账号切换与在途失效；固定批次重试、消息持久化后回执；同账号远程与共享任务权限；iOS/Android 历史引用恢复。
+真实工具发现和调用、读无关联副作用；明确管理及移除优先；非空旧库升级并再次启动；消息写入、导入和重启不从正文建立关联，清空、rewind 与助手校正不改变既有关联；显式关联可添加，已移除关系只允许显式 restore；head 不匹配和分页失败显式未知；多读取者、重启、游标过期；账号切换与在途失效；固定批次重试、消息持久化后回执；同账号远程与共享任务权限；iOS/Android 历史引用恢复。
 
 ## GitLab MR 的界面状态与关联
 
 任务顶栏、悬停面板、管理弹窗、侧栏和伙伴卡片同时支持 GitHub PR 与 GitLab MR。
 Mobile 只扩展现有状态展示与网页跳转，不增加原生功能。GitLab 使用 `!N` / MR，
-HTTPS 链接 `https://host/group/subgroup/project/-/merge_requests/N` 沿显式添加、
-导入、补扫、重算与手动添加入口关联；识别不依赖登录。任意域名可识别，多级 namespace
+HTTPS 链接 `https://host/group/subgroup/project/-/merge_requests/N` 仅通过 Agent 或用户的
+显式添加入口关联；消息正文、导入、补扫和重算不建立关联。链接识别不依赖登录。任意域名可识别，多级 namespace
 完整保存在 owner，repo 保存项目名；不支持 HTTP。子路径部署的链接会被识别为多级
 分组，部署前缀也会计入项目路径，因项目路径不正确而查不到状态。
 
