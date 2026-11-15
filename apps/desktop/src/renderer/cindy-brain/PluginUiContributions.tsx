@@ -1,9 +1,9 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isHostUiPosition, type GhostHostUiContribution, type GhostHostUiPosition } from '@cindy/plugin-protocol';
 import { getApprovedGhostHostUi, type InstalledGhost } from '../../shared/ghost';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
-import { useInstalledGhosts } from './useInstalledGhosts';
+import { useInstalledGhosts, readInstalledGhostsSnapshot } from './useInstalledGhosts';
 import { usePluginUiControl } from './pluginUiControls';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { Button } from '@/components/ui/button';
@@ -11,17 +11,22 @@ import { Select } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
-import { Puzzle } from 'lucide-react';
+import { ChevronDown, ChevronRight, Puzzle } from 'lucide-react';
+import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
+import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
+import { MAIN_VIEW_ICONS } from './mainViewIcons';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from './pluginUiVisibility';
 const PluginUiView = lazy(() => import('./PluginUiView').then(module => ({ default: module.PluginUiView })));
 const openPluginUiView = async (instanceId: string, viewId: string, sessionId: string | null, input?: Record<string, unknown>) =>
   (await import('@/features/right-sidebar/lib/openPluginUiView')).openPluginUiView(instanceId, viewId, sessionId, input);
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
 export type PluginUiEntry = { ghost: InstalledGhost; instanceId: string; contribution: GhostHostUiContribution };
 type Directory = ReadonlyMap<GhostHostUiPosition, readonly PluginUiEntry[]>;
 const EMPTY: Directory = new Map();
 const NO_ENTRIES: readonly PluginUiEntry[] = [];
+const NO_SETTINGS: readonly InstalledGhost[] = [];
 const DirectoryContext = createContext<Directory>(EMPTY);
 type SlotVisibility = { element: Element; intersecting: boolean; listeners: Set<(visible: boolean) => void> };
 const observedSlots = new Map<Element, SlotVisibility>();
@@ -103,16 +108,18 @@ export function usePluginUiMessageCandidates(sessionId?: string | null): PluginU
   }, [messageBody, toolBody, messageActions, turnFooter, menu, disabled]);
 }
 
-/** One window subscription, compiled only when the original installed projection changes. */
-export function PluginUiProvider({ children, host: hostNode, enabled = true }: { children: ReactNode; host?: ReactNode; enabled?: boolean }) {
-  const ghosts = useInstalledGhosts(enabled);
-  const directory = useMemo(() => {
+const compiledDirectories = new WeakMap<readonly InstalledGhost[], ReturnType<typeof compileDirectory>>();
+function compileDirectory(ghosts: readonly InstalledGhost[]) {
     const entries = new Map<GhostHostUiPosition, PluginUiEntry[]>();
     const launchers: PluginUiLauncher[] = [];
+    const settings: InstalledGhost[] = [];
     let active = false;
     for (const ghost of ghosts) {
-      if (!ghost.enabled || ghost.uiCapabilityApproved !== true) continue;
+      if (!ghost.enabled) continue;
       const host = getApprovedGhostHostUi(ghost);
+      if (host?.settings?.length || ghost.uiCapabilityApproved === true &&
+          host?.contributions?.some(item => item.position === 'settings.section')) settings.push(ghost);
+      if (ghost.uiCapabilityApproved !== true) continue;
       if (host) active = true;
       const instanceId = installedGhostStoragePart(ghost);
       for (const view of host?.views ?? []) launchers.push({ ghost, instanceId, id: view.id, title: view.title,
@@ -127,8 +134,45 @@ export function PluginUiProvider({ children, host: hostNode, enabled = true }: {
         values.push({ ghost, instanceId: installedGhostStoragePart(ghost), contribution });
       }
     }
-    return { entries: entries.size ? entries : EMPTY, launchers, active };
-  }, [ghosts]);
+    return { entries: entries.size ? entries : EMPTY, launchers, settings: settings.length ? settings : NO_SETTINGS, active };
+}
+function compiledDirectory(ghosts: readonly InstalledGhost[]) {
+  let value = compiledDirectories.get(ghosts);
+  if (!value) { value = compileDirectory(ghosts); compiledDirectories.set(ghosts, value); }
+  return value;
+}
+/** Read the existing owner projection; never subscribe once more at a placement. */
+export const readPluginUiEntries = (position: GhostHostUiPosition) => compiledDirectory(readInstalledGhostsSnapshot()).entries.get(position) ?? NO_ENTRIES;
+function windowCandidates(ghosts: readonly InstalledGhost[]) {
+  const { entries, settings } = compiledDirectory(ghosts);
+  return { settings, sidebarSections: entries.get('sidebar.section') ?? NO_ENTRIES,
+    titlebarEntries: entries.get('window.titlebar') ?? NO_ENTRIES };
+}
+/** The existing panel owner feeds changes; the window root adds no subscription. */
+export function usePluginUiWindowCandidates() {
+  const [candidates, setCandidates] = useState(() => windowCandidates(readInstalledGhostsSnapshot()));
+  const current = useRef(candidates);
+  const onGhostsChanged = useCallback((ghosts: readonly InstalledGhost[]) => {
+    const next = windowCandidates(ghosts), previous = current.current;
+    if (previous.settings === next.settings && previous.sidebarSections === next.sidebarSections &&
+        previous.titlebarEntries === next.titlebarEntries) return;
+    // Broadcasts deserialize the entire roster. Compare only actual window
+    // candidates, so an unrelated plugin cannot invalidate the routed shell.
+    if (JSON.stringify(previous) === JSON.stringify(next)) return;
+    current.current = next;
+    setCandidates(next);
+  }, []);
+  return { ...candidates, onGhostsChanged };
+}
+export function usePluginUiComposerCandidates() {
+  const directory = useContext(DirectoryContext);
+  return { toolbar: !!directory.get('composer.toolbar')?.length, completion: directory.get('composer.completion') ?? NO_ENTRIES };
+}
+
+/** One window subscription, compiled only when the original installed projection changes. */
+export function PluginUiProvider({ children, host: hostNode, enabled = true }: { children: ReactNode; host?: ReactNode; enabled?: boolean }) {
+  const ghosts = useInstalledGhosts(enabled);
+  const directory = compiledDirectory(ghosts);
   return <DirectoryContext.Provider value={directory.entries}><LauncherContext.Provider value={directory.launchers}>{directory.active && hostNode}{children}</LauncherContext.Provider></DirectoryContext.Provider>;
 }
 
@@ -197,7 +241,18 @@ export function PluginUiMenu({ sessionId, ghostId }: { sessionId?: string | null
     </DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>;
 }
 
-function EntryControl({ entry, sessionId, clientId, active }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean }) {
+/** Only an open menu with actual candidates mounts this live directory consumer. */
+export function PluginUiSessionMenuItems({ sessionId, disabled, className }: { sessionId: string; disabled: boolean; className?: string }) {
+  const entries = useEntries('session.menu', { sessionId });
+  const { t } = useTranslation();
+  if (!entries.length) return null;
+  return <><DropdownMenuSeparator />{entries.map(entry => <PluginUiMessageMenuItem
+    key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry} sessionId={sessionId}
+    disabled={disabled} className={className} onSelect={() => void runPluginUiEntry(entry, sessionId)
+      .catch(() => toast.error(t('pluginUi.actionFailed')))} />)}</>;
+}
+
+function EntryControl({ entry, sessionId, clientId, active, appearance }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean; appearance?: 'navigation' | 'rail' | 'titlebar' }) {
   const { t } = useTranslation();
   const [pending, setPending] = useState(false);
   const [value, setValue] = useState('');
@@ -216,6 +271,22 @@ function EntryControl({ entry, sessionId, clientId, active }: { entry: PluginUiE
   };
   if (state?.visible === false) return null;
   const title = state?.title ?? action.title;
+  const Icon = MAIN_VIEW_ICONS[action.icon as keyof typeof MAIN_VIEW_ICONS] ?? Puzzle;
+  if (appearance === 'titlebar') {
+    const view = action.view && getApprovedGhostHostUi(entry.ghost)?.views?.find(view => view.id === action.view);
+    const unavailable = !!sessionId && !!getStickySessionDeviceId(sessionId) || !!view && view.scope === 'task' && !sessionId;
+    return <ChromeIconButton aria-label={`${title} · ${entry.ghost.manifest.name}`} tooltipSide="bottom"
+      disabled={pending || state?.disabled || unavailable} onClick={() => void run()} className="shrink-0">
+      <Icon size={14} />
+    </ChromeIconButton>;
+  }
+  if (appearance === 'rail') return <SidebarIconButton icon={Icon} label={`${title} · ${entry.ghost.manifest.name}`}
+    disabled={pending || state?.disabled} onClick={() => void run()} />;
+  if (appearance === 'navigation') return <button type="button" disabled={pending || state?.disabled} onClick={() => void run()}
+    aria-label={`${title} · ${entry.ghost.manifest.name}`} title={entry.ghost.manifest.name}
+    className="flex h-8 w-full items-center gap-2.5 rounded-full px-3 text-sm font-normal text-[var(--sidebar-nav-text)] transition-colors hover:bg-sidebar-item-hover disabled:opacity-40">
+    <Icon size={15} strokeWidth={1.8} className="shrink-0" /><span className="truncate">{title}</span>
+  </button>;
   if (action.kind === 'status') return <span className="text-12 text-[var(--text-secondary)]" title={entry.ghost.manifest.name}>{title}</span>;
   if (action.kind === 'select') return <Select label={title} value={state?.value ?? value} options={action.options ?? []}
     disabled={pending || state?.disabled} onValueChange={next => void run(next)} className="h-7 max-w-48 text-12" />;
@@ -239,8 +310,8 @@ export function PluginUiSlot({ position, ...target }: Target & { position: Ghost
   return <PluginUiSlotControls entries={entries} sessionId={target.sessionId ?? null} clientId={target.clientId} />;
 }
 
-function PluginUiSlotControls({ entries, sessionId, clientId }: {
-  entries: readonly PluginUiEntry[]; sessionId: string | null; clientId?: string;
+export function PluginUiSlotControls({ entries, sessionId = null, clientId, appearance }: {
+  entries: readonly PluginUiEntry[]; sessionId?: string | null; clientId?: string; appearance?: 'navigation' | 'rail' | 'titlebar';
 }) {
   const root = useRef<HTMLSpanElement>(null);
   const [active, setActive] = useState(false);
@@ -249,10 +320,47 @@ function PluginUiSlotControls({ entries, sessionId, clientId }: {
     // Observe the original message row, whose size is independent of a plugin hiding its control.
     if (element) return observeSlotVisibility(element.closest('[data-message-client-id]') ?? element.parentElement ?? element, setActive);
   }, []);
-  return <span ref={root} className="inline-flex min-w-0 flex-wrap items-center gap-1 [-webkit-app-region:no-drag]">
+  return <span ref={root} className={appearance === 'navigation'
+    ? 'flex min-w-0 flex-col gap-0.5 [-webkit-app-region:no-drag]'
+    : appearance === 'titlebar' ? 'inline-flex min-w-0 max-w-[min(16rem,30vw)] flex-nowrap items-center gap-1 overflow-x-auto [-webkit-app-region:no-drag]'
+      : 'inline-flex min-w-0 flex-wrap items-center gap-1 [-webkit-app-region:no-drag]'}>
     {entries.map(entry => <EntryControl key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry}
-      sessionId={sessionId} clientId={clientId} active={active} />)}
+      sessionId={sessionId} clientId={clientId} active={active} appearance={appearance} />)}
   </span>;
+}
+
+export function PluginUiSidebarSections({ entries, sessionId }: { entries: readonly PluginUiEntry[]; sessionId: string | null }) {
+  return <div className="max-h-[45%] shrink-0 overflow-y-auto px-3 pb-2">
+    {entries.map(entry => <PluginUiSidebarSection key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry} sessionId={sessionId} />)}
+  </div>;
+}
+function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; sessionId: string | null }) {
+  const [expanded, setExpanded] = useState(false);
+  const [visible, setVisible] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = root.current;
+    if (element) return observeSlotVisibility(element.closest('aside') ?? element.parentElement ?? element, setVisible);
+  }, []);
+  const state = usePluginUiControl(useMemo(() => ({ instanceId: entry.instanceId, id: entry.contribution.id,
+    sessionId }), [entry.instanceId, entry.contribution.id, sessionId]), entry.ghost, visible);
+  const view = getApprovedGhostHostUi(entry.ghost)?.views?.find(view => view.id === entry.contribution.view);
+  const available = !!view && (view.scope !== 'task' || sessionId && !getStickySessionDeviceId(sessionId));
+  const title = `${state?.title ?? entry.contribution.title} · ${entry.ghost.manifest.name}`;
+  if (state?.visible === false) return null;
+  return <div ref={root} className="min-w-0">
+    {/* Ordinary action hover frame: DESIGN §5 Step 2 pill; the chevron is an intrinsic icon. */}
+    <button type="button" aria-expanded={expanded} disabled={!available || state?.disabled}
+      onClick={() => setExpanded(value => !value)} title={title}
+      className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-full px-2 text-left text-12 text-[var(--text-secondary)] hover:bg-sidebar-item-hover disabled:opacity-40">
+      {expanded ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
+      <span className="truncate">{title}</span>
+    </button>
+    <SectionCollapse collapsed={!expanded}>
+      {expanded && visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView ghost={entry.ghost}
+        viewId={view!.id} sessionId={view!.scope === 'task' ? sessionId : null} input={entry.contribution.arguments} /></Suspense>}
+    </SectionCollapse>
+  </div>;
 }
 
 /** One explicit selection owns the body; the original stays the default and fallback. */

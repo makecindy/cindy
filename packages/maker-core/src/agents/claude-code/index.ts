@@ -83,7 +83,7 @@ import {
 import { preparePinnedClaudeSkillInvocation } from './pinned-skill-invocation.js';
 import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
-import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
+import { loadMemoryContext } from '../../memory/context.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import type {
@@ -1824,11 +1824,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     if (makerMemoryEnabled && makerMemory) {
       try {
         // 设备托管：记忆在任务所在电脑上，只用随启动选项带来的快照，不打开本机记忆库。
-        const store = hosted ? null : await makerMemory.getStore(memoryScopeKey);
-        makerMemoryRules = opts.makerMemoryScopeKey?.startsWith('bot:')
-          ? ''
-          : MAKER_MEMORY_RULES;
-        makerMemoryIndex = opts.makerMemoryIndexSnapshot ?? (store ? await store.getIndex() : '');
+        const memoryContext = await loadMemoryContext({
+          manager: makerMemory, scopeKey: memoryScopeKey, hosted: !!hosted,
+          snapshot: opts.makerMemoryIndexSnapshot, projectDirectory: opts.makerMemoryProjectDir,
+        });
+        makerMemoryRules = memoryContext.rules;
+        makerMemoryIndex = memoryContext.index;
         memoryFlushController = new MemoryFlushController({
           logger: log.child('memory-flush'),
           workdir: memoryScopeKey,
@@ -4504,6 +4505,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(managedPlugins?.roots ?? []),
           ...(controllerManagedSkills?.claudePluginRoots ?? []),
           ...(opts.botRuntimeProfile?.skillPolicy.ownSkillPluginRoots ?? []),
+          // Host Skills of this session (e.g. 群协作 for a group's Cindy task); local runtime only.
+          ...(opts.remoteHostId ? [] : (opts.hostSkills ?? []).map((skill) => skill.pluginRoot)),
         ])];
       // Bind the native request id before the first HTTP request, not after SDK init.
       // A fork keeps its resume source but must publish a new destination id.

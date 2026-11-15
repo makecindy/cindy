@@ -30,6 +30,29 @@ if (picked.ok) {
   派活(§4.11.1)的 `workingDir` 转述只对台账里的目录放行。台账建立在真实
   点选上,你存在 /kv 里的路径不算数。
 
+### 自主访问所选目录
+
+声明 `"pick":true` 和 `"agent":{"hostTools":["files"]}`，经系统选择器取得目录引用：
+
+```js
+const selected = await cindy.pick({ mode: 'directory', access: 'files', title: '选择同步目录' });
+if (!selected.ok) return; // 取消或拒绝后不要循环重弹
+// selected.directoryRef 只对本插件、当前账号和执行电脑有效，可存入插件 KV。
+await cindy.fs({ root: 'picked', directoryRef: selected.directoryRef,
+  op: 'write', path: 'exports/report.txt', content: 'ready' });
+```
+
+`files` 单独列在安装/更新与详情权限清单，批准记录沿用 Host receipt；缺少批准时首次调用
+复用宿主确认，拒绝后由详情页重试。选目录的系统对话框另外明确说明读、写、列举、删除和
+持续监听范围。只有这次明确选择才签发 `directoryRef`；旧的 pick 路径、过户票据、
+`fs:true` 和未知声明不会自动取得引用或访问权。引用不返回绝对路径，不要求 Node 能力。
+
+引用沿用本插件最近 8 个亲选目录的存储，不另建授权状态机。同目录重新授权会换引用；
+目录被替换、移走或记录被新选择淘汰后需重新选择。停用、换源、账号或安装代次变化使
+在途操作和监听失效。Host 数据目录及其上级目录不能选作访问根。
+此模式需要执行电脑的系统选择器；当前手机、远程页面和无界面 Node Host 不能建立新引用，
+应明确引导在执行电脑选择。文件操作与监听契约见[§4.10](plugin-files-and-library.md)。
+
 ### 文件选择
 
 ```js

@@ -45,14 +45,16 @@ vi.mock('expo-router/react-navigation', () => ({ useIsFocused: () => state.focus
   NavigationContext: createContext(null), NavigationRouteContext: createContext(null) }));
 vi.mock('@/platform/AdaptiveWindowContext', () => ({
   usePaneViewport: () => ({ width: state.width, height: state.height }),
-  useAdaptiveWindow: () => ({ width: state.width, height: state.height }),
+  useAdaptiveWindow: () => ({ width: state.width, height: state.height, insets: { top: 0, bottom: 0, left: 0, right: 0 } }),
   PaneViewportProvider: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock('@/session/useHomeMode', () => ({ useHomeMode: () => ({ mode: 'tasks' }) }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
-vi.mock('@/session/sessionPaneLayout', () => ({ sessionPaneLayout: () => ({ persistent: true }) }));
+vi.mock('@/session/sessionPaneLayout', () => ({ sessionPaneLayout: () => ({ persistent: true, detail: { x: 0 }, resizeBounds: null }) }));
 // Resize gestures have their own tests; this suite exercises the resident hosts.
-vi.mock('@/session/SessionPaneDivider', () => ({ SessionPaneDivider: () => null }));
+vi.mock('@/session/SessionPaneDivider', () => ({ useSessionPaneDivider: () => ({ gesture: {}, edge: null, rowInset: 0 }),
+  PaneEdgeInsetProvider: ({ children }: any) => children, usePaneEdgeInset: () => 0 }));
+vi.mock('@/platform/gestureHandler', () => ({ GestureDetector: ({ children }: any) => children }));
 vi.mock('@/session/remoteSessionStore', () => ({
   RemoteSessionStoreSubscriptionGate: ({ children, enabled }: { children: ReactNode; enabled: boolean }) =>
     <div data-store-gate={String(enabled)}>{children}</div>,

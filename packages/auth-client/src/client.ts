@@ -37,6 +37,8 @@ export interface AuthFetchResponse {
   status: number;
   headers?: { get(name: string): string | null };
   json(): Promise<unknown>;
+  /** Optional raw reader for host-side diagnostics of public endpoint errors. */
+  text?(): Promise<string>;
 }
 
 export type AuthFetch = (

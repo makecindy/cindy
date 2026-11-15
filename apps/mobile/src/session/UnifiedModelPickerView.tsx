@@ -210,6 +210,34 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   useEffect(() => {
     modelListRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, [p.query, p.filter]);
+  const initialScrollPending = useRef(true);
+  const initialScrollAttempts = useRef(0);
+  const initialScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectedIndex = modelItems.findIndex(item => item.kind === "model" && item.row.selected);
+  const cancelInitialScroll = () => {
+    initialScrollPending.current = false;
+    if (initialScrollTimer.current !== null) clearTimeout(initialScrollTimer.current);
+    initialScrollTimer.current = null;
+  };
+  const scrollToSelected = () => {
+    if (!p.visible || !initialScrollPending.current || selectedIndex < 0 || !modelListRef.current) return;
+    initialScrollPending.current = false;
+    modelListRef.current.scrollToIndex({ index: selectedIndex, viewPosition: 0.5, animated: false });
+  };
+  useEffect(() => {
+    initialScrollPending.current = true;
+    initialScrollAttempts.current = 0;
+    return cancelInitialScroll;
+  }, [p.visible]);
+  useEffect(() => {
+    // The first frame lets the sheet and any freshly loaded model rows mount.
+    const frame = requestAnimationFrame(scrollToSelected);
+    return () => {
+      cancelAnimationFrame(frame);
+      if (initialScrollTimer.current !== null) clearTimeout(initialScrollTimer.current);
+      initialScrollTimer.current = null;
+    };
+  }, [p.visible, selectedIndex, p.filter]);
   // 与 iOS 同口径:重新打开或切换设置对象都回到主页。
   useEffect(() => {
     setPage(null);
@@ -271,7 +299,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           accessibilityLabel={t("models.picker.searchAccessibility")}
           autoCapitalize="none"
           autoCorrect={false}
-          onChangeText={p.onQuery}
+          onChangeText={(value) => { cancelInitialScroll(); p.onQuery(value); }}
           // Android adjustResize:聚焦搜索时吸到 full,边输边看列表(与旧版模型浮窗同口径)。
           onFocus={() => setSnap("full")}
           placeholder={t("models.picker.searchPlaceholder")}
@@ -347,6 +375,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         </View>
       }
       onPress={() => {
+        cancelInitialScroll();
         p.onFilter(item.id);
         setPage(null);
       }}
@@ -828,6 +857,15 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                     {...scrollProps}
                     ref={modelListRef}
                     data={modelItems}
+                    onScrollBeginDrag={cancelInitialScroll}
+                    onContentSizeChange={scrollToSelected}
+                    onScrollToIndexFailed={({ index, averageItemLength }) => {
+                      if (++initialScrollAttempts.current > 5) return;
+                      initialScrollPending.current = true;
+                      modelListRef.current?.scrollToOffset({ offset: averageItemLength * index, animated: false });
+                      if (initialScrollTimer.current !== null) clearTimeout(initialScrollTimer.current);
+                      initialScrollTimer.current = setTimeout(scrollToSelected, 50);
+                    }}
                     keyExtractor={(item) => item.key}
                     initialNumToRender={8}
                     maxToRenderPerBatch={4}

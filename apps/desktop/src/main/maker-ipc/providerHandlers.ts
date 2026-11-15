@@ -1,3 +1,5 @@
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
+import { remoteProviderDisableKey } from '@cindy/model-providers';
 import { withoutProviderHeaderCredentials } from '../maker-host/provider-public-view.js';
 import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 import { bindModelSourceSnapshot, acceptsModelSourceSnapshot, modelSourceRequestSignature, issueModelSourceSnapshot } from '../maker-host/model-source-snapshots.js';
@@ -450,9 +452,14 @@ export interface ProviderHandlerDeps {
    */
   setModelsDisabled(providerId: string, modelIds: readonly string[], disabled: boolean): void;
   setProviderDisabled(providerId: string, disabled: boolean): void;
+  getDisabledProviders?(): Record<string, boolean>;
+  listRemoteProviders?(deviceId: string): Promise<ProviderView[]>;
   /** Per-provider opt-in for remote Agent use; absent means disabled. */
   getRemoteProviderInvocationEnabled?(providerId: string): boolean;
   setRemoteProviderInvocationEnabled?(providerId: string, enabled: boolean): void | Promise<void>;
+  /** 「远程连接」里的「让我的其他电脑用本机模型」，默认关闭。 */
+  getOwnComputerModelUse?(): boolean;
+  setOwnComputerModelUse?(enabled: boolean): Promise<void>;
   /** 供应商「运行于」：用户改选过的电脑(deviceId 或 'local')。 */
   getProviderRunLocation?(providerId: string): string | undefined;
   setProviderRunLocation?(providerId: string, location: string | null): void;
@@ -1217,6 +1224,7 @@ export function registerProviderHandlers(
       providers: ProviderView[];
       providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
+      disabledProviders?: Record<string, boolean>;
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
@@ -1268,6 +1276,7 @@ export function registerProviderHandlers(
         }),
         providerOrder,
         modelVisibilityOverrides,
+        ...(trusted ? { disabledProviders: deps.getDisabledProviders?.() ?? {} } : {}),
       };
     };
   registry.handle(MAKER_INVOKE.PROVIDER_LIST, async (event) => {
@@ -1816,6 +1825,14 @@ export function registerProviderHandlers(
     if (i.kind !== 'model' && i.kind !== 'provider' && i.kind !== 'reset') {
       throwIpcError('INVALID_PARAMS', 'kind must be "model", "provider" or "reset"');
     }
+    if (i.remoteDeviceId !== undefined && (
+      i.kind !== 'provider' || typeof i.remoteDeviceId !== 'string' ||
+      !i.remoteDeviceId || i.remoteDeviceId.length > MAX_DISABLE_ID_LENGTH ||
+      isProviderShareAgentDeviceId(i.remoteDeviceId)
+    )) throwIpcError('INVALID_PARAMS', 'invalid remote provider disable target');
+    const disableKey = typeof i.remoteDeviceId === 'string'
+      ? remoteProviderDisableKey(i.remoteDeviceId, i.providerId as string)
+      : i.providerId as string;
     // reset = 删除整组 override(恢复默认),无 disabled 语义;其余两种必须显式带方向。
     if (i.kind !== 'reset' && typeof i.disabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'disabled required');
@@ -1836,7 +1853,10 @@ export function registerProviderHandlers(
     // provider / model(chat 各 agent 清单 ∪ imageModels ∪ videoModels);恢复启用是
     // 删条目,故意不校验 —— 目录漂移后用户仍能清掉指向已下架 id 的陈旧 override。
     const requireCatalogProvider = async (providerId: string): Promise<ProviderView> => {
-      const provider = (await deps.listProviders()).find((p) => p.id === providerId);
+      const catalog = typeof i.remoteDeviceId === 'string'
+        ? await deps.listRemoteProviders?.(i.remoteDeviceId) ?? []
+        : await deps.listProviders();
+      const provider = catalog.find((p) => p.id === providerId);
       if (!provider) throwIpcError('INVALID_PARAMS', `unknown providerId "${providerId}"`);
       return provider;
     };
@@ -1888,6 +1908,7 @@ export function registerProviderHandlers(
           for (const m of provider.imageModels ?? []) known.add(m.id);
           for (const m of provider.videoModels ?? []) known.add(m.id);
           for (const m of provider.audioModels ?? []) known.add(m.id);
+          for (const m of provider.evaluationModels ?? []) known.add(m.id);
           for (const m of provider.embeddingModels ?? []) known.add(m.id);
           const unknown = modelIds.filter((id) => !known.has(id));
           if (unknown.length > 0) {
@@ -1904,12 +1925,12 @@ export function registerProviderHandlers(
       } else {
         if (i.disabled) await requireCatalogProvider(i.providerId as string);
         assertSameOwner();
-        persist(() => deps.setProviderDisabled(i.providerId as string, i.disabled as boolean));
+        persist(() => deps.setProviderDisabled(disableKey, i.disabled as boolean));
       }
       deps.broadcastChanged();
       return { ok: true };
     };
-    return withAvailabilityPolicyMutation(i.providerId as string, () => enqueueDisableWrite(run));
+    return withAvailabilityPolicyMutation(disableKey, () => enqueueDisableWrite(run));
   };
   registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
@@ -1944,6 +1965,31 @@ export function registerProviderHandlers(
       });
       throwIpcError('INTERNAL', 'failed to persist remote provider access');
     }
+    deps.broadcastChanged();
+    return { ok: true, enabled: value.enabled };
+  });
+
+  registry.handle(MAKER_INVOKE.OWN_COMPUTER_MODEL_USE_GET, async (event) => {
+    assertTrustedProviderMutationSender(event);
+    if (!deps.getOwnComputerModelUse) throwIpcError('INTERNAL', 'own computer model use is not wired');
+    return { enabled: deps.getOwnComputerModelUse() };
+  });
+
+  registry.handle(MAKER_INVOKE.OWN_COMPUTER_MODEL_USE_SET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = captureProviderOwnerSession();
+    if (!deps.setOwnComputerModelUse) throwIpcError('INTERNAL', 'own computer model use is not wired');
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throwIpcError('INVALID_PARAMS', 'invalid input');
+    const value = input as Record<string, unknown>;
+    if (typeof value.enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled required');
+    assertProviderMutationOwner(ownerAtIngress, 'active account changed before persisting own computer model use');
+    try {
+      await deps.setOwnComputerModelUse(value.enabled);
+    } catch (err) {
+      log.warn('own computer model use persist failed', { error: err instanceof Error ? err.message : String(err) });
+      throwIpcError('INTERNAL', 'failed to persist own computer model use');
+    }
+    // 自己的其他电脑据此重读目录(同「允许被远程调用」)。
     deps.broadcastChanged();
     return { ok: true, enabled: value.enabled };
   });

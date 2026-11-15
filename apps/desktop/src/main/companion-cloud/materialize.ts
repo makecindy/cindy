@@ -7,6 +7,8 @@
  * automatic take-over retries it.
  */
 import type { CompanionMirrorCursor, CompanionMirrorRow } from './mirror.js';
+import { correctedProfile, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
+import { validateCompanionProfileSources } from '../../shared/botProfileSources.js';
 import { COMPANION_HISTORY_CLIENT_PREFIX } from './mirror.js';
 import { parseCompanionCapabilities, type CompanionArrivalNotice, type CompanionCapabilitiesValue } from './capabilities.js';
 import { directRoomSourceId } from './directRoom.js';
@@ -61,6 +63,8 @@ export interface CompanionMaterializeHost {
   writeSystemPrompt: (botId: string, text: string, fence: CompanionWriteFence) => Promise<void>;
   /** Copy the companion's Home (identity, prompt, user file, memories, skills) aside; returns where. */
   backupHome?: (botId: string, fence: CompanionWriteFence) => Promise<string | null>;
+  /** Preserve the complete cloud original before applying an explicit source correction. */
+  backupProfileSource?: (botId: string, value: unknown, fence: CompanionWriteFence) => Promise<void>;
   readMemory: (botId: string, filename: string) => Promise<string | null>;
   restoreMemory: (botId: string, filename: string, raw: string, fence: CompanionWriteFence) => Promise<void>;
   removeMemory: (botId: string, filename: string, fence: CompanionWriteFence) => Promise<void>;
@@ -171,6 +175,7 @@ export async function materializeCompanion(input: {
   log?: CompanionLog;
   /** Publish the demotion (send guard, routines, lists) before the first local write. */
   onDemoted?: () => void;
+  correction?: ProfileCorrection;
   /** Brings the room's files along with the history; without it only their names come. */
   download?: CompanionRoomDownload;
 }): Promise<CompanionMaterializeResult> {
@@ -187,7 +192,8 @@ export async function materializeCompanion(input: {
   const rows = await step(() => readCompanionRows(api, input.store, actor.id));
   const prefs = new Map(rows.map(row => [row.key, row]));
   const profileValue = prefs.get(COMPANION_PROFILE_KEY)?.value;
-  const profile = isCompanionProfileSnapshot(profileValue) ? profileValue : null;
+  const profileRowForRepair = prefs.get(COMPANION_PROFILE_KEY);
+  let profile = isCompanionProfileSnapshot(profileValue) ? profileValue : null;
   /** A restored value is recorded under the revisions of where it came from. */
   const remember = (entry: CompanionBotState, key: string, value: { hash: string; revision: number }) => {
     // The other location's record is from before another computer changed the value: drop it, or a
@@ -215,10 +221,20 @@ export async function materializeCompanion(input: {
   // Without the home's profile snapshot this copy's own (or empty) profile would be published as
   // the companion's identity: wait (demoted, retried) until the home has uploaded one.
   if (!profile) throw new Error('PROFILE_SNAPSHOT_MISSING');
+  if (input.correction && profileRowForRepair) profile = correctedProfile(profileRowForRepair, input.correction);
+  validateCompanionProfileSources(profile);
   const templateId = text(record(profile)?.templateId);
   // The cloud externalId is the only reusable local identity. Another Cindy (even one with
   // the same name) must not be overwritten, re-keyed or silently merged into this actor.
   await assertCompanionIdentity(host, botId, templateId, fence);
+  if (input.correction) {
+    if (!host.backupProfileSource) throw new CompanionProfileRepairError('backup');
+    try { await step(() => host.backupProfileSource!(botId, profileValue, fence)); }
+    catch (error) {
+      fence.assertCurrent();
+      throw new CompanionProfileRepairError('backup');
+    }
+  }
   // An existing local copy is saved before the cloud copy replaces (or deletes) its files.
   let backup: string | null | undefined;
   if (local && !(known?.actorId === actor.id && known.backedUp) && host.backupHome) {

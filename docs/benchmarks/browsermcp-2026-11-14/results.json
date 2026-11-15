@@ -1,0 +1,2245 @@
+{
+ "date": "2026-11-14",
+ "note": "Seconds unless a field name says otherwise. Means over runs that finished (the one killed run has no turns). See README.md in this folder for method and limits.",
+ "model": "claude-opus-5-5",
+ "effort": "medium",
+ "cindyHeadSha": "8fc79a25b5d06860de683b0556d438bb2d666d0e",
+ "browsermcp": {
+  "version": "0.0.43",
+  "commit": "a5c8572",
+  "extension": "0.0.30",
+  "chrome": "Chrome for Testing 151.0.7922.34"
+ },
+ "summary": {
+  "fixture/browsermcp": {
+   "runs": 39,
+   "passed": 39,
+   "turns": 5.872,
+   "browserCalls": 4.872,
+   "costUsd": 0.063,
+   "seconds": 21.269,
+   "inputTokens": 92685,
+   "toolResultChars": 3521
+  },
+  "fixture/cindy": {
+   "runs": 39,
+   "passed": 39,
+   "turns": 3.487,
+   "browserCalls": 2.487,
+   "costUsd": 0.039,
+   "seconds": 14.241,
+   "inputTokens": 14533,
+   "toolResultChars": 4435
+  },
+  "real/browsermcp": {
+   "runs": 16,
+   "passed": 16,
+   "turns": 4.75,
+   "browserCalls": 3.75,
+   "costUsd": 0.061,
+   "seconds": 21.831,
+   "inputTokens": 78249,
+   "toolResultChars": 3165
+  },
+  "real/cindy": {
+   "runs": 16,
+   "passed": 14,
+   "turns": 2.267,
+   "browserCalls": 1.2,
+   "costUsd": 0.04,
+   "seconds": 11.42,
+   "inputTokens": 9880,
+   "toolResultChars": 5999
+  }
+ },
+ "runs": [
+  {
+   "kind": "fixture",
+   "task": "badge",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 8,
+   "browserCalls": 7,
+   "costUsd": 0.0946,
+   "seconds": 27.5,
+   "inputTokens": 136012,
+   "outputTokens": 985,
+   "toolResultChars": 34139,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "js(202)",
+    "js(393)",
+    "tab_observe",
+    "tab_observe",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "badge",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0427,
+   "seconds": 16.7,
+   "inputTokens": 19815,
+   "outputTokens": 773,
+   "toolResultChars": 2795,
+   "calls": [
+    "open",
+    "cdp(nodes)",
+    "cdp(type,type,click,nodes)",
+    "cdp(nodes)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "badge",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0591,
+   "seconds": 19.4,
+   "inputTokens": 81047,
+   "outputTokens": 602,
+   "toolResultChars": 1874,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "js(509)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "badge",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0426,
+   "seconds": 17.4,
+   "inputTokens": 19731,
+   "outputTokens": 780,
+   "toolResultChars": 2795,
+   "calls": [
+    "open",
+    "cdp(nodes)",
+    "cdp(type,type,click,nodes)",
+    "cdp(nodes)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "badge",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0635,
+   "seconds": 22.2,
+   "inputTokens": 97116,
+   "outputTokens": 721,
+   "toolResultChars": 1357,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "js(191)",
+    "js(276)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "badge",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0445,
+   "seconds": 17.4,
+   "inputTokens": 19958,
+   "outputTokens": 836,
+   "toolResultChars": 2795,
+   "calls": [
+    "open",
+    "cdp(nodes)",
+    "cdp(type,type,click,nodes)",
+    "cdp(nodes)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "catalog",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0698,
+   "seconds": 20.2,
+   "inputTokens": 84441,
+   "outputTokens": 605,
+   "toolResultChars": 3988,
+   "calls": [
+    "js(217)",
+    "js(58)",
+    "js(237)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "catalog",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0365,
+   "seconds": 12.0,
+   "inputTokens": 12319,
+   "outputTokens": 488,
+   "toolResultChars": 3467,
+   "calls": [
+    "open",
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "catalog",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0593,
+   "seconds": 19.3,
+   "inputTokens": 81241,
+   "outputTokens": 610,
+   "toolResultChars": 1606,
+   "calls": [
+    "open_tab",
+    "js(224)",
+    "js(246)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "catalog",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0367,
+   "seconds": 12.9,
+   "inputTokens": 12356,
+   "outputTokens": 494,
+   "toolResultChars": 3466,
+   "calls": [
+    "open",
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "catalog",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0614,
+   "seconds": 23.3,
+   "inputTokens": 81718,
+   "outputTokens": 694,
+   "toolResultChars": 1676,
+   "calls": [
+    "js(202)",
+    "js(219)",
+    "js(245)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "catalog",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0364,
+   "seconds": 11.3,
+   "inputTokens": 12307,
+   "outputTokens": 490,
+   "toolResultChars": 3465,
+   "calls": [
+    "open",
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "directory",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0504,
+   "seconds": 15.6,
+   "inputTokens": 79447,
+   "outputTokens": 433,
+   "toolResultChars": 1006,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "js(67)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "directory",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0269,
+   "seconds": 14.0,
+   "inputTokens": 10514,
+   "outputTokens": 402,
+   "toolResultChars": 1731,
+   "calls": [
+    "open",
+    "batch(type,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "directory",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0531,
+   "seconds": 16.3,
+   "inputTokens": 80241,
+   "outputTokens": 426,
+   "toolResultChars": 1559,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "tab_observe",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "directory",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0284,
+   "seconds": 11.2,
+   "inputTokens": 10578,
+   "outputTokens": 435,
+   "toolResultChars": 1914,
+   "calls": [
+    "open",
+    "batch(type,press,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "directory",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 7,
+   "browserCalls": 6,
+   "costUsd": 0.0624,
+   "seconds": 22.0,
+   "inputTokens": 112574,
+   "outputTokens": 594,
+   "toolResultChars": 1244,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "js(69)",
+    "js(63)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "directory",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0266,
+   "seconds": 11.8,
+   "inputTokens": 10497,
+   "outputTokens": 389,
+   "toolResultChars": 1731,
+   "calls": [
+    "open",
+    "batch(type,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "form",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0722,
+   "seconds": 22.4,
+   "inputTokens": 100026,
+   "outputTokens": 850,
+   "toolResultChars": 3327,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "js(626)",
+    "js(136)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "form",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0582,
+   "seconds": 19.6,
+   "inputTokens": 19363,
+   "outputTokens": 941,
+   "toolResultChars": 6043,
+   "calls": [
+    "open",
+    "batch(type,type,select,type,click,click,type)",
+    "batch(click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "form",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.076,
+   "seconds": 24.0,
+   "inputTokens": 100669,
+   "outputTokens": 945,
+   "toolResultChars": 3447,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "js(816)",
+    "js(130)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "form",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0572,
+   "seconds": 18.5,
+   "inputTokens": 19367,
+   "outputTokens": 889,
+   "toolResultChars": 6043,
+   "calls": [
+    "open",
+    "batch(type,type,select,type,click,click,type)",
+    "batch(click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "form",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0727,
+   "seconds": 21.8,
+   "inputTokens": 100287,
+   "outputTokens": 840,
+   "toolResultChars": 3316,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "js(696)",
+    "js(70)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "form",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0651,
+   "seconds": 20.7,
+   "inputTokens": 26085,
+   "outputTokens": 1061,
+   "toolResultChars": 6285,
+   "calls": [
+    "open",
+    "batch(type,type,select,type,click,click,type)",
+    "cdp(nodes)",
+    "batch(click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "iframe",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0523,
+   "seconds": 17.2,
+   "inputTokens": 79814,
+   "outputTokens": 468,
+   "toolResultChars": 1185,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "js(177)",
+    "js(80)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "iframe",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0242,
+   "seconds": 10.5,
+   "inputTokens": 9870,
+   "outputTokens": 374,
+   "toolResultChars": 1386,
+   "calls": [
+    "read",
+    "open"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "iframe",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0522,
+   "seconds": 15.7,
+   "inputTokens": 80215,
+   "outputTokens": 396,
+   "toolResultChars": 1641,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "js(179)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "iframe",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0242,
+   "seconds": 11.4,
+   "inputTokens": 9875,
+   "outputTokens": 369,
+   "toolResultChars": 1386,
+   "calls": [
+    "read",
+    "open"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "iframe",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0623,
+   "seconds": 22.5,
+   "inputTokens": 96984,
+   "outputTokens": 628,
+   "toolResultChars": 1750,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "js(164)",
+    "js(212)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "iframe",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0235,
+   "seconds": 12.3,
+   "inputTokens": 9838,
+   "outputTokens": 347,
+   "toolResultChars": 1386,
+   "calls": [
+    "read",
+    "open"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "late",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0489,
+   "seconds": 28.4,
+   "inputTokens": 78961,
+   "outputTokens": 452,
+   "toolResultChars": 509,
+   "calls": [
+    "open_tab",
+    "js(114)",
+    "js(65)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "late",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0149,
+   "seconds": 9.8,
+   "inputTokens": 6075,
+   "outputTokens": 194,
+   "toolResultChars": 315,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "late",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0604,
+   "seconds": 24.5,
+   "inputTokens": 97006,
+   "outputTokens": 560,
+   "toolResultChars": 1682,
+   "calls": [
+    "open_tab",
+    "js(124)",
+    "js(102)",
+    "tab_observe",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "late",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0152,
+   "seconds": 9.3,
+   "inputTokens": 6077,
+   "outputTokens": 209,
+   "toolResultChars": 315,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "late",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0479,
+   "seconds": 33.9,
+   "inputTokens": 78893,
+   "outputTokens": 408,
+   "toolResultChars": 509,
+   "calls": [
+    "open_tab",
+    "js(68)",
+    "js(63)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "late",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0152,
+   "seconds": 9.2,
+   "inputTokens": 6078,
+   "outputTokens": 209,
+   "toolResultChars": 315,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "manual",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.088,
+   "seconds": 18.8,
+   "inputTokens": 91411,
+   "outputTokens": 553,
+   "toolResultChars": 14065,
+   "calls": [
+    "open_tab",
+    "js(73)",
+    "js(84)",
+    "js(65)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "manual",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0801,
+   "seconds": 10.4,
+   "inputTokens": 19344,
+   "outputTokens": 379,
+   "toolResultChars": 23630,
+   "calls": [
+    "read",
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "manual",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0845,
+   "seconds": 18.2,
+   "inputTokens": 91214,
+   "outputTokens": 458,
+   "toolResultChars": 13942,
+   "calls": [
+    "open_tab",
+    "js(73)",
+    "js(143)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "manual",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0795,
+   "seconds": 10.5,
+   "inputTokens": 19341,
+   "outputTokens": 349,
+   "toolResultChars": 23630,
+   "calls": [
+    "read",
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "manual",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0923,
+   "seconds": 19.9,
+   "inputTokens": 111744,
+   "outputTokens": 573,
+   "toolResultChars": 14081,
+   "calls": [
+    "open_tab",
+    "js(74)",
+    "js(93)",
+    "js(88)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "manual",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0801,
+   "seconds": 11.2,
+   "inputTokens": 19338,
+   "outputTokens": 379,
+   "toolResultChars": 23630,
+   "calls": [
+    "read",
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "orders",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.051,
+   "seconds": 15.6,
+   "inputTokens": 65036,
+   "outputTokens": 387,
+   "toolResultChars": 1716,
+   "calls": [
+    "js(116)",
+    "js(192)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "orders",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0544,
+   "seconds": 17.2,
+   "inputTokens": 14233,
+   "outputTokens": 678,
+   "toolResultChars": 6567,
+   "calls": [
+    "open",
+    "batch(click,wait,read,click,wait,read,click,wait,read,click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "orders",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0569,
+   "seconds": 17.7,
+   "inputTokens": 80840,
+   "outputTokens": 493,
+   "toolResultChars": 1649,
+   "calls": [
+    "open_tab",
+    "js(83)",
+    "js(268)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "orders",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0611,
+   "seconds": 20.3,
+   "inputTokens": 18308,
+   "outputTokens": 817,
+   "toolResultChars": 7025,
+   "calls": [
+    "read",
+    "open",
+    "batch(click,wait,read,click,wait,read,click,wait,read,click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "orders",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0562,
+   "seconds": 22.3,
+   "inputTokens": 80779,
+   "outputTokens": 472,
+   "toolResultChars": 1629,
+   "calls": [
+    "open_tab",
+    "js(84)",
+    "js(280)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "orders",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.054,
+   "seconds": 14.3,
+   "inputTokens": 14214,
+   "outputTokens": 663,
+   "toolResultChars": 6565,
+   "calls": [
+    "open",
+    "batch(click,wait,read,click,wait,read,click,wait,read,click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "report",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0499,
+   "seconds": 19.3,
+   "inputTokens": 79474,
+   "outputTokens": 425,
+   "toolResultChars": 823,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "js(291)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "report",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0261,
+   "seconds": 14.5,
+   "inputTokens": 10401,
+   "outputTokens": 377,
+   "toolResultChars": 1755,
+   "calls": [
+    "open",
+    "batch(click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "report",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.057,
+   "seconds": 21.0,
+   "inputTokens": 96119,
+   "outputTokens": 519,
+   "toolResultChars": 1146,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "js(205)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "report",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0266,
+   "seconds": 12.9,
+   "inputTokens": 10451,
+   "outputTokens": 394,
+   "toolResultChars": 1755,
+   "calls": [
+    "open",
+    "batch(click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "report",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0566,
+   "seconds": 19.6,
+   "inputTokens": 96033,
+   "outputTokens": 506,
+   "toolResultChars": 1177,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "js(172)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "report",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0257,
+   "seconds": 12.9,
+   "inputTokens": 10387,
+   "outputTokens": 364,
+   "toolResultChars": 1755,
+   "calls": [
+    "open",
+    "batch(click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "settings",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 11,
+   "browserCalls": 10,
+   "costUsd": 0.0953,
+   "seconds": 33.6,
+   "inputTokens": 152499,
+   "outputTokens": 1121,
+   "toolResultChars": 4056,
+   "calls": [
+    "tabs_list",
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "tab_observe",
+    "tab_act",
+    "tab_observe",
+    "js(379)",
+    "js(92)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "settings",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.066,
+   "seconds": 22.6,
+   "inputTokens": 28529,
+   "outputTokens": 1143,
+   "toolResultChars": 6403,
+   "calls": [
+    "open",
+    "act:click",
+    "act:click",
+    "batch(click,click,select)",
+    "batch(click,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "settings",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 12,
+   "browserCalls": 11,
+   "costUsd": 0.1039,
+   "seconds": 30.7,
+   "inputTokens": 156443,
+   "outputTokens": 1209,
+   "toolResultChars": 5761,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "tab_observe",
+    "tab_act",
+    "tab_observe",
+    "js(458)",
+    "tab_act",
+    "tab_observe",
+    "js(68)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "settings",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 7,
+   "browserCalls": 6,
+   "costUsd": 0.0693,
+   "seconds": 26.1,
+   "inputTokens": 35154,
+   "outputTokens": 1111,
+   "toolResultChars": 6830,
+   "calls": [
+    "open",
+    "act:click",
+    "act:click",
+    "batch(click,click,select)",
+    "cdp(nodes)",
+    "batch(click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "settings",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 11,
+   "browserCalls": 10,
+   "costUsd": 0.0954,
+   "seconds": 32.9,
+   "inputTokens": 152449,
+   "outputTokens": 1133,
+   "toolResultChars": 4061,
+   "calls": [
+    "tabs_list",
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "tab_observe",
+    "tab_act",
+    "tab_observe",
+    "js(485)",
+    "js(133)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "settings",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0676,
+   "seconds": 25.5,
+   "inputTokens": 28614,
+   "outputTokens": 1170,
+   "toolResultChars": 6585,
+   "calls": [
+    "open",
+    "act:click",
+    "act:click",
+    "batch(click,click,select)",
+    "batch(click,wait,read)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "spinner",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.049,
+   "seconds": 21.3,
+   "inputTokens": 79019,
+   "outputTokens": 447,
+   "toolResultChars": 495,
+   "calls": [
+    "open_tab",
+    "js(139)",
+    "js(65)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "spinner",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0145,
+   "seconds": 8.8,
+   "inputTokens": 6079,
+   "outputTokens": 176,
+   "toolResultChars": 308,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "spinner",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0484,
+   "seconds": 22.8,
+   "inputTokens": 78969,
+   "outputTokens": 428,
+   "toolResultChars": 493,
+   "calls": [
+    "open_tab",
+    "js(110)",
+    "js(63)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "spinner",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0147,
+   "seconds": 8.7,
+   "inputTokens": 6085,
+   "outputTokens": 188,
+   "toolResultChars": 308,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "spinner",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0485,
+   "seconds": 26.0,
+   "inputTokens": 78974,
+   "outputTokens": 431,
+   "toolResultChars": 495,
+   "calls": [
+    "open_tab",
+    "js(111)",
+    "js(63)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "spinner",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0148,
+   "seconds": 13.1,
+   "inputTokens": 6070,
+   "outputTokens": 193,
+   "toolResultChars": 308,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "status",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0399,
+   "seconds": 11.6,
+   "inputTokens": 62772,
+   "outputTokens": 237,
+   "toolResultChars": 392,
+   "calls": [
+    "open_tab",
+    "js(69)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "status",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0149,
+   "seconds": 7.6,
+   "inputTokens": 6071,
+   "outputTokens": 184,
+   "toolResultChars": 376,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "status",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0401,
+   "seconds": 13.8,
+   "inputTokens": 62733,
+   "outputTokens": 260,
+   "toolResultChars": 390,
+   "calls": [
+    "open_tab",
+    "js(68)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "status",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0152,
+   "seconds": 7.5,
+   "inputTokens": 6101,
+   "outputTokens": 202,
+   "toolResultChars": 376,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "status",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0408,
+   "seconds": 13.5,
+   "inputTokens": 62753,
+   "outputTokens": 282,
+   "toolResultChars": 392,
+   "calls": [
+    "open_tab",
+    "js(69)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "status",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.015,
+   "seconds": 8.2,
+   "inputTokens": 6094,
+   "outputTokens": 197,
+   "toolResultChars": 376,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "vault",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0561,
+   "seconds": 17.2,
+   "inputTokens": 96250,
+   "outputTokens": 436,
+   "toolResultChars": 1580,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "tab_observe",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "vault",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0368,
+   "seconds": 17.3,
+   "inputTokens": 18586,
+   "outputTokens": 689,
+   "toolResultChars": 2167,
+   "calls": [
+    "open",
+    "cdp(nodes)",
+    "cdp(click,nodes)",
+    "cdp(nodes)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "vault",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.056,
+   "seconds": 19.3,
+   "inputTokens": 96165,
+   "outputTokens": 443,
+   "toolResultChars": 1580,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "tab_observe",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "vault",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0478,
+   "seconds": 22.8,
+   "inputTokens": 23803,
+   "outputTokens": 971,
+   "toolResultChars": 2743,
+   "calls": [
+    "open",
+    "cdp(nodes)",
+    "cdp(click,nodes)",
+    "batch(wait,read)",
+    "cdp(nodes)"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "vault",
+   "side": "browsermcp",
+   "repetition": 2,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0564,
+   "seconds": 18.2,
+   "inputTokens": 96337,
+   "outputTokens": 440,
+   "toolResultChars": 1586,
+   "calls": [
+    "open_tab",
+    "tab_observe",
+    "tab_act",
+    "tab_observe",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "fixture",
+   "task": "vault",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0385,
+   "seconds": 17.0,
+   "inputTokens": 18879,
+   "outputTokens": 726,
+   "toolResultChars": 2235,
+   "calls": [
+    "open",
+    "cdp(nodes)",
+    "cdp(click,nodes)",
+    "cdp(nodes)"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "apple",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.044,
+   "seconds": 15.9,
+   "inputTokens": 63207,
+   "outputTokens": 358,
+   "toolResultChars": 688,
+   "calls": [
+    "open_tab",
+    "js(210)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "apple",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0317,
+   "seconds": 9.2,
+   "inputTokens": 8048,
+   "outputTokens": 252,
+   "toolResultChars": 4606,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "apple",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0442,
+   "seconds": 14.9,
+   "inputTokens": 63585,
+   "outputTokens": 430,
+   "toolResultChars": 851,
+   "calls": [
+    "js(128)",
+    "js(314)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "apple",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0286,
+   "seconds": 8.3,
+   "inputTokens": 8056,
+   "outputTokens": 211,
+   "toolResultChars": 4606,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "crates",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0461,
+   "seconds": 14.0,
+   "inputTokens": 64000,
+   "outputTokens": 296,
+   "toolResultChars": 1864,
+   "calls": [
+    "open_tab",
+    "js(203)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "crates",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0183,
+   "seconds": 8.5,
+   "inputTokens": 6618,
+   "outputTokens": 149,
+   "toolResultChars": 1542,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "crates",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0438,
+   "seconds": 14.7,
+   "inputTokens": 63961,
+   "outputTokens": 298,
+   "toolResultChars": 1862,
+   "calls": [
+    "open_tab",
+    "js(202)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "crates",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0227,
+   "seconds": 10.1,
+   "inputTokens": 7322,
+   "outputTokens": 196,
+   "toolResultChars": 3294,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "gh-pr",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0521,
+   "seconds": 13.3,
+   "inputTokens": 48523,
+   "outputTokens": 429,
+   "toolResultChars": 3562,
+   "calls": [
+    "open_tab",
+    "js(116)"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "gh-pr",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0467,
+   "seconds": 14.4,
+   "inputTokens": 13995,
+   "outputTokens": 675,
+   "toolResultChars": 5874,
+   "calls": [
+    "read",
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "gh-pr",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0578,
+   "seconds": 16.1,
+   "inputTokens": 66088,
+   "outputTokens": 569,
+   "toolResultChars": 3702,
+   "calls": [
+    "open_tab",
+    "js(120)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "gh-pr",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0363,
+   "seconds": 11.2,
+   "inputTokens": 8218,
+   "outputTokens": 538,
+   "toolResultChars": 5295,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "gh-releases",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0592,
+   "seconds": 39.4,
+   "inputTokens": 65228,
+   "outputTokens": 766,
+   "toolResultChars": 1768,
+   "calls": [
+    "js(391)",
+    "js(402)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "gh-releases",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0456,
+   "seconds": 10.8,
+   "inputTokens": 9413,
+   "outputTokens": 412,
+   "toolResultChars": 7338,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "gh-releases",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0532,
+   "seconds": 35.6,
+   "inputTokens": 64624,
+   "outputTokens": 703,
+   "toolResultChars": 1274,
+   "calls": [
+    "js(344)",
+    "js(364)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "gh-releases",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.043,
+   "seconds": 10.2,
+   "inputTokens": 9427,
+   "outputTokens": 408,
+   "toolResultChars": 7338,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "hn",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0556,
+   "seconds": 19.3,
+   "inputTokens": 80500,
+   "outputTokens": 553,
+   "toolResultChars": 1594,
+   "calls": [
+    "open_tab",
+    "js(202)",
+    "js(59)",
+    "js(64)"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "hn",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0361,
+   "seconds": 9.0,
+   "inputTokens": 8447,
+   "outputTokens": 321,
+   "toolResultChars": 5440,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "hn",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.067,
+   "seconds": 17.9,
+   "inputTokens": 84106,
+   "outputTokens": 491,
+   "toolResultChars": 5074,
+   "calls": [
+    "open_tab",
+    "js(106)",
+    "tab_observe",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "hn",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0469,
+   "seconds": 10.0,
+   "inputTokens": 10193,
+   "outputTokens": 291,
+   "toolResultChars": 9634,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "pypi",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.0693,
+   "seconds": 23.2,
+   "inputTokens": 98833,
+   "outputTokens": 701,
+   "toolResultChars": 3406,
+   "calls": [
+    "open_tab",
+    "js(337)",
+    "js(46)",
+    "js(217)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "pypi",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.039,
+   "seconds": 10.3,
+   "inputTokens": 13071,
+   "outputTokens": 364,
+   "toolResultChars": 5546,
+   "calls": [
+    "read",
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "pypi",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 7,
+   "browserCalls": 6,
+   "costUsd": 0.0698,
+   "seconds": 23.6,
+   "inputTokens": 115638,
+   "outputTokens": 768,
+   "toolResultChars": 2594,
+   "calls": [
+    "open_tab",
+    "js(93)",
+    "js(154)",
+    "js(153)",
+    "js(176)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "pypi",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0374,
+   "seconds": 10.7,
+   "inputTokens": 13075,
+   "outputTokens": 392,
+   "toolResultChars": 5546,
+   "calls": [
+    "read",
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "tailscale",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 7,
+   "browserCalls": 6,
+   "costUsd": 0.1023,
+   "seconds": 30.4,
+   "inputTokens": 123097,
+   "outputTokens": 1078,
+   "toolResultChars": 10612,
+   "calls": [
+    "tabs_list",
+    "open_tab",
+    "js(216)",
+    "js(432)",
+    "js(237)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "tailscale",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 2,
+   "costUsd": 0.0689,
+   "seconds": 19.2,
+   "inputTokens": 17510,
+   "outputTokens": 842,
+   "toolResultChars": 10385,
+   "calls": [
+    "read",
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "tailscale",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 6,
+   "browserCalls": 5,
+   "costUsd": 0.078,
+   "seconds": 26.7,
+   "inputTokens": 101899,
+   "outputTokens": 953,
+   "toolResultChars": 5608,
+   "calls": [
+    "open_tab",
+    "js(222)",
+    "js(270)",
+    "js(226)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "tailscale",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": false,
+   "error": "claude exited 143",
+   "turns": null,
+   "browserCalls": 2,
+   "costUsd": null,
+   "seconds": 480.7,
+   "inputTokens": 0,
+   "outputTokens": null,
+   "toolResultChars": 3379,
+   "calls": [
+    "read",
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "wiki",
+   "side": "browsermcp",
+   "repetition": 0,
+   "passed": true,
+   "turns": 4,
+   "browserCalls": 3,
+   "costUsd": 0.0591,
+   "seconds": 18.2,
+   "inputTokens": 65278,
+   "outputTokens": 680,
+   "toolResultChars": 2275,
+   "calls": [
+    "open_tab",
+    "js(616)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "wiki",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 2,
+   "browserCalls": 1,
+   "costUsd": 0.0635,
+   "seconds": 10.7,
+   "inputTokens": 11872,
+   "outputTokens": 316,
+   "toolResultChars": 13546,
+   "calls": [
+    "read"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "wiki",
+   "side": "browsermcp",
+   "repetition": 1,
+   "passed": true,
+   "turns": 5,
+   "browserCalls": 4,
+   "costUsd": 0.0734,
+   "seconds": 26.1,
+   "inputTokens": 83411,
+   "outputTokens": 978,
+   "toolResultChars": 3899,
+   "calls": [
+    "open_tab",
+    "js(620)",
+    "js(521)",
+    "session_finish"
+   ]
+  },
+  {
+   "kind": "real",
+   "task": "wiki",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": false,
+   "turns": 1,
+   "browserCalls": 0,
+   "costUsd": 0.0361,
+   "seconds": 18.7,
+   "inputTokens": 2928,
+   "outputTokens": 1511,
+   "toolResultChars": 0,
+   "calls": []
+  },
+  {
+   "kind": "real-after-fix",
+   "task": "tailscale",
+   "side": "cindy",
+   "repetition": 0,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0546,
+   "seconds": 16.2,
+   "inputTokens": 14454,
+   "outputTokens": 686,
+   "toolResultChars": 10385,
+   "calls": [
+    "read",
+    "read"
+   ]
+  },
+  {
+   "kind": "real-after-fix",
+   "task": "tailscale",
+   "side": "cindy",
+   "repetition": 1,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0747,
+   "seconds": 18.7,
+   "inputTokens": 16969,
+   "outputTokens": 687,
+   "toolResultChars": 17277,
+   "calls": [
+    "read",
+    "read"
+   ]
+  },
+  {
+   "kind": "real-after-fix",
+   "task": "tailscale",
+   "side": "cindy",
+   "repetition": 2,
+   "passed": true,
+   "turns": 3,
+   "browserCalls": 2,
+   "costUsd": 0.0544,
+   "seconds": 16.2,
+   "inputTokens": 14451,
+   "outputTokens": 681,
+   "toolResultChars": 10385,
+   "calls": [
+    "read",
+    "read"
+   ]
+  }
+ ],
+ "afterFix": {
+  "note": "Cindy with this fix, real-site task tailscale only, same model and settings; repetition 1 read the redirecting page and its target in one call, the pattern that hung before.",
+  "cindyHeadSha": "working tree on top of 18b4e4ffbd",
+  "passed": 3,
+  "runs": 3,
+  "seconds": 17.0
+ }
+}

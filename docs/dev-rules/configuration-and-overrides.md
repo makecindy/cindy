@@ -61,10 +61,16 @@ Host 启动时没有主题包投影；renderer 按当前选择先同步应用配
 不写 localStorage，不切换配色。沿用在途请求身份丢弃迟到结果；Agent 回执确认实际结果。
 从主题包切回内置或 loose 才撤掉包默认层；从未选包的用户不发准备或清理 IPC。
 只有主题包生效时，单项恢复删除相应覆盖并跟随包默认；没有主题包时仍按原静态默认写入。
+
 全量恢复仅清外观覆盖，不重置主题模式或家族。字号恢复不清字体家族，壁纸恢复不清字体。
 密度／动效默认 1，不添加可见设置项；动效服从系统减少动效。主题格式与素材限制见内置
 `cindy-theme-creator` 的 package-format.md；回归入口为 `useTheme.test.tsx`、
 `appearanceSettingsStore.test.ts` 和 `packages.test.ts`。
+
+已知限制：没有选用主题包时，用户或插件显式设置为与 Cindy 默认值相同的外观项
+（例如 `uiSize=14`、`wallpaperMotion=static`）不会记为覆盖；之后选择主题包时，
+这些项目会采用主题包的默认值。此行为保留现有覆盖设置与“恢复默认”的语义。
+主题包目前没有原生卸载入口，可以通过“打开目录”手动移除。
 
 模型资料的系统层再区分公共默认、供应商默认、供应商实报与服务端明确修正；用户覆盖始终最高。
 发现快照和用户字段分开持久化，详见 [模型资料优先级](../product-rules/model-metadata-precedence.md)。
@@ -112,6 +118,19 @@ override 仍然优先。供应商／模型停用、退役、付费准入和凭�
 
 实现与回归：`apps/desktop/src/main/utility-model/directTextRoute.ts`、
 `__tests__/auxiliaryDirectRoutes.test.ts`、`__tests__/oneShotCandidates.test.ts`。
+
+### Codex 服务器压缩
+
+设置 → 个性化 → 上下文压缩提供一个开关，按本机 data owner 保存到
+`codex-compaction-settings.json`。默认 `serverEnabled: null` 保留原生选择与失败后的
+摘要回退；显式 `false` 对现有 OpenAI/Cindy Codex 远程压缩身份选择 `cindy_summary`，
+显式 `true` 允许已保存的摘要任务恢复服务器压缩。恢复默认删除 override。
+设置在本机 Codex 启动/恢复时读取，不打断正在运行的轮，不切模型、不改写历史。
+第三方供应商、SSH 和受托访客任务保持原策略。设备互联执行由执行端读取自己的设置；
+此本机设置不新增远程全局写权限。兼容旧宿主/缺省依赖时保留原行为。
+回归：`compaction-settings-store.test.ts`、Codex `index.test.ts` 的 native compaction
+identity / canonical account history 场景，以及
+`provider-compatibility.integration.test.ts` 的原生开关往返与历史保留验证。
 
 ## 3. 默认值演进与迁移
 

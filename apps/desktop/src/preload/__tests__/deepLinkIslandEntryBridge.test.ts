@@ -1,3 +1,4 @@
+import { parseSettingsNavigationTarget } from '@cindy/maker-shared/settings-navigation';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -22,7 +23,8 @@ const compiled = ts.transpileModule(`const bridge = {${source.slice(start, end)}
 
 function connect() {
   let listener: ((payload: unknown) => void) | undefined;
-  const bridge = new Function('fanOutDeepLinkNavigate', 'isDeepLinkProviderConnectId', 'isValidPluginResourceId', `${compiled}; return bridge;`)(
+  const bridge = new Function('parseSettingsNavigationTarget', 'fanOutDeepLinkNavigate', 'isDeepLinkProviderConnectId', 'isValidPluginResourceId', `${compiled}; return bridge;`)(
+    parseSettingsNavigationTarget,
     (callback: (payload: unknown) => void) => {
       listener = callback;
       return () => { listener = undefined; };
@@ -165,4 +167,18 @@ describe('public plugin entry through the production bridge', () => {
     deliver({ ...expected, install: true, url: 'https://untrusted.example.test' });
     expect(received).toEqual([expected]);
   });
+});
+
+// Unit: both warm/cold delivery must preserve the computer and the requested setting.
+it('delivers device-bound settings through the live bridge and cold-start buffer', () => {
+  const { received, deliver } = connect();
+  const href = 'cindy://settings-link/appearance?device=computer-a&query=font';
+  const expected = { type: 'settings-navigation', target: { tab: 'appearance', deviceId: 'computer-a', query: 'font' } };
+  handleIncomingDeepLink(href, 'open-url');
+  expect(received).toEqual([expected]);
+  deliver({ type: 'settings-navigation', target: { ...expected.target, command: 'run' } });
+  expect(received).toEqual([expected]);
+  setDeepLinkMainWindow(null);
+  handleIncomingDeepLink(href, 'argv');
+  expect(takePendingDeepLink()).toEqual(expected);
 });

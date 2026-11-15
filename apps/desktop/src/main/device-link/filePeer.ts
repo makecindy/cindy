@@ -30,6 +30,7 @@ import {
   parseFilePeerFile,
   type FilePeerFile,
   type FilePeerRequest,
+  shortDeviceRef,
 } from '@cindy/device-link';
 import { FILE_PEER_LOCAL, type FilePeerCommand } from '../../shared/filePeer';
 import { DesktopCaptureWindow } from '../remote-desktop/captureWindow';
@@ -41,13 +42,13 @@ import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from
 import { captureFilePeerScope, invalidateFilePeerScopes } from './filePeerScope';
 import { createLogger } from '../logger.js';
 import { handlePeerAttachment } from './peerAttachmentStore';
-import { fileVersion } from './fileVersion';
+import { readFileVersion } from './fileVersion';
 import { remoteFileVersionCache, type FileVersionMetadata } from './remoteFileVersionCache';
 import { createSourceFileAccessError, isSourceFileAccessError, withSourceFileHandleContext } from './sourceFileError';
 
 // Local-only diagnostics (scope is not upload-allowlisted): stages, sizes and timings, never paths.
 const log = createLogger('device-link:filePeer');
-const short = (id: string | undefined) => (id ?? '?').slice(0, 8);
+const short = (id: string | undefined) => (id ? shortDeviceRef(id) : '?');
 const errorText = (error: unknown) =>
   (error instanceof Error ? error.message : String(error)).slice(0, 200);
 
@@ -67,9 +68,9 @@ interface Source {
   connection: string;
   file: FileHandle;
   size: number;
-  mtime: number;
-  ctime: number;
-  versionedCache: boolean;
+  absPath: string;
+  version: string;
+  sourceVersion?: string;
   offset: number;
   busy: boolean;
   openedAt: number;
@@ -503,7 +504,8 @@ async function handleFilePeerRequest(
       touch(r.connection);
       if (!stat.isFile() || stat.size > (authorized.maxBytes ?? FILE_PEER_MAX_BYTES))
         throw new Error('FILE_PEER_SIZE');
-      const version = fileVersion(authorized.absPath, stat, authorized.sourceVersion);
+      const { version } = await readFileVersion(file, authorized.absPath, stat, authorized.sourceVersion);
+      touch(r.connection);
       if (r.range && (r.range.version !== version || r.range.end >= stat.size))
         throw new Error('FILE_PEER_CHANGED');
       const ticket = randomUUID();
@@ -517,9 +519,9 @@ async function handleFilePeerRequest(
         size: r.range ? r.range.end - r.range.start + 1 : stat.size,
         start: r.range?.start ?? 0,
         fileSize: stat.size,
-        mtime: stat.mtimeMs,
-        ctime: stat.ctimeMs,
-        versionedCache: authorized.sourceVersion !== undefined,
+        absPath: authorized.absPath,
+        version,
+        sourceVersion: authorized.sourceVersion,
         offset: 0,
         busy: false,
         openedAt: Date.now(),
@@ -624,15 +626,19 @@ export function registerFilePeerIpc() {
       s.busy = true;
       try {
         const stat = await s.file.stat();
-        // SSH versioned copies can be LRU-touched by another preview while open.
-        if (
-          stat.size !== s.fileSize ||
-          (!s.versionedCache && (stat.mtimeMs !== s.mtime || stat.ctimeMs !== s.ctime))
-        ) throw new Error('FILE_PEER_CHANGED');
+        if (stat.size !== s.fileSize) throw new Error('FILE_PEER_CHANGED');
+        // Reuse the same version rule as prepare/open, including SSH LRU semantics.
+        const current = await readFileVersion(s.file, s.absPath, stat, s.sourceVersion);
+        if (current.version !== s.version) throw new Error('FILE_PEER_CHANGED');
         const bytes = Buffer.alloc(Math.min(requestedBytes as number, s.size - s.offset));
         if (bytes.length) {
-          const read = await s.file.read(bytes, 0, bytes.length, s.start + s.offset);
-          if (read.bytesRead !== bytes.length) throw new Error('FILE_PEER_CHANGED');
+          if (current.bytes) {
+            // Deliver the bytes we just checked, not a second possibly changed read.
+            current.bytes.copy(bytes, 0, s.start + s.offset, s.start + s.offset + bytes.length);
+          } else {
+            const read = await s.file.read(bytes, 0, bytes.length, s.start + s.offset);
+            if (read.bytesRead !== bytes.length) throw new Error('FILE_PEER_CHANGED');
+          }
         }
         touch(connection);
         if (sources.get(ticket) !== s) throw new Error('FILE_PEER_CLOSED');

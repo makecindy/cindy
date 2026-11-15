@@ -486,6 +486,7 @@ import {
   startHostEventBridge,
   type HostDelegationConfig,
 } from './host-delegation';
+import { createHostIpcProxy, registerHostIpcProxies } from './host-ipc-proxy';
 import { createIpcChannelUsage, registeredIpcChannels, tapIpcChannelUsage } from './ipcChannelUsage';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
@@ -587,7 +588,7 @@ import {
 } from '@cindy/maker-core/pi-subagent-runs';
 
 import { onQuit, installQuitHandler } from './lifecycle';
-import { initStartupDiagnostics } from './startup-diagnostics';
+import { initStartupDiagnostics, noteSystemResume, noteSystemSuspend } from './startup-diagnostics';
 import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createStartupGateStallReporter } from './startupGateStallReport';
 import { STARTUP_GATE_STALL_CHANNEL } from '../shared/startupGateStall';
@@ -604,7 +605,8 @@ import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { readMainHeapSamplingFlag, startMainHeapSampling } from './process-monitor/heap-sampling.js';
-import { startMemoryLog } from './process-monitor/memory-log.js';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { createEventLoopDelayCounters, startMemoryLog } from './process-monitor/memory-log.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import {
   initAppBadgeService,
@@ -634,6 +636,7 @@ import {
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
   isTrustedCindyRendererWindow,
   isTrustedTopLevelCindyRendererEvent,
 } from './security/trustedAppRenderer.js';
@@ -668,7 +671,8 @@ import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
 import { sidebarWindowExpansion } from './sidebarWindowExpansion';
 import { registerSidebarWindowExpansionIpc } from './sidebarWindowExpansionIpc';
 import { WindowManualDragController } from './windowManualDrag';
-import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
+import { loadPackagedWindowsShellNative, loadWindowsTaskbarNative } from './windowsTaskbarNative';
+import { createWindowsDeepLinkHandoff, deepLinkRequestData } from './windowsDeepLinkHandoff';
 import { setWindowsWindowDarkMode } from './windowsWindowDarkMode';
 import {
   issueWritableDirectoryPickerGrant,
@@ -684,6 +688,7 @@ import {
   waitForSharedTaskRelay,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
+  handleDeviceLinkSystemSuspend,
   getControllerName,
   revokeController,
 } from './device-link';
@@ -715,6 +720,7 @@ import {
 import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
 import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
 import { assertCaptureHealthy } from './device-link/invoke-registry';
+import { registerSettingsNavigationIpc } from './settingsNavigationIpc';
 import { registerRemoteResourcesIpc } from './device-link/remoteResourcesIpc';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
 import {
@@ -730,6 +736,7 @@ import { registerGitContextIpc, disposeGitContext } from './git-context';
 import { registerGitReviewDeviceOp, registerGitReviewIpc } from './git-review';
 import { registerProjectOrderIpc } from './projectOrderStore';
 import { registerSidebarSettingsIpc, loadSidebarSettingsSnapshot, setLocalMainViewHidden } from './sidebarSettingsStore';
+import { registerTaskManagementIpc } from './task-management/ipc.desktop.js';
 import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibility-owner-claim.js';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
@@ -873,6 +880,7 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
+  registerComputerUseIpc,
   restoreOrcaRemoteWorkersForCurrentOwner,
   stopOrcaRemoteWorkersForOwnerBoundary,
   isSessionTurnPendingCompletion,
@@ -887,7 +895,10 @@ import {
   setGoalStopObserver,
   setGoalAskAnswerObserver,
   withSendToSessionLock,
+  pendingRequestForAlert,
 } from './maker-ipc/register.js';
+import { buildPermissionAlert, buildQuestionAlert } from './device-link/mobileNotify.js';
+import { getPermissionAlertQuestion } from './sessionNotificationCopy.js';
 import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
 import {
   createLocalProjectFromTaskHandlers,
@@ -995,6 +1006,8 @@ import {
   type ProviderSecretId,
 } from '../shared/providerSecrets.js';
 import {
+  readCodexCompactionState,
+  writeCodexServerCompaction,
   readCompactionPct,
   readCompactionState,
   resetCompactionPct,
@@ -1189,9 +1202,12 @@ import {
   refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
+import { installEvaluationRuntime } from './cindy-evaluate/runtime.js';
+import { callEvaluate, readEvaluationImageFile } from './cindy-evaluate/service.js';
 import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
+import { refreshHostToolProviderOwner } from './mcp-integrations/hostToolCaller.js';
 import {
   activeOwnerScopeKey,
   beginAppSessionBoundary,
@@ -1236,6 +1252,7 @@ import {
   resolveGhostControlPointPlugin,
   diagnoseScheduleHookPluginForActiveOwner,
   getLiveScreenHost,
+  pluginLiveScreenViews,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -1328,12 +1345,53 @@ function installHostClientMode(): boolean {
   // The host owns the profile's database too; a local open would be a second writer.
   setHostClientMode(true);
   const hostClient = createHostClient(delegation);
-  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain, assertTrusted: assertTrustedAppRendererEvent });
+  const pluginConfirmations = new Map<string, { window: BrowserWindow; channel: string }>();
+  const confirmationWindows = new WeakSet<BrowserWindow>();
+  const cancelWindowConfirmations = (window: BrowserWindow) => {
+    for (const [requestId, pending] of pluginConfirmations) {
+      if (pending.window !== window) continue;
+      pluginConfirmations.delete(requestId);
+      if (isTrustedAppRendererWindow(window)) window.webContents.send(
+        pending.channel === 'ghosts:confirm-request' ? 'ghosts:confirm-dismissed' : 'ghosts:install-consent:dismissed', { requestId });
+      void hostClient.request(pending.channel === 'ghosts:confirm-request' ? '/api/ghosts/confirm/resolve' : '/api/ghosts/install-consent/resolve',
+        { requestId, confirmed: false }).catch(() => {});
+    }
+  };
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain,
+    assertTrusted: assertTrustedAppRendererEvent,
+    authorizePluginApproval: (event, channel, args) => {
+      if (!isTrustedAppRendererEvent(event)) return false;
+      if (channel === 'ghosts:request-task-approval') return true;
+      const requestId = (args[0] as { requestId?: unknown } | null)?.requestId;
+      const pending = typeof requestId === 'string' ? pluginConfirmations.get(requestId) : undefined;
+      return !!pending && !pending.window.isDestroyed() && pending.window.webContents === event.sender
+        && pending.channel === (channel === 'ghosts:confirm:resolve' ? 'ghosts:confirm-request' : 'ghosts:install-consent:request');
+    },
+  });
+  // Registered channels (host-ipc-registry) use the Host's generic route, pinned
+  // to the Host instance and to the account the windows show.
+  const hostIpcLog = createLogger('host-ipc');
+  const ipcProxy = createHostIpcProxy({
+    baseUrl: delegation.baseUrl,
+    token: delegation.token,
+    instanceId: delegation.instanceId,
+    readOwner: () => {
+      const state = authManager.getAuthState();
+      return { dataOwnerId: state.dataOwnerId, ownerGeneration: state.ownerGeneration, canEnterApp: state.canEnterApp };
+    },
+    applyAuthState: (state) => authManager.receiveHostAuthState(state as authManager.AuthState),
+    log: (message, meta) => hostIpcLog.warn(message, meta ?? {}),
+  });
+  const routed = registerHostIpcProxies({
+    ipcMain,
+    proxy: ipcProxy,
+    admit: { 'trusted-app-renderer': assertTrustedAppRendererEvent },
+  });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {
     console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
-  });
+  }, routed);
   const channelUsage = createIpcChannelUsage({
     mode: 'client',
     file: ipcUsageReportFile,
@@ -1351,6 +1409,7 @@ function installHostClientMode(): boolean {
   });
   console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
   console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
+  console.log(`[bootstrap-electron] client mode routed channels: ${routed.join(', ')}`);
   void registerHostDelegatedSync({
     channel: 'ghosts:list',
     path: '/api/ghosts',
@@ -1395,6 +1454,8 @@ function installHostClientMode(): boolean {
     token: delegation.token,
     instanceId: delegation.instanceId,
     beforeEvents: async (signal) => {
+      // A (re)connected stream may face another Host build: negotiate again on next use.
+      ipcProxy.invalidate();
       const auth = await hostClient.request('/api/auth/state', null, signal) as authManager.AuthState;
       if (!signal.aborted) {
         authManager.receiveHostAuthState(auth);
@@ -1404,6 +1465,43 @@ function installHostClientMode(): boolean {
     onConnectionState: (state) => {
       hostConnectionState = state;
       sendToAllWindows('host-client:connection', state);
+      if (state.status !== 'connected') {
+        for (const [requestId, pending] of pluginConfirmations) {
+          if (!pending.window.isDestroyed()) pending.window.webContents.send(
+            pending.channel === 'ghosts:confirm-request' ? 'ghosts:confirm-dismissed' : 'ghosts:install-consent:dismissed', { requestId });
+        }
+        pluginConfirmations.clear();
+      }
+    },
+    onPluginPush: (channel, payload) => {
+      if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify'].includes(channel)) {
+        for (const win of BrowserWindow.getAllWindows())
+          if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
+        return;
+      }
+      const requestId = (payload as { requestId?: unknown } | null)?.requestId;
+      if (typeof requestId !== 'string') return;
+      if (channel === 'ghosts:confirm-dismissed' || channel === 'ghosts:install-consent:dismissed') {
+        const pending = pluginConfirmations.get(requestId); pluginConfirmations.delete(requestId);
+        if (pending && isTrustedAppRendererWindow(pending.window)) pending.window.webContents.send(channel, payload);
+      } else if (channel === 'ghosts:confirm-request' || channel === 'ghosts:install-consent:request') {
+        if (pluginConfirmations.has(requestId)) return;
+        const focused = BrowserWindow.getFocusedWindow();
+        const target = isTrustedAppRendererWindow(focused) ? focused : mainWindowRef;
+        if (target && isTrustedAppRendererWindow(target)) {
+          if (!confirmationWindows.has(target)) {
+            confirmationWindows.add(target);
+            target.once('closed', () => cancelWindowConfirmations(target));
+            target.webContents.on('did-start-navigation', () => cancelWindowConfirmations(target));
+            target.webContents.on('render-process-gone', () => cancelWindowConfirmations(target));
+          }
+          const pending = { window: target, channel }; pluginConfirmations.set(requestId, pending);
+          target.webContents.send(channel, payload);
+        } else {
+          void hostClient.request(channel === 'ghosts:confirm-request' ? '/api/ghosts/confirm/resolve' : '/api/ghosts/install-consent/resolve',
+            { requestId, confirmed: false }).catch(() => {});
+        }
+      }
     },
     onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
     onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
@@ -2796,15 +2894,17 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
-const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows((sender) =>
-  isResourceUsageOpenSender({
-    sender,
-    mainWindow: mainWindowRef,
-    senderWindow: BrowserWindow.fromWebContents(sender),
-    isSecondaryAppWindow,
-  }),
+const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows(
+  (sender) =>
+    isResourceUsageOpenSender({
+      sender,
+      mainWindow: mainWindowRef,
+      senderWindow: BrowserWindow.fromWebContents(sender),
+      isSecondaryAppWindow,
+    }),
+  (sender) => !!mainWindowRef && !mainWindowRef.isDestroyed() && mainWindowRef.webContents === sender,
 );
-remoteDesktopViewerWindows.register();
+remoteDesktopViewerWindows.register(pluginLiveScreenViews);
 
 const rsbBrowserRegistry = getRsbBrowserBridge();
 registerRsbNativePopupSurfaceIpc(rsbBrowserRegistry);
@@ -2985,6 +3085,7 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && activeOwnerScopeKey() === scopeKey
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
+  if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
     const outcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
@@ -4201,7 +4302,8 @@ app.on('open-file', (event, filePath) => {
 // ── Single instance lock ─────────────────────────────────────────────────
 // 正常 dev 与 packaged 一律启用。这是把 OS 因深链(cindy://focus 授权返回 /
 // cindy://session 等)/ 右键 "通过 Cindy 打开" 而拉起的第二个进程 redirect 成
-// "聚焦已运行窗口" 的唯一机制——两个独立 Electron 进程之间没有别的通道能交接焦点。
+// "聚焦已运行窗口" 的机制。Windows 普通浏览器不能经 WM_COPYDATA 通知提权实例，
+// 这种权限组合补走同用户、同锁域的有界深链管道，沿用同一解析与 pending 入口。
 //
 // 锁按 flavor 分域(resolveSingleInstanceLockUserDataDir):packaged 锁真实
 // userData(release 之间单实例);dev 锁 `<userData>/dev-single-instance-lock`
@@ -4218,6 +4320,8 @@ app.on('open-file', (event, filePath) => {
 // pending / 超前 / drift 都拒绝启动。passive 自己不迁移/repair schema,并用多
 // reader lease 阻止之后的 primary 抢跑 migration。
 // 隔离数据实例走 `--isolated[=<名字>]`(独立 userData → 独立锁域,见 docs/dev-rules/desktop-development.md)。
+let singleInstanceRejected = false;
+const deepLinkHandoffLog = createLogger('deepLink:handoff');
 if (
   getCindyVersionLockScope() !== null ||
   shouldRequestSingleInstanceLock({
@@ -4235,9 +4339,34 @@ if (
             isPackaged: app.isPackaged,
             userDataDir: realUserDataDir,
           });
+  const startupUrl = process.platform === 'win32' ? findDeepLinkInArgv(process.argv) : null;
+  const startupRequest = startupUrl ? deepLinkRequestData() : undefined;
+  let windowsHandoff: ReturnType<typeof createWindowsDeepLinkHandoff> | undefined;
+  if (process.platform === 'win32' && app.isPackaged) {
+    try {
+      const native = loadPackagedWindowsShellNative();
+      if (native) {
+        windowsHandoff = createWindowsDeepLinkHandoff({
+          lockScopeDir,
+          native,
+          isDeepLink: (url) => findDeepLinkInArgv([url]) !== null,
+          dispatch: (url, source) => {
+            handleIncomingDeepLink(url, source);
+            if (source === 'windows-handoff' && startupWindowCreationAllowed && !focusMainWindow()) {
+              createWindow();
+            }
+          },
+          // Do not log native exceptions or incoming URLs: they may hold secrets.
+          onFailure: (stage) => deepLinkHandoffLog.warn('Windows handoff failed', { stage }),
+        });
+      }
+    } catch {
+      deepLinkHandoffLog.warn('Windows handoff unavailable');
+    }
+  }
   let gotTheLock: boolean;
   if (lockScopeDir === realUserDataDir) {
-    gotTheLock = app.requestSingleInstanceLock();
+    gotTheLock = app.requestSingleInstanceLock(startupRequest);
   } else {
     // Electron 没有自定义锁作用域的 API:锁文件 / socket 按调用时刻的 userData
     // 路径生成。这里在同步窗口内临时切换 userData 再还原——主进程单线程,中间
@@ -4245,12 +4374,20 @@ if (
     fs.mkdirSync(lockScopeDir, { recursive: true });
     app.setPath('userData', lockScopeDir);
     try {
-      gotTheLock = app.requestSingleInstanceLock();
+      gotTheLock = app.requestSingleInstanceLock(startupRequest);
     } finally {
       app.setPath('userData', realUserDataDir);
     }
   }
   if (!gotTheLock) {
+    singleInstanceRejected = true;
+    // Synchronous, bounded send in the losing process, before app.quit(). The
+    // owning process coalesces this with second-instance by the launch ID.
+    if (startupUrl && windowsHandoff) {
+      const queued = windowsHandoff.forward(startupUrl, startupRequest);
+      if (queued) deepLinkHandoffLog.info('queued Windows handoff');
+    }
+    if (startupUrl) redactConsumedDeepLinkInArgv(process.argv, startupUrl);
     markDesktopDevStartupFailed(
       'SINGLE_INSTANCE_OWNED',
       'Another Cindy instance already owns this single-instance lock scope.',
@@ -4258,8 +4395,10 @@ if (
     );
     app.quit();
   } else {
+    windowsHandoff?.start();
+    app.once('will-quit', () => windowsHandoff?.close());
     finishCindyVersionStartup();
-    app.on('second-instance', (_event, argv) => {
+    app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
       // Windows: 用户点 cindy://(或历史 xdt-maker://)链接 / 右键 "通过 Cindy 打开" 时,
       // OS 会再起一个本 app 实例; 单例锁把它 redirect 成 second-instance 事件,
       // URL 或 --open-folder 参数都在 argv 里。macOS 不走这个路径(走 open-url),
@@ -4272,7 +4411,8 @@ if (
       const url = findDeepLinkInArgv(argv);
       if (url) {
         redactConsumedDeepLinkInArgv(argv, url);
-        handleIncomingDeepLink(url, 'second-instance');
+        if (windowsHandoff) windowsHandoff.dispatch(url, additionalData, 'second-instance');
+        else handleIncomingDeepLink(url, 'second-instance');
       } else {
         const openFolder = findOpenFolderInArgv(argv);
         if (openFolder) {
@@ -4315,7 +4455,7 @@ if (
 // 入口 (mac 走 LSItemContentTypes / open-file 事件), 也不会在 mac argv 出现。
 //
 // 同 second-instance:两类入口互斥, 优先 deep link URL。
-if (process.platform !== 'darwin') {
+if (!singleInstanceRejected && process.platform !== 'darwin') {
   const coldStartUrl = findDeepLinkInArgv(process.argv);
   if (coldStartUrl) {
     redactConsumedDeepLinkInArgv(process.argv, coldStartUrl);
@@ -5042,6 +5182,13 @@ const registerIpcHandlers = () => {
   initNotificationService({
     isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
     shouldSilenceTaskNotification: (kind) => getAgentIslandService()?.shouldSilenceTaskNotification(kind) === true,
+    pendingInteractionAlert: (sessionId) => {
+      const request = pendingRequestForAlert(sessionId);
+      if (!request) return undefined;
+      const permission = buildPermissionAlert(request, getPermissionAlertQuestion);
+      const question = permission ? undefined : buildQuestionAlert(request);
+      return permission || question ? { ...(permission ? { permission } : {}), ...(question ? { question } : {}) } : undefined;
+    },
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
@@ -5604,6 +5751,20 @@ const registerIpcHandlers = () => {
     assertTrustedAppRendererEvent(event);
     resetSessionRuntimeFallbackSettings();
     return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
+  });
+
+  ipcMain.handle(MAKER_IPC_INVOKE.CODEX_COMPACTION_GET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return codexCompactionWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.CODEX_COMPACTION_SET, async (event, enabled: unknown, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    assertCompactionMutationOwner(owner);
+    if (enabled !== null && typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'codex compaction enabled must be boolean or null');
+    }
+    writeCodexServerCompaction(enabled as boolean | null);
+    return codexCompactionWire();
   });
 
   ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async (event) => {
@@ -6902,6 +7063,13 @@ const registerIpcHandlers = () => {
     // never register competing handlers.
     if (hostClientMode) {
       makerIpcsRegistered = true;
+      // Computer Use settings manage this machine's CuaDriver, which keeps serving
+      // Host-run agents through the window, so they stay window-local.
+      try {
+        registerComputerUseIpc();
+      } catch (err) {
+        console.error('[bootstrap-electron] failed to register computer-use IPC', err);
+      }
       return;
     }
     // Compose here: IM runtime and hook IPC depend on maker-host, so the host
@@ -9783,6 +9951,10 @@ app.on('ready', async () => {
   // 用户专属 key)+ 注册 model-access:* IPC。须在 initClientEndpoints 之后
   // (依赖 modelAccessApiBaseUrl 端点)、renderer auth:initialize 之前装订阅。
   if (!hostClientMode) initModelAccess();
+  installEvaluationRuntime({
+    callEvaluate: (...args) => callEvaluate(...args),
+    readEvaluationImageFile: (...args) => readEvaluationImageFile(...args),
+  });
 
   initializeUpdatePresentationRecovery();
 
@@ -10407,6 +10579,7 @@ app.on('ready', async () => {
   registerModelVisibilityOwnerClaimIpc();
   registerModelVisibilitySyncIpc();
   registerSidebarSettingsIpc();
+  registerTaskManagementIpc();
   registerProjectOrderIpc();
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart
@@ -10534,6 +10707,7 @@ app.on('ready', async () => {
   // Stable module-neutral façade. Feature providers were registered with their
   // owning modules above; future collections/actions do not add tunnel channels.
   registerRemoteResourcesIpc();
+  registerSettingsNavigationIpc();
   registerDeviceLinkIpc();
   registerTaskMigrationIpc((sessionId, workingDir, assertAuthority) =>
     moveSessionProjectFromHost(isSessionInTurn, sessionId, workingDir, assertAuthority),
@@ -10574,6 +10748,12 @@ app.on('ready', async () => {
   // 睡醒白屏取证:suspend/resume/lock/unlock 全部落日志,给 renderer 侧
   // render-watchdog 的漂移/无帧日志提供时间锚点。
   installPowerEventDiagnostics({ powerMonitor });
+  // 睡眠状态写进 run marker:睡眠中被系统重启(如 Windows 更新)结束的进程,下次启动不报
+  // 「上次意外退出」(issue #10071)。
+  powerMonitor.on('suspend', noteSystemSuspend);
+  powerMonitor.on('resume', noteSystemResume);
+  // device-link:睡前主动断开 relay,对端立即看到离线(唤醒重建见下方 resume)。
+  powerMonitor.on('suspend', handleDeviceLinkSystemSuspend);
 
   // 挂起/锁屏时通知 renderer 释放语音输入的保活麦克风(用户已离开,再占着采集
   // 设备只剩隐私指示灯常亮和 idle-sleep assertion 的代价)。
@@ -10614,14 +10794,18 @@ app.on('ready', async () => {
   authCredentialRecovery.request();
 
   // 各进程内存采样进 main 日志(scope memory-usage):正式版 10 分钟一次,dev 保持 30s。
+  // 事件循环延迟按采样窗口清零:每行给出这一窗口内主线程最长被占了多久。
+  const eventLoopDelayHistogram = monitorEventLoopDelay({ resolution: 20 });
+  eventLoopDelayHistogram.enable();
+  const eventLoopDelay = createEventLoopDelayCounters(eventLoopDelayHistogram);
   const stopMemoryLog = startMemoryLog({
     getMetrics: () => app.getAppMetrics(),
     memoryUsage: () => process.memoryUsage(),
-    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions() }),
+    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions(), ...eventLoopDelay.counters() }),
     log: createLogger('memory-usage'),
     intervalMs: app.isPackaged ? 10 * 60_000 : 30_000,
   });
-  onQuit('memory-usage-log', stopMemoryLog, 'sync');
+  onQuit('memory-usage-log', () => { stopMemoryLog(); eventLoopDelay.stop(); }, 'sync');
   // 主进程堆采样:只在开发版、日志目录 log-config.json 写了 mainHeapSampling 时运行。
   if (!app.isPackaged && readMainHeapSamplingFlag(getLogDir())) {
     const stopHeapSampling = startMainHeapSampling({
@@ -11243,6 +11427,11 @@ function sessionRuntimeFallbackWire() {
     isCustomized: state.isCustomized,
     defaultEnabled: state.defaults.enabled,
   };
+}
+
+function codexCompactionWire() {
+  const state = readCodexCompactionState();
+  return { enabled: state.value.serverEnabled !== false, isCustomized: state.isCustomized };
 }
 
 function compactionWire() {

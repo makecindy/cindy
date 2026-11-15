@@ -33,6 +33,7 @@ export const TELEGRAM_OP_MARKER = {
   progress: ':progress:',
   final: ':final:',
   card: ':card:',
+  notice: ':notice:',
 } as const;
 
 /** 这条回执属于本端驱动的某一轮 msg.op(进度 / 终稿 / 卡片)吗。 */

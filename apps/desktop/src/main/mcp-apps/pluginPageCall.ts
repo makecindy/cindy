@@ -13,6 +13,8 @@ export interface PluginPageCall {
   sessionId: string | null;
   clientId: string;
   tool: string;
+  /** Main-owned native composer input; the plugin receives only the normal handoff. */
+  attachments?: string[];
   assertCurrent(): Promise<void>;
 }
 

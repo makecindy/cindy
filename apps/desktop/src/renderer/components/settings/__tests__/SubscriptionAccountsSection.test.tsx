@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
 import type { SubscriptionPoolView } from '../../../../shared/subscriptionAccounts';
@@ -18,7 +18,7 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn() }),
 }));
 
-import { SubscriptionAccountsSection } from '../SubscriptionAccountsSection';
+import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from '../SubscriptionAccountsSection';
 
 /* 测试价值：多账号设置页曾给每个账号另画一条周用量条，又在底部重复原用量卡，且漏掉
  * 5 小时与分模型周窗口。经真实组件验证：默认账号行放原用量卡，其他账号用同一张卡显示
@@ -59,10 +59,42 @@ beforeEach(() => {
       command: vi.fn(async () => view),
       onChanged: vi.fn(() => () => undefined),
     },
+    // Providers an account may move to (2026-11-13); none of the same kind unless a test adds them.
+    maker: { listProviders: vi.fn(async () => ({ providers: [] })) },
   };
 });
 
 describe('SubscriptionAccountsSection usage', () => {
+  // Unit regression: the real second-account row must expose the shared reset UI
+  // and send its own scope/key. Previously only the supplied default card had it.
+  it.each([true, false])('shows and saves second-account reset preferences with quota present=%s', async hasQuota => {
+    const scope = 'openai-account:cindy-owner-second';
+    const autoUse = { accountKey: 'second-account-key', settings: {
+      enabled: false, lowQuota: true, minimumDays: 3, expiring: true, expiryMinutes: 60,
+    }, customized: false, lastUsedAt: null };
+    const snapshot = { providerId: scope, account: { email: 'se***@example.test', accountId: '…second', planType: 'pro' },
+      rateLimits: {}, rateLimitsByLimitId: null, rateLimitResetCredits: { availableCount: 1, credits: null }, resetOffer: null, autoUse };
+    const getCodexRateLimits = vi.fn(async () => snapshot);
+    const setCodexResetAutoUse = vi.fn(async () => ({ ...snapshot, autoUse: {
+      ...autoUse, settings: { ...autoUse.settings, enabled: true }, customized: true,
+    } }));
+    Object.assign(window.electronAPI.maker, { usage: { getCodexRateLimits, setCodexResetAutoUse } });
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, providerId: 'openai', accounts: [
+      view.accounts[0], { ...view.accounts[1], codexResetProviderId: scope, usage: hasQuota ? { codex: { credits: null, buckets: {
+        codex: { limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
+          secondary: { usedPercent: 20, windowMinutes: 10080, resetsAt } },
+      } } } : undefined },
+    ] });
+    render(<SubscriptionAccountsSection providerId="openai" defaultUsage={<div>Default quota</div>} />);
+    const toggle = await screen.findByRole('switch', { name: 'codexResets.autoUse.label' });
+    const rows = screen.getAllByTestId('subscription-account');
+    expect(within(rows[0]).getByText('Default quota')).toBeTruthy();
+    expect(within(rows[1]).getByText('codexResets.title')).toBeTruthy();
+    expect(getCodexRateLimits).toHaveBeenCalledWith(scope);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setCodexResetAutoUse).toHaveBeenCalledWith({ enabled: true }, 'second-account-key', scope));
+  });
   // Unit: independent expiry dates and the inline renewal target are observable
   // through the real component; existing tests only exercised the overflow menu.
   it('shows each account expiry and renews only the account clicked', async () => {
@@ -175,13 +207,36 @@ describe('SubscriptionAccountsSection usage', () => {
       accounts: [{ ...view.accounts[0], identity: undefined, status: 'signed-out' }],
     });
     render(<SubscriptionAccountsSection providerId="anthropic" />);
-    // The loading spinner goes once the read lands.
-    await vi.waitFor(() => expect(document.querySelector('.animate-spinner')).toBeNull());
+    // The loading placeholder goes once the read lands.
+    await vi.waitFor(() => expect(screen.queryByTestId('subscription-accounts-loading')).toBeNull());
     expect(screen.queryAllByTestId('subscription-account')).toHaveLength(0);
     expect(screen.queryByRole('radiogroup')).toBeNull();
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.queryByText('1')).toBeNull();
     expect(screen.getByRole('button', { name: 'subscriptionAccounts.add' })).toBeTruthy();
+  });
+  // Regression (2026-11-14): switching back to a subscription provider emptied its list into a
+  // spinner, then pushed the page down again when the read landed. Within one providers page the
+  // last list stays on screen while the fresh read replaces it. Minimal input: remount with the
+  // read still pending (before the fix: no rows, only the spinner).
+  it('shows the last list at once when the providers page switches back to it', async () => {
+    const page = (
+      <SubscriptionPoolViewCache.Provider value={new Map()}>
+        <SubscriptionAccountsSection providerId="anthropic" />
+      </SubscriptionPoolViewCache.Provider>
+    );
+    const { unmount } = render(page);
+    expect(await screen.findAllByTestId('subscription-account')).toHaveLength(2);
+    unmount();
+    let land: (next: SubscriptionPoolView) => void = () => {};
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(
+      () => new Promise<SubscriptionPoolView>((resolve) => { land = resolve; }),
+    );
+    render(page);
+    expect(screen.getAllByTestId('subscription-account')).toHaveLength(2);
+    expect(screen.queryByTestId('subscription-accounts-loading')).toBeNull();
+    await act(async () => { land({ ...view, accounts: [view.accounts[1]] }); });
+    expect(screen.getAllByTestId('subscription-account')).toHaveLength(1);
   });
   // An account that needs signing in again is still an account: known, busy, or beside another.
   const unknown = { ...view.accounts[0], identity: undefined, status: 'signed-out' as const };

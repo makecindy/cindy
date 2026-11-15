@@ -223,7 +223,7 @@ export function broadcastSessionTokens(payload: SessionTokensPayload, ownerScope
 }
 
 /**
- * 写入本 session 的 context 快照 (turn 结束时由 register.ts 调)。
+ * 写入本 session 的 context 快照（turn 结束或成功的 Pi 压缩边界）。
  *
  * 字段写入语义:
  *   - contextTokens: 总是覆盖写 (包括 0 —— SDK 自动压缩后真值可能很小, 不能因 ">0"
@@ -232,7 +232,7 @@ export function broadcastSessionTokens(payload: SessionTokensPayload, ownerScope
  *   - contextWindow: 仅在 > 0 时写 (0 = "SDK 未给", 不能覆盖已有真值;
  *     与 usage-tracker.ts:84-86 setContextWindow 同语义)
  *
- * 调用方 (register.ts) 已确保只在 turn end 调一次, 不会高频 IO。
+ * 调用方仅在这些离散边界记录，不跟随 token 流高频写入。
  */
 export async function recordSessionContextSnapshot(
   sessionId: string,

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   root: '', routines: [] as Routine[], runs: [] as Array<Record<string, unknown>>, bindings: {} as Record<string, unknown>,
   write: vi.fn(), remove: vi.fn(), moveMemory: vi.fn(async () => 0),
-  projectMode: true, updateProfile: vi.fn(),
+  projectMode: true, updateProfile: vi.fn(), repository: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: { getPath: () => h.root } }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
@@ -32,6 +32,7 @@ vi.mock('../botProjectMode.js', () => ({
   ensureBotProjectAutomations: vi.fn(async () => true),
   moveTeammateMemoryIntoProject: h.moveMemory,
   ensureTeammateTemplate: async () => false,
+  ensureWorkspaceRepository: h.repository,
   nameBotProject: async () => {},
 }));
 vi.mock('../botV1Routines.js', () => ({
@@ -64,6 +65,7 @@ beforeEach(async () => {
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-v2-migration-'));
   h.write.mockReset(); h.remove.mockReset(); h.moveMemory.mockClear(); h.updateProfile.mockReset();
   h.projectMode = true; h.runs = [];
+  h.repository.mockReset().mockResolvedValue('already-git');
 });
 afterEach(async () => { await fs.rm(h.root, { recursive: true, force: true }); });
 
@@ -106,6 +108,20 @@ it('turns project mode back on for an upgraded teammate whose switch was turned 
   h.projectMode = false;
   await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('already');
   expect(h.updateProfile).toHaveBeenCalledWith({ id: BOT, capabilities: { projectMode: true } });
+});
+
+// #10216 unit: the V2 receipt bypasses prepare, but must still retry a failed first
+// commit on later starts. Git failure must not prevent this buddy from starting.
+it('retries repository setup after the V2 receipt without blocking startup on Git failure', async () => {
+  await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('migrated');
+  h.repository.mockRejectedValueOnce(new Error('Author identity unknown'));
+  await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('already');
+  h.repository.mockResolvedValueOnce('initialized');
+  await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('already');
+  expect(h.repository.mock.calls).toEqual([
+    [path.join(h.root, 'bots', BOT, 'workspace')],
+    [path.join(h.root, 'bots', BOT, 'workspace')],
+  ]);
 });
 
 // PR #9314 review: a teammate taken over from a computer still on V1 arrived with its open todos

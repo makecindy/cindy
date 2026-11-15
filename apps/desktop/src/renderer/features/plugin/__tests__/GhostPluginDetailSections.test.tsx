@@ -4,7 +4,7 @@
  * @vitest-environment jsdom
  */
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import path from 'node:path';
@@ -55,7 +55,12 @@ vi.mock('../PluginReadmeSection', () => ({
   usePluginReadme: () => null,
 }));
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async () => {
+  const { createInstance } = await import('i18next');
+  const { default: common } = await import('../../../i18n/locales/en/common.json');
+  const localized = createInstance();
+  await localized.init({ lng: 'en', interpolation: { escapeValue: false }, resources: { en: { translation: common } } });
+  return ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {
       const labels: Record<string, string> = {
@@ -97,11 +102,13 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.oauthScopeStale':
           'This authorization does not include newly added permissions. Reconnect to enable them.',
       };
-      return labels[key] ?? (options?.value !== undefined ? `${options.value} ${key}` : key);
+      return key.startsWith('settings.ghosts.perm.hostUi.') ? localized.t(key, options) :
+        labels[key] ?? (options?.value !== undefined ? `${options.value} ${key}` : key);
     },
     i18n: { language: 'en' },
   }),
-}));
+  });
+});
 
 import type { GhostPermissionItem } from '../../../../shared/ghost';
 import {
@@ -199,6 +206,14 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  // Unit: the real permission summary previously interpolated raw Host subjects.
+  it('renders readable host capability details in the plugin permission summary', () => {
+    const view = render(<PermissionSummary items={[{ key: 'ui:host:capability:draft', kind: 'panel',
+      labelKey: 'uiHost', detailKey: 'uiHostAccess', detailArgs: { subject: 'capability:draft', access: 'draft' } }]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Permissions: settings.ghosts.perm.uiHost/ }));
+    expect(screen.getByText('Read and edit the message draft')).toBeTruthy();
+    expect(view.container.textContent).not.toContain('capability:draft');
+  });
   it('shows target shared counts without reading local personal usage for a remote installation', () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -491,6 +506,33 @@ describe('Ghost plugin detail sections', () => {
     rerender(view(true));
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentCompanionsRequest' })).toBeNull();
   });
+  it('retries only the selected unapproved host group and hides the action after approval', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const requestTaskApproval = vi.fn(async () => ({ granted: false }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest: { agent: { hostTools: ['history', 'future-group'] } }, enabled: true } as InstalledGhost;
+    const view = (approved = false) => <GhostPluginDetailView ghost={{ ...ghost, ...(approved ? { approvedHostToolGroups: ['history' as const] } : {}) }} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+    const { rerender } = render(view());
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.perm.hostToolsRequest' })); });
+    expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'host-tools:history');
+    rerender(view(true));
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.hostToolsRequest' })).toBeNull();
+  });
+
+  // Unit UI: legacy content declarations need an explicit Host confirmation; existing tests only cover Agent groups.
+  it('lets the user approve each new content topic independently', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const requestTaskApproval = vi.fn(async () => ({ granted: false }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest: { subscribe: { topics: ['message', 'task-state'] } }, enabled: true } as InstalledGhost;
+    const view = (approved = false) => <GhostPluginDetailView ghost={{ ...ghost, ...(approved ? { approvedEventTopics: ['message' as const] } : {}) }} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+    const { rerender } = render(view());
+    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'settings.ghosts.perm.hostToolsRequest' })[0]!); });
+    expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'event:message');
+    rerender(view(true));
+    expect(screen.getAllByRole('button', { name: 'settings.ghosts.perm.hostToolsRequest' })).toHaveLength(1);
+  });
+
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(
       'ResizeObserver',

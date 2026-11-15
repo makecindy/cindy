@@ -461,6 +461,24 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     hostPath: '/api/ghosts/set-enabled',
     body: ([id, enabled, expectedInstalledApproval]) => ({ id, enabled, expectedInstalledApproval }),
   },
+  {
+    desktopChannel: 'ghosts:request-task-approval',
+    webPath: 'ghosts.requestTaskApproval',
+    hostPath: '/api/ghosts/request-task-approval',
+    body: ([id, capability]) => ({ id, capability }),
+  },
+  {
+    desktopChannel: 'ghosts:confirm:resolve',
+    webPath: 'ghosts.resolveConfirm',
+    hostPath: '/api/ghosts/confirm/resolve',
+    body: ([requestId, confirmed]) => requestId && typeof requestId === 'object' ? requestId : ({ requestId, confirmed }),
+  },
+  {
+    desktopChannel: 'ghosts:install-consent:resolve',
+    webPath: 'ghosts.resolveInstallConsent',
+    hostPath: '/api/ghosts/install-consent/resolve',
+    body: ([requestId, confirmed]) => requestId && typeof requestId === 'object' ? requestId : ({ requestId, confirmed }),
+  },
 ];
 
 /** Transport stays with the caller: web uses its paired cookie, main its token. */

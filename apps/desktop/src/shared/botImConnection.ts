@@ -255,3 +255,7 @@ export interface BotImConnectionLanesPayload {
 }
 
 export const BOT_IM_CONNECTION_CHANGED_EVENT = 'botImConnection:changed';
+
+/** Local-only settings: passwords are write-only and an empty value retains the saved password. */
+export type BotIMessageConfig = Omit<Extract<BotImConnectionAddInput, { channel: 'imessage' }>, 'botId' | 'channel' | 'password'>;
+export type BotIMessageUpdateInput = BotIMessageConfig & { password?: string };
