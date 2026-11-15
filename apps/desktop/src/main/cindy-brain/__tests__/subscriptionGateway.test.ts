@@ -293,6 +293,7 @@ function ghost(
     },
     dir: `/fake/${id}`,
     enabled,
+    approval: { state: 'approved', revision: 'installed-v1' },
   } as InstalledGhost;
 }
 
@@ -1946,6 +1947,24 @@ describe('control points', () => {
     trigger: 'cron' as const, firedAt: 1,
   };
   const approved = (id: string): InstalledGhost => ({ ...ghost(id, { hooks: [point] }), approvedControlPoints: [point] });
+
+  // #9803 regression, unit/fake timers: a selected, declared provider with a
+  // valid installation must receive the request without a per-point receipt list.
+  // Existing transport tests only supplied approvedControlPoints fixtures.
+  it.each(['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory'] as const)
+    ('executes selected %s using whole-install approval', async runtimePoint => {
+      const provider = ghost('runtime', { hooks: [runtimePoint] });
+      const { gw, sent, running } = makeGateway({ listGhosts: () => [provider] });
+      running.add('runtime');
+      const pending = gw.screenControlPoint(runtimePoint, { sessionId: 'task',
+        route: { agentKind: 'pi', model: 'm', providerId: 'p' }, phase: 'select', text: 'input', query: 'query', limit: 10 },
+        { pluginId: 'runtime', onFailure: 'block' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent).toHaveLength(1);
+      const hookId = (sent[0].payload as { hookId: string }).hookId;
+      gw.handleVerdict('runtime', { type: 'event-verdict', hookId, action: 'allow' });
+      expect(await pending).toEqual({ action: 'allow' });
+    });
 
   // Runtime latency contract, unit/fake timers: silence reaches the selected
   // failure policy at each new point's own deadline, not the legacy 8s limit.

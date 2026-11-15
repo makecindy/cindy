@@ -432,21 +432,29 @@ describe('GhostInstallReceiptStore cleanup', () => {
     } });
   });
 
-  // Rule: approved control points persist across reads, keep only names this manifest still declares,
-  // and an older receipt without the field stays approved with no control point granted.
-  // Unit: real receipt write/read dropped a static capability because it is
-  // declared outside subscribe.hooks. Installation must preserve that consent.
-  it('round trips approved static prompt fragments through the installation receipt', async () => {
+  // #9803 regression, unit: real receipt write/read keeps the installed manifest
+  // and old control-point grants but neither stores nor consumes runtime grants.
+  // Minimum input: a whole approved install with a stale five-point list.
+  it('ignores runtime point grants without rewriting old receipt data', async () => {
     const base = createSetupReceipt();
     const fragments = [{ id: 'style', text: 'Static task instructions', order: 10, scope: 'selected-task' as const }];
+    const hooks = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory', 'will-schedule-run'] as const;
     const receipt = createGhostInstallReceipt({ ...base,
-      manifest: { ...base.manifest, schemaVersion: 3, minCindyVersion: '0.0.0', systemPrompt: fragments },
-      approvedControlPoints: ['system-prompt'],
+      manifest: { ...base.manifest, schemaVersion: 3, minCindyVersion: '0.0.0', systemPrompt: fragments,
+        subscribe: { hooks: [...hooks] } },
+      approvedControlPoints: [...hooks, 'system-prompt'],
     });
+    expect(receipt.approvedControlPoints).toEqual(['will-schedule-run']);
     await store.write(receipt);
+    const file = path.join(stateRoot, 'hello.json');
+    const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    raw.approvedControlPoints = [...hooks, 'system-prompt'];
+    const previousBytes = JSON.stringify(raw);
+    await fs.promises.writeFile(file, previousBytes);
     expect(await store.readAsync('hello')).toMatchObject({ state: 'approved', receipt: {
-      manifest: { systemPrompt: fragments }, approvedControlPoints: ['system-prompt'],
+      manifest: { systemPrompt: fragments }, approvedControlPoints: ['will-schedule-run'], revision: receipt.revision,
     } });
+    expect(await fs.promises.readFile(file, 'utf8')).toBe(previousBytes);
   });
 
   it('round trips approved control points and keeps older receipts approved without them', async () => {
