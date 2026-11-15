@@ -117,16 +117,20 @@ export async function watchAwayGuardInput(
   },
 ): Promise<AwayGuardInputMonitor> {
   const child = runtime.spawn(await runtime.resolveBinary());
-  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  let finished = false;
+  const closed = new Promise<void>((resolve) => child.once('close', () => {
+    finished = true;
+    resolve();
+  }));
   let locked = false;
-  let ready = false;
+  let watching = false;
   let reported = false;
   let lockedNow: (() => void) | undefined;
   const lockConfirmed = new Promise<void>((resolve) => {
     lockedNow = resolve;
   });
   const report = () => {
-    if (reported || !ready) return;
+    if (reported || !watching) return;
     reported = true;
     clearInterval(heartbeat);
     ended(locked);
@@ -159,14 +163,16 @@ export async function watchAwayGuardInput(
       const line = buffer.slice(0, end).trim();
       buffer = buffer.slice(end + 1);
       if (line === 'ready') {
-        ready = true;
         settleReady?.();
       } else if (/^reason [a-z-]{1,16}$/.test(line)) {
         lockingBecause(line.slice('reason '.length));
       } else if (line === 'locked') {
+        finished = true;
         locked = true;
         lockedNow?.();
         report();
+      } else if (['permission', 'error', 'released', 'lock-failed'].includes(line)) {
+        finished = true;
       }
       // `permission`, `error`, `released` and `lock-failed` all end with process exit.
     }
@@ -187,11 +193,15 @@ export async function watchAwayGuardInput(
   };
   try {
     await readyPromise;
+    // Main can resume after the helper has already locked/exited. Do not publish
+    // that dead input shield or call ended before the caller has its monitor.
+    if (finished) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
   } catch (error) {
     child.kill();
     await closed;
     throw error;
   }
+  watching = true;
   return {
     confirm: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
     resume: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
