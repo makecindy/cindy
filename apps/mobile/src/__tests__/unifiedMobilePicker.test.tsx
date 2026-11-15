@@ -1113,3 +1113,24 @@ it('keeps a reset warning when another account makes the pool average unknown', 
   expect(quota.label).toContain('models.unified.quotaResetSoon');
   expect(test.view.groups[0].rows[0].quotaLabel).toBeNull();
 });
+
+// Unit: phone source rows share desktop's verified account identity, while saved routes survive.
+it('folds own duplicate subscriptions but keeps different workspaces and third-party shares', async () => {
+  const base = { id: 'account', name: 'Primary', connected: true, agents: ['codex'], models: { codex: [{ id: 'model', name: 'Model' }] }, subscriptionAccountKeys: ['verified-a'] };
+  const duplicate = { ...base, id: 'second', name: 'Duplicate' };
+  const other = { ...base, id: 'different', name: 'Other workspace', subscriptionAccountKeys: ['verified-b'] };
+  const entry = test.entries[0];
+  test.entriesFor = providers => providers.map(provider => ({ ...entry, providerId: provider.id }));
+  test.activeSource = input => input.selectedProviderId;
+  await mount(undefined, { providers: [base, duplicate, other], existingSessionRoute: false,
+    unified: { scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({ hasFastMode: true }), onSelect: vi.fn(),
+      remote: { hostDeviceId: 'host', selectedDeviceId: null, catalogs: [
+        { deviceId: 'peer', name: 'Other computer', status: 'ready', providers: [{ ...duplicate, remoteInvocationEnabled: true }] },
+        { deviceId: 'share:friend', name: 'Friend', status: 'ready', providers: [{ ...duplicate, remoteInvocationEnabled: true }] },
+      ] } } });
+  expect(test.view.filters.map((filter: any) => filter.id)).toContain('account');
+  expect(test.view.filters.map((filter: any) => filter.id)).toContain('different');
+  expect(test.view.filters.map((filter: any) => filter.id)).not.toContain('second');
+  expect(test.view.filters.some((filter: any) => filter.remote?.deviceId === 'peer')).toBe(false);
+  expect(test.view.filters.some((filter: any) => filter.remote?.deviceId === 'share:friend')).toBe(true);
+});

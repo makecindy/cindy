@@ -1257,3 +1257,63 @@ describe('被控浮窗读取控制端展示名', () => {
     expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
   });
 });
+
+describe('[7] 账号级状态快照不占满卡住对端的可靠窗口', () => {
+  // Bug(2026-11-10~14 Mac Studio 日志):手机网络一卡,每帧 ~1 KB 的调度运行诊断与
+  // 同账号用量快照逐帧灌进 64 帧可靠窗口,控制端在等的 invoke-result 被拒为
+  // `reliable transport buffer is full`(iPhone 345 次)。状态快照只需最新值:卡住时
+  // 不再入窗,恢复后每个键只发最新一帧;驱动刷新的调度事件仍逐帧即时转发。
+  it('stages runtime-state and usage snapshots latest-wins for the busy peer only', async () => {
+    let phoneDepth = 40;
+    const sent: Array<{ dst: string; channel: string; payload: unknown }> = [];
+    const client = {
+      ...mkClient(),
+      getReliableSendQueueDepth: vi.fn((dst: string) => (dst === 'phone' ? phoneDepth : 0)),
+      sendPush: vi.fn((dst: string, channel: string, payload: unknown) => { sent.push({ dst, channel, payload }); }),
+    };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+    subscriptions.subscribe('desk', ['sessions'], 'desk');
+    const to = (dst: string) => sent.filter((push) => push.dst === dst).map(({ channel, payload }) => ({ channel, payload }));
+
+    for (let i = 0; i < 40; i++) {
+      __testing.forwardPush('maker:schedule:event', { type: 'runtime-state', snapshot: { slotsInUse: i } });
+    }
+    for (let i = 0; i < 13; i++) {
+      __testing.forwardPush('usage:codex-provider-account-changed', { providerId: 'p1', snapshot: { used: i } });
+    }
+    __testing.forwardPush('usage:codex-provider-account-changed', { providerId: 'p2', snapshot: null });
+    __testing.forwardPush('maker:schedule:event', { type: 'fired', scheduleId: 's1', runId: 'r1' });
+
+    const fired = { channel: 'maker:schedule:event', payload: { type: 'fired', scheduleId: 's1', runId: 'r1' } };
+    const latest = [
+      { channel: 'maker:schedule:event', payload: { type: 'runtime-state', snapshot: { slotsInUse: 39 } } },
+      { channel: 'usage:codex-provider-account-changed', payload: { providerId: 'p1', snapshot: { used: 12 } } },
+      { channel: 'usage:codex-provider-account-changed', payload: { providerId: 'p2', snapshot: null } },
+    ];
+    // Refresh-driving schedule events stay immediate and ordered for every peer.
+    expect(to('phone')).toEqual([fired]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    // The healthy peer receives one latest frame per key; the busy peer admits none.
+    expect(to('desk')).toEqual([fired, ...latest]);
+    expect(to('phone')).toEqual([fired]);
+    expect(__testing.latestStatePushStageSize('phone')).toBe(3);
+
+    phoneDepth = 0;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(to('phone')).toEqual([fired, ...latest]);
+    expect(__testing.latestStatePushStageSize('phone')).toBe(0);
+  });
+
+  it('drops staged snapshots once the controller unsubscribes from sessions', async () => {
+    const client = { ...mkClient(), getReliableSendQueueDepth: vi.fn(() => 0) };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+    __testing.forwardPush('usage:claude-account-changed', { daily: 1 });
+    expect(__testing.latestStatePushStageSize('phone')).toBe(1);
+    subscriptions.unsubscribe('phone', ['sessions']);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(client.sendPush).not.toHaveBeenCalled();
+    expect(__testing.latestStatePushStageSize('phone')).toBe(0);
+  });
+});

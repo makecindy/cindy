@@ -1,15 +1,13 @@
-import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import type { ClaudeAccountUsageSnapshot } from './claudeAccountUsage.js';
 
-/** undefined means legacy gateway/server; null means unavailable, with no credential fallback. */
-export async function readOrganizationAccountUsage(): Promise<ClaudeAccountUsageSnapshot | 'unlimited' | null | undefined> {
+/** Model Access is the only quota source; null means unavailable. */
+export async function readOrganizationAccountUsage(): Promise<ClaudeAccountUsageSnapshot | 'unlimited' | null> {
   try {
     const data = await serverApiFetch<unknown>('/api/model-access/quota', {
       baseUrl: () => getClientEndpoint('modelAccessApiBaseUrl'),
       timeoutMs: 8000, redactErrorDetails: true,
-      allowedRedactedErrorCodes: ['MODEL_ACCESS_QUOTA_NOT_SUPPORTED'],
-      expectedErrors: [{ status: 404 }, { status: 501, code: 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED' }],
     });
     if (!data || typeof data !== 'object') return null;
     const row = data as Record<string, unknown>;
@@ -23,9 +21,7 @@ export async function readOrganizationAccountUsage(): Promise<ClaudeAccountUsage
       ? row.todaySpend : null;
     return { spend: row.spend, maxBudget: row.maxBudget, currency: row.currency,
       budgetResetAt: row.budgetResetAt, todaySpend, dailyLimitEnabled, fetchedAt: Date.now() };
-  } catch (error) {
-    if (error instanceof ServerApiError && (error.statusCode === 404 ||
-      (error.statusCode === 501 && error.code === 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED'))) return undefined;
+  } catch {
     return null;
   }
 }

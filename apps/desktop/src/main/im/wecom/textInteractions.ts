@@ -1,3 +1,4 @@
+import { findImQuestionReply } from '../shared/questionPresentation';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import { escapeWecomMarkdown, type IMMessageEvent, type WecomIM } from '@cindy/im';
 
@@ -86,6 +87,8 @@ export class WecomTextInteractions {
   }
 
   private consume(event: IMMessageEvent): boolean {
+    const answer = findImQuestionReply(this.im, event);
+    if (answer) { void answer().catch(() => undefined); return true; }
     const pending = this.pending.get(event.senderId);
     if (!pending) return false;
     if (isStopCommand(event.text)) {

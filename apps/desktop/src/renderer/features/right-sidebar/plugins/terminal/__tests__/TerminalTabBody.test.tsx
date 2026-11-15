@@ -9,6 +9,7 @@ import type { TerminalExitEvent } from '@/../shared/terminal-bridge';
 let realPool = false;
 const fit = vi.fn();
 const proposeDimensions = vi.fn((): { cols: number; rows: number } | undefined => ({ cols: entry.terminal.cols, rows: entry.terminal.rows }));
+let onExitHandler: ((event: unknown) => void) | undefined;
 const resize = vi.fn(async () => undefined);
 const entry = {
   terminal: {
@@ -35,7 +36,11 @@ const entry = {
 };
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, options?: Record<string, unknown>) => (
+      options ? `${key} ${JSON.stringify(options)}` : key
+    ),
+  }),
 }));
 vi.mock('@/components/ui/spinner', () => ({ Spinner: () => null }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
@@ -131,6 +136,7 @@ beforeEach(() => {
   resize.mockClear();
   entry.terminal.open.mockClear();
   entry.terminal.onData.mockClear();
+  onExitHandler = undefined;
   entry.terminal.cols = 80;
   entry.terminal.rows = 24;
   entry.lastSize = { cols: 80, rows: 24 };
@@ -162,7 +168,7 @@ beforeEach(() => {
         restart: vi.fn(),
         write: vi.fn(),
         onData: vi.fn(() => vi.fn()),
-        onExit: vi.fn(() => vi.fn()),
+        onExit: vi.fn((handler: (event: unknown) => void) => { onExitHandler = handler; return vi.fn(); }),
       },
     },
   });
@@ -186,6 +192,27 @@ async function useRealPool() {
   vi.mocked(onXtermExit).mockImplementation(actual.onXtermExit);
   return actual;
 }
+
+describe('TerminalTabBody exit display', () => {
+  it.each([
+    [{ code: 1, signal: '0' }, 'rightSidebar.terminal.processExited', { code: 1 }],
+    [{ code: null, signal: '9' }, 'rightSidebar.terminal.processKilled', { signal: '9' }],
+  ])('distinguishes exit code from a real signal: %o', async (exit, messageKey, interpolation) => {
+    render(
+      <TerminalTabBody
+        state={{ created: true, exited: null, title: '', shellId: '', shellDisplayName: '' }}
+        ctx={makeContext()}
+        active
+      />,
+    );
+
+    await waitFor(() => expect(onExitHandler).toBeTypeOf('function'));
+    await act(async () => {
+      onExitHandler?.({ id: 'terminal-1', exit });
+    });
+    expect(screen.getByText(`${messageKey} ${JSON.stringify(interpolation)}`)).toBeTruthy();
+  });
+});
 
 describe('TerminalTabBody sidebar visibility', () => {
   // PRRT_kwDOTgdRUs62sDlx / unit: hook-only tests missed DB rollback. The real
@@ -450,7 +477,7 @@ it('retains a native exit through close rollback without requiring another attac
   act(() => vi.mocked(window.electronAPI.terminal.onExit).mock.calls.at(-1)![0]({ id: ctx.tabId, exit: { code: 255, signal: null } }));
   await act(async () => { rejectDispose(new Error('close failed')); expect(await closing).toBe(false); });
   expect(entry.closing).toBe(false);
-  expect(screen.getByText('rightSidebar.terminal.processExited')).toBeTruthy();
+  expect(screen.getByText('rightSidebar.terminal.processExited {"code":255}')).toBeTruthy();
   expect(ctx.patchState).toHaveBeenCalledWith({ rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID, created: true, exited: { code: 255, signal: null } });
   expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce();
 });
@@ -687,7 +714,7 @@ describe('TerminalTabBody remote ownership', () => {
     render(<Session />);
     await act(async () => {});
     expect(Boolean(screen.queryByText('rightSidebar.terminal.restart'))).toBe(replay);
-    expect(screen.queryByText('rightSidebar.terminal.processKilled')).toBeNull();
+    expect(screen.queryByText(/^rightSidebar\.terminal\.processKilled/)).toBeNull();
     expect(api.create).toHaveBeenCalledOnce();
   });
 
@@ -1222,7 +1249,7 @@ describe('TerminalTabBody remote ownership', () => {
       [{ rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID, exited: { code: 255, signal: null } }],
       [{ rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID, created: true, shellId: 'sh', shellDisplayName: 'SSH' }],
     ]);
-    expect(screen.getByText('rightSidebar.terminal.processExited')).toBeTruthy();
+    expect(screen.getByText('rightSidebar.terminal.processExited {"code":255}')).toBeTruthy();
     expect(entry.ptyAttached).toBe(true);
     expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce();
   });

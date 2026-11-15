@@ -48,6 +48,7 @@ const state = vi.hoisted(() => ({
   workers: [] as string[],
   estimateLimits: [] as number[],
   timeoutAction: '' as string,
+  offlineError: null as Error | null,
   exclusions: [] as string[],
   /** Entries each snapshot reports it left behind. */
   skipped: [] as Array<{ path: string; code: string }>,
@@ -137,6 +138,7 @@ vi.mock('../../device-link', () => ({
     opts?: { preSend(): void },
   ) => {
     opts?.preSend();
+    if (state.offlineError) throw state.offlineError;
     if (state.timeoutAction === args[0].action) {
       const { DeviceLinkError } = await import('@cindy/device-link');
       throw new DeviceLinkError('INVOKE_TIMEOUT', 'no invoke-result within 180000ms');
@@ -368,6 +370,7 @@ describe('resumable cross-computer copy', () => {
     state.workers = [];
     state.estimateLimits = [];
     state.timeoutAction = '';
+    state.offlineError = null;
     state.exclusions = [];
     state.transcript = '';
     state.transcriptCount = 1;
@@ -655,6 +658,25 @@ describe('resumable cross-computer copy', () => {
       handler({} as never, 'B', { action: 'estimate', sessionId: 'fork' }),
     ).rejects.toThrow('MIGRATION_TIMEOUT');
   });
+  // Unit regression #10537: UI mocks bypassed the real migration IPC catch.
+  // Minimal input: a status read rejected by the SDK gate or desktop transport.
+  it.each(['sdk', 'desktop'])(
+    'preserves the offline reason across migration IPC (%s)',
+    async (kind) => {
+      const { ipcMain } = await import('electron');
+      const { DeviceLinkError } = await import('@cindy/device-link');
+      const handler = vi
+        .mocked(ipcMain.handle)
+        .mock.calls.findLast(([channel]) => channel === TASK_MIGRATION_LOCAL_CHANNEL)![1];
+      state.offlineError =
+        kind === 'sdk'
+          ? new DeviceLinkError('DEVICE_OFFLINE', 'route unavailable')
+          : new Error('[DEVICE_LINK_DEVICE_OFFLINE] route unavailable');
+      await expect(
+        handler({} as never, 'B', { action: 'status', sessionId: 'fork' }),
+      ).rejects.toThrow(kind === 'sdk' ? 'DEVICE_OFFLINE' : 'DEVICE_LINK_DEVICE_OFFLINE');
+    },
+  );
   it('ignores tasks running in other registered worktrees under the copied root', async () => {
     const rows = state.rows.get('A')!;
     const cwd = rows.get('fork')!.workingDir as string;

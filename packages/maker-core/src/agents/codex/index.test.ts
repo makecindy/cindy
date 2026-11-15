@@ -32,6 +32,7 @@ import {
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
+import { ACCOUNT_PROVIDER_ID, CODEX_AUTH_ADAPTER_ENTRY_INPUTS, CODEX_AUTH_ADAPTER_INPUTS_BY_PATH } from './__tests__/authAdapterEntryInputs.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent as CoreAgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
@@ -5983,10 +5984,13 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await handle.close();
   });
 
-  it('selects remote compaction identities only for ChatGPT and Cindy codex routes', async () => {
-    const agent = new CodexAgent(createDeps());
+  // Unit: startSession must emit the requested native provider without changing
+  // unrelated routes. Existing default-only coverage could not detect ignored off.
+  it.each([null, false, true])('selects native compaction identities with server preference %s', async preference => {
+    const agent = new CodexAgent(createDeps({}, { getCodexServerCompactionPreference: () => preference }));
     const host = installFakeHost(agent, undefined, {
       codexProxyActive: true,
+      localCompactionProviderId: 'cindy_summary',
       remoteCompactionProviderId: 'cindy_openai',
       cindyRemoteCompactionProviderId: 'cindy_codex',
     });
@@ -6001,7 +6005,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const oauthParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       modelProvider?: string;
     };
-    expect(oauthParams.modelProvider).toBe('cindy_openai');
+    expect(oauthParams.modelProvider).toBe(preference === false ? 'cindy_summary' : 'cindy_openai');
     await oauthHandle.close();
 
     // Cindy Provider codex/* → 同一 app-server 内选择固定 HTTP 的远程压缩 identity。
@@ -6015,7 +6019,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const gatewayParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       modelProvider?: string;
     };
-    expect(gatewayParams.modelProvider).toBe('cindy_codex');
+    expect(gatewayParams.modelProvider).toBe(preference === false ? 'cindy_summary' : 'cindy_codex');
     await gatewayHandle.close();
 
     // 旧会话未写 providerId 时，codex/* 仍属于 Cindy Provider。
@@ -6028,7 +6032,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const implicitGatewayParams = host.request.mock.calls.find(
       ([method]) => method === Method.ThreadStart,
     )?.[1] as { modelProvider?: string };
-    expect(implicitGatewayParams.modelProvider).toBe('cindy_codex');
+    expect(implicitGatewayParams.modelProvider).toBe(preference === false ? 'cindy_summary' : 'cindy_codex');
     await implicitGatewayHandle.close();
 
     // openai-codex/* 与 codex/* 一样走 Cindy 远程压缩。
@@ -6042,7 +6046,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const openAiCodexParams = host.request.mock.calls.find(
       ([method]) => method === Method.ThreadStart,
     )?.[1] as { modelProvider?: string };
-    expect(openAiCodexParams.modelProvider).toBe('cindy_codex');
+    expect(openAiCodexParams.modelProvider).toBe(preference === false ? 'cindy_summary' : 'cindy_codex');
     await openAiCodexHandle.close();
 
     // Cindy Provider 的非 codex/* 模型不误开远程压缩。
@@ -8625,6 +8629,55 @@ describe('CodexAgent MCP thread context hooks', () => {
     } finally { await agent.dispose(); }
   });
 
+  // The inputs the Host and desktop adapter comparison treats as reachable
+  // (hostCodexAuthAdapterParity.test.ts). Every path must complete, and each
+  // records its own inputs on its own agent, so one path cannot hide behind another.
+  it('the auth adapter sees only these inputs on the session, model refresh, rate limit and discovery paths', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-entry-inputs-'));
+    tempRoots.push(home);
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.AccountRateLimitsRead, { result: { rateLimits: null, rateLimitsByLimitId: null } });
+    };
+    // A fresh agent per path: none of them reuses a host another path started.
+    const inputsOf = async (run: (agent: CodexAgent) => Promise<unknown>) => {
+      const seen = new Set<string>();
+      const note = (options?: Parameters<AuthAdapter['getState']>[0]) => {
+        seen.add(`${options?.providerId ?? '-'} | ${options?.credentialMode ?? '-'}`);
+      };
+      const deps = createDeps();
+      deps.auth = { ...deps.auth,
+        getState: async (options) => { note(options); return { authenticated: true }; },
+        getAuthEnv: async (options) => { note(options); return { CODEX_HOME: home }; } };
+      deps.isCodexAccountProvider = (providerId) => providerId === ACCOUNT_PROVIDER_ID;
+      const agent = new CodexAgent(deps);
+      try { await run(agent); } finally { await agent.dispose(); }
+      return [...seen].sort();
+    };
+    const session = (providerId?: string) => async (agent: CodexAgent) => {
+      const handle = await agent.startSession({ sessionId: `entry-${providerId ?? 'none'}`, model: 'gpt-5.4',
+        workingDir: home, ...(providerId ? { providerId } : {}) });
+      await handle.close();
+    };
+    const observed: Record<string, string[]> = {
+      'session (none)': await inputsOf(session()),
+      'session xd': await inputsOf(session('xd')),
+      'session cindy': await inputsOf(session('cindy')),
+      'session openai': await inputsOf(session('openai')),
+      'session xai': await inputsOf(session('xai')),
+      'session cprov-custom': await inputsOf(session('cprov-custom')),
+      'session account': await inputsOf(session(ACCOUNT_PROVIDER_ID)),
+      // As the hosts call it: after a login, for an account after its login, and for API models.
+      'refresh after login': await inputsOf(agent => agent.refreshLocalModels({ credentialMode: 'oauth-bearer' })),
+      'refresh for an account': await inputsOf(agent => agent.refreshLocalModels({ credentialMode: 'oauth-bearer', providerId: ACCOUNT_PROVIDER_ID })),
+      'refresh for API models': await inputsOf(agent => agent.refreshLocalModels({ credentialMode: 'provider-oauth' })),
+      'rate limits': await inputsOf(agent => agent.readAccountRateLimits()),
+      'rate limits for an account': await inputsOf(agent => agent.readAccountRateLimits(ACCOUNT_PROVIDER_ID)),
+      'skill discovery': await inputsOf(agent => agent.listAgentSkills({ workingDir: home })),
+    };
+    expect(observed).toEqual(CODEX_AUTH_ADAPTER_INPUTS_BY_PATH);
+    expect([...new Set(Object.values(observed).flat())].sort()).toEqual([...CODEX_AUTH_ADAPTER_ENTRY_INPUTS].sort());
+  });
+
   it('closes credential-free skill discovery after a native RPC failure', async () => {
     MockCodexTransport.onCreate = (transport) => {
       transport.setMockResponse(Method.SkillsList, { error: { code: -32603, message: 'Skill discovery unavailable' } });
@@ -9692,6 +9745,123 @@ describe('CodexAgent MCP thread context hooks', () => {
     await first.close();
     await second.close();
     await agent.dispose();
+  });
+
+  // Regression: a default control 401 fanned out to unrelated pooled account hosts.
+  // Real entry: account RPC/startSession + auth-boundary retirement. Existing isolation tests
+  // only closed one session; they did not run the default adapter's invalidation callback.
+  // Unit tier, fake transport/auth only; no production credentials or reset-credit consumption.
+  it.each([false, true])('preserves subscription hosts across default control invalidation (starting=%s)', async (starting) => {
+    const deps = createDeps();
+    const agent = new CodexAgent(deps);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const entered = vi.fn();
+    const profile = (id: string): NativeSubscriptionAccount => ({
+      id, configDir: `/fixture/.codex-${id}`, defaultProfile: id === 'default',
+      assertCurrent() {}, readState: async () => ({ authenticated: true }),
+    });
+    const initialGetState = deps.auth.getState;
+    deps.auth.getState = async options => {
+      if (starting && options?.nativeSubscriptionAccount?.id === 'second') {
+        entered();
+        await gate;
+      }
+      return initialGetState(options);
+    };
+    deps.auth.invalidate = async reason => {
+      await agent.forceDisposeLocalHostForAuthChange(reason, {
+        preserveExternalAuth: true, preserveSubscriptionAccounts: true,
+      });
+    };
+    const start = (id: string) => agent.startSession({
+      sessionId: `pooled-${id}`, providerId: 'openai', model: 'gpt-5.4',
+      workingDir: '/repo', [NATIVE_SUBSCRIPTION_ACCOUNT]: profile(id),
+    });
+    const first = await start('default');
+    createdTransports[0].emitMockLine({ method: 'turn/started',
+      params: { threadId: first.id, turn: { id: 'active-account-turn' } } });
+    await waitForExpectation(() => expect(first.isTurnRunning?.()).toBe(true));
+    const secondPromise = start('second');
+    // Attach rejection immediately so a regressed retirement does not produce an unhandled error.
+    const secondResult = secondPromise.then(handle => ({ handle }), error => ({ error }));
+    if (starting) await waitForExpectation(() => expect(entered).toHaveBeenCalled());
+    else await secondPromise;
+    MockCodexTransport.onCreate = transport => transport.setMockResponse(Method.AccountRateLimitsRead, {
+      error: { code: -32603, message: 'failed to fetch codex rate limits: 401 Unauthorized token_revoked' },
+    });
+    try {
+      await expect(agent.readAccountRateLimits()).rejects.toThrow();
+      await waitForExpectation(() => expect(createdTransports.at(-1)?.closed).toBe(true));
+      expect(createdTransports[0].closed).toBe(false);
+      expect(first.isTurnRunning?.()).toBe(true);
+      release();
+      const second = await secondResult;
+      if (!('handle' in second)) throw second.error;
+      expect(createdTransports.filter(transport => !transport.closed)).toHaveLength(2);
+      createdTransports[0].emitMockLine({ method: 'turn/completed',
+        params: { threadId: first.id, turn: { id: 'active-account-turn', status: 'completed' } } });
+      await waitForExpectation(() => expect(first.isTurnRunning?.()).toBe(false));
+      await first.send({ type: 'user', content: 'first account remains usable' });
+      await second.handle.send({ type: 'user', content: 'second account remains usable' });
+      // Explicit complete cleanup still closes every account; preservation is not an auth bypass.
+      await agent.forceDisposeLocalHostForAuthChange('explicit boundary');
+      expect(createdTransports.every(transport => transport.closed)).toBe(true);
+      await first.close(); await second.handle.close();
+    } finally {
+      release(); await secondResult; await agent.dispose();
+    }
+  });
+
+  it('keeps an account child rejection out of the default adapter and other subscriptions', async () => {
+    const deps = createDeps();
+    const invalidate = vi.fn(async () => undefined);
+    deps.auth.invalidate = invalidate;
+    const agent = new CodexAgent(deps);
+    const start = (id: string) => agent.startSession({
+      sessionId: id, providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo',
+      [NATIVE_SUBSCRIPTION_ACCOUNT]: { id, configDir: `/fixture/${id}`,
+        assertCurrent() {}, readState: async () => ({ authenticated: true }) },
+    });
+    const failed = await start('failed');
+    const healthy = await start('healthy');
+    try {
+      createdTransports[0].setMockResponse(Method.TurnStart, {
+        error: { code: -32000, message: 'token_revoked',
+          data: { reason: 'cloudRequirements', errorCode: 'Auth' } },
+      });
+      await expect(failed.send({ type: 'user', content: 'fail' }, { throwOnStartFailure: true })).rejects.toThrow();
+      await waitForExpectation(() => expect(createdTransports[0].closed).toBe(true));
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(createdTransports[1].closed).toBe(false);
+      await healthy.send({ type: 'user', content: 'still healthy' });
+    } finally { await failed.close(); await healthy.close(); await agent.dispose(); }
+  });
+
+  it('does not retire a replacement host after an old invalidation callback completes', async () => {
+    const deps = createDeps();
+    let finishInvalidation!: () => void;
+    const invalidation = new Promise<void>(resolve => { finishInvalidation = resolve; });
+    const invalidate = vi.fn(() => invalidation);
+    deps.auth.invalidate = invalidate;
+    const agent = new CodexAgent(deps);
+    const old = await agent.startSession({ sessionId: 'old', model: 'gpt-5.4', workingDir: '/repo' });
+    createdTransports[0].setMockResponse(Method.TurnStart, {
+      error: { code: -32000, message: 'token_revoked',
+        data: { reason: 'cloudRequirements', errorCode: 'Auth' } },
+    });
+    await expect(old.send({ type: 'user', content: 'fail' }, { throwOnStartFailure: true })).rejects.toThrow();
+    await waitForExpectation(() => expect(invalidate).toHaveBeenCalled());
+    await agent.forceDisposeLocalHostForAuthChange('login replaced old host');
+    const replacement = await agent.startSession({ sessionId: 'replacement', model: 'gpt-5.4', workingDir: '/repo' });
+    try {
+      finishInvalidation();
+      await invalidation;
+      // Drain the invalidation continuation before dispatching on the same-key replacement.
+      await Promise.resolve(); await Promise.resolve();
+      expect(createdTransports[1].closed).toBe(false);
+      await replacement.send({ type: 'user', content: 'current generation remains usable' });
+    } finally { finishInvalidation(); await old.close(); await replacement.close(); await agent.dispose(); }
   });
 
   it('retires only the local host when local Codex auth is invalidated', async () => {
@@ -11767,7 +11937,10 @@ describe('CodexAgent MCP thread context hooks', () => {
   });
 
   describe('automatic remote compaction summary fallback', () => {
-    it.each(['cindy_openai', 'cindy_summary', null])('resumes canonical account history before host reads (%s)', async (savedProvider) => {
+    it.each([
+      ['cindy_openai', null], ['cindy_summary', null], [null, null],
+      ['cindy_openai', false], ['cindy_summary', true],
+    ] as const)('resumes canonical account history (%s, server preference %s)', async (savedProvider, preference) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-account-resume-'));
       const threadId = '0199ae4e-d6b0-7755-a755-66754cd7a847';
       const source = path.join(dir, 'rollout.jsonl');
@@ -11780,20 +11953,20 @@ describe('CodexAgent MCP thread context hooks', () => {
         await fs.writeFile(source, history);
         const prepare = vi.fn(async () => source);
         const recordLocation = vi.fn(async () => {});
-        const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession: prepare,
+        const agent = new CodexAgent(createDeps({}, { getCodexServerCompactionPreference: () => preference, prepareCodexResumeSession: prepare,
           resolveCodexThreadStorage: async () => ({ historyHome: dir, sqliteHome: dir }), recordCodexThreadLocation: recordLocation }));
         const host = installFakeHost(agent, (method, raw) => {
           if (method === 'thread/read') throw new Error(`thread not loaded: ${threadId}`);
           if (method === Method.ThreadResume) return { thread: { id: threadId, path: source }, model: 'gpt-5.6-luna', modelProvider: (raw as { modelProvider?: string }).modelProvider };
           return undefined;
-        }, { codexProxyActive: true, localCompactionProviderId: 'cindy_summary', codexHome: '/tmp/target-account-home' });
+        }, { codexProxyActive: true, remoteCompactionProviderId: 'cindy_openai', localCompactionProviderId: 'cindy_summary', codexHome: '/tmp/target-account-home' });
         const handle = await agent.startSession({ sessionId: 'account-switch', providerId: 'openai', model: 'gpt-5.6-luna', workingDir: dir, resumeSessionId: threadId });
         expect(prepare).toHaveBeenCalledOnce();
         expect(host.getHost).toHaveBeenCalledWith(undefined, expect.anything(), expect.objectContaining({ sqliteHome: dir, keyOverride: expect.stringContaining(`:storage:${dir}`) }));
         expect(recordLocation).toHaveBeenCalledWith(threadId, dir, source);
         const resume = host.request.mock.calls.find(([m]) => m === Method.ThreadResume)!;
         expect(resume[1]).toMatchObject({ threadId, path: source });
-        if (savedProvider === 'cindy_summary') expect(resume[1]).toMatchObject({ modelProvider: savedProvider });
+        expect(resume[1]).toMatchObject({ modelProvider: preference === false || (savedProvider === 'cindy_summary' && preference !== true) ? 'cindy_summary' : 'cindy_openai' });
         expect(host.request.mock.calls.some(([m]) => m === 'thread/read' || m === Method.ThreadStart || m === Method.ThreadFork)).toBe(false);
         expect(handle.id).toBe(threadId);
         await handle.close();
@@ -36519,5 +36692,53 @@ describe('Codex native manual compaction', () => {
       vi.useRealTimers();
       await handle.close();
     }
+  });
+});
+
+describe('Codex idle reclamation probe', () => {
+  // Idle reclamation closes the thread runtime; work that survives the turn
+  // (native children, background terminals) must keep it, and unknown is busy.
+  async function setup(terminals: () => unknown) {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      if (method === Method.ThreadBackgroundTerminalsList) return terminals();
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'idle-probe', model: 'gpt-5.4', workingDir: '/repo' });
+    void (async () => { for await (const _ of handle.events()) { /* drain */ } })();
+    return { host, handle };
+  }
+
+  it('reports idle only when the thread has no live terminals or native children', async () => {
+    let listed: unknown = { data: [], nextCursor: null };
+    const { host, handle } = await setup(() => listed);
+    await expect(handle.hasLiveBackgroundWork!()).resolves.toBe(false);
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadBackgroundTerminalsList,
+      { threadId: handle.id, limit: 1 }, expect.objectContaining({ timeoutMs: expect.any(Number) }));
+    listed = { data: [{ itemId: 'dev-server', processId: '7' }], nextCursor: null };
+    await expect(handle.hasLiveBackgroundWork!()).resolves.toBe(true);
+    listed = {};
+    await expect(handle.hasLiveBackgroundWork!()).resolves.toBe(true);
+
+    listed = { data: [], nextCursor: null };
+    await handle.send({ type: 'user', content: 'Start a child' });
+    const h = host.getThreadHandlers()!;
+    h.turnStarted!({ threadId: handle.id, turn: { id: 'turn-1', status: 'inProgress' } });
+    h.itemStarted!({ threadId: handle.id, turnId: 'turn-1', item: {
+      type: 'collabAgentToolCall', id: 'spawn-child', tool: 'spawnAgent', status: 'inProgress',
+      senderThreadId: handle.id, receiverThreadIds: ['child-thread'], prompt: 'Keep working', agentsStates: {},
+    } });
+    h.turnCompleted!({ threadId: handle.id, turn: { id: 'turn-1', status: 'completed' } });
+    await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+    await expect(handle.hasLiveBackgroundWork!()).resolves.toBe(true);
+    await handle.close();
+    await expect(handle.hasLiveBackgroundWork!()).resolves.toBe(false);
+  });
+
+  it('surfaces a failed terminal probe so Session keeps the runtime', async () => {
+    const { handle } = await setup(() => { throw new Error('method not found'); });
+    await expect(handle.hasLiveBackgroundWork!()).rejects.toThrow('method not found');
+    await handle.close();
   });
 });

@@ -7,6 +7,54 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit, capability list #10/#15: the existing registry had no native package
+// transfer. A named task or file is enough to exercise discovery, caller identity
+// and scope rejection; no filesystem, network or engine process is needed.
+it('offers native package transfer to Agents and plugins through the same registry', async () => {
+  const sessionShare = {
+    export: vi.fn(async () => ({ ok: true as const, status: 'ok', attachment_ref: 'handoff:00000000-0000-4000-8000-000000000000' })),
+    import: vi.fn(async () => ({ ok: true as const, status: 'imported', session_id: 'imported' })),
+  };
+  const plugin = { agentKind: 'codex' as const, workingDir: '',
+    hostCaller: { kind: 'plugin' as const, pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 } };
+  const server = createXdtHelperMcpServer({ sessionShare } as Parameters<typeof createXdtHelperMcpServer>[0], plugin);
+  expect(server.hostTools.describe('export_session')).toMatchObject({ category: 'history' });
+  expect(server.hostTools.describe('import_session')).toMatchObject({ category: 'control' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'local::target' })))
+    .toMatchObject({ ok: true, attachment_ref: expect.stringMatching(/^handoff:/) });
+  expect(sessionShare.export).toHaveBeenCalledWith({ sessionId: 'target', excludeMedia: false }, plugin);
+  expect(parsePayload(await server.hostTools.call('import_session', { attachment_ref: 'handoff:00000000-0000-4000-8000-000000000000' })))
+    .toMatchObject({ ok: true, session_id: 'imported' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'target', output_path: '/private/export.cshare' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(parsePayload(await server.hostTools.call('import_session', { file_path: '/private/import.cshare' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'other::task' })))
+    .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+  expect(sessionShare.export).toHaveBeenCalledOnce();
+  expect(sessionShare.import).toHaveBeenCalledOnce();
+  await server.close();
+
+  const agent = { agentKind: 'codex' as const, workingDir: '/workspace', sessionId: 'caller' };
+  const native = createXdtHelperMcpServer({ sessionShare } as Parameters<typeof createXdtHelperMcpServer>[0], agent);
+  expect(parsePayload(await native.hostTools.call('import_session', { file_path: 'task.cshare' })))
+    .toMatchObject({ ok: true, session_id: 'imported' });
+  expect(sessionShare.import).toHaveBeenLastCalledWith(expect.objectContaining({ filePath: 'task.cshare', overwrite: false }), agent);
+  await native.close();
+});
+
+it('denies native package export outside the existing history scope before file I/O', async () => {
+  const sessionShare = { export: vi.fn(), import: vi.fn() };
+  const history = { resolveSessionScope: async () => ({ ok: true as const, sessionIds: ['allowed'] }),
+    listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
+  const server = createXdtHelperMcpServer({ sessionShare, history } as Parameters<typeof createXdtHelperMcpServer>[0],
+    { agentKind: 'codex', workingDir: '', sessionId: 'caller' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'denied' })))
+    .toMatchObject({ ok: false, errorCode: 'HISTORY_SCOPE_DENIED' });
+  expect(sessionShare.export).not.toHaveBeenCalled();
+  await server.close();
+});
+
 // Item 28, unit: the ordinary helper registry and public plugin entry must
 // expose the same read-only catalog, with no self-reported caller fields.
 it('discovers Host services through the common validated registry', async () => {
@@ -1469,13 +1517,49 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
       expect(models).not.toHaveBeenCalled();
       await call('configure_model_connection', { change: { action: 'presets' } });
       expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'settings-owner', operation: 'connection', change: { action: 'presets' } }, expect.any(AbortSignal));
+      // Unit, real MCP: unknown image/video models were rejected by the public
+      // connection schema, so agents could only repair them through SQLite.
+      const mediaChange = { action: 'setModels', providerId: 'relay', agent: 'pi', models: [
+        { id: 'new-image', mode: 'image_generation', modalities: { input: ['text', 'image'], output: ['image'] } },
+        { id: 'new-video', mode: 'video_generation', modalities: { input: ['text', 'image'], output: ['video'] } },
+      ] };
+      expect((await call('configure_model_connection', { change: mediaChange })).isError).not.toBe(true);
+      expect(models).toHaveBeenLastCalledWith({ callerSessionId: 'settings-owner', operation: 'connection', change: mediaChange }, expect.any(AbortSignal));
+      const guideTarget = { providerId: 'relay', agent: 'pi', modelId: 'new-image' };
+      await call('manage_media_guide', { target: guideTarget, change: { action: 'get' } });
+      expect(models).toHaveBeenLastCalledWith({ callerSessionId: 'settings-owner', operation: 'mediaGuide', target: guideTarget, change: { action: 'get' } }, expect.any(AbortSignal));
       restricted = true;
       expect(parsePayload(await call('configure_model_connection', { change: { action: 'presets' } })).ok).toBe(false);
-      expect(models).toHaveBeenCalledTimes(1);
+      expect(parsePayload(await call('manage_media_guide', { target: guideTarget, change: { action: 'save', guide: {}, expectedRevision: null } })).ok).toBe(false);
+      expect(models).toHaveBeenCalledTimes(3);
       expect(parsePayload(await call('update_app_settings', { section: 'appearance', patch: { uiSize: 17 } })).ok).toBe(false);
       expect(settings).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   }
+});
+
+// Real MCP wire: evidence describes a source type; raw examples (which may
+// contain credentials) must be rejected before the settings callback runs.
+it.each(['codex', 'claude-code', 'pi'] as const)('accepts kind-only media evidence and rejects raw references in %s', async agentKind => {
+  const models = vi.fn(async () => ({ ok: true as const, saved: true }));
+  const server = createXdtHelperMcpServer({ modelSettings: { call: models } },
+    { agentKind, workingDir: '/fixture', sessionId: 'guide-evidence-owner' });
+  const client = new Client({ name: 'guide-evidence-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const target = { providerId: 'relay', agent: 'pi', modelId: 'new-image' };
+    const change = { action: 'save', guide: {}, expectedRevision: null, evidence: { kind: 'curl' } };
+    const call = (value: typeof change) => client.callTool({ name: 'call_tool', arguments: {
+      name: 'manage_media_guide', args: { target, change: value },
+    } });
+    const evidence = { kind: 'curl', reference: "curl -H 'Authorization: Bearer invalid-test-mcp-evidence-key' https://example.test/render" };
+    expect((await call({ ...change, evidence })).isError).toBe(true);
+    expect(models).not.toHaveBeenCalled();
+    expect(parsePayload(await call(change))).toMatchObject({ ok: true, saved: true });
+    expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'guide-evidence-owner',
+      operation: 'mediaGuide', target, change }, expect.any(AbortSignal));
+  } finally { await client.close(); await server.close(); }
 });
 
 // Unit, parity #7: plugins use the existing settings callbacks with no current task.
@@ -1678,4 +1762,21 @@ it('routes Pi version checks and exact-version installs to the managed runtime',
     expect(await invoke('update_pi_runtime', { source: 'upstream', version: '1.4.0' })).toMatchObject({ ok: false });
     expect(call).toHaveBeenCalledTimes(2);
   } finally { await client.close(); await server.close(); }
+});
+
+// Unit: the public discovery/Host tool must return a real, device-bound navigation link,
+// not mutate settings or claim that the user has already completed setup.
+it('discovers and generates settings links on the task computer', async () => {
+  const call = vi.fn();
+  const server = createXdtHelperMcpServer({ appSettings: { call, navigationDeviceId: () => 'computer-a' } }, {
+    agentKind: 'codex', workingDir: '/repo', sessionId: 'task-a',
+  });
+  try {
+    const result = parsePayload(await server.hostTools.call('get_settings_link', { page: 'voice-input', query: '词典' }));
+    expect(result).toMatchObject({ ok: true, deviceId: 'computer-a', page: 'voice-input' });
+    expect(result.markdown).toContain('cindy://settings-link/voice-input?device=computer-a');
+    expect(call).not.toHaveBeenCalled();
+    expect(parsePayload(await server.hostTools.call('get_settings_link', { page: 'slack' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  } finally { await server.close(); }
 });

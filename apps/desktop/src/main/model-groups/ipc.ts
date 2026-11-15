@@ -60,6 +60,7 @@ async function quotaWindows() {
 
 const resolver = createModelGroupResolver({
   config: readModelGroupsConfig,
+  recordDecision: recordModelGroupDecision,
   views: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
   agents: getPluginModelPickerAgents,
   // 别的电脑上的引擎问那台的 maker:agent:status，与插件选路同一判断。
@@ -129,11 +130,12 @@ export function registerModelGroupsIpc(): void {
       ...(context?.hasImages === true ? { context: { hasImages: true } } : {}),
       ...(rawLocation ? { location: { agentDeviceId: locationId } } : {}),
     };
-    const scope = activeOwnerScopeKey();
-    const result = await resolver.resolve(request);
-    // 设置页的「试一下」不算一次真实选择；选路期间换了账号，这次选择不属于现在这个账号，不记。
-    if (!request.dryRun && scope === activeOwnerScopeKey()) recordModelGroupDecision(selection, result);
-    return result;
+    return resolver.resolve(request);
+  });
+  ipcMain.handle(MODEL_GROUPS_IPC.COMMIT, (event, decisionId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof decisionId !== 'string' || decisionId.length > 64) throwIpcError('INVALID_PARAMS', 'decisionId is required');
+    return resolver.commit(decisionId);
   });
   ipcMain.handle(MODEL_GROUPS_IPC.BIND_SESSION, (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);

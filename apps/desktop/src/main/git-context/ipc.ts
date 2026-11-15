@@ -61,7 +61,6 @@ import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
 import {
-  ensurePrRefsBackfill,
   listAllPrRefs,
   listPrRefs,
   managePrRefs,
@@ -70,6 +69,7 @@ import {
 import {
   filterPrStatusQueriesForRefs,
   PrStatusService,
+  withoutPrMetadata,
   type PrStatusQuery,
   type PrStatusResult,
   type PrRemoteState,
@@ -373,7 +373,7 @@ export function registerGitContextIpc(): void {
 
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_REFS_LIST, async (_e, sessionId: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
-    void ensurePrRefsBackfill();
+
     return listPrRefs(sid);
   });
 
@@ -381,7 +381,7 @@ export function registerGitContextIpc(): void {
     // PrRefsProvider 挂在 App 顶层,首次调用通常早于登录后的 db ensureReady。
     // 未就绪时返回 null 当"稍后再试"信号(renderer 定时重试),不抛错刷日志。
     if (getCurrentDbClientUserId() === null) return null;
-    void ensurePrRefsBackfill();
+
     return listAllPrRefs();
   });
 
@@ -498,7 +498,8 @@ export function registerGitContextIpc(): void {
         return [];
       }
     }
-    return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
+    const statuses = await prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
+    return statuses.map(withoutPrMetadata);
   };
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, statusHandler);
   ipcMain.handle('git-context:mr-status', statusHandler);

@@ -116,6 +116,7 @@ import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
 
 import { createLogger } from './logger';
 import { requestErrorMessage } from './requestErrorMessage';
+import { withProviderResponseDiagnostics } from './authProviderResponse';
 import { AuthOwnerChangeShellGate } from './authOwnerChangeShellGate';
 import {
   isGhostSkillProjectionBoundaryStableForOwner,
@@ -449,7 +450,10 @@ function createAuthClient(
     deviceId,
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
-    fetch: scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+    fetch: withProviderResponseDiagnostics(
+      scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+      (diagnostic) => log.warn('login providers non-JSON response', diagnostic),
+    ),
     onRequestError: (apiPath, status, error) => {
       log.warn('auth request failed', apiPath, { realm, status }, requestErrorMessage(error));
     },
@@ -5991,6 +5995,7 @@ async function runLoginAction(
     const errorState = loginPreparingErrorState(
       code,
       error instanceof AuthApiError ? error.retryAt : undefined,
+      code === 'INVALID_RESPONSE' && status >= 400 && status <= 599 ? status : undefined,
     );
     loginFlowState =
       flowCannotRetry || code === 'CREDENTIAL_STORE_UNAVAILABLE'

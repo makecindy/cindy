@@ -436,5 +436,51 @@
       "sendText": "Enviar texto escrito",
       "taskHint": "Estos atajos funcionan en las páginas de sesión. Si un botón está asignado a voz, esa función tiene prioridad; al soltarlo, el texto queda en el cuadro de mensaje."
     }
+  },
+  "projectInfo": {
+    "automatic": "Usar icono del proyecto",
+    "autoLoading": "Buscando icono…",
+    "autoNone": "Se usan las iniciales del nombre del proyecto.",
+    "autoSource": "Origen",
+    "githubAvatar": "Usar avatar de GitHub",
+    "title": "Ajustes del proyecto",
+    "name": "Nombre visible",
+    "saveName": "Guardar nombre",
+    "reset": "Restaurar valor predeterminado",
+    "icon": "Icono",
+    "directory": "Carpeta del proyecto",
+    "done": "Listo",
+    "failed": "No se pudo guardar. Inténtalo de nuevo.",
+    "unavailable": "Ajustes no disponibles. Conecta un ordenador actualizado e inténtalo de nuevo.",
+    "back": "Volver",
+    "cancel": "Cancelar",
+    "changeIcon": "Cambiar icono",
+    "chooseIcon": "Elegir un icono",
+    "save": "Guardar",
+    "symbols": "Iconos",
+    "emoji": "Emoji",
+    "letters": "Letras",
+    "image": "Imagen",
+    "upload": "Subir imagen",
+    "imageHint": "PNG, JPG o WebP · recorte cuadrado",
+    "imageError": "No se pudo leer la imagen. Prueba un PNG o JPG más pequeño.",
+    "search": "Buscar iconos",
+    "customEmoji": "O pega un emoji",
+    "lettersHint": "Usa una o dos letras o números.",
+    "thisComputer": "Este ordenador",
+    "nameHint": "Nombre en la lista de proyectos. La carpeta no cambiará de nombre.",
+    "copy": "Copiar ruta",
+    "copied": "Copiado",
+    "applyIcon": "Usar icono",
+    "noResults": "No se encontraron iconos",
+    "discardHint": "¿Descartar los cambios sin guardar?",
+    "keepEditing": "Seguir editando",
+    "discard": "Descartar",
+    "colors": {
+      "default": "Predeterminado (según el tema)"
+    }
+  },
+  "navigation": {
+    "unavailable": "No se pudo abrir la configuración del equipo de destino. Comprueba que esté conectado y permita el control remoto; actualiza Cindy si usa una versión antigua."
   }
 }

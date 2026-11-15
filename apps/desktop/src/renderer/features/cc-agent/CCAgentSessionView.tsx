@@ -183,6 +183,7 @@ import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
 import { ContextCapacityRing, formatTokenCount, getModelContextWindow } from '@/components/status/ContextCapacityRing';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
+import { DiffPanelContainer } from '@/components/diff-panel/DiffPanelShell';
 import { ChatDisplaySnapshotProvider } from '@/components/chat/ChatDisplaySnapshotContext';
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
 import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
@@ -2391,14 +2392,6 @@ function CCAgentSessionContent({
   );
   // 账号池：任务固定在执行电脑上的某个账号，模型列表与底部用量都按它显示，读的是与用量 chip
   // 同一台电脑(读不到那份账号时不读)。
-  const taskAccountProviderId =
-    usageAccount.kind === 'unreadable'
-      ? null
-      : sessionSubscriptionPoolProvider(
-          normalizeDbAgentKind(displayAgentKind),
-          usageChipProviderId,
-          session?.remoteHostId,
-        );
   const taskAccountDeviceId =
     usageAccount.kind === 'device'
       ? usageAccount.deviceId
@@ -2410,6 +2403,9 @@ function CCAgentSessionContent({
   );
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
+  const taskAccountProviderId = usageAccount.kind === 'unreadable' ? null
+    : sessionSubscriptionPoolProvider(normalizeDbAgentKind(displayAgentKind), usageChipProviderId,
+        session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId));
   const canSwitchToClaudeSubscription = useMemo(() => {
     if (
       remoteDeviceId ||
@@ -5937,7 +5933,7 @@ function CCAgentSessionContent({
         {/* Scroll container — full height, bottom padding reserves space for input overlay.
            key={sessionId}: force a full remount on session switch so scroll state,
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
-        <div
+        <DiffPanelContainer
           className="wallpaper-message-viewport relative min-h-0 flex-1"
           data-plugin-ui-element="messages"
           style={{ '--wallpaper-composer-height': `${overlayHeight}px` } as CSSProperties}
@@ -5954,7 +5950,7 @@ function CCAgentSessionContent({
           {botChatIdentity && isBotOpeningPending({ invitationStage: botInvitationStage, historyLoaded, messageCount: messages.length }) ? (
             <BotOpeningPending name={botChatIdentity.name} bottomInset={overlayHeight} />
           ) : null}
-        </div>
+        </DiffPanelContainer>
 
         {/* Input overlay — sticky at bottom with gradient fade.
            左右 padding 由 useProportionalWidth.inputPad 计算:默认 40,compact
@@ -6667,6 +6663,7 @@ function CCAgentSessionContent({
           {/* 模型列表与底部用量共用：任务实际在用的订阅账号。 */}
           <SessionSubscriptionAccountProvider
             providerId={taskAccountProviderId}
+            routeProviderId={usageChipProviderId}
             deviceId={taskAccountDeviceId}
             sessionId={sessionId}
             nativeSessionId={session?.sdkSessionId}

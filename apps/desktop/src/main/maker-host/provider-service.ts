@@ -41,6 +41,8 @@ export interface ConnectionReadOptions {
   allowSideEffects: boolean;
   /** Host-only snapshot read: never refresh CLI status or load account presentation. */
   snapshotOnly?: boolean;
+  /** Derived only from a host-provided full catalog, for existing bound task routes. */
+  includeBoundAccounts?: boolean;
   /**
    * Wait for post-claim model discovery before materializing this snapshot.
    * This is an internal readiness hint for routing callers; ordinary provider reads
@@ -95,7 +97,9 @@ export interface ProviderServiceDeps {
    * （生产 = generic-oauth 的 hasGenericOAuthLogin）。缺省 = 一律未连接。
    */
   genericOAuthConnected?: (providerId: string) => boolean;
-  codexAccountConnected?: (providerId: string) => boolean;
+  codexAccountConnected?: (providerId: string, options?: { includeBoundAccounts?: boolean }) => boolean;
+  /** A provider Cindy created for subscription accounts: one of its own accounts is signed in. */
+  subscriptionPoolConnected?: (providerId: string, options?: { includeBoundAccounts?: boolean }) => boolean;
   subscriptionAccountConnected?: (providerId: string) => boolean;
   subscriptionReadUnavailable?: (providerId: string) => boolean;
   subscriptionAccountInfo?: (providerId: string) => Promise<ProviderView['subscriptionAccount']>;
@@ -156,6 +160,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       allowSideEffects: opts?.allowSideEffects === true && opts?.snapshotOnly !== true,
       snapshotOnly: opts?.snapshotOnly === true,
       waitForDiscovery: opts?.waitForDiscovery === true,
+      ...(opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : {}),
     };
     const [xd, anthropic, openai, xai] = await Promise.all([
       Promise.resolve(deps.connection.xd(readOpts)),
@@ -175,12 +180,18 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
           return routing !== undefined && routing.disabled !== true;
         });
       }
+      // 为订阅账号新建的供应商（2026-11-13）：自己名下有已登录的账号才算连接。
+      else if (p.subscriptionPool) {
+        connected[p.id] = deps.subscriptionPoolConnected?.(p.id,
+          opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : undefined) ?? false;
+      }
       // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
       // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
       else if (p.auth.native === 'claude' || p.auth.native === 'xai') {
         connected[p.id] = deps.subscriptionAccountConnected?.(p.id) ?? false;
       } else if (p.auth.native === 'codex') {
-        connected[p.id] = deps.codexAccountConnected?.(p.id) ?? false;
+        connected[p.id] = deps.codexAccountConnected?.(p.id,
+          opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : undefined) ?? false;
       } else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
         connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
       } else if (isCustomRoutedProvider(p)) {

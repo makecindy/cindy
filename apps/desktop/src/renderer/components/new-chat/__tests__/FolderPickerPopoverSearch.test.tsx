@@ -2,6 +2,9 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/features/cc-agent/sidebar/ProjectIcon', () => ({ ProjectIcon: () => null }));
+vi.mock('@/features/cc-agent/hooks/useProjectInfo', () => ({ useProjectInfo: () => undefined }));
+
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/recentWorkdirsStore', () => ({ recentWorkdirsStore: { remove: vi.fn() } }));
 

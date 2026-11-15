@@ -436,5 +436,51 @@
       "sendText": "发送已输入文字",
       "taskHint": "组合键和 Start 仅用于任务页。设为语音键时，优先按住说话；松开后文字留在输入框。"
     }
+  },
+  "projectInfo": {
+    "automatic": "使用项目图标",
+    "autoLoading": "正在识别项目图标…",
+    "autoNone": "使用项目名称生成的字母图标。",
+    "autoSource": "来源",
+    "githubAvatar": "使用 GitHub 账号头像",
+    "title": "项目设置",
+    "name": "显示名称",
+    "saveName": "保存名称",
+    "reset": "恢复默认",
+    "icon": "图标",
+    "directory": "项目目录",
+    "done": "完成",
+    "failed": "保存失败，请重试。",
+    "unavailable": "项目设置暂不可用，请连接已更新的电脑后重试。",
+    "back": "返回",
+    "cancel": "取消",
+    "changeIcon": "更换图标",
+    "chooseIcon": "选择图标",
+    "save": "保存",
+    "symbols": "图标",
+    "emoji": "表情",
+    "letters": "字母",
+    "image": "图片",
+    "upload": "上传图片",
+    "imageHint": "PNG、JPG 或 WebP · 自动裁成正方形",
+    "imageError": "无法读取这张图片，请尝试较小的 PNG 或 JPG。",
+    "search": "搜索图标",
+    "customEmoji": "也可以粘贴一个表情",
+    "lettersHint": "输入一到两个文字或数字。",
+    "thisComputer": "这台电脑",
+    "nameHint": "用于项目列表中的显示，不会重命名文件夹。",
+    "copy": "复制路径",
+    "copied": "已复制",
+    "applyIcon": "使用图标",
+    "noResults": "没有找到匹配的图标",
+    "discardHint": "放弃尚未保存的修改？",
+    "keepEditing": "继续编辑",
+    "discard": "放弃修改",
+    "colors": {
+      "default": "默认色（跟随主题）"
+    }
+  },
+  "navigation": {
+    "unavailable": "无法打开目标电脑的设置。请确认电脑在线并已允许远程控制；旧版本请先更新 Cindy。"
   }
 }

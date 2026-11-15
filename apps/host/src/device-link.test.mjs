@@ -20,6 +20,8 @@ import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
+import { publishAgentEvent } from './agent/turn-executor.mjs';
+import { redactEventForRenderer } from '../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 
 const waitFor = async condition => {
   const deadline = Date.now() + 5000;
@@ -133,6 +135,20 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // Saved error rows must reach the channel desktop and mobile already listen on.
   hub.publish({ type: 'error_persisted', sessionId: 'task', persistId: 'err' });
   await waitFor(() => received.every(frames => frames.some(frame => frame.payload.channel === 'local-db:session:error-persisted')));
+  // An agent event reaches every controller as the Host publishes it for its clients: the desktop's
+  // renderer-boundary projection, without the proxy credential or Host lifecycle fields.
+  const browserEvent = { type: 'tool_use', sessionTurnGeneration: 3, sessionInstanceId: 'fixture-runtime', turnAttemptToken: 'fixture-attempt',
+    data: { toolUseId: 'browse-remote', toolName: 'mcp__cindy_browser__call_tool',
+      input: { name: 'browser', args: { action: 'open', proxyServer: 'http://fixture-user:fixture-pass@proxy.test:8080' } } } };
+  publishAgentEvent(hub, 'task', browserEvent, { inputClientId: 'single' });
+  const carries = frame => JSON.stringify(frame).includes('browse-remote');
+  await waitFor(() => received.every(frames => frames.some(carries)));
+  for (const frames of received) {
+    const pushed = frames.filter(carries);
+    assert.equal(JSON.stringify(pushed).includes('fixture-pass'), false);
+    assert.equal(JSON.stringify(pushed).includes('fixture-attempt'), false);
+    assert.ok(JSON.stringify(pushed).includes(JSON.stringify(redactEventForRenderer(browserEvent).data)));
+  }
   // Desktop connection lifetime must not own the Host/mobile connection. Keep a
   // mobile write admitted while the old desktop disconnects; the replacement
   // reads the same Host without replaying the mobile operation.

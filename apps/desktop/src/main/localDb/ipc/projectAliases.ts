@@ -1,3 +1,7 @@
+import { resolveAutomaticProjectIcon } from '../../projectAutomaticIcon.desktop.js';
+import { readProjectIconImage, updateProjectInfo as updateProjectInfoCore } from '../../projectInfoCore.js';
+import { readProjectIcons } from '../../projectIconStore.js';
+import { PROJECT_SETTINGS_SET_CHANNEL, PROJECT_ICON_IMAGE_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
 import { BrowserWindow, ipcMain } from 'electron';
 import * as core from './projectAliasesCore.js';
 import {
@@ -54,6 +58,9 @@ export async function readHostProjectAliasesSnapshot(): Promise<HostProjectAlias
     aliases: rows
       .filter((row) => row.projectKey.startsWith('local:') || row.projectKey.startsWith('remote:'))
       .map(({ projectKey, alias }) => ({ projectKey, alias })),
+    icons: Object.fromEntries(Object.entries(readProjectIcons()).filter(([key]) => !key.startsWith('device:'))),
+    settingsSupported: true,
+    settingsVersion: 5,
     platform: process.platform,
     ...(scope.ownerStamp ? { ownerStamp: scope.ownerStamp } : {}),
   };
@@ -73,7 +80,26 @@ export async function deleteProjectAlias(
   await upsertProjectAlias(projectKeyRaw, '', localPlatform);
 }
 
+export async function updateProjectInfo(input: unknown): Promise<HostProjectAliasesSnapshot> {
+  const scope = captureDataOwnerBroadcastScope();
+  const result = await updateProjectInfoCore(input);
+  broadcastProjectAliasesChanged(scope);
+  return result;
+}
+
 export function registerProjectAliasesIpc(): void {
+  ipcMain.handle('sidebar-settings:get-project-auto-icon', (event, input: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    return resolveAutomaticProjectIcon(input);
+  });
+  ipcMain.handle(PROJECT_ICON_IMAGE_CHANNEL, (event, input: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    return readProjectIconImage(input);
+  });
+  ipcMain.handle(PROJECT_SETTINGS_SET_CHANNEL, (event, input: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    return updateProjectInfo(input);
+  });
   ipcMain.handle(PROJECT_ALIASES_GET_CHANNEL, async (event) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     return readHostProjectAliasesSnapshot();

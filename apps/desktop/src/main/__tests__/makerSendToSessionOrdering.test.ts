@@ -17,6 +17,10 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = resolve(__dirname, '..', '..', '..', '..', '..');
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const dispatchBoundarySource = readFileSync(
+  resolve(__dirname, '..', 'turn-change-set', 'dispatchBoundary.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const acceptedCallbackSourcePath = resolve(__dirname, '..', 'maker-ipc', 'acceptedCallbackRunner.ts');
 const acceptedCallbackSource = readFileSync(acceptedCallbackSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const orcaInterAgentDispatcherSourcePath = resolve(__dirname, '..', 'maker-ipc', 'orcaInterAgentDispatcher.ts');
@@ -432,11 +436,11 @@ describe('sendToSession ordering', () => {
   });
 
   it('awaits Git baseline capture after send_to_session user row persistence and before dispatch', () => {
-    const changeSetBlock = extractBetween(
-      source,
-      'async function beginTurnChangeSetAtDispatch',
-      'export interface RegisterMakerIpcOptions',
-    );
+    // The dispatch boundary moved verbatim to a leaf shared with the Node Host.
+    const changeSetStart = dispatchBoundarySource.indexOf('async function beginTurnChangeSetAtDispatch');
+    expect(changeSetStart).toBeGreaterThanOrEqual(0);
+    const changeSetBlock = dispatchBoundarySource.slice(changeSetStart);
+    expect(source).toContain("import { beginTurnChangeSetAtDispatch } from '../turn-change-set/dispatchBoundary.js';");
     const helperBlock = extractBetween(
       source,
       'async function sendUserMessageWithAwaitedGitBaseline',

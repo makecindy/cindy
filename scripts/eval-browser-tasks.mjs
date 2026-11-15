@@ -13,6 +13,9 @@
  * Usage:
  *   node --import tsx scripts/eval-browser-tasks.mjs --live --baseline-ref origin/main \
  *     [--model claude-sonnet-5-5] [--effort medium] [--repeats 3] [--only form,vault] [--variants A,C] [--parallel 3]
+ *     --variants B,C compares the current tree with BrowserMCP (jackwener/browsermcp) instead of a baseline;
+ *     it needs BROWSERMCP_DIR and BROWSERMCP_CHROME, see scripts/benchmarks/browsermcp-env.mjs. Its docs_get
+ *     calls are counted like list_tools, not as browser calls.
  *     --effort is passed to the CLI as its reasoning effort; without it the CLI default applies.
  *     --real-sites adds eight read tasks on public websites (GitHub, crates.io, PyPI, Hacker News search,
  *     Tailscale docs, Apple support, Wikipedia). Their answers are fetched from the sites' public APIs and
@@ -129,7 +132,10 @@ if (!values.check && !values.serve && (!values.live || !values['baseline-ref'] |
   throw new Error('Require --check, --serve, or --live with --baseline-ref and positive --repeats / --parallel');
 }
 const variants = values.variants.split(',');
-if (variants.some((variant) => !['A', 'C'].includes(variant))) throw new Error('Invalid --variants');
+if (variants.some((variant) => !['A', 'B', 'C'].includes(variant))) throw new Error('Invalid --variants');
+// B = BrowserMCP (jackwener/browsermcp) in an isolated Chrome for Testing profile, for comparing with
+// another product's browser tools on the same tasks; setup in scripts/benchmarks/browsermcp-env.mjs.
+const browserMcpEnv = variants.includes('B') ? await import('./benchmarks/browsermcp-env.mjs') : null;
 
 const token = (prefix) => `${prefix}-${randomBytes(4).toString('hex').toUpperCase()}`;
 const page = (title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title>
@@ -583,13 +589,14 @@ async function runOne(task, variant, repetition) {
   const trace = path.join(dir, 'runtime-trace.jsonl');
   await fs.writeFile(trace, '');
   const config = path.join(dir, 'mcp.json');
-  await fs.writeFile(config, JSON.stringify({ mcpServers: { cindy_browser: { command: process.execPath, args: ['--import', import.meta.resolve('tsx'),
+  const bmcp = variant === 'B' ? await browserMcpEnv.startBrowserMcpEnv(path.join(dir, 'runtime')) : null;
+  await fs.writeFile(config, JSON.stringify({ mcpServers: bmcp ? { browsermcp: bmcp.mcpServer } : { cindy_browser: { command: process.execPath, args: ['--import', import.meta.resolve('tsx'),
     fileURLToPath(import.meta.url), '--mcp', '--variant', variant, '--baseline-ref', baselineSha, '--runtime-dir', path.join(dir, 'runtime'),
     '--trace', trace, '--cdp-port', String(await freePort())] } } }));
   const started = Date.now();
   const child = spawn('claude', ['-p', task.prompt(state), '--output-format', 'stream-json', '--verbose', '--model', values.model, ...(values.effort ? ['--effort', values.effort] : []),
     '--system-prompt', SYSTEM, '--tools', '', '--strict-mcp-config', '--mcp-config', config,
-    '--allowedTools', 'mcp__cindy_browser__list_tools', 'mcp__cindy_browser__call_tool',
+    '--allowedTools', ...(bmcp ? ['mcp__browsermcp'] : ['mcp__cindy_browser__list_tools', 'mcp__cindy_browser__call_tool']),
     '--no-session-persistence', '--setting-sources', 'project', '--max-turns', '40'],
   { cwd: path.join(dir, 'cwd'), stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, MCP_TIMEOUT: '90000' } });
   let stdout = '', stderr = '';
@@ -598,6 +605,7 @@ async function runOne(task, variant, repetition) {
   const timer = setTimeout(() => child.kill('SIGTERM'), 8 * 60_000);
   const exit = await new Promise((resolve) => child.on('close', resolve));
   clearTimeout(timer);
+  await bmcp?.stop();
   await fs.writeFile(path.join(dir, 'stream.jsonl'), stdout);
   if (stderr) await fs.writeFile(path.join(dir, 'stderr.txt'), stderr);
   const events = stdout.split('\n').filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
@@ -608,6 +616,11 @@ async function runOne(task, variant, repetition) {
     for (const block of event.message?.content ?? []) {
       if (event.type === 'assistant' && block.type === 'tool_use') {
         const args = block.input?.args ?? {};
+        if (block.name.startsWith('mcp__browsermcp__')) {
+          const name = block.name.slice('mcp__browsermcp__'.length);
+          toolCalls.push(name === 'docs_get' ? 'list_tools' : name === 'js' ? `js(${String(block.input?.code ?? '').length})` : name);
+          continue;
+        }
         toolCalls.push(block.name.endsWith('list_tools') ? 'list_tools'
           : args.action === 'batch' ? `batch(${(args.steps ?? []).map((step) => step.action === 'act' ? step.request?.kind : step.action).join(',')})`
           : args.action === 'cdp' ? `cdp(${(args.commands ?? []).map((command) => command.method).join(',')})`

@@ -460,6 +460,9 @@ export const MAKER_INVOKE = {
   COMPACTION_GET_STATE: 'maker:compaction:get-state',
   COMPACTION_SET_PCT: 'maker:compaction:set-pct',
   COMPACTION_RESET_PCT: 'maker:compaction:reset-pct',
+  // Codex 原生压缩方式（本机 owner 设置）。
+  CODEX_COMPACTION_GET: 'maker:codex-compaction:get',
+  CODEX_COMPACTION_SET: 'maker:codex-compaction:set',
   /** Pi 原生自动上下文压缩触发阈值。下次 startSession / 恢复任务时读取。 */
   PI_COMPACTION_GET_PCT: 'maker:pi-compaction:get-pct',
   PI_COMPACTION_GET_STATE: 'maker:pi-compaction:get-state',

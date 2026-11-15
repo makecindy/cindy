@@ -4,7 +4,11 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { watchAwayGuardInput, watchPrivacyInput } from '../privacyInput';
 
 vi.mock('../inputHost', () => ({ resolveDesktopInputBinary: vi.fn() }));
-afterEach(() => vi.useRealTimers());
+const platform = process.platform;
+afterEach(() => {
+  vi.useRealTimers();
+  Object.defineProperty(process, 'platform', { value: platform });
+});
 function fixture() {
   const child = Object.assign(new EventEmitter(), {
     stdout: new EventEmitter(),
@@ -24,11 +28,17 @@ function fixture() {
 
 it('requires native acknowledgement and parses split status words without exposing event data', async () => {
   const f = fixture();
-  const starting = watchPrivacyInput(f.local, f.failed, f.runtime);
+  const pointer = vi.fn();
+  const starting = watchPrivacyInput(f.local, f.failed, f.runtime, pointer);
   await Promise.resolve();
   f.line('rea');
   f.line('dy\n');
   const monitor = await starting;
+  // 2026-11-14: pointer movement wakes the privacy screen's notice. Unknown words end
+  // the privacy screen, so this word must be understood, and it never counts as input.
+  f.line('pointer\n');
+  expect(pointer).toHaveBeenCalledOnce();
+  expect(f.local).not.toHaveBeenCalled();
   f.line('local-in');
   f.line('put\n');
   expect(f.local).toHaveBeenCalledExactlyOnceWith();
@@ -99,17 +109,20 @@ it('waits for actual process close after EOF or fallback kill, including repeate
 
 // Away guard (Settings → Keep working while away): Main may remove the masks only
 // after the helper itself confirmed the OS lock; a release never claims a lock.
+// The fixed lock-failed word reaches Main's log so a failed lock can be diagnosed
+// (2026-11-14: the away cover reported failures with no cause); Windows sends none.
 it.each([
-  ['lock', 'locked', true],
-  ['lock', 'lock-failed', false],
-  ['release', 'released', false],
-] as const)('away guard %s reports %s as locked=%s', async (command, reply, locked) => {
+  ['lock', 'locked', true, undefined],
+  ['lock', 'lock-failed timeout', false, 'timeout'],
+  ['lock', 'lock-failed', false, 'unknown'],
+  ['release', 'released', false, undefined],
+] as const)('away guard %s reports %s as locked=%s', async (command, reply, locked, failure) => {
   const f = fixture();
   Object.assign(f.child.stdin, { writable: true });
   const ended = vi.fn();
   const starting = watchAwayGuardInput(ended, undefined, f.runtime);
   await Promise.resolve();
-  f.line('ready\n');
+  f.line(process.platform === 'win32' ? 'away-ready\n' : 'ready\n');
   const monitor = await starting;
   const finishing = command === 'lock' ? monitor.lock() : monitor.stop().then(() => false);
   expect(f.child.stdin.write).toHaveBeenLastCalledWith(`${command}\n`);
@@ -118,9 +131,80 @@ it.each([
   // Main must not wait for (or kill) it before removing masks.
   if (!locked) f.child.emit('close');
   await expect(finishing).resolves.toBe(locked);
-  expect(ended).toHaveBeenCalledExactlyOnceWith(locked);
+  if (failure) expect(ended).toHaveBeenCalledExactlyOnceWith(locked, failure);
+  else expect(ended).toHaveBeenCalledExactlyOnceWith(locked);
   await monitor.stop();
   f.child.emit('close');
   expect(f.child.kill).not.toHaveBeenCalled();
   expect(ended).toHaveBeenCalledOnce();
 });
+
+// New Windows mode must not accept the ordinary ready emitted by old helpers.
+// Unit: production startup parser + fake stdio/timers, no native process.
+// Standalone vitest duration: 1.28 s on 2026-11-11.
+it.each(['ready', 'away-ready'])('Windows away startup requires its own acknowledgement: %s', async (word) => {
+  vi.useFakeTimers();
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+  const f = fixture();
+  Object.assign(f.child.stdin, { writable: true });
+  f.child.kill.mockImplementation(() => { f.child.emit('close'); });
+  const starting = watchAwayGuardInput(vi.fn(), undefined, f.runtime);
+  const rejected = word === 'ready'
+    ? expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE') : undefined;
+  await Promise.resolve();
+  f.line(`${word}\n`);
+  if (rejected) {
+    await vi.advanceTimersByTimeAsync(5000);
+    await rejected;
+    expect(f.child.kill).toHaveBeenCalledOnce();
+  } else {
+    const monitor = await starting;
+    const stopping = monitor.stop();
+    f.child.emit('close');
+    await stopping;
+    expect(f.child.kill).not.toHaveBeenCalled();
+  }
+});
+
+// Greptile r4534014236: a failed lock must keep the native physical-input fence.
+// Real monitor lock entry, fake stdio/timers; previous timeout killed the helper.
+// tier: unit; standalone duration: 0.925 s on 2026-11-11.
+it('keeps Windows away helper alive when lock confirmation times out', async () => {
+  vi.useFakeTimers();
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+  const f = fixture();
+  const starting = watchAwayGuardInput(f.local, f.failed, f.runtime);
+  await Promise.resolve();
+  f.line('away-ready\n');
+  const monitor = await starting;
+  const locking = monitor.lock();
+  await vi.advanceTimersByTimeAsync(8000);
+  expect(await locking).toBe(false);
+  expect(f.child.kill).not.toHaveBeenCalled();
+  expect(f.local).not.toHaveBeenCalled();
+  f.line('locked\n');
+  expect(f.local).toHaveBeenCalledWith(true);
+  f.child.emit('close');
+});
+// A stalled Main can receive startup and termination in one pipe delivery.
+// The service has not assigned its awaited monitor yet: notifying it here can
+// access that binding before initialization, or publish an already-dead shield.
+// Unit regression through the real watcher; existing tests awaited ready first.
+it.each(['locked', 'lock-failed', 'lock-failed timeout', 'released', ''])(
+  'does not publish an away guard that reports %s during startup',
+  async (reply) => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    const f = fixture();
+    const ended = vi.fn();
+    const starting = watchAwayGuardInput(ended, undefined, f.runtime);
+    const rejected = expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+    await Promise.resolve();
+    f.line(`ready\n${reply}\n`);
+    // Let startup observe the terminal status before close can mark it finished.
+    // The empty reply separately covers ready and close arriving together.
+    if (reply) await Promise.resolve();
+    f.child.emit('close');
+    await rejected;
+    expect(ended).not.toHaveBeenCalled();
+  },
+);

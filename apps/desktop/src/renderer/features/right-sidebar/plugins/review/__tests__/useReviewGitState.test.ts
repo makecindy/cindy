@@ -9,6 +9,7 @@ import type {
   ReviewDirtySummary,
   ReviewFileDiffData,
   ReviewFileDiffRequest,
+  ReviewData,
 } from '@/lib/gitReview.types';
 import type { SessionStatusInfo } from '@/lib/makerChatStore';
 import {
@@ -17,6 +18,7 @@ import {
   useReviewDirtySummary,
   useReviewFileDiff,
   useReviewFileDiffs,
+  useReviewGitState,
 } from '../useReviewGitState';
 
 function deferred<T>() {
@@ -34,6 +36,12 @@ function Probe({ sessionId, oid }: { sessionId: string; oid: string }) {
     { 'data-testid': 'state' },
     `${state.data?.commitOid ?? 'null'}|${state.loading ? 'loading' : 'idle'}`,
   );
+}
+
+function WorktreeProbe({ sessionId, workdir }: { sessionId: string; workdir: string }) {
+  const state = useReviewGitState(sessionId, false, null, workdir);
+  return createElement('div', { 'data-testid': 'worktree-state' },
+    `${state.data?.scope.branch ?? 'null'}|${state.loading ? 'loading' : 'idle'}`);
 }
 
 function SummaryProbe({
@@ -258,6 +266,30 @@ describe('useReviewGitState cache continuity', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  it('clears the old worktree result immediately and loads the newly selected directory', async () => {
+    const pendingNew = deferred<ReviewData>();
+    const get = vi.fn(() => get.mock.calls.length === 1
+      ? Promise.resolve({ scope: { branch: 'old' } } as ReviewData)
+      : pendingNew.promise);
+    (window as unknown as { electronAPI: unknown }).electronAPI = { gitReview: { get } };
+
+    const { rerender } = render(createElement(WorktreeProbe, {
+      sessionId: 'moved-worktree-session', workdir: '/repo/wt-old',
+    }));
+    await waitFor(() => expect(screen.getByTestId('worktree-state').textContent).toBe('old|idle'));
+
+    rerender(createElement(WorktreeProbe, {
+      sessionId: 'moved-worktree-session', workdir: '/repo/wt-new',
+    }));
+    expect(screen.getByTestId('worktree-state').textContent).not.toContain('old');
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      pendingNew.resolve({ scope: { branch: 'new' } } as ReviewData);
+      await pendingNew.promise;
+    });
+    await waitFor(() => expect(screen.getByTestId('worktree-state').textContent).toBe('new|idle'));
   });
 
   it('keeps previous data while loading an uncached commit diff key', async () => {
