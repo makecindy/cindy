@@ -5,9 +5,26 @@ import { appDownloadName } from './downloadFile.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { GhostHandoffStore } from '../cindy-brain/handoffStore.js';
+import type { GhostCardService } from '../cindy-brain/cardService.js';
 import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
+
+/** Track the native provider call through the existing card lifecycle. */
+export async function callPluginAttachmentTool(input: {
+  instance: string; sessionId: string | null; tool: string;
+}, ports: {
+  cards: Pick<GhostCardService, 'registerCall' | 'finalizeCall'>;
+  call(callId: string): Promise<CallToolResult>;
+}): Promise<CallToolResult> {
+  const callId = randomUUID();
+  // Retain task correlation without asserting an Agent-authorized local call.
+  ports.cards.registerCall(callId, { ghostId: input.instance, sessionId: input.sessionId, tool: input.tool,
+    toolUseId: null });
+  try { return await ports.call(callId); }
+  finally { ports.cards.finalizeCall(callId); }
+}
 
 /** Main-owned, user-added input. This is a transfer, not an Agent file grant. */
 export async function callPluginAttachmentProvider(input: {
@@ -17,6 +34,7 @@ export async function callPluginAttachmentProvider(input: {
   assertCurrent(): Promise<void>;
   assertStillValid(): void;
   handoff: Pick<GhostHandoffStore, 'hold' | 'currentRoot' | 'import' | 'delete'>;
+  supportsMedia(mimeType: string): boolean;
   deposit(buffer: Buffer, mimeType: string): Promise<{ hash: string; cleanup(): Promise<void> }>;
   call(args: Record<string, unknown>): Promise<CallToolResult>;
 }): Promise<CallToolResult> {
@@ -32,7 +50,7 @@ export async function callPluginAttachmentProvider(input: {
   await check();
   if (!bytes || bytes.length !== file.size) throw new Error('MCP_APP_FILE_INVALID');
   const mimeType = sniffMediaMime(bytes, file.mimeType);
-  if (!mimeType && /^(image|audio|video|model)\//.test(file.mimeType)) throw new Error('MCP_APP_FILE_INVALID');
+  if (!mimeType && ports.supportsMedia(file.mimeType)) throw new Error('MCP_APP_FILE_INVALID');
   let cleanup = async () => {};
   let release: (() => void) | undefined;
   let delivered = false;

@@ -23,7 +23,7 @@ import { measureTraceOperation } from '../performance-trace/measure.js';
 import { assertSessionCreationCurrent, currentSessionCreationSignal } from '../localDb/sessionRuntimeCleanup.js';
 import { pagePermissionGrants } from '../mcp-apps/pagePermissions.js';
 import { setPluginPageToolRunner, readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
-import { callPluginAttachmentProvider } from '../mcp-apps/pluginAttachment.js';
+import { callPluginAttachmentProvider, callPluginAttachmentTool } from '../mcp-apps/pluginAttachment.js';
 import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
 import { removeRefById } from '../cindy-media/ledger.js';
 import { ghostToolDeclaresHandoff } from '../../shared/ghost.js';
@@ -354,7 +354,7 @@ import {
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.desktop.js';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop.js';
+import { resolveSafe as resolveCindyMediaUrl, supportedMime as isCindyMediaMime } from '../cindy-media/blobStore.desktop.js';
 import { companionAvatarCache } from '../companion-cloud/avatarCacheHost.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import { removeRefs as removeMediaRefs } from '../cindy-media/ledger.js';
@@ -19463,7 +19463,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return callPluginAttachmentProvider({ instance: grant.instance, paths: grant.attachments, args,
         handoffDeclared: ghostToolDeclaresHandoff(entry.ghost.manifest.tools?.find(tool => tool.name === grant.tool)),
       }, {
-        signal, assertStillValid, handoff: getGhostHandoffStore(),
+        signal, assertStillValid, handoff: getGhostHandoffStore(), supportsMedia: isCindyMediaMime,
         assertCurrent: async () => { await grant.assertCurrent(); assertStillValid(); },
         deposit: async (buffer, mimeType) => {
           const media = await ingestMedia({ buffer, mimeType,
@@ -19474,17 +19474,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             for (const id of media.refIds) await removeRefById(id, db);
           } };
         },
-        call: async transferred => {
-          const callId = randomUUID(), cards = getGhostCardService();
-          cards.registerCall(callId, { ghostId: grant.instance, sessionId: grant.sessionId, tool: grant.tool,
-            toolUseId: null, remoteHostId: null });
-          try {
+        call: transferred => callPluginAttachmentTool({ instance: grant.instance, sessionId: grant.sessionId, tool: grant.tool }, {
+          cards: getGhostCardService(),
+          call: async callId => {
             const result = await getGhostPipeDispatcher().callGhostTool({ ghostId: grant.instance,
               tool: grant.tool, args: transferred, callId, signal, ...(grant.sessionId ? { sessionId: grant.sessionId } : {}) });
             return result.ok ? pluginAppResult(result.result) : { isError: true,
               content: [{ type: 'text', text: JSON.stringify(result) }] };
-          } finally { cards.finalizeCall(callId); }
-        },
+          },
+        }),
       });
     }
     if (grant.sessionId === null) {
