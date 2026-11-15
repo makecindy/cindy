@@ -31,14 +31,11 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => ({
 
 import { createCodexProxyHost, type CodexProxyHostPorts } from '../codex-proxy-host.js';
 
-const requestSizeController: ReturnType<CodexProxyHostPorts['createRequestSizeController']> = { control: async () => null };
-
 const ports = (): CodexProxyHostPorts => ({
-  createRequestSizeController: () => requestSizeController,
   bearerKeyFromHeaders: () => null,
   reportCindyGatewayKeyRejected: () => {},
   createAttachmentRecovery: () => null,
-  createRequestSizeController: (_resolve: unknown, preprocessor: import('@cindy/anthropic-compat-proxy').InlineImagePreprocessor) => ({ preprocessor, control: async () => null }),
+  createRequestSizeController: (_resolve: unknown, preprocessor: import('@cindy/anthropic-compat-proxy').InlineImagePreprocessor): ReturnType<CodexProxyHostPorts['createRequestSizeController']> => ({ preprocessor, control: async () => null }),
   restrictSubscriptionRequest: (decision: unknown) => decision,
   withSubscriptionFastRequestPolicy: (decision: unknown) => decision,
   peekGrokAccessToken: () => null,
