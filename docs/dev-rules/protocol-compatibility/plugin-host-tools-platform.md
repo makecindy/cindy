@@ -3,7 +3,7 @@
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件记录对应能力的增量协议与旧端降级。
 
 `terminal` 新增同一 helper registry 的 `terminal_start/list/read/write/resize/stop/forget`，不改 Host 调用签名。
-新组仍须显式批准；旧 receipt 和未知字段不自动授予执行命令权限。终端输出用 Host 随机进程代次及
+整体安装批准有效、启用且已声明新组即可调用；旧 receipt 的分项字段读到即忽略，未知组不提供实现。终端输出用 Host 随机进程代次及
 非消费游标续读，缺口显式 `resetRequired`；执行电脑不支持或重启后记录丢失时报告失败，不重放命令。
 托管作业按调用方最多同时运行 10 个（包括启动和停止中），超出返回 `TERMINAL_JOB_LIMIT`，
 `data.current/limit` 说明数量和上限；不排队、不终止已有作业。输出在运行中最多 256 KiB、

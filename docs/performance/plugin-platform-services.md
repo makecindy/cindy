@@ -95,9 +95,15 @@ Node 22.22.3 / macOS；每条路径预热 5 次、计数 50 次，读取临时�
 保留 Desktop / Node 的 starting、stop、crash、update 生命周期矩阵，插件侧边栏浏览器仍明确拒绝，
 专用浏览器、我的浏览器、Agent 与 UI 的既有路径不变。
 
-Node Host 已装配 history、任务控制、terminal、files、storage、discovery，复用上游 browser/computer
-provider；实际原生操作仍须通过客户端、开关、输入协调器与身份门禁。scheduler、ssh、docs
-未装配时返回 `UNSUPPORTED_CAPABILITY`，不另建平台实现。
+Node Host 已装配 history、任务控制、terminal、files、storage、discovery，并复用上游 browser
+provider；browser 仍须通过既有后端与实例门禁。插件 computer 尚未接入 Node 安装身份与连接
+生命周期，返回 `UNSUPPORTED_CAPABILITY`；Agent 和 Desktop 插件的 computer 路径不变。
+scheduler、ssh、docs 未装配时同样返回 `UNSUPPORTED_CAPABILITY`，不另建平台实现。
+
+后续整体安装授权修复移除了文件删除、存储分享和 Node 宿主工具的二次确认；目录发现仅返回
+manifest 声明及实际可用性，不生成或读取分项批准投影。没有调用时仍不进入对应槽位；已启用且
+整体安装批准有效的插件只需声明对应能力。上表与 receipt 数字记录原 PR 的隔离测量，不代表
+这一后续修复重新实测了冷启动、调用耗时或 bundle 体积。
 
 风险保留：receipt 实时读取的开销、超大目录完整枚举、16 MiB 完整文件回复、64 MiB 完整分享快照、
 托管作业预算、原任务事件 writer 的既有背压行为。完整安装产物链与跨平台原生输入未验证。

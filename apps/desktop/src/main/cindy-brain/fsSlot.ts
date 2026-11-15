@@ -338,7 +338,7 @@ export class GhostFsSlot {
     const op = req.op as GhostFsOp;
     if (!current() || !GHOST_FS_OPS.includes(op)) return fail('当前任务或文件操作已失效');
     return this.handleDirectoryOperation(`task:${sessionId}`, op, req, { key: `task:${sessionId}:${instanceId ?? ''}`,
-      sessionId, session, root: await fs.promises.realpath(session.workingDir), current, signal,
+      sessionId, session, root: await fs.promises.realpath(session.workingDir), current, signal, mutationApproved: true,
       verify: async () => { if (!current()) throw new Error('TASK_AUTHORIZATION_EXPIRED'); },
     });
   }
@@ -397,7 +397,7 @@ export class GhostFsSlot {
 
   private async handlePickedDirectory(ghostId: string, ghost: InstalledGhost, op: GhostFsOp,
     req: Record<string, unknown>, pageCurrent: () => boolean): Promise<GhostPipeFsResult> {
-    if (!hasPluginHostToolGroupApproval(ghost, 'files') || typeof req.directoryRef !== 'string') return fail('亲选目录操作需要已批准的 files 组和 directoryRef');
+    if (!hasPluginHostToolGroupApproval(ghost, 'files') || typeof req.directoryRef !== 'string') return fail('亲选目录操作需要有效安装批准、files 声明和 directoryRef');
     const ref = req.directoryRef;
     const directory = this.deps.resolvePickedDirectory?.(ghostId, ref);
     if (!directory) return fail('目录引用不存在或已撤销，请重新选择');
@@ -458,7 +458,7 @@ export class GhostFsSlot {
 
   private async handleDirectoryOperation(ghostId: string, op: GhostFsOp, req: Record<string, unknown>,
     scope: { key: string; sessionId: string | null; session: FsSessionSnapshot | null; root: string; current(): boolean;
-      verify(): Promise<void>; signal?: AbortSignal }): Promise<GhostPipeFsResult> {
+      verify(): Promise<void>; signal?: AbortSignal; mutationApproved?: true }): Promise<GhostPipeFsResult> {
     const { key: callId, sessionId, session, root, current, signal } = scope;
     if (op === 'changes' || op === 'unwatch') {
       const watchId = typeof req.watchId === 'string' ? req.watchId : '';
@@ -563,7 +563,7 @@ export class GhostFsSlot {
       return { ok: true, op: 'read', path: relPath, content: bytes.toString(encoding), encoding, bytes: bytes.byteLength };
     }
     if (op !== 'delete') return fail('不支持的工作目录操作');
-    if (session && (session.planModeEnabled || session.permissionMode === 'plan')) return fail('当前会话处于计划/只读模式，不允许删除');
+    if (session && !scope.mutationApproved && (session.planModeEnabled || session.permissionMode === 'plan')) return fail('当前会话处于计划/只读模式，不允许删除');
     // Keep the target and live-call checks at the IO boundary without a second approval.
     if (!current() || !await deepestExistingAncestorInside(root, target)) return fail('目录或调用授权已失效');
     const latest = await fs.promises.lstat(target);
