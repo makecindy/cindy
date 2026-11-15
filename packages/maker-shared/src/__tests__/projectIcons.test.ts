@@ -2,6 +2,7 @@
 import { expect, it } from "vitest";
 import {
   validProjectIcon,
+  projectDirectoryName,
   defaultProjectLetters,
   defaultProjectColor,
   PROJECT_EMOJIS,
@@ -83,8 +84,27 @@ it.each([
 // User-requested automatic identity color: normalization must not change a project's color.
 // Existing tests cover initials/wire validation only; unit minimum: "Cindy" vs full-width/case/space.
 it("keeps automatic project colors stable across normalized names", () => {
-  expect(defaultProjectColor("  ＣＩＮＤＹ  ")).toBe(defaultProjectColor("cindy"));
+  expect(defaultProjectColor("  ＣＩＮＤＹ  ")).toBe(
+    defaultProjectColor("cindy"),
+  );
   expect(defaultProjectColor("Cindy")).not.toBe("default");
   expect(defaultProjectColor("Cindy")).not.toBe("white");
   expect(defaultProjectColor("a")).not.toBe(defaultProjectColor("b"));
 });
+
+// CodeQL #503: replace the suffix regexp while preserving cross-platform labels.
+// Unit: existing icon/wire cases never called directory-name extraction.
+it.each([
+  ["/repo/project///", "project"],
+  ["C:\\repo\\project\\", "project"],
+  ["//server/share/project/", "project"],
+  ["project", "project"],
+  ["/", "/"],
+  ["", ""],
+  [`project${"/".repeat(4096)}`, "project"],
+])(
+  "extracts a directory label without suffix-regexp backtracking: %s",
+  (directory, expected) => {
+    expect(projectDirectoryName(directory)).toBe(expected);
+  },
+);

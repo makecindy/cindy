@@ -16,11 +16,11 @@ it('finds a website manifest icon relative to its manifest, after invalid local 
   expect(await discoverProjectIcon({read:async p=>files[p]??null,fetch:async u=>pages[u]?{bytes:pages[u]!,url:u}:null})).toMatchObject({kind:'website',source:'https://example.com',candidate:false});
 });
 it('uses a GitHub repository website before offering its account avatar',async()=>{
-  const fetch=vi.fn(async(url:string)=>({url,bytes:url.includes('api.github.com')?Buffer.from(JSON.stringify({homepage:'https://site.example',owner:{avatar_url:'https://avatars.example/icon.png'}})):url==='https://site.example/'?Buffer.from('<link rel="icon" href="/brand.png">'):png}));
+  const fetch=vi.fn(async(url:string)=>({url,bytes:new URL(url).hostname === 'api.github.com'?Buffer.from(JSON.stringify({homepage:'https://site.example',owner:{avatar_url:'https://avatars.example/icon.png'}})):url==='https://site.example/'?Buffer.from('<link rel="icon" href="/brand.png">'):png}));
   const io={read:async()=>null,gitOrigin:async()=> 'git@github.com:team/project.git',fetch};
   expect(await discoverProjectIcon(io)).toMatchObject({kind:'website',candidate:false});
-  expect(fetch.mock.calls.some(([u])=>u.includes('avatars.example'))).toBe(false);
-  const result=await discoverProjectIcon({...io,fetch:async(url:string)=>url.includes('api.github.com')?{url,bytes:Buffer.from('{"owner":{"avatar_url":"https://avatars.example/icon.png"}}')}:{url,bytes:png}});
+  expect(fetch.mock.calls.some(([u])=>new URL(u).hostname === 'avatars.example')).toBe(false);
+  const result=await discoverProjectIcon({...io,fetch:async(url:string)=>new URL(url).hostname === 'api.github.com'?{url,bytes:Buffer.from('{"owner":{"avatar_url":"https://avatars.example/icon.png"}}')}:{url,bytes:png}});
   expect(result).toMatchObject({kind:'github',source:'https://github.com/team',candidate:true});
 });
 it('rejects external-resource SVGs, credentials, protocols and escaping local paths',async()=>{

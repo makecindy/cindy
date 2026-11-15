@@ -170,12 +170,18 @@ export function validProjectIcon(value: unknown): value is string {
   );
 }
 export function projectDirectoryName(directory: string): string {
-  return (
-    directory
-      .replace(/[\\/]+$/, "")
-      .split(/[\\/]/)
-      .pop() || directory
-  );
+  let end = directory.length;
+  while (end > 0 && (directory[end - 1] === "/" || directory[end - 1] === "\\"))
+    end--;
+  if (end === 0) return directory;
+  let start = end;
+  while (
+    start > 0 &&
+    directory[start - 1] !== "/" &&
+    directory[start - 1] !== "\\"
+  )
+    start--;
+  return directory.slice(start, end);
 }
 
 export const PROJECT_AUTO_ICON_CHANNEL =
