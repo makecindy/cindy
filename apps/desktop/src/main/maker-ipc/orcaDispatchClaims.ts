@@ -317,6 +317,6 @@ export function buildDispatchClaimNoticeSummary(params: {
   const trimmedQuote = quote.length > 120 ? `${quote.slice(0, 120)}…` : quote;
   return [
     `${claim}${reason}；引文取自它这轮回复：「${trimmedQuote}」；`,
-    '已自动补派一次仍未核实，可让它重新派发，或确认目标 worker 是否真的收到。',
+    '已请它重做一次，仍没有可核对的派发记录；可以让它再试，或确认 worker 是否真的收到。',
   ].join('');
 }
