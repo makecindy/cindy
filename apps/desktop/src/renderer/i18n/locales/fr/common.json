@@ -21716,6 +21716,25 @@
     "lineNumbers": "Numéros de ligne"
   },
   "subscriptionAccounts": {
+    "strategyHelp": {
+      "details": "Utilité et limites des stratégies",
+      "saved": "Réglages enregistrés.",
+      "scope": "S’applique dès maintenant aux nouvelles attributions suivantes. Les sessions existantes fonctionnelles gardent leur compte ; changer de stratégie ne les déplace pas.",
+      "recoveryOff": "Les comptes rétablis ne reparticipent plus activement aux prochains envois sûrs. Les sessions fonctionnelles gardent leur compte ; le basculement après une vraie panne reste inchangé. Un transfert déjà validé n’est pas annulé.",
+      "basis": "Les quatre stratégies vérifient d’abord disponibilité, pause, droits du modèle, délai de récupération et limites de simultanéité, puis l’urgence du quota. La stratégie choisit parmi les candidats similaires restants, pas tous les comptes.",
+      "least": "Répartir le travail simultané : choisir le compte avec le moins de sessions en cours ; à égalité, suivre la liste. Le nombre de sessions n’est pas la consommation de tokens.",
+      "round": "Répartir les attributions : choisir le prochain compte admissible après le dernier choisi. Les comptes sautés et les volumes variables ne garantissent pas des parts égales de tokens ou de quota.",
+      "order": "Privilégier un compte : choisir le premier restant dans la liste. Les filtres de quota et de disponibilité sont prioritaires.",
+      "weight": "Orienter les nouvelles attributions : choisir aléatoirement parmi les comptes restants, proportionnellement à leurs poids. C’est une probabilité par attribution, pas un ratio garanti de tokens ou de quota."
+    },
+     "autoRejoin": {
+       "label": "Reparticiper aux sessions existantes après rétablissement du quota",
+       "scope": "Pour les comptes précédemment en échec dont le rétablissement est confirmé, et non pour un équilibrage général des comptes fonctionnels. Uniquement pour les sessions Codex existantes sur cet ordinateur, lors du prochain envoi utile et sûr, y compris la poursuite des objectifs. Les outils et le travail en arrière-plan ne sont pas interrompus.",
+       "details": "Voir le fonctionnement et les limites",
+       "context": "Le changement de compte peut entraîner une perte de contexte lors du transfert. L’historique interne des outils et du raisonnement ne peut pas être intégralement conservé.",
+       "failover": "La désactivation n’affecte pas le changement de compte en cas de quota épuisé ou de panne. Modifier uniquement la stratégie d’attribution ne déplace pas les sessions fonctionnelles. Activer ce réglage donne à un compte dont le rétablissement est confirmé une occasion de participer.",
+       "unsupported": "Cet hôte ne prend pas en charge ce réglage. Son état est inconnu et ne peut pas être enregistré. Mettez à jour Cindy sur l’hôte."
+     },
     "placement": {
       "needsUpdate": "Cindy doit être mis à jour sur l'ordinateur qui exécute cette opération pour déplacer des comptes ainsi.",
       "moveTo": "Déplacer vers…",
@@ -21846,19 +21865,19 @@
     "strategy": {
       "expiring": {
         "title": "Bientôt expiré d'abord",
-        "hint": "Utilise d'abord le quota d'abonnement le plus fourni et sur le point d'être réinitialisé, pour ne rien perdre. Les sources sans quota lisible passent après."
+        "hint": "Éviter le gaspillage : comparer le quota restant divisé par le temps avant réinitialisation, en évitant d’abord les fenêtres de 5 heures presque épuisées. Le quota inconnu vient après le connu ; une urgence similaire suit la liste."
       },
       "order": {
         "title": "Dans l'ordre",
-        "hint": "Passe à la source suivante seulement si la précédente est inutilisable."
+        "hint": "Privilégier une source : choisir la première disponible après filtrage, pas forcément la première configurée."
       },
       "rotate": {
         "title": "À tour de rôle",
-        "hint": "Chaque nouvelle tâche passe à la source suivante et répartit la charge."
+        "hint": "Répartir les sélections : choisir la prochaine source admissible après le dernier choix validé. La position reste en mémoire et repart au début après redémarrage ; les aperçus ne la font pas avancer. L’égalité de consommation de tokens ou de quota n’est pas garantie."
       },
       "cheapest": {
         "title": "Le moins cher",
-        "hint": "Utilise d'abord les abonnements qui ont encore du quota, sans coût supplémentaire ; le reste suit du prix affiché le plus bas au plus élevé, et les sources sans prix passent en dernier."
+        "hint": "Privilégier le prix affiché le plus bas : abonnements avec quota restant d’abord, puis prix en USD par million de tokens de sortie. Prix inconnus en dernier ; prix égaux ou tous inconnus selon la liste. Le coût total réel n’est pas prédit."
       }
     },
     "picker": {
@@ -21891,6 +21910,8 @@
       "separator": " ; "
     },
     "settings": {
+      "strategyScope": "Les changements enregistrés s’appliquent à la prochaine sélection : les nouvelles sessions choisissent avant le premier envoi. Les sessions existantes ne changent jamais automatiquement ; choisir un mode manuellement sélectionne une seule fois au lieu d’exécution de la session, avec la confirmation et le délai habituels du changement de modèle. Cela ne déplace pas la session sur un autre ordinateur.",
+      "strategyLimits": "Seules ces quatre stratégies sont prises en charge, sans poids ni moindre occupation. Les exceptions passent d’abord ; les sources désactivées, déconnectées ou indisponibles sont ignorées. Les abonnements épuisés passent après ; si tous le sont, la réinitialisation la plus proche est choisie. Si aucune source n’est utilisable, le modèle initial reste. Les suggestions après épuisement du quota exigent un clic, sans migration automatique.",
       "newRoute": "Nouveau mode",
       "newRouteName": "Nouveau mode",
       "routesEmpty": "Aucun mode pour l'instant. Créez-en un et ajoutez-y plusieurs sources.",

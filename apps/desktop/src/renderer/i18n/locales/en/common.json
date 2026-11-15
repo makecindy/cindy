@@ -21512,6 +21512,25 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "strategyHelp": {
+      "details": "Strategy uses and limits",
+      "saved": "Settings saved.",
+      "scope": "Applies to subsequent new assignments now. Healthy existing sessions keep their account; changing strategy does not migrate them.",
+      "recoveryOff": "Recovery participation is off for future safe sends. Healthy sessions keep their account; failover after a real failure is unchanged. An already committed handoff is not undone.",
+      "basis": "All four strategies first respect availability, pause, model access, cooldown and concurrency limits, then quota urgency. The strategy chooses among the remaining similar candidates, not every account.",
+      "least": "Spread concurrent work: pick the account with the fewest running tasks; ties follow list order. Task count is not token consumption.",
+      "round": "Spread assignment turns: pick the next eligible account after the last one. Skipped accounts and differing task sizes mean neither token nor quota shares are guaranteed.",
+      "order": "Prefer an account: pick the first remaining account in list order. Earlier quota and availability filtering can override that preference.",
+      "weight": "Bias new assignments: randomly pick among remaining accounts in proportion to their weights. This is a probability per assignment, not a guaranteed token or quota ratio."
+    },
+     "autoRejoin": {
+       "label": "Rejoin existing sessions when quota recovers",
+       "scope": "For previously failed accounts whose recovery has been confirmed, not general balancing of healthy accounts. Only applies to existing Codex sessions on this desktop, at the next useful, safe send, including goal continuation. It does not interrupt tools or background work.",
+       "details": "How recovery works and its limits",
+       "context": "Switching accounts may require a lossy context handoff. Internal tool and reasoning history cannot be fully preserved.",
+       "failover": "Turning this off does not affect account failover after quota exhaustion or failures. Changing the allocation strategy alone does not migrate healthy sessions. Enabling this setting gives a confirmed recovered account one opportunity to participate.",
+       "unsupported": "This host does not support this setting. Its state is unknown and cannot be saved; update Cindy on the host."
+     },
     "placement": {
       "needsUpdate": "The computer running this needs a Cindy update before accounts can be moved this way.",
       "moveTo": "Move to…",
@@ -21641,19 +21660,19 @@
     "strategy": {
       "expiring": {
         "title": "Expiring first",
-        "hint": "Uses subscription quota that is plentiful and about to reset first, so none is wasted. Sources without readable quota come after."
+        "hint": "Avoid wasting subscription quota: rank remaining quota divided by time to reset, avoiding tight 5-hour windows first. Unknown quota comes after known quota; similar urgency follows list order."
       },
       "order": {
         "title": "In order",
-        "hint": "Moves to the next source only when the one above cannot be used."
+        "hint": "Prefer a source: use the first available source in list order after filtering, not necessarily the first configured source."
       },
       "rotate": {
         "title": "Rotate",
-        "hint": "Each new task goes to the next source, sharing the load evenly."
+        "hint": "Spread selections: use the next eligible source after the last committed choice. The cursor is in memory and resets on restart; previews do not advance it. This does not guarantee equal token or quota consumption."
       },
       "cheapest": {
         "title": "Cheapest",
-        "hint": "Uses subscriptions with quota left first, at no extra cost; the rest go from lowest to highest listed price, and sources without a price come last."
+        "hint": "Prefer lower listed cost: subscriptions with quota left come first, then listed USD prices per million output tokens. Unknown prices come last; equal or entirely unknown prices follow list order. Actual total cost is not predicted."
       }
     },
     "picker": {
@@ -21686,6 +21705,8 @@
       "separator": "; "
     },
     "settings": {
+      "strategyScope": "Saved changes apply at the next selection: new sessions pick before their first send. Existing sessions never switch automatically; manually choosing a mode picks once at the session’s running location, using normal model-switch confirmation and timing. It cannot move the session to another computer.",
+      "strategyLimits": "Only these four strategies are supported, not weights or least busy. Exceptions run first; disabled, disconnected or unavailable sources are skipped. Exhausted subscriptions are deferred; if all are exhausted, the earliest reset is selected. If none is usable, keep the original model. Quota-limit source suggestions require your click; they are not automatic migration.",
       "newRoute": "New mode",
       "newRouteName": "New mode",
       "routesEmpty": "No modes yet. Create one and add a few sources.",

@@ -15,6 +15,9 @@ export default {
     narrow: { about: '320-pixel content width without clipped account controls' },
     'narrow-weight': { about: '320-pixel content width with task limit, weight, assignment and account menu controls' },
     codex: { about: 'Codex accounts and weight strategy' },
+    'strategy-narrow': { about: 'All account strategy explanations by keyboard, save receipt and scope at 320px' },
+    'codex-recovery-narrow': { about: 'Recovery participation at 320px: default off, click disclosure, save on and off' },
+    'codex-old-host': { about: 'Old host: unknown recovery setting is disabled, with clickable explanation' },
     'codex-no-usage': { about: 'A signed-in second Codex account retains reset controls without usage data' },
     'codex-no-usage-narrow': { about: 'Second-account reset controls without usage data at 320-pixel content width' },
     error: { about: 'Unavailable status read and inline retry on focus' },
@@ -85,7 +88,40 @@ export default {
       }
       await ui.capture('account-resets');
     }
-    assert.equal(await page.getByRole('switch').count(), codex ? 6 : 3);
+    assert.equal(await page.getByRole('switch').count(), codex ? 7 : 3);
+    if (ui.case === 'strategy-narrow' || ui.case === 'codex-recovery-narrow') {
+      const details = page.getByRole('button', { name: await ui.t('subscriptionAccounts.strategyHelp.details'), exact: true });
+      await details.focus();
+      await page.keyboard.press('Enter');
+      assert.equal(await details.getAttribute('aria-expanded'), 'true');
+      for (const strategy of ['least', 'round', 'order', 'weight']) {
+        await page.getByText(await ui.t(`subscriptionAccounts.strategyHelp.${strategy}`), { exact: true }).waitFor();
+      }
+      await ui.capture('strategy-details');
+      await page.keyboard.press('Space');
+      assert.equal(await details.getAttribute('aria-expanded'), 'false');
+      await page.getByRole('radio', { name: await ui.t('providerGroup.strategy.round'), exact: true }).click();
+      await page.getByRole('status').filter({ hasText: await ui.t('subscriptionAccounts.strategyHelp.saved') }).waitFor();
+      await ui.capture('strategy-saved');
+      if (ui.case === 'strategy-narrow') return;
+    }
+    if (ui.case === 'codex-recovery-narrow' || ui.case === 'codex-old-host') {
+      const toggle = page.getByRole('switch', { name: await ui.t('subscriptionAccounts.autoRejoin.label'), exact: true });
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+      const oldHost = ui.case === 'codex-old-host';
+      assert.equal(await toggle.isDisabled(), oldHost);
+      if (oldHost) await page.getByText(await ui.t('subscriptionAccounts.autoRejoin.unsupported'), { exact: true }).waitFor();
+      await page.getByRole('button', { name: await ui.t('subscriptionAccounts.autoRejoin.details'), exact: true }).click();
+      await page.getByText(await ui.t('subscriptionAccounts.autoRejoin.context'), { exact: true }).waitFor();
+      await ui.capture('recovery-limits');
+      if (!oldHost) {
+        await toggle.click();
+        await page.waitForFunction(label => document.querySelector(`button[aria-label="${label}"]`)?.getAttribute('aria-checked') === 'true', await ui.t('subscriptionAccounts.autoRejoin.label'));
+        await ui.capture('recovery-enabled');
+        await toggle.click();
+      }
+      return;
+    }
     assert.equal(await page.getByRole('radiogroup', { name: await ui.t('subscriptionAccounts.strategy'), exact: true }).getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
     // Every account's bars share one column, whatever each account's own labels and numbers are.
     const bars = await page.getByRole('progressbar').evaluateAll(elements =>
@@ -114,9 +150,10 @@ export default {
     await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.remove'), exact: true }).waitFor();
     await ui.capture('menu');
     await page.keyboard.press('Escape');
-    await page.getByRole('switch').first().click();
-    await page.getByRole('switch').first().waitFor();
-    assert.equal(await page.getByRole('switch').first().getAttribute('aria-checked'), 'false');
+    const assignment = page.getByTestId('subscription-account').first().getByRole('switch').first();
+    await assignment.click();
+    await assignment.waitFor();
+    assert.equal(await assignment.getAttribute('aria-checked'), 'false');
     await ui.capture('paused');
   },
 };

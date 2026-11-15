@@ -93,6 +93,7 @@ void mountPage({
       providerId: isCodex ? 'openai' : 'anthropic',
       configured: true,
       strategy: isCodex ? 'weight' : 'least',
+      ...(isCodex && ctx.case !== 'codex-old-host' ? { autoRejoinRecovered: false } : {}),
       accounts: [
         {
           id: 'default',
@@ -199,6 +200,7 @@ void mountPage({
             view = {
               ...view,
               strategy: command.strategy ?? view.strategy,
+              ...(command.autoRejoinRecovered !== undefined ? { autoRejoinRecovered: command.autoRejoinRecovered } : {}),
               accounts: view.accounts.map((a) =>
                 a.id === command.accountId
                   ? { ...a, ...(command.paused !== undefined ? { paused: command.paused } : {}) }

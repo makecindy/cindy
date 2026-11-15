@@ -21716,6 +21716,25 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "strategyHelp": {
+      "details": "Utilidade e limites das estratégias",
+      "saved": "Definições guardadas.",
+      "scope": "Aplica-se já às novas atribuições seguintes. As sessões existentes saudáveis mantêm a conta; mudar a estratégia não as migra.",
+      "recoveryOff": "As contas recuperadas deixam de participar ativamente nos próximos envios seguros. As sessões saudáveis mantêm a conta e a troca após uma falha real não muda. Uma transferência já confirmada não é desfeita.",
+      "basis": "As quatro estratégias verificam primeiro disponibilidade, pausa, permissões do modelo, espera e limites de simultaneidade, depois a urgência da quota. A estratégia escolhe entre os candidatos semelhantes restantes, não entre todas as contas.",
+      "least": "Repartir trabalho simultâneo: escolher a conta com menos sessões em execução; em empate, seguir a lista. A contagem de sessões não é o consumo de tokens.",
+      "round": "Repartir atribuições: escolher a conta elegível seguinte à última escolhida. Contas ignoradas e volumes diferentes impedem garantir partes iguais de tokens ou quota.",
+      "order": "Preferir uma conta: escolher a primeira restante na lista. Os filtros prévios de quota e disponibilidade têm prioridade.",
+      "weight": "Orientar novas atribuições: escolher aleatoriamente entre as contas restantes, proporcionalmente aos pesos. É uma probabilidade por atribuição, não uma proporção garantida de tokens ou quota."
+    },
+     "autoRejoin": {
+       "label": "Voltar a participar nas sessões existentes após recuperar a quota",
+       "scope": "Destina-se a contas que falharam anteriormente e cuja recuperação foi confirmada, não ao equilíbrio geral de contas saudáveis. Aplica-se apenas às sessões Codex existentes neste computador, no próximo envio útil e seguro, incluindo a continuação de objetivos. Não interrompe ferramentas nem trabalho em segundo plano.",
+       "details": "Ver o funcionamento e os limites da recuperação",
+       "context": "A mudança de conta pode exigir uma transferência de contexto com perdas. Não é possível preservar integralmente o histórico interno de ferramentas e raciocínio.",
+       "failover": "Desativar não afeta a mudança de conta por quota esgotada ou falhas. Alterar apenas a estratégia de atribuição não transfere sessões saudáveis. Ativar esta definição dá a uma conta cuja recuperação foi confirmada uma oportunidade de participar.",
+       "unsupported": "Este anfitrião não suporta esta definição. O estado é desconhecido e não pode ser guardado. Atualize o Cindy no anfitrião."
+     },
     "placement": {
       "needsUpdate": "É necessário atualizar o Cindy no computador que executa esta operação para mover contas assim.",
       "moveTo": "Mover para…",
@@ -21846,19 +21865,19 @@
     "strategy": {
       "expiring": {
         "title": "Primeiro o que expira",
-        "hint": "Usa primeiro a quota de subscrição que mais sobra e que está prestes a ser reposta, para não a desperdiçar. As fontes sem quota legível ficam para depois."
+        "hint": "Evitar desperdício de quota: comparar quota restante dividida pelo tempo até à reposição, evitando primeiro janelas de 5 horas quase esgotadas. Quota desconhecida vem depois da conhecida; urgência semelhante segue a lista."
       },
       "order": {
         "title": "Por ordem",
-        "hint": "Só passa à fonte seguinte quando a anterior não pode ser usada."
+        "hint": "Preferir uma fonte: escolher a primeira disponível após os filtros, não necessariamente a primeira configurada."
       },
       "rotate": {
         "title": "À vez",
-        "hint": "Cada nova tarefa passa à fonte seguinte e reparte a carga."
+        "hint": "Repartir seleções: escolher a próxima fonte elegível após a última escolha confirmada. A posição fica apenas na memória e reinicia ao arrancar; as pré-visualizações não a avançam. Não garante consumo igual de tokens ou quota."
       },
       "cheapest": {
         "title": "O mais barato",
-        "hint": "Usa primeiro as subscrições com quota disponível, sem custo adicional; o resto segue do preço de tabela mais baixo ao mais alto, e as fontes sem preço ficam para o fim."
+        "hint": "Preferir menor preço de tabela: subscrições com quota restante primeiro, depois preço em USD por milhão de tokens de saída. Preços desconhecidos por último; iguais ou todos desconhecidos seguem a lista. Não prevê o custo total real."
       }
     },
     "picker": {
@@ -21891,6 +21910,8 @@
       "separator": "; "
     },
     "settings": {
+      "strategyScope": "As alterações guardadas aplicam-se na próxima seleção: novas sessões escolhem antes do primeiro envio. As existentes nunca mudam automaticamente; escolher um modo manualmente seleciona uma vez no local de execução da sessão, com a confirmação e os tempos habituais da troca de modelo. Não move a sessão para outro computador.",
+      "strategyLimits": "Só estas quatro estratégias são suportadas, sem pesos nem menor ocupação. As exceções aplicam-se primeiro; fontes desativadas, desligadas ou indisponíveis são ignoradas. Subscrições esgotadas ficam para depois; se todas estiverem esgotadas, escolhe-se a reposição mais próxima. Sem fontes utilizáveis, mantém-se o modelo original. As sugestões após esgotar a quota exigem um clique, não são migração automática.",
       "newRoute": "Novo modo",
       "newRouteName": "Novo modo",
       "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",

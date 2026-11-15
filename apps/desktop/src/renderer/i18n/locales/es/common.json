@@ -21716,6 +21716,25 @@
     "lineNumbers": "Números de línea"
   },
   "subscriptionAccounts": {
+    "strategyHelp": {
+      "details": "Usos y límites de las estrategias",
+      "saved": "Ajustes guardados.",
+      "scope": "Se aplica desde ahora a las nuevas asignaciones posteriores. Las sesiones existentes que funcionan bien conservan su cuenta; cambiar la estrategia no las migra.",
+      "recoveryOff": "Las cuentas recuperadas no volverán a participar activamente en los próximos envíos seguros. Las sesiones sanas conservan su cuenta y el cambio tras un fallo real no varía. No se deshace una transferencia ya confirmada.",
+      "basis": "Las cuatro estrategias comprueban primero disponibilidad, pausa, permisos del modelo, espera y límites de concurrencia, y después la urgencia de la cuota. La estrategia elige entre los candidatos similares restantes, no entre todas las cuentas.",
+      "least": "Repartir trabajo simultáneo: elegir la cuenta con menos sesiones en ejecución; en empate, seguir la lista. El número de sesiones no es el consumo de tokens.",
+      "round": "Repartir asignaciones: elegir la siguiente cuenta apta tras la última elegida. Las cuentas omitidas y los distintos volúmenes no garantizan partes iguales de tokens o cuota.",
+      "order": "Priorizar una cuenta: elegir la primera restante en la lista. Los filtros previos de cuota y disponibilidad tienen prioridad.",
+      "weight": "Orientar nuevas asignaciones: elegir al azar entre las cuentas restantes en proporción a sus pesos. Es una probabilidad por asignación, no una proporción garantizada de tokens o cuota."
+    },
+     "autoRejoin": {
+       "label": "Volver a participar en sesiones existentes al recuperar la cuota",
+       "scope": "Para cuentas que fallaron anteriormente y cuya recuperación se ha confirmado, no para equilibrar cuentas sanas en general. Solo se aplica a sesiones de Codex existentes en este escritorio, en el siguiente envío útil y seguro, incluida la continuación de objetivos. No interrumpe herramientas ni trabajo en segundo plano.",
+       "details": "Ver cómo funciona la recuperación y sus límites",
+       "context": "Al cambiar de cuenta, la transferencia de contexto puede perder información. No se puede conservar íntegramente el historial interno de herramientas y razonamiento.",
+       "failover": "Desactivarlo no afecta al cambio de cuenta por cuota agotada o fallos. Cambiar solo la estrategia de asignación no migra las sesiones que funcionan bien. Activar este ajuste da a una cuenta cuya recuperación se ha confirmado una oportunidad de participar.",
+       "unsupported": "Este host no admite este ajuste. Su estado es desconocido y no se puede guardar. Actualiza Cindy en el host."
+     },
     "placement": {
       "needsUpdate": "Hay que actualizar Cindy en el equipo que realiza esta operación para mover cuentas así.",
       "moveTo": "Mover a…",
@@ -21846,19 +21865,19 @@
     "strategy": {
       "expiring": {
         "title": "Primero lo que caduca",
-        "hint": "Usa primero la cuota de suscripción que más sobra y que está a punto de restablecerse, para no desperdiciarla. Las fuentes sin cuota legible van después."
+        "hint": "Evitar desperdiciar cuota: comparar cuota restante dividida por tiempo hasta el restablecimiento, evitando primero ventanas de 5 horas casi agotadas. La cuota desconocida va después de la conocida; con urgencia similar, se sigue la lista."
       },
       "order": {
         "title": "En orden",
-        "hint": "Pasa a la siguiente fuente solo cuando la anterior no se puede usar."
+        "hint": "Priorizar una fuente: elegir la primera disponible tras filtrar, no necesariamente la primera configurada."
       },
       "rotate": {
         "title": "Por turnos",
-        "hint": "Cada tarea nueva pasa a la siguiente fuente y reparte la carga."
+        "hint": "Repartir selecciones: elegir la siguiente fuente apta tras la última elección confirmada. La posición solo está en memoria y se reinicia al arrancar; las vistas previas no avanzan. No garantiza consumo igual de tokens o cuota."
       },
       "cheapest": {
         "title": "Lo más barato",
-        "hint": "Usa primero las suscripciones con cuota disponible, sin coste adicional; el resto va del precio de lista más bajo al más alto, y las fuentes sin precio quedan al final."
+        "hint": "Priorizar menor precio publicado: primero suscripciones con cuota restante, luego precio en USD por millón de tokens de salida. Precios desconocidos al final; iguales o todos desconocidos siguen la lista. No predice el coste total real."
       }
     },
     "picker": {
@@ -21891,6 +21910,8 @@
       "separator": "; "
     },
     "settings": {
+      "strategyScope": "Los cambios guardados se aplican en la próxima selección: las sesiones nuevas eligen antes del primer envío. Las existentes nunca cambian automáticamente; elegir un modo manualmente selecciona una vez en el lugar de ejecución de la sesión, con la confirmación y los tiempos habituales del cambio de modelo. No puede mover la sesión a otro ordenador.",
+      "strategyLimits": "Solo se admiten estas cuatro estrategias, sin pesos ni menor ocupación. Se aplican primero las excepciones y se omiten fuentes desactivadas, desconectadas o no disponibles. Las suscripciones agotadas van después; si todas lo están, se elige el restablecimiento más cercano. Sin fuentes utilizables, se mantiene el modelo original. Las sugerencias tras agotar la cuota requieren un clic, no son una migración automática.",
       "newRoute": "Nuevo modo",
       "newRouteName": "Nuevo modo",
       "routesEmpty": "Aún no hay modos. Crea uno y añade varias fuentes.",
