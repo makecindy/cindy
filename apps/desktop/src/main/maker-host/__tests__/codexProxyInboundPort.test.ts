@@ -23,7 +23,10 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => ({
 
 import { createCodexProxyHost, type CodexProxyHostPorts } from '../codex-proxy-host.js';
 
+const requestSizeController: ReturnType<CodexProxyHostPorts['createRequestSizeController']> = { control: async () => null };
+
 const ports = (): CodexProxyHostPorts => ({
+  createRequestSizeController: () => requestSizeController,
   bearerKeyFromHeaders: () => null,
   reportCindyGatewayKeyRejected: () => {},
   createAttachmentRecovery: () => null,
