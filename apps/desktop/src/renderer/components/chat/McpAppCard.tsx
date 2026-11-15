@@ -44,11 +44,12 @@ function rememberMcpAppHeight(key: string, height: number): void {
   while (mcpAppHeightCache.size > MCP_APP_HEIGHT_CACHE_LIMIT)
     mcpAppHeightCache.delete(mcpAppHeightCache.keys().next().value!);
 }
-function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' | 'active', sessionId: string | null, clientId: string): void {
+function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' | 'active' | 'exit-fullscreen', sessionId: string | null, clientId: string): void {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   const code = message.match(/\b[A-Z][A-Z_]+\b/g)?.find(value => appFailureCodes.has(value)) ?? 'UNKNOWN';
   const stage = code.endsWith('_TIMEOUT') ? 'timeout' : code === 'MCP_APP_SANDBOX_FAILED' ? 'sandbox' : phase;
-  const write = (card: string) => createLogger('mcp-apps').warn('App View failed', { code, stage, card });
+  const event = phase === 'exit-fullscreen' ? 'App fullscreen exit not delivered' : 'App View failed';
+  const write = (card: string) => createLogger('mcp-apps').warn(event, { code, stage, card });
   // A stable digest supports correlation without writing task/card identifiers.
   void (async () => {
     try {
@@ -429,7 +430,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   // Exit locally; the modal blocks the window.
   const exitFullscreen = () => {
     setMode('inline');
-    void controllerRef.current?.displayMode('inline').catch(() => {});
+    void controllerRef.current?.displayMode('inline').catch((error) => logAppFailure(error, 'exit-fullscreen', sessionId, clientId));
   };
   return (
     <dialog
