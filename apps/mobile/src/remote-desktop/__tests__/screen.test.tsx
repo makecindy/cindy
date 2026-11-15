@@ -2053,12 +2053,12 @@ describe("remote desktop controls", () => {
   });
 
   describe("control requests over the media channel", () => {
-    const withChannel = (enabled: boolean) => {
+    const withChannel = (enabled: boolean, signalingContinuity = false) => {
       const original = fixture.invoke.getMockImplementation()!;
       fixture.invoke.mockImplementation(async (...args) => {
         const result = await original(...args);
         return args[2][0].op === "capabilities" && enabled
-          ? { ...(result as object), channelRequests: true }
+          ? { ...(result as object), channelRequests: true, signalingContinuity }
           : result;
       });
     };
@@ -2080,6 +2080,34 @@ describe("remote desktop controls", () => {
     const release = () => viewer({ type: "inputOverflow" });
     const channelRequest = () =>
       sent().findLast((m) => m.type === "channelRequest");
+
+    it("retries a missing media heartbeat reply before the 12s host deadline", async () => {
+      withChannel(true, true);
+      await live();
+      fixture.status = "offline";
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      await act(async () => vi.advanceTimersByTimeAsync(9000));
+      const heartbeats = sent().filter((m) => m.type === "channelRequest" && m.request.op === "heartbeat");
+      expect(heartbeats).toHaveLength(2);
+      expect(heartbeats[0].id).not.toBe(heartbeats[1].id);
+      await viewer({ type: "channelReply", id: heartbeats[1].id, ok: true, result: { controlling: true } });
+      expect(requests().some((r) => r.op === "stop")).toBe(false);
+    });
+
+    it.each(["fallback", "DESKTOP_LEASE_EXPIRED"])("stops retained media on %s during signaling loss", async (reason) => {
+      withChannel(true, true);
+      await live();
+      fixture.status = "offline";
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      expect(requests().some((r) => r.op === "stop")).toBe(false);
+      if (reason === "fallback") await viewer({ type: "fallback", reason: "failed" });
+      else {
+        await act(async () => vi.advanceTimersByTimeAsync(3000));
+        const heartbeat = sent().findLast((m) => m.type === "channelRequest" && m.request.op === "heartbeat");
+        await viewer({ type: "channelReply", id: heartbeat.id, ok: false, error: reason });
+      }
+      expect(requests().some((r) => r.op === "stop")).toBe(true);
+    });
 
     it("sends control over the WebView channel and settles from its reply", async () => {
       withChannel(true);
@@ -2177,6 +2205,31 @@ describe("remote desktop controls", () => {
       await release();
       expect(sent().some((m) => m.type === "channelRequest")).toBe(false);
       expect(relayedControl().map((r) => r.enabled)).toEqual([false, true]);
+    });
+
+    // Unit: a native send can finish after the peer has been replaced.
+    it("does not replay a delayed native send or accept its reply on a new media attempt", async () => {
+      fixture.nativeMedia = true;
+      withChannel(true);
+      act(() => root.render(<RemoteDesktopScreen />));
+      await connect();
+      const nativeEvent = (type: string, attemptId: string, extra = {}) =>
+        act(async () => fixture.nativeMessage!({ nativeEvent: { data: JSON.stringify({
+          type, epoch: "lease", attemptId, ...extra,
+        }) } }));
+      await nativeEvent("iceConfig", "native-1");
+      await nativeEvent("streaming", "native-1");
+      let finish!: (sent: boolean) => void;
+      fixture.nativeRequest.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+      await release();
+      const pending = fixture.nativeRequest.mock.calls.at(-1)![0] as { id: string };
+      await nativeEvent("iceConfig", "native-2");
+      fixture.invoke.mockClear();
+      fixture.post.mockClear();
+      await act(async () => finish(false));
+      await nativeEvent("channelReply", "native-1", { id: pending.id, ok: true, result: { controlling: false } });
+      expect(sent().some((m) => m.type === "channelRequest")).toBe(false);
+      expect(relayedControl()).toEqual([]);
     });
 
     it("prefers the native receiver on iOS and falls back to the WebView", async () => {
@@ -5268,6 +5321,26 @@ describe("remote desktop controls", () => {
       ).toHaveLength(1);
     },
   );
+  // Unit regression: a fallback frame still in flight can fail after WebRTC
+  // recovers. That obsolete failure must not tear down the live lease.
+  it("keeps recovered video when an earlier screenshot request fails", async () => {
+    const original = fixture.invoke.getMockImplementation()!;
+    let rejectFrame!: (cause: unknown) => void;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "frame"
+        ? new Promise((_resolve, reject) => { rejectFrame = reject; })
+        : original(...args),
+    );
+    await connect();
+    await act(async () => vi.advanceTimersByTimeAsync(350));
+    await act(async () => fixture.message!({ nativeEvent: {
+      data: JSON.stringify({ type: "streaming", epoch: "lease" }),
+    } }));
+    await act(async () => rejectFrame(Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" })));
+    expect(requests().filter((request) => request.op === "stop")).toEqual([]);
+    expect(requests().filter((request) => request.op === "start")).toHaveLength(1);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
   it("measures screenshot payloads separately and clears frame time when frames stop", async () => {
     const original = fixture.invoke.getMockImplementation()!;
     fixture.invoke.mockImplementation((...args) =>
@@ -7136,6 +7209,39 @@ describe("remote desktop controls", () => {
     await act(async () => root.render(<RemoteDesktopScreen />));
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     await connect(); // Even a late WebView ready event cannot re-enter.
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+  });
+  // Unit: the shared relay may reconnect while this lease's video/control
+  // channel remains healthy. Old hosts and screenshot-only sessions still pause.
+  it.each([true, false])("preserves live media during signaling recovery only with host support=%s", async (supported) => {
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      return args[2][0].op === "capabilities"
+        ? { ...result, channelRequests: true, signalingContinuity: supported }
+        : result;
+    });
+    await connect();
+    await act(async () => fixture.message!({ nativeEvent: {
+      data: JSON.stringify({ type: "streaming", epoch: "lease" }),
+    } }));
+    fixture.status = "offline";
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    if (!supported) {
+      expect(requests().some((r) => r.op === "stop")).toBe(true);
+      return;
+    }
+    for (let i = 0; i < 14; i++) {
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      const message = sent().filter((m) => m.type === "channelRequest" && m.request.op === "heartbeat").at(-1);
+      expect(message).toBeDefined();
+      await act(async () => fixture.message!({ nativeEvent: { data: JSON.stringify({
+        type: "channelReply", epoch: "lease", id: message.id, ok: true, result: { controlling: true },
+      }) } }));
+    }
+    expect(requests().some((r) => r.op === "stop")).toBe(false);
+    fixture.status = "online";
+    await act(async () => root.render(<RemoteDesktopScreen />));
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
   });
   it("automatically resumes after network loss and keeps view-only preference", async () => {

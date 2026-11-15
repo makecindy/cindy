@@ -267,6 +267,7 @@ export class RemoteDesktopController {
         sequence: number;
         authenticationSession: string | undefined;
         backgroundViewing?: boolean;
+        mediaHeartbeatAt?: number;
         clipboardSync?: boolean;
         hostMute?: boolean;
         lockOnExit?: boolean;
@@ -441,17 +442,18 @@ export class RemoteDesktopController {
       void this.stop(undefined, undefined, 'heartbeat-expired');
     }
   }
-  /** Losing the signaling socket is expected while the phone shows PiP.
-   * Only an authorized, view-only presentation may outlive it, and only while
-   * the media channel keeps renewing the existing bounded lease. */
+  /** Signaling loss is not media loss. Keep only a live independent channel
+   * (or the existing view-only presentation); tick still enforces authorization
+   * and the unchanged lease deadline. Media pongs alone never renew control. */
   signalingLost(peer?: string): void {
     this.tick();
     const active = this.active;
     if (
       active &&
       (!peer || active.peer === peer) &&
-      active.backgroundViewing &&
-      !active.controlling
+      ((active.backgroundViewing && !active.controlling) ||
+        (active.mediaHeartbeatAt !== undefined &&
+          this.now() - active.mediaHeartbeatAt < REMOTE_DESKTOP_LEASE_MS))
     )
       return;
     this.stop(peer, undefined, peer ? 'peer-offline' : 'signaling-lost');
@@ -839,9 +841,12 @@ export class RemoteDesktopController {
   /** Only the trusted capture renderer may forward live DataChannel pongs. */
   viewHeartbeat(lease: string): void {
     this.tick();
-    if (this.active?.lease === lease && this.active.backgroundViewing && !this.active.controlling) {
-      this.active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
-      this.active.diagnostics.heartbeats.add({ receivedAt: this.now(), result: 'media-accepted' });
+    const active = this.active;
+    if (active?.lease !== lease) return;
+    active.mediaHeartbeatAt = this.now();
+    if (active.backgroundViewing && !active.controlling) {
+      active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
+      active.diagnostics.heartbeats.add({ receivedAt: this.now(), result: 'media-accepted' });
     }
   }
   /** Also used by the exact capture renderer's DataChannel bridge. */
@@ -1398,7 +1403,7 @@ export class RemoteDesktopController {
         if (request.lockOnExit !== undefined && !active.handoff && !active.screen)
           active.lockOnExit = request.lockOnExit;
         active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
-        active.diagnostics.heartbeats.add({ receivedAt: this.now(), result: 'relay-accepted' });
+        active.diagnostics.heartbeats.add({ receivedAt: this.now(), result: 'request-accepted' });
         {
           // A device screen turns (by the viewer, the device or an app): the
           // viewer lays the picture out at the shape it actually shows.

@@ -11,6 +11,8 @@ import {
 /** Additive, same-account business channel. Never broadcast screen data or input. */
 export const REMOTE_DESKTOP_CHANNEL = "device-link:remote-desktop:v1";
 export const REMOTE_DESKTOP_LEASE_MS = 12_000;
+/** Leave time for the next 3s renewal tick inside the unchanged lease. */
+export const REMOTE_DESKTOP_HEARTBEAT_TIMEOUT_MS = 5_000;
 /** Human inactivity, independent of transport heartbeats. Zero disables it. */
 export const REMOTE_DESKTOP_IDLE_MINUTES = [0, 1, 5, 10, 15, 30] as const;
 export const REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES = 5;
@@ -243,6 +245,8 @@ export interface RemoteDesktopCapabilities {
    * send them otherwise: older hosts end the session on unknown channel data.
    */
   channelRequests?: boolean;
+  /** Accepts heartbeats over input-v1 and retains live media through signaling loss. */
+  signalingContinuity?: boolean;
   /** Display changes requested with `keepVideo` may keep the live video stream. */
   liveDisplaySwitch?: boolean;
   /**
@@ -805,6 +809,7 @@ export function parseRemoteDesktopRequest(
  */
 export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
   "control",
+  "heartbeat",
   "presentation",
   "hostMute",
   "privacyScreen",
@@ -818,6 +823,14 @@ export const REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS = 64;
 /** Fits one SCTP message on every shipped receiver. */
 export const REMOTE_DESKTOP_CHANNEL_MAX_BYTES = 32_768;
 export const REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS = 8_000;
+
+export function remoteDesktopChannelTimeoutMs(
+  request: RemoteDesktopRequest,
+): number {
+  return request.op === "heartbeat"
+    ? REMOTE_DESKTOP_HEARTBEAT_TIMEOUT_MS
+    : REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS;
+}
 
 export function isRemoteDesktopChannelRequest(
   request: RemoteDesktopRequest,

@@ -68,7 +68,7 @@ it('records bounded received heartbeats and the unchanged expiration deadline wi
     session: createHash('sha256').update(lease).digest('hex').slice(0, 16),
   });
   expect(data.heartbeats).toHaveLength(8);
-  expect(data.heartbeats[0]).toEqual({ receivedAt: 10000, result: 'relay-accepted' });
+  expect(data.heartbeats[0]).toEqual({ receivedAt: 10000, result: 'request-accepted' });
   expect(JSON.stringify(data)).not.toContain(lease);
   expect(JSON.stringify(data)).not.toContain('phone');
 });
@@ -283,7 +283,43 @@ describe('remote desktop authority and lifecycle', () => {
     expect(h.deps.stopVideo).toHaveBeenCalledOnce();
   });
 
-  it('does not preserve foreground control or revoked presentations when signaling disappears', async () => {
+  // Unit: a relay probe reconnect must not end an independently live media
+  // channel. Keep the original lease deadline; pongs alone cannot renew control.
+  it.each([10_000, 40_000])('retains active media across %d ms of signaling loss', async (duration) => {
+    const h = harness();
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    for (let elapsed = 0; elapsed < duration; elapsed += 2_000) {
+      h.controller.viewHeartbeat(lease);
+      h.controller.signalingLost('phone');
+      h.controller.signalingLost();
+      expect(h.deps.stopVideo).not.toHaveBeenCalled();
+      await h.controller.request('phone', { op: 'heartbeat', lease });
+      h.advance(2_000);
+    }
+    // A healthy media ping cannot authorize a controlling lease indefinitely.
+    for (let i = 0; i < 6; i++) {
+      h.advance(2_000);
+      h.controller.viewHeartbeat(lease);
+    }
+    expect(h.deps.stopVideo).toHaveBeenCalledOnce();
+  });
+
+  it.each(['revoke', 'stop'] as const)('ends retained foreground media on explicit %s', async (reason) => {
+    const h = harness();
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    h.controller.viewHeartbeat(lease);
+    h.controller.signalingLost('phone');
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+    if (reason === 'revoke') {
+      h.revoke();
+      h.controller.viewHeartbeat(lease);
+    } else await h.controller.request('phone', { op: 'stop', lease });
+    expect(h.deps.stopVideo).toHaveBeenCalledOnce();
+  });
+
+  it('does not preserve unproven foreground media or revoked presentations when signaling disappears', async () => {
     const foreground = harness();
     const { lease } = await foreground.start();
     await foreground.controller.request('phone', { op: 'control', lease, enabled: true });

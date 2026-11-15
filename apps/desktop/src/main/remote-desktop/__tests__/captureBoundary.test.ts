@@ -964,7 +964,7 @@ it('uses native Hyprland capture for video and relay without opening a portal pi
   expect(h.hyprlandStop).toHaveBeenCalled();
 });
 
-it('authorizes channel requests exactly like the relay and only for small control ops', async () => {
+it.each(['control', 'heartbeat'] as const)('authorizes channel %s requests exactly like the relay', async (op) => {
   const settings = await import('../../device-link/settings-store.desktop');
   const config = {
     remoteDesktopEnabled: true,
@@ -976,7 +976,7 @@ it('authorizes channel requests exactly like the relay and only for small contro
   vi.spyOn(screen, 'getAllDisplays').mockReturnValue([
     { id: 1, label: 'Main', size: { width: 1920, height: 1080 } },
   ] as any);
-  expect((await h.deps.capabilities()).channelRequests).toBe(true);
+  expect(await h.deps.capabilities()).toMatchObject({ channelRequests: true, signalingContinuity: true });
   const pending = offer();
   h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
   await flush();
@@ -985,7 +985,9 @@ it('authorizes channel requests exactly like the relay and only for small contro
   h.controllerState = { peer: 'phone', controlling: true };
   h.controllerRequest.mockResolvedValue({ controlling: true });
   const channel = h.handlers.get(DESKTOP_LOCAL.CHANNEL_REQUEST);
-  const control = { op: 'control', lease: h.lease, enabled: true };
+  const control = op === 'control'
+    ? { op, lease: h.lease, enabled: true }
+    : { op, lease: h.lease };
   await expect(channel(event(), h.lease, control)).resolves.toEqual({
     ok: true,
     result: { controlling: true },

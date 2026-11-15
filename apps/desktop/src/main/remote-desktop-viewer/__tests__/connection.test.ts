@@ -825,11 +825,11 @@ describe('remembered viewer resolution', () => {
 });
 
 describe('requests carried by the viewer window’s media data channel', () => {
-  function channelFixture(channelRequests = true) {
+  function channelFixture(channelRequests = true, signalingContinuity = false) {
     const relay = vi.fn(
       async (_target: string, message: RemoteDesktopRequest, check: () => void) => {
         check();
-        if (message.op === 'capabilities') return { channelRequests, clipboardText: true };
+        if (message.op === 'capabilities') return { channelRequests, signalingContinuity, clipboardText: true };
         if (message.op === 'start') return { lease: 'lease', controlling: false };
         if (message.op === 'control') return { controlling: message.enabled };
         return { ok: true };
@@ -912,6 +912,17 @@ describe('requests carried by the viewer window’s media data channel', () => {
     f.refuse();
     await f.connection.request(f.generation, { op: 'displayModes', lease: 'lease' });
     expect(relayed(f.relay, 'displayModes')).toBe(2);
+  });
+
+  it('carries heartbeats only after the host advertises signaling continuity', async () => {
+    const f = channelFixture(true, true);
+    await f.start();
+    const heartbeat = f.connection.request(f.generation, { op: 'heartbeat', lease: 'lease' });
+    await vi.waitFor(() => expect(f.carried).toHaveLength(1));
+    expect(f.carried[0].request).toMatchObject({ op: 'heartbeat', lease: 'lease' });
+    f.reply(0, { kind: 'result', value: { controlling: false } });
+    await expect(heartbeat).resolves.toMatchObject({ ok: true });
+    expect(relayed(f.relay, 'heartbeat')).toBe(0);
   });
 
   it('never routes requests outside the channel list or to a host without support', async () => {
