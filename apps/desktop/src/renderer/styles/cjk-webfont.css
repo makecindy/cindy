@@ -11,9 +11,9 @@
 
    The package only exports "." (index.css), so the per-weight files are
    referenced by path, like the punctuation faces in globals.css. The per-weight
-   files carry the same @font-face rules as index.css and no :lang() rule, so
-   dependency-patches/harmonyos-sans-sc-webfont-splitted.patch is not needed
-   here. Keep the package version exact-pinned. */
+   files carry the same @font-face rules as index.css but not its :lang() rule
+   that overrides font-family, so the package needs no patch as long as
+   index.css is never imported. Keep the package version exact-pinned. */
 @import '../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular.css';
 @import '../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Medium.css';
 @import '../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Semibold.css';

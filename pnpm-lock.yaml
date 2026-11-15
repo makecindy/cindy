@@ -19,14 +19,13 @@ overrides:
   builder-util-runtime: ^9.7.0
 
 patchedDependencies:
-  '@expo/ui@58.0.27': dce49e0cd10d199dc33d24ea09941255f9d3f38d6d6b23cae02afc907a81d943
   '@expo/cli@58.1.19': bf44a5f353700b074164286e0005bf9d5f218a067b6639b5c6a6fb8a1e056298
+  '@expo/ui@58.0.27': dce49e0cd10d199dc33d24ea09941255f9d3f38d6d6b23cae02afc907a81d943
   '@terrazzo/parser@2.7.1': c79c6d6f1161668e6081ada2140d622114beeede90e0d53883a0661c0e10138e
   expo-image@58.0.18: 46725ea274130be1df9de144759f1febf5a92bbf85cd36919059c16de2f7469c
   expo-modules-core@58.0.30: 1a53965ceba6ed84ab514b4de51ccbaab45a9492be23de1f14843dd11826c353
   expo-paste-input@0.2.2: 7125922aa9772f1ac949d034fe120e8837c3708fe6912e1aec5db0d3c5ed91ae
   expo-router@58.0.30: 611a9b0644099d0a9725be517184f1b9e7d96ad5058c8445d90cc106012afebe
-  harmonyos-sans-sc-webfont-splitted: 272e3ded46880ee2f9eaff39327b8465de6df4072271de03caf73950e6e57822
   react-native-gesture-handler@3.3.0: 39510e7ffb1eb4c4bac3104f55f7df20a870df790af35c9773f309e3308dca63
   react-native-screens@4.30.1: 476334336418f46357c772c57f5fc6b535f76092a64beb479b1c833e64ae40f2
   react-native-uitextview@2.2.0: 0fd5ae94e21c0ec89ce719a90730f2660957ba45260d4ceaba10dd49c22d1909
@@ -414,7 +413,7 @@ importers:
         version: 4.0.3
       harmonyos-sans-sc-webfont-splitted:
         specifier: 1.1.0
-        version: 1.1.0(patch_hash=272e3ded46880ee2f9eaff39327b8465de6df4072271de03caf73950e6e57822)(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)
+        version: 1.1.0(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)
       highlight.js:
         specifier: ^11.11.1
         version: 11.11.1
@@ -19888,7 +19887,7 @@ snapshots:
 
   hachure-fill@0.5.2: {}
 
-  harmonyos-sans-sc-webfont-splitted@1.1.0(patch_hash=272e3ded46880ee2f9eaff39327b8465de6df4072271de03caf73950e6e57822)(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2):
+  harmonyos-sans-sc-webfont-splitted@1.1.0(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2):
     dependencies:
       cn-font-split: 6.0.3(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)
     transitivePeerDependencies:

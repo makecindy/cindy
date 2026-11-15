@@ -28,7 +28,6 @@ overrides:
   "@esbuild-kit/core-utils>esbuild": ^0.25.0
   builder-util-runtime: ^9.7.0
 patchedDependencies:
-  harmonyos-sans-sc-webfont-splitted: dependency-patches/harmonyos-sans-sc-webfont-splitted.patch
   react-native@0.85.3: dependency-patches/react-native@0.85.3.patch
   react-native-uitextview@2.2.0: dependency-patches/react-native-uitextview@2.2.0.patch
   expo-paste-input@0.2.2: dependency-patches/expo-paste-input@0.2.2.patch
