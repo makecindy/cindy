@@ -259,7 +259,7 @@ vi.mock('../../utils/ipcValidate', () => ({
     throw new Error('PERMISSION_DENIED');
   },
 }));
-import { registerRemoteDesktopIpc } from '../index';
+import { registerRemoteDesktopIpc, requestRemoteDesktop } from '../index';
 import { PrivacyScreen } from '../privacyScreen';
 const event = (owner = h.owner) => ({ sender: owner, senderFrame: owner.mainFrame });
 const flush = async () => {
@@ -993,7 +993,11 @@ it.each(['control', 'heartbeat'] as const)('authorizes channel %s requests exact
     result: { controlling: true },
   });
   // The lease owner is the authority, never anything the viewer claims.
-  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', control);
+  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', control, 'media');
+  // Relay payloads cannot label themselves as media; only the trusted IPC can.
+  const relayed = { ...control, source: 'media' };
+  await requestRemoteDesktop('phone', relayed);
+  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', relayed, 'relay');
   h.controllerRequest.mockClear();
   for (const [value, error] of [
     [{ op: 'start', displayId: '1' }, 'INVALID_REQUEST'],

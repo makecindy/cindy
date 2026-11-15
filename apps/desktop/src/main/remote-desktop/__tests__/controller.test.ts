@@ -290,11 +290,10 @@ describe('remote desktop authority and lifecycle', () => {
     const { lease } = await h.start();
     await h.controller.request('phone', { op: 'control', lease, enabled: true });
     for (let elapsed = 0; elapsed < duration; elapsed += 2_000) {
-      h.controller.viewHeartbeat(lease);
+      await h.controller.request('phone', { op: 'heartbeat', lease }, 'media');
       h.controller.signalingLost('phone');
       h.controller.signalingLost();
       expect(h.deps.stopVideo).not.toHaveBeenCalled();
-      await h.controller.request('phone', { op: 'heartbeat', lease });
       h.advance(2_000);
     }
     // A healthy media ping cannot authorize a controlling lease indefinitely.
@@ -305,11 +304,25 @@ describe('remote desktop authority and lifecycle', () => {
     expect(h.deps.stopVideo).toHaveBeenCalledOnce();
   });
 
+  it.each(['expired', 'revoked', 'wrong-owner', 'old-lease'] as const)(
+    'rejects %s media heartbeats before recording any continuity proof', async (reason) => {
+      const h = harness();
+      const { lease } = await h.start();
+      if (reason === 'expired') h.advance(12_000);
+      if (reason === 'revoked') h.revoke();
+      await expect(h.controller.request(reason === 'wrong-owner' ? 'other' : 'phone', {
+        op: 'heartbeat', lease: reason === 'old-lease' ? 'old' : lease,
+      }, 'media')).rejects.toThrow();
+      h.controller.signalingLost('phone');
+      expect(h.deps.stopVideo).toHaveBeenCalled();
+    },
+  );
+
   it.each(['revoke', 'stop'] as const)('ends retained foreground media on explicit %s', async (reason) => {
     const h = harness();
     const { lease } = await h.start();
     await h.controller.request('phone', { op: 'control', lease, enabled: true });
-    h.controller.viewHeartbeat(lease);
+    await h.controller.request('phone', { op: 'heartbeat', lease }, 'media');
     h.controller.signalingLost('phone');
     expect(h.deps.stopVideo).not.toHaveBeenCalled();
     if (reason === 'revoke') {
@@ -323,6 +336,8 @@ describe('remote desktop authority and lifecycle', () => {
     const foreground = harness();
     const { lease } = await foreground.start();
     await foreground.controller.request('phone', { op: 'control', lease, enabled: true });
+    // A payload field cannot forge the trusted media transport argument.
+    await foreground.controller.request('phone', { op: 'heartbeat', lease, source: 'media' });
     foreground.controller.signalingLost('phone');
     expect(foreground.deps.stopVideo).toHaveBeenCalledOnce();
     const revoked = harness();

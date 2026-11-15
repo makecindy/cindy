@@ -744,7 +744,11 @@ async function ice(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceRe
   return parseDesktopIceReply(result);
 }
 
-export async function requestRemoteDesktop(peer: string, value: unknown): Promise<unknown> {
+export async function requestRemoteDesktop(
+  peer: string,
+  value: unknown,
+  source: 'relay' | 'media' = 'relay',
+): Promise<unknown> {
   const settings = readDeviceLinkSettings();
   if (
     !settings.remoteControlEnabled ||
@@ -780,8 +784,8 @@ export async function requestRemoteDesktop(peer: string, value: unknown): Promis
     typeof value === 'object' &&
     'op' in value &&
     value.op === 'credential'
-    ? remoteCredentialHost.request(peer, value, (body) => remoteDesktop.request(peer, body))
-    : remoteDesktop.request(peer, value);
+    ? remoteCredentialHost.request(peer, value, (body) => remoteDesktop.request(peer, body, source))
+    : remoteDesktop.request(peer, value, source);
 }
 
 /**
@@ -1585,7 +1589,7 @@ export function registerRemoteDesktopIpc(
           throw new Error('INVALID_REQUEST');
         const owner = remoteDesktop.state;
         if (!owner || !remoteDesktop.hasLease(lease)) throw new Error('DESKTOP_LEASE_EXPIRED');
-        return { ok: true, result: await requestRemoteDesktop(owner.peer, request) };
+        return { ok: true, result: await requestRemoteDesktop(owner.peer, request, 'media') };
       } catch (error) {
         // Business refusals are replies, not IPC failures: no error log per tap.
         return { ok: false, error: desktopErrorCode(error) };

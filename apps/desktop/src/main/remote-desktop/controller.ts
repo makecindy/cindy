@@ -881,7 +881,7 @@ export class RemoteDesktopController {
     // helper cannot repeatedly restart itself after its ready handshake.
     if (generation === this.controlGeneration) this.inputRecoveryUsed = false;
   }
-  async request(peer: string, raw: unknown): Promise<unknown> {
+  async request(peer: string, raw: unknown, source: 'relay' | 'media' = 'relay'): Promise<unknown> {
     const request = parseRemoteDesktopRequest(raw);
     this.tick();
     if (request.op === 'capabilities') {
@@ -940,7 +940,7 @@ export class RemoteDesktopController {
         ? this.withControl(peer, this.active, lease)
         : lease;
     }
-    return this.leaseRequest(peer, request);
+    return this.leaseRequest(peer, request, source);
   }
   private async start(
     peer: string,
@@ -1169,6 +1169,7 @@ export class RemoteDesktopController {
       ReturnType<typeof parseRemoteDesktopRequest>,
       { op: 'capabilities' | 'permissions' | 'screens' | 'start' }
     >,
+    source: 'relay' | 'media',
   ): Promise<unknown> {
     const active = this.require(peer, request.lease);
     if (active.handoff && !HANDOFF_WINDOW_OPS.has(request.op))
@@ -1390,6 +1391,9 @@ export class RemoteDesktopController {
         });
       }
       case 'heartbeat':
+        // Set only after the same owner/auth/lease checks as relay heartbeats.
+        // Foreground viewers send these on input-v1 but reserve viewPing for PiP.
+        if (source === 'media') active.mediaHeartbeatAt = this.now();
         if (
           request.idleTimeoutMinutes !== undefined &&
           !active.handoff &&
