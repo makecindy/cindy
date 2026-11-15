@@ -192,6 +192,15 @@ test('unsupported web actions cannot report a successful save or execution', asy
   assert.equal(b.calls.length, 0);
 });
 
+// Regression: the generic read fallback answered `modelGroups.get()` with `null`;
+// the renderer stored it as the model group config and the model picker crashed
+// reading `config.routes`. Minimal input: one call, which must reject.
+test('the model groups read rejects instead of answering a null config', async () => {
+  const b = browser();
+  await assert.rejects(b.api.modelGroups.get(), { code: 'HOST_CHANNEL_UNSUPPORTED' });
+  assert.equal(b.calls.length, 0);
+});
+
 // Real-browser regression: opening a task and finishing a reply invoked these
 // desktop presentation hooks without awaiting them, causing unhandled rejections.
 // No native window or notification surface exists in this client; settings writes

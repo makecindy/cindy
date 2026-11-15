@@ -1,7 +1,6 @@
 import { createMcpAppsService } from './service.js';
 import { extractIpcError } from '../../shared/ipcError.js';
 import { pagePermissionGrants, onPagePermissionSessionChanged } from './pagePermissions.js';
-import { getDesktopMcpToolApprovalPolicy } from '../maker-host/mcp-tool-approval-policy.js';
 import { createPluginFileAccess } from './pluginFileAccess.js';
 import { configurePluginAppearanceFiles } from './appearance.js';
 import { mediaTypeForLibraryPath } from '../cindy-brain/runtime/ghostFiles.js';
@@ -21,7 +20,6 @@ import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { GHOST_HANDOFF_MAX_BYTES_PER_FILE } from '../../shared/ghost.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { t } from '../i18n.desktop.js';
 import { saveAppDownload } from './downloadFile.js';
 import { randomUUID } from 'node:crypto';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
@@ -112,28 +110,6 @@ export function registerMcpAppsIpc(
       }
     },
     pluginFiles,
-    authorizeGlobalTool: async (_sessionId, tool, args, signal, source) => {
-      signal.throwIfAborted();
-      const owner = currentOwner();
-      const config = source ? readAppServer(source.serverId) : undefined;
-      if (!owner || !config?.plugin) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
-      config.plugin.assertCurrent();
-      const call = { ghost_id: config.plugin.ghostId ?? config.plugin.instance,
-        ...(config.plugin.namespace !== undefined ? { namespace: config.plugin.namespace } : {}), tool: tool.name, args };
-      if (getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_call', toolParams: call }) === 'auto-approve') return;
-      const match = /^renderer:(\d+)$/.exec(source?.caller ?? '');
-      const contents = match ? webContents.fromId(Number(match[1])) : undefined;
-      const window = contents ? BrowserWindow.fromWebContents(contents) : null;
-      if (!window || window.isDestroyed()) throw new Error('MCP_APP_OWNER_ONLY');
-      const answer = await dialog.showMessageBox(window, { type: 'question', title: source!.title,
-        message: tool.title ?? tool.name, detail: JSON.stringify(args, null, 2),
-        buttons: [t('common.cancel'), t('agentIsland.native.allowOnce')], defaultId: 0, cancelId: 0 });
-      signal.throwIfAborted();
-      if (owner !== currentOwner()) throw new Error('MCP_APP_OWNER_CHANGED');
-      config.plugin.assertCurrent();
-      if (answer.response !== 1) throw new Error('MCP_APP_TOOL_DENIED');
-      return;
-    },
     disposeDocument: removeMcpAppDocument,
   });
   setMcpAppsHost(host);
@@ -273,7 +249,7 @@ export function registerMcpAppsIpc(
             } else throw new Error('MCP_APP_INVALID_REQUEST');
           } else if (action.input !== undefined || action.requestId !== undefined) throw new Error('MCP_APP_INVALID_REQUEST');
           signal.throwIfAborted();
-          const result = await host.callPluginAction(caller, sessionId, { id: action.id, serverId: entry.config.id,
+          const result = await host.callPluginAction(caller, sessionId, { id: action.id, config: entry.config,
             title: declaration.title, assertCurrent, ...(attachments ? { attachments } : {}) }, declaration.tool, args, signal);
           return position === 'composer.attachment'
             ? await preparePluginAttachmentResult(action.instanceId, result, { access: pluginFiles, stage, cleanup, assertCurrent, signal }) : result;
