@@ -280,7 +280,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'dri
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
-import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
+import { createTurnModelAttribution } from './turnModelAttribution.js';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
@@ -18941,48 +18941,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         patchMessageAgentMeta(sessionId, clientId, { piEntryId }),
       ),
     beforeDispatchDirectUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
-    onModelDispatched: recordDispatchedModelHolder = (sessionId, clientId) => {
-      const live = maker.getSession(sessionId);
-      if (!live) return;
-      const current: TurnModelIdentity = {
-        agentKind: live.agentKind, model: live.model, providerId: getSessionProvider(sessionId),
-      };
-      const owner = captureDataOwnerBroadcastScope();
-      const db = getDbClient().drizzle;
-      const createdAt = Date.now();
-      void enqueueDurableWrite(`turn-model:${sessionId}:${clientId}`, async () => {
-        if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
-        const [input] = await db.select({ content: messages.content, meta: messages.agentMeta }).from(messages)
-          .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
-            eq(messages.role, 'user'), isNull(messages.rewindAt))).limit(1);
-        if (!input) return;
-        await recordTurnModelChange(current, {
-          input: { content: input.content, autoResume: isAutoResumeUserMessage(input.meta ? JSON.parse(input.meta) : null) },
-          readPrevious: async () => {
-            const [previous] = await db.select({ meta: messages.agentMeta }).from(messages)
-              .innerJoin(sessions, eq(sessions.id, messages.sessionId))
-              .where(and(
-                eq(messages.sessionId, sessionId), eq(messages.role, 'user'),
-                sql`${messages.clientId} <> ${clientId}`, isNull(messages.rewindAt),
-                or(isNull(sessions.clearedAt), sql`${messages.createdAt} > ${sessions.clearedAt}`),
-                sql`CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.executionModel') END IS NOT NULL`,
-              )).orderBy(desc(messages.createdAt), desc(sql`${messages}.rowid`)).limit(1);
-            return previous?.meta
-              ? (JSON.parse(previous.meta) as { executionModel?: TurnModelIdentity }).executionModel ?? null
-              : null;
-          },
-          record: async (executionModel) => isDataOwnerBroadcastScopeCurrent(owner) &&
-            await patchMessageAgentMeta(sessionId, clientId, { executionModel }),
-          publish: async (modelChange) => {
-            if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
-            await createDbMessage(sessionId, {
-              clientId: `model-change:${clientId}`, role: 'assistant', content: '',
-              agentMeta: { modelChange }, agentKind: makerToDbAgentKind(current.agentKind), createdAt,
-            });
-          },
-        });
-      }).catch((error) => log.warn('turn model attribution failed', { sessionId, error }));
-    },
+    onModelDispatched: recordDispatchedModelHolder = createTurnModelAttribution({
+      maker, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
+      enqueueDurableWrite, patchMessageAgentMeta, createDbMessage, log,
+    }),
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
       assertTaskPromptCurrent(sessionId);
       const remote = isDeviceLinkInvoke();
