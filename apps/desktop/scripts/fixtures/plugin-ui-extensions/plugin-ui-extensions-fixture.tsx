@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import manifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/ghost.json';
-import { getApprovedGhostHostUi, ghostHostUiApprovalTokens, type InstalledGhost } from '../../../src/shared/ghost';
+import { getApprovedGhostHostUi, type InstalledGhost } from '../../../src/shared/ghost';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 import { PluginUiProvider, PluginUiSlotControls, PluginUiSidebarSections, readPluginUiEntries } from '../../../src/renderer/cindy-brain/PluginUiContributions';
 import { PluginUiCompletionBridge, type PluginUiCompletionResult } from '../../../src/renderer/cindy-brain/PluginUiCompletionBridge';
@@ -23,8 +23,7 @@ if (!crypto.randomUUID) {
   crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
 }
 const ghost: InstalledGhost = { manifest: manifest as unknown as InstalledGhost['manifest'], enabled: true,
-  dir: '/fixture', approval: { state: 'approved', revision: 'fixture' }, uiCapabilityApproved: true };
-ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest);
+  dir: '/fixture', approval: { state: 'approved', revision: 'fixture' } };
 const fields = getApprovedGhostHostUi(ghost)!.settings!;
 const pages = buildPluginSettingsPages([ghost]);
 const documents = buildPluginSettingsSearchDocuments(pages, '插件设置');
@@ -58,6 +57,7 @@ function Scene() {
   const sections = readPluginUiEntries('sidebar.section');
   const titlebar = readPluginUiEntries('window.titlebar');
   return <div className="flex h-full min-w-0 bg-[var(--settings-bg)] text-[var(--text-primary)]">
+    <p className="pointer-events-none fixed right-2 top-2 z-50 text-12 text-[var(--text-secondary)]">验收样本，非产品默认界面</p>
     <aside className="flex w-60 shrink-0 flex-col gap-5 border-r border-[var(--border-default)] p-4">
       {entries.length > 0 && <PluginUiSlotControls entries={entries} appearance="navigation" />}
       {sections.length > 0 && <PluginUiSidebarSections entries={sections} sessionId={null} />}

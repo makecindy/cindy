@@ -2,7 +2,7 @@ import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { declaredGhostHostToolGroups, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
-import { getPluginHostUi, hostUiApprovalSubjects, type GhostHostUi } from '@cindy/plugin-protocol';
+import { getPluginHostUi, hostUiApprovalSubjects, HOST_UI_CAPABILITIES, isHostUiPosition, type GhostHostUi } from '@cindy/plugin-protocol';
 import { PLUGIN_APPEARANCE_FIELDS } from '@cindy/plugin-protocol/appearance';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
@@ -1974,8 +1974,6 @@ export interface InstalledGhost {
   /** Independent Host consent for cross-task/companion target access. */
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
-  /** Exact Host UI permission projections shown by a supporting confirmation UI. */
-  approvedHostUi?: string[];
   /** Read-only remote management projection; never persisted as approval. */
   uiPromptSuppressed?: true;
   delegationCapabilityApproved?: true;
@@ -2267,36 +2265,20 @@ export function ghostHostUiPermissionItems(manifest: GhostManifest): GhostPermis
   })) : [];
 }
 
-export function ghostHostUiApprovalTokens(manifest: GhostManifest): string[] {
-  return ghostHostUiPermissionItems(manifest).map(ghostPermissionProjectionKey);
-}
-
-/** Receipt approval is independent of a declaration and of the original page grant. */
+/** Host UI follows the enabled installation's manifest, independently of legacy page approval. */
 export function getApprovedGhostHostUi(ghost: InstalledGhost): GhostHostUi | undefined {
-  if (ghost.approval.state !== 'approved') return;
+  if (!ghost.enabled || ghost.approval.state !== 'approved') return;
   const host = getPluginHostUi(ghost.manifest);
   if (!host) return;
-  const approved = new Set(ghost.approvedHostUi ?? []);
-  const keys = new Set(ghostHostUiPermissionItems(ghost.manifest)
-    .filter(item => approved.has(ghostPermissionProjectionKey(item))).map(item => item.key));
-  if (!keys.size) return;
-  const has = (kind: string, id: string) => keys.has(`ui:host:${kind}:${id}`);
-  return {
-    views: (host.views ?? []).filter(view => has('view', view.id)),
-    contributions: (host.contributions ?? []).filter(item => has('contribution', item.id) && (!item.view || has('view', item.view))),
-    commands: (host.commands ?? []).filter(command => has('command', command.id) && (!command.view || has('view', command.view))),
-    capabilities: (host.capabilities ?? []).filter(capability => has('capability', capability)),
-    ...(host.settings ? { settings: host.settings.filter(field => has('setting', field.id)) } : {}),
-    ...(host.appearance || host.capabilities?.includes('appearance') ? { appearance: {
-      fields: (host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS).filter(field => has('appearance', field)),
-      resources: (host.appearance?.resources ?? []).filter(resource => has('appearance-resource', resource.id)),
+  const projected = { ...host,
+    ...(host.contributions ? { contributions: host.contributions.filter(item => isHostUiPosition(item.position)) } : {}),
+    ...(host.capabilities ? { capabilities: host.capabilities.filter(capability => HOST_UI_CAPABILITIES.some(known => known === capability)) } : {}),
+    ...(host.appearance ? { appearance: { ...host.appearance,
+      ...(host.appearance.fields ? { fields: host.appearance.fields.filter(field => PLUGIN_APPEARANCE_FIELDS.some(known => known === field)) } : {}),
     } } : {}),
   };
-}
-
-export function ghostHostUiNeedsApproval(ghost: InstalledGhost): boolean {
-  const approved = new Set(ghost.approvedHostUi ?? []);
-  return ghostHostUiApprovalTokens(ghost.manifest).some(token => !approved.has(token));
+  return [projected.views, projected.contributions, projected.commands, projected.capabilities, projected.settings,
+    projected.appearance?.fields, projected.appearance?.resources].some(items => items?.length) ? projected : undefined;
 }
 
 export function ghostPermissionProjectionFingerprint(manifest: GhostManifest): string {
@@ -2953,7 +2935,14 @@ export function diffGhostPermissionItems(
   prev: GhostManifest,
   next: GhostManifest,
 ): GhostPermissionDiff {
-  const prevItems = ghostPermissionItems(prev);
+  return compareGhostPermissionItems(prev, next, ghostPermissionItems(prev));
+}
+
+function compareGhostPermissionItems(
+  prev: GhostManifest,
+  next: GhostManifest,
+  prevItems: GhostPermissionItem[],
+): GhostPermissionDiff {
   const nextItems = ghostPermissionItems(next);
   const prevKeys = new Set(prevItems.map((i) => i.key));
   const nextKeys = new Set(nextItems.map((i) => i.key));
@@ -3036,7 +3025,7 @@ export function diffInstalledGhostPermissionItems(
       mcpApps: installed.manifest.mcpApps && typeof installed.manifest.mcpApps === 'object'
         ? { ...installed.manifest.mcpApps as object,
           ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
-          host: getApprovedGhostHostUi(installed) }
+          host: undefined }
         : undefined,
       ...(installed.manifest.agent ? { agent: { ...installed.manifest.agent,
         hostTools: declaredGhostHostToolGroups(installed.manifest).filter(group => installed.approvedHostToolGroups?.includes(group)),
@@ -3046,7 +3035,10 @@ export function diffInstalledGhostPermissionItems(
       systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,
       tools: withoutUnapprovedAutoTools(installed),
     };
-    const diff = diffGhostPermissionItems(previous, next);
+    // Host declarations belong to the installed version, even when the legacy
+    // page grant is absent and its UI resources are omitted from that baseline.
+    const previousItems = [...ghostHostUiPermissionItems(installed.manifest), ...ghostPermissionItems(previous)];
+    const diff = compareGhostPermissionItems(previous, next, previousItems);
     // Only the historical official GitHub installation keeps its PAT -> gh fingerprint
     // compatibility. Other installations must explicitly approve using the shared login.
     const legacyGithub = installed.manifest.id === 'cindy-github' && installed.namespace == null &&

@@ -28,8 +28,9 @@ open 结果沿用现有 invokeTransfer gzip 协商，自建中转继续透明转
 尚未发布的本机插件界面增量在 v3 `mcpApps.host` 声明视图、位置、命令和能力，仍引用
 `mcpApps.ui.resources` 并复用标准 AppBridge。`open-resource` 仅本机支持真正的无任务来源；
 原远程操作继续要求真实任务，不扩大 device-link allowlist、relay 或 Mobile 原生能力。
-receipt v2 新增可选 `approvedHostUi`，只承认当前 Host 理解且确认界面实际展示过的主体；
-旧 receipt、旧页面批准及旧提示界面不自动授予新宿主操作，原工具和页面批准继续可用。
+Host UI 以整版安装/更新批准有效、已启用及当前 manifest 声明为准，不另存分项批准。
+旧 receipt 的 `approvedHostUi` 字段读到即忽略，不迁移、不删数据；旧页面批准与原工具审批保持不变。
+原生入口、具名页面工具及无任务全局工具不套用 Agent MCP 策略或调用时确认，仍校验归属、版本、声明与来源 ticket。
 原生控件订阅/状态沿现有管子与本机用途受限 IPC，消息正文不新增落库前查询。
 `message.menu` 复用贡献项的显式批准和原动作执行；只接菜单动作，关闭的菜单不成为状态消费者。
 作者契约与兼容范围见[插件界面扩展](../../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md)。

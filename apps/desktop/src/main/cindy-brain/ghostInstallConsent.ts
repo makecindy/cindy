@@ -16,8 +16,6 @@ import {
   declaredGhostTaskEventTopics,
   type GhostTaskEventTopic,
   declaredGhostControlPoints,
-  ghostHostUiApprovalTokens,
-  ghostPermissionProjectionKey,
   GHOST_CONTROL_POINTS,
   type GhostControlPointId,
   type GhostManifest,
@@ -41,7 +39,6 @@ export type GhostInstallConsentPrompt = ((
 ) => Promise<boolean>) & {
   /** Main-owned negotiation: legacy remote controllers cannot approve page capabilities. */
   uiCapabilityApproval?: boolean;
-  hostUiCapabilityApproval?: boolean;
 };
 
 export type GhostInstallConsentPolicy =
@@ -62,7 +59,7 @@ export type GhostInstallConsentPolicy =
 
 /** 求得的确认结论；随安装请求一路交到安装锁内复核。 */
 export type GhostInstallConsentDecision =
-  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true; hostUiCapabilityUnsupported?: true }
+  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true }
   /** 求确认时判定无需确认；落位前必须仍然无需确认。 */
   | { mode: 'unprompted' }
   | { mode: 'exempt'; reason: 'server-default-install' };
@@ -205,7 +202,6 @@ export async function obtainGhostInstallConsent(
   return {
     mode: 'confirmed',
     ...(policy.prompt.uiCapabilityApproval === false ? { uiCapabilityUnsupported: true as const } : {}),
-    ...(ghostHostUiApprovalTokens(manifest).length && policy.prompt.hostUiCapabilityApproval !== true ? { hostUiCapabilityUnsupported: true as const } : {}),
     ...(forced ? { forced: true as const } : {}),
     key: ghostInstallConsentKey(
       facts,
@@ -257,12 +253,4 @@ export function confirmedUiCapability(decision: GhostInstallConsentDecision, ins
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === 'ui:pages') ? decision.uiCapabilityUnsupported !== true : undefined;
-}
-
-export function confirmedHostUiPermissions(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): string[] {
-  if (decision.mode === 'exempt') return ghostHostUiApprovalTokens(next);
-  if (decision.mode !== 'confirmed' || decision.hostUiCapabilityUnsupported) return [];
-  const facts = evaluateGhostInstallConsent(installed, next);
-  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added ?? [];
-  return shown.filter(item => item.key.startsWith('ui:host:')).map(ghostPermissionProjectionKey);
 }
