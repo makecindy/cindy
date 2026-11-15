@@ -527,6 +527,10 @@ describe('2026-01-26 MCP Apps conformance against an independent local server', 
     expect(await f.peer.request('ui/request-display-mode', { mode: 'fullscreen' })).toEqual({
       mode: 'fullscreen',
     });
+    expect(await f.peer.request('ui/request-display-mode', { mode: 'inline' })).toEqual({
+      mode: 'inline',
+    });
+    await f.peer.request('ui/request-display-mode', { mode: 'fullscreen' });
     f.host.displayMode('renderer:conformance', 'task', f.document.viewId, 'inline');
     await vi.waitFor(() =>
       expect(f.peer.notifications.at(-1)).toEqual(

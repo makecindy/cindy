@@ -989,7 +989,8 @@ export class McpAppsHost {
           const modes = bridge.getAppCapabilities()?.availableDisplayModes ??
             context.availableDisplayModes ?? ['inline'];
           const mode =
-            modes.includes(params.mode) && view.context.availableDisplayModes?.includes(params.mode)
+            params.mode === 'inline' ||
+            (modes.includes(params.mode) && view.context.availableDisplayModes?.includes(params.mode))
               ? params.mode
               : (view.context.displayMode ?? 'inline');
           view.context = { ...view.context, displayMode: mode };
