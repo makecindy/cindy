@@ -449,6 +449,68 @@ try {
     console.log('PASS Claude context overflow recovery on the gateway through the production wiring: the key changed during the rebuild and the replay used the new key, carrying the summary once; no client error; the next message carries no summary');
   }
 
+  // ---- Idle runtime release, through the queue as main.ts wires it (idle-release.ts) ----
+  // An ordinary Claude task idle for its configured minutes (a test clock, no real wait) releases
+  // its Claude process; the next message resumes the same native session, whose history reaches
+  // the gateway.
+  {
+    const idleTask = 'claude-idle-release';
+    await new OwnerSessionStorage({ db: () => database }).create({ id: idleTask,
+      title: 'Idle release fixture', agentKind: 'claude-code', model: 'claude-sonnet-4-5', workDir: root });
+    await database.drizzle.update(sessions).set({ providerId: 'xd' }).where(eq(sessions.id, idleTask));
+    const hub = createEventHub();
+    const readSession = async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1))[0];
+    const clock = { monotonic: 0, wall: Date.now() };
+    const queue = createInputQueue({ getMaker: () => graph.maker, hub, readSession,
+      getOwner: getCurrentDbClientSnapshot,
+      persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) }),
+      markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
+      markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
+      readClaudeIdleMinutes: () => 30,
+      idleReleaseClock: { monotonic: () => clock.monotonic, wall: () => clock.wall },
+    });
+    const seen = [];
+    const unsubscribe = hub.subscribe(event => { if (event.sessionId === idleTask) seen.push(event); });
+    const doneCount = () => seen.filter(event => event.event?.type === 'done').length;
+    const until = async (predicate, what) => {
+      const deadline = Date.now() + 90_000;
+      // real-wait: the Claude process answers on its own schedule.
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
+    try {
+      await queue.enqueue(idleTask, { clientId: 'claude-idle-first', text: 'remember the word heron' });
+      await until(() => doneCount() === 1, 'the first turn');
+      const live = graph.maker.getSession(idleTask);
+      assert.ok(live?.sdkSessionId, 'the first turn has a native session');
+      const nativeId = live.sdkSessionId;
+      await queue.scanIdleRelease();
+      assert.equal(graph.maker.getSession(idleTask), live, 'not released before 30 idle minutes');
+      clock.monotonic += 31 * 60_000;
+      clock.wall = Date.now() + 31 * 60_000;
+      await queue.scanIdleRelease();
+      assert.equal(graph.maker.getSession(idleTask), undefined, 'released after 30 idle minutes');
+      const beforeNext = requests.length;
+      await queue.enqueue(idleTask, { clientId: 'claude-idle-second', text: 'now return synthetic complete' });
+      await until(() => doneCount() === 2, 'the resumed turn');
+      assert.equal(graph.maker.getSession(idleTask)?.sdkSessionId, nativeId, 'the next message resumes the same native session');
+      const resumed = requests.slice(beforeNext).filter(r => r.url.startsWith('/v1/messages') && !r.url.includes('count_tokens')
+        && /now return synthetic complete/.test(JSON.stringify(r.messages ?? [])));
+      assert.ok(resumed.length > 0, 'the resumed turn reached the gateway');
+      assert.match(JSON.stringify(resumed[0].messages), /remember the word heron/, 'the resumed request carries the first turn');
+    } finally {
+      unsubscribe();
+      await queue.dispose();
+      await graph.maker.closeSession(idleTask).catch(() => {});
+      const exitDeadline = Date.now() + 10_000;
+      // real-wait: the process exits on its own schedule.
+      while ((await childPids()).length > 0 && Date.now() < exitDeadline) await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    console.log('PASS Claude idle release through the production wiring: released after 30 idle minutes (test clock); the next message resumes the same native session with its history');
+  }
+
   // Neither proxy secret is written anywhere: logs, the CLI's home and config, the profile.
   const secrets = [proxy.inboundSecret(), proxy.gatewayInboundSecret()];
   let scanned = 0;

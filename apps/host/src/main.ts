@@ -128,6 +128,7 @@ import { createTaskTagService } from '../../desktop/src/main/localDb/ipc/taskTag
 import { executeConversationSearch } from '../../desktop/src/main/localDb/ipc/search.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../desktop/src/main/device-link/broadcast-tap.js';
 import { createInputQueue } from './agent/input-queue.mjs';
+import { readClaudeIdleMinutesFrom } from '../../desktop/src/main/maker-host/claudeIdleReleaseSettingsCore.js';
 import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
@@ -785,6 +786,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     if (makerMemory.isEnabled()) await makerMemory.enable();
     runtime.agents = [...agentGraph.agents];
     runtime.agentLane = currentGateway() ? 'gateway-key' : 'claude-subscription';
+    // Idle ordinary tasks release their runtimes from here on, as on the desktop (idle-release.ts).
+    inputQueue.startIdleRelease();
 
   }
   if (claudeBinary) {
@@ -958,6 +961,8 @@ const contextRecovery = createHostContextRecoveryWiring({
 });
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  // The profile root's claude-idle-release.json, which the desktop window reads too (read-only here).
+  readClaudeIdleMinutes: () => readClaudeIdleMinutesFrom(profileDir),
   pendingHandoff,
   ...contextRecovery,
   createAttachments: ({ assertCurrent }: { assertCurrent(): void }) => createHostAttachments({

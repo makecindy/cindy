@@ -592,6 +592,60 @@ try {
   // The desktop product system prompt reaches the real Codex request (runtimeConfigsCore.ts).
   assert.ok(requests.some(request => JSON.stringify(request.body).includes('You are Cindy, an open-source AI assistant.')),
     'Codex upstream request carries the Cindy product prompt');
+
+  // ---- Idle runtime release, through the queue as main.ts wires it (idle-release.ts) ----
+  // An ordinary task idle for 30 minutes (a test clock, no real wait) releases its native Codex
+  // runtime; the next message resumes the same native thread, whose history reaches the upstream.
+  {
+    const idleTask = 'idle-release-native-fixture';
+    await new OwnerSessionStorage({ db: () => database }).create({ id: idleTask,
+      title: 'Idle release fixture', agentKind: 'codex', model: 'fixture-model', workDir: root });
+    await database.drizzle.update(sessions).set({ providerId: 'cprov-fixture' }).where(eq(sessions.id, idleTask));
+    const clock = { monotonic: 0, wall: Date.now() };
+    const idleQueue = createInputQueue({ getMaker: () => graph.maker, hub, readSession,
+      getOwner: getCurrentDbClientSnapshot,
+      persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) }),
+      markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
+      markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
+      readClaudeIdleMinutes: () => 30,
+      idleReleaseClock: { monotonic: () => clock.monotonic, wall: () => clock.wall },
+    });
+    const turnDone = () => {
+      let timer, unsubscribe;
+      return new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('Idle release turn timed out')), 45_000);
+        unsubscribe = hub.subscribe(event => {
+          if (event.sessionId !== idleTask) return;
+          if (event.event?.type === 'done') resolve();
+          if (event.event?.type === 'error') reject(new Error(`Idle release turn failed: ${JSON.stringify(event.event.data)}`));
+        });
+      }).finally(() => { clearTimeout(timer); unsubscribe?.(); });
+    };
+    try {
+      let done = turnDone();
+      await idleQueue.enqueue(idleTask, { clientId: 'idle-first', text: 'remember the word heron' });
+      await done;
+      const live = graph.maker.getSession(idleTask);
+      assert.ok(live?.sdkSessionId, 'the first turn has a native thread');
+      const thread = live.sdkSessionId;
+      await idleQueue.scanIdleRelease();
+      assert.equal(graph.maker.getSession(idleTask), live, 'not released before 30 idle minutes');
+      clock.monotonic += 31 * 60_000;
+      clock.wall = Date.now() + 31 * 60_000;
+      await idleQueue.scanIdleRelease();
+      assert.equal(graph.maker.getSession(idleTask), undefined, 'released after 30 idle minutes');
+      const [row] = await database.drizzle.select().from(sessions).where(eq(sessions.id, idleTask)).limit(1);
+      assert.equal(row.sdkSessionId, thread, 'the task keeps its native thread');
+      const before = requests.length;
+      done = turnDone();
+      await idleQueue.enqueue(idleTask, { clientId: 'idle-second', text: 'return synthetic complete' });
+      await done;
+      assert.equal(graph.maker.getSession(idleTask)?.sdkSessionId, thread, 'the next message resumes the same native thread');
+      const resumed = JSON.stringify(requests.slice(before).map(request => request.body.input));
+      assert.match(resumed, /remember the word heron/, 'the resumed request carries the first turn');
+    } finally { await idleQueue.dispose(); }
+    console.log('PASS native Codex idle release through the production wiring: released after 30 idle minutes (test clock); the next message resumes the same native thread with its history');
+  }
   console.log('PASS the Codex upstream request carries the Cindy product system prompt');
   console.log('PASS native Codex + production Host: gateway and custom provider turns; key rotation during a live turn preserves completion and the next gateway task uses the new key');
 

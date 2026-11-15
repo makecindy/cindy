@@ -2893,3 +2893,46 @@ test('context recovery assembly: an overflow of a closed kind takes the normal e
   assert.equal(r.h.maker.sessions.get('assembled-closed'), first, 'the runtime is not replaced');
   assert.match(r.h.queue.projection('assembled-closed').error, /prompt is too long/);
 });
+
+// Idle release (idle-release.ts) lives with one owner's input runtime: it scans only after main.ts
+// starts it, and disposing the runtime (Host shutdown, sign-out, account switch) stops its watchers
+// before the tasks are stopped, so nothing is released from a runtime that is going away.
+test('idle release: watchers scan once started and stop when the owner runtime is disposed', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let scans = 0;
+  const h = createHarness({ readClaudeIdleMinutes: () => 30 });
+  h.maker.listActiveSessions = () => { scans += 1; return []; };
+  t.mock.timers.tick(60_000);
+  assert.equal(scans, 0, 'nothing scans before the runtime is ready');
+  h.queue.startIdleRelease();
+  t.mock.timers.tick(60_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(scans, 2, 'the Claude and Codex watchers scan each minute');
+  await h.queue.dispose();
+  scans = 0;
+  t.mock.timers.tick(120_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(scans, 0, 'a disposed runtime scans no more');
+});
+
+// Claude's background-activity detection (claude-session-background-activity.ts) needs the logical
+// turn's start and end; the Host feeds them from its event stream at the desktop's points, so model
+// calls the proxy records after the turn ended mark the task busy (idle release keeps it).
+test('idle release: a Claude turn\'s start and end reach background-activity detection', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-15T00:00:00Z') });
+  const { recordClaudeApiActivity, getClaudeSessionBackgroundActivity, resetClaudeBackgroundActivityForTests } =
+    await import('../../../desktop/src/main/maker-host/claude-session-background-activity.ts');
+  t.after(() => resetClaudeBackgroundActivityForTests());
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  await h.queue.enqueue('bg', { clientId: 'first', text: 'work' });
+  await waitFor(() => h.maker.sessions.get('bg')?.sent.length === 1);
+  const session = h.maker.sessions.get('bg');
+  session.emit({ type: 'status', data: { isRunning: true } });
+  recordClaudeApiActivity('native-bg', 'bg');
+  assert.equal(getClaudeSessionBackgroundActivity('bg'), false, 'calls during the turn are the turn\'s own');
+  session.emit({ type: 'done', data: {} });
+  t.mock.timers.tick(5_000);
+  recordClaudeApiActivity('native-bg', 'bg');
+  assert.equal(getClaudeSessionBackgroundActivity('bg'), true, 'calls after the turn ended are background work');
+});

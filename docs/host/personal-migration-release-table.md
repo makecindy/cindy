@@ -63,7 +63,7 @@
 | 32 | 发送前处理与换引擎交接（8h） | `makerSendTransaction` 的 `resolveRecoveredWorkingDir`、`isPersistedWorktreeFallback`、工作目录恢复说明、`restoreArchivedSessionForSend`、`applyPendingAgentSwitch` 与交接文本、计划对账与目标状态说明、`onModelDispatched`；协调器的 `resolveSessionReferences`、`refreshAgentReferencesBeforeDispatch`、`persistTerminalSendError`、`onPersistedSendRejected`、`supersedeRetriedUserTurn`、`onRejectedUserTurn` | 未做，归 M1：第 8 步之后单列一步，先交切断清单，**迁移前必须完成**（C3 盘点发现，审核方 m1-cp18e 定）。Host 上：工作目录没了时发送失败；往已归档任务发消息不恢复任务状态；输入框选中的会话引用不读；计划对账与目标说明不注入；不记“这一轮换了模型”；换引擎只改任务行，不关旧引擎、不写交接（桌面留下的待发交接摘要，Host 已随下一次发送带上，见“待发交接摘要”行）；回合中改模型：桌面延期到下一次发送，Host 当场改（见“改模型时的窗口保护”行）。线索：Host 的发送本来就按任务行对账并应用设置（`applyQueuedSessionSettings`），回合中只写任务行、不动运行中的会话，下一次发送时自然生效，可能就是 Host 上最省事的延期，到这一步再评估；已落库但派发失败时是否补可重试的错误行未核（清单里先回答）。并入这一步的事件管线项：Codex 生图结果的实时投递（`deliverCodexGeneratedImage`）、目标空闲通知、活跃时间（`onUserAction`）、事件快照（`recordSessionEventSnapshots`）。派发不可逆后与清空边界上的 4 个协调器回调、Codex 重启与凭证形态切换的收尾，等价性在清单里核清 | — | 无 |
 | 33 | 插件按任务的提示、上下文、回合选项与意识拦截（8i） | `makerSendTransaction` 的 `prepareRuntimePrompt`、`composeRuntimeContext`、`prepareRuntimeTurn`（`createTaskRuntimePlugins`、`composeGhostRuntimeContext`）；协调器的 `screenUserMessage`、`onUserMessageBlocked`、`onUserMessageRewritten` | 未做，归 M1：第 8 步之后单列一步，先交切断清单，**迁移前必须完成**；属插件基座，单独提交，发布时要白名单审批（C3 盘点发现，审核方 m1-cp18e 定）。main #9825 已接宿主工具服务、逐次确认、任务输入授权与历史读取（见第 22 行），这不等于接上本行的回合钩子。Host 上插件按任务给的系统提示、运行时上下文与回合选项都不生效，意识对用户消息的拦截与改写也不生效。清单里写清桌面的规则和拦截逻辑出错时的方向。并入这一步的事件管线项：插件任务终态（`onPluginTaskTerminal`）、会话运行时控制收尾（`settlePendingSessionRuntimeControl`）。定时任务的安静输出投影（`projectQuietScheduledOutput`）随 M3 | — | 无 |
 | 34 | 引擎二进制管理（8k） | `agent-binaries/index.ts`（就绪路径 `getReadyBinaryPath`、安装与更新 `updateReadyPiBinary` 等）及其下载器一族（manifestService、downloader/http、clientEndpointsService、pi-kernel-manager 等） | 未做，归 M1：排在 8f 到 8i 之后、第 9 步之前，先交评估、不动手（审核方 m1-cp18c 前定），**迁移前必须完成**。方向：Host 复用桌面现有的 agent-binaries 管理逻辑，不另造一套；“窗口安装、Host 读就绪路径”只作备选。交接任务的答复：现在的个人版仍是内嵌桌面，运行期间由谁安装、更新引擎没定也没联调，不能靠重启 Host 弥补启动时把路径定死。它建议的五条边界：进行中的任务固定用实际启动时的引擎版本；新任务重新解析经过验证的就绪路径；新版本先装到独立目录再发布就绪状态；旧 Host、子进程或在途启动仍在引用的版本必须保留，清理不能只看窗口版本或当前就绪指针；“首次没有某个引擎、运行中装好后能否直接启动”“Pi 自更新后新旧任务各用哪个版本”进 M1 或 M4 的放行表。评估要回答：那一族各自的 Electron 依赖与拆 core 的规模；管理器状态（就绪路径、下载中的任务、清单缓存）放在哪里，客户端模式下窗口进程是否仍初始化它、两个进程都初始化时谁是唯一安装者；五条边界逐条对照桌面现状；三个引擎“总是创建、启动任务时才取路径”（第二节“引擎二进制的路径”）与这一步的关系；下载出口走 hostOutbound 与第 28 行系统代理的关系；窗口安装与更新界面通道（M2）怎么对上（窗口只发起、Host 执行）。在这一步之前：Host 启动时定路径；Pi 本体更新在 Host 上报错并写明原因（m1-cp18c2，hostStage `unsupported`）。8k 完成后 Host 不再产生 `unsupported`，届时决定这个取值是保留还是删掉。同一中间状态下，Pi 回执里结构化的 `recovery` 字段仍是 store 给出的 `check-host-update-and-retry-core`（模型能读到），用户看到的文字不含重试；8k 完成后这一中间状态不再存在，现在不改（审核方 m1-cp18c2 复核时定） | — | 无 |
-| 35 | 空闲运行时的释放 | `maker-ipc/claudeIdleReleaseWatcher.ts`（`register.ts` 装配）：普通本机任务（不含机器人、Orca、目标、远程与隐藏任务）空闲 30 分钟后释放运行时，下一次发送再懒加载续上原生会话。Claude 与 Pi 原来就有（Claude 的分钟数可设置；Codex 沿用 Pi 与 Claude 的 30 分钟默认，见该文件注释）；Codex 由 main 的 `868de6dc38` 纳入，释放前经 maker-core 的 `hasLiveBackgroundWork` 确认没有后台工作 | 未做，归 M1，**迁移前要评估**：Host 没有任何对应的空闲释放，运行时会一直占着。个人版迁移后任务长期挂在后台，这一条直接影响内存占用。上下文恢复这一批不做（审核方定，2026-11-15） | 无 | 无 |
+| 35 | 空闲运行时的释放 | `maker-ipc/claudeIdleReleaseWatcher.ts`（Claude 与 Codex）、`piIdleReleaseWatcher.ts`（Pi），`register.ts` 装配；装配里两边都要的部分已移到共用文件（`idleReleaseInputGates.ts` 的待处理输入与排队、续跑判据，Pi 的候选查询，Claude 与 Codex 的普通任务判断与只关空闲运行时；Claude 分钟数覆盖文件经 `claudeIdleReleaseSettingsCore.ts` 按给定的 profile 根目录读）。普通本机任务（不含伙伴、Orca、目标、远程与隐藏任务）空闲 30 分钟后释放运行时，下一次发送再懒加载续上原生会话。Claude 的分钟数可由 profile 根目录的 `claude-idle-release.json` 覆盖；Codex 释放前经 `hasLiveBackgroundWork` 确认没有后台工作 | 已对齐（第一批检查点 1）：`apps/host/src/agent/idle-release.ts` 用桌面的三个回收器、同样的忙闲判据和同一把任务锁，每个 owner 的输入运行时一套；Agent 运行时就绪后（`main.ts`）开始，有序关闭、登出、换账号时先于停止任务停掉。桌面的“回合还在收尾”在 Host 上是执行器里仍在进行的回合，“有待回答的交互”是 Host 的交互代理（与桌面相同，Pi 回收器不看这一条）。Claude 的“回合结束后子进程仍在调模型”检测，Host 之前没有喂回合起止，检测恒为否；现在按桌面的位置从事件流喂入（`turn-executor.mjs` 的 `noteBackgroundActivity`：前台 running 状态开始，done、终态错误与前台 running=false 状态结束，任务更新刷新后台命令），回收器据此不释放。待切换的凭据（桌面 `pendingCredentialSwitchHolder`）Host 还不登记，这一项恒为否，第一批检查点 3 接上改路线的共用核心后一并接 | Host `idle-release.test.mjs`（真实迁移后的账号库：到点释放、只关空闲且是瞬态关闭；Claude 覆盖只影响 Claude；排队输入、回合收尾、待回答交互、后台任务、Claude 后台活动时不释放；等任务锁，锁内发送开始了新一轮则不释放）；`input-queue.test.mjs`（启动前不扫、处置后不再扫；回合起止喂给后台活动检测）；三个真实引擎 e2e 各一段（释放后下一条消息续上同一个原生会话并带着历史）；桌面 `claudeIdleReleaseWatcher.test.ts`、`piIdleReleaseWatcher.test.ts`、`claudeIdleReleaseSettings.test.ts` | 无 |
 
 ### 第 26 行：Codex 原生登录的对齐记录与索引
 
@@ -222,6 +222,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | codex-home、codex-accounts | 写 | Codex 登录、作废标记、账号目录 | 24b、m1-cp9、m1-cp13 | Codex 自己的格式；账号服务同一 core；作废双向对照（`hostCodexInvalidationParity.test.ts`） |
 | pi-agent-home、工作树租约、回合改动记录 | 写 | Pi 运行目录与会话；租约；改动记录 | 各行 | 同一份代码 |
 | browser-runtime、windows-atomic-rename | 写 | 托管浏览器运行目录；Windows 原子改名辅助程序缓存 | M1 前 | 与桌面同名，同一份代码、同一布局 |
+| profile 根目录的 `claude-idle-release.json`（Claude 空闲释放的分钟数覆盖） | 不写，只读 | 空闲释放每次扫描时读（第一批检查点 1，第 35 行） | 第一批检查点 1 | Host 不写 |
 | Host 专用：两个锁库、`host-endpoint.json`、`host-api-token`、`host-device.json`、`host-background.log`、`platform-power` | 写 | Host 自己的运行状态 | M1 前 | 内嵌的旧桌面不读；`host-api-token` 只有客户端模式的窗口进程读（`host-delegation.ts`） |
 
 ## 四、移出 M1
@@ -275,6 +276,34 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 
 | 通道 | 状态来源 | 具备于 |
 |---|---|---|
-| `maker:session-background-activity`、`maker:session-background-activity:list`、推送 `maker:session-background-activity-changed` | `claude-session-background-activity.ts`，由回环代理的请求与响应观察写入，任务关闭时清 | 24a |
+| `maker:session-background-activity`、`maker:session-background-activity:list`、推送 `maker:session-background-activity-changed` | `claude-session-background-activity.ts`，由回环代理的请求与响应观察写入，回合起止由 Host 的事件流写入（第一批检查点 1），任务关闭时清 | 24a；回合起止：第一批检查点 1 |
 | `maker:claude-session-route:get`、推送 `maker:claude-session-route-changed` | `claude-session-route-registry.ts`，由回环代理的路由决策写入 | 24a |
 | `process-monitor:subscribe`、`process-monitor:unsubscribe`（现归 C 类窗口本地，窗口进程只看得到自己的子进程；接 Host 的登记时要重新归类） | `process-monitor/codex-process-registry.ts`，由三个引擎的进程登记写入，进程结束时清 | m1-cp17b |
+
+## 七、Host 重写的逻辑
+
+目标是让 Host 自己写的那层越来越薄。这里列出 Host 重写了桌面已有判断的地方。只接端口、用共用主体的不算；HTTP 服务、IPC 路由、登录命令行等 Host 平台自己的部分也不算。每项的状态是三选一：已改为共用（Host 删掉自己的那份）、保留并有对照测试、平台差别。每批结束时更新，写明这批减少了几项、新增了几项。
+
+第一版（第一批开始时，2026-11-15）：共 18 项。已改为共用 0，保留并有对照测试 1（第 1 项），平台差别 1（第 17 项），待定 16。做法：按“照桌面”“as the desktop”“line for line”等说法检索，再逐个读候选文件确认。可能漏项，以后碰到再补，并写明是新发现的。
+
+| # | 位置 | 重写了桌面的什么 | 状态 |
+|---|---|---|---|
+| 1 | `agent/context-recovery.ts` `holdsOverflowBroadcast` | `sessionEventDelivery.ts` 压住上下文恢复错误广播的判据 | 保留并有对照测试（`sessionEventPipeline.test.ts`）；第一批改为共用 |
+| 2 | `agent/model-window-gate.ts` `modelSwitchGateInput` | `applySessionRuntimeSelection` 远程分支的闸门输入 | 待定；第一批改为共用 |
+| 3 | `main.ts` 的 `pendingAgentSwitches`、`applyPendingAgentSwitch`、`projectAgentSwitchIntent` | `sessionAgentSwitchHandler.ts` 的待切换登记与应用 | 待定；第一批改为共用 |
+| 4 | `agent/turn-executor.mjs` `listen` 的事件处理顺序（第一批检查点 1 加入后台活动检测的回合起止） | `prepareSessionEvent` → 投递 → 终态的流水线 | 待定；第一批只重排终态顺序，保留并有对照测试 |
+| 5 | `agent/turn-executor.mjs` `finish` 的终态结算 | `sessionEventTerminal.ts` 与 register 的 `onTurnErrorEvent` 收尾 | 待定；同上 |
+| 6 | `agent/turn-executor.mjs` 的 `send`、`openTurn`、`dispatchTurn` | `register.ts` 的 `sendToAgentAccepted` | 待定；第一批补齐第 32 行的端口 |
+| 7 | `agent/session-settings.mjs` 的 `applyQueuedSessionSettings`、`applyLiveSessionSettings` | 回合中改模型的延期兑现、发送时对账 | 待定；第一批改走共用核心后删掉 |
+| 8 | `agent/session-update.ts` `createHostSessionUpdate` | `applySessionRuntimeSelection`（改模型、来源、努力） | 待定；第一批改走共用核心 `applyRuntimeSetModelChange` |
+| 9 | `agent/turn-executor.mjs` Git 基线的结算 | `sessionEventDelivery.ts` 的保存点结算 | 待定 |
+| 10 | `agent/start-options.ts` 启动钩子的步骤编排 | `maker-host/index.ts` 的启动钩子与 `onBeforeStart` | 待定 |
+| 11 | `agent/codex-token-reader.ts` | `createCodexAuthTokenReader`（注释自述逐行相同） | 待定（第二批） |
+| 12 | `agent/codex-auth-boundary.ts` | `maker-host/index.ts` 的三个鉴权边界钩子（注释自述逐步相同） | 待定（第二批） |
+| 13 | `agent/codex-invalidation.ts` | `DesktopCodexAuthAdapter.invalidate` 的两个分支 | 待定（第二批） |
+| 14 | `agent/codex-system-login.ts`、`agent/codex-runtime.ts` `createBridgeTokenReader` | 桌面 Codex 适配器与系统登录的对账、`getAccessToken` | 待定（第二批） |
+| 15 | `agent/claude-proxy-runtime.ts`、`agent/runtime.ts` 的凭据路由 | 桌面代理的凭据路由规则 | 待定（第二批） |
+| 16 | `main.ts` 的模型清单刷新、`agent/providers.mjs` | 桌面 `runModelsSync` 与目录变更点的刷新 | 待定（第二批） |
+| 17 | `agent/auxiliary-model-chain.ts` | 辅助模型链（两处答案故意不同） | 平台差别（第二节） |
+| 18 | `agent/send-preflight.ts` | 桌面 `prepareUserMessageForAgent` 的附件归一化；远程任务的拦截 | 待定（附件随第 12 行）；拦截是平台差别 |
+

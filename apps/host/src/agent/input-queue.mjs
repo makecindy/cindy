@@ -2,6 +2,7 @@ import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
+import { createHostIdleRelease } from './idle-release.ts';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { randomUUID } from 'node:crypto';
@@ -242,6 +243,15 @@ export function createInputQueue(deps) {
         discarded?.();
       },
     });
+    // The desktop's idle-runtime release (idle-release.ts), one set of watchers per owner runtime.
+    const idleRelease = deps.readClaudeIdleMinutes ? createHostIdleRelease({
+      coordinator,
+      getMaker: () => { try { return deps.getMaker(); } catch { return null; } },
+      isTurnPendingCompletion: executor.isRunning,
+      hasPendingInteraction: id => (deps.interactions?.pending(id)?.length ?? 0) > 0,
+      readClaudeMinutes: deps.readClaudeIdleMinutes,
+      ...(deps.idleReleaseClock ? { clock: deps.idleReleaseClock } : {}),
+    }) : null;
     const scheduleBridge = createSchedulerQueueBridge({
       coordinator,
       isSessionBusy: id => coordinator.shouldQueueNewTurn(id) ||
@@ -492,8 +502,14 @@ export function createInputQueue(deps) {
         await attachments?.closeSession(id);
         await flushed(id);
       },
+      /** Starts releasing idle runtimes once this owner's agent runtime is ready (main.ts). */
+      startIdleRelease: () => { if (!closing) idleRelease?.start(); },
+      /** One scan of every idle-release watcher, for tests. */
+      scanIdleRelease: async () => { await idleRelease?.scanNow(); },
       async dispose() {
         closing = true;
+        // No runtime is released while this owner's runtime drains and stops.
+        idleRelease?.stop();
         // Recoveries in flight end as failures and write their error rows first (bounded),
         // before their tasks are stopped; a stop would read as the user's and drop the error.
         await executor.drainRecoveriesForShutdown();
