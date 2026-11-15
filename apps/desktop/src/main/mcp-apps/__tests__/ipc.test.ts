@@ -203,7 +203,7 @@ describe('MCP App persistence and IPC wiring', () => {
     const rejected = expect(pending).rejects.toThrow('MCP_APP_REQUEST_FAILED');
     await vi.waitFor(() => expect(state.action).toHaveBeenCalledOnce());
     expect(state.action.mock.calls[0].slice(0, 5)).toEqual(['renderer:1', null,
-      expect.objectContaining({ id: 'lookup', serverId: 'plugin-source' }), 'lookup', { scope: 'declared', trigger: '@', query: 'issue' }]);
+      expect.objectContaining({ id: 'lookup', config: state.plugin.config }), 'lookup', { scope: 'declared', trigger: '@', query: 'issue' }]);
     await state.handle!({ sender: { id: 2 } }, null, { op: 'plugin-action-cancel', requestId: 'one' });
     expect(signal!.aborted).toBe(false);
     await state.handle!(event, null, { op: 'plugin-action-cancel', requestId: 'one' });
