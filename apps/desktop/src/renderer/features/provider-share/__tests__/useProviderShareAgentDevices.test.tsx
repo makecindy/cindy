@@ -28,6 +28,7 @@ const catalog = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: catalog.refresh }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  hasDeviceProvidersInterest: (deviceId: string) => catalog.cached.has(deviceId),
   getCachedDeviceProviders: (deviceId: string) => (catalog.cached.has(deviceId) ? {
     providers: catalog.subscriptions.has(deviceId) ? [{ subscriptionFastPolicy: { allowFast: false } }] : [],
   } : null),

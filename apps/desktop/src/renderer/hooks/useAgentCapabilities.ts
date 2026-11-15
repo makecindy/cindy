@@ -413,6 +413,14 @@ function notifyRemoteCapabilities(
   for (const listener of remoteListeners.get(cacheKey(agentKind, deviceId)) ?? []) listener(event);
 }
 
+/** Capabilities-only consumers also keep a received-share refresh live. */
+export function hasDeviceCapabilitiesInterest(deviceId: string): boolean {
+  return (['claude-code', 'codex', 'pi'] as const).some(agent => {
+    const key = cacheKey(agent, deviceId);
+    return inflight.has(key) || remoteListeners.has(key);
+  });
+}
+
 /** 订阅某被控端某 agent 的能力快照；只通知当前代际成功提交的完整结果。 */
 export function subscribeDeviceCapabilities(
   deviceId: string,

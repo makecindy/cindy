@@ -450,6 +450,11 @@ export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPaylo
   return expiry.valid(deviceId) ? cache.get(deviceId) ?? null : null;
 }
 
+/** Mounted consumers (including empty/error states) and reads still in flight. */
+export function hasDeviceProvidersInterest(deviceId: string): boolean {
+  return inflight.has(deviceId) || listeners.has(deviceId);
+}
+
 /** Only subscription shares opt into freshness polling; custom API catalogs keep their existing lifetime. */
 export function hasSubscriptionShareCatalog(deviceId: string): boolean {
   return subscriptionFetchedAt.has(deviceId);
