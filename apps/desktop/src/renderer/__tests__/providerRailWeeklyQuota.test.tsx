@@ -619,6 +619,41 @@ describe('provider rail weekly remaining bars', () => {
     for (const read of [reads.codex, reads.claude, reads.xai])
       expect(read.mock.calls.some(([enabled]) => enabled)).toBe(false);
   });
+  // #10561 / unit: real rail tooltips must retain a legacy single account's reset.
+  // Existing mirror tests only checked percentages; pool tests had account details.
+  // Minimal input: one weekly window with a future reset, without an account pool.
+  it.each([
+    { id: 'anthropic', deviceId: null },
+    { id: 'anthropic', deviceId: 'device-1' },
+    { id: 'openai', deviceId: null },
+    { id: 'openai', deviceId: 'device-1' },
+  ])('preserves the $id single-account reset countdown on $deviceId', async ({ id, deviceId }) => {
+    const resetsAt = Date.now() / 1000 + 3600;
+    const claude = { sevenDay: { utilization: 40, resetsAt } };
+    const codex = snapshot(40);
+    codex.rateLimits.secondary!.resetsAt = resetsAt;
+    reads.codex.mockImplementation(enabled => ({ snapshot: enabled ? codex : null }));
+    reads.claude.mockImplementation(enabled => enabled ? claude : null);
+    reads.xai.mockReturnValue(null);
+    reads.remoteCodex.mockImplementation(device => device
+      ? { webSnapshot: null, appServerBuckets: { codex: codex.rateLimits } } : null);
+    reads.remoteClaude.mockImplementation(device => device ? claude : null);
+    reads.remoteXai.mockReturnValue(null);
+    render(
+      <UnifiedModelRail
+        items={[{ kind: 'provider', providerId: id }]}
+        active={{ kind: 'all' }}
+        providers={[provider(id)]}
+        providerLabel={() => id}
+        onSelect={() => {}}
+        providerUsage={{ deviceId }}
+      />,
+    );
+    fireEvent.focus(screen.getByRole('button', { name: id }));
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip.textContent).toContain('每周 · 剩余 60%');
+    expect(tooltip.textContent).toContain('1小时 后重置');
+  });
   it('shows no quota when the directory may not show account usage', () => {
     render(
       <UnifiedModelRail

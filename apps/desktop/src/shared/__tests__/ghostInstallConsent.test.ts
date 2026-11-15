@@ -38,24 +38,25 @@ function installed(
 }
 
 describe('plugin install consent', () => {
-  it.each(['browser', 'computer', 'ssh', 'docs', 'discovery'] as const)('requires explicit approval for a newly recognized %s group', group => {
+  it.each(['browser', 'computer', 'ssh', 'docs', 'discovery'] as const)('retains an installed %s declaration and confirms newly added declarations', group => {
     const next = manifest({ agent: { hostTools: [group] } });
     const old = installed(next);
-    expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
+    expect(evaluateGhostInstallConsent(old, next)).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(manifest()), next)).toMatchObject({ kind: 'update',
       added: expect.arrayContaining([expect.objectContaining({ key: `agent:host-tools:${group}` })]) });
-    expect(evaluateGhostInstallConsent({ ...old, approvedHostToolGroups: [group] }, next)).toBeNull();
   });
 
-  // §21 unit: a group retained as unknown by an older Host is not an explicit
-  // filesystem approval. Existing cases did not cover a newly recognized group.
-  it('将亲选目录 files 组单列为扩权，旧声明不补批准', () => {
+  // Unit: installation grants existing declarations, while a package adding
+  // files still presents both the new group and the changed code explanation.
+  it('保留已安装的 files 声明，新增声明仍随整体更新确认展示', () => {
     const next = manifest({ pick: true, agent: { hostTools: ['files'] } });
     const old = installed(next);
-    expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
+    expect(evaluateGhostInstallConsent(old, next)).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(manifest({ pick: true })), next)).toMatchObject({ kind: 'update',
       // The code row also changes from the isolated-page explanation to the
       // approved Host-file explanation; it must remain visible in the consent.
-      added: [expect.objectContaining({ key: 'agent:host-tools:files' }), expect.objectContaining({ key: 'code', detailKey: 'codeDetailFiles' })] });
-    expect(evaluateGhostInstallConsent({ ...old, approvedHostToolGroups: ['files'] }, next)).toBeNull();
+      added: [expect.objectContaining({ key: 'agent:user-action' }), expect.objectContaining({ key: 'agent:host-tools:files' }),
+        expect.objectContaining({ key: 'code', detailKey: 'codeDetailFiles' })] });
     expect(evaluateGhostInstallConsent(null, next)).toMatchObject({ kind: 'install',
       permissions: expect.arrayContaining([expect.objectContaining({ key: 'agent:host-tools:files' })]) });
   });

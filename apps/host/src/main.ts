@@ -103,7 +103,6 @@ import { createHostToolService } from './agent/host-tools.js';
 import { storageShareMessage } from '../../desktop/src/main/cindy-brain/storageService.js';
 import { createHostConfirmations } from './host-confirmations.js';
 import { createMainI18n } from '../../desktop/src/main/i18n.js';
-import { GHOST_HOST_TOOL_GROUPS } from '@cindy/plugin-protocol';
 import { createHostMcpDuplicateChoices } from './agent/mcp-duplicate-choices.js';
 import { toolAutoReviewAction } from '@cindy/maker-core';
 import { GhostGrantConfirmBridge } from '../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.js';
@@ -596,7 +595,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
   hostTools = createHostToolService({ profileDir: dataDir, ownerId,
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
-    current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null, manager: pluginManager,
+    current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null,
     files: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.fsSlot; },
     storage: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.storage; },
     getSession: id => agentGraph?.maker.getSession(id), confirmations: hostConfirmations, t: i18n.t,
@@ -1177,10 +1176,6 @@ const serverDeps = {
     hostConfirmations?.connect(caller, send),
   resolvePluginConfirmation: (caller: string, kind: 'confirm' | 'install', requestId: string, confirmed: boolean) =>
     hostConfirmations?.resolve(caller, kind, requestId, confirmed) ?? false,
-  requestPluginTaskApproval: async (id: string, capability: string) => {
-    const group = GHOST_HOST_TOOL_GROUPS.find(value => capability === `host-tools:${value}`);
-    return { granted: !!group && !!hostTools && await hostTools.approveGroup(id, group, () => plugins?.current() === true, true) };
-  },
   cancelPendingAuth: async () => {
     agentAuth?.close();
     await providerConfig?.cancelLogins();
