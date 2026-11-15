@@ -1426,18 +1426,23 @@ function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
   if (unverified) {
     return (
       <div
-        className="flex w-full select-none flex-col gap-0.5 px-2 py-1"
+        className="flex w-full items-start gap-1.5 px-2 py-[3px]"
         role="note"
         aria-label={label}
       >
-        <span className="text-12 leading-[1.5] text-[var(--error-fg)]">{label}</span>
+        <span className="shrink-0 text-12 leading-[1.5] text-[var(--error-fg)]">{label}</span>
         {summary && (
-          <span
-            className="whitespace-pre-line text-11 leading-[1.4] text-[var(--text-secondary)]"
-            title={summary}
-          >
-            {summary}
-          </span>
+          <>
+            <span aria-hidden className="shrink-0 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+              ·
+            </span>
+            <span
+              className="min-w-0 whitespace-normal text-left text-12 leading-[1.5] text-[var(--text-secondary)]"
+              title={summary}
+            >
+              {summary}
+            </span>
+          </>
         )}
       </div>
     );

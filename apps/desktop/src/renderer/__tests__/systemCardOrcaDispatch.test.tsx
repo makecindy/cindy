@@ -96,7 +96,9 @@ describe('SystemCard orca-dispatch 行', () => {
 
     expect(screen.queryByRole('button')).toBeNull();
     const summary = screen.getByText('你说了已派给 developer，但本轮没有对应派发凭据');
-    expect(summary.className).toContain('whitespace-pre-line');
+    // 升级卡与普通回执同一套行内节奏，只差颜色；区别是它不折叠、不截断。
+    expect(summary.className).toContain('whitespace-normal');
     expect(summary.className).not.toContain('truncate');
+    expect(screen.getByRole('note').className).toContain('px-2 py-[3px]');
   });
 });
