@@ -351,8 +351,9 @@ it.each([100 * 1024, 1024 * 1024, 5 * 1024 * 1024])('forwards %i bytes of text w
   await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
   const address = upstream.address();
   if (!address || typeof address === 'string') throw new Error('test server address unavailable');
-  const prepare = vi.fn(async () => null);
-  const controller = createRequestSizeController(() => state.resolved, { prepare });
+  const preprocessor = createInlineImagePreprocessor(() => true);
+  const prepare = vi.spyOn(preprocessor, 'prepare');
+  const controller = createRequestSizeController(() => state.resolved, preprocessor);
   const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${address.port}`, transformRequest: [], requestSizeController: controller });
   try {
     const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_text', text: 'x'.repeat(bytes) }] }] }));
@@ -372,17 +373,34 @@ it.each([100 * 1024, 1024 * 1024, 5 * 1024 * 1024])('forwards %i bytes of text w
   }
 });
 
-it.each([false, true])('does not stage media when a small image only needs preprocessing: changed=%s', async changed => {
-  const prepare = vi.fn(async () => changed ? { bytes: Buffer.alloc(300), mimeType: 'image/webp', width: 1, height: 1, changed: true, cacheKey: 'small' } : null);
-  const controller = createRequestSizeController(() => state.resolved, { prepare });
-  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [pngBlock()] }] }));
-  const result = await controller.control(raw, 'responses', { signal: new AbortController().signal, route: {} });
+// PR2 integration: use the actual adapter, including JPEG passthrough, to
+// protect PR1's lazy persistence contract after the compressor is wired in.
+it.each([false, true])('does not stage media with the real adapter: changed=%s', async changed => {
+  const preprocessor = createInlineImagePreprocessor(() => true);
+  const prepare = vi.spyOn(preprocessor, 'prepare');
+  const controller = createRequestSizeController(() => state.resolved, preprocessor);
+  const image = sharp({ create: { width: 64, height: 48, channels: 3, background: '#123456' } });
+  const bytes = await (changed ? image.png({ compressionLevel: 0 }) : image.jpeg({ quality: 95 })).toBuffer();
+  const mime = changed ? 'image/png' : 'image/jpeg';
+  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:${mime};base64,${bytes.toString('base64')}` }] }] }));
+  vi.mocked(writeFile).mockClear();
+  const result = await controller.control(raw, 'responses', { signal: new AbortController().signal, route: { providerId: 'openai', modelId: 'gpt-6-astra' } });
   expect(prepare).toHaveBeenCalledOnce();
   expect(result?.removedImages ?? 0).toBe(0);
   expect(result !== null).toBe(changed);
+  if (changed) {
+    const uri = JSON.parse(result!.body.toString()).input[0].content[0].image_url as string;
+    expect(uri).toMatch(/^data:image\/webp;base64,/);
+    const encoded = Buffer.from(uri.split(',')[1], 'base64');
+    expect(await sharp(encoded).raw().toBuffer()).toEqual(await sharp(bytes).raw().toBuffer());
+  } else {
+    expect(result).toBeNull(); // The caller keeps the original JPEG request.
+  }
   expect(mkdtemp).not.toHaveBeenCalled();
   expect(rm).not.toHaveBeenCalled();
+  expect(writeFile).not.toHaveBeenCalled();
   expect(state.ingest).not.toHaveBeenCalled();
+  expect(state.addRef).not.toHaveBeenCalled();
   expect(state.info).not.toHaveBeenCalled();
 });
 
