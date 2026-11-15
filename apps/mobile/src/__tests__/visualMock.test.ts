@@ -341,7 +341,7 @@ it('round-trips project profiles and changes image identity on replacement', asy
   const save = (icon: string | null) => link.invoke<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>(mock.VISUAL_MOCK_DEVICE_ID, contracts.PROJECT_SETTINGS_SET_CHANNEL, [{projectKey, field: 'profile', value: {name: 'Cindy', icon}, ...initial.ownerStamp}]);
   const first = await save('data:image/png;base64,AAAA');
   const second = await save('data:image/png;base64,BBBB');
-  expect(contracts.parseHostProjectAliasesSnapshot(second)?.settingsVersion).toBe(3);
+  expect(contracts.parseHostProjectAliasesSnapshot(second)?.settingsVersion).toBe(5);
   expect(second.icons?.[projectKey]).not.toBe(first.icons?.[projectKey]);
   expect(second.aliases).toContainEqual({projectKey, alias: 'Cindy'});
   expect(await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, contracts.PROJECT_ICON_IMAGE_CHANNEL, [{projectKey}])).toBe('data:image/png;base64,BBBB');

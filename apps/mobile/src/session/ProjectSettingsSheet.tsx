@@ -323,9 +323,11 @@ export function ProjectSettingsSheet({
                   setEditingName(false);
                   setPickerIcon(icon);
                   setPickerColor(
-                    parseProjectSymbol(icon)?.color ??
-                      parseProjectLetters(icon)?.color ??
-                      defaultProjectColor(name.trim() || defaultName),
+                    (snapshot?.settingsVersion ?? 0) >= 3
+                      ? (parseProjectSymbol(icon)?.color ??
+                          parseProjectLetters(icon)?.color ??
+                          defaultProjectColor(name.trim() || defaultName))
+                      : "default",
                   );
                   setMode(
                     isProjectImage(icon) || isProjectImageDraft(icon)
