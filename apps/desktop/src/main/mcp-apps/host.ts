@@ -326,8 +326,9 @@ export class McpAppsHost {
     clientId: string,
     hostContext: McpUiHostContext,
     openId?: string,
+    resolveSdkRef?: (sdk: NonNullable<McpAppDocument['sdk']>) => string | undefined,
   ): Promise<McpAppDocument> {
-    return this.openSource(caller, sessionId, clientId, hostContext, openId);
+    return this.openSource(caller, sessionId, clientId, hostContext, openId, undefined, resolveSdkRef);
   }
 
   async openResource(
@@ -347,6 +348,7 @@ export class McpAppsHost {
     hostContext: McpUiHostContext,
     openId?: string,
     resourceBinding?: McpAppResourceBinding,
+    resolveSdkRef?: (sdk: NonNullable<McpAppDocument['sdk']>) => string | undefined,
   ): Promise<McpAppDocument> {
     const owner = this.captureOwner();
     const key = JSON.stringify([caller, sessionId, openId ?? randomUUID()]);
@@ -363,7 +365,7 @@ export class McpAppsHost {
     });
     try {
       return await Promise.race([
-        this.openView(caller, sessionId, clientId, hostContext, pending.abort.signal, openId, resourceBinding),
+        this.openView(caller, sessionId, clientId, hostContext, pending.abort.signal, openId, resourceBinding, resolveSdkRef),
         cancelled,
       ]);
     } finally {
@@ -421,6 +423,7 @@ export class McpAppsHost {
     signal: AbortSignal,
     openId?: string,
     resourceBinding?: McpAppResourceBinding,
+    resolveSdkRef?: (sdk: NonNullable<McpAppDocument['sdk']>) => string | undefined,
   ): Promise<McpAppDocument> {
     await this.sweep();
     signal.throwIfAborted();
@@ -508,14 +511,22 @@ export class McpAppsHost {
         prefersBorder: resource.meta.prefersBorder !== false,
       };
       const remote = caller.startsWith('device:');
+      // Use bytes already held by the viewer before optional SDK bytes compete
+      // with the page budget. The resolver is local, never part of hostContext.
+      const sdkRef = remote && document.sdk ? resolveSdkRef?.(document.sdk) : undefined;
+      if (sdkRef) { document.sdkRef = sdkRef; delete document.sdk; }
       // The optional runtime must not reduce the budget of an installed page.
       // With no source detection, a missing SDK can only fail that page's import.
       if (remote && document.sdk && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
         // Optional addons never displace an official SDK that would fit on its own.
         document.sdk = { source: document.sdk.source };
+        // A previous boundary-sized page may have cached this reduced variant.
+        const reducedSdkRef = resolveSdkRef?.(document.sdk);
+        if (reducedSdkRef) { document.sdkRef = reducedSdkRef; delete document.sdk; }
       }
       if (remote && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
         delete document.sdk;
+        delete document.sdkRef;
         if (Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES)
           throw new Error('MCP_APP_RESOURCE_TOO_LARGE');
         createLogger('mcp-apps').warn('Host SDK omitted: page fits the remote budget, but page plus SDK exceeds it; bare SDK imports will fail in this View');
