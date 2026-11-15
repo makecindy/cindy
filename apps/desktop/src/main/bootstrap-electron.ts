@@ -1199,6 +1199,8 @@ import {
   refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
+import { installEvaluationRuntime } from './cindy-evaluate/runtime.js';
+import { callEvaluate, readEvaluationImageFile } from './cindy-evaluate/service.js';
 import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
@@ -9932,6 +9934,10 @@ app.on('ready', async () => {
   // 用户专属 key)+ 注册 model-access:* IPC。须在 initClientEndpoints 之后
   // (依赖 modelAccessApiBaseUrl 端点)、renderer auth:initialize 之前装订阅。
   if (!hostClientMode) initModelAccess();
+  installEvaluationRuntime({
+    callEvaluate: (...args) => callEvaluate(...args),
+    readEvaluationImageFile: (...args) => readEvaluationImageFile(...args),
+  });
 
   initializeUpdatePresentationRecovery();
 

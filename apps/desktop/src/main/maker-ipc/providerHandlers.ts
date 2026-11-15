@@ -1891,6 +1891,7 @@ export function registerProviderHandlers(
           for (const m of provider.imageModels ?? []) known.add(m.id);
           for (const m of provider.videoModels ?? []) known.add(m.id);
           for (const m of provider.audioModels ?? []) known.add(m.id);
+          for (const m of provider.evaluationModels ?? []) known.add(m.id);
           for (const m of provider.embeddingModels ?? []) known.add(m.id);
           const unknown = modelIds.filter((id) => !known.has(id));
           if (unknown.length > 0) {

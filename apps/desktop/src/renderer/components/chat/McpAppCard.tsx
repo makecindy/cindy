@@ -36,7 +36,42 @@ const appFailureCodes = new Set([
 const MCP_APP_HEIGHT_CACHE_LIMIT = 100;
 const MCP_APP_LOADING_INDICATOR_DELAY_MS = 400;
 const MCP_APP_HEIGHT_FALLBACK_DELAY_MS = 500;
+const MCP_APP_OFFSCREEN_KEEP_MS = 5_000;
+const MCP_APP_OFFSCREEN_KEEP_LIMIT = 2;
 const mcpAppHeightCache = new Map<string, number>();
+// §8.7: one renderer-wide expiry timer, at most two five-second local leases.
+const retainedLocalViews = new Map<object, { expiresAt: number; release(): void }>();
+let retainedLocalViewsTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleRetainedLocalViews(): void {
+  clearTimeout(retainedLocalViewsTimer);
+  retainedLocalViewsTimer = undefined;
+  const next = retainedLocalViews.values().next().value;
+  if (!next) return;
+  retainedLocalViewsTimer = setTimeout(() => {
+    const now = Date.now();
+    for (const [key, item] of retainedLocalViews) if (item.expiresAt <= now) {
+      retainedLocalViews.delete(key); item.release();
+    }
+    scheduleRetainedLocalViews();
+  }, Math.max(0, next.expiresAt - Date.now()));
+}
+function forgetRetainedLocalView(key: object): void {
+  if (retainedLocalViews.delete(key)) scheduleRetainedLocalViews();
+}
+function retainLocalView(key: object, release: () => void): void {
+  if (retainedLocalViews.has(key)) return; // Repeated observer events never renew the lease.
+  retainedLocalViews.set(key, { expiresAt: Date.now() + MCP_APP_OFFSCREEN_KEEP_MS, release });
+  while (retainedLocalViews.size > MCP_APP_OFFSCREEN_KEEP_LIMIT) {
+    const [oldest, item] = retainedLocalViews.entries().next().value!;
+    retainedLocalViews.delete(oldest); item.release();
+  }
+  scheduleRetainedLocalViews();
+}
+function releaseAllRetainedLocalViews(): void {
+  const items = [...retainedLocalViews.values()];
+  retainedLocalViews.clear(); scheduleRetainedLocalViews();
+  items.forEach(item => item.release());
+}
 function cachedMcpAppHeight(key: string): number | undefined { return mcpAppHeightCache.get(key); }
 function rememberMcpAppHeight(key: string, height: number): void {
   mcpAppHeightCache.delete(key);
@@ -151,6 +186,11 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   contextSourceRef.current = contextSource;
   const unavailableRef = useRef(onUnavailable); unavailableRef.current = onUnavailable;
   const [revealed, setRevealed] = useState(false);
+  const visibleRef = useRef(visible);
+  const retentionKey = useRef({}).current;
+  const [retained, setRetained] = useState(false);
+  const enabled = visible || retained;
+  const updateContextRef = useRef<(() => void) | undefined>(undefined);
 
   useEffect(() => {
     setHeight(cachedMcpAppHeight(heightKey) ?? 320);
@@ -162,7 +202,21 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     if (!element) return;
     let intersecting = false;
     let windowHidden = isWindowHidden();
-    const update = () => setVisible(intersecting && !windowHidden && document.visibilityState !== 'hidden' && isPluginUiElementVisible(element));
+    const update = () => {
+      const windowVisible = !windowHidden && document.visibilityState !== 'hidden';
+      const regionVisible = isPluginUiElementVisible(element);
+      const next = intersecting && windowVisible && regionVisible;
+      visibleRef.current = next;
+      if (!windowVisible) releaseAllRetainedLocalViews();
+      if (!next && windowVisible && regionVisible && deviceId === undefined && controllerRef.current?.document) {
+        retainLocalView(retentionKey, () => setRetained(false));
+        setRetained(true);
+      } else {
+        forgetRetainedLocalView(retentionKey);
+        setRetained(false);
+      }
+      setVisible(next);
+    };
     const observer = new IntersectionObserver(([entry]) => {
       intersecting = entry.isIntersecting;
       update();
@@ -176,12 +230,15 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       document.removeEventListener('visibilitychange', update);
       stopWindowHidden?.();
       stopRegions();
+      forgetRetainedLocalView(retentionKey);
+      visibleRef.current = false;
     };
-  }, []);
+  }, [deviceId, retentionKey]);
 
   useLayoutEffect(() => {
     const element = root.current;
-    if (!element || !visible) return;
+    if (!element || !enabled) return;
+    if (!visibleRef.current) { setRetained(false); return; }
     setRevealed(false);
     let disposed = false;
     let revealedFrame = false;
@@ -295,10 +352,10 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     let sending = false;
     let pendingContext: Record<string, unknown> | undefined;
     const flush = async () => {
-      if (sending || disposed || !opened) return;
+      if (sending || disposed || !opened || !visibleRef.current) return;
       sending = true;
       try {
-        while (!disposed && pendingContext) {
+        while (!disposed && visibleRef.current && pendingContext) {
           const latest = pendingContext;
           pendingContext = undefined;
           await controller.context(latest);
@@ -308,10 +365,11 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     };
     const update = () => {
       if (queued || disposed) return;
+      if (!visibleRef.current) return;
       queued = true;
       queueMicrotask(() => {
         queued = false;
-        if (disposed) return;
+        if (disposed || !visibleRef.current) return;
         const context = readContext();
         const serialized = JSON.stringify(context);
         if (serialized === lastContext) return;
@@ -321,6 +379,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         void flush();
       });
     };
+    updateContextRef.current = update;
     const unsubscribeContext = contextSourceRef.current?.subscribe(update);
     const initialContext = readContext();
     lastContext = JSON.stringify(initialContext);
@@ -364,6 +423,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     function dispose() {
       if (disposed) return;
       disposed = true;
+      forgetRetainedLocalView(retentionKey);
+      updateContextRef.current = undefined;
       clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer); clearTimeout(heightFallbackTimer);
       clearTimeout(loadingTimer);
       controllerRef.current = undefined;
@@ -401,10 +462,22 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, visible, deviceId, source?.instanceId, source?.viewId]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId]);
+
+  useLayoutEffect(() => {
+    const controller = controllerRef.current;
+    if (!controller || deviceId !== undefined || !enabled) return;
+    if (retained && !visible) {
+      void controller.suspend().catch(() => { forgetRetainedLocalView(retentionKey); setRetained(false); });
+    } else {
+      void controller.resume().then(() => updateContextRef.current?.()).catch(() => {
+        forgetRetainedLocalView(retentionKey); setRetained(false); setVisible(false);
+      });
+    }
+  }, [enabled, retained, visible, deviceId, retentionKey]);
 
   useEffect(() => {
-    if (root.current)
+    if (root.current && visibleRef.current)
       void controllerRef.current?.context(hostContext(locale, root.current)).catch(() => {});
   }, [locale]);
   useLayoutEffect(() => {
@@ -421,7 +494,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     return () => {
       dialog.close();
       dialog.setAttribute('open', '');
-      if (root.current) void controllerRef.current?.context(hostContext(localeRef.current, root.current)).catch(() => {});
+      if (root.current && visibleRef.current) void controllerRef.current?.context(hostContext(localeRef.current, root.current)).catch(() => {});
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [mode]);

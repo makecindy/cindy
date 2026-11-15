@@ -8265,6 +8265,8 @@
         "cindyTextOneshot": "Pode fazer uma pergunta ao canal rápido da Cindy e receber uma resposta em texto",
         "cindyTextOneshotDetail": "Usa a cadeia de modelos utilitários leves do sistema (o mesmo canal dos títulos automáticos). Não envolve Agent nem acesso a arquivos. Pode haver cobrança pelo uso do modelo.",
         "cindyEmbedText": "Pode enviar texto para ser convertido em vetores (para busca semântica)",
+        "cindyModelsDecisions": "Pode usar modelos de decisão (consome sua cota de modelos)",
+        "cindyModelsRerank": "Pode usar modelos de reordenação (consome sua cota de modelos)",
         "cindyEmbedTextDetail": "O texto é enviado ao modelo de embeddings do sistema e convertido em números, com até {{max}} itens por chamada. Pode haver cobrança pelo uso do modelo. Os vetores vão apenas para o plugin — nada é gravado na sua biblioteca.",
         "cindySearchWeb": "Pode pesquisar na web pública com Cindy AI",
         "cindySearchWebDetail": "As solicitações de pesquisa acessam a web pública e podem consumir a cota do Cindy AI.",
@@ -9459,6 +9461,7 @@
     "backToLogin": "Voltar ao login"
   },
   "login": {
+    "networkResponseHint": "O serviço de login retornou uma resposta inesperada. Um intermediário de rede ou proxy pode estar bloqueando a solicitação. Verifique as configurações de rede e proxy.",
     "title": "Boas-vindas ao Cindy",
     "subtitle": "Escolha uma forma segura de entrar",
     "savedLoginPreserved": "A recuperação mantém seus dados de login salvos",
@@ -14061,6 +14064,7 @@
         "realtime": "Áudio em tempo real",
         "embedding": "Embeddings",
         "decision": "Decisão",
+        "rerank": "Reordenação",
         "compression": "Compressão",
         "ungrouped": "Sem grupo",
         "other": "Outro"
@@ -17393,9 +17397,8 @@
         "automatic": "Automática",
         "manually": "Manualmente",
         "session": "Sessão",
-        "silentRun": "Não notificar quando as verificações não encontrarem nada",
-        "silentRunTooltip": "Relate apenas alterações ou problemas. Desative para lembretes e mensagens agendadas.",
-        "silentRunInfoAria": "Ver regras de execução silenciosa",
+        "silentRun": "Execução silenciosa",
+        "silentRunTooltip": "Quando ativada, execuções bem-sucedidas não notificam por padrão. Se o prompt da tarefa pedir aviso em condições específicas, a IA avisará quando elas forem atendidas. Falhas e erros continuam sendo notificados.",
         "finishSendToFeishu": "Enviar ao FeishuBot ao concluir",
         "finishSendToWecomGroup": "Enviar resultado ao grupo do WeCom",
         "configWecomGroup": "Configurar notificações do grupo do WeCom",
@@ -17505,10 +17508,7 @@
       },
       "layout": {
         "content": "O que executar",
-        "notifications": "Notificações e execução silenciosa",
-        "contentTab": "Conteúdo e gatilho",
-        "optionsTab": "Opções de execução",
-        "sections": "Configurações de automação"
+        "notifications": "Notificações e execução silenciosa"
       },
       "webhook": {
         "quotaHint": "Os recebimentos de Webhook têm limite diário, e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários.",

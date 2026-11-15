@@ -1,3 +1,4 @@
+import { resolveGatewayConnection, GatewayConnectionError } from '../model-access/gatewayConnection.js';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -21,8 +22,6 @@ import { createLogger } from '../logger.js';
 import { ServerApiError } from '../serverApiClient.desktop.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
-import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
-import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import {
   fetchMediaInvocationGuide,
@@ -31,7 +30,6 @@ import {
   MediaGuideCompatibilityError,
   MediaModelCatalogError,
 } from '../model-access/mediaModels.js';
-import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import * as blobStore from './blobStore.desktop.js';
 import { ingestMedia } from './ingest.js';
 import { downloadMediaResult, MediaDownloadError, type MediaDownloadContext } from './mediaDownload.js';
@@ -237,34 +235,11 @@ async function resolveInvocationConnection(invocation: StoredMediaInvocation): P
 }
 
 function resolveConnection(providerId: string): MediaConnection {
-  if (providerId !== 'xd') {
-    throw new MediaInvocationError(
-      'CONNECTION_NOT_SUPPORTED',
-      `当前 Cindy 版本没有注册媒体连接 ${JSON.stringify(providerId)}`,
-    );
+  try { return resolveGatewayConnection(providerId); }
+  catch (error) {
+    if (error instanceof GatewayConnectionError) throw new MediaInvocationError(error.code, error.message);
+    throw error;
   }
-  if (!getAppCapabilities().canUseCindyGateway) {
-    throw new MediaInvocationError('CONNECTION_UNAVAILABLE', '当前账号不能使用 Cindy AI 网关');
-  }
-  const baseUrl = effectiveXdGatewayBaseUrl().trim();
-  const apiKey = getProviderSecretStore().get('xd')?.trim() ?? '';
-  if (!baseUrl || !apiKey) {
-    throw new MediaInvocationError('CONNECTION_UNAVAILABLE', 'Cindy AI 连接尚未就绪，请先完成登录');
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    throw new MediaInvocationError('CONNECTION_INVALID', 'Cindy AI endpoint 不合法');
-  }
-  if (
-    (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') ||
-    parsed.username ||
-    parsed.password
-  ) {
-    throw new MediaInvocationError('CONNECTION_INVALID', 'Cindy AI endpoint 不合法');
-  }
-  return { baseUrl, apiKey, onUnauthorized: () => reportCindyGatewayKeyRejected(apiKey) };
 }
 
 function requestUrl(baseUrl: string, relativePath: string): string {

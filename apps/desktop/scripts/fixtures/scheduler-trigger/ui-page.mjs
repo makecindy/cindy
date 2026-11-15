@@ -69,13 +69,13 @@ export default {
     }
     if (ui.case === 'scrolled') {
       await page.getByRole('radio', { name: await ui.t('scheduler.editor.fields.manually'), exact: true }).click();
-      await page.getByRole('tabpanel').evaluate((panel) => {
+      await page.locator('[data-schedule-form-fields]').evaluate((panel) => {
         panel.parentElement.parentElement.scrollTop = 0;
       });
       // The scroll anchor must not leave a permanently long, empty form after
       // the user scrolls back up. Compare actual content bounds, not CSS values.
       await page.waitForFunction(() => {
-        const panel = document.querySelector('[role="tabpanel"]');
+        const panel = document.querySelector('[data-schedule-form-fields]');
         const content = panel.parentElement;
         const viewport = content.parentElement;
         const naturalBottom = panel.getBoundingClientRect().bottom - viewport.getBoundingClientRect().top

@@ -174,6 +174,15 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return botsResumeLifecycle(db, txArgs);
     case 'bots.archiveLifecycle':
       return botsArchiveLifecycle(db, txArgs);
+    case 'bots.retireCloudCopy': {
+      const p = asRecord(txArgs, 'bots.retireCloudCopy args');
+      // Keep every version, session link and message. Only a confirmed cloud retirement
+      // releases this hidden copy's name; moving to another computer never calls this.
+      const result = db.prepare(`UPDATE bot_profiles SET status = 'archived', updated_at = ?
+        WHERE id = ? AND status NOT IN ('archived', 'deleting')`)
+        .run(expectNumber(p.at, 'at'), expectString(p.botId, 'botId'));
+      return { changed: result.changes > 0 };
+    }
     case 'bots.deleteProfile':
       return botsDeleteProfile(db, txArgs);
     case 'bots.prepareProfileDeletion':
