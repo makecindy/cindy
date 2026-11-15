@@ -17221,9 +17221,8 @@
         "automatic": "Automatisch",
         "manually": "Manuell",
         "session": "Sitzung",
-        "silentRun": "Keine Meldung, wenn Prüfungen nichts finden",
-        "silentRunTooltip": "Nur Änderungen oder Probleme melden. Für Erinnerungen und geplante Nachrichten deaktivieren.",
-        "silentRunInfoAria": "Regeln für stille Ausführungen anzeigen",
+        "silentRun": "Stille Ausführung",
+        "silentRunTooltip": "Wenn aktiviert, benachrichtigen erfolgreiche Ausführungen standardmäßig nicht. Verlangt der Aufgaben-Prompt eine Benachrichtigung unter bestimmten Bedingungen, meldet sich die KI, sobald diese erfüllt sind. Fehler und Ausnahmen werden weiterhin gemeldet.",
         "finishSendToFeishu": "Ergebnis an FeishuBot senden",
         "finishSendToWecomGroup": "Ergebnis an WeCom-Gruppe senden",
         "configWecomGroup": "WeCom-Gruppenbenachrichtigungen konfigurieren",
@@ -17333,10 +17332,7 @@
       },
       "layout": {
         "content": "Auszuführender Inhalt",
-        "notifications": "Benachrichtigungen und stille Ausführung",
-        "contentTab": "Inhalt und Auslöser",
-        "optionsTab": "Ausführungsoptionen",
-        "sections": "Automatisierungseinstellungen"
+        "notifications": "Benachrichtigungen und stille Ausführung"
       },
       "webhook": {
         "quotaHint": "Webhook-Empfänge sind pro Tag begrenzt, und Filter hier verringern die Anzahl nicht. Wähle beim Absender, etwa GitHub, nur die benötigten Ereignisse aus.",

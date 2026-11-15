@@ -17147,9 +17147,8 @@
         "automatic": "自发",
         "manually": "手发",
         "session": "差事",
-        "silentRun": "察而无事则默",
-        "silentRunTooltip": "唯报变故与疑难。提醒与定时遣讯者可阖之。",
-        "silentRunInfoAria": "观默行之规",
+        "silentRun": "默行",
+        "silentRunTooltip": "启之，则事成默不告。若任务所述有当告之情，AI 遇之自报；败与异常仍告。",
         "finishSendToFeishu": "毕则遣至飞书机器人",
         "finishSendToWecomGroup": "毕则遣至企业微信群",
         "configWecomGroup": "设企微群之告",
@@ -17259,10 +17258,7 @@
       },
       "layout": {
         "content": "所行之事",
-        "notifications": "告知与静行",
-        "contentTab": "内容与触发",
-        "optionsTab": "执行之设",
-        "sections": "自运之设"
+        "notifications": "告知与静行"
       },
       "webhook": {
         "quotaHint": "Webhook 受信之数日有其限，此处之筛不减其数。请于发信之方（如 GitHub）唯选所需之事。",

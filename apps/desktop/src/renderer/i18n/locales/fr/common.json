@@ -17386,9 +17386,8 @@
         "automatic": "Automatique",
         "manually": "Manuellement",
         "session": "Session",
-        "silentRun": "Rester silencieux quand les vérifications ne trouvent rien",
-        "silentRunTooltip": "Signaler uniquement les changements ou les problèmes. Désactivez cette option pour les rappels et les messages planifiés.",
-        "silentRunInfoAria": "Voir les règles d'exécution silencieuse",
+        "silentRun": "Exécution silencieuse",
+        "silentRunTooltip": "Lorsque cette option est activée, les exécutions réussies ne notifient pas par défaut. Si le prompt de la tâche demande une notification dans certaines conditions, l'IA la signalera lorsqu'elles sont remplies. Les échecs et les erreurs sont toujours notifiés.",
         "finishSendToFeishu": "Envoyer le résultat à FeishuBot",
         "finishSendToWecomGroup": "Envoyer le résultat au groupe WeCom",
         "configWecomGroup": "Configurer les notifications du groupe WeCom",
@@ -17498,10 +17497,7 @@
       },
       "layout": {
         "content": "Contenu à exécuter",
-        "notifications": "Notifications et exécution silencieuse",
-        "contentTab": "Contenu et déclenchement",
-        "optionsTab": "Options d’exécution",
-        "sections": "Paramètres de l’automatisation"
+        "notifications": "Notifications et exécution silencieuse"
       },
       "webhook": {
         "quotaHint": "Les réceptions Webhook sont limitées par jour et le filtrage ici ne réduit pas ce nombre. Chez l'expéditeur, comme GitHub, sélectionnez uniquement les événements utiles.",
