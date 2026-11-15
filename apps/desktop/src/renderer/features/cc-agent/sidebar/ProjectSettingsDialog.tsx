@@ -359,7 +359,7 @@ export function ProjectSettingsDialog({
                           nameBeforeEdit.current = name;
                           setEditingName(true);
                         }}
-                        className="group flex min-h-9 max-w-full items-center gap-2 rounded-md text-left text-20 font-medium text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                        className="group flex min-h-9 max-w-full items-center gap-2 rounded-full text-left text-20 font-medium text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                       >
                         <span className="truncate">{name.trim() || defaultName}</span>
                         <Pencil
