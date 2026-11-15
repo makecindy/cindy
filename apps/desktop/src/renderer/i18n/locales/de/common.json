@@ -9377,6 +9377,7 @@
     "backToLogin": "Zurück zur Anmeldung"
   },
   "login": {
+    "networkResponseHint": "Der Anmeldedienst hat eine unerwartete Antwort zurückgegeben. Ein Netzwerkzwischengerät oder Proxy blockiert möglicherweise die Anfrage. Prüfe die Netzwerk- und Proxy-Einstellungen.",
     "title": "Willkommen bei Cindy",
     "subtitle": "Wähle eine sichere Anmeldemethode",
     "savedLoginPreserved": "Bei der Wiederherstellung bleiben deine gespeicherten Anmeldedaten erhalten",

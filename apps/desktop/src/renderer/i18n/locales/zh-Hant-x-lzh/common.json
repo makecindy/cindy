@@ -9334,6 +9334,7 @@
     "backToLogin": "歸登入方式"
   },
   "login": {
+    "networkResponseHint": "登入之應異常，或為網路、 Proxy 所阻。請察網路與 Proxy 之設。",
     "title": "Cindy 恭候多時矣",
     "subtitle": "擇一法，安然登門",
     "savedLoginPreserved": "復原之舉將保留已存之登入資訊",

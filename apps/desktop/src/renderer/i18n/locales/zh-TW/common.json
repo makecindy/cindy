@@ -9334,6 +9334,7 @@
     "backToLogin": "返回登入方式"
   },
   "login": {
+    "networkResponseHint": "登入服務傳回異常回應，請求可能被中間網路或 Proxy 攔截。請檢查網路和 Proxy 設定。",
     "title": "歡迎使用 Cindy",
     "subtitle": "選擇一種方式安全登入",
     "savedLoginPreserved": "恢復操作會保留已儲存的登入資訊",

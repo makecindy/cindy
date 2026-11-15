@@ -9377,6 +9377,7 @@
     "backToLogin": "Back to sign-in"
   },
   "login": {
+    "networkResponseHint": "The sign-in service returned an unexpected response. A network intermediary or proxy may be blocking the request. Check your network and proxy settings.",
     "title": "Welcome to Cindy",
     "subtitle": "Choose a secure way to sign in",
     "savedLoginPreserved": "Recovery keeps your saved sign-in details",
