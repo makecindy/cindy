@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-protocol';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
-import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { DeviceLinkClient, classifyConnectionIssue, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -124,6 +124,7 @@ function makeHarness(opts?: {
   invokeMetrics?: ConstructorParameters<typeof DeviceLinkClient>[0]['invokeMetrics'];
   frameAuth?: ConstructorParameters<typeof DeviceLinkClient>[0]['frameAuth'];
   transportAllowed?: () => boolean;
+  createWebSocket?: ConstructorParameters<typeof DeviceLinkClient>[0]['createWebSocket'];
 }): Harness {
   const sockets: FakeWs[] = [];
   const client = new DeviceLinkClient({
@@ -137,11 +138,11 @@ function makeHarness(opts?: {
       remoteControlEnabled: true,
       busy: false,
     }),
-    createWebSocket: () => {
+    createWebSocket: opts?.createWebSocket ?? (() => {
       const ws = new FakeWs();
       sockets.push(ws);
       return ws;
-    },
+    }),
     peerFailurePolicy: opts?.peerFailurePolicy,
     peerResetReadRetry: opts?.peerResetReadRetry,
     invokeMetrics: opts?.invokeMetrics,
@@ -7345,6 +7346,47 @@ describe('DeviceLinkClient', () => {
       ws.emit('close', 1006);
       expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'auth-failed' });
       h.client.stop();
+    });
+
+    it('工厂 reject AGENT_NET_UPGRADE_401(agent-net 升级被拒,socket 尚未创建)→ issue=device-removed,按退避继续重试', async () => {
+      // 线上案例:设备被同账号其它设备移除后,升级每次被中转 401 拒绝,错误只出现在
+      // createWebSocket 工厂 reject 里;不分类则 UI 永远显示「连接中」。
+      let attempts = 0;
+      const h = makeHarness({
+        createWebSocket: async () => {
+          attempts += 1;
+          throw new Error('AGENT_NET_UPGRADE_401');
+        },
+      });
+      const issues: unknown[] = [];
+      h.client.onConnectionIssue((issue) => issues.push(issue));
+      h.client.start();
+      await tick();
+      expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'device-removed' });
+      expect(issues).toHaveLength(1);
+      // 工厂 reject 不停止重连:宿主重置身份后仍靠同一条退避循环重新入网
+      await vi.waitFor(() => expect(attempts).toBeGreaterThan(1));
+      expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'device-removed' });
+      h.client.stop();
+    });
+
+    it('工厂 reject 普通网络错误 → 不产生 issue(不误报鉴权/移除)', async () => {
+      const h = makeHarness({
+        createWebSocket: async () => {
+          throw new Error('connect ECONNREFUSED 127.0.0.1:443');
+        },
+      });
+      h.client.start();
+      await tick();
+      expect(h.client.getConnectionIssue()).toBeNull();
+      h.client.stop();
+    });
+
+    it('classifyConnectionIssue:AGENT_NET_UPGRADE_401/403 → device-removed(与 portableSocket 的 4410 映射同义)', () => {
+      expect(classifyConnectionIssue(undefined, undefined, 'Error: AGENT_NET_UPGRADE_401')).toBe('device-removed');
+      expect(classifyConnectionIssue(undefined, 'AGENT_NET_UPGRADE_403', undefined)).toBe('device-removed');
+      // 既有语义不变:普通 ws 升级 401 文案仍是 auth-failed
+      expect(classifyConnectionIssue(undefined, undefined, 'Unexpected server response: 401')).toBe('auth-failed');
     });
 
     it('4429 连接数超限 → too-many-connections;4400 版本 reason → version-mismatch', async () => {

@@ -606,6 +606,12 @@ export interface DeviceLinkPeerTransportReset {
  * 401 场景两端 ws 实现都不给 close code(升级失败统一 1006),只能靠 socket error
  * message 匹配:Node ws 是 "Unexpected server response: 401",RN 是
  * "Expected HTTP 101 response but was '401 Unauthorized'"。
+ *
+ * agent-net 传输的升级拒绝不走 ws 库的错误文案,而是工厂直接 reject
+ * `AGENT_NET_UPGRADE_<status>`(portableClient);401/403 是中转对设备证书的
+ * 拒绝(DEVICE_REVOKED 等),与 portableSocket 已有的 401/403 → close(4410)
+ * 映射同义,归入 device-removed。注意通用 401 正则 `\b401\b` 匹配不上
+ * `UPGRADE_401`(下划线是 word 字符),必须显式识别。
  */
 export function classifyConnectionIssue(
   code?: number,
@@ -617,6 +623,7 @@ export function classifyConnectionIssue(
   if (code === 4429) return 'too-many-connections';
   if (code === 4400 && /version/i.test(reason ?? '')) return 'version-mismatch';
   const detail = `${reason ?? ''} ${socketErrorMessage ?? ''}`;
+  if (/AGENT_NET_UPGRADE_40[13]/.test(detail)) return 'device-removed';
   if (/\b401\b|unauthorized/i.test(detail)) return 'auth-failed';
   return null;
 }
@@ -2716,6 +2723,14 @@ export class DeviceLinkClient {
         return;
       }
       this.log.warn('createWebSocket failed', err);
+      // 工厂 reject 意味着 socket 从未创建,handleDisconnect 的分类不会发生;可分类的
+      // 失败(agent-net 升级被拒 = 设备证书被中转拒绝)必须在这里同样记 issue,否则
+      // UI 会永远显示笼统的「连接中」。普通工厂错误照旧不产生 issue。
+      const detail = err instanceof Error ? err.message : String(err);
+      const kind = classifyConnectionIssue(undefined, undefined, detail);
+      if (kind) {
+        this.setConnectionIssue({ kind, detail, at: Date.now() });
+      }
       this.scheduleReconnect();
       return;
     }
