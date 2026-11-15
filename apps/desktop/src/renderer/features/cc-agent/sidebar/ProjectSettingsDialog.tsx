@@ -779,7 +779,7 @@ export function ProjectSettingsDialog({
           open
           existingOnly
           fixedDeviceId={project.deviceLinkDeviceId}
-          title={label('browseDirectory')}
+          title={label('addDirectory')}
           confirmText={label('addDirectory')}
           onOpenChange={(open) => {
             if (!open) setRemoteBrowse(null);

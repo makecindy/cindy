@@ -8,7 +8,12 @@ const writes: unknown[] = [];
 Object.assign(window, { projectSettingsWrites: writes });
 mountPage({
   host: (ctx) => ({
-    showOpenDirectoryDialog: async () => ({ canceled: false, path: '/Projects/Reference' }),
+    showOpenDirectoryDialog: async () => ({
+      canceled: false,
+      path:
+        (window as unknown as { projectPickerPath?: string }).projectPickerPath ??
+        '/Projects/Reference',
+    }),
     localDb: {
       projectAliases: {
         snapshot: async () => ({

@@ -380,7 +380,7 @@ export function ProjectSettingsSheet({
   });
   const browse = (target: "main" | "additional") => {
     setBrowseTarget(target);
-    picker.openPicker();
+    picker.openDirectoryPicker();
   };
   const draw = (value: string | null, size: number) => (
     <ProjectIcon
@@ -956,6 +956,7 @@ export function ProjectSettingsSheet({
         </View>
       </FormSheet>
       <OrcaWorkerDirectoryPicker
+        directoryOnly
         picker={picker}
         deviceId={deviceId}
         workingDir={directory}

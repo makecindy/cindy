@@ -80,9 +80,9 @@ export default {
   async check(page, ui) {
     if (ui.case === 'create-primary') {
       for (const path of ['/Projects/First', '/Projects/Second']) {
-        await page
-          .getByRole('textbox', { name: await ui.t('projectSettings.directoryPath'), exact: true })
-          .fill(path);
+        await page.evaluate((path) => {
+          window.projectPickerPath = path;
+        }, path);
         await page
           .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
           .click();
@@ -107,9 +107,9 @@ export default {
       return;
     }
     if (ui.case === 'create-existing') {
-      await page
-        .getByRole('textbox', { name: await ui.t('projectSettings.directoryPath'), exact: true })
-        .fill('/Projects/Cindy');
+      await page.evaluate((path) => {
+        window.projectPickerPath = path;
+      }, '/Projects/Cindy');
       await page
         .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
         .click();
@@ -130,14 +130,17 @@ export default {
       return;
     }
     if (ui.case === 'create-cancel') {
-      await page
-        .getByRole('textbox', { name: await ui.t('projectSettings.directoryPath'), exact: true })
-        .fill('/Projects/Example');
+      await page.evaluate((path) => {
+        window.projectPickerPath = path;
+      }, '/Projects/Example');
       await page
         .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
         .click();
+      await page.evaluate(() => {
+        window.projectPickerPath = '/Projects/Reference';
+      });
       await page
-        .getByRole('button', { name: await ui.t('projectSettings.browseDirectory'), exact: true })
+        .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
         .last()
         .click();
       await page
@@ -157,21 +160,24 @@ export default {
         await page
           .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
           .fill('Example');
-        await page
-          .getByRole('textbox', { name: await ui.t('projectSettings.directoryPath'), exact: true })
-          .fill('/Projects/Example');
+        await page.evaluate((path) => {
+          window.projectPickerPath = path;
+        }, '/Projects/Example');
         await page
           .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
           .click();
+        await page.evaluate(() => {
+          window.projectPickerPath = '/Projects/Reference';
+        });
         await page
-          .getByRole('button', { name: await ui.t('projectSettings.browseDirectory'), exact: true })
+          .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
           .last()
           .click();
       }
       if (ui.case === 'directories') {
-        await page
-          .getByRole('textbox', { name: await ui.t('projectSettings.directoryPath'), exact: true })
-          .fill('/Projects/Output');
+        await page.evaluate((path) => {
+          window.projectPickerPath = path;
+        }, '/Projects/Output');
         await page
           .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
           .click();

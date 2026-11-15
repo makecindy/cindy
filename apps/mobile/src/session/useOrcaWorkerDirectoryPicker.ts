@@ -102,7 +102,7 @@ export function useOrcaWorkerDirectoryPicker(params: {
     void load(live.current.workingDir || '~');
   }, [isCurrent, load]);
   return {
-    page, openPicker, close, closed, choose, browse, load,
+    page, openPicker, openDirectoryPicker: () => { openPicker(); browse(); }, close, closed, choose, browse, load,
     back: () => { seq.current += 1; setLoading(false); setPage('workspace'); },
     path: directory?.resolvedPath ?? '', parent: directory?.parent ?? null,
     entries: filterRemoteDirectoryEntries((directory?.entries ?? []).filter(entry => entry.kind !== 'file'), showHidden),

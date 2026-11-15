@@ -74,6 +74,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
             accessory={icon('chevron.right')} disabled={workspaceUnavailable} onPress={p.onBrowse} testID="newSession.workspaceBrowseOption" />
         </Section>
       </> : browsing ? <>
+        {p.directoryInput ? <Section><RNHostView matchContents>{p.directoryInput}</RNHostView></Section> : null}
         <Section>
           <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}
             testID="newSession.remoteBrowseCurrentPath">{p.path || t('session.new.readingRemoteDir')}</Text>

@@ -39,6 +39,7 @@ export function ProjectDirectoriesEditor({
   const label = (key: string) => t(`settings.projectInfo.${key}`);
   const { colors } = useTheme();
   const [path, setPath] = useState("");
+  const [enteringPath, setEnteringPath] = useState(false);
   return (
     <View style={styles.group}>
       <Text style={[styles.body, { color: colors.textPrimary }]}>
@@ -111,57 +112,72 @@ export function ProjectDirectoriesEditor({
           </View>
         </View>
       ))}
-      {allowAdd && value.length < 10 && (
-        <View style={styles.group}>
-          {onBrowse && (
+      {allowAdd &&
+        value.length < 10 &&
+        (enteringPath ? (
+          <View style={styles.group}>
+            <TextInput
+              value={path}
+              onChangeText={setPath}
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!disabled}
+              accessibilityLabel={label("directoryPath")}
+              placeholder={label("directoryPath")}
+              placeholderTextColor={colors.textPlaceholder}
+              style={[
+                styles.input,
+                {
+                  color: colors.textPrimary,
+                  backgroundColor: colors.surfaceChip,
+                },
+              ]}
+            />
             <MainWindowActionButton
               action={{
-                label: label("browseDirectory"),
+                label: label("addDirectory"),
+                disabled: disabled || !path.trim(),
                 tone: "secondary",
-                disabled,
-                onPress: onBrowse,
+                onPress: () => {
+                  const clean = path.trim();
+                  if (
+                    clean &&
+                    clean !== mainDirectory &&
+                    !value.some((item) => item.path === clean)
+                  ) {
+                    if (!mainDirectory && onMainDirectoryChange)
+                      onMainDirectoryChange(clean);
+                    else onChange([...value, { path: clean, access: "write" }]);
+                  }
+                  setPath("");
+                  setEnteringPath(false);
+                },
               }}
             />
-          )}
-          <TextInput
-            value={path}
-            onChangeText={setPath}
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!disabled}
-            accessibilityLabel={label("directoryPath")}
-            placeholder={label("directoryPath")}
-            placeholderTextColor={colors.textPlaceholder}
-            style={[
-              styles.input,
-              {
-                color: colors.textPrimary,
-                backgroundColor: colors.surfaceChip,
-              },
-            ]}
-          />
+            <MainWindowActionButton
+              action={{
+                label: label("cancel"),
+                tone: "secondary",
+                onPress: () => {
+                  setEnteringPath(false);
+                  setPath("");
+                },
+              }}
+            />
+          </View>
+        ) : (
           <MainWindowActionButton
             action={{
               label: label("addDirectory"),
-              disabled: disabled || !path.trim(),
               tone: "secondary",
+              disabled,
               onPress: () => {
-                const clean = path.trim();
-                if (
-                  clean &&
-                  clean !== mainDirectory &&
-                  !value.some((item) => item.path === clean)
-                ) {
-                  if (!mainDirectory && onMainDirectoryChange)
-                    onMainDirectoryChange(clean);
-                  else onChange([...value, { path: clean, access: "write" }]);
-                }
-                setPath("");
+                if (onBrowse) onBrowse();
+                else setEnteringPath(true);
               },
             }}
           />
-        </View>
-      )}
+        ))}
       <Text style={[styles.note, { color: colors.textSecondary }]}>
         {label("directoriesHint")}
       </Text>

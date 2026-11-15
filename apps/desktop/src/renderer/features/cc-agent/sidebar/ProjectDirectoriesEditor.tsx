@@ -33,6 +33,7 @@ export function ProjectDirectoriesEditor({
   const { t } = useTranslation();
   const label = (key: string) => t(`projectSettings.${key}`);
   const [path, setPath] = useState('');
+  const [enteringPath, setEnteringPath] = useState(false);
   const [error, setError] = useState(false);
   const add = (candidate: string) => {
     const clean = candidate.trim();
@@ -40,6 +41,7 @@ export function ProjectDirectoriesEditor({
     if (!mainDirectory && onMainDirectoryChange) onMainDirectoryChange(clean);
     else onChange([...value, { path: clean, access: 'write' }]);
     setPath('');
+    setEnteringPath(false);
   };
   return (
     <FormField label={label('directories')} hint={label('directoriesHint')}>
@@ -98,49 +100,66 @@ export function ProjectDirectoriesEditor({
               </Button>
             </div>
           ))}
-          {allowAdd && value.length < 10 && (
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                value={path}
-                onChange={setPath}
-                placeholder={label('directoryPath')}
-                aria-label={label('directoryPath')}
+          {allowAdd &&
+            value.length < 10 &&
+            (enteringPath ? (
+              <div className="flex flex-col gap-2">
+                <Input
+                  autoFocus
+                  value={path}
+                  onChange={setPath}
+                  placeholder={label('directoryPath')}
+                  aria-label={label('directoryPath')}
+                  disabled={disabled}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      add(path);
+                    }
+                  }}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setEnteringPath(false);
+                      setPath('');
+                    }}
+                  >
+                    {label('cancel')}
+                  </Button>
+                  <Button disabled={disabled || !path.trim()} onClick={() => add(path)}>
+                    {label('addDirectory')}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                variant="secondary"
                 disabled={disabled}
-                className="min-w-0 flex-1 basis-full sm:basis-0"
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    add(path);
+                className="self-start"
+                onClick={() => {
+                  if (onBrowse) {
+                    onBrowse();
+                    return;
                   }
+                  if (!local) {
+                    setEnteringPath(true);
+                    return;
+                  }
+                  setError(false);
+                  void window.electronAPI
+                    .showOpenDirectoryDialog()
+                    .then((result) => {
+                      if (!result.canceled && result.path) add(result.path);
+                    })
+                    .catch(() => setError(true));
                 }}
-              />
-              <Button disabled={disabled || !path.trim()} onClick={() => add(path)}>
+              >
+                <FolderPlus size={15} />
                 {label('addDirectory')}
               </Button>
-              {(local || onBrowse) && (
-                <Button
-                  variant="secondary"
-                  disabled={disabled}
-                  onClick={() => {
-                    if (onBrowse) {
-                      onBrowse();
-                      return;
-                    }
-                    setError(false);
-                    void window.electronAPI
-                      .showOpenDirectoryDialog()
-                      .then((result) => {
-                        if (!result.canceled && result.path) add(result.path);
-                      })
-                      .catch(() => setError(true));
-                  }}
-                >
-                  <FolderPlus size={15} />
-                  {label('browseDirectory')}
-                </Button>
-              )}
-            </div>
-          )}
+            ))}
           {error && (
             <p role="alert" className="text-13 text-[var(--text-danger)]">
               {label('failed')}

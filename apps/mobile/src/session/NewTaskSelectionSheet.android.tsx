@@ -145,6 +145,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           </>
         ) : browsing ? (
           <>
+            {p.directoryInput}
             <Text
               testID="newSession.remoteBrowseCurrentPath"
               style={{
