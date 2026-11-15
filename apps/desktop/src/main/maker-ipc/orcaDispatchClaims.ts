@@ -297,3 +297,26 @@ export function settleDispatchClaimIncident(leadSessionId: string, consistent: b
 export function resetDispatchClaimState(): void {
   ledgers.clear();
 }
+
+/** 升级卡是给主人看的：不能复用发给 Lead 的英文纠正句，要写清「谁说的、宿主查到什么、引文出自哪里」。 */
+export function buildDispatchClaimNoticeSummary(params: {
+  verdict: DispatchClaimVerdict;
+  targets: OrcaDispatchRosterEntry[];
+  quote: string;
+}): string {
+  const { verdict, targets, quote } = params;
+  const target = targets.map(entry => entry.label).join('、');
+  const claim = target ? `Lead 称已派给 ${target}` : 'Lead 称已派单';
+  const reason = verdict.consistent
+    ? ''
+    : verdict.reason === 'no-dispatch'
+      ? '但宿主这一轮没有接受任何派单'
+      : verdict.reason === 'target-not-dispatched'
+        ? `但宿主这一轮没有派往 ${verdict.detail} 的记录`
+        : `但引用的队列编号 ${verdict.detail} 不对应任何派单`;
+  const trimmedQuote = quote.length > 120 ? `${quote.slice(0, 120)}…` : quote;
+  return [
+    `${claim}${reason}；引文取自它这轮回复：「${trimmedQuote}」；`,
+    '已自动补派一次仍未核实，可让它重新派发，或确认目标 worker 是否真的收到。',
+  ].join('');
+}

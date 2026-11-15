@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  buildDispatchClaimNoticeSummary,
   dispatchFactsForTurn,
   dropLeadDispatchFact,
   noteLeadDispatchFact,
@@ -179,5 +180,41 @@ describe('lead dispatch claim incident', () => {
     noteLeadDispatchFact(LEAD, fact());
     expect(settleDispatchClaimIncident(LEAD, true)).toBeNull();
     expect(settleDispatchClaimIncident(LEAD, false)).toBe('wake');
+  });
+});
+
+describe('buildDispatchClaimNoticeSummary', () => {
+  const roster = [{ id: 'w1', label: 'developer' }];
+
+  it('names the lead as the source and says where the quote came from', () => {
+    const text = buildDispatchClaimNoticeSummary({
+      verdict: { consistent: false, reason: 'target-not-dispatched', detail: 'developer' },
+      targets: roster,
+      quote: '已派给 developer，接着做行值修复',
+    });
+    expect(text).toContain('Lead 称已派给 developer');
+    expect(text).toContain('但宿主这一轮没有派往 developer 的记录');
+    expect(text).toContain('引文取自它这轮回复');
+    expect(text).not.toContain('Your turn said');
+    expect(text).not.toContain('still unverified');
+  });
+
+  it('explains an unknown queue id instead of repeating a generic failure', () => {
+    const text = buildDispatchClaimNoticeSummary({
+      verdict: { consistent: false, reason: 'unknown-message-id', detail: '3f1a' },
+      targets: [],
+      quote: '已排队给 developer（queued_message_id: 3f1a）',
+    });
+    expect(text).toContain('引用的队列编号 3f1a 不对应任何派单');
+  });
+
+  it('clips a long quote so the card stays readable', () => {
+    const text = buildDispatchClaimNoticeSummary({
+      verdict: { consistent: false, reason: 'no-dispatch', detail: '' },
+      targets: [],
+      quote: 'x'.repeat(200),
+    });
+    expect(text).toContain('…');
+    expect(text.length).toBeLessThan(400);
   });
 });

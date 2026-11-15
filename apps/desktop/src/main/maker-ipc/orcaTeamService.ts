@@ -17,6 +17,7 @@ import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 import {
   describeDispatchClaimVerdict,
   dispatchFactsForTurn,
+  buildDispatchClaimNoticeSummary,
   dropLeadDispatchFact,
   noteLeadDispatchFact,
   readDispatchClaim,
@@ -2352,6 +2353,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
    * Lead 收口对账：只在 lead 文本声称已派、而本轮凭据不支撑时动手；
    * 首次唤醒补派一次（队列消息，开一轮），补派轮仍不一致则升级为会话内纠正卡 + 提醒。
    */
+
   async handleLeadTurnSettled(params: {
     leadSessionId: string;
     turnGeneration: number;
@@ -2404,7 +2406,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     deps.escalateDispatchClaim?.(params.leadSessionId, {
       state: 'unverified',
       version: 1,
-      summary: lines('Dispatch claim is still unverified after one correction.'),
+      summary: buildDispatchClaimNoticeSummary({
+        verdict,
+        targets: reading.targets,
+        quote: reading.quote,
+      }),
       reason,
       quote: reading.quote,
       at: Date.now(),
