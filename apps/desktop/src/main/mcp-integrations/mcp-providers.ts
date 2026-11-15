@@ -35,6 +35,7 @@ import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
+import { createDesktopSessionShareCallbacks } from '../session-share/sessionShareTools.desktop.js';
 import { listProjects, renameProject, removeProject, readCurrentSessionProject } from './projectManagement.js';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
@@ -394,6 +395,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     return (await authorizeTaskToolCall({ sessionId, server: 'cindy_helper', tool: 'history', args: {} })).ok;
   };
 
+  const sessionShare = createDesktopSessionShareCallbacks();
   const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
     const dbClient = tryGetDbClient();
     const plugin = !sessionId ? getPluginHostToolCaller() : undefined;
@@ -979,6 +981,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       askUserQuestionAsync: deps.askUserQuestionAsync,
       manageUserQuestions: deps.manageUserQuestions,
       sessionImport: sessionImportCallbacks,
+      sessionShare: {
+        export: (params, context) => withAccountDataAccess(context.sessionId, () => sessionShare.export(params, context)),
+        import: (params, context) => withAccountDataAccess(context.sessionId, () => sessionShare.import(params, context)),
+      },
       renameSessions: async ({ changes, dryRun }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };

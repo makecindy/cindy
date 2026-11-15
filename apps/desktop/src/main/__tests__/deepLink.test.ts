@@ -45,6 +45,7 @@ import {
   OPEN_SHARE_FILE_FLAG,
   focusMainWindow,
   handleIncomingDeepLink,
+  handleIncomingShareFile,
   openMainWindowVoiceSettings,
   openMainWindowSession,
   openMainWindowRemoteControlSettings,
@@ -591,6 +592,16 @@ describe('dual scheme (cindy primary + legacy xdt-maker)', () => {
     handleIncomingDeepLink('cindy://session/external-task', 'open-url');
     owner.generation += 1;
     expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'external-task' });
+  });
+
+  // Unit: a plugin package is account-owned, unlike an external file-open intent.
+  // The old share-file entry could not bind a buffered wizard to its owner.
+  it('drops a buffered native package wizard after its owner changes', () => {
+    setDeepLinkMainWindow(null);
+    takePendingDeepLink();
+    handleIncomingShareFile('/fixture/task.cshare', 'host-tool', { ownerScopeKey: String(owner.generation) });
+    owner.generation += 1;
+    expect(takePendingDeepLink()).toBeNull();
   });
 
   it('buffers only the opaque provider import id during cold start', () => {

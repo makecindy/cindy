@@ -422,7 +422,7 @@ export function handleIncomingOpenFolder(workingDir: string, source: string): vo
   dispatchDeepLink(payload);
 }
 
-export function handleIncomingShareFile(filePath: string, source: string): void {
+export function handleIncomingShareFile(filePath: string, source: string, owner?: DataOwnerBroadcastScope): void {
   if (typeof filePath !== 'string' || filePath.length === 0) {
     log.warn('ignoring empty --open-share-file', { source });
     return;
@@ -437,7 +437,7 @@ export function handleIncomingShareFile(filePath: string, source: string): void 
     return;
   }
   log.info('received open-share-file', { source, filePath: cleaned });
-  dispatchDeepLink({ type: 'share-import', filePath: cleaned });
+  dispatchDeepLink({ type: 'share-import', filePath: cleaned }, true, owner);
 }
 
 /**

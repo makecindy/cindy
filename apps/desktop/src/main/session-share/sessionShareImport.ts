@@ -174,7 +174,6 @@ async function loadZipAndManifest(
 
 /** 第一段:读文件、解头。明文直接出预览;加密只报 encrypted,等 unlock。 */
 export async function inspectShareFile(filePath: string, hostResources?: { resourceBudgetBytes: number }): Promise<InspectResult> {
-  sweepExpiredDrafts();
   const stat = await fsp.stat(filePath).catch(() => null);
   if (!stat?.isFile()) throw codedError('SHARE_FILE_INVALID', 'file not found');
   const readLimit = hostResources?.resourceBudgetBytes ?? SHARE_FILE_READ_LIMIT_BYTES;
@@ -182,6 +181,15 @@ export async function inspectShareFile(filePath: string, hostResources?: { resou
     throw codedError('SHARE_FILE_INVALID', hostResources ? 'MIGRATION_NO_MEMORY' : 'file too large');
   }
   const fileBytes = await fsp.readFile(filePath);
+  return inspectShareBytes(fileBytes, filePath, hostResources);
+}
+
+/** Host-approved handoff bytes enter the same parser without reopening their source path. */
+export async function inspectShareBytes(fileBytes: Buffer, filePath: string, hostResources?: { resourceBudgetBytes: number }): Promise<InspectResult> {
+  sweepExpiredDrafts();
+  const readLimit = hostResources?.resourceBudgetBytes ?? SHARE_FILE_READ_LIMIT_BYTES;
+  if (!Number.isSafeInteger(readLimit) || readLimit < 0 || fileBytes.byteLength > readLimit)
+    throw codedError('SHARE_FILE_INVALID', hostResources ? 'MIGRATION_NO_MEMORY' : 'file too large');
   const draftId = randomUUID();
 
   // 先探测头:加密文件不需要密码也能识别出「这是加密的 .xdtshare」。
