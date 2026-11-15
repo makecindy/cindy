@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import { isAuthorized } from './api-token.mjs';
 import { clientErrorMessage } from './client-error.mjs';
+import { parseTypedError, typedErrorStatus } from './typed-error.mjs';
 import { createWebAuth, isLoopbackRequest, CONNECT_PAGE, CONNECT_SCRIPT } from './web-auth.mjs';
 import { buildWebShim } from './web-client-build.mjs';
 import { HOST_IPC_MANIFEST_PATH, HOST_IPC_PATH_PREFIX } from '@cindy/maker-shared/host-ipc-registry';
@@ -375,6 +376,13 @@ export function createHostServer(input) {
         response.end();
         return;
       }
+      // A typed error whose code is in the shared table answers with its status and code
+      // (typed-error.mjs, as the IPC route). The message stays the whole `[CODE] message`: the web
+      // client reads the code from the response text (apps/web/shim.js requestHost). Anything else
+      // stays the 500 below.
+      const typed = parseTypedError(error);
+      const status = typed ? typedErrorStatus(typed.code) : null;
+      if (typed && status !== null) { send(response, status, { error: typed.code, message: clientErrorMessage(error) }); return; }
       send(response, 500, { error: 'internal_error', message: clientErrorMessage(error) });
     } finally {
       finishOwnerRequest?.();

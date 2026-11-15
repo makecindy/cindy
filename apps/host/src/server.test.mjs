@@ -347,6 +347,33 @@ test('unknown routes and internal failures stay JSON', async (t) => {
   assert.equal(failed.body.message, 'storage offline');
 });
 
+// Rule: a typed error from an /api entry answers with the shared table's status, as the IPC route
+// (typed-error.mjs); the message stays the whole `[CODE] message`, which the web client reads the
+// code from. Gap: every failure here answered 500, a refused model change included. Only an exactly
+// typed error in the table changes; a code mismatch, a code outside the table or a plain error stay 500.
+test('typed errors from /api entries answer with their table status; anything else stays 500', async (t) => {
+  const typed = (code, text = `[${code}] refused`) => Object.assign(new Error(text), { code });
+  let failure;
+  const request = await withServer(t, { updateSession: () => { throw failure; } });
+  const call = () => request('/api/sessions/update', { method: 'POST',
+    headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 's', patch: { model: 'small' } }) });
+  for (const [code, status] of [['MODEL_WINDOW_PROTECTION_UNAVAILABLE', 409], ['PRECONDITION_FAILED', 409],
+    ['INVALID_PARAMS', 400], ['UNSUPPORTED_CAPABILITY', 501]]) {
+    failure = typed(code);
+    const answer = await call();
+    assert.equal(answer.status, status, code);
+    assert.deepEqual(answer.body, { error: code, message: `[${code}] refused` });
+  }
+  for (const untyped of [typed('NOT_IN_TABLE'), typed('INVALID_PARAMS', '[NOT_FOUND] mismatch'),
+    new Error('[INVALID_PARAMS] no code property')]) {
+    failure = untyped;
+    const answer = await call();
+    assert.equal(answer.status, 500, untyped.message);
+    assert.deepEqual(answer.body, { error: 'internal_error', message: untyped.message });
+  }
+});
+
 // Only an Error's message is part of the client contract. Any other thrown value
 // may stringify to a stack or an internal path, so no error body may echo it.
 test('thrown values that are not errors are never serialised to the client', async (t) => {
