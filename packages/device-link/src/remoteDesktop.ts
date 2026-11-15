@@ -230,6 +230,14 @@ export interface RemoteDesktopCapabilities {
   lockOnExit?: boolean;
   /** Host enforces human inactivity and locks before ending the lease. */
   idleLock?: boolean;
+  /**
+   * The host applies its own away time to idle viewers and ignores `idleTimeoutMinutes`
+   * (docs/product-rules/privacy-screen.md). Viewers hide their idle setting; for hosts
+   * without it they keep sending the old default.
+   */
+  hostIdle?: boolean;
+  /** How a protected end leaves the host: its privacy screen, or a real lock. Older hosts: lock. */
+  exitProtection?: 'privacy-screen' | 'lock';
   videoSettings?: boolean;
   trickleIce?: boolean;
   systemAudio?: boolean;

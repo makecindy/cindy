@@ -1116,19 +1116,23 @@
   },
   "privacyExit": {
     "status": "Dieser Computer wird über Cindy ferngesteuert",
-    "hint": "Um diesen Bildschirm anzuzeigen, deaktiviere auf dem steuernden Gerät unter „Sicherheit“ die Option „Sichtschutz am Computer“. Oder klicke auf diesem Computer oder drücke eine beliebige Taste und wähle dann „Verbindung trennen“.",
+    "hint": "Um diesen Bildschirm anzuzeigen, deaktiviere auf dem steuernden Gerät unter „Sicherheit“ die Option „Sichtschutz während der Verbindung“. Oder klicke auf diesem Computer oder drücke eine beliebige Taste und wähle dann „Trennen“.",
     "title": "Remotedesktop-Verbindung trennen?",
-    "detail": "Dadurch wird die Fernsteuerung beendet und der Bildschirm dieses Computers wiederhergestellt. Der Computer wird gesperrt, wenn die Sperre beim Beenden aktiviert ist.",
+    "detail": "Damit endet die Fernsteuerung und der Sichtschutz wird entfernt. Ist „Computer beim Beenden schützen“ aktiv, wird der Computer auch gesperrt.",
     "cancel": "Verbunden bleiben",
     "disconnect": "Trennen"
   },
   "awayGuard": {
     "status": "Cindy arbeitet",
-    "hint": "Drücke eine Taste zum Sperren und entsperre dann mit Touch ID oder deinem Passwort.",
+    "hint": "Drücke eine beliebige Taste oder die Touch ID-Taste zum Sperren und entsperre dann mit Fingerabdruck oder Passwort",
     "lockFailed": {
       "status": "Cindy konnte diesen Mac nicht sperren",
-      "hint": "Drücke Control-Command-Q zum Sperren. Nach einer Weile sperrt sich der Bildschirm auch von selbst."
-    }
+      "hint": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Touch ID oder deinem Passwort, um den Sichtschutz zu entfernen. Du kannst auch den Deckel schließen oder die Ein/Aus-Taste drücken.",
+      "hintWindows": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Windows Hello oder deiner PIN, um den Sichtschutz zu entfernen. Du kannst auch Windows-Logo-Taste + L drücken."
+    },
+    "hintWindows": "Zum Sperren eine beliebige Taste drücken; entsperren mit Windows Hello oder deinem Passwort",
+    "hintLinux": "Zum Sperren eine beliebige Taste drücken; entsperren mit deinem Passwort",
+    "verifyReason": "den Sichtschutz entfernen"
   },
   "appBadge": {
     "attentionCount": "Aufgaben, die Aufmerksamkeit benötigen: {{count}}"
@@ -1279,10 +1283,10 @@
       "resolutionHint": "Auflösungsänderungen wirken sich auf den tatsächlichen entfernten Monitor aus."
     },
     "settingUnsupported": "Dieser Computer unterstützt diese Einstellung noch nicht",
-    "privacyScreen": "Sichtschutz am Computer",
-    "privacyScreenHint": "Die Bildschirme des Computers verdecken. Klicke auf dem Computer oder drücke eine Taste und bestätige dann, um die Verbindung zu trennen. Falls aktiviert, wird der Computer beim Beenden gesperrt.",
-    "privacyActive": "Der Sichtschutz ist eingeschaltet. Klicke auf dem Computer oder drücke eine Taste und bestätige dann, um die Verbindung zu trennen. Falls aktiviert, wird der Computer beim Beenden gesperrt.",
-    "privacyFailed": "Der Sichtschutz konnte nicht aktiviert werden. Die Bildschirme des Computers sind möglicherweise weiterhin sichtbar.",
+    "privacyScreen": "Sichtschutz während der Verbindung",
+    "privacyScreenHint": "Verdeckt den Bildschirm dieses Computers während der Fernsteuerung. Klickt jemand am Computer oder drückt eine Taste, wird zuerst gefragt, ob die Verbindung getrennt werden soll.",
+    "privacyActive": "Der Sichtschutz ist aktiv. Klickt jemand am Computer oder drückt eine Taste, wird zuerst gefragt, ob die Verbindung getrennt werden soll.",
+    "privacyFailed": "Der Sichtschutz konnte nicht aktiviert werden. Der Bildschirm des Computers ist möglicherweise noch sichtbar.",
     "hostMute": "Gesteuerten Computer stummschalten",
     "hostMuteHint": "Gesteuerten Computer während der Verbindung stummschalten",
     "hostMuteFailed": "Stummschaltung des gesteuerten Computers konnte nicht geändert werden",
@@ -1298,8 +1302,8 @@
     "idleMinutes_one": "{{count}} Minute",
     "idleMinutes_other": "{{count}} Minuten",
     "idleDisconnected": "Verbindung wegen Inaktivität getrennt. Verbinde dich erneut, wenn du bereit bist.",
-    "lockOnExit": "Computer beim Beenden sperren",
-    "lockOnExitHint": "Sperrt den Computer, wenn du den Remotedesktop beendest.",
+    "lockOnExit": "Computer beim Beenden schützen",
+    "lockOnExitHint": "Sperrt den Computer, wenn du den Remote-Desktop beendest.",
     "lockOnExitFailed": "Es konnte nicht bestätigt werden, dass der Computer gesperrt wurde. Prüfe den Computer, bevor du ihn unbeaufsichtigt lässt.",
     "nativeResolution": "Nativ",
     "autoUnlock": "Computer automatisch entsperren",
@@ -1341,7 +1345,9 @@
         "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktualisiere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
         "action": "Aktualisieren"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "Zeigt beim Beenden den Sichtschutz, damit die KI weiterarbeiten kann; eine Berührung am Computer sperrt ihn.",
+    "lockedEnablePrivacyHint": "Damit die KI diesen Computer weiter nutzen kann, während du weg bist, aktiviere auf ihm den Sichtschutz unter Einstellungen → Allgemein → Wenn du weg bist."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1910,7 +1916,8 @@
       "windowBehavior": "App-Verhalten",
       "shortcuts": "Tastenkombinationen",
       "mcpServers": "Benutzerdefiniertes MCP",
-      "bots": "Freunde"
+      "bots": "Freunde",
+      "awayFromComputer": "Wenn du weg bist"
     },
     "remote": {
       "title": "Remote-Rechner",
@@ -2476,21 +2483,23 @@
       "swallowActivationClickAria": "Schutz vor versehentlichen Klicks bei der Rückkehr zum Fenster ein-/ausschalten",
       "macRestartNote": "Starte unter macOS die App neu, damit die Änderungen wirksam werden.",
       "awayGuard": {
-        "label": "Weiterarbeiten, während du weg bist",
-        "hint": "Wenn aktiviert, schaltet dieser Mac den Bildschirm nicht mehr von selbst aus und sperrt sich nicht, damit die KI ihn jederzeit nutzen kann. Bist du eine Weile weg, verdeckt eine schwarze Abdeckung den Bildschirm und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort.",
+        "label": "Sichtschutz statt Sperren verwenden",
+        "hint": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
         "permission": "Erlaube Cindy unter Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen, damit der Bildschirm sofort gesperrt wird, wenn jemand diesen Mac berührt. Bis dahin geht der Bildschirm wie gewohnt in den Ruhezustand und wird gesperrt.",
         "preview": "Jetzt ausprobieren",
-        "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
-        "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut.",
+        "previewStarting": "Lass Maus und Tastatur los. In 3 Sekunden erscheint der Sichtschutz; drücke eine beliebige Taste zum Sperren und entsperre dann zum Testen.",
+        "previewUnavailable": "Der Sichtschutz konnte nicht angezeigt werden. Starte Cindy neu und versuche es erneut.",
         "delay": {
           "30": "30 s",
           "60": "1 Min.",
           "120": "2 Min.",
           "300": "5 Min.",
-          "label": "Bildschirm verdecken nach",
-          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
+          "label": "Sichtschutz anzeigen nach",
+          "hint": "So lange darf niemand Tastatur oder Maus berühren, während die KI arbeitet. Standard ist die Zeit, nach der das System den Bildschirm ausschaltet.",
           "system": "System"
-        }
+        },
+        "hintWindows": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Windows Hello oder deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
+        "hintLinux": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer."
       }
     },
     "agentIsland": {
@@ -7019,7 +7028,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "Im Sichtschutz enthalten: Dieser Computer geht nicht in den Ruhezustand."
     },
     "imBot": {
       "beta": "Beta",
@@ -9273,6 +9283,9 @@
         "failed": "Bereinigung konnte nicht abgeschlossen werden",
         "pending": "In der Warteschlange"
       }
+    },
+    "awayFromComputer": {
+      "title": "Wenn du weg bist"
     },
     "navigation": {
       "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."

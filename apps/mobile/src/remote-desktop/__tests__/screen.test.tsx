@@ -136,6 +136,8 @@ const fixture = vi.hoisted(() => ({
   lockPreferenceFromStorage: false,
   lockSupported: true,
   idleSupported: false,
+  hostIdle: false,
+  exitProtection: undefined as undefined | "privacy-screen" | "lock",
   alert: vi.fn(),
   resetUnlockAttempt: vi.fn(),
   maybeUnlock: vi.fn(async (_beforeAuthentication?: () => Promise<void>) => {}),
@@ -529,6 +531,8 @@ beforeEach(async () => {
   fixture.lockPreferenceFromStorage = false;
   fixture.lockSupported = true;
   fixture.idleSupported = false;
+  fixture.hostIdle = false;
+  fixture.exitProtection = undefined;
   fixture.views = {};
   fixture.keyboardListeners = {};
   fixture.webViewProps = null;
@@ -553,6 +557,8 @@ beforeEach(async () => {
           version: 1,
           lockOnExit: fixture.lockSupported,
           idleLock: fixture.idleSupported,
+          ...(fixture.hostIdle ? { hostIdle: true } : {}),
+          ...(fixture.exitProtection ? { exitProtection: fixture.exitProtection } : {}),
           trickleIce: fixture.trickleIce,
           automaticReconnect: true,
           connectionTakeover: true,
@@ -3859,6 +3865,31 @@ describe("remote desktop controls", () => {
       expect(
         host.querySelector('[data-testid="remoteDesktop.lockOnExit"]'),
       ).not.toBeNull();
+    },
+  );
+  // docs/product-rules/privacy-screen.md (2026-11-14): hosts with their own away time
+  // hide the viewer's idle setting; the exit wording follows how the host protects, and a
+  // host whose privacy screen is off says where to turn it on. Legacy hosts are unchanged.
+  it.each([
+    [false, undefined, "remoteDesktop.lockOnExitHint", true, false],
+    [true, "lock", "remoteDesktop.lockOnExitHint", false, true],
+    [true, "privacy-screen", "remoteDesktop.lockOnExitHintPrivacy", false, false],
+  ] as const)(
+    "follows host idle %s / protection %s in the security panel",
+    async (hostIdle, protection, exitHint, idleShown, guidance) => {
+      fixture.idleSupported = true;
+      fixture.hostIdle = hostIdle;
+      fixture.exitProtection = protection;
+      await connect();
+      act(() => button("operations").click());
+      act(() => button("security").click());
+      expect(
+        host.querySelector('[data-testid="remoteDesktop.idleLock"]') !== null,
+      ).toBe(idleShown);
+      expect(host.textContent).toContain(exitHint);
+      expect(host.textContent?.includes("remoteDesktop.lockedEnablePrivacyHint")).toBe(
+        guidance,
+      );
     },
   );
   it.each(["light", "dark"])(

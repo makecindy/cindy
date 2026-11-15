@@ -20,7 +20,10 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => ({
 
 import { createAnthropicCompatProxyHost, type AnthropicCompatProxyHostPorts } from '../anthropicCompatProxyHostCore.js';
 
+const requestSizeController: ReturnType<AnthropicCompatProxyHostPorts['createRequestSizeController']> = { control: async () => null };
+
 const ports = (): AnthropicCompatProxyHostPorts => ({
+  createRequestSizeController: () => requestSizeController,
   createAttachmentRecovery: () => null,
   outboundFetch: async () => new Response(null),
   isOpenAiSubscriptionProviderId: () => false,
@@ -45,6 +48,7 @@ describe('the optional inbound check port', () => {
     await createAnthropicCompatProxyHost({ ...ports(), authorizeInbound: gate }).ensureAnthropicCompatProxyReady();
     const [without, withGate] = captured;
     expect(without).toBeDefined();
+    expect(without!.requestSizeController).toBe(requestSizeController);
     expect('authorizeInbound' in without!).toBe(false);
     expect(withGate!.authorizeInbound).toBe(gate);
     expect(Object.keys(withGate!).filter(key => key !== 'authorizeInbound')).toEqual(Object.keys(without!));
