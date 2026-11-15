@@ -66,7 +66,7 @@ export function SharedTaskExitDialog({ target, onDismiss, onComplete }: {
       if (current()) { pending.current = false; setBusy(false); }
     }
   };
-  return <ConfirmDialog presentation="standard" cancelFirst
+  return <ConfirmDialog
     open={owner.dataOwnerId === dataOwnerId && current()}
     onOpenChange={(open) => { if (!open && !pending.current) onDismiss(); }}
     title={t(leaving ? 'sharedTask.leaveTitle' : 'sharedTask.cancelTitle')}

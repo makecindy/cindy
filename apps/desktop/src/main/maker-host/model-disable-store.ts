@@ -109,6 +109,26 @@ export function readModelDisableOverrides(): ModelDisableOverrides {
   return store.read();
 }
 
+/** Taking an account out must not re-enable models. Persist the complete override copy before
+ * publishing its provider; unlike a best-effort batch toggle, a capacity failure aborts the move.
+ */
+export function copyProviderDisableOverrides(sourceId: string, targetId: string): void {
+  if (!sourceId || !targetId || sourceId === targetId) return;
+  store.invalidateIfChanged();
+  const current = store.read();
+  const disabledModels = { ...current.disabledModels };
+  const disabledProviders = { ...current.disabledProviders };
+  const prefix = `${sourceId}:`;
+  for (const key of Object.keys(current.disabledModels)) {
+    if (key.startsWith(prefix)) disabledModels[modelDisableKey(targetId, key.slice(prefix.length))] = true;
+  }
+  if (current.disabledProviders[sourceId]) disabledProviders[targetId] = true;
+  if (Object.keys(disabledModels).length > MAX_ENTRIES_PER_SECTION
+    || Object.keys(disabledProviders).length > MAX_ENTRIES_PER_SECTION)
+    throw new Error('Too many model access overrides');
+  store.writePatch({ disabledModels, disabledProviders });
+}
+
 /** 写/清一批 (供应商, 模型) 的停用标记。disabled=false 即删除条目(恢复启用 = 删 override)。 */
 export function setModelsDisabled(
   providerId: string,

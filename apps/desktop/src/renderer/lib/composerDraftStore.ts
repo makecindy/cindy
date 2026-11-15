@@ -291,6 +291,18 @@ const presenceListeners = new Map<string, Set<DraftListener>>();
  *  detection in `recomputeDraftPresence`. NOT the read source of truth
  *  (`getDraftPresence` always computes fresh). */
 const presenceCache = new Map<string, boolean>();
+const allPresenceListeners = new Set<DraftListener>();
+
+/** Task housekeeping only needs identifiers, never composer contents. */
+export function getComposerDraftSessionIds(): string[] {
+  const prefix = ownerPrefix();
+  return [...drafts.entries()].filter(([key, draft]) => key.startsWith(prefix) && draftHasContent(draft))
+    .map(([key]) => key.slice(prefix.length));
+}
+export function subscribeAllDraftPresence(listener: DraftListener): () => void {
+  allPresenceListeners.add(listener);
+  return () => { allPresenceListeners.delete(listener); };
+}
 
 /**
  * Whether a Tiptap JSON doc carries any real content. Mirrors `isEditorEmpty`
@@ -380,6 +392,9 @@ function recomputeDraftPresence(sessionId: string, key = draftKey(sessionId)): v
   if (next === prev) return;
   if (next) presenceCache.set(key, true);
   else presenceCache.delete(key);
+  for (const listener of allPresenceListeners) {
+    try { listener(); } catch { log.warn('Draft protection observer failed'); }
+  }
   const set = presenceListeners.get(key);
   if (set)
     for (const fn of set) {

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import ts from 'typescript';
-import { confirmedAutoTools, confirmedHostToolGroups, confirmedEventTopics, confirmedHostUiPermissions } from '../ghostInstallConsent.js';
+import { confirmedAutoTools, confirmedHostToolGroups, confirmedEventTopics, confirmedCindyModelActions } from '../ghostInstallConsent.js';
 import { setPluginEnabled } from '../pluginEnableService.js';
 import { createGhostExecutionPipe } from '../executionPipe.js';
 import { setTaskChangeListener } from '../../localDb/taskEvents.js';
@@ -18,6 +18,13 @@ import {
   isPluginInstanceKey,
   resolvePluginInstanceQuery,
 } from '../../../shared/pluginIdentity.js';
+import {
+  availableGhostsIn,
+  findGhostForInstanceIdIn,
+  isGhostAvailableForSessionIn,
+  listAvailableGhostsFrom,
+  listInstalledGhostsForOwner,
+} from '../ghostAvailability.js';
 
 const productionIdentityDeps = {
   ghostInstallApprovalToken,
@@ -34,13 +41,19 @@ const productionIdentityDeps = {
   confirmedAutoTools,
   confirmedHostToolGroups,
   confirmedEventTopics,
-  confirmedHostUiPermissions,
+  confirmedCindyModelActions,
   ghostInstallTargetContext,
   resolveForgeInstallTarget,
   installedGhostPhysicalRelId,
   installedGhostStoragePart,
   isPluginInstanceKey,
   resolvePluginInstanceQuery,
+  // The lookups index.ts delegates to (ghostAvailability.ts).
+  availableGhostsIn,
+  findGhostForInstanceIdIn,
+  isGhostAvailableForSessionIn,
+  listAvailableGhostsFrom,
+  listInstalledGhostsForOwner,
   libraryRestartRequiredReason: (): string | null => null,
 };
 

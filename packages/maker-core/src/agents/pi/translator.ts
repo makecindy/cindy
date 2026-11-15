@@ -258,7 +258,35 @@ export interface PiTranslateContext {
   compactTurnGeneration: number | null;
 }
 
-export function createPiTranslateContext(logger: Logger): PiTranslateContext {
+const OPENAI_RESPONSES_APIS = new Set([
+  'openai-responses',
+  'openai-codex-responses',
+  'azure-openai-responses',
+]);
+
+/**
+ * Pi routes both full-stream reasoning models (Gemini / DeepSeek / Qwen / GLM)
+ * and bursty summary models (Claude / OpenAI Responses). Keep summary sampling
+ * explicit by model/API rather than inferring it from constructor defaults.
+ */
+export function isPiSummarizedThinkingModel(model?: string, api?: string): boolean {
+  if (api && OPENAI_RESPONSES_APIS.has(api)) return true;
+  if (!model) return false;
+  return /claude/i.test(model) || /(?:^|\/)(?:gpt-(?!image)[56]|codex-gpt|o[134](?:-|$))/i.test(model);
+}
+
+export function setPiTranslateModel(
+  ctx: PiTranslateContext,
+  model?: string,
+  api?: string,
+): void {
+  ctx.tokenSpeed.setSummarizedThinking(isPiSummarizedThinkingModel(model, api));
+}
+
+export function createPiTranslateContext(
+  logger: Logger,
+  options?: { model?: string; api?: string },
+): PiTranslateContext {
   return {
     logger,
     getPriceVariant: undefined,
@@ -297,8 +325,13 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     finalAssistantText: '',
     finalAssistantStopReason: null,
     turnWallClockStartedAt: 0,
-    // Pi providers mostly stream thinking in full: count it as streamed until usage says otherwise.
-    tokenSpeed: new CalibratedTokenSpeedMeter({ estimate: estimateWordTokens, thinkingScale: 1 }),
+    // Pi routes both verbatim-thinking and summary-thinking models: configure explicitly
+    // from the active model/API, defaulting to verbatim when none is supplied.
+    tokenSpeed: new CalibratedTokenSpeedMeter({
+      estimate: estimateWordTokens,
+      thinkingScale: 1,
+      summarizedThinking: isPiSummarizedThinkingModel(options?.model, options?.api),
+    }),
     lastRunningStatus: 'Working…',
     generationDurationMs: 0,
     generationOpenAt: 0,
@@ -882,7 +915,13 @@ export function translatePiEvent(
       if (role && role !== 'assistant') return;
       ctx.thinkingBlocks.clear();
       ctx.streamStopTokenByIndex.clear();
-      const message = event.message as { usage?: PiUsage; timestamp?: number } | undefined;
+      const message = event.message as { usage?: PiUsage; timestamp?: number; model?: string; api?: string } | undefined;
+      if (
+        (typeof message?.model === 'string' && message.model.trim().length > 0) ||
+        (typeof message?.api === 'string' && message.api.trim().length > 0)
+      ) {
+        setPiTranslateModel(ctx, message?.model, message?.api);
+      }
       const bridgedPriceVariant = priceVariantFromServiceTier(message?.usage?.service_tier);
       ctx.pendingPriceVariants.push(bridgedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard');
       startPiGenerationHeartbeat(ctx);
@@ -1185,6 +1224,11 @@ export function translatePiEvent(
       const finalTokens = ctx.turnMainOutput + ctx.unreportedEstimatedOutput;
       ctx.tokenSpeed.stop(finalTokens);
       stopPiGenerationHeartbeat(ctx);
+      const calibratedElapsedMs = ctx.tokenSpeed.snapshot()?.elapsedMs;
+      const usageDurationMs =
+        typeof calibratedElapsedMs === 'number' && Number.isFinite(calibratedElapsedMs) && calibratedElapsedMs > 0
+          ? Math.round(calibratedElapsedMs)
+          : ctx.generationDurationMs;
       const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx);
       const pendingAssistantError = hostAbortRequested ? null : ctx.pendingAssistantError;
       // Classify the final assistant message at settlement, after native retries
@@ -1194,11 +1238,11 @@ export function translatePiEvent(
         && ctx.finalAssistantStopReason === 'length';
       const usage = {
         ...piTurnUsageOf(ctx),
-        // durationMs is deliberately generation-only. If Pi does not report a
-        // per-assistant generation duration, omit it instead of charging tool
-        // execution / user waits to TPS.
-        ...(ctx.generationTimingReliable && ctx.generationDurationMs > 0
-          ? { durationMs: ctx.generationDurationMs }
+        // durationMs is deliberately generation-only. Prefer the calibrated meter's
+        // first-byte generation clock so unmeasured TTFT waits are excluded when
+        // generation timing is reliable.
+        ...(ctx.generationTimingReliable && usageDurationMs > 0
+          ? { durationMs: usageDurationMs }
           : {}),
         ...(ctx.turnWallClockStartedAt > 0
           ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) }

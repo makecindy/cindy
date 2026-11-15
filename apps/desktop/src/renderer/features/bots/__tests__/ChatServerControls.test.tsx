@@ -21,6 +21,16 @@ import type { BotGroupDetail, BotGroupMessageView, BotGroupThreadSummary, ChatMa
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
 import { queryShareableMessageIds, stripInteractiveElements } from '@/lib/shareConversationImage';
 
+// Native dictation is covered in useBotGroupVoiceInput.test.tsx; keep this
+// thread/send suite independent of microphone and account-service setup.
+vi.mock('../useBotGroupVoiceInput', () => {
+  const ownsDraft = () => false;
+  return { useBotGroupVoiceInput: ({ text }: { text: string }) => ({
+  ownsDraft,
+  displayText: text, state: 'idle', isBusy: false, isListening: false, isCaptureReady: false,
+  lastError: null, shortcutLabel: '', start: () => false, stop: async () => {}, cancel: async () => {},
+}) }; });
+
 const mocks = vi.hoisted(() => ({
   status: vi.fn(), react: vi.fn(), reactors: vi.fn(), thread: vi.fn(), followThread: vi.fn(), reply: vi.fn(), createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(),
   mask: vi.fn(), mentions: vi.fn(), refresh: vi.fn(), shareToMain: vi.fn(), ownerCurrent: true,
@@ -866,6 +876,29 @@ describe('chat interaction controls', () => {
     expect(mocks.reply.mock.calls[2]![0].clientId).not.toBe(original.clientId);
   });
 
+  // PR #10371 review (component): the shared-name hold read the live roster before the retry
+  // rule, so a member renamed to the same name after a failed send blocked its retry. A retry
+  // keeps its own roster and clientId; only a newly typed @ is held.
+  it('retries a failed typed thread reply after another member takes the same name, and holds only a retyped one', async () => {
+    mocks.reply.mockResolvedValue({ ok: false, errorCode: 'REQUEST_TIMEOUT' });
+    const ann = { botId: 'bot', name: 'Ann', status: 'active' as const };
+    const view = render(<ChatThreadPanel group={{ ...group, members: [ann] } as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
+    const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '@Ann hello' } });
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await screen.findByRole('alert');
+    const original = mocks.reply.mock.calls[0]![0];
+    view.rerender(<Tooltip.Provider><ChatThreadPanel group={{ ...group, members: [ann, { ...ann, botId: 'namesake' }] } as BotGroupDetail} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1]![0]).toEqual(original);
+    await waitFor(() => expect(input.value).toBe('@Ann hello'));
+    fireEvent.change(input, { target: { value: '@Ann hello again' } });
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('bots.groupChat.errors.mentionAmbiguous'));
+    expect(mocks.reply).toHaveBeenCalledTimes(2);
+  });
+
   // Regression: thread mode hid the attachment menu and silently sent text only.
   // Real panel + useAttachments; unit tier, picking a single image is the minimal input.
   // #8084 / r4429774858: also-send must carry its image before the main share receipt arrives.
@@ -1167,9 +1200,11 @@ describe('chat interaction controls', () => {
       type(input, '@Ann ', 4);
       fireEvent.keyDown(input, { key: 'Escape' });
       fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
-      // A retyped name is a manual @: both namesakes, as in the main composer.
-      expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['ann-chris', 'ann-dana'] });
+      // A retyped name is a manual @. Two members share it, so it names neither: the reply is
+      // held with its draft until one is picked, as in the main composer (incident 2026-11-13).
+      expect((await screen.findByRole('alert')).textContent).toContain('bots.groupChat.errors.mentionAmbiguous');
+      expect(mocks.reply).not.toHaveBeenCalled();
+      expect(input.value).toBe('@Ann ');
     });
 
     it('moves the caret past the space when a re-pick leaves the text unchanged, and does not pull it back later', () => {
@@ -1231,7 +1266,7 @@ describe('chat interaction controls', () => {
 
     // One retry rule (bot-group-chat.md): a failed reply is retried with the same clientId only when the
     // text and its targets are unchanged. Each row edits the draft between attempts without changing the text.
-    // Comparing only the text fails rows 1 and 4; comparing the pick records fails row 3; re-resolving
+    // Comparing only the text fails row 1; comparing the pick records fails row 3; re-resolving
     // against the live roster fails the roster-refresh test above.
     const pickAt = (input: HTMLTextAreaElement, caret: number, option: number) => {
       // As a user would: click back into the box with the caret after the name, then pick.
@@ -1247,8 +1282,6 @@ describe('chat interaction controls', () => {
       { row: 'pick the same teammate for a typed mention', draft: (input: HTMLTextAreaElement) => type(input, '@Bo '),
         // The typed query `Bo` also matches the untranslated 所有人 key here, so Bo is the second option.
         edit: (input: HTMLTextAreaElement) => pickAt(input, 3, 1), text: '@Bo ', first: ['bo'], second: ['bo'], reused: true },
-      { row: 'pick one namesake for a typed mention', draft: (input: HTMLTextAreaElement) => type(input, '@Ann '),
-        edit: (input: HTMLTextAreaElement) => pickAt(input, 4, 1), text: '@Ann ', first: ['ann-chris', 'ann-dana'], second: ['ann-dana'], reused: false },
     ])('retries a failed reply after "$row" with reused clientId = $reused', async ({ draft, edit, text, first, second, reused }) => {
       const input = renderThread();
       mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' });

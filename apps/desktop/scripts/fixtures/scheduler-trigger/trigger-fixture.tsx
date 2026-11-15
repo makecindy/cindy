@@ -13,7 +13,7 @@ const schedule: Schedule = {
 
 void mountPage({
   route: '/cc-agent/scheduled',
-  host: { maker: {
+  host: { gitContext: { githubAppStatus: async () => ({ available: true, login: null }) }, maker: {
     listAvailableAgents: async () => ['codex'],
     onAgentsChanged: subscription('agentsChanged'),
     schedule: {

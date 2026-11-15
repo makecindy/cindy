@@ -4,8 +4,8 @@ import type { GroupProjectFolders, GroupProjectRoom, GroupWorkFolder } from './g
 
 /**
  * The group's Cindy on this computer (bot-group-chat.md §9): one ordinary visible task per
- * conversation (main group or Thread), titled with the group's name, under the group's project folder when this computer has it and
- * under 「对话」 otherwise. Requests the owner makes to Cindy in the group arrive in it as ordinary
+ * conversation (main group or Thread), titled with the group's name, in the group's project folder
+ * (`groupProjectFolder.ts`), which is there at once even while its repository is still being fetched. Requests the owner makes to Cindy in the group arrive in it as ordinary
  * messages, so anything that blocks (a permission, a sign-in, a question) is handled right there.
  *
  * The task follows the project folder: once the folder appears or changes, the next request opens
@@ -15,7 +15,7 @@ export interface GroupAssistantTask {
   sessionId: string;
   /** The group's newest message already delivered into the task, per conversation (`main` or a Thread's root ID). */
   delivered: Record<string, string>;
-  /** Why the group's repository is not on this computer yet; the task is under 「对话」 meanwhile. */
+  /** The group's repository is not in the task's folder yet, and why (`preparing`: being cloned now). */
   pending?: GroupWorkFolder['pending'];
 }
 
@@ -37,7 +37,7 @@ export function createGroupAssistantTasks(deps: {
 
   async function find(room: GroupProjectRoom & { name: string }, isCurrent: () => boolean, threadRootId?: string): Promise<GroupAssistantTask> {
     if (!deps.ensureSession) throw new Error('MEMBER_UNAVAILABLE');
-    // The requester is at this computer: Cindy may open its GitHub sign-in to fetch the repository.
+    // The requester is at this computer: a background fetch of the repository may open Cindy's GitHub sign-in.
     const folder = await deps.folders.forWork(room, { signIn: true, isCurrent: () => deps.current() && isCurrent() });
     const key = taskKey(room.id, threadRootId);
     const saved = deps.store().read()[key];

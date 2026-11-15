@@ -27,7 +27,6 @@ export interface ModelGroupSwitchOfferSessionRow {
 
 export interface ModelGroupSwitchOfferDeps {
   readBinding(sessionId: string): ModelGroupSessionBinding | null;
-  clearBinding(sessionId: string): void;
   readSession(sessionId: string): Promise<ModelGroupSwitchOfferSessionRow | null>;
   /** 正在共享给别的账号。 */
   isShared(sessionId: string): boolean;
@@ -63,8 +62,8 @@ export async function computeModelGroupSwitchOffer(
   const location = row.agentDeviceId || undefined;
   const current = { agentKind: row.agentKind, providerId: row.providerId, model: row.model, agentDeviceId: location };
   if (modelGroupCandidateKey(current) !== binding.pickedKey) {
-    // 模型或来源已被换过(用户自己换的，或别处换的)：这个任务不再按模型组走。
-    deps.clearBinding(sessionId);
+    // 模型或来源此刻不是记下的这个(用户自己换了，或别处换了)：不提议。记录不删 —— 跨引擎的换模型
+    // 可能只是登记了「下一条消息再换」，任务还在旧模型上跑；等真换过去时记录要照样有效。
     return null;
   }
   const now = deps.now();

@@ -1,11 +1,15 @@
+import { remoteProviderDisableKey } from '@cindy/model-providers';
 /**
  * 运行 Agent 的另一台电脑的模型目录：经设备互联读取，只做最小校验。
  */
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseDeviceProviderViews, readDeviceProviderViews, readRemoteProviderRoute } from '../controller/deviceCatalog';
 
+const disabled = vi.hoisted(() => ({ providers: {} as Record<string, boolean> }));
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({ disabledProviders: disabled.providers }) }));
+beforeEach(() => { disabled.providers = {}; });
 const deviceLink = vi.hoisted(() => ({ remoteBackgroundInvoke: vi.fn() }));
 vi.mock('../../device-link', () => deviceLink);
 
@@ -101,4 +105,20 @@ describe('readDeviceProviderViews', () => {
     if (accepted) await expect(route).resolves.toMatchObject({ provider: { id: 'spark' }, model: { id: 'spark/qwen' } });
     else await expect(route).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
   });
+});
+
+it('applies receiving-client stop to only that device and provider, retaining the original catalog', async () => {
+  disabled.providers[remoteProviderDisableKey('device-b', 'spark')] = true;
+  const offered = provider({ remoteInvocationEnabled: true });
+  const invoke = vi.fn(async () => ({ ok: true, result: { providers: [offered] } }));
+  expect((await readDeviceProviderViews(invoke, 'device-b'))[0].suspended).toBe(true);
+  expect((await readDeviceProviderViews(invoke, 'device-c'))[0].suspended).not.toBe(true);
+  expect(offered).not.toHaveProperty('suspended');
+  delete disabled.providers[remoteProviderDisableKey('device-b', 'spark')];
+  expect((await readDeviceProviderViews(invoke, 'device-b'))[0].suspended).not.toBe(true);
+});
+it('rejects an explicitly selected stopped remote route instead of falling back', async () => {
+  disabled.providers[remoteProviderDisableKey('device-b', 'spark')] = true;
+  deviceLink.remoteBackgroundInvoke.mockResolvedValue({ ok: true, result: { providers: [provider({ remoteInvocationEnabled: true })] } });
+  await expect(readRemoteProviderRoute({ agentDeviceId: 'device-b', agentKind: 'pi', providerId: 'spark', model: 'spark/qwen' })).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
 });

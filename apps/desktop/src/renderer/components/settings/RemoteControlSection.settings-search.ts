@@ -68,6 +68,7 @@ export const remoteControlSettings = defineSettings({
     targetId: 'settings-search-target-remote-ssh',
     titleKey: 'settings.remoteControl.sections.ssh',
     sectionKey: 'settings.sections.remoteControl',
+    keywordKeys: ['settings.remote.importedAgentHint'],
     aliases: ['SSH', 'SSH host', 'SSH hosts', 'SSH主机', 'remote host', '远程主机', '主机'],
   },
   remoteControl: {
