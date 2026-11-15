@@ -81,6 +81,31 @@ export const storageManagementCardSettings = defineSettings({
     descriptionKey: 'settings.about.storage.dbSizeWarningDisableDescription',
     sectionKey: 'settings.tabs.storage',
   },
+  aboutStorageDbAutoCleanupTitle: {
+    id: 'settings.about.storage.dbAutoCleanupTitle',
+    fallbackTargetId: 'settings-panel-storage',
+    tab: 'storage',
+    targetId: 'settings-search-settings-about-storage-dbAutoCleanupTitle',
+    titleKey: 'settings.about.storage.dbAutoCleanupTitle',
+    descriptionKey: 'settings.about.storage.dbAutoCleanupDescription',
+    sectionKey: 'settings.tabs.storage',
+  },
+  aboutStorageDbAutoCleanupEnableLabel: {
+    id: 'settings.about.storage.dbAutoCleanupEnableLabel',
+    fallbackTargetId: 'settings-search-settings-about-storage-dbAutoCleanupTitle',
+    tab: 'storage',
+    targetId: 'settings-search-settings-about-storage-dbAutoCleanupEnableLabel',
+    titleKey: 'settings.about.storage.dbAutoCleanupEnableLabel',
+    sectionKey: 'settings.tabs.storage',
+  },
+  aboutStorageDbAutoCleanupRetentionLabel: {
+    id: 'settings.about.storage.dbAutoCleanupRetentionLabel',
+    fallbackTargetId: 'settings-search-settings-about-storage-dbAutoCleanupTitle',
+    tab: 'storage',
+    targetId: 'settings-search-settings-about-storage-dbAutoCleanupRetentionLabel',
+    titleKey: 'settings.about.storage.dbAutoCleanupRetentionLabel',
+    sectionKey: 'settings.tabs.storage',
+  },
 });
 
 export default {

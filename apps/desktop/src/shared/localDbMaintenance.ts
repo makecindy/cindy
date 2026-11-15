@@ -1,6 +1,25 @@
 export const DB_SLIMMING_ARCHIVE_AGE_OPTIONS = ['7-days', 1, 3, 6] as const;
 export type DbSlimmingArchiveAge = (typeof DB_SLIMMING_ARCHIVE_AGE_OPTIONS)[number];
 export const DB_SLIMMING_DEFAULT_ARCHIVE_AGE: DbSlimmingArchiveAge = '7-days';
+
+/**
+ * Retention presets for the automatic cleanup that runs before the database
+ * opens. Separate from `DB_SLIMMING_ARCHIVE_AGE_OPTIONS` on purpose: that one is
+ * the filter window of a manual scan, this one is a lifecycle policy (#8730).
+ */
+export const DB_AUTO_CLEANUP_RETENTION_DAYS_OPTIONS = [7, 30, 90, 180] as const;
+export type DbAutoCleanupRetentionDays = (typeof DB_AUTO_CLEANUP_RETENTION_DAYS_OPTIONS)[number];
+
+/** Renderer-safe projection. Thresholds and the cooldown stamp stay in main. */
+export interface DbAutoCleanupSettingsView {
+  enabled: boolean;
+  retentionDays: DbAutoCleanupRetentionDays;
+}
+
+export interface DbAutoCleanupSettingsPatch {
+  enabled?: boolean;
+  retentionDays?: DbAutoCleanupRetentionDays;
+}
 export const DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL =
   'local-db:maintenance:startup-progress-changed';
 
