@@ -40,6 +40,13 @@ import {
 } from '@/lib/autoResumePresentation';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
+import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
+import {
+  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+  ACTIVITY_ROW_RADIUS_CLASS,
+} from './activityRowChrome';
 import { Spinner } from '@/components/ui/spinner';
 import { LearnStatusCard } from '@/features/learn/LearnStatusCard';
 import {
@@ -1403,26 +1410,30 @@ function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
         : '';
   const queued = data?.delivery === 'queued';
   const summary = typeof data?.summary === 'string' ? data.summary : '';
-  const [expanded, setExpanded] = useState(false);
+  // 展开态与工具行一致：按块记忆，重渲不丢；回执没有 dispatchId 时退化为
+  // 内容锚，避免所有老回执共用同一个 key。
+  const blockKey =
+    typeof data?.dispatchId === 'string' && data.dispatchId
+      ? `orca-dispatch:${data.dispatchId}`
+      : `orca-dispatch:${String(data?.at ?? '')}:${queued ? 'queued' : 'sent'}:${labelFallback(data)}`;
+  const { expanded, setExpanded } = useExpandedBlockMemory(blockKey);
   const label = unverified
     ? t('chat.systemCard.orcaDispatch.unverified')
     : queued
       ? t('chat.systemCard.orcaDispatch.queued', { worker })
       : t('chat.systemCard.orcaDispatch.sent', { worker });
-  // 升级卡是要人行动的信息，保持多行不截断；普通回执压成一行事实，点开看三行。
+  // 升级卡是要人行动的结论，保持常显；普通回执是一行事实，点开看全文。
   if (unverified) {
     return (
       <div
-        className="flex w-full select-none flex-col gap-1 py-2 text-center"
+        className="flex w-full select-none flex-col gap-0.5 px-2 py-1"
         role="note"
         aria-label={label}
       >
-        <span className="inline-flex items-center justify-center gap-2 text-12 leading-[1.33] text-[var(--error-fg)]">
-          {label}
-        </span>
+        <span className="text-12 leading-[1.5] text-[var(--error-fg)]">{label}</span>
         {summary && (
           <span
-            className="mx-auto w-full max-w-[86%] text-left text-11 leading-[1.33] whitespace-pre-line text-[var(--text-secondary)]"
+            className="whitespace-pre-line text-11 leading-[1.4] text-[var(--text-secondary)]"
             title={summary}
           >
             {summary}
@@ -1432,48 +1443,55 @@ function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
     );
   }
   return (
-    <div
-      className="flex w-full select-none justify-center py-2 text-center"
-      role="note"
-      aria-label={label}
-    >
+    <div className="flex w-full flex-col" role="note" aria-label={label}>
       {summary ? (
         <button
           type="button"
-          className={cn(
-            'mx-auto flex min-h-6 w-full max-w-[92%] justify-center gap-1.5 px-1 text-12 leading-[1.33] text-[var(--text-tertiary)]',
-            expanded ? 'items-start' : 'items-center',
-          )}
           onClick={() => setExpanded(prev => !prev)}
           aria-expanded={expanded}
           title={expanded ? undefined : summary}
+          className={cn(
+            'group flex w-full items-center gap-1.5 text-left',
+            ACTIVITY_ROW_RADIUS_CLASS,
+            'px-2 py-[3px]',
+            ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+            ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+            'cursor-pointer select-none outline-none',
+            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          )}
         >
-          <span className="shrink-0 text-[var(--text-secondary)]">{label}</span>
-          <span aria-hidden className="shrink-0">
-            ·
+          <span className="shrink-0 text-12 leading-[1.5] text-[var(--text-secondary)]">{label}</span>
+          {!expanded && (
+            <>
+              <span aria-hidden className="shrink-0 text-12 text-[var(--text-tertiary)]">
+                ·
+              </span>
+              <span className="min-w-0 truncate text-12 leading-[1.5] text-[var(--text-tertiary)]">
+                {summary}
+              </span>
+            </>
+          )}
+          <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
+            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           </span>
-          <span
-            className={cn(
-              'min-w-0 text-left',
-              expanded ? 'line-clamp-3 whitespace-normal' : 'truncate',
-            )}
-          >
-            {summary}
-          </span>
-          <ChevronRight
-            size={11}
-            strokeWidth={1.8}
-            aria-hidden
-            className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}
-          />
         </button>
       ) : (
-        <span className="inline-flex items-center justify-center gap-2 text-12 leading-[1.33] text-[var(--text-secondary)]">
+        <span className="px-2 py-[3px] text-12 leading-[1.5] text-[var(--text-secondary)]">
           {label}
         </span>
       )}
+      <Collapse open={expanded}>
+        <p className="whitespace-pre-line px-2 pb-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {summary}
+        </p>
+      </Collapse>
     </div>
   );
+}
+
+function labelFallback(data?: Record<string, unknown>): string {
+  const summary = typeof data?.summary === 'string' ? data.summary : '';
+  return summary.slice(0, 24);
 }
 
 const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {

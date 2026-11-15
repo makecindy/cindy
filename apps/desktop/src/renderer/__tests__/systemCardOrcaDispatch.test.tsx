@@ -6,7 +6,8 @@
  * Bug 依据：回执曾把 240 字摘要整段铺开，还同时挂 `truncate` 与 `whitespace-pre-line`
  * （两个类抢同一个属性，结果折了五行）。这里锁三件事：
  *  1. 折叠态是一行，摘要不折行；
- *  2. 点一下能展开成三行，再点收起（手机没有 hover，点击是主入口）；
+ *  2. 点一下展开、再点收起（手机没有 hover，点击是主入口），展开体走共享
+ *     Collapse —— 与工具行同一套展开语言；
  *  3. 升级卡不参与压缩 —— 它是需要主人决策的信息，压成一行等于埋掉。
  */
 
@@ -68,9 +69,10 @@ describe('SystemCard orca-dispatch 行', () => {
     render(<SystemCard cardType="orca-dispatch" data={sentReceipt} />);
 
     fireEvent.click(screen.getByRole('button'));
-    const expandedSummary = screen.getByText(sentReceipt.summary);
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true');
-    expect(expandedSummary.className).toContain('line-clamp-3');
+    // 展开后摘要移进 Collapse 正文：整段可读，不再依赖行数截断。
+    const expandedSummary = screen.getByText(sentReceipt.summary);
+    expect(expandedSummary.className).toContain('whitespace-pre-line');
     expect(expandedSummary.className).not.toContain('truncate');
 
     fireEvent.click(screen.getByRole('button'));
