@@ -66,6 +66,38 @@ describe('request size control', () => {
     expect(classifyRequestSizeError('image exceeds 5 MB maximum: 7473812 bytes')).toMatchObject({ kind: 'single-image-too-large', limitBytes: 5 * 1024 * 1024 });
     expect(classifyRequestSizeError('Request size is too large. Max size is 100 MB')).toMatchObject({ kind: 'request-too-large', limitBytes: 100 * 1024 * 1024 });
     expect(classifyRequestSizeError('Input is too long.')).toMatchObject({ kind: 'context-too-long' });
+    const nested = (message: string, code: string) => JSON.stringify({ error: {
+      message: `litellm.BadRequestError: NovaException - ${JSON.stringify({ error: { message, type: 'invalid_request_error', param: null, code: 'provider_invalid_request' } })}`,
+      type: null, param: null, code,
+    } });
+    expect(classifyRequestSizeError(nested('Exceeded maximum number of images (50) allowed in the request.', '400')))
+      .toEqual({ kind: 'image-count', limitCount: 50 });
+    expect(classifyRequestSizeError(nested('The request exceeds the maximum allowed size.', '413')))
+      .toEqual({ kind: 'request-too-large' });
+    expect(classifyRequestSizeError('{"error":"Request size is too large. Max size is 100 MB"}'))
+      .toEqual({ kind: 'request-too-large', limitBytes: 100 * 1024 * 1024 });
+    expect(classifyRequestSizeError('invalid_request_error: messages.8.content.0.tool_result.content.0.image.source.base64: image exceeds 5 MB maximum: 7473812 bytes > 5242880 bytes'))
+      .toEqual({ kind: 'single-image-too-large', limitBytes: 5 * 1024 * 1024 });
+    expect(classifyRequestSizeError('The request exceeds the maximum allowed size of 1.5 MB'))
+      .toEqual({ kind: 'request-too-large', limitBytes: 1.5 * 1024 * 1024 });
+    expect(classifyRequestSizeError('Max size is 1,024 KB')).toEqual({ kind: 'request-too-large', limitBytes: 1024 * 1024 });
+    expect(classifyRequestSizeError('Exceeded maximum number of images (50). Max size is 32000 bytes'))
+      .toEqual({ kind: 'image-count', limitCount: 50, limitBytes: 32000 });
+    expect(classifyRequestSizeError('prompt is too long: 1,008,214 tokens > 1,000,000 maximum')).toEqual({ kind: 'context-too-long' });
+    expect(classifyRequestSizeError('unsupported image')).toEqual({ kind: 'other' });
+    expect(classifyRequestSizeError('unsupported image format')).toEqual({ kind: 'unsupported-image-format' });
+    expect(classifyRequestSizeError('only supports text modality')).toEqual({ kind: 'unsupported-image' });
+  });
+  // PR #10663 CodeQL js/polynomial-redos: only classify a bounded error prefix.
+  // Unit tier; the old implementation picked up a limit after the 4K window.
+  it('classifies only a bounded prefix of an upstream error', () => {
+    expect(classifyRequestSizeError('x'.repeat(4096) + 'Too many images (50)')).toEqual({ kind: 'other' });
+  });
+  // The old overlapping non-digit repetitions could repeatedly scan these
+  // keyword-rich suffixes. Assert the result, not machine-dependent elapsed time.
+  it('returns other for a 100 KiB adversarial error without digits', () => {
+    const text = 'image maximum request exceeds '.repeat(4000).slice(0, 100 * 1024);
+    expect(classifyRequestSizeError(text)).toEqual({ kind: 'other' });
   });
   it('keeps a small request byte-for-byte on the quick path', async () => {
     const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }] }));
