@@ -4398,7 +4398,9 @@
           "inline": "Se ejecuta en",
           "signInHere": "Iniciar sesión en esta computadora",
           "writeFailed": "No se pudo guardar dónde se ejecuta este proveedor. Inténtalo de nuevo."
-        }
+        },
+        "sameAccountConnections": "Conexiones guardadas de esta cuenta",
+        "sameAccountConnectionsHint": "La cuenta aparece una sola vez. Elegir una conexión solo cambia los ajustes que gestionas; las tareas existentes conservan su conexión."
       },
       "detect": {
         "groupLabel": "Detectado en este dispositivo",
@@ -8296,9 +8298,9 @@
         "agentCompanionsDetail": "Puede ver a todos los amigos, incluidos los que se ejecutan en tus otras computadoras: nombre, descripción, avatar, estado (trabajando, esperando tu respuesta, inactivo, sin conexión), el tipo de paso en el que está cada uno (como pensar o ejecutar una herramienta), las solicitudes que esperan tu respuesta tal como las muestran sus tarjetas (preguntas, comandos por ejecutar, planes) y la conversación reciente de su chat principal (hasta 50 de tus mensajes y sus respuestas, sin los pasos de herramientas); y abrir la conversación de un amigo en la ventana principal. Si también tiene el permiso para entregar mensajes, puede transmitir las respuestas que des en el complemento: responder preguntas, rechazar solicitudes y opinar sobre planes. Para permitir un paso, sigues haciendo clic en la confirmación propia de Cindy. No puede leer archivos, pasos de herramientas ni razonamientos.",
         "agentCompanionsRequest": "Revisar el permiso para ver amigos",
         "hostTools_history": "Historial de tareas",
-        "hostTools_historyDetail": "Usar las herramientas de Cindy para listar tareas existentes, leer mensajes completos y buscar en el historial, también en otros ordenadores accesibles que selecciones explícitamente.",
+        "hostTools_historyDetail": "Usar las herramientas de Cindy para listar tareas existentes, leer mensajes completos y buscar en el historial, también en otros ordenadores accesibles que selecciones explícitamente. Exportar tareas locales en archivos de formato nativo. Los complementos usan los permisos concedidos al instalarse; el Agent sigue sus propios permisos durante la ejecución.",
         "hostTools_control": "Gestión de tareas",
-        "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes. Las operaciones de alto riesgo requieren confirmación en Cindy cada vez.",
+        "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes, e importar archivos de tareas en formato nativo en este ordenador. Las operaciones de alto riesgo requieren confirmación en Cindy cada vez.",
         "hostTools_handoff": "Mensajes a tareas",
         "hostTools_handoffDetail": "Usar las herramientas de Cindy para enviar mensajes a tareas existentes. Las operaciones que necesitan una tarea actual requieren un destino explícito.",
         "hostTools_settings": "Ajustes de la aplicación",
@@ -9343,6 +9345,9 @@
         "failed": "No se pudo completar la limpieza",
         "pending": "En cola"
       }
+    },
+    "navigation": {
+      "unavailable": "No se pudo abrir la configuración del equipo de destino. Comprueba que esté conectado y permita el control remoto; actualiza Cindy si usa una versión antigua."
     }
   },
   "remoteDevice": {

@@ -95,6 +95,8 @@ export type ModelDiscoveryFailureState = Partial<
 
 /** 供应商 + 连接状态。 */
 export interface ProviderView extends Provider {
+  /** Same-account devices only: complete, host-verified subscription identity set. Display equality, never authorization. */
+  subscriptionAccountKeys?: string[];
   /** Host observed a transient native-account read failure. Optional on older hosts; no credential data. */
   subscriptionReadUnavailable?: true;
   /** Host-owned subscription speed policy; absence means an unrelated provider or older host. */
@@ -120,7 +122,7 @@ export interface ProviderView extends Provider {
   subscriptionAccountPool?: 'openai' | 'anthropic';
   subscriptionAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
   /** Public account identity and credential origin, never credential material. */
-  openAiAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
+  openAiAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean; accountKey?: string };
   connected: boolean;
   /** Ready media execution channels, independent of chat authorization. Absent on older hosts. */
   availableMediaModelIds?: string[];

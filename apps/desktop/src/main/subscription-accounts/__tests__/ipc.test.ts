@@ -114,6 +114,7 @@ import {
   normalizePlacementFile,
   readMergedLegacyCodexAccountId,
   readOpenAiMergedLegacyAccountsIfReadable,
+  readSharedOpenAiLegacyAccountsIfReadable,
   restoreAutoMergedLegacyCodexAccounts,
   restoreUnplacedSubscriptionAccounts,
 } from '../placement.js';
@@ -289,6 +290,9 @@ describe('legacy Codex account upgrade', () => {
     });
     expect(readMergedLegacyCodexAccountId('openai-a')).toBeUndefined();
     expect(readOpenAiMergedLegacyAccountsIfReadable()).toEqual({ 'openai-d': ids.d });
+    // A historical alias retained for old tasks must not reopen the restored independent account.
+    expect(readSharedOpenAiLegacyAccountsIfReadable(new Set(['openai']))).toEqual({ 'openai-d': ids.d });
+    expect(readSharedOpenAiLegacyAccountsIfReadable(new Set(['anthropic']))).toEqual({});
     expect(h.pools.openai!.accounts.map((account) => [account.id, account.paused])).toEqual([
       ['default', false], [ids.a, false], [ids.b, false], [ids.d, false],
     ]);

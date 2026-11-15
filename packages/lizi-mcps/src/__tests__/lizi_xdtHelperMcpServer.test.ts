@@ -7,6 +7,54 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit, capability list #10/#15: the existing registry had no native package
+// transfer. A named task or file is enough to exercise discovery, caller identity
+// and scope rejection; no filesystem, network or engine process is needed.
+it('offers native package transfer to Agents and plugins through the same registry', async () => {
+  const sessionShare = {
+    export: vi.fn(async () => ({ ok: true as const, status: 'ok', attachment_ref: 'handoff:00000000-0000-4000-8000-000000000000' })),
+    import: vi.fn(async () => ({ ok: true as const, status: 'imported', session_id: 'imported' })),
+  };
+  const plugin = { agentKind: 'codex' as const, workingDir: '',
+    hostCaller: { kind: 'plugin' as const, pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 } };
+  const server = createXdtHelperMcpServer({ sessionShare } as Parameters<typeof createXdtHelperMcpServer>[0], plugin);
+  expect(server.hostTools.describe('export_session')).toMatchObject({ category: 'history' });
+  expect(server.hostTools.describe('import_session')).toMatchObject({ category: 'control' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'local::target' })))
+    .toMatchObject({ ok: true, attachment_ref: expect.stringMatching(/^handoff:/) });
+  expect(sessionShare.export).toHaveBeenCalledWith({ sessionId: 'target', excludeMedia: false }, plugin);
+  expect(parsePayload(await server.hostTools.call('import_session', { attachment_ref: 'handoff:00000000-0000-4000-8000-000000000000' })))
+    .toMatchObject({ ok: true, session_id: 'imported' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'target', output_path: '/private/export.cshare' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(parsePayload(await server.hostTools.call('import_session', { file_path: '/private/import.cshare' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'other::task' })))
+    .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+  expect(sessionShare.export).toHaveBeenCalledOnce();
+  expect(sessionShare.import).toHaveBeenCalledOnce();
+  await server.close();
+
+  const agent = { agentKind: 'codex' as const, workingDir: '/workspace', sessionId: 'caller' };
+  const native = createXdtHelperMcpServer({ sessionShare } as Parameters<typeof createXdtHelperMcpServer>[0], agent);
+  expect(parsePayload(await native.hostTools.call('import_session', { file_path: 'task.cshare' })))
+    .toMatchObject({ ok: true, session_id: 'imported' });
+  expect(sessionShare.import).toHaveBeenLastCalledWith(expect.objectContaining({ filePath: 'task.cshare', overwrite: false }), agent);
+  await native.close();
+});
+
+it('denies native package export outside the existing history scope before file I/O', async () => {
+  const sessionShare = { export: vi.fn(), import: vi.fn() };
+  const history = { resolveSessionScope: async () => ({ ok: true as const, sessionIds: ['allowed'] }),
+    listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
+  const server = createXdtHelperMcpServer({ sessionShare, history } as Parameters<typeof createXdtHelperMcpServer>[0],
+    { agentKind: 'codex', workingDir: '', sessionId: 'caller' });
+  expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'denied' })))
+    .toMatchObject({ ok: false, errorCode: 'HISTORY_SCOPE_DENIED' });
+  expect(sessionShare.export).not.toHaveBeenCalled();
+  await server.close();
+});
+
 // Item 28, unit: the ordinary helper registry and public plugin entry must
 // expose the same read-only catalog, with no self-reported caller fields.
 it('discovers Host services through the common validated registry', async () => {
@@ -1678,4 +1726,21 @@ it('routes Pi version checks and exact-version installs to the managed runtime',
     expect(await invoke('update_pi_runtime', { source: 'upstream', version: '1.4.0' })).toMatchObject({ ok: false });
     expect(call).toHaveBeenCalledTimes(2);
   } finally { await client.close(); await server.close(); }
+});
+
+// Unit: the public discovery/Host tool must return a real, device-bound navigation link,
+// not mutate settings or claim that the user has already completed setup.
+it('discovers and generates settings links on the task computer', async () => {
+  const call = vi.fn();
+  const server = createXdtHelperMcpServer({ appSettings: { call, navigationDeviceId: () => 'computer-a' } }, {
+    agentKind: 'codex', workingDir: '/repo', sessionId: 'task-a',
+  });
+  try {
+    const result = parsePayload(await server.hostTools.call('get_settings_link', { page: 'voice-input', query: '词典' }));
+    expect(result).toMatchObject({ ok: true, deviceId: 'computer-a', page: 'voice-input' });
+    expect(result.markdown).toContain('cindy://settings-link/voice-input?device=computer-a');
+    expect(call).not.toHaveBeenCalled();
+    expect(parsePayload(await server.hostTools.call('get_settings_link', { page: 'slack' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  } finally { await server.close(); }
 });

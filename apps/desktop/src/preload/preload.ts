@@ -1,3 +1,4 @@
+import { parseSettingsNavigationTarget, type SettingsNavigationTarget } from '@cindy/maker-shared/settings-navigation';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
@@ -4336,6 +4337,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'provider-share-join'; link: string }
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
+        | { type: 'settings-navigation'; target: SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; imGroup?: 'cindy' | 'personal' },
     ) => void,
   ): (() => void) =>
@@ -4343,6 +4345,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       if (!payload || typeof payload !== 'object') return;
       const p = payload as {
         type?: unknown;
+        target?: unknown;
         id?: unknown;
         workingDir?: unknown;
         filePath?: unknown;
@@ -4391,6 +4394,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         && [p.groupId, p.messageId, ...(p.threadRootId === undefined ? [] : [p.threadRootId])].every(value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value))) {
         callback({ type: 'chat-message', groupId: p.groupId, messageId: p.messageId,
           ...(typeof p.threadRootId === 'string' ? { threadRootId: p.threadRootId } : {}) });
+      } else if (p.type === 'settings-navigation') {
+        const target = parseSettingsNavigationTarget(p.target);
+        if (target) callback({ type: 'settings-navigation', target });
       } else if (p.type === 'settings' && (p.tab === 'voice-input' || p.tab === 'providers' || p.tab === 'remote-control' || p.tab === 'builtin-tools' || p.tab === 'im-bot')) {
         // connect 只对 providers 页有意义;主进程已做 id 白名单,这里按纵深防御
         // 原样复用同一规则。字段存在但不合法时丢弃整个 payload,不降级成半执行。
@@ -4464,6 +4470,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     | { type: 'provider-share-join'; link: string }
     | { type: 'chat-invite'; token: string }
     | { type: 'chat-invite-malformed' }
+    | { type: 'settings-navigation'; target: SettingsNavigationTarget }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; imGroup?: 'cindy' | 'personal' }
     | null
   > => ipcRenderer.invoke('deep-link:take-pending'),
@@ -6887,6 +6894,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ownerGeneration: number;
       providers: import('@cindy/model-providers').ProviderView[];
       providerOrder: string[];
+      disabledProviders?: Record<string, boolean>;
     }> => ipcRenderer.invoke('maker:provider:list'),
     setProviderRemoteAccess: (input: { providerId: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
       ipcRenderer.invoke('maker:provider:remote-access:set', input),
@@ -7217,7 +7225,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setModelDisable: (
       input:
         | { kind: 'model'; providerId: string; modelIds: string[]; disabled: boolean }
-        | { kind: 'provider'; providerId: string; disabled: boolean }
+        | { kind: 'provider'; providerId: string; disabled: boolean; remoteDeviceId?: string }
         // reset = 恢复默认:删除该供应商整组停用 override(含陈旧条目),遵循
         // configuration-and-overrides.md §4 的「删 override 跟随默认」语义。
         | { kind: 'reset'; providerId: string },

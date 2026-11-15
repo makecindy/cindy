@@ -10,10 +10,12 @@ import { createSessionStderrOptions, isSessionRunningError } from '../../../desk
 import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-host/rehydrateCloseSuppression.ts';
 import { createWireNoteMemory } from '../../../desktop/src/main/maker-ipc/wireNoteMemory.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
+import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { DEFAULT_CLASSICAL_REPLY_STYLE } from '@cindy/maker-shared/classical-reply';
 import { assertHostTaskExecutionSupported, prepareHostUserMessage } from './send-preflight.ts';
 import { createHostLearnInvocationCapture } from './learn-capture.ts';
 import { createHostEventPersistence } from './event-persistence.ts';
+import { createHostContextRecovery } from './context-recovery.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
 import { clearPendingTurnChangeSets, finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
@@ -51,6 +53,11 @@ export function createTurnExecutor(deps) {
   const bindings = new Map();
   const wireNotes = createWireNoteMemory();
   const log = createLogger('host-input');
+  // Context recovery of a terminal error (context-recovery.ts); without a recovery factory the
+  // listener behaves as before.
+  const recovery = deps.getRecoveryRollover ? createHostContextRecovery({ getRollover: deps.getRecoveryRollover,
+    isRecoverable: deps.isContextRecoveryOpen,
+    publish: (id, event, fields) => publishAgentEvent(deps.hub, id, event, fields), log }) : null;
   function historyFor(id) {
     let history = histories.get(id);
     if (!history) {
@@ -101,7 +108,8 @@ export function createTurnExecutor(deps) {
     return snapshot.onTurnStart(sessionId, signal);
   }
 
-  function finish(sessionId, turn, error, event) {
+  // recoveryOwnsError: context recovery claimed this terminal error and writes its row if it fails.
+  function finish(sessionId, turn, error, event, recoveryOwnsError = false) {
     if (turn.terminal) return turn.settlement;
     turn.terminal = true;
     // A stop the engine acknowledged without a terminal event: the engines' stop paths end in a
@@ -112,7 +120,7 @@ export function createTurnExecutor(deps) {
     const history = historyFor(sessionId);
     history.flushAssistantBlock(sessionId);
     history.flushOrphanToolResults(sessionId, event?.agentMeta ?? null);
-    if (error) history.onTurnErrorEvent(sessionId, { ...event?.data, message: error }, event?.agentMeta ?? null);
+    if (error && !recoveryOwnsError) history.onTurnErrorEvent(sessionId, { ...event?.data, message: error }, event?.agentMeta ?? null);
     if (error) history.persistCodexPlanOnTerminalError(sessionId);
     else if (event) history.persistCodexPlanOnDone(sessionId, event.data);
     history.preserveTurnPersistStateForBackground(sessionId);
@@ -186,10 +194,17 @@ export function createTurnExecutor(deps) {
       const stream = history.event(session, event);
       // As the desktop (sessionEventDelivery.ts): a turn that ended on a rejected Cindy AI Key
       // reports the current key, which resynchronizes the credentials.
-      if (isGatewayProxyTokenRecoveryErrorEventForProvider(getSessionProvider(sessionId), event)) {
-        deps.reportAgentCindyGatewayKeyRejected?.();
-      }
-      publishAgentEvent(deps.hub, sessionId, event, { ...stream, inputClientId: turn.clientId });
+      const gatewayKeyRejected = isGatewayProxyTokenRecoveryErrorEventForProvider(getSessionProvider(sessionId), event);
+      if (gatewayKeyRejected) deps.reportAgentCindyGatewayKeyRejected?.();
+      const fields = { ...stream, inputClientId: turn.clientId };
+      // Recovery claims a turn's terminal error synchronously, before finish hands it to the
+      // coordinator (the desktop's coordinator receives it first; the order differs, release table).
+      const recoveryTerminal = recovery && event.type === 'error' && isTerminalTurnErrorEvent(event)
+        && event.turnScope !== 'background'
+        ? { session, event, history, fields, isStopping: deps.isStoppingRuntime(), isGatewayProxyTokenRecovery: gatewayKeyRejected }
+        : null;
+      const claim = recoveryTerminal ? recovery.claim(recoveryTerminal) : 'idle';
+      if (claim === 'idle') publishAgentEvent(deps.hub, sessionId, event, fields);
       // Desktop takes the after-edit savepoint once the event is delivered (sessionEventDelivery.ts).
       if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) settleGitBaseline(sessionId, turn, 'end');
       if (isTerminalTurnErrorEvent(event)) settleGitBaseline(sessionId, turn, 'abort');
@@ -200,7 +215,8 @@ export function createTurnExecutor(deps) {
         const error = event.type === 'error'
           ? event.data?.message || event.message || (typeof event.data === 'string' ? event.data : 'Agent error')
           : undefined;
-        void finish(sessionId, turn, error, event);
+        void finish(sessionId, turn, error, event, claim !== 'idle');
+        if (claim !== 'idle') recovery.settle(recoveryTerminal, claim, () => turn.settlement);
       }
     });
     const unsubscribeStatus = session.onStatusChange?.(status => {
@@ -365,6 +381,10 @@ export function createTurnExecutor(deps) {
       deps.assertProviderExecutionSupported?.(id, turn.createOpts.providerId);
     },
     ackInterruptedTurnDispatched: deps.ackInterruptedTurnDispatched,
+    // The pending handoff summary (handoff-pending.ts): sent once with the next accepted send, as
+    // on the desktop (register.ts peekPendingHandoff / consumePendingHandoff).
+    peekPendingHandoff: deps.pendingHandoff ? id => deps.pendingHandoff.peek(id) : undefined,
+    consumePendingHandoff: deps.pendingHandoff ? id => deps.pendingHandoff.consume(id) : undefined,
     isClearBoundaryCurrent: deps.isClearBoundaryCurrent,
     rewindPersistedUserMessageAfterClear: deps.rewindPersistedUserMessageAfterClear,
     readPiUserEntry: deps.readPiUserEntry ? async (id, clientId) => {
@@ -461,18 +481,55 @@ export function createTurnExecutor(deps) {
     });
   }
 
-  async function send(sessionId, message, createOpts, sendOpts) {
-    createOpts = { ...createOpts };
+  // The record a dispatched turn runs under. The listener only accepts events of the record's
+  // instance and generation (listen), and the shared transaction's hooks read it (turns.get), so
+  // every dispatch, an input's send or a context recovery's replay, opens one.
+  function openTurn(sessionId, createOpts, sendOpts, clientId) {
     // Until this turn reserves its own generation, events of the previous one are recognised by theirs.
     const turn = { running: true, terminal: false, dbKind: dbKind(createOpts.agentKind),
-      createOpts, sendOpts, clientId: sendOpts.persistUserMessage?.clientId, previousGeneration: turns.get(sessionId)?.generation };
+      createOpts, sendOpts, clientId, previousGeneration: turns.get(sessionId)?.generation };
     turns.set(sessionId, turn);
-    const check = () => {
+    turn.check = () => {
       deps.assertCurrent();
       sendOpts.signal?.throwIfAborted();
       if (turns.get(sessionId) !== turn) throw new Error('input runtime was replaced');
     };
-    turn.check = check;
+    return turn;
+  }
+
+  // Runs the shared send transaction for a turn once it is prepared, binding the instance and
+  // generation it reserves (bindTurnSession listens to that instance). A dispatch that throws
+  // leaves the record not running.
+  async function dispatchTurn(sessionId, turn, message, dispatch) {
+    try {
+      await turn.preparing;
+      turn.check();
+      return await dispatch(sessionId, message, turn.createOpts, {
+        ...turn.sendOpts,
+        onVendorTurnReserved: generation => {
+          turn.check();
+          bindTurnSession(sessionId, deps.getMaker().getSession(sessionId));
+          turn.generation = generation;
+          turn.sendOpts.onVendorTurnReserved?.(generation);
+        },
+      });
+    } catch (error) {
+      turn.running = false;
+      throw error;
+    }
+  }
+
+  // As the desktop's sendToAgentAccepted (register.ts), every send of a task runs under that
+  // task's send lock, shared with the entries that change its runtime or route
+  // (session-route-lock.mjs) and with context recovery. Held until the send is accepted or refused.
+  function send(sessionId, message, createOpts, sendOpts) {
+    return withSendToSessionLock(sessionId, () => sendUnlocked(sessionId, message, createOpts, sendOpts));
+  }
+
+  async function sendUnlocked(sessionId, message, createOpts, sendOpts) {
+    createOpts = { ...createOpts };
+    const turn = openTurn(sessionId, createOpts, sendOpts, sendOpts.persistUserMessage?.clientId);
+    const check = turn.check;
     turn.preparing = (async () => {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
       const stored = await readExecutionSession(sessionId);
@@ -483,7 +540,6 @@ export function createTurnExecutor(deps) {
       createOpts.planMode = queuedPlan;
       createOpts.workingDir = stored.workingDir || '';
       turn.dbKind = dbKind(createOpts.agentKind);
-      await deps.beforeSessionStart?.(sessionId, createOpts.agentKind);
       check();
       assertHostTaskExecutionSupported(createOpts);
       deps.assertProviderExecutionSupported?.(sessionId, createOpts.providerId);
@@ -501,18 +557,9 @@ export function createTurnExecutor(deps) {
       }
       setSessionProvider(sessionId, createOpts.providerId ?? null);
     })();
+    const result = await dispatchTurn(sessionId, turn, message,
+      (...args) => transaction.sendToAgentAccepted(...args));
     try {
-      await turn.preparing;
-      check();
-      const result = await transaction.sendToAgentAccepted(sessionId, message, createOpts, {
-        ...sendOpts,
-        onVendorTurnReserved: generation => {
-          check();
-          bindTurnSession(sessionId, deps.getMaker().getSession(sessionId));
-          turn.generation = generation;
-          sendOpts.onVendorTurnReserved?.(generation);
-        },
-      });
       if (!result.accepted) {
         turn.running = false;
         if (deps.isCurrent()) await deps.markEnded?.(sessionId, Date.now());
@@ -529,8 +576,45 @@ export function createTurnExecutor(deps) {
     }
   }
 
+  // A context recovery's replay of the user's message (contextRecoveryAssembly.ts
+  // replayContextRecoveryWithPorts, the desktop's sendToAgentAcceptedUnlocked): a turn of its own
+  // through the same shared transaction, with no input-queue item, no new user row and no send lock
+  // (recovery holds it). Recovery has closed the task's runtime and waited for the claimed turn's
+  // settlement before it replays; a turn of the task still running, or a live runtime, means
+  // something started since, so the replay is refused. As on the desktop, its Git baseline is the
+  // transaction's: a replay has no persistUserMessage, so beforeDispatchDirectUserTurn opens it and
+  // onUndispatchedDirectUserTurn drops it when the replay is refused or fails. Its turn carries the
+  // claimed input's client id, only to stamp its events and receipts (Host-only: /api/chat ends a
+  // message's stream on a terminal of its own client id); no user row is written for it.
+  async function replay(sessionId, message, createOpts, sendOpts = {}) {
+    if (turns.get(sessionId)?.running || deps.getMaker().getSession(sessionId)) return { accepted: false };
+    createOpts = { ...createOpts };
+    const turn = openTurn(sessionId, createOpts, sendOpts, recovery?.replayClientId(sessionId));
+    turn.preparing = (async () => {
+      await readExecutionSession(sessionId);
+      assertHostTaskExecutionSupported(createOpts);
+      deps.assertProviderExecutionSupported?.(sessionId, createOpts.providerId);
+      turn.check();
+    })();
+    const result = await dispatchTurn(sessionId, turn, message, (...args) => transaction.sendToAgentAccepted(...args));
+    if (!result.accepted) {
+      turn.running = false;
+      if (deps.isCurrent()) await deps.markEnded?.(sessionId, Date.now());
+    }
+    return result;
+  }
+
   return {
     send,
+    /** On shutdown, before stopping tasks: waits (bounded) for context recoveries in flight to end. */
+    drainRecoveriesForShutdown: () => recovery?.drainForShutdown(),
+    /** A recovery's replay was accepted (the recovery factory's onRebuilt). */
+    noteRecoveryRebuilt: id => recovery?.noteRebuilt(id),
+    replay,
+    /** Writes the queued history of every task, as the desktop's drainPersistQueue. */
+    async drainHistories() { await Promise.all([...histories.values()].map(history => history.drain())); },
+    /** A rebuilt native context has seen no environment notes (contextRecoveryRebuilt). */
+    resetWireNotes: id => wireNotes.reset(id),
     async beforeDispatchUserTurn(id, item, signal) {
       const turn = turns.get(id);
       const live = deps.getMaker()?.getSession(id);
