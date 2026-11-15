@@ -62,12 +62,6 @@ import {
 import { BotDirectMessageCard } from '@/features/bots/BotDirectMessageCard';
 import { VoiceCallCard, VoiceCallTaskEntry } from '@/features/bots/voice/VoiceCallTranscript';
 import { readVoiceCallRecord } from '@/../shared/voiceConversation';
-import {
-  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
-  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
-  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
-  ACTIVITY_ROW_RADIUS_CLASS,
-} from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
