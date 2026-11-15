@@ -286,6 +286,8 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 
 第一版（第一批开始时，2026-11-15）：共 18 项。已改为共用 0，保留并有对照测试 1（第 1 项），平台差别 1（第 17 项），待定 16。做法：按“照桌面”“as the desktop”“line for line”等说法检索，再逐个读候选文件确认。可能漏项，以后碰到再补，并写明是新发现的。
 
+之后新发现的：第 19 项（2026-11-15，#10613 评审，平台差别）。现为 19 项：已改为共用 0，保留并有对照测试 1，平台差别 2，待定 16。
+
 | # | 位置 | 重写了桌面的什么 | 状态 |
 |---|---|---|---|
 | 1 | `agent/context-recovery.ts` `holdsOverflowBroadcast` | `sessionEventDelivery.ts` 压住上下文恢复错误广播的判据 | 保留并有对照测试（`sessionEventPipeline.test.ts`）；第一批改为共用 |
@@ -296,7 +298,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 6 | `agent/turn-executor.mjs` 的 `send`、`openTurn`、`dispatchTurn` | `register.ts` 的 `sendToAgentAccepted` | 待定；第一批补齐第 32 行的端口 |
 | 7 | `agent/session-settings.mjs` 的 `applyQueuedSessionSettings`、`applyLiveSessionSettings` | 回合中改模型的延期兑现、发送时对账 | 待定；第一批改走共用核心后删掉 |
 | 8 | `agent/session-update.ts` `createHostSessionUpdate`（改模型、来源、努力；任务状态的写入也在这里） | `applySessionRuntimeSelection`（改模型、来源、努力）；状态写入对应桌面 `patchSessionMetaInDb`（恢复为 active 时走数据库事务 `sessions.setStatus` 并通知插件，Host 只直接改列，第一批桌面准备时新发现） | 待定；第一批改走共用核心 `applyRuntimeSetModelChange`；状态写入的等价性在检查点 2 核对（归档任务发消息时恢复用它） |
-| 9 | `agent/turn-executor.mjs` Git 基线的结算 | `sessionEventDelivery.ts` 的保存点结算 | 待定 |
+| 9 | `agent/turn-executor.mjs` Git 基线的结算 | `sessionEventDelivery.ts` 的保存点结算 | 待定；上下文恢复重放自己开、撤基线的那几步已删，与桌面一样交给共用事务的 `beforeDispatchDirectUserTurn` / `onUndispatchedDirectUserTurn`（#10613 评审发现重复开基线） |
 | 10 | `agent/start-options.ts` 启动钩子的步骤编排 | `maker-host/index.ts` 的启动钩子与 `onBeforeStart` | 待定 |
 | 11 | `agent/codex-token-reader.ts` | `createCodexAuthTokenReader`（注释自述逐行相同） | 待定（第二批） |
 | 12 | `agent/codex-auth-boundary.ts` | `maker-host/index.ts` 的三个鉴权边界钩子（注释自述逐步相同） | 待定（第二批） |
@@ -306,4 +308,5 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 16 | `main.ts` 的模型清单刷新、`agent/providers.mjs` | 桌面 `runModelsSync` 与目录变更点的刷新 | 待定（第二批） |
 | 17 | `agent/auxiliary-model-chain.ts` | 辅助模型链（两处答案故意不同） | 平台差别（第二节） |
 | 18 | `agent/send-preflight.ts` | 桌面 `prepareUserMessageForAgent` 的附件归一化；远程任务的拦截 | 待定（附件随第 12 行）；拦截是平台差别 |
+| 19 | `agent/turn-executor.mjs` `replay` 用被认领那一轮的 clientId 给重放的事件和回执打标（`agent/context-recovery.ts` `replayClientId`） | 桌面没有对应：桌面重放不带 clientId（只有 Pi 缓存兼容带 `retryUserClientId`） | 平台差别：Host 的 `/api/chat` 靠终态事件的 clientId 结束一条消息的流，桌面渲染层不靠 clientId 判断结束。只打标，不写用户行，事务仍不带 `persistUserMessage`；只在这次恢复进行中有效。新发现（2026-11-15，#10613 评审） |
 
