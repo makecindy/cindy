@@ -295,7 +295,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 5 | `agent/turn-executor.mjs` `finish` 的终态结算 | `sessionEventTerminal.ts` 与 register 的 `onTurnErrorEvent` 收尾 | 待定；同上 |
 | 6 | `agent/turn-executor.mjs` 的 `send`、`openTurn`、`dispatchTurn` | `register.ts` 的 `sendToAgentAccepted` | 待定；第一批补齐第 32 行的端口 |
 | 7 | `agent/session-settings.mjs` 的 `applyQueuedSessionSettings`、`applyLiveSessionSettings` | 回合中改模型的延期兑现、发送时对账 | 待定；第一批改走共用核心后删掉 |
-| 8 | `agent/session-update.ts` `createHostSessionUpdate` | `applySessionRuntimeSelection`（改模型、来源、努力） | 待定；第一批改走共用核心 `applyRuntimeSetModelChange` |
+| 8 | `agent/session-update.ts` `createHostSessionUpdate`（改模型、来源、努力；任务状态的写入也在这里） | `applySessionRuntimeSelection`（改模型、来源、努力）；状态写入对应桌面 `patchSessionMetaInDb`（恢复为 active 时走数据库事务 `sessions.setStatus` 并通知插件，Host 只直接改列，第一批桌面准备时新发现） | 待定；第一批改走共用核心 `applyRuntimeSetModelChange`；状态写入的等价性在检查点 2 核对（归档任务发消息时恢复用它） |
 | 9 | `agent/turn-executor.mjs` Git 基线的结算 | `sessionEventDelivery.ts` 的保存点结算 | 待定 |
 | 10 | `agent/start-options.ts` 启动钩子的步骤编排 | `maker-host/index.ts` 的启动钩子与 `onBeforeStart` | 待定 |
 | 11 | `agent/codex-token-reader.ts` | `createCodexAuthTokenReader`（注释自述逐行相同） | 待定（第二批） |
