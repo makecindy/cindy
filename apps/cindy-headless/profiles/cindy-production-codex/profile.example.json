@@ -13,7 +13,7 @@
   },
   "permissionMode": "bypassPermissions",
   "systemPromptFile": "prompt.md",
-  "expectedSystemPromptDigest": "b5a12214b75db6628f1e619f170af54fb14b0702934620b4dbfc66b12380f879",
+  "expectedSystemPromptDigest": "8dec43651fda9723991e261d154f5f9c474a30f79c7957b37880a0151aa08bfb",
   "makerMemory": true,
   "nativeMemory": false,
   "projectContext": true,

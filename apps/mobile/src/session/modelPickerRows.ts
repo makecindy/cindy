@@ -61,6 +61,8 @@ const PROVIDER_TITLE: Record<string, string> = {
 };
 
 export function providerDisplayTitle(p: Pick<ProviderView, 'id' | 'name'>): string {
+  // Names belong to the source computer, not the phone's signed-in account.
+  if (p.id === 'xd') return p.name?.startsWith('Cindy AI · ') ? p.name : PROVIDER_TITLE.xd;
   return PROVIDER_TITLE[p.id] ?? p.name;
 }
 

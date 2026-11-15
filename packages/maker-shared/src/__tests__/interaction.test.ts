@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   splitQuestionReferences,
   asyncQuestionNeedsSupplement,
+  asyncQuestionReplyDisplayText,
+  formatAsyncQuestionReplyDisplay,
   formatAsyncQuestionSupplement,
+  withdrawnQuestionDraftText,
   buildAskQuestionProgressSummary,
   buildAskQuestionReviewPresentation,
   buildAskUserQuestionDecision,
@@ -22,12 +25,13 @@ import {
   canStartInteractionResolve,
   encodeMultiSelectAnswer,
   extractPlanOutline,
+  describePermissionAction,
   formatPermissionInput,
   interactionBlocksRemoteComposer,
+  pendingInteractionsBlockRemoteComposer,
   isFreeTextAskOptionLabel,
   normalizeAskQuestions,
   normalizeIssueConfirm,
-  pendingInteractionsBlockRemoteComposer,
   permissionRiskSummary,
   permissionTitle,
   remoteInteractionHandling,
@@ -38,6 +42,14 @@ import {
   visibleAskOptions,
   type PendingInteractionLike,
 } from '../interaction.js';
+
+it('restores the composer for collapsed questions while another approval still blocks it', () => {
+  const question = { request: { kind: 'ask_user_question', requestId: 'q', delivery: 'async' } };
+  const permission = { request: { kind: 'permission', requestId: 'p' } };
+  expect(pendingInteractionsBlockRemoteComposer([question])).toBe(true);
+  expect(pendingInteractionsBlockRemoteComposer([question], ['q'])).toBe(false);
+  expect(pendingInteractionsBlockRemoteComposer([question, permission], ['q', 'p'])).toBe(true);
+});
 
 describe('interaction shared model', () => {
   // Unit regression: existing question presentation tests only covered prose.
@@ -100,6 +112,33 @@ describe('interaction shared model', () => {
     expect(formatAsyncQuestionSupplement([{ question: 'Scope?\nDetails?', header: 'Scope' }, { question: 'Skipped?' }],
       { Scope: 'Mobile too', 'Skipped?': '' })).toBe('> Scope?\n> Details?\n\nMobile too');
     expect(formatAsyncQuestionSupplement([{ question: 'Q?' }], {})).toBe('');
+  });
+
+
+  it('keeps delayed-answer context outside the native reply and never sends an empty reply', () => {
+    const question = { id: '["request_user_input_async","item",0]', question: 'Install?' };
+    const text = formatAsyncQuestionSupplement([question], { [question.id]: 'Yes' }, { late: true });
+    expect(text).toContain('</send_user_message_question_reply>\n\n<cindy_question_context>');
+    expect(text).toContain('whether the question still applies');
+    expect(text).toContain("not part of the user's answer or new authorization");
+    expect(formatAsyncQuestionSupplement([question], {}, { late: true })).toBe('');
+    expect(withdrawnQuestionDraftText('Details', ['A', 'B'])).toBe('A\nB\nDetails');
+    expect(withdrawnQuestionDraftText('', [], '["A","B"]')).toBe('A\nB');
+  });
+
+  // Bug: an answer to a Codex question appeared in the conversation as the reply markup and
+  // the delayed-answer note sent to the model. Entry: the shared formatters every client uses.
+  it('reads an answer as question and answer, including rows saved in the model format', () => {
+    const question = { id: '["request_user_input_async","item",0]', question: 'Install?\nNow?' };
+    const answers = { [question.id]: ' Yes ' };
+    expect(formatAsyncQuestionReplyDisplay([question], answers)).toBe('> Install?\n> Now?\n\nYes');
+    expect(formatAsyncQuestionReplyDisplay([question], {})).toBe('');
+    expect(asyncQuestionReplyDisplayText(formatAsyncQuestionSupplement([question], answers, { late: true })))
+      .toBe('> Install?\n> Now?\n\nYes');
+    expect(asyncQuestionReplyDisplayText(formatAsyncQuestionSupplement([{ question: 'Q?' }], { 'Q?': 'A' }, { late: true })))
+      .toBe('> Q?\n\nA');
+    const unreadable = '<send_user_message_question_reply>\nnot a reply list\n</send_user_message_question_reply>';
+    expect(asyncQuestionReplyDisplayText(unreadable)).toBe(unreadable);
   });
 
   it('never supplements an accepted native answer', async () => {
@@ -266,9 +305,92 @@ describe('interaction shared model', () => {
         title: '高风险授权需要二次确认',
         detail: '先核对命令内容，再点一次确认允许；不确定就拒绝。',
       },
-      title: '允许使用 Bash?',
+      title: '允许运行这条命令？',
       toolName: 'Bash',
     });
+  });
+
+  // 2026-10-24: an Auto ask from Codex showed "Allow Codex to run this command?" with raw JSON
+  // and no reason. The card must say what runs, why Auto asked, and warn on risky exec commands.
+  it('explains Auto asks with the reviewer reason and the readable operation across harness tool names', () => {
+    const exec = buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-ask',
+      toolName: 'exec',
+      title: 'Allow Codex to run this command?',
+      input: { command: 'xcrun simctl delete all', cwd: '/repo' },
+      metadata: { autoReviewReason: '这会删除电脑上的所有 iOS 模拟器，你只让我排查键盘问题。' },
+    });
+    expect(exec).toMatchObject({
+      title: '允许运行这条命令？',
+      code: 'xcrun simctl delete all\n# cwd: /repo',
+      autoReviewReason: '这会删除电脑上的所有 iOS 模拟器，你只让我排查键盘问题。',
+    });
+
+    const plugin = buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-plugin',
+      toolName: 'mcp:cindy:ghost_call',
+      input: { ghost_id: 'cindy-github', tool: 'call_tool', args: { name: 'get_user', args: { username: 'octo' } } },
+    });
+    expect(plugin).toMatchObject({ title: '允许使用插件「cindy-github」？', code: 'get_user {"username":"octo"}', autoReviewReason: null });
+
+    expect(buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-browser',
+      toolName: 'mcp:cindy_browser:call_tool',
+      input: { name: 'browser', args: { action: 'navigate', url: 'https://x.com/compose/post' } },
+    })).toMatchObject({ title: '允许浏览器执行这一步？', code: expect.stringContaining('navigate {"url":"https://x.com/compose/post"}') });
+
+    // The summary must not hide what the user is approving (review 2026-10-24: recipe/typed text, move/diff).
+    expect(describePermissionAction('mcp:cindy_browser:call_tool', {
+      name: 'browser', args: { action: 'recipe', recipeId: 'post-reply', site: 'x.com', text: 'hello' },
+    }).preview).toBe('recipe {"recipeId":"post-reply","site":"x.com","text":"hello"}');
+    // MCP names parse by plain string scan: both separators work and hostile names stay linear (CodeQL ReDoS).
+    expect(describePermissionAction('mcp__cindy_orca__create_workers', { n: 1 })).toMatchObject({ kind: 'mcp', subject: 'cindy_orca', preview: 'create_workers {"n":1}' });
+    expect(describePermissionAction('mcp:my-server:do_it', {})).toMatchObject({ kind: 'mcp', subject: 'my-server', preview: 'do_it' });
+    expect(describePermissionAction('mcp__', {}).kind).toBe('tool');
+    const hostile = `mcp:9${'-9'.repeat(50_000)}`;
+    const started = Date.now();
+    expect(describePermissionAction(hostile, {}).kind).toBe('tool');
+    expect(Date.now() - started).toBeLessThan(500);
+    // argv arrays keep argument boundaries.
+    expect(describePermissionAction('shell', { command: ['printf', '%s', 'a b', "it's", ''] }).preview)
+      .toBe("printf %s 'a b' 'it'\\''s' ''");
+    expect(describePermissionAction('exec', { command: 'rm -rf build', cwd: '/repo/app' }).preview)
+      .toBe('rm -rf build\n# cwd: /repo/app');
+    expect(describePermissionAction('Grep', { pattern: 'AKIA', path: '/Users/me' }).preview).toBe('AKIA \u2192 /Users/me');
+    expect(describePermissionAction('grep', { pattern: 'TODO' }).preview).toBe('TODO');
+    // call_tool.args stringified by the caller (issue #350) is parsed like the approval policy does.
+    expect(describePermissionAction('mcp:cindy_browser:call_tool', {
+      name: 'browser', args: JSON.stringify({ action: 'recipe', recipeId: 'post-reply' }),
+    }).preview).toBe('recipe {"recipeId":"post-reply"}');
+    expect(describePermissionAction('mcp:cindy:ghost_call', {
+      ghost_id: 'cindy-github', tool: 'call_tool', args: JSON.stringify({ name: 'get_user', args: JSON.stringify({ username: 'octo' }) }),
+    }).preview).toBe('get_user {"username":"octo"}');
+    expect(describePermissionAction('file_change', { changes: [
+      { path: '/repo/a.ts', kind: { type: 'update', move_path: '/repo/b.ts' }, diff: '@@ -1 +1 @@' },
+      { path: '/repo/old.ts', kind: { type: 'delete' } },
+    ] }).preview).toBe('update /repo/a.ts \u2192 /repo/b.ts\n@@ -1 +1 @@\ndelete /repo/old.ts');
+
+    // A failed review shows its own fixed copy, never a stale model reason.
+    expect(buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-down',
+      toolName: 'Bash',
+      metadata: { autoReviewUnavailable: true, autoReviewReason: 'stale' },
+    }).autoReviewReason).toBeNull();
+  });
+
+  // Regression: ordinary MCP servers were labeled plugins and hid the Host's own title.
+  // Public presentation entry; unit tier; direct and progressive calls cover both preview paths.
+  it.each([
+    ['mcp__cindy_scheduler__schedule_delete', { id: 'completed-followup' }, '确认任务操作', '确认任务操作', 'schedule_delete {"id":"completed-followup"}'],
+    ['mcp:external-service:call_tool', { name: 'update_item', args: { id: 'item' } }, undefined, '允许使用 external-service?', 'update_item {"id":"item"}'],
+  ])('presents %s as an MCP tool without replacing an explicit title', (toolName, input, title, expectedTitle, code) => {
+    expect(buildPermissionReviewPresentation({
+      kind: 'permission', requestId: 'mcp-confirmation', toolName, input, title,
+    })).toMatchObject({ title: expectedTitle, code });
   });
 
   it('marks auto-review unavailable handoffs so mobile can localize the confirmation copy', () => {
@@ -700,6 +822,7 @@ describe('interaction shared model', () => {
   });
 
   it('only lets remotely resolvable interactions take over the controller composer', () => {
+    expect(remoteInteractionHandling({ request: { kind: 'issue_confirm', requestId: 'i1', remoteConfirmSupported: true } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'permission', requestId: 'p1' } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'ask_user_question', requestId: 'a1' } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'plan_review', requestId: 'pl1' } })).toBe('resolvable');
@@ -722,6 +845,15 @@ describe('interaction shared model', () => {
     expect(interactionBlocksRemoteComposer({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } })).toBe(false);
     expect(interactionBlocksRemoteComposer({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe(false);
     expect(interactionBlocksRemoteComposer(null)).toBe(false);
+    // Feedback review must keep normal chat available.
+    // It remains resolvable only through its confirmation, and cannot hide
+    // another pending permission's composer gate. Tier: unit, shared entry.
+    const feedback = { request: { kind: 'issue_confirm', requestId: 'i1', remoteConfirmSupported: true } };
+    expect(remoteInteractionHandling(feedback)).toBe('resolvable');
+    expect(pendingInteractionsBlockRemoteComposer([feedback])).toBe(false);
+    expect(pendingInteractionsBlockRemoteComposer([feedback,
+      { request: { kind: 'permission', requestId: 'p1' } },
+    ])).toBe(true);
   });
 
   it('lets the controller answer 代输入 without taking over its composer', () => {

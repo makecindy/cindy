@@ -1,5 +1,6 @@
 import type { GhostTrustInfo } from '../../shared/ghost.js';
 import type { GhostInstallReceipt } from './ghostInstallReceipt.js';
+import { LOCAL_PLUGIN_NAMESPACE } from '../../shared/pluginIdentity.js';
 
 const PACKAGE_SHA256_RE = /^[a-f0-9]{64}$/;
 
@@ -12,8 +13,9 @@ export interface GhostLocalUpdatePackageEvidence {
 
 export interface GhostLocalUpdateSourceInput {
   existingSourceChanged: boolean;
+  nextInstallOrigin?: 'manual' | 'agent-forge';
   previousApprovedReceipt: Pick<GhostInstallReceipt,
-    'id' | 'namespace' | 'packageSha256' | 'trust' | 'legacyFirstPartyEligible'> | null;
+    'id' | 'namespace' | 'packageSha256' | 'trust' | 'legacyFirstPartyEligible' | 'installOrigin'> | null;
   inspectedPackage: GhostLocalUpdatePackageEvidence;
 }
 
@@ -45,7 +47,9 @@ export function classifyGhostLocalUpdateSource(
   );
   const previousProtectedSource = previous?.legacyFirstPartyEligible === true ||
     previous?.trust.level === 'cindy-official' || previousPublisherKey !== null;
-  const sourceChanged = input.existingSourceChanged || !identityMatches || !nextHashValid ||
+  const originChanged = input.nextInstallOrigin !== undefined && next.namespace !== LOCAL_PLUGIN_NAMESPACE &&
+    (previous?.installOrigin === 'agent-forge' ? 'agent-forge' : 'manual') !== input.nextInstallOrigin;
+  const sourceChanged = input.existingSourceChanged || originChanged || !identityMatches || !nextHashValid ||
     (previousProtectedSource && !sameSourceProven);
   return {
     sourceChanged,

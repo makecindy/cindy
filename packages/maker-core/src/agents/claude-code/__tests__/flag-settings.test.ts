@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { buildClaudeFlagSettings } from '../flag-settings.js';
 
+it('a subscription prohibition writes explicit false over native Fast defaults', () => {
+  expect(buildClaudeFlagSettings({ showThinkingSummaries: false, fastMode: true, fastModeAllowed: false }).fastMode).toBe(false);
+  expect(buildClaudeFlagSettings({ showThinkingSummaries: false, fastMode: false, fastModeAllowed: false })).toHaveProperty('fastMode', false);
+});
+
 describe('buildClaudeFlagSettings', () => {
   it('恒置空 apiKeyHelper — 屏蔽用户级 helper 对 oauth-spawn 订阅鉴权的劫持(回归锚点)', () => {
     // 用户 ~/.claude/settings.json 配了 apiKeyHelper 时,cc 鉴权优先级里它高于 claude.ai

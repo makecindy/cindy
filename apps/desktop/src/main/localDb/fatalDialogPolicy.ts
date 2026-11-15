@@ -13,9 +13,10 @@
  */
 
 /** ensureReady 失败结果的稳定错误码集合。 */
-export type EnsureReadyErrorCode = 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED';
+export type EnsureReadyErrorCode =
+  'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED' | 'DB_SCHEMA_LOCKED';
 
-/** MIGRATE_FAILED 由 renderer 全屏恢复界面接管 UX；其余 code 维持原生对话框。 */
+/** 迁移失败与租约阻断由 renderer 恢复界面接管；其余 code 维持原生对话框。 */
 export function shouldShowNativeFatalDialog(code: EnsureReadyErrorCode): boolean {
-  return code !== 'MIGRATE_FAILED';
+  return code !== 'MIGRATE_FAILED' && code !== 'DB_SCHEMA_LOCKED';
 }

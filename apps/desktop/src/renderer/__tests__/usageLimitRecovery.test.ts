@@ -134,6 +134,18 @@ describe('usage limit recovery detection', () => {
     ).toEqual({ resetAtMs: Date.parse('2026-01-24T13:10:00.000Z') });
   });
 
+  // Unit regression: the screenshot's text-only five-hour error was not recognized,
+  // so its explicit timezone/reset was lost. Existing cases only covered session/weekly.
+  it.each(["You've hit your 5-hour limit", 'You’ve hit your 5-hour limit'])(
+    'parses the five-hour deadline without SDK metadata: %s', (message) => {
+      expect(extractUsageLimitRecoveryHint(
+        { message: `${message} · resets 2:30am (Pacific/Auckland)` },
+        Date.parse('2026-11-11T10:00:00Z'),
+        { localTimeZoneTrusted: false },
+      )).toEqual({ resetAtMs: Date.parse('2026-11-11T13:30:00Z') });
+    },
+  );
+
   it('normalizes Intl midnight hour 24 while parsing a time-of-day reset', () => {
     const originalFormatToParts = Intl.DateTimeFormat.prototype.formatToParts;
     vi.spyOn(Intl.DateTimeFormat.prototype, 'formatToParts').mockImplementation(function (
@@ -197,6 +209,17 @@ describe('usage limit recovery detection', () => {
     ).toBeNull();
     expect(
       extractUsageLimitRecoveryHint({ message: 'insufficient_quota: add billing credits' }, NOW),
+    ).toBeNull();
+  });
+
+  it('keeps an upstream overload that also says "rate limit exceeded" out of the limit path', () => {
+    // 实录文案同时命中限额正则与过载短语，过载短语必须优先(否则会按限额的周期
+    // 重置去安排自动续跑，issue #7897)。
+    expect(
+      extractUsageLimitRecoveryHint(
+        { message: 'rate limit exceeded: The engine is currently overloaded, please try again later' },
+        NOW,
+      ),
     ).toBeNull();
   });
 });

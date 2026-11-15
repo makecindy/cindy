@@ -1,0 +1,16 @@
+{
+  "picker": {
+    "shareName": "Von {{owner}} freigegeben",
+    "numbered": "{{name}} ({{index}})",
+    "unavailable": "Freigabe nicht verfügbar"
+  },
+  "link": {
+    "title": "Anbieterfreigabe",
+    "heading": "Diesen Link auf einem Computer öffnen",
+    "body": "Anbieterfreigaben können nur in {{appName}} auf einem Computer angefordert und genutzt werden. Sende den Link an deinen Computer und öffne ihn dort oder füge ihn unter Einstellungen → Anbieter → Für mich freigegebene Anbieter ein.",
+    "note": "Freigabelinks laufen 5 Minuten nach ihrer Erstellung ab und können nur einmal verwendet werden.",
+    "copy": "Freigabelink kopieren",
+    "copied": "Freigabelink kopiert",
+    "copyFailed": "Der Freigabelink konnte nicht kopiert werden. Versuche es gleich noch einmal."
+  }
+}

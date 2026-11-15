@@ -77,7 +77,17 @@ export function spawnManagedSidecar(
   binary: string,
   spawnImpl: typeof spawn = spawn,
 ): ChildProcess {
-  stopManagedSidecar();
+  // All callers use the same loopback service. A delayed failed probe must not
+  // replace a child another session has already started. Each caller still owns
+  // its readiness timeout/cancellation; only an explicit stop or exit allows a restart.
+  if (
+    sidecarChild
+    && !sidecarChild.killed
+    && sidecarChild.exitCode === null
+    && sidecarChild.signalCode === null
+  ) {
+    return sidecarChild;
+  }
   const child = spawnImpl(binary, ['serve'], {
     stdio: 'ignore',
     windowsHide: true,

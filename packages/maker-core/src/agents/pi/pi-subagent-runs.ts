@@ -2292,6 +2292,7 @@ interface PiSubagentResumeLaunch {
     modelsJson: Buffer;
     bridgeSource: Buffer;
     runnerSource: Buffer;
+    cacheRulesJson?: Buffer;
   };
 }
 
@@ -2724,6 +2725,26 @@ async function resumeClaimedPiSubagentRun(
         fs.readFile(selectedRunnerFile),
       ]);
   JSON.parse(modelsJson.toString('utf8'));
+  // Rules and models must come from the same generation. An older caller's
+  // current snapshot without rules must not inherit a historical route digest.
+  let cacheRules = launch.runtimeSnapshot?.cacheRulesJson;
+  if (cacheRules && cacheRules.byteLength > 256 * 1024) {
+    throw new Error('PI Subagent resume cache rules escaped their source run');
+  }
+  if (!launch.runtimeSnapshot) {
+    try {
+      const sourceCacheRules = path.join(sourceConfigHome, 'pi-cache-compatibility.json');
+      const [info, canonical] = await Promise.all([fs.lstat(sourceCacheRules), fs.realpath(sourceCacheRules)]);
+      if (info.isSymbolicLink() || !info.isFile() || info.size > 256 * 1024
+        || path.dirname(canonical) !== canonicalConfigHome) {
+        throw new Error('PI Subagent resume cache rules escaped their source run');
+      }
+      cacheRules = await fs.readFile(sourceCacheRules);
+    } catch (error) {
+      // Optional for older durable snapshots; preserve their missing-file compatibility.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
   const runId = randomUUID();
   const runDir = path.join(root, runId);
   const childConfigHome = path.join(runDir, 'pi-home');
@@ -2793,6 +2814,7 @@ async function resumeClaimedPiSubagentRun(
     }
     await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    if (cacheRules) await fs.writeFile(path.join(childConfigHome, 'pi-cache-compatibility.json'), cacheRules, { mode: 0o600, flag: 'wx' });
     await copyStagedRipgrep(
       sourceConfigHome,
       childConfigHome,
@@ -3005,8 +3027,8 @@ const DEFAULT_KILL_BUDGET_MS = 8_000;
  * Runs under `root` that this sweep still owns, as one universe.
  *
  * `status` is undefined when status.json is missing, corrupt, oversized or
- * unreadable. Those runs stay in the set deliberately, and every pass of the
- * sweep derives its work from *this* function: when the stop pass and the kill
+ * unreadable. Without a matching independent terminal receipt those runs stay
+ * in the set deliberately. Every sweep pass derives work from *this* function: when the stop pass and the kill
  * pass disagree about which runs exist, a record we cannot read drops out of the
  * escalation and the boundary reports itself clean.
  *
@@ -3020,11 +3042,17 @@ const DEFAULT_KILL_BUDGET_MS = 8_000;
  * signalling child pids read off disk, which the runner header forbids because
  * of pid reuse.
  */
-async function sweepableRunsUnderRoot(
+interface SweepableRun {
+  runId: string;
+  status: PiSubagentRunStatus | undefined;
+  terminalIdentities?: string[];
+}
+
+async function collectSweepableRunsUnderRoot(
   root: string,
   scope: PiSubagentSweepScope,
   startTimeMemo?: ProcessStartTimeMemo,
-): Promise<Array<{ runId: string; status: PiSubagentRunStatus | undefined }>> {
+): Promise<SweepableRun[]> {
   const runIds = await listRunDirectoryIds(root);
   const [listedStatuses, diagnostics] = await Promise.all([
     listPiSubagentRuns(root),
@@ -3034,7 +3062,7 @@ async function sweepableRunsUnderRoot(
   const staleRunIds = new Set(
     diagnostics.filter((diagnostic) => diagnostic.kind === 'stale').map((diagnostic) => diagnostic.runId),
   );
-  const sweepable: Array<{ runId: string; status: PiSubagentRunStatus | undefined }> = [];
+  const sweepable: SweepableRun[] = [];
   for (const runId of runIds) {
     const status = statuses.get(runId);
     if ((status && isPiSubagentTerminal(status.state)) || staleRunIds.has(runId)) continue;
@@ -3046,9 +3074,395 @@ async function sweepableRunsUnderRoot(
       continue;
     }
     if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid, startTimeMemo)) continue;
-    sweepable.push({ runId, status });
+    const terminalIdentities = !status ? await terminalResultProcessIdentities(root, runId) : null;
+    sweepable.push({ runId, status, ...(terminalIdentities ? { terminalIdentities } : {}) });
   }
   return sweepable;
+}
+
+async function sweepableRunsUnderRoots(
+  roots: readonly string[],
+  scope: PiSubagentSweepScope,
+  recoveryDeadline: number,
+  startTimeMemo?: ProcessStartTimeMemo,
+): Promise<Map<string, SweepableRun[]>> {
+  const byRoot = new Map<string, SweepableRun[]>();
+  for (const root of roots) {
+    byRoot.set(root, await collectSweepableRunsUnderRoot(root, scope, startTimeMemo));
+  }
+  if (![...byRoot.values()].some(runs => runs.some(run => run.terminalIdentities))) return byRoot;
+  // Read every root's receipts BEFORE the inventory: an earlier cached query
+  // could miss a later launch. One query per pass also keeps historical roots
+  // from each consuming another slice of the shared recovery deadline.
+  const processes = await readRecoveryProcessInventory(recoveryDeadline);
+  if (!processes) return byRoot;
+  const missing: string[] = [];
+  for (const runs of byRoot.values()) {
+    for (const { terminalIdentities } of runs) {
+      if (!terminalIdentities) continue;
+      if (processes.some((command) => terminalIdentities.some((id) => command.includes(id)))) continue;
+      missing.push(...terminalIdentities);
+    }
+  }
+  const procfs = process.platform === 'linux' && missing.length > 0
+    ? await linuxProcfsLiveIdentities(missing, recoveryDeadline)
+    : 'unavailable';
+  if (procfs === 'unknown') return byRoot;
+  for (const [root, runs] of byRoot) {
+    byRoot.set(root, runs.filter(({ terminalIdentities }) => !terminalIdentities
+      || processes.some((command) => terminalIdentities.some((id) => command.includes(id)))
+      || (procfs !== 'unavailable' && terminalIdentities.some((id) => procfs.has(id)))));
+  }
+  return byRoot;
+}
+
+/**
+ * A result survives a damaged status (#6694), but is NOT exit evidence: signal
+ * and partial-failure paths can publish it after an unsuccessful kill attempt.
+ * Require both a matching receipt and an independent OS inventory with no
+ * runner/child identities left. Resume creates a fresh run UUID; a resumed child
+ * with the same native session ID is conservatively considered still active.
+ * Keep both files untouched, including the corrupt status, for diagnosis.
+ */
+async function terminalResultProcessIdentities(
+  root: string,
+  runId: string,
+): Promise<string[] | null> {
+  try {
+    const runDir = path.join(root, runId);
+    const [config, value] = await Promise.all([
+      readSmallJson(path.join(runDir, 'config.json')),
+      readSmallJson(path.join(runDir, 'result.json')),
+    ]);
+    if (!isResumeConfig(config, runId)
+      || config.parentSessionId !== path.basename(root)
+      || typeof config.runDir !== 'string'
+      || path.resolve(config.runDir) !== path.resolve(runDir)
+      || !value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const result = value as Record<string, unknown>;
+    if (result.version !== 1 || result.runId !== runId || result.taskId !== config.taskId
+      || !isState(result.state) || !isPiSubagentTerminal(result.state)
+      || !finiteNonNegative(result.completedAt)
+      || !Array.isArray(result.tasks) || result.tasks.length !== config.tasks.length) return null;
+    const seen = new Set<string>();
+    const matchingTasks = result.tasks.every((value: unknown) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const task = value as Record<string, unknown>;
+      if (typeof task.childId !== 'string' || !task.childId || seen.has(task.childId)) return false;
+      seen.add(task.childId);
+      const expected = config.tasks.find((candidate) => candidate?.childId === task.childId);
+      return expected !== undefined
+        && typeof expected.sessionId === 'string' && expected.sessionId.length > 0
+        && typeof expected.agent === 'string' && expected.agent.length > 0
+        && task.sessionId === expected.sessionId && task.agent === expected.agent
+        && isState(task.status) && isPiSubagentTerminal(task.status);
+    });
+    if (!matchingTasks) return null;
+    // The runner argv carries the UUID in its config/script path; every Pi
+    // child carries --session-id, including children surviving a runner exit.
+    // Matching only runner PIDs would miss precisely that orphan-child case.
+    return [runId, ...config.tasks.map(task => task.sessionId)];
+  } catch {
+    // Bounded reads reject missing, corrupt, oversized and linked artifacts.
+    return null;
+  }
+}
+/** Full Linux argv, or null if that pid is already gone. `'unknown'` is fail-closed. */
+async function readLinuxProcArgs(
+  pid: string,
+  options: { ignorePermission?: boolean } = {},
+): Promise<string | null | 'unknown'> {
+  try {
+    const cmdline = await fs.readFile(`/proc/${pid}/cmdline`);
+    const args = cmdline.toString('utf8').split('\0').filter((part) => part.length > 0).join(' ');
+    return args.trim() ? args : null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return null;
+    if (options.ignorePermission && (code === 'EACCES' || code === 'EPERM')) return null;
+    return 'unknown';
+  }
+}
+
+/**
+ * Identities still visible in `/proc` after `ps` missed them.
+ * `unavailable` means this is not a Linux procfs (a unit test may only pretend
+ * to be Linux). `unknown` means the scan could not finish and must fail closed.
+ */
+async function linuxProcfsLiveIdentities(
+  identities: readonly string[],
+  deadline: number,
+): Promise<Set<string> | 'unavailable' | 'unknown'> {
+  const sought = identities.filter((id) => id.length >= 32);
+  if (sought.length === 0) return new Set();
+  let names: string[];
+  try {
+    names = await fs.readdir('/proc');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'unavailable' : 'unknown';
+  }
+  const found = new Set<string>();
+  for (const name of names) {
+    if (Date.now() >= deadline) return 'unknown';
+    if (!/^[1-9]\d*$/.test(name)) continue;
+    // Other users' cmdlines are often unreadable. Skip those; a permission
+    // error is not evidence that our own child is still alive.
+    const args = await readLinuxProcArgs(name, { ignorePermission: true });
+    if (args === 'unknown') return 'unknown';
+    if (!args) continue;
+    for (const id of sought) {
+      if (args.includes(id)) found.add(id);
+    }
+    if (sought.every((id) => found.has(id))) break;
+  }
+  return found;
+}
+
+/** Add same-user processes `ps` omitted. An unreadable live command line is unknown. */
+async function supplementLinuxProcCommandLines(
+  commands: string[],
+  seenPids: Set<string>,
+  uid: number,
+  deadline: number,
+): Promise<string[] | null> {
+  let names: string[];
+  try {
+    names = await fs.readdir('/proc');
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    if (Date.now() >= deadline) return null;
+    if (!/^[1-9]\d*$/.test(name) || seenPids.has(name)) continue;
+    let statusText: string;
+    try {
+      statusText = await fs.readFile(`/proc/${name}/status`, 'utf8');
+    } catch {
+      continue;
+    }
+    const uidField = statusText.split('\n').find((line) => line.startsWith('Uid:'));
+    const realUid = uidField ? Number(uidField.slice(4).trim().split(/\s+/)[0]) : Number.NaN;
+    if (realUid !== uid) continue;
+    const stateField = statusText.split('\n').find((line) => line.startsWith('State:'));
+    if (stateField?.slice(6).trim().startsWith('Z')) continue;
+    const args = await readLinuxProcArgs(name);
+    if (args === 'unknown') return null;
+    if (!args) continue;
+    commands.push(args);
+    seenPids.add(name);
+  }
+  return commands;
+}
+
+/**
+ * Inventory only for receipt recovery; never a source of PIDs to signal.
+ * Failed/incomplete probes are unknown. Windows compares WTS primary-token
+ * SIDs before reading PID/command-line fields, with a limited native fallback.
+ * Unreadable live processes stay unknown except OS-confirmed antimalware PPL.
+ * Confirm exits before compiling that helper to stay within the kill budget.
+ * Linux supplements ps with full /proc argv; no command-line clipping proves absence.
+ */
+async function readRecoveryProcessInventory(deadline: number): Promise<string[] | null> {
+  try {
+    const remaining = Math.floor(deadline - Date.now());
+    if (remaining <= 0) return null;
+    if (process.platform === 'win32') {
+      const script = [
+        "$ErrorActionPreference = 'Stop'",
+        // Compare token SIDs without tasklist's per-process account-name/window
+        // lookup, which can block past the entire recovery deadline on Windows.
+        // WTS enumerates the caller's processes without administrator rights;
+        // foreign-user entries do not extend this account's recovery scope.
+        // https://learn.microsoft.com/windows/win32/api/wtsapi32/nf-wtsapi32-wtsenumerateprocessesw
+        "Add-Type -TypeDefinition @'",
+        'using System;',
+        'using System.Collections.Generic;',
+        'using System.ComponentModel;',
+        'using System.Runtime.InteropServices;',
+        'using System.Security.Principal;',
+        'public static class CindyRecoveryProcessOwners {',
+        '  [StructLayout(LayoutKind.Sequential)]',
+        '  private struct Info { public uint SessionId; public uint ProcessId; public IntPtr Name; public IntPtr UserSid; }',
+        '  [DllImport("wtsapi32.dll", EntryPoint = "WTSEnumerateProcessesW", SetLastError = true)]',
+        '  private static extern bool Enumerate(IntPtr server, uint reserved, uint version, out IntPtr buffer, out uint count);',
+        '  [DllImport("wtsapi32.dll")]',
+        '  private static extern void WTSFreeMemory(IntPtr buffer);',
+        '  [StructLayout(LayoutKind.Sequential)]',
+        '  private struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }',
+        '  [DllImport("kernel32.dll", SetLastError = true)]',
+        '  private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);',
+        '  [DllImport("kernel32.dll")]',
+        '  private static extern bool CloseHandle(IntPtr handle);',
+        '  [DllImport("ntdll.dll")]',
+        '  private static extern int NtQueryInformationProcess(IntPtr handle, int kind, IntPtr buffer, uint size, out uint needed);',
+        // CIM can omit command lines for elevated processes of the same user
+        // even though PROCESS_QUERY_LIMITED_INFORMATION can read them. A failed
+        // native query still leaves the PID unknown, never presumed exited.
+        '  public static string CommandLine(uint pid) {',
+        '    IntPtr handle = OpenProcess(0x1000, false, pid);',
+        '    if (handle == IntPtr.Zero) return null;',
+        '    try {',
+        '      uint needed;',
+        '      NtQueryInformationProcess(handle, 60, IntPtr.Zero, 0, out needed); // ProcessCommandLineInformation',
+        '      if (needed < Marshal.SizeOf(typeof(UnicodeString)) || needed > 1024 * 1024) return null;',
+        '      uint size = needed;',
+        '      IntPtr buffer = Marshal.AllocHGlobal(checked((int)size));',
+        '      try {',
+        '        if (NtQueryInformationProcess(handle, 60, buffer, size, out needed) != 0 || needed > size) return null;',
+        '        var value = (UnicodeString)Marshal.PtrToStructure(buffer, typeof(UnicodeString));',
+        '        long offset = value.Buffer.ToInt64() - buffer.ToInt64();',
+        '        if (value.Length == 0 || value.Length % 2 != 0 || value.Length > value.MaximumLength || value.Length > size',
+        '          || offset < Marshal.SizeOf(typeof(UnicodeString)) || offset > size - value.Length) return null;',
+        '        return Marshal.PtrToStringUni(value.Buffer, value.Length / 2);',
+        '      } finally { Marshal.FreeHGlobal(buffer); }',
+        '    } finally { CloseHandle(handle); }',
+        '  }',
+        '  public static int[] CurrentUser() {',
+        '    IntPtr buffer; uint count;',
+        '    if (!Enumerate(IntPtr.Zero, 0, 1, out buffer, out count)) throw new Win32Exception(Marshal.GetLastWin32Error());',
+        '    try {',
+        '      using (var identity = WindowsIdentity.GetCurrent()) {',
+        '        if (identity.User == null || buffer == IntPtr.Zero || count == 0) throw new InvalidOperationException("Missing process inventory");',
+        '        var owned = new List<int>();',
+        '        int size = Marshal.SizeOf(typeof(Info));',
+        '        for (int i = 0; i < count; i++) {',
+        '          var row = (Info)Marshal.PtrToStructure(IntPtr.Add(buffer, checked(i * size)), typeof(Info));',
+        '          if (row.UserSid != IntPtr.Zero && identity.User.Equals(new SecurityIdentifier(row.UserSid))) {',
+        '            owned.Add(checked((int)row.ProcessId));',
+        '          }',
+        '        }',
+        '        if (!owned.Contains(System.Diagnostics.Process.GetCurrentProcess().Id)) throw new InvalidOperationException("Incomplete user inventory");',
+        '        return owned.ToArray();',
+        '      }',
+        '    } finally { WTSFreeMemory(buffer); }',
+        '  }',
+        '}',
+        "'@",
+        '$processIds = @{}',
+        'foreach ($number in [CindyRecoveryProcessOwners]::CurrentUser()) {',
+        '  if ($number -le 0) { throw "invalid process inventory" }',
+        '  $processIds[$number] = $true',
+        '}',
+        '$count = $processIds.Count',
+        '$commands = [System.Collections.Generic.List[string]]::new()',
+        '$complete = $true',
+        '$items = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -ErrorAction Stop)',
+        'foreach ($item in $items) {',
+        '  $number = [int]$item.ProcessId',
+        '  if (-not $processIds.ContainsKey($number)) { continue }',
+        '  if ([string]::IsNullOrWhiteSpace($item.CommandLine)) { continue }',
+        '  $commands.Add($item.CommandLine)',
+        '  $processIds.Remove($number)',
+        '}',
+        // Try the limited native query, then retire confirmed exits before compiling PPL support.
+        '$stillLive = New-Object System.Collections.Generic.List[int]',
+        'foreach ($number in @($processIds.Keys)) {',
+        '  $command = [CindyRecoveryProcessOwners]::CommandLine($number)',
+        '  if (-not [string]::IsNullOrWhiteSpace($command)) {',
+        '    $commands.Add($command)',
+        '    continue',
+        '  }',
+        '  $unreadable = $null',
+        '  try {',
+        '    $unreadable = [System.Diagnostics.Process]::GetProcessById($number)',
+        '    if ($unreadable.HasExited) { $count-- } else { [void]$stillLive.Add($number) }',
+        '  } catch [System.ArgumentException] {',
+        '    $count--',
+        '  } finally {',
+        '    if ($null -ne $unreadable) { $unreadable.Dispose() }',
+        '  }',
+        '}',
+        // DefenderSessionHelper can belong to this user but hide its command
+        // line. Never exempt an image name: query the OS protection level with
+        // minimum read-only rights. Only ANTIMALWARE_LIGHT is excluded; NONE,
+        // third-party PPL_APP, unknown levels and query failures remain unknown.
+        // https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocessinformation
+        'if ($stillLive.Count -gt 0) {',
+        "Add-Type -TypeDefinition @'",
+        'using System;',
+        'using System.Runtime.InteropServices;',
+        'public static class CindyRecoveryProcessProtection {',
+        '  [DllImport("kernel32.dll", SetLastError = true)]',
+        '  private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);',
+        '  [DllImport("kernel32.dll", SetLastError = true)]',
+        '  private static extern bool GetProcessInformation(IntPtr handle, int kind, out uint level, uint size);',
+        '  [DllImport("kernel32.dll")]',
+        '  private static extern bool CloseHandle(IntPtr handle);',
+        '  public static bool IsAntimalware(uint pid) {',
+        '    IntPtr handle = OpenProcess(0x1000, false, pid); // PROCESS_QUERY_LIMITED_INFORMATION',
+        '    if (handle == IntPtr.Zero) return false;',
+        '    try {',
+        '      uint level;',
+        '      return GetProcessInformation(handle, 7, out level, 4) && level == 3; // ProcessProtectionLevelInfo / ANTIMALWARE_LIGHT',
+        '    } finally { CloseHandle(handle); }',
+        '  }',
+        '}',
+        "'@",
+        // Exits were already retired above. Only a still-live PID remains, and
+        // only OS-confirmed antimalware may be dropped without a command line.
+        '  foreach ($number in $stillLive) {',
+        '    if ([CindyRecoveryProcessProtection]::IsAntimalware([uint32]$number)) { $count-- } else { $complete = $false }',
+        '  }',
+        '}',
+        // ConvertTo-Json unwraps a one-element array and can emit null for an
+        // empty one. Build the array explicitly so a finished probe stays JSON.
+        '$encoded = @(foreach ($command in $commands) { ConvertTo-Json -InputObject $command -Compress })',
+        '$commandJson = \'[\' + ($encoded -join \',\') + \']\'',
+        '$completeJson = if ($complete) { \'true\' } else { \'false\' }',
+        '\'{"complete":\' + $completeJson + \',"count":\' + $count + \',"commands":\' + $commandJson + \'}\'',
+      ].join('\n');
+      const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        encoding: 'utf8', timeout: Math.min(DEFAULT_KILL_BUDGET_MS, remaining), maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+      });
+      const value = JSON.parse(stdout);
+      const commands = Array.isArray(value?.commands)
+        ? value.commands
+        : value?.count === 0 && value?.commands == null ? [] : null;
+      if (value?.complete !== true || !Number.isSafeInteger(value.count) || value.count < 0
+        || !Array.isArray(commands) || commands.length !== value.count
+        || commands.some((command: unknown) => typeof command !== 'string' || !command.trim())) return null;
+      return commands;
+    }
+    if (process.geteuid === undefined) return null;
+    const uid = process.geteuid();
+    // COLUMNS does not always yield to -ww when stdout is a pipe. A clipped
+    // line can drop --session-id and look like the child already exited.
+    const { stdout } = await execFileAsync('ps', ['-ww', '-u', String(uid), '-o', 'pid=,args='], {
+      encoding: 'utf8',
+      timeout: Math.min(KILL_PROBE_TIMEOUT_MS, remaining),
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, COLUMNS: '1000000' },
+    });
+    const lines = stdout.trim().split('\n');
+    const commands: string[] = [];
+    const seenPids = new Set<string>();
+    for (const line of lines) {
+      if (Date.now() >= deadline) return null;
+      const match = /^\s*([1-9]\d*)\s+(.+)$/.exec(line);
+      if (!match || !match[2]!.trim()) return null;
+      const pid = match[1]!;
+      let command = match[2]!;
+      if (process.platform === 'linux') {
+        const full = await readLinuxProcArgs(pid);
+        if (full === 'unknown') return null;
+        // Replace only a listing /proc confirms. A missing entry keeps the ps
+        // text so a test stub pid is not overwritten by an unrelated process.
+        // A live argv that does not contain the visible ps text is still
+        // recorded: ps can show only `comm` while /proc keeps --session-id.
+        const visible = command.endsWith('+') ? command.slice(0, -1) : command;
+        if (full && visible && full.includes(visible)) command = full;
+        else if (full && full !== command) commands.push(full);
+      }
+      commands.push(command);
+      seenPids.add(pid);
+    }
+    if (commands.length === 0) return null;
+    if (process.platform !== 'linux') return commands;
+    return supplementLinuxProcCommandLines(commands, seenPids, uid, deadline);
+  } catch {
+    return null;
+  }
 }
 
 /** Resolve false if `work` has not settled within `ms`, without leaking a timer. */
@@ -3066,8 +3480,8 @@ async function raceWithDeadline(work: Promise<boolean>, ms: number): Promise<boo
 
 /**
  * Request stop for every non-terminal run under `roots` and wait until they are
- * all terminal (or the deadline passes). An unreadable status stays in scope so
- * a corrupt record can never keep a child alive past its boundary.
+ * all terminal (or the deadline passes). An unreadable status without a validated
+ * terminal result receipt stays in scope so a corrupt record can never keep a child alive past its boundary.
  */
 async function stopPiSubagentRunsUnderRoots(
   roots: readonly string[],
@@ -3075,14 +3489,15 @@ async function stopPiSubagentRunsUnderRoots(
   scope: PiSubagentSweepScope = {},
 ): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
+  const recoveryDeadline = deadline + (scope.killBudgetMs ?? DEFAULT_KILL_BUDGET_MS);
   const requested = new Set<string>();
   for (;;) {
     // One memo per pass, discarded with it: within a single pass a pid cannot
     // meaningfully be recycled, and across passes we must see it if it was.
     const startTimeMemo: ProcessStartTimeMemo = new Map();
     let activeCount = 0;
-    for (const root of roots) {
-      for (const { runId } of await sweepableRunsUnderRoot(root, scope, startTimeMemo)) {
+    for (const [root, runs] of await sweepableRunsUnderRoots(roots, scope, recoveryDeadline, startTimeMemo)) {
+      for (const { runId } of runs) {
         activeCount += 1;
         const key = `${root}:${runId}`;
         if (requested.has(key)) continue;
@@ -3100,12 +3515,11 @@ async function stopPiSubagentRunsUnderRoots(
       // spending the outgoing account and editing the workspace. Escalate to a
       // verified kill; anything we cannot positively identify is left alone.
       if (!scope.killUnresponsiveRunners) return false;
-      const killDeadline = Date.now() + (scope.killBudgetMs ?? DEFAULT_KILL_BUDGET_MS);
+      const killDeadline = Math.min(recoveryDeadline, Date.now() + (scope.killBudgetMs ?? DEFAULT_KILL_BUDGET_MS));
       let killedAll = true;
-      for (const root of roots) {
-        // Re-derived, so a run whose directory vanished in the meantime is gone
-        // from the set and counts as reclaimed.
-        const work = await sweepableRunsUnderRoot(root, scope, startTimeMemo);
+      // Re-read every root and take a fresh inventory for the escalation pass.
+      // A run whose directory vanished is gone from the set and reclaimed.
+      for (const work of (await sweepableRunsUnderRoots(roots, scope, killDeadline, startTimeMemo)).values()) {
         // In parallel: each reclaim is mostly waiting on its own process probe,
         // and serialising them multiplied the worst case by the number of
         // runners — enough to overrun a quit budget with only a few of them.

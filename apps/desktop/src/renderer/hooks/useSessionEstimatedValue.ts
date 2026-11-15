@@ -96,7 +96,11 @@ function legacyEstimateMoney(costUsd: number): RegionalMoney | null {
 
 function estimateFromChatMessage(message: ChatMessage): { clientId: string; money: RegionalMoney } | null {
   if (message.role !== 'assistant') return null;
-  if (message.turnCostIsEstimate !== true) return null;
+  if (message.turnCostIsEstimate !== true) {
+    const money = addCompatibleRegionalMoney((message.turnUsageDetails?.perModelCost ?? [])
+      .filter(item => item.money.kind === 'value-estimate').map(item => item.money));
+    return money?.amount ? { clientId: message.clientId, money } : null;
+  }
   const normalized =
     normalizeRegionalMoney(message.turnMoney) ??
     (typeof message.turnCostUsd === 'number'
@@ -194,7 +198,11 @@ export function syncEstimatedValueCostsFromStoreSnapshot(
 export function resolveEstimatedValueTurnCostEntry(
   payload: EstimatedValueTurnCostPayload,
 ): { clientId: string; money: RegionalMoney } | null {
-  if (payload.turnCostIsEstimate !== true) return null;
+  if (payload.turnCostIsEstimate !== true) {
+    const money = addCompatibleRegionalMoney((normalizeTurnUsageDetails(payload.turnUsageDetails)?.perModelCost ?? [])
+      .filter(item => item.money.kind === 'value-estimate').map(item => item.money));
+    return money?.amount ? { clientId: payload.clientId, money } : null;
+  }
   if (!payload.clientId) return null;
   const normalized =
     normalizeRegionalMoney(payload.turnMoney) ??

@@ -41,7 +41,7 @@ afterEach(() => { cleanup(); });
 
 describe('CindyMergeSetting', () => {
   it('is hidden while there is only one Cindy', async () => {
-    maker.listCindyCopies.mockResolvedValue([]);
+    maker.listCindyCopies.mockResolvedValue([copies[0]]);
     render(<CindyMergeSetting bot={{ id: 'cindy-default', name: 'Cindy' }} />);
     await waitFor(() => expect(maker.listCindyCopies).toHaveBeenCalled());
     expect(screen.queryByTestId('cindy-merge-row')).toBeNull();

@@ -14,6 +14,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { tabGroupPanelKind, type TabGroupId } from '../../../shared/layoutTree';
+import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 import { usePanelMaximize } from '@/layout/panelMaximize';
 import { usePaneAtWindowLeft, usePaneAtWindowTop, usePaneFill } from '@/layout/panePlacement';
 import { usePanelWidth } from '@/layout/paneWidths';
@@ -47,6 +48,28 @@ function TabGroupPanelBody({ groupId }: { groupId: TabGroupId }): ReactNode {
       }
       style={style}
     >
+      {!host.isMac && atWindowTop && (
+        // 与右侧栏保持同一条 46px 窗口标题带，避免页签操作与系统窗口按钮重叠。
+        // 下方组撑满时布局引擎也会把 atWindowTop 置为 true；还原后自动收回占位。
+        <div
+          aria-hidden
+          className="h-[46px] shrink-0 border-b border-[var(--border-default)] bg-[var(--panel-bg)]"
+          style={{ WebkitAppRegion: 'drag' } as CSSProperties}
+        >
+          {atWindowLeft && (host.sidebarCollapsed || host.hasRailChromeActions) && (
+            <div
+              className="h-full"
+              style={
+                {
+                  width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+                  marginLeft: CHROME_ACTIONS_GEOMETRY.defaultLeft,
+                  WebkitAppRegion: 'no-drag',
+                } as CSSProperties
+              }
+            />
+          )}
+        </div>
+      )}
       <RightSidebarShell
         groupId={groupId}
         sessionId={host.sessionId}

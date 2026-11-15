@@ -8,11 +8,11 @@ import { companionEnvironmentStore } from './runtime.js';
 import { IMPORTED_TOOL_LIMIT, listImportedTools, withImportedConnection } from './connections.js';
 import { object, string, type ImportItem, type ImportedMcpServer } from './types.js';
 import { connectionRedactions, importedContentRedactions, publicConnectionName, redactImportedTool, restoreImportedArguments } from './connectionCatalog.js';
-import { verifyImportedDelivery } from './delivery.js';
 import { fingerprint, writeImportFiles } from './files.js';
 import { importedProcessEnvironment, isPublicImportSetting, redactEnvironmentValues, redactEnvironmentData, runImportedProcess } from './process.js';
 import { importedHttpBases, publicImportHttpBases, resolveImportHttpPath } from './httpBindings.js';
 import { withAuthorizedImportProbe } from './probeAuthorization.js';
+import { isSkillContextFile, readSkillArchiveContext } from './skillArchive.js';
 import { importedCommand } from './commandAutomation.js';
 
 interface ReadPlan {
@@ -53,7 +53,6 @@ export async function verifyImportedAutomation(root: string, botId: string, item
     if (!environment || !item.automation) return { verified: false, reason: 'CREDENTIAL_STORAGE_UNAVAILABLE' };
     const command = importedCommand(item.automation.original);
     const bot = await getBotRemoteResourceSource(botId); assertOwner();
-    await verifyImportedDelivery(environment, item.automation.deliveries ?? [], assertOwner);
     const monitorUrl = item.automation.original.monitor_url;
     const contentSecrets = importedContentRedactions(environment, monitorUrl ? [string(monitorUrl)] : []);
     let monitorVerified = false;
@@ -90,8 +89,8 @@ export async function verifyImportedAutomation(root: string, botId: string, item
         assertOwner();
       }
     }
-    // Delivery credentials are required for selection/handover, but are not data
-    // reads. Remove only delivery roots before expanding read dependencies: a
+    // Former chat destinations (older checkpoints) are not data reads, and results now stay in
+    // the automation's task. Remove only delivery roots before expanding read dependencies: a
     // shared variable (or a credential referenced by a skill) must still be checked.
     const deliveryIds = new Set(item.automation.deliveries?.map(delivery => delivery.connectionId));
     const referencedIds = new Set((item.view.dependsOn ?? []).filter(id => !deliveryIds.has(id)));
@@ -103,12 +102,26 @@ export async function verifyImportedAutomation(root: string, botId: string, item
     }
     // SKILL.md can delegate the real query to a bundled script. Include selected
     // skill code when finding env references and planning reads, with a total cap.
-    let skillBytes = 0;
-    const skillFiles = skills.flatMap(skill => (skill.files ?? []).filter(file => /\.(md|py|js|mjs|sh|ts|json|ya?ml|toml)$/i.test(file.name)).map(file => {
-      const source = redactEnvironmentValues(file.bytes.toString('utf8').slice(0, Math.max(0, Math.min(32000, 96000 - skillBytes))), contentSecrets);
-      skillBytes += source.length;
-      return { name: redactEnvironmentValues(`${skill.view.name}/${file.name}`, contentSecrets), source };
-    })).filter(file => file.source);
+    const skillBudget = { remaining: 96000 };
+    const skillFiles: Array<{ name: string; source: string; complete: boolean }> = [];
+    for (const skill of skills) {
+      if (skillBudget.remaining <= 0) break;
+      if (skill.skillArchive) {
+        skillFiles.push(...await readSkillArchiveContext(skill.skillArchive, companionEnvironmentStore, contentSecrets, assertOwner, skill.view.name, skillBudget));
+        continue;
+      }
+      const files = [...skill.files ?? []].sort((a, b) => Number(b.name === 'SKILL.md') - Number(a.name === 'SKILL.md'));
+      for (const file of files) {
+        if (!isSkillContextFile(file.name)) continue;
+        const name = redactEnvironmentValues(`${skill.view.name}/${file.name}`, contentSecrets);
+        const limit = Math.max(0, Math.min(32000, skillBudget.remaining - name.length));
+        if (!limit) continue;
+        const text = redactEnvironmentValues(file.bytes.toString('utf8'), contentSecrets);
+        const source = text.slice(0, limit);
+        skillBudget.remaining -= name.length + source.length;
+        if (source) skillFiles.push({ name, source, complete: source.length === text.length });
+      }
+    }
     const skillText = skillFiles.map(file => file.source).join('\n');
     const allowedVariables = new Set([
       ...Object.keys(environment.env).filter(name => referencedIds.has(`env-${fingerprint(name).slice(0, 20)}`)),

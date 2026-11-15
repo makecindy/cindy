@@ -148,6 +148,24 @@ describe('inspectPdfPages', () => {
     expect(Math.round(result.pages[0]!.height)).toBe(792);
   });
 
+  it('单页文字提取失败只把该页标为未验证,其余页照常检查', async () => {
+    // pdf.js 5.7/6.4 在内容流里第一次显示文字前若尚无字体、且先设字号 0(Aspose 等工具写入的
+    // 隐形水印即此形态),getTextContent 会抛 "Cannot read properties of null (reading 'name')"。
+    // 文件本身完好(MuPDF 正常渲染),不能让这一页拖垮整份检查,也不能把它判成空白。
+    const pdf = buildPdf(['before', { raw: 'BT /F1 0 Tf (mark) Tj ET' }, 'after']);
+    const result = await inspectPdfPages(pdf, [], 10, 100);
+    expect(result.pages.map((p) => p.page)).toEqual([1, 2, 3]);
+    expect(result.pages[0]).toMatchObject({ textPreview: 'before', visibilityUnverified: false });
+    expect(result.pages[1]).toMatchObject({
+      textChars: 0,
+      blank: false,
+      visibilityUnverified: true,
+    });
+    expect(result.pages[1]!.textError).toContain("reading 'name'");
+    expect(result.pages[1]!.drawOps).toBeGreaterThan(0);
+    expect(result.pages[2]).toMatchObject({ textPreview: 'after', visibilityUnverified: false });
+  });
+
   it('损坏的 PDF 抛错而不是返回一份"看起来正常"的空结果', async () => {
     await expect(
       inspectPdfPages(new Uint8Array(Buffer.from('not a pdf at all')), [], 10, 100),

@@ -20,6 +20,7 @@ import type { DbSlimmingStartupProgress } from '../../../../shared/localDbMainte
 const mocks = vi.hoisted(() => ({
   splash: {
     phase: 'splash_checking' as string,
+    isReturningSession: false,
     isDownloading: false,
     downloadProgress: 0,
     downloadInfo: { progress: 0 } as {
@@ -176,6 +177,7 @@ beforeEach(() => {
   mocks.splash.downloadProgress = 0;
   mocks.splash.downloadInfo = { progress: 0 };
   mocks.splash.resetSignal = 0;
+  mocks.splash.isReturningSession = false;
   mocks.coverHeld = false;
   setPhase('splash_checking');
   document.documentElement.removeAttribute('data-splash-active');
@@ -233,6 +235,67 @@ describe('SplashScreen wave4 统一面板', () => {
     expect(stats.textContent).toContain('24.8 MB');
     expect(stats.textContent).toContain('65.3 MB');
   });
+
+  // #9564: existing cases only supplied integers. Exercise the real component's
+  // visible label with Linux fallback telemetry; keep the underlying bar precise.
+  it.each(['splash_downloading', 'splash_updating'])(
+    '%s: rounds fractional percentage text without changing transfer details',
+    (phase) => {
+      mocks.splash.downloadProgress = 8.181846572494996;
+      mocks.splash.downloadInfo = {
+        progress: 8.181846572494996,
+        speed: '411.2 KB/s',
+        downloaded: '8.5 MB',
+        total: '103.5 MB',
+      };
+      renderSplash(phase);
+
+      const stats = screen.getByTestId('splash-progress-stats');
+      expect(stats.textContent).toBe('8%·411.2 KB/s·8.5 MB / 103.5 MB');
+      expect(parseFloat(screen.getByTestId('splash-progress-fill').style.width)).toBeCloseTo(
+        8.181846572494996,
+        4,
+      );
+    },
+  );
+
+  it.each<[number, string]>([
+    [0, '0%'],
+    [38, '38%'],
+    [100, '100%'],
+    [-1, '0%'],
+    [101, '100%'],
+    [Number.NaN, '0%'],
+    [Number.POSITIVE_INFINITY, '0%'],
+  ])('keeps percentage text finite and bounded for %s', (progress, label) => {
+    mocks.splash.downloadProgress = progress;
+    renderSplash('splash_downloading');
+    expect(screen.getByTestId('splash-progress-stats').textContent).toBe(label);
+  });
+
+  // PR #9566: rounding 99.5 must not announce completion before the transfer does.
+  it.each(['splash_downloading', 'splash_updating'])(
+    '%s: reserves 100 percent for completed progress',
+    (phase) => {
+      mocks.splash.downloadProgress = 99.5;
+      const { rerender } = renderSplash(phase);
+
+      for (const [progress, label] of [
+        [99.5, '99%'],
+        [99.999, '99%'],
+        [100, '100%'],
+      ] as const) {
+        mocks.splash.downloadProgress = progress;
+        rerender(<SplashScreen />);
+
+        expect(screen.getByTestId('splash-progress-stats').textContent).toBe(label);
+        expect(parseFloat(screen.getByTestId('splash-progress-fill').style.width)).toBeCloseTo(
+          progress,
+          4,
+        );
+      }
+    },
+  );
 
   it('update_done:统一面板 + 现网 updateDone 文案 + spinner(379:607 样式)', () => {
     renderSplash('splash_update_done');
@@ -412,6 +475,14 @@ describe('SplashScreen wave4 统一面板', () => {
     expect(root.getAttribute('style') ?? '').not.toContain('background');
     expect(root.getAttribute('style')).toContain('--splash-fade-duration');
     expect(root.className).toContain('opacity-100');
+  });
+
+  it('已有会话返回启动用标准较短过渡，首启仍保留 splash 淡出时长', () => {
+    mocks.splash.isReturningSession = true;
+    const { container } = renderSplash('splash_checking');
+    expect((container.firstElementChild as HTMLElement).style.transition).toContain(
+      'var(--motion-enter)',
+    );
   });
 
   it('marks the document as splash-active only before fade out', () => {

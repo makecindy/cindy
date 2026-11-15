@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PiTransport } from '../transport.js';
 import type { AgentEvent } from '../../../types/events.js';
@@ -67,6 +67,16 @@ vi.mock('../transport.js', async (importOriginal) => {
         readline.createInterface({ input: process.stdin }).on('line', line => {
           const cmd = JSON.parse(line);
           if (rpcLost) return process.exit(23);
+          if (cmd.type === 'fixture_usage_retry') {
+            const message = input => ({ type: 'message_end', message: { role: 'assistant', model: 'm',
+              content: [], usage: { input, output: 2, cacheRead: 3, cacheWrite: 1 } } });
+            output(message(100));
+            output({ type: 'agent_end' });
+            output({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2 });
+            output({ type: 'agent_start' });
+            output(message(20));
+            return;
+          }
           if (cmd.type === 'fixture_finish') {
             finish(cmd.omit);
             if (cmd.eof) endOutput();
@@ -213,6 +223,29 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     return { events, transport, handle, nativeFrames };
   }
 
+  // #8887: real PiAgent/Session and stdio, fake executable only. Two completed
+  // requests followed by each lifecycle termination must retain 120 input tokens.
+  it.each(['rpc', 'exit', 'exhausted', 'close', 'detach', 'stop'] as const)(
+    'retains request receipts through retry and %s', async cause => {
+      const { events, transport } = await start(false);
+      await transport.writeLine(JSON.stringify({ type: 'fixture_usage_retry' }));
+      await vi.waitFor(() => expect(events.filter(e => e.type === 'account_usage')).toHaveLength(2));
+      expect(events.some(e => e.type === 'done')).toBe(false);
+      if (cause === 'close') await session!.close();
+      else if (cause === 'detach') await session!.detach({ reason: 'app-quit' });
+      else if (cause === 'stop') await session!.abort();
+      else await transport.writeLine(JSON.stringify({ type: cause === 'rpc' ? 'fixture_lose_rpc'
+        : cause === 'exit' ? 'fixture_exit' : 'fixture_retry_exhausted_eof' }));
+      await vi.waitFor(() => expect(events.some(e => e.type === 'done' || e.type === 'error')).toBe(true));
+      const terminal = events.find(e => e.type === 'done' || e.type === 'error')!;
+      expect(terminal.data).toMatchObject({ usage: { inputTokens: 120, outputTokens: 4,
+        cacheReadTokens: 6, cacheCreationTokens: 2, receipts: [
+          expect.objectContaining({ inputTokens: 100 }), expect.objectContaining({ inputTokens: 20 }),
+        ] } });
+      if (cause !== 'stop') expect(events.filter(e => e.type === 'done')).toEqual([]);
+    },
+  );
+
   it('keeps a quiet live tool running and delivers its result, usage and terminal without another send', async () => {
     const { events, transport, handle } = await start(true);
     // Twenty minutes without model tokens or tool output is not evidence of
@@ -318,16 +351,27 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).toEqual(['fixture_lose_rpc']);
   });
 
-  it('preserves the completed result when settled is followed by RPC EOF', async () => {
-    const { events, transport } = await start();
-    await transport.writeLine(JSON.stringify({ type: 'fixture_finish', eof: true }));
-    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
-    expect(events.filter(event => event.type === 'done')).toHaveLength(1);
-    expect(events.find(event => event.type === 'done')?.data).toMatchObject({
-      status: 'completed', result: 'Build finished.', usage: { outputTokens: 3 },
+  describe('completed result followed by RPC EOF', () => {
+    let running: Awaited<ReturnType<typeof start>>;
+
+    // Real subprocess startup belongs to fixture preparation, not the EOF
+    // lifecycle deadline. Keep the test and waitFor deadlines unchanged so a
+    // lost result or slow EOF settlement still fails on Windows and macOS.
+    beforeEach(async () => {
+      running = await start();
     });
-    expect(events.some(event => event.type === 'error')).toBe(false);
-    expect(events.find(event => event.type === 'tool_result_full')?.data).toMatchObject({ fullText: 'fixture build complete' });
+
+    it('preserves the completed result when settled is followed by RPC EOF', async () => {
+      const { events, transport } = running;
+      await transport.writeLine(JSON.stringify({ type: 'fixture_finish', eof: true }));
+      await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+      expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+      expect(events.find(event => event.type === 'done')?.data).toMatchObject({
+        status: 'completed', result: 'Build finished.', usage: { outputTokens: 3 },
+      });
+      expect(events.some(event => event.type === 'error')).toBe(false);
+      expect(events.find(event => event.type === 'tool_result_full')?.data).toMatchObject({ fullText: 'fixture build complete' });
+    });
   });
 
   it('preserves tool result, final answer and usage drained after stdin EPIPE', async () => {

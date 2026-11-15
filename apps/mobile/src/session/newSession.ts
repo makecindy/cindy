@@ -1,7 +1,11 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
-import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
+import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from '@cindy/maker-shared/project-alias-sync';
 import {
   DEFAULT_DRAFT_SESSION_TITLE,
   deriveOptimisticSessionTitle,
@@ -366,19 +370,25 @@ export function buildRecentWorkspaceOptions(
   sessions: readonly RemoteSession[],
   deviceId?: string,
   limit = 6,
+  projectAliases?: ProjectAliasDisplayIndex,
 ): RecentWorkspaceOption[] {
   const byPath = new Map<string, RecentWorkspaceOption>();
+  const membersByPath = new Map<string, RemoteSession[]>();
   for (const session of sessions) {
     if (deviceId && session.deviceLinkDeviceId && session.deviceLinkDeviceId !== deviceId) continue;
     if (session.status === 'deleted') continue;
     if (session.workspaceKind !== 'project') continue;
     if (session.orcaRole === 'worker') continue;
-    const rawWorkingDir = session.workingDir?.trim();
-    if (!rawWorkingDir) continue;
+    const rawWorkingDir = sessionProjectDirectory(session)?.trim();
+    // A teammate's project is reached from the teammate, not offered for new tasks.
+    if (!rawWorkingDir || isTeammateProjectPath(rawWorkingDir)) continue;
     const workingDir = collapseWorktreeDirForGrouping(rawWorkingDir);
     // Match home project grouping; keep the original path for display and remote actions.
     const pathKey = normalizeProjectOrderPath(workingDir);
-    const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
+    const members = membersByPath.get(pathKey) ?? [];
+    members.push(session);
+    membersByPath.set(pathKey, members);
+    const lastActivityAt = getSessionListActivityAt(session) ?? session.createdAt;
     const current = byPath.get(pathKey);
     if (!current) {
       byPath.set(pathKey, {
@@ -395,6 +405,10 @@ export function buildRecentWorkspaceOptions(
     }
   }
 
+  for (const [key, workspace] of byPath) {
+    workspace.title = resolveProjectAliasForSessions(membersByPath.get(key) ?? [], projectAliases, deviceId)
+      ?? workspace.title;
+  }
   return [...byPath.values()]
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt) || a.workingDir.localeCompare(b.workingDir))
     .slice(0, Math.max(0, limit));
@@ -468,8 +482,8 @@ export function validateModelProviderId(
  *   3) 没有任何来源提供该模型 → 落目录首项(连同其 provider);
  *   4) 目录为空 → 模型留空 + 默认路由,由用户自己选;
  * catalogReady=false 时不评判,维持信任语义(见 validateModelProviderId)。
- * 通用于「跟随最近会话」的自动默认与「提交点 / 目录就绪」的草稿终检(codex review P2:
- * 提交终检时同样联合回退)。
+ * 自动默认可以推荐替代来源；已有草稿的终检必须 preserveExplicitProvider，
+ * 来源不可用时保留选择，由提交入口要求用户重选，不能按同名模型替换账号。
  */
 export function resolveRecentModelAndProvider(
   modelRows: readonly ProviderModelRow[],
@@ -478,6 +492,7 @@ export function resolveRecentModelAndProvider(
   catalogReady: boolean,
   providers: readonly ProviderView[],
   visibilityOverrides?: Record<string, boolean> | null,
+  options: { preserveExplicitProvider?: boolean } = {},
 ): { model: string; providerId: string | null } {
   if (!catalogReady || modelNeedsReselection(visibilityOverrides, agentKind, recent.model, recent.providerId)) {
     return { model: recent.model, providerId: recent.providerId };
@@ -519,6 +534,7 @@ export function resolveRecentModelAndProvider(
   }
   const valid = validateModelProviderId(modelRows, recent.providerId, recent.model, true);
   if (valid) return { model: recent.model, providerId: valid };
+  if (options.preserveExplicitProvider) return recent;
   // 显式来源失效的替代选择:与 null 分支同口径(codex review P2:按 Agent 默认
   // 规则选择失效来源的替代项)——同名模型多来源时**不得取目录首行**(目录顺序
   // ≠ Agent 原生默认顺序,如 Codex 候选 [custom, xd] 会被首行绑定到 custom,
@@ -1181,7 +1197,7 @@ function readNewSessionDeviceOptionsParam(value: unknown): NewSessionDeviceOptio
       const record = item as Record<string, unknown>;
       const deviceId = readString(record.deviceId)?.trim() ?? '';
       if (!deviceId) return [];
-      const name = readString(record.name)?.trim() || deviceId;
+      const name = deviceDisplayName(deviceId, readString(record.name));
       return [{ deviceId, name }];
     });
   } catch {
@@ -1198,7 +1214,7 @@ function normalizeNewSessionDeviceOptions(
     const deviceId = option.deviceId.trim();
     if (!deviceId || seen.has(deviceId)) continue;
     seen.add(deviceId);
-    result.push({ deviceId, name: option.name.trim() || deviceId });
+    result.push({ deviceId, name: deviceDisplayName(deviceId, option.name) });
   }
   return result;
 }

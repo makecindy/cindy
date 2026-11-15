@@ -27,9 +27,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { AgentKind, Session, WorkspaceKind } from '@/lib/ccAgent.types';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import * as sessionService from '@/lib/sessionService';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { getDraft } from '@/state/newMakerDraft';
 
 interface UseCCSessionsOptions {
   /** Session status filter — F-PJ-10 V0.5.1。默认 'active'。 */
@@ -66,7 +72,7 @@ interface UseCCSessionsReturn {
     providerId?: string | null;
     /** Only the Cindy Make purpose may be requested from the renderer; Main validates it. */
     source?: 'cindy-make';
-  }) => Promise<Session | null>;
+  }, onCreateError?: (error: unknown) => void) => Promise<Session | null>;
   refreshSessions: () => Promise<Session[]>;
   patchLocal: (id: string, patch: Partial<Session>) => void;
 }
@@ -80,6 +86,9 @@ interface SnapshotState {
 
 export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsReturn {
   const filter: ListStatusFilter = options?.includeArchived ?? 'active';
+  // patchLocal 可能被异步写入失败回调持有；让该回调只属于创建它的 data owner，
+  // 避免旧账号的 remote/local pin 回滚在账号切换后的同 sessionId 上落入新缓存。
+  const patchOwner = getDataOwnerGeneration();
 
   // 关键：初始 snapshot 来自 store —— remount 命中 cache 即非 null，无 skeleton 闪烁。
   const [snapshotState, setSnapshotState] = useState<SnapshotState>(() => ({
@@ -172,10 +181,10 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       source?: 'cindy-make';
       /** 新建页的未发送任务(见 sessionService.create)。 */
       provisional?: boolean;
-    }): Promise<Session | null> => {
+    }, onCreateError?: (error: unknown) => void): Promise<Session | null> => {
       try {
         const newSession = await sessionService.create({
-          permissionMode: 'auto',
+          permissionMode: getDraft().newChatDefaultPermissionMode ?? 'auto',
           fastMode: false,
           ...opts,
         });
@@ -185,6 +194,8 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
         return newSession;
       } catch (err) {
         setError(err instanceof Error ? err : new Error(String(err)));
+        // The caller needs this invocation's error before React commits setError.
+        onCreateError?.(err);
         return null;
       }
     },
@@ -196,8 +207,11 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
   /** Update a session's fields without re-fetching. Preserves list order — useful
    *  for renames that shouldn't re-sort. 实际转发给 store 让所有 subscriber 同步。 */
   const patchLocal = useCallback(
-    (id: string, patch: Partial<Session>) => sessionsStore.patchLocal(id, patch),
-    [],
+    (id: string, patch: Partial<Session>) => {
+      if (!isDataOwnerGenerationCurrent(patchOwner) || getStickySessionDeviceId(id)) return;
+      sessionsStore.patchLocal(id, patch);
+    },
+    [patchOwner],
   );
 
   return {

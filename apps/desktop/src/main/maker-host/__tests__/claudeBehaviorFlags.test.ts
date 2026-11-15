@@ -1,6 +1,10 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { claudeBehaviorFlagsForSpawn, claudeToolSearchMode } from '../claude-behavior-flags.js';
+import { readUserToolSearchOverride } from '../claude-user-tool-search.js';
 import { shouldCloseSessionForCredentialSwitch } from '../codex-credential-switch.js';
 
 describe('claudeBehaviorFlagsForSpawn', () => {
@@ -8,7 +12,7 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     const flags = claudeBehaviorFlagsForSpawn({ providerId: 'anthropic-work',
       nativeAuth: 'claude', credentialMode: 'provider-oauth', oauthConnected: () => true });
     expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
-    expect(flags.ENABLE_TOOL_SEARCH).toBe('auto');
+    expect(flags.ENABLE_TOOL_SEARCH).toBe('true');
     expect(claudeToolSearchMode('grok-work', 'provider-oauth', 'xai')).toBe('false');
   });
 
@@ -26,8 +30,8 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     // oauth-bearer / 未显式指定:CLI 可能用本机登录直连 api.anthropic.com,归因块必须保留,
     // 否则分类器子请求被上游 429。
     const cases = [
-      { credentialMode: 'oauth-bearer', providerId: 'anthropic', toolSearch: 'auto' },
-      { credentialMode: undefined, providerId: undefined, toolSearch: 'auto' },
+      { credentialMode: 'oauth-bearer', providerId: 'anthropic', toolSearch: 'true' },
+      { credentialMode: undefined, providerId: undefined, toolSearch: 'true' },
     ] as const;
     for (const { credentialMode, providerId, toolSearch } of cases) {
       const flags = claudeBehaviorFlagsForSpawn({
@@ -70,10 +74,10 @@ describe('claudeBehaviorFlagsForSpawn', () => {
   });
 
   it('enables Tool Search only for known compatible upstreams', () => {
-    expect(claudeToolSearchMode('xd', 'gateway-key')).toBe('auto');
-    expect(claudeToolSearchMode('anthropic', 'oauth-bearer')).toBe('auto');
-    expect(claudeToolSearchMode(null, 'gateway-key')).toBe('auto');
-    expect(claudeToolSearchMode(null, 'oauth-bearer')).toBe('auto');
+    expect(claudeToolSearchMode('xd', 'gateway-key')).toBe('true');
+    expect(claudeToolSearchMode('anthropic', 'oauth-bearer')).toBe('true');
+    expect(claudeToolSearchMode(null, 'gateway-key')).toBe('true');
+    expect(claudeToolSearchMode(null, 'oauth-bearer')).toBe('true');
 
     expect(claudeToolSearchMode('openrouter-custom', 'provider-oauth')).toBe('false');
     expect(claudeToolSearchMode('xai', 'provider-oauth')).toBe('false');
@@ -106,5 +110,35 @@ describe('claudeBehaviorFlagsForSpawn', () => {
       currentModel: 'x-ai/grok-4.6',
       nextModel: 'openai/gpt-5.4',
     })).toBe(false);
+  });
+
+  // issue #7524:自定义供应商默认 'false'(#2929 防线),但用户在 settings.json / 宿主环境
+  // 里显式写下的 ENABLE_TOOL_SEARCH 不能被静默覆盖;未显式配置时默认值不变。
+  it('lets an explicit user ENABLE_TOOL_SEARCH override the fail-closed default', () => {
+    const base = { credentialMode: 'provider-oauth', providerId: 'openrouter-custom', oauthConnected: () => false } as const;
+    expect(claudeBehaviorFlagsForSpawn({ ...base, userToolSearch: () => 'true' }).ENABLE_TOOL_SEARCH).toBe('true');
+    expect(claudeBehaviorFlagsForSpawn({ ...base, userToolSearch: () => undefined }).ENABLE_TOOL_SEARCH).toBe('false');
+    expect(claudeBehaviorFlagsForSpawn(base).ENABLE_TOOL_SEARCH).toBe('false');
+  });
+
+  it('reads the user override from host env first, then ~/.claude/settings.json env; ignores junk', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-toolsearch-'));
+    try {
+      expect(readUserToolSearchOverride({}, home)).toBeUndefined();
+      fs.mkdirSync(path.join(home, '.claude'));
+      const write = (body: string) => fs.writeFileSync(path.join(home, '.claude', 'settings.json'), body);
+      write(JSON.stringify({ env: { ENABLE_TOOL_SEARCH: ' TRUE ' } }));
+      expect(readUserToolSearchOverride({}, home)).toBe('true');
+      expect(readUserToolSearchOverride({ ENABLE_TOOL_SEARCH: 'auto:10' }, home)).toBe('auto:10');
+      write(JSON.stringify({ env: { ENABLE_TOOL_SEARCH: 'banana' } }));
+      expect(readUserToolSearchOverride({}, home)).toBeUndefined();
+      // CLI 照常应用带 BOM / 注释 / 尾逗号的设置,这里也必须读到(否则显式 override 仍被覆盖)。
+      write(`\uFEFF{\n  // keep tool search on\n  "env": { /* note */ "ENABLE_TOOL_SEARCH": "true", },\n}`);
+      expect(readUserToolSearchOverride({}, home)).toBe('true');
+      write('{ not json');
+      expect(readUserToolSearchOverride({}, home)).toBeUndefined();
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });

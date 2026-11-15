@@ -1,11 +1,15 @@
 {
   "site": "bilibili.com",
-  "auth": "热门/排行榜公开内容无需登录即可读;登录态(持久浏览器登录 bilibili.com)可降低风控概率并拿到个性化数据",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://www.bilibili.com",
-    "popular": "https://api.bilibili.com/x/web-interface/popular?pn=1&ps=<limit>",
-    "ranking": "https://api.bilibili.com/x/web-interface/ranking/v2?rid=0&type=all"
+    "home": "https://www.bilibili.com"
   },
-  "recipes": ["bilibili-hot"],
-  "notes": "关键:不要直接 navigate 到 api.bilibili.com——非同源访问会被风控喂 SPA HTML/拦截。正确姿势是先 navigate 到 https://www.bilibili.com,再用 evaluate 步在页面内 fetch(api 全路径, {credentials:'include'}):同源 cookie 自动带上。bilibili-hot 走 /x/web-interface/popular?pn=1&ps=<limit>,响应 {data:{list:[{title,owner:{name},stat:{view,danmaku},bvid}]}}。另一个可直接复用的免签名读接口是排行榜 /x/web-interface/ranking/v2?rid=0&type=all(同样 data.list 结构,无需签名,需要时可照 bilibili-hot 套同样的 in-page fetch 模式做成 bilibili-ranking)。视频详情页 URL 用 https://www.bilibili.com/video/<bvid> 拼接。注意:搜索接口 /x/web-interface/wbi/search/type 需要 WBI 动态签名(w_rid + wts,从 nav 接口取 img_key/sub_key 计算),实现脆弱,本配方未收录;若需搜索请走页面交互。务必使用持久浏览器(带登录态)以稳定拿到 JSON。"
+  "recipes": [
+    "bilibili-hot"
+  ],
+  "notes": "兼容入口 bilibili-hot 现执行内置 bilibili/hot，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

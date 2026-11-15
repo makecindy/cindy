@@ -72,6 +72,8 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
           ? 'ghostGrant.confirm.descriptionRevealPath'
           : pending.lane === 'fs_write'
             ? 'ghostGrant.confirm.descriptionFsWrite'
+            : pending.lane === 'fs_delete'
+              ? 'ghostGrant.confirm.descriptionFsDelete'
             : pending.lane === 'workspace'
               ? 'ghostGrant.confirm.descriptionWorkspace'
               : pending.lane === 'forge_source'
@@ -88,7 +90,9 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
                     : pending.operation === 'write'
                       ? 'ghostGrant.confirm.descriptionOutsideWrite'
                       : 'ghostGrant.confirm.descriptionOutsideWorkdir'
-                  : 'ghostGrant.confirm.descriptionSaveDir';
+                  : pending.lane === 'handoff'
+                    ? 'ghostGrant.confirm.descriptionHandoff'
+                    : 'ghostGrant.confirm.descriptionSaveDir';
 
   return (
     <div
@@ -99,7 +103,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
+          <p className="text-15 font-medium leading-tight text-[var(--chat-input-text)]">
             {t(
               pending.lane === 'reveal_path'
                 ? 'ghostGrant.confirm.titleRevealPath'

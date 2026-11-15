@@ -282,6 +282,7 @@ describe('coerceCachedSession', () => {
       attached: true,
       _count: { messages: 99 },
       extraDirs: ['/a', '/b'],
+      companion: { id: 'owner', role: 'channel', channel: 'feishu', secret: 'omit' },
     });
     expect(coerced).not.toBeNull();
     expect(coerced).not.toHaveProperty('deviceLinkConnectionStatus');
@@ -290,6 +291,7 @@ describe('coerceCachedSession', () => {
     expect(coerced).not.toHaveProperty('_count');
     expect(coerced).not.toHaveProperty('extraDirs');
     expect(coerced?.title).toBe('T');
+    expect(coerced?.companion).toEqual({ id: 'owner', role: 'channel', channel: 'feishu' });
   });
 
   it('长文本截断到上限', () => {
@@ -741,6 +743,23 @@ describe('deviceId / sessionId 归一化', () => {
 });
 
 describe('session list', () => {
+  // #7972: cold-start/offline list projection must retain project identity, not cwd.
+  // Unit round trip with a new cache instance; remote POSIX paths, including old payloads.
+  it.each([{ projectDir: `/projects/${'long-project/'.repeat(24)}` }, { projectDir: null }, {}])(
+    'preserves optional project membership on disk: %j',
+    async (membership) => {
+      await cache().writeSessionList([{
+        deviceId: 'dev-1', deviceName: 'Mac', sessions: [{
+          id: 's1', status: 'active', workingDir: '/tmp/checkout', ...membership,
+        }],
+      }]);
+      const [cached] = await cache().readSessionList();
+      expect(cached.sessions[0]).toEqual({
+        id: 's1', status: 'active', workingDir: '/tmp/checkout', ...membership,
+      });
+    },
+  );
+
   it('写入后读回,live 态字段不落盘', async () => {
     const c = cache();
     await c.writeSessionList([
@@ -753,6 +772,7 @@ describe('session list', () => {
             status: 'active',
             title: 'T',
             createdAt: '2026-01-01T00:00:00.000Z',
+            lastActivityAt: '2026-01-02T00:00:00.000Z',
             deviceLinkConnectionStatus: 'connected',
           },
         ],
@@ -760,6 +780,7 @@ describe('session list', () => {
     ]);
     const devices = await c.readSessionList();
     expect(devices).toHaveLength(1);
+    expect(devices[0].sessions[0].lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
     expect(devices[0].sessions[0]).not.toHaveProperty('deviceLinkConnectionStatus');
   });
 

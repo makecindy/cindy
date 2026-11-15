@@ -26,6 +26,7 @@ describe("project management MCP", () => {
         ],
         total: 1,
         nextOffset: null,
+        projectsRoot: { path: "/home/me/Projects", source: "inferred" as const, exists: true },
       }));
       const rename = vi.fn(async () => ({
         ok: true as const,
@@ -92,6 +93,7 @@ describe("project management MCP", () => {
           ok: true,
           total: 1,
           next_offset: null,
+          projects_root: { path: "/home/me/Projects", source: "inferred", exists: true },
           projects: [
             {
               working_dir: "/repo",
@@ -107,6 +109,9 @@ describe("project management MCP", () => {
           offset: 0,
           limit: 100,
         });
+        expect(await call("list_projects", { device: "other-computer", limit: 20 })).toMatchObject({ ok: true });
+        expect(list).toHaveBeenLastCalledWith({ callerSessionId: "caller", device: "other-computer",
+          includeHidden: true, offset: 0, limit: 20 });
         expect(
           await call("rename_project", { working_dir: "/repo", name: "" }),
         ).toMatchObject({ ok: true, alias: null });
@@ -165,7 +170,7 @@ describe("project management MCP", () => {
             errorCode: "CAPABILITY_NOT_AVAILABLE",
           });
         }
-        expect(list).toHaveBeenCalledTimes(2);
+        expect(list).toHaveBeenCalledTimes(3);
         expect(rename).toHaveBeenCalledTimes(2);
         expect(remove).toHaveBeenCalledTimes(2);
       } finally {

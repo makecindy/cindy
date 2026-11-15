@@ -32,6 +32,27 @@ async function assertAbsent(file: string): Promise<void> {
   throw new Error('worktree is locked or explicitly kept');
 }
 
+/** A `.git` file whose metadata directory was already deleted cannot answer Git queries. */
+export async function gitMetadataUsable(worktreePath: string): Promise<boolean> {
+  const link = path.join(worktreePath, '.git');
+  let stat;
+  try { stat = await fs.lstat(link); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+  // Anything but a regular gitfile goes through the identity check, which rejects it.
+  if (!stat.isFile()) return true;
+  const match = /^gitdir:\s*(.+?)\s*$/m.exec(await fs.readFile(link, 'utf8'));
+  if (!match) return true;
+  try {
+    await fs.stat(path.resolve(worktreePath, match[1]));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 /** A regular .git link must resolve to this worktree in the expected repository. */
 export async function assertWorktreeGitIdentity(meta: WorktreeMeta): Promise<void> {
   const link = await fs.lstat(path.join(meta.path, '.git'));

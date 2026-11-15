@@ -32,6 +32,12 @@ it('restores device workspace choices in the same account without sharing them w
   const store = chatServerWorkspaces('https://chat.example.test', 'alice', () => current);
   store.save(room, value);
   expect(chatServerWorkspaces('https://chat.example.test', 'alice', () => true).read(room)).toEqual(value);
+  // Existing nonempty preferences survive adding progress, and a fresh store reads
+  // exact sequence strings. This supplies restart/old-format coverage for the group latency fix.
+  const upgraded = { ...store.read(room)!, attachmentAfter: { 'lane-owner': '9007199254740993', 'lane-chat': '12' } };
+  store.save(room, upgraded);
+  expect(chatServerWorkspaces('https://chat.example.test', 'alice', () => true).read(room)).toEqual(upgraded);
+  expect(chatServerWorkspaces('https://other.example.test', 'alice', () => true).read(room)).toBeNull();
   expect(chatServerWorkspaces('https://chat.example.test', 'bob', () => true).read(room)).toBeNull();
   current = false;
   expect(() => store.save(room, value)).toThrow('OWNER_CHANGED');

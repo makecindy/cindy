@@ -17,6 +17,10 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = resolve(__dirname, '..', '..', '..', '..', '..');
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const dispatchBoundarySource = readFileSync(
+  resolve(__dirname, '..', 'turn-change-set', 'dispatchBoundary.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const acceptedCallbackSourcePath = resolve(__dirname, '..', 'maker-ipc', 'acceptedCallbackRunner.ts');
 const acceptedCallbackSource = readFileSync(acceptedCallbackSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const orcaInterAgentDispatcherSourcePath = resolve(__dirname, '..', 'maker-ipc', 'orcaInterAgentDispatcher.ts');
@@ -285,7 +289,10 @@ describe('sendToSession ordering', () => {
     expect(serviceDispatchBlock).toContain('onAcceptedCommit: commitAccepted,');
     expect(serviceDispatchBlock).toContain('const currentWorkers = await deps.listWorkersByLead(link.leadSessionId);');
     expect(serviceDispatchBlock).toContain('const currentWorker = currentWorkers.find((worker) => worker.id === target.id);');
-    expect(serviceDispatchBlock).toContain('previousStatus: currentWorker?.status ?? target.status,');
+    // A worker missing from the active-team list at acceptance is a revocation, not a stale turn;
+    // the snapshot then always carries the live row status.
+    expect(serviceDispatchBlock).toContain("if (!currentWorker) throw new Error('worker no longer belongs to an active team');");
+    expect(serviceDispatchBlock).toContain('previousStatus: currentWorker.status,');
     expect(serviceDispatchBlock).toContain('onAcceptedRollback: rollbackAccepted,');
     expectOrder(serviceDispatchBlock, 'const currentWorkers = await deps.listWorkersByLead(link.leadSessionId);', "await deps.updateWorkerStatus(target.id, 'running');");
     expectOrder(serviceDispatchBlock, 'acceptedSnapshot = {', "await deps.updateWorkerStatus(target.id, 'running');");
@@ -304,24 +311,25 @@ describe('sendToSession ordering', () => {
       'agentInputCoordinatorHolder = inputCoordinator;',
     );
 
-    expect(orcaInterAgentDispatcherSource).toContain('interface QueuedOrcaInterAgentAcceptedCallback');
-    expect(orcaInterAgentDispatcherSource).toMatch(
-      /const queuedOrcaInterAgentAcceptedCallbacks = new Map<\s*string,\s*QueuedOrcaInterAgentAcceptedCallback\s*>\(\);/,
-    );
+    // Callback lifetime is exercised by acceptedCallbackRunner.test.ts; this
+    // guard only verifies that Orca and the coordinator use that shared service.
+    expect(orcaInterAgentDispatcherSource).toContain('const queuedAccepted = createQueuedAcceptedCallbacks(log);');
+    for (const [name, method] of [
+      ['register', 'register'], ['rollback', 'rollback'], ['settle', 'settle'],
+      ['run', 'run'], ['discard', 'discard'],
+    ]) {
+      expect(orcaInterAgentDispatcherSource).toContain(
+        `const ${name}QueuedOrcaInterAgentAcceptedCallback = queuedAccepted.${method};`,
+      );
+    }
     expect(dispatchBlock).toMatch(
       /registerQueuedOrcaInterAgentAcceptedCallback\(\s*clientId,\s*params\.onAccepted,\s*params\.onAcceptedRollback,\s*params\.onAcceptedCommit,?\s*\);/,
     );
-    expect(orcaInterAgentDispatcherSource).toContain('rollback,');
-    expect(orcaInterAgentDispatcherSource).toContain('commit,');
-    expect(orcaInterAgentDispatcherSource).toContain('didRun: false,');
     expect(coordinatorBlock).toContain('await orcaInterAgentDispatcher.settleQueuedOrcaInterAgentAcceptedCallback(');
     expectOrder(coordinatorBlock, 'sessionId,', 'sendOpts,');
     expectOrder(coordinatorBlock, 'sendOpts,', 'result.outcome');
     expect(coordinatorBlock).toContain('await orcaInterAgentDispatcher.rollbackQueuedOrcaInterAgentAcceptedCallback(');
-    expect(orcaInterAgentDispatcherSource).toContain('callback.didRun = true;');
-    expect(orcaInterAgentDispatcherSource).toContain('return runAcceptedCallback(callback.accepted, sessionId, item.clientId, log);');
     expect(coordinatorBlock).toContain('orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);');
-    expectOrder(orcaInterAgentDispatcherSource, 'callback.didRun = true;', 'return runAcceptedCallback(callback.accepted, sessionId, item.clientId, log);');
   });
 
   it('keeps queued Orca lead/worker items structured-cloneable', () => {
@@ -346,6 +354,10 @@ describe('sendToSession ordering', () => {
   });
 
   it('does not let persisted sends ignore typed dispatch outcomes', () => {
+    // #6895: the final demotion fence now wraps the same dispatch notification.
+    // Keep the existing accepted/dispatch contract, including the callback body.
+    const dispatchCallback = extractBetween(source, 'const onInternalDispatching = () => {', '\n    if (targetSessionId) {');
+    expect(dispatchCallback).toContain('dispatchAgentIslandUserPrompt(targetSessionId!);');
     const helperBlock = extractBetween(
       orcaInterAgentDispatcherSource,
       'async function sendPersistedUserMessageToSession',
@@ -359,7 +371,7 @@ describe('sendToSession ordering', () => {
     );
     expectOrder(
       block,
-      'prepareUnhealthySession(targetSessionId)',
+      'prepareUnhealthySessionForSend(targetSessionId)',
       'live = maker.getSession(targetSessionId);',
     );
     const liveBranch = extractBetween(
@@ -391,13 +403,13 @@ describe('sendToSession ordering', () => {
     expect(liveBranch).toContain('live,');
     expectOrder(liveBranch, 'message,', 'clientId,');
     expect(liveBranch).toContain('onAccepted: persistUserMessage,');
-    expect(liveBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(liveBranch).toContain('onDispatching: onInternalDispatching,');
     expect(liveBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session live');");
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(resumedBranch).toContain('session,');
     expectOrder(resumedBranch, 'message,', 'clientId,');
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
-    expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(resumedBranch).toContain('onDispatching: onInternalDispatching,');
     expect(resumedBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session resumed');");
   });
 
@@ -424,11 +436,11 @@ describe('sendToSession ordering', () => {
   });
 
   it('awaits Git baseline capture after send_to_session user row persistence and before dispatch', () => {
-    const changeSetBlock = extractBetween(
-      source,
-      'async function beginTurnChangeSetAtDispatch',
-      'export interface RegisterMakerIpcOptions',
-    );
+    // The dispatch boundary moved verbatim to a leaf shared with the Node Host.
+    const changeSetStart = dispatchBoundarySource.indexOf('async function beginTurnChangeSetAtDispatch');
+    expect(changeSetStart).toBeGreaterThanOrEqual(0);
+    const changeSetBlock = dispatchBoundarySource.slice(changeSetStart);
+    expect(source).toContain("import { beginTurnChangeSetAtDispatch } from '../turn-change-set/dispatchBoundary.js';");
     const helperBlock = extractBetween(
       source,
       'async function sendUserMessageWithAwaitedGitBaseline',
@@ -436,10 +448,10 @@ describe('sendToSession ordering', () => {
     );
     const block = extractSendToSessionSource();
 
-    expect(helperBlock).toContain('onAccepted: async () => {');
-    expect(helperBlock).toContain('await opts.onAccepted?.();');
+    expect(helperBlock).toContain('onAccepted: async (signal) => {');
+    expect(helperBlock).toContain('await opts.onAccepted?.(signal);');
     expect(helperBlock).toContain('await beginTurnChangeSetAtDispatch(session, anchorClientId);');
-    expect(helperBlock).toContain('await gitSnapshotCoordinator.onTurnStart(session.id);');
+    expect(helperBlock).toContain('await gitSnapshotCoordinator.onTurnStart(session.id, signal);');
     expect(helperBlock).toContain('const pendingHandoff = await agentHandoffPending.peek(session.id);');
     expect(helperBlock).toContain('prependHandoffToUserMessage(');
     expect(helperBlock).toContain("{ type: 'user', content: message },");
@@ -465,13 +477,13 @@ describe('sendToSession ordering', () => {
     expect(begin).toBeGreaterThan(secondSeal);
     expectOrder(
       helperBlock,
-      'await opts.onAccepted?.();',
+      'await opts.onAccepted?.(signal);',
       'await beginTurnChangeSetAtDispatch(session, anchorClientId);',
     );
     expectOrder(
       helperBlock,
       'await beginTurnChangeSetAtDispatch(session, anchorClientId);',
-      'await gitSnapshotCoordinator.onTurnStart(session.id);',
+      'await gitSnapshotCoordinator.onTurnStart(session.id, signal);',
     );
     expect(countOccurrences(block, 'sendUserMessageWithAwaitedGitBaseline(')).toBe(3);
     expect(block).not.toContain(
@@ -492,7 +504,7 @@ describe('sendToSession ordering', () => {
     expect(createBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {');
     expect(createBranch).toContain('planMode: false,');
     expectOrder(createBranch, 'onAccepted: async () => {', 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {');
-    expectOrder(createBranch, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await createDbMessage(session.id, {');
+    expectOrder(createBranch, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await persistUserTurnMessage(session.id, {');
     expect(createBranch).toContain('content: persistedContent ?? message,');
     expect(createBranch).not.toContain('persist user message failed (non-fatal)');
     expect(createBranch).toContain('if (isSessionRunningError(err))');
@@ -506,24 +518,31 @@ describe('sendToSession ordering', () => {
       'if (!targetSessionId) {',
       'const prev = sendToSessionLocks.get(targetSessionId);',
     );
-    const acceptedBlock = extractBetween(
+    // Verified relays use the durable queue (behavior-covered by
+    // sendToSessionLazyResumePermission); inspect the remaining direct-send
+    // contract without depending on its nesting indentation.
+    const sendCall = extractBetween(
       createBranch,
-      'onAccepted: async () => {',
-      '          },\n          onDispatching:',
+      'const sendResult = await sendUserMessageWithAwaitedGitBaseline(',
+      '}, directSource);',
     );
-    const sendCallEndNeedle =
-      '          onDispatching: () => dispatchAgentIslandUserPrompt(session.id),\n        }, directSource);';
+    const acceptedBlock = extractBetween(
+      sendCall,
+      'onAccepted: async () => {',
+      'onDispatching:',
+    );
+    const sendCallEndNeedle = '}, directSource);';
     const afterSendResolves = createBranch.slice(
       createBranch.indexOf(sendCallEndNeedle) + sendCallEndNeedle.length,
     );
 
-    expect(acceptedBlock).toContain('await createDbMessage(session.id, {');
+    expect(acceptedBlock).toContain('await persistUserTurnMessage(session.id, {');
     expect(acceptedBlock).toContain('notifyAgentIslandUserPrompt(session, persistedContent ?? message, {');
     expect(acceptedBlock).toContain('broadcastSessionCreated(session.id);');
-    expectOrder(acceptedBlock, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await createDbMessage(session.id, {');
-    expectOrder(acceptedBlock, 'await createDbMessage(session.id, {', 'broadcastSessionCreated(session.id);');
+    expectOrder(acceptedBlock, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await persistUserTurnMessage(session.id, {');
+    expectOrder(acceptedBlock, 'await persistUserTurnMessage(session.id, {', 'broadcastSessionCreated(session.id);');
     expect(afterSendResolves).not.toContain('broadcastSessionCreated(session.id);');
-    expect(countOccurrences(createBranch, 'broadcastSessionCreated(session.id);')).toBe(1);
+    expect(countOccurrences(sendCall, 'broadcastSessionCreated(session.id);')).toBe(1);
   });
 
   it('routes ANY_SESSION_IN_TURN through maker active session state', () => {
@@ -630,7 +649,10 @@ describe('sendToSession ordering', () => {
     // Protect the SET_MODEL wire argument order. Other preload APIs (including
     // voice preferences) also accept `selection` and are outside this contract.
     const preloadSetModel = extractBetween(preloadSource, '    setModel: (', '    switchSessionAgent: (');
-    expect(preloadSetModel).toContain("selection?: { effort: string | null; fastMode: boolean | 'ultrafast' },");
+    // #5044 在 selection 上加了可选 thinking 载体；上游已把 fastMode 扩成 ultrafast。
+    expect(preloadSetModel).toContain(
+      "selection?: { effort: string | null; fastMode: boolean | 'ultrafast'; thinking?: boolean },",
+    );
     expectOrder(
       preloadSetModel,
       'expectedAgentSwitchRevision,',
@@ -647,13 +669,13 @@ describe('sendToSession ordering', () => {
       ['reconcileBotModelRoute', 'reconcileBotModelRoute'],
       ['applyPendingAgentSwitchIfIdle', 'applyPendingAgentSwitchIfIdle'],
       ['applyScheduledModelSelection', 'applyScheduledProfile'],
-      ['prepareUnhealthySession', 'prepareUnhealthySession'],
+      ['prepareUnhealthySession', 'prepareUnhealthySessionForSend'],
     ]) {
       expectOrder(directSendSwitchBlock, `stage = 'direct-send:${operation}'`, `${call}(`);
     }
     expectOrder(directSendSwitchBlock, 'prepareUnhealthySession', "stage = 'direct-send:caller-dispatch'");
     expectOrder(directSendSwitchBlock, 'applyPendingAgentSwitchIfIdle(', 'prepareUnhealthySession');
-    expectOrder(directSendSwitchBlock, 'prepareUnhealthySession', 'return { release, selection: resolvedSelection,');
+    expectOrder(directSendSwitchBlock, 'prepareUnhealthySession', 'return { release, selection: resolvedSelection');
   });
 
   it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {
@@ -720,8 +742,8 @@ describe('sendToSession ordering', () => {
     const block = extractSendToSessionSource();
     // 同 sendPersistedUserMessageToSession 的顺序硬约束(Codex review P2):
     // prompt preview 可先发,但 accepted 副作用仍必须等落库成功后才执行。
-    expectOrder(block, 'notifyAgentIslandUserPrompt(previewSessionMeta', 'await createDbMessage(targetSessionId, {');
-    expectOrder(block, 'await createDbMessage(targetSessionId, {', 'await runAcceptedCallback(onAccepted, targetSessionId, clientId);');
+    expectOrder(block, 'notifyAgentIslandUserPrompt(previewSessionMeta', 'await persistUserTurnMessage(targetSessionId, {');
+    expectOrder(block, 'await persistUserTurnMessage(targetSessionId, {', 'await runAcceptedCallback(onAccepted, targetSessionId, clientId);');
     const liveBranch = extractBetween(
       block,
       'live = maker.getSession(targetSessionId);',
@@ -731,7 +753,7 @@ describe('sendToSession ordering', () => {
     expect(liveBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(liveBranch).toContain('live,');
     expect(liveBranch).toContain('onAccepted: persistUserMessage,');
-    expect(liveBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(liveBranch).toContain('onDispatching: onInternalDispatching,');
     expect(liveBranch).not.toContain('await persistUserMessage();');
     expect(liveBranch).toContain('if (isSessionRunningError(err))');
     expect(liveBranch).toContain('await enqueueSendToSessionMessage({');
@@ -749,7 +771,7 @@ describe('sendToSession ordering', () => {
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(resumedBranch).toContain('session,');
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
-    expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(resumedBranch).toContain('onDispatching: onInternalDispatching,');
     expect(resumedBranch).not.toContain('await persistUserMessage();');
     expect(resumedBranch).toContain('if (isSessionRunningError(err))');
     expect(resumedBranch).toContain('await enqueueSendToSessionMessage({');
@@ -789,10 +811,59 @@ describe('sendToSession ordering', () => {
       'const opts = buildCreateOptsWithStderr({',
     );
     expectOrder(resumeBranch, '...directoryGrantsForRuntime(storedExtraDirs),', 'await bootstrapSession(opts);');
+    // 任务级窗口预算：worker 唤醒自己拼 opts，不经 createSession 的 prepareStartOptions 钩子。
+    // 缺这一步，预算会在引擎进程重启时丢失（2026-09-30 实测：档位卡仍显示 50%，而 Pi 的
+    // compaction.reserveTokens 被写成无预算值 → 阈值退回满窗，跑到预算窗口 100% 以上也不压缩）。
+    expectOrder(
+      resumeBranch,
+      '...directoryGrantsForRuntime(storedExtraDirs),',
+      'await applySessionContextWindowBudgetToCreateOpts(target.sessionId, opts, getActiveCatalog());',
+    );
+    expectOrder(
+      resumeBranch,
+      'await applySessionContextWindowBudgetToCreateOpts(target.sessionId, opts, getActiveCatalog());',
+      'await bootstrapSession(opts);',
+    );
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
-    expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
-    expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');
-    expect(switchFocusMcpBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target, assertCurrent);');
+expect(serviceDepsBlock).toContain('await orcaWorkerResumeScheduler.request(target);');
+    // focus 切换是纯 UI 操作：resume 只能后台调度，不能在 IPC / MCP handler 里同步 await
+    // 冷启动（首次切 dormant worker 的 ~5s 卡顿回归点）。MCP 路径仍透传 assertCurrent，
+    // 权威校验在后台预热内部继续生效。
+    expect(switchFocusIpcBlock).toContain('orcaWorkerResumeScheduler.requestInBackground(target,');
+    expect(switchFocusIpcBlock).not.toContain('await resumeOrcaWorkerSessionIfMissing(target)');
+    expect(switchFocusMcpBlock).toContain('orcaWorkerResumeScheduler.requestInBackground(');
+    expect(switchFocusMcpBlock).toContain('{ assertCurrent },');
+    expect(switchFocusMcpBlock).not.toContain('await resumeOrcaWorkerSessionIfMissing(target');
+    // 关闭协同 / 归档 / 显式 idle 与冷启动交错时，唤醒必须可取消，并在 bootstrap
+    // 返回后关掉刚拉起的 session（review P1：不得把已归档 worker 留在运行态）。
+    expect(resumeBranch).toContain('if (isCancelled?.()) return false;');
+    expect(resumeBranch).toContain('await maker.closeSession(resumedSession.id).catch((err) => {');
+    // bootstrap 之后 runtime 已存在，授权复核失败也必须先清理再抛（Security review）。
+    expect(resumeBranch).toContain("await closeResumedSession('assert-current-after-bootstrap');");
+    expect(resumeBranch).toContain('throw err;');
+    expectOrder(
+      resumeBranch,
+      'const { session: resumedSession } = await bootstrapSession(opts);',
+      "await closeResumedSession('assert-current-after-bootstrap');",
+    );
+    expectOrder(
+      resumeBranch,
+      "await closeResumedSession('assert-current-after-bootstrap');",
+      'await markOrcaRoleIfNeeded(resumedSession.id,',
+    );
+    expect(serviceDepsBlock).toContain(
+      'cancelWorkerResume: (sessionId) => orcaWorkerResumeScheduler.cancel(sessionId),',
+    );
+  });
+
+  it('cancels pending worker resumes before releasing runtimes', () => {
+    const disableOrcaBlock = extractBetween(
+      source,
+      'async function disableOrcaInternal',
+      'ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA',
+    );
+    expect(disableOrcaBlock).toContain('orcaWorkerResumeScheduler.cancel(w.sessionId);');
+    expect(orcaTeamServiceSource).toContain('deps.cancelWorkerResume?.(worker.sessionId);');
   });
 
   it('keeps IPC and MCP createWorker delegated to the shared lifecycle service', () => {

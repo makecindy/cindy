@@ -27,22 +27,30 @@ import { jsonObjectArg } from './json-object-arg.js';
 import { SshToolRegistry } from './ssh/registry.js';
 import { errorPayload } from './ssh/_shared.js';
 import {
+  registerSshAddHostTool,
+  registerSshManageHostTools,
   registerSshExecTool,
   registerSshHostStatusTool,
   registerSshListHostsTool,
+  registerSshReloadConfigTool,
 } from './ssh/index.js';
 import type { SshMcpDeps } from './types.js';
+import type { HostToolMcpServer } from './host-tool-runtime.js';
 
 const D_LIST_TOOLS =
   '探索 cindy_ssh 可用工具（渐进式发现入口）。不传 category → 返回所有类目+每个类目工具数量。' +
   '传 category=ssh → 返回该类目下所有工具的名称和简介。' +
   '用户要求 ssh 到某台机器执行命令 / 查看远端状态时，用本工具集（复用应用内已配置的 SSH 主机与认证），' +
-  '不要用 Bash 手拼 ssh 命令行。获取工具名后用 call_tool({name, args}) 执行。';
+  '不要用 Bash 手拼 ssh 命令行。可直接添加、编辑显示名和连接、删除本机主机配置，与「设置 → 远程连接」共用实现。' +
+  '获取工具名后用 call_tool({name, args}) 执行。';
 
 const D_CALL_TOOL =
   '调用 cindy_ssh 中的某个具体工具。先用 list_tools 拿工具名 + 简介，再用本工具执行。' +
   '错误码：' +
-  '`HOST_NOT_FOUND` = 目标主机未配置（返回已配置清单，引导用户到「设置 → 远程连接」添加）；' +
+  '`HOST_NOT_FOUND` = 目标主机未配置（返回已配置清单；需要时用 ssh_add_host 添加）；' +
+  '`HOST_ALREADY_EXISTS` = 添加时别名已存在；' +
+  '`SSH_CONFIG_RELOAD_REQUIRED` = 配置已写入但未刷新，调用 ssh_reload_config；' +
+  '`SSH_CONFIG_WRITE_FAILED` = 写入 SSH 配置失败，把 hint 转告用户；' +
   '`AMBIGUOUS_HOST` = hostname 命中多台，改用 alias；' +
   '`SSH_AUTH_FAILED` = 认证失败（确定性错误，不要重试，把 hint 转告用户）；' +
   '`SSH_AGENT_UNAVAILABLE` = 本机 SSH Agent 不可用（启动 Agent / ssh-add 后再试）；' +
@@ -59,12 +67,20 @@ function registerListToolsEntry(server: McpServer, registry: SshToolRegistry): v
     'list_tools',
     D_LIST_TOOLS,
     {
+      name: z.string().optional().describe('已发现的工具名；只读返回完整参数 schema，不执行操作。'),
       category: z
         .enum(CATEGORY_ENUM)
         .optional()
         .describe('工具类目。不传时返回所有类目概览。'),
     },
-    async ({ category }) => {
+    async ({ category, name }) => {
+      if (name) {
+        const tool = registry.get(name);
+        const value = tool ? { ok: true, tool: { name: tool.name, description: tool.description,
+          inputSchema: z.toJSONSchema(z.strictObject(tool.inputShape)) } }
+          : { ok: false, errorCode: 'UNKNOWN_TOOL' };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] };
+      }
       if (category) {
         const tools = registry.list(category);
         return {
@@ -125,7 +141,7 @@ function registerCallToolEntry(
 
 // ── Factory ────────────────────────────────────────────────────────────────
 
-export function createSshMcpServer(deps: SshMcpDeps): McpServer {
+export function createSshMcpServer(deps: SshMcpDeps): HostToolMcpServer {
   const server = new McpServer({
     name: 'cindy_ssh',
     version: '1.0.0',
@@ -137,9 +153,17 @@ export function createSshMcpServer(deps: SshMcpDeps): McpServer {
   registerSshListHostsTool(registry, deps);
   registerSshHostStatusTool(registry, deps);
   registerSshExecTool(registry, deps);
+  registerSshAddHostTool(registry, deps);
+  registerSshReloadConfigTool(registry, deps);
+  registerSshManageHostTools(registry, deps);
 
   registerListToolsEntry(server, registry);
   registerCallToolEntry(server, registry);
 
-  return server;
+  return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
+    describe: (name: string) => registry.list().find(tool => tool.name === name),
+    call: (name: string, args?: Record<string, unknown>) => registry.call(name, args),
+    close: () => server.close(),
+  } });
 }

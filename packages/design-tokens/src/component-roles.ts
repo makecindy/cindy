@@ -6,8 +6,7 @@
  * （见 colors.ts 的 DS-4 注释——暗色下 surface-hover 与 surface-chip 同值，
  * alias 会让悬停不可见），按治理合同 §3.4「运行时派生值不迁」只在
  * classification.json 登记为 runtime-derived-or-protected，不进 DTCG。
- * 唯一可建模的是 button-cta-hover：它是对 semantic 角色 accent-hover 的
- * 纯 alias，DS-8 生成时能落回 semantic。
+ * 填充按钮的状态值同样由基础色算出（themes/filledButtonStates.ts），所以目前没有可建模的角色。
  * rest 态填充按治理合同 §3.3「Primitive 默认只绑定 semantic 角色」由组件直接
  * 消费 Tier-1 slot，不再复制一层 component token。
  */
@@ -19,7 +18,6 @@ export interface ComponentRole {
 }
 
 export const COMPONENT_ROLES: readonly ComponentRole[] = [
-  { id: 'button-cta-hover', group: 'button' },
 ] as const;
 
 export const COMPONENT_ROLE_IDS = new Set(COMPONENT_ROLES.map((role) => role.id));
@@ -34,5 +32,14 @@ export const RUNTIME_DERIVED_BUTTON_STATE_IDS = [
   'button-primary-pressed',
   'button-secondary-hover',
   'button-secondary-pressed',
+  'button-cta-hover',
   'button-cta-pressed',
+  'send-btn-hover-bg',
+  'send-btn-pressed-bg',
+  'confirm-btn-primary-hover',
+  'confirm-btn-primary-pressed',
+  'perm-allow-btn-hover',
+  'perm-allow-btn-pressed',
+  'button-danger-solid-hover',
+  'button-danger-solid-pressed',
 ] as const;

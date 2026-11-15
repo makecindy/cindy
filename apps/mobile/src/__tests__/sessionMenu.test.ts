@@ -115,7 +115,7 @@ describe('sessionMenu actions', () => {
       writeDisabled: false,
     });
     expect(actions.find((action) => action.id === 'pin')?.label).toBe('取消置顶');
-    expect(actions.find((action) => action.id === 'archive')?.label).toBe('恢复');
+    expect(actions.find((action) => action.id === 'archive')?.label).toBe('取消归档');
     expect(actions.find((action) => action.id === 'archive')?.testID).toBe('session.restoreButton');
   });
 

@@ -1,0 +1,440 @@
+/**
+ * Page abstraction — implements IPage by sending commands to the daemon.
+ *
+ * All browser operations are ultimately 'exec' (JS evaluation via CDP)
+ * plus a few native Chrome Extension APIs (tabs, cookies, navigate).
+ *
+ * IMPORTANT: After goto(), we remember the page identity (targetId) returned
+ * by the navigate action and pass it to all subsequent commands. This ensures
+ * page-scoped operations target the correct page without guessing.
+ */
+
+import type { BrowserCookie, BrowserDownloadWaitResult, BrowserEvaluateFunction, ScreenshotOptions } from '../types.js';
+import { sendCommand, sendCommandFull } from './daemon-client.js';
+import { buildEvaluateExpression } from './utils.js';
+import { saveBase64ToFile } from '../utils.js';
+import { generateStealthJs } from './stealth.js';
+import { waitForDomStableJs } from './dom-helpers.js';
+import { CDPBasePage, NativeInputVisibilityError } from './base-page.js';
+import { classifyBrowserError } from './errors.js';
+import { CommandExecutionError } from '../errors.js';
+import { log } from '../logger.js';
+
+function isUnsupportedNetworkCaptureError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  const normalized = message.toLowerCase();
+  return (normalized.includes('unknown action') && normalized.includes('network-capture'))
+    || (normalized.includes('network capture') && normalized.includes('not supported'));
+}
+
+// The extension throws "Page not found: <id> — stale page identity" when our cached
+// `_page` targetId no longer maps to a live tab — e.g. the user closed the automation
+// window, or a long-running script left the cache pointing at an evicted target.
+// Detect that signature so goto() can drop the stale id and let resolveTab fall back
+// to the session lease (or create a fresh tab).
+function isStalePageIdentityError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes('stale page identity') || /^Page not found:\s*\S+\s*$/.test(message);
+}
+
+/**
+ * Page — implements IPage by talking to the daemon via HTTP.
+ */
+export class Page extends CDPBasePage {
+  private readonly _idleTimeout: number | undefined;
+
+  constructor(
+    private readonly session: string,
+    idleTimeout?: number,
+    public readonly contextId?: string,
+    private readonly windowMode?: 'foreground' | 'background',
+    private readonly surface: 'browser' | 'adapter' = 'browser',
+    private readonly siteSession?: 'ephemeral' | 'persistent',
+    /** Soft profile preference (config default) — daemon arbitrates; see profileRouteParams. */
+    public readonly preferredContextId?: string,
+  ) {
+    super();
+    this._idleTimeout = idleTimeout;
+  }
+
+  /** Active page identity (targetId), set after navigate and used in all subsequent commands */
+  private _page: string | undefined;
+  private _networkCaptureUnsupported = false;
+  private _networkCaptureWarned = false;
+
+  /** Helper: spread session into command params */
+  private _sessionOpts(): { session: string; surface: 'browser' | 'adapter'; idleTimeout?: number; contextId?: string; preferredContextId?: string; windowMode?: 'foreground' | 'background'; siteSession?: 'ephemeral' | 'persistent' } {
+    return {
+      session: this.session,
+      surface: this.surface,
+      ...(this.contextId && { contextId: this.contextId }),
+      ...(this.preferredContextId && { preferredContextId: this.preferredContextId }),
+      ...(this._idleTimeout != null && { idleTimeout: this._idleTimeout }),
+      ...(this.windowMode && { windowMode: this.windowMode }),
+      ...(this.siteSession && { siteSession: this.siteSession }),
+    };
+  }
+
+  /** Helper: spread session + page identity into command params */
+  private _cmdOpts(): Record<string, unknown> {
+    return {
+      session: this.session,
+      surface: this.surface,
+      ...(this.contextId && { contextId: this.contextId }),
+      ...(this.preferredContextId && { preferredContextId: this.preferredContextId }),
+      ...(this._page !== undefined && { page: this._page }),
+      ...(this._idleTimeout != null && { idleTimeout: this._idleTimeout }),
+      ...(this.windowMode && { windowMode: this.windowMode }),
+      ...(this.siteSession && { siteSession: this.siteSession }),
+    };
+  }
+
+  async goto(url: string, options?: { waitUntil?: 'load' | 'none'; settleMs?: number }): Promise<void> {
+    let result: { data: unknown; page?: string };
+    try {
+      result = await sendCommandFull('navigate', {
+        url,
+        ...this._cmdOpts(),
+      });
+    } catch (err) {
+      // If our cached targetId went stale (tab closed externally, identity evicted),
+      // drop the dead id and retry without it — the extension will resolve through the
+      // session lease or open a fresh automation tab. Without this, every subsequent
+      // adapter call in the same process keeps re-sending the same dead targetId and
+      // cascades into "Page not found:" failures across concurrent calls.
+      if (!isStalePageIdentityError(err) || this._page === undefined) throw err;
+      this._page = undefined;
+      result = await sendCommandFull('navigate', {
+        url,
+        ...this._cmdOpts(),
+      });
+    }
+    // Remember the page identity (targetId) for subsequent calls
+    if (result.page) {
+      this._page = result.page;
+    }
+    this._lastUrl = url;
+    // Inject stealth + settle in a single round-trip instead of two sequential exec calls.
+    // The stealth guard flag prevents double-injection; settle uses DOM stability detection.
+    if (options?.waitUntil !== 'none') {
+      const maxMs = options?.settleMs ?? 1000;
+      const combinedCode = `${generateStealthJs()};\n${waitForDomStableJs(maxMs, Math.min(500, maxMs))}`;
+      const combinedOpts = {
+        code: combinedCode,
+        ...this._cmdOpts(),
+      };
+      try {
+        await sendCommand('exec', combinedOpts);
+      } catch (err) {
+        const advice = classifyBrowserError(err);
+        // Only settle-retry on target navigation (SPA client-side redirects).
+        // Extension/daemon errors are already retried by sendCommandRaw —
+        // retrying them here would silently swallow real failures.
+        if (advice.kind !== 'target-navigation') throw err;
+        try {
+          await new Promise((r) => setTimeout(r, advice.delayMs));
+          await sendCommand('exec', combinedOpts);
+        } catch (retryErr) {
+          if (classifyBrowserError(retryErr).kind !== 'target-navigation') throw retryErr;
+        }
+      }
+    } else {
+      // Even with waitUntil='none', still inject stealth (best-effort)
+      try {
+        await sendCommand('exec', {
+          code: generateStealthJs(),
+          ...this._cmdOpts(),
+        });
+      } catch {
+        // Non-fatal: stealth is best-effort
+      }
+    }
+  }
+
+  /** Get the active page identity (targetId) */
+  getActivePage(): string | undefined {
+    return this._page;
+  }
+
+  /** Bind this Page instance to a specific page identity (targetId). */
+  setActivePage(page?: string): void {
+    this._page = page;
+    this._lastUrl = null;
+  }
+  private _markUnsupportedNetworkCapture(): void {
+    this._networkCaptureUnsupported = true;
+    if (this._networkCaptureWarned) return;
+    this._networkCaptureWarned = true;
+    log.warn(
+      'Browser Bridge extension does not support network capture; continuing without it. ' +
+      'Explore output may miss API endpoints until you reload or reinstall the extension.',
+    );
+  }
+
+  async evaluate<T = unknown>(js: string): Promise<T>;
+  async evaluate<Args extends unknown[], T>(fn: BrowserEvaluateFunction<Args, T>, ...args: Args): Promise<Awaited<T>>;
+  async evaluate(input: string | BrowserEvaluateFunction<unknown[], unknown>, ...args: unknown[]): Promise<unknown> {
+    const code = buildEvaluateExpression(input, args);
+    try {
+      return await sendCommand('exec', { code, ...this._cmdOpts() });
+    } catch (err) {
+      const advice = classifyBrowserError(err);
+      if (advice.kind !== 'target-navigation') throw err;
+      await new Promise((resolve) => setTimeout(resolve, advice.delayMs));
+      return sendCommand('exec', { code, ...this._cmdOpts() });
+    }
+  }
+
+  /** Non-idempotent writes must not use evaluate's navigation retry. */
+  async evaluateOnce<T = unknown>(js: string): Promise<T> {
+    return await sendCommand('exec', { code: buildEvaluateExpression(js, []), ...this._cmdOpts() }) as T;
+  }
+
+  async getCookies(opts: { domain?: string; url?: string } = {}): Promise<BrowserCookie[]> {
+    const result = await sendCommand('cookies', { ...this._sessionOpts(), ...opts });
+    if (!Array.isArray(result) || result.some(cookie => !cookie || typeof cookie.name !== 'string' || typeof cookie.value !== 'string')) {
+      throw new CommandExecutionError('Browser Bridge returned an invalid cookies response');
+    }
+    return result;
+  }
+
+  /** Release the current browser session lease in the extension */
+  async closeWindow(): Promise<void> {
+    const closeOwnedTab = process.env.OPENCLI_CLOSE_OWNED_TAB === '1';
+    try {
+      const result = await sendCommand(closeOwnedTab ? 'close-owned-tab' : 'close-window', {
+        ...this._sessionOpts(),
+      });
+      const cleanup = result && typeof result === 'object' && 'tabCleanup' in result ? result.tabCleanup : undefined;
+      if (closeOwnedTab && cleanup !== 'closed-owned-tab' && cleanup !== 'no-owned-tab') {
+        throw new CommandExecutionError('Browser Bridge did not acknowledge owned-tab cleanup; update the extension.');
+      }
+    } catch (err) {
+      if (closeOwnedTab) {
+        log.warn(`Owned-tab cleanup failed (session=${this.session}, surface=${this.surface}): ${err instanceof Error ? err.message : String(err)}. Retry cleanup separately or close the remaining tab manually; do not repeat the site action.`);
+        throw err;
+      }
+      // Window may already be closed or daemon may be down
+    }
+    this._page = undefined;
+    this._lastUrl = null;
+    this._networkCaptureUnsupported = false;
+    this._networkCaptureWarned = false;
+  }
+
+  async tabs(): Promise<unknown[]> {
+    const result = await sendCommand('tabs', { op: 'list', ...this._sessionOpts() });
+    return Array.isArray(result) ? result : [];
+  }
+
+  async newTab(url?: string): Promise<string | undefined> {
+    const result = await sendCommandFull('tabs', {
+      op: 'new',
+      ...(url !== undefined && { url }),
+      ...this._sessionOpts(),
+    });
+    this._lastUrl = null;
+    return result.page;
+  }
+
+  async closeTab(target?: number | string): Promise<void> {
+    const params: Record<string, unknown> = { op: 'close', ...this._sessionOpts() };
+    if (typeof target === 'number') params.index = target;
+    else if (typeof target === 'string') params.page = target;
+    else if (this._page !== undefined) params.page = this._page;
+
+    const result = await sendCommand('tabs', params) as { closed?: string } | null;
+    const closedPage = typeof result?.closed === 'string' ? result.closed : undefined;
+
+    if ((closedPage && closedPage === this._page) || (!closedPage && (target === undefined || target === this._page))) {
+      this._page = undefined;
+      this._lastUrl = null;
+    }
+  }
+
+  async selectTab(target: number | string): Promise<void> {
+    const result = await sendCommandFull('tabs', {
+      op: 'select',
+      ...(typeof target === 'number' ? { index: target } : { page: target }),
+      ...this._sessionOpts(),
+    });
+    if (result.page) this._page = result.page;
+    this._lastUrl = null;
+  }
+
+  /**
+   * Capture a screenshot via CDP Page.captureScreenshot.
+   */
+  async screenshot(options: ScreenshotOptions = {}): Promise<string> {
+    const base64 = await sendCommand('screenshot', {
+      ...this._cmdOpts(),
+      format: options.format,
+      quality: options.quality,
+      fullPage: options.fullPage,
+      width: options.width,
+      height: options.height,
+    }) as string;
+
+    if (options.path) {
+      await saveBase64ToFile(base64, options.path);
+    }
+
+    return base64;
+  }
+
+  async startNetworkCapture(pattern: string = ''): Promise<boolean> {
+    if (this._networkCaptureUnsupported) return false;
+    try {
+      await sendCommand('network-capture-start', {
+        pattern,
+        ...this._cmdOpts(),
+      });
+      return true;
+    } catch (err) {
+      if (!isUnsupportedNetworkCaptureError(err)) throw err;
+      this._markUnsupportedNetworkCapture();
+      return false;
+    }
+  }
+
+  async readNetworkCapture(options: { retainIncomplete?: boolean } = {}): Promise<unknown[]> {
+    if (this._networkCaptureUnsupported) return [];
+    try {
+      const result = await sendCommand('network-capture-read', {
+        ...options,
+        ...this._cmdOpts(),
+      });
+      return Array.isArray(result) ? result : [];
+    } catch (err) {
+      if (!isUnsupportedNetworkCaptureError(err)) throw err;
+      this._markUnsupportedNetworkCapture();
+      return [];
+    }
+  }
+
+  async waitForDownload(pattern: string = '', timeoutMs: number = 30_000): Promise<BrowserDownloadWaitResult> {
+    const result = await sendCommand('wait-download', {
+      pattern,
+      timeoutMs,
+      ...this._cmdOpts(),
+    });
+    return result as BrowserDownloadWaitResult;
+  }
+
+  /**
+   * Set local file paths on a file input element via CDP DOM.setFileInputFiles.
+   * Chrome reads the files directly from the local filesystem, avoiding the
+   * payload size limits of base64-in-evaluate.
+   */
+  async setFileInput(files: string[], selector?: string): Promise<void> {
+    const result = await sendCommand('set-file-input', {
+      files,
+      selector,
+      ...this._cmdOpts(),
+    }) as { count?: number };
+    if (!result?.count) {
+      throw new Error('setFileInput returned no count — command may not be supported by the extension');
+    }
+  }
+
+  async insertText(text: string): Promise<void> {
+    const result = await sendCommand('insert-text', {
+      text,
+      ...this._cmdOpts(),
+    }) as { inserted?: boolean };
+    if (!result?.inserted) {
+      throw new Error('insertText returned no inserted flag — command may not be supported by the extension');
+    }
+  }
+
+  async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string }>> {
+    const result = await sendCommand('frames', { ...this._cmdOpts() });
+    return Array.isArray(result) ? result : [];
+  }
+
+  async evaluateInFrame(js: string, frameIndex: number): Promise<unknown> {
+    const code = buildEvaluateExpression(js);
+    return sendCommand('exec', { code, frameIndex, ...this._cmdOpts() });
+  }
+
+  async cdp(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    return sendCommand('cdp', {
+      cdpMethod: method,
+      cdpParams: params,
+      ...this._cmdOpts(),
+    });
+  }
+
+  /** Precise click using DOM.getContentQuads/getBoxModel for inline elements */
+  async clickWithQuads(ref: string): Promise<void> {
+    await this.assertNativeInputVisible();
+    const safeRef = JSON.stringify(ref);
+    const cssSelector = `[data-opencli-ref="${ref.replace(/"/g, '\\"')}"]`;
+
+    // Scroll element into view first
+    await this.evaluate(`
+      (() => {
+        const el = document.querySelector('[data-opencli-ref="' + ${safeRef} + '"]');
+        if (el) el.scrollIntoView({ behavior: 'instant', block: 'center' });
+        return !!el;
+      })()
+    `);
+
+    try {
+      // Find DOM node via CDP
+      const doc = await this.cdp('DOM.getDocument', {}) as { root: { nodeId: number } };
+      const result = await this.cdp('DOM.querySelectorAll', {
+        nodeId: doc.root.nodeId,
+        selector: cssSelector,
+      }) as { nodeIds: number[] };
+
+      if (!result.nodeIds?.length) throw new Error('DOM node not found');
+
+      const nodeId = result.nodeIds[0];
+
+      // Try getContentQuads first (precise for inline elements)
+      try {
+        const quads = await this.cdp('DOM.getContentQuads', { nodeId }) as { quads: number[][] };
+        if (quads.quads?.length) {
+          const q = quads.quads[0];
+          const cx = (q[0] + q[2] + q[4] + q[6]) / 4;
+          const cy = (q[1] + q[3] + q[5] + q[7]) / 4;
+          await this.nativeClick(Math.round(cx), Math.round(cy));
+          return;
+        }
+      } catch (error) {
+        if (error instanceof NativeInputVisibilityError) throw error;
+        // Fall through for unsupported geometry lookup.
+      }
+
+      // Try getBoxModel
+      try {
+        const box = await this.cdp('DOM.getBoxModel', { nodeId }) as { model: { content: number[] } };
+        if (box.model?.content) {
+          const c = box.model.content;
+          const cx = (c[0] + c[2] + c[4] + c[6]) / 4;
+          const cy = (c[1] + c[3] + c[5] + c[7]) / 4;
+          await this.nativeClick(Math.round(cx), Math.round(cy));
+          return;
+        }
+      } catch (error) {
+        if (error instanceof NativeInputVisibilityError) throw error;
+        // Fall through for unsupported geometry lookup.
+      }
+    } catch (error) {
+      if (error instanceof NativeInputVisibilityError) throw error;
+      // Fall through for unsupported DOM lookup.
+    }
+
+    // Final fallback: regular click
+    await this.evaluate(`
+      (() => {
+        const el = document.querySelector('[data-opencli-ref="' + ${safeRef} + '"]');
+        if (!el) throw new Error('Element not found: ' + ${safeRef});
+        el.click();
+        return 'clicked';
+      })()
+    `);
+  }
+
+}

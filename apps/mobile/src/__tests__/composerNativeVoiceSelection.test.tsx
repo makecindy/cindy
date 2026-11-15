@@ -6,7 +6,7 @@ import { ComposerNativeInput } from '@/session/ComposerNativeInput.ios';
 import type { ComposerRichInputHandle, ComposerRichInputProps } from '@/session/ComposerRichInput';
 import type { ComposerDocument } from '@/session/composerDocument';
 
-const bridge = vi.hoisted(() => ({ props: {} as any, setDocument: vi.fn() }));
+const bridge = vi.hoisted(() => ({ props: {} as any, setDocument: vi.fn(), writeImage: vi.fn(), deleteImage: vi.fn() }));
 vi.mock('expo', async () => {
   const { forwardRef, useImperativeHandle } = await import('react');
   return {
@@ -23,20 +23,20 @@ vi.mock('react-native-reanimated', () => ({
   useAnimatedStyle: () => ({}),
 }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ mode: 'light' }) }));
-vi.mock('expo-file-system', () => ({ File: class {}, Paths: {} }));
-vi.mock('expo-file-system/legacy', () => ({}));
+vi.mock('expo-file-system', () => ({ File: class { uri = 'file:///cache/native-paste.png'; }, Paths: {} }));
+vi.mock('expo-file-system/legacy', () => ({ EncodingType: { Base64: 'base64' }, writeAsStringAsync: bridge.writeImage, deleteAsync: bridge.deleteImage }));
 
 const cleanups: Array<() => void> = [];
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 afterEach(() => { cleanups.splice(0).forEach((cleanup) => cleanup()); vi.clearAllMocks(); });
-function mount(text: string) {
+function mount(text: string, initialProps: Partial<ComposerRichInputProps> = {}) {
   const container = document.createElement('div');
   const root = createRoot(container);
   const ref = createRef<ComposerRichInputHandle>();
-  const render = (text: string, prefix: ComposerDocument['nodes'] = []) => {
+  const render = (text: string, prefix: ComposerDocument['nodes'] = [], props = initialProps) => {
     const document: ComposerDocument = { version: 1, nodes: [...prefix, { type: 'text', text }] };
     act(() => root.render(createElement(ComposerNativeInput, {
-      ref, document, height: 40, theme: {}, onChangeDocument: vi.fn(),
+      ref, document, height: 40, theme: {}, onChangeDocument: vi.fn(), ...props,
     } as unknown as ComposerRichInputProps & { ref: typeof ref })));
     return document;
   };
@@ -93,4 +93,34 @@ it('lets subsequent native editing own the caret instead of reusing dictation me
   bridge.props.onSelectionChange({ nativeEvent: { start: 1, end: 1, revision: 1 } });
   expect(input.current!.getSelection('语音结果').end).toBe(1);
   expect(input.current!.getSelection('别的草稿').end).toBe(4);
+});
+
+// PR #9242 r4500592029, unit: native iOS can reject an oversized clipboard as
+// images:[] without creating a placeholder. It must not settle an older accepted
+// batch. Existing native-input tests did not exercise async image delivery.
+it.each([{ images: [] }, { images: ['eA=='] }])('does not let a rejected native image batch release an accepted batch placeholder ($images)', async ({ images }) => {
+  let finishWrite!: () => void;
+  bridge.writeImage.mockReturnValue(new Promise<void>((resolve) => { finishWrite = resolve; }));
+  bridge.deleteImage.mockResolvedValue(undefined);
+  let placeholders = 0;
+  const fail = vi.fn(() => { placeholders -= 1; });
+  const deliver = vi.fn(() => { placeholders -= 1; });
+  const props = {
+    onPasteImages: deliver,
+    onPasteImagesLoading: (count: number) => { placeholders += count; },
+    onPasteImagesLoadFailed: fail,
+  };
+  const { render } = mount('draft with an image', props);
+  act(() => bridge.props.onPasteImages({ nativeEvent: { images: ['eA=='] } }));
+  expect(placeholders).toBe(1);
+  // Send removes only new-image entry callbacks; the first file write is pending.
+  render('draft with an image', [], { ...props, onPasteImages: undefined, onPasteImagesLoading: undefined });
+  act(() => bridge.props.onPasteImages({ nativeEvent: { images } }));
+  expect(placeholders).toBe(1);
+  expect(fail).not.toHaveBeenCalled();
+  expect(bridge.writeImage).toHaveBeenCalledTimes(1);
+  await act(async () => finishWrite());
+  expect(deliver).toHaveBeenCalledExactlyOnceWith(['file:///cache/native-paste.png']);
+  expect(placeholders).toBe(0);
+  expect(fail).not.toHaveBeenCalled();
 });

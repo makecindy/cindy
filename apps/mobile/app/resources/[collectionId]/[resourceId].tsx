@@ -1,3 +1,5 @@
+import { inheritTaskListEntry } from '@/session/taskListNavigationPolicy';
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { randomUUID } from 'expo-crypto';
 import { useAuth } from '@/auth/AuthContext';
 import { Redirect, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -49,12 +51,13 @@ function RemoteResourceResolverScreenContent() {
     deviceId?: string;
     deviceName?: string;
     title?: string;
+    taskListEntry?: string;
   }>();
   const collectionId = firstParam(params.collectionId);
   const resourceId = firstParam(params.resourceId);
   const resourceKind = firstParam(params.resourceKind);
   const deviceId = firstParam(params.deviceId);
-  const deviceName = firstParam(params.deviceName) || deviceId;
+  const deviceName = deviceDisplayName(deviceId, firstParam(params.deviceName));
   const title = firstParam(params.title) || t('devices.resources.titleFallback');
   const host = useMemo<RemoteResourceHostTarget>(
     () => ({ deviceId, deviceName }),
@@ -124,7 +127,7 @@ function RemoteResourceResolverScreenContent() {
       recovery.current?.succeeded();
       setPreparation(null);
       remoteSessionStore.upsertDeviceSession(deviceId, deviceName, session);
-      router.replace({
+      router.replace(inheritTaskListEntry({
         pathname: '/sessions/[sessionId]',
         params: {
           deviceId,
@@ -134,14 +137,14 @@ function RemoteResourceResolverScreenContent() {
           resourceId,
           resourceKind,
         },
-      });
+      }, params));
     } catch (cause) {
       if (profileOpenRef.current) return true;
       if (resolveGenerationRef.current === generation && currentBinding.current === binding) {
         setError(humanizeRemoteError(cause)); recovery.current?.failed(cause);
       }
     }
-  }, [binding, collectionId, deviceId, deviceName, host, i18n.language, invoke, openLink, resourceId, resourceKind, router, status, t]);
+  }, [binding, collectionId, deviceId, deviceName, host, i18n.language, invoke, openLink, resourceId, resourceKind, params.taskListEntry, router, status, t]);
 
   useFocusEffect(useCallback(() => {
     let disposed = false;

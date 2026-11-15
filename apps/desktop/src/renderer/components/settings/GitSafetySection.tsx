@@ -1,11 +1,12 @@
+import { gitSafetySettings } from './GitSafetySection.settings-search';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useGitSafetySettings } from '@/hooks/useGitSafetySettings';
 import type { GitSafetyMode } from '@/lib/gitSafetySettingsStore';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 export function GitSafetySection() {
@@ -37,42 +38,27 @@ export function GitSafetySection() {
   }, [reset, saving, t]);
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.gitSafety.title')}
-      </h2>
-
-      <div
-        className={cn(
-          'flex flex-col gap-3 rounded-xl px-4 py-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="cindy-segmented-row">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-gitSafety-autoSnapshotTitle" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-              {t('settings.gitSafety.autoSnapshotTitle')}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">{t('settings.gitSafety.description')}</p>
-          </div>
-
-          <div className="cindy-segmented-row-actions">
-          <SegmentedControl
-            value={mode}
-            onValueChange={handleModeChange}
-            disabled={saving}
-            aria-label={t('settings.gitSafety.modeAria')}
-            options={[
-              { value: 'off', label: t('settings.gitSafety.modes.off') },
-              { value: 'existing-git', label: t('settings.gitSafety.modes.existingGit') },
-              { value: 'all-projects', label: t('settings.gitSafety.modes.allProjects') },
-            ] satisfies ReadonlyArray<{ value: GitSafetyMode; label: string }>}
-          />
-          <DefaultOverrideControls isCustomized={isCustomized} disabled={saving} onReset={handleReset} />
-          </div>
-        </div>
-      </div>
-    </div>
+    <SettingsSection title={t('settings.gitSafety.title')}>
+      <SettingsCard>
+        <SettingsRow
+          className="cindy-segmented-row"
+          title={<span id={gitSafetySettings.autoSnapshotTitle.targetId}>{t(gitSafetySettings.autoSnapshotTitle.titleKey)}</span>}
+          hint={t(gitSafetySettings.autoSnapshotTitle.descriptionKey)}
+          trailing={
+            <div className="cindy-segmented-row-actions">
+              {/* Per-setting reset sits left of the control (CONTROLS decision 3). */}
+              <DefaultOverrideControls isCustomized={isCustomized} disabled={saving} onReset={handleReset} />
+              <SegmentedControl data-setting-id={gitSafetySettings.autoSnapshotTitle.id}
+                value={mode}
+                onValueChange={handleModeChange}
+                disabled={saving}
+                aria-label={t('settings.gitSafety.modeAria')}
+                options={gitSafetySettings.autoSnapshotTitle.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+              />
+            </div>
+          }
+        />
+      </SettingsCard>
+    </SettingsSection>
   );
 }

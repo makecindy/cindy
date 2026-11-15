@@ -4,6 +4,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 
 import type { ChatMessage } from '@/lib/makerChatStore';
 import type { BotGroupQuoteDisplay } from '../../../shared/botGroupChat';
@@ -37,11 +38,13 @@ export function usePendingBotReplyQuote(sessionId: string | null | undefined): C
   return useSyncExternalStore(subscribe, () => getPendingBotReplyQuote(sessionId), () => null);
 }
 
-type QuotableMessage = Pick<ChatMessage, 'clientId' | 'role' | 'content' | 'images' | 'files'>;
+type QuotableMessage = Pick<ChatMessage, 'clientId' | 'role' | 'content' | 'images' | 'files' | 'automationOrigin' | 'hookSource'>;
 
 /** The text the user reads: a companion reply's components as their visible text, not their source. */
 function readableText(message: QuotableMessage): string {
-  return message.role === 'assistant' ? richAnswerText(message.content) : message.content;
+  if (message.role === 'assistant') return richAnswerText(message.content);
+  return message.automationOrigin?.kind === 'session' && !message.hookSource
+    ? forwardedRequestDisplayText(message.content) : message.content;
 }
 
 function attachmentSummary(message: QuotableMessage | undefined): { count: number; name: string | null } {

@@ -23,6 +23,19 @@ function patchShareFeedback(source) {
     "    handleShare()\n    super.viewDidAppear(animated)",
     "    super.viewDidAppear(animated)\n    handleShare()",
   );
+  // Reception has no editable post or send action. A regular UIKit controller
+  // avoids flashing SLComposeServiceViewController's misleading Post editor.
+  replace("import Social\n", "");
+  replace("class ShareIntoViewController: SLComposeServiceViewController {", "class ShareIntoViewController: UIViewController {");
+  replace(`  override func didSelectPost() {
+    // This is called if the standard Apple UI "Post" button is pressed.
+    // Since we are redirecting immediately in viewDidAppear, should never be reached,
+    // but good to have.
+    handleShare()
+  }`, `  override func viewDidLoad() {
+    super.viewDidLoad()
+    showShareProgress()
+  }`);
   replace(
     "      self.extensionContext?.completeRequest(returningItems: nil)",
     "      showShareFeedback(received: false)",
@@ -60,7 +73,7 @@ function patchShareFeedback(source) {
   );
   replace(
     "  private func close() {",
-    `  override func didSelectCancel() {
+    `  func didSelectCancel() {
     close()
   }
 

@@ -299,6 +299,8 @@ describe('shouldPrependMobileClientPromptNote(内置命令旁路)', () => {
 
   it('不把相似文本、带附件消息或其他 Agent 的输入误判成 Claude 命令', () => {
     expect(shouldPrependMobileClientPromptNote('/compactness', 'claude-code')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('/learner', 'claude-code')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('/other:learn', 'claude-code')).toBe(true);
     expect(shouldPrependMobileClientPromptNote(' /compact', 'claude-code')).toBe(true);
     expect(shouldPrependMobileClientPromptNote(
       {

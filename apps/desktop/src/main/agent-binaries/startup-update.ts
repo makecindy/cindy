@@ -9,8 +9,8 @@ const MARKER_FILE = 'agent-binary-update-once.json';
 const MARKER_KINDS: readonly AgentBinaryKind[] = ['claude-code', 'codex', 'pi'];
 
 /**
- * Which managed binaries the next startup may refresh: `true` = all (app update),
- * a list = only the harnesses the user confirmed, `false` = ordinary startup.
+ * Legacy startup intent: `true` = application update (now cache adoption only),
+ * a list = explicit harness update/repair, `false` = ordinary startup.
  */
 export type StartupBinaryUpdateScope = boolean | readonly AgentBinaryKind[];
 

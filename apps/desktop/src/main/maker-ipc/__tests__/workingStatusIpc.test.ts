@@ -11,7 +11,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendere
 vi.mock('../../utility-model/oneShotCandidates.js', () => ({ requestUtilityText: h.request }));
 vi.mock('../../utility-model/resolveAuxiliaryModelChain.js', () => ({ getEffectiveAuxiliaryModelChainSnapshot: () => h.chain }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => h.owner, isAppSessionBoundaryPending: () => h.boundary }));
-vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => h.locale }));
+vi.mock('../../i18n.desktop.js', () => ({ getResolvedMainLocale: () => h.locale }));
 import { registerWorkingStatusIpc } from '../workingStatus.js';
 let listeners: Set<(event: AgentEvent) => void>;
 const invoke = (phase = 'reading-memory') => h.handler!({}, { sessionId: 'test', phase, locale: 'zh-CN' });

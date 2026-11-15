@@ -1,0 +1,255 @@
+{
+  "generatedAt": "2026-10-28T13:42:44.762Z",
+  "verdict": "passed-with-coverage-limits",
+  "machine": "XD-PC",
+  "platform": "win32-x64",
+  "baseCommit": "7fdb9dd0963794cf46bc026f240d34c568bac03f",
+  "branch": "cindy/quirky-bohr",
+  "workingTree": "dirty: screenshot performance changes",
+  "instance": {
+    "region": "global",
+    "sandbox": "quirky-bohr-34018d",
+    "pid": 56388,
+    "cdpPort": 9337,
+    "readyVerdict": "DESKTOP_DEV_VERDICT=ready"
+  },
+  "displays": [
+    {
+      "x": 0,
+      "y": 0,
+      "width": 2560,
+      "height": 1440,
+      "deviceScaleFactor": 1
+    },
+    {
+      "x": 2560,
+      "y": 0,
+      "width": 2560,
+      "height": 1440,
+      "deviceScaleFactor": 1
+    }
+  ],
+  "method": "Full development app with mock account/task data; real global hotkey, Electron main/preload, OS screen capture, clipboard, native PNG save and pin. Renderer input uses Playwright CDP; native hotkey/dialog input uses computer tools. No screenshot API, capture pixels, clipboard or save-dialog response was replaced.",
+  "screenshotSessions": 8,
+  "cases": [
+    {
+      "name": "真实快捷键与双屏启动",
+      "status": "passed",
+      "detail": "独立 Cindy 实例通过系统热键打开两块 2560×1440 屏幕，浮层尺寸正确。"
+    },
+    {
+      "name": "左屏裁剪与系统复制",
+      "status": "passed",
+      "detail": "580×180；104,400 个像素与独立原生测试图逐个一致，差异为 0。"
+    },
+    {
+      "name": "右屏裁剪与原生 PNG 保存",
+      "status": "passed",
+      "detail": "经过 Windows 另存为对话框；落盘图片 580×180，全像素差异为 0。"
+    },
+    {
+      "name": "深色模式标注、撤销、重做与复制",
+      "status": "passed",
+      "detail": "矩形恢复后导出；1,840 个变化像素均位于预期矩形边界，其余像素保持一致。"
+    },
+    {
+      "name": "冷建双屏与 Esc 退出",
+      "status": "passed",
+      "detail": "外部关闭两份预热浮层，再用真实热键重新创建；右屏可选区，Esc 后无可见浮层。"
+    },
+    {
+      "name": "重复上次选区",
+      "status": "passed",
+      "detail": "重新打开后按 R，正确恢复左屏的 580×180 选区。"
+    },
+    {
+      "name": "取消原生保存",
+      "status": "passed",
+      "detail": "在系统保存框按 Esc；没有生成新图片，可再次截图。"
+    },
+    {
+      "name": "右键重选与取消",
+      "status": "passed",
+      "detail": "第一次右键清除选区，第二次退出截图。"
+    },
+    {
+      "name": "贴图显示与关闭",
+      "status": "passed",
+      "detail": "贴图画布 580×180，104,400 个像素差异为 0；Esc 关闭。"
+    },
+    {
+      "name": "全屏选区与取消",
+      "status": "passed",
+      "detail": "空格选择 2560×1440，Esc 退出；原生窗口列表仅剩测试实例主窗口。"
+    },
+    {
+      "name": "左屏原生吸附，Light / Dark",
+      "status": "passed",
+      "detail": "真实 Chrome、Windows helper、原生截图和真实 Overlay；移动、边界、细分元素、滚轮、单击均通过。"
+    },
+    {
+      "name": "右屏原生吸附，Light / Dark",
+      "status": "passed",
+      "detail": "窗口位于 (2700,80)，同一套独立几何断言全部通过。"
+    }
+  ],
+  "pixels": {
+    "clipboard": {
+      "width": 580,
+      "height": 180,
+      "pixelCount": 104400,
+      "mismatch": 0
+    },
+    "nativeSave": {
+      "width": 580,
+      "height": 180,
+      "pixelCount": 104400,
+      "mismatch": 0
+    }
+  },
+  "annotation": {
+    "changed": 1840,
+    "bounds": {
+      "minX": 218,
+      "minY": 28,
+      "maxX": 341,
+      "maxY": 141
+    }
+  },
+  "pin": {
+    "width": 580,
+    "height": 180,
+    "mismatch": 0
+  },
+  "nativeSnapping": [
+    {
+      "position": "left",
+      "report": [
+        {
+          "theme": "light",
+          "content": {
+            "x": 88,
+            "y": 223,
+            "width": 984,
+            "height": 649
+          },
+          "window": [
+            87,
+            80,
+            1073,
+            873
+          ],
+          "nativeRegions": 0,
+          "movementSamples": 122,
+          "checks": [
+            "pending-movement",
+            "pending-boundary",
+            "button",
+            "file-list",
+            "body",
+            "browser-chrome",
+            "wheel",
+            "click"
+          ]
+        },
+        {
+          "theme": "dark",
+          "content": {
+            "x": 88,
+            "y": 223,
+            "width": 984,
+            "height": 649
+          },
+          "window": [
+            87,
+            80,
+            1073,
+            873
+          ],
+          "nativeRegions": 0,
+          "movementSamples": 121,
+          "checks": [
+            "pending-movement",
+            "pending-boundary",
+            "button",
+            "file-list",
+            "body",
+            "browser-chrome",
+            "wheel",
+            "click"
+          ]
+        }
+      ]
+    },
+    {
+      "position": "right",
+      "report": [
+        {
+          "theme": "light",
+          "content": {
+            "x": 2708,
+            "y": 223,
+            "width": 984,
+            "height": 649
+          },
+          "window": [
+            2707,
+            80,
+            3693,
+            873
+          ],
+          "nativeRegions": 0,
+          "movementSamples": 122,
+          "checks": [
+            "pending-movement",
+            "pending-boundary",
+            "button",
+            "file-list",
+            "body",
+            "browser-chrome",
+            "wheel",
+            "click"
+          ]
+        },
+        {
+          "theme": "dark",
+          "content": {
+            "x": 2708,
+            "y": 223,
+            "width": 984,
+            "height": 649
+          },
+          "window": [
+            2707,
+            80,
+            3693,
+            873
+          ],
+          "nativeRegions": 0,
+          "movementSamples": 122,
+          "checks": [
+            "pending-movement",
+            "pending-boundary",
+            "button",
+            "file-list",
+            "body",
+            "browser-chrome",
+            "wheel",
+            "click"
+          ]
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "macOS 未实机验证。",
+    "物理双屏均为 100% 缩放；真实混合 DPI 未验证。",
+    "本轮未实跑系统滚动截图和 WebM/GIF 录制；上一轮的 Chromium 场景不代表原生录制验收。",
+    "本轮只验收功能；不把工具调用或首次开发构建耗时计作性能指标。"
+  ],
+  "notes": [
+    "全应用初次启动时 recordingPreview 预热有一次 ERR_FAILED，后续页面重建成功；本轮没有对原生录制结论作通过声明。",
+    "UIA set_value 未把保存文件名提交给 Windows 对话框，文件实际保存于默认图片目录。核对确切新文件后将其移到证据目录；未覆盖用户文件。",
+    "自动化最初等到 Canvas 存在即输入，早于浮层显示；改为等窗口可见且尺寸稳定后输入。导出、Esc 销毁窗口时，CDP 的后续查询或 keyup 可报 page closed，已用窗口列表和实际产物独立核对结束结果。"
+  ]
+}

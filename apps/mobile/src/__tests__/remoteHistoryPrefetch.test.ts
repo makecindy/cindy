@@ -43,6 +43,30 @@ afterEach(async () => {
 });
 
 describe('history read ahead after a list refresh', () => {
+  it.each([false, true])('fills a gap before replacing the offline reading window (failure=%s)', async (failure) => {
+    setMobileAuthOwner('user-1');
+    const rows: RemoteMessage[] = Array.from({ length: 8 }, (_, index) => ({ ...row(String(index + 1), index + 1), role: 'user' }));
+    const authority = historyDiskAuthority(DEVICE, 's');
+    const previous = snapshotOf(rows.slice(0, 3));
+    await writeHistoryDisk(authority, previous);
+    remoteSessionStore.setDeviceSessions(DEVICE, 'Mac', [session('s', rows[7].createdAt)]);
+    let finish!: () => void;
+    const reader = { readHistoryView: vi.fn(async (_id: string, before?: string) => {
+      if (!before) return { ...page(rows.slice(6)), hasMore: true, nextCursor: '7' };
+      await new Promise<void>(resolve => { finish = resolve; });
+      if (failure) throw new Error('temporary connection failure');
+      return { ...page(rows.slice(2, 6)), hasMore: true, nextCursor: '3' };
+    }) };
+    const pending = prefetchRemoteHistories(DEVICE, reader, () => true);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'), { interval: 1 });
+    expect((await readHistoryDisk(authority))?.items).toEqual(previous.items);
+    finish();
+    await pending;
+    expect(reader.readHistoryView.mock.calls).toEqual([['s'], ['s', '7']]);
+    const cached = await readHistoryDisk(authority);
+    expect(cached?.items).toEqual(failure ? previous.items : page(rows).items);
+    expect(cached?.hasMore).toBe(false);
+  });
   // A bounded reconnect read is not a superset of completion targets. Hold one
   // real read pending, then enqueue both request kinds in either order.
   it.each([false, true])('retains completion targets alongside a queued reconnect (recent first=%s)', async (recentFirst) => {
@@ -96,7 +120,8 @@ describe('history read ahead after a list refresh', () => {
     } finally { off(); }
   });
 
-  it.each(['prefix', 'collapsed', 'latest'] as const)('handles an oversized %s without losing the offline cache', async (kind) => {
+  // A filled gap can exceed the cache even when its original latest page fits.
+  it.each(['prefix', 'collapsed', 'latest', 'gap'] as const)('handles an oversized %s without losing the offline cache', async (kind) => {
     setMobileAuthOwner('user-1');
     const old = row('old', 1, 'x'.repeat(1_250_000));
     const anchor = row('anchor', 2);
@@ -113,9 +138,13 @@ describe('history read ahead after a list refresh', () => {
     const authority = historyDiskAuthority(DEVICE, 's');
     expect(await writeHistoryDisk(authority, previous)).toBe(true);
     const reply = row('new', 9, 'y'.repeat(kind === 'latest' ? 1_500_000 : 200_000));
-    const latest = { ...page([anchor, reply]), hasMore: true, nextCursor: anchor.id };
+    const latest = { ...page(kind === 'gap' ? [reply] : [anchor, reply]), hasMore: true,
+      nextCursor: kind === 'gap' ? reply.id : anchor.id };
     remoteSessionStore.setDeviceSessions(DEVICE, 'Mac', [session('s', reply.createdAt)]);
     const reader = { readHistoryView: vi.fn(async () => latest) };
+    if (kind === 'gap') reader.readHistoryView.mockResolvedValueOnce(latest).mockResolvedValueOnce({
+      ...page([anchor, row('gap', 5, 'z'.repeat(1_500_000))]), hasMore: true, nextCursor: anchor.id,
+    });
     await prefetchRemoteHistories(DEVICE, reader, () => true);
     const cached = await readHistoryDisk(authority);
     expect(cached).not.toBeNull();
@@ -130,9 +159,13 @@ describe('history read ahead after a list refresh', () => {
     } else {
       expect(cached?.items.at(-1)?.key).toBe(reply.id);
       expect(cached?.details.size).toBe(0);
-      expect(cached).toMatchObject(kind === 'prefix'
-        ? { hasMore: true, nextCursor: anchor.id } : { hasMore: false, nextCursor: null });
-      expect(cached?.items[0].key).toBe(kind === 'prefix' ? latest.items[0].key : 'work');
+      expect(cached).toMatchObject(kind === 'prefix' || kind === 'gap'
+        ? { hasMore: true, nextCursor: latest.nextCursor } : { hasMore: false, nextCursor: null });
+      expect(cached?.items[0].key).toBe(kind === 'prefix' || kind === 'gap' ? latest.items[0].key : 'work');
+      if (kind === 'gap') {
+        await prefetchRemoteHistories(DEVICE, reader, () => true);
+        expect(reader.readHistoryView).toHaveBeenCalledTimes(2);
+      }
     }
   });
 

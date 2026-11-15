@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from assets/usage-widgets/text.json (the picker reads these). -->
+<resources>
+  <string name="cindy_widget_quota_label">订阅余量</string>
+  <string name="cindy_widget_quota_description">每个订阅还剩多少、什么时候回满。</string>
+  <string name="cindy_widget_usage_label">每日用量</string>
+  <string name="cindy_widget_usage_description">今天用了多少，和最近每天的走势。</string>
+</resources>

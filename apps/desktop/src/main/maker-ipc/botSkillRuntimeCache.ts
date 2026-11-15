@@ -4,7 +4,7 @@ import path from 'node:path';
 type Projection = {
   pluginRoot: string;
   artifacts?: string[];
-  skills: { name: string; description: string; path: string; filePath: string }[];
+  skills: { name: string; description: string; path: string; filePath: string; updatedAt?: string }[];
 };
 type Entry = {
   revision: number;

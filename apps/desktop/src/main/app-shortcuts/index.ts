@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 
 import { throwIpcError } from '../utils/ipcValidate.js';
-import type { AppShortcutOverrides } from '../../shared/appShortcuts.js';
+import type { AppShortcutId, AppShortcutOverrides } from '../../shared/appShortcuts.js';
 import {
   AppShortcutStore,
   APP_SHORTCUTS_FILE_NAME,
@@ -19,10 +19,26 @@ import {
  * - set-override / clear-override / reset-all (invoke): 写路径, 校验失败
  *   throwIpcError('INVALID_PARAMS')。
  * - changed (main → renderer 广播): overrides 全量快照, renderer 热更新。
+ *
+ * get / changed 同时携带 globalFailures: global scope 条目中当前生效组合
+ * 向系统注册失败 (多为被其它应用占用) 的 id, 设置页据此提示。它是运行态,
+ * 不落盘; 由注册方 (如 region-screenshot) 通过
+ * setGlobalShortcutRegistrationFailures 上报。
  */
 
 let storeSingleton: AppShortcutStore | null = null;
 let ipcRegistered = false;
+let globalFailures: AppShortcutId[] = [];
+
+/** 注册方上报当前注册失败的 global 条目; 变化时连同 overrides 一起广播。 */
+export function setGlobalShortcutRegistrationFailures(ids: readonly AppShortcutId[]): void {
+  const next = [...new Set(ids)].sort();
+  if (next.length === globalFailures.length && next.every((id, i) => id === globalFailures[i])) {
+    return;
+  }
+  globalFailures = next;
+  broadcastAppShortcutsChanged(getAppShortcutStore().getOverrides());
+}
 
 // ── 录制态 gate ──────────────────────────────────────────────────────────
 // 设置页录制快捷键期间, renderer 的 useAppShortcut 靠 body dataset 让路,
@@ -69,6 +85,7 @@ export function registerAppShortcutIpc(): void {
     event.returnValue = {
       overrides: store.getOverrides(),
       platform: process.platform,
+      globalFailures: [...globalFailures],
     };
   });
 
@@ -134,6 +151,8 @@ function rejectionMessage(rejection: AppShortcutOverrideRejection, id: unknown):
       return 'shortcut combo is reserved by the operating system';
     case 'menu-inexpressible':
       return 'shortcut combo cannot be expressed as a menu accelerator on macOS';
+    case 'global-unusable':
+      return 'shortcut combo cannot be used as a system-wide shortcut';
     case 'conflict':
       return 'shortcut combo conflicts with another shortcut in an overlapping scope';
   }
@@ -142,6 +161,9 @@ function rejectionMessage(rejection: AppShortcutOverrideRejection, id: unknown):
 function broadcastAppShortcutsChanged(overrides: AppShortcutOverrides): void {
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;
-    window.webContents.send('app-shortcuts:changed', { overrides });
+    window.webContents.send('app-shortcuts:changed', {
+      overrides,
+      globalFailures: [...globalFailures],
+    });
   });
 }

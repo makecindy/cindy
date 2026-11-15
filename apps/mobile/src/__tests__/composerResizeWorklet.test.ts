@@ -19,7 +19,7 @@ const sourcePath = path.resolve(__dirname, '..', 'session', 'composerResize.ts')
 
 interface WorkletLike {
   (...args: unknown[]): unknown;
-  __closure?: Record<string, unknown>;
+  __closure?: unknown[];
   __workletHash?: number;
 }
 
@@ -58,10 +58,10 @@ describe('composerResize worklets(经 react-native-worklets 插件转译后)', (
     const worklet = exported.applyComposerResizeDrag as WorkletLike;
     expect(typeof worklet).toBe('function');
     expect(typeof worklet.__workletHash).toBe('number');
-    const closure = worklet.__closure ?? {};
+    const closure = worklet.__closure ?? [];
     // 本次回归只关乎两个辅助函数的声明顺序:它们必须以函数身份进入闭包。
-    expect(typeof closure.normalizeBounds, '__closure.normalizeBounds').toBe('function');
-    expect(typeof closure.clamp, '__closure.clamp').toBe('function');
+    expect(typeof closure[0], '__closure[0]').toBe('function');
+    expect(typeof closure[1], '__closure[1]').toBe('function');
     // 更一般的约束是「抓进闭包的标识符不能是尚未赋值的 var」;worklet 合法捕获常量 /
     // 对象在仓库里有先例,所以只拒绝 undefined,不限定类型。
     for (const [name, value] of Object.entries(closure)) {

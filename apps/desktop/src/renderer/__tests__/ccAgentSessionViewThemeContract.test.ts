@@ -4,7 +4,7 @@
  * 源契约守卫（DESIGN.md §10 双模式交付门槛 / design-governance.md §6 Level 1）：
  * CCAgentSessionView 的 handoff pill 与 context 环不再裸写颜色——
  *  1. handoff pill 文字走 text-muted-foreground；
- *  2. context 环阈值走 error-flat / warning-fg 语义 token；
+ *  2. context 环颜色现由 contextWindowBudgetChip.test.tsx 渲染真实组件验证；
  *  3. 消费的 token 槽位同时具备 light / dark 双模式值。
  */
 
@@ -28,14 +28,6 @@ describe('CCAgentSessionView 主题契约（语义 token，双模式）', () => 
   it('handoff pill 不再裸写灰字色，改走 text-muted-foreground', () => {
     expect(viewSource).not.toContain('text-[' + hex('595959') + ']');
     expect(viewSource).toContain('text-muted-foreground');
-  });
-
-  it('context 环阈值色不再裸写红/橙，改走 error-flat / warning-fg', () => {
-    expect(viewSource).not.toContain(hex('EF4444'));
-    expect(viewSource).not.toContain(hex('F59E0B'));
-    expect(viewSource).toMatch(
-      /pct\s*>\s*90\s*\?\s*'var\(--error-flat\)'\s*:\s*pct\s*>\s*70\s*\?\s*'var\(--warning-fg\)'\s*:\s*'var\(--msg-tool-card-chevron\)'/,
-    );
   });
 
   it('消费的 token 槽位同时具备 light / dark 双模式值', () => {

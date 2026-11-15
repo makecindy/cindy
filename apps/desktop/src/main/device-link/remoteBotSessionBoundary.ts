@@ -2,9 +2,9 @@ import { DL_HISTORY_QUERY_CHANNEL } from '@cindy/device-link';
 import { currentDbRpcAdmissionClass, type DbRpcAdmissionClass } from '../localDb/client/rpcAdmission.js';
 
 /**
- * - ordinary / visible:正常可见;hidden:伙伴隐藏,任何远端读写都按不存在处理;
- * - background:插件后台隐藏任务,只从列表类结果(任务列表、运行中列表)中排除,单任务读取
- *   与操作照常,手机插件页可深链打开(未结束提示只回 id,已在源查询排除);missing:不存在。
+ * ordinary / visible: listed tasks; background: owner-readable tasks omitted from
+ * default lists (including hidden companion and plugin tasks). hidden: denied by
+ * the current owner scope; missing: no record. Account/device authorization is upstream.
  */
 export type RemoteBotSessionAccess = 'ordinary' | 'visible' | 'hidden' | 'background' | 'missing';
 
@@ -97,6 +97,22 @@ function sessionIds(value: unknown): string[] {
 
 /** Resolve channel-specific Bot IDs before checking generic Session references. */
 export async function assertRemoteBotInvocationAllowed(args: unknown[], channel = ''): Promise<void> {
+  if (channel === 'local-db:bots:dm-thread:list' || channel === 'local-db:bots:dm-thread:ensure') {
+    const body = record(args[0]);
+    const botId = body?.botId;
+    const rootSessionId = body?.rootSessionId;
+    const rootClientId = body?.rootClientId;
+    if (args.length !== 1 || typeof botId !== 'string' || !/^\S{1,128}$/.test(botId)
+      || typeof rootSessionId !== 'string' || !/^[^:\s]{1,128}$/.test(rootSessionId)
+      || (channel.endsWith(':ensure') && (typeof rootClientId !== 'string' || !/^\S{1,256}$/.test(rootClientId)))) {
+      throw new Error('[INVALID_PARAMS] Invalid private topic root');
+    }
+    if (!lookup) throw new Error('[HOST_NOT_READY] Topic visibility is not ready');
+    if (await lookup(botId, 'bot') !== 'visible' || await lookup(rootSessionId, 'session') === 'hidden') {
+      throw new Error('[NOT_FOUND] Topic does not exist');
+    }
+    return;
+  }
   if (channel === DL_HISTORY_QUERY_CHANNEL) {
     if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
     const ids = record(record(args[0])?.args)?.session_ids;
@@ -182,18 +198,19 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
     const row = record(value);
     if (!row || !Array.isArray(row.results)) return value;
-    // Search pages can wait in the transport cache while a companion is hidden.
-    // Re-check personal ownership before returning snippets or identity metadata.
+    // Recheck exact records at delivery; a companion's sidebar visibility is not
+    // permission to read this owner's task. The device/account boundary is upstream.
     const ids = [...new Set(row.results.flatMap(item => {
-      const id = record(record(record(item)?.session)?.companion)?.id;
+      const id = record(record(item)?.session)?.id;
       return typeof id === 'string' ? [id] : [];
     }))];
     const access = batchLookup
-      ? await batchLookup(ids, 'bot')
-      : new Map(await Promise.all(ids.map(async id => [id, await lookup!(id, 'bot')] as const)));
+      ? await batchLookup(ids, 'session')
+      : new Map(await Promise.all(ids.map(async id => [id, await lookup!(id, 'session')] as const)));
     const results = row.results.filter(item => {
-      const id = record(record(record(item)?.session)?.companion)?.id;
-      return typeof id !== 'string' || access.get(id) === 'visible';
+      const id = record(record(item)?.session)?.id;
+      const status = typeof id === 'string' ? access.get(id) : undefined;
+      return status === 'ordinary' || status === 'visible' || status === 'background';
     });
     return { ...row, results };
   }
@@ -202,6 +219,15 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     // Rechecked on normal, cached and queued delivery by the existing dispatch path.
     const row = record(value);
     if (!row || row.ok !== true) return value;
+    if (Array.isArray(row.teammates)) {
+      await assertHistoryReferences(row.teammates.map(item => record(item)?.id), 'bot');
+      return value;
+    }
+    if (Array.isArray(row.relationships)) {
+      await assertHistoryReferences([row.teammateId], 'bot');
+      await assertHistoryReferences(row.relationships.map(item => record(item)?.sessionId), 'session');
+      return value;
+    }
     const listing = Array.isArray(row.sessions);
     if (!listing && !Array.isArray(row.hits)) throw new Error('[INVALID_PARAMS] Invalid history result');
     const entries = (listing ? row.sessions : row.hits) as unknown[];
@@ -296,6 +322,19 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
   const projected = await project(value);
   if (projected === null && channel.endsWith(':get')) throw new Error('[NOT_FOUND] Resource does not exist');
   return projected;
+}
+
+/** New history shapes keep the existing source-owned access rules on every delivery. */
+async function assertHistoryReferences(ids: unknown[], kind: 'session' | 'bot'): Promise<void> {
+  if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
+  if (ids.length > 1000 || ids.some(id => typeof id !== 'string' || !id || id.length > 512))
+    throw new Error('[INVALID_PARAMS] Invalid history result');
+  const unique = [...new Set(ids as string[])];
+  const access = batchLookup ? await batchLookup(unique, kind)
+    : new Map(await Promise.all(unique.map(async id => [id, await lookup!(id, kind)] as const)));
+  if (unique.some(id => kind === 'bot' ? access.get(id) !== 'visible'
+    : !['ordinary', 'visible', 'background'].includes(access.get(id) ?? 'hidden')))
+    throw new Error('[NOT_FOUND] History page is no longer available');
 }
 
 /**

@@ -323,6 +323,31 @@ struct PrivacyInputGate {
   }
 }
 
+/// Away guard: which physical input at a covered Mac means "someone is here". Only a
+/// deliberate press counts. Releases, pointer drift, Caps Lock and a stray scroll tick
+/// are swallowed without locking: idle mice, wireless receivers and some keypads emit
+/// these on their own (2026-11-06 previews locked within 0.1 s of covering).
+struct AwayInputGate {
+  static let scrollPoints = 30.0
+  private var scrollSum = 0.0
+  private var scrollStart = -Double.infinity
+  mutating func isPresence(_ type: CGEventType, flags: CGEventFlags, scroll: Double, now: Double) -> Bool {
+    switch type {
+    case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown:
+      return true
+    case .flagsChanged:
+      // A modifier going down; releases and Caps Lock carry none of these.
+      return !flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate]).isEmpty
+    case .scrollWheel:
+      if now - scrollStart > 1 { scrollStart = now; scrollSum = 0 }
+      scrollSum += abs(scroll)
+      return scrollSum >= Self.scrollPoints
+    default:
+      return false
+    }
+  }
+}
+
 // MARK: - Input handoff (代输入)
 // One JSON request on stdin, one JSON reply on stdout. Owner values arrive only
 // on stdin and are never printed. Text fields only report whether they contain
@@ -389,8 +414,21 @@ func handoffFingerprint(_ element: AXUIElement) -> String {
 }
 func handoffPrepare(_ app: AXUIElement) {
   AXUIElementSetMessagingTimeout(app, 0.5)
-  // Chromium/Electron only build their web accessibility tree for assistive clients.
+  // Electron only builds its web accessibility tree for assistive clients. Browsers do not know this one: see handoffExposePage.
   AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+}
+/** Asks a browser to build its page for accessibility, or to stop. Costs the browser, so it is not left on: the caller takes it back. */
+func handoffExposePage(_ request: [String: Any]) -> [String: Any] {
+  guard let pid = handoffPid(request), NSRunningApplication(processIdentifier: pid) != nil else { return ["error": "target_gone"] }
+  let app = AXUIElementCreateApplication(pid)
+  AXUIElementSetMessagingTimeout(app, 0.5)
+  let on = request["on"] as? Bool ?? false
+  let attribute = "AXEnhancedUserInterface"
+  // Already as asked (another assistive tool, say): not this request's to change, or to take back later.
+  if (handoffBool(app, attribute) ?? false) == on { return ["changed": false] }
+  AXUIElementSetAttributeValue(app, attribute as CFString, on ? kCFBooleanTrue : kCFBooleanFalse)
+  // Chrome takes the value yet answers with an error code: only reading it back tells.
+  return ["changed": (handoffBool(app, attribute) ?? false) == on]
 }
 func handoffWindows(_ app: AXUIElement) -> [AXUIElement] {
   guard let raw = handoffAttr(app, kAXWindowsAttribute), let windows = raw as? [AXUIElement] else { return [] }
@@ -544,11 +582,18 @@ func handoffSecureTarget(_ request: [String: Any]) -> [String: Any] {
   }
   return ["secure": false]
 }
-func handoffWindowList() -> [String: Any] {
+func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
   var pids = Set<Int32>()
   if let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
     for info in infos where (info[kCGWindowLayer as String] as? Int) == 0 {
       if let pid = info[kCGWindowOwnerPID as String] as? Int32 { pids.insert(pid) }
+    }
+  }
+  // An app with only minimized windows has nothing on screen (macOS may even report it hidden), yet the step may wait in one of them.
+  let onScreen = pids
+  if request["background"] as? Bool == true {
+    for running in NSWorkspace.shared.runningApplications where running.activationPolicy == .regular {
+      pids.insert(running.processIdentifier)
     }
   }
   var apps: [[String: Any]] = []
@@ -562,10 +607,14 @@ func handoffWindowList() -> [String: Any] {
        "frame": handoffFrame(window) ?? [], "focused": focused.map { CFEqual($0, window) } ?? false,
        "minimized": handoffBool(window, kAXMinimizedAttribute) ?? false]
     }
+    // Without `background`, an app is listed only while it has something on screen. With it, every
+    // app is, even with no window at all: that is how a closed last window is told from a hidden one.
+    if request["background"] as? Bool != true && !onScreen.contains(pid) { continue }
     apps.append(["pid": Int(pid), "app": running.localizedName ?? "", "bundleId": running.bundleIdentifier ?? "",
                  "windows": windows])
   }
-  return ["frontmost": Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), "apps": apps]
+  // Read fresh (see handoffFrontPid): NSWorkspace can name another app in this short-lived process.
+  return ["frontmost": Int(handoffFrontPid() ?? NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), "apps": apps]
 }
 let handoffSource = CGEventSource(stateID: .privateState)
 func handoffKey(_ code: CGKeyCode, flags: CGEventFlags = []) {
@@ -628,9 +677,18 @@ func handoffWaitFront(_ pid: Int32, _ seconds: Double) -> Bool {
   }
   return true
 }
+/// A minimized window draws nothing and takes no input: bring it back and let the Dock animation finish.
+func handoffRestore(_ window: AXUIElement) {
+  guard handoffBool(window, kAXMinimizedAttribute) == true else { return }
+  AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+  let deadline = Date().addingTimeInterval(1.0)
+  while handoffBool(window, kAXMinimizedAttribute) == true && Date() < deadline { usleep(40000) }
+  usleep(300000)
+}
 /// Bring the window forward. Reports whether its app now takes keys: typing must never go anywhere else.
 @discardableResult
 func handoffActivate(_ pid: Int32, _ window: AXUIElement) -> Bool {
+  handoffRestore(window)
   let front = handoffFrontPid() == pid
   if !front {
     _ = NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateIgnoringOtherApps])
@@ -737,10 +795,11 @@ func handoffRaise(_ request: [String: Any]) -> [String: Any] {
   let app = AXUIElementCreateApplication(pid)
   handoffPrepare(app)
   guard let window = handoffResolveWindow(app, request)?.0 else { return ["error": "target_gone"] }
-  handoffActivate(pid, window)
+  // Whether the app now takes keys: macOS may refuse a background helper, and the owner must be told.
+  let activated = handoffActivate(pid, window)
   usleep(180000)
   guard let frame = handoffFrame(window), frame[2] > 0, frame[3] > 0 else { return ["error": "target_gone"] }
-  var result: [String: Any] = ["frame": frame]
+  var result: [String: Any] = ["frame": frame, "activated": activated]
   if let id = handoffWindowID(pid, frame) { result["windowId"] = Int(id) }
   return result
 }
@@ -874,8 +933,10 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--handoff-qr"] {
     if count <= 0 { break }
     data.append(chunk, count: count)
   }
-  guard data.count == length, let session = CGSessionCopyCurrentDictionary() as? [String: Any],
-    !(session["CGSSessionScreenIsLocked"] as? Bool ?? false) else { handoffRespond(["error": "unavailable"]) }
+  // Decode only the bytes Main supplied, including screenshots from another
+  // device. This never reads the desktop, so it remains usable while locked.
+  // Caller authentication above and the --handoff window lock gate still apply.
+  guard data.count == length else { handoffRespond(["error": "unavailable"]) }
   handoffRespond(["codes": handoffDetectQr(data)])
 }
 if CommandLine.arguments.contains("--lock-state") {
@@ -887,26 +948,33 @@ if CommandLine.arguments.contains("--request-permission") {
   let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
   print(AXIsProcessTrustedWithOptions(options) ? "ready" : "permission"); exit(0)
 }
-if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-screen" {
-  func ownedSession() -> [String: Any]? {
-    guard let state = CGSessionCopyCurrentDictionary() as? [String: Any],
-      (state[kCGSessionUserIDKey as String] as? NSNumber)?.uint32Value == geteuid(),
-      state[kCGSessionOnConsoleKey as String] as? Bool == true,
-      state[kCGSessionLoginDoneKey as String] as? Bool == true else { return nil }
-    return state
-  }
-  guard let state = ownedSession(), inputCaller.code() != nil else { exit(2) }
-  if state["CGSSessionScreenIsLocked"] as? Bool == true { print("locked"); exit(0) }
-  guard AXIsProcessTrusted(), ownedSession() != nil else { exit(2) }
+func ownedConsoleSession() -> [String: Any]? {
+  guard let state = CGSessionCopyCurrentDictionary() as? [String: Any],
+    (state[kCGSessionUserIDKey as String] as? NSNumber)?.uint32Value == geteuid(),
+    state[kCGSessionOnConsoleKey as String] as? Bool == true,
+    state[kCGSessionLoginDoneKey as String] as? Bool == true else { return nil }
+  return state
+}
+/// Locks this user's own console session and waits until the OS reports it.
+/// `requireCaller` is false only for the away guard's orphan path: once Main is
+/// gone the only remaining action is locking, which never needs Main's authority.
+func lockOwnedSession(requireCaller: Bool) -> Bool {
+  guard let state = ownedConsoleSession(), !requireCaller || inputCaller.code() != nil else { return false }
+  if state["CGSSessionScreenIsLocked"] as? Bool == true { return true }
+  guard AXIsProcessTrusted(), ownedConsoleSession() != nil else { return false }
   // Fixed system lock shortcut. No password, shell command or caller-provided key.
   key(59, true); key(55, true); key(12, true)
   key(12, false); key(55, false); key(59, false)
   let deadline = Date().addingTimeInterval(3)
   while Date() < deadline {
-    guard let current = ownedSession(), inputCaller.code() != nil else { exit(2) }
-    if current["CGSSessionScreenIsLocked"] as? Bool == true { print("locked"); exit(0) }
+    guard let current = ownedConsoleSession(), !requireCaller || inputCaller.code() != nil else { return false }
+    if current["CGSSessionScreenIsLocked"] as? Bool == true { return true }
     usleep(50_000)
   }
+  return false
+}
+if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-screen" {
+  if lockOwnedSession(requireCaller: true) { print("locked"); exit(0) }
   exit(2)
 }
 guard AXIsProcessTrusted() else { print("permission"); fflush(stdout); exit(2) }
@@ -925,7 +993,7 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
   // A locked screen is never read or typed into; the owner unlocks the computer first.
   if session["CGSSessionScreenIsLocked"] as? Bool ?? false { handoffRespond(["error": "locked"]) }
   switch request["op"] as? String {
-  case "windows": handoffRespond(handoffWindowList())
+  case "windows": handoffRespond(handoffWindowList(request))
   case "snapshot": handoffRespond(handoffSnapshot(request))
   case "act": handoffRespond(handoffAct(request))
   case "secure": handoffRespond(handoffSecureTarget(request))
@@ -933,6 +1001,7 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
   case "windowid": handoffRespond(handoffWindowIDFor(request))
   case "focused": handoffRespond(handoffFocusedField(request))
   case "pointer": handoffRespond(handoffPointer(request))
+  case "exposePage": handoffRespond(handoffExposePage(request))
   default: handoffRespond(["error": "invalid"])
   }
 }
@@ -994,6 +1063,104 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--privacy-input"] {
   timer.schedule(deadline: .now() + 1, repeating: 1)
   timer.setEventHandler {
     if Date().timeIntervalSince(heartbeat) > 5 || inputCaller.code() == nil || !AXIsProcessTrusted() { exit(2) }
+  }
+  timer.resume()
+  CFRunLoopRun()
+  exit(0)
+}
+// Away guard (Settings → Keep working while away): Main shows the privacy masks
+// while an Agent works and nobody is at this Mac. Physical input is consumed and
+// becomes the real system lock, so the owner unlocks with Touch ID or password;
+// injected Agent input passes. Losing Main (EOF, missed heartbeat, dead parent)
+// locks as well, so a crashed Cindy never leaves an unlocked desktop behind.
+// All state lives on the main queue; only fixed words cross stdout.
+final class AwayGuard {
+  var tap: CFMachPort?
+  var gate = AwayInputGate()
+  private var ended = false
+  private let lockSession: () -> Bool
+  init(lockSession: @escaping () -> Bool) { self.lockSession = lockSession }
+  /// `reason` is a fixed word for Main's log; it never carries event contents.
+  func finish(lock: Bool, reason: String) {
+    if ended { return }
+    ended = true
+    if lock { print("reason \(reason)"); fflush(stdout) }
+    DispatchQueue.global().async { [self] in
+      if !lock { print("released"); fflush(stdout); exit(0) }
+      guard lockSession() else { print("lock-failed"); fflush(stdout); exit(3) }
+      // The lock screen owns input now; never hold the owner's keys or clicks after unlock.
+      DispatchQueue.main.sync { if let tap = tap { CGEvent.tapEnable(tap: tap, enable: false) } }
+      print("locked"); fflush(stdout); exit(0)
+    }
+  }
+}
+if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
+  // Locking is the only action left once Main is gone; it never needs Main's authority.
+  let away = AwayGuard(lockSession: { lockOwnedSession(requireCaller: false) })
+  // A dead Main closes our stdout; writing the status word must not kill us before
+  // the lock (2026-11-06: a force-quit Cindy left the desktop uncovered and unlocked).
+  signal(SIGPIPE, SIG_IGN)
+  // Being terminated along with Cindy also ends in the lock, never in an open desktop.
+  var terminations: [DispatchSourceSignal] = []
+  for number in [SIGTERM, SIGHUP, SIGINT] {
+    signal(number, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+    source.setEventHandler { away.finish(lock: true, reason: "terminated") }
+    source.resume()
+    terminations.append(source)
+  }
+  var heartbeat = Date()
+  let events: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp,
+    .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .mouseMoved,
+    .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]
+  let mask = events.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+  guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
+    options: .defaultTap, eventsOfInterest: mask, callback: { _, type, event, info in
+      let away = Unmanaged<AwayGuard>.fromOpaque(info!).takeUnretainedValue()
+      if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        away.finish(lock: true, reason: "tap-disabled")
+        return Unmanaged.passUnretained(event)
+      }
+      let physical = event.getIntegerValueField(.eventSourceUnixProcessID) == 0
+        && event.getIntegerValueField(.eventSourceStateID) == Int64(CGEventSourceStateID.hidSystemState.rawValue)
+      if !physical { return Unmanaged.passUnretained(event) }
+      // Physical input never reaches the apps behind the cover; only a deliberate press
+      // turns into the lock (see AwayInputGate).
+      let scroll = Double(abs(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1))
+        + abs(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)))
+      if away.gate.isPresence(type, flags: event.flags, scroll: scroll, now: ProcessInfo.processInfo.systemUptime) {
+        let reason = type == .scrollWheel ? "scroll" : type == .flagsChanged ? "modifier"
+          : type == .keyDown ? "key" : "click"
+        away.finish(lock: true, reason: reason)
+      }
+      return nil
+    }, userInfo: Unmanaged.passUnretained(away).toOpaque()), let runSource = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
+      print("error"); fflush(stdout); exit(2)
+    }
+  away.tap = tap
+  CFRunLoopAddSource(CFRunLoopGetMain(), runSource, .commonModes)
+  CGEvent.tapEnable(tap: tap, enable: true)
+  print("ready"); fflush(stdout)
+  DispatchQueue.global().async {
+    while let command = readLine() {
+      DispatchQueue.main.async {
+        heartbeat = Date()
+        switch command {
+        case "ping": break
+        case "release": away.finish(lock: false, reason: "")
+        case "lock": away.finish(lock: true, reason: "requested")
+        // Anything unexpected ends in the safe state.
+        default: away.finish(lock: true, reason: "command")
+        }
+      }
+    }
+    DispatchQueue.main.async { away.finish(lock: true, reason: "main-closed") }
+  }
+  let timer = DispatchSource.makeTimerSource(queue: .main)
+  timer.schedule(deadline: .now() + 1, repeating: 1)
+  timer.setEventHandler {
+    if Date().timeIntervalSince(heartbeat) > 5 { away.finish(lock: true, reason: "heartbeat") }
+    if inputCaller.code() == nil { away.finish(lock: true, reason: "main-gone") }
   }
   timer.resume()
   CFRunLoopRun()

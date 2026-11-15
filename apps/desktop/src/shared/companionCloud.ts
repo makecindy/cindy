@@ -1,11 +1,18 @@
+import type { BotProfileSourceFailure } from './botProfileSources.js';
+
 /** Cloud companions (docs/product-rules/cloud-companions.md): which computer runs each companion. */
 export interface CompanionCloudHomeDevice {
   deviceId: string;
   /** Device-link name; empty when the device is not in this account's device list. */
   name: string;
   online: boolean;
+  /** The device list says this computer allows remote control; absent when the list had no entry for it. */
+  remoteControlEnabled?: boolean;
   isSelf: boolean;
 }
+
+/** What a move to this computer could not keep of the companion's old setup (cloud-companions.md §2). */
+export type CompanionArrivalNoticeKind = 'permissions' | 'model';
 
 export interface CompanionCloudActor {
   /** Chat Server actor id. */
@@ -18,6 +25,10 @@ export interface CompanionCloudActor {
   homeDeviceId: string | null;
   /** Resolved home computer; only present in the renderer view (state IPC / change push). */
   homeDevice?: CompanionCloudHomeDevice | null;
+  /** Only in the renderer view: shown once after the companion arrived here, then dismissed. */
+  arrivalNotices?: CompanionArrivalNoticeKind[];
+  /** This computer could not restore the source. No user content; absent on older hosts. */
+  profileFailure?: BotProfileSourceFailure;
 }
 
 export interface CompanionCloudSnapshot {
@@ -40,14 +51,31 @@ export const EMPTY_COMPANION_CLOUD_SNAPSHOT: CompanionCloudSnapshot = Object.fre
 
 export type CompanionCloudFailureCode =
   | 'HOME_CONFLICT' | 'OFFLINE' | 'NOT_ENABLED' | 'FAILED' | 'TARGET_UNAVAILABLE' | 'BUSY'
+  /** A different, still effective local Cindy must be merged or moved explicitly. */
+  | 'LOCAL_CINDY_CONFLICT'
   /** The home runs a Cindy that cannot be asked from another computer; change it there. */
   | 'HOME_OUTDATED'
   /** The companion (one of the copies, for a merge) is paused: resume it first. */
-  | 'PAUSED';
+  | 'PAUSED'
+  /** The chosen computer runs a Cindy too old for a V2 teammate (a project): update it first. */
+  | 'TARGET_OUTDATED';
 
 export type CompanionCloudActionResult =
   | { ok: true }
-  | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null };
+  | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null;
+      /** Local identity conflict provenance; older/remote replies may omit it. Never a cleanup authorization. */
+      conflictingBotId?: string; conflictingDeviceId?: string | null;
+      /** Optional detail of FAILED; older clients retain the existing generic failure. */
+      profileFailure?: BotProfileSourceFailure;
+      /** Only on the local recovery editor response; no source text in broadcasts. */
+      profileRepairError?: 'changed' | 'invalid' | 'backup' };
+
+export interface CompanionProfileRepairField extends BotProfileSourceFailure { source: string }
+export interface CompanionProfileRepairDraft { token: string; fields: CompanionProfileRepairField[] }
+export type CompanionProfileRepairRequest = { action: 'read' }
+  | { action: 'save'; token: string; values: Partial<Record<BotProfileSourceFailure['field'], string>> };
+export type CompanionProfileRepairResult = { ok: true; draft?: CompanionProfileRepairDraft }
+  | Extract<CompanionCloudActionResult, { ok: false }>;
 
 /**
  * What a move does while the companion is still working (a turn running or queued in any of
@@ -93,6 +121,8 @@ export interface CompanionTransferTarget {
   online: boolean;
   /** The computer asking (only in `CompanionHomeChoices`). */
   isSelf?: boolean;
+  /** Its Cindy cannot run a V2 teammate yet: shown, not selectable, until it is updated. */
+  outdated?: boolean;
 }
 
 /**
@@ -110,4 +140,6 @@ export interface CompanionHomeChoices {
   reason?: 'HOME_OUTDATED' | 'NOT_ENABLED' | 'NOT_FOUND';
   /** Computers it can move to (never the current home). */
   targets: CompanionTransferTarget[];
+  /** Why this computer is not among the targets of a remote home: it has not allowed same-account control. */
+  thisComputer?: 'REMOTE_CONTROL_OFF';
 }

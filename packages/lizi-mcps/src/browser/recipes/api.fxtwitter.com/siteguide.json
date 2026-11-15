@@ -6,6 +6,12 @@
     "tweetWithUser": "https://api.fxtwitter.com/<screen_name>/status/<id>",
     "userProfile": "https://api.fxtwitter.com/<screen_name>"
   },
-  "recipes": ["x-tweet"],
-  "notes": "读单条 X 公开推文最省最稳的路径,直接 navigate 到 API URL 再解析 body JSON,不碰 x.com 风控。响应 {code,message,tweet:{text,author:{screen_name,name,followers},replies,retweets,likes,quotes,bookmarks,views,created_at,lang,replying_to,media:{photos[],videos[]},quote}};code 404 = 不存在/已删/私密。x-tweet 配方封装 /status/<id> 并展平常用字段。另有免登录用户资料端点 /<screen_name>(响应 {code,message,user:{screen_name,name,followers,following,tweets,likes,description,joined,...}}),无需配方、照同样姿势 navigate + 解析即可,可替代需登录的 x.com twitter-profile 配方。能力边界:只覆盖单条推文与用户资料;时间线/搜索/回复列表这个 API 做不到——需要登录态走 x.com 内部 GraphQL(见 x.com siteguide)。"
+  "recipes": [
+    "x-tweet"
+  ],
+  "notes": "读单条 X 公开推文最省最稳的路径,直接 navigate 到 API URL 再解析 body JSON,不碰 x.com 风控。响应 {code,message,tweet:{text,author:{screen_name,name,followers},replies,retweets,likes,quotes,bookmarks,views,created_at,lang,replying_to,media:{photos[],videos[]},quote}};code 404 = 不存在/已删/私密。x-tweet 配方封装 /status/<id> 并展平常用字段。另有免登录用户资料端点 /<screen_name>(响应 {code,message,user:{screen_name,name,followers,following,tweets,likes,description,joined,...}}),无需配方、照同样姿势 navigate + 解析即可,可替代需登录的 x.com twitter-profile 配方。能力边界:只覆盖单条推文与用户资料;时间线/搜索/回复列表这个 API 做不到——需要登录态走 x.com 内部 GraphQL(见 x.com siteguide)。\n完整目录更新时保留此 Cindy 独立配方：上游没有相同的接口或免登录/参数合同。本站可用能力以 siteguide 当前目录为准。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

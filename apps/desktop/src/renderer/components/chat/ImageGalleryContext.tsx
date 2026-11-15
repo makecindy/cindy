@@ -1,25 +1,11 @@
-/**
- * ImageGalleryContext
- * ---------------------------------------------------------------------------
- * 把"当前会话内全部可翻阅图片的有序列表"下发给 ImageLightbox。
- *
- * 为什么需要它:聊天消息流为了性能只渲染末尾一段(RENDER_WINDOW_INITIAL_ITEMS),
- * 早期消息不在 DOM 里。如果 lightbox 只扫 DOM,计数和翻页就只能覆盖"已加载"的图,
- * 用户得先往上滚动把老图加载出来才会被算进去(codex review P2)。
- *
- * 所以改由 MessageStream 从 **allRenderItems(全量,未窗口裁剪)** 派生完整列表,
- * 经本 context 传给 lightbox —— 计数立刻是整个会话的总数,也能直接翻到最早那张
- * (img 直接按 url 加载,不依赖缩略图是否挂载)。
- *
- * 列表项带标注元数据:持久化的烧录标注图翻页到达时,lightbox 据此打开
- * "原图 + 可编辑笔迹"视图(与直接点击该图的再编辑分支同语义),否则翻页会把
- * 烧录图当普通图降级发送(codex review P2)。
- *
- * 非聊天场景(上传预览条 / 输入框预览 / 文件浏览器)不在 Provider 内,取默认
- * null,ImageLightbox 退回原有的扫 DOM / 单图行为,完全不受影响。
+/** Explicit ordered images supplied by the opening message, draft or file list.
+ * Portals retain this scope; no viewer scans the DOM or a whole session history.
+ * Annotation metadata travels with each image so switching keeps editable strokes.
  */
 import { createContext } from 'react';
 import type { AnnotationStroke } from './lightboxAnnotations';
+import type { AttachmentCollectionItem } from './AttachmentCollectionContext';
+import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 
 /** 会话画廊里的一张图:src 为渲染所用 URL(标注图 = 烧录图)。 */
 export interface GalleryImage {
@@ -36,5 +22,19 @@ export interface GalleryImage {
   annotationStrokes?: readonly AnnotationStroke[];
 }
 
-/** 当前会话全部图片的有序列表(全量)。无 Provider 时为 null。 */
+/** Opening surface collection. Without a provider the viewer shows only its source. */
 export const ImageGalleryContext = createContext<readonly GalleryImage[] | null>(null);
+
+/** Keep the displayed (burned) identity for selection, but edit the original pixels. */
+export function galleryImagePreviewItem(image: GalleryImage, id: string): AttachmentCollectionItem {
+  return {
+    id: image.galleryId ?? id,
+    name: previewSourceName(image.src, 'Image'),
+    source: image.src,
+    kind: 'image',
+    media: true,
+    image: image.annotationSourceUrl
+      ? { src: image.annotationSourceUrl, initialStrokes: image.annotationStrokes, annotationFallbackSrc: image.src }
+      : undefined,
+  };
+}

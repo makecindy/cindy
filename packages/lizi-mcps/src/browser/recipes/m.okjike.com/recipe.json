@@ -1,16 +1,24 @@
 {
   "id": "jike-user-posts",
-  "match": ["m.okjike.com", "okjike.com"],
-  "description": "读取即刻某用户的动态列表(正文/类型/点赞/评论/时间/链接)。即刻移动站(m.okjike.com)是 Next.js SSR,帖子数据内嵌在页面的 <script type=\"application/json\"> 里,navigate 后直接解析该 JSON,无需调接口、公开主页免登录可读。",
-  "inputs": { "username": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://m.okjike.com/users/{{username}}" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "posts",
-      "fn": "async () => { const el = document.getElementById('__NEXT_DATA__') || document.querySelector('script#__NEXT_DATA__[type=\"application/json\"]') || document.querySelector('script[type=\"application/json\"]'); if (!el) throw new Error('未找到即刻 SSR 数据(页面结构变化或该用户不存在/需登录),请确认用户名或在持久浏览器登录后重试'); let data; try { data = JSON.parse(el.textContent); } catch (e) { throw new Error('即刻 SSR JSON 解析失败'); } const posts = (data && data.props && data.props.pageProps && data.props.pageProps.posts) ? data.props.pageProps.posts : []; return posts.map(p => ({ content: (p.content || '').replace(/\\n/g, ' ').slice(0, 200), type: p.type === 'ORIGINAL_POST' ? 'post' : p.type === 'REPOST' ? 'repost' : (p.type || ''), likes: p.likeCount || 0, comments: p.commentCount || 0, time: p.actionTime || p.createdAt || '', url: p.id ? 'https://web.okjike.com/originalPost/' + p.id : '' })); }"
-    }
+  "match": [
+    "m.okjike.com",
+    "okjike.com"
   ],
-  "output": "{{posts}}"
+  "description": "即刻用户动态",
+  "access": "read",
+  "adapter": "jike/user",
+  "inputs": {
+    "username": {
+      "required": true,
+      "type": "string",
+      "description": "Username from profile URL (e.g. wenhao1996)"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of posts"
+    }
+  },
+  "steps": []
 }

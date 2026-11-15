@@ -69,7 +69,7 @@ export function PriceTierMarks({
                 className="relative inline-block text-11 font-semibold leading-none tracking-[0.5px]"
               >
                 <span className="invisible">{marks}</span>
-                <span className="absolute inset-0 text-[var(--text-tertiary)] opacity-55">
+                <span className="absolute inset-0 text-[var(--text-disabled)]">
                   {marks}
                 </span>
                 <span

@@ -2,7 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ account: 1, view: {} as any, create: {} as any, model: {} as any, picker: {} as any, importing: null as any, importMounts: 0, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), close: vi.fn(), closed: vi.fn(), push: vi.fn(), created: vi.fn(), deleted: vi.fn() }));
+const h = vi.hoisted(() => ({ account: 1, view: {} as any, create: {} as any, model: {} as any, primary: {} as any, picker: {} as any, importing: null as any, importMounts: 0, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), close: vi.fn(), closed: vi.fn(), push: vi.fn(), created: vi.fn(), deleted: vi.fn() }));
 vi.mock('react-native', () => ({ Platform: { OS: 'ios' }, StyleSheet: { create: (v: unknown) => v }, View: 'div', Alert: { alert: vi.fn() }, Image: 'img', Pressable: 'button', ScrollView: 'div', Switch: 'input', ActivityIndicator: 'progress' }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-id' }));
@@ -36,13 +36,11 @@ vi.mock('@/session/CompanionImportSheet', async () => {
     return null;
   } };
 });
-vi.mock('@/session/CompanionModelChain', () => ({ readCompanionModelChain: (v: string) => JSON.parse(v || '[]'), CompanionModelChain: (p: any) => { h.model = p; return null; }, CompanionModelPicker: (p: any) => { h.picker = p; return null; } }));
+vi.mock('@/session/CompanionModelChain', () => ({ readCompanionModelChain: (v: string) => JSON.parse(v || '[]'), CompanionModelChain: (p: any) => { h.model = p; if (!p.single) h.primary = p; return null; }, CompanionModelPicker: (p: any) => { h.picker = p; return null; } }));
 import { CompanionProfileSheet, CompanionCreateSheet } from '@/session/CompanionProfileSheet';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const resource = { ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, display: { title: 'Cindy' }, links: [], revision: 'v1' };
 const panel = { id: 'profile', values: { name: 'Cindy' }, action: { id: 'grant', label: 'Save', fields: [{ id: 'name', label: 'Name', kind: 'text' }] } };
-import { CompanionFollowUpInvitation } from '@/session/CompanionFollowUpInvitation';
-import { parseCompanionProfileData } from '@/session/companionProfileData';
 let root: Root | undefined;
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true, onClose: h.close, onClosed: h.closed, onDeleted: h.deleted, onOpenSearch() {} }))); }
 beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.read.mockResolvedValue({ resource, panels: [panel, { ...panel, id: 'models', values: { modelChain: '[]', followsDefault: false }, action: { id: 'model-grant', fields: [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }] } }] }); h.invoke.mockResolvedValue({ effects: [] }); });
@@ -89,24 +87,75 @@ it('waits for native dismissal before presenting the model picker and preserves 
   expect(h.view.visible).toBe(true); expect(h.view.page).toBe('models'); expect(h.view.dirty).toBe(true);
   expect(JSON.parse(h.view.values.modelChain)[0].model).toBe('real-model');
 });
-it('keeps the primary route while choosing a task model with a different harness', async () => {
-  const primary = { harness: 'claude', model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'medium', fastMode: false };
-  const task = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai:account', effort: 'high', fastMode: true };
-  h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models',
-    values: { modelChain: JSON.stringify([primary]), followsDefault: false, taskFollowsPrimary: true, taskModel: JSON.stringify([primary]) },
-    action: { id: 'model-grant', fields: ['modelChain', 'followsDefault', 'taskModel', 'taskFollowsPrimary'].map(id => ({ id, kind: 'text' })) } }] });
+it('keeps a same-model picker selection dirty and submits the primary fields explicitly', async () => {
+  const primary = { harness: 'pi', model: 'saved', providerId: 'provider', effort: '', fastMode: false };
+  const values = { modelChain: JSON.stringify([primary]), followsDefault: false };
+  h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models', acceptsModelSelection: true, values,
+    action: { id: 'model-grant', fields: ['modelChain', 'followsDefault'].map(id => ({ id, kind: 'text' })) } }] });
   await render(); await act(async () => h.view.onOpen('models'));
-  expect(h.model.single).toBe(true); expect(h.model.values.followsDefault).toBe(true);
+  expect(h.view.dirty).toBe(false);
   await act(async () => h.model.onPick(0));
   await act(async () => h.view.onClosed());
-  await act(async () => h.picker.onSelect(task));
+  await act(async () => h.picker.onSelect(primary));
   await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
-  expect(JSON.parse(h.view.values.modelChain)).toEqual([primary]);
-  expect(JSON.parse(h.view.values.taskModel)).toEqual([task]);
-  expect(h.view.values.taskFollowsPrimary).toBe(false);
+  expect(h.view.dirty).toBe(true);
+  h.invoke.mockRejectedValueOnce(new Error('offline'));
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.view.dirty).toBe(true);
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.invoke.mock.calls[1][2]).toMatchObject({ actionId: 'model-grant', input: values });
+  expect(h.view.dirty).toBe(false);
+});
+
+it.each([false, true])('retains an unchanged primary selection on a legacy host (followsDefault=%s)', async followsDefault => {
+  const primary = { harness: 'pi', model: 'saved', providerId: 'provider', effort: '', fastMode: false };
+  const values = { modelChain: JSON.stringify([primary]), followsDefault };
+  h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models', values,
+    action: { id: 'model-grant', fields: ['modelChain', 'followsDefault'].map(id => ({ id, kind: 'text' })) } }] });
+  await render(); await act(async () => h.view.onOpen('models'));
+  await act(async () => h.model.onChange({ ...values }));
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.invoke).not.toHaveBeenCalled(); expect(h.view.dirty).toBe(true);
+  expect(h.view.receipt).toBeNull();
+  await act(async () => h.view.onBack());
+  const { Alert } = await import('react-native');
+  expect(Alert.alert).toHaveBeenCalledOnce();
+  const discard = vi.mocked(Alert.alert).mock.calls[0][2]!.find(button => button.style === 'destructive')!;
+  await act(async () => discard.onPress!());
+  expect(h.view.page).toBe('home');
+});
+
+it('still saves an actual primary change to a legacy host', async () => {
+  const primary = { harness: 'pi', model: 'saved', providerId: 'provider', effort: '', fastMode: false };
+  const values = { modelChain: JSON.stringify([primary]), followsDefault: false };
+  h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models', values,
+    action: { id: 'model-grant', fields: ['modelChain', 'followsDefault'].map(id => ({ id, kind: 'text' })) } }] });
+  await render(); await act(async () => h.view.onOpen('models'));
+  const changed = { ...values, modelChain: JSON.stringify([{ ...primary, model: 'another' }]) };
+  await act(async () => h.model.onChange(changed));
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.invoke.mock.calls[0][2]).toMatchObject({ input: changed });
+  expect(h.view.dirty).toBe(false);
+});
+
+// 2026-11-09: the teammate task model setting is retired. An older host still lists its fields:
+// only the primary chain is shown, and a primary change goes back without them.
+it('hides an older host\'s retired task model and saves only the primary change', async () => {
+  const primary = { harness: 'claude', model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'medium', fastMode: false };
+  const next = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai:account', effort: 'high', fastMode: true };
+  h.model = {}; h.primary = {};
+  h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models',
+    values: { modelChain: JSON.stringify([primary]), followsDefault: false, taskFollowsPrimary: false, taskModel: JSON.stringify([next]) },
+    action: { id: 'model-grant', fields: ['modelChain', 'followsDefault', 'taskModel', 'taskFollowsPrimary'].map(id => ({ id, kind: 'text' })) } }] });
+  await render(); await act(async () => h.view.onOpen('models'));
+  expect(h.model).toBe(h.primary);
+  await act(async () => h.model.onPick(0));
+  await act(async () => h.view.onClosed());
+  await act(async () => h.picker.onSelect(next));
+  await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
   await act(async () => h.view.onSubmit(h.view.panel));
   expect(h.invoke).toHaveBeenCalledWith(expect.anything(), { deviceId: 'host', deviceName: 'Mac' }, expect.objectContaining({
-    actionId: 'model-grant', input: { taskModel: JSON.stringify([task]), taskFollowsPrimary: false },
+    actionId: 'model-grant', input: { modelChain: JSON.stringify([next]), followsDefault: false },
   }), 'en');
 });
 it('ignores a late save response after changing accounts', async () => {
@@ -343,23 +392,13 @@ it.each([undefined, JSON.stringify([{ harness: 'pi', model: 'default', providerI
   },
 );
 
-// Invitation reads do not authorize a model run. Only a button sends the opaque host action.
-it.each([true, false])('mobile follow-up invitation saves the explicit choice, enable=%s', async enable => {
-  const ref = { collectionId: 'teammates', kind: 'bot', id: 'settings:cindy-default/follow-up' };
-  const raw = { ref, revision: '1', display: { title: 'Follow up' }, links: [],
-    blocks: [{ id: 'follow-up', primitive: 'form', fallbackMarkdown: 'Reads summaries on the teammate computer; uses model allowance.',
-      data: { actionId: 'enable-grant', values: { enabled: false }, invitationAvailable: true, operationActions: { dismiss: 'dismiss-grant' } } }],
-    actions: [{ id: 'enable-grant', label: 'Follow up', fields: [{ id: 'enabled', kind: 'toggle', label: 'Enabled' }] }, { id: 'dismiss-grant', label: 'Not now' }],
-  };
-  h.read.mockResolvedValue(parseCompanionProfileData(raw, ref));
-  const container = document.createElement('div'); root = createRoot(container);
-  await act(async () => root!.render(<CompanionFollowUpInvitation deviceId="host" deviceName="Mac" botId="cindy-default" />));
+// Both platform views share dismissal/navigation: no resource binding may follow an IM task.
+it('opens the original IM task on its computer after the settings sheet closes', async () => {
+  await render();
+  await act(async () => h.view.channels.props.onOpenTask('channel-original'));
+  expect(h.close).toHaveBeenCalledOnce();
+  expect(h.push).not.toHaveBeenCalled();
+  await act(async () => h.view.onClosed());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'channel-original', deviceId: 'host' } });
   expect(h.invoke).not.toHaveBeenCalled();
-  expect(container.textContent).toContain(raw.blocks[0].fallbackMarkdown);
-  const buttons = container.querySelectorAll('button'); expect(buttons).toHaveLength(2);
-  await act(async () => buttons[enable ? 1 : 0].click());
-  expect(h.invoke).toHaveBeenCalledWith(expect.any(Function), { deviceId: 'host', deviceName: 'Mac' }, {
-    collectionId: 'teammates', resourceRef: ref, actionId: enable ? 'enable-grant' : 'dismiss-grant', input: enable ? { enabled: true } : {},
-  }, 'en');
-  expect(container.querySelectorAll('button')).toHaveLength(0);
 });

@@ -1,12 +1,17 @@
 {
   "id": "barchart-quote",
-  "match": ["barchart.com"],
-  "description": "查询某只股票在 Barchart 的行情与关键指标(价格、涨跌、当日开高低、前收、成交量、均量、市值、市盈率、每股收益)。Barchart 的行情走站内 proxy 接口,需要页面里的 CSRF token + 登录会话 cookie——所以先 navigate 到该股 overview 页,再在页面内同源 fetch。symbol 用交易代码(如 AAPL)。需要先在持久浏览器登录 barchart.com。",
-  "inputs": { "symbol": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.barchart.com/stocks/quotes/{{symbol}}/overview" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "evaluate", "as": "quote", "fn": "async () => { const csrf = (document.querySelector('meta[name=\"csrf-token\"]') || {}).content || ''; if (!csrf) throw new Error('未取到 Barchart 的 CSRF token,通常是页面没加载完或未登录,请先在持久浏览器登录 barchart.com 后重试'); const fields = ['symbol','symbolName','lastPrice','priceChange','percentChange','openPrice','highPrice','lowPrice','previousPrice','volume','averageVolume','marketCap','peRatio','earningsPerShare','tradeTime'].join(','); const r = await fetch('/proxies/core-api/v1/quotes/get?symbol=' + encodeURIComponent('{{symbol|js}}'.toUpperCase()) + '&fields=' + fields, { credentials: 'include', headers: { 'X-CSRF-TOKEN': csrf } }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch(e) { throw new Error('Barchart 接口返回非 JSON(未登录或被风控),请在持久浏览器登录该站后重试'); } const row = d && d.data && d.data[0]; if (!row) throw new Error('未取到该股行情(代码可能不存在或市场休市)'); const v = row.raw || row; return { symbol: v.symbol, name: v.symbolName, price: v.lastPrice, change: v.priceChange, changePercent: v.percentChange, open: v.openPrice, high: v.highPrice, low: v.lowPrice, previousClose: v.previousPrice, volume: v.volume, avgVolume: v.averageVolume, marketCap: v.marketCap, peRatio: v.peRatio, eps: v.earningsPerShare, tradeTime: v.tradeTime }; }" }
+  "match": [
+    "barchart.com"
   ],
-  "output": "{{quote}}"
+  "description": "Barchart stock quote with price, volume, and key metrics",
+  "access": "read",
+  "adapter": "barchart/quote",
+  "inputs": {
+    "symbol": {
+      "required": true,
+      "type": "str",
+      "description": "Stock ticker (e.g. AAPL, MSFT, TSLA)"
+    }
+  },
+  "steps": []
 }

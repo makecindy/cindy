@@ -19,7 +19,7 @@ export function registerCreateProjectTool(
     name: "create_project",
     category: "control",
     description:
-      "Add an existing local directory to Cindy’s project list and restore it if hidden. Does not create directories, initialize Git, create a task, or start an agent. Create any needed directory with your file tools first. Pass the returned working_dir to send_to_session to start work there. Repeating this call reuses the same project. Runs on the Cindy host; unavailable from SSH tasks.",
+      "Explicitly add an existing local directory to Cindy’s project list, or restore a hidden project. Use list_projects first and reuse an existing project for related work; temporary execution directories and worktrees do not need their own projects. Does not create directories, initialize Git, create a task, or start an agent. Pass the returned project_path to send_to_session to select this project; working_dir there may differ. Repeating this call reuses the same project. Runs on the Cindy host; unavailable from SSH tasks.",
     inputShape: {
       working_dir: z
         .string()
@@ -47,7 +47,7 @@ export function registerCreateProjectTool(
         workingDir: working_dir,
       });
       return result.ok
-        ? okPayload({ working_dir: result.workingDir })
+        ? okPayload({ working_dir: result.workingDir, project_path: result.workingDir })
         : errorPayload(result.errorCode, result.message);
     },
   });

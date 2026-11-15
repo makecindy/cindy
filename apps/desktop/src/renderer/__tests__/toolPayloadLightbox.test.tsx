@@ -106,9 +106,9 @@ describe('ToolPayloadLightbox editable text mode', () => {
         fireEvent.click(closeButtons[closeButtons.length - 1]);
       } else {
         const overlay = document.querySelector('[data-tool-payload-lightbox-overlay]');
-        const backdrop = overlay?.querySelector(':scope > button');
-        expect(backdrop).toBeInstanceOf(HTMLButtonElement);
-        fireEvent.click(backdrop as HTMLButtonElement);
+        const backdrop = overlay?.querySelector(':scope > [data-preview-scrim]');
+        expect(backdrop).toBeInstanceOf(HTMLElement);
+        fireEvent.click(backdrop as HTMLElement);
       }
 
       expect(onSave).not.toHaveBeenCalled();

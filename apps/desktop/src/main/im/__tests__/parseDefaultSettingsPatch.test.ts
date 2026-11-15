@@ -14,6 +14,10 @@ import {
 import { parseImDefaultSettingsPatch } from '../parseDefaultSettingsPatch.js';
 
 describe('parseImDefaultSettingsPatch', () => {
+  it('accepts restoring automatic selection but never an empty remote route', () => {
+    expect(parseImDefaultSettingsPatch({ agents: IM_DEFAULT_SETTINGS.agents }).agents).toEqual(IM_DEFAULT_SETTINGS.agents);
+    expect(() => parseImDefaultSettingsPatch({ agents: { codex: { model: '', agentDeviceId: 'share:alice', providerId: 'openai' } } })).toThrow('remote model required');
+  });
   it('preserves a shared route and clears its location when selecting local', () => {
     const shared = { providerId: 'openai', model: 'gpt-5.5', effort: 'high', agentDeviceId: 'share:alice' };
     expect(parseImDefaultSettingsPatch({ agents: { codex: shared } }).agents?.codex).toEqual(shared);

@@ -292,6 +292,86 @@ const LOCAL_PATCHES = {
   ],
   'extension/src/browser/routes/agent.act.ts': [
     {
+      desc: 'execute fixed structured DOM reads in an isolated world without the interaction grace delay',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";`,
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { readBrowserDom } from "../../../../../shim/browser-dom-read.js";`,
+        ],
+        [
+          `          const profileName = profileCtx.profile.name;
+          if (isExistingSession) {`,
+          `          // Only structured host reads enter this path. Arbitrary fn is
+          // ignored here, never trusted as a promise of read-only behavior.
+          if (action.kind === "evaluate" && body.domRead !== undefined && !isExistingSession) {
+            if (!evaluateEnabled) {
+              return jsonActError(res, 403, ACT_ERROR_CODES.evaluateDisabled,
+                browserEvaluateDisabledMessage("evaluate"));
+            }
+            const observed = await readBrowserDom({
+              cdpUrl, targetId: tab.targetId, spec: body.domRead,
+              timeoutMs: action.timeoutMs, ssrfPolicy,
+              browserProxyMode: navigationPolicy.browserProxyMode, signal: req.signal,
+            });
+            if ("blockedByDialog" in observed) {
+              return res.json({ ok: true, targetId: tab.targetId, ...observed });
+            }
+            return res.json({ ok: true, targetId: tab.targetId, url: observed.url, result: observed.value });
+          }
+          const profileName = profileCtx.profile.name;
+          if (isExistingSession) {`,
+        ],
+      ]),
+    },
+    {
+      desc: 'resolve the selected tab alias before comparing or executing action targets',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";`,
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { resolveActionTargetIds } from "openclaw/plugin-sdk/browser-action-targets";`,
+        ],
+        [
+          `      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
+        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {`,
+          `      const requestedAction = action;
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
+        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+          let resolvedAction: BrowserActRequest;
+          try {
+            resolvedAction = resolveActionTargetIds(requestedAction, targetId, tab.targetId);
+          } catch {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch,
+              "action targetId must match request targetId");
+          }
+          const action = resolvedAction;`,
+        ],
+        [
+          `          if (action.targetId && action.targetId !== tab.targetId) {
+            return jsonActError(
+              res,
+              403,
+              ACT_ERROR_CODES.targetIdMismatch,
+              "action targetId must match request targetId",
+            );
+          }
+`,
+          ``,
+        ],
+      ]),
+    },
+    {
       desc: 'carry the effective browser proxy mode through interaction navigation guards',
       transform: (source) => applyExactReplacements(source, [
         [
@@ -826,7 +906,16 @@ const LOCAL_PATCHES = {
     cleanup();
   }
 }`,
-          `        await waitForStep(page.waitForFunction(fn, { timeout }));
+          `        // Pass a real function so Playwright caches its compilation between
+        // polls (string expressions re-eval and can fail under Trusted Types).
+        // Compile only on the host; execution stays in the page context.
+        const predicate = new Function(
+          "const value = (" + normalizeBrowserEvaluateFunctionSource(fn) + ")(); " +
+            "if (value && typeof value.then === 'function') { " +
+            "Promise.resolve(value).catch(() => {}); throw new Error('wait.fn requires a synchronous predicate'); } " +
+            "return value;",
+        ) as () => unknown;
+        await waitForStep(page.waitForFunction(predicate, undefined, { timeout }));
       }
     }
       },
@@ -1457,6 +1546,30 @@ const UNTORN_DOWN_BROWSER_MESSAGE =
   ],
   'extension/src/browser/pw-session.ts': [
     {
+      desc: 'use Playwright local-path uploads only for a live browser managed by this runtime',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import path from "node:path";`,
+          `import path from "node:path";
+import { getBrowserControlState } from "../browser-control-state.js";
+import { isManagedLocalCdpConnection } from "openclaw/plugin-sdk/cdp-locality";`,
+        ],
+        [
+          `          const headers = getHeadersWithAuth(target);
+          // Bypass proxy for loopback CDP connections (#31219)`,
+          `          const headers = getHeadersWithAuth(target);
+          const isLocal = isManagedLocalCdpConnection(
+            normalized, target, getBrowserControlState()?.profiles.values() ?? [],
+          );
+          // Bypass proxy for loopback CDP connections (#31219)`,
+        ],
+        [
+          `chromium.connectOverCDP(target, { timeout, headers })`,
+          `chromium.connectOverCDP(target, { timeout, headers, isLocal })`,
+        ],
+      ]),
+    },
+    {
       desc: 'export a non-blocking quarantine so the popup-overflow path can mark a target unusable without awaiting close() (a hung page must not keep the interaction pending)',
       find: `// Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.`,
       replace: `/**
@@ -1476,6 +1589,65 @@ export async function quarantineTargetWithoutClosing(opts: {
 }
 
 // Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.`,
+    },
+    {
+      desc: 'bound the per-tab target-id probe: Target.attachToTarget can go unanswered for a tab mid-redirect, and every page lookup probes every tab, so one silent tab stalled read, snapshot and act on all tabs',
+      find: `async function pageTargetId(page: Page): Promise<string | null> {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
+    const targetId = normalizeOptionalString(info?.targetInfo?.targetId) ?? "";
+    return targetId || null;
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}`,
+      replace: `/**
+ * Chrome can leave \`Target.attachToTarget\` unanswered for a tab in the middle of
+ * a redirect (seen: a 308 to the address another open tab already shows), and
+ * Playwright sets no deadline on it. Every page lookup probes every tab, so one
+ * silent tab used to stall read, snapshot and act on all tabs indefinitely.
+ * Every caller already treats a failed probe as "unknown"; a session that
+ * attaches after the deadline is detached instead of leaking.
+ */
+const PAGE_TARGET_ID_TIMEOUT_MS = 3_000;
+
+async function pageTargetId(page: Page): Promise<string | null> {
+  let expired = false;
+  let session: { detach(): Promise<void> } | undefined;
+  const probe = (async () => {
+    const attached = await page.context().newCDPSession(page);
+    if (expired) {
+      await attached.detach().catch(() => {});
+      return null;
+    }
+    session = attached;
+    try {
+      const info = (await attached.send("Target.getTargetInfo")) as TargetInfoResponse;
+      const targetId = normalizeOptionalString(info?.targetInfo?.targetId) ?? "";
+      return targetId || null;
+    } finally {
+      await attached.detach().catch(() => {});
+    }
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("page target lookup timed out")),
+      PAGE_TARGET_ID_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([probe, deadline]);
+  } catch (err) {
+    expired = true;
+    probe.catch(() => {});
+    void session?.detach().catch(() => {});
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}`,
     },
   ],
   'extension/src/browser/ssrf-policy-helpers.ts': [
@@ -1595,6 +1767,11 @@ export async function quarantineTargetWithoutClosing(opts: {
   ],
   'extension/src/browser/chrome.ts': [
     {
+      desc: 'read the selected managed Chrome profile for silent macOS startup',
+      find: `import path from "node:path";`,
+      replace: `import path from "node:path";\nimport { loadJsonFile } from "../../../../shim/json-store.js";`,
+    },
+    {
       desc: 'reuse the bounded CDP command helper for graceful Windows Chrome shutdown',
       find: `  openCdpWebSocket,\n} from "./cdp.helpers.js";`,
       replace: `  openCdpWebSocket,\n  withCdpSocket,\n} from "./cdp.helpers.js";`,
@@ -1661,9 +1838,26 @@ export async function quarantineTargetWithoutClosing(opts: {
       if (remainingMs <= 0) break;`,
     },
     {
-      desc: 'start headed automation Chrome without an empty foreground window',
+      desc: 'start headed automation Chrome without a foreground window while preserving macOS Quit',
       find: `  if (headlessMode.headless) {\n    args.push("--headless=new");\n    args.push("--disable-gpu");\n  }`,
-      replace: `  if (headlessMode.headless) {\n    args.push("--headless=new");\n    args.push("--disable-gpu");\n  } else {\n    args.push("--no-startup-window");\n  }`,
+      replace: `  if (headlessMode.headless) {
+    args.push("--headless=new");
+    args.push("--disable-gpu");
+  } else if ((params.platform ?? process.platform) === "darwin") {
+    // macOS already keeps a windowless app alive. --no-startup-window with CDP
+    // adds a REMOTE_DEBUGGING keep-alive that survives normal application Quit.
+    // Explicitly select the existing profile too: otherwise Chrome defers its
+    // startup profile activation until the first background tab is created.
+    const localState = loadJsonFile<{ profile?: { last_used?: unknown } }>(
+      path.join(userDataDir, "Local State"),
+    );
+    const lastUsed = localState?.profile?.last_used;
+    const profileDirectory =
+      typeof lastUsed === "string" && lastUsed.trim() ? lastUsed.trim() : "Default";
+    args.push("--silent-launch", "--profile-directory=" + profileDirectory);
+  } else {
+    args.push("--no-startup-window");
+  }`,
     },
     {
       desc: 'expose managed-profile PID lookup so the host can confirm process exit from the OS, not from CDP endpoint silence (a stalled Chrome stops answering while still alive)',

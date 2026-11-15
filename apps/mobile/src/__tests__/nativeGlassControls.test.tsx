@@ -9,9 +9,11 @@ import { useNativeGlassButtonStyle } from "../platform/chrome/nativeGlassButtonS
 import { NewTaskSelectionSheet } from "../session/NewTaskSelectionSheet.ios";
 import { ContextSheetFooterButton, ContextSheetRow } from "../session/ContextSheet.ios";
 import { PermissionGuideView } from "../remote-desktop/PermissionGuideView.ios";
+import { HomeDisplayMenu } from "../session/HomeDisplayMenu.ios";
+import { buildHomeDisplayPullDownActions, homeDisplayActionPatch, type HomeDisplayMenuState } from "../session/homeChromeMenus";
 import type { NewTaskSelectionSheetProps } from "../session/NewTaskSelectionSheet";
 
-const state = vi.hoisted(() => ({ glass: true, mode: "light" }));
+const state = vi.hoisted(() => ({ glass: true, mode: "light", toggleRenders: 0 }));
 vi.mock("@/theme", () => ({
   navigationChrome: {
     target: 44,
@@ -40,6 +42,19 @@ vi.mock("@/theme", () => ({
 }));
 vi.mock("@/session/useLiquidGlassAvailable", () => ({
   useLiquidGlassAvailable: () => state.glass,
+}));
+vi.mock("@/platform/chrome/useNativeMenuReminderImage", () => ({
+  useNativeMenuReminderImage: () => '/cache/reminder.png',
+}));
+// Display settings do not use device scope navigation or remote collections.
+vi.mock("@/session/mobileHome", () => ({ canBrowseMobileHomeDevice: () => true }));
+vi.mock("@/device-link/remoteResources", () => ({ serializeRemoteResourceTargets: vi.fn() }));
+// MenuView 2.0 Fabric's SubAction has no subactions: inline sections consume
+// its only child level. Model that native boundary for the pre-fix regression.
+vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
+  NativePullDownMenu: ({ actions, onAction }: any) => actions.flatMap((section: any) =>
+    (section.subactions ?? [section]).map((action: any) =>
+      <button key={action.id} data-testid={`home.displayMenu.${action.id}`} onClick={() => onAction(action.id)}>{action.title}</button>)),
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -86,7 +101,16 @@ vi.mock("@expo/ui/swift-ui", () => {
     RNHostView: Container,
     Text: ({ children, modifiers }: any) => <span data-text-style={JSON.stringify(modifiers)}>{children}</span>,
     Picker: Container,
-    Toggle: () => null,
+    Toggle: ({ children, isOn, onIsOnChange, testID, modifiers = [] }: any) => {
+      state.toggleRenders += 1;
+      return (
+      <button data-testid={testID} aria-checked={isOn} data-button-style={JSON.stringify(modifiers)}
+        disabled={modifiers.some((m: any) => m.name === "disabled" && m.value)}
+        onClick={() => onIsOnChange(!isOn)}>{children}</button>
+      );
+    },
+    Menu: ({ children, label, testID }: any) => <div data-testid={testID}>{label}{children}</div>,
+    Section: Container,
     Divider: () => null,
     LabeledContent: Container,
     Image: () => null,
@@ -130,6 +154,10 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
     "fixedSize",
     "multilineTextAlignment",
     "padding",
+    "menuStyle",
+    "menuIndicator",
+    "menuOrder",
+    "menuActionDismissBehavior",
   ];
   return {
     ...Object.fromEntries(
@@ -144,6 +172,7 @@ afterEach(() => {
   act(() => roots.splice(0).forEach((root) => root.unmount()));
   state.glass = true;
   state.mode = "light";
+  state.toggleRenders = 0;
 });
 function mount(children: ReactNode) {
   const host = document.createElement("div");
@@ -152,6 +181,81 @@ function mount(children: ReactNode) {
   act(() => root.render(children));
   return host;
 }
+
+// Sidebar scrolling and task selection update the trigger without changing its
+// choices. Those updates must not resend every Toggle through the native bridge.
+it("keeps native choices idle on trigger updates and refreshes changed choices and callbacks", () => {
+  const actions = [{ id: "status.active", title: "Active", state: "on" as const }];
+  const onAction = vi.fn();
+  const host = mount(<HomeDisplayMenu actions={actions} onAction={onAction} accessibilityLabel="Display">
+    <span>More</span>
+  </HomeDisplayMenu>);
+  const root = roots.at(-1)!;
+  const initialRenders = state.toggleRenders;
+  act(() => root.render(<HomeDisplayMenu actions={actions} onAction={onAction} accessibilityLabel="Updated display">
+    <span>Updated trigger</span>
+  </HomeDisplayMenu>));
+  expect(host.textContent).toContain("Updated trigger");
+  expect(state.toggleRenders).toBe(initialRenders);
+
+  const latestAction = vi.fn();
+  act(() => root.render(<HomeDisplayMenu actions={actions} onAction={latestAction} accessibilityLabel="Display">
+    <span>More</span>
+  </HomeDisplayMenu>));
+  act(() => (host.querySelector('[data-testid="home.displayMenu.status.active"]') as HTMLButtonElement).click());
+  expect(latestAction).toHaveBeenCalledWith("status.active");
+  expect(onAction).not.toHaveBeenCalled();
+
+  act(() => root.render(<HomeDisplayMenu actions={[{ ...actions[0], state: "off" }]}
+    onAction={latestAction} accessibilityLabel="Display"><span>More</span></HomeDisplayMenu>));
+  const option = host.querySelector('[data-testid="home.displayMenu.status.active"]') as HTMLButtonElement;
+  expect(option.getAttribute("aria-checked")).toBe("false");
+  act(() => option.click());
+  expect(latestAction).toHaveBeenCalledTimes(2);
+  expect(onAction).not.toHaveBeenCalled();
+});
+
+// Unit: Duo's sidebar display settings must deliver deep leaf IDs to the real
+// preference reducer. Existing menu-model tests never cross the native presenter.
+// Minimum failure: inline section → submenu → leaf (MenuView Fabric drops leaf).
+it.each(["light", "dark"])("applies nested sidebar display choices in %s", (mode) => {
+  state.mode = mode;
+  const changed = vi.fn();
+  function DisplayMenu() {
+    const [settings, setSettings] = useState<HomeDisplayMenuState>({
+      groupByProject: true, groupDialogue: false, sortBy: 'priority', projectOrder: 'activity',
+      statusFilter: 'active', projectFilter: 'all', vendorFilter: 'all', lastActivityFilter: 'all',
+      viewMode: 'text', taskInfoFields: [],
+    });
+    const actions = buildHomeDisplayPullDownActions({ state: settings,
+      projects: [{ key: 'project-a', title: 'Project A', count: 1 }], dialogueCount: 0, t: key => key });
+    return <HomeDisplayMenu actions={actions} accessibilityLabel="Display settings" onAction={id => {
+      const patch = homeDisplayActionPatch(id, settings);
+      changed(patch);
+      if (patch) setSettings(current => ({ ...current, ...patch }));
+    }}><span>More</span></HomeDisplayMenu>;
+  }
+  const host = mount(<DisplayMenu />);
+  // Preserve the existing automation identifier across component extraction;
+  // losing it would make the menu trigger undiscoverable by its stable ID.
+  expect(host.querySelector('[data-testid="home.displaySettingsButton"]')).not.toBeNull();
+  const option = (id: string) => host.querySelector(`[data-testid="home.displayMenu.${id}"]`) as HTMLButtonElement;
+  expect(option('status.archived')).not.toBeNull();
+  act(() => option('status.archived').click());
+  expect(changed).toHaveBeenLastCalledWith({ statusFilter: 'archived' });
+  expect(option('status.archived').getAttribute('aria-checked')).toBe('true');
+  expect(option('status.active').getAttribute('aria-checked')).toBe('false');
+  act(() => option('filter.project:project-a').click());
+  expect(changed).toHaveBeenLastCalledWith({ projectFilter: ['project-a'] });
+  expect(option('filter.project:project-a').getAttribute('aria-checked')).toBe('true');
+  expect(JSON.parse(option('filter.project:project-a').getAttribute('data-button-style')!))
+    .toContainEqual({ name: 'menuActionDismissBehavior', value: 'disabled' });
+  act(() => option('filter.reset').click());
+  expect(changed).toHaveBeenLastCalledWith(expect.objectContaining({ projectFilter: 'all' }));
+  expect(option('filter.reset').disabled).toBe(true);
+  act(() => option('filter.reset').click());
+  expect(changed).toHaveBeenCalledTimes(3);
+});
 
 it.each(["light", "dark"])("keeps the context row label and hit area while toggling a sized trailing icon in %s", (mode) => {
   state.mode = mode;
@@ -446,4 +550,37 @@ it.each(["light", "dark"])("pairs permission-guide primary labels without changi
         .toContainEqual({ name: "foregroundStyle", value: primary ? (mode === "dark" ? "black" : "white") : "primary" });
     });
   }
+});
+
+// PR #9826 / unit: iOS must show the failure without disabling an already loaded folder.
+it("allows an explicit folder retry while displaying a move error", () => {
+  const props = directoryProps({ actionError: "Move failed" });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  expect(host.textContent).toContain("Move failed");
+  act(() => (host.querySelector('[data-testid="newSession.remoteBrowseSelectCurrent"]') as HTMLButtonElement).click());
+  expect(props.onChoose).toHaveBeenCalledExactlyOnceWith("/project");
+});
+
+// PR #9826 / unit: keep current project membership selected and disabled in move mode.
+it("does not dispatch the disabled current project membership", () => {
+  const props = directoryProps({ page: "workspace", workspaces: [{ title: "Project", workingDir: "/project", disabled: true }] });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  const row = host.querySelector('[data-testid="newSession.workspaceProjectOption"]') as HTMLButtonElement;
+  expect(row.getAttribute("aria-pressed")).toBe("true");
+  expect(row.disabled).toBe(true);
+  act(() => row.click());
+  expect(props.onProject).not.toHaveBeenCalled();
+});
+
+// PR #9826: browseLoading may stay true after returning to workspace on the new-task page.
+it.each([false, true])("gates workspace selection only for its own loading (%s)", workspaceLoading => {
+  const props = directoryProps({ page: "workspace", loading: true, workspaceLoading,
+    workspaces: [{ title: "Project", workingDir: "/project" }] });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  for (const name of ["Dialogue", "Project", "Browse"]) {
+    act(() => (host.querySelector(`[data-testid="newSession.workspace${name}Option"]`) as HTMLButtonElement).click());
+  }
+  expect(props.onDialogue).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+  expect(props.onProject).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+  expect(props.onBrowse).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
 });

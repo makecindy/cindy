@@ -110,11 +110,11 @@ const REQUEST = {
 };
 
 describe('权限档钳制', () => {
-  it('普通任务使用 ask；旧适配器可保留 plan；完全访问不能进入配置', () => {
+  it('普通任务使用 ask；保留旧 plan 和用户显式选择的完全访问', () => {
     expect(clampPluginTaskPermissionMode(undefined)).toBe('ask');
     expect(clampPluginTaskPermissionMode(undefined, 'plan')).toBe('plan');
-    expect(clampPluginTaskPermissionMode('bypassPermissions')).toBe('ask');
-    expect(clampPluginTaskPermissionMode('bypassPermissions', 'plan')).toBe('plan');
+    expect(clampPluginTaskPermissionMode('bypassPermissions')).toBe('bypassPermissions');
+    expect(clampPluginTaskPermissionMode('unknown', 'plan')).toBe('plan');
     expect(clampPluginTaskPermissionMode('ask')).toBe('ask');
     expect(clampPluginTaskPermissionMode('acceptEdits')).toBe('acceptEdits');
     expect(clampPluginTaskPermissionMode('auto')).toBe('auto');

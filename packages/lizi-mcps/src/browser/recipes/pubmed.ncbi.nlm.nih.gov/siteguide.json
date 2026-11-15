@@ -1,7 +1,15 @@
 {
   "site": "pubmed.ncbi.nlm.nih.gov",
-  "auth": "只读无需登录",
-  "entry": { "api": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&term={query}" },
-  "recipes": ["pubmed-search"],
-  "notes": "NCBI E-utilities esearch 公开接口（PubMed 检索走 eutils 域名）。返回 JSON {esearchresult:{count,idlist:[PMID,...],querytranslation,...}}。拿到 idlist 后可再用 esummary/efetch 取详情。无 key 时有速率限制。"
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
+  "entry": {
+    "home": "https://pubmed.ncbi.nlm.nih.gov"
+  },
+  "recipes": [
+    "pubmed-search"
+  ],
+  "notes": "兼容入口 pubmed-search 现执行内置 pubmed/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

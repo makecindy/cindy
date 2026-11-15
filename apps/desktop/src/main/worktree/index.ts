@@ -7,6 +7,11 @@
  */
 
 import path from 'node:path';
+import { readOriginDefaultBranch } from './branchSync';
+import { createBranchSyncHandlers } from './branchSyncHandlers';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../device-link/invoke-context';
+import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 
 import { ipcMain as ipcMainType, type IpcMain, shell } from 'electron';
 import * as WorktreeManager from './WorktreeManager';
@@ -49,6 +54,23 @@ export * from './types';
  * 调用方保证只调一次。
  */
 export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
+  const branchSync = createBranchSyncHandlers({
+    assertTrustedAppRendererEvent,
+    isDeviceLinkInvoke,
+    getCallerScope: () => {
+      const owner = getCurrentDbClientSnapshot();
+      return owner
+        ? JSON.stringify([
+            owner.userId,
+            owner.clientEpoch,
+            getDeviceLinkInvokeContext()?.controllerDeviceId ?? 'local',
+          ])
+        : null;
+    },
+  });
+  ipcMain.handle('worktree:branch-sync-status', branchSync.status);
+  ipcMain.handle('worktree:sync-branch', branchSync.sync);
+
   ipcMain.handle('worktree:create', (_e, req: CreateWorktreeReq) =>
     WorktreeManager.createWorktree(req),
   );
@@ -110,9 +132,12 @@ export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
     name: await WorktreeManager.suggestName(req.baseRepo),
   }));
 
-  ipcMain.handle('worktree:list-branches', (_e, req: ListBranchesReq) =>
-    WorktreeManager.listBranches(req.baseRepo),
-  );
+  ipcMain.handle('worktree:list-branches', async (_e, req: ListBranchesReq) => {
+    const branches = await WorktreeManager.listBranches(req.baseRepo);
+    // Optional UI enrichment must never affect creation or the local branch list.
+    const remoteDefaultBranch = await readOriginDefaultBranch(req.baseRepo).catch(() => undefined);
+    return { ...branches, remoteDefaultBranch };
+  });
 
   // ── P1: 删除确认预检 + 回收后恢复 ──────────────────────────────────────────
   // removal-preview 是只读查询，允许 device-link 控制端在被控端执行；restore 仍是

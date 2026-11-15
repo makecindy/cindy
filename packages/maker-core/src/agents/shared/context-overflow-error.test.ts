@@ -2,11 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { isContextOverflowErrorMessage } from './context-overflow-error.js';
 
-/**
- * Pattern 与 desktop providerErrors.ts 的 CONTEXT_TOO_LONG_RE、renderer 镜像判定
- * 同语义(三处同步, 见模块注释)。正例覆盖四类真实供应商措辞, 反例守住与
- * overload / network 判定的互斥边界。
- */
+/** Shared matcher through the Agent entry point: preserve recognized errors and false positives. */
 describe('isContextOverflowErrorMessage', () => {
   it('matches the litellm/Azure phrasing from #1429 (with and without the error code)', () => {
     // 实踩原文: 结构化 code 字段随 JSON 一起出现
@@ -67,5 +63,6 @@ describe('isContextOverflowErrorMessage', () => {
     expect(isContextOverflowErrorMessage('reading the context window documentation')).toBe(false);
     expect(isContextOverflowErrorMessage('token usage: 1200 input, 300 output')).toBe(false);
     expect(isContextOverflowErrorMessage('')).toBe(false);
+    expect(isContextOverflowErrorMessage('Invalid Responses API request: input - Invalid input')).toBe(false);
   });
 });

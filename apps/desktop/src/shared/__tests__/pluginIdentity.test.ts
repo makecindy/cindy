@@ -7,6 +7,7 @@ import {
   findInstalledGhostByIdentity,
   findInstalledGhostByInstanceId,
   findInstalledRootGhostForFileImport,
+  findInstalledLocalGhostForFileImport,
   findInstalledGhostForLocalUpdate,
   findInstalledGhostForDeliveryTarget,
   isGhostInstanceId,
@@ -454,5 +455,18 @@ describe('findInstalledRootGhostForFileImport', () => {
     const fresh = ghost({ namespace: null, namespaceState: 'confirmed', instanceKey: '_root__helper' });
     const legacy = ghost({ namespaceState: 'pending', instanceKey: 'helper' });
     expect(findInstalledRootGhostForFileImport([fresh, legacy], 'helper')).toBeNull();
+  });
+});
+
+
+describe('local file import identity', () => {
+  it('updates only the confirmed local instance alongside root and enterprise installs', () => {
+    const root = { manifest: { id: 'helper' }, namespace: null, namespaceState: 'confirmed' as const };
+    const org = { ...root, namespace: 'xd' };
+    const local = { ...root, namespace: 'local' };
+    expect(findInstalledLocalGhostForFileImport([root, org], 'helper')).toBeNull();
+    expect(findInstalledLocalGhostForFileImport([root, org, local], 'helper')).toBe(local);
+    expect(findInstalledLocalGhostForFileImport([{ ...local, namespaceState: 'pending' }], 'helper')).toBeNull();
+    expect(findInstalledLocalGhostForFileImport([local, { ...local }], 'helper')).toBeNull();
   });
 });

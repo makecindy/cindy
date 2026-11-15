@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ windows: [] as any[], displays: [] as any[], confirm: vi.fn() }));
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }) }));
 vi.mock('electron', () => ({
   app: { focus: vi.fn() },

@@ -2,8 +2,8 @@
  * loginDesignTokens.ts — 登录皮肤布局常量 + 颜色消费单点。
  *
  * 尺寸常量:token-decision-table.md §4 指定落点(desktop renderer 本文件);
- * 数值权威 = figma-component-spec.md §4/§5.1(带 nodeId)+ demo 呈现仲裁
- * (id-tabs 几何、Slogan 位移等设计稿未单列项)。
+ * 数值权威 = 本文件常量(注释保留 Figma nodeId 溯源)+ DESIGN.md §16 几何表;
+ * 设计稿未单列项(id-tabs 几何、Slogan 位移等)按 demo 呈现仲裁。
  *
  * 颜色:全部经 CSS var 消费(规则 16,组件内禁 raw hex)。本对象是登录组件
  * 取色的唯一入口——token 注册在 themes/colors.ts(wave4 组 PR0a;组件色组
@@ -163,7 +163,7 @@ export const TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, fontSize: 20 }
  *
  * 槽位 430..490,面板底余 10(= 500 - 490,新稿下内边距);上接 ERROR_TEXT(380..430),
  * 两者同时可见时首尾相接不重叠。字号取稿值 24(≠ TEXT_LINK 的 20,故单列常量);
- * 颜色走 --login-secondary-text(#6F6F6F 双模同值,与稿一致)。
+ * 颜色走 --login-secondary-text(墨水次要档 黑 56% / 白 55%,2026-10-23 并入墨水阶梯)。
  *
  * width 680 / height 60 是**布局容器**,容器自身不可点;hitPaddingX = 可点区在实际
  * 文字渲染宽度基础上左右各扩的设计px(热区随语言自适应,zh 4 字与 en「Skip Sign-In」
@@ -256,7 +256,7 @@ export const SPLASH_PANEL = {
    * (desktopScale vs PANEL_FIXED_SCALE),尺寸本就不重合,拆开不破坏 handoff 连续性。
    */
   height: 440,
-  /** spinner 64×64 @面板内(308,188),内弧 #6F6F6F(login-secondary-text) */
+  /** spinner 64×64 @面板内(308,188),内弧 login-secondary-text(墨水次要档) */
   spinner: { x: 308, y: 188, size: 64 },
   /** 更新/下载进度条 轨 501×16 r12 @(90,346)(379:580) */
   progress: { x: 90, y: 346, width: 501, height: 16, radius: 12 },
@@ -298,7 +298,6 @@ export const LOGIN_COLORS = {
   primaryButtonBg: 'var(--login-primary-button-bg)',
   primaryButtonBorder: 'var(--login-primary-button-border)',
   primaryButtonText: 'var(--login-primary-button-text)',
-  disabledOverlay: 'var(--login-disabled-button-overlay)',
   /** disabled 主按钮底/字(两模式同构深底浅字,暗色不反相;figma Disable 态) */
   disabledButtonBg: 'var(--login-disabled-button-bg)',
   disabledButtonText: 'var(--login-disabled-button-text)',
@@ -307,8 +306,7 @@ export const LOGIN_COLORS = {
   brandAccent: 'var(--login-brand-accent)',
   linkText: 'var(--login-link-text)',
   /**
-   * Text_link pressed/hover(figma §4.7:pressed U-9 裁决 #1A1818;hover wave3
-   * 实测 358:792,lead 裁决 2026-07-20 决策表滞后修订追加)。伪类态无法走 inline
+   * Text_link pressed/hover(2026-10-27 墨水口径:pressed 强调档 / hover 说明档)。伪类态无法走 inline
    * style,实际消费在 LoginControls LoginTextLink 的 hover:/active: 类字面量
    * (引用同名 CSS var);此两键保留作 token 登记锚与非伪类场景入口。
    */

@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { agentNetMediaDestination } from '../../device-link/agentNetMediaRouting';
 import {
   parseAttachmentOssRef,
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
@@ -20,6 +21,7 @@ const state = vi.hoisted(() => ({
   dbs: new Map<string, { query: ReturnType<typeof vi.fn>; queryOne: ReturnType<typeof vi.fn> }>(),
   rows: new Map<string, Map<string, Record<string, unknown>>>(),
   files: new Map<string, string>(),
+  uploadDestinations: [] as Array<string | undefined>,
   imports: vi.fn(),
   created: vi.fn(),
   snapshot: vi.fn(),
@@ -46,6 +48,7 @@ const state = vi.hoisted(() => ({
   workers: [] as string[],
   estimateLimits: [] as number[],
   timeoutAction: '' as string,
+  offlineError: null as Error | null,
   exclusions: [] as string[],
   /** Entries each snapshot reports it left behind. */
   skipped: [] as Array<{ path: string; code: string }>,
@@ -123,7 +126,7 @@ vi.mock('../../device-link/invoke-context', () => ({
     return peer ? { controllerDeviceId: peer } : null;
   },
 }));
-vi.mock('../../device-link/settings-store', () => ({
+vi.mock('../../device-link/settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
 }));
 vi.mock('../../device-link', () => ({
@@ -135,6 +138,7 @@ vi.mock('../../device-link', () => ({
     opts?: { preSend(): void },
   ) => {
     opts?.preSend();
+    if (state.offlineError) throw state.offlineError;
     if (state.timeoutAction === args[0].action) {
       const { DeviceLinkError } = await import('@cindy/device-link');
       throw new DeviceLinkError('INVOKE_TIMEOUT', 'no invoke-result within 180000ms');
@@ -152,13 +156,14 @@ vi.mock('../../device-link', () => ({
   },
 }));
 vi.mock('../../device-link/filePeer', () => ({ tryUploadPeerAttachment: async () => null }));
-vi.mock('../../device-link/mediaTransfer', () => ({
+vi.mock('../../device-link/mediaTransfer.desktop', () => ({
   MAX_MEDIA_BYTES: 2 * 1024 ** 3,
   removeRemote: (key: string) => state.remove(key),
   uploadLocalFile: async (
     file: string,
     opts: { onProgress?: (bytes: number) => void; signal?: AbortSignal },
   ) => {
+    state.uploadDestinations.push(agentNetMediaDestination());
     if (state.stallUpload) {
       state.stallUpload();
       await new Promise((_, reject) =>
@@ -184,7 +189,7 @@ vi.mock('../../device-link/remoteAttachment', () => ({
   },
 }));
 vi.mock('../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent() {} }));
-vi.mock('../../cindy-media/refCompensationJournal', () => ({
+vi.mock('../../cindy-media/refCompensationJournal.desktop', () => ({
   captureMediaRefCompensationScope: () => ({}),
 }));
 vi.mock('../../im/binding', () => ({ bindingStore: { findByTarget: () => null } }));
@@ -348,6 +353,7 @@ describe('resumable cross-computer copy', () => {
     state.rows.clear();
     state.dbs.clear();
     state.files.clear();
+    state.uploadDestinations = [];
     state.imports.mockClear();
     state.created.mockReset();
     state.snapshot.mockClear();
@@ -364,6 +370,7 @@ describe('resumable cross-computer copy', () => {
     state.workers = [];
     state.estimateLimits = [];
     state.timeoutAction = '';
+    state.offlineError = null;
     state.exclusions = [];
     state.transcript = '';
     state.transcriptCount = 1;
@@ -431,6 +438,19 @@ describe('resumable cross-computer copy', () => {
       });
     return separate;
   }
+
+  // V2 encryption rule: a locally started migration has no inbound invoke
+  // context. Peer-file refusal must still pass the known destination into the
+  // real media routing context, rather than upload plaintext or fail strict mode.
+  // Existing tests stubbed uploadLocalFile without observing its destination.
+  // Unit tier: real service/AsyncLocalStorage, memory transfer and temporary files.
+  it('binds every outbound fallback upload to the migration destination', async () => {
+    await start();
+    expect((await settled()).stage).toBe('complete');
+    expect(state.uploadDestinations.length).toBeGreaterThan(0);
+    expect(new Set(state.uploadDestinations)).toEqual(new Set(['B']));
+    expect(agentNetMediaDestination()).toBeUndefined();
+  });
 
   it('flushes journal files using writable handles without truncation', async () => {
     const open = vi.spyOn(syncFs, 'openSync');
@@ -638,6 +658,25 @@ describe('resumable cross-computer copy', () => {
       handler({} as never, 'B', { action: 'estimate', sessionId: 'fork' }),
     ).rejects.toThrow('MIGRATION_TIMEOUT');
   });
+  // Unit regression #10537: UI mocks bypassed the real migration IPC catch.
+  // Minimal input: a status read rejected by the SDK gate or desktop transport.
+  it.each(['sdk', 'desktop'])(
+    'preserves the offline reason across migration IPC (%s)',
+    async (kind) => {
+      const { ipcMain } = await import('electron');
+      const { DeviceLinkError } = await import('@cindy/device-link');
+      const handler = vi
+        .mocked(ipcMain.handle)
+        .mock.calls.findLast(([channel]) => channel === TASK_MIGRATION_LOCAL_CHANNEL)![1];
+      state.offlineError =
+        kind === 'sdk'
+          ? new DeviceLinkError('DEVICE_OFFLINE', 'route unavailable')
+          : new Error('[DEVICE_LINK_DEVICE_OFFLINE] route unavailable');
+      await expect(
+        handler({} as never, 'B', { action: 'status', sessionId: 'fork' }),
+      ).rejects.toThrow(kind === 'sdk' ? 'DEVICE_OFFLINE' : 'DEVICE_LINK_DEVICE_OFFLINE');
+    },
+  );
   it('ignores tasks running in other registered worktrees under the copied root', async () => {
     const rows = state.rows.get('A')!;
     const cwd = rows.get('fork')!.workingDir as string;
@@ -937,6 +976,23 @@ describe('resumable cross-computer copy', () => {
     await start();
     expect(await copiedDir()).toBe(path.join(state.root, 'app 2'));
   });
+  // #7972: real copy entry must name its destination after membership, but copy cwd files.
+  // Existing coverage only exercised legacy worktree inference; unit, isolated host paths.
+  it.each([['products', 'Chosen'], ['app', '.worktrees', 'feature']])(
+    'copies explicit project identity independently of the checkout: %j',
+    async (...segments) => {
+      await moveSource('tmp', 'checkout');
+      const projectDir = path.join(state.root, ...segments);
+      await fs.mkdir(projectDir, { recursive: true });
+      await fs.writeFile(path.join(projectDir, 'draft'), 'project files');
+      state.rows.get('A')!.get('fork')!.projectDir = projectDir;
+      await start();
+      const copied = await copiedDir();
+      expect(copied).toBe(path.join(path.dirname(projectDir), `${path.basename(projectDir)} 2`));
+      expect(state.recentProjects).toEqual([copied]);
+      expect(await fs.readFile(path.join(copied, 'draft'), 'utf8')).toBe('original');
+    },
+  );
   it.each([
     ['parent', ['Code']],
     // E.g. a Windows reserved name such as CON: the parent exists, the folder itself is refused.

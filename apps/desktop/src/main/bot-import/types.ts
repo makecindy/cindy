@@ -23,6 +23,9 @@ export interface ImportFile {
   interpreterLink?: string;
 }
 
+/** Main-only vault identity, never an arbitrary filesystem path. */
+export interface ImportResourceRef { key: string; id: string; digest: string }
+
 export interface ImportedMcpServer {
   name: string;
   enabled?: boolean;
@@ -44,6 +47,11 @@ export interface ImportItem {
   /** Stable index in the originating preview, retained in selected-only checkpoints. */
   sourceIndex?: number;
   files?: ImportFile[];
+  skillArchive?: ImportResourceRef;
+  /** Only known credentials actually found in archived selected content. */
+  archiveRedactions?: Record<string, string>;
+  /** Compact references found by streaming resources used by automations. */
+  resourceReferences?: string;
   sourceDirectory?: string;
   sourceAlias?: string;
   /** Failed document or subtree read; retained for an explicit retry. */

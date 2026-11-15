@@ -1,10 +1,10 @@
 /**
- * storageOpReplay —— `modelFavorites` 与 `modelEnginePrefs` 两个 localStorage store 的
- * **跨 renderer 并发一致性**小工具。刻意只服务这两个文件,不做成通用存储框架:它依赖
- * 「写操作能表达成可重放且幂等的 op」这一前提,而那是那两个 store 自己的设计约束。
+ * storageOpReplay —— `modelFavorites` / `modelEnginePrefs` / `recentModels` 三个 localStorage
+ * store 的**跨 renderer 并发一致性**小工具。刻意只服务这三个文件,不做成通用存储框架:它依赖
+ * 「写操作能表达成可重放且幂等的 op」这一前提,而那是那三个 store 自己的设计约束。
  *
  * 要解决的问题(2026-08-17 review H1 / K1 / K2):
- *   两个 store 都是**整表写回**。「写前重读 localStorage」只能修「另一窗口先写完、事件还没
+ *   三个 store 都是**整表写回**。「写前重读 localStorage」只能修「另一窗口先写完、事件还没
  *   到」那一路;两个 renderer 若**都在对方写回之前**读了同一份旧快照,后写者仍然整表覆盖
  *   先写者 —— 新增丢失、编辑丢失,删除与编辑交错时已删的条目还会复活。localStorage 没有
  *   CAS,同进程 JS 单线程,但**跨 renderer 进程**的 getItem / setItem 可以任意交错,所以
@@ -27,7 +27,7 @@
  *      owner 是谁**(K1 修复点):调和按捕获的 key 自洽运行,登出 / 切号后旧分区的 log 继续有效;
  *      仅当 key 恰好是当前 active 分区时才顺带刷新缓存 / 通知(config.persist / config.adopt
  *      由 store 侧按 key 自行判断);
- *   4. 触发时机两处:a) 每次 commit 后;b) **storage 事件** —— 两个 store 的监听器都从「只认
+ *   4. 触发时机两处:a) 每次 commit 后;b) **storage 事件** —— 三个 store 的监听器都从「只认
  *      当前 active key」放宽为「凡是 op-log 里有记录的 key 都认」。这是 K2 的收敛闭环:任何
  *      迟到脏写抹掉本窗的 op,都会以 storage 事件的形式到达本窗,本窗随即在锁内把自己的
  *      op-log 重新施加到最新状态上 —— 被抹的 op 被重新断言,删除也是 op、同样重新断言;

@@ -29,6 +29,11 @@ import { useSyncExternalStore } from 'react';
 export type UpdateBannerDismissReason = 'user' | 'busy';
 
 interface DismissState {
+  revealRequested: boolean;
+  /** 每次手动检查递增；让同一请求只绑定一次，用户随后关闭不会被重新弹出。 */
+  revealSeq: number;
+  /** 已绑定过的请求（seq+状态+版本）；放在 store 里，切页面重挂载组件也不会重复展开。 */
+  revealBoundKey: string | null;
   dismissed: boolean;
   reason: UpdateBannerDismissReason | null;
   dismissedStatus: string | null;
@@ -44,6 +49,9 @@ export function updateBannerDecisionVersion(version: string | null): string {
 }
 
 const INITIAL_STATE: DismissState = {
+  revealRequested: false,
+  revealSeq: 0,
+  revealBoundKey: null,
   dismissed: false,
   reason: null,
   dismissedStatus: null,
@@ -89,6 +97,7 @@ function sameBusyDefer(status: string, version: string | null): boolean {
 export function dismissUpdateBanner(currentStatus: string, currentVersion: string | null) {
   if (state.dismissed && state.reason === 'user') return;
   state = {
+    ...state,
     dismissed: true,
     reason: 'user',
     dismissedStatus: currentStatus,
@@ -108,6 +117,7 @@ export function deferUpdateBannerBecauseBusy(currentStatus: string, currentVersi
   if (isUpdateBannerPinnedFor(currentVersion)) return;
   if (sameBusyDefer(currentStatus, currentVersion)) return;
   state = {
+    ...state,
     dismissed: true,
     reason: 'busy',
     dismissedStatus: currentStatus,
@@ -129,6 +139,7 @@ export function markUpdateBannerAutoShown(currentVersion: string | null) {
     && !state.pinnedByUser
   ) return;
   state = {
+    ...state,
     dismissed: false,
     reason: null,
     dismissedStatus: null,
@@ -142,12 +153,43 @@ export function markUpdateBannerAutoShown(currentVersion: string | null) {
 export function restoreUpdateBanner(opts?: { pin?: boolean }) {
   if (!state.dismissed) return;
   state = {
+    ...state,
     dismissed: false,
     reason: null,
     dismissedStatus: null,
     dismissedVersion: null,
     decidedVersion: state.decidedVersion,
     pinnedByUser: opts?.pin !== false,
+  };
+  emit();
+}
+
+/** 手动检查发现更新：即使下载未完成或横幅尚未挂载，也记住这次展示意图。 */
+export function requestUpdateBannerReveal() {
+  state = { ...state, revealRequested: true, revealSeq: state.revealSeq + 1 };
+  emit();
+}
+
+/**
+ * 绑定展示请求到实际版本，避免沿用上次关闭的版本或被忙碌探针再次隐藏。
+ * superseding 携带的还是旧补丁版本，新版尚未就绪：先钉住让提醒可见，但保留请求，
+ * 等新版 ready 时再绑定新版本；只有 ready 才消费请求。
+ */
+export function revealRequestedUpdateBanner(
+  status: string,
+  version: string | null,
+  consume: boolean,
+) {
+  if (!state.revealRequested) return;
+  const key = `${state.revealSeq}:${status}:${updateBannerDecisionVersion(version)}`;
+  if (state.revealBoundKey === key) return;
+  state = {
+    ...INITIAL_STATE,
+    revealSeq: state.revealSeq,
+    revealRequested: !consume,
+    revealBoundKey: consume ? null : key,
+    decidedVersion: updateBannerDecisionVersion(version),
+    pinnedByUser: true,
   };
   emit();
 }
@@ -192,6 +234,8 @@ export function useUpdateBannerDismiss() {
   const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return {
     dismissed: snap.dismissed,
+    revealRequested: snap.revealRequested,
+    revealSeq: snap.revealSeq,
     reason: snap.reason,
     dismiss: dismissUpdateBanner,
     restore: restoreUpdateBanner,

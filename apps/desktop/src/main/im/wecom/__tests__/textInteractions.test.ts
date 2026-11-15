@@ -1,9 +1,14 @@
 import type { InteractionRequest } from '@cindy/maker-core';
 import type { IMMessageEvent, IMStatus, WecomIM } from '@cindy/im';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { formatWecomInteractionPrompt, WecomTextInteractions } from '../textInteractions';
 import { createSharedPermission } from '../../../maker-ipc/sharedPermission';
+import { setMainLocale } from '../../../i18n.desktop';
+
+// 断言中文控制文案:显式锁定界面语言,结束后还原默认。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 function permissionRequest(
   input: Record<string, unknown>,
@@ -77,8 +82,8 @@ describe('formatWecomInteractionPrompt', () => {
     );
 
     expect(prompt).toContain('需要确认工具“运行命令”');
-    expect(prompt).toContain('"command": "pnpm test"');
-    expect(prompt).toContain('"path": "D:\\\\workspace\\\\cindy"');
+    // Shell tools show the command itself, not a JSON envelope.
+    expect(prompt).toContain('操作：\n```\npnpm test\n```');
     expect(prompt).toContain('回复“允许”执行一次');
     expect(prompt).not.toContain('自动审批没完成');
   });
@@ -212,4 +217,27 @@ describe('formatWecomInteractionPrompt', () => {
         reason: 'wecom_interaction_send_failed',
       });
   });
+});
+
+it.each([
+  ['permission', 'erlauben', 'allow'], ['permission', 'ablehnen', 'deny'],
+  ['plan_review', 'genehmigen', 'allow'], ['plan_review', 'ablehnen', 'deny'],
+] as const)('keeps pending %s reply %s valid after a language change', async (kind, reply, behavior) => {
+  let intercept!: (event: IMMessageEvent) => boolean;
+  const im = {
+    onTextMessageIntercept: (handler: typeof intercept) => { intercept = handler; },
+    onStatusChange: vi.fn(),
+    sendMarkdownText: vi.fn(async (_user: string, prompt: string) => { expect(prompt).toContain(reply); }),
+    sendText: vi.fn(async () => ({})),
+  } as unknown as WecomIM;
+  const interactions = new WecomTextInteractions(im);
+  setMainLocale('de');
+  const request: InteractionRequest = kind === 'permission' ? permissionRequest({})
+    : { kind, requestId: 'switch', plan: 'Plan' };
+  const result = interactions.handle('user', request);
+  setMainLocale('en');
+  intercept({ senderId: 'user', text: 'unrelated' } as IMMessageEvent);
+  expect(im.sendText).toHaveBeenCalledWith('user', expect.stringContaining('erlauben'));
+  intercept({ senderId: 'user', text: reply } as IMMessageEvent);
+  await expect(result).resolves.toMatchObject({ kind, behavior });
 });

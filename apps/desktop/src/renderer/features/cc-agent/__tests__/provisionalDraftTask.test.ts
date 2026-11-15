@@ -22,6 +22,9 @@ vi.mock('@/lib/sessionsBus', () => ({
 }));
 
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import type { Session } from '@/lib/ccAgent.types';
+import { groupSessions } from '../lib/projectGrouping';
+import { getProvisionalDraftProjectTaskId } from '../lib/provisionalDraftTaskId';
 
 import {
   canOpenProvisionalDraftTask,
@@ -33,6 +36,7 @@ import {
   provisionalDraftTaskId,
   provisionalDraftTaskIdForCurrentOwner,
   resetProvisionalDraftTaskForTest,
+  subscribeProvisionalDraftTask,
   takeProvisionalDraftTask,
   type ProvisionalDraftCreateArgs,
 } from '../provisionalDraftTask';
@@ -105,6 +109,54 @@ describe('provisional draft task', () => {
     expect(mocks.commit).toHaveBeenCalledWith('draft-1');
     expect(mocks.discard).not.toHaveBeenCalled();
     expect(provisionalDraftTaskId()).toBeNull();
+  });
+
+  // Unit regression for the 2026-10-23 sidebar jump: the old tests only checked
+  // the final handoff, not grouping during commit or when draft identity clears.
+  it('keeps the task in its project throughout the asynchronous send handoff', async () => {
+    const row = await ensureProvisionalDraftTask(args()) as Session;
+    const placements: string[][] = [];
+    const observe = () => placements.push(groupSessions([row], {
+      provisionalDraftTaskId: getProvisionalDraftProjectTaskId(),
+    }).unclassified.map((s) => s.id));
+    mocks.commit.mockImplementationOnce(async () => {
+      observe();
+      await Promise.resolve();
+      observe();
+      return { committed: true };
+    });
+    const unsubscribe = subscribeProvisionalDraftTask(observe);
+    try {
+      await takeProvisionalDraftTask(args());
+      observe();
+      expect(placements.length).toBeGreaterThan(0);
+      expect(placements.every((ids) => ids.length === 0)).toBe(true);
+      // Even a late pre-send snapshot stays in the project; navigation must
+      // already treat the id as an ordinary task rather than redirect to /new.
+      expect(provisionalDraftTaskId()).toBeNull();
+      expect(groupSessions([{ ...row, userSendAt: null }], {
+        provisionalDraftTaskId: getProvisionalDraftProjectTaskId(),
+      }).projects[0]?.sessions[0]?.id).toBe('draft-1');
+      await ensureProvisionalDraftTask(args({ id: 'draft-2' }));
+      expect(getProvisionalDraftProjectTaskId()).toBe('draft-2');
+      await discardProvisionalDraftTask();
+      expect(getProvisionalDraftProjectTaskId()).toBeNull();
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  // Empty checks wait in the existing serial queue; resumed input must win
+  // even if the timeout fired before an in-flight create finished (unit).
+  it('rechecks an empty cleanup when its queued operation actually runs', async () => {
+    const opening = ensureProvisionalDraftTask(args());
+    let empty = true;
+    const discarding = discardProvisionalDraftTask(() => empty);
+    empty = false;
+    await opening;
+    await discarding;
+    expect(provisionalDraftTaskId()).toBe('draft-1');
+    expect(mocks.discard).not.toHaveBeenCalled();
   });
 
   it('deletes it first when the send uses different settings, so the normal create can reuse the id', async () => {

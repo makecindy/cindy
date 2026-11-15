@@ -5,7 +5,7 @@ import { providerPresetOAuth } from '@cindy/model-providers';
  * 覆盖（存储 / fetch / 时钟注入，不联网、不触电 Electron）：
  *   - blob 缓存读写、has/logout 语义；
  *   - 临期单飞刷新：refresh_token 交换、登出竞态不回写、并发只刷一次；
- *   - readCachedGenericOAuthAccessToken 同步返回 + 临期触发后台刷新；
+ *   - 请求等待刷新，状态读取不启动刷新；
  *   - discoverGenericOAuthModels 解析 OpenAI /models 形状 + 失败回 null；
  *   - buildRouteDecision 的 oauth-token 分支（Bearer 覆盖、cc 抹 x-api-key、codex 抹 OpenAI
  *     账号元数据头、无 token passthrough）；
@@ -13,7 +13,7 @@ import { providerPresetOAuth } from '@cindy/model-providers';
  *   - setDiscoveredProviderModels 的 additions-only merge。
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import type { OAuthProviderDescriptor, ProviderView } from '@cindy/model-providers';
 import { fetchSavedOAuthProviderModels } from '../provider-model-fetch.js';
@@ -27,14 +27,16 @@ import {
   logoutGenericOAuth,
   removeGenericOAuthCredentialsReversibly,
   readCachedGenericOAuthAccessToken,
+  readGenericOAuthAccessToken,
   refreshGenericOAuthIfNeeded,
   discoverGenericOAuthModels,
   resetGenericOAuthMemoryCache,
   runGenericOAuthLogin,
   type GenericOAuthStorage,
-} from '../generic-oauth.js';
+} from '../generic-oauth.desktop.js';
 import {
   buildRouteDecision,
+  beginProviderRouteMutation,
   isHostInjectedAuthSession,
   setOAuthTokenReader,
   resolveSessionRouteDecision,
@@ -83,7 +85,7 @@ function memStorage(): GenericOAuthStorage & { map: Map<string, string> } {
 let storage = memStorage();
 let nowMs = 1_000_000;
 let fetchCalls: { url: string; body?: string; headers?: Record<string, string> }[] = [];
-let fetchResponder: (url: string) => Response = () => new Response('{}', { status: 500 });
+let fetchResponder: (url: string) => Response | Promise<Response> = () => new Response('{}', { status: 500 });
 let openedUrls: string[] = [];
 
 beforeEach(() => {
@@ -122,6 +124,55 @@ function seedBlob(providerId: string, blob: Record<string, unknown>): void {
   resetGenericOAuthMemoryCache(); // 让下次读走注入 storage
 }
 
+describe('Copilot account-specific model discovery (#6663)', () => {
+  it.each(['individual', 'business', 'enterprise'] as const)('uses the %s account host for automatic model discovery', async account => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    const token = `test-token;proxy-ep=proxy.${account}.githubcopilot.com;exp=9999999999`;
+    seedBlob('copilot-account', { access_token: token });
+    fetchResponder = () => new Response('{"data":[{"id":"test-model"}]}');
+    const original = 'https://api.individual.githubcopilot.com';
+    const expected = `https://api.${account}.githubcopilot.com/models`;
+    // Regression: login derives the URL from the preset, unlike the old fixture
+    // which supplied /models and concealed the erroneous /v1/models request.
+    const automatic = await discoverGenericOAuthModels('copilot-account', oauth, deriveModelsDiscoveryUrl(original), 'pi');
+    expect(automatic).toMatchObject([{ id: 'test-model' }]);
+    expect(fetchCalls.map(call => call.url)).toEqual([expected]);
+    expect(fetchCalls[0].headers).toMatchObject({ 'copilot-integration-id': 'vscode-chat' });
+  });
+
+  it.each(['individual', 'business', 'enterprise'] as const)('uses the %s account host when refreshing saved model lists', async account => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    const token = `test-token;proxy-ep=proxy.${account}.githubcopilot.com;exp=9999999999`;
+    seedBlob('copilot-account', { access_token: token });
+    const original = 'https://api.individual.githubcopilot.com';
+    const expected = `https://api.${account}.githubcopilot.com/models`;
+    const requests: string[] = [];
+    const provider: ProviderView = {
+      id: 'copilot-account', name: 'Copilot', source: 'user', connected: true,
+      auth: { method: 'oauth', oauth }, agents: ['pi'], models: {},
+      routing: { pi: { upstream: original, authStrategy: 'oauth-token', wireProtocol: 'openai-chat' } },
+    };
+    const saved = await fetchSavedOAuthProviderModels(provider, 'pi', 'copilot-account', () => true,
+      async (url, init) => {
+        requests.push(String(url));
+        expect(init?.headers).toMatchObject({ authorization: `Bearer ${token}`, 'copilot-integration-id': 'vscode-chat' });
+        return new Response('{"data":[{"id":"test-model"}]}');
+      });
+    expect(saved).toMatchObject({ ok: true, models: [{ id: 'test-model' }] });
+    expect(requests).toEqual([expected]);
+  });
+
+  it.each([
+    ['proxy-ep=proxy.business.githubcopilot.com.evil.test;', 'https://api.individual.githubcopilot.com/models'],
+    ['proxy-ep=proxy.business.githubcopilot.com;', 'https://custom.example/models'],
+  ])('preserves custom URLs and rejects untrusted token destinations', async (token, url) => {
+    seedBlob('copilot-account', { access_token: token });
+    fetchResponder = () => new Response('{"data":[{"id":"test-model"}]}');
+    await discoverGenericOAuthModels('copilot-account', providerPresetOAuth('github-copilot')!, url, 'pi');
+    expect(fetchCalls.map(call => call.url)).toEqual([url]);
+  });
+});
+
 describe('manual model refresh for saved OAuth providers', () => {
   function savedProvider(presetId = 'openrouter'): ProviderView {
     const baseUrl = presetId === 'nous'
@@ -136,22 +187,35 @@ describe('manual model refresh for saved OAuth providers', () => {
     };
   }
 
+  // Unit: refresh must reuse the saved login for both OpenRouter catalogs. The
+  // former single-response fixture rejected the speech URL and hid its models.
   for (const presetId of ['openrouter', 'nous']) {
     it.each(['claude-code', 'codex', 'pi'] as const)(`${presetId} refresh uses the saved login and upstream protocol for %s`, async agent => {
       const provider = savedProvider(presetId);
       // Display IDs and owner-scoped storage IDs deliberately differ.
       seedBlob('scoped-account', { access_token: 'fake-oauth-access' });
-      let requests = 0;
+      const requests: string[] = [];
       const result = await fetchSavedOAuthProviderModels(provider, agent, 'scoped-account', () => true,
         async (url, init) => {
-          requests++;
-          expect(url).toBe(provider.auth.oauth!.modelsDiscoveryUrl);
+          requests.push(String(url));
           expect(init?.headers).toEqual({ authorization: 'Bearer fake-oauth-access' });
           expect(init?.redirect).toBe('error');
+          if (new URL(String(url)).searchParams.get('output_modalities') === 'speech') {
+            return new Response(JSON.stringify({ data: [{
+              id: 'minimax/speech-2.8-turbo', architecture: { output_modalities: ['speech'] },
+            }] }));
+          }
           return new Response(JSON.stringify({ data: [{ id: 'new-model', context_length: 123456 }] }));
         });
-      expect(requests).toBe(1);
-      expect(result).toMatchObject({ ok: true, models: [{ id: 'new-model', contextWindow: 123456 }] });
+      const modelsUrl = provider.auth.oauth!.modelsDiscoveryUrl!;
+      expect(requests).toEqual(presetId === 'openrouter'
+        ? [modelsUrl, `${modelsUrl}?output_modalities=speech`] : [modelsUrl]);
+      expect(result).toMatchObject({ ok: true, models: [
+        { id: 'new-model', contextWindow: 123456 },
+        ...(presetId === 'openrouter' ? [{
+          id: 'minimax/speech-2.8-turbo', discoveredMetadata: { mode: 'audio_speech' },
+        }] : []),
+      ] });
       expect(JSON.stringify(result)).not.toContain('fake-oauth-access');
     });
   }
@@ -195,14 +259,20 @@ describe('manual model refresh for saved OAuth providers', () => {
     expect(requests).toBe(0);
   });
 
-  it.each(['before-request', 'during-request'])('discards a refresh after account/config changes %s', async phase => {
+  // A new catalog must not reuse a revoked owner snapshot or publish a late result.
+  // Keep the original one-request maximum when ownership changes on the first reply.
+  it.each(['before-request', 'during-request', 'during-speech-request'])('discards a refresh after account/config changes %s', async phase => {
     seedBlob('scoped-account', { access_token: 'fake-access' });
     let current = phase !== 'before-request';
     let requests = 0;
     const result = await fetchSavedOAuthProviderModels(savedProvider(), 'pi', 'scoped-account', () => current,
-      async () => { requests++; current = false; return new Response('{"data":["model"]}'); });
+      async () => {
+        requests++;
+        if (phase === 'during-request' || requests === 2) current = false;
+        return new Response('{"data":["model"]}');
+      });
     expect(result).toEqual({ ok: false, code: 'AUTH_INVALID' });
-    expect(requests).toBe(phase === 'before-request' ? 0 : 1);
+    expect(requests).toBe(phase === 'before-request' ? 0 : phase === 'during-request' ? 1 : 2);
   });
 });
 
@@ -274,6 +344,75 @@ describe('blob 读写 / has / logout', () => {
 });
 
 describe('临期刷新（单飞）', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('waits for the production OAuth route on %s and closes refresh failures locally', async agent => {
+    setActiveCatalog({ version: 't', providers: [{
+      id: 'acme', name: 'Acme', source: 'builtin', agents: [agent],
+      auth: { method: 'oauth', oauth: OAUTH },
+      routing: { [agent]: { upstream: 'https://api.acme.example', authStrategy: 'oauth-token', wireProtocol: 'openai-chat' } },
+      models: { [agent]: [{ id: 'acme-1', name: 'A1', contextWindow: 1000, efforts: [], defaultEffort: null }] },
+    }] });
+    setSessionProvider('oauth-race', 'acme');
+    seedBlob('acme', { access_token: 'fake-expired', refresh_token: 'fake-refresh', expires_at: nowMs - 1 });
+    let release!: (response: Response) => void;
+    fetchResponder = () => new Promise<Response>(resolve => { release = resolve; });
+    setOAuthTokenReader(id => readGenericOAuthAccessToken(id, OAUTH));
+    let resolved = false;
+    const decision = Promise.resolve(resolveSessionRouteDecision('oauth-race', agent, null)).then(value => {
+      resolved = true;
+      return value;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    release(new Response(JSON.stringify({ access_token: 'fake-fresh', expires_in: 3600 })));
+    expect((await decision)?.headerOverride?.authorization).toBe('Bearer fake-fresh');
+
+    seedBlob('acme', { access_token: 'fake-expired', refresh_token: 'fake-refresh', expires_at: nowMs - 1 });
+    fetchResponder = () => new Response('{}', { status: 503 });
+    const failed = await resolveSessionRouteDecision('oauth-race', agent, null);
+    expect(failed?.localHandler).toBeTypeOf('function');
+    expect(failed?.upstreamOverride).toBeUndefined();
+    expect(failed?.headerOverride).toBeUndefined();
+  });
+
+  it('invalidates a session route when the connection changes while awaiting refresh', async () => {
+    setActiveCatalog({ version: 't', providers: [{ id: 'acme', name: 'Acme', source: 'builtin',
+      agents: ['pi'], auth: { method: 'oauth', oauth: OAUTH },
+      routing: { pi: { upstream: 'https://api.acme.example', authStrategy: 'oauth-token', wireProtocol: 'openai-chat' } },
+      models: { pi: [] },
+    }] });
+    setSessionProvider('oauth-config-race', 'acme');
+    let release!: (token: string) => void;
+    setOAuthTokenReader(() => new Promise<string>(resolve => { release = resolve; }));
+    const decision = resolveSessionRouteDecision('oauth-config-race', 'pi', null);
+    await Promise.resolve();
+    const finish = beginProviderRouteMutation('acme');
+    finish.commit();
+    finish();
+    release('fake-new-token');
+    expect((await decision)?.localHandler).toBeTypeOf('function');
+  });
+
+  // #7942: 生产模型发现入口；用挂起的刷新响应验证首个请求的凭证与出站顺序。
+  // 内存存储和 fetch 注入，不访问真实账号、网络或系统钥匙串。
+  it('does not dispatch model discovery until an expired credential refresh completes', async () => {
+    seedBlob('acme', { access_token: 'fake-expired', refresh_token: 'fake-refresh', expires_at: nowMs - 1 });
+    let release!: (response: Response) => void;
+    const refreshing = new Promise<Response>(resolve => { release = resolve; });
+    fetchResponder = url => url === OAUTH.tokenUrl
+      ? refreshing : new Response(JSON.stringify({ data: [{ id: 'test-model' }] }));
+    const discovery = discoverGenericOAuthModels('acme', OAUTH);
+    await Promise.resolve();
+    await Promise.resolve();
+    const beforeRelease = fetchCalls.filter(call => call.url === OAUTH.modelsDiscoveryUrl);
+    release(new Response(JSON.stringify({ access_token: 'fake-fresh', expires_in: 3600 })));
+    await discovery;
+    expect(beforeRelease).toHaveLength(0);
+    expect(fetchCalls.filter(call => call.url === OAUTH.modelsDiscoveryUrl)).toEqual([
+      expect.objectContaining({ headers: expect.objectContaining({ authorization: 'Bearer fake-fresh' }) }),
+    ]);
+  });
+
   it('临期 + refresh_token → 交换新 token 并落盘', async () => {
     seedBlob('acme', { access_token: 'old', refresh_token: 'rt-1', expires_at: nowMs + 1_000 });
     fetchResponder = () =>
@@ -307,14 +446,70 @@ describe('临期刷新（单飞）', () => {
     expect(hasGenericOAuthLogin('acme')).toBe(false);
   });
 
-  it('readCachedGenericOAuthAccessToken：临期时同步返回旧 token 并后台触发刷新', async () => {
-    seedBlob('acme', { access_token: 'old', refresh_token: 'rt-1', expires_at: nowMs + 1_000 });
-    fetchResponder = () =>
-      new Response(JSON.stringify({ access_token: 'new', expires_in: 3600 }), { status: 200 });
-    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('old'); // 不阻塞
-    await refreshGenericOAuthIfNeeded('acme', OAUTH); // 排队等后台那次完成（单飞去重）
-    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('new');
+  it('cached status reads do not start refresh requests', () => {
+    seedBlob('acme', { access_token: 'fake-old', refresh_token: 'fake-refresh', expires_at: nowMs - 1 });
+    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe('fake-old');
+    expect(fetchCalls).toHaveLength(0);
   });
+
+  it('shares one successful refresh across concurrent readers and returns the rotated token to all of them', async () => {
+    seedBlob('acme', { access_token: 'fake-old', refresh_token: 'fake-refresh', expires_at: nowMs - 1 });
+    let release!: (response: Response) => void;
+    fetchResponder = () => new Promise<Response>(resolve => { release = resolve; });
+    const requests = Array.from({ length: 8 }, () => readGenericOAuthAccessToken('acme', OAUTH));
+    expect(fetchCalls).toHaveLength(1);
+    release(new Response(JSON.stringify({ access_token: 'fake-fresh', refresh_token: 'fake-rotated', expires_in: 3600 })));
+    expect(await Promise.all(requests)).toEqual(Array(8).fill('fake-fresh'));
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it.each([503, 200])('shares a failed refresh (%s) and rejects expired credentials for every waiter', async status => {
+    seedBlob('acme', { access_token: 'fake-old', refresh_token: 'fake-refresh', expires_at: nowMs - 1 });
+    let release!: (response: Response) => void;
+    fetchResponder = () => new Promise<Response>(resolve => { release = resolve; });
+    const requests = Array.from({ length: 8 }, () => readGenericOAuthAccessToken('acme', OAUTH));
+    expect(fetchCalls).toHaveLength(1);
+    release(new Response('{}', { status }));
+    const results = await Promise.allSettled(requests);
+    expect(results.every(result => result.status === 'rejected')).toBe(true);
+    expect(fetchCalls).toHaveLength(1);
+    fetchResponder = () => new Response(JSON.stringify({ access_token: 'fake-recovered', expires_in: 3600 }));
+    await expect(readGenericOAuthAccessToken('acme', OAUTH)).resolves.toBe('fake-recovered');
+    expect(fetchCalls).toHaveLength(2);
+  });
+
+  it.each(['logout', 'reset', 'relogin'] as const)('discards late refresh and cancels the old reader after %s', async action => {
+    seedBlob('acme', { access_token: 'fake-old', refresh_token: 'fake-same-refresh', expires_at: nowMs - 1 });
+    let release!: (response: Response) => void;
+    fetchResponder = () => new Promise<Response>(resolve => { release = resolve; });
+    const request = readGenericOAuthAccessToken('acme', OAUTH);
+    if (action === 'reset') resetGenericOAuthMemoryCache();
+    else logoutGenericOAuth('acme');
+    if (action === 'relogin') seedBlob('acme', {
+      access_token: 'fake-new-login', refresh_token: 'fake-same-refresh', expires_at: nowMs + 3600_000,
+    });
+    release(new Response(JSON.stringify({ access_token: 'fake-late', refresh_token: 'fake-late-refresh', expires_in: 3600 })));
+    await expect(request).rejects.toThrow('provider_oauth_login_changed');
+    expect(readCachedGenericOAuthAccessToken('acme', OAUTH)).toBe(
+      action === 'relogin' ? 'fake-new-login' : action === 'reset' ? 'fake-old' : null,
+    );
+  });
+
+  it('keeps a still-valid credential after a temporary refresh failure, but rejects it at expiry', async () => {
+    seedBlob('acme', { access_token: 'fake-valid', refresh_token: 'fake-refresh', expires_at: nowMs + 1000 });
+    fetchResponder = () => new Response('{}', { status: 503 });
+    await expect(readGenericOAuthAccessToken('acme', OAUTH)).resolves.toBe('fake-valid');
+    nowMs += 1000;
+    await expect(readGenericOAuthAccessToken('acme', OAUTH)).rejects.toThrow('provider_oauth_refresh_failed');
+  });
+
+  it('rejects an expired token without refresh credentials or a descriptor', async () => {
+    seedBlob('acme', { access_token: 'fake-expired', expires_at: nowMs - 1 });
+    await expect(readGenericOAuthAccessToken('acme', OAUTH)).rejects.toThrow('provider_oauth_refresh_failed');
+    await expect(readGenericOAuthAccessToken('acme', undefined)).rejects.toThrow('provider_oauth_refresh_failed');
+    expect(fetchCalls).toHaveLength(0);
+  });
+
 });
 
 describe('登录流与凭证落盘失败', () => {
@@ -613,6 +808,48 @@ describe('登录流与凭证落盘失败', () => {
 });
 
 describe('discoverGenericOAuthModels', () => {
+  // PR #6900 unit regression: the login follow-up (unlike saved refresh) could
+  // send more Bearer requests after cancellation. Hold a real catalog response
+  // at each async boundary; no subsequent page or late result may escape.
+  it.each(['before-request', 'first-page', 'next-page', 'speech-page', 'active'] as const)(
+    'checks login ownership before every catalog request: %s', async (phase) => {
+      seedBlob('router', { access_token: 'fake-login-key' });
+      const oauth = providerPresetOAuth('openrouter')!;
+      const endpoint = oauth.modelsDiscoveryUrl!;
+      let current = phase !== 'before-request';
+      let release!: (value: unknown) => void;
+      const waiting = new Promise<unknown>(resolve => { release = resolve; });
+      const pausedUrl = phase === 'next-page' ? `${endpoint}?cursor=next`
+        : phase === 'speech-page' ? `${endpoint}?output_modalities=speech` : endpoint;
+      fetchResponder = (url) => {
+        const payload = url.includes('output_modalities=speech')
+          ? { data: [{ id: 'tts', architecture: { output_modalities: ['speech'] } }] }
+          : { data: ['chat'], ...(url === endpoint ? { next_cursor: 'next' } : {}) };
+        const response = new Response(JSON.stringify(payload));
+        if (url === pausedUrl && current && phase !== 'active') {
+          response.json = () => waiting.then(() => payload);
+        }
+        return response;
+      };
+      const pending = discoverGenericOAuthModels('router', oauth, undefined, 'claude-code', () => current);
+      if (phase !== 'before-request' && phase !== 'active') {
+        await vi.waitFor(() => expect(fetchCalls.at(-1)?.url).toBe(pausedUrl));
+        current = false;
+        release(undefined);
+      }
+      const result = await pending;
+      expect(fetchCalls.map(({ url }) => url)).toEqual(
+        phase === 'before-request' ? [] : [endpoint,
+          ...(['next-page', 'speech-page', 'active'].includes(phase) ? [`${endpoint}?cursor=next`] : []),
+          ...(['speech-page', 'active'].includes(phase) ? [`${endpoint}?output_modalities=speech`] : []),
+        ],
+      );
+      for (const request of fetchCalls) expect(request.headers).toEqual({ authorization: 'Bearer fake-login-key' });
+      if (phase === 'active') expect(result?.map(model => model.id)).toEqual(['chat', 'tts']);
+      else expect(result).toBeNull();
+    },
+  );
+
   it('解析 {data:[{id}]} 形状并去重', async () => {
     seedBlob('acme', { access_token: 'at' });
     fetchResponder = () =>
@@ -781,7 +1018,7 @@ describe('oauth-token 路由分支', () => {
     });
     setSessionProvider('sess-1', 'acme');
     setOAuthTokenReader((id) => (id === 'acme' ? 'at-x' : null));
-    // oauth-token 分支同步返回；await 兼容联合返回类型（provider-oauth-header 分支才是 Promise）。
+    // OAuth 路由统一等待异步 reader。
     const d = await resolveSessionRouteDecision('sess-1', 'claude-code', null);
     expect(d?.headerOverride?.authorization).toBe('Bearer at-x');
     expect(d?.upstreamOverride).toBe('https://api.acme.example');
@@ -910,7 +1147,7 @@ describe('close() 回执路径(裸 done 消除)', () => {
 
 describe('explicit provider metadata fields', () => {
   it('preserves false, empty efforts and null defaults without inventing a supplied name', async () => {
-    const { parseModelsListResponse } = await import('../generic-oauth.js');
+    const { parseModelsListResponse } = await import('../generic-oauth.desktop.js');
     expect(
       parseModelsListResponse({
         data: [

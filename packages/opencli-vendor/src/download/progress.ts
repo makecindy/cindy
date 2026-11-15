@@ -1,0 +1,134 @@
+/**
+ * Download progress display: terminal progress bars, status updates.
+ */
+
+
+export interface ProgressBar {
+  update(current: number, total: number, label?: string): void;
+  complete(success: boolean, message?: string): void;
+  fail(error: string): void;
+}
+
+/**
+ * Format bytes as human-readable string (KB, MB, GB).
+ */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 1) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
+
+/**
+ * Format milliseconds as human-readable duration.
+ */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    const remainingSeconds = seconds % 60;
+    return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+/**
+ * Create a simple progress bar for terminal display.
+ */
+export function createProgressBar(filename: string, index: number, total: number): ProgressBar {
+  const prefix = `[${index + 1}/${total}]`;
+  const truncatedName = filename.length > 40 ? filename.slice(0, 37) + '...' : filename;
+
+  return {
+    update(current: number, totalBytes: number, label?: string) {
+      const percent = clampPercent(totalBytes > 0 ? Math.round((current / totalBytes) * 100) : 0);
+      const bar = createBar(percent);
+      const size = totalBytes > 0 ? formatBytes(totalBytes) : '';
+      const extra = label ? ` ${label}` : '';
+      void 0;
+    },
+    complete(success: boolean, message?: string) {
+      const icon = success ? '✓' : '✗';
+      const msg = message ? ` ${message}` : '';
+      void 0;
+    },
+    fail(error: string) {
+      void 0;
+    },
+  };
+}
+
+function clampPercent(percent: number): number {
+  if (!Number.isFinite(percent)) return 0;
+  return Math.max(0, Math.min(100, percent));
+}
+
+/**
+ * Create a progress bar string.
+ */
+function createBar(percent: number, width: number = 20): string {
+  const filled = Math.round((percent / 100) * width);
+  const empty = width - filled;
+  return '█'.repeat(filled) + '░'.repeat(empty);
+}
+
+/**
+ * Multi-file download progress tracker.
+ */
+export class DownloadProgressTracker {
+  private completed = 0;
+  private failed = 0;
+  private skipped = 0;
+  private total: number;
+  private startTime: number;
+  private verbose: boolean;
+
+  constructor(total: number, verbose: boolean = true) {
+    this.total = total;
+    this.startTime = Date.now();
+    this.verbose = verbose;
+  }
+
+  onFileStart(filename: string, index: number): ProgressBar | null {
+    if (!this.verbose) return null;
+    return createProgressBar(filename, index, this.total);
+  }
+
+  onFileComplete(success: boolean, skipped: boolean = false): void {
+    if (skipped) {
+      this.skipped++;
+    } else if (success) {
+      this.completed++;
+    } else {
+      this.failed++;
+    }
+  }
+
+  getSummary(): string {
+    const elapsed = formatDuration(Date.now() - this.startTime);
+    const parts: string[] = [];
+
+    if (this.completed > 0) {
+      parts.push(`${this.completed} downloaded`);
+    }
+    if (this.skipped > 0) {
+      parts.push(`${this.skipped} skipped`);
+    }
+    if (this.failed > 0) {
+      parts.push(`${this.failed} failed`);
+    }
+
+    return `${parts.join(', ')} in ${elapsed}`;
+  }
+
+  finish(): void {
+    if (this.verbose) {
+      void 0;
+    }
+  }
+}

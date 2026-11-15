@@ -1,6 +1,7 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Trash2, Check, RefreshCw } from 'lucide-react';
+import { Eye, EyeOff, Trash2, Check, RefreshCw, Link } from 'lucide-react';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
@@ -8,7 +9,7 @@ import { useFeishuBot, type FeishuBotService, type FeishuBotStatus } from '@/hoo
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import { Tip } from '@/components/ui/tooltip';
+import { ImConnectionError, ImReconnectButton } from './ImConnectionRecovery';
 import { savedCredentialsNoteKey, shouldShowSavedCredentialsCard } from './feishuBotPresentation';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
@@ -96,6 +97,7 @@ export function FeishuBotSection({
   }, [hasLoadedState, hasSavedCreds, preferredService, searchActivation, setService]);
 
   const showSavedCredentialsCard = shouldShowSavedCredentialsCard(hasSavedCreds);
+  const displayStatus = isReconnecting ? 'testing' : status;
   const canSave = appId.trim().length > 0 && appSecret.trim().length > 0 && !isSaving;
 
   const handleClearClick = useCallback(async () => {
@@ -115,8 +117,8 @@ export function FeishuBotSection({
 
   return (
     <ImChannelSettingsCard
-      id="personal-im-feishu"
-      title={t('settings.feishuBot.title')}
+      id={imBotSettings.feishu.targetId}
+      title={t(imBotSettings.feishu.titleKey)}
       description={t('settings.feishuBot.description')}
       routeSummary={
         routeSummary
@@ -134,28 +136,27 @@ export function FeishuBotSection({
             'border border-[var(--settings-badge-border)]',
             'text-11 font-medium tracking-[0.12px]',
           )}
-          style={{ letterSpacing: '0.12px', color: statusTextColor(status) }}
+          style={{ letterSpacing: '0.12px', color: statusTextColor(displayStatus) }}
           role="status"
           aria-live="polite"
-          aria-label={t('settings.feishuBot.statusAria', { status: t(statusKey[status]) })}
+          aria-label={t('settings.feishuBot.statusAria', { status: t(statusKey[displayStatus]) })}
         >
           <span
             className="h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: statusColor(status) }}
+            style={{ backgroundColor: statusColor(displayStatus) }}
             aria-hidden
           />
-          {t(statusKey[status])}
+          {t(statusKey[displayStatus])}
         </span>
       }
     >
-      <ImDefaultSettingsSection channel="feishu" embedded onSummaryChange={setRouteSummary} />
-      <div className="h-px w-full bg-[var(--border-default)]" />
       {showSavedCredentialsCard ? (
         <SavedCredentialsCard
           appId={appId}
           service={service}
           ownerOpenId={ownerOpenId}
-          status={status}
+          status={displayStatus}
+          errorMessage={errorMessage}
           isClearing={isClearing}
           isReconnecting={isReconnecting}
           onReconnect={reconnect}
@@ -179,6 +180,8 @@ export function FeishuBotSection({
           onOpenLauncher={openLauncher}
         />
       )}
+      <div className="h-px w-full bg-[var(--border-default)]" />
+      <ImDefaultSettingsSection channel="feishu" embedded onSummaryChange={setRouteSummary} />
       {hasSavedCreds && (
         <>
           <div className="h-px w-full bg-[var(--border-default)]" />
@@ -194,6 +197,7 @@ function SavedCredentialsCard(props: {
   service: FeishuBotService;
   ownerOpenId: string | null;
   status: FeishuBotStatus;
+  errorMessage: string | null;
   isClearing: boolean;
   isReconnecting: boolean;
   onReconnect: () => Promise<boolean>;
@@ -201,73 +205,78 @@ function SavedCredentialsCard(props: {
 }) {
   const { t } = useTranslation();
   const serviceName = t(`settings.feishuBot.services.${props.service}`);
+  const isConnecting =
+    props.isReconnecting || props.status === 'testing' || props.status === 'reconnecting';
+  const hasError =
+    !props.isReconnecting && (props.status === 'error' || props.status === 'conflict');
+  const reconnectButton = (
+    <ImReconnectButton
+      variant={props.status === 'connected' ? 'secondary' : 'primary'}
+      size="sm"
+      loading={props.isReconnecting}
+      onReconnect={props.onReconnect}
+      disabled={props.isClearing || props.status === 'testing'}
+      aria-label={t('settings.feishuBot.connected.reconnect', { service: serviceName })}
+    >
+      <RefreshCw size={14} />
+      {t('settings.feishuBot.saved.reconnect')}
+    </ImReconnectButton>
+  );
   return (
     <div
+      data-feishu-connection-card=""
       className={cn(
         'mt-1 flex flex-col gap-3 rounded-xl p-5',
         'border border-[var(--settings-theme-card-border)]',
         'bg-[var(--settings-theme-card-bg)]',
       )}
     >
-      <div className="flex items-start gap-3">
-        <div
-          className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)]"
-          style={{
-            color:
-              props.status === 'connected'
-                ? 'var(--settings-badge-connected)'
-                : 'var(--settings-badge-saved)',
-          }}
-        >
-          <Check size={16} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <div className="text-13 font-medium text-[var(--settings-section-title)]">
-              {t(
+      {hasError ? (
+        <ImConnectionError
+          role="status"
+          message={t('settings.feishuBot.saved.errorHeading', { service: serviceName })}
+          description={t(savedCredentialsNoteKey(props.status, props.errorMessage))}
+          details={props.errorMessage ?? undefined}
+          actions={reconnectButton}
+        />
+      ) : (
+        <div className="flex items-start gap-3" role="status">
+          <div
+            className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)]"
+            style={{
+              color:
                 props.status === 'connected'
-                  ? 'settings.feishuBot.connected.heading'
-                  : 'settings.feishuBot.saved.heading',
-                { service: serviceName },
-              )}
-            </div>
-            <Tip
-              text={t('settings.feishuBot.connected.reconnect', { service: serviceName })}
-              side="top"
-              delay={200}
-            >
-              {/* Keep the trigger hoverable while the inner button is disabled. */}
-              <span className="inline-flex shrink-0">
-                <button
-                  type="button"
-                  onClick={() => void props.onReconnect()}
-                  disabled={props.isReconnecting || props.isClearing}
-                  aria-label={t('settings.feishuBot.connected.reconnect', {
-                    service: serviceName,
-                  })}
-                  className={cn(
-                    'inline-flex h-7 w-7 select-none items-center justify-center rounded-full',
-                    'text-[var(--settings-section-desc)] transition-colors',
-                    'hover:bg-[var(--surface-hover)] hover:text-[var(--settings-section-title)]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    (props.isReconnecting || props.isClearing) && 'cursor-not-allowed opacity-40',
-                  )}
-                >
-                  <Spinner
-                    icon={RefreshCw}
-                    size={14}
-                    strokeWidth={2}
-                    spinning={props.isReconnecting}
-                  />
-                </button>
-              </span>
-            </Tip>
+                  ? 'var(--settings-badge-connected)'
+                  : 'var(--settings-badge-saved)',
+            }}
+          >
+            {isConnecting ? (
+              <Spinner size={16} />
+            ) : props.status === 'connected' ? (
+              <Check size={16} />
+            ) : (
+              <Link size={16} />
+            )}
           </div>
-          <div className="mt-1 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
-            {t(savedCredentialsNoteKey(props.status))}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <div className="text-13 font-medium text-[var(--settings-section-title)]">
+                {t(
+                  isConnecting
+                    ? 'settings.feishuBot.status.connecting'
+                    : props.status === 'connected'
+                      ? 'settings.feishuBot.connected.heading'
+                      : 'settings.feishuBot.saved.heading',
+                  { service: serviceName },
+                )}
+              </div>
+            </div>
+            <div className="mt-1 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
+              {t(savedCredentialsNoteKey(props.isReconnecting ? 'testing' : props.status))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
       <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
         <div className="flex justify-between gap-4">
           <span>{t('settings.feishuBot.connected.serviceLabel')}</span>
@@ -288,15 +297,15 @@ function SavedCredentialsCard(props: {
           </span>
         </div>
       </div>
-      <div className="flex gap-2 pt-1">
-        <Button
-          variant="secondary"
-          size="lg"
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        {!hasError && reconnectButton}
+        <Button data-settings-search-action="Clear the failed bot connection"
+          tone="quiet"
+          size="sm"
           loading={props.isClearing}
           type="button"
           onClick={props.onClear}
-          disabled={props.isClearing}
-          className="flex-1"
+          disabled={props.isClearing || props.isReconnecting}
         >
           <Trash2 size={13} />
           {t('settings.feishuBot.connected.clear')}
@@ -332,7 +341,7 @@ function ManualConfig(props: {
         >
           {t('settings.feishuBot.serviceLabel')}
         </legend>
-        <SegmentedControl
+        <SegmentedControl data-setting-id={imBotSettings.feishu.id}
           aria-label={t('settings.feishuBot.serviceAria')}
           value={props.service}
           onValueChange={props.setService}
@@ -352,7 +361,7 @@ function ManualConfig(props: {
       >
         {t('settings.feishuBot.appIdLabel')}
       </label>
-      <input
+      <input data-setting-id={imBotSettings.feishu.id}
         type="text"
         value={props.appId}
         onChange={(e) => props.setAppId(e.target.value)}
@@ -375,7 +384,7 @@ function ManualConfig(props: {
         {t('settings.feishuBot.appSecretLabel')}
       </label>
       <div className="relative">
-        <input
+        <input data-setting-id={imBotSettings.feishu.id}
           type={props.showSecret ? 'text' : 'password'}
           value={props.appSecret}
           onChange={(e) => props.setAppSecret(e.target.value)}
@@ -390,7 +399,7 @@ function ManualConfig(props: {
           )}
           style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
         />
-        <button
+        <button data-settings-search-action="Reveal or conceal the entered secret"
           type="button"
           onClick={() => props.setShowSecret(!props.showSecret)}
           className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
@@ -419,7 +428,7 @@ function ManualConfig(props: {
               className="text-12 text-[var(--settings-source-meta)]"
               style={{ letterSpacing: '0.12px' }}
             >
-              <button
+              <button data-settings-search-action="Open the bot setup guide"
                 type="button"
                 onClick={props.onOpenLauncher}
                 className="cursor-pointer bg-transparent p-0 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
@@ -434,7 +443,7 @@ function ManualConfig(props: {
         </div>
       </div>
 
-      <Button
+      <Button data-settings-search-action="Save the bot connection form"
         variant="cta"
         size="lg"
         loading={props.isSaving}

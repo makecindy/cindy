@@ -1,0 +1,28 @@
+diff --git a/build/layouts/stack-utils/toolbar/StackToolbarMenu/index.js b/build/layouts/stack-utils/toolbar/StackToolbarMenu/index.js
+index 2665349..d1b99f7 100644
+--- a/build/layouts/stack-utils/toolbar/StackToolbarMenu/index.js
++++ b/build/layouts/stack-utils/toolbar/StackToolbarMenu/index.js
+@@ -154,6 +154,10 @@ function convertStackToolbarSubmenuMenuPropsToRNHeaderItem(props) {
+     if (props.inline !== undefined) {
+         item.inline = props.inline;
+     }
++    // Cindy patch: let a submenu carry its current value as a subtitle (UIMenuElement.subtitle).
++    if (props.subtitle !== undefined) {
++        item.subtitle = props.subtitle;
++    }
+     if (props.palette !== undefined) {
+         item.layout = props.palette ? 'palette' : 'default';
+     }
+diff --git a/build/layouts/stack-utils/toolbar/StackToolbarMenu/types.d.ts b/build/layouts/stack-utils/toolbar/StackToolbarMenu/types.d.ts
+index 0c71960..662d143 100644
+--- a/build/layouts/stack-utils/toolbar/StackToolbarMenu/types.d.ts
++++ b/build/layouts/stack-utils/toolbar/StackToolbarMenu/types.d.ts
+@@ -162,6 +162,8 @@ export interface StackToolbarMenuProps {
+      * @platform ios
+      */
+     title?: string;
++    /** Current value shown below the submenu title on iOS. */
++    subtitle?: string;
+     /**
+      * Corner radius in dp for the dropdown menu container. Defaults to the Material3
+      * `MenuDefaults.shape` corner radius.

@@ -74,7 +74,7 @@ export function getRemoteClaudeEnv(): Record<string, string> | null {
     // 命中率,保持禁用 —— 本地按 spawn 形态条件化的逻辑(claude-behavior-flags.ts,
     // issue #758)不适用于这里。
     CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
-    ENABLE_TOOL_SEARCH: 'auto',
+    ENABLE_TOOL_SEARCH: 'true',
     // Telemetry off — endpoints would 401 against the company proxy
     // (telemetry hits real api.anthropic.com which doesn't accept our token),
     // creating log noise without value.

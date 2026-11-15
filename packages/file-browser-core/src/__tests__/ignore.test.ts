@@ -12,7 +12,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { __clearCacheForTesting, loadIgnoreMatcher } from '../ignore';
+import { __clearCacheForTesting, createEventIgnoreMatcher, loadIgnoreMatcher } from '../ignore';
 
 async function makeWorkdir(gitignore?: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ignore-test-'));
@@ -130,5 +130,114 @@ describe('loadIgnoreMatcher cache + inflight', () => {
     } finally {
       await fs.rm(empty, { recursive: true, force: true }).catch(() => {});
     }
+  });
+});
+
+describe('loadIgnoreMatcher 内置忽略分层 (showIgnoredDirs)', () => {
+  let workdir: string;
+
+  beforeEach(async () => {
+    __clearCacheForTesting();
+    workdir = await makeWorkdir();
+  });
+
+  afterEach(async () => {
+    await fs.rm(workdir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('默认隐藏依赖 / 构建产物 / 缓存目录', async () => {
+    const matcher = await loadIgnoreMatcher(workdir, { honorVcsIgnore: false });
+    for (const dir of ['build', 'dist', 'out', 'bin', 'obj', 'target', 'vendor', 'Temp', 'Logs']) {
+      expect(matcher.ignores(`${dir}/`, true), dir).toBe(true);
+    }
+  });
+
+  it('showIgnoredDirs 放行依赖 / 构建产物 / 缓存目录', async () => {
+    const matcher = await loadIgnoreMatcher(workdir, {
+      honorVcsIgnore: false,
+      showIgnoredDirs: true,
+    });
+    for (const dir of ['build', 'dist', 'out', 'bin', 'obj', 'target', 'vendor', 'Temp']) {
+      expect(matcher.ignores(`${dir}/`, true), dir).toBe(false);
+    }
+    expect(matcher.ignores('node_modules/', true)).toBe(false);
+    expect(matcher.ignores('Library/', true)).toBe(false);
+  });
+
+  it('VCS 元数据 / OS 垃圾不受开关影响', async () => {
+    const matcher = await loadIgnoreMatcher(workdir, {
+      honorVcsIgnore: false,
+      showIgnoredDirs: true,
+    });
+    expect(matcher.ignores('.git/', true)).toBe(true);
+    expect(matcher.ignores('.git/config', false)).toBe(true);
+    expect(matcher.ignores('.DS_Store', false)).toBe(true);
+  });
+
+  it('*.meta 仍只由 hideMetaFiles 决定,与开关正交', async () => {
+    const revealKeepMeta = await loadIgnoreMatcher(workdir, {
+      honorVcsIgnore: false,
+      hideMetaFiles: false,
+      showIgnoredDirs: true,
+    });
+    expect(revealKeepMeta.ignores('Foo.cs.meta', false)).toBe(false);
+
+    const revealHideMeta = await loadIgnoreMatcher(workdir, {
+      honorVcsIgnore: false,
+      hideMetaFiles: true,
+      showIgnoredDirs: true,
+    });
+    expect(revealHideMeta.ignores('Foo.cs.meta', false)).toBe(true);
+  });
+
+  it('两个开关值分别缓存(互不污染)', async () => {
+    const off = await loadIgnoreMatcher(workdir, { honorVcsIgnore: false });
+    const on = await loadIgnoreMatcher(workdir, { honorVcsIgnore: false, showIgnoredDirs: true });
+    expect(on).not.toBe(off);
+    // 再次取用各自命中自己的缓存条目。
+    expect(await loadIgnoreMatcher(workdir, { honorVcsIgnore: false })).toBe(off);
+    expect(
+      await loadIgnoreMatcher(workdir, { honorVcsIgnore: false, showIgnoredDirs: true }),
+    ).toBe(on);
+  });
+});
+
+/**
+ * 事件侧的恒真层。这一层和 listDir 的口径必须**故意不同**:开关打开后
+ * node_modules / Library 可以列出来,但内部改动永远不推事件(daemon
+ * WorkdirWatchManager 靠它挡住 SSH 上的事件洪水)。
+ */
+describe('createEventIgnoreMatcher(事件侧恒真层)', () => {
+  it('不论开关如何都挡掉依赖 / Unity 资源缓存,包含其后代与嵌套同名目录', () => {
+    const matcher = createEventIgnoreMatcher();
+    // 目录本身、目录内文件、任意深度的同名目录都算 —— 与
+    // BUILTIN_IGNORE_* 的「路径任意位置命中」口径一致。
+    for (const rel of [
+      'node_modules/',
+      'node_modules/react/index.js',
+      'packages/app/node_modules/react/index.js',
+      'Library/',
+      'Library/ScriptAssemblies/Assembly-CSharp.dll',
+      'Assets/Library/foo.prefab',
+    ]) {
+      expect(matcher.ignores(rel, rel.endsWith('/')), rel).toBe(true);
+    }
+  });
+
+  it('不误伤开关要放行的构建产物与普通目录', () => {
+    const matcher = createEventIgnoreMatcher();
+    // build / dist / Temp 这类目录**不在**这一层:开关打开时它们的改动要推事件。
+    for (const rel of ['build/app.js', 'dist/index.html', 'Temp/x', 'src/index.ts']) {
+      expect(matcher.ignores(rel, false), rel).toBe(false);
+    }
+    // 名字相近但不同名的不算(子串不算命中)。
+    expect(matcher.ignores('myLibrary/a', false)).toBe(false);
+    expect(matcher.ignores('node_modules_backup/a', false)).toBe(false);
+  });
+
+  it('VCS 元数据与 OS 垃圾也挡', () => {
+    const matcher = createEventIgnoreMatcher();
+    expect(matcher.ignores('.git/config', false)).toBe(true);
+    expect(matcher.ignores('.DS_Store', false)).toBe(true);
   });
 });

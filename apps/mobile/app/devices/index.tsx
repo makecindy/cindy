@@ -1,15 +1,19 @@
-import { HomeUnreadProvider } from '@/session/HomeUnreadContext';
-import { useAuth } from '@/auth/AuthContext';
+import { StyleSheet, View } from 'react-native';
 import { MobileHome } from '@/session/HomeSurface';
-import { HomeModePanes } from '@/session/HomeModePanes';
-import { TeammateHomeScreen } from '@/session/TeammateHomeScreen';
+import { SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
 import { useHomeMode } from '@/session/useHomeMode';
+import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 
+/** One home, as on desktop: teammates are the section at the top of the task list. */
 export default function HomeScreen() {
-  const { accountGeneration } = useAuth();
   const navigation = useHomeMode();
+  const headerHeight = useOptionalHeaderHeight();
+  // The teammate section's stored fold is part of the first frame.
   if (!navigation.hydrated) return null;
-  return <HomeUnreadProvider key={accountGeneration}><HomeModePanes mode={navigation.mode}
-    tasks={<MobileHome active={navigation.mode === 'tasks'} onModeChange={navigation.setMode} />}
-    teammates={<TeammateHomeScreen active={navigation.mode === 'teammates'} />} /></HomeUnreadProvider>;
+  return <View style={styles.home}>
+    <MobileHome />
+    <SessionHeaderNativeBlur height={headerHeight} />
+  </View>;
 }
+
+const styles = StyleSheet.create({ home: { flex: 1 } });

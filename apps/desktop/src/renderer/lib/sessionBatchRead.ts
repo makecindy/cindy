@@ -56,6 +56,7 @@ export function isSessionListRow(
     hasOptionalNullableString(session, 'clearedAt') &&
     hasOptionalNullableString(session, 'pinnedAt') &&
     hasOptionalNullableString(session, 'userSendAt') &&
+    hasOptionalNullableString(session, 'lastActivityAt') &&
     hasOptionalNullableString(session, 'source') &&
     hasOptionalNullableString(session, 'orcaRole') &&
     hasOptionalNullableString(session, 'providerId') &&

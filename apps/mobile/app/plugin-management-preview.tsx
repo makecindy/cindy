@@ -171,6 +171,7 @@ function createSettingsFixture(): PluginSettingsClientOptions {
     lastField: "Long form field",
   };
   let saved = false;
+  let documentEpoch = 0;
   let accounts = [
     { id: "one", label: "Test account one", isDefault: true },
     { id: "two", label: "Test account two", isDefault: false },
@@ -182,6 +183,7 @@ function createSettingsFixture(): PluginSettingsClientOptions {
   }));
   const document = {
     pageId: "qa-page",
+    documentIsolation: true,
     pluginId: "qa-settings",
     manifestId: "qa-settings",
     name: "QA settings",
@@ -201,6 +203,7 @@ function createSettingsFixture(): PluginSettingsClientOptions {
       request: async (raw) => {
         if (raw.op !== "settings") throw new Error("QA_ONLY");
         const c = raw.command;
+        if (c.kind === "document") { documentEpoch = c.epoch; return {}; }
         if (c.kind === "asset") {
           const text = assets[c.path as keyof typeof assets];
           const bytes = new TextEncoder()
@@ -224,7 +227,7 @@ function createSettingsFixture(): PluginSettingsClientOptions {
         let body: unknown;
         if (c.path === "/kv") {
           if (c.method === "PUT") preferences = JSON.parse(c.body ?? "{}");
-          body = preferences;
+          body = { ...preferences, documentEpoch };
         } else if (c.path === "/secrets/key" && c.method === "PUT") {
           saved = true;
           return { status: 204, mime: "application/json", base64: "" };

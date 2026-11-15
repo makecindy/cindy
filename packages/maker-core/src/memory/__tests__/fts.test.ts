@@ -2,7 +2,7 @@
  * MemoryFts 单测 — 用真 better-sqlite3 内存库。
  *
  * 重点覆盖 #1537: unicode61 tokenizer 把连续 CJK 文本当一个 token,
- * phrase MATCH 无法命中中文子串, 必须由 LIKE 兜底捞回 (模式对齐 contacts/fts.ts)。
+ * phrase MATCH 无法命中中文子串, 必须由 LIKE 兜底捞回。
  * 另覆盖 buildFilename 对带 type 前缀 slug 的拒绝 (#1652 附带小 bug)。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';

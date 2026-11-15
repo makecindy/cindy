@@ -404,7 +404,7 @@ export class ToolLoopGuard {
   }
 
   /**
-   * 复核认定当前模式是在等外部进度:接下来 graceResults 次普通结果不再报疑似,
+   * 当前模式放行(有合理理由或证据不足):接下来 graceResults 次普通结果不再报疑似,
    * 之后若模式仍在则重新报。最终上限不受影响。
    */
   acceptCurrentPattern(graceResults: number): void {
@@ -716,7 +716,7 @@ const TRAILING_TOKEN_FRAGMENT_RE = /[A-Za-z0-9_\-+/=.:@%~]+$/;
  * 有换行时丢掉被截断的整行(凭证以行为界:赋值、参数、引号串);没有换行时丢掉末尾
  * 连续串,若还剩未闭合的引号,从该引号起全部丢掉。
  */
-function captureEvidence(text: string): string {
+export function captureEvidence(text: string): string {
   if (text.length <= EVIDENCE_CAPTURE_LIMIT) return text;
   const cut = text.slice(0, EVIDENCE_CAPTURE_LIMIT);
   const lastNewline = cut.lastIndexOf('\n');

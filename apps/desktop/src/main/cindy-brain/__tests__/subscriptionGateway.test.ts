@@ -5,6 +5,7 @@
  * 归属校验、reason 截断;turn 翻译器状态机与 usage 归一化;activity 边界配对与轮次来源过滤。
  */
 
+import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -34,6 +35,26 @@ import {
   type InstalledGhost,
 } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+import { GhostNotificationIndex } from '../ghostNotificationIndex.js';
+import { GhostTaskEventIndex } from '../taskEventIndex.js';
+import { decodeCursor } from '@cindy/mcps/history-cursor';
+import type { Message } from '../../../renderer/lib/ccAgent.types.js';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
+import type { DbClient } from '../../localDb/client/DbClient.js';
+import { messageCreateToRow, messageToCamel } from '../../localDb/mapper.js';
+import { createRuntimePluginControl } from '../runtimeControl.js';
+import { createRuntimeContextProviders } from '../runtimeContext.js';
+import type { RuntimePluginSettings } from '../../../shared/pluginRuntime.js';
+
+const createSessionNotification = createGhostProductionCallbacks<{
+  notifyGhostSessionEvent(
+    kind: 'created' | 'archived' | 'switched',
+    data: { sessionId: string },
+    claim: () => Promise<boolean>,
+    releaseRaw: (resetPrimary?: boolean) => void,
+  ): void;
+}>({ functions: ['notifyGhostSessionEvent'] });
 
 describe('did-session-switched primary session resolution', () => {
   it('allows ordinary sessions and Orca leads, but never workers or background sessions', () => {
@@ -135,9 +156,9 @@ describe('createGhostPrimarySessionFocusTracker', () => {
   });
 
   it('claims publication at the final async boundary', async () => {
-    const pending: Array<{ sessionId: string; claim: () => Promise<boolean> }> = [];
-    const tracker = createGhostPrimarySessionFocusTracker(async () => 'lead', (sessionId, claim) => {
-      pending.push({ sessionId, claim });
+    const pending: Array<{ sessionId: string; claim: () => Promise<boolean>; releaseRaw: (resetPrimary?: boolean) => void }> = [];
+    const tracker = createGhostPrimarySessionFocusTracker(async () => 'lead', (sessionId, claim, releaseRaw) => {
+      pending.push({ sessionId, claim, releaseRaw });
     });
 
     tracker.note('worker-1');
@@ -147,6 +168,8 @@ describe('createGhostPrimarySessionFocusTracker', () => {
 
     await expect(pending[0]?.claim()).resolves.toBe(false);
     await expect(pending[1]?.claim()).resolves.toBe(true);
+    // A late discovery failure must not erase the newer focus's deduplication.
+    pending[0]?.releaseRaw(true);
     await expect(pending[1]?.claim()).resolves.toBe(false);
   });
 
@@ -273,6 +296,193 @@ function ghost(
   } as InstalledGhost;
 }
 
+// Unit through the production gateway: unknown declarations preserved by old Hosts
+// must not start delivering message content after an upgrade without explicit consent.
+it('does not deliver a newly recognized message topic without its receipt approval', () => {
+  const g = ghost('reader', { topics: ['message'] });
+  g.approval = { state: 'approved', revision: 'r1' };
+  const { gw, sent, running } = makeGateway({ listGhosts: () => [g] });
+  running.add('reader');
+  gw.publish('message' as never, 'did-message-created' as never, { sessionId: 'task' });
+  expect(sent).toHaveLength(0);
+});
+
+// Unit: production content index -> gateway. Existing metadata tests never exercise saved
+// message content, attachment path removal or an install replaced during cold-start delivery.
+describe('indexed task content and state events', () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
+  afterEach(() => vi.useRealTimers());
+  const owner = { dataOwnerId: 'owner', ownerGeneration: 1 };
+  const row = { id: 'message', role: 'assistant', createdAt: '2026-11-10T00:00:00.000Z', rowid: 4,
+    content: { text: 'saved reply', images: [{ url: '/private/image.png', name: 'image.png' }],
+      files: [{ path: '/private/file.txt', name: 'file.txt' }], reasoning: 'private thinking' } } as Message;
+  const subscriber = (): InstalledGhost => ({ ...ghost('reader', { topics: ['message', 'task-state'] }),
+    approval: { state: 'approved', revision: 'r1' }, approvedEventTopics: ['message', 'task-state'] });
+
+  // Unit, #9801 scope reduction: lifecycle events reuse immediate delivery and
+  // the existing cold queue; they add no timer and must not fold a finished turn.
+  it('delivers running, completed and running immediately in order without a timer', () => {
+    const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    for (const phase of ['running', 'completed', 'running'])
+      index.publish({ kind: 'state', sessionId: 'task', state: { activity: { phase } } }, owner, () => gw);
+    expect(sent.map(item => (item.payload as any).data.state.activity.phase)).toEqual(['running', 'completed', 'running']);
+    expect(sent.map(item => (item.payload as any).seq)).toEqual([1, 2, 3]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('uses the existing 100-event cold queue and dropped marker without a timer', async () => {
+    const g = subscriber();
+    let finishWake!: () => void;
+    const wake = vi.fn(() => new Promise<void>(resolve => { finishWake = resolve; }));
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g, wake });
+    for (let n = 0; n < 103; n++) gw.publishIndexed([g], 'message', 'did-message-created', { sessionId: 'task', messageId: `${n}` });
+    expect(sent).toHaveLength(0); expect(wake).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    running.add('reader'); finishWake();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toHaveLength(100); expect(sent[0]!.payload).toMatchObject({ seq: 4, dropped: 3 });
+    gw.dropGhost('reader'); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([false, true])('delivers saved content with a usable history cursor and attachment positions (serialized=%s)', async serialized => {
+    const g = subscriber() as InstalledGhost;
+    const { gw, sent } = makeGateway({ findGhostForDelivery: () => g });
+    const index = new GhostTaskEventIndex();
+    index.replace([g], owner);
+    index.publish({ kind: 'message', sessionId: 'task', message: { ...row,
+      content: serialized ? JSON.stringify(row.content) : row.content } }, owner, () => gw);
+    index.publish({ kind: 'state', sessionId: 'task', state: { status: 'archived' } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent.map(item => item.payload.name)).toEqual(['did-message-created', 'did-task-state-changed']);
+    const payload = sent[0]!.payload;
+    if (!('data' in payload)) throw new Error('expected content event');
+    const data = payload.data as { content: unknown; historyCursor: string };
+    expect(data.content).toEqual({ text: 'saved reply', attachments: [{ attachment_index: 0, name: 'image.png' }, { attachment_index: 1, name: 'file.txt' }] });
+    expect(decodeCursor(data.historyCursor)).toEqual({ createdAt: Date.parse(row.createdAt), id: 'message', rowid: 4 });
+  });
+
+  // Unit, #9801 / 4537623634: ordinary JSON is message content, not an attachment
+  // envelope. Existing cases only used attachment objects. Exercise the real
+  // mapper and index -> gateway with both unmapped text and decoded row values.
+  it.each(['123', 'false', 'null', '"quoted"', '{ "answer": 42 }',
+    '[1, true, {"answer":42}]', '[{"type":"record","answer":42}]',
+    '{"text":"kept","answer":42}', '{"images":[],"answer":42}'])(
+    'preserves ordinary JSON message content: %s', body => {
+      const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+      running.add('reader');
+      const decoded = messageToCamel(messageCreateToRow('message', 'task', {
+        clientId: 'json-message', role: 'assistant', content: body,
+      }, Date.parse(row.createdAt)) as Parameters<typeof messageToCamel>[0]);
+      const index = new GhostTaskEventIndex(); index.replace([g], owner);
+      for (const content of [body, decoded.content])
+        index.publish({ kind: 'message', sessionId: 'task', message: { ...row, content } }, owner, () => gw);
+      expect(sent.map(item => (item.payload as { data: { content: unknown } }).data.content))
+        .toEqual([body, decoded.content]);
+    },
+  );
+
+  it('keeps native message blocks free of attachment paths and reasoning', () => {
+    const g = subscriber(), { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publish({ kind: 'message', sessionId: 'task', message: { ...row, content: [
+      { type: 'text', text: 'saved reply' }, { type: 'image', source: { url: '/private/image.png' } },
+      { type: 'thinking', thinking: 'private reasoning' },
+    ] } }, owner, () => gw);
+    expect(sent[0]!.payload).toMatchObject({ data: { content: { text: 'saved reply' } } });
+    expect(JSON.stringify(sent)).not.toContain('private');
+  });
+
+  it.each(['no-subscriber', 'unapproved', 'owner-change', 'removed'] as const)('does no discovery or projection after %s', scenario => {
+    const index = new GhostTaskEventIndex();
+    const g = subscriber() as InstalledGhost;
+    if (scenario === 'unapproved') g.approvedEventTopics = undefined;
+    index.replace(scenario === 'no-subscriber' ? [] : [g], owner);
+    if (scenario === 'removed') index.replace([], owner);
+    const gateway = vi.fn();
+    index.publish({ kind: 'message', sessionId: 'task', get message(): Message { throw new Error('must not project'); } },
+      scenario === 'owner-change' ? { ...owner, ownerGeneration: 2 } : owner, gateway);
+    expect(gateway).not.toHaveBeenCalled();
+  });
+
+  // A committed-position read must not deliver a previous owner's or removed
+  // subscription's message after its asynchronous DB response arrives.
+  it.each(['owner', 'database', 'subscription'] as const)('drops a late cursor lookup after %s changes', async change => {
+    let finish!: (row: { rowid: number }) => void;
+    const queryOne = vi.fn(() => new Promise<{ rowid: number }>(resolve => { finish = resolve; }));
+    const index = new GhostTaskEventIndex(), gateway = vi.fn();
+    setCurrentDbClient({ queryOne } as unknown as DbClient, owner.dataOwnerId);
+    index.replace([subscriber()], owner);
+    try {
+      index.publish({ kind: 'message', sessionId: 'task', message: { ...row, rowid: undefined } }, owner, gateway);
+      expect(queryOne).toHaveBeenCalledOnce();
+      if (change === 'owner') index.replace([subscriber()], { ...owner, ownerGeneration: 2 });
+      else if (change === 'database') setCurrentDbClient({} as DbClient, 'next-owner');
+      else index.replace([], owner);
+      finish({ rowid: 4 });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(gateway).not.toHaveBeenCalled();
+    } finally { clearCurrentDbClient(); }
+  });
+
+  // Unit, §1.2: cursor lookup predates queueing. A new approved installation
+  // must not become the recipient of the previous installation's pending read.
+  it('keeps cursor lookup recipients bound to their original installation', async () => {
+    let finish!: (row: { rowid: number }) => void;
+    const queryOne = () => new Promise<{ rowid: number }>(resolve => { finish = resolve; });
+    const original = subscriber();
+    let live = original;
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => live });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([original], owner);
+    setCurrentDbClient({ queryOne } as unknown as DbClient, owner.dataOwnerId);
+    try {
+      index.publish({ kind: 'message', sessionId: 'task', message: { ...row, rowid: undefined } }, owner, () => gw);
+      live = { ...original, approval: { state: 'approved', revision: 'r2' } };
+      index.replace([live], owner); finish({ rowid: 4 });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(sent).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { clearCurrentDbClient(); }
+  });
+
+  // State-only permission must never deliver tool/activity prose or title-derived labels.
+  it('keeps state-only subscriptions free of action summaries and workflow text', async () => {
+    const g = { ...subscriber(), approvedEventTopics: ['task-state'] } as InstalledGhost;
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publish({ kind: 'state', sessionId: 'task', state: { changedAtMs: 10, activity: {
+      sessionId: 'task', phase: 'running', attention: false, currentActionSummary: 'private command arguments',
+      workflow: { key: 'title:private', label: 'private task title' },
+    } } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent[0]!.payload).toMatchObject({ data: { state: { changedAtMs: 10, activity: { sessionId: 'task', phase: 'running', attention: false } } } });
+    expect(JSON.stringify(sent)).not.toContain('private');
+  });
+
+  it.each(['revision', 'uninstalled', 'revoked', 'disabled'] as const)('drops buffered content when %s changes before wake completes', async change => {
+    const g = subscriber() as InstalledGhost;
+    let live: InstalledGhost | null = g;
+    let wake!: () => void;
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => live,
+      wake: () => new Promise<void>(resolve => { wake = resolve; }) });
+    gw.publishIndexed([g], 'message', 'did-message-created', { sessionId: 'task', content: 'secret' });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    live = change === 'uninstalled' ? null : { ...g,
+      ...(change === 'revision' ? { approval: { state: 'approved', revision: 'r2' } } : {}),
+      ...(change === 'revoked' ? { approvedEventTopics: [] } : {}),
+      ...(change === 'disabled' ? { enabled: false } : {}),
+    };
+    running.add('reader'); wake();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toEqual([]);
+  });
+});
+
 function makeGateway(overrides: Partial<GhostSubscriptionGatewayDeps> = {}) {
   const sent: Array<{ ghostId: string; payload: GhostPipeEventPush }> = [];
   const running = new Set<string>();
@@ -322,6 +532,221 @@ describe('subscriptionGateway owner boundary', () => {
 });
 
 const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
+
+// Unit regression: async discovery must preserve ordered delivery without a
+// synchronous scan, and must not reuse another owner's pending discovery.
+// Existing fan-out tests only exercise synchronous discovery / wake boundaries.
+describe('asynchronous notification discovery', () => {
+  // Unit performance regression: when recursive watching is unavailable, the
+  // real index scans on each read. Preflight and delivery must share one read
+  // for each lifecycle event, while the next event must still discover afresh.
+  it.each(['created', 'archived', 'switched'] as const)('scans once per %s event without filesystem watchers', async (kind) => {
+    const watch = vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('watch unavailable'); });
+    const subscriber = ghost('a', { topics: ['session'] });
+    const scan = vi.fn(async () => [subscriber]);
+    const index = new GhostNotificationIndex({ roots: () => [process.cwd()], scan });
+    try {
+      const { gw, sent, running } = makeGateway({ listGhostsAsync: () => index.read() });
+      running.add('a');
+      const { notifyGhostSessionEvent } = createSessionNotification({
+        ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+        getGhostSubscriptionGateway: () => gw,
+        isGhostEligibleSession: async () => ({ outcome: 'eligible' }),
+      });
+      notifyGhostSessionEvent(kind, { sessionId: 'A' }, async () => true, () => {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(watch).toHaveBeenCalled();
+      expect(sent).toHaveLength(1);
+      expect(scan).toHaveBeenCalledTimes(1);
+      notifyGhostSessionEvent(kind, { sessionId: 'B' }, async () => true, () => {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(2);
+      expect(scan).toHaveBeenCalledTimes(2);
+    } finally {
+      index.dispose();
+      watch.mockRestore();
+    }
+  });
+
+  // Unit regression: an unreadable discovery root must not reserve a failed
+  // focus, either when the same raw focus retries or when the user returns.
+  it.each([false, true])('recovers after discovery fails (retry same focus: %s)', async (retrySameFocus) => {
+    let failDiscovery = false;
+    const subscriber = ghost('a', { topics: ['session'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => {
+        if (failDiscovery) throw new Error('receipt root temporarily unreadable');
+        return [subscriber];
+      },
+    });
+    running.add('a');
+    const eligible = vi.fn(async () => ({ outcome: 'eligible' }));
+    const { notifyGhostSessionEvent } = createSessionNotification({
+      ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+      getGhostSubscriptionGateway: () => gw,
+      isGhostEligibleSession: eligible,
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (id) => id,
+      (sessionId, claim, releaseRaw) => notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw),
+    );
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    failDiscovery = true;
+    tracker.note('B');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent).toHaveLength(1);
+    expect(eligible).toHaveBeenCalledTimes(1);
+
+    failDiscovery = false;
+    if (retrySameFocus) {
+      tracker.note('B');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(2);
+    }
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent.map(({ payload }) => 'data' in payload ? payload.data : undefined)).toEqual(
+      (retrySameFocus ? ['A', 'B', 'A'] : ['A', 'A']).map(sessionId => ({ sessionId })),
+    );
+  });
+
+  // Unit regression (PR #8752): the gateway-only preflight tests did not cover
+  // focus bookkeeping across an empty subscription set. A -> disabled B -> A
+  // must deliver both A events through the production notification entry.
+  it('advances focus without subscribers so re-enabling does not suppress a return', async () => {
+    let enabled = true;
+    const subscriber = ghost('a', { topics: ['session'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => enabled ? [subscriber] : [],
+    });
+    running.add('a');
+    const eligible = vi.fn(async () => ({ outcome: 'eligible' }));
+    const { notifyGhostSessionEvent } = createSessionNotification({
+      ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+      getGhostSubscriptionGateway: () => gw,
+      isGhostEligibleSession: eligible,
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (id) => id,
+      (sessionId, claim, releaseRaw) => notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw),
+    );
+    tracker.note('A');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    enabled = false;
+    tracker.note('B');
+    // Drain the async focus/notification chain without sleeping or assuming
+    // how many Promise continuations the implementation uses.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(eligible).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveLength(1);
+
+    enabled = true;
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent.map(({ payload }) => 'data' in payload ? payload.data : undefined)).toEqual([
+      { sessionId: 'A' }, { sessionId: 'A' },
+    ]);
+    expect(eligible).toHaveBeenCalledTimes(2);
+  });
+
+  it('preflights the requested topic without waking unrelated or disabled plugins', async () => {
+    const { gw, deps } = makeGateway({ listGhostsAsync: async () => [
+      ghost('idle', { topics: ['session'] }), ghost('off', { topics: ['turn'] }, false),
+      ghost('hooks', { hooks: ['will-user-message'] }),
+    ] });
+    await expect(gw.preparePublish('session')).resolves.toEqual(expect.any(Function));
+    await expect(gw.preparePublish('turn')).resolves.toBeNull();
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  // Prepared candidates are discovery hints, never cached authorization.
+  it.each(['approval', 'disabled', 'topic', 'owner'] as const)('rechecks %s after preparing an event', async (change) => {
+    let owner = 1;
+    const candidate = { ...ghost('a', { topics: ['session'] }), approval: { state: 'approved' as const, revision: 'old' } };
+    let live = candidate;
+    const { gw, sent, running, deps } = makeGateway({
+      listGhostsAsync: async () => [candidate],
+      findGhostForDelivery: () => live,
+      ownerScope: { capture: () => owner, isCurrent: stamp => stamp === owner, isStable: () => true },
+    });
+    running.add('a');
+    const publish = await gw.preparePublish('session');
+    expect(publish).not.toBeNull();
+    if (change === 'approval') live = { ...candidate, approval: { state: 'approved', revision: 'new' } };
+    if (change === 'disabled') live = { ...candidate, enabled: false };
+    if (change === 'topic') live = { ...candidate, manifest: { ...candidate.manifest, subscribe: { topics: ['turn'] } } };
+    if (change === 'owner') owner++;
+    publish?.('did-session-switched', { sessionId: 'A' });
+    expect(sent).toHaveLength(0);
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  it('rejects an indexed subscriber after its approval was replaced without refreshing the index', async () => {
+    const candidate = { ...ghost('a', { topics: ['turn'] }), approval: { state: 'approved' as const, revision: 'old' } };
+    const { gw, sent, deps } = makeGateway({
+      listGhostsAsync: async () => [candidate],
+      findGhostForDelivery: () => ({ ...candidate, approval: { state: 'approved', revision: 'new' } }),
+    });
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  it('shares an in-flight scan, delivers in order and refreshes the next burst', async () => {
+    let resolve!: (ghosts: InstalledGhost[]) => void;
+    const pending = new Promise<InstalledGhost[]>((done) => { resolve = done; });
+    const listGhosts = vi.fn(() => { throw new Error('synchronous scan'); });
+    const listGhostsAsync = vi.fn(() => pending);
+    const subscriber = ghost('a', { topics: ['turn'] });
+    const { gw, sent, running } = makeGateway({ listGhosts, listGhostsAsync });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    gw.publish('turn', 'did-turn-end', { ...TURN_DATA, durationMs: 5, endReason: 'completed' });
+    expect(sent).toEqual([]);
+    expect(listGhostsAsync).toHaveBeenCalledOnce();
+    resolve([subscriber]);
+    await vi.waitFor(() => expect(sent.map(({ payload }) => payload.name)).toEqual(['did-turn-start', 'did-turn-end']));
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
+    expect(listGhostsAsync).toHaveBeenCalledTimes(2);
+    expect(listGhosts).not.toHaveBeenCalled();
+  });
+
+  it('starts fresh discovery after owner changes while an old scan is pending', async () => {
+    let owner = 1;
+    const releases: Array<(ghosts: InstalledGhost[]) => void> = [];
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: () => new Promise((resolve) => { releases.push(resolve); }),
+      ownerScope: { capture: () => owner, isCurrent: (stamp) => stamp === owner, isStable: () => true },
+    });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', { ...TURN_DATA, sessionId: 'old' });
+    owner++;
+    gw.publish('turn', 'did-turn-start', { ...TURN_DATA, sessionId: 'new' });
+    expect(releases).toHaveLength(2);
+    releases[0]!([ghost('a', { topics: ['turn'] })]);
+    releases[1]!([ghost('a', { topics: ['turn'] })]);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.payload).toMatchObject({ data: { sessionId: 'new' } });
+  });
+
+  it('does not deliver when the subscriber was disabled during discovery', async () => {
+    const subscriber = ghost('a', { topics: ['turn'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => [subscriber],
+      findGhostForDelivery: () => ({ ...subscriber, enabled: false }),
+    });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+  });
+});
 
 describe('did- 旁听扇出', () => {
   it('does not deliver an old buffered event after its physical key has been reused', async () => {
@@ -399,6 +824,34 @@ describe('did- 旁听扇出', () => {
     await vi.waitFor(() => expect(sent).toHaveLength(2));
     expect(deps.wake).toHaveBeenCalledTimes(1); // 唤醒去重
     expect(sent.map((s) => (s.payload as { name: string }).name)).toEqual([
+      'did-turn-start',
+      'did-turn-end',
+    ]);
+  });
+
+  it('补投首次唤醒 flush 期间新入队的终止事件', async () => {
+    const delivered: GhostPipeEventPush[] = [];
+    let gateway!: GhostSubscriptionGateway;
+    const created = makeGateway({
+      sendToGhost: (_ghostId, payload) => {
+        delivered.push(payload);
+        if ((payload as { name?: string }).name === 'did-turn-start') {
+          queueMicrotask(() => {
+            gateway.publish('turn', 'did-turn-end', {
+              ...TURN_DATA,
+              durationMs: 5,
+              endReason: 'completed',
+            });
+          });
+        }
+      },
+    });
+    gateway = created.gw;
+
+    gateway.publish('turn', 'did-turn-start', TURN_DATA);
+
+    await vi.waitFor(() => expect(delivered).toHaveLength(2));
+    expect(delivered.map((payload) => (payload as { name: string }).name)).toEqual([
       'did-turn-start',
       'did-turn-end',
     ]);
@@ -1473,5 +1926,248 @@ describe('GhostTurnOriginTracker', () => {
     origin.noteEvent({ type: 'thinking', data: { stage: 'start', blockId: 'b1' } });
     origin.noteEvent({ type: 'assistant', data: {} });
     expect(origin.acceptsInteraction(undefined)).toBe(false);
+  });
+});
+
+// Bug/rule: control points (2026-10-31) ask only the plugin the task chose, never every installed
+// plugin; a plugin can only tighten; an unavailable or silent plugin follows the task's onFailure.
+// Message-hook cases above do not cover per-task targeting or `skip`. Unit tier, fake timers.
+describe('control points', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const point = 'will-schedule-run' as const;
+  const data = {
+    scheduleId: 's1', runId: 'r1', name: 'Daily', prompt: 'summarize', executionMode: 'agent' as const,
+    trigger: 'cron' as const, firedAt: 1,
+  };
+  const approved = (id: string): InstalledGhost => ({ ...ghost(id, { hooks: [point] }), approvedControlPoints: [point] });
+
+  // Runtime latency contract, unit/fake timers: silence reaches the selected
+  // failure policy at each new point's own deadline, not the legacy 8s limit.
+  it.each([['will-start-turn', 1000], ['will-compose-context', 2000], ['will-search-memory', 1500], ['will-model-request', 1000]] as const)
+    ('bounds unanswered %s at %dms', async (runtimePoint, timeoutMs) => {
+      const provider = { ...ghost('runtime', { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] };
+      const { gw, running, sent } = makeGateway({ listGhosts: () => [provider] });
+      running.add('runtime');
+      const input = { sessionId: 'task', route: { agentKind: 'pi' as const, model: 'm', providerId: 'p' },
+        phase: 'select' as const, text: 'text', query: 'query', limit: 10 };
+      let settled = false;
+      const pending = gw.screenControlPoint(runtimePoint, input, { pluginId: 'runtime', onFailure: 'allow' });
+      void pending.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(sent[0].payload).toMatchObject({ deadline: 1000 + timeoutMs });
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({ action: 'allow' });
+      expect(settled).toBe(true);
+    });
+
+  it('asks only the chosen plugin and returns its skip', async () => {
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [approved('p1'), approved('p2')] });
+    running.add('p1').add('p2');
+    const result = gw.screenControlPoint(point, data, { pluginId: 'p2', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.map((item) => item.ghostId)).toEqual(['p2']);
+    expect(sent[0].payload).toMatchObject({ name: point, data, deadline: 1_000 + 30_000 });
+    const hookId = (sent[0].payload as { hookId: string }).hookId;
+    gw.handleVerdict('p2', { type: 'event-verdict', hookId, action: 'skip', reason: 'nothing new' });
+    expect(await result).toEqual({ action: 'skip', ghostId: 'p2', ghostName: '意识p2', reason: 'nothing new', failure: false });
+  });
+
+  it('applies the task failure setting to an unapproved, missing or silent plugin', async () => {
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [ghost('pre', { hooks: [point] }), approved('p1')] });
+    running.add('pre').add('p1');
+    expect(await gw.screenControlPoint(point, data, { pluginId: 'pre', onFailure: 'skip' }))
+      .toMatchObject({ action: 'skip', ghostId: 'pre', failure: true });
+    expect(await gw.screenControlPoint(point, data, { pluginId: 'gone', onFailure: 'block' }))
+      .toMatchObject({ action: 'block', ghostId: 'gone', failure: true });
+    expect(sent).toHaveLength(0);
+
+    const blocked = gw.screenControlPoint(point, data, { pluginId: 'p1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(30_000 + 10);
+    expect(await blocked).toMatchObject({ action: 'block', ghostId: 'p1', failure: true });
+
+    const allowed = gw.screenControlPoint(point, data, { pluginId: 'p1', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(30_000 + 10);
+    expect(await allowed).toEqual({ action: 'allow' });
+  });
+
+  // Rule (2026-10-31): only the new-task point may pick a model; the route is reduced to the four
+  // known fields before Main validates it, and a route sent to a run point is just "no objection".
+  it('returns a sanitized route only at the new-task point', async () => {
+    const start = 'will-start-task' as const;
+    const startData = { modelId: 'auto', text: 'fix the login bug', attachmentCount: 0, route: { agentKind: 'codex' as const, model: 'm1', providerId: 'p' } };
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [{ ...ghost('r1', { hooks: [start, point] }), approvedControlPoints: [start, point] }],
+    });
+    running.add('r1');
+    const verdict = (index: number, route: unknown) => gw.handleVerdict('r1', {
+      type: 'event-verdict', hookId: (sent[index].payload as { hookId: string }).hookId, action: 'route', reason: 'code', route,
+    });
+
+    const routed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(0, { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', agentDeviceId: 'share:fixture', endpoint: 'https://evil' });
+    expect(await routed).toEqual({
+      action: 'route', ghostId: 'r1', ghostName: '意识r1', reason: 'code',
+      route: { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', agentDeviceId: 'share:fixture' },
+    });
+
+    const malformed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(1, { agentKind: 'gpt', model: 'opus', providerId: 'anthropic' });
+    expect(await malformed).toEqual({ action: 'allow' });
+
+    const runPoint = gw.screenControlPoint(point, data, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(2, { agentKind: 'cc', model: 'opus', providerId: 'anthropic' });
+    expect(await runPoint).toEqual({ action: 'allow' });
+  });
+
+  // Runtime points are opt-in per task; installing a router cannot give it other
+  // tasks. Unlike the legacy new-task selector, invalid runtime answers use the
+  // task's failure policy. Unit: real gateway, in-memory transport, fake timers.
+  it('routes only the selected runtime plugin and retains request preferences', async () => {
+    const runtimePoint = 'will-start-turn' as const;
+    const ghosts = ['r1', 'r2'].map(id => ({ ...ghost(id, { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] }));
+    const listGhosts = vi.fn(() => ghosts);
+    const findGhostForDelivery = vi.fn((id: string) => ghosts.find(item => installedGhostStoragePart(item) === id) ?? null);
+    const { gw, sent, running } = makeGateway({
+      listGhosts, findGhostForDelivery,
+    });
+    running.add('r1');
+    running.add('r2');
+    const route = { agentKind: 'pi' as const, model: 'm1', providerId: 'p', effort: 'high', fastMode: true };
+    const response = gw.screenControlPoint(runtimePoint, { sessionId: 'task', text: 'work', attachmentCount: 0, route }, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toHaveLength(1);
+    gw.handleVerdict('r2', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await response).toMatchObject({ action: 'route', ghostId: 'r1', route });
+    // Performance contract: check fresh target approval before and after the
+    // ask without scanning unrelated installations on every model request.
+    expect(listGhosts).not.toHaveBeenCalled();
+    expect(findGhostForDelivery.mock.calls).toEqual([['r1'], ['r1']]);
+  });
+
+  it('processes a request only at the model-request point and follows failure policy for invalid routes', async () => {
+    const requestPoint = 'will-model-request' as const;
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [{ ...ghost('r1', { hooks: [requestPoint] }), approvedControlPoints: [requestPoint] }],
+    });
+    running.add('r1');
+    const input = { sessionId: 'task', phase: 'payload' as const, route: { agentKind: 'pi' as const, model: 'm1', providerId: 'p' }, request: { model: 'm1', max_tokens: 100 } };
+    const response = gw.screenControlPoint(requestPoint, input, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'transform', request: { model: 'm1', max_tokens: 200 } });
+    expect(await response).toMatchObject({ action: 'transform', request: { model: 'm1', max_tokens: 200 } });
+    const invalid = gw.screenControlPoint(requestPoint, { ...input, phase: 'select' }, { pluginId: 'r1', onFailure: 'skip' });
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[1].payload as { hookId: string }).hookId, action: 'route', route: { agentKind: 'pi' } });
+    expect(await invalid).toMatchObject({ action: 'skip', failure: true });
+  });
+
+  it('rejects a runtime answer from an installation replaced during the ask', async () => {
+    const point = 'will-start-turn' as const;
+    const selected = { ...ghost('r1', { hooks: [point] }), approvedControlPoints: [point],
+      approval: { state: 'approved' as const, revision: '00000000-0000-4000-8000-000000000001' } };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [selected] });
+    running.add('r1');
+    const route = { agentKind: 'pi' as const, providerId: 'p', model: 'm' };
+    const response = gw.screenControlPoint(point, { sessionId: 'task', route }, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    selected.approval.revision = '00000000-0000-4000-8000-000000000002';
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await response).toMatchObject({ action: 'block', failure: true });
+  });
+
+  // PR #9803: a fast provider can be revoked while another provider is pending.
+  // Existing gateway tests stop at delivery; exercise the real collection and
+  // application entry, with no network/waits (unit/fake timers). Minimum input:
+  // two providers, first answers, its enable/approval changes, second answers.
+  it.each((['disabled', 'approval'] as const).flatMap(change => [
+    ['will-compose-context', 'allow', change], ['will-compose-context', 'skip', change],
+    ['will-compose-context', 'block', change], ['will-search-memory', 'allow', change],
+  ] as const))('rechecks collected %s with %s policy after %s changes', async (point, onFailure, change) => {
+    const selected = ['first', 'second'].map(id => ({ ...ghost(id, { hooks: [point] }), approvedControlPoints: [point],
+      approval: { state: 'approved' as const, revision: '00000000-0000-4000-8000-000000000001' } }));
+    const listGhosts = vi.fn(() => selected);
+    const { gw, sent, running } = makeGateway({ listGhosts,
+      findGhostForDelivery: id => selected.find(item => installedGhostStoragePart(item) === id) ?? null });
+    for (const item of selected) running.add(installedGhostStoragePart(item));
+    const settings: RuntimePluginSettings = { [point]: selected.map(item => ({ pluginId: item.manifest.id, onFailure })) };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: (...args) => gw.screenControlPoint(...args) });
+    const providers = createRuntimeContextProviders(control);
+    const pending = point === 'will-compose-context' ? providers.compose('task', 'current input')
+      : providers.search({ sessionId: 'task', query: 'word', limit: 10 });
+    const observed = pending!.then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
+    await vi.advanceTimersByTimeAsync(0);
+    const reply = (id: string) => {
+      const event = sent.find(item => item.ghostId === id)!.payload;
+      gw.handleVerdict(id, { type: 'event-verdict', hookId: (event as { hookId: string }).hookId,
+        ...(point === 'will-compose-context' ? { action: 'context', blocks: [{ id, text: id }] }
+          : { action: 'memories', entries: [{ id, title: id, content: id }] }) });
+    };
+    reply('first');
+    await vi.advanceTimersByTimeAsync(0);
+    if (change === 'disabled') selected[0].enabled = false;
+    else selected[0].approval.revision = '00000000-0000-4000-8000-000000000002';
+    reply('second');
+    const outcome = await observed;
+    if (onFailure !== 'allow') expect(outcome.error).toMatchObject({ action: onFailure, failure: true });
+    else if (point === 'will-search-memory') expect(outcome.value).toMatchObject({ hits: [{ id: 'second', sourcePlugin: { id: 'second' } }] });
+    else {
+      expect(outcome.error).toBeUndefined();
+      expect(typeof outcome.value).toBe('string');
+      expect(JSON.parse(outcome.value as string)).toMatchObject({ sourcePlugin: { id: 'second' }, blocks: [{ id: 'second', text: 'second' }] });
+    }
+    expect(listGhosts).not.toHaveBeenCalled();
+  });
+
+  // The same approval boundary also spans asynchronous host route validation.
+  it.each(['will-start-turn', 'will-model-request'] as const)('rechecks %s before applying an asynchronous host effect', async point => {
+    const selected = { ...ghost('router', { hooks: [point] }), approvedControlPoints: [point] };
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => selected });
+    running.add('router');
+    const settings: RuntimePluginSettings = { [point]: [{ pluginId: 'router', onFailure: 'block' }] };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: (...args) => gw.screenControlPoint(...args) });
+    const route = { agentKind: 'pi' as const, providerId: 'p', model: 'm' };
+    const applied = vi.fn();
+    const pending = control.run(point, 'task', async () => ({ sessionId: 'task', phase: 'select' as const, route }),
+      async (_result, _input, assertCurrent) => {
+        await Promise.resolve();
+        selected.enabled = false;
+        assertCurrent();
+        applied();
+      });
+    const observed = pending!.then(() => undefined, error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('router', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await observed).toMatchObject({ action: 'block', failure: true });
+    expect(applied).not.toHaveBeenCalled();
+  });
+
+  it.each(['will-compose-context', 'will-search-memory'] as const)('validates provider results and times out %s without blocking', async point => {
+    const selected = { ...ghost('provider', { hooks: [point] }), approvedControlPoints: [point] };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [selected] });
+    running.add('provider');
+    const data = point === 'will-compose-context' ? { sessionId: 'task', text: 'read' }
+      : { sessionId: 'task', query: 'word', limit: 10 };
+    const pending = gw.screenControlPoint(point, data, { pluginId: 'provider', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(0);
+    const answer = point === 'will-compose-context' ? { action: 'context', blocks: [{ id: 'a', text: 'reference', sourcePlugin: 'forged' }] }
+      : { action: 'memories', entries: [{ id: 'a', title: 'Title', content: 'Full memory', sourcePlugin: 'forged' }] };
+    gw.handleVerdict('provider', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, ...answer });
+    expect(JSON.stringify(await pending)).not.toContain('forged');
+    const timeout = gw.screenControlPoint(point, data, { pluginId: 'provider', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(8001);
+    expect(await timeout).toEqual({ action: 'allow' });
   });
 });

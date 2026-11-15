@@ -1,3 +1,4 @@
+import { assertTaskActionCurrent } from './taskActionAuthorization.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from './appDefaultModelControl.js';
 import type { BotCapabilityCallbacks, BotControlState } from '@cindy/mcps';
 import { and, eq } from 'drizzle-orm';
@@ -5,8 +6,9 @@ import { botProfiles, botProfileVersions, botSessionLinks, sessions } from '../l
 import { getDbClient } from '../localDb/client/current.js';
 import { updateBotProfile } from '../localDb/ipc/bots.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
+import { listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
+import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import type { AgentKind, Maker } from '@cindy/maker-core';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
@@ -15,12 +17,13 @@ import type { BotProfileRuntimeDeps } from './botProfileRuntime.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { readEffectiveBotModelChain, readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
-type Input = { callerSessionId: string; kind: Kind };
-type Entry = { id: string; name: string; description: string; available: boolean; joined: boolean };
+type Input = { callerSessionId: string; kind: Kind | 'feature' };
+type Entry = { id: string; name: string; description: string; available: boolean; joined: boolean; cindyOfficial?: boolean };
 export interface BotCapabilityServiceDeps {
+  markOfficialSkills?: <T extends { path?: string }>(skills: readonly T[], remoteHostId?: string) => Promise<Array<T & { cindyOfficial: boolean }>>;
+  readConversationConnections?(botId: string): Promise<NonNullable<BotControlState['conversations']>['connections']>;
   getMaker: () => Pick<Maker, 'listAgentSkills'>;
   resolveBotAgentKind: (sessionId: string, modelChain?: BotModelRoute[]) => Promise<AgentKind | null>;
   getPluginRegistry: () => Pick<PluginRegistry, 'getPlugins' | 'getEnableState'>;
@@ -38,11 +41,18 @@ const fields: Record<Kind, { list: string; mode: string }> = {
   mcp: { list: 'mcpServers', mode: 'mcpMode' },
   toolset: { list: 'toolsets', mode: 'toolsetMode' },
 };
+/** `kind=feature`: this teammate's own switches (only memory; the V1 system Skills were removed). */
+const FEATURES: { id: 'memory'; name: string; description: string }[] = [
+  { id: 'memory', name: '记忆', description: '记住主人的偏好与背景；关闭后不读也不存记忆。' },
+];
+function featureEntries(config: Record<string, unknown>): Entry[] {
+  return FEATURES.map((item) => ({ ...item, available: true, joined: config.memory !== false }));
+}
 const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 
-/** Only the live owner may select capabilities; no caller-supplied Bot or connection config. */
-async function context(callerSessionId: string, opts?: { allowPaused?: boolean; readScope?: 'self' | 'owner' }) {
+/** Any of the teammate's own chats manages it, like a task in its project; no caller-supplied Bot or connection config. */
+async function context(callerSessionId: string, opts?: { allowPaused?: boolean }) {
   const owner = activeOwnerScopeKey();
   const assertOwner = () => {
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner)
@@ -80,17 +90,12 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean; 
     .where(eq(botSessionLinks.sessionId, callerSessionId))
     .limit(1);
   assertOwner();
-  const groupAuthority = row?.role === 'group' && opts?.readScope
-    ? await authorizeGroupTool(callerSessionId, row.botId, opts.readScope === 'self' ? 'read-self' : 'owner-action') : null;
-  assertOwner();
   const profileAllowed =
     row?.profileStatus === 'active' ||
     (opts?.allowPaused === true && row?.profileStatus === 'paused');
   if (
     !row ||
     row.source !== 'bot' ||
-    // The owner's Bot Chat: the current main Chat or one of its private-chat topics.
-    (!groupAuthority && row.role !== 'thread' && (row.role !== 'canonical' || row.canonicalSessionId !== callerSessionId)) ||
     row.archivedAt !== null ||
     row.sessionStatus !== 'active' ||
     !profileAllowed
@@ -102,16 +107,12 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean; 
     parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : {};
-  return { ...row, config: normalizeBotToolCapabilities(config), canReadOwnerModels: !groupAuthority || groupAuthority.mode === 'owner', assertOwner: () => {
-    assertOwner(); groupAuthority?.assertCurrent();
-  }, refresh: async () => {
-    assertOwner();
-    await groupAuthority?.refresh();
+  return { ...row, config: normalizeBotToolCapabilities(config), assertOwner, refresh: async () => {
     assertOwner();
   } };
 }
 
-async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context>>, 'config' | 'workingDir' | 'remoteHostId' | 'botId' | 'assertOwner'>, deps: BotCapabilityServiceDeps,
+async function catalog(input: { callerSessionId: string; kind: Kind }, ctx: Pick<Awaited<ReturnType<typeof context>>, 'config' | 'workingDir' | 'remoteHostId' | 'botId' | 'assertOwner'>, deps: BotCapabilityServiceDeps,
   options?: { modelChain?: BotModelRoute[]; forceReload?: boolean; agentKind?: AgentKind }): Promise<Entry[]> {
   const joined = new Set(strings(ctx.config[fields[input.kind].list]).filter(
     (id) => input.kind !== 'toolset' || !BOT_BASELINE_PLUGIN_IDS.has(id),
@@ -129,12 +130,24 @@ async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context
       remoteHostId: ctx.remoteHostId ?? undefined,
       ...(options?.forceReload ? { forceReload: true } : {}),
     });
-    items = result.skills.map((skill) => ({
-      id: skill.name,
-      name: skill.name,
-      description: skill.description ?? '',
-      available: skill.enabled !== false && skill.runtimeStatus !== 'failed',
-    }));
+    const skills = deps.markOfficialSkills
+      ? await deps.markOfficialSkills(result.skills, ctx.remoteHostId ?? undefined) : result.skills;
+    // Resolve namesakes like the runtime: the last entry wins, except that an
+    // active Cindy official Skill keeps the name.
+    const byName = new Map<string, Omit<Entry, 'joined'>>();
+    for (const skill of skills) {
+      const entry = {
+        cindyOfficial: skill.cindyOfficial === true,
+        id: skill.name,
+        name: skill.name,
+        description: skill.description ?? '',
+        available: skill.enabled !== false && skill.runtimeStatus !== 'failed',
+      };
+      const kept = byName.get(entry.id);
+      if (kept?.cindyOfficial && kept.available && !entry.cindyOfficial) continue;
+      byName.set(entry.id, entry);
+    }
+    items = [...byName.values()];
   } else if (input.kind === 'mcp') {
     const runtimeCatalog = await deps.listMcpServers({
       agentKind, workingDir, remoteHostId: ctx.remoteHostId ?? undefined,
@@ -142,13 +155,21 @@ async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context
     const available = new Set(runtimeCatalog
       .filter((entry) => entry.source === 'custom' && entry.available !== false)
       .map((entry) => entry.name));
+    const harness = runtimeCatalog.filter((entry) => entry.source === 'harness');
+    // Legacy collisions remain in custom settings, but cannot replace or duplicate
+    // the engine-owned capability in this selection list.
     // Project only display metadata. URLs, headers and tokens never enter tool results.
-    items = (await listCustomMcpServers()).map((mcp) => ({
+    items = (await listCustomMcpServers()).filter((mcp) => !harness.some((entry) => entry.name === mcp.id)).map((mcp) => ({
       id: mcp.id,
       name: mcp.name,
       description: mcp.transport,
       available: available.has(mcp.id),
     }));
+    items.push(...harness.map((entry) => ({
+      id: entry.name, name: entry.name,
+      description: 'Engine-provided connectors; not Cindy tasks, routines or plugins.',
+      available: entry.available !== false,
+    })));
   } else {
     const registry = getPluginRegistry();
     items = await Promise.all(
@@ -172,8 +193,10 @@ async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context
     );
   }
   ctx.assertOwner();
-  const inherit = input.kind !== 'skill' && ctx.config[fields[input.kind].mode] === 'inherit';
-  const result = items.map((item) => ({ ...item, joined: joined.has(item.id) || (inherit && item.available) }));
+  // V2: every session of the teammate has everything here; there is no selection.
+  const inherit = readBotProjectMode(ctx.config)
+    || (input.kind !== 'skill' && ctx.config[fields[input.kind].mode] === 'inherit');
+  const result = items.map((item) => ({ ...item, joined: item.cindyOfficial ? item.available : joined.has(item.id) || (inherit && item.available) }));
   // Uninstalled references remain removable, instead of silently disappearing.
   for (const id of joined)
     if (!result.some((item) => item.id === id))
@@ -183,16 +206,16 @@ async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context
 
 async function findBotCapabilities(input: Input & { query?: string }, deps: BotCapabilityServiceDeps) {
   try {
-    const ctx = await context(input.callerSessionId, { readScope: 'owner' });
+    const ctx = await context(input.callerSessionId);
     const query = input.query?.trim().toLocaleLowerCase() ?? '';
-    const capabilities = (await catalog(input, ctx, deps)).filter(
+    const entries = input.kind === 'feature' ? featureEntries(ctx.config) : await catalog({ ...input, kind: input.kind }, ctx, deps);
+    const capabilities = entries.filter(
       (item) =>
         !query || `${item.id} ${item.name} ${item.description}`.toLocaleLowerCase().includes(query),
     );
     await ctx.refresh();
     return { ok: true as const, capabilities: capabilities.slice(0, 50) };
   } catch (error) {
-    if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
     return {
       ok: false as const,
       errorCode: 'CAPABILITY_DISCOVERY_FAILED',
@@ -204,24 +227,51 @@ async function findBotCapabilities(input: Input & { query?: string }, deps: BotC
 async function selectBotCapability(input: Input & { id: string; joined: boolean }, deps: BotCapabilityServiceDeps) {
   try {
     const ctx = await context(input.callerSessionId);
-    if (input.kind === 'toolset' && BOT_BASELINE_PLUGIN_IDS.has(input.id)) {
+    if (input.kind === 'feature') {
+      if (input.id !== 'memory') {
+        return { ok: false as const, errorCode: 'CAPABILITY_UNAVAILABLE', message: '没有这项功能；可选 memory' };
+      }
+      ctx.assertOwner();
+      await updateBotProfile({ id: ctx.botId, capabilities: { memory: input.joined } }, ctx.version);
+      ctx.assertOwner();
+      return { ok: true as const, joined: input.joined, effective: 'next-turn' as const };
+    }
+    const kind = input.kind;
+    if (readBotProjectMode(ctx.config)) {
+      return {
+        ok: false as const,
+        errorCode: 'CAPABILITY_NOT_SELECTABLE',
+        message: '伙伴的每个对话都能用这台电脑上已有的工具、MCP 与技能，无需加入或移除；要给自己加技能，写进项目的 .agents/skills/',
+      };
+    }
+    if (kind === 'toolset' && BOT_BASELINE_PLUGIN_IDS.has(input.id)) {
       return {
         ok: false as const,
         errorCode: 'CAPABILITY_NOT_SELECTABLE',
         message: '该工具集是伙伴固定能力，无需加入且不能移除',
       };
     }
-    const field = fields[input.kind];
-    const previous = input.kind !== 'skill' && ctx.config[field.mode] === 'inherit'
-      ? (await catalog(input, ctx, deps)).filter((item) => item.joined).map((item) => item.id)
+    if (kind === 'skill') {
+      const item = (await catalog({ ...input, kind }, ctx, deps)).find(entry => entry.id === input.id);
+      if (item?.cindyOfficial) return {
+        ok: false as const, errorCode: 'CAPABILITY_NOT_SELECTABLE',
+        message: 'Cindy 官方技能跟随本机的启停设置，无需为伙伴单独加入或移除。',
+      };
+    }
+    const field = fields[kind];
+    const previous = kind !== 'skill' && ctx.config[field.mode] === 'inherit'
+      ? (await catalog({ ...input, kind }, ctx, deps)).filter((item) => item.joined).map((item) => item.id)
       : strings(ctx.config[field.list]);
     if (input.joined) {
-      const item = (await catalog(input, ctx, deps, { forceReload: true })).find((entry) => entry.id === input.id);
+      const item = (await catalog({ ...input, kind }, ctx, deps, { forceReload: true })).find((entry) => entry.id === input.id);
       if (!item?.available)
         return {
           ok: false as const,
           errorCode: 'CAPABILITY_UNAVAILABLE',
-          message: '该能力未安装、已停用或当前运行引擎不可用',
+          // Weaker models guess kind=skill for memory; point them at the right switch.
+          message: !item && FEATURES.some((feature) => feature.id === input.id)
+            ? `${input.id} 是伙伴自己的功能开关，请改用 kind=feature`
+            : '该能力未安装、已停用或当前运行引擎不可用',
         };
     }
     ctx.assertOwner();
@@ -235,7 +285,6 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
     ctx.assertOwner();
     return { ok: true as const, joined: input.joined, effective: 'next-turn' as const };
   } catch (error) {
-    if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
     return {
       ok: false as const,
       errorCode: 'CAPABILITY_SELECTION_FAILED',
@@ -249,35 +298,39 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
   return {
     async models(input: { callerSessionId: string }) {
       try {
-        const ctx = await context(input.callerSessionId, { readScope: 'owner' });
+        const ctx = await context(input.callerSessionId);
         const selection = await inspectAppDefaultModel();
         await ctx.refresh();
         return { ok: true as const, ...selection };
       } catch (error) {
-        if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
         return { ok: false as const, errorCode: 'MODEL_SETTINGS_UNAVAILABLE', message: '无法读取当前用户的默认模型和可用型号' };
       }
     },
-    async setDefaultModel(input: { callerSessionId: string; id: string; effort?: string }) {
+    async setDefaultModel(input: { callerSessionId: string; id: string; effort?: string; fastMode?: boolean | 'ultrafast' }) {
       try {
         const ctx = await context(input.callerSessionId);
-        const result = await changeAppDefaultModel(input.id, input.effort, ctx.assertOwner);
+        const result = await changeAppDefaultModel(input.id, input.effort, async () => { await ctx.refresh(); ctx.assertOwner(); await assertTaskActionCurrent(); }, input.fastMode);
         ctx.assertOwner();
         return { ok: true as const, ...result };
       } catch (error) {
-        if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
         return { ok: false as const, errorCode: 'MODEL_DEFAULT_NOT_CONFIRMED', message: '默认模型未确认保存；型号可能已停用、账号或选择已变化，请重新查询当前设置。' };
       }
     },
     async inspect(input: { callerSessionId: string }) {
       try {
-        const ctx = await context(input.callerSessionId, { readScope: 'self' });
+        const ctx = await context(input.callerSessionId);
         const explicit = readExplicitBotModelChain(ctx.config);
-        // A self-read may report inherited selection without exposing owner route IDs.
-        const candidates = explicit === null && !ctx.canReadOwnerModels
-          ? [] : await readEffectiveBotModelChain(ctx.config);
+        const candidates = await readEffectiveBotModelChain(ctx.config);
+        const conversations: BotControlState['conversations'] = {
+          scope: 'local',
+          teammateId: ctx.botId,
+          connections: await deps.readConversationConnections?.(ctx.botId) ?? [],
+          connectionsAvailable: Boolean(deps.readConversationConnections),
+          guidance: 'Recall a topic with search_chat_history(query, teammate_id=teammateId), without a workdir or creation-date filter. list_sessions(teammate_id=teammateId, time_field=activity) includes old active, archived and topic/channel chats. Read matching originals with get_chat_history. If no match, existing account-history permission permits a bounded topic search without teammate_id for unlinked legacy records; report companion=null as unverified ownership, never infer it from a current connection, name or directory. device=all queries online authorized computers; unavailable/older devices and capped results are incomplete coverage.',
+        };
         await ctx.refresh();
         const state: BotControlState = {
+          conversations,
           profile: { id: ctx.botId, name: ctx.displayName, description: ctx.description,
             identitySource: ctx.identitySource, version: ctx.version },
           session: { id: input.callerSessionId, workingDir: ctx.workingDir, remoteHostId: ctx.remoteHostId },
@@ -288,7 +341,6 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         };
         return { ok: true as const, state };
       } catch (error) {
-        if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
         return { ok: false as const, errorCode: 'BOT_STATE_UNAVAILABLE', message: '无法读取当前伙伴状态，请稍后重试' };
       }
     },
@@ -319,6 +371,9 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         }
         ctx.assertOwner();
         await updateBotProfile({ id: ctx.botId,
+          // Supplying a model selection explicitly accepts it even when its
+          // value is unchanged; unrelated profile edits retain automation state.
+          ...(modelChain !== undefined ? { acceptSavedModelSelectionVersion: input.expectedVersion } : {}),
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.description !== undefined ? { description: input.description } : {}),
           ...(input.identitySource !== undefined ? { identitySource: input.identitySource } : {}),
@@ -329,7 +384,6 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         ctx.assertOwner();
         return { ok: true as const, effective: 'next-turn' as const };
       } catch (error) {
-        if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
         return { ok: false as const, errorCode: 'BOT_PROFILE_UPDATE_FAILED',
           message: '伙伴资料已变化，或所选模型及档位不可用；请重新读取伙伴状态和可用型号后重试' };
       }
@@ -344,7 +398,7 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
     },
     list: (input: Input & { query?: string }) => findBotCapabilities(input, deps),
     /** Settings use the complete catalog, including removable unavailable references. */
-    async forSettings(input: Input) {
+    async forSettings(input: { callerSessionId: string; kind: Kind }) {
       const ctx = await context(input.callerSessionId, { allowPaused: true });
       return catalog(input, ctx, deps);
     },
@@ -377,3 +431,4 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
     },
   };
 }
+

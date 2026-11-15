@@ -21,9 +21,9 @@
  *   - 侧栏不跳、作品集不断、右栏 tab 不重挂、device-link 不用重新解析归属;
  *   - 没有链,也就没有跟错节点这回事。
  *
- * 代价是压缩后 agent 进程要重建(旧 runtime 关掉、按当前档案重新 bootstrap),
- * 这正是 `botCompactRuntimeRefresh` 那个协调器在做的事 —— 它顺带解决了 Hermes
- * 那条链**没有**解决的问题:压缩后把灵魂、技能索引、记忆快照重新注入。
+ * 正常压缩交给原生 Session,不重建伙伴 runtime。明确的资源/配置变化才使用
+ * `botCompactRuntimeRefresh` 协调器刷新。压缩后不 close/bootstrap 的行为由
+ * sessionEventPipeline.test.ts 的真实事件管线 + 刷新协调器回归覆盖。
  *
  * 结论:这里**有意不实现**续接链。抄过来是退步。
  */
@@ -62,15 +62,10 @@ describe('三个 harness 都会报压缩边界', () => {
   });
 });
 
-describe('压缩之后伙伴的身份被重新注入', () => {
+describe('显式配置变化的伙伴运行实例刷新', () => {
   const register = read('apps/desktop/src/main/maker-ipc/register.ts');
 
-  it('压缩边界被记下来,而不是当场重建 —— 同一轮里可能压好几次', () => {
-    expect(read('apps/desktop/src/main/maker-ipc/sessionEventPreparation.ts')).toContain("event.type === 'compact_boundary'");
-    expect(read('apps/desktop/src/main/maker-ipc/sessionEventPreparation.ts')).toContain('botCompactRuntimeRefreshCoordinator.noteBoundary(session)');
-  });
-
-  it('真正的重建发生在轮次结束之后', () => {
+  it('已登记的配置刷新可在轮次结束后执行', () => {
     expect(register).toContain('botCompactRuntimeRefreshCoordinator.attempt(session)');
   });
 
@@ -85,7 +80,7 @@ describe('压缩之后伙伴的身份被重新注入', () => {
     expect(register).toContain('clearForClosedSession');
   });
 
-  it('重建留痕,能查到某次压缩之后档案是哪个版本', () => {
+  it('重建留痕,能查到配置刷新使用的档案版本', () => {
     expect(register).toContain('compact-runtime-refresh-applied');
   });
 });

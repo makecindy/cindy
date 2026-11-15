@@ -313,10 +313,10 @@ describe('identifier 态(附录 A providers 场景)', () => {
     );
   });
 
-  it('「跳过登录」= 文字按钮:统一 #6F6F6F 不随 hover/pressed 变色(用户拍板 2026-07-27)', async () => {
+  it('「跳过登录」= 文字按钮:统一次要档不随 hover/pressed 变色(用户拍板 2026-07-27)', async () => {
     mount(await identifierState('providers:both'));
     const skip = screen.getByTestId('login-skip-entry');
-    // 颜色走 --login-secondary-text(双模同值 #6F6F6F),不是 link 族 --login-link-text
+    // 颜色走 --login-secondary-text(墨水次要档),不是 link 族 --login-link-text
     const style = skip.getAttribute('style') ?? '';
     expect(style).toContain('--login-secondary-text');
     expect(style).not.toContain('--login-link-text');

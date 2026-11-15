@@ -17,7 +17,7 @@ import {
   type RemoteSessionListItem,
 } from './sessionList';
 
-// 首页「筛选」(项目 / Harness / 最近活跃)作用到展示模型。与 homeDisplaySettings 分开:
+// 首页「筛选」(项目 / 伙伴 / Harness / 最近活跃)作用到展示模型。与 homeDisplaySettings 分开:
 // 自动化组部分命中时要重新折叠并本地化,依赖 i18n;设置本身的纯逻辑不应带上这条依赖。
 
 /**
@@ -29,11 +29,15 @@ export function createHomeContentFilter(
   filters: HomeContentFilters,
   nowMs: number,
 ): ((item: RemoteSessionListItem) => RemoteSessionListItem | null) | null {
-  if (filters.vendor === 'all' && filters.lastActivity === 'all') return null;
+  if (filters.vendor === 'all' && filters.lastActivity === 'all' && (!filters.teammates || filters.teammates === 'all')) return null;
   const cutoff = filters.lastActivity === 'all'
     ? null
     : nowMs - LAST_ACTIVITY_DAYS[filters.lastActivity] * DAY_MS;
   const keep = (item: RemoteSessionListItem): boolean => {
+    if (filters.teammates === 'none') {
+      if (filters.teammateKey?.(item)) return false;
+    } else if (filters.teammates && filters.teammates !== 'all'
+      && !filters.teammates.includes(filters.teammateKey?.(item) ?? '')) return false;
     if (filters.vendor !== 'all' && sessionVendor(item) !== filters.vendor) return false;
     if (cutoff !== null && activityMsFromIso(item.lastActivityAt) < cutoff) return false;
     return true;
@@ -75,7 +79,7 @@ function filterItems(
 /**
  * 按筛选收窄首页展示模型。与桌面侧栏一致(设计文档 §3.3,2026-08-12 用户重申):
  * **筛选一律不作用于置顶区**——置顶是「我要一直看见它」,被筛掉会让人以为置顶丢了。
- * 项目筛选作用于项目组与对话;Harness / 最近活跃作用于项目组与对话里的任务。
+ * 项目筛选作用于项目组与对话;伙伴 / Harness / 最近活跃作用于项目组与对话里的任务。
  * 筛完为空的项目组整组隐藏。共享任务分组见 filterSharedHomeRows。
  */
 export function applyHomeContentFilters(
@@ -116,7 +120,7 @@ export function filterSharedHomeRows<Row extends { item?: RemoteSessionListItem 
   const filter = createHomeContentFilter(filters, nowMs);
   if (!filter) return rows;
   return rows.flatMap((row) => {
-    if (!row.item) return [row];
+    if (!row.item) return Array.isArray(filters.teammates) ? [] : [row];
     const item = filter(row.item);
     if (!item) return [];
     return [item === row.item ? row : { ...row, item }];

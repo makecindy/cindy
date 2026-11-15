@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 import {
   countHomeSuggestionSessions,
   isRemoteTaskSuggestionId,
@@ -9,6 +10,7 @@ import {
 } from "@/session/remoteTaskSuggestionsModel";
 import type { MobileHomePresentation } from "@/session/mobileHome";
 import type { RemoteSessionListItem } from "@/session/sessionList";
+import { deviceDisplayName } from "@/device-link/deviceName";
 
 // Source-fragment assertions must also work with Windows CRLF checkouts.
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
@@ -107,7 +109,21 @@ describe("suggestion route IDs", () => {
 describe("home recommendation connection readiness", () => {
   it("hides both modes after disconnect despite a retained online device snapshot", () => {
     const source = readTextLf(resolve(process.cwd(), "src/session/HomeSurface.tsx"), "utf8");
-    const expression = source.match(/ready: ([\s\S]*?),\n  \}\);\n  const newSessionDeviceOptions/)?.[1];
+    const file = ts.createSourceFile('HomeSurface.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let expression: string | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'taskSuggestionsCandidateMode'
+        && node.initializer && ts.isCallExpression(node.initializer)) {
+        const options = node.initializer.arguments[0];
+        if (options && ts.isObjectLiteralExpression(options)) {
+          const ready = options.properties.find(property => ts.isPropertyAssignment(property)
+            && property.name.getText(file) === 'ready');
+          if (ready && ts.isPropertyAssignment(ready)) expression = ready.initializer.getText(file);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
     expect(expression).toBeTruthy();
     const evaluateReady = new Function("status", "activeConnectionIssue", "recoveringDeviceIds", "selectedDeviceId", `
       const unresponsiveDevices = new Set(), rawDeviceConnectionStates = {};
@@ -139,19 +155,21 @@ describe("home recommendation connection readiness", () => {
 describe("recommendation route target", () => {
   it("passes the checked computer explicitly for both empty and template actions", () => {
     const source = readTextLf(resolve(process.cwd(), "src/session/HomeSurface.tsx"), "utf8");
-    const openBody = source.match(/const openNewSession = useCallback\([^\n]*=> \{([\s\S]*?)\n  \}, \[guardedPush, home.primaryDevice/)?.[1];
+    const openBody = source.match(/const openNewSession = useCallback\([^\n]*=> \{([\s\S]*?)\n  \}, \[guardedPush, t\]\);/)?.[1];
     const suggestedBody = source.match(/const openSuggestedSession = useCallback\([^\n]*=> \{([\s\S]*?)\n  \}, \[openNewSession/)?.[1];
     expect(openBody).toBeTruthy();
     expect(suggestedBody).toBeTruthy();
     expect(source.match(/onSelect=\{openSuggestedSession\}/g)).toHaveLength(2);
     expect(source.match(/onNewSession=\{\(\) => openSuggestedSession\(\)\}/g)).toHaveLength(2);
-    const open = new Function("project", "suggestion", "explicitDeviceId", "guardedPush", `
-      const home = { primaryDevice: { deviceId: 'fallback', label: 'Fallback' } };
-      const selectedDeviceId = null;
+    const open = new Function("project", "suggestion", "explicitDeviceId", "guardedPush", "deviceDisplayName", `
+      const newSessionTargetRef = { current: {
+        primaryDevice: { deviceId: 'fallback', label: 'Fallback' },
+        newSessionDeviceOptions: [{ deviceId: 'checked', name: 'Checked' }],
+        selectedDeviceId: null,
+      } };
       // 推荐入口不带 origin,不应触发 composer 形变入场。
       const origin = undefined;
       const rememberComposerEntry = () => { throw new Error('unexpected composer morph'); };
-      const newSessionDeviceOptions = [{ deviceId: 'checked', name: 'Checked' }];
       const serializeNewSessionDeviceOptions = JSON.stringify;
       const setError = (error) => { throw new Error(error); }, t = (key) => key;
       ${openBody}
@@ -160,7 +178,7 @@ describe("recommendation route target", () => {
     for (const suggestion of [undefined, "findFile"]) {
       let route: { params: Record<string, string> } | undefined;
       suggested(suggestion, (project: unknown, id: unknown, deviceId: unknown) =>
-        open(project, id, deviceId, (value: typeof route) => { route = value; }), "checked");
+        open(project, id, deviceId, (value: typeof route) => { route = value; }, deviceDisplayName), "checked");
       expect(route?.params).toMatchObject({ deviceId: "checked", deviceName: "Checked", deviceExplicit: "1" });
       expect(route?.params.suggestion).toBe(suggestion);
     }

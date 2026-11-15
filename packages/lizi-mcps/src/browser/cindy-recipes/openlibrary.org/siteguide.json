@@ -1,0 +1,13 @@
+{
+  "site": "openlibrary.org",
+  "auth": "公开信息，无需登录。",
+  "recipes": [
+    "open-library-search"
+  ],
+  "notes": "只查询公开书目信息，不下载书籍；固定最多 20 条，每本最多显示 5 个 ISBN，ISBN 对应不同版本。",
+  "source": "Cindy",
+  "verifiedAt": "2026-10-23",
+  "aliases": [
+    "open-library"
+  ]
+}

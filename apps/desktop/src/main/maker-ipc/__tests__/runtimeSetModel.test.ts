@@ -434,6 +434,71 @@ describe('applyRuntimeSetModelChange', () => {
     });
   });
 
+  it('forwards the Pi thinking intent to live setModel', async () => {
+    const sessionId = rememberSession('runtime-set-model-thinking-intent');
+    setSessionProvider(sessionId, 'native-a');
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'local-model',
+        setModel,
+        previewModelSwitch: vi.fn(async () => ({
+          action: 'hot' as const,
+          targetContextWindow: null,
+          windowVerified: false,
+        })),
+      }),
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'target-model',
+      providerId: 'native-a',
+      thinkingEnabled: false,
+    });
+
+    expect(setModel).toHaveBeenCalledWith('target-model', {
+      providerId: 'native-a',
+      thinkingEnabled: false,
+    });
+  });
+
+  it('omits the thinking intent when the caller has none', async () => {
+    const sessionId = rememberSession('runtime-set-model-no-thinking-intent');
+    setSessionProvider(sessionId, 'native-a');
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'local-model',
+        setModel,
+        previewModelSwitch: vi.fn(async () => ({
+          action: 'hot' as const,
+          targetContextWindow: null,
+          windowVerified: false,
+        })),
+      }),
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'target-model',
+      providerId: 'native-a',
+    });
+
+    // 严格匹配：无意图时不得给 runtime 添加 thinkingEnabled 键（保持旧行为）。
+    expect(setModel).toHaveBeenCalledWith('target-model', { providerId: 'native-a' });
+  });
+
   it('hot-applies a same-provider Claude model change while the turn is running',
     async () => {
       // 闸门 fail-open 之后走这条:Opus → Fable / Cindy 同凭证热切,不关会话、不丢 effort。
@@ -1289,6 +1354,46 @@ describe('applyRuntimeSetModelChange', () => {
       expect(getSessionProvider(sessionId)).toBe(toProvider);
     },
   );
+
+  it('passes the target budget to the Pi preview, same as the setModel call', async () => {
+    // 预演决定要不要重建，而 switchModel 会先把预算写成新值再预演。外层预演拿旧预算
+    // 就会判「可热切」，内层按新预算发现保留量不匹配便抛错 —— 首次发送必失败。
+    const sessionId = rememberSession('runtime-set-model-pi-preview-budget');
+    setSessionProvider(sessionId, 'xai');
+    const previewModelSwitch = vi.fn(async () => ({ action: 'hot' as const,
+      targetContextWindow: 1_000_000, windowVerified: true }));
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'grok-4.6',
+        setModel,
+        previewModelSwitch,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'grok-4.5',
+      providerId: 'xai',
+      contextWindowBudget: 500_000,
+    });
+
+    expect(previewModelSwitch).toHaveBeenCalledWith('grok-4.5', {
+      providerId: 'xai',
+      contextWindowBudget: 500_000,
+    });
+    expect(setModel).toHaveBeenCalledWith('grok-4.5', {
+      providerId: 'xai',
+      contextWindowBudget: 500_000,
+    });
+  });
 
   it('hot-switches idle Pi inside the same proxy identity without closing', async () => {
     const sessionId = rememberSession('runtime-set-model-pi-same-xai');

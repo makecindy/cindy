@@ -14,6 +14,16 @@ const catalog = [
 ] as unknown as ProviderView[];
 
 describe('providerDisplayNameById', () => {
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])(
+    'preserves the source computer name %s in selectors and usage history', (name) => {
+      const provider = { id: 'xd', name } as ProviderView;
+      expect(providerDisplayName(provider, t)).toBe(name);
+      expect(providerDisplayNameById('xd', [provider], t)).toBe(name);
+    },
+  );
+  it('keeps an older host generic instead of guessing its account identity', () => {
+    expect(providerDisplayName({ id: 'xd', name: 'XD Gateway' }, t)).toBe('Cindy AI');
+  });
   it('内置供应商用设置页标题，而不是裸 id', () => {
     expect(providerDisplayNameById('xd', [], t)).toBe('Cindy AI');
     expect(providerDisplayNameById('anthropic', catalog, t)).toBe('Anthropic');

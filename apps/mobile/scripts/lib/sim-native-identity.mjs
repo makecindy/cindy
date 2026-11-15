@@ -14,6 +14,7 @@ function fingerprint(value) {
 export function computeSimulatorNativeFingerprint(
   projectDir,
   env = process.env,
+  platform = 'ios',
 ) {
   const projectRequire = createRequire(
     join(resolve(projectDir), "package.json"),
@@ -24,28 +25,32 @@ export function computeSimulatorNativeFingerprint(
   try {
     const output = execFileSync(
       process.execPath,
-      [bin, "fingerprint:generate", "--platform", "ios"],
+      [bin, "fingerprint:generate", "--platform", platform],
       {
         cwd: projectDir,
         env,
         encoding: "utf8",
         maxBuffer: 64 * 1024 * 1024,
         timeout: 120_000,
+        killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
     const hash = fingerprint(JSON.parse(output).hash);
     if (!hash) throw new Error("Invalid fingerprint");
     return hash;
-  } catch {
-    throw new Error("Expo Updates native fingerprint calculation failed");
+  } catch (error) {
+    throw Object.assign(new Error("Expo Updates native fingerprint calculation failed"), {
+      code: error.code === "ETIMEDOUT" ? "NATIVE_FINGERPRINT_TIMEOUT" : "NATIVE_FINGERPRINT_FAILED",
+    });
   }
 }
 
 /**
  * @param {{ appPath?: string, projectDir?: string, env?: Record<string, string | undefined>,
  * expectedFingerprint?: string, compute?: typeof computeSimulatorNativeFingerprint,
- * read?: (path: string) => string }} options
+ * read?: (path: string) => string, platform?: 'ios' | 'android',
+ * readInstalledFingerprint?: () => string }} options
  */
 export function inspectSimulatorNativeIdentity({
   appPath,
@@ -54,6 +59,8 @@ export function inspectSimulatorNativeIdentity({
   expectedFingerprint,
   compute = computeSimulatorNativeFingerprint,
   read = (path) => readFileSync(path, "utf8"),
+  platform = 'ios',
+  readInstalledFingerprint = () => read(join(appPath, "EXUpdates.bundle", "fingerprint")),
 }) {
   const result = {
     healthy: false,
@@ -64,19 +71,30 @@ export function inspectSimulatorNativeIdentity({
   if (!appPath) return { ...result, code: "native-missing" };
   try {
     result.installedFingerprint = fingerprint(
-      read(join(appPath, "EXUpdates.bundle", "fingerprint")),
+      readInstalledFingerprint(),
     );
+  } catch (error) {
+    // A failed read is not evidence of an incompatible build. Keep a bounded
+    // reason, never the child output; a genuinely missing file can be rebuilt.
+    const reason = error?.code === 'ENOENT' ? 'installed-fingerprint-missing'
+      : error?.code === 'ANDROID_PROBE_TIMEOUT' || error?.code === 'ETIMEDOUT'
+        ? 'installed-fingerprint-timeout' : 'installed-fingerprint-unreadable';
+    return { ...result, reason };
+  }
+  if (!result.installedFingerprint) return { ...result, reason: "installed-fingerprint-missing" };
+  try {
     result.expectedFingerprint = fingerprint(
-      expectedFingerprint ?? compute(projectDir, env),
+      expectedFingerprint ?? compute(projectDir, env, platform),
     );
-    if (!result.installedFingerprint || !result.expectedFingerprint)
-      return result;
+    if (!result.expectedFingerprint)
+      return { ...result, reason: "native-fingerprint-unavailable" };
     result.healthy = result.installedFingerprint === result.expectedFingerprint;
     result.code = result.healthy ? "native-matched" : "native-mismatch";
     return result;
-  } catch {
+  } catch (error) {
     // Unknown is never compatibility evidence. Keep CLI output free of config
     // contents or child-process diagnostics that may contain local secrets.
-    return result;
+    return { ...result, reason: error.code === "NATIVE_FINGERPRINT_TIMEOUT"
+      ? "native-fingerprint-timeout" : "native-fingerprint-unavailable" };
   }
 }

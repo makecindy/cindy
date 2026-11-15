@@ -1,3 +1,4 @@
+import { DocumentPreviewChrome } from "./DocumentPreviewChrome";
 import { useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -43,13 +44,21 @@ import {
 
 /** Android/web use opaque themed surfaces so arbitrary webpage colors cannot erase the controls. */
 export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChromeProps) {
+  return p.document ? (
+    <DocumentPreviewChrome {...p} />
+  ) : (
+    <WebsitePreviewChrome {...p} />
+  );
+}
+
+function WebsitePreviewChrome(p: HtmlBrowserChromeProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [address, setAddress] = useState(p.document ? '' : p.address);
-  const website = !p.document && p.website;
+  const [address, setAddress] = useState(p.address);
+  const website = p.website;
   const afterClose = useRef<(() => void) | null>(null);
   const close = () => setMenuOpen(false);
   const choose = (action: () => void) => {
@@ -86,13 +95,12 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
       <View
         pointerEvents="box-none"
-        style={[styles.row, { top: p.top, left: p.document ? Math.max(p.left, p.right) : p.left, right: p.document ? Math.max(p.left, p.right) : p.right }]}
+        style={[styles.row, { top: p.top, left: p.left, right: p.right }]}
       >
         {button(X, t("files.preview.done"), p.onClose, "filePreview.done")}
-        <View style={[styles.address, p.document && styles.documentTitle]}>
-          {p.document ? <View style={styles.addressTitle}>
-            <Text numberOfLines={1} style={styles.documentTitleText} testID="filePreview.title">{p.title}</Text>
-          </View> : editing ? <TextInput
+        <View style={styles.address}>
+          {editing ? (
+            <TextInput
             value={address}
             onChangeText={setAddress}
             autoFocus
@@ -106,7 +114,9 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
             accessibilityLabel={t("files.preview.browserAddress")}
             testID="filePreview.browser.addressInput"
             style={[styles.title, { flex: 1, height: size, paddingHorizontal: spacing.md }]}
-          /> : <Pressable
+          />
+          ) : (
+            <Pressable
             accessibilityRole="button"
             accessibilityLabel={`${t("files.preview.browserAddress")}: ${p.address}`}
             disabled={p.pending}
@@ -127,8 +137,11 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
             >
               {p.title}
             </Text>
-          </Pressable>}
-          {p.document ? null : editing ? button(X, t("files.preview.browserCancelAddress"), () => setEditing(false), "filePreview.browser.cancelAddress") : p.loading ? (
+          </Pressable>
+          )}
+          {editing ? (
+            button(X, t("files.preview.browserCancelAddress"), () => setEditing(false), "filePreview.browser.cancelAddress")
+          ) : p.loading ? (
             <View style={styles.button}>
               <ActivityIndicator color={colors.textSecondary} />
             </View>
@@ -142,21 +155,16 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
             )
           )}
         </View>
-        {p.document ? button(
-          Ellipsis,
-          t("files.preview.browserMore"),
-          () => setMenuOpen(true),
-          "filePreview.browser.more",
-          p.pending,
-        ) : null}
       </View>
       {p.notice ? (
         <View
           pointerEvents={p.onCancelNotice ? "box-none" : "none"}
-          style={[styles.notice, { bottom: p.bottom + (p.document ? spacing.sm : size + spacing.sm) }]}
+          style={[styles.notice, { bottom: p.bottom + (size + spacing.sm) }]}
         >
           <View style={styles.noticePill}>
-            {p.onCancelNotice ? <ActivityIndicator color={colors.textTertiary} size="small" /> : null}
+            {p.onCancelNotice ? (
+              <ActivityIndicator color={colors.textTertiary} size="small" />
+            ) : null}
             <Text
               accessibilityLiveRegion="polite"
               testID="filePreview.notice"
@@ -177,11 +185,13 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
           </View>
         </View>
       ) : null}
-      {!p.document ? <View
+      {
+        <View
         pointerEvents="box-none"
         style={[styles.row, { bottom: p.bottom, left: p.left, right: p.right }]}
       >
-        {!p.document ? <View style={styles.navigation}>
+        {
+            <View style={styles.navigation}>
           {button(
             ChevronLeft,
             t("files.preview.browserBack"),
@@ -196,7 +206,8 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
             "filePreview.browser.forward",
             !p.canGoForward,
           )}
-        </View> : null}
+        </View>
+          }
         <View pointerEvents="none" style={styles.spacer} />
         {button(
           Share,
@@ -212,7 +223,8 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
           "filePreview.browser.more",
           p.pending,
         )}
-      </View> : null}
+      </View>
+      }
       <SheetModal
         nativePresentation
         visible={menuOpen}
@@ -241,19 +253,13 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
               {[p.meta, p.path].filter(Boolean).join('\n')}
             </Text>
             {[
-              ...(p.document ? [{
-                id: "filePreview.share",
-                Icon: Share,
-                label: t("files.preview.a11yShare"),
-                action: p.onShare,
-                disabled: p.busy,
-              }] : []),
+              ...[],
               ...(p.onToggleSource ? [{
                 id: "filePreview.browser.source",
                 Icon: CodeXml,
                 label: t(
                   website ? "files.preview.browserReturnToFile" : p.source
-                    ? p.document ? "files.preview.browserShowDocument" : "files.preview.browserShowPage"
+                    ? "files.preview.browserShowPage"
                     : "files.preview.browserShowSource",
                 ),
                 action: p.onToggleSource,
@@ -273,7 +279,8 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
                 action: p.onAddToTask,
                 disabled: p.busy,
               },
-            ].filter(item => !website || item.id !== "filePreview.sendToSession").map(({ id, Icon, label, action, disabled }) => (
+            ].filter(
+                (item) => !website || item.id !== "filePreview.sendToSession").map(({ id, Icon, label, action, disabled }) => (
               <Pressable
                 key={id}
                 accessibilityRole="button"
@@ -326,15 +333,6 @@ const makeStyles = (c: ThemeColors) =>
       borderRadius: radius.pill,
       backgroundColor: c.surfaceElevated,
       paddingLeft: spacing.lg,
-    },
-    documentTitle: { paddingHorizontal: spacing.lg },
-    documentTitleText: {
-      flex: 1,
-      textAlign: "center",
-      color: c.textPrimary,
-      fontSize: typeScale.body,
-      lineHeight: lineHeight.body,
-      fontWeight: fontWeight.semibold,
     },
     title: { flex: 1, color: c.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     addressTitle: {

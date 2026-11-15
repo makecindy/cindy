@@ -36,7 +36,7 @@ export function PluginManagementConfirmation(
             {t("plugins.notice.title.confirmation")}
           </Text>
           <Text style={styles.title}>{info?.title}</Text>
-          {[props.deviceName, info?.identity, info?.origin, info?.version]
+          {[props.deviceName, info?.identity, info?.trust, info?.origin, info?.version]
             .filter(Boolean)
             .map((text, index) => (
               <Text key={index} style={styles.body}>

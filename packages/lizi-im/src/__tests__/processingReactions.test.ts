@@ -21,10 +21,10 @@ describe('processing reaction transport tokens', () => {
     await expect(TelegramIM.prototype.removeMessageReaction.call(telegram, '123|456')).rejects.toBe(error);
   });
 
-  it.each(['👨‍💻', '🤔', '🤓', '✍'])(
+  it.each(['👩🏻‍💻', '🤔', '🤓', '✍'])(
     'Discord removes the selected %s rather than the requested base emoji',
     async (emoji) => {
-      const variants = ['👨‍💻', '🤔', '🤓', '✍'];
+      const variants = ['👩🏻‍💻', '🤔', '🤓', '✍'];
       vi.spyOn(Math, 'random').mockReturnValue(variants.indexOf(emoji) / 4);
       const remove = vi.fn();
       const resolve = vi.fn(() => ({ users: { remove } }));
@@ -35,7 +35,7 @@ describe('processing reaction transport tokens', () => {
         })),
         gateway: { client: { user: { id: 'bot' } } },
       } as unknown as DiscordIM;
-      const token = await DiscordIM.prototype.reactToMessage.call(im, '123|456', '👨‍💻');
+      const token = await DiscordIM.prototype.reactToMessage.call(im, '123|456', '👩🏻‍💻');
       expect(react).toHaveBeenCalledWith(emoji);
       expect(token).toBe(emoji);
       await DiscordIM.prototype.removeMessageReaction.call(im, '123|456', token!);

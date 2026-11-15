@@ -5,6 +5,7 @@ import { Outlet, useOutletContext, useParams, useLocation, useNavigate } from 'r
 import { useRegisterCCAgentSidebar } from '../cc-agent/useRegisterCCAgentSidebar';
 import { BotSettingsDrawer } from './BotSettingsDrawer';
 import { BotGroupSettingsDrawer } from './BotGroupSettingsDrawer';
+import { GroupMaskProvider } from './GroupMaskProvider';
 import { useBotProfiles } from './botStore';
 import { useBotGroupSummary } from './botGroupStore';
 
@@ -53,11 +54,13 @@ export function BotsFeatureLayout() {
       deviceLinkDeviceId?: string | null,
     ) => void;
   } | null>();
-  return (
+  const content = (
     <>
       <Outlet context={shellContext} />
       <BotSettingsDrawer />
       <BotGroupSettingsDrawer />
     </>
   );
+  return groupId && new URLSearchParams(location.search).get('conversationKind') !== 'direct'
+    ? <GroupMaskProvider groupId={groupId}>{content}</GroupMaskProvider> : content;
 }

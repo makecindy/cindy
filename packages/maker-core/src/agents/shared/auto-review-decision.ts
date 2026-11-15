@@ -1,9 +1,11 @@
 import { createAutoReviewIntentProjection, type AutoReviewUserIntent } from '@cindy/maker-shared/auto-review-intent';
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import type { AgentKind, UserMessage } from '../../types/common.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  MAX_AUTO_REVIEW_STATIC_TEXT_CHARS,
   reviewAction,
   type ReviewableAction,
   type ReviewVerdict,
@@ -199,7 +201,7 @@ export function isSystemPermissionDenialReason(reason: unknown): boolean {
   return SYSTEM_PERMISSION_DENIAL_PREFIXES.some((prefix) => reason.startsWith(prefix));
 }
 
-/** Model-visible text on the rejected tool result, never an extra conversation message. */
+/** Denial provenance for tool results and Codex's same-turn host feedback. */
 export function formatPermissionDenial(source: 'auto' | 'user' | 'system', reason?: string): string {
   const label = source === 'auto' ? 'Cindy Auto-review denied this tool call'
     : source === 'user' ? 'User denied this tool call via Cindy'
@@ -232,6 +234,33 @@ export function annotatePermissionRequestForUnavailableReview<
   };
 }
 
+/** InteractionRequest.metadata：审阅器判定「需要用户决定」时写给用户的原因（已脱敏、限长）。 */
+export const AUTO_REVIEW_REASON_METADATA_KEY = 'autoReviewReason';
+
+export function autoReviewReasonFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const reason = metadata?.[AUTO_REVIEW_REASON_METADATA_KEY];
+  return typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
+}
+
+/**
+ * 确认卡说明「为什么问你」：故障降级用固定文案；审阅器的 ask 原因挂在 metadata 上，
+ * 不覆盖 Agent／SDK 自带的 description。其余确认（Ask 档、逐次确认策略）原样返回。
+ */
+export function annotatePermissionRequestForAutoReview<
+  T extends {
+    kind: 'permission';
+    description?: string;
+    metadata?: Record<string, unknown>;
+  },
+>(req: T, review: { unavailable?: boolean; reason?: string } | undefined): T {
+  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req);
+  const reason = review?.reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
+  if (!reason) return req;
+  return { ...req, metadata: { ...req.metadata, [AUTO_REVIEW_REASON_METADATA_KEY]: reason } };
+}
+
 /**
  * 有界用户原话与宿主动作事实；不含助手历史、工具结果、Skill 或 Memory。
  * `userIntent.currentUserReferences` 是宿主盖章的「用户本条明确指向的内容」（被回复／引用的消息、
@@ -245,6 +274,8 @@ export interface AutoReviewRequest {
   userIntent: AutoReviewUserIntent;
   /** Actual blocked calls preceding the latest user input; reference evidence, never consent. */
   precedingBlockedActions?: readonly ReviewableAction[];
+  /** The agent's own public words (no thinking, no tool output); untrusted, never consent. */
+  agentContext?: AutoReviewAgentContext;
   /** Host-verified requester authority, separate from model-visible/quoted text. */
   authorizationContext?: {
     requesterAuthority: 'owner' | 'guest' | 'unknown';
@@ -423,6 +454,8 @@ export type LocalAutoReviewTier = Exclude<ReviewVerdict, 'prompt'> | 'needs-revi
 export function classifyLocalAutoReviewTier(
   request: AutoReviewRequest,
 ): LocalAutoReviewTier {
+  // Large payloads bypass synchronous parsing, not permission review.
+  if (getAutoReviewActionTextLength(request.action) > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return 'needs-review';
   const verdict = reviewAction(
     request.action,
     request.workspaceRoots,
@@ -446,17 +479,32 @@ function missingReviewEvidence(action: ReviewableAction): string | null {
         ? null
         : 'Network review needs a concrete destination or query.';
     case 'other':
-      return action.description?.trim()
-        ? null
-        : 'Unknown actions cannot be reviewed without concrete action details.';
+      if (!action.description?.trim()) return 'Unknown actions cannot be reviewed without concrete action details.';
+      return fileChangeWithoutPaths(action.description)
+        ? 'File-change review needs concrete paths.'
+        : null;
     default:
       return null;
   }
 }
 
+/** A risk-first reviewer would wave a pathless patch through as "low risk"; never approve unseen writes. */
+function fileChangeWithoutPaths(description: string): boolean {
+  let envelope: unknown;
+  try { envelope = JSON.parse(description); } catch { return false; }
+  if (!envelope || typeof envelope !== 'object') return false;
+  const { toolName, input } = envelope as { toolName?: unknown; input?: unknown };
+  if (toolName !== 'file_change') return false;
+  const changes = input && typeof input === 'object' ? (input as { changes?: unknown }).changes : undefined;
+  const paths = Array.isArray(changes)
+    ? changes.map((change) => (change && typeof change === 'object' ? (change as { path?: unknown }).path : undefined))
+    : changes && typeof changes === 'object' ? Object.keys(changes) : [];
+  return !paths.some((path) => typeof path === 'string' && path.trim().length > 0);
+}
+
 function oversizedReviewEvidence(action: ReviewableAction): string | null {
   return getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS
-    ? `Automatic review requires action text at most ${MAX_AUTO_REVIEW_ACTION_TEXT_CHARS} characters.`
+    ? 'This action is too large for automatic review in full, so it needs your confirmation.'
     : null;
 }
 
@@ -471,7 +519,7 @@ function oversizedReviewEvidence(action: ReviewableAction): string | null {
  * 安全边界不降低（未经用户点头仍然不会执行），但用户至少知道该点头还是拒绝。
  *
  * 与「模型判定危险」的 `block` 仍然严格区分：那个继续静默，因为 Auto 的本意
- * 就是不打扰；模型 ask 与 unavailable 才交用户。
+ * 就是不打扰；模型 ask、完整证据超出预算与 unavailable 才交用户。
  */
 export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
@@ -485,11 +533,11 @@ export async function resolveAutoReviewDecision(
   // Outside Auto, only establish whether Host trust can skip confirmation.
   // A delegated request must use the existing human approval path, never AI.
   if (hostShortcutOnly) return { verdict: 'ask' };
-  // Bound untrusted input before the static classifier's command/path parsers,
-  // not merely before the model request. Neither may inspect an oversized action.
+  // Never review a truncated action or deny routine work merely for its length.
+  // Beyond the complete model-review budget, retain the existing confirmation path.
   const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
   if (oversizedEvidenceReason) {
-    return { verdict: 'block', reason: oversizedEvidenceReason };
+    return { verdict: 'ask', reason: oversizedEvidenceReason };
   }
   const localTier = classifyLocalAutoReviewTier(request);
   // The registered task can constrain reads as well as writes. No delegated
@@ -597,6 +645,74 @@ export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent | unde
   );
 }
 
+/** A host-synthesized continuation re-sends the same user intent; it is not a new user input. */
+export function isAutoReviewNewUserInput(sendOpts?: SendOptions): boolean {
+  return !sendOpts?.[AUTO_REVIEW_DELEGATED_CONTINUATION];
+}
+
+export interface AutoReviewAgentContext {
+  /** The agent's last public message before the user's current message: what a short "yes" answers. */
+  lastReplyToUser?: string;
+  /** The agent's latest public explanation and the tool's own description for this call. */
+  statedPurpose?: string;
+}
+
+/** Each field is kept at its end, where the question or the step being started usually sits. */
+export const MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS = 2_000;
+
+/** Raw window kept per field; far larger than what is sent, so cutting it never touches the sent tail. */
+const MAX_AGENT_TEXT_WINDOW_CHARS = 32_000;
+
+/** Redaction needs the text around a credential, so it always runs before any cut that drops text. */
+function tailOf(text: string): string {
+  const trimmed = redactSensitiveText(text).trim();
+  return trimmed.length <= MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS
+    ? trimmed
+    : `…${trimmed.slice(-(MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS - 1))}`;
+}
+
+/**
+ * Tracks the agent's public text in the main scope, mirroring the tool-loop explanation: text
+ * accumulates, the first text after a tool call starts a new explanation, and a final text block
+ * replaces it. Subagent and background text is ignored, so it is never attributed to a main call.
+ */
+export function createAutoReviewAgentTextTracker() {
+  let explanation = '';
+  let afterTool = false;
+  let lastReplyToUser = '';
+  // The intent can be re-resolved for the same input; only new text moves the reply forward.
+  let textSinceInput = false;
+  return {
+    observe(event: { type: string; data?: unknown; turnScope?: string; agentMeta?: Record<string, unknown> | null }): void {
+      if (event.turnScope === 'background' || event.agentMeta?.parentUuid || event.agentMeta?.parentToolUseId) return;
+      if (event.type === 'tool_use') { afterTool = true; return; }
+      if (event.type !== 'text') return;
+      const data = event.data && typeof event.data === 'object' ? event.data as { text?: unknown; isFinal?: unknown; runtimeActivity?: unknown } : {};
+      if (typeof data.text !== 'string' || data.runtimeActivity === 'snapshot') return;
+      if (afterTool || data.isFinal === true) explanation = '';
+      afterTool = false;
+      textSinceInput = true;
+      explanation = (explanation + data.text).slice(-MAX_AGENT_TEXT_WINDOW_CHARS);
+    },
+    /** A new user input: the latest text becomes the message it replies to. */
+    beginUserInput(): void {
+      if (textSinceInput) lastReplyToUser = explanation;
+      textSinceInput = false;
+      explanation = '';
+      afterTool = false;
+    },
+    snapshot(toolDescription?: unknown, mainScope = true): AutoReviewAgentContext | undefined {
+      const purpose = [typeof toolDescription === 'string' ? toolDescription.slice(-MAX_AGENT_TEXT_WINDOW_CHARS).trim() : '', mainScope ? explanation.trim() : '']
+        .filter(Boolean).join('\n');
+      const context = {
+        ...(lastReplyToUser.trim() ? { lastReplyToUser: tailOf(lastReplyToUser) } : {}),
+        ...(purpose ? { statedPurpose: tailOf(purpose) } : {}),
+      };
+      return Object.keys(context).length ? context : undefined;
+    },
+  };
+}
+
 /** Keep actual denied actions across one user follow-up, without assistant explanations or grants. */
 export function createAutoReviewActionContext() {
   let blocked: ReviewableAction[] = [];
@@ -607,11 +723,11 @@ export function createAutoReviewActionContext() {
       blocked = [];
     },
     record(action: ReviewableAction, decision: AutoReviewDecision): void {
-      if (decision.verdict !== 'block' || getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return;
+      if (decision.verdict !== 'block' || getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return;
       const snapshot = JSON.parse(JSON.stringify(action)) as ReviewableAction;
       const key = JSON.stringify(snapshot);
       blocked = [...blocked.filter((item) => JSON.stringify(item) !== key), snapshot].slice(-3);
-      while (blocked.length && JSON.stringify(blocked).length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) blocked.shift();
+      while (blocked.length && JSON.stringify(blocked).length > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) blocked.shift();
     },
     get precedingBlockedActions(): readonly ReviewableAction[] { return preceding; },
   };

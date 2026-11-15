@@ -1,3 +1,12 @@
+import {
+  splitRichAnswer,
+  type RichValues,
+} from "@cindy/maker-shared/rich-answer";
+import {
+  conversationShareReadableBody,
+  conversationShareRichHtml,
+} from "./conversationShareRichAnswer";
+import { layoutConversationShareRichBody } from "./conversationShareRichSvg";
 import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
 import { summarizeMessageBubblePresentation } from "@cindy/maker-shared/message-presentation";
 import { buildKatexLoaderJs } from "@/session/mathWebViewHtml";
@@ -24,6 +33,8 @@ export interface ConversationShareMessage {
   ownUserBubble?: boolean;
   /** Export-only decoded images, keyed by attachment/Markdown source. */
   images?: ReadonlyMap<string, ConversationShareImage>;
+  richStateKey?: string;
+  richValues?: Readonly<Record<number, RichValues>>;
 }
 
 export interface ConversationShareImage {
@@ -44,6 +55,9 @@ export type ConversationShareBodyPart =
 
 export interface ConversationShareWebViewColors {
   background: string;
+  success?: string;
+  warning?: string;
+  danger?: string;
   surfaceElevated: string;
   border: string;
   codeSurface: string;
@@ -74,11 +88,19 @@ export const CONVERSATION_SHARE_PADDING_Y = spacing.xl;
 export const CONVERSATION_SHARE_HAIRLINE = 0.5;
 
 /** 使用聊天面板的视口（双栏时不是整个窗口），两种出图路径共用可读宽度。 */
-export function buildConversationShareContentWidth(viewport: { width: number; height: number }): number {
-  return Math.max(280, Math.round(buildMobileReadableViewportLayout({
-    screenWidth: viewport.width,
-    screenHeight: viewport.height,
-  }).contentWidth));
+export function buildConversationShareContentWidth(viewport: {
+  width: number;
+  height: number;
+}): number {
+  return Math.max(
+    280,
+    Math.round(
+      buildMobileReadableViewportLayout({
+        screenWidth: viewport.width,
+        screenHeight: viewport.height,
+      }).contentWidth,
+    ),
+  );
 }
 
 export function buildConversationShareHtml({
@@ -90,10 +112,7 @@ export function buildConversationShareHtml({
   selectedMessages,
 }: BuildConversationShareHtmlOptions): string {
   const messageIndex = new Map(allShareableIds.map((id, index) => [id, index]));
-  const markdownOptions = buildConversationShareMarkdownOptions(
-    contentWidth,
-    colors,
-  );
+  const markdownOptions = buildConversationShareMarkdownOptions(colors);
   const messagesHtml: string[] = [];
   let previousIndex: number | null = null;
 
@@ -106,7 +125,14 @@ export function buildConversationShareHtml({
     ) {
       messagesHtml.push('<div class="share-gap" aria-hidden="true">⋯</div>');
     }
-    messagesHtml.push(buildMessageHtml(message, markdownOptions));
+    messagesHtml.push(
+      buildMessageHtml(
+        message,
+        markdownOptions,
+        colors,
+        contentWidth - CONVERSATION_SHARE_PADDING_X * 2,
+      ),
+    );
     previousIndex = currentIndex;
   }
 
@@ -153,6 +179,8 @@ export function buildConversationShareHtml({
 function buildMessageHtml(
   message: ConversationShareMessage,
   markdownOptions: SelectableMarkdownHtmlOptions,
+  colors: ConversationShareWebViewColors,
+  width: number,
 ): string {
   markdownOptions = {
     ...markdownOptions,
@@ -164,27 +192,73 @@ function buildMessageHtml(
       )
     : [message.body];
   if (message.secondaryBody) texts.push(message.secondaryBody);
+  const visibleTexts = texts.map((text) =>
+    conversationShareReadableBody(message, text),
+  );
   // Redaction can consume image delimiters as well as URLs. Let the existing
   // SVG path own all image-bearing text that needs redaction, even when image
   // preparation failed; never parse damaged Markdown or expose its source URL.
   if (
-    texts.some((text) => redactSensitiveText(text) !== text) &&
-    texts.some((text) => collectMobileMarkdownImages(text).length > 0)
+    visibleTexts.some((text) => redactSensitiveText(text) !== text) &&
+    visibleTexts.some((text) => collectMobileMarkdownImages(text).length > 0)
   ) {
     throw new Error("conversation-share-image-requires-svg");
   }
-  const body = redactSensitiveText(message.body).trim();
+  const readable = conversationShareReadableBody(message, message.body);
+  // Parse operations before redaction: changing a string inside JSON can invalidate the whole document.
+  // Cross-node secrets still take the existing whole-message redaction fallback.
+  if (readable !== redactSensitiveText(readable)) {
+    message = { ...message, body: readable, richValues: undefined };
+  }
+  // Rich part keys are source offsets into the unmodified conversation body.
+  const body =
+    message.kind === "assistant"
+      ? message.body
+      : redactSensitiveText(message.body).trim();
+  const renderBody = (source: string) =>
+    message.kind === "assistant"
+      ? splitRichAnswer(source)
+          .map((part) => {
+            if (part.kind === "markdown")
+              return buildSelectableMarkdownFragmentHtml(
+                redactSensitiveText(part.source).trim(),
+                markdownOptions,
+              );
+            return conversationShareRichHtml(
+              part.source,
+              message.richValues?.[part.key],
+              colors,
+              width,
+              (text) =>
+                buildSelectableMarkdownFragmentHtml(text, markdownOptions),
+              (text, left, top, available) =>
+                layoutConversationShareRichBody(
+                  {
+                    ...message,
+                    kind: "user",
+                    body: text,
+                    bodyParts: undefined,
+                    secondaryBody: undefined,
+                  },
+                  colors,
+                  left,
+                  top,
+                  available,
+                ),
+              message.images,
+            );
+          })
+          .join("")
+      : buildSelectableMarkdownFragmentHtml(source, markdownOptions);
   const secondaryBody = message.secondaryBody
     ? redactSensitiveText(message.secondaryBody).trim()
     : "";
   const bodyHtml = message.bodyParts
     ? buildBodyPartsHtml(message.bodyParts, markdownOptions)
-    : body
-      ? buildSelectableMarkdownFragmentHtml(body, markdownOptions)
+    : body.trim()
+      ? renderBody(body)
       : "";
-  const secondaryHtml = secondaryBody
-    ? buildSelectableMarkdownFragmentHtml(secondaryBody, markdownOptions)
-    : "";
+  const secondaryHtml = secondaryBody ? renderBody(secondaryBody) : "";
   const attachmentsHtml = buildAttachmentsHtml(
     message.attachments ?? [],
     message.images,
@@ -267,12 +341,10 @@ function buildAttachmentsHtml(
 }
 
 function buildConversationShareMarkdownOptions(
-  contentWidth: number,
   colors: ConversationShareWebViewColors,
 ): SelectableMarkdownHtmlOptions {
-  const layout = buildMessageContentLayout({ screenWidth: contentWidth });
   return {
-    bodyGap: layout.markdownBodyGap,
+    bodyGap: spacing.lg,
     borderColor: colors.border,
     chipColor: colors.codeSurface,
     fontSize: typeScale.bodyLarge,
@@ -307,7 +379,7 @@ function buildConversationShareCss({
 }): string {
   // 尺寸与间距照搬聊天消息流(MessageRenderer):同屏宽下换行、气泡与附件一致。
   const layout = buildMessageContentLayout({ screenWidth: width });
-  const bodyGap = layout.markdownBodyGap;
+  const bodyGap = spacing.lg;
   return `
     html, body {
       margin: 0;

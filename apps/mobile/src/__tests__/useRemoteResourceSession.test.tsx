@@ -12,13 +12,14 @@ const h = vi.hoisted(() => ({
   get: vi.fn(),
   language: "en", focused: true,
   t: (key: string) => key, metadataVerified: true,
-  resourceId: 'bot-1', sessionId: 'task-1', openSearch: '', resourceHistorySessionId: '',
-  markRead: vi.fn(),
+  resourceId: 'bot-1', sessionId: 'task-1', openSearch: '', resourceHistorySessionId: '', resourceThreadRootSessionId: '', resourceThreadRootClientId: '',
+  markRead: vi.fn(), forget: vi.fn(), reportRead: vi.fn(),
   store: { getSessionDeviceId: vi.fn(), upsertDeviceSession: vi.fn() },
   router: { replace: vi.fn(), setParams: vi.fn() },
   auth: { user: { id: 'owner' }, accountGeneration: 1 },
   link: { openLink: vi.fn(), invoke: vi.fn(), connectionEpoch: 1, status: 'online', onRemoteResourceChanged: vi.fn(() => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
 }));
+vi.mock('@/session/useCachedCompanionSession', () => ({ useCachedCompanionSession: () => null }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: h.t, i18n: { language: h.language } }) }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } }));
@@ -27,15 +28,15 @@ vi.mock('expo-router', async () => {
   return {
     useIsFocused: () => h.focused,
     useFocusEffect: (effect: () => void | (() => void)) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]),
-    useLocalSearchParams: () => ({ resourceCollectionId: 'teammates', resourceId: h.resourceId, resourceKind: 'bot', openSearch: h.openSearch, resourceHistorySessionId: h.resourceHistorySessionId }),
+    useLocalSearchParams: () => ({ resourceCollectionId: 'teammates', resourceId: h.resourceId, resourceKind: 'bot', openSearch: h.openSearch, resourceHistorySessionId: h.resourceHistorySessionId, resourceThreadRootSessionId: h.resourceThreadRootSessionId, resourceThreadRootClientId: h.resourceThreadRootClientId }),
     useRouter: () => h.router,
   };
 });
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
 vi.mock('@/device-link/remoteStatus', async () => ({ ...await vi.importActual<typeof import('@/device-link/remoteStatus')>('@/device-link/remoteStatus'), formatRemoteError: String }));
-vi.mock('@/device-link/remoteResources', () => ({ getRemoteResource: h.get }));
-vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
+vi.mock('@/device-link/remoteResources', () => ({ getRemoteResource: h.get, invokeRemoteResourceAction: h.reportRead }));
+vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead, forgetRemoteResource: h.forget }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: h.store }));
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
@@ -77,11 +78,14 @@ async function render(canMarkRead = false) {
   // A viewport receipt is separate from loading/entering the chat.
   result.markReadThrough(200);
 }
-beforeEach(() => { vi.clearAllMocks(); h.link.openLink.mockResolvedValue(undefined); h.openSearch = ''; h.resourceHistorySessionId = ''; h.auth.accountGeneration = 1; h.metadataVerified = true; h.focused = true; h.language = "en"; h.resourceId = 'bot-1'; h.sessionId = 'task-1'; h.link.status = 'online'; h.link.connectionEpoch = 1; h.store.getSessionDeviceId.mockReturnValue(undefined); });
+beforeEach(() => { vi.clearAllMocks(); h.link.openLink.mockResolvedValue(undefined); h.openSearch = ''; h.resourceHistorySessionId = ''; h.resourceThreadRootSessionId = ''; h.resourceThreadRootClientId = ''; h.auth.accountGeneration = 1; h.metadataVerified = true; h.focused = true; h.language = "en"; h.resourceId = 'bot-1'; h.sessionId = 'task-1'; h.link.status = 'online'; h.link.connectionEpoch = 1; h.store.getSessionDeviceId.mockReturnValue(undefined); });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 
 describe('companion task visibility refresh', () => {
-  it('does not acknowledge on entry and never acknowledges beyond the rendered tail', async () => {
+  // The detail and history requests are independent: a newly rendered reply can
+  // be newer than the profile snapshot. Previously its receipt was capped at 200,
+  // leaving the roster's newer reply unread indefinitely (unit regression).
+  it('acknowledges only the rendered reply, even when the profile snapshot lags behind it', async () => {
     h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 200 } });
     container = document.createElement('div'); root = createRoot(container);
     await act(async () => root!.render(createElement(Probe, { canMarkRead: true })));
@@ -89,7 +93,7 @@ describe('companion task visibility refresh', () => {
     result.markReadThrough(100);
     expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'bot-1', 100);
     result.markReadThrough(300);
-    expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'bot-1', 200);
+    expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'bot-1', 300);
   });
   it('does not mark read until the entered task has rendered its synchronized history', async () => {
     h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 200 } });
@@ -126,17 +130,21 @@ describe('companion task visibility refresh', () => {
     expect(h.router.setParams).toHaveBeenCalledWith({ sessionId: 'task-2' });
     expect(h.markRead).not.toHaveBeenCalled();
   });
-  it.each([Object.assign(new Error('gone'), { code: 'NOT_FOUND' }), new Error('[NOT_FOUND] resource missing')])('leaves the cached task when the host rejects the resource', async (error) => {
+  // Persisted notification identities must not reopen a task after an explicit access rejection (unit).
+  it.each([Object.assign(new Error('gone'), { code: 'NOT_FOUND' }), new Error('[NOT_FOUND] resource missing'),
+    Object.assign(new Error('revoked'), { code: 'ACCESS_REVOKED' }), new Error('[PERMISSION_DENIED] resource revoked')])('leaves the cached task when the host rejects the resource', async (error) => {
     h.get.mockRejectedValue(error);
     await render();
     expect(h.router.replace).toHaveBeenCalledWith({ pathname: '/resources/[collectionId]/[resourceId]', params: {
       collectionId: 'teammates', resourceId: 'bot-1', resourceKind: 'bot', deviceId: 'mac', deviceName: 'My Mac',
     } });
+    expect(h.forget).toHaveBeenCalledWith('owner', 'bot-1');
   });
   it('retains recovery for a transient connection failure', async () => {
     h.get.mockRejectedValue(new Error('NOT_CONNECTED'));
     await render();
     expect(h.router.replace).not.toHaveBeenCalled();
+    expect(h.forget).not.toHaveBeenCalled();
   });
   it('ignores a visibility rejection belonging to the previous account', async () => {
     let reject!: (error: Error) => void;
@@ -150,7 +158,7 @@ describe('companion task visibility refresh', () => {
   });
 });
 
-it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])('sends the viewing locale %s and reloads when it changes', async (locale) => {
+it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"])('sends the viewing locale %s and reloads when it changes', async (locale) => {
   h.get.mockImplementation(async () => ({ revision: 'same', links: [], display: { title: h.language } }));
   h.language = locale;
   await render();
@@ -181,7 +189,7 @@ it('shows the clicked identity immediately but waits for resource and session va
   expect(result.ready).toBe(false);
   h.metadataVerified = true; await render(true);
   expect(result.ready).toBe(true);
-  expect(h.markRead).toHaveBeenCalledExactlyOnceWith('owner', 'mac', 'bot-1', 42);
+  expect(h.markRead).toHaveBeenCalledExactlyOnceWith('owner', 'mac', 'bot-1', 200);
   expect(h.get).toHaveBeenCalledTimes(1);
   expect(h.link.invoke).not.toHaveBeenCalled(); // Session metadata is the screen's existing read.
 });
@@ -410,4 +418,67 @@ it.each([true, false])('keeps a searched historical transcript read-only after v
   expect(result.error === null).toBe(owned);
   expect(h.router.setParams).not.toHaveBeenCalled();
   expect(h.markRead).not.toHaveBeenCalled();
+});
+
+// Mobile topics: the canonical redirect must not steal a reply; a forged root must
+// never unlock sending. Existing transcript tests did not cover writable hidden lanes (unit).
+it.each([true, false])('verifies the exact private-topic binding before enabling replies (%s)', async (matches) => {
+  h.sessionId = 'topic-1'; h.resourceThreadRootSessionId = 'task-1'; h.resourceThreadRootClientId = 'root-1';
+  h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 200 } });
+  h.link.invoke.mockResolvedValue({ dmThreadsSupported: true, sessions: [{ id: 'topic-1', role: 'thread', status: 'active',
+    threadRoot: { rootSessionId: 'task-1', rootClientId: matches ? 'root-1' : 'somebody-else' } }] });
+  await render(true);
+  expect(result.ready).toBe(matches);
+  expect(result.canCompose).toBe(matches);
+  expect(h.router.setParams).not.toHaveBeenCalled();
+  expect(h.markRead).not.toHaveBeenCalled();
+  h.link.connectionEpoch += 1;
+  let resolve!: (value: unknown) => void;
+  h.link.invoke.mockReturnValue(new Promise(r => { resolve = r; }));
+  await render(true);
+  expect(result.ready).toBe(false);
+  expect(result.canCompose).toBe(false);
+  await act(async () => resolve({ dmThreadsSupported: false }));
+  expect(result.ready).toBe(false);
+});
+
+// The computer keeps one read position per conversation for every device: the phone reports what
+// it showed, a failed report is retried by the next read of the same reply, and a topic reports on
+// its own position without touching the main chat's.
+describe('reporting reads to the computer', () => {
+  const readRequest = (input: Record<string, unknown>) => [expect.anything(), { deviceId: 'mac', deviceName: 'My Mac' },
+    { collectionId: 'teammates', actionId: 'read', resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'bot-1' }, input }, 'en'];
+  it('reports the shown reply once, retries after a failure, and stays quiet for older hosts', async () => {
+    h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 300, lastReadAt: 100 } });
+    h.reportRead.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ effects: [] });
+    container = document.createElement('div'); root = createRoot(container);
+    await act(async () => root!.render(createElement(Probe, { canMarkRead: true })));
+    await act(async () => result.markReadThrough(200));
+    expect(h.reportRead).toHaveBeenLastCalledWith(...readRequest({ at: 200 }));
+    await act(async () => result.markReadThrough(200)); // the failed report is sent again
+    expect(h.reportRead).toHaveBeenCalledTimes(2);
+    await act(async () => result.markReadThrough(200)); // acknowledged: not again
+    await act(async () => result.markReadThrough(50)); // not past what the computer has
+    expect(h.reportRead).toHaveBeenCalledTimes(2);
+    h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 300 } });
+    h.reportRead.mockClear();
+    await act(async () => root!.unmount()); root = undefined; container = document.createElement('div'); root = createRoot(container);
+    await act(async () => root!.render(createElement(Probe, { canMarkRead: true })));
+    await act(async () => result.markReadThrough(300));
+    expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'bot-1', 300);
+    expect(h.reportRead).not.toHaveBeenCalled();
+  });
+  it('reports a topic read with the topic session and keeps the main chat position untouched', async () => {
+    h.sessionId = 'topic-1'; h.resourceThreadRootSessionId = 'task-1'; h.resourceThreadRootClientId = 'root-1';
+    h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 400, lastReadAt: 400 } });
+    h.link.invoke.mockResolvedValue({ dmThreadsSupported: true, sessions: [{ id: 'topic-1', role: 'thread', status: 'active',
+      threadRoot: { rootSessionId: 'task-1', rootClientId: 'root-1' } }] });
+    h.reportRead.mockResolvedValue({ effects: [] });
+    container = document.createElement('div'); root = createRoot(container);
+    await act(async () => root!.render(createElement(Probe, { canMarkRead: true })));
+    await act(async () => result.markReadThrough(250));
+    // Older than the main chat's position, yet the topic still reports its own.
+    expect(h.reportRead).toHaveBeenLastCalledWith(...readRequest({ at: 250, threadSessionId: 'topic-1' }));
+    expect(h.markRead).not.toHaveBeenCalled();
+  });
 });

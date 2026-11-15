@@ -17,6 +17,9 @@ public final class CindyPhotoPickerModule: Module {
     AsyncFunction("pick") { (limit: Int, promise: Promise) in
       self.present(limit: limit, promise: promise)
     }.runOnQueue(.main)
+    AsyncFunction("pickMedia") { (limit: Int, promise: Promise) in
+      self.present(limit: limit, includeVideos: true, promise: promise)
+    }.runOnQueue(.main)
     AsyncFunction("load") { (id: String, promise: Promise) in
       self.load(id: id, promise: promise)
     }.runOnQueue(.main)
@@ -40,7 +43,7 @@ public final class CindyPhotoPickerModule: Module {
     }
   }
 
-  private func present(limit: Int, promise: Promise) {
+  private func present(limit: Int, includeVideos: Bool = false, promise: Promise) {
     guard picker == nil else {
       promise.reject("ERR_PHOTO_PICKER_BUSY", "Photo picker is already open.")
       return
@@ -50,7 +53,7 @@ public final class CindyPhotoPickerModule: Module {
       return
     }
     var configuration = PHPickerConfiguration(photoLibrary: .shared())
-    configuration.filter = .images
+    configuration.filter = includeVideos ? .any(of: [.images, .videos]) : .images
     configuration.selection = .ordered
     configuration.selectionLimit = max(1, limit)
     configuration.preferredAssetRepresentationMode = .current
@@ -60,15 +63,17 @@ public final class CindyPhotoPickerModule: Module {
       let selected = results.enumerated().map { index, result -> [String: Any] in
         let id = UUID().uuidString
         self.selections[id] = result.itemProvider
+        let isVideo = self.representationType(result.itemProvider) == .movie
         var value: [String: Any] = [
           "id": id,
           "name": result.itemProvider.suggestedName ?? "photo-\(index + 1)",
-          "previewUri": ""
+          "previewUri": "",
+          "mediaType": isVideo ? "video" : "image"
         ]
         // Read only a small LOCAL thumbnail. Never wait for an original or ask
         // for broader library permission just to preview a selected photo.
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        if (status == .authorized || status == .limited), let assetID = result.assetIdentifier,
+        if !isVideo, (status == .authorized || status == .limited), let assetID = result.assetIdentifier,
            let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil).firstObject {
           value["width"] = asset.pixelWidth
           value["height"] = asset.pixelHeight
@@ -105,6 +110,12 @@ public final class CindyPhotoPickerModule: Module {
     picker.presentationController?.delegate = delegate
   }
 
+  // Live Photos may advertise both types; keep their existing still-image path.
+  private func representationType(_ provider: NSItemProvider) -> UTType {
+    if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) { return .image }
+    return .movie
+  }
+
   private func load(id: String, promise: Promise) {
     guard let provider = selections[id] else {
       promise.reject("ERR_PHOTO_SELECTION_RELEASED", "Photo selection is no longer available.")
@@ -118,7 +129,8 @@ public final class CindyPhotoPickerModule: Module {
     loads[id] = load
     // NSItemProvider preserves the picker grant even for a photo outside the
     // limited library. This also keeps edits, GIFs and the current representation.
-    load.progress = provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { [weak self] url, error in
+    let representation = representationType(provider)
+    load.progress = provider.loadFileRepresentation(forTypeIdentifier: representation.identifier) { [weak self] url, error in
       var copy: URL?
       var failure = error
       if let url, failure == nil {
@@ -162,7 +174,7 @@ public final class CindyPhotoPickerModule: Module {
         ]
         // Read dimensions without decoding full pixels. Limited-library photos
         // have no PHAsset metadata, and edits can change the original dimensions.
-        if let source = CGImageSourceCreateWithURL(copied as CFURL, nil),
+        if representation == .image, let source = CGImageSourceCreateWithURL(copied as CFURL, nil),
            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
            let width = properties[kCGImagePropertyPixelWidth] as? Int,
            let height = properties[kCGImagePropertyPixelHeight] as? Int {

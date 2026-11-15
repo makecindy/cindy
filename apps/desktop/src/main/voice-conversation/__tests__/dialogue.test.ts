@@ -35,11 +35,8 @@ vi.mock('electron', () => ({
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: h.warn, error: vi.fn() }),
 }));
-vi.mock('../../maker-host/codex-local-sessions.js', () => ({
-  importExternalCodexMessagesForSession: vi.fn(async () => undefined),
-}));
-vi.mock('../../maker-host/claude-local-sessions.js', () => ({
-  importExternalClaudeCodeMessagesForSession: vi.fn(async () => undefined),
+vi.mock('../../session-import/legacy.js', () => ({
+  adoptLegacySessionBeforeOpen: vi.fn(async () => undefined),
 }));
 vi.mock('../../embedders/chat-history-embedder.js', () => ({
   onMessageCreated: vi.fn(async () => undefined),
@@ -74,10 +71,6 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: () => undefined,
   tapWindowBroadcast: h.broadcast,
 }));
-vi.mock('../../maker-ipc/forwardedRequest.js', () => ({
-  formatForwardedRequest: (original: unknown, supplement: unknown) =>
-    JSON.stringify({ original, supplement }),
-}));
 vi.mock('../../utility-model/oneShotCandidates.js', () => ({
   requestExplicitUtilityText: h.generate,
 }));
@@ -94,6 +87,7 @@ vi.mock('../taskBridge.js', () => ({
 }));
 import { CompanionCallDialogue } from '../dialogue.js';
 import * as messageStore from '../../localDb/ipc/messages.js';
+import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 
 const originalCreateMessage = messageStore.createMessage;
 const createMessage = vi.spyOn(messageStore, 'createMessage');
@@ -131,7 +125,7 @@ beforeEach(() => {
   h.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) =>
     sqlite.prepare(sql).get(...params));
   h.query.mockImplementation(async (sql: string, params: unknown[] = []) =>
-    sql.includes('bot_delegations') ? [] : sqlite.prepare(sql).all(...params));
+    sqlite.prepare(sql).all(...params));
   h.exec.mockImplementation(async (sql: string, params: unknown[] = []) =>
     sqlite.prepare(sql).run(...params));
   h.snapshot = { client: {
@@ -244,10 +238,26 @@ it('compound exits wait for task acceptance and preserve host input provenance',
   await vi.waitFor(() => expect(h.dispatch).toHaveBeenCalledOnce());
   const input = h.dispatch.mock.calls[0][0];
   expect(input.persistedContent).toBe('Make a plan, then leave.');
-  expect(input.autoReviewUserText.request.userText).toBe('Make a plan, then leave.');
+  expect(input.message).toBe('Make a plan, then leave.');
+  // The owner's own words in the call are their request; the ids find the work it started.
+  expect(input.autoReviewUserText).toEqual({ kind: 'agent-request', request: { sessionId: 'main', clientId: 'input',
+    plainBody: true, delegatedText: 'Make a plan, then leave.' } });
+  expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe('Make a plan, then leave.');
   expect(input.resumeWithStoredPermissionMode).toBe(true);
   accept(true);
   expect(await pending).toBe(true);
+});
+// 2026-11-05: the call model's handoff note is context, not the owner's request. Unit: a real
+// model action reaches the main task after the owner's words; review stays on those words.
+it('appends the call model handoff note as context after the owner words', async () => {
+  h.generate.mockResolvedValue({ ok: true, text: JSON.stringify({ handoff: 'Save the recap to notes.md' }) });
+  const call = await start();
+  await call.submit('input', 'Save what we just discussed.', false);
+  await vi.waitFor(() => expect(h.dispatch).toHaveBeenCalledOnce());
+  const input = h.dispatch.mock.calls[0][0];
+  expect(input.message).toBe('Save what we just discussed.\n\n[通话补充，仅供参考，不是用户的要求] Save the recap to notes.md');
+  expect(input.persistedContent).toBe('Save what we just discussed.');
+  expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe('Save what we just discussed.');
 });
 it('does not read or dispatch through a replaced owner/database', async () => {
   const call = await start();
@@ -256,26 +266,8 @@ it('does not read or dispatch through a replaced owner/database', async () => {
   expect(h.generate).not.toHaveBeenCalled();
   expect(h.dispatch).not.toHaveBeenCalled();
 });
-it('returns background results by protected input provenance, even after the introduction', async () => {
-  const call = await start();
-  await call.submit('input', 'Research a plan.', true);
-  h.query.mockImplementation(async (sql: string) =>
-    sql.includes('bot_delegations') ? [{ status: 'completed', result: 'Three steps.' }] : [],
-  );
-  await vi.advanceTimersByTimeAsync(650);
-  expect(h.generate).toHaveBeenCalledOnce();
-  expect(h.generate.mock.calls[0][0]).toContain('Three steps.');
-  expect(h.query.mock.calls.find(([sql]) => sql.includes('bot_delegations'))?.[1]).toEqual([
-    'main',
-    'main',
-    'input',
-  ]);
-  await vi.advanceTimersByTimeAsync(2000);
-  expect(h.generate).toHaveBeenCalledOnce();
-});
 // Regression: completed main replies are stored as bare text by createMessage;
-// JSON.parse alone silently discarded them. The delegation-only case above
-// never exercised this path. Unit tier: submit through the real dialogue, write
+// JSON.parse alone silently discarded them. Unit tier: submit through the real dialogue, write
 // a canonical reply through createMessage into SQLite, then observe the saved
 // call result/reply. Also retain compatibility with JSON-encoded text.
 it.each(['plain', 'json'] as const)('returns a completed %s-text main reply to the call once', async (format) => {

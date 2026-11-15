@@ -123,6 +123,23 @@ function reasoningLevels(model: CatalogModel): unknown {
   }));
 }
 
+const STORED_PARENT_EFFORTS = new Set([
+  'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
+]);
+
+/**
+ * Parent task effort stamped onto every smart-route candidate.
+ * Undefined (never stored, or a fixed-effort model) leaves the field off so the
+ * proxy keeps spawn_agent's own choice instead of inventing a higher level.
+ */
+export function parentReasoningEffortForSmartRoute(
+  effort: string | null | undefined,
+): CodexSubagentRouteSnapshot['reasoningEffort'] {
+  const normalized = effort?.trim();
+  if (!normalized || !STORED_PARENT_EFFORTS.has(normalized)) return undefined;
+  return normalized as NonNullable<CodexSubagentRouteSnapshot['reasoningEffort']>;
+}
+
 export function buildCodexSmartModelCatalog(
   rawCatalog: unknown,
   candidates: readonly SmartCandidate[],
@@ -201,6 +218,24 @@ export function buildCodexSmartModelCatalog(
       catalogModel: candidate.model.id,
     })),
   };
+}
+
+/**
+ * Stamp the parent task's stored effort onto smart routes for this thread only.
+ * The catalog itself stays shared across tasks; the level travels with the
+ * thread registration so one parent's xhigh cannot leak into another task.
+ * A missing level stays off the route, and the proxy then leaves the child
+ * request's own effort (or its absence) alone instead of inventing a higher one.
+ */
+export function withParentReasoningEffort(
+  routes: readonly CodexSubagentRouteSnapshot[],
+  effort: string | null | undefined,
+): CodexSubagentRouteSnapshot[] {
+  const reasoningEffort = parentReasoningEffortForSmartRoute(effort);
+  if (reasoningEffort === undefined) {
+    return routes.map(({ providerId, catalogModel }) => ({ providerId, catalogModel }));
+  }
+  return routes.map((route) => ({ ...route, reasoningEffort }));
 }
 
 export function prepareCodexSmartSubagentConfig(args: {

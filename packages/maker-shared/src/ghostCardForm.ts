@@ -27,11 +27,7 @@ export function parseMailAttachmentItems(value: string): MailAttachmentItem[] | 
       ...(typeof i.previewUrl === 'string' && /^cindy-media:\/\/blobs\/[a-f0-9]{64}\.(png|jpg|jpeg|gif|webp)$/.test(i.previewUrl) ? { previewUrl: i.previewUrl } : {}) }));
   } catch { return null; }
 }
-/** Presentation only: body images keep their MIME parts and preview URLs, but
- * do not also appear as attachments. Removing the reference reveals them again. */
-export function visibleMailAttachments(values: Record<string, string>, field = 'attachmentItems'): MailAttachmentItem[] {
-  const files = parseMailAttachmentItems(values[field]) || [];
-  if (!files.some(file => file.contentId)) return files;
+function usedMailImageCids(values: Record<string, string>): Set<string> {
   const used = new Set<string>();
   const walk = (node: DefaultTreeAdapterTypes.Node) => {
     if ('tagName' in node) {
@@ -44,6 +40,14 @@ export function visibleMailAttachments(values: Record<string, string>, field = '
     if ('childNodes' in node) for (const child of node.childNodes) walk(child);
   };
   for (const name of ['bodyHtml', 'quoteHtml']) if (values[name]) walk(parse(values[name]));
+  return used;
+}
+/** Presentation only: body images keep their MIME parts and preview URLs, but
+ * do not also appear as attachments. Removing the reference reveals them again. */
+export function visibleMailAttachments(values: Record<string, string>, field = 'attachmentItems'): MailAttachmentItem[] {
+  const files = parseMailAttachmentItems(values[field]) || [];
+  if (!files.some(file => file.contentId)) return files;
+  const used = usedMailImageCids(values);
   return files.filter(file => !file.contentId || !used.has(file.contentId.replace(/^<|>$/g, '')));
 }
 /** Remove the MIME part and its visible CID image together, preserving the rest
@@ -64,7 +68,7 @@ export function removeMailAttachment(values: Record<string, string>, field: stri
 export function canInsertMailImage(values: Record<string, string>, file: MailAttachmentItem): boolean {
   if (typeof values.bodyHtml !== 'string' || !/^image\/(png|jpeg|gif|webp)$/i.test(file.mimeType || '')) return false;
   const cid = file.contentId?.replace(/^<|>$/g, '');
-  return !cid || !(values.bodyHtml + (values.quoteHtml || '')).includes('cid:' + cid);
+  return !cid || !usedMailImageCids(values).has(cid);
 }
 /** Reuse an existing MIME part. Only its CID/disposition changes; its bytes
  * remain at the provider. Preview URLs are never written into the HTML. */
@@ -164,6 +168,16 @@ export function readMailCard(html: string): MailCardData | null {
   if (!value) return null;
   try { return parseMailCard(JSON.parse(value.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'))); }
   catch { return null; }
+}
+/** Host-owned marker on a plugin card that a newer card of the same plugin in the same task replaced.
+ * The Host prepends it after sanitizing; plugin HTML cannot carry data-cindy-* attributes. */
+const SUPERSEDED_MARKER = /^<div data-cindy-superseded-by="([A-Za-z0-9_:.-]{1,128})" hidden><\/div>/;
+export function markGhostCardSuperseded(html: string, by: string): string {
+  return `<div data-cindy-superseded-by="${by}" hidden></div>${html}`;
+}
+/** The card that replaced this one (a generic plugin card or a mail view); views hide replaced cards. */
+export function readGhostCardSupersededBy(html: string): string | undefined {
+  return SUPERSEDED_MARKER.exec(html)?.[1] ?? readMailCard(html)?.supersededBy;
 }
 export function isLegacyMailCard(html: string): boolean {
   return !readMailCard(html) && !!readGhostCardFormChange(html)?.startsWith('mail:change:');
@@ -422,4 +436,23 @@ export function omitGhostCardFormPreview(html: string): string {
   };
   visit(doc);
   return removed ? serialize(doc) : html;
+}
+
+/**
+ * Plugin card links open after a host confirmation that shows the real address. GitHub's own
+ * pages (the owner's choice, 2026-11-03) open directly; every other address still asks.
+ */
+export function ghostCardLinkOpensDirectly(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.port
+      && (parsed.hostname === 'github.com' || parsed.hostname === 'www.github.com');
+  } catch {
+    return false;
+  }
+}
+
+/** Narrow navigation-only card links; never accept arbitrary Cindy commands or URL parameters. */
+export function ghostCardSessionLinkId(url: string): string | null {
+  return typeof url === 'string' ? /^cindy:\/\/session\/([A-Za-z0-9_-]{1,128})$/.exec(url)?.[1] ?? null : null;
 }

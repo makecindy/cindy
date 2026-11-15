@@ -18,9 +18,11 @@ import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { toast } from '@/lib/toast';
 import { bindSharedTaskPushOwner, resetRemoteDataOwnerPushFence } from '@/lib/remoteDataOwnerPushFence';
 import { remoteProjectsStore, isRemoteDeviceMarkedDisconnected } from './remoteProjectsStore';
+import { OwnRelayCrossAccountNotice } from './OwnRelayCrossAccountNotice';
 import { sharedTaskErrorKey } from './sharedTaskCompatibility';
 import { closeOwnedSharedTask } from './closeOwnedSharedTask';
 import { filterVisibleSharedTasks } from './sharedTaskVisibility';
+import { notifySharedTaskMembershipChanged } from './useSharedTaskTasks';
 
 type Tab = 'join' | 'joined' | 'owned';
 type Target = { sessionId: string; title: string; deviceId?: string; sharedTaskId?: string; guestId?: string; connect?: boolean };
@@ -232,6 +234,8 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
       setConfirm(null); await loadDetail(snapshot.target); restore(confirmationOrigin.current);
     } else {
       await window.electronAPI.sharedTask.account({ action: 'leave', sharedTaskId: snapshot.item.sharedTaskId });
+      // A directory read already in flight may still list it; reread after.
+      notifySharedTaskMembershipChanged();
       if (!current()) return;
       const peer = sharedTaskHostPeer(snapshot.item.sharedTaskId, snapshot.item.hostDeviceId);
       resetRemoteDataOwnerPushFence(peer);
@@ -249,6 +253,7 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
     void run(async current => {
       try {
         const result = await window.electronAPI.sharedTask.account({ action: 'join', invitation: invitation.trim(), displayName: sharedTaskAccountName(user?.name) }) as { sharedTaskId: string };
+        notifySharedTaskMembershipChanged();
         if (!current()) return;
         const joinedDetail = await window.electronAPI.sharedTask.account({ action: 'get', sharedTaskId: result.sharedTaskId }) as SharedTaskDetail;
         if (!current()) return;
@@ -339,6 +344,7 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
         {target.guestId && <Button variant="secondary" onClick={() => switchTab('join')}>{t('sharedTask.rejoin')}</Button>}</>
       : !detail ? <>
         <p className="mb-4 text-13 text-[var(--text-secondary)]">{t('sharedTask.startIntro')}</p>
+        <OwnRelayCrossAccountNotice feature="sharedTask" className="-mt-2 mb-4" />
         <div className="mb-5 flex items-center gap-3 rounded-xl border border-[var(--border-default)] p-3"><FileText size={18} aria-hidden />
           <div className="min-w-0"><h3 className="break-words text-14 font-medium">{target.title || t('sharedTask.title')}</h3>
             <p className="text-12 text-[var(--text-secondary)]">{t(target.deviceId ? 'sharedTask.runsOnHostDevice' : 'sharedTask.runsOnThisDevice')}</p></div></div>
@@ -421,6 +427,7 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
     </div>
     {!embedded && <div hidden={tab !== 'join'} role="tabpanel" id="shared-task-panel-join" aria-labelledby="shared-task-tab-join">
       <p className="mb-5 text-13 text-[var(--text-secondary)]">{t('sharedTask.joinIntro')}</p>
+      <OwnRelayCrossAccountNotice feature="sharedTask" className="-mt-3 mb-5" />
       {joinForm}
     </div>}
     <div hidden={tab !== 'joined'} role="tabpanel" id="shared-task-panel-joined" aria-labelledby="shared-task-tab-joined">{tab === 'joined' && listView('joined')}</div>
@@ -434,7 +441,8 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
   };
   return <>{embedded && <section>
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-      <div><h2 className="text-20 font-medium">{t('sharedTask.title')}</h2><p className="mt-2 text-13 text-[var(--text-secondary)]">{t('sharedTask.managementIntro')}</p></div>
+      <div><h2 className="text-20 font-medium">{t('sharedTask.title')}</h2><p className="mt-2 text-13 text-[var(--text-secondary)]">{t('sharedTask.managementIntro')}</p>
+        <OwnRelayCrossAccountNotice feature="sharedTask" className="mt-1" /></div>
       <Button variant="secondary" size="lg" disabled={!isAuthenticated || busy} onClick={() => switchTab('join')}>{t('sharedTask.join')}</Button>
     </div>
     {isAuthenticated ? hub : <p className="text-13">{t('sharedTask.login')}</p>}

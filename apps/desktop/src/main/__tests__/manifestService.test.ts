@@ -31,6 +31,11 @@ vi.mock('../clientEndpointsService', () => ({
   getClientEndpoint,
 }));
 
+const runningTranslated = vi.hoisted(() => vi.fn(() => false));
+vi.mock('../arm64Translation', () => ({
+  isRunningUnderArm64Translation: runningTranslated,
+}));
+
 vi.mock('../logger', () => ({
   createLogger: () => ({
     info: vi.fn(),
@@ -91,6 +96,23 @@ describe('manifestService cache channel identity', () => {
   afterEach(async () => {
     const { clearCachedManifest } = await import('../manifestService');
     clearCachedManifest();
+  });
+
+  // Optional binary preparation observes metadata; it cannot change the result
+  // of the application's update lookup, even if the observer fails. Tier: unit.
+  it('isolates optional metadata observers and honors unsubscribe', async () => {
+    const service = await import('../manifestService');
+    const observer = vi.fn(() => { throw new Error('optional prefetch failed'); });
+    const unsubscribe = service.onManifestFetched(observer);
+    try {
+      mockManifestResponse(RELEASE_MANIFEST);
+      await expect(service.fetchManifest()).resolves.toMatchObject({ app: { version: '0.0.65' } });
+      expect(observer).toHaveBeenCalledOnce();
+      unsubscribe();
+      mockManifestResponse(RELEASE_MANIFEST);
+      await expect(service.fetchManifest()).resolves.toMatchObject({ app: { version: '0.0.65' } });
+      expect(observer).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); }
   });
 
   it('discards a cached release manifest after the shared channel switches to beta', async () => {
@@ -176,13 +198,24 @@ describe('probeBetaManifest', () => {
     await expect(service.probeBetaManifest()).resolves.toBe(false);
   });
 
-  it('accepts a Linux x64 beta manifest with a complete .deb installer', async () => {
-    setRuntime('linux', 'x64');
-    mockManifestResponse(JSON.stringify(LINUX_BETA_MANIFEST));
+  // Regression: ARM64 beta builds must reach the same real manifest probe and
+  // .deb validation as x64, rather than failing before the request. Tier: unit.
+  it.each(['x64', 'arm64'])('accepts a Linux %s beta manifest with a complete .deb installer', async (arch) => {
+    setRuntime('linux', arch);
+    mockManifestResponse(JSON.stringify({
+      ...LINUX_BETA_MANIFEST,
+      app: {
+        ...LINUX_BETA_MANIFEST.app,
+        installer: {
+          ...LINUX_BETA_MANIFEST.app.installer,
+          file: `app/linux-${arch}/cindy-0.0.66-${arch === 'x64' ? 'amd64' : 'arm64'}.deb`,
+        },
+      },
+    }));
     const service = await import('../manifestService');
 
     await expect(service.probeBetaManifest()).resolves.toBe(true);
-    expect(String(netRequest.mock.calls[0]?.[0])).toContain('manifest-linux-x64-beta.json');
+    expect(String(netRequest.mock.calls[0]?.[0])).toContain(`manifest-linux-${arch}-beta.json`);
   });
 
   it.each([
@@ -223,19 +256,111 @@ describe('probeBetaManifest', () => {
         },
       },
     ],
-  ])('rejects a Linux x64 beta manifest with %s', async (_case, manifest) => {
-    setRuntime('linux', 'x64');
-    mockManifestResponse(JSON.stringify(manifest));
-    const service = await import('../manifestService');
+  ].flatMap(([reason, manifest]) => ['x64', 'arm64'].map((arch) => ({ arch, reason, manifest }))))(
+    'rejects a Linux $arch beta manifest with $reason',
+    async ({ arch, manifest }) => {
+      setRuntime('linux', arch);
+      mockManifestResponse(JSON.stringify(manifest));
+      const service = await import('../manifestService');
 
-    await expect(service.probeBetaManifest()).resolves.toBe(false);
-  });
+      await expect(service.probeBetaManifest()).resolves.toBe(false);
+      expect(netRequest).toHaveBeenCalledOnce();
+    },
+  );
 
-  it('does not probe the beta channel on Linux arm64', async () => {
-    setRuntime('linux', 'arm64');
+  it('does not probe the beta channel on unsupported Linux architectures', async () => {
+    setRuntime('linux', 'ia32');
     const service = await import('../manifestService');
 
     await expect(service.probeBetaManifest()).resolves.toBe(false);
     expect(netRequest).not.toHaveBeenCalled();
+  });
+});
+
+// NZWG-9FC9：Apple 芯片上的 darwin-x64 包按 process.arch 只能拿到 x64 清单，永远留在
+// Rosetta 转译里。应用更新改看 arm64 清单，但 x64 缓存要留给按进程架构安装的引擎。
+describe('fetchAppUpdateManifest', () => {
+  const X64 = { app: { version: '0.1.128', hotfix: { file: 'hotfix/darwin-x64/x64.zip', sha256: 'a'.repeat(64) } } };
+  const ARM = { app: { version: '0.1.128', hotfix: { file: 'hotfix/darwin-arm64/arm.zip', sha256: 'b'.repeat(64) } } };
+
+  function mockNotFound(): void {
+    const request = Object.assign(new EventEmitter(), {
+      abort: vi.fn(),
+      end: vi.fn(() => request.emit('response', Object.assign(new EventEmitter(), { statusCode: 404 }))),
+    });
+    netRequest.mockReturnValueOnce(request);
+  }
+
+  beforeEach(() => {
+    netRequest.mockReset();
+    runningTranslated.mockReturnValue(true);
+    setRuntime('darwin', 'x64');
+  });
+
+  afterEach(async () => {
+    setRuntime(originalPlatform, originalArch);
+    runningTranslated.mockReturnValue(false);
+    isBetaChannelEnabled.mockReturnValue(false);
+    (await import('../manifestService')).clearCachedManifest();
+  });
+
+  it('uses the arm64 manifest for app updates without replacing the x64 engine cache', async () => {
+    mockManifestResponse(JSON.stringify(X64));
+    mockManifestResponse(JSON.stringify(ARM));
+    const service = await import('../manifestService');
+
+    const manifest = await service.fetchAppUpdateManifest();
+
+    expect(manifest?.app.hotfix?.file).toBe('hotfix/darwin-arm64/arm.zip');
+    expect(service.getAppUpdateTargetArch(manifest!)).toBe('arm64');
+    expect(service.getCachedManifest()?.app.hotfix?.file).toBe('hotfix/darwin-x64/x64.zip');
+    expect(netRequest.mock.calls.map(([url]) => String(url).match(/manifest-[\w-]+\.json/)?.[0]))
+      .toEqual(['manifest-darwin-x64.json', 'manifest-darwin-arm64.json']);
+  });
+
+  it('keeps the x64 update when the arm64 manifest is missing or behind', async () => {
+    const service = await import('../manifestService');
+
+    mockManifestResponse(JSON.stringify(X64));
+    mockNotFound();
+    const missing = await service.fetchAppUpdateManifest();
+    expect(missing?.app.hotfix?.file).toBe('hotfix/darwin-x64/x64.zip');
+    expect(service.getAppUpdateTargetArch(missing!)).toBeUndefined();
+
+    mockManifestResponse(JSON.stringify({ app: { ...X64.app, version: '0.1.129' } }));
+    mockManifestResponse(JSON.stringify(ARM));
+    const behind = await service.fetchAppUpdateManifest();
+    expect(behind?.app.version).toBe('0.1.129');
+    expect(service.getAppUpdateTargetArch(behind!)).toBeUndefined();
+
+    // 200 但不可安装（没有 hotfix、版本非法）的 arm64 清单不能挡住 x64 更新。
+    for (const unusable of [{ app: { version: '0.1.130' } }, { app: { ...ARM.app, version: 'not-semver' } }]) {
+      mockManifestResponse(JSON.stringify(X64));
+      mockManifestResponse(JSON.stringify(unusable));
+      const kept = await service.fetchAppUpdateManifest();
+      expect(kept?.app.hotfix?.file).toBe('hotfix/darwin-x64/x64.zip');
+      expect(service.getAppUpdateTargetArch(kept!)).toBeUndefined();
+    }
+  });
+
+  it('discards both responses when the channel changes between the two reads', async () => {
+    mockManifestResponse(JSON.stringify(X64));
+    mockManifestResponse(JSON.stringify(ARM), () => {
+      isBetaChannelEnabled.mockReturnValue(true);
+    });
+    const service = await import('../manifestService');
+
+    await expect(service.fetchAppUpdateManifest()).resolves.toBeNull();
+  });
+
+  it('does not request another manifest for native builds', async () => {
+    runningTranslated.mockReturnValue(false);
+    mockManifestResponse(JSON.stringify(X64));
+    const service = await import('../manifestService');
+
+    const manifest = await service.fetchAppUpdateManifest();
+
+    expect(service.getAppUpdateTargetArch(manifest!)).toBeUndefined();
+    expect(netRequest).toHaveBeenCalledOnce();
   });
 });

@@ -18,9 +18,11 @@ import ts from 'typescript';
 import { EventEmitter } from 'node:events';
 
 const scanFork = vi.hoisted(() => vi.fn());
+const electronPaths = vi.hoisted(() => ({ userData: '' }));
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
-// 真实退出路径 (信号 / before-quit) 不在本文件覆盖。
+// 真实退出路径 (信号 / before-quit) 不在本文件覆盖。getPath / getVersion /
+// crashReporter 只供 session-end 用例初始化真实 run marker。
 vi.mock('electron', () => ({
   utilityProcess: { fork: scanFork },
   app: {
@@ -28,7 +30,11 @@ vi.mock('electron', () => ({
     isReady: () => false,
     quit: vi.fn(),
     exit: vi.fn(),
+    getPath: () => electronPaths.userData,
+    getVersion: () => '0.0.0-test',
   },
+  BrowserWindow: { getAllWindows: () => [] },
+  crashReporter: { start: vi.fn() },
 }));
 
 const nativePopupWebContentsIds = vi.hoisted(() => new Set<number>());
@@ -656,7 +662,7 @@ describe('installQuitHandler render-process-gone', () => {
     }
   });
 
-  it('resource usage renderer crash does NOT shut the app down', async () => {
+  it('recoverable auxiliary renderer crashes do NOT shut the app down', async () => {
     resourceUsageWebContentsIds.add(44);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
@@ -667,6 +673,19 @@ describe('installQuitHandler render-process-gone', () => {
         expect.stringContaining('resource usage render-process-gone'),
       );
       expect(mocks.logger.error).not.toHaveBeenCalled();
+      // Unit regression for the real Windows direct-renderer crash: local
+      // cleanup ran, but the app-wide event still disposed DB/device-link.
+      // Other auxiliary tests never registered the transport factory's owner.
+      const { markCaptureWindowWebContents } = await import('../remote-desktop/captureWindowRegistry');
+      const capture = { id: 46, getType: () => 'window' };
+      markCaptureWindowWebContents(capture as unknown as Electron.WebContents);
+      handler(undefined, capture, { reason: 'crashed', exitCode: 5 });
+      await Promise.resolve();
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('capture transport render-process-gone'),
+      );
     } finally {
       restore();
     }
@@ -754,6 +773,50 @@ describe('installQuitHandler', () => {
         err,
       );
     } finally {
+      snapshot.restore();
+    }
+  });
+
+  // Issue #9600: Electron terminates the process right after 'session-end' returns, so the
+  // handler's own marker write is the only exit record the next start will see.
+  it('win32 session-end records the exit reason so the next start does not see a crash', async () => {
+    const snapshot = snapshotProcessListeners(['SIGINT', 'SIGTERM', 'exit', 'uncaughtException', 'unhandledRejection']);
+    const sigbreakBefore = new Set(process.listeners('SIGBREAK'));
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    electronPaths.userData = watchdogTmpDir;
+    vi.useFakeTimers({ toFake: ['setInterval'] }); // run-marker heartbeat must not outlive the tmp dir
+    try {
+      const lifecycle = await freshLifecycle();
+      const diagnostics = await import('../startup-diagnostics');
+      diagnostics.initStartupDiagnostics();
+      lifecycle.prepareShutdownWatchdogScript({ platform: 'win32', tmpDir: watchdogTmpDir });
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+      lifecycle.installQuitHandler();
+      Object.defineProperty(process, 'platform', platform);
+
+      const { app } = await import('electron');
+      const [, onWindowCreated] = (vi.mocked(app.on).mock.calls as unknown as Array<[string, (e: unknown, w: EventEmitter) => void]>)
+        .find(([event]) => event === 'browser-window-created')!;
+      const win = new EventEmitter();
+      onWindowCreated({}, win);
+      win.emit('session-end', { reasons: ['shutdown'] });
+
+      const nextStart = new diagnostics.RunMarkerStore({
+        dir: join(watchdogTmpDir, 'diagnostics', 'run-markers'),
+        pid: process.pid + 1,
+        version: 'next',
+        isPidAlive: () => false,
+      });
+      expect(nextStart.analyzePreviousRuns()).toMatchObject([
+        { kind: 'shutdown-incomplete', marker: { pid: process.pid, shutdownReason: 'session-end' } },
+      ]);
+      expect(app.exit).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+      vi.useRealTimers();
+      for (const listener of process.listeners('SIGBREAK')) {
+        if (!sigbreakBefore.has(listener)) process.removeListener('SIGBREAK', listener);
+      }
       snapshot.restore();
     }
   });

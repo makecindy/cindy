@@ -23,6 +23,7 @@ export type GhostCardEntry =
   | {
       status: 'ready';
       ghostId: string;
+      sessionId?: string | null;
       /** 静态版(settle 后 / 历史回放)。 */
       html: string;
       /** 动画版(仅推送携带;DB 取件无此字段——历史卡永远静止)。 */
@@ -96,9 +97,11 @@ export function ingestCardPush(payload: {
 }): void {
   const now = Date.now();
   sweepLive(now);
+  const previous = byCallId.get(payload.callId);
   byCallId.set(payload.callId, {
     status: 'ready',
     ghostId: payload.ghostId,
+    sessionId: payload.sessionId ?? (previous?.status === 'ready' ? previous.sessionId : undefined),
     html: payload.html,
     ...(payload.animatedHtml ? { animatedHtml: payload.animatedHtml } : {}),
     height: payload.height,
@@ -163,8 +166,11 @@ export function ensureSessionCards(sessionId: string): void {
       let changed = false;
       for (const c of cards) {
         const cur = byCallId.get(c.callId);
-        if (cur?.status === 'ready') continue; // 推送先到,以更新者为准
-        byCallId.set(c.callId, { status: 'ready', ghostId: c.ghostId, html: c.html, height: c.height });
+        if (cur?.status === 'ready') {
+          if (!cur.sessionId) { byCallId.set(c.callId, { ...cur, sessionId }); changed = true; }
+          continue; // 推送先到,以更新者为准
+        }
+        byCallId.set(c.callId, { status: 'ready', sessionId, ghostId: c.ghostId, html: c.html, height: c.height });
         changed = true;
       }
       if (changed) bump();

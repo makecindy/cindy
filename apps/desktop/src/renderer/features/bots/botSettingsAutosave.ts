@@ -24,6 +24,32 @@
 
 import type { BotCapabilities, BotProfileUpdatePatch } from './botStore';
 import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection';
+import { extractIpcError } from '../../../shared/ipcError';
+
+/** Only recognized causes become localized copy; never display raw host errors. */
+export function botSettingsSaveErrorKey(error: unknown): string | null {
+  const failure = extractIpcError(error);
+  if (!failure) return null;
+  switch (failure.code) {
+    case 'INVALID_PARAMS':
+      return /Model route unavailable|任务模型不可用/.test(failure.message)
+        ? 'ipcError.MODEL_SELECTION_UNAVAILABLE' : 'ipcError.INVALID_PARAMS';
+    case 'MODEL_SELECTION_UNAVAILABLE':
+      return 'ipcError.MODEL_SELECTION_UNAVAILABLE';
+    case 'DEVICE_LINK_DEVICE_OFFLINE':
+    case 'DEVICE_LINK_NOT_CONNECTED':
+      return 'bots.profileSaveOffline';
+    case 'DEVICE_LINK_TIMEOUT':
+    case 'DEVICE_LINK_DEVICE_UNRESPONSIVE':
+      return 'bots.remoteSettings.saveFailed';
+    case 'UNSUPPORTED_CAPABILITY':
+      return 'bots.remoteSettings.unsupported';
+    case 'PRECONDITION_FAILED':
+      return /伙伴配置已更新/.test(failure.message) ? 'bots.remoteSettings.conflict' : 'ipcError.PRECONDITION_FAILED';
+    default:
+      return null;
+  }
+}
 
 /** 提交给 `updateBotProfile` 的字段集合(与手动保存时的载荷完全一致)。 */
 export interface BotSettingsPayload {
@@ -134,12 +160,23 @@ export function botSettingsPayloadEqual(a: BotSettingsPayload, b: BotSettingsPay
 }
 
 /** Send only edited fields, preserving capabilities joined concurrently by the companion. */
-export function botSettingsChanges(previous: BotSettingsPayload, next: BotSettingsPayload, includeCapabilityBaseline = false): BotProfileUpdatePatch {
+export function botSettingsChanges(previous: BotSettingsPayload, next: BotSettingsPayload, includeCapabilityBaseline = false, modelSelection = false): BotProfileUpdatePatch {
   const { capabilities, ...values } = next;
   const changed = Object.fromEntries(Object.entries(values).filter(([key, value]) =>
     !capabilityValueEqual(value, previous[key as keyof typeof values])));
   const capabilityChanges = Object.fromEntries(Object.entries(capabilities).filter(([key, value]) =>
     !capabilityValueEqual(value, previous.capabilities[key as keyof BotCapabilities])));
+  // Preserve the route the user picked, even if a concurrent profile read has
+  // moved the saved primary while an unchanged selection is awaiting retry.
+  if (modelSelection) {
+    for (const key of ['modelChain', 'modelChainOverride', 'modelOverride', 'harness', 'model', 'providerId', 'effort', 'fastMode'] as const)
+      capabilityChanges[key] = capabilities[key];
+    // Retrying the same remote choice must carry its mirror too. Keep ordinary
+    // local saves compatible with hosts that predate the optional location field.
+    if (capabilities.agentDeviceId != null || previous.capabilities.agentDeviceId != null) {
+      capabilityChanges.agentDeviceId = capabilities.agentDeviceId ?? null;
+    }
+  }
   const capabilityBaseline = {
     ...('skills' in changed ? { skills: previous.skills } : {}),
     ...('mcpServers' in capabilityChanges ? { mcpServers: previous.capabilities.mcpServers } : {}),
@@ -159,9 +196,10 @@ export function reconcileBotSettingsDraft(
   baseline: BotSettingsPayload,
   draft: BotSettingsDraft,
   incoming: BotSettingsPayload,
+  modelSelection = false,
 ): BotSettingsDraft {
   const normalized = normalizeBotSettingsPayload(draft, baseline.name);
-  const changes = botSettingsChanges(baseline, normalized);
+  const changes = botSettingsChanges(baseline, normalized, false, modelSelection);
   // Text that only differs from the saved copy by surrounding whitespace is the
   // user mid-typing (a trailing space or new line); keep it instead of the trimmed copy.
   const typedWhitespace = Object.fromEntries(BOT_SETTINGS_TEXT_FIELDS
@@ -187,7 +225,7 @@ export function reconcileBotSettingsDraft(
 export type BotAutosaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 /** 触发来源:文本输入走防抖,离散选择(开关 / 下拉 / 头像)走即时合并窗口。 */
-export type BotAutosaveTrigger = 'text' | 'instant';
+export type BotAutosaveTrigger = 'text' | 'instant' | 'model';
 
 export interface BotSettingsAutosaveOptions {
   /** 文本输入的防抖窗口,默认 1200ms。 */
@@ -199,9 +237,9 @@ export interface BotSettingsAutosaveOptions {
   /** 读取上次成功保存的快照(基线)。成功提交后由 commit 侧推进。 */
   readBaseline: () => BotSettingsPayload;
   /** 真正提交(IPC)。resolve = 已落库(此时 commit 侧应已推进基线);reject = 失败。 */
-  commit: (payload: BotSettingsPayload) => Promise<void>;
+  commit: (payload: BotSettingsPayload, modelSelection?: boolean) => Promise<void>;
   /** 状态变化回调。dispose 之后不再触发。 */
-  onStatusChange?: (status: BotAutosaveStatus) => void;
+  onStatusChange?: (status: BotAutosaveStatus, error?: unknown) => void;
 }
 
 export interface BotSettingsAutosaveHandle {
@@ -217,6 +255,7 @@ export interface BotSettingsAutosaveHandle {
   cancel(): void;
   /** 是否有已改但未落库的内容。 */
   isDirty(): boolean;
+  hasPendingModelSelection(): boolean;
 }
 
 export function createBotSettingsAutosave(
@@ -230,10 +269,13 @@ export function createBotSettingsAutosave(
   let instantPending = false;
   let inFlight: Promise<void> | null = null;
   let detached = false;
+  // An explicit model choice is an action even when its configured value is unchanged.
+  let modelSelectionRevision = 0;
+  let savedModelSelectionRevision = 0;
 
-  const emit = (status: BotAutosaveStatus): void => {
+  const emit = (status: BotAutosaveStatus, error?: unknown): void => {
     if (detached) return;
-    options.onStatusChange?.(status);
+    options.onStatusChange?.(status, error);
   };
 
   const clearTimer = (): void => {
@@ -245,7 +287,15 @@ export function createBotSettingsAutosave(
   };
 
   const isDirty = (): boolean =>
+    modelSelectionRevision !== savedModelSelectionRevision ||
     !botSettingsPayloadEqual(options.readPayload(), options.readBaseline());
+
+  const commit = async (payload: BotSettingsPayload): Promise<void> => {
+    const revision = modelSelectionRevision;
+    await options.commit(payload, revision !== savedModelSelectionRevision);
+    // A second choice made during this request still needs its own acceptance.
+    savedModelSelectionRevision = revision;
+  };
 
   const runNow = async (): Promise<void> => {
     clearTimer();
@@ -256,7 +306,7 @@ export function createBotSettingsAutosave(
     }
     if (detached) return;
     const payload = options.readPayload();
-    if (botSettingsPayloadEqual(payload, options.readBaseline())) {
+    if (!isDirty()) {
       // 无实际变化 —— 不发 IPC。
       return;
     }
@@ -265,10 +315,10 @@ export function createBotSettingsAutosave(
     // 看到 inFlight 为 null 而重复提交同一份 payload。
     const attempt = (async () => {
       try {
-        await options.commit(payload);
+        await commit(payload);
         emit(isDirty() ? 'idle' : 'saved');
-      } catch {
-        emit('error');
+      } catch (error) {
+        emit('error', error);
       }
     })();
     inFlight = attempt;
@@ -285,7 +335,8 @@ export function createBotSettingsAutosave(
   return {
     schedule(trigger) {
       if (detached) return;
-      if (trigger === 'instant') {
+      if (trigger === 'model') modelSelectionRevision += 1;
+      if (trigger !== 'text') {
         if (timer !== null) clearTimeout(timer);
         instantPending = true;
         timer = setTimeout(fire, instantDelayMs);
@@ -308,7 +359,7 @@ export function createBotSettingsAutosave(
       if (detached) return;
       clearTimer();
       const payload = options.readPayload();
-      const dirty = !botSettingsPayloadEqual(payload, options.readBaseline());
+      const dirty = isDirty();
       // 先断开状态回调:组件正在卸载,任何 setState 都是无主的。
       detached = true;
       if (!dirty) return;
@@ -319,16 +370,17 @@ export function createBotSettingsAutosave(
           .catch(() => undefined)
           .then(() => {
             const trailing = options.readPayload();
-            if (botSettingsPayloadEqual(trailing, options.readBaseline())) return;
-            return options.commit(trailing).catch(() => undefined);
+            if (!isDirty()) return;
+            return commit(trailing).catch(() => undefined);
           });
         return;
       }
-      void options.commit(payload).catch(() => undefined);
+      void commit(payload).catch(() => undefined);
     },
     cancel() {
       clearTimer();
     },
     isDirty,
+    hasPendingModelSelection: () => modelSelectionRevision !== savedModelSelectionRevision,
   };
 }

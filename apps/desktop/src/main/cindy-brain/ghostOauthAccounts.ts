@@ -36,6 +36,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   fetchGhostOauthAvatar,
+  type GhostOauthAvatarHop,
   fetchGhostOauthIdentity,
   refreshGhostOauthToken,
   startGhostOauthFlow,
@@ -44,6 +45,7 @@ import {
   type GhostOauthFlowError,
   type GhostOauthLogger,
 } from './ghostOauthFlow.js';
+import { tokenBrokerIssuesClientId } from './ghostOauthBroker.js';
 import {
   changedBuiltinOauthClientSecretKeys,
   type GhostManifest,
@@ -112,7 +114,7 @@ export interface GhostOauthAccountManagerDeps {
   fetchImpl: typeof fetch;
   /** 拉起系统浏览器(仅 connect 用;生产注入 shell.openExternal)。 */
   openExternal(url: string): void | Promise<void>;
-  /** XDT server token broker 调用器(tokenBroker 声明的意识用;接线处注入并做第一方门控)。 */
+  /** XDT server token broker 调用器(tokenBroker 声明的意识用;接线处注入并核验企业绑定)。 */
   broker?: GhostOauthBrokerClient;
   /**
    * brokerBounce 声明的公网弹跳地址解析器:入参是声明的站内路径(如
@@ -124,7 +126,7 @@ export interface GhostOauthAccountManagerDeps {
   brandName?: string;
   logger?: GhostOauthLogger;
   /** 钉死端口被外部进程占用时的自动回收器(生产注入 portReclaim.reclaimLoopbackPort)。 */
-  reclaimPort?: (port: number) => Promise<boolean>;
+  reclaimPort?: (port: number, instanceKey: string, isCurrent: () => boolean) => Promise<boolean>;
   /**
    * 授权成功钩子(2026-07-14):新连与同身份重连两个成功出口都触发,调用方
    * 拿它广播"授权成功"的主机代言 tips(label = 账号展示标签,声明 identity
@@ -165,8 +167,11 @@ export interface GhostOauthAccountManagerDeps {
    * 缺省拒绝。
    */
   isTokenBrokerAuthorized?: (instanceKey: string) => boolean;
-  /** Port reclaim / identity avatar. Missing = deny. */
-  isHostPrimitiveAuthorized?: (instanceKey: string) => boolean;
+  /**
+   * 头像下载的受防护单跳请求(生产注入 guardedOutboundFetch)。头像地址来自身份
+   * 响应、对所有插件开放,只能经这条通道请求,缺省不下载头像。
+   */
+  fetchAvatarHop?: GhostOauthAvatarHop;
 }
 
 /**
@@ -390,8 +395,12 @@ export class GhostOauthAccountManager {
 
   /** client 凭证是否可用(用户自填或清单内置任一即可;设置页状态展示,不回明文)。 */
   clientConfigured(instanceKey: string, secretKey: string, decl?: GhostOauthDecl): boolean {
-    // broker 模式:secret 在服务端,声明了内置 clientId 即视为可连(用户零配置)。
-    if (decl?.tokenBroker) return typeof decl.clientId === 'string' && decl.clientId.length > 0;
+    // broker 模式:secret 在服务端,声明了内置 clientId 即视为可连(用户零配置);
+    // 由服务端签发应用身份的 broker 连 clientId 也不需要。
+    if (decl?.tokenBroker) {
+      return tokenBrokerIssuesClientId(decl.tokenBroker)
+        || (typeof decl.clientId === 'string' && decl.clientId.length > 0);
+    }
     if (this.clientCustomized(instanceKey, secretKey)) return true;
     return typeof decl?.clientId === 'string' && decl.clientId.length > 0;
   }
@@ -743,7 +752,7 @@ export class GhostOauthAccountManager {
       clientId = decl.clientId ?? null;
       clientSecret = decl.clientSecret;
     }
-    if (!clientId) return null;
+    if (!clientId && !tokenBrokerIssuesClientId(decl.tokenBroker)) return null;
     // brokerBounce → 双地址模型:公网弹跳地址由接线处解析器现拼(broker 基
     // 地址来自端点清单;当前 region 提供该服务时应为非空)。null 仅剩一种
     // 来源:宿主未接线
@@ -759,7 +768,7 @@ export class GhostOauthAccountManager {
       ...(decl.scopeDelimiter !== undefined ? { scopeDelimiter: decl.scopeDelimiter } : {}),
       pkce: decl.pkce,
       extraAuthorizeParams: decl.extraAuthorizeParams,
-      clientId,
+      ...(clientId ? { clientId } : {}),
       ...(clientSecret ? { clientSecret } : {}),
       ...(decl.redirectPort !== undefined ? { redirectPort: decl.redirectPort } : {}),
       ...(decl.tokenBroker !== undefined ? { tokenBroker: decl.tokenBroker } : {}),
@@ -977,11 +986,9 @@ export class GhostOauthAccountManager {
       broker: this.deps.broker,
       brandName: this.deps.brandName,
       logger: this.deps.logger,
-      // 端口回收器只对第一方官方意识放行:
-      // 回收 = 强杀占用进程,而"杀谁"由 redirectPort 决定——第三方 manifest
-      // 可声明任意端口(如 5432),放开等于让任意意识借「连接账号」之手
-      // 强杀用户本地服务(Postgres 等),故第三方一律回落"占用即报错"。
-      reclaimPort: this.deps.isHostPrimitiveAuthorized?.(instanceKey) ? this.deps.reclaimPort : undefined,
+      // Every plugin uses the same host confirmation, bound to this connection target.
+      reclaimPort: this.deps.reclaimPort ? port => isConnectTargetCurrent()
+        ? this.deps.reclaimPort!(port, instanceKey, isConnectTargetCurrent) : Promise.resolve(false) : undefined,
     });
     if (!flow.ok) return { ok: false, error: flow.error, detail: flow.detail };
     opts?.remote?.assertCurrent();
@@ -1006,14 +1013,13 @@ export class GhostOauthAccountManager {
       });
       label = identity.label;
       display = identity.display;
-      // 头像下载只对第一方官方意识放行:
-      // 头像地址是身份端点响应里的任意 https,不受 hosts 白名单约束——放开
-      // 等于给第三方意识一个"主机代发 GET + 小图字节回沙箱"的 SSRF 读原语。
+      // 头像地址是身份端点响应里的任意 https,不受 hosts 白名单约束,只走受防护
+      // 通道(拦截内网/回环、逐跳复核、限时限量),不能用普通 fetchImpl 代发。
       // 下载本身不带任何凭证(CDN 域名不在注入白名单);失败降级无头像。
-      if (identity.avatarUrl !== null && this.deps.isHostPrimitiveAuthorized?.(instanceKey)) {
+      if (identity.avatarUrl !== null && this.deps.fetchAvatarHop) {
         avatar = await fetchGhostOauthAvatar({
           url: identity.avatarUrl,
-          fetchImpl: this.deps.fetchImpl,
+          fetchHop: this.deps.fetchAvatarHop,
         });
       }
     }
@@ -1413,10 +1419,11 @@ export class GhostOauthAccountManager {
       const row = before.accounts.find((a) => a.id === accountId);
       if (!row) return;
       const needDisplay = template !== undefined && row.displayLabel === null;
-      // 头像回填同样只对第一方官方意识放行(connectAccount 处的 SSRF 口径)。
+      // 头像回填同样只走受防护通道(connectAccount 处的 SSRF 口径)。
+      const fetchAvatarHop = this.deps.fetchAvatarHop;
       const needAvatar =
         decl.identity.avatarPath !== undefined &&
-        this.deps.isHostPrimitiveAuthorized?.(instanceKey) === true &&
+        fetchAvatarHop !== undefined &&
         this.readAvatar(instanceKey, secretKey, accountId) === null;
       if (!needDisplay && !needAvatar) return;
       const identity = await fetchGhostOauthIdentity({
@@ -1443,11 +1450,11 @@ export class GhostOauthAccountManager {
         });
         this.deps.logger?.info('ghost oauth 账号展示名已回填', { ghostId: instanceKey, secretKey, accountId });
       }
-      if (needAvatar && identity.avatarUrl !== null) {
+      if (needAvatar && fetchAvatarHop && identity.avatarUrl !== null) {
         if (this.ghostGeneration(instanceKey) !== generation) return;
         const avatar = await fetchGhostOauthAvatar({
           url: identity.avatarUrl,
-          fetchImpl: this.deps.fetchImpl,
+          fetchHop: fetchAvatarHop,
         });
         // 存前重验账号仍在清单(拉取期间可能被断开;断开后不再写孤儿头像键)。
         if (avatar !== null) {

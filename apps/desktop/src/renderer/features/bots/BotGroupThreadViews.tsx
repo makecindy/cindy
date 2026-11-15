@@ -7,6 +7,7 @@ import { useId, useState, type ReactNode } from 'react';
 import { ChevronRight, CornerDownRight, MessageSquare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
+import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { CHAT_BODY_CLASS } from '@/components/chat/chatChrome';
 import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
 import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR } from '@/lib/shareConversationImage';
@@ -51,10 +52,7 @@ function ReplySummary({ reply }: { reply: BotGroupThreadPreviewReply }) {
   return <>{reply.attachments.length > 1 ? t(key('attachmentsSummary'), { label, name: first.name, count: reply.attachments.length }) : `${label} · ${first.name}`}</>;
 }
 
-/**
- * One line under a root message, flush with its bubble: who replied, how many replies and when
- * the last one came. The newest replies stay readable as the button's description.
- */
+/** Thread summary; recent replies provide the button's accessible description. */
 export function BotGroupThreadPreview({ message, members, onOpen }: {
   message: BotGroupMessageView; members: readonly BotGroupMemberView[]; onOpen: () => void;
 }) {
@@ -76,7 +74,7 @@ export function BotGroupThreadPreview({ message, members, onOpen }: {
         ...(unread?.mentioned ? [t(key('mentionedYou'))] : [])].join(', ')}
       aria-describedby={replies.length ? linesId : undefined}
       onClick={onOpen} onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)}
-      className={cn('group/thread flex min-h-6 min-w-0 max-w-full self-start select-none items-center gap-2 rounded-full text-left text-13 leading-5', FOCUS)}>
+      className={cn('group/thread flex min-h-6 min-w-0 max-w-full flex-wrap self-start select-none items-center gap-2 rounded-full text-left text-13 leading-5', FOCUS)}>
       {repliers.length ? (
         <span aria-hidden className="flex shrink-0 items-center -space-x-1.5">
           {repliers.map(reply => {
@@ -114,7 +112,8 @@ export function botGroupThreadShareLabel(share: BotGroupThreadShareView, t: (key
 }
 
 /** The referenced reply as the server has it now: edits show, deletions say so. */
-export function BotGroupThreadShareQuote({ share, members, attachments, onOpenThread, inset = false }: {
+export function BotGroupThreadShareQuote({ share, members, attachments, onOpenThread, inset = false, richScope }: {
+  richScope?: string;
   share: BotGroupThreadShareView; members: readonly BotGroupMemberView[]; attachments: ReactNode;
   /** Omitted inside the thread panel, where the quote is already the thread's root. */
   onOpenThread?: () => void;
@@ -142,7 +141,10 @@ export function BotGroupThreadShareQuote({ share, members, attachments, onOpenTh
           </figcaption>
           {share.content.trim() ? (
             <blockquote className={`min-w-0 break-words text-[var(--msg-assistant-text)] ${CHAT_BODY_CLASS}`}>
-              <MarkdownRenderer workingDir="" content={share.content} allowPrivilegedLinks={false} />
+              <SessionQuickSendProvider value={null}>
+                <MarkdownRenderer workingDir="" content={share.content} allowPrivilegedLinks={false}
+                  renderRichAnswers={share.authorKind === 'bot'} streamFadeKey={`group:${richScope}:${share.messageId}`} />
+              </SessionQuickSendProvider>
             </blockquote>
           ) : null}
           {attachments}

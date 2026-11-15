@@ -65,6 +65,8 @@ export type LocalRequestHandler = (args: {
  * 与 RequestTransform 职责分离:RequestTransform 改 body,RoutingTransform 只读、决定路由。
  */
 export interface RoutingDecision {
+  /** Trusted host-selected, versioned stream behavior (never a request header). */
+  compatibilityProfiles?: readonly string[];
   /** 覆盖本次请求的上游 URL(完整 `http(s)://host[:port][/basePath]`);省略 = 用默认 `opts.upstream`。 */
   upstreamOverride?: string;
   /**
@@ -207,6 +209,21 @@ export interface ProxyLogger {
   isDebugEnabled?: () => boolean;
 }
 
+/** What the inbound admission check sees: the request line and its flattened headers. */
+export interface InboundAdmissionCtx {
+  method: string;
+  url: string;
+  /** Mutable: an admitted request may have its credential headers rewritten here. */
+  headers: Record<string, string>;
+}
+
+/** A local refusal of an inbound request. */
+export interface InboundRejection {
+  status: 401 | 403;
+  code: string;
+  message: string;
+}
+
 /**
  * createAnthropicCompatProxy 入参。
  */
@@ -224,6 +241,14 @@ export interface ProxyOptions {
    * 传空数组 [] = 显式禁用所有 transform,纯透传。
    */
   transformRequest?: RequestTransform[];
+  /**
+   * Optional inbound admission, checked first for every HTTP request and WebSocket
+   * upgrade: before oversized-request recovery, the request guard, routing and every
+   * transform. Return null to admit. A rejection is answered locally and nothing is sent
+   * upstream; a throw rejects with 401. The check may rewrite credential headers in
+   * `ctx.headers` before routing (the same object the proxy forwards). Not set = no check.
+   */
+  authorizeInbound?: (ctx: InboundAdmissionCtx) => InboundRejection | null;
   /** Host-owned, request-frozen enforcement before routing, including opaque/local-handler paths.
    * Throws fail closed. Ordinary requests return null and retain their zero-copy response path. */
   requestGuard?: (ctx: RequestTransformCtx) => {
@@ -351,6 +376,25 @@ export interface ProxyOptions {
     readonly url: string;
     readonly headers: Readonly<Record<string, string>>;
   }) => string | null;
+  /** Optional host authentication immediately before opening an upstream socket.
+   * Replaces outbound headers, preserving only host-approved handshake metadata.
+   * The signal revokes pending and established connections with the owning runtime.
+   * authorize rechecks mutable route ownership before forwarding each outbound chunk,
+   * without decoding frames or changing compression negotiation.
+   * Omitted by existing callers, whose forwarding remains unchanged.
+   */
+  prepareWebSocketRequest?: (ctx: {
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+  }) => Promise<{
+    headers: Record<string, string>;
+    signal: AbortSignal;
+    authorize?: () => boolean;
+    /** Observe a complete, bounded HTTP upgrade refusal without consuming its body. */
+    onUpgradeFailure?: (status: number, body: string) => Promise<void>;
+    /** Connection-bound message guards; requires webSocketTransforms (uncompressed negotiation). */
+    transforms?: () => { outbound: Transform; inbound: Transform };
+  }>;
   /**
    * 对带稳定 thread id、且此前已真实完成过上游 101 的 WebSocket 重连启用 Cindy 侧保活。
    * proxy 会先用已证明一致的协商参数接住该条客户端 socket，再以有界退避回探上游；只要

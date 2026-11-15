@@ -16,7 +16,7 @@ export function resolveVoiceConfiguration(
 ) {
   const selectedModel = preference
     ? models.find((model) => voiceModelKey(model) === voiceModelKey(preference))
-    : models[0];
+    : models.find((model) => model.pickerVisible !== false);
   const protocolOverride = selectedModel?.protocolLocked ? undefined : preference?.protocol;
   const incompatibleSavedProtocol = Boolean(
     selectedModel?.protocolLocked &&
@@ -33,7 +33,7 @@ export function resolveVoiceConfiguration(
     selectedModel?.protocol ??
     ((selectedModel?.providerId ?? 'xd') === 'xd' ? 'openai' : undefined);
   const resolvedSpeed = selectedModel
-    ? resolveSpeechSpeed(selectedModel.id, protocol, speed)
+    ? resolveSpeechSpeed(selectedModel.id, protocol, speed, selectedModel.speedRange)
     : undefined;
   const selection = selectedModel
     ? normalizeVoiceConversationSelection({
@@ -52,7 +52,7 @@ export function resolveVoiceConfiguration(
     selectedVoice,
     protocol,
     selection,
-    speedRange: selectedModel ? speechSpeedRange(selectedModel.id, protocol) : null,
+    speedRange: selectedModel ? speechSpeedRange(selectedModel.id, protocol, selectedModel.speedRange) : null,
     speed: resolvedSpeed,
     speedAdjusted: speed !== undefined && speed !== resolvedSpeed,
   };

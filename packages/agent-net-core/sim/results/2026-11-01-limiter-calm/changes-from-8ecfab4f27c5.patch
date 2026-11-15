@@ -1,0 +1,208 @@
+diff -ru a/src/congestion.rs b/src/congestion.rs
+--- a/src/congestion.rs	2026-11-01 09:25:07
++++ b/src/congestion.rs	2026-11-01 09:25:07
+@@ -82,6 +82,8 @@
+ const CALM_SAMPLE_WINDOW: u32 = 512;
+ /// 样本少于这么多时按这么多算，刚开始一两个丢包不会把估计值推得很高。
+ const CALM_SAMPLE_FLOOR: u32 = 64;
++/// 看最近这么多轮的平均送达速率。要盖过排空阶段：排空时发得慢，送达速率本来就低。
++const DELIVERY_ROUNDS: usize = 4;
+ 
+ #[derive(Clone, Copy, PartialEq)]
+ enum Mode {
+@@ -116,6 +118,9 @@
+     next_round_delivered: u64,
+     /// 这一轮开始时的送达量和这一轮的丢失量，用来认出突发丢包的轮次。
+     round_start_delivered: u64,
++    round_started_at: u64,
++    /// 最近几轮各自的平均送达速率。
++    round_rates: [u64; DELIVERY_ROUNDS],
+     round_lost: u64,
+     btl_bw: u64,
+     min_rtt_us: u64,
+@@ -182,6 +187,8 @@
+             round: 0,
+             next_round_delivered: 0,
+             round_start_delivered: 0,
++            round_started_at: 0,
++            round_rates: [0; DELIVERY_ROUNDS],
+             round_lost: 0,
+             btl_bw: 0,
+             min_rtt_us: 0,
+@@ -408,6 +415,16 @@
+         self.mode == Mode::ProbeBw && PROBE_CYCLE[self.cycle_index] < 1000
+     }
+ 
++    /// 被窗口限住、随机丢包率的样本已经攒够、也没有撞上过容量的降速阶段。
++    fn settled_window_limited(&self) -> bool {
++        self.mode == Mode::ProbeBw
++            && self.window_limited
++            && self.is_below_capacity()
++            && self.rate_cap == 0
++            && self.last_period_rate == 0
++            && self.calm_samples >= CALM_SAMPLE_WINDOW / 2
++    }
++
+     /// 宽松的上限还没确认时，降速阶段按的是放大过的上限，仍可能高过真实限速，
+     /// 这时的丢包混着限速造成的丢包，不能用来估计随机丢包率。令牌桶上能把估计值推到 76%。
+     /// 要在发送时判断：结果要晚一个往返才知道，那时上限可能刚好确认，按那时算会把限速丢包全收进来。
+@@ -484,7 +501,7 @@
+             Mode::ProbeBw if PROBE_CYCLE[self.cycle_index] == 1000 && self.queue_is_building() => QUEUE_DRAIN_GAIN,
+             // 被窗口限住时瓶颈没有队列，这一轮只是要测随机丢包率，低于送达速率就够了，不用多降。
+             // 窗口对应的速率可能高过限速，所以要等样本攒够、确认过没有撞上容量。
+-            Mode::ProbeBw if self.window_limited && self.is_below_capacity() && self.rate_cap == 0 && self.last_period_rate == 0 && self.calm_samples >= CALM_SAMPLE_WINDOW / 2 => {
++            Mode::ProbeBw if self.settled_window_limited() => {
+                 WINDOW_LIMITED_CALM_GAIN
+             }
+             Mode::ProbeBw => PROBE_CYCLE[self.cycle_index],
+@@ -499,6 +516,17 @@
+         // 只量到一次的宽松上限可能是突发丢包造成的，不在这里强压。
+         // 想知道上限有没有放宽，由 relax_rate_cap 定期放开一档去试。
+         let rate = if self.is_rate_limited() { rate.min(self.rate_cap) } else { rate };
++        // 降速阶段要真的低于路径送得出去的速率，这段的丢包才能当随机丢包。令牌桶放行突发时测到的带宽能高出上限好几倍，
++        // 按它打折的“降速”仍远超上限，限速丢包混进随机丢包率；估计值一高，补偿后发得更快，越滚越高，再也认不出上限。
++        // 最近几轮的平均送达速率既远低于带宽估计、又远低于窗口能送的速率，说明卡住送达的是路径上的上限，
++        // 这时降速阶段不超过带宽估计的一半。取平均：攒够令牌时能放行短突发，单看最快的一轮会偏高。
++        // 窗口受限的长往返路径上，启动测到的速率常比窗口能送的高好几倍，那不是限速，不压；
++        // 随机丢包率已经测稳的窗口受限阶段也不压，那时降速只比窗口速率低一点，再压就白白慢了。
++        let recent = self.round_rates.iter().sum::<u64>() / DELIVERY_ROUNDS as u64;
++        let window_rate = self.max_cwnd.saturating_mul(1_000_000) / self.min_rtt_us.max(1);
++        let limited_elsewhere = recent < self.btl_bw / 2 && recent < window_rate / 2;
++        let delivering = if limited_elsewhere { self.btl_bw / 2 } else { u64::MAX };
++        let rate = if self.is_below_capacity() && recent > 0 && !self.settled_window_limited() { rate.min(delivering) } else { rate };
+         // 稀疏消息测到的是应用发送速度，不能把它当作恢复积压时的路径上限。
+         // 仍受拥塞窗口限制；主动降速、排空、排队或已知限速时都不抬高，避免污染低速丢包样本。
+         if self.probe_sender_limited && self.app_idle_estimate && self.rate_cap == 0
+@@ -591,6 +619,12 @@
+                 }
+             }
+             self.clean_rounds = if outage { 0 } else { self.clean_rounds.saturating_add(1) };
++            let round_elapsed = now_us.saturating_sub(self.round_started_at);
++            if self.round_started_at > 0 && round_elapsed > 0 {
++                self.round_rates.rotate_right(1);
++                self.round_rates[0] = round_delivered.saturating_mul(1_000_000) / round_elapsed;
++            }
++            self.round_started_at = now_us;
+             self.next_round_delivered = delivered;
+             self.round_start_delivered = delivered;
+             self.round_lost = 0;
+diff -ru a/src/connection.rs b/src/connection.rs
+--- a/src/connection.rs	2026-11-01 09:25:07
++++ b/src/connection.rs	2026-11-01 09:25:07
+@@ -321,7 +321,10 @@
+     /// 这个包带来了暂存的校验包等着的分片。
+     parity_dirty: bool,
+     parity_seen_at: Option<u64>,
+-    received: VecDeque<(u64, u64)>,
++    /// 收到的包号区间 `(低, 高, 最后变化时已发出的确认数)`。
++    received: VecDeque<(u64, u64, u32)>,
++    /// 已发出的确认个数，判断旧区间还要不要接着带。
++    acks_sent: u32,
+     largest_received: Option<u64>,
+     largest_received_at: u64,
+     late_packets: [u64; MAX_LATE_PACKETS],
+@@ -413,6 +416,7 @@
+             parity_seen_at: None,
+             received: VecDeque::new(),
+             largest_received: None,
++            acks_sent: 0,
+             largest_received_at: now_us,
+             late_packets: [0; MAX_LATE_PACKETS],
+             late_packet_count: 0,
+@@ -1116,22 +1120,30 @@
+     }
+ 
+     fn is_duplicate(&self, number: u64) -> bool {
+-        self.received.iter().rev().any(|&(low, high)| low <= number && number <= high)
++        self.received.iter().rev().any(|&(low, high, _)| low <= number && number <= high)
+     }
+ 
+     fn record_received(&mut self, number: u64) {
+-        let index = self.received.partition_point(|&(_, high)| high < number);
++        let index = self.received.partition_point(|&(_, high, _)| high < number);
+         let joins_previous = index > 0 && self.received[index - 1].1 + 1 == number;
+-        let joins_next = self.received.get(index).is_some_and(|&(low, _)| low == number + 1);
++        let joins_next = self.received.get(index).is_some_and(|&(low, _, _)| low == number + 1);
++        let acks = self.acks_sent;
+         match (joins_previous, joins_next) {
+             (true, true) => {
+                 let high = self.received[index].1;
+                 self.received[index - 1].1 = high;
+                 self.received.remove(index);
++                self.received[index - 1].2 = acks;
+             }
+-            (true, false) => self.received[index - 1].1 = number,
+-            (false, true) => self.received[index].0 = number,
+-            (false, false) => self.received.insert(index, (number, number)),
++            (true, false) => {
++                self.received[index - 1].1 = number;
++                self.received[index - 1].2 = acks;
++            }
++            (false, true) => {
++                self.received[index].0 = number;
++                self.received[index].2 = acks;
++            }
++            (false, false) => self.received.insert(index, (number, number, acks)),
+         }
+         if self.received.len() > MAX_TRACKED_RANGES {
+             self.received.pop_front();
+@@ -1448,7 +1460,10 @@
+             let delay = now_us.saturating_sub(self.largest_received_at);
+             let window = self.advertised_window();
+             let late_packets = &self.late_packets[..self.late_packet_count];
+-            used = wire::write_ack(out, used, self.received.iter().copied(), late_packets, delay, self.rcv_next, window);
++            let acks = self.acks_sent;
++            let ranges = self.received.iter().map(|&(low, high, changed)| (low, high, acks.wrapping_sub(changed) < wire::RANGE_REPORT_ACKS));
++            used = wire::write_ack(out, used, ranges, late_packets, delay, self.rcv_next, window);
++            self.acks_sent = self.acks_sent.wrapping_add(1);
+             self.late_packet_count = 0;
+             self.ack_pending = false;
+             self.unacked_packets = 0;
+diff -ru a/src/wire.rs b/src/wire.rs
+--- a/src/wire.rs	2026-11-01 09:25:07
++++ b/src/wire.rs	2026-11-01 09:25:07
+@@ -21,6 +21,11 @@
+ /// 发送时最多带的区间数。重传用新包号，旧空洞永远填不上，全带的话确认帧常年 149 字节；
+ /// 每个新区间会出现在后续好几个确认里，只带最新的就够了。
+ const MAX_SENT_ACK_RANGES: usize = 8;
++/// 区间最后一次变化以后，再跟着这么多个确认发出去就不再带：对端早就知道了。
++/// 不限的话，随机丢包的路径上每个确认都带满 8 个旧区间，慢速链路上光确认就占流量的 4%。
++/// 也不能太少：确认在回程上同样会丢、会乱序，留得太短，发送方会把已经收到的包当成丢了重传（跨境乱序路径上 8 个就嫌少）。
++/// 按确认个数而不是包号距离算：高速链路上一阵突发丢包就隔开几百个包号，按距离会把还没送到的区间提前扔掉。
++pub(crate) const RANGE_REPORT_ACKS: u32 = 32;
+ 
+ const FRAME_DATA: u8 = 1;
+ const FRAME_ACK: u8 = 2;
+@@ -151,14 +156,14 @@
+ pub(crate) fn write_ack(
+     out: &mut [u8],
+     used: usize,
+-    received: impl DoubleEndedIterator<Item = (u64, u64)>,
++    received: impl DoubleEndedIterator<Item = (u64, u64, bool)>,
+     late_packets: &[u64],
+     delay_us: u64,
+     una: u64,
+     window: u32,
+ ) -> usize {
+     let mut newest_first = received.rev();
+-    let Some((first_low, first_high)) = newest_first.next() else {
++    let Some((first_low, first_high, _)) = newest_first.next() else {
+         return used;
+     };
+     if used + ACK_FIXED_LEN > out.len() {
+@@ -176,12 +181,13 @@
+     let mut cursor = header + ACK_FIXED_LEN;
+     let mut count = 0usize;
+     let mut previous_low = first_high + 1 - first_run;
+-    for (low, high) in newest_first {
++    for (low, high, fresh) in newest_first {
+         if cursor + ACK_RANGE_LEN > out.len() {
+             break;
+         }
+         // 晚到的包落在最新几个区间之外时也要带上，否则发送方永远等不到它的确认，只能白白重传。
+-        if count >= MAX_SENT_ACK_RANGES && !late_packets.iter().any(|&number| low <= number && number <= high) {
++        let stale = count >= MAX_SENT_ACK_RANGES || !fresh;
++        if stale && !late_packets.iter().any(|&number| low <= number && number <= high) {
+             continue;
+         }
+         let gap = previous_low - high - 1;

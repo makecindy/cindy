@@ -1,13 +1,15 @@
 {
   "site": "news.ycombinator.com",
-  "auth": "只读无需登录",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://news.ycombinator.com/",
-    "searchApi": "https://hn.algolia.com/api/v1/search?tags=story&query="
+    "home": "https://news.ycombinator.com"
   },
-  "pages": [
-    { "type": "front", "url": "https://news.ycombinator.com/", "container": ".athing", "notes": "标题在 .titleline a" }
+  "recipes": [
+    "hn-search"
   ],
-  "recipes": ["hn-search"],
-  "notes": "搜索走公开 Algolia API(hn.algolia.com/api/v1/search?tags=story&query=),返回 JSON {hits:[{title,url,author,points,objectID,created_at,...}]};直接 navigate 到该 URL 再读 body 即拿到 JSON。首页 DOM 列表是 .athing 行。"
+  "notes": "兼容入口 hn-search 现执行内置 hackernews/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

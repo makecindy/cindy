@@ -25,6 +25,7 @@ export {
   readFileChunk,
   FILE_CHUNK_MAX_LENGTH,
   writeFile,
+  writeFileBytes,
   createFile,
   createFolder,
   renameEntry,
@@ -40,6 +41,8 @@ export {
 
 export {
   loadIgnoreMatcher,
+  createEventIgnoreMatcher,
+  WATCH_ALWAYS_IGNORE,
   __clearCacheForTesting,
   type Matcher,
 } from './ignore.js';

@@ -12,6 +12,7 @@ function createDeps() {
   return {
     idleWorker: vi.fn(async (): Promise<WorkerControlResult> => ({ ok: true, workerId: 'worker-1' })),
     archiveWorker: vi.fn(async (): Promise<WorkerControlResult> => ({ ok: true, workerId: 'worker-1' })),
+    updateWorker: vi.fn(async (): Promise<WorkerControlResult> => ({ ok: true, workerId: 'worker-1' })),
     logInfo: vi.fn(),
   };
 }
@@ -185,5 +186,67 @@ describe('Orca worker control IPC handlers', () => {
         workerId: 'worker-1',
       }),
     ).rejects.toMatchObject({ code: 'INTERNAL' });
+  });
+
+  it('forwards partial identity patches to the update service', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    registerOrcaWorkerControlHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.WORKER_UPDATE, {
+      leadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      label: 'backend-2',
+    });
+    expect(deps.updateWorker).toHaveBeenCalledWith({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      label: 'backend-2',
+    });
+
+    deps.updateWorker.mockClear();
+    await harness.invoke(MAKER_INVOKE.WORKER_UPDATE, {
+      leadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: 'Reviewer',
+    });
+    expect(deps.updateWorker).toHaveBeenCalledWith({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: 'Reviewer',
+    });
+  });
+
+  it('rejects an empty update patch before calling the service', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    registerOrcaWorkerControlHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.WORKER_UPDATE, {
+        leadSessionId: 'lead-1',
+        workerId: 'worker-1',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(deps.updateWorker).not.toHaveBeenCalled();
+  });
+
+  it('maps update duplicate-label failures to the stable IPC error code', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    deps.updateWorker.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'DUPLICATE_LABEL',
+      message: 'label "backend" already used in this team',
+    });
+    registerOrcaWorkerControlHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.WORKER_UPDATE, {
+        leadSessionId: 'lead-1',
+        workerId: 'worker-1',
+        label: 'backend',
+      }),
+    ).rejects.toMatchObject({ code: 'DUPLICATE_LABEL' });
   });
 });

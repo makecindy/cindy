@@ -7,7 +7,7 @@
  * - 只用于分摊负载，报告失败只记日志、稍后重报，不影响任务。
  */
 import type { ProviderGroupRemoteLease } from '../../shared/providerGroup.js';
-import type { ProviderGroupBinding } from './bindings.js';
+import type { ProviderGroupBinding } from './bindings.desktop.js';
 
 export const PROVIDER_GROUP_LEASE_DEBOUNCE_MS = 1_000;
 export const PROVIDER_GROUP_LEASE_HEARTBEAT_MS = 60_000;

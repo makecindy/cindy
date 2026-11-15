@@ -20,6 +20,7 @@ const management = {
     blocks: [{ id: 'memory', primitive: 'form', fallbackMarkdown: 'Memory', data: { actionId: 'grant', values: { memory: true, userContext: '' } } }] })),
   getEditor: vi.fn(async (_context: unknown, id: string) => ({ ref: ref(id), revision: 'list', display: { title: 'Saved Memories' }, links: [], blocks: [] })),
   getInvitation: vi.fn(), invoke: vi.fn(), bindResource: vi.fn(),
+  settingsHost: { invoke: vi.fn(async () => ({ effects: [], result: { ok: true, value: 'hosted' } })) },
 };
 registerBotRemoteResourceProvider(management as unknown as typeof botRemoteManagement);
 const context = { controllerDeviceId: 'phone' };
@@ -39,4 +40,14 @@ it('forwards the optional query and the declared primitives to the memory page',
   expect(management.getEditor).toHaveBeenLastCalledWith(context, 'settings:bot-1/memory', 'zh-CN', { query: '咖啡', primitives: ['form', 'search'] });
   await remoteResourceRegistry.get(context, { client, ref: ref('settings:bot-1/memory') });
   expect(management.getEditor).toHaveBeenLastCalledWith(context, 'settings:bot-1/memory', 'zh-CN', { query: undefined, primitives: ['form', 'search'] });
+});
+
+it('declares the desktop teammate-settings action beside create, and routes it to the settings host only', async () => {
+  const manifest = remoteResourceRegistry.manifest(context, { client: { protocolVersion: 1, primitives: [] } });
+  const actions = manifest.collections.find(collection => collection.id === 'teammates')?.actions?.map(action => action.id);
+  expect(actions).toEqual(expect.arrayContaining(['open-create', 'management:settings']));
+  const request = { client: { protocolVersion: 1, primitives: [] }, collectionId: 'teammates', actionId: 'management:settings', resourceRef: ref('bot-1'), input: { v: 1, op: 'caps' } };
+  await expect(remoteResourceRegistry.invoke(context, request)).resolves.toMatchObject({ result: { ok: true, value: 'hosted' } });
+  expect(management.settingsHost.invoke).toHaveBeenCalledWith(context, expect.objectContaining({ actionId: 'management:settings' }));
+  expect(management.invoke).not.toHaveBeenCalled();
 });

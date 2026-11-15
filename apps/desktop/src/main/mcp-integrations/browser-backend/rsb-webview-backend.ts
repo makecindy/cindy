@@ -24,7 +24,7 @@ import type {
   BrowserControlRequest,
   BrowserControlResult,
 } from '@cindy/browser-control-runtime';
-import { isPublicHttpResourceUrl } from '@cindy/browser-control-runtime';
+import { isPublicHttpResourceUrl, RecipeBrowserSessions } from '@cindy/browser-control-runtime';
 import type { WebContents } from 'electron';
 
 import type { TabRegistry } from '../../rsb-browser-bridge/registry.js';
@@ -209,6 +209,7 @@ export class RsbWebviewBackend implements BrowserBackend {
   private readonly artifacts?: RsbWebviewArtifacts;
   private readonly dialogs: RsbWebviewDialogs;
   private readonly network: RsbWebviewNetwork;
+  private readonly recipeSessions = new RecipeBrowserSessions();
   private readonly activity: BrowserActivity[] = [];
   private readonly activeCalls = new Set<Promise<BackendResult>>();
   private readonly backgroundCalls = new Set<Promise<unknown>>();
@@ -291,6 +292,12 @@ export class RsbWebviewBackend implements BrowserBackend {
     return this.disposePromise;
   }
 
+  /** An open-tab reply can precede the guest's dom-ready/registry report. Keep
+   * that observation in the drain boundary rather than freezing in this gap. */
+  canReleaseClient(): boolean {
+    return !this.disposing && this.activeCalls.size === 0 && this.backgroundCalls.size === 0;
+  }
+
   private async performDispose(): Promise<void> {
     // Switching backends never closes the user's tabs. Only listeners,
     // captures and debugger attachments owned by this backend are released.
@@ -301,7 +308,7 @@ export class RsbWebviewBackend implements BrowserBackend {
         Promise.resolve().then(() => this.automation.dispose()),
         Promise.resolve().then(() => this.artifacts?.dispose()),
         Promise.resolve().then(() => this.dialogs.dispose()),
-        Promise.resolve().then(() => this.network.dispose()),
+        Promise.resolve().then(() => { this.recipeSessions.dispose(); this.network.dispose(); }),
         Promise.resolve().then(() => this.releasePinLeases()),
       ]);
       for (const result of cleanup) {
@@ -357,6 +364,40 @@ export class RsbWebviewBackend implements BrowserBackend {
 
   private async dispatch(request: BackendRequest): Promise<BackendResult> {
     switch (request.action) {
+      case 'recipeCommand': {
+        const command = request.recipeCommand;
+        if (!command || !request.targetId) return actionFailed(request.action, 'recipeCommand requires an explicit targetId and command');
+        const resolved = await this.resolveTabForDirectAction(request, request.targetId);
+        if (!resolved.ok) return resolved.result;
+        const scope = JSON.stringify([this.resolveSessionId(request) ?? '', request.profile ?? '', request.targetId]);
+        return this.withTabPin(request.targetId, async () => {
+          if (command.method !== 'Cindy.begin') return actionOk(request.action,
+            await this.recipeSessions.call(scope, command.sessionId ?? '', command.method, command.params));
+          // The existing monitor owns the attachment and releases it with the guest.
+          await this.network.observe(resolved.wc);
+          const debuggerTransport = resolved.wc.debugger;
+          const sessionId = this.recipeSessions.begin(scope, {
+            send: async (method, params) => {
+              this.assertActive();
+              const result = await debuggerTransport.sendCommand(method, params);
+              this.assertActive();
+              return result;
+            },
+            subscribe: (listener) => {
+              const handler = (_event: unknown, method: string, params: Record<string, unknown>) => listener(method, params);
+              debuggerTransport.on('message', handler);
+              return () => { debuggerTransport.removeListener('message', handler); };
+            },
+            onClose: (listener) => {
+              resolved.wc.on('destroyed', listener);
+              debuggerTransport.on('detach', listener);
+              return () => { resolved.wc.removeListener('destroyed', listener); debuggerTransport.removeListener('detach', listener); };
+            },
+            dispose: () => {},
+          });
+          return actionOk(request.action, { sessionId });
+        });
+      }
       case 'status':
         return this.handleStatus(request);
       case 'doctor':

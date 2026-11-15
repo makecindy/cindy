@@ -1,0 +1,9 @@
+== old exp_ping 14:30:41
+RESULT loss 0: runs 410 dead 0 mean 1.97s p50 1.90s p90 3.66s p99 4.15s max 4.16s
+RESULT loss 0.1: runs 410 dead 0 mean 2.49s p50 2.15s p90 4.33s p99 8.91s max 12.15s
+RESULT loss 0.3: runs 410 dead 4 mean 4.81s p50 3.35s p90 11.52s p99 18.75s max 26.86s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 180.03s
+== old exp_port 14:33:50
+RESULT up 20000000 down 1: runs 48 time 355.5s retransmitted 9441 client timeout losses 186
+RESULT up 0 down 20000000: runs 48 time 409.6s retransmitted 78064 client timeout losses 1
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.32s

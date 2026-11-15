@@ -1,3 +1,6 @@
+import { normalizeHomeDisplayOrder, type HomeDisplayOrder } from './homeProjectOrder';
+import { parseTaskCompanion, parseTaskTeammate } from './teammateTaskSource';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { normalizeTaskTags } from '@cindy/maker-shared';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RemoteSession } from '@/session/types';
@@ -38,6 +41,7 @@ type StoredHomeListCache = {
   version: 1;
   updatedAt: number;
   devices: CachedHomeDeviceSnapshot[];
+  displayOrder?: HomeDisplayOrder | null;
 };
 
 function storageKeyForUser(userId: string): string {
@@ -46,19 +50,25 @@ function storageKeyForUser(userId: string): string {
 
 // 读取快照;无缓存 / JSON 损坏 / 形状不对 / userId 缺失一律静默返回空数组(乐观 hydrate 不应抛错)。
 export async function getCachedHomeListSnapshot(userId: string): Promise<CachedHomeDeviceSnapshot[]> {
+  return (await getCachedHomeListState(userId)).devices;
+}
+
+export async function getCachedHomeListState(userId: string): Promise<{ devices: CachedHomeDeviceSnapshot[]; displayOrder: HomeDisplayOrder | null }> {
+  const empty = { devices: [], displayOrder: null };
   // 废弃的 v1 全局 key 顺带清掉(fire-and-forget,不阻塞冷启动首帧)。
   void AsyncStorage.removeItem(LEGACY_STORAGE_KEY).catch(() => undefined);
-  if (!userId.trim()) return [];
+  if (!userId.trim()) return empty;
   const raw = await AsyncStorage.getItem(storageKeyForUser(userId)).catch(() => null);
-  if (!raw) return [];
+  if (!raw) return empty;
   try {
     const parsed = JSON.parse(raw) as unknown;
     const devices = isRecord(parsed) && Array.isArray((parsed as StoredHomeListCache).devices)
       ? (parsed as StoredHomeListCache).devices
       : [];
-    return normalizeSnapshotDevices(devices, MAX_CACHED_HOME_SESSIONS_PER_DEVICE);
+    return { devices: normalizeSnapshotDevices(devices, MAX_CACHED_HOME_SESSIONS_PER_DEVICE),
+      displayOrder: isRecord(parsed) ? normalizeHomeDisplayOrder(parsed.displayOrder) : null };
   } catch {
-    return [];
+    return empty;
   }
 }
 
@@ -78,7 +88,8 @@ export async function cacheHomeListSnapshot(userId: string, sessions: readonly R
       await AsyncStorage.removeItem(storageKey).catch(() => undefined);
       return;
     }
-    const payload: StoredHomeListCache = { version: 1, updatedAt: Date.now(), devices };
+    const payload: StoredHomeListCache = { version: 1, updatedAt: Date.now(), devices,
+      displayOrder: displayOrderOwner === userId ? displayOrder : null };
     const serialized = JSON.stringify(payload);
     if (utf8ByteLength(serialized) > MAX_CACHED_HOME_LIST_BYTES) continue;
     if (epoch !== writeEpoch) return;
@@ -89,6 +100,14 @@ export async function cacheHomeListSnapshot(userId: string, sessions: readonly R
     return;
   }
   // 缩到最小档仍超体积上限:放弃本次写入,保留旧快照(缓存只是首屏加速,不追求完整)。
+}
+
+// Reuse the existing snapshot write/debounce; no additional storage read or timer.
+let displayOrderOwner = '';
+let displayOrder: HomeDisplayOrder | null = null;
+export function rememberHomeDisplayOrder(userId: string, order: HomeDisplayOrder): void {
+  displayOrderOwner = userId;
+  displayOrder = normalizeHomeDisplayOrder(order);
 }
 
 // 去抖回写:collect 在定时器触发时才执行,拿的是届时最新的 store 快照(不闭包旧数据)。
@@ -124,6 +143,8 @@ export function scheduleHomeListSnapshotPersist(
 export async function clearCachedHomeListSnapshot(): Promise<void> {
   // 自增代际,作废所有 in-flight 的 cacheHomeListSnapshot 写入(见其代际核对)。
   writeEpoch += 1;
+  displayOrderOwner = '';
+  displayOrder = null;
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;
@@ -182,7 +203,7 @@ function normalizeSnapshotDevices(
     .slice(0, MAX_CACHED_HOME_DEVICES);
 }
 
-// 会话字段白名单瘦身:只保留列表渲染(标题 / 预览 / 时间 / 图标)、分组(workingDir / workspaceKind)
+// 会话字段白名单瘦身:只保留列表渲染(标题 / 预览 / 时间 / 图标)、分组(projectDir / workingDir / workspaceKind)
 // 与跳转(id)需要的字段。刻意丢弃:
 //  - live-only 状态(attached / deviceLinkAttached 等):冷启动时设备尚未连上,缓存它会画出假的在线态;
 //  - orcaRole === 'worker' 的会话:mobile 全局隐藏 worker 子会话,缓存它纯占体积;
@@ -214,9 +235,12 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     status,
     agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' ? item.agentKind : 'cc',
     userSendAt: typeof item.userSendAt === 'string' ? item.userSendAt : null,
+    lastActivityAt: typeof item.lastActivityAt === 'string' ? item.lastActivityAt : null,
     createdAt,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
   };
+  // Project identity must round-trip exactly; truncating a path changes the project key.
+  if (typeof item.projectDir === 'string' || item.projectDir === null) session.projectDir = item.projectDir;
   if (typeof item.worktreePath === 'string') session.worktreePath = truncateText(item.worktreePath);
   if (typeof item.totalTokenUsage === 'number' && Number.isFinite(item.totalTokenUsage)) {
     session.totalTokenUsage = item.totalTokenUsage;
@@ -226,7 +250,12 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   }
   const totalMoney = normalizeRemoteMoney(item.totalMoney);
   if (totalMoney) session.totalMoney = totalMoney;
+  // Project aliases distinguish a host's local directory from its SSH workspaces.
+  // Keep that identity in the cold-start list too; otherwise an SSH row can borrow a local alias.
+  if (typeof item.remoteHostId === 'string') session.remoteHostId = item.remoteHostId;
   if (typeof item.source === 'string') session.source = item.source;
+  session.companion = parseTaskCompanion(item.companion);
+  session.taskTeammate = parseTaskTeammate(item.taskTeammate);
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;
   if (typeof item.preview === 'string') session.preview = truncateText(item.preview);
@@ -240,7 +269,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
 }
 
 function lastActivityTime(session: RemoteSession): string {
-  return session.userSendAt ?? session.updatedAt ?? session.createdAt;
+  return getSessionListActivityAt(session) ?? session.createdAt;
 }
 
 function truncateText(value: string): string {

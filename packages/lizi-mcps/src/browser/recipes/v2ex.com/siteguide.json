@@ -1,23 +1,15 @@
 {
   "site": "v2ex.com",
-  "auth": "公开内容(热门/最新/节点/主题/回复/用户资料)全部无需登录,走官方 JSON API;签到等写操作才需登录态",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://www.v2ex.com",
-    "hot": "https://www.v2ex.com/api/topics/hot.json",
-    "latest": "https://www.v2ex.com/api/topics/latest.json",
-    "topic": "https://www.v2ex.com/api/topics/show.json?id=<topicId>",
-    "node": "https://www.v2ex.com/api/topics/show.json?node_name=<node>",
-    "replies": "https://www.v2ex.com/api/replies/show.json?topic_id=<topicId>",
-    "nodes": "https://www.v2ex.com/api/nodes/all.json",
-    "member": "https://www.v2ex.com/api/members/show.json?username=<name>"
+    "home": "https://www.v2ex.com"
   },
-  "pages": [
-    {
-      "type": "listing",
-      "url": "https://www.v2ex.com/api/topics/hot.json",
-      "notes": "返回数组 [{id,title,url,replies,node:{title,name},member:{username},created,...}]"
-    }
+  "recipes": [
+    "v2ex-hot"
   ],
-  "recipes": ["v2ex-hot"],
-  "notes": "V2EX 提供稳定的公开 v1 JSON API,直接 navigate 到端点即返回原始 JSON(非 SPA HTML),无需登录、无需同源 fetch。已收录 v2ex-hot(热门主题)。其它常用读端点可直接 navigate + extract body 取 JSON:最新主题 /api/topics/latest.json;主题详情 /api/topics/show.json?id=<id>(返回单元素数组,含 title/content/member.username/node.title/replies/url);节点主题列表 /api/topics/show.json?node_name=<node>(如 python、apple,最多 20 条);主题回复 /api/replies/show.json?topic_id=<id>(数组,含 member.username/content/created);全部节点 /api/nodes/all.json(含 name/title/topics/stars);用户资料 /api/members/show.json?username=<name>。主题页 URL 直接用响应里的 item.url 字段。"
+  "notes": "兼容入口 v2ex-hot 现执行内置 v2ex/hot，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

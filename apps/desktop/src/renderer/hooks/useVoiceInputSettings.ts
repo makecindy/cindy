@@ -31,6 +31,7 @@ import {
   type VoiceInputSettingsPatch,
 } from '../../shared/voiceInputData';
 import type { VoiceInputShortcut } from '@/voice-input/shortcut';
+import { noteVoiceInputUse } from '@/voice-input/WebMicAudioEngine';
 import { findComposerVoiceInputConflict } from '@/voice-input/composerVoiceInputConflict';
 import { getComposerSendShortcutPreference } from './useComposerSendShortcutPreference';
 
@@ -132,7 +133,13 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
 export function subscribeVoiceInputSettings(
   callback: (settings: VoiceInputSettings) => void,
 ): () => void {
+  // Every renderer receives the existing main-owned broadcast. Only a live
+  // off-to-on transition is user intent; subscribing with an already-enabled
+  // snapshot (or receiving history/language updates) must not renew the window.
+  let fastActivationEnabled = getVoiceInputSettings().fastActivationEnabled;
   return window.electronAPI.voiceInput.onDataChanged((snapshot: VoiceInputDataSnapshot) => {
+    if (!fastActivationEnabled && snapshot.settings.fastActivationEnabled) noteVoiceInputUse();
+    fastActivationEnabled = snapshot.settings.fastActivationEnabled;
     callback(snapshot.settings);
   });
 }

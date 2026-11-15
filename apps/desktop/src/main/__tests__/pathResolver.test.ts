@@ -73,6 +73,20 @@ describe('bfsFindBySuffix', () => {
     expect(matches).toEqual([real]);
   });
 
+  // 用户场景：Agent 在子文件夹 film/ 里渲染出 renders/out/clip.mp4，回复里写相对子文件夹的路径。
+  // 路径自己点名经过的被忽略目录(renders 下的 out)必须能进入；别处的 out 与首段就是被忽略
+  // 目录的查找仍按原规则跳过，避免打开整棵树里的构建产物。
+  it.each([
+    ['renders/out/clip.mp4', ['film/renders/out/clip.mp4']],
+    ['out/clip.mp4', []],
+  ])('enters an ignored directory only where %s names it', (href, expected) => {
+    write('film/renders/out/clip.mp4');
+    write('film/out/clip.mp4');
+    write('web/out/renders/out/clip.mp4');
+
+    expect(bfsFindBySuffix(workspace, href)).toEqual(expected.map((rel) => path.join(workspace, rel)));
+  });
+
   it('respects maxCandidates and stops early', () => {
     write('a/foo.ts');
     write('b/foo.ts');
@@ -259,6 +273,42 @@ describe('resolveWorkspacePath', () => {
     });
   });
 
+  // #8726: `/D:/x` 是盘符路径的 URI pathname 写法;剥离前在 Windows 上会拿
+  // `/D:/x` 直接 stat(被解析成当前盘下的非法 `\D:\x`)而静默返回 none,点击
+  // 链接弹「文件不可用」。盘符写法只对 Windows 工作区做归一(与 renderer
+  // normalizeWindowsDriveHref 同门控)——POSIX 工作区里 `/D:` 是合法路径名。
+  it('resolves a URI-pathname Windows drive href (/D:/x)', async () => {
+    const target = write('docs/app.tsx');
+    if (process.platform === 'win32') {
+      // 真实盘符路径:`/` + `C:/.../docs/app.tsx` → 剥离后就是 absolute fast path。
+      const driveHref = `/${target.replace(/\\/g, '/')}`;
+      await expect(resolveWorkspacePath(driveHref, workspace)).resolves.toEqual({
+        status: 'unique',
+        candidates: [target.replace(/\\/g, '/')],
+        kind: 'file',
+      });
+      // 裸盘符 `/C:` 归一为盘根 `C:/`(目录链接尾斜杠剥落后的形态),stat 盘根命中目录。
+      await expect(resolveWorkspacePath('/C:', workspace)).resolves.toEqual({
+        status: 'unique',
+        candidates: ['C:/'],
+        kind: 'directory',
+      });
+    } else {
+      // POSIX 工作区门控关闭:`/D:*` 按 POSIX 绝对路径直接 stat,落空 none。
+      // 刻意写入 ws/D:/app.tsx:若剥离误开,`D:/app.tsx` 会经 direct-join
+      // 命中该文件返回 unique,none 断言因此能区分门控是否生效。
+      write('D:/app.tsx');
+      await expect(resolveWorkspacePath('/D:/app.tsx', workspace)).resolves.toEqual({
+        status: 'none',
+        candidates: [],
+      });
+      await expect(resolveWorkspacePath('/D:', workspace)).resolves.toEqual({
+        status: 'none',
+        candidates: [],
+      });
+    }
+  });
+
   it('returns none for href with newline', async () => {
     write('apps/desktop/src/App.tsx');
 
@@ -299,6 +349,19 @@ describe('resolveWorkspacePath', () => {
 });
 
 describe('resolveWorkspacePathCached', () => {
+  // #7303: renderer retries used to hit the same main-process negative cache.
+  // Exercise real batch-cache → file restoration → explicit refresh, no timers.
+  it('refreshes a restored file immediately despite a batch-cached miss', async () => {
+    const href = 'report.pdf';
+    expect((await resolveWorkspacePathBatchCached([href], workspace))[href].status).toBe('none');
+    const target = write(href, 'restored');
+    expect((await resolveWorkspacePathCached(href, workspace)).status).toBe('none');
+    expect(await resolveWorkspacePathCached(href, workspace, { refresh: true })).toEqual({
+      status: 'unique', candidates: [target], kind: 'file',
+    });
+    expect((await resolveWorkspacePathBatchCached([href], workspace))[href].candidates).toEqual([target]);
+  });
+
   it('returns the same result on repeated calls (cache hit)', async () => {
     const target = write('apps/desktop/src/App.tsx');
 
@@ -354,6 +417,19 @@ describe('bfsFindManyBySuffix (single-walk multi-href)', () => {
     expect(found.get('src/App.tsx')).toEqual([real]);
   });
 
+  // 一个 href 点名的被忽略目录(renders 下的 out)只对它自己放行：同一批里的 clip.mp4 不能借道
+  // 匹配到那里的输出文件，否则单独解析是 none/unique 的路径会因为同批的其他引用变成错误的结果。
+  it('keeps an ignored directory one href names closed to the other hrefs', async () => {
+    write('film/renders/out/other.mp4');
+    write('film/renders/out/clip.mp4');
+    write('docs/clip.mp4');
+    const hrefs = ['renders/out/other.mp4', 'clip.mp4', 'out/clip.mp4'];
+
+    const found = await bfsFindManyBySuffix(workspace, hrefs);
+    expect(found.get('clip.mp4')).toEqual([path.join(workspace, 'docs/clip.mp4')]);
+    for (const href of hrefs) expect(found.get(href)).toEqual(bfsFindBySuffix(workspace, href));
+  });
+
   it('caps each bucket independently at maxCandidates', async () => {
     write('a/foo.ts');
     write('b/foo.ts');
@@ -377,6 +453,14 @@ describe('resolveWorkspacePathBatch', () => {
     expect(out['src/App.tsx']).toEqual({ status: 'unique', candidates: [direct], kind: 'file' });
     expect(out['src/deep.tsx']).toEqual({ status: 'unique', candidates: [nested], kind: 'file' });
     expect(out['ghost/x.ts']).toEqual({ status: 'none', candidates: [] });
+  });
+
+  it('finds a file under an output directory named by the href (real resolver)', async () => {
+    const real = write('chaoshan-film/renders2d/out/seg3_2d_v1.mp4');
+    write('chaoshan-film/out/seg3_2d_v1.mp4');
+
+    const result = await resolveWorkspacePathBatch(['renders2d/out/seg3_2d_v1.mp4'], workspace);
+    expect(result['renders2d/out/seg3_2d_v1.mp4']).toEqual({ status: 'unique', candidates: [real], kind: 'file' });
   });
 
   it('decodes percent-encoded hrefs in batch mode', async () => {
@@ -461,6 +545,26 @@ describe('resolveWorkspacePathBatch', () => {
     });
   });
 
+  // #8726: 与单发用例同形的 URI pathname 盘符路径,验证批量入口共享同一归一化与门控。
+  it('resolves a URI-pathname Windows drive href (/D:/x)', async () => {
+    const target = write('docs/app.tsx');
+    if (process.platform === 'win32') {
+      const driveHref = `/${target.replace(/\\/g, '/')}`;
+      const out = await resolveWorkspacePathBatch([driveHref], workspace);
+      expect(out[driveHref]).toEqual({
+        status: 'unique',
+        candidates: [target.replace(/\\/g, '/')],
+        kind: 'file',
+      });
+    } else {
+      // POSIX 工作区门控关闭:`/D:/app.tsx` 按 POSIX 绝对路径直接 stat 落空
+      // none;ws/D:/app.tsx 刻意存在,剥离误开时 direct-join 会命中返回 unique。
+      write('D:/app.tsx');
+      const out = await resolveWorkspacePathBatch(['/D:/app.tsx'], workspace);
+      expect(out['/D:/app.tsx']).toEqual({ status: 'none', candidates: [] });
+    }
+  });
+
   it('collapses duplicate hrefs into a single resolution', async () => {
     const target = write('src/App.tsx');
     const out = await resolveWorkspacePathBatch(['src/App.tsx', 'src/App.tsx'], workspace);
@@ -495,6 +599,24 @@ describe('resolveWorkspacePathBatchCached', () => {
     fs.rmSync(target);
     const r2 = await resolveWorkspacePathBatchCached(['src/App.tsx'], workspace);
     expect(r2['src/App.tsx']).toEqual(r1['src/App.tsx']);
+  });
+
+  // 回复可能先引用产物、文件后写出：调用方要求重查时，缓存里的 none 必须重新搜索；
+  // 已唯一命中的结论照常走缓存，不因重查放大目录遍历。
+  it('re-walks cached negative answers only when asked to revalidate them', async () => {
+    const first = await resolveWorkspacePathBatchCached(['src/App.tsx'], workspace);
+    expect(first['src/App.tsx'].status).toBe('none');
+    const app = write('apps/desktop/src/App.tsx');
+
+    // 不要求重查时仍走缓存；要求重查时重新搜索并写回缓存。
+    expect((await resolveWorkspacePathBatchCached(['src/App.tsx'], workspace))['src/App.tsx'].status).toBe('none');
+    const rechecked = await resolveWorkspacePathBatchCached(['src/App.tsx'], workspace, {}, true);
+    expect(rechecked['src/App.tsx']).toEqual({ status: 'unique', candidates: [app], kind: 'file' });
+
+    // 唯一命中的结论即使要求重查也走缓存（删掉文件后结论不变说明没有重新遍历）。
+    fs.rmSync(app);
+    const kept = await resolveWorkspacePathBatchCached(['src/App.tsx'], workspace, {}, true);
+    expect(kept['src/App.tsx'].candidates).toEqual([app]);
   });
 
   it('shares its cache with the single-point resolveWorkspacePathCached', async () => {

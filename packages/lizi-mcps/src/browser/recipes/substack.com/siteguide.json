@@ -1,11 +1,15 @@
 {
   "site": "substack.com",
-  "auth": "搜索/浏览只读无需登录;付费/订阅内容才需要持久浏览器登录态",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://substack.com",
-    "postSearch": "https://substack.com/api/v1/post/search?query=<kw>&page=0&includePlatformResults=true",
-    "profileSearch": "https://substack.com/api/v1/profile/search?query=<kw>&page=0"
+    "home": "https://substack.com"
   },
-  "recipes": ["substack-search"],
-  "notes": "Substack 有公开 JSON 搜索接口,且都在 substack.com 同源下。文章搜索:/api/v1/post/search?query=&page=0&includePlatformResults=true,返回 {results:[{title, publishedBylines:[{name}], post_date(ISO), description/subtitle/truncated_body_text, canonical_url}]}。作者/Newsletter 搜索:/api/v1/profile/search?query=&page=0,返回 {results:[{name, bio, primaryPublication:{name, hero_text, subdomain, custom_domain}}]},Newsletter 主页 = custom_domain 有就 https://<custom_domain>,否则 https://<subdomain>.substack.com。substack-search 配方用的是 post/search;搜 Newsletter 把 fn 里的路径换成 profile/search 即可。关键:不要直接 navigate 到 api 路径(会被喂前端 SPA HTML),先 navigate 到 https://substack.com 再在页面内同源 fetch。某个 Newsletter 的历史文章可拉 https://<pub>.substack.com/api/v1/archive?sort=new&limit=20 (返回文章 JSON 数组)。"
+  "recipes": [
+    "substack-search"
+  ],
+  "notes": "兼容入口 substack-search 现执行内置 substack/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

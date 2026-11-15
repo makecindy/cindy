@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { WorktreeMeta } from '../../worktree/types.js';
 import {
   prepareHandoffWorktree,
+  prepareTaskWorktree,
   resolveHandoffBaseRepo,
   shouldRecycleHandoffWorktreeOnFailure,
   type HandoffWorktreeDeps,
@@ -241,5 +242,116 @@ describe('shouldRecycleHandoffWorktreeOnFailure', () => {
 
   it('session 已建成 → 绝不回收(workingDir/DB 都指着它,删了产生孤儿会话;随 session close 生命周期回收)', () => {
     expect(shouldRecycleHandoffWorktreeOnFailure(true)).toBe(false);
+  });
+});
+
+// create_task_worktree:给已有任务自己绑定托管 worktree(不搬任务、不重启)。
+// 生产入口 prepareTaskWorktree;可观察结果是绑定到调用方 session 的 worktree 与错误码。
+describe('prepareTaskWorktree', () => {
+  const caller = { workingDir: BASE, status: 'active', source: 'desktop' };
+
+  it('binds a new worktree to the calling task, branched from the fresh remote default', async () => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main' }));
+    const deps = makeDeps({ resolveFreshSource });
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller });
+    expect(res).toMatchObject({ ok: true, created: true, meta: { sessionId: 'task-1' } });
+    expect(resolveFreshSource).toHaveBeenCalledWith(BASE, 'main');
+    expect(deps.createWorktree).toHaveBeenCalledWith({
+      sessionId: 'task-1',
+      baseRepo: BASE,
+      name: 'fresh-name',
+      sourceBranch: 'refs/remotes/origin/main',
+    });
+  });
+
+  it('returns the existing binding instead of creating a second worktree', async () => {
+    const deps = makeDeps({ getForSession: vi.fn(() => meta({ sessionId: 'task-1' })) });
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller });
+    expect(res).toMatchObject({ ok: true, created: false, meta: { path: WT } });
+    expect(deps.createWorktree).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['archived task', { caller: { ...caller, status: 'archived' } }, 'PRECONDITION_FAILED'],
+    ['read-only review task', { caller: { ...caller, source: 'review' } }, 'PRECONDITION_FAILED'],
+    ['relative repo_dir', { caller, repoDir: 'repo' }, 'INVALID_ARGS'],
+    ['no directory to branch from', { caller: { ...caller, workingDir: null } }, 'INVALID_ARGS'],
+  ] as const)('rejects %s without touching git', async (_label, input, errorCode) => {
+    const deps = makeDeps();
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', ...input });
+    expect(res).toMatchObject({ ok: false, errorCode });
+    expect(deps.createWorktree).not.toHaveBeenCalled();
+  });
+
+  it('branches from repo_dir when the task directory is not the repository', async () => {
+    const repo = path.resolve('/workspace/repo');
+    const deps = makeDeps({
+      detectCwd: vi.fn(async () => ({ isGitRepo: true, isInsideWorktree: false, gitInstalled: true, repoRoot: repo })),
+    });
+    const res = await prepareTaskWorktree(deps, {
+      sessionId: 'task-1',
+      caller: { ...caller, workingDir: path.resolve('/workspace') },
+      repoDir: repo,
+    });
+    expect(res.ok).toBe(true);
+    expect(deps.detectCwd).toHaveBeenCalledWith(repo);
+  });
+
+  // #9513:显式基线分支。默认路径取远端默认分支,给出 base_ref 时按该引用切出,
+  // 且引用解析不了必须报错而不是回退默认分支。
+  it('branches from the explicit base ref instead of the remote default branch', async () => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main' }));
+    const deps = makeDeps({ resolveFreshSource });
+    const res = await prepareTaskWorktree(deps, {
+      sessionId: 'task-1',
+      caller,
+      baseRef: 'release/2.x',
+    });
+    expect(res).toMatchObject({ ok: true, created: true, meta: { sourceBranch: 'release/2.x' } });
+    expect(deps.createWorktree).toHaveBeenCalledWith({
+      sessionId: 'task-1',
+      baseRepo: BASE,
+      name: 'fresh-name',
+      sourceBranch: 'release/2.x',
+    });
+    expect(resolveFreshSource).not.toHaveBeenCalled();
+  });
+
+  it('fails instead of falling back to the default branch when the base ref does not resolve', async () => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main' }));
+    const deps = makeDeps({
+      resolveFreshSource,
+      createWorktree: vi.fn(async () => ({
+        ok: false as const,
+        error: { kind: 'unknown' as const, message: '源分支 "release/2.x" 不存在' },
+      })),
+    });
+    const res = await prepareTaskWorktree(deps, {
+      sessionId: 'task-1',
+      caller,
+      baseRef: 'release/2.x',
+    });
+    expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
+    expect(res.ok === false && res.message).toContain('release/2.x');
+    expect(resolveFreshSource).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['option injection', '-upload-pack=evil'],
+    ['empty', '   '],
+    ['control character', 'release/2.x\u0000'],
+  ] as const)('rejects a malformed base ref (%s) without touching git', async (_label, baseRef) => {
+    const deps = makeDeps();
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller, baseRef });
+    expect(res).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(deps.createWorktree).not.toHaveBeenCalled();
+  });
+
+  it('reports a directory that is not a git repository as WORKTREE_UNAVAILABLE', async () => {
+    const deps = makeDeps({
+      detectCwd: vi.fn(async () => ({ isGitRepo: false, isInsideWorktree: false, gitInstalled: true })),
+    });
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller });
+    expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
   });
 });

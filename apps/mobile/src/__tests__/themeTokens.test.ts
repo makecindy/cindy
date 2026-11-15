@@ -264,8 +264,8 @@ describe('theme tokens', () => {
     }
   });
 
-  it('字号阶梯收拢为 11 档(2026-09-27 用户定稿:14 并入 15、19 并入 20)', () => {
-    expect(Object.values(typeScale)).toEqual([11, 12, 13, 15, 16, 17, 18, 20, 24, 30, 40]);
+  it('字号阶梯保留原档并登记 V9 邀请标题 22pt（2026-10-28 用户定稿）', () => {
+    expect(Object.values(typeScale)).toEqual([11, 12, 13, 15, 16, 17, 18, 20, 22, 24, 30, 40]);
     expect(typeScale.bodySmall).toBe(15);
     expect(lineHeight.bodySmall).toBe(20);
     expect(textStyles.bodySmall).toEqual({ fontSize: 15, lineHeight: 20 });

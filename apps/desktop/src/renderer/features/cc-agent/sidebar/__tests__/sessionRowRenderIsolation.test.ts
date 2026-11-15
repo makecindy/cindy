@@ -114,9 +114,16 @@ vi.mock('@/lib/toast', () => ({
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('@/lib/makerChatStore', () => ({
-  makerChatStore: { ensureInitialMessages: vi.fn() },
-}));
+vi.mock('@/lib/makerChatStore', () => {
+  const statuses = new Map();
+  return {
+    makerChatStore: {
+      ensureInitialMessages: vi.fn(),
+      getRunningSnapshot: () => statuses,
+      subscribeAll: () => () => {},
+    },
+  };
+});
 
 // mock 之后再 import,确保 SessionItem 拿到的是探针版依赖。
 import { SessionItem } from '../SessionItem';

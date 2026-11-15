@@ -25,6 +25,24 @@ function channel(fetchImplementation: typeof fetch, overrides: Record<string, un
 }
 
 describe('xaiImageClient', () => {
+  // #8673 / unit: extra native JSON fields used to disappear in the fixed
+  // payload builder; generation and editing must expose the same behavior.
+  it('preserves unenumerated native fields in generation and editing requests', async () => {
+    const doFetch = vi.fn<typeof fetch>(async () => Response.json({ data: [{ b64_json: 'aW1hZ2U=' }] }));
+    const nativeParameters = { seed: 0, future_option: { enabled: false, values: ['native', 1] } };
+    const params = { model: 'xai/grok-imagine-image', prompt: 'p', nativeParameters };
+    const c = channel(doFetch);
+    await c.generateImage(params);
+    const readFile = vi.spyOn(fs, 'readFile').mockResolvedValue(Buffer.from('89504e470d0a1a0a', 'hex'));
+    try {
+      await c.editImage({ ...params, imagePaths: ['/test/reference.png'] });
+    } finally {
+      readFile.mockRestore();
+    }
+    for (const [, init] of doFetch.mock.calls) expect(JSON.parse(String(init?.body))).toMatchObject(nativeParameters);
+    expect(JSON.parse(String(doFetch.mock.calls[1]?.[1]?.body)).image).toMatchObject({ type: 'image_url' });
+  });
+
   it('uses the xAI API-key source for Imagine generation', async () => {
     const doFetch = vi.fn<typeof fetch>(
       async () =>

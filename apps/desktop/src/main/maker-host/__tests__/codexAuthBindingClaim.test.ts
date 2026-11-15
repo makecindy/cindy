@@ -1,3 +1,4 @@
+import { configureOwnerContext } from '../../ownerContext.js';
 /**
  * Codex OAuth 绑定自愈(claimDetectedCodexOAuthBinding)+ readState 绑定 gate 集成测试。
  *
@@ -17,6 +18,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const dirs: string[] = [];
 const h = vi.hoisted(() => ({ userDataDir: '', dataOwnerId: null as string | null }));
+
+// Mirror this fixture's changing profile/owner through the Host-neutral ports.
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));
+configureOwnerContext({
+  read: () => ({ dataOwnerId: h.dataOwnerId, generation: 1, boundaryPending: false }),
+  fallbackBaseDir: () => h.userDataDir,
+});
 
 vi.mock('electron', () => ({
   app: {
@@ -60,6 +68,9 @@ vi.mock('../../appSessionState.js', async (importOriginal) => {
     isAppSessionBoundaryPending: () => false,
   };
 });
+
+// Load the adapter once during collection; keep cold transforms outside claim deadlines.
+import { DesktopCodexAuthAdapter } from '../auth-adapters.js';
 
 function fixture(): {
   codexHome: string;
@@ -122,7 +133,6 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     const { bindingFile } = fixture();
     h.dataOwnerId = 'owner-a';
     writeStableProjectionOwner('owner-a');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState()).resolves.toMatchObject({
@@ -143,7 +153,6 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: 'owner-a' }));
     h.dataOwnerId = 'owner-a';
     writeStableProjectionOwner('owner-a');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState()).resolves.toMatchObject({
@@ -164,7 +173,6 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     );
     h.dataOwnerId = 'owner-b';
     writeStableProjectionOwner('owner-b');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState()).resolves.toEqual({
@@ -192,7 +200,6 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     ).toBe(true);
     h.dataOwnerId = 'owner-a';
     writeStableProjectionOwner('owner-a');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState()).resolves.toMatchObject({ authenticated: false });
@@ -205,7 +212,6 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     const { bindingFile } = fixture();
     h.dataOwnerId = 'owner-a';
     writeStableProjectionOwner('owner-a');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     // getState 的同步段捕获 sessionAtStart(owner-a);首个 await 挂起后切到 owner-b。
@@ -224,7 +230,6 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     const { bindingFile } = fixture();
     h.dataOwnerId = 'owner-a';
     writeStableProjectionOwner('owner-a');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     const claimed = vi.fn();
     adapter.setOnOAuthBindingClaimed(claimed);
@@ -246,7 +251,6 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     );
     h.dataOwnerId = 'owner-b';
     writeStableProjectionOwner('owner-b');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     const claimed = vi.fn();
     adapter.setOnOAuthBindingClaimed(claimed);
@@ -260,7 +264,6 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     const { bindingFile } = fixture();
     h.dataOwnerId = 'owner-a';
     writeStableProjectionOwner('owner-a');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
 
     const throwing = new DesktopCodexAuthAdapter();
     throwing.setOnOAuthBindingClaimed(() => {
@@ -281,7 +284,6 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
   it('keeps pre-session behavior without writing any binding when no owner is committed', async () => {
     const { bindingFile } = fixture();
     writeStableProjectionOwner(null);
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
 
     await expect(adapter.getState()).resolves.toMatchObject({

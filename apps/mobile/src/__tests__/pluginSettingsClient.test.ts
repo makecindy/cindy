@@ -342,3 +342,9 @@ it('routes only the fixed credential check through encrypted settings and never 
   expect(f.request).toHaveBeenCalledTimes(1);
   await client.close();
 });
+
+it('negotiates document isolation only from an explicit Host capability', () => {
+  expect(parsePluginSettingsDocument(document, document.pluginId).documentIsolation).toBeUndefined();
+  expect(parsePluginSettingsDocument({ ...document, documentIsolation: true }, document.pluginId).documentIsolation).toBe(true);
+  expect(parsePluginSettingsDocument({ ...document, documentIsolation: 'true' }, document.pluginId).documentIsolation).toBeUndefined();
+});

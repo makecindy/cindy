@@ -39,6 +39,7 @@ vi.mock('@/lib/logger', () => ({
 
 vi.mock('@/lib/appShortcutStore', () => ({
   getAppShortcutCombos: mocks.getCombos,
+  getAppShortcutGlobalFailures: () => [],
   getAppShortcutOverrides: mocks.getOverrides,
   getAppShortcutPlatform: () => 'darwin',
   subscribeAppShortcuts: () => () => {},
@@ -97,8 +98,28 @@ vi.mock('@/hooks/useXboxGamepad', async () => {
 });
 
 import { KeyboardShortcutsSection } from '../KeyboardShortcutsSection';
+import { APP_SHORTCUT_DEFINITIONS, isAppShortcutAvailableOnPlatform } from '../../../../shared/appShortcuts';
+import { resolveSettingsSearchEntry } from '../settingsSearchCatalog';
 
 describe('KeyboardShortcutsSection mutation ordering', () => {
+  // Unit contract regression (#8481): page-level IDs let unrelated shortcut rows
+  // pass discovery coverage. Resolve each real rendered action back to its catalog target.
+  it('binds edit, delete and reset to each visible shortcut search entry', () => {
+    const definitions = APP_SHORTCUT_DEFINITIONS.filter(def => !def.hiddenInSettings && isAppShortcutAvailableOnPlatform(def.id, 'darwin'));
+    mocks.getOverrides.mockReturnValue(Object.fromEntries(definitions.map(def => [def.id, combo])));
+    mocks.getCombos.mockReturnValue([combo]);
+    render(<KeyboardShortcutsSection />);
+    for (const def of definitions) {
+      const row = document.getElementById(`settings-shortcut-${def.id}`)!;
+      const actions = row.querySelectorAll('button[data-setting-id]');
+      expect(actions).toHaveLength(3);
+      for (const action of actions) {
+        const entry = resolveSettingsSearchEntry('shortcuts', action.getAttribute('data-setting-id'));
+        expect(entry?.titleKey).toBe(def.labelKey);
+        expect(document.getElementById(entry!.targetId)).toBe(row);
+      }
+    }
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.workLouderPresent = false;
@@ -149,8 +170,8 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     });
 
     render(<KeyboardShortcutsSection />);
-    fireEvent.click(screen.getAllByTitle('settings.shortcuts.delete')[0]!);
-    fireEvent.click(screen.getByTitle('settings.shortcuts.reset'));
+    fireEvent.click(screen.getAllByLabelText('settings.shortcuts.deleteAria')[0]!);
+    fireEvent.click(screen.getByLabelText('settings.shortcuts.reset'));
     await vi.waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
 
     await act(async () => {
@@ -183,8 +204,8 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     });
 
     render(<KeyboardShortcutsSection />);
-    fireEvent.click(screen.getAllByTitle('settings.shortcuts.delete')[0]!);
-    fireEvent.click(screen.getAllByTitle('settings.shortcuts.edit')[1]!);
+    fireEvent.click(screen.getAllByLabelText('settings.shortcuts.deleteAria')[0]!);
+    fireEvent.click(screen.getAllByLabelText('settings.shortcuts.editAria')[1]!);
     await vi.waitFor(() => expect(document.body.dataset.appShortcutRecording).toBe('1'));
     fireEvent.keyDown(window, { key: 'q', code: 'KeyQ' });
     await vi.waitFor(() => {

@@ -13,7 +13,7 @@ import { watchSharedTaskAccess } from './sharedTaskAccessWatch';
 export function useSharedTaskAccess(deviceId: string | undefined, sessionId: string, appActive: boolean) {
   const api = useSharedTaskApi();
   const { accountGeneration } = useAuth();
-  const { status, sharedTaskAvailable, closeLink } = useDeviceLink();
+  const { status, sharedTaskAvailable, closeLink } = useDeviceLink(deviceId);
   useFocusEffect(useCallback(() => {
     const peer = deviceId ? parseSharedTaskPeer(deviceId) : null;
     if (!appActive || status !== 'online' || sharedTaskAvailable !== true

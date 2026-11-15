@@ -1,3 +1,7 @@
+vi.mock('@/session/SessionProjectMoveSheet', () => ({
+  sessionAllowsProjectMove: () => false,
+  useSessionProjectMoveSheet: () => ({ open: vi.fn(), parentClosed: vi.fn(), sheet: null }),
+}));
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => null }));
@@ -67,8 +71,10 @@ vi.mock('@expo/ui/swift-ui/modifiers', () => ({
       'accessibilityAddTraits',
       'accessibilityLabel',
       'contentShape',
+      'containerRelativeFrame',
       'buttonStyle',
       'disabled',
+      'environment',
       'font',
       'foregroundStyle',
       'onGeometryChange',

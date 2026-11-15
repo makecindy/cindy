@@ -3,8 +3,11 @@ import {
   type SpeechVoiceCatalog,
   type SpeechVoice,
 } from '../../shared/voiceConversation.js';
-import { referenceSpeechVoices } from '../../shared/speechVoices.js';
+import { gatewayReferenceSpeechVoices, referenceSpeechVoices } from '../../shared/speechVoices.js';
+import { alibabaSystemVoices } from '../../shared/alibabaSpeechVoices.js';
+import { loadDashscopeVoices } from './dashscopeVoices.js';
 import type { SpeechConnection } from './speech.js';
+import { openRouterSpeechBaseUrl } from './openrouter.js';
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue =>
@@ -49,13 +52,24 @@ export async function loadSpeechVoices(
   modelId: string,
   fetcher: typeof fetch,
   assertCurrent: () => void,
+  providerId?: string,
 ): Promise<SpeechVoiceCatalog> {
   assertCurrent();
-  if (connection.protocol === 'openai') {
-    const voices = referenceSpeechVoices(modelId, connection.protocol).map((id) => ({
-      id,
-      name: id,
-    }));
+  if (providerId === 'xd' && connection.protocol === 'openai') {
+    const voices = gatewayReferenceSpeechVoices(modelId);
+    if (voices.length)
+      return { source: 'reference', voices: voices.map((voice) => ({ ...voice })) };
+  }
+  const openRouterBase = providerId !== 'xd' && connection.protocol === 'openai'
+    ? openRouterSpeechBaseUrl(connection.baseUrl) : undefined;
+  if ((connection.protocol === 'openai' && !openRouterBase) || connection.protocol === 'qwen-tts') {
+    const voices =
+      connection.protocol === 'qwen-tts'
+        ? alibabaSystemVoices(modelId, connection.protocol, connection.baseUrl)
+        : referenceSpeechVoices(modelId, connection.protocol).map((id) => ({
+            id,
+            name: id,
+          }));
     return { source: voices.length ? 'reference' : 'manual', voices };
   }
   const controller = new AbortController();
@@ -70,6 +84,7 @@ export async function loadSpeechVoices(
   };
   const request = async (url: URL, body?: unknown): Promise<RecordValue> => {
     assertCurrent();
+    controller.signal.throwIfAborted();
     const response = await fetcher(url.toString(), {
       method: body ? 'POST' : 'GET',
       headers: { ...connection.headers, ...(body ? { 'content-type': 'application/json' } : {}) },
@@ -83,6 +98,22 @@ export async function loadSpeechVoices(
   };
   try {
     const base = connection.baseUrl.replace(/\/+$/, '');
+    if (openRouterBase) {
+      const json = await request(new URL(`${openRouterBase}/models?output_modalities=speech`));
+      if (!Array.isArray(json.data)) throw new Error('invalid_voice_catalog');
+      const model = json.data.map(record).find(entry => entry.id === modelId);
+      if (!model) throw new Error('voice_catalog_unavailable');
+      if (model.supported_voices == null) return { source: 'manual', voices: [] };
+      if (!Array.isArray(model.supported_voices)) throw new Error('invalid_voice_catalog');
+      const ids = [...new Set(model.supported_voices
+        .map(normalizeSpeechVoiceId).filter((id): id is string => !!id))];
+      return {
+        source: 'provider', voices: ids.slice(0, 1000).map(id => ({ id, name: id })),
+        ...(ids.length > 1000 ? { truncated: true } : {}),
+      };
+    }
+    if (connection.protocol === 'dashscope-tts')
+      return await loadDashscopeVoices(modelId, base, request, assertCurrent);
     if (connection.protocol === 'minimax') {
       // https://platform.minimax.io/docs/api-reference/voice-management-get
       const json = await request(new URL(`${base}/get_voice`), { voice_type: 'all' });

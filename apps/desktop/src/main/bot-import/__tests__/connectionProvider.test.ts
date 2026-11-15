@@ -8,10 +8,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 vi.mock('@cindy/mcps', () => ({ resolveLiziMcpSessionContext: () => ({ sessionId: 'fixture-session' }) }));
 vi.mock('../host.js', () => ({ continueCompanionImport: vi.fn(), getCompanionImportSetupStatus: vi.fn(), useCindyImportSettings: vi.fn() }));
-vi.mock('../runtime.js', () => ({ readCompanionSessionDiscovery: vi.fn(), readCompanionSessionEnvironment: vi.fn(), readCompanionSessionScope: vi.fn() }));
-import { readCompanionSessionDiscovery, readCompanionSessionEnvironment, readCompanionSessionScope } from '../runtime.js';
+vi.mock('../runtime.js', () => ({ readCompanionSessionDiscovery: vi.fn(), readCompanionSessionEnvironment: vi.fn(), readCompanionSessionScope: vi.fn(), companionEnvironmentStore: { readResource: vi.fn() } }));
+import { companionEnvironmentStore, readCompanionSessionDiscovery, readCompanionSessionEnvironment, readCompanionSessionScope } from '../runtime.js';
 import { projectEnvironmentDiscovery } from '../environmentJson.js';
-import { createCompanionConnectionsProvider } from '../connectionProvider.js';
+import { createCompanionConnectionsProvider, readCompanionConnectionsAvailability } from '../connectionProvider.js';
+import { readAgentCapabilityCatalog } from '../../maker-host/agentCapabilityCatalog.js';
 import { redactEnvironmentData } from '../process.js';
 import { withImportedConnection } from '../connections.js';
 import * as connectionModule from '../connections.js';
@@ -25,6 +26,40 @@ beforeEach(() => {
   });
 });
 afterEach(async () => { vi.unstubAllEnvs(); if (root) await fs.rm(root, { recursive: true, force: true }); });
+
+// #7629: the old provider advertised registered for an ordinary task, then
+// reported its legitimate empty list as a connection outage. Unit tier:
+// real provider + catalog entry points, only the caller environment is a fixture.
+it.each([false, true])('reports caller environment applicability without executing imported tools: %s', async available => {
+  vi.mocked(readCompanionSessionEnvironment).mockReset().mockRejectedValue(new Error('must not load full environment'));
+  vi.mocked(readCompanionSessionDiscovery).mockResolvedValue(available ? {
+    identity: 'fixture', botId: 'bot', userData: '/fixture', assertOwner() {},
+    environment: { env: {}, mcp: [], identity: 'fixture', pendingImport: false },
+  } : undefined);
+  const provider = createCompanionConnectionsProvider();
+  const runtime = { agentKind: 'codex' as const, workingDir: '/fixture', sessionId: 'fixture-session' };
+  const factory = vi.spyOn(provider, 'toClaudeSdkConfig');
+  const read = vi.fn(async () => ({ state: 'connected' as const, tools: [{ name: 'run_command' }] }));
+  const availability = () => readCompanionConnectionsAvailability(runtime);
+  const index = await readAgentCapabilityCatalog([provider], runtime, {}, availability, read);
+  expect(index).toMatchObject({ capabilities: expect.arrayContaining([expect.objectContaining({
+    server: 'companion_connections', title: '伙伴环境连接', source: 'custom',
+    status: available ? 'registered' : 'unavailable',
+  })]) });
+  const result = await readAgentCapabilityCatalog([provider], runtime, { server: provider.name }, availability, read);
+  if (available) {
+    expect(result).toMatchObject({ ok: true, tools: [{ name: 'run_command' }] });
+    expect(await readAgentCapabilityCatalog([provider], runtime, { server: provider.name }, availability,
+      async () => ({ state: 'failed', tools: [] })))
+      .toMatchObject({ ok: false, errorCode: 'HARNESS_MCP_NOT_READY', engineState: 'failed' });
+  } else {
+    expect(result).toMatchObject({ ok: false, capability: { status: 'unavailable',
+      reason: 'not-applicable-without-companion-environment' } });
+    expect(read).not.toHaveBeenCalled();
+  }
+  expect(factory).not.toHaveBeenCalled();
+  expect(readCompanionSessionEnvironment).not.toHaveBeenCalled();
+});
 
 it('lists and refreshes pending setup tools without loading the retry archive', async () => {
   vi.mocked(readCompanionSessionEnvironment).mockReset().mockRejectedValue(new Error('must not load full environment'));
@@ -461,4 +496,31 @@ it('offers paginated private import setup only in the owning companion and masks
     expect(readCompanionSessionEnvironment).not.toHaveBeenCalled();
     expect(assertOwner).toHaveBeenCalled();
   } finally { await client.close(); await config.instance.close(); }
+});
+
+// Unit #9583: resource preparation shares the command deadline; a fake clock
+// crosses the limit during a vault read, before any command can be spawned.
+it.each(['deadline', 'cancel'])('enforces %s while restoring private Skill resources', async reason => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-command-deadline-'));
+  let now = 1000;
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const controller = new AbortController();
+  let observed = '';
+  vi.mocked(companionEnvironmentStore.readResource).mockImplementation(async function* (_ref, assertOwner) {
+    if (reason === 'deadline') now += 120001;
+    else controller.abort();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    try { assertOwner(); } catch (error) { observed = (error as Error).message; throw error; }
+    yield '{}';
+  });
+  vi.mocked(readCompanionSessionEnvironment).mockResolvedValue({ identity: 'fixture', botId: 'bot', userData: root, assertOwner() {},
+    environment: { version: 1, env: {}, mcp: [], credentials: [], skillArchives: { report: { key: 'fixture', id: 'fixture', digest: 'fixture' } } } });
+  const config = await createCompanionConnectionsProvider().toClaudeSdkConfig!({} as never) as { instance: McpServer };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'fixture', version: '1' });
+  await config.instance.connect(serverTransport); await client.connect(clientTransport);
+  try {
+    await expect(client.callTool({ name: 'run_command', arguments: { command: 'echo should-not-run' } }, undefined, { signal: controller.signal })).rejects.toThrow();
+    await vi.waitFor(() => expect(observed).toBe(reason === 'deadline' ? 'AUTOMATION_TIMEOUT' : 'AUTOMATION_CANCELLED'));
+  } finally { clock.mockRestore(); await client.close(); await config.instance.close(); }
 });

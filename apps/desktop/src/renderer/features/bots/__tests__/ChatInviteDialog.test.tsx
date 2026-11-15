@@ -3,13 +3,14 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { ChatInviteDialog } from '../ChatInviteDialog';
-const mocks = vi.hoisted(() => ({ createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(), revokeInvite: vi.fn(), copy: vi.fn(), success: vi.fn() }));
+const mocks = vi.hoisted(() => ({ createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(), status: vi.fn(), revokeInvite: vi.fn(), copy: vi.fn(), success: vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { date?: string }) => values?.date ? `${key}: ${values.date}` : key, i18n: { language: 'en' } }) }));
 vi.mock('../botGroupStore', () => ({ refreshBotGroups: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ toast: { success: mocks.success } }));
 const k = (name: string) => `bots.groupChat.server.${name}`;
 const link = `cindy://chat-invite/${'a'.repeat(43)}`;
 beforeEach(() => {
+  mocks.status.mockResolvedValue({ personalMask: false });
   vi.clearAllMocks(); setDataOwnerGeneration('account', 1);
   mocks.createInvite.mockResolvedValue({ ok: true, link, expiresAt: null, reusable: true });
   mocks.previewInvite.mockResolvedValue({ ok: true, groupId: 'room', name: 'Room', inviterName: 'Host', expiresAt: null, reusable: true, joined: false });
@@ -20,15 +21,58 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 async function create() {
-  render(<ChatInviteDialog groupId="room" onClose={vi.fn()} />);
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: k('createLink') })));
+  await act(async () => { render(<ChatInviteDialog groupId="room" onClose={vi.fn()} />); });
 }
 describe('invitation validity', () => {
-  it('shows null as reusable and copies the same link repeatedly without generating more', async () => {
+  it('automatically generates a link after creation with just close and copy actions', async () => {
+    render(<ChatInviteDialog groupId="new-room" created onClose={vi.fn()} />);
+    expect(screen.getByRole('heading').textContent).toBe(k('groupCreated'));
+    const copy = await screen.findByRole('button', { name: k('copyLink') });
+    expect(mocks.createInvite).toHaveBeenCalledExactlyOnceWith({ groupId: 'new-room', clientId: expect.any(String) });
+    expect(screen.queryByRole('button', { name: k('revokeLink') })).toBeNull();
+    expect(screen.getByText(k('inviteFriends'))).toBeTruthy();
+    expect(screen.queryByText(k('reusableLink'))).toBeNull();
+    expect(screen.getAllByRole('button')).toHaveLength(2);
+    await act(async () => fireEvent.click(copy));
+    expect(mocks.copy).toHaveBeenCalledWith(link);
+    expect(screen.getByRole('button', { name: k('copied') })).toBeTruthy();
+    expect(mocks.success).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('retries only the invitation with the same operation after automatic generation fails (created=%s)', async created => {
+    mocks.createInvite.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' });
+    render(<ChatInviteDialog groupId="new-room" created={created} onClose={vi.fn()} />);
+    await screen.findByRole('alert');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: k('createLink') })));
+    await screen.findByRole('button', { name: k('copyLink') });
+    expect(mocks.createInvite).toHaveBeenCalledTimes(2);
+    expect(mocks.createInvite.mock.calls[0][0]).toEqual(mocks.createInvite.mock.calls[1][0]);
+  });
+
+  // Automatic generation must remain dismissible; earlier unit cases only settled requests before closing.
+  it('allows closing during automatic generation and ignores its late result', async () => {
+    let finish!: (value: unknown) => void;
+    mocks.createInvite.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const onClose = vi.fn();
+    const view = render(<ChatInviteDialog groupId="room" onClose={onClose} />);
+    expect(mocks.createInvite).toHaveBeenCalledOnce();
+    const close = screen.getByRole('button', { name: 'bots.close' }) as HTMLButtonElement;
+    expect(close.disabled).toBe(false);
+    fireEvent.click(close);
+    expect(onClose).toHaveBeenCalledOnce();
+    view.unmount();
+    await act(async () => finish({ ok: true, link, expiresAt: null, reusable: true }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mocks.createInvite).toHaveBeenCalledOnce();
+    expect(mocks.copy).not.toHaveBeenCalled();
+    expect(mocks.success).not.toHaveBeenCalled();
+  });
+
+  it('copies the same reusable link repeatedly without generating more or showing extra validity text', async () => {
     await create();
-    expect(screen.getByRole('status').textContent).toBe(k('reusableLink'));
+    expect(screen.queryByText(k('reusableLink'))).toBeNull();
     await act(async () => fireEvent.click(screen.getByRole('button', { name: k('copyLink') })));
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: k('copyLink') })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: k('copied') })));
     expect(mocks.copy.mock.calls).toEqual([[link], [link]]);
     expect(mocks.createInvite).toHaveBeenCalledOnce();
   });
@@ -78,7 +122,7 @@ describe('invitation validity', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: k('createLink') })));
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe(newLink);
     expect(mocks.createInvite.mock.calls[0][0].clientId).not.toBe(mocks.createInvite.mock.calls[1][0].clientId);
-    expect(screen.getByRole('status').textContent).toBe(k('reusableLink'));
+    expect(screen.queryByText(k('reusableLink'))).toBeNull();
   });
   it.each(['ROLE_REQUIRED', 'INVITATION_NOT_FOUND', 'REQUEST_TIMEOUT', 'INVITE_REVOKE_UNSUPPORTED'])('retains state when revoke fails with %s', async errorCode => {
     mocks.revokeInvite.mockResolvedValue({ ok: false, errorCode });
@@ -86,7 +130,7 @@ describe('invitation validity', () => {
     fireEvent.click(screen.getByRole('button', { name: k('revokeLink') }));
     await act(async () => fireEvent.click(screen.getAllByRole('button', { name: k('revokeLink') }).at(-1)!));
     expect(screen.getByRole('alert')).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toBe(k('reusableLink'));
+    expect(screen.queryByText(k('reusableLink'))).toBeNull();
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe(link);
     expect(screen.getByRole('button', { name: k('copyLink') })).toBeTruthy();
     expect(mocks.success).not.toHaveBeenCalled();
@@ -140,7 +184,7 @@ describe('invitation validity', () => {
     mocks.revokeInvite.mockReturnValue(new Promise((resolve, fail) => { finish = resolve; reject = fail; }));
     const onClose = vi.fn();
     render(<ChatInviteDialog groupId="room" onClose={onClose} />);
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: k('createLink') })));
+    await screen.findByRole('button', { name: k('copyLink') });
     fireEvent.click(screen.getByRole('button', { name: k('revokeLink') }));
     fireEvent.click(screen.getByRole('button', { name: k('revokeLink') }));
     expect((screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }) as HTMLButtonElement).disabled).toBe(true);
@@ -151,7 +195,7 @@ describe('invitation validity', () => {
     });
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(screen.getByRole('status').textContent).toBe(k('reusableLink'));
+    expect(screen.queryByText(k('reusableLink'))).toBeNull();
     expect(mocks.success).not.toHaveBeenCalled();
     const close = screen.getByRole('button', { name: 'bots.close' }) as HTMLButtonElement;
     expect(close.disabled).toBe(false);
@@ -174,12 +218,18 @@ describe('invitation validity', () => {
     await create();
     expect(screen.queryByText(k('reusableLink'))).toBeNull();
   });
-  it('retains link and shows a failed clipboard action without a success toast', async () => {
-    mocks.copy.mockRejectedValue(new Error('unavailable'));
+  it.each([false, true])('retains the link and clears successful copy feedback on clipboard failure (previousSuccess=%s)', async previousSuccess => {
     await create();
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: k('copyLink') })));
+    if (previousSuccess) {
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: k('copyLink') })));
+      expect(screen.getByRole('button', { name: k('copied') })).toBeTruthy();
+    }
+    mocks.copy.mockRejectedValueOnce(new Error('unavailable'));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: k(previousSuccess ? 'copied' : 'copyLink') })));
     expect(screen.getByRole('alert').textContent).toBe(k('copyFailed'));
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe(link);
+    expect(screen.getByRole('button', { name: k('copyLink') })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: k('copied') })).toBeNull();
     expect(mocks.success).not.toHaveBeenCalled();
   });
 });

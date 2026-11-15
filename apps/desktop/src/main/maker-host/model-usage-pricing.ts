@@ -55,7 +55,8 @@ export function captureUsagePricing(sessionId: string, priceVariant: PriceVarian
 
 /** Read-only tee of native JSON/SSE responses; token/content bytes reach the harness unchanged. */
 export function createUsagePricingObserver(contentType: string, record: (value: unknown) => void): ResponseObserverSink {
-  const sse = contentType.includes('text/event-stream');
+  const mime = contentType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+  let mode: 'sse' | 'json' | 'detect' = mime === 'text/event-stream' ? 'sse' : mime ? 'json' : 'detect';
   const decoder = new StringDecoder('utf8');
   let pending = '';
   let overflow = false;
@@ -65,12 +66,21 @@ export function createUsagePricingObserver(contentType: string, record: (value: 
   };
   const ingest = (text: string): void => {
     pending += text;
-    if (sse) {
+    // Codex's subscription HTTP fallback can omit Content-Type. The forwarding
+    // layer accepts these streams, so their receipts must follow the same path.
+    // Wait for a recognizable prefix across chunks; never override an explicit
+    // MIME type or retain an unbounded body while detecting the format.
+    if (mode === 'detect') {
+      const prefix = pending.trimStart();
+      if (/^(?:data:|event:|id:|retry:|:)/.test(prefix)) mode = 'sse';
+      else if (prefix.startsWith('{') || prefix.startsWith('[')) mode = 'json';
+    }
+    if (mode === 'sse') {
       let boundary: RegExpExecArray | null;
       while ((boundary = /\r?\n\r?\n/.exec(pending))) {
         const frame = pending.slice(0, boundary.index);
         pending = pending.slice(boundary.index + boundary[0].length);
-        if (!overflow) parse(frame.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n'));
+        if (!overflow) parse(frame.replace(/^\uFEFF/, '').split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n'));
         overflow = false;
       }
     }
@@ -80,7 +90,7 @@ export function createUsagePricingObserver(contentType: string, record: (value: 
     onData: chunk => ingest(decoder.write(chunk)),
     onEnd: () => {
       ingest(decoder.end());
-      if (sse) ingest('\n\n');
+      if (mode === 'sse') ingest('\n\n');
       else if (!overflow) parse(pending);
     },
   };

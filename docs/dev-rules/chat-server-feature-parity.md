@@ -5,6 +5,10 @@
 原有行为以 [伙伴群聊](../product-rules/bot-group-chat.md) 为准；普通伙伴私聊仍走
 [伙伴运行时](../product-rules/cindy-bots-runtime.md)，不是服务器群时间线。
 
+手机路径说明（#5759）：下文的手机实测走 Desktop Remote Resource 兼容入口，不证明手机直连
+已验收。直连已有安排的读取、卡片与控制操作现接入同一服务端 API，范围与未接入能力见
+[手机直连规则](../product-rules/bot-group-chat.md#84-手机直连-chat-server)；须另做真实直连及原生验收。
+
 ## 原有能力与迁移情况
 
 | 原有能力 | 服务器版接线与本次处置 |

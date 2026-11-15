@@ -6,6 +6,10 @@ vi.mock('@/lib/makerTransport', () => ({
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   getSessionDeviceId: vi.fn(),
 }));
+const stickyOrigin = vi.hoisted(() => ({ get: vi.fn((): string | null => null) }));
+vi.mock('@/features/device-link/stickySessionOrigin', () => ({
+  getStickySessionDeviceId: stickyOrigin.get,
+}));
 
 type SessionLike = { id: string };
 
@@ -98,5 +102,51 @@ describe('sessionService.get in-flight deduplication', () => {
 
     await expect(service.get('session-1')).resolves.toMatchObject({ id: 'session-1' });
     expect(get).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('sessionService.patchMeta routing', () => {
+  beforeEach(() => {
+    stickyOrigin.get.mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    stickyOrigin.get.mockReturnValue(null);
+  });
+
+  function stub(update: ReturnType<typeof vi.fn>) {
+    const invoke = vi.fn(async () => ({ id: 'session-1' }));
+    vi.stubGlobal('window', {
+      electronAPI: { localDb: { sessions: { update } }, deviceLink: { invoke } },
+    });
+    return { invoke };
+  }
+
+  it('writes notificationsMuted locally even when the session has a sticky remote origin', async () => {
+    const update = vi.fn(async () => ({ id: 'session-1' }));
+    const { invoke } = stub(update);
+    stickyOrigin.get.mockReturnValue('device-a');
+    const service = await loadSessionService();
+
+    await service.patchMeta('session-1', { notificationsMuted: true });
+
+    expect(update).toHaveBeenCalledWith('session-1', { notificationsMuted: true });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('still tunnels the other metadata writes for a sticky remote session', async () => {
+    const update = vi.fn(async () => ({ id: 'session-1' }));
+    const { invoke } = stub(update);
+    stickyOrigin.get.mockReturnValue('device-a');
+    const service = await loadSessionService();
+
+    await service.patchMeta('session-1', { status: 'archived' });
+
+    expect(invoke).toHaveBeenCalledWith('device-a', 'local-db:sessions:patch-meta', [
+      'session-1',
+      { status: 'archived' },
+    ]);
+    expect(update).not.toHaveBeenCalled();
   });
 });

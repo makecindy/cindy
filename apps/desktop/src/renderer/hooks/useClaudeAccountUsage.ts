@@ -47,6 +47,8 @@ export interface ClaudeAccountUsageSnapshot {
    * 此时消费方应隐藏 daily 段。
    */
   todaySpend: number | null;
+  /** 企业日额度开关；false 隐藏日额度和读取失败提示，旧网关路径不设置。 */
+  dailyLimitEnabled?: boolean;
   fetchedAt: number;
 }
 

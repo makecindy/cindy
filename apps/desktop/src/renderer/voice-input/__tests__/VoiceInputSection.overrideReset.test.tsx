@@ -5,7 +5,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { VoiceInputSection } from '../../components/settings/VoiceInputSection';
+import { VoiceInputSection as VoiceInputSectionComponent } from '../../components/settings/VoiceInputSection';
+import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
+import { voiceInputSettings } from '../../components/settings/VoiceInputSection.settings-search';
 import { toast } from '@/lib/toast';
 import { getDefaultVoiceInputSettings, type VoiceInputSettings } from '../../../shared/voiceInputData';
 
@@ -27,6 +29,9 @@ vi.mock('@/hooks/useVoiceInputModelSelection', () => ({
 }));
 
 const defaults = getDefaultVoiceInputSettings('win32');
+function VoiceInputSection() {
+  return <VoiceInputSectionComponent modelSelection={useVoiceInputModelSelection()} />;
+}
 const restoreLabel = 'settings.defaults.restore';
 let settings: VoiceInputSettings;
 const updateSettings = vi.fn();
@@ -90,11 +95,39 @@ it('keeps custom ASR URL validation inline and associated through repeated edits
 });
 
 const cases = [
-  { field: 'composerLongPressEnabled', override: 'composerLongPressEnabledOverride',
-    label: 'settings.voiceInput.composerLongPress.ariaLabel' },
   { field: 'dictionarySyncEnabled', override: 'dictionarySyncEnabledOverride',
     label: 'settings.voiceInput.refinement.dictionary.deviceSync.ariaLabel' },
 ] as const;
+
+// Unit regression: the shared select discarded caller IDs, so the runtime search
+// fixture matched every select to the page entry. Verify each real trigger keeps its
+// own definition and still opens its listbox (shared Select, DESIGN.md §4).
+it('keeps each voice select bound to its own search definition', async () => {
+  Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  serviceModel.current = {
+    ready: true, asrProfiles: [{ id: 'custom-realtime-asr', mode: 'realtime', auth: 'api-key', model: 'test' }],
+    selection: {
+      serviceMode: 'byok', asrProvider: 'custom-realtime-asr',
+      customAsr: { protocol: 'openai-realtime', websocketUrl: 'wss://voice.example/realtime', model: 'test' },
+    },
+  };
+  render(<MemoryRouter><VoiceInputSection /></MemoryRouter>);
+  for (const [name, definition] of [
+    ['settings.voiceInput.serviceSource.ariaLabel', voiceInputSettings.serviceSource],
+    ['settings.voiceInput.serviceSource.asr.ariaLabel', voiceInputSettings.asr],
+    ['settings.voiceInput.serviceSource.customAsr.protocol.ariaLabel', voiceInputSettings.customAsrProtocol],
+    ['settings.voiceInput.language.ariaLabel', voiceInputSettings.languageLabel],
+    ['settings.voiceInput.microphone.ariaLabel', voiceInputSettings.microphoneLabel],
+  ] as const) {
+    const trigger = await screen.findByRole('combobox', { name });
+    expect(trigger.getAttribute('data-setting-id')).toBe(definition.id);
+    fireEvent.click(trigger);
+    const listbox = await screen.findByRole('listbox');
+    expect(within(listbox).getAllByRole('option').length).toBeGreaterThan(0);
+    fireEvent.keyDown(listbox, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+  }
+});
 
 /**
  * Test value: the real settings page must expose each override's restore action, send its null
@@ -103,7 +136,8 @@ const cases = [
  * clicked this component, so removing its controls or disconnecting their props escaped coverage.
  * Minimal input: one explicit override opposite to its default (including false for dictionary sync).
  * Unit/jsdom: a separate file is needed because recordingGate is a node-only source guard; no
- * VoiceInputSection component harness exists to extend. Both controls share this single fixture.
+ * VoiceInputSection component harness exists to extend. The 2026-10-24 product decision hides
+ * long-press dictation even with an explicit override; dictionary sync keeps its restore control.
  * Measured alone: 3.25s wall / 2.19s Vitest (1.11s collect, 550ms jsdom, 281ms tests).
  */
 describe('VoiceInputSection restore defaults', () => {
@@ -113,10 +147,9 @@ describe('VoiceInputSection restore defaults', () => {
     updateSettings.mockImplementation(async () => { settings = restored; return settings; });
     render(<MemoryRouter><VoiceInputSection /></MemoryRouter>);
 
-    const dictionaryHeading = screen.getByText('settings.voiceInput.refinement.dictionary.label');
-    fireEvent.click(within(dictionaryHeading.parentElement!.parentElement!).getByRole('button', {
-      name: 'settings.voiceInput.refinement.instructions.edit',
-    }));
+    const dictionaryToggle = screen.getAllByRole('button', { name: 'settings.voiceInput.refinement.instructions.edit' })
+      .find((button) => button.getAttribute('aria-controls') === 'voice-input-custom-dictionary');
+    fireEvent.click(dictionaryToggle!);
 
     const toggle = () => screen.getByRole('switch', { name: label });
     const row = () => within(toggle().parentElement!.parentElement!);
@@ -130,9 +163,8 @@ describe('VoiceInputSection restore defaults', () => {
     expect(row().queryByText('settings.defaults.customizedBadge')).toBeNull();
     expect(toast.success).toHaveBeenCalledExactlyOnceWith('settings.defaults.restored');
 
-    const other = cases.find(candidate => candidate.field !== field)!;
-    const otherToggle = screen.getByRole('switch', { name: other.label });
-    expect(otherToggle.getAttribute('aria-checked')).toBe(String(!defaults[other.field]));
-    expect(within(otherToggle.parentElement!.parentElement!).getByRole('button', { name: restoreLabel })).toBeTruthy();
+    // Long-press dictation is now a hidden override, even when explicitly configured.
+    expect(screen.queryByRole('switch', { name: 'settings.voiceInput.composerLongPress.ariaLabel' })).toBeNull();
+    expect(settings.composerLongPressEnabledOverride).toBe(false);
   });
 });

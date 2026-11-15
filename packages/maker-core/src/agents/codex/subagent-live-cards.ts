@@ -107,6 +107,8 @@ export interface SubagentLiveCardTracker {
   clear(): void;
   /** 诊断/测试用:当前跟踪的子代理卡数。 */
   readonly size: number;
+  /** Native child work cannot survive replacing its owning process. */
+  readonly hasRunning: boolean;
 }
 
 /**
@@ -955,6 +957,9 @@ export function createSubagentLiveCardTracker(opts: {
 
     get size(): number {
       return cards.size;
+    },
+    get hasRunning(): boolean {
+      return [...cards.values()].some((card) => aggregateStatus(card) === 'running');
     },
   };
 }

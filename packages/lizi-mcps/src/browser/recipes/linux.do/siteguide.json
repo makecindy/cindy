@@ -1,23 +1,15 @@
 {
   "site": "linux.do",
-  "auth": "Discourse 论坛,公开话题免登录即可读 JSON;登录态(持久浏览器登录 linux.do)可读受限分类并降低 Cloudflare 拦截概率",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://linux.do",
-    "latest": "https://linux.do/latest.json",
-    "top": "https://linux.do/top.json?period=<all|daily|weekly|monthly|quarterly|yearly>",
-    "search": "https://linux.do/search.json?q=<keyword>",
-    "topic": "https://linux.do/t/<topicId>.json",
-    "categories": "https://linux.do/categories.json",
-    "tags": "https://linux.do/tags.json",
-    "userTopics": "https://linux.do/topics/created-by/<username>.json"
+    "home": "https://linux.do"
   },
-  "pages": [
-    {
-      "type": "listing",
-      "url": "https://linux.do/latest.json",
-      "notes": "JSON {topic_list:{topics:[{id,title,fancy_title,posts_count,like_count,views,created_at,...}]}};话题 URL = https://linux.do/t/topic/<id>"
-    }
+  "recipes": [
+    "linuxdo-latest"
   ],
-  "recipes": ["linuxdo-latest"],
-  "notes": "linux.do 是基于 Discourse 的论坛,所有列表/详情都有标准 .json 端点。关键:不要直接 navigate 到 *.json——Cloudflare 会对非同源访问喂挑战页/SPA HTML。正确姿势是先 navigate 到 https://linux.do,再用 evaluate 步在页面内 fetch(相对路径, {credentials:'include'}):同源 + 带 cookie,公开内容免登录也能读、登录后还能读受限分类。已收录 linuxdo-latest(最新话题,走 /latest.json)。其它常用读流程同理在页面内 fetch:热门 /top.json?period=weekly(结构同 topic_list.topics,含 period 选 all/daily/weekly/monthly/quarterly/yearly);搜索 /search.json?q=<encodeURIComponent(keyword)>(响应 {topics:[{id,title,views,like_count,posts_count}]});话题详情+楼层 /t/<id>.json(响应 {post_stream:{posts:[{username,cooked(HTML正文,需去标签),like_count,created_at,post_number}]}},post_number===1 为主楼);分类 /categories.json(category_list.categories[{name,slug,id,topic_count}]);标签 /tags.json(tags[{id,name,slug,count}]);某用户创建的话题 /topics/created-by/<username>.json。回复数 = posts_count - 1。"
+  "notes": "兼容入口 linuxdo-latest 现执行内置 linux-do/feed，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

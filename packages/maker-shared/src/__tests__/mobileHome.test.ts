@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildMobileHomePresentation,
+  parseHostProjectAliases,
+  remoteProjectAlias,
+  sessionMatchesProjectDir,
   type MobileHomeSessionLike,
 } from '../mobileHome.js';
 
@@ -26,6 +29,51 @@ function session(id: string, patch: Partial<MobileHomeSessionLike> = {}): Mobile
 }
 
 describe('mobileHome', () => {
+  // Unit: home cards and their drill-down must agree when project != execution cwd.
+  it('groups temporary execution directories into their explicit project and filters consistently', () => {
+    const tasks = ['/tmp/checkout', '/repo/.cindy-worktrees/branch'].map((workingDir, i) => session(String(i), {
+      workingDir, projectDir: '/product', deviceLinkDeviceId: 'mac',
+    }));
+    const home = buildMobileHomePresentation({ sessions: tasks,
+      projectAliases: new Map([['device:mac:/product', 'Product']]) });
+    expect(home.projects).toHaveLength(1);
+    expect(home.projects[0]).toMatchObject({ workingDir: '/product', title: 'Product' });
+    expect(home.projects[0].sessions).toHaveLength(2);
+    expect(sessionMatchesProjectDir(tasks[0], '/product')).toBe(true);
+    expect(sessionMatchesProjectDir(tasks[0], '/tmp/checkout')).toBe(false);
+    expect(sessionMatchesProjectDir('/product', '/product')).toBe(true);
+  });
+  it('maps host aliases with the same Windows/worktree identity as project cards', () => {
+    const aliases = parseHostProjectAliases('pc:one', [
+      { projectKey: 'local:C:\\Repo\\App\\', alias: 'Newest' },
+      { projectKey: 'local:c:/repo/app', alias: 'Older' },
+      { projectKey: 'remote:ssh:/repo/app', alias: 'SSH only' },
+      { projectKey: 'device:another:/repo/app', alias: 'Viewer only' },
+    ]);
+    expect(remoteProjectAlias(aliases, 'pc:one', 'c:/REPO/app/.cindy-worktrees/branch')).toBe('Newest');
+    expect(remoteProjectAlias(aliases, 'pc:two', 'c:/repo/app')).toBeUndefined();
+    expect(aliases.size).toBe(1);
+    expect(() => parseHostProjectAliases('pc:one', {})).toThrow();
+  });
+  // #6916: existing grouping tests only exercised directory names. A host alias must
+  // change visible titles/search, without changing project identity (unit tier).
+  it('uses device-scoped project aliases for titles and search, and falls back after clearing', () => {
+    const sessions = ['mac-a', 'mac-b'].map((deviceLinkDeviceId) => session(deviceLinkDeviceId, {
+      deviceLinkDeviceId,
+    }));
+    const options = {
+      sessions,
+      projectAliases: new Map([['device:mac-a:/repo/app', 'Customer Portal']]),
+    };
+    const home = buildMobileHomePresentation(options);
+    expect(home.projects.map((project) => [project.key, project.title])).toEqual([
+      ['device:mac-a:/repo/app', 'Customer Portal'],
+      ['device:mac-b:/repo/app', 'app'],
+    ]);
+    expect(buildMobileHomePresentation({ ...options, searchQuery: 'customer' }).projects.map((p) => p.deviceId)).toEqual(['mac-a']);
+    expect(buildMobileHomePresentation({ ...options, projectAliases: new Map() }).projects.map((p) => p.title)).toEqual(['app', 'app']);
+  });
+
   it('hides Cindy Make creation and merge tasks from the home presentation', () => {
     const sessions = [
       session('make-a', { source: 'cindy-make', workingDir: 'C:\\Cindy\\tasks\\random-a' }),
@@ -767,4 +815,22 @@ describe('mobileHome', () => {
     expect(revoked.emptyTitle).toBe('访问权限已被撤销');
     expect(revoked.emptyCopy).toContain('「MacBook」');
   });
+});
+
+// Unit: the actual phone home entry and project drill-down must agree for old
+// dialogue lanes and project/worktree lanes. Previous coverage only used cwd/projectDir.
+it.each(['dialogue', 'project'] as const)('uses group display membership on the actual home pipeline (%s)', workspaceKind => {
+  const lane = session('group-lane', { source: 'bot', workspaceKind,
+    workingDir: '/legacy/execution', projectDir: '/legacy/execution', deviceLinkDeviceId: 'mac',
+    companion: { taskProjectDir: '/groups/product' } });
+  const home = buildMobileHomePresentation({ sessions: [lane],
+    projectAliases: new Map([['device:mac:/groups/product', 'Product group']]) });
+  expect(home.chats).toHaveLength(0);
+  expect(home.projects).toHaveLength(1);
+  expect(home.projects[0]).toMatchObject({ workingDir: '/groups/product', title: 'Product group' });
+  expect(home.projects[0].sessions[0].session.workingDir).toBe('/legacy/execution');
+  expect(sessionMatchesProjectDir(lane, '/groups/product')).toBe(true);
+  expect(sessionMatchesProjectDir(lane, '/legacy/execution')).toBe(false);
+  expect(buildMobileHomePresentation({ sessions: [lane], searchQuery: 'Product group',
+    projectAliases: new Map([['device:mac:/groups/product', 'Product group']]) }).projects).toHaveLength(1);
 });

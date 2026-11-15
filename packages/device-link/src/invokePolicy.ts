@@ -5,7 +5,7 @@ import {
   TASK_MIGRATION_RECEIVE_TIMEOUT_MS,
 } from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
-import { isRemoteAgentReadInvoke } from './remoteAgent.js';
+import { isRemoteAgentReadInvoke, remoteAgentInvokeHoldMs } from './remoteAgent.js';
 
 /** These reads may wait behind current-task work. Not a retry or authorization policy.
  * sessions:list also serves initial loading and recovery probes, so it stays foreground.
@@ -13,6 +13,7 @@ import { isRemoteAgentReadInvoke } from './remoteAgent.js';
 const BACKGROUND_INVOKE_CHANNELS = new Set([
   'git-context:pr-refs:list',
   'git-context:pr-status',
+  'git-context:mr-status',
   'maker:schedule:list-sidebar-index-runs',
   'maker:usage:device-rows',
   // 远程任务状态栏的定时复查(每 15 秒两次只读);后台任务面板挂载水合同用,可让位于用户操作。
@@ -232,6 +233,16 @@ const PEER_RESET_RETRYABLE_READ_CHANNELS = new Set([
  */
 export function isPeerResetRetryableInvoke(channel: string, args?: unknown[]): boolean {
   return isPeerResetRetryableReadChannel(channel) || isRemoteAgentReadInvoke(channel, args);
+}
+
+/**
+ * 被控端按协议可能刻意挂起这次调用多久才回(长轮询)。两端的慢请求 / 慢执行诊断
+ * 在阈值上加上它：一轮 10 秒的空 poll 是正常节奏，不是慢请求；超出挂起上限的
+ * 部分、超时与失败仍照常记录。只影响诊断，不改超时、重试或调度。长轮询通道都在
+ * 这里登记，不在各处散落通道名判断。
+ */
+export function invokeIntendedHoldMs(channel: string, args?: unknown[]): number {
+  return remoteAgentInvokeHoldMs(channel, args);
 }
 
 export function isPeerResetRetryableReadChannel(channel: string): boolean {

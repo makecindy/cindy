@@ -26,7 +26,8 @@ import type { ProviderSection } from '@cindy/model-providers';
 import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import type { InteractiveCardSpec } from '@cindy/im';
 
-import { autoReviewUnavailablePromptLine } from './autoReviewUnavailablePrompt';
+import { describePermissionAction } from '@cindy/maker-shared/interaction';
+import { autoReviewUnavailablePromptLine, permissionPromptDescription } from './autoReviewUnavailablePrompt';
 import type { ImUiTextPack } from './types';
 import {
   composeInteractionModel,
@@ -39,6 +40,7 @@ import {
   MAX_PLAN_LEN,
 } from './interactionCardModel';
 import type { ControlProject, ControlSession, RecentControlSession } from './controlProjects';
+import { projectToken } from './projectToken';
 
 /** IM 卡片文本截断(实现见 interactionCardModel.truncateBlock)。 */
 const truncate = truncateBlock;
@@ -198,11 +200,15 @@ export function createCardBuilders(
 
     buildPermissionCard(req) {
       const model = composeInteractionModel(req);
-      const params = `${ui.cards.permission.paramsLabel}\n\`\`\`json\n${previewInput(model.input)}\n\`\`\``;
+      // 命令、文件、插件调用、浏览器步骤直接显示要执行的内容；认不出的工具才给 JSON。
+      const action = describePermissionAction(model.toolName, model.input);
+      const params = action.kind === 'tool'
+        ? `${ui.cards.permission.paramsLabel}\n\`\`\`json\n${previewInput(model.input)}\n\`\`\``
+        : `${ui.cards.permission.paramsLabel}\n\`\`\`\n${truncate(action.preview, IM_PERMISSION_INPUT_PREVIEW_MAX)}\n\`\`\``;
       const unavailable = autoReviewUnavailablePromptLine(req);
       return {
         title: ui.cards.permission.title(model.toolName),
-        body: [req.description, unavailable, params].filter(Boolean).join('\n\n'),
+        body: [permissionPromptDescription(req), unavailable, params].filter(Boolean).join('\n\n'),
         buttons: [
           {
             id: 'permission:allow:once',
@@ -212,7 +218,7 @@ export function createCardBuilders(
           },
           // Auto 故障降级会标 forcePrompt：Claude 丢 permissionUpdates，
           // Codex 把 acceptForSession 收成单次 allow。展示「总是允许」等于说谎。
-          ...(!unavailable ? [{
+          ...(!unavailable && (!req.metadata?.mcpApp || (req.metadata.mcpApp as { scope?: string }).scope === 'session') ? [{
             id: 'permission:allow:always',
             label: ui.cards.permission.btnAllowAlways,
             type: 'default' as const,
@@ -599,10 +605,11 @@ export function createCardBuilders(
             id: 'project:pick',
             label: truncate(p.displayName, 30),
             type: 'default' as const,
+            // 只带不透明标记, 不带本机路径(见 projectToken.ts); 回调时按当前项目清单找回目录。
             payload: {
-              requestId: `project-pick:${p.workingDir}`,
+              requestId: `project-pick:${projectToken(p.workingDir)}`,
               botAppId,
-              workingDir: p.workingDir,
+              projectToken: projectToken(p.workingDir),
               displayName: p.displayName,
             },
           })),

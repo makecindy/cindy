@@ -1,6 +1,7 @@
 import { modelRouteLocationKey } from '@cindy/maker-shared/model-route';
 import type { AgentKind, Effort } from '@cindy/maker-core';
 import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
+import { makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import {
   connectedProvidersForAgent,
   isModelSelectableForNewRoute,
@@ -24,6 +25,11 @@ export interface PendingSessionRuntimeMutation {
   generation: number;
   source: SessionRuntimeMutationSource;
   profile: SessionRuntimeProfile;
+  /**
+   * Pi-only：该选择的思考开关意图（renderer 记忆，缺省开）。settle 重放时随
+   * selection 一并应用；不落 DB（会随 runtimePending 投影带出，renderer 不消费）。
+   */
+  thinking?: boolean;
 }
 
 export interface SessionRuntimeControlSnapshot {
@@ -34,6 +40,15 @@ export interface SessionRuntimeControlSnapshot {
   visitedRoutes: string[];
 }
 
+/** Startup-only projection; persisted preferences and native-history identity stay on the row. */
+export function getSessionRuntimeStartOverride(sessionId: string, agentKind: AgentKind, agentDeviceId?: string | null) {
+  const profile = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
+  if (!profile || profile.agentKind !== agentKind
+    || (profile.agentDeviceId ?? null) !== (agentDeviceId ?? null)) return {};
+  return { model: profile.model, providerId: profile.providerId,
+    effort: profile.effort ?? undefined, fastMode: profile.fastMode };
+}
+
 /** Shared by full session reads and route-change pushes; all axes come from one profile. */
 export function projectSessionRuntimeControl(
   sessionId: string,
@@ -42,6 +57,7 @@ export function projectSessionRuntimeControl(
   const control = getSessionRuntimeControlSnapshot(sessionId);
   const effective = control.effectiveOverride ?? baseline;
   return {
+    agentKind: makerToDbAgentKind(effective.agentKind),
     model: effective.model,
     providerId: effective.providerId,
     // The legacy wire axis is string-compatible; the profile preserves null.
@@ -51,6 +67,7 @@ export function projectSessionRuntimeControl(
     runtimeBaseline: baseline,
     runtimeEffective: effective,
     runtimePending: control.pending,
+    runtimeBaselineRecoveryPending: false,
   };
 }
 
@@ -125,6 +142,32 @@ export function recordUserSessionRuntimeMutation(sessionId: string): number {
   state.pendingRouteExplicit = true;
   state.fallbackHop = 0;
   state.visitedRoutes.clear();
+  return state.generation;
+}
+
+/** Account handoff changes only the admitted source, preserving temporary model/axis intent. */
+export function remapSessionRuntimeProvider(params: {
+  sessionId: string;
+  fromProviderId: string;
+  toProviderId: string;
+  expectedOwnerEpoch: string;
+  expectedGeneration: number;
+}): number | null {
+  if (!sessionRuntimeControlOwnerEpochMatches(params.expectedOwnerEpoch)) return null;
+  const existing = states.get(params.sessionId);
+  const generation = existing?.generation ?? 0;
+  if (generation !== params.expectedGeneration) return null;
+  const state = existing ?? stateFor(params.sessionId);
+  const effective = state.effectiveOverride;
+  // The admitted route changed even without an override; fence every old Agent snapshot.
+  state.generation += 1;
+  if (effective?.providerId === params.fromProviderId)
+    state.effectiveOverride = { ...effective, providerId: params.toProviderId };
+  if (state.pending) {
+    state.pending = { ...state.pending, generation: state.generation,
+      profile: effective?.providerId === params.fromProviderId && routeKey(state.pending.profile) === routeKey(effective)
+        ? { ...state.pending.profile, providerId: params.toProviderId } : state.pending.profile };
+  }
   return state.generation;
 }
 
@@ -225,6 +268,8 @@ export function deferSessionRuntimeAxisMutation(params: {
   source: SessionRuntimeMutationSource;
   effectiveProfile: SessionRuntimeProfile;
   pendingPatch: SessionRuntimeAxisPatch;
+  /** Pi-only：延期期间也要记住目标模型的思考开关意图（结算重放时用）。 */
+  thinking?: boolean;
 }): number {
   const state = stateFor(params.sessionId);
   const hadPendingMutation = state.pending !== null;
@@ -234,11 +279,13 @@ export function deferSessionRuntimeAxisMutation(params: {
         ...state.pending,
         generation: state.generation,
         profile: { ...state.pending.profile, ...params.pendingPatch },
+        ...(params.thinking !== undefined ? { thinking: params.thinking } : {}),
       }
     : {
         generation: state.generation,
         source: params.source,
         profile: { ...params.effectiveProfile, ...params.pendingPatch },
+        ...(params.thinking !== undefined ? { thinking: params.thinking } : {}),
       };
   if (!hadPendingMutation) state.pendingRouteExplicit = false;
   if (params.source === 'agent') {
@@ -276,13 +323,27 @@ export function acceptSessionRuntimeMutation(params: {
   profile: SessionRuntimeProfile;
   previousProfile?: SessionRuntimeProfile;
   deferred: boolean;
+  thinking?: boolean;
 }): number {
   const state = stateFor(params.sessionId);
+  const previousPending = state.pending;
   state.generation += 1;
+  // 延期替换时若本次没算出意图（undefined），且仍指向**同一个目标**（model 与
+  // provider 都相同），继承上一份 pending：一次「无法判定」的点击不该把用户刚
+  // 表达过的思考开关悄悄清掉。换到别的模型时不继承——旧模型的开关不适用，
+  // 否则 A 的 off 会串给 B；false / true 是明确意图，永远以本次为准。
+  const samePendingTarget =
+    previousPending != null &&
+    previousPending.profile.model === params.profile.model &&
+    (previousPending.profile.providerId ?? null) === (params.profile.providerId ?? null);
+  const acceptedThinking =
+    params.thinking ??
+    (params.deferred && samePendingTarget ? previousPending?.thinking : undefined);
   const accepted: PendingSessionRuntimeMutation = {
     generation: state.generation,
     source: params.source,
     profile: params.profile,
+    ...(acceptedThinking !== undefined ? { thinking: acceptedThinking } : {}),
   };
   state.pending = params.deferred ? accepted : null;
   state.pendingRouteExplicit = true;
@@ -416,6 +477,17 @@ export function resolveCompatibleSessionRuntimeEffort(
         Math.abs(EFFORT_ORDER.indexOf(b) - requestedRank),
     )[0] ?? null
   );
+}
+
+/** A cleared fixed-effort axis must not revive the NOT NULL row's historical rank. */
+export function resolveSessionRuntimeRefreshEffort(params: {
+  model: CatalogModel | null;
+  storedEffort: Effort | null;
+  persistedEffort: Effort | null;
+}): Effort | null {
+  return params.storedEffort ?? (params.model
+    ? resolveCompatibleSessionRuntimeEffort(params.model, params.persistedEffort)
+    : params.persistedEffort);
 }
 
 export function resolveSessionRuntimeAxes(params: {

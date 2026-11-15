@@ -12,7 +12,11 @@ import {
   resetProviderShareStoreForTests,
 } from '@/features/provider-share/providerShareStore';
 
-vi.mock('@/hooks/useDeviceProviders', () => ({ getCachedDeviceProviders: () => null }));
+vi.mock('@/hooks/useDeviceProviders', () => ({
+  getCachedDeviceProviders: () => null,
+  // This favorites fixture has no cached subscription catalog to refresh.
+  isSubscriptionShareCatalogStale: () => false,
+}));
 vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: vi.fn(async () => {}) }));
 const share: ProviderShareReceived = {
   shareId: 's1', memberId: 'm1', providerId: 'anthropic', providerLabel: 'Anthropic', hostDeviceId: 'host',
@@ -104,12 +108,13 @@ it('does not run an earlier account retry after switching owners', async () => {
   readSnapshot = vi.fn(async () => { throw new Error('unavailable'); });
   ensureProviderShareReceivedStarted();
   await tick();
-  expect(readSnapshot).toHaveBeenCalledTimes(1);
+  // Initial timestamped snapshot + the owner/favorite membership read.
+  expect(readSnapshot).toHaveBeenCalledTimes(2);
   setDataOwnerGeneration('other', 2);
   setModelFavoritesOwner('other');
   addModelFavorite({ providerId: providerShareFavoriteSource(share), modelId: 'opus', agent: 'cc' });
   await vi.advanceTimersByTimeAsync(60_000);
-  expect(readSnapshot).toHaveBeenCalledTimes(1);
+  expect(readSnapshot).toHaveBeenCalledTimes(2);
   expect(listModelFavorites()).toHaveLength(1);
 });
 
@@ -148,7 +153,7 @@ it('recovers regions hinted by the remote task device favorites, once per accoun
   ensureProviderShareReceivedStarted();
   await tick();
   await tick();
-  expect(commands.map((item) => item.action)).toEqual(['received', 'received-snapshot']);
+  expect(commands.map((item) => item.action)).toEqual(['received-snapshot', 'received-snapshot']);
   commands = [];
   snapshot = { ...snapshot, confirmedRegions: ['global', 'cn'] };
   requestProviderShareFavoriteRegions(['cn']);

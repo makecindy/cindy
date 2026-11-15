@@ -21,6 +21,24 @@ export interface DurableOutboxRecord {
   /** Canonical realm-qualified auth accountKey; unqualified pre-release rows are never claimed. */
   accountId: string;
   deviceId: string;
+  /** Direct Chat Server destination; an empty deviceId never routes to a computer. */
+  chat?: {
+    roomId: string;
+    input: import('../chat/chatServerClient').ChatSendInput;
+    body?: import('../chat/chatServerClient').ChatSendBody;
+    messageId?: string;
+    /** Optional second stage; absent on all pre-topic records. */
+    shareToMain?: {
+      state: 'pending' | 'failed' | 'sent' | 'unavailable';
+      body?: import('../chat/chatServerClient').ChatSendBody;
+      messageId?: string | null;
+      error?: 'THREAD_SHARE_FAILED' | 'SHARE_UNAVAILABLE';
+    };
+    quote?: import('@cindy/maker-shared/botGroupChat').BotGroupQuoteView;
+    after: number;
+    /** Server cursor; `after` above is only the local displayed row position. */
+    afterServerSequence?: string;
+  };
   /** Permanent resource identity for sends queued from a companion, including after page exit/restart. */
   resourceRef?: import('@cindy/device-link').RemoteResourceRef;
   /** Stable disk/file identity when a cancelled creation is retried with a fresh session ID. */
@@ -244,7 +262,7 @@ export function createDurableOutbox(storage: OutboxStorage, reconcileDraft?: (
       return ready;
     },
     async add(record: DurableOutboxRecord) {
-      if (!record.accountId || !record.deviceId)
+      if (!record.accountId || (!record.deviceId && !validChatDestination(record)))
         throw new Error("OUTBOX_OWNER_REQUIRED");
       await store.ready();
       if (records.some((r) => keyFor(r) === keyFor(record)))
@@ -279,7 +297,7 @@ function isLoadableOutboxRecord(
   const row = record as DurableOutboxRecord;
   return row.version === 1
     && row.accountId === owner
-    && !!row.deviceId
+    && (row.chat === undefined ? !!row.deviceId : validChatDestination(row))
     && !!row.item?.sessionId
     && !!row.item.clientId
     && (row.resourceRef === undefined || (row.resourceRef !== null
@@ -297,6 +315,26 @@ function isLoadableOutboxRecord(
     && ["queued", "sending", "confirming", "host-owned", "failed"].includes(row.state)
     && Number.isFinite(row.createdAt)
     && Array.isArray(row.item.attachmentSlots);
+}
+
+function validChatDestination(row: DurableOutboxRecord): boolean {
+  const chat = row.chat;
+  const share = chat?.shareToMain;
+  if (share && ((chat?.messageId !== undefined && (typeof chat.messageId !== 'string' || !chat.messageId))
+    || !chat?.input?.threadRootId || !['pending', 'failed', 'sent', 'unavailable'].includes(share.state)
+    || (share.state === 'sent' && !chat.messageId)
+    || (share.error !== undefined && !['THREAD_SHARE_FAILED', 'SHARE_UNAVAILABLE'].includes(share.error))
+    || (share.messageId !== undefined && share.messageId !== null && typeof share.messageId !== 'string')
+    || (share.body && (!chat.messageId || share.body.threadRootId || share.body.operationId !== `thread-share:${chat.messageId}`
+      || !Array.isArray(share.body.content) || !Array.isArray(share.body.mentions))))) return false;
+  if (chat?.afterServerSequence !== undefined && !/^[1-9][0-9]{0,18}$/.test(chat.afterServerSequence)) return false;
+  return !!chat && row.deviceId === '' && typeof chat.roomId === 'string' && !!chat.roomId
+    && row.item?.sessionId === chat.roomId && chat.input?.clientId === row.item.clientId
+    && typeof chat.input.text === 'string' && typeof chat.input.mentions?.all === 'boolean'
+    && Array.isArray(chat.input.mentions.botIds) && chat.input.mentions.botIds.every(id => typeof id === 'string')
+    && (chat.input.threadRootId === undefined || typeof chat.input.threadRootId === 'string')
+    && (!chat.body || (chat.body.operationId === row.item.clientId
+      && Array.isArray(chat.body.content) && Array.isArray(chat.body.mentions)));
 }
 
 export type DurableOutboxStore = ReturnType<typeof createDurableOutbox>;

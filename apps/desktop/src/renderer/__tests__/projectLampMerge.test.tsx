@@ -53,8 +53,7 @@ function props(): ProjectNodeProps {
     onCreateInProject: vi.fn(),
     onOpenConversationSearch: vi.fn(),
     onOpenInExplorer: vi.fn(),
-    onLinkCodexProject: vi.fn(),
-    linkingCodexProject: false,
+    onImportFromTools: vi.fn(),
     onBrowseFiles: vi.fn(),
     onArchiveAll: vi.fn(),
   };

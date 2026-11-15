@@ -8,6 +8,34 @@ const metadata = {
   transferRequired: true,
 };
 describe("shared file read policy", () => {
+  // Unit: old peers omit video MIME mappings; preserve both authorization and the
+  // WeakMap-bound staging lease when reconciling metadata with downloaded bytes.
+  // Unit: retained file-channel streams precede OSS; old hosts keep the fallback.
+  it.each(['stream', 'old-host', 'cancel'] as const)('selects a negotiated player stream: %s', async mode => {
+    const prepared = { ossKey: '', size: 2_000_000, mimeType: 'video/mp4', transferRequired: true };
+    const stream = { ...prepared, transferRequired: false };
+    const abort = new AbortController();
+    const fallback = vi.fn(async () => ({ ...prepared, ossKey: 'cloud' }));
+    const discard = vi.fn(), peer = vi.fn();
+    const pending = readDeviceFile({ prepare: async () => prepared, stream: true, peer, fallback, discard, signal: abort.signal,
+      peerStream: async () => { if (mode === 'cancel') abort.abort(); return mode === 'old-host' ? null : stream; } });
+    if (mode === 'cancel') { await expect(pending).rejects.toThrow('CANCELLED'); expect(discard).toHaveBeenCalledWith(stream); }
+    else expect(await pending).toEqual(mode === 'stream' ? stream : { ...prepared, ossKey: 'cloud' });
+    expect(peer).not.toHaveBeenCalled();
+    expect(fallback).toHaveBeenCalledTimes(mode === 'old-host' ? 1 : 0);
+  });
+  it.each(['same', 'version', 'size', 'unversioned', 'explicit-type'] as const)(
+    'reconciles generic peer media only for the authorized version: %s', async mode => {
+      const prepared = { ...metadata, version: 'a'.repeat(64), mimeType: 'video/mp4' };
+      const direct = { ossKey: '', size: prepared.size + (mode === 'size' ? 1 : 0),
+        version: mode === 'unversioned' ? undefined : (mode === 'version' ? 'b' : 'a').repeat(64),
+        mimeType: mode === 'explicit-type' ? 'text/html' : 'application/octet-stream' };
+      const expectedMime = mode === 'same' ? prepared.mimeType : direct.mimeType;
+      const result = await readDeviceFile({ prepare: async () => prepared, peer: async () => direct, fallback: vi.fn() });
+      expect(result).toBe(direct);
+      expect(result.mimeType).toBe(expectedMime);
+    },
+  );
   it.each(['cancelled', 'superseded'])('reopens from cache and refreshes independently of a %s read', async mode => {
     const cached = { ...metadata, version: 'a'.repeat(64), inlineBase64: 'YQ==' };
     const fresh = { ...cached, version: 'b'.repeat(64), transferRequired: false, inlineBase64: 'Yg==' };

@@ -7,7 +7,7 @@ import { modelManagementState } from './modelManagementState';
  * 设计(2026-07 模型供应商重构定稿 + 2026-07-28 启用/显示双轴交互定稿):
  *   - 列表 = 该供应商**所有 agent 的模型并集**(按 model id 合并),不再按 CLI 分 Tab。
  *   - 三个概念钉死到三种互不借用的表达上(用户裁决):
- *       · **开关 = 显示轴**(仅对话模型行):是否出现在模型选择面板 —— 纯陈列,全页
+ *       · **开关 = 显示轴**:是否出现在对应模型选择面板 —— 纯陈列,全页
  *         唯一一种开关语义。隐藏的模型被显式点名 / 自动兜底时仍可用。存储 =
  *         renderer modelVisibilityPrefs(不变)。
  *       · **高级设置 = 停用动作**(所有行):停用 = 准入关,不可被任何
@@ -19,7 +19,7 @@ import { modelManagementState } from './modelManagementState';
  *         "下沉"是停用在整个设置页的统一隐喻(左栏停用的供应商同样沉底)。
  *   - **能力模型组**(图像/音频/视频/向量/其它端点):不能当 agent 用,永远不进对话模型
  *     选择面板(modelList.ts 硬排除)。图像/视频走同一套显示开关,控制作图/视频功能
- *     是否列出该型号;音频/向量仍只有「⋯」停用。
+ *     是否列出该型号;语音合成复用显示开关控制伙伴朗读候选，其余音频/向量只有停用。
  *   - 普通列表只有一个显示开关;开启时只选一个推荐引擎，逐引擎控制进入高级详情。
  *   - 用途筛选与厂商分组独立;同一家族按型号数字倒序,不冒充上线时间。
  *
@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown, Info, Lock, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Tip } from '@/components/ui/tooltip';
@@ -43,8 +44,6 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
@@ -71,6 +70,8 @@ import {
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
 import { LocalPackagingTag } from './LocalPackagingTag';
+import { getModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
+import { getProviderModelEffort, getProviderModelFast, getProviderModelThinking, useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { ModelAdvancedDrawer } from './ModelAdvancedDrawer';
 import {
   groupModelsForManagement,
@@ -86,8 +87,10 @@ import {
   pickRecommendedAgent,
   nativeModelAgents,
   resolveModelIconKind,
+  markedSelectionAliasGroups, type SelectionAliasPreferences,
 } from '@cindy/model-providers';
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
+import { modelCompactionTarget } from '../../../shared/modelContextLimit';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -117,6 +120,7 @@ const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'stt',
   'realtime',
   'embedding',
+  'decision',
   'compression',
   'other',
 ]);
@@ -159,6 +163,8 @@ export function loadCollapsedMap(): Record<string, boolean> {
 
 /** 并集行:同一模型跨 agent 合并;byAgent 保留各 agent 的目录条目(id / 元数据可能不同)。 */
 export interface UnionModelRow {
+  /** Real member rows for management and precise advanced edits. Never discard their raw IDs. */
+  aliasRows?: readonly UnionModelRow[];
   /** 规范化 id(剥掉桥接命名空间前缀后的 canonical key;仅用于合并与搜索,写开关用 byAgent 的真实 id)。 */
   id: string;
   name: string;
@@ -174,15 +180,13 @@ export interface UnionModelRow {
  * 否则并集出现两行、各自被误标单端。
  */
 function canonicalModelKey(provider: ProviderView, agent: AgentKind, id: string): string {
-  for (const prefix of provider.routing[agent]?.modelPrefixes ?? []) {
-    if (id.startsWith(prefix)) return id.slice(prefix.length);
-  }
-  return id;
+  return modelCompactionTarget(provider, agent, id).modelId;
 }
 
 /** 构建并集(导出供单测):行序 = 第一个 agent 的目录序,后续 agent 独占模型追加其后;
  *  专属媒体清单(imageModels/videoModels,不挂 agent)以合成能力行追加在最后。 */
-export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
+export function buildUnionRows(provider: ProviderView,
+  aliasPreferences?: (agent: AgentKind, modelId: string) => SelectionAliasPreferences): UnionModelRow[] {
   const rows: UnionModelRow[] = [];
   const byKey = new Map<string, UnionModelRow>();
   for (const agent of provider.agents) {
@@ -279,17 +283,32 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
     byKey.set(m.id, row);
     rows.push(row);
   }
-  return rows;
+  if (!aliasPreferences) return rows;
+  const groups = markedSelectionAliasGroups(provider, aliasPreferences);
+  const emitted = new Set<string>();
+  return rows.flatMap((row) => {
+    const group = groups.find((g) => Object.values(g.members).some((models) => models?.some((m) => m.id === row.id)));
+    if (!group) return [row];
+    if (emitted.has(group.keyModelId)) return [];
+    emitted.add(group.keyModelId);
+    const aliasRows = rows.filter((candidate) => Object.values(group.members).some((models) => models?.some((m) => m.id === candidate.id)));
+    if (aliasRows.length < 2) return aliasRows;
+    const preferred = aliasRows.find((r) => r.id === group.keyModelId) ?? aliasRows[0];
+    const byAgent: UnionModelRow['byAgent'] = {};
+    for (const agent of provider.agents) byAgent[agent] = preferred.byAgent[agent] ?? aliasRows.find((r) => r.byAgent[agent])?.byAgent[agent];
+    return [{ ...preferred, id: group.keyModelId, aliasRows, byAgent,
+      avail: provider.agents.filter((agent) => byAgent[agent]) }];
+  });
 }
 
 function rowHasVisibilitySwitch(row: UnionModelRow, userProvider: boolean): boolean {
   if (!isCapabilityRow(row, userProvider)) return true;
   return managementKindsOfRow(row, userProvider).some(
-    (kind) => kind === 'image' || kind === 'video',
+    (kind) => kind === 'image' || kind === 'video' || kind === 'tts',
   );
 }
 
-/** Image/video switches follow media readiness, not the chat OAuth connection. */
+/** Media switches follow their own channel readiness, not the chat OAuth connection. */
 export function canWriteModelVisibility(options: {
   connected: boolean;
   suspended?: boolean;
@@ -352,6 +371,8 @@ export function modelVisibilityTargets(
   row: UnionModelRow,
   enabled: boolean,
 ) {
+  if (row.aliasRows) return row.aliasRows.flatMap((member) => member.avail.flatMap((agent) =>
+    member.byAgent[agent] ? [{ agent, modelId: member.byAgent[agent]!.id }] : []));
   const userProvider = provider.source === 'user';
   if (rowHasVisibilitySwitch(row, userProvider) && isCapabilityRow(row, userProvider)) {
     return row.avail.flatMap((agent) => {
@@ -393,6 +414,7 @@ function rowAnyEnabled(providerId: string, row: UnionModelRow, userProvider: boo
 
 /** 该行全部 avail agent 的真实目录 id(桥接投影两端 id 不同,写停用要两端一起写)。 */
 function rowModelIds(row: UnionModelRow): string[] {
+  if (row.aliasRows) return [...new Set(row.aliasRows.flatMap(rowModelIds))];
   const ids = new Set<string>();
   for (const a of row.avail) {
     const m = row.byAgent[a];
@@ -443,6 +465,7 @@ export function managementKindOfRow(row: UnionModelRow, userProvider: boolean): 
 export function UnifiedModelList({
   provider,
   onRefresh,
+  onAddSpeechModels,
   refreshing,
   refreshDisabled,
   refreshIdleLabel,
@@ -455,6 +478,7 @@ export function UnifiedModelList({
   provider: ProviderView;
   /** 「刷新模型」；内置供应商走各自真源，自定义供应商走 additions-only 发现。 */
   onRefresh?: () => void;
+  onAddSpeechModels?: () => void;
   refreshing?: boolean;
   /** 其它供应商正在刷新时禁用，避免并发刷新造成反馈归属不清。 */
   refreshDisabled?: boolean;
@@ -586,11 +610,22 @@ export function UnifiedModelList({
   // 订阅可见性 version:开关变更后 counts memo 必须重算(否则「全部开启/关闭」
   // 按钮方向与计数陈旧)。行内开关读取不 memo,天然新鲜;只有 counts 依赖它。
   const visibilityVersion = useModelVisibilityVersion();
+  const aliasEngineVersion = useModelEnginePrefsVersion();
+  const aliasMemoryVersion = useProviderModelMemoryVersion();
 
   const selectionAvailable = provider.connected && !provider.suspended;
   const multiAgent = provider.agents.length > 1;
-  const unionRows = useMemo(() => buildUnionRows(provider), [provider]);
-  const currentAdvancedRow = unionRows.find((row) => row.id === advancedRow?.id) ?? advancedRow;
+  const unionRows = useMemo(() => buildUnionRows(provider, (agent, modelId) => ({
+    engine: getModelEngineOverride(provider.id, modelId),
+    customThinking: getProviderModelThinking(agent, provider.id, modelId) !== undefined,
+    customPrice: (() => { const model = provider.models[agent]!.find((m) => m.id === modelId)!;
+      const p = pricePresentationOf(agent, model); return p?.kind === 'priced' && p.current.source === 'user-override'; })(),
+    effort: getProviderModelEffort(agent, provider.id, modelId),
+    fast: getProviderModelFast(agent, provider.id, modelId),
+    visible: isModelEnabled(agent, provider.id, provider.models[agent]!.find((m) => m.id === modelId)!),
+  })), [provider, visibilityVersion, aliasEngineVersion, aliasMemoryVersion, pricePresentationOf]);
+  const currentAdvancedRow = unionRows.find((row) => row.id === advancedRow?.id ||
+    row.aliasRows?.some((member) => member.id === advancedRow?.id)) ?? advancedRow;
 
   const rowDisabledEffective = useCallback(
     (row: UnionModelRow) => pendingDisabled[row.id] ?? isRowDisabled(row),
@@ -611,6 +646,7 @@ export function UnifiedModelList({
     if (!focusModelId) return null;
     return (
       unionRows.find((row) => {
+        if (row.aliasRows?.some((m) => m.avail.some((a) => (!focusAgent || a === focusAgent) && m.byAgent[a]?.id === focusModelId))) return true;
         if (focusAgent) return row.byAgent[focusAgent]?.id === focusModelId;
         return row.avail.some((agent) => row.byAgent[agent]?.id === focusModelId);
       }) ?? null
@@ -636,15 +672,16 @@ export function UnifiedModelList({
   /** 写停用轴:乐观覆盖 + IPC;失败回滚并提示(错误 = 发生了什么 + 下一步)。 */
   const setRowDisabled = useCallback(
     (row: UnionModelRow, disabled: boolean) => {
-      if (!disabled && !selectionAvailable) return;
+      if (!disabled && !selectionAvailable) return Promise.resolve(false);
       setPendingDisabled((prev) => ({ ...prev, [row.id]: disabled }));
-      void window.electronAPI.maker
+      return window.electronAPI.maker
         .setModelDisable({
           kind: 'model',
           providerId: provider.id,
           modelIds: rowModelIds(row),
           disabled,
         })
+        .then(() => true)
         .catch(() => {
           setPendingDisabled((prev) => {
             // 只回滚仍属于本次请求的乐观态:IPC 在途期间用户可能又点了反向操作
@@ -657,6 +694,7 @@ export function UnifiedModelList({
             return next;
           });
           toast.error(t('settings.providers.models.accessWriteFailed'));
+          return false;
         });
     },
     [provider.id, selectionAvailable, t],
@@ -749,7 +787,7 @@ export function UnifiedModelList({
   // 分组沿用现有口径:用每行第一个可用 agent 的目录条目作代表参与分组。
   const { groups, hiddenRows, disabledRows } = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const searched = q ? unionRows.filter((r) => matchesModelName(r, q, t)) : unionRows;
+    const searched = q ? unionRows.filter((r) => matchesModelName(r, q, t) || r.aliasRows?.some((m) => matchesModelName(m, q, t))) : unionRows;
     const matched =
       showKindFilter && kindFilter !== 'all'
         ? searched.filter((r) =>
@@ -935,7 +973,7 @@ export function UnifiedModelList({
         : explicitIcon === 'codex'
           ? 'openai'
           : explicitIcon === 'cindy'
-            ? 'xd'
+            ? 'cindy'
             : brand?.logoKind;
     const paymentRequired = isRowPaymentRequired(row);
     // 能力注记:多 agent 供应商里缺少任一通道就标(单 agent 供应商头部已说明);
@@ -967,7 +1005,7 @@ export function UnifiedModelList({
             <ProviderLogoMark
               providerId={provider.id}
               routing={provider.routing}
-              {...(logoKind ? { logoKind } : {})}
+              logoKind={logoKind ?? provider.logoKind}
               size={19}
             />
           ) : (
@@ -1045,7 +1083,7 @@ export function UnifiedModelList({
             位置的 1M / 128K 缩写在真实数据里是歧义的(1,000,000 /
             1,048,576 / 1,050,000 都印成 1M)。 */}
         {rowAdvancedButton(row)}
-        {/* 音频/向量能力行没有显示开关,占同宽空位保证列对齐。图像/视频与对话同行。 */}
+        {/* 其余音频/向量能力行没有显示开关。语音合成、图像/视频复用显示轴。 */}
         {capability && !rowHasVisibilitySwitch(row, provider.source === 'user') && (
           <span className="w-9 shrink-0" />
         )}
@@ -1110,7 +1148,23 @@ export function UnifiedModelList({
                 <Spinner icon={RefreshCw} size={14} spinning={refreshing} />
               </button>
             )}
+            {/* Arrangement is a view field, not a menu action (DESIGN.md §4). */}
             {unionRows.length > 0 && (
+              <Select data-settings-search-action="Choose how the provider model list is arranged"
+                label={t('settings.providers.models.manage.arrange')}
+                size="compact"
+                className="shrink-0"
+                value={managementView}
+                onValueChange={(value) => {
+                  if (value === 'brand' || value === 'model') setManagementView(value);
+                }}
+                options={[
+                  { value: 'brand', label: t('settings.providers.models.manage.byBrand') },
+                  { value: 'model', label: t('settings.providers.models.manage.byName') },
+                ]}
+              />
+            )}
+            {(unionRows.length > 0 || onAddSpeechModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="secondary" size="sm" compact type="button" className="shrink-0">
@@ -1119,44 +1173,37 @@ export function UnifiedModelList({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>
-                    {t('settings.providers.models.manage.arrange')}
-                  </DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={managementView}
-                    onValueChange={(value) => {
-                      if (value === 'brand' || value === 'model') setManagementView(value);
-                    }}
-                  >
-                    <DropdownMenuRadioItem value="brand">
-                      {t('settings.providers.models.manage.byBrand')}
-                    </DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="model">
-                      {t('settings.providers.models.manage.byName')}
-                    </DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel>
-                    {t('settings.providers.models.manage.selection')}
-                  </DropdownMenuLabel>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable || selectedCount === writableRows.length}
-                    onSelect={() => handleBulk('show')}
-                  >
-                    {t('settings.providers.models.manage.showAll')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable || selectedCount === 0}
-                    onSelect={() => handleBulk('hide')}
-                  >
-                    {t('settings.providers.models.manage.hideAll')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable}
-                    onSelect={() => handleBulk('reset')}
-                  >
-                    {t('settings.providers.models.manage.reset')}
-                  </DropdownMenuItem>
+                  {onAddSpeechModels && (
+                    <DropdownMenuItem onSelect={onAddSpeechModels}>
+                      {t('settings.providers.speechSetup.add')}
+                    </DropdownMenuItem>
+                  )}
+                  {unionRows.length > 0 && (
+                    <>
+                      {onAddSpeechModels && <DropdownMenuSeparator />}
+                      <DropdownMenuLabel>
+                        {t('settings.providers.models.manage.selection')}
+                      </DropdownMenuLabel>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable || selectedCount === writableRows.length}
+                        onSelect={() => handleBulk('show')}
+                      >
+                        {t('settings.providers.models.manage.showAll')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable || selectedCount === 0}
+                        onSelect={() => handleBulk('hide')}
+                      >
+                        {t('settings.providers.models.manage.hideAll')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable}
+                        onSelect={() => handleBulk('reset')}
+                      >
+                        {t('settings.providers.models.manage.reset')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -1454,6 +1501,8 @@ export function UnifiedModelList({
       <ModelAdvancedDrawer
         provider={provider}
         row={currentAdvancedRow}
+        selectedMemberId={advancedRow?.id}
+        onSelectMember={setAdvancedRow}
         open={advancedOpen && currentAdvancedRow !== null}
         onOpenChange={(next) => {
           setAdvancedOpen(next);
@@ -1461,10 +1510,9 @@ export function UnifiedModelList({
         pricePresentationOf={pricePresentationOf}
         disabled={currentAdvancedRow ? rowDisabledEffective(currentAdvancedRow) : false}
         paymentRequired={currentAdvancedRow ? isRowPaymentRequired(currentAdvancedRow) : false}
-        onDisable={(row) => {
+        onDisable={async (row) => {
           // 抽屉里的停用/启用与列表行同一条写入路径(乐观覆盖 + IPC),不另开一套。
-          setRowDisabled(row, !rowDisabledEffective(row));
-          setAdvancedOpen(false);
+          if (await setRowDisabled(row, !rowDisabledEffective(row))) setAdvancedOpen(false);
         }}
         {...(provider.id === MANAGED_OLLAMA_PROVIDER_ID
           ? {

@@ -102,7 +102,7 @@ describe.skipIf(!binary)('first-profile gateway/API startup with native Codex', 
     const { DesktopCodexAuthAdapter, getCodexHome } = await import('../auth-adapters.js');
     const { captureCodexLocalAuthPolicy } = await import('../provider-route.js');
     const { setCustomProviders } = await import('../active-catalog.js');
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
     const diagnostics: unknown[] = [];
     const nativePids: number[] = [];
     const testLogger: Logger = { ...logger, debug: (...args) => { diagnostics.push(args); }, warn: (...args) => { diagnostics.push(args); }, error: (...args) => { diagnostics.push(args); }, child: () => testLogger };

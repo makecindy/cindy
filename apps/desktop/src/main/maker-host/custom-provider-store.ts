@@ -1,4 +1,4 @@
-import { pickModelMetadata, MODEL_METADATA_FIELDS } from '@cindy/model-providers';
+import { pickModelMetadata, MODEL_METADATA_FIELDS, PROVIDER_VIDEO_APIS, isProviderVideoApi, validDiscoveredModelSource } from '@cindy/model-providers';
 import {
   mergeDiscoveredRuntimeModels,
   validModelMetadata,
@@ -234,8 +234,8 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (r.imageApi !== undefined && r.imageApi !== 'openai-images') {
     return invalid(`runtime '${agent}' imageApi must be openai-images`);
   }
-  if (r.videoApi !== undefined && r.videoApi !== 'xai-videos') {
-    return invalid(`runtime '${agent}' videoApi must be xai-videos`);
+  if (r.videoApi !== undefined && !isProviderVideoApi(r.videoApi)) {
+    return invalid(`runtime '${agent}' videoApi must be one of ${PROVIDER_VIDEO_APIS.join(', ')}`);
   }
   if (!Array.isArray(r.models)) return invalid(`runtime '${agent}' models must be an array`);
   for (const m of r.models) {
@@ -255,8 +255,12 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       Object.entries(mm.discoveredCost).some(([key, value]) =>
         !['input', 'output', 'cacheRead', 'cacheWrite'].includes(key) || typeof value !== 'number' || !Number.isFinite(value) || value < 0)
     )) return invalid(`runtime '${agent}' discoveredCost invalid`);
+    if (mm.opaqueModelId !== undefined && mm.opaqueModelId !== true) return invalid(`runtime '${agent}' opaqueModelId invalid`);
+    if (mm.discoveredSource !== undefined && !validDiscoveredModelSource(mm.discoveredSource)) return invalid(`runtime '${agent}' discoveredSource invalid`);
     if (mm.discoveredMetadata !== undefined && !validModelMetadata(mm.discoveredMetadata))
       return invalid(`runtime '${agent}' discoveredMetadata invalid`);
+    if (mm.supportsUltrafastMode !== undefined && typeof mm.supportsUltrafastMode !== 'boolean')
+      return invalid(`runtime '${agent}' model.supportsUltrafastMode must be a boolean`);
     if (
       mm.contextWindow !== undefined &&
       (typeof mm.contextWindow !== 'number' ||
@@ -271,6 +275,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
       return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
     }
+    if (mm.interfaceId !== undefined && (typeof mm.interfaceId !== 'string' || !mm.interfaceId.trim() || mm.interfaceId.length > 256)) return invalid(`runtime '${agent}' model.interfaceId invalid`);
     if (mm.api !== undefined && !isPiModelApi(mm.api)) return invalid(`runtime '${agent}' model.api invalid`);
     if (mm.piApi !== undefined && (agent !== 'pi' || !isPiModelApi(mm.piApi))) {
       return invalid(`runtime '${agent}' model.piApi invalid`);
@@ -595,8 +600,13 @@ function normalizeRuntime(
       name: m.name.trim(),
       ...pickModelMetadata({ ...m, name: m.name.trim() }),
       ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
+      ...(m.opaqueModelId === true ? { opaqueModelId: true as const } : {}),
+      ...(validDiscoveredModelSource(m.discoveredSource) ? { discoveredSource: m.discoveredSource } : {}),
+      ...(typeof m.supportsUltrafastMode === 'boolean'
+        ? { supportsUltrafastMode: m.supportsUltrafastMode } : {}),
       ...(m.discoveredCost ? { discoveredCost: m.discoveredCost } : {}),
       ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
+      ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
       ...(m.api ? { api: m.api } : {}),
       ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
       ...(m.route
@@ -641,7 +651,7 @@ function normalizeRuntime(
     out.supportsImageGeneration = true;
   }
   if (rt.imageApi === 'openai-images') out.imageApi = rt.imageApi;
-  if (rt.videoApi === 'xai-videos') out.videoApi = rt.videoApi;
+  if (isProviderVideoApi(rt.videoApi)) out.videoApi = rt.videoApi;
   if (agent !== 'pi' && rt.requestPath && rt.requestPath.trim()) {
     out.requestPath = rt.requestPath.trim();
   }
@@ -716,8 +726,18 @@ function invalidateEditedProviderMetadata(
     const before = previous.runtimes[agent];
     const after = next.runtimes[agent];
     if (!before || !after) continue;
+    const context = (runtime: CustomProviderRuntimeConfig, auth: CustomProviderConfig['auth']) =>
+      JSON.stringify([runtime.baseUrl, runtime.modelsUrl, runtime.headers, runtime.wireProtocol, runtime.requestPath,
+        auth?.method === 'apiKey' || !auth ? null : auth]);
+    if (context(before, previous.auth) !== context(after, next.auth)) {
+      after.models = after.models.map(({ discoveredSource: _source, ...model }) => model);
+    }
     after.models = after.models.map(model => {
       const old = before.models.find(row => row.id === model.id);
+      if (old && routeKey(before, old) !== routeKey(after, model) && model.discoveredSource) {
+        const { discoveredSource: _source, ...rest } = model;
+        model = rest;
+      }
       if (!old?.discoveredCost || routeKey(before, old) === routeKey(after, model) ||
           JSON.stringify(old.discoveredCost) !== JSON.stringify(model.discoveredCost)) return model;
       const copy = { ...model };
@@ -764,6 +784,26 @@ export function mergeDiscoveredModelsIntoConfig(
         ...config,
         runtimes: { ...config.runtimes, [agent]: { ...rt, models } },
       };
+}
+
+/** Called only after an explicit native login commits a different identity. */
+export function clearCodexAccountUltrafast(config: CustomProviderConfig): CustomProviderConfig {
+  const runtime = config.runtimes.codex;
+  if (config.auth?.native !== 'codex' || !runtime) return config;
+  return { ...config, runtimes: { ...config.runtimes, codex: {
+    ...runtime, models: runtime.models.map(model => ({ ...model, supportsUltrafastMode: false })),
+  } } };
+}
+
+/** A CAS miss/owner switch rejects the replacement login instead of keeping an old grant. */
+export async function revokeCodexAccountUltrafast(
+  providerId: string,
+  sameOwner: () => boolean,
+): Promise<boolean> {
+  if (!sameOwner()) return false;
+  const previous = await getCustomProvider(providerId);
+  if (!sameOwner() || !previous || previous.auth?.native !== 'codex') return false;
+  return updateCustomProviderIfUnchanged(providerId, previous, clearCodexAccountUltrafast(previous));
 }
 
 /** 安全解析 auth 列 JSON（坏数据 / 结构不完整兜底为 undefined = API key 历史形态）。 */
@@ -817,6 +857,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               id: String(m.id),
               name: String(m.name ?? ''),
               ...pickModelMetadata(m),
+              ...(typeof m.interfaceId === 'string' && m.interfaceId.trim() && m.interfaceId.length <= 256 ? { interfaceId: m.interfaceId } : {}),
               ...(isPiModelApi(m.api) ? { api: m.api } : {}),
               ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
               ...(route ? { route } : {}),
@@ -824,9 +865,13 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
                 ? { discoveredCost: Object.fromEntries(Object.entries(m.discoveredCost).filter(([key, value]) =>
                   ['input', 'output', 'cacheRead', 'cacheWrite'].includes(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0)) }
                 : {}),
+              ...(m.opaqueModelId === true ? { opaqueModelId: true as const } : {}),
+              ...(validDiscoveredModelSource(m.discoveredSource) ? { discoveredSource: m.discoveredSource } : {}),
               ...(validModelMetadata(m.discoveredMetadata)
                 ? { discoveredMetadata: m.discoveredMetadata }
                 : {}),
+              ...(typeof m.supportsUltrafastMode === 'boolean'
+                ? { supportsUltrafastMode: m.supportsUltrafastMode } : {}),
               ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
               ...(typeof m.contextWindow === 'number' &&
               Number.isFinite(m.contextWindow) &&
@@ -864,7 +909,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       entry.supportsImageGeneration = true;
     }
     if (r.imageApi === 'openai-images') entry.imageApi = r.imageApi;
-    if (r.videoApi === 'xai-videos') entry.videoApi = r.videoApi;
+    if (isProviderVideoApi(r.videoApi)) entry.videoApi = r.videoApi;
     if (agent !== 'pi' && isProviderRequestPath(r.requestPath)) {
       entry.requestPath = r.requestPath;
     }
@@ -954,22 +999,38 @@ export async function updateCustomProvider(
   now: number = Date.now(),
 ): Promise<CustomProviderConfig | null> {
   const db = getDbClient().drizzle;
-  const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
-  if (!existing) return null;
-  const c = invalidateEditedProviderMetadata(
-    rowToConfig(existing),
-    normalizeConfig({ ...config, id }),
-  );
-  await db
-    .update(customProviders)
-    .set({
-      name: c.name,
-      runtimes: JSON.stringify(c.runtimes),
-      auth: c.auth ? JSON.stringify(c.auth) : null,
-      updatedAt: nextUpdatedAt(now, existing.updatedAt),
-    })
-    .where(eq(customProviders.id, id));
-  return c;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
+    if (!existing) return null;
+    const previous = rowToConfig(existing);
+    const c = invalidateEditedProviderMetadata(previous, normalizeConfig({ ...config, id }));
+    const nativeAccount = previous.auth?.native === 'codex' || c.auth?.native === 'codex';
+    if (nativeAccount && c.runtimes.codex) {
+      // Settings snapshots cannot grant or revoke account-discovered capabilities.
+      // Only the main-owned discovery/revocation CAS path may change this field.
+      const models = new Map(previous.runtimes.codex?.models.map(model => [model.id, model]));
+      c.runtimes.codex.models = c.runtimes.codex.models.map(model => ({
+        ...model,
+        supportsUltrafastMode: previous.auth?.native === 'codex' && c.auth?.native === 'codex'
+          && models.get(model.id)?.supportsUltrafastMode === true,
+      }));
+    }
+    const result = await db
+      .update(customProviders)
+      .set({
+        name: c.name,
+        runtimes: JSON.stringify(c.runtimes),
+        auth: c.auth ? JSON.stringify(c.auth) : null,
+        updatedAt: nextUpdatedAt(now, existing.updatedAt),
+      })
+      .where(nativeAccount
+        ? and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt))
+        : eq(customProviders.id, id))
+      .run();
+    if (!nativeAccount || result.changes === 1) return c;
+    // A discovery/revocation raced this write. Merge against the latest grant.
+  }
+  throw new Error('Provider changed while saving settings; retry the update');
 }
 
 /**

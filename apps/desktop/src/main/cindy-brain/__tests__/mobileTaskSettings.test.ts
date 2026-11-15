@@ -42,6 +42,16 @@ function setup() {
   };
 }
 describe('native mobile task preferences', () => {
+  // unit: the remote user settings use the same choices as the local picker;
+  // saving full access keeps the Host-owned directory and returns the saved mode.
+  it('offers the ordinary three modes and persists an explicit full-access choice', async () => {
+    const h = setup(), before = h.service.read('plugin', 'installed-1');
+    expect(before.permissionModes).toEqual(['ask', 'auto', 'bypassPermissions']);
+    const result = await h.service.update('plugin', 'installed-1',
+      { expectedRevision: before.revision, permissionMode: 'bypassPermissions' }, () => {});
+    expect(result.config.permissionMode).toBe('bypassPermissions');
+    expect(h.get().workingDir).toBe('/private/selected-directory');
+  });
   it('never projects the private directory and pins complete validated configuration while preserving it', async () => {
     const h = setup(),
       before = h.service.read('plugin', 'installed-1');

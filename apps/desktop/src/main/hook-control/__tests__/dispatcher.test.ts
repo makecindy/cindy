@@ -5,12 +5,13 @@
  */
 
 import path from 'node:path';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Session,
+  TurnDispatchRejectedError,
   type AgentEvent,
   type AgentSessionHandle,
   type Capabilities,
@@ -19,20 +20,23 @@ import {
 import { observeHookTurn } from '../turnObserver';
 import {
   onChannelTurn,
-  publishChannelTurn,
-  publishProviderInitiatedTurn,
+  createChannelTurnObserver,
+  withChannelTurnSource,
 } from '../../maker-ipc/channelTurnSignal';
 import { bindRuntimeRecoveryNotice } from '../../im/shared/runtimeRecoveryNotice';
-import { setMainLocale } from '../../i18n';
+import { setMainLocale } from '../../i18n.desktop';
 
 import {
   HOOK_FEATURE_MESSAGE_OPS,
+  HOOK_FEATURE_IM_QUESTIONS,
   HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_TELEGRAM_CARD_OPS,
+  HOOK_FEATURE_TELEGRAM_QUESTION_OPS,
   HOOK_FEATURE_TELEGRAM_COMMANDS,
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
+  HOOK_FEATURE_X_MEDIA_RELAY,
   HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
   type TaskDispatchPayload,
@@ -267,6 +271,11 @@ function makeDispatcher(overrides?: {
   return { d, bindings, fr };
 }
 
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
+
 describe('任务失败原因进主日志(issue #5912)', () => {
   it('runner 抛出路由不可用: 主日志记 requestId / 渠道 / 原因, turn.end 带同一 errorMessage', async () => {
     const message =
@@ -379,13 +388,12 @@ describe('harness wake-ups of an IM-bound task (real Session)', () => {
       handle, capabilities: {} as Capabilities, logger, turnStallMs: 0 });
     // Production wiring: maker-ipc/sessionTurnObserver.ts.
     session.setTurnLifecycleObserver({
-      beforeProviderStart: () => publishChannelTurn(session, 'starting'),
-      onUndispatched: () => publishChannelTurn(session, 'undispatched'),
+      ...createChannelTurnObserver(session),
       onTerminal: () => undefined,
-      onProviderInitiatedTurn: () => { void publishProviderInitiatedTurn(session); },
     });
     return {
       session,
+      handle,
       continuations,
       /** One provider event; a terminal `done` without keepRunning flips the handle idle. */
       async emit(event: Partial<AgentEvent>, opts: { keepRunning?: boolean } = {}) {
@@ -405,13 +413,13 @@ describe('harness wake-ups of an IM-bound task (real Session)', () => {
     });
   }
 
-  it('relays each wake-up after the hook turn once, never desktop turns or subagent output', async () => {
-    const externalKey = 'telegram:group:bot:-100200:user-7:g1';
+  it.each(['telegram:group:bot:-100200:user-7:g1', 'slack:T:C:1.2'])(
+    '%s keeps desktop-started background results in Cindy after a channel turn', async (externalKey) => {
     let live: ReturnType<typeof wakeableSession> | undefined;
     const run = vi.fn(async (req: HookRunRequest): Promise<HookRunOutcome> => {
       live = wakeableSession(req.sessionId);
       const observer = hookSessionObserver(live.session, req.onTurnTerminal);
-      await live.session.send(req.prompt);
+      await live.session.send(req.prompt, { origin: { kind: 'user', surface: 'im' } });
       await observer.finished;
       return { status: 'ok', finalText: observer.finalText(), errorMessage: null, durationMs: 1 };
     });
@@ -476,6 +484,32 @@ describe('harness wake-ups of an IM-bound task (real Session)', () => {
       await h.emit({ type: 'done' });
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(turnEnds()).toHaveLength(3);
+      // Regression: a task created in Slack later runs tests from Cindy. Their completion
+      // wakes the provider without Session.send; it must inherit the desktop destination.
+      for (const report of ['Desktop test results.', 'Desktop final report.']) {
+        await h.emit({ type: 'text', data: { text: report, isFinal: true } });
+        await h.emit({ type: 'done' });
+        expect(turnEnds()).toHaveLength(3);
+      }
+      // A failed channel send must not turn the previous desktop work into channel output.
+      vi.mocked(h.handle.send).mockRejectedValueOnce(new TurnDispatchRejectedError('rejected'));
+      await expect(h.session.send('rejected channel request', { origin: { kind: 'user', surface: 'im' } }))
+        .resolves.toEqual({ accepted: false, reason: 'provider-rejected-before-dispatch' });
+      await expect(h.session.send('failed channel request', {
+        origin: { kind: 'user', surface: 'im' },
+        beforeProviderStart: async () => { throw new Error('preflight failed'); },
+      })).rejects.toThrow('preflight failed');
+      await h.emit({ type: 'text', data: { text: 'More desktop results.', isFinal: true } });
+      await h.emit({ type: 'done' });
+      expect(turnEnds()).toHaveLength(3);
+
+      // An actual new other-task request changes the destination again, including later wakes.
+      await withChannelTurnSource(h.session.id, 'other-task', () => h.session.send('other task request'));
+      await h.emit({ type: 'text', data: { text: 'Other task result.', isFinal: true } });
+      await h.emit({ type: 'done' });
+      await h.emit({ type: 'text', data: { text: 'Other task background result.', isFinal: true } });
+      await h.emit({ type: 'done' });
+      expect(turnEnds().slice(-2)).toEqual([[true, 'Other task result.'], [true, 'Other task background result.']]);
       expect(run).toHaveBeenCalledOnce();
       expect(c.ofType('turn.end').filter((frame) => frame.payload.background).every(
         (frame) => frame.payload.externalKey === externalKey && frame.payload.sessionId === h.session.id,
@@ -669,10 +703,10 @@ describe('normalizeTaskSource', () => {
       teamId: 'i'.repeat(200),
       teamName: 'n'.repeat(200),
       userText: 'u'.repeat(20_100),
-      threadContext: Array.from({ length: 25 }, (_, index) => ({
+      threadContext: Array.from({ length: 55 }, (_, index) => ({
         author: `author-${index}-${'a'.repeat(140)}`,
-        text: 't'.repeat(4_100),
-        isBot: index === 0,
+        text: 't'.repeat(9_000),
+        isBot: index === 5,
       })),
     });
 
@@ -680,14 +714,14 @@ describe('normalizeTaskSource', () => {
     expect(source.teamId).toHaveLength(128);
     expect(source.teamName).toHaveLength(160);
     expect(source.userText).toHaveLength(20_000);
-    expect(source.threadContext).toHaveLength(20);
+    expect(source.threadContext).toHaveLength(50);
     expect(source.threadContext?.[0]).toEqual({
       author: expect.any(String),
       text: expect.any(String),
       isBot: true,
     });
     expect(source.threadContext?.[0]?.author).toHaveLength(128);
-    expect(source.threadContext?.[0]?.text).toHaveLength(4_000);
+    expect(source.threadContext?.[0]?.text).toHaveLength(8_256);
     expect(source.threadContext?.[1]).not.toHaveProperty('isBot');
   });
 
@@ -719,9 +753,9 @@ describe('normalizeTaskSource', () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
-    // A 21-ancestor X chain ending in the current request: display keeps the oldest 20.
+    // A 51-ancestor X chain ending in the current request: display keeps the newest 50.
     const threadContext = [
-      ...Array.from({ length: 21 }, (_, index) => ({ messageId: `m${index}`, author: `@a${index}`, text: `ancestor ${index}` })),
+      ...Array.from({ length: 51 }, (_, index) => ({ messageId: `m${index}`, author: `@a${index}`, text: `ancestor ${index}` })),
       { messageId: 'current', author: '@user', text: '@bot is this true?' },
     ];
     d.handleDispatch('conn-1', dispatch({
@@ -729,15 +763,15 @@ describe('normalizeTaskSource', () => {
     }), c.send);
     await tick();
 
-    expect(fr.calls[0]?.source?.threadContext).toHaveLength(20);
-    expect(fr.calls[0]?.source?.threadContext?.at(-1)?.text).toBe('ancestor 19');
-    expect(fr.calls[0]?.autoReviewReplyTarget).toEqual({ author: '@a20', text: 'ancestor 20' });
+    expect(fr.calls[0]?.source?.threadContext).toHaveLength(50);
+    expect(fr.calls[0]?.source?.threadContext?.at(-1)?.text).toBe('ancestor 50');
+    expect(fr.calls[0]?.autoReviewReplyTarget).toEqual({ author: '@a50', text: 'ancestor 50' });
     fr.finish();
   });
 
   // laneKind 的唯一消费者是群轮次的 turn lease(见 session-runner);派生判据必须
   // 在正常派发与续跑观察两条路径上一致, 否则续跑轮会丢掉那层独占。
-  it('laneKind 派生: telegram group/topic externalKey → group, DM 与 Slack → dm', async () => {
+  it('laneKind 派生: telegram group/topic 与飞书话题 externalKey → group, DM 与 Slack → dm', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
@@ -747,6 +781,9 @@ describe('normalizeTaskSource', () => {
       'telegram:topic:bot:-900:77:9:g0',
       'telegram:dm:bot:user:g0',
       'team-slack:C1:1.1',
+      // 官方飞书 / Lark: 群里一律在话题回复, 话题 lane 是多人可见的群轮次。
+      'feishu:topic:cli_app:oc_chat:om_root:ou_user:g0',
+      'feishu:dm:cli_app:ou_user:g0',
     ];
     for (const [i, externalKey] of keys.entries()) {
       d.handleDispatch('conn-1', dispatch({ requestId: `req-lane-${i}`, externalKey }), c.send);
@@ -754,7 +791,7 @@ describe('normalizeTaskSource', () => {
       fr.finish();
       await tick();
     }
-    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
+    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm', 'group', 'dm']);
     expect(fr.calls[0]?.groupHistoryAccess).toEqual({
       access: 'lane',
       provider: 'telegram:9',
@@ -992,7 +1029,7 @@ describe('dispatcher 核心语义', () => {
       userText: '查看 PR', triggerMessageId: '2', xContext: { requesterId: 'u' },
     });
     expect(fr.calls[0]?.source?.threadContext).toEqual([
-      expect.objectContaining({ messageId: '1', author: '@other', text: longText.slice(0, 4000) }),
+      expect.objectContaining({ messageId: '1', author: '@other', text: longText }),
     ]);
   });
 
@@ -1202,7 +1239,7 @@ describe('dispatcher 核心语义', () => {
     const ends = c.ofType('turn.end').map((m) => m.payload);
     const queued = ends.find((e) => e.requestId === 'req-2')!;
     expect(queued.status).toBe('error');
-    expect(queued.errorMessage).toContain('已不在工作目录映射里');
+    expect(queued.errorMessage).toContain('已不属于任何项目');
     // 关键: 排队那条根本没进 runner
     expect(fr.calls).toHaveLength(1);
   });
@@ -1232,7 +1269,7 @@ describe('dispatcher 核心语义', () => {
     expect(fr.calls).toHaveLength(0);
     const end = c.last('turn.end')!.payload;
     expect(end.status).toBe('error');
-    expect(end.errorMessage).toContain('已不在工作目录映射里');
+    expect(end.errorMessage).toContain('已不属于任何项目');
   });
 
   it('排队期间连接被停用: 目录还在映射里也不执行', async () => {
@@ -1306,7 +1343,10 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
-  it('inspect 期间目录被加回映射: 按当前映射判定, 不误杀这条绑定', async () => {
+  // 2026-11-13 起复用要求任务就在这次点名的项目里(见下一条用例)。原先这里断言的是
+  // 「inspect 期间把任务所在目录加回清单 -> 照旧复用」: 那时只要求任务在清单内任一目录里。
+  // 现在即便它所在的目录此刻是清单里的另一个项目, 也不复用 —— 这次点名的是 xdmaker。
+  it('inspect 期间任务所在目录成了清单里的另一个项目: 仍按点名的项目新建, 不接回旧任务', async () => {
     const bindings = memoryBindings();
     const OUTSIDE = path.resolve('/repos/another-project');
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {
@@ -1314,6 +1354,7 @@ describe('dispatcher 核心语义', () => {
     };
     const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
     let releaseInspect!: () => void;
+    const calls: HookRunRequest[] = [];
     const runner: HookSessionRunner = {
       isBusy: () => false,
       inspect: async (id) => {
@@ -1322,7 +1363,10 @@ describe('dispatcher 核心语义', () => {
         });
         return sessions[id] ? { ...sessions[id] } : null;
       },
-      run: async () => ({ status: 'ok', finalText: 'done', errorMessage: null, durationMs: 1 }),
+      run: async (req) => {
+        calls.push(req);
+        return { status: 'ok', finalText: 'done', errorMessage: null, durationMs: 1 };
+      },
     };
     const { d } = makeDispatcher({ runner, bindings, config });
     const c = collector();
@@ -1330,13 +1374,93 @@ describe('dispatcher 核心语义', () => {
 
     d.handleDispatch('conn-1', dispatch(), c.send);
     await tick();
-    // inspect 还挂着时用户把这个目录加进了映射 —— 入口快照里没有它, 当前映射有
     config.workspaces = { xdmaker: WS_DIR, other: OUTSIDE };
     releaseInspect();
     await tick();
 
-    expect(c.last('task.ack')!.payload.sessionId).toBe('bound-session');
-    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe('bound-session');
+    const created = c.last('task.ack')!.payload.sessionId;
+    expect(created).not.toBe('bound-session');
+    expect(calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: 'xdmaker' });
+    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe(created);
+  });
+
+  // 回归(2026-11-13): 在 IM 里把会话从项目 A 切到项目 B 后, 服务端带同一个 externalKey
+  // 派发(工作区改成 B), 旧任务还在 A 里、A 也还在清单内, 消息照旧进了 A 的旧任务 ——
+  // 而机器人刚回过「已切换到 B」。最小失败输入: 两个项目 + 同 key 两次派发、第二次点名 B。
+  it('IM 里切到另一个项目 -> 不复用旧项目里的任务, 在新项目新建', async () => {
+    const bindings = memoryBindings();
+    const OTHER = path.resolve('/repos/other-project');
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR, other: OTHER } };
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const first = c.last('task.ack')!.payload.sessionId!;
+    sessions[first] = { workingDir: WS_DIR, usable: true };
+    fr.finish();
+    await tick();
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2', workspace: 'other' }), c.send);
+    await tick();
+    const second = c.last('task.ack')!.payload.sessionId!;
+    expect(second).not.toBe(first);
+    expect(fr.calls[1]).toMatchObject({ isNew: true, workingDir: OTHER, workspaceAlias: 'other' });
+    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe(second);
+    fr.finish();
+    await tick();
+
+    // 切回原项目同理: 绑定已经指向 B 里的任务, 不会凭「A 也在清单内」被接回去。
+    sessions[second] = { workingDir: OTHER, usable: true };
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-3' }), c.send);
+    await tick();
+    expect(fr.calls[2]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: 'xdmaker' });
+    fr.finish();
+  });
+
+  // 项目改名后(侧栏改名 / 升级前手填的别名), 服务端仍按旧名称派发。清单把旧名称补在现用
+  // 名称之后(见 projectWorkspaces.lookupWorkspaces): 旧名称要能找到目录、复用同一个任务,
+  // 且偏好按现用名称读 —— 否则改个名字就丢了这个项目的模型与权限设置。
+  it('按改名前的旧名称派发 -> 找到同一个项目, 新任务与复用都报现用名称', async () => {
+    const bindings = memoryBindings();
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { 主仓库: WS_DIR, xdmaker: WS_DIR } };
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const first = c.last('task.ack')!.payload.sessionId!;
+    expect(fr.calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: '主仓库' });
+    sessions[first] = { workingDir: WS_DIR, usable: true };
+    fr.finish();
+    await tick();
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2', workspace: '主仓库' }), c.send);
+    await tick();
+    expect(fr.calls[1]).toMatchObject({ isNew: false, sessionId: first, workspaceAlias: '主仓库' });
+    fr.finish();
+  });
+
+  // PR #10291 review: 纯数字的旧名称在对象里恒排最前, 按目录反查名称不能靠键序。
+  it('旧名称是纯数字时: 仍能按它派发, 报出的是现用名称', async () => {
+    const fr = fakeRunner();
+    const config: HookConnectionConfig = {
+      ...CONFIG,
+      workspaces: { reports: WS_DIR, '2025': WS_DIR },
+      retiredWorkspaceNames: ['2025'],
+    };
+    const { d } = makeDispatcher({ runner: fr.runner, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ workspace: '2025' }), c.send);
+    await tick();
+    expect(c.last('task.ack')!.payload.result).toBe('accepted');
+    expect(fr.calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: 'reports' });
+    fr.finish();
   });
 
   it('在工作目录映射内换目录 -> 无感跟随复用(边界内的移动不受影响)', async () => {
@@ -2956,6 +3080,121 @@ describe('dispatcher 核心语义', () => {
 
     expect(c.ofType('turn.end')).toHaveLength(1);
     expect(stored.records[0]?.delivery).toBe('sent');
+  });
+
+  // 分块转传只给声明能力的 X 连接: 发给旧 server 的新帧会被丢弃, 上传只能等到超时。
+  // unit, 入口 handleDispatch。最小失败输入: 带能力的 welcome。
+  it.each([
+    ['x', [HOOK_FEATURE_X_MEDIA_RELAY], true],
+    ['x', [], false],
+    ['slack', [HOOK_FEATURE_X_MEDIA_RELAY], false],
+  ])('只有声明能力的 X 连接才转传视频 (%s, %j)', async (im, features, expected) => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, features);
+    d.handleDispatch('conn-1', dispatch({ source: { im } }), c.send);
+    await tick();
+    expect(typeof fr.calls[0]?.relayXVideo === 'function').toBe(expected);
+  });
+
+  // IM 轮次流程 §9：明确停止包含 Agent 结束后的上传；此前只 abort Agent，回执仍可能等 35 分钟。
+  // 生产入口 cancel；最小失败输入：init 在途时 task.cancel。其他连接不能取消，取消后也不能重新开始上传。
+  it('task.cancel immediately stops its video upload and prevents a late upload', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'x' } }), c.send);
+    await tick();
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-dispatch-relay-'));
+    const file = path.join(dir, 'clip.mp4');
+    writeFileSync(file, 'video');
+    try {
+      const relayVideo = fr.calls[0]!.relayXVideo!;
+      const upload = relayVideo(file, 'video/mp4').catch((error: unknown) => error);
+      await vi.waitFor(() => expect(c.ofType('x.media.init')).toHaveLength(1));
+      d.cancel('other-connection', 'req-1');
+      expect(c.ofType('x.media.abort')).toHaveLength(0);
+      d.cancel('conn-1', 'req-1');
+      expect(await upload).toMatchObject({ code: 'X_MEDIA_RELAY_CANCELLED' });
+      expect(c.ofType('x.media.abort')).toHaveLength(1);
+      await expect(relayVideo(file, 'video/mp4')).rejects.toMatchObject({ code: 'X_MEDIA_RELAY_CANCELLED' });
+      expect(c.ofType('x.media.init')).toHaveLength(1);
+      fr.finish();
+      await tick();
+      expect(c.ofType('turn.end').at(-1)?.payload).toMatchObject({ status: 'cancelled' });
+    } finally {
+      d.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // 断线只结束已开始的上传。Agent 还在生成时短暂断连，恢复后的首个上传必须仍可开始。
+  it.each([true, false])('uses the current relay capability after reconnecting while the Agent was generating (%s)', async (supportsRelay) => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    const send = (message: HookMessage): boolean => {
+      const accepted = c.send(message);
+      if (message.type === 'x.media.init' || message.type === 'x.media.append' || message.type === 'x.media.finalize') {
+        d.handleXMediaResult('conn-1', {
+          uploadId: message.payload.uploadId,
+          step: message.type === 'x.media.init' ? 'init' : message.type === 'x.media.append' ? 'append' : 'finalize',
+          segmentIndex: message.type === 'x.media.append' ? message.payload.segmentIndex : null,
+          mediaId: message.type === 'x.media.finalize' ? '700' : null, error: null,
+        });
+      }
+      return accepted;
+    };
+    d.onConnected('conn-1', send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'x' } }), send);
+    await tick();
+    d.onDisconnected('conn-1');
+    d.onConnected('conn-1', send, supportsRelay ? [HOOK_FEATURE_X_MEDIA_RELAY] : []);
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-dispatch-relay-'));
+    const file = path.join(dir, 'clip.mp4');
+    writeFileSync(file, 'video');
+    try {
+      const upload = fr.calls[0]!.relayXVideo!(file, 'video/mp4');
+      if (supportsRelay) await expect(upload).resolves.toBe('700');
+      else {
+        await expect(upload).rejects.toMatchObject({ code: 'X_MEDIA_RELAY_OFFLINE' });
+        expect(c.ofType('x.media.init')).toHaveLength(0);
+        expect(c.ofType('x.media.abort')).toHaveLength(0);
+      }
+      fr.finish(supportsRelay ? { xMediaIds: ['700'] } : {});
+      await tick();
+      expect(c.ofType('turn.end').at(-1)?.payload).toMatchObject({ status: 'ok', ...(supportsRelay ? { xMediaIds: ['700'] } : {}) });
+    } finally {
+      d.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // media id 必须随终稿发回, 否则视频已上传但回帖不带它。
+  it('turn.end 带上已转传的 media id, 断线时结束等待中的上传', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'x' } }), c.send);
+    await tick();
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-dispatch-relay-'));
+    const file = path.join(dir, 'clip.mp4');
+    writeFileSync(file, 'video');
+    try {
+      const upload = fr.calls[0]!.relayXVideo!(file, 'video/mp4').catch((error: unknown) => error);
+      await vi.waitFor(() => expect(c.ofType('x.media.init')).toHaveLength(1));
+      d.onDisconnected('conn-1');
+      expect(await upload).toMatchObject({ code: 'X_MEDIA_RELAY_DISCONNECTED' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_X_MEDIA_RELAY]);
+    fr.finish({ finalText: '', xMediaIds: ['700'] });
+    await tick();
+    expect(c.ofType('turn.end').at(-1)?.payload).toMatchObject({ xMediaIds: ['700'] });
   });
 
   it('协商 delivery ACK 后，accepted 前按退避重放同一 turn.end，accepted 后停止并释放正文', async () => {
@@ -5014,7 +5253,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
 
     expect(c.last('task.ack')?.payload).toMatchObject({ result: 'queued' });
     // 第一条已经处理中，第二条仍显示排队。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀']);
   });
 
   it('排队中被取消 → 👀 换成终态, 不永远挂着「在做」', async () => {
@@ -5033,7 +5272,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
 
     // 取消排队任务时清掉它的状态，不影响正在执行的任务。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀', '']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀', '']);
   });
 
   it('账号停用: 已打 👀 而终态没人发的任务, 停用时撤销那个 👀', async () => {
@@ -5052,7 +5291,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']); // 两条各一个在册
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀']); // 两条各一个在册
 
     const draining = d.deactivateAccount();
     await tick();
@@ -5074,7 +5313,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'offline-final' }), online.send);
     await tick();
-    expect(reactionEmojis(online.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(online.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
 
     d.onDisconnected('conn-1');
     fr.finish({ status: 'ok' });
@@ -5128,7 +5367,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'hydrated' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
   });
 
   it('账号切换后档位打回未知 —— 不拿上一位主人的选择顶上', async () => {
@@ -5139,7 +5378,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first-owner' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
 
     const draining = d.deactivateAccount();
     fr.finish({ status: 'ok' });
@@ -5287,6 +5526,47 @@ describe('官方 Telegram 进度消息由客户端渲染(telegram-progress-ops-v
   });
 });
 
+describe('official IM question capability', () => {
+  it.each(['slack', 'feishu', 'lark'])('%s keeps an async question answerable after turn.end', async im => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_IM_QUESTIONS]);
+    d.handleDispatch('conn-1', dispatch({ source: { im, userText: 'hello' } }), c.send);
+    await tick();
+    let settle!: (value: import('@cindy/maker-core').InteractionDecision) => void;
+    const answer = vi.fn();
+    await fr.calls[0].onQuestion!({ kind: 'ask_user_question', requestId: 'question', delivery: 'async',
+      questions: [{ question: 'Which format?', options: [{ label: 'PDF' }] }] },
+    { answer, settled: new Promise(resolve => { settle = resolve; }) });
+    fr.finish();
+    await tick(40);
+    const card = c.ofType('interaction.request')[0];
+    expect(card.payload.questionMode).toBe('async');
+    expect(c.sent.indexOf(card)).toBeLessThan(c.sent.findIndex(m => m.type === 'turn.end'));
+    d.handleInteractionDecision('conn-1', { requestId: card.payload.requestId,
+      interactionId: card.payload.interactionId, buttonId: card.payload.buttons[0].id });
+    await tick();
+    expect(answer).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { 'Which format?': 'PDF' } });
+    settle(answer.mock.calls[0][0]);
+    await tick();
+    expect(c.ofType('interaction.cancel')[0]?.payload.interactionId).toBe(card.payload.interactionId);
+  });
+
+  it('keeps generic questions disabled for a server without the capability', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, []);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'slack' } }), c.send);
+    await tick();
+    expect(fr.calls[0].onQuestion).toBeUndefined();
+    fr.finish();
+    await tick();
+    expect(c.ofType('interaction.request')).toHaveLength(0);
+  });
+});
+
 describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', () => {
   type OpMessage = Extract<HookMessage, { type: 'msg.op' }>;
   const ALL_FEATURES = [
@@ -5326,6 +5606,69 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
     return { ...c, send };
   }
 
+  // Real dispatcher lifecycle: buttons remain routed after turn.end.
+  it('keeps question buttons usable after draining and turn.end', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, [...ALL_FEATURES, HOOK_FEATURE_TELEGRAM_QUESTION_OPS]);
+    d.handleDispatch('conn-1', telegramDispatch(), c.send);
+    await tick();
+    let settle!: (value: import('@cindy/maker-core').InteractionDecision) => void;
+    const answer = vi.fn();
+    const controls = { answer, settled: new Promise<import('@cindy/maker-core').InteractionDecision>(r => { settle = r; }) };
+    const request = { kind: 'ask_user_question' as const, requestId: 'question', delivery: 'async' as const,
+      questions: [{ question: 'Which format?', options: [{ label: 'PDF' }] }] };
+    const sent = fr.calls[0].onQuestion!(request, controls);
+    fr.finish({ finalText: 'Other work is done' });
+    await sent;
+    await tick(40);
+    const notice = ops(c.sent, 'turn-notice')[0];
+    expect(notice.payload).toMatchObject({ requestId: 'req-1',
+      scope: { externalKey: telegramDispatch().externalKey }, action: { kind: 'send', tier: 'html' } });
+    expect(c.sent.indexOf(notice)).toBeLessThan(c.sent.findIndex(m => m.type === 'turn.end'));
+    const buttonId = (notice.payload.action as { buttons: { token: string }[][] }).buttons[0][0].token;
+    d.handleInteractionDecision('conn-1', { requestId: 'req-1', interactionId: notice.payload.interactionId!, buttonId });
+    await tick();
+    expect(answer).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { 'Which format?': 'PDF' } });
+    settle(answer.mock.calls[0][0]);
+    await tick();
+    expect(ops(c.sent, 'turn-notice').at(-1)?.payload).toMatchObject({ interactionClosed: true, action: { kind: 'edit', buttons: [] } });
+    const count = ops(c.sent, 'turn-notice').length;
+    await fr.calls[0].onQuestion!(request, controls);
+    expect(ops(c.sent, 'turn-notice')).toHaveLength(count);
+  });
+
+  it('does not publish a queued async question after the account changes', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, [...ALL_FEATURES, HOOK_FEATURE_TELEGRAM_QUESTION_OPS]);
+    d.handleDispatch('conn-1', telegramDispatch(), c.send);
+    await tick();
+    const sent = fr.calls[0].onQuestion!({ kind: 'ask_user_question', requestId: 'question',
+      questions: [{ question: 'Private question' }] }, { answer: vi.fn(), settled: new Promise(() => {}) });
+    const rejected = expect(sent).rejects.toThrow('channel unavailable');
+    const drained = d.deactivateAccount();
+    fr.finish();
+    await drained;
+    await rejected;
+    expect(ops(c.sent, 'turn-notice')).toHaveLength(0);
+  });
+
+  it('does not enable asynchronous notice sends on a legacy server', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, ALL_FEATURES);
+    d.handleDispatch('conn-1', telegramDispatch(), c.send);
+    await tick();
+    expect(fr.calls[0].onQuestion).toBeUndefined();
+    fr.finish();
+    await tick(40);
+    expect(ops(c.sent, 'turn-notice')).toHaveLength(0);
+  });
+
   it('协商终稿: 先写持久出箱、再经 msg.op 发布, 最后 turn.end 带 clientFinal.complete', async () => {
     const ledger = memoryTerminalLedger();
     const fr = fakeRunner();
@@ -5358,6 +5701,50 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
     expect(ledger.get('conn-1', 'req-1')?.turnEnd?.clientFinal).toEqual({ complete: true });
   });
 
+  // 规则: 官方飞书 / Lark 与官方 Telegram 走同一套协商与收口(im-turn-flow.md「官方飞书 / Lark」),
+  // 排版用个人飞书 bot 的卡片。入口: 真实 dispatcher 的 handleDispatch → turn.end; 此前飞书任务
+  // 不建载体, 这条分支没有覆盖。最小输入: 一轮带过程记录的成功任务; unit。
+  it.each([
+    ['协商了电脑排版', ['msg-op-v1', 'feishu-progress-ops-v1', 'feishu-final-ops-v1'], true],
+    ['服务端没有宣告电脑排版', [], false],
+  ] as const)('官方飞书: %s', async (_name, features, clientRenders) => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, [...features]);
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ externalKey: 'feishu:dm:cli_app:ou_alice:g1', source: { im: 'feishu' } }),
+      c.send,
+    );
+    await tick();
+    fr.finish({
+      finalText: '**答案**',
+      process: { title: '过程记录 · 1 项 · 3s', lines: ['✓ 读取 a.ts'] },
+    });
+    await tick(40);
+
+    const end = c.last('turn.end')!.payload;
+    expect(end.finalText).toBe('**答案**');
+    expect(end).not.toHaveProperty('process');
+    if (!clientRenders) {
+      expect(ops(c.sent)).toHaveLength(0);
+      expect(end.clientFinal).toBeUndefined();
+      return;
+    }
+    const finals = ops(c.sent, 'turn-final');
+    expect(finals).toHaveLength(1);
+    expect(finals[0].payload).toMatchObject({ finalPart: 0, action: { kind: 'send' } });
+    const action = finals[0].payload.action;
+    const card = JSON.parse(action.kind === 'send' ? action.text : '{}') as {
+      body: { elements: Array<{ tag: string; content?: string }> };
+    };
+    expect(card.body.elements.map((element) => element.tag)).toEqual(['collapsible_panel', 'markdown']);
+    expect(card.body.elements[1].content).toBe('**答案**');
+    expect(c.sent.findIndex((m) => m.type === 'turn.end')).toBeGreaterThan(c.sent.indexOf(finals[0]));
+    expect(end.clientFinal).toEqual({ complete: true });
+  });
+
   it('客户端终稿没有完整确认 → turn.end 带 clientFinal.complete=false(服务端照旧发布)', async () => {
     vi.useFakeTimers();
     try {
@@ -5373,6 +5760,51 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
       const end = c.last('turn.end')!.payload;
       expect(end.clientFinal).toEqual({ complete: false });
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 2026-10-27 长期 pending 回归：经真实 dispatcher 验证小时级 429 后完整正文
+  // 进入既有出箱交接，且下一轮能执行；已有未知回执用例不覆盖长退避。unit 假时钟。
+  it('终稿长退避到期后交回完整正文、释放同任务队列，不重跑已完成轮次', async () => {
+    vi.useFakeTimers();
+    const ledger = memoryTerminalLedger();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger: ledger });
+    try {
+      const c = respondingCollector(d, (p) =>
+        p.requestId === 'req-1' && p.purpose === 'turn-final'
+          ? { ok: false, channelErrorCode: 429, retryAfterMs: 3_600_000 }
+          : {},
+      );
+      d.onConnected('conn-1', c.send, ALL_FEATURES);
+      d.handleDispatch('conn-1', telegramDispatch(), c.send);
+      await tick();
+      d.handleDispatch('conn-1', telegramDispatch({ requestId: 'req-2' }), c.send);
+      await tick();
+      expect(c.last('task.ack')?.payload.result).toBe('queued');
+      fr.finish({ finalText: '已经生成的完整答案' });
+      await tick(40);
+      expect(ledger.get('conn-1', 'req-1')?.delivery).toBe('pending');
+      expect(c.ofType('turn.end')).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      await tick(40);
+      expect(c.last('turn.end')?.payload).toMatchObject({
+        requestId: 'req-1',
+        finalText: '已经生成的完整答案',
+        clientFinal: { complete: false },
+      });
+      expect(ledger.get('conn-1', 'req-1')?.delivery).toBe('sent');
+      expect(fr.calls).toHaveLength(2);
+      fr.finish({ finalText: '第二轮答案' });
+      await tick(40);
+      expect(c.ofType('turn.end').map((m) => m.payload.requestId)).toEqual(['req-1', 'req-2']);
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect(fr.calls).toHaveLength(2);
+      expect(ops(c.sent, 'turn-final').filter((m) => m.payload.requestId === 'req-1')).toHaveLength(1);
+    } finally {
+      d.dispose();
       vi.useRealTimers();
     }
   });

@@ -25,8 +25,10 @@ vi.mock('../defaultSettingsStore', () => ({
 }));
 vi.mock('../remoteProviderRoute', () => ({ readImRemoteProviderRoute: mocks.readRemoteRoute }));
 
-import { resolveImSessionDefaults } from '../defaultSessionSettings';
+import { projectImDefaultSettings, resolveImSessionDefaults } from '../defaultSessionSettings';
+import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings';
 import type { ImOrchestratorConfig } from '../shared/types';
+import { setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror';
 
 const config: ImOrchestratorConfig = {
   agentKind: 'claude-code',
@@ -76,6 +78,7 @@ const providers = [
   {
     id: 'xd',
     name: 'XD',
+    auth: { method: 'managed' },
     source: 'builtin',
     connected: true,
     agents: ['claude-code', 'codex'],
@@ -91,6 +94,7 @@ const providers = [
   {
     id: 'openai',
     name: 'OpenAI',
+    auth: { method: 'managed' },
     source: 'builtin',
     connected: true,
     agents: ['codex'],
@@ -113,6 +117,71 @@ const customCodexModel = {
 };
 
 describe('resolveImSessionDefaults', () => {
+  // PR #7291 unit: automatic selection must honor per-source visibility in both
+  // factory recommendations and custom-provider fallback; previous tests had no overrides.
+  it.each([false, true])('excludes hidden automatic models, including fallback (custom=%s)', async (custom) => {
+    mocks.readImDefaultSettings.mockReturnValue(IM_DEFAULT_SETTINGS);
+    const provider = { ...providers[1], id: custom ? 'custom' : 'openai',
+      source: custom ? 'user' : 'builtin', access: { kind: 'subscription' },
+      models: { codex: [
+        { ...openAiCodexModels[0], id: 'gpt-6.1-sol', sortOrder: 1 },
+        { ...openAiCodexModels[0], id: 'shown-model', sortOrder: 2 },
+      ] },
+    };
+    setModelVisibilityMirror({ [`codex:${provider.id}:gpt-6.1-sol`]: false }, { fallback: true });
+    mocks.listProviders.mockResolvedValue([provider]);
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({ model: 'shown-model' });
+    setModelVisibilityMirror({ [`codex:${provider.id}:gpt-6.1-sol`]: false,
+      [`codex:${provider.id}:shown-model`]: false }, { fallback: true });
+    await expect(resolveImSessionDefaults(config)).rejects.toThrow('no available chat model');
+  });
+  // Unit: old fixed IM defaults ignored catalog updates; exercise the real creation resolver.
+  it('resolves automatic defaults from the live catalog without persisting a model snapshot', async () => {
+    mocks.readImDefaultSettings.mockReturnValue(IM_DEFAULT_SETTINGS);
+    const subscription = {
+      ...providers[1], access: { kind: 'subscription' },
+      models: { codex: [
+        { ...openAiCodexModels[0], sortOrder: 20 },
+        { ...openAiCodexModels[0], id: 'current-recommendation', sortOrder: 1 },
+      ] },
+    };
+    mocks.listProviders.mockResolvedValue([providers[0], subscription]);
+    const first = await resolveImSessionDefaults(config);
+    expect(first).toMatchObject({ agentKind: 'codex', model: 'current-recommendation', providerId: 'openai', effort: 'medium' });
+    subscription.models.codex[1].id = 'next-recommendation';
+    const next = await resolveImSessionDefaults(config);
+    expect(next.model).toBe('next-recommendation');
+    expect(next.fingerprint).not.toBe(first.fingerprint);
+    expect(IM_DEFAULT_SETTINGS.agents.codex.model).toBe('');
+  });
+
+  it('does not invent a model when automatic selection has no usable source', async () => {
+    mocks.readImDefaultSettings.mockReturnValue(IM_DEFAULT_SETTINGS);
+    mocks.listProviders.mockResolvedValue([]);
+    await expect(resolveImSessionDefaults(config)).rejects.toThrow('no available chat model');
+    mocks.listProviders.mockRejectedValue(new Error('catalog offline'));
+    await expect(resolveImSessionDefaults(config)).rejects.toThrow('no available chat model');
+  });
+
+  it('projects automatic engine slots for official workspace overrides without changing saved choices', async () => {
+    const saved = { ...IM_DEFAULT_SETTINGS, agents: { ...IM_DEFAULT_SETTINGS.agents,
+      'claude-code': { providerId: 'xd', model: 'explicit-old-model', effort: 'high' as const },
+    } };
+    const view = await projectImDefaultSettings(saved);
+    expect(view.agents['claude-code']).toEqual(saved.agents['claude-code']);
+    expect(view.agents.codex.model).toBeTruthy();
+    expect(view.agents.codex.providerId).toBeTruthy();
+    expect(saved.agents.codex.model).toBe('');
+    expect(mocks.listProviders).toHaveBeenCalledTimes(1);
+  });
+
+  it('filters automatic engines by the channel approval capability', async () => {
+    mocks.readImDefaultSettings.mockReturnValue(IM_DEFAULT_SETTINGS);
+    mocks.getCapabilities.mockImplementation((agent: string) => ({
+      availableModels: [], turnPermissionPolicy: { supported: { supported: agent === 'codex' } },
+    }));
+    await expect(resolveImSessionDefaults(config, undefined, 'wechat')).resolves.toMatchObject({ agentKind: 'codex' });
+  });
   it.each(['claude-code', 'codex', 'pi'] as const)('resolves a shared %s model only against its own catalog', async (agentKind) => {
     mocks.readImDefaultSettings.mockReturnValue({ agentKind, permissionMode: 'auto', agents: {
       [agentKind]: { agentDeviceId: 'share:owner', providerId: 'owner-only', model: 'remote-model', effort: 'high' },
@@ -128,13 +197,14 @@ describe('resolveImSessionDefaults', () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
+    setModelVisibilityMirror({}, { fallback: true });
     mocks.getCapabilities.mockImplementation((agentKind: string) => ({
       availableModels: agentKind === 'codex' ? codexModels : claudeModels,
     }));
     mocks.listProviders.mockResolvedValue(providers);
   });
 
-  it('resolves the system IM default to Claude Opus 4.8 xhigh', async () => {
+  it('preserves an explicitly saved older model and effort', async () => {
     mocks.readImDefaultSettings.mockReturnValue({
       agentKind: 'claude-code',
       agents: {
@@ -405,8 +475,8 @@ describe('resolveImSessionDefaults', () => {
 
     await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
       agentKind: 'codex',
-      model: 'codex/gpt-5.5',
-      effort: 'high',
+      model: 'gpt-5.5',
+      effort: 'medium',
       providerId: null,
     });
   });
@@ -563,7 +633,7 @@ describe('resolveImSessionDefaults', () => {
 
     await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
       agentKind: 'codex',
-      model: 'codex/gpt-5.5', // the image model sorts first but must be skipped
+      model: 'gpt-5.5', // the image model must be skipped; use the connected source fallback
     });
   });
 

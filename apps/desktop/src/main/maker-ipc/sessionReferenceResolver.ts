@@ -12,6 +12,7 @@ import { messages, sessions } from '../localDb/schema.js';
 import { readLatestSessionTerminal } from '../localDb/sessionTerminal.js';
 import { messageToCamel } from '../localDb/mapper.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
+import { agentInputMessageReferenceKey } from '@cindy/maker-shared/agent-input-projection';
 import {
   serializeSessionReferencePayload,
   type AgentInputSessionRef,
@@ -109,28 +110,42 @@ function fitMessagesToTokenBudget(
   raw: AgentInputSessionReferenceMessage[],
   tokenBudget: number,
   anchorIndex?: number,
-): { messages: AgentInputSessionReferenceMessage[]; usedTokens: number; truncated: boolean } {
+  options?: { excludeAnchor?: boolean },
+): {
+  messages: AgentInputSessionReferenceMessage[];
+  usedTokens: number;
+  truncated: boolean;
+  /** Position of the anchor inside `messages`; -1 when it is not part of the quote. */
+  anchorPosition: number;
+} {
   if (anchorIndex !== undefined && raw[anchorIndex]) {
     const anchor = raw[anchorIndex];
     const anchorTokens = estimateReferenceTokens(anchor.content);
-    if (anchorTokens >= tokenBudget) {
+    // The anchor can already be delivered verbatim inside the user message. In
+    // that case the quote only carries the surrounding context, and the anchor
+    // body must not be paid for twice.
+    const excludeAnchor = options?.excludeAnchor === true;
+    if (!excludeAnchor && anchorTokens >= tokenBudget) {
       const content = sliceTailToTokenBudget(anchor.content, tokenBudget);
       return {
         messages: content ? [{ ...anchor, content }] : [],
         usedTokens: tokenBudget,
         truncated: true,
+        anchorPosition: content ? 0 : -1,
       };
     }
 
-    let remaining = tokenBudget - anchorTokens;
-    const kept = new Map<number, AgentInputSessionReferenceMessage>([[anchorIndex, anchor]]);
+    let remaining = excludeAnchor ? tokenBudget : tokenBudget - anchorTokens;
+    const kept = new Map<number, AgentInputSessionReferenceMessage>();
+    if (!excludeAnchor) kept.set(anchorIndex, anchor);
     let budgetExhausted = false;
     let partialTruncation = false;
     for (let distance = 1; kept.size < raw.length && !budgetExhausted; distance += 1) {
       if (remaining === 0) break;
-      const candidates = [anchorIndex - distance, anchorIndex + distance];
+      const candidates: number[] = [anchorIndex - distance, anchorIndex + distance];
       let found = false;
       for (const index of candidates) {
+        if (index === anchorIndex) continue;
         const message = raw[index];
         if (!message) continue;
         found = true;
@@ -149,10 +164,15 @@ function fitMessagesToTokenBudget(
       }
       if (!found) break;
     }
+    const messages = [...kept.entries()].sort(([a], [b]) => a - b).map(([, message]) => message);
+    // The anchor was left out on purpose (it is already in the user message),
+    // so it does not count as a budget loss.
+    const available = raw.length - (excludeAnchor ? 1 : 0);
     return {
-      messages: [...kept.entries()].sort(([a], [b]) => a - b).map(([, message]) => message),
+      messages,
       usedTokens: tokenBudget - remaining,
-      truncated: partialTruncation || kept.size < raw.length,
+      truncated: partialTruncation || kept.size < available,
+      anchorPosition: excludeAnchor ? -1 : messages.indexOf(anchor),
     };
   }
 
@@ -176,12 +196,13 @@ function fitMessagesToTokenBudget(
     truncated = true;
     break;
   }
-  return { messages: kept, usedTokens: tokenBudget - remaining, truncated };
+  return { messages: kept, usedTokens: tokenBudget - remaining, truncated, anchorPosition: -1 };
 }
 
 /** Enforce the budget on the exact JSON that will be injected, including escaping and metadata. */
 function fitSerializedPayloadBudget(
   input: readonly AgentInputSessionReferenceContext[],
+  anchorPositions: readonly number[] = [],
 ): AgentInputSessionReferenceContext[] {
   const contexts = input.map((context) => ({
     ...context,
@@ -189,17 +210,39 @@ function fitSerializedPayloadBudget(
   }));
   let tokens = estimateReferenceTokens(serializeSessionReferencePayload(contexts));
   while (tokens > FINAL_REFERENCE_PAYLOAD_TOKENS) {
+    // The anchor is the message the user pointed at: it must not lose its head
+    // while other quoted content can still be shed.
     let targetContext: AgentInputSessionReferenceContext | undefined;
     let targetMessage: AgentInputSessionReferenceMessage | undefined;
-    for (const context of contexts) {
-      for (const message of context.messages) {
+    for (let contextIndex = 0; contextIndex < contexts.length; contextIndex += 1) {
+      const context = contexts[contextIndex];
+      const anchorPosition = anchorPositions[contextIndex] ?? -1;
+      for (let messageIndex = 0; messageIndex < context.messages.length; messageIndex += 1) {
+        if (messageIndex === anchorPosition) continue;
+        const message = context.messages[messageIndex];
+        // A one-character body cannot shed more content; picking it would stall
+        // the loop and mask the anchor fallback below.
+        if (message.content.length <= 1) continue;
         if (!targetMessage || message.content.length > targetMessage.content.length) {
           targetContext = context;
           targetMessage = message;
         }
       }
     }
-    if (targetMessage && targetMessage.content.length > 1) {
+    if (!targetMessage) {
+      // No neighbor can shrink any further; trim the anchor rather than
+      // dropping the whole quote.
+      for (const context of contexts) {
+        for (const message of context.messages) {
+          if (message.content.length <= 1) continue;
+          if (!targetMessage || message.content.length > targetMessage.content.length) {
+            targetContext = context;
+            targetMessage = message;
+          }
+        }
+      }
+    }
+    if (targetMessage) {
       const excess = tokens - FINAL_REFERENCE_PAYLOAD_TOKENS;
       const drop = Math.min(targetMessage.content.length - 1, Math.max(1, excess));
       targetMessage.content = `…${targetMessage.content.slice(drop + 1)}`;
@@ -354,7 +397,8 @@ async function resolveLocal(
   ref: AgentInputSessionRef,
   messageLimit: number,
   tokenBudget: number,
-): Promise<{ context: AgentInputSessionReferenceContext; usedTokens: number }> {
+  options?: { excludeAnchor?: boolean },
+): Promise<{ context: AgentInputSessionReferenceContext; usedTokens: number; anchorPosition: number }> {
   const db = getDbClient().drizzle;
   const [session] = await db
     .select({
@@ -393,7 +437,12 @@ async function resolveLocal(
   if (ref.messageClientId && anchorIndex === -1) {
     throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `找不到消息锚点 ${ref.messageClientId}`);
   }
-  const fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
+  const excludeAnchor = options?.excludeAnchor === true && anchorIndex !== undefined;
+  let fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex, { excludeAnchor });
+  if (excludeAnchor && fitted.messages.length === 0) {
+    // An empty quote carries nothing: keep the anchor instead.
+    fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
+  }
   return {
     context: {
       sessionId: ref.sessionId,
@@ -407,6 +456,7 @@ async function resolveLocal(
       ...(terminal ? { terminal } : {}),
     },
     usedTokens: fitted.usedTokens,
+    anchorPosition: fitted.anchorPosition,
   };
 }
 
@@ -596,7 +646,8 @@ async function resolveRemote(
   ref: AgentInputSessionRef,
   messageLimit: number,
   tokenBudget: number,
-): Promise<{ context: AgentInputSessionReferenceContext; usedTokens: number }> {
+  options?: { excludeAnchor?: boolean },
+): Promise<{ context: AgentInputSessionReferenceContext; usedTokens: number; anchorPosition: number }> {
   if (!ref.deviceId) {
     throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `任务 ${ref.sessionId} 没有在线来源设备`);
   }
@@ -697,7 +748,12 @@ async function resolveRemote(
   if (mapped.length === 0) {
     throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `任务 ${ref.sessionId} 没有可引用的可见消息`);
   }
-  const fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
+  const excludeAnchor = options?.excludeAnchor === true && anchorIndex !== undefined;
+  let fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex, { excludeAnchor });
+  if (excludeAnchor && fitted.messages.length === 0) {
+    // An empty quote carries nothing: keep the anchor instead.
+    fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
+  }
   return {
     context: {
       sessionId: ref.sessionId,
@@ -714,12 +770,14 @@ async function resolveRemote(
       ...(terminal ? { terminal } : {}),
     },
     usedTokens: fitted.usedTokens,
+    anchorPosition: fitted.anchorPosition,
   };
 }
 
 /** 解析全部引用；超出数量或共享预算时明确报错/标记，不静默丢引用。 */
 export async function resolveSessionReferences(
   refs: readonly AgentInputSessionRef[] | undefined,
+  options?: { inlineMessageKeys?: ReadonlySet<string> },
 ): Promise<AgentInputSessionReferenceContext[]> {
   if (!refs || refs.length === 0) return [];
   if (refs.length > MAX_SESSION_REFERENCES) {
@@ -729,6 +787,7 @@ export async function resolveSessionReferences(
     );
   }
   const contexts: AgentInputSessionReferenceContext[] = [];
+  const anchorPositions: number[] = [];
   let remainingMessages = MAX_REFERENCE_MESSAGES;
   let remainingTokens = MAX_REFERENCE_TOKENS;
   for (let index = 0; index < refs.length; index++) {
@@ -752,12 +811,24 @@ export async function resolveSessionReferences(
     const remoteDeviceId = ref.deviceId && ref.deviceId !== getSelfDeviceId()
       ? ref.deviceId
       : undefined;
+    // The anchor is already delivered verbatim inside the user message when the
+    // composer inlined it; the quote then carries the surrounding context only.
+    const inlineAnchor = ref.messageClientId !== undefined
+      && options?.inlineMessageKeys?.has(
+        agentInputMessageReferenceKey(ref.sessionId, ref.messageClientId),
+      ) === true;
     const resolved = remoteDeviceId
-      ? await resolveRemote({ ...ref, deviceId: remoteDeviceId }, messageLimit, tokenBudget)
-      : await resolveLocal(ref, messageLimit, tokenBudget);
+      ? await resolveRemote(
+        { ...ref, deviceId: remoteDeviceId },
+        messageLimit,
+        tokenBudget,
+        { excludeAnchor: inlineAnchor },
+      )
+      : await resolveLocal(ref, messageLimit, tokenBudget, { excludeAnchor: inlineAnchor });
     contexts.push(resolved.context);
+    anchorPositions.push(resolved.anchorPosition);
     remainingMessages -= resolved.context.messageCount;
     remainingTokens -= resolved.usedTokens;
   }
-  return fitSerializedPayloadBudget(contexts);
+  return fitSerializedPayloadBudget(contexts, anchorPositions);
 }

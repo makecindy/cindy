@@ -6,6 +6,34 @@ import {
 
 export type DeviceAccessState = 'ready' | 'busy' | 'offline' | 'remote_disabled' | 'access_revoked' | 'self';
 
+export interface DeviceNameSource {
+  deviceId: string;
+  name?: string | null;
+}
+
+/** Presentation only: routing IDs must never become a computer's visible name. */
+export function deviceDisplayName(
+  deviceId: string,
+  name: string | null | undefined,
+  unnamed: string,
+  devices: readonly DeviceNameSource[] = [],
+): string {
+  const readable = (id: string, value: string | null | undefined) => {
+    const trimmed = value?.trim();
+    return trimmed && trimmed !== id ? trimmed : '';
+  };
+  const resolvedName = readable(deviceId, name)
+    || readable(deviceId, devices.find((device) => device.deviceId === deviceId)?.name);
+  const label = resolvedName || unnamed;
+  const peers = new Set([deviceId]);
+  for (const device of devices) {
+    const otherLabel = readable(device.deviceId, device.name) || unnamed;
+    if (otherLabel.toLowerCase() === label.toLowerCase()) peers.add(device.deviceId);
+  }
+  // Sorting identities keeps the suffix stable when a roster is reordered.
+  return peers.size > 1 ? `${label} (${[...peers].sort().indexOf(deviceId) + 1})` : label;
+}
+
 export interface DeviceListDeviceLike {
   busy: boolean;
   deviceId: string;
@@ -14,6 +42,7 @@ export interface DeviceListDeviceLike {
   name: string;
   online: boolean;
   platform: string | null;
+  app?: string;
   remoteControlEnabled: boolean;
 }
 
@@ -43,7 +72,12 @@ export interface DeviceListPresentation {
 }
 
 export function isControllableDevice(device: DeviceListDeviceLike): boolean {
-  return device.online && device.remoteControlEnabled && !device.isSelf && !isMobilePlatform(device.platform);
+  return device.online && device.remoteControlEnabled && !device.isSelf && isCindyApp(device.app) && !isMobilePlatform(device.platform);
+}
+
+/** Self-reported UX routing only. Missing App labels preserve legacy Cindy behavior. */
+export function isCindyApp(app: string | null | undefined): boolean {
+  return app == null || app === 'cindy';
 }
 
 /**
@@ -71,7 +105,7 @@ export function toDeviceListItems<TDevice extends DeviceListDeviceLike>(
 ): DeviceListItem<TDevice>[] {
   return devices
     .map((device) => toDeviceListItem(device, now, revokedDevices, localizer))
-    .filter((item) => item.state !== 'self' && !isMobilePlatform(item.device.platform))
+    .filter((item) => item.state !== 'self' && isCindyApp(item.device.app) && !isMobilePlatform(item.device.platform))
     .map((item, index) => ({ index, item }))
     .sort((a, b) => compareDeviceListItems(a.item, b.item) || a.index - b.index)
     .map(({ item }) => item);
@@ -116,7 +150,7 @@ export function toDeviceListItem<TDevice extends DeviceListDeviceLike>(
   return {
     device,
     state,
-    canOpen: state === 'ready' || state === 'busy',
+    canOpen: isControllableDevice(device) && (state === 'ready' || state === 'busy'),
     statusLabel: deviceStatusLabel(state, localizer),
     statusDetail: deviceStatusDetail(device, state, now, localizer),
   };

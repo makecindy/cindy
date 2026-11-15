@@ -24,7 +24,8 @@ export type ComposerSuggestionActionId =
   | 'new-goal'
   | 'plan-mode'
   | 'collaboration'
-  | 'add-extra-dir';
+  | 'add-extra-dir'
+  | `plugin-completion:${string}`;
 
 export interface ComposerSuggestionAction {
   id: ComposerSuggestionActionId;
@@ -37,7 +38,11 @@ export interface ComposerSuggestionAction {
   disabled?: boolean;
   /** Shown as a row tooltip when the action is disabled (e.g. collab policy). */
   disabledReason?: string;
+  /** Opens a next-level page inside the `+` panel instead of finishing there (add directory). */
+  opensPanelPage?: boolean;
   run: () => void;
+  /** Async provider suggestions must still own the original query/selection. */
+  canRun?: () => boolean;
 }
 
 export type ComposerSuggestionEntry =

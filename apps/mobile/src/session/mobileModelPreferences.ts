@@ -19,10 +19,11 @@ export function sanitizeModelPreferences(value: unknown): MobileModelPreferences
 }
 /** Favorites and engine choices belong to the controlling account AND remote device.
  * Effort/Fast memories continue through the existing draft/mirror accessors. */
-export function useMobileModelPreferences(scope: string, visible = true) {
+export function useMobileModelPreferences(scope: string, visible = true, transient = false) {
   const remote = useRemoteMobileFavorites(scope, visible);
   const [state, setState] = useState<{ scope: string; value: MobileModelPreferences } | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [draft, setDraft] = useState<{ scope: string; value: MobileModelPreferences } | null>(null);
   const key = `cindy:mobileModelPicker:v1:${scope}`;
   useEffect(() => {
     let disposed = false;
@@ -34,8 +35,12 @@ export function useMobileModelPreferences(scope: string, visible = true) {
     return () => { disposed = true; };
   }, [scope, key]);
   const ready = state?.scope === scope;
-  return { ready, favoritesReady: remote.ready, error: error ?? remote.error, value: {favorites:remote.items, engines:ready ? state.value.engines : {} } as MobileModelPreferences,
+  return { ready, favoritesReady: remote.ready, error: error ?? remote.error, value: transient && draft?.scope === scope ? draft.value : {favorites:remote.items, engines:ready ? state.value.engines : {} } as MobileModelPreferences,
     save: async (value: MobileModelPreferences) => {
+      if (transient) {
+        setDraft({ scope, value });
+        return;
+      }
       await remote.save(value.favorites);
       if (state?.scope === scope && JSON.stringify(state.value.engines) === JSON.stringify(value.engines)) return;
       // Preserve the previous local snapshot for recovery; it is no longer the remote truth.

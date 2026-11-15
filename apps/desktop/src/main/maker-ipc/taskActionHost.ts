@@ -2,7 +2,6 @@ import { and, eq } from 'drizzle-orm';
 import type { ToolCallAuthorizer } from '@cindy/mcps';
 import type { Session } from '@cindy/maker-core';
 import {
-  botDelegations,
   botProfiles,
   botSessionLinks,
   sessions,
@@ -11,18 +10,20 @@ import {
 } from '../localDb/schema.js';
 import { tryGetDbClient } from '../localDb/client/current.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
-import { authorizeGroupTool } from './botGroupToolAuthorization.js';
+import { watchCredentialGrantRevocation } from '../remote-agent/executor/credentialGrants.js';
 import {
   admitTaskAction,
+  isolateTaskActionAuthorizer,
   createTaskActionAuthorizer,
-  DELEGATED_TASK_ACTIONS,
+  type TaskActionConfirmation,
   taskActionFingerprint,
   type TaskActionScope,
 } from './taskActionAuthorization.js';
 
 type TaskActionSession = Pick<Session,
   'stablePermissionModeState' | 'stablePlanModeState' |
-  'getCurrentTurnOrigin' | 'reviewHostPermissionAction'>;
+  'getCurrentTurnOrigin' | 'reviewHostPermissionAction'> & { readonly instanceId?: string };
+
 
 /** The live turn identifies a continuation, not consent. Only its existing
  * permission reviewer may approve the exact action against restored user intent. */
@@ -62,7 +63,7 @@ function captureScheduledRuntime(
 
 /** Adapt the shared gate to Host facts. No transcript parsing or Agent-supplied approval fields. */
 export function createDesktopTaskActionAuthorizer(deps: {
-  input(sessionId: string): {
+  input(sessionId: string, forSelfRewind?: boolean): {
     key: string;
     ownerInput: boolean;
     automatic?: boolean;
@@ -74,17 +75,26 @@ export function createDesktopTaskActionAuthorizer(deps: {
       isCurrent?: () => boolean;
     } | null;
     boundary: string;
+    /** The coordinator's in-memory /clear fence; it can be ahead of `sessions.cleared_at`. */
+    clearBoundaryMs?: number | null;
+    /** Read lazily only for an exact self rewind; the coordinator owns these facts. */
+    rewind?: { generation: number; signal: AbortSignal; locked: boolean; idle: boolean };
   };
   getSession(sessionId: string): TaskActionSession | undefined;
-  confirm(sessionId: string, tool: string, args: unknown): Promise<boolean>;
+  confirm(sessionId: string, tool: string, args: unknown, context?: TaskActionConfirmation): Promise<boolean>;
 }): ToolCallAuthorizer {
-  return async (call) => {
+  return isolateTaskActionAuthorizer(async (call) => {
     // Per invocation: a concurrent automatic call must never inherit owner evidence.
     let admittedScope: TaskActionScope | null = null;
     let rejectedDecision: Awaited<ReturnType<ToolCallAuthorizer>> | null = null;
     const fingerprint = taskActionFingerprint(call);
+    const rewindArgs = call.args as { session_id?: string; message_client_id?: string; stop_if_running?: boolean };
+    const selfRewind = call.server === 'cindy_helper' && call.tool === 'rewind_session' &&
+      rewindArgs?.stop_if_running === true && typeof rewindArgs.session_id === 'string' &&
+      rewindArgs.session_id.replace(/^local::/, '') === call.sessionId &&
+      typeof rewindArgs.message_client_id === 'string' && rewindArgs.message_client_id.length > 0;
     const decision = await createTaskActionAuthorizer({
-      confirm: deps.confirm,
+      confirm: (sessionId, tool, args) => deps.confirm(sessionId, tool, args, { server: call.server }),
       capture: async (call) => {
         if (!call.sessionId) throw new Error('TASK_UNAVAILABLE');
         const sessionId = call.sessionId;
@@ -98,6 +108,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
             role: botSessionLinks.role,
             botStatus: botProfiles.status,
             archivedAt: botSessionLinks.archivedAt,
+            ...(selfRewind ? { permissionMode: sessions.permissionMode, planModeEnabled: sessions.planModeEnabled } : {}),
           })
           .from(sessions)
           .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
@@ -105,7 +116,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
           .where(eq(sessions.id, sessionId))
           .limit(1);
         if (!caller) throw new Error('TASK_UNAVAILABLE');
-        const input = deps.input(sessionId);
+        const input = deps.input(sessionId, selfRewind);
         const scheduled = !caller.botId && caller.source !== 'bot' &&
           deps.getSession(sessionId)?.getCurrentTurnOrigin()?.kind === 'scheduler';
         // User-authored ordinary work retains the existing Agent permission flow.
@@ -118,16 +129,12 @@ export function createDesktopTaskActionAuthorizer(deps: {
           return null;
         if (caller.botId && (caller.botStatus !== 'active' || caller.archivedAt !== null))
           throw new Error('BOT_SESSION_INACTIVE');
-        // A persisted group lane is not consent. Reuse Chat Server's live, owner-only
-        // execution authority; guest, stale and temporarily unavailable grants fail closed.
-        const group =
-          caller.botId && caller.role === 'group'
-            ? await authorizeGroupTool(sessionId, caller.botId, 'owner-action')
-            : null;
-        const ownerInput = group !== null || input.ownerInput;
+        // Teammates use the same task flow as ordinary tasks: any task can already open a
+        // Full Access task, so a teammate-only gate would protect nothing (2026-11-08).
+        const ownerInput = input.ownerInput;
         // All execution modes use the normal runtime permission flow, including
         // automatic/resumed turns. Do not ask for owner consent a second time.
-        // Group identity was checked above; shared guests keep their own boundary.
+        // Shared guests keep their own boundary.
         // This is the Host admission snapshot, not an upstream approval receipt.
         // Its revocation lifetime starts here; the approval-to-Host handoff keeps
         // ordinary session semantics and is not made atomic by this gate.
@@ -147,46 +154,6 @@ export function createDesktopTaskActionAuthorizer(deps: {
         const runtime = !useRuntimePermissions && scheduled
           ? captureScheduledRuntime(sessionId, deps.getSession)
           : null;
-        const args =
-          call.args && typeof call.args === 'object' && !Array.isArray(call.args)
-            ? (call.args as Record<string, unknown>)
-            : {};
-        const taskId = typeof args.task_id === 'string' ? args.task_id : undefined;
-        const readDelegation = async (rechecking = false) => {
-          if (
-            !taskId ||
-            !DELEGATED_TASK_ACTIONS.includes(call.tool as (typeof DELEGATED_TASK_ACTIONS)[number])
-          )
-            return null;
-          const [row] = await db.drizzle
-            .select()
-            .from(botDelegations)
-            .where(
-              and(eq(botDelegations.id, taskId), eq(botDelegations.parentSessionId, sessionId)),
-            )
-            .limit(1);
-          if (!row || !['queued', 'running', 'waiting'].includes(row.status)) return null;
-          let snapshot: {
-            taskActionAuthority?: { version?: number; actions?: string[] };
-            taskPause?: unknown;
-          };
-          try {
-            snapshot = JSON.parse(row.permissionSnapshotJson);
-          } catch {
-            return null;
-          }
-          const grant = snapshot.taskActionAuthority;
-          // Paused work only resumes following a new owner request. Permission answers
-          // and model changes are also exact decisions, never a standing message grant.
-          // An admitted pause writes its intent before stopping the execution.
-          // That intent cannot revoke the very same stop; it still blocks every
-          // new admission and every message/resume delivery.
-          const completingPause = rechecking && call.tool === 'stop_session_task' && args.mode === 'pause';
-          if ((snapshot.taskPause && !completingPause) || args.decision || args.answers || args.mode === 'resume')
-            return null;
-          return grant?.version === 1 && grant.actions?.includes(call.tool) ? row : null;
-        };
-        const delegation = useRuntimePermissions ? null : await readDelegation();
         // A real Worker report continues its ordinary Lead's existing team. It
         // cannot authorize helper writes to unrelated tasks or create a new team.
         const readOrcaTeam = async () => {
@@ -213,21 +180,41 @@ export function createDesktopTaskActionAuthorizer(deps: {
           return team ?? null;
         };
         const orcaTeam = useRuntimePermissions ? null : await readOrcaTeam();
+        const rewindSession = selfRewind && input.rewind ? deps.getSession(sessionId) : undefined;
+        const rewindPermission = rewindSession?.stablePermissionModeState;
+        const rewindPlan = rewindSession?.stablePlanModeState;
+        const canRewind = !!(rewindSession && rewindPermission && rewindPlan && !rewindPlan.enabled &&
+          rewindPermission.mode !== 'plan' && input.rewind);
+        const permissionAtRewind = rewindPermission && { ...rewindPermission };
+        const planAtRewind = rewindPlan && { ...rewindPlan };
+        let rewindPhase: 'input' | 'stopped' | 'closed' = 'input';
+        let rewindSignal = input.rewind?.signal;
+        let idleKey = input.rewind?.idle ? input.key : undefined;
+        let rewindRevoked = false;
+        let rewindFinished = false;
+        let unwatchRewind: (() => void) | undefined;
+        // An admitted message outlives the turn that sent it. Delivery stops only on
+        // real revocation: account switch, sender cleared or deleted, companion paused
+        // or archived, or team changed. The sender's live
+        // Session incarnation, input generation and permission/Plan generation gate
+        // executing this call (assertCurrent), never an already queued message.
+        // The captured database client is the owner identity. A held app-session boundary alone
+        // proves nothing: a same-owner Ghost projection repair holds it too. While it is pending
+        // a delivery check cannot be answered, which is a failed check (kept for retry), not a
+        // revocation; once the client is replaced the next check proves the owner changed.
+        const assertSameOwner = (revokedAs: string) => {
+          if (db !== tryGetDbClient()) throw new Error(revokedAs);
+          if (isAppSessionBoundaryPending()) throw new Error('HOST_NOT_READY');
+        };
         const assertDeliveryCurrent = async () => {
-          runtime?.assertCurrent();
-          await group?.refresh();
-          if (
-            isAppSessionBoundaryPending() ||
-            db !== tryGetDbClient() ||
-            deps.input(sessionId).boundary !== input.boundary
-          )
-            throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+          assertSameOwner('TASK_ACTION_AUTHORIZATION_EXPIRED');
           const [fresh] = await db.drizzle
             .select({
               status: sessions.status,
               clearedAt: sessions.clearedAt,
               botStatus: botProfiles.status,
               archivedAt: botSessionLinks.archivedAt,
+              ...(selfRewind ? { permissionMode: sessions.permissionMode, planModeEnabled: sessions.planModeEnabled } : {}),
             })
             .from(sessions)
             .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
@@ -239,49 +226,106 @@ export function createDesktopTaskActionAuthorizer(deps: {
             fresh.status === 'deleted' ||
             fresh.clearedAt !== caller.clearedAt ||
             (caller.botId && (fresh.botStatus !== 'active' || fresh.archivedAt !== null))
+            || (canRewind && (fresh.permissionMode !== caller.permissionMode || fresh.planModeEnabled !== caller.planModeEnabled))
           )
             throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
-          if (delegation) {
-            const current = await readDelegation(true);
-            if (!current || current.runSequence !== delegation.runSequence)
-              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
-          }
+          // /clear moves the coordinator's fence before persisting cleared_at, and persisting may
+          // fail, so the sender's clear is also read from memory. A persisted boundary loaded late
+          // (restart) is no newer than what admission already saw in the database.
+          const clearedInMemory = deps.input(sessionId).clearBoundaryMs;
+          if (clearedInMemory != null && clearedInMemory > Math.max(input.clearBoundaryMs ?? 0, caller.clearedAt ?? 0))
+            throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
           if (orcaTeam) {
             if ((await readOrcaTeam())?.id !== orcaTeam.id)
               throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
           }
-          group?.assertCurrent();
-          assertPermissionCurrent();
-          if (db !== tryGetDbClient() || isAppSessionBoundaryPending())
-            throw new Error('OWNER_SCOPE_CHANGED');
-          runtime?.assertCurrent();
+          assertSameOwner('OWNER_SCOPE_CHANGED');
         };
         const assertCurrentSync = () => {
-          runtime?.assertInputCurrent();
-          group?.assertCurrent();
-          assertPermissionCurrent();
-          const current = deps.input(sessionId);
+          if (rewindPhase !== 'closed') {
+            if (rewindPhase === 'stopped') runtime?.assertCurrent();
+            else runtime?.assertInputCurrent();
+            assertPermissionCurrent();
+          }
+          const current = deps.input(sessionId, selfRewind);
           if (
-            isAppSessionBoundaryPending() || db !== tryGetDbClient() ||
-            current.boundary !== input.boundary || current.key !== input.key
+            isAppSessionBoundaryPending() || db !== tryGetDbClient()
           ) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+          if (canRewind) {
+            const boundary = current.rewind;
+            if (fingerprint !== taskActionFingerprint(call) || call.sessionId !== sessionId || call.server !== 'cindy_helper' ||
+              rewindFinished || rewindRevoked || !boundary || boundary.generation !== input.rewind!.generation ||
+              rewindSignal?.aborted || boundary.signal !== rewindSignal)
+              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+            if (rewindPhase === 'closed') {
+              if (deps.getSession(sessionId) !== undefined) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+            } else {
+              const permission = rewindSession!.stablePermissionModeState, plan = rewindSession!.stablePlanModeState;
+              if (deps.getSession(sessionId) !== rewindSession || !permission || !plan ||
+                permission.generation !== permissionAtRewind!.generation || permission.mode !== permissionAtRewind!.mode ||
+                plan.generation !== planAtRewind!.generation || plan.enabled !== planAtRewind!.enabled)
+                throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+            }
+            if (rewindPhase !== 'input') {
+              if (!boundary.locked || (idleKey !== undefined ? current.key !== idleKey :
+                !boundary.idle && current.key !== input.key)) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+              if (boundary.idle) idleKey = current.key;
+              return;
+            }
+          }
+          if (current.boundary !== input.boundary || current.key !== input.key)
+            throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
         };
         const scope: TaskActionScope = {
           key: input.key,
           ownerInput,
-          delegated: !!delegation || !!orcaTeam,
+          delegated: !!orcaTeam,
           assertDeliveryCurrent,
           assertCurrentSync,
           assertCurrent: async () => {
-            if (fingerprint !== taskActionFingerprint(call))
+            if (fingerprint !== taskActionFingerprint(call) ||
+              (canRewind && (call.sessionId !== sessionId || call.server !== 'cindy_helper')))
               throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
             await assertDeliveryCurrent();
             assertCurrentSync();
           },
+          ...(canRewind ? {
+            rewindTarget: { sessionId, clientId: rewindArgs.message_client_id! },
+            rewindBoundary: async <T>(target: string, clientId: string, phase: 'stop' | 'native-close', operation: () => T | Promise<T>): Promise<T> => {
+              if (target !== sessionId || clientId !== rewindArgs.message_client_id ||
+                fingerprint !== taskActionFingerprint(call) || rewindPhase === 'closed')
+                throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+              await scope.assertCurrent();
+              assertCurrentSync();
+              if (!deps.input(sessionId, true).rewind?.locked) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+              if (phase === 'stop') {
+                if (rewindPhase !== 'input') throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+                const result = operation();
+                const next = deps.input(sessionId, true).rewind;
+                // Stop itself is synchronous. Capture its new abort fence before yielding;
+                // another Stop, /clear or input boundary must never be mistaken for ours.
+                if (!rewindSignal?.aborted || !next || next.signal === rewindSignal)
+                  throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+                rewindSignal = next.signal;
+                rewindPhase = 'stopped';
+                await scope.assertCurrent();
+                return await result;
+              }
+              if (!deps.input(sessionId, true).rewind?.idle) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+              const result = await operation();
+              rewindPhase = 'closed';
+              await scope.assertCurrent();
+              return result;
+            },
+            startRewind: () => {
+              unwatchRewind = watchCredentialGrantRevocation(sessionId, () => { rewindRevoked = true; });
+            },
+            finishRewind: () => { rewindFinished = true; unwatchRewind?.(); },
+          } : {}),
         };
         if (useRuntimePermissions) {
           // Owner requests and live execution modes use the normal Agent permission flow.
-          // Retain delivery evidence so workbench, queues and new delegations work too.
+          // Retain delivery evidence so queues and later deliveries work too.
           admittedScope = scope;
           return null;
         }
@@ -315,5 +359,5 @@ export function createDesktopTaskActionAuthorizer(deps: {
     })(call);
     return rejectedDecision ?? (decision.ok && admittedScope
       ? admitTaskAction(call, admittedScope, fingerprint) : decision);
-  };
+  });
 }

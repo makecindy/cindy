@@ -105,3 +105,18 @@ describe('command card localization boundaries', () => {
       .toEqual([cmdLine, spawnError, stdout, stderr]);
   });
 });
+
+
+it.each(SUPPORTED_LOCALES)('distinguishes a summary fallback from native resume: %s', async locale => {
+  await i18n.changeLanguage(locale);
+  const { rerender } = render(<SystemCard cardType="agent-switch" data={{
+    fromAgentKind: 'codex', toAgentKind: 'codex', toAgentDeviceId: 'mini', nativeHistory: 'fallback', resumed: false,
+  }} />);
+  expect(screen.getByText(i18n.t('chat.systemCard.agentSwitch.fallbackBadge'))).toBeTruthy();
+  expect(screen.queryByText(i18n.t('chat.systemCard.agentSwitch.resumedBadge'))).toBeNull();
+  rerender(<SystemCard cardType="agent-switch" data={{
+    fromAgentKind: 'codex', toAgentKind: 'codex', toAgentDeviceId: 'mini', nativeHistory: 'restored', resumed: true,
+  }} />);
+  expect(screen.getByText(i18n.t('chat.systemCard.agentSwitch.resumedBadge'))).toBeTruthy();
+  expect(screen.queryByText(i18n.t('chat.systemCard.agentSwitch.fallbackBadge'))).toBeNull();
+});

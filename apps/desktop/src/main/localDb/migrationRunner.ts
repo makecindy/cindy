@@ -8,6 +8,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import type Database from 'better-sqlite3';
 
 export interface MigrationFile {
@@ -527,8 +528,8 @@ export function runMigrationReplay(
 
 function loadScriptWithRequire(scriptPath: string): unknown {
   // require 而非 import：生产 Electron 以 CommonJS 加载 raw TS 配套脚本。
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require(scriptPath);
+  // Node Host loads this runner as ESM; the companion itself remains CommonJS.
+  return createRequire(import.meta.url)(scriptPath);
 }
 
 function writeSchemaVersion(db: Database.Database, seq: number): void {

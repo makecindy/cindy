@@ -1,6 +1,7 @@
-/** Route only the four Worker bridge tools, using persisted links on both computers. */
+/** Route only the four allowlisted Worker bridge tools, using persisted links on both computers. */
 import {
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
+  ORCA_REMOTE_WORKER_BRIDGE_TOOLS,
   parseOrcaRemoteWorkerBridgeRequest,
   isOrcaRemoteWorkerSessionId,
   type InvokeResultPayload,
@@ -66,6 +67,14 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
       if (!lead) return null;
       if (row.status !== 'active' || lead.releasedAt !== undefined) {
         return toolError('remote worker collaboration has ended', 'NOT_FOUND');
+      }
+      // Only the four allowlisted tools cross devices. Managing reports queued at the Lead is
+      // local-Worker only for now; say so instead of failing protocol validation.
+      if (!(ORCA_REMOTE_WORKER_BRIDGE_TOOLS as readonly string[]).includes(tool)) {
+        return toolError(
+          'This tool is not available to a Worker running on another computer yet.',
+          'REMOTE_WORKER_NOT_SUPPORTED',
+        );
       }
       // Provenance is checked on the execution device before crossing the device boundary.
       if (tool === 'send_to_lead') {

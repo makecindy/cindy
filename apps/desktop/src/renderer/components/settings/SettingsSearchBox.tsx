@@ -25,10 +25,11 @@ import {
 interface SettingsSearchBoxProps {
   visibleTabIds: readonly VisibleSettingsTab[];
   searchContext?: SettingsSearchContext;
+  additionalDocuments?: readonly SettingsSearchDocument[];
   onSelect?: (result: { tab: SettingsTab; sectionId: string }) => void;
 }
 
-export function SettingsSearchBox({ visibleTabIds, searchContext, onSelect }: SettingsSearchBoxProps) {
+export function SettingsSearchBox({ visibleTabIds, searchContext, additionalDocuments, onSelect }: SettingsSearchBoxProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
@@ -43,8 +44,8 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, onSelect }: Se
     },
   });
   const documents = useMemo(
-    () => buildSettingsSearchDocuments(t, visibleTabIds, searchContext),
-    [t, visibleTabIds, searchContext],
+    () => [...buildSettingsSearchDocuments(t, visibleTabIds, searchContext), ...(additionalDocuments ?? [])],
+    [t, visibleTabIds, searchContext, additionalDocuments],
   );
   const results = useMemo(() => searchSettings(documents, query), [documents, query]);
   const hasQuery = query.trim().length > 0;

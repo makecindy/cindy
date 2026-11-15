@@ -1,0 +1,1 @@
+ALTER TABLE `plugin_usage_events` ADD `entry_kind` text DEFAULT 'tool' NOT NULL;

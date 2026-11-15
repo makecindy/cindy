@@ -5,7 +5,7 @@
  * 复制一份必然漂：
  *   1. XD 实际报价与非 XD 的 Catalog 参考价是**两份独立快照**，只按行来源选快照，
  *      相同 modelId 不跨 provider 复用或兜底。
- *   2. XD 且报价来自 gateway 时要叠 `CatalogModel.cost`（服务端下发的折后展示价），
+ *   2. XD Gateway 与企业 BYOK 报价要叠 `CatalogModel.cost`（服务端下发的折后展示价），
  *      由 `modelPricePresentation` 与标准价跑比例一致性校验后才认定为折扣。
  *   3. 非 XD 的 `approximate` 报价在展示时抹掉近似标记（`displayQuote`）——
  *      参考价本身就是估算，再挂一次「近似」是重复表达。
@@ -18,7 +18,7 @@
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { modelPricePresentation, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 
-import { getModel, type ProviderView } from '@cindy/model-providers';
+import { getModel, isByokProviderId, type ProviderView } from '@cindy/model-providers';
 
 import { getModelPriceQuote } from '../../shared/modelPriceQuote';
 import type { ModelPricingCatalog } from '../../shared/regionalMoney';
@@ -44,7 +44,10 @@ export function resolveModelPricePresentation({
   referencePricing,
 }: ModelPricePresentationInput): ModelPricePresentation | null {
   const pricing = providerId === 'xd' ? gatewayPricing : referencePricing;
-  const quote = getModelPriceQuote(pricing, providerId, modelId, agent ?? undefined);
+  // A provider Cindy created for subscription accounts (2026-11-13) mirrors its built-in
+  // subscription's models and prices; the reference table only knows the built-in id.
+  const pricedAs = providers.find((item) => item.id === providerId)?.subscriptionPool ?? providerId;
+  const quote = getModelPriceQuote(pricing, pricedAs, modelId, agent ?? undefined);
   if (providerId === 'xd' && (!quote || quote.source === 'gateway')) {
     // 网关快照还没到（null）且这一行也没有 quote：什么都不画，别先画一个错的。
     if (!quote && gatewayPricing == null) return null;
@@ -54,5 +57,10 @@ export function resolveModelPricePresentation({
   }
   if (!quote) return null;
   const displayQuote = quote.approximate ? { ...quote, approximate: false } : quote;
-  return modelPricePresentation(displayQuote, undefined);
+  const provider =
+    isByokProviderId(providerId) && quote.source === 'provider-reference'
+      ? providers.find((item) => item.id === providerId)
+      : undefined;
+  const effectiveCost = provider && agent ? getModel(provider, modelId, agent)?.cost : undefined;
+  return modelPricePresentation(displayQuote, effectiveCost);
 }

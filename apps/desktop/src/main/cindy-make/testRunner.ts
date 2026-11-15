@@ -76,6 +76,7 @@ const OS_ENV_KEYS = new Set([
   'corepack_enable_auto_pin',
   'corepack_enable_download_prompt',
   'npm_config_manage_package_manager_versions',
+  'pnpm_config_manage_package_manager_versions',
   'npm_config_managepackagemanagerversions',
   'pnpm_manage_package_manager_versions',
 ]);
@@ -191,6 +192,8 @@ const WRAPPER_FAILURE_CODES = new Set([
   'STARTUP_TIMEOUT',
   'STARTUP_FAILED',
   'WHOAMI_MISMATCH',
+  'WHOAMI_UNAVAILABLE',
+  'PROCESS_SCAN_FAILED',
   'MIGRATION_POLICY',
   'MIGRATE_FAILED',
   'AUTH_INIT_FAILED',

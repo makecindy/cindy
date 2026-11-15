@@ -15,13 +15,16 @@ pub fn sync(exe: &std::path::Path, key: &str) {
     }
     let mut system_dir = [0u16; 32768];
     // SAFETY: the buffer is writable and its declared length matches the array.
-    let len = unsafe { GetSystemDirectoryW(system_dir.as_mut_ptr(), system_dir.len() as u32) } as usize;
+    let len =
+        unsafe { GetSystemDirectoryW(system_dir.as_mut_ptr(), system_dir.len() as u32) } as usize;
     if len == 0 || len >= system_dir.len() {
         crate::logger::warn("[installer] system directory unavailable for metadata repair");
         return;
     }
     let powershell = std::path::PathBuf::from(String::from_utf16_lossy(&system_dir[..len]))
-        .join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
     let result = Command::new(powershell)
         .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
         .env("CINDY_VERSION_SYNC_KEY", key)

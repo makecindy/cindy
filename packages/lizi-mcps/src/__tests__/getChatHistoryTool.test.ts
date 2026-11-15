@@ -41,6 +41,20 @@ describe('get_chat_history remote errors', () => {
 });
 
 describe('get_chat_history cursor pagination', () => {
+  // Unit, lifecycle #15: the storage row id differs from the UI/native anchor.
+  // Existing cursor cases never expose a message, so they cannot catch losing clientId.
+  it.each([undefined, 'native-anchor'])('preserves optional message clientId %s for history operations', async clientId => {
+    const row = { id: 'storage-row', clientId, sessionId: 'task', sessionWorkingDir: null, sessionAgentKind: 'cc', sessionTitle: 'Task',
+      role: 'user', content: 'question', toolUseId: null, agentMeta: null, createdAt: 1000, rewindAt: null };
+    const history = { listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
+      getMessages: vi.fn(async () => ({ ok: true as const, page: { items: [row], nextCursor: null, hasMore: false } })) };
+    const registry = new XdtHelperToolRegistry();
+    registerGetChatHistoryTool(registry, { history });
+    const result = parseText(await registry.call('get_chat_history', { session_ids: ['task'] })) as { messages: Array<{ id: string; clientId?: string }> };
+    expect(result.messages[0]).toMatchObject({ id: 'storage-row', ...(clientId ? { clientId } : {}) });
+    if (!clientId) expect(result.messages[0]).not.toHaveProperty('clientId');
+  });
+
   it('carries rowid through the public nextCursor round-trip', async () => {
     const getMessages = vi
       .fn()
@@ -76,6 +90,116 @@ describe('get_chat_history cursor pagination', () => {
     expect(getMessages).toHaveBeenNthCalledWith(2, expect.objectContaining({
       cursor: { createdAt: 1_000, id: 'message-1', rowid: 42 },
     }));
+  });
+});
+
+describe('get_chat_history error role', () => {
+  it('returns error rows when the caller lists the role explicitly', async () => {
+    const getMessages = vi.fn(async () => ({
+      ok: true as const,
+      page: {
+        items: [{
+          id: 'm-error',
+          sessionId: 'session-1',
+          sessionWorkingDir: null,
+          sessionAgentKind: 'cc',
+          sessionTitle: 'Session',
+          role: 'error',
+          content: { message: 'worker 派发成功后无输出就终止', sdkError: '[redacted]' },
+          toolUseId: null,
+          agentMeta: null,
+          createdAt: 1_700_000_000_000,
+          rewindAt: null,
+        }],
+        nextCursor: null,
+        hasMore: false,
+      },
+    }));
+    const history = {
+      listWorkdirs: vi.fn(),
+      listSessions: vi.fn(),
+      getMessages,
+      searchChatHistory: vi.fn(),
+    } satisfies XdtHelperHistoryDeps;
+    const registry = new XdtHelperToolRegistry();
+    registerGetChatHistoryTool(registry, { history });
+
+    const result = await registry.call('get_chat_history', {
+      session_ids: ['session-1'],
+      roles: ['error'],
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(getMessages).toHaveBeenCalledWith(expect.objectContaining({
+      roles: ['error'],
+      rolesDefaulted: false,
+    }));
+    const payload = parseText(result) as {
+      messages: Array<{ role: string }>;
+      query: { roles: string[]; roles_defaulted: boolean };
+    };
+    expect(payload.query.roles).toEqual(['error']);
+    expect(payload.query.roles_defaulted).toBe(false);
+    expect(payload.messages.map((m) => m.role)).toEqual(['error']);
+  });
+
+  it('keeps error rows out of the unchanged default role set', async () => {
+    const items = [
+      {
+        id: 'm-user',
+        sessionId: 'session-1',
+        sessionWorkingDir: null,
+        sessionAgentKind: 'cc',
+        sessionTitle: 'Session',
+        role: 'user',
+        content: 'hello',
+        toolUseId: null,
+        agentMeta: null,
+        createdAt: 1_700_000_000_000,
+        rewindAt: null,
+      },
+      {
+        id: 'm-error',
+        sessionId: 'session-1',
+        sessionWorkingDir: null,
+        sessionAgentKind: 'cc',
+        sessionTitle: 'Session',
+        role: 'error',
+        content: { message: 'worker 派发成功后无输出就终止' },
+        toolUseId: null,
+        agentMeta: null,
+        createdAt: 1_700_000_000_001,
+        rewindAt: null,
+      },
+    ];
+    const getMessages = vi.fn(async (args: { roles: readonly string[] | null }) => ({
+      ok: true as const,
+      page: {
+        items: items.filter((m) => args.roles?.includes(m.role)),
+        nextCursor: null,
+        hasMore: false,
+      },
+    }));
+    const history = {
+      listWorkdirs: vi.fn(),
+      listSessions: vi.fn(),
+      getMessages,
+      searchChatHistory: vi.fn(),
+    } satisfies XdtHelperHistoryDeps;
+    const registry = new XdtHelperToolRegistry();
+    registerGetChatHistoryTool(registry, { history });
+
+    const payload = parseText(
+      await registry.call('get_chat_history', { session_ids: ['session-1'] }),
+    ) as { messages: Array<{ role: string }>; query: { roles: string[] } };
+
+    expect(getMessages).toHaveBeenCalledWith(expect.objectContaining({
+      roles: ['user', 'assistant', 'ask_user', 'plan_review'],
+      rolesDefaulted: true,
+    }));
+    expect(payload.query.roles).toEqual(['user', 'assistant', 'ask_user', 'plan_review']);
+    expect(payload.query.roles).not.toContain('error');
+    expect(payload.messages.map((m) => m.role)).toEqual(['user']);
   });
 });
 

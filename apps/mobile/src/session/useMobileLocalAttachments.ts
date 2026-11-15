@@ -22,7 +22,6 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { retainComposerAttachmentFile } from './durableOutboxFiles';
 import * as ImagePicker from 'expo-image-picker';
 import { formatRemoteError } from '@/device-link/remoteStatus';
-import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
 import { pickDeferredLibraryPhotos } from '@/session/deferredPhotoLibrary';
 import {
   MOBILE_MAX_ATTACHMENTS,
@@ -35,6 +34,7 @@ import {
   isCameraUnavailableOnSimulator,
   type MobileLocalAttachmentUploadCandidate,
   type MobileLocalAttachmentUploadController,
+  type MobileLocalAttachmentUploadDeps,
   type PendingLocalAttachmentUpload,
 } from '@/session/mobileLocalAttachmentUpload';
 import {
@@ -55,6 +55,8 @@ import {
 import type { RemoteSerializedAttachment } from '@/session/types';
 
 export interface UseMobileLocalAttachmentsOptions {
+  /** Fixed for this composer's lifetime; defaults to the existing computer upload. */
+  upload?: MobileLocalAttachmentUploadDeps['upload'];
   /**
    * composer 附件作用域。已建任务页传 sessionId；作用域换代后，旧 picker / 粘贴 /
    * 标注异步入口与上传完成结果不得写入新作用域。省略时保持旧的单作用域行为。
@@ -288,7 +290,7 @@ export function useMobileLocalAttachments(
       if (candidate.kind === 'image') assertMobileImageSize(size);
       else assertMobileDocumentSize(size);
     },
-    upload: (candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, { ...opts, sharedTaskId: candidate.sharedTaskId, deviceId: candidate.deviceId }),
+    upload: options.upload ?? ((candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, { ...opts, sharedTaskId: candidate.sharedTaskId, deviceId: candidate.deviceId })),
     discard: (attachment, token) => discardMobileUploadedAttachment(attachment, {
       getToken: () => token === undefined ? optionsRef.current.getAccessToken() : Promise.resolve(token),
     }),
@@ -465,15 +467,11 @@ export function useMobileLocalAttachments(
         optionsRef.current.onError(t('composer.upload.simulatorNoCamera'));
         return;
       }
-      if (source === 'camera' || canBrowsePhotoLibraryDirectly(Platform.OS)) {
-        const permission = source === 'camera'
-          ? await ImagePicker.requestCameraPermissionsAsync()
-          : await ImagePicker.requestMediaLibraryPermissionsAsync(false);
+      if (source === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
         if (!isAttachmentScopeActive()) return;
         if (!permission.granted) {
-          optionsRef.current.onError(source === 'camera'
-            ? t('composer.upload.cameraPermission')
-            : t('composer.upload.photoPermission'));
+          optionsRef.current.onError(t('composer.upload.cameraPermission'));
           return;
         }
       }
@@ -503,7 +501,9 @@ export function useMobileLocalAttachments(
         })
         : await ImagePicker.launchImageLibraryAsync({
           allowsMultipleSelection: true,
-          mediaTypes: ['images'],
+          mediaTypes: ['images', 'videos'],
+          videoExportPreset: ImagePicker.VideoExportPreset.Passthrough,
+          preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
           orderedSelection: true,
           quality: 1,
           selectionLimit: begun.remainingSlots,
@@ -513,7 +513,14 @@ export function useMobileLocalAttachments(
 
       const candidates: MobileLocalAttachmentUploadCandidate[] = picked.assets
         .slice(0, begun.remainingSlots)
-        .map((asset, index) => ({ kind: 'image', ...buildMobileImageAttachmentCandidate(asset, index) }));
+        .map((asset, index) => {
+          if (asset.type !== 'video') return { kind: 'image', ...buildMobileImageAttachmentCandidate(asset, index) };
+          const uri = asset.uri.trim();
+          if (!uri) throw new Error(t('composer.upload.noFileRead'));
+          return { kind: 'file', uri,
+            name: asset.fileName?.trim() || uri.split('/').pop()?.split(/[?#]/)[0] || `video-${index + 1}`,
+            size: asset.fileSize ?? 0, mimeType: asset.mimeType || undefined };
+        });
       if (candidates.length === 0 || !isAttachmentScopeActive()) return;
       // 立即入 pending 托盘(不先 await token):token 等待窗里任务已可被 waitForIdle 看到,
       // composer 抢发会等它落定而不是丢图;token 由任务开跑时自行等待(拿不到→该任务失败报错)。

@@ -68,6 +68,12 @@ export function classifyBotFailureReason(value: unknown): BotFailureReason {
   ) return 'provider_server_error';
   if (/context length|context_overflow|maximum context/i.test(text)) return 'context_overflow';
   if (/no llm provider configured|missing config|no access token/i.test(text)) return 'missing_config';
+  // The Bot still points at a provider that was deleted or no longer offers its model
+  // (e.g. a preset connection re-added under a new id). Nothing recovers this until
+  // the owner picks the model again, so it must surface as needs-attention.
+  if (
+    /cannot serve model .*\(provider absent|provider "[^"]*" is unavailable; select an available provider/i.test(text)
+  ) return 'missing_config';
   if (/model .*(?:not found|does not exist)|model_not_found/i.test(text)) return 'model_unavailable';
   if (/agent (?:is )?blocked|awaiting approval|waiting for approval/i.test(text)) return 'agent_blocked';
   return 'unknown';

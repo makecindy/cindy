@@ -55,6 +55,8 @@ const CUSTOM_IMG_SCHEMES = [
   'cindy-media:',
 ];
 const CUSTOM_MEDIA_SCHEMES = [
+  // Task-file video uses the same guarded local-file handler as image previews.
+  'xdt-file:',
   'xdt-audio:',
   'xdt-video:',
   'xdt-image:',
@@ -225,7 +227,8 @@ export function installContentSecurityPolicy(session: Session, ctx: CspContext):
     const isAppDocument =
       (ctx.desktopCapture === true &&
         (url === 'cindy-desktop-capture://capture/index.html' ||
-          url === 'cindy-desktop-capture://capture/index.html?mode=files')) ||
+          url === 'cindy-desktop-capture://capture/index.html?mode=files' ||
+          url === 'cindy-desktop-capture://capture/index.html?mode=recording')) ||
       url.startsWith('file://') ||
       (ctx.devServerOrigin !== null && parseOrigin(url) === ctx.devServerOrigin);
     if (!isAppDocument) {

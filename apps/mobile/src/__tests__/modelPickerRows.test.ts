@@ -61,9 +61,18 @@ describe('providerDisplayTitle / formatPriceLine / buildRowMetaLine', () => {
   it('内置供应商用桌面 zh-CN 标题,自定义回退 name', () => {
     expect(providerDisplayTitle({ id: 'anthropic', name: 'x' })).toBe('Anthropic');
     expect(providerDisplayTitle({ id: 'openai', name: 'x' })).toBe('OpenAI');
-    expect(providerDisplayTitle({ id: 'xd', name: 'x' })).toBe('Cindy AI');
+    expect(providerDisplayTitle({ id: 'xd', name: 'XD Gateway' })).toBe('Cindy AI');
     expect(providerDisplayTitle({ id: 'my-proxy', name: '我的代理' })).toBe('我的代理');
   });
+
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])(
+    'uses the source computer identity %s in model rows', (name) => {
+      const provider = { id: 'xd', name };
+      expect(providerDisplayTitle(provider)).toBe(name);
+      expect(buildRowMetaLine({ provider, model: { id: 'auto', contextWindow: 272_000 } }))
+        .toBe(`${name} · 272K 上下文`);
+    },
+  );
 
   it('价格行对齐桌面 priceTip 文案;无价 null', () => {
     expect(formatPriceLine({ inputUsdPerMtok: 3, outputUsdPerMtok: 15 })).toBe(

@@ -18,11 +18,32 @@ import {
   selectProjectBulkArchiveCandidates,
 } from '../lib/projectBulkArchiveAction';
 import type { FilterStatus } from './useSidebarFilter';
+import {
+  getAutomationSidebarGroupInfo,
+  type AutomationSessionGroup,
+  type AutomationScheduleSessionInfo,
+} from '../lib/automationSidebarGrouping';
 
 const log = createLogger('SessionGroupArchive');
 
+/** Read takeover first, then the live running store after that asynchronous boundary. */
+async function archiveBlockReason(sessionId: string): Promise<'attached' | 'running' | null> {
+  try {
+    if ((await window.electronAPI.binding.resolveSession(sessionId)).attached) return 'attached';
+  } catch {
+    // Match the existing single-session and selection archive preflight fallback.
+  }
+  return makerChatStore.getRunningSnapshot().get(sessionId)?.isRunning ? 'running' : null;
+}
+
 type SessionGroupArchiveScope =
-  { kind: 'project'; project: ProjectNode } | { kind: 'dialogue'; sessions: readonly Session[] };
+  | { kind: 'project'; project: ProjectNode }
+  | { kind: 'dialogue'; sessions: readonly Session[] }
+  | {
+      kind: 'automation';
+      group: AutomationSessionGroup;
+      scheduleSessionIndex: ReadonlyMap<string, AutomationScheduleSessionInfo>;
+    };
 
 interface SessionGroupArchiveOptions {
   sessions: readonly Session[];
@@ -35,7 +56,7 @@ interface SessionGroupArchiveOptions {
   navigate: NavigateFunction;
 }
 
-/** Shared project/dialogue bulk lifecycle. Scope membership never depends on visible fold limits. */
+/** Shared group bulk lifecycle. Scope membership never depends on visible fold limits. */
 export function useSessionGroupArchive({
   sessions,
   runningSessionIds,
@@ -52,35 +73,50 @@ export function useSessionGroupArchive({
       if (
         scope.kind === 'project'
           ? isDeviceLinkWriteBlocked(scope.project)
-          : scope.sessions.some((session) => session.deviceLinkDeviceId)
+          : scope.kind === 'automation'
+            ? scope.group.deviceLinkDeviceId ||
+              scope.group.sessions.some((s) => s.deviceLinkDeviceId)
+            : scope.sessions.some((session) => session.deviceLinkDeviceId)
       ) {
         toast.warning(
           t(
-            scope.kind === 'project'
+            scope.kind !== 'dialogue'
               ? 'ccAgent.remoteSession.actionsUnavailable'
               : 'ccAgent.sidebar.dialogueAction.remoteBulkUnavailable',
           ),
         );
         return;
       }
-      const action = projectBulkArchiveActionForStatus(status);
+      const action =
+        scope.kind === 'automation' ? 'archive' : projectBulkArchiveActionForStatus(status);
       const memberIds =
         scope.kind === 'dialogue' ? new Set(scope.sessions.map((session) => session.id)) : null;
       const belongsToGroup = (session: Session): boolean =>
         scope.kind === 'project'
           ? projectIdentityKeyForSession(session) === scope.project.projectKey
-          : memberIds!.has(session.id);
-      const archiveCopy = scope.kind === 'project' ? 'archiveAll' : 'dialogueArchiveAll';
+          : scope.kind === 'automation'
+            ? !session.deviceLinkDeviceId &&
+              getAutomationSidebarGroupInfo(session, scope.scheduleSessionIndex)?.key ===
+                scope.group.id
+            : memberIds!.has(session.id);
+      const archiveCopy =
+        scope.kind === 'project'
+          ? 'archiveAll'
+          : scope.kind === 'automation'
+            ? 'automationArchiveAll'
+            : 'dialogueArchiveAll';
       const restoreCopy = scope.kind === 'project' ? 'unarchiveAll' : 'dialogueRestoreAll';
 
       // Only local records are written; remote batches require runtime checks on their owning computer.
-      // Both group types share candidate selection, confirmation and lifecycle cleanup.
-      const { candidates, skippedPinned, skippedRunning } = selectProjectBulkArchiveCandidates(
+      // All group types share candidate selection, confirmation and lifecycle cleanup.
+      const selection = selectProjectBulkArchiveCandidates(
         sessions,
         action,
         runningSessionIds,
         belongsToGroup,
       );
+      let { candidates, skippedRunning } = selection;
+      const { skippedPinned } = selection;
 
       if (action === 'unarchive') {
         if (candidates.length === 0) {
@@ -134,8 +170,32 @@ export function useSessionGroupArchive({
         return;
       }
 
+      let skippedAttached = 0;
+      const checked = await Promise.all(
+        candidates.map(async (session) => {
+          const reason = await archiveBlockReason(session.id);
+          if (reason === 'attached') skippedAttached++;
+          if (reason === 'running') skippedRunning++;
+          return reason ? null : session;
+        }),
+      );
+      candidates = checked.filter((session): session is Session => session !== null);
+
+      const skipNotesFor = (running: number, pinned: number, attached: number): string[] => {
+        const notes: string[] = [];
+        if (running > 0)
+          notes.push(t('ccAgent.sidebar.archiveAll.skipRunning', { count: running }));
+        if (pinned > 0) notes.push(t('ccAgent.sidebar.archiveAll.skipPinned', { count: pinned }));
+        if (attached > 0)
+          notes.push(t('ccAgent.sidebar.bulkSelection.skipAttached', { count: attached }));
+        return notes;
+      };
+      const skipSep = t('ccAgent.sidebar.archiveAll.skipSeparator');
+      const skipNotes = skipNotesFor(skippedRunning, skippedPinned, skippedAttached);
       if (candidates.length === 0) {
-        if (skippedPinned > 0 && skippedRunning > 0) {
+        if (skippedAttached > 0) {
+          toast.warning(t('ccAgent.sidebar.archiveAll.skipped', { skip: skipNotes.join(skipSep) }));
+        } else if (skippedPinned > 0 && skippedRunning > 0) {
           toast.warning(t(`ccAgent.sidebar.${archiveCopy}.allPinnedOrRunning`));
         } else if (skippedPinned > 0) {
           toast.warning(t(`ccAgent.sidebar.${archiveCopy}.allPinned`));
@@ -150,12 +210,6 @@ export function useSessionGroupArchive({
       const scheduleWarning = await archiveScheduleWarningMany(t, candidates);
       const dirtyCount = await countDirtyWorktreesForRemoval(candidates);
 
-      const skipNotes: string[] = [];
-      if (skippedRunning > 0)
-        skipNotes.push(t('ccAgent.sidebar.archiveAll.skipRunning', { count: skippedRunning }));
-      if (skippedPinned > 0)
-        skipNotes.push(t('ccAgent.sidebar.archiveAll.skipPinned', { count: skippedPinned }));
-      const skipSep = t('ccAgent.sidebar.archiveAll.skipSeparator');
       const baseDescription =
         skipNotes.length > 0
           ? t(`ccAgent.sidebar.${archiveCopy}.descriptionWithSkip`, {
@@ -183,11 +237,37 @@ export function useSessionGroupArchive({
 
       // 失败的 id 收集起来，最后统一 toast；其余继续走完，不让一条失败拖累整批。
       const failed: string[] = [];
+      const succeededIds = new Set<string>();
+      let newlyRunning = 0;
+      let newlyAttached = 0;
+      let newlyPinned = 0;
       for (const s of candidates) {
-        // 关掉 SDK subprocess + 清 in-memory state，与单条 archive 行为一致
-        makerChatStore.closeSessionQuery(s.id);
         try {
-          await sessionService.setStatus(s.id, 'archived');
+          const statusWriteTarget = await sessionService.resolveStatusWriteTarget(s.id);
+          // Confirmation, earlier writes and target resolution can outlive preflight.
+          const reason = await archiveBlockReason(s.id);
+          if (reason) {
+            if (reason === 'attached') newlyAttached++;
+            else newlyRunning++;
+            continue;
+          }
+          const current = await sessionService.get(s.id);
+          if (current.status !== 'active' || current.deviceLinkDeviceId || !belongsToGroup(current)) {
+            continue;
+          }
+          if (current.pinnedAt) {
+            newlyPinned++;
+            continue;
+          }
+          // The final metadata read is also an asynchronous boundary. Check the
+          // live runtime again, then close and write without further preparation.
+          if (makerChatStore.getRunningSnapshot().get(s.id)?.isRunning) {
+            newlyRunning++;
+            continue;
+          }
+          makerChatStore.closeSessionQuery(s.id);
+          await sessionService.setStatus(s.id, 'archived', statusWriteTarget);
+          succeededIds.add(s.id);
           // 写入后同步各状态桶，再清理该任务的运行视图与草稿。
           patchLocal(s.id, { status: 'archived', pinnedAt: null });
           makerChatStore.purgeSession(s.id);
@@ -198,9 +278,6 @@ export function useSessionGroupArchive({
         }
       }
 
-      const failedIds = new Set(failed);
-      const succeededIds = new Set(candidates.filter((s) => !failedIds.has(s.id)).map((s) => s.id));
-
       await refreshSessions();
 
       // 当前注视中的 session 被归档了 → 走 /cc-agent 让 CCAgentIndexRedirect
@@ -209,14 +286,20 @@ export function useSessionGroupArchive({
         navigate('/cc-agent');
       }
 
-      if (failed.length === 0) {
+      if (failed.length === 0 && succeededIds.size > 0) {
         toast.success(t('ccAgent.sidebar.archiveAll.archived', { count: succeededIds.size }));
-      } else {
+      } else if (failed.length > 0) {
         toast.error(
           t('ccAgent.sidebar.archiveAll.partialFailure', {
             ok: succeededIds.size,
             fail: failed.length,
           }),
+        );
+      }
+      const lateSkipNotes = skipNotesFor(newlyRunning, newlyPinned, newlyAttached);
+      if (lateSkipNotes.length > 0) {
+        toast.warning(
+          t('ccAgent.sidebar.archiveAll.skipped', { skip: lateSkipNotes.join(skipSep) }),
         );
       }
     },

@@ -38,19 +38,11 @@ import {
   type SetStateAction,
 } from 'react';
 
-interface FeatureSidebarSlotContextValue {
+interface FeatureSidebarState {
   /** 当前 Sidebar 上半槽位的内容，由当前激活的 Feature 注入。 */
   upperContent: ReactNode;
-  /** 内部 setter，Feature Layout 通过 useRegisterSidebarUpper 间接调用。 */
-  setUpperContent: Dispatch<SetStateAction<ReactNode>>;
-  /** 当前 ContentHeader 槽位的内容（右侧内容区顶栏中部），由当前路由视图注入。 */
-  headerContent: ReactNode;
-  /** 内部 setter，路由视图通过 useRegisterContentHeader 间接调用。 */
-  setHeaderContent: Dispatch<SetStateAction<ReactNode>>;
   /** Sidebar 当前是否折叠，Feature 上半组件据此分支渲染。 */
   isCollapsed: boolean;
-  /** 当前 Feature 是否需要 Sidebar。false 时整个 Sidebar 不显示。 */
-  setSidebarEnabled: Dispatch<SetStateAction<boolean>>;
   /** 当前 Feature 是否需要 Sidebar */
   sidebarEnabled: boolean;
   /**
@@ -60,11 +52,21 @@ interface FeatureSidebarSlotContextValue {
    * 默认 false:没有长列表的视图(插件页等)仍由 Shell 整块渲染常驻行。
    */
   ownsTopNavScrollableRows: boolean;
-  /** 内部 setter,Feature 经 useOwnTopNavScrollableRows 声明。 */
+}
+
+interface FeatureSlotActions {
+  setUpperContent: Dispatch<SetStateAction<ReactNode>>;
+  setHeaderContent: Dispatch<SetStateAction<ReactNode>>;
+  setSidebarEnabled: Dispatch<SetStateAction<boolean>>;
   setOwnsTopNavScrollableRows: Dispatch<SetStateAction<boolean>>;
 }
 
-const FeatureSidebarSlotContext = createContext<FeatureSidebarSlotContextValue | null>(null);
+// Title registrations change on task navigation. Keep their notifications away
+// from sidebar readers and from the route that only registers slot content;
+// otherwise one title update synchronously renders both large subtrees again.
+const FeatureSidebarStateContext = createContext<FeatureSidebarState | null>(null);
+const FeatureHeaderContext = createContext<{ content: ReactNode } | null>(null);
+const FeatureSlotActionsContext = createContext<FeatureSlotActions | null>(null);
 
 interface FeatureSidebarSlotProviderProps {
   isCollapsed: boolean;
@@ -84,25 +86,32 @@ export function FeatureSidebarSlotProvider({
   const [sidebarEnabled, setSidebarEnabled] = useState(true);
   const [ownsTopNavScrollableRows, setOwnsTopNavScrollableRows] = useState(false);
 
-  const value = useMemo<FeatureSidebarSlotContextValue>(
+  const sidebar = useMemo<FeatureSidebarState>(
     () => ({
       upperContent,
-      setUpperContent,
-      headerContent,
-      setHeaderContent,
       isCollapsed,
       sidebarEnabled,
-      setSidebarEnabled,
       ownsTopNavScrollableRows,
+    }),
+    [upperContent, isCollapsed, sidebarEnabled, ownsTopNavScrollableRows],
+  );
+  const header = useMemo(() => ({ content: headerContent }), [headerContent]);
+  const actions = useMemo<FeatureSlotActions>(
+    () => ({
+      setUpperContent,
+      setHeaderContent,
+      setSidebarEnabled,
       setOwnsTopNavScrollableRows,
     }),
-    [upperContent, headerContent, isCollapsed, sidebarEnabled, ownsTopNavScrollableRows],
+    [],
   );
 
   return (
-    <FeatureSidebarSlotContext.Provider value={value}>
-      {children}
-    </FeatureSidebarSlotContext.Provider>
+    <FeatureSlotActionsContext.Provider value={actions}>
+      <FeatureSidebarStateContext.Provider value={sidebar}>
+        <FeatureHeaderContext.Provider value={header}>{children}</FeatureHeaderContext.Provider>
+      </FeatureSidebarStateContext.Provider>
+    </FeatureSlotActionsContext.Provider>
   );
 }
 
@@ -111,7 +120,7 @@ export function FeatureSidebarSlotProvider({
  * 只读，不包含 setter。
  */
 export function useFeatureSidebarUpper(): ReactNode {
-  const ctx = useContext(FeatureSidebarSlotContext);
+  const ctx = useContext(FeatureSidebarStateContext);
   if (!ctx) {
     throw new Error('useFeatureSidebarUpper must be used inside <FeatureSidebarSlotProvider>');
   }
@@ -122,7 +131,7 @@ export function useFeatureSidebarUpper(): ReactNode {
  * Feature 上半组件内部读取当前折叠态，用于分支渲染展开/折叠两套 UI。
  */
 export function useSidebarCollapsedState(): boolean {
-  const ctx = useContext(FeatureSidebarSlotContext);
+  const ctx = useContext(FeatureSidebarStateContext);
   if (!ctx) {
     throw new Error('useSidebarCollapsedState must be used inside <FeatureSidebarSlotProvider>');
   }
@@ -133,7 +142,7 @@ export function useSidebarCollapsedState(): boolean {
  * MainLayout 读取当前 Feature 是否需要显示 Sidebar。
  */
 export function useFeatureSidebarEnabled(): boolean {
-  const ctx = useContext(FeatureSidebarSlotContext);
+  const ctx = useContext(FeatureSidebarStateContext);
   if (!ctx) {
     throw new Error('useFeatureSidebarEnabled must be used inside <FeatureSidebarSlotProvider>');
   }
@@ -148,7 +157,7 @@ export function useFeatureSidebarEnabled(): boolean {
  * 用 useLayoutEffect 确保在浏览器绘制前完成 setState，路由切换无闪烁。
  */
 export function useRegisterSidebarUpper(node: ReactNode): void {
-  const ctx = useContext(FeatureSidebarSlotContext);
+  const ctx = useContext(FeatureSlotActionsContext);
   if (!ctx) {
     throw new Error('useRegisterSidebarUpper must be used inside <FeatureSidebarSlotProvider>');
   }
@@ -169,7 +178,7 @@ export function useRegisterSidebarUpper(node: ReactNode): void {
  * 下一个 Feature 挂载时自然覆盖(不接管的 Feature 传 false)。
  */
 export function useOwnTopNavScrollableRows(owns: boolean): void {
-  const ctx = useContext(FeatureSidebarSlotContext);
+  const ctx = useContext(FeatureSlotActionsContext);
   if (!ctx) {
     throw new Error('useOwnTopNavScrollableRows must be used inside <FeatureSidebarSlotProvider>');
   }
@@ -182,7 +191,7 @@ export function useOwnTopNavScrollableRows(owns: boolean): void {
 
 /** Sidebar Shell 读取:顶部导航是否只渲染固定段(可滚动段已被 Feature 接管)。 */
 export function useOwnsTopNavScrollableRows(): boolean {
-  const ctx = useContext(FeatureSidebarSlotContext);
+  const ctx = useContext(FeatureSidebarStateContext);
   if (!ctx) {
     throw new Error('useOwnsTopNavScrollableRows must be used inside <FeatureSidebarSlotProvider>');
   }
@@ -194,11 +203,11 @@ export function useOwnsTopNavScrollableRows(): boolean {
  * 只读，不包含 setter。
  */
 export function useFeatureContentHeader(): ReactNode {
-  const ctx = useContext(FeatureSidebarSlotContext);
+  const ctx = useContext(FeatureHeaderContext);
   if (!ctx) {
     throw new Error('useFeatureContentHeader must be used inside <FeatureSidebarSlotProvider>');
   }
-  return ctx.headerContent;
+  return ctx.content;
 }
 
 /**
@@ -211,7 +220,7 @@ export function useFeatureContentHeader(): ReactNode {
  * 用 useLayoutEffect 确保在浏览器绘制前完成 setState，路由切换无闪烁。
  */
 export function useRegisterContentHeader(node: ReactNode): void {
-  const ctx = useContext(FeatureSidebarSlotContext);
+  const ctx = useContext(FeatureSlotActionsContext);
   if (!ctx) {
     throw new Error('useRegisterContentHeader must be used inside <FeatureSidebarSlotProvider>');
   }
@@ -231,7 +240,7 @@ export function useRegisterContentHeader(node: ReactNode): void {
  * - false: 隐藏 Sidebar（全屏内容）
  */
 export function useSetSidebarEnabled(enabled: boolean): void {
-  const ctx = useContext(FeatureSidebarSlotContext);
+  const ctx = useContext(FeatureSlotActionsContext);
   if (!ctx) {
     throw new Error('useSetSidebarEnabled must be used inside <FeatureSidebarSlotProvider>');
   }

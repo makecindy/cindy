@@ -58,6 +58,9 @@ export function CindyMakeTabBody({ ctx }: TabKindBodyProps<CindyMakeState>) {
           key={ctx.sessionId}
           sessionId={ctx.sessionId}
           workingDir={ctx.workdir}
+          // 宿主给出的执行端：本地-only 能力(如嵌入媒体的任务目录搜索)只在已确认本机时开启。
+          remoteHostId={ctx.remoteHostId}
+          ownerDeviceId={ctx.deviceLinkDeviceId}
           messages={chat.messages}
           historyLoaded={chat.historyLoaded}
           isSessionStreaming={chat.isStreaming}

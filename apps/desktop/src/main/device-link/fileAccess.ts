@@ -11,10 +11,11 @@ import {
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { openRemotePeerMediaStream, type PeerStreamFileResult } from './peerMediaStream';
 import { tryPeerFile, copyReceivedFile } from './filePeer';
 import { activeOwnerScopeKey } from '../appSessionState';
 import { captureFilePeerScope } from './filePeerScope';
-import { downloadToFile, removeRemote } from './mediaTransfer';
+import { downloadToFile, removeRemote } from './mediaTransfer.desktop';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './broadcast-tap';
 import { captureRemoteMediaCacheValidity } from './remoteMediaPersistentCache';
 
@@ -22,6 +23,8 @@ type Invoke = Parameters<typeof tryPeerFile>[2];
 type LocalFileResult = DeviceFileResult & { path: string; dispose(): Promise<void> };
 // Metadata only: bytes remain in the existing managed disk caches.
 const latestFiles = new Map<string, { url: string; metadata: DeviceFileResult }>();
+// Each reader retains at most its 1 MiB probe. Revalidate metadata before reuse.
+const playbackStreams = new Map<string, PeerStreamFileResult>();
 let latestOwner = '';
 /** Platform adapter; authorization stays in the controlled host's shared resolver. */
 export function readRemoteDeviceFile(
@@ -38,6 +41,7 @@ export function readRemoteDeviceFile(
     maxPeerBytes?: number;
     maxBytes?: number;
     stream?: boolean;
+    playback?: boolean;
     workdir?: string;
     relPath?: string;
     fallback?: () => Promise<DeviceFileResult>;
@@ -48,7 +52,7 @@ export function readRemoteDeviceFile(
   const assertCacheCurrent = options.assertCacheCurrent ?? captureRemoteMediaCacheValidity();
   const isCurrent = captureFilePeerScope(device);
   const scope = activeOwnerScopeKey();
-  if (latestOwner !== scope) { latestFiles.clear(); latestOwner = scope; }
+  if (latestOwner !== scope) { latestFiles.clear(); playbackStreams.clear(); latestOwner = scope; }
   const cacheKey = JSON.stringify([scope, device, url, options.workdir, options.relPath]);
   let returnedCached = false;
   const remember = (result: DeviceFileResult) => {
@@ -78,7 +82,11 @@ export function readRemoteDeviceFile(
     }
     return response.result as DeviceFileResult;
   };
-  return readDeviceFile<LocalFileResult>({
+  // Workdir callers supply same-account export jobs. Guests must retain the
+  // media endpoint's task authorization and shared-task OSS scope instead.
+  const fallback = !isSharedTaskPeer(device) && options.fallback
+    ? options.fallback : () => fetch(false);
+  return readDeviceFile<LocalFileResult | PeerStreamFileResult>({
     cacheFirst: options.skipCache || options.cacheFirst === false || isSharedTaskPeer(device) ? undefined : {
       read: async () => {
         const previous = latestFiles.get(cacheKey);
@@ -138,6 +146,22 @@ export function readRemoteDeviceFile(
       },
     },
     stream: options.stream,
+    peerStream: options.playback && !isSharedTaskPeer(device) ? async metadata => {
+      const previous = playbackStreams.get(cacheKey);
+      if (!options.signal && !options.skipCache && previous?.isAvailable() &&
+        previous.version === metadata.version && previous.size === metadata.size && previous.mimeType === metadata.mimeType) {
+        playbackStreams.delete(cacheKey); playbackStreams.set(cacheKey, previous);
+        return previous;
+      }
+      playbackStreams.delete(cacheKey);
+      const stream = await openRemotePeerMediaStream(device, url, invoke, metadata, isCurrent, options.signal);
+      if (stream && !options.signal && stream.isAvailable()) {
+        for (const [key, value] of playbackStreams) if (!value.isAvailable()) playbackStreams.delete(key);
+        playbackStreams.set(cacheKey, stream);
+        if (playbackStreams.size > 8) playbackStreams.delete(playbackStreams.keys().next().value!);
+      }
+      return stream;
+    } : undefined,
     signal: options.signal,
     isCurrent,
     discard: async (result) => {
@@ -153,7 +177,7 @@ export function readRemoteDeviceFile(
         if (options.signal?.aborted || !isCurrent())
           throw new Error('FILE_PEER_CANCELLED');
         if (!caps.ok) throw new Error('FILE_CAPABILITY_FAILED');
-        if (!(caps.result as { fileRead?: boolean })?.fileRead) return options.fallback();
+        if (!(caps.result as { fileRead?: boolean })?.fileRead) return fallback();
         const reference = await invoke(device, 'file-browser:remote-op', [
           { op: 'fileUrl', workdir: options.workdir, relPath: options.relPath },
         ]);
@@ -173,6 +197,7 @@ export function readRemoteDeviceFile(
     },
     peer: async (metadata) => {
       if (
+        isSharedTaskPeer(device) ||
         metadata.size > Math.min(options.maxPeerBytes ?? FILE_PEER_MAX_BYTES, FILE_PEER_MAX_BYTES)
       )
         return null;
@@ -189,6 +214,6 @@ export function readRemoteDeviceFile(
       }
       return result ? { ...result, ossKey: '' } : null;
     },
-    fallback: options.fallback ?? (() => fetch(false)),
+    fallback,
   }).then((result) => { if (!returnedCached) remember(result); return result; });
 }

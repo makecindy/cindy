@@ -21,6 +21,7 @@
  */
 
 import { BrowserWindow } from 'electron';
+import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
 import type { SendOrigin } from '@cindy/maker-core';
 
 import type { MessageTurnCostPayload } from '../shared/turnCostPayload.js';
@@ -34,7 +35,7 @@ import {
   readPriorUserRoundCost,
   type MessageAgentMetaPatchResult,
 } from './localDb/ipc/messages.js';
-import { enqueueDurableWrite } from './messagePersistBroadcaster.js';
+import { enqueueDurableWrite } from './messagePersistBroadcaster.desktop.js';
 import { createLogger } from './logger.js';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 import {
@@ -70,9 +71,11 @@ export interface TurnCostDeps {
     next: Record<string, unknown>,
   ): Promise<void>;
   readPriorUserRoundCost(sessionId: string, clientId: string): Promise<{
+    additionalCosts?: RegionalMoney[];
     money: RegionalMoney | null;
     costUsd: number;
     hasEstimatedValue: boolean;
+    isFirstUserRound?: boolean;
   }>;
   enqueue<T>(label: string, fn: () => Promise<T> | T): Promise<T>;
   broadcast(payload: MessageTurnCostPayload): void;
@@ -160,6 +163,14 @@ async function patchAgentMetaPreservingTurnDuration(
   };
 }
 
+/** 第一轮没有可复用的缓存；把这一事实随明细落库，供「缓存命中率偏低」建议排除。 */
+function withFirstUserRound(
+  details: TurnUsageDetails | null | undefined,
+  isFirstUserRound: boolean | undefined,
+): TurnUsageDetails | null | undefined {
+  return details && isFirstUserRound ? { ...details, firstUserRound: true } : details;
+}
+
 /**
  * 把一笔 SDK 分段费用写到指定消息，并同时写入从本轮用户消息累计的展示费用。
  *
@@ -190,15 +201,17 @@ export async function recordTurnCostOnMessage(
       // This runs in the durable FIFO after prior assistant cost patches, so
       // the query sees every earlier segment of this user round.
       const prior = await deps.readPriorUserRoundCost(sessionId, clientId);
-      userTurnMoney = prior.money
-        ? (addCompatibleRegionalMoney([prior.money, normalized], normalized.currency) ??
-          normalized)
-        : normalized;
-      userTurnCostIsEstimate =
-        (prior.money?.currency === userTurnMoney.currency &&
-          prior.hasEstimatedValue) ||
-        (normalized.currency === userTurnMoney.currency &&
-          normalized.kind === 'value-estimate');
+      const detailsWithAdditional = withFirstUserRound(prior.additionalCosts?.length
+        ? { ...(turnUsageDetails ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
+            cacheCreateTokens: 0, totalTokens: 0, cacheHitRate: null }), additionalCosts: prior.additionalCosts }
+        : turnUsageDetails, prior.isFirstUserRound);
+      userTurnMoney = addCompatibleRegionalMoney([
+        ...(prior.money ? [prior.money] : []), normalized,
+        ...supplementalConversationEstimates({ turnCost: normalized, turnUsageDetails }),
+      ], normalized.currency) ?? normalized;
+      userTurnCostIsEstimate = userTurnMoney.kind === 'value-estimate' ||
+        supplementalConversationEstimates({ turnCost: normalized, turnUsageDetails }).some(value => value.currency === userTurnMoney.currency) ||
+        (prior.money?.currency === userTurnMoney.currency && prior.hasEstimatedValue);
       const patch: Record<string, unknown> = {
         // Keep the raw segment immutable: daily/session/model accounting and
         // scheduler summaries consume this field and must never see a running
@@ -217,13 +230,13 @@ export async function recordTurnCostOnMessage(
       if (turnOrigin?.kind === 'scheduler' && typeof turnOrigin.runId === 'string' && turnOrigin.runId) {
         patch.origin = turnOrigin;
       }
-      if (turnUsageDetails) patch.turnUsageDetails = turnUsageDetails;
+      if (detailsWithAdditional) patch.turnUsageDetails = detailsWithAdditional;
       const patchedMeta = await patchAgentMetaPreservingTurnDuration(
         deps,
         sessionId,
         clientId,
         patch,
-        turnUsageDetails,
+        detailsWithAdditional,
       );
       if (!patchedMeta) return null;
       const { result } = patchedMeta;
@@ -317,9 +330,12 @@ export async function recordTurnUsageOnMessage(
       // 与 recordTurnCostOnMessage 同一条 durable FIFO,所以这里看得到本用户轮此前
       // 每个 segment 已落库的费用。
       const prior = await deps.readPriorUserRoundCost(sessionId, clientId);
+      const detailsWithAdditional = withFirstUserRound(prior.additionalCosts?.length
+        ? { ...turnUsageDetails, additionalCosts: prior.additionalCosts } : turnUsageDetails,
+      prior.isFirstUserRound) ?? turnUsageDetails;
       const userTurnMoney =
         prior.money && prior.money.amount > 0 ? prior.money : null;
-      const patch: Record<string, unknown> = { turnUsageDetails };
+      const patch: Record<string, unknown> = { turnUsageDetails: detailsWithAdditional };
       if (userTurnMoney) {
         patch.userTurnCost = userTurnMoney;
         patch.userTurnCostIsEstimate = prior.hasEstimatedValue;
@@ -332,7 +348,7 @@ export async function recordTurnUsageOnMessage(
         sessionId,
         clientId,
         patch,
-        turnUsageDetails,
+        detailsWithAdditional,
       );
       if (!patchedMeta) return null;
       persistedTurnUsageDetails = patchedMeta.turnUsageDetails ?? turnUsageDetails;

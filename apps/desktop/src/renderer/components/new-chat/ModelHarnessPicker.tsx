@@ -46,7 +46,9 @@ export function ModelHarnessPicker({
     return [
       labelOf(engine),
       api,
-      t(`settings.providers.models.advanced.protocol.${capability?.protocolMode ?? 'unknown'}`),
+      // A served interface needs no label; only Cindy's local conversion or missing metadata is named.
+      capability?.protocolMode !== 'matching' &&
+        t(`settings.providers.models.advanced.protocol.${capability?.protocolMode ?? 'unknown'}`),
       agent === entry.recommended && t('newChat.modelSelector.unified.recommended'),
     ]
       .filter(Boolean)

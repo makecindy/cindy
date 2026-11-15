@@ -6,7 +6,7 @@ import { toLocalFileUrl } from '@/lib/localPathResolver';
 import { cn } from '@/lib/utils';
 
 import { OpenInSystemActions } from './OpenInSystemActions';
-import { basename, dirname, formatBytes, formatMtime, joinPath } from './lib/fileMeta';
+import { basename, formatBytes, formatMtime, joinPath } from './lib/fileMeta';
 
 export interface ImagePreviewProps {
   workdir: string;
@@ -19,14 +19,24 @@ export interface ImagePreviewProps {
    * 会话缓存副本场景)时 lightbox 只提供查看/缩放/复制/另存。
    */
   sessionId?: string;
+  /** Already-read SVG bytes; never resolve a remote path on this computer. */
+  src?: string;
+  remote?: boolean;
 }
 
-export function ImagePreview({ workdir, relPath, size, mtimeMs, sessionId }: ImagePreviewProps) {
+export function ImagePreview({
+  workdir,
+  relPath,
+  size,
+  mtimeMs,
+  sessionId,
+  src: providedSrc,
+  remote = false,
+}: ImagePreviewProps) {
   const { t } = useTranslation();
   const name = basename(relPath);
   const absPath = joinPath(workdir, relPath);
-  const folderPath = joinPath(workdir, dirname(relPath));
-  const src = toLocalFileUrl(absPath);
+  const src = providedSrc ?? toLocalFileUrl(absPath);
   // 点击图片 → 全屏 ImageLightbox(缩放/复制/另存/标注/发送到对话与聊天图
   // 一致)。此前这里是纯静态 <img>,是图片能力升级后唯一没接 lightbox 的入口。
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -52,7 +62,7 @@ export function ImagePreview({ workdir, relPath, size, mtimeMs, sessionId }: Ima
           alt={name}
           className={cn(
             'min-h-0 min-w-0 max-h-full max-w-full rounded-lg object-contain',
-            'bg-[#ececea] dark:bg-[#2c2c2a]',
+            'bg-[var(--surface-chip-alt)]',
             'cursor-pointer transition-opacity hover:opacity-90',
           )}
           onClick={() => setLightboxOpen(true)}
@@ -61,11 +71,11 @@ export function ImagePreview({ workdir, relPath, size, mtimeMs, sessionId }: Ima
       {lightboxOpen ? (
         <ImageLightbox src={src} sessionId={sessionId} onClose={() => setLightboxOpen(false)} />
       ) : null}
-      <div className="shrink-0 text-xs text-[#737373] dark:text-[#a3a3a3]">
+      <div className="shrink-0 text-xs text-[var(--text-secondary)]">
         {name} · {formatBytes(size)} ·{' '}
         {t('ccAgent.workdirBrowse.unrenderable.modifiedAt', { time: formatMtime(mtimeMs) })}
       </div>
-      <OpenInSystemActions absPath={absPath} folderPath={folderPath} className="shrink-0" />
+      {!remote && <OpenInSystemActions absPath={absPath} className="shrink-0" />}
     </div>
   );
 }

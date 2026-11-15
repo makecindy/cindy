@@ -61,7 +61,7 @@ export function parseScheduleBindings(raw: unknown): ScheduleBinding[] {
       manual: s.manual === true,
       recurring: s.recurring as boolean | undefined,
       intervalMs: s.intervalMs as number | undefined,
-      // 持续会话在任务归档后会换绑新任务继续跑,归档确认据此不提示。
+      // 保留运行模式；持续与手动绑定的自动任务都会恢复已归档的普通任务。
       ...(s.persistentSession === true ? { persistentSession: true } : {}),
     });
   }

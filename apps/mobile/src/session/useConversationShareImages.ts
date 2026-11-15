@@ -11,6 +11,7 @@ import type {
 } from "@/session/conversationShareWebViewHtml";
 import {
   isDesktopLocalMediaUrl,
+  isDirectPreviewableMediaUrl,
   type ResolveRemoteMediaFn,
 } from "@/session/remoteMedia";
 import { withDownloadedRemoteMediaFile } from "@/session/remoteMediaDiskCacheExpo";
@@ -21,6 +22,101 @@ import {
 } from "@/session/sentAttachmentThumbStore";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+/** Decode one bounded first frame only when the user exports. Reuse the player
+ * and image encoder already shipped with the app; no persistent thumbnail store. */
+async function loadShareVideoCover(
+  url: string,
+  resolve: ResolveRemoteMediaFn,
+  canRead: () => boolean,
+  signal: AbortSignal,
+): Promise<ConversationShareImage | null> {
+  if (!canRead()) return null;
+  let uri = url;
+  let releaseSource: (() => void) | undefined;
+  if (!isDirectPreviewableMediaUrl(url)) {
+    const media = await resolve(
+      { kind: "video", url, previewable: false },
+      { signal },
+    );
+    if (
+      !canRead() ||
+      !media.previewable ||
+      !media.mimeType.startsWith("video/")
+    )
+      return null;
+    uri = media.url;
+    releaseSource = media.protectLocalFile?.();
+  }
+  let player: import("expo-video").VideoPlayer | undefined;
+  let thumbnail: import("expo-video").VideoThumbnail | undefined;
+  let context:
+    import("expo-image-manipulator").ImageManipulatorContext | undefined;
+  let image: import("expo-image-manipulator").ImageRef | undefined;
+  let savedUri: string | undefined;
+  const deleteSavedFile = (uri: string) => {
+    try { new File(uri).delete(); } catch { /* OS cache cleanup */ }
+  };
+  const release = () => {
+    const resources = [image, context, thumbnail, player];
+    image = undefined; context = undefined; thumbnail = undefined; player = undefined;
+    for (const resource of resources) {
+      try { resource?.release(); } catch { /* Already disposed by native cancellation. */ }
+    }
+    const releaseFile = releaseSource;
+    releaseSource = undefined;
+    releaseFile?.();
+    if (savedUri) { deleteSavedFile(savedUri); savedUri = undefined; }
+  };
+  // Adopt a native result before completing the await. Cancellation owns all
+  // adopted resources; results arriving after it are disposed without adoption.
+  const take = <T,>(read: () => Promise<T>, adopt: (value: T) => void, discard: (value: T) => void) =>
+    readWithShareImageCancellation(() => read().then(value => {
+      if (signal.aborted) discard(value);
+      else adopt(value);
+    }), signal);
+  signal.addEventListener("abort", release, { once: true });
+  try {
+    const { createVideoPlayer } = await import("expo-video");
+    const { ImageManipulator, SaveFormat } =
+      await import("expo-image-manipulator");
+    if (!canRead()) return null;
+    const currentPlayer = player = createVideoPlayer(null);
+    currentPlayer.muted = true;
+    await readWithShareImageCancellation(() => currentPlayer.replaceAsync(uri), signal);
+    if (!canRead()) return null;
+    await take(() => currentPlayer.generateThumbnailsAsync([0], {
+      maxWidth: 1024,
+      maxHeight: 1024,
+    }), frames => { [thumbnail] = frames; }, frames => frames.forEach(frame => frame.release()));
+    if (!thumbnail || !canRead()) return null;
+    const currentContext = context = ImageManipulator.manipulate(thumbnail);
+    await take(() => currentContext.renderAsync(), value => { image = value; }, value => value.release());
+    if (!image || !canRead()) return null;
+    let saved: import("expo-image-manipulator").ImageResult | undefined;
+    const currentImage = image;
+    await take(() => currentImage.saveAsync({
+      format: SaveFormat.JPEG,
+      compress: 0.85,
+      base64: true,
+    }), value => { saved = value; savedUri = value.uri; }, value => deleteSavedFile(value.uri));
+    if (
+      !canRead() ||
+      !saved ||
+      !saved.base64 ||
+      saved.base64.length > (MAX_IMAGE_BYTES * 4) / 3
+    )
+      return null;
+    return {
+      uri: `data:image/jpeg;base64,${saved.base64}`,
+      width: saved.width,
+      height: saved.height,
+    };
+  } finally {
+    signal.removeEventListener("abort", release);
+    release();
+  }
+}
 
 async function readWithShareImageCancellation<T>(
   read: () => Promise<T>,
@@ -52,9 +148,13 @@ async function readShareImageFile(
   if (!file.exists || file.size <= 0 || file.size > MAX_IMAGE_BYTES)
     return null;
   // Android's encoded-image size reader accepts file:// but rejects data:.
-  const size = await readWithShareImageCancellation(() => Image.getSize(uri), signal);
+  const size = await readWithShareImageCancellation(
+    () => Image.getSize(uri),
+    signal,
+  );
   if (!canRead()) return null;
-  const dataUri = embeddedUri ?? `data:${mimeType};base64,${await file.base64()}`;
+  const dataUri =
+    embeddedUri ?? `data:${mimeType};base64,${await file.base64()}`;
   return canRead() ? { uri: dataUri, ...size } : null;
 }
 
@@ -69,7 +169,10 @@ async function readShareImageDataUri(
   if (!header) {
     // iOS can size other data-image encodings. Preserve that existing support;
     // an unsupported native format still follows the usual placeholder path.
-    const size = await readWithShareImageCancellation(() => Image.getSize(uri), signal);
+    const size = await readWithShareImageCancellation(
+      () => Image.getSize(uri),
+      signal,
+    );
     return canRead() ? { uri, ...size } : null;
   }
   if (uri.length === header[0].length) return null;
@@ -97,7 +200,9 @@ async function readShareImageDataUri(
       });
       // Cancellation cannot stop this native write. Clean up again if a late
       // completion recreates the file after the immediate finally cleanup.
-      const cleanupLateWrite = () => { if (signal.aborted) cleanup(); };
+      const cleanupLateWrite = () => {
+        if (signal.aborted) cleanup();
+      };
       void write.then(cleanupLateWrite, cleanupLateWrite);
       return write;
     }, signal);
@@ -152,8 +257,11 @@ async function loadShareImage(
     // Only download objects whose size the controlled desktop resolver knows.
     // Arbitrary HTTP sources have no trusted pre-transfer bound: keep alt text.
     if (/^https?:\/\//i.test(uri)) {
-      return withDownloadedRemoteMediaFile(uri, mimeType, MAX_IMAGE_BYTES, (file) =>
-        readShareImageFile(file.uri, mimeType, canRead, signal),
+      return withDownloadedRemoteMediaFile(
+        uri,
+        mimeType,
+        MAX_IMAGE_BYTES,
+        (file) => readShareImageFile(file.uri, mimeType, canRead, signal),
       );
     }
   }
@@ -181,19 +289,28 @@ interface ShareImageJob {
 export function useConversationShareImages(
   messages: readonly ConversationShareMessage[],
   resolve: ResolveRemoteMediaFn,
-  { workdir, remoteHostId, sessionId }: ConversationShareImageContext,
+  {
+    workdir,
+    remoteHostId,
+    sessionId,
+    snapshotRichValues,
+  }: ConversationShareImageContext,
 ) {
   const [job, setJob] = useState<ShareImageJob | null>(null);
   const prepare = useCallback(() => {
     return new Promise<readonly ConversationShareMessage[]>((finish) => {
       setJob({
-        sourceMessages: messages,
+        sourceMessages: messages.map((message) =>
+          message.kind === "assistant" && snapshotRichValues
+            ? { ...message, richValues: snapshotRichValues(message) }
+            : message,
+        ),
         resolve,
         context: { workdir, remoteHostId, sessionId },
         finish,
       });
     });
-  }, [messages, resolve, workdir, remoteHostId, sessionId]);
+  }, [messages, resolve, workdir, remoteHostId, sessionId, snapshotRichValues]);
   const cancel = useCallback(() => setJob(null), []);
   const selectionKey = JSON.stringify(
     messages.map((message) => message.clientId),
@@ -228,11 +345,11 @@ export function useConversationShareImages(
       sourceMessages,
       // Keep completed images and all message text when the shared deadline
       // expires. Remaining images become placeholders without starting more IO.
-      (url) =>
+      (url, kind) =>
         timedOut
           ? Promise.resolve(null)
           : Promise.race([
-              loadShareImage(
+              (kind === "video" ? loadShareVideoCover : loadShareImage)(
                 url,
                 resolve,
                 () => active && !timedOut,

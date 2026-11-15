@@ -584,3 +584,31 @@ it("releases old subscriptions before the new document subscribes, including an 
     { kind: "subscribe", channels: ["test"] }, { kind: "unsubscribe", channel: "test" }, { kind: "subscribe", channels: ["test"] },
   ]);
 });
+
+// #6680 unseen-confirm gap: activate the new Host document before reads/posts,
+// without serializing a confirmation-dependent fetch ahead of its cancellation.
+// Production component; memory transport, fake clock; tier: unit.
+it("activates the Host document before commands and does not deadlock navigation behind a pending fetch", async () => {
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(document.createElement("div"));
+  cleanup = async () => { await act(async () => root.unmount()); };
+  await act(async () => root.render(createElement(PluginSettingsCard, {
+    identity: { deviceId: "host", instanceId: "plugin", expectedInstalledApproval: "approval" },
+    active: true, generation: 1, assertCurrent() {}, invokeTarget: vi.fn(), openSession: vi.fn(),
+  })));
+  const client = state.clients[0];
+  client.document.documentIsolation = true;
+  let activate!: () => void, finishFetch!: (value: unknown) => void;
+  client.send.mockImplementationOnce(() => new Promise<void>(resolve => { activate = resolve; }));
+  client.fetch.mockImplementationOnce(() => new Promise(resolve => { finishFetch = resolve; }));
+  await act(async () => state.web.onLoadStart());
+  await act(async () => state.web.onMessage({ nativeEvent: { data: JSON.stringify({ settings: "page", id: 1, command: { kind: "fetch", path: "/kv", method: "PUT", body: '{"label":"A"}' } }) } }));
+  expect(client.fetch).not.toHaveBeenCalled();
+  await act(async () => activate());
+  expect(client.fetch).toHaveBeenCalledWith("/kv", "PUT", '{"label":"A"}');
+  await act(async () => state.web.onLoadStart());
+  expect(client.send.mock.calls.map(([command]: any[]) => command)).toEqual([{ kind: "document", epoch: 1 }, { kind: "document", epoch: 2 }]);
+  state.inject.mockClear();
+  await act(async () => finishFetch({ status: 200, mime: "application/json", base64: "e30=" }));
+  expect(state.inject).not.toHaveBeenCalled();
+});

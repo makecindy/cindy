@@ -33,6 +33,80 @@ afterEach(async () => {
 });
 
 describe('mobileRealtimeAudio', () => {
+  it('replays a packet rejected after stop even when its event beat the native start receipt', async () => {
+    let listener!: (event: unknown) => void;
+    let finishStart!: () => void;
+    const packet = { chunkIndex: 0, base64Pcm16: '6APoAw==', capturedAt: 10, sampleRate: 16000, durationMs: .125 };
+    const native = {
+      addListener: vi.fn((name: string, callback: (event: unknown) => void) => {
+        if (name === 'onAudioChunk') listener = callback;
+        return { remove: vi.fn() };
+      }),
+      start: vi.fn(() => new Promise<void>((resolve) => { finishStart = resolve; })),
+      stopAndDrain: vi.fn(async () => [packet]),
+    };
+    vi.mocked(requireNativeModule).mockReturnValue(native);
+    const { startMobileRealtimeAudio } = await import('@/session/mobileRealtimeAudio');
+    const onChunk = vi.fn((chunk: { drained?: boolean }) => chunk.drained === true);
+    const opening = startMobileRealtimeAudio({ onChunk });
+    await vi.waitFor(() => expect(finishStart).toBeTypeOf('function'));
+    listener(packet);
+    finishStart();
+    await (await opening)(20);
+    expect(native.stopAndDrain).toHaveBeenCalledWith(-1, 20);
+    expect(onChunk.mock.calls.map(([chunk]) => chunk.drained)).toEqual([undefined, true]);
+  });
+
+  it('drains only undelivered pre-stop packets, deduplicates the receipt, and ignores a previous capture', async () => {
+    type Packet = { captureId: string; chunkIndex: number; base64Pcm16: string; capturedAt: number; sampleRate: number; durationMs: number };
+    let listener!: (event: Packet) => void;
+    let captureId = '';
+    const packet = (index: number): Packet => ({
+      captureId, chunkIndex: index, base64Pcm16: '6APoAw==',
+      capturedAt: 10, sampleRate: 16000, durationMs: .125,
+    });
+    const native = {
+      addListener: vi.fn((name: string, callback: (event: Packet) => void) => {
+        if (name === 'onAudioChunk') listener = callback;
+        return { remove: vi.fn() };
+      }),
+      start: vi.fn(async (options: { captureId: string }) => { captureId = options.captureId; }),
+      stop: vi.fn(async () => undefined),
+      stopAndDrain: vi.fn(async () => [packet(0), packet(1)]),
+    };
+    vi.mocked(requireNativeModule).mockReturnValue(native);
+    const { startMobileRealtimeAudio } = await import('@/session/mobileRealtimeAudio');
+    const onChunk = vi.fn();
+    const stop = await startMobileRealtimeAudio({ onChunk });
+    listener({ ...packet(0), captureId: 'previous' });
+    listener(packet(0));
+    await stop(20);
+    expect(native.stopAndDrain).toHaveBeenCalledWith(0, 20);
+    expect(native.stop).not.toHaveBeenCalled();
+    expect(onChunk.mock.calls.map(([chunk]) => [chunk.trace.chunkIndex, chunk.drained])).toEqual([[0, undefined], [1, true]]);
+    expect([...new Int16Array(onChunk.mock.calls[1][0].pcm16)]).toEqual([1000, 1000]);
+    await stop();
+    expect(native.stopAndDrain).toHaveBeenCalledOnce();
+  });
+
+  it('coalesces concurrent native prewarm calls and allows a later prewarm', async () => {
+    let finish!: () => void;
+    const native = { prewarm: vi.fn(() => new Promise<void>((resolve) => { finish = resolve; })) };
+    vi.mocked(requireNativeModule).mockReturnValue(native);
+    const { prewarmMobileRealtimeAudio } = await import('@/session/mobileRealtimeAudio');
+    prewarmMobileRealtimeAudio();
+    prewarmMobileRealtimeAudio();
+    expect(native.prewarm).toHaveBeenCalledOnce();
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+    prewarmMobileRealtimeAudio();
+    expect(native.prewarm).toHaveBeenCalledTimes(2);
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
   it.each([undefined, { inputPortTypes: ['MicrophoneBuiltIn'], inputSampleRate: 48000, inputChannels: 1 }])(
     'logs input metadata and supports installed modules without it: %j', async (input) => {
       const native = {

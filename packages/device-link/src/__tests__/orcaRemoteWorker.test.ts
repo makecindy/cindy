@@ -3,6 +3,7 @@ import {
   INVOKE_TIMEOUT_OVERRIDES_MS,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
+  ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_TIMEOUT_MS,
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
@@ -10,6 +11,7 @@ import {
   parseOrcaRemoteWorkerOpenRequest,
   parseOrcaRemoteWorkerReleaseRequest,
   parseOrcaRemoteWorkerBridgeRequest,
+  parseOrcaRemoteWorkerModelsRequest,
 } from '../index.js';
 
 const base = {
@@ -45,6 +47,7 @@ describe('orca remote worker channels', () => {
     for (const channel of [
       ORCA_REMOTE_WORKER_CAPS_CHANNEL,
       ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
+      ORCA_REMOTE_WORKER_MODELS_CHANNEL,
       ORCA_REMOTE_WORKER_OPEN_CHANNEL,
       ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
     ]) {
@@ -60,6 +63,11 @@ describe('orca remote worker channels', () => {
 });
 
 describe('parseOrcaRemoteWorkerOpenRequest', () => {
+  // Unit protocol regression: the execution computer must receive the selected
+  // model computer. Previously the parser silently dropped that route.
+  it.each([null, 'provider-pc', 'share:approved'])('preserves the independent Agent location %s', agentDeviceId => {
+    expect(parseOrcaRemoteWorkerOpenRequest({ ...base, agentDeviceId })).toMatchObject({ agentDeviceId });
+  });
   it('keeps known fields, trims text and drops unknown fields', () => {
     expect(
       parseOrcaRemoteWorkerOpenRequest({
@@ -92,8 +100,18 @@ describe('parseOrcaRemoteWorkerOpenRequest', () => {
     ['missing worker label', { ...base, lead: { ...base.lead, workerLabel: '' } }],
     ['working dir with newline', { ...base, workingDir: '/tmp/a\nb' }],
     ['non-boolean fastMode', { ...base, fastMode: 'yes' }],
+    ['invalid model computer', { ...base, agentDeviceId: '../elsewhere' }],
   ])('rejects %s', (_name, input) => {
     expect(() => parseOrcaRemoteWorkerOpenRequest(input)).toThrow(/\[INVALID_PARAMS\]/);
+  });
+});
+
+describe('execution host model discovery', () => {
+  it('preserves remote scopes and rejects malformed inputs before discovery', () => {
+    expect(parseOrcaRemoteWorkerModelsRequest({})).toEqual({});
+    expect(parseOrcaRemoteWorkerModelsRequest({ agent: 'pi', agentDeviceId: 'provider-pc' })).toEqual({ agent: 'pi', agentDeviceId: 'provider-pc' });
+    expect(() => parseOrcaRemoteWorkerModelsRequest({ agentDeviceId: 42 })).toThrow(/INVALID_PARAMS/);
+    expect(() => parseOrcaRemoteWorkerModelsRequest({ agent: 'unknown' })).toThrow(/INVALID_PARAMS/);
   });
 });
 

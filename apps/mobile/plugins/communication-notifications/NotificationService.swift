@@ -2,7 +2,8 @@ import Intents
 import UIKit
 import UserNotifications
 
-/// Enrich only teammate replies. No network or access to the app's account storage.
+/// Native communication notifications for teammate replies and group messages.
+/// No network or access to the app's account storage.
 final class NotificationService: UNNotificationServiceExtension {
   private let completionLock = NSLock()
   private var handler: ((UNNotificationContent) -> Void)?
@@ -17,27 +18,45 @@ final class NotificationService: UNNotificationServiceExtension {
     original = request.content
     completionLock.unlock()
 
-    let content = request.content
-    guard content.userInfo["category"] as? String == "session-done",
+    var content = request.content
+    if let link = content.userInfo["deepLink"] as? String, link.hasPrefix("cindy://agent-net-notification") {
+      guard let payload = AgentNetNotifications.open(link), let next = content.mutableCopy() as? UNMutableNotificationContent else {
+        finish(UNMutableNotificationContent()); return
+      }
+      next.title = payload["title"] as? String ?? "Cindy"
+      next.body = payload["body"] as? String ?? ""
+      next.threadIdentifier = payload["collapseId"] as? String ?? ""
+      next.userInfo = payload
+      content = next
+      completionLock.lock(); original = next; completionLock.unlock()
+    }
+    let category = content.userInfo["category"] as? String
+    let isChat = category == "chat-message"
+    let isGroup = isChat && (content.userInfo["conversationKind"] as? String) != "direct"
+    guard ["session-done", "session-error", "session-needs-reply"].contains(category ?? "") || isChat,
           let senderData = content.userInfo["sender"] as? [String: Any],
           let id = senderData["id"] as? String, !id.isEmpty, id.utf8.count <= 128,
           !content.title.isEmpty, !content.threadIdentifier.isEmpty else {
       finish(content)
       return
     }
+    let senderName = isChat ? (content.userInfo["senderName"] as? String ?? "") : content.title
+    guard !senderName.isEmpty else { finish(content); return }
+    let prefix = senderName + ": "
+    let message = isChat && content.body.hasPrefix(prefix) ? String(content.body.dropFirst(prefix.count)) : content.body
     let sender = INPerson(
       personHandle: INPersonHandle(value: id, type: .unknown),
       nameComponents: nil,
-      displayName: content.title,
-      image: Self.avatar(senderData["avatar"], name: content.title),
+      displayName: senderName,
+      image: Self.avatar(senderData["avatar"], name: senderName),
       contactIdentifier: nil,
       customIdentifier: id
     )
     let intent = INSendMessageIntent(
       recipients: nil,
       outgoingMessageType: .outgoingMessageText,
-      content: content.body,
-      speakableGroupName: nil,
+      content: message,
+      speakableGroupName: isGroup ? INSpeakableString(spokenPhrase: content.title) : nil,
       conversationIdentifier: content.threadIdentifier,
       serviceName: nil,
       sender: sender,
@@ -70,7 +89,7 @@ final class NotificationService: UNNotificationServiceExtension {
     handler = nil
     original = nil
     completionLock.unlock()
-    callback?(content)
+    callback?(NotificationRetirement.isRetired(content.userInfo) ? UNMutableNotificationContent() : content)
   }
 
   static func avatar(_ input: Any?, name: String) -> INImage? {

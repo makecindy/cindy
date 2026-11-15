@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { findSystemSettingsWindowBounds } from './placement.js';
+import { adaptComputerDriverArgs, type ComputerDriverToolSchema } from '../mcp-integrations/computer-contract.js';
 
 const SYSTEM_CUA_DRIVER_APP_EXECUTABLE = path.join(
   '/Applications',
@@ -55,6 +56,7 @@ interface SwitchLocatorConnection {
   client: Client;
   transport: StdioClientTransport;
   session: string;
+  toolSchemas: Map<string, ComputerDriverToolSchema>;
 }
 
 let switchLocatorConnection: SwitchLocatorConnection | null = null;
@@ -281,9 +283,12 @@ async function connectSwitchLocator(executable: string): Promise<SwitchLocatorCo
     client,
     transport,
     session: `xdt-permission-switch-${Date.now()}`,
+    toolSchemas: new Map<string, ComputerDriverToolSchema>(),
   };
   try {
     await withTimeout(client.connect(transport), CONNECT_TIMEOUT_MS, 'switch locator startup');
+    const { tools } = await withTimeout(client.listTools(), TOOL_TIMEOUT_MS, 'switch locator tools');
+    connection.toolSchemas = new Map(tools.map((tool) => [tool.name, tool.inputSchema as ComputerDriverToolSchema]));
     switchLocatorConnection = connection;
     return connection;
   } catch (error) {
@@ -324,17 +329,19 @@ async function locateComputerUseSwitchTargetSerialized(): Promise<ComputerUseSwi
     const stateResult = parseSuccessfulMcpResult(await withTimeout(
       connection.client.callTool({
         name: 'get_window_state',
-        arguments: {
+        arguments: adaptComputerDriverArgs('get_window_state', {
           pid,
           window_id: windowId,
           include_screenshot: false,
+          // The locator consumes frames; 0.35+ defaults to Markdown without them.
+          tree_format: 'elements',
           // Match the stable app row instead of the localized permission-pane
           // title, while avoiding a walk of the full 400-500 element tree.
           max_elements: 180,
           max_depth: 6,
           query: 'CuaDriver',
           session: connection.session,
-        },
+        }, connection.toolSchemas),
       }),
       TOOL_TIMEOUT_MS,
       'Computer Use switch lookup',

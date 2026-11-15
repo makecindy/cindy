@@ -9,12 +9,13 @@ export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 
  * 在这个键上 — 两者互不影响。
  */
 export type ImDefaultSettingsChannel =
-  'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
+  'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom' | 'imessage';
 
 export interface ImDefaultAgentSettings {
   /** Agent 所在电脑；share:<id> 表示分享供应商，缺省为本机。 */
   agentDeviceId?: string | null;
   providerId: string | null;
+  /** Empty means automatic selection from the current catalog, never a wire model ID. */
   model: string;
   effort: ImDefaultEffort;
 }
@@ -47,6 +48,8 @@ export type ImDefaultSettingsPatch = Omit<Partial<ImDefaultSettings>, 'agents'> 
 };
 
 export interface ImDefaultSettingsState extends ImDefaultSettings {
+  /** Read-only projection flag. The model shown is resolved; persisted automatic models remain empty. */
+  automaticModel?: boolean;
   isCustomized: boolean;
   customizedKeys: string[];
   defaults: ImDefaultSettings;
@@ -59,18 +62,18 @@ export const IM_DEFAULT_SETTINGS: ImDefaultSettings = {
   agents: {
     'claude-code': {
       providerId: null,
-      model: 'claude-opus-4-8',
-      effort: 'xhigh',
+      model: '',
+      effort: 'high',
     },
     codex: {
       providerId: null,
-      model: 'codex/gpt-5.5',
+      model: '',
       effort: 'high',
     },
-    // Pi 走网关中档模型作为 IM 新会话默认值，可在各渠道设置中覆盖。
+    // Empty defaults follow the common new-task policy; explicit selections stay fixed.
     pi: {
       providerId: null,
-      model: 'claude-sonnet-5',
+      model: '',
       effort: 'high',
     },
   },
@@ -84,6 +87,7 @@ export const IM_DEFAULT_SETTINGS_CHANNELS: readonly ImDefaultSettingsChannel[] =
   'telegram',
   'dingtalk',
   'wecom',
+  'imessage',
 ];
 
 export const IM_DEFAULT_EFFORT_OVERRIDES: Readonly<Partial<Record<string, ImDefaultEffort>>> = {
@@ -127,13 +131,9 @@ export const WECHAT_UNSUPPORTED_PERMISSION_MODES: readonly ImDefaultPermissionMo
  * (event.speaker 存在)时挂载,主人私聊不挂 → Pi 在私聊可用,设置 UI 不区分
  * 群聊/私聊,不能整体警告。新增渠道时先确认其 policy 挂载是否无条件。
  */
-export const UNCONDITIONAL_TURN_POLICY_CHANNELS: readonly ImDefaultSettingsChannel[] = [
-  'wechat',
-];
+export const UNCONDITIONAL_TURN_POLICY_CHANNELS: readonly ImDefaultSettingsChannel[] = ['wechat'];
 
-export function isUnconditionalTurnPolicyChannel(
-  channel: ImDefaultSettingsChannel,
-): boolean {
+export function isUnconditionalTurnPolicyChannel(channel: ImDefaultSettingsChannel): boolean {
   return UNCONDITIONAL_TURN_POLICY_CHANNELS.includes(channel);
 }
 

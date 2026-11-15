@@ -379,5 +379,73 @@ describe('InputHandoffCard', () => {
         expect(mocks.resolve).toHaveBeenCalledWith('req1', { kind: 'input_handoff', action: 'done', expectedRevision: 6 }),
       );
     });
+
+    // ask_owner kind=scan with the agent's screenshot (2026-10-30): Cindy cannot see that
+    // screen, so it says where the picture came from, never claims to continue by itself,
+    // has nothing to tap, and the owner hands back after scanning.
+    it('labels a code from the agent\'s screenshot and lets the owner hand back after scanning', async () => {
+      answerWith('https://login.example.com/qr?t=1', 'https://login.example.com/qr?t=1');
+      render(<InputHandoffCard sessionId="s1" snapshot={qrStep({ agentPicture: true, agentControlled: true, source: { app: 'Cindy', origin: 'https://login.example.com' } })} />);
+      fill('inputHandoff.action.scan');
+      const code = await screen.findByTestId('input-handoff-qr-code');
+      expect(screen.getByText('inputHandoff.agentPicture')).toBeTruthy();
+      expect(screen.queryByText('inputHandoff.agentControlled')).toBeNull();
+      expect(screen.queryByText('inputHandoff.qr.hintLink')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'inputHandoff.action.picture' })).toBeNull();
+      fireEvent.click(code, { clientX: 120, clientY: 60 });
+      expect(mocks.answer).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.done' }));
+      await waitFor(() =>
+        expect(mocks.resolve).toHaveBeenCalledWith('req1', { kind: 'input_handoff', action: 'done', expectedRevision: 4 }),
+      );
+    });
+  });
+
+  describe('a sign-in step', () => {
+    const signIn = (overrides: Partial<InputHandoffSnapshot> = {}) => step({ directSignIn: true, ...overrides });
+    const raise = vi.fn(async () => true);
+    const stubDesktop = () => {
+      Object.assign(window, { electronAPI: { maker: { raiseInputHandoff: raise }, openRemoteDesktop: mocks.openRemoteDesktop } });
+    };
+
+    it('sends the owner to the window on this computer, with no form', async () => {
+      stubDesktop();
+      render(<InputHandoffCard sessionId="s1" snapshot={signIn()} />);
+      expect(screen.getByRole('status').textContent).toBe('inputHandoff.directSignIn.hint');
+      expect(screen.queryByRole('button', { name: 'inputHandoff.action.fill' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.openWindow' }));
+      await waitFor(() => expect(raise).toHaveBeenCalledWith('req1'));
+      expect(mocks.resolve).toHaveBeenCalledWith('req1', expect.objectContaining({ action: 'claim', expectedRevision: 4 }));
+    });
+
+    it('opens the live view from another computer, and looks the same otherwise', async () => {
+      stubDesktop();
+      mocks.hostDeviceId = 'mac';
+      render(<InputHandoffCard sessionId="s1" snapshot={signIn({ liveView: true })} />);
+      expect(screen.getByRole('status').textContent).toBe('inputHandoff.directSignIn.hint');
+      expect(screen.queryByRole('button', { name: 'inputHandoff.action.liveView' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.openRemoteDesktop' }));
+      await waitFor(() => expect(mocks.openRemoteDesktop).toHaveBeenCalledWith({ deviceId: 'mac', name: 'Studio', handoff: 'req1' }));
+      // Working on the window takes the card, so other devices show it as being handled.
+      expect(mocks.resolve).toHaveBeenCalledWith('req1', expect.objectContaining({ action: 'claim', expectedRevision: 4 }));
+    });
+
+    it('offers the form when the window cannot be used, and shows an error when opening it did not work', async () => {
+      stubDesktop();
+      raise.mockResolvedValueOnce(false);
+      render(<InputHandoffCard sessionId="s1" snapshot={signIn()} />);
+      fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.openWindow' }));
+      await waitFor(() => expect(screen.getByText('inputHandoff.error.raise')).toBeTruthy());
+      fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.useForm' }));
+      expect(screen.getByRole('button', { name: 'inputHandoff.action.fill' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'inputHandoff.action.openWindow' })).toBeNull();
+    });
+
+    it('keeps the form from another computer when there is no live view', () => {
+      mocks.hostDeviceId = 'mac';
+      render(<InputHandoffCard sessionId="s1" snapshot={signIn()} />);
+      expect(screen.getByRole('button', { name: 'inputHandoff.action.fill' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'inputHandoff.action.openRemoteDesktop' })).toBeNull();
+    });
   });
 });

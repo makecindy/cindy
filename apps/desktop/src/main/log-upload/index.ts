@@ -35,7 +35,7 @@ import {
 } from '../analytics-settings-store';
 import { isFatalShutdownReason, onFatalShutdown, onQuit } from '../lifecycle';
 import { createLogger, getLogDir } from '../logger';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { getPreviousRunReports } from '../startup-diagnostics';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -61,6 +61,9 @@ import { PendingMarkerStore, type MarkerFs } from './pendingMarkers';
 import type { LogUploadMeta, LogUploadTarget } from './types';
 import { generateUploadCode } from './uploadCode';
 import { runUpload, type UploadOutcome } from './uploadRunner';
+import { activeOwnerScopeKey } from '../appSessionState';
+import type { TraceReport } from '../performance-trace/report';
+import { submitPerformanceReport } from '../performance-trace/upload';
 
 const log = createLogger('log-upload');
 
@@ -177,7 +180,7 @@ function runnerDeps() {
     send: (target: LogUploadTarget, meta: LogUploadMeta, records: Parameters<typeof sendLogs>[3]) =>
       sendLogs({ fetchImpl: outboundFetch }, target, meta, records),
     buildMeta,
-    generateUploadCode: () => generateUploadCode((size) => crypto.randomBytes(size)),
+    generateUploadCode: () => generateUploadCode((size) => crypto.randomBytes(size), CURRENT_CINDY_REGION),
     markers: ensureMarkerStore(),
     now: () => Date.now(),
     log: {
@@ -185,6 +188,27 @@ function runnerDeps() {
       warn: (message: string, ...rest: unknown[]) => log.warn(message, ...rest),
     },
   };
+}
+
+/** Explicit full-file performance upload. Files are selected by the recording controller,
+ * redacted before compression, and sent separately from the ordinary log source allowlist. */
+export async function uploadPerformanceTraceReport(
+  report: TraceReport,
+  note: string,
+  artifacts: () => Promise<import('../performance-trace/artifacts').TraceArtifact[]>,
+): Promise<void> {
+  await submitPerformanceReport(
+    {
+      owner: activeOwnerScopeKey,
+      gate: () => evaluateGate(gateDeps, 'manual'),
+      target: currentTarget,
+      meta: (uploadCode) => buildMeta({ uploadCode, reason: 'manual' }),
+      fetch: outboundFetch,
+      artifacts,
+    },
+    report,
+    note,
+  );
 }
 
 // ── 设置 payload 与广播 ─────────────────────────────────────────────────────

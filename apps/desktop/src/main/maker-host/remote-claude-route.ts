@@ -45,6 +45,7 @@ const REMOTE_NO_AUTH_PLACEHOLDER = 'cindy-remote-no-auth';
 const REMOTE_AGENT = 'claude-code' as const;
 
 export async function resolveRemoteClaudeRoute(opts: {
+  sessionId?: string;
   providerId?: string | null;
   model: string;
 }): Promise<RemoteClaudeRoute | null> {
@@ -67,8 +68,13 @@ export async function resolveRemoteClaudeRoute(opts: {
         `[REMOTE_PROVIDER_UPDATING] provider "${providerId}" credentials are being updated on this desktop; retry in a moment`,
       );
     }
-    const routed = await resolveProviderRouteDecision(providerId, REMOTE_AGENT, readClaudeApiKey());
-    if (routed) return materializeRoutedProvider(routed);
+    const routed = await resolveProviderRouteDecision(providerId, REMOTE_AGENT, readClaudeApiKey(), opts.model, opts.sessionId);
+    if (routed) {
+      if (routed.routing.modelInterface && routed.routing.modelInterface.wireModelId !== opts.model) {
+        throw new Error('[REMOTE_PROVIDER_UNSUPPORTED] this interface needs model-id rewriting, which remote Claude Code cannot express');
+      }
+      return materializeRoutedProvider(routed);
+    }
     // TOCTOU 兜底:resolver 内部也会因 mutation 窗口返回 null;若恰好在两次判定之间
     // 窗口开启,报 UPDATING 而非 UNSUPPORTED(语义更准确,用户稍后重试即可)。
     if (isProviderRouteMutationInProgress(providerId)) {

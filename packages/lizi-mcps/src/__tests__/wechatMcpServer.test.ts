@@ -92,7 +92,7 @@ describe('cindy_wechat proactive routing', () => {
     }
   });
 
-  it('rejects files outside the current working directory', async () => {
+  it('rejects non-image files outside the working directory but sends images from any path', async () => {
     const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-wechat-workdir-'));
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-wechat-outside-'));
     const outsidePath = path.join(outsideDir, 'secret.txt');
@@ -115,6 +115,19 @@ describe('cindy_wechat proactive routing', () => {
         arguments: { name: 'send_file_to_user', args: { absPath: outsidePath } },
       });
       expect(JSON.stringify(call)).toContain('PATH_OUT_OF_BOUNDS');
+      expect(sendFile).not.toHaveBeenCalled();
+      // Images follow the chat rule: Cindy's own chat shows any local image, so WeChat may send it.
+      const imagePath = path.join(outsideDir, 'preview.png');
+      await fs.writeFile(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      sendFile.mockResolvedValue({ ok: true, messageId: 'm1' });
+      await client.callTool({ name: 'call_tool', arguments: { name: 'send_file_to_user', args: { absPath: imagePath } } });
+      expect(sendFile).toHaveBeenCalledWith('peer-session', await fs.realpath(imagePath), undefined);
+      // A renamed document is still a document.
+      const disguised = path.join(outsideDir, 'secret.png');
+      await fs.writeFile(disguised, 'not-for-wechat');
+      sendFile.mockClear();
+      const blocked = await client.callTool({ name: 'call_tool', arguments: { name: 'send_file_to_user', args: { absPath: disguised } } });
+      expect(JSON.stringify(blocked)).toContain('PATH_OUT_OF_BOUNDS');
       expect(sendFile).not.toHaveBeenCalled();
     } finally {
       await client.close();

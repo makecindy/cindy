@@ -38,6 +38,7 @@ describe('scanClaudeSlashCommands', () => {
 
     vi.stubEnv('HOME', home);
     vi.stubEnv('USERPROFILE', home);
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
     try {
       await mkdir(commandsDir, { recursive: true });
       await mkdir(skillDir, { recursive: true });
@@ -65,6 +66,38 @@ describe('scanClaudeSlashCommands', () => {
       ]));
     } finally {
       vi.unstubAllEnvs();
+      homedir.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('discovers one namespace level and stops at the third level', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-palette-nested-'));
+    const home = path.join(root, 'home');
+    const skillsDir = path.join(home, '.claude', 'skills');
+    const nested = path.join(skillsDir, '@scope', 'nested');
+    const tooDeep = path.join(skillsDir, '@scope', 'group', 'too-deep');
+
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
+    try {
+      for (const skillDir of [nested, tooDeep]) {
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(
+          path.join(skillDir, 'SKILL.md'),
+          `---\ndescription: ${path.basename(skillDir)}\n---\nbody\n`,
+          'utf8',
+        );
+      }
+
+      const commands = await scanClaudeSlashCommands();
+
+      expect(commands.map((command) => command.name)).toContain('nested');
+      expect(commands.map((command) => command.name)).not.toContain('too-deep');
+    } finally {
+      vi.unstubAllEnvs();
+      homedir.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -78,6 +111,7 @@ describe('scanClaudeSlashCommands', () => {
 
     vi.stubEnv('HOME', home);
     vi.stubEnv('USERPROFILE', home);
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
     try {
       await mkdir(targetSkill, { recursive: true });
       await mkdir(path.dirname(linkedSkill), { recursive: true });
@@ -99,6 +133,7 @@ describe('scanClaudeSlashCommands', () => {
       }));
     } finally {
       vi.unstubAllEnvs();
+      homedir.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -111,6 +146,7 @@ describe('scanClaudeSlashCommands', () => {
 
     vi.stubEnv('HOME', home);
     vi.stubEnv('USERPROFILE', home);
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
     try {
       await mkdir(workingDir, { recursive: true });
       await mkdir(path.join(skillsDir, 'folded'), { recursive: true });
@@ -138,6 +174,7 @@ describe('scanClaudeSlashCommands', () => {
       }));
     } finally {
       vi.unstubAllEnvs();
+      homedir.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });

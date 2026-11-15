@@ -9,12 +9,13 @@ import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mobileClientBundleEnv } from "../../../../scripts/shared/client-endpoint-build-env.mjs";
 import { withLocalMobileRegionConfig } from "./mobile-dev-region.mjs";
+import { inspectMetroListeners, probeMetroOwnership } from "../sim-metro.mjs";
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SIMULATOR_UDID_PATTERN = /^[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}$/;
 
 /** Parse one optional exact Simulator target without changing sim:start arguments. */
-export function extractSimWhoamiUdidArgs(args) {
+export function extractSimWhoamiUdidArgs(args, platform = 'ios') {
   let simulatorUdid = null;
   const passthrough = [];
 
@@ -31,10 +32,9 @@ export function extractSimWhoamiUdidArgs(args) {
     }
 
     if (simulatorUdid !== null) throw new Error("Simulator UDID 只能传一次");
-    const normalized = String(value ?? "")
-      .trim()
-      .toUpperCase();
-    if (!SIMULATOR_UDID_PATTERN.test(normalized)) {
+    const trimmed = String(value ?? "").trim();
+    const normalized = platform === 'android' ? trimmed : trimmed.toUpperCase();
+    if (!(platform === 'android' ? /^emulator-\d+$/.test(normalized) : SIMULATOR_UDID_PATTERN.test(normalized))) {
       throw new Error(`Simulator UDID 无效: ${value ?? "(缺失)"}`);
     }
     simulatorUdid = normalized;
@@ -63,9 +63,18 @@ export function cindySimulatorEnabled({ root = CINDY_SIMULATOR_ROOT, readFile = 
   }
 }
 
+/** Cindy's simulator is the default path whenever it is installed and allowed to run. */
+export function cindySimulatorAvailable({
+  root = CINDY_SIMULATOR_ROOT,
+  exists = existsSync,
+  readFile = readFileSync,
+} = {}) {
+  return exists(join(root, "devices")) && cindySimulatorEnabled({ root, readFile });
+}
+
 /**
  * Device sets to search, in order. CINDY_MOBILE_SIMULATOR=auto (default) prefers Cindy's
- * simulator when it is installed and allowed to run, then the system (Xcode) set;
+ * simulator when it is available, then the system (Xcode) set;
  * `cindy` / `system` pin one, and an absolute path pins that CoreSimulator device set.
  */
 export function resolveSimulatorDeviceSets({
@@ -77,7 +86,7 @@ export function resolveSimulatorDeviceSets({
   const cindy = { name: "cindy", path: join(root, "devices") };
   const system = { name: "system", path: null };
   if (choice === "auto")
-    return exists(cindy.path) && cindySimulatorEnabled({ root, readFile }) ? [cindy, system] : [system];
+    return cindySimulatorAvailable({ root, exists, readFile }) ? [cindy, system] : [system];
   if (choice === "system") return [system];
   if (choice === "cindy") {
     if (!exists(cindy.path))
@@ -88,6 +97,8 @@ export function resolveSimulatorDeviceSets({
   }
   if (!isAbsolute(choice))
     throw new Error("CINDY_MOBILE_SIMULATOR 只能是 auto、cindy、system 或设备目录的绝对路径");
+  // The same directory by path is still Cindy's simulator: it must get the same notices.
+  if (resolve(choice) === resolve(cindy.path)) return [cindy];
   return [{ name: choice, path: choice }];
 }
 
@@ -97,8 +108,11 @@ export function simctlArgs(deviceSet, args) {
 }
 
 /**
- * Use the set holding the exact UDID, otherwise the first set with a booted device.
- * An unreadable fallback candidate is skipped; a pinned (single) set still reports its error.
+ * Use the set holding the exact UDID, otherwise the first readable set, even with nothing booted:
+ * an idle Cindy simulator must not silently hand the task to whatever the system set is running.
+ * A set that cannot be listed is not an empty set: without an exact UDID, selecting another
+ * backend because of a transient failure would defeat the Cindy-first rule, so it fails closed.
+ * With an exact UDID the owner may be another set, so an unreadable one is skipped.
  */
 export function selectBootedSimulator(deviceSets, listBooted, simulatorUdid) {
   for (const deviceSet of deviceSets) {
@@ -106,14 +120,50 @@ export function selectBootedSimulator(deviceSets, listBooted, simulatorUdid) {
     try {
       lines = listBooted(deviceSet).split("\n");
     } catch (error) {
-      if (deviceSets.length === 1) throw error;
+      if (deviceSets.length === 1 || !simulatorUdid)
+        throw new Error(`无法读取 ${deviceSet.name} 模拟器的设备列表（${error.message}）；不改用其他模拟器，请排查 CoreSimulator 后重试，或用 --udid 指定设备。`);
       continue;
     }
     const booted = bootedSimulatorLinesForTarget(lines, null);
     const targetBooted = bootedSimulatorLinesForTarget(lines, simulatorUdid);
-    if (simulatorUdid ? targetBooted.length : booted.length) return { deviceSet, booted, targetBooted };
+    if (!simulatorUdid || targetBooted.length) return { deviceSet, booted, targetBooted };
   }
   return { deviceSet: deviceSets[0], booted: [], targetBooted: [] };
+}
+
+/** Explain a selection that leaves the default Cindy path; null when there is nothing to say. */
+export function simulatorBackendNotice({
+  deviceSet,
+  booted,
+  simulatorUdid,
+  listDevices,
+  cindyAvailable = cindySimulatorAvailable(),
+}) {
+  if (!cindyAvailable) return null;
+  if (deviceSet.name === "system")
+    return {
+      code: "system-while-cindy-available",
+      message: "正在使用系统模拟器，但 Cindy 模拟器可用。只有用户明确要求时才这样做，并在交付说明里写明。",
+    };
+  if (deviceSet.name !== "cindy" || simulatorUdid || booted.length > 0) return null;
+  let reusable = [];
+  try {
+    reusable = listDevices(deviceSet).split("\n").filter((line) => /\(Shutdown\)/.test(line)).map((line) => line.trim());
+  } catch {
+    // The list only saves a lookup; the guidance below still holds without it.
+  }
+  return {
+    code: "cindy-idle",
+    message: "Cindy 模拟器可用，但没有已开机设备：用 cindy-simulator 插件启动或新建一台。只有用户明确要求或插件不可用时，才传 --udid 或设 CINDY_MOBILE_SIMULATOR=system 使用系统模拟器。",
+    reusable,
+  };
+}
+
+/** Without one exact target nothing was probed, so this must not read as "the app is missing". */
+export function inspectTargetNativeIdentity({ targetBooted, probeFailed, inspect }) {
+  const reason = probeFailed ? "probe-timeout" : targetBooted.length !== 1 ? "target-not-unique" : null;
+  if (!reason) return inspect();
+  return { healthy: false, code: "native-unknown", reason, installedFingerprint: null, expectedFingerprint: null };
 }
 
 /** Find the set that knows this UDID in any state (build-only runs need no booted device). */
@@ -240,6 +290,50 @@ export function validateSimMetroIdentity({
 }
 
 /**
+ * Assemble the whoami Metro receipt and its start-hint decision. The CLI and
+ * unit tests use this same entry; only read-only process I/O is injectable.
+ */
+export function inspectSimMetroIdentity({
+  ports, expectedPort, worktreeRoot, expectedSource, region, envFingerprint,
+}, {
+  inspectListeners = inspectMetroListeners,
+  probeOwnership = probeMetroOwnership,
+  timedCheck = (_stage, run) => run(),
+} = {}) {
+  const probeErrors = [];
+  const metros = [];
+  let anyMetro = false;
+  let currentSourceOnExpectedPort = false;
+  const listeners = timedCheck("metro-listeners", () => inspectListeners(ports));
+  if (!listeners.healthy) probeErrors.push({ stage: "metro-listeners", code: listeners.code });
+  for (const port of ports) {
+    if (!listeners.pids[port]) continue;
+    const ownership = timedCheck(`metro-${port}`, () => probeOwnership(port, {
+      listenerPid: () => listeners.pids[port],
+      onProbeError: (error) => probeErrors.push({ port, ...error }),
+    }));
+    if (!ownership) continue;
+    const listener = classifySimMetroListener({
+      cwd: ownership.cwd, source: ownership.source, targetWorktree: worktreeRoot,
+    });
+    const identity = validateSimMetroIdentity({
+      listener, currentSource: expectedSource, runningSource: ownership.source,
+      currentRegion: region, runningRegion: ownership.region,
+      currentEnvFingerprint: envFingerprint, runningEnvFingerprint: ownership.envFingerprint,
+    });
+    anyMetro ||= listener.confirmed;
+    metros.push({ port, ...ownership, pid: Number(ownership.pid), worktree: listener.worktree,
+      isMetro: listener.confirmed, identity });
+    if (port === expectedPort) currentSourceOnExpectedPort = identity.healthy;
+  }
+  return {
+    healthy: currentSourceOnExpectedPort && probeErrors.length === 0,
+    anyMetro, currentSourceOnExpectedPort, metros, probeErrors,
+    canSuggestStart: !anyMetro && probeErrors.length === 0,
+  };
+}
+
+/**
  * Decide whether sim:start should reuse, restart, or refuse the occupant on 8081.
  *
  * `--takeover` may stop a confirmed Cindy Metro (cwd ends with /apps/mobile and
@@ -288,7 +382,7 @@ export function resolveSimMetroHandoff({
           action: 'refuse',
           code: regionChanged ? 'target-region-stale' : 'target-env-stale',
           lines: [
-            `✗ 已补/改 apps/mobile/.env,但 ${port} 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。`,
+            `✗ apps/mobile/.env 或 --mock 模拟数据开关变了,但 ${port} 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。`,
             "  需要刷新 env 时传 `--takeover` 重起,新 env 才会生效。",
           ],
         };
@@ -394,9 +488,14 @@ export function resolveMobileSimulatorBundleId(region, options = {}) {
         env: { ...(options.env ?? process.env), ...buildEnv },
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
+        timeout: 30_000,
+        killSignal: "SIGKILL",
       },
     );
   } catch (error) {
+    if (error?.code === "ETIMEDOUT") {
+      throw Object.assign(new Error(`Expo config 解析 ${region} Simulator bundle id 超时（30s）；检查当前 worktree 依赖和 Expo 配置后重试。`), { code: "EXPO_CONFIG_TIMEOUT" });
+    }
     const detail = String(error?.stderr ?? error?.message ?? error).trim();
     throw new Error(
       `无法解析 ${region} Simulator bundle id${detail ? `: ${detail}` : ""}`,
@@ -412,9 +511,10 @@ export function resolveMobileSimulatorBundleId(region, options = {}) {
       cause: error,
     });
   }
-  const bundleId = config?.ios?.bundleIdentifier;
+  const android = options.platform === 'android';
+  const bundleId = android ? config?.android?.package : config?.ios?.bundleIdentifier;
   if (typeof bundleId !== "string" || !bundleId.trim()) {
-    throw new Error(`Expo config 缺少 ios.bundleIdentifier(region=${region})`);
+    throw new Error(`Expo config 缺少 ${android ? 'android.package' : 'ios.bundleIdentifier'}(region=${region})`);
   }
   return bundleId.trim();
 }

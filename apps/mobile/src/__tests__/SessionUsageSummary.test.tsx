@@ -95,6 +95,19 @@ const usage: ReturnType<typeof useSessionMenuUsage> = {
   refresh: () => {},
 };
 describe("task menu usage summary", () => {
+  // Renderer: same model on two channels remains two facts; all extra models
+  // appear under one fee category without splitting the collapsed task total.
+  it('shows model and channel rows in the shared detail view', () => {
+    const costs = [{ model: 'same-model', category: 'conversation' as const, billingSource: 'subscription' as const,
+      money: usage.estimate! }, { model: 'same-model', category: 'additional' as const, billingSource: 'cindy-ai' as const,
+      money: { amount: 2, currency: 'USD' as const, approximate: false, kind: 'actual-cost' as const } }];
+    act(() => root.render(<SessionUsageSummary session={session}
+      usage={{ ...usage, costBreakdown: costs }} contextUsage={null} detail />));
+    expect(host.textContent?.match(/same-model/g)).toHaveLength(2);
+    expect(host.textContent).toContain('附加费用');
+    expect(host.textContent).toContain('订阅');
+    expect(host.textContent).toContain('Cindy AI');
+  });
   it.each(["light", "dark"])(
     "shows quota, value and context in the first-level entry with %s tokens",
     (mode) => {

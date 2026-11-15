@@ -5,6 +5,7 @@ import { ChevronDown, CircleAlert, CircleCheck, FileText } from 'lucide-react-na
 import type { BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import type { BotDelegationListResult } from '@cindy/maker-shared/botDelegation';
 import { useRemoteCompanionQuery } from './useRemoteCompanionQuery';
+import { SessionQuickSendProvider } from './SessionQuickSendContext';
 import { Text } from '@/components/AppText';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useGuardedPush } from '@/utils/useGuardedPush';
@@ -159,7 +160,7 @@ export function CompanionTaskResultCard({ meta, deviceId, parentSessionId, rende
     </Pressable>
     {expanded && <View style={styles.content}>
       {result.text ? renderMarkdown
-        ? <ChatFilePathContext.Provider value={fileContext}>{renderMarkdown(result.text)}</ChatFilePathContext.Provider>
+        ? <SessionQuickSendProvider value={null}><ChatFilePathContext.Provider value={fileContext}>{renderMarkdown(result.text)}</ChatFilePathContext.Provider></SessionQuickSendProvider>
         : <Text selectable style={styles.body}>{result.text}</Text>
         : <Text selectable style={styles.body}>{t('devices.companions.noWrittenResult')}</Text>}
       {result.artifacts.map((artifact) => <ResultFileAction key={artifact.absolutePath}

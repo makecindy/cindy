@@ -1,7 +1,8 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import {
   buildAttachmentPayload,
+  resolveAttachmentPreviewSource,
   buildDiffPayload,
   buildMediaPayload,
   buildMermaidPayload,
@@ -255,5 +256,25 @@ describe('messagePayload', () => {
     expect(payloadMediaKindLabel('audio')).toBe('音频');
     expect(isPayloadDesktopLocalMediaUrl('xdt-file://artifact')).toBe(true);
     expect(isPayloadDirectPreviewableUrl('https://example.com/image.png')).toBe(true);
+  });
+});
+
+// #8356 r4436061981: direct audio must reach the player without a host fetch.
+// Existing payload-format tests never executed the preview resolver (unit tier).
+describe('attachment preview source', () => {
+  it.each(['https://media.example.invalid/clip.mp3', 'data:audio/mpeg;base64,SUQz'])('plays direct audio %s without remote fetching', async (url) => {
+    const resolve = vi.fn();
+    const payload = buildMediaPayload({ kind: 'audio', url, previewable: true, mimeType: 'audio/mpeg' }, 'clip.mp3');
+    await expect(resolveAttachmentPreviewSource(payload, resolve, new AbortController().signal))
+      .resolves.toEqual({ url, mimeType: 'audio/mpeg' });
+    expect(resolve).not.toHaveBeenCalled();
+  });
+  it('authorizes a host file with the caller cancellation signal', async () => {
+    const signal = new AbortController().signal;
+    const resolved = { url: 'file:///cache/clip.mp3', mimeType: 'audio/mpeg' };
+    const resolve = vi.fn().mockResolvedValue(resolved);
+    const payload = buildMediaPayload({ kind: 'audio', url: 'xdt-file://open?path=%2Fclip.mp3', previewable: false }, 'clip.mp3');
+    await expect(resolveAttachmentPreviewSource(payload, resolve, signal)).resolves.toBe(resolved);
+    expect(resolve).toHaveBeenCalledExactlyOnceWith({ kind: 'file', url: payload.media.url, previewable: false }, { front: true, signal });
   });
 });

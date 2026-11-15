@@ -3,7 +3,11 @@ export default {
   name: 'codex-reset', entry: './codex-reset-fixture.tsx', viewport: { width: 700, height: 650 },
   real: 'CodexResetCredits, CodexResetAutoUseControl, production controls, five locales and themes',
   notCovered: 'Fixture settings RPC; actual redemption, account authentication, persistence and native mobile runtime are not exercised here',
-  cases: { default: { about: 'Manual cards with compact automatic rules' }, embedded: { about: 'Collapsed provider card entry' } },
+  cases: {
+    default: { about: 'Manual cards with compact automatic rules' },
+    embedded: { about: 'Collapsed provider card entry' },
+    modal: { about: 'Rules and nested selects remain clickable above the usage reset dialog' },
+  },
   async check(page, ui) {
     await page.getByRole('button', { name: await ui.t('codexResets.autoUse.rules') }).click();
     await page.getByRole('combobox', { name: await ui.t('codexResets.autoUse.resetDistance') }).waitFor();

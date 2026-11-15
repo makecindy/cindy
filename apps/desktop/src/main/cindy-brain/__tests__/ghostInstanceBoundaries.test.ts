@@ -18,7 +18,7 @@ const load = createGhostProductionCallbacks<{
   initialize: 'let cardActionDispatcherSingleton = null;' });
 
 const loadUsageBinding = createGhostProductionCallbacks<{
-  bindPluginUsage: (ghost: InstalledGhost) => Promise<void>;
+  bindPluginUsage: (ghost: InstalledGhost, previousRevision?: string, force?: boolean) => Promise<void>;
 }>({ functions: ['bindPluginUsage'] });
 
 function harness() {
@@ -33,12 +33,14 @@ function harness() {
   const send = vi.fn(() => true);
   const setEnabled = vi.fn(async () => ({}));
   const stop = vi.fn();
+  const cancelModelPicker = vi.fn();
   const ghostCanRead = vi.fn(async () => true);
   const preview = new GhostPreviewGate({ ghostCanRead,
     getBlobInfo: async () => ({ mimeType: 'image/png', ext: '.png' }),
     blobUrl: (hash, ext) => 'cindy-media://blobs/' + hash + ext });
   const api = load({ availableGhosts: () => ghosts, findInstalledGhostByInstanceId, resolveInstalledGhost,
     installedGhostPhysicalKeys,
+    modelPickerSingleton: { cancel: cancelModelPicker },
     requireGhostAvailableForActiveSession: vi.fn(), getGhostManager: () => ({ setEnabled,
       findInstalledInstance: (key: string) => ghosts.find((ghost) => installedGhostStoragePart(ghost) === key) }),
     beginGhostMutation: () => vi.fn(), captureGhostMutationOwner: vi.fn(),
@@ -59,12 +61,15 @@ function harness() {
     sendToGhostLogic: send, getGhostAgentSlot: () => ({ issueUserActionToken: () => null, clearGhost: vi.fn() }),
     getGhostSessionActivityTracker: () => ({ begin: vi.fn() }), ghostOwnerScope: undefined,
     ghostInstallApprovalToken, log: { info: vi.fn(), warn: vi.fn() },
-    getGhostPreviewGate: () => preview, prepareMailAttachmentUpload,
+    getGhostPreviewGate: () => preview, prepareMailAttachmentUpload, isPluginModelRouteAvailableNow: async () => false,
   });
-  return { ...api, root, organization, ghosts, send, setEnabled, stop, ghostCanRead, setStoredId: (id: string) => { storedId = id; } };
+  return { ...api, root, organization, ghosts, send, setEnabled, stop, cancelModelPicker, ghostCanRead, setStoredId: (id: string) => { storedId = id; } };
 }
 
 describe('production plugin instance boundaries', () => {
+  // The disable callback now cancels pending model picks. Inject that dependency
+  // and verify it uses the same physical installation gate as stopping runtime
+  // (plugin-security §3/§5). Existing tests previously omitted the picker fixture.
   it('rejects a confirmed close after source replacement before stopping any runtime', async () => {
     const fixture = harness();
     const confirmedApproval = ghostInstallApprovalToken(fixture.organization.approval);
@@ -72,20 +77,25 @@ describe('production plugin instance boundaries', () => {
     await expect(fixture.setGhostEnabledForUser('helper', false, confirmedApproval)).rejects.toThrow('NOT_FOUND');
     expect(fixture.setEnabled).not.toHaveBeenCalled();
     expect(fixture.stop).not.toHaveBeenCalled();
+    expect(fixture.cancelModelPicker).not.toHaveBeenCalled();
     const currentApproval = ghostInstallApprovalToken(fixture.organization.approval);
     await fixture.setGhostEnabledForUser('helper', false, currentApproval);
     expect(fixture.setEnabled).toHaveBeenCalledExactlyOnceWith('helper', false, currentApproval, undefined);
+    expect(fixture.cancelModelPicker).toHaveBeenCalledExactlyOnceWith(installedGhostStoragePart(fixture.organization));
   });
   it('does not disable a logical twin after the original physical target disappears', async () => {
     const fixture = harness();
     await fixture.setGhostEnabledForUser('helper', false);
     expect(fixture.setEnabled).toHaveBeenCalledWith('helper', false, ghostInstallApprovalToken(fixture.organization.approval), undefined);
+    expect(fixture.cancelModelPicker).toHaveBeenCalledExactlyOnceWith(installedGhostStoragePart(fixture.organization));
     fixture.setEnabled.mockClear();
     fixture.stop.mockClear();
+    fixture.cancelModelPicker.mockClear();
     fixture.ghosts.splice(0, 1);
     await expect(fixture.setGhostEnabledForUser('helper', false)).rejects.toThrow('NOT_FOUND');
     expect(fixture.setEnabled).not.toHaveBeenCalled();
     expect(fixture.stop).not.toHaveBeenCalled();
+    expect(fixture.cancelModelPicker).not.toHaveBeenCalled();
   });
   it.each(['root', 'in-place', 'organization'])('opens Mobile media with the protocol host and %s physical authority', async (layout) => {
     const fixture = harness();
@@ -127,6 +137,66 @@ describe('usage binding instance revalidation', () => {
   // Unit regression: a market refresh used to rescan every plugin once per
   // binding. Read the committed target inside the lock and retain fallback for
   // missing registry entries, without binding a same-name replacement instance.
+  it('skips rebinding when the installed revision already has a usage handle', async () => {
+    const { organization } = harness();
+    const bind = vi.fn(async () => {});
+    const captureBound = vi.fn(() => ({ subjectId: 'subject-1' }));
+    const list = vi.fn();
+    const findInstalledInstance = vi.fn();
+    const withGhostInstallLock = vi.fn(async () => {});
+    const api = loadUsageBinding({
+      activeOwnerScopeKey: () => 'owner-a',
+      currentPluginUsageService: () => ({ bind, captureBound }),
+      isAppSessionBoundaryPending: () => false,
+      getGhostManager: () => ({ list, findInstalledInstance }),
+      findInstalledGhostByInstanceId,
+      readPluginUsageIdentity: (ghost: InstalledGhost) => ghost.approval,
+      withGhostInstallLock,
+      log: { warn: vi.fn() },
+    });
+    await api.bindPluginUsage(organization);
+    const approvedRevision = organization.approval.state === 'approved' ? organization.approval.revision : '';
+    expect(captureBound).toHaveBeenCalledWith(installedGhostStoragePart(organization), approvedRevision);
+    expect(withGhostInstallLock).not.toHaveBeenCalled();
+    expect(bind).not.toHaveBeenCalled();
+  });
+
+  it('force-rebinds when source backfill changes the reporting identity', async () => {
+    const { organization } = harness();
+    const bind = vi.fn(async () => {});
+    const captureBound = vi.fn(() => ({ subjectId: 'subject-1' }));
+    const api = loadUsageBinding({
+      activeOwnerScopeKey: () => 'owner-a',
+      currentPluginUsageService: () => ({ bind, captureBound }),
+      isAppSessionBoundaryPending: () => false,
+      getGhostManager: () => ({ list: vi.fn(() => [organization]), findInstalledInstance: vi.fn(() => organization) }),
+      findInstalledGhostByInstanceId,
+      readPluginUsageIdentity: (ghost: InstalledGhost) => ghost.approval,
+      withGhostInstallLock: async (_id: string, callback: () => Promise<void>) => { await callback(); },
+      log: { warn: vi.fn() },
+    });
+    await api.bindPluginUsage(organization, undefined, true);
+    expect(bind).toHaveBeenCalledOnce();
+  });
+
+  it('rebinds with previousRevision even when a usage handle already exists', async () => {
+    const { organization } = harness();
+    const bind = vi.fn(async () => {});
+    const captureBound = vi.fn(() => ({ subjectId: 'subject-1' }));
+    const api = loadUsageBinding({
+      activeOwnerScopeKey: () => 'owner-a',
+      currentPluginUsageService: () => ({ bind, captureBound }),
+      isAppSessionBoundaryPending: () => false,
+      getGhostManager: () => ({ list: vi.fn(() => [organization]), findInstalledInstance: vi.fn(() => organization) }),
+      findInstalledGhostByInstanceId,
+      readPluginUsageIdentity: (ghost: InstalledGhost) => ghost.approval,
+      withGhostInstallLock: async (_id: string, callback: () => Promise<void>) => { await callback(); },
+      log: { warn: vi.fn() },
+    });
+    await api.bindPluginUsage(organization, 'previous-revision');
+    expect(bind).toHaveBeenCalledOnce();
+  });
+
   it.each(['indexed', 'fallback', 'removed', 'owner-changed'] as const)(
     'revalidates the committed installation with %s state', async (state) => {
       const { organization, root } = harness();

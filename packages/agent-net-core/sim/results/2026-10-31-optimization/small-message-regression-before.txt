@@ -1,0 +1,26 @@
+CMD ['cargo', 'test', '--profile', 'sim', '-p', 'agent-net-sim', '--test', 'reliability', 'lost_messages_do_not_wait_for_the_next_one', '--locked', '--offline']
+
+running 1 test
+test lost_messages_do_not_wait_for_the_next_one ... FAILED
+
+failures:
+
+---- lost_messages_do_not_wait_for_the_next_one stdout ----
+
+thread 'lost_messages_do_not_wait_for_the_next_one' (9044843) panicked at sim/tests/reliability.rs:232:5:
+p99 40.92
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    lost_messages_do_not_wait_for_the_next_one
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.00s
+
+   Compiling agent-net-core v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression)
+   Compiling agent-net-sim v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression/sim)
+    Finished `sim` profile [optimized] target(s) in 1.40s
+     Running tests/reliability.rs (/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/regression-target/sim/deps/reliability-2b52743125a82e3e)
+error: test failed, to rerun pass `-p agent-net-sim --test reliability`
+
+EXIT 101

@@ -17,6 +17,7 @@ import {
   resolveStoredWorkingDirCandidates,
 } from '../workingDirHistoryFilter';
 import { listSessionsForHistory, listWorkdirsForHistory } from '../chatHistoryReader';
+import { readTeammateDirectory } from '../teammateDirectory';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import * as schema from '../schema';
@@ -28,6 +29,7 @@ function createLocalDb(): Database.Database {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL DEFAULT 'New Maker',
       working_dir TEXT,
+      project_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       scheduled_model_baseline TEXT,
@@ -35,6 +37,7 @@ function createLocalDb(): Database.Database {
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       status TEXT NOT NULL DEFAULT 'active',
       orca_role TEXT,
+      orca_remote_lead TEXT,
       user_send_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       parent_session_id TEXT,
@@ -51,6 +54,7 @@ function createLocalDb(): Database.Database {
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
       pinned_at INTEGER,
+      hidden_at INTEGER,
       summary TEXT,
       provider_id TEXT,
       forked_at_message_id TEXT,
@@ -73,6 +77,7 @@ function createLocalDb(): Database.Database {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE bot_session_links (session_id TEXT PRIMARY KEY, bot_id TEXT, role TEXT, route_key TEXT);
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
       client_id TEXT NOT NULL,
@@ -137,6 +142,38 @@ describe('normalizeHistoryWorkingDir', () => {
       '//server/share/repo',
     );
   });
+});
+
+// Unit through the production reader: hiding affects the sidebar, not account history.
+it('enumerates hidden dialogue tasks with their visibility metadata', async () => {
+  const db = useDb();
+  insertSession(db, 'hidden-dialogue', '/tmp/dialogue', 1000);
+  db.prepare("UPDATE sessions SET hidden_at=2000, workspace_kind='dialogue' WHERE id='hidden-dialogue'").run();
+  const result = await listSessionsForHistory({ workdir: null, fromMs: null, toMs: null, agentKind: null,
+    includeDeleted: false, limit: 10, cursor: null, order: 'desc' });
+  expect(result.items).toEqual([expect.objectContaining({ id: 'hidden-dialogue', hiddenAt: 2000, workspaceKind: 'dialogue' })]);
+});
+
+// Unit, #9801 performance: the original one-profile fixture missed unbounded
+// directory/relationship materialization. Page each collection through the reader.
+it('pages hidden teammates and their persisted relationships without activating them', async () => {
+  const db = useDb();
+  db.exec(`CREATE TABLE bot_profiles (id TEXT, display_name TEXT, status TEXT, hidden_at INTEGER, updated_at INTEGER);
+    ALTER TABLE bot_session_links ADD COLUMN archived_at INTEGER;
+    ALTER TABLE bot_session_links ADD COLUMN created_at INTEGER DEFAULT 0;
+    CREATE UNIQUE INDEX teammate_id ON bot_profiles(id);
+    CREATE INDEX teammate_roles ON bot_session_links(bot_id, role);
+    INSERT INTO bot_profiles VALUES ('paused','Paused','paused',1,2), ('archived','Archived','archived',NULL,2);
+    INSERT INTO bot_session_links(session_id, bot_id, role, route_key) VALUES
+      ('main','paused','canonical',NULL), ('channel','paused','route','telegram:1'), ('history','paused','history',NULL);`);
+  const first = await readTeammateDirectory({ limit: 1, cursor: null });
+  expect(first).toMatchObject({ items: [{ id: 'archived' }], hasMore: true });
+  const second = await readTeammateDirectory({ limit: 1, cursor: first.nextCursor });
+  expect(second).toMatchObject({ items: [{ id: 'paused', status: 'paused', hiddenAt: 1 }], hasMore: false, nextCursor: null });
+  const firstLinks = await readTeammateDirectory({ teammateId: 'paused', limit: 2, cursor: null });
+  expect(firstLinks).toMatchObject({ items: [{ sessionId: 'main' }, { sessionId: 'history' }], hasMore: true });
+  const lastLinks = await readTeammateDirectory({ teammateId: 'paused', limit: 2, cursor: firstLinks.nextCursor });
+  expect(lastLinks).toMatchObject({ items: [{ sessionId: 'channel', routeKey: 'telegram:1' }], hasMore: false, nextCursor: null });
 });
 
 describe('resolveStoredWorkingDirCandidates', () => {

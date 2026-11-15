@@ -35,6 +35,7 @@ import type {
 import { AssistantMessage } from '@/components/chat/AssistantMessage';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { UserMessage } from '@/components/chat/UserMessage';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import {
@@ -66,10 +67,13 @@ import {
   runTitle,
 } from './subagentFormat';
 
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
+
 export type SubagentControlIntent = 'steer' | 'follow_up' | 'resume';
 
 export interface SubagentDetailViewProps {
   detail: SubagentRunDetail | null;
+  onDiagnose?: (source: ErrorDiagnosisSource) => void;
   loading: boolean;
   workdir: string;
   allowPrivilegedLinks: boolean;
@@ -269,8 +273,10 @@ function PiDurableDetailView({
   onBack,
   onStop,
   onControl,
+  onDiagnose,
 }: SubagentDetailViewProps) {
   const { t } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates();
   const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
   const [controlDrafts, setControlDrafts] = useState<Record<string, string>>({});
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
@@ -546,6 +552,7 @@ function PiDurableDetailView({
 
           {showAssignmentFallback ? (
             <UserMessage
+              pluginUi={pluginUi}
               workingDir={workdir}
               allowPrivilegedLinks={allowPrivilegedLinks}
               content={assignment}
@@ -567,6 +574,7 @@ function PiDurableDetailView({
               render it a second time. */}
           {showDurableResultFallback ? (
             <AssistantMessage
+              pluginUi={pluginUi}
               workingDir={workdir}
               allowPrivilegedLinks={allowPrivilegedLinks}
               content={visibleResult}
@@ -592,7 +600,15 @@ function PiDurableDetailView({
             </div>
           ) : null}
 
-          {rawError ? <SubagentErrorNotice rawError={rawError} /> : null}
+          {rawError ? (
+            <SubagentErrorNotice
+              rawError={rawError}
+              onDiagnose={onDiagnose ? (source) => onDiagnose({
+                ...source,
+                details: `subagentRunId: ${detail.id}\n${selectedChild ? `childId: ${selectedChild.id}\n` : ''}${source.details}`,
+              }) : undefined}
+            />
+          ) : null}
 
           {selectedOutputTruncated ? (
             <p className="text-11 text-[var(--text-tertiary)]">

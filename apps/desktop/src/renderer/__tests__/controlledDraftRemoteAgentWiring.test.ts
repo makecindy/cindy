@@ -53,7 +53,7 @@ describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => 
 
   it('选了另一台电脑时模型目录跟着那台', () => {
     expect(draftRouteSource).toContain(
-      'const catalogDeviceId = effectiveAgentDeviceId ?? effectiveDeviceLinkDeviceId;',
+      'effectiveAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId,',
     );
   });
 
@@ -93,9 +93,14 @@ describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => 
     // 两次提交给被控电脑 + 默认来源解析。
     expect(draftRouteSource.split('deviceProviders: agentCatalogProviders,').length - 1).toBe(2);
     const initialProvider = draftRouteSource.indexOf('const chatInitialProviderId = useMemo');
-    expect(
-      draftRouteSource.slice(initialProvider, initialProvider + 400),
-    ).toContain('effectiveSourceIdForModel(\n      agentCatalogProviders,');
+    expect(initialProvider).toBeGreaterThan(0);
+    // 取整个 memo 块(到下一个顶层声明为止),不按固定长度截:块里多几行说明,
+    // 断言就会因为窗口不够而误报,那份接线本身没变。
+    const providerMemo = draftRouteSource.slice(
+      initialProvider,
+      draftRouteSource.indexOf('\n  const ', initialProvider),
+    );
+    expect(providerMemo).toContain('effectiveSourceIdForModel(\n      targetSelectableProviders,');
     // 远程协同(普通发送与新建目标)按同一份收窄。
     expect(
       draftRouteSource.match(/draftEnableOrcaOptions\(\s*effectiveCollab,\s*agentCatalogProviders,/g),
@@ -121,7 +126,10 @@ describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => 
   });
 
   it('普通发送与新建目标都把 agentDeviceId 交给被控电脑', () => {
-    expect(draftRouteSource.split('agentDeviceId: effectiveAgentDeviceId,').length - 1).toBe(2);
+    // The final per-submit location includes a plugin override, or the original draft
+    // location when kept. Both create payloads must forward it; behavior is exercised
+    // by newMakerDraftSubmission.test.ts for absent/kept/changed/local routes.
+    expect(draftRouteSource.split('agentDeviceId: routeAgentDeviceId,').length - 1).toBe(2);
   });
 
   it('两条标识都显示:上一条写任务在哪台,下一条写 Agent 在哪台', () => {

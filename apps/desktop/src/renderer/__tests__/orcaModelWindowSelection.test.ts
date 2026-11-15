@@ -61,7 +61,7 @@ function setup(options: { agent?: string; role?: string; used?: number; current?
 }
 
 describe('Orca same-Agent window preflight', () => {
-  it.each(['claude-code', 'codex', 'pi'])('%s overflow must be confirmed before staging for either role', async agent => {
+  it.each(['claude-code', 'pi'])('%s overflow must be confirmed before staging for either role', async agent => {
     for (const role of ['lead', 'worker']) {
       const h = setup({ agent, role });
       expect(await h.pick(agent, 'small', 'provider')).toBe(false);
@@ -75,13 +75,13 @@ describe('Orca same-Agent window preflight', () => {
       h.confirmDialog.mockResolvedValue(true);
       expect(await h.pick(agent, 'small', 'provider')).toBe(true);
       expect(h.switchSessionAgent).toHaveBeenCalledWith('s1', agent, 'small', 'provider', 'high', false,
-        { confirmedContextWindow: 200000 });
+        { confirmedContextWindow: 200000 }, undefined);
     }
   });
 
   it.each([100000, 150000, 180000])('allows existing local warning semantics at %i tokens', async used => {
-    const h = setup({ used });
-    expect(await h.pick('codex', 'small', 'provider')).toBe(true);
+    const h = setup({ used, agent: 'claude-code' });
+    expect(await h.pick('claude-code', 'small', 'provider')).toBe(true);
     expect(h.confirmDialog).not.toHaveBeenCalled();
     expect(h.bindings.toast.warning).toHaveBeenCalledTimes(used >= 140000 ? 1 : 0);
   });
@@ -99,21 +99,31 @@ describe('Orca same-Agent window preflight', () => {
   });
 
   it('checks a same-id model on a different provider, using the runtime Agent even with a cross-Agent preview', async () => {
-    const h = setup({ displayedAgent: 'pi' });
-    expect(await h.pick('codex', 'old-model', 'small-provider')).toBe(false);
+    const h = setup({ agent: 'claude-code', displayedAgent: 'pi' });
+    expect(await h.pick('claude-code', 'old-model', 'small-provider')).toBe(false);
     expect(h.bindings.resolveProviderModelContextWindow).toHaveBeenCalledWith({
-      providers: [], providerId: 'small-provider', modelId: 'old-model', agentKind: 'codex',
+      providers: [], providerId: 'small-provider', modelId: 'old-model', agentKind: 'claude-code',
     });
     expect(h.switchSessionAgent).not.toHaveBeenCalled();
   });
 
-  it.each(['claude-code', 'codex', 'pi'])('blocks a pressured device-link %s selection before staging', async agent => {
+  it.each(['claude-code', 'pi'])('blocks a pressured device-link %s selection before staging', async agent => {
     for (const used of [180000, 240000]) {
       const h = setup({ remote: true, agent, used });
       expect(await h.pick(agent, 'small', 'provider')).toBe(false);
       expect(h.confirmDialog).not.toHaveBeenCalled();
       expect(h.switchSessionAgent).not.toHaveBeenCalled();
       expect(h.bindings.toast.error).toHaveBeenCalledOnce();
+    }
+  });
+
+  it.each([false, true])('lets Codex stage a pressured switch without a handoff confirmation (remote=%s)', async remote => {
+    for (const role of ['lead', 'worker']) {
+      const h = setup({ remote, role });
+      expect(await h.pick('codex', 'small', 'provider')).toBe(true);
+      expect(h.confirmDialog).not.toHaveBeenCalled();
+      expect(h.bindings.toast.error).not.toHaveBeenCalled();
+      expect(h.switchSessionAgent).toHaveBeenCalledWith('s1', 'codex', 'small', 'provider', 'high', false, undefined, undefined);
     }
   });
 
@@ -132,14 +142,14 @@ describe('Orca same-Agent window preflight', () => {
       expect(h.confirmDialog).not.toHaveBeenCalled();
       expect(h.bindings.resolveProviderModelContextWindow).not.toHaveBeenCalled();
       expect(h.switchSessionAgent).toHaveBeenCalledWith('s1', 'codex', 'small', 'provider', 'high', false,
-        { agentDeviceId: 'share:alice-share' });
+        { agentDeviceId: 'share:alice-share' }, undefined);
     }
   });
 
   it('does not register a choice if the user leaves the session during confirmation', async () => {
-    const h = setup();
+    const h = setup({ agent: 'claude-code' });
     h.confirmDialog.mockImplementation(async () => { h.bindings.currentSessionIdRef.current = 's2'; return true; });
-    expect(await h.pick('codex', 'small', 'provider')).toBe(false);
+    expect(await h.pick('claude-code', 'small', 'provider')).toBe(false);
     expect(h.switchSessionAgent).not.toHaveBeenCalled();
     expect(h.release).toHaveBeenCalledOnce();
   });
@@ -147,21 +157,21 @@ describe('Orca same-Agent window preflight', () => {
   it('does not turn an unknown target window into acknowledgement', async () => {
     const h = setup({ target: Number.NaN });
     expect(await h.pick('codex', 'unknown', 'provider')).toBe(true);
-    expect(h.switchSessionAgent).toHaveBeenCalledWith('s1', 'codex', 'unknown', 'provider', 'high', false);
+    expect(h.switchSessionAgent).toHaveBeenCalledWith('s1', 'codex', 'unknown', 'provider', 'high', false, undefined, undefined);
   });
 
   it('rechecks a pending route when selected again, while axis-only edits skip the dialog', async () => {
-    const h = setup();
-    h.bindings.makerChatStore.getAgentSwitchIntent = () => ({ target: 'codex', model: 'old-model', providerId: 'old-provider' }) as never;
+    const h = setup({ agent: 'claude-code' });
+    h.bindings.makerChatStore.getAgentSwitchIntent = () => ({ target: 'claude-code', model: 'old-model', providerId: 'old-provider' }) as never;
     // The callback holds the same store object; a send rejected for a changed
     // window must be recoverable by selecting the pending model again.
-    expect(await h.pick('codex', 'old-model', 'old-provider')).toBe(false);
+    expect(await h.pick('claude-code', 'old-model', 'old-provider')).toBe(false);
     h.confirmDialog.mockResolvedValue(true);
-    expect(await h.pick('codex', 'old-model', 'old-provider')).toBe(true);
-    expect(h.switchSessionAgent).toHaveBeenLastCalledWith('s1', 'codex', 'old-model', 'old-provider', 'high', false,
-      { confirmedContextWindow: 200000 });
+    expect(await h.pick('claude-code', 'old-model', 'old-provider')).toBe(true);
+    expect(h.switchSessionAgent).toHaveBeenLastCalledWith('s1', 'claude-code', 'old-model', 'old-provider', 'high', false,
+      { confirmedContextWindow: 200000 }, undefined);
     h.confirmDialog.mockClear();
-    expect(await h.pick('codex', 'old-model', 'old-provider', { effort: 'high', axesOnly: true })).toBe(true);
+    expect(await h.pick('claude-code', 'old-model', 'old-provider', { effort: 'high', axesOnly: true })).toBe(true);
     expect(h.confirmDialog).not.toHaveBeenCalled();
   });
 });

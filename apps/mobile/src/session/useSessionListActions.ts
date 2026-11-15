@@ -4,7 +4,10 @@ import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
-import { isExplicitRemoteNotFoundError } from '@/session/newSessionWorktree';
+import { isExplicitRemoteNotFoundError, isWorktreeChannelNotAllowedError } from '@/session/newSessionWorktree';
+import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { markSessionScheduleRunsRead } from '@/session/scheduleRunRead';
+import { sessionMayHaveScheduleRuns } from '@/session/scheduleIndex';
 import type { SessionMetaPatch } from '@/device-link/mobileMakerTransport';
 import {
   remoteSessionStore,
@@ -37,8 +40,12 @@ import { confirmArchiveWithSchedules, loadActiveBoundScheduleNames } from '@/ses
  * 这类会让行移走或移位的乐观写入与失败回滚经它落地,行的移动与列表让位带动画;
  * 不传时直接写入。
  */
-export function useSessionListActions(options?: { animateListChange?: (apply: () => void) => void }) {
+export function useSessionListActions(options?: {
+  animateListChange?: (apply: () => void) => void;
+  preferredRpcDeviceId?: string;
+}) {
   const animateListChange = options?.animateListChange;
+  const preferredRpcDeviceId = options?.preferredRpcDeviceId;
   const { t } = useTranslation();
   const { invoke } = useDeviceLink();
   const swipeRegistry = useMemo(() => createSwipeRowRegistry(), []);
@@ -47,20 +54,70 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
   const [renameSessionDraft, setRenameSessionDraft] = useState('');
   const pendingSheetActionRef = useRef<(() => void) | null>(null);
 
-  const patchSession = useCallback(async (session: RemoteSession, patch: SessionMetaPatch) => {
-    const devices = resolveSessionWriteDevices(session.id, session);
+  const patchSession = useCallback(async (
+    session: RemoteSession,
+    patch: SessionMetaPatch,
+    prepare?: (isLatest: () => boolean) => Promise<boolean>,
+    onApplied?: () => void,
+  ) => {
+    const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
     if (!devices) throw new Error(t('devices.list.error.sessionDeviceNotFound'));
     const { rpcDeviceId, shardId } = devices;
     const fields = Object.keys(patch);
-    const write = sessionMetaWriteGuard.begin(session.id, writeGuardFields(patch));
-    const applyOptimistic = () => remoteSessionStore.applySessionPatch(shardId, session.id, patch);
-    if ((patch.status !== undefined || patch.pinnedAt !== undefined) && animateListChange) {
-      animateListChange(applyOptimistic);
-    } else {
-      applyOptimistic();
-    }
+    // 预检只取代旧预检、观察 status；取消时不能作废此前仍在重试的元数据写。
+    let write = prepare
+      ? sessionMetaWriteGuard.begin(session.id, ['archive-preflight'], ['status'])
+      : sessionMetaWriteGuard.begin(session.id, writeGuardFields(patch));
+    let rollbackSession = session;
+    let applied = false;
+    let finishPreview: (() => void) | undefined;
+    const updateList = (apply: () => void): Promise<void> => new Promise((resolve, reject) => {
+      const commit = () => {
+        try { apply(); resolve(); } catch (err) { reject(err); }
+      };
+      if (animateListChange) animateListChange(commit);
+      else commit();
+    });
+    const applyOptimistic = () => {
+      if (!write.isLatest()) return;
+      rollbackSession = remoteSessionStore.getSessions().find((s) => s.id === session.id) ?? session;
+      onApplied?.();
+      remoteSessionStore.applySessionPatch(shardId, session.id, patch);
+      applied = true;
+    };
     const releasePending = sessionPendingWrites.track(session.id, fields);
+    const restoreSession = () => {
+      const shardName = remoteSessionStore.getSessions()
+        .find((s) => s.deviceLinkDeviceId === shardId)?.deviceLinkDeviceName
+        ?? session.deviceLinkDeviceName
+        ?? shardId;
+      releasePending();
+      const rollback = () => {
+        remoteSessionStore.upsertDeviceSession(shardId, shardName, rollbackSession);
+        remoteSessionStore.requestReseed(shardId);
+      };
+      if (animateListChange) animateListChange(rollback);
+      else rollback();
+    };
     try {
+      if (prepare) {
+        await updateList(() => {
+          if (write.isLatest()) finishPreview = remoteSessionStore.beginSessionListRemovalPreview(session.id);
+        });
+        if (!write.isLatest()) return;
+        const confirmed = await prepare(write.isLatest);
+        if (!write.isLatest()) return;
+        if (!confirmed) {
+          releasePending();
+          remoteSessionStore.requestReseed(shardId);
+          return;
+        }
+        // 只有确认后才取代全部元数据写，并真正移除详情/清理消息。
+        write = sessionMetaWriteGuard.begin(session.id, writeGuardFields(patch));
+      }
+      if (patch.status !== undefined || patch.pinnedAt !== undefined) await updateList(applyOptimistic);
+      else applyOptimistic();
+      if (!applied) return;
       const updated = await withNewSessionCreationRemoval(session.id, rpcDeviceId, patch.status,
         () => sessionMetaWriteQueue.enqueue(session.id, fields, () => retryPatchWhileLatest(
         write.isLatest,
@@ -84,25 +141,18 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
         }
       }
     } catch (err) {
-      if (write.isLatest()) {
+      if (!applied) {
+        releasePending();
+        remoteSessionStore.requestReseed(shardId);
+      } else if (write.isLatest()) {
         if (fields.includes('status')) {
           if (isExplicitRemoteNotFoundError(err)) {
             remoteSessionStore.applySessionPatch(shardId, session.id, { status: 'deleted' });
             remoteSessionStore.requestReseed(shardId);
             return;
           }
-          const shardName = remoteSessionStore.getSessions()
-            .find((s) => s.deviceLinkDeviceId === shardId)?.deviceLinkDeviceName
-            ?? session.deviceLinkDeviceName
-            ?? shardId;
           // 先释放本笔在途登记:upsertDeviceSession 会挡掉 status 在途、已被乐观移出的行。
-          releasePending();
-          const rollback = () => {
-            remoteSessionStore.upsertDeviceSession(shardId, shardName, session);
-            remoteSessionStore.requestReseed(shardId);
-          };
-          if (animateListChange) animateListChange(rollback);
-          else rollback();
+          restoreSession();
         } else {
           const rollback = () => {
             const currentUpdatedAt = remoteSessionStore.getSessions()
@@ -124,33 +174,23 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
       throw err;
     } finally {
       releasePending();
+      if (finishPreview) await updateList(finishPreview);
     }
-  }, [animateListChange, invoke, t]);
+  }, [animateListChange, invoke, preferredRpcDeviceId, t]);
 
+  // 归档预检提示 active 自动化后续会恢复原任务；沿用乐观归档事务，取消时恢复行。
   const runSwipeAction = useCallback((session: RemoteSession, action: Exclude<SessionSwipeAction, 'rename'>) => {
-    void patchSession(session, swipeActionPatch(action)).catch((err: unknown) => {
+    void patchSession(session, swipeActionPatch(action), action === 'archive' ? async (isLatest) => {
+      const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
+      const names = devices ? await loadActiveBoundScheduleNames({
+        deviceId: devices.rpcDeviceId, invoke, sessionId: session.id, source: session.source,
+      }) : [];
+      return isLatest() && confirmArchiveWithSchedules(t, names);
+    } : undefined).catch((err: unknown) => {
       swipeRegistry.closeOpenRow();
       Alert.alert(t('devices.list.alert.actionFailed'), humanizeRemoteError(err));
     });
-  }, [patchSession, swipeRegistry, t]);
-
-  // 绑定了 active 自动化的任务归档前先确认(归档后电脑会暂停它们);普通任务直接归档。
-  const archiveWithScheduleConfirm = useCallback(async (session: RemoteSession) => {
-    const devices = resolveSessionWriteDevices(session.id, session);
-    const names = devices
-      ? await loadActiveBoundScheduleNames({
-        deviceId: devices.rpcDeviceId,
-        invoke,
-        sessionId: session.id,
-        source: session.source,
-      })
-      : [];
-    if (!(await confirmArchiveWithSchedules(t, names))) {
-      swipeRegistry.closeOpenRow();
-      return;
-    }
-    runSwipeAction(session, 'archive');
-  }, [invoke, runSwipeAction, swipeRegistry, t]);
+  }, [invoke, patchSession, preferredRpcDeviceId, swipeRegistry, t]);
 
   const applySessionSheetAction = useCallback((session: RemoteSession, action: SessionSwipeAction) => {
     if (action === 'delete') {
@@ -167,12 +207,8 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
       setRenameSessionTarget(session);
       return;
     }
-    if (action === 'archive') {
-      void archiveWithScheduleConfirm(session);
-      return;
-    }
     runSwipeAction(session, action);
-  }, [archiveWithScheduleConfirm, runSwipeAction, t]);
+  }, [runSwipeAction, t]);
 
   const handleSessionSheetAction = useCallback((action: SessionSwipeAction) => {
     const session = actionSheetSession;
@@ -215,22 +251,62 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
 
   const archiveSession = useCallback((session: RemoteSession) => {
     const { action } = statusToggleAction(session.status);
-    if (action === 'archive') void archiveWithScheduleConfirm(session);
-    else runSwipeAction(session, action);
-  }, [archiveWithScheduleConfirm, runSwipeAction]);
+    runSwipeAction(session, action);
+  }, [runSwipeAction]);
 
   const showSessionOptions = useCallback((session: RemoteSession) => {
     setActionSheetSession(session);
   }, []);
 
+  const markSessionRead = useCallback((session: RemoteSession) => {
+    const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
+    if (!devices) {
+      Alert.alert(t('devices.list.alert.actionFailed'), t('devices.list.error.sessionDeviceNotFound'));
+      return;
+    }
+    const activityAtSwipe = remoteSessionStore.getSessionLiveActivity(session.id);
+    const runAtSwipe = remoteSessionStore.getSessionRunStatus(session.id);
+    const superseded = new Error('RECEIPT_SUPERSEDED');
+    const isCurrent = () => remoteSessionStore.getSessionLiveActivity(session.id) === activityAtSwipe
+      && remoteSessionStore.getSessionRunStatus(session.id) === runAtSwipe;
+    const maker = createMobileMakerTransport({
+      deviceId: devices.rpcDeviceId,
+      invoke: (deviceId, channel, args) => channel !== 'notification:clear-session-attention'
+        && channel !== 'maker:schedule:mark-run-read'
+        ? invoke(deviceId, channel, args)
+        : invoke(deviceId, channel, args, { preSend: () => {
+          // Recheck after reconnect/backpressure. A new run invalidates even an identical completion label.
+          if (!isCurrent()) throw superseded;
+        } }),
+    });
+    const scheduleRead = sessionMayHaveScheduleRuns(devices.rpcDeviceId, session.id, session.source)
+      ? markSessionScheduleRunsRead(maker, session.id, devices.rpcDeviceId, isCurrent).catch((err: unknown) => {
+        if (!isCurrent()) throw superseded;
+        throw err;
+      }) : Promise.resolve();
+    // Clear attention last: its normal relay echo must not invalidate this gesture's schedule reads.
+    // A schedule lookup failure still permits the independent attention write, and remains reportable.
+    const attentionRead = scheduleRead.catch(() => undefined)
+      .then(() => maker.clearSessionAttention(session.id, 'explicit')).catch((err: unknown) => {
+        // Older Hosts lack this channel; schedule-read has already been attempted.
+        if (err !== superseded && !isWorktreeChannelNotAllowedError(err)) throw err;
+      });
+    void Promise.all([scheduleRead, attentionRead]).catch((err: unknown) => {
+      if (err === superseded) return;
+      Alert.alert(t('devices.list.alert.actionFailed'), humanizeRemoteError(err));
+    });
+  }, [invoke, preferredRpcDeviceId, t]);
+
   const sessionSwipeControls = useMemo<SessionSwipeControls>(() => ({
+    onMarkRead: markSessionRead,
     onArchive: archiveSession,
     onShowOptions: showSessionOptions,
     onTogglePin: toggleSessionPinned,
     registry: swipeRegistry,
-  }), [archiveSession, showSessionOptions, swipeRegistry, toggleSessionPinned]);
+  }), [archiveSession, markSessionRead, showSessionOptions, swipeRegistry, toggleSessionPinned]);
 
   return {
+    patchSession,
     actionSheetSession,
     archiveSession,
     closeRenameSession,

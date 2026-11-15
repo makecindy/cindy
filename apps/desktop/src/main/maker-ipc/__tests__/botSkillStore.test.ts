@@ -3,12 +3,15 @@
  * (credentials-and-local-storage.md「测试生成物」)。
  */
 
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  applyBotSkillFiles,
+  listBotSkillFiles,
   BOT_SKILL_MAX_BODY_BYTES,
   BotSkillStoreError,
   botSkillRootDir,
@@ -18,6 +21,7 @@ import {
   importBotSkillFiles,
   normalizeBotSkillSlug,
   parseBotSkillFile,
+  patchCustomBotSkillSource,
   readBotSkill,
   readBotSkillSource,
   listBotSkillSources,
@@ -25,6 +29,7 @@ import {
   saveBotSkill,
   saveBotSkillSource,
   seedBotSkillIfMissing,
+  setBotSkillEnabled,
 } from '../botSkillStore';
 
 let userDataDir = '';
@@ -395,6 +400,39 @@ describe('verbatim SKILL.md (cloud companions)', () => {
     expect((await readBotSkill(userDataDir, 'bot_c', 'brew'))?.enabled).toBeUndefined();
     expect(await fs.readFile(path.join(botSkillsDir(userDataDir, 'bot_c'), 'brew', 'helper.sh'), 'utf8')).toBe('echo hi');
   });
+
+  // The settings switch must not rewrite a skill or bring back one deleted while it was queued.
+  it('turns a skill off and on by moving it, and refuses a skill that no longer exists', async () => {
+    const source = '---\nname: brew\ndescription: Brew\nlicense: MIT\n---\n\nsteps\n';
+    await saveBotSkillSource(userDataDir, 'bot_d', 'brew', source);
+    await setBotSkillEnabled(userDataDir, 'bot_d', 'brew', false);
+    expect(await listBotSkillSources(userDataDir, 'bot_d')).toEqual([{ slug: 'brew', source, enabled: false }]);
+    await setBotSkillEnabled(userDataDir, 'bot_d', 'brew', true);
+    expect(await listBotSkillSources(userDataDir, 'bot_d')).toEqual([{ slug: 'brew', source, enabled: true }]);
+    await deleteBotSkill(userDataDir, 'bot_d', 'brew');
+    await expect(setBotSkillEnabled(userDataDir, 'bot_d', 'brew', false)).rejects.toMatchObject({ errorCode: 'NOT_FOUND' });
+    expect(await listBotSkillSources(userDataDir, 'bot_d')).toEqual([]);
+  });
+
+  // Editing an imported skill from settings must keep frontmatter Cindy does not write, and a
+  // rename and the version stamp must stick so a second, stale editor cannot overwrite it.
+  it('patches an imported skill in place and refuses a save based on an older read', async () => {
+    const own = '---\nname: brew\ndescription: Old\nallowed-tools:\n  - Bash\nmetadata:\n  author: me\n---\n\nold steps\n';
+    const edit = { name: 'Brew tea', description: 'New "tea"', body: 'new steps', updatedAt: '2026-11-01T00:00:00.000Z' };
+    const patched = patchCustomBotSkillSource(own, edit)!;
+    expect(patched).toBe('---\nname: brew\ndescription: "New \\"tea\\""\nallowed-tools:\n  - Bash\nmetadata:\n  author: me\n  displayName: "Brew tea"\n  updatedAt: "2026-11-01T00:00:00.000Z"\n---\n\nnew steps\n');
+    expect(parseBotSkillFile(patched)).toMatchObject({ name: 'Brew tea', description: 'New "tea"', updatedAt: edit.updatedAt });
+    expect(patchCustomBotSkillSource(renderBotSkillFile({ slug: 'brew', name: 'Brew', description: 'd', updatedAt: 'now', body: 'b' }),
+      { ...edit, description: 'x', body: 'y' })).toBeNull();
+    const block = '---\nname: brew\ndescription: >\n  Long\nlicense: MIT\n---\n\nsteps\n';
+    expect(() => patchCustomBotSkillSource(block, { ...edit, description: 'Other' })).toThrow(BotSkillStoreError);
+
+    await saveBotSkillSource(userDataDir, 'bot_e', 'brew', own);
+    await saveBotSkillSource(userDataDir, 'bot_e', 'brew', patched, { expectedUpdatedAt: '' });
+    // A second editor opened before the first save still holds the empty stamp.
+    await expect(saveBotSkillSource(userDataDir, 'bot_e', 'brew', own, { expectedUpdatedAt: '' })).rejects.toThrow('Skill changed during review');
+    expect(await readBotSkillSource(userDataDir, 'bot_e', 'brew')).toBe(patched);
+  });
 });
 
 describe('strict skill reads (cloud companions)', () => {
@@ -414,5 +452,102 @@ describe('strict skill reads (cloud companions)', () => {
     } finally {
       await fs.chmod(dir, 0o700);
     }
+  });
+});
+
+describe('skill files for cloud companions', () => {
+  const skillDir = () => path.join(botSkillsDir(userDataDir, 'bot_a'), 'brew');
+  const write = async (relative: string, content: string, mode = 0o644) => {
+    const file = path.join(skillDir(), relative);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, content);
+    await fs.chmod(file, mode);
+  };
+  const source = async (content: string) => {
+    const file = path.join(userDataDir, `download-${createHash('sha256').update(content).digest('hex')}`);
+    await fs.writeFile(file, content);
+    return file;
+  };
+  const sha = (content: string) => createHash('sha256').update(content).digest('hex');
+  const entry = (relative: string, content: string, executable = false) =>
+    ({ path: relative, size: content.length, sha256: sha(content), ...(executable ? { executable: true as const } : {}) });
+
+  beforeEach(async () => { await saveBotSkillSource(userDataDir, 'bot_a', 'brew', '---\nname: "brew"\n---\n\nsteps\n'); });
+
+  it('lists what belongs to the skill, leaving hidden files, dependencies and keys behind', async () => {
+    await write('scripts/run.sh', '#!/bin/sh\n', 0o755);
+    await write('references/a.md', 'a');
+    await write('.env', 'TOKEN=1');
+    await write('node_modules/x/index.js', 'x');
+    await write('deploy.pem', 'secret');
+    await write('Skill.MD', 'another spelling of the entry file');
+    await fs.symlink('/etc/hosts', path.join(skillDir(), 'link'));
+    const files = await listBotSkillFiles(userDataDir, 'bot_a', 'brew', true);
+    expect(files.map(file => file.path)).toEqual(['references/a.md', 'scripts/run.sh']);
+    expect(files[1]).toMatchObject({ sha256: sha('#!/bin/sh\n'), executable: true });
+    expect(files[0]?.executable).toBeUndefined();
+  });
+
+  it('restores files with their executable bit and removes the ones the home no longer has', async () => {
+    await write('old.md', 'old');
+    await write('.env', 'TOKEN=1');
+    const content = '#!/bin/sh\n';
+    await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('scripts/run.sh', content, true)], async () => source(content), { removeOthers: true });
+    const restored = path.join(skillDir(), 'scripts/run.sh');
+    expect(await fs.readFile(restored, 'utf8')).toBe(content);
+    if (process.platform !== 'win32') expect((await fs.stat(restored)).mode & 0o111).not.toBe(0);
+    await expect(fs.access(path.join(skillDir(), 'old.md'))).rejects.toThrow();
+    expect(await fs.readFile(path.join(skillDir(), '.env'), 'utf8')).toBe('TOKEN=1');
+    expect(await readBotSkillSource(userDataDir, 'bot_a', 'brew')).toContain('steps');
+  });
+
+  it('keeps the local copy when a file is gone for good, its bytes are wrong, or the list is incomplete', async () => {
+    await write('a.md', 'local a');
+    await write('b.md', 'local b');
+    await write('c.md', 'local c');
+    expect(await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('a.md', 'cloud a'), entry('b.md', 'cloud b')],
+      async file => (file.path === 'a.md' ? null : source('tampered')), { removeOthers: false })).toEqual(['a.md', 'b.md']);
+    expect(await fs.readFile(path.join(skillDir(), 'a.md'), 'utf8')).toBe('local a');
+    expect(await fs.readFile(path.join(skillDir(), 'b.md'), 'utf8')).toBe('local b');
+    expect(await fs.readFile(path.join(skillDir(), 'c.md'), 'utf8')).toBe('local c');
+  });
+
+  it('creates an empty file without fetching it, and keeps what the list says exists elsewhere', async () => {
+    await write('big.bin', 'never reached the cloud');
+    await write('stale.md', 'removed at the home');
+    const fetch = vi.fn(async () => null);
+    await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('pkg/__init__.py', '')], fetch, { removeOthers: true, keep: ['big.bin'] });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(skillDir(), 'pkg/__init__.py'), 'utf8')).toBe('');
+    expect(await fs.readFile(path.join(skillDir(), 'big.bin'), 'utf8')).toBe('never reached the cloud');
+    await expect(fs.access(path.join(skillDir(), 'stale.md'))).rejects.toThrow();
+  });
+
+  it('replaces an empty folder with the file, and does not stall on one that holds something', async () => {
+    await fs.mkdir(path.join(skillDir(), 'data'));
+    await write('kept/.env', 'TOKEN=1');
+    const fetch = async (file: { sha256: string }) => source(file.sha256 === sha('d') ? 'd' : 'k');
+    expect(await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('data', 'd'), entry('kept', 'k')], fetch, { removeOthers: true })).toEqual(['kept']);
+    expect(await fs.readFile(path.join(skillDir(), 'data'), 'utf8')).toBe('d');
+    expect(await fs.readFile(path.join(skillDir(), 'kept/.env'), 'utf8')).toBe('TOKEN=1');
+  });
+
+  it('restores a file whose name is as long as the disk allows', async () => {
+    const name = `${'n'.repeat(250)}.md`;
+    expect(await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry(name, '')], async () => null, { removeOthers: false })).toEqual([]);
+    expect(await fs.readFile(path.join(skillDir(), name), 'utf8')).toBe('');
+  });
+
+  it('never writes outside the skill folder', async () => {
+    const outside = await fs.mkdtemp(path.join(userDataDir, 'outside-'));
+    await fs.symlink(outside, path.join(skillDir(), 'linked'));
+    const fetch = async () => source('x');
+    for (const unsafe of ['../escape.md', '/abs.md', 'a\\b.md', '.hidden/a.md', 'SKILL.md', 'Skill.MD', 'node_modules/a.js']) {
+      await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry(unsafe, 'x')], fetch, { removeOthers: false });
+    }
+    expect(await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('linked/a.md', 'x')], fetch, { removeOthers: false })).toEqual(['linked/a.md']);
+    expect(await fs.readdir(outside)).toEqual([]);
+    await expect(fs.access(path.join(botSkillsDir(userDataDir, 'bot_a'), 'escape.md'))).rejects.toThrow();
+    expect(await readBotSkillSource(userDataDir, 'bot_a', 'brew')).toContain('steps');
   });
 });

@@ -26,7 +26,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-const { resolveSafe, resolveSessionImageLenient, collectSessionImageUrls } = await import('../imageCacheStore');
+const { resolveSafe, resolveSessionImageLenient, collectSessionImageUrls } = await import('../imageCacheStore.desktop');
 
 describe('resolveSafe — reserved hosts', () => {
   it('feishu-media-images host routes to feishu-media/images/', () => {

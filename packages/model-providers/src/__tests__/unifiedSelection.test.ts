@@ -17,12 +17,14 @@ import {
   candidateAgentsForModel,
   catalogModelIdCandidates,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   nativeAgentForProviderModel,
   normalizeModelIdForClassification,
   partitionEntriesByNativeAgent,
   pickRecommendedAgent,
   recommendedAgentForModel,
   resolveAgentCapability,
+  resolveStoredModelEntry,
   resolveWireModelId,
   sortEntriesForAgent,
   unifiedModelEntries,
@@ -1323,4 +1325,49 @@ it('keeps display pricing attached to the selected provider and engine', () => {
     displayPricing: quote, currency: 'CNY', costDiscount: 0.2,
   });
   expect(resolveAgentCapability(providers, 'openai', 'same-model', 'codex')).not.toHaveProperty('displayPricing');
+});
+
+describe('uniqueRenamedSessionModelId', () => {
+  it('migrates a saved bare ID only with one replacement in the same provider and engine', () => {
+    const provider = { models: { codex: [m('chatgpt/gpt-6-luna')] } } as ProviderView;
+    expect(uniqueRenamedSessionModelId(provider, 'gpt-6-luna', 'codex')).toBe('chatgpt/gpt-6-luna');
+    expect(uniqueRenamedSessionModelId(provider, 'gpt-6-luna', 'pi')).toBeNull();
+    provider.models.codex!.push(m('xai/gpt-6-luna'));
+    expect(uniqueRenamedSessionModelId(provider, 'gpt-6-luna', 'codex')).toBeNull();
+    provider.models.codex!.push(m('gpt-6-luna'));
+    expect(uniqueRenamedSessionModelId(provider, 'gpt-6-luna', 'codex')).toBeNull();
+  });
+});
+
+describe('admitted aliases in unified rows', () => {
+  const aliases = () => view({ id: 'example', source: 'user', models: {
+    'claude-code': [m('flash', { selectionAliasKey: 'flash' })],
+    codex: [m('flash-old', { selectionAliasKey: 'flash' }), m('flash', { selectionAliasKey: 'flash' })],
+  } });
+  it('combines display identity but keeps the exact historical wire ID', () => {
+    const providers = [aliases()];
+    const [row] = unifiedModelEntries({ providers, aliasPreferences: () => ({}),
+      keepModel: { providerId: 'example', agent: 'codex', modelId: 'flash-old' } });
+    expect(row.modelId).toBe('flash');
+    expect(row.capabilities.codex?.wireModelId).toBe('flash-old');
+    expect(row.capabilities['claude-code']?.wireModelId).toBe('flash');
+    expect(row.aliasEntries).toHaveLength(2);
+    expect(unifiedModelEntries({ providers, aliasPreferences: () => ({}) })).toHaveLength(1);
+    expect(unifiedModelEntries({ providers, aliasPreferences: () => ({}) })[0].capabilities.codex?.wireModelId).toBe('flash');
+  });
+  it('requires inspected preferences and preserves conflicts, scope, and missing members', () => {
+    const providers = [aliases()];
+    expect(unifiedModelEntries({ providers })).toHaveLength(2);
+    expect(unifiedModelEntries({ providers, aliasPreferences: (_, __, id) => ({ effort: id === 'flash' ? 'high' : 'low' }) })).toHaveLength(2);
+    const rows = unifiedModelEntries({ providers, agents: ['claude-code'], aliasPreferences: () => ({}) });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].capabilities.codex).toBeUndefined();
+  });
+  it('resolves old stored IDs to the merged row without a current old-ID task', () => {
+    const [row] = unifiedModelEntries({ providers: [aliases()], aliasPreferences: () => ({}) });
+    expect(row.capabilities.codex?.wireModelId).toBe('flash');
+    expect(resolveStoredModelEntry([row], 'example', 'flash-old')).toBe(row);
+    expect(resolveStoredModelEntry([row], 'another-provider', 'flash-old')).toBeUndefined();
+    expect(resolveStoredModelEntry([row], 'example', 'unknown')).toBeUndefined();
+  });
 });

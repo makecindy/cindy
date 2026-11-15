@@ -1,6 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { isSharedTaskPeer } from '@cindy/device-link';
+import { McpAppSdkCache } from '../../shared/mcpApps.js';
 import type { McpAppSandboxView } from '../../shared/mcpApps.js';
 import { isMcpAppLinkAuthorizationCurrent } from '../../shared/mcpApps.js';
 import { MCP_APPS_MAX_BYTES, MCP_APPS_MAX_REMOTE_BYTES, safeAppLink } from './protocol.js';
@@ -9,6 +10,15 @@ import { assertMcpAppDocumentCaller, mountRemoteAppDocument, unmountRemoteAppDoc
 
 const id = z.string().min(1).max(256);
 const documentSchema = z.object({
+  sdkRef: z.string().regex(/^[a-f0-9]{64}$/).optional().catch('invalid'),
+  sdk: z.object({
+    source: z.string().max(MCP_APPS_MAX_BYTES),
+    addons: z.object({
+      'cindy/view-state': z.object({
+        source: z.string().max(16 * 1024), reactSource: z.string().max(16 * 1024),
+      }).optional(),
+    }).optional().catch(undefined),
+  }).optional().catch(undefined),
   viewId: id, html: z.string(), csp: z.string(), prefersBorder: z.boolean(),
   policy: z.object({
     connectDomains: z.array(z.string()).optional(), resourceDomains: z.array(z.string()).optional(),
@@ -18,7 +28,7 @@ const documentSchema = z.object({
 interface RemoteViewDeps {
   owner(): object | null | undefined;
   closeEpoch(deviceId: string): number;
-  invoke(deviceId: string, sessionId: string, input: Record<string, unknown>, preSend: () => void): Promise<unknown>;
+  invoke(deviceId: string, sessionId: string, input: Record<string, unknown>, preSend: () => void, options?: { noResultCache?: boolean }): Promise<unknown>;
   openLink(url: string): Promise<void>;
 }
 interface Opening {
@@ -26,11 +36,12 @@ interface Opening {
   remoteOpenId: string; cancelled: boolean; closeEpoch: number;
 }
 interface RemoteView extends Opening {
-  localId: string; remoteId: string; links: Map<string, string>; closing?: Promise<void>;
+  localId: string; remoteId: string; links: Map<string, string>; linkEpoch: number; closing?: Promise<void>;
 }
 
 /** Main binds a remote View to its local owner/window/frame; Renderer IDs never grant App RPC access. */
 export class RemoteMcpAppViews {
+  private readonly sdkCache = new McpAppSdkCache(text => createHash('sha256').update(text).digest('hex'));
   private readonly opening = new Set<Opening>();
   private readonly views = new Map<string, RemoteView>();
   constructor(private readonly deps: RemoteViewDeps) {}
@@ -46,6 +57,8 @@ export class RemoteMcpAppViews {
       assertCurrent();
     };
     preSend();
+    if (input.op === 'open' || input.op === 'poll')
+      return this.deps.invoke(entry.deviceId, entry.sessionId, input, preSend, { noResultCache: true });
     return this.deps.invoke(entry.deviceId, entry.sessionId, input, preSend);
   }
   private assertView(view: RemoteView): void {
@@ -120,18 +133,27 @@ export class RemoteMcpAppViews {
     this.opening.add(entry);
     let remoteId: string | undefined;
     try {
-      const raw = await this.call(entry, { ...input, openId: entry.remoteOpenId }, () => {
-        if (entry.cancelled) throw new Error('MCP_APP_OPEN_CANCELLED');
-      });
-      this.assertLink(entry);
-      const document = documentSchema.parse(raw);
+      const assertCurrent = () => {
+        this.assertLink(entry);
+        if (entry.cancelled || this.deps.owner() !== owner) throw new Error('MCP_APP_OPEN_CANCELLED');
+      };
+      const document = await this.sdkCache.open(owner, deviceId, { ...input, openId: entry.remoteOpenId }, async request => {
+        const raw = await this.call(entry, request, request.op === 'open' ? assertCurrent : undefined);
+        if (request.op !== 'open') {
+          if (request.op === 'teardown') remoteId = undefined;
+          return raw;
+        }
+        const parsed = documentSchema.parse(raw);
+        remoteId = parsed.viewId;
+        if (Buffer.byteLength(JSON.stringify(parsed)) > MCP_APPS_MAX_REMOTE_BYTES)
+          throw new Error('MCP_APP_DOCUMENT_TOO_LARGE');
+        return parsed;
+      }, assertCurrent);
+      assertCurrent();
       remoteId = document.viewId;
-      if (Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES)
-        throw new Error('MCP_APP_DOCUMENT_TOO_LARGE');
-      if (entry.cancelled || this.deps.owner() !== owner) throw new Error('MCP_APP_OPEN_CANCELLED');
       // Only Main's remote result is supplied. There is no Renderer-controlled HTML/RPC rebinding.
-      const view: RemoteView = { ...entry, localId: '', remoteId, links: new Map() };
-      view.localId = mountRemoteAppDocument(document, caller, (raw) => this.frame(view, raw), () => this.dispose(view));
+      const view: RemoteView = { ...entry, localId: '', remoteId, links: new Map(), linkEpoch: 0 };
+      view.localId = mountRemoteAppDocument(document, caller, (raw) => this.frame(view, raw), () => this.dispose(view), input.context);
       this.views.set(view.localId, view);
       return { viewId: view.localId, transport: 'sandbox', prefersBorder: document.prefersBorder };
     } catch (error) {
@@ -153,10 +175,12 @@ export class RemoteMcpAppViews {
       if (typeof value.linkId !== 'string' || typeof value.url !== 'string' ||
           view.links.get(value.linkId) !== safeAppLink(value.url)) throw new Error('MCP_APP_INVALID_LINK');
       view.links.delete(value.linkId);
+      const linkEpoch = view.linkEpoch;
       const requestedAt = performance.now();
       const authorization = await this.forward(view, { op: 'authorize-link', linkId: value.linkId });
       this.assertView(view);
       if (view.closing) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+      if (view.linkEpoch !== linkEpoch) throw new Error('MCP_APP_DOCUMENT_CHANGED');
       if (!isMcpAppLinkAuthorizationCurrent(authorization, performance.now() - requestedAt))
         throw new Error('MCP_APP_LINK_NOT_AUTHORIZED');
       await this.deps.openLink(safeAppLink(value.url));
@@ -166,6 +190,13 @@ export class RemoteMcpAppViews {
     if (!parsed.success || !['message', 'poll', 'link-result'].includes(parsed.data.op))
       throw new Error('MCP_APP_INVALID_REQUEST');
     const input = parsed.data;
+    const message = input.op === 'message' ? input.message as { method?: unknown } | null : null;
+    if (message?.method === 'ui/initialize') {
+      // Local frame boundary: revoke pending browser effects before awaiting the
+      // execution computer. This epoch is not part of the remote wire protocol.
+      view.linkEpoch++;
+      view.links.clear();
+    }
     const result = await (input.op === 'poll' ? this.poll(view, input) : this.forward(view, input));
     this.assertView(view);
     if (input.op === 'poll') {

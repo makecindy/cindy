@@ -1,3 +1,4 @@
+import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
 import {
   isByokImageMode,
   BUNDLED_CATALOG,
@@ -31,6 +32,7 @@ export function buildByokProvider({ provider, credential }: ByokConnection): Pro
       // Anthropic SDK appends /v1/messages, while Codex expects a /v1 base.
       upstream: agent === 'codex' ? `${inferenceBase}/v1` : inferenceBase,
       authStrategy: 'api-key-header',
+      ...(agent === 'codex' ? { forceCindyCodexOriginator: true } : {}),
       // Pi consumes per-model piApi; the gateway accepts all declared protocols.
       wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses',
       ...(agent === 'codex' && provider.imageBinding
@@ -51,8 +53,6 @@ export function buildByokProvider({ provider, credential }: ByokConnection): Pro
         agent === 'pi' ? declaredEfforts.filter((effort) => effort !== 'ultra') : declaredEfforts;
       const defaultEffort =
         defaults.defaultEffort !== undefined ? defaults.defaultEffort : model.defaultEffort;
-      const price = (value: number | undefined) =>
-        value === undefined ? undefined : value * 1_000_000;
       const projected: CatalogModel = {
         id: model.id,
         name: model.name ?? model.id,
@@ -90,12 +90,9 @@ export function buildByokProvider({ provider, credential }: ByokConnection): Pro
               },
             }
           : {}),
-        cost: {
-          input: price(model.inputCostPerToken),
-          output: price(model.outputCostPerToken),
-          cacheRead: price(model.cacheReadInputTokenCost),
-          cacheWrite: price(model.cacheCreationInputTokenCost),
-        },
+        currency: model.currency,
+        costDiscount: model.costDiscount,
+        cost: effectiveGatewayModelCost(model),
       };
       const resolved = applyModelMetadata(projected, resolveModelMetadata(
         BUNDLED_CATALOG.modelRegistry, provider.id, model.id,

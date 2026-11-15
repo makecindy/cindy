@@ -78,3 +78,27 @@ export function ghostBootHtml(entry: string): string {
     '</body></html>',
   ].join('');
 }
+
+/** library 投影的 MIME 按扩展名粗判(面板展示用;嗅探不做,宿主只供已存文件)。 */
+export function mediaTypeForLibraryPath(relPath: string): string {
+  const ext = relPath.slice(relPath.lastIndexOf('.')).toLowerCase();
+  switch (ext) {
+    case '.png': return 'image/png';
+    case '.jpg':
+    case '.jpeg': return 'image/jpeg';
+    case '.gif': return 'image/gif';
+    case '.webp': return 'image/webp';
+    case '.svg': return 'image/svg+xml';
+    case '.mp4': return 'video/mp4';
+    case '.webm': return 'video/webm';
+    case '.mov': return 'video/quicktime';
+    case '.mp3': return 'audio/mpeg';
+    case '.wav': return 'audio/wav';
+    case '.ogg': return 'audio/ogg';
+    case '.m4a': return 'audio/mp4';
+    case '.pdf': return 'application/pdf';
+    case '.json': return 'application/json; charset=utf-8';
+    case '.txt': return 'text/plain; charset=utf-8';
+    default: return 'application/octet-stream';
+  }
+}

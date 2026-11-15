@@ -23,6 +23,9 @@ export function browserOpenForLoginErrorCode(
   return isBrowserOpenForLoginErrorCode(code) ? code : null;
 }
 
-export function browserOpenForLoginToastKey(code: BrowserOpenForLoginErrorCode): string {
-  return TOAST_KEYS[code] ?? 'settings.computerUse.browser.toast.openForLoginFailed';
+export function browserOpenForLoginToastKey(
+  code: BrowserOpenForLoginErrorCode,
+  fallback = 'settings.computerUse.browser.toast.openForLoginFailed',
+): string {
+  return TOAST_KEYS[code] ?? fallback;
 }

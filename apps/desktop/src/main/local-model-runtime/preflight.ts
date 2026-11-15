@@ -10,6 +10,9 @@ import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 import { assertManagedLlamaCppProvider } from './managedLlamaCppProvider.js';
 import { getManagedLlamaCppService } from './llamaCppService.js';
 
+/** A cold Ollama start can take well over 15s; a send waits instead of failing early. */
+export const OLLAMA_SESSION_START_TIMEOUT_MS = 120_000;
+
 function cindyUserDataDir(explicit?: string): string | undefined {
   if (explicit) return explicit;
   try {
@@ -25,6 +28,8 @@ export async function ensureManagedOllamaReadyForSession(opts: {
   userDataDir?: string;
   /** Existing turns only restore a stopped service; they do not apply pending presets. */
   onlyIfStopped?: boolean;
+  /** Cancels this caller's Ollama readiness wait, not the shared service process. */
+  signal?: AbortSignal;
 }): Promise<void> {
   if (opts.remoteHostId) return;
   if (opts.providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
@@ -39,7 +44,9 @@ export async function ensureManagedOllamaReadyForSession(opts: {
     return;
   }
   if (opts.providerId !== MANAGED_OLLAMA_PROVIDER_ID) return;
+  opts.signal?.throwIfAborted();
   const existing = await getCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
+  opts.signal?.throwIfAborted();
   if (
     !existing ||
     !matchesManagedOllamaFingerprint({
@@ -56,6 +63,8 @@ export async function ensureManagedOllamaReadyForSession(opts: {
     platform: process.platform,
     fetchImpl: (url, init) => fetch(url, init),
     userDataDir: cindyUserDataDir(opts.userDataDir),
+    startTimeoutMs: OLLAMA_SESSION_START_TIMEOUT_MS,
+    signal: opts.signal,
   });
   if (ready.kind !== 'ready') {
     throw new Error(

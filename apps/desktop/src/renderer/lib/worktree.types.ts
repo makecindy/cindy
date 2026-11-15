@@ -69,6 +69,8 @@ export interface DetectCwdResp {
 }
 
 export interface ListBranchesResp {
+  /** Full ref, never a local branch named origin/main. */
+  remoteDefaultBranch?: string;
   branches: string[];
   /** 当前 HEAD 所在分支名（用于默认值）。 */
   current: string;

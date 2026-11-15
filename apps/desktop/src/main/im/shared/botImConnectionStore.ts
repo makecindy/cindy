@@ -10,15 +10,20 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { activeOwnerScopeKey } from '../../appSessionState.js';
+import { normalizeDiscordChannelAccess } from '@cindy/im';
+
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { desktopMakerLogger } from '../../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../../maker-host/override-settings-file.js';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage.js';
 import {
   BOT_IM_CHANNELS,
+  isBotImGroupChatId,
   type BotImChannel,
   type BotImConnectionRecord,
+  type BotImDiscordChannelAccess,
   type BotImFeishuService,
+  type BotImTaskArchiveActivity,
 } from '../../../shared/botImConnection.js';
 
 const log = desktopMakerLogger.child('bot-im-connection-store');
@@ -60,6 +65,9 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
       ? r.botContextId
       : null;
   const groupActivation = normalizeGroupActivation(r.groupActivation);
+  const discordChannelAccess = r.channel === 'discord' ? normalizeDiscordAccess(r.discordChannelAccess) : undefined;
+  const archivedTaskRows = normalizeArchivedTaskRows(r.archivedTaskRows);
+  const archivedTaskActivity = normalizeArchivedTaskActivity(r.archivedTaskActivity, archivedTaskRows);
   return {
     botId: r.botId,
     channel: r.channel,
@@ -67,7 +75,48 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
     ...(service ? { service } : {}),
     botContextId,
     ...(groupActivation ? { groupActivation } : {}),
+    ...(discordChannelAccess ? { discordChannelAccess } : {}),
+    ...(archivedTaskRows ? { archivedTaskRows } : {}),
+    ...(archivedTaskActivity ? { archivedTaskActivity } : {}),
   };
+}
+
+/** Presentation state only: malformed cutoffs cannot hide a row. */
+function normalizeArchivedTaskRows(raw: unknown): Record<string, number> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const rows = Object.fromEntries(Object.entries(raw).filter(([id, at]) =>
+    /^[A-Za-z0-9_.:-]{1,200}$/.test(id) && typeof at === 'number' && Number.isFinite(at) && at >= 0,
+  )) as Record<string, number>;
+  return Object.keys(rows).length ? rows : undefined;
+}
+
+function normalizeArchivedTaskActivity(
+  raw: unknown,
+  cutoffs: Record<string, number> | undefined,
+): Record<string, BotImTaskArchiveActivity> | undefined {
+  if (!cutoffs || !raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const entries: [string, BotImTaskArchiveActivity][] = [];
+  for (const [id, value] of Object.entries(raw)) {
+    if (!Object.hasOwn(cutoffs, id) || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const activity = value as Record<string, unknown>;
+    if (typeof activity.generation !== 'string' || !ID_PATTERN.test(activity.generation)) continue;
+    if (activity.messageId !== null && (typeof activity.messageId !== 'string'
+      || !activity.messageId.trim() || activity.messageId.length > 256)) continue;
+    entries.push([id, { messageId: activity.messageId as string | null, generation: activity.generation }]);
+  }
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function archivedCutoff(record: Pick<BotImConnectionRecord, 'archivedTaskRows'>, id: string): number | undefined {
+  return record.archivedTaskRows && Object.hasOwn(record.archivedTaskRows, id) ? record.archivedTaskRows[id] : undefined;
+}
+
+function archivedActivity(record: Pick<BotImConnectionRecord, 'archivedTaskActivity'>, id: string): BotImTaskArchiveActivity | undefined {
+  return record.archivedTaskActivity && Object.hasOwn(record.archivedTaskActivity, id) ? record.archivedTaskActivity[id] : undefined;
+}
+
+function sameArchiveActivity(left: BotImTaskArchiveActivity | undefined, right: BotImTaskArchiveActivity | undefined): boolean {
+  return left?.messageId === right?.messageId && left?.generation === right?.generation;
 }
 
 /** 只认 chatId → 'always'; 'mention' 是缺省, 不落盘。未知值整条丢弃。 */
@@ -75,9 +124,15 @@ function normalizeGroupActivation(raw: unknown): Record<string, 'always'> | unde
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const out: Record<string, 'always'> = {};
   for (const [chatId, mode] of Object.entries(raw as Record<string, unknown>)) {
-    if (/^-?\d{1,32}$/.test(chatId) && mode === 'always') out[chatId] = 'always';
+    if (isBotImGroupChatId(chatId) && mode === 'always') out[chatId] = 'always';
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** 只认 Discord 连接上合法的 guild / channel id；空白名单不落盘（缺省就是不开放）。 */
+export function normalizeDiscordAccess(raw: unknown): BotImDiscordChannelAccess | undefined {
+  const access = normalizeDiscordChannelAccess(raw);
+  return access.channels.length > 0 || (access.guilds?.length ?? 0) > 0 ? access : undefined;
 }
 
 function normalizeDocument(raw: unknown): BotImConnectionDocument {
@@ -148,7 +203,7 @@ export async function addBotImConnectionRecord(
 
 export async function updateBotImConnectionRecord(
   id: string,
-  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation'>>,
+  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation' | 'discordChannelAccess'>>,
 ): Promise<BotImConnectionRecord | null> {
   if (!isBotImConnectionId(id)) return null;
   let next: BotImConnectionRecord | null = null;
@@ -162,6 +217,85 @@ export async function updateBotImConnectionRecord(
     },
     { preserveDefaults: true },
   );
+  return next;
+}
+
+// Reserve most of the 256 KiB connection file for bindings/group preferences.
+// This is an owner-wide budget, so adding connections cannot multiply it.
+const MAX_ARCHIVED_TASK_ROWS = 512;
+const MAX_ARCHIVED_TASK_BYTES = 64 * 1024;
+
+function assertArchiveCapacity(connections: BotImConnectionDocument['connections']): void {
+  const count = Object.values(connections).reduce((sum, record) => sum + Object.keys(record.archivedTaskRows ?? {}).length, 0);
+  const withoutArchives = Object.fromEntries(Object.entries(connections).map(([id, record]) => [id, {
+    ...record, archivedTaskRows: undefined, archivedTaskActivity: undefined,
+  }]));
+  const archiveBytes = Buffer.byteLength(JSON.stringify({ connections }, null, 2), 'utf8')
+    - Buffer.byteLength(JSON.stringify({ connections: withoutArchives }, null, 2), 'utf8');
+  if (count > MAX_ARCHIVED_TASK_ROWS || archiveBytes > MAX_ARCHIVED_TASK_BYTES) {
+    throw new Error('ARCHIVE_CAPACITY_REACHED');
+  }
+}
+
+export interface BotImTaskArchiveCleanup {
+  connection: BotImConnectionRecord;
+  cutoffs: Readonly<Record<string, number>>;
+}
+
+/** Archive a row in one connection, without touching its session or route link. */
+export async function archiveBotImTaskRow(
+  expected: BotImConnectionRecord,
+  sessionId: string,
+  reclaimable: readonly BotImTaskArchiveCleanup[] = [],
+  activity?: BotImTaskArchiveActivity,
+): Promise<BotImConnectionRecord | null> {
+  const owner = activeOwnerScopeKey();
+  let next: BotImConnectionRecord | null = null;
+  await file.updateAtomic((current) => {
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_CHANGED');
+    const existing = current.value.connections[expected.id];
+    if (!existing || existing.botId !== expected.botId || existing.channel !== expected.channel || existing.botContextId !== expected.botContextId) return current.value;
+    if (activity && (archivedCutoff(existing, sessionId) !== archivedCutoff(expected, sessionId)
+      || !sameArchiveActivity(archivedActivity(existing, sessionId), archivedActivity(expected, sessionId)))) {
+      // A newer archive already won while this request was reading activity.
+      next = { id: expected.id, ...existing };
+      return current.value;
+    }
+    const connections = { ...current.value.connections };
+    for (const { connection, cutoffs } of reclaimable) {
+      const source = connections[connection.id];
+      if (!source || source.botId !== connection.botId || source.channel !== connection.channel || source.botContextId !== connection.botContextId) continue;
+      const archivedTaskRows = { ...source.archivedTaskRows };
+      const archivedTaskActivity = { ...source.archivedTaskActivity };
+      for (const [id, observedCutoff] of Object.entries(cutoffs)) {
+        // A newer archive made while activity was being read must survive.
+        if (archivedCutoff(source, id) === observedCutoff
+          && sameArchiveActivity(archivedActivity(source, id), archivedActivity(connection, id))) {
+          delete archivedTaskRows[id];
+          delete archivedTaskActivity[id];
+        }
+      }
+      connections[connection.id] = {
+        ...source, archivedTaskRows,
+        archivedTaskActivity: Object.keys(archivedTaskActivity).length ? archivedTaskActivity : undefined,
+      };
+    }
+    const target = connections[expected.id];
+    const archivedTaskActivity = activity
+      ? { ...target.archivedTaskActivity, [sessionId]: activity }
+      : { ...target.archivedTaskActivity };
+    if (!activity) delete archivedTaskActivity[sessionId];
+    const merged = {
+      ...target,
+      archivedTaskRows: { ...target.archivedTaskRows, [sessionId]: Date.now() },
+      archivedTaskActivity: Object.keys(archivedTaskActivity).length ? archivedTaskActivity : undefined,
+    };
+    connections[expected.id] = merged;
+    assertArchiveCapacity(connections);
+    next = { id: expected.id, ...merged };
+    return { connections };
+  }, { preserveDefaults: true });
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_CHANGED');
   return next;
 }
 
@@ -179,6 +313,16 @@ export async function setBotImConnectionGroupActivation(
   return updateBotImConnectionRecord(id, {
     groupActivation: Object.keys(next).length > 0 ? next : undefined,
   });
+}
+
+/** Discord 连接的服务器频道白名单（整份替换；非 Discord 连接 / 不存在返回 null）。 */
+export async function setBotImConnectionDiscordChannelAccess(
+  id: string,
+  access: unknown,
+): Promise<BotImConnectionRecord | null> {
+  const current = readBotImConnection(id);
+  if (!current || current.channel !== 'discord') return null;
+  return updateBotImConnectionRecord(id, { discordChannelAccess: normalizeDiscordAccess(access) });
 }
 
 export async function removeBotImConnectionRecord(id: string): Promise<BotImConnectionRecord | null> {

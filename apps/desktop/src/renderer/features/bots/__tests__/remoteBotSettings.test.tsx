@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -9,6 +9,13 @@ import {
 import { RemoteBotSettings } from '../RemoteBotSettings';
 import { parseRemoteMediaUrl } from '../../../../shared/remoteMediaUrl';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+
+// Unit: remote navigation stays guarded during upload/crop, then JPEG conversion.
+// Existing gallery coverage cannot exercise the new confirmation boundary.
+vi.mock('@/components/settings/avatarCropImage', () => ({
+  loadAvatarSource: async () => ({ bitmap: { close() {} }, size: { width: 800, height: 400 } }),
+  exportAvatarCrop: async () => ({ blob: new Blob(['cropped'], { type: 'image/png' }) }),
+}));
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
   confirm: vi.fn(async () => true),
@@ -149,17 +156,20 @@ async function open() {
   await waitFor(() => expect(screen.getAllByText('Choose account').length).toBeGreaterThan(0));
   return view;
 }
-it('saves an independent task route to the owning host without changing the primary', async () => {
+// 2026-11-09: the teammate task model setting is retired. An older host still lists its fields:
+// they are not shown, and a primary model save leaves the host's task choice untouched.
+it('hides an older host\'s retired task model fields and never sends them back', async () => {
   const remote = resource();
   remote.actions[0].fields.push({ id: 'taskModel', label: 'Task model', kind: 'multiline' }, { id: 'taskFollowsPrimary', label: 'Inherit primary', kind: 'toggle' });
   Object.assign(remote.blocks[0].data.values, { taskModel: JSON.stringify(chain), taskFollowsPrimary: true });
   h.invoke.mockImplementation(async (_: string, channel: string) => channel === REMOTE_RESOURCE_GET_CHANNEL ? remote : { effects: [] });
   await open();
-  expect(h.model.deviceId).toBe('host');
-  fireEvent.click(within(screen.getByTestId('bot-task-model-controls')).getByText('Choose account'));
+  expect(screen.queryByText('Task model')).toBeNull();
+  expect(screen.queryByText('Inherit primary')).toBeNull();
+  fireEvent.click(screen.getByText('Choose account'));
   fireEvent.click(screen.getByText('bots.save'));
   await waitFor(() => expect(h.invoke).toHaveBeenCalledWith('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [expect.objectContaining({
-    input: { taskFollowsPrimary: false, taskModel: JSON.stringify([{ harness: 'codex', model: 'gpt-6', providerId: 'openai:remote-account', effort: 'high', fastMode: true }]) },
+    input: { modelChain: JSON.stringify([{ harness: 'codex', model: 'gpt-6', providerId: 'openai:remote-account', effort: 'high', fastMode: true }]) },
   })]));
 });
 it('saves the complete model route on the selected host using a renewed opaque action', async () => {
@@ -616,16 +626,23 @@ it.each(['gallery', 'file'])(
   'guards navigation through real picker %s preparation and conversion',
   async (source) => {
     h.realPortrait = true;
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     const decodes: Array<() => void> = [];
     await openAvatar(() => new Promise<void>((resolve) => decodes.push(resolve)));
-    let reader: { result: string; onload: () => void };
+    let finishChoose!: (result: { canceled: boolean; previewDataUrl: string }) => void;
+    Object.assign(window.electronAPI, { localDb: { bots: {} } });
+    window.electronAPI.localDb.bots.chooseAvatarSource = vi.fn(() =>
+      new Promise<{ canceled: boolean; previewDataUrl: string }>((resolve) => {
+        finishChoose = resolve;
+      }),
+    );
     vi.stubGlobal(
       'FileReader',
       class {
         result = 'data:image/png;base64,cG5n';
         onload = () => {};
         readAsDataURL() {
-          reader = this;
+          this.onload();
         }
       },
     );
@@ -633,10 +650,7 @@ it.each(['gallery', 'file'])(
     let canClose: unknown;
     await act(async () => {
       if (source === 'gallery') fireEvent.click(screen.getByRole('button', { name: 'Cindy' }));
-      else
-        fireEvent.change(document.querySelector('input[type="file"]')!, {
-          target: { files: [new File(['image'], 'avatar.png', { type: 'image/png' })] },
-        });
+      else fireEvent.click(screen.getByRole('button', { name: 'bots.guided.upload' }));
       canClose = await close.current?.();
     });
     expect(canClose).toBe(false);
@@ -646,9 +660,15 @@ it.each(['gallery', 'file'])(
     expect(h.portrait.disabled).toBe(true);
     await act(async () => {
       if (source === 'gallery') decodes.shift()!();
-      else reader!.onload();
+      else finishChoose({ canceled: false, previewDataUrl: 'data:image/png;base64,c2Ry' });
     });
-    // Picker preprocessing has finished; the subsequent JPEG conversion still owns the guard.
+    if (source === 'file') {
+      expect(h.invoke).not.toHaveBeenCalledWith('host', REMOTE_RESOURCE_INVOKE_CHANNEL, expect.anything());
+      expect(await close.current?.()).toBe(false);
+      expect(h.portrait.disabled).toBe(true);
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.crop.done' })));
+    }
+    // Confirmed crop / gallery bytes now enter the existing JPEG conversion.
     expect(decodes).toHaveLength(1);
     expect(await close.current?.()).toBe(false);
     expect(h.portrait.disabled).toBe(true);

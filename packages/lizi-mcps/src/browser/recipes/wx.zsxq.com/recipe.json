@@ -1,16 +1,19 @@
 {
   "id": "zsxq-dynamics",
-  "match": ["wx.zsxq.com", "zsxq.com"],
-  "description": "读取知识星球(zsxq)我加入的所有星球最新动态(时间/星球名/作者/标题/评论数/点赞数/链接)。先落到 wx.zsxq.com 域,再在页面内同源 fetch api.zsxq.com 接口——带上登录 cookie(zsxq 用 httpOnly cookie,必须页面内带凭证发请求)。",
-  "inputs": {},
-  "steps": [
-    { "action": "navigate", "url": "https://wx.zsxq.com" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "dynamics",
-      "fn": "async () => { const r = await fetch('https://api.zsxq.com/v2/dynamics?scope=general&count=20', { credentials: 'include' }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('zsxq 返回非 JSON(未登录或被风控),请在持久浏览器登录知识星球后重试'); } if (d && d.succeeded === false) { throw new Error('zsxq 接口报错(可能未登录): ' + (d.info || d.code)); } const rd = (d && d.resp_data) ? d.resp_data : d; const list = (rd && rd.dynamics) ? rd.dynamics : []; const textOf = (tp) => { if (!tp) return ''; const p = [tp.title, tp.talk && tp.talk.text, tp.question && tp.question.text, tp.answer && tp.answer.text, tp.task && tp.task.text, tp.solution && tp.solution.text].find(v => typeof v === 'string' && v.trim()); return (p || '').replace(/\\s+/g, ' ').trim(); }; const authorOf = (tp) => (tp && (tp.owner && tp.owner.name || tp.talk && tp.talk.owner && tp.talk.owner.name || tp.question && tp.question.owner && tp.question.owner.name || tp.answer && tp.answer.owner && tp.answer.owner.name)) || ''; return list.map(x => { const tp = x.topic; return { time: x.create_time || (tp && tp.create_time) || '', group: (tp && tp.group && tp.group.name) || '', author: authorOf(tp), title: textOf(tp).slice(0, 120), comments: (tp && tp.comments_count) || 0, likes: (tp && tp.likes_count) || 0, url: (tp && tp.topic_id) ? 'https://wx.zsxq.com/topic/' + tp.topic_id : '' }; }); }"
-    }
+  "match": [
+    "wx.zsxq.com",
+    "zsxq.com"
   ],
-  "output": "{{dynamics}}"
+  "description": "获取所有星球的最新动态",
+  "access": "read",
+  "adapter": "zsxq/dynamics",
+  "inputs": {
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of dynamics to return"
+    }
+  },
+  "steps": []
 }

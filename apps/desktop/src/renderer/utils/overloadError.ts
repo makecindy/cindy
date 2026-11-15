@@ -13,8 +13,9 @@
  * 成"网络异常"会让用户白折腾自己的网络。
  *
  * 两种形态:
- *  - `capacity`:Codex 透传 OpenAI 的 `Selected model is at capacity`。
- *    app-server 侧不重试,由 maker-core 接管退避重投。
+ *  - `capacity`:Codex 透传 OpenAI 的 `Selected model is at capacity`,以及上游
+ *    app-server 自己写的 `currently overloaded`(那条通道也不重试)。这两种都由
+ *    maker-core 接管退避重投。
  *  - `overloaded`:Anthropic HTTP 529。Claude Code SDK 自己带退避重试,客户端
  *    只负责显示进度。
  */
@@ -46,7 +47,9 @@ export function parseOverloadError(
   if (reason === UPSTREAM_OVERLOAD_REASON) return { kind: 'capacity' };
   if (errorStatus === 529) return { kind: 'overloaded' };
   // 文案 pattern 保留作老 daemon(不发结构化标识)与 Anthropic 侧的兜底。
-  if (/\bat capacity\b/i.test(message)) return { kind: 'capacity' };
+  if (/\bat capacity\b/i.test(message) || /\bcurrently overloaded\b/i.test(message)) {
+    return { kind: 'capacity' };
+  }
   if (/\boverloaded_error\b|\b529\b/.test(message)) return { kind: 'overloaded' };
   return null;
 }

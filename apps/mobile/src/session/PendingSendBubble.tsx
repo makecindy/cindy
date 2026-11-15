@@ -7,7 +7,7 @@
  * 送达后正式消息的「复制 / …」占的就是这一行,所以前后行高不变。本机刚发出的条目图标延后出现,
  * 多数发送在延迟内落定,不闪转圈。左侧图标语义:
  *  - 转圈 = 还没有「已被收下」这个事实(enqueue 在途 / 已出队待回流 / 附件上传中);
- *  - 「排入队尾 list-end」= 已确认入队,顺序由排列先后表达,不标数字;
+ *  - 已确认入队:图标与「排队中」合并到下方菜单入口,左侧不重复显示;
  *  - 时钟 = 电脑离线,消息留在手机上,连上后自动发出(不算失败);
  *  - ✎ = 正在底部 composer 编辑这一条;
  *  - ⚠ = 失败,可重试 / 删除。
@@ -20,6 +20,8 @@ import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { CompanionFadeIn } from '@/session/CompanionEntering';
 import { LOCAL_SEND_STATUS_DELAY_MS, localSendStartedAt } from '@/session/localSendMotion';
 import { Text } from '@/components/AppText';
+import { NativePullDownMenu, usesNativePullDownMenu, type NativePullDownAction } from '@/platform/chrome/NativePullDownMenu';
+import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { summarizeMessageBubblePresentation } from '@/session/messagePresentation';
 import { LONG_USER_MESSAGE_COLLAPSED_LINES, LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD, mayExceedVisualLineThreshold, resolveUserMessageCollapse } from '@/session/userMessageCollapse';
@@ -29,7 +31,10 @@ import { MessageBodyTapBoundary } from '@/session/ShareMessageCheckbox';
 import { shareSelectionTapMoved, shouldCommitShareSelectionTap, type ShareSelectionTapPoint } from '@/session/shareSelectionTap';
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   Bot,
+  ChevronDown,
   Clock,
   Ghost,
   ListEnd,
@@ -40,6 +45,7 @@ import {
   Send,
   Smartphone,
   Timer,
+  Trash2,
   type LucideIcon,
 } from 'lucide-react-native';
 import { shouldShowSourceDevice } from '@cindy/maker-shared/message-source';
@@ -94,6 +100,7 @@ export interface PendingSendBubbleActions {
   onRemove(clientId: string): void;
   onBeginEdit(clientId: string): void;
   onSteer(clientId: string): void;
+  onMove(clientId: string, direction: 'up' | 'down'): void;
   onRetryOutbox(clientId: string): void;
   onRemoveOutbox(clientId: string): void;
   busy?: boolean;
@@ -298,6 +305,7 @@ export function PendingSendBubble({
   renderImage,
   renderText,
   renderFile,
+  renderReplyQuote,
   screenWidth,
   viewerDeviceId,
   onOpenImage,
@@ -307,6 +315,8 @@ export function PendingSendBubble({
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   renderText: (text: string, index: number) => ReactNode;
   renderFile: (name: string, index: number) => ReactNode;
+  /** 伙伴私聊的引用回复块;普通任务不传。 */
+  renderReplyQuote?: (quote: NonNullable<MobilePendingSendItem['replyQuote']>) => ReactNode;
   screenWidth?: number;
   item: MobilePendingSendItem;
   actions: PendingSendBubbleActions;
@@ -333,6 +343,7 @@ export function PendingSendBubble({
   const uploadsPending = item.phase === 'uploading';
   const statusShown = useLocalSendStatusShown(item.key);
   const waiting = item.phase === 'waiting';
+  const queued = item.phase === 'queued' && !!item.actions;
   const failedImages = item.thumbs.filter((thumb) => thumb.failed).length;
   // 只有「正在下方输入框编辑」时淡化:那一刻气泡确实在被改写。
   const contentOpacity = useAnimatedOpacity(editing ? 0.38 : 1);
@@ -467,7 +478,7 @@ export function PendingSendBubble({
         </View>
       ) : null}
       <View style={styles.bubbleRow}>
-        <Pressable
+        {!queued ? <Pressable
           accessibilityHint={item.hint ?? undefined}
           accessibilityLabel={item.source
             ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })
@@ -496,7 +507,7 @@ export function PendingSendBubble({
               )}
             </CompanionFadeIn>
           )}
-        </Pressable>
+        </Pressable> : null}
         <Animated.View
           style={[styles.content, { opacity: contentOpacity }]}
           testID={`pendingSend.bubble.${item.clientId}`}
@@ -518,7 +529,7 @@ export function PendingSendBubble({
               ) : null}
             </View>
           ) : null}
-          {hasBody ? (
+          {hasBody || (item.replyQuote && renderReplyQuote) ? (
             <MessageBodyTapBoundary value={cancelBubbleTouch}>
             <View
               key={`body:${item.clientId}`}
@@ -535,6 +546,7 @@ export function PendingSendBubble({
               ]}
               testID={`pendingSend.body.${item.clientId}`}
             >
+              {item.replyQuote && renderReplyQuote ? renderReplyQuote(item.replyQuote) : null}
               {rendersSentInlineBody ? (
                 <SentInlineAtomBody
                   interactiveAtoms={false}
@@ -628,19 +640,9 @@ export function PendingSendBubble({
           </CompanionFadeIn>
         ) : item.actions && item.phase === 'queued' && statusShown ? (
           <CompanionFadeIn distance={0} duration={motionDuration.fast} play={statusShown === 'revealed'}>
-          <View style={styles.statusActions} testID={`pendingSend.actions.${item.clientId}`}>
-            <Text numberOfLines={1} style={styles.statusText}>{t('message.queue.queued')}</Text>
-            <View style={styles.statusDivider} />
-            <StatusAction busy={actions.busy} disabled={item.actions.steer.disabled}
-              disabledReason={item.actions.steer.disabledReason} label={t('message.queue.steer')}
-              onPress={() => actions.onSteer(item.clientId)} testID={`pendingSend.steer.${item.clientId}`} />
-            <StatusAction busy={actions.busy} disabled={item.actions.edit.disabled}
-              disabledReason={item.actions.edit.disabledReason} label={t('message.queue.edit')}
-              onPress={() => actions.onBeginEdit(item.clientId)} testID={`pendingSend.edit.${item.clientId}`} />
-            <StatusAction busy={actions.busy} disabled={item.actions.remove.disabled}
-              disabledReason={item.actions.remove.disabledReason} label={t('message.queue.cancel')}
-              onPress={() => actions.onRemove(item.clientId)} testID={`pendingSend.remove.${item.clientId}`} />
-          </View>
+            <QueuedSendMenu item={item} actions={actions} accessibilityLabel={item.source
+              ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })
+              : statusLabel} />
           </CompanionFadeIn>
         ) : selected && outbox && item.canCancel !== false ? (
           // 还在上传 / 发出途中:轻点气泡才露出「取消」,平时这一行留空,只有左侧图标。
@@ -660,6 +662,58 @@ export function PendingSendBubble({
         <Text style={styles.rowHint} testID={`pendingSend.hint.${item.clientId}`}>{item.hint}</Text>
       ) : null}
     </View>
+  );
+}
+
+/** 排队状态与操作共用一个入口,菜单浮在消息上,不展开列表行。 */
+function QueuedSendMenu({ item, actions, accessibilityLabel }: {
+  item: MobilePendingSendItem;
+  actions: PendingSendBubbleActions;
+  accessibilityLabel: string;
+}) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const choices: NativePullDownAction[] = [
+    { id: 'steer', title: t('message.queue.steer'), image: 'arrow.up', icon: ArrowUp },
+    { id: 'edit', title: t('message.queue.edit'), image: 'pencil', icon: Pencil },
+    { id: 'moveUp', title: t('message.queue.moveUp'), image: 'arrow.up', icon: ArrowUp },
+    { id: 'moveDown', title: t('message.queue.moveDown'), image: 'arrow.down', icon: ArrowDown },
+    { id: 'remove', title: t('message.queue.cancelSend'), image: 'trash', icon: Trash2, destructive: true },
+  ].filter((choice) => {
+    const availability = item.actions?.[choice.id as keyof NonNullable<MobilePendingSendItem['actions']>];
+    return !actions.busy && availability && !availability.disabled;
+  });
+  const disabled = choices.length === 0;
+  const trigger = (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={item.hint ?? undefined}
+      accessibilityRole="button"
+      accessibilityState={{ disabled, busy: actions.busy || undefined }}
+      disabled={disabled}
+      style={({ pressed }) => [styles.queueMenuTrigger, pressed && styles.pressed]}
+      testID={`pendingSend.queueStatus.${item.clientId}`}
+    >
+      <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      <Text style={styles.queueStatusText}>{t('message.queue.queued')}</Text>
+      {!disabled && <ChevronDown color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />}
+    </Pressable>
+  );
+  if (disabled) return trigger;
+  const Menu = usesNativePullDownMenu() ? NativePullDownMenu : AnchoredPullDownMenu;
+  return (
+    <Menu actions={choices} testID={`pendingSend.queueMenu.${item.clientId}`}
+      onAction={(id) => {
+        if (item.phase !== 'queued' || !choices.some((choice) => choice.id === id && !choice.disabled)) return;
+        if (id === 'steer') actions.onSteer(item.clientId);
+        else if (id === 'edit') actions.onBeginEdit(item.clientId);
+        else if (id === 'remove') actions.onRemove(item.clientId);
+        else if (id === 'moveUp') actions.onMove(item.clientId, 'up');
+        else if (id === 'moveDown') actions.onMove(item.clientId, 'down');
+      }}>
+      {trigger}
+    </Menu>
   );
 }
 
@@ -776,6 +830,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   statusRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, height: 46, justifyContent: 'flex-end', marginTop: -spacing.sm, maxWidth: '100%' },
   // 按钮自带 44 宽的留白,彼此只留 4 的间距。
   statusActions: { alignItems: 'center', alignSelf: 'stretch', flexDirection: 'row', gap: spacing.xs },
+  queueMenuTrigger: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, minHeight: 44, minWidth: 44 },
+  queueStatusText: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   // 说明 / 报错是成句的话:13/18,二级色;失败用报错色。
   statusText: { color: colors.textSecondary, flexShrink: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   statusError: { color: colors.errorText, flexShrink: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },

@@ -121,7 +121,11 @@ describe('passive shared-userData instance auth isolation', () => {
       '\n}\n',
     );
     expect(retryBody).not.toContain('isPassiveSharedUserDataInstance');
-    expect(retryBody).toContain('refreshTimer = setTimeout(');
+    expect(retryBody).toContain('scheduleRefreshRetry(epoch);');
+    // 失败重排与 401 快速重试共用同一个排 timer 的函数,同样不设 passive 闸门。
+    const armBody = sliceBody('function scheduleRefreshRetry(epoch: number): void {', '\n}\n');
+    expect(armBody).not.toContain('isPassiveSharedUserDataInstance');
+    expect(armBody).toContain('refreshTimer = setTimeout(');
   });
 
   it('refresh 本身不被 passive 拦:冷启动仍能换 access token,凭证缺席仍走过期出口', () => {

@@ -1,9 +1,9 @@
-import { REMOTE_RESOURCE_INVOKE_CHANNEL, REMOTE_RESOURCE_MANIFEST_CHANNEL } from '@cindy/device-link';
+import { isSharedTaskPeer, isProviderSharePeer, REMOTE_RESOURCE_INVOKE_CHANNEL, REMOTE_RESOURCE_MANIFEST_CHANNEL } from '@cindy/device-link';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { isRemoteResourcesUnsupported } from '@/device-link/remoteResources';
 import {
   isBoundedPluginResponse, marketItemMatchesPlugin, parsePluginManagementDetail,
-  parsePluginManagementReceipt, parsePluginManagementSnapshot, pluginApprovalToken,
+  parsePluginManagementReceipt, parsePluginManagementSnapshot, parsePluginUiConsent, pluginApprovalToken,
   type ManagedMarketDetail, type ManagedPlugin,
 } from './pluginManagementTypes';
 
@@ -16,9 +16,10 @@ export interface PluginManagementClientOptions {
   /** Target/view/connection fence, in addition to the built-in account-owner fence. */
   isCurrent?: () => boolean;
 }
-export type PluginManagementBegin = { operationId: string } & (
+export interface PluginManagementCapabilities { snapshot: boolean; uiConsent: boolean }
+export type PluginManagementBegin = { operationId: string; uiConsentVersion?: 1 } & (
   | { kind: 'install'; detail: ManagedMarketDetail; installed?: ManagedPlugin }
-  | { kind: 'uninstall' | 'enable' | 'disable'; installed: ManagedPlugin }
+  | { kind: 'uninstall' | 'enable' | 'disable' | 'approve-ui' | 'defer-ui'; installed: ManagedPlugin }
 );
 export class PluginManagementRequestError extends Error {
   constructor(message: string, readonly outcomeUnknown = false) { super(message); }
@@ -38,11 +39,14 @@ function utf8Bytes(value: string): number {
 }
 export function createPluginManagementClient(options: PluginManagementClientOptions) {
   const owner = getMobileAuthOwner();
+  let uiCapabilityApproval = false;
   const isOwnerCurrent = () => !owner.switching && isMobileAuthOwnerCurrent(owner);
   const isCurrent = () => isOwnerCurrent() && (options.isCurrent?.() ?? true);
   async function call<T>(channel: string, payload: unknown, parse: (value: unknown) => T, mutation = false, guard?: () => boolean, cleanup = false): Promise<T> {
     const requestCurrent = () => (cleanup ? isOwnerCurrent() : isCurrent()) && (!guard || guard());
-    const assertRequestCurrent = () => { if (!requestCurrent()) localError('PLUGIN_MANAGEMENT_STALE'); };
+    const assertRequestCurrent = () => {
+      if (isSharedTaskPeer(options.deviceId) || isProviderSharePeer(options.deviceId)) localError('PLUGIN_MANAGEMENT_OWNER_ONLY');
+      if (!requestCurrent()) localError('PLUGIN_MANAGEMENT_STALE'); };
     assertRequestCurrent();
     try {
       const response = await options.invoke(options.deviceId, channel, [payload], { preSend: assertRequestCurrent });
@@ -72,21 +76,32 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
   return {
     deviceId: options.deviceId,
     isCurrent,
-    async capability(): Promise<'supported' | 'unsupported'> {
+    async capabilities(): Promise<PluginManagementCapabilities> {
       try {
         return await call(REMOTE_RESOURCE_MANIFEST_CHANNEL, { client: descriptor }, (value) => {
           if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_RESPONSE');
           const data = value as { collections?: Array<{ id?: string; actions?: Array<{ id?: string; disabled?: boolean }> }> };
           if (!Array.isArray(data.collections) || !data.collections.every((c) => c && typeof c.id === 'string'
             && (c.actions === undefined || (Array.isArray(c.actions) && c.actions.every((a) => a && typeof a.id === 'string'))))) throw new Error('INVALID_RESPONSE');
-          return data.collections.some((c) => c.id === 'plugins' && c.actions?.some((a) => a.id === 'management:snapshot' && !a.disabled)) ? 'supported' : 'unsupported';
+          const plugins = data.collections.find((c) => c.id === 'plugins');
+          const actions = plugins?.actions ?? [];
+          return { snapshot: actions.some((a) => a.id === 'management:snapshot' && !a.disabled),
+            uiConsent: actions.some((a) => a.id === 'management:ui-consent' && !a.disabled) };
         });
       } catch (error) {
-        if (isRemoteResourcesUnsupported(error)) return 'unsupported';
+        if (isRemoteResourcesUnsupported(error)) return { snapshot: false, uiConsent: false };
         throw error;
       }
     },
-    snapshot: () => action('snapshot', {}, parsePluginManagementSnapshot),
+    async capability(): Promise<'supported' | 'unsupported'> {
+      return (await this.capabilities()).snapshot ? 'supported' : 'unsupported';
+    },
+    uiConsent: () => action('ui-consent', {}, parsePluginUiConsent),
+    snapshot: () => action('snapshot', {}, (value) => {
+      const snapshot = parsePluginManagementSnapshot(value);
+      uiCapabilityApproval = snapshot.uiCapabilityApproval === true;
+      return snapshot;
+    }),
     async detail(pluginId: string) {
       if (!validId(pluginId, 1024)) return localError('INVALID_INPUT');
       return action('market-detail', { pluginId }, (v) => {
@@ -97,9 +112,12 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
     },
     begin(request: PluginManagementBegin, guard?: () => boolean) {
       if (!validId(request.operationId)) return localError('INVALID_INPUT');
+      if ((request.kind === 'approve-ui' || request.kind === 'defer-ui' || request.uiConsentVersion !== undefined)
+        && (!uiCapabilityApproval || request.uiConsentVersion !== 1)) return localError('PLUGIN_UI_APPROVAL_UNSUPPORTED');
       const installed = request.installed;
       if (installed && !validId(installed.instanceKey, 1024)) return localError('INVALID_INPUT');
       const input: Record<string, unknown> = { operationId: request.operationId, kind: request.kind,
+        ...(request.uiConsentVersion === 1 ? { uiConsentVersion: 1 } : {}),
         ...(installed ? { expectedInstalledApproval: pluginApprovalToken(installed) } : {}) };
       if (request.kind === 'install') {
         const detail = parsePluginManagementDetail(request.detail);

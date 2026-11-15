@@ -18,6 +18,7 @@ import type {
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import {
   classifySubagentError,
   formatClockTime,
@@ -129,7 +130,10 @@ export function CenteredState({
  * Classified failure card: an actionable sentence up front, the harness's raw
  * payload kept collapsed (DESIGN.md §11 — say what happened and what to do).
  */
-export function SubagentErrorNotice({ rawError }: { rawError: string }) {
+export function SubagentErrorNotice({ rawError, onDiagnose }: {
+  rawError: string;
+  onDiagnose?: (source: ErrorDiagnosisSource) => void;
+}) {
   const { t } = useTranslation();
   const kind = classifySubagentError(rawError);
   return (
@@ -137,6 +141,10 @@ export function SubagentErrorNotice({ rawError }: { rawError: string }) {
       data-subagent-error-kind={kind}
       message={t(`rightSidebar.subagents.errors.${kind}`)}
       details={rawError}
+      onDiagnose={onDiagnose ? () => onDiagnose({
+        message: t(`rightSidebar.subagents.errors.${kind}`),
+        details: rawError,
+      }) : undefined}
     />
   );
 }

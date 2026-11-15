@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   beginPendingStatus: vi.fn(),
   completePendingStatus: vi.fn(),
   rollbackPendingStatus: vi.fn(),
+  isPendingStatusCurrent: vi.fn(),
   clearComposerDraft: vi.fn(),
   cleanupSessionLayoutPrefs: vi.fn(),
   cleanupSessionImages: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
     beginPendingStatus: mocks.beginPendingStatus,
     completePendingStatus: mocks.completePendingStatus,
     rollbackPendingStatus: mocks.rollbackPendingStatus,
+    isPendingStatusCurrent: mocks.isPendingStatusCurrent,
   },
 }));
 
@@ -134,6 +136,7 @@ beforeEach(() => {
   );
   mocks.completePendingStatus.mockReturnValue(true);
   mocks.rollbackPendingStatus.mockReturnValue(true);
+  mocks.isPendingStatusCurrent.mockReturnValue(true);
   mocks.rollbackStatusTransition.mockReturnValue(true);
   mocks.refreshSessions.mockResolvedValue([]);
   mocks.cleanupSessionImages.mockResolvedValue(undefined);
@@ -144,6 +147,47 @@ beforeEach(() => {
 });
 
 describe('archive uses current state after asynchronous checks', () => {
+  // Regression: remote preflight used to block the optimistic row update.
+  // Unit: a deferred preflight must hide the row before any write/navigation,
+  // then cancellation/failure restores it; a newer intent prevents a late write.
+  it.each(['confirm', 'cancel', 'fail', 'superseded', 'running'] as const)(
+    'updates the remote list during preflight and handles %s', async (outcome) => {
+      mocks.resolveStatusWriteTarget.mockResolvedValue({ kind: 'device-link', deviceId: 'device-1' });
+      let resolve!: (confirmed: boolean) => void;
+      let reject!: (error: Error) => void;
+      const preparation = new Promise<boolean>((done, fail) => { resolve = done; reject = fail; });
+      const { result } = renderHook(() => useSessionLifecycleActions());
+      let action!: Promise<unknown>;
+      await act(async () => {
+        action = result.current.runSessionAction('session-1', 'archive', {
+          activeSessionId: 'session-1', prepareArchive: () => preparation,
+        });
+      });
+      expect(mocks.beginPendingStatus).toHaveBeenCalledWith('device-1', 'session-1', 'archived');
+      expect(mocks.setStatus).not.toHaveBeenCalled();
+      expect(mocks.navigate).not.toHaveBeenCalled();
+      expect(mocks.purgeSession).not.toHaveBeenCalled();
+      await act(async () => {
+        if (outcome === 'superseded') mocks.isPendingStatusCurrent.mockReturnValue(false);
+        if (outcome === 'running') mocks.getRunningSnapshot.mockReturnValue(new Map([['session-1', { isRunning: true }]]));
+        if (outcome === 'fail') reject(new Error('preflight failed'));
+        else resolve(outcome !== 'cancel');
+        await action;
+      });
+      if (outcome === 'confirm') {
+        expect(mocks.setStatus).toHaveBeenCalledOnce();
+        expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+          state: { workspacePrompt: 'generic' },
+        });
+        expect(mocks.completePendingStatus).toHaveBeenCalledOnce();
+      } else {
+        expect(mocks.setStatus).not.toHaveBeenCalled();
+        expect(mocks.navigate).not.toHaveBeenCalled();
+        expect(mocks.purgeSession).not.toHaveBeenCalled();
+        expect(mocks.rollbackPendingStatus).toHaveBeenCalledTimes(outcome === 'superseded' ? 0 : 1);
+      }
+    },
+  );
   it('shares a live running guard with callers before they close sharing', () => {
     const { result } = renderHook(() => useSessionLifecycleActions());
     const guard = result.current.archiveBlockedByRunning;
@@ -163,7 +207,7 @@ describe('archive uses current state after asynchronous checks', () => {
       finishTarget = resolve;
     }));
     const { result } = renderHook(() => useSessionLifecycleActions());
-    let pending!: Promise<void>;
+    let pending!: Promise<unknown>;
     await act(async () => {
       pending = result.current.runSessionAction('session-1', 'archive', { activeSessionId: 'session-1' });
     });
@@ -269,7 +313,9 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     expect(mocks.beginStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.navigate.mock.invocationCallOrder[0],
     );
-    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
+    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+      state: { workspacePrompt: 'generic' },
+    });
     expect(mocks.completeStatusTransition).toHaveBeenCalledWith(
       { sessionId: 'session-1', token: 1 },
       expect.objectContaining({ id: 'session-1', status: 'archived' }),
@@ -450,7 +496,9 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     expect(mocks.beginPendingStatus.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.setStatus.mock.invocationCallOrder[0],
     );
-    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
+    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+      state: { workspacePrompt: 'generic' },
+    });
     expect(mocks.setStatus).toHaveBeenCalledWith('remote-session', 'archived', {
       kind: 'device-link',
       deviceId: 'device-1',
@@ -479,7 +527,7 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     );
     const { result } = renderHook(() => useSessionLifecycleActions({ includeArchived: 'all' }));
 
-    let archiving!: Promise<void>;
+    let archiving!: Promise<unknown>;
     let unarchiving!: Promise<void>;
     await act(async () => {
       archiving = result.current.runSessionAction('remote-session', 'archive', {
@@ -567,6 +615,24 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
 });
 
 describe('useSessionLifecycleActions delete cache invalidation', () => {
+  // Unit: deleting the last visible task enters the real generic new-task route.
+  // Existing delete tests have no active route and cannot catch a missing default-directory marker.
+  it('marks the new-task redirect as generic after deleting the last visible task', async () => {
+    window.history.replaceState(null, '', '#/cc-agent/session-1');
+    const { result } = renderHook(() => useSessionLifecycleActions({ includeArchived: 'active' }));
+
+    await act(async () => {
+      await result.current.runSessionAction('session-1', 'delete', {
+        activeSessionId: 'session-1',
+        deleteRedirectRoute: '/cc-agent/new',
+      });
+    });
+
+    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+      state: { workspacePrompt: 'generic' },
+    });
+  });
+
   it('patches every loaded status bucket only after the delete write succeeds', async () => {
     const { result } = renderHook(() => useSessionLifecycleActions({ includeArchived: 'all' }));
 

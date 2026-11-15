@@ -9,6 +9,26 @@ export class ComputerContractError extends Error {
   readonly code = 'COMPUTER_DRIVER_INCOMPATIBLE';
 }
 
+/**
+ * Negotiate arguments for an optional driver decoration. Missing tools or a
+ * closed schema with no compatible Cindy fields mean the decoration is not
+ * available; they must not become rejected driver calls.
+ */
+export function selectAdvertisedComputerDriverArgs(
+  name: string,
+  input: Record<string, unknown>,
+  schemas: ReadonlyMap<string, ComputerDriverToolSchema>,
+): Record<string, unknown> | null {
+  const schema = schemas.get(name);
+  if (!schema) return null;
+  if (schema.additionalProperties !== false) return { ...input };
+  const properties = schema.properties ?? {};
+  const args = Object.fromEntries(
+    Object.entries(input).filter(([key, value]) => value !== undefined && Object.hasOwn(properties, key)),
+  );
+  return Object.keys(args).length > 0 ? args : null;
+}
+
 /** Fields Cindy may advertise after an older installed driver froze its schema. */
 const DRIVER_COMPAT_OPTIONAL_FIELDS = new Set(['delivery_mode']);
 
@@ -16,6 +36,7 @@ export function adaptComputerDriverArgs(
   name: string,
   input: Record<string, unknown>,
   schemas: ReadonlyMap<string, ComputerDriverToolSchema>,
+  options: { desktopCaptureValidated?: boolean } = {},
 ): Record<string, unknown> {
   const schema = schemas.get(name);
   if (!schema)
@@ -24,6 +45,19 @@ export function adaptComputerDriverArgs(
     );
   const props = schema.properties ?? {};
   const args = { ...input };
+  if ((args.target as { kind?: unknown } | undefined)?.kind === 'desktop') {
+    if (!('target' in props))
+      throw new ComputerContractError('Installed driver does not advertise capture-bound desktop input; no action was dispatched.');
+    if (!('capture_id' in props)) {
+      // 0.47 drag uses the session's latest desktop capture but has no capture_id
+      // field. Only the serialized host path that checked our latest, unused
+      // credential may adapt it; never weaken target scope or window guards.
+      if (name !== 'drag' || !options.desktopCaptureValidated || !('session' in props)
+        || !schemas.has('get_desktop_state'))
+        throw new ComputerContractError('Installed driver does not advertise capture-bound desktop input; no action was dispatched.');
+      delete args.capture_id;
+    }
+  }
   if (name === 'get_window_state') {
     const screenshot =
       typeof args.include_screenshot === 'boolean'
@@ -48,6 +82,8 @@ export function adaptComputerDriverArgs(
     // elements to register tokens and frames, and trims them from the model view.
     if ('tree_format' in props) args.tree_format ??= 'both';
     else delete args.tree_format;
+    // Evidence reads may use compact diffs; older drivers simply return full state.
+    if (!('since' in props)) delete args.since;
   }
   if (args.element_index !== undefined && !('element_index' in props) && 'element_token' in props) {
     // Newer drivers address an observed row only as `<snapshot_id>:<row>`.

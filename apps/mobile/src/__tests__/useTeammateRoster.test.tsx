@@ -25,23 +25,25 @@ import { useTeammateRoster } from '@/session/useTeammateRoster';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 let result: ReturnType<typeof useTeammateRoster>;
-function Probe() { result = useTeammateRoster(); return null; }
-async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
+function Probe({ enabled = true }: { enabled?: boolean }) { result = useTeammateRoster(enabled); return null; }
+async function render(enabled = true) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe, { enabled }))); }
 beforeEach(() => {
   vi.clearAllMocks(); h.list.items = []; h.revoked.clear(); h.link.openLink.mockResolvedValue(undefined); h.link.status = 'online'; h.link.connectionEpoch = 1; h.auth.accountGeneration = 1;
   h.list.isOnline.mockReturnValue(true);
   h.snapshot.mockResolvedValue({ home: [], items: {}, read: {} });
   h.link.readDeviceList.mockResolvedValue({ devices: ['old', 'new'].map(deviceId => ({ device: { deviceId, name: deviceId }, canOpen: true, state: 'online' })) });
-  h.link.invoke.mockImplementation(async (deviceId) => ({ protocolVersion: 1, collections: [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', ...(deviceId === 'new' ? { actions: [{ id: 'open-create', label: 'Create' }] } : {}) }] }));
+  h.link.invoke.mockImplementation(async (deviceId) => ({ protocolVersion: 1, collections: [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', ...(deviceId === 'new' ? { actions: [{ id: 'open-create', label: 'Create' }] } : {}) }] }));
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 it('offers only real online hosts advertising create, including a host with an empty roster', async () => {
   await render();
   expect(result.targets.map(host => host.deviceId)).toEqual(['old', 'new']);
-  expect(result.createTargets).toEqual([{ deviceId: 'new', deviceName: 'new' }]);
+  expect(result.createTargets).toEqual([{ deviceId: 'new', deviceName: 'another computer (1)' }]);
   expect(h.link.invoke).toHaveBeenCalledTimes(2); // No extra capability probe or mutation.
   expect(result.authoritative).toBe(true);
   h.list.isOnline.mockReturnValue(false); await render(); expect(result.createTargets).toEqual([]);
+  // Offline cached shards no longer raise refresh errors, but are still not authoritative.
+  expect(result.authoritative).toBe(false);
 });
 it('does not treat initial offline discovery as authoritative; recovers on connection', async () => {
   h.link.status = 'offline'; await render(); expect(result.authoritative).toBe(false); expect(result.createTargets).toEqual([]);
@@ -91,7 +93,7 @@ it('drops old account discovery replies', async () => {
 
 it('clears prior-account create and group capabilities before the new directory answers', async () => {
   h.link.invoke.mockResolvedValue({ protocolVersion: 1, collections: [
-    { id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
+    { id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
     { id: 'bot-groups', title: 'Groups', resourceKind: 'bot-group' },
   ] });
   await render();
@@ -130,12 +132,12 @@ it('shows cached teammates while host discovery is pending, then removes revoked
 
 it('exposes only computers whose manifest advertises group chats, keeping them through a failed read', async () => {
   const manifest = (groups: boolean) => ({ protocolVersion: 1, collections: [
-    { id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope' },
+    { id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope' },
     ...(groups ? [{ id: 'bot-groups', title: 'Group Chats', resourceKind: 'bot-group' }] : []),
   ] });
   h.link.invoke.mockImplementation(async (deviceId) => manifest(deviceId === 'new'));
   await render();
-  expect(result.groupTargets).toEqual([{ deviceId: 'new', deviceName: 'new' }]);
+  expect(result.groupTargets).toEqual([{ deviceId: 'new', deviceName: 'another computer (1)' }]);
   // A transient manifest failure keeps the computer's groups; an older desktop never gains them.
   h.link.invoke.mockImplementation(async (deviceId) => { if (deviceId === 'new') throw new Error('timeout'); return manifest(false); });
   h.link.connectionEpoch++; await render();
@@ -149,7 +151,7 @@ it('exposes only computers whose manifest advertises group chats, keeping them t
 it('publishes a discovered teammate host without waiting for an unrelated manifest', async () => {
   let finish!: (value: unknown) => void;
   h.link.invoke.mockImplementation(async device => device === 'old'
-    ? { protocolVersion: 1, collections: [{ id: 'teammates', resourceKind: 'bot', title: 'Teammates', placement: 'home-scope' }] }
+    ? { protocolVersion: 1, collections: [{ id: 'teammates', resourceKind: 'bot', title: "Buddies", placement: 'home-scope' }] }
     : new Promise(resolve => { finish = resolve; }));
   await render();
   expect(result.targets.map(host => host.deviceId)).toEqual(['old']);
@@ -164,7 +166,7 @@ it('retries only failed manifests while preserving healthy capabilities and stab
   h.link.invoke.mockImplementation(async device => {
     if (device === 'new') throw new Error('INVOKE_TIMEOUT');
     return { protocolVersion: 1, collections: [
-      { id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
+      { id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
       { id: 'bot-groups', title: 'Groups', resourceKind: 'bot-group' },
     ] };
   });
@@ -176,7 +178,7 @@ it('retries only failed manifests while preserving healthy capabilities and stab
   h.link.invoke.mockImplementation(async device => device === 'new'
     ? { protocolVersion: 1, collections: [] }
     : { protocolVersion: 1, collections: [
-      { id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
+      { id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', actions: [{ id: 'open-create', label: 'Create' }] },
       { id: 'bot-groups', title: 'Groups', resourceKind: 'bot-group' },
     ] });
   await act(async () => vi.advanceTimersByTimeAsync(900));
@@ -234,12 +236,12 @@ it('keeps every cached roster host in the list targets while a partial home mani
   const rows = hosts.map(host => ({ key: host.deviceId, host, item: {
     ref: { collectionId: 'teammates', kind: 'bot', id: host.deviceId }, revision: '1', display: { title: host.deviceId }, links: [],
   } }));
-  h.snapshot.mockResolvedValue({ home: [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets: [hosts[0]] }],
+  h.snapshot.mockResolvedValue({ home: [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', targets: [hosts[0]] }],
     items: { teammates: rows }, read: {} });
   h.list.items = rows;
   let finish!: (value: unknown) => void;
   h.link.invoke.mockImplementation(async device => device === 'old'
-    ? { protocolVersion: 1, collections: [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope' }] }
+    ? { protocolVersion: 1, collections: [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope' }] }
     : new Promise(resolve => { finish = resolve; }));
   await render();
   // The real list reader may persist a successful old-host shard now. It must
@@ -249,4 +251,19 @@ it('keeps every cached roster host in the list targets while a partial home mani
   await act(async () => finish({ protocolVersion: 1, collections: [] }));
   expect(result.targets.map(host => host.deviceId)).toEqual(['old']);
   expect(result.items).toEqual([rows[0]]);
+});
+
+it('reuses discovered hosts through 20 switches, with explicit, expired and reconnect refreshes', async () => {
+  vi.useFakeTimers(); await render();
+  const groups = result.groupTargets;
+  for (let n = 0; n < 20; n++) { await render(false); await render(true); }
+  expect(h.link.readDeviceList).toHaveBeenCalledTimes(1);
+  expect(h.link.invoke).toHaveBeenCalledTimes(2);
+  expect(result.groupTargets).toBe(groups);
+  await act(async () => result.refresh());
+  expect(h.link.invoke).toHaveBeenCalledTimes(4);
+  await render(false); await act(async () => vi.advanceTimersByTimeAsync(30001)); await render(true);
+  expect(h.link.invoke).toHaveBeenCalledTimes(6);
+  h.link.connectionEpoch++; await render();
+  expect(h.link.invoke).toHaveBeenCalledTimes(8);
 });

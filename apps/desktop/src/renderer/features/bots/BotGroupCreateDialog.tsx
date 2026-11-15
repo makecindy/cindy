@@ -1,5 +1,5 @@
 /**
- * 新建群聊：填群名称，选 2–6 位本机伙伴。
+ * 新建群聊：云端群可选择同账号各设备的伙伴；本地群沿用本机伙伴。
  *
  * 表单弹窗遵循 DESIGN.md §4 Dialog & Modal：无右上角 ×，点遮罩不关闭（误触不能丢掉
  * 填了一半的表单），Esc 与底部「取消」关闭，打开时聚焦群名称。成员数与群名长度由
@@ -21,7 +21,6 @@ import { botGroupApi, refreshBotGroups } from './botGroupStore';
 import { BOT_GROUP_MAX_MEMBERS, BOT_GROUP_MIN_MEMBERS, botGroupErrorKey } from './botGroupPresentation';
 import { useBotProfiles, type BotProfile } from './botStore';
 
-/** Local Bots that may appear in the picker; archived and deleting ones never do. */
 function pickableBots(bots: readonly BotProfile[]): BotProfile[] {
   return bots
     .filter((bot) => bot.status !== 'archived' && bot.status !== 'deleting')
@@ -29,33 +28,59 @@ function pickableBots(bots: readonly BotProfile[]): BotProfile[] {
 }
 
 /** Whether a teammate can join a group right now (shared with entry points outside this dialog). */
-export function isSelectable(bot: BotProfile): boolean {
+export function isSelectable(bot: Pick<BotProfile, 'status' | 'enabled'>): boolean {
   return (bot.status ?? 'active') === 'active' && bot.enabled !== false;
 }
 
 export function BotGroupCreateDialog({
-  initialBotIds = [],
+  privateChatBotId,
   onOpenChange,
   onCreated,
 }: {
-  /** Preselected teammates, e.g. the one whose private chat started this group. */
-  initialBotIds?: readonly string[];
+  privateChatBotId?: string;
   onOpenChange: (open: boolean) => void;
   onCreated: (groupId: string) => void;
 }) {
   const { t } = useTranslation();
   const bots = useBotProfiles();
-  const candidates = useMemo(() => pickableBots(bots), [bots]);
-  const selectableCount = candidates.filter(isSelectable).length;
+  type Candidate = Pick<BotProfile, 'id' | 'name' | 'avatar' | 'status' | 'enabled'>;
+  const [cloudBots, setCloudBots] = useState<Candidate[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(!privateChatBotId);
+  const [membersLoadFailed, setMembersLoadFailed] = useState(false);
+  const [membersLoadAttempt, setMembersLoadAttempt] = useState(0);
   const [serverBacked, setServerBacked] = useState(false);
+  const candidates = useMemo(() => serverBacked ? cloudBots : pickableBots(bots), [bots, cloudBots, serverBacked]);
+  const selectableCount = candidates.filter(isSelectable).length;
   useEffect(() => {
+    if (privateChatBotId) return;
     let disposed = false;
-    void botGroupApi()?.chatServer?.status().then(s => { if (!disposed) setServerBacked(s.enabled); }).catch(() => undefined);
+    const owner = getDataOwnerGeneration();
+    const current = () => !disposed && isDataOwnerGenerationCurrent(owner);
+    void (async () => {
+      try {
+        const api = botGroupApi()?.chatServer;
+        const status = await api?.status();
+        if (!current()) return;
+        setServerBacked(status?.enabled === true);
+        if (status?.enabled && api) {
+          const result = await api.ownedBots();
+          if (!current()) return;
+          if (!result.ok) throw new Error(result.errorCode);
+          setCloudBots(result.bots.flatMap(bot => bot.botId ? [{
+            id: bot.botId, name: bot.name, avatar: bot.avatar ?? '', status: 'active' as const, enabled: true,
+          }] : []));
+        }
+      } catch {
+        if (current()) setMembersLoadFailed(true);
+      } finally {
+        if (current()) setLoadingMembers(false);
+      }
+    })();
     return () => { disposed = true; };
-  }, []);
-  const minMembers = serverBacked ? 0 : BOT_GROUP_MIN_MEMBERS;
+  }, [privateChatBotId, membersLoadAttempt]);
+  const minMembers = privateChatBotId ? 1 : serverBacked ? 0 : BOT_GROUP_MIN_MEMBERS;
   const [name, setName] = useState('');
-  const [selectedIds, setSelectedIds] = useState<string[]>(() => initialBotIds.slice(0, BOT_GROUP_MAX_MEMBERS));
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [nameError, setNameError] = useState(false);
   const [membersError, setMembersError] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -65,7 +90,7 @@ export function BotGroupCreateDialog({
   const firstMemberRef = useRef<HTMLButtonElement>(null);
 
   // Speaking order follows the picker's order, not the click order.
-  const orderedSelection = candidates
+  const orderedSelection = privateChatBotId ? [privateChatBotId] : candidates
     .filter((bot) => selectedIds.includes(bot.id))
     .map((bot) => bot.id);
   const atLimit = orderedSelection.length >= BOT_GROUP_MAX_MEMBERS;
@@ -82,7 +107,7 @@ export function BotGroupCreateDialog({
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
-    if (busyRef.current) return;
+    if (busyRef.current || loadingMembers || membersLoadFailed) return;
     const trimmed = name.trim();
     const nameInvalid = trimmed.length === 0;
     const membersInvalid =
@@ -105,6 +130,15 @@ export function BotGroupCreateDialog({
     const owner = getDataOwnerGeneration();
     try {
       if (!api) throw new Error('Bot group IPC is unavailable');
+      // This flow must create a shared group: a local-only group cannot invite people.
+      if (privateChatBotId) {
+        const status = await api.chatServer?.status();
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        if (!status?.enabled) {
+          setSubmitError(t('bots.groupChat.errors.chatUnavailable'));
+          return;
+        }
+      }
       const result = await api.createBotGroup({ name: trimmed, botIds: orderedSelection });
       if (!isDataOwnerGenerationCurrent(owner)) return;
       if (!result.ok) {
@@ -122,7 +156,7 @@ export function BotGroupCreateDialog({
   };
 
   const membersHint =
-    selectableCount < minMembers
+    membersLoadFailed ? t('bots.groupChat.create.failed') : selectableCount < minMembers
       ? t('bots.groupChat.create.notEnoughBots', { min: BOT_GROUP_MIN_MEMBERS })
       : undefined;
 
@@ -146,11 +180,12 @@ export function BotGroupCreateDialog({
             <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">
               {t('bots.groupChat.create.title')}
             </Dialog.Title>
-            <Dialog.Description className="mt-1 text-13 leading-normal text-[var(--confirm-desc)]">
-              {t(serverBacked ? 'bots.groupChat.server.createDescription' : 'bots.groupChat.create.description')}
+            <Dialog.Description className={privateChatBotId ? 'sr-only' : 'mt-1 text-13 leading-normal text-[var(--confirm-desc)]'}>
+              {t(privateChatBotId || serverBacked ? 'bots.groupChat.server.createDescription' : 'bots.groupChat.create.description')}
             </Dialog.Description>
 
-            <div className="mt-4 flex min-h-0 flex-col gap-4 overflow-y-auto">
+            {/* Leave room for outer input rings inside the scroll container. */}
+            <div className="mt-4 -mx-1 -mb-1 flex min-h-0 flex-col gap-4 overflow-y-auto px-1 pb-1">
               <FormField
                 label={t('bots.groupChat.nameLabel')}
                 error={nameError ? t('bots.groupChat.create.nameRequired') : undefined}
@@ -179,7 +214,7 @@ export function BotGroupCreateDialog({
                 )}
               </FormField>
 
-              <div className="flex min-w-0 flex-col gap-2">
+              {!privateChatBotId && <div className="flex min-w-0 flex-col gap-2">
                 <div className="flex items-center justify-between gap-2">
                   <span
                     id="bot-group-create-members-label"
@@ -250,13 +285,22 @@ export function BotGroupCreateDialog({
                 ) : null}
                 <div id="bot-group-create-members-feedback" className="text-12 leading-snug">
                   {membersHint ? <p className="text-[var(--form-field-hint)]">{membersHint}</p> : null}
+                  {membersLoadFailed ? (
+                    <Button type="button" variant="secondary" size="sm" onClick={() => {
+                      setMembersLoadFailed(false);
+                      setLoadingMembers(true);
+                      setMembersLoadAttempt(attempt => attempt + 1);
+                    }}>
+                      {t('commonUi.retry')}
+                    </Button>
+                  ) : null}
                   <p aria-live="polite" className="text-[var(--error-fg)]">
                     {membersError
                       ? t('bots.groupChat.create.minMembers', { min: BOT_GROUP_MIN_MEMBERS })
                       : null}
                   </p>
                 </div>
-              </div>
+              </div>}
             </div>
 
             {submitError ? (
@@ -271,7 +315,7 @@ export function BotGroupCreateDialog({
                   {t('bots.cancel')}
                 </Button>
               </Dialog.Close>
-              <Button type="submit" variant="cta" palette="confirmation" size="lg" loading={busy}>
+              <Button type="submit" variant="cta" palette="confirmation" size="lg" loading={busy} disabled={loadingMembers || membersLoadFailed}>
                 {t('bots.groupChat.create.submit')}
               </Button>
             </div>

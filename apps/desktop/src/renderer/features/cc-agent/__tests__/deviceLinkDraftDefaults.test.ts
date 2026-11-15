@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   resolveDeviceLinkDraftDefaults,
+  resolveDeviceLinkWorktreeEnabled,
   shouldReseedDeviceLinkDraftDefaults,
 } from '../deviceLinkDraftDefaults';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -515,6 +516,25 @@ describe('shouldReseedDeviceLinkDraftDefaults', () => {
         remoteModelChosenByUser: true,
       }),
     ).toBe(true);
+  });
+});
+
+// 回归:在远程电脑上选项目(设备域浏览器)时，新设备快照与切设备同批到达，旧实现的
+// 「先镜像、后重置」两段 effect 把被控端已勾选的 worktree 压回未勾选，会话于是不建
+// worktree、落在被控端仓库当前(默认)分支上，用户选的源分支被静默忽略。
+describe('resolveDeviceLinkWorktreeEnabled', () => {
+  const ready = (worktreeEnabled?: boolean) => ({
+    status: 'ready' as const,
+    value: worktreeEnabled === undefined ? {} : { worktreeEnabled },
+  });
+  const deviceA = { deviceId: 'device-a', remoteDraftState: ready(false) };
+
+  it.each([
+    ['切设备且同批带来新设备快照 → 采用被控端勾选记忆', deviceA, { deviceId: 'device-b', remoteDraftState: ready(true) }, true],
+    ['切设备但快照仍是上一台那份 → 回到未勾选，不串台', deviceA, { deviceId: 'device-b', remoteDraftState: deviceA.remoteDraftState }, false],
+    ['同设备快照缺字段 → 保持当前显示', deviceA, { deviceId: 'device-a', remoteDraftState: ready() }, null],
+  ] as const)('%s', (_name, previous, current, expected) => {
+    expect(resolveDeviceLinkWorktreeEnabled(previous, current)).toBe(expected);
   });
 });
 

@@ -51,22 +51,23 @@ import {
   getSessionDir,
   removeSession as removeSessionImages,
   resolveSafe as resolveImageUrl,
-} from '../imageCacheStore.js';
+} from '../imageCacheStore.desktop.js';
 import { resolveSafe as resolveVideoUrl } from '../videoCacheStore.js';
 import { resolveSafe as resolveModelUrl } from '../modelCacheStore.js';
 import {
   parseBlobUrl,
   mimeForExt,
   resolveHashRef as resolveBlobHashRef,
-} from '../cindy-media/blobStore.js';
+} from '../cindy-media/blobStore.desktop.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
-import type { MediaRefCompensationScope } from '../cindy-media/refCompensationJournal.js';
+import type { MediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
 import {
   removeSessionRefs as removeSessionMediaRefs,
   removeSessionRefsIfDeleted,
   type LedgerDb,
 } from '../cindy-media/ledger.js';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock.js';
+import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
 
 import { openPayload } from './xdtshareCrypto.js';
 import {
@@ -1105,6 +1106,13 @@ export async function commitShareImport(
         assertStillValid();
       },
     );
+
+    // Publish only after the entire graph is durable, using persisted public
+    // messages rather than bundle candidates. Revalidate before each task so an
+    // account switch cannot redirect the remaining workers into another DB.
+    for (const sessionId of [newId, ...workerPlans.map((plan) => plan.newId)]) {
+      await guarded(() => recordPrRefsForImportedMessages(sessionId));
+    }
 
     // ── 最终保真度(lead + 全部 Worker 聚合) ──
     const bundledKeys = new Set(

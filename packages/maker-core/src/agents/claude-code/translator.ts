@@ -40,17 +40,19 @@ import type { UsageTracker } from '../shared/usage-tracker.js';
 import { isModelAccessDenied } from './model-access-error.js';
 import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import {
-  beginClaudeGeneration,
   beginClaudeGenerationAtRequestStart,
   finalizeClaudeGeneration,
   markClaudeGenerationUnreliable,
   newClaudeGenerationState,
   noteClaudeParentStreamedOutputIncomplete,
   noteClaudeSubagent,
+  observeClaudeSpeedEvent,
   pauseClaudeGeneration,
   resetClaudeGenerationTiming,
   resumeClaudeGeneration,
+  settleClaudeSpeedRequest,
   type ClaudeGenerationState,
+  type ClaudeSpeedStreamEvent,
 } from './generation-timing.js';
 
 // ── 共享 turn / runtime 状态 ─────────────────────────────────────────────────
@@ -350,6 +352,7 @@ function ccLiveStatus(
       openStartedAt: ctx.rt.generation.startedAt,
       reliable: ctx.rt.generation.reliable,
     }),
+    requestUsage: ctx.tracker.getRequestMetering(),
     isRunning,
   };
 }
@@ -378,6 +381,18 @@ type ResultUsageAggregate = {
   cacheReadTokens?: number;
   cacheCreateTokens?: number;
 };
+
+/**
+ * Anthropic 在 usage.cache_creation 里把缓存写入按 TTL 拆开；1h 写入单价高于 5m，
+ * 计价需单独带上这部分。上游不给拆分时返回 undefined（按 5m 单价兜底）。
+ */
+function cacheCreate1hTokensFromUsage(usage: unknown): number | undefined {
+  if (!usage || typeof usage !== 'object') return undefined;
+  const split = (usage as { cache_creation?: unknown }).cache_creation;
+  if (!split || typeof split !== 'object') return undefined;
+  const value = (split as { ephemeral_1h_input_tokens?: unknown }).ephemeral_1h_input_tokens;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
 
 function resultUsageToTurnDelta(
   previous: ResultUsageAggregate | null,
@@ -971,6 +986,24 @@ export function translateSdkMessage(
       // 都会回一条 control_response。这里只打日志做可见性 —— 排查"我点了切模型怎么没反应"很有用。
       // 不 push 任何 event 给上层 (renderer 不需要感知, IPC payload 也不必膨胀)。
       handleControlResponse(rawMsg, ctx);
+      return;
+    }
+
+    case 'command_lifecycle': {
+      // CLI 2.1.312 emits these command receipts although SDK 0.3.292's
+      // SDKMessage union omits them. A command may be folded into another turn;
+      // completed can precede OR follow result, so it must not drive Cindy's
+      // input queue, UI status or onTurnEnd. The existing result path owns that.
+      const commandUuid = msg.command_uuid;
+      const state = msg.state;
+      if (
+        typeof commandUuid === 'string' && commandUuid.length > 0 &&
+        (state === 'queued' || state === 'started' || state === 'completed')
+      ) return;
+      // cancelled/discarded/refused can describe a command that never ran.
+      // Keep them, malformed receipts and future states diagnosable without
+      // treating a command-level receipt as a whole-turn failure or retry signal.
+      ctx.log.warn('SDK ▷ non-success or unknown command lifecycle', { commandUuid, state });
       return;
     }
 
@@ -1673,41 +1706,14 @@ function observeClaudeSubagentStream(
 
 // ── stream_event 子分支(content_block_delta / message_delta / message_start) ──
 
-/** Main-thread live tok/s, mirroring pi-token-speed's message_update handlers. */
+/** Main-thread live tok/s: the stream feeds the meter, each request's usage corrects it. */
 function observeClaudeTokenSpeed(
-  event: {
-    type?: string;
-    index?: number;
-    delta?: Record<string, unknown>;
-    content_block?: { type?: string; name?: string };
-  },
+  event: ClaudeSpeedStreamEvent,
   queue: EventQueue,
   ctx: TranslateContext,
 ): void {
-  const speed = ctx.rt.generation.tokenSpeed;
-  const tools = ctx.rt.generation.tokenSpeedToolByIndex;
-  const index = typeof event.index === 'number' ? event.index : 0;
-  switch (event.type) {
-    case 'message_start':
-      tools.clear();
-      return;
-    case 'content_block_start':
-      if (event.content_block?.type === 'tool_use') tools.set(index, event.content_block.name ?? '');
-      speed.start();
-      return;
-    case 'content_block_delta': {
-      const delta = event.delta;
-      const text = delta?.type === 'input_json_delta'
-        ? (tools.has(index) ? delta.partial_json : undefined)
-        : delta?.text ?? delta?.thinking;
-      if (typeof text === 'string' && speed.recordDelta(text)) {
-        queue.push({ type: 'status', data: ccLiveStatus(ctx, 'Generating...', true), source: 'claude-code' });
-      }
-      return;
-    }
-    case 'content_block_stop':
-      if (tools.has(index)) speed.pause();
-      return;
+  if (observeClaudeSpeedEvent(ctx.rt.generation, event)) {
+    queue.push({ type: 'status', data: ccLiveStatus(ctx, 'Generating...', true), source: 'claude-code' });
   }
 }
 
@@ -1844,13 +1850,18 @@ function handleStreamEvent(
     // 第一个事件。在此停表,才能排除工具执行/审批等待,又不把参数生成
     // 区间从 tok/s 分母里抠掉。只有主流自己的 message_delta 才停主时钟:
     // 子代理 delta 到达时父级可能正在并行生成(后台 Agent),不许提前切断。
-    if (!parentToolUseId) pauseClaudeGenerationForCurrentRequestTools(ctx);
+    if (!parentToolUseId) {
+      pauseClaudeGenerationForCurrentRequestTools(ctx);
+      // The response is complete: nothing generates until the next request's first block.
+      ctx.rt.generation.tokenSpeed.pause();
+    }
     const usage = event.usage;
     if (usage) {
       const dIn = usage.input_tokens ?? 0;
       const dOut = usage.output_tokens ?? 0;
       const dCacheRead = usage.cache_read_input_tokens ?? 0;
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
+      const dCacheCreate1h = cacheCreate1hTokensFromUsage(usage);
       // 累加进 tracker (跨多个 message_delta 会一直涨 —— 对标老 agentManager.ts:2362-2365
       // 的 session.currentTurn{Input,Output,CacheRead,CacheCreate}Tokens += dX)
       const segmentId =
@@ -1877,16 +1888,27 @@ function handleStreamEvent(
         outputTokens: dOut,
         cacheReadTokens: dCacheRead,
         cacheCreateTokens: dCacheCreate,
+        ...(dCacheCreate1h !== undefined ? { cacheCreate1hTokens: dCacheCreate1h } : {}),
         complete: hasCompleteUsageSnapshot,
       });
       if (parentToolUseId) noteClaudeSubagent(ctx.rt.generation);
-      else if (ctx.tracker.getTurnUsage().output > previousOutput) {
-        // Upserts retain the largest output count. Input-only, duplicate, and
-        // older usage must not advance the paired denominator on their own.
-        ctx.rt.generation.outputDurationMs = sampleGenerationDuration(
-          ctx.rt.generation.durationMs,
-          ctx.rt.generation.startedAt,
-        );
+      else {
+        if (ctx.tracker.getTurnUsage().output > previousOutput) {
+          // Upserts retain the largest output count. Input-only, duplicate, and
+          // older usage must not advance the paired denominator on their own.
+          ctx.rt.generation.outputDurationMs = sampleGenerationDuration(
+            ctx.rt.generation.durationMs,
+            ctx.rt.generation.startedAt,
+          );
+        }
+        // The request's real output replaces what the stream could only estimate.
+        const calibration = settleClaudeSpeedRequest(ctx.rt.generation, mainTurnOutputTokens(ctx.tracker), usage);
+        if (calibration) {
+          ctx.log.debug('SDK ▷ token speed calibration', {
+            sdkSessionId: ctx.getSdkSessionId(),
+            ...calibration,
+          });
+        }
       }
       // 每次 API 回合的 token 增量打一行 —— 一个 turn 可能多个 message_delta(工具循环),
       // 让人看日志能直观看到 token 是怎么涨上去的, 而不是只在 turn end 看到一个总数。
@@ -1946,6 +1968,7 @@ function handleStreamEvent(
       const dIn = usage.input_tokens ?? 0;
       const dCacheRead = usage.cache_read_input_tokens ?? 0;
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
+      const dCacheCreate1h = cacheCreate1hTokensFromUsage(usage);
       if (dIn > 0 || dCacheRead > 0 || dCacheCreate > 0) {
         ctx.tracker.upsertApiCallUsage(segmentId, {
           id: segmentId,
@@ -1955,6 +1978,7 @@ function handleStreamEvent(
           outputTokens: 0,
           cacheReadTokens: dCacheRead,
           cacheCreateTokens: dCacheCreate,
+          ...(dCacheCreate1h !== undefined ? { cacheCreate1hTokens: dCacheCreate1h } : {}),
           complete: false,
         });
       }
@@ -2354,15 +2378,15 @@ function handleResult(
       source: 'claude-code',
     });
   }
-  // silent-stop 判定: turn 内干过活(有 tool 调用),或整轮没有任何用户可见正文,且最后
-  // 一条 assistant 消息没有实质内容(典型: 只有 thinking 块),result 也没兜出可补的
-  // 文本 —— 上游把 turn 静默收了尾,用户侧表现为"干着干着停了、看起来像正常结束"。已知
+  // silent-stop 判定: 整轮没有任何用户可见正文,且最后一条 assistant 消息没有实质内容
+  // (典型: 只有 thinking 块),result 也没兜出可补的文本 —— 上游把 turn 静默收了尾,
+  // 用户侧表现为"干着干着停了、看起来像正常结束"。末尾不可见 reasoning 不能推翻前面
+  // 已交付的正文；否则工具调用后的正常回答会被误判并触发额外自动执行 (#8240)。已知
   // 上游形态: 模型偶发 thinking-only 空响应(anthropics/claude-code#50597,
   // stop_reason=end_turn)与 SSE 流被静默中断后 SDK 按正常结束处理(#38905, 此形态
   // stop_reason 常缺失)。与 isEmptyResponseTurn(整轮 0 产出 + usage 全 0)互斥:
-  // 零 tool 但零可见正文也必须命中:第一次自动补发「继续」后,上游可能再次只返回
-  // thinking；旧的 toolUses > 0 守卫会把第二次当正常完成。已有可见正文的零 tool turn
-  // 则不扩张判定。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
+  // 零 tool 且零可见正文也要命中:第一次自动补发「继续」后,上游可能再次只返回
+  // thinking。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
   // interruptRequested(用户停止/watchdog)、sawCompactBoundary(compact 轮合法空)。
   // 命中后事件流仍走正常 Done/done 收尾(记账/收口零变更), 只在 done.data 附加
   // silentStop 标记交给 host 的自动续跑守卫决策; WARN 日志保留作 dev 排查。
@@ -2371,7 +2395,7 @@ function handleResult(
     !ctx.turn.interruptRequested &&
     !ctx.turn.sawCompactBoundary &&
     !isEmptyResponseTurn &&
-    (ctx.turn.toolUses > 0 || ctx.turn.uiEmittedText.length === 0) &&
+    ctx.turn.uiEmittedText.length === 0 &&
     !ctx.turn.lastAssistantMsgHadSubstance &&
     fallbackTail.length === 0;
   if (isSilentStopTurn) {
@@ -2552,6 +2576,7 @@ function handleResult(
       : msg;
   const resultWithUsageSegments = {
     ...safeResult,
+    requestUsage: ctx.tracker.getRequestMetering(),
     usageSegments: turnUsageSegments,
     usageSegmentsComplete,
     modelUsageCumulativeStartsAtZero: ctx.modelUsageCumulativeStartsAtZero?.() === true,

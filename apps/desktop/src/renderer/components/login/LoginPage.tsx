@@ -76,6 +76,7 @@ import {
 import { PANEL_FIXED_SCALE } from './loginScale';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
 import { getSsoOrgHistory } from '@/state/ssoOrgHistory';
+import appI18n from 'i18next';
 
 /**
  * 标题旁区域徽标的 i18n key(2026-07-27 拍板)。
@@ -354,7 +355,7 @@ export function LoginPage({
   }, [consentDialogOpen, currentConsentStamp.step, credentialStoreFailed]);
   const openLegalLink = (kind: 'terms' | 'privacy') => {
     // 链接经系统默认浏览器打开(shell:open-external 只放行 http(s),未登录可用);
-    // URL 按构建区域分流(国内 protocol.xd.cn / 国际 protocol.xd.com)。
+    // URL 按构建区域分流(国内 cindy.cn / 国际 cindy.app)。
     // 吞掉 IPC 失败(与移动端 Linking.openURL(...).catch 同口径),避免未处理 rejection
     void window.electronAPI
       ?.openExternal?.(kind === 'terms' ? LEGAL_LINKS.termsOfService : LEGAL_LINKS.privacyPolicy)
@@ -1759,7 +1760,7 @@ function AccountDeletionStatusPanel({
 function formatAccountDeletionDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
+  return new Intl.DateTimeFormat(appI18n.language, { dateStyle: 'medium' }).format(date);
 }
 
 function SsoGlyph() {

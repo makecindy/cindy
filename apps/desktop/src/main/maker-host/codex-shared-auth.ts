@@ -4,12 +4,23 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { brandUserDataDirName } from '@cindy/maker-shared/brand-identity';
+import { codexHomeDir } from '../../shared/codexHome.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { shouldSuppressLocalCodexAuth } from './codex-auth-invalidation.js';
+import { codexWorkspaceIdFromTokens } from './codex-auth-identity.js';
 
-/** 本机 Codex CLI 默认维护的 OpenAI 登录态。 */
+/**
+ * 本机 Codex CLI 主目录：尊重用户设置的 `CODEX_HOME`（仅绝对路径；空值、相对路径
+ * 一律回退 `~/.codex`，避免相对路径按 cwd 解析落进工作区）。判据集中在
+ * `shared/codexHome.ts`，凭证发现、远端同步与设置页扫描共用同一处 (#8258)。
+ */
+function resolveCodexCliHome(): string {
+  return codexHomeDir(process.env, os.homedir());
+}
+
+/** 本机 Codex CLI 维护的 OpenAI 登录态（默认 `~/.codex/auth.json`，随 `CODEX_HOME`）。 */
 export function getCodexCliAuthPath(): string {
-  return path.join(os.homedir(), '.codex', 'auth.json');
+  return path.join(resolveCodexCliHome(), 'auth.json');
 }
 
 /** 当前区域 Release 维护的 OpenAI 登录态。 */
@@ -52,22 +63,39 @@ function releaseOpenAiConnectionOwner(): string | null {
   }
 }
 
-function hasUsableCodexOAuth(pathname: string): boolean {
+type CodexOAuthCandidate = { accountId: string | null; expiresAtMs: number | null };
+
+function readCodexOAuthCandidate(pathname: string): CodexOAuthCandidate | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(pathname, 'utf8')) as {
-      tokens?: { access_token?: unknown };
+      tokens?: { access_token?: unknown; account_id?: unknown; id_token?: unknown };
     };
-    return (
-      typeof parsed.tokens?.access_token === 'string' && parsed.tokens.access_token.length > 0
-    );
+    const token = parsed.tokens?.access_token;
+    if (typeof token !== 'string' || token.length === 0) return null;
+    let expiresAtMs: number | null = null;
+    try {
+      // Expiry is only a source-selection hint. Opaque tokens keep their existing behavior;
+      // the account RPC remains authoritative about whether a credential actually works.
+      const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+      if (typeof claims.exp === 'number' && Number.isFinite(claims.exp)) {
+        expiresAtMs = claims.exp * 1000;
+      }
+    } catch {
+      // Unknown expiry must not discard an otherwise supported login format.
+    }
+    return {
+      accountId: codexWorkspaceIdFromTokens(parsed.tokens),
+      expiresAtMs,
+    };
   } catch {
-    return false;
+    return null;
   }
 }
 
 /**
  * 普通 Dev 只读复用同 owner、同区域 Release 的登录态；Release 不可用时沿用
- * 原有的本机 Codex 共享来源。Packaged 行为保持不变，仍只与本机 Codex 协调。
+ * 原有的本机 Codex 共享来源。Release 已过期且本机有同账号的有效授权时优先本机，
+ * 避免旧快照挡住已经恢复的本机登录。Packaged 仍只与本机 Codex 协调。
  */
 export function getPreferredSharedCodexAuthPath(activeOwnerId: string | null): string {
   if (!app.isPackaged) {
@@ -81,12 +109,28 @@ export function getPreferredSharedCodexAuthPath(activeOwnerId: string | null): s
       return releaseAuth;
     }
     const releaseOwner = releaseOpenAiConnectionOwner();
+    const release = readCodexOAuthCandidate(releaseAuth);
     if (
-      hasUsableCodexOAuth(releaseAuth) &&
+      release &&
       !shouldSuppressLocalCodexAuth(path.dirname(releaseAuth), releaseAuth) &&
       activeOwnerId !== null &&
       activeOwnerId === releaseOwner
     ) {
+      const now = Date.now();
+      if (release.expiresAtMs !== null && release.expiresAtMs <= now) {
+        const cliAuth = getCodexCliAuthPath();
+        const cli = readCodexOAuthCandidate(cliAuth);
+        // Do not switch accounts/workspaces or replace a refreshable Release credential
+        // with another expired/unknown token. Both source files remain untouched.
+        if (
+          release.accountId &&
+          cli?.accountId === release.accountId &&
+          cli.expiresAtMs !== null &&
+          cli.expiresAtMs > now
+        ) {
+          return cliAuth;
+        }
+      }
       return releaseAuth;
     }
   }

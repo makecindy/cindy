@@ -2,7 +2,7 @@ import type { SpeechStartResult, VoiceConversationApi } from '@/../shared/voiceC
 import type { SpeechPlayer } from './PcmSpeechPlayer';
 
 type Segment = { text: string; streaming: boolean };
-type Prepared = { requestId: string; ready: Promise<SpeechStartResult | { error: true }> };
+type Prepared = { requestId: string; ready: Promise<SpeechStartResult | { error: unknown }> };
 
 /** Ordered playback with one bounded lookahead. Text may keep arriving while
  * audio plays; an empty queue is not the end of an unfinished model reply.
@@ -30,7 +30,7 @@ export class SpeechPlaybackQueue {
       phase(phase: 'thinking' | 'preparing' | 'speaking' | null): void;
       drained(): void;
       deferred(alreadyPlayed: boolean): void;
-      failed(): void;
+      failed(error: unknown): void;
       diagnostic(event: string, details: Record<string, string | number | boolean>): void;
     },
   ) {}
@@ -80,7 +80,7 @@ export class SpeechPlaybackQueue {
           text: segment.text,
           ...(segment.streaming ? { streaming: true } : {}),
         })
-        .catch(() => ({ error: true as const }));
+        .catch((error: unknown) => ({ error }));
       // Observe rejection immediately, even if playback never reaches this segment.
       this.prepared.push({ requestId, ready });
     }
@@ -110,10 +110,10 @@ export class SpeechPlaybackQueue {
         this.deps.deferred(this.played);
         return;
       }
-      if ('error' in result) throw new Error('Speech preparation failed');
+      if ('error' in result) throw result.error;
       await this.deps.player.play(
         () => this.deps.api.readSpeech(this.deps.callId, segment.requestId),
-        result.sampleRate,
+        'format' in result ? result : result.sampleRate,
         () => {
           if (this.cancelled) return;
           this.deps.diagnostic('playback scheduled', {
@@ -132,10 +132,10 @@ export class SpeechPlaybackQueue {
       this.deps.diagnostic('playback completed', { requestId: segment.requestId });
       this.active = false;
       this.pump();
-    } catch {
+    } catch (error) {
       if (!this.cancelled) {
         this.cancel();
-        this.deps.failed();
+        this.deps.failed(error);
       }
     }
   }

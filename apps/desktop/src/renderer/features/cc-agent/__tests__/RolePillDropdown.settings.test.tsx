@@ -7,6 +7,7 @@ import type { WorkerInfo } from '../hooks/useWorkers';
 import { RolePillDropdown, WorkerListToolbar } from '../RolePillDropdown';
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => {} },
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
@@ -126,5 +127,27 @@ describe('RolePillDropdown collaboration settings entry', () => {
     expect(button.getAttribute('aria-disabled')).toBe('true');
     fireEvent.click(button);
     expect(onOpenCreate).not.toHaveBeenCalled();
+  });
+
+  it('exposes the worker edit affordance only when the entry is supported', () => {
+    const current = worker();
+    const onEditWorker = vi.fn();
+    const props = {
+      worker: current,
+      workers: [current],
+      selectedWorkerId: current.workerId,
+      activeWorkerCount: 1,
+      onSwitchFocus: vi.fn(),
+      onArchiveWorker: vi.fn(),
+    };
+    const { rerender } = render(<RolePillDropdown {...props} onEditWorker={onEditWorker} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /developer/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.rolePill.editWorkerAria' }));
+    expect(onEditWorker).toHaveBeenCalledWith('worker-a');
+
+    rerender(<RolePillDropdown {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /developer/ }));
+    expect(screen.queryByRole('button', { name: 'orca.rolePill.editWorkerAria' })).toBeNull();
   });
 });

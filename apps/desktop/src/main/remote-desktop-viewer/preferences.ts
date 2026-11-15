@@ -1,3 +1,4 @@
+import { isRemoteDesktopIdleMinutes } from '@cindy/device-link';
 import { createHash } from 'node:crypto';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file';
@@ -21,7 +22,9 @@ const store = createOverrideSettingsFile<Overrides>({
       for (const key of Object.keys(
         DEFAULT_VIEWER_PREFERENCES,
       ) as (keyof RemoteViewerPreferences)[]) {
-        if (key in value && typeof value[key] === 'boolean') patch[key] = value[key];
+        if (key === 'idleTimeoutMinutes') {
+          if (isRemoteDesktopIdleMinutes(value[key])) patch[key] = value[key];
+        } else if (key in value && typeof value[key] === 'boolean') patch[key] = value[key];
       }
       result[device] = patch;
     }
@@ -49,21 +52,22 @@ export async function writeViewerPreferences(
     Array.isArray(patch) ||
     Object.entries(patch).some(
       ([key, value]) =>
-        !Object.hasOwn(DEFAULT_VIEWER_PREFERENCES, key) || typeof value !== 'boolean',
+        !Object.hasOwn(DEFAULT_VIEWER_PREFERENCES, key) ||
+        (key === 'idleTimeoutMinutes'
+          ? !isRemoteDesktopIdleMinutes(value)
+          : typeof value !== 'boolean'),
     )
   )
     throw new Error('INVALID_REQUEST');
   const key = keyFor(device);
   const result = await store.updateAtomic(({ value }) => {
-    const next = { ...DEFAULT_VIEWER_PREFERENCES, ...value[key], ...patch };
-    return {
-      [key]: Object.fromEntries(
-        Object.entries(next).filter(
-          ([name, value]) =>
-            value !== DEFAULT_VIEWER_PREFERENCES[name as keyof RemoteViewerPreferences],
-        ),
-      ),
-    };
+    // Keep explicit toggle choices even when they equal today's default. Unedited
+    // fields remain absent so future defaults do not become frozen overrides.
+    // Choosing the default idle duration clears it, matching Mobile.
+    const next = { ...value[key], ...patch };
+    if (next.idleTimeoutMinutes === DEFAULT_VIEWER_PREFERENCES.idleTimeoutMinutes)
+      delete next.idleTimeoutMinutes;
+    return { [key]: next };
   });
   return { ...DEFAULT_VIEWER_PREFERENCES, ...result[key] };
 }

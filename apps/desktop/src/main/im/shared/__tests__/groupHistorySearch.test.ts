@@ -23,7 +23,8 @@ import {
   recordGroupWindowEntry,
   sweepExpiredGroupWindowCursors,
 } from '../groupWindowCore';
-import { searchGroupHistory } from '../groupHistorySearch';
+import { searchGroupHistory, getGroupHistoryImages } from '../groupHistorySearch';
+import { receivedHistoryScope, recordReceivedImageMessage } from '../receivedImageHistory';
 
 function readMigration(prefix: string): string {
   const dir = path.resolve(__dirname, '../../../../../drizzle');
@@ -49,6 +50,7 @@ function installClient(): void {
 function installGroupHistoryMigrations(): void {
   sqlite.exec(readMigration('0087_'));
   sqlite.exec(readMigration('0088_'));
+  sqlite.exec(readMigration('0136_'));
 }
 
 function insertRaw(
@@ -103,6 +105,51 @@ beforeEach(() => {
 afterEach(() => sqlite.close());
 
 describe('group history FTS', () => {
+  // DB tier: real receipt index -> exact message lookup; previous fixtures only covered Telegram.
+  it.each(['wecom', 'dingtalk', 'discord', 'wechat', 'feishu', 'lark'])(
+    'indexes received %s images without indexing arbitrary paths or crossing bots',
+    async (channel) => {
+      installGroupHistoryMigrations();
+      const scope = receivedHistoryScope(channel, 'bot', 'chat', 'topic');
+      const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+      const attachment = {
+        kind: 'image' as const,
+        url,
+        absPath: '/ignored',
+        originalName: 'screen.png',
+        mimeType: 'image/png',
+      };
+      await recordReceivedImageMessage({
+        scope,
+        messageId: 'non-numeric-id',
+        text: '截图',
+        attachments: [attachment, { ...attachment, url: 'file:///private/file.png' }, {
+          kind: 'file', absPath: '/unused', originalName: 'requirements.pdf', mimeType: 'application/pdf',
+        }],
+      });
+      expect(
+        await getGroupHistoryImages({ lane: scope.lane!, messageId: 'non-numeric-id' }),
+      ).toEqual({ imageRefs: [{ fileId: url, name: 'screen.png', mimeType: 'image/png' }] });
+      // #7756 mixed attachment regression: early image indexing wins the INSERT
+      // conflict, so it must keep the non-image filename searchable too. Unit, in-memory SQLite.
+      expect(await searchGroupHistory({ lane: scope.lane!, query: 'requirements.pdf' }))
+        .toEqual([expect.objectContaining({ fileNames: expect.arrayContaining(['requirements.pdf']) })]);
+      expect(
+        await getGroupHistoryImages({
+          lane: { ...scope.lane!, provider: `${channel}-personal:other` },
+          messageId: 'non-numeric-id',
+        }),
+      ).toBeNull();
+      await recordReceivedImageMessage({
+        scope,
+        messageId: 'protected',
+        text: '',
+        attachments: [attachment],
+        protectedContent: true,
+      });
+      expect(await getGroupHistoryImages({ lane: scope.lane!, messageId: 'protected' })).toBeNull();
+    },
+  );
   it('migration 回填老行，并用仓内 LIKE 兜底召回中文子串', async () => {
     insertRaw({ messageId: 'legacy', text: '发布边界索引配置说明' });
     installGroupHistoryMigrations();
@@ -189,6 +236,31 @@ describe('group history FTS', () => {
 });
 
 describe('group window storage guardrails', () => {
+  // #7756 review: the existing aggregate tests contain text only. Unit: public
+  // writer/stats and real SQLite triggers must charge UTF-8 image metadata on
+  // insert, image/provider update, clearing refs and delete, without cross-lane totals.
+  it('accounts image metadata through insert, update, namespace move and delete', async () => {
+    installGroupHistoryMigrations();
+    const refs = [{ fileId: 'photo', name: '图.png', mimeType: 'image/png', downloadToken: '签'.repeat(100) }];
+    await recordGroupWindowEntry({
+      ...LANE, messageId: 'image-stats', text: '正文', author: { name: 'sender' }, imageRefs: refs, sentAt: 1,
+    });
+    expect(await getGroupWindowNamespaceStats(LANE.provider)).toEqual({
+      rows: 1, textBytes: Buffer.byteLength('正文') + Buffer.byteLength(JSON.stringify(refs)),
+    });
+    const otherProvider = 'telegram:other';
+    const updatedRefs = JSON.stringify([{ ...refs[0], downloadToken: '新'.repeat(150) }]);
+    sqlite.prepare('UPDATE hook_group_messages SET provider = ?, text = ?, image_refs = ? WHERE message_id = ?')
+      .run(otherProvider, '新正文', updatedRefs, 'image-stats');
+    expect(await getGroupWindowNamespaceStats(LANE.provider)).toEqual({ rows: 0, textBytes: 0 });
+    expect(await getGroupWindowNamespaceStats(otherProvider)).toEqual({
+      rows: 1, textBytes: Buffer.byteLength('新正文') + Buffer.byteLength(updatedRefs),
+    });
+    sqlite.prepare('UPDATE hook_group_messages SET image_refs = NULL WHERE message_id = ?').run('image-stats');
+    expect(await getGroupWindowNamespaceStats(otherProvider)).toEqual({ rows: 1, textBytes: Buffer.byteLength('新正文') });
+    sqlite.prepare('DELETE FROM hook_group_messages WHERE message_id = ?').run('image-stats');
+    expect(await getGroupWindowNamespaceStats(otherProvider)).toEqual({ rows: 0, textBytes: 0 });
+  });
   it('正文按 UTF-8 约 16KB 硬上限安全截断，统计按命名空间给出行数与字节', async () => {
     installGroupHistoryMigrations();
     const text = '中'.repeat(6_000);
@@ -289,5 +361,37 @@ describe('group window storage guardrails', () => {
         .prepare('SELECT count(*) AS count FROM hook_group_context_cursors WHERE provider = ?')
         .get(LANE.provider),
     ).toEqual({ count: 0 });
+  });
+});
+
+// Test value: exact message retrieval used to have no durable image locator. Unit/DB fixture:
+// one photo, same message ID in another topic, then recreate the client (no media pool).
+describe('durable group image lookup', () => {
+  it('reads persisted references after client recreation and requires all lane fields', async () => {
+    installGroupHistoryMigrations();
+    const imageRefs = [{ fileId: 'photo-id', name: 'photo.jpg', mimeType: 'image/jpeg' }];
+    await recordGroupWindowEntry({
+      ...LANE,
+      messageId: '42',
+      text: '',
+      author: { name: 'sender' },
+      imageRefs,
+      sentAt: 1,
+    });
+    installClient();
+    await expect(getGroupHistoryImages({ lane: LANE, messageId: '42' })).resolves.toEqual({
+      imageRefs,
+    });
+    for (const lane of [
+      { ...LANE, threadId: '7' },
+      { ...LANE, provider: 'telegram:other' },
+      { ...LANE, chatId: '-901' },
+    ]) {
+      await expect(getGroupHistoryImages({ lane, messageId: '42' })).resolves.toBeNull();
+    }
+    insertRaw({ messageId: '43' });
+    await expect(getGroupHistoryImages({ lane: LANE, messageId: '43' })).resolves.toEqual({
+      imageRefs: [],
+    });
   });
 });

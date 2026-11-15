@@ -21,6 +21,7 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import { useCollapsibleShowAll } from './hooks/useCollapsibleShowAll';
 import { SessionCard } from './SessionCard';
+import { sessionRowKey } from './sessionRowKey';
 
 /** 条目是否为当前激活会话(group 命中其下任一会话)。 */
 function entryIsActive(entry: SidebarSessionEntry, activeSessionId?: string): boolean {
@@ -145,7 +146,7 @@ export function SessionEntryRows({
 
           return sessionVariant === 'list' ? (
             <SessionCard
-              key={entry.session.id}
+              key={sessionRowKey(entry.session)}
               {...commonProps}
               variant="list"
               isFirst={showFirstDivider && index === 0}
@@ -154,7 +155,7 @@ export function SessionEntryRows({
             />
           ) : (
             <SessionItem
-              key={entry.session.id}
+              key={sessionRowKey(entry.session)}
               {...commonProps}
               sourceLabel={sourceLabelMap?.get(entry.session.id)}
             />

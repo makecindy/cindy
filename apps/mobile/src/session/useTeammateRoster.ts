@@ -1,9 +1,11 @@
+import { REMOTE_DISPLAY_REUSE_MS } from '@/device-link/remoteResourceAvailability';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { REMOTE_RESOURCE_MANIFEST_CHANNEL, type RemoteResourceManifestResponse } from '@cindy/device-link';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { toDeviceListItems } from '@/device-link/devices';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
@@ -28,6 +30,13 @@ export function useTeammateRoster(enabled = true) {
   const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion } = useDeviceLink();
   const revoked = useRevokedDevices();
   const binding = `${user?.id ?? ''}:${accountGeneration}`;
+  const discoveryKey = JSON.stringify([binding, connectionEpoch, presenceVersion, status, i18n.language, [...revoked]]);
+  const validatedDiscovery = useRef<string | null>(null);
+  const validatedAt = useRef(0);
+  useEffect(() => {
+    const app = AppState.addEventListener('change', () => { validatedDiscovery.current = null; });
+    return () => app.remove();
+  }, []);
   const ownerRef = useRef(binding); ownerRef.current = binding;
   const generation = useRef(0);
   const active = useRef(false);
@@ -43,6 +52,7 @@ export function useTeammateRoster(enabled = true) {
     groupTargets: RemoteResourceHostTarget[]; error: string | null;
   }>({ binding: '', ready: false, loading: true, settled: false, targets: NO_TARGETS, createTargets: NO_TARGETS, groupTargets: NO_TARGETS, error: null });
   const discover = useCallback(async (run: RemoteSyncRun) => {
+    validatedDiscovery.current = null;
     const expected = ++generation.current;
     const signal = focusController.current.signal;
     const current = () => !run.isStale() && !signal.aborted && active.current && AppState.currentState === 'active'
@@ -120,6 +130,7 @@ export function useTeammateRoster(enabled = true) {
           });
         } catch (cause) {
           if (current()) {
+            mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'computer-manifest' });
             failures.push(cause);
             if (isAutoRecoveringRemoteError(cause)) failedHosts.current.add(deviceId);
           }
@@ -143,10 +154,13 @@ export function useTeammateRoster(enabled = true) {
       groupTargets = targets.filter((target) => advertisingGroups.has(target.deviceId)
         || (!answered.has(target.deviceId) && previousGroupTargets.some((host) => host.deviceId === target.deviceId)));
       void cacheRemoteResourceHome(user?.id ?? '', collections);
-    } catch (cause) { error = formatRemoteError(cause); failures.push(cause); }
+    } catch (cause) {
+      mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'computer-directory' });
+      error = formatRemoteError(cause); failures.push(cause);
+    }
     if (!current()) return;
     lastCollections.current = { binding, home: collections };
-    if (!failures.length) recovery.current?.succeeded();
+    if (!failures.length) { validatedDiscovery.current = discoveryKey; validatedAt.current = Date.now(); recovery.current?.succeeded(); }
     else failures.forEach(cause => recovery.current?.failed(cause));
     const targets = collections.find((collection) => collection.id === TEAMMATE_COLLECTION_ID && collection.resourceKind === 'bot')?.targets ?? NO_TARGETS;
     groupTargets = groupTargets.filter((host) => !revoked.has(host.deviceId));
@@ -155,8 +169,9 @@ export function useTeammateRoster(enabled = true) {
     const filtered = targets.filter(host => !revoked.has(host.deviceId));
     setDiscovery(old => ({ binding, ready: true, loading: false, settled: true, createTargets,
       targets: old.binding === binding && JSON.stringify(old.targets) === JSON.stringify(filtered) ? old.targets : filtered,
-      groupTargets, error: error ?? (failures.length ? formatRemoteError(failures[0]) : null) }));
-  }, [binding, i18n.language, invoke, openLink, readDeviceList, revoked, status, t, user?.id]);
+      groupTargets: old.binding === binding && JSON.stringify(old.groupTargets) === JSON.stringify(groupTargets) ? old.groupTargets : groupTargets,
+      error: error ?? (failures.length ? formatRemoteError(failures[0]) : null) }));
+  }, [binding, discoveryKey, i18n.language, invoke, openLink, readDeviceList, revoked, status, t, user?.id]);
   useEffect(() => {
     if (!enabled || discovery.binding !== binding || !discovery.ready || discovery.settled
       || (status !== 'stopped' && status !== 'connecting')) return;
@@ -175,14 +190,14 @@ export function useTeammateRoster(enabled = true) {
       focusController.current = new AbortController();
       recovery.current = createRemoteReadRecovery(() => { void requestDiscover({ reason: 'retry' }); },
         () => active.current && status === 'online' && AppState.currentState === 'active');
-      if (active.current) void requestDiscover({ reason: 'focus' });
+      if (active.current && (validatedDiscovery.current !== discoveryKey || Date.now() - validatedAt.current >= REMOTE_DISPLAY_REUSE_MS)) void requestDiscover({ reason: 'focus' });
     };
     const stop = () => { active.current = false; generation.current += 1;
       focusController.current.abort(); recovery.current?.dispose(); };
     start();
     const foreground = AppState.addEventListener('change', (value) => { stop(); if (value === 'active') start(); });
     return () => { stop(); foreground.remove(); };
-  }, [connectionEpoch, discover, enabled, presenceVersion, requestDiscover, status]));
+  }, [connectionEpoch, discover, discoveryKey, enabled, presenceVersion, requestDiscover, status]));
   const ready = discovery.binding === binding && discovery.ready;
   const list = useRemoteResourceList(TEAMMATE_COLLECTION_ID, ready ? discovery.targets : NO_TARGETS, enabled && ready);
   // Discover refreshes targets too: newly online hosts and newly created rosters are not stranded.
@@ -196,7 +211,8 @@ export function useTeammateRoster(enabled = true) {
     // Stable reference (revocation is applied at discovery and again to the listed rows).
     groupTargets: ready ? discovery.groupTargets : NO_TARGETS,
     createTargets: ready && status === 'online' ? discovery.createTargets.filter((host) => !revoked.has(host.deviceId) && list.isOnline(host)) : NO_TARGETS,
-    authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error && (!discovery.targets.length || !list.error),
+    authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error
+      && (!discovery.targets.length || (!list.error && discovery.targets.every(list.isOnline))),
     loading: !ready || !discovery.settled || list.loading,
     refreshing: list.refreshing,
     error: ready ? discovery.error ?? (discovery.targets.length ? list.error : null) : null, refresh };

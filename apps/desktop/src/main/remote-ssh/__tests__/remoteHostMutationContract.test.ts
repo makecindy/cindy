@@ -13,6 +13,16 @@ function handlerBody(channel: string, nextChannel: string): string {
   return source.slice(start, end);
 }
 
+/** UI IPC and Agent tools share these queued, ownership-checked operations. */
+function sharedHostBody(operation: 'add' | 'update' | 'remove'): string {
+  const start = source.indexOf(`export async function ${operation}RemoteSshHost(`);
+  const end = source.indexOf('\nexport ', start + 1);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+const addHostBody = () => sharedHostBody('add');
+
 describe('remote SSH managed-host mutation contract', () => {
   it('validates the app renderer before remote Codex discovery can start a daemon', () => {
     const body = handlerBody('LIST_CODEX_MODELS', 'CHECK_CODEX_AUTH');
@@ -30,42 +40,41 @@ describe('remote SSH managed-host mutation contract', () => {
       ...[
         body.indexOf('ensureHydrated()'),
         body.indexOf('hydrateRemoteHosts()'),
+        body.indexOf('reloadRemoteSshConfig()'),
       ].filter((index) => index >= 0),
     );
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(read);
   });
 
+  it('ADD validates the app renderer before delegating to the shared add flow', () => {
+    const body = handlerBody('ADD', 'UPDATE');
+    const guard = body.indexOf('assertTrustedAppRendererEvent(event);');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(body.indexOf('return addRemoteSshHost(rawHost);'));
+  });
+
   it.each([
-    ['ADD', 'UPDATE'],
-    ['UPDATE', 'REMOVE'],
-    ['REMOVE', 'CONNECT'],
-  ])('%s validates the app renderer before parsing input', (channel, nextChannel) => {
+    ['UPDATE', 'REMOVE', 'updateRemoteSshHost(rawHost)'],
+    ['REMOVE', 'CONNECT', 'removeRemoteSshHost(args)'],
+  ])('%s validates the app renderer before delegating', (channel, nextChannel, call) => {
     const body = handlerBody(channel, nextChannel);
     const guard = body.indexOf('assertTrustedAppRendererEvent(event);');
-    const parse = Math.min(
-      ...[
-        body.indexOf('normalizeAddInput('),
-        body.indexOf('requireObject('),
-      ].filter((index) => index >= 0),
-    );
+    const delegation = body.indexOf(`return ${call};`);
     expect(guard).toBeGreaterThan(-1);
-    expect(guard).toBeLessThan(parse);
+    expect(delegation).toBeGreaterThan(guard);
   });
 
   it('serializes add, update, and remove with config reloads', () => {
-    for (const [channel, nextChannel] of [
-      ['ADD', 'UPDATE'],
-      ['UPDATE', 'REMOVE'],
-      ['REMOVE', 'CONNECT'],
-    ]) {
-      expect(handlerBody(channel, nextChannel))
+    expect(addHostBody()).toContain('return remoteHostHydrationQueue.run(async () => {');
+    for (const operation of ['update', 'remove'] as const) {
+      expect(sharedHostBody(operation))
         .toContain('return remoteHostHydrationQueue.run(async () => {');
     }
   });
 
   it('does not disconnect existing aliases when an add write or refresh fails', () => {
-    const body = handlerBody('ADD', 'UPDATE');
+    const body = addHostBody();
     const hostWrite = body.indexOf('await addManagedHostWithInclude(');
     const hydrate = body.indexOf('await hydrateRemoteHostsUnqueued(new Set(), true, new Set([cfg.id]));');
     const reloadError = body.indexOf("throwReloadRequired('新主机'");
@@ -88,7 +97,7 @@ describe('remote SSH managed-host mutation contract', () => {
     expect(ownershipCheck).toBeGreaterThan(-1);
     expect(ownershipCheck).toBeLessThan(poolPublish);
 
-    const body = handlerBody('ADD', 'UPDATE');
+    const body = addHostBody();
     const hydrate = body.indexOf('await hydrateRemoteHostsUnqueued(new Set(), true, new Set([cfg.id]));');
     const rollback = body.indexOf('await addReceipt.rollback();');
     const prefs = body.indexOf('patchSshHostPrefOrThrow(cfg.id');
@@ -98,7 +107,7 @@ describe('remote SSH managed-host mutation contract', () => {
   });
 
   it('rejects external connection-field edits and writes before invalidating an owned endpoint', () => {
-    const body = handlerBody('UPDATE', 'REMOVE');
+    const body = sharedHostBody('update');
     const diskRead = body.indexOf('const latest = await readLatestSshConfigOrThrow();');
     const readOnlyGuard = body.indexOf('if (!latestHost?.managedByCindy)');
     const write = body.indexOf('await updateManagedHostFields(');
@@ -115,7 +124,7 @@ describe('remote SSH managed-host mutation contract', () => {
   });
 
   it('writes a remove before disconnecting the target and never deletes external hosts', () => {
-    const body = handlerBody('REMOVE', 'CONNECT');
+    const body = sharedHostBody('remove');
     const diskRead = body.indexOf('const latest = await readLatestSshConfigOrThrow();');
     const ownershipGuard = body.indexOf('if (!latestHost?.managedByCindy)');
     const write = body.indexOf('await removeManagedHost(');
@@ -132,10 +141,7 @@ describe('remote SSH managed-host mutation contract', () => {
   });
 
   it('uses managed ownership instead of the legacy manual source marker', () => {
-    const mutationSource = source.slice(
-      source.indexOf('ipcMain.handle(REMOTE_SSH_INVOKE.ADD'),
-      source.indexOf('ipcMain.handle(REMOTE_SSH_INVOKE.CONNECT'),
-    );
+    const mutationSource = ['add', 'update', 'remove'].map(op => sharedHostBody(op as 'add' | 'update' | 'remove')).join('\n');
     expect(mutationSource).not.toContain("source === 'manual'");
     expect(mutationSource).toContain('managedByCindy');
   });

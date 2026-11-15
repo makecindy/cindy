@@ -51,8 +51,10 @@ describe('topicForPush', () => {
   });
 
   it('账号 / 全局级 channel → sessions(随列表订阅走)', () => {
+    expect(topicForPush('local-db:project-aliases:changed', {})).toBe('sessions');
     expect(topicForPush('maker:provider:changed', { revision: 42 })).toBe('sessions');
     expect(topicForPush('maker:agents:changed', {})).toBe('sessions');
+    expect(topicForPush('local-db:project-aliases:changed', undefined)).toBe('sessions');
     expect(topicForPush('maker:schedule:event', { kind: 'x' })).toBe('sessions');
     expect(topicForPush('maker:project-automation:event', {})).toBe('sessions');
     // 被控端当前草稿全量变更(无 sessionId)→ 并入 sessions topic。
@@ -73,6 +75,7 @@ describe('topicForPush', () => {
       fiveHour: { utilization: 4, resetsAt: 1788345000 },
     })).toBe('sessions');
     expect(topicForPush('usage:claude-subscription-changed', null)).toBe('sessions');
+    expect(topicForPush('subscription-accounts:changed', { providerId: 'anthropic' })).toBe('sessions');
     // 其余账号级用量快照同口径。
     expect(topicForPush('usage:codex-account-changed', {
       primary: { usedPercent: 3 }, webSnapshot: null,

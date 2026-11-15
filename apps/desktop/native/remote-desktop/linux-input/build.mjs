@@ -30,6 +30,8 @@ const flags = run('pkg-config', [
   'wayland-client',
   'xkbcommon',
   'json-c',
+  'x11',
+  'xtst',
 ]).split(/\s+/);
 const binary = path.join(output, 'cindy-linux-desktop-input');
 run('cc', [

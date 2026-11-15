@@ -7,7 +7,7 @@
 
 | 用户看到的位置 | 实际实现 | 边界与源码 |
 | --- | --- | --- |
-| 普通页面返回、任务顶栏及工具栏 | 原生导航栈、UINavigationBar、系统 toolbar item | 标题内容可嵌入 RN；首页 / 伙伴首页的顶栏布局仍是 RN。[入口](../src/platform/chrome/SimpleStackHeader.tsx)、[任务顶栏](../src/session/SessionHeaderNativeControls.ios.tsx) |
+| 普通页面返回、任务顶栏及工具栏 | 原生导航栈、UINavigationBar、系统 toolbar item | 标题内容可嵌入 RN；首页顶栏布局仍是 RN。[入口](../src/platform/chrome/SimpleStackHeader.tsx)、[任务顶栏](../src/session/SessionHeaderNativeControls.ios.tsx) |
 | 设备范围、任务显示等下拉菜单 | UIMenu | 菜单是系统的；触发按钮可由调用方提供。旧包缺原生模块时有自绘回退。[入口](../src/platform/chrome/NativePullDownMenu.tsx) |
 | 普通确认弹窗 | UIAlertController，经 React Native Alert 调用 | 自定义多步骤编辑不能一概算系统弹窗。[入口](../src/platform/chrome/showActionMenu.ts) |
 | 设置里的开关 | SwiftUI 系统开关，经 @expo/ui 使用 | 设置分组和说明布局仍是 RN，不代表整页 Settings 原生化。[实现](../src/platform/chrome/NativeSwitch.tsx) |

@@ -95,6 +95,10 @@ describe('sessionControls', () => {
       detail: '12,000 / 200,000 tokens · 6% · $0.1235',
       rows: [],
     });
+    // Regression: Claude SDK reports `percentage` on a 0–100 scale, unlike legacy `percent`.
+    expect(summarizeContextUsage({ percentage: 1 })).toMatchObject({
+      detail: '1%',
+    });
     expect(summarizeContextUsage(null)).toEqual({
       title: 'Context usage',
       detail: '暂无上下文数据',

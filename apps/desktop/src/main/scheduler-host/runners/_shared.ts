@@ -12,7 +12,7 @@ import type { Session, AgentEvent } from '@cindy/maker-core';
 import type { Logger } from '@cindy/maker-scheduler';
 
 import { sessions as sessionsTable } from '../../localDb/schema';
-import type { SchedulerDrizzleDb } from '../storage';
+import type { SchedulerDrizzleDb } from '../storage.desktop';
 
 /**
  * 修正 runner 新建 sessions 行的 metadata 列。

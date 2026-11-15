@@ -127,7 +127,6 @@ vi.mock('@/platform/gestureHandler', () => {
 
 // Keep native device polling outside the drawer window/lifecycle fixture.
 vi.mock('@/plugins/PluginMenuUnreadDot', () => ({ PluginMenuUnreadDot: () => null }));
-vi.mock('@/session/HomeModeSwitch', () => ({ HomeModeSwitch: () => null }));
 
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ replace: vi.fn() }) }));
@@ -137,7 +136,6 @@ vi.mock('@/session/AccountSwitcherSheet', () => ({ AccountSwitcherSheet: () => n
 vi.mock('@/session/remoteSessionStore', () => ({
   remoteSessionStore: { subscribe: () => () => {}, getSessions: () => [], isSessionRunning: () => false },
 }));
-vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ chooseMode: vi.fn() }) }));
 
 const drawerProps = (over: Partial<Parameters<typeof HomeChromeDrawer>[0]> = {}) => ({
   onClose: vi.fn(),

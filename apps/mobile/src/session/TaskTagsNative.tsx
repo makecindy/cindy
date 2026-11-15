@@ -13,6 +13,11 @@ export function NativeTagSwatch(_props: NativeTagSwatchProps) {
   return null;
 }
 
-export function NativeTaskTagsExpanded(_props: { state: TaskTagsExpandedState }) {
+export interface NativeTaskTagsExpandedProps {
+  state: TaskTagsExpandedState;
+  onSortingChange?(sorting: boolean): void;
+}
+
+export function NativeTaskTagsExpanded(_props: NativeTaskTagsExpandedProps) {
   return null;
 }

@@ -80,9 +80,8 @@ export function collectMobileMessageGalleryImages(
   // thinking / tool_group 的 body 以纯 Text 展示,图片标记不会渲染成图,收进图集会让 lightbox
   // 翻页翻到聊天里看不到、也点不到的"隐藏页"。orcaCard / systemCardType 消息同理:它们的 body
   // 分别走 OrcaCollabCard / MobileSystemCard 的纯 Text 渲染,不是 MarkdownBody(见 RenderItemView 路由)。
-  const rendersMarkdownBody = (message: NormalizedRemoteMessage): boolean => (
-    !message.orcaCard && !message.systemCardType
-  );
+  const rendersMarkdownBody = (message: NormalizedRemoteMessage): boolean =>
+    !message.orcaCard && !message.systemCardType;
 
   const visitMessage = (message: NormalizedRemoteMessage, keyPrefix: string, includeBodyImages: boolean) => {
     const clientId = message.source.clientId ?? message.source.id;
@@ -106,12 +105,12 @@ export function collectMobileMessageGalleryImages(
         ? getSentImagePreview?.(clientId, imageIndex, displayAttachment.name, undefined, displayAttachment.sha256, displayAttachment.uri)
         : undefined;
       const previewUri = attachment.kind === 'image' && displayAttachment.uri
-        ? getSentAttachmentThumbUri(localPreview?.sourceRef ?? displayAttachment.uri) ?? localPreview?.uri
-        : null;
+        ? (getSentAttachmentThumbUri(localPreview?.sourceRef ?? displayAttachment.uri) ?? localPreview?.uri)
+          : null;
       // The verified send snapshot bridges outbox/queue keys to formal history, even when
       // an earlier unreadable upload first enters the gallery at this exact handoff.
       const galleryImageKey = localPreview && clientId
-        ? localPreview.galleryImageKey ?? sentImageGalleryKey(clientId, localPreview.attachmentId)
+        ? (localPreview.galleryImageKey ?? sentImageGalleryKey(clientId, localPreview.attachmentId))
         : undefined;
       push(galleryImageKey ?? `${keyPrefix}:attachment:${index}`, attachment.name,
         galleryImageKey ? { ...payload, galleryImageKey } : payload, previewUri);
@@ -291,4 +290,58 @@ export function lightboxImagesForPayload(
     url: payload.media.url,
     payload,
   }];
+}
+
+/** A snapshot for the opening message, including documents alongside media. */
+export function collectMobileMessageAttachmentPayloads(
+  item: MobileMessageRenderItem,
+  workdir?: string,
+  remoteHostId?: string,
+  sessionId?: string,
+): MessagePayload[] {
+  const payloads: MessagePayload[] = [];
+  const visitMessage = (message: NormalizedRemoteMessage) => {
+    for (const attachment of message.attachments ?? [])
+      payloads.push(
+        buildAttachmentPayload(
+          svgAttachmentForDisplay(
+            attachment,
+            workdir,
+            message.key,
+            remoteHostId,
+            sessionId,
+          ),
+        ),
+      );
+    for (const media of message.media ?? [])
+      payloads.push(
+        buildMediaPayload(
+          media,
+          media.title ?? payloadMediaKindLabel(media.kind),
+        ),
+      );
+  };
+  const visit = (row: MobileMessageRenderItem | MobileWorkChildItem) => {
+    if (row.type === "message" || row.type === "thinking")
+      visitMessage(row.message);
+    else if (row.type === "tool_group") row.tools.forEach(visitMessage);
+    else if (row.type === "work_group") row.children.forEach(visit);
+    else if (row.type === "subagent_group") row.childItems.forEach(visit);
+  };
+  visit(item);
+  for (const image of collectMobileMessageGalleryImages(
+    [item],
+    workdir,
+    remoteHostId,
+    sessionId,
+  )) {
+    if (
+      !payloads.some(
+        (payload) =>
+          payload.kind === "media" && payload.media.url === image.url,
+      )
+    )
+      payloads.push(image.payload);
+  }
+  return payloads;
 }

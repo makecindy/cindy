@@ -56,7 +56,8 @@ it('indexes aliases and script subtrees while preserving dependency order and in
   const item = normalizeAutomation(source, { id: 'report', skills: ['folder', 'alias'], script: 'reports/run.py', monitor_script: 'reports/data/check.py', schedule: { kind: 'interval', minutes: 5 } }, dependencies, 'UTC');
   expect(item.view.dependsOn).toEqual(['mcp', 'skill', 'main', 'data']);
   expect(item.envDependencies?.names).toEqual(['SKILL_TOKEN', 'SCRIPT_TOKEN']);
-  expect(item.view.issues).toEqual(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING']);
+  // A script job also stays at its source: project automations only run a prompt.
+  expect(item.view.issues).toEqual(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_CONTEXT_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING']);
   expect(normalizeAutomation(source, { id: 'missing', script: 'reports/missing.py' }, dependencies, 'UTC').view.issues).toContain('AUTOMATION_SCRIPT_MISSING');
 });
 
@@ -74,25 +75,25 @@ it.each([
   const task = snapshot.items.find(item => item.automation)!;
   const transfer: TransferDeps = { assertOwner: vi.fn(), readReceipt: vi.fn(async () => undefined), saveReceipt: vi.fn(async () => {}),
     createCompanion: vi.fn(async () => {}), importItem: vi.fn(async () => {}), saveEnvironment: vi.fn(async () => {}), saveCheckpoint: vi.fn(async () => {}),
-    createConversation: vi.fn(async () => 'chat'), createRoutine: vi.fn(async () => 'routine'),
-    verifyAutomation: vi.fn(async () => ({ verified: true })), pauseSource: vi.fn(async () => {}), resumeSource: vi.fn(async () => {}), enableRoutine: vi.fn(async () => {}) };
+    createConversation: vi.fn(async () => 'chat'), createAutomation: vi.fn(async () => 'routine'),
+    verifyAutomation: vi.fn(async () => ({ verified: true })), pauseSource: vi.fn(async () => {}), resumeSource: vi.fn(async () => {}), enableAutomation: vi.fn(async () => {}) };
   const result = await transferCompanion(snapshot, { requestId: 'fixture-model-request', previewId: 'preview', name: 'Ada', entryIds: snapshot.items.filter(item => item.view.selected).map(item => item.view.id), takeover: true }, transfer);
-  expect(transfer.createRoutine).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ enabled: false }), expect.any(String), task);
+  expect(transfer.createAutomation).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ enabled: false }), expect.any(String), task);
   if (blocked) {
     expect(task.view.issues).toContain('AUTOMATION_MODEL_NEEDS_MAPPING');
     expect(result.checks.find(check => check.entryId === task.view.id)).toMatchObject({ status: 'needs-attention', message: 'AUTOMATION_MODEL_NEEDS_MAPPING' });
     expect(transfer.verifyAutomation).not.toHaveBeenCalled();
     expect(transfer.pauseSource).not.toHaveBeenCalled();
-    expect(transfer.enableRoutine).not.toHaveBeenCalled();
+    expect(transfer.enableAutomation).not.toHaveBeenCalled();
   } else {
     expect(task.view.issues).toBeUndefined();
     expect(result.checks.find(check => check.entryId === task.view.id)?.status).toBe('taken-over');
     expect(transfer.pauseSource).toHaveBeenCalledOnce();
-    expect(transfer.enableRoutine).toHaveBeenCalledOnce();
+    expect(transfer.enableAutomation).toHaveBeenCalledOnce();
   }
 });
 
-it('retains an over-budget skill for retry without dropping healthy siblings', async () => {
+it('keeps resource bodies out of the preview budget even when multiple skills are used by automations', async () => {
   await write('.hermes/config.yaml', 'name: Ada\n');
   for (const name of ['first', 'second']) {
     await write(`.hermes/skills/${name}/SKILL.md`, `---\nname: ${name}\n---\nRead data.txt`);
@@ -102,12 +103,12 @@ it('retains an over-budget skill for retry without dropping healthy siblings', a
   await write('.hermes/cron/jobs.json', jobs(['first']));
   const reader = deps(); const [source] = await discoverImportSources(reader);
   const snapshot = await inspectImportSource(source!, reader, createImportBudget(6000));
-  expect(snapshot.items.find(item => item.view.name === 'first')?.files?.find(file => file.name === 'data.txt')?.bytes.length).toBe(2048);
-  expect(snapshot.items.find(item => item.view.name === 'second')?.files).toHaveLength(1);
+  expect(snapshot.items.find(item => item.view.name === 'first')?.files).toBeUndefined();
+  expect(snapshot.items.find(item => item.view.name === 'second')?.files).toBeUndefined();
   await write('.hermes/cron/jobs.json', jobs(['first', 'second']));
   const partial = await inspectImportSource(source!, reader, createImportBudget(6000));
-  expect(partial.items.find(item => item.view.name === 'second')?.captureIssue).toBe('SOURCE_SNAPSHOT_TOO_LARGE');
-  expect(partial.items.find(item => item.view.name === 'first')?.files).toHaveLength(2);
+  expect(partial.items.filter(item => item.view.category === 'skills')).toHaveLength(2);
+  expect(partial.items.filter(item => item.view.category === 'skills').every(item => !item.captureIssue && !item.files)).toBe(true);
 });
 
 it('counts configuration includes and memory against the same source budget', async () => {
@@ -391,7 +392,8 @@ it('preserves every script while tracking only actual entry and monitor dependen
   const reader = deps(); const [source] = await discoverImportSources(reader);
   const snapshot = await inspectImportSource(source!, reader);
   const automation = snapshot.items.find(item => item.automation)!;
-  expect(automation.view.issues).toBeUndefined();
+  // Kept for the record; the job itself stays at its source (project automations only run a prompt).
+  expect(automation.view.issues).toEqual(['AUTOMATION_CONTEXT_NEEDS_MAPPING']);
   const files = snapshot.items.filter(item => item.asset);
   expect(files.filter(item => item.view.selected).map(item => item.asset!.name).sort()).toEqual([
     'scripts/monitor/check.sh', 'scripts/monitor/data/value.txt', 'scripts/reports/daily.sh', 'scripts/reports/data/template.txt', 'scripts/reports/helper.sh', 'scripts/reports-unused/other.sh',
@@ -416,7 +418,8 @@ it.each(['daily-report', 'Daily report'])('matches a skill reference %s against 
   expect(automation.view.dependsOn).toEqual(expect.arrayContaining([
     skill.view.id, ...snapshot.items.filter(item => item.env).map(item => item.view.id),
   ]));
-  expect(skill.files?.find(file => file.name === 'scripts/query.py')).toBeDefined();
+  expect(skill.resourceReferences).toContain('REPORT_TOKEN');
+  expect(skill.resourceReferences).toContain('REPORT_URL');
 });
 
 it('requires an explicit credential account and binds variables to the chosen profile, including MCP references', async () => {
@@ -537,7 +540,14 @@ it('discovers 142 grouped Hermes skills and all memory documents, excluding arch
   for (let i = 0; i < 142; i++) {
     await write(`.hermes/skills/group-${i % 13}/skill-${i}/SKILL.md`, `---\nname: skill-${i}\n---\nInstructions ${i}`);
   }
-  for (let i = 0; i < 2100; i++) await write(`.hermes/memories/note-${i}.md`, `Memory ${i}`);
+  const memoryRoot = path.join(home, '.hermes/memories');
+  await fs.mkdir(memoryRoot, { recursive: true });
+  for (let offset = 0; offset < 2100; offset += 32) {
+    await Promise.all(Array.from({ length: Math.min(32, 2100 - offset) }, (_, index) => {
+      const i = offset + index;
+      return fs.writeFile(path.join(memoryRoot, `note-${i}.md`), `Memory ${i}`);
+    }));
+  }
   await write('.hermes/skills/.archive/old/SKILL.md', 'archived');
   await write('.hermes/skills/group-0/skill-0/references/example/SKILL.md', 'example');
   await write('extra-skills/category/extra/SKILL.md', '---\nname: extra\n---\nExtra');
@@ -568,7 +578,7 @@ it('uses OpenClaw declared names, skillKey, grouped roots and plugin sources in 
   const skills = snapshot.items.filter(item => item.view.category === 'skills');
   expect(skills.map(item => item.view.name)).toEqual(['report', 'project', 'personal', 'extra', 'example']);
   expect(skills[0]?.view).toMatchObject({ selected: true, enabled: false });
-  expect(skills[0]?.files?.[0]?.bytes.toString()).toContain('Workspace');
+  expect(skills[0]?.sourceDirectory).toBe(await fs.realpath(path.join(home, '.openclaw/workspace/skills/category/renamed')));
   expect(snapshot.items.find(item => item.env?.SERVICE_TOKEN)?.view.selected).toBe(true);
 });
 
@@ -746,7 +756,7 @@ it('preserves sorted skill-name precedence after streaming directory entries', a
   const items = await discoverImportSkills({ kind: 'hermes', agentId: 'main', name: 'Ada', root, workspace: root, configFile: path.join(root, 'config.yaml') }, {}, home, {}, createImportBudget());
   expect(items).toHaveLength(1);
   expect(items[0]!.sourceAlias).toBe('a-first');
-  expect(items[0]!.files![0]!.bytes.toString()).toContain('First');
+  expect(items[0]!.sourceDirectory).toBe(await fs.realpath(path.join(home, '.hermes/skills/a-first')));
 });
 
 it('does not synchronously sort a whole 100,000-entry Skill root before visiting children', async () => {
@@ -834,7 +844,8 @@ it('preserves native commands, heartbeat jobs and their instruction document', a
   expect(tasks).toHaveLength(3);
   expect(tasks[0]?.automation?.input).toMatchObject({ name: 'Command report', enabled: false });
   expect(tasks[0]?.automation?.original.payload).toEqual(command);
-  expect(tasks[0]?.view.issues).toBeUndefined();
+  // A native command stays at its source: project automations only run a prompt.
+  expect(tasks[0]?.view.issues).toEqual(['AUTOMATION_CONTEXT_NEEDS_MAPPING']);
   expect(tasks[1]?.automation?.input).toMatchObject({ enabled: false, triggers: [{ kind: 'interval', intervalMs: 60000 }] });
   expect(tasks[1]?.automation?.original.payload).toEqual({ kind: 'heartbeat' });
   expect(tasks[1]?.view.issues).toContain('AUTOMATION_CONTEXT_NEEDS_MAPPING');

@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   onMove: null as null | ((sources: number[], destination: number) => void),
   textField: null as any,
   announce: vi.fn(),
+  sortingChanged: vi.fn(),
 }));
 
 vi.mock('react-native', () => ({
@@ -23,12 +24,17 @@ vi.mock('@/platform/chrome/nativeGlassButtonStyle.ios', () => ({
   useNativeGlassButtonStyle: () => [],
 }));
 vi.mock('@/session/ComposerNativeSection', () => ({
-  ComposerNativeSection: ({ children }: any) => <section>{children}</section>,
+  ComposerNativeSection: ({ children, footer }: any) => (
+    <section>
+      {children}
+      {footer}
+    </section>
+  ),
 }));
 vi.mock('@/session/ComposerNativeRow', () => ({
-  ComposerNativeRow: ({ title, onPress, onOptions, testID }: any) => (
-    <div>
-      <button data-testid={testID} onClick={onPress}>
+  ComposerNativeRow: ({ title, onPress, onOptions, testID, disabled, modifiers }: any) => (
+    <div data-modifiers={JSON.stringify(modifiers)}>
+      <button data-testid={testID} disabled={disabled} onClick={onPress}>
         {title}
       </button>
       {onOptions ? (
@@ -53,7 +59,9 @@ vi.mock('@expo/ui/swift-ui', () => {
       </button>
     ),
     Circle: () => null,
-    Group: Box,
+    Group: ({ children, modifiers }: any) => (
+      <div data-modifiers={JSON.stringify(modifiers)}>{children}</div>
+    ),
     HStack: Box,
     Image: () => null,
     List,
@@ -76,6 +84,7 @@ vi.mock('@expo/ui/swift-ui/modifiers', () => ({
       'accessibilityLabel',
       'buttonStyle',
       'contentShape',
+      'deleteDisabled',
       'disabled',
       'font',
       'foregroundStyle',
@@ -89,6 +98,9 @@ vi.mock('@expo/ui/swift-ui/modifiers', () => ({
       'tint',
     ].map((name) => [name, (value: unknown) => ({ [name]: value })]),
   ),
+  environment: (key: string, value: string) => ({
+    environment: { key, value },
+  }),
   shapes: { rectangle: () => ({}) },
 }));
 
@@ -138,17 +150,16 @@ const baseState = (over: Record<string, unknown> = {}): any => ({
 let root: ReturnType<typeof createRoot>;
 let node: HTMLDivElement;
 const render = (state: any) =>
-  act(async () => root.render(<NativeTaskTagsExpanded state={state} />));
+  act(async () => root.render(<NativeTaskTagsExpanded state={state} onSortingChange={h.sortingChanged} />));
 const press = (testID: string) =>
-  act(async () =>
-    node.querySelector<HTMLButtonElement>(`[data-testid="${testID}"]`)!.click(),
-  );
+  act(async () => node.querySelector<HTMLButtonElement>(`[data-testid="${testID}"]`)!.click());
 
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   h.onMove = null;
   h.textField = null;
   h.announce.mockClear();
+  h.sortingChanged.mockClear();
   node = document.createElement('div');
   root = createRoot(node);
 });
@@ -167,9 +178,13 @@ it('routes list drags, taps, edit and add through the shared state', async () =>
   const state = baseState();
   await render(state);
   act(() => h.onMove!([0], 3));
+  expect(state.onMove).not.toHaveBeenCalled();
+  await press('taskTags.reorder');
+  act(() => h.onMove!([0], 3));
   expect(state.onMove).toHaveBeenLastCalledWith(0, 2);
   act(() => h.onMove!([2], 0));
   expect(state.onMove).toHaveBeenLastCalledWith(2, 0);
+  await press('taskTags.reorder');
   await press('taskTags.tag.b');
   expect(state.onToggle).toHaveBeenCalledWith('b');
   await press('taskTags.tag.b.options');
@@ -215,4 +230,72 @@ it('announces failures to VoiceOver once per message', async () => {
   expect(h.announce).toHaveBeenCalledTimes(1);
   await render(baseState({ message: 'taskTags.offline' }));
   expect(h.announce).toHaveBeenLastCalledWith('taskTags.offline');
+});
+
+const modifiers = () =>
+  Array.from(node.querySelectorAll('[data-modifiers]')).flatMap((element) =>
+    JSON.parse(element.getAttribute('data-modifiers')!),
+  );
+
+it('disables native deletion in both modes and exposes edit mode only when sorting', async () => {
+  const state = baseState();
+  await render(state);
+  expect(h.sortingChanged).toHaveBeenLastCalledWith(false);
+  expect(modifiers().filter((m: any) => m.deleteDisabled)).toHaveLength(3);
+  expect(node.textContent).toContain('taskTags.reorderFooter');
+  await press('taskTags.reorder');
+  expect(h.sortingChanged).toHaveBeenLastCalledWith(true);
+  expect(modifiers().filter((m: any) => m.deleteDisabled)).toHaveLength(3);
+  expect(modifiers().filter((m: any) => m.moveDisabled === false)).toHaveLength(3);
+  expect(node.textContent).toContain('taskTags.reorderDone');
+  expect(node.textContent).toContain('taskTags.reorderHint');
+  expect(node.querySelector('[data-testid="taskTags.tag.a.options"]')).toBeNull();
+  expect(node.querySelector('[data-testid="taskTags.add"]')).toBeNull();
+  await press('taskTags.tag.a');
+  expect(state.onToggle).not.toHaveBeenCalled();
+  await press('taskTags.reorder');
+  expect(h.sortingChanged).toHaveBeenLastCalledWith(false);
+  expect(node.querySelector('[data-testid="taskTags.tag.a.options"]')).not.toBeNull();
+  expect(node.querySelector('[data-testid="taskTags.add"]')).not.toBeNull();
+});
+
+it('blocks moves while saving or offline, and restores sorting after the lock clears', async () => {
+  const state = baseState();
+  await render(state);
+  const move = h.onMove!;
+  await press('taskTags.reorder');
+  await render({ ...state, disabled: true });
+  expect(modifiers().filter((m: any) => m.moveDisabled === true)).toHaveLength(3);
+  act(() => move([0], 3));
+  expect(state.onMove).not.toHaveBeenCalled();
+  await render(state);
+  act(() => move([0], 3));
+  expect(state.onMove).toHaveBeenCalledWith(0, 2);
+});
+
+it('resets sorting after leaving the list and keeps an exit when the catalog shrinks', async () => {
+  const state = baseState();
+  await render(state);
+  await press('taskTags.reorder');
+  await render({ ...state, tags: [state.tags[0]] });
+  expect(node.textContent).toContain('taskTags.reorderDone');
+  await render({ ...state, page: 'edit' });
+  await render(state);
+  expect(h.sortingChanged).toHaveBeenLastCalledWith(false);
+});
+
+it('allows finishing sorting while offline without enabling writes or re-entry', async () => {
+  const state = baseState();
+  await render(state);
+  await press('taskTags.reorder');
+  await render({ ...state, disabled: true });
+  const reorderButton = () =>
+    node.querySelector<HTMLButtonElement>('[data-testid="taskTags.reorder"]')!;
+  expect(reorderButton().disabled).toBe(false);
+  await press('taskTags.reorder');
+  expect(h.sortingChanged).toHaveBeenLastCalledWith(false);
+  expect(reorderButton().disabled).toBe(true);
+  expect(node.querySelector<HTMLButtonElement>('[data-testid="taskTags.tag.a"]')!.disabled).toBe(true);
+  act(() => h.onMove!([0], 3));
+  expect(state.onMove).not.toHaveBeenCalled();
 });

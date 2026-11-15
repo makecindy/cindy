@@ -28,7 +28,7 @@ export function buildDocModeSwitchProjects(
     if (session.status !== 'active') continue;
     if (session.workspaceKind !== 'project') continue;
     if (session.remoteHostId) continue;
-    const workingDir = normalizeWorkingDir(session.workingDir);
+    const workingDir = normalizeWorkingDir(session.projectDir ?? session.workingDir);
     if (!workingDir) continue;
     const projectKey = projectIdentityKeyForSession(session);
     if (!projectKey) continue;

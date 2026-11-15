@@ -1,12 +1,34 @@
 {
   "id": "hn-search",
-  "match": ["news.ycombinator.com", "hn.algolia.com"],
-  "description": "用 Hacker News 的公开 Algolia 搜索 API 搜故事,返回 JSON(标题/链接/作者/分数)。读接口而非扒 DOM。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://hn.algolia.com/api/v1/search?tags=story&query={{query|url}}" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "news.ycombinator.com",
+    "hn.algolia.com"
   ],
-  "output": "{{json}}"
+  "description": "Search Hacker News stories",
+  "access": "read",
+  "adapter": "hackernews/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search query"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of results"
+    },
+    "sort": {
+      "required": false,
+      "type": "str",
+      "default": "relevance",
+      "description": "Sort by relevance or date",
+      "choices": [
+        "relevance",
+        "date"
+      ]
+    }
+  },
+  "steps": []
 }

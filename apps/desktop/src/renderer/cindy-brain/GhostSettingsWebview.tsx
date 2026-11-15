@@ -96,10 +96,10 @@ function AsleepHint({ appearance }: { appearance: 'settings' | 'plugin' }): Reac
   const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center gap-1.5 px-6 py-9">
-      <MoonStar size={20} className="text-[var(--text-tertiary)] opacity-60" />
+      <MoonStar size={20} className="text-[var(--text-tertiary)]" />
       <p
         className={cn(
-          'text-center text-[var(--text-tertiary)] opacity-70',
+          'text-center text-[var(--text-tertiary)]',
           appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
         )}
       >

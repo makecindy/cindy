@@ -52,6 +52,7 @@ export function importedImBotTarget(botId: string, credential: { format: string;
     input = parseBotImConnectionAddInput({ botId, channel, token: value.token, ownerUserId: owner, appId: value.appId, appSecret: value.appSecret,
       service: value.service, wecomBotId: value.wecomBotId, secret: value.secret, appKey: value.appKey });
   } catch (error) { return issueOf(channel, error); }
+  if (input.channel === 'imessage') return 'IMPORT_IM_BOT_CONNECT_FAILED';
   const identity = input.channel === 'telegram' || input.channel === 'discord' ? input.token
     : input.channel === 'feishu' ? input.appId : input.channel === 'wecom' ? input.wecomBotId : input.appKey;
   return {

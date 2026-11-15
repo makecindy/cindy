@@ -143,7 +143,8 @@ describe("local journal persistence", () => {
         files.append.mock.calls.map(([batch]) => batch).join(""),
       ).not.toContain("after opt-out");
       expect(await log.diagnosticSnapshot()).toEqual(before);
-      expect(vi.getTimerCount()).toBe(fails ? 1 : 0);
+      // Stall tick and JS loop-lag sampler.
+      expect(vi.getTimerCount()).toBe(fails ? 2 : 0);
       stop();
     },
   );
@@ -197,7 +198,8 @@ describe("local journal persistence", () => {
     await log.hydrateDiagnostics();
     expect(vi.getTimerCount()).toBe(0);
     await log.setDiagnosticsEnabled(true);
-    expect(vi.getTimerCount()).toBe(1);
+    // Stall tick and JS loop-lag sampler.
+    expect(vi.getTimerCount()).toBe(2);
     await vi.advanceTimersByTimeAsync(2000);
     expect(
       files.append.mock.calls.some(([batch]) =>

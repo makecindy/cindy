@@ -120,16 +120,23 @@ export function withToolProcessMedia(
   const encoded = encode(payload);
   // Remote history has an 8KB byte budget. Truncate prose, never cut JSON or a URL.
   if (bytes.encode(encoded).length <= 8192) return encoded;
+  const originalText = typeof payload.text === 'string' ? payload.text : text;
+  const truncatedPayload = (value: string) =>
+    typeof payload.text === 'string' ? { ...payload, text: value } : { text: value };
+  // 同级字段本身已超限时无法全部保留，退回有界的纯文本 envelope，仍不能超出预算。
+  if (bytes.encode(encode(truncatedPayload(''))).length > 8192) {
+    return encode({ text: '' });
+  }
   let low = 0;
-  let high = text.length;
+  let high = originalText.length;
   while (low < high) {
     const mid = Math.ceil((low + high) / 2);
-    if (bytes.encode(encode({ text: text.slice(0, mid) })).length <= 8192)
+    if (bytes.encode(encode(truncatedPayload(originalText.slice(0, mid)))).length <= 8192)
       low = mid;
     else high = mid - 1;
   }
-  if (low > 0 && /[\uD800-\uDBFF]/.test(text[low - 1])) low--;
-  return encode({ text: text.slice(0, low) });
+  if (low > 0 && /[\uD800-\uDBFF]/.test(originalText[low - 1])) low--;
+  return encode(truncatedPayload(originalText.slice(0, low)));
 }
 
 export function nativeToolMediaFields(content: unknown): {

@@ -1,12 +1,15 @@
 {
   "site": "weread.qq.com",
-  "auth": "搜索/榜单只读无需登录;书籍详情走私有接口 i.weread.qq.com,需在持久浏览器登录微信读书",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://weread.qq.com/",
-    "searchApi": "https://weread.qq.com/web/search/global?keyword=<keyword>",
-    "rankingApi": "https://weread.qq.com/web/bookListInCategory/<category>?rank=1",
-    "bookInfoApi": "https://i.weread.qq.com/book/info?bookId=<bookId>"
+    "home": "https://weread.qq.com"
   },
-  "recipes": ["weread-search"],
-  "notes": "公开 Web 接口在 weread.qq.com/web/* 下,Node 直连即可,无需登录。搜索:/web/search/global?keyword=,返回 JSON {books:[{bookInfo:{title,author,bookId,category}}]};weread-search 配方直接 navigate 到该 URL 再读 body 即拿 JSON。榜单:/web/bookListInCategory/<category>?rank=1,category 传 all(全部)、rising(飙升)或数字分类 ID,返回 {books:[{bookInfo:{title,author,bookId},readingCount}]},同样可 navigate+读 body。书籍详情走私有接口 i.weread.qq.com/book/info?bookId=,需登录:先 navigate 到 https://weread.qq.com/ 落域,再用 evaluate 在页面内 fetch('https://i.weread.qq.com/book/info?bookId='+id,{credentials:'include',headers:{Origin:'https://weread.qq.com',Referer:'https://weread.qq.com/'}}),返回 {title,author,publisher,category,intro,newRating};未登录会返回 errcode -2010/-2012,需重新登录。书架/笔记等更深入的个性化数据上游靠 localStorage 快照 + DOM,稳定性差,本配方不收录。"
+  "recipes": [
+    "weread-search"
+  ],
+  "notes": "兼容入口 weread-search 现执行内置 weread/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

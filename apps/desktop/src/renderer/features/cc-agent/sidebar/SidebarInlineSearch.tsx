@@ -97,11 +97,12 @@ export function SidebarInlineSearch({
     onSearchActiveRef.current = onSearchActive;
   });
   useEffect(() => {
-    if (search.query.length > 0) onSearchActiveRef.current?.();
-  }, [search.query]);
+    if (search.trimmed) onSearchActiveRef.current?.();
+  }, [search.trimmed]);
 
   // 静息态行:点击 / 键盘聚焦时展开并把焦点交给真正的输入框(鼠标 hover 时其实已提前展开)。
   const activate = () => {
+    search.resume();
     setForceOpen(true);
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
@@ -162,6 +163,8 @@ export function SidebarInlineSearch({
           )}
           <input
             ref={inputRef}
+            onFocus={search.resume}
+            onClick={search.resume}
             value={search.query}
             onChange={(event) => search.setQuery(event.target.value)}
             placeholder={t('ccAgent.search.placeholder')}
@@ -169,7 +172,7 @@ export function SidebarInlineSearch({
             // leading-none 与静息态「搜索」文字(及其余导航行)完全一致(2026-07
             // 已随导航行一起去掉 mt-0.5,改为纯 flex 垂直居中),避免 hover 展开成
             // 输入框时占位符相对「搜索」发生位移。
-            className="min-w-0 flex-1 bg-transparent text-sm leading-none text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+            className="min-w-0 flex-1 bg-transparent text-sm leading-none text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)]"
           />
           {search.query && (
             <Tip text={t('ccAgent.search.clear')} side="bottom">

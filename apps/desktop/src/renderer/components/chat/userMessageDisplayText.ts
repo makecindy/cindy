@@ -1,3 +1,4 @@
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { captureImContext, type ImMessageSource } from '../../../shared/imMessageSource';
 /**
  * userMessageDisplayText
@@ -77,6 +78,7 @@ export function resolveHookGroupContext(source: {
 export interface UserDisplayTextSource {
   content: string;
   hookSource?: { userText?: string } | null;
+  automationOrigin?: { kind: string };
 }
 
 export function resolveUserDisplayText(
@@ -89,7 +91,8 @@ export function resolveUserDisplayText(
   ),
 ): string {
   const rawDisplayContent = orcaCommunication?.content ?? source.content;
-  if (!source.hookSource) return rawDisplayContent;
+  if (!source.hookSource) return source.automationOrigin?.kind === 'session'
+    ? forwardedRequestDisplayText(rawDisplayContent) : rawDisplayContent;
   return (
     source.hookSource.userText ?? rawDisplayContent.replace(THREAD_CONTEXT_PREFIX_RE, '').trim()
   );

@@ -16,7 +16,7 @@ import { app } from 'electron';
 import claudeLatest from '../../../../../tools/claude/latest.json';
 import codexLatest from '../../../../../tools/codex/latest.json';
 import { download, type ProgressEvent } from '../downloader/index.js';
-import { parseBinaryVersionOutput } from './binary-version-probe.js';
+import { parseBinaryVersionOutput, readBinaryVersionOutput } from './binary-version-probe.js';
 
 export type LinuxRuntimeFallbackKind = 'claude-code' | 'codex';
 
@@ -251,12 +251,9 @@ async function readExecutableVersion(
   signal?: AbortSignal,
 ): Promise<string | null> {
   try {
+    if (signal?.aborted) throw probeCancelledError(binaryPath);
     fs.accessSync(binaryPath, fs.constants.X_OK);
-    const result = await execProbe(binaryPath, ['--version'], {
-      signal,
-      timeoutMs: VERIFY_TIMEOUT_MS,
-    });
-    return result.stdout || result.stderr;
+    return await readBinaryVersionOutput(binaryPath, signal, VERIFY_TIMEOUT_MS);
   } catch {
     if (signal?.aborted) throw probeCancelledError(binaryPath);
     return null;

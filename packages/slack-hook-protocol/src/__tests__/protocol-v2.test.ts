@@ -350,6 +350,13 @@ describe('query 帧字段联动', () => {
     const msg = makeQueryRequest({ queryId: 'q-1', kind: 'workspaces' });
     expectReject({ ...msg, payload: { queryId: 'q-1', kind: 'channels' } }, 'kind must be one of');
   });
+
+  it('recipient 可选; 带上时必须是完整的应用与账号', () => {
+    const msg = roundTrip(
+      makeQueryRequest({ queryId: 'q-1', kind: 'workspaces', recipient: { scopeId: 'cli_app', principalId: 'ou_user' } }),
+    );
+    expectReject({ ...msg, payload: { queryId: 'q-1', kind: 'workspaces', recipient: { scopeId: 'cli_app' } } }, 'recipient');
+  });
 });
 
 describe('v1 帧扩展行为', () => {

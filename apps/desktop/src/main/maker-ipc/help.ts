@@ -73,6 +73,14 @@ const LOCALE_NAME: Record<HelpLocale, string> = {
   en: 'English',
   ja: 'Japanese',
   ko: 'Korean',
+
+  "es": "Spanish",
+  "fr": "French",
+  "de": "German",
+  "pt-PT": "European Portuguese",
+  "pt-BR": "Brazilian Portuguese",
+  "zh-Hant-x-lzh": "Classical Chinese (文言) in Traditional characters, keeping UI names exactly as shown in the app",
+  "zh-Hans-x-lzh": "Classical Chinese (文言) in Simplified characters, keeping UI names exactly as shown in the app",
 };
 
 type HelpOneShotTarget = {
@@ -99,15 +107,17 @@ async function isHelpSessionAgentDispatchAllowed(
   target: HelpOneShotTarget,
   ownerScopeKey: string,
   auxiliaryChainSnapshot: string,
+  // Agent 在派发前解析出的实际模型(Codex 的默认模型只有 thread/start 后才知道)。
+  resolvedModel?: string,
 ): Promise<boolean> {
   if (!target.agentKind) return false;
   if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return false;
-  if (await isAgentOneShotRouteDisabled(target.agentKind, target.options.model)) return false;
+  if (await isAgentOneShotRouteDisabled(target.agentKind, target.options.model ?? resolvedModel)) return false;
   return isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
 }
 
 function normalizeLocale(locale: unknown): HelpLocale {
-  return locale === 'zh-CN' || locale === 'zh-TW' || locale === 'en' || locale === 'ja' || locale === 'ko'
+  return locale === 'zh-CN' || locale === 'zh-TW' || locale === 'en' || locale === 'ja' || locale === 'ko' || locale === 'es' || locale === 'fr' || locale === 'de' || locale === 'pt-PT' || locale === 'pt-BR' || locale === 'zh-Hant-x-lzh' || locale === 'zh-Hans-x-lzh'
     ? locale
     : 'en';
 }
@@ -169,8 +179,8 @@ async function routeHelpTopics(
     });
     if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return [];
     let raw = utility.ok ? utility.text : '';
-    const beforeSessionAgentDispatch = () =>
-      isHelpSessionAgentDispatchAllowed(target, ownerScopeKey, auxiliaryChainSnapshot);
+    const beforeSessionAgentDispatch = (route?: { model?: string }) =>
+      isHelpSessionAgentDispatchAllowed(target, ownerScopeKey, auxiliaryChainSnapshot, route?.model);
     // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
     if (
       !raw &&
@@ -331,13 +341,10 @@ function buildOneShotOptions(agentKind: AgentKind): OneShotOptions {
       timeoutMs: 20_000,
     };
   }
-  // Pi 的可用模型来自动态 provider 目录(BYOM 也可能只有本地模型)，不硬编码
-  // GPT id；让 Maker 按该 Pi agent 的当前能力选择默认模型。
-  if (agentKind === 'pi') return { timeoutMs: 20_000 };
-  return {
-    model: 'gpt-5.4-mini',
-    timeoutMs: 20_000,
-  };
+  // Pi 的可用模型来自动态 provider 目录(BYOM 也可能只有本地模型)，Codex 的可用型号
+  // 随账号与上游变化(写死的型号下线后兜底会整条失败)：两者都不硬编码模型 id，
+  // 让 Maker 按该 agent 的当前能力选择默认模型。
+  return { timeoutMs: 20_000 };
 }
 
 async function pickHelpOneShotTarget(
@@ -388,8 +395,8 @@ export function registerMakerHelpIpc(maker: Maker): void {
         });
         if (!isHelpOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return { kind: 'no-answer' };
         let raw = utility.ok ? utility.text : '';
-        const beforeSessionAgentDispatch = () =>
-          isHelpSessionAgentDispatchAllowed(target, ownerScopeKey, auxiliaryChainSnapshot);
+        const beforeSessionAgentDispatch = (route?: { model?: string }) =>
+          isHelpSessionAgentDispatchAllowed(target, ownerScopeKey, auxiliaryChainSnapshot, route?.model);
         // 自动档保留会话 agent 兜底。自定义 1–3 用尽即停，不再打当前任务大模型。
         if (
           !raw &&

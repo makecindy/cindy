@@ -20,6 +20,7 @@ describe('subscription replay scheduler', () => {
     let presence: Map<string, boolean>;
     let directoryOnline: Map<string, boolean>;
     let relayOnline: boolean;
+    let retained: Set<string>;
     let unresponsive: boolean;
     let tornDown: boolean;
     let refs: Array<{ deviceId: string; topics: string[] }>;
@@ -31,6 +32,7 @@ describe('subscription replay scheduler', () => {
       presence = new Map();
       directoryOnline = new Map();
       relayOnline = true;
+      retained = new Set();
       unresponsive = false;
       tornDown = false;
       refs = [{ deviceId, topics: ['session:one'] }];
@@ -41,6 +43,7 @@ describe('subscription replay scheduler', () => {
         remoteSubscribe,
         isLinkTornDown: () => tornDown,
         isRelayOnline: () => relayOnline,
+        hasOfflineDirectPath: id => retained.has(id),
         isDeviceUnresponsive: () => unresponsive,
         getPresenceAvailability: (id) => presence.get(id)
           ?? (directoryOnline.get(id) === false ? false : undefined),
@@ -87,6 +90,20 @@ describe('subscription replay scheduler', () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(remoteSubscribe).toHaveBeenCalledTimes(++attempts);
       }
+    });
+
+    // Unit: actual scheduler with a retained M and an offline neighbour. Previously
+    // relay/presence gates blocked even the first replay; lease loss must end retries.
+    it('replays only the healthy retained data peer during signaling loss and stops when that proof expires', async () => {
+      relayOnline = false; retained.add(deviceId); presence.set(deviceId, false);
+      refs.push({ deviceId: 'other', topics: ['sessions'] });
+      scheduler.replay('data-recovery');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(remoteSubscribe).toHaveBeenCalledExactlyOnceWith(deviceId, ['session:one']);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+      retained.clear(); await vi.advanceTimersByTimeAsync(60_000);
+      expect(remoteSubscribe).toHaveBeenCalledTimes(2);
     });
 
     it('stops on explicit unavailability and resumes on the next online trigger', async () => {

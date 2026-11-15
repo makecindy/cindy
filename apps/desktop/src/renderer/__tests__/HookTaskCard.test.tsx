@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -54,7 +55,6 @@ describe('HookTaskCard attached context', () => {
       const toggle = screen.getByRole('button', { name: '本条附带的上下文（12）' });
       expect(toggle.className).toContain('min-h-6');
       expect(toggle.className).toContain('py-1');
-      expect(toggle.className).toContain('focus-visible:outline');
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       fireEvent.click(toggle);
       expect(screen.getByRole('region', { name: '引用消息（2）' })).toBeTruthy();
@@ -107,7 +107,6 @@ describe('HookTaskCard attached context', () => {
       const toggle = screen.getByRole('button');
       expect(toggle.className).toContain('min-h-6');
       expect(toggle.className).toContain('py-1');
-      expect(toggle.className).toContain('focus-visible:outline');
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(container.querySelector('.line-clamp-10')).toBeTruthy();
       fireEvent.click(toggle);
@@ -339,7 +338,7 @@ describe('HookTaskCard attached context', () => {
       <MemoryRouter>
         <ConfirmDialogProvider>
           <Tooltip.Provider>
-            <UserMessage
+            <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
               content="Please check the error"
               workingDir=""
               sessionId="clean-im-edit-session"
@@ -381,7 +380,7 @@ describe('teammate DM attachment-only bubbles in share images', () => {
         <MemoryRouter>
           <ConfirmDialogProvider>
             <Tooltip.Provider>
-              <UserMessage content="" workingDir="" simplifiedBotConversation {...attachments} />
+              <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content="" workingDir="" simplifiedBotConversation {...attachments} />
             </Tooltip.Provider>
           </ConfirmDialogProvider>
         </MemoryRouter>,

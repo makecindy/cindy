@@ -28,7 +28,7 @@ import * as authManager from './authManager';
 import { createLogger } from './logger';
 import { onQuit } from './lifecycle';
 import { getClientEndpoint } from './clientEndpointsService';
-import { outboundFetch } from './maker-host/outbound-fetch';
+import { outboundFetch } from './maker-host/outbound-fetch.desktop';
 
 const log = createLogger('heartbeat');
 

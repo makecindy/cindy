@@ -1,9 +1,15 @@
 {
   "site": "jd.com",
-  "auth": "需要在持久浏览器登录京东;价格与详情图依赖登录态 + 滚动懒加载",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "itemPage": "https://item.jd.com/<sku>.html"
+    "home": "https://item.jd.com"
   },
-  "recipes": ["jd-item"],
-  "notes": "京东无稳定公开接口,商品详情靠扒 DOM。注意两点:(1) 价格、店铺、详情区大图是登录后 + 滚动到视口才加载的,所以必须先 navigate 到 item.jd.com/<sku>.html、分段 scrollTo 触发懒加载、再读 DOM(jd-item 配方已封装,结果直接在 output(已自动解包))。(2) 未登录时价格常拿不到,会回退成提示文案。\n关键选择器:价格 .J-p-<sku> 或 .p-price strong;标题 .sku-name / .product-title;店铺 .J-shop-name;商品图 img[src*=\"360buyimg.com\"](去重后取前若干张)。规格参数没有结构化容器,从 document.body.innerText 里「商品编号 ... 包装清单」之间按行成对(键/值)切出。sku 即商品 URL 里的数字 id,如 https://item.jd.com/100291143898.html 的 100291143898。"
+  "recipes": [
+    "jd-item"
+  ],
+  "notes": "兼容入口 jd-item 现执行内置 jd/item，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

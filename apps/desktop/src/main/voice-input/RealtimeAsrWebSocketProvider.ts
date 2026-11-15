@@ -3,7 +3,7 @@ import type { ClientRequest, IncomingMessage } from 'node:http';
 import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core';
 import type { VoiceInputRealtimeProtocolProfile } from '../../shared/voiceInputAsrProfiles.js';
 import { createLogger } from '../logger.js';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
+import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { openAiLanguageCode } from './language.js';
 import { describeAsrHandshakeTraceId, describeAsrWebSocketTarget } from './voiceInputAsrConfig.js';
 import {

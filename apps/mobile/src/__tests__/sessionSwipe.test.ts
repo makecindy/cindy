@@ -498,7 +498,9 @@ describe('会话元数据写的设备解析(首页与会话页同口径)', () =>
 
   it('首页 / 设备页写路径共用同一解析,回滚同样先释放在途登记', () => {
     const source = read('src/session/useSessionListActions.ts');
-    expect(source).toContain('resolveSessionWriteDevices(session.id, session)');
+    // PR #6863：详情归档也复用此入口，必须保留路由 RPC 设备覆盖，
+    // 乐观写与回滚仍使用解析出的物理 shard（跨文件设备路由 guard）。
+    expect(source).toContain('resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId)');
     expect(source.indexOf('releasePending();')).toBeLessThan(source.indexOf('upsertDeviceSession(shardId'));
   });
 });

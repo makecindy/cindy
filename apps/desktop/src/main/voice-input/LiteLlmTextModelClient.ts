@@ -18,8 +18,8 @@ const REFINER_TIMING_ENABLED = process.env.XDT_VOICE_INPUT_REFINER_TIMING === '1
 // Caps the model's output text and any single SSE event. The whole stream gets
 // a far larger cap: each event wraps one or two characters in ~180 chars of
 // JSON, so a 64K stream cap rejected every refinement over ~550 characters.
-// 2M still bounds endless framing-only events (each chunk rearms the idle
-// timeout) while staying ~10x above the managed server's 1,024-token output.
+// The stream cap also bounds framing overhead. Only nonempty model content
+// rearms the idle timeout; SSE heartbeats are not refinement progress.
 const MAX_RESPONSE_CHARS = 64_000;
 const MAX_STREAM_CHARS = 2_000_000;
 
@@ -169,13 +169,19 @@ export class LiteLlmTextModelClient implements TextModelClient {
           },
         ],
       });
+      // The first target's URL is kept for the auth retry: a managed voice
+      // session may be replaced by an ASR reconnect meanwhile, and the request
+      // was already counted against the session it first resolved to.
+      let targetUrl: string | undefined;
       const sendRequest = async (forceRefresh = false): Promise<UndiciResponse> => {
-        const target = this.requestTargetProvider
+        const resolved = this.requestTargetProvider
           ? await this.requestTargetProvider(forceRefresh ? { forceRefresh: true } : undefined)
           : {
               url: joinProxyPath(this.baseUrl!, '/v1/chat/completions'),
               authorization: `Bearer ${this.proxyApiKey!}`,
             };
+        targetUrl ??= resolved.url;
+        const target = { url: targetUrl, authorization: resolved.authorization };
         // 代理解析放在看门狗起表之前:它是本机一次解析(带 30s 缓存),不该占用
         // response-headers 的等待预算。
         const dispatcher = await resolveRefinerDispatcher(target.url, refinerDispatcher);
@@ -216,7 +222,7 @@ export class LiteLlmTextModelClient implements TextModelClient {
 
       const { content, usageSummary, servedModel, rawChars, bodyAt } = await readStreamingChatCompletion({
         body: response.body,
-        onChunk: () => armIdleTimeout('response stream'),
+        onTextProgress: () => armIdleTimeout('response stream'),
         onFirstByte: () => {
           if (firstByteAt === null) firstByteAt = performance.now();
         },
@@ -280,7 +286,7 @@ export class LiteLlmTextModelClient implements TextModelClient {
 
 async function readStreamingChatCompletion(input: {
   body: NodeReadableStream;
-  onChunk: () => void;
+  onTextProgress: () => void;
   onFirstByte: () => void;
   onTextContent: (content: string) => void;
 }): Promise<{
@@ -303,7 +309,6 @@ async function readStreamingChatCompletion(input: {
       const { done, value } = await reader.read();
       if (done) break;
       input.onFirstByte();
-      input.onChunk();
       const chunk = decoder.decode(value, { stream: true });
       rawChars += chunk.length;
       assertResponseWithinLimit(rawChars, MAX_STREAM_CHARS);
@@ -325,6 +330,7 @@ async function readStreamingChatCompletion(input: {
           }
           const delta = extractDeltaContent(event.data);
           if (delta) {
+            if (delta.trim()) input.onTextProgress();
             content += delta;
             assertResponseWithinLimit(content.length);
             input.onTextContent(content);

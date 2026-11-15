@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Catalog, CatalogModel, Provider } from '@cindy/model-providers';
-import { projectSessionContextWindow, resolveSessionContextWindow, resolveVerifiedContextWindow } from '../sessionContextWindow';
+import { projectSessionContextWindow, resolveRouteContextWindowBounds, resolveSessionContextWindow, resolveVerifiedContextWindow } from '../sessionContextWindow';
 import { shouldRebuildForModelWindowSwitch } from '../../main/maker-ipc/contextOverflowRollover';
 
 const model: CatalogModel = {
@@ -122,5 +122,62 @@ describe('session context read projection', () => {
     const before = { providers: [provider('openai', { ...model, contextWindow: 1_050_000 })] };
     expect(resolveSessionContextWindow(before, session)).toBe(1_050_000);
     expect(resolveSessionContextWindow(catalog, session)).toBe(272_000);
+  });
+});
+
+describe('route context window bounds', () => {
+  const boundsFor = (row: CatalogModel) =>
+    resolveRouteContextWindowBounds(
+      { providers: [provider('openai', row)] } as unknown as Pick<Catalog, 'providers'>,
+      'claude-code',
+      'openai',
+      row.id,
+    );
+
+  it('uses a verified context window as the physical max', () => {
+    // 已核实路由：resolveVerifiedContextWindow 按 min(预算, contextWindowMax ?? contextWindow)
+    // 夹，contextWindow 就是真容量。
+    expect(boundsFor({ ...model, contextWindow: 1_000_000 })).toEqual({
+      providerId: 'openai', defaultWindow: 1_000_000, maxWindow: 1_000_000,
+    });
+  });
+
+  it('prefers a declared max over the verified context window', () => {
+    expect(boundsFor({ ...model, contextWindow: 200_000, contextWindowMax: 1_000_000 })).toEqual({
+      providerId: 'openai', defaultWindow: 200_000, maxWindow: 1_000_000,
+    });
+  });
+
+  it('keeps an unverified declared max as the ceiling', () => {
+    // 发现流程只拿到 max 的形态：未核实也按它夹（resolveConfiguredContextWindow）。
+    expect(boundsFor({
+      ...model, contextWindow: 200_000, contextWindowMax: 400_000, contextWindowVerified: false,
+    })).toEqual({ providerId: 'openai', defaultWindow: 200_000, maxWindow: 400_000 });
+  });
+
+  it('does not promote an unverified fallback context window to a ceiling', () => {
+    // 自定义连接未声明窗口：contextWindow 只是兜底默认（DEFAULT_CUSTOM_CONTEXT_WINDOW=200K），
+    // main 刻意不按它夹 —— 报成 maxWindow 会把档位基准钉在 200K，让「模型默认 1M」显示成 500%
+    // （用户实测报障，2026-09-22）。默认窗口仍要给（没有模型级上限时它就是运行窗口）。
+    expect(boundsFor({ ...model, contextWindow: 200_000, contextWindowVerified: false })).toEqual({
+      providerId: 'openai', defaultWindow: 200_000, maxWindow: null,
+    });
+  });
+
+  it('falls back to a declared max when the route has no context window', () => {
+    expect(boundsFor({
+      ...model, contextWindow: 0, contextWindowMax: 400_000, contextWindowVerified: false,
+    })).toEqual({ providerId: 'openai', defaultWindow: 400_000, maxWindow: 400_000 });
+  });
+
+  it('reports nothing for an ambiguous or empty route', () => {
+    const row = { ...model, contextWindow: 200_000, contextWindowVerified: false };
+    expect(resolveRouteContextWindowBounds(
+      { providers: [provider('a', row), provider('b', row)] } as unknown as Pick<Catalog, 'providers'>,
+      'claude-code',
+      null,
+      row.id,
+    )).toBeNull();
+    expect(boundsFor({ ...model, contextWindow: 0, contextWindowVerified: false })).toBeNull();
   });
 });

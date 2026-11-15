@@ -26,6 +26,8 @@ const defaultPrefs = {
   manualProjectOrder: [],
   projectFilter: 'all',
   projectFilterOwner: '',
+  teammateFilter: 'all',
+  teammateFilterOwner: '',
   vendorFilter: 'all',
   lastActivityFilter: 'all',
   viewMode: 'list',
@@ -33,6 +35,17 @@ const defaultPrefs = {
 } as const;
 
 describe('homeViewPreferenceStore', () => {
+  it('persists teammate multi-selection for its owner and resets without changing project choices', async () => {
+    const { saveHomeViewPreferences, readHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
+    await saveHomeViewPreferences({ teammateFilter: { owner: OWNER, value: ['cindy', 'filo'] }, projectFilter: { owner: OWNER, value: ['project'] } });
+    expect((await readHomeViewPreferences(OWNER)).teammateFilter).toEqual(['cindy', 'filo']);
+    expect((await readHomeViewPreferences('another-owner')).teammateFilter).toBe('all');
+    await saveHomeViewPreferences({ teammateFilter: { owner: OWNER, value: 'none' } });
+    expect((await readHomeViewPreferences(OWNER)).teammateFilter).toBe('none');
+    expect((await readHomeViewPreferences('another-owner')).teammateFilter).toBe('all');
+    await saveHomeViewPreferences({ teammateFilter: { owner: OWNER, value: 'all' } });
+    expect(await readHomeViewPreferences(OWNER)).toMatchObject({ teammateFilter: 'all', projectFilter: ['project'] });
+  });
   it('does not overwrite saved grouping when the merge read fails', async () => {
     const { saveHomeViewPreferences, readHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
     await saveHomeViewPreferences({ groupByProject: false, groupDialogue: true });
@@ -117,6 +130,8 @@ describe('homeViewPreferenceStore', () => {
     };
     await expect(readHomeViewPreferences(OWNER)).resolves.toEqual({
       ...expected,
+      teammateFilter: 'all',
+      teammateFilterOwner: '',
       selectedDevice: { deviceId: 'devA', name: 'Mac A' },
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({
@@ -202,6 +217,19 @@ describe('homeViewPreferenceStore', () => {
       ...defaultPrefs,
       selectedDevice: { deviceId: 'devA', name: 'Mac A' },
     });
+  });
+
+  it('keeps group collapse per account, merges patches, and bounds stored keys', async () => {
+    const { readHomeCollapsePreferences, saveHomeCollapsePreferences } = await import('@/session/homeViewPreferenceStore');
+    await saveHomeCollapsePreferences(OWNER, { pinnedCollapsed: true, collapsedProjectKeys: ['dev:/a'] });
+    await saveHomeCollapsePreferences(OWNER, { expandedAutomationGroups: ['auto-1'] });
+    await expect(readHomeCollapsePreferences(OWNER)).resolves.toEqual({
+      pinnedCollapsed: true, collapsedProjectKeys: ['dev:/a'], expandedAutomationGroups: ['auto-1'],
+    });
+    await expect(readHomeCollapsePreferences('another-owner')).resolves.toEqual({});
+    const keys = Array.from({ length: 250 }, (_, index) => `dev:/p${index}`);
+    await saveHomeCollapsePreferences(OWNER, { collapsedProjectKeys: keys });
+    expect((await readHomeCollapsePreferences(OWNER)).collapsedProjectKeys).toEqual(keys.slice(-200));
   });
 
   it('keeps old-blob defaults: project on, dialogue group off, time sort, active', async () => {

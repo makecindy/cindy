@@ -24,12 +24,15 @@ export interface ProviderLocalLoadDeps {
   resolveImplicitProvider(agentKind: AgentKind, model: string): Promise<string | null>;
   /** 替其他电脑运行、正在运行一轮的远程 Agent 任务用的本机供应商(每个任务一项)。 */
   hostRunningProviders(): readonly string[];
+  /** 本机应用 API 会话不在普通任务表中；每个本机运行中的会话一项。 */
+  applicationRunningProviders?(): readonly string[];
 }
 
 export async function countProviderRunningTurns(deps: ProviderLocalLoadDeps): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   const add = (providerId: string) => counts.set(providerId, (counts.get(providerId) ?? 0) + 1);
   for (const providerId of deps.hostRunningProviders()) add(providerId);
+  for (const providerId of deps.applicationRunningProviders?.() ?? []) add(providerId);
   const running = deps.listTurnRunningSessions();
   if (running.length === 0) return counts;
   const implicit = new Map<string, Promise<string | null>>();

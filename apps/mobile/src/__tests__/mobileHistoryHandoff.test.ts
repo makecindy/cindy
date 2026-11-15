@@ -115,6 +115,51 @@ describe('mobile history handoff', () => {
     view.setActive(false);
   });
 
+  // Regression: the Host can save a reply before its final text drains and complete
+  // the same row later. A page read between those writes must not cut off the
+  // streamed answer. Unit: real handoff + renderer, no network or timers.
+  it('keeps a streamed answer while history only has an earlier saved prefix', async () => {
+    const question = row('user');
+    const finalText = '上游修了以后，这个本地补丁就可以删掉。';
+    const savedPrefix = { ...row('answer'), content: '上游修了以' };
+    let pageRows: RemoteMessage[] = [question];
+    const view = new HistoryViewController<RemoteMessage>({
+      refreshOnResume: false,
+      page: async () => ({ version: 1, items: projectHistoryView(pageRows, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    view.setActive(true);
+    await view.refresh();
+    const handoff = createHandoff();
+    const render = (raw: RemoteMessage[]) => {
+      const snapshot = view.getSnapshot();
+      const state = handoff.reconcile(snapshot, raw);
+      return {
+        pending: state.pending,
+        bodies: buildMobileHistoryRenderItems({ view, snapshot, messages: state.messages,
+          pendingHandoff: state.pending, staleTail: state.tail, streaming: false, sessionId: 's' })
+          .filter(item => item.type === 'message' && item.message.kind === 'assistant')
+          .map(item => item.type === 'message' ? item.message.body : ''),
+      };
+    };
+    expect(render([question, { ...row('answer', true), content: { text: '上游修了', isStreaming: true } }]).pending)
+      .toEqual(new Set(['answer']));
+
+    pageRows = [question, savedPrefix];
+    await view.refresh(false, true);
+    const finalized = { ...row('answer'), content: finalText };
+    expect(render([question, finalized]).bodies).toEqual([finalText]);
+
+    // History catches up with the completed row: it takes over again.
+    pageRows = [question, { ...savedPrefix, content: finalText }];
+    await view.refresh(false, true);
+    const caughtUp = render([question, finalized]);
+    expect(caughtUp.bodies).toEqual([finalText]);
+    expect(caughtUp.pending.size).toBe(0);
+    view.setActive(false);
+  });
+
   // Regression: an updated list body has the same ID/time as the cached page. The
   // old tail-only rule hid it. Unit: real handoff + renderer, no network or timers.
   it('shows a newer received body in place until a page read after that push takes over', async () => {

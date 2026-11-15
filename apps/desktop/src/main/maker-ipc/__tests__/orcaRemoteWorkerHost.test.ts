@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
+  ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
   ORCA_REMOTE_WORKER_VERSION,
@@ -8,6 +9,7 @@ import {
 
 import {
   createOrcaRemoteWorkerHost,
+  createOrcaRemoteWorkerSessionOpener,
   registerOrcaRemoteWorkerHandlers,
   type OrcaRemoteWorkerCaller,
   type OrcaRemoteWorkerExistingSession,
@@ -64,6 +66,54 @@ function setup(
 }
 
 describe('orca remote worker host', () => {
+  // Unit: discovery stays on the Worker host with the same caller boundary as
+  // open. The old coverage only exercised the local-model creation path.
+  it('serves Agent locations only to an authorized device caller', async () => {
+    const { deps } = setup();
+    deps.readModels = vi.fn(async input => ({ agentDeviceId: input.agentDeviceId ?? null,
+      locations: [{ agentDeviceId: 'provider-pc', name: 'Provider PC' }], codex: [{ id: 'remote-only', label: 'Remote model' }] }));
+    const host = createOrcaRemoteWorkerHost(deps);
+    expect(host.caps()).toMatchObject({ agentDevice: true });
+    await expect(host.models({ agent: 'codex', agentDeviceId: 'provider-pc' })).resolves.toMatchObject({ agentDeviceId: 'provider-pc', codex: [{ id: 'remote-only' }] });
+    const guest = createOrcaRemoteWorkerHost({ ...deps, getCaller: () => ({ controllerDeviceId: 'guest', sharedTask: {} }) });
+    await expect(guest.models({})).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(deps.readModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists the resolved remote Agent route with the Worker’s directory before bootstrap', async () => {
+    const row = { id: 'w_remote_1', agentKind: 'codex', model: 'remote-only', agentDeviceId: 'provider-pc',
+      providerId: 'openai', workingDir: '/worker/project', effort: 'low', fastMode: false };
+    const insertSession = vi.fn(), bootstrapSession = vi.fn(), broadcastSessionCreated = vi.fn();
+    const openSession = vi.fn(async (input, commit) => { expect(input.body).toMatchObject({
+      agentDeviceId: 'provider-pc', providerId: 'openai', model: 'remote-only', workingDir: '/worker/project' });
+      const value = await commit(row, () => {}); return { row, value }; });
+    const resolveAgentSelection = vi.fn(async input => ({ ...input, model: 'remote-only', providerId: 'openai' }));
+    const opener = createOrcaRemoteWorkerSessionOpener({
+      openSession: openSession as unknown as Parameters<typeof createOrcaRemoteWorkerSessionOpener>[0]['openSession'],
+      insertSession, bootstrapSession, broadcastSessionCreated, resolveAgentSelection,
+    });
+    await expect(opener({ ...request, agentKind: 'codex', permissionMode: 'auto', agentDeviceId: 'provider-pc', workingDir: '/worker/project' },
+      { leadDeviceId: 'lead-pc', leadDeviceName: 'Lead', leadSessionId: 'lead-1', leadTitle: 'Lead', workerLabel: 'test' })).resolves.toMatchObject({
+        agentDeviceId: 'provider-pc', providerId: 'openai', model: 'remote-only', workingDir: '/worker/project' });
+    expect(insertSession).toHaveBeenCalledWith(row);
+    expect(bootstrapSession).toHaveBeenCalledWith(row, expect.any(Function));
+  });
+  // Unit: an account switch during remote catalog admission cannot create a
+  // task in the next owner's database. Older coverage had no asynchronous route.
+  it('rejects an owner switch while resolving the model computer', async () => {
+    const openSession = vi.fn();
+    let current = true;
+    const opener = createOrcaRemoteWorkerSessionOpener({ openSession,
+      captureOwner: () => () => { if (!current) throw new Error('owner changed'); },
+      resolveAgentSelection: async input => { current = false; return input; },
+      insertSession: vi.fn(), bootstrapSession: vi.fn(), broadcastSessionCreated: vi.fn(),
+    });
+    await expect(opener({ ...request, agentKind: 'codex', permissionMode: 'auto', agentDeviceId: 'provider-pc' },
+      { leadDeviceId: 'lead-pc', leadDeviceName: 'Lead', leadSessionId: 'lead-1', leadTitle: 'Lead', workerLabel: 'test' }))
+      .rejects.toThrow('owner changed');
+    expect(openSession).not.toHaveBeenCalled();
+  });
+
   it('only answers device-link callers', async () => {
     const { host } = setup({ caller: null });
     expect(() => host.caps()).toThrow(/PRECONDITION_FAILED/);
@@ -205,6 +255,7 @@ describe('orca remote worker host', () => {
     expect([...handlers.keys()].sort()).toEqual(
       [
         ORCA_REMOTE_WORKER_CAPS_CHANNEL,
+        ORCA_REMOTE_WORKER_MODELS_CHANNEL,
         ORCA_REMOTE_WORKER_OPEN_CHANNEL,
         ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
       ].sort(),

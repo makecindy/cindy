@@ -4,8 +4,14 @@
  * 同一份 `botImConnection.list()` 投影 + `botImConnection:changed` 广播: 添加、移除与
  * 传输层状态变化都走广播刷新。线上类型与语义见 shared/botImConnection.ts。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
+import {
+  DiscordChannelAccessUnsupportedError,
+  type DiscordChannelAccessSource,
+} from '@/hooks/useDiscordChannelAccess';
+
+import { BOT_IM_DISCORD_ACCESS_VERSION } from '../../../shared/botImConnection';
 import type {
   BotImAdoptablePersonalBotsPayload,
   BotImAdoptPersonalBotInput,
@@ -18,7 +24,7 @@ import type {
   BotImGroupActivationMode,
 } from '../../../shared/botImConnection';
 
-type BotImConnectionApi = Window['electronAPI']['botImConnection'];
+export type BotImConnectionApi = Window['electronAPI']['botImConnection'];
 
 export function botImConnectionApi(): BotImConnectionApi | null {
   // 副窗口 / 旧 preload 没有这个命名空间时整块功能静默隐藏, 不抛错。
@@ -27,18 +33,25 @@ export function botImConnectionApi(): BotImConnectionApi | null {
   return api && typeof api.list === 'function' ? api : null;
 }
 
-export function useBotImConnections(): {
+/**
+ * `scope` says which computer's connections these are (the settings target); the API object itself is read
+ * when the subscription starts, because a window API is not a render-stable identity.
+ */
+export function useBotImConnections(api: BotImConnectionApi | null = botImConnectionApi(), scope: unknown = null): {
   payload: BotImConnectionListPayload | null;
   /** 首次读取还在途; 读取失败或没有 IPC 时为 false, payload 保持 null。 */
   loading: boolean;
   apply: (next: BotImConnectionListPayload) => void;
 } {
   const [payload, setPayload] = useState<BotImConnectionListPayload | null>(null);
-  const [loading, setLoading] = useState(() => botImConnectionApi() !== null);
+  const [loading, setLoading] = useState(() => api !== null);
+  const apiRef = useRef(api);
+  apiRef.current = api;
 
   useEffect(() => {
-    const api = botImConnectionApi();
+    const api = apiRef.current;
     if (!api) return;
+    setPayload(null);
     let cancelled = false;
     const unsubscribe = api.onChanged((next) => {
       if (!cancelled) setPayload(next);
@@ -59,74 +72,95 @@ export function useBotImConnections(): {
       cancelled = true;
       unsubscribe();
     };
-  }, []);
+  }, [scope]);
 
   return { payload, loading, apply: setPayload };
 }
 
-export function addBotImConnection(input: BotImConnectionAddInput): Promise<BotImConnectionAddResult> {
-  const api = botImConnectionApi();
+export function addBotImConnection(api: BotImConnectionApi | null, input: BotImConnectionAddInput): Promise<BotImConnectionAddResult> {
   if (!api) return Promise.reject(new Error('botImConnection IPC unavailable'));
   return api.add(input);
 }
 
-export function removeBotImConnection(id: string): Promise<BotImConnectionRemoveResult> {
-  const api = botImConnectionApi();
+export function removeBotImConnection(api: BotImConnectionApi | null, id: string): Promise<BotImConnectionRemoveResult> {
   if (!api) return Promise.reject(new Error('botImConnection IPC unavailable'));
   return api.remove({ id });
 }
 
 /** 旧 preload 没有群聊接口时整个「群聊」小节不显示。 */
-export function botImConnectionGroupsSupported(): boolean {
-  const api = botImConnectionApi();
+export function botImConnectionGroupsSupported(api: BotImConnectionApi | null = botImConnectionApi()): boolean {
   return !!api && typeof api.listGroups === 'function' && typeof api.setGroupActivation === 'function';
 }
 
-export function listBotImConnectionGroups(id: string): Promise<BotImConnectionGroupsPayload> {
-  const api = botImConnectionApi();
+export function listBotImConnectionGroups(api: BotImConnectionApi | null, id: string): Promise<BotImConnectionGroupsPayload> {
   if (!api?.listGroups) return Promise.reject(new Error('botImConnection IPC unavailable'));
   return api.listGroups({ id });
 }
 
 export function setBotImConnectionGroupActivation(
+  api: BotImConnectionApi | null,
   id: string,
   chatId: string,
   mode: BotImGroupActivationMode,
 ): Promise<BotImConnectionGroupsPayload> {
-  const api = botImConnectionApi();
   if (!api?.setGroupActivation) return Promise.reject(new Error('botImConnection IPC unavailable'));
   return api.setGroupActivation({ id, chatId, mode });
 }
 
+/** 旧 preload / 旧电脑没有 Discord 频道白名单接口时整个小节不显示。 */
+export function botImConnectionDiscordChannelsSupported(api: BotImConnectionApi | null = botImConnectionApi()): boolean {
+  return !!api && typeof api.listDiscordChannels === 'function' && typeof api.setDiscordChannelAccess === 'function';
+}
+
+/** 某条 Discord 连接自己的白名单读写（只带连接 id，归属校验在主进程 / 伙伴设置操作里）。 */
+export function discordChannelAccessSourceFor(api: BotImConnectionApi, id: string): DiscordChannelAccessSource {
+  return {
+    async load() {
+      const payload = await api.listDiscordChannels!({ id });
+      // 对端电脑太旧（读到的不是含服务器级设置的白名单版本）：整段拒绝编辑，不猜、不写。
+      if (payload.accessVersion !== BOT_IM_DISCORD_ACCESS_VERSION) throw new DiscordChannelAccessUnsupportedError();
+      return { guilds: payload.guilds, access: payload.access, online: payload.online };
+    },
+    async save(access) {
+      return (await api.setDiscordChannelAccess!({ id, access })).access;
+    },
+  };
+}
+
 /** 旧 preload 没有隐藏任务接口时整个小节不显示。 */
-export function botImConnectionLanesSupported(): boolean {
-  const api = botImConnectionApi();
+export function botImConnectionLanesSupported(api: BotImConnectionApi | null = botImConnectionApi()): boolean {
   return !!api && typeof api.listLanes === 'function' && typeof api.resetLane === 'function';
 }
 
-export function listBotImConnectionLanes(id: string): Promise<BotImConnectionLanesPayload> {
-  const api = botImConnectionApi();
+export function listBotImConnectionLanes(api: BotImConnectionApi | null, id: string): Promise<BotImConnectionLanesPayload> {
   if (!api?.listLanes) return Promise.reject(new Error('botImConnection IPC unavailable'));
   return api.listLanes({ id });
 }
 
 /** 让一条隐藏任务重新开始(下一条消息从干净的上下文开始, 记录保留)。 */
-export function resetBotImConnectionLane(id: string, sessionId: string): Promise<BotImConnectionLanesPayload> {
-  const api = botImConnectionApi();
+export function resetBotImConnectionLane(api: BotImConnectionApi | null, id: string, sessionId: string): Promise<BotImConnectionLanesPayload> {
   if (!api?.resetLane) return Promise.reject(new Error('botImConnection IPC unavailable'));
   return api.resetLane({ id, sessionId });
 }
 
+/** Old preload keeps viewing/restart available without advertising archive. */
+export function botImConnectionLaneArchiveSupported(api: BotImConnectionApi | null = botImConnectionApi()): boolean {
+  return typeof api?.archiveLane === 'function';
+}
+
+export function archiveBotImConnectionLane(api: BotImConnectionApi | null, id: string, sessionId: string): Promise<BotImConnectionLanesPayload> {
+  if (!api?.archiveLane) return Promise.reject(new Error('botImConnection IPC unavailable'));
+  return api.archiveLane({ id, sessionId });
+}
+
 /** 设置 → IM 机器人 里可以移给伙伴的个人 bot; 旧 preload 没有这个接口时当作没有。 */
-export function listAdoptablePersonalBots(): Promise<BotImAdoptablePersonalBotsPayload> {
-  const api = botImConnectionApi();
+export function listAdoptablePersonalBots(api: BotImConnectionApi | null): Promise<BotImAdoptablePersonalBotsPayload> {
   if (!api?.listAdoptable) return Promise.resolve({ bots: [] });
   return api.listAdoptable();
 }
 
 /** 把个人 bot 移给伙伴(个人 bot 随之清空)。 */
-export function adoptPersonalBot(input: BotImAdoptPersonalBotInput): Promise<BotImConnectionAddResult> {
-  const api = botImConnectionApi();
+export function adoptPersonalBot(api: BotImConnectionApi | null, input: BotImAdoptPersonalBotInput): Promise<BotImConnectionAddResult> {
   if (!api?.adopt) return Promise.reject(new Error('botImConnection IPC unavailable'));
   return api.adopt(input);
 }

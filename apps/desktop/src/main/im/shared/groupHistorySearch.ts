@@ -212,3 +212,39 @@ export async function searchGroupHistory(args: {
   }
   return [...matched.hits, ...fallback].slice(0, limit);
 }
+
+/** Exact lane/message lookup; filenames alone never constitute a downloadable image. */
+export async function getGroupHistoryImages(args: {
+  lane: GroupHistorySearchLane;
+  messageId: string;
+}): Promise<{
+  imageRefs: import('@cindy/im').TelegramHistoryImageRef[];
+} | null> {
+  assertLane(args.lane);
+  const rows = await getDbClient().query<{ imageRefs: string | null }>(
+    'SELECT image_refs AS imageRefs FROM hook_group_messages WHERE provider = ? AND chat_id = ? AND thread_id = ? AND message_id = ? LIMIT 1',
+    [args.lane.provider, args.lane.chatId, args.lane.threadId, args.messageId],
+  );
+  if (!rows[0]) return null;
+  try {
+    const refs: unknown = JSON.parse(rows[0].imageRefs ?? '[]');
+    if (!Array.isArray(refs) || refs.length > 4) return { imageRefs: [] };
+    return {
+      imageRefs: refs.filter(
+        (ref) =>
+          ref &&
+          typeof ref.fileId === 'string' &&
+          ref.fileId.length > 0 &&
+          ref.fileId.length <= 1024 &&
+          typeof ref.name === 'string' &&
+          ref.name.length <= 256 &&
+          typeof ref.mimeType === 'string' &&
+          /^image\/(jpeg|png|gif|webp)$/.test(ref.mimeType) &&
+          (ref.downloadToken === undefined ||
+            (typeof ref.downloadToken === 'string' && ref.downloadToken.length <= 8192)),
+      ),
+    };
+  } catch {
+    return { imageRefs: [] };
+  }
+}

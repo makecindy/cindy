@@ -4,6 +4,7 @@ import * as QRCode from 'qrcode';
 
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
+import { parseCssColorComposited, toHex } from '../../shared/theme-import/color';
 
 const log = createLogger('useFeishuBotRegistration');
 
@@ -11,18 +12,22 @@ function getCssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+/**
+ * qrcode 只接受 hex。主题色可能是半透明墨水(Cindy 的文字色),先叠到二维码底色上
+ * 再转成不透明 hex;解析不了时回落黑码白底,保证二维码照样能扫。
+ */
+export function toQrColors(darkRaw: string, lightRaw: string): { dark: string; light: string } {
+  const light = parseCssColorComposited(lightRaw, null) ?? { r: 255, g: 255, b: 255 };
+  const dark = parseCssColorComposited(darkRaw, light) ?? { r: 0, g: 0, b: 0 };
+  return { dark: toHex(dark), light: toHex(light) };
+}
+
 function getQrColors(): { dark: string; light: string } {
   if (document.documentElement.classList.contains('dark')) {
-    return {
-      dark: getCssVar('--settings-btn-primary-text'),
-      light: getCssVar('--settings-btn-primary-bg'),
-    };
+    return toQrColors(getCssVar('--settings-btn-primary-text'), getCssVar('--settings-btn-primary-bg'));
   }
 
-  return {
-    dark: getCssVar('--settings-section-title'),
-    light: getCssVar('--settings-btn-primary-text'),
-  };
+  return toQrColors(getCssVar('--settings-section-title'), getCssVar('--settings-btn-primary-text'));
 }
 
 export type FeishuBotRegistrationPhase =

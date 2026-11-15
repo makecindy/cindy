@@ -1,0 +1,4 @@
+# These helpers must run on clean Windows installations, including from the
+# uninstaller and the protected SYSTEM service directory, without VC++ Runtime.
+[target.'cfg(target_env = "msvc")']
+rustflags = ["-C", "target-feature=+crt-static"]

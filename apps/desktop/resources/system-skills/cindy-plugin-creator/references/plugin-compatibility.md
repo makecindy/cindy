@@ -1,5 +1,8 @@
 ## 9. 兼容性与常见拒装原因
 
+编写前先按 [§0a](plugin-source-verification.md) 用执行宿主的实际版本定位 tag / commit，
+核验所依赖接口；不能用最新 main、控制端版本或未核实的本地 HEAD 推断旧宿主支持范围。
+
 插件开发不应受当前客户端能力注册进度限制。未知顶层能力、对象扩展字段、能力动作
 与订阅事件保留为声明，不因此阻断发布或安装，也不因此获得执行权限。
 插件必须检查所需接口是否存在并处理不支持响应：可选功能局部降级，必要能力缺失时
@@ -22,7 +25,6 @@
   · `hiddenTasks` 不是布尔值,或写了 `hiddenTasks: true` 却没有 `tasks: true`
 - node 详单格式错(entry 不是包内 CommonJS .js/.cjs、protocol 不在 json-rpc-stdio / mcp-stdio、
   resident 又写 idleTimeoutSeconds)；未知 command/args/shell/env 只保留，不传给进程启动器
-- id 用了 `cindy-` 前缀(平台保留,正式版用户通道拒装)。`filo-` / `xd-` 只是普通名称，不授予官方资格
 - ghost.json 声明了 namespace(包括 null)。namespace 由可信交付及 Host 安装事实决定，作者不能自报
 - 企业发布遵循当前服务端准入。S1 或 S2 尚未开启时仍保留旧认领和前缀命名流程，不能把收到 namespace 当作自由命名已开放
 - network 详单格式错(hosts 缺失/裸 TLD/IP/带端口/通配不在最左、secret 缺 inject、
@@ -30,7 +32,7 @@
   inject.hosts 不是 hosts 声明条目的子集、
   secret.source 不是 "user"/"login-email"/"oauth"/"gh-cli"/"oidc-token"、
   source:"login-email" 或 source:"oidc-token" 声明了 url 或 exchange、
-  source:"gh-cli" 不是官方 cindy-github、注入形态不是 api.github.com 的
+  source:"gh-cli" 注入形态不是 api.github.com 的
   Authorization Bearer、或声明了 exchange、
   声明了 user 凭证但没声明 settingsHtml、遗留 input 字段值不是 "ghost")
 - exchange 声明格式错(url 非 https/域名不在 hosts 白名单、bodyFormat 不是恰含一个

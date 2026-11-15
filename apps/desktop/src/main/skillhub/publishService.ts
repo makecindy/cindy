@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { net } from 'electron';
-import { ServerApiError } from '../serverApiClient';
+import { ServerApiError } from '../serverApiClient.desktop';
 import { publishErrorDetail, serverPublishErrorCode, type SkillhubPublishErrorCode } from '../../shared/skillhubPublishErrors';
 import { skillhubApiFetch } from './hubApi';
 import { computeFolderHash } from './folderHash';

@@ -4,6 +4,7 @@ import { sessions, orcaTeams, orcaWorkers, botSessionLinks } from '../localDb/sc
 import { updateSessionInDb } from '../localDb/ipc/sessions.js';
 import { bindingStore } from '../im/binding.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
 import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 import {
   validateExistingLocalProjectDirectory,
@@ -47,6 +48,63 @@ export function moveSessionProjectFromHost(
   return moveSessionProject(isSessionRunning, sessionId, sessionId, workingDir, assertAuthority);
 }
 
+/** Every move entry runs the same eligibility checks before mutating anything. */
+export async function assertSessionMovable(
+  client: DbClient,
+  sessionId: string,
+  isSessionRunning: (sessionId: string) => boolean,
+  assertCurrent: () => void,
+): Promise<void> {
+  assertCurrent();
+  const [target] = await client.drizzle
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  assertCurrent();
+  if (!target) throwIpcError('NOT_FOUND', 'Task does not exist in this account.');
+  if (target.remoteHostId)
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote tasks cannot be moved.');
+  // A task whose agent runs on another computer may move: that computer keys the agent's
+  // workspace (and its conversation record) by task id, not by this computer's project path.
+  if (target.status !== 'active')
+    throwIpcError('PRECONDITION_FAILED', 'Only active tasks can be moved.');
+  // Review immutability is also enforced by updateSessionInDb for all callers.
+  if (target.source === 'review')
+    throwIpcError(
+      'UNSUPPORTED_CAPABILITY',
+      'Review task settings are fixed to the source task.',
+    );
+  // Bot runtime resolves its workspace from the ownership link, including legacy tasks.
+  const [botLink] = await client.drizzle
+    .select({ botId: botSessionLinks.botId })
+    .from(botSessionLinks)
+    .where(eq(botSessionLinks.sessionId, sessionId))
+    .limit(1);
+  assertCurrent();
+  if (target.source === 'bot' || botLink)
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'Bot tasks use their own managed workspace.');
+  // Re-read active team membership at each checkpoint, including after
+  // transcript copying/runtime close. Do not retain the pre-move snapshot.
+  const workers = await client.drizzle
+    .select({ sessionId: orcaWorkers.sessionId })
+    .from(orcaWorkers)
+    .innerJoin(orcaTeams, eq(orcaWorkers.teamId, orcaTeams.id))
+    .where(and(eq(orcaTeams.leadSessionId, sessionId), eq(orcaTeams.status, 'active')));
+  assertCurrent();
+  if (
+    isSessionRunning(sessionId) ||
+    workers.some((worker) => isSessionRunning(worker.sessionId))
+  ) {
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Running tasks or leads with running workers cannot be moved.',
+    );
+  }
+  if (bindingStore.findByTarget(sessionId))
+    throwIpcError('PRECONDITION_FAILED', 'IM-controlled tasks cannot be moved.');
+}
+
 async function moveSessionProject(
   isSessionRunning: (sessionId: string) => boolean,
   contextSessionId: string,
@@ -65,58 +123,11 @@ async function moveSessionProject(
     };
     assertCurrent();
     const assertMoveAllowed = async () => {
-      assertCurrent();
-      const [target] = await context.client.drizzle
-        .select()
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      assertCurrent();
-      if (!target) throwIpcError('NOT_FOUND', 'Task does not exist in this account.');
-      if (target.remoteHostId)
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote tasks cannot be moved.');
-      // A task whose agent runs on another computer may move: that computer keys the agent's
-      // workspace (and its conversation record) by task id, not by this computer's project path.
-      if (target.status !== 'active')
-        throwIpcError('PRECONDITION_FAILED', 'Only active tasks can be moved.');
-      // Review immutability is also enforced by updateSessionInDb for all callers.
-      if (target.source === 'review')
-        throwIpcError(
-          'UNSUPPORTED_CAPABILITY',
-          'Review task settings are fixed to the source task.',
-        );
-      // Bot runtime resolves its workspace from the ownership link, including legacy tasks.
-      const [botLink] = await context.client.drizzle
-        .select({ botId: botSessionLinks.botId })
-        .from(botSessionLinks)
-        .where(eq(botSessionLinks.sessionId, sessionId))
-        .limit(1);
-      assertCurrent();
-      if (target.source === 'bot' || botLink)
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'Bot tasks use their own managed workspace.');
+      await assertSessionMovable(context.client, sessionId, isSessionRunning, assertCurrent);
       if (targetDir) {
         const physicalDirectory = await validateExistingLocalProjectDirectory(targetDir);
         if (!physicalDirectory.ok) throwIpcError('INVALID_PARAMS', physicalDirectory.message);
       }
-      // Re-read active team membership at each checkpoint, including after
-      // transcript copying/runtime close. Do not retain the pre-move snapshot.
-      const workers = await context.client.drizzle
-        .select({ sessionId: orcaWorkers.sessionId })
-        .from(orcaWorkers)
-        .innerJoin(orcaTeams, eq(orcaWorkers.teamId, orcaTeams.id))
-        .where(and(eq(orcaTeams.leadSessionId, sessionId), eq(orcaTeams.status, 'active')));
-      assertCurrent();
-      if (
-        isSessionRunning(sessionId) ||
-        workers.some((worker) => isSessionRunning(worker.sessionId))
-      ) {
-        throwIpcError(
-          'PRECONDITION_FAILED',
-          'Running tasks or leads with running workers cannot be moved.',
-        );
-      }
-      if (bindingStore.findByTarget(sessionId))
-        throwIpcError('PRECONDITION_FAILED', 'IM-controlled tasks cannot be moved.');
       await beforeMutation?.();
       assertCurrent();
     };

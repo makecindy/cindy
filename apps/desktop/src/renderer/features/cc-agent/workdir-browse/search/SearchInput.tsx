@@ -61,7 +61,7 @@ export function SearchInput({
         data-workdir-search-input=""
         className={cn(
           'min-w-0 flex-1 bg-transparent text-13 font-medium text-foreground',
-          'placeholder:font-normal placeholder:text-sidebar-action-icon',
+          'placeholder:font-normal placeholder:text-[var(--text-placeholder)]',
           'focus:outline-none',
         )}
         spellCheck={false}

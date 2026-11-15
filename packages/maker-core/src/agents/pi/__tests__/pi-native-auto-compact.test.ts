@@ -9,6 +9,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertPiSpawnArgvFitsPlatform } from '../project-resource-cli.js';
 import { preparePinnedPiSkillInvocation } from '../runtime-capabilities.js';
+import { estimatePiContext } from '../context-estimate.js';
 
 const knobs = vi.hoisted(() => ({
   spawnArgs: [] as string[],
@@ -25,6 +26,7 @@ const knobs = vi.hoisted(() => ({
   runtimeModel: "m",
   runtimeContextWindow: 200_000,
   contextTokens: null as number | null,
+  contextMessages: undefined as unknown,
   targetRuntimeContextWindow: 100_000,
   setModelReportsContextWindow: true,
   verifiedContextWindows: [] as number[],
@@ -71,6 +73,7 @@ vi.mock("../rpc-client.js", () => ({
       error?: string;
     }> {
       knobs.rpcCalls.push(cmd);
+      if (cmd.type === 'get_messages') return { success: true, data: { messages: knobs.contextMessages } };
       if (cmd.type === 'get_commands') return { success: true, data: { commands: [
         { name: 'cindy-native-provider-refresh', source: 'extension' },
       ] } };
@@ -218,6 +221,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.runtimeModel = "m";
     knobs.runtimeContextWindow = 200_000;
     knobs.contextTokens = null;
+    knobs.contextMessages = undefined;
     knobs.targetRuntimeContextWindow = 100_000;
     knobs.setModelReportsContextWindow = true;
     knobs.verifiedContextWindows = [];
@@ -243,8 +247,11 @@ describe("PiAgent native auto-compaction ownership", () => {
       expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
       expect((await handle.getContextUsage!()).maxTokens).toBe(1_000);
       knobs.contextTokens = 6_000;
+      knobs.contextMessages = [{ role: 'system', content: '', sections: { preamble: 'abcd' } }];
       expect(await handle.getContextUsage!()).toMatchObject({
         totalTokens: 6_000, maxTokens: 1_000, rawMaxTokens: 1_000, percentage: 100,
+        categories: [],
+        textEstimate: { method: 'text-heuristic', items: [{ source: 'native', tokens: 1 }] },
       });
       expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(false);
       budget = 32_000;
@@ -636,7 +643,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     },
   );
 
-  function readLatestPiSettings(): { compaction?: { reserveTokens?: number }; skills?: string[]; packages?: Array<{ source: string; skills?: string[] }> } {
+  function readLatestPiSettings(): { compaction?: { reserveTokens?: number; modelOverrides?: Record<string, { reserveTokens?: number }> }; skills?: string[]; packages?: Array<{ source: string; skills?: string[] }> } {
     const files: string[] = [];
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -648,7 +655,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     walk(agentHome);
     expect(files.length).toBeGreaterThan(0);
     return JSON.parse(readFileSync(files[files.length - 1]!, "utf8")) as {
-      compaction?: { reserveTokens?: number };
+      compaction?: { reserveTokens?: number; modelOverrides?: Record<string, { reserveTokens?: number }> };
     };
   }
 
@@ -696,6 +703,119 @@ describe("PiAgent native auto-compaction ownership", () => {
     expect(knobs.runtimeModel).toBe("n");
     expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
     await handle.close();
+  });
+
+  it("never depends on the non-official reserve RPC when a task budget changes", async () => {
+    const handle = await start();
+    knobs.rpcCalls = [];
+    await handle.setModel!("n", { contextWindowBudget: 32_000 }).catch(() => undefined);
+    expect(knobs.rpcCalls.some((call) => call.type === "set_compaction_reserve_tokens")).toBe(false);
+    expect(knobs.rpcCalls.some((call) => call.type === "refresh_models")).toBe(false);
+    await handle.close();
+  });
+
+  // 任务级预算的按模型保留量（buildPiSettingsJsonContent 的 pct=75）：
+  //   reserve = ceil(window - budget * 0.75)
+  const budgetReserve = (window: number, budget: number): number =>
+    Math.ceil(window - budget * 0.75);
+
+  async function startWithBudget(budget: number): Promise<AgentSessionHandle> {
+    return new PiAgent(buildDeps()).startSession({
+      sessionId: "budgeted",
+      workingDir: cwd,
+      model: "m",
+      contextWindowBudget: budget,
+    });
+  }
+
+  it("writes the task budget into every selectable model's reserve at startup", async () => {
+    const handle = await startWithBudget(50_000);
+    try {
+      // 官方 Pi 1.0 切模时按 modelOverrides 选保留量：预算必须落在**每个**可选模型上，
+      // 只写顶层 reserveTokens 会被同模型的 model-level override 盖掉。
+      expect(knobs.nativeSettings?.compaction?.modelOverrides).toMatchObject({
+        "cindy/m": { reserveTokens: budgetReserve(200_000, 50_000) },
+        "cindy/n": { reserveTokens: budgetReserve(100_000, 50_000) },
+      });
+      expect(readLatestPiSettings().compaction?.reserveTokens).toBe(budgetReserve(200_000, 50_000));
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("keeps the task budget hot-switching across models instead of demanding a rebuild", async () => {
+    const handle = await startWithBudget(50_000);
+    try {
+      // 启动快照已按预算写好每个模型的保留量 ⇒ 切到另一个模型命中同保留量，保持热切。
+      const preview = await handle.previewModelSwitch?.("n");
+      expect(["hot", "refresh"]).toContain(preview?.action);
+      await handle.setModel!("n");
+      // 切换后生效窗口仍然是本任务的预算（而不是 n 自己的模型级上限 100_000）。
+      expect(handle.getUsageSnapshot().contextWindow).toBe(50_000);
+      // 切后写盘与 ctx.workingContextWindow 仍按任务预算，不能被模型级上限顶掉。
+      expect(await handle.getContextUsage!()).toMatchObject({ maxTokens: 50_000 });
+      expect(readLatestPiSettings().compaction?.reserveTokens).toBe(budgetReserve(100_000, 50_000));
+      expect(await handle.requiresModelSwitchRebuild?.("n")).toBe(false);
+      expect(knobs.rpcCalls.some((call) => call.type === "switch_session")).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("keeps a second same-budget switch hot after the post-switch settings write", async () => {
+    const handle = await startWithBudget(50_000);
+    try {
+      // 第一次热切（m → n）：Pi 切模成功后的 settings 写盘不带预算的话，会把
+      // 其它模型的按预算保留量冲回各自上限；下一次同预算再切就预演成重建。
+      await handle.setModel!("n");
+      expect(readLatestPiSettings().compaction?.modelOverrides).toMatchObject({
+        "cindy/m": { reserveTokens: budgetReserve(200_000, 50_000) },
+        "cindy/n": { reserveTokens: budgetReserve(100_000, 50_000) },
+      });
+      // 同预算连切第二次（n → m）：必须仍是热切，不得走重建。
+      const second = await handle.previewModelSwitch?.("m");
+      expect(["hot", "refresh"]).toContain(second?.action);
+      await handle.setModel!("m");
+      expect(handle.getUsageSnapshot().contextWindow).toBe(50_000);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("previews a rebuild when the live reserve does not match the required one", async () => {
+    const handle = await startWithBudget(50_000);
+    try {
+      // 运行中 Pi 实际配置与要求不一致（例如被控端版本旧 / 快照被别的路径改过）：
+      // 预演必须返回 rebuild，而不是谎称文件改写已生效。
+      knobs.nativeSettings = {
+        ...(knobs.nativeSettings as { compaction?: Record<string, unknown> }),
+        compaction: {
+          ...(knobs.nativeSettings?.compaction as Record<string, unknown>),
+          modelOverrides: { "cindy/n": { reserveTokens: 1 } },
+        },
+      };
+      expect(await handle.previewModelSwitch?.("n")).toMatchObject({
+        action: "rebuild",
+        reason: expect.stringMatching(/native compaction settings/),
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("previews a rebuild when the task budget changes mid-session", async () => {
+    const handle = await startWithBudget(50_000);
+    try {
+      expect(await handle.previewModelSwitch?.("n")).toMatchObject({ action: expect.any(String) });
+      expect(["hot", "refresh"]).toContain((await handle.previewModelSwitch?.("n"))?.action);
+      // 预算改成另一个值 ⇒ 要求的保留量与运行中配置不再相同，走既有重建分支。
+      await expect(
+        handle.setModel!("n", { contextWindowBudget: 10_000 }),
+      ).rejects.toThrow(/native compaction settings/);
+      expect(knobs.rpcCalls.some((call) => call.type === "set_model")).toBe(false);
+    } finally {
+      await handle.close();
+    }
   });
 
   it("rejects an unexpected runtime window rather than claiming an unapplied reserve", async () => {
@@ -924,5 +1044,36 @@ describe("PiAgent native auto-compaction ownership", () => {
     await handle.setModel!("n");
     expect(readLatestPiSettings().compaction?.reserveTokens).toBe(25_000);
     await handle.close();
+  });
+});
+
+// Context diagnostics must follow Pi's active projection (including removals),
+// while native totals remain authoritative. Unit coverage was previously only
+// the native total/window; these inputs distinguish replacement and missing data.
+describe('Pi context text diagnostics', () => {
+  it('counts effective sections and tools once after updates and removals', () => {
+    const tool = { name: 'read', description: 'read', parameters: {} };
+    const messages = [
+      { role: 'system', content: '', sections: { skills: 'discard', project_context: 'discard', addendum: '<addendum>host\n\nuser</addendum>' }, toolsAdded: [tool, { ...tool, name: 'gone' }] },
+      { role: 'system', content: '', sections: { skills: 'abcd', project_context: null }, toolsRemoved: [{ name: 'gone' }], toolsAdded: [{ ...tool, description: 'updated' }] },
+      { role: 'user', content: [{ type: 'text', text: '你好' }, { type: 'image', data: 'a'.repeat(10000) }] },
+    ];
+    const result = estimatePiContext(messages, [{ source: 'host', text: 'host' }, { source: 'user', text: 'user' }]);
+    expect(result?.items).toEqual(expect.arrayContaining([
+      { source: 'host', tokens: 1 }, { source: 'user', tokens: 1 },
+      { source: 'skills', tokens: 1 }, { source: 'messages', tokens: 2 },
+    ]));
+    expect(result?.items.some(item => item.source === 'project' || item.source === 'other')).toBe(false);
+    const onlyCurrentTool = estimatePiContext([{ role: 'system', toolsAdded: [{ ...tool, description: 'updated' }] }], []);
+    expect(result?.items.find(item => item.source === 'tools')).toEqual(onlyCurrentTool?.items[0]);
+  });
+
+  it('reports no breakdown without a native system snapshot and keeps checkpoint summaries', () => {
+    expect(estimatePiContext([{ role: 'user', content: 'history' }], [])).toBeUndefined();
+    expect(estimatePiContext(undefined, [])).toBeUndefined();
+    expect(estimatePiContext([
+      { role: 'system', sections: { preamble: 'abcd' } },
+      { role: 'compactionSummary', summary: '摘要' },
+    ], [])?.items).toEqual([{ source: 'native', tokens: 1 }, { source: 'messages', tokens: 2 }]);
   });
 });

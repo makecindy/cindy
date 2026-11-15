@@ -13,6 +13,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
+import { LOCAL_AGENT_CLIENT } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
@@ -26,7 +27,47 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: sdkMock.query,
 }));
 
+// 设置落盘失败注入: 只有用例显式打开时才拒绝, 其余用例仍走真实实现。
+// 记下这次调用实际建出来的暂存目录, 断言只看它们, 不扫系统临时目录
+// (并行用例也会建 cindy-claude-skills-* , 全局差集会把别人的算进来)。
+const flagSettingsMock = vi.hoisted(() => ({
+  fail: false,
+  stagingDirs: [] as string[],
+  // 本次启动是否把超限设置真的写成了临时文件（内联路径不算）。
+  wroteFile: false,
+}));
+
+vi.mock('../managed-skill-plugins.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../managed-skill-plugins.js')>();
+  return {
+    ...actual,
+    prepareManagedSkillPlugins: async (
+      ...args: Parameters<typeof actual.prepareManagedSkillPlugins>
+    ) => {
+      const prepared = await actual.prepareManagedSkillPlugins(...args);
+      if (prepared.stagingDir) flagSettingsMock.stagingDirs.push(prepared.stagingDir);
+      return prepared;
+    },
+  };
+});
+
+vi.mock('../flag-settings-file.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../flag-settings-file.js')>();
+  return {
+    ...actual,
+    materializeClaudeFlagSettings: async (
+      ...args: Parameters<typeof actual.materializeClaudeFlagSettings>
+    ) => {
+      if (flagSettingsMock.fail) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      const delivery = await actual.materializeClaudeFlagSettings(...args);
+      flagSettingsMock.wroteFile = delivery.kind === 'file';
+      return delivery;
+    },
+  };
+});
+
 import { ClaudeCodeAgent } from '../index.js';
+import { CLAUDE_INLINE_SETTINGS_ARGV_BUDGET } from '../flag-settings-file.js';
 
 const tempDirs: string[] = [];
 const liveHandles: Awaited<ReturnType<ClaudeCodeAgent['startSession']>>[] = [];
@@ -62,11 +103,13 @@ function createDeps(): AgentDeps {
   };
   return {
     auth,
-    runtimeConfig: { systemPrompt: 'GLOBAL CINDY HOST PROMPT' },
+    runtimeConfig: {
+      systemPrompt: 'GLOBAL CINDY HOST PROMPT',
+      answerDeliveryPrompt: 'CINDY ANSWER DELIVERY FIXTURE',
+    },
     binaryPath: process.execPath,
     logger: createNoopLogger(),
     getGhostRosterPrompt: vi.fn(() => 'GLOBAL GHOST ROSTER'),
-    getContactsPromptState: vi.fn(() => 'enabled' as const),
   };
 }
 
@@ -79,7 +122,8 @@ function createFakeQuery() {
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     applyFlagSettings: vi.fn(async () => {}),
-    mcpServerStatus: vi.fn(async () => []),
+    mcpServerStatus: vi.fn(async (): Promise<Array<{ name: string; status: string; scope?: string }>> => []),
+    setMcpServers: vi.fn(async (servers: Record<string, unknown>) => ({ added: [], removed: servers.custom_magpie ? [] : ['custom_magpie'], errors: {} })),
     interrupt: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     rewindFiles: vi.fn(async () => ({ canRewind: false })),
@@ -95,21 +139,36 @@ async function makeTempDir(): Promise<string> {
 const OWN_SKILL_ROOT = '/userdata/bot-skills/bot-1';
 
 async function startBotSession(input: {
+  query?: ReturnType<typeof createFakeQuery>;
+  duplicateResolver?: AgentDeps['resolveLocalMcpDuplicateChoices'];
   ownSkillPluginRoots?: string[];
   reviewMode?: boolean;
   remote?: boolean;
   ordinary?: boolean;
+  localHostOnly?: boolean;
+  hostedGuest?: boolean;
   managed?: boolean;
   disabled?: boolean;
   allowManaged?: boolean;
   catalogState?: 'failed' | 'disabled' | 'missing' | 'user-collision';
+  projectContext?: boolean;
+  availableModels?: NonNullable<AgentDeps['capabilityAdditions']>['availableModels'];
+  resolveSessionEnvironment?: AgentDeps['resolveSessionEnvironment'];
 }) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
-  sdkMock.query.mockReturnValue(createFakeQuery());
+  sdkMock.query.mockReturnValue(input.query ?? createFakeQuery());
 
   const deps = createDeps();
+  if (input.availableModels) deps.capabilityAdditions = { availableModels: input.availableModels };
+  if (input.resolveSessionEnvironment) deps.resolveSessionEnvironment = input.resolveSessionEnvironment;
+  if (input.duplicateResolver) {
+    deps.resolveLocalMcpDuplicateChoices = input.duplicateResolver;
+    deps.mcpProviders = ['custom_magpie', 'other'].map(name => ({ name,
+      toClaudeSdkConfig: () => ({ type: 'http', url: 'http://localhost:3425/mcp' }),
+    }));
+  }
   if (input.managed) {
     await fs.mkdir(`${configDir}/managed/learn`, { recursive: true });
     await fs.writeFile(`${configDir}/managed/learn/SKILL.md`, '---\nname: learn\ndescription: Fixture\n---\nBody');
@@ -130,6 +189,19 @@ async function startBotSession(input: {
     sessionId: 'session-bot-skills',
     model: 'claude-opus-4-6',
     workingDir,
+    ...(input.hostedGuest ? { deviceHosted: {
+      workingDir, platform: process.platform, pathPlatform: process.platform,
+      shell: 'fixture-shell', isGitRepo: false,
+      extraDirs: [], writableDirs: [],
+      tunnelUrl: 'http://127.0.0.1:12345', tunnelToken: 'fixture', mcpServers: ['notebook'],
+      guest: true, guestHome: configDir,
+      guestProvider: { providerId: 'fixture', modelIds: ['claude-opus-4-6'], routeToken: 'fixture' },
+    }, providerId: 'fixture' } : {}),
+    ...(input.localHostOnly !== undefined ? {
+      [LOCAL_AGENT_CLIENT]: {url:'http://127.0.0.1:12345/mcp/fixture',token:'fixture-token',hostToolsOnly:input.localHostOnly,mcpName:'notebook'},
+      makerMemoryEnabled: false,
+      makerMemoryIndexSnapshot: 'PRIVATE_MEMORY_INDEX_CANARY',
+    } : {}),
     ...(input.remote ? { remoteHostId: 'remote-bot-host' } : {}),
     permissionMode: 'acceptEdits',
     botProfilePrompt: 'BOT SOUL',
@@ -158,6 +230,7 @@ async function startBotSession(input: {
       },
       mcpPolicy: { mode: 'inherit', configured: [], catalog: [] },
       toolsetPolicy: { mode: 'inherit', configured: [], catalog: [] },
+      ...(input.projectContext ? { projectContext: true } : {}),
     },
   });
 
@@ -165,16 +238,47 @@ async function startBotSession(input: {
   const options = (input.remote ? remoteOptions : sdkMock.query.mock.calls.at(-1)?.[0]?.options) as
     | {
         plugins?: Array<{ type: string; path: string }>;
+        tools?: string[];
+        mcpServers?: Record<string, {type:string;url:string;headers?:Record<string,string>}>;
         settingSources?: string[];
         disallowedTools?: string[];
         strictMcpConfig?: boolean;
-        settings?: { autoMemoryEnabled?: boolean; autoDreamEnabled?: boolean; skillOverrides?: Record<string, string> };
+        settings?: { autoMemoryEnabled?: boolean; autoDreamEnabled?: boolean; skillOverrides?: Record<string, string>; deniedMcpServers?: Array<{serverName: string}> };
         systemPrompt?: { append?: string };
       }
     | undefined;
   if (!options) throw new Error('expected sdk query options');
   return options;
 }
+
+// 测试价值：实际 adapter 的 SDK 启动选项是 Claude 工具隔离执行点；普通伙伴挂载用例不覆盖本机接入。
+// 最小输入：一个受管技能与独立客户端 MCP；tier unit，无进程或网络。
+// 2026-10-22 维护者裁决：接入保持 Cindy 提示词装配，权限由实际工具面约束。
+// 普通任务对照锁住完整追加段，不复制提示词常量；禁用记忆仍不得带出已有索引。
+it.each([false, true])('local client-only sessions expose only their own tools (shared=%s)', async (hostedGuest) => {
+  const ordinary = await startBotSession({ordinary:true,managed:true});
+  const partner = await startBotSession({ordinary:true,managed:true,localHostOnly:true,hostedGuest});
+  expect(partner.tools).toEqual([]);
+  expect(partner.settingSources).toEqual([]);
+  expect(partner.plugins ?? []).toEqual([]);
+  expect(partner.strictMcpConfig).toBe(true);
+  expect(Object.keys(partner.mcpServers ?? {})).toEqual(['notebook']);
+  expect(partner.mcpServers?.notebook.headers?.Authorization).toBe('Bearer fixture-token');
+  const prompt = partner.systemPrompt?.append ?? '';
+  expect(prompt).toContain('GLOBAL CINDY HOST PROMPT');
+  expect(prompt).toContain('CINDY ANSWER DELIVERY FIXTURE');
+  if (hostedGuest) expect(prompt).not.toContain('GLOBAL GHOST ROSTER');
+  else expect(prompt).toContain('GLOBAL GHOST ROSTER');
+  expect(prompt).toContain('GLOBAL USER PROMPT');
+  expect(prompt).not.toContain('PRIVATE_MEMORY_INDEX_CANARY');
+  if (!hostedGuest) expect(prompt).toBe(ordinary.systemPrompt?.append);
+  const delegated = await startBotSession({ordinary:true,localHostOnly:false,hostedGuest});
+  if (hostedGuest) expect(delegated.tools).toContain('WebSearch');
+  else {
+    expect(delegated.tools).toBeUndefined();
+    expect(delegated.systemPrompt?.append).toBe(prompt);
+  }
+});
 
 afterEach(async () => {
   await Promise.all(liveHandles.splice(0).map((handle) => handle.close()));
@@ -190,6 +294,7 @@ afterEach(async () => {
   }
   sdkMock.forkSession.mockReset();
   sdkMock.query.mockReset();
+  flagSettingsMock.wroteFile = false;
   if (originalClaudeConfigDir === undefined) {
     delete process.env.CLAUDE_CONFIG_DIR;
   } else {
@@ -199,6 +304,83 @@ afterEach(async () => {
 });
 
 describe('Claude Code mounts the Bot\'s own learned Skills', () => {
+  // #8902: the public startSession must change the actual SDK tool/config inputs,
+  // while preserving native user settings and excluding nonlocal/strict runtimes.
+  it.each(['cindy', 'claude'] as const)('applies the explicit %s source choice to ordinary local sessions', async choice => {
+    const duplicateResolver = vi.fn(async () => ({
+      skipHostServers: choice === 'claude' ? ['custom_magpie'] : [],
+      denyNativeServers: choice === 'cindy' ? ['magpie'] : [],
+      nativeServersToKeep: choice === 'claude' ? ['magpie'] : [],
+    }));
+    const query = createFakeQuery();
+    query.mcpServerStatus.mockResolvedValue([{ name: 'magpie', status: 'connected', scope: 'user' }]);
+    const options = await startBotSession({ ordinary: true, duplicateResolver, query });
+    expect(Object.keys(options.mcpServers ?? {})).toEqual(['custom_magpie', 'other']);
+    if (choice === 'claude') {
+      expect(query.setMcpServers).toHaveBeenNthCalledWith(1, options.mcpServers);
+      expect(query.setMcpServers).toHaveBeenNthCalledWith(2, { other: options.mcpServers!.other });
+      expect(query.setMcpServers.mock.calls[1]![0].other).toBe(options.mcpServers!.other);
+    } else expect(query.setMcpServers).not.toHaveBeenCalled();
+    expect(options.settings?.deniedMcpServers ?? []).toEqual(choice === 'cindy' ? [{ serverName: 'magpie' }] : []);
+    expect(options.settingSources).toEqual(['user', 'project', 'local']);
+    expect(options.strictMcpConfig).toBeUndefined();
+  });
+  // PR #9055: files cannot reflect managed policy. Exercise the real startSession
+  // assembly with native status absent, disconnected or unreadable; unit, no CLI.
+  it.each(['missing', 'failed', 'pending', 'error', 'update-error'])('keeps available connections when native selection is %s', async status => {
+    const query = createFakeQuery();
+    if (status === 'error') query.mcpServerStatus.mockRejectedValue(new Error('status unavailable'));
+    else query.mcpServerStatus.mockResolvedValue(status === 'missing' ? [] : [{ name: 'magpie', status: status === 'update-error' ? 'connected' : status, scope: 'user' }]);
+    if (status === 'update-error') query.setMcpServers.mockResolvedValueOnce({ added: [], removed: [], errors: {} })
+      .mockRejectedValueOnce(new Error('update unavailable'));
+    const options = await startBotSession({ ordinary: true, query,
+      duplicateResolver: async () => ({ skipHostServers: ['custom_magpie'], denyNativeServers: [], nativeServersToKeep: ['magpie'] }),
+    });
+    expect(options.mcpServers).toHaveProperty('custom_magpie');
+    expect(query.setMcpServers).toHaveBeenNthCalledWith(1, options.mcpServers);
+    expect(query.setMcpServers).toHaveBeenCalledTimes(status === 'update-error' ? 2 : 1);
+    // Failed diagnostics must release the input gate, not strand the first turn.
+    const prompt = sdkMock.query.mock.calls.at(-1)![0].prompt as AsyncIterable<unknown>;
+    const next = prompt[Symbol.asyncIterator]().next();
+    await liveHandles.at(-1)!.send({ type: 'user', content: 'use the connection' });
+    expect((await next).value).toMatchObject({ type: 'user' });
+  });
+  // PR #9055: a connected name alone can belong to a host/provider, plugin or
+  // project override. Unit: saved user-scope choice + non-user runtime status.
+  it.each([['dynamic', 'magpie'], ['project', 'magpie'], [undefined, 'magpie'], ['user', 'other']] as const)(
+    'does not replace Cindy with a %s-scoped connection named %s', async (scope, name) => {
+      const query = createFakeQuery();
+      query.mcpServerStatus.mockResolvedValue([{ name, status: 'connected', scope }]);
+      const options = await startBotSession({ ordinary: true, query,
+        duplicateResolver: async () => ({ skipHostServers: ['custom_magpie'], denyNativeServers: [], nativeServersToKeep: [name] }),
+      });
+      expect(query.setMcpServers).toHaveBeenCalledTimes(1);
+      expect(query.setMcpServers).toHaveBeenCalledWith(options.mcpServers);
+    });
+  it.each([{ ordinary: false }, { ordinary: true, remote: true }, { ordinary: true, reviewMode: true }, { ordinary: true, localHostOnly: true }])(
+    'does not apply local duplicate choices in isolated/remote runtimes: %j', async context => {
+      const duplicateResolver = vi.fn(async () => ({ skipHostServers: ['custom_magpie'], denyNativeServers: ['magpie'] }));
+      await startBotSession({ ...context, duplicateResolver });
+      expect(duplicateResolver).not.toHaveBeenCalled();
+    },
+  );
+  // 伙伴 V2(项目模式):就是普通项目任务加一层伙伴身份。SDK 选项与普通任务一致(用户/项目设置、
+  // 宿主提示词、不收窄 MCP),伙伴身份与自有技能照常挂上。依据:伙伴 = 包装过的项目 + session
+  // (主人 2026-11-06)。最小输入:projectContext 开关;unit,无进程。
+  it('runs a V2 teammate as an ordinary task with its identity on top', async () => {
+    const ordinary = await startBotSession({ ordinary: true });
+    const v2 = await startBotSession({ projectContext: true, ownSkillPluginRoots: [OWN_SKILL_ROOT] });
+    expect(v2.settingSources).toEqual(ordinary.settingSources);
+    expect(v2.strictMcpConfig).toBeUndefined();
+    expect(v2.settings?.autoMemoryEnabled).toBe(ordinary.settings?.autoMemoryEnabled);
+    expect(v2.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
+    expect(v2.systemPrompt?.append).toContain('GLOBAL USER PROMPT');
+    expect(v2.systemPrompt?.append).toContain('BOT SOUL');
+    const classic = await startBotSession({});
+    expect(classic.settingSources).toEqual([]);
+    expect(classic.systemPrompt?.append).not.toContain('GLOBAL USER PROMPT');
+  });
+
   it('passes the per-Bot skill root as a local plugin', async () => {
     const options = await startBotSession({ ownSkillPluginRoots: [OWN_SKILL_ROOT] });
     expect(options.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
@@ -242,7 +424,7 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     expect(options.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
   });
 
-  it('keeps global Cindy identity, roster, contacts, and user prompt out of Bot context', async () => {
+  it('keeps global Cindy identity, roster, and user prompt out of Bot context', async () => {
     const options = await startBotSession({});
     const prompt = options.systemPrompt?.append ?? '';
     expect(prompt).toContain('BOT SOUL');
@@ -250,7 +432,6 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     expect(prompt).not.toContain('GLOBAL CINDY HOST PROMPT');
     expect(prompt).not.toContain('GLOBAL GHOST ROSTER');
     expect(prompt).not.toContain('GLOBAL USER PROMPT');
-    expect(prompt).not.toContain('Smart Contacts');
   });
 });
 
@@ -337,5 +518,69 @@ describe('managed skill command collisions', () => {
     }));
     const result = await new ClaudeCodeAgent(deps).listRuntimeSkills({ workingDir: await isolatedWorkingDir(), runtimeConfigDir: configDir });
     expect(result.skills.map((skill) => skill.name)).toEqual(['learn', 'cindy-plugin-a:demo', 'cindy-plugin-b:demo']);
+  });
+});
+
+// 测试价值：托管技能插件的暂存目录在设置落盘失败时必须一起拆掉，否则每次启动失败
+// 都会留下一份 cindy-claude-skills-* 目录与技能链接。
+// 最小输入：一个受管技能 + 让 materializeClaudeFlagSettings 报 ENOSPC；tier unit。
+describe('managed skill staging cleanup when settings materialization fails', () => {
+  it('removes the staging dir created before the failure', async () => {
+    flagSettingsMock.stagingDirs.length = 0;
+    flagSettingsMock.fail = true;
+    try {
+      await expect(startBotSession({ managed: true, allowManaged: true })).rejects.toMatchObject({
+        cause: { code: 'ENOSPC' },
+      });
+    } finally {
+      flagSettingsMock.fail = false;
+    }
+
+    expect(flagSettingsMock.stagingDirs).toHaveLength(1);
+    await expect(fs.stat(flagSettingsMock.stagingDirs[0]!)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：ClaudeCodeAgent.startSession。本地伙伴会话在设置落盘后作用域失效时，启动 reject，且不调 sdk query。
+// - Bug／规则依据：PR #9776 P1。prepareFlagSettings 的 await 打开异步窗口，回来后必须再调 companionEnvironment.assertCurrent，失效走启动清理而不拉起 SDK。
+// - 现有覆盖缺口：同文件只覆盖落盘失败时拆掉托管技能暂存；没有覆盖落盘期间伙伴被删或换主。
+// - 最小失败输入：带 botRuntimeProfile 的本地会话，模型白名单序列化后超过 CLAUDE_INLINE_SETTINGS_ARGV_BUDGET，assertCurrent 在落盘 await 之后抛 OWNER_CHANGED。
+// - tier：unit。进程内假 SDK 与临时文件，无网络、无真实 CLI。
+// - 实测耗时：见 tmp/fix-9776c-vitest.log
+describe('companion scope invalidated while flag settings are written', () => {
+  it('rejects startSession and does not call the SDK when the Bot scope dies after the settings file is written', async () => {
+    const catalogIds = Array.from({ length: 280 }, (_, index) =>
+      `vendor/${'gateway'.repeat(12)}-model-${index}`,
+    );
+    expect(JSON.stringify(catalogIds).length).toBeGreaterThan(CLAUDE_INLINE_SETTINGS_ARGV_BUDGET);
+
+    // buildQuery 开头和落盘前各有一次围栏。计数器放过这两次；
+    // 只有落盘 await 回来之后的那一次（此时临时文件已写出）才抛。
+    // 拿掉落盘后的复查时，这里不会抛，SDK query 会被调用。
+    let scopeChecks = 0;
+    await expect(startBotSession({
+      availableModels: catalogIds.map((id) => ({
+        id,
+        displayName: 'Catalog',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      })),
+      resolveSessionEnvironment: async (sessionId) => {
+        expect(sessionId).toBe('session-bot-skills');
+        return {
+          identity: 'companion-scope',
+          assertCurrent() {
+            scopeChecks += 1;
+            if (scopeChecks > 2 && flagSettingsMock.wroteFile) throw new Error('OWNER_CHANGED');
+          },
+        };
+      },
+    })).rejects.toThrow('OWNER_CHANGED');
+
+    expect(sdkMock.query).not.toHaveBeenCalled();
+    expect(flagSettingsMock.wroteFile).toBe(true);
+    expect(scopeChecks).toBe(3);
   });
 });

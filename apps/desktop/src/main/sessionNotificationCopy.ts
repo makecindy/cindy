@@ -5,7 +5,7 @@
  * renderer locale key。函数每次调用都现场执行 t()，因此 renderer 通过
  * setMainLocale() 切换语言后，下一条通知会立即跟随，不需要额外缓存或事件机制。
  */
-import { t } from './i18n.js';
+import { t } from './i18n.desktop.js';
 
 export type SessionEventKind = 'done' | 'error' | 'needs-reply';
 
@@ -35,6 +35,20 @@ export function getSessionExternalNotificationText(title: string, kind: SessionE
   return t(EXTERNAL_KEY_BY_KIND[kind]).replaceAll('{{title}}', () => title);
 }
 
+const PERMISSION_QUESTION_KEY = {
+  command: 'newChat.permissionPrompt.titleCommand',
+  'file-read': 'newChat.permissionPrompt.titleFileRead',
+  'file-write': 'newChat.permissionPrompt.titleFileWrite',
+  browser: 'newChat.permissionPrompt.titleBrowser',
+  plugin: 'newChat.permissionPrompt.titlePlugin',
+} as const;
+
+/** First line of a permission alert on the phone: the permission card's own title. */
+export function getPermissionAlertQuestion(kind: keyof typeof PERMISSION_QUESTION_KEY, plugin?: string): string {
+  // The plugin id is data: a function replacement keeps `$&` and friends literal.
+  return t(PERMISSION_QUESTION_KEY[kind]).replaceAll('{{plugin}}', () => plugin ?? '');
+}
+
 /** 代输入 push body: fixed copy, never the screen or the agent's purpose text. */
 export function getInputHandoffNotificationBody(): string {
   return t('settings.notifications.sessionEvent.inputHandoff');
@@ -60,4 +74,8 @@ export function getBotGroupStepNotificationBody(event: {
   return t(key)
     .replaceAll('{{name}}', () => event.botName)
     .replaceAll('{{task}}', () => event.task);
+}
+
+export function getNotificationImageLabel(): string {
+  return t('settings.notifications.chat.image');
 }

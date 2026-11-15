@@ -3,7 +3,7 @@
 在 v3 ghost.json 顶层添加 `recommendations` 数组，每条包含稳定 `id`、短标题
 `label` 和完整 `prompt`。最多 24 条，id 为 1–64 位小写字母、数字或连字符，
 label 为 1–120 字符，prompt 为 1–8000 字符；整份列表 UTF-8 不超过 64 KiB。
-可选 `locales` 按 en / zh-CN / zh-TW / ja / ko 提供 `{label,prompt}`，
+可选 `locales` 按 en / zh-CN / zh-TW / ja / ko / es / fr / de / pt-PT / pt-BR 提供 `{label,prompt}`，
 缺当前语言时使用 en，再回退条目自身。不要放秘密或其它账号的内容。
 宿主在生成首页候选时校验此列表，不合格的列表不展示，但不影响插件安装、批准和运行。
 v2 清单继续忽略此扩展字段；运行时更新始终严格校验，不合格的更新不会替换原列表。

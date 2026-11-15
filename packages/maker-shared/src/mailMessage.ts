@@ -7,6 +7,32 @@ export interface MailReaderDeclaration {
   /** The reader accepts markRead:true for an explicit user opening, never background reads. */
   markRead?: true;
 }
+/** Host-issued instance reference. Never inferred from a plugin name or URL. */
+export interface MailReaderChoice { id: string; name: string; namespace: string | null }
+export interface MailPreviewResult {
+  supported: boolean;
+  message?: MailMessage;
+  /** Host-verified card in this task, for an explicitly opened saved draft. */
+  draftCallId?: string;
+  error?: string;
+  providerId?: string;
+  providers?: MailReaderChoice[];
+}
+export function parseMailDraftCallId(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value) ? value : undefined;
+}
+export function parseMailReaderChoices(value: unknown): MailReaderChoice[] | undefined {
+  if (!Array.isArray(value) || !value.length || value.length > 100) return undefined;
+  const choices: MailReaderChoice[] = [];
+  for (const p of value) {
+    if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !p.id || p.id.length > 512 ||
+        typeof p.name !== 'string' || !p.name || p.name.length > 256 ||
+        !(p.namespace === null || typeof p.namespace === 'string' && p.namespace.length <= 128) ||
+        choices.some(c => c.id === p.id)) return undefined;
+    choices.push({ id: p.id, name: p.name, namespace: p.namespace });
+  }
+  return choices;
+}
 export function parseMailReader(value: unknown): MailReaderDeclaration | null {
   if (!value || typeof value !== 'object') return null;
   const p = value as Record<string, unknown>;
@@ -35,6 +61,8 @@ export interface MailMessage {
   bodyText: string;
   bodyHtml: string;
   attachments: MailAttachmentItem[];
+  /** Optional exact-email contact photos. Older providers/clients may omit/ignore these. */
+  participantPhotos?: { email: string; url: string }[];
   /** Optional, chronological metadata only. Bodies are read on explicit expansion. */
   conversation?: MailConversation;
   conversationUnavailable?: boolean;
@@ -83,11 +111,27 @@ export function parseMailMessage(value: unknown): MailMessage | null {
   const attachments = parseMailAttachmentItems(JSON.stringify(p.attachments));
   if (!attachments) return null;
   const conversation = parseConversation(p.conversation, p.messageId as string);
+  const participantPhotos = Array.isArray(p.participantPhotos) ? p.participantPhotos.slice(0, 64).flatMap(photo => {
+    if (!photo || typeof photo.email !== 'string' || photo.email.length > 320 ||
+        mailParticipantEmail(photo.email) !== photo.email || typeof photo.url !== 'string' || photo.url.length > 2048) return [];
+    try {
+      const url = new URL(photo.url);
+      if (url.protocol !== 'https:' || url.username || url.password || url.port) return [];
+      return [{ email: photo.email, url: url.href }];
+    } catch { return []; }
+  }) : [];
   return { ...Object.fromEntries(Object.keys(limits).map(k => [k, p[k]])), attachments,
+    ...(participantPhotos.length ? { participantPhotos } : {}),
     ...(p.markReadFailed === true ? { markReadFailed: true } : {}),
     ...(conversation ? { conversation } : {}),
     ...(p.conversationUnavailable === true || (p.conversation !== undefined && !conversation) ? { conversationUnavailable: true } : {}),
   } as unknown as MailMessage;
+}
+
+/** Conservative display lookup: never infer an email from a person's name. */
+export function mailParticipantEmail(address: string): string | undefined {
+  const email = (/<([^<>]+)>\s*$/.exec(address)?.[1] || address).trim().toLowerCase();
+  return email.length <= 320 && /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}$/.test(email) ? email : undefined;
 }
 /** Reuse the compose card's HTML, recipients, CID and attachment renderers, with no actions. */
 export function mailMessageFields(mail: MailMessage, label: (key: string) => string): GhostCardFormField[] {

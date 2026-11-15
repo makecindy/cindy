@@ -43,18 +43,21 @@ export function useVoiceInputModelSelection(): {
   const [result, setResult] = useState<ModelSelectionResult | null>(null);
   const [saving, setSaving] = useState(false);
   const mountedRef = useRef(true);
+  const refreshGenerationRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      refreshGenerationRef.current += 1;
     };
   }, []);
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
     try {
       const next = await window.electronAPI.voiceInput.getModelSelection();
-      if (mountedRef.current) setResult(next);
+      if (mountedRef.current && generation === refreshGenerationRef.current) setResult(next);
     } catch (error) {
       log.warn('voice input model selection load failed', {
         error: error instanceof Error ? error.message : String(error),
@@ -67,9 +70,13 @@ export function useVoiceInputModelSelection(): {
   }, [refresh]);
 
   const applyPatch = useCallback(async (patch: ModelSelectionPatch) => {
+    // A read started before this edit must not restore its old snapshot.
+    refreshGenerationRef.current += 1;
     setSaving(true);
     try {
       const next = await window.electronAPI.voiceInput.setModelSelection(patch);
+      // Also invalidate reads started while this write was pending.
+      refreshGenerationRef.current += 1;
       if (mountedRef.current) setResult(next);
       return true;
     } catch (error) {

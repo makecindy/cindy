@@ -111,6 +111,8 @@ const MAX_DEFERRED_COMMANDS_PER_SESSION = 32;
  * worker,tab 落在 lead 的桶),其余命令宿主即自身 sessionId。
  */
 function commandHostSessionId(cmd: RsbWindowCommand): string {
+  // Global commands are delivered directly, without a task bucket or adoption.
+  if (cmd.type === 'open-plugin-view') return '';
   return cmd.type === 'open-turn-review' ? (cmd.hostSessionId ?? cmd.sessionId) : cmd.sessionId;
 }
 
@@ -458,9 +460,22 @@ export class RsbWindowController {
   async routeCommand(
     request: RsbWindowCommandRouteRequest,
   ): Promise<RsbWindowCommandRouteResult> {
-    const { command, allowOpen } = request;
+    const { allowOpen } = request;
+    // 子窗口执行开页时也需要原点击来源。只从既有路由信封派生一次，
+    // 与 command 一起经过现有排队/交接路径；不信任 command 内自报的来源。
+    const command: RsbWindowCommand = request.command.type === 'open-plugin-task'
+      ? { ...request.command, userInitiated: request.userInitiated === true }
+      : request.command;
     const userInitiated = request.userInitiated !== false;
     if (!this.deps.settings.read().detached) return 'attached';
+    if (command.type === 'open-plugin-view') {
+      if (allowOpen) await this.ensureOpenForAutomation({ userInitiated });
+      if (!this.deps.settings.read().detached) return 'attached';
+      const win = this.winRef;
+      if (!win || win.isDestroyed() || !this.presentationReady || !this.visible) return 'stale-context';
+      this.deps.sendToWindow(win, this.deps.commandChannel, command);
+      return 'routed';
+    }
     const hostSessionId = commandHostSessionId(command);
     if (!allowOpen) {
       const windowReady =

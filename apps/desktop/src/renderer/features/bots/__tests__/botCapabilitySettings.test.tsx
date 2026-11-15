@@ -8,6 +8,10 @@ const h = vi.hoisted(() => ({
   offPush: vi.fn(),
   offMcp: vi.fn(),
   list: vi.fn(async () => ({ agentKind: 'pi', servers: [] })),
+  setEnabled: vi.fn(async () => {}),
+  confirm: vi.fn(async () => true),
+  skillPage: null as null | { view: { type: string; editing?: boolean }; onView: (view: unknown) => void;
+    editorDirtyRef?: { current: (() => boolean) | null } },
 }));
 vi.mock('../botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string, opts?: { defaultValue?: string }) => opts?.defaultValue ?? key }) }));
 vi.mock('../botStore', () => ({
@@ -15,6 +19,10 @@ vi.mock('../botStore', () => ({
   subscribeBotGlobalModel: () => () => {},
 }));
 vi.mock('@/lib/sessionService', () => ({ get: async () => ({ agentKind: 'pi' }) }));
+// The Skill pages render Markdown; these tests cover the list.
+vi.mock('../BotSkillPage', () => ({ BotSkillPage: (props: NonNullable<typeof h.skillPage>) => { h.skillPage = props; return null; } }));
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: h.confirm }) }));
+vi.mock('@/components/ui/toast', () => ({ toast: { error: vi.fn() } }));
 vi.mock('@/lib/sessionsBus', () => ({ onPatch: () => h.offLocal }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   getDataOwnerGeneration: () => 1,
@@ -33,7 +41,10 @@ describe('controlled capability page lifetime', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
-        localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [{ slug: 'weekly-report', name: '整理工作周报', enabled: true }] } },
+        localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: {
+          listSkills: async () => [{ slug: 'weekly-report', name: '整理工作周报', enabled: true }],
+          skills: { setEnabled: h.setEnabled },
+        } },
         maker: {
           onMcpChanged: () => h.offMcp,
           listCustomMcpServers: h.list,
@@ -55,7 +66,9 @@ describe('controlled capability page lifetime', () => {
     await waitFor(() => expect(view.getByText('整理工作周报')).toBeTruthy());
     const checkbox = view.getByRole('switch', { name: '整理工作周报' }) as HTMLButtonElement;
     expect(checkbox.getAttribute('aria-checked') === 'true').toBe(true);
-    expect(checkbox.disabled).toBe(true);
+    // A learned Skill can be turned off from the list; the files stay.
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(h.setEnabled).toHaveBeenCalledExactlyOnceWith('bot-1', 'weekly-report', false));
     view.rerender(<BotCapabilitySettings {...props} expanded={false} />);
     expect(h.offLocal).toHaveBeenCalledOnce();
     expect(h.offPush).toHaveBeenCalledOnce();
@@ -64,6 +77,65 @@ describe('controlled capability page lifetime', () => {
     view.rerender(<BotCapabilitySettings {...props} expanded />);
     await waitFor(() => expect(h.list).toHaveBeenCalledTimes(2));
   });
+});
+
+it('shows the name, not the internal id, of a kept reference this computer does not have', async () => {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: {
+      localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
+      maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list, listAgentSkills: async () => ({ success: true, skills: [] }), plugins: { list: async () => [] } },
+    },
+  });
+  const bot = { id: 'bot-1', canonicalSessionId: 's1' } as BotProfile;
+  const capabilities = { modelChain: [], modelChainOverride: null, mcpMode: 'allowlist', mcpServers: ['mcp_9f3a', 'mcp_unnamed'],
+    mcpServerNames: { mcp_9f3a: '公司知识库' }, toolsets: [] } as unknown as BotProfile['capabilities'];
+  const view = render(<BotCapabilitySettings bot={bot} capabilities={capabilities} skills={[]} onChange={vi.fn()} expanded />);
+  expect(await view.findByText('公司知识库')).toBeTruthy();
+  expect(view.queryByText('mcp_9f3a')).toBeNull();
+  expect(view.getByText('mcp_unnamed')).toBeTruthy();
+  expect(view.getAllByText('bots.capabilities.notOnThisComputer')).toHaveLength(2);
+});
+
+it.each([
+  { enabled: true, runtimeStatus: 'discovered', firstEnabled: false, firstStatus: 'discovered' },
+  { enabled: false, runtimeStatus: 'discovered', firstEnabled: true, firstStatus: 'discovered' },
+  { enabled: true, runtimeStatus: 'discovered', firstEnabled: true, firstStatus: 'failed' },
+  { enabled: true, runtimeStatus: 'failed', firstEnabled: true, firstStatus: 'discovered' },
+])('uses the runtime winner for duplicate skill state: $enabled/$runtimeStatus', async ({ enabled, runtimeStatus, firstEnabled, firstStatus }) => {
+  const discovered = [
+    { name: 'agent-ops', path: '/home/.agents/skills/agent-ops/SKILL.md', scope: 'repo',
+      description: 'First source description', enabled: firstEnabled, runtimeStatus: firstStatus },
+    { name: 'agent-ops', path: '/home/.agents/skills/agent-ops/SKILL.md', scope: 'user',
+      description: 'Runtime winner description', enabled, runtimeStatus },
+    { name: 'unique-skill', path: '/project/.pi/skills/unique-skill/SKILL.md', enabled: true },
+  ];
+  const listAgentSkills = vi.fn(async () => ({ success: true, skills: discovered }));
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
+    maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
+      listAgentSkills, plugins: { list: async () => [] } },
+  } });
+  const onChange = vi.fn();
+  const view = render(<BotCapabilitySettings expanded
+    bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
+    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [] } as unknown as BotProfile['capabilities']}
+    skills={[]} onChange={onChange} />);
+
+  await waitFor(() => expect(view.getAllByRole('switch', { name: 'agent-ops' })).toHaveLength(1));
+  const checkbox = view.getByRole('switch', { name: 'agent-ops' }) as HTMLButtonElement;
+  const available = enabled && runtimeStatus !== 'failed';
+  expect(checkbox.disabled).toBe(!available);
+  expect(view.getByText('Runtime winner description')).toBeTruthy();
+  expect(view.queryByText('First source description')).toBeNull();
+  expect(view.getByRole('switch', { name: 'unique-skill' })).toBeTruthy();
+  if (available) {
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('skill', ['agent-ops']);
+  }
+  // Rendering must leave the discovery catalog intact for other consumers.
+  expect(discovered).toHaveLength(3);
+  expect(listAgentSkills).toHaveBeenCalledOnce();
 });
 
 
@@ -138,7 +210,7 @@ it.each(['mcp', 'toolset'] as const)('preserves inherited %s tools until its fai
   expect(onChange).toHaveBeenCalledExactlyOnceWith(kind, ['inherited']);
 });
 
-it('keeps the full tool list visible and offers configuration for available and unavailable tools', async () => {
+it('offers turning on an unavailable tool and keeps tool settings in the group heading', async () => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
     localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
     maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
@@ -157,12 +229,97 @@ it('keeps the full tool list visible and offers configuration for available and 
     skills={[]} onChange={vi.fn()} />);
   await waitFor(() => expect(view.getByRole('switch', { name: 'Browser' })).toBeTruthy());
   const field = view.getByRole('switch', { name: 'Browser' }).closest('fieldset')!;
-  expect(field.querySelector('.overflow-y-auto')).toBeNull();
   expect(field.textContent).toContain('Read and operate web pages');
-  const buttons = field.querySelectorAll<HTMLButtonElement>('button:not([role=switch])');
-  fireEvent.click(buttons[0]!); expect(onConfigure).toHaveBeenLastCalledWith('toolset', 'browser');
-  fireEvent.click(buttons[1]!); expect(onConfigure).toHaveBeenLastCalledWith('toolset', 'computer');
+  fireEvent.click(view.getByRole('button', { name: 'bots.capabilities.turnOn' }));
+  expect(onConfigure).toHaveBeenLastCalledWith('toolset', 'computer');
+  fireEvent.click(view.getByRole('button', { name: 'bots.capabilities.toolSettings' }));
+  expect(onConfigure).toHaveBeenLastCalledWith('toolset');
   fireEvent.change(view.getByRole('textbox'), { target: { value: 'web pages' } });
   expect(view.getByRole('switch', { name: 'Browser' })).toBeTruthy();
   expect(view.queryByRole('switch', { name: 'Computer' })).toBeNull();
+});
+
+// 2026-11-10 owner (third-round review #1): a V2 teammate has the same capabilities in every
+// session, so its page offers no tool / MCP / Skill selection, only its own Skills.
+it('offers no capability selection for a V2 teammate', async () => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: {
+      listSkills: async () => [{ slug: 'hand-off', name: 'hand-off', enabled: true }],
+    } },
+    maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
+      listAgentSkills: async () => ({ success: true, skills: [{ name: 'agent-ops', enabled: true }] }),
+      plugins: { list: async () => [{ id: 'browser', name: 'Browser', available: true }] } },
+  } });
+  const view = render(<BotCapabilitySettings expanded
+    bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
+    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [], projectMode: true } as unknown as BotProfile['capabilities']}
+    skills={[]} onChange={vi.fn()} />);
+  expect(await view.findByRole('switch', { name: 'hand-off' })).toBeTruthy();
+  await waitFor(() => expect(h.list).toHaveBeenCalled());
+  expect(view.queryByRole('switch', { name: 'Browser' })).toBeNull();
+  expect(view.queryByRole('switch', { name: 'agent-ops' })).toBeNull();
+  expect(view.queryByText('bots.capabilities.core.name')).toBeNull();
+});
+
+// Greptile #8330: back and closing settings must not silently drop an edited learned Skill.
+it('asks before leaving a learned Skill editor with unsaved changes', async () => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: {
+      listSkills: async () => [{ slug: 'weekly-report', name: '整理工作周报', enabled: true }],
+      skills: { setEnabled: h.setEnabled, read: vi.fn() },
+    } },
+    maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
+      listAgentSkills: async () => ({ success: true, skills: [] }), plugins: { list: async () => [] } },
+  } });
+  const backRef: { current: (() => Promise<boolean>) | null } = { current: null };
+  const leaveRef: { current: (() => Promise<boolean>) | null } = { current: null };
+  const view = render(<BotCapabilitySettings expanded backRef={backRef} leaveRef={leaveRef}
+    bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
+    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [] } as unknown as BotProfile['capabilities']}
+    skills={[]} onChange={vi.fn()} />);
+  fireEvent.click(await view.findByText('整理工作周报'));
+  await waitFor(() => expect(h.skillPage?.view).toEqual({ type: 'learned', slug: 'weekly-report' }));
+  expect(leaveRef.current).toBeNull();
+  h.skillPage!.onView({ type: 'learned', slug: 'weekly-report', editing: true });
+  await waitFor(() => expect(leaveRef.current).not.toBeNull());
+  h.skillPage!.editorDirtyRef!.current = () => true;
+  h.confirm.mockResolvedValueOnce(false);
+  expect(await backRef.current!()).toBe(true);
+  expect(h.skillPage?.view.editing).toBe(true);
+  h.confirm.mockResolvedValueOnce(false);
+  expect(await leaveRef.current!()).toBe(false);
+  expect(await backRef.current!()).toBe(true);
+  await waitFor(() => expect(h.skillPage?.view.editing).toBe(false));
+  expect(h.confirm).toHaveBeenCalledTimes(3);
+});
+
+ it('shows official skills as inherited and keeps personal skills selectable', async () => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
+    maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
+      listAgentSkills: async () => ({ success: true, skills: [
+        { name: 'PR', cindyOfficial: true, enabled: true },
+        { name: 'Disabled official', cindyOfficial: true, enabled: false },
+        { name: 'Personal', enabled: true },
+        { name: 'PR', enabled: true },
+      ] }), plugins: { list: async () => [] },
+    },
+  } });
+  const onChange = vi.fn();
+  const view = render(<BotCapabilitySettings expanded
+    bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
+    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [] } as unknown as BotProfile['capabilities']}
+    skills={[]} onChange={onChange} />);
+  await waitFor(() => expect(view.getByRole('switch', { name: 'PR' })).toBeTruthy());
+  const official = view.getByRole('switch', { name: 'PR' }) as HTMLButtonElement;
+  expect(official.disabled).toBe(true);
+  expect(official.getAttribute('aria-checked')).toBe('true');
+  // The same-name namesake does not hide the official entry; a disabled official keeps its explanation.
+  expect(view.getAllByRole('switch', { name: 'PR' })).toHaveLength(1);
+  expect(view.getAllByText('bots.capabilities.officialInherited')).toHaveLength(2);
+  expect(view.getByRole('switch', { name: 'Disabled official' }).getAttribute('aria-checked')).toBe('false');
+  const personal = view.getByRole('switch', { name: 'Personal' }) as HTMLButtonElement;
+  expect(personal.disabled).toBe(false);
+  fireEvent.click(personal);
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('skill', ['Personal']);
 });

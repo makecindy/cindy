@@ -39,9 +39,10 @@ export async function readRemoteBotSessionAccessBatch(
         .where(inArray(sessions.id, chunk));
       if (!isDataOwnerBroadcastScopeCurrent(owner)) return denyAll();
       for (const row of rows) {
-        // 插件后台隐藏任务:列表类结果不返回,单任务读取/操作仍允许(插件页深链打开)。
+        // Hidden is a listing preference, not an owner access boundary.
+        // Companion history and orphaned transcripts remain readable by exact ID.
         access.set(row.id, row.source !== 'bot' ? (row.hiddenAt != null ? 'background' : 'ordinary')
-          : row.visible ? 'visible' : 'hidden');
+          : row.visible && row.hiddenAt == null ? 'visible' : 'background');
       }
     }
   }

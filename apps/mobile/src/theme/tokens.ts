@@ -44,6 +44,13 @@ export interface ThemeColors {
   surfaceTranslucentSidebar: string;
   /** Chat 顶栏玻璃底色(M3:只给会话页顶部 chrome,不污染侧栏 / sheet) */
   chatHeaderSurface: string;
+  /**
+   * 边缘磨砂(首页 / 任务顶栏、输入框底部)在模糊之上、同一遮罩内的压暗层。深色系统材质比
+   * `surface` 亮,单靠模糊会把空白页面提亮成一条可见的带;压暗后空白处仍是 `surface`,只有背后
+   * 有内容时才看得出磨砂。浅色材质本就贴近页面,不压暗。Layered 用于顶栏三层叠加的每一层。
+   */
+  edgeBlurShade: string;
+  edgeBlurShadeLayered: string;
   /** Chat 顶栏底部分割线(M3:dark 为极弱白线) */
   chatHeaderDivider: string;
   /** 浮层卡 sheet surface 底色(R1 audit 模式3,solid 玻璃感由 backdrop blur 承担,surface 不叠 blur 规避 Android 滚动热路径) */
@@ -114,6 +121,8 @@ export interface ThemeColors {
   borderStrong: string;
   /** 主标题 / 主正文 */
   textPrimary: string;
+  /** 群聊正文点名专用；对齐 Desktop CINDY msg-link，不用于普通链接或状态。 */
+  groupMentionText: string;
   /** 次要文字 / 图标 */
   textSecondary: string;
   /** 三级文字 / metadata(时间、计数等真实信息) */
@@ -139,6 +148,10 @@ export interface ThemeColors {
   statusAccent: string;
   /** 房主皇冠标识金色；与 Desktop --warning-fg 对齐，Light / Dark 均保持醒目。 */
   warningFg: string;
+  /** 额度黄（剩余不超过 30%，@cindy/maker-shared/quota-level）；仅额度使用，双模式同值。 */
+  quotaBarWarn: string;
+  /** 额度红（剩余不超过 10%）#EF4444，与 Desktop --quota-bar-crit、Mac 面板、iPhone 组件同值。 */
+  quotaBarCrit: string;
   /** 会话状态点 — 等待用户回复/选择(TapTap 蓝,对齐桌面 --card-status-awaiting 与灵动岛 needs-interaction) */
   statusAwaiting: string;
   /**
@@ -153,9 +166,11 @@ export interface ThemeColors {
   permAutoAccent: string;
   /**
    * 伙伴列表未读点(信息蓝 #417CDD,L=D 同值)。对齐桌面 `--bot-unread-bg`(DESIGN.md「Bot Unread Badge」):
-   * 表示 IM 未读语义,只用于伙伴列表行(伙伴与群聊)的未读点,不是 CTA、不是状态色,不得挪作他用。
+   * 表示 IM 未读语义,用于伙伴列表行(伙伴与群聊)及群内话题入口的未读提示,不是 CTA、不是状态色,不得挪作他用。
    */
   botUnread: string;
+  /** 话题内新回复分界线及标签；列表与摘要继续使用 botUnread。 */
+  threadUnreadDivider: string;
   /**
    * PR 已合并图标色(焦点蓝 #417CDD,L=D 同值)。对齐桌面 PR_STATUS_COLOR.merged = `--focus-ring`;
    * 只用于 PR 状态图标,不得挪作他用。其余 PR 状态复用 statusDone / statusError / textTertiary。
@@ -183,15 +198,20 @@ export interface ThemeColors {
    * 注意:侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar(light 近白),不受本 token 影响。
    */
   overlay: string;
+  /** 视频封面播放标记：恒深底与恒白前景，保证任意画面上的对比度。 */
+  mediaPlayBackground: string;
+  mediaPlayForeground: string;
   /** 素雅新建对话 FAB:dark 用柔白 #E6E6E6 而非 cta 近白,避免主入口在深底上过跳 */
   homeListFab: string;
   /** List FAB 描边:light 无描边(transparent),dark 按 301:1073 帧白色 hairline */
   homeListFabBorder: string;
   /** 会话行右滑「置顶/取消置顶」按钮底色(Heart Orange,与 statusAccent 同值但语义独立) */
   swipeActionPin: string;
+  /** 右滑已读:沿用灵动岛青绿色语义,加深底色保证白色单勾的对比度。 */
+  swipeActionRead: string;
   /** 会话行左滑「选项」按钮底色(iOS systemGray 感的中性灰) */
   swipeActionNeutral: string;
-  /** 会话行左滑「归档」按钮底色(iOS 系统蓝;不用 statusAwaiting 青——其上白字对比不足) */
+  /** 会话行左滑「归档」按钮底色:保留手机版原有蓝色,与灵动岛归档对齐 */
   swipeActionArchive: string;
   /** swipe 按钮上的文字/图标色:两个主题都是白(按钮底色恒为深色系,不能用会反相的 ctaText) */
   swipeActionText: string;
@@ -423,6 +443,8 @@ export const lightColors: ThemeColors = {
   surfaceTranslucent: 'rgba(249, 249, 246, 0.78)',
   surfaceTranslucentSidebar: 'rgba(255, 255, 252, 0.90)',
   chatHeaderSurface: 'rgba(249, 249, 246, 0.90)',
+  edgeBlurShade: 'transparent',
+  edgeBlurShadeLayered: 'transparent',
   chatHeaderDivider: '#CCCCC8',
   surfaceGlassPanel: '#FFFFFC',
   surfaceListRow: '#FFFFFC',
@@ -453,6 +475,7 @@ export const lightColors: ThemeColors = {
   borderTranslucent: 'rgba(204, 204, 200, 0.62)',
   borderStrong: '#858581',
   textPrimary: '#0F0F0F',
+  groupMentionText: '#1D4ED8',
   textSecondary: '#4D4D4A',
   textTertiary: '#686864',
   textPlaceholder: '#858581',
@@ -462,11 +485,14 @@ export const lightColors: ThemeColors = {
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
+  quotaBarWarn: '#F3A115',
+  quotaBarCrit: '#EF4444',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
+  threadUnreadDivider: '#D91F37',
   prMerged: '#417CDD',
   errorText: '#0F0F0F',
   destructive: '#f43d3f',
@@ -476,11 +502,14 @@ export const lightColors: ThemeColors = {
   // overlay:遮罩双模式恒深(light 原 0.24 太浅近白;0.50 实机过重,用户定稿 0.35,2026-07-21)。
   // 侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar,不受影响。
   overlay: 'rgba(38, 38, 38, 0.35)',
+  mediaPlayBackground: 'rgba(0, 0, 0, 0.55)',
+  mediaPlayForeground: '#ffffff',
   // homeListFab:反相中性,不染品牌红(lead 裁决 2026-07-17:染红=扩张红名单,超 U8
   // 已批决策表范围;日后要红 FAB 须单独过用户关卡)。light 对齐 textPrimary / cta 近黑 #0F0F0F。
   homeListFab: '#0F0F0F',
   homeListFabBorder: 'transparent',
   swipeActionPin: '#EA6B17',
+  swipeActionRead: '#008579',
   swipeActionNeutral: '#8e8e93',
   swipeActionArchive: '#3b82f6',
   swipeActionText: '#fbfbfa',
@@ -513,6 +542,9 @@ export const darkColors: ThemeColors = {
   surfaceTranslucent: 'rgba(18, 18, 18, 0.78)',
   surfaceTranslucentSidebar: 'rgba(10, 10, 10, 0.85)',
   chatHeaderSurface: 'rgba(18, 18, 18, 0.80)',
+  // iOS 27 实测:#121212 上单层(55)提亮到约 21.9、顶栏三层(各 32)约 21.4;压暗后回到 18。
+  edgeBlurShade: 'rgba(0, 0, 0, 0.18)',
+  edgeBlurShadeLayered: 'rgba(0, 0, 0, 0.08)',
   chatHeaderDivider: 'rgba(255, 255, 255, 0.08)',
   surfaceGlassPanel: '#242424',
   surfaceListRow: '#1E1E1E',
@@ -544,6 +576,7 @@ export const darkColors: ThemeColors = {
   borderTranslucent: 'rgba(56, 56, 56, 0.62)',
   borderStrong: '#8A8A8A',
   textPrimary: '#EDEDED',
+  groupMentionText: '#93C5FD',
   textSecondary: '#BDBDBD',
   textTertiary: '#999999',
   textPlaceholder: '#757575',
@@ -553,11 +586,14 @@ export const darkColors: ThemeColors = {
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
+  quotaBarWarn: '#F3A115',
+  quotaBarCrit: '#EF4444',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
+  threadUnreadDivider: '#FF667A',
   prMerged: '#417CDD',
   errorText: '#EDEDED',
   destructive: '#f43d3f',
@@ -565,10 +601,13 @@ export const darkColors: ThemeColors = {
   sharedTaskConfirmForeground: '#121212',
   errorBorder: '#8A8A8A',
   overlay: 'rgba(0, 0, 0, 0.45)',
+  mediaPlayBackground: 'rgba(0, 0, 0, 0.55)',
+  mediaPlayForeground: '#ffffff',
   // homeListFab:反相中性(lead 裁决,见 lightColors 注释);dark 用 #E6E6E6 柔白(比 cta 略收)。
   homeListFab: '#E6E6E6',
   homeListFabBorder: '#FFFFFF',
   swipeActionPin: '#EA6B17',
+  swipeActionRead: '#008579',
   swipeActionNeutral: '#636366',
   swipeActionArchive: '#3b82f6',
   swipeActionText: '#fbfbfa',
@@ -630,6 +669,8 @@ export const typeScale = {
   bodyLarge: 17,
   subtitle: 18,
   title: 20,
+  /** 2026-10-28 approved invitation V9 identity, paired with listTitle (28). */
+  inviteTitle: 22,
   headline: 24,
   largeTitle: 30,
   hero: 40,

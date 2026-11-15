@@ -38,6 +38,8 @@ export interface SidebarTabWindowAssignment {
 /** 下发给弹出窗口的指派:附不可持久化会话的整桶内存快照(仅 device-link 远程会话非空)。 */
 export interface SidebarTabWindowAssignmentPayload extends SidebarTabWindowAssignment {
   handoff: RsbWindowTabSnapshot | null;
+  /** 本次指派要求选中的已承载页签；只发给它的窗口，不持久化。 */
+  revealTabId?: string;
 }
 
 /** 主窗 → main 的弹出 / 搬入请求。 */

@@ -261,49 +261,9 @@ describe('turn-done list preview refresh', () => {
     );
   });
 
-  it('助手正文被改写后也刷新列表预览', () => {
-    const messagesSource = readFileSync(
-      resolve(__dirname, '..', 'localDb', 'ipc', 'messages.ts'),
-      'utf8',
-    );
-    const latestSource = readFileSync(
-      resolve(__dirname, '..', 'localDb', 'latestMessageText.ts'),
-      'utf8',
-    );
-    const updateStart = messagesSource.indexOf('export async function updateMessageContent');
-    const updateEnd = messagesSource.indexOf('function clampLimit', updateStart);
-    const updateBlock = messagesSource.slice(updateStart, updateEnd);
-    expect(updateBlock).toContain('const ownerScope = captureOwnerBroadcastScope();');
-    expect(updateBlock).toContain("await dbClient.tx('message.updateContent'");
-    expect(updateBlock.indexOf('const ownerScope = captureOwnerBroadcastScope();')).toBeLessThan(
-      updateBlock.indexOf("await dbClient.tx('message.updateContent'"),
-    );
-    expect(updateBlock).toContain(
-      'await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);',
-    );
-    const broadcastStart = messagesSource.indexOf(
-      'async function maybeBroadcastSessionListPreview',
-    );
-    const broadcastEnd = messagesSource.indexOf('function isAutoResumeUserRow', broadcastStart);
-    const broadcastBlock = messagesSource.slice(broadcastStart, broadcastEnd);
-    expect(broadcastBlock).toContain('latest = await latestVisiblePreviewRow(sessionId);');
-    expect(broadcastBlock).toContain('if (latest?.clientId !== row.clientId) return;');
-    expect(broadcastBlock).toContain(
-      'const preview = extractMessagePreview(row.content, row.role);',
-    );
-    expect(broadcastBlock).not.toContain('await persistSessionListPreview');
-    expect(broadcastBlock).toContain('patch: { preview }');
-    expect(broadcastBlock).not.toContain('if (!preview) return;');
-    expect(latestSource).toContain('export async function latestVisiblePreviewRow');
-    expect(latestSource).toContain(
-      'or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt))',
-    );
-    expect(latestSource).toContain('const joinedMessageRowid = sql<number>`"messages"."rowid"`;');
-    expect(latestSource).toContain('.orderBy(desc(messages.createdAt), desc(joinedMessageRowid))');
-    expect(latestSource).toContain(
-      "CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1",
-    );
-  });
+  // Message rewrite preview behavior is exercised through the production DB
+  // entry in localDb/ipc/__tests__/assistantFinalRetraction.test.ts.
+
 });
 
 describe('sanitize — 去噪 + 句界截断', () => {

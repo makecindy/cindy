@@ -1,3 +1,4 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 import { Button } from '@/components/ui/button';
 import { Check, FolderOpen, Loader2, RotateCw, Trash2, Unplug } from 'lucide-react';
 import { useCallback } from 'react';
@@ -45,10 +46,16 @@ export function WechatBotSection({
   expanded,
   onToggle,
   companion,
+  host,
 }: {
   expanded: boolean;
   onToggle: () => void;
   companion?: { id: string; name: string };
+  /**
+   * Set when the teammate runs on another computer: its WeChat API. Authorizing opens a browser and
+   * scanning happens on that computer, so connecting stays there; assignment and release work from here.
+   */
+  host?: { name: string; api: Window['electronAPI']['wechatBot'] };
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -65,7 +72,7 @@ export function WechatBotSection({
     resetWorkingDirectory,
     setCompanion,
     isUpdatingCompanion,
-  } = useWechatBot();
+  } = useWechatBot(host?.api);
   const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wechat');
   const assigned = channelSettings?.companionBotId;
   const otherCompanion = !!companion && !!assigned && assigned !== companion.id;
@@ -124,7 +131,7 @@ export function WechatBotSection({
   return (
     <ImChannelSettingsCard
       id={companion ? 'companion-im-wechat' : 'personal-im-wechat'}
-      title={t('settings.wechatBot.title')}
+      title={t(imBotSettings.wechat.titleKey)}
       description={t('settings.wechatBot.description')}
       routeSummary={
         companion ? (assigned === companion.id ? companion.name : null)
@@ -167,12 +174,12 @@ export function WechatBotSection({
             {t('settings.wechatBot.companion.permissionNote')}
           </p>
           {!otherCompanion && assigned ? (
-            <Button variant="secondary" size="sm" loading={isUpdatingCompanion}
+            <Button data-setting-id={imBotSettings.wechat.id} variant="secondary" size="sm" loading={isUpdatingCompanion}
               onClick={() => void setCompanion(null)}>
               {t('settings.wechatBot.companion.remove')}
             </Button>
           ) : !otherCompanion && state.bound && companion ? (
-            <Button variant="secondary" size="sm" loading={isUpdatingCompanion}
+            <Button data-setting-id={imBotSettings.wechat.id} variant="secondary" size="sm" loading={isUpdatingCompanion}
               disabled={!channelSettings} onClick={() => void setCompanion(companion.id)}>
               {t('settings.wechatBot.companion.useExisting', { name: companion.name })}
             </Button>
@@ -206,7 +213,7 @@ export function WechatBotSection({
               {t('settings.wechatBot.waiting.note')}
             </p>
           </div>
-          <Button
+          <Button data-setting-id={imBotSettings.wechat.id}
             variant="secondary"
             size="lg"
             type="button"
@@ -235,19 +242,21 @@ export function WechatBotSection({
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button
-              variant="secondary"
-              size="lg"
-              loading={isAuthorizing}
-              type="button"
-              onClick={() => void handleAuthorize()}
-              disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}
-              className="flex-1"
-            >
-              <RotateCw size={13} />
-              {t('settings.wechatBot.actions.rebind')}
-            </Button>
-            <Button
+            {host ? null : (
+              <Button data-setting-id={imBotSettings.wechat.id}
+                variant="secondary"
+                size="lg"
+                loading={isAuthorizing}
+                type="button"
+                onClick={() => void handleAuthorize()}
+                disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}
+                className="flex-1"
+              >
+                <RotateCw size={13} />
+                {t('settings.wechatBot.actions.rebind')}
+              </Button>
+            )}
+            <Button data-setting-id={imBotSettings.wechat.id}
               variant="secondary"
               size="lg"
               loading={isUnbinding}
@@ -274,17 +283,23 @@ export function WechatBotSection({
               )}
             </p>
           </div>
-          <Button
-            variant="cta"
-            size="lg"
-            loading={isAuthorizing}
-            type="button"
-            onClick={() => void handleAuthorize()}
-            disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}
-            className="w-full"
-          >
-            {t('settings.wechatBot.actions.connect')}
-          </Button>
+          {host ? (
+            <p className="text-12 leading-[1.6] text-[var(--settings-section-desc)]">
+              {t('bots.remoteSettings.finishOnHost', { device: host.name })}
+            </p>
+          ) : (
+            <Button data-setting-id={imBotSettings.wechat.id}
+              variant="cta"
+              size="lg"
+              loading={isAuthorizing}
+              type="button"
+              onClick={() => void handleAuthorize()}
+              disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}
+              className="w-full"
+            >
+              {t('settings.wechatBot.actions.connect')}
+            </Button>
+          )}
         </div>
       )}
     </ImChannelSettingsCard>
@@ -316,7 +331,7 @@ function WechatWorkingDirectory({
         </p>
       </div>
       <div className="flex min-w-0 items-center gap-2">
-        <Button
+        <Button data-setting-id={imBotSettings.wechat.id}
           variant="secondary"
           size="lg"
           type="button"
@@ -330,7 +345,7 @@ function WechatWorkingDirectory({
           </span>
         </Button>
         {configured && (
-          <Button
+          <Button data-setting-id={imBotSettings.wechat.id}
             variant="secondary"
             size="lg"
             type="button"

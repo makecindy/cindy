@@ -96,6 +96,81 @@ afterEach(() => {
 });
 
 describe('ProfileEditDialog 头像调整', () => {
+  // Regression: a group editor must never load or save the global account profile.
+  // Existing crop tests cover only account editing; this exercises the same real
+  // dialog with a group-scoped destination (unit/jsdom).
+  it('saves a cropped group avatar without reading or writing the account profile', async () => {
+    const avatarEditor = {
+      title: 'Group avatar', hint: 'Only this group',
+      getState: vi.fn(async () => ({ name: 'Group me', avatarUrl: 'https://example.com/group.png', defaultAvatarUrl: 'https://example.com/account.png' })),
+      save: vi.fn(async () => {}),
+    };
+    render(<ProfileEditDialog open onOpenChange={vi.fn()} avatarEditor={avatarEditor} />);
+    await screen.findByText('Group avatar');
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(api.profileGetState).not.toHaveBeenCalled();
+    await chooseImage();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.crop.done' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.userProfile.edit.save' }));
+    await waitFor(() => expect(avatarEditor.save).toHaveBeenCalledWith({ type: 'set', data: EXPORTED, mimeType: 'image/jpeg' }));
+    expect(api.profileUpdate).not.toHaveBeenCalled();
+  });
+
+  // Review regression (unit/jsdom): existing group tests never refreshed member
+  // metadata mid-edit. A new nickname must not discard the crop or saved draft.
+  it.each(['cropping', 'preview'] as const)('preserves the group avatar during %s when member metadata refreshes', async (step) => {
+    const onOpenChange = vi.fn();
+    const save = vi.fn(async () => {});
+    const editor = (name: string) => ({
+      title: 'Group avatar', hint: 'Only this group', save,
+      getState: async () => ({ name, avatarUrl: 'https://example.com/group.png', defaultAvatarUrl: null }),
+    });
+    const view = render(<ProfileEditDialog open onOpenChange={onOpenChange} avatarEditor={editor('Before')} />);
+    await chooseImage();
+    if (step === 'preview') {
+      fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.crop.done' }));
+      await screen.findByRole('button', { name: 'settings.userProfile.edit.save' });
+    }
+
+    const refreshed = editor('After');
+    view.rerender(<ProfileEditDialog open onOpenChange={onOpenChange} avatarEditor={refreshed} />);
+    await act(async () => {});
+    expect(source.bitmap.close).not.toHaveBeenCalled();
+    if (step === 'cropping') {
+      expect(screen.getByRole('group', { name: 'settings.userProfile.edit.crop.stageLabel' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.crop.done' }));
+      await screen.findByRole('button', { name: 'settings.userProfile.edit.save' });
+    }
+    expect((screen.getByRole('img') as HTMLImageElement).src).toBe('blob:avatar-1');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.save' }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ type: 'set', data: EXPORTED, mimeType: 'image/jpeg' }));
+    expect(api.profileUpdate).not.toHaveBeenCalled();
+
+    // Closing still releases the draft; reopening starts with server data.
+    view.rerender(<ProfileEditDialog open={false} onOpenChange={onOpenChange} avatarEditor={refreshed} />);
+    expect(source.bitmap.close).toHaveBeenCalledTimes(1);
+    view.rerender(<ProfileEditDialog open onOpenChange={onOpenChange} avatarEditor={refreshed} />);
+    await act(async () => {});
+    expect((screen.getByRole('img') as HTMLImageElement).src).toBe('https://example.com/group.png');
+  });
+
+  it('previews the account avatar on group reset and keeps the editor open if saving fails', async () => {
+    const onOpenChange = vi.fn();
+    const avatarEditor = {
+      title: 'Group avatar', hint: 'Only this group',
+      getState: async () => ({ name: 'Group me', avatarUrl: 'https://example.com/group.png', defaultAvatarUrl: 'https://example.com/account.png' }),
+      save: vi.fn(async () => { throw new Error('REQUEST_FAILED'); }),
+    };
+    render(<ProfileEditDialog open onOpenChange={onOpenChange} avatarEditor={avatarEditor} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.userProfile.edit.resetAvatar' }));
+    expect((screen.getByRole('img') as HTMLImageElement).src).toBe('https://example.com/account.png');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.edit.save' }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('settings.userProfile.edit.saveFailed'));
+    expect(avatarEditor.save).toHaveBeenCalledWith({ type: 'reset' });
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(api.profileUpdate).not.toHaveBeenCalled();
+  });
+
   it('选图后进入调整步骤;取消回到表单且不改旧头像,保存不上传', async () => {
     const { onOpenChange } = renderDialog();
     await chooseImage();

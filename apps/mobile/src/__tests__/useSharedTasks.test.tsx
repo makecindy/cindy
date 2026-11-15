@@ -3,6 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useSharedTasks } from '../device-link/useSharedTasks';
+import { notifySharedTaskMembershipChanged } from '../device-link/sharedTaskMembershipSignal';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { sharedTaskHostPeer, type SharedTaskListItem } from '@cindy/device-link';
 import type { RemoteSession } from '@/session/types';
@@ -14,7 +15,15 @@ const state = vi.hoisted(() => ({
   api: { list: vi.fn<() => Promise<SharedTaskListItem[]>>(async () => []), leave: vi.fn() },
   revoked: vi.fn(),
   store: { getSessions: vi.fn<() => RemoteSession[]>(() => []), removeDevice: vi.fn(), setDeviceSessions: vi.fn() },
+  appState: 'active', appStateListener: undefined as undefined | (() => void),
 }));
+vi.mock('react-native', () => ({ AppState: {
+  get currentState() { return state.appState; },
+  addEventListener: (_: string, listener: () => void) => {
+    state.appStateListener = listener;
+    return { remove: () => { state.appStateListener = undefined; } };
+  },
+} }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => state.auth }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => state.link }));
 vi.mock('@/device-link/useSharedTaskApi', () => ({ useSharedTaskApi: () => state.api }));
@@ -32,6 +41,7 @@ beforeEach(() => {
   state.auth.isAuthenticated = true; state.auth.accountGeneration = 1;
   setMobileAuthOwner('owner');
   state.link.status = 'online'; state.link.sharedTaskAvailable = false;
+  state.appState = 'active';
   root = createRoot(document.createElement('div'));
 });
 const owned = { sharedTaskId: 'owned', sessionId: 'owned-task', ownerAccountId: 'owner', hostDeviceId: 'desktop', title: 'My share', revision: 1 };
@@ -48,7 +58,7 @@ it('discovers owner shares without opening guest links or requiring remote contr
   state.link.status = 'online'; state.api.list.mockRejectedValue(new Error('offline')); await render();
   expect(ownedTasks).toEqual([confirmedOwned]);
   state.api.list.mockResolvedValue([]);
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
   expect(ownedTasks).toEqual([]);
   expect(state.store.removeDevice).not.toHaveBeenCalled();
   expect(state.link.closeLink).not.toHaveBeenCalled();
@@ -85,7 +95,7 @@ it('retries membership cleanup on the next restore poll after a leave failure', 
   await render();
   expect(state.api.leave).toHaveBeenCalledTimes(1);
   expect(state.store.setDeviceSessions).not.toHaveBeenCalled();
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
   expect(state.api.leave).toHaveBeenCalledTimes(2);
   expect(state.link.closeLink).toHaveBeenCalledWith(sharedTaskHostPeer('joined', 'desktop'));
 });
@@ -120,7 +130,7 @@ it('hides the previous account shares and ignores its late list response', async
   await render(); expect(ownedTasks).toEqual([confirmedOwned]);
   let finish!: (value: SharedTaskListItem[]) => void;
   state.api.list.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
   setMobileAuthOwner('other'); state.auth.accountGeneration++;
   state.api.list.mockResolvedValue([]); await render();
   expect(ownedTasks).toEqual([]);
@@ -150,7 +160,7 @@ it('keeps an offline unknown share hidden and resumes ordinary discovery after s
   state.link.invoke.mockRejectedValueOnce(new Error('offline'));
   await render(); expect(ownedTasks).toEqual([]);
   state.link.invoke.mockResolvedValue({ id: owned.sessionId });
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
   expect(ownedTasks).toEqual([{ ...owned, source: null }]);
   expect(state.link.openLink).not.toHaveBeenCalled();
 });
@@ -169,11 +179,25 @@ it('does not poll an old relay, resumes after upgrade, and pauses without deleti
   expect(state.api.list).not.toHaveBeenCalled();
   state.link.sharedTaskAvailable = true; await render();
   expect(state.api.list).toHaveBeenCalledTimes(1);
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
   expect(state.api.list).toHaveBeenCalledTimes(2);
   state.link.status = 'connecting'; state.link.sharedTaskAvailable = undefined; await render();
   await act(async () => vi.advanceTimersByTimeAsync(15_000));
   expect(state.api.list).toHaveBeenCalledTimes(2);
   expect(state.store.removeDevice).not.toHaveBeenCalled();
   expect(state.link.closeLink).not.toHaveBeenCalled();
+});
+it('pauses in the background and rereads on return or after joining, not every 5 s', async () => {
+  state.link.sharedTaskAvailable = true;
+  await render();
+  await act(async () => vi.advanceTimersByTimeAsync(59_999));
+  expect(state.api.list).toHaveBeenCalledTimes(1);
+  await act(async () => { notifySharedTaskMembershipChanged(); });
+  expect(state.api.list).toHaveBeenCalledTimes(2);
+  state.appState = 'background'; state.appStateListener?.();
+  await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+  expect(state.api.list).toHaveBeenCalledTimes(2);
+  state.appState = 'active';
+  await act(async () => { state.appStateListener?.(); });
+  expect(state.api.list).toHaveBeenCalledTimes(3);
 });

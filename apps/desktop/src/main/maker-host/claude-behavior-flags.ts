@@ -30,15 +30,20 @@ const STATIC_CLAUDE_BEHAVIOR_FLAGS: Readonly<Record<string, string>> = {
 /**
  * ToolSearch 依赖上游接受 deferred tools / tool_reference。仅对已知支持该协议的
  * XD 网关与 Anthropic 原生路由开启；其它显式来源默认关闭，避免兼容供应商返回 400。
+ *
+ * 开启时用 'true' 而不是 'auto'：'auto' 在新会话首个请求按 MCP 工具占上下文窗口的比例
+ * 判定，1M 窗口下必然低于阈值，首轮会把全部工具 schema 内联（约 70k token），第二轮才
+ * 改为按需加载，工具集一变又让首轮写入的缓存前缀作废。'true' 下 CLI 仍会对不支持
+ * tool_reference 的模型自动关闭，端点拒绝时也会去掉 deferred tools 重发。
  */
 export function claudeToolSearchMode(
   providerId: string | null | undefined,
   credentialMode?: string,
   nativeAuth?: string,
-): 'auto' | 'false' {
+): 'true' | 'false' {
   const provider = providerId?.trim() || null;
-  if (provider) return provider === 'xd' || provider === 'anthropic' || nativeAuth === 'claude' ? 'auto' : 'false';
-  return credentialMode === 'provider-oauth' ? 'false' : 'auto';
+  if (provider) return provider === 'xd' || provider === 'anthropic' || nativeAuth === 'claude' ? 'true' : 'false';
+  return credentialMode === 'provider-oauth' ? 'false' : 'true';
 }
 
 export interface ClaudeSpawnFlagsContext {
@@ -49,6 +54,12 @@ export interface ClaudeSpawnFlagsContext {
   nativeAuth?: string;
   /** 是否连了 Claude.ai 订阅。惰性回调:gateway-key 分支不调用、不产生钥匙串读。 */
   oauthConnected: () => boolean;
+  /**
+   * 用户显式配置的 ENABLE_TOOL_SEARCH(宿主环境或 settings.json env,issue #7524)。
+   * 有值时压过按来源推导的默认值;未提供 / 返回 undefined 时保持 fail-closed 默认。
+   * 惰性回调,远端 spawn 不传(远端机器的用户配置不归本机读取)。
+   */
+  userToolSearch?: () => string | undefined;
 }
 
 export function claudeBehaviorFlagsForSpawn(ctx: ClaudeSpawnFlagsContext): Record<string, string> {
@@ -63,7 +74,10 @@ export function claudeBehaviorFlagsForSpawn(ctx: ClaudeSpawnFlagsContext): Recor
   // '0'/'false'/'no'/'off' 视为禁用,'1' = 保留归因,与未设置同义。
   return {
     ...STATIC_CLAUDE_BEHAVIOR_FLAGS,
-    ENABLE_TOOL_SEARCH: claudeToolSearchMode(ctx.providerId, ctx.credentialMode, ctx.nativeAuth),
+    // 用户显式配置优先:否则 Cindy 的 'false' 默认会静默覆盖 settings.json 里的选择(#7524)。
+    // 默认值仍是 #2929 的 fail-closed 防线,只有用户明确写了才放开。
+    ENABLE_TOOL_SEARCH:
+      ctx.userToolSearch?.() ?? claudeToolSearchMode(ctx.providerId, ctx.credentialMode, ctx.nativeAuth),
     CLAUDE_CODE_ATTRIBUTION_HEADER: keepAttribution ? '1' : '0',
   };
 }

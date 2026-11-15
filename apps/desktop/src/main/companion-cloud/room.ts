@@ -1,6 +1,6 @@
 /** Reading a companion's 1:1 room: the conversation layer every device can see. */
 import type { CompanionTranscriptMessage, CompanionTranscriptPage } from '../../shared/companionCloud.js';
-import type { CompanionApi } from './types.js';
+import { errorCode, type CompanionApi } from './types.js';
 
 export interface CompanionRoomMessage {
   id: string;
@@ -92,4 +92,62 @@ export function transcriptPageOf(messages: readonly CompanionTranscriptMessage[]
   while (start > 0 && messages[start - 1]!.createdAt === messages[start]!.createdAt) start -= 1;
   const page = messages.slice(start, end);
   return { messages: page, ...(start > 0 && page.length ? { nextBefore: String(page[0]!.createdAt) } : {}) };
+}
+
+export interface CompanionRoomSearchHit {
+  teammateId: string; teammateName: string; messageId: string; role: 'user' | 'assistant'; text: string; createdAt: number;
+}
+export interface CompanionRoomSearchResult {
+  hits: CompanionRoomSearchHit[];
+  /** Rooms that could not be searched: the result does not cover them. */
+  failed: Array<{ teammateId: string; teammateName: string; code: string }>;
+  /** More may match than `hits` holds: narrow the search instead of reading this as everything. */
+  incomplete: boolean;
+}
+export interface CompanionRoomSearchFilter { roles?: ReadonlyArray<'user' | 'assistant'>; fromMs?: number | null; toMs?: number | null }
+const ROOM_SEARCH_QUERY_MAX = 200;
+const ROOM_SEARCH_PAGE = 50;
+/** What one search reads of a room; reaching it is reported as `incomplete`, never as "no more". */
+const ROOM_SEARCH_PAGES = 10;
+const ROOM_SEARCH_TIMEOUT_MS = 8_000;
+
+/** Keyword search of companions' rooms (the server matches substrings); newest first. One slow room only costs itself. */
+export async function searchCompanionRooms(api: CompanionApi, companions: Array<{ id: string; externalId: string; name: string; room: () => Promise<string> }>,
+  query: string, filter: CompanionRoomSearchFilter = {}, timeoutMs = ROOM_SEARCH_TIMEOUT_MS): Promise<CompanionRoomSearchResult> {
+  const result: CompanionRoomSearchResult = { hits: [], failed: [], incomplete: false };
+  const keeps = (view: CompanionTranscriptMessage) => !!view.text && (!filter.roles || filter.roles.includes(view.role))
+    && (filter.fromMs == null || view.createdAt >= filter.fromMs) && (filter.toMs == null || view.createdAt < filter.toMs);
+  await Promise.all(companions.map(async companion => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let done = false;
+    // The server cannot filter by role or time, and its order is arrival, not message time: history
+    // uploaded later comes first. So "the newest matches" takes reading on, not just enough rows.
+    const search = async () => {
+      const roomId = await companion.room();
+      let before: string | undefined;
+      for (let pages = 0; !done; pages += 1) {
+        if (pages === ROOM_SEARCH_PAGES) { result.incomplete = true; return; }
+        const params = new URLSearchParams({ q: query.slice(0, ROOM_SEARCH_QUERY_MAX), limit: String(ROOM_SEARCH_PAGE) });
+        if (before) params.set('before', before);
+        const page = await api<CompanionRoomMessage[]>(`/conversations/${roomId}/search?${params}`);
+        const rows = Array.isArray(page) ? page : [];
+        for (const message of rows) {
+          const view = roomMessageView(message, companion.id);
+          if (!view || !keeps(view)) continue;
+          result.hits.push({ teammateId: companion.externalId, teammateName: companion.name, messageId: view.id, role: view.role, text: view.text, createdAt: view.createdAt });
+        }
+        if (rows.length < ROOM_SEARCH_PAGE) return;
+        before = rows.at(-1)!.seq;
+      }
+    };
+    try {
+      await Promise.race([search(), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('TIMEOUT')), timeoutMs);
+      })]);
+    } catch (error) {
+      result.failed.push({ teammateId: companion.externalId, teammateName: companion.name, code: errorCode(error) });
+    } finally { done = true; clearTimeout(timer); }
+  }));
+  result.hits.sort((a, b) => b.createdAt - a.createdAt);
+  return result;
 }

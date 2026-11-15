@@ -6,7 +6,7 @@
  * 纯模块(无 electron / i18n import),可直接单测;措辞由调用方注入
  * (state 持有,默认共享包中文表,service 换成本地化实现)。
  */
-import { formatToolRowText, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
+import { DEFAULT_TOOL_ROW_WORDING, formatToolRowText, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
 import { describeToolUse, truncateToolText, type ToolUseDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
 
 /** task 描述与 generic 兜底沿用旧岛的 80 字上限,防长 prompt 撑爆 pill。 */
@@ -29,7 +29,9 @@ export function formatIslandToolDetail(
 ): string | null {
   const toolInput = asRecord(input);
   if (!toolInput) {
-    return firstNonEmptyString(fallback?.description, fallback?.toolDescription, fallback?.displayName);
+    const description = firstNonEmptyString(fallback?.description, fallback?.toolDescription, fallback?.displayName);
+    if (options.requireCommandVisible) return description;
+    return truncateToolText(description ?? toolCallLabel(options.wording), ISLAND_DETAIL_MAX_CHARS);
   }
 
   // codex 工具侧问题(input.questions)优先于工具形态展示。
@@ -42,19 +44,26 @@ export function formatIslandToolDetail(
   }
   const label = formatToolRowText(descriptor, options.wording).label;
   if (!label) return null;
-  if (descriptor.kind === 'generic') {
-    // 描述符解析不出形态的工具(codex MCP elicitation 的 `mcp:server`、
-    // permissions 等):input 里的人话字段与请求级 description 比「调用 X」
-    // 更有信息量,优先展示(旧岛行为);都没有时才落 label(+detail)。
+  if (
+    descriptor.kind === 'generic' || descriptor.kind === 'mcp'
+    || descriptor.kind === 'dynamic' || descriptor.kind === 'collab'
+  ) {
+    if (options.requireCommandVisible && descriptor.kind !== 'generic') return label;
+    // Runtime activity is a glanceable summary, not the detailed tool row.
+    // Only explicit action metadata is used; URL/query/prompt are tool data.
     const informative = firstNonEmptyString(
-      toolInput.message,
+      descriptor.kind === 'generic' ? toolInput.message : null,
       toolInput.toolTitle,
       toolInput.toolDescription,
       fallback?.description,
+      options.requireCommandVisible ? null : fallback?.toolDescription,
+      options.requireCommandVisible ? null : fallback?.displayName,
     );
     if (informative) return truncateToolText(informative, ISLAND_DETAIL_MAX_CHARS);
+    if (!options.requireCommandVisible) return toolCallLabel(options.wording);
+    // Permission prompts retain the original identity and details being approved.
     return truncateToolText(
-      descriptor.detail ? `${label} · ${descriptor.detail}` : label,
+      descriptor.kind === 'generic' && descriptor.detail ? `${label} · ${descriptor.detail}` : label,
       ISLAND_DETAIL_MAX_CHARS,
     );
   }
@@ -62,6 +71,10 @@ export function formatIslandToolDetail(
     return truncateToolText(label, ISLAND_DETAIL_MAX_CHARS);
   }
   return label;
+}
+
+function toolCallLabel(wording: ToolRowWording): string {
+  return (wording.toolCallLabel ?? DEFAULT_TOOL_ROW_WORDING.toolCallLabel)();
 }
 
 /**

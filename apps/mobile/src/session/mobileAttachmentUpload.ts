@@ -1,12 +1,16 @@
 import { apiFetchRaw } from '@/api/client';
+import { assertMobileLegacyMediaAllowed, canUploadEncryptedMobileMedia, tryUploadEncryptedMobileMedia } from '@/device-link/agentNetMediaRegistry';
+import { fromBase64Url } from '@cindy/agent-net/portable';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { canMobilePeerUpload, tryMobilePeerUpload } from '@/device-link/peerFileRegistry';
-import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
+import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { i18n } from '@/i18n';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { isAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import {
   buildMobileUploadedAttachment,
+  effectiveUploadMimeType,
   assertMobileDocumentSize,
   assertMobileOssAttachmentSize,
   isWithinMobileOssAttachmentLimit,
@@ -54,28 +58,18 @@ interface UploadDeps {
 const PRESIGN_TIMEOUT_MS = 12_000;
 const PRESIGN_MAX_ATTEMPTS = 2;
 
-/**
- * mimeType 缺失时的统一兜底。预签名的 contentType 与 PUT 实发的 Content-Type
- * 必须**逐字节一致**且**都不能缺**:缺失时预签名把 Content-Type 位签成空串,而
- * expo-file-system 原生直传层会自动补 application/octet-stream,两边不一致直接
- * OSS SignatureDoesNotMatch 403(2026-07 粘贴图片无 mimeType 实撞)。presign 与
- * buildMobileAttachmentUploadHeaders 都必须经 effectiveUploadMimeType 取值。
- */
-const FALLBACK_UPLOAD_MIME = 'application/octet-stream';
-
-export function effectiveUploadMimeType(mimeType: string | undefined): string {
-  const trimmed = mimeType?.trim();
-  return trimmed ? trimmed : FALLBACK_UPLOAD_MIME;
-}
+// Preserve the existing helper import for upload callers.
+export { effectiveUploadMimeType } from '@/session/attachments';
 
 export async function presignMobileAttachmentUpload(
   candidate: MobileAttachmentUploadCandidate,
   options: { token: string | null; sharedTaskId?: string; deps?: UploadDeps },
 ): Promise<MobileAttachmentPresignResult> {
+  assertMobileLegacyMediaAllowed();
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   const result = await withTransientRemoteRetry(
     () => apiFetch<MobileAttachmentPresignResult>('/api/device-link/media/presign-put', {
-      baseUrl: DEVICE_LINK_API_BASE_URL,
+      baseUrl: options.sharedTaskId ? getOfficialDeviceLinkApiBaseUrl() : DEVICE_LINK_API_BASE_URL,
       method: 'POST',
       token: options.token,
       timeoutMs: PRESIGN_TIMEOUT_MS,
@@ -276,10 +270,12 @@ export async function putMobileAttachmentUploadFromFile(
   fileUri: string,
   mimeType: string | undefined,
   deps: UploadDeps = {},
-  opts: UploadRecoveryOptions = {},
+  opts: UploadRecoveryOptions & { signedHeaders?: Readonly<Record<string, string>> } = {},
 ): Promise<void> {
   const uploadFile = deps.uploadFile ?? uploadFileNative;
-  const headers = buildMobileAttachmentUploadHeaders(mimeType);
+  // Chat Server signs a different header set from device-link. Never add OSS
+  // headers to an already signed request; preserve the device-link default.
+  const headers = opts.signedHeaders ? { ...opts.signedHeaders } : buildMobileAttachmentUploadHeaders(mimeType);
   await putAttachmentWithRecovery((signal, onProgress) => uploadFile(putUrl, fileUri, headers, { signal, onProgress }), opts, true);
 }
 
@@ -300,11 +296,23 @@ export async function statMobileAttachmentFileSize(uri: string): Promise<number>
 export async function uploadMobileAttachment(
   candidate: MobileAttachmentUploadCandidate,
   body: MobileAttachmentUploadBody,
-  options: { token: string | null; sharedTaskId?: string; id?: string; deps?: UploadDeps },
+  options: { token: string | null; sharedTaskId?: string; deviceId?: string; id?: string; deps?: UploadDeps },
 ): Promise<RemoteSerializedAttachment> {
   // presign 前先校验体积:超出 OSS 上限的文件若先 presign + PUT、再在
   // buildMobileUploadedAttachment 处被拒,会在 device-link OSS 桶里留下永不被引用的孤儿对象。
   assertMobileDocumentSize(candidate.size);
+  const encrypted = await tryUploadEncryptedMobileMedia({ deviceId: options.deviceId,
+    size: candidate.size, contentType: effectiveUploadMimeType(candidate.mimeType), read: async (offset, length) => {
+      if (body instanceof Blob) return new Uint8Array(await body.slice(offset, offset + length).arrayBuffer());
+      if (body instanceof ArrayBuffer) return new Uint8Array(body, offset, length);
+      if (ArrayBuffer.isView(body)) return new Uint8Array(body.buffer, body.byteOffset + offset, length);
+      throw new Error('AGENT_NET_NATIVE_FILE_SOURCE_REQUIRED');
+    } });
+  if (encrypted) {
+    const attachment = buildMobileUploadedAttachment({ ...candidate, id: options.id, ossKey: encrypted.key, sha256: encrypted.sha256 });
+    if (!attachment) throw new Error(i18n.t('composer.upload.noFileRead'));
+    return attachment;
+  }
   assertMobileOssAttachmentSize(candidate.size);
   const sha256 = await sha256MobileAttachmentBody(body, candidate.size);
   const presigned = await presignMobileAttachmentUpload(candidate, options);
@@ -347,6 +355,7 @@ export async function uploadMobileAttachmentFromFile(
   const peerCandidate = !!options.deviceId && !options.sharedTaskId;
   if (
     !isWithinMobileOssAttachmentLimit(candidate.size) &&
+    !canUploadEncryptedMobileMedia(options.deviceId) &&
     !(peerCandidate && await canMobilePeerUpload(options.deviceId!, candidate.size))
   ) {
     assertMobileOssAttachmentSize(candidate.size);
@@ -374,6 +383,19 @@ export async function uploadMobileAttachmentFromFile(
   try {
     if (snapshot.size !== candidate.size) {
       throw new Error(`Attachment size changed: expected ${candidate.size}, actual ${snapshot.size}`);
+    }
+    const encrypted = await tryUploadEncryptedMobileMedia({ deviceId: options.deviceId,
+      size: candidate.size, contentType: effectiveUploadMimeType(candidate.mimeType), signal: options.signal,
+      assertCurrent: () => { if (!isActive()) throw new Error('AGENT_NET_OWNER_CHANGED'); },
+      read: async (offset, length) => {
+        const base64 = options.deps?.readFileChunk ? await options.deps.readFileChunk(snapshot.uri, offset, length)
+          : await (await import('expo-file-system/legacy')).readAsStringAsync(snapshot.uri, { encoding: 'base64', position: offset, length });
+        return fromBase64Url(base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''));
+      } });
+    if (encrypted) {
+      const attachment = buildMobileUploadedAttachment({ ...candidate, id: options.id, ossKey: encrypted.key, sha256: encrypted.sha256 });
+      if (!attachment) throw new Error(i18n.t('composer.upload.noFileRead'));
+      return await retain(attachment);
     }
     const sha256 = await sha256MobileAttachmentFile(snapshot.uri, candidate.size, {
       readChunk: options.deps?.readFileChunk,
@@ -453,7 +475,7 @@ export async function deleteMobileAttachmentUpload(
 ): Promise<void> {
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   await apiFetch<{ deleted: boolean }>('/api/device-link/media', {
-    baseUrl: DEVICE_LINK_API_BASE_URL,
+    baseUrl: deviceLinkMediaApiBaseUrl(ossKey),
     method: 'DELETE',
     token: options.token,
     body: { key: ossKey },

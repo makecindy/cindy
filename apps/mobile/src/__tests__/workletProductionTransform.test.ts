@@ -7,7 +7,7 @@ type Babel = {
   transformFileSync: (filename: string, options: Record<string, unknown>) => BabelTransformResult;
 };
 type WorkletFunction = ((input: unknown) => unknown) & {
-  __closure?: Record<string, unknown>;
+  __closure?: unknown[];
 };
 
 const require = createRequire(import.meta.url);
@@ -26,8 +26,8 @@ function loadProductionModule(relativePath: string): Record<string, unknown> {
   });
   if (!transformed.code) throw new Error(`Babel produced no code for ${relativePath}`);
   const moduleExports: Record<string, unknown> = {};
-  const evaluate = Function('exports', transformed.code) as (exports: Record<string, unknown>) => void;
-  evaluate(moduleExports);
+  const evaluate = Function('exports', 'require', transformed.code) as (exports: Record<string, unknown>, require: NodeJS.Require) => void;
+  evaluate(moduleExports, require);
   return moduleExports;
 }
 
@@ -42,8 +42,8 @@ describe('Android production worklet transform', () => {
     const moduleExports = loadProductionModule('src/session/composerResize.ts');
     const applyComposerResizeDrag = worklet(moduleExports, 'applyComposerResizeDrag');
 
-    expect(typeof applyComposerResizeDrag.__closure?.normalizeBounds).toBe('function');
-    expect(typeof applyComposerResizeDrag.__closure?.clamp).toBe('function');
+    expect(typeof applyComposerResizeDrag.__closure?.[0]).toBe('function');
+    expect(typeof applyComposerResizeDrag.__closure?.[1]).toBe('function');
     expect(applyComposerResizeDrag({
       bounds: { minContentHeight: 20, maxContentHeight: 200 },
       startContentHeight: 40,
@@ -56,9 +56,9 @@ describe('Android production worklet transform', () => {
     const applyContextSheetDrag = worklet(moduleExports, 'applyContextSheetDrag');
     const settleContextSheetDrag = worklet(moduleExports, 'settleContextSheetDrag');
 
-    expect(typeof applyContextSheetDrag.__closure?.normalizeHeights).toBe('function');
-    expect(typeof applyContextSheetDrag.__closure?.clamp).toBe('function');
-    expect(typeof settleContextSheetDrag.__closure?.normalizeHeights).toBe('function');
+    expect(typeof applyContextSheetDrag.__closure?.[0]).toBe('function');
+    expect(typeof applyContextSheetDrag.__closure?.[1]).toBe('function');
+    expect(typeof settleContextSheetDrag.__closure?.[0]).toBe('function');
     expect(applyContextSheetDrag({
       heights: { half: 320, full: 700 },
       startHeight: 320,

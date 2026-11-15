@@ -85,7 +85,8 @@ const NUMBER_RE = /^\d+(?:\.\d+)?$/;
  * 加严保护值：治理合同 §1.1 / DESIGN.md §15。
  * 两种 mode（治理合同 §3.2 的 Tier-1/Tier-3 分野）：
  *  - semantic-modeled——Tier-1 slot（text-secondary / text-secondary-cross）：
- *    照常 semantic 建模 + protected 元数据。U2 保护限制的是改值须裁决，
+ *    照常 semantic 建模 + protected 元数据。保护（原 U2，2026-10-22 起为墨水文字
+ *    阶梯，family id 沿用 u2-secondary-info）限制的是改值须裁决，
  *    不是禁止迁移；「名称与用途延续」要求 DS-8 能从新真相源生成它们。
  *  - register-only——Tier-3 singleton（annotation-accent / login-brand-*）：
  *    只登记、不建模（治理合同「保留原位，逐项裁决，默认不动」）。
@@ -101,14 +102,14 @@ export const PROTECTED_IDS: Readonly<Record<string, ProtectedRule>> = {
   },
   'text-secondary': {
     family: 'u2-secondary-info',
-    owner: 'DESIGN.md §15.5',
-    rule: 'U2 二级信息色，never darken unilaterally',
+    owner: 'DESIGN.md §15.16',
+    rule: '文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）',
     mode: 'semantic-modeled',
   },
   'text-secondary-cross': {
     family: 'u2-secondary-info',
-    owner: 'DESIGN.md §15.5',
-    rule: 'U2 二级信息色，never darken unilaterally',
+    owner: 'DESIGN.md §15.16',
+    rule: '文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）',
     mode: 'semantic-modeled',
   },
   'login-brand-accent': {

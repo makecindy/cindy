@@ -1,10 +1,15 @@
 {
   "site": "xiaohongshu.com",
-  "auth": "需登录持久浏览器:未登录搜索页会显示「登录后查看搜索结果」登录墙",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "searchNotes": "https://www.xiaohongshu.com/search_result?keyword={kw}&source=web_search_result_notes",
-    "explore": "https://www.xiaohongshu.com/explore"
+    "home": "https://www.xiaohongshu.com"
   },
-  "recipes": ["xiaohongshu-search"],
-  "notes": "小红书 web API(edith.xiaohongshu.com/.../search/notes)要 x-s/x-t 签名头(页面里混淆 JS window._webmsxyw 实时算),盲发 fetch 会被拒——所以不能走「页面内 fetch 内部 API」那条捷径,只能读页面渲染后的 DOM。配方:navigate 搜索页 → 检测登录墙(/登录后查看搜索结果/)→ 滚动 3 次加载 → 扒 section.note-item(跳过 .query-note-item):标题 .title/.note-title/a.title/.footer .title span;作者 a.author .name/.name/.nick-name;点赞 .count/.like-count;链接取 a.cover.mask 或 a[href*=/search_result//explore//note/]。⚠️ 必须登录态;选择器易随改版失效(失效则快速失败 → 回退现场 snapshot+extract,可 saveRecipe 更新)。"
+  "recipes": [
+    "xiaohongshu-search"
+  ],
+  "notes": "兼容入口 xiaohongshu-search 现执行内置 xiaohongshu/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

@@ -1,0 +1,9 @@
+    Finished `sim` profile [optimized] target(s) in 0.04s
+     Running tests\udp.rs (target\sim\deps\udp-799d085759a8aa92.exe)
+
+running 2 tests
+test a_rebound_client_is_followed ... ok
+test connections_share_one_port ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+

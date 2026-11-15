@@ -1,12 +1,33 @@
 {
   "id": "lobsters-feed",
-  "match": ["lobste.rs"],
-  "description": "拉取 lobste.rs 某个 feed 的故事列表(JSON)。feed 取 hottest/newest/active。lobste.rs 没有可用的 search.json,列表端点才是稳定的读接口。",
-  "inputs": { "feed": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://lobste.rs/{{feed}}.json" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "lobste.rs"
   ],
-  "output": "{{json}}"
+  "description": "拉取 lobste.rs 某个 feed 的故事列表(JSON)。feed 取 hottest/newest/active。lobste.rs 没有可用的 search.json,列表端点才是稳定的读接口。",
+  "inputs": {
+    "feed": {
+      "required": true
+    }
+  },
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://lobste.rs/{{feed}}.json"
+    },
+    {
+      "action": "wait",
+      "loadState": "load"
+    },
+    {
+      "action": "extract",
+      "as": "json",
+      "extract": {
+        "fields": {
+          "body": "body"
+        }
+      }
+    }
+  ],
+  "output": "{{json}}",
+  "access": "read"
 }

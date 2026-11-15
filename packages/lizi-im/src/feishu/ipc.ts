@@ -188,6 +188,7 @@ export function getPublicState(): FeishuPublicState {
   // across get-state ↔ init). storage.readOwnerOpenId is the source of truth.
   return {
     status: wsClient.getCurrentStatus(),
+    error: wsClient.getCurrentError(),
     appId: creds?.appId ?? null,
     appSecret: creds?.appSecret ?? null,
     hasSecret: creds != null,
@@ -414,8 +415,7 @@ export async function clearAndDisconnect(): Promise<void> {
   });
   // 逻辑凭证清除(而非 transport 重连): 清掉账号态并重置 lastBoundCreds —
   // 之后重新保存相同 appId/service 不会被误判为同账号重连, 登出前的
-  // opener/锚点不会被新一轮会话认领; 挂起的孤儿提示重试同样丢弃。
+  // opener/锚点不会被新一轮会话认领。
   outbound.forgetBoundAccount();
-  wsClient.clearOrphanRetriesForCredentialClear();
   storage.clearAll();
 }

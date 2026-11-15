@@ -23,6 +23,7 @@ export const DESKTOP_LOCAL = {
   VIEW_HEARTBEAT: 'remote-desktop:view-heartbeat',
   NATIVE_FRAME: 'remote-desktop:native-frame',
   NATIVE_AUDIO: 'remote-desktop:native-audio',
+  LIVE_SCREEN_FRAMES: 'remote-desktop:live-screen-frames',
   WINDOWS_SUPPORT: 'remote-desktop:windows-support',
   PERMISSIONS: 'remote-desktop:permissions',
   OPEN_PERMISSION: 'remote-desktop:open-permission',
@@ -53,6 +54,8 @@ export interface DesktopHostCommand {
   /** Local-only output monitor, enabled only by the main process audio grant. */
   nativeAudio?: boolean;
   cursorOverlay?: boolean;
+  /** offer: the video is a plugin live screen whose messages come from `liveScreenFrames`. */
+  liveScreen?: boolean;
   /** viewer-hidden: stop sending video while the viewer is hidden. */
   hidden?: boolean;
   /** offer / background-viewing: the viewer is view-only in the background
@@ -104,6 +107,12 @@ export interface DesktopCaptureApi {
   viewHeartbeat(lease: string): Promise<void>;
   nativeFrame(lease: string): Promise<string | RemoteDesktopCursorFrame | null>;
   nativeAudio?(lease: string): Promise<Uint8Array>;
+  /**
+   * A live screen lease's next frame-stream messages (`[type][payload]`), `[]`
+   * after a quiet second, null once the stream ended. `keyframe` asks for a new
+   * keyframe after the decoder lost its state.
+   */
+  liveScreenFrames?(lease: string, keyframe: boolean): Promise<Uint8Array[] | null>;
   input(lease: string, sequence: number, events: DesktopInput[]): Promise<void>;
   /** A control request the viewer sent over `input-v1`; Main authorizes it. */
   request?(lease: string, request: unknown): Promise<DesktopChannelResult>;

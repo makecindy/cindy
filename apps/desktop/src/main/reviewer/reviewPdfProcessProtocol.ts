@@ -32,8 +32,10 @@ export interface ReviewPdfPageInspection {
   imageOps: number | null;
   /** 无文本且无任何绘图/图像算子。算子读不出来时恒为 false(不猜)。 */
   blank: boolean;
-  /** true = 算子读取不完整,结构检查未完成;false = 算子已成功读取。 */
+  /** true = 算子或文字读取不完整,结构检查未完成;false = 两者都已成功读取。 */
   visibilityUnverified: boolean;
+  /** 该页文字提取失败时的解析器错误(此时 textChars=0 不代表没有文字)。 */
+  textError?: string;
 }
 
 export interface ReviewPdfInspectProcessResult {

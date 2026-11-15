@@ -341,6 +341,16 @@ export function PluginSettingsCard(props: PluginSettingsCardProps) {
         clientRef.current = client;
         documentChannels.current = {
           send(command, epoch) {
+            if (command.kind === "fetch") {
+              // Wait for document activation, but never let a fetch waiting for a native
+              // prompt block navigation from cancelling that same prompt on Host.
+              const { path, method, body } = command;
+              return channelQueue.then(() => {
+                check();
+                if (epoch !== documentEpoch.current) throw new Error("PLUGIN_SETTINGS_CLOSED");
+                return client!.fetch(path, method, body);
+              });
+            }
             const work = channelQueue.then(async () => {
               check();
               if (epoch !== documentEpoch.current) throw new Error("PLUGIN_SETTINGS_CLOSED");
@@ -355,10 +365,13 @@ export function PluginSettingsCard(props: PluginSettingsCardProps) {
             return work;
           },
           reset() {
+            const epoch = documentEpoch.current;
             // Keep the lease/authorization, but release A's channels before B can subscribe.
             // Host unsubscribe also removes buffered events for those channels.
             channelQueue = channelQueue.then(async () => {
               check();
+              if (client!.document.documentIsolation)
+                await client!.send({ kind: "document", epoch });
               for (const channel of channels) {
                 await client!.send({ kind: "unsubscribe", channel });
                 channels.delete(channel);
@@ -609,13 +622,11 @@ export function PluginSettingsCard(props: PluginSettingsCardProps) {
               !foregroundRef.current ||
               authorizationActive.current
                 ? Promise.reject(new Error("PLUGIN_SETTINGS_COVERED"))
-                : command.kind === "fetch"
-                  ? client.fetch(command.path, command.method, command.body)
-                  : ["subscribe", "unsubscribe", "post"].includes(command.kind)
-                    ? documentChannels.current!.send(command, requestDocument)
-                    : Promise.reject(
-                        new Error("PLUGIN_SETTINGS_COMMAND_BLOCKED"),
-                      );
+                : ["fetch", "subscribe", "unsubscribe", "post"].includes(command.kind)
+                  ? documentChannels.current!.send(command, requestDocument)
+                  : Promise.reject(
+                      new Error("PLUGIN_SETTINGS_COMMAND_BLOCKED"),
+                    );
             if (command.kind === "fetch") command.body = undefined;
             void work
               .then((value) => {

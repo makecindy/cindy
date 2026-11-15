@@ -1,3 +1,4 @@
+import { prNumberLabel } from '@cindy/maker-shared';
 /**
  * SessionInfoMeta — 任务行右侧信息槽的内容(sidebar-redesign C / C' 期)。
  * ---------------------------------------------------------------------------
@@ -21,8 +22,8 @@
  *     无单位后缀(与费用的货币前缀天然区分);0 视为无数据不显示。
  *   - cost:优先 totalMoney(区域币种 $/¥),回退 legacy totalCostUsd;
  *     两者都为 0 / 缺失(如订阅模式)不显示。
- *   - time:与现状时间槽同一时间轴(activityIso 由调用方传入,SessionItem 用
- *     session.updatedAt,SessionCard 同)。
+ *   - time:与列表排序同一时间轴,调用方通过 getSessionListActivityAt 依次取
+ *     lastActivityAt、userSendAt、updatedAt。
  *
  * 远程会话:token / 费用字段在远端 DB,device-link 投影可能缺失或为 0——按
  * 「无数据不显示」自然降级,不误显示 0(设计文档 §9.6:第一期仅本机会话有值)。
@@ -192,10 +193,11 @@ function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: bo
       isActive: Boolean(isActive),
       backgroundLightness,
     }),
+    status?.ok ? status.conflicts : null,
   );
   const baseTitle = kind
-    ? `${prRef.owner}/${prRef.repo}#${prRef.prNumber} · ${t(`ccAgent.gitContext.pr.status.${kind}`)}`
-    : `${prRef.owner}/${prRef.repo}#${prRef.prNumber}`;
+    ? `${prRef.owner}/${prRef.repo}${prNumberLabel(prRef)} · ${t(`ccAgent.gitContext.pr.status.${kind}`)}`
+    : `${prRef.owner}/${prRef.repo}${prNumberLabel(prRef)}`;
   const title =
     showDot && unresolvedCount
       ? `${baseTitle} · ${t('ccAgent.gitContext.pr.unresolved', { count: unresolvedCount })}`
@@ -221,7 +223,7 @@ function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: bo
           />
         ) : null}
       </span>
-      #{prRef.prNumber}
+      {prNumberLabel(prRef)}
     </span>
   );
 }

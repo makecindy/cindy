@@ -1,3 +1,5 @@
+import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
+import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -17,7 +19,7 @@ import * as overflow from '../../maker-ipc/contextOverflowRollover.js';
 import { applyRuntimeSetModelChange } from '../../maker-ipc/runtimeSetModel.js';
 import { normalizeDeviceLinkSetModelWireArgs } from '../../maker-ipc/setModelWireArgs.js';
 import { CredentialModeSwitchBusyError } from '../codex-credential-switch.js';
-import { createPendingAgentSwitchRegistry, applyPendingAgentSwitchIfIdle, projectPendingAgentSwitchIntent, type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler.js';
+import { createPendingAgentSwitchRegistry, isUserPendingAgentSwitchIntent, applyPendingAgentSwitchIfIdle, projectPendingAgentSwitchIntent, type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler.js';
 import { registerSessionSetModelHandler } from '../../maker-ipc/sessionSetModelHandler.js';
 import { registerMakerSessionSendHandler } from '../../maker-ipc/sessionSendHandler.js';
 import { createMakerSendTransaction, type MakerSendTransactionDeps } from '../../maker-ipc/makerSendTransaction.js';
@@ -64,6 +66,12 @@ export function createCodexPickerHarness(input: {
   const env: Record<string, unknown> = {
     ...providers, ...efforts, ...routeGuard, ...control, ...axes, ...relink, ...windowGate, ...overflow,
     maker, sessions, eq, log, agentSwitchPending: pending,
+    // Active local fixture: no scheduled model override or pending window budget.
+    scheduledModelScope: { restore: asyncNoop },
+    updateScheduledPreference: asyncNoop,
+    isUserPendingAgentSwitchIntent, restoreArchivedSessionForSend: asyncNoop,
+    replayPendingSessionContextWindowBudgetUnderLock: asyncNoop,
+    readStoredSessionContextWindowBudget: async () => null,
     // Ordinary local picker has no shared-task invocation context.
     captureSharedTaskSettingGuard: (id: string) => createSharedTaskSettingGuard(undefined, id, { admitted: false }),
     normalizeDeviceLinkSetModelWireArgs, applyRuntimeSetModelChange, CredentialModeSwitchBusyError,
@@ -100,7 +108,11 @@ export function createCodexPickerHarness(input: {
   env.agentSwitchDeps = switchDeps;
   const beforeSend = vm.runInContext(closure('pendingAgentSwitchApplyHolder'), context) as (id: string) => Promise<{ release(): void }>;
   const transactionDeps: MakerSendTransactionDeps = {
-    getSession: id => maker.getSession(id), closeSession: id => maker.closeSession(id), getSessionMeta: id => maker.getSessionMeta(id),
+    getMainClassicalStyle, getResolvedMainLocale, readMcpAppModelContext: id => mcpAppModelContext(id),
+    statDirectory: async () => ({ isDirectory: () => true }),
+    getSession: id => maker.getSession(id), closeSession: id => maker.closeSession(id),
+    closeSessionIfCurrent: async id => { const s = maker.getSession(id); if (s) await maker.closeSessionIfCurrent(s, 'runtime-refresh'); },
+    getSessionMeta: id => maker.getSessionMeta(id),
     preflightBotRuntimeResources: asyncNoop, ensureRemoteReadyForSessionStart: asyncNoop,
     checkWorkDirExists: async () => true, readSessionWorkingDirFromDb: async () => workingDir,
     readWorkingDirectoryRecoveryCreateOpts: async id => {

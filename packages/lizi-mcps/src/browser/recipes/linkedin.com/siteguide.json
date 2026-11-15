@@ -1,10 +1,15 @@
 {
   "site": "linkedin.com",
-  "auth": "需登录持久浏览器(csrf-token = JSESSIONID cookie 值)",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "jobsVoyager": "/voyager/api/voyagerJobsDashJobCards?decorationId=...JobSearchCardsCollection-220&count=25&q=jobSearch&query=(origin:JOB_SEARCH_PAGE_OTHER_ENTRY,keywords:{kw},spellCorrectionEnabled:true)&start=0",
-    "feed": "https://www.linkedin.com/feed/"
+    "home": "https://www.linkedin.com"
   },
-  "recipes": ["linkedin-jobs-search"],
-  "notes": "LinkedIn 有内部 Voyager API,同源可调:页面内 fetch,header 带 csrf-token(取自 JSESSIONID cookie、去掉首尾引号)+ x-restli-protocol-version:2.0.0。职位搜索端点 voyagerJobsDashJobCards,query 是 (origin:...,keywords:KW,...) 的 DSL。响应 elements[].jobCardUnion.jobPostingCard → 标题 jobPostingTitle/title.text,职位 id 从 jobPostingUrn 里取数字,详情页 /jobs/view/{id}。⚠️ 两点:① 搜索只覆盖职位(不是通用人/帖搜索);② LinkedIn 对自动化封号较狠,属高账号风险,慎用、低频用。可加 company/experience/jobType/timePostedRange 过滤(扩 query DSL)——按需 saveRecipe 派生。"
+  "recipes": [
+    "linkedin-jobs-search"
+  ],
+  "notes": "兼容入口 linkedin-jobs-search 现执行内置 linkedin/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

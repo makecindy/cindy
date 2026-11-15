@@ -122,6 +122,15 @@ describe('MessageSourceLabels device label', () => {
 });
 
 describe('MessageSourceLabels plugin and row', () => {
+  // #7631: local app source IDs must not open an unrelated plugin page.
+  it('identifies a local application and shows its app ID without plugin navigation', () => {
+    render(<MessageSourceLabels sourcePlugin={{ pluginId: 'local-app:com.taptap.pc', name: 'TapTap' }} />);
+    const label = screen.getByText('localAgent.messageSource:TapTap');
+    expect(label.closest('[title]')?.getAttribute('title')).toBe('chat.userMessage.sourceIds.localApp:com.taptap.pc');
+    expect(screen.queryByRole('button')).toBeNull();
+    fireEvent.click(label);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
   it.each([['Reports', 'Reports'], [undefined, 'reports']])(
     'identifies MCP Apps by server name or ID without opening plugin details (%s)',
     (name, expectedLabel) => {
@@ -150,6 +159,13 @@ describe('MessageSourceLabels plugin and row', () => {
   it('uses the generic plugin text without a name', () => {
     render(<MessageSourceLabels sourcePlugin={{ pluginId: 'p' }} />);
     expect(screen.getByRole('button').textContent).toBe('chat.userMessage.pluginSent');
+  });
+
+  // A received plugin message belongs to the source computer, even in a local task.
+  it('shows a remote plugin source without opening an unrelated local installation', () => {
+    render(<MessageSourceLabels sourcePlugin={{ pluginId: 'other-device::dashboard', name: 'Dashboard' }} />);
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByTitle('chat.userMessage.sourceIds.plugin:other-device::dashboard')).toBeTruthy();
   });
 
   it('shows at most one sender label plus the device label, marked as a share-image source', () => {

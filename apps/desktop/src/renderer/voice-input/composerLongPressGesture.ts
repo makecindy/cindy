@@ -7,10 +7,21 @@ export const COMPOSER_LONG_PRESS_MOVE_TOLERANCE_PX = 4;
 
 export type ComposerLongPressPoint = { x: number; y: number };
 
+/**
+ * 长按只是已开启语音输入的快捷方式，不负责首次开启：麦克风尚未授权时，长按与
+ * 长按提示都不生效，免得选字或停顿时意外弹出授权。点麦克风按钮或快捷键授权一次
+ * 后自动可用。读 main 的同步缓存，只在按下与提示即将出现时调用。
+ */
+export function isComposerLongPressVoiceReady(): boolean {
+  return window.electronAPI?.voiceInput?.getMicrophonePermissionCached?.().ok === true;
+}
+
 export type ComposerLongPressVoiceGestureOptions = {
   holdMs?: number;
   moveTolerancePx?: number;
   getState: () => VoiceInputState;
+  /** Prepare only after the hold is recognized; cleanup hands off after start. */
+  prepare?: () => (() => void) | void;
   /**
    * 开始录音。返回 `false` 表示这次没有占用录音（已在录音、被取消等），
    * 调用方不得再对当前会话执行 `stop()`。
@@ -68,11 +79,19 @@ export function createComposerLongPressVoiceGesture(
   let stopInFlight = false;
   let disposed = false;
   let startGeneration = 0;
+  let releasePreparation: (() => void) | void;
+
+  const clearPreparation = (): void => {
+    const release = releasePreparation;
+    releasePreparation = undefined;
+    release?.();
+  };
 
   const clearPending = (): void => {
     if (!pending) return;
     clearTimeout(pending.timer);
     pending = null;
+    clearPreparation();
   };
 
   const endHold = (): void => {
@@ -109,14 +128,25 @@ export function createComposerLongPressVoiceGesture(
 
   const beginVoiceInput = (): void => {
     pending = null;
-    if (disposed || !isIdleLike(options.getState())) return;
+    if (disposed || !isIdleLike(options.getState())) {
+      clearPreparation();
+      return;
+    }
     holding = true;
     options.onHoldStart?.();
+    // Opening a Bluetooth microphone can interrupt playback in other apps even
+    // without recording PCM. Ordinary clicks must never prepare the device.
+    try {
+      releasePreparation = options.prepare?.();
+    } catch {
+      // Preparation is optional; the normal start path can still recover.
+    }
     const generation = ++startGeneration;
     const currentStart = Promise.resolve()
       .then(() => options.start())
       .then((claimed) => claimed !== false)
-      .catch(() => false);
+      .catch(() => false)
+      .finally(clearPreparation);
     startPromise = currentStart;
     void currentStart.then((claimed) => {
       if (startPromise !== currentStart) return;

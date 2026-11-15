@@ -1,4 +1,6 @@
+import { pluginHasToolUi } from '../toolUi.js';
 import { describe, expect, it } from 'vitest';
+import { parsePluginResolveResponse, parsePluginRecommendations, parsePluginCatalogPage } from '../catalog.js';
 import {
   PLUGIN_API_SCHEMA_VERSION,
   parseGetPluginResponse,
@@ -46,6 +48,74 @@ const oidcManifest = {
 } as const;
 
 describe('plugin delivery contract', () => {
+  // unit：新读取契约不能把页长当总数、信任自称官方的条目或接受错目标的清理通告。
+  // 旧 list/detail parser 覆盖不到这些新增边界；最小输入为一页、一条候选或一个目标。
+  const candidate = { id: pluginId, ghostId: validManifest.id, name: validManifest.name,
+    description: null, author: 'Cindy', publisherKind: 'official', scope: 'public', namespace: null,
+    organizationId: null, defaultInstall: false,
+    currentRelease: { id: 'release-1', version: '1.0.0', sha256: 'a'.repeat(64), sizeBytes: 42,
+      publishedAt: '2026-07-19T00:00:00.000Z', icon: null } };
+  it('keeps full catalog counts independent of the page size and rejects legacy removals on read pages', () => {
+    const page = { schemaVersion: 2, plugins: [candidate], nextCursor: 'next',
+      counts: { all: 200, public: 200, organization: 0, personal: 0 } };
+    expect(parsePluginCatalogPage(page).counts?.all).toBe(200);
+    expect(() => parsePluginCatalogPage({ ...page, removals: [] })).toThrow();
+    expect(() => parsePluginCatalogPage({ ...page, counts: { ...page.counts, all: 1 } })).toThrow();
+  });
+  it('accepts only a unique public official recommendation pool with a rolling 24h window', () => {
+    const response = { schemaVersion: 2, windowStart: '2026-11-08T08:35:00.000Z', windowEnd: '2026-11-09T08:35:00.000Z', plugins: [candidate] };
+    expect(parsePluginRecommendations(response).plugins).toHaveLength(1);
+    for (const change of [
+      { plugins: [{ ...candidate, publisherKind: 'personal' }] },
+      { plugins: [candidate, candidate] },
+      { windowStart: '2026-11-02T08:35:00.000Z' },
+      { nextCursor: 'more' },
+    ]) expect(() => parsePluginRecommendations({ ...response, ...change })).toThrow();
+  });
+  it('rejects a logical target response for another namespace or plugin', () => {
+    const targets = [{ key: 'wanted', ghostId: candidate.ghostId, namespace: null }];
+    const response = { schemaVersion: 2, results: [{ key: 'wanted', status: 'available', plugin: { ...candidate, ghostId: 'another-plugin' }, matchesQuery: true }], removals: [] };
+    expect(() => parsePluginResolveResponse(response, targets)).toThrow();
+  });
+  it('rejects removal notices outside the requested installation targets', () => {
+    const response = { schemaVersion: 2, results: [{ key: 'wanted', status: 'unavailable' }], removals: [{
+      pluginId: `c${'x'.repeat(24)}`, ghostId: 'another-plugin', namespace: 'acme', scope: 'organization',
+      organizationId: 'org-1', action: 'purge', removedAt: '2026-11-09T08:35:00.000Z',
+    }] };
+    expect(() => parsePluginResolveResponse(response, [{ key: 'wanted', pluginId }])).toThrow();
+  });
+
+  // #7408 P1: published schemas can exceed UTF-8 16KB while satisfying the old
+  // UTF-16 limit. Unit: read through the real release parser, retaining old bounds.
+  it('reads historical parameter sizes without accepting invalid release manifests', () => {
+    const schema = (description: string) => ({ type: 'object', description });
+    const overhead = JSON.stringify(schema('')).length;
+    const parameters = schema('汉'.repeat(6_000));
+    expect(JSON.stringify(parameters).length).toBeLessThan(16_384);
+    expect(new TextEncoder().encode(JSON.stringify(parameters)).length).toBeGreaterThan(16_384);
+    const read = (manifest: unknown) => parseGetPluginResponse({
+      schemaVersion: 2,
+      plugin: {
+        id: pluginId, ghostId: validManifest.id, name: validManifest.name,
+        description: null, author: null, scope: 'public', organizationId: null,
+        defaultInstall: false,
+        currentRelease: {
+          id: 'release-1', version: validManifest.version, sha256: 'a'.repeat(64),
+          sizeBytes: 60_000, publishedAt: '2026-07-19T00:00:00.000Z', icon: null, manifest,
+        },
+      },
+    }).plugin.currentRelease.manifest;
+    const withParameters = (value: unknown) => ({
+      ...validManifest, tools: [{ name: 'help', description: 'Help', parameters: value }],
+    });
+    for (const accepted of [parameters, schema('汉'.repeat(16_384 - overhead))]) {
+      expect(read(withParameters(accepted)).tools?.[0]?.parameters).toEqual(accepted);
+    }
+    expect(() => read(withParameters(schema('a'.repeat(16_385 - overhead))))).toThrow('16KB');
+    expect(() => read(withParameters([]))).toThrow('JSON Schema');
+    expect(() => read({ ...withParameters(parameters), entry: '../main.js' })).toThrow();
+  });
+
   it('preserves optional cumulative download statistics in list and detail without conflating installs', () => {
     const plugin = {
       id: pluginId, ghostId: validManifest.id, name: validManifest.name,
@@ -833,5 +903,64 @@ describe('plugin delivery contract', () => {
     });
     expect(response.namespace).toBe('acme');
     expect(parsePluginDownloadResponse(legacy)).not.toHaveProperty('namespace');
+  });
+});
+
+// Unit: an immutable historical Release may carry formerly unknown mcpApps.
+// Real delivery parsing must preserve its tools/data; unrelated errors still fail.
+it.each([null, 'legacy', [], { ui: { resources: [{ uri: 'ui://help', file: '../page.html' }], tools: { help: {} } } }])(
+  'reads historical release mcpApps without granting UI: %j', mcpApps => {
+    const plugin = { id: pluginId, ghostId: validManifest.id, name: validManifest.name, description: null, author: null,
+      scope: 'public', organizationId: null, defaultInstall: false,
+      currentRelease: { id: 'release-1', version: validManifest.version, sha256: 'a'.repeat(64), sizeBytes: 1024,
+        publishedAt: '2026-07-19T00:00:00.000Z', icon: null, manifest: { ...validManifest, mcpApps } } };
+    const parsed = parseGetPluginResponse({ schemaVersion: 2, plugin }).plugin.currentRelease.manifest;
+    expect(parsed.mcpApps).toEqual(mcpApps);
+    expect(parsed.tools).toEqual(validManifest.tools);
+    expect(pluginHasToolUi(parsed)).toBe(false);
+    expect(() => parseGetPluginResponse({ schemaVersion: 2, plugin: { ...plugin,
+      currentRelease: { ...plugin.currentRelease, manifest: { ...plugin.currentRelease.manifest, entry: '../main.js' } } } })).toThrow();
+  },
+);
+
+describe('Plugin detail readme', () => {
+  // 协议(PluginReadmeDelivery):详细介绍只用于展示,格式不合法时整体丢弃,详情其余部分照常可用;
+  // 若改成抛错,一个作者写坏的介绍会让整个插件详情打不开。
+  const manifest = { ...validManifest, readme: { en: 'README.md' } };
+  const detail = (readme: unknown) =>
+    parseGetPluginResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugin: {
+        id: pluginId,
+        ghostId: manifest.id,
+        name: manifest.name,
+        description: null,
+        author: null,
+        scope: 'public',
+        organizationId: null,
+        defaultInstall: false,
+        currentRelease: {
+          id: 'release-1',
+          version: manifest.version,
+          sha256: 'a'.repeat(64),
+          sizeBytes: 1024,
+          publishedAt: '2026-07-19T00:00:00.000Z',
+          manifest,
+        },
+        readme,
+      },
+    }).plugin;
+
+  it('parses a declared readme and drops a malformed one without failing the detail', () => {
+    const image = { ...validIcon, path: 'assets/shot.png' };
+    expect(detail({ path: 'README.md', markdown: '# Hi', images: [image] }).readme).toEqual({
+      path: 'README.md',
+      markdown: '# Hi',
+      images: [image],
+    });
+    const undeclared = detail({ path: 'OTHER.md', markdown: '# Hi', images: [] });
+    expect(undeclared.currentRelease.manifest.id).toBe(manifest.id);
+    expect(undeclared).not.toHaveProperty('readme');
+    expect(detail(undefined)).not.toHaveProperty('readme');
   });
 });

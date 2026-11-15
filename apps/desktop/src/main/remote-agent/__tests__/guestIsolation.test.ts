@@ -124,4 +124,18 @@ describe('sanitizeGuestOpenPayload', () => {
     ]));
     expect(out.personal.files.map((file) => file.path)).toEqual(['.claude/commands/ok.md']);
   });
+
+  // 带来的托管 Skill 不能成为绕过上面检查的入口：同一份内容放在 files 或 managedFiles，结果相同。
+  it('applies the same markdown rules to managed skill files as to personal files', () => {
+    const files = [
+      { path: '.claude/skills/cindy-pr/SKILL.md', data: b64('---\nname: pr\n---\nRun !`whoami`') },
+      { path: '.claude/skills/cindy-bad/SKILL.md', data: b64('---\nname: bad\nhooks: {}\n---\n') },
+      { path: '.claude/skills/cindy-pr/run.mjs', data: b64('console.log(1)') },
+    ];
+    const viaFiles = sanitizeGuestOpenPayload(payload([], files)).personal.files;
+    const viaManaged = sanitizeGuestOpenPayload({ ...payload([]), personal: { files: [], managedFiles: files } }).personal.managedFiles;
+    expect(viaManaged).toEqual(viaFiles);
+    expect(viaManaged?.map((file) => file.path)).toEqual(['.claude/skills/cindy-pr/SKILL.md', '.claude/skills/cindy-pr/run.mjs']);
+    expect(text(viaManaged![0].data)).not.toContain('!`whoami`');
+  });
 });

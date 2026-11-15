@@ -8,5 +8,6 @@
   "messageSource": "$t(mcpApps.appName)「{{name}}」から送信",
   "serverId": "MCP サーバー ID：{{id}}",
   "exitFullscreen": "全画面表示を終了",
-  "mobileUpdateRequired": "このカードを開くには、スマートフォンの Cindy を更新してください。"
+  "mobileUpdateRequired": "このカードを開くには、スマートフォンの Cindy を更新してください。",
+  "filesOnExecutionComputer": "ファイルの内容は実行元のパソコンで確認してください"
 }

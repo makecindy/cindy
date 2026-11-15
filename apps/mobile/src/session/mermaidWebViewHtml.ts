@@ -15,6 +15,10 @@ export { MOBILE_MERMAID_VERSION } from '@/session/richContentAssets.generated';
 /** 本地资源执行超时;异常时停留在源码降级。 */
 const MERMAID_LOCAL_TIMEOUT_MS = 1000;
 
+// The bundled runtime is immutable. Escape it once on first use, not on startup
+// or for every diagram/theme; only source and callbacks vary between documents.
+let serializedMermaidRuntime: string | undefined;
+
 /** Mermaid 本地动态加载器,只在页面含图表时注入。 */
 export function buildMermaidLoaderJs(
   onReadyJs: string,
@@ -32,7 +36,7 @@ export function buildMermaidLoaderJs(
       }
       try {
         var script = document.createElement('script');
-        script.textContent = ${serializeForScript(MOBILE_MERMAID_JS)};
+        script.textContent = ${serializedMermaidRuntime ??= serializeForScript(MOBILE_MERMAID_JS)};
         document.head.appendChild(script);
         if (!window.mermaid) { fail(); return; }
         try { ${onReadyJs} } catch (error) { fail(); return; }

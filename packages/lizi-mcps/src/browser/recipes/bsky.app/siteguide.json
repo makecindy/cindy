@@ -1,11 +1,15 @@
 {
   "site": "bsky.app",
-  "auth": "只读公开内容无需登录,直接打 AT-proto 公开 API 主机 public.api.bsky.app 即可",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "authorFeed": "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor=<handle>&limit=25",
-    "profile": "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=<handle>",
-    "searchActors": "https://public.api.bsky.app/xrpc/app.bsky.actor.searchActors?q=<query>&limit=10"
+    "home": "https://public.api.bsky.app"
   },
-  "recipes": ["bluesky-user-posts"],
-  "notes": "Bluesky 基于开放的 AT-proto,public.api.bsky.app 上的 app.bsky.* XRPC 接口对未登录用户开放,返回标准 JSON,可直接 navigate + extract,不需要 cookie/token。bluesky-user-posts 配方封装的是 getAuthorFeed:返回 {feed:[{post:{record:{text,createdAt},author:{handle,displayName},likeCount,repostCount,replyCount,uri}}],cursor}。其它常用只读端点(同样可直接 navigate 取 JSON):1) 账号资料 getProfile?actor=<handle> 返回 {handle,displayName,followersCount,followsCount,postsCount,description};2) 搜账号 actor.searchActors?q=<query>&limit=10 返回 {actors:[{handle,displayName,description}]}(注意:searchActors 不含 followersCount,要粉丝数得另打 getProfile);3) 粉丝/关注 graph.getFollowers / graph.getFollows?actor=<handle>;4) 帖子线程 feed.getPostThread?uri=<at-uri>&depth=2。注意:帖子全文搜索 feed.searchPosts 需登录态(未登录 403),公开只能按账号取 feed。actor 参数可用 handle 或 did。"
+  "recipes": [
+    "bluesky-user-posts"
+  ],
+  "notes": "兼容入口 bluesky-user-posts 现执行内置 bluesky/user，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

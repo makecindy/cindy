@@ -79,15 +79,20 @@ describe('agent-device model selection wiring', () => {
   it('keeps tasks created from these tasks on the same computer', () => {
     const start = source.indexOf('async function sendToSessionInternal(');
     const body = source.slice(start, source.indexOf('assertDesktopSendDispatched(sendResult', start));
-    expect(body).toContain('if (meta.agentDeviceId && !meta.remoteHostId) inheritedAgentDeviceId = meta.agentDeviceId;');
+    // 来源位置(SSH 除外)交给 resolveSendToSessionCreateRoute；不指定 agent_device_id 时原样继承(单测见
+    // sendToSessionExecutionConfig.test.ts)，解析出的位置写进新任务。
+    expect(body).toContain('const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;');
+    expect(body).toContain('inheritedAgentDeviceId = route.agentDeviceId ?? undefined;');
     expect(body).toContain('...(inheritedAgentDeviceId ? { agentDeviceId: inheritedAgentDeviceId } : {}),');
-    // 换模型时按那台的目录校验，而不是本机目录。
-    expect(body).toContain('availableModels: deviceRouting?.remoteCodexModels ?? maker.getCapabilities(targetAgent).availableModels,');
-    expect(body).toContain('providerRouting: deviceRouting ?? await getProviderRoutingContext(),');
+    // 换模型或换电脑时按那台的目录校验，而不是本机目录。
+    expect(body).toContain('availableModels: deviceRouting.remoteCodexModels ?? maker.getCapabilities(agentKind).availableModels,');
+    expect(body).toContain('providerRouting: deviceRouting,');
   });
 
   it("lists the other computer's models for Orca leads whose agent runs there", () => {
-    const start = source.indexOf('listAvailableModels: async ({ agent, callerSessionId, agentDeviceId: requestedAgentDeviceId }) => {');
+    // Locate the protocol adapter by its name, independent of optional inputs.
+    // Worker discovery behavior is covered by orcaRemoteWorkers unit tests.
+    const start = source.indexOf('listAvailableModels: async (');
     expect(start).toBeGreaterThan(0);
     const body = source.slice(start, source.indexOf('const providerRouting = await getProviderRoutingContext();', start));
     // 不指定位置时列 Lead 所在位置(Lead 归在供应商组里时列组那一项所在电脑)；Lead 也可以指定别的电脑 / 分享，

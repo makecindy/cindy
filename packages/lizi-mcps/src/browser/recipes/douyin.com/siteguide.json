@@ -1,12 +1,15 @@
 {
   "site": "douyin.com",
-  "auth": "需要登录态 + 持久浏览器:抖音 web 接口对未登录/非同源会话返回非 JSON 或风控,且依赖浏览器签名(a_bogus)与 cookie,必须在持久浏览器登录 douyin.com 后于页面内 fetch",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://www.douyin.com/",
-    "userPage": "https://www.douyin.com/user/<sec_uid>",
-    "userVideosApi": "https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=<sec_uid>&max_cursor=0&count=20&aid=6383",
-    "commentsApi": "https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id=<aweme_id>&count=10&cursor=0&aid=6383"
+    "home": "https://www.douyin.com"
   },
-  "recipes": ["douyin-user-videos"],
-  "notes": "关键:抖音 web 接口的签名(a_bogus)和 cookie 由浏览器自身在页面内发起 fetch 时补齐,所以绝不能直接 navigate 到 api URL(会被喂 SPA HTML 或风控),正确姿势是先 navigate 到目标用户主页 https://www.douyin.com/user/<sec_uid> 落域并让页面跑起来,再用 evaluate 在页面内 fetch(api, {credentials:'include', headers:{referer:'https://www.douyin.com/'}})。用户作品:/aweme/v1/web/aweme/post/?sec_user_id=&max_cursor=0&count=20&aid=6383,返回 {aweme_list:[{aweme_id,desc,video:{duration(ms),play_addr:{url_list}},statistics:{digg_count}}]};status_code 非 0 表示异常/风控。sec_uid 是用户主页 URL 末段那串长字符。评论:/aweme/v1/web/comment/list/?aweme_id=&count=10&cursor=0&aid=6383,返回 {comments:[{text,digg_count,user:{nickname}}]}。务必使用持久浏览器并已登录;即便如此抖音风控仍可能间歇失败,失败时按错误提示重试或重新登录。creator.douyin.com 下的发布/草稿/账号信息接口需创作者登录且更复杂,本配方不收录。"
+  "recipes": [
+    "douyin-user-videos"
+  ],
+  "notes": "兼容入口 douyin-user-videos 现执行内置 douyin/user-videos，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

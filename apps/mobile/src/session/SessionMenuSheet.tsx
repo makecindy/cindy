@@ -1,3 +1,6 @@
+import { sessionAllowsProjectMove, useSessionProjectMoveSheet } from './SessionProjectMoveSheet';
+import { SessionPrLinks } from './SessionPrLinks';
+import { SessionMenuPrLinks } from './SessionMenuPrLinks';
 import { CodexResetAutoUseControl } from './CodexResetAutoUseControl';
 import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
 import { TaskTagsSheet, useTaskTagsSheet } from './TaskTagsSheet';
@@ -24,6 +27,7 @@ import {
   Archive,
   ArchiveRestore,
   Copy,
+  Folder,
   Link2,
   LogOut,
   Pencil,
@@ -117,7 +121,18 @@ export interface SessionMenuWorkerActions {
   onArchive?: (onConfirmed: () => void) => void;
 }
 
+/** One entry of the menu's 「打开」 section, in the order of the task page header. */
+export interface SessionMenuOpenEntry {
+  id: string;
+  label: string;
+  icon: MenuIcon;
+  disabled?: boolean;
+  onPress(): void;
+}
+
 export interface SessionMenuSheetProps {
+  /** 「打开」分区:远程桌面、电脑侧边栏里手机能打开的入口(如模拟器)与文件。 */
+  openEntries?: SessionMenuOpenEntry[];
   tagDeviceId?: string;
   providerName?: string;
   /** 当前模型在模型目录里的用户可读展示名(用量卡显示;缺席时卡片自行兜底)。 */
@@ -168,9 +183,10 @@ export interface SessionMenuSheetProps {
   worker?: SessionMenuWorkerActions;
   leavingSharing?: boolean;
   onTogglePinned(): void;
-  onArchive(): void;
-  /** 归档前的确认(如绑定了自动化);返回 false 时保留菜单、不归档。 */
-  confirmArchive?: () => Promise<boolean>;
+  /** 由调用方在列表预览事务内等待确认，再提交归档。 */
+  onArchive(prepare: (isCurrent: () => boolean) => Promise<boolean>): void;
+  /** 菜单收起后执行归档确认(如绑定了自动化);返回 false 时留在当前任务、不归档。 */
+  confirmArchive?: (isCurrent: () => boolean) => Promise<boolean>;
   onRestore(): void;
   onDelete(): void;
   onClose(): void;
@@ -179,6 +195,7 @@ export interface SessionMenuSheetProps {
 }
 
 export function SessionMenuSheet({
+  openEntries,
   tagDeviceId,
   providerName,
   modelLabel,
@@ -222,6 +239,15 @@ export function SessionMenuSheet({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
+  const projectMove = useSessionProjectMoveSheet();
+  const pendingArchiveRef = useRef<(() => void) | null>(null);
+  const handleClosed = useCallback(() => {
+    const archive = pendingArchiveRef.current;
+    pendingArchiveRef.current = null;
+    onClosed?.();
+    projectMove.parentClosed();
+    archive?.();
+  }, [onClosed, projectMove.parentClosed]);
   const menuUsage = useSessionMenuUsage(
     session,
     usageReader,
@@ -499,12 +525,9 @@ export function SessionMenuSheet({
           onClose();
           return;
         }
-        // 与删除同序:确认弹窗在菜单仍展开时弹出,确认后再收起并归档。
-        void (confirmArchive?.() ?? Promise.resolve(true)).then((ok) => {
-          if (!ok) return;
-          onArchive();
-          onClose();
-        });
+        // 先响应点击收起菜单，关闭动画结束后再查询/弹确认，避免原生 Modal 吞掉 Alert。
+        pendingArchiveRef.current = () => onArchive(confirmArchive ?? (async () => true));
+        onClose();
         return;
       case 'delete':
         confirmDelete();
@@ -611,7 +634,7 @@ export function SessionMenuSheet({
     );
   }, [codexRateLimits, codexResetBusy, onResetCodexRateLimits, resetSummary, t]);
 
-  const tagsSheet = useTaskTagsSheet(visible, onClosed);
+  const tagsSheet = useTaskTagsSheet(visible, handleClosed);
   const menuContent = (
     <View style={styles.menuBody} testID="session.menuSheetBody">
       {renaming ? (
@@ -688,7 +711,43 @@ export function SessionMenuSheet({
             </View>
                 )}
 
+          {!messageOnly && !workerMode && !sharedGuest && (tagDeviceId ?? session.deviceLinkDeviceId) ? (
+            <SessionMenuPrLinks
+              deviceId={(tagDeviceId ?? session.deviceLinkDeviceId)!}
+              sessionId={session.id}
+              updatedAt={session.updatedAt}
+              visible={visible && view === 'menu'}
+            />
+          ) : null}
+
           {!messageOnly ? <SessionUsageSummary modelLabel={modelLabel} providerName={providerName} session={session} usage={menuUsage} contextUsage={contextUsage} onPress={openInfo} translucent={Platform.OS === 'ios'} /> : null}
+
+          {openEntries?.length && !workerMode ? (
+            <View testID="session.openSection">
+              <Text style={styles.openHeading}>{t('session.menu.openSection')}</Text>
+              {Platform.OS === 'ios' ? (
+                <SessionDetailsNativeActions actions={openEntries.map((entry) => ({
+                  label: entry.label,
+                  disabled: entry.disabled,
+                  testID: `session.open.${entry.id}`,
+                  onPress: entry.onPress,
+                }))} />
+              ) : (
+                <View style={styles.actionGroup}>
+                  {openEntries.map((entry) => (
+                    <MenuActionRow
+                      key={entry.id}
+                      disabled={entry.disabled}
+                      icon={entry.icon}
+                      label={entry.label}
+                      onPress={entry.onPress}
+                      testID={`session.open.${entry.id}`}
+                    />
+                  ))}
+                </View>
+              )}
+            </View>
+          ) : null}
 
           {workerMode ? (
             <WorkerMenuActions onClose={onClose} worker={worker} />
@@ -722,6 +781,16 @@ export function SessionMenuSheet({
               />
             ))}
           </View>}
+
+          {!messageOnly && sessionAllowsProjectMove(session) ? (
+            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
+              label: t('session.menu.moveToProject'), disabled: busy,
+              onPress: () => projectMove.open(session, onClose, tagDeviceId), testID: 'session.moveToProject',
+            }]} /> : <View style={styles.actionGroup}>
+              <MenuActionRow icon={Folder} label={t('session.menu.moveToProject')} disabled={busy}
+                onPress={() => projectMove.open(session, onClose, tagDeviceId)} testID="session.moveToProject" />
+            </View>
+          ) : null}
 
           {workerMode ? null : !messageOnly && isSharedTaskPeer(session.deviceLinkDeviceId) && onLeaveSharing ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
@@ -814,6 +883,7 @@ export function SessionMenuSheet({
 
   const infoContent = (
     <View style={styles.infoBody} testID="session.infoSheetBody">
+      {!sharedGuest && (tagDeviceId ?? session.deviceLinkDeviceId) && <SessionPrLinks key={`${session.id}:${tagDeviceId ?? session.deviceLinkDeviceId}`} sessionId={session.id} deviceId={(tagDeviceId ?? session.deviceLinkDeviceId)!} readOnly={session.source === 'review'} />}
       <SessionUsageSummary modelLabel={modelLabel} providerName={providerName} session={session} usage={menuUsage} contextUsage={contextUsage} detail translucent={Platform.OS === 'ios'} />
       <View style={styles.infoSection}>
         <View style={styles.infoSectionHeader}>
@@ -1042,6 +1112,7 @@ export function SessionMenuSheet({
         {showingInfo ? infoContent : menuContent}
       </SessionDetailsNative>
         {tagEditor}
+        {projectMove.sheet}
       </>
     );
   }
@@ -1100,6 +1171,7 @@ export function SessionMenuSheet({
       ) : null}
     </SheetModal>
       {tagEditor}
+      {projectMove.sheet}
     </>
   );
 }
@@ -1355,6 +1427,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
       right: 0,
       top: 0,
       width: 44,
+    },
+    openHeading: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      paddingHorizontal: spacing.lg,
+      paddingBottom: Platform.OS === 'ios' ? 0 : spacing.xs,
+      paddingTop: spacing.md,
     },
     renameErrorText: {
       color: colors.errorText,

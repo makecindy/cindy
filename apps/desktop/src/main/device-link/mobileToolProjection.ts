@@ -64,7 +64,7 @@ export function projectMobileToolResult(content: unknown): unknown {
       };
       // Presentation control flags precede references so compaction cannot revive
       // suppressed assets or images already owned by a card.
-      for (const key of ['_xdt_render_image', 'xdt_images_in_card', 'xdt_audio_in_card']) {
+      for (const key of ['_xdt_render_image', 'xdt_images_in_card', 'xdt_audio_in_card', 'xdt_card_turn_end']) {
         if (typeof source[key] === 'boolean') add(key, source[key]);
       }
       for (const key of ['xdt_card_id', 'xdt_anchor_card_id', 'xdt_image_url', 'xdt_video_url']) {

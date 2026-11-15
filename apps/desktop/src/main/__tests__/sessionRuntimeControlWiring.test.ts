@@ -3,6 +3,9 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { createEffortChangeCoordinator, enqueueEffortChange } from '../../renderer/components/new-chat/effortChangeQueue';
+import { supportsSubscriptionFastPolicy, type ProviderView } from '@cindy/model-providers';
+import { withFastModePolicy } from '../../../../../packages/maker-core/src/agents/shared/fast-mode-policy';
+import { commitRuntimeAxisAfterPersistence } from '../maker-ipc/runtimeSelectionAxes';
 
 const mainRoot = resolve(__dirname, '..');
 const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8').replace(
@@ -31,6 +34,10 @@ const deviceLinkHostSource = readFileSync(
 ).replace(/\r\n?/g, '\n');
 const makerSendSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+const queuedInputOriginSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
@@ -100,6 +107,9 @@ describe.each([
       sessionId: 'archived-task', effort: 'high', enabled: true,
       sessions: {}, eq: vi.fn(), getDbClient: () => ({ drizzle: { select: () => query } }),
       remoteResponse: response, persistSessionFields: persist, agentSwitchPending: pending,
+      readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'next-provider', agentDeviceId: null } }),
+      getSessionProvider: () => 'next-provider',
+      createSubscriptionFastPolicy: () => ({ isAllowed: () => true }),
       // These archived fixtures have no saved automation model scope.
       updateSavedScheduledAxis: vi.fn(async () => false),
       updateScheduledPreference: vi.fn(async () => {}),
@@ -203,12 +213,77 @@ describe.each([
   });
 });
 
+// Review R11: run the production IPC closure with the real runtime policy
+// wrapper. Policy-only tests cannot catch an IPC branch that bypasses it.
+// Guard tier shares this file's compiled Electron closure fixture; the minimal
+// sequence is deny -> allow -> explicit enable on an active Claude task.
+describe('active Claude subscription Fast setting', () => {
+  it.each([
+    { id: 'anthropic', auth: { method: 'oauth', native: 'claude' } },
+    { id: 'openai', auth: { method: 'oauth', native: 'codex' } },
+    { id: 'custom-api', auth: { method: 'apiKey' } },
+  ])('updates the live subscription handle while preserving API behavior ($id)', async provider => {
+    let allowed = true;
+    let fast: boolean | 'ultrafast' = true;
+    let enforce!: () => Promise<void>;
+    const onFastModeChanged = vi.fn();
+    const handle = withFastModePolicy({
+      setFastMode: async (next: boolean | 'ultrafast') => { fast = next; },
+      getFastMode: () => fast,
+      close: async () => {},
+    } as Parameters<typeof withFastModePolicy>[0], {
+      isAllowed: () => allowed,
+      subscribe: listener => { enforce = listener; return () => {}; },
+      onFastModeChanged,
+    });
+    const profile = { providerId: provider.id, agentDeviceId: null };
+    const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active' }] };
+    const persistFastMode = vi.fn(async () => {});
+    const bindings = {
+      sessionId: 'active-claude-task', enabled: true, sessions: {}, eq: vi.fn(),
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      agentSwitchPending: new Map(), readSessionRuntimeProfiles: async () => ({ effective: profile }),
+      createSubscriptionFastPolicy: () => ({ isAllowed: () => allowed }), supportsSubscriptionFastPolicy,
+      getSessionProvider: () => provider.id,
+      getActiveCatalog: () => ({ providers: [provider as ProviderView] }),
+      assertOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
+      isUserPendingAgentSwitchIntent, updateSavedScheduledAxis: async () => false,
+      resolvePendingRuntimeAxisPatch: async (_id: string, patch: object) => ({ ...patch }),
+      recordUserSessionRuntimeAxisMutation: vi.fn(), setSessionFastMode: vi.fn(),
+      maker: { getSession: () => ({ agentKind: 'claude-code', setFastMode: handle.setFastMode, getFastMode: handle.getFastMode }) },
+      persistFastMode, commitRuntimeAxisAfterPersistence, pendingCredentialSwitchHolder: null,
+      remoteResponse: undefined, log: { debug: vi.fn() },
+    };
+    const run = new Function(...Object.keys(bindings), axisHandlers.get('applyFastMode')!)(...Object.values(bindings));
+    try {
+      allowed = false;
+      await enforce();
+      expect(handle.getFastMode!()).toBe(false);
+      allowed = true;
+      await enforce();
+      expect(handle.getFastMode!()).toBe(false); // relaxation alone must never enable
+      onFastModeChanged.mockClear();
+      await run();
+      expect(persistFastMode).toHaveBeenCalledOnce();
+      if (provider.auth.method === 'oauth') {
+        expect(handle.getFastMode!()).toBe(true);
+        expect(onFastModeChanged).toHaveBeenCalledWith(true);
+      } else {
+        expect(handle.getFastMode!()).toBe(false);
+        expect(onFastModeChanged).not.toHaveBeenCalled();
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+});
+
 describe('session runtime control wiring', () => {
   it('replays Windows attention after the main window is shown independently of inventory loading', () => {
     const body = handlerBody(
       bootstrapSource,
       "mainWindow.once('ready-to-show'",
-      'void runComputerUseSmokeIfRequested();',
+      'void runComputerUseSmokeIfRequested(',
     );
     const shown = body.indexOf('showMainWindowAndRestoreFullscreen(');
     const badge = body.indexOf('refreshWindowsAppBadge();');
@@ -219,13 +294,17 @@ describe('session runtime control wiring', () => {
       /if \(!app.isPackaged \|\| isCindyVersionLaunchPending\(\)\)\s+markDesktopDevWindowReady\(mainWindow.webContents.getOSProcessId\(\)\);/,
     );
   });
-  it('advertises host-side model-window protection to remote controllers', () => {
+  it('advertises host-side model-window protection and Orca relocation to remote controllers', () => {
     const capabilities = handlerBody(
       registerSource,
       'ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES',
       'ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS',
     );
     expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
+    // Controllers only offer moving a controlled Orca Lead / local Worker's Agent when this is declared.
+    expect(capabilities).toContain('supportsOrcaAgentRelocation: true');
+    // Same for an execution-device Worker whose Lead is on another computer.
+    expect(capabilities).toContain('supportsOrcaRemoteWorkerAgentRelocation: true');
   });
 
   it('authenticates Desktop package-command entry points before minting Main context', () => {
@@ -240,11 +319,8 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('persisted?.autoResume === true');
     expect(registerSource).toContain('persisted?.origin !== undefined');
 
-    const steerDispatch = handlerBody(
-      registerSource,
-      'const steerToAgentAccepted = async (',
-      'registerMakerSessionSendHandler(',
-    );
+    const steerDispatch = readFileSync(resolve(mainRoot, 'maker-ipc/makerSteerTransaction.ts'), 'utf8');
+    expect(registerSource).toContain('const steerToAgentAccepted = createMakerSteerTransaction(');
     expect(steerDispatch).toContain('[MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT]');
     expect(registerSource).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
     expect(registerSource).toContain(
@@ -259,9 +335,9 @@ describe('session runtime control wiring', () => {
       expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
       expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
     }
-    expect(makerSendSource).toContain('clientId: explicitUserItem.clientId');
-    expect(makerSendSource).toContain('persistedContent: explicitUserItem.persistedContent');
-    expect(makerSendSource).toContain(
+    expect(queuedInputOriginSource).toContain('clientId: explicitUserItem.clientId');
+    expect(queuedInputOriginSource).toContain('persistedContent: explicitUserItem.persistedContent');
+    expect(queuedInputOriginSource).toContain(
       'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
     );
     expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');
@@ -550,7 +626,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
   });
 
-  it('accepts local user null effort at the selection gate; ranked models still fail in catalog', () => {
+  it('passes user null effort through catalog normalization before model side effects', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -558,7 +634,7 @@ describe('session runtime control wiring', () => {
     );
     const confirmation = setModel.indexOf('const confirmedContextWindow =');
     const selectionValidation = setModel.indexOf('!isSupportedRuntimeEffort(selectionEffort)');
-    const fixedEffortValidation = setModel.indexOf('atomicSelection.effort === null');
+    const axisResolution = setModel.indexOf('const axes = resolveSessionRuntimeAxes({');
     const prepare = setModel.indexOf('prepareModelWindowSwitch(');
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
 
@@ -570,12 +646,11 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain(
       "selectionEffort === null &&\n            (internalOptions.source !== 'user' ||\n              isDeviceLinkInvoke() ||\n              confirmedContextWindow !== undefined)",
     );
-    expect(setModel).toContain('catalogModel.efforts.length > 0');
-    expect(setModel).toContain(
-      "internalOptions.source === 'user' &&\n          atomicSelection.effort === null &&\n          catalogModel.efforts.length > 0",
-    );
-    expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
-    expect(fixedEffortValidation).toBeLessThan(prepare);
+    // #7449: a null wire axis must reach catalog normalization, otherwise the
+    // pending selection fails again on every queued-send retry.
+    expect(setModel).not.toContain('`effort "null" is unavailable for model "${model}"`');
+    expect(axisResolution).toBeGreaterThan(selectionValidation);
+    expect(axisResolution).toBeLessThan(prepare);
     expect(prepare).toBeLessThan(apply);
     expect(setModel).toContain(
       '!isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow',
@@ -662,7 +737,6 @@ describe('session runtime control wiring', () => {
       normalWakeGuard,
     );
 
-    expect(setModel).toContain('atomicSelection.effort === null');
     expect(setModel).toContain('isDeviceLinkInvoke() ||');
     expect(setModel).toContain("(atomicSelection?.effort === null && runtimeAgentKind !== 'pi')");
     expect(setModel).toContain('!rebuildLiveOrcaWorker && !atomicSelection');
@@ -678,6 +752,19 @@ describe('session runtime control wiring', () => {
     expect(persistSelection).toBeGreaterThan(patchFast);
     expect(normalWakeGuard).toBeGreaterThan(persistSelection);
     expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
+  });
+
+  it('persists a send-time renamed model inside the shared route transaction', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('persistRenamedSessionModel: true');
+    const persistGate = setModel.indexOf('internalOptions.persistRenamedSessionModel === true');
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);', persistGate);
+    expect(persistGate).toBeGreaterThan(-1);
+    expect(persist).toBeGreaterThan(persistGate);
   });
 
   it('uses current runtime window facts but still requires a verified target before rebuilding', () => {
@@ -781,11 +868,13 @@ describe('session runtime control wiring', () => {
   });
 
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
-    const commitRebuild = handlerBody(
-      registerSource,
-      'commitRebuild: async (sessionId, handoff, meta, signal) => {',
-      'setPendingHandoff: (sessionId, handoff, expectedGeneration)',
-    );
+    const coreSource = readFileSync(resolve(mainRoot, 'maker-ipc/contextRecoveryAssembly.ts'), 'utf8');
+    const coreAst = ts.createSourceFile('contextRecoveryAssembly.ts', coreSource, ts.ScriptTarget.Latest, true);
+    const core = coreAst.statements.find((node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'commitContextRecoveryWithPorts');
+    if (!core) throw new Error('Shared context rebuild coordination is missing');
+    const commitRebuild = core.body!.getText(coreAst).replace(/\bports\./g, '');
+    expect(registerSource).toContain('commitContextRecoveryWithPorts({');
     const query = commitRebuild.indexOf('contextWindow: sessions.contextWindow,');
     const commit = commitRebuild.indexOf('commitContextRebuild(sessionId, handoff, meta)');
     const cancellation = commitRebuild.indexOf('signal?.throwIfAborted();');
@@ -978,6 +1067,49 @@ describe('session runtime control wiring', () => {
     expect(body).toContain(
       "internalOptions.source === 'user' && agentSwitchPending.get(sessionId)?.sameAgentSelection",
     );
+  });
+
+  it('carries the Pi thinking intent through every staged selection replay', () => {
+    const body = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const early = body.slice(body.indexOf('// A picker click'), body.indexOf('const axisPatch:'));
+    // 点选暂存：intent 必须带上思考意图，否则发送时回放会丢档位。
+    expect(early).toContain('{ thinking: atomicSelection.thinking }');
+    // 发送回放 / deferred 结算另两条重建链也不能丢。
+    expect(registerSource).toContain('{ thinking: intent.thinking }');
+    expect(registerSource).toContain('{ thinking: pending.thinking }');
+    expect(
+      registerSource.split('{ thinking: atomicSelection.thinking }').length,
+    ).toBeGreaterThanOrEqual(3);
+    // 回合中延期（deferLockedSelection）的两条登记都要暂存思考意图：只靠结算侧回放
+    // pending.thinking 不够，登记时不写就恒为 undefined，原症状会在「回合中切模」
+    // 场景原样复现。
+    const defer = body.slice(
+      body.indexOf('const deferLockedSelection = async () =>'),
+      body.indexOf('if (runtimeStatus.remoteHostId && isSessionInTurn(sessionId)) {'),
+    );
+    expect(defer).toContain('acceptSessionRuntimeMutation({');
+    expect(defer).toContain('deferSessionRuntimeAxisMutation({');
+    expect(
+      defer.split('{ thinking: atomicSelection.thinking }').length - 1,
+    ).toBeGreaterThanOrEqual(2);
+    // 非 Pi 引擎绝不能收到 thinkingEnabled（只有 Pi 的 set_model 会消费它）。
+    expect(registerSource).toContain(
+      "runtimeAgentKind === 'pi' && atomicSelection?.thinking !== undefined",
+    );
+    // 提交写入镜像后同步本机 renderer 记忆：renderer 的全量快照才会带上该选择，
+    // 镜像里的钉子得以撤销（否则会长期压住被控端后来的显式改动）。
+    const rememberThinking = registerSource.slice(
+      registerSource.indexOf('rememberThinkingIntent: ({'),
+      registerSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
+    );
+    expect(rememberThinking).toContain(
+      'setThinkingEnabledInMemory(agentKind, providerId, model, thinking)',
+    );
+    expect(rememberThinking).toContain('DRAFT_PREF_APPLY');
   });
 
   it('only relinks retained cross-host writers without rewriting native history', () => {
@@ -1337,6 +1469,21 @@ describe('session runtime control wiring', () => {
     const liveUsageRead = setModel.indexOf('getSessionLastLiveUsage(sessionId)');
     expect(liveUsageRead).toBeGreaterThan(-1);
     expect(liveUsageRead).toBeLessThan(pressurePreflight);
+    // 预算必须在预检之前读到，且预检比较的目标窗口必须带预算：否则小预算任务会拿
+    // 目录默认大窗证明「有余量」，跳过冷启动核实和切换后的最终窗口校验，既有上下文
+    // 直接落进过载窗口（Greptile P1，2026-09-22）。
+    const budgetRead = setModel.indexOf('await readStoredSessionContextWindowBudget(sessionId)');
+    const targetWindowResolve = setModel.indexOf('const coldPiTargetContextWindow');
+    expect(budgetRead).toBeGreaterThan(-1);
+    expect(budgetRead).toBeLessThan(targetWindowResolve);
+    expect(targetWindowResolve).toBeLessThan(pressurePreflight);
+    expect(
+      setModel.slice(targetWindowResolve, pressurePreflight).includes('sessionContextWindowBudget'),
+    ).toBe(true);
+    // 预算只读一次，预检与后续的缩窗闸门共用同一个值（同一锁内不可能变化）。
+    expect(
+      setModel.split('await readStoredSessionContextWindowBudget(sessionId)').length - 1,
+    ).toBe(1);
     expect(setModel).toContain('set-model: skipped cold Pi window verification');
     expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true;');
     // 终态活进程核验必须同步跳过，否则只是换成 'Pi target runtime could not be verified'。
@@ -1652,5 +1799,203 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain(
       'if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||',
     );
+  });
+});
+
+// Guard tier: the scheduled startup owner assertion protects an asynchronous account switch.
+// Start before the automation preference holder: the buggy snapshot lived just
+// above the bootstrap holder assignment, so a block anchored on that assignment
+// would have skipped the exact line the guard is meant to catch.
+const WIRING_START = 'prepareScheduledModelPreferencesHolder = async';
+const WIRING_ANCHOR = 'scheduledSessionBootstrapHolder = createScheduledSessionBootstrap(';
+const WIRING_END = 'let recoverRenamedSessionModelOnSend';
+
+describe('scheduled session bootstrap wiring', () => {
+  function wiringBlock(): string {
+    const start = registerSource.indexOf(WIRING_START);
+    expect(start).toBeGreaterThan(-1);
+    const end = registerSource.indexOf(WIRING_END, start);
+    expect(end).toBeGreaterThan(start);
+    return registerSource.slice(start, end);
+  }
+
+  it('builds the automation bootstrap holder from the per-fire factory', () => {
+    expect(wiringBlock()).toContain(WIRING_ANCHOR);
+  });
+
+  it('forwards the owner assertion into the startup funnel', () => {
+    // Losing this forwarder would silently downgrade the guard to the single
+    // entry check, so an account switch inside the funnel could create the task
+    // under the new owner instead of aborting.
+    expect(wiringBlock()).toContain(
+      'bootstrapSession(options as MakerSessionCreateOpts, assertAccess)',
+    );
+  });
+
+  it('never snapshots the data owner for automations at registration time', () => {
+    // A snapshot evaluated once while the handlers register is the bug: the app
+    // session commit that restores the account can land later, so it stays stale
+    // and every automation fails until the app restarts. Assert on the wiring
+    // block, not on a variable name: any `const`/`let` shape that captures the
+    // scope here reintroduces the same failure.
+    expect(wiringBlock()).not.toContain('captureDataOwnerBroadcastScope');
+  });
+});
+
+
+// Recovery assembly guard: execute the actual Desktop callbacks, not a copy
+// of their bodies or a mock of the recovery deps. Covers owner/DB fences and
+// persistence-before-projection before these closures become host ports.
+// Minimal failures: changed owner across an await, or a card write failing
+// after context.rebuild committed. Ordinary factory tests replace these deps.
+async function recoveryAssembly(bindings: Record<string, unknown>) {
+  let rowReader: ts.VariableStatement | undefined;
+  let assembly: ts.ExpressionStatement | undefined;
+  function visit(node: ts.Node): void {
+    if (ts.isVariableStatement(node) && node.declarationList.declarations.some(d => d.name.getText(registerAst) === 'readContextRecoverySession')) rowReader = node;
+    if (ts.isExpressionStatement(node) && ts.isBinaryExpression(node.expression)
+      && node.expression.left.getText(registerAst) === 'contextOverflowRolloverHolder') assembly = node;
+    ts.forEachChild(node, visit);
+  }
+  visit(registerAst);
+  if (!rowReader || !assembly) throw new Error('Desktop recovery assembly is missing');
+  const code = ts.transpileModule(`let contextOverflowRolloverHolder;\n${rowReader.getText(registerAst)}\n${assembly.getText(registerAst)}\nreturn contextOverflowRolloverHolder;`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, removeComments: true } }).outputText;
+  // Load newly extracted production functions from their real imports. Existing
+  // Desktop IO remains injected. This same guard runs unchanged before/after
+  // extraction and never recreates the extracted implementation in the test.
+  for (const statement of registerAst.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    const named = statement.importClause?.namedBindings;
+    if (!named || !ts.isNamedImports(named) || statement.importClause?.isTypeOnly) continue;
+    for (const spec of named.elements) {
+      const name = spec.name.text;
+      if (spec.isTypeOnly || name in bindings || !new RegExp(`\\b${name}\\b`).test(code)) continue;
+      const file = resolve(mainRoot, 'maker-ipc', statement.moduleSpecifier.text).replace(/\.js$/, '.ts');
+      const imported = await import(/* @vite-ignore */ file);
+      bindings[name] = imported[spec.propertyName?.text ?? name];
+    }
+  }
+  return new Function(...Object.keys(bindings), code)(...Object.values(bindings)) as Record<string, (...args: unknown[]) => unknown>;
+}
+
+function recoveryFixture() {
+  const order: string[] = [];
+  let current = true;
+  const row = { status: 'active', source: 'desktop', botRole: 'canonical', botStatus: 'active',
+    botHiddenAt: null, botLinkArchivedAt: null, agentKind: 'codex', workingDir: '/fixture',
+    model: 'm', providerId: 'p', clearedAt: null, contextWindow: 1000, remoteHostId: null };
+  const query = { from: () => query, leftJoin: () => query, where: () => query,
+    limit: vi.fn(async () => { order.push('read'); return [row]; }) };
+  const db = { clientEpoch: 1, client: { drizzle: { select: () => query } } };
+  const coordinator = { clearError: vi.fn(() => { order.push('clear'); return { status: 'idle' }; }),
+    hasPendingQueuedWork: vi.fn(() => false), getInputAbortSignal: () => new AbortController().signal };
+  const bindings: Record<string, unknown> = {
+    createContextOverflowRollover: (deps: unknown) => deps,
+    getDbClient: () => db.client, getCurrentDbClientSnapshot: () => ({ ...db }),
+    captureDataOwnerBroadcastScope: () => 'owner', isDataOwnerBroadcastScopeCurrent: () => current,
+    sessions: new Proxy({}, { get: (_t, key) => key }), botSessionLinks: {}, botProfiles: {}, eq: vi.fn(),
+    maker: { getSession: vi.fn(), closeSession: vi.fn() },
+    log: { info: vi.fn(), warn: vi.fn(() => { order.push('warn'); }) },
+    isHeadlessGhostSetupTurn: () => false, bindingStore: { findByTarget: () => null },
+    needsSubscriptionAccountHandoff: vi.fn(), remoteBackgroundInvoke: vi.fn(),
+    readCodexThreadStorageReadOnly: vi.fn(async () => ({ rolloutPath: '/fixture/history' })),
+    classifyCodexHistoryOversized: vi.fn(async () => 'healthy'),
+    DEFAULT_MODEL_COMPACTION_PCT: 80, getActiveCatalog: vi.fn(), dbToMakerAgentKind: (x: unknown) => x,
+    resolveConfiguredContextWindow: vi.fn(), listMessagesForAgentHandoff: vi.fn(),
+    listBotRecallSessionIds: vi.fn(), COMPANION_SESSION_IDS_LIMIT: 10,
+    findLatestUserMessageForRebuild: vi.fn(), findLatestContextRebuildMeta: vi.fn(),
+    rehydrateColdPiRuntimeForWindowVerification: vi.fn(), drainPersistQueue: vi.fn(),
+    commitContextRebuild: vi.fn(async () => { order.push('commit'); return { updatedAt: 123 }; }),
+    broadcastSessionPatched: vi.fn(() => { order.push('project'); }),
+    createDbMessage: vi.fn(async () => { order.push('card'); throw new Error('card unavailable'); }),
+    createId: () => 'id', agentHandoffPending: { set: vi.fn(), readGeneration: () => 1 },
+    agentInputCoordinatorHolder: coordinator, wireNoteMemory: { reset: vi.fn(() => { order.push('reset'); }) },
+    readPiNativeCompatOverride: vi.fn(), recordPiNativeCompatOverride: vi.fn(),
+    buildCreateOptsWithStderr: (x: unknown) => x,
+    readSessionExtraDirsFromDb: vi.fn(async () => []), directoryGrantsForRuntime: vi.fn(),
+    readSessionWritableDirsFromDb: vi.fn(async () => []), readAutoReviewHistory: vi.fn(async () => []),
+    restoreAutoReviewUserIntent: vi.fn(() => 'authored-intent'), canContinueContextRecovery: () => true,
+    persistedUserContentToWireMessage: (x: unknown) => x, readAutoReviewUserText: () => 'author',
+    sendToAgentAcceptedUnlocked: vi.fn(async () => { order.push('send'); return { accepted: true }; }),
+    PI_CACHE_RECOVERY_EXPECTATION: Symbol('compat'), INHERITED_CAPABILITY_SELECTION: Symbol('capabilities'),
+    AUTO_REVIEW_SOURCE_CONTENT: Symbol('source'), AUTO_REVIEW_USER_INTENT: Symbol('intent'),
+    app: { getPath: () => '/fixture/profile' },
+    withCindyMakeProjectUse: async (_profile: unknown, _dir: unknown, send: () => unknown) => {
+      order.push('project-use'); return send();
+    },
+    withSendToSessionLock: vi.fn(), withRehydrateCloseSuppressed: vi.fn(),
+  };
+  return { bindings, row, order, db, coordinator, setCurrent: (value: boolean) => { current = value; } };
+}
+
+describe('Desktop recovery assembly ordering and fences', () => {
+  it('reads an active companion role only while its link and profile are active', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    expect(await deps.getSessionRow('s')).toMatchObject({ botRole: 'canonical' });
+    h.row.botStatus = 'inactive';
+    expect(await deps.getSessionRow('s')).toMatchObject({ botRole: null });
+  });
+
+  it('classifies only the recorded history and refuses an owner change across inspection', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    expect(await deps.classifyCodexHistory('thread')).toBe('healthy');
+    h.setCurrent(false);
+    await expect(deps.classifyCodexHistory('thread')).rejects.toThrow('owner changed');
+    h.setCurrent(true);
+    (h.bindings.readCodexThreadStorageReadOnly as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    expect(await deps.classifyCodexHistory('thread')).toBe('unknown');
+  });
+
+  it('commits before zero-usage projection and tolerates a derived card failure', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    await deps.commitRebuild('s', 'handoff', { reason: 'context-overflow', sourceUserClientId: 'u' });
+    expect(h.order).toEqual(['read', 'commit', 'project', 'card', 'warn']);
+    expect(h.bindings.broadcastSessionPatched).toHaveBeenCalledWith('s', expect.objectContaining({
+      sdkSessionId: null, contextTokens: 0, contextWindow: 1000,
+    }), 'owner');
+    h.order.length = 0; h.setCurrent(false);
+    await expect(deps.commitRebuild('s', 'handoff', {})).rejects.toThrow('owner changed before commit');
+    expect(h.order).toEqual(['read']);
+    h.setCurrent(true);
+    (h.bindings.commitContextRebuild as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      h.order.push('commit'); h.db.clientEpoch++; return { updatedAt: 123 };
+    });
+    await expect(deps.commitRebuild('s', 'handoff', {})).rejects.toThrow('owner changed after commit');
+    expect(h.order).toEqual(['read', 'read', 'commit']);
+  });
+
+  // clearError returns a projection object in the real Desktop coordinator.
+  // The void callback contract must ignore it rather than treating it as a Promise.
+  it.each(['rebuild', 'queued-input'])('keeps %s synchronous when clearError returns a projection', async (entry) => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    if (entry === 'rebuild') {
+      expect(deps.onRebuilt('s')).toBeUndefined();
+      expect(h.order).toEqual(['clear', 'reset']);
+    } else {
+      expect((deps.getRecoveryAbortSignal('s') as AbortSignal).aborted).toBe(false);
+      h.coordinator.hasPendingQueuedWork.mockReturnValue(true);
+      const signal = deps.getRecoveryAbortSignal('s');
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect((signal as AbortSignal).aborted).toBe(true);
+      expect(h.order).toEqual(['clear']);
+    }
+  });
+
+  it('rechecks continuation ownership before sending and preserves authored recovery intent', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    const recovery = { continueFromHistory: true, sourceUserContent: 'author', sourceUserClientId: 'u',
+      sourceCapabilitySelectionText: 'capability', signal: new AbortController().signal };
+    expect(await deps.replayUserMessage('s', 'continue', undefined, recovery)).toEqual({ accepted: true });
+    expect(h.order).toEqual(['read', 'read', 'project-use', 'send']);
+    const send = h.bindings.sendToAgentAcceptedUnlocked as ReturnType<typeof vi.fn>;
+    const opts = send.mock.calls[0][3];
+    expect(opts[h.bindings.AUTO_REVIEW_SOURCE_CONTENT as symbol]).toBe('author');
+    expect(opts[h.bindings.AUTO_REVIEW_USER_INTENT as symbol]).toBe('authored-intent');
+    h.row.status = 'archived';
+    expect(await deps.replayUserMessage('s', 'continue', undefined, recovery)).toEqual({ accepted: false });
+    expect(send).toHaveBeenCalledTimes(1);
+    const cancelled = new AbortController(); cancelled.abort();
+    expect(await deps.replayUserMessage('s', 'continue', undefined, { signal: cancelled.signal })).toEqual({ accepted: false });
   });
 });

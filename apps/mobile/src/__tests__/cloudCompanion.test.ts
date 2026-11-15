@@ -36,7 +36,7 @@ describe('cloud companion rows', () => {
     expect(rows.find(item => item.item.ref.id === 'dash')?.host.deviceName).toBe('Studio');
     // A new phone that never saw the main computer still gets an entry for the cloud conversation.
     const mia = rows.find(item => item.item.ref.id === 'mia')!;
-    expect(mia.host).toEqual({ deviceId: 'mac-c', deviceName: 'mac-c' });
+    expect(mia.host).toEqual({ deviceId: 'mac-c', deviceName: 'another computer' });
     expect(mia.item.display).toMatchObject({ title: 'mia', avatar: { kind: 'emoji', value: '🦊' } });
     expect(cloudActorForRow(actors, mia)?.id).toBe(id(5));
     expect(cloudCompanionRows(items, []).map(item => item.key)).toEqual(items.map(item => item.key));
@@ -59,6 +59,36 @@ describe('cloud companion rows', () => {
     ], id(1));
     expect(view.map(item => [item.text, item.fromCompanion])).toEqual([['hello', false], ['reply', true]]);
   });
+  it('keeps attachments beside the text: attachment-only messages stay, captions are not repeated as text, unknown blocks stay out', () => {
+    const base = { authorId: id(1), author: { kind: 'bot', name: '' }, createdAt: '2026-10-13T00:00:00Z', deleted: false, threadRootId: null };
+    const view = cloudCompanionMessages([
+      { ...base, id: id(10), seq: '10', content: [{ type: 'media', mediaId: id(40), caption: 'report.docx' }] },
+      { ...base, id: id(11), seq: '11', authorId: id(9), content: [{ type: 'text', text: '〔来自飞书〕\nlook' }, { type: 'media', mediaId: id(41), caption: 'a.png' },
+        { type: 'media', mediaId: id(42) }, { type: 'media', caption: 'no-id.png' }, { type: 'widget' }] },
+      { ...base, id: id(12), seq: '12', content: [{ type: 'widget' }] },
+      { ...base, id: id(13), seq: '13', deleted: true, content: [{ type: 'media', mediaId: id(43), caption: 'gone.png' }] },
+    ], id(1));
+    expect(view.map(item => ({ id: item.id, text: item.text, names: item.attachments.map(attachment => [attachment.id, attachment.name]) }))).toEqual([
+      { id: id(10), text: '', names: [[id(40), 'report.docx']] },
+      { id: id(11), text: '〔来自飞书〕\nlook', names: [[id(41), 'a.png'], [id(42), expect.any(String)]] },
+    ]);
+  });
+  it('drops private-protocol image links from the companion\'s reply and keeps everything else', () => {
+    const base = { author: { kind: 'bot', name: '' }, createdAt: '2026-10-13T00:00:00Z', deleted: false, threadRootId: null };
+    const reply = (n: number, text: string, authorId = id(1)): ChatMessage => ({ ...base, id: id(n), seq: String(n), authorId, content: [{ type: 'text', text }] });
+    const hash = 'a'.repeat(64);
+    const view = cloudCompanionMessages([
+      reply(1, `Here is the frog.\n\n![绿色小青蛙](cindy-media://blobs/${hash}.png)\n\nEnjoy`),
+      reply(2, `![x](cindy-media://blobs/${hash}.png)`),
+      reply(3, `![web](https://example.com/a.png) [link](cindy-media://x) \`![c](cindy-media://y)\`\n\n\`\`\`\n![d](xdt-image://s/f.png)\n\`\`\``),
+      reply(4, `![mine](cindy-media://blobs/${hash}.png)`, id(9)),
+    ], id(1));
+    expect(view.map(item => item.text)).toEqual([
+      'Here is the frog.\n\nEnjoy',
+      `![web](https://example.com/a.png) [link](cindy-media://x) \`![c](cindy-media://y)\`\n\n\`\`\`\n![d](xdt-image://s/f.png)\n\`\`\``,
+      `![mine](cindy-media://blobs/${hash}.png)`,
+    ]);
+  });
   it('orders by message time, so older history uploaded later still appears first', () => {
     const at = (n: number, time: string): ChatMessage => ({ id: id(n), seq: String(n), authorId: id(9), author: { kind: 'human', name: '' },
       createdAt: time, deleted: false, threadRootId: null, content: [{ type: 'text', text: `m${n}` }] });
@@ -66,9 +96,10 @@ describe('cloud companion rows', () => {
     expect(view.map(item => item.text)).toEqual(['m30', 'm20']);
   });
 
-  it('offers the computers the main computer names, never itself or this phone', () => {
-    const targets = [{ deviceId: 'home', online: true }, { deviceId: 'phone', online: true }, { deviceId: 'mac', online: true }, { deviceId: 'off', online: false }];
-    expect(cloudHomeTargets(targets, 'home', 'phone').map(target => target.deviceId)).toEqual(['mac']);
+  it('offers the computers the main computer names, never itself or this phone; an older one too', () => {
+    const targets = [{ deviceId: 'home', online: true }, { deviceId: 'phone', online: true }, { deviceId: 'mac', online: true }, { deviceId: 'off', online: false },
+      { deviceId: 'old', online: true, outdated: true }];
+    expect(cloudHomeTargets(targets, 'home', 'phone').map(target => target.deviceId)).toEqual(['mac', 'old']);
   });
 });
 
@@ -117,13 +148,36 @@ describe('Chat Server client for companions', () => {
       value: { name: 'Cindy', description: '', soul: '', systemPrompt: '', user: '' } }]);
     const client = createChatServerClient(request as never);
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(true);
-    expect(request).toHaveBeenLastCalledWith('/preferences', 'GET', undefined, id(1));
+    expect(request).toHaveBeenLastCalledWith('/preferences?key=companion.profile.v1', 'GET', undefined, id(1));
     request.mockResolvedValueOnce([{ key: 'companion.memory.v1:a.md', value: { content: 'x' } }]);
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
     request.mockResolvedValueOnce([{ key: 'companion.profile.v1', value: null }]);
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
     request.mockResolvedValueOnce([{ key: 'companion.profile.v1', value: { name: 'Cindy' } }]);
     await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
+  });
+
+  it('finds a profile too large for the preferences in the companion store, and none on an older server', async () => {
+    const complete = { name: 'Cindy', description: '', soul: '', systemPrompt: '', user: '' };
+    const request = vi.fn(async (path: string): Promise<unknown> => (path.startsWith('/preferences') ? []
+      : { key: 'companion.profile.v1', revision: 1, deleted: false, value: complete }));
+    const client = createChatServerClient(request as never);
+    await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(true);
+    expect(request).toHaveBeenLastCalledWith('/companion-store/entry?key=companion.profile.v1', 'GET', undefined, id(1));
+    request.mockImplementation(async (path: string) => (path.startsWith('/preferences') ? []
+      : { key: 'companion.profile.v1', revision: 1, deleted: false, blob: true }));
+    await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(true);
+    request.mockImplementation(async (path: string) => {
+      if (path.startsWith('/preferences')) return [];
+      throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
+    });
+    await expect(client.hasProfileSnapshot(id(1))).resolves.toBe(false);
+    // A failed read is not "no profile": callers keep what they knew.
+    request.mockImplementation(async (path: string) => {
+      if (path.startsWith('/preferences')) return [];
+      throw Object.assign(new Error('UNAVAILABLE'), { status: 503 });
+    });
+    await expect(client.hasProfileSnapshot(id(1))).rejects.toThrow('UNAVAILABLE');
   });
 
   it('sends compare-and-set and returns a typed conflict', async () => {

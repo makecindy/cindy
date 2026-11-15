@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ROOM_HISTORY_MAX_PAGES, readAllRoomMessages, transcriptPageOf } from '../room.js';
+import { ROOM_HISTORY_MAX_PAGES, readAllRoomMessages, searchCompanionRooms, transcriptPageOf } from '../room.js';
 import type { CompanionTranscriptMessage } from '../../../shared/companionCloud.js';
 import { fakeApi } from './fakes.js';
 
@@ -62,5 +62,57 @@ describe('transcript pages', () => {
     expect(short.messages).toHaveLength(100);
     expect(short.nextBefore).toBe('51');
     expect(transcriptPageOf(Array.from({ length: 150 }, (_, i) => at(i + 1, i + 1)), 51).messages.map(m => m.text).at(-1)).toBe('50');
+  });
+});
+
+describe('searching companion rooms', () => {
+  const roomRow = (id: string, createdAt: number, over = {}) => ({ id, seq: id, authorId: 'actor-a', createdAt: new Date(createdAt).toISOString(), content: [{ type: 'text', text: `about ${id}` }], ...over });
+  const companion = (id: string, room = async () => `room-${id}`) => ({ id: `actor-${id}`, externalId: `bot_${id}`, name: id, room });
+
+  it('merges rooms newest first, leaves out what is not conversation, and names the room it could not read', async () => {
+    const { api, calls } = fakeApi((route) => {
+      if (route.startsWith('/conversations/room-a/')) return [roomRow('old', 1_000), roomRow('gone', 5_000, { deleted: true })];
+      if (route.startsWith('/conversations/room-b/')) return [roomRow('new', 3_000, { authorId: 'human' })];
+      throw new Error('FORBIDDEN');
+    });
+    const result = await searchCompanionRooms(api, [companion('a'), companion('b'), companion('c')], 'x'.repeat(300));
+    expect(calls[0]?.route).toContain(`q=${'x'.repeat(200)}&limit=50`);
+    expect(result.hits.map(hit => [hit.messageId, hit.teammateId, hit.role])).toEqual([['new', 'bot_b', 'user'], ['old', 'bot_a', 'assistant']]);
+    expect(result.failed).toEqual([{ teammateId: 'bot_c', teammateName: 'c', code: 'FORBIDDEN' }]);
+  });
+
+  it('does not let a stuck room hold the others up', async () => {
+    const { api } = fakeApi((route) => (route.includes('room-a') ? [roomRow('m', 1_000)] : []));
+    const stuck = companion('b', () => new Promise<string>(() => {}));
+    const result = await searchCompanionRooms(api, [companion('a'), stuck], 'q', {}, 5);
+    expect(result.hits).toHaveLength(1);
+    expect(result.failed).toEqual([{ teammateId: 'bot_b', teammateName: 'b', code: 'TIMEOUT' }]);
+  });
+
+  it('finds the newest match even when older history, uploaded later, arrives first', async () => {
+    const backfilled = Array.from({ length: 50 }, (_, index) => roomRow(String(100 - index), 1_000 + index));
+    const { api } = fakeApi((route) => (route.includes('before=') ? [roomRow('newest', 9_000_000)] : backfilled));
+    const found = await searchCompanionRooms(api, [companion('a')], 'q');
+    expect(found.hits[0]?.messageId).toBe('newest');
+    expect(found.incomplete).toBe(false);
+  });
+
+  it('reads past newer matches to find older ones that pass the filter, and says when it stopped early', async () => {
+    const page = (start: number, authorId: string) => Array.from({ length: 50 }, (_, index) =>
+      roomRow(String(start - index), 1_000_000 + start - index, { authorId }));
+    const routes: string[] = [];
+    const { api } = fakeApi((route) => {
+      routes.push(route);
+      return route.includes('before=') ? [roomRow('1', 1_000, { authorId: 'human' })] : page(100, 'actor-a');
+    });
+    const found = await searchCompanionRooms(api, [companion('a')], 'q', { roles: ['user'] });
+    expect(routes[1]).toContain('before=51');
+    expect(found.hits.map(hit => hit.messageId)).toEqual(['1']);
+    expect(found.incomplete).toBe(false);
+
+    const endless = fakeApi(() => page(100, 'actor-a'));
+    const stopped = await searchCompanionRooms(endless.api, [companion('a')], 'q', { roles: ['user'] });
+    expect(stopped).toMatchObject({ hits: [], failed: [], incomplete: true });
+    expect(endless.calls).toHaveLength(10);
   });
 });

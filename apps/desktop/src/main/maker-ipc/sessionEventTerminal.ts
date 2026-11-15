@@ -1,7 +1,6 @@
-import { reviewTeammateLearning } from './botLearningReview.js';
+import { claimContextRecoveryTerminal, deferContextRecoveryTerminal, settleContextRecoveryTerminal, type ContextRecoveryTerminalPorts } from './contextRecoveryTerminal.js';
 import { botLearningTracker } from './botLearningTracker.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
-import type { BotDelegationService } from './botDelegationService.js';
 import { settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
@@ -30,8 +29,8 @@ import {
   reserveTurnErrorPersistId,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
-} from '../messagePersistBroadcaster.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+} from '../messagePersistBroadcaster.desktop.js';
+import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { MAKER_PUSH } from './channels.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
 import {
@@ -40,7 +39,7 @@ import {
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
-import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
+import { isTerminalTurnErrorEvent, type SessionListActivityTracker } from './sessionTurnActivityTracker.js';
 import { botGroupRuntimeFailureCode } from './botGroupRuntimeFailure.js';
 import { ProductTurnUsageTargetTracker } from './turnWallClock.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
@@ -60,7 +59,8 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
-  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string) => void;
+  readonly sessionListActivityTracker: SessionListActivityTracker;
+  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string, inputClientIds?: string[]) => void;
   readonly onSuccessfulProductTurn?: (
     sessionId: string,
     owner?: ProductTurnFailureOwner,
@@ -71,7 +71,6 @@ export interface FinishSessionTerminalEventDeps {
   ) => Promise<void>;
   /** Hold a recovery-owned terminal until its final failure surface settles. */
   readonly deferUnsuccessfulProductTurn?: (owner: ProductTurnFailureOwner) => void;
-  readonly botDelegationServiceHolder: Pick<BotDelegationService, 'settleSession'> | null;
   /** Resolves a Bot group member turn when its hidden group lane finishes. */
   readonly botGroupChatServiceHolder?: Pick<BotGroupChatService, 'settleLaneTurn'> | null;
   readonly pendingFailedTurnAssistantPersistId: Map<string, string>;
@@ -146,7 +145,7 @@ export interface FinishSessionTerminalEventDeps {
     ReturnType<typeof createWorkerTurnStartSequencer>,
     'waitForStart'
   >;
-  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn'> | null;
+  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn' | 'noteWorkerProductTerminal'> | null;
 }
 
 export function finishSessionTerminalEvent(
@@ -169,7 +168,7 @@ export function finishSessionTerminalEvent(
   const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)
-      ? captureProductTurnFailureOwner(session, event, eventAgentMeta)
+      ? captureProductTurnFailureOwner(session, event, eventAgentMeta, prepared.pluginTargetInputIds)
       : undefined;
   // done / 终止型 error 持久化边界:把在飞 assistant 落库(与 text isFinal 互斥幂等)。
   // tool_use 边界的 flush 已在上面 broadcast 前做(需先于 tool_use 落库);
@@ -302,21 +301,27 @@ export function finishSessionTerminalEvent(
       event.type === 'done'
         ? (deps.agentInputCoordinatorHolder?.getProviderGroupSwitchHoldId?.(session.id) ?? null)
         : null;
-    const overflowClaim =
-      event.type === 'error' &&
-      !session.remoteHostId &&
-      isTerminalTurnErrorEvent(event) &&
-      !isPlannedUpgradeClose &&
-      !isRemoteAuthRetry &&
-      !isGatewayProxyTokenRecovery &&
-      !autoResumeSuppressesPersist
-        ? (deps.contextOverflowRolloverHolder?.claim(session.id, {
-            instanceId: event.sessionInstanceId,
-            generation: event.sessionTurnGeneration,
-          }, isContextOverflowErrorData(attributedEvent.data)
-            || isOversizedHistoryErrorData(attributedEvent.data)
-            || isUnsupportedRequestOptionErrorData(attributedEvent.data)) ?? 'idle')
-        : 'idle';
+    const contextRecoveryPorts: ContextRecoveryTerminalPorts = {
+      getRollover: () => deps.contextOverflowRolloverHolder,
+      getSuppressedBroadcasts: () => deps.overflowSuppressedBroadcasts,
+      isTerminalTurnErrorEvent: event => isTerminalTurnErrorEvent(event),
+      isContextOverflowErrorData: data => isContextOverflowErrorData(data),
+      isOversizedHistoryErrorData: data => isOversizedHistoryErrorData(data),
+      isUnsupportedRequestOptionErrorData: data => isUnsupportedRequestOptionErrorData(data),
+      reserveTurnErrorPersistId: (...args) => reserveTurnErrorPersistId(...args),
+      releaseReservedTurnErrorPersistId: (...args) => releaseReservedTurnErrorPersistId(...args),
+      onTurnErrorEvent: (...args) => onTurnErrorEvent(...args),
+      broadcastToAllWindows: (...args) => deps.broadcastToAllWindows(...args),
+      handleAgentIslandEventAfterBroadcast: (...args) => deps.handleAgentIslandEventAfterBroadcast(...args),
+      eventChannel: () => MAKER_PUSH.EVENT,
+      log: { warn: (...args) => deps.log.warn(...args) },
+    };
+    const contextRecoveryInput = {
+      session, event, attributedEvent, broadcastEvent, eventAgentMeta,
+      isPlannedUpgradeClose, isRemoteAuthRetry, isGatewayProxyTokenRecovery,
+      autoResumeSuppressesPersist, persistId,
+    };
+    const overflowClaim = claimContextRecoveryTerminal(contextRecoveryPorts, contextRecoveryInput);
     const deferUnsuccessfulProductTurn = (): void => {
       if (terminalOwner) deps.deferUnsuccessfulProductTurn?.(terminalOwner);
     };
@@ -331,76 +336,13 @@ export function finishSessionTerminalEvent(
     // renderer's deferred persist IPC is the final auth/gateway failure exit;
     // overflow uses the async surface below. Planned upgrade closes are kept
     // under the same owner so a paired success can clear them.
-    let recoveryOwnsUnsuccessfulBoundary =
-      isTerminalTurnErrorEvent(event) &&
-      (isRemoteAuthRetry ||
-        isGatewayProxyTokenRecovery ||
-        isPlannedUpgradeClose ||
-        overflowClaim === 'claimed' ||
-        overflowClaim === 'in-flight');
-    if (recoveryOwnsUnsuccessfulBoundary || autoResumeSuppressesPersist) {
-      deferUnsuccessfulProductTurn();
-    }
-    if (overflowClaim === 'claimed') {
-      const overflowErrorData = attributedEvent.data;
-      // Duplicate terminals can replace the session-indexed stash while this
-      // promise is pending. Keep this claim's own broadcast for failure.
-      const claimedBroadcast = deps.overflowSuppressedBroadcasts.get(session.id);
-      const ownedBroadcast = claimedBroadcast?.event === broadcastEvent ? claimedBroadcast : undefined;
-      let overflowFailureSurfaced = false;
-      const surfaceOverflowFailure = (): void => {
-        if (overflowFailureSurfaced) return;
-        overflowFailureSurfaced = true;
-        const overflowErrorPayload = overflowErrorData as {
-          message?: unknown;
-          reason?: unknown;
-          sdkError?: unknown;
-        } | null;
-        const overflowPersistId = reserveTurnErrorPersistId(
-          session.id,
-          overflowErrorPayload,
-          eventAgentMeta,
-        );
-        if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {
-          deps.overflowSuppressedBroadcasts.delete(session.id);
-        }
-        if (ownedBroadcast) {
-          deps.broadcastToAllWindows(MAKER_PUSH.EVENT, {
-            ...ownedBroadcast,
-            persistId: overflowPersistId ?? ownedBroadcast.persistId,
-          });
-          deps.handleAgentIslandEventAfterBroadcast(session, ownedBroadcast.event);
-        }
-        onTurnErrorEvent(session.id, overflowErrorPayload, eventAgentMeta, overflowPersistId);
-        notifyUnsuccessfulProductTurn();
-      };
-      void deps.contextOverflowRolloverHolder
-        ?.tryRecover(session.id, overflowErrorData, {
-          instanceId: event.sessionInstanceId,
-          generation: event.sessionTurnGeneration,
-        })
-        .then((recovered) => {
-          if (recovered) {
-            if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {
-              deps.overflowSuppressedBroadcasts.delete(session.id);
-            }
-            return;
-          }
-          surfaceOverflowFailure();
-        })
-        .catch((error) => {
-          deps.log.warn('context overflow rollover rejected', {
-            sessionId: session.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          surfaceOverflowFailure();
-        });
-    } else if (overflowClaim === 'in-flight') {
-      // 同一 turn 的重复终态 error：继续压住，避免污染历史。
-      if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {
-        deps.overflowSuppressedBroadcasts.delete(session.id);
-      }
-      if (persistId) releaseReservedTurnErrorPersistId(session.id, persistId);
+    let recoveryOwnsUnsuccessfulBoundary = deferContextRecoveryTerminal(
+      contextRecoveryPorts, contextRecoveryInput, overflowClaim, deferUnsuccessfulProductTurn,
+    );
+    if (settleContextRecoveryTerminal(
+      contextRecoveryPorts, contextRecoveryInput, overflowClaim, notifyUnsuccessfulProductTurn,
+    )) {
+      // This terminal belongs to the recovery settlement above.
     } else if (
       event.type === 'error' &&
       !isPlannedUpgradeClose &&
@@ -543,6 +485,18 @@ export function finishSessionTerminalEvent(
     }
     if (!isContinuationBoundary) {
       deps.markTurnEndedAfterPersistDrain(session.id);
+      if (
+        event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal'
+      ) {
+        deps.sessionListActivityTracker.end(session.id, {
+          identity: event.sessionTurnGeneration === undefined ? undefined
+            : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`,
+          hold: autoResumeSuppressesPersist || recoveryOwnsUnsuccessfulBoundary ||
+            deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) ||
+            deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) ||
+            (event.type === 'done' && (event.data as { silentStop?: boolean } | null)?.silentStop === true),
+        });
+      }
       // 逻辑 turn 结束:跨段存活的计划行引用到此回收(continuation boundary
       // 上必须保留,否则最终 done 找不到计划行 → 无章无失败印记 → 胶囊永久
       // 钉住,review P1-1)。
@@ -647,11 +601,6 @@ export function finishSessionTerminalEvent(
       !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
     ) {
-      if (turnBoundaryAssistantPersistId && !session.remoteHostId) {
-        const replyId = turnBoundaryAssistantPersistId;
-        void reviewTeammateLearning(session.id, replyId).catch(() =>
-          deps.log.warn('Teammate learning review did not complete'));
-      }
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
         void callback(session.id, terminalOwner).catch(() =>
@@ -675,7 +624,7 @@ export function finishSessionTerminalEvent(
         deps.onPluginTaskTerminal?.(session.id, {
           instanceId: event.sessionInstanceId ?? session.instanceId,
           generation: event.sessionTurnGeneration,
-        }, outcome, turnAssistantPersistId ?? undefined);
+        }, outcome, turnAssistantPersistId ?? undefined, prepared.pluginTargetInputIds.length ? prepared.pluginTargetInputIds : undefined);
       }
       if (
         unsuccessfulBoundary &&
@@ -684,47 +633,6 @@ export function finishSessionTerminalEvent(
       ) {
         notifyUnsuccessfulProductTurn();
       }
-      // Group lane turns are attributed by the accepted input, captured before the queue drains.
-      const botDelegationPendingInputClientIds =
-        deps.agentInputCoordinatorHolder
-          ?.getQueueControlSnapshot(session.id)
-          .pendingQueue.flatMap((item) => [
-            item.clientId,
-            ...(item.supersedesUserClientId ? [item.supersedesUserClientId] : []),
-            ...(item.retrySourceClientId ? [item.retrySourceClientId] : []),
-          ]) ?? [];
-      void (async () => {
-        try {
-          const doneData = event.data as {
-            result?: unknown;
-            message?: unknown;
-            reason?: unknown;
-          } | null;
-          await deps.botDelegationServiceHolder?.settleSession({
-            childSessionId: session.id,
-            execution:
-              typeof event.sessionTurnGeneration === 'number'
-                ? {
-                    instanceId: event.sessionInstanceId ?? session.instanceId,
-                    generation: event.sessionTurnGeneration,
-                  }
-                : null,
-            outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
-            resultText: typeof doneData?.result === 'string' ? doneData.result : '',
-            error: [doneData?.message, doneData?.reason].find(
-              (value): value is string => typeof value === 'string' && value.length > 0,
-            ),
-            hadPendingInputAtTerminal: botDelegationPendingInputClientIds.length > 0,
-            pendingInputClientIds: botDelegationPendingInputClientIds,
-            resultMessageClientId: turnAssistantPersistId,
-          });
-        } catch (error) {
-          deps.log.warn('Bot delegation terminal settlement failed', {
-            sessionId: session.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      })();
       if (
         groupTerminal && deps.botGroupChatServiceHolder &&
         !providerGroupHeldWorkerTerminal
@@ -740,6 +648,7 @@ export function finishSessionTerminalEvent(
       if (providerGroupHeldWorkerTerminal) {
         // 已与产品终态一起暂存，由同一次恢复登记结算。
       } else {
+        deps.orcaTeamServiceForEvents?.noteWorkerProductTerminal(workerTerminalCapture);
         void (async () => {
           try {
             await deps.workerTurnStartSequencer.waitForStart(session.id);

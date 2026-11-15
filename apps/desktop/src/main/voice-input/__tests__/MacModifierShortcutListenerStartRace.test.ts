@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MacModifierShortcutListener } from '../MacModifierShortcutListener.js';
 
 /**
  * 守住 helper 子进程不泄漏。
@@ -7,6 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * （swiftc，可能几秒）。那段时间 `child` 还是 null，所以 stop 光看 `child` 拦不住一个
  * 正在飞的启动，重叠的启动之间也会互相覆盖 `child` 引用。漏掉的进程不是空转——它持有
  * 全局 event tap，会一直监听键盘。
+ *
+ * Gate regression: the overlapping-start fixture left its winning start pending; its
+ * 1500 ms startup timeout could call the shared kill mock during a later test. Exercise
+ * the real start/ready/stop lifecycle and advance only the fake timeout clock (unit tier).
+ * State belongs to each listener instance, so the production module is loaded once.
  */
 
 const mocks = vi.hoisted(() => {
@@ -78,7 +84,6 @@ function flush(): Promise<void> {
 
 describe('MacModifierShortcutListener start race', () => {
   beforeEach(() => {
-    vi.resetModules();
     mocks.pendingCompilations.length = 0;
     mocks.execFile.mockClear();
     mocks.spawn.mockClear();
@@ -92,7 +97,6 @@ describe('MacModifierShortcutListener start race', () => {
   });
 
   it('does not spawn a helper when the start is stopped while the dev helper is still compiling', async () => {
-    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
     const listener = new MacModifierShortcutListener({ onTrigger: vi.fn() });
 
     const starting = listener.startKeyCapture();
@@ -112,25 +116,40 @@ describe('MacModifierShortcutListener start race', () => {
   });
 
   it('only spawns for the latest start when two starts overlap', async () => {
-    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
     const listener = new MacModifierShortcutListener({ onTrigger: vi.fn() });
+    // Keep setImmediate real so flush() still drains compilation/spawn microtasks.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const first = listener.startKeyCapture();
+      await flush();
+      const second = listener.startKeyCapture();
+      await flush();
+      expect(mocks.pendingCompilations).toHaveLength(2);
 
-    const first = listener.startKeyCapture();
-    await flush();
-    const second = listener.startKeyCapture();
-    await flush();
-    expect(mocks.pendingCompilations).toHaveLength(2);
+      // 先让第一轮回来：它已被第二轮顶掉，不该 spawn。
+      mocks.pendingCompilations[0]();
+      await expect(first).resolves.toMatchObject({ ok: false });
+      expect(mocks.spawn).not.toHaveBeenCalled();
 
-    // 先让第一轮回来：它已被第二轮顶掉，不该 spawn。
-    mocks.pendingCompilations[0]();
-    await expect(first).resolves.toMatchObject({ ok: false });
-    expect(mocks.spawn).not.toHaveBeenCalled();
+      // 第二轮才是有效的那次。
+      mocks.pendingCompilations[1]();
+      await flush();
+      expect(mocks.spawn).toHaveBeenCalledTimes(1);
+      mocks.stdoutDataHandlers[0]?.('{"type":"ready"}\n');
+      await expect(second).resolves.toMatchObject({ ok: true });
 
-    // 第二轮才是有效的那次。
-    mocks.pendingCompilations[1]();
-    await flush();
-    expect(mocks.spawn).toHaveBeenCalledTimes(1);
-    void second;
+      // A leaked startup timer used to call the shared kill mock in a later case.
+      vi.advanceTimersByTime(1_500);
+      expect(mocks.kill).not.toHaveBeenCalled();
+    } finally {
+      try {
+        listener.stop();
+        mocks.spawnedChildren[0]?.get('exit')?.(null, 'SIGTERM');
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
   });
 
   /**
@@ -140,7 +159,6 @@ describe('MacModifierShortcutListener start race', () => {
    * 连续两轮共用一个 id）——新 helper 在跑，用户按 Fn 却没反应。
    */
   it('reports a superseded start when the spawned helper is killed by stop before it reports ready', async () => {
-    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
     const listener = new MacModifierShortcutListener({ onTrigger: vi.fn() });
 
     const starting = listener.startKeyCapture();
@@ -167,7 +185,6 @@ describe('MacModifierShortcutListener start race', () => {
    * 而 helper 其实已经没了 —— 用户按 Fn 毫无反应，只能关掉录制框重开。
    */
   it('reports a superseded start when a killed helper reports ready late', async () => {
-    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
     const listener = new MacModifierShortcutListener({ onTrigger: vi.fn() });
 
     const starting = listener.startKeyCapture();
@@ -195,7 +212,6 @@ describe('MacModifierShortcutListener start race', () => {
    * 不会 scheduleRestart）→ 快捷键写着「已注册」,实际没人监听,要等下次窗口聚焦才被救回来。
    */
   it('does not accept a spawned-but-not-ready capture child as a working listener', async () => {
-    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
     const listener = new MacModifierShortcutListener({ onTrigger: vi.fn() });
 
     // A 窗口的 capture:进程起来了,但还没报 ready。
@@ -227,7 +243,6 @@ describe('MacModifierShortcutListener start race', () => {
 
   // 别把上面那条修成「有 child 就一律失败」:那次启动报了 ready 之后,复用方必须拿到成功。
   it('accepts the preserved capture child once the in-flight start reports ready', async () => {
-    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
     const listener = new MacModifierShortcutListener({ onTrigger: vi.fn() });
 
     const capture = listener.startKeyCapture();
@@ -249,12 +264,13 @@ describe('MacModifierShortcutListener start race', () => {
     await expect(capture).resolves.toMatchObject({ ok: true });
     // 复用没有再 spawn 一个 helper。
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    listener.stop();
+    mocks.spawnedChildren[0].get('exit')?.(null, 'SIGTERM');
   });
 
   // 同一个漏洞的另一半：解析 helper 抛异常（dev 下 swiftc 失败）时压根没查代次，
   // 已被作废的启动会把编译错误当成这次操作的故障报出去。
   it('reports a superseded start when the dev helper compilation fails after the start was stopped', async () => {
-    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
     const listener = new MacModifierShortcutListener({ onTrigger: vi.fn() });
 
     const starting = listener.startKeyCapture();
@@ -268,7 +284,6 @@ describe('MacModifierShortcutListener start race', () => {
   });
 
   it('maps bare function-key snapshots to start/tap and releases an active press on helper exit', async () => {
-    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
     const onTrigger = vi.fn();
     const listener = new MacModifierShortcutListener({ onTrigger });
     const shortcut = {
@@ -311,7 +326,6 @@ describe('MacModifierShortcutListener start race', () => {
   });
 
   it('ends a held function key once and replaces the helper on a system release', async () => {
-    const { MacModifierShortcutListener } = await import('../MacModifierShortcutListener.js');
     const onTrigger = vi.fn();
     const listener = new MacModifierShortcutListener({ onTrigger });
     const shortcut = {

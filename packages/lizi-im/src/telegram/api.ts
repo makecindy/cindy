@@ -148,6 +148,8 @@ export interface TgMessage {
    */
   has_protected_content?: boolean;
   reply_to_message?: TgMessage;
+  quote?: { text: string; position?: number };
+  rich_message?: { blocks?: unknown };
   text?: string;
   caption?: string;
   entities?: TgMessageEntity[];

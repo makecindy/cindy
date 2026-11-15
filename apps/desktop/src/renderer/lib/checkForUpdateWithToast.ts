@@ -1,3 +1,4 @@
+import { requestUpdateBannerReveal } from '@/hooks/useUpdateBannerDismiss';
 import { toast } from '@/lib/toast';
 
 type Translate = (key: string) => string;
@@ -9,9 +10,11 @@ export async function checkForUpdateWithToast(t: Translate): Promise<void> {
       toast.success(t('titleBar.updateCheckToast.alreadyLatest'));
       break;
     case 'downloading':
+      requestUpdateBannerReveal();
       toast.warning(t('titleBar.updateCheckToast.downloading'));
       break;
     case 'ready':
+      requestUpdateBannerReveal();
       toast.success(t('titleBar.updateCheckToast.ready'));
       break;
     case 'manifest_failed':

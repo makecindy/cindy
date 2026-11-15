@@ -20,6 +20,7 @@ import {
   isPendingSendItemSelected,
   mergePendingSendItems,
   pendingSendItemKey,
+  pendingSendBubbleText,
   pendingSendSpins,
   type MobilePendingSendActions,
 } from '@/session/pendingSendItems';
@@ -281,6 +282,18 @@ describe('reply before user echo', () => {
 });
 
 describe('buildPendingSendItems', () => {
+  // PR #9727: history can be absent while an answer is queued or settling.
+  // Existing dedup tests did not cover card-only replies. Tier: unit.
+  it.each(['queued', 'settling', 'outbox'] as const)('keeps card answers out of %s bubbles and menus', (phase) => {
+    const answerId = 'question-reply:answered:request-1';
+    const supplementId = 'question-reply:request-2';
+    const ids = [answerId, 'ordinary', supplementId];
+    const input = phase === 'outbox'
+      ? { outbox: ids.map(id => outboxItem(id)) }
+      : { [phase === 'queued' ? 'queue' : 'settling']: ids.map(id => queued(id)) };
+    expect(build(input).map(item => item.clientId)).toEqual(['ordinary', supplementId]);
+  });
+
   it('shares the message item key so the bubble and the real message land in one place', () => {
     const [item] = build({ queue: [queued('abc')] });
     expect(item.key).toBe(pendingSendItemKey('abc'));
@@ -312,6 +325,8 @@ describe('buildPendingSendItems', () => {
       queue: [queued('same')],
       presentationByClientId: new Map([['same', {
         actions: {
+          moveUp: { disabled: true, disabledReason: null, targetIndex: null },
+          moveDown: { disabled: true, disabledReason: null, targetIndex: null },
           remove: { disabled: false, disabledReason: null },
           edit: { disabled: false, disabledReason: null },
           steer: { disabled: false, disabledReason: null },
@@ -431,6 +446,8 @@ describe('pending_send 渲染接线', () => {
       queue: [queued('selected')],
       presentationByClientId: new Map([['selected', {
         actions: {
+          moveUp: { disabled: true, disabledReason: null, targetIndex: null },
+          moveDown: { disabled: true, disabledReason: null, targetIndex: null },
           remove: { disabled: false, disabledReason: null },
           edit: { disabled: false, disabledReason: null },
           steer: { disabled: false, disabledReason: null },
@@ -523,6 +540,15 @@ describe('pending bubble source labels', () => {
     origin,
   }) as QueuedRemoteMessage;
 
+  // 回归：合批数量不能被首个 Worker 的名字替代；正文保持原样（unit）。
+  it('labels a system batch by count while preserving every report', () => {
+    const body = 'Worker A (worker-1): done\nA full report\nWorker B (worker-2): error\nB full report';
+    const [item] = build({ queue: [withOrigin('batch', { kind: 'orca', senderLabel: 'A',
+      autoBridge: true, autoBridgeBatchCount: 2 }, body, JSON.stringify({ orcaSource: 'worker', content: body }))] });
+    expect(item.source).toEqual({ kind: 'orca', label: '系统回传的 2 条 Worker 结果' });
+    expect(item.text).toBe(body);
+  });
+
   it('labels automation, task, teammate, Orca and plugin rows like the desktop queue panel', () => {
     const items = build({
       queue: [
@@ -592,4 +618,15 @@ describe('pending bubble source labels', () => {
     const [bubble] = build({ outbox: [outboxItem('o1')] });
     expect(bubble.source).toBeNull();
   });
+});
+
+
+// Unit regression: remote pending bubble used to expose transport escapes. The
+// original queue item is retained for sending; a human draft is not decoded.
+it('decodes only attributed forwarded pending bubbles', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n第二段"';
+  const item = { ...queued('forwarded', content), origin: { kind: 'session' as const, senderSessionId: 'sender' } };
+  expect(pendingSendBubbleText(item)).toContain('第一段\n第二段');
+  expect(item.persistedContent).toBe(content);
+  expect(pendingSendBubbleText(queued('human', content))).toBe(content);
 });

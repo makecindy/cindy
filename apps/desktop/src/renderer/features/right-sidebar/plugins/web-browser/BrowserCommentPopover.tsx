@@ -269,7 +269,7 @@ export function BrowserCommentPopover({
   const inputCls = cn(
     'w-full rounded-md border border-[var(--border-default)] bg-transparent',
     'px-2 py-1 text-12 leading-[1.4] text-[var(--text-primary)]',
-    'placeholder:text-[var(--text-tertiary)] outline-none',
+    'placeholder:text-[var(--text-placeholder)] outline-none',
     'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
   );
   const styleTweaksLabel = submitting
@@ -301,7 +301,7 @@ export function BrowserCommentPopover({
       ref={rootRef}
       className={cn(
         'absolute z-20 flex flex-col gap-2 rounded-lg border border-[var(--border-default)]',
-        'bg-[var(--surface-elevated)] p-2.5 shadow-[var(--shadow-menu)]',
+        'bg-[var(--surface-elevated)] p-2.5 shadow-[shadow:var(--shadow-menu)]',
       )}
       style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH }}
     >
@@ -316,7 +316,7 @@ export function BrowserCommentPopover({
         className={cn(
           'w-full resize-none rounded-md border border-[var(--border-default)] bg-transparent',
           'px-2 py-1.5 text-12 leading-[1.5] text-[var(--text-primary)]',
-          'placeholder:text-[var(--text-tertiary)] outline-none',
+          'placeholder:text-[var(--text-placeholder)] outline-none',
           'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
         )}
       />

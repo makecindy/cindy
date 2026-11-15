@@ -1,0 +1,89 @@
+import { CommandExecutionError, TimeoutError } from '@jackwener/opencli/errors';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+cli({
+    site: 'twitter',
+    name: 'unblock',
+    access: 'write',
+    description: 'Unblock a Twitter user',
+    domain: 'x.com',
+    strategy: Strategy.UI,
+    browser: true,
+    args: [
+        { name: 'username', type: 'string', positional: true, required: true, help: 'Twitter screen name (without @)' },
+    ],
+    columns: ['status', 'message'],
+    func: async (page, kwargs) => {
+        if (!page)
+            throw new CommandExecutionError('Browser session required for twitter unblock');
+        const username = kwargs.username.replace(/^@/, '');
+        await page.goto(`https://x.com/${username}`);
+        await page.wait({ selector: '[data-testid="primaryColumn"]' });
+        const result = await page.evaluate(`(async () => {
+        let writeStarted = false;
+        try {
+            let attempts = 0;
+            let unblockBtn = null;
+            const getPrimary = () => document.querySelector('[data-testid="primaryColumn"]');
+            if (!getPrimary()) {
+                return { ok: false, message: 'Could not find profile surface. Are you logged in?' };
+            }
+
+            while (attempts < 20) {
+                const primary = getPrimary();
+                if (!primary) {
+                    return { ok: false, message: 'Could not find profile surface. Are you logged in?' };
+                }
+                // Check if not blocked (follow button visible means not blocked)
+                const followBtn = primary.querySelector('[data-testid$="-follow"]');
+                if (followBtn) {
+                    return { ok: true, message: 'Not blocking @${username} (already unblocked).' };
+                }
+
+                unblockBtn = primary.querySelector('[data-testid$="-unblock"]');
+                if (unblockBtn) break;
+
+                await new Promise(r => setTimeout(r, 500));
+                attempts++;
+            }
+
+            if (!unblockBtn) {
+                return { ok: false, message: 'Could not find Unblock button. Are you logged in?' };
+            }
+
+            // Click the unblock button — this opens a confirmation dialog
+            unblockBtn.click();
+            await new Promise(r => setTimeout(r, 1000));
+
+            // Confirm the unblock in the dialog
+            const confirmBtn = document.querySelector('[data-testid="confirmationSheetConfirm"]');
+            if (!confirmBtn) {
+                return { ok: false, message: 'Unblock confirmation dialog did not appear.' };
+            }
+            writeStarted = true;
+            confirmBtn.click();
+            await new Promise(r => setTimeout(r, 1000));
+
+            // Verify
+            const verify = getPrimary()?.querySelector('[data-testid$="-follow"]');
+            if (verify) {
+                return { ok: true, message: 'Successfully unblocked @${username}.' };
+            } else {
+                return { ok: false, unconfirmed: true, message: 'Unblock action initiated but UI did not update.' };
+            }
+        } catch (e) {
+            return { ok: false, unconfirmed: writeStarted, message: e.toString() };
+        }
+    })()`);
+        if (result.unconfirmed) {
+            throw new TimeoutError('twitter unblock confirmation', 1, `${result.message} Check the profile before retrying; the unblock may already have succeeded.`);
+        }
+        if (!result.ok) {
+            throw new CommandExecutionError(result.message, 'Nothing changed. Open the profile in the browser and retry.');
+        }
+        await page.wait(2);
+        return [{
+                status: 'success',
+                message: result.message
+            }];
+    }
+});

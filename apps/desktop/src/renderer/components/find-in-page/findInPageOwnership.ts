@@ -2,7 +2,7 @@
  * findInPageOwnership — Ctrl/Cmd+F 接管令牌。
  *
  * 默认情况下,App 根上挂了一个 FindInPageBar,它在 window 上 capture 阶段截
- * Ctrl+F,驱动 Chromium 原生的 webContents.findInPage。但有些场景需要把搜
+ * Ctrl+F,查找页面中的可见文本。但有些场景需要把搜
  * 索改成自己的 in-doc 搜索(例如 doc 模式的 FileBodyView),不希望全局那个
  * 搜索条同时弹出。
  *
@@ -29,4 +29,28 @@ export function acquireFindInPage(): () => void {
 
 export function isFindInPageClaimed(): boolean {
   return claimCount > 0;
+}
+
+/** The foreground Markdown preview owns find even when an editor remains behind it. */
+export function getTextPreviewSearchHost(): HTMLElement | null {
+  const roots = document.querySelectorAll<HTMLElement>('[data-text-lightbox-search-host]');
+  return roots.item(roots.length - 1);
+}
+
+/** Background shortcuts yield to the document in both rendered and source modes. */
+export function getTextPreviewHost(): HTMLElement | null {
+  const roots = document.querySelectorAll<HTMLElement>('[data-text-lightbox-card]');
+  return roots.item(roots.length - 1);
+}
+
+/** A preview's menus and described tooltips dismiss before its search or document. */
+export function isPreviewPopupKeyEvent(event: KeyboardEvent, host: HTMLElement): boolean {
+  if (event.target instanceof Element && event.target.closest(
+    '[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]',
+  )) return true;
+  return [...host.querySelectorAll('[aria-describedby]')].some(element =>
+    (element.getAttribute('aria-describedby') ?? '').split(/\s+/).some(id =>
+      document.getElementById(id)?.getAttribute('role') === 'tooltip',
+    ),
+  );
 }

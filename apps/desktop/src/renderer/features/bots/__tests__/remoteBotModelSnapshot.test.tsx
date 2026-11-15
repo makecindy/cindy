@@ -8,7 +8,11 @@ import { makerApiFor } from '@/lib/makerTransport';
 import { resolveComposerModelSelection } from '@/components/new-chat/composerModelSelection';
 
 const h = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock('react-router-dom', () => ({ useParams: () => ({ deviceId: 'snapshot-host', botId: 'writer' }) }));
+vi.mock('react-router-dom', () => ({ useLocation: () => ({ search: '', state: null }), Navigate: () => null, useParams: () => ({ deviceId: 'snapshot-host', botId: 'writer' }) }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => null,
+  useDeviceLinkDeviceListRequestState: () => ({ status: 'ready', error: null }),
+}));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../useRemoteBots', () => ({
   markRemoteBotRead: vi.fn(),

@@ -1,7 +1,9 @@
 import {
   MODEL_ACCESS_MEDIA_CAPABILITIES,
+  isProviderVideoApi,
   type MediaCapability,
   type ModelAccessParseResult,
+  type ProviderVideoApi,
 } from '@cindy/model-providers';
 
 export const MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION = 1 as const;
@@ -47,6 +49,8 @@ export interface MediaSyncResponseGuide {
 export interface MediaAsyncPollGuide {
   method: 'GET' | 'POST';
   path: string;
+  /** Original task's authenticated download endpoint when no media URL is returned. */
+  contentPath?: string;
   headers?: Record<string, string>;
   bodyTaskIdPath?: string[];
   statusPath: string[];
@@ -78,7 +82,6 @@ export interface MediaInvocationGuide {
   schemaVersion: typeof MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION;
   guideId: string;
   revision: string;
-  connection: { providerId: string };
   operations: MediaInvocationOperationGuide[];
 }
 
@@ -87,10 +90,15 @@ export interface ResolvedMediaInvocationGuide {
   guide: MediaInvocationGuide;
 }
 
-/** Persisted snapshot after `prepare` selects one operation from the Server Guide. */
+/** Local execution state, never supplied by the protocol Guide. */
+export type MediaInvocationBinding =
+  | { providerId: string; executor: 'gateway' | 'provider-image' }
+  | { providerId: string; executor: 'provider-video'; connectionRevision: string; videoProtocol?: ProviderVideoApi };
+
+/** Persisted operation snapshot plus the independently selected local binding. */
 export type PreparedMediaInvocationGuide = Omit<MediaInvocationGuide, 'operations'> &
   Pick<ResolvedMediaInvocationGuide, 'modelId'> &
-  MediaInvocationOperationGuide;
+  MediaInvocationOperationGuide & { binding: MediaInvocationBinding };
 
 type PlainObject = Record<string, unknown>;
 
@@ -131,6 +139,7 @@ const PREPARED_GUIDE_FIELDS = [
   'modelId',
   'revision',
   'connection',
+  'binding',
   ...OPERATION_FIELDS,
 ] as const;
 
@@ -243,7 +252,6 @@ function extractorError(value: unknown, path: string): string | null {
   if (value.encoding === 'url') {
     if (
       !Array.isArray(value.allowedUrlHosts) ||
-      value.allowedUrlHosts.length === 0 ||
       value.allowedUrlHosts.length > 16 ||
       value.allowedUrlHosts.some(
         (host) =>
@@ -377,6 +385,7 @@ function pollError(value: unknown, path: string): string | null {
     [
       'method',
       'path',
+      'contentPath',
       'headers',
       'bodyTaskIdPath',
       'statusPath',
@@ -394,6 +403,12 @@ function pollError(value: unknown, path: string): string | null {
     return `${path}.method must be GET or POST`;
   error = relativePathError(value.path, `${path}.path`, true);
   if (error) return error;
+  if (value.contentPath !== undefined) {
+    error = relativePathError(value.contentPath, `${path}.contentPath`, true);
+    if (error) return error;
+    if (!(value.contentPath as string).includes('{taskId}'))
+      return `${path}.contentPath must include {taskId}`;
+  }
   error = headersError(value.headers, `${path}.headers`);
   if (error) return error;
   if (value.method === 'GET') {
@@ -488,14 +503,15 @@ function guideBaseError(value: PlainObject, fields: readonly string[]): string |
   for (const [field, max] of [['revision', 128]] as const) {
     if (!boundedString(value[field], max)) return `guide.${field} must be a bounded string`;
   }
-  if (!isPlainObject(value.connection)) return 'guide.connection must be an object';
-  error = unknownField(value.connection, ['providerId'], 'guide.connection');
-  if (error) return error;
-  if (
-    !boundedString(value.connection.providerId, 128) ||
-    !/^[a-zA-Z0-9_-]+$/.test(value.connection.providerId)
-  ) {
-    return 'guide.connection.providerId must be a bounded string';
+  // Read old Server responses and persisted snapshots, without treating the
+  // connection as part of the current protocol contract.
+  if (value.connection !== undefined) {
+    if (!isPlainObject(value.connection)) return 'guide.connection must be an object';
+    error = unknownField(value.connection, ['providerId'], 'guide.connection');
+    if (error) return error;
+    if (!boundedString(value.connection.providerId, 128) || !/^[a-zA-Z0-9_-]+$/.test(value.connection.providerId)) {
+      return 'guide.connection.providerId must be a bounded string';
+    }
   }
   return null;
 }
@@ -530,7 +546,8 @@ export function parseMediaInvocationGuide(
     }
     capabilities.add(capability);
   }
-  return ok(value as unknown as MediaInvocationGuide);
+  const { connection: _legacyConnection, ...protocol } = value;
+  return ok(protocol as unknown as MediaInvocationGuide);
 }
 
 export function parseResolvedMediaInvocationGuide(
@@ -541,7 +558,7 @@ export function parseResolvedMediaInvocationGuide(
   if (error) return fail(error);
   const guide = parseMediaInvocationGuide(value.guide);
   if (!guide.ok) return fail(guide.error);
-  return ok(value as unknown as ResolvedMediaInvocationGuide);
+  return ok({ modelId: value.modelId as string, guide: guide.value });
 }
 
 export function parsePreparedMediaInvocationGuide(
@@ -552,5 +569,37 @@ export function parsePreparedMediaInvocationGuide(
     guideBaseError(value, PREPARED_GUIDE_FIELDS) ??
     resolvedBindingError(value, PREPARED_GUIDE_FIELDS, 'guide') ??
     operationError(value, 'guide', false);
-  return error ? fail(error) : ok(value as unknown as PreparedMediaInvocationGuide);
+  if (error) return fail(error);
+  let binding = value.binding;
+  if (binding === undefined && isPlainObject(value.connection)) {
+    // Only old stored tasks need these identifiers. New executor selection is
+    // made from the local connection, independently of the Server's Guide ID.
+    const executor = value.guideId === 'cindy-provider-image-v1' ? 'provider-image'
+      : value.guideId === 'cindy-provider-xai-video-v1' ? 'provider-video' : 'gateway';
+    binding = {
+      providerId: value.connection.providerId, executor,
+      ...(executor === 'provider-video' ? { connectionRevision: value.revision } : {}),
+    };
+  } else if (value.connection !== undefined) {
+    return fail('guide must not contain both binding and legacy connection');
+  }
+  if (!isPlainObject(binding)) return fail('guide.binding must be an object');
+  const bindingFields = binding.executor === 'provider-video'
+    ? ['providerId', 'executor', 'connectionRevision', 'videoProtocol'] : ['providerId', 'executor'];
+  const bindingError = unknownField(binding, bindingFields, 'guide.binding');
+  if (bindingError) return fail(bindingError);
+  if (!boundedString(binding.providerId, 128) || !/^[a-zA-Z0-9_-]+$/.test(binding.providerId)) {
+    return fail('guide.binding.providerId must be a bounded identifier');
+  }
+  if (!['gateway', 'provider-image', 'provider-video'].includes(binding.executor as string)) {
+    return fail('guide.binding.executor must be supported');
+  }
+  if (binding.executor === 'provider-video' && !boundedString(binding.connectionRevision, 128)) {
+    return fail('guide.binding.connectionRevision must be a bounded string');
+  }
+  if (binding.videoProtocol !== undefined && !isProviderVideoApi(binding.videoProtocol)) {
+    return fail('guide.binding.videoProtocol must be supported');
+  }
+  const { connection: _legacyConnection, ...snapshot } = value;
+  return ok({ ...snapshot, binding } as unknown as PreparedMediaInvocationGuide);
 }

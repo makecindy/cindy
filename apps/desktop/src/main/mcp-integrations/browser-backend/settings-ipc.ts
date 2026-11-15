@@ -1,9 +1,17 @@
 import type {
+  BrowserExtensionStoreOpenResult,
   BrowserBackendHealth,
   BrowserBackendRecoveryResult,
   BrowserBackendSourceReadAccess,
 } from '../../../shared/browserBackend.js';
-import { requireBoolean, requireEnum, requireObject } from '../../utils/ipcValidate.js';
+import { isBrowserOpenForLoginErrorCode } from '../../../shared/browserBackend.js';
+import {
+  requireBoolean,
+  requireEnum,
+  requireObject,
+  throwIpcError,
+} from '../../utils/ipcValidate.js';
+import { isRealProfileError } from '../browser-real-profile/types.js';
 import type { BackendKind } from './types.js';
 
 export interface BrowserBackendSettingsState {
@@ -27,6 +35,7 @@ interface BrowserBackendIpcDeps<Event> {
   getHealth(): Promise<BrowserBackendHealth>;
   recover(): Promise<BrowserBackendRecoveryResult>;
   probeSourceRead(): BrowserBackendSourceReadAccess;
+  openExtensionStore(): Promise<BrowserExtensionStoreOpenResult>;
 }
 
 /** Pure handler factory so trust gates and response contracts stay testable. */
@@ -39,14 +48,22 @@ export function createBrowserBackendIpcHandlers<Event>(deps: BrowserBackendIpcDe
     async setKind(event: Event, payload: unknown) {
       deps.assertTrusted(event);
       const obj = requireObject(payload, 'set-kind payload');
-      const kind = requireEnum(obj.kind, ['external', 'rsb-webview'] as const, 'kind');
+      const kind = requireEnum(obj.kind, ['external', 'rsb-webview', 'user-browser'] as const, 'kind');
       return { ok: true as const, active: await deps.setKind(kind) };
     },
     async setUseRealProfile(event: Event, payload: unknown) {
       deps.assertTrusted(event);
       const obj = requireObject(payload, 'set-use-real-profile payload');
       const enabled = requireBoolean(obj.enabled, 'enabled');
-      return { ok: true as const, enabled: await deps.setUseRealProfile(enabled) };
+      try {
+        return { ok: true as const, enabled: await deps.setUseRealProfile(enabled) };
+      } catch (err) {
+        // Known login-copy failures keep their code so Settings can say what went wrong.
+        if (isRealProfileError(err) && isBrowserOpenForLoginErrorCode(err.code)) {
+          throwIpcError(err.code, err.message);
+        }
+        throw err;
+      }
     },
     async reset(event: Event) {
       deps.assertTrusted(event);
@@ -63,6 +80,10 @@ export function createBrowserBackendIpcHandlers<Event>(deps: BrowserBackendIpcDe
     probeSourceRead(event: Event) {
       deps.assertTrusted(event);
       return deps.probeSourceRead();
+    },
+    openExtensionStore(event: Event) {
+      deps.assertTrusted(event);
+      return deps.openExtensionStore();
     },
   };
 }

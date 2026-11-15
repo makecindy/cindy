@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import type { ProviderShareBudgetStatus } from './providerShareBudget';
 import type { ProviderUsageDayView } from './providerShare';
 
 export const PROVIDER_SHARE_INSIGHTS_CHANNEL = 'provider-share:insights:v1';
+export const MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS = 512;
 
 export interface ProviderShareVisibility {
   quota: boolean;
@@ -31,6 +33,11 @@ export interface ProviderShareQuotaAccount {
   } | null;
 }
 
+/** Member computers also list each pooled subscription account; older ones send one account. */
+export type ProviderShareQuotaAccountResult = ProviderShareQuotaAccount & {
+  accounts?: ProviderShareQuotaAccount[];
+};
+
 export type ProviderShareUsageDay = Omit<ProviderUsageDayView, 'providerId' | 'memberKey'>;
 
 export interface ProviderShareUsageDetails {
@@ -50,6 +57,7 @@ export interface ProviderShareUsageDetails {
 
 export interface ProviderShareInsights {
   version: 1;
+  memberBudget?: ProviderShareBudgetStatus | null;
   capabilities: ProviderShareVisibility;
   status: {
     quota: 'disabled' | 'ready' | 'unavailable';
@@ -99,13 +107,28 @@ const quotaAccount = z.object({
 const status = z.enum(['disabled', 'ready', 'unavailable']);
 const schema = z.object({
   version: z.literal(1),
+  memberBudget: z.object({
+    state: z.enum(['recorded', 'empty', 'unavailable']), enabled: z.boolean(),
+    windowStart: z.iso.date(), windowEnd: z.iso.date(), nextWindowAt: timestamp,
+    totalTokens: number.min(0).nullable(),
+    recommendedModel: z.string().max(512).nullable(),
+    rules: z.array(z.object({
+      id: z.string().max(512), models: z.array(z.string().max(512)).length(1),
+      tokens: number.min(0).nullable(), usedPercent: number.min(0).max(100).nullable(),
+      limitPercent: number.positive().max(100), wouldBlock: z.boolean(), blocked: z.boolean(),
+    })).max(32),
+  }).nullable().optional(),
   capabilities: z.object({ quota: z.boolean(), usage: z.boolean() }),
   status: z.object({
     quota: status,
     usage: z.enum(['disabled', 'not-requested', 'ready', 'unavailable']),
   }),
   quota: z
-    .object({ group: z.boolean(), partial: z.boolean(), accounts: z.array(quotaAccount).max(512) })
+    .object({
+      group: z.boolean(),
+      partial: z.boolean(),
+      accounts: z.array(quotaAccount).max(MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS),
+    })
     .nullable(),
   usage: z
     .object({

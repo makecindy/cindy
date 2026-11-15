@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdtemp, open, rm, statfs, type FileHandle } from 'node:fs/promises';
+import { mkdtemp, open, rm, statfs, writeFile, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
@@ -98,6 +98,40 @@ export async function collectRecoverableBody(
       try { if (directory) await rm(directory, { recursive: true, force: true }); }
       finally { reservedDiskBytes -= reserved; }
     }
+  }
+}
+
+/**
+ * The in-memory counterpart of collectRecoverableBody for one complete message
+ * (a WebSocket request): spool it, then run the same overflow-only recovery.
+ * Returns null when recovery cannot bring the message within targetBytes.
+ */
+export async function recoverOversizedMessage(
+  message: Buffer,
+  targetBytes: number,
+  recover: (body: OversizedBody) => Promise<Buffer | null>,
+  signal: AbortSignal,
+): Promise<Buffer | null> {
+  let reserved = 0;
+  let directory: string | undefined;
+  try {
+    const required = message.length * 4;
+    const allocationUnit = await reserveDisk(required);
+    reserved += required;
+    directory = await mkdtemp(path.join(tmpdir(), 'cindy-request-'));
+    const filePath = path.join(directory, 'body.json');
+    await writeFile(filePath, message, { flag: 'wx', mode: 0o600 });
+    signal.throwIfAborted();
+    const result = await recover({ filePath, bytes: message.length, signal, reserveAttachment: async () => {
+      const overhead = allocationUnit * 2;
+      await reserveDisk(overhead);
+      reserved += overhead;
+    } });
+    signal.throwIfAborted();
+    return result && result.length <= targetBytes ? result : null;
+  } finally {
+    try { if (directory) await rm(directory, { recursive: true, force: true }); }
+    finally { reservedDiskBytes -= reserved; }
   }
 }
 

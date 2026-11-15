@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <application>
+    <service android:name="expo.modules.notifications.service.ExpoFirebaseMessagingService" tools:node="remove" />
+    <service android:name=".ChatFirebaseService" android:exported="false">
+      <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>
+    </service>
+    <service android:name=".ChatConnectionService" android:exported="false" android:foregroundServiceType="specialUse">
+      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="User-enabled real-time chat delivery over an authenticated connection when Google push is unavailable; visible ongoing notification with a stop action." />
+    </service>
+    <receiver android:name=".ChatNotificationsService" android:exported="false">
+      <intent-filter android:priority="10"><action android:name="expo.modules.notifications.NOTIFICATION_EVENT" /></intent-filter>
+    </receiver>
+  </application>
+</manifest>

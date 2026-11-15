@@ -2,13 +2,14 @@ import { builtInSkillsRoot, sharedBuiltInSkillsRoot } from '../maker-host/built-
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { app } from 'electron';
+import { getAppDataDir, getUserDataDir } from '../userDataPath';
 import { createLogger } from '../logger';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file';
 import {
   BUILT_IN_LEARN_SKILL_NAME,
   builtInSkillDescriptors,
   canonicalBuiltInSkillActivationPath,
+  type BuiltInSkillDescriptor,
 } from '../maker-host/built-in-skills';
 
 /** Device/profile-local user intent; independent of cloud installs and account changes. */
@@ -24,14 +25,14 @@ export function skillActivationKey(source: string): string {
   if (path.basename(resolved).toLowerCase() === 'skill.md') resolved = path.dirname(resolved);
   resolved = canonicalBuiltInSkillActivationPath(
     resolved,
-    app.getPath('userData'),
-    app.getPath('appData'),
+    getUserDataDir(),
+    getAppDataDir(),
   );
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 const store = createOverrideSettingsFile<SkillActivationPreferences>({
-  filePath: () => path.join(app.getPath('userData'), 'skillhub', 'activation-preferences.json'),
+  filePath: () => path.join(getUserDataDir(), 'skillhub', 'activation-preferences.json'),
   defaults: { disabledPaths: [] },
   normalize: (raw) => {
     const values = (raw as Partial<SkillActivationPreferences> | null)?.disabledPaths;
@@ -52,7 +53,8 @@ const store = createOverrideSettingsFile<SkillActivationPreferences>({
   preserveUnreadableFile: true,
 });
 
-export function readDisabledSkillPaths(): readonly string[] {
+/** An already verified snapshot may be reused within the same synchronous read. */
+export function readDisabledSkillPaths(descriptors?: readonly BuiltInSkillDescriptor[]): readonly string[] {
   store.invalidateIfChanged();
   const value = store.read();
   const paths = value.disabledPaths.flatMap((source) => [source,
@@ -64,9 +66,9 @@ export function readDisabledSkillPaths(): readonly string[] {
   // Cindy's bundled copy normally wins through ~/.agents/skills. Claude uses an
   // isolated config directory in Desktop dev, so mirror the same user preference
   // to that runtime projection. Codex's own /skill-creator remains independent.
-  for (const descriptor of builtInSkillDescriptors(
-    app.getPath('userData'),
-    app.getPath('appData'),
+  for (const descriptor of descriptors ?? builtInSkillDescriptors(
+    getUserDataDir(),
+    getAppDataDir(),
   )) {
     if (value.disabledPaths.includes(skillActivationKey(descriptor.absolutePath))) {
       try {
@@ -97,15 +99,15 @@ export function isCindyLearnSkillEnabledForListing(descriptors: readonly { name:
   if (!descriptors.some((skill) => skill.name === BUILT_IN_LEARN_SKILL_NAME)) return false;
   const disabled = readDisabledSkillPathsForListing();
   return ![
-    path.join(builtInSkillsRoot(app.getPath('userData')), BUILT_IN_LEARN_SKILL_NAME),
-    path.join(sharedBuiltInSkillsRoot(app.getPath('appData')), BUILT_IN_LEARN_SKILL_NAME),
+    path.join(builtInSkillsRoot(getUserDataDir()), BUILT_IN_LEARN_SKILL_NAME),
+    path.join(sharedBuiltInSkillsRoot(getAppDataDir()), BUILT_IN_LEARN_SKILL_NAME),
   ].some((value) => disabled.includes(process.platform === 'win32' ? value.toLowerCase() : value));
 }
 
 export function isCindyLearnSkillEnabled(): boolean {
   const descriptor = builtInSkillDescriptors(
-    app.getPath('userData'),
-    app.getPath('appData'),
+    getUserDataDir(),
+    getAppDataDir(),
   ).find((skill) => skill.name === BUILT_IN_LEARN_SKILL_NAME);
   return descriptor ? isCindySkillEnabled(descriptor.absolutePath) : false;
 }
@@ -114,7 +116,7 @@ export function isCindyLearnSkillEnabled(): boolean {
 export function isCindyLearnSkillEnabledForCommandListing(): boolean {
   // Use the same active path as execution, without enumerating or hashing files.
   // A retired profile copy must not veto an explicitly reenabled shared copy.
-  const source = path.join(sharedBuiltInSkillsRoot(app.getPath('appData')), '.active', BUILT_IN_LEARN_SKILL_NAME);
+  const source = path.join(sharedBuiltInSkillsRoot(getAppDataDir()), '.active', BUILT_IN_LEARN_SKILL_NAME);
   return !readDisabledSkillPathsForListing().includes(skillActivationKey(source));
 }
 

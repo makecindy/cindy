@@ -50,9 +50,11 @@ import {
   isGlobalTabId,
   removeGlobalTab,
   useGlobalTabs,
+  requestRevealSessionTab,
 } from '@/features/right-sidebar/globalTabs';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
+import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import { useLocale } from '@/hooks/useLocale';
@@ -129,6 +131,9 @@ export function SidebarTabWindowLayout() {
     }
     for (const id of [...seenRef.current]) if (!nextIds.has(id)) seenRef.current.delete(id);
     setAssignment(next);
+    if (next.sessionId && next.revealTabId && nextIds.has(next.revealTabId)) {
+      requestRevealSessionTab(next.sessionId, next.revealTabId);
+    }
   }, []);
 
   // mount:订阅指派推送 + 主动拉一次(重载 / 推送早于订阅)+ renderer-ready 握手。
@@ -324,9 +329,12 @@ export function SidebarTabWindowLayout() {
   );
 
   const context = assignment?.context;
+  const pluginTitlebarEntries = readPluginUiEntries('window.titlebar');
   const topbarLeading = <div className={isMac ? 'w-[72px] shrink-0' : 'w-1 shrink-0'} />;
   const topbarTrailing = (
     <>
+      {pluginTitlebarEntries.length > 0 && <PluginUiSlotControls entries={pluginTitlebarEntries}
+        sessionId={sessionId} appearance="titlebar" />}
       {activeTabId && (
         <div
           className="flex h-full shrink-0 items-center gap-0.5"

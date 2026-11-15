@@ -1,3 +1,5 @@
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 /**
  * 待发送消息 → 消息流渲染项。
  * ---------------------------------------------------------------------------
@@ -15,7 +17,7 @@
  * 未派发条目保持队列 / outbox 顺序。已派发气泡在分组前占据本地用户消息的位置，
  * 正式回流以同一个 clientId 原位替换，不比较控制端与主机的时钟。
  */
-import { queueItemVisibleText } from '@cindy/maker-shared/queue';
+import { queueItemVisibleText, type QueueRowPresentation } from '@cindy/maker-shared/queue';
 import { syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
 import {
   isHookSchedulerOrigin,
@@ -35,11 +37,14 @@ import {
   type SentInlineToken,
 } from '@/session/sentMessageAtoms';
 import type { QueuedRemoteMessage } from '@/session/types';
+import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
+import { queuedMessageReplyQuote } from '@/session/inputProjection';
 import { sentImageGalleryKey, type GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
 import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
 import {
   automationOriginLabel,
   orcaMessageTitle,
+  orcaAutoBridgeBatchCount,
   sessionOriginLabel,
   sourceIdText,
   sourcePluginLabel,
@@ -73,12 +78,8 @@ export interface MobilePendingSendSource {
   idText?: string;
 }
 
-/** 气泡上的三个队列操作在当前条目上可不可用(由 buildQueueRowPresentation 预先算好)。 */
-export interface MobilePendingSendActions {
-  remove: { disabled: boolean; disabledReason: string | null };
-  edit: { disabled: boolean; disabledReason: string | null };
-  steer: { disabled: boolean; disabledReason: string | null };
-}
+/** 队列操作的可用性与移动目标由共享队列规则计算。 */
+export type MobilePendingSendActions = QueueRowPresentation['actions'];
 
 export interface MobilePendingSendItem {
   type: 'pending_send';
@@ -113,6 +114,8 @@ export interface MobilePendingSendItem {
   waitingFor?: MobilePendingSendWaitingFor;
   /** 本机发出的时刻(手机时钟),伙伴对话的时间分隔按它分组,回流后同 key 沿用。 */
   sentAt?: number;
+  /** 伙伴私聊的引用回复:乐观气泡同样先画出引用块,回流后原位不跳。 */
+  replyQuote?: ChatReplyQuote;
 }
 
 export interface MobileMessageListExtraData {
@@ -182,7 +185,7 @@ export function mergePendingSendItems(
 }
 
 type PendingSendTextSource = Pick<QueuedRemoteMessage, 'text' | 'chatMessage'>
-  & Partial<Pick<QueuedRemoteMessage, 'persistedContent' | 'files' | 'origin'>>;
+  & Partial<Pick<QueuedRemoteMessage, 'clientId' | 'persistedContent' | 'files' | 'origin'>>;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -206,7 +209,8 @@ function pendingSendAgentText(item: PendingSendTextSource): string {
     const persisted = parseOrcaPersistedMessage(item.persistedContent);
     if (persisted) return persisted.body;
   }
-  return queueItemVisibleText(item);
+  const visible = queueItemVisibleText(item);
+  return origin?.kind === 'session' ? forwardedRequestDisplayText(visible) : visible;
 }
 
 /**
@@ -288,7 +292,7 @@ export function pendingSendSource(
     const senderLabel = readNonEmptyString(origin.senderLabel);
     const direction = readOrcaPersistedSource(item.persistedContent)
       ?? (senderLabel?.toLowerCase() === 'lead' ? 'lead' : 'worker');
-    return { kind: 'orca', label: orcaMessageTitle(direction, senderLabel) };
+    return { kind: 'orca', label: orcaMessageTitle(direction, senderLabel, orcaAutoBridgeBatchCount(origin)) };
   }
   return null;
 }
@@ -397,7 +401,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   const seen = new Set<string>();
 
   const pushQueued = (item: QueuedRemoteMessage, phase: MobilePendingSendPhase, queueIndex: number | null) => {
-    if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
+    if (isAnsweredAsyncQuestionClientId(item.clientId) || seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
     seen.add(item.clientId);
     const attachments = queuedAttachmentThumbs(item, input.previewByOssRef, input.getImagePreview);
     const presentation = queueIndex === null
@@ -406,6 +410,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
     const agentText = pendingSendAgentText(item);
     // 合成指令只显示标签:结构化 atom 也不能从原文里重建出来。
     const synthetic = pendingSendSyntheticKind(item, agentText) !== null;
+    const replyQuote = item.persistedContent ? queuedMessageReplyQuote({ persistedContent: item.persistedContent }) : undefined;
     items.push({
       type: 'pending_send',
       key: pendingSendItemKey(item.clientId),
@@ -429,6 +434,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       hint: presentation?.hint ?? null,
       source: pendingSendSource(item),
       ...(readMessageSourceDevice(item) ? { sourceDevice: readMessageSourceDevice(item) } : {}),
+      ...(replyQuote ? { replyQuote } : {}),
     });
   };
 
@@ -448,7 +454,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   });
   // 本地 outbox 恒在最后:它们是最晚发出的消息。
   for (const item of input.outbox) {
-    if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) continue;
+    if (isAnsweredAsyncQuestionClientId(item.clientId) || seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) continue;
     seen.add(item.clientId);
     const uploadsPending = item.attachmentCount > 0 && item.uploadedCount < item.attachmentCount;
     // 断开时整条投递(含附件上传)都停着:附件没传完也写「等连上」,图片不再转圈。
@@ -474,6 +480,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       actions: null,
       hint: null,
       source: null,
+      ...(item.replyQuote ? { replyQuote: item.replyQuote } : {}),
     });
   }
   return items;

@@ -1,6 +1,6 @@
 import { youtubeVideo } from '../richAnswer';
 import { describe, expect, it } from 'vitest';
-import { RichAnswerStream, RichInteractionMemory, hasRichAnswer, splitRichAnswer, richDefaults, richEvaluate, richLabel, richResolvedValues, richChart, richCalculationUnavailable, richVisualStyle, richVector, richLinePlot, type RichPalette } from '../richAnswer';
+import { RichAnswerStream, RichInteractionMemory, hasRichAnswer, splitRichAnswer, richDefaults, richEvaluate, richLabel, richResolvedValues, richChart, richCalculationUnavailable, richVisualStyle, richVector, richLinePlot, richMediaSource, type RichPalette } from '../richAnswer';
 // Tier 1: actual stream reducer. Regression targets are partial transport, edits,
 // replay and preservation of user input; no DOM/source-string contracts.
 const line = (seq: number, op: Record<string, unknown>) => JSON.stringify({ seq, ...op }) + '\n';
@@ -32,6 +32,81 @@ describe('streaming answer documents', () => {
     expect(new RichAnswerStream().update(create + append).nodes).toEqual(next.nodes);
     expect(parser.update(create).nodes.get('a')?.props.text).toBe('one');
   });
+  it.each([false, true])('recovers a prematurely finalized partial operation when the full snapshot arrives (newline=%s)', (newline) => {
+    const heading = line(1, { op: 'create', id: 'title', kind: 'heading', props: { text: 'Results' } });
+    const answer = line(2, { op: 'create', id: 'answer', kind: 'markdown', props: { text: 'Complete findings' } });
+    const full = heading + (newline ? answer : answer.trimEnd());
+    const parser = new RichAnswerStream();
+    const partial = parser.update(heading + answer.slice(0, -8), true);
+    expect(partial.roots).toEqual(['title']);
+    expect(partial.issues).toBe(1);
+    // Identical snapshots must not count the unfinished tail as another error.
+    expect(parser.update(heading + answer.slice(0, -8), true).issues).toBe(1);
+    const recovered = parser.update(full, true);
+    expect(recovered.roots).toEqual(['title', 'answer']);
+    expect(recovered.nodes.get('answer')?.props.text).toBe('Complete findings');
+    expect(recovered.issues).toBe(0);
+    expect(recovered.nodes).toEqual(new RichAnswerStream().update(full, true).nodes);
+    expect(partial.roots).toEqual(['title']);
+    expect(partial.nodes.has('answer')).toBe(false);
+  });
+  it('preserves a valid finalized tail and applies later operations exactly once', () => {
+    const create = line(1, { op: 'create', id: 'answer', kind: 'text', props: { text: 'one' } }).trimEnd();
+    const append = line(2, { op: 'append', id: 'answer', text: ' two' });
+    const parser = new RichAnswerStream();
+    const first = parser.update(create, true);
+    const full = create + String.fromCharCode(10) + append;
+    const next = parser.update(full, true);
+    expect(next.nodes.get('answer')?.props.text).toBe('one two');
+    expect(next.issues).toBe(0);
+    expect(parser.update(full, true).nodes.get('answer')?.props.text).toBe('one two');
+    expect(first.nodes.get('answer')?.props.text).toBe('one');
+  });
+  it.each(['create', 'append', 'patch'])('preserves a committed %s tail when malformed suffixes keep growing', (operation) => {
+    const create = line(1, { op: 'create', id: 'answer', kind: 'text', props: { text: 'one' } });
+    const update = operation === 'create' ? create.trimEnd() : create + line(2, operation === 'append'
+      ? { op: 'append', id: 'answer', text: ' two' }
+      : { op: 'patch', id: 'answer', props: { text: 'one two' } }).trimEnd();
+    const expected = operation === 'create' ? 'one' : 'one two';
+    const parser = new RichAnswerStream();
+    const committed = parser.update(update, true);
+    for (const suffix of ['{', '{"seq":', '{"seq":3']) {
+      const next = parser.update(update + suffix, true);
+      expect(next.nodes.get('answer')?.props.text).toBe(expected);
+      expect(next.roots).toEqual(['answer']);
+      expect(next.issues).toBeGreaterThan(0);
+    }
+    const prefix = update + '{"seq":3' + String.fromCharCode(10);
+    const beforeRecovery = parser.update(prefix, true);
+    const later = line(operation === 'create' ? 2 : 3, { op: 'create', id: 'later', kind: 'text', props: { text: 'Later' } });
+    parser.update(prefix + later.slice(0, -8), true);
+    const recovered = parser.update(prefix + later, true);
+    expect(recovered.nodes.get('answer')?.props.text).toBe(expected);
+    expect(recovered.nodes.get('later')?.props.text).toBe('Later');
+    expect(recovered.issues).toBe(beforeRecovery.issues);
+    expect(committed.nodes.get('answer')?.props.text).toBe(expected);
+  });
+  it('preserves committed content when an extended finalized tail exceeds the source limit', () => {
+    const create = line(1, { op: 'create', id: 'answer', kind: 'text', props: { text: 'Readable' } }).trimEnd();
+    const parser = new RichAnswerStream();
+    parser.update(create, true);
+    const rejected = parser.update(create + ' '.repeat(2_000_001), true);
+    expect(rejected.nodes.get('answer')?.props.text).toBe('Readable');
+    expect(rejected.issues).toBe(1);
+    const recovered = parser.update(create + String.fromCharCode(10), true);
+    expect(recovered.nodes.get('answer')?.props.text).toBe('Readable');
+    expect(recovered.issues).toBe(0);
+  });
+  it('retains genuine malformed-line issues after an unfinished tail recovers', () => {
+    const prefix = 'invalid' + String.fromCharCode(10);
+    const answer = line(1, { op: 'create', id: 'answer', kind: 'text', props: { text: 'Readable' } });
+    const parser = new RichAnswerStream();
+    expect(parser.update(prefix + answer.slice(0, -8), true).issues).toBe(2);
+    expect(parser.update(prefix + answer.slice(0, -8) + ' '.repeat(2_000_001), true).issues).toBe(2);
+    const recovered = parser.update(prefix + answer, true);
+    expect(recovered.nodes.get('answer')?.props.text).toBe('Readable');
+    expect(recovered.issues).toBe(1);
+  });
   it('keeps user-edited state while model defaults and calculated data change', () => {
     const parser = new RichAnswerStream(), memory = new RichInteractionMemory();
     const source = line(1, { op: 'create', id: 'months', kind: 'range', props: { default: 6 } }) + line(2, { op: 'create', id: 'cost', kind: 'stat', props: { value: { op: 'mul', args: [{ ref: 'months' }, 10] } } });
@@ -55,6 +130,19 @@ describe('streaming answer documents', () => {
     expect(doc.roots).toEqual(['text']);
     expect(doc.nodes.get('text')?.props.text).toBe('Readable');
     expect(doc.issues).toBe(1);
+  });
+  it('commits later operations after a malformed or skipped sequence instead of orphaning them', () => {
+    // Real-world regression (session 3c876950): one unescaped quote in a props.text
+    // used to reject every following line via the strict +1 gate, dropping 9 of 13 ops.
+    const heading = (seq: number, id: string) => line(seq, { op: 'create', id, kind: 'heading', props: { text: id } });
+    const malformed = '{"seq":3,"op":"create","id":"bad","kind":"markdown","props":{"text":"记了"注入"缺陷"}}\n';
+    const doc = new RichAnswerStream().update(heading(1, 'a') + heading(2, 'b') + malformed + heading(4, 'c') + heading(5, 'd'));
+    expect(doc.roots).toEqual(['a', 'b', 'c', 'd']);
+    expect(doc.nodes.has('bad')).toBe(false);
+    expect(doc.issues).toBe(2); // the malformed line itself + the skipped sequence 3
+    const skipped = new RichAnswerStream().update(heading(1, 'a') + heading(3, 'c') + heading(4, 'd'));
+    expect(skipped.roots).toEqual(['a', 'c', 'd']);
+    expect(skipped.issues).toBe(1);
   });
 });
 it('restores persisted controls without overwriting input entered during a slow load', async () => {
@@ -203,6 +291,18 @@ it("keeps small-valued axes distinguishable and dense dates on the same coordina
   ).toBeLessThanOrEqual(0);
 });
 
+// Unit: RFC 3986 schemes are case-insensitive. Existing media coverage missed
+// case normalization; only the scheme may change, and unsafe schemes stay denied.
+it.each([
+  ['HTTPS://Example.test/Media/Image.PNG?Token=Aa%2Bb#Preview', 'https://Example.test/Media/Image.PNG?Token=Aa%2Bb#Preview'],
+  ['CINDY-MEDIA://blobs/AbC123.PNG?Token=Aa%2Bb#Preview', 'cindy-media://blobs/AbC123.PNG?Token=Aa%2Bb#Preview'],
+])('normalizes only the allowed scheme in %s', (src, expected) => {
+  expect(richMediaSource({ id: 'media', kind: 'image', props: { src }, children: [] })).toBe(expected);
+});
+it.each(['JaVaScRiPt:alert(1)', 'DaTa:text/html;base64,PHNjcmlwdD4='])('rejects unsafe media scheme %s', src => {
+  expect(richMediaSource({ id: 'media', kind: 'image', props: { src }, children: [] })).toBeNull();
+});
+
 // Unit: the reported YouTube watch URL used to reach the file player. Existing
 // media tests cover file URLs only; verify host routing and the navigation boundary.
 it('routes YouTube pages to canonical players without turning arbitrary URLs into embeds', () => {
@@ -224,4 +324,309 @@ it("ignores model backgrounds and color values and keeps borders on the host bor
   ).nodes.get("card")!;
   expect(richVisualStyle(card, palette)).toEqual({ padding: 20, borderWidth: 1, borderStyle: "solid", borderColor: "B" });
   expect(richVisualStyle(card)).toEqual({ padding: 20, borderWidth: 1 });
+});
+
+// Unit: new explicit send protocol. Existing local-state tests cannot detect a
+// message duplicated on double-click/remount or an invalid expression submitted.
+it('resolves only bounded message text and keeps local actions independent', async () => {
+  const { richSendText, richAction } = await import('../richAnswer');
+  const node = { id: 'send', kind: 'button' as const, children: [], props: {
+    send: { op: 'concat', args: ['Plan: ', { ref: 'choice' }] },
+    set: { choice: 'local' },
+  } };
+  expect(richSendText(node, { choice: 'Park' })).toBe('Plan: Park');
+  expect(richSendText(node, {})).toBeUndefined();
+  for (const send of ['', '   ', false, { op: 'execute', args: ['bad'] }, 'x'.repeat(16001)])
+    expect(richSendText({ ...node, props: { send } }, {})).toBeUndefined();
+  expect(richAction(node, {})).toEqual({ choice: 'local' });
+});
+
+it('holds an in-flight submission across remounts and restores accepted receipts', async () => {
+  const { RichSubmissionController } = await import('../richAnswer');
+  let persisted = '';
+  const storage = { read: async () => persisted, write: async (v: string) => { persisted = v; } };
+  const memory = new RichInteractionMemory(storage), controller = new RichSubmissionController(memory);
+  let finish!: (accepted: boolean) => void;
+  const messages: string[] = [];
+  const send = (text: string) => { messages.push(text); return new Promise<boolean>(resolve => { finish = resolve; }); };
+  const first = controller.submit('owner:message:send', 'Plan: Park', send);
+  await memory.load();
+  await Promise.resolve();
+  await controller.submit('owner:message:send', 'Plan: Park', send);
+  expect(controller.status('owner:message:send', 'Plan: Park')).toBe('sending');
+  expect(messages).toEqual(['Plan: Park']);
+  finish(true); await first;
+  const restored = new RichSubmissionController(new RichInteractionMemory(storage));
+  await restored.submit('owner:message:send', 'Plan: Park', send);
+  expect(messages).toEqual(['Plan: Park']);
+  expect(restored.status('owner:message:send', 'Plan: Park')).toBe('sent');
+  expect(restored.status('owner:message:send', 'Plan: Museum')).toBe('idle');
+  expect(restored.status('other-owner:message:send', 'Plan: Park')).toBe('idle');
+});
+
+it('lets the user retry a refused submission without consuming field values', async () => {
+  const { RichSubmissionController } = await import('../richAnswer');
+  const memory = new RichInteractionMemory(), controller = new RichSubmissionController(memory);
+  memory.set('fields', { choice: 'Park' });
+  await controller.submit('receipt', 'Park', async () => false);
+  expect(controller.status('receipt', 'Park')).toBe('failed');
+  expect(memory.get('fields')).toEqual({ choice: 'Park' });
+  await controller.submit('receipt', 'Park', async () => true);
+  expect(controller.status('receipt', 'Park')).toBe('sent');
+});
+
+
+// #7627: two near-miss drafts models keep writing. Both used to drop the whole
+// node (or all of its text) and leave only the "part of this content was hidden" line.
+describe('malformed node drafts stay readable', () => {
+  it('keeps the text of a node whose props is a plain string', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'b', kind: 'text', props: '这一行会消失' }),
+    );
+    expect(doc.issues).toBe(0);
+    expect(doc.nodes.get('b')?.props.text).toBe('这一行会消失');
+  });
+  it('turns inline children of a details node into child nodes', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, {
+        op: 'create',
+        id: 'd',
+        kind: 'details',
+        props: { label: '折叠块', children: [{ kind: 'markdown', text: '正文' }] },
+      }),
+    );
+    const details = doc.nodes.get('d');
+    expect(doc.issues).toBe(0);
+    expect(details?.props.children).toBeUndefined();
+    expect(details?.children).toHaveLength(1);
+    const child = doc.nodes.get(details?.children[0] ?? '');
+    expect(child?.kind).toBe('markdown');
+    expect(child?.props.text).toBe('正文');
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：RichAnswerStream 重放 cindy-ui 围栏；用户看到容器卡片里的
+//   正文，而不是空卡片加「部分内容未能显示」。
+// - Bug／规则依据：会话 66065272 实录（details 写 children:["kind:stack"]，另有 5 条
+//   append 直接打到 stack/details 容器，正文全部丢失）；#7627 同族的第三类笔误。
+// - 现有覆盖缺口：#7627 用例只盖裸字符串 props 与对象型内联 children；
+//   append→容器与字符串 children draft 均无覆盖。
+// - 最小失败输入：create details(children:["kind:stack"]) + append 到容器。
+// - tier：unit（与同文件流归约测试同级，复用同一模块加载）。
+// - 实测耗时：pnpm --filter @cindy/maker-shared exec vitest run src/__tests__/richAnswer.test.ts
+//   （修复前新增用例红、修复后全绿）。
+describe('append to a container stays readable', () => {
+  it('routes prose appended to a container into one implicit markdown child', () => {
+    const parser = new RichAnswerStream();
+    const source =
+      line(1, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(2, { op: 'append', id: 'card', text: '**提交表**\n' });
+    const doc = parser.update(source + line(3, { op: 'append', id: 'card', text: '| a | b |' }));
+    const children = doc.nodes.get('card')?.children ?? [];
+    expect(children).toEqual(['card-1']);
+    expect(doc.nodes.get('card-1')?.kind).toBe('markdown');
+    expect(doc.nodes.get('card-1')?.props.text).toBe('**提交表**\n| a | b |');
+    expect(doc.issues).toBe(0);
+    // 历史消息从原文重放，容错结果必须逐节点一致。
+    expect(new RichAnswerStream().update(source + line(3, { op: 'append', id: 'card', text: '| a | b |' })).nodes).toEqual(doc.nodes);
+  });
+
+  it('keeps a details label and its appended body when children only name kinds', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'd', kind: 'details', props: { label: '折叠块', children: ['kind:stack'] } }) +
+      line(2, { op: 'append', id: 'd', text: '正文' }),
+    );
+    const details = doc.nodes.get('d');
+    expect(details?.props.label).toBe('折叠块');
+    expect(details?.children).toHaveLength(1);
+    expect(doc.nodes.get(details?.children[0] ?? '')?.props.text).toBe('正文');
+    // 只有救不回的字符串 draft 计一次，append 本身算成功。
+    expect(doc.issues).toBe(1);
+  });
+
+  it('grows a fresh implicit child after the old subtree is removed or moved away', () => {
+    const parser = new RichAnswerStream();
+    const base =
+      line(1, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(2, { op: 'append', id: 'card', text: 'one' });
+    const removed = parser.update(
+      base + line(3, { op: 'remove', id: 'card' }) +
+      line(4, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(5, { op: 'append', id: 'card', text: 'two' }),
+    );
+    expect(removed.nodes.get('card')?.children).toEqual(['card-1']);
+    expect(removed.nodes.get('card-1')?.props.text).toBe('two');
+    const moved = parser.update(
+      base + line(3, { op: 'move', id: 'card-1', parent: 'root' }) +
+      line(4, { op: 'append', id: 'card', text: 'two' }),
+    );
+    expect(moved.roots).toContain('card-1');
+    expect(moved.nodes.get('card-1')?.props.text).toBe('one');
+    expect(moved.nodes.get('card')?.children).toEqual(['card-1-2']);
+    expect(moved.nodes.get('card-1-2')?.props.text).toBe('two');
+  });
+
+  it('still rejects appends to leaves that render no text', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'stat', kind: 'stat', props: { value: 1 } }) +
+      line(2, { op: 'append', id: 'stat', text: 'x' }),
+    );
+    expect(doc.nodes.get('stat')?.props.text).toBeUndefined();
+    expect(doc.issues).toBe(1);
+  });
+
+  // Greptile P1：删除容器后旧映射仍在，重建同名容器时同 id 可能换成别的 kind，
+  // 正文会写进不渲染 props.text 的节点并且不计 issues。
+  it('keeps prose out of a rebuilt container child that is not the implicit one', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(2, { op: 'append', id: 'card', text: 'one' }) +
+      line(3, { op: 'remove', id: 'card' }) +
+      line(4, { op: 'create', id: 'card', kind: 'stack', props: { children: [{ kind: 'stat', props: { value: 1 } }] } }) +
+      line(5, { op: 'append', id: 'card', text: 'two' }),
+    );
+    const children = doc.nodes.get('card')?.children ?? [];
+    expect(children).toHaveLength(2);
+    const stat = doc.nodes.get(children[0]);
+    expect(stat?.kind).toBe('stat');
+    expect(stat?.props.text).toBeUndefined();
+    const body = doc.nodes.get(children[1]);
+    expect(body?.kind).toBe('markdown');
+    expect(body?.props.text).toBe('two');
+  });
+
+  // Greptile P2：节点数上限只在真要新建节点时才拦，追加到已有隐式子节点不受限。
+  it('appends to an existing implicit child after the node limit is reached', () => {
+    const head =
+      line(1, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(2, { op: 'append', id: 'card', text: 'one' });
+    const filler = Array.from({ length: 2046 }, (_, i) =>
+      line(i + 3, { op: 'create', id: `n${i}`, kind: 'text', props: { text: 'x' } }),
+    ).join('');
+    const doc = new RichAnswerStream().update(
+      head + filler + line(2049, { op: 'append', id: 'card', text: 'two' }),
+      true,
+    );
+    expect(doc.nodes.size).toBe(2048);
+    expect(doc.nodes.get('card-1')?.props.text).toBe('onetwo');
+    expect(doc.issues).toBe(0);
+  });
+
+  // 维护者 zqchris：append → create 子节点 → 再 append 时，第二段正文不能并进
+  // 排在子节点之前的隐式子节点，否则读者看到的顺序与模型写的顺序不一致。
+  it('keeps appended prose in the order the model wrote it', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(2, { op: 'append', id: 'card', text: 'before' }) +
+      line(3, { op: 'create', id: 'table', kind: 'markdown', parent: 'card', props: { text: '| a |' } }) +
+      line(4, { op: 'append', id: 'card', text: 'after' }),
+    );
+    const children = doc.nodes.get('card')?.children ?? [];
+    expect(children).toHaveLength(3);
+    expect(doc.nodes.get(children[0])?.props.text).toBe('before');
+    expect(doc.nodes.get(children[1])?.props.text).toBe('| a |');
+    expect(doc.nodes.get(children[2])?.props.text).toBe('after');
+    expect(doc.issues).toBe(0);
+  });
+});
+describe('inline draft limits', () => {
+  it('caps nested inline drafts at the depth limit', () => {
+    let nested: Record<string, unknown> = { kind: 'markdown', text: 'deepest' };
+    for (let level = 0; level < 40; level++) nested = { kind: 'stack', children: [nested] };
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'd', kind: 'details', props: { label: '折叠块', children: [nested] } }),
+    );
+    expect(doc.nodes.size).toBeLessThanOrEqual(32);
+    expect(doc.nodes.get('d')?.children).toHaveLength(1);
+    // 被深度上限截掉的子树属于「没能显示出来的内容」, 不能让 issues 保持 0。
+    expect(doc.issues).toBeGreaterThan(0);
+  });
+  it('skips one unreadable inline draft without losing its siblings', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, {
+        op: 'create',
+        id: 'd',
+        kind: 'details',
+        props: {
+          label: '折叠块',
+          children: [
+            { kind: 'markdown', text: '第一段' },
+            { kind: 'text', props: 123 },
+            { kind: 'markdown', text: '第二段' },
+          ],
+        },
+      }),
+    );
+    const details = doc.nodes.get('d');
+    expect(details?.children).toHaveLength(2);
+    const texts = (details?.children ?? []).map((id) => doc.nodes.get(id)?.props.text);
+    expect(texts).toEqual(['第一段', '第二段']);
+    expect(doc.issues).toBe(1);
+  });
+});
+describe('inline draft ids', () => {
+  it('limits string props by the size of the node it becomes', () => {
+    const quoted = '"'.repeat(65_535);
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'q', kind: 'text', props: quoted }),
+    );
+    // 原始字符串没超限, 但存下来的是 {text: ...}, 序列化后翻倍越过上限。
+    expect(doc.nodes.get('q')).toBeUndefined();
+    expect(doc.issues).toBe(1);
+    const plain = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'p', kind: 'text', props: 'a'.repeat(30_000) }),
+    );
+    expect(plain.nodes.get('p')?.props.text).toHaveLength(30_000);
+  });
+  it('keeps generated ids inside the eighty character grammar', () => {
+    const parentId = 'p'.repeat(79);
+    const drafts = Array.from({ length: 1001 }, (_, i) => ({ kind: 'markdown', text: `第${i}段` }));
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: parentId, kind: 'details', props: { label: '折叠块', children: drafts } }),
+    );
+    const children = doc.nodes.get(parentId)?.children ?? [];
+    expect(children).toHaveLength(1001);
+    expect(new Set(children).size).toBe(1001);
+    for (const id of children) expect(id.length).toBeLessThanOrEqual(80);
+    expect(doc.issues).toBe(0);
+  });
+});
+
+// #7627 review: a draft that names itself keeps that id, and a bare string only
+// counts as text for the kinds that render `props.text`.
+describe('inline draft ids and text-only props', () => {
+  it('keeps an inline child id that the draft declares', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, {
+        op: 'create',
+        id: 'tabs',
+        kind: 'details',
+        props: {
+          label: 'x',
+          children: [
+            { id: 'second', kind: 'markdown', text: 'two' },
+            { kind: 'markdown', text: 'three' },
+          ],
+        },
+      }),
+    );
+    expect(doc.issues).toBe(0);
+    expect(doc.nodes.get('tabs')?.children[0]).toBe('second');
+  });
+
+  it('keeps a string props on the kinds that render text from it', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'm', kind: 'math', props: 'E = mc^2' }),
+    );
+    expect(doc.issues).toBe(0);
+    expect(doc.nodes.get('m')?.props.text).toBe('E = mc^2');
+  });
+  it('drops a string props on a kind that never reads text', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'd', kind: 'details', props: 'plain string' }),
+    );
+    expect(doc.nodes.has('d')).toBe(false);
+    expect(doc.issues).toBe(1);
+  });
 });

@@ -51,15 +51,16 @@ export function runPluginUsageTransaction(
         return { subjectId: row.id, historyGeneration: row.historyGeneration, identity };
       }
       case 'accept': {
-        const { handle, callId, toolName, sessionId, occurredAt } = body;
+        const { handle, callId, toolName, sessionId, occurredAt, entryKind = 'tool' } = body;
         db.prepare(
           `INSERT OR IGNORE INTO plugin_usage_events
-          (call_id,subject_id,history_generation,occurred_at,tool_name,session_id,version,release_id,report_target,report_state)
-          SELECT ?,id,history_generation,?,?,?,?,?,?,? FROM plugin_usage_subjects WHERE id=? AND history_generation=?`,
+          (call_id,subject_id,history_generation,occurred_at,tool_name,entry_kind,session_id,version,release_id,report_target,report_state)
+          SELECT ?,id,history_generation,?,?,?,?,?,?,?,? FROM plugin_usage_subjects WHERE id=? AND history_generation=?`,
         ).run(
           callId,
           occurredAt,
           toolName,
+          entryKind,
           sessionId,
           handle.identity.version,
           handle.identity.releaseId,

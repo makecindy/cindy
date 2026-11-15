@@ -1,9 +1,10 @@
+import type { OrcaWorkerCreateRequest } from './orcaWorkerDefaults';
 import type { AgentKind } from '@cindy/maker-core';
 
+import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
 import { buildUiAssignmentInitialTask } from './orcaUiAssignment.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort } from './orcaTeamService.js';
-import { normalizeOrcaWorkerLabel } from './orcaWorkerCreationService.js';
 import type {
   OrcaTeamSnapshot,
   OrcaWorkerCreateInTeamParams,
@@ -100,11 +101,12 @@ export interface OrcaLifecycleDeps {
     assertCurrent: () => Promise<void>;
   }>;
   setWorkerPermissionMode(workerPermissionMode: OrcaWorkerPermissionMode): void;
-  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+  createWorkerInTeam(params: Omit<OrcaWorkerCreateInTeamParams, 'agent'> & OrcaWorkerCreateRequest, assertCurrent?: () => Promise<void>,
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult>;
   dispatchWorkerTask(params: {
     targetSessionId: string;
     message: string;
+    imagePaths?: string[];
     dispatchMeta: {
       source: string;
       context: string;
@@ -135,7 +137,7 @@ export interface OrcaLifecycleDeps {
 export interface OrcaLifecycleService {
   /** Host-only admission check; kept inside native work and its existing compensation. */
   startTeam(params: OrcaStartTeamParams, assertCurrent?: () => Promise<void>): Promise<OrcaStartTeamResult>;
-  createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult>;
+  createWorker(params: OrcaWorkerCreateRequest): Promise<OrcaWorkerCreationResult>;
   enableTeam(params: OrcaEnableTeamParams): Promise<OrcaEnableTeamResult>;
 }
 
@@ -219,6 +221,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   async function dispatchInitialTask(params: {
     workerSessionId: string;
     message: string | undefined;
+    imagePaths?: string[];
     context: string;
   }, assertCurrent?: () => Promise<void>): Promise<DispatchWorkerTaskResult | undefined> {
     if (!params.message) return undefined;
@@ -238,6 +241,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       const result = await deps.dispatchWorkerTask({
         targetSessionId: params.workerSessionId,
         message: params.message,
+        ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
         dispatchMeta: {
           source: dispatchSource,
           context: params.context,
@@ -261,7 +265,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     }
   }
 
-  async function createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult> {
+  async function createWorker(params: OrcaWorkerCreateRequest): Promise<OrcaWorkerCreationResult> {
     const override = await deps.getWorkerPermissionModeOverride?.(params.leadSessionId);
     const team = await deps.getActiveTeamByLead(params.leadSessionId);
     await override?.assertCurrent();
@@ -290,6 +294,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
         dispatchResult = await dispatchInitialTask({
           workerSessionId: created.workerSessionId,
           message: initialTask,
+          ...(params.initialTaskImages ? { imagePaths: params.initialTaskImages } : {}),
           context: `create_worker/${created.workerSessionId}/initial_task`,
         }, assertCreatedCurrent);
       } else {

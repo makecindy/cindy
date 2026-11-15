@@ -1,3 +1,5 @@
+import { isKimiCodingProviderView } from './kimiCodingUsage';
+import { isOpenCodeGoProviderView } from './opencodeGoUsage';
 import type { ProviderView } from '@cindy/model-providers';
 
 /**
@@ -6,12 +8,14 @@ import type { ProviderView } from '@cindy/model-providers';
  */
 export function providerWeeklyQuotaSource(
   provider: ProviderView,
-): 'codex' | 'claude' | 'xai' | null {
+): 'codex' | 'claude' | 'xai' | 'kimi' | 'opencode-go' | null {
+  if (provider.connected && !provider.suspended && !provider.removed && isKimiCodingProviderView(provider)) return 'kimi';
+  if (provider.connected && !provider.suspended && !provider.removed && isOpenCodeGoProviderView(provider)) return 'opencode-go';
   if (
     !provider.connected ||
     provider.suspended ||
     provider.openAiAccount?.reconnectRequired ||
-    provider.auth.method !== 'oauth' ||
+    provider.auth?.method !== 'oauth' ||
     (provider.access && provider.access.kind !== 'subscription')
   )
     return null;

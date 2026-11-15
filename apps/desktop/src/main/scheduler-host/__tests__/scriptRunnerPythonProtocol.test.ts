@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { FireContext, Schedule, ScriptCapability } from '@cindy/maker-scheduler';
 
-import { ScriptScheduleRunner, type ScriptCapabilityBroker } from '../script-runner';
+import { ScriptScheduleRunner, type ScriptCapabilityBroker } from '../script-runner.desktop';
 
 const PYTHON_CLIENT_DIR = fileURLToPath(new URL('../python-client/', import.meta.url));
 

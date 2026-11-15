@@ -240,3 +240,22 @@ describe('阅读器里「有下划线 = 可点」不得出现反例(DESIGN.md §
       .not.toContain('<a href="mailto:');
   });
 });
+
+describe('buildSelectableMarkdownHtml remote images', () => {
+  it('does not expose remote image URLs when an explicit empty image allowlist is supplied', () => {
+    const html = buildSelectableMarkdownHtml(
+      '![tracking pixel](https://tracker.example.test/pixel.png)',
+      { imageSources: new Map() },
+    );
+    expect(html).not.toContain('https://tracker.example.test/pixel.png');
+    expect(html).toContain('<span class="xdt-image-chip">tracking pixel</span>');
+  });
+});
+
+// #8603 / unit: inspect the actual HTML product consumed by the file reader.
+it('preserves nested list rows and source-line locations in the file reader', () => {
+  const html = buildSelectableMarkdownHtml('- A\n  - B\n    2. C', { targetLine: 3 });
+  expect(html).toContain('<div class="list-row" style="margin-left:1em"><span class="list-marker">◦</span>');
+  expect(html).toContain('<div data-src-line="2"><div class="list-row" style="margin-left:2em">');
+  expect(html).toContain('<span class="list-marker">2.</span>');
+});

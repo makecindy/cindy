@@ -1,0 +1,14 @@
+[
+  {
+    "pattern": "^Sending `(onAnimatedValueUpdate|websocketMessage|websocketClosed)` with no listeners registered\\.",
+    "reason": "动画结束、WebSocket 关闭后 RN 仍发出的这三个事件没有 JS 监听者,已在日志中观察到,无用户可感知影响。其他事件缺监听者可能是原生集成问题,不在此列。"
+  },
+  {
+    "pattern": "@noble/hashes/crypto\\.js.*not listed in the \"exports\"",
+    "reason": "第三方依赖的引用方式,Metro 会自动回退解析。"
+  },
+  {
+    "pattern": "^Require cycle: .*packages/model-providers/src/modelMetadataLayers\\.ts",
+    "reason": "待拆开 model-providers 的循环依赖,修复后删除本条。"
+  }
+]

@@ -1,0 +1,20 @@
+## 第 1 轮 18:47:38
+下载 只有 TCP               平均 5.7            Mbit/s  每轮 5.7
+下载 只有 agent-net         平均 5.9            Mbit/s  每轮 5.9
+下载 同跑 agent-net / TCP   平均 5.2 / 0.5      Mbit/s  每轮 5.2/0.5
+下载 两条 TCP               平均 5.4 / 0.4      Mbit/s  每轮 5.4/0.4
+上传 只有 TCP               平均 100.5          Mbit/s  每轮 100.5
+上传 只有 agent-net         平均 107.2          Mbit/s  每轮 107.2
+上传 同跑 agent-net / TCP   平均 95.6 / 6.2     Mbit/s  每轮 95.6/6.2
+上传 两条 TCP               平均 53.8 / 46.7    Mbit/s  每轮 53.8/46.7
+exit 0
+## 第 2 轮 18:49:50
+下载 只有 TCP               平均 5.8            Mbit/s  每轮 5.8
+下载 只有 agent-net         平均 6.0            Mbit/s  每轮 6.0
+下载 同跑 agent-net / TCP   平均 5.6 / 0.0      Mbit/s  每轮 5.6/0.0
+下载 两条 TCP               平均 3.7 / 2.1      Mbit/s  每轮 3.7/2.1
+上传 只有 TCP               平均 100.4          Mbit/s  每轮 100.4
+上传 只有 agent-net         平均 107.1          Mbit/s  每轮 107.1
+上传 同跑 agent-net / TCP   平均 93.8 / 6.2     Mbit/s  每轮 93.8/6.2
+上传 两条 TCP               平均 48.4 / 52.1    Mbit/s  每轮 48.4/52.1
+exit 0

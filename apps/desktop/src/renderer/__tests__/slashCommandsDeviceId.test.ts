@@ -58,6 +58,67 @@ function stubElectron() {
 }
 
 describe('loadAllCommands deviceId', () => {
+  // Unit: task view and composer can ask for the same roster before either
+  // request finishes. Existing routing tests only make sequential calls.
+  // A refresh must still return a fresh roster, and a later read must see edits.
+  it('shares in-flight skill reads while a forced refresh supersedes the older flight', async () => {
+    const s = stubElectron();
+    let finishOld!: (value: Awaited<ReturnType<typeof s.listAgentSkills>>) => void;
+    let finishFresh!: typeof finishOld;
+    s.listAgentSkills.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFresh = resolve; }));
+    const first = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' });
+    const second = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' });
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(1);
+    const refresh = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read', forceReload: true });
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(2);
+    finishOld({ success: true, skills: [c('old', 'agent-skill')] });
+    expect((await first).some((x) => x.name === 'old')).toBe(true);
+    expect((await second).some((x) => x.name === 'old')).toBe(true);
+    const duringRefresh = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' });
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(2);
+    finishFresh({ success: true, skills: [c('fresh', 'agent-skill')] });
+    for (const result of await Promise.all([refresh, duringRefresh])) {
+      expect(result.some((x) => x.name === 'fresh')).toBe(true);
+      expect(result.some((x) => x.name === 'old')).toBe(false);
+    }
+    expect((await loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' }))
+      .some((x) => x.name === 'localskill')).toBe(true);
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not share skill reads across a task, folder, agent or device boundary', async () => {
+    const s = stubElectron();
+    const results = await Promise.all([
+      loadAllCommands('claude-code', '/w', { sessionId: 'one' }),
+      loadAllCommands('claude-code', '/w', { sessionId: 'two' }),
+      loadAllCommands('claude-code', '/other', { sessionId: 'one' }),
+      loadAllCommands('codex', '/w', { sessionId: 'one' }),
+      loadAllCommands('claude-code', '/w', { sessionId: 'one' }, 'remote-one'),
+      loadAllCommands('claude-code', '/w', { sessionId: 'one' }, 'remote-two'),
+    ]);
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(4);
+    expect(s.invoke.mock.calls.filter((call) => call[1] === 'maker:list-agent-skills')).toHaveLength(2);
+    expect(results.slice(0, 4).every((commands) => commands.some((x) => x.name === 'localskill'))).toBe(true);
+    expect(results.slice(4).every((commands) => commands.some((x) => x.name === 'host-skill'))).toBe(true);
+  });
+
+  // Unit: a rejected shared IPC must not poison subsequent reads after recovery.
+  it('retries after a shared skill read fails', async () => {
+    const s = stubElectron();
+    s.listAgentSkills.mockRejectedValueOnce(new Error('temporarily disconnected'));
+    const results = await Promise.all([
+      loadAllCommands('claude-code', '/w', { sessionId: 'retry-read' }),
+      loadAllCommands('claude-code', '/w', { sessionId: 'retry-read' }),
+    ]);
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(1);
+    expect(results.every((commands) => commands.some((x) => x.name === 'help'))).toBe(true);
+    expect(results.every((commands) => !commands.some((x) => x.name === 'localskill'))).toBe(true);
+    expect((await loadAllCommands('claude-code', '/w', { sessionId: 'retry-read' }))
+      .some((x) => x.name === 'localskill')).toBe(true);
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(2);
+  });
+
   it('本地会话(无 deviceId):三源全本地,不碰隧道', async () => {
     const s = stubElectron();
     const cmds = await loadAllCommands('claude-code', '/w', { sessionId: 'local-session' });

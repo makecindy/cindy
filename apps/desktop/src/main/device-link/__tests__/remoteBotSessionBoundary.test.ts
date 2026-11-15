@@ -5,6 +5,23 @@ import {
 
 afterEach(() => setRemoteBotSessionLookup(null));
 
+// Unit, #9801: the existing history boundary accepted only sessions/hits,
+// rejecting both new successful source-query shapes. Repeated delivery must
+// still revoke a hidden profile/session and preserve pagination as one page.
+it('projects new directory and relationship results with fresh source visibility', async () => {
+  let hidden = false;
+  setRemoteBotSessionLookup(async (_id, kind) => hidden ? 'hidden' : kind === 'bot' ? 'visible' : 'background');
+  const directory = { ok: true, teammates: [{ id: 'teammate', name: 'Companion' }], nextCursor: 'next', hasMore: true };
+  const relationships = { ok: true, teammateId: 'teammate', relationships: [{ sessionId: 'task', role: 'history' }], nextCursor: null, hasMore: false };
+  for (const result of [directory, relationships]) {
+    expect(await projectRemoteSessionResult('local-db:history:query', result)).toEqual(result);
+  }
+  hidden = true;
+  for (const result of [directory, relationships]) {
+    await expect(projectRemoteSessionResult('local-db:history:query', result)).rejects.toThrow('[NOT_FOUND]');
+  }
+});
+
 it.each([false, true])('rechecks parent references on repeated history delivery (batch=%s)', async (useBatch) => {
   let parentAccess: 'visible' | 'hidden' | 'missing' = 'visible';
   const single = vi.fn(async (id: string) => id === 'parent' ? parentAccess : 'ordinary' as const);
@@ -208,11 +225,32 @@ it('does not let another computer message a hidden teammate task through session
 // A cached search reply must respect a later hide just like a fresh query. Unit tier.
 it('rechecks companion search snippets on queued delivery without hiding ordinary tasks', async () => {
   let hidden = false;
-  setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');
+  setRemoteBotSessionLookup(async id => id === 'task' ? 'ordinary' : hidden ? 'hidden' : 'background');
   const ordinary = { session: { id: 'task' } };
   const personal = { session: { id: 'chat', companion: { id: 'bot' } }, contentHit: { preview: 'private' } };
   const page = { results: [ordinary, personal] };
   expect(await projectRemoteSessionResult('local-db:conversations:search', page)).toEqual(page);
   hidden = true;
   expect(await projectRemoteSessionResult('local-db:conversations:search', page)).toEqual({ results: [ordinary] });
+});
+
+// Remote topic channels carry a Bot and a root Session, not a top-level sessionId.
+// Verify both at dispatch/replay, and reject malformed input before lookup (unit).
+it.each(['list', 'ensure'])('checks private-topic %s ownership on every delivery', async (op) => {
+  const channel = `local-db:bots:dm-thread:${op}`;
+  const args = [{ botId: 'bot', rootSessionId: 'root', rootClientId: 'opening:1' }];
+  await expect(assertRemoteBotInvocationAllowed(args, channel)).rejects.toThrow('HOST_NOT_READY');
+  let hidden = '';
+  const lookup = vi.fn(async (id: string) => id === hidden ? 'hidden' as const : 'visible' as const);
+  setRemoteBotSessionLookup(lookup);
+  await assertRemoteBotInvocationAllowed(args, channel);
+  expect(lookup).toHaveBeenCalledWith('bot', 'bot');
+  expect(lookup).toHaveBeenCalledWith('root', 'session');
+  for (const id of ['bot', 'root']) {
+    hidden = id;
+    await expect(assertRemoteBotInvocationAllowed(args, channel)).rejects.toThrow('NOT_FOUND');
+  }
+  lookup.mockClear();
+  await expect(assertRemoteBotInvocationAllowed([{ ...args[0], rootSessionId: ['root'] }], channel)).rejects.toThrow('INVALID_PARAMS');
+  expect(lookup).not.toHaveBeenCalled();
 });

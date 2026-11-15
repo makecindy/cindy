@@ -88,15 +88,21 @@ describe('provider share guest prefs', () => {
 
   it('publishes trust only after the atomic write succeeds', async () => {
     const rename = fsp.rename;
+    let reachedRename!: () => void;
+    const renaming = new Promise<void>((resolve) => { reachedRename = resolve; });
     let finishWrite!: () => void;
     const pendingWrite = new Promise<void>((resolve) => { finishWrite = resolve; });
     const renameSpy = vi.spyOn(fsp, 'rename').mockImplementationOnce(async (source, target) => {
+      reachedRename();
       await pendingWrite;
       await rename(source, target);
     });
     const saving = setProviderShareCredentialConsent('share-1', 'global', true);
     try {
-      await vi.waitFor(() => expect(renameSpy).toHaveBeenCalled());
+      // 等真实写入到达提交点；锁与磁盘 I/O 不保证在 waitFor 默认的 1 秒内完成。
+      // 同时观察保存结果，避免 rename 前失败时只能等待测试超时。
+      await Promise.race([renaming, saving]);
+      expect(renameSpy).toHaveBeenCalled();
       expect(isProviderShareCredentialConsentSkipped('share-1')).toBe(false);
     } finally {
       finishWrite();

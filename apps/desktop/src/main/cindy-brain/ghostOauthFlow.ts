@@ -52,8 +52,11 @@ export interface GhostOauthClientConfig {
   scopes: readonly string[];
   /** scope 参数拼接分隔符(缺省空格 = OAuth 标准;Slack 这类逗号分隔的服务商传 ','). */
   scopeDelimiter?: string;
-  /** 用户在意识设置页自填的 OAuth 客户端 ID。 */
-  clientId: string;
+  /**
+   * 用户在意识设置页自填或清单内置的 OAuth 客户端 ID。由服务端签发应用身份的
+   * tokenBroker(飞书企业)可缺省,授权开始时经 broker bootstrap 取得。
+   */
+  clientId?: string;
   /** 可选:客户端 secret(桌面应用的 installed-app secret 本非机密,但仍按凭证纪律保管)。 */
   clientSecret?: string;
   /** PKCE(S256)开关,缺省 true;个别老服务商不支持时意识可显式声明关闭。 */
@@ -62,6 +65,7 @@ export interface GhostOauthClientConfig {
    * 服务商特有的授权页附加参数,由意识声明(平台不预设 provider 语义):
    * Google 要 refresh token 需 `access_type=offline` + `prompt=consent`,
    * Atlassian 需 `audience=api.atlassian.com` + `prompt=consent`。
+   * 直连 tokenUrl 时,授权 URL 的 resource 原样随授权码交换提交(RFC 8707)。
    * 协议保留参数(response_type / client_id / redirect_uri / state / scope /
    * code_challenge*)不可覆盖,撞名忽略。
    */
@@ -220,10 +224,23 @@ export type GhostOauthBrokerResult =
  * 带登录 JWT 调 server 端 `/api/integrations/<slug>/oauth/exchange|refresh`
  * 并把响应映射成 bundle;本引擎不感知 HTTP 细节。
  */
+/** broker 为本次授权签发的应用身份(一次性授权事务绑定当时的企业 App 版本)。 */
+export type GhostOauthBrokerBootstrapResult =
+  | { ok: true; clientId: string; transactionId: string }
+  | { ok: false; error: 'EXCHANGE_FAILED' | 'SERVICE_UNAVAILABLE' | 'NETWORK'; detail?: string };
+
 export interface GhostOauthBrokerClient {
+  /**
+   * 由服务端签发应用身份的 slug 返回本次授权的 clientId 与授权事务;其它 slug
+   * 返回 null,继续用清单里的 clientId。
+   */
+  bootstrap?(
+    slug: string,
+    params: { redirectUri: string },
+  ): Promise<GhostOauthBrokerBootstrapResult | null>;
   exchange(
     slug: string,
-    params: { code: string; redirectUri: string; codeVerifier?: string },
+    params: { code: string; redirectUri: string; codeVerifier?: string; transactionId?: string },
   ): Promise<GhostOauthBrokerResult>;
   refresh(slug: string, params: { refreshToken: string }): Promise<GhostOauthBrokerResult>;
 }
@@ -247,7 +264,7 @@ export interface StartGhostOauthFlowOptions {
   brandName?: string;
   /**
    * 可选:钉死端口(redirectPort)被外部进程占用时的回收器。listen 失败时
-   * 引擎调它一次(生产注入 portReclaim:查占用 PID 并强杀,护栏见该模块),
+   * 引擎调它一次(生产注入 portReclaim:展示占用程序并经用户确认后结束,护栏见该模块),
    * 返回 true 表示值得重试 listen;未注入或回收失败按 LISTEN_FAILED 收场。
    * 自家上一单的僵尸监听不走这里——引擎在 listen 前就等它关完了。
    */
@@ -421,7 +438,10 @@ export async function startGhostOauthFlow(
 ): Promise<GhostOauthFlowResult> {
   const { config } = opts;
 
-  if (!config.clientId) return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+  // tokenBroker 可在授权开始时由服务端签发 clientId,缺省时留到流程内判定。
+  if (!config.clientId && !config.tokenBroker) {
+    return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+  }
   if (!isSafeHttpsUrl(config.authorizeUrl)) {
     return {
       ok: false,
@@ -601,23 +621,6 @@ async function runGhostOauthFlow(
   const callbackPath = config.callbackPath ?? CALLBACK_PATH;
   const redirectUri = config.publicRedirectUri ?? `http://127.0.0.1:${port}${callbackPath}`;
 
-  const authorizeUrl = new URL(config.authorizeUrl);
-  authorizeUrl.searchParams.set('response_type', 'code');
-  authorizeUrl.searchParams.set('client_id', config.clientId);
-  authorizeUrl.searchParams.set('redirect_uri', redirectUri);
-  authorizeUrl.searchParams.set('state', state);
-  if (config.scopes.length > 0) {
-    authorizeUrl.searchParams.set('scope', config.scopes.join(config.scopeDelimiter ?? ' '));
-  }
-  if (challenge) {
-    authorizeUrl.searchParams.set('code_challenge', challenge);
-    authorizeUrl.searchParams.set('code_challenge_method', 'S256');
-  }
-  for (const [key, value] of Object.entries(config.extraAuthorizeParams ?? {})) {
-    if (RESERVED_AUTHORIZE_PARAMS.has(key)) continue;
-    authorizeUrl.searchParams.set(key, value);
-  }
-
   // 回调等待(含超时与取消;三路竞速,谁先到听谁的)。
   const callback = new Promise<
     { kind: 'code'; code: string } | { kind: 'invalid'; detail: string }
@@ -714,6 +717,45 @@ async function runGhostOauthFlow(
   try {
     // listen / 回收期间已被顶掉或取消:别再拉浏览器弹无主的授权页。
     if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+    // 由服务端签发应用身份的 broker(飞书企业):每次授权取企业当前 App ID 与一次性
+    // 授权事务,不用包内 clientId(包内的只留给不认识该接口的旧客户端)。
+    let clientId = config.clientId;
+    let transactionId: string | undefined;
+    // 请求挂住时仍要能被取消(再点连接会顶掉本单)并受整单时限约束,否则本单
+    // 一直占着回调端口,新的一单也排不上。
+    const bootstrapping = config.tokenBroker
+      ? opts.broker?.bootstrap?.(config.tokenBroker, { redirectUri })
+      : undefined;
+    const issued = bootstrapping
+      ? await Promise.race([bootstrapping, timeout, cancellation.cancelledPromise])
+      : null;
+    if (issued === 'timeout') return { ok: false, error: 'TIMEOUT' };
+    if (issued === 'cancelled') return { ok: false, error: 'CANCELLED' };
+    if (issued) {
+      if (!issued.ok) {
+        logger?.warn('ghost oauth broker 获取授权应用失败', { slug: config.tokenBroker, error: issued.error });
+        return { ok: false, error: issued.error, detail: issued.detail };
+      }
+      ({ clientId, transactionId } = issued);
+    }
+    if (!clientId) return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+    if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+    const authorizeUrl = new URL(config.authorizeUrl);
+    authorizeUrl.searchParams.set('response_type', 'code');
+    authorizeUrl.searchParams.set('client_id', clientId);
+    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+    authorizeUrl.searchParams.set('state', state);
+    if (config.scopes.length > 0) {
+      authorizeUrl.searchParams.set('scope', config.scopes.join(config.scopeDelimiter ?? ' '));
+    }
+    if (challenge) {
+      authorizeUrl.searchParams.set('code_challenge', challenge);
+      authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+    }
+    for (const [key, value] of Object.entries(config.extraAuthorizeParams ?? {})) {
+      if (RESERVED_AUTHORIZE_PARAMS.has(key)) continue;
+      authorizeUrl.searchParams.set(key, value);
+    }
     opts.remote?.assertCurrent();
     if (opts.remote) await new Promise<void>(resolve => server.close(() => resolve()));
     // Reserve the same redirect port on both hosts. The controller never kills a port owner.
@@ -747,6 +789,7 @@ async function runGhostOauthFlow(
         code: outcome.code,
         redirectUri,
         ...(verifier !== null ? { codeVerifier: verifier } : {}),
+        ...(transactionId !== undefined ? { transactionId } : {}),
       });
       opts.remote?.assertCurrent();
       if (!brokered.ok) {
@@ -773,9 +816,15 @@ async function runGhostOauthFlow(
     form.set('grant_type', 'authorization_code');
     form.set('code', outcome.code);
     form.set('redirect_uri', redirectUri);
-    form.set('client_id', config.clientId);
+    form.set('client_id', clientId);
     if (config.clientSecret) form.set('client_secret', config.clientSecret);
     if (verifier) form.set('code_verifier', verifier);
+    // RFC 8707: preserve the resource indicators actually sent during authorization,
+    // including URL query values and extraAuthorizeParams overrides. Other
+    // authorize-only parameters (prompt, state, etc.) must not reach this endpoint.
+    for (const resource of authorizeUrl.searchParams.getAll('resource')) {
+      form.append('resource', resource);
+    }
 
     let res: Response;
     try {
@@ -884,6 +933,9 @@ export async function refreshGhostOauthToken(
     return { ok: true, bundle };
   }
 
+  if (!config.clientId) {
+    return { ok: false, error: 'EXCHANGE_FAILED', invalidGrant: false, detail: 'clientId 未配置' };
+  }
   const form = new URLSearchParams();
   form.set('grant_type', 'refresh_token');
   form.set('refresh_token', refreshToken);
@@ -1069,32 +1121,82 @@ function extractIdentityUrlValue(parsed: unknown, path: string): string | null {
 const AVATAR_MAX_BYTES = 256 * 1024;
 /** 头像可接受的图片 mime(data URL 直出给沙箱 <img>,只认常见位图)。 */
 const AVATAR_ALLOWED_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+/** 整次头像下载(含全部跳转)的时间上限。 */
+const AVATAR_TIMEOUT_MS = 10_000;
+const AVATAR_MAX_REDIRECTS = 3;
 
 /**
- * 下载账号头像并转 data URL。地址来自身份响应(服务商自报的 CDN),**绝不
- * 带 Authorization**——头像域名不在凭证注入白名单里,带令牌出去就是泄露。
- * 任何失败(非 https / 非图片 / 超限 / 网络)一律 null,纯 best-effort。
+ * 单跳受防护请求(生产注入 `guardedOutboundFetch`):每一跳都做 DNS/IP 级别的
+ * 内网、回环拦截,且不自动跟随跳转。release 归还连接,读完或放弃 body 后必须调用。
+ */
+export type GhostOauthAvatarHop = (
+  url: string,
+  init: RequestInit,
+) => Promise<{ response: Response; release: () => Promise<void> }>;
+
+/**
+ * 下载账号头像并转 data URL。地址来自身份响应(服务商自报的 CDN),对任何插件都
+ * 开放,因此整条链路按不可信地址处理:每一跳(含跳转)都走注入的受防护单跳请求,
+ * 跳转在这里手动复核 https;body 流式读取,超过上限立即放弃;整次下载有总时限。
+ * **绝不带 Authorization**——头像域名不在凭证注入白名单里,带令牌出去就是泄露。
+ * 任何失败一律 null,纯 best-effort。
  */
 export async function fetchGhostOauthAvatar(opts: {
   url: string;
-  fetchImpl: typeof fetch;
+  fetchHop: GhostOauthAvatarHop;
+  timeoutMs?: number;
 }): Promise<string | null> {
   if (!isSafeHttpsUrl(opts.url)) return null;
-  let res: Response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? AVATAR_TIMEOUT_MS);
+  timer.unref?.();
   try {
-    res = await opts.fetchImpl(opts.url, { method: 'GET', headers: { Accept: 'image/*' } });
+    let url = opts.url;
+    for (let hop = 0; hop <= AVATAR_MAX_REDIRECTS; hop++) {
+      const { response, release } = await opts.fetchHop(url, {
+        method: 'GET',
+        headers: { Accept: 'image/*' },
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+      try {
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          const location = response.headers.get('location');
+          if (!location) return null;
+          const next = new URL(location, url).href;
+          if (!isSafeHttpsUrl(next)) return null;
+          url = next;
+          continue;
+        }
+        if (!response.ok) return null;
+        const mime = (response.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+        if (!AVATAR_ALLOWED_MIMES.has(mime)) return null;
+        const reader = response.body?.getReader();
+        if (!reader) return null;
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            total += value.byteLength;
+            if (total > AVATAR_MAX_BYTES) return null;
+            chunks.push(value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        if (total === 0) return null;
+        return `data:${mime};base64,${Buffer.concat(chunks).toString('base64')}`;
+      } finally {
+        await response.body?.cancel().catch(() => undefined);
+        await release();
+      }
+    }
+    return null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
-  if (!res.ok) return null;
-  const mime = (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
-  if (!AVATAR_ALLOWED_MIMES.has(mime)) return null;
-  let bytes: Buffer;
-  try {
-    bytes = Buffer.from(await res.arrayBuffer());
-  } catch {
-    return null;
-  }
-  if (bytes.byteLength === 0 || bytes.byteLength > AVATAR_MAX_BYTES) return null;
-  return `data:${mime};base64,${bytes.toString('base64')}`;
 }

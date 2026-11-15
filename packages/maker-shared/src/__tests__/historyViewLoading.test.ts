@@ -13,6 +13,38 @@ function fixture() {
 }
 
 describe('history read coverage', () => {
+  // A latest page can advance beyond the cached tail while the phone is away.
+  // The old overlap-only tests never exercised this gap (2026-10-25 shrink).
+  // Equal timestamps still have distinct rowid order; time equality is not a boundary.
+  it.each(['join', 'same-time', 'failure', 'blur', 'repeated-cursor'] as const)('keeps the cached reading window until a disconnected refresh settles (%s)', async (outcome) => {
+    const makePage = (ids: number[], hasMore = true): HistoryViewPage<HistoryMessageSource> => ({
+      version: 1, items: ids.map(id => ({ type: 'messages', key: String(id), messages: [{
+        id: String(id), clientId: String(id), role: 'user', content: String(id),
+        createdAt: new Date(1700000000000 + (outcome === 'same-time' ? 0 : id * 1000)).toISOString(),
+      }] })), hasMore, nextCursor: hasMore ? String(ids[0]) : null,
+    });
+    let finish!: (page: HistoryViewPage<HistoryMessageSource>) => void;
+    let fail!: (error: Error) => void;
+    const read = vi.fn().mockResolvedValueOnce(makePage([1, 2, 3], false))
+      .mockResolvedValueOnce(makePage([7, 8]))
+      .mockImplementationOnce(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+    const view = new HistoryViewController<HistoryMessageSource>({ page: read, details: vi.fn(), expanded: vi.fn(async () => undefined) });
+    await view.refresh();
+    const visible: string[][] = [];
+    view.subscribe(() => visible.push(view.getSnapshot().items.map(item => item.key)));
+    const pending = view.refresh();
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3), { interval: 1 });
+    expect(view.getSnapshot().items.map(item => item.key)).toEqual(['1', '2', '3']);
+    if (outcome === 'blur') view.setActive(false);
+    if (outcome === 'failure') fail(new Error('temporary read failure'));
+    else finish(outcome === 'repeated-cursor' ? makePage([7, 8]) : makePage([3, 4, 5, 6]));
+    await pending;
+    expect(view.getSnapshot().items.map(item => item.key)).toEqual(outcome === 'join' || outcome === 'same-time'
+      ? ['1', '2', '3', '4', '5', '6', '7', '8'] : ['1', '2', '3']);
+    expect(visible.every(items => items[0] === '1')).toBe(true);
+    expect(view.getSnapshot().hasMore).toBe(false);
+    if (outcome === 'failure' || outcome === 'repeated-cursor') expect(view.getSnapshot().error).toBeTruthy();
+  });
   // Desktop's push-driven repair asks these two questions to avoid a second page read
   // per notice; an older-page read must not count as covering a latest-page notice.
   it('reports when the latest page was last read and whether a latest read is in flight', async () => {

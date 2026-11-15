@@ -306,8 +306,9 @@ describe('sessionComposerLayout', () => {
       },
     });
     expect(layout.input).toMatchObject({
-      disabled: true,
-      disabledReason: '消息正在发送到电脑端。',
+      // Keep the native editor focused while send itself remains locked below.
+      disabled: false,
+      disabledReason: null,
       placeholder: '正在转写语音',
     });
     expect(layout.voice).toMatchObject({

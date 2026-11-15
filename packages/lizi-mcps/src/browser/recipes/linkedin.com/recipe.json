@@ -1,16 +1,65 @@
 {
   "id": "linkedin-jobs-search",
-  "match": ["linkedin.com"],
-  "description": "搜索 LinkedIn 职位(标题/链接)。走 Voyager 内部 API:页面内同源 fetch,csrf-token 取自 JSESSIONID cookie。需登录态。⚠️ LinkedIn 对自动化封号较狠,谨慎用。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.linkedin.com/feed/" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "jobs",
-      "fn": "async () => { const js=document.cookie.split(';').map(p=>p.trim()).find(p=>p.indexOf('JSESSIONID=')===0); if(!js) throw new Error('未找到 JSESSIONID,请先在持久浏览器登录 LinkedIn'); const csrf=js.slice('JSESSIONID='.length).replace(/^\"|\"$/g,''); const q=encodeURIComponent('{{query|js}}'); const query='(origin:JOB_SEARCH_PAGE_OTHER_ENTRY,keywords:'+q+',spellCorrectionEnabled:true)'; const url='/voyager/api/voyagerJobsDashJobCards?decorationId=com.linkedin.voyager.dash.deco.jobs.search.JobSearchCardsCollection-220&count=25&q=jobSearch&query='+query+'&start=0'; const res=await fetch(url,{credentials:'include',headers:{'csrf-token':csrf,'x-restli-protocol-version':'2.0.0'}}); const t=await res.text(); let d; try{ d=JSON.parse(t); }catch(e){ throw new Error('LinkedIn 返回非 JSON(未登录或被风控),请在持久浏览器登录后重试'); } const els=Array.isArray(d&&d.elements)?d.elements:[]; return els.map(el=>{ const card=el&&el.jobCardUnion&&el.jobCardUnion.jobPostingCard; if(!card) return null; const urn=String(card.jobPostingUrn||(card.jobPosting&&card.jobPosting.entityUrn)||card.entityUrn||''); const m=urn.match(/(\\d+)/); const id=m?m[1]:''; return { title: card.jobPostingTitle||(card.title&&card.title.text)||'', url: id?'https://www.linkedin.com/jobs/view/'+id:'' }; }).filter(Boolean); }"
-    }
+  "match": [
+    "linkedin.com"
   ],
-  "output": "{{jobs}}"
+  "description": "Search LinkedIn jobs",
+  "access": "read",
+  "adapter": "linkedin/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "string",
+      "description": "Job search keywords"
+    },
+    "location": {
+      "required": false,
+      "type": "string",
+      "description": "Location text such as San Francisco Bay Area"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 10,
+      "description": "Number of jobs to return (max 100)"
+    },
+    "start": {
+      "required": false,
+      "type": "int",
+      "default": 0,
+      "description": "Result offset for pagination"
+    },
+    "details": {
+      "required": false,
+      "type": "bool",
+      "default": false,
+      "description": "Include full job description and apply URL (slower)"
+    },
+    "company": {
+      "required": false,
+      "type": "string",
+      "description": "Comma-separated company names or LinkedIn company IDs"
+    },
+    "experience-level": {
+      "required": false,
+      "type": "string",
+      "description": "Comma-separated: internship, entry, associate, mid-senior, director, executive"
+    },
+    "job-type": {
+      "required": false,
+      "type": "string",
+      "description": "Comma-separated: full-time, part-time, contract, temporary, volunteer, internship, other"
+    },
+    "date-posted": {
+      "required": false,
+      "type": "string",
+      "description": "One of: any, month, week, 24h"
+    },
+    "remote": {
+      "required": false,
+      "type": "string",
+      "description": "Comma-separated: on-site, hybrid, remote"
+    }
+  },
+  "steps": []
 }

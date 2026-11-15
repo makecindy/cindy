@@ -53,3 +53,21 @@
   这些控件会反档;真要覆盖就跟着主机主题一起换;
 - 滚动条统一规范:12px 槽 + 6px 圆角 thumb,滚动时加 `.is-scrolling` 显形
   (颜色用 `var(--msg-scrollbar)` / `var(--msg-scrollbar-hover)`),2 秒无活动移除。
+
+### 可选的 Mac 原生双指输入
+
+需要真实双触点的平面画面（例如设备模拟器）可在顶层页面声明
+`<meta name="cindy-native-trackpad" content="touch">`，并在实际交互元素上加
+`data-cindy-trackpad`。支持此能力的 Mac 宿主只在页面聚焦、鼠标位于该元素时，将
+AppKit 的两指位置投递为标准 Touch/Pointer 事件，嵌套 iframe 同样适用。
+元素应设 `touch-action:none` 并处理结束、取消和失焦；不需要 preload、消息桥或新权限。
+落指中心取鼠标位置，触控板宽度对应元素长边，两轴按触控板物理比例等比映射，超出元素边缘的触点裁剪。
+边缘不累计越界位移，反向移动立即生效。
+第三指交回系统；原生序列不重复投递 wheel/magnify。旧宿主、非 Mac、原生模块不可用
+或页面正在被其他调试会话占用时不启用；保留原有 wheel 兼容逻辑，不能假定所有宿主都有。
+
+对连续输入可使用 `data-cindy-trackpad="contacts"`：处理元素上的 `cindy-trackpad`
+事件，`detail` 为 `{phase,touches:[{id,x,y}]}`，坐标相对元素所属 frame 的 viewport。
+`begin/change/end/cancel` 对应落指、移动、结束、取消；touches 是全部仍按下的手指。
+一次事件必须同时更新所有触点再发送，避免先产生单指手势；结束/取消必须释放输入。
+标准 Touch/Pointer 处理仍需保留，供不支持整帧投递的宿主使用。

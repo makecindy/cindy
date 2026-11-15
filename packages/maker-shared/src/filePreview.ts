@@ -22,6 +22,8 @@ const SUPPORTED_OFFICE_EXTS = new Set(['.doc', '.docx', '.xls', '.xlsx', '.ppt',
 
 // Mirrors desktop shared/textFileExts.ts for remote read-only previews.
 const SUPPORTED_TEXT_EXTS = new Set([
+  ".mmd",
+  ".mermaid",
   '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java',
   '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh', '.cs', '.rb', '.php',
   '.swift', '.kt', '.kts', '.scala', '.groovy', '.coffee',
@@ -41,6 +43,15 @@ const SUPPORTED_TEXT_EXTS = new Set([
   '.srt', '.vtt',
   '.po', '.pot',
   '.sln', '.csproj', '.vbproj', '.fsproj', '.gemspec', '.podspec', '.cabal',
+  // .NET project/configuration sources and related schema formats (text only).
+  '.vbhtml', '.vb', '.csx', '.cake', '.linq', '.props',
+  '.targets', '.slnx', '.slnf', '.config', '.resx', '.settings',
+  '.manifest', '.nuspec', '.runsettings', '.globalconfig', '.http', '.rest',
+  '.xaml', '.axaml', '.resw', '.rdlc', '.rdl', '.pubxml',
+  '.ruleset', '.dotsettings', '.testsettings', '.filters', '.gql', '.graphqls',
+  '.psd1', '.ps1xml', '.psql', '.bicep', '.fbs', '.thrift',
+  '.capnp', '.avsc', '.csproj.user', '.fsproj.user', '.vbproj.user',
+  '.razor', '.cshtml',
   '.sql', '.graphql', '.proto', '.dockerfile',
   '.rss', '.atom',
   '.gitignore', '.gitattributes', '.gitconfig', '.gitmodules', '.gitkeep',
@@ -74,7 +85,7 @@ const SUPPORTED_TEXT_EXTS = new Set([
  */
 const HTML_PREVIEW_EXTS = new Set(['.html', '.htm']);
 
-const COMPOUND_EXTS = ['.env.example', '.env.local', '.env.development', '.env.production'];
+const COMPOUND_EXTS = ['.env.example', '.env.local', '.env.development', '.env.production', '.csproj.user', '.fsproj.user', '.vbproj.user'];
 const KNOWN_TEXT_FILENAMES = new Set([
   'dockerfile',
   'makefile',
@@ -240,12 +251,18 @@ export function describeTextPreviewFailure(result: RemoteTextFilePreviewResultLi
   return result.error || '当前文件无法预览。';
 }
 
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB'] as const;
+
 export function formatByteSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  // 档位按取整后的展示值选:1048575 B 属于 MB 档,不该停在 KB 档被四舍五入成
+  // "1024.0 KB" —— 那一档的合法最大值是 1023,超过就该升到下一档。
+  let value = Math.round(bytes);
+  for (let unit = 0; ; unit += 1) {
+    const text = unit === 0 ? `${value}` : value.toFixed(1);
+    if (Number(text) < 1024 || unit === BYTE_UNITS.length - 1) return `${text} ${BYTE_UNITS[unit]}`;
+    value /= 1024;
+  }
 }
 
 export { HTML_PREVIEW_CSP, HTML_SNAPSHOT_CSP, withHtmlPreviewCsp, withSnapshotHtmlCsp } from './htmlPreviewCsp.js';

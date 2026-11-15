@@ -34,7 +34,10 @@
 import type { InteractionButton, InteractionRequestPayload } from '@cindy/slack-hook-protocol';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import type { SharedPermission } from '../maker-ipc/sharedPermission';
+import { describePermissionAction } from '@cindy/maker-shared/interaction';
 import { permissionOutcomeText } from '../im/shared/permissionPresentation';
+import { autoReviewUnavailablePromptLine, permissionPromptDescription } from '../im/shared/autoReviewUnavailablePrompt';
+import { imText } from '../im/shared/imText';
 
 import {
   composeInteractionModel,
@@ -104,7 +107,7 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
       },
       decisions,
       defaultDecision: model.buildDefaultDecision(TIMEOUT_REASON),
-      fallbackReason: '等待回答超时, 任务已按“未回答”继续',
+      fallbackReason: imText('imBot.text.hook.interaction.askTimeout'),
     };
   }
 
@@ -113,11 +116,11 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
     return {
       card: {
         kind: 'plan_review',
-        title: '📋 计划待审阅',
+        title: imText('imBot.text.hook.interaction.planTitle'),
         body: truncate(model.plan, MAX_PLAN_LEN),
         buttons: [
-          { id: 'plan:approve', label: '批准执行', style: approve.style },
-          { id: 'plan:reject', label: '打回', style: reject.style },
+          { id: 'plan:approve', label: imText('imBot.text.hook.interaction.planApprove'), style: approve.style },
+          { id: 'plan:reject', label: imText('imBot.text.hook.interaction.planReject'), style: reject.style },
         ],
       },
       decisions: new Map<string, InteractionDecision>([
@@ -127,15 +130,22 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
       // 超时按安全默认 deny;恒带 dismissed(系统性 dismissal, 别让 codex 把超时
       // reason 当用户反馈发起修订 turn) —— 见 interactionCardModel。
       defaultDecision: model.buildDefaultDecision(TIMEOUT_REASON),
-      fallbackReason: '等待审阅超时, 计划未获批准',
+      fallbackReason: imText('imBot.text.hook.interaction.planTimeout'),
     };
   }
 
   const [allowOnce, allowAlways, deny] = model.choices;
-  const inputSummary = summarizeInput(model.input);
+  // 与 IM 富卡同口径：能认出的命令 / 文件 / 插件 / 浏览器步骤直接显示操作本身，并写明自动审批为何问你。
+  const action = describePermissionAction(model.toolName, model.input);
+  const inputSummary = action.kind === 'tool'
+    ? summarizeInput(model.input)
+    : truncate(action.preview, HOOK_PERMISSION_INPUT_SUMMARY_MAX);
+  const handoff = autoReviewUnavailablePromptLine(req) !== null
+    || (req.kind === 'permission' && !!req.metadata?.mcpApp && (req.metadata.mcpApp as { scope?: string }).scope !== 'session');
   const body = [
-    model.description,
-    `工具: \`${model.toolName}\``,
+    permissionPromptDescription(req) ?? '',
+    autoReviewUnavailablePromptLine(req) ?? '',
+    imText('imBot.text.hook.interaction.permissionTool', { tool: model.toolName }),
     inputSummary ? `\`\`\`${inputSummary}\`\`\`` : '',
   ]
     .filter((s) => s.length > 0)
@@ -143,21 +153,22 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
   return {
     card: {
       kind: 'permission',
-      title: `🔐 权限请求: ${truncate(model.displayTitle, TITLE_MAX)}`,
+      title: imText('imBot.text.hook.interaction.permissionTitle', { title: truncate(model.displayTitle, TITLE_MAX) }),
       body,
       buttons: [
-        { id: 'perm:allow', label: '允许一次', style: allowOnce.style },
-        { id: 'perm:always', label: '本任务总是允许', style: allowAlways.style },
-        { id: 'perm:deny', label: '拒绝', style: deny.style },
+        { id: 'perm:allow', label: imText('imBot.text.hook.interaction.allowOnce'), style: allowOnce.style },
+        // Auto-review handoffs (AI ask or unavailable) only ever allow this one call.
+        ...(handoff ? [] : [{ id: 'perm:always', label: imText('imBot.text.hook.interaction.alwaysAllowForSession'), style: allowAlways.style }]),
+        { id: 'perm:deny', label: imText('imBot.text.hook.interaction.deny'), style: deny.style },
       ],
     },
     decisions: new Map<string, InteractionDecision>([
       ['perm:allow', allowOnce.decision],
-      ['perm:always', allowAlways.decision],
+      ...(handoff ? [] : [['perm:always', allowAlways.decision] as [string, InteractionDecision]]),
       ['perm:deny', deny.decision],
     ]),
     defaultDecision: model.buildDefaultDecision(TIMEOUT_REASON),
-    fallbackReason: '等待授权超时, 已拒绝该权限请求',
+    fallbackReason: imText('imBot.text.hook.interaction.permissionTimeout'),
   };
 }
 

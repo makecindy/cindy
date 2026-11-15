@@ -1,12 +1,18 @@
 {
   "id": "v2ex-hot",
-  "match": ["v2ex.com"],
-  "description": "读取 V2EX 当前热门主题(标题/节点/回复数/链接),走官方公开 API,无需登录;直接 navigate 到 JSON 端点即可拿到原始 JSON。",
-  "inputs": {},
-  "steps": [
-    { "action": "navigate", "url": "https://www.v2ex.com/api/topics/hot.json" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "v2ex.com"
   ],
-  "output": "{{json}}"
+  "description": "V2EX 热门话题",
+  "access": "read",
+  "adapter": "v2ex/hot",
+  "inputs": {
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of topics"
+    }
+  },
+  "steps": []
 }

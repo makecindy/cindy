@@ -5,6 +5,7 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import { GHOST_ERRAND_PERMISSION_MODES } from '../../shared/ghost.js';
+import { PLUGIN_TASK_PERMISSION_MODES } from '../../shared/pluginTasks.js';
 import { PLUGIN_TASK_EFFORTS, type PluginTaskConfig } from './pluginTaskPrefsStore.js';
 import type { PluginTaskPreferences } from '@cindy/device-link';
 
@@ -24,7 +25,7 @@ export class MobileTaskSettings {
     return {
       revision: this.revision(id, installRevision),
       config,
-      permissionModes: [...GHOST_ERRAND_PERMISSION_MODES],
+      permissionModes: [...PLUGIN_TASK_PERMISSION_MODES],
       defaultPermissionMode: 'ask',
     };
   }

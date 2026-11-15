@@ -31,10 +31,10 @@ export function cloudCompanionAt(cloud: CompanionCloudSnapshot, deviceId: string
   return cloud.actors.find((actor) => actor.externalId === botId && actor.homeDeviceId === deviceId) ?? null;
 }
 
-/** A remote companion homed on that computer: its connection is not announced (cloud-companions.md §3.1). */
+/** Read-only cloud rows do not announce a connection, including a rejected local restore. */
 export function isCloudCompanionRemote(cloud: CompanionCloudSnapshot, bot: Pick<RemoteBot, 'id' | 'deviceId'>): boolean {
   const actor = cloudCompanionAt(cloud, bot.deviceId, bot.id);
-  return !!actor && actor.homeDeviceId !== cloud.selfDeviceId;
+  return !!actor && (actor.homeDeviceId !== cloud.selfDeviceId || !!actor.profileFailure);
 }
 
 /**
@@ -45,7 +45,8 @@ export function cloudOnlyRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: r
   if (!cloud.enabled) return [];
   return cloud.actors.flatMap((actor) => {
     const home = actor.homeDeviceId;
-    if (!home || home === cloud.selfDeviceId) return [];
+    // A rejected local restore still needs a read-only entry with its recovery action.
+    if (!home || (home === cloud.selfDeviceId && !actor.profileFailure)) return [];
     if (remoteBots.some((bot) => bot.deviceId === home && bot.id === actor.externalId)) return [];
     return [{
       id: actor.externalId,
@@ -90,4 +91,19 @@ export function companionRunsHere(cloud: CompanionCloudSnapshot, localBotIds: re
   if (!localBotIds.includes(botId) || cloud.demotedBotIds.includes(botId)) return false;
   const home = cloud.enabled ? cloud.actors.find((actor) => actor.externalId === botId)?.homeDeviceId : undefined;
   return !home || home === cloud.selfDeviceId;
+}
+
+/**
+ * The main computer is online but has not allowed remote control. Read from the live device list
+ * (what the devices page shows), since the snapshot's copy of the presence is only rebuilt when a
+ * home changes and goes stale; the snapshot answers only for a computer the list does not have.
+ */
+export function homeControlOff(
+  actor: CompanionCloudActor | undefined,
+  devices: ReadonlyArray<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> | null,
+): boolean {
+  if (!actor?.homeDeviceId) return false;
+  const live = devices?.find((device) => device.deviceId === actor.homeDeviceId);
+  if (live) return live.online && live.remoteControlEnabled === false;
+  return actor.homeDevice?.online === true && actor.homeDevice.remoteControlEnabled === false;
 }

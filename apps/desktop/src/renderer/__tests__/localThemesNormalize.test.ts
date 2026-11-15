@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
+import { convertVsCodeTheme } from '../../shared/theme-import';
 import {
   contrastRatio,
   parseCssColor,
   type Rgb,
 } from '../../shared/theme-import/color';
+import '../themes/colors';
+import legacyTable from '../themes/loginLegacyDefaults.json';
+import { LEGACY_SNAPSHOT_MIN_MATCHES } from '../themes/loginLegacyDefaults';
+import { filledButtonPressedFromHover } from '../themes/filledButtonStates';
 import { normalizeLocalThemeColors } from '../themes/local-themes-normalize';
 
 function rgb(value: string | undefined): Rgb {
@@ -17,6 +22,72 @@ function rgb(value: string | undefined): Rgb {
 const SWITCH_DERIVATION_TARGET = 3.2;
 
 describe('normalizeLocalThemeColors', () => {
+  it('旧主题显式写的 accent-hover 继续作为 CTA 与确认框主按钮的悬停色', () => {
+    const out = normalizeLocalThemeColors({ 'accent-hover': '#6a5acd' });
+    expect(out['button-cta-hover']).toBe('var(--accent-hover)');
+    expect(out['confirm-btn-primary-hover']).toBe('var(--accent-hover)');
+    expect(out['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'darker'));
+    expect(out['confirm-btn-primary-pressed']).toBe(
+      filledButtonPressedFromHover('var(--confirm-btn-primary-hover)', 'darker'),
+    );
+    expect(normalizeLocalThemeColors(out)).toEqual(out);
+  });
+
+  it('按下沿底色到悬停的方向继续，接近黑色的悬停色不会被抬亮', () => {
+    // 真实导入路径：中性浅色主题省略按钮色时，accent-hover 落在低亮度分支以下。
+    const imported = convertVsCodeTheme(
+      JSON.stringify({ colors: { 'editor.background': '#ffffff', 'editor.foreground': '#262626' } }),
+      'Neutral',
+    );
+    const colors = imported?.themes[0]?.colors;
+    if (!colors) throw new Error('VS Code 主题导入失败');
+    expect(colors['accent-hover']).toBe('#1b1b1b');
+    const out = normalizeLocalThemeColors(colors);
+    expect(out['confirm-btn-primary-pressed']).toBe(
+      filledButtonPressedFromHover('var(--confirm-btn-primary-hover)', 'darker'),
+    );
+    expect(out['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'darker'));
+
+    const lighter = normalizeLocalThemeColors({
+      'accent-hover': '#555555',
+      'accent-cta-bg-pure': '#222222',
+    });
+    expect(lighter['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'lighter'));
+  });
+
+  it('主题没写底色时按模式取默认值判断方向，未知模式不猜', () => {
+    // 浅色默认底色接近黑色，比 #555555 暗：悬停变亮，按下继续变亮。
+    const sparse = normalizeLocalThemeColors({ 'accent-hover': '#555555' }, 'light');
+    expect(sparse['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'lighter'));
+    expect(sparse['confirm-btn-primary-pressed']).toBe(
+      filledButtonPressedFromHover('var(--confirm-btn-primary-hover)', 'lighter'),
+    );
+
+    const aliased = normalizeLocalThemeColors(
+      { 'accent-hover': '#555555', 'accent-cta-bg-pure': 'var(--brand)', brand: '#eeeeee' },
+      'light',
+    );
+    expect(aliased['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'darker'));
+
+    const unknownMode = normalizeLocalThemeColors({ 'accent-hover': '#555555' });
+    expect(unknownMode['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'darker'));
+  });
+
+  it('显式状态色优先，没有 accent-hover 时仍由基础色算出', () => {
+    const explicit = normalizeLocalThemeColors({
+      'accent-hover': '#6a5acd',
+      'button-cta-hover': '#111111',
+      'button-cta-pressed': '#222222',
+    });
+    expect(explicit['button-cta-hover']).toBe('#111111');
+    expect(explicit['button-cta-pressed']).toBe('#222222');
+    expect(explicit['confirm-btn-primary-hover']).toBe('var(--accent-hover)');
+
+    const baseOnly = normalizeLocalThemeColors({ 'accent-cta-bg-pure': '#6a5acd' });
+    expect(baseOnly['button-cta-hover']).toBeUndefined();
+    expect(baseOnly['confirm-btn-primary-hover']).toBeUndefined();
+  });
+
   it('迁移旧 connected badge override 并保留原中性色给文字 token', () => {
     const out = normalizeLocalThemeColors({
       surface: '#111',
@@ -173,5 +244,78 @@ describe('normalizeLocalThemeColors', () => {
 
     expect(out['switch-track-off']).toBe('#555555');
     expect(out['switch-thumb-off']).toBe('#000000');
+  });
+
+  describe('升级前导出的 login-* 默认值(历史快照迁移)', () => {
+    /** 某个模式下「旧版导出的快照」:前 N 个有历史值的登录 token 各取一个旧值。 */
+    function legacySnapshot(type: 'light' | 'dark'): Record<string, string> {
+      const entries = Object.entries(legacyTable.defaults)
+        .map(([id, slots]) => [id, slots[type][0]] as const)
+        .filter((entry): entry is readonly [string, string] => entry[1] !== undefined);
+      return Object.fromEntries(entries.slice(0, LEGACY_SNAPSHOT_MIN_MATCHES + 2));
+    }
+
+    it('旧快照:丢弃等于本模式历史默认值的 override,用户改过的值与非登录色原样保留', () => {
+      const snapshot = legacySnapshot('light');
+      expect(Object.keys(snapshot).length).toBeGreaterThan(LEGACY_SNAPSHOT_MIN_MATCHES);
+      const out = normalizeLocalThemeColors(
+        { ...snapshot, surface: '#111111', 'login-control-bg': '#123456' }, // 后一项是用户自己改过的
+        'light',
+      );
+      expect(out).toEqual({ surface: '#111111', 'login-control-bg': '#123456' });
+    });
+
+    it('覆盖更早几代:10-23 前的文字实色、10-01 前的画布底,否则旧值会压在新面板上', () => {
+      expect(
+        normalizeLocalThemeColors(
+          { ...legacySnapshot('dark'), 'login-secondary-text': '#6F6F6F', 'login-bg-base': '#1F1F1E' },
+          'dark',
+        ),
+      ).toEqual({});
+      expect(
+        normalizeLocalThemeColors(
+          { ...legacySnapshot('light'), 'login-title-text': '#252222', 'login-bg-base': '#EDEDED' },
+          'light',
+        ),
+      ).toEqual({});
+    });
+
+    it('rgba 数字写法不同(0.5 与 0.50)也能识别', () => {
+      expect(
+        normalizeLocalThemeColors(
+          { ...legacySnapshot('light'), 'login-overlay-button-pressed': 'rgba(0,0,0,0.5)' },
+          'light',
+        ),
+      ).toEqual({});
+    });
+
+    it('只比对本模式的历史值:深色快照里混入的历史亮色值不被丢弃,反之亦然', () => {
+      expect(
+        normalizeLocalThemeColors({ ...legacySnapshot('dark'), 'login-panel-bg': '#FBFBFB' }, 'dark'),
+      ).toEqual({ 'login-panel-bg': '#FBFBFB' });
+      expect(
+        normalizeLocalThemeColors({ ...legacySnapshot('light'), 'login-panel-bg': '#312F2F' }, 'light'),
+      ).toEqual({ 'login-panel-bg': '#312F2F' });
+    });
+
+    it('稀疏手写主题,或本版本新建的副本里零星几个有意设成历史值的 override,原样保留', () => {
+      const sparse = { 'login-panel-bg': '#FBFBFB', 'login-secondary-text': '#6F6F6F' };
+      expect(normalizeLocalThemeColors(sparse, 'light')).toBe(sparse);
+      // 新建副本:全部登录色是当前值(不在历史表里),用户只改了一个为历史值
+      const freshCopy = {
+        ...Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`login-current-${i}`, '#abcdef'])),
+        'login-panel-bg': '#FBFBFB',
+      };
+      expect(normalizeLocalThemeColors(freshCopy, 'light')).toBe(freshCopy);
+    });
+
+    it('没有传主题模式时不迁移;幂等,没有可迁移项时返回同一个对象', () => {
+      const snapshot = legacySnapshot('light');
+      expect(normalizeLocalThemeColors(snapshot)).toBe(snapshot);
+      const colors = { surface: '#111111', 'login-control-bg': '#123456' };
+      expect(normalizeLocalThemeColors(colors, 'light')).toBe(colors);
+      const once = normalizeLocalThemeColors({ ...snapshot, surface: '#111111' }, 'light');
+      expect(normalizeLocalThemeColors(once, 'light')).toEqual(once);
+    });
   });
 });

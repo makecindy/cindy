@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   invalidateMcpEndpoint: vi.fn(),
   dbLimit: vi.fn(),
   logWarn: vi.fn(),
+  send: vi.fn(),
 }));
 
 vi.mock('../../logger.js', async (importOriginal) => {
@@ -51,7 +52,7 @@ vi.mock('electron', async (importOriginal) => {
       }),
     },
     BrowserWindow: class {
-      static getAllWindows(): never[] { return []; }
+      static getAllWindows() { return [{ isDestroyed: () => false, webContents: { send: mocks.send } }]; }
     },
   };
 });
@@ -134,6 +135,9 @@ vi.mock('../../maker-host/index.js', () => ({
 
 import {
   getRemoteSshPool,
+  updateRemoteSshHost,
+  removeRemoteSshHost,
+  REMOTE_SSH_PUSH,
   probeRemoteWorkingDirectory,
   registerRemoteSshIpc,
   REMOTE_SSH_INVOKE,
@@ -211,6 +215,32 @@ beforeEach(async () => {
 });
 
 describe('remote SSH mutation runtime semantics', () => {
+  // Unit: AI rename previously had no native path. A key-backed external host
+  // with existing sessions must remain usable without exposing/replacing the key.
+  it('renames through the Agent patch path without rewriting a key-backed connection', async () => {
+    const original = host('agent-name', { managedByCindy: false, authMethod: 'key', identityFile: '/private/id_ed25519', port: 2222 });
+    await getRemoteSshPool().hydrate([original]);
+    mocks.dbLimit.mockResolvedValue([{ id: 'existing-session' }]);
+    await updateRemoteSshHost({ id: original.id, displayName: '家里的服务器' }, { patch: true });
+    expect(mocks.patchPref).toHaveBeenCalledWith(original.id, expect.objectContaining({ displayName: '家里的服务器' }));
+    expect(mocks.updateManagedHostFields).not.toHaveBeenCalled();
+    expect(getRemoteSshPool().get(original.id)?.config).toEqual(original);
+  });
+
+  // Unit: deleting through AI has no Settings component to remove its row.
+  // The shared mutation must broadcast the sanitized remaining list itself.
+  it('broadcasts the remaining SSH list after a native removal', async () => {
+    const target = host('delete-from-agent');
+    const other = host('keep-from-agent', { authMethod: 'key', identityFile: '/private/keep-key' });
+    await getRemoteSshPool().hydrate([target, other]);
+    mocks.readSshConfigDetailed.mockResolvedValueOnce(successfulRead([target, other]))
+      .mockResolvedValueOnce(successfulRead([other]));
+    await removeRemoteSshHost({ id: target.id });
+    const receipt = mocks.send.mock.calls.find(([channel]) => channel === REMOTE_SSH_PUSH.HOSTS_CHANGED);
+    expect(receipt?.[1].hosts.map((entry: { config: { id: string } }) => entry.config.id)).toEqual([other.id]);
+    expect(JSON.stringify(receipt)).not.toContain('/private/keep-key');
+  });
+
   it.each(['\n', '\r', '\r\n'])('rejects injected protocol lines before remote execution (%j)', async (separator) => {
     await getRemoteSshPool().hydrate([host('worker-dir')]);
     const remote = getRemoteSshPool().get('worker-dir')!;

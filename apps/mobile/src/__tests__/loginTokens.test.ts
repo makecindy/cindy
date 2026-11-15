@@ -15,7 +15,7 @@ import {
  *    (防止后来者把登录色搬进主题色板导致随主题染色)。
  * 2. 错误文字必须走独立 `loginError`(#D91F37 族),不得复用 statusError——语义违规
  *    (implementation-plan Step 0 WHAT1 明文)。
- * 3. 关键色值/尺寸冻结——变更须回到 design.md §8 / figma-component-spec / U 裁决
+ * 3. 关键色值/尺寸冻结——变更须回到 DESIGN.md §16 / U 裁决
  *    的权威链取值,不允许在 tokens.ts 里顺手漂移。
  */
 describe('login token 守护', () => {

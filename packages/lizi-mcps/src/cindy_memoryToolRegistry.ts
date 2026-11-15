@@ -36,6 +36,8 @@ export interface MemoryToolDef {
   description: string;
   rules?: string[];
   inputShape: z.ZodRawShape;
+  /** 跨字段校验；只影响 call() 的 parse，不影响对模型展示的 JSON Schema */
+  refine?: (value: Record<string, unknown>, ctx: z.RefinementCtx) => void;
   handler: MemoryToolHandler;
 }
 
@@ -55,6 +57,7 @@ export class MemoryToolRegistry {
     description: string;
     rules?: string[];
     inputShape: T;
+    refine?: (value: Record<string, unknown>, ctx: z.RefinementCtx) => void;
     handler: MemoryToolHandler<{ [K in keyof T]: z.infer<T[K]> }>;
   }): void {
     if (this.tools.has(def.name)) {
@@ -117,7 +120,10 @@ export class MemoryToolRegistry {
     // "返回成功、实际忽略",误导其以为生效(典型:camelCase 写成 sessionIds 而非 session_ids)。
     // 失败分支已带 schema + hint,agent 可据此自纠重试。
     const objSchema = z.strictObject(def.inputShape);
-    const parsed = objSchema.safeParse(rawArgs ?? {});
+    const parseSchema = def.refine
+      ? objSchema.superRefine((value, ctx) => def.refine!(value, ctx))
+      : objSchema;
+    const parsed = parseSchema.safeParse(rawArgs ?? {});
     if (!parsed.success) {
       let jsonSchema: unknown;
       try {
@@ -134,6 +140,11 @@ export class MemoryToolRegistry {
               errorCode: 'INVALID_ARGS',
               data: {
                 tool: name,
+                // received: 回显收到的顶层 keys — 只回 schema 时模型看不出自己是多包了一层信封
+                // (keys=["args"]) 还是拍平了 (keys=参数字段), 实测 2026-10-31 三个会话因此连续盲试。
+                received: rawArgs && typeof rawArgs === 'object'
+                  ? Object.keys(rawArgs as Record<string, unknown>)
+                  : [],
                 validation_errors: parsed.error.issues,
                 schema: jsonSchema,
                 hint: '请按 schema 修正参数后重试',

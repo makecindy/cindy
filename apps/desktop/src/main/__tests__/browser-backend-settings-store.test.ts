@@ -9,7 +9,7 @@ vi.mock('electron', () => ({ app: { getPath: () => paths.userData } }));
 import {
   __testing, readBrowserBackendSettingsState, resetBrowserBackendSettings,
   writeBrowserBackendKind, writeBrowserUseRealProfile,
-} from '../browser-backend-settings-store.js';
+} from '../browser-backend-settings-store.desktop.js';
 
 describe('browser-backend explicit preferences', () => {
   beforeEach(() => { paths.userData = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-settings-')); });
@@ -33,6 +33,11 @@ describe('browser-backend explicit preferences', () => {
 });
 
 describe('browser-backend-settings-store normalize', () => {
+  it('accepts the user browser target and falls back to external for unknown kinds', () => {
+    expect(__testing.normalize({ kind: 'user-browser' })).toEqual({ kind: 'user-browser', useRealProfile: false });
+    expect(__testing.normalize({ kind: 'chrome' })).toEqual({ kind: 'external', useRealProfile: false });
+  });
+
   it('defaults useRealProfile to false', () => {
     expect(__testing.normalize(undefined)).toEqual({
       kind: 'external',

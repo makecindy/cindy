@@ -3,6 +3,9 @@ import {
   DEFAULT_ORCA_COLLABORATION_SETTINGS,
   buildDraftWorkerInitialTask,
   createWorkerLabel,
+  normalizeOrcaWorkerLabel,
+  normalizeOrcaWorkerRole,
+  orcaWorkerSessionTitle,
   orcaWorkerSlotState,
   parseOrcaCollaborationSettings,
   parseOrcaTeamWorkers,
@@ -22,6 +25,29 @@ describe('orca team shared helpers', () => {
     expect(createWorkerLabel(`${'-'.repeat(50_000)}x`, [])).toBe('x');
     expect(shouldShowWorkerLabel('developer', 'developer-2')).toBe(true);
     expect(shouldShowWorkerLabel('developer', 'developer')).toBe(false);
+  });
+
+  it('normalizes worker labels and roles with the shared create/rename contract', () => {
+    expect(normalizeOrcaWorkerLabel('  Backend-2 ')).toEqual({ ok: true, value: 'backend-2' });
+    expect(normalizeOrcaWorkerLabel('')).toEqual({ ok: false, message: 'label required' });
+    expect(normalizeOrcaWorkerLabel('a'.repeat(33))).toEqual({
+      ok: false,
+      message: 'label must be 1-32 chars',
+    });
+    expect(normalizeOrcaWorkerLabel('前端')).toEqual({
+      ok: false,
+      message: 'label may only contain letters, numbers, hyphens and underscores',
+    });
+    expect(normalizeOrcaWorkerRole('  Reviewer ')).toEqual({ ok: true, value: 'Reviewer' });
+    expect(normalizeOrcaWorkerRole('   ')).toEqual({ ok: false, message: 'role required' });
+    expect(normalizeOrcaWorkerRole('r'.repeat(33))).toEqual({
+      ok: false,
+      message: 'role must be 1-32 chars',
+    });
+    expect(orcaWorkerSessionTitle('reviewer', 'reviewer-2')).toBe('Worker · reviewer · reviewer-2');
+    // role 与 label（忽略大小写）相同时只写一次，与创建侧 orcaWorkerTitle 同一形态。
+    expect(orcaWorkerSessionTitle('reader', 'reader')).toBe('Worker · reader');
+    expect(orcaWorkerSessionTitle('reader', 'READER')).toBe('Worker · reader');
   });
 
   it('keeps pending Lead input as context only when a Worker task exists', () => {

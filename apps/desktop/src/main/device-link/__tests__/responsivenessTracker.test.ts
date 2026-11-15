@@ -6,7 +6,7 @@
  * 成功 / 失败分类(超时计失败、控制帧成功不定论、探测通道回包关熔断)。
  */
 import { describe, expect, it, vi } from 'vitest';
-import { DeviceLinkError } from '@cindy/device-link';
+import { DeviceLinkError, providerShareHostPeer, REMOTE_AGENT_CHANNEL } from '@cindy/device-link';
 import {
   BREAKER_FAILURE_THRESHOLD,
   BREAKER_PROBE_BACKOFF_BASE_MS,
@@ -30,6 +30,7 @@ function timeoutError(): DeviceLinkError {
 function harness(overrides?: {
   probeInvoke?: ReturnType<typeof vi.fn>;
   isProbeEligible?: () => boolean;
+  confirmRelayForTimeout?: () => boolean;
   recoverLink?: ReturnType<typeof vi.fn>;
 }) {
   let at = 1_000_000;
@@ -40,6 +41,7 @@ function harness(overrides?: {
     onUnresponsiveChanged,
     isProbeEligible: overrides?.isProbeEligible ?? (() => true),
     recoverLink: overrides?.recoverLink,
+    confirmRelayForTimeout: overrides?.confirmRelayForTimeout,
     now: () => at,
   });
   return {
@@ -69,6 +71,35 @@ async function openBreaker(
 }
 
 describe('responsivenessTracker', () => {
+  // Unit: the screenshot's provider-share target never authorizes local-db:sessions:list.
+  // This exercises half-open recovery itself, not just the channel selector.
+  it.each(['group-owner', 'executor-m'])('probes the actual scoped Agent service for %s without reading its task database', async device => {
+    const target = providerShareHostPeer('shared', device);
+    const h = harness(); await openBreaker(h, target);
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS); h.tracker.probeTick();
+    await Promise.resolve(); await Promise.resolve();
+    expect(h.probeInvoke).toHaveBeenCalledWith(target, REMOTE_AGENT_CHANNEL, [{ op: 'caps' }]);
+    expect(h.tracker.isUnresponsive(target)).toBe(false);
+  });
+  // Oct 30 multi-device outage: shared silence is not independent peer failure.
+  // Existing tests supplied only peer timeout codes, never relay health evidence.
+  it('does not open peer breakers or reopen links during an unconfirmed shared outage', async () => {
+    const confirmRelayForTimeout = vi.fn(() => false);
+    const recoverLink = vi.fn(async () => {});
+    const h = harness({ confirmRelayForTimeout, recoverLink });
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i++) {
+      for (const peer of [DEV, OTHER_DEV])
+        await expect(h.tracker.guardInvoke(peer, 'local-db:sessions:list', async () => { throw timeoutError(); }))
+          .rejects.toThrow('no invoke-result');
+      h.advance(1100);
+    }
+    expect(h.tracker.getUnresponsiveDeviceIds()).toEqual([]);
+    expect(recoverLink).not.toHaveBeenCalled();
+    confirmRelayForTimeout.mockReturnValue(true);
+    await openBreaker(h);
+    expect(h.tracker.isUnresponsive(DEV)).toBe(true);
+    expect(h.tracker.isUnresponsive(OTHER_DEV)).toBe(false);
+  });
   it('local socket queue expiry neither opens the peer circuit nor starts link recovery', async () => {
     const recoverLink = vi.fn(async () => undefined);
     const h = harness({ recoverLink });

@@ -53,8 +53,8 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
-import { projectQuietScheduledOutput } from '../silent-output.js';
+import { MakerScheduleRunner } from '../runner.desktop';
+import { projectQuietScheduledOutput, revealScheduledOutput, hasVisibleScheduledOutput } from '../silent-output.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -152,6 +152,7 @@ function createRunnerHarness(
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -196,6 +197,18 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
   });
 
+  it.each([true, false])('adds the checkpoint guidance only to recurring teammate work (%s)', async (recurring) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: true });
+    const promise = runner.fire(baseSchedule({ source: 'bot', recurring }), createFireContext());
+    await vi.waitFor(() => expect(h.session.send).toHaveBeenCalled());
+    const sent = JSON.stringify(vi.mocked(h.session.send).mock.calls[0][0]);
+    expect(sent.includes('[Routine checkpoint]')).toBe(recurring);
+    expect(sent).toContain('check the PR status');
+    h.emit({ type: 'done', data: { result: '' } });
+    await promise;
+  });
+
   it('passes successful precheck output only to model input, keeping stored instructions intact', async () => {
     mocks.executePreRunHook.mockResolvedValue({
       decision: 'pass',
@@ -218,16 +231,18 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     expect(mocks.createMessage.mock.calls[0][1].content).toBe('check the PR status');
   });
 
-  it.each([true, false])(
-    'keeps ordinary task events visible without duplicating the final report (silenced=%s)',
-    async (silenced) => {
+  // Independent routines must retain the same inspectable transcript as ordinary tasks.
+  it.each([true, false].flatMap(silenced => ['ordinary', 'routine'].map(kind => ({ silenced, kind }))))(
+    'keeps $kind events visible without duplicating the final report (silenced=$silenced)',
+    async ({ silenced, kind }) => {
       const h = createSessionHarness(acceptingSend());
       const { runner, notifier } = createRunnerHarness(h.session, { silenced });
-      const promise = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+      const id = kind === 'routine' ? 'routine-check' : 'schedule-1';
+      const promise = runner.fire(baseSchedule({ id, source: kind === 'routine' ? 'bot' : 'user', silentWhenIdle: true }), createFireContext());
       await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
       const origin = {
         kind: 'scheduler' as const,
-        scheduleId: 'schedule-1',
+        scheduleId: id,
         scheduleName: 'pr follow-up',
         runId: 'run-1',
       };
@@ -252,7 +267,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       h.emit({ type: 'text', turnOrigin: origin, data: { text: 'Review fixed', isFinal: true } });
       h.emit(done);
       await promise;
-      expect(mocks.createMessage.mock.calls[0][1].content).toBe('check the PR status');
+      expect(mocks.createMessage.mock.calls[0][1].content).toBe(kind === 'routine' ? '[UI_ACTION_TRIGGER]check the PR status' : 'check the PR status');
       expect(
         mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant'),
       ).toHaveLength(0);
@@ -410,6 +425,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
         expect.objectContaining({
           clientId: 'schedule-result:run-1',
           content: 'Final answer',
+          agentMeta: expect.objectContaining({ turnCompleted: true }),
         }),
         expect.anything(),
       );
@@ -480,6 +496,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       expect(mocks.rewind).toHaveBeenCalledExactlyOnceWith(
         h.session.id,
         mocks.createMessage.mock.calls[0][1].clientId,
+        { discard: true },
       );
       expect(notifier.notify).not.toHaveBeenCalled();
     },
@@ -507,6 +524,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     expect(mocks.rewind).toHaveBeenCalledExactlyOnceWith(
       h.session.id,
       mocks.createMessage.mock.calls[0][1].clientId,
+        { discard: true },
     );
     expect(notifier.notify).not.toHaveBeenCalled();
   });
@@ -560,6 +578,42 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       expect(notifier.notify).toHaveBeenCalledTimes(silenced ? 0 : 1);
     },
   );
+
+  it.each([true, false].flatMap(silenced => [true, false].map(terminalOnly => ({ silenced, terminalOnly }))))(
+    'persists an owner-promoted reply once (silenced=$silenced, terminalOnly=$terminalOnly)',
+    async ({ silenced, terminalOnly }) => {
+      const h = createSessionHarness(acceptingSend());
+      const { runner, notifier } = createRunnerHarness(h.session, { silenced });
+      const promise = runner.fire(baseSchedule({ source: 'bot', silentWhenIdle: true }), createFireContext());
+      await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+      h.emit({ type: 'text', data: { text: 'Hidden preamble' } });
+      revealScheduledOutput({ kind: 'scheduler', scheduleId: 'schedule-1', scheduleName: 'Check', runId: 'run-1' });
+      if (!terminalOnly) h.emit({ type: 'text', data: { text: 'Owner reply', isFinal: true } });
+      h.emit({ type: 'done', data: { result: 'Owner reply' } });
+      await promise;
+      const repairs = mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant');
+      // The normal text pipeline persists streamed replies; only a done-only reply needs repair.
+      expect(repairs).toHaveLength(terminalOnly ? 1 : 0);
+      if (terminalOnly) expect(repairs[0][1].content).toBe('Owner reply');
+      expect(notifier.notify).toHaveBeenCalledTimes(silenced ? 0 : 1);
+      expect(hasVisibleScheduledOutput('run-1')).toBe(false);
+    },
+  );
+
+  it.each([true, false])('repairs a hidden Claude block followed by a visible fallback tail (silenced=%s)', async (silenced) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced });
+    const promise = runner.fire(baseSchedule({ source: 'bot', silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'text', source: 'claude-code', data: { text: 'Hidden prefix ', isFinal: true } });
+    revealScheduledOutput({ kind: 'scheduler', scheduleId: 'schedule-1', scheduleName: 'Check', runId: 'run-1' });
+    h.emit({ type: 'text', source: 'claude-code', data: { text: 'visible tail' } });
+    h.emit({ type: 'done', source: 'claude-code', data: { result: 'Hidden prefix visible tail' } });
+    await promise;
+    const repairs = mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant');
+    expect(repairs).toHaveLength(1);
+    expect(repairs[0][1].content).toBe('Hidden prefix visible tail');
+  });
 
   it('does not broadcast or notify into a new owner after persisting the final report', async () => {
     const h = createSessionHarness(acceptingSend());

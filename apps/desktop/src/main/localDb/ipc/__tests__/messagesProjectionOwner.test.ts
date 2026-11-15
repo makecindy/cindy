@@ -28,11 +28,8 @@ vi.mock('../../../logger', () => ({
 vi.mock('../../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../../maker-host/codex-local-sessions', () => ({
-  importExternalCodexMessagesForSession: vi.fn(async () => undefined),
-}));
-vi.mock('../../../maker-host/claude-local-sessions', () => ({
-  importExternalClaudeCodeMessagesForSession: vi.fn(async () => undefined),
+vi.mock('../../../session-import/legacy', () => ({
+  adoptLegacySessionBeforeOpen: vi.fn(async () => undefined),
 }));
 vi.mock('../../../embedders/chat-history-embedder', () => ({
   onMessageCreated: vi.fn(async () => undefined),
@@ -62,7 +59,8 @@ vi.mock('../../client/current', () => ({
   getDbClient: () => h.client,
 }));
 
-import { createMessage } from '../messages';
+import { commitContextRebuild, createMessage, patchMessageAgentMetaWithResult } from '../messages';
+import { setTaskChangeListener } from '../../taskEvents';
 import { tx } from '../../worker/opHandlers/tx';
 
 function setupDb(): void {
@@ -103,7 +101,7 @@ function setupDb(): void {
 }
 
 describe('teammate projection owner broadcasts', () => {
-  afterEach(() => h.sqlite?.close());
+  afterEach(() => { setTaskChangeListener(undefined); h.sqlite?.close(); });
   beforeEach(() => {
     h.broadcast.mockClear();
     h.windowSend.mockClear();
@@ -112,9 +110,24 @@ describe('teammate projection owner broadcasts', () => {
     setupDb();
   });
 
+  it('keeps a sampling metadata retry on its original database across an account switch', async () => {
+    h.sqlite!.prepare(`INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+      VALUES ('reply', 'reply', 's1', 'assistant', 'accepted', '{"samplingAttemptPending":true}', 1)`).run();
+    const pending = patchMessageAgentMetaWithResult('s1', 'reply', { samplingAttemptPending: false });
+    const nextOwnerUpdate = vi.fn(() => { throw new Error('must not write to the next owner'); });
+    h.client = { ...h.client!, drizzle: { update: nextOwnerUpdate } as unknown as ReturnType<typeof drizzle> };
+    await expect(pending).resolves.toMatchObject({ next: { samplingAttemptPending: false } });
+    expect(nextOwnerUpdate).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT agent_meta FROM messages WHERE id = ?').get('reply')).toEqual({
+      agent_meta: '{"samplingAttemptPending":false}',
+    });
+  });
+
   it.each([false, true])('keeps a projected reply on its original owner across message persistence (switch=%s)', async (switchOwner) => {
     const owner = { ownerScopeKey: 'original', ownerStamp: { dataOwnerId: 'original', ownerGeneration: 1 } };
     h.ownerScope = owner;
+    const events: unknown[] = [];
+    setTaskChangeListener((event, stamp) => events.push({ event, stamp }));
     h.duringInsert = () => {
       if (switchOwner) h.ownerScope = { ownerScopeKey: 'next', ownerStamp: { dataOwnerId: 'next', ownerGeneration: 2 } };
     };
@@ -125,12 +138,40 @@ describe('teammate projection owner broadcasts', () => {
     }, { broadcastOwnerScope: owner });
     expect(h.sqlite!.prepare('SELECT client_id FROM messages').get()).toEqual({ client_id: 'reply-anchor' });
     if (switchOwner) {
+      expect(events).toEqual([]);
       expect(h.windowSend).not.toHaveBeenCalled();
       expect(h.broadcast).not.toHaveBeenCalled();
     } else {
+      expect(events).toEqual([{ event: { kind: 'message', sessionId: 's1', message }, stamp: owner.ownerStamp }]);
       expect(h.broadcast).toHaveBeenCalledWith('local-db:messages:created', { sessionId: 's1', message }, owner.ownerStamp);
       expect(h.windowSend).toHaveBeenCalledWith('local-db:messages:created', expect.objectContaining({ message }), owner.ownerStamp);
     }
   });
 
+});
+
+
+// Persistence contract: the real Desktop wrapper must construct one atomic
+// rebuild marker with null/undefined distinctions intact; tx tests cover the
+// transaction itself but not this wrapper's metadata and timestamp choices.
+describe('context rebuild marker assembly', () => {
+  it('uses one timestamp and preserves the rejected SDK and explicit null route fields', async () => {
+    const transaction = vi.fn(async () => undefined);
+    h.client = { tx: transaction } as unknown as NonNullable<typeof h.client>;
+    const result = await commitContextRebuild('s', 'handoff', {
+      reason: 'native-session-recovery', sourceUserClientId: 'u', sourceAgentKind: 'codex',
+      sourceModel: null, sourceProviderId: null, expectedSdkSessionId: 'rejected',
+      replacementRoute: { model: 'new', providerId: 'p',
+        effort: 'high', fastMode: false, expectedSdkSessionId: 'route-original' },
+    });
+    expect(transaction).toHaveBeenCalledWith('context.rebuild', expect.objectContaining({
+      sessionId: 's', markerId: expect.any(String), markerClientId: expect.stringMatching(/^context-rebuild:/),
+      markerCreatedAt: result.updatedAt, updatedAt: result.updatedAt, expectedClearedAt: null,
+      expectedSdkSessionId: 'rejected',
+    }));
+    const args = transaction.mock.calls[0] as unknown as [string, { markerContent: string }];
+    expect(JSON.parse(args[1].markerContent)).toEqual({ handoff: 'handoff', consumed: false,
+      reason: 'native-session-recovery', sourceUserClientId: 'u', sourceAgentKind: 'codex',
+      sourceModel: null, sourceProviderId: null, sourceSdkSessionId: 'route-original' });
+  });
 });

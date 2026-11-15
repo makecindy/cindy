@@ -5,6 +5,7 @@ import {
   getUpdateBannerDismissState,
   isUpdateBannerPinnedFor,
   markUpdateBannerAutoShown,
+  revealRequestedUpdateBanner,
   useUpdateBannerDismiss,
 } from '@/hooks/useUpdateBannerDismiss';
 
@@ -57,6 +58,12 @@ export function useDeferUpdateBannerWhileBusy(
   useEffect(() => {
     if (!isActiveUpdateStatus(status)) return;
 
+    if (getUpdateBannerDismissState().revealRequested) {
+      // superseding 不消费请求；去重记录在 store 里，同一请求只展开一次。
+      revealRequestedUpdateBanner(status, versionOrNull, status === 'ready');
+      return;
+    }
+
     const read = () => apiRef.current;
 
     if (read().isNewUpdateAfterDismiss(status, versionOrNull)) {
@@ -105,7 +112,7 @@ export function useDeferUpdateBannerWhileBusy(
       cancelled = true;
       if (timer !== null) clearTimeout(timer);
     };
-  }, [status, versionOrNull, dismissApi.dismissed, dismissApi.reason, dismissApi.pinnedByUser]);
+  }, [status, versionOrNull, dismissApi.dismissed, dismissApi.reason, dismissApi.pinnedByUser, dismissApi.revealRequested, dismissApi.revealSeq]);
 
   return hideUntilDecided;
 }

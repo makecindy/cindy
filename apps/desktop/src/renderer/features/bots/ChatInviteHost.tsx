@@ -42,5 +42,5 @@ export function ChatInviteHost() {
   if (token === MALFORMED) return <ChatInviteDialog key={token} malformedLink onClose={() => dismiss(token)} />;
   return token ? <ChatInviteDialog key={token} initialLink={`cindy://chat-invite/${token}`}
     onClose={() => dismiss(token)}
-    onJoined={id => navigate(`/bots/groups/${encodeURIComponent(id)}`)} /> : null;
+    onJoined={(id, configureMask) => navigate(`/bots/groups/${encodeURIComponent(id)}${configureMask ? '?groupSettings=1&groupMask=1' : ''}`)} /> : null;
 }

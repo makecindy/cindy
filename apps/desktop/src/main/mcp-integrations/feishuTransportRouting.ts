@@ -58,7 +58,7 @@ export function createFeishuTransportResolver(deps: {
         eq(botSessionLinks.sessionId, session.sessionId),
         eq(sessions.source, 'bot'),
         // The owner's Bot Chat: the main Chat or one of its private-chat topics.
-        inArray(botSessionLinks.role, ['canonical', 'thread']),
+        inArray(botSessionLinks.role, ['canonical', 'thread', 'routine']),
       ))
       .limit(1)
       .get();

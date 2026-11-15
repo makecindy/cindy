@@ -116,6 +116,10 @@ vi.mock('../hooks/useOrcaWorkerSelection', () => ({
     workerSessionId: null,
     createOpen: false,
     setCreateOpen: mocks.setCreateOpen,
+    editWorker: null,
+    handleOpenEditWorker: vi.fn(),
+    handleCloseEditWorker: vi.fn(),
+    handleUpdateWorker: vi.fn(),
     handleCreateWorker: vi.fn(),
     handleSwitchFocus: vi.fn(),
     handleArchiveWorker: vi.fn(),
@@ -216,11 +220,13 @@ describe('OrcaWorkerPanel settings navigation wiring', () => {
   it('wires settings navigation for local leads', () => {
     render(<OrcaWorkerPanel leadSessionId="lead-1" deviceId={null} viewVisible />);
     expect(mocks.toolbarProps.onOpenSettings).toBeTypeOf('function');
+    expect(mocks.toolbarProps.onEditWorker).toBeTypeOf('function');
   });
 
   it('fails closed for unresolved device ownership', () => {
     render(<OrcaWorkerPanel leadSessionId="lead-1" viewVisible />);
     expect(mocks.toolbarProps.onOpenSettings).toBeUndefined();
+    expect(mocks.toolbarProps.onEditWorker).toBeUndefined();
   });
 });
 
@@ -283,7 +289,9 @@ describe('OrcaWorkerPanel worker on another computer', () => {
     expect(mocks.sessionViewProps).toMatchObject({ sessionIdProp: 'proxy-1' });
   });
 
-  it('offers execution devices only for a confirmed local Lead and local Agent', () => {
+  // PR #6787: the work computer no longer depends on the Lead's Agent location.
+  // Exercise the real panel's dialog contract, retaining SSH/controlled limits.
+  it('offers execution devices for a confirmed local Lead independently of its Agent location', () => {
     const { rerender } = render(
       <OrcaWorkerPanel leadSessionId="lead-1" deviceId={null} agentDeviceId={null} viewVisible />,
     );
@@ -293,9 +301,9 @@ describe('OrcaWorkerPanel worker on another computer', () => {
     rerender(<OrcaWorkerPanel leadSessionId="lead-1" deviceId="dev-1" agentDeviceId={null} viewVisible />);
     expect(mocks.createProps.executionDevicesEnabled).toBe(false);
     rerender(<OrcaWorkerPanel leadSessionId="lead-1" deviceId={null} agentDeviceId="agent-pc" viewVisible />);
-    expect(mocks.createProps.executionDevicesEnabled).toBe(false);
+    expect(mocks.createProps.executionDevicesEnabled).toBe(true);
     rerender(<OrcaWorkerPanel leadSessionId="lead-1" deviceId={null} viewVisible />);
-    expect(mocks.createProps.executionDevicesEnabled).toBe(false);
+    expect(mocks.createProps.executionDevicesEnabled).toBe(true);
     rerender(<OrcaWorkerPanel leadSessionId="lead-1" viewVisible />);
     expect(mocks.createProps.executionDevicesEnabled).toBe(false);
   });
@@ -475,14 +483,14 @@ describe('OrcaWorkersTabBody Lead Agent context', () => {
     expect(mocks.toolbarProps.clearAttentionWhenVisible).toBe(false);
   });
 
-  it.each([false, true])('hides execution devices for a remote Agent while keeping creation available (detached: %s)', async (detached) => {
+  it.each([false, true])('keeps execution devices available with a remote Agent (detached: %s)', async (detached) => {
     mocks.sidebarWindow = detached;
     mocks.sessions = [
       { id: 'other-lead', agentDeviceId: null, orcaRole: 'lead' },
       { id: 'lead-1', agentDeviceId: 'agent-pc', orcaRole: 'lead' },
     ];
     const { rerender } = render(<OrcaWorkersTabBody ctx={ctx} state={{}} active />);
-    expect(mocks.createProps.executionDevicesEnabled).toBe(false);
+    expect(mocks.createProps.executionDevicesEnabled).toBe(true);
     expect(mocks.createProps.onCreate).toBeTypeOf('function');
     await act(async () => (mocks.toolbarProps.onOpenCreate as () => void)());
     expect(mocks.setCreateOpen).toHaveBeenCalledWith(true);
@@ -492,14 +500,16 @@ describe('OrcaWorkersTabBody Lead Agent context', () => {
     expect(mocks.createProps.executionDevicesEnabled).toBe(true);
   });
 
-  it('does not offer execution devices before Lead metadata is available', () => {
+  it('keeps execution devices independent of pending Lead Agent metadata', () => {
     mocks.sessionsLoading = true;
     const { rerender } = render(<OrcaWorkersTabBody ctx={ctx} state={{}} active />);
-    expect(mocks.createProps.executionDevicesEnabled).toBe(false);
+    expect(mocks.createProps.executionDevicesEnabled).toBe(true);
+    expect(mocks.workerAgentInput?.controlledDeviceId).toBeUndefined();
 
     mocks.sessionsLoading = false;
     mocks.sessions = [{ id: 'lead-1', orcaRole: 'lead' }];
     rerender(<OrcaWorkersTabBody ctx={ctx} state={{}} active />);
     expect(mocks.createProps.executionDevicesEnabled).toBe(true);
+    expect(mocks.workerAgentInput?.controlledDeviceId).toBeNull();
   });
 });

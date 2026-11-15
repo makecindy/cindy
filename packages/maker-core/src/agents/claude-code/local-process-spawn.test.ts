@@ -31,6 +31,13 @@ function spawnProcess(overrides: {
   registerProcess?: (pid: number) => void | (() => void);
   trackDebugFile?: () => () => void;
   onStderr?: (chunk: string) => void;
+  onExit?: (details: {
+    pid: number | undefined;
+    exitCode: number | null;
+    signal: NodeJS.Signals | null;
+    abortRequested: boolean;
+  }) => void;
+  signal?: AbortSignal;
 } = {}) {
   return spawnObservedClaudeProcess({
     spawnOptions: {
@@ -38,7 +45,7 @@ function spawnProcess(overrides: {
       args: ['--output-format', 'stream-json'],
       cwd: '/work',
       env: {},
-      signal: new AbortController().signal,
+      signal: overrides.signal ?? new AbortController().signal,
     },
     ...overrides,
   });
@@ -89,5 +96,38 @@ describe('spawnObservedClaudeProcess', () => {
     ).not.toThrow();
     child.stderr.emit('data', Buffer.from('diagnostic'));
     expect(onStderr).toHaveBeenCalledWith('diagnostic');
+  });
+
+  it('reports process exit details and whether a signal was requested by the host', () => {
+    const child = makeChild(9876);
+    mocks.spawn.mockReturnValue(child);
+    const onExit = vi.fn();
+    const controller = new AbortController();
+
+    spawnProcess({ onExit, signal: controller.signal });
+    child.emit('exit', null, 'SIGTERM');
+
+    expect(onExit).toHaveBeenCalledWith({
+      pid: 9876,
+      exitCode: null,
+      signal: 'SIGTERM',
+      abortRequested: false,
+    });
+
+    const requestedChild = makeChild(9877);
+    mocks.spawn.mockReturnValue(requestedChild);
+    const requestedExit = vi.fn();
+    const requestedController = new AbortController();
+    requestedController.abort();
+
+    spawnProcess({ onExit: requestedExit, signal: requestedController.signal });
+    requestedChild.emit('exit', null, 'SIGTERM');
+
+    expect(requestedExit).toHaveBeenCalledWith({
+      pid: 9877,
+      exitCode: null,
+      signal: 'SIGTERM',
+      abortRequested: true,
+    });
   });
 });

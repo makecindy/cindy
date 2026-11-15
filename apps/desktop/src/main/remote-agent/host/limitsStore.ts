@@ -10,7 +10,8 @@ const store = createOverrideSettingsFile<RemoteAgentLimits>({
   scopeKey: () => { captureProviderManagementScope(); return activeOwnerScopeKey(); },
   defaults: DEFAULT_REMOTE_AGENT_LIMITS,
   normalize: raw => isRemoteAgentLimits(raw)
-    ? { perDevice: raw.perDevice, total: raw.total } : { ...DEFAULT_REMOTE_AGENT_LIMITS },
+    ? { perDevice: raw.perDevice, total: raw.total, idleMinutes: raw.idleMinutes ?? DEFAULT_REMOTE_AGENT_LIMITS.idleMinutes }
+    : { ...DEFAULT_REMOTE_AGENT_LIMITS },
   log: createLogger('remote-agent:limits'),
   label: 'remote-agent-limits',
   preserveUnreadableFile: true,

@@ -26,3 +26,10 @@ export interface WorkerProjectContext {
   dialogue: boolean;
   projects: Array<{ path: string; name: string; description: string; missing: boolean }>;
 }
+
+/** Actual revision used to create a Worker checkout, including a rejected preference. */
+export interface WorkerWorktreeSourceSelection {
+  sourceBranch: string;
+  source: 'memory' | 'current' | 'explicit';
+  fallbackReason?: string;
+}

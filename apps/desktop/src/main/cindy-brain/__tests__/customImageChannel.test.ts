@@ -105,8 +105,11 @@ describe('standalone custom OpenAI Images', () => {
     const h = harness(source);
     expect(source.imageModels?.[0]?.sourceAgent).toBe('pi');
     expect(h.channel.isModelReady?.(MODEL)).toBe(true);
-    await h.channel.generateImage({ model: MODEL, prompt: 'red circle' });
+    // #8673 / unit: the configured Images connection must also retain native
+    // options; the existing duplicate-model case covers its credential binding.
+    await h.channel.generateImage({ model: MODEL, prompt: 'red circle', nativeParameters: { output_compression: 0 } });
     expect(h.fetchImplementation.mock.calls[0]?.[0]).toBe('https://images.example.invalid/v1/images/generations');
+    expect(JSON.parse(String(h.fetchImplementation.mock.calls[0]?.[1]?.body)).output_compression).toBe(0);
     expect(h.readApiKey).not.toHaveBeenCalledWith(agent);
   });
 

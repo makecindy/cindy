@@ -2,6 +2,8 @@
  * Input —— DESIGN.md §4 单行输入标准控件，升格自 SettingsTextInput。
  *
  * 尺寸：sm/md/lg = 32/36/40px（DS-4 G1；输入框保留三档，按钮不设 40）。
+ * 默认 md（36px），与默认 Select、Button lg 同高；lg 只给需要宽松的字段显式选用
+ * （2026-11-11 维护者裁决 C-08）。
  * 圆角：单行一律胶囊（§5）；textarea 变体一律 8px。
  * placeholder 一律 `--text-placeholder`（§4 G3）。
  *
@@ -96,6 +98,7 @@ export interface InputProps extends Omit<
   inputRef?: Ref<HTMLInputElement>;
   /** 兼容 SettingsTextInput 的可读名称别名，映射为原生 aria-label。 */
   ariaLabel?: string;
+  /** 默认 `md`（36px）；`lg`（40px）只给需要宽松的字段。 */
   size?: InputSize;
   /** 底色档:默认 §4 规定的 `--surface-elevated`;`ivory` 见 SURFACE_STYLES 注释。 */
   surface?: InputSurface;
@@ -125,7 +128,7 @@ export function Input({
   onBlur,
   placeholder,
   type = 'text',
-  size = 'lg',
+  size = 'md',
   surface = 'elevated',
   mono = false,
   secret = false,

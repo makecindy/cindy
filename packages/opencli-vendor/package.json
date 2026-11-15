@@ -1,0 +1,41 @@
+{
+  "name": "@jackwener/opencli",
+  "version": "2.0.2",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    "./registry": "./src/registry-api.ts",
+    "./errors": "./src/errors.ts",
+    "./types": "./src/types.ts",
+    "./utils": "./src/utils.ts",
+    "./logger": "./src/logger.ts",
+    "./browser/cdp": "./src/browser/cdp.ts",
+    "./browser/page": "./src/browser/page.ts",
+    "./browser/utils": "./src/browser/utils.ts",
+    "./download": "./src/download/index.ts",
+    "./download/article-download": "./src/download/article-download.ts",
+    "./download/media-download": "./src/download/media-download.ts",
+    "./download/progress": "./src/download/progress.ts",
+    "./pipeline": "./src/pipeline/index.ts",
+    "./cindy": "./cindy/index.ts",
+    "./catalog": "./cindy/catalog.ts",
+    "./cindy/host": "./cindy/host.ts"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "acorn": "^8.19.0",
+    "cli-table3": "^0.6.5",
+    "commander": "^14.0.3",
+    "js-yaml": "^4.3.2",
+    "turndown": "^7.2.2",
+    "turndown-plugin-gfm": "^1.0.2",
+    "undici": "7.29.1",
+    "ws": "^8.18.0",
+    "@cindy/browser-control-runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/turndown": "^5.0.6",
+    "@types/js-yaml": "^4.0.9"
+  }
+}

@@ -57,6 +57,20 @@ describe('formToProjectConfig fastMode', () => {
 });
 
 describe('project automation providerId serialization', () => {
+  // PR #6832: promotion and subsequent edits must keep the provider's device.
+  // Unit: both production projections cross JSON, which previously lost it.
+  it('preserves the runtime location through promotion and form edits', () => {
+    const route = { model: 'remote-model', providerId: 'remote-provider', agentDeviceId: 'studio' };
+    const promoted = JSON.parse(JSON.stringify(scheduleToProjectConfig({
+      id: 's1', name: 'n', prompt: 'p', cronExpr: '0 9 * * *', ...route,
+    } as Schedule, 'daily')));
+    expect(promoted).toMatchObject(route);
+    const form = makeForm(route);
+    expect(JSON.parse(JSON.stringify(formToProjectConfig(form, 'daily')))).toMatchObject(route);
+    expect(JSON.parse(JSON.stringify(formToProjectConfig({ ...form, agentDeviceId: undefined }, 'daily'))))
+      .not.toHaveProperty('agentDeviceId');
+  });
+
   it('preserves an explicit provider from the form', () => {
     expect(formToProjectConfig(makeForm({ providerId: 'openai' }), 'auto-provider').providerId).toBe(
       'openai',

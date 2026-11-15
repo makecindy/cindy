@@ -98,7 +98,7 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
           onPress: mode === "code" ? props.onDone : props.onSubmit,
         };
   // A QR step shows just the code; the whole window stays one tap away.
-  const quietPicture = !snapshot.command && (!snapshot.picture || mode === "qr");
+  const quietPicture = !snapshot.command && !snapshot.agentPicture && (!snapshot.picture || mode === "qr");
   return (
     <Host colorScheme={scheme} seedColor={colors.textPrimary} pointerEvents="none" style={{ position: "absolute" }}>
       <BottomSheet
@@ -149,7 +149,9 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
                 {error}
               </Text>
             ) : null}
-            {mode === "qr" && props.qr ? <QrActions qr={props.qr} busy={busy} onClose={onClose} /> : null}
+            {mode === "qr" && props.qr ? (
+              <QrActions qr={props.qr} busy={busy} onClose={onClose} onDone={snapshot.agentPicture ? props.onDone : undefined} />
+            ) : null}
             {primary ? (
               <VStack spacing={spacing.xs}>
                 <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), multilineTextAlignment("center"), frame({ maxWidth: Infinity })]}>
@@ -247,7 +249,8 @@ function SheetHeader({ snapshot }: { snapshot: InputHandoffSnapshot }) {
       {inputHandoffWarnings(snapshot, t).map((warning) => (
         <HStack key={warning} spacing={6} alignment="top">
           <Image systemName="exclamationmark.triangle.fill" size={iconSize.sm} color={colors.warningFg} />
-          <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textPrimary), frame({ maxWidth: Infinity, alignment: "leading" })]}>{warning}</Text>
+          {/* Wraps in full: the AI-screenshot warning carries the check-the-site instruction. */}
+          <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textPrimary), frame({ maxWidth: Infinity, alignment: "leading" }), fixedSize({ horizontal: false, vertical: true })]}>{warning}</Text>
         </HStack>
       ))}
     </VStack>
@@ -355,7 +358,8 @@ function SheetField({
 }
 
 /** Scan-to-sign-in: open the link here (the app that handles it takes over), or save or share the code. */
-function QrActions({ qr, busy, onClose }: { qr: InputHandoffQrSheet; busy: boolean; onClose(): void }) {
+/** `onDone`: an agent's screenshot, where Cindy cannot see the scan finish; the owner hands back. */
+function QrActions({ qr, busy, onClose, onDone }: { qr: InputHandoffQrSheet; busy: boolean; onClose(): void; onDone?: () => void }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const shown = qr.view.state === "shown";
@@ -366,9 +370,11 @@ function QrActions({ qr, busy, onClose }: { qr: InputHandoffQrSheet; busy: boole
   const disabled = busy || !shown;
   return (
     <VStack spacing={spacing.xs}>
-      <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), multilineTextAlignment("center"), frame({ maxWidth: Infinity }), fixedSize({ horizontal: false, vertical: true })]}>
-        {t(link ? "interaction.inputHandoff.qr.hintLink" : "interaction.inputHandoff.qr.hint")}
-      </Text>
+      {onDone ? null : (
+        <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), multilineTextAlignment("center"), frame({ maxWidth: Infinity }), fixedSize({ horizontal: false, vertical: true })]}>
+          {t(link ? "interaction.inputHandoff.qr.hintLink" : "interaction.inputHandoff.qr.hint")}
+        </Text>
+      )}
       <Button
         onPress={primary.onPress}
         modifiers={[buttonStyle("plain"), disabledModifier(disabled), padding({ top: spacing.sm }), accessibilityLabel(primary.label)]}
@@ -407,6 +413,22 @@ function QrActions({ qr, busy, onClose }: { qr: InputHandoffQrSheet; busy: boole
         <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), multilineTextAlignment("center"), frame({ maxWidth: Infinity }), fixedSize({ horizontal: false, vertical: true })]}>
           {qr.notice}
         </Text>
+      ) : null}
+      {onDone ? (
+        <Button onPress={onDone} modifiers={[buttonStyle("plain"), disabledModifier(busy), padding({ top: spacing.xs }), accessibilityLabel(t("interaction.inputHandoff.action.done"))]}>
+          <Text
+            modifiers={[
+              font({ textStyle: "body", weight: "medium" }),
+              foregroundStyle(colors.textPrimary),
+              frame({ maxWidth: Infinity, minHeight: BUTTON_HEIGHT }),
+              background(colors.sheetActionSurface, shapes.capsule()),
+              strokeBorder({ color: colors.sheetActionBorder, shape: "capsule", style: { lineWidth: 1 } }),
+              contentShape(shapes.capsule()),
+            ]}
+          >
+            {t("interaction.inputHandoff.action.done")}
+          </Text>
+        </Button>
       ) : null}
       <Button onPress={onClose} modifiers={[buttonStyle("plain")]}>
         <Text

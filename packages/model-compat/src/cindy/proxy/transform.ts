@@ -90,6 +90,37 @@ export const stripToolUseProviderSpecificFields: RequestTransform = (body) => {
   return deepDeleteToolUseProviderSpecificFields(body) > 0 ? body : null;
 };
 
+/** Only lower protocol content, never tool input or schema objects with similar shapes. */
+export function lowerToolReferencesFromBody(rawBody: Buffer): Buffer | null {
+  let body: unknown;
+  try { body = JSON.parse(rawBody.toString('utf8')); } catch { return null; }
+  if (!isPlainObject(body) || !Array.isArray(body.messages)) return null;
+  let changed = false;
+  for (const message of body.messages) {
+    if (!isPlainObject(message) || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (!isPlainObject(block) || block.type !== 'tool_result' || !Array.isArray(block.content)) continue;
+      block.content = block.content.map((item: unknown) => {
+        if (!isPlainObject(item) || item.type !== 'tool_reference' || typeof item.tool_name !== 'string') return item;
+        changed = true;
+        return { type: 'text', text: `Available tool: ${item.tool_name}` };
+      });
+    }
+  }
+  return changed ? Buffer.from(JSON.stringify(body), 'utf8') : null;
+}
+
+/** Retry only after the selected upstream explicitly rejects native tool references. */
+export function createToolReferenceRecoveryRule(): RecoveryRule {
+  return {
+    id: 'unsupported_tool_reference',
+    enabled: () => true,
+    matches: text => /content type tool_reference requires a native Anthropic Messages target/i.test(text),
+    strip: lowerToolReferencesFromBody,
+    applyOnUnmatchedRetry: false,
+  };
+}
+
 /**
  * Responses `input[]` 里的上下文压缩块 (OpenAI `/v1/responses/compact` 与 xAI 同名接口
  * 都回这个形态)。它的 `encrypted_content` 装的是**压缩 blob 本体** —— 压缩点之前的
@@ -1884,5 +1915,27 @@ export function createToolExchangeAdjacencyRecoveryRule(opts: {
     strip: repairToolExchangeStructureFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
+  };
+}
+
+/** Retry only after a gateway explicitly rejects the top-level context editor (#7041). */
+export function createAnthropicContextManagementRecoveryRule(): RecoveryRule {
+  return {
+    id: 'anthropic_context_management',
+    enabled: () => true,
+    matches: (text) => /(?:^|[\s"'])context_management\s*:\s*extra inputs are not permitted\b/i.test(text),
+    strip: (body) => {
+      try {
+        const parsed: unknown = JSON.parse(body.toString('utf8'));
+        if (!isPlainObject(parsed) || !Array.isArray(parsed.messages) || !('context_management' in parsed)) return null;
+        const next = { ...parsed };
+        delete next.context_management;
+        return Buffer.from(JSON.stringify(next), 'utf8');
+      } catch {
+        return null;
+      }
+    },
+    applyOnUnmatchedRetry: false,
+    allowExtraRules: false,
   };
 }

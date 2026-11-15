@@ -51,15 +51,20 @@ describe('默认态与持久化', () => {
       enabled: false,
       telegramEnabled: false,
       xEnabled: false,
+      feishuEnabled: false,
       xCompanionBotId: null,
       urlOverride: null,
       workspaces: {},
+      retiredWorkspaces: {},
+      projectCatalogMigrated: false,
       bindingsCache: [],
       lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
       xBindingCache: null,
+      feishuBindingCache: null,
       xDefaultWorkspace: null,
       telegramDefaultWorkspace: null,
+      feishuDefaultWorkspace: null,
     });
     expect(store.effectiveUrl()).toBe(TEST_DEFAULT_URL);
   });
@@ -88,10 +93,16 @@ describe('默认态与持久化', () => {
 });
 
 describe('workspaces 校验', () => {
-  it('非法别名 / 相对路径拒绝', () => {
-    expect(() => validateWorkspaces({ 别名: path.join(dir, 'x') })).toThrow(
-      HookConnectionValidationError,
-    );
+  it('非法名称 / 相对路径拒绝; 侧栏项目名(含中文、空格)可以用', () => {
+    // 名称来自侧栏项目名, 不限字符集; 但像绝对路径的名称会被协议拒收(路径不出本机),
+    // 控制字符与首尾空白也不行。
+    for (const name of ['/etc/passwd', 'C:\\repo', 'a\nb', ' 前导空格', 'x'.repeat(33)]) {
+      expect(() => validateWorkspaces({ [name]: path.join(dir, 'x') })).toThrow(
+        HookConnectionValidationError,
+      );
+    }
+    const abs = path.join(dir, 'x');
+    expect(validateWorkspaces({ '周报 整理': abs })).toEqual({ '周报 整理': abs });
     expect(() => validateWorkspaces({ ok: 'relative/path' })).toThrow(
       HookConnectionValidationError,
     );
@@ -175,15 +186,20 @@ describe('旧多连接文件迁移', () => {
       enabled: false,
       telegramEnabled: false,
       xEnabled: false,
+      feishuEnabled: false,
       xCompanionBotId: null,
       urlOverride: null,
       workspaces: {},
+      retiredWorkspaces: {},
+      projectCatalogMigrated: false,
       bindingsCache: [],
       lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
       xBindingCache: null,
+      feishuBindingCache: null,
       xDefaultWorkspace: null,
       telegramDefaultWorkspace: null,
+      feishuDefaultWorkspace: null,
     });
   });
 });
@@ -253,32 +269,43 @@ describe('provider 与 Cindy 账号隔离', () => {
     scopeName: 'CindyBot',
   };
 
-  it('Slack/Telegram 开关独立，目录映射设备共享，绑定缓存按账号分区', () => {
+  it('Slack/Telegram/飞书开关独立，目录映射设备共享，绑定缓存按账号分区', () => {
     let fingerprint = 'account-one';
     const store = makeStore(undefined, () => fingerprint);
     const abs = path.join(dir, 'repo');
+    const feishuBinding = { ...telegramBinding, principalId: 'ou_user', scopeId: 'cli_app' };
 
     store.setEnabled(true);
     store.setProviderEnabled('telegram', true);
     store.setProviderBindingCache('telegram', telegramBinding);
+    store.setProviderEnabled('feishu', true);
+    store.setProviderBindingCache('feishu', feishuBinding);
     store.setWorkspaces({ cindy: abs });
 
     expect(store.anyProviderEnabled()).toBe(true);
     expect(store.get()).toMatchObject({
       enabled: true,
       telegramEnabled: true,
+      feishuEnabled: true,
       workspaces: { cindy: abs },
       telegramBindingCache: telegramBinding,
+      feishuBindingCache: feishuBinding,
     });
 
     fingerprint = 'account-two';
     expect(store.get()).toMatchObject({
       enabled: false,
       telegramEnabled: false,
+      feishuEnabled: false,
       workspaces: { cindy: abs },
       bindingsCache: [],
       telegramBindingCache: null,
+      feishuBindingCache: null,
     });
+    // 只开飞书也算有 provider 开着(决定是否需要建连)。
+    store.setProviderEnabled('feishu', true);
+    expect(store.anyProviderEnabled()).toBe(true);
+    store.setProviderEnabled('feishu', false);
 
     store.setProviderEnabled('telegram', true);
     fingerprint = 'account-one';
@@ -352,58 +379,105 @@ describe('provider 与 Cindy 账号隔离', () => {
       expect(store.setProviderDefaultWorkspace('x', null).xDefaultWorkspace).toBeNull();
     });
 
-    it('两个 provider 各存一份, 互不影响', () => {
+    // 规则: 清单由侧栏项目投影而来(projectWorkspaces.ts)。项目改名时默认项目必须跟着改名 ——
+    // 按「清单外」清掉的话, 侧栏里改个名字, 默认项目就悄悄退回「对话」。
+    it('按项目列表落清单: 改名的默认项目跟着改名, 移除的清掉, 旧名称与迁移标记落盘', () => {
       const store = makeStore();
-      store.setWorkspaces({ cindy: '/Users/dash/Code/cindy', other: '/tmp/other' });
+      store.setWorkspaces({ xdmaker: '/code/cindy', docs: '/code/docs' });
+      store.setProviderDefaultWorkspace('feishu', 'xdmaker');
+
+      const next = store.applyProjectWorkspaces({
+        workspaces: { 主仓库: '/code/cindy' },
+        retired: { xdmaker: '/code/cindy' },
+        renames: [{ from: 'xdmaker', to: '主仓库' }],
+      });
+      expect(next.workspaces).toEqual({ 主仓库: '/code/cindy' });
+      expect(next.feishuDefaultWorkspace).toBe('主仓库');
+      expect(next.xDefaultWorkspace).toBe('主仓库');
+      store.markProjectCatalogMigrated();
+
+      expect(makeStore().get()).toMatchObject({
+        workspaces: { 主仓库: '/code/cindy' },
+        retiredWorkspaces: { xdmaker: '/code/cindy' },
+        projectCatalogMigrated: true,
+        feishuDefaultWorkspace: '主仓库',
+      });
+    });
+
+    // 规则: 默认项目所有官方机器人共用一个(不再每个机器人各选一个)。
+    // 生产入口: store 的读写。可观察结果: 从任一机器人的入口改, 三处读到同一个值, 清空也一起清。
+    // 最小失败输入: 先后从两个入口各写一次。tier: unit。
+    it('默认项目所有官方机器人共用一个: 任一入口写入或清空, 三处一起变', () => {
+      const store = makeStore();
+      store.setWorkspaces({ cindy: '/code/cindy', other: '/tmp/other' });
 
       store.setProviderDefaultWorkspace('telegram', 'cindy');
+      expect(store.get()).toMatchObject({
+        telegramDefaultWorkspace: 'cindy', xDefaultWorkspace: 'cindy', feishuDefaultWorkspace: 'cindy',
+      });
       store.setProviderDefaultWorkspace('x', 'other');
-      expect(store.get().telegramDefaultWorkspace).toBe('cindy');
-      expect(store.get().xDefaultWorkspace).toBe('other');
-
-      // 清掉一个不得连带清掉另一个 —— 泛化前只有一个字段, 很容易写成共用。
-      store.setProviderDefaultWorkspace('telegram', null);
-      expect(store.get().telegramDefaultWorkspace).toBeNull();
-      expect(store.get().xDefaultWorkspace).toBe('other');
+      expect(store.get()).toMatchObject({
+        telegramDefaultWorkspace: 'other', xDefaultWorkspace: 'other', feishuDefaultWorkspace: 'other',
+      });
+      store.setProviderDefaultWorkspace('feishu', null);
+      expect(store.get()).toMatchObject({
+        telegramDefaultWorkspace: null, xDefaultWorkspace: null, feishuDefaultWorkspace: null,
+      });
     });
 
-    it('旧配置文件没有 telegram.defaultWorkspace 键: 读成 null, 不需要迁移动作', () => {
+    // 持久化兼容: 升级前每个机器人各存各的默认项目, 存档里三处可能不一样(也可能缺键)。
+    // 可观察结果: 不需要迁移动作, 读出来按 飞书 -> Telegram -> X 取第一个仍然可选的。
+    // 最小失败输入: 飞书没设、Telegram 缺键、X 设过。tier: unit。
+    it('升级前各存各的默认项目: 读出来按 飞书 -> Telegram -> X 取第一个可选的', () => {
       const store = makeStore();
-      store.setWorkspaces({ cindy: '/Users/dash/Code/cindy' });
+      store.setWorkspaces({ cindy: '/code/cindy', other: '/tmp/other' });
       store.setProviderDefaultWorkspace('x', 'cindy');
-
-      // 手工把这个键删掉, 模拟升级前写下的存档。
       const raw = JSON.parse(fs.readFileSync(filePath(), 'utf-8')) as {
-        accounts: Record<string, { telegram: Record<string, unknown> }>;
+        accounts: Record<string, Record<'telegram' | 'x' | 'feishu', Record<string, unknown>>>;
       };
-      delete raw.accounts['account-test'].telegram.defaultWorkspace;
+      const account = raw.accounts['account-test'];
+      account.feishu.defaultWorkspace = null;
+      delete account.telegram.defaultWorkspace;
+      account.x.defaultWorkspace = 'cindy';
       fs.writeFileSync(filePath(), JSON.stringify(raw), 'utf-8');
+      expect(makeStore().get()).toMatchObject({
+        telegramDefaultWorkspace: 'cindy', xDefaultWorkspace: 'cindy', feishuDefaultWorkspace: 'cindy',
+      });
 
-      const reopened = makeStore();
-      expect(reopened.get().telegramDefaultWorkspace).toBeNull();
-      // 同一份存档里 X 那份不受影响。
-      expect(reopened.get().xDefaultWorkspace).toBe('cindy');
+      account.telegram.defaultWorkspace = 'other';
+      fs.writeFileSync(filePath(), JSON.stringify(raw), 'utf-8');
+      expect(makeStore().get()).toMatchObject({
+        telegramDefaultWorkspace: 'other', xDefaultWorkspace: 'other', feishuDefaultWorkspace: 'other',
+      });
     });
 
-    it('目录被删掉后两个 provider 的默认值都归零(存档层面也删掉)', () => {
+    it('目录被删掉后每个 provider 的默认值都归零(存档层面也删掉)', () => {
       const store = makeStore();
       store.setWorkspaces({ cindy: '/Users/dash/Code/cindy', other: '/tmp/other' });
       store.setProviderDefaultWorkspace('telegram', 'cindy');
       store.setProviderDefaultWorkspace('x', 'cindy');
+      store.setProviderDefaultWorkspace('feishu', 'cindy');
+      expect(store.get().feishuDefaultWorkspace).toBe('cindy');
 
       store.setWorkspaces({ other: '/tmp/other' });
       expect(store.get().telegramDefaultWorkspace).toBeNull();
       expect(store.get().xDefaultWorkspace).toBeNull();
+      expect(store.get().feishuDefaultWorkspace).toBeNull();
 
-      // 只清一个 provider 会让另一个的失效别名留在盘上, 用户重建同名别名时复活。
+      // 漏清一个 provider 会让它的失效别名留在盘上, 用户重建同名别名时复活。
       const raw = JSON.parse(fs.readFileSync(filePath(), 'utf-8')) as {
         accounts: Record<
           string,
-          { telegram: { defaultWorkspace: string | null }; x: { defaultWorkspace: string | null } }
+          {
+            telegram: { defaultWorkspace: string | null };
+            x: { defaultWorkspace: string | null };
+            feishu: { defaultWorkspace: string | null };
+          }
         >;
       };
       expect(raw.accounts['account-test'].telegram.defaultWorkspace).toBeNull();
       expect(raw.accounts['account-test'].x.defaultWorkspace).toBeNull();
+      expect(raw.accounts['account-test'].feishu.defaultWorkspace).toBeNull();
     });
 
     it('未配置的别名写入即拒(非法值会在下次握手时被协议拒收, 那时离操作已经很远)', () => {
@@ -460,4 +534,22 @@ it('persists X companion assignment only for the current account', () => {
   expect(store.get().xCompanionBotId).toBe('bot-one');
   store.setXCompanionBotId(null);
   expect(makeStore(undefined, () => owner).get().xCompanionBotId).toBeNull();
+});
+
+
+// User requirement: the account list is presentation-only and must survive restart
+// without leaking identities when the Cindy account changes. Uses the production store.
+// Review gap: a null display name on the first identity must survive disk reload too.
+it('persists store Feishu identities by Cindy account and preserves the legacy first-account cache', () => {
+  let account = 'account-a';
+  const rows = ['alice', 'bob'].map((id) => ({ bindingId: id, principalId: `ou_${id}`, principalName: id,
+    scopeId: 'cli_store', scopeName: id === 'alice' ? null : 'Cindy', tenantKey: `tenant-${id}` }));
+  const store = makeStore(undefined, () => account);
+  store.setFeishuBindingsCache(rows);
+  expect(makeStore(undefined, () => account).get().feishuBindingsCache).toEqual(rows);
+  expect(store.get().feishuBindingCache).toEqual(rows[0]);
+  account = 'account-b'; expect(store.get().feishuBindingsCache).toBeUndefined();
+  account = 'account-a'; expect(store.get().feishuBindingsCache).toEqual(rows);
+  store.setFeishuBindingsCache([rows[1]!]);
+  expect(store.get().feishuBindingsCache).toEqual([rows[1]]);
 });

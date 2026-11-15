@@ -95,7 +95,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
             if (event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
         >
-          <Dialog.Title className="text-16 font-semibold text-[var(--confirm-title)]">
+          <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
             {t('settings.cindyMake.create.title')}
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-13 leading-relaxed text-[var(--confirm-desc)]">
@@ -125,7 +125,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
                   rows={5}
                   maxLength={MAX_REQUEST_LENGTH}
                   disabled={starting}
-                  className="min-h-[120px] resize-y placeholder:opacity-55"
+                  className="min-h-[120px] resize-y"
                   onKeyDown={(event) => {
                     if (
                       event.key === 'Enter' &&

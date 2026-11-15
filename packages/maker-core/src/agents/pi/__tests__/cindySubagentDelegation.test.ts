@@ -9,7 +9,7 @@ import { CINDY_SUBAGENT_EXTENSION_SOURCE } from '../cindy-subagent-source.js';
 
 // Execute the exact staged extension, including its filesystem mailbox and
 // lifecycle handlers. Export helpers only in this test's in-memory module.
-const compiled = ts.transpileModule(CINDY_SUBAGENT_EXTENSION_SOURCE + '\nexport { parentContextSnapshot, createResultDelivery };', {
+const compiled = ts.transpileModule(CINDY_SUBAGENT_EXTENSION_SOURCE + '\nexport { parentContextSnapshot, createResultDelivery, resolveTaskModelRoutes, normalizeInvocation, modelProviderMap, singleTaskDisplayModel };', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const nativeRequire = createRequire(import.meta.url);
@@ -48,7 +48,7 @@ async function fixture(fsOverrides: Record<string, unknown> = {}) {
   const ctx = { ui: { input: vi.fn(async (_title: string, _payload: string) => JSON.stringify({ ok: true })) },
     sessionManager: { getBranch: () => [] }, hasPendingMessages: () => false };
   const execute = (params: any, signal = new AbortController().signal) => tool.execute('control-id', params, signal, undefined, ctx);
-  return { root, runId, dir, status, publish, hooks, pi, ctx, execute };
+  return { root, runId, dir, status, publish, hooks, pi, ctx, execute, tool };
 }
 const boundary = { outcome: 'completed', context: { pendingMessages: [] } };
 function restorePending(f: Awaited<ReturnType<typeof fixture>>) {
@@ -300,5 +300,151 @@ describe('Pi delegation behavior', () => {
     f.status.tasks.forEach(task => { task.status = 'completed'; task.output = 'CHILD_RESULT'; });
     await f.publish();
     expect((await operation).entries[0].content).toContain('CHILD_RESULT');
+  });
+});
+
+describe('Pi subagent provider selection', () => {
+  // 同一裸模型 id 在两个真实连接下重名(ex: 智谱 Coding Plan 与 OpenCode Go 都有 glm-5.3-flash),
+  // 父会话在第三个 provider 上时,只有调用方显式点名的 provider 能消歧。
+  const runtime = {
+    model: 'parent-model',
+    provider: 'parent',
+    modelRoutes: {
+      'parent-model': [{ provider: 'parent', model: 'parent-model' }],
+      'glm-5.3-flash': [
+        { provider: 'opencode-go', model: 'glm-5.3-flash', sourceProviderId: 'opencode-go' },
+        { provider: 'glm-coding-plan', model: 'glm-5.3-flash', sourceProviderId: 'glm-coding-plan' },
+      ],
+      'gateway-model': [
+        { provider: 'cindy', model: 'gateway-model', sourceProviderId: 'cindy-gateway', proxySessionAuth: true },
+        { provider: 'commandcode', model: 'gateway-model', sourceProviderId: 'commandcode' },
+      ],
+      // ChatGPT 订阅与一条来源 id 恰好叫 openai-codex 的自定义连接提供同一个模型。
+      'chatgpt/gpt-5.4': [
+        { provider: 'openai-codex', model: 'gpt-5.4', sourceProviderId: 'openai', proxySessionAuth: true },
+        { provider: 'cindy-byom-openai-codex', model: 'chatgpt/gpt-5.4', sourceProviderId: 'openai-codex' },
+      ],
+      // 父会话 provider 与前缀隐含来源各命中一条不同连接。
+      'claude-5-sonnet': [
+        { provider: 'anthropic', model: 'claude-5-sonnet', sourceProviderId: 'anthropic', proxySessionAuth: true },
+        { provider: 'parent', model: 'claude-5-sonnet', sourceProviderId: 'parent' },
+      ],
+    },
+  };
+  const route = (task: { model?: string; provider?: string }) => {
+    const tasks = [task];
+    extension.resolveTaskModelRoutes(tasks, runtime);
+    return tasks[0] as Record<string, unknown>;
+  };
+
+  it('routes a child to the provider the caller names for an ambiguous model', () => {
+    expect(route({ model: 'glm-5.3-flash', provider: 'glm-coding-plan' })).toMatchObject({
+      routeProvider: 'glm-coding-plan',
+      routeModel: 'glm-5.3-flash',
+      routeSourceProviderId: 'glm-coding-plan',
+      routeProxySessionAuth: false,
+    });
+  });
+
+  it('accepts the Cindy source id even when the runtime provider name differs', () => {
+    expect(route({ model: 'gateway-model', provider: 'cindy-gateway' })).toMatchObject({
+      routeProvider: 'cindy',
+      routeProxySessionAuth: true,
+    });
+  });
+
+  it('keeps the parent model when only a provider is given', () => {
+    expect(route({ provider: 'parent' })).toMatchObject({
+      routeProvider: 'parent',
+      routeModel: 'parent-model',
+    });
+  });
+
+  // 前台卡片的模型 chip 只吃进度帧里的这个值:报父会话模型会让委派给别的模型的子代理
+  // 在卡片上显示成父模型(右栏面板读 status.json 的 displayModel,两边同屏矛盾)。
+  it('reports the child task model on a card frame, never the parent model', () => {
+    const cardModel = (tasks: Array<{ model?: string; provider?: string }>) => {
+      const routed = tasks.map(task => ({ ...task }));
+      extension.resolveTaskModelRoutes(routed, runtime);
+      return extension.singleTaskDisplayModel(routed, runtime);
+    };
+    expect(cardModel([{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }])).toBe('glm-5.3-flash');
+    // 未指定模型:继承父会话模型(路由解析同样把 routeModel 落成父模型)。
+    expect(cardModel([{}])).toBe('parent-model');
+    // 批次内模型一致:仍然显示。
+    expect(cardModel([
+      { model: 'glm-5.3-flash', provider: 'glm-coding-plan' },
+      { model: 'glm-5.3-flash', provider: 'opencode-go' },
+    ])).toBe('glm-5.3-flash');
+    // 批次内模型不同:不猜(宿主读状态文件时对这种情况发 model: null)。
+    expect(cardModel([
+      { model: 'glm-5.3-flash', provider: 'glm-coding-plan' },
+      { model: 'gateway-model', provider: 'commandcode' },
+    ])).toBeUndefined();
+  });
+
+  it('rejects a provider that does not offer the model and lists the ones that do', () => {
+    expect(() => route({ model: 'glm-5.3-flash', provider: 'commandcode' })).toThrow(
+      'provider "commandcode" does not offer model "glm-5.3-flash" in this session. '
+      + 'Providers for this model: opencode-go, glm-coding-plan.',
+    );
+  });
+
+  it('points an unqualified ambiguous model at the provider knob', () => {
+    expect(() => route({ model: 'glm-5.3-flash' })).toThrow(
+      'is available from multiple providers: opencode-go, glm-coding-plan. Pass provider',
+    );
+  });
+
+  it('rejects a name that is both a runtime provider and another connection source id', () => {
+    expect(() => route({ model: 'chatgpt/gpt-5.4', provider: 'openai-codex' })).toThrow(
+      'provider "openai-codex" matches 2 connections for model "chatgpt/gpt-5.4". '
+      + 'Pass one of: openai, cindy-byom-openai-codex.',
+    );
+  });
+
+  it('sends each colliding name to its own connection', () => {
+    expect(route({ model: 'chatgpt/gpt-5.4', provider: 'openai' })).toMatchObject({
+      routeProvider: 'openai-codex',
+      routeSourceProviderId: 'openai',
+      routeProxySessionAuth: true,
+    });
+    expect(route({ model: 'chatgpt/gpt-5.4', provider: 'cindy-byom-openai-codex' })).toMatchObject({
+      routeProvider: 'cindy-byom-openai-codex',
+      routeSourceProviderId: 'openai-codex',
+    });
+  });
+
+  it('lists only names that resolve to one connection in capabilities', () => {
+    expect(extension.modelProviderMap(runtime)['chatgpt/gpt-5.4'])
+      .toEqual(['openai', 'cindy-byom-openai-codex']);
+  });
+
+  it('keeps the pre-existing prefix-before-parent order when no provider is given', () => {
+    // 本 PR 不调整未传 provider 时的优先级:前缀隐含来源仍然压过父会话 provider。
+    expect(route({ model: 'claude-5-sonnet' })).toMatchObject({
+      routeProvider: 'anthropic',
+      routeSourceProviderId: 'anthropic',
+    });
+    // 显式 provider 则可以越过这条顺序,直接选父会话那个连接。
+    expect(route({ model: 'claude-5-sonnet', provider: 'parent' })).toMatchObject({
+      routeProvider: 'parent',
+      routeSourceProviderId: 'parent',
+    });
+  });
+
+  it('accepts provider at call level and per task, and exposes it in the tool schema', async () => {
+    const callLevel = extension.normalizeInvocation({ agent: 'worker', task: 'x', provider: 'glm-coding-plan' });
+    expect(callLevel.tasks[0].provider).toBe('glm-coding-plan');
+    const perTask = extension.normalizeInvocation({
+      agent: 'worker', task: 'x', provider: 'call-level',
+      tasks: [{ agent: 'worker', task: 'a' }, { agent: 'reviewer', task: 'b', provider: 'task-level' }],
+    });
+    expect(perTask.tasks.map((task: { provider: string }) => task.provider))
+      .toEqual(['call-level', 'task-level']);
+    expect(extension.normalizeInvocation({ agent: 'worker', task: 'x' }).tasks[0].provider).toBe('');
+    const f = await fixture();
+    expect(f.tool.parameters.properties.provider.type).toBe('string');
+    expect(f.tool.parameters.properties.tasks.items.properties.provider.type).toBe('string');
   });
 });

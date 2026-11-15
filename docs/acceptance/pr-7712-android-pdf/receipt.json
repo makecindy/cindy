@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "relatedPr": 7712,
+  "testedSourceCommit": "b24232bb01f3f56ea19d460fc0c5df1c8da79f8e",
+  "platform": "Android API 36 arm64 Google APIs",
+  "package": {
+    "applicationId": "com.xd.cindy",
+    "variant": "release, locally debug signed, embedded JS",
+    "sha256": "e56a2b9f72aa8d5b0e1f0a89e7c1e7529dac5b5bbe395de17cd8d09bba8d2f89",
+    "matchesLocal": true,
+    "otaEnabled": false,
+    "mock": false,
+    "metroRequired": false
+  },
+  "result": "passed",
+  "scope": "Android emulator; physical device coverage substituted by emulator per acceptance agreement relayed by the requester",
+  "checks": {
+    "matchingApkInstalled": "passed",
+    "nativePdfSelection": "passed",
+    "onlineGroupSend": "passed",
+    "pdfOpen": "passed",
+    "historyReentry": "passed",
+    "companionPdfContentAnswer": "passed",
+    "onlineDownloadByteIntegrity": "passed"
+  },
+  "sample": {
+    "path": "sample.pdf",
+    "bytes": 962,
+    "sha256": "55d2bccdae1a5d2eed208c0779a808475e55c607d700dbdd01a484c131be4d2a",
+    "expected": {
+      "verificationCode": "NOVA-A5D748",
+      "greenSquares": 4,
+      "purpleSquares": 3,
+      "total": 7
+    }
+  },
+  "onlineReadback": {
+    "bytes": 962,
+    "sha256": "55d2bccdae1a5d2eed208c0779a808475e55c607d700dbdd01a484c131be4d2a",
+    "matchesUploadedFixture": true
+  },
+  "companion": {
+    "requestLabel": "QA-7712-PDF-RECHECK-1430",
+    "requestContainsExpectedAnswer": false,
+    "attachmentIncluded": true,
+    "replyCompleted": true,
+    "answeredAt": "2026-10-30T06:09:57.003Z",
+    "actualAnswer": "Verification code：NOVA-A5D748\n绿色方块：4 个\n紫色方块：3 个\n总数：7 个",
+    "runtime": {
+      "harness": "codex",
+      "model": "gpt-6.1-sol",
+      "providerKind": "local connected OpenAI",
+      "effort": "medium",
+      "fast": false
+    },
+    "matchesExpected": true
+  },
+  "evidence": [
+    {
+      "path": "native-picker.jpg",
+      "sha256": "d1b90c41521469aa64726d4e6db7e0d03570a89d82f3d0934f224709a37e11c3"
+    },
+    {
+      "path": "pdf-open.jpg",
+      "sha256": "cdeaa440b3808231ae91e03da80f8c2f89f44a19c1bfcfff2d7bea50dfb1aa07"
+    },
+    {
+      "path": "companion-answer.png",
+      "sha256": "259896dbc94470a5fc47c1da39e84878f74dfe6feaed5a623e88e69742263910"
+    },
+    {
+      "path": "sample.pdf",
+      "sha256": "55d2bccdae1a5d2eed208c0779a808475e55c607d700dbdd01a484c131be4d2a"
+    }
+  ],
+  "limitations": [
+    "Android emulator API 36 arm64 only; no additional physical device or iOS pass claimed.",
+    "Two reloads occurred in the Metro-backed debug build after picker return. The same-source standalone release package completed the chain; debug reload root cause remains undetermined.",
+    "This acceptance record targets the tested PR source, not all subsequent main changes."
+  ],
+  "screenshotNotes": {
+    "companion-answer.png": "Recaptured from the existing successful reply at 2026-10-30T06:58:43.834Z using native screenshot region; excludes identities; no new test message sent."
+  }
+}

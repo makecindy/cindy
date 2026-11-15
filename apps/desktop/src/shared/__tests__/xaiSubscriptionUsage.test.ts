@@ -62,6 +62,16 @@ describe('parseXaiBillingCreditsConfig', () => {
     expect(parsed?.creditUsagePercent).toBe(40);
   });
 
+  it('converts prepaidBalance.val from cents into dollars', () => {
+    const parsed = parseXaiBillingCreditsConfig({
+      config: {
+        creditUsagePercent: 28,
+        prepaidBalance: { val: 3741 },
+      },
+    });
+    expect(parsed?.prepaidBalance).toBe(37.41);
+  });
+
   it('returns null when neither percent nor reset exists', () => {
     expect(parseXaiBillingCreditsConfig({ config: { prepaidBalance: { val: 0 } } })).toBeNull();
     expect(parseXaiBillingCreditsConfig(null)).toBeNull();

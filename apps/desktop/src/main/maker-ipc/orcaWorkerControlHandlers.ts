@@ -11,6 +11,12 @@ type IdleWorkerExpectedStatus = 'done';
 export interface OrcaWorkerControlHandlerDeps {
   idleWorker(params: { callerLeadSessionId: string; workerId: string; expectedStatus?: IdleWorkerExpectedStatus }): Promise<OrcaWorkerControlResult>;
   archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaWorkerControlResult>;
+  updateWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }): Promise<OrcaWorkerControlResult>;
   logInfo(message: string, fields?: Record<string, unknown>): void;
 }
 
@@ -59,6 +65,24 @@ export function registerOrcaWorkerControlHandlers(
     deps.logInfo('archiveWorker done', { workerId: b.workerId });
     return result;
   });
+
+  registry.handle(MAKER_INVOKE.WORKER_UPDATE, async (_e, body: unknown) => {
+    const b = readWorkerUpdatePayload(body);
+    let result: Awaited<ReturnType<OrcaWorkerControlHandlerDeps['updateWorker']>>;
+    try {
+      result = await deps.updateWorker({
+        callerLeadSessionId: b.leadSessionId,
+        workerId: b.workerId,
+        ...(b.role !== undefined ? { role: b.role } : {}),
+        ...(b.label !== undefined ? { label: b.label } : {}),
+      });
+    } catch (err) {
+      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+    if (!result.ok) throwOrcaServiceFailure(result);
+    deps.logInfo('updateWorker done', { workerId: b.workerId });
+    return result;
+  });
 }
 
 function readWorkerControlPayload(body: unknown): {
@@ -76,5 +100,31 @@ function readWorkerControlPayload(body: unknown): {
     leadSessionId: b.leadSessionId,
     workerId: b.workerId,
     ...(b.expectedStatus === 'done' ? { expectedStatus: 'done' } : {}),
+  };
+}
+
+function readWorkerUpdatePayload(body: unknown): {
+  leadSessionId: string;
+  workerId: string;
+  role?: string;
+  label?: string;
+} {
+  const b = body as Record<string, unknown> | null | undefined;
+  if (!b || typeof b.workerId !== 'string') throwIpcError('INVALID_PARAMS', 'workerId required');
+  if (typeof b.leadSessionId !== 'string') throwIpcError('INVALID_PARAMS', 'leadSessionId required');
+  if (b.role !== undefined && typeof b.role !== 'string') {
+    throwIpcError('INVALID_PARAMS', 'role must be a string');
+  }
+  if (b.label !== undefined && typeof b.label !== 'string') {
+    throwIpcError('INVALID_PARAMS', 'label must be a string');
+  }
+  if (b.role === undefined && b.label === undefined) {
+    throwIpcError('INVALID_PARAMS', 'role or label required');
+  }
+  return {
+    leadSessionId: b.leadSessionId,
+    workerId: b.workerId,
+    ...(typeof b.role === 'string' ? { role: b.role } : {}),
+    ...(typeof b.label === 'string' ? { label: b.label } : {}),
   };
 }

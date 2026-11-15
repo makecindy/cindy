@@ -2,7 +2,9 @@
  * 单轮费用计算。定价先看实际 billing route，再看模型；模型名不再决定来源。
  */
 
+import { isByokProviderId, type AgentKind } from '@cindy/model-providers';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import type { UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
 
 import { gatewayLedgerCurrency, getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import {
@@ -26,6 +28,8 @@ export interface TurnTokenDeltas {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreateTokens: number;
+  /** cacheCreateTokens 中按 1h TTL 写入的部分；缺省视为全部 5m 写入。 */
+  cacheCreate1hTokens?: number;
 }
 
 export interface TurnUsageSegment extends TurnTokenDeltas {
@@ -71,6 +75,11 @@ export function normalizeTurnUsageSegments(value: unknown): TurnUsageSegment[] {
     ) {
       segment.priceVariant = raw.priceVariant;
     }
+    const cacheCreate1hTokens = Math.min(
+      finiteNonNegative(raw.cacheCreate1hTokens),
+      segment.cacheCreateTokens,
+    );
+    if (cacheCreate1hTokens > 0) segment.cacheCreate1hTokens = cacheCreate1hTokens;
     if (costUsd > 0) segment.costUsd = costUsd;
     if (raw.complete === true || raw.complete === false) segment.complete = raw.complete;
     segments.push(segment);
@@ -179,6 +188,12 @@ export function computeGatewayTurnCost(
     band?.cacheCreatePerMtok ??
     tariff.cacheCreatePerMtok ??
     (priority && price.source === 'gateway' ? price.cacheCreatePerMtok : undefined);
+  // 1h TTL 写入有独立且更高的单价。报价未声明 1h 单价时
+  // （如 Gateway）沿用 5m 单价，不让本来可计价的轮次变成无价。
+  const cacheCreate1hPrice =
+    band?.cacheCreate1hPerMtok ?? tariff.cacheCreate1hPerMtok ?? cacheCreatePrice;
+  const cacheCreate1hTokens = Math.min(tokens.cacheCreate1hTokens ?? 0, tokens.cacheCreateTokens);
+  const cacheCreate5mTokens = tokens.cacheCreateTokens - cacheCreate1hTokens;
   if (
     (tokens.inputTokens > 0 && inputPrice === undefined) ||
     (tokens.outputTokens > 0 && outputPrice === undefined) ||
@@ -191,7 +206,8 @@ export function computeGatewayTurnCost(
     (tokens.inputTokens * (inputPrice ?? 0) +
       tokens.outputTokens * (outputPrice ?? 0) +
       tokens.cacheReadTokens * (cacheReadPrice ?? 0) +
-      tokens.cacheCreateTokens * (cacheCreatePrice ?? 0)) /
+      cacheCreate5mTokens * (cacheCreatePrice ?? 0) +
+      cacheCreate1hTokens * (cacheCreate1hPrice ?? 0)) /
     1_000_000
   );
 }
@@ -228,7 +244,8 @@ export function computePriceQuoteTurnMoney(
       : computeGatewayTurnCost(tokens, price);
   if (standardAmount == null) return null;
   const discount =
-    price.source === 'gateway' &&
+    (price.source === 'gateway' ||
+      (price.source === 'provider-reference' && isByokProviderId(price.providerId))) &&
     typeof price.costDiscount === 'number' &&
     Number.isFinite(price.costDiscount) &&
     price.costDiscount > 0 &&
@@ -274,13 +291,14 @@ export function computePriceQuoteTurnMoney(
 
 export function resolveTurnCost(args: {
   rawModel: string;
+  agent?: AgentKind;
   tokens: TurnTokenDeltas;
   sdkCostDelta?: number;
   pricing: ModelPricingCatalog | null | undefined;
   context: TurnPricingContext;
   segments?: readonly TurnUsageSegment[];
 }): TurnCostResolution {
-  const { rawModel, tokens, sdkCostDelta, pricing, context, segments } = args;
+  const { rawModel, agent = 'claude-code', tokens, sdkCostDelta, pricing, context, segments } = args;
   const model = normalizeModelIdForPricing(rawModel);
 
   // An explicit provider API route is authoritative. User-defined providers may legitimately
@@ -317,7 +335,7 @@ export function resolveTurnCost(args: {
 
   const providerQuote =
     context.billingRoute === 'provider-api'
-      ? getModelPriceQuote(pricing, context.providerId, model, 'claude-code')
+      ? getModelPriceQuote(pricing, context.providerId, model, agent)
       : undefined;
   if (context.accessKind === 'managed') {
     return {
@@ -551,12 +569,21 @@ export function buildClaudeTurnUsageDetails(
   perModel?: ResolvedModelCost[],
   durationMs?: number,
   turnDurationMs?: number,
+  billing?: UsageBillingSource,
 ): TurnUsageDetails | null {
   const hasModelUsageDeltas = Boolean(deltas && deltas.length > 0);
   const perModelCost = perModel
     ?.filter((item) => item.money && item.money.amount > 0)
-    .map((item) => ({ model: item.model, money: item.money! }));
+    .map((item) => {
+      const billingSource = item.source === 'gateway' ? 'cindy-ai' as const
+        : item.source === 'subscription' ? 'subscription' as const : billing?.billingSource;
+      // A bridge can use another account type in the same turn. Never attach
+      // the selected provider's identity to that different billing source.
+      return { model: item.model, money: item.money!,
+        ...(billingSource === billing?.billingSource ? billing : {}), billingSource };
+    });
   return buildTurnUsageDetails({
+    ...billing,
     inputTokens: hasModelUsageDeltas
       ? deltas?.reduce((sum, delta) => sum + delta.inputTokensDelta, 0)
       : usage?.input_tokens,

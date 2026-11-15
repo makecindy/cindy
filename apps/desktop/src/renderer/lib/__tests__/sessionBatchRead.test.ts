@@ -73,4 +73,12 @@ describe('shared local and remote metadata reads', () => {
     expect((await readSessionBatch(['s']))[0].value?.status).toBe('archived');
     expect(getMany).toHaveBeenCalledTimes(2);
   });
+
+  it.each([undefined, null, '2026-09-13T00:00:00Z'])('accepts the optional activity field from old and new hosts: %s', async lastActivityAt => {
+    const session = { ...row('s'), lastActivityAt };
+    invoke.mockResolvedValueOnce([session]);
+    expect(await readSessionBatch(['s'], 'desktop')).toEqual([{ sessionId: 's', value: session }]);
+    invoke.mockResolvedValueOnce([{ ...session, lastActivityAt: 123 }]);
+    expect(await readSessionBatch(['s'], 'desktop')).toEqual([{ sessionId: 's' }]);
+  });
 });

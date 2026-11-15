@@ -677,3 +677,60 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     );
   });
 });
+
+// Regression: object-form capability replies carry the same bounded metadata stamp
+// as provider lists; the renderer cache must not outlive the forwarded deadline.
+it('expires a remote capabilities snapshot at the forwarded host deadline', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  try {
+    const invoke = vi.fn(async (deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`${deviceId}:${String(args[0])}`),
+      providerContinuity: { stale: true, remainingMs: 1000 },
+    }));
+    const getCapabilities = vi.fn(async (kind: string) => caps(`local:${kind}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    await mod.prefetchDeviceCapabilities('dev-1');
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).not.toBeNull();
+
+    invoke.mockRejectedValue(new Error('[DEVICE_LINK_NOT_CONNECTED] offline'));
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+// Regression: a retained capability refresh keeps the display payload while the
+// new read is in flight, but it must not clear the forwarded deadline. Otherwise
+// a hung refresh can leave the old capabilities on screen indefinitely.
+it('keeps the host deadline across a retained capability refresh', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  try {
+    const invoke = vi.fn(async (deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`${deviceId}:${String(args[0])}`),
+      providerContinuity: { stale: true, remainingMs: 1000 },
+    }));
+    const getCapabilities = vi.fn(async (kind: string) => caps(`local:${kind}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    await mod.prefetchDeviceCapabilities('dev-1');
+    const events = vi.fn();
+    const off = mod.subscribeDeviceCapabilities('dev-1', 'codex', events);
+    events.mockClear();
+
+    mod.evictDeviceCapabilities('dev-1', { retainDisplaySnapshot: true });
+    expect(events).toHaveBeenCalledWith({ status: 'loading', retainDisplaySnapshot: true });
+    await vi.advanceTimersByTimeAsync(1001);
+    // The deadline now ends the affected cache key with a terminal error, not
+    // an indefinite loading state.
+    expect(events).toHaveBeenCalledWith({ status: 'error',
+      error: '[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired' });
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).toBeNull();
+    off();
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});

@@ -473,6 +473,7 @@ const mobile = await (async () => {
   const CNPHONE_TS = 'apps/mobile/src/auth/cnPhone.ts';
   const KB_TS = 'apps/mobile/src/auth/loginKeyboardAvoidance.ts';
   const mods = await compileModules([
+    ['apps/mobile/src/i18n/locale.ts', 'mob-locale.mjs'],
     [LAYOUT_TS, 'mob-layout.mjs'],
     [TOKENS_TS, 'mob-tokens.mjs'],
     [METHOD_TS, 'mob-method.mjs'],
@@ -485,6 +486,7 @@ const mobile = await (async () => {
       // authErrorMessages 常量,不执行 getLocales/getManualLocaleOverride。
       (code) =>
         code
+          .replace(/from ["']@\/i18n\/locale["']/g, 'from "./mob-locale.mjs"')
           .replace(
             /import\s*\{\s*getLocales\s*\}\s*from\s*['"]expo-localization['"];?/,
             'const getLocales = () => [{ languageTag: "zh-CN" }];',

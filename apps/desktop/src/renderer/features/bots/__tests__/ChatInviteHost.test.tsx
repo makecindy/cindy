@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '../ChatInviteHost';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
-const api = vi.hoisted(() => ({ previewInvite: vi.fn(), acceptInvite: vi.fn() }));
+const api = vi.hoisted(() => ({ previewInvite: vi.fn(), acceptInvite: vi.fn(), status: vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../botGroupStore', () => ({ refreshBotGroups: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn() } }));
@@ -19,6 +19,7 @@ function mount() {
 }
 async function retry() { await act(async () => { fireEvent.click(screen.getByRole('button', { name: k('retryInvite') })); }); }
 beforeEach(() => {
+  api.status.mockResolvedValue({ personalMask: false });
   vi.clearAllMocks();
   setDataOwnerGeneration('owner-a');
   api.previewInvite.mockResolvedValue({ ok: true, groupId: 'room', name: 'Invited group', inviterName: 'Host', joined: false });

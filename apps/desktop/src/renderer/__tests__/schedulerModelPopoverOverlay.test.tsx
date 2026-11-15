@@ -82,6 +82,15 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
 }));
 
 vi.mock('@/hooks/useAvailableAgents', () => ({ useModelPickerAgents: () => ['claude-code', 'codex', 'pi'] }));
+// These cases exercise the popover; location discovery is covered by useWorkerAgentDevices.
+vi.mock('@/hooks/useModelRouteDevices', () => ({ useModelRouteDevices: () => ({ devices: undefined }) }));
+
+// PR #6832: these local popover interaction tests now also import remote location
+// discovery. Keep the unit fixture local; loading real account/chat state made
+// collection fail before the existing selection/refresh assertions could run.
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ leadAgentDeviceId: null, devices: [] }),
+}));
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   getCachedCapabilities: () => null,
@@ -210,4 +219,14 @@ describe('scheduler model popover overlay behavior', () => {
       }),
     ).toBeTruthy();
   });
+});
+
+// Acceptance P1: form cleared an unavailable route but the real chip invented a
+// second default. Existing tests always supplied modelValue. Unit/jsdom, empty
+// model plus a connected catalog: the button must not advertise that catalog model.
+it('shows an empty selection without independently resolving a model or effort', () => {
+  render(<ModelEffortChip onSelect={vi.fn()} onFollowSession={vi.fn()}
+    agentKind="codex" modelValue="" providerId="" effortValue="high"
+    onChangeModel={vi.fn()} onChangeProviderId={vi.fn()} onChangeEffort={vi.fn()} />);
+  expect(screen.getByRole('button', {name:'newChat.modelSelector.trigger.agent.codex \u00b7 scheduler.chips.model.default'})).toBeTruthy();
 });

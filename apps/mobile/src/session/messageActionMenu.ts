@@ -7,7 +7,7 @@
  */
 import { i18n } from '@/i18n';
 
-export type MobileMessageMenuActionId = 'side-chat' | 'add-to-chat' | 'copy-link' | 'rewind' | 'delete';
+export type MobileMessageMenuActionId = 'side-chat' | 'add-to-chat' | 'copy-link' | 'edit' | 'rewind' | 'delete';
 
 export interface MobileMessageMenuItem {
   id: MobileMessageMenuActionId;
@@ -23,6 +23,8 @@ export function buildMobileMessageMenu(input: {
   canAddToChat: boolean;
   canCopyLink: boolean;
   canDelete: boolean;
+  /** 任务运行中「编辑」不外显，收进菜单(对齐桌面);停下后回到操作行。 */
+  canEditInMenu?: boolean;
   canRewind: boolean;
 }): MobileMessageMenuItem[] {
   const items: MobileMessageMenuItem[] = [];
@@ -38,6 +40,9 @@ export function buildMobileMessageMenu(input: {
   }
   if (input.canCopyLink) {
     items.push({ id: 'copy-link', label: i18n.t('session.messageMenu.copyLink'), image: 'cindy-link-2' });
+  }
+  if (input.canEditInMenu) {
+    items.push({ id: 'edit', label: i18n.t('message.renderer.controlEdit'), image: 'cindy-pencil' });
   }
   if (input.canRewind) items.push({ id: 'rewind', label: i18n.t('session.messageMenu.rewind'), image: 'cindy-undo-2' });
   if (input.canDelete) {

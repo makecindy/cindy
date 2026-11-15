@@ -7,6 +7,7 @@ import {
 } from "./remoteMoney";
 import type { RemoteSession } from "./types";
 import { quotaCountdown } from "./mobileModelRowPresentation";
+import { quotaLevelFromRemaining, type QuotaLevel } from "@cindy/maker-shared/quota-level";
 
 /**
  * Time left until a quota resets, used as the window label like the desktop status
@@ -78,7 +79,8 @@ export interface AccountUsageRow {
   label: string;
   value: string;
   detail?: string;
-  warning?: boolean;
+  /** Shared quota rule (`@cindy/maker-shared/quota-level`): yellow at 30% left, red at 10%. */
+  level?: QuotaLevel;
 }
 
 export function accountUsageRows(
@@ -119,7 +121,7 @@ export function accountUsageRows(
         : t("session.menu.usage.remaining", {
             percent: Math.round(window.remainingPercent),
           }),
-      warning: !expired && window.remainingPercent <= 10,
+      level: expired ? "normal" : quotaLevelFromRemaining(window.remainingPercent),
     });
   }
   const credits = account.credits;
@@ -146,7 +148,7 @@ export function accountUsageRows(
     rows.push({
       label: t("session.menu.usage.credits"),
       value: parts.join(" · "),
-      warning: credits.status === "depleted",
+      level: credits.status === "depleted" ? "crit" : "normal",
     });
   }
   for (const amount of account.amounts) {
@@ -159,10 +161,12 @@ export function accountUsageRows(
     rows.push({
       label: t(`session.menu.usage.${amount.id}`),
       value: `${formatSessionUsageMoney(money)}${amount.limit === undefined ? "" : ` / ${formatSessionUsageMoney({ ...money, amount: amount.limit })}`}`,
-      warning:
+      level:
         amount.id === "balance"
-          ? amount.amount <= 0
-          : amount.limit !== undefined && amount.amount >= amount.limit,
+          ? amount.amount <= 0 ? "crit" : "normal"
+          : amount.limit !== undefined && amount.limit > 0
+            ? quotaLevelFromRemaining(((amount.limit - amount.amount) / amount.limit) * 100)
+            : "normal",
     });
   }
   return rows;

@@ -359,3 +359,22 @@ describe('MCP App result delivery authorization', () => {
     },
   );
 });
+
+// 4429338500: Controller sequencing relies on the production operation receipt,
+// not a transport send acknowledgment. Await only that receipt before replacing.
+it('acknowledges initialized after the Host has recognized its document', async () => {
+  const f = fixture();
+  const view = await open(f.host, 'device:phone');
+  const message = (value: unknown) => handleMcpAppOperation(f.host, view.caller, 'task', {
+    op: 'message', viewId: view.viewId, message: value,
+  });
+  await message({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+  await message({ jsonrpc: '2.0', id: 72, method: 'ui/initialize', params: {
+    protocolVersion: '2026-01-26', appInfo: { name: 'Replacement', version: '1' }, appCapabilities: {},
+  } });
+  const events = await f.host.poll(view.caller, 'task', view.viewId, view.after);
+  expect(events).toContainEqual(expect.objectContaining({
+    generation: 1, message: expect.objectContaining({ id: 72, result: expect.any(Object) }),
+  }));
+  await f.host.teardown(view.caller, 'task', view.viewId, true);
+});

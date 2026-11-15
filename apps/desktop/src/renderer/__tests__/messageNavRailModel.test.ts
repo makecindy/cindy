@@ -1,3 +1,4 @@
+import { resolveUserDisplayText } from '@/components/chat/userMessageDisplayText';
 /**
  * messageNavRailModel 纯逻辑单测:条目派生过滤 / 当前提问判定 / 空间与截断规划。
  * 全部 node 环境,无 DOM(组件侧几何测量不在此覆盖,见 MessageNavRail.tsx 注释)。
@@ -626,4 +627,14 @@ describe('forwardNavRailWheel', () => {
   it('滚动容器缺席(卸载竞态)时静默不抛', () => {
     expect(() => forwardNavRailWheel(null, { deltaX: 0, deltaY: 10 })).not.toThrow();
   });
+});
+
+
+// Unit regression: bubble and navigation share this projection, which formerly
+// returned JSON-quoted history verbatim. Human examples must remain literal.
+it('shows readable delegated history only on attributed task messages', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n\\n保留 `\\\\n`"';
+  expect(resolveUserDisplayText({ content, automationOrigin: { kind: 'session' } }))
+    .toContain('第一段\n\n保留 `\\n`');
+  expect(resolveUserDisplayText({ content })).toBe(content);
 });

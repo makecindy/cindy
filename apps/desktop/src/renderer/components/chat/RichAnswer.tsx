@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import {
   Mail,
   CalendarDays,
@@ -33,6 +34,8 @@ import {
   richVector,
   RichAnswerStream,
   RichInteractionMemory,
+  RichSubmissionController,
+  richSendText,
   richAction,
   richChart,
   richLinePlot,
@@ -52,6 +55,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
+import { useSessionQuickSend } from './SessionQuickSendContext';
 import './rich-answer.css';
 
 /** Answer colors are Cindy theme tokens, so they follow the mode without re-rendering. */
@@ -90,6 +94,25 @@ const memory = new RichInteractionMemory({
     localStorage.setItem('cindy.richAnswer.viewState.v1', value);
   },
 });
+const submissions = new RichSubmissionController(memory);
+
+function RichSendAction({ node, text, receiptKey, ready, style }: {
+  node: RichNode; text: string | undefined; receiptKey: string; ready: boolean;
+  style?: CSSProperties;
+}) {
+  const { t } = useTranslation();
+  const sender = useSessionQuickSend();
+  const status = useSyncExternalStore(submissions.subscribe, () => submissions.status(receiptKey, text));
+  const disabled = !ready || !sender || !text || status === 'sending' || status === 'sent';
+  return <div className="rich-answer-layout rich-answer-stack" style={style}>
+    {text && <p className="rich-answer-caption" style={{ whiteSpace: 'pre-wrap' }}>{text}</p>}
+    <Button type="button" variant="secondary" disabled={disabled}
+      onClick={() => { if (!disabled) void submissions.submit(receiptKey, text, value => sender.send(value, { literalText: true, independent: true })); }}>
+      {status === 'sending' ? t('richAnswer.sending') : status === 'sent' ? t('richAnswer.sent') : richString(node, 'label', richString(node, 'text')) || t('richAnswer.send')}
+    </Button>
+    {status === 'failed' && <p className="rich-answer-caption" role="alert">{t('richAnswer.sendFailed')}</p>}
+  </div>;
+}
 /** Component identities and user input survive content patches; no generated HTML executes. */
 export function RichAnswer({
   source,
@@ -181,6 +204,26 @@ function RichAnswerDocument({
   const renderContent = (id: string): ReactNode => {
     const node = doc.nodes.get(id);
     if (!node) return null;
+    const imageSource = node.kind === 'image' ? richString(node, 'src').trim() : '';
+    // Both media namespaces are served by the Desktop protocol. Reloading a
+    // placeholder or truncated reference cannot recover the existing image.
+    if (/^cindy-media:/i.test(imageSource)
+      && !/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-zA-Z0-9]+$/.test(imageSource)
+      && !/^cindy-media:\/\/client-wallpaper\/[a-f0-9]{64}\.(webp|mp4)$/.test(imageSource)) {
+      const message = t('richAnswer.requestImageAgainMessage', {
+        name: JSON.stringify(richString(node, 'alt', id)),
+        source: JSON.stringify(imageSource),
+      });
+      return <div data-rich-node={id} className="rich-answer-layout rich-answer-stack" style={{ overflowWrap: 'anywhere' }}>
+        <p className="rich-answer-caption" role="status">{complete ? t('richAnswer.invalidImageReference') : '…'}</p>
+        {complete && <RichSendAction
+          node={{ ...node, kind: 'button', props: { label: t('richAnswer.requestImageAgain') } }}
+          text={message.length <= 16_000 ? message : undefined}
+          receiptKey={`${stateKey}:invalid-image:${id}`} ready
+        />}
+        {richString(node, 'caption') && <p className="rich-answer-caption">{richString(node, 'caption')}</p>}
+      </div>;
+    }
     if (richCalculationUnavailable(node, values))
       return (
         <p className="rich-answer-caption" role="status">
@@ -214,6 +257,7 @@ function RichAnswerDocument({
         const vector = richVector(node, palette);
         return (
           <svg
+            data-chat-rich-svg
             role="img"
             aria-label={label || richString(node, 'alt')}
             viewBox={vector.viewBox}
@@ -352,12 +396,16 @@ function RichAnswerDocument({
           </label>
         );
       case 'button':
+        if (Object.prototype.hasOwnProperty.call(node.props, 'send'))
+          return <RichSendAction node={node} text={richSendText(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} />;
         return (
-          <Button variant="secondary" tone="quiet" onClick={() => apply(node)}>
+          <Button type="button" variant="secondary" tone="quiet" onClick={() => apply(node)}>
             {label || richString(node, 'text')}
           </Button>
         );
       case 'form':
+        if (Object.prototype.hasOwnProperty.call(node.props, 'send'))
+          return <div className="rich-answer-layout rich-answer-stack">{children}<RichSendAction node={node} text={richSendText(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} /></div>;
         return (
           <form
             className="rich-answer-layout rich-answer-stack"
@@ -440,7 +488,7 @@ function RichAnswerDocument({
                       <dd>{item.value}</dd>
                     </div>
                     {richString(node, 'variant') !== 'line' && (
-                      <div className="rich-answer-track">
+                      <div className="rich-answer-track" data-chat-rich-bar>
                         <div
                           style={{
                             backgroundColor:
@@ -500,6 +548,7 @@ function AnswerLineChart({
   return (
     <div ref={ref}>
       <svg
+        data-chat-rich-svg="chart"
         role="img"
         aria-label={`${label}. ${data.map((item) => `${item.label}: ${item.value}`).join(', ')}`}
         viewBox={`0 0 ${plot.width} ${plot.height}`}
