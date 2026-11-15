@@ -431,6 +431,8 @@ export function createTurnExecutor(deps) {
         }
       }) : undefined,
     readTaskSource: async id => (await readExecutionSession(id)).source ?? null,
+    // Sending to an archived task makes it active first (task-restore.ts), as on the desktop.
+    restoreArchivedSessionForSend: deps.restoreArchivedSessionForSend,
     // Desktop register.ts: a direct (non-queued) user turn takes the Git baseline
     // before dispatch and drops it when the turn is not dispatched.
     beforeDispatchDirectUserTurn: startGitBaseline,

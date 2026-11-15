@@ -18,6 +18,8 @@ export function createHostSessionUpdate(deps: {
   getLiveSession(sessionId: string): LiveSession | null | undefined;
   readSessionForRun(sessionId: string): Promise<{ model?: string | null }>;
   publish(event: Record<string, unknown>): void;
+  /** Making the task active again (task-restore.ts), the one Host route for it; it also serves sends. */
+  restoreTaskToActive(sessionId: string, options?: { publish?: boolean }): Promise<void>;
   /** The configured window of a route, with the task's window budget (agent graph). */
   modelWindow?(): {
     resolveRouteWindow(agentKind: string, modelId: string, providerId: string | null, budget: number | null): number | null;
@@ -63,7 +65,9 @@ export function createHostSessionUpdate(deps: {
     await applyLiveSessionSettings(live, patch, stored);
     const update: Record<string, unknown> = { updatedAt: Date.now() };
     if (typeof patch.title === 'string') update.title = patch.title;
-    if (patch.status === 'active' || patch.status === 'archived') update.status = patch.status;
+    // Restoring goes through the shared transaction below; archiving still writes the column (release
+    // table: the desktop's archive also checks lanes, recycles the worktree and notifies plugins).
+    if (patch.status === 'archived') update.status = patch.status;
     if (patch.pinnedAt === null) update.pinnedAt = null;
     else if (typeof patch.pinnedAt === 'string') update.pinnedAt = Date.parse(patch.pinnedAt) || null;
     if (typeof patch.notificationsMuted === 'boolean') update.notificationsMuted = patch.notificationsMuted;
@@ -75,6 +79,9 @@ export function createHostSessionUpdate(deps: {
     if (patch.providerId === null || typeof patch.providerId === 'string') update.providerId = patch.providerId;
     if (typeof patch.agentKind === 'string') update.agentKind = patch.agentKind === 'claude-code' ? 'cc' : patch.agentKind;
     await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
+    // As the desktop's patchSessionMetaInDb: the other fields first, then the status transaction. The
+    // event below carries the whole patch, so the restore does not publish its own.
+    if (patch.status === 'active') await deps.restoreTaskToActive(sessionId, { publish: false });
     const rows = await getDbClient().drizzle.select().from(sessionTable)
       .where(eq(sessionTable.id, sessionId)).limit(1);
     const row = rows[0];

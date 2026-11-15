@@ -3128,3 +3128,22 @@ test('idle release: a Claude turn\'s start and end reach background-activity det
   recordClaudeApiActivity('native-bg', 'bg');
   assert.equal(getClaudeSessionBackgroundActivity('bg'), true, 'calls after the turn ended are background work');
 });
+
+// Unit: a send to an archived task makes it active before the turn is dispatched (the send
+// transaction's restoreArchivedSessionForSend, which main.ts binds to task-restore.ts; the restore
+// itself is tested in session-update.test.mjs). Gap: the Host sent without restoring.
+test('a send restores the task through the send transaction before the turn is dispatched', async () => {
+  const restores = [];
+  let h;
+  h = createHarness({ restoreArchivedSessionForSend: async id => {
+    restores.push([id, h.maker.getSession(id)?.sent.length ?? 0]);
+  } });
+  try {
+    await enqueue(h, 'archived-task', { clientId: 'resumes', text: 'continue' });
+    // Restored once, while nothing had been sent to the Agent yet.
+    assert.deepEqual(restores, [['archived-task', 0]]);
+    assert.equal(h.maker.getSession('archived-task').sent.length, 1);
+  } finally {
+    await h.queue.dispose();
+  }
+});

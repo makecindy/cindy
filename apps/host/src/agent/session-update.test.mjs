@@ -27,6 +27,8 @@ import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { setSessionProvider, getSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { planUserRuntimeModelSwitch } from '../../../desktop/src/shared/runtimeModelSwitchGate.ts';
 import { createHostSessionUpdate } from './session-update.ts';
+import { createHostTaskRestore } from './task-restore.ts';
+import { botProfiles, botSessionLinks } from '../../../desktop/src/main/localDb/schema.ts';
 import { MODEL_WINDOW_REBUILD_UNSUPPORTED } from './model-window-gate.ts';
 
 // Route windows of the fixture catalog; a model it does not know has no verified window.
@@ -57,7 +59,11 @@ async function fixture(t) {
   const live = new Map();
   const events = [];
   const budgets = new Map();
+  const taskRestore = createHostTaskRestore({ getOwner: () => database, publish: event => events.push(event) });
+  const restoreCalls = [];
+  const restoreTaskToActive = (id, options) => { restoreCalls.push(['task list', id]); return taskRestore.restoreTaskToActive(id, options); };
   const update = createHostSessionUpdate({
+    restoreTaskToActive,
     getLiveSession: id => live.get(id),
     readSessionForRun: async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0],
     publish: event => events.push(event),
@@ -85,7 +91,7 @@ async function fixture(t) {
     return session;
   };
   const row = async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0];
-  return { update, task, runtime, row, events, budgets };
+  return { update, task, runtime, row, events, budgets, database, taskRestore, restoreCalls };
 }
 
 // Each cell: the task's usage and the change it asks for. `refused`: the Host's verdict.
@@ -180,4 +186,73 @@ test('model change: a task that does not exist is "session not found", as before
   const orphan = f.runtime('window-orphan');
   await assert.rejects(f.update('window-orphan', { model: 'small' }), { message: 'session not found' });
   assert.deepEqual(orphan.setModelCalls, []);
+});
+
+/**
+ * Making an archived task active (task-restore.ts): the task list's restore and a send to the task
+ * go through the same writer, the shared transaction `sessions.setStatus`.
+ * - Rule: the desktop restores through patchSessionMetaInDb's active branch, whose result is decided
+ *   by that transaction: a deleted task stays deleted, a teammate's own task is managed by the
+ *   teammate, a group lane is detached in the same transaction. A send also refuses a managed task
+ *   the desktop's send refuses (archivedTaskRestore.ts).
+ * - Gap: the Host wrote the status column directly, and a send left an archived task archived.
+ * - Tier: unit, through the real entries over a migrated profile database.
+ */
+async function archivedTask(f, id, { status = 'archived', source, lane } = {}) {
+  await f.task(id);
+  await f.database.drizzle.update(sessions).set({ status, ...(source ? { source } : {}), updatedAt: 1 })
+    .where(eq(sessions.id, id));
+  if (lane) {
+    await f.database.drizzle.insert(botProfiles).values({ id: `bot-${id}`, displayName: 'Teammate', createdAt: 1, updatedAt: 1 });
+    await f.database.drizzle.insert(botSessionLinks).values({ id: `link-${id}`, botId: `bot-${id}`, sessionId: id, role: lane, createdAt: 1 });
+  }
+}
+const linkOf = async (f, id) => (await f.database.drizzle.select().from(botSessionLinks).where(eq(botSessionLinks.sessionId, id)))[0];
+
+test('restore: the task list and a send make an archived task active through the same transaction', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await archivedTask(f, 'restore-list');
+  await archivedTask(f, 'restore-send');
+  const updated = await f.update('restore-list', { status: 'active', title: 'Back' });
+  assert.equal(updated.status, 'active');
+  assert.equal(updated.title, 'Back');
+  await f.taskRestore.restoreArchivedSessionForSend('restore-send');
+  for (const id of ['restore-list', 'restore-send']) {
+    const row = await f.row(id);
+    assert.equal(row.status, 'active');
+    assert.ok(row.updatedAt > 1, 'the transaction stamps updated_at');
+  }
+  // One event per route: the task list's carries its whole patch, a send's the new status.
+  assert.deepEqual(f.events.map(e => [e.sessionId, e.patch]), [
+    ['restore-list', { status: 'active', title: 'Back' }],
+    ['restore-send', { status: 'active' }],
+  ]);
+  assert.deepEqual(f.restoreCalls, [['task list', 'restore-list']]);
+  // An active task is left as it is by a send.
+  await f.taskRestore.restoreArchivedSessionForSend('restore-send');
+  assert.equal(f.events.length, 2);
+});
+
+test('restore: a deleted task stays deleted on both routes', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await archivedTask(f, 'restore-deleted', { status: 'deleted' });
+  await assert.rejects(f.update('restore-deleted', { status: 'active' }), { code: 'PRECONDITION_FAILED' });
+  await assert.rejects(f.taskRestore.restoreArchivedSessionForSend('restore-deleted'), { code: 'NOT_FOUND' });
+  assert.equal((await f.row('restore-deleted')).status, 'deleted');
+});
+
+test('restore: a teammate\'s own task is refused, a group lane is restored and detached', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await archivedTask(f, 'restore-teammate', { source: 'bot', lane: 'canonical' });
+  await assert.rejects(f.update('restore-teammate', { status: 'active' }), { code: 'PRECONDITION_FAILED' });
+  await assert.rejects(f.taskRestore.restoreArchivedSessionForSend('restore-teammate'), { code: 'PRECONDITION_FAILED' });
+  assert.equal((await f.row('restore-teammate')).status, 'archived');
+
+  for (const [id, route] of [['restore-group-list', 'list'], ['restore-group-send', 'send']]) {
+    await archivedTask(f, id, { source: 'bot', lane: 'group' });
+    if (route === 'list') await f.update(id, { status: 'active' });
+    else await f.taskRestore.restoreArchivedSessionForSend(id);
+    assert.equal((await f.row(id)).status, 'active');
+    assert.ok((await linkOf(f, id)).archivedAt > 0, 'restored history is never the live group receiver again');
+  }
 });

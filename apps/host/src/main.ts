@@ -134,6 +134,9 @@ import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
 import { createHostSessionUpdate } from './agent/session-update.ts';
+import { createHostTaskRestore } from './agent/task-restore.ts';
+import { setSessionRouteLockImplementation } from '../../desktop/src/main/localDb/sessionRouteLock.ts';
+import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
@@ -934,6 +937,13 @@ const insertSessionMessage = createHostMessageStore({ getOwner: getCurrentDbClie
 const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot,
   publish: (event: unknown) => eventHub.publish(event) });
 
+// Shared database writers that change a task's route (restoring an archived task) take the task's send
+// lock through this bridge, as on the desktop (localDb/ipc/registerAll.ts installs the same lock).
+setSessionRouteLockImplementation(withSendToSessionLock);
+// Making an archived task active: sending to it, and the task list's restore (task-restore.ts).
+const taskRestore = createHostTaskRestore({ getOwner: getCurrentDbClientSnapshot,
+  publish: event => eventHub.publish(event) });
+
 // The pending handoff summary: one registry for the Host process, as the desktop's singleton.
 const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
   publish: event => eventHub.publish(event), log: createLogger('agent-handoff-pending') });
@@ -954,6 +964,7 @@ const contextRecovery = createHostContextRecoveryWiring({
 });
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  restoreArchivedSessionForSend: taskRestore.restoreArchivedSessionForSend,
   // The profile root's claude-idle-release.json, which the desktop window reads too (read-only here).
   readClaudeIdleMinutes: () => readClaudeIdleMinutesFrom(profileDir),
   pendingHandoff,
@@ -1283,6 +1294,7 @@ const serverDeps = {
     }));
   },
   updateSession: lockSessionRoute(createHostSessionUpdate({
+    restoreTaskToActive: taskRestore.restoreTaskToActive,
     getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
     readSessionForRun,
     publish: event => eventHub.publish(event),
