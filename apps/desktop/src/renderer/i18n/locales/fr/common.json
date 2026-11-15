@@ -2522,7 +2522,7 @@
       "macRestartNote": "Sous macOS, redémarrez l'application pour appliquer les modifications.",
       "awayGuard": {
         "label": "Utiliser l'écran de confidentialité au lieu du verrouillage",
-        "hint": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec Touch ID ou votre mot de passe. Sans tâche en cours, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
+        "hint": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec Touch ID ou votre mot de passe. Sans tâche en cours d'exécution, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
         "permission": "Autorisez Cindy dans Réglages Système > Confidentialité et sécurité > Accessibilité pour qu'elle verrouille l'écran dès que quelqu'un touche ce Mac. En attendant, l'écran se met en veille et se verrouille comme d'habitude.",
         "preview": "Essayer maintenant",
         "previewStarting": "Lâchez la souris et le clavier. Dans 3 secondes, l'écran de confidentialité apparaît ; appuyez sur une touche pour verrouiller, puis déverrouillez pour essayer.",
@@ -2536,8 +2536,8 @@
           "hint": "Durée sans toucher au clavier ni à la souris pendant que l'IA travaille. Par défaut, le délai d'extinction de l'écran du système.",
           "system": "Système"
         },
-        "hintWindows": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec Windows Hello ou votre mot de passe. Sans tâche en cours, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
-        "hintLinux": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec votre mot de passe. Sans tâche en cours, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur."
+        "hintWindows": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec Windows Hello ou votre mot de passe. Sans tâche en cours d'exécution, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
+        "hintLinux": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec votre mot de passe. Sans tâche en cours d'exécution, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur."
       }
     },
     "agentIsland": {

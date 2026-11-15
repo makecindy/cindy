@@ -5227,23 +5227,8 @@ const registerIpcHandlers = () => {
   // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
   if (!authManager.isPassiveSharedUserDataInstance()) {
     // 隐私屏只在需要时让屏幕常亮:有 Agent 任务在跑,或定时任务快要开始(见 privacy-screen.md)。
-    let runningTasks = 0;
-    let countedIsland: ReturnType<typeof getAgentIslandService> = null;
-    const countRunningTasks = () => {
-      const island = getAgentIslandService();
-      if (!island) return 0;
-      if (island !== countedIsland) {
-        countedIsland = island;
-        const recount = () => {
-          runningTasks = island.getTaskOverview().filter((task) => task.phase === 'running').length;
-        };
-        recount();
-        onQuit('privacy-screen-task-count', island.subscribeTaskOverview(recount));
-      }
-      return runningTasks;
-    };
     const displayDemand = new DisplayDemand({
-      runningTasks: countRunningTasks,
+      runningTasks: () => getAgentIslandService()?.getLocalRunningTaskCount() ?? 0,
       nextScheduledRunAt: async () => {
         const next = (await getScheduleStorage().listActive())
           .map((schedule) => schedule.nextFireAt)

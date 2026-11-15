@@ -102,7 +102,7 @@ it('relayouts the non-captured display and releases its listeners on stop', asyn
   expect(screen.listenerCount('display-metrics-changed')).toBe(0);
 });
 
-function fixture() {
+function fixture(heldInput?: () => void) {
   const stopped = vi.fn();
   const excluded = vi.fn();
   const resume = vi.fn(async () => {});
@@ -114,13 +114,15 @@ function fixture() {
   };
   let local!: () => void;
   let failed!: () => void;
-  const masks = new PrivacyScreen(excluded, stopped, suspend, async (onLocal, onFailed) => {
+  const watch = vi.fn(async (onLocal: () => void, onFailed: () => void) => {
     local = onLocal;
     failed = onFailed;
     return monitor;
   });
+  const masks = new PrivacyScreen(excluded, stopped, suspend, watch, { heldInput });
   return {
     masks,
+    watch,
     stopped,
     excluded,
     suspend,
@@ -377,4 +379,35 @@ it('does not lock a replacement lease after delayed old hook teardown', async ()
   expect(f.stopped).not.toHaveBeenCalled();
   expect(state.windows[1].destroyed).toBe(false);
   f.masks.stop();
+});
+
+// PR #10639: releasing an input helper must not detach live mask failure protection.
+it.each(['closed', 'render-process-gone'])('locks on %s after verification releases and rearms input', async (event) => {
+  const f = fixture();
+  await f.masks.set(true, () => true);
+  await f.masks.releaseInput();
+  await f.masks.rearmInput();
+  const window = state.windows[0];
+  (event === 'closed' ? window : window.webContents).emit(event);
+  await settle();
+  expect(f.stopped).toHaveBeenCalledOnce();
+});
+
+// PR #10639: failed native re-arm must leave a local recovery path on the mask.
+it('retries from a held mask click when the native watcher cannot re-arm', async () => {
+  const retry = vi.fn();
+  const f = fixture(retry);
+  await f.masks.set(true, () => true);
+  const window = state.windows[0];
+  f.masks.holdInput();
+  await f.masks.releaseInput();
+  f.watch.mockRejectedValueOnce(new Error('ACCESSIBILITY_DENIED'));
+  await expect(f.masks.rearmInput()).rejects.toThrow('ACCESSIBILITY_DENIED');
+  window.webContents.emit('before-mouse-event', {}, { type: 'mouseMove' });
+  expect(retry).not.toHaveBeenCalled();
+  window.webContents.emit('before-mouse-event', {}, { type: 'mouseDown' });
+  expect(retry).toHaveBeenCalledOnce();
+  f.masks.stop();
+  window.webContents.emit('before-mouse-event', {}, { type: 'mouseDown' });
+  expect(retry).toHaveBeenCalledOnce();
 });

@@ -526,9 +526,9 @@ export class RemoteDesktopController {
     // Local privacy exit and process shutdown need the actual OS lock. All other
     // protected ends may leave a persistent cover so background work can continue.
     const protect =
-      reason === 'privacy-exit'
+      reason === 'privacy-exit' || (reason === 'idle-timeout' && active?.hostIdle)
         ? this.lockOrCover()
-        : reason === 'shutdown' || (reason === 'idle-timeout' && active?.hostIdle)
+        : reason === 'shutdown'
           ? // Nobody used this computer for its away time: Cindy locks it itself rather than
             // waiting for the system, which may never sleep or may delay the password.
             this.deps.lockScreen

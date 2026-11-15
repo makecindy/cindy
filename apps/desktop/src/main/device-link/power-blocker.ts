@@ -40,7 +40,11 @@ export class KeepAwakeController {
    */
   private privacyScreen = false;
 
-  constructor(private readonly backend: PowerSaveBlockerBackend = powerSaveBlocker) {}
+  constructor(private readonly backend: PowerSaveBlockerBackend = {
+    start: (type) => powerSaveBlocker.start(type),
+    stop: (id) => powerSaveBlocker.stop(id),
+    isStarted: (id) => powerSaveBlocker.isStarted(id),
+  }) {}
 
   /** 是否正持有生效中的 blocker。 */
   get active(): boolean {

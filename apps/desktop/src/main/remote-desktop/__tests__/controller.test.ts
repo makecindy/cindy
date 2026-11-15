@@ -714,6 +714,7 @@ describe('remote desktop authority and lifecycle', () => {
   // and an unavailable cover still reports the original failure.
   it.each([
     ['local-privacy', 'covered', undefined, 1],
+    ['host-idle', 'covered', undefined, 1],
     ['local-privacy', 'unavailable', 'LOCK_FAILED', 1],
     ['shutdown', 'covered', undefined, 0],
   ] as const)(
@@ -730,6 +731,7 @@ describe('remote desktop authority and lifecycle', () => {
         expect(h.deps.stopPrivacyScreen).not.toHaveBeenCalled();
         if (cover === 'unavailable') throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
       });
+      if (reason === 'host-idle') h.deps.hostIdle = () => ({ awayAfterMs: 120_000, keepWhileWorking: false });
       const { lease } = await h.start();
       await h.controller.request('phone', { op: 'control', lease, enabled: true });
       await h.controller.request('phone', {
@@ -738,8 +740,9 @@ describe('remote desktop authority and lifecycle', () => {
         enabled: true,
         lockOnExit: true,
       });
-      const ending =
-        reason === 'local-privacy' ? h.controller.stopPrivacyByUser() : h.controller.stopAndRestore();
+      const ending = reason === 'host-idle'
+        ? h.controller.stop(undefined, true, 'idle-timeout')
+        : reason === 'local-privacy' ? h.controller.stopPrivacyByUser() : h.controller.stopAndRestore();
       if (rejects) await expect(ending).rejects.toThrow(rejects);
       else await ending.catch(() => {});
       expect(h.deps.coverLockFailure).toHaveBeenCalledTimes(covers);

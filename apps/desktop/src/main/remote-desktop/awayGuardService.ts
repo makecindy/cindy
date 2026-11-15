@@ -357,6 +357,18 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
         t(process.platform === 'win32' ? 'awayGuard.hintWindows' : 'awayGuard.hint'),
       ),
       nonActivating: true,
+      // No new UI or native permission: the held mask already catches local clicks.
+      // If the helper cannot re-arm, the next click still retries lock + verification.
+      heldInput: () => {
+        if (verifying || !heldUntilLocked) return;
+        verifying = true;
+        void lockNow().then((locked) => {
+          verifying = false;
+          if (!heldUntilLocked) return;
+          if (locked) releaseHeld();
+          else void verifyOwnerOrRetry();
+        });
+      },
     },
   );
 

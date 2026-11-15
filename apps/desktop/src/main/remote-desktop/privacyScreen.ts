@@ -27,8 +27,12 @@ const log = createLogger('remote-desktop:privacy');
 export class PrivacyScreen {
   private windows: BrowserWindow[] = [];
   private generation = 0;
+  private inputGeneration = 0;
+  private windowGeneration = 0;
   private partitionConfigured = false;
   private confirming = false;
+  private disconnecting = false;
+  private holdingInput = false;
   private monitor: PrivacyInputMonitor | null = null;
   /** The page currently shown, reloaded to wake its notice. */
   private page = '';
@@ -53,13 +57,17 @@ export class PrivacyScreen {
        * desktop keeps its dialog-capable windows and only restores Dock presence.
        */
       nonActivating?: boolean;
+      /** Local click recovery when the native input watcher cannot be restarted. */
+      heldInput?: () => void;
     } = {},
   ) {}
   private async disconnect(generation: number): Promise<void> {
-    if (generation !== this.generation) return;
+    if (generation !== this.generation || this.disconnecting) return;
+    this.disconnecting = true;
     // Invalidate callbacks immediately, but retain masks and capture exclusions
     // until the controller has finished locking and ended the viewing lease.
     const ending = ++this.generation;
+    this.inputGeneration++;
     let keep = false;
     try {
       // The confirming hook rejects injected input, including our lock shortcut.
@@ -71,7 +79,10 @@ export class PrivacyScreen {
     } catch {
       log.warn('privacy disconnect failed');
     } finally {
-      if (ending === this.generation && !keep) this.stop();
+      if (ending === this.generation) {
+        this.disconnecting = false;
+        if (!keep) this.stop();
+      }
     }
   }
   private async confirmExit(window: BrowserWindow, generation: number): Promise<void> {
@@ -139,6 +150,10 @@ export class PrivacyScreen {
     if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
     if (this.windows.length) return;
     const generation = ++this.generation;
+    const windowGeneration = ++this.windowGeneration;
+    const windowFailed = () => {
+      if (windowGeneration === this.windowGeneration) void this.disconnect(this.generation);
+    };
     const created: BrowserWindow[] = [];
     const partition = session.fromPartition('cindy-desktop-privacy', { cache: false });
     if (!this.partitionConfigured) {
@@ -209,13 +224,13 @@ export class PrivacyScreen {
           try {
             window.setBounds(changed.bounds, false);
           } catch {
-            void this.disconnect(generation);
+            windowFailed();
           }
         };
         screen.on('display-metrics-changed', relayout);
         window.on('closed', () => {
           screen.removeListener('display-metrics-changed', relayout);
-          void this.disconnect(generation);
+          windowFailed();
         });
         window.setMenuBarVisibility(false);
         await window.loadURL(
@@ -223,6 +238,10 @@ export class PrivacyScreen {
         );
         window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
         window.webContents.on('will-navigate', (event) => event.preventDefault());
+        window.webContents.on('before-mouse-event', (_event, input) => {
+          if (windowGeneration === this.windowGeneration && this.holdingInput &&
+              !this.monitor && input.type === 'mouseDown') this.options.heldInput?.();
+        });
         window.setContentProtection(true);
         // Remote system injection must reach the app behind this passive mask.
         // Physical input is identified and consumed by the native hook instead.
@@ -233,7 +252,7 @@ export class PrivacyScreen {
         });
         window.setAlwaysOnTop(true, 'screen-saver', 1);
         window.webContents.on('render-process-gone', () => {
-          void this.disconnect(generation);
+          windowFailed();
         });
       }
       if (!current() || generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
@@ -273,15 +292,17 @@ export class PrivacyScreen {
     }
   }
   private watch(generation: number): Promise<PrivacyInputMonitor> {
+    const inputGeneration = ++this.inputGeneration;
+    const current = () => generation === this.generation && inputGeneration === this.inputGeneration;
     return this.watchInput(
       () => {
-        if (generation === this.generation) void this.confirmExit(this.windows[0], generation);
+        if (current()) void this.confirmExit(this.windows[0], generation);
       },
       () => {
-        void this.disconnect(generation);
+        if (current()) void this.disconnect(generation);
       },
       () => {
-        if (generation === this.generation) this.wake();
+        if (current()) this.wake();
       },
     );
   }
@@ -291,6 +312,7 @@ export class PrivacyScreen {
    * clicks land on the masks instead of passing through to apps nobody can see.
    */
   holdInput(): void {
+    this.holdingInput = true;
     for (const window of this.windows) if (!window.isDestroyed()) window.setIgnoreMouseEvents(false);
   }
 
@@ -303,7 +325,7 @@ export class PrivacyScreen {
     const monitor = this.monitor;
     if (!monitor) return;
     this.monitor = null;
-    this.generation++;
+    this.inputGeneration++;
     await monitor.stop();
   }
 
@@ -357,7 +379,11 @@ export class PrivacyScreen {
 
   stop(): void {
     this.generation++;
+    this.inputGeneration++;
+    this.windowGeneration++;
     this.confirming = false;
+    this.disconnecting = false;
+    this.holdingInput = false;
     this.monitor?.stop();
     this.monitor = null;
     const windows = this.windows;
