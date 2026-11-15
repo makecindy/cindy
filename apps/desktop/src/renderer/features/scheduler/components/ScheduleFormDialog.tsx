@@ -230,6 +230,8 @@ export function ScheduleFormDialog({
   };
   useEffect(() => {
     // 关闭时也清掉展开态:否则下次打开会直接停在展开层,焦点也会落到入口按钮上。
+    // promptWasExpanded 一起清:此路径不经用户收起,焦点不应再被还给入口按钮。
+    promptWasExpanded.current = false;
     setPromptExpanded(false);
   }, [open, initial?.id]);
   const [submitting, setSubmitting] = useState(false);
@@ -1725,7 +1727,7 @@ export function ScheduleFormDialog({
               className="absolute inset-0 z-10 flex flex-col bg-[var(--confirm-bg)]"
             >
               <header className="flex min-h-[72px] shrink-0 items-center gap-4 px-6 pt-[18px] pb-[14px]">
-                <p className="min-w-0 flex-1 text-24 font-normal leading-[1.33] text-[var(--msg-assistant-text)]">
+                <p className="min-w-0 flex-1 text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
                   {t('scheduler.editor.fields.prompt')}
                 </p>
                 <Button variant="secondary" size="lg" type="button" onClick={() => setPromptExpanded(false)}>
