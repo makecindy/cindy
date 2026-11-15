@@ -175,6 +175,31 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
   约定。
 - agent 修改配置时，只有用户明确要求才写入 override，不得把当前默认值固化回用户配置。
 
+### 请求体积控制
+
+`XDT_REQUEST_SIZE_CONTROL_DISABLE` 是 Desktop／Node Host 宿主进程的隐藏环境开关，不新增
+设置页或持久化 override。默认开启请求体积控制；只有值为字符串 `1` 时才关闭，未设置或其他值
+均保持开启。修改启动环境变量后须重启宿主，新的环境才会进入该进程。
+
+关闭后 HTTP 回到原有入口超限／上游 413 附件恢复路径，不启用新的主动重放和预算学习；
+Codex 的回退上限为 **42 MiB**，不会恢复到原来的 128 MiB，Claude Code／Pi 仍为 32 MiB。
+**图片压缩不受此开关控制**，已注入的图片预处理继续运行。完整阈值、恢复与归属边界以
+[模型请求超限时的附件恢复](media-storage-and-protocols.md#模型请求超限时的附件恢复)为正本；
+实现入口为 `oversizedAttachmentRecoveryCore.ts` 的 `createRequestSizeController`。
+
+### 代理图片压缩
+
+`XDT_IMAGE_COMPRESSION_DISABLE` 是 Desktop 与 Node Host 的隐藏进程环境开关，不进入设置页或
+持久化配置。未设置时默认开启；仅字符串 `1` 关闭，其他值不关闭。移除该环境变量恢复默认。
+
+开关只控制本地代理的图片预处理（`prepare`）及单张图片超限后的进一步压缩（`tighten`）；
+关闭时保留输入图片，不调用编码器，也不复用已缓存的压缩结果。它不控制附件的
+`image-resizer` 缩图，与 `XDT_REQUEST_SIZE_CONTROL_DISABLE` 控制的请求体积恢复互不替代。
+每次调用都读取宿主进程当前的环境值；从外部修改启动环境后，需要重新启动宿主才能带入新值。
+
+实现与回归见 `apps/desktop/src/main/maker-host/inlineImagePreprocessor.ts` 及
+`__tests__/inlineImagePreprocessor.test.ts`。
+
 ## 6. 设置搜索与页面定义
 
 设置页新增、改写设置控件时，使用 `defineSettings` 声明稳定 ID、分类、定位锚点、
@@ -225,3 +250,15 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
 
 实现／PR 说明至少写明：配置层级、默认值及推荐理由、override 如何记录与识别、未自定义
 用户如何跟随新默认、恢复默认会清除什么。
+
+## 作答文风与默认提示词
+
+文风选择仅在显式选中「文言」界面时显示；普通语言忽略旧版保存的特殊文风。
+默认普通作答及文言下的「照常作答」不附加任何语言／文风说明，也不注入取消文风的提示。
+文言默认的「雅正文言」属于主动启用的文学模式，仍附加对应说明。
+
+特殊文风只约束当前轮，普通发送与插话每次带上本轮说明，不走环境说明去重；
+IM 不附加语言／文风说明。固定 system prompt 不因这个设置改变。
+既有原生历史不可事后清除，旧版本留下的跨轮文风指令仍可能影响已有会话；不自动重置会话。
+回归从 `uiLanguageErrorNote.test.ts`、`makerSendTransaction.test.ts` 与
+`hook-control/__tests__/session-runner.test.ts` 进入，验证实际发送文本而非推断模型输出。

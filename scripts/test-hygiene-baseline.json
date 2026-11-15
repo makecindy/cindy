@@ -34,9 +34,6 @@
     "apps/desktop/src/main/__tests__/chatAttachmentIpcOwnerBoundary.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/__tests__/claudeAccountUsageSource.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/__tests__/claudeOrphanReaper.test.ts": {
       "resetModules": 1
     },

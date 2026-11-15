@@ -347,6 +347,10 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
   },
 
   // --- Project Aliases ---
+  { desktopChannel: 'sidebar-settings:get-project-auto-icon', webPath: 'localDb.projectAliases.autoIcon', hostPath: '/api/project-info/auto-icon', body: ([input]) => input ?? {} },
+  { desktopChannel: 'sidebar-settings:get-project-icon-image', webPath: 'localDb.projectAliases.iconImage', hostPath: '/api/project-info/image', body: ([input]) => input ?? {} },
+  { desktopChannel: 'sidebar-settings:get-project-aliases', webPath: 'localDb.projectAliases.snapshot', hostPath: '/api/project-info/get', body: () => null },
+  { desktopChannel: 'sidebar-settings:set-project-info', webPath: 'localDb.projectAliases.updateInfo', hostPath: '/api/project-info/set', body: ([input]) => input ?? {}, trustedRenderer: true },
   {
     desktopChannel: 'local-db:project-aliases:list',
     webPath: 'localDb.projectAliases.list',
@@ -460,12 +464,6 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     webPath: 'ghosts.setEnabled',
     hostPath: '/api/ghosts/set-enabled',
     body: ([id, enabled, expectedInstalledApproval]) => ({ id, enabled, expectedInstalledApproval }),
-  },
-  {
-    desktopChannel: 'ghosts:request-task-approval',
-    webPath: 'ghosts.requestTaskApproval',
-    hostPath: '/api/ghosts/request-task-approval',
-    body: ([id, capability]) => ({ id, capability }),
   },
   {
     desktopChannel: 'ghosts:confirm:resolve',

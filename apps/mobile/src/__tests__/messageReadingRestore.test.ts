@@ -30,6 +30,7 @@ function restore(focused: string | null = null, key = 'message') {
   const scrollToIndex = vi.fn();
   const scrollToEndProgrammatically = vi.fn();
   const bindings = {
+    historyPositioning: true,
     initialAnchorDoneRef: { current: false },
     listData: [{ key: 'message' }],
     initialRevealProgress: { setValue: vi.fn() },
@@ -121,9 +122,9 @@ describe('reading position after real row measurements', () => {
 
 
 describe('top padding during bookmark restoration', () => {
-  function run(restoring: boolean, sequence = 1, nearBottom = false) {
+  function run(restoring: boolean, sequence = 1, nearBottom = false, historyPositioning = true) {
     const bindings = {
-      prevTopPaddingRef: { current: 0 }, topPadding: 90,
+      historyPositioning, prevTopPaddingRef: { current: 0 }, topPadding: 90,
       nearBottomRef: { current: nearBottom }, readingOlderRef: { current: false },
       reopeningAnchorRef: { current: restoring ? { anchor: {} } : null },
       reconcileReopeningAnchor: vi.fn(), initialAnchorDoneRef: { current: true },
@@ -136,9 +137,14 @@ describe('top padding during bookmark restoration', () => {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
     }).outputText;
     new Function(...Object.keys(bindings), `${compiled}\nrun();`)(...Object.values(bindings));
-    expect(bindings.prevTopPaddingRef.current).toBe(90);
+    expect(bindings.prevTopPaddingRef.current).toBe(historyPositioning ? 90 : 0);
     return bindings;
   }
+  it('defers hidden chrome compensation without consuming the padding delta', () => {
+    const r = run(false, 1, false, false);
+    expect(r.scrollToOffsetProgrammatically).not.toHaveBeenCalled();
+    expect(r.prevTopPaddingRef.current).toBe(0);
+  });
   it('lets the bookmark resolver own positioning instead of cancelling its index seek', () => {
     const r = run(true, 0);
     expect(r.reconcileReopeningAnchor).toHaveBeenCalledOnce();

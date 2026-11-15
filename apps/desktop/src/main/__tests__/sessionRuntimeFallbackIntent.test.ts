@@ -9,10 +9,10 @@ const guard = source.slice(
   source.indexOf('  const canApplyAutomaticRuntimeSelection ='),
   source.indexOf('  cancelPendingAgentSwitchHolder ='),
 );
-const fallback = source.slice(
-  source.indexOf('  const maybeApplySessionRuntimeFallback = async ('),
-  source.indexOf('  const sessionControlService = createSessionControlService({'),
-);
+// The fallback body is in sessionRuntimeFallback.ts; its ports and imports keep the names injected below.
+const fallbackSource = readFileSync(new URL('../maker-ipc/sessionRuntimeFallback.ts', import.meta.url), 'utf8');
+const fallbackBodyStart = fallbackSource.indexOf('  return async (\n    sessionId: string,') + '  return '.length;
+const fallback = `const maybeApplySessionRuntimeFallback = ${fallbackSource.slice(fallbackBodyStart, fallbackSource.lastIndexOf('\n}'))}`;
 
 function harness() {
   const pending = createPendingAgentSwitchRegistry();

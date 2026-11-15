@@ -7,7 +7,7 @@ import { HOST_UI_POSITIONS, type GhostHostUi, type GhostHostUiSetting } from '@c
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent';
 import { GhostInstallConsentContent, GhostInstallConsentHost } from '../GhostInstallConsentHost';
 import { GhostConfirmDialogHost } from '../GhostConfirmDialogHost';
-import { ghostHostUiApprovalTokens, ghostHostUiPermissionItems, type GhostManifest } from '../../../shared/ghost';
+import { ghostPermissionProjectionKey, ghostHostUiPermissionItems, type GhostManifest } from '../../../shared/ghost';
 
 const mocks = vi.hoisted(() => ({ confirm: vi.fn() }));
 
@@ -44,7 +44,7 @@ function hostPermissionText(host: GhostHostUi, subject: string): string {
     tools: [{ name: 'refresh', description: 'Refresh items' }],
     mcpApps: { ui: { resources: [{ uri: 'ui://board', file: 'page.html' }], tools: {} },
       host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'global' }], ...host } } };
-  const tokens = ghostHostUiApprovalTokens(manifest);
+  const projection = ghostHostUiPermissionItems(manifest).map(ghostPermissionProjectionKey);
   const item = ghostHostUiPermissionItems(manifest).find(permission => permission.detailArgs?.subject === subject);
   expect(item).toBeDefined();
   const before = JSON.stringify(item);
@@ -53,7 +53,7 @@ function hostPermissionText(host: GhostHostUi, subject: string): string {
   expect(text).not.toContain(subject);
   expect(text).not.toMatch(/\{"|perm\.hostUi\./);
   expect(JSON.stringify(item)).toBe(before);
-  expect(ghostHostUiApprovalTokens(manifest)).toEqual(tokens);
+  expect(ghostHostUiPermissionItems(manifest).map(ghostPermissionProjectionKey)).toEqual(projection);
   view.unmount();
   return text;
 }
@@ -172,7 +172,7 @@ describe('GhostInstallConsentHost', () => {
         host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'task' }],
           contributions: [{ id: 'review', title: 'Review', position: 'message.actions', view: 'board' }],
           capabilities: ['draft'] } } };
-    const before = ghostHostUiApprovalTokens(manifest);
+    const before = ghostHostUiPermissionItems(manifest).map(ghostPermissionProjectionKey);
     expect(before).toContain(JSON.stringify(['ui:host:capability:draft', 'panel', 'uiHost', [], null,
       'uiHostAccess', [['access', 'draft'], ['subject', 'capability:draft']]]));
     const view = render(<GhostInstallConsentContent facts={{ kind: 'install', ghostId: 'board', name: 'Board',
@@ -180,7 +180,7 @@ describe('GhostInstallConsentHost', () => {
     expect(screen.getByText('Read and edit the message draft')).toBeTruthy();
     expect(view.container.textContent).toContain('message action bar');
     expect(view.container.textContent).not.toMatch(/capability:|contribution:|\{"|"position"/);
-    expect(ghostHostUiApprovalTokens(manifest)).toEqual(before);
+    expect(ghostHostUiPermissionItems(manifest).map(ghostPermissionProjectionKey)).toEqual(before);
   });
 
   it.each([

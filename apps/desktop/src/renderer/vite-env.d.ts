@@ -1475,7 +1475,7 @@ interface ElectronAPI {
     uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
     deferUiPrompt: (id: string, version: string) => Promise<void>;
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
-    requestTaskApproval: (id: string, capability?: 'observe' | 'companions' | `host-tools:${import('@cindy/plugin-protocol').GhostHostToolGroup}` | `event:${import('../shared/ghost').GhostTaskEventTopic}`) => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
     getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
     listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId) => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
     runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings) => Promise<import('../shared/pluginRuntime').RuntimePluginSettings>;
@@ -5384,6 +5384,10 @@ interface ElectronAPI {
       ) => Promise<import('@cindy/maker-shared').TaskTagResult>;
     };
     projectAliases: {
+      autoIcon: (input: { projectKey: string }) => Promise<unknown>;
+      iconImage: (input: { projectKey: string }) => Promise<string | null>;
+      snapshot: () => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
+      updateInfo: (input: {projectKey: string; field: 'name' | 'icon' | 'profile'; value: string | null | {name?: string; icon?: string | null}; dataOwnerId: string | null; ownerGeneration: number}) => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
       set: (input: {
         projectKey: string;

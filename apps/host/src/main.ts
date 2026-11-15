@@ -2,6 +2,8 @@
 import './boot-env.js';
 // Second: keeps unreadable user settings files instead of deleting them.
 import './boot-settings.js';
+import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutomaticIcon.js';
+import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
 import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
@@ -98,10 +100,8 @@ import { ownerScopedPath } from '../../desktop/src/main/dataOwnerPath.js';
 import { createHostPluginRuntime } from './plugins/runtime.js';
 import { createHostPluginGateway } from './plugins/gateway.js';
 import { createHostToolService } from './agent/host-tools.js';
-import { storageShareMessage } from '../../desktop/src/main/cindy-brain/storageService.js';
 import { createHostConfirmations } from './host-confirmations.js';
 import { createMainI18n } from '../../desktop/src/main/i18n.js';
-import { GHOST_HOST_TOOL_GROUPS } from '@cindy/plugin-protocol';
 import { createHostMcpDuplicateChoices } from './agent/mcp-duplicate-choices.js';
 import { toolAutoReviewAction } from '@cindy/maker-core';
 import { GhostGrantConfirmBridge } from '../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.js';
@@ -595,7 +595,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
   hostTools = createHostToolService({ profileDir: dataDir, ownerId,
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
-    current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null, manager: pluginManager,
+    current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null,
     files: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.fsSlot; },
     storage: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.storage; },
     getSession: id => agentGraph?.maker.getSession(id), confirmations: hostConfirmations, t: i18n.t,
@@ -605,13 +605,6 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   });
   plugins = await createHostPluginRuntime({ profileDir: dataDir, ownerId, manager: pluginManager, credentials,
     hostToolRequest: hostTools.request, onPluginStopped: hostTools.stopPlugin,
-    confirmStorageShare: async (facts, check) => {
-      if (!check() || !hostConfirmations) return false;
-      const confirmed = await hostConfirmations.confirm({ ghostId: facts.sourceId, ghostName: facts.sourceName,
-        body: `${storageShareMessage(i18n.t, facts)}\n\n${facts.sourceId}\n→ ${facts.targetId}`,
-        confirmText: i18n.t('settings.ghosts.connections.confirmAllow'), cancelText: null, danger: false });
-      return check() && confirmed;
-    },
     getLoginEmail: () => accountUser?.email ?? null,
     getUser: () => accountUser,
     account: {
@@ -1180,10 +1173,6 @@ const serverDeps = {
     hostConfirmations?.connect(caller, send),
   resolvePluginConfirmation: (caller: string, kind: 'confirm' | 'install', requestId: string, confirmed: boolean) =>
     hostConfirmations?.resolve(caller, kind, requestId, confirmed) ?? false,
-  requestPluginTaskApproval: async (id: string, capability: string) => {
-    const group = GHOST_HOST_TOOL_GROUPS.find(value => capability === `host-tools:${value}`);
-    return { granted: !!group && !!hostTools && await hostTools.approveGroup(id, group, () => plugins?.current() === true, true) };
-  },
   cancelPendingAuth: async () => {
     agentAuth?.close();
     await providerConfig?.cancelLogins();
@@ -1244,6 +1233,14 @@ const serverDeps = {
   },
   // Project aliases are rows in the same owner database; the sidebar groups by
   // them on both clients, so they come straight from that table.
+  readProjectInfo,
+  readProjectIconImage,
+  resolveAutomaticProjectIcon,
+  updateProjectInfo: async (input: unknown) => {
+    const result = await updateProjectInfo(input);
+    eventHub.publish({ type: 'project_aliases_changed' });
+    return result;
+  },
   listProjectAliases: async () => {
     const rows = await getDbClient().drizzle.select().from(projectAliasTable);
     return rows.map((row: Record<string, unknown>) => ({

@@ -1,6 +1,6 @@
 # 插件调用宿主工具 cindy.host.call
 
-插件可直接调用普通任务中 Agent 使用的宿主工具。宿主复用相同的工具处理器、数据范围和风险规则；插件没有当前任务，不借用其它任务身份。此接口与仅管理本插件所建任务的 `cindy.tasks` 分别声明。
+插件可直接调用普通任务中 Agent 使用的宿主工具。宿主复用相同的工具处理器、数据范围和业务约束；插件没有当前任务，不借用其它任务身份。此接口与仅管理本插件所建任务的 `cindy.tasks` 分别声明。
 
 ## 声明与批准
 
@@ -17,14 +17,14 @@
 | `scheduler` | `cindy_scheduler` | 定时任务管理 |
 | `terminal` | `cindy_helper` | 宿主管理的命令、交互终端与后台作业 |
 | `files` | `cindy_helper` | 授权目录的文件操作与监听；调用 `file_request` |
-| `storage` | `cindy_helper` | 本插件存储接口与每次确认的跨插件副本分享；调用 `storage_request` |
+| `storage` | `cindy_helper` | 本插件存储接口与跨插件副本分享；调用 `storage_request` |
 | `browser` | `cindy_browser` | 当前浏览器的统一自动操作工具 |
 | `computer` | `cindy_computer` | 本机窗口、键盘和鼠标工具 |
 | `ssh` | `cindy_ssh` | 已配置 SSH 连接与远程命令 |
 | `docs` | `cindy_docs` | 插件私有目录内的文档生成、转换与读取 |
-| `discovery` | `cindy_helper` | 查询执行宿主提供的服务与本插件的声明、批准事实 |
+| `discovery` | `cindy_helper` | 查询执行宿主提供的服务与本插件声明 |
 
-每组在安装、更新确认和详情页各列一行权限。新增组需要批准；移除组立即收权。旧安装记录不会自动获得新能力，首次调用可请求宿主确认。用户拒绝后由详情页手动重试，插件不要循环请求。未知组按 Manifest v3 原样保存，当前宿主不授权。
+各组在安装、更新确认和详情页展示。安装或更新确认是整体决定：接受即授予该版本 manifest 声明的全部已知能力，拒绝则不安装或不更新。已启用且整体安装批准有效的插件可直接调用已声明组，不另存分组批准，也没有补批入口。旧 receipt 中的分项批准字段读取时忽略，不迁移或清理数据。未知组按 Manifest v3 原样保存，当前宿主不支持。
 
 ## 调用与结果
 
@@ -33,7 +33,7 @@
 ```js
 const result = await cindy.host.call('cindy_helper', 'list_sessions', { limit: 10 });
 const schedules = await cindy.host.call('cindy_scheduler', 'schedule_list', {});
-// archive_sessions 的参数和风险判定与 Agent 工具一致。
+// archive_sessions 的参数与 Host 业务处理和 Agent 工具一致。
 const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
   session_ids: [selectedSessionId]
 });
@@ -43,7 +43,7 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 
 依赖当前任务的工具必须显式传其目标参数（例如 `session_id` 或 `target_session_id`，以工具参数定义为准）。省略时保留 `NO_SESSION_CONTEXT` 等原工具错误；宿主不会替插件挑选任务。参数、设备寻址与返回结构均沿用对应 Agent 工具，可查该版本的 `list_tools` / `tool_schema`。插件能见的范围与普通用户任务一致，包含工具本身支持的跨设备范围。
 
-组批准后，`auto-approve` 工具直接执行；其余工具由宿主原生确认展示插件名、工具和参数，仅允许本次调用。取消、窗口不可用、账号切换、安装更新、停用或卸载均使旧请求失效。插件没有可继承的任务权限档，不能要求永久允许高风险操作。
+整体安装批准有效、已启用且 manifest 声明对应组时，插件直接进入同一个 Host 工具处理器，不套用 Agent 的 MCP Full/Auto/Ask 逐次策略，也不自动弹出确认框或权限卡。真实 Agent 执行继续使用它自己的权限机制。调用仍核对账号、安装目录与批准版本、启用状态和声明组；停用、卸载、撤销安装批准或账号变化使旧请求失效，Host 原有业务准入与写入检查继续执行。
 
 本入口仅支持表中服务的已声明组。插件管理（`ghost_*` 等）、主人代输入或 `ask_owner`、应用更新和反馈不开放。Node 子进程不提供此 API；应由声明的插件 Node 工作进程调用。
 
@@ -53,7 +53,7 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 
 ## 查询执行宿主的能力
 
-声明并获准 `agent.hostTools:['discovery']` 后调用：
+整体安装批准有效且声明 `agent.hostTools:['discovery']` 后调用：
 
 ```js
 const result = await cindy.host.call('cindy_helper', 'host_services', {});
@@ -62,10 +62,10 @@ const { scope, services } = JSON.parse(result.content.find(item => item.type ===
 
 `scope:'local'` 指执行插件的电脑，`services[]` 含 `group/server/tools/available`，有工具时另有示例 `entryTool`。
 不可用时 `reason` 为 `unsupported`（未提供）或 `disabled`（宿主开关关闭）；无法读取开关时为 `unavailable`。
-插件调用另含每组 `declared` / `approved`；这是宿主现查的本实例事实，不接受自报身份，也不查询其他插件数据。
+插件调用另含每组 `declared`，不返回独立 `approved` 状态；这是宿主现查的本实例声明，不接受自报身份，也不查询其他插件数据。
 `entryTool` 是该服务的一个现有工具入口；目录查询不执行工具、不启动服务、不读取凭证或内部路径。
 `available:true` 只说明宿主已接入且允许使用该服务；外部账号、浏览器连接、驱动安装和系统权限仍由原工具检查。
-服务注册替换后目录重建，开关、声明和批准每次现查。Node Host 缺少生产调度器等服务时明确返回不可用。
+服务注册替换后目录重建，开关、声明和整体安装批准每次现查。Node Host 缺少生产调度器等服务时明确返回不可用。
 普通 Agent 使用同一个 helper 工具查询服务，不附插件批准字段。查询能力不会赋予安装、停用或撤销其他插件的权限。
 
 ## 服务依赖与生命周期
@@ -98,7 +98,7 @@ const document = await cindy.host.call('cindy_docs', 'make_docx', {
 });
 ```
 
-浏览器使用用户已选择的后端；切换到「我的浏览器」、recipe、upload 等保留现有风险规则。
+浏览器使用用户已选择的后端；切换到「我的浏览器」、recipe、upload 等保留现有参数与业务校验，插件不追加风险确认。
 插件没有任务归属，选中侧边栏 `rsb-webview` 时返回 `BROWSER_RUNTIME_ACTION_FAILED` 并明确不支持；
 不会借用当前界面任务。专用浏览器与「我的浏览器」仍可用，原 Agent 和 UI 行为不变。
 页面中的主人私密输入保护保持生效，插件不能调用代输入确认或取得秘密。依赖真实任务的文件授权
@@ -106,7 +106,7 @@ const document = await cindy.host.call('cindy_docs', 'make_docx', {
 电脑观察快照按插件实例保留，停用、换版或账号变化后失效。录制等文件操作和文档工具的根目录
 为本插件私有文件目录；文档不能用路径参数越界。需要读取产物字节时另声明 `fs:true`，
 通过 `cindy.fs({op:'read',root:'data',path:'documents/report.docx'})` 读取；不能从宿主内部路径获取其他数据。
-SSH 使用当前账号已配置的连接池，沿用原连接管理和风险确认，私钥或认证值不进入插件。
+SSH 使用当前账号已配置的连接池，沿用原连接管理；插件不追加风险确认，私钥或认证值不进入插件。
 每个执行 Host 必须已提供对应服务；Node Host 插件复用已有 browser 平台 provider。
 Node Host 的插件 computer 调用与未装配的 scheduler、SSH 和文档服务返回
 `UNSUPPORTED_CAPABILITY`，不会因 manifest 声明自行安装或启动第二套实现。
@@ -125,12 +125,12 @@ Node Host 的插件 computer 调用与未装配的 scheduler、SSH 和文档服�
 `schedule_pause`、`schedule_resume`、`schedule_delete`、`schedule_run_now` 与 `schedule_list_runs`。
 参数和执行位置沿用原工具；插件没有当前任务，不能用 `bindToCurrentSession:true`，
 需要绑定时显式传 `targetSessionId`。运行记录由 `schedule_list_runs({scheduleId})` 读取。
-删除及其它由宿主判为逐次确认的调用须等待原生确认；回执不明时先查询，不自动重试写操作。
+调用使用整体安装授予的 `scheduler` 声明和 Host 业务准入；回执不明时先查询，不自动重试写操作。
 
 没有已批准 `node` 能力的插件，不支持提交或修改脚本、前置命令，以及运行或恢复已有脚本或前置命令的调度，
 统一返回 `UNSUPPORTED_CAPABILITY`，不提供额外确认放行。更新时也检查任务实际配置，不能通过只改 `recurring` 等字段重新激活脚本。
 普通调度的更新、运行与恢复复用主干 `expectedSchedule` 执行点检查：读后配置被另一处改动时按原不匹配结果拒绝，重新读取后再决定操作。
-普通定时任务的读改不受影响。已有 `node` 批准的插件沿用原共享风险规则；Agent 的工具分类与权限档保持原行为。
+普通定时任务的读改不受影响。使用脚本仍需已批准的 `node` 能力；Agent 的工具分类与权限档保持原行为。
 
 `settings` 组使用 `list_app_settings` 发现分类，再用 `get_app_settings({section})` 读取当前值和修改 schema，
 最后调用 `update_app_settings({section,patch})`。省略的字段保持原值，写入复用设置页的保存与生效路径；
@@ -138,14 +138,14 @@ Node Host 的插件 computer 调用与未装配的 scheduler、SSH 和文档服�
 
 ## 删除、分叉与检查点
 
-`control` 组的 `delete_session({session_id})` 使用宿主已有删除路径，风险规则固定为 `prompt-each-time`。
+整体安装已批准且声明 `control` 组的插件通过 `delete_session({session_id})` 使用宿主已有删除路径。
 跨电脑传 `deviceId::sessionId`，复用同账号远程控制；返回 `REMOTE_RESULT_UNKNOWN` 时先查询，不能自动重发。
 删除后的任务不能用 `unarchive_sessions` 恢复。插件没有当前任务；任务中的 Agent 不能删除调用任务自身。
 
 `fork_session({session_id,message_client_id})` 使用历史消息的 `clientId`，返回新任务的 `session_id`，不自动发送消息。
 user 锚点复制它之前的历史；assistant 锚点复制至下一条 user 之前，沿用界面已有的原生历史语义与限制。
 `rewind_session({session_id,message_client_id,stop_if_running:false,restore_files:true})` 恢复指定 user 消息之前的历史与检查点，
-风险固定为 `prompt-each-time`。只有明确要停止当前执行时才传 `stop_if_running:true`；`restore_files:false` 只回退对话。
+只有明确要停止当前执行时才传 `stop_if_running:true`；`restore_files:false` 只回退对话。
 两项支持 `deviceId::sessionId`，复用同账号远程控制。没有原生历史或检查点时返回宿主既有错误；不创建替代任务、不自动重试。
 跨电脑回执未知时先查看目标状态与历史，分叉尤其不能盲目重复，否则会生成多个任务。
 
@@ -153,8 +153,8 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 
 `get_session_runtime({session_id})` 返回 `permission_mode` 与运行设置的 `generation`。
 `set_session_runtime({session_id,expected_generation,permission_mode})` 支持宿主现有权限档：
-`ask` / `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`。插件每次调用走原生确认，
-变更使用界面同一提交队列、运行时更新、持久化与失败回滚；不会由插件直接写权限设置。
+`ask` / `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`。整体安装已批准且声明 `control` 组的插件直接调用，
+变更使用界面同一提交队列、运行时更新、持久化与失败回滚；不会由插件直接写权限设置，也不新增逐次审批。
 单独改权限保留模型和待生效路线；同时修改时先应用运行设置，成功后提交权限。`generation` 保护运行设置，权限仍按原队列提交，
 模型可能等到下一次发送生效；权限档字段不替代独立的 Plan 开关。
 合法的模型与权限组合仍可一次提交；目标运行实例不支持的权限档会在模型写入前拒绝。
@@ -168,13 +168,13 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 `send_to_session` 支持 `deviceId::sessionId`；派发前协商 `pluginCaller:1`，旧电脑缺少该能力时返回 `REMOTE_UNSUPPORTED`，不发送正文。
 来源标识为 `deviceId::pluginId`，仅用于来源展示；排队执行仍由既有一次性派发回执复核账号、安装、批准与原参数。
 消息已成功排队后，关闭逻辑页或 Node 正常空闲回收不取消该消息；执行、准入及返回仍要求来源有效。
-实际投递继续复核账号、安装目录与批准版本、启用状态、工具组批准以及目标和原消息；停用、卸载、更新重批或账号变化仍使它失效。
+实际投递继续复核账号、安装目录与批准版本、启用状态、manifest 工具组声明以及目标和原消息；停用、卸载、安装批准失效或账号变化仍使它失效。
 宿主进程重启后沿用现有无内存守卫失效规则，不提供持久重放或恢复。
 
 ## 命令、终端和后台作业
 
-声明 `agent.hostTools:["terminal"]` 后，逻辑页和 Node Worker 使用同一入口。启动、输入、
-调整尺寸、停止和清除已退出记录每次经原宿主风险判定与确认；读取、列表不会执行新命令。
+整体安装批准有效且声明 `agent.hostTools:["terminal"]` 后，逻辑页和 Node Worker 使用同一入口。
+启动、输入、调整尺寸、停止和清除已退出记录不追加调用确认；读取、列表不会执行新命令。
 命令以用户身份在执行电脑上运行，能访问其本机文件和应用；这项能力不是文件沙箱。
 宿主只传筛选后的系统路径、语言与用户配置目录环境，不继承宿主 API key、token 或 Node
 启动注入变量，也不自动传任何 `node.secretBindings` 的凭证。
@@ -224,11 +224,11 @@ Node Host 为逻辑页和 Node Worker 装配相同的公共入口、helper regis
 `history` 组的本机任务列表、工作目录、历史消息与搜索复用桌面宿主的查询回调和同一账号数据库；
 另一个已认证客户端读取的是这份任务数据，不创建插件专用任务副本。普通任务的来源、权限与
 Plan 状态继续由共享输入协调器和任务动作检查判定，插件调用继续使用宿主核验的插件身份。
-无需打开插件页面；已批准组的读取可直接执行。首次组批准与逐次确认仍须由已配对的
-Cindy 客户端在宿主对话框中回答；未连接支持确认的客户端时返回拒绝，不默认同意。
-详情页的重新批准沿用同一 receipt，不要求重装插件。
+无需打开插件页面或连接确认客户端；整体安装批准有效、启用且声明的能力直接使用原处理器。
+没有补批端点或独立工具组批准；Agent 自身的权限流程保持原样。
+安装/更新和 Host 现有独立业务确认继续由原有流程处理。
 
-确认只发送给一个已认证控制端，不写入任务事件回放。断线、停用、更新或账号边界使
+宿主原有安装确认及显式交互的确认只发送给一个已认证控制端，不写入任务事件回放；`host.call` 不产生这类批准请求。断线、停用、更新或账号边界使
 旧确认失效；插件应把取消作为本次未获批准，不能循环重试或伪造回答。
 确认发送积压超过 1 MiB，或写入遇到背压且缓冲未排空时，同样按无法送达拒绝本次确认。
 终端作业留在执行 Host，重新调用列表和续读不会再次启动程序。Node Host 当前已装配
@@ -237,8 +237,8 @@ Cindy 客户端在宿主对话框中回答；未连接支持确认的客户端�
 `UNSUPPORTED_CAPABILITY`，说明当前执行环境不支持此宿主服务；不会创建另一套调度任务。
 `history` 的本机查询与 `terminal` 已接通，其他组须以执行 Host 的工具目录和实际回执为准。
 Node Host 已提供的 `browser` 平台 provider 同时接入 Agent 与插件入口，不另建浏览器实现。
-Node Host 插件的 `computer` 在创建观察 runtime、确认或驱动执行之前返回 `UNSUPPORTED_CAPABILITY`，
-`host_services` 同样报告不可用：Desktop 的逐次批准身份不能从跨进程 caller 元数据重建。
+Node Host 插件的 `computer` 在创建观察 runtime 或驱动执行之前返回 `UNSUPPORTED_CAPABILITY`，
+`host_services` 同样报告不可用：现有平台桥尚未接通 Node 插件的安装归属与调用生命周期。
 不新增跨进程授权证明；Node Agent 与 Desktop 插件的电脑调用保留原路径、快照生命周期和门禁。
 需要定时任务时使用已提供调度器的执行宿主，不循环重试不支持结果。
 

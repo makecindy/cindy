@@ -477,7 +477,7 @@ describe('idle release input gates', () => {
 describe('idle release shared check and close', () => {
   it('checks ordinary scope with the given SQL and closes idle-only unless retrying an error', async () => {
     const queryOne = vi.fn(async (_sql: string, params?: unknown[]) => (params?.[0] === 'task' ? { id: 'task' } : undefined));
-    const isOrdinary = createOrdinaryIdleReleaseTaskCheck(() => ({ queryOne }), ORDINARY_CODEX_TASK_SQL);
+    const isOrdinary = createOrdinaryIdleReleaseTaskCheck(() => ({ queryOne } as never), ORDINARY_CODEX_TASK_SQL);
     await expect(isOrdinary('task', 'native')).resolves.toBe(true);
     await expect(isOrdinary('other', 'native')).resolves.toBe(false);
     expect(queryOne).toHaveBeenCalledWith(ORDINARY_CODEX_TASK_SQL, ['task', 'native']);

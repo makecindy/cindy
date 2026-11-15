@@ -40,6 +40,7 @@ import type { ContextRebuildArgs } from '../client/tx/types';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { isEmptyAssistantContent } from '../sessionListProjection.sql';
 import { messages, sessions } from '../schema';
+import { messageRowid, supersedeRetriedUserTurnWithPorts } from '../retriedUserTurnSupersede.js';
 import {
   messageToCamel,
   messageCreateToRow,
@@ -58,12 +59,10 @@ import {
 import { adoptLegacySessionBeforeOpen } from '../../session-import/legacy';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
-import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
 import {
   isSyntheticTriggerText,
   mergeDismissedIntoErrorContent,
 } from '../../../shared/interruptedTurn.js';
-import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../../shared/codexSubscriptionValue.js';
 import { buildTurnUsageDetails, normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails.js';
 import { readSessionCostDetails } from '../../usage/sessionCostDetails.js';
@@ -96,7 +95,6 @@ const log = createLogger('localDb/messages');
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE = 32;
-const messageRowid = sql<number>`rowid`;
 /**
  * Skip silent-stop autoResume user rows without letting one bad historical
  * agent_meta blob fail the whole page query. SQLite may evaluate
@@ -108,7 +106,6 @@ function notAutoResumeAgentMetaSql() {
 
 // Normal publication stays non-blocking. Authoritative corrections/retractions
 // settle the exact row's create/update hooks before reconciling derived state.
-const pendingPrRefWrites = new WeakMap<DbClient, Map<string, Promise<void>>>();
 const pendingMediaWrites = new WeakMap<DbClient, Map<string, Set<Promise<void>>>>();
 
 function trackMessageMediaWrite(dbClient: DbClient, rowId: string, write: Promise<void>): Promise<void> {
@@ -1162,8 +1159,6 @@ export async function commitMessageDeletion(
     });
   }
 
-  void recomputePrRefsForSession(sessionId).catch(() => undefined);
-
   // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出 canonical
   // preview，避免其它窗口 / device-link 控制端继续显示已删除的末条消息。preview 口径与
   // sessions:list 的 LATEST_MSG_CONTENT_SQL 一致：可见 user/assistant，过滤 rewind_at /
@@ -1271,7 +1266,6 @@ export const rewindPersistedUserMessageAfterClear = createMessageClearRecovery({
   collectCindyMediaHashes: content => collectCindyMediaHashes(content),
   removeSessionAttachmentRefIfUnreferencedByLiveMessage: params => removeSessionAttachmentRefIfUnreferencedByLiveMessage(params),
   broadcastMessageDeleted: (payload, scope) => broadcastMessageDeleted(payload, scope),
-  recomputePrRefsForSession: id => recomputePrRefsForSession(id),
   log,
 });
 
@@ -1340,68 +1334,9 @@ export async function supersedeRetriedUserTurn(
   sessionId: string,
   args: { supersededUserClientId: string; retryUserClientId: string },
 ): Promise<string[]> {
-  const ownerScope = captureOwnerBroadcastScope();
-  const db = getDbClient().drizzle;
-  const [oldRow] = await db
-    .select({
-      clientId: messages.clientId,
-      createdAt: messages.createdAt,
-      rowid: messageRowid,
-    })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.clientId, args.supersededUserClientId),
-        eq(messages.role, 'user'),
-        isNull(messages.rewindAt),
-      ),
-    )
-    .limit(1);
-  const [retryRow] = await db
-    .select({ createdAt: messages.createdAt, rowid: messageRowid })
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, args.retryUserClientId)))
-    .limit(1);
-  if (!oldRow || !retryRow) return [];
-  // 窗口两端都用 (created_at, rowid) 双键:error 行的 createdAt 取"本轮最后行 + 1",
-  // 但历史数据与时钟边缘仍可能与相邻 user 行同毫秒。口径与 rewind / fork 的边界
-  // 比较一致(messageRowid + gt/lt 组合),orderBy 让返回顺序确定,不依赖执行计划。
-  const errorRows = await db
-    .select({ clientId: messages.clientId })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.role, 'error'),
-        isNull(messages.rewindAt),
-        or(
-          gt(messages.createdAt, oldRow.createdAt),
-          and(eq(messages.createdAt, oldRow.createdAt), gt(messageRowid, oldRow.rowid)),
-        ),
-        or(
-          lt(messages.createdAt, retryRow.createdAt),
-          and(eq(messages.createdAt, retryRow.createdAt), lt(messageRowid, retryRow.rowid)),
-        ),
-      ),
-    )
-    .orderBy(asc(messages.createdAt), asc(messageRowid));
-  const clientIds = [oldRow.clientId, ...errorRows.map((r) => r.clientId)];
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return [];
-  await db
-    .update(messages)
-    .set({ rewindAt: Date.now() })
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        inArray(messages.clientId, clientIds),
-        isNull(messages.rewindAt),
-      ),
-    );
-  if (isOwnerBroadcastScopeCurrent(ownerScope)) {
-    broadcastMessageDeleted({ sessionId, clientId: oldRow.clientId, clientIds }, ownerScope);
-  }
-  return clientIds;
+  return supersedeRetriedUserTurnWithPorts(sessionId, args, {
+    captureOwnerBroadcastScope, isOwnerBroadcastScopeCurrent, broadcastMessageDeleted,
+  });
 }
 
 /** Settle media publication off the global message queue, using its captured DB. */
@@ -1441,15 +1376,6 @@ async function reconcileAssistantDerivedState(
       error: error instanceof Error ? error.message : String(error),
     });
   });
-  await pendingPrRefWrites.get(dbClient)?.get(row.id);
-  try {
-    if (isCurrent()) await recomputePrRefsForSession(row.sessionId, { dbClient, isCurrent });
-  } catch (error) {
-    log.warn('assistant correction PR reference reconciliation failed', {
-      sessionId: row.sessionId, clientId: row.clientId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
   if (!refreshPreview || !isCurrent()) return;
   try {
     const latest = await latestVisiblePreviewRow(row.sessionId);
@@ -1525,10 +1451,6 @@ export async function updateMessageContent(
   // The correction already committed: settle its original publication even if
   // clear/owner changed or another deletion removed the row during readback.
   if (original) await reconcileAssistantDerivedState(original, dbClient, isCurrent, ownerScope, false);
-  else if (row && (row.role === 'user' || row.role === 'assistant')) {
-    await pendingPrRefWrites.get(dbClient)?.get(row.id);
-    if (isCurrent()) await recomputePrRefsForSession(sessionId, { dbClient, isCurrent });
-  }
   return row ? messageToCamel(row) : null;
 }
 
@@ -1694,20 +1616,6 @@ export async function createMessage(
     // 双保险: chat-history-embedder.onMessageCreated 内部已 try/catch,
     // 此处 .catch 仅防御该函数将来被 refactor 时漏掉的异常路径。
   });
-  // session-git-pr-context hook —— fire-and-forget。内部限定 user/assistant 角色,
-  // 每条消息跑一次锚定正则线性扫描(开销可忽略);失败仅 log warn。
-  const prRefsWrite = recordPrRefsForMessage(msg).catch(() => {
-    // recordPrRefsForMessage 内部已 try/catch,此处兜底防御 refactor 漏网异常。
-  });
-  let pendingPrRefs = pendingPrRefWrites.get(dbClient);
-  if (!pendingPrRefs) {
-    pendingPrRefs = new Map();
-    pendingPrRefWrites.set(dbClient, pendingPrRefs);
-  }
-  pendingPrRefs.set(msg.id, prRefsWrite);
-  void prRefsWrite.then(() => {
-    if (pendingPrRefs.get(msg.id) === prRefsWrite) pendingPrRefs.delete(msg.id);
-  });
   return msg;
 }
 
@@ -1802,7 +1710,6 @@ export function extractEstimatedSessionValueEntries(
  * 用于 turnCostBroadcaster:turn 结束后把 per-turn 费用挂到该轮最后一条 assistant。
  */
 
-
 /** Stable native identity of a visible user input; do not match retries by text. */
 export async function readPiUserEntry(sessionId: string, clientId: string): Promise<string | undefined> {
   return readVisiblePiUserEntry(getDbClient(), sessionId, clientId);
@@ -1812,7 +1719,6 @@ export async function readPiUserEntry(sessionId: string, clientId: string): Prom
 export async function patchMessageAgentMetaWithResult(sessionId: string, clientId: string, patch: Record<string, unknown>): Promise<MessageAgentMetaPatchResult | null> {
   return patchMessageAgentMetaWithResultRow(getDbClient(), sessionId, clientId, patch);
 }
-
 
 
 /**
@@ -2243,134 +2149,8 @@ function isHiddenContinuationUserMessage(agentMeta: string | null, content: stri
 }
 
 
-
-/** Phase 2:目标引擎的停泊原生会话(由最近一次"它离场"的边界行派生)。 */
-export interface ParkedEngineSession {
-  /** 该引擎离场时的原生 session id(resume 用)。 */
-  sdkSessionId: string;
-  /** 水位线 = 离场边界行的位置;增量交接只取其后的消息。 */
-  watermarkCreatedAt: number;
-  watermarkRowid: number;
-}
-
-/**
- * session-agent-switch Phase 2:查目标引擎是否有可续接的停泊原生会话。
- *
- * 停泊绑定不新增 schema,从边界行确定性派生:最新一条未被 rewind、晚于 /clear
- * 的 agent_switch 行中,content.fromAgentKind === targetDbKind 的那条——其
- * fromSdkSessionId 即该引擎离场时的原生会话快照,行位置即水位线。
- *
- * 只认"该引擎最近一次离场"那一行:fromSdkSessionId 为空(该引擎上次在场期间
- * 从未真正 spawn)→ 按无绑定处理,不回退更早的行——更早快照对应的原生会话
- * 已被后来的全新会话取代,续接它会让引擎拿到与消息流矛盾的记忆。
- * 消息删除写入的 context_rebuild 行会使它之前的全部停泊绑定失效；否则
- * 用户稍后切回旧引擎时仍会 resume 含被删消息的 transcript，绕过本次上下文重建。
- * 传 fromAgentDeviceId 时只认在该设备离场的边界:另一台电脑上的原生线程在本机
- * 不存在,误续接会合成一份来源身份错误的恢复历史。缺省不按设备过滤。普通设备 ID
- * 以边界与当前设备相等为准(A→B→A 可继续原生接续);share: 绑定与旧版缺字段边界
- * 在后续换电脑后失效,因为逻辑 ID 无法证明原生线程仍在当前物理机。
- * content 是 JSON,无法在 SQL 里按字段过滤,取有界条数(边界行数量 = 切换次数,
- * 天然很小)在 JS 里扫。
- */
-export async function findParkedEngineSession(
-  sessionId: string,
-  targetDbKind: 'cc' | 'codex' | 'pi',
-  fromAgentDeviceId?: string | null,
-): Promise<ParkedEngineSession | null> {
-  const db = getDbClient().drizzle;
-  const [sessRow] = await db
-    .select({ clearedAt: sessions.clearedAt })
-    .from(sessions)
-    .where(eq(sessions.id, sessionId))
-    .limit(1);
-  const clearedAt = sessRow?.clearedAt ?? null;
-  const afterClear = clearedAt === null ? undefined : gt(messages.createdAt, clearedAt);
-  const [contextRebuild] = await db
-    .select({ rowid: messageRowid, createdAt: messages.createdAt })
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'context_rebuild'), afterClear))
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
-    .limit(1);
-  const rows = await db
-    .select({
-      rowid: messageRowid,
-      content: messages.content,
-      createdAt: messages.createdAt,
-    })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.role, 'agent_switch'),
-        isNull(messages.rewindAt),
-        afterClear,
-      ),
-    )
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
-    .limit(50);
-  // Older boundaries did not record their departure device. Keep resuming them
-  // only while the task has stayed on one computer; a later relocation makes the
-  // missing evidence unsafe to interpret locally.
-  let deviceMovedAfterBoundary = false;
-  for (const row of rows) {
-    let parsed: {
-      fromAgentKind?: unknown;
-      fromSdkSessionId?: unknown;
-      fromAgentDeviceId?: unknown;
-      toAgentDeviceId?: unknown;
-    };
-    try {
-      parsed = JSON.parse(row.content) as typeof parsed;
-    } catch {
-      continue;
-    }
-    if (parsed.fromAgentKind !== targetDbKind) {
-      // toAgentDeviceId exists only on relocation boundaries. Forced provider
-      // relocations can keep the same logical share/group id while moving to a
-      // different physical computer, so presence (not id inequality) is the
-      // safe signal that an older native binding may have changed owners.
-      if (parsed.toAgentDeviceId !== undefined) deviceMovedAfterBoundary = true;
-      continue;
-    }
-    // A cross-device switch leaves the native thread on the computer it ran on.
-    // This is still the engine's most recent departure, so do not fall back to
-    // an older local thread: resuming it would skip the remote interval's native
-    // memory and synthesize a lossy history with the wrong client identity.
-    if (fromAgentDeviceId !== undefined) {
-      const boundaryDeviceId = parsed.fromAgentDeviceId === null
-        ? null
-        : typeof parsed.fromAgentDeviceId === 'string'
-          ? parsed.fromAgentDeviceId
-          : undefined;
-      // A share binding can hide a physical move behind the same logical id.
-      // Legacy boundaries have no device evidence at all, so a later relocation
-      // also makes them unsafe. Ordinary device ids can be trusted when they
-      // match the current device, including an A -> B -> A return.
-      if (deviceMovedAfterBoundary
-        && (boundaryDeviceId === undefined || isProviderShareAgentDeviceId(boundaryDeviceId))) {
-        return null;
-      }
-      if (boundaryDeviceId !== undefined && boundaryDeviceId !== fromAgentDeviceId) return null;
-    }
-    if (
-      contextRebuild &&
-      (contextRebuild.createdAt > row.createdAt ||
-        (contextRebuild.createdAt === row.createdAt && contextRebuild.rowid > row.rowid))
-    ) {
-      return null;
-    }
-    // 命中"该引擎最近一次离场":快照为空即无绑定,不再往更早找。
-    if (typeof parsed.fromSdkSessionId !== 'string' || parsed.fromSdkSessionId.length === 0) {
-      return null;
-    }
-    return {
-      sdkSessionId: parsed.fromSdkSessionId,
-      watermarkCreatedAt: row.createdAt,
-      watermarkRowid: row.rowid,
-    };
-  }
-  return null;
-}
+export type { ParkedEngineSession } from '../agentSwitchRows.js';
+export { findParkedEngineSession } from '../agentSwitchRows.js';
 
 /**
  * session-agent-switch Phase 2:改写边界行 content 并广播(resume bootstrap 失败
