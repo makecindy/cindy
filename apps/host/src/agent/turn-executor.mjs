@@ -583,11 +583,13 @@ export function createTurnExecutor(deps) {
   // settlement before it replays; a turn of the task still running, or a live runtime, means
   // something started since, so the replay is refused. As on the desktop, its Git baseline is the
   // transaction's: a replay has no persistUserMessage, so beforeDispatchDirectUserTurn opens it and
-  // onUndispatchedDirectUserTurn drops it when the replay is refused or fails.
+  // onUndispatchedDirectUserTurn drops it when the replay is refused or fails. Its turn carries the
+  // claimed input's client id, only to stamp its events and receipts (Host-only: /api/chat ends a
+  // message's stream on a terminal of its own client id); no user row is written for it.
   async function replay(sessionId, message, createOpts, sendOpts = {}) {
     if (turns.get(sessionId)?.running || deps.getMaker().getSession(sessionId)) return { accepted: false };
     createOpts = { ...createOpts };
-    const turn = openTurn(sessionId, createOpts, sendOpts, undefined);
+    const turn = openTurn(sessionId, createOpts, sendOpts, recovery?.replayClientId(sessionId));
     turn.preparing = (async () => {
       await readExecutionSession(sessionId);
       assertHostTaskExecutionSupported(createOpts);

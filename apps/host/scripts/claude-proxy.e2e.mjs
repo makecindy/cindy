@@ -119,6 +119,7 @@ const { sessions, messages: messageTable } = await import('../../desktop/src/mai
 const { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } = await import('../../desktop/src/main/localDb/sessionActiveTurn.ts');
 const { createInputQueue } = await import('../src/agent/input-queue.mjs');
 const { createEventHub } = await import('../src/events.mjs');
+const { createChatHandler } = await import('../src/chat.mjs');
 const { createHostMessageStore } = await import('../src/message-store.ts');
 const { createHostContextRecoveryWiring } = await import('../src/agent/context-recovery-wiring.ts');
 const { createHostAgentHandoffPending } = await import('../src/agent/handoff-pending.ts');
@@ -370,12 +371,14 @@ try {
     const store = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
     let rotatedDuringRebuild = null;
     // The rebuild's card is written between the rebuild's commit and the replay: the gateway takes
-    // requests again and its key changes there.
+    // requests again there, and on the first rebuild its key changes.
     const persistMessage = async (id, input, options) => {
-      if (String(input.clientId).startsWith('context-rebuild-card:') && rotatedDuringRebuild === null) {
+      if (String(input.clientId).startsWith('context-rebuild-card:')) {
         overflowing = false;
-        rotatedDuringRebuild = gatewayKey = 'synthetic-gateway-key-during-rebuild';
-        await modelAccess.sync.sync();
+        if (rotatedDuringRebuild === null) {
+          rotatedDuringRebuild = gatewayKey = 'synthetic-gateway-key-during-rebuild';
+          await modelAccess.sync.sync();
+        }
       }
       return store(id, input, options);
     };
@@ -435,6 +438,33 @@ try {
       assert.ok(next.length > 0);
       assert.equal(count(lastUserText(next[0]), firstLine), 0, 'the next message carries no summary');
       assert.equal(JSON.parse((await rowsOf('context_rebuild'))[0].content).consumed, true);
+
+      // The same recovery for a message sent through /api/chat: the replay's events carry the
+      // message's client id, so its stream carries the answer and ends on the replay's done.
+      const chat = createChatHandler({ readSession, events: hub,
+        enqueue: (id, input) => queue.enqueue(id, input), inputStatus: (id, clientId) => queue.inputStatus(id, clientId) });
+      const chatServer = createServer((req, res) => { void chat(req, res); });
+      await new Promise(resolve => chatServer.listen(0, '127.0.0.1', resolve));
+      try {
+        const beforeChat = requests.length;
+        overflowing = true;
+        // A stream that never ends fails here on the timeout.
+        const body = await fetch(`http://127.0.0.1:${chatServer.address().port}/chat`, { method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId: recoveryTask, clientId: 'claude-recovery-chat', prompt: 'now return synthetic complete again' }),
+          signal: AbortSignal.timeout(120_000) }).then(async response => { assert.equal(response.status, 200); return response.text(); });
+        assert.ok(turnRequests(beforeChat).some(r => r.overflow), 'the gateway refused the chat message as too long');
+        const streamed = body.split('\n\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice('data: '.length)));
+        assert.ok(streamed.some(event => event.inputClientId === 'claude-recovery-chat' && event.type === 'done'),
+          'the stream ends on the replay\'s done, stamped with the message\'s client id');
+        assert.match(body, /event: end/);
+        assert.equal(streamed.filter(event => event.type === 'error' || event.event?.type === 'error').length, 0, 'the stream shows no error');
+        assert.equal((await rowsOf('user')).length, 4, 'the replay writes no second user row');
+        assert.equal((await rowsOf('context_rebuild')).length, 2, 'the chat message was recovered');
+        assert.equal((await rowsOf('error')).length, 0, 'no error row');
+      } finally {
+        await new Promise(resolve => chatServer.close(resolve));
+      }
     } finally {
       unsubscribe();
       overflowing = false;
@@ -446,7 +476,7 @@ try {
       // real-wait: the process exits on its own schedule.
       while ((await childPids()).length > 0 && Date.now() < exitDeadline) await new Promise(resolve => setTimeout(resolve, 100));
     }
-    console.log('PASS Claude context overflow recovery on the gateway through the production wiring: the key changed during the rebuild and the replay used the new key, carrying the summary once; no client error; the next message carries no summary');
+    console.log('PASS Claude context overflow recovery on the gateway through the production wiring: the key changed during the rebuild and the replay used the new key, carrying the summary once; no client error; the next message carries no summary; a message sent through /api/chat is recovered and its stream ends on the replay');
   }
 
   // Neither proxy secret is written anywhere: logs, the CLI's home and config, the profile.

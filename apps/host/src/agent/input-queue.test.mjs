@@ -21,7 +21,7 @@ import { createInputQueue } from './input-queue.mjs';
 import { createTurnExecutor } from './turn-executor.mjs';
 import { lockSessionRoute } from './session-route-lock.mjs';
 import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
-import { RECOVERY_SHUTDOWN_WAIT_MS, contextRecoveryKind } from './context-recovery.ts';
+import { RECOVERY_SHUTDOWN_WAIT_MS, contextRecoveryKind, createHostContextRecovery } from './context-recovery.ts';
 import { createHostContextRecoveryRollover } from './context-recovery-assembly.ts';
 import { createHostAgentHandoffPending } from './handoff-pending.ts';
 import { createSessionStderrOptions } from '../../../desktop/src/main/maker-ipc/sessionRequest.ts';
@@ -36,6 +36,9 @@ import { createHostMessageStore } from '../message-store.ts';
 import { listErrorTailPendingRows } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { createEventHub } from '../events.mjs';
+import { createChatHandler } from '../chat.mjs';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
 import { GATEWAY_PROXY_TOKEN_INVALID_REASON } from '@cindy/maker-shared/error-redaction';
@@ -2815,6 +2818,135 @@ for (const outcome of ['accepted', 'refused', 'throws']) {
     assert.equal(coordinator.hasPendingTurnStart(id), false, 'no baseline record is left for the next turn to take');
   });
 }
+
+// Bug (Greptile on #10613): the replay's turn carried no client id, so none of its events matched the
+// /api/chat stream of the message it replays (chat.mjs ends on a terminal of its own clientId) and the
+// claimed overflow error is held, so the stream never ended after the answer. Rule: a Host turn's events
+// carry its input's clientId; the replay takes the claimed turn's, only to stamp events and receipts
+// (no user row, no persistUserMessage). The desktop has no counterpart: its renderer does not end a
+// view on a client id (release table section 7).
+// The replay's client id lives exactly as long as the task's running recovery (context-recovery.ts
+// replayClientId): it is there while the recovery runs and gone once it recovers, fails, throws, is
+// rebuilt or is drained at shutdown, so no later, unrelated replay (a rebuild that has no terminal,
+// such as a model change) is stamped with an old message's id.
+for (const end of ['recovers', 'fails', 'throws', 'rebuilt', 'shutdown']) {
+  const label = { recovers: 'recovers', fails: 'fails (a refused replay included)', throws: 'throws', rebuilt: 'is rebuilt', shutdown: 'is drained at shutdown' }[end];
+  test(`context recovery: the replay client id is gone once the recovery ${label}`, { timeout: 10_000 }, async t => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let seen;
+    let recovery;
+    const rollover = {
+      claim: () => 'claimed',
+      tryRecover: async () => {
+        seen = recovery.replayClientId('lifecycle');
+        if (end === 'rebuilt') recovery.noteRebuilt('lifecycle');
+        await gate;
+        if (end === 'throws') throw new Error('recovery failed');
+        return end !== 'fails';
+      },
+    };
+    recovery = createHostContextRecovery({ getRollover: () => rollover, publish() {}, log: quiet });
+    const history = { reserveTurnErrorPersistId: () => 'row', releaseReservedTurnErrorPersistId() {},
+      onTurnErrorEvent() {}, drain: async () => {} };
+    const terminal = { session: { id: 'lifecycle', remoteHostId: null }, history,
+      event: { type: 'error', data: OVERFLOW }, fields: { inputClientId: 'lifecycle-input' },
+      isStopping: false, isGatewayProxyTokenRecovery: false };
+    assert.equal(recovery.replayClientId('lifecycle'), undefined, 'no recovery, no client id');
+    const claim = recovery.claim(terminal);
+    assert.equal(claim, 'claimed');
+    recovery.settle(terminal, claim, async () => {});
+    await waitFor(() => seen !== undefined);
+    assert.equal(seen, 'lifecycle-input', 'the running recovery\'s replay gets the claimed input\'s id');
+    if (end === 'shutdown') {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const draining = recovery.drainForShutdown();
+      t.mock.timers.tick(RECOVERY_SHUTDOWN_WAIT_MS);
+      await draining;
+    } else {
+      release();
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(recovery.replayClientId('lifecycle'), undefined);
+    release();
+  });
+}
+
+async function chatThroughRecovery(t, overrides = {}) {
+  const hub = createEventHub();
+  const r = await assembledRecovery(t, { hub, ...overrides });
+  const writes = [];
+  const response = Object.assign(new EventEmitter(), {
+    writableEnded: false, headersSent: false,
+    writeHead(status) { this.statusCode = status; this.headersSent = true; },
+    write(chunk) { writes.push(String(chunk)); },
+    end(chunk) { if (chunk) writes.push(String(chunk)); this.writableEnded = true; this.emit('close'); },
+  });
+  const chat = createChatHandler({ events: hub, readSession: async id => ({ id, status: 'active' }),
+    createSession: async () => { throw new Error('the task exists'); },
+    enqueue: (id, input) => r.h.queue.enqueue(id, input), inputStatus: async () => 'running' });
+  const send = async (id, clientId) => {
+    await r.db.createTask(id);
+    await chat(Readable.from([Buffer.from(JSON.stringify({ sessionId: id, clientId, prompt: 'long task' }))]), response);
+    await waitFor(() => r.h.maker.sessions.get(id)?.sent.length === 1);
+    const first = r.h.maker.sessions.get(id);
+    first.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+    return first;
+  };
+  const streamed = () => writes.join('').split('\n\n').filter(line => line.startsWith('data: '))
+    .map(line => JSON.parse(line.slice('data: '.length)));
+  return { ...r, response, writes, send, streamed };
+}
+
+test('context recovery through /api/chat: the stream carries the replay\'s answer and ends after its done, with one user row', { timeout: 30_000 }, async t => {
+  const c = await chatThroughRecovery(t);
+  const first = await c.send('chat-recovered', 'chat-input');
+  await waitFor(() => { const next = c.h.maker.sessions.get('chat-recovered'); return next && next !== first && next.sent.length === 1; });
+  const replayed = c.h.maker.sessions.get('chat-recovered');
+  const stamp = { sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId };
+  replayed.emit({ type: 'text', data: { text: 'replayed answer' }, ...stamp });
+  await waitFor(() => c.streamed().some(event => event.event?.data?.text === 'replayed answer' || event.data?.text === 'replayed answer'));
+  assert.equal(c.response.writableEnded, false, 'the stream is still open while the replay runs');
+  replayed.emit({ type: 'done', data: {}, ...stamp });
+  await waitFor(() => c.response.writableEnded);
+  const answer = c.streamed().filter(event => event.inputClientId === 'chat-input' && event.type === 'text');
+  assert.equal(answer.length, 1, 'the replay\'s answer is stamped with the replayed message\'s client id');
+  assert.equal(c.streamed().filter(event => event.type === 'error').length, 0, 'the held overflow error is not shown');
+  assert.match(c.writes.at(-1), /event: end/);
+  assert.equal(c.rows('chat-recovered', 'user').length, 1, 'the replay writes no second user row');
+  assert.deepEqual(c.rows('chat-recovered', 'user').map(row => row.client_id), ['chat-input']);
+});
+
+test('context recovery through /api/chat: a stop during the replay ends the stream with the message\'s interrupted receipt', { timeout: 30_000 }, async t => {
+  const c = await chatThroughRecovery(t);
+  const first = await c.send('chat-stopped', 'chat-stop-input');
+  await waitFor(() => { const next = c.h.maker.sessions.get('chat-stopped'); return next && next !== first && next.sent.length === 1; });
+  assert.equal(c.response.writableEnded, false);
+  await c.h.queue.stop('chat-stopped');
+  await waitFor(() => c.response.writableEnded);
+  assert.ok(c.streamed().some(event => event.type === 'input_receipt' && event.inputClientId === 'chat-stop-input'
+    && event.status === 'interrupted'));
+  assert.equal(c.rows('chat-stopped', 'user').length, 1);
+});
+
+test('context recovery through /api/chat: a recovery that fails shows the held error to the message\'s stream, which ends', { timeout: 30_000 }, async t => {
+  const c = await chatThroughRecovery(t);
+  const create = c.h.maker.createSession;
+  let created = 0;
+  c.h.maker.createSession = async opts => {
+    const session = await create(opts);
+    // The replay's runtime fails to send: the recovery fails.
+    if (++created === 2) session.send = async () => { throw new Error('vendor failed'); };
+    return session;
+  };
+  await c.send('chat-failed', 'chat-fail-input');
+  await waitFor(() => c.response.writableEnded);
+  const errors = c.streamed().filter(event => event.type === 'error');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].inputClientId, 'chat-fail-input', 'the error carries the replayed message\'s client id');
+  assert.equal(c.rows('chat-failed', 'user').length, 1);
+});
 
 test('context recovery assembly: a steer in flight when the replay is accepted is not aborted', { timeout: 30_000 }, async t => {
   const r = await assembledRecovery(t);
