@@ -1679,3 +1679,20 @@ it('routes Pi version checks and exact-version installs to the managed runtime',
     expect(call).toHaveBeenCalledTimes(2);
   } finally { await client.close(); await server.close(); }
 });
+
+// Unit: the public discovery/Host tool must return a real, device-bound navigation link,
+// not mutate settings or claim that the user has already completed setup.
+it('discovers and generates settings links on the task computer', async () => {
+  const call = vi.fn();
+  const server = createXdtHelperMcpServer({ appSettings: { call, navigationDeviceId: () => 'computer-a' } }, {
+    agentKind: 'codex', workingDir: '/repo', sessionId: 'task-a',
+  });
+  try {
+    const result = parsePayload(await server.hostTools.call('get_settings_link', { page: 'voice-input', query: '词典' }));
+    expect(result).toMatchObject({ ok: true, deviceId: 'computer-a', page: 'voice-input' });
+    expect(result.markdown).toContain('cindy://settings-link/voice-input?device=computer-a');
+    expect(call).not.toHaveBeenCalled();
+    expect(parsePayload(await server.hostTools.call('get_settings_link', { page: 'slack' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  } finally { await server.close(); }
+});

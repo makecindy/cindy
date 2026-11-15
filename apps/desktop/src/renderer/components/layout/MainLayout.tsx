@@ -1,3 +1,5 @@
+import { toast } from '@/lib/toast';
+import { openSettingsNavigation } from '@/lib/settingsNavigation';
 import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
@@ -769,6 +771,7 @@ export function MainLayout() {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
       if (payload.type === 'chat-message') {
@@ -839,6 +842,10 @@ export function MainLayout() {
       }
       if (payload.type === 'provider-import') {
         navigate(`/settings?tab=providers&import=${encodeURIComponent(payload.importId)}`);
+        return;
+      }
+      if (payload.type === 'settings-navigation') {
+        void openSettingsNavigation(payload.target, navigate).catch(() => toast.error(t('settings.navigation.unavailable')));
         return;
       }
       if (payload.type === 'settings') {

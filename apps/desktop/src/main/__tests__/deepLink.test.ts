@@ -897,3 +897,12 @@ describe('fixed local plugin share navigation', () => {
     expect(parseDeepLink(`cindy://plugin-share/${snapshotId}${suffix}`)).toBeNull();
   });
 });
+
+// Unit: a device-qualified URL must never degrade to the old local-only settings path.
+it('preserves settings device identity and refuses ambiguous settings links', () => {
+  expect(parseDeepLink('cindy://settings-link/general?device=computer-a&query=font')).toEqual({
+    type: 'settings-navigation', target: { tab: 'general', deviceId: 'computer-a', query: 'font' },
+  });
+  expect(parseDeepLink('cindy://settings-link/providers?device=a&device=b')).toBeNull();
+  expect(parseDeepLink('cindy://settings-link/providers?device=a&command=run')).toBeNull();
+});

@@ -9219,6 +9219,9 @@
         "failed": "回收未能完成",
         "pending": "已排队"
       }
+    },
+    "navigation": {
+      "unavailable": "无法打开目标电脑的设置。请确认电脑在线并已允许远程控制；旧版本请先更新 Cindy。"
     }
   },
   "remoteDevice": {

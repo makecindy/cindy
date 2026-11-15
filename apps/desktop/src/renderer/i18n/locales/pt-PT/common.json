@@ -9334,6 +9334,9 @@
         "failed": "Não foi possível concluir a limpeza",
         "pending": "Em fila"
       }
+    },
+    "navigation": {
+      "unavailable": "Não foi possível abrir as definições do computador de destino. Verifique se está online e permite controlo remoto; atualize o Cindy se tiver uma versão antiga."
     }
   },
   "remoteDevice": {
