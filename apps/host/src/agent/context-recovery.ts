@@ -201,6 +201,17 @@ export function createHostContextRecovery(deps: {
     },
 
     /**
+     * The client id of the input whose terminal error the task's running recovery claimed, for its
+     * replay to stamp its events and receipts with (the Host's /api/chat ends a message's stream on a
+     * terminal of its own client id). Only while that recovery runs: it ends, fails, throws, is
+     * rebuilt or is drained at shutdown, and the entry goes. A replay outside a recovery gets none.
+     */
+    replayClientId(sessionId: string): string | undefined {
+      const clientId = recovering.get(sessionId)?.terminal.fields.inputClientId;
+      return typeof clientId === 'string' ? clientId : undefined;
+    },
+
+    /**
      * On shutdown, before the tasks are stopped: waits for the recoveries in flight to end, all
      * together for at most RECOVERY_SHUTDOWN_WAIT_MS. Recovery's own checks fail once the runtime
      * is closing, so a recovery normally ends as a failure and writes its error row. For one still
