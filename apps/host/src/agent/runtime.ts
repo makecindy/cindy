@@ -1,8 +1,12 @@
-import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
-import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
-import { createHostClaudeSubagentModelAccess } from './subagent-model-access.js';
-import { createHostCodexAuthTokenReader } from './codex-token-reader.js';
-import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/codex-gateway-config.js';
+import { applyProjectDirectoriesForTurn } from "../../../desktop/src/main/projectDirectoryRuntime.js";
+import {
+  getDesktopClaudeReadOnlyAllowedTools,
+  getDesktopMcpToolApprovalPolicy,
+} from "../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js";
+import { claudeSubagentUsageBridge } from "../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js";
+import { createHostClaudeSubagentModelAccess } from "./subagent-model-access.js";
+import { createHostCodexAuthTokenReader } from "./codex-token-reader.js";
+import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from "../../../desktop/src/main/maker-host/codex-gateway-config.js";
 /** Node assembly of the shared Maker agents, provider configuration and MCP transports.
  * Native login, settings and platform integrations are assembled by the owning runtime. */
 
@@ -804,6 +808,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     agents,
     storage: options.storage,
     lifecycleHooks: {
+      beforeTurn: applyProjectDirectoriesForTurn,
       prepareStartOptions: startOptions.prepareStartOptions,
       onBeforeStart: startOptions.onBeforeStart,
       onStartFailed: startOptions.onStartFailed,

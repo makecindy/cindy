@@ -1,3 +1,4 @@
+import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { askPluginModelRoute, usePluginModels, writePluginModelRouteNote } from './pluginModelRoute';
@@ -3771,6 +3772,7 @@ export function NewMakerDraftRoute() {
   // 这里只在「当前设备」的语境内换工作区。所以选「对话」= 在当前设备上开不绑项目的对话,
   // 而不是退回本机 —— 后者由设备 pill 选「本机」来表达。picker 现在只列当前设备的项目,
   // 传进来的 path 必然属于当前设备,语义自洽。
+  const [projectSettingsMode, setProjectSettingsMode] = useState<'create' | 'edit' | null>(null);
   const handleWorkingDirChange = useCallback(
     (dir: string | null) => {
       // 设备维度不动:原样回传当前设备,于是 applyDraftTarget 判出 deviceChanged=false,只处理
@@ -6695,7 +6697,33 @@ export function NewMakerDraftRoute() {
                   compact={isDraftNarrow && selectableDevices.length > 1}
                   disabled={wtCreating || sendInFlight || directoryRecoverySelecting}
                 />
+                {projectSettingsMode && (
+                  <ProjectSettingsDialog
+                    key={`${effectiveDeviceLinkDeviceId}:${projectSettingsMode}:${effectiveWorkingDir}`}
+                    create={projectSettingsMode === 'create'}
+                    project={{
+                      projectKey: effectiveRemoteHostId
+                        ? `remote:${encodeURIComponent(effectiveRemoteHostId)}:${effectiveWorkingDir}`
+                        : `local:${effectiveWorkingDir ?? ''}`,
+                      scope:
+                        effectiveDeviceLinkDeviceId || effectiveRemoteHostId ? 'remote' : 'local',
+                      workingDir:
+                        projectSettingsMode === 'create' ? '' : (effectiveWorkingDir ?? ''),
+                      remoteHostId: effectiveRemoteHostId ?? null,
+                      deviceLinkDeviceId: effectiveDeviceLinkDeviceId ?? null,
+                      deviceLinkDeviceName: draft.deviceLinkDeviceName ?? null,
+                      deviceLinkConnectionStatus: null,
+                      displayName: projectSettingsMode === 'create' ? '' : createAgentModeLabel,
+                      segments: 1,
+                      sessions: [],
+                      latestActivityAt: '',
+                    }}
+                    onClose={() => setProjectSettingsMode(null)}
+                    onCreated={handleWorkingDirChange}
+                  />
+                )}
                 <FolderPickerPopover
+                  onCreateProject={() => setProjectSettingsMode('create')}
                   open={folderPickerOpen}
                   onOpenChange={handleFolderPickerOpenChange}
                   onSelect={handleModePickerSelect}
@@ -6777,6 +6805,9 @@ export function NewMakerDraftRoute() {
                     </div>
                   )}
                   <ChatInput
+                    onOpenProjectSettings={
+                      effectiveWorkingDir ? () => setProjectSettingsMode('edit') : undefined
+                    }
                     onSend={handleSend}
                     onComposerTyping={openProvisionalDraftTask}
                     onComposerVoiceBusyChange={onProvisionalVoiceBusyChange}

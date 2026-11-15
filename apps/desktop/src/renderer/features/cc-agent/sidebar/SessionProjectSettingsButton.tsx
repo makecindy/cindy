@@ -26,6 +26,33 @@ export function SessionProjectSettingsButton({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const project = useSessionProjectNode(session);
+  if (!project) return null;
+  return (
+    <>
+      <Tip text={t('projectSettings.title')}>
+        <button
+          type="button"
+          aria-label={t('projectSettings.title')}
+          disabled={disabled}
+          onClick={() => setOpen(true)}
+          style={WINDOW_NO_DRAG_STYLE}
+          className="mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-md hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+        >
+          <ResolvedProjectIcon
+            directory={project.workingDir}
+            remoteHostId={session.remoteHostId}
+            deviceId={session.deviceLinkDeviceId}
+            size={20}
+          />
+        </button>
+      </Tip>
+      {open && <ProjectSettingsDialog project={project} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function useSessionProjectNode(session: Session): ProjectNode | null {
   const info = useProjectInfo(session.deviceLinkDeviceId ?? null);
   const identity = getProjectIdentity(session);
   const projectKey = projectIdentityKeyForSession(session);
@@ -44,26 +71,16 @@ export function SessionProjectSettingsButton({
     info?.aliases.find(
       (row) => projectAliasComparisonKey(row.projectKey, info.platform) === comparison,
     )?.alias || project.displayName;
-  return (
-    <>
-      <Tip text={t('projectSettings.title')}>
-        <button
-          type="button"
-          aria-label={t('projectSettings.title')}
-          disabled={disabled}
-          onClick={() => setOpen(true)}
-          style={WINDOW_NO_DRAG_STYLE}
-          className="mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-md hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
-        >
-          <ResolvedProjectIcon
-            directory={identity.workingDir}
-            remoteHostId={session.remoteHostId}
-            deviceId={session.deviceLinkDeviceId}
-            size={20}
-          />
-        </button>
-      </Tip>
-      {open && <ProjectSettingsDialog project={project} onClose={() => setOpen(false)} />}
-    </>
-  );
+  return project;
+}
+
+export function SessionProjectSettingsDialog({
+  session,
+  onClose,
+}: {
+  session: Session;
+  onClose(): void;
+}) {
+  const project = useSessionProjectNode(session);
+  return project ? <ProjectSettingsDialog project={project} onClose={onClose} /> : null;
 }

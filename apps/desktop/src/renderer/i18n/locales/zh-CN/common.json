@@ -21600,7 +21600,19 @@
     "discard": "放弃修改",
     "colors": {
       "default": "默认色（跟随主题）"
-    }
+    },
+    "additionalDirectories": "附加目录",
+    "directoriesHint": "从下一轮起应用于此项目的所有任务。已有任务单独添加的目录会保留。",
+    "readOnly": "只读参考",
+    "readWrite": "可读写",
+    "removeDirectory": "移除目录",
+    "directoryPath": "完整目录路径",
+    "addDirectory": "添加目录",
+    "browseDirectory": "浏览目录",
+    "directoryAccess": "目录权限",
+    "mainDirectory": "主目录",
+    "createTitle": "新建项目",
+    "createAction": "创建项目"
   },
   "taskManagement": {
     "scope": "仅应用于当前账号在这台电脑上的任务。",

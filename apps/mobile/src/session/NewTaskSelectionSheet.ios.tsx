@@ -70,7 +70,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
             disabled={workspaceUnavailable || workspace.disabled} onPress={() => p.onProject(workspace.workingDir)} testID="newSession.workspaceProjectOption" />)}
         </Section> : null}
         <Section>
-          <ComposerNativeRow title={t('session.new.chooseOtherFolder')} leading={icon('folder.badge.plus')}
+          <ComposerNativeRow title={p.browseLabel ?? t('session.new.chooseOtherFolder')} leading={icon('folder.badge.plus')}
             accessory={icon('chevron.right')} disabled={workspaceUnavailable} onPress={p.onBrowse} testID="newSession.workspaceBrowseOption" />
         </Section>
       </> : browsing ? <>

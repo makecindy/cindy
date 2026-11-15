@@ -21682,7 +21682,19 @@
     "discard": "Verwerfen",
     "colors": {
       "default": "Standard (dem Design folgen)"
-    }
+    },
+    "additionalDirectories": "Zusätzliche Verzeichnisse",
+    "directoriesHint": "Gilt ab dem nächsten Durchlauf für alle Aufgaben dieses Projekts. Bestehende aufgabenspezifische Verzeichnisse bleiben erhalten.",
+    "readOnly": "Nur lesen",
+    "readWrite": "Lesen und schreiben",
+    "removeDirectory": "Verzeichnis entfernen",
+    "directoryPath": "Vollständiger Verzeichnispfad",
+    "addDirectory": "Verzeichnis hinzufügen",
+    "browseDirectory": "Verzeichnisse durchsuchen",
+    "directoryAccess": "Verzeichniszugriff",
+    "mainDirectory": "Hauptverzeichnis",
+    "createTitle": "Neues Projekt",
+    "createAction": "Projekt erstellen"
   },
   "taskManagement": {
     "scope": "Nur für dieses Konto auf diesem Computer.",

@@ -11,6 +11,10 @@ const h = vi.hoisted(() => ({
   importImage: vi.fn(),
   cleanup: vi.fn(),
   readImage: vi.fn(),
+  setDirectories: vi.fn(),
+  validateDirectories: vi.fn(),
+  register: vi.fn(),
+  validateRoot: vi.fn(),
 }));
 vi.mock('../appSessionState.js', () => ({
   ownerScopedUserDataPath: (file: string) => '/mock/' + file,
@@ -23,6 +27,23 @@ vi.mock('../device-link/crossProcessLock.js', () => ({
     _o: unknown,
     fn: (status: { held: true }) => Promise<void>,
   ) => fn({ held: true }),
+}));
+vi.mock('../projectDirectoryStore.js', () => ({
+  readProjectDirectories: () => ({}),
+  setProjectDirectories: h.setDirectories,
+}));
+vi.mock('../localDb/ipc/recentWorkdirsCore.js', () => ({
+  upsertRecentWorkdir: h.register,
+  hasRecentWorkdir: async () => false,
+  removeRecentWorkdir: vi.fn(),
+}));
+vi.mock('../sidebarSettingsStore.js', () => ({ restoreLocalProjectVisibility: vi.fn() }));
+vi.mock('../projectDirectoryValidation.js', () => ({
+  validateProjectDirectories: h.validateDirectories,
+}));
+vi.mock('../projectDirectoryRoot.js', () => ({
+  validateLocalProjectDirectory: (workingDir: string) => ({ ok: true, workingDir }),
+  validateExistingLocalProjectDirectory: h.validateRoot,
 }));
 vi.mock('../projectIconMedia.js', () => ({
   importProjectIcon: h.importImage,
@@ -42,6 +63,10 @@ import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../pro
 beforeEach(() => {
   vi.resetAllMocks();
   h.cleanup.mockResolvedValue(undefined);
+  h.register.mockResolvedValue(true);
+  h.validateRoot.mockResolvedValue({ ok: true, workingDir: '/repo' });
+  h.setDirectories.mockResolvedValue(undefined);
+  h.validateDirectories.mockResolvedValue(undefined);
   h.rename.mockResolvedValue(undefined);
   h.importImage.mockResolvedValue(`cindy-media://blobs/${'a'.repeat(64)}.png`);
   h.icons['local:/repo'] = '🚀';
@@ -199,3 +224,93 @@ it.each(['symbol:Rocket:blue', 'text:CY:blue', 'text:中A:white', 'text:CY'])(
     expect(h.rename).not.toHaveBeenCalled();
   },
 );
+
+it('validates every directory before changing any profile field', async () => {
+  h.validateDirectories.mockRejectedValueOnce(new Error('Project directories must not overlap'));
+  await expect(
+    updateProjectInfo({
+      ...h.stamp,
+      projectKey: 'local:/repo',
+      field: 'profile',
+      value: {
+        name: 'Updated',
+        icon: '🚀',
+        directories: [{ path: '/repo/child', access: 'write' }],
+      },
+    }),
+  ).rejects.toThrow('overlap');
+  expect(h.rename).not.toHaveBeenCalled();
+  expect(h.set).not.toHaveBeenCalled();
+  expect(h.setDirectories).not.toHaveBeenCalled();
+});
+it('rolls back directory settings if alias save fails', async () => {
+  h.rename.mockRejectedValueOnce(new Error('DB unavailable'));
+  await expect(
+    updateProjectInfo({
+      ...h.stamp,
+      projectKey: 'local:/repo',
+      field: 'profile',
+      value: { name: 'Updated', directories: [{ path: '/reference', access: 'read' }] },
+    }),
+  ).rejects.toThrow('DB unavailable');
+  expect(h.setDirectories.mock.calls.map((args) => args.slice(0, 2))).toEqual([
+    ['local:/repo', [{ path: '/reference', access: 'read' }]],
+    ['local:/repo', undefined],
+  ]);
+});
+it('creates the project with the saved profile and rejects managed workspaces before any write', async () => {
+  const request = {
+    ...h.stamp,
+    create: true,
+    projectKey: 'local:/repo',
+    field: 'profile',
+    value: { name: 'Updated', directories: [] },
+  };
+  await updateProjectInfo(request);
+  expect(h.register).toHaveBeenCalledWith(
+    '/repo',
+    expect.any(Number),
+    process.platform,
+    expect.any(Object),
+  );
+  h.register.mockClear();
+  h.setDirectories.mockClear();
+  h.validateRoot.mockResolvedValueOnce({ ok: false, message: 'Managed workspace' });
+  await expect(updateProjectInfo(request)).rejects.toThrow('Managed workspace');
+  expect(h.register).not.toHaveBeenCalled();
+  expect(h.setDirectories).not.toHaveBeenCalled();
+});
+it('compensates the profile when registering the new project fails', async () => {
+  h.register.mockResolvedValueOnce(false);
+  await expect(
+    updateProjectInfo({
+      ...h.stamp,
+      create: true,
+      projectKey: 'local:/repo',
+      field: 'profile',
+      value: { name: 'Updated', directories: [] },
+    }),
+  ).rejects.toThrow('register');
+  expect(h.rename.mock.calls.map((args) => args.slice(0, 2))).toEqual([
+    ['local:/repo', 'Updated'],
+    ['local:/repo', ''],
+  ]);
+  expect(h.setDirectories.mock.calls.map((args) => args.slice(0, 2))).toEqual([
+    ['local:/repo', []],
+    ['local:/repo', undefined],
+  ]);
+});
+
+it('does not silently collapse a selected task worktree into a new project registration', async () => {
+  await expect(
+    updateProjectInfo({
+      ...h.stamp,
+      create: true,
+      projectKey: 'local:/repo/.cindy-worktrees/task',
+      field: 'profile',
+      value: { directories: [] },
+    }),
+  ).rejects.toThrow('main directory');
+  expect(h.register).not.toHaveBeenCalled();
+  expect(h.setDirectories).not.toHaveBeenCalled();
+});

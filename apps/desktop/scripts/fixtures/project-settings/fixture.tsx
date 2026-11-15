@@ -8,6 +8,7 @@ const writes: unknown[] = [];
 Object.assign(window, { projectSettingsWrites: writes });
 mountPage({
   host: (ctx) => ({
+    showOpenDirectoryDialog: async () => ({ canceled: false, path: '/Projects/Reference' }),
     localDb: {
       projectAliases: {
         snapshot: async () => ({
@@ -15,7 +16,10 @@ mountPage({
           icons: ctx.data.automatic ? {} : { 'local:/Projects/Cindy': '🚀' },
           platform: 'darwin',
           settingsSupported: true,
-          settingsVersion: ctx.data.version ?? 5,
+          settingsVersion: ctx.data.version ?? 6,
+          directories: ctx.data.directories
+            ? { 'local:/Projects/Cindy': [{ path: '/Projects/Reference', access: 'read' }] }
+            : {},
           ownerStamp: { dataOwnerId: 'fixture', ownerGeneration: 1 },
         }),
         iconImage: async () => null,
@@ -51,11 +55,12 @@ mountPage({
       </div>
     ) : (
       <ProjectSettingsDialog
+        create={!!ctx.data.create}
         onClose={() => {}}
         project={{
           projectKey: 'local:/Projects/Cindy',
-          workingDir: '/Projects/Cindy',
-          displayName: 'Cindy',
+          workingDir: ctx.data.create ? '' : '/Projects/Cindy',
+          displayName: ctx.data.create ? '' : 'Cindy',
           scope: 'local',
           remoteHostId: null,
           deviceLinkDeviceId: null,

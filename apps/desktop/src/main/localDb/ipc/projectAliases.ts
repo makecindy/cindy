@@ -1,3 +1,5 @@
+import '../../projectDirectories.desktop.js';
+import { readProjectDirectories } from '../../projectDirectoryStore.js';
 import { resolveAutomaticProjectIcon } from '../../projectAutomaticIcon.desktop.js';
 import { readProjectIconImage, updateProjectInfo as updateProjectInfoCore } from '../../projectInfoCore.js';
 import { readProjectIcons } from '../../projectIconStore.js';
@@ -60,7 +62,8 @@ export async function readHostProjectAliasesSnapshot(): Promise<HostProjectAlias
       .map(({ projectKey, alias }) => ({ projectKey, alias })),
     icons: Object.fromEntries(Object.entries(readProjectIcons()).filter(([key]) => !key.startsWith('device:'))),
     settingsSupported: true,
-    settingsVersion: 5,
+    settingsVersion: 6,
+    directories: readProjectDirectories(),
     platform: process.platform,
     ...(scope.ownerStamp ? { ownerStamp: scope.ownerStamp } : {}),
   };
@@ -84,6 +87,14 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
   const scope = captureDataOwnerBroadcastScope();
   const result = await updateProjectInfoCore(input);
   broadcastProjectAliasesChanged(scope);
+  const body = requireObject(input, 'input');
+  if (body.create === true && isDataOwnerBroadcastScopeCurrent(scope)) {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (isTrustedAppRendererWindow(window))
+        window.webContents.send('local-db:recent-workdirs:changed', {}, scope.ownerStamp);
+    }
+    tapWindowBroadcast('local-db:recent-workdirs:changed', {}, scope.ownerStamp);
+  }
   return result;
 }
 

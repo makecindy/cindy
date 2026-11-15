@@ -1,3 +1,20 @@
+import {
+  validateLocalProjectDirectory,
+  validateExistingLocalProjectDirectory,
+} from './projectDirectoryRoot.js';
+import {
+  upsertRecentWorkdir,
+  hasRecentWorkdir,
+  removeRecentWorkdir,
+} from './localDb/ipc/recentWorkdirsCore.js';
+import { restoreLocalProjectVisibility } from './sidebarSettingsStore.js';
+import { readProjectDirectories, setProjectDirectories } from './projectDirectoryStore.js';
+import {
+  projectAliasComparisonKey,
+  parseProjectDirectories,
+  resolveProjectDirectories,
+} from '@cindy/maker-shared/project-alias-sync';
+import { validateProjectDirectories } from './projectDirectoryValidation.js';
 import { withCrossProcessLock } from './device-link/crossProcessLock.js';
 import { ownerScopedUserDataPath } from './appSessionState.js';
 import {
@@ -41,7 +58,8 @@ export async function readProjectInfo(): Promise<HostProjectAliasesSnapshot> {
       Object.entries(readProjectIcons()).filter(([key]) => !key.startsWith('device:')),
     ),
     settingsSupported: true,
-    settingsVersion: 5,
+    settingsVersion: 6,
+    directories: readProjectDirectories(),
     platform: process.platform,
     ownerStamp,
   };
@@ -75,7 +93,10 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
         : body.field === 'name'
           ? { name: body.value }
           : null;
-  if (!changes || Object.keys(changes).some((key) => key !== 'name' && key !== 'icon'))
+  if (
+    !changes ||
+    Object.keys(changes).some((key) => key !== 'name' && key !== 'icon' && key !== 'directories')
+  )
     throwIpcError('INVALID_PARAMS', 'Invalid project setting');
   if ('name' in changes && (typeof changes.name !== 'string' || changes.name.trim().length > 80))
     throwIpcError('INVALID_PARAMS', 'Invalid project name');
@@ -86,6 +107,30 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
     !isProjectImageDraft(changes.icon)
   )
     throwIpcError('INVALID_PARAMS', 'Invalid project icon');
+  if (body.create !== undefined && typeof body.create !== 'boolean')
+    throwIpcError('INVALID_PARAMS', 'Invalid create mode');
+  if (body.create && !projectKey.startsWith('local:'))
+    throwIpcError(
+      'UNSUPPORTED_CAPABILITY',
+      'New projects require a directory on the selected computer',
+    );
+  if (body.create) {
+    const requestedDirectory = (body.projectKey as string).slice(6);
+    const lexical = validateLocalProjectDirectory(requestedDirectory);
+    if (!lexical.ok) throwIpcError('INVALID_PARAMS', lexical.message);
+    if (projectKey !== `local:${lexical.workingDir}`)
+      throwIpcError(
+        'INVALID_PARAMS',
+        'Use the project main directory, not a managed task worktree',
+      );
+    const validation = await validateExistingLocalProjectDirectory(lexical.workingDir);
+    if (!validation.ok) throwIpcError('INVALID_PARAMS', validation.message);
+  }
+  const directories =
+    'directories' in changes ? parseProjectDirectories(changes.directories) : undefined;
+  if (directories === null) throwIpcError('INVALID_PARAMS', 'Invalid project directories');
+  if (directories) await validateProjectDirectories(projectKey, directories);
+  assertCurrent();
   const lockPath = ownerScopedUserDataPath('project-info-write.lock');
   await withCrossProcessLock(
     lockPath,
@@ -106,20 +151,64 @@ export async function updateProjectInfo(input: unknown): Promise<HostProjectAlia
       if (isProjectImageDraft(icon))
         icon = await importProjectIcon(icon, projectKey, assertCurrent);
       assertCurrent();
+      const previousDirectories = resolveProjectDirectories(
+        { aliases: [], platform: process.platform, directories: readProjectDirectories() },
+        projectKey,
+      );
+      const previousAliases = body.create ? await core.listProjectAliases() : [];
+      const previousName =
+        previousAliases.find(
+          (row) =>
+            projectAliasComparisonKey(row.projectKey, process.platform) ===
+            projectAliasComparisonKey(projectKey, process.platform),
+        )?.alias ?? '';
+      const previouslyRegistered = body.create ? await hasRecentWorkdir(projectKey.slice(6)) : true;
+      assertCurrent();
+      let nameWritten = false;
+      let registered = false;
+      let directoriesWritten = false;
       let iconWritten = false;
       try {
         if ('icon' in changes) {
           await setProjectIcon(projectKey, icon, assertCurrent);
           iconWritten = true;
         }
-        if ('name' in changes)
+        if (directories) {
+          await setProjectDirectories(projectKey, directories, assertCurrent);
+          directoriesWritten = true;
+        }
+        if ('name' in changes) {
           await core.upsertProjectAlias(projectKey, changes.name, process.platform, {
             client: getDbClient(),
             assertCurrent,
           });
+          nameWritten = true;
+        }
         assertCurrent();
+        if (body.create) {
+          if (
+            !(await upsertRecentWorkdir(
+              projectKey.slice(6),
+              Date.now(),
+              process.platform,
+              getDbClient(),
+            ))
+          )
+            throwIpcError('INVALID_PARAMS', 'Could not register project directory');
+          registered = true;
+          assertCurrent();
+          await restoreLocalProjectVisibility(projectKey.slice(6), owner);
+        }
       } catch (error) {
         assertCurrent();
+        if (body.create && nameWritten)
+          await core.upsertProjectAlias(projectKey, previousName, process.platform, {
+            client: getDbClient(),
+            assertCurrent,
+          });
+        if (registered && !previouslyRegistered) await removeRecentWorkdir(projectKey.slice(6));
+        if (directoriesWritten)
+          await setProjectDirectories(projectKey, previousDirectories, assertCurrent);
         if (iconWritten) await setProjectIcon(projectKey, previousIcon, assertCurrent);
         if ('icon' in changes)
           await releasePreviousProjectImages(projectKey, previousIcon, assertCurrent).catch(

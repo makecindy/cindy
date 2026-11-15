@@ -11,6 +11,22 @@ export default {
   real: 'ProjectSettingsDialog and ProjectIcon',
   notCovered: 'Real persistence, device-link transport and phone native presentation.',
   cases: {
+    'create-existing': {
+      about: 'Selecting a registered project preserves its saved name, icon and directory grants',
+      data: { create: true, directories: true },
+    },
+    'create-cancel': {
+      about: 'Cancel creation and discard directory drafts without any profile write',
+      data: { create: true },
+    },
+    directories: {
+      about: 'Project directory draft switches access and persists only on Save',
+      data: { directories: true },
+    },
+    create: {
+      about: 'New project uses the same settings form and does not create a task before saving',
+      data: { create: true },
+    },
     header: {
       about: 'Click a task header project icon to edit its owning project, including worktrees',
       data: { header: true },
@@ -57,6 +73,85 @@ export default {
       .waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'create-existing') {
+      await page
+        .getByRole('textbox', { name: await ui.t('projectSettings.mainDirectory'), exact: true })
+        .fill('/Projects/Cindy');
+      await page
+        .getByRole('radio', { name: await ui.t('projectSettings.readOnly'), exact: true })
+        .waitFor();
+      if (
+        (await page
+          .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
+          .inputValue()) !== 'Cindy'
+      )
+        throw new Error('Existing name was not loaded');
+      await ui.capture('existing-project');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true })
+        .click();
+      const writes = await page.evaluate(() => window.projectSettingsWrites);
+      if (writes.length !== 1 || Object.keys(writes[0].value).length !== 0)
+        throw new Error('Creation overwrote an existing profile');
+      return;
+    }
+    if (ui.case === 'create-cancel') {
+      await page
+        .getByRole('textbox', { name: await ui.t('projectSettings.mainDirectory'), exact: true })
+        .fill('/Projects/Example');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.browseDirectory'), exact: true })
+        .last()
+        .click();
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.cancel'), exact: true })
+        .last()
+        .click();
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.discard'), exact: true })
+        .click();
+      if (await page.evaluate(() => window.projectSettingsWrites.length))
+        throw new Error('Cancelled creation persisted a draft');
+      return;
+    }
+
+    if (ui.case === 'directories' || ui.case === 'create') {
+      if (ui.case === 'create') {
+        await page
+          .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
+          .fill('Example');
+        await page
+          .getByRole('textbox', { name: await ui.t('projectSettings.mainDirectory'), exact: true })
+          .fill('/Projects/Example');
+        await page
+          .getByRole('button', { name: await ui.t('projectSettings.browseDirectory'), exact: true })
+          .last()
+          .click();
+      }
+      await page
+        .getByRole('radio', { name: await ui.t('projectSettings.readWrite'), exact: true })
+        .click();
+      if (await page.evaluate(() => window.projectSettingsWrites.length))
+        throw new Error('Directory draft saved early');
+      await ui.capture('directory-form');
+      await page
+        .getByRole('button', {
+          name: await ui.t(
+            ui.case === 'create' ? 'projectSettings.createAction' : 'projectSettings.save',
+          ),
+          exact: true,
+        })
+        .click();
+      const writes = await page.evaluate(() => window.projectSettingsWrites);
+      if (writes.length !== 1 || writes[0].value.directories[0].access !== 'write')
+        throw new Error('Missing project directory save');
+      if (
+        ui.case === 'create' &&
+        (!writes[0].create || writes[0].projectKey !== 'local:/Projects/Example')
+      )
+        throw new Error('Wrong creation identity');
+      return;
+    }
     const button = async (key) => {
       if (key.startsWith('colors.') && ui.case !== 'legacy') {
         const trigger = page.getByRole('button', {

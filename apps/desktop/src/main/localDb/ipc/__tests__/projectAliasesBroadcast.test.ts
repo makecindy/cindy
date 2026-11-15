@@ -18,8 +18,16 @@ const h = vi.hoisted(() => ({
   assertTrusted: vi.fn(),
   remoteInvoke: false,
 }));
-vi.mock('../../../projectIconStore.js', () => ({readProjectIcons: () => ({}), setProjectIcon: vi.fn()}));
-vi.mock('../../../projectInfoCore.js', () => ({updateProjectInfo: vi.fn(), readProjectIconImage: vi.fn()}));
+vi.mock('../../../projectDirectories.desktop.js', () => ({}));
+vi.mock('../../../projectDirectoryStore.js', () => ({ readProjectDirectories: () => ({}) }));
+vi.mock('../../../projectIconStore.js', () => ({
+  readProjectIcons: () => ({}),
+  setProjectIcon: vi.fn(),
+}));
+vi.mock('../../../projectInfoCore.js', () => ({
+  updateProjectInfo: vi.fn(),
+  readProjectIconImage: vi.fn(),
+}));
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [h.trusted, h.untrusted] },
   ipcMain: { handle: h.handle },
@@ -85,7 +93,8 @@ describe('project alias remote snapshot and owner boundary', () => {
       ],
       icons: {},
       settingsSupported: true,
-      settingsVersion: 5,
+      settingsVersion: 6,
+      directories: {},
       platform: process.platform,
       ownerStamp: h.ownerStamp,
     });

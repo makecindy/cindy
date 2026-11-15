@@ -1,3 +1,9 @@
+import {
+  parseHostProjectAliasesSnapshot,
+  resolveProjectDirectories,
+  resolveProjectIcon,
+  projectAliasComparisonKey,
+} from '@cindy/maker-shared/project-alias-sync';
 import { resolveAutomaticProjectIcon } from '../projectAutomaticIcon.desktop.js';
 import { parseProjectSymbol, parseProjectLetters } from '@cindy/maker-shared/project-alias-sync';
 import { readProjectInfo } from '../projectInfoCore.js';
@@ -838,9 +844,59 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       moveSession: createMoveSession(isSessionInTurn),
       createTaskWorktree: createTaskWorktreeHost(),
       projectManagement: {
-        inspectIcon: async ({callerSessionId,device,projectKey}) => {
-          if (isSessionSharedTaskActive(callerSessionId)) return {ok:false,errorCode:'PERMISSION_DENIED',message:'Not available in a shared task'};
-          return withAccountDataAccess(callerSessionId,async assertCurrent => {
+        readInfo: async ({ callerSessionId, device, projectKey }) => {
+          if (isSessionSharedTaskActive(callerSessionId))
+            return {
+              ok: false,
+              errorCode: 'PERMISSION_DENIED',
+              message: 'Not available in a shared task',
+            };
+          return withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+            const response =
+              !device || device === 'local' || device === getDeviceId()
+                ? await readProjectInfo()
+                : await deps
+                    .invokeRemote(device, 'sidebar-settings:get-project-aliases', [], {
+                      preSend: assertCurrent,
+                    })
+                    .then((result) => {
+                      if (!result.ok) throw new Error(result.error.message);
+                      return result.result;
+                    });
+            await assertCurrent();
+            const snapshot = parseHostProjectAliasesSnapshot(response);
+            if (!snapshot)
+              return {
+                ok: false as const,
+                errorCode: 'UNSUPPORTED_CAPABILITY',
+                message: 'Project settings unavailable',
+              };
+            const comparison = projectAliasComparisonKey(projectKey, snapshot.platform);
+            return {
+              ok: true as const,
+              project: {
+                project_key: projectKey,
+                device: device ?? 'local',
+                name:
+                  snapshot.aliases.find(
+                    (row) =>
+                      projectAliasComparisonKey(row.projectKey, snapshot.platform) === comparison,
+                  )?.alias ?? null,
+                icon: resolveProjectIcon(snapshot, projectKey),
+                directories: resolveProjectDirectories(snapshot, projectKey) ?? [],
+                directories_supported: (snapshot.settingsVersion ?? 0) >= 6,
+              },
+            };
+          });
+        },
+        inspectIcon: async ({ callerSessionId, device, projectKey }) => {
+          if (isSessionSharedTaskActive(callerSessionId))
+            return {
+              ok: false,
+              errorCode: 'PERMISSION_DENIED',
+              message: 'Not available in a shared task',
+            };
+          return withAccountDataAccess(callerSessionId, async (assertCurrent) => {
             if (!device || device === 'local' || device === getDeviceId()) {
               const icon = await resolveAutomaticProjectIcon({projectKey});
               await assertCurrent(); return {ok:true as const,icon};
@@ -860,11 +916,49 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             } else {
               const response = await deps.invokeRemote(device, 'sidebar-settings:get-project-aliases', []);
               await assertCurrent();
-              if (!response.ok) return {ok:false as const, errorCode:'INTERNAL', message:response.error.message};
-              const snapshot = response.result as {settingsSupported?: boolean; settingsVersion?: number; ownerStamp?: unknown};
-              if (!snapshot.settingsSupported || (snapshot.settingsVersion ?? 0) < 2 || !snapshot.ownerStamp) return {ok:false as const, errorCode:'UNSUPPORTED_CAPABILITY', message:'Update the target computer and retry.'};
-              const requestedIcon = request.field === 'icon' ? request.value : request.field === 'profile' && request.value && typeof request.value === 'object' ? request.value.icon : null;
-              const symbol = typeof requestedIcon === 'string' ? parseProjectSymbol(requestedIcon) : null;
+              if (!response.ok)
+                return {
+                  ok: false as const,
+                  errorCode: 'INTERNAL',
+                  message: response.error.message,
+                };
+              const snapshot = response.result as {
+                settingsSupported?: boolean;
+                settingsVersion?: number;
+                ownerStamp?: unknown;
+              };
+              if (
+                !snapshot.settingsSupported ||
+                (snapshot.settingsVersion ?? 0) < 2 ||
+                !snapshot.ownerStamp
+              )
+                return {
+                  ok: false as const,
+                  errorCode: 'UNSUPPORTED_CAPABILITY',
+                  message: 'Update the target computer and retry.',
+                };
+              if (
+                request.field === 'profile' &&
+                request.value &&
+                typeof request.value === 'object' &&
+                'directories' in request.value &&
+                (snapshot.settingsVersion ?? 0) < 6
+              )
+                return {
+                  ok: false as const,
+                  errorCode: 'UNSUPPORTED_CAPABILITY',
+                  message: 'Update the target computer to configure project directories.',
+                };
+              const requestedIcon =
+                request.field === 'icon'
+                  ? request.value
+                  : request.field === 'profile' &&
+                      request.value &&
+                      typeof request.value === 'object'
+                    ? request.value.icon
+                    : null;
+              const symbol =
+                typeof requestedIcon === 'string' ? parseProjectSymbol(requestedIcon) : null;
               if (symbol && symbol.color !== 'default' && (snapshot.settingsVersion ?? 0) < 3)
                 return {ok:false as const, errorCode:'UNSUPPORTED_CAPABILITY', message:'Update the target computer to set an icon color.'};
               const letters = typeof requestedIcon === 'string' ? parseProjectLetters(requestedIcon) : null;

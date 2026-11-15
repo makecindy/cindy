@@ -1,4 +1,9 @@
-import { matchesTaskCreators, useTaskCreatorIndex, useTaskCreatorOptions } from '@/features/bots/botFollowScopes';
+import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
+import {
+  matchesTaskCreators,
+  useTaskCreatorIndex,
+  useTaskCreatorOptions,
+} from '@/features/bots/botFollowScopes';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ErrorNotice } from '@/components/ui/error-notice';
 /**
@@ -2805,42 +2810,8 @@ function ExpandedView({
     [handleClearSelection, navigate, t],
   );
 
-  const handleCreateProject = useCallback(async () => {
-    const hiddenProjectKeysAtPickerOpen = new Set(hiddenProjectKeys);
-    try {
-      const result = await window.electronAPI.showOpenDirectoryDialog();
-      if (result.canceled || !result.path) return;
-      const localProjectKey = normalizeProjectKey(result.path);
-      if (localProjectKey?.startsWith('local:')) {
-        const restored = await restoreHiddenProjectIfPresent({
-          projectKey: localProjectKey,
-          wasHiddenAtPickerOpen: isProjectHidden(
-            localProjectKey,
-            hiddenProjectKeysAtPickerOpen,
-            localPlatform,
-          ),
-          setProjectHidden,
-          getCurrentProjectKeys: () => restorableProjectKeysRef.current(),
-          ensureProjectIncluded: filter.ensureProjectIncluded,
-          localPlatform,
-        });
-        if (restored) return;
-      }
-      handleClearSelection();
-      patchNewMakerDraft({ workingDir: result.path, remoteHostId: null });
-      navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
-    } catch (err) {
-      log.warn('create project directory picker failed', err);
-      toast.error(t('ccAgent.sidebar.createProjectFailed'));
-    }
-  }, [
-    filter.ensureProjectIncluded,
-    handleClearSelection,
-    hiddenProjectKeys,
-    navigate,
-    setProjectHidden,
-    t,
-  ]);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const handleCreateProject = useCallback(() => setCreatingProject(true), []);
 
   /**
    * 新建对话。目标设备两种来源:
@@ -3668,6 +3639,37 @@ function ExpandedView({
 
   return (
     <>
+      {creatingProject && (
+        <ProjectSettingsDialog
+          create
+          project={{
+            projectKey: 'local:',
+            scope: 'local',
+            workingDir: '',
+            remoteHostId: null,
+            deviceLinkDeviceId: null,
+            deviceLinkDeviceName: null,
+            deviceLinkConnectionStatus: null,
+            displayName: '',
+            segments: 1,
+            sessions: [],
+            latestActivityAt: '',
+          }}
+          onClose={() => setCreatingProject(false)}
+          onCreated={(directory) => {
+            filter.ensureProjectIncluded(directory);
+            handleClearSelection();
+            patchNewMakerDraft({
+              workingDir: directory,
+              remoteHostId: null,
+              deviceLinkDeviceId: null,
+              deviceLinkDeviceName: null,
+            });
+            navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
+          }}
+        />
+      )}
+
       {/* 顶部动作(新建 / 搜索 / 自动任务)已上移到 shell 的 SidebarTopNav 常驻列表;
           这里直接从多选操作条 / 列表内容开始。 */}
       {selectedSessionIds.size > 0 && (

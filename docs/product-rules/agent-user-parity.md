@@ -324,7 +324,7 @@ OAuth 代码、App 密钥或任务签名密钥。`schedule_get.webhookStatus` �
 
 `update_project_info` 与桌面／手机共用项目名称和图标保存入口，支持 `device` 指定同账号电脑。
 `projects.management` 第一层索引可发现；共享任务访客沿用既有拒绝规则，未升级的目标明确返回不支持。
-不更改目录或任务执行参数。
+不移动主目录。2026-11-15：`get_project_info` 读回项目资料和目录权限；`update_project_info` 的 profile 支持附加目录完整列表（path/access），新建表单与设置共用保存入口，任务从下一轮继承，旧任务单独授权保留。两项工具均在 projects.management 首层索引可发现；远端要求 settingsVersion >= 6。
 
 项目图标颜色：`update_project_info` 的 icon 接受 `symbol:Rocket:blue` 等白名单颜色，走同一资料保存入口；连接旧主机时检查 v3 能力，默认颜色省略后缀。字母支持 `text:CY:blue` 等相同色板，远端检查 v5，默认仍是 `text:CY`。
 

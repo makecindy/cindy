@@ -198,7 +198,11 @@ export async function hasRecentWorkdir(
   const rows = await client.drizzle
     .select({ path: recentWorkdirs.path })
     .from(recentWorkdirs)
-    .where(eq(recentWorkdirs.path, normalized))
+    .where(
+      isCaseInsensitiveWindowsPath(normalized, process.platform)
+        ? sql`lower(${recentWorkdirs.path}) = lower(${normalized})`
+        : eq(recentWorkdirs.path, normalized),
+    )
     .limit(1);
   return rows.length > 0;
 }

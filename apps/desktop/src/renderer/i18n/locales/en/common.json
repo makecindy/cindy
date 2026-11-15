@@ -21682,7 +21682,19 @@
     "discard": "Discard",
     "colors": {
       "default": "Default (follow theme)"
-    }
+    },
+    "additionalDirectories": "Additional directories",
+    "directoriesHint": "Applies to all tasks in this project from their next turn. Existing task-specific directories are kept.",
+    "readOnly": "Read only",
+    "readWrite": "Read and write",
+    "removeDirectory": "Remove directory",
+    "directoryPath": "Full directory path",
+    "addDirectory": "Add directory",
+    "browseDirectory": "Browse directories",
+    "directoryAccess": "Directory access",
+    "mainDirectory": "Main directory",
+    "createTitle": "New project",
+    "createAction": "Create project"
   },
   "taskManagement": {
     "scope": "Applies to this account on this computer only.",

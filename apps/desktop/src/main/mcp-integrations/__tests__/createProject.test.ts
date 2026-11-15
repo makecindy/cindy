@@ -25,7 +25,7 @@ const h = vi.hoisted(() => ({
   projectsRoot: null as string | null,
   home: '',
 }));
-vi.mock('../../localDb/dialogueWorkspace.js', () => ({
+vi.mock('../../dialogue-workspace-settings.js', () => ({
   dialogueWorkspaceRootDir: () => h.dialogueRoot,
   dialogueWorkspaceRoots: () => [h.dialogueRoot, ...h.historicalRoots],
 }));

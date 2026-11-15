@@ -21888,7 +21888,19 @@
     "discard": "Descartar",
     "colors": {
       "default": "Padrão (seguir tema)"
-    }
+    },
+    "additionalDirectories": "Diretórios adicionais",
+    "directoriesHint": "Aplica-se a todas as tarefas deste projeto a partir do próximo turno. Os diretórios específicos de cada tarefa são mantidos.",
+    "readOnly": "Somente leitura",
+    "readWrite": "Leitura e gravação",
+    "removeDirectory": "Remover diretório",
+    "directoryPath": "Caminho completo do diretório",
+    "addDirectory": "Adicionar diretório",
+    "browseDirectory": "Procurar diretórios",
+    "directoryAccess": "Acesso ao diretório",
+    "mainDirectory": "Diretório principal",
+    "createTitle": "Novo projeto",
+    "createAction": "Criar projeto"
   },
   "taskManagement": {
     "scope": "Apenas para esta conta neste computador.",

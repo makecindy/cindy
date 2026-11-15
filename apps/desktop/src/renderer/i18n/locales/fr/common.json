@@ -21887,7 +21887,19 @@
     "discard": "Abandonner",
     "colors": {
       "default": "Par défaut (selon le thème)"
-    }
+    },
+    "additionalDirectories": "Dossiers supplémentaires",
+    "directoriesHint": "S’applique à toutes les tâches de ce projet dès le prochain tour. Les dossiers propres à chaque tâche sont conservés.",
+    "readOnly": "Lecture seule",
+    "readWrite": "Lecture et écriture",
+    "removeDirectory": "Retirer le dossier",
+    "directoryPath": "Chemin complet du dossier",
+    "addDirectory": "Ajouter un dossier",
+    "browseDirectory": "Parcourir les dossiers",
+    "directoryAccess": "Accès au dossier",
+    "mainDirectory": "Dossier principal",
+    "createTitle": "Nouveau projet",
+    "createAction": "Créer le projet"
   },
   "taskManagement": {
     "scope": "Uniquement pour ce compte sur cet ordinateur.",

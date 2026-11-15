@@ -1,4 +1,12 @@
-import { collapseWorktreeDirForGrouping, sessionTaskProjectDirectory } from './worktreePaths.js';
+import {
+  parseProjectDirectories,
+  type ProjectDirectory,
+} from "./projectDirectories.js";
+export * from "./projectDirectories.js";
+import {
+  collapseWorktreeDirForGrouping,
+  sessionTaskProjectDirectory,
+} from "./worktreePaths.js";
 import {
   normalizeProjectOrderPath,
   parseSyncedProjectOrderOwnerStamp,
@@ -15,6 +23,7 @@ export interface HostProjectAliasesSnapshot {
   /** Host identities only: a controller's device: overrides stay on that controller. */
   aliases: readonly { projectKey: string; alias: string }[];
   icons?: Readonly<Record<string, string>>;
+  directories?: Readonly<Record<string, readonly ProjectDirectory[]>>;
   settingsSupported?: boolean;
   settingsVersion?: number;
   platform: string;
@@ -93,8 +102,34 @@ export function parseHostProjectAliasesSnapshot(raw: unknown): HostProjectAliase
       if (projectAliasComparisonKey(key, value.platform) && validProjectIcon(icon)) icons[key] = icon;
     }
   }
-  return { aliases, platform: value.platform, ...(ownerStamp ? { ownerStamp } : {}),
-    ...(value.settingsSupported === true ? { settingsSupported: true, settingsVersion: typeof value.settingsVersion === 'number' ? value.settingsVersion : 1, icons } : {}) };
+  const directories: Record<string, ProjectDirectory[]> = {};
+  if (
+    value.directories &&
+    typeof value.directories === "object" &&
+    !Array.isArray(value.directories)
+  ) {
+    for (const [key, raw] of Object.entries(value.directories)) {
+      const parsed = parseProjectDirectories(raw);
+      if (projectAliasComparisonKey(key, value.platform) && parsed)
+        directories[key] = parsed;
+    }
+  }
+  return {
+    aliases,
+    ...(value.directories !== undefined ? { directories } : {}),
+    platform: value.platform,
+    ...(ownerStamp ? { ownerStamp } : {}),
+    ...(value.settingsSupported === true
+      ? {
+          settingsSupported: true,
+          settingsVersion:
+            typeof value.settingsVersion === "number"
+              ? value.settingsVersion
+              : 1,
+          icons,
+        }
+      : {}),
+  };
 }
 
 export function resolveProjectIcon(snapshot: HostProjectAliasesSnapshot | undefined, projectKey: string): string | null {
@@ -175,15 +210,27 @@ function missingChannel(error: unknown): boolean {
   return resolved === 'CHANNEL_NOT_ALLOWED' || resolved === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';
 }
 
-function snapshotsEqual(a: HostProjectAliasesSnapshot | undefined, b: HostProjectAliasesSnapshot): boolean {
-  return !!a && a.platform === b.platform
-    && a.ownerStamp?.dataOwnerId === b.ownerStamp?.dataOwnerId
-    && a.ownerStamp?.ownerGeneration === b.ownerStamp?.ownerGeneration
-    && a.settingsSupported === b.settingsSupported
-    && a.settingsVersion === b.settingsVersion
-    && JSON.stringify(a.icons ?? {}) === JSON.stringify(b.icons ?? {})
-    && a.aliases.length === b.aliases.length
-    && a.aliases.every((row, index) => row.projectKey === b.aliases[index].projectKey && row.alias === b.aliases[index].alias);
+function snapshotsEqual(
+  a: HostProjectAliasesSnapshot | undefined,
+  b: HostProjectAliasesSnapshot,
+): boolean {
+  return (
+    !!a &&
+    a.platform === b.platform &&
+    a.ownerStamp?.dataOwnerId === b.ownerStamp?.dataOwnerId &&
+    a.ownerStamp?.ownerGeneration === b.ownerStamp?.ownerGeneration &&
+    a.settingsSupported === b.settingsSupported &&
+    a.settingsVersion === b.settingsVersion &&
+    JSON.stringify(a.directories ?? {}) ===
+      JSON.stringify(b.directories ?? {}) &&
+    JSON.stringify(a.icons ?? {}) === JSON.stringify(b.icons ?? {}) &&
+    a.aliases.length === b.aliases.length &&
+    a.aliases.every(
+      (row, index) =>
+        row.projectKey === b.aliases[index].projectKey &&
+        row.alias === b.aliases[index].alias,
+    )
+  );
 }
 
 /** In-memory read model. Hosts own persistence; adapters own authorization and connection recovery. */
@@ -284,4 +331,17 @@ export function createProjectAliasMirror() {
       notify();
     },
   };
+}
+
+export function resolveProjectDirectories(
+  snapshot: HostProjectAliasesSnapshot | undefined,
+  projectKey: string,
+): readonly ProjectDirectory[] | undefined {
+  if (!snapshot?.directories) return undefined;
+  const key = projectAliasComparisonKey(projectKey, snapshot.platform);
+  if (!key) return undefined;
+  return Object.entries(snapshot.directories).find(
+    ([candidate]) =>
+      projectAliasComparisonKey(candidate, snapshot.platform) === key,
+  )?.[1];
 }

@@ -21600,7 +21600,19 @@
     "discard": "放棄修改",
     "colors": {
       "default": "本色（隨主題）"
-    }
+    },
+    "additionalDirectories": "附加目錄",
+    "directoriesHint": "自下輪起用於本專案諸任務；各任務既有目錄仍存。",
+    "readOnly": "唯讀參考",
+    "readWrite": "可讀寫",
+    "removeDirectory": "移除目錄",
+    "directoryPath": "目錄全徑",
+    "addDirectory": "加入目錄",
+    "browseDirectory": "瀏覽目錄",
+    "directoryAccess": "目錄權限",
+    "mainDirectory": "主目錄",
+    "createTitle": "新增專案",
+    "createAction": "建立專案"
   },
   "taskManagement": {
     "scope": "僅用於本機當前名籍之差事。",

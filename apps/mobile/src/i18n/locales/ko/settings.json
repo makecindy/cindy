@@ -478,6 +478,18 @@
     "discard": "변경 취소",
     "colors": {
       "default": "기본 색상 (테마에 맞춤)"
-    }
+    },
+    "additionalDirectories": "추가 디렉터리",
+    "directoriesHint": "다음 턴부터 이 프로젝트의 모든 작업에 적용됩니다. 기존 작업별 디렉터리는 유지됩니다.",
+    "readOnly": "읽기 전용",
+    "readWrite": "읽기 및 쓰기",
+    "removeDirectory": "디렉터리 제거",
+    "directoryPath": "전체 디렉터리 경로",
+    "addDirectory": "디렉터리 추가",
+    "browseDirectory": "디렉터리 찾아보기",
+    "directoryAccess": "디렉터리 권한",
+    "mainDirectory": "기본 디렉터리",
+    "createTitle": "새 프로젝트",
+    "createAction": "프로젝트 만들기"
   }
 }

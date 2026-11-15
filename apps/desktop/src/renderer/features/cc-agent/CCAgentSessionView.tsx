@@ -1,3 +1,4 @@
+import { SessionProjectSettingsDialog } from './sidebar/SessionProjectSettingsButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { PendingQueueBubble } from '@/components/chat/PendingQueueBubble';
@@ -1603,6 +1604,7 @@ function CCAgentSessionContent({
 
   // F2: controlled folder picker open state
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
 
   // ── Full-area drag-and-drop (F-FI-1 enhancement) ──
   // Attachments are managed here so the entire content area can act as a drop zone.
@@ -6295,7 +6297,14 @@ function CCAgentSessionContent({
                   inert={voiceModeOpen && voiceSurfaceAvailable}
                   aria-hidden={voiceModeOpen && voiceSurfaceAvailable ? true : undefined}
                 >
+                {projectSettingsOpen && session && (
+                  <SessionProjectSettingsDialog key={session.id} session={session}
+                    onClose={() => setProjectSettingsOpen(false)} />
+                )}
                 <ChatInput
+                  onOpenProjectSettings={session?.workspaceKind === 'project' &&
+                    !isSharedTaskPeer(session.deviceLinkDeviceId ?? '')
+                    ? () => setProjectSettingsOpen(true) : undefined}
                   sessionModelPickRef={sessionModelPickRef}
                   {...(taskModelGroups ? { modelGroups: taskModelGroups } : {})}
                   modelPickerRequest={sharedTaskRecovery.modelPickerRequest}

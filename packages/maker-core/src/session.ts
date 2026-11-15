@@ -189,6 +189,7 @@ export type SessionStartupPreferences = Readonly<Pick<StartSessionOptions,
   'userPrompt' | 'makerMemoryEnabled' | 'displayReasoning'>>;
 
 export interface SessionOptions {
+  beforeTurn?: (session: Session) => Promise<void>;
   hostStartupPreferences?: SessionStartupPreferences;
   id: string;
   /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
@@ -654,7 +655,10 @@ export class Session {
   private turnControlState: TurnControlState | null = null;
   private readonly asyncUserQuestions: AsyncUserQuestions;
 
+  private readonly beforeTurn?: (session: Session) => Promise<void>;
+
   constructor(opts: SessionOptions) {
+    this.beforeTurn = opts.beforeTurn;
     this.hostStartupPreferences = opts.hostStartupPreferences
       ? Object.freeze({ ...opts.hostStartupPreferences }) : undefined;
     this.id = opts.id;
@@ -1050,6 +1054,7 @@ export class Session {
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
       if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
+      await this.beforeTurn?.(this);
       const cancelledAfterReservation = finishCancelledBeforeDispatch();
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
