@@ -8320,7 +8320,7 @@
         "hostTools_filesDetail": "Leer, escribir, listar y eliminar archivos y observar cambios en los directorios que selecciones expresamente. Las selecciones anteriores no dan acceso. Desactivar el complemento detiene el acceso.",
         "filesPickMessage": "El complemento «{{name}}» podrá leer, escribir, listar y eliminar archivos del directorio seleccionado y observar sus cambios. Selecciona un directorio al que permitas su acceso.",
         "codeDetailTerminal": "Las páginas del complemento se ejecutan en un entorno aislado. Los comandos autorizados se ejecutan con tus permisos y pueden acceder a archivos locales, aplicaciones y redes.",
-        "hostTools_terminalDetail": "Iniciar comandos y terminales interactivos con tus permisos en este equipo, leer la salida, enviar entradas y detener los procesos de este complemento. Los comandos pueden acceder a tus archivos y aplicaciones. Iniciar, escribir y realizar otros cambios requiere confirmación en Cindy cada vez.",
+        "hostTools_terminalDetail": "Iniciar comandos y terminales interactivos con tus permisos en este equipo, leer la salida, enviar entradas y detener los procesos de este complemento. Los comandos pueden acceder a tus archivos y aplicaciones.",
         "agentHiddenTasks": "Puede crear tareas en segundo plano ocultas de la lista de tareas",
         "agentHiddenTasksDetail": "Las tareas que crea este complemento pueden permanecer fuera de la lista de tareas, la búsqueda y las notificaciones. Siempre puedes verlas, abrirlas o mostrarlas en la lista de tareas desde Tareas en segundo plano en la página de este complemento; al desinstalar el complemento, vuelven a mostrarse.",
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",

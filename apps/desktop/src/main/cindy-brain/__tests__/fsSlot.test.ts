@@ -177,7 +177,6 @@ describe('GhostFsSlot', () => {
   it('亲选引用可自主读写列删监听，撤权与根替换立即失效', async () => {
     const ghost = makeGhost(false);
     ghost.manifest.agent = { hostTools: ['files'] };
-    ghost.approvedHostToolGroups = ['files'];
     const stat = await fs.promises.stat(workdir, { bigint: true });
     const directory = { ref: 'picked', path: await fs.promises.realpath(workdir), dev: stat.dev.toString(), ino: stat.ino.toString() };
     const { deps } = makeHarness(dataRoot);
@@ -203,11 +202,11 @@ describe('GhostFsSlot', () => {
     expect(fs.existsSync(path.join(outside, 'secret.txt'))).toBe(false);
     expect(await slot.handleFsRequest('other', { root: 'picked', directoryRef: 'picked', op: 'list' })).toMatchObject({ ok: false });
     expect(await call('delete', { path: 'folder/a.txt' })).toMatchObject({ ok: true, existed: true });
-    ghost.approvedHostToolGroups = [];
+    ghost.enabled = false;
     notify({ path: 'folder/b.txt', type: 'create' });
     expect(await call('changes', { watchId: watch.watchId })).toMatchObject({ ok: false });
     expect(release).toHaveBeenCalledOnce();
-    ghost.approvedHostToolGroups = ['files'];
+    ghost.enabled = true;
     await fs.promises.rename(workdir, `${workdir}-previous`);
     await fs.promises.mkdir(workdir);
     expect(await call('write', { path: 'new.txt', content: 'never' })).toMatchObject({ ok: false });
