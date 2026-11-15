@@ -1,4 +1,5 @@
 import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
 import { opencodeGoUsageWindowMinutes } from '../../shared/opencodeGoUsage.js';
 /**
@@ -286,7 +287,7 @@ export function sameSubscriptionAccount(a: MenubarSubscriptionInput, b: MenubarS
   // hosts have no workspace ID, so keep those entries separate rather than
   // hiding a quota or assigning one workspace's running marker to another.
   if (a.family === 'codex' && (a.pooled || b.pooled) &&
-      !left.some(key => key.startsWith('codex:id:') && right.includes(key))) return false;
+      !left.some(key => (key.startsWith('codex:id:') || key.startsWith('codex:verified:')) && right.includes(key))) return false;
   if (left.some((key) => right.includes(key))) return true;
   // Pool entries are known distinct accounts; similar windows alone cannot identify them.
   if (a.pooled || b.pooled) return false;
@@ -336,6 +337,12 @@ function identityKeys(family: string, provider: ProviderView, ...ids: [string, u
   }
   const identity = accountIdentity(provider);
   if (identity) keys.push(`${family}:identity:${identity.toLowerCase()}`);
+  if (family === 'codex') {
+    const workspace = ids.find(([kind]) => kind === 'id')?.[1];
+    const verified = provider.openAiAccount?.accountKey
+      ?? (identity && typeof workspace === 'string' ? codexAccountDisplayKey(identity, workspace) : undefined);
+    if (verified) keys.push(`codex:verified:${verified}`);
+  }
   return keys;
 }
 
@@ -433,7 +440,7 @@ export function subscriptionPoolSources(provider: ProviderView, pool: Subscripti
       id: account.id === 'default' ? provider.id : `${provider.id}:account:${account.id}`,
       account: identity,
       plan: planLabel(account.plan) ?? source.plan,
-      accountKeys: [...(source.accountKeys ?? []), ...(identity ? [`${source.family}:identity:${identity.toLowerCase()}`] : [])],
+      accountKeys: [...(source.accountKeys ?? []), ...(account.accountKey ? [`${source.family}:verified:${account.accountKey}`] : []), ...(identity ? [`${source.family}:identity:${identity.toLowerCase()}`] : [])],
       pooled: true,
       consuming: account.running > 0,
       resetCredits: null,

@@ -4308,7 +4308,9 @@
           "inline": "运行于",
           "signInHere": "在这台电脑登录",
           "writeFailed": "「运行于」未能保存，请重试"
-        }
+        },
+        "sameAccountConnections": "此账号的已保存连接",
+        "sameAccountConnectionsHint": "同一账号只显示一项。选择连接仅切换要管理的设置，已有任务保持原连接。"
       },
       "detect": {
         "groupLabel": "检测到本机 CLI",
@@ -5331,6 +5333,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 服务器压缩",
+        "description": "开启时优先使用服务器压缩；关闭后使用 Codex 原生本地摘要，仍会调用当前模型。",
+        "hint": "在这台电脑运行的 Codex 下次启动或恢复任务时生效。不支持服务器压缩的供应商保持原有方式。",
+        "loadFailed": "无法读取 Codex 压缩设置",
+        "saveFailed": "保存 Codex 压缩设置失败"
+      },
       "title": "上下文压缩",
       "description": "Claude Code 和 Pi 的压缩比例在此调整。Codex 随模型设置的上下文上限自动调整压缩阈值；远端压缩失败时自动改用摘要压缩，并在当前任务中保持。",
       "card": {
@@ -8184,9 +8193,9 @@
         "agentCompanionsDetail": "可查看所有伙伴（包括在你其他电脑上运行的伙伴）的名称、简介、头像和状态（工作中、等你处理、空闲、离线），每位伙伴正在做哪类事（如思考、执行工具），等你处理的请求内容（提问、要执行的命令、计划，和对话里看到的一样），以及伙伴主对话里最近的对话（最多 50 条你说的话和伙伴的回复，不含工具过程），并在主窗口打开伙伴的对话。同时获准投递消息时，可以把你在插件里给的回答交给伙伴：回答提问、拒绝请求、对计划提意见；允许执行仍要你在 Cindy 自己的确认框里点。不能读取文件，也看不到工具过程和思考内容。",
         "agentCompanionsRequest": "确认伙伴查看权限",
         "hostTools_history": "任务历史",
-        "hostTools_historyDetail": "通过 Cindy 的任务工具查询已有任务、读取完整消息和搜索历史；可显式选择你有权访问的其他电脑。",
+        "hostTools_historyDetail": "通过 Cindy 的任务工具查询已有任务、读取完整消息和搜索历史；可显式选择你有权访问的其他电脑。也可导出本机任务为原生文件。插件按安装授权调用；Agent 运行时遵循自身权限流程。",
         "hostTools_control": "任务管理",
-        "hostTools_controlDetail": "通过 Cindy 的任务工具修改、归档、恢复和控制已有任务及项目。高风险操作每次都需要在 Cindy 中确认。",
+        "hostTools_controlDetail": "通过 Cindy 的任务工具修改、归档、恢复和控制已有任务及项目，并在本机导入原生任务文件。高风险操作每次都需要在 Cindy 中确认。",
         "hostTools_handoff": "任务投递",
         "hostTools_handoffDetail": "通过 Cindy 的任务工具给已有任务发送消息。需要当前任务上下文的操作必须显式指定任务。",
         "hostTools_settings": "应用设置",
@@ -9234,6 +9243,9 @@
     },
     "awayFromComputer": {
       "title": "离开电脑时"
+    },
+    "navigation": {
+      "unavailable": "无法打开目标电脑的设置。请确认电脑在线并已允许远程控制；旧版本请先更新 Cindy。"
     }
   },
   "remoteDevice": {
@@ -9349,6 +9361,7 @@
     "backToLogin": "返回登录方式"
   },
   "login": {
+    "networkResponseHint": "登录服务返回了异常响应，请求可能被中间网络或 Proxy 拦截。请检查网络和 Proxy 设置。",
     "title": "欢迎使用 Cindy",
     "subtitle": "选择一种方式安全登录",
     "savedLoginPreserved": "恢复操作会保留已保存的登录信息",

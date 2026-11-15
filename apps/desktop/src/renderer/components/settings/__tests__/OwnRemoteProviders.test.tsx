@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -335,11 +335,21 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
     expect(mark.querySelector('path[fill^="url"]')?.getAttribute('fill')).toBe(`url(#${gradient!.id})`);
   });
 
+  it('uses the existing disabled state and removes model and quota content until re-enabled', () => {
+    const stopped = { ...entry, provider: { ...entry.provider, suspended: true } };
+    render(<><OwnRemoteProviderRows entries={[stopped]} selectedKey={stopped.key} onSelect={() => undefined} /><OwnRemoteProviderDetail entry={stopped} /></>);
+    expect(screen.getByTestId('own-remote-provider-row').textContent).toContain('settings.providers.pill.suspended');
+    expect(screen.getByText('settings.providers.detail.suspendedBanner')).toBeTruthy();
+    expect(screen.queryByTestId('own-remote-provider-models')).toBeNull();
+    expect(screen.queryByTestId('provider-usage-module')).toBeNull();
+  });
+
   it('shows the models that computer leaves visible, read-only', () => {
     render(<OwnRemoteProviderDetail entry={entry} />);
     const list = screen.getByTestId('own-remote-provider-models');
     expect(Array.from(list.querySelectorAll('li')).map((item) => item.textContent)).toEqual(['Opus 5.5']);
-    expect(screen.queryByRole('switch')).toBeNull();
+    expect(within(list).queryByRole('switch')).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' })).toBeTruthy();
   });
 
   // 测试价值：通过真实详情、订阅 hook 与额度卡验证 provider-sharing.md §5.2 的只读远程额度。
@@ -355,7 +365,7 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
     expect(screen.getByRole('progressbar').getAttribute('aria-valuetext')).toBe('quotaCard.remainingPercent:{"percent":63}');
     expect(usage.remoteClaude).toHaveBeenCalledWith('mini-a', 'anthropic', { live: false });
     expect(usage.localClaude.mock.calls.every(([enabled]) => !enabled)).toBe(true);
-    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getAllByRole('button')).toEqual([screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' })]);
     expect(screen.queryByRole('link')).toBeNull();
 
     rerender(<OwnRemoteProviderDetail entry={{ ...subscription, key: ownRemoteProviderKey('mini-b', 'anthropic'), deviceId: 'mini-b' }} />);

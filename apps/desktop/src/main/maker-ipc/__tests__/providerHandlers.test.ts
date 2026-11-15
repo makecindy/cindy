@@ -1,3 +1,4 @@
+import { remoteProviderDisableKey } from '@cindy/model-providers';
 import * as customProviderStore from '../../maker-host/custom-provider-store.js';
 import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
 import Database from 'better-sqlite3';
@@ -6088,5 +6089,30 @@ describe('Agent API connection configuration', () => {
     await actions.connections.fetch(config, 'pi');
     expect(deps.fetchModels).toHaveBeenCalledTimes(1);
     expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'https://new.test/v1', apiKey: 'new-key' }));
+  });
+});
+
+describe('receiving-client remote provider disable', () => {
+  it('reuses provider overrides with a device-scoped key and never changes host sharing', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listRemoteProviders: vi.fn(async () => [catalogView('openai', {})]), setRemoteProviderInvocationEnabled: vi.fn() });
+    registerProviderHandlers(harness, deps);
+    const command = { kind: 'provider', providerId: 'openai', remoteDeviceId: 'peer', disabled: true };
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, command);
+    expect(deps.setProviderDisabled).toHaveBeenCalledWith(remoteProviderDisableKey('peer', 'openai'), true);
+    expect(deps.setRemoteProviderInvocationEnabled).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { ...command, disabled: false });
+    expect(deps.setProviderDisabled).toHaveBeenLastCalledWith(remoteProviderDisableKey('peer', 'openai'), false);
+    expect(deps.listRemoteProviders).toHaveBeenCalledOnce();
+  });
+  it('rejects unknown remote providers but permits clearing a stale stop while offline', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listRemoteProviders: async () => [] });
+    registerProviderHandlers(harness, deps);
+    const command = { kind: 'provider', providerId: 'missing', remoteDeviceId: 'peer', disabled: true };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, command)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.setProviderDisabled).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { ...command, disabled: false });
+    expect(deps.setProviderDisabled).toHaveBeenCalledWith(remoteProviderDisableKey('peer', 'missing'), false);
   });
 });
