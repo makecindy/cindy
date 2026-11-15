@@ -25,6 +25,9 @@ import { recordGhostCallMedia } from '../../../desktop/src/main/cindy-brain/ghos
 import type { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.js';
 import type { Session } from '@cindy/maker-core';
 import { GhostFsSlot } from '../../../desktop/src/main/cindy-brain/fsSlot.js';
+import { getGhostPickedDirectory } from '../../../desktop/src/main/cindy-brain/pickGrantsStore.js';
+import { HostStorageService, type StorageShareFacts } from '../../../desktop/src/main/cindy-brain/storageService.js';
+import { createHostStorageProviders } from '../../../desktop/src/main/cindy-brain/storageProviders.js';
 import { GhostNotifySlot } from '../../../desktop/src/main/cindy-brain/notifySlot.js';
 import { getDirDepositVault, getSaveDepositVault } from '../../../desktop/src/main/cindy-brain/dirDeposit.js';
 import { PluginDownloadSlot } from '../../../desktop/src/main/cindy-brain/downloadSlot.js';
@@ -37,6 +40,14 @@ import { setPluginEnabled } from '../../../desktop/src/main/cindy-brain/pluginEn
 import { ghostInstallApprovalToken, type InstalledGhost, type GhostAppContextResult } from '../../../desktop/src/shared/ghost.js';
 import { installedGhostStoragePart, findInstalledGhostByInstanceId } from '../../../desktop/src/shared/pluginIdentity.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, type ActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
+import {
+  availableGhostsIn,
+  findGhostForInstanceIdIn,
+  isGhostAvailableForSessionIn,
+  listAvailableGhostsFrom,
+  listInstalledGhostsForOwner,
+} from '../../../desktop/src/main/cindy-brain/ghostAvailability.js';
+import { createManagedSkills } from '../../../desktop/src/main/maker-host/managedSkillsCore.js';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 import { hostBlobStore, hostMediaIngest } from '../media-store.js';
@@ -51,6 +62,7 @@ import { handleGhostConnectionsRequest } from '../../../desktop/src/main/cindy-b
 import type { User } from '../../../desktop/src/shared/authUser.js';
 import { hostOutbound } from '../outbound.mjs';
 import { prepareHostPluginAssets } from './assets.mjs';
+import type { GhostNodeRuntimeBrokerDeps } from '../../../desktop/src/main/cindy-brain/nodeRuntimeBroker.js';
 
 interface PluginRuntimeOptions {
   profileDir: string;
@@ -61,10 +73,13 @@ interface PluginRuntimeOptions {
   getUser?(): User | null;
   account?: PluginAccountPorts;
   confirmConnectionHost?(id: string, label: string, host: string): Promise<boolean>;
+  confirmStorageShare?(facts: StorageShareFacts, current: () => boolean): Promise<boolean>;
   appContext(): GhostAppContextResult;
   getSession(id: string): Session | undefined;
   requestFileConfirmation: GhostGrantConfirmBridge['request'];
   publish(channel: string, payload: unknown): void;
+  hostToolRequest?: GhostNodeRuntimeBrokerDeps['hostToolRequest'];
+  onPluginStopped?(id: string): void;
   /** Built/release paths only, never plugin-provided. */
   assets?: Awaited<ReturnType<typeof prepareHostPluginAssets>>;
 }
@@ -110,8 +125,37 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const secret = createHostPluginSecrets(options.profileDir, options.ownerId, options.credentials);
   const kv = createGhostKvStore({ getRootDir: () => root('ghost-kv'), log });
   const models = createGhostKvStore({ getRootDir: () => root('ghost-published-models'), log });
-  const identity = createHostPluginIdentity({ manager: options.manager, root, getGhost,
+  // Desktop's findGhostForInstanceId over this owner's manager (ghostAvailability.ts),
+  // including its account-availability check. Identity reads use it; the runtime's
+  // getGhost keeps its suspension overlay for everything else.
+  const identityLookup = {
+    getGhostManager: () => options.manager,
+    isGhostAvailableForActiveSession: (id: string) => isGhostAvailableForSessionIn(options.manager, id),
+    availableGhosts: () => availableGhostsIn(() => options.manager),
+  };
+  const identity = createHostPluginIdentity({ manager: options.manager, root,
+    findGhost: id => (current() ? findGhostForInstanceIdIn(identityLookup, id) : null),
     getUser: options.getUser ?? (() => null), assertCurrent });
+  // Desktop ghostOwnerScope (cindy-brain/index.ts): capture fails during an account
+  // boundary; owner and generation must still match after the scan. The Host also
+  // requires this runtime to be current.
+  const sameAppSession = (a: ActiveAppSession, b: ActiveAppSession) =>
+    a.mode === b.mode && a.dataOwnerId === b.dataOwnerId && a.generation === b.generation;
+  const listingScope = {
+    capture: () => {
+      if (isAppSessionBoundaryPending()) throw new Error('账号切换中，已取消本次 Plugin 操作');
+      return getActiveAppSession();
+    },
+    isCurrent: (scope: unknown) => current() && !!scope && sameAppSession(scope as ActiveAppSession, getActiveAppSession()),
+    isStable: (scope: unknown) => current() && !!scope && !isAppSessionBoundaryPending()
+      && sameAppSession(scope as ActiveAppSession, getActiveAppSession()),
+  };
+  // The desktop managed Skill catalog (managedSkillsCore.ts) over this owner's plugins.
+  const managedSkills = createManagedSkills({
+    listAvailableGhosts: () => listAvailableGhostsFrom(() => listInstalledGhostsForOwner(listingScope, () => options.manager)),
+    getGhostManager: () => options.manager,
+    loadGhostFirstPartyFactsForGhost: (id, purpose) => identity.loadFirstPartyFacts(id, purpose),
+  });
   const unavailable = () => { throw new Error('PLUGIN_ACCOUNT_SERVICE_UNAVAILABLE'); };
   const authorization = createHostPluginAuthorization({ owner, root, current, assertCurrent,
     getGhost, list: () => options.manager.list(), secret, kv, identity,
@@ -146,11 +190,17 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     broadcast: payload => { if (current()) options.publish('ghosts:card-updated', payload); }, log,
   });
   const fsSlot = new GhostFsSlot({ getGhost, dataRootDir: () => root('ghost-fs'),
+    ownerKey: () => owner, resolvePickedDirectory: getGhostPickedDirectory,
     callInfo: id => current() ? cards.callInfoOf(id) : null,
     inFlightCallInfo: id => current() ? cards.inFlightCallInfoOf(id) : null,
     getSessionSnapshot: async (id, instance) => current() ? resolveGhostFsSessionSnapshot(options.getSession, id, instance) : null,
     requestWriteConfirm: (id, payload) => { assertCurrent(); return options.requestFileConfirmation(id, payload); },
     writeSaveDeposit: (id, token, name, bytes) => getSaveDepositVault().write(id, token, name, bytes), log });
+  const storage = new HostStorageService({ ownerKey: () => owner, getGhost, handoff, listGhosts: () => options.manager.list(),
+    providers: createHostStorageProviders({ kv, files: fsSlot, library, handoff, media: files,
+      kvChanged: id => authorization.changes.emit(id, { source: 'kv' }) }),
+    confirmShare: (facts, check) => options.confirmStorageShare?.(facts, () => current() && check()) ?? Promise.resolve(false),
+  });
   const network = new GhostNetworkSlot({ getGhost, captureRequestGuard: guard,
     inFlightCallInfo: id => current() ? cards.inFlightCallInfoOf(id) : null,
     readSecret: secret.readGhostSecret, getLoginEmail: options.getLoginEmail,
@@ -212,7 +262,11 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     log,
   });
   const ownerScope = { capture: () => owner, isCurrent: (value: unknown) => value === owner && current(), isStable: (value: unknown) => value === owner && current() };
+  const disposeRuntimeHostServices = (id: string) => {
+    fsSlot.disposePlugin(id); options.onPluginStopped?.(id);
+  };
   const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope,
+    hostToolRequest: options.hostToolRequest, onStopped: disposeRuntimeHostServices,
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
     resolveOauthSecret: async (id, key, accountId) => {
       const decl = getGhost(id)?.manifest.network?.secrets?.find(item => item.key === key && item.source === 'oauth')?.oauth;
@@ -228,7 +282,8 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     send: (id, event) => { void sandbox.deliver(id, event); }, download: createDownloader(), guardedFetch: hostOutbound.guardedOutboundFetch });
   const notify = new GhostNotifySlot({ getGhost, broadcast: payload => options.publish('ghosts:notify', payload), log });
   const pipe = createGhostExecutionPipe({ dispatcher: () => dispatcher,
-    fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload) => fsSlot.handleFsRequest(id, payload),
+    hostTools: options.hostToolRequest,
+    fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload, check) => fsSlot.handleFsRequest(id, payload, check),
     library: (id, payload) => library.handleLibraryRequest(id, payload),
     download: (id, payload, check) => download.handle(id, payload, check),
     node: (id, payload, check) => download.withNodeDownloads(id, payload as Record<string, unknown>, request => node.handleRequest(id, request), check),
@@ -296,7 +351,10 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     }),
   });
   const runtime = new GhostRuntime({ adapter: sandbox.adapter, log,
-    onStateChanged: (id, state) => { dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() }); } });
+    onStateChanged: (id, state) => {
+      if (state !== 'running' && state !== 'starting') disposeRuntimeHostServices(id);
+      dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() });
+    } });
   const dispatcher = new GhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
     spawn: ghost => runtime.spawnForTool(ghost), sendToGhost: sandbox.deliver, ownerScope, log });
   async function reconcileInstalled() {
@@ -351,6 +409,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   async function dispose() {
     closed = true; stopSignal.abort(); runtime.destroyAll();
+    fsSlot.disposeAll();
     const errors: unknown[] = [];
     const finish = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
     await finish(() => browserExtensions.dispose());
@@ -369,9 +428,12 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     if (errors.length) throw new AggregateError(errors, 'Plugin runtime cleanup failed');
   }
   return {
-    list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, network, secret, node, authorization,
+    list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, storage, network, secret, node, authorization,
     browserExtensions,
     manager: options.manager, getGhost, current, assertCurrent, dispatcher, handoff, files,
+    /** Built-in and approved plugin Skills, as Desktop's listCindyManagedSkills. */
+    listManagedSkills: () => managedSkills.listCindyManagedSkills(),
+    identity,
     captureMutationOwner() { assertCurrent(); return getActiveAppSession(); },
     acquireMutationLease(expected: ActiveAppSession) {
       assertCurrent();

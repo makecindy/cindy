@@ -5,7 +5,7 @@ import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { app } from 'electron';
+import { getUserDataDir, getAppDataDir } from '../userDataPath.js';
 
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
 import { isManagedWorktreeDirectoryName } from '../../shared/managedWorktreePaths';
@@ -16,12 +16,12 @@ import {
 import { isGitProcessTreeAlive } from './gitExec';
 
 function runtimeRoot(): string {
-  return path.join(app.getPath('userData'), 'worktree-runtime-leases');
+  return path.join(getUserDataDir(), 'worktree-runtime-leases');
 }
 
 /** Older clients may still hold cross-profile leases; keep reading/retrying them. */
 function sharedRuntimeRoot(): string {
-  return path.join(app.getPath('appData'), 'Cindy', 'shared-worktree-runtime-leases');
+  return path.join(getAppDataDir(), 'Cindy', 'shared-worktree-runtime-leases');
 }
 
 
@@ -354,7 +354,7 @@ async function isAbandonedLease(
 
 /** Unknown/older live instances keep terminal task references protected. */
 export async function readWorktreeRuntimePaths(): Promise<Set<string> | null> {
-  const registry = path.join(app.getPath('userData'), '.dev-instances');
+  const registry = path.join(getUserDataDir(), '.dev-instances');
   const names = new Set((await fs.readdir(registry)).map((name) => name.replace(/\.bak$/, '')));
   const compatiblePids = new Set([process.pid]);
   const reusedInstanceRecords = new Map<number, string>();
@@ -397,7 +397,7 @@ export async function readWorktreeRuntimePaths(): Promise<Set<string> | null> {
   }
   if (process.platform !== 'win32') {
     try {
-      const target = await fs.readlink(path.join(app.getPath('userData'), 'SingletonLock'));
+      const target = await fs.readlink(path.join(getUserDataDir(), 'SingletonLock'));
       const match = /-(\d+)$/.exec(target);
       if (!match) return null;
       const pid = Number(match[1]);
@@ -412,7 +412,7 @@ export async function readWorktreeRuntimePaths(): Promise<Set<string> | null> {
           const identity = await readDesktopProcessIdentity(pid);
           if (!identity || !isReusedDesktopInstancePid(JSON.parse(raw), identity)
             || await readRecord(`${pid}.json`) !== raw
-            || await fs.readlink(path.join(app.getPath('userData'), 'SingletonLock')) !== target) return null;
+            || await fs.readlink(path.join(getUserDataDir(), 'SingletonLock')) !== target) return null;
         } catch {
           return null;
         }

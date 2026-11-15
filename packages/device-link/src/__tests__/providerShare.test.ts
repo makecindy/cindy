@@ -220,6 +220,7 @@ describe('provider share identity scrubbing', () => {
       id: 'openai-2', name: 'OpenAI · alice@corp.com', connected: true,
       // The guest still uses this original shared connection, not the owner's whole account pool.
       subscriptionPoolAlias: true,
+      subscriptionPoolTarget: 'private-pool-target',
       subscriptionAccount: { source: 'local', identity: 'alice@corp.com' },
       openAiAccount: { source: 'oauth', identity: 'alice@corp.com' },
     };

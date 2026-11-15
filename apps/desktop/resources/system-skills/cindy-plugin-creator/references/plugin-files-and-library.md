@@ -1,13 +1,15 @@
-## 4.10 写文件(fs 能力)
+## 4.10 文件操作(fs 能力)
 
-沙箱本身没有文件系统，字节始终由主机落盘。三档目的地的声明边界不同：
+沙箱本身没有文件系统，字节始终由主机落盘。四档目的地的声明边界不同：
 
 - `root:'workdir'`：当前 Agent tool-call 内传 `callId: msg.callId` 即可按会话
-  permission mode 写入，不需要 `"fs": true`。
+  permission mode 读写、列举、删除和监听，不需要 `"fs": true`。
 - `root:'save'`：授权是主 Agent 发放的限时、限次、绑定插件票据，不需要
   `"fs": true`。
 - `root:'data'`：这是插件脱离当前 Agent 调用仍可持久读写的私有目录，
   属于自主 Host 能力；使用它才声明 `"fs": true`，并在插件详情如实展示。
+- `root:'picked'`：使用已批准的 `agent.hostTools:["files"]` 与一次新的
+  `pick({mode:'directory',access:'files'})` 返回的 `directoryRef`，不借用任务、无需 callId。
 
 ```js
 // 写自己的私有数据目录(免确认;适合缓存、大结果落盘、跨生命周期状态)
@@ -15,14 +17,27 @@ const w = await cindy.send({ type: 'fs-request', op: 'write', root: 'data',
   path: 'reports/result.json', content: JSON.stringify(data) });
 // w = { ok:true, op:'write', path:'reports/result.json', bytes:12345 } 或 { ok:false, message:'原因' }
 
-// 读回 / 列清单 / 删除(仅限 root:'data')
+// 读回 / 列清单 / 删除自己的私有文件
 await cindy.send({ type: 'fs-request', op: 'read',   root: 'data', path: 'reports/result.json' });
 await cindy.send({ type: 'fs-request', op: 'list',   root: 'data' });          // 可带 path 列子目录
 await cindy.send({ type: 'fs-request', op: 'delete', root: 'data', path: 'reports/result.json' });
 
-// 写当前会话的工作目录(仅 write;必须带 tool-call 下发的 callId)
+// 操作当前任务的工作目录(必须带 tool-call 下发的 callId)
 await cindy.send({ type: 'fs-request', op: 'write', root: 'workdir',
   path: 'output/summary.md', content: text, callId: msg.callId });
+await cindy.fs({ op: 'read', root: 'workdir', path: 'output/summary.md', callId: msg.callId });
+await cindy.fs({ op: 'list', root: 'workdir', callId: msg.callId });
+await cindy.fs({ op: 'delete', root: 'workdir', path: 'output/summary.md', callId: msg.callId });
+
+// 同一调用内监听目录，只续读变更元数据，不自动读取文件内容
+const watch = await cindy.fs({ op: 'watch', root: 'workdir', callId: msg.callId });
+if (watch.ok) {
+  const changes = await cindy.fs({ op: 'changes', root: 'workdir', watchId: watch.watchId,
+    cursor: watch.cursor, callId: msg.callId });
+  // changes = {ok:true, op:'changes', cursor, events:[{sequence,path,type}], resetRequired}
+  // resetRequired:true 表示缓冲有缺口或 watcher 报错，应重新 list，不得当作完整变更流。
+  await cindy.fs({ op: 'unwatch', root: 'workdir', watchId: watch.watchId, callId: msg.callId });
+}
 
 // 写主 agent 过户的目录(仅 write;token 来自 ghost_call 顶层 save_dir 注入的 args.save_deposit.token)
 await cindy.send({ type: 'fs-request', op: 'write', root: 'save',
@@ -32,24 +47,40 @@ await cindy.send({ type: 'fs-request', op: 'write', root: 'save',
 await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
 ```
 
-三档目的地(都由主机强制,写错拿到的是结构化拒绝):
+四档目的地(都由主机强制,写错拿到的是结构化拒绝):
 
 - `root:'data'` **私有数据目录**:你的专属储物柜(卸载时整体回收,沉睡保留)。
   免确认,全操作(write/read/list/delete)。配额:总量 256MB、2000 个文件;
   超限写会被拒,自己删旧文件腾地方。**超大工具结果建议落这里再把路径交给
   agent 读**(交卷体量有限时的泄洪通道);
-- `root:'workdir'` **会话工作目录**:仅 write,必须带当次 tool-call 的 `callId`
-  (主机凭它定位会话,不认自报)。**是否放行跟随该会话的权限模式**——agent
+- `root:'workdir'` **任务工作目录**:支持 write/read/list/delete/watch/changes/unwatch，必须带当次 tool-call 的 `callId`
+  (主机凭它定位任务,不认自报)。read 支持 UTF-8/base64，单次上限 16MiB；list 只列当前层，
+  返回目录与普通文件的相对路径、type、bytes、mtime，不返回隐藏路径或 symlink。
+  **写入和删除是否放行跟随该任务的权限模式**——Agent
   编辑文件免批的模式直接写;逐条确认的模式会弹确认卡请用户点头(同目录本
-  会话批一次);计划/只读模式一律拒。SSH 远程工作区会话不支持(目录在远端
+  任务批一次)。删除单独裁决，不复用写入确认记忆；目录删除包含其内容。计划模式可读、列举和监听，禁止写入与删除。
+  watch 只在原调用存活时生效，交卷、Stop、账号或安装变化即失效；游标只在该 watcher 内有效，
+  最近 256 条元数据可续读，较旧游标返回 resetRequired。监听初始化失败明确报错，不能当作空事件。
+  新操作须检测结构化 ok:false 并按不支持处理，旧 Host 无需重装插件。
+  SSH 远程工作区任务不支持(目录在远端
   机器),会明确报错,请改用 root:'data'。例外:scheduler「仅运行脚本」通道
   (无会话的定时脚本直调)下发的调用,以该 schedule 配置的工作目录为写入根
-  直接放行——没有会话就没有权限模式可跟随,授权来自 schedule 配置本身;
+  直接放行 write，其他新操作不借用脚本调用授权——没有任务就没有权限模式可跟随,授权来自 schedule 配置本身;
   该通道的写入必须在当次 tool-call 处理期间完成,交卷后 callId 立即失效
   (比会话通道更严:无宽限,先写盘再交卷);
 - `root:'save'` **过户目录**:仅 write,凭主 agent 在 ghost_call 顶层传 `save_dir`
   过户后注入的 `args.save_deposit.token` 写入(与 §4.7 fetch `as:'file'` 下载
   落盘同一张票:限时、限次数、限字节、文件名主机消毒、永不覆盖已有文件)。
+- `root:'picked'` **自主授权目录**：同一宿主文件服务提供 read/write/list/delete/watch/changes/unwatch。
+  每次传 `directoryRef`；相对路径、16 MiB 单次读写、非递归列举、监听的 256 条元数据及游标缺口
+  规则与 workdir 相同。写入使用文件浏览器同一原子发布器；目录内的自主写入和删除已由亲选授权，
+  删除目录包含其内容，不能删除根本身。最多同时保留本插件 32 个监听；不用时 unwatch。
+  监听不需要 Agent 在途调用，停用、原运行页结束、换源、账号或安装变化时清理；旧引用不能授权新目录身份。
+  沙箱调用 `cindy.fs`；逻辑页与 Node Worker 也可经公共入口
+  `cindy.host.call('cindy_helper','file_request',{op:'read',directoryRef,path:'a.txt'})` 操作相同目录。
+  公共工具入口的 write/delete 仍执行其原生逐次风险确认。普通 Agent 使用该工具时由真实 Session
+  定位当前工作目录，计划模式禁止修改，不借用插件引用。Node Host 复用已提供的文件服务，未装配
+  系统选择器或 watcher 时明确不支持该部分，不在控制端操作远端路径。
 
 通用规则:
 
@@ -228,11 +259,12 @@ await cindy.library({
   （与 hashes / library 三选一，文件名是净化后的原名，另附 `filename*`）；本机处理则由页面从
   `hostContext.toolInfo.tool._meta['cindy/attachments']` 找到同一 `uri` 的项，用
   `_meta['cindy/file'].url` 读取，在页面里解析后再调用你的 app-only 工具保存结果。
-- 插件拿不到字节和路径，也不能删除副本；副本连续 7 天未使用后宿主自动删除（卡片签发地址、
+- 原交接接口不返回字节和路径，也不能删除副本；另获 `storage` 组批准后可按下节分块读取和删除自己的副本。
+  副本连续 7 天未使用后宿主自动删除（卡片签发地址、
   页面读取、`upload.handoff` 上传成功都算使用，会顺延），用户也可以在插件详情页逐个删除。
   之后上传返回 `errorCode:'HANDOFF_UNAVAILABLE'`，页面上该项没有 `url`；请提示用户重新发送。
   `expiresAt` 是收到时的当前到期时间，使用时会顺延，不要把它当成固定截止时间。
-- 手机和其他电脑暂时打不开带这类文件的卡片；Node 工作进程不能使用这个能力。
+- 手机和其他电脑暂时打不开带这类文件的卡片；Node 工作进程使用下节 `storage_request` 读取自己的交接副本，原卡片通道限制保持。
 - 需要 `minCindyVersion: 0.1.122-beta`；旧宿主不认识这个参数，非媒体文件仍会要求改用 dir。
 
 ```js
@@ -248,3 +280,54 @@ _meta['cindy/file'].url 取临时只读地址。不要拼地址、传本机路�
 大文件优先由 cindy.pick 写入 Library，再由工具上传；页面不搬运完整文件字节。
 参数、限额、拖放和下载写法统一见[§4.23 文件参考](examples/interactive-pages/REFERENCE.md#文件)，
 完整代码见[files 示例](examples/interactive-pages/files/)。
+
+### 4.10.4 统一存储接口与跨插件分享
+
+声明 `"agent":{"hostTools":["storage"]}`。安装/更新和详情页单列权限，receipt 记录组批准，
+旧声明不会自动补批准。逻辑页和 Node Worker 使用同一公共工具入口：
+
+```js
+const storage = async args => {
+  const result = await cindy.host.call('cindy_helper', 'storage_request', args);
+  const value = JSON.parse(result.content.find(item => item.type === 'text').text);
+  if (result.isError || !value.ok) throw new Error(value.errorCode);
+  return value;
+};
+const { providers } = await storage({ op: 'providers' });
+const own = await storage({ op: 'call', provider: 'kv', request: { op: 'read' } });
+const { targets } = await storage({ op: 'targets' });
+// 让用户选 targets 中的实际实例；不能拿 manifest id 猜物理实例。
+await storage({ op: 'share', targetPluginId: chosenTarget.id,
+  source: { provider: 'kv', key: 'selectedBusinessRecord' } });
+```
+
+Host 的 `HostStorageProvider` 接口统一提供 id、operations、可用性、call 和可选 snapshot；
+provider 继续拥有自己的 IO 与持久化，不复制一套存储实现。`providers` 只表示当前插件声明下
+可调用的接口；窗口、磁盘和连接是否就绪仍以实际回执为准。宿主尚未提供的 provider 返回
+`UNSUPPORTED_PROVIDER`，不要猜默认存储或读写 Host 文件。
+
+| provider | request | 既有边界 |
+| --- | --- | --- |
+| `kv` | `read`；`write` 带 value 对象 | 本插件自定义参数，64 KiB、整体覆盖写，不含凭证保险库 |
+| `data` | read/write/list/delete，与 fs:data 同参数 | 另需 fs:true，保留原配额与卸载清理 |
+| `library` | 与 cindy.library 相同的 op 与参数 | 另需 library:true，保留原子写、分块流、SQL 门与卸载不删 |
+| `handoff` | list；read/delete/touch 带 ref，read 可传 offset | 只处理本插件的交接副本，read 每次最多 64 KiB base64，并返回 nextOffset、原名和 sha256；读取会续期 |
+| `media` | read 带 ref，可传 offset | 只读本插件获授的 cindy-media 引用，每次最多 64 KiB base64，返回 nextOffset |
+
+分享是具体内容的独立副本，接收方从 `provider:'handoff'` 的 list/read 取得，也可自行保存进
+自己的 KV 或 Library；源文件后续更新不会同步。source 为
+`{provider:'kv',key}`、`{provider:'data'|'library',path}` 或 `{provider:'handoff'|'media',ref}`。
+单份最多 64 MiB，仍受源 provider 原有读取上限和接收方交接配额约束；Library/data 的普通 read
+上限为 16 MiB，不因为分享绕过。副本沿用 7 天使用续期、SHA-256 和用户详情页删除机制。
+
+双方都须启用、安装已批准且 `storage` 组已获批准；targets 只列同账号本机、同组织范围且
+namespace 已确认的接收方。个人 root 与 local 实例属于个人范围；组织实例只与同一组织互享。
+分享不会替目标插件启用能力、批准权限或创建账号，也不能直接查询他人的 KV/库/凭证。
+普通 Agent 没有插件存储身份，直接调用返回 `PLUGIN_CONTEXT_REQUIRED`；应经该插件的工具操作其业务数据。
+
+宿主每次单独展示可信来源、接收方、文件名和字节数，用户拒绝或无确认客户端时不交付。
+确认期间 owner、安装、启用态或内容改变会阻止交付；`STALE_RESOURCE` 要重新展示当前内容并确认。
+`SHARE_RESULT_UNKNOWN` 表示写入阶段的回执不确定；返回 targetPluginId 和 file 的 name/size/sha256，
+先由接收方按这些事实查询交接列表，不能自动重发。底层 provider 失败的 reason 等结构化字段保留。
+已交付且被对方读取或另存的内容无法收回。停用/卸载仍可从 Cindy 管理页执行，不由插件控制。
+旧 Host 不提供此工具时提示能力不可用，保留本插件其它功能，不要求重装旧插件。

@@ -213,6 +213,7 @@ import {
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
   PiManagedPackageMutationFailedError,
+  projectPiManagedCommandFailure,
   type TurnPermissionPolicy,
 } from '../../base-agent.js';
 import {
@@ -1087,6 +1088,39 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(deps.onPiManagedPackageMutationSettled).not.toHaveBeenCalled();
       expect(captured.closed).toBe(false);
     } finally { await handle.close(); }
+  });
+
+  // A host that cannot update the Pi core (the Node Host until it manages engine binaries) reports
+  // hostStage 'unsupported'; the caller reads that the core update is unavailable, without a retry.
+  it.each(['desktop', 'tool'] as const)('tells the %s caller a Pi core update is unavailable, without a retry', async origin => {
+    const deps = buildDeps();
+    const details = { phase: 'host-binary-update', hostStage: 'unsupported', packagesUpdated: false,
+      recovery: 'check-host-update-and-retry-core' } as const;
+    deps.mutatePiManagedPackage = vi.fn(async () => { throw new PiManagedPackageMutationFailedError(false, 'native-command-failed', details); });
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'unsupported-' + origin, workingDir: cwd, model: 'm', permissionMode: 'bypassPermissions' });
+    try {
+      let receipt;
+      if (origin === 'desktop') {
+        await handle.send({ type: 'user', content: 'pi update --self' }, desktopCommandOptions('pi update --self'));
+        const message = String(captured.requests.find(request => request.type === 'prompt')?.message ?? '');
+        receipt = JSON.parse(message.split('\n')[0].replace('[Cindy Pi command receipt] ', ''));
+      } else {
+        captured.onEvent?.({ type: 'extension_ui_request', id: 'unsupported-tool', method: 'input',
+          title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['update', '--self'], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
+        receipt = JSON.parse(String((await waitForResponse('unsupported-tool')).value));
+      }
+      const error = String(receipt.error ?? receipt.result?.error);
+      expect(error).toBe('Updating the Pi core is not available here yet; package install, update and remove still work.');
+      expect(error).not.toMatch(/retry/i);
+      expect(receipt.commandFailure ?? receipt.result?.commandFailure).toMatchObject({ hostStage: 'unsupported' });
+    } finally { await handle.close(); }
+  });
+
+  it('accepts the known host update stages, including unsupported, and drops unknown ones', () => {
+    const base = { phase: 'host-binary-update', packagesUpdated: false, recovery: 'check-host-update-and-retry-core' };
+    expect(projectPiManagedCommandFailure({ ...base, hostStage: 'unsupported' })).toEqual({ ...base, hostStage: 'unsupported' });
+    expect(projectPiManagedCommandFailure({ ...base, hostStage: 'download' })).toEqual({ ...base, hostStage: 'download' });
+    expect(projectPiManagedCommandFailure({ ...base, hostStage: 'not-a-stage' })).toEqual(base);
   });
 
   it.each([['ask', 'send', '--self'], ['auto', 'send', '--all'], ['ask', 'steer', '--self'], ['auto', 'steer', '--all']] as const)('routes exact IM updates through channel confirmation in %s/%s/%s', async (permissionMode, method, target) => {

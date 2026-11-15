@@ -189,7 +189,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       <div className="flex items-center gap-2.5">
         {companion ? <BotAvatar bot={companion} size="sm" /> : null}
         <div className="min-w-0">
-          <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
+          <p className="text-15 font-medium leading-tight text-[var(--chat-input-text)]">
             {companion ? t('bots.permissionRequest', { name: companion.name }) : displayTitle}
           </p>
           {companion ? (

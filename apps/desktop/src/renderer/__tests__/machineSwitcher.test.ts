@@ -305,6 +305,14 @@ describe('机器选择持久化(serialize / parse 往返)', () => {
 });
 
 describe('buildSwitcherDevices', () => {
+  // App routing, unit: a stale synced/rejected shard must not put a controller App
+  // back into the computer switcher. Existing cases excluded only mobile platforms.
+  it.each(['cindy-friend', 'other-app'])('excludes app=%s even with cached projects or a rejected row', app => {
+    expect(buildSwitcherDevices({ fullList: [mkDevice('friend', { app, platform: 'darwin' })],
+      syncedDevices: [{ deviceId: 'friend', deviceName: 'Mac', sessionCount: 1, connected: true }],
+      revoked: new Set(['friend']),
+    })).toEqual([]);
+  });
   it('已连接(已同步)/ 连接中(在线可控未同步)/ 被拒(已撤销)三态分类', () => {
     const result = buildSwitcherDevices({
       fullList: [mkDevice('dev-connected'), mkDevice('dev-connecting'), mkDevice('dev-rejected')],

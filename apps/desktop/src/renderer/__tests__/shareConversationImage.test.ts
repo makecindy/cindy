@@ -273,6 +273,22 @@ describe('redactTextNodes', () => {
 });
 
 describe('inlineCloneImages', () => {
+  // Unit regression: production Vite chunks resolve bundled avatars to file:
+  // URLs; the existing relative-asset case cannot catch their silent removal.
+  it('keeps packaged avatar bytes but does not fetch local files outside renderer assets', async () => {
+    vi.stubGlobal('window', { location: new URL('file:///Applications/Cindy.app/Contents/Resources/app.asar/.vite/renderer/main_window/index.html') });
+    isImageBytesReachable.mockReturnValue(false);
+    const fetchAsset = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['avatar'], { type: 'image/png' }) });
+    vi.stubGlobal('fetch', fetchAsset);
+    const src = 'file:///Applications/Cindy.app/Contents/Resources/app.asar/.vite/renderer/main_window/assets/cindy-hash.png';
+    const el = root(`<img src="${src}" /><img src="file:///private/image.png" /><img src="${src.replace('/assets/', '/assets-other/')}" />`);
+    await inlineCloneImages(el);
+    expect(el.querySelectorAll('img')).toHaveLength(1);
+    expect(el.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,YXZhdGFy');
+    expect(fetchAsset).toHaveBeenCalledExactlyOnceWith(src);
+    expect(loadImageSourceBase64).not.toHaveBeenCalled();
+  });
+
   it('preserves bundled relative avatars without routing app assets through privileged image reads', async () => {
     isImageBytesReachable.mockReturnValue(false);
     const fetchAsset = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['avatar'], { type: 'image/png' }) });

@@ -98,6 +98,8 @@ export type {
 export type {
   ForwardLifecycleObserver,
   ForwardLifecycleFailure,
+  InboundAdmissionCtx,
+  InboundRejection,
   LocalRequestHandler,
   OversizedRequestCompactor,
   ProxyHandle,

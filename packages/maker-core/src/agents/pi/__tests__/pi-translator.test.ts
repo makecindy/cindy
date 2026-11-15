@@ -2941,6 +2941,108 @@ describe('pi translator live token speed', () => {
       vi.useRealTimers();
     }
   });
+
+  it('publishes live thinking rate within 2.5s, resets stale rate on new request, and excludes TTFT from done.usage.durationMs', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) =>
+        send({ type: 'message_update', assistantMessageEvent }, at);
+
+      send({ type: 'agent_start' }, 1_000);
+      // 5s TTFT wait before first byte arrives.
+      send({ type: 'message_start', message: { role: 'assistant', timestamp: 1_000 } }, 1_000);
+      update({ type: 'thinking_start', contentIndex: 0 }, 6_000);
+      for (let t = 6_250; t <= 8_500; t += 250) {
+        update({ type: 'thinking_delta', contentIndex: 0, delta: 'a '.repeat(25) }, t);
+      }
+      // Verbatim thinking should already produce a live reading well before 10s.
+      const thinkingSnap = ctx.tokenSpeed.snapshot(8_500);
+      expect(thinkingSnap?.streaming).toBe(true);
+      expect(thinkingSnap?.rate).toBeGreaterThan(80);
+
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'toolUse', timestamp: 1_000,
+        usage: { input: 10, output: 250, reasoning: 250 },
+      } }, 8_500);
+
+      // Next request after >500ms pause must not leak the previous request's rate while warming up.
+      send({ type: 'message_start', message: { role: 'assistant', timestamp: 15_000 } }, 15_000);
+      update({ type: 'text_start', contentIndex: 0 }, 15_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'hello world' }, 15_100);
+      expect(ctx.tokenSpeed.snapshot(15_100)?.rate).toBe(0);
+
+      update({ type: 'text_delta', contentIndex: 0, delta: 'foo bar' }, 16_000);
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'hello world foo bar' }], stopReason: 'stop',
+        timestamp: 15_000, usage: { input: 10, output: 100 },
+      } }, 16_000);
+      send({ type: 'agent_settled' }, 16_000);
+
+      const done = events.find((e) => e.type === 'done')!;
+      const usage = (done.data as { usage: Record<string, unknown> }).usage;
+      // Excludes the 5s TTFT wait and 6.5s tool gap; matches the calibrated clock.
+      const calibratedMs = Math.round(ctx.tokenSpeed.snapshot(16_000)!.elapsedMs);
+      expect(usage.durationMs).toBe(calibratedMs);
+      expect(usage.durationMs).toBeLessThan(5_000);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Codex review P2 (#discussion_r4561674374): Pi summary models (e.g. Claude)
+  // stream bursts >5s apart; without explicit summarizedThinking mode on
+  // message_start, the 5s verbatim window resets on every burst and leaves the
+  // live rate stuck at an inflated initial reading instead of ~28.6 tok/s.
+  it('retains summary window sampling for Claude/summary models in Pi and switches back for verbatim models', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) =>
+        send({ type: 'message_update', assistantMessageEvent }, at);
+
+      send({ type: 'agent_start' }, 1_000);
+      send({ type: 'message_start', message: { role: 'assistant', model: 'anthropic/claude-sonnet-4-5', timestamp: 1_000 } }, 1_000);
+      update({ type: 'thinking_start', contentIndex: 0 }, 1_000);
+      // Initial small burst that would read 100 tok/s if subsequent 7s bursts kept resetting a 5s window.
+      update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(10) }, 1_050);
+      update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(90) }, 1_950);
+      // 7s intervals with 200-word summaries (~28.6 tok/s).
+      update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(200) }, 8_950);
+      update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(200) }, 15_950);
+      const summarySnap = ctx.tokenSpeed.snapshot(15_950);
+      expect(summarySnap?.rate).toBeGreaterThan(25);
+      expect(summarySnap?.rate).toBeLessThan(35);
+
+      send({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', timestamp: 1_000, usage: { input: 10, output: 500 } } }, 16_000);
+      send({ type: 'agent_settled' }, 16_000);
+
+      // Switching to a verbatim-thinking model on the next turn restores the 5s/2s live window.
+      send({ type: 'agent_start' }, 20_000);
+      send({ type: 'message_start', message: { role: 'assistant', model: 'google/gemini-3.8-flash', timestamp: 20_000 } }, 20_000);
+      update({ type: 'thinking_start', contentIndex: 0 }, 20_000);
+      for (let t = 20_250; t <= 22_500; t += 250) {
+        update({ type: 'thinking_delta', contentIndex: 0, delta: 'a '.repeat(25) }, t);
+      }
+      const verbatimSnap = ctx.tokenSpeed.snapshot(22_500);
+      expect(verbatimSnap?.streaming).toBe(true);
+      expect(verbatimSnap?.rate).toBeGreaterThan(80);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 it.each(['none', 'thinking', 'tool'])('reports a route receipt and blocks recovery after %s output', (kind) => {

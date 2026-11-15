@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({ root: '', userData: '' }));
 const notify = vi.hoisted(() => vi.fn());
 const readIdentity = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ app: { getPath: (name: string) => name === 'appData' ? path.join(state.root, 'app-data') : (state.userData || state.root) } }));
+vi.mock('../userDataPath', () => ({ getUserDataDir: () => state.userData || state.root, getAppDataDir: () => path.join(state.root, 'app-data') }));
 vi.mock('../worktree/recycleEvents', () => ({ notifyWorktreeRecycleOpportunity: notify }));
 vi.mock('../desktopProcessIdentity', async (importOriginal) => ({
   ...await importOriginal<typeof import('../desktopProcessIdentity')>(),

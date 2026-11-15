@@ -171,6 +171,97 @@ describe('standby client production entry points (all identities/providers are l
     expect(policy.members[0].models).toEqual(['allowed']);
     expect(f.request.mock.calls.some(([path]) => path.endsWith('/disable'))).toBe(false);
   });
+  // Unit: publishShareAvailability must satisfy the server's same-(kind,id)
+  // definition contract during additive catalog rollouts. Existing fixtures had
+  // only one executor and missed default/optional-description drift. Fake peers.
+  it.each([false, true])('publishes compatible old/new model descriptions without dropping routes (offline=%s)', async offline => {
+    const common = { ...model, efforts: ['low', 'high'], defaultEffort: 'low',
+      supportsImageInput: true, supportsFastMode: true, status: 'active' };
+    const rich = { ...common, defaultEffort: 'high', mode: 'chat',
+      modalities: { input: ['text', 'image'], output: ['text'] } };
+    const registered = { deviceId: 'old', providerId: 'local', limit: 3, models: [{
+      ...model, efforts: common.efforts, defaultEffort: 'low', kind: 'codex',
+      metadata: { supportsImageInput: true, supportsFastMode: true, status: 'active' },
+    }] };
+    const original = JSON.parse(JSON.stringify(registered));
+    f.request.mockImplementation(async (path: string) => path.endsWith('/policy') ? { revision: 5, executors: [registered] } : {});
+    f.members = [
+      { member: { kind: 'device', agentDeviceId: 'new', providerId: 'local', limit: 2 }, state: 'ok',
+        view: { connected: true, models: { codex: [rich, { ...rich, id: 'only-new' }], pi: [{ ...model, contextWindow: 100000 }] } } },
+      { member: { kind: 'device', agentDeviceId: 'old', providerId: 'local', limit: 4 }, state: offline ? 'offline' : 'ok',
+        view: { connected: true, models: { codex: [common] } } },
+    ];
+    for (const members of [f.members, [...f.members].reverse()]) {
+      f.members = members;
+      f.request.mockClear();
+      await publishShareAvailability([owned]);
+      const policy = f.request.mock.calls.find(([path]) => path.endsWith('/publish'))![1].body.policy;
+      const shared = policy.executors.map((row: any) => row.models.find((m: any) => m.kind === 'codex' && m.id === 'allowed'));
+      expect(shared).toEqual([original.models[0], original.models[0]]);
+      expect(policy.executors.find((row: any) => row.deviceId === 'new').models.map((m: any) => [m.kind, m.id]))
+        .toEqual([['codex', 'allowed'], ['codex', 'only-new'], ['pi', 'allowed']]);
+      expect(policy.executors.find((row: any) => row.deviceId === 'old').limit).toBe(4);
+      expect(policy.members).toEqual([{ memberId: 'member', joinedAt: Date.parse(owned.members[0].joinedAt), models: ['allowed'] }]);
+      expect(f.request.mock.calls).toHaveLength(2);
+    }
+    expect(registered).toEqual(original);
+    expect(rich.defaultEffort).toBe('high');
+    expect(rich.modalities.input).toEqual(['text', 'image']);
+  });
+  it.each([
+    { contextWindow: 100000 }, { efforts: ['low'] }, { supportsImageInput: false },
+    { reasoningRequired: true }, { mode: 'audio_speech' },
+    { modalities: { input: ['text'], output: ['text'] } },
+  ])('does not disguise incompatible standby capabilities %j', async difference => {
+    const first = { ...model, efforts: ['low', 'high'], defaultEffort: 'high', supportsImageInput: true,
+      mode: 'chat', modalities: { input: ['text', 'image'], output: ['text'] } };
+    const second = { ...first, defaultEffort: 'low', ...difference };
+    // A third, older description must not hide a disagreement between two newer ones.
+    const sparse = { ...model, efforts: ['low', 'high'], defaultEffort: 'low', supportsImageInput: true };
+    f.members = [first, second, sparse].map((entry, index) => ({
+      member: { kind: 'device', agentDeviceId: `standby-${index}`, providerId: 'local', limit: 2 },
+      state: 'ok', view: { connected: true, models: { codex: [entry] } },
+    }));
+    await publishShareAvailability([owned]);
+    const rows = f.request.mock.calls.find(([path]) => path.endsWith('/publish'))![1].body.policy.executors;
+    expect(rows.map((row: any) => row.models[0].defaultEffort)).toEqual(['high', 'low', 'low']);
+    expect(rows[0].models[0]).toMatchObject({ contextWindow: first.contextWindow, efforts: first.efforts });
+    expect(rows[1].models[0]).toMatchObject({ contextWindow: second.contextWindow, efforts: second.efforts });
+    for (const field of ['supportsImageInput', 'reasoningRequired', 'mode', 'modalities'] as const) {
+      expect(rows[1].models[0].metadata[field]).toEqual((second as Record<string, unknown>)[field]);
+    }
+  });
+  it.each([false, true])('uses a stable existing default and never constructs a mixed description (differentDescriptions=%s)', async differentDescriptions => {
+    const entries = [
+      { ...model, efforts: ['low', 'high'], defaultEffort: 'high', ...(differentDescriptions ? { group: 'gpt' } : {}) },
+      { ...model, efforts: ['low', 'high'], defaultEffort: 'low', ...(differentDescriptions ? { icon: 'openai' } : {}) },
+    ];
+    for (const order of [entries, [...entries].reverse()]) {
+      f.members = order.map((entry, index) => ({ member: { kind: 'device', agentDeviceId: `standby-${index}`, providerId: 'local', limit: 2 },
+        state: 'ok', view: { connected: true, models: { codex: [entry] } } }));
+      f.request.mockClear();
+      await publishShareAvailability([owned]);
+      const rows = f.request.mock.calls.find(([path]) => path.endsWith('/publish'))![1].body.policy.executors;
+      expect(rows.map((row: any) => row.models[0].defaultEffort))
+        .toEqual(differentDescriptions ? order.map(entry => entry.defaultEffort) : ['high', 'high']);
+      expect(rows.map((row: any) => row.models[0].metadata))
+        .toEqual(differentDescriptions ? order.map(entry => 'group' in entry ? { group: 'gpt' } : { icon: 'openai' }) : [undefined, undefined]);
+    }
+  });
+  it.each([
+    { mode: 'audio_speech' }, { modalities: { input: ['text'], output: ['image'] } },
+  ])('does not erase media descriptions missing from an older catalog %j', async description => {
+    const sparse = { ...model, efforts: ['low', 'high'], defaultEffort: 'low', supportsImageInput: true };
+    const rich = { ...sparse, defaultEffort: 'high', ...description };
+    f.members = [sparse, rich].map((entry, index) => ({
+      member: { kind: 'device', agentDeviceId: `standby-${index}`, providerId: 'local', limit: 2 },
+      state: 'ok', view: { connected: true, models: { codex: [entry] } },
+    }));
+    await publishShareAvailability([owned]);
+    const rows = f.request.mock.calls.find(([path]) => path.endsWith('/publish'))![1].body.policy.executors;
+    expect(rows.map((row: any) => row.models[0].defaultEffort)).toEqual(['low', 'high']);
+    expect(rows[1].models[0].metadata).toMatchObject(description);
+  });
   it('does not register third-party shares and denies unverifiable personal budgets', async () => {
     f.members.push({ ...f.members[0], member: { kind: 'share', agentDeviceId: 'foreign', providerId: 'foreign' } });
     f.budget = true;

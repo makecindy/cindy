@@ -199,8 +199,8 @@ export interface ImChannelAdapter {
    */
   interactionExpiredNotice?: string;
   /**
-   * `/project` 项目切换开关(个人 Telegram: true)。开启后 slash 层放行
-   * /project 命令: 列出 desktop 端项目工作区, 选中后把当前 (bot, user/lane)
+   * `/project` 项目切换开关(个人 Telegram、个人飞书: true)。开启后 slash 层放行
+   * /project 命令: 列出侧栏的本机项目, 选中后把当前 (bot, user/lane)
    * 会话行切到该项目目录并重开上下文(bot 原生会话, 非接管)。开启时
    * ui.cards.project 必须提供(orchestrator 接线期断言)。
    */
