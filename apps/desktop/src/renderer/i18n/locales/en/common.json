@@ -1116,19 +1116,23 @@
   },
   "privacyExit": {
     "status": "This computer is being remotely controlled through Cindy",
-    "hint": "To show this screen, turn off Computer privacy screen under Security on the device controlling it. Or click or press any key on this computer, then choose Disconnect.",
+    "hint": "To show this screen, turn off Privacy screen while connected under Security on the controlling device. Or click or press any key on this computer, then choose Disconnect.",
     "title": "Disconnect remote desktop?",
-    "detail": "This will end remote control and restore this computer’s screen. The computer will lock if lock on exit is enabled.",
+    "detail": "This ends remote control and removes the privacy screen. If Protect Computer on Exit is on, the computer also locks.",
     "cancel": "Keep connected",
     "disconnect": "Disconnect"
   },
   "awayGuard": {
     "status": "Cindy is working",
-    "hint": "Press any key to lock, then unlock with Touch ID or your password.",
+    "hint": "Press any key or the Touch ID key to lock, then unlock with your fingerprint or password",
     "lockFailed": {
       "status": "Cindy couldn't lock this Mac",
-      "hint": "Press Control-Command-Q to lock it. The screen will also lock on its own after a while."
-    }
+      "hint": "Touch the computer to try locking again. If it still can’t lock, verify with Touch ID or your password to remove the cover. You can also close the lid or press the power button to lock.",
+      "hintWindows": "Touch the computer to try locking again. If it still can’t lock, verify with Windows Hello or your PIN to remove the cover. You can also press the Windows logo key + L to lock."
+    },
+    "hintWindows": "Press any key to lock; unlock with Windows Hello or your password",
+    "hintLinux": "Press any key to lock; unlock with your password",
+    "verifyReason": "remove the privacy screen"
   },
   "appBadge": {
     "attentionCount": "Tasks needing attention: {{count}}"
@@ -1279,10 +1283,10 @@
       "resolutionHint": "Resolution changes affect the actual remote monitor."
     },
     "settingUnsupported": "This computer does not support this setting yet",
-    "privacyScreen": "Computer privacy screen",
-    "privacyScreenHint": "Cover the computer’s screens. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
-    "privacyActive": "Privacy screen is on. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
-    "privacyFailed": "Privacy screen could not be enabled. The computer’s screens may still be visible.",
+    "privacyScreen": "Privacy screen while connected",
+    "privacyScreenHint": "Covers this computer’s screen during remote control. If someone clicks or presses a key at the computer, it asks before disconnecting.",
+    "privacyActive": "Privacy screen is on. If someone clicks or presses a key at the computer, it asks before disconnecting.",
+    "privacyFailed": "Couldn't turn on the privacy screen. The computer's screen may still be visible.",
     "hostMute": "Mute controlled computer",
     "hostMuteHint": "Mute the controlled computer while connected",
     "hostMuteFailed": "Couldn’t change the controlled computer’s mute state",
@@ -1298,7 +1302,7 @@
     "idleMinutes_one": "{{count}} minute",
     "idleMinutes_other": "{{count}} minutes",
     "idleDisconnected": "Disconnected due to inactivity. Reconnect when you are ready.",
-    "lockOnExit": "Lock Computer on Exit",
+    "lockOnExit": "Protect Computer on Exit",
     "lockOnExitHint": "Locks the computer when you exit remote desktop.",
     "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended.",
     "nativeResolution": "Native",
@@ -1341,7 +1345,9 @@
         "body": "This task has {{device}} open on another computer. Update the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
         "action": "Update"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "Shows the privacy screen when you exit, so AI can keep working; touching the computer locks it.",
+    "lockedEnablePrivacyHint": "To let AI keep using this computer while you're away, turn on the privacy screen in its Settings → General → When You're Away."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1910,7 +1916,8 @@
       "windowBehavior": "App Behavior",
       "shortcuts": "Keyboard Shortcuts",
       "mcpServers": "Custom MCP",
-      "bots": "Buddies"
+      "bots": "Buddies",
+      "awayFromComputer": "When You're Away"
     },
     "remote": {
       "title": "Remote machines",
@@ -2476,21 +2483,23 @@
       "swallowActivationClickAria": "Toggle protection from accidental clicks when returning to the window",
       "macRestartNote": "On macOS, restart the app for changes to take effect.",
       "awayGuard": {
-        "label": "Keep working while you're away",
-        "hint": "When on, this Mac won't sleep its display or lock on its own, so AI can use it at any time. After you've been away for a while, a black cover hides the screen and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password.",
+        "label": "Use privacy screen instead of locking",
+        "hint": "When AI needs the screen, this computer won't turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password. With no tasks running, the display sleeps and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
         "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual.",
         "preview": "Try it now",
-        "previewStarting": "Take your hands off the mouse and keyboard. The screen is covered in 3 seconds; press any key to lock it, then unlock.",
-        "previewUnavailable": "Couldn't cover the screen. Restart Cindy and try again.",
+        "previewStarting": "Let go of the mouse and keyboard. In 3 seconds the privacy screen appears; press any key to lock, then unlock to try it.",
+        "previewUnavailable": "Couldn't show the privacy screen. Restart Cindy and try again.",
         "delay": {
           "30": "30 sec",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
-          "label": "Cover the screen after",
-          "hint": "How long the keyboard and mouse stay untouched before the cover goes up. By default, the same as your display sleep time.",
+          "label": "Show privacy screen after",
+          "hint": "How long nobody touches the keyboard or mouse while AI is working. Defaults to the system's display-off time.",
           "system": "System"
-        }
+        },
+        "hintWindows": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Windows Hello or your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
+        "hintLinux": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too."
       }
     },
     "agentIsland": {
@@ -7019,7 +7028,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "Included in the privacy screen: this computer won't sleep."
     },
     "imBot": {
       "beta": "Beta",
@@ -9273,6 +9283,9 @@
         "failed": "Cleanup could not finish",
         "pending": "Queued"
       }
+    },
+    "awayFromComputer": {
+      "title": "When You're Away"
     },
     "navigation": {
       "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."

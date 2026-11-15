@@ -1133,19 +1133,23 @@
   },
   "privacyExit": {
     "status": "Este computador está a ser controlado remotamente através de Cindy",
-    "hint": "Para mostrar este ecrã, desative Ecrã de privacidade do computador em Segurança no dispositivo que o controla. Ou clique ou prima qualquer tecla neste computador e escolha Desligar.",
+    "hint": "Para mostrar este ecrã, desative “Ecrã de privacidade durante a ligação” em Segurança no dispositivo que o controla. Ou clique ou prima qualquer tecla neste computador e escolha Desligar.",
     "title": "Desligar o ambiente de trabalho remoto?",
-    "detail": "Isto terminará o controlo remoto e restaurará o ecrã deste computador. O computador será bloqueado se a opção de bloquear ao sair estiver ativada.",
+    "detail": "Isto termina o controlo remoto e retira o ecrã de privacidade. Se “Proteger o computador ao sair” estiver ativo, o computador também é bloqueado.",
     "cancel": "Manter ligação",
     "disconnect": "Desligar"
   },
   "awayGuard": {
     "status": "O Cindy está a trabalhar",
-    "hint": "Prima qualquer tecla para bloquear e desbloqueie com Touch ID ou a sua palavra-passe.",
+    "hint": "Prima qualquer tecla ou a tecla Touch ID para bloquear e depois desbloqueie com a impressão digital ou a palavra-passe",
     "lockFailed": {
       "status": "O Cindy não conseguiu bloquear este Mac",
-      "hint": "Prima Control-Comando-Q para o bloquear. O ecrã também bloqueia sozinho passado algum tempo."
-    }
+      "hint": "Toque no computador para tentar bloquear novamente. Se continuar sem bloquear, confirme com Touch ID ou a sua palavra-passe para retirar o ecrã. Também pode fechar a tampa ou premir o botão de energia.",
+      "hintWindows": "Toque no computador para tentar bloquear novamente. Se continuar sem bloquear, confirme com o Windows Hello ou o seu PIN para retirar o ecrã. Também pode premir a tecla do logótipo do Windows + L."
+    },
+    "hintWindows": "Prima qualquer tecla para bloquear; desbloqueie com o Windows Hello ou a sua palavra-passe",
+    "hintLinux": "Prima qualquer tecla para bloquear; desbloqueie com a sua palavra-passe",
+    "verifyReason": "retirar o ecrã de privacidade"
   },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
@@ -1296,10 +1300,10 @@
       "resolutionHint": "As alterações de resolução afetam o monitor remoto real."
     },
     "settingUnsupported": "Este computador ainda não suporta esta definição",
-    "privacyScreen": "Ecrã de privacidade do computador",
-    "privacyScreenHint": "Ocultar os ecrãs do computador. Clique ou prima uma tecla no computador e confirme para desligar. O bloqueio ao sair aplica-se se estiver ativado.",
-    "privacyActive": "O ecrã de privacidade está ativo. Clique ou prima uma tecla no computador e confirme para desligar. O bloqueio ao sair aplica-se se estiver ativado.",
-    "privacyFailed": "Não foi possível ativar o ecrã de privacidade. Os ecrãs do computador podem continuar visíveis.",
+    "privacyScreen": "Ecrã de privacidade durante a ligação",
+    "privacyScreenHint": "Cobre o ecrã deste computador durante o controlo remoto. Se alguém clicar ou premir uma tecla no computador, pergunta antes de desligar.",
+    "privacyActive": "O ecrã de privacidade está ativo. Se alguém clicar ou premir uma tecla no computador, pergunta antes de desligar.",
+    "privacyFailed": "Não foi possível ativar o ecrã de privacidade. O ecrã do computador pode continuar visível.",
     "hostMute": "Silenciar computador controlado",
     "hostMuteHint": "Silenciar o computador controlado durante a ligação",
     "hostMuteFailed": "Não foi possível alterar o estado de silêncio do computador controlado",
@@ -1315,8 +1319,8 @@
     "idleMinutes_one": "{{count}} minuto",
     "idleMinutes_other": "{{count}} minutos",
     "idleDisconnected": "A ligação foi terminada por inatividade. Volte a ligar quando estiver pronto.",
-    "lockOnExit": "Bloquear computador ao sair",
-    "lockOnExitHint": "Bloqueia o computador quando sai do ambiente de trabalho remoto.",
+    "lockOnExit": "Proteger o computador ao sair",
+    "lockOnExitHint": "Bloqueia o computador ao sair do ambiente de trabalho remoto.",
     "lockOnExitFailed": "Não foi possível confirmar que o computador foi bloqueado. Verifique o computador antes de o deixar sem vigilância.",
     "nativeResolution": "Nativa",
     "autoUnlock": "Desbloquear computador automaticamente",
@@ -1359,7 +1363,9 @@
         "body": "Esta tarefa tem {{device}} aberto noutro computador. Atualize o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
         "action": "Atualizar"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "Mostra o ecrã de privacidade ao sair, para a IA continuar a trabalhar; tocar no computador bloqueia-o.",
+    "lockedEnablePrivacyHint": "Para a IA continuar a utilizar este computador enquanto se ausenta, ative o ecrã de privacidade nas respetivas Definições → Geral → Quando se ausenta."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1948,7 +1954,8 @@
       "windowBehavior": "Comportamento da aplicação",
       "shortcuts": "Atalhos de teclado",
       "mcpServers": "MCP personalizado",
-      "bots": "Amigos"
+      "bots": "Amigos",
+      "awayFromComputer": "Quando se ausenta"
     },
     "remote": {
       "title": "Máquinas remotas",
@@ -2514,21 +2521,23 @@
       "swallowActivationClickAria": "Ativar ou desativar a proteção contra cliques acidentais ao regressar à janela",
       "macRestartNote": "No macOS, reinicie a aplicação para aplicar as alterações.",
       "awayGuard": {
-        "label": "Continuar a trabalhar quando se ausenta",
-        "hint": "Quando ativado, este Mac não desliga o ecrã nem bloqueia sozinho, para que a IA o possa usar a qualquer momento. Depois de algum tempo ausente, uma camada preta tapa o ecrã e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia-o de imediato; desbloqueie com Touch ID ou a sua palavra-passe.",
+        "label": "Utilizar ecrã de privacidade em vez de bloquear",
+        "hint": "Quando a IA precisa do ecrã, este computador não o desliga nem se bloqueia. Um ecrã de privacidade cobre-o e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia de imediato; desbloqueie com Touch ID ou a sua palavra-passe. Sem tarefas em curso, o ecrã apaga-se e bloqueia como habitualmente. No fim de um controlo remoto, o ecrã de privacidade também protege este computador.",
         "permission": "Permita o Cindy em Definições do Sistema > Privacidade e segurança > Acessibilidade para que possa bloquear o ecrã assim que alguém tocar neste Mac. Até lá, o ecrã desliga-se e bloqueia como habitualmente.",
         "preview": "Experimentar agora",
-        "previewStarting": "Largue o rato e o teclado. O ecrã fica tapado dentro de 3 segundos; prima qualquer tecla para o bloquear e, depois, desbloqueie-o.",
-        "previewUnavailable": "Não foi possível tapar o ecrã. Reinicie o Cindy e tente novamente.",
+        "previewStarting": "Solte o rato e o teclado. Em 3 segundos aparece o ecrã de privacidade; prima qualquer tecla para bloquear e depois desbloqueie para experimentar.",
+        "previewUnavailable": "Não foi possível mostrar o ecrã de privacidade. Reinicie o Cindy e tente novamente.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
-          "label": "Tapar o ecrã após",
-          "hint": "Tempo sem tocar no teclado nem no rato até a camada aparecer. Por predefinição, igual ao repouso do ecrã.",
+          "label": "Mostrar ecrã de privacidade após",
+          "hint": "Tempo sem tocar no teclado nem no rato enquanto a IA trabalha. Por predefinição, o tempo após o qual o sistema desliga o ecrã.",
           "system": "Sistema"
-        }
+        },
+        "hintWindows": "Quando a IA precisa do ecrã, este computador não o desliga nem se bloqueia. Um ecrã de privacidade cobre-o e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia de imediato; desbloqueie com o Windows Hello ou a sua palavra-passe. Sem tarefas em curso, o ecrã apaga-se e bloqueia como habitualmente. No fim de um controlo remoto, o ecrã de privacidade também protege este computador.",
+        "hintLinux": "Quando a IA precisa do ecrã, este computador não o desliga nem se bloqueia. Um ecrã de privacidade cobre-o e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia de imediato; desbloqueie com a sua palavra-passe. Sem tarefas em curso, o ecrã apaga-se e bloqueia como habitualmente. No fim de um controlo remoto, o ecrã de privacidade também protege este computador."
       }
     },
     "agentIsland": {
@@ -7086,7 +7095,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "Incluído no ecrã de privacidade: este computador não entra em suspensão."
     },
     "imBot": {
       "beta": "Beta",
@@ -9345,6 +9355,9 @@
         "failed": "Não foi possível concluir a limpeza",
         "pending": "Em fila"
       }
+    },
+    "awayFromComputer": {
+      "title": "Quando se ausenta"
     },
     "navigation": {
       "unavailable": "Não foi possível abrir as definições do computador de destino. Verifique se está online e permite controlo remoto; atualize o Cindy se tiver uma versão antiga."
