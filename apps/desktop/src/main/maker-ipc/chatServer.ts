@@ -2455,6 +2455,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
       // A task started again after a restart keeps its own permission and plan mode.
       resumeWithStoredPermissionMode: true,
+      assertDispatchCurrent: () => {
+        if (!current() || running.get(execution.id) !== run || run.settlement) throw new Error('STALE_EXECUTOR');
+      },
       onAccepted: async () => {
         if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
         run.accepted = true;
@@ -2865,6 +2868,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
         ...(attachments.length ? { attachments } : {}),
         resumeWithStoredPermissionMode: true,
+        assertDispatchCurrent: () => {
+          if (!live() || run.settlement) throw new Error('STALE_EXECUTOR');
+        },
         onAccepted: async () => {
           if (!live()) throw new Error('STALE_EXECUTOR');
           run.accepted = true;
@@ -3270,6 +3276,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const dispatched = await deps.dispatch({ targetSessionId: lane.sessionId, clientId: run.clientId, message: stillContinuous ? prompt : fullPrompt,
         persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${fullPrompt}`, autoReviewUserText,
         attachments, toolsDisabled: toolsOff,
+        assertDispatchCurrent: () => {
+          if (!current() || running.get(execution.id) !== run || run.settlement) throw new Error('STALE_EXECUTOR');
+        },
         onQueued: async clientId => { run.clientId = clientId; }, onAccepted: async () => {
           if (!current() || running.get(execution.id) !== run) { await deps.abortLane(lane.sessionId); throw new Error('STALE_EXECUTOR'); }
           run.accepted = true;

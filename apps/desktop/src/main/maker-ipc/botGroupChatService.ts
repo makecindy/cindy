@@ -163,6 +163,8 @@ export interface BotGroupChatServiceDeps {
     toolsDisabled?: boolean;
     /** An ordinary task that is not running starts with the permission it was opened with, never bypass. */
     resumeWithStoredPermissionMode?: boolean;
+    /** Recheck execution liveness after async preparation, immediately before enqueue. */
+    assertDispatchCurrent?: () => void;
     onQueued?: (clientId: string) => Promise<void>;
     onAccepted: () => void | Promise<void>;
   }) => Promise<DispatchResult>;

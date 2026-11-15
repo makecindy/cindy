@@ -6823,6 +6823,40 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
   });
 
+  // #10631 review: keepQueue used to requeue an unpersisted cancelled group input,
+  // or leave its persisted pre-dispatch recovery. Integration tier, real coordinator;
+  // resume must dispatch only the unrelated tail in either preparation window.
+  it.each([false, true])('scoped stop discards the active input while retaining the tail (persisted=%s)', async persisted => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'scoped-pre-send-stop';
+    const started = deferred<void>(), release = deferred<void>();
+    const dispatched: unknown[] = [];
+    if (persisted) h.beforeDispatchUserTurn.mockImplementationOnce(async () => {
+      started.resolve(); await release.promise;
+    });
+    else h.getSdkSessionId.mockImplementationOnce(async () => {
+      started.resolve(); await release.promise; return 'sdk-session';
+    });
+    h.sendToAgent.mockImplementation(async (id, message, _opts, sendOpts) => {
+      await persistQueuedUserMessage(id, sendOpts);
+      dispatched.push(message);
+      return sendSuccess();
+    });
+    const tail = makeItem('user-next', 'second');
+    h.coordinator.enqueue(sid, makeItem('group-input', 'cancelled group request'));
+    await started.promise;
+    h.coordinator.enqueue(sid, tail);
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true, discardActiveInput: true });
+    release.resolve();
+    await flush();
+    expect(dispatched).toEqual([]);
+    expect(latestProjection(h.projections)).toMatchObject({ pendingQueue: [tail], recovery: null, error: null });
+    h.coordinator.resume(sid);
+    await flush();
+    expect(dispatched).toEqual([{ type: 'user', content: 'second' }]);
+  });
+
   it('does not dispatch a queued turn after Stop wins during pre-send metadata lookup', async () => {
     const h = createHarness();
     h.setAgentKind('codex');
