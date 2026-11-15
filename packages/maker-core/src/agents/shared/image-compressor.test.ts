@@ -21,6 +21,43 @@ async function pngBuffer(opts: { width?: number; height?: number; alpha?: boolea
 }
 
 describe('compressImageBuffer', () => {
+  // Format fallback is not a byte-saving optimization: a rejected WebP may
+  // grow when encoded as PNG. Unknown routes alone must not change user WebP.
+  it.each([true, false])('handles explicit WebP rejection=%s without a byte budget', async rejectsWebp => {
+    const bytes = await sharp({ create: { width: 64, height: 48, channels: 4, background: { r: 40, g: 80, b: 120, alpha: 0.5 } } })
+      .webp({ lossless: true }).toBuffer();
+    const route = { acceptsWebp: false, rejectsWebp };
+    const result = await compressImageBuffer({ bytes, mimeType: 'image/webp', route });
+    expect(result.changed).toBe(rejectsWebp);
+    expect(result.mimeType).toBe(rejectsWebp ? 'image/png' : 'image/webp');
+    if (rejectsWebp) {
+      expect(result.bytes.length).toBeGreaterThan(bytes.length);
+      expect((await sharp(result.bytes).metadata()).hasAlpha).toBe(true);
+      expect(await sharp(result.bytes).raw().toBuffer()).toEqual(await sharp(bytes).raw().toBuffer());
+      expect(result.cacheKey).not.toBe(imageCompressionCacheKey(bytes, { mimeType: 'image/webp', route: { acceptsWebp: false } }));
+    } else expect(result.bytes).toEqual(bytes);
+  });
+
+  it.each([true, false])('keeps the no-WebP byte-budget format policy for alpha=%s', async alpha => {
+    const bytes = await sharp(await pngBuffer({ width: 96, height: 64, alpha })).png({ compressionLevel: 0 }).toBuffer();
+    const maxBytes = Math.floor(bytes.length * 0.8);
+    const result = await compressImageBuffer({ bytes, mimeType: 'image/png', route: { acceptsWebp: false }, budget: { maxBytes } });
+    expect(result.changed).toBe(true);
+    expect(result.mimeType).toBe(alpha ? 'image/png' : 'image/jpeg');
+    expect(result.bytes.length).toBeLessThanOrEqual(maxBytes);
+    expect((await sharp(result.bytes).metadata()).hasAlpha).toBe(alpha);
+  });
+
+  it('preserves animated WebP even when the route explicitly rejects WebP', async () => {
+    const bytes = await sharp(Buffer.concat([Buffer.alloc(20 * 10 * 3, 200), Buffer.alloc(20 * 10 * 3, 40)]),
+      { raw: { width: 20, height: 20, channels: 3, pageHeight: 10 } }).webp({ lossless: true }).toBuffer();
+    expect((await sharp(bytes).metadata()).pages).toBe(2);
+    const route = { acceptsWebp: false, rejectsWebp: true };
+    const result = await compressImageBuffer({ bytes, mimeType: 'image/webp', route });
+    expect(result.changed).toBe(false);
+    expect(result.bytes).toEqual(bytes);
+  });
+
   it('encodes PNG as lossless WebP only for a route that accepts it, preserving pixels', async () => {
     const input = await pngBuffer({ width: 512, height: 384 });
     const result = await compressImageBuffer({ bytes: input, mimeType: 'image/png', route: { providerId: 'openai', acceptsWebp: true } });
