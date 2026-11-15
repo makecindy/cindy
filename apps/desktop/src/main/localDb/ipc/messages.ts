@@ -40,6 +40,7 @@ import type { ContextRebuildArgs } from '../client/tx/types';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { isEmptyAssistantContent } from '../sessionListProjection.sql';
 import { messages, sessions } from '../schema';
+import { messageRowid, supersedeRetriedUserTurnWithPorts } from '../retriedUserTurnSupersede.js';
 import {
   messageToCamel,
   messageCreateToRow,
@@ -95,7 +96,6 @@ const log = createLogger('localDb/messages');
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE = 32;
-const messageRowid = sql<number>`rowid`;
 /**
  * Skip silent-stop autoResume user rows without letting one bad historical
  * agent_meta blob fail the whole page query. SQLite may evaluate
@@ -1335,68 +1335,9 @@ export async function supersedeRetriedUserTurn(
   sessionId: string,
   args: { supersededUserClientId: string; retryUserClientId: string },
 ): Promise<string[]> {
-  const ownerScope = captureOwnerBroadcastScope();
-  const db = getDbClient().drizzle;
-  const [oldRow] = await db
-    .select({
-      clientId: messages.clientId,
-      createdAt: messages.createdAt,
-      rowid: messageRowid,
-    })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.clientId, args.supersededUserClientId),
-        eq(messages.role, 'user'),
-        isNull(messages.rewindAt),
-      ),
-    )
-    .limit(1);
-  const [retryRow] = await db
-    .select({ createdAt: messages.createdAt, rowid: messageRowid })
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, args.retryUserClientId)))
-    .limit(1);
-  if (!oldRow || !retryRow) return [];
-  // 窗口两端都用 (created_at, rowid) 双键:error 行的 createdAt 取"本轮最后行 + 1",
-  // 但历史数据与时钟边缘仍可能与相邻 user 行同毫秒。口径与 rewind / fork 的边界
-  // 比较一致(messageRowid + gt/lt 组合),orderBy 让返回顺序确定,不依赖执行计划。
-  const errorRows = await db
-    .select({ clientId: messages.clientId })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.role, 'error'),
-        isNull(messages.rewindAt),
-        or(
-          gt(messages.createdAt, oldRow.createdAt),
-          and(eq(messages.createdAt, oldRow.createdAt), gt(messageRowid, oldRow.rowid)),
-        ),
-        or(
-          lt(messages.createdAt, retryRow.createdAt),
-          and(eq(messages.createdAt, retryRow.createdAt), lt(messageRowid, retryRow.rowid)),
-        ),
-      ),
-    )
-    .orderBy(asc(messages.createdAt), asc(messageRowid));
-  const clientIds = [oldRow.clientId, ...errorRows.map((r) => r.clientId)];
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return [];
-  await db
-    .update(messages)
-    .set({ rewindAt: Date.now() })
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        inArray(messages.clientId, clientIds),
-        isNull(messages.rewindAt),
-      ),
-    );
-  if (isOwnerBroadcastScopeCurrent(ownerScope)) {
-    broadcastMessageDeleted({ sessionId, clientId: oldRow.clientId, clientIds }, ownerScope);
-  }
-  return clientIds;
+  return supersedeRetriedUserTurnWithPorts(sessionId, args, {
+    captureOwnerBroadcastScope, isOwnerBroadcastScopeCurrent, broadcastMessageDeleted,
+  });
 }
 
 /** Settle media publication off the global message queue, using its captured DB. */
