@@ -24,7 +24,8 @@ describe('task runtime plugin control', () => {
   // registration; order/name are stable, and the fixed prefix is untouched.
   it('assembles selected static sections in stable order after the fixed prefix', () => {
     let settings: RuntimePluginSettings = {};
-    const find = vi.fn((id: string) => ({ enabled: true, approvedControlPoints: ['system-prompt'],
+    const find = vi.fn((id: string) => ({ enabled: true,
+      approval: { state: 'approved', revision: 'installed-v1' },
       manifest: { systemPrompt: [
         { id: 'last', order: 20, text: 'LAST', scope: 'selected-task' },
         { id: 'first', order: 10, text: `${id} {{literal}}`, scope: 'selected-task', agentKinds: ['pi'] },

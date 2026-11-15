@@ -62,6 +62,7 @@ import {
   type InstalledGhost,
   declaredAutoApproveTools,
   declaredGhostControlPoints,
+  isGhostRuntimeControlPoint,
 } from '../../shared/ghost.js';
 import { verifyGhostZipSignatures, type GhostTrustRegistry } from './ghostSignature.js';
 import { isPathInsideDir } from './dirDeposit.js';
@@ -141,7 +142,7 @@ function approvedAutoToolsProjection(receipt: Pick<GhostInstallReceipt, 'approve
 /** receipt 里批准过、manifest 仍声明、当前 Host 也认识的控制节点。 */
 function approvedControlPointsProjection(receipt: Pick<GhostInstallReceipt, 'approvedControlPoints' | 'manifest'>) {
   const approved = new Set(receipt.approvedControlPoints ?? []);
-  const points = declaredGhostControlPoints(receipt.manifest).filter((point) => approved.has(point));
+  const points = declaredGhostControlPoints(receipt.manifest).filter((point) => !isGhostRuntimeControlPoint(point) && approved.has(point));
   return points.length > 0 ? { approvedControlPoints: points } : {};
 }
 
@@ -5173,7 +5174,7 @@ export class GhostManager {
         ...(current.state === 'approved' && current.receipt.delegationCapabilityApproved === true &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
         // 随包种子由 Cindy 自己发布，声明的控制节点与免确认工具视为已随版本批准。
-        approvedControlPoints: [...new Set([...(approvedManifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(approvedManifest)])],
+        approvedControlPoints: approvedManifest.subscribe?.hooks?.filter(point => !isGhostRuntimeControlPoint(point)) ?? [],
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
         approvedCindyModelActions: current.state === 'approved' ? current.receipt.approvedCindyModelActions : undefined,
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
