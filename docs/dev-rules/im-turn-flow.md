@@ -12,6 +12,13 @@ Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠�
 [`../product-rules/telegram-bot-parity.md`](../product-rules/telegram-bot-parity.md)；
 台账里标「有意不同」的项以策略参数表达，合并时不抹平。
 
+模型输入的语言／文风规则（2026-11-15）：IM 不附加界面语言、文学形式或暂停／恢复文风说明；
+官方 hook 的 `promptWithNote` 仅保留渠道与实际业务上下文说明。模型正文和错误说明随来信、
+用户要求及模型决定，宿主固定控制文案仍按各渠道本地化规则生成。实现与发送回归见
+[session-runner.ts](../../apps/desktop/src/main/hook-control/session-runner.ts) 和
+[session-runner.test.ts](../../apps/desktop/src/main/hook-control/__tests__/session-runner.test.ts)；
+产品台账见 [Telegram bot 对齐](../product-rules/telegram-bot-parity.md)。
+
 连接恢复由渠道 transport 持有，不重放任务或发送内容。Telegram、Discord 的启动网络失败与
 钉钉的连接失败使用可取消的指数退避（约 1 秒起、30 秒封顶，带抖动）；Telegram 429 尊重
 服务端完整等待时间。飞书保留 SDK 重连，仅在 SDK 耗尽重试或启动抛错后补重试；就绪日志须
