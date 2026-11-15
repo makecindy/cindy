@@ -1395,6 +1395,7 @@ import {
   setModelsDisabled,
   setProviderDisabled,
   stageProviderDisableOverridesClear,
+  readModelDisableOverrides,
 } from '../maker-host/model-disable-store.js';
 import { readProviderOrder, setProviderOrder } from '../maker-host/provider-order-store.js';
 import {
@@ -7889,6 +7890,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setModelsDisabled: (providerId, modelIds, disabled) =>
       setModelsDisabled(providerId, modelIds, disabled),
     setProviderDisabled: (providerId, disabled) => setProviderDisabled(providerId, disabled),
+    getDisabledProviders: () => readModelDisableOverrides().disabledProviders ?? {},
+    listRemoteProviders: (deviceId) => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
     getRemoteProviderInvocationEnabled: (providerId) =>
       isRemoteProviderInvocationAllowed(providerId),
     setRemoteProviderInvocationEnabled: (providerId, enabled) =>

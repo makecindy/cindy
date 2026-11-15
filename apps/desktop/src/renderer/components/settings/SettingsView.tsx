@@ -421,6 +421,7 @@ function SettingsViewContent() {
           </div>
 
           <SettingsSidebarNav
+            requestedQuery={searchParams.get('query') ?? ''}
             tabIds={visibleTabIds}
             searchContext={searchContext}
             activeTab={activeTab}

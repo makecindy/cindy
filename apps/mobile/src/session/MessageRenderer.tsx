@@ -1,4 +1,6 @@
 import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
+import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
+import { SettingsLinkSpan } from './SettingsLinkSpan';
 import type { ViewInstance } from 'react-native';
 import { resolveAttachmentPreviewSource } from './messagePayload';
 import {
@@ -6782,6 +6784,9 @@ function renderInline(
           </SpanText>
         );
       }
+      const settingsTarget = parseSettingsNavigationUrl(inline.url);
+      if (settingsTarget) return <SettingsLinkSpan key={spanKey(`settings:${index}:${inline.url}`)} target={settingsTarget}
+        label={inline.text} SpanText={SpanText} style={clickableInlineStyle(styles, () => {}, ctx.baseStyle)} />;
       const session = parseSessionDeepLinkUrl(inline.url);
       if (session) {
         return (
