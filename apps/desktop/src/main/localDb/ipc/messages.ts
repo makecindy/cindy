@@ -1,3 +1,4 @@
+import { commitContextRebuildWithPorts } from '../contextRebuildPersistence.js';
 import { parseAgentMetaRecord, patchMessageAgentMetaWithResultRow, findVisibleToolUseMessageByAliasesRow,
   writeMessageContentRow, rollbackAssistantMessageRow, readVisiblePiUserEntry } from '../messageMutations.js';
 import type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
@@ -81,6 +82,8 @@ import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botR
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { createHistoryViewReader, MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from './historyViewReader';
 import { setHistoryWorkPageReader } from '../../device-link/historyViewPush';
+import { encodeHistoryViewDelta } from '../../device-link/historyViewDelta';
+import { isScopedPeer, parseHistoryViewDeltaOptions } from '@cindy/device-link';
 import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { createMessageClearRecovery } from '../messageClearRecovery.js';
 
@@ -479,10 +482,14 @@ export function registerMessageIpc(
     // Work lines and their patches serve same-account remote controllers only; a shared
     // guest keeps the existing projection and authorization path unchanged.
     const workLines = (opts as { workLines?: unknown } | null)?.workLines === true && !!context?.historyView && !context.sharedTask;
+    // Same-account remote readers may name the page they already hold (history-view-delta-v1).
+    const historyDelta = context && !context.sharedTask && !isScopedPeer(context.controllerDeviceId)
+      ? parseHistoryViewDeltaOptions(opts) : null;
+    const lazyDetails = (opts as { lazyDetails?: unknown } | null)?.lazyDetails === true;
     let shape: HistoryPageShape | undefined;
     const page = await historyView.page(sid, before == null ? undefined : requireString(before, 'before'),
-      (opts as { lazyDetails?: unknown } | null)?.lazyDetails === true,
-      workLines ? { workLines, onShape: (value) => { shape = value; } } : {}).catch((error) => {
+      lazyDetails,
+      workLines || historyDelta ? { workLines, onShape: (value) => { shape = value; } } : {}).catch((error) => {
       if (isHistoryViewUnavailable(error)) context?.historyView?.disable();
       throw error;
     });
@@ -491,7 +498,8 @@ export function registerMessageIpc(
         .filter((item) => item.type === 'work' && item.summary.isStreaming).map((item) => item.key);
       context?.historyView?.update(liveKeys, { workLines, shape });
     }
-    return page;
+    return historyDelta && context
+      ? encodeHistoryViewDelta(context.controllerDeviceId, sid, `${lazyDetails}:${workLines}`, historyDelta, page, shape) : page;
   });
   setHistoryWorkPageReader((sid, onShape) => historyView.page(sid, undefined, true, { workLines: true, onShape }));
   ipcMain.handle('local-db:messages:view-intent', (event, sessionId: unknown, refs: unknown) => {
@@ -1199,7 +1207,7 @@ export async function commitMessageDeletion(
   };
 }
 
-export async function commitContextRebuild(
+export function commitContextRebuild(
   sessionId: string,
   handoff: string,
   meta: {
@@ -1218,30 +1226,11 @@ export async function commitContextRebuild(
     replacementRoute?: ContextRebuildArgs['replacementRoute'];
   },
 ): Promise<{ updatedAt: number }> {
-  const now = Date.now();
-  await getDbClient().tx('context.rebuild', {
-    sessionId,
-    markerId: createId(),
-    markerClientId: `context-rebuild:${createId()}`,
-    markerContent: JSON.stringify({
-      handoff,
-      consumed: false,
-      reason: meta.reason,
-      sourceUserClientId: meta.sourceUserClientId,
-      ...(meta.replacementRoute || meta.expectedSdkSessionId
-        ? { sourceSdkSessionId: meta.replacementRoute?.expectedSdkSessionId ?? meta.expectedSdkSessionId }
-        : {}),
-      ...(meta.sourceAgentKind ? { sourceAgentKind: meta.sourceAgentKind } : {}),
-      ...(meta.sourceModel !== undefined ? { sourceModel: meta.sourceModel } : {}),
-      ...(meta.sourceProviderId !== undefined ? { sourceProviderId: meta.sourceProviderId } : {}),
-    }),
-    markerCreatedAt: now,
-    updatedAt: now,
-    expectedClearedAt: meta.expectedClearedAt ?? null,
-    ...(meta.replacementRoute ? { replacementRoute: meta.replacementRoute } : {}),
-    ...(meta.expectedSdkSessionId !== undefined ? { expectedSdkSessionId: meta.expectedSdkSessionId } : {}),
-  });
-  return { updatedAt: now };
+  return commitContextRebuildWithPorts({
+    now: () => Date.now(),
+    createId: () => createId(),
+    tx: (...args) => getDbClient().tx(...args),
+  }, sessionId, handoff, meta);
 }
 
 export async function findLatestContextRebuildMeta(sessionId: string): Promise<{

@@ -86,8 +86,8 @@ export function TaskRuntimePluginsDialog({ session, onDismiss }: { session: Sess
           {failed && <p role="alert" className="text-13 text-[var(--text-primary)]">{t('runtimePlugins.failed')}</p>}
         </div>
         <div className="flex justify-end gap-2">
-          <Button palette="confirmation" variant="primary" disabled={!loaded || busy} onClick={() => void save()}>{t('runtimePlugins.save')}</Button>
           <Button palette="confirmation" variant="secondary" disabled={busy} onClick={onDismiss}>{t('commonUi.confirmDialog.cancel')}</Button>
+          <Button palette="confirmation" variant="primary" disabled={!loaded || busy} onClick={() => void save()}>{t('runtimePlugins.save')}</Button>
         </div>
       </Dialog.Content>
     </Dialog.Portal>

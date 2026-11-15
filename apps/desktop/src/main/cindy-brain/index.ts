@@ -350,9 +350,7 @@ import {
   installedGhostMutationTargetToken,
   isGhostInstanceId,
   resolvePluginLibraryStorageKey,
-  parsePluginInstallRelId,
   parsePluginInstanceId,
-  parsePluginStoragePart,
   pluginStoragePart,
   pluginInstallStoragePart,
   isValidPluginInstallRelId,
@@ -464,6 +462,14 @@ import {
   withSharedSkillRootsLock,
 } from '../authBoundaryQuarantine.js';
 import { type GhostOwnerScope } from './ghostOwnerScope.js';
+// Shared with the Node Host (ghostAvailability.ts).
+import {
+  availableGhostsIn,
+  findGhostForInstanceIdIn,
+  isGhostAvailableForSessionIn,
+  listAvailableGhostsFrom,
+  listInstalledGhostsForOwner,
+} from './ghostAvailability.js';
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
@@ -1291,23 +1297,11 @@ export function waitForGhostMutations(): Promise<void> {
 
 /** Account-managed built-ins are unavailable outside a verified cloud session. */
 export function isGhostAvailableForActiveSession(id: string): boolean {
-  if (isAppSessionBoundaryPending()) return false;
-  const identity = parsePluginStoragePart(id) ?? parsePluginInstallRelId(id);
-  const ghostId = identity?.ghostId ?? id;
-  if (getAppCapabilities().canUseCindyAccountServices) return true;
-  const exact = managerSingleton?.findInstalledInstance(id);
-  if (exact) return !ghostRequiresCindyAccount(exact.manifest);
-  const ghosts = managerSingleton?.list() ?? [];
-  const target = findInstalledGhostByInstanceId(ghosts, id);
-  return target ? !ghostRequiresCindyAccount(target.manifest)
-    : !ghosts.some(ghost => ghost.manifest.id === ghostId && ghostRequiresCindyAccount(ghost.manifest));
+  return isGhostAvailableForSessionIn(managerSingleton, id);
 }
 
 function availableGhosts(): InstalledGhost[] {
-  if (isAppSessionBoundaryPending()) return [];
-  const accountServices = getAppCapabilities().canUseCindyAccountServices;
-  return getGhostManager().list()
-    .filter(ghost => accountServices || !ghostRequiresCindyAccount(ghost.manifest));
+  return availableGhostsIn(getGhostManager);
 }
 
 function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
@@ -1352,16 +1346,7 @@ function findAvailableGhost(id: string, namespace?: string | null): InstalledGho
 }
 
 export function findGhostForInstanceId(id: string, namespace?: string | null): InstalledGhost | null {
-  // Plugin requests recheck their target many times per call. An exact
-  // instance key reads only that instance so each check does not rescan every
-  // install; anything else still resolves against the full list.
-  if (namespace === undefined) {
-    if (isAppSessionBoundaryPending()) return null;
-    const ghost = getGhostManager().findInstalledInstance(id);
-    if (ghost) return isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)) ? ghost : null;
-  }
-  const resolved = resolvePluginInstanceQuery(availableGhosts(), id, namespace);
-  return resolved.status === 'unique' ? resolved.ghost : null;
+  return findGhostForInstanceIdIn({ getGhostManager, isGhostAvailableForActiveSession, availableGhosts }, id, namespace);
 }
 
 function libraryStorageKeyFor(id: string): string | null {
@@ -1386,20 +1371,11 @@ export function listAvailableGhostsForAuthorization(): InstalledGhost[] {
 
 /** Discovery may yield, but never carries an old owner's results into a new account. */
 export async function listInstalledGhostsAsync(): Promise<InstalledGhost[]> {
-  const owner = ghostOwnerScope.capture();
-  if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return [];
-  const ghosts = await getGhostManager().listAsync();
-  if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return [];
-  return ghosts;
+  return listInstalledGhostsForOwner(ghostOwnerScope, getGhostManager);
 }
 
 export async function listAvailableGhostsAsync(): Promise<InstalledGhost[]> {
-  const ghosts = await listInstalledGhostsAsync();
-  if (isAppSessionBoundaryPending()) return [];
-  // The scan already supplies each exact instance. Looking up its bare id again
-  // can fall back to N full scans (and confuse same-name namespace instances).
-  const accountServices = getAppCapabilities().canUseCindyAccountServices;
-  return ghosts.filter(ghost => accountServices || !ghostRequiresCindyAccount(ghost.manifest));
+  return listAvailableGhostsFrom(listInstalledGhostsAsync);
 }
 
 /** Notification discovery is indexed; exact live approvals remain the delivery boundary. */

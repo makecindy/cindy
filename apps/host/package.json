@@ -12,6 +12,7 @@
     "start": "node --import tsx --import ./src/loaders/register-raw.mjs src/main.ts",
     "test": "node --import tsx --import ./src/loaders/register-raw.mjs --test \"src/**/*.test.mjs\"",
     "build": "node scripts/build.mjs",
+    "test:ipc-route": "node --import tsx --import ./src/loaders/register-raw.mjs scripts/ipc-route.e2e.mjs",
     "test:lifecycle": "node scripts/lifecycle.e2e.mjs",
     "test:scheduler": "node --import tsx --import ./src/loaders/register-raw.mjs scripts/scheduler-runtime.e2e.mjs"
   },

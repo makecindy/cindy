@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createLogger } from '../logger';
+import { isPreservingUnreadableSettingsFilesByDefault } from '../maker-host/override-settings-file.js';
 
 
 export interface DeviceLinkSettings {
@@ -154,6 +155,12 @@ function normalizeDeviceNameMap(raw: unknown): Record<string, string> {
 let cached: DeviceLinkSettings | null = null;
 /** 缓存对应的文件 mtimeMs;文件不存在时为 null。mtime 变化 → 缓存失效重载(跨实例写入可见)。 */
 let cachedMtimeMs: number | null = null;
+/**
+ * The process keeps settings files it cannot read (override-settings-file.ts, set by the Host
+ * only): the unreadable file stays, reads as the defaults (everything off) until it changes, and
+ * refuses writes, as createOverrideSettingsFile does. Never set on the desktop.
+ */
+let cachedUnreadable = false;
 
 function statMtimeMs(file: string): number | null {
   try {
@@ -171,6 +178,7 @@ function readDeviceLinkSettings(): DeviceLinkSettings {
     if (mtimeMs !== null) {
       cached = normalize(JSON.parse(fs.readFileSync(file, 'utf-8')));
       cachedMtimeMs = mtimeMs;
+      cachedUnreadable = false;
       return cached;
     }
   } catch (err) {
@@ -178,10 +186,17 @@ function readDeviceLinkSettings(): DeviceLinkSettings {
       error: err instanceof Error ? err.message : String(err),
       path: file,
     });
+    if (isPreservingUnreadableSettingsFilesByDefault()) {
+      cached = { ...DEFAULTS };
+      cachedMtimeMs = mtimeMs;
+      cachedUnreadable = true;
+      return cached;
+    }
     try { fs.unlinkSync(file); } catch { /* no-op */ }
   }
   cached = { ...DEFAULTS };
   cachedMtimeMs = null;
+  cachedUnreadable = false;
   return cached;
 }
 
@@ -277,6 +292,7 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
   cached = null;
   cachedMtimeMs = null;
   const current = readDeviceLinkSettings();
+  if (cachedUnreadable) throw new Error('device-link settings file is unreadable; refusing to overwrite it');
   const nextValue = updater(current[key]);
   const next = { ...current, [key]: nextValue };
   const tmp = `${file}.${process.pid}.${tag}.tmp`;

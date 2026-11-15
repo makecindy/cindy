@@ -22,6 +22,7 @@ import { ProfileEditDialog } from '@/components/settings/ProfileEditDialog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
 import type { BotGroupMemberView, BotGroupSummary, ChatGroupAction } from '../../../shared/botGroupChat';
+import { groupRepositoryLabel, parseGroupRepository } from '../../../shared/botGroupChat';
 import { GroupMaskAvatar, useOpenGroupMask } from './GroupMaskControls';
 import { useGroupMask } from './groupMaskPresentation';
 import { ChatBotAccessField } from './ChatBotAccessField';
@@ -123,6 +124,8 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState('');
+  // What choosing a folder did to the group's repository (§7.5), shown under the project.
+  const [projectNotice, setProjectNotice] = useState('');
   const nicknameDirty = useRef(false);
   useEffect(() => { if (!nicknameDirty.current) setNickname(me?.nickname ?? ''); }, [me?.nickname]);
 
@@ -143,7 +146,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
 
   async function mutate(action: ChatGroupAction, exit = false) {
     if (busyRef.current) return false;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError(''); setProjectNotice('');
     const owner = getDataOwnerGeneration();
     try {
       const result = await api().manage({ groupId: group.id, action });
@@ -157,7 +160,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   }
   async function confirmed(action: ChatGroupAction, title: string, note: string, exit = false, confirmText = t(key('confirm'))) {
     const owner = getDataOwnerGeneration();
-    if (await confirm({ presentation: 'standard', title, description: note, confirmText,
+    if (await confirm({ title, description: note, confirmText,
       cancelText: t('bots.cancel'), confirmVariant: 'destructive' }) && mounted.current && isDataOwnerGenerationCurrent(owner)) await mutate(action, exit);
   }
   async function saveRules(change: { replyMode?: BotGroupSummary['replyMode']; speakingMode?: BotGroupSummary['speakingMode'] }) {
@@ -182,15 +185,18 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       refreshBotGroups();
     },
   }), [group.id, me?.actorId, me?.name, me?.groupAvatar, me?.defaultAvatarUrl, t]);
-  async function updateWorkSettings(input: { organizerBotId?: string; projectDir?: string | null; githubRepo?: string | null; autoContinue?: boolean }) {
+  async function updateWorkSettings(input: { organizerBotId?: string; projectDir?: string | null; repository?: string | null; autoContinue?: boolean }) {
     if (busyRef.current) return;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError(''); setProjectNotice('');
     const generation = getDataOwnerGeneration();
     try {
       const result = await window.electronAPI.maker.updateBotGroup({ groupId: group.id, ...input });
       if (!isDataOwnerGenerationCurrent(generation)) return;
-      if (!result.ok) setError(t('autoContinue' in input ? 'bots.groupChat.settings.autoContinueSaveFailed' : 'githubRepo' in input ? key('githubRepoSaveFailed') : 'bots.groupChat.settings.projectDirSaveFailed'));
-      else refreshBotGroups();
+      if (!result.ok) setError(t('autoContinue' in input ? 'bots.groupChat.settings.autoContinueSaveFailed' : 'repository' in input ? key('githubRepoSaveFailed') : 'bots.groupChat.settings.projectDirSaveFailed'));
+      else {
+        if (result.folderRepository) setProjectNotice(t(key(result.folderRepository.filled ? 'folderRepoFilled' : 'folderRepoDiffers'), { repo: result.folderRepository.repo }));
+        refreshBotGroups();
+      }
     } catch { if (isDataOwnerGenerationCurrent(generation)) setError(t(chatErrorKey('REQUEST_FAILED'))); }
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
   }
@@ -276,11 +282,13 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       {/* The group's project: a shared repository and this computer's folder. Replies and 分工 work in it (§7.5). */}
       <SettingsSection title={t(key('project'))} caption={t(key('projectCaption'))}>
         <SettingsCard>
-          {group.supportsGroupProject && <SettingsRow wrap title={t(key('githubRepo'))} hint={t(key('githubRepoHint'))}
-            trailing={<GithubRepoField repo={group.project?.repo ?? ''} busy={busy} onSave={githubRepo => void updateWorkSettings({ githubRepo })} />} />}
+          {group.supportsGroupProject && <SettingsRow wrap title={t(key(group.supportsGroupProjectGit ? 'repository' : 'githubRepo'))} hint={t(key(group.supportsGroupProjectGit ? 'repositoryHint' : 'githubRepoHint'))}
+            trailing={<RepositoryField repo={group.project ? groupRepositoryLabel(group.project) : ''} anyHost={group.supportsGroupProjectGit === true} busy={busy}
+              onSave={repository => void updateWorkSettings({ repository })} />} />}
           <SettingsRow wrap title={t(key('projectFolder'))} hint={t(key(group.projectDirAuto ? 'projectDirAutoHint' : 'projectDirHint'))}
             trailing={<ProjectFolder dir={group.projectDir} auto={group.projectDirAuto === true} busy={busy} onChoose={() => void chooseProjectDir()} onClear={() => void updateWorkSettings({ projectDir: null })} />} />
         </SettingsCard>
+        {projectNotice && <div className="mt-2"><SettingsNotice>{projectNotice}</SettingsNotice></div>}
       </SettingsSection>
       {/* The organizer arranges a 分工 whose steps are not written out (§7.1). */}
       <SettingsSection title={t(key('work'))} caption={t(key('workCaption'))}>
@@ -473,26 +481,31 @@ function About({ topic, description, canEdit, onEdit }: { topic: string; descrip
   </SettingsSection>;
 }
 
-/** `owner/name`, saved when you leave the field or press Enter; empty clears it. */
-function GithubRepoField({ repo, busy, onSave }: { repo: string; busy: boolean; onSave: (repo: string | null) => void }) {
+/**
+ * The group's repository: `owner/name` for GitHub, or a GitLab, CNB or other git link where the
+ * server keeps those (`anyHost`). Written as you like, saved in its plain form when you leave the
+ * field or press Enter; empty clears it.
+ */
+function RepositoryField({ repo, anyHost, busy, onSave }: { repo: string; anyHost: boolean; busy: boolean; onSave: (repo: string | null) => void }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(repo);
   const focused = useRef(false);
   useEffect(() => { if (!focused.current) setDraft(repo); }, [repo]);
-  const value = draft.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').replace(/\/$/, '');
-  const invalid = !!value && !GITHUB_REPO.test(value);
+  const parsed = draft.trim() ? parseGroupRepository(draft) : null;
+  const usable = parsed && (anyHost || parsed.kind === 'github') ? parsed : null;
+  const value = usable ? groupRepositoryLabel(usable) : '';
+  const invalid = !!draft.trim() && !usable;
   const save = () => {
     focused.current = false;
     if (invalid) return;
     if (value !== repo) onSave(value || null);
     setDraft(value);
   };
-  return <Input size="md" className="w-[220px] max-w-full" mono value={draft} disabled={busy} error={invalid}
-    placeholder="owner/name" aria-label={t(key('githubRepo'))} spellCheck={false} autoComplete="off"
+  return <Input size="md" className="w-[280px] max-w-full" mono value={draft} disabled={busy} error={invalid}
+    placeholder={anyHost ? t(key('repositoryPlaceholder')) : 'owner/name'} aria-label={t(key(anyHost ? 'repository' : 'githubRepo'))} spellCheck={false} autoComplete="off"
     onFocus={() => { focused.current = true; }} onChange={setDraft} onBlur={save}
     onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); (event.target as HTMLInputElement).blur(); } }} />;
 }
-const GITHUB_REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
 
 /**
  * The project folder as a pill: its name with the full path, 更换 and 清除 behind it. A folder found

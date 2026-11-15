@@ -47,6 +47,8 @@ import {
 import type {
   ForwardLifecycleObserver,
   ForwardLifecycleFailure,
+  InboundAdmissionCtx,
+  InboundRejection,
   LocalRequestHandler,
   ProxyHandle,
   ProxyLogger,
@@ -427,6 +429,19 @@ function respondRoutingFailure(
     return;
   }
   res.destroy(err instanceof Error ? err : new Error(String(err)));
+}
+
+/** Runs the optional inbound admission check; a throwing check rejects. */
+function admitInbound(
+  check: ProxyOptions['authorizeInbound'],
+  ctx: InboundAdmissionCtx,
+): InboundRejection | null {
+  if (!check) return null;
+  try {
+    return check(ctx);
+  } catch {
+    return { status: 401, code: 'inbound_admission_failed', message: 'The request could not be admitted.' };
+  }
 }
 
 /**
@@ -2225,6 +2240,16 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const method = req.method ?? 'GET';
     const url = req.url ?? '/';
     const headers = flattenRequestHeaders(req.headers);
+    const inboundRejection = admitInbound(opts.authorizeInbound, { method, url, headers });
+    if (inboundRejection) {
+      logger.warn?.('inbound request rejected', { reqId, method, path: url.split('?')[0], code: inboundRejection.code });
+      req.resume();
+      res.writeHead(inboundRejection.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ type: 'error', error: {
+        type: inboundRejection.status === 401 ? 'authentication_error' : 'permission_error',
+        code: inboundRejection.code, message: inboundRejection.message } }));
+      return;
+    }
     const requestCtx: RequestTransformCtx = { reqId, method, url, headers };
     const threadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
     const contentType = headers['content-type'] ?? '';
@@ -2812,6 +2837,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const reqId = ++reqIdSeq;
     const headers = flattenRequestHeaders(req.headers);
     const url = req.url ?? '/';
+    const inboundRejection = admitInbound(opts.authorizeInbound, { method: req.method ?? 'GET', url, headers });
+    if (inboundRejection) {
+      logger.warn?.('inbound upgrade rejected', { reqId, path: url.split('?')[0], code: inboundRejection.code });
+      writeUpgradeFailure(clientSocket, inboundRejection.status, inboundRejection.status === 401 ? 'Unauthorized' : 'Forbidden');
+      return;
+    }
     const resolveWsUpstream = opts.resolveWebSocketUpstream;
 
     // 不配 resolver = 本 proxy 不接 upgrade(Claude Code 侧就是这样, 行为与扩展前一致)。
