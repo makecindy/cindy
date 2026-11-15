@@ -101,6 +101,30 @@ describe('standalone custom OpenAI Images', () => {
     }
   });
 
+  // Unit, #4577490768: official video routes need an explicit owner without
+  // acquiring the raw-HTTP Guide path rules. Aggregate ownership is ambiguous.
+  it.each([
+    ['xai-videos', 'pi'], ['xai-videos', 'codex'],
+    ['minimax-videos', 'pi'], ['minimax-videos', 'codex'],
+    ['openai-videos', 'pi'], ['openai-videos', 'codex'],
+  ] as const)('resolves the selected %s video runtime %s with its existing API base', (videoApi, agent) => {
+    const source = buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' },
+      runtimes: Object.fromEntries(['pi', 'codex'].map(runtime => [runtime, {
+        baseUrl: `https://${runtime}.example.invalid`, videoApi,
+        models: [{ id: MODEL, name: 'Video', mode: 'video_generation' }],
+      }])),
+    });
+    expect(source.videoModels?.[0]?.sourceAgent).toBeUndefined();
+    const readApiKey = vi.fn(runtime => `${runtime}-only-key`);
+    const connection = resolveCustomMediaConnection({ getProvider: () => source, readApiKey,
+      isOwnerBoundaryPending: () => false }, MODEL, 'video', { agent });
+    expect(connection).toMatchObject({ agent, videoApi,
+      baseUrl: `https://${agent}.example.invalid${videoApi === 'minimax-videos' ? '' : '/v1'}`,
+      headers: { authorization: `Bearer ${agent}-only-key` },
+    });
+    expect(readApiKey).toHaveBeenCalledExactlyOnceWith(agent);
+  });
+
   it.each([
     ['image_generation', 'image.generate', 'image.edit', 'image'],
     ['video_generation', 'video.generate', 'video.image_to_video', 'video'],

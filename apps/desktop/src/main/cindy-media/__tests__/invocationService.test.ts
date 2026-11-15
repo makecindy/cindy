@@ -834,6 +834,103 @@ describe('Cindy Core media invocation state and security boundary', () => {
     mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value });
     expect(await callCindyMedia(request)).toMatchObject({ ok: true, source_agent: 'pi', guide_source: 'custom' });
   });
+  // Unit, #4577490768: explicit ownership must survive official-Guide selection,
+  // persisted decoding, paid submission and result polling, without a local Guide.
+  it.each([
+    ['xai-videos', 'pi'], ['xai-videos', 'codex'],
+    ['minimax-videos', 'pi'], ['minimax-videos', 'codex'],
+    ['openai-videos', 'pi'], ['openai-videos', 'codex'],
+  ] as const)('keeps the selected %s runtime %s through official video execution', async (protocol, agent) => {
+    const { model } = setupGuideDriven({ ...operation({ mode: 'async' }), capability: 'video.generate' });
+    mocks.providerModel.mockReturnValue({ ...model, sourceAgent: undefined, sourceAgents: ['pi', 'codex'] });
+    const connection = { baseUrl: `https://${agent}.example.invalid${protocol === 'minimax-videos' ? '' : '/v1'}`,
+      headers: { authorization: `Bearer ${agent}-owned-key` }, revision: `${agent}-video-1`, assertCurrent: vi.fn() };
+    mocks.httpConnection.mockReturnValue(connection);
+    mocks.videoConnection.mockImplementation((_provider, _model, selected) => selected === agent ? connection : null);
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'official', protocol, value: providerServerGuide(model.id, protocol).guide });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id,
+      sourceAgent: agent, capability: 'video.generate' });
+    expect(prepared).toMatchObject({ ok: true, guide_source: 'official', source_agent: agent });
+    const id = String(prepared.invocation_id);
+    const row = mocks.rows.get(id)!;
+    const decoded = parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(row.guide)));
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) throw new Error(decoded.error);
+    row.guide = decoded.value;
+    expect(decoded.value.binding).toMatchObject({ executor: 'provider-video', sourceAgent: agent });
+    const minimax = protocol === 'minimax-videos';
+    const submission = minimax ? { task_id: 'paid-task' } : protocol === 'xai-videos' ? { request_id: 'paid-task' } : { id: 'paid-task' };
+    const response = minimax ? { task: { status: 'succeeded', content: { url: 'https://cdn.hailuoai.com/right.mp4' } } }
+      : protocol === 'xai-videos' ? { status: 'done', video: { url: 'https://cdn.vidgen.x.ai/right.mp4' } }
+      : { status: 'completed', video_url: 'https://cdn.selected.example/right.mp4' };
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json(submission))
+      .mockResolvedValueOnce(Response.json(response)).mockResolvedValueOnce(new Response(MP4));
+    const body = minimax ? { content: [{ type: 'text', text: 'cat' }], resolution: '768P', duration: 5, ratio: '16:9' } : { prompt: 'cat' };
+    expect(await callCindyMedia({ action: 'request', invocationId: id, body })).toMatchObject({ ok: true, status: 'pending' });
+    expect(await callCindyMedia({ action: 'poll', invocationId: id })).toMatchObject({ ok: true, status: 'complete' });
+    const apiCalls = mocks.outboundFetch.mock.calls.slice(0, 2);
+    expect(apiCalls.map(call => call[0])).toEqual([
+      `${connection.baseUrl}${minimax ? '/v2/video_generation' : protocol === 'xai-videos' ? '/videos/generations' : '/videos'}`,
+      `${connection.baseUrl}${minimax ? '/v2/query/video_generation/paid-task' : '/videos/paid-task'}`,
+    ]);
+    expect(apiCalls.every(([, init]) => init.headers.authorization === `Bearer ${agent}-owned-key`)).toBe(true);
+    expect(mocks.videoConnection.mock.calls.every(call => call[2] === agent)).toBe(true);
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+  });
+
+  it('does not pay through a disabled selected video runtime while another remains available', async () => {
+    const { model } = setupGuideDriven({ ...operation({ mode: 'async' }), capability: 'video.generate' });
+    mocks.providerModel.mockReturnValue({ ...model, sourceAgent: undefined, sourceAgents: ['pi', 'codex'] });
+    const connection = { baseUrl: 'https://pi.example.invalid/v1', headers: {}, revision: 'pi-video', assertCurrent: vi.fn() };
+    mocks.httpConnection.mockReturnValue(connection);
+    mocks.videoConnection.mockImplementation((_provider, _model, agent) => agent === 'pi' ? connection : null);
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'official', protocol: 'xai-videos', value: providerServerGuide(model.id, 'xai-videos').guide });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id,
+      sourceAgent: 'pi', capability: 'video.generate' });
+    expect(prepared).toMatchObject({ ok: true });
+    mocks.providerModel.mockReturnValue({ ...model, sourceAgent: 'codex', sourceAgents: ['codex'] });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ request_id: 'should-not-be-submitted' }));
+    expect(await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } }))
+      .toMatchObject({ ok: false, errorCode: 'MODEL_NOT_AVAILABLE' });
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    expect(mocks.rows.get(String(prepared.invocation_id))?.state).toBe('prepared');
+  });
+
+  // Unit, #4577505284: provider messages can echo short, opaque credentials
+  // without a Bearer prefix. Exercise submit/poll through the real tool boundary.
+  it.each([
+    ['submit', 'authorization'], ['poll', 'authorization'],
+    ['submit', 'aPi-KeY'], ['poll', 'aPi-KeY'],
+    ['submit', 'X-API-KEY'], ['poll', 'X-API-KEY'],
+    ['submit', 'x-Goog-api-key'], ['poll', 'x-Goog-api-key'],
+  ] as const)('redacts the exact sent %s credential from %s errors', async (phase, header) => {
+    const { model, connection } = setupGuideDriven(phase === 'poll' ? recoveryVideoOperation() : undefined);
+    const key = 'short-key.[v1]';
+    Object.assign(connection.headers, { [header]: header === 'authorization' ? `Bearer ${key}` : key });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id,
+      capability: phase === 'poll' ? 'video.generate' : 'image.generate' });
+    if (phase === 'poll') mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: 'paid-task' }));
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ error: { message: `credential rejected: ${key}; Bearer ${key}` } }, { status: 403 }));
+    let result = await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } });
+    if (phase === 'poll') result = await callCindyMedia({ action: 'poll', invocationId: String(prepared.invocation_id) });
+    expect(result).toMatchObject({ ok: false, errorCode: 'UPSTREAM_REJECTED' });
+    expect(result.message).toContain('HTTP 403');
+    expect(result.message).toContain('credential rejected');
+    expect(result.message).not.toContain(key);
+    expect(mocks.outboundFetch.mock.calls.at(-1)?.[1].headers[header]).toBe(header === 'authorization' ? `Bearer ${key}` : key);
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+  });
+
+  it('redacts a credential before truncating a provider error', async () => {
+    const { model, connection } = setupGuideDriven();
+    connection.headers.authorization = 'Bearer short-key-at-limit';
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ error: { message: `${'!'.repeat(490)} short-key-at-limit` } }, { status: 403 }));
+    const result = await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'UPSTREAM_REJECTED' });
+    expect(result.message).not.toContain('short-key');
+  });
+
   it.each(['xai-videos', 'minimax-videos', 'openai-videos'] as const)('keeps the existing %s public Guide on its original video connection', async protocol => {
     const published = providerServerGuide('private/new-model', protocol);
     const { model } = setupGuideDriven({ ...operation({ mode: 'async' }), capability: 'video.generate' });

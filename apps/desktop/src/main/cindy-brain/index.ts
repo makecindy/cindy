@@ -5925,13 +5925,14 @@ async function resolveNativeVideoConnection(providerId: string, modelId: string)
   };
 }
 
-function resolveCustomVideoConnection(providerId: string, modelId: string): ProviderVideoConnection | null {
+function resolveCustomVideoConnection(providerId: string, modelId: string, agent?: AgentKind): ProviderVideoConnection | null {
   const options = {
     getProvider: () => getActiveCatalog().providers.find(provider => provider.id === providerId),
     readApiKey: (agent: AgentKind) => readCustomProviderKey(providerId, agent),
     isOwnerBoundaryPending: () => isGhostBoundaryPending(),
   };
-  const binding = resolveCustomMediaConnection(options, modelId, 'video');
+  const selection = agent ? { agent } : undefined;
+  const binding = resolveCustomMediaConnection(options, modelId, 'video', selection);
   if (!binding) return null;
   const owner = activeOwnerScopeKey();
   const revision = videoConnectionRevision(providerId, modelId, binding);
@@ -5940,7 +5941,7 @@ function resolveCustomVideoConnection(providerId: string, modelId: string): Prov
     headers: binding.headers,
     revision,
     assertCurrent: () => {
-      const current = resolveCustomMediaConnection(options, modelId, 'video');
+      const current = resolveCustomMediaConnection(options, modelId, 'video', selection);
       if (isGhostBoundaryPending() || owner !== activeOwnerScopeKey() || !current ||
           revision !== videoConnectionRevision(providerId, modelId, current)) {
         throw new Error('视频连接或账号已改变，本次操作已停止；请恢复原连接后查询原任务');
@@ -5985,9 +5986,9 @@ configureProviderMediaRuntime({
     return createHash('sha256').update(JSON.stringify([target, model.route?.baseUrl ?? route.upstream,
       route.authStrategy, model.route?.wireProtocol ?? route.wireProtocol])).digest('hex');
   },
-  resolveVideoConnection: (providerId, modelId) => providerId === 'xai'
+  resolveVideoConnection: (providerId, modelId, agent) => providerId === 'xai'
     ? resolveNativeVideoConnection(providerId, modelId)
-    : resolveCustomVideoConnection(providerId, modelId),
+    : resolveCustomVideoConnection(providerId, modelId, agent),
   listModels: capabilities => listLocalProviderMediaModels(true, capabilities),
   listVideoModels: capabilities => listLocalProviderVideoModels(true, capabilities),
   listExecutableModels: () => listLocalProviderMediaModels(false),

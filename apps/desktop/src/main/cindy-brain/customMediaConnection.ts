@@ -58,11 +58,12 @@ export function resolveCustomMediaConnection(
   opts: CustomMediaConnectionOptions,
   modelId: string,
   kind: 'image' | 'video' = 'image',
-  selection?: { guideDriven: true; agent: AgentKind },
+  selection?: { guideDriven?: true; agent: AgentKind },
 ): CustomMediaConnection | null {
   const provider = opts.getProvider();
   if (opts.isOwnerBoundaryPending() || !provider) return null;
-  if (selection ? provider.source !== 'user' || !!provider.auth.native || !['apiKey', 'none'].includes(provider.auth.method)
+  const guideDriven = selection?.guideDriven === true;
+  if (guideDriven ? provider.source !== 'user' || !!provider.auth.native || !['apiKey', 'none'].includes(provider.auth.method)
     : !(kind === 'image' ? isCustomImageProvider(provider) : isCustomVideoProvider(provider))) return null;
   const media = (kind === 'image' ? provider.imageModels : provider.videoModels)?.find((model) => model.id === modelId);
   // Never borrow another runtime's credentials when the model's own route is missing.
@@ -73,16 +74,16 @@ export function resolveCustomMediaConnection(
   if (
     !route ||
     route.disabled ||
-    (!selection && (kind === 'image' ? route.imageApi !== 'openai-images' : !route.videoApi)) ||
+    (!guideDriven && (kind === 'image' ? route.imageApi !== 'openai-images' : !route.videoApi)) ||
     !model ||
     (selection && model.mode !== (kind === 'image' ? 'image_generation' : 'video_generation')) ||
     route.headerOverrideState === 'unknown'
   )
     return null;
   const upstream = model.route?.baseUrl ?? route.upstream;
-  const v1BaseUrl = mediaBaseUrl(upstream, !!selection);
+  const v1BaseUrl = mediaBaseUrl(upstream, guideDriven);
   // MiniMax video paths are versioned at the API root (/v2/...), not under /v1.
-  const baseUrl = !selection && kind === 'video' && route.videoApi === 'minimax-videos' ? v1BaseUrl?.replace(/\/v1$/, '') : v1BaseUrl;
+  const baseUrl = !guideDriven && kind === 'video' && route.videoApi === 'minimax-videos' ? v1BaseUrl?.replace(/\/v1$/, '') : v1BaseUrl;
   if (!baseUrl || !mediaBaseUrl(route.upstream)) return null;
   // Model overrides must stay within the credential owner's origin.
   if (new URL(upstream).origin !== new URL(route.upstream).origin) return null;
@@ -119,7 +120,7 @@ export function resolveCustomMediaConnection(
     const key = opts.readApiKey(agent)?.trim();
     if (!key) return null;
     headers.authorization = `Bearer ${key}`;
-    if (selection) {
+    if (guideDriven) {
       // Reuse only this runtime's existing managed authentication configuration.
       // A Guide can neither supply these values nor choose another key owner.
       const configured = new Headers(route.headerOverride);

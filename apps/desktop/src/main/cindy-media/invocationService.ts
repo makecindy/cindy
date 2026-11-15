@@ -225,7 +225,7 @@ async function resolveInvocationConnection(invocation: StoredMediaInvocation): P
   if (binding.executor !== 'provider-video' && binding.executor !== 'provider-http') return resolveConnection(binding.providerId);
   const connection = await (binding.executor === 'provider-http'
     ? resolveProviderHttpConnection(binding.providerId, invocation.modelId, invocation.capability, binding.sourceAgent)
-    : resolveProviderVideoConnection(binding.providerId, invocation.modelId));
+    : resolveProviderVideoConnection(binding.providerId, invocation.modelId, binding.sourceAgent));
   if (!connection || connection.revision !== binding.connectionRevision) {
     throw new MediaInvocationError('CONNECTION_CHANGED', '视频连接已改变，请恢复原连接后查询原任务；不要重新生成');
   }
@@ -241,7 +241,7 @@ async function resolveInvocationConnection(invocation: StoredMediaInvocation): P
       // Re-read executable membership after reference reads and the database claim.
       // Paid task polling/recovery remains independent of the model's enable switch.
       const current = resolveProviderMediaModel(binding.providerId, invocation.modelId, invocation.capability);
-      if (!current || (binding.executor === 'provider-http' &&
+      if (!current || (binding.sourceAgent &&
           !(current.sourceAgents ?? (current.sourceAgent ? [current.sourceAgent] : [])).includes(binding.sourceAgent))) {
         throw new MediaInvocationError('MODEL_NOT_AVAILABLE', '该模型或来源已停用或不再支持本次能力，本次生成未发出');
       }
@@ -325,7 +325,7 @@ async function readBoundedResponse(response: Response, maxBytes: number): Promis
   );
 }
 
-function providerErrorMessage(buffer: Buffer): string {
+function providerErrorMessage(buffer: Buffer, headers: Record<string, string>): string {
   const text = buffer.toString('utf8').slice(0, 2_000);
   try {
     const value = JSON.parse(text) as {
@@ -335,7 +335,13 @@ function providerErrorMessage(buffer: Buffer): string {
     };
     const message = value.error?.message ?? value.message ?? value.msg;
     if (typeof message !== 'string' || !message.trim()) return '上游拒绝请求';
-    return message
+    let redacted = message;
+    const credentials = Object.entries(headers)
+      .filter(([name]) => /^(authorization|api-key|x-api-key|x-goog-api-key)$/i.test(name))
+      .flatMap(([, value]) => [value, value.replace(/^Bearer\s+/i, '')])
+      .filter(Boolean).sort((a, b) => b.length - a.length);
+    for (const credential of credentials) redacted = redacted.replaceAll(credential, '[已脱敏凭证]');
+    return redacted
       .replace(/data:[^,\s]{1,128};base64,[A-Za-z0-9+/=\s]+/gi, '[已脱敏 data URL]')
       .replace(/\bhttps?:\/\/[^\s"'<>]+/gi, '[已脱敏 URL]')
       .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{16,}\b/gi, 'Bearer [已脱敏]')
@@ -470,18 +476,19 @@ async function dispatchRequest(input: {
     });
     input.connection.assertCurrent?.();
     if (input.operation === 'submit') input.connection.beforeSubmit?.();
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      ...(input.body && input.bodyEncoding !== 'multipart'
+        ? { 'Content-Type': 'application/json' }
+        : {}),
+      ...(input.headers ?? {}),
+      ...(input.connection.apiKey ? { Authorization: `Bearer ${input.connection.apiKey}` } : {}),
+      ...(input.connection.headers ?? {}),
+    };
     dispatched = true;
     const response = await outboundFetch(url, {
       method: input.method,
-      headers: {
-        Accept: 'application/json',
-        ...(input.body && input.bodyEncoding !== 'multipart'
-          ? { 'Content-Type': 'application/json' }
-          : {}),
-        ...(input.headers ?? {}),
-        ...(input.connection.apiKey ? { Authorization: `Bearer ${input.connection.apiKey}` } : {}),
-        ...(input.connection.headers ?? {}),
-      },
+      headers,
       ...(requestBody ? { body: requestBody } : {}),
       redirect: 'error',
       signal: controller.signal,
@@ -519,7 +526,7 @@ async function dispatchRequest(input: {
     // its connection changed in flight. Save it before guarding later reads.
     if (input.operation === 'poll') input.connection.assertCurrent?.();
     if (!response.ok) {
-      const message = providerErrorMessage(buffer);
+      const message = providerErrorMessage(buffer, headers);
       if (response.status >= 500) {
         if (input.operation === 'poll') {
           throw new MediaInvocationError(
@@ -1306,13 +1313,13 @@ async function prepareInvocation(
           { outcomeKnown: true, allowedActions: GUIDE_FALLBACK_ACTIONS });
         binding = { providerId: model.providerId, executor: 'provider-image' };
       } else if (resolved.source === 'official' && isProviderVideoApi(resolved.protocol)) {
-        const videoConnection = await resolveProviderVideoConnection(model.providerId, resolvedModelId);
+        const videoConnection = await resolveProviderVideoConnection(model.providerId, resolvedModelId, agent);
         assertAuthScope(scope);
         if (!videoConnection) return failure('GUIDE_NOT_AVAILABLE',
           '公开 Guide 依赖的视频通道不适用于所选连接；请根据接口资料补齐本地 HTTP Guide，再重新 prepare', false,
           { outcomeKnown: true, allowedActions: GUIDE_FALLBACK_ACTIONS });
         binding = { providerId: model.providerId, executor: 'provider-video', connectionRevision: videoConnection.revision,
-          videoProtocol: resolved.protocol };
+          videoProtocol: resolved.protocol, sourceAgent: agent };
       }
     } else if (capability === 'image.generate' || capability === 'image.edit') {
       protocol = providerModel.imageProtocol ?? 'provider-images';
@@ -1407,7 +1414,7 @@ async function prepareInvocation(
     capability,
     guide_revision: preparedGuide.revision,
     guide_source: binding.executor === 'provider-http' ? binding.guideSource : 'official',
-    ...(binding.executor === 'provider-http' ? { source_agent: binding.sourceAgent } : {}),
+    ...('sourceAgent' in binding && binding.sourceAgent ? { source_agent: binding.sourceAgent } : {}),
     instructions: preparedGuide.instructions,
     input_schema: preparedGuide.inputSchema,
     example_body: preparedGuide.exampleBody,

@@ -252,6 +252,8 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   协议版本，自定义 HTTP 绑定同时保存 Guide 来源与 sourceAgent；视频/HTTP 的
   `binding.connectionRevision` 表示本地连接摘要。地址、Key 或来源
   变化继续按原摘要校验，已付费任务的查询与下载不要求重新读取 Server Guide。
+  官方视频执行器同样保存已选 `sourceAgent`，提交、轮询和内容读取均沿用该来源；
+  不再从同型号的聚合目录重新选择凭据。既有视频协议的路径规则保持，旧无此字段的快照仍可读。
 - HTTP Guide 提错任务编号、状态或结果字段时，补齐 Guide 并重新 `prepare`，传入
   `source_invocation_id` 将原付费调用的回执绑定新快照；原 `guide_json` 不变。要求同账号、
   provider、模型、能力、sourceAgent 与连接摘要，且原 request/poll 当前不在执行。
@@ -278,7 +280,9 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   Guide 不能改 host 或凭证。
   公开来源只决定说明，不改变 provider、runtime、账号或计费。新说明只影响新的 prepare。
 - Core 返回 HTTP 状态、脱敏上游错误及提交/任务状态等事实；Agent 通过工具提示判断是否
-  调整参数、处理连接、尝试官方或请用户补资料，不新增业务错误分类和自动后备重试。
+  调整参数、处理连接、尝试官方或请用户补资料。错误文本在截断前按本次实际发出的凭据值
+  精确脱敏，使用出站 header 快照，不读取刷新后的凭据替代原值；保留非敏感的上游说明。
+  不新增业务错误分类和自动后备重试。
   所有调用继续走 Ask/Auto/完全访问权限；结果未知、pending 或已生成未交付时恢复原任务，
   不能靠换 Guide、新 invocation、脚本或原始 HTTP 重复生成或绕过权限。
 - 存量插件的 `cindy-request` 图片、视频接口保留原参数与返回格式。Host 完成原有权限、配额、

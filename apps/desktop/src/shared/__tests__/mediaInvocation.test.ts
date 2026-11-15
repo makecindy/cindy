@@ -27,6 +27,19 @@ describe('媒体协议说明与本地执行绑定', () => {
       { ...snapshot.binding, connectionRevision: undefined }, { ...snapshot.binding, host: 'https://other.example' },
     ]) expect(parsePreparedMediaInvocationGuide({ ...snapshot, binding })).toMatchObject({ ok: false });
   });
+  // Unit, #4577490768: the real persisted decoder must preserve a selected video
+  // runtime after restart while accepting existing snapshots without that field.
+  it('roundtrips an optional selected runtime in the official video binding', () => {
+    const snapshot = { ...protocol, ...operation, modelId: 'private-video',
+      binding: { providerId: 'relay', executor: 'provider-video', connectionRevision: 'video-1', videoProtocol: 'openai-videos' } };
+    for (const sourceAgent of [undefined, 'pi', 'codex']) {
+      const value = JSON.parse(JSON.stringify({ ...snapshot, binding: { ...snapshot.binding, sourceAgent } }));
+      expect(parsePreparedMediaInvocationGuide(value)).toEqual({ ok: true, value });
+    }
+    expect(parsePreparedMediaInvocationGuide({ ...snapshot, binding: { ...snapshot.binding, sourceAgent: 'unknown' } }))
+      .toMatchObject({ ok: false });
+  });
+
   // 自带 provider 接入契约：用户资料不一定有官方链接，型号也可能只存在于 URL。
   // 原解析器强制 bodyModelPath/officialDocs；unit，复用生产 parser 并核对持久快照。
   it.each(['/render', '/v1beta/models/{model}:generateContent'])(

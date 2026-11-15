@@ -50,7 +50,7 @@ interface ProviderMediaRuntime {
   /** Settings readiness; must include hidden models so the display switch stays togglable. */
   listExecutableModels?(): ProviderMediaRuntimeModel[];
   listExecutableVideoModels?(): ProviderMediaRuntimeModel[];
-  resolveVideoConnection?(providerId: string, modelId: string): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null>;
+  resolveVideoConnection?(providerId: string, modelId: string, agent?: AgentKind): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null>;
   invoke(request: ProviderMediaRuntimeRequest): Promise<ProviderMediaRuntimeResult>;
 }
 
@@ -93,8 +93,8 @@ export function listProviderMediaModels(capabilities: readonly MediaCapability[]
   ];
 }
 
-export function resolveProviderVideoConnection(providerId: string, modelId: string): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null> {
-  return runtime?.resolveVideoConnection?.(providerId, modelId) ?? null;
+export function resolveProviderVideoConnection(providerId: string, modelId: string, agent?: AgentKind): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null> {
+  return runtime?.resolveVideoConnection?.(providerId, modelId, agent) ?? null;
 }
 
 /** Readiness only; dispatch still belongs to the image/video execution registries. */
