@@ -229,7 +229,7 @@ function collaborationLabel(role: string | null | undefined, translate: ListTran
 }
 
 function isDialogue(session: RemoteSessionListItem['session']): boolean {
-  return session.workspaceKind === 'dialogue' || !session.workingDir;
+  return !session.companion?.taskProjectDir && (session.workspaceKind === 'dialogue' || !session.workingDir);
 }
 
 function relativeActivity(iso: string, now: number, translate: ListTranslator): string {

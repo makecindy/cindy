@@ -6,6 +6,7 @@ import { HOST_UI_POSITIONS, type GhostHostUi, type GhostHostUiSetting } from '@c
 
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent';
 import { GhostInstallConsentContent, GhostInstallConsentHost } from '../GhostInstallConsentHost';
+import { GhostConfirmDialogHost } from '../GhostConfirmDialogHost';
 import { ghostHostUiApprovalTokens, ghostHostUiPermissionItems, type GhostManifest } from '../../../shared/ghost';
 
 const mocks = vi.hoisted(() => ({ confirm: vi.fn() }));
@@ -83,6 +84,83 @@ describe('GhostInstallConsentHost', () => {
   afterEach(() => {
     cleanup();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  // Node Host can retract a dialog when its controller disconnects or plugin
+  // stops. A late UI promise must answer false, even after it yielded true.
+  it('retracts a pending Host tool dialog and rejects a late affirmative UI result', async () => {
+    let request: Parameters<typeof window.electronAPI.ghosts.onConfirmRequest>[0] | undefined;
+    let dismiss: ((payload: { requestId: string }) => void) | undefined;
+    let finish: ((value: boolean) => void) | undefined;
+    const resolveConfirm = vi.fn(async () => ({ handled: false }));
+    const unsubscribeDismiss = vi.fn();
+    const subscribeDismiss = vi.fn((callback: typeof dismiss) => { dismiss = callback; return unsubscribeDismiss; });
+    const subscribeConnection = vi.fn();
+    Object.assign(window.electronAPI, { hostConnection: { client: 'desktop', onStateChanged: subscribeConnection, retry() {} } });
+    Object.assign(window.electronAPI.ghosts, {
+      onConfirmRequest: (callback: typeof request) => { request = callback; return () => {}; },
+      onConfirmDismissed: subscribeDismiss,
+      resolveConfirm,
+    });
+    mocks.confirm.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    render(<GhostConfirmDialogHost />);
+    // Performance regression: mounting the app without any dialog must not add
+    // the new dismissal subscription. Keep it only for an actual pending answer.
+    expect(subscribeDismiss).not.toHaveBeenCalled();
+    await act(async () => request?.({ requestId: 'command', ghostId: 'demo', ghostName: 'Demo',
+      body: 'Run terminal_start', confirmText: null, cancelText: null, danger: false }));
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    expect(subscribeDismiss).toHaveBeenCalledOnce();
+    expect(subscribeConnection).not.toHaveBeenCalled();
+    const signal = mocks.confirm.mock.calls[0][1] as AbortSignal;
+    await act(async () => { dismiss?.({ requestId: 'command' }); finish?.(true); });
+    expect(signal.aborted).toBe(true);
+    await waitFor(() => expect(resolveConfirm).toHaveBeenCalledWith('command', false));
+    expect(unsubscribeDismiss).toHaveBeenCalledOnce();
+  });
+
+  // #9825 / 4560074079: a disconnected browser cannot receive the Host's
+  // dismissal. Existing dismissal tests miss this. Unit: real dialog hosts,
+  // two pending requests (visible/queued), late answers and a fresh connection.
+  it.each(['operation', 'permission'] as const)('cancels browser %s dialogs on disconnect without retaining idle observers', async kind => {
+    type ConnectionListener = Parameters<NonNullable<typeof window.electronAPI.hostConnection>['onStateChanged']>[0];
+    let connection: ConnectionListener | undefined;
+    const unsubscribe = vi.fn(() => { connection = undefined; });
+    const subscribe = vi.fn((listener: ConnectionListener) => {
+      connection = listener;
+      listener({ status: 'connected', connection: 1, recovery: 0 });
+      return unsubscribe;
+    });
+    Object.assign(window.electronAPI, { hostConnection: { client: 'browser', onStateChanged: subscribe, retry() {} } });
+    let operation: Parameters<typeof window.electronAPI.ghosts.onConfirmRequest>[0] | undefined;
+    const resolveConfirm = vi.fn(async () => ({ handled: false }));
+    Object.assign(window.electronAPI.ghosts, {
+      onConfirmRequest: (listener: typeof operation) => { operation = listener; return () => {}; },
+      onConfirmDismissed: () => () => {}, resolveConfirm,
+    });
+    const finishes: Array<(answer: boolean) => void> = [];
+    mocks.confirm.mockImplementation(() => new Promise<boolean>(resolve => { finishes.push(resolve); }));
+    render(kind === 'operation' ? <GhostConfirmDialogHost /> : <GhostInstallConsentHost />);
+    expect(subscribe).not.toHaveBeenCalled();
+    const request = (requestId: string) => kind === 'operation'
+      ? operation?.({ requestId, ghostId: 'demo', ghostName: 'Demo', body: 'Run', confirmText: null, cancelText: null, danger: false })
+      : push?.({ requestId, initiator: 'user', origin: 'local-file',
+        facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } });
+    await act(async () => { request('visible'); request('queued'); });
+    const signals = mocks.confirm.mock.calls.map(call => call[1] as AbortSignal);
+    expect(signals).toHaveLength(2);
+    expect(signals.every(signal => !signal.aborted)).toBe(true);
+    await act(async () => { connection?.({ status: 'disconnected', connection: 1, recovery: 0 }); });
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect(subscribe).toHaveBeenCalledOnce();
+    await act(async () => { for (const finish of finishes) finish(true); });
+    const resolve = kind === 'operation' ? resolveConfirm : resolveInstallConsent;
+    expect(resolve.mock.calls).toEqual([['visible', false], ['queued', false]]);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    await act(async () => { request('fresh'); finishes.at(-1)?.(true); });
+    expect(resolve).toHaveBeenLastCalledWith('fresh', true);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(unsubscribe).toHaveBeenCalledTimes(2);
   });
 
   // #9496 exposed protocol subjects/JSON in consent. Existing tests only cover

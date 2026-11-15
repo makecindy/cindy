@@ -1010,6 +1010,23 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(seenAuth).toBe('sk-saved');
   });
 
+  // #8679: saved providers probe the first chat model, which the user never picks in the test button's
+  // context. A bare "upstream 5xx" made a failure on that model read like the whole provider (or the model
+  // that just answered) was broken, so the result must say which model was tested.
+  it('testProviderConnection(saved) 失败时仍带回被测模型 ID', async () => {
+    setCustomProviders([buildUserProvider({
+      ...config,
+      runtimes: { 'claude-code': { ...config.runtimes['claude-code'],
+        models: [{ id: 'glm-5.2', name: 'GLM' }, { id: 'glm-5.2-air', name: 'GLM Air' }] } },
+    })]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    const r = await testProviderConnection(
+      { kind: 'saved', providerId: 'my-relay', agent: 'claude-code' },
+      async () => fakeResponse(500, '{}'),
+    );
+    expect(r).toMatchObject({ ok: false, modelId: 'glm-5.2' });
+  });
+
   it('oauth-token 供应商:探测 token 走 authorization 头,绝不发 x-api-key(与真实路由同口径)', async () => {
     const oauthConfig = {
       ...config,

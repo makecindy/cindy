@@ -52,6 +52,7 @@ const DESCRIPTION =
   + 'Pass `target` for a window on this computer, or `image` for a fresh screenshot containing a sign-in QR code '
   + '(for example a simulator inside Cindy). Never target the Cindy window itself. '
   + 'Buttons, options and consent pages are yours to handle: a screen with neither a field to type nor a sign-in QR code ends at once with failure nothing_to_fill. '
+  + 'A passkey, Touch ID, security key or approve-on-phone prompt has nothing to type: do not hand it off; ask the owner in the conversation to finish it on this computer. '
   + 'Do not type, click or read secrets in that window yourself while it is pending. '
   + 'Returns a pending receipt; a hidden "[Input handoff ended]" message continues this task later. '
   + 'Values the owner enters are never shared with you. One pending handoff per task. '

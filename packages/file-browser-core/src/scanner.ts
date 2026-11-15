@@ -523,6 +523,42 @@ export async function writeFile(
     await probeHandle.close();
   }
 
+  await publishFileBytes(realAbs, buf);
+  const after = await fs.stat(realAbs);
+  return { size: after.size, mtimeMs: after.mtimeMs };
+}
+
+/** Bounded callers may create or replace binary files using the editor's same
+ * atomic publisher. Policy and byte budgets belong to the calling Host service. */
+export async function writeFileBytes(workdir: string, relPath: string, bytes: Uint8Array,
+  assertCurrent: () => Promise<void>): Promise<void> {
+  const sub = assertInsideWorkdir(workdir, relPath);
+  if (!sub) throw new Error('cannot write workdir root');
+  const abs = path.join(workdir, sub);
+  // Check the existing ancestor before recursive mkdir can cross a symlink.
+  let ancestor = path.dirname(abs);
+  for (;;) {
+    try { await assertRealPathInsideWorkdir(workdir, ancestor); break; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || ancestor === path.dirname(ancestor)) throw error;
+      ancestor = path.dirname(ancestor);
+    }
+  }
+  await assertCurrent();
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  await assertRealParentInsideWorkdir(workdir, abs);
+  await assertCurrent();
+  await publishFileBytes(abs, bytes, async () => {
+    await assertRealParentInsideWorkdir(workdir, abs);
+    try {
+      const stat = await fs.lstat(abs);
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('target is not a regular file');
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    await assertCurrent();
+  });
+}
+
+async function publishFileBytes(realAbs: string, buf: Uint8Array, beforePublish?: () => Promise<void>): Promise<void> {
   // 临时名带随机段并以 'wx' 独占创建:固定名可被工作目录里预置的符号链接
   // 占位,'w' 会跟随链接写到工作目录外,rename 还会把链接本身搬成目标文件。
   // 仍以 XDT_TMP_SUFFIX 结尾,listDir / watcher 的过滤照旧生效。
@@ -537,14 +573,12 @@ export async function writeFile(
     }
     // rename is atomic on same filesystem (which .xdt-tmp guarantees since
     // we wrote it in the same directory).
+    await beforePublish?.();
     await fs.rename(tmp, realAbs);
   } catch (err) {
     await fs.rm(tmp, { force: true }).catch(() => {});
     throw err;
   }
-
-  const after = await fs.stat(realAbs);
-  return { size: after.size, mtimeMs: after.mtimeMs };
 }
 
 /**

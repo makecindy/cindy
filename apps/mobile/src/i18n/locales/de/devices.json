@@ -738,6 +738,8 @@
     "memoryDeleteFailed": "Die Erinnerung konnte nicht gelöscht werden",
     "create": "Neuer Freund",
     "createFailed": "Die Erstellung wurde noch nicht bestätigt. Versuche es erneut, um sie zu prüfen.",
+    "createHostUnsupported": "Dieser Computer kann derzeit keinen Freund erstellen. Aktualisiere Cindy dort oder erstelle ihn auf diesem Computer.",
+    "createNeedsDetails": "Gib einen Namen ein und wähle ein Porträt, um einen Freund zu erstellen.",
     "title": "Freund",
     "profile": "Profil & Persönlichkeit",
     "memory": "Gedächtnis",

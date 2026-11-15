@@ -430,7 +430,11 @@
       "voice": "長按而言",
       "scrollKeys": "右搖桿",
       "scroll": "捲動",
-      "page": "翻頁"
+      "page": "翻頁",
+      "triggerScrollKeys": "L2 / R2 ＋ 十字鍵上下",
+      "triggerScroll": "捲動所見",
+      "sendText": "遣所輸之字",
+      "taskHint": "此諸捷鍵唯於差事頁可用。若設為語音鍵，則以言為先；釋之，字仍留於輸入框。"
     }
   }
 }

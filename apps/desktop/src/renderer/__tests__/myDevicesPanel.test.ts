@@ -4,10 +4,16 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...await importOriginal<typeof import('react-i18next')>(),
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async (importOriginal) => {
+  const { default: locale } = await import('@/i18n/locales/en/common.json');
+  return {
+    ...await importOriginal<typeof import('react-i18next')>(),
+    // Keep key-based control selectors, but render the App brands from real locale data.
+    useTranslation: () => ({ t: (key: string) => key === 'settings.devices.apps.cindy'
+      ? locale.settings.devices.apps.cindy : key === 'settings.devices.apps.cindyFriend'
+        ? locale.settings.devices.apps.cindyFriend : key }),
+  };
+});
 
 import type { DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
 import { MyDevicesPanel } from '@/components/settings/MyDevicesPanel';
@@ -47,6 +53,8 @@ function device(deviceId: string, name: string, isSelf = false): DeviceLinkDevic
 describe('MyDevicesPanel device identity', () => {
   afterEach(cleanup);
 
+  // App routing, unit: the real panel renders brands from the locale and keeps
+  // foreign Apps out of outbound controls. The old identity fixture only had Cindy.
   it('shows versions and compact names without exposing device fingerprints', () => {
     const s = settings();
     s.devices = [
@@ -54,6 +62,8 @@ describe('MyDevicesPanel device identity', () => {
       { ...device('release-device', 'Mac Studio'), appVersion: '0.1.75' },
       { ...device('dev-dev-0123456789abcdef0123456789abcdef', 'Mac Studio'), appVersion: '0.1.76-beta.2' },
       { ...device('legacy', 'iPhone'), appVersion: null },
+      { ...device('foreign-0001', 'Friend Mac'), platform: 'darwin', app: 'cindy-friend' },
+      { ...device('foreign-0002', 'Other Mac'), platform: 'darwin', app: 'future-app' },
     ];
     render(createElement(MyDevicesPanel, { s }));
 
@@ -61,12 +71,16 @@ describe('MyDevicesPanel device identity', () => {
       const row = document.querySelector(`[data-device-id="${d.deviceId}"]`);
       expect(row?.textContent).not.toContain(d.deviceId);
       if (!d.isSelf && d.name === 'Mac Studio') expect(row?.textContent).toMatch(/Mac Studio \(\d\)/);
-      if (d.appVersion) expect(row?.textContent).toContain(`Cindy ${d.appVersion}`);
+      const appName = d.app === 'cindy-friend' ? 'Cindy Friend' : d.app ?? 'Cindy';
+      if (d.appVersion) expect(row?.textContent).toContain(`${appName} ${d.appVersion}`);
       else {
         expect(row?.textContent).not.toContain('Cindy null');
         expect(row?.textContent).not.toContain('Cindy undefined');
       }
+      if (d.app) expect(row?.textContent).not.toContain('settings.remoteControl.myDevices.iCan');
     }
+    expect(document.querySelector('[data-device-id="foreign-0001"]')?.textContent).toContain('Cindy Friend · Friend Mac');
+    expect(document.querySelector('[data-device-id="foreign-0002"]')?.textContent).toContain('future-app · Other Mac');
   });
 });
 

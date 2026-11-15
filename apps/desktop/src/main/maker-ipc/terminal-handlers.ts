@@ -21,12 +21,14 @@ import {
   type ShellId,
 } from '../terminal/shellResolver.js';
 import {
-  PtyManager,
+  type PtyManager,
+  type PtyOwner,
   type CreateOptions,
   type CreateResult,
   type DataPayload,
   type ExitPayload,
 } from '../terminal/ptyManager.js';
+import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import {
   getDefaultShellPref,
   setDefaultShellPref,
@@ -59,20 +61,19 @@ export interface TerminalHandlersOptions {
  * 必须只调一次（重复注册会被 ipcMain 抛错）。返回 PtyManager 实例供调用方在
  * shutdown 流程里手动 dispose（如果需要）。
  */
-export function registerTerminalHandlers(options?: TerminalHandlersOptions): PtyManager {
-  const manager = new PtyManager({
-    sink: {
-      emitData: (target: WebContents, payload: DataPayload) => {
-        if (!target.isDestroyed()) target.send(TERMINAL_PUSH.DATA, payload);
-      },
-      emitExit: (target: WebContents, payload: ExitPayload) => {
-        if (!target.isDestroyed()) target.send(TERMINAL_PUSH.EXIT, payload);
-      },
+export function registerTerminalHandlers(options?: TerminalHandlersOptions): PtyManager<PtyOwner> {
+  const service = getDesktopHostTerminalService();
+  service.bindUi({
+    emitData: (target: WebContents, payload: DataPayload) => {
+      if (!target.isDestroyed()) target.send(TERMINAL_PUSH.DATA, payload);
     },
-    resolveFallbackOwner: options?.getFallbackOwner
-      ? () => options.getFallbackOwner?.() ?? null
-      : undefined,
-  });
+    emitExit: (target: WebContents, payload: ExitPayload) => {
+      if (!target.isDestroyed()) target.send(TERMINAL_PUSH.EXIT, payload);
+    },
+  }, options?.getFallbackOwner
+    ? () => options.getFallbackOwner?.() ?? null
+    : undefined);
+  const manager = service.manager;
 
   ipcMain.handle(TERMINAL_INVOKE.CREATE, (event: IpcMainInvokeEvent, params: unknown) => {
     const opts = parseCreateParams(params, event.sender);

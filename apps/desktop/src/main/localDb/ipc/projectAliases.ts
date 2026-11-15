@@ -7,6 +7,7 @@ import {
 } from '@cindy/maker-shared/project-alias-sync';
 
 import type { ProjectAlias } from '../../../shared/projectAliases.js';
+import { emitProjectCatalogChanged } from '../../projectCatalogEvents.js';
 import type { DbClient } from '../client/DbClient.js';
 import { getDbClient } from '../client/current';
 import { requireObject, throwIpcError } from '../../utils/ipcValidate';
@@ -21,6 +22,7 @@ import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 
 function broadcastProjectAliasesChanged(scope: DataOwnerBroadcastScope): void {
   if (!isDataOwnerBroadcastScopeCurrent(scope)) return;
+  emitProjectCatalogChanged();
   for (const w of BrowserWindow.getAllWindows()) {
     if (isTrustedAppRendererWindow(w)) {
       w.webContents.send(PROJECT_ALIASES_CHANGED_CHANNEL, {}, scope.ownerStamp);

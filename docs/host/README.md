@@ -6,6 +6,22 @@
 下一阶段目标已扩展为支持桌面、手机、网页及无图形 Linux 的共用后台，见
 [完整无界面 Cindy 计划](headless-runtime-plan.md)；该目标尚未全部实现。
 
+## 目标
+
+这项工作要实现下面四点，目前尚未全部实现：
+
+- **可以在服务器上无头运行**：不需要桌面窗口，无图形的 Linux 上也能运行。
+- **后台不依赖 Electron**：任务、账号、插件、调度等逻辑从 Electron 主进程里解出来，由桌面和 Host 共用。
+- **界面与后台分离**：以后换性能更好的前端，不用重写任务逻辑。
+- **升级不中断任务**：任务跑在后台，界面升级、重启时任务不停。
+
+顺带的好处：逻辑只有一份，桌面与后台不会各改各的；手机、网页和其他设备可以连接同一个后台。
+底线：迁移过程中桌面版的行为不变。
+
+现在所处的一步：把逻辑从 Electron 主进程里原样搬出来，第一阶段先让普通本地任务在 Host 上与桌面一致；
+之后依次是界面与 Host 之间的通道，伙伴、供应商分组与定时任务等，最后是联合验收，开放迁移另行决定。
+每项能力的现状与差异见[个人版迁移放行表](personal-migration-release-table.md)。
+
 代码中的两个入口：
 
 - **`cindy-host`**：按需启动的后台服务，提供任务、消息与模型调用等已接通的接口。
@@ -19,6 +35,7 @@
 | [architecture-and-status.md](architecture-and-status.md) | 原 PR 阶段的模块分析与实验记录；现状以基础网页版和当前计划为准 |
 | [maintenance-plan.md](maintenance-plan.md) | PR #9246 合并后的维护计划与逐批验收边界 |
 | [feature-parity.md](feature-parity.md) | 原 PR 阶段的逐项功能记录与审计，保留历史验证范围 |
+| [personal-migration-release-table.md](personal-migration-release-table.md) | 个人版迁移放行表：每项应保留能力的现状、与桌面的差异和证据（M1 起随检查点更新） |
 | [electron-client-mode.md](electron-client-mode.md) | Electron 以客户端模式运行：通道代理表、安全边界、未迁移清单 |
 | [channel-coverage.md](channel-coverage.md) | 脚本生成：桌面主进程全部 IPC 通道的归属（A 后台／B 窗口／W 窗口设置／S 同步／R 回执／C 待定）、要 Host 做的总数与真实使用排行、客户端模式行为 |
 | [systemd.md](systemd.md) | user unit 安装与运维 |

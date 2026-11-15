@@ -751,7 +751,7 @@ export function ScheduleFormDialog({
         >
           <header className="flex min-h-[72px] shrink-0 items-center gap-4 pt-[18px] pr-4 pb-[14px] pl-6">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <Dialog.Title className="text-24 font-normal leading-[1.33] text-[var(--msg-assistant-text)]">
+              <Dialog.Title className="text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
                 {isProjectAutomationMode
                   ? isEdit
                     ? t('scheduler.editor.promptDialog.titleProjectEdit')

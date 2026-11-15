@@ -3,8 +3,15 @@ import type { Session } from '@cindy/maker-core';
 /** Only live runtime capabilities; persistent task state is never modified here. */
 export type IdleClaudeSession = Pick<Session, 'id' | 'agentKind' | 'remoteHostId' | 'agentDeviceId' | 'sdkSessionId'
   | 'getStatus' | 'getTurnGeneration' | 'isTurnRunning' | 'listBackgroundTasks'
-  | 'countPendingWakeContinuations' | 'manageAsyncUserQuestions' | 'onEvent' | 'closeIfIdle' | 'close'>;
+  | 'countPendingWakeContinuations' | 'manageAsyncUserQuestions' | 'onEvent' | 'closeIfIdle' | 'close'>
+  & Partial<Pick<Session, 'hasLiveBackgroundWork'>>;
+/** Codex mirrors the Pi and Claude 30-minute default; no separate setting. */
+export const DEFAULT_CODEX_IDLE_RELEASE_MINUTES = 30;
+/** Engines whose ordinary local tasks share this reclamation policy. */
+export type IdleReleaseAgentKind = 'claude-code' | 'codex';
 export interface ClaudeIdleReleaseDeps {
+  /** Defaults to Claude; Codex reuses the same gates plus its async background probe. */
+  agentKind?: IdleReleaseAgentKind;
   listSessions(): IdleClaudeSession[];
   getSession(id: string): IdleClaudeSession | undefined;
   readMinutes(): number;
@@ -19,18 +26,23 @@ export interface ClaudeIdleReleaseDeps {
 }
 
 /** Scope query runs through the DB worker; source and ownership are host facts. */
-export const ORDINARY_CLAUDE_TASK_SQL = `SELECT id FROM sessions s
+const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex') => `SELECT id FROM sessions s
 WHERE s.id = ? AND s.status = 'active' AND s.source = 'desktop'
 AND s.hidden_at IS NULL AND s.agent_device_id IS NULL
 AND s.sdk_session_id = ? AND s.sdk_session_id != '<pending>'
-AND s.agent_kind = 'cc' AND s.remote_host_id IS NULL AND s.orca_role IS NULL
+AND s.agent_kind = '${dbAgentKind}' AND s.remote_host_id IS NULL AND s.orca_role IS NULL
 AND NOT EXISTS (SELECT 1 FROM bot_session_links b WHERE b.session_id = s.id)
 AND NOT EXISTS (SELECT 1 FROM orca_workers w WHERE w.session_id = s.id)
 AND NOT EXISTS (SELECT 1 FROM orca_teams t WHERE t.lead_session_id = s.id AND t.status = 'active')
 AND NOT EXISTS (SELECT 1 FROM session_goals g WHERE g.session_id = s.id AND g.status != 'complete')`;
+export const ORDINARY_CLAUDE_TASK_SQL = ordinaryTaskSql('cc');
+/** Same ordinary-task scope for Codex: bots, Orca, Goals, remote and hidden tasks keep their own lifecycle. */
+export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex');
 
 /** Single-flight scans reuse the send lock and Session's atomic close-if-idle boundary. */
 export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
+  const agentKind = deps.agentKind ?? 'claude-code';
+  const label = agentKind === 'codex' ? 'Codex' : 'Claude';
   const tracked = new Map<IdleClaudeSession, { since: number; generation: number; closeFailed: boolean; unsubscribe: () => void }>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let epoch = 0;
@@ -57,7 +69,7 @@ export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
         for (const session of tracked.keys()) forget(session);
         return;
       }
-      const sessions = deps.listSessions().filter(s => s.agentKind === 'claude-code' && !s.remoteHostId && !s.agentDeviceId);
+      const sessions = deps.listSessions().filter(s => s.agentKind === agentKind && !s.remoteHostId && !s.agentDeviceId);
       const live = new Set(sessions);
       for (const session of tracked.keys()) if (!live.has(session)) forget(session);
       for (const session of sessions) {
@@ -81,6 +93,12 @@ export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
             if (deps.now() - state.since < minutes * 60_000) return;
             const sdkSessionId = session.sdkSessionId;
             if (!await deps.isOrdinaryTask(session.id, sdkSessionId) || await deps.hasPendingInput(session.id)) {
+              state.since = deps.now();
+              return;
+            }
+            // Provider work invisible to listBackgroundTasks (Codex native children,
+            // yielded exec cells, background terminals). A failed probe counts as busy.
+            if (await session.hasLiveBackgroundWork?.()) {
               state.since = deps.now();
               return;
             }
@@ -110,11 +128,11 @@ export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
           });
         } catch {
           state.since = deps.now();
-          deps.warn('Claude idle release skipped: runtime or task state unavailable');
+          deps.warn(`${label} idle release skipped: runtime or task state unavailable`);
         }
       }
     } catch {
-      deps.warn('Claude idle release scan failed');
+      deps.warn(`${label} idle release scan failed`);
     } finally { scanning = false; }
   };
   return {

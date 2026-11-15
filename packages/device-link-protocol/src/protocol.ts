@@ -108,6 +108,8 @@ export interface RelayErrorPayload {
 export interface HelloPayload {
   deviceName: string;
   platform: string;
+  /** Optional App label carried by Agent-Net; legacy relays can ignore it. Not an authority. */
+  app?: string;
   appVersion: string;
   remoteControlEnabled: boolean;
   busy: boolean;
@@ -241,6 +243,8 @@ export interface PresenceSnapshot {
   selfName?: string | null;
   deviceInfo?: DeviceInfo | null;
   platform: string;
+  /** Self-reported App label, absent on legacy relays/clients. */
+  app?: string;
   appVersion: string;
   /** unix ms */
   lastSeenAt: number;

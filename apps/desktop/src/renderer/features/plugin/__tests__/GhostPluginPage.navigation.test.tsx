@@ -102,6 +102,7 @@ beforeEach(() => {
   catalog.device = null;
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   auth.mode = 'local';
+  auth.dataOwnerId = 'navigation-owner';
   auth.user.membershipKind = 'personal';
   translation.i18n.language = 'en';
   translation.i18n.resolvedLanguage = 'en';
@@ -185,6 +186,122 @@ function page(entry: string, withRetirementNavigation = false) {
     </MemoryRouter>
   );
 }
+
+describe('market action feedback', () => {
+  // Unit, #10358: exercise the real page with one delayed detail response.
+  // Card-only pending props cannot detect the page confusing viewing with installing.
+  async function openCard(compact: boolean) {
+    const item = { ...detail, downloadStatistics: { requestCount: '123' } };
+    window.electronAPI.pluginMarket.snapshot = async () => ({ items: [item], unavailableReason: null,
+      customSourceNames: [], unavailableCustomSourceNames: [] });
+    if (compact) window.electronAPI.pluginMarket.recommendations = async () => [item,
+      ...[1, 2].map(index => ({ ...item, pluginId: `other-${index}`, ghostId: `other-${index}`, name: `Other ${index}` }))];
+    const view = render(page('/plugins'));
+    if (!compact) fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    const body = await screen.findByRole('button', { name: detail.name });
+    return { ...view, body, card: within(body.closest('article')!) };
+  }
+
+  it.each([
+    [false, 'body'], [false, 'arrow'], [false, 'downloads'],
+    [true, 'body'], [true, 'downloads'],
+  ] as const)('shows detail loading without installation from compact=%s %s', async (compact, entry) => {
+    let finish!: (value: PluginMarketDetail) => void;
+    loadDetail.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const install = vi.fn();
+    Object.assign(window.electronAPI.pluginMarket, { install });
+    const { body, card } = await openCard(compact);
+    const action = card.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    fireEvent.click(entry === 'body' ? body : entry === 'arrow'
+      ? card.getByRole('button', { name: 'settings.ghosts.market.detailsAria' })
+      : card.getByRole('group'));
+    expect(action.getAttribute('aria-busy')).not.toBe('true');
+    expect(action.querySelector('.animate-spinner')).toBeNull();
+    expect(card.getByRole('status').textContent).toBe('settings.ghosts.market.loadingDetails');
+    expect(body.getAttribute('aria-busy')).toBe('true');
+    fireEvent.click(body);
+    fireEvent.click(action);
+    expect(loadDetail).toHaveBeenCalledTimes(1);
+    expect(install).not.toHaveBeenCalled();
+    await act(async () => { finish(detail); });
+    await screen.findByRole('heading', { level: 1, name: detail.name });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.backToList' }));
+    expect(screen.queryByText('settings.ghosts.market.loadingDetails')).toBeNull();
+    expect((await screen.findByRole('button', { name: detail.name }) as HTMLButtonElement).disabled).toBe(false);
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('keeps explicit installation loading across detail and install with compact=%s', async compact => {
+    let finishDetail!: (value: PluginMarketDetail) => void;
+    let failInstall!: (error: Error) => void;
+    loadDetail.mockImplementationOnce(() => new Promise(resolve => { finishDetail = resolve; }));
+    const install = vi.fn(() => new Promise((_resolve, reject) => { failInstall = reject; }));
+    Object.assign(window.electronAPI.pluginMarket, { install });
+    vi.spyOn(toast, 'error').mockReturnValue('install-error');
+    const { body, card } = await openCard(compact);
+    const action = card.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    fireEvent.click(action);
+    expect(action.getAttribute('aria-busy')).toBe('true');
+    expect(card.queryByRole('status')).toBeNull();
+    expect(install).not.toHaveBeenCalled();
+    await act(async () => { finishDetail(detail); });
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(action.getAttribute('aria-busy')).toBe('true');
+    fireEvent.click(body);
+    fireEvent.click(action);
+    expect(loadDetail).toHaveBeenCalledTimes(1);
+    await act(async () => { failInstall(new Error('Installation failed')); });
+    expect(action.getAttribute('aria-busy')).not.toBe('true');
+    expect((action as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('clears failed detail feedback and allows a fresh explicit install', async () => {
+    let fail!: (error: Error) => void;
+    loadDetail.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const error = vi.spyOn(toast, 'error').mockReturnValue('detail-error');
+    const { body, card } = await openCard(false);
+    fireEvent.click(body);
+    expect(card.getByRole('status')).toBeTruthy();
+    await act(async () => { fail(new Error('Details unavailable')); });
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(card.queryByRole('status')).toBeNull();
+    const action = card.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    expect((action as HTMLButtonElement).disabled).toBe(false);
+    loadDetail.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    fireEvent.click(action);
+    expect(action.getAttribute('aria-busy')).toBe('true');
+    await act(async () => { fail(new Error('Details unavailable')); });
+    expect(action.getAttribute('aria-busy')).not.toBe('true');
+    expect((action as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it.each(['owner', 'mode'] as const)('retires detail feedback on %s change without clearing a newer install', async change => {
+    let finishOld!: (value: PluginMarketDetail) => void;
+    let failNew!: (error: Error) => void;
+    loadDetail.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
+    const install = vi.fn();
+    Object.assign(window.electronAPI.pluginMarket, { install });
+    vi.spyOn(toast, 'error').mockReturnValue('detail-error');
+    const { body, rerender } = await openCard(false);
+    fireEvent.click(body);
+    expect(screen.getByText('settings.ghosts.market.loadingDetails')).toBeTruthy();
+    if (change === 'owner') auth.dataOwnerId = 'another-owner';
+    else auth.mode = 'cloud';
+    rerender(page('/plugins'));
+    expect(screen.queryByText('settings.ghosts.market.loadingDetails')).toBeNull();
+    loadDetail.mockImplementationOnce(() => new Promise((_resolve, reject) => { failNew = reject; }));
+    const action = await screen.findByRole('button', { name: 'settings.ghosts.page.installAria' });
+    fireEvent.click(action);
+    expect(action.getAttribute('aria-busy')).toBe('true');
+    await act(async () => { finishOld(detail); });
+    expect(screen.queryByRole('heading', { level: 1, name: detail.name })).toBeNull();
+    expect(action.getAttribute('aria-busy')).toBe('true');
+    expect(install).not.toHaveBeenCalled();
+    await act(async () => { failNew(new Error('Details unavailable')); });
+    expect(action.getAttribute('aria-busy')).not.toBe('true');
+    expect((action as HTMLButtonElement).disabled).toBe(false);
+  });
+});
 
 // Unit: the new recommendation pool must survive tab/search/detail navigation;
 // existing tests covered installs but did not exercise a fixed three-card pool.
