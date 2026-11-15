@@ -274,7 +274,7 @@ import {
 } from '@cindy/device-link';
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
-import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
 import { createTurnModelAttribution } from './turnModelAttribution.js';
 import { createUserMessageDurableWrite } from './userMessageDurableWrite.js';
@@ -1467,6 +1467,7 @@ import {
   type ApplySessionRuntimeSelection,
   type InternalRuntimeSelectionOptions,
 } from './sessionRuntimeSelectionApply.js';
+import { createSessionRuntimeProjection, createUpdateScheduledPreference } from './sessionRuntimeProjection.js';
 import { PendingCredentialSwitchService, type PendingCredentialSwitchDeps } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
@@ -6815,65 +6816,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   setSessionTextSnapshotReader(getSessionTextSnapshot);
   log.info('registering maker:* IPC handlers');
-  const broadcastSessionRuntimeProjection = async (
-    sessionId: string,
-    baselineOverride?: SessionRuntimeProfile,
-  ): Promise<void> => {
-    const [saved] = await getDbClient().drizzle
-      .select({ value: sessions.scheduledModelBaseline }).from(sessions)
-      .where(eq(sessions.id, sessionId)).limit(1);
-    const scheduledBaseline = parseScheduledModelBaseline(saved?.value);
-    if (scheduledBaseline) {
-      broadcastSessionPatched(sessionId, projectScheduledPreferences(sessionId, scheduledBaseline));
-      return;
-    }
-    let baseline = baselineOverride;
-    if (!baseline) {
-      const [row] = await getDbClient()
-        .drizzle.select({
-          agentKind: sessions.agentKind,
-          model: sessions.model,
-          providerId: sessions.providerId,
-          effort: sessions.effort,
-          fastMode: sessions.fastMode,
-        })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      if (!row) return;
-      baseline = {
-        agentKind: dbToMakerAgentKind(row.agentKind),
-        model: row.model,
-        providerId: row.providerId?.trim() || null,
-        effort: row.effort,
-        fastMode: (row.fastMode === 'ultrafast' ? 'ultrafast' : row.fastMode === true),
-      };
-    }
-    broadcastSessionPatched(
-      sessionId,
-      projectSessionRuntimeControl(sessionId, baseline) as Record<string, unknown>,
-    );
-  };
-  const projectScheduledPreferences = (sessionId: string, saved: ScheduledModelBaseline) => {
-    const baseline: ScheduledModelSelection = {
-      agentKind: saved.agentKind, model: saved.model, providerId: saved.providerId,
-      ...(saved.agentDeviceId !== undefined ? { agentDeviceId: saved.agentDeviceId } : {}),
-      effort: saved.effort, fastMode: saved.fastMode,
-    };
-    return {
-      ...projectSessionRuntimeControl(sessionId, baseline),
-      agentKind: makerToDbAgentKind(baseline.agentKind),
-      ...(baseline.agentDeviceId !== undefined ? { agentDeviceId: baseline.agentDeviceId } : {}),
-      model: baseline.model,
-      providerId: baseline.providerId,
-      effort: baseline.effort ?? '',
-      fastMode: baseline.fastMode,
-      runtimeBaseline: baseline,
-      runtimeEffective: baseline,
-      runtimePending: null,
-      runtimeBaselineRecoveryPending: !saved.pendingBotProfileVersion,
-    };
-  };
+  const { broadcastSessionRuntimeProjection, projectScheduledPreferences } =
+    createSessionRuntimeProjection({ broadcastSessionPatched });
   setSessionRuntimeProjector((session) => {
     const baseline = parseScheduledModelBaseline(session.scheduledModelBaseline);
     const projection = baseline ? projectScheduledPreferences(session.id, baseline) : projectSessionRuntimeControl(session.id, {
@@ -11937,24 +11881,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     recoverUnavailableBaseline: (sessionId, expectedBaseline) =>
       reconcileBotModelRoute.recoverUnavailableBaseline(sessionId, expectedBaseline),
   });
-  const updateScheduledPreference = async (
-    sessionId: string, patch: { effort?: ScheduledModelSelection['effort']; fastMode?: ScheduledModelSelection['fastMode'] } | null,
-    expectedBaseline?: string | null,
-  ) => {
-    const db = getDbClient().drizzle;
-    const [row] = await db.select({ baseline: sessions.scheduledModelBaseline }).from(sessions)
-      .where(eq(sessions.id, sessionId)).limit(1);
-    const baseline = parseScheduledModelBaseline(row?.baseline);
-    if (expectedBaseline !== undefined && row?.baseline !== expectedBaseline) return false;
-    if (!baseline) return true;
-    const updated = await db.update(sessions).set({
-      scheduledModelBaseline: patch ? JSON.stringify({ ...baseline, ...patch }) : null,
-    }).where(and(eq(sessions.id, sessionId), eq(sessions.scheduledModelBaseline, row.baseline!)))
-      .returning({ id: sessions.id });
-    if (!updated.length) return false;
-    await broadcastSessionRuntimeProjection(sessionId);
-    return true;
-  };
+  const updateScheduledPreference = createUpdateScheduledPreference({ broadcastSessionRuntimeProjection });
   const updateSavedScheduledAxis = async (
     sessionId: string,
     patch: { effort?: ScheduledModelSelection['effort']; fastMode?: ScheduledModelSelection['fastMode'] },

@@ -9,6 +9,7 @@ import { applyScheduledModelSelection, createScheduledModelScope, createSchedule
 import { readSshCodexModelList } from '../../remote-ssh/codex-model-list';
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import { projectSessionRuntimeControl } from '../sessionRuntimeControl';
+import { createSessionRuntimeProjection } from '../sessionRuntimeProjection';
 
 // Regression for #7177/#7428: an unavailable frozen selection used to reject
 // every input before dispatch, despite a usable saved companion configuration.
@@ -255,14 +256,15 @@ it.each(['same-harness', 'same-harness-staged', 'cross-harness', 'back-to-task-d
   }
 });
 it.each(['claude-code', 'codex', 'pi'] as const)('restores all projected axes after recovering a legacy baseline to %s', (agentKind) => {
-  const project = registeredFunction('projectScheduledPreferences', {
-    projectSessionRuntimeControl, makerToDbAgentKind: (kind: string) => kind,
-  });
+  // projectScheduledPreferences moved out of register.ts (sessionRuntimeProjection.ts): call it directly.
+  const { projectScheduledPreferences: project } = createSessionRuntimeProjection({ broadcastSessionPatched: () => {} });
   const baseline = { agentKind: 'codex' as const, model: 'old', providerId: 'removed', effort: null, fastMode: false };
-  const legacy = project('projection-test', baseline);
+  // A saved baseline always has its scope id (parseScheduledModelBaseline requires one); the projection ignores it.
+  const saved = { ...baseline, scopeId: 'projection-scope' };
+  const legacy = project('projection-test', saved);
   expect(legacy.runtimeBaselineRecoveryPending).toBe(true);
   expect(legacy.runtimeEffective).toEqual(baseline); // Does not assert a different/available source.
-  expect(project('projection-test', { ...baseline, pendingBotProfileVersion: 2 }).runtimeBaselineRecoveryPending).toBe(false);
+  expect(project('projection-test', { ...saved, pendingBotProfileVersion: 2 }).runtimeBaselineRecoveryPending).toBe(false);
   const recovered = { ...baseline, agentKind, model: 'saved-model', providerId: 'saved' };
   const cleared = { ...legacy, ...projectSessionRuntimeControl('projection-test', recovered) };
   expect(cleared.runtimeBaselineRecoveryPending).toBe(false); // Shallow-merged patches cannot retain the offer.
