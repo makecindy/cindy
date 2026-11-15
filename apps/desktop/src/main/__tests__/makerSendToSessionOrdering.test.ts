@@ -568,11 +568,7 @@ describe('sendToSession ordering', () => {
   });
 
   it('serializes SET_MODEL behind the send-time agent switch for the same session', () => {
-    const setModelBlock = extractBetween(
-      source,
-      'const handleSetModel = async (',
-      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
-    );
+    const setModelBlock = setModelSource();
     const directSendSwitchBlock = extractBetween(
       source,
       'pendingAgentSwitchApplyHolder = async (',
@@ -683,11 +679,7 @@ describe('sendToSession ordering', () => {
   });
 
   it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {
-    const setModelBlock = extractBetween(
-      source,
-      'const handleSetModel = async (',
-      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
-    );
+    const setModelBlock = setModelSource();
     expect(setModelBlock).toContain('normalizeDeviceLinkSetModelWireArgs(');
     expect(setModelBlock).toContain('isDeviceLinkInvoke(),');
     expect(setModelBlock).toContain(
@@ -1233,6 +1225,18 @@ function extractWorkerTerminalHandlerSource(): string {
     resolve(__dirname, '..', 'maker-ipc', 'sessionEventTerminal.ts'),
     'utf8',
   ).replaceAll('deps.', '');
+}
+
+// handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts; register.ts keeps the binding
+// (createHandleSetModel) and what follows it. These blocks read the moved function followed by that
+// register.ts tail, in their former order.
+const runtimeSelectionApplySource = readFileSync(
+  resolve(__dirname, '..', 'maker-ipc', 'sessionRuntimeSelectionApply.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+function setModelSource(): string {
+  return extractBetween(runtimeSelectionApplySource, 'const handleSetModel = async (', '  return handleSetModel;')
+    + extractBetween(source, 'const handleSetModel = createHandleSetModel(', 'ipcMain.handle(MAKER_INVOKE.SET_EFFORT');
 }
 
 function extractBetween(

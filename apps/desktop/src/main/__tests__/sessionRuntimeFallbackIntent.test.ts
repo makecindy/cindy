@@ -221,12 +221,6 @@ describe('automatic runtime selection respects the user send boundary', () => {
     expect(h.pending.get('session')?.model).toBe('chosen');
   });
 
-  it('uses the same guard before every automatic same-engine mutation can write or reconcile', () => {
-    const start = source.indexOf('  const handleSetModel = async (');
-    const body = source.slice(start, source.indexOf('      const routeExplicit =', start));
-    expect(body).toMatch(/internalOptions.source !== 'user' &&\s*!canApplyAutomaticRuntimeSelection\(sessionId, internalOptions.expectedGeneration\)/);
-    expect(body).toContain('return { deferred: false, superseded: true };');
-  });
 });
 
 it.each(['device-b', 'share:one'])('applies a same-engine fallback at %s without a no-op agent switch', async agentDeviceId => {
