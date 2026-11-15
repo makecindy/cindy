@@ -69,7 +69,7 @@ test('disconnect, plugin stop and owner change cancel only their own pending con
 test('Node provider assembly uses installation authority without supplementary confirmation', async () => {
   const database = { drizzle: {} };
   setCurrentDbClient(database, 'owner');
-  const ghost = { enabled: true, dir: '/fixture/demo', approvedHostToolGroups: [],
+  const ghost = { enabled: true, dir: '/fixture/demo',
     approval: { state: 'approved', revision: 'r1' },
     manifest: { schemaVersion: 3, id: 'demo', name: 'Demo', version: '1.0.0', kind: 'chip', entry: 'main.js',
       agent: { hostTools: ['terminal'] } } };
@@ -86,10 +86,13 @@ test('Node provider assembly uses installation authority without supplementary c
   const body = result => JSON.parse(result.content.find(item => item.type === 'text').text);
   try {
     assert.deepEqual(body(await call()).jobs, []);
+    ghost.approvedHostToolGroups = [];
+    assert.deepEqual(body(await call()).jobs, []);
     ghost.enabled = false;
     assert.equal(body(await call()).errorCode, 'PERMISSION_DENIED');
     ghost.enabled = true;
     ghost.manifest.agent.hostTools = [];
+    ghost.approvedHostToolGroups = ['terminal'];
     assert.equal(body(await call()).errorCode, 'PERMISSION_DENIED');
     ghost.manifest.agent.hostTools = ['terminal'];
     ghost.approval = { state: 'legacy-unapproved' };
@@ -163,7 +166,7 @@ test('Node reports an unavailable scheduler as unsupported by the execution envi
 });
 
 // #9825 A/B, unit: use the production Node gateway and discovery executor, not
-// forwarded caller metadata. Computer cannot attest approvals across processes;
+// forwarded caller metadata. The Node plugin connection is not assembled;
 // no Node observation runtime may be constructed, while Desktop retains its path.
 test('Node plugins cannot create computer snapshots or execute, while Desktop plugins retain the provider', async () => {
   const database = { drizzle: {} };
@@ -186,12 +189,16 @@ test('Node plugins cannot create computer snapshots or execute, while Desktop pl
   const request = { type: 'host-tool-request', server: 'cindy_computer', tool: 'list_windows', args: {} };
   const body = value => JSON.parse(value.content.find(item => item.type === 'text').text);
   try {
-    for (let i = 0; i < 2; i++) assert.equal(body(await service.request('computer', request, () => true)).errorCode, 'UNSUPPORTED_CAPABILITY');
+    for (let i = 0; i < 2; i++) {
+      const result = body(await service.request('computer', request, () => true));
+      assert.equal(result.errorCode, 'UNSUPPORTED_CAPABILITY');
+      assert.match(result.message, /not connected/i);
+    }
     assert.equal(runtimes, 0); assert.equal(prompts, 0); assert.equal(executions, 0);
     const discovery = body(await service.request('computer', { ...request, server: 'cindy_helper', tool: 'host_services' }, () => true));
     assert.equal(discovery.ok, true, JSON.stringify(discovery));
     assert.deepEqual(discovery.services.find(s => s.group === 'computer'), {
-      group: 'computer', server: 'cindy_computer', tools: [], available: false, reason: 'unsupported', declared: true, approved: true,
+      group: 'computer', server: 'cindy_computer', tools: [], available: false, reason: 'unsupported', declared: true,
     });
     assert.equal(service.services.list({ agentKind: 'codex', workingDir: '' }).find(s => s.group === 'computer').available, true);
     const agent = provider.toHostTools({ agentKind: 'codex', workingDir: '', sessionId: 'task' });

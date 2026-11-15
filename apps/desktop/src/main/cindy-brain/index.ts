@@ -618,7 +618,7 @@ import { ghostTokenBrokerInstallError } from './ghostTokenBrokerInstallError.js'
 import { ghostBrokerRedirectPortInstallError } from './ghostBrokerRedirectPort.js';
 import { ConnectionTokenProvider, type IssuedConnectionToken } from './connectionTokenProvider.js';
 import { GhostFsSlot } from './fsSlot.js';
-import { HostStorageService, storageShareMessage } from './storageService.js';
+import { HostStorageService } from './storageService.js';
 import { createHostStorageProviders } from './storageProviders.js';
 import { GhostLibrarySlot } from './librarySlot.js';
 import { LibraryBindingStore, assertLibraryMetaOwner, relocateLibraryMetaOwner, validateLibraryCandidateLocation } from './libraryBinding.js';
@@ -6951,14 +6951,6 @@ export function getGhostStorageService(): HostStorageService {
       media: createPluginFileAccess({ libraryPath: (id, relative) => getGhostLibrarySlot().resolvePanelFilePath(id, relative),
         libraryMime: mediaTypeForLibraryPath, openHandoff: (id, ref) => getGhostHandoffStore().openForPage(id, ref) }),
     }),
-    confirmShare: async (facts, current) => {
-      const parent = getDeepLinkMainWindow();
-      if (!current() || !parent || !isTrustedAppRendererWindow(parent)) return false;
-      const answer = await dialog.showMessageBox(parent, { type: 'question', title: t('settings.ghosts.perm.storageShareTitle'),
-        message: storageShareMessage(t, facts), detail: `${facts.sourceId}\n→ ${facts.targetId}`,
-        buttons: [t('settings.ghosts.connections.confirmAllow'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true });
-      return current() && answer.response === 0;
-    },
   });
   return storageServiceSingleton;
 }
