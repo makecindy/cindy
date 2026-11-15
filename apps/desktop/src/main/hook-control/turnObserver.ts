@@ -263,7 +263,7 @@ export function observeHookTurn(
           pendingSettleUnsub = onSilentStopSettled(session.id, (_sid, reason) => {
             pendingSettleUnsub?.();
             pendingSettleUnsub = undefined;
-            if (reason === 'exhausted') {
+            if (reason === 'exhausted' || reason === 'send-failed') {
               failTurn(new Error('silent-stop auto-resume exhausted'));
             } else {
               finish();

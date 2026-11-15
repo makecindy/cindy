@@ -28,9 +28,11 @@ export const SILENT_STOP_RESUME_MIN_INTERVAL_MS = 5_000;
 /** 自动补发的续跑消息正文(固定常量;作为普通 user 消息 append,不扰动缓存前缀)。 */
 export const SILENT_STOP_RESUME_PROMPT = '继续';
 
+export type SilentStopFailureCause = 'budget' | 'rate-limit' | 'session-breaker' | 'dispatch-failed';
+
 export type SilentStopDecision =
   | { action: 'resume' }
-  | { action: 'exhausted' }
+  | { action: 'exhausted'; cause: Exclude<SilentStopFailureCause, 'dispatch-failed'> }
   | { action: 'skip'; why: 'disabled' | 'superseded' | 'pending' };
 
 interface GuardLogger {
@@ -149,21 +151,21 @@ export class SilentStopAutoResumeGuard {
           resumeCount: s.resumeCount,
         });
       }
-      return { action: 'exhausted' };
+      return { action: 'exhausted', cause: 'session-breaker' };
     }
     if (s.lastResumeAt > 0 && now - s.lastResumeAt < SILENT_STOP_RESUME_MIN_INTERVAL_MS) {
       this.deps.log.warn('silent-stop resume burst-guarded (too soon after previous resume)', {
         sessionId,
         sinceLastResumeMs: now - s.lastResumeAt,
       });
-      return { action: 'exhausted' };
+      return { action: 'exhausted', cause: 'rate-limit' };
     }
     if (s.budgetLeft <= 0) {
       this.deps.log.debug('silent-stop resume budget exhausted — waiting for user', {
         sessionId,
         resumeCount: s.resumeCount,
       });
-      return { action: 'exhausted' };
+      return { action: 'exhausted', cause: 'budget' };
     }
     s.budgetLeft -= 1;
     s.resumeCount += 1;

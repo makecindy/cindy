@@ -126,6 +126,8 @@ import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../../shared/interruptedTurn.
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { isUnattendedTurn } from '../../mcp-integrations/unattendedTurn';
 import { noteUnattendedPlanReviewDeclined } from '../../mcp-integrations/unattendedTurn';
+import { createSchedulerQueueBridge } from '../../maker-ipc/schedulerQueueBridge.js';
+import { runSchedulerQueuedPreparation, type SchedulerQueuedPreparation } from '../../maker-ipc/schedulerQueuedPreparation.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SessionStatus = Parameters<Parameters<Session['onStatusChange']>[0]>[0];
@@ -524,8 +526,10 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
   // Review P1 / unit: the real IPC Continue input starts with planMode=false.
   // Connect that handler and coordinator to the real runner so the accepted
   // permission gate, rather than a mocked enqueue, decides vendor dispatch.
-  it.each([false, true])('continues a saved plan-mode task through the input handler and real runner (busy=%s)', async (busy) => {
+  it.each([false, true].flatMap(busy => (['claude-code', 'pi'] as const).map(agentKind => ({ busy, agentKind }))))(
+    'continues a saved plan-mode task through the input handler and real runner (busy=$busy, engine=$agentKind)', async ({ busy, agentKind }) => {
     const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind });
     const planState = { enabled: true, generation: 0 };
     Object.defineProperty(h.session, 'stablePlanModeState', { value: planState });
     mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: true });
@@ -533,11 +537,12 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const { runner } = createRunnerHarness(h.session, queue.deps);
     const ctx = { ...createFireContext(), resumeSessionId: SESSION_ID };
     const vendorPlans: boolean[] = [];
+    const vendorMessages: string[] = [];
     let input!: ReturnType<typeof createInputEnqueueHarness>;
     let completion: Promise<{ runId: string }> | undefined;
     const coordinator = new AgentInputCoordinator({
-      sendToAgent: async (_sid, _message, createOpts, sendOpts) => {
-        await input.preparations.get(sendOpts.persistUserMessage!.clientId)?.onPreparing?.();
+      sendToAgent: async (_sid, message, createOpts, sendOpts) => {
+        const preparedMessage = await runSchedulerQueuedPreparation(sendOpts.persistUserMessage!.clientId, input.preparations, () => {}, message);
         planState.enabled = createOpts.planMode === true;
         await sendOpts.persistUserMessage?.onPersisted?.();
         if (vi.mocked(h.session.abort).mock.calls.length > 0) {
@@ -545,6 +550,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
             reason: 'cancelled-before-dispatch', context: 'permission check', message: 'dispatch cancelled' };
         }
         vendorPlans.push(createOpts.planMode === true);
+        vendorMessages.push(String(typeof preparedMessage === 'string' ? preparedMessage : preparedMessage.content));
         return { kind: 'session-dispatch', source: 'test', dispatched: true };
       },
       onAcceptedQueuedMessage: async (_sid, item) => { await input.acceptedCallbacks.get(item.clientId)?.(); },
@@ -552,7 +558,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       abortSession: async () => {},
       isTurnRunning: () => false,
       hasPendingInteraction: () => false,
-      getAgentKind: () => 'claude-code',
+      getAgentKind: () => h.session.agentKind,
       getSdkSessionId: async () => 'sdk-1',
       emitProjection: () => {},
     });
@@ -568,7 +574,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       clientId: 'continue-plan-task', text: CONTINUE_AFTER_APP_EXIT_PROMPT,
       persistedContent: CONTINUE_AFTER_APP_EXIT_PROMPT, model: 'claude-opus-4-6',
       effort: '', permissionMode: 'ask', workingDir: '/tmp/bound',
-      createOpts: { agentKind: 'claude-code', model: 'claude-opus-4-6', workingDir: '/tmp/bound',
+      createOpts: { agentKind, model: 'claude-opus-4-6', workingDir: '/tmp/bound',
         permissionMode: 'ask', planMode: false, userPrompt: '', makerMemoryEnabled: true, displayReasoning: 'summarized' },
       chatMessage: { clientId: 'continue-plan-task', role: 'user', content: CONTINUE_AFTER_APP_EXIT_PROMPT,
         createdAt: '2026-10-30T00:00:00.000Z' },
@@ -576,9 +582,13 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     try {
       await input.enqueue({}, SESSION_ID, item);
       await vi.waitFor(() => expect(vendorPlans).toEqual([true]));
+      expect(vendorMessages).toHaveLength(1);
+      expect(vendorMessages[0]).toContain(CONTINUE_AFTER_APP_EXIT_PROMPT);
+      expect(vendorMessages[0]).not.toContain(heartbeatSchedule().prompt);
+      expect(vendorMessages[0]!.includes('completed: true')).toBe(agentKind === 'pi');
       expect(ctx.onTurnActive).toHaveBeenCalledWith(SESSION_ID);
       expect(h.session.abort).not.toHaveBeenCalled();
-      h.emit({ type: 'done', data: {}, source: 'claude-code' });
+      h.emit({ type: 'done', data: {}, source: agentKind });
       await completion;
     } finally {
       ctx.abortController.abort();
@@ -737,6 +747,135 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
     expect(opts.prepareModelPreferences).toHaveBeenCalledTimes(1);
   });
+
+  // #10479 review P1 / unit: bridge and coordinator copy queue text before
+  // owner-route preparation. Observe the real outbound message, not callback
+  // return values; existing route-only tests never asserted dispatched guidance.
+  it.each((['claude-code', 'pi'] as const).flatMap(agentKind =>
+    [
+      { explicit: false, retry: false, changeEngine: false },
+      { explicit: true, retry: false, changeEngine: false },
+      { explicit: false, retry: true, changeEngine: false },
+      { explicit: false, retry: true, changeEngine: true },
+    ].map(options => ({ agentKind, ...options }))))(
+    'selects queued completion guidance at dispatch (engine=$agentKind, override=$explicit, retry=$retry, changeEngine=$changeEngine)',
+    async ({ agentKind, explicit, retry, changeEngine }) => {
+      const h = createSessionHarness(async () => ({ accepted: true }));
+      const previousAgent = explicit ? agentKind : agentKind === 'pi' ? 'claude-code' : 'pi';
+      Object.assign(h.session, { agentKind: previousAgent, model: 'owner-model' });
+      let busy = true;
+      const preparations = new Map<string, SchedulerQueuedPreparation>();
+      const accepted = new Map<string, () => void | Promise<void>>();
+      const persisted: string[] = [];
+      const wireMessages: unknown[] = [];
+      const wireContents: string[] = [];
+      const coordinator = new AgentInputCoordinator({
+        sendToAgent: async (_sid, message, _createOpts, sendOpts) => {
+          const preparedMessage = await runSchedulerQueuedPreparation(sendOpts.persistUserMessage?.clientId, preparations, () => {}, message);
+          const content = typeof preparedMessage === 'string' ? preparedMessage : preparedMessage.content;
+          if (typeof content !== 'string') throw new Error('queued text fixture received non-text content');
+          wireMessages.push(message);
+          wireContents.push(content);
+          if (retry && wireMessages.length === 1) throw new Error('executor failed before persistence');
+          if (sendOpts.persistUserMessage) persisted.push(sendOpts.persistUserMessage.content);
+          await sendOpts.persistUserMessage?.onPersisted?.();
+          await h.session.send(content);
+          return { kind: 'session-dispatch', source: 'test', dispatched: true };
+        },
+        onAcceptedQueuedMessage: async (_sid, item) => {
+          preparations.delete(item.clientId);
+          await accepted.get(item.clientId)?.();
+        },
+        steerToAgent: async () => {}, abortSession: async () => {},
+        isTurnRunning: () => busy, hasPendingInteraction: () => false,
+        getAgentKind: () => h.session.agentKind, getSdkSessionId: async () => 'sdk-1',
+        emitProjection: () => {},
+      });
+      const queue = createSchedulerQueueBridge({
+        coordinator, isSessionBusy: () => busy,
+        getSessionMeta: async () => ({ agentKind: h.session.agentKind }),
+        getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+        createId: () => 'queued-guidance',
+        discardWatchers: new Map(), preparations,
+        enqueue: async req => {
+          accepted.set(req.clientId, () => req.onAccepted({ permissionMode: 'ask', planMode: false }));
+          coordinator.enqueue(req.targetSessionId, {
+            clientId: req.clientId, text: req.message, persistedContent: req.persistedContent,
+            origin: req.origin, model: 'owner-model', effort: '', permissionMode: 'ask', workingDir: '/tmp/bound',
+            createOpts: { agentKind: h.session.agentKind, model: 'owner-model', workingDir: '/tmp/bound',
+              permissionMode: 'ask', planMode: false, userPrompt: '', makerMemoryEnabled: true, displayReasoning: 'summarized' },
+            chatMessage: { clientId: req.clientId, role: 'user', content: req.persistedContent,
+              createdAt: '2026-11-14T00:00:00.000Z' },
+          });
+        },
+      });
+      const prepareModelPreferences = vi.fn(async (_id: string, override: boolean) => {
+        expect(override).toBe(explicit);
+        if (!override) Object.assign(h.session, { agentKind });
+      });
+      const { runner } = createRunnerHarness(h.session, queue, {
+        metaModel: 'owner-model', prepareModelPreferences,
+      });
+      const ctx = createFireContext();
+      const schedule = heartbeatSchedule(explicit ? { model: 'owner-model' } : {});
+      const fire = runner.fire(schedule, ctx);
+      void fire.catch(() => {});
+      try {
+        await vi.waitFor(() => expect(coordinator.getProjection(SESSION_ID).pendingQueue).toHaveLength(1));
+        const queuedText = coordinator.getProjection(SESSION_ID).pendingQueue[0]!.text;
+        expect(queuedText).not.toContain('completed: true');
+        expect(persisted).toEqual([]);
+        expect(coordinator.getProjection(SESSION_ID).pendingQueue[0]!.persistedContent).toBe(schedule.prompt);
+        expect(prepareModelPreferences).not.toHaveBeenCalled();
+        busy = false;
+        coordinator.wakeSession(SESSION_ID, 'test-dispatch');
+        if (retry) {
+          await vi.waitFor(() => expect(coordinator.getProjection(SESSION_ID).error).toBeTruthy());
+          expect(coordinator.getProjection(SESSION_ID).pendingQueue[0]!.text).toBe(queuedText);
+          expect(persisted).toEqual([]);
+          expect(preparations.size).toBe(1);
+          expect(wireContents[0]!.match(/completed: true/g)?.length ?? 0).toBe(agentKind === 'pi' ? 1 : 0);
+          if (changeEngine) Object.assign(h.session, { agentKind: agentKind === 'pi' ? 'claude-code' : 'pi' });
+          await coordinator.retryLastError(SESSION_ID);
+        }
+        if (changeEngine && agentKind === 'claude-code') {
+          // Guidance follows the final Pi engine, but cached Claude preparation
+          // must not bypass Pi's existing native-route synchronization guard.
+          await expect(fire).rejects.toThrow('Scheduled Pi route changed after preparation');
+          expect(wireMessages).toHaveLength(2);
+          expect(wireMessages[0]).not.toBe(wireMessages[1]);
+          expect(wireContents[1]!.match(/completed: true/g)).toHaveLength(1);
+          expect(h.send).not.toHaveBeenCalled();
+          expect(persisted).toEqual([schedule.prompt]);
+          expect(prepareModelPreferences).toHaveBeenCalledOnce();
+          expect(preparations.size).toBe(0);
+          return;
+        }
+        await vi.waitFor(() => expect(h.send).toHaveBeenCalledOnce());
+        const dispatched = h.send.mock.calls[0]![0];
+        const finalAgentKind = changeEngine ? agentKind === 'pi' ? 'claude-code' : 'pi' : agentKind;
+        expect(h.session.agentKind).toBe(finalAgentKind);
+        expect(dispatched).toContain(schedule.prompt);
+        expect(String(dispatched).match(/completed: true/g)?.length ?? 0).toBe(finalAgentKind === 'pi' ? 1 : 0);
+        expect(prepareModelPreferences).toHaveBeenCalledOnce();
+        expect(preparations.size).toBe(0);
+        if (retry) {
+          expect(wireMessages).toHaveLength(2);
+          expect(wireMessages[0]).not.toBe(wireMessages[1]);
+          expect(wireContents[1]).toBe(dispatched);
+        }
+        expect(queuedText).not.toContain('completed: true');
+        expect(persisted).toEqual([schedule.prompt]);
+        h.emit({ type: 'done', source: finalAgentKind, data: { status: 'completed', result: '' } });
+        coordinator.onTurnEvent(SESSION_ID, 'done');
+        await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
+      } finally {
+        ctx.abortController.abort();
+        coordinator.clearSession(SESSION_ID);
+        await fire.catch(() => {});
+      }
+    },
+  );
 
   it('dispatches a fresh implicit provider route using the resolved fire-local schedule', async () => {
     const h = createSessionHarness(async () => ({ accepted: true }));
