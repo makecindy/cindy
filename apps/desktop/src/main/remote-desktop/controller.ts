@@ -50,6 +50,12 @@ export type DesktopStopReason =
   | 'display-failed'
   | 'input-failed'
   | 'screen-ended';
+/** Ends caused by losing contact, after which a privacy-screen cover still allows resume. */
+const RESUMABLE_AFTER_COVER: ReadonlySet<DesktopStopReason> = new Set([
+  'heartbeat-expired',
+  'peer-offline',
+  'signaling-lost',
+]);
 
 /** The one window a 代输入 live view shows; resolved by the host, never by a viewer. */
 export interface DesktopHandoffWindow {
@@ -193,8 +199,11 @@ export interface DesktopControllerDeps {
    * capture confirms a live stream follows it (e.g. not browser capture).
    */
   resumeVideo?(display: RemoteDesktopDisplay): Promise<boolean>;
-  /** Cover an unattended desktop; the host falls back to a lock if unavailable. */
-  protectOnExit?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
+  /**
+   * Cover an unattended desktop; the host falls back to a lock if unavailable.
+   * Resolves 'covered' only when the privacy screen, not a lock, now protects it.
+   */
+  protectOnExit?(isCurrent: () => boolean, signal: AbortSignal): Promise<'covered' | void>;
   lockScreen?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
   /**
    * A local privacy exit asked for a lock that was not confirmed: keep the desktop
@@ -209,6 +218,11 @@ export interface DesktopControllerDeps {
    * an Agent is working), which keeps the lease while the work lasts.
    */
   hostIdle?(): { awayAfterMs: number; keepWhileWorking: boolean } | null;
+  /**
+   * The persistent privacy screen still covers this computer and it has not locked.
+   * Lets a viewer that lost contact resume (docs/product-rules/privacy-screen.md).
+   */
+  exitCoverUp?(): boolean;
   /** How a protected end leaves this computer, for the viewer's wording; undefined without a privacy screen. */
   exitProtection?(): 'privacy-screen' | 'lock' | undefined;
   offer(
@@ -357,6 +371,8 @@ export class RemoteDesktopController {
   private inputStarting = false;
   private inputRecoveryUsed = false;
   private userStopped = new Map<string, string>();
+  /** Leases in userStopped that lost contact and were left under the privacy screen only. */
+  private coveredExits = new Map<string, string>();
   private lastEnded: { peer: string; lease: string } | null = null;
   constructor(private readonly deps: DesktopControllerDeps) {}
   get state(): { peer: string; controlling: boolean } | null {
@@ -538,6 +554,7 @@ export class RemoteDesktopController {
       // unattended and automatically unlock the computer again.
       if (active.idleTimeoutMinutes || active.hostIdle)
         this.userStopped.set(active.peer, active.lease);
+      let covered = false;
       this.locking = true;
       const cancellation = new AbortController();
       this.lockAbort = cancellation;
@@ -557,11 +574,23 @@ export class RemoteDesktopController {
             cancellation.signal,
           ),
         )
+        .then((outcome) => {
+          covered = outcome === 'covered';
+        })
         .finally(async () => {
           this.stopping = null;
           this.lockAbort = null;
           this.locking = false;
           if (this.active === active) await this.stop(active.peer, false, reason);
+          // Lost contact, and only the privacy screen was left: nothing is unlocked or
+          // shown, so the viewer may resume while that cover stands (resumeOverCover).
+          // Recorded after the lease is gone, so a resume never revives the ending one.
+          if (
+            covered &&
+            RESUMABLE_AFTER_COVER.has(reason) &&
+            this.userStopped.get(active.peer) === active.lease
+          )
+            this.coveredExits.set(active.peer, active.lease);
         });
       this.stopping = pending;
       // Timer/disconnect callers have no reply channel; explicit callers still
@@ -589,6 +618,19 @@ export class RemoteDesktopController {
     this.viewerGeometryManaged = false;
     this.deps.changed();
     return restoring;
+  }
+  /**
+   * The viewer's last lease lost contact under the privacy screen and that cover still
+   * stands. Once someone here touched it and it locked, automatic recovery is refused
+   * again: a resumed viewer could otherwise unlock it with a saved password.
+   */
+  private resumeOverCover(peer: string): boolean {
+    const stopped = this.userStopped.get(peer);
+    return (
+      stopped !== undefined &&
+      this.coveredExits.get(peer) === stopped &&
+      this.deps.exitCoverUp?.() === true
+    );
   }
   /** Someone at this computer ended privacy: lock, and never uncover an unlocked desktop. */
   private lockOrCover(): DesktopControllerDeps['lockScreen'] {
@@ -1009,7 +1051,7 @@ export class RemoteDesktopController {
     request: Extract<ReturnType<typeof parseRemoteDesktopRequest>, { op: 'start' }>,
   ): Promise<RemoteDesktopLease> {
     const authenticationSession = this.authenticationSession(peer);
-    if (request.resume && this.userStopped.has(peer))
+    if (request.resume && this.userStopped.has(peer) && !this.resumeOverCover(peer))
       throw new Error(this.idleStopped.has(peer) ? 'DESKTOP_IDLE_TIMEOUT' : 'DESKTOP_STOPPED');
     if (request.handoff !== undefined && !this.deps.handoffWindow)
       throw new Error('DESKTOP_HANDOFF_UNAVAILABLE');
@@ -1069,7 +1111,7 @@ export class RemoteDesktopController {
         throw new Error('DESKTOP_DISABLED');
       if (caps.permissions && !desktopPermissionReady(caps.permissions.screenRecording))
         throw new Error('DESKTOP_SCREEN_PERMISSION_REQUIRED');
-      if (request.resume && this.userStopped.has(peer))
+      if (request.resume && this.userStopped.has(peer) && !this.resumeOverCover(peer))
         throw new Error(this.idleStopped.has(peer) ? 'DESKTOP_IDLE_TIMEOUT' : 'DESKTOP_STOPPED');
       if (request.takeover && this.active) {
         this.userStopped.set(this.active.peer, this.active.lease);
@@ -1092,9 +1134,10 @@ export class RemoteDesktopController {
         display = restored.displays.find((d) => d.id === displayId);
         if (!display) throw new Error('DESKTOP_DISPLAY_MISSING');
       }
-      if (!request.resume) {
+      if (!request.resume || this.resumeOverCover(peer)) {
         this.userStopped.delete(peer);
         this.idleStopped.delete(peer);
+        this.coveredExits.delete(peer);
       }
       const lease: RemoteDesktopLease = handoff
         ? {
@@ -1148,7 +1191,7 @@ export class RemoteDesktopController {
     const target = request.screen!;
     const authenticationSession = this.authenticationSession(peer);
     if (!this.deps.liveScreens) throw new Error('DESKTOP_SCREEN_UNAVAILABLE');
-    if (request.resume && this.userStopped.has(peer)) throw new Error('DESKTOP_STOPPED');
+    if (request.resume && this.userStopped.has(peer) && !this.resumeOverCover(peer)) throw new Error('DESKTOP_STOPPED');
     const resumesActive =
       request.resume &&
       this.active?.peer === peer &&
@@ -1189,11 +1232,14 @@ export class RemoteDesktopController {
         this.deps.liveScreens.close();
         throw new Error('DESKTOP_LEASE_EXPIRED');
       }
-      if (request.resume && this.userStopped.has(peer)) {
+      if (request.resume && this.userStopped.has(peer) && !this.resumeOverCover(peer)) {
         this.deps.liveScreens.close();
         throw new Error('DESKTOP_STOPPED');
       }
-      if (!request.resume) this.userStopped.delete(peer);
+      if (!request.resume || this.resumeOverCover(peer)) {
+        this.userStopped.delete(peer);
+        this.coveredExits.delete(peer);
+      }
       this.liveShape = opened.shape;
       this.watchLiveShape = opened.watchShape;
       const lease: RemoteDesktopLease = {

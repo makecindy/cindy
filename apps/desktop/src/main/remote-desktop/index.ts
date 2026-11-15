@@ -84,6 +84,7 @@ import {
   coverRemoteDesktopExit,
   displayNeededForWork,
   hostAwayAfterMs,
+  isAwayCoverUp,
   privacyScreenAvailable,
   privacyScreenEnabled,
   setLinuxPrivacyAvailable,
@@ -1175,6 +1176,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
             awayAfterMs: hostAwayAfterMs() ?? 10 * 60_000,
             keepWhileWorking: privacyScreenEnabled() && displayNeededForWork(),
           }),
+        exitCoverUp: () => isAwayCoverUp() || linuxPrivacy.inputShielded,
         exitProtection: (): 'privacy-screen' | 'lock' | undefined =>
           !privacyScreenAvailable() ? undefined : privacyScreenEnabled() ? 'privacy-screen' : 'lock',
       }
@@ -1189,6 +1191,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
             if (!privacyScreenEnabled()) return await lockDesktopScreen(isCurrent, signal);
             if (process.platform === 'linux') await linuxPrivacy.coverOnExit(isCurrent);
             else await coverRemoteDesktopExit();
+            return 'covered';
           } catch (error) {
             log.warn('Exit privacy cover unavailable; falling back to screen lock', error);
             await lockDesktopScreen(isCurrent, signal);

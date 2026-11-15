@@ -2167,6 +2167,27 @@ describe('host-enforced idle lock', () => {
     expect(h.deps.lockScreen).toHaveBeenCalledOnce();
     await expect(h.controller.request('phone', { op: 'start', displayId: '1', resume: true })).rejects.toThrow('DESKTOP_STOPPED');
   });
+  // User decision 2026-11-15: a heartbeat loss covered by the privacy screen (nothing
+  // unlocked or shown) lets the phone resume on its own. A fallback lock, or a cover that
+  // someone here has since turned into a lock, still forbids it (saved-password unlock).
+  // Minimal failing input: protectOnExit resolves 'covered' and resume is still refused.
+  it.each([
+    ['covered', true, 'resolves'],
+    ['covered', false, 'DESKTOP_STOPPED'],
+    [undefined, true, 'DESKTOP_STOPPED'],
+  ] as const)('after a lost heartbeat protected as %s (cover up: %s), resume %s', async (outcome, coverUp, expected) => {
+    const h = await setup();
+    h.deps.protectOnExit = vi.fn(async () => outcome);
+    h.deps.exitCoverUp = () => coverUp;
+    h.advance(12000);
+    h.controller.tick();
+    await h.controller.stop();
+    expect(h.deps.protectOnExit).toHaveBeenCalledOnce();
+    expect(h.deps.lockScreen).not.toHaveBeenCalled();
+    const resumed = h.controller.request('phone', { op: 'start', displayId: '1', resume: true });
+    if (expected === 'resolves') await expect(resumed).resolves.toHaveProperty('lease');
+    else await expect(resumed).rejects.toThrow(expected);
+  });
   it.each([0, undefined])('keeps disabled/legacy policy %s unchanged', async (minutes) => {
     const h = harness();
     h.deps.lockScreen = vi.fn(async () => {});
