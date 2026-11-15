@@ -1,6 +1,6 @@
-import { usePreventRemove } from 'expo-router/react-navigation';
+import { type NavigationAction, usePreventRemove } from 'expo-router/react-navigation';
 import { useNavigation } from 'expo-router';
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert } from 'react-native';
 
@@ -17,12 +17,16 @@ export function useConfirmLeaveWhileUploading(active: boolean): () => Promise<bo
   const navigation = useNavigation();
   const discardedRef = useRef(false);
   const pendingRef = useRef<Promise<boolean> | null>(null);
-  usePreventRemove(active, ({ data }) => {
+  const [leaveAction, setLeaveAction] = useState<NavigationAction | null>(null);
+  usePreventRemove(active && !leaveAction, ({ data }) => {
     // 弹窗已开时再次触发离开(再滑一次)不叠第二个弹窗。
-    if (pendingRef.current) return;
+    if (pendingRef.current || discardedRef.current) return;
     let settle!: (discard: boolean) => void;
     pendingRef.current = new Promise<boolean>((resolve) => { settle = resolve; });
+    let decided = false;
     const decide = (discard: boolean) => {
+      if (decided) return;
+      decided = true;
       pendingRef.current = null;
       settle(discard);
     };
@@ -37,7 +41,7 @@ export function useConfirmLeaveWhileUploading(active: boolean): () => Promise<bo
           onPress: () => {
             discardedRef.current = true;
             decide(true);
-            navigation.dispatch(data.action);
+            setLeaveAction(data.action);
           },
         },
       ],
@@ -45,5 +49,9 @@ export function useConfirmLeaveWhileUploading(active: boolean): () => Promise<bo
       { cancelable: true, onDismiss: () => decide(false) },
     );
   });
+  // 先提交解除拦截的状态，再重放原返回动作；上传未结束也必须能退出。
+  useEffect(() => {
+    if (leaveAction) navigation.dispatch(leaveAction);
+  }, [leaveAction, navigation]);
   return useCallback(async () => (await pendingRef.current) ?? discardedRef.current, []);
 }

@@ -83,7 +83,6 @@ import {
   finalizePlainPreview,
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
-import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
 import * as imageCacheStore from '../../imageCacheStore.desktop';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
 import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
@@ -1330,7 +1329,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  void recomputePrRefsForSession(sessionId).catch(() => undefined);
+
   if (isOwnerScopeCurrent(ownerScope)) {
     broadcastSessionPatched(
       sessionId,
@@ -2155,8 +2154,6 @@ export async function updateSessionInDb(
       p.workingDir !== undefined,
     );
     moveGuard?.assertCurrent();
-    // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
-    // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
     if (p.clearedAt !== undefined) {
       noteSessionClearBoundary(sid, p.clearedAt as string | null);
       // sidebar-card-mode(codex review):summary 是基于 clear 前内容生成的,clear 后
@@ -2165,7 +2162,6 @@ export async function updateSessionInDb(
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
       }
-      void recomputePrRefsForSession(sid).catch(() => undefined);
     }
     const row = await selectSessionWithCount(db, sid);
     moveGuard?.assertCurrent();

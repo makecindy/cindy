@@ -10,7 +10,7 @@ function fixture() {
   let generation = 0;
   const ghost = (id: string): InstalledGhost => ({ enabled: true, dir: `/fixture/${id}`,
     approval: { state: 'approved', revision: id }, namespace: null, namespaceState: 'confirmed',
-    approvedHostToolGroups: ['storage'], manifest: { schemaVersion: 3, id, name: `Plugin ${id}`,
+    manifest: { schemaVersion: 3, id, name: `Plugin ${id}`,
       version: '1.0.0', kind: 'chip', entry: 'main.js', agent: { hostTools: ['storage'] } } });
   const source = ghost('source'), target = ghost('target');
   const copies = new Map<string, unknown[]>();
@@ -54,12 +54,12 @@ describe('shared Host storage', () => {
     expect(f.copies.has('root-0:source')).toBe(false);
   });
 
-  it.each(['deny', 'target-stop', 'target-update', 'owner-change', 'other-organization', 'pending-namespace', 'missing-group'] as const)(
+  it.each(['deny', 'target-stop', 'target-update', 'owner-change', 'other-organization', 'pending-namespace', 'missing-declaration'] as const)(
     'does not deliver a snapshot after %s', async scenario => {
       const f = fixture();
       if (scenario === 'other-organization') { f.source.namespace = 'first'; f.target.namespace = 'second'; }
       if (scenario === 'pending-namespace') f.target.namespaceState = 'pending';
-      if (scenario === 'missing-group') f.target.approvedHostToolGroups = [];
+      if (scenario === 'missing-declaration') f.target.manifest.agent!.hostTools = [];
       f.confirmShare.mockImplementation(async () => {
         if (scenario === 'target-stop') f.target.enabled = false;
         if (scenario === 'target-update') f.target.approval = { state: 'approved', revision: 'updated' };
@@ -69,7 +69,7 @@ describe('shared Host storage', () => {
       expect(await f.share()).toMatchObject({ ok: false });
       expect(f.importCopies).not.toHaveBeenCalled();
       expect(f.copies.size).toBe(0);
-      if (['other-organization', 'pending-namespace', 'missing-group'].includes(scenario)) {
+      if (['other-organization', 'pending-namespace', 'missing-declaration'].includes(scenario)) {
         expect(f.snapshot).not.toHaveBeenCalled(); expect(f.confirmShare).not.toHaveBeenCalled();
       }
     });

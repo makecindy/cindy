@@ -1,3 +1,5 @@
+import { ProjectSettingsSheet } from './ProjectSettingsSheet';
+import { Settings as ProjectSettingsIcon } from 'lucide-react-native';
 import { useStableHomeSections, type HomeDisplayOrder } from './homeStableOrder';
 import { playHaptic } from '@/platform/haptics';
 import { taskListSessionTarget } from './sessionDrawerNavigation';
@@ -2416,6 +2418,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   });
   const sections = useMemo(() => {
     if (!shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) return homeSections;
+    // SectionList counts section headers/footers even with no rows, suppressing
+    // ListEmptyComponent. Leave the list truly empty while searching or on no hits.
+    if (indexedSearch.results.length === 0) return [];
     return [{
       data: indexedSearch.results.map((item) => ({
         item,
@@ -3390,8 +3395,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
                 padding: windowLayout.emptyPadding,
               }}
             />
-          ) : filteredHome.pinned.length > 0 ? (
+          ) : !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) && filteredHome.pinned.length > 0 ? (
             // 仅剩置顶且被收起时 item 数为 0,但用户并非"无对话",不显示空状态插画。
+            // 搜索列表的空态只认搜索结果,不能被普通列表里的置顶任务遮掉。
             null
           ) : showRemoteGuide && home.emptyNoDevice ? (
             // 无可控制电脑是「首次使用 / 产品模式说明」级空态:按 reason 渲染远程访问引导
@@ -3505,7 +3511,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       ) : null}
       <View
         onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
-        style={[styles.homeChrome, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
+        style={[styles.homeChrome, {
+          // Absolute positioning ignores the root's padding. Keep the search and
+          // connection controls inside the same safe edges as the task list.
+          left: embedded ? 0 : edgePadding.paddingLeft,
+          right: embedded ? 0 : edgePadding.paddingRight,
+        }, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
       >
         <HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>
         <View style={{ paddingTop: nativeHomeHeader ? 0 : embedded ? spacing.lg : edgePadding.paddingTop }}>
@@ -4139,6 +4150,10 @@ function ProjectRow({
   /** 项目标题与子任务共用同一滑动互斥注册表。 */
   swipe?: SessionSwipeControls;
 }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const hostKeys = new Set(project.sessions.map(item => item.session.remoteHostId
+    ? `remote:${encodeURIComponent(item.session.remoteHostId)}:${project.workingDir}` : `local:${project.workingDir}`));
+  const hostKey = hostKeys.size === 1 ? Array.from(hostKeys)[0]! : null;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -4268,6 +4283,7 @@ function ProjectRow({
         { name: 'newTask', label: t('devices.list.projectActions.newTask') },
         { name: 'allTasks', label: t('devices.list.projectActions.allTasks') },
         { name: 'search', label: t('devices.list.projectActions.search') },
+        ...(hostKey ? [{name:'settings', label:t('settings.projectInfo.title')}] : []),
       ] : undefined}
       onAccessibilityAction={actionable ? (event) => {
         swipe?.registry.closeOpenRow();
@@ -4275,6 +4291,7 @@ function ProjectRow({
           case 'newTask': onNewTask(); break;
           case 'allTasks': onOpenProject(); break;
           case 'search': onSearchProject(); break;
+          case 'settings': if (hostKey) setSettingsOpen(true); break;
         }
       } : undefined}
       accessibilityState={{ expanded: !collapsed }}
@@ -4317,6 +4334,10 @@ function ProjectRow({
         <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
         {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
       </View>
+      {kind === 'project' && hostKey && project.deviceId && <Pressable accessibilityRole="button" accessibilityLabel={t('settings.projectInfo.title')}
+        hitSlop={8} onPress={event => {event.stopPropagation(); setSettingsOpen(true);}} style={{padding:8}}>
+        <ProjectSettingsIcon size={iconSize.lg} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
+      </Pressable>}
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
       {collapsedStatus?.dot ? (
         // 与任务行右槽同一 18×18 槽、同一右边缘,点色与任务行同表。
@@ -4346,6 +4367,8 @@ function ProjectRow({
       style={[styles.projectGroup, suppressTopBorder && styles.projectGroupNoTop]}
       testID={groupTestID}
     >
+      {settingsOpen && hostKey && project.deviceId && <ProjectSettingsSheet deviceId={project.deviceId} projectKey={hostKey}
+        title={project.title} deviceName={project.deviceName} directory={project.workingDir} visible={settingsOpen} onClose={() => setSettingsOpen(false)} />}
       {windowingEnabled && scrollY ? (
         <HomeProjectWindowAnchorTracker
           childOffsets={estimatedChildOffsets}

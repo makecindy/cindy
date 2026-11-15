@@ -317,13 +317,13 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     secrets: [{ key: 'account', label: 'Account', source: 'oauth', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] },
       oauth: { authorizeUrl: 'https://accounts.example.test/authorize', tokenUrl: 'https://accounts.example.test/token', scopes: ['read'], clientId: 'fixture-client' } }] } }, dir, enabled: true,
     namespace: null, namespaceState: 'confirmed',
-    approval: { state: 'approved', revision: 'real-worker-fixture' }, approvedHostToolGroups: ['terminal', 'files', 'storage', 'browser', 'discovery'] };
+    approval: { state: 'approved', revision: 'real-worker-fixture' } };
   const receiverDir = path.join(dir, 'receiver'); fs.mkdirSync(receiverDir);
   fs.copyFileSync(path.join(dir, 'worker.cjs'), path.join(receiverDir, 'worker.cjs'));
   const receiver = { manifest: { id: 'test-receiver', name: 'Receiver fixture', version: '1.0.0',
     agent: { hostTools: ['storage'] }, node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio' } },
     dir: receiverDir, enabled: true, namespace: null, namespaceState: 'confirmed',
-    approval: { state: 'approved', revision: 'receiver-fixture' }, approvedHostToolGroups: ['storage'] };
+    approval: { state: 'approved', revision: 'receiver-fixture' } };
   const getGhost = id => id === 'test-node' ? ghost : id === 'test-receiver' ? receiver : null;
   const original = { ...ghost, manifest: { ...ghost.manifest, id: 'source-account' } };
   const values = new Map([
@@ -399,7 +399,6 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   const hostTools = createHostToolService({ terminal: terminals, files: () => fileService, storage: () => storage,
     profileDir: dir, ownerId: 'fixture-owner', owner,
     getGhost, getSession: () => undefined, current: () => true, confirmations, t: key => key,
-    manager: { approveTaskCapability: async () => { throw new Error('fixture group was already approved'); } },
   });
   // This fixture supplies a browser driver, as Desktop does. Node Host's default
   // assembly remains unsupported; Worker/FD/gateway/registry are the real path.
@@ -439,10 +438,10 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     assert.equal(browser.ok, true, JSON.stringify(browser));
     assert.equal(browser.result.ok, true, JSON.stringify(browser));
     assert.equal(browser.result.data.source, 'shared-browser-handler');
-    ghost.approvedHostToolGroups = ghost.approvedHostToolGroups.filter(group => group !== 'browser');
-    const unapprovedBrowser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
+    ghost.manifest.agent.hostTools = ghost.manifest.agent.hostTools.filter(group => group !== 'browser');
+    const undeclaredBrowser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
       server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
-    assert.equal(unapprovedBrowser.result.errorCode, 'PERMISSION_DENIED');
+    assert.equal(undeclaredBrowser.result.errorCode, 'PERMISSION_DENIED');
     const terminalCall = async (tool, args = {}) => {
       const result = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: { tool, args } });
       assert.equal(result.ok, true, JSON.stringify(result));

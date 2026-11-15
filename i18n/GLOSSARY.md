@@ -835,6 +835,10 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 
 模型价目表的时长收费项：Duration Input / Duration Output；不是请求耗时。
 
+### Privacy screen
+
+Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转系统锁屏，AI 在后面继续工作。用于离开时、远程控制中和远程结束后三种场景（docs/product-rules/privacy-screen.md）。取代旧称「电脑防窥」「防窥遮罩」「黑色遮罩」；不是系统自带的锁屏，也不是显示器防窥膜。
+
 ### Process
 
 OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。

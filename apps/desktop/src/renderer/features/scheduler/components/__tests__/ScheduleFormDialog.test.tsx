@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
@@ -138,7 +138,7 @@ beforeEach(() => {
   state.pendingCapabilities.clear();
   state.vendors = new Set(['cc', 'codex', 'pi']);
   localStorage.clear();
-  vi.stubGlobal('electronAPI', { maker: { schedule: {
+  vi.stubGlobal('electronAPI', { gitContext: { githubAppStatus: async () => ({ available: true, login: null }) }, maker: { schedule: {
     webhookReceiver: async () => 'cloud', scriptCapabilityStatus: async () => ({ statuses: [] }),
   } } });
   resetDraft();
@@ -622,4 +622,54 @@ it('does not relocate hidden Auto history outside a template source constraint',
   });
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
   expect(onSubmit).not.toHaveBeenCalled();
+});
+
+// 2026-11-15 connection-choice UX, unit/jsdom: the existing legacy tests cover
+// omitted sources, not a new default or changing modes. Save the real dialog to
+// protect the persisted source and repository scope, without contacting GitHub.
+it('defaults new Webhooks to Cindy and saves the selected connection method', async () => {
+  const onSubmit = vi.fn(async () => {});
+  render(<ScheduleFormDialog open initial={null} initialValues={{ name: 'Events', prompt: 'Check events',
+    agentKind: 'codex', model: 'shared', providerId: 'source', webhookEnabled: true }}
+    onOpenChange={() => {}} onSubmit={onSubmit} />);
+  const key = 'scheduler.editor.webhook.';
+  const app = await screen.findByRole('radio', { name: key + 'cindyConnection' });
+  expect((app as HTMLInputElement).checked).toBe(true);
+  fireEvent.change(screen.getByRole('textbox', { name: key + 'repositoriesLabel' }), { target: { value: 'example/project' } });
+  const save = () => fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  save();
+  await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: [], source: { preset: 'github-app', repositories: ['example/project'] } },
+  }), false));
+  fireEvent.click(screen.getByRole('radio', { name: key + 'manualConnection' }));
+  save();
+  await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: [], source: { preset: 'github' } },
+  }), false));
+  fireEvent.click(app);
+  expect((screen.getByRole('textbox', { name: key + 'repositoriesLabel' }) as HTMLTextAreaElement).value).toBe('example/project');
+});
+
+// issue 10224: the prompt card keeps its original three lines, so a long automation
+// prompt is edited in a panel-filling editor opened from it. Unit/jsdom: the toggle,
+// live text, a single field and the focus hand-back are the user-visible results a
+// second hidden textarea or a dropped focus would break.
+it('edits a long prompt in the expanded editor and returns focus on collapse', async () => {
+  const h = mount(schedule({ prompt: 'first\nsecond\nthird\nfourth' }));
+  const expand = screen.getByRole('button', { name: 'scheduler.editor.promptDialog.expandPrompt' });
+  fireEvent.click(expand);
+  const panel = screen.getByRole('group', { name: 'scheduler.editor.fields.prompt' });
+  const editor = within(panel).getByRole('textbox') as HTMLTextAreaElement;
+  expect(editor.value).toBe('first\nsecond\nthird\nfourth');
+  expect(document.querySelectorAll('textarea')).toHaveLength(1);
+  fireEvent.change(editor, { target: { value: 'rewritten in the expanded editor' } });
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.collapsePrompt' }));
+  expect(screen.queryByRole('group', { name: 'scheduler.editor.fields.prompt' })).toBeNull();
+  const compact = document.querySelector('textarea') as HTMLTextAreaElement;
+  expect(compact.value).toBe('rewritten in the expanded editor');
+  expect(document.activeElement).toBe(expand);
+  h.save();
+  await waitFor(() => expect(h.onSubmit).toHaveBeenCalledWith(
+    expect.objectContaining({ prompt: 'rewritten in the expanded editor' }), true,
+  ));
 });

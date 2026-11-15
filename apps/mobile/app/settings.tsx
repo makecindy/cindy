@@ -29,7 +29,7 @@ import {
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
 import { hasPrivacyConsent } from '@/update/updateConsentGate';
-import { CLASSICAL_REPLY_STYLES, isClassicalReplyStyle, replyStyleFamilyOf } from '@cindy/maker-shared/classical-reply';
+import { CLASSICAL_REPLY_STYLES, isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { isClassicalLocale, type ClassicalLocale } from '@/i18n/locale';
 import { useLocale } from '@/i18n/useLocale';
@@ -158,7 +158,6 @@ export default function SettingsScreen() {
   const { t } = useTranslation();
   const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
   const classical = isClassicalLocale(locale) ? locale : null;
-  const replyStyleOnly = !classical && replyStyleFamilyOf(effectiveLocale) !== null;
   const languageOption: LanguageOption = classical ? CLASSICAL_OPTION : locale;
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
@@ -1002,7 +1001,7 @@ export default function SettingsScreen() {
               />
             </NativePullDownMenu>
           ) : null}
-          {classical || replyStyleOnly ? (
+          {classical ? (
             <NativePullDownMenu
               actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
                 id: style.id,

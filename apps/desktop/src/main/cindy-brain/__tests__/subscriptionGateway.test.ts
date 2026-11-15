@@ -296,15 +296,19 @@ function ghost(
   } as InstalledGhost;
 }
 
-// Unit through the production gateway: unknown declarations preserved by old Hosts
-// must not start delivering message content after an upgrade without explicit consent.
-it('does not deliver a newly recognized message topic without its receipt approval', () => {
+// Unit, installation authority: a valid installed declaration must deliver even
+// when old, absent or malformed per-topic fields remain in historical snapshots.
+it.each([
+  { legacy: undefined }, { legacy: [] }, { legacy: ['message'] },
+  { legacy: 'invalid' }, { legacy: { message: true } },
+])('delivers installed event declarations while ignoring old topic fields: $legacy', ({ legacy }) => {
   const g = ghost('reader', { topics: ['message'] });
   g.approval = { state: 'approved', revision: 'r1' };
+  Object.assign(g, { approvedEventTopics: legacy });
   const { gw, sent, running } = makeGateway({ listGhosts: () => [g] });
   running.add('reader');
   gw.publish('message' as never, 'did-message-created' as never, { sessionId: 'task' });
-  expect(sent).toHaveLength(0);
+  expect(sent).toHaveLength(1);
 });
 
 // Unit: production content index -> gateway. Existing metadata tests never exercise saved
@@ -317,7 +321,7 @@ describe('indexed task content and state events', () => {
     content: { text: 'saved reply', images: [{ url: '/private/image.png', name: 'image.png' }],
       files: [{ path: '/private/file.txt', name: 'file.txt' }], reasoning: 'private thinking' } } as Message;
   const subscriber = (): InstalledGhost => ({ ...ghost('reader', { topics: ['message', 'task-state'] }),
-    approval: { state: 'approved', revision: 'r1' }, approvedEventTopics: ['message', 'task-state'] });
+    approval: { state: 'approved', revision: 'r1' } });
 
   // Unit, #9801 scope reduction: lifecycle events reuse immediate delivery and
   // the existing cold queue; they add no timer and must not fold a finished turn.
@@ -395,10 +399,12 @@ describe('indexed task content and state events', () => {
     expect(JSON.stringify(sent)).not.toContain('private');
   });
 
-  it.each(['no-subscriber', 'unapproved', 'owner-change', 'removed'] as const)('does no discovery or projection after %s', scenario => {
+  it.each(['no-subscriber', 'invalid-install', 'undeclared', 'disabled', 'owner-change', 'removed'] as const)('does no discovery or projection after %s', scenario => {
     const index = new GhostTaskEventIndex();
     const g = subscriber() as InstalledGhost;
-    if (scenario === 'unapproved') g.approvedEventTopics = undefined;
+    if (scenario === 'invalid-install') g.approval = { state: 'legacy-unapproved' };
+    if (scenario === 'undeclared') g.manifest.subscribe!.topics = ['task-state'];
+    if (scenario === 'disabled') g.enabled = false;
     index.replace(scenario === 'no-subscriber' ? [] : [g], owner);
     if (scenario === 'removed') index.replace([], owner);
     const gateway = vi.fn();
@@ -451,7 +457,8 @@ describe('indexed task content and state events', () => {
 
   // State-only permission must never deliver tool/activity prose or title-derived labels.
   it('keeps state-only subscriptions free of action summaries and workflow text', async () => {
-    const g = { ...subscriber(), approvedEventTopics: ['task-state'] } as InstalledGhost;
+    const g = subscriber();
+    g.manifest.subscribe!.topics = ['task-state'];
     const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
     running.add('reader');
     const index = new GhostTaskEventIndex(); index.replace([g], owner);
@@ -464,7 +471,7 @@ describe('indexed task content and state events', () => {
     expect(JSON.stringify(sent)).not.toContain('private');
   });
 
-  it.each(['revision', 'uninstalled', 'revoked', 'disabled'] as const)('drops buffered content when %s changes before wake completes', async change => {
+  it.each(['revision', 'uninstalled', 'revoked', 'undeclared', 'disabled'] as const)('drops buffered content when %s changes before wake completes', async change => {
     const g = subscriber() as InstalledGhost;
     let live: InstalledGhost | null = g;
     let wake!: () => void;
@@ -474,7 +481,8 @@ describe('indexed task content and state events', () => {
     await new Promise<void>(resolve => setImmediate(resolve));
     live = change === 'uninstalled' ? null : { ...g,
       ...(change === 'revision' ? { approval: { state: 'approved', revision: 'r2' } } : {}),
-      ...(change === 'revoked' ? { approvedEventTopics: [] } : {}),
+      ...(change === 'revoked' ? { approval: { state: 'legacy-unapproved' } as const } : {}),
+      ...(change === 'undeclared' ? { manifest: { ...g.manifest, subscribe: { topics: ['task-state'] } } as InstalledGhost['manifest'] } : {}),
       ...(change === 'disabled' ? { enabled: false } : {}),
     };
     running.add('reader'); wake();

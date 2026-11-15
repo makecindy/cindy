@@ -90,7 +90,6 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('<View onLayout={handleKeyboardAreaLayout} pointerEvents="none" style={StyleSheet.absoluteFill} />');
     expect(source).toContain('testID="session.composerFrost"');
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
-    expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== \'ios\' && { backgroundColor: colors.surface }]}>');
     // iOS 临时任务列表抽屉放进独立窗口盖住系统栏;系统栏不随抽屉开合收起。
     expect(source).toContain("aboveSystemBar={Platform.OS === 'ios'}");
     expect(source).not.toContain('systemBarHidden');

@@ -2,7 +2,7 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { messages, sessions } from '../../schema';
+import { messages, sessions, sessionPrRefs } from '../../schema';
 import { tx } from '../../worker/opHandlers/tx';
 import { createMessage, discardPersistedAssistantMessage, updateMessageContent } from '../messages';
 import * as prRefsStore from '../../../git-context/prRefsStore';
@@ -115,7 +115,6 @@ function setupDb(): void {
   };
 }
 
-
 beforeEach(() => { vi.clearAllMocks(); clearSessionPersistState('s1'); setupDb(); });
 afterEach(async () => { await drainPersistQueue(); clearSessionPersistState('s1'); h.sqlite?.close(); });
 
@@ -167,103 +166,6 @@ it('keeps a row changed while the exact-row rollback was being queued', async ()
   expect(h.sqlite!.prepare('SELECT content FROM messages').get()).toEqual({ content: '"edited"' });
 });
 
-
-it('removes the withdrawn draft PR reference but retains a surviving message reference', async () => {
-  const hook = vi.spyOn(prRefsStore, 'recordPrRefsForMessage');
-  try {
-    onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/1', agentMessageId: 'keep' }, null);
-    flushAssistantBlock('s1');
-    onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/2', agentMessageId: 'withdraw' }, null);
-    flushAssistantBlock('s1');
-    await drainPersistQueue();
-    await Promise.all(hook.mock.results.map(result => result.value));
-    expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber).sort()).toEqual([1, 2]);
-    onAssistantTextEvent('s1', { text: '', agentMessageId: 'withdraw', isFinal: true, isFullText: true }, null);
-    await drainPersistQueue();
-    expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber)).toEqual([1]);
-  } finally { hook.mockRestore(); }
-});
-
-it('orders retraction cleanup after the original asynchronous PR publication hook', async () => {
-  let release!: () => void;
-  const pending = new Promise<void>((resolve) => { release = resolve; });
-  const original = prRefsStore.recordPrRefsForMessage;
-  const hook = vi.spyOn(prRefsStore, 'recordPrRefsForMessage').mockImplementationOnce(async (msg) => {
-    await pending;
-    await original(msg);
-  });
-  let retracted!: () => void;
-  const rollback = new Promise<void>((resolve) => { retracted = resolve; });
-  const originalTx = h.client!.tx;
-  h.client!.tx = async (name, args) => {
-    const result = await originalTx(name, args);
-    if ((args as { publication?: string }).publication === 'rollback') retracted();
-    return result;
-  };
-  try {
-    onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/2', agentMessageId: 'withdraw' }, null);
-    flushAssistantBlock('s1');
-    await drainPersistQueue();
-    expect(hook).toHaveBeenCalledTimes(1);
-    onAssistantTextEvent('s1', { text: '', agentMessageId: 'withdraw', isFinal: true, isFullText: true }, null);
-    await rollback;
-    release();
-    await drainPersistQueue();
-    await pending;
-    // Await the hook itself too, so a late stale write cannot hide behind the assertion.
-    await hook.mock.results[0].value;
-    expect(await prRefsStore.listPrRefs('s1')).toHaveLength(0);
-  } finally { release(); hook.mockRestore(); }
-});
-
-
-it('does not restore pre-clear PR references when retraction cleanup resumes after clear', async () => {
-  onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/1', agentMessageId: 'keep' }, null);
-  flushAssistantBlock('s1');
-  onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/2', agentMessageId: 'withdraw' }, null);
-  flushAssistantBlock('s1');
-  await drainPersistQueue();
-  let release!: () => void;
-  const resume = new Promise<void>((resolve) => { release = resolve; });
-  let captured!: () => void;
-  const snapshotTaken = new Promise<void>((resolve) => { captured = resolve; });
-  const db = h.client!.drizzle;
-  const select = db.select.bind(db);
-  let paused = false;
-  const spy = vi.spyOn(db, 'select').mockImplementation((fields) => {
-    const query = select(fields);
-    const from = query.from.bind(query);
-    vi.spyOn(query, 'from').mockImplementation((table) => {
-      const builder = from(table);
-      if (table === messages && !paused) {
-        const orderBy = builder.orderBy.bind(builder);
-        vi.spyOn(builder, 'orderBy').mockImplementationOnce((...columns) => {
-          paused = true;
-          const snapshot = orderBy(...columns).all();
-          captured();
-          return resume.then(() => snapshot) as unknown as ReturnType<typeof orderBy>;
-        });
-      }
-      return builder;
-    });
-    return query;
-  });
-  try {
-    onAssistantTextEvent('s1', { text: '', agentMessageId: 'withdraw', isFinal: true, isFullText: true }, null);
-    await snapshotTaken;
-    const boundary = Date.now() + 1000;
-    h.sqlite!.prepare('UPDATE sessions SET cleared_at = ? WHERE id = ?').run(boundary, 's1');
-    noteSessionClearBoundary('s1', boundary);
-    const clearedRefs = prRefsStore.recomputePrRefsForSession('s1');
-    release();
-    await clearedRefs;
-    expect(await prRefsStore.listPrRefs('s1')).toHaveLength(0);
-    await drainPersistQueue();
-    expect(await prRefsStore.listPrRefs('s1')).toHaveLength(0);
-  } finally { release(); spy.mockRestore(); }
-});
-
-
 it.each(['none', 'previous', 'newer'] as const)(
   'broadcasts the surviving canonical list preview after retracting the draft (%s)', async (survivor) => {
     if (survivor === 'previous') {
@@ -284,41 +186,6 @@ it.each(['none', 'previous', 'newer'] as const)(
     expect(patches.at(-1)?.[1]).toEqual({ sessionId: 's1', patch: {
       preview: survivor === 'none' ? null : survivor === 'previous' ? 'Previous question' : 'Newer answer',
     } });
-  },
-);
-
-it.each(['Corrected without a link', 'https://github.com/o/r/pull/3'])(
-  'reconciles PR references after nonempty final correction and a delayed original hook (%s)', async (text) => {
-    onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/1', agentMessageId: 'keep' }, null);
-    flushAssistantBlock('s1');
-    await drainPersistQueue();
-    let release!: () => void;
-    const pending = new Promise<void>((resolve) => { release = resolve; });
-    const original = prRefsStore.recordPrRefsForMessage;
-    const hook = vi.spyOn(prRefsStore, 'recordPrRefsForMessage').mockImplementationOnce(async (msg) => {
-      await pending;
-      await original(msg);
-    });
-    let corrected!: () => void;
-    const written = new Promise<void>((resolve) => { corrected = resolve; });
-    const originalTx = h.client!.tx;
-    h.client!.tx = async (name, args) => {
-      const result = await originalTx(name, args);
-      if (name === 'message.updateContent') corrected();
-      return result;
-    };
-    try {
-      onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/2', agentMessageId: 'correct' }, null);
-      flushAssistantBlock('s1');
-      await drainPersistQueue();
-      onAssistantTextEvent('s1', { text, agentMessageId: 'correct', isFinal: true, isFullText: true }, null);
-      await written;
-      release();
-      await drainPersistQueue();
-      await hook.mock.results[0].value;
-      expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber).sort())
-        .toEqual(text.includes('/pull/') ? [1, 3] : [1]);
-    } finally { release(); hook.mockRestore(); }
   },
 );
 
@@ -372,7 +239,6 @@ it.each([{ shared: false, clear: false }, { shared: true, clear: false }, { shar
   } finally { release(); await drainPersistQueue(); clearSessionPersistState('s2'); }
 });
 
-
 it.each([false, true])('reconciles replaced media without releasing another live message reference (shared=%s)', async (shared) => {
   const oldHash = 'a'.repeat(64);
   const newHash = 'b'.repeat(64);
@@ -389,11 +255,10 @@ it.each([false, true])('reconciles replaced media without releasing another live
   await drainPersistQueue();
   onAssistantTextEvent('s1', { text: newUrl, agentMessageId: 'replace-media', isFinal: true, isFullText: true }, null);
   await drainPersistQueue();
-  expect(h.sqlite!.prepare("SELECT hash FROM media_refs WHERE ref_kind = 'session-attachment' ORDER BY hash").all())
-    .toEqual((shared ? [oldHash, newHash] : [newHash]).map((hash) => ({ hash })));
+  await vi.waitFor(() => expect(h.sqlite!.prepare("SELECT hash FROM media_refs WHERE ref_kind = 'session-attachment' ORDER BY hash").all())
+    .toEqual((shared ? [oldHash, newHash] : [newHash]).map((hash) => ({ hash }))));
   expect(h.sqlite!.prepare('SELECT count(*) AS n FROM media_blobs').get()).toEqual({ n: 2 });
 });
-
 
 it.each(['after-update', 'during-preview', 'row-deleted'] as const)(
   'settles replaced media publication when clear interrupts a committed final (%s)', async (phase) => {
@@ -448,7 +313,6 @@ it.each(['after-update', 'during-preview', 'row-deleted'] as const)(
   },
 );
 
-
 // Replaces sessionTaskSummary's source-spelling assertion (CI #6532): invoke
 // the production update with real SQLite and inspect the saved body/cache/push.
 // Unit tier; existing retraction cases did not cover ordinary nonempty updates.
@@ -496,7 +360,6 @@ it('publishes the surviving preview when an ordinary latest-message rewrite has 
   });
 });
 
-
 it('does not republish a rewritten message at the session clear boundary', async () => {
   h.sqlite!.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('target', 'target', 's1', 'assistant', 'Old body', 10)").run();
   h.sqlite!.prepare("UPDATE sessions SET cleared_at = 10 WHERE id = 's1'").run();
@@ -505,83 +368,6 @@ it('does not republish a rewritten message at the session clear boundary', async
     .toEqual({ content: 'Rewritten hidden body' });
   expect(h.broadcast.mock.calls.filter(([channel]) => channel === 'local-db:sessions:patched'))
     .toHaveLength(0);
-});
-
-it.each(['correction', 'retraction'])('preserves concurrent new-message PR refs during final %s', async (mode) => {
-  onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/1', agentMessageId: 'a' }, null);
-  flushAssistantBlock('s1'); await drainPersistQueue();
-  let release!: () => void, captured!: () => void;
-  const resume = new Promise<void>(resolve => { release = resolve; });
-  const snapshotTaken = new Promise<void>(resolve => { captured = resolve; });
-  const db = h.client!.drizzle, select = db.select.bind(db);
-  let paused = false;
-  const spy = vi.spyOn(db, 'select').mockImplementation((fields) => {
-    const query = select(fields);
-    if (fields) return query;
-    const from = query.from.bind(query);
-    vi.spyOn(query, 'from').mockImplementation((table) => {
-      const builder = from(table);
-      if (table === messages && !paused) {
-        const orderBy = builder.orderBy.bind(builder);
-        vi.spyOn(builder, 'orderBy').mockImplementationOnce((...columns) => {
-          paused = true; const snapshot = orderBy(...columns).all(); captured();
-          return resume.then(() => snapshot) as unknown as ReturnType<typeof orderBy>;
-        });
-      }
-      return builder;
-    }); return query;
-  });
-  const hook = vi.spyOn(prRefsStore, 'recordPrRefsForMessage');
-  try {
-    onAssistantTextEvent('s1', { text: mode === 'retraction' ? '' : 'Corrected final without a link', agentMessageId: 'a', isFinal: true, isFullText: true }, null);
-    await snapshotTaken;
-    await createMessage('s1', { clientId: 'new-user', role: 'user', content: 'https://github.com/o/r/pull/2' });
-    const newMessagePrWrite = hook.mock.results.at(-1)!.value;
-    // A blocked recompute in s1 must not block another task's publication.
-    h.sqlite!.prepare("INSERT INTO sessions (id) VALUES ('s2')").run();
-    const otherMessage = await createMessage('s2', { clientId: 'other-task', role: 'user', content: 'https://github.com/o/r/pull/3' });
-    await prRefsStore.recordPrRefsForMessage(otherMessage);
-    expect((await prRefsStore.listPrRefs('s2')).map(ref => ref.prNumber)).toEqual([3]);
-    // Let a non-serialized publication finish; a correctly queued hook waits
-    // for the recompute. Do not await that hook while holding its predecessor.
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    release();
-    await newMessagePrWrite;
-    await drainPersistQueue();
-    expect(h.sqlite!.prepare("SELECT client_id FROM messages WHERE client_id='new-user'").get()).toBeTruthy();
-    expect((await prRefsStore.listPrRefs('s1')).map(ref => ref.prNumber)).toContain(2);
-  } finally { release(); spy.mockRestore(); hook.mockRestore(); }
-});
-
-it('releases the PR write queue after a failed publication', async () => {
-  const insert = vi.spyOn(h.client!.drizzle, 'insert').mockImplementationOnce(() => {
-    throw new Error('simulated PR write failure');
-  });
-  try {
-    for (const n of [1, 2]) {
-      h.sqlite!.prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(`queue-${n}`, `queue-${n}`, 's1', 'user', JSON.stringify(`https://github.com/o/r/pull/${n}`), n);
-      await prRefsStore.recordPrRefsForMessage({ id: `queue-${n}`, sessionId: 's1', role: 'user',
-        content: `https://github.com/o/r/pull/${n}`, createdAt: n });
-    }
-    expect((await prRefsStore.listPrRefs('s1')).map(ref => ref.prNumber)).toEqual([2]);
-  } finally { insert.mockRestore(); }
-});
-
-// Ordinary plugin/IPC edits must update associations, including a delayed create hook.
-it.each(['user', 'assistant'] as const)('reconciles PRs after an ordinary %s rewrite with pending creation', async (role) => {
-  let release!: () => void;
-  const pending = new Promise<void>(resolve => { release = resolve; });
-  const original = prRefsStore.recordPrRefsForMessage;
-  const hook = vi.spyOn(prRefsStore, 'recordPrRefsForMessage').mockImplementationOnce(async msg => {
-    await pending; await original(msg);
-  });
-  try {
-    await createMessage('s1', { clientId: 'ordinary-edit', role, content: 'https://github.com/o/r/pull/81' });
-    const update = updateMessageContent('s1', 'ordinary-edit', 'https://github.com/o/r/pull/82');
-    release(); await update; await hook.mock.results[0].value;
-    expect((await prRefsStore.listPrRefs('s1')).map(r => r.prNumber)).toEqual([82]);
-  } finally { release(); hook.mockRestore(); }
 });
 
 // A pending manual GitHub check must not hold the PR lock needed by the global
@@ -613,4 +399,28 @@ it.each(['correction', 'retraction'] as const)('persists another task during PR 
   } finally {
     release(); await attaching; await drained; clearSessionPersistState('s2');
   }
+});
+
+// DB regression: a diagnostic message quoting an old PR must not own that PR.
+// Previous tests required automatic extraction; exercise real create/update/delete
+// with both a legacy association and an agent attachment instead.
+it.each(['user', 'assistant'] as const)('keeps %s links informational and preserves explicit and legacy associations', async role => {
+  const url = (n: number) => `https://github.com/o/r/pull/${n}`;
+  await createMessage('s1', { clientId: 'quoted-pr', role, content: url(1) });
+  expect(await prRefsStore.listPrRefs('s1')).toEqual([]);
+  await updateMessageContent('s1', 'quoted-pr', url(2));
+  expect(await prRefsStore.listPrRefs('s1')).toEqual([]);
+  const verify = vi.fn(async () => undefined);
+  await prRefsStore.managePrRefs('s1', { action: 'add', url: url(3) }, verify, 'agent:test');
+  h.client!.drizzle.insert(sessionPrRefs).values({
+    id: 'legacy-pr', sessionId: 's1', provider: 'github', host: 'github.com',
+    owner: 'o', repo: 'r', prNumber: 4, url: url(4), firstSeenAt: 1, lastSeenAt: 1,
+    associationSource: 'explicit', associationOrigin: 'message', manuallyAdded: false,
+  }).run();
+  const before = await prRefsStore.listPrRefs('s1');
+  await updateMessageContent('s1', 'quoted-pr', 'No links remain');
+  if (role === 'assistant') await discardPersistedAssistantMessage('s1', 'quoted-pr', () => true);
+  expect(await prRefsStore.listPrRefs('s1')).toEqual(before);
+  expect(before.map(ref => ref.prNumber).sort()).toEqual([3, 4]);
+  expect(verify).toHaveBeenCalledOnce();
 });
