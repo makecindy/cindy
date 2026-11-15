@@ -896,13 +896,15 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(mocks.rows.get(String(prepared.invocation_id))?.state).toBe('prepared');
   });
 
-  // Unit, #4577505284: provider messages can echo short, opaque credentials
-  // without a Bearer prefix. Exercise submit/poll through the real tool boundary.
+  // Unit, #4577664316: all managed runtime headers are private regardless of
+  // name or token shape. Exercise submit/poll through the real tool boundary.
   it.each([
     ['submit', 'authorization'], ['poll', 'authorization'],
     ['submit', 'aPi-KeY'], ['poll', 'aPi-KeY'],
     ['submit', 'X-API-KEY'], ['poll', 'X-API-KEY'],
     ['submit', 'x-Goog-api-key'], ['poll', 'x-Goog-api-key'],
+    ['submit', 'X-Provider-Token'], ['poll', 'X-Provider-Token'],
+    ['submit', 'X-Relay-Proof'], ['poll', 'X-Relay-Proof'],
   ] as const)('redacts the exact sent %s credential from %s errors', async (phase, header) => {
     const { model, connection } = setupGuideDriven(phase === 'poll' ? recoveryVideoOperation() : undefined);
     const key = 'short-key.[v1]';
@@ -919,6 +921,41 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(result.message).not.toContain(key);
     expect(mocks.outboundFetch.mock.calls.at(-1)?.[1].headers[header]).toBe(header === 'authorization' ? `Bearer ${key}` : key);
     expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+  });
+
+  it('keeps generated protocol diagnostics while redacting managed header values', async () => {
+    const { model, connection } = setupGuideDriven();
+    const key = 'short-proof.[v2]';
+    Object.assign(connection.headers, { 'X-Relay-Proof': key });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ message: `application/json rejected: ${key}` }, { status: 422 }));
+    const result = await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'UPSTREAM_REJECTED', http_status: 422 });
+    expect(result.message).toContain('application/json rejected');
+    expect(result.message).not.toContain(key);
+    expect(mocks.outboundFetch.mock.calls[0]?.[1].headers).toMatchObject({ Accept: 'application/json', 'Content-Type': 'application/json' });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the sent managed header snapshot after native credential recovery changes it', async () => {
+    const { model, connection } = setupGuideDriven();
+    const key = 'old-proof.[v1]';
+    Object.assign(connection.headers, { 'X-Relay-Proof': key });
+    const onAuthRejected = vi.fn(async () => {
+      Object.assign(connection.headers, { 'X-Relay-Proof': 'new-proof.[v2]' });
+      return true;
+    });
+    Object.assign(connection, { onAuthRejected });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ message: `credential rejected: ${key}` }, { status: 403 }));
+    const result = await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'UPSTREAM_REJECTED', http_status: 403 });
+    expect(result.message).toContain('credential rejected');
+    expect(result.message).not.toContain(key);
+    expect(onAuthRejected).toHaveBeenCalledTimes(1);
+    expect(connection.headers).toMatchObject({ 'X-Relay-Proof': 'new-proof.[v2]' });
+    expect(mocks.outboundFetch.mock.calls[0]?.[1].headers).toMatchObject({ 'X-Relay-Proof': key });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
   });
 
   it('redacts a credential before truncating a provider error', async () => {

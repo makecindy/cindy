@@ -325,7 +325,7 @@ async function readBoundedResponse(response: Response, maxBytes: number): Promis
   );
 }
 
-function providerErrorMessage(buffer: Buffer, headers: Record<string, string>): string {
+function providerErrorMessage(buffer: Buffer, managedHeaders: Record<string, string>): string {
   const text = buffer.toString('utf8').slice(0, 2_000);
   try {
     const value = JSON.parse(text) as {
@@ -336,9 +336,8 @@ function providerErrorMessage(buffer: Buffer, headers: Record<string, string>): 
     const message = value.error?.message ?? value.message ?? value.msg;
     if (typeof message !== 'string' || !message.trim()) return '上游拒绝请求';
     let redacted = message;
-    const credentials = Object.entries(headers)
-      .filter(([name]) => /^(authorization|api-key|x-api-key|x-goog-api-key)$/i.test(name))
-      .flatMap(([, value]) => [value, value.replace(/^Bearer\s+/i, '')])
+    const credentials = Object.values(managedHeaders)
+      .flatMap((value) => [value, value.replace(/^Bearer\s+/i, '')])
       .filter(Boolean).sort((a, b) => b.length - a.length);
     for (const credential of credentials) redacted = redacted.replaceAll(credential, '[已脱敏凭证]');
     return redacted
@@ -476,14 +475,19 @@ async function dispatchRequest(input: {
     });
     input.connection.assertCurrent?.();
     if (input.operation === 'submit') input.connection.beforeSubmit?.();
+    // Runtime header values are managed secrets regardless of their names.
+    // Snapshot before awaiting transport or native credential recovery.
+    const managedHeaders: Record<string, string> = {
+      ...(input.connection.apiKey ? { Authorization: `Bearer ${input.connection.apiKey}` } : {}),
+      ...(input.connection.headers ?? {}),
+    };
     const headers: Record<string, string> = {
       Accept: 'application/json',
       ...(input.body && input.bodyEncoding !== 'multipart'
         ? { 'Content-Type': 'application/json' }
         : {}),
       ...(input.headers ?? {}),
-      ...(input.connection.apiKey ? { Authorization: `Bearer ${input.connection.apiKey}` } : {}),
-      ...(input.connection.headers ?? {}),
+      ...managedHeaders,
     };
     dispatched = true;
     const response = await outboundFetch(url, {
@@ -526,7 +530,7 @@ async function dispatchRequest(input: {
     // its connection changed in flight. Save it before guarding later reads.
     if (input.operation === 'poll') input.connection.assertCurrent?.();
     if (!response.ok) {
-      const message = providerErrorMessage(buffer, headers);
+      const message = providerErrorMessage(buffer, managedHeaders);
       if (response.status >= 500) {
         if (input.operation === 'poll') {
           throw new MediaInvocationError(
