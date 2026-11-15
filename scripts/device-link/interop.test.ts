@@ -227,9 +227,10 @@ it.skipIf(!process.env.CINDY_TEST_OBSERVER_TOKEN)('interoperates across the SDK 
   const replies: McpAppDocument[] = [];
   const receivedActions: Array<{ caller: string; channel: string }> = [];
   const api = {
-    open: async (caller: string) => {
+    open: async (caller: string, _session: string, _card: string, _context: unknown, _openId?: string, resolveSdkRef?: Parameters<McpAppsHost['open']>[5]) => {
       const viewId = `view-${++serial}`; active.set(viewId, caller);
-      return { viewId, html: '<!doctype html><p>App', csp: "default-src 'none'", prefersBorder: true, sdk };
+      const sdkRef = resolveSdkRef?.(sdk);
+      return { viewId, html: '<!doctype html><p>App', csp: "default-src 'none'", prefersBorder: true, ...(sdkRef ? { sdkRef } : { sdk }) };
     },
     teardown: async (caller: string, _session: string, viewId: string) => {
       if (active.get(viewId) !== caller) throw new Error('MCP_APP_VIEW_UNAVAILABLE');

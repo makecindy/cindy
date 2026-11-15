@@ -8160,6 +8160,8 @@
         "cindyTextOneshot": "Cindy의 빠른 채널에 질문하고 텍스트 답변을 받을 수 있음",
         "cindyTextOneshotDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다.",
         "cindyEmbedText": "텍스트를 벡터로 변환할 수 있습니다(의미 검색용)",
+        "cindyModelsDecisions": "의사결정 모델 호출 가능(모델 사용 한도 사용)",
+        "cindyModelsRerank": "재순위화 모델 호출 가능(모델 사용 한도 사용)",
         "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
         "cindySearchWeb": "Cindy AI로 공개 웹을 검색할 수 있음",
         "cindySearchWebDetail": "검색 요청은 공개 웹에 접근하며 Cindy AI 할당량을 소모할 수 있습니다.",
@@ -9693,6 +9695,7 @@
     "tokenLine": "토큰: 총 {{total}} · 입력 {{input}} · 출력 {{output}}",
     "cacheLine": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}} · 적중률 {{rate}}",
     "cacheLineNoRate": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}}",
+    "stepsLine": "이번 턴 요청 {{steps}}회 · 요청당 약 {{context}} 컨텍스트",
     "modelLine": "모델: {{model}}",
     "multipleModels": "모델 {{count}}개",
     "costBreakdownHeader": "모델별:",
@@ -13894,6 +13897,7 @@
         "realtime": "실시간 음성",
         "embedding": "임베딩",
         "decision": "의사결정",
+        "rerank": "재순위화",
         "compression": "압축",
         "ungrouped": "미분류",
         "other": "기타"
@@ -17156,9 +17160,8 @@
         "automatic": "자동",
         "manually": "수동",
         "session": "세션",
-        "silentRun": "확인 결과 변화가 없으면 알리지 않기",
-        "silentRunTooltip": "변화나 문제만 보고합니다. 리마인더와 예약 메시지는 이 옵션을 끌 수 있습니다.",
-        "silentRunInfoAria": "조용히 실행 규칙 보기",
+        "silentRun": "조용히 실행",
+        "silentRunTooltip": "켜면 작업이 성공적으로 완료되어도 기본적으로 알림을 보내지 않습니다. 작업 프롬프트에서 특정 조건에 알림을 요청한 경우, AI가 조건이 충족될 때 직접 보고합니다. 실패와 오류는 계속 알림을 보냅니다.",
         "finishSendToFeishu": "완료 시 Feishu Bot에 전송",
         "finishSendToWecomGroup": "완료 시 WeCom 그룹으로 전송",
         "configWecomGroup": "WeCom 그룹 알림 설정",
@@ -17268,10 +17271,7 @@
       },
       "layout": {
         "content": "실행 내용",
-        "notifications": "알림 및 조용한 실행",
-        "contentTab": "내용 및 트리거",
-        "optionsTab": "실행 옵션",
-        "sections": "자동화 설정"
+        "notifications": "알림 및 조용한 실행"
       },
       "webhook": {
         "quotaHint": "Webhook 수신 횟수에는 일일 한도가 있으며 여기서 필터링해도 횟수는 줄지 않습니다. 보내는 곳(예: GitHub)에서 필요한 이벤트만 선택하세요.",
@@ -21572,5 +21572,31 @@
     "switchOffer": {
       "action": "{{model}}(으)로 바꿔 계속"
     }
+  },
+  "taskManagement": {
+    "scope": "이 컴퓨터의 현재 계정에만 적용됩니다.",
+    "archive": "자동 보관",
+    "enabled": "사용하지 않는 작업 자동 보관",
+    "description": "사용하지 않는 작업을 자동으로 보관합니다. 기록은 계속 확인할 수 있습니다.",
+    "days": "미사용 일수",
+    "daysHint": "마지막 메시지 송수신 또는 실행 종료부터 계산합니다.",
+    "days7": "7일",
+    "days14": "14일",
+    "days30": "30일",
+    "customDays": "일수 지정",
+    "invalidDays": "1~365 사이의 정수를 입력하세요.",
+    "reset": "기본값 복원",
+    "archiveHint": "사용 중인 작업은 유지됩니다. 보관된 작업은 언제든 복원할 수 있습니다.",
+    "preview": "보관 미리보기",
+    "loadFailed": "설정을 불러오지 못했습니다.",
+    "loading": "설정을 불러오는 중…",
+    "candidateCount": "보관 가능: {{count}}개",
+    "keptCount": "유지: {{count}}개",
+    "lastCheck": "최근 확인: {{date}}",
+    "notChecked": "아직 자동 확인하지 않았습니다",
+    "saveFailed": "설정이 저장되지 않았습니다. 다시 시도하세요.",
+    "archivedNotice": "미사용 작업 {{count}}개를 자동 보관했습니다",
+    "undo": "실행 취소",
+    "undoFailed": "취소할 수 없습니다. 보관된 작업에서 복원하세요."
   }
 }

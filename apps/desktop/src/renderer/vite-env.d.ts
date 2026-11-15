@@ -4909,6 +4909,7 @@ interface ElectronAPI {
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 
+  taskManagement: import('../shared/taskManagement').TaskManagementApi;
   sidebarSettings: {
     claimLegacyRendererOwner: () => import('../shared/sidebarSettings').SidebarLegacyRendererOwnerClaim;
     loadSnapshot: () => import('../shared/sidebarSettings').SidebarSettingsSnapshot;

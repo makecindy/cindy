@@ -72,6 +72,7 @@ function harness(options: {
   codexUsage?: Record<string, ProviderGroupCodexUsageSnapshot>;
   /** 这些组内电脑按「那台用不了」报；stale 表示这条判定来自有界快照，不是现读。 */
   cachedUnavailable?: { members: string[]; stale: boolean };
+  stale?: string[];
 } = {}) {
   let now = 1_000_000;
   const config: ProviderGroupConfig = {
@@ -99,6 +100,7 @@ function harness(options: {
           ? { member: m, label: `${m.key}-name`, state: 'unavailable',
             ...(options.cachedUnavailable.stale ? { providerContinuity: { stale: true, remainingMs: 600_000 } } : {}) }
           : { member: m, label: `${m.key}-name`, state: 'ok', view: view(m.providerId, options.unusableModel?.[m.key]),
+            ...(options.stale?.includes(m.key) ? { providerContinuity: { stale: true, remainingMs: 600_000 } } : {}),
             claudeUsage: options.usage?.[m.key], codexUsage: options.codexUsage?.[m.key] });
     },
     async listCandidates() {
@@ -1362,6 +1364,24 @@ describe('beforeSend', () => {
     expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
   });
 
+  // Unit: bounded directory fallback cannot relocate an existing task using old
+  // quota (provider-groups.md, continuity contract). Existing cases only covered
+  // stale unavailable state, not a usable directory plus an exhausted quota.
+  it('ignores stale quota before sending but still honors a real failure cooldown', async () => {
+    const h = harness({ members: [MINI, LOCAL], stale: [MINI.key],
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
+      usage: { [MINI.key]: { updatedAt: 1_000_000, fiveHour: { utilization: 100, resetsAt: 3_000 } } },
+    });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    await h.service.beforeSend('s1');
+    expect(h.row.agentDeviceId).toBe('mini');
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    h.router.markCooling('anthropic', MINI.key, 2_000_000, MODEL);
+    await h.service.beforeSend('s1');
+    expect(h.row.agentDeviceId).toBeNull();
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledOnce();
+  });
+
   // Unit: beforeSend must use the task's bridge quota, not the unrelated native Codex bucket.
   // Router-only coverage cannot detect dropping agentKind between the session and this check.
   it.each([[100, 20, 'mini'], [20, 100, null]])('checks the OpenAI bridge quota before sending (web=%s, native=%s)', async (web, native, device) => {
@@ -1458,6 +1478,39 @@ describe('switching accounts between messages to balance quota', () => {
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
     return { ...h, usage };
   }
+
+  // Unit: both sides of quota balancing must be live. The original fixtures
+  // always returned live members and missed stale origins/targets and expiry
+  // between the suggestion and the actual send.
+  const backup = member('device', 'backup', 'anthropic-backup');
+  function remotePaced(stale: string[]) {
+    const usage = paceUsage(1_000_000);
+    const h = harness({ members: [MINI, backup, LOCAL], stale,
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
+      usage: { [MINI.key]: usage.local, [backup.key]: usage[MINI.key] },
+    });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    return h;
+  }
+
+  it.each([MINI.key, backup.key])('does not propose balancing with a stale member: %s', async key => {
+    const stale = [key];
+    const h = remotePaced(stale);
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+    stale.length = 0;
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: backup.key });
+  });
+
+  it.each([MINI.key, backup.key])('rechecks stale evidence after a balancing suggestion was accepted: %s', async key => {
+    const stale: string[] = [];
+    const h = remotePaced(stale);
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: backup.key });
+    expect(await h.service.rebalanceDecision('s1', backup.key, false, 'message-a')).toBe(true);
+    stale.push(key);
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.row.agentDeviceId).toBe('mini');
+  });
 
   it('automatically offers native relocation and binds the move to the next user message', async () => {
     const h = paced();

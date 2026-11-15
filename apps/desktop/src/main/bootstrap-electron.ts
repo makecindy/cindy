@@ -741,6 +741,7 @@ import { registerGitContextIpc, disposeGitContext } from './git-context';
 import { registerGitReviewDeviceOp, registerGitReviewIpc } from './git-review';
 import { registerProjectOrderIpc } from './projectOrderStore';
 import { registerSidebarSettingsIpc, loadSidebarSettingsSnapshot, setLocalMainViewHidden } from './sidebarSettingsStore';
+import { registerTaskManagementIpc } from './task-management/ipc.desktop.js';
 import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibility-owner-claim.js';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
@@ -1204,6 +1205,8 @@ import {
   refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
+import { installEvaluationRuntime } from './cindy-evaluate/runtime.js';
+import { callEvaluate, readEvaluationImageFile } from './cindy-evaluate/service.js';
 import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
@@ -9952,6 +9955,10 @@ app.on('ready', async () => {
   // 用户专属 key)+ 注册 model-access:* IPC。须在 initClientEndpoints 之后
   // (依赖 modelAccessApiBaseUrl 端点)、renderer auth:initialize 之前装订阅。
   if (!hostClientMode) initModelAccess();
+  installEvaluationRuntime({
+    callEvaluate: (...args) => callEvaluate(...args),
+    readEvaluationImageFile: (...args) => readEvaluationImageFile(...args),
+  });
 
   initializeUpdatePresentationRecovery();
 
@@ -10576,6 +10583,7 @@ app.on('ready', async () => {
   registerModelVisibilityOwnerClaimIpc();
   registerModelVisibilitySyncIpc();
   registerSidebarSettingsIpc();
+  registerTaskManagementIpc();
   registerProjectOrderIpc();
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart

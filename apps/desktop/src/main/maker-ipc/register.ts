@@ -827,6 +827,7 @@ import {
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
 import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
 import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
+import { configureTaskArchiveRuntime } from '../task-management/service.js';
 import {
   createPiIdleReleaseWatcher,
   createPiIdleReleaseClose,
@@ -3354,6 +3355,7 @@ export function stopOrcaIdleWatcher(): void {
   claudeIdleReleaseWatcher = null;
   codexIdleReleaseWatcher?.stop();
   codexIdleReleaseWatcher = null;
+  configureTaskArchiveRuntime(null);
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
 }
@@ -6173,8 +6175,15 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
       shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason) ||
       (closeReason === 'unexpected' && session.wasClosedByRuntime() &&
         agentInputCoordinatorHolder?.hasUsageLimitRecovery(session.id) === true);
+    const preserveProviderGroupRecovery =
+      closeReason === 'agent-switch' &&
+      agentInputCoordinatorHolder?.hasProviderGroupSwitchHold(session.id) === true;
     pendingContinuationOnlyAutoResumeRebuilds.delete(session);
-    return { closeReason, closedDirectAbortBoundary, preserveAutoResumeIntent };
+    return {
+      closeReason,
+      closedDirectAbortBoundary,
+      preserveAutoResumeIntent: preserveAutoResumeIntent || preserveProviderGroupRecovery,
+    };
   },
   cleanupClosedSession: (session: WiredSession, context) => {
     if ((context.closeReason === 'requested' || context.closeReason === 'unexpected')
@@ -17071,6 +17080,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     warn: (message) => log.warn(message),
   });
   claudeIdleReleaseWatcher.start();
+  configureTaskArchiveRuntime({
+    pending: hasPendingIdleReleaseInput,
+    waiting: id => hasPendingAgentInteractionForSession(id)
+      || inputCoordinator.hasPendingQueuedWork(id)
+      || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
+      || inputCoordinator.isAutoResumePending(id) || inputCoordinator.hasQueuedAutoResume(id)
+      || inputCoordinator.getAutoResumeAttemptToken(id) !== null
+      || pendingCredentialSwitchHolder?.has(id) === true,
+    busy: id => isSessionInTurn(id) || Boolean(maker.getSession(id)?.isTurnRunning())
+      || (maker.getSession(id)?.listBackgroundTasks().length ?? 0) > 0
+      || isSessionTurnPendingCompletion(id) || Boolean(getClaudeSessionBackgroundActivity(id)),
+  });
 
   // Ordinary local Codex tasks: same scope and gates as Claude. Codex does not
   // list its native children, yielded exec cells or background terminals as
@@ -20191,6 +20212,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       providerGroupService?.mayHandleTurnError(sessionId, signals)
         ? providerGroupSwitchCause(signals, 'run')
         : null,
+    claimExternalAutomaticRecovery: (sessionId) =>
+      interruptedTurnAutoResumeGuard.claimExternalAutomaticRecovery(sessionId).action === 'allow',
     onUsageLimitedTurnError: (sessionId, signals, item, candidateToken) => {
       if (item.origin?.kind === 'scheduler' && item.origin.runId) {
         // Claim synchronously, before the runner consumes this error. Reset-time
@@ -20208,6 +20231,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。
       if (!providerGroupService || signals.providerGroupUsageLimit) {
+        usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
+        return;
+      }
+      // Provider-group recovery shares the interrupted-turn budget. Once it is
+      // exhausted, do not enter the group's failover loop; keep the normal
+      // manual/usage-limit recovery path instead.
+      if (interruptedTurnAutoResumeGuard.isBudgetExhausted(sessionId)) {
         usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
         return;
       }

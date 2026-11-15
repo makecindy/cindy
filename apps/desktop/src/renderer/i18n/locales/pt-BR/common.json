@@ -8275,6 +8275,8 @@
         "cindyTextOneshot": "Pode fazer uma pergunta ao canal rápido da Cindy e receber uma resposta em texto",
         "cindyTextOneshotDetail": "Usa a cadeia de modelos utilitários leves do sistema (o mesmo canal dos títulos automáticos). Não envolve Agent nem acesso a arquivos. Pode haver cobrança pelo uso do modelo.",
         "cindyEmbedText": "Pode enviar texto para ser convertido em vetores (para busca semântica)",
+        "cindyModelsDecisions": "Pode usar modelos de decisão (consome sua cota de modelos)",
+        "cindyModelsRerank": "Pode usar modelos de reordenação (consome sua cota de modelos)",
         "cindyEmbedTextDetail": "O texto é enviado ao modelo de embeddings do sistema e convertido em números, com até {{max}} itens por chamada. Pode haver cobrança pelo uso do modelo. Os vetores vão apenas para o plugin — nada é gravado na sua biblioteca.",
         "cindySearchWeb": "Pode pesquisar na web pública com Cindy AI",
         "cindySearchWebDetail": "As solicitações de pesquisa acessam a web pública e podem consumir a cota do Cindy AI.",
@@ -9808,6 +9810,7 @@
     "tokenLine": "Tokens: {{total}} no total · entrada {{input}} · saída {{output}}",
     "cacheLine": "Detalhamento do cache: leitura {{read}} · gravação {{create}} · taxa de acertos {{rate}}",
     "cacheLineNoRate": "Detalhamento do cache: leitura {{read}} · gravação {{create}}",
+    "stepsLine": "Solicitações neste turno: {{steps}} · ~{{context}} de contexto cada uma",
     "modelLine": "Modelo: {{model}}",
     "multipleModels": "{{count}} modelos",
     "costBreakdownHeader": "Por modelo:",
@@ -14063,6 +14066,7 @@
         "realtime": "Áudio em tempo real",
         "embedding": "Embeddings",
         "decision": "Decisão",
+        "rerank": "Reordenação",
         "compression": "Compressão",
         "ungrouped": "Sem grupo",
         "other": "Outro"
@@ -17395,9 +17399,8 @@
         "automatic": "Automática",
         "manually": "Manualmente",
         "session": "Sessão",
-        "silentRun": "Não notificar quando as verificações não encontrarem nada",
-        "silentRunTooltip": "Relate apenas alterações ou problemas. Desative para lembretes e mensagens agendadas.",
-        "silentRunInfoAria": "Ver regras de execução silenciosa",
+        "silentRun": "Execução silenciosa",
+        "silentRunTooltip": "Quando ativada, execuções bem-sucedidas não notificam por padrão. Se o prompt da tarefa pedir aviso em condições específicas, a IA avisará quando elas forem atendidas. Falhas e erros continuam sendo notificados.",
         "finishSendToFeishu": "Enviar ao FeishuBot ao concluir",
         "finishSendToWecomGroup": "Enviar resultado ao grupo do WeCom",
         "configWecomGroup": "Configurar notificações do grupo do WeCom",
@@ -17507,10 +17510,7 @@
       },
       "layout": {
         "content": "O que executar",
-        "notifications": "Notificações e execução silenciosa",
-        "contentTab": "Conteúdo e gatilho",
-        "optionsTab": "Opções de execução",
-        "sections": "Configurações de automação"
+        "notifications": "Notificações e execução silenciosa"
       },
       "webhook": {
         "quotaHint": "Os recebimentos de Webhook têm limite diário, e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários.",
@@ -21860,5 +21860,31 @@
     "switchOffer": {
       "action": "Continuar com {{model}}"
     }
+  },
+  "taskManagement": {
+    "scope": "Apenas para esta conta neste computador.",
+    "archive": "Arquivamento automático",
+    "enabled": "Arquivar tarefas inativas automaticamente",
+    "description": "Arquive automaticamente tarefas inativas. O histórico continua disponível.",
+    "days": "Dias de inatividade",
+    "daysHint": "Desde a última mensagem enviada ou recebida, ou o fim de uma execução.",
+    "days7": "7 dias",
+    "days14": "14 dias",
+    "days30": "30 dias",
+    "customDays": "Dias personalizados",
+    "invalidDays": "Insira um inteiro de 1 a 365.",
+    "reset": "Restaurar padrões",
+    "archiveHint": "Tarefas em uso são mantidas. Você pode restaurar as arquivadas a qualquer momento.",
+    "preview": "Prévia do arquivamento",
+    "loadFailed": "Não foi possível carregar as configurações.",
+    "loading": "Carregando configurações…",
+    "candidateCount": "Tarefas elegíveis: {{count}}",
+    "keptCount": "Mantidas: {{count}}",
+    "lastCheck": "Última verificação: {{date}}",
+    "notChecked": "Ainda não houve verificação automática",
+    "saveFailed": "As configurações não foram salvas. Tente novamente.",
+    "archivedNotice": "Tarefas inativas arquivadas automaticamente: {{count}}",
+    "undo": "Desfazer",
+    "undoFailed": "Não foi possível desfazer. Restaure as tarefas arquivadas."
   }
 }

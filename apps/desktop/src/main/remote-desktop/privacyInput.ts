@@ -123,17 +123,21 @@ export async function watchAwayGuardInput(
   pointer: () => void = () => {},
 ): Promise<AwayGuardInputMonitor> {
   const child = runtime.spawn(await runtime.resolveBinary());
-  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  let finished = false;
+  const closed = new Promise<void>((resolve) => child.once('close', () => {
+    finished = true;
+    resolve();
+  }));
   let locked = false;
   let failure: string | undefined;
-  let ready = false;
+  let watching = false;
   let reported = false;
   let lockedNow: (() => void) | undefined;
   const lockConfirmed = new Promise<void>((resolve) => {
     lockedNow = resolve;
   });
   const report = () => {
-    if (reported || !ready) return;
+    if (reported || !watching) return;
     reported = true;
     clearInterval(heartbeat);
     if (!locked && failure) ended(false, failure);
@@ -169,7 +173,6 @@ export async function watchAwayGuardInput(
       // Old Windows helpers treat unknown switches as ordinary input mode and
       // also print ready; require a mode-specific acknowledgement before masking.
       if (line === (process.platform === 'win32' ? 'away-ready' : 'ready')) {
-        ready = true;
         settleReady?.();
       } else if (/^reason [a-z-]{1,16}$/.test(line)) {
         lockingBecause(line.slice('reason '.length));
@@ -177,10 +180,15 @@ export async function watchAwayGuardInput(
         if (!locked) pointer();
       } else if (/^lock-failed( [a-z-]{1,16})?$/.test(line)) {
         failure = line.slice('lock-failed '.length) || 'unknown';
+        // macOS exits after failure; Windows retains its physical-input fence.
+        if (process.platform !== 'win32') finished = true;
       } else if (line === 'locked') {
+        finished = true;
         locked = true;
         lockedNow?.();
         report();
+      } else if (['permission', 'error', 'released'].includes(line)) {
+        finished = true;
       }
       // Windows lock-failed retains the helper and its input hooks; the bounded
       // lock() call reports failure without removing them.
@@ -210,11 +218,15 @@ export async function watchAwayGuardInput(
   };
   try {
     await readyPromise;
+    // Main can resume after the helper has already locked/exited. Do not publish
+    // that dead input shield or call ended before the caller has its monitor.
+    if (finished) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
   } catch (error) {
     child.kill();
     await closed;
     throw error;
   }
+  watching = true;
   return {
     confirm: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
     resume: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),

@@ -8203,6 +8203,8 @@
         "cindyTextOneshot": "Can ask Cindy's fast lane a question and receive a text answer",
         "cindyTextOneshotDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply.",
         "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
+        "cindyModelsDecisions": "Can call decision models (uses your model quota)",
+        "cindyModelsRerank": "Can call reranking models (uses your model quota)",
         "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "cindySearchWeb": "Can search the public web with Cindy AI",
         "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
@@ -9736,6 +9738,7 @@
     "tokenLine": "Tokens: {{total}} total · input {{input}} · output {{output}}",
     "cacheLine": "Cache breakdown: read {{read}} · write {{create}} · hit rate {{rate}}",
     "cacheLineNoRate": "Cache breakdown: read {{read}} · write {{create}}",
+    "stepsLine": "Requests this turn: {{steps}} · ~{{context}} context each",
     "modelLine": "Model: {{model}}",
     "multipleModels": "{{count}} models",
     "costBreakdownHeader": "By model:",
@@ -13948,6 +13951,7 @@
         "realtime": "Realtime Audio",
         "embedding": "Embeddings",
         "decision": "Decision",
+        "rerank": "Rerank",
         "compression": "Compression",
         "ungrouped": "Ungrouped",
         "other": "Other"
@@ -17230,9 +17234,8 @@
         "automatic": "Automatic",
         "manually": "Manually",
         "session": "Session",
-        "silentRun": "Stay quiet when checks find nothing",
-        "silentRunTooltip": "Report changes or problems only. Turn off for reminders and scheduled messages.",
-        "silentRunInfoAria": "View silent run rules",
+        "silentRun": "Silent run",
+        "silentRunTooltip": "When enabled, successful runs do not notify by default. If the task prompt asks to notify under specific conditions, AI will report when those conditions are met. Failures and errors still notify.",
         "finishSendToFeishu": "Send result to Feishu bot",
         "finishSendToWecomGroup": "Send result to WeCom group",
         "configWecomGroup": "Configure WeCom group notifications",
@@ -17342,10 +17345,7 @@
       },
       "layout": {
         "content": "What to run",
-        "notifications": "Notifications & quiet runs",
-        "contentTab": "Content & Trigger",
-        "optionsTab": "Run options",
-        "sections": "Automation settings"
+        "notifications": "Notifications & quiet runs"
       },
       "webhook": {
         "quotaHint": "Webhook deliveries have a daily limit, and filtering here doesn't reduce the count. In the sender, such as GitHub, select only the events you need.",
@@ -21654,5 +21654,31 @@
     "switchOffer": {
       "action": "Continue with {{model}}"
     }
+  },
+  "taskManagement": {
+    "scope": "Applies to this account on this computer only.",
+    "archive": "Auto-archive",
+    "enabled": "Automatically archive idle tasks",
+    "description": "Automatically archive idle tasks. Their history stays available.",
+    "days": "Idle days",
+    "daysHint": "Measured from the last message sent or received, or the end of a run.",
+    "days7": "7 days",
+    "days14": "14 days",
+    "days30": "30 days",
+    "customDays": "Custom days",
+    "invalidDays": "Enter a whole number from 1 to 365.",
+    "reset": "Restore defaults",
+    "archiveHint": "Tasks in use are kept. Archived tasks can be restored anytime.",
+    "preview": "Archive preview",
+    "loadFailed": "Could not load settings.",
+    "loading": "Loading settings…",
+    "candidateCount": "Eligible tasks: {{count}}",
+    "keptCount": "Kept: {{count}}",
+    "lastCheck": "Last check: {{date}}",
+    "notChecked": "No automatic check yet",
+    "saveFailed": "Settings were not saved. Try again.",
+    "archivedNotice": "Automatically archived idle tasks: {{count}}",
+    "undo": "Undo",
+    "undoFailed": "Could not undo. Restore the tasks from Archived."
   }
 }
