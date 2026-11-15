@@ -1,3 +1,4 @@
+import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { askPluginModelRoute, usePluginModels, writePluginModelRouteNote } from './pluginModelRoute';
 import { bindModelGroupSession, modelGroupLocationNameFrom, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
@@ -6723,11 +6724,13 @@ export function NewMakerDraftRoute() {
                     className="inline-flex h-[30px] min-w-20 max-w-[220px] items-center justify-center gap-1.5 rounded-full border border-[var(--create-agent-control-border)] bg-[var(--create-agent-control-bg)] px-3 text-12 font-medium leading-[1.167] text-[var(--create-agent-control-text)] transition-colors hover:bg-[var(--create-agent-control-bg-hover)] active:bg-[var(--create-agent-control-bg-pressed)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--create-agent-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                     aria-label={t('newChat.collaboration.modeLabel')}
                   >
-                    <MessageSquare
+                    {effectiveWorkingDir ? <ResolvedProjectIcon directory={effectiveWorkingDir}
+                      remoteHostId={effectiveRemoteHostId} deviceId={effectiveDeviceLinkDeviceId}
+                      name={createAgentModeLabel} size={18} /> : <MessageSquare
                       size={12}
                       strokeWidth={2}
                       className="shrink-0 text-[var(--create-agent-control-icon)]"
-                    />
+                    />}
                     <span className="min-w-0 truncate">{createAgentModeLabel}</span>
                     <ChevronDown
                       size={12}

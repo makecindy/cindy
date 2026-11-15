@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   assertTrusted: vi.fn(),
   remoteInvoke: false,
 }));
+vi.mock('../../../projectIconStore.js', () => ({readProjectIcons: () => ({}), setProjectIcon: vi.fn()}));
+vi.mock('../../../projectInfoCore.js', () => ({updateProjectInfo: vi.fn(), readProjectIconImage: vi.fn()}));
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [h.trusted, h.untrusted] },
   ipcMain: { handle: h.handle },
@@ -81,6 +83,9 @@ describe('project alias remote snapshot and owner boundary', () => {
         { projectKey: 'local:C:/Repo', alias: 'Local project' },
         { projectKey: 'remote:ssh-a:/repo', alias: 'SSH project' },
       ],
+      icons: {},
+      settingsSupported: true,
+      settingsVersion: 5,
       platform: process.platform,
       ownerStamp: h.ownerStamp,
     });
