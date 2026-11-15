@@ -30,7 +30,10 @@ vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: (...args: unknown[]
 vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ blobUrl: () => 'cindy-media://blobs/test.png', extForMime: () => '.png', resolveSafe: () => ({ absPath: path.join(state.root, 'saved.png') }) }));
 import { createAttachmentRecovery, createRequestSizeController } from '../oversized-attachment-recovery.js';
 import { sessions } from '../../localDb/schema.js';
+import { createAttachmentRecoveryService } from '../oversizedAttachmentRecoveryCore.js';
+import * as blobs from '../../cindy-media/blobStore.desktop.js';
 import * as ingest from '../../cindy-media/ingest.js';
+import * as journal from '../../cindy-media/refCompensationJournal.desktop.js';
 
 beforeEach(async () => {
   state.root = await mkdtemp(path.join(tmpdir(), 'host-recovery-test-'));
@@ -174,6 +177,45 @@ it('recovers a spooled PDF to hook-attachments while preserving images in the me
   } finally {
     await proxy.dispose(); upstream.closeAllConnections();
     await new Promise<void>(resolve => upstream.close(() => resolve()));
+  }
+});
+
+// PR #10663: batch persistence could leave the first new reference on later failure.
+// Unit tier: two different images, with failure/cancellation/owner change during commit.
+// Existing compensation tests covered only the legacy recovery factory.
+it.each(['second-ingest', 'lost-ack', 'abort', 'owner'] as const)('compensates controller references on %s during batch commit', async failure => {
+  const mediaPath = (url: string) => path.join(state.root, path.basename(new URL(url).pathname));
+  const service = createAttachmentRecoveryService({ getUserDataDir: () => state.root, media: {
+    ...blobs, ...ingest, ...journal,
+    blobUrl: (hash, ext) => `cindy-media://blobs/${hash}${ext}`,
+    resolveSafe: url => ({ ...blobs.resolveSafe(url), absPath: mediaPath(url) }),
+  } });
+  const abort = new AbortController();
+  let saves = 0;
+  state.ingest.mockImplementation(async (params: Parameters<typeof ingest.ingestMedia>[0]) => {
+    params.assertStillValid?.();
+    if (++saves === 2 && failure === 'second-ingest') throw new Error('disk full');
+    const bytes = await readFile(params.filePath!);
+    const url = `cindy-media://blobs/${createHash('sha256').update(bytes).digest('hex')}.png`;
+    await writeFile(mediaPath(url), bytes);
+    if (saves === 1 && failure === 'abort') abort.abort();
+    if (saves === 1 && failure === 'owner') state.snapshot = { ...state.snapshot };
+    return { url };
+  });
+  if (failure === 'lost-ack') state.addRef.mockRejectedValue(new Error('lost acknowledgement'));
+  const second = { ...pngBlock(), image_url: pngBlock().image_url.replace(/AAAA/, 'AQEB') };
+  const raw = await readFile((await multiBody([pngBlock(), second])).filePath);
+  const result = await service.createRequestSizeController(() => state.resolved).control(raw, 'responses', {
+    signal: abort.signal, route: {}, triggerBytes: 3500, targetBytes: 1600,
+  });
+  expect(result).toBeNull();
+  expect(state.removeRef).toHaveBeenCalledTimes(2);
+  if (failure === 'second-ingest' || failure === 'lost-ack') {
+    expect(state.addRef).toHaveBeenCalledOnce();
+    expect(state.removeRef.mock.calls.map(([id]) => id)).toContain(state.addRef.mock.calls[0][0].id);
+  } else {
+    expect(saves).toBe(1);
+    expect(state.addRef).not.toHaveBeenCalled();
   }
 });
 
