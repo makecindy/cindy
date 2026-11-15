@@ -11,6 +11,7 @@ export interface SessionHeaderNativeTitleProps {
   onTitleDoubleTap?: () => void;
   tags?: import('@cindy/maker-shared').TaskTag[];
   title: string;
+  projectIcon?: import('react').ReactNode;
   pinned: boolean;
   syncing: boolean;
   syncingImmediately: boolean;

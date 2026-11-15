@@ -372,6 +372,26 @@ beforeEach(() => {
   resetRecentModels();
 });
 
+// model-groups.md §6: users without modes should not see an unused rail entry.
+// Existing coverage only supplies a populated config. Minimal input: empty routes;
+// tier: unit, real ModelSelectorContent. Also cover removing the last mode while open.
+it('shows the model-groups rail only while modes exist', async () => {
+  const picker = { config: { routes: [] }, active: null, onSelect: vi.fn(), onManage: vi.fn() };
+  const props = { remoteAgent: undefined, modelId: 'claude-opus-5', effort: 'medium', onModelChange: vi.fn(), onEffortChange: vi.fn() };
+  const view = renderPanel({ ...props, modelGroups: picker });
+  expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
+  view.rerender(<ModelSelectorContent {...props} modelGroups={{ ...picker, config: {
+    routes: [{ id: 'mode', name: 'My mode', strategy: 'order', candidates: [] }],
+  } }} />);
+  const rail = document.querySelector('[data-rail-item="model-groups"]');
+  expect(rail).not.toBeNull();
+  await act(async () => fireEvent.click(rail!));
+  expect(screen.getByText('My mode')).toBeTruthy();
+  view.rerender(<ModelSelectorContent {...props} modelGroups={picker} />);
+  expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
+  expect(document.querySelector('[data-rail-item="all"][aria-pressed="true"]')).not.toBeNull();
+});
+
 // #10207 / #10235 merge regression: local loading must not label a populated
 // mode section empty. Existing cases cover model favorites, not pinned modes.
 // Minimal input: pending local catalog + one mode; tier: unit, real picker.

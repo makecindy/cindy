@@ -259,7 +259,7 @@ vi.mock('../../utils/ipcValidate', () => ({
     throw new Error('PERMISSION_DENIED');
   },
 }));
-import { registerRemoteDesktopIpc } from '../index';
+import { registerRemoteDesktopIpc, requestRemoteDesktop } from '../index';
 import { PrivacyScreen } from '../privacyScreen';
 const event = (owner = h.owner) => ({ sender: owner, senderFrame: owner.mainFrame });
 const flush = async () => {
@@ -964,7 +964,7 @@ it('uses native Hyprland capture for video and relay without opening a portal pi
   expect(h.hyprlandStop).toHaveBeenCalled();
 });
 
-it('authorizes channel requests exactly like the relay and only for small control ops', async () => {
+it.each(['control', 'heartbeat'] as const)('authorizes channel %s requests exactly like the relay', async (op) => {
   const settings = await import('../../device-link/settings-store.desktop');
   const config = {
     remoteDesktopEnabled: true,
@@ -976,7 +976,7 @@ it('authorizes channel requests exactly like the relay and only for small contro
   vi.spyOn(screen, 'getAllDisplays').mockReturnValue([
     { id: 1, label: 'Main', size: { width: 1920, height: 1080 } },
   ] as any);
-  expect((await h.deps.capabilities()).channelRequests).toBe(true);
+  expect(await h.deps.capabilities()).toMatchObject({ channelRequests: true, signalingContinuity: true });
   const pending = offer();
   h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
   await flush();
@@ -985,13 +985,19 @@ it('authorizes channel requests exactly like the relay and only for small contro
   h.controllerState = { peer: 'phone', controlling: true };
   h.controllerRequest.mockResolvedValue({ controlling: true });
   const channel = h.handlers.get(DESKTOP_LOCAL.CHANNEL_REQUEST);
-  const control = { op: 'control', lease: h.lease, enabled: true };
+  const control = op === 'control'
+    ? { op, lease: h.lease, enabled: true }
+    : { op, lease: h.lease };
   await expect(channel(event(), h.lease, control)).resolves.toEqual({
     ok: true,
     result: { controlling: true },
   });
   // The lease owner is the authority, never anything the viewer claims.
-  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', control);
+  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', control, 'media');
+  // Relay payloads cannot label themselves as media; only the trusted IPC can.
+  const relayed = { ...control, source: 'media' };
+  await requestRemoteDesktop('phone', relayed);
+  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', relayed, 'relay');
   h.controllerRequest.mockClear();
   for (const [value, error] of [
     [{ op: 'start', displayId: '1' }, 'INVALID_REQUEST'],

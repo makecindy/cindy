@@ -40,6 +40,18 @@ const queuedInputOriginSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const runtimeFallbackSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeFallback.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+const autoResumeHooksSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/interruptedTurnAutoResumeHooks.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+const modelSwitchGateInputSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/modelSwitchGateInput.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -847,15 +859,18 @@ describe('session runtime control wiring', () => {
     const restore = setModel.indexOf('if (!hasSessionProvider(sessionId)) {');
     const hydrate = setModel.indexOf('hydrateSessionProvider(sessionId, persistedProviderId);');
     const current = setModel.indexOf('const currentProviderId = internalOptions.previousPiRoute');
-    const catalogCurrent = setModel.indexOf('const catalogCurrentWindow =');
+    // The source window is resolved in modelSwitchGateInput.ts; handleSetModel calls it.
+    const catalogCurrent = setModel.indexOf('const switchWindows = resolveModelSwitchWindows({');
     expect(requested).toBeGreaterThan(-1);
     expect(restore).toBeGreaterThan(requested);
     expect(hydrate).toBeGreaterThan(restore);
     expect(current).toBeGreaterThan(hydrate);
     // 恢复出的源 provider 必须先于源窗口解析被消费;目标窗口仍由目标 provider 解析。
     expect(catalogCurrent).toBeGreaterThan(current);
-    expect(setModel).toContain(
-      'lookupVerifiedContextWindow(\n          resolveRouteWindow,\n          model,\n          targetRouteProviderId,',
+    expect(setModel).toContain('currentRuntimeModel, currentProviderId, piPreview, liveCurrentWindow,');
+    expect(modelSwitchGateInputSource).toContain('const catalogCurrentWindow =');
+    expect(modelSwitchGateInputSource).toContain(
+      'lookupVerifiedContextWindow(\n    resolveRouteWindow,\n    model,\n    targetRouteProviderId,',
     );
     expect(setModel).toContain('const targetProviderId =');
     // 停用轴准入只依赖目标路由,源 provider 的 DB 查询失败不能跳过准入
@@ -898,8 +913,10 @@ describe('session runtime control wiring', () => {
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
-    expect(setModel).toContain("typeof runtimeStatus.contextTokens === 'number'");
-    expect(setModel).toContain('runtimeStatus.contextTokens >= 0');
+    // The usage reading is validated in modelSwitchGateInput.ts; handleSetModel calls it.
+    expect(setModel).toContain('resolveModelSwitchContextTokens(runtimeStatus, liveContextTokens)');
+    expect(modelSwitchGateInputSource).toContain("typeof runtimeStatus.contextTokens === 'number'");
+    expect(modelSwitchGateInputSource).toContain('runtimeStatus.contextTokens >= 0');
     const persistFinalRoute = setModel.indexOf('await persistSessionFields(sessionId, patch);');
     const projectFinalWindow = setModel.indexOf(
       '// commitRebuild first projects zero usage against the still-authoritative',
@@ -1190,27 +1207,27 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain(
       'const pendingSessionRuntimeFallbackRebuilds = new WeakMap<Session, number>();',
     );
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain(
       'pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);',
     );
-    expect(registerSource).toContain(
+    expect(autoResumeHooksSource).toContain(
       'pendingSessionRuntimeFallbackRebuilds.delete(fallbackRebuildSession);',
     );
     expect(registerSource).toContain(
       'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
     expect(registerSource).toContain('autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken)');
-    expect(registerSource).toContain(
+    expect(autoResumeHooksSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
     );
-    expect(registerSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
+    expect(runtimeFallbackSource).toContain(
       'automatic session runtime fallback rebuilding frozen remote route',
     );
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain(
       'await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));',
     );
-    expect(registerSource).toContain('result = await applyCandidate();');
+    expect(runtimeFallbackSource).toContain('result = await applyCandidate();');
   });
 
   it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
@@ -1235,10 +1252,12 @@ describe('session runtime control wiring', () => {
       'runtime selection was not changed',
     );
 
+    // The fallback is in sessionRuntimeFallback.ts; register.ts assembles it.
+    expect(registerSource).toContain('const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({');
     const fallback = handlerBody(
-      registerSource,
-      'const maybeApplySessionRuntimeFallback = async (',
-      'const sessionControlService = createSessionControlService({',
+      runtimeFallbackSource,
+      'export function createSessionRuntimeFallback',
+      '\n}\n',
     );
     const fallbackGuard = fallback.indexOf(
       'if (runtimeSelectionRequiresModelWindowConfirmation(result))',
@@ -1311,16 +1330,18 @@ describe('session runtime control wiring', () => {
   // persists Pi runtime-verified windows without catalog replacement: covered by the executable sessionEventPipeline tests.
 
   it('counts fallback eligibility across the whole interrupted-turn episode', () => {
-    expect(registerSource).toContain(
+    expect(autoResumeHooksSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
     );
   });
 
   it('records failed fallback routes without allowing stale owner work to mutate state', () => {
+    // The fallback is in sessionRuntimeFallback.ts; register.ts assembles it.
+    expect(registerSource).toContain('const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({');
     const fallback = handlerBody(
-      registerSource,
-      'const maybeApplySessionRuntimeFallback = async (',
-      'const sessionControlService = createSessionControlService({',
+      runtimeFallbackSource,
+      'export function createSessionRuntimeFallback',
+      '\n}\n',
     );
     expect(fallback).toContain(
       'const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();',

@@ -2075,7 +2075,24 @@ describe('Chat Server result delivery and refresh', () => {
 
     // Claimed as the group's Cindy, never through AI reply mode; the requester's own words become one
     // ordinary visible message in the group's task with its label and the group's recent messages; only
-    // that input's turn end answers the group, and the group never stops the task.
+    // that input's turn end answers the group.
+    it('stops the exact public Cindy task input when another device requests a stop', async () => {
+      await ask(5, 'Wait until stopped');
+      const [input] = dispatched();
+      expect(input!.assertDispatchCurrent).toBeTypeOf('function');
+      expect(() => input!.assertDispatchCurrent!()).not.toThrow();
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => body?.action === 'heartbeat'
+        ? { status: 409, body: { error: { code: 'STOP_REQUESTED' } } }
+        : original(route, method, body));
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(deps.abortLane).toHaveBeenCalledExactlyOnceWith('group-task-1', input!.clientId);
+      expect(() => input!.assertDispatchCurrent!()).toThrow('STALE_EXECUTOR');
+      expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'cancel')).toBe(true);
+      expect(await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: input!.clientId, resultText: 'Late result' })).toBe(false);
+      expect(deliveries()).toHaveLength(0);
+    });
+
     it('delivers your request into the group task and answers with that turn', async () => {
       history.push(message(2, peerId, 'The build is red\nagain'));
       await ask(5, '@Cindy please fix it');
