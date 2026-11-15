@@ -641,6 +641,35 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
   });
 
+  // prepare/request/poll entry, unit: #4577333353 requires a saved poll/result
+  // AND a repaired task ID. Existing cases repaired either the ID or the result fields.
+  it.each([
+    ['same', 'poll'], ['same', 'result'], ['changed', 'poll'], ['changed', 'result'],
+  ] as const)('rebinds a %s task with a saved %s receipt without delivering another task', async (identity, saved) => {
+    const { model, value } = setupGuideDriven(recoveryVideoOperation(['wrongId'], saved === 'poll' ? ['wrong'] : ['phase'], ['wrong']));
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    const oldTask = identity === 'same' ? 'correct-task' : 'incorrect-task';
+    const oldBytes = Buffer.concat([MP4, Buffer.from(oldTask)]);
+    const correctBytes = Buffer.concat([MP4, Buffer.from('correct-task')]);
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: 'correct-task', wrongId: oldTask }))
+      .mockResolvedValueOnce(Response.json({ phase: 'ready', movie: oldBytes.toString('base64') }));
+    await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
+    await callCindyMedia({ action: 'poll', invocationId: String(first.invocation_id) });
+    expect(mocks.ingestMedia).not.toHaveBeenCalled();
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value: { ...value, revision: 'fixed-task-and-result', operations: [recoveryVideoOperation()] } });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate', sourceInvocationId: String(first.invocation_id) });
+    expect(next).toMatchObject({ ok: true, next_action: 'poll' });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
+    if (identity === 'changed') mocks.outboundFetch.mockResolvedValueOnce(Response.json({ phase: 'ready', movie: correctBytes.toString('base64') }));
+    expect(await callCindyMedia({ action: 'poll', invocationId: String(next.invocation_id) })).toMatchObject({ ok: true, status: 'complete' });
+    expect(mocks.ingestMedia.mock.calls[0]?.[0].buffer).toEqual(correctBytes);
+    expect(mocks.outboundFetch.mock.calls.map(call => call[0])).toEqual([
+      'https://relay.example/proxy/v2/images/generations', `https://relay.example/proxy/v2/jobs/${oldTask}`,
+      ...(identity === 'changed' ? ['https://relay.example/proxy/v2/jobs/correct-task'] : []),
+    ]);
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+  });
+
   it('rejects preparing a paid receipt across changed connections without creating a new invocation', async () => {
     const { model, connection } = setupGuideDriven();
     const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'image.generate' });
@@ -692,6 +721,41 @@ describe('Cindy Core media invocation state and security boundary', () => {
       .toMatchObject({ ok: false, errorCode: 'INVOCATION_NOT_FOUND' });
     expect(mocks.rows.size).toBe(1);
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  // callCindyMedia + real download gate, unit: #4577352082. A local Guide's
+  // declared CDN must not grant itself source permission in either response mode.
+  it.each([
+    ['sync', 'custom', true], ['sync', 'custom', false], ['sync', 'official', true],
+    ['async', 'custom', true], ['async', 'custom', false], ['async', 'official', true],
+  ] as const)('uses Host source approval for a %s %s Guide (allowed=%s)', async (mode, source, allowed) => {
+    const media = [{ path: ['media'], encoding: 'url', kind: mode === 'sync' ? 'image' : 'video', allowedUrlHosts: ['known.example.com'] }];
+    const video = recoveryVideoOperation();
+    const op = mode === 'sync' ? operation({ mode, media })
+      : { ...video, response: { ...video.response, poll: { ...video.response.poll, media } } };
+    const { model, value } = setupGuideDriven(op);
+    mocks.resolvedGuide.mockResolvedValueOnce({ source, protocol: 'gateway', value });
+    mocks.confirm.mockResolvedValue(allowed);
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: mode === 'sync' ? 'image.generate' : 'video.generate' });
+    expect(prepared).toMatchObject({ ok: true, guide_source: source });
+    if (mode === 'async') mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: 'paid-task' }));
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ phase: 'ready', media: 'https://known.example.com/result' }))
+      .mockResolvedValueOnce(new Response(mode === 'sync' ? PNG : MP4));
+    let result = await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body: { prompt: 'cat' } });
+    if (mode === 'async') result = await callCindyMedia({ action: 'poll', invocationId: String(prepared.invocation_id) });
+    if (allowed) {
+      expect(result).toMatchObject({ ok: true, status: 'complete' });
+      expect(mocks.ingestMedia).toHaveBeenCalledOnce();
+      expect(mocks.guardedOutboundFetch).toHaveBeenCalledOnce();
+    } else {
+      expect(result).toMatchObject({ ok: false, errorCode: 'MEDIA_DOWNLOAD_DENIED', retryable: false });
+      expect(mocks.ingestMedia).not.toHaveBeenCalled();
+      expect(mocks.guardedOutboundFetch).not.toHaveBeenCalled();
+      expect(mocks.rows.get(String(prepared.invocation_id))?.state).toBe('pending');
+    }
+    if (source === 'custom') expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith({ source: 'https://known.example.com', reasons: ['source'] });
+    else expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
   });
 
   // Unit at production dispatch: a new model must use its Guide's real path,

@@ -903,6 +903,7 @@ async function materializeResults(
   extractors: readonly MediaResultExtractor[],
   scope: MediaAuthScope,
   db: DbClient,
+  binding: MediaInvocationBinding,
 ): Promise<Record<string, unknown>> {
   const found: Array<{ raw: string; extractor: MediaResultExtractor }> = [];
   const seen = new Set<string>();
@@ -933,7 +934,10 @@ async function materializeResults(
     assertAuthScope(scope);
     let media: Awaited<ReturnType<typeof mediaBytes>>;
     try {
-      media = await mediaBytes(item.raw, item.extractor, scope);
+      // A local Guide describes the response; it cannot approve its own CDN.
+      const extractor = binding.executor === 'provider-http' && binding.guideSource === 'custom'
+        ? { ...item.extractor, allowedUrlHosts: [] } : item.extractor;
+      media = await mediaBytes(item.raw, extractor, scope);
     } catch (error) {
       // 账号切换与下载失败同时发生时，账号边界优先，避免旧账号结果继续落状态。
       assertAuthScope(scope);
@@ -1194,7 +1198,7 @@ async function materializeSyncInvocation(
     const extractors: readonly MediaResultExtractor[] = isClientProviderInvocation(invocation)
       ? [{ path: ['url'], encoding: 'url', kind: 'image' }, ...responseGuide.media]
       : responseGuide.media;
-    const media = await materializeResults(response, extractors, scope, db);
+    const media = await materializeResults(response, extractors, scope, db, invocation.guide.binding);
     assertAuthScope(scope, invocation.owner);
     return persistCompletedInvocation(invocation, media, scope, db);
   } catch (error) {
@@ -1460,7 +1464,7 @@ async function preparePaidReceipt(guide: PreparedMediaInvocationGuide, sourceId:
       ? valuesAtPath(submission, guide.response.taskIdPath).find((value): value is string => typeof value === 'string' && value.length > 0)
       : source.taskId;
     if (!taskId) throw new MediaInvocationError('RECOVERY_NOT_AVAILABLE', '修正后的 Guide 仍未从原回执取得任务编号，请继续补齐 Guide；不要重新生成');
-    const poll = receipt.result ?? receipt.poll;
+    const poll = taskId === source.taskId ? receipt.result ?? receipt.poll : undefined;
     const status = valuesAtPath(poll, guide.response.poll.statusPath)[0];
     const result = typeof status === 'string' && guide.response.poll.successValues.includes(status) ? poll : undefined;
     responseJson = serializeMediaInvocationReceipt({ submission, poll: result === undefined ? poll : undefined, result });
@@ -1784,7 +1788,7 @@ async function materializeAsyncInvocation(
   }
   try {
     if (isClientVideoInvocation(invocation)) (await resolveInvocationConnection(invocation)).assertCurrent?.();
-    const media = await materializeResults(response, responseGuide.poll.media, scope, db);
+    const media = await materializeResults(response, responseGuide.poll.media, scope, db, invocation.guide.binding);
     assertAuthScope(scope, invocation.owner);
     return persistCompletedInvocation(invocation, media, scope, db);
   } catch (error) {

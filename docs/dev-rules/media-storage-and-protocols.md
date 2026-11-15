@@ -257,6 +257,7 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   provider、模型、能力、sourceAgent 与连接摘要，且原 request/poll 当前不在执行。
   prepare 原子保存为已有结果/任务的 pending，不能再次生成；不访问上游，返回后直接
   依 `next_action` 走现有 request/poll、权限和入仓流程，没有独立恢复动作。
+  重新提取的任务编号变化时只保留提交回执，不复用旧编号的轮询响应或结果；编号相同才可复用。
   原回执缺失时说明无法恢复，不自动重提。Guide 不能提供凭证；Google/Anthropic 鉴权头复用实际连接
   （含型号覆盖）的协议与所选 runtime 的托管 Key。
 - 声明式 HTTP 的提交回执和最近轮询回执保存在账号数据库已有的 `response_json`，以
@@ -293,7 +294,9 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 
 - 下载是生成流程内部的一步，不新增“领取”状态、列表或用户操作。上游返回后，客户端
   下载并通过 `ingestMedia` 返回受管媒体；需要确认时暂停同一次操作，批准后自动继续。
-- Guide 的 `allowedUrlHosts` 保留为已确认来源名单。使用 `openai-videos` 的自定义视频连接还将
+- 官方 Guide 的 `allowedUrlHosts` 保留为已确认来源名单。账号本地自定义 Guide 的域名声明
+  不构成来源授权，URL 结果沿用名单外来源的既有确认；保存或 prepare 通过不免除此确认。
+  使用 `openai-videos` 的自定义视频连接还将
   绑定中转站的域名及其子域名视作已确认结果来源（排除 IP、无点域名和 `.local`）。
   名单内的正常结果 URL 自动通过隔离下载读取，仅允许 GET，不携带生成接口凭证；
   名单外来源、HTTP、特殊端口、地址内登录信息、受限网络等权限要求通过
