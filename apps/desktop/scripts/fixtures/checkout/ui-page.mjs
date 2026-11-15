@@ -303,13 +303,55 @@ export default {
       );
       const leave = page.getByRole('radio').nth(1);
       assert.equal(await leave.isChecked(), ui.case === 'conflict');
-      if (ui.case !== 'conflict') {
-        await carry.focus();
-        await page.keyboard.press('ArrowDown');
-        assert.equal(await leave.isChecked(), true);
-        await page.keyboard.press('ArrowUp');
-        assert.equal(await carry.isChecked(), true);
-      }
+      const firstAvailable = ui.case === 'conflict' ? leave : carry;
+      const focusPaint = () =>
+        firstAvailable.evaluate((input) => {
+          const label = input.closest('label');
+          const indicator = label.querySelector('span[aria-hidden]');
+          const style = globalThis.getComputedStyle(indicator);
+          const circle = indicator.getBoundingClientRect();
+          const group = label.parentElement.getBoundingClientRect();
+          return {
+            focused: globalThis.document.activeElement === input,
+            visible: input.matches(':focus-visible'),
+            outline: style.outlineStyle,
+            width: parseFloat(style.outlineWidth),
+            offset: parseFloat(style.outlineOffset),
+            rowShadow: globalThis.getComputedStyle(label).boxShadow,
+            contained:
+              circle.left - 4 >= group.left &&
+              circle.right + 4 <= group.right &&
+              circle.top - 4 >= group.top &&
+              circle.bottom + 4 <= group.bottom,
+          };
+        });
+      await firstAvailable.locator('..').click();
+      const mouse = await focusPaint();
+      assert.equal(mouse.visible, false, 'Mouse selection must not paint keyboard focus');
+      assert.equal(mouse.rowShadow, 'none', 'The row must not have a rectangular focus ring');
+      assert.equal(mouse.outline, 'none');
+      await ui.capture('mouse-selection');
+      await page
+        .getByRole('button', { name: await ui.t('newChat.checkout.showFiles'), exact: true })
+        .focus();
+      await page.keyboard.press('Tab');
+      assert.equal((await focusPaint()).focused, true, 'Tab must enter on the checked radio');
+      await page.keyboard.press('ArrowDown');
+      assert.equal(await firstAvailable.isChecked(), false);
+      await page.keyboard.press('ArrowUp');
+      assert.equal(await firstAvailable.isChecked(), true);
+      const keyboard = await focusPaint();
+      assert.equal(keyboard.visible, true);
+      assert.equal(keyboard.rowShadow, 'none');
+      assert.equal(keyboard.outline, 'solid');
+      assert.equal(keyboard.width, 2);
+      assert.equal(keyboard.offset, 2);
+      assert.equal(
+        keyboard.contained,
+        true,
+        'Circular focus outline must fit inside the clipped group',
+      );
+      await ui.capture('keyboard-first-option');
       // Keyboard checks can scroll the dialog body; capture its initial view.
       await page.getByRole('radiogroup').evaluate((el) => {
         el.parentElement.scrollTop = 0;

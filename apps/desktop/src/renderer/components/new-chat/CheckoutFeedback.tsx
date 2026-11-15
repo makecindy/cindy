@@ -281,7 +281,7 @@ export function CheckoutDialog({
                   return (
                     <label
                       key={choice}
-                      className={`relative flex cursor-pointer items-center gap-3 px-3 py-2 focus-within:ring-2 focus-within:ring-inset focus-within:ring-[var(--focus-ring)] ${disabled ? 'cursor-not-allowed' : 'hover:bg-[var(--surface-hover)]'} ${strategy === choice ? 'bg-[var(--surface-chip)]' : ''}`}
+                      className={`relative flex cursor-pointer items-center gap-3 px-3 py-2 ${disabled ? 'cursor-not-allowed' : 'hover:bg-[var(--surface-hover)]'} ${strategy === choice ? 'bg-[var(--surface-chip)]' : ''}`}
                     >
                       <span
                         className={`${disabled ? 'opacity-60' : ''} flex size-[30px] shrink-0 items-center justify-center rounded-lg ${strategy === choice ? 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]' : 'bg-[var(--surface-chip)] text-[var(--text-secondary)]'}`}
@@ -299,7 +299,7 @@ export function CheckoutDialog({
                         checked={strategy === choice}
                         disabled={disabled}
                         onChange={() => setStrategy(choice)}
-                        className="sr-only"
+                        className="peer sr-only"
                       />
                       <span className="min-w-0 flex-1 break-words">
                         <span className={`block font-medium ${disabled ? 'opacity-60' : ''}`}>
@@ -319,7 +319,7 @@ export function CheckoutDialog({
                       </span>
                       <span
                         aria-hidden
-                        className={`${disabled ? 'opacity-60' : ''} flex size-4 shrink-0 items-center justify-center rounded-full border-[1.5px] border-[var(--text-tertiary)] ${strategy === choice ? 'bg-[var(--text-primary)] border-[var(--text-primary)]' : ''}`}
+                        className={`${disabled ? 'opacity-60' : ''} flex size-4 shrink-0 items-center justify-center rounded-full peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--focus-ring)] border-[1.5px] border-[var(--text-tertiary)] ${strategy === choice ? 'bg-[var(--text-primary)] border-[var(--text-primary)]' : ''}`}
                       >
                         {strategy === choice && (
                           <span className="size-1.5 rounded-full bg-[var(--confirm-bg)]" />
