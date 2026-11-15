@@ -1149,7 +1149,10 @@ function handleVisualMockFileBrowser(input: unknown): unknown {
   const op = input && typeof input === 'object' && 'op' in input ? String(input.op) : '';
   const shared = sharedUiMockFiles(input);
   if (shared !== undefined) return shared;
-  if (op === 'caps') return { ok: true, gzip: true } satisfies FileBrowserCapsResult;
+  if (op === 'caps') return { ok: true, gzip: true, fileRead: true } satisfies FileBrowserCapsResult & { fileRead: boolean };
+  // Reuse the synthetic PDF bytes so the multi-file browser can exercise the real reader.
+  if (op === 'fileUrl' && (input as { relPath?: string }).relPath === 'quarterly-report.pdf')
+    return { ok: true, url: 'xdt-file://open?path=%2Fattachment-preview%2Fsample.pdf' };
   if (op === 'listDir') return visualMockFileBrowserEntries();
   if (op === 'listAllFiles') {
     return {
