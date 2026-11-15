@@ -34,13 +34,16 @@ const responsesSse = [
   { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 1 } } },
 ];
 let chatgptRejects = false;
+// While set, every gateway message request is refused as too long for the window, including the
+// CLI's own compaction of the conversation: the overflow reaches Cindy only when that fails too.
+let overflowing = false;
 const upstream = createServer(async (req, res) => {
   let raw = '';
   for await (const chunk of req) raw += chunk;
   let body = null;
   try { body = raw ? JSON.parse(raw) : null; } catch { /* opaque */ }
   requests.push({ url: req.url, apiKey: req.headers['x-api-key'], authorization: req.headers.authorization, model: body?.model,
-    accountId: req.headers['chatgpt-account-id'] });
+    accountId: req.headers['chatgpt-account-id'], messages: body?.messages });
   // The ChatGPT subscription backend (the bridge's https://chatgpt.com/ is redirected here).
   if (req.url?.startsWith('/chatgpt/')) {
     if (chatgptRejects) {
@@ -63,6 +66,12 @@ const upstream = createServer(async (req, res) => {
   // The gateway accepts only its current key (custom providers have their own path).
   if (req.url.startsWith('/v1/messages') && req.headers['x-api-key'] !== gatewayKey) {
     res.writeHead(401, { 'content-type': 'application/json' }).end('{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}');
+    return;
+  }
+  if (overflowing) {
+    requests.at(-1).overflow = true;
+    res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ type: 'error',
+      error: { type: 'invalid_request_error', message: 'prompt is too long: 210000 tokens > 200000 maximum' } }));
     return;
   }
   if (body?.stream) {
@@ -104,6 +113,16 @@ const { setSessionProvider, clearSessionProvider } = await import('../../desktop
 const { customProviderSecretStorageKey } = await import('../../desktop/src/shared/providerSecrets.ts');
 const { dataOwnerStorageKey } = await import('../../desktop/src/main/dataOwnerPath.ts');
 const { initLogger } = await import('../../desktop/src/main/logger.ts');
+const { getCurrentDbClientSnapshot } = await import('../../desktop/src/main/localDb/client/current.ts');
+const { eq } = await import('drizzle-orm');
+const { sessions, messages: messageTable } = await import('../../desktop/src/main/localDb/schema.ts');
+const { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } = await import('../../desktop/src/main/localDb/sessionActiveTurn.ts');
+const { createInputQueue } = await import('../src/agent/input-queue.mjs');
+const { createEventHub } = await import('../src/events.mjs');
+const { createChatHandler } = await import('../src/chat.mjs');
+const { createHostMessageStore } = await import('../src/message-store.ts');
+const { createHostContextRecoveryWiring } = await import('../src/agent/context-recovery-wiring.ts');
+const { createHostAgentHandoffPending } = await import('../src/agent/handoff-pending.ts');
 initLogger({ logDir: path.join(root, 'logs'), isDev: true, level: 'debug' });
 
 const profile = path.join(root, 'profile');
@@ -198,14 +217,20 @@ try {
 
   // 1b. The gateway key changes while a Claude process is running. The process keeps what it was
   // started with; its next request reaches the gateway with the new key, without a restart.
+  // This process's child processes, by parent process id (`ps` has no Windows counterpart; there the
+  // same pairs come from Win32_Process). The listing process itself is left out.
   const childPids = async () => {
     const { execFile } = await import('node:child_process');
-    let ps;
+    let lister;
+    const [command, args] = process.platform === 'win32'
+      ? ['powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+        `Get-CimInstance Win32_Process -Filter "ParentProcessId=${process.pid}" | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }`]]
+      : ['ps', ['-A', '-o', 'pid=,ppid=']];
     const out = await new Promise((resolve, reject) => {
-      ps = execFile('ps', ['-A', '-o', 'pid=,ppid='], (error, stdout) => error ? reject(error) : resolve(stdout));
+      lister = execFile(command, args, (error, stdout) => error ? reject(error) : resolve(stdout));
     });
-    return out.trim().split('\n').map(line => line.trim().split(/\s+/).map(Number))
-      .filter(([pid, ppid]) => ppid === process.pid && pid !== ps.pid).map(([pid]) => pid).sort((a, b) => a - b);
+    return out.trim().split(/\r?\n/).filter(Boolean).map(line => line.trim().split(/\s+/).map(Number))
+      .filter(([pid, ppid]) => ppid === process.pid && pid !== lister.pid).map(([pid]) => pid).sort((a, b) => a - b);
   };
   setSessionProvider('claude-gateway-rotation', 'xd');
   const live = await graph.agent.startSession({ sessionId: 'claude-gateway-rotation', providerId: 'xd', model: 'claude-sonnet-4-5', workingDir: root });
@@ -331,6 +356,128 @@ try {
   assert.deepEqual(oneShotRequests.map(r => [r.url, r.apiKey, r.authorization]), [['/v1/messages', gatewayKey, undefined]]);
   assert.equal(connects.length, connectsBefore);
   console.log('PASS one-shot with a Claude Code login: one request to the gateway with the gateway key, none elsewhere');
+
+  // ---- Context recovery of an overflow on the gateway, through the queue as main.ts wires it ----
+  // One ordinary turn, then the gateway refuses the next request as too long. While the task is
+  // rebuilt the gateway key changes; the replay reaches the gateway with the new key, carrying the
+  // summary of the first turn once, and the client sees no error.
+  {
+    const recoveryTask = 'claude-recovery';
+    await new OwnerSessionStorage({ db: () => database }).create({ id: recoveryTask,
+      title: 'Recovery fixture', agentKind: 'claude-code', model: 'claude-sonnet-4-5', workDir: root });
+    await database.drizzle.update(sessions).set({ providerId: 'xd' }).where(eq(sessions.id, recoveryTask));
+    const hub = createEventHub();
+    const readSession = async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1))[0];
+    const store = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
+    let rotatedDuringRebuild = null;
+    // The rebuild's card is written between the rebuild's commit and the replay: the gateway takes
+    // requests again there, and on the first rebuild its key changes.
+    const persistMessage = async (id, input, options) => {
+      if (String(input.clientId).startsWith('context-rebuild-card:')) {
+        overflowing = false;
+        if (rotatedDuringRebuild === null) {
+          rotatedDuringRebuild = gatewayKey = 'synthetic-gateway-key-during-rebuild';
+          await modelAccess.sync.sync();
+        }
+      }
+      return store(id, input, options);
+    };
+    const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
+      publish: event => hub.publish(event), log: console });
+    const queue = createInputQueue({ getMaker: () => graph.maker, hub, readSession,
+      getOwner: getCurrentDbClientSnapshot, persistMessage, pendingHandoff,
+      markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
+      markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
+      ...createHostContextRecoveryWiring({ openKinds: new Set(['context-overflow']), getGraph: () => graph,
+        persistMessage, publish: event => hub.publish(event), pendingHandoff, log: console }),
+    });
+    const seen = [];
+    const unsubscribe = hub.subscribe(event => { if (event.sessionId === recoveryTask) seen.push(event); });
+    const doneCount = () => seen.filter(event => event.event?.type === 'done').length;
+    const until = async (predicate, what) => {
+      const deadline = Date.now() + 90_000;
+      // real-wait: the Claude process answers on its own schedule.
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
+    const rowsOf = async role => (await database.drizzle.select().from(messageTable).where(eq(messageTable.sessionId, recoveryTask)))
+      .filter(row => row.role === role);
+    const turnRequests = from => requests.slice(from).filter(r => r.url.startsWith('/v1/messages') && !r.url.includes('count_tokens'));
+    const lastUserText = request => JSON.stringify((request.messages ?? []).filter(message => message.role === 'user').at(-1) ?? null);
+    const count = (text, needle) => text.split(JSON.stringify(needle).slice(1, -1)).length - 1;
+    try {
+      await queue.enqueue(recoveryTask, { clientId: 'claude-recovery-first', text: 'remember the word heliotrope' });
+      await until(() => doneCount() === 1, 'the first turn');
+      const keyBefore = gatewayKey;
+      const beforeOverflow = requests.length;
+      overflowing = true;
+      await queue.enqueue(recoveryTask, { clientId: 'claude-recovery-second', text: 'now return synthetic complete' });
+      await until(() => doneCount() === 2, 'the replayed turn');
+      const sent = turnRequests(beforeOverflow);
+      const overflowAt = sent.findIndex(r => r.overflow);
+      assert.ok(overflowAt >= 0, 'the gateway refused a request as too long');
+      assert.equal(sent[overflowAt].apiKey, keyBefore);
+      assert.equal(rotatedDuringRebuild, 'synthetic-gateway-key-during-rebuild', 'the key changed during the rebuild');
+      const replay = sent.slice(overflowAt + 1).filter(r => /now return synthetic complete/.test(lastUserText(r)));
+      assert.ok(replay.length > 0, 'the replay reached the gateway');
+      for (const request of replay) assert.equal(request.apiKey, rotatedDuringRebuild, 'the replay uses the new key');
+      const [marker] = await rowsOf('context_rebuild');
+      const { handoff } = JSON.parse(marker.content);
+      const firstLine = handoff.split('\n').find(line => line.trim().length > 20);
+      assert.equal(count(lastUserText(replay[0]), firstLine), 1, 'the replay carries the summary once');
+      assert.match(lastUserText(replay[0]), /heliotrope/, 'the summary carries the first turn');
+      assert.equal(seen.filter(event => event.event?.type === 'error' || event.type === 'error').length, 0, 'the client sees no error');
+      assert.equal((await rowsOf('user')).length, 2, 'the replay writes no second user row');
+      assert.equal((await rowsOf('error')).length, 0, 'no error row');
+      const beforeNext = requests.length;
+      await queue.enqueue(recoveryTask, { clientId: 'claude-recovery-third', text: 'one more' });
+      await until(() => doneCount() === 3, 'the next turn');
+      const next = turnRequests(beforeNext).filter(r => /one more/.test(lastUserText(r)));
+      assert.ok(next.length > 0);
+      assert.equal(count(lastUserText(next[0]), firstLine), 0, 'the next message carries no summary');
+      assert.equal(JSON.parse((await rowsOf('context_rebuild'))[0].content).consumed, true);
+
+      // The same recovery for a message sent through /api/chat: the replay's events carry the
+      // message's client id, so its stream carries the answer and ends on the replay's done.
+      const chat = createChatHandler({ readSession, events: hub,
+        enqueue: (id, input) => queue.enqueue(id, input), inputStatus: (id, clientId) => queue.inputStatus(id, clientId) });
+      const chatServer = createServer((req, res) => { void chat(req, res); });
+      await new Promise(resolve => chatServer.listen(0, '127.0.0.1', resolve));
+      try {
+        const beforeChat = requests.length;
+        overflowing = true;
+        // A stream that never ends fails here on the timeout.
+        const body = await fetch(`http://127.0.0.1:${chatServer.address().port}/chat`, { method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId: recoveryTask, clientId: 'claude-recovery-chat', prompt: 'now return synthetic complete again' }),
+          signal: AbortSignal.timeout(120_000) }).then(async response => { assert.equal(response.status, 200); return response.text(); });
+        assert.ok(turnRequests(beforeChat).some(r => r.overflow), 'the gateway refused the chat message as too long');
+        const streamed = body.split('\n\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice('data: '.length)));
+        assert.ok(streamed.some(event => event.inputClientId === 'claude-recovery-chat' && event.type === 'done'),
+          'the stream ends on the replay\'s done, stamped with the message\'s client id');
+        assert.match(body, /event: end/);
+        assert.equal(streamed.filter(event => event.type === 'error' || event.event?.type === 'error').length, 0, 'the stream shows no error');
+        assert.equal((await rowsOf('user')).length, 4, 'the replay writes no second user row');
+        assert.equal((await rowsOf('context_rebuild')).length, 2, 'the chat message was recovered');
+        assert.equal((await rowsOf('error')).length, 0, 'no error row');
+      } finally {
+        await new Promise(resolve => chatServer.close(resolve));
+      }
+    } finally {
+      unsubscribe();
+      overflowing = false;
+      await queue.dispose();
+      // The replay's Claude process has exited (and removed its session file) before the files
+      // under the run's root are scanned below; closing a session does not wait for the exit.
+      await graph.maker.closeSession(recoveryTask).catch(() => {});
+      const exitDeadline = Date.now() + 10_000;
+      // real-wait: the process exits on its own schedule.
+      while ((await childPids()).length > 0 && Date.now() < exitDeadline) await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    console.log('PASS Claude context overflow recovery on the gateway through the production wiring: the key changed during the rebuild and the replay used the new key, carrying the summary once; no client error; the next message carries no summary; a message sent through /api/chat is recovered and its stream ends on the replay');
+  }
 
   // Neither proxy secret is written anywhere: logs, the CLI's home and config, the profile.
   const secrets = [proxy.inboundSecret(), proxy.gatewayInboundSecret()];
