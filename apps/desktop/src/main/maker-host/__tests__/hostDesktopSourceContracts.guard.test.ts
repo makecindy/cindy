@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 const repo = path.resolve(__dirname, '../../../../../..');
 const hostSrc = path.join(repo, 'apps/host/src');
@@ -407,5 +407,45 @@ describe('Host copies of desktop expressions', () => {
     const copied = after(read(path.join(desktopMain, 'learn-host/__tests__/hostLearnCaptureParity.test.ts')), '  desktop = createCindyLearnInvocationCapture({', '\n  }) as Capture;');
     assert.ok(desktopDeps.length > 0);
     assert.equal(copied, desktopDeps);
+  });
+});
+
+// 以下断言原在桌面普通单测里读 register.ts；第一批桌面准备把被守护的代码原样搬进共用文件
+// （如 interruptedTurnAutoResumeHooks.ts），Host 之后直接调用这些文件。断言随代码
+// 改读新文件，按测试规范从普通单测移到这里，每条的意思不变；register.ts 一侧的接线断言留在原文件。
+describe('shared turn files moved out of register.ts', () => {
+  const autoResumeHooksSource = read(path.join(desktopMain, 'maker-ipc/interruptedTurnAutoResumeHooks.ts'));
+
+  // 原在 interruptedContinuationContract.test.ts “keeps a scheduler auto-resume owned until dispatch and fails it
+  // when discarded”。规则：定时任务的自动续接在派发前一直归它所有，被丢弃时以 deferredOwner 收尾。
+  // 失效后果：定时任务的续接在派发前就被清掉，或被丢弃后留在待定状态。
+  it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {
+    const scheduleStart = autoResumeHooksSource.indexOf('autoResumeBookkeeping.schedule(');
+    const scheduleEnd = autoResumeHooksSource.indexOf('onUnconfirmedAutoResumeTurn:', scheduleStart);
+    expect(scheduleStart).toBeGreaterThan(-1);
+    expect(scheduleEnd).toBeGreaterThan(scheduleStart);
+    const scheduleHook = autoResumeHooksSource.slice(scheduleStart, scheduleEnd);
+    expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
+    expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
+    expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
+
+    const ownerDiscardedStart = autoResumeHooksSource.indexOf('onResumableTurnErrorDiscarded: (');
+    const ownerDiscardedEnd = autoResumeHooksSource.indexOf('onResumableTurnError: (', ownerDiscardedStart);
+    expect(autoResumeHooksSource.slice(ownerDiscardedStart, ownerDiscardedEnd)).toMatch(
+      /deferredOwner:\s*options\.owner/,
+    );
+  });
+
+  // 原在 makerEventHotPathOrdering.test.ts “keeps auto-resume-owned terminal errors out of Agent Island until they
+  // are final”与“preserves continuation-only retry across its exact unexpected provider rebuild”。规则：过期的续接
+  // 不再重试；只续接型的续接记下预期的那一次重建；未确认的续接放弃持久化的那一份。失效后果：过期续接重复发送，
+  // 或只续接型的续接在重建后丢失。
+  it('keeps the auto-resume hooks\' attempt, rebuild and unconfirmed-turn steps', () => {
+    expect(autoResumeHooksSource).toContain('if (!attempt.isCurrent()) {');
+    expect(autoResumeHooksSource).toContain('if (isContinuationOnlyAutoResumeReason(signals.reason)) {');
+    expect(autoResumeHooksSource).toContain(
+      'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
+    );
+    expect(autoResumeHooksSource).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
   });
 });

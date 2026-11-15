@@ -40,6 +40,10 @@ const queuedInputOriginSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const autoResumeHooksSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/interruptedTurnAutoResumeHooks.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const modelSwitchGateInputSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/modelSwitchGateInput.ts'),
   'utf8',
@@ -1202,14 +1206,14 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain(
       'pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);',
     );
-    expect(registerSource).toContain(
+    expect(autoResumeHooksSource).toContain(
       'pendingSessionRuntimeFallbackRebuilds.delete(fallbackRebuildSession);',
     );
     expect(registerSource).toContain(
       'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
     expect(registerSource).toContain('autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken)');
-    expect(registerSource).toContain(
+    expect(autoResumeHooksSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
     );
     expect(registerSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
@@ -1320,7 +1324,7 @@ describe('session runtime control wiring', () => {
   // persists Pi runtime-verified windows without catalog replacement: covered by the executable sessionEventPipeline tests.
 
   it('counts fallback eligibility across the whole interrupted-turn episode', () => {
-    expect(registerSource).toContain(
+    expect(autoResumeHooksSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
     );
   });

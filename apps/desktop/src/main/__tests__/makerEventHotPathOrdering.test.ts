@@ -362,7 +362,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain(
       'autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId, source);',
     );
-    expect(source).toContain('if (!attempt.isCurrent()) {');
+    // The hooks' `if (!attempt.isCurrent()) {` is guarded in hostDesktopSourceContracts.guard.test.ts.
     expect(source).toContain(
       'autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);',
     );
@@ -569,10 +569,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain(
       'const pendingContinuationOnlyAutoResumeRebuilds = new WeakMap<Session, number>();',
     );
-    expect(source).toContain('if (isContinuationOnlyAutoResumeReason(signals.reason)) {');
-    expect(source).toContain(
-      'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
-    );
+    // The hooks' continuation-only rebuild steps are guarded in hostDesktopSourceContracts.guard.test.ts.
     expect(source).toContain('shouldPreserveWaitingContinuationOnlyAutoResume({');
     expect(source).toContain('leasedAttemptToken,');
     expect(source).toContain(
@@ -593,7 +590,7 @@ describe('maker:event hot path ordering', () => {
     expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');
     expect(source).toMatch(/onBind: \(session: WiredSession\) => \{\s*advanceSessionTurnBoundaryGeneration\(session.id\);\s*bindContinuationOnlyAutoResumeLease\(session\);/);
     expect(source).toContain('onUnconfirmedAutoResumeTurn:');
-    expect(source).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
+    // The hooks' abandonUnconfirmedPersistedResume step is guarded in hostDesktopSourceContracts.guard.test.ts.
   });
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {

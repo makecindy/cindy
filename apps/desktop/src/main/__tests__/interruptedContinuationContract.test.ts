@@ -79,21 +79,11 @@ describe('interrupted continuation enqueue contract', () => {
   });
 
   it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {
-    const scheduleStart = registerSource.indexOf('autoResumeBookkeeping.schedule(');
-    const scheduleEnd = registerSource.indexOf('steerToAgent:', scheduleStart);
-    expect(scheduleStart).toBeGreaterThan(-1);
-    expect(scheduleEnd).toBeGreaterThan(scheduleStart);
-    const scheduleHook = registerSource.slice(scheduleStart, scheduleEnd);
-    expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
-    expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
-    expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
+    // The auto-resume hooks are in interruptedTurnAutoResumeHooks.ts; register.ts hands them to the coordinator.
+    // The hooks' own schedule and discard steps are guarded in hostDesktopSourceContracts.guard.test.ts.
+    expect(registerSource).toContain('onResumableTurnError: interruptedTurnAutoResumeHooks.onResumableTurnError,');
 
     expect(eventSource).toMatch(/getAutoResumeDeferredOwner\(session\.id\)/);
-    const ownerDiscardedStart = registerSource.indexOf('onResumableTurnErrorDiscarded:');
-    const ownerDiscardedEnd = registerSource.indexOf('onResumableTurnError:', ownerDiscardedStart);
-    expect(registerSource.slice(ownerDiscardedStart, ownerDiscardedEnd)).toMatch(
-      /deferredOwner:\s*options\.owner/,
-    );
 
     const dispatchedStart = registerSource.indexOf('onDispatchedUserTurn:');
     const dispatchedEnd = registerSource.indexOf('noteSessionClearBoundary', dispatchedStart);
