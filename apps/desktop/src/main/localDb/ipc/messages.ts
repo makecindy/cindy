@@ -63,7 +63,6 @@ import {
   isSyntheticTriggerText,
   mergeDismissedIntoErrorContent,
 } from '../../../shared/interruptedTurn.js';
-import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../../shared/codexSubscriptionValue.js';
 import { buildTurnUsageDetails, normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails.js';
 import { readSessionCostDetails } from '../../usage/sessionCostDetails.js';
@@ -2150,133 +2149,8 @@ function isHiddenContinuationUserMessage(agentMeta: string | null, content: stri
 }
 
 
-/** Phase 2:目标引擎的停泊原生会话(由最近一次"它离场"的边界行派生)。 */
-export interface ParkedEngineSession {
-  /** 该引擎离场时的原生 session id(resume 用)。 */
-  sdkSessionId: string;
-  /** 水位线 = 离场边界行的位置;增量交接只取其后的消息。 */
-  watermarkCreatedAt: number;
-  watermarkRowid: number;
-}
-
-/**
- * session-agent-switch Phase 2:查目标引擎是否有可续接的停泊原生会话。
- *
- * 停泊绑定不新增 schema,从边界行确定性派生:最新一条未被 rewind、晚于 /clear
- * 的 agent_switch 行中,content.fromAgentKind === targetDbKind 的那条——其
- * fromSdkSessionId 即该引擎离场时的原生会话快照,行位置即水位线。
- *
- * 只认"该引擎最近一次离场"那一行:fromSdkSessionId 为空(该引擎上次在场期间
- * 从未真正 spawn)→ 按无绑定处理,不回退更早的行——更早快照对应的原生会话
- * 已被后来的全新会话取代,续接它会让引擎拿到与消息流矛盾的记忆。
- * 消息删除写入的 context_rebuild 行会使它之前的全部停泊绑定失效；否则
- * 用户稍后切回旧引擎时仍会 resume 含被删消息的 transcript，绕过本次上下文重建。
- * 传 fromAgentDeviceId 时只认在该设备离场的边界:另一台电脑上的原生线程在本机
- * 不存在,误续接会合成一份来源身份错误的恢复历史。缺省不按设备过滤。普通设备 ID
- * 以边界与当前设备相等为准(A→B→A 可继续原生接续);share: 绑定与旧版缺字段边界
- * 在后续换电脑后失效,因为逻辑 ID 无法证明原生线程仍在当前物理机。
- * content 是 JSON,无法在 SQL 里按字段过滤,取有界条数(边界行数量 = 切换次数,
- * 天然很小)在 JS 里扫。
- */
-export async function findParkedEngineSession(
-  sessionId: string,
-  targetDbKind: 'cc' | 'codex' | 'pi',
-  fromAgentDeviceId?: string | null,
-): Promise<ParkedEngineSession | null> {
-  const db = getDbClient().drizzle;
-  const [sessRow] = await db
-    .select({ clearedAt: sessions.clearedAt })
-    .from(sessions)
-    .where(eq(sessions.id, sessionId))
-    .limit(1);
-  const clearedAt = sessRow?.clearedAt ?? null;
-  const afterClear = clearedAt === null ? undefined : gt(messages.createdAt, clearedAt);
-  const [contextRebuild] = await db
-    .select({ rowid: messageRowid, createdAt: messages.createdAt })
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'context_rebuild'), afterClear))
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
-    .limit(1);
-  const rows = await db
-    .select({
-      rowid: messageRowid,
-      content: messages.content,
-      createdAt: messages.createdAt,
-    })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.role, 'agent_switch'),
-        isNull(messages.rewindAt),
-        afterClear,
-      ),
-    )
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
-    .limit(50);
-  // Older boundaries did not record their departure device. Keep resuming them
-  // only while the task has stayed on one computer; a later relocation makes the
-  // missing evidence unsafe to interpret locally.
-  let deviceMovedAfterBoundary = false;
-  for (const row of rows) {
-    let parsed: {
-      fromAgentKind?: unknown;
-      fromSdkSessionId?: unknown;
-      fromAgentDeviceId?: unknown;
-      toAgentDeviceId?: unknown;
-    };
-    try {
-      parsed = JSON.parse(row.content) as typeof parsed;
-    } catch {
-      continue;
-    }
-    if (parsed.fromAgentKind !== targetDbKind) {
-      // toAgentDeviceId exists only on relocation boundaries. Forced provider
-      // relocations can keep the same logical share/group id while moving to a
-      // different physical computer, so presence (not id inequality) is the
-      // safe signal that an older native binding may have changed owners.
-      if (parsed.toAgentDeviceId !== undefined) deviceMovedAfterBoundary = true;
-      continue;
-    }
-    // A cross-device switch leaves the native thread on the computer it ran on.
-    // This is still the engine's most recent departure, so do not fall back to
-    // an older local thread: resuming it would skip the remote interval's native
-    // memory and synthesize a lossy history with the wrong client identity.
-    if (fromAgentDeviceId !== undefined) {
-      const boundaryDeviceId = parsed.fromAgentDeviceId === null
-        ? null
-        : typeof parsed.fromAgentDeviceId === 'string'
-          ? parsed.fromAgentDeviceId
-          : undefined;
-      // A share binding can hide a physical move behind the same logical id.
-      // Legacy boundaries have no device evidence at all, so a later relocation
-      // also makes them unsafe. Ordinary device ids can be trusted when they
-      // match the current device, including an A -> B -> A return.
-      if (deviceMovedAfterBoundary
-        && (boundaryDeviceId === undefined || isProviderShareAgentDeviceId(boundaryDeviceId))) {
-        return null;
-      }
-      if (boundaryDeviceId !== undefined && boundaryDeviceId !== fromAgentDeviceId) return null;
-    }
-    if (
-      contextRebuild &&
-      (contextRebuild.createdAt > row.createdAt ||
-        (contextRebuild.createdAt === row.createdAt && contextRebuild.rowid > row.rowid))
-    ) {
-      return null;
-    }
-    // 命中"该引擎最近一次离场":快照为空即无绑定,不再往更早找。
-    if (typeof parsed.fromSdkSessionId !== 'string' || parsed.fromSdkSessionId.length === 0) {
-      return null;
-    }
-    return {
-      sdkSessionId: parsed.fromSdkSessionId,
-      watermarkCreatedAt: row.createdAt,
-      watermarkRowid: row.rowid,
-    };
-  }
-  return null;
-}
+export type { ParkedEngineSession } from '../agentSwitchRows.js';
+export { findParkedEngineSession } from '../agentSwitchRows.js';
 
 /**
  * session-agent-switch Phase 2:改写边界行 content 并广播(resume bootstrap 失败

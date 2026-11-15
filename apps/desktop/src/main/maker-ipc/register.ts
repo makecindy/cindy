@@ -281,6 +281,7 @@ import { applyScheduledModelSelection, createScheduledModelScope, createSchedule
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
 import { createTurnModelAttribution } from './turnModelAttribution.js';
+import { createAgentSwitchBoundaryInsert, createAgentSwitchDbApply, createSwitchedSessionBootstrap, readAgentSwitchSessionRow } from './agentSwitchDepsCore.js';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
@@ -11658,61 +11659,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     assertAgentDeviceRouteUsable,
     describeAgentDevice,
-    getSessionRow: async (sessionId) => {
-      const db = getDbClient().drizzle;
-      const [row] = await db
-        .select({
-          id: sessions.id,
-          agentKind: sessions.agentKind,
-          model: sessions.model,
-          providerId: sessions.providerId,
-          status: sessions.status,
-          remoteHostId: sessions.remoteHostId,
-          orcaRole: sessions.orcaRole,
-          orcaRemoteLead: sessions.orcaRemoteLead,
-          sdkSessionId: sessions.sdkSessionId,
-          workingDir: sessions.workingDir,
-          source: sessions.source,
-          agentDeviceId: sessions.agentDeviceId,
-        })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      return row ?? null;
-    },
+    getSessionRow: readAgentSwitchSessionRow,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId, 'agent-switch'),
     listMessagesForHandoff: (sessionId, after) =>
       listMessagesForAgentHandoff(sessionId, 400, after),
     findParkedEngineSession: (sessionId, targetDbKind, fromAgentDeviceId) =>
       findParkedEngineSession(sessionId, targetDbKind, fromAgentDeviceId),
-    applyAgentSwitchToDb: async (sessionId, patch) => {
-      // 把 Agent 挪到另一台电脑时那台的目录才算数，不拿本机目录的窗口写进去。
-      const movingToOtherDevice = typeof patch.agentDeviceId === 'string';
-      const verifiedWindow = movingToOtherDevice ? undefined : lookupVerifiedContextWindow(
-        (agentKind, modelId, pid) =>
-          resolveConfiguredContextWindow(
-            getActiveCatalog(),
-            dbToMakerAgentKind(agentKind || patch.agentKind),
-            pid,
-            modelId,
-          ),
-        patch.model,
-        patch.providerId ?? null,
-        dbToMakerAgentKind(patch.agentKind),
-      );
-      await applyAgentSwitchToSessionRow(sessionId, {
-        ...patch,
-        ...(verifiedWindow ? { contextWindow: verifiedWindow } : {}),
-      });
-    },
+    applyAgentSwitchToDb: createAgentSwitchDbApply(applyAgentSwitchToSessionRow, resolveConfiguredContextWindow),
     setSessionProvider,
     supersedePendingCredentialSwitch: clearPendingCredentialSwitchForSession,
-    insertBoundaryMessage: async (sessionId, content) => {
-      const clientId = `agent-switch:${createId()}`;
-      await createDbMessage(sessionId, { clientId, role: 'agent_switch', content });
-      return clientId;
-    },
+    insertBoundaryMessage: createAgentSwitchBoundaryInsert(createDbMessage),
     applyResumeFallbackAtomically: applyAgentSwitchResumeFallbackAtomically,
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
@@ -11730,69 +11687,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         thinking,
       });
     },
-    bootstrapSwitchedSession: async (sessionId, opts) => {
-      const ownerGeneration = getActiveAppSession().generation;
-      const assertOwner = () => {
-        if (getActiveAppSession().generation !== ownerGeneration) throw new Error('REMOTE_AGENT_ACCOUNT_CHANGED');
-      };
-      // 切换已提交,从 DB 行(新引擎值)重建 live session。resumeSessionId 直接取
-      // 行上的 sdk_session_id:切换事务在有停泊绑定时已把它落成停泊 id(Phase 2
-      // 切回续接),否则为 null = 全新原生会话,上下文由交接注入承接——与
-      // lazy-create(reconcileCreateOptsAgainstDb)同一条 resume 口径。
-      const db = getDbClient().drizzle;
-      const [row] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-      if (!row) throw new Error(`session ${sessionId} row missing after agent switch`);
-      if (!row.workingDir) {
-        // 无 workingDir(理论上只有从未 send 过的草稿,不可能有可切换的历史):
-        // 抛错走 engineReady=false 降级,下一条消息的 lazy-create 用其现有错误呈现。
-        throw new Error(`session ${sessionId} has no workingDir; cannot bootstrap switched engine`);
-      }
-      const co = buildCreateOptsWithStderr({
-        id: sessionId,
-        agentKind: dbToMakerAgentKind(row.agentKind),
-        workingDir: row.workingDir,
-        model: row.model ?? undefined,
-        providerId: row.providerId,
-        effort: (row.effort ?? undefined) as CreateOpts['effort'],
-        fastMode: (row.fastMode ?? false),
-        permissionMode: (row.permissionMode ?? 'ask') as CreateOpts['permissionMode'],
-        planMode: false,
-        // 跨引擎意图期内改的思考开关必须显式带入：否则 createSession 只能读被控端
-        // 镜像/默认值，与用户刚选的不一致（device-link 远程场景）。
-        ...(opts?.thinkingEnabled !== undefined
-          ? { thinkingEnabled: opts.thinkingEnabled }
-          : {}),
-        title: row.title ?? undefined,
-        resumeSessionId: row.sdkSessionId ?? undefined,
-        // 远端会话切换引擎后仍是远端:带回 remoteHostId 并走 ensure (SSH
-        // 重连 / agent 安装 / codex daemon MCP 注入), 否则会以远端
-        // workingDir 在本机 spawn。
-        remoteHostId: row.remoteHostId ?? undefined,
-        vendorOptions: resolveSwitchedSessionVendorOptions(sessionId),
-      });
-      // 协同的 Lead / Worker(只有供应商组换电脑会走到这里)：按任务记录带回协同身份、提示词与协同工具，
-      // 换过去的那台照常是团队成员，不等下一次发送再重启一次。
-      if (row.orcaRole) await synthesizeOrcaVendorOptionsFromDb(sessionId, co);
-      if (co.extraDirs === undefined) {
-        try {
-          const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-          if (extraDirs.length > 0) Object.assign(co, directoryGrantsForRuntime(extraDirs));
-        } catch (err) {
-          log.warn('agent-switch bootstrap: read extra_dirs from DB failed (non-fatal)', {
-            sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-      if (co.writableDirs === undefined) {
-        const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
-        if (writableDirs.length > 0) co.writableDirs = writableDirs;
-      }
-      assertOwner();
-      await ensureRemoteReadyForSessionStart({ createOpts: co });
-      await bootstrapSession(co, assertOwner, opts?.nativeHistoryResume);
-      broadcastSessionCreated(sessionId);
-    },
+    bootstrapSwitchedSession: createSwitchedSessionBootstrap({
+      getActiveAppSession, buildCreateOptsWithStderr, resolveSwitchedSessionVendorOptions,
+      synthesizeOrcaVendorOptionsFromDb, readSessionExtraDirsFromDb, directoryGrantsForRuntime,
+      readSessionWritableDirsFromDb, ensureRemoteReadyForSessionStart, bootstrapSession, broadcastSessionCreated, log,
+    }),
     withCloseSuppressed: withRehydrateCloseSuppressed,
     pendingSwitches: agentSwitchPending,
     selectSameAgentModel: async (sessionId, intent, applyNow, assertSelectionCurrent, beforeMutation, pendingSelectionAccess) => {
