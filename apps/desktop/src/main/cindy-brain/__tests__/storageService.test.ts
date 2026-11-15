@@ -66,7 +66,7 @@ describe('shared Host storage', () => {
 
   it('keeps snapshot creation single-flight without holding installation mutations during provider IO', async () => {
     const f = fixture();
-    let answer!: (value: { name: string; bytes: Buffer }) => void, shown!: () => void;
+    let answer!: (value: Awaited<ReturnType<typeof f.snapshot>>) => void, shown!: () => void;
     const prompt = new Promise<void>(resolve => { shown = resolve; });
     f.snapshot.mockImplementationOnce(() => { shown(); return new Promise(resolve => { answer = resolve; }); });
     const pending = f.share(); await prompt;
