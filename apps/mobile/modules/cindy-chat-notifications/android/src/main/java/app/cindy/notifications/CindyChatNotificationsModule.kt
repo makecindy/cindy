@@ -11,6 +11,13 @@ class CindyChatNotificationsModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("CindyChatNotifications")
     Events("refreshRequested")
+    AsyncFunction("setTaskBadgeIdentity") { scope: String, account: String ->
+      appContext.reactContext?.let { TaskBadgeDelivery.identity(it, scope, account) }
+    }
+    AsyncFunction("applyTaskBadge") { summary: String ->
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      TaskBadgeDelivery.apply(context, org.json.JSONObject(summary))
+    }
     AsyncFunction("isPaused") {
       appContext.reactContext?.getSharedPreferences("cindy-chat-background", android.content.Context.MODE_PRIVATE)?.getBoolean("paused", false) ?: false
     }

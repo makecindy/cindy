@@ -867,7 +867,7 @@ function insertBotSession(db: Database.Database, s: Record<string, unknown>): vo
       expectNumber(s.updatedAt, 'session.updatedAt'), nullableString(s.agentDeviceId), nullableString(s.projectDir));
 }
 
-/** One hidden lane per (group, Bot); reuses an active lane instead of creating a second. */
+/** One isolated lane per (group, Bot); reuses an active lane instead of creating a second. */
 function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArgs): BotGroupsCreateLaneResult {
   const p = asRecord(args, 'bots.createGroupLane args');
   const botId = expectString(p.botId, 'botId');
@@ -886,19 +886,26 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
     if (!profile || profile.status !== 'active') {
       throw Object.assign(new Error('伙伴当前不可用'), { code: 'MEMBER_UNAVAILABLE' });
     }
-    const existing = db.prepare(`SELECT l.session_id AS sessionId FROM bot_session_links l
+    const existing = db.prepare(`SELECT l.session_id AS sessionId, s.working_dir AS workingDir FROM bot_session_links l
       INNER JOIN sessions s ON s.id = l.session_id
       WHERE l.bot_id = ? AND l.role = 'group' AND l.route_key = ? AND l.archived_at IS NULL
         AND s.source = 'bot' AND s.status = 'active'
-      LIMIT 1`).get(botId, routeKey) as { sessionId: string } | undefined;
-    if (existing) return { sessionId: existing.sessionId, created: false };
+      LIMIT 1`).get(botId, routeKey) as { sessionId: string; workingDir: string | null } | undefined;
+    const replace = existing && p.replaceOtherWorkingDir === true && existing.workingDir !== (s.workingDir ?? null);
+    if (existing && !replace) return { sessionId: existing.sessionId, created: false };
+    if (existing) {
+      // The group's project folder changed on this computer: the lane moves with it.
+      db.prepare('UPDATE bot_session_links SET archived_at = ? WHERE session_id = ?').run(createdAt, existing.sessionId);
+      db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'`)
+        .run(createdAt, existing.sessionId);
+    }
     insertBotSession(db, s);
     db.prepare(`INSERT INTO bot_session_links
       (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
       VALUES (?, ?, ?, ?, 'group', ?, ?, NULL)`)
       .run(`${botId}:${sessionId}`, botId, sessionId, profile.version, routeKey, createdAt);
     const permission = botsReconcileLanePermission(db, { sessionId });
-    return { sessionId, created: true,
+    return { sessionId, created: true, ...(existing ? { replacedSessionId: existing.sessionId } : {}),
       ...(permission.canonicalSessionId ? { permissionRepairCanonicalSessionId: permission.canonicalSessionId } : {}) };
   })();
 }
@@ -1571,6 +1578,10 @@ function contextRebuild(db: Database.Database, args: unknown): void {
           nullableString(replacement.providerId), nullableString(replacement.effort),
           fastModeToStorage(replacement.fastMode), sessionId, expectedClearedAt,
           expectString(replacement.expectedSdkSessionId, 'replacementRoute.expectedSdkSessionId'), 'deleted')
+      : payload.expectedSdkSessionId !== undefined
+        ? db.prepare(
+            'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1) AND sdk_session_id = ? AND status != ?',
+          ).run(updatedAt, sessionId, expectedClearedAt, expectString(payload.expectedSdkSessionId, 'expectedSdkSessionId'), 'deleted')
       : db.prepare(
           'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
         ).run(updatedAt, sessionId, expectedClearedAt);
@@ -2118,7 +2129,7 @@ function sessionsRenameTitles(db: Database.Database, args: unknown): Array<{
   }>;
 }
 
-const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel', 'group') LIMIT 1";
 
 // 批量归档 / 取消归档:存在性预检 + 状态更新放进同一事务,任一 id 缺失整批回滚(全有才写)。
 // 本文件是 inproc 回滚口;默认热路径走 file worker 的同名 handler(client/WorkerThreadTransport.ts)。
@@ -2175,6 +2186,11 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
           code: 'PRECONDITION_FAILED',
         });
       }
+      // Restoring history never makes it the live receiver again. Detach in
+      // the same transaction, before a later trigger can create its successor.
+      if ((existing as { source?: unknown }).source === 'bot' && (status === 'archived' || (existing as { status?: unknown }).status === 'archived')) {
+        db.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
+      }
       const updated = updateSession.get(status, now, sessionId) as
         | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null }
         | undefined;
@@ -2221,6 +2237,9 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
     // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
     if (existing.source === 'bot' && !db.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
+    if (existing.source === 'bot') {
+      db.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
+    }
     if (status === 'archived' || status === 'deleted') db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = db.prepare(
       'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',

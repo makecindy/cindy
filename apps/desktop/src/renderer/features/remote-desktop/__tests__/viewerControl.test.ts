@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import type { RemoteDesktopRequest } from '@cindy/device-link';
 import type {
   RememberedViewerResolution,
   RemoteDesktopViewerApi,
@@ -1056,4 +1057,92 @@ it('distinguishes unsupported host input from missing permission', async () => {
   await fixture(undefined, false, { caps: { canControl: false } });
   await vi.advanceTimersByTimeAsync(0);
   expect(snapshot).toMatchObject({ ready: false, controlling: false, error: 'inputUnsupported' });
+});
+
+// 测试价值：查看窗口以「设备画面」为目标时，必须按该设备建立连接、把鼠标交给设备触摸、
+// 只发设备列出的按键，并随设备转向调整画面形状；既有用例都只覆盖整屏远程桌面。
+// 被控端对设备画面不提供截图帧，继续轮询只会白占通道。最小输入：一个带 screen 的目标；unit tier。
+it('shows a device screen as that device: touches, its own buttons and its turns', async () => {
+  const requests: RemoteDesktopRequest[] = [];
+  const screen = {
+    plugin: 'cindy-simulator',
+    pluginIdentity: '_ns__acme__cindy-simulator',
+    id: 'sim',
+    name: 'iPhone',
+    platform: 'ios',
+    cornerRadius: 0.1,
+    maxTouches: 5,
+    keyboard: true,
+    buttons: [{ id: 'home', icon: 'home', label: 'Home' }],
+  };
+  await fixture(undefined, false, {
+    api: {
+      state: async () => ({
+        generation: 1,
+        active: true,
+        target: {
+          deviceId: 'host',
+          name: 'Computer',
+          screen: { plugin: screen.plugin, id: 'sim', pluginIdentity: '_ns__acme__cindy-simulator' },
+        },
+      }),
+      request: async (_generation, request) => {
+        requests.push(request);
+        switch (request.op) {
+          case 'capabilities':
+            return {
+              version: 1,
+              enabled: true,
+              canControl: false,
+              platform: 'darwin',
+              displays: [],
+              liveScreens: true,
+              autoControl: true,
+            };
+          case 'start':
+            return {
+              lease: 'lease',
+              controlling: request.control === true,
+              display: { id: 'live-screen:sim', name: 'iPhone', width: 390, height: 844 },
+              screen,
+            };
+          case 'heartbeat':
+            return { controlling: true };
+          case 'screenShape':
+            // The device was turned to landscape; afterwards nothing changes.
+            return request.known ? new Promise(() => {}) : { shape: { width: 844, height: 390 } };
+          default:
+            return {};
+        }
+      },
+    },
+  });
+  expect(requests.find((request) => request.op === 'start')).toMatchObject({
+    displayId: 'live-screen',
+    screen: { plugin: 'cindy-simulator', id: 'sim', pluginIdentity: '_ns__acme__cindy-simulator' },
+    control: true,
+  });
+  expect(runtime.receive).toHaveBeenCalledWith({
+    type: 'deviceTouch',
+    enabled: true,
+    maxTouches: 5,
+    keyboard: true,
+  });
+  present();
+  expect(snapshot.screen?.name).toBe('iPhone');
+  expect(snapshot.controlling).toBe(true);
+  await vi.advanceTimersByTimeAsync(1100);
+  expect(runtime.receive).toHaveBeenCalledWith({
+    type: 'displayGeometry',
+    width: 844,
+    height: 390,
+    restore: true,
+  });
+  // The page that draws the device (the plugin's own) sends its input through here.
+  expect(controller.deviceInput([{ kind: 'press', button: 'home' }])).toBe(true);
+  expect(runtime.receive.mock.calls.filter(([message]) => message.type === 'events')).toEqual([
+    [{ type: 'events', events: [{ kind: 'press', button: 'home' }] }],
+  ]);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(requests.some((request) => request.op === 'frame')).toBe(false);
 });

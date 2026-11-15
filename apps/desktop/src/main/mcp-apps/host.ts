@@ -37,6 +37,7 @@ import {
   MCP_APPS_MAX_BYTES,
   MCP_APPS_MAX_REMOTE_BYTES,
 } from './protocol.js';
+import { OwnerScopedAppResourceCache } from './appResourceCache.js';
 
 // A fixed total budget: server progress may renew the View's idle timer, but
 // must not keep a Main-owned tool request alive indefinitely.
@@ -247,6 +248,10 @@ export class McpAppsHost {
     owner: object; sessionId: string; clientId: string; writer: ViewStateWriter;
   }>();
   private readonly connectionIds = new WeakMap<AppConnection, string>();
+  private readonly resourceCache = new OwnerScopedAppResourceCache<{
+    html: string; meta: import('@modelcontextprotocol/ext-apps').McpUiResourceMeta;
+    policy: ReturnType<typeof appCsp>;
+  }>();
   private sweepTimer?: ReturnType<typeof setInterval>;
   constructor(private readonly deps: McpAppsHostDeps) {}
 
@@ -262,7 +267,7 @@ export class McpAppsHost {
 
   /** Native entries use the same policy, one-use ticket and original main.js runner. */
   async callPluginAction(caller: string, sessionId: string | null, source: {
-    serverId: string; id: string; title: string; assertCurrent(): void | Promise<void>;
+    serverId: string; id: string; title: string; attachments?: string[]; assertCurrent(): void | Promise<void>;
   }, name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult> {
     const owner = this.captureOwner();
     const assertCurrent = async () => {
@@ -281,7 +286,8 @@ export class McpAppsHost {
     await assertCurrent();
     const client = await connection.getClient(signal);
     return withPluginPageTicket({ instance: config.plugin.instance, revision: config.plugin.revision,
-      sessionId, clientId: source.id, tool: name, assertCurrent }, async ticket => {
+      sessionId, clientId: source.id, tool: name, assertCurrent,
+      ...(source.attachments ? { attachments: source.attachments } : {}) }, async ticket => {
       const result = await client.callTool({ name, arguments: args, _meta: { [PLUGIN_PAGE_TICKET]: ticket } },
         CallToolResultSchema, { signal, timeout: GHOST_PIPE_CALL_MAX_TOTAL_MS });
       await assertCurrent();
@@ -464,10 +470,16 @@ export class McpAppsHost {
       const tool = record ? (await connection.tools(signal)).find((item) => item.name === record!.tool.name) : undefined;
       if (record && (!tool || uiToolUri(tool) !== resourceUri))
         throw new Error('MCP_APP_TOOL_UNAVAILABLE');
-      const loaded = await connection.resource(resourceUri, signal);
-      signal.throwIfAborted();
-      const resource = readAppResource(loaded.result, resourceUri, loaded.meta);
-      const policy = appCsp(resource.meta);
+      const resourceKey = JSON.stringify([serverId, serverRevision, config.plugin?.packageSha256, resourceUri]);
+      let resource = config.plugin ? this.resourceCache.get(owner, resourceKey) : undefined;
+      if (!resource) {
+        const loaded = await connection.resource(resourceUri, signal);
+        signal.throwIfAborted();
+        const parsed = readAppResource(loaded.result, resourceUri, loaded.meta);
+        resource = { ...parsed, policy: appCsp(parsed.meta) };
+        if (config.plugin) this.resourceCache.set(owner, resourceKey, resource);
+      }
+      const policy = resource.policy;
       if (config.plugin) {
         const allowed = new Set(config.plugin.domains);
         for (const domains of Object.values(policy.csp)) {
@@ -488,7 +500,7 @@ export class McpAppsHost {
         throw new Error('MCP_APP_VIEW_LIMIT');
       const viewId = randomUUID();
       const document: McpAppDocument = {
-        sdk: hostAppSdkAsset,
+        sdk: { source: hostAppSdkAsset.source, addons: hostAppSdkAsset.addons },
         viewId,
         html: resource.html,
         csp: policy.header,
@@ -498,6 +510,10 @@ export class McpAppsHost {
       const remote = caller.startsWith('device:');
       // The optional runtime must not reduce the budget of an installed page.
       // With no source detection, a missing SDK can only fail that page's import.
+      if (remote && document.sdk && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
+        // Optional addons never displace an official SDK that would fit on its own.
+        document.sdk = { source: document.sdk.source };
+      }
       if (remote && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
         delete document.sdk;
         if (Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES)

@@ -133,10 +133,12 @@ export function companionSnapshot(input: {
   humanActorId: string | null;
   actors: Array<HomeActor & { name: string; avatar?: string | null }>;
   demotedBotIds?: string[];
+  profileFailure?: (botId: string) => CompanionCloudActor['profileFailure'];
 }): CompanionCloudSnapshot {
   // Retired actors (deleted on their home) are not companions any more.
   const actors: CompanionCloudActor[] = input.actors.filter(a => a.kind === 'bot' && !a.disabled).map(a => ({
     id: a.id, externalId: a.externalId, name: a.name, avatar: a.avatar ?? null, homeDeviceId: a.homeDeviceId ?? null,
+    ...(input.profileFailure?.(a.externalId) ? { profileFailure: input.profileFailure(a.externalId) } : {}),
   }));
   return { enabled: input.enabled, selfDeviceId: input.selfDeviceId, humanActorId: input.humanActorId, actors,
     demotedBotIds: [...(input.demotedBotIds ?? [])].sort() };

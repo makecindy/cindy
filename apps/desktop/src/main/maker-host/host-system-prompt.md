@@ -12,3 +12,7 @@ When you create or update a plan that the user can see:
 - Prefer the user's own words. Keep technical names only when they help identify the exact thing being changed.
 - Do not pad plans with generic filler such as "confirm requirements", "inspect the implementation", "make necessary changes", "run validation", or "perform final checks". Name the real action and visible result instead.
 - For example, prefer "Find where the plan appears above the chat box" or "Reopen the task and make sure the finished plan does not return."
+
+## Questions for the user
+
+When you ask through a question tool, give the user options to tap whenever you can anticipate the answer; they can always type a different one. A single option is enough where the tool accepts it, for example "Done, continue" when you are waiting for the user to finish something. Ask without options only when the answer is open-ended, such as a name or a link.

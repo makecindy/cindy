@@ -269,7 +269,7 @@ import {
 const TEST_INSTALL_CONTEXT: PluginMarketInstallContext = {
   consent: { prompt: async () => true, initiator: 'user' },
 };
-import { PluginMarketEndpointUnsupportedError, type PluginMarketApi } from '../api';
+import { PluginMarketEndpointUnsupportedError, PluginMarketApi } from '../api';
 import { downloadVerifiedPlugin } from '../download';
 import { createOrganizationPrefixStore } from '../organizationPrefixStore';
 
@@ -864,17 +864,83 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.api.resolve).toHaveBeenCalled();
   });
 
-  it('returns a continuation without scanning later pages of installed search matches', async () => {
+  it.each(['', 'Tool'])('returns a continuation without scanning later pages of installed matches for query "%s"', async query => {
     const items = Array.from({ length: 30 }, (_, index) => summary({
       id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
     }));
     const h = harness(items);
     runtime.ghosts = items.map(item => ({ ...ghostEntry(item.ghostId), namespace: null }));
     for (const item of items) h.ledger.upsertInstallation(recordForTest(item, { installed: true }));
-    const first = await h.service.query({ query: 'Tool', limit: 10, excludeInstalled: true, counts: false });
+    const first = await h.service.query({ query, limit: 10, excludeInstalled: true, counts: false });
     expect(first.items).toEqual([]);
     expect(first.nextCursor).not.toBeNull();
     expect(h.api.catalog).toHaveBeenCalledTimes(1);
+    expect(h.api.resolve).not.toHaveBeenCalled();
+  });
+
+  // Unit: the market must show and count only uninstalled matches, keeping source
+  // conflicts. Previous paging fixtures covered empty installed pages without counts.
+  // A current install, an update, an uninstalled item and an unmanaged conflict are
+  // the minimum distinct states; count-free paging must not repeat ID verification.
+  it('counts uninstalled market matches through bounded ID verification and retains source conflicts', async () => {
+    const items = Array.from({ length: 4 }, (_, index) => summary({
+      id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
+    }));
+    const h = harness(items);
+    runtime.ghosts = [items[0]!, items[1]!, items[3]!].map(item => ({ ...ghostEntry(item.ghostId), namespace: null }));
+    h.ledger.upsertInstallation(recordForTest(items[0]!, { namespace: null }));
+    h.ledger.upsertInstallation(recordForTest(items[1]!, { namespace: null, releaseId: 'older-release' }));
+
+    const first = await h.service.query({ limit: 10, excludeInstalled: true });
+    expect(first.items.map(item => [item.ghostId, item.installState])).toEqual([
+      ['tool-2', 'not-installed'], ['tool-3', 'conflict'],
+    ]);
+    expect(first.counts).toMatchObject({ all: 2, public: 2 });
+    expect(h.api.resolve).toHaveBeenCalledExactlyOnceWith([
+      { key: items[0]!.id, pluginId: items[0]!.id },
+      { key: items[1]!.id, pluginId: items[1]!.id },
+    ], undefined);
+
+    const searched = await h.service.query({ query: 'Tool 2', limit: 10, excludeInstalled: true });
+    expect(searched.items.map(item => item.ghostId)).toEqual(['tool-2']);
+    expect(searched.counts).toMatchObject({ all: 1, public: 1 });
+    expect(h.api.resolve).toHaveBeenLastCalledWith(expect.any(Array), 'Tool 2');
+    await h.service.query({ limit: 10, excludeInstalled: true, counts: false });
+    expect(h.api.resolve).toHaveBeenCalledTimes(2);
+    expect(h.api.listAll).not.toHaveBeenCalled();
+  });
+
+  // Unit: PR #10162 ordinary browsing made legacy count deduction download the
+  // full catalog again. Use the real API fallback, not the in-memory server fake;
+  // public/organization installs, one available entry and a conflict cover both
+  // accurate source-wide counts and query matching without another HTTP read.
+  it.each(['', 'Tool 2'])('reuses the current legacy catalog for installed counts with query "%s"', async query => {
+    const items = Array.from({ length: 4 }, (_, index) => summary({
+      id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
+      ...(index === 1 ? { scope: 'organization' as const, organizationId: 'org-1', namespace: 'acme' } : {}),
+    }));
+    runtime.currentOrganization = { organizationId: 'org-1', pluginPrefix: null, orgSlug: 'acme' };
+    const h = harness(items);
+    runtime.ghosts = [items[0]!, items[1]!, items[3]!].map(item => ({ ...ghostEntry(item.ghostId), namespace: item.namespace }));
+    for (const item of items.slice(0, 2)) h.ledger.upsertInstallation(recordForTest(item, { namespace: item.namespace }));
+    const fetcher = vi.fn();
+    fetcher.mockImplementation(async (request: string) => {
+      if (!request.startsWith('/api/plugins?')) throw Object.assign(new Error('unsupported'), { statusCode: 404 });
+      const search = new URL(request, 'https://plugin.test.invalid').searchParams.get('query');
+      return { schemaVersion: 2, plugins: items.filter(item => !search || item.name.includes(search)),
+        removals: [], nextCursor: null, currentOrganization: runtime.currentOrganization };
+    });
+    const api = new PluginMarketApi(fetcher);
+    const resolve = vi.spyOn(api, 'resolve');
+    const service = new PluginMarketService(api, h.ledger);
+    const page = await service.query({ query, scope: 'public', limit: 10, excludeInstalled: true });
+    expect(page.unavailableReason).toBeNull();
+    expect(page.items.map(item => [item.ghostId, item.installState])).toEqual(query
+      ? [['tool-2', 'not-installed']] : [['tool-2', 'not-installed'], ['tool-3', 'conflict']]);
+    expect(page.counts).toMatchObject({ all: query ? 1 : 2, public: query ? 1 : 2, organization: 0 });
+    expect(fetcher.mock.calls.filter(([request]) => request.startsWith('/api/plugins?'))).toHaveLength(1);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(page).not.toHaveProperty('legacyQueryPlugins');
   });
 
   // unit：v7.5 首屏只读一页，搜索覆盖未加载项；原 snapshot 用例不能证明不追全量目录。

@@ -618,7 +618,7 @@ export function projectPiManagedCommandFailure(value: unknown): import('./pi/man
     phase: data.phase as import('./pi/managed-command.js').PiManagedCommandFailure['phase'],
     packagesUpdated: data.packagesUpdated,
     recovery: data.recovery as import('./pi/managed-command.js').PiManagedCommandFailure['recovery'],
-    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish'].includes(data.hostStage)
+    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish', 'unsupported'].includes(data.hostStage)
       ? { hostStage: data.hostStage as import('./pi/managed-command.js').PiBinaryUpdateFailureStage } : {}),
   };
 }
@@ -807,6 +807,10 @@ export interface AgentDeps {
    * interaction surfaces, so maker-core never hard-codes one UI language.
    */
   getPiExtensionUiStrings?: () => PiExtensionUiStrings;
+  /** Localized recovery hint for a confirmed dataless context-file candidate.
+   * The supplied path is already redacted and escaped for display, not execution.
+   */
+  formatPiStartupCloudFileHint?: (displayPath: string) => string;
 
   /**
    * Pi-only: start a durable Subagent runner through a host-supported Node
@@ -1955,6 +1959,8 @@ export interface LocalAgentClient {
 }
 
 export const TASK_SYSTEM_PROMPT = Symbol('cindy.task-system-prompt');
+export interface HostSessionSkill { name: string; description: string; path: string; filePath: string; pluginRoot: string }
+
 export interface StartSessionOptions {
   /** Host-owned task instructions, appended after the native fixed prompt. */
   readonly [TASK_SYSTEM_PROMPT]?: string;
@@ -2072,6 +2078,13 @@ export interface StartSessionOptions {
    */
   botRuntimeProfile?: BotRuntimeProfile;
   /**
+   * Host-owned Skills mounted for this session only, such as Cindy's 「群协作」 Skill for the task of a
+   * group's Cindy. Each is a versioned directory Cindy manages (`path` holds `SKILL.md`, `pluginRoot`
+   * is its Claude Code local plugin). Never written to user or project discovery directories; local,
+   * non-Review sessions only.
+   */
+  hostSkills?: HostSessionSkill[];
+  /**
    * 是否启用 Maker Memory (本次 session 内). 跟 userPrompt 同模式 — renderer 启 session
    * 时透传当前 memoryMode='maker' → true, 'native' / 'off' → false。main 不持久化。
    *
@@ -2101,6 +2114,8 @@ export interface StartSessionOptions {
    * can observe different memory generations.
    */
   makerMemoryIndexSnapshot?: string;
+  /** Project-local Markdown memory on the task's computer; load on demand, never as an index snapshot. */
+  makerMemoryProjectDir?: string;
   /**
    * 设备托管：任务所在电脑在打开任务时按真实工作目录生成的插件花名册段。插件工具经隧道
    * 回到那台电脑，花名册也必须来自那台；Agent 所在电脑不读自己的已装插件。
@@ -2589,6 +2604,16 @@ export interface AgentSessionHandle {
    * 不能把进程关在操作中间。不支持的 agent 留空(Session 层回退 false)。
    */
   hasPendingHostOperation?(): boolean;
+
+  /**
+   * Conservative probe for provider-owned work that can outlive a product turn
+   * but is not represented by listBackgroundTasks (for example Codex native
+   * child agents, yielded exec cells and background terminals). Idle runtime
+   * reclamation calls it before closing; true means busy *or unknown*, so a
+   * failed or unsupported probe keeps the runtime. Not for UI hydration.
+   * Agents whose background work is fully covered by listBackgroundTasks omit it.
+   */
+  hasLiveBackgroundWork?(): Promise<boolean>;
 
   /**
    * Resolve the provider claim attached atomically to a specific `done` event.

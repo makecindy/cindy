@@ -77,6 +77,11 @@ module.exports = {
       },
       {
         type: "dir",
+        filePath: "plugins/notification-content",
+        reasons: ["notification content extension native source"],
+      },
+      {
+        type: "dir",
         filePath: "plugins/usage-widgets",
         reasons: ["home-screen widget extension native source"],
       },

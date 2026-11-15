@@ -140,10 +140,6 @@ function stateWith(overrides: Partial<HookWorkspacePrefsState> = {}): HookWorksp
     imDefaults: { agentKind: 'claude-code', agents: {} },
     reloadImDefaults: async () => {},
     applyPatch,
-    teams: [],
-    selectedTeamId: null,
-    selectTeam: vi.fn(),
-    showTeamChip: false,
     ...overrides,
   };
 }

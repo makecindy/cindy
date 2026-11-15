@@ -453,6 +453,9 @@ export interface ProviderHandlerDeps {
   /** Per-provider opt-in for remote Agent use; absent means disabled. */
   getRemoteProviderInvocationEnabled?(providerId: string): boolean;
   setRemoteProviderInvocationEnabled?(providerId: string, enabled: boolean): void | Promise<void>;
+  /** 「远程连接」里的「让我的其他电脑用本机模型」，默认关闭。 */
+  getOwnComputerModelUse?(): boolean;
+  setOwnComputerModelUse?(enabled: boolean): Promise<void>;
   /** 供应商「运行于」：用户改选过的电脑(deviceId 或 'local')。 */
   getProviderRunLocation?(providerId: string): string | undefined;
   setProviderRunLocation?(providerId: string, location: string | null): void;
@@ -1944,6 +1947,31 @@ export function registerProviderHandlers(
       });
       throwIpcError('INTERNAL', 'failed to persist remote provider access');
     }
+    deps.broadcastChanged();
+    return { ok: true, enabled: value.enabled };
+  });
+
+  registry.handle(MAKER_INVOKE.OWN_COMPUTER_MODEL_USE_GET, async (event) => {
+    assertTrustedProviderMutationSender(event);
+    if (!deps.getOwnComputerModelUse) throwIpcError('INTERNAL', 'own computer model use is not wired');
+    return { enabled: deps.getOwnComputerModelUse() };
+  });
+
+  registry.handle(MAKER_INVOKE.OWN_COMPUTER_MODEL_USE_SET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = captureProviderOwnerSession();
+    if (!deps.setOwnComputerModelUse) throwIpcError('INTERNAL', 'own computer model use is not wired');
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throwIpcError('INVALID_PARAMS', 'invalid input');
+    const value = input as Record<string, unknown>;
+    if (typeof value.enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled required');
+    assertProviderMutationOwner(ownerAtIngress, 'active account changed before persisting own computer model use');
+    try {
+      await deps.setOwnComputerModelUse(value.enabled);
+    } catch (err) {
+      log.warn('own computer model use persist failed', { error: err instanceof Error ? err.message : String(err) });
+      throwIpcError('INTERNAL', 'failed to persist own computer model use');
+    }
+    // 自己的其他电脑据此重读目录(同「允许被远程调用」)。
     deps.broadcastChanged();
     return { ok: true, enabled: value.enabled };
   });

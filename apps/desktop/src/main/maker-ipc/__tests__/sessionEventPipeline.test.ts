@@ -2,6 +2,11 @@ import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { createDrizzleProxy } from '../../localDb/client/drizzleProxy.js';
+import type { DbTransport } from '../../localDb/client/DbTransport.js';
+import { createRemoteAgentHandle } from '../../remote-agent/controller/proxyHandle.js';
+import { ExecutorWorkspace } from '../../remote-agent/executor/workspace.js';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from '../piUsageReceipts.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
@@ -26,6 +31,7 @@ import { createProviderGroupHeldWorkerTerminals } from '../../provider-group/hel
 import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../gatewayProxyTokenRecovery.js';
 import { GATEWAY_PROXY_TOKEN_INVALID_REASON } from '@cindy/maker-shared/error-redaction';
 import { reportCindyGatewayKeyRejectedForCurrentKey } from '../../model-access/gatewayKeyRejection.js';
+import { GIT_SETTLEMENT_SEQUENCES } from './gitBaselineSettlementSequences.js';
 
 const effects = vi.hoisted(() => {
   const calls: string[] = [];
@@ -245,7 +251,9 @@ function event(
   return { type, source: 'codex', data, ...extra } as AgentEvent;
 }
 
-function harness() {
+const actualSnapshotWriter = await vi.importActual<typeof import('../../sessionSpendBroadcaster.js')>('../../sessionSpendBroadcaster.js');
+
+function harness(remoteHandle?: AgentSessionHandle) {
   const log = {
     trace: vi.fn(),
     debug: vi.fn(),
@@ -256,7 +264,7 @@ function harness() {
     child: () => log,
   };
   const ended = deferred();
-  const handle = {
+  const handle = remoteHandle ?? {
     id: 'provider',
     agentKind: 'codex',
     model: 'test-model',
@@ -1061,6 +1069,21 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // The Host settles the same sequences in its turn executor (apps/host input-queue.test.mjs).
+  it.each(GIT_SETTLEMENT_SEQUENCES)('settles the Git baseline of $name as the shared table says', async ({ steps, desktop }) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }));
+    effects.calls.length = 0;
+    for (const step of steps) {
+      if (step === 'stop') continue; // abort() returning is not an event the pipeline sees.
+      if (step === 'error') h.emit(event('error', { message: 'provider failed', isTerminal: true }));
+      else h.emit(event('done', {}, step === 'continuation-done' ? { turnContinuationId: 0 } : {}));
+    }
+    await microtasks();
+    expect(effects.calls.filter(call => call === 'git-end' || call === 'git-abort').map(call => call.slice(4))).toEqual(desktop);
+    await h.dispose();
+  });
+
   it('keeps the silent-stop decision window running and rejects an unowned late terminal', async () => {
     const h = harness();
     h.emit(event('done', { silentStop: true }));
@@ -1092,6 +1115,109 @@ describe('production Session event pipeline', () => {
       await h.dispose();
     },
   );
+
+  // #10198 (unit): end-of-turn coverage missed native compaction inside a live
+  // turn. Remote poll chunks may deliver status before its cached state. Drive
+  // the real proxy -> pipeline -> writer and reopen SQLite (db tier, no files).
+  it.each([false, true])('persists remote Pi compaction across split delivery (state first=%s)', async (stateFirst) => {
+    const oldUsage = { tokenUsage: 0, costUsd: 0, contextTokens: 579216, contextWindow: 272000 };
+    const proxy = createRemoteAgentHandle({
+      started: { id: 'remote', agentKind: 'pi', model: 'test', shadowDir: '/remote', methods: [],
+        state: { usage: oldUsage, turnRunning: true } },
+      link: { live: async () => null, ensure: vi.fn(), begin: () => () => {}, close: async () => {} },
+      workspace: new ExecutorWorkspace({ workingDir: process.cwd() }),
+      recordApproval: vi.fn(), newId: () => 'request', dispose: async () => {},
+    });
+    const h = harness(proxy.handle);
+    const iterator = proxy.handle.events()[Symbol.asyncIterator]();
+    const deliver = async (value: AgentEvent) => {
+      proxy.onEvent(value);
+      const next = await iterator.next();
+      expect(next.done).toBe(false);
+      h.emit(next.value!);
+    };
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, context_tokens INTEGER,
+      context_window INTEGER, context_window_runtime INTEGER);
+      INSERT INTO sessions VALUES ('task', 579216, 272000, 272000);`);
+    const transport: DbTransport = {
+      async send<R>(op: string, args: unknown): Promise<R> {
+        const { sql, params } = args as { sql: string; params: unknown[] };
+        const statement = sqlite.prepare(sql);
+        return (op === 'run' ? statement.run(...params) : op === 'rawGet'
+          ? statement.raw().get(...params) : statement.raw().all(...params)) as R;
+      },
+      on() {}, onTerminated() {}, async close() {},
+    };
+    const unexpectedDbCall = async (): Promise<never> => { throw new Error('Expected snapshot Drizzle path'); };
+    const db: DbClient = {
+      drizzle: createDrizzleProxy(transport),
+      query: unexpectedDbCall, queryOne: unexpectedDbCall, exec: unexpectedDbCall, tx: unexpectedDbCall,
+      vecAvailable: false, async dispose() {},
+    };
+    const writes: Promise<void>[] = [];
+    setCurrentDbClient(db, 'compaction-test');
+    effects.fn('getDbClient').mockReturnValue(db);
+    effects.fn('recordSessionContextSnapshot').mockImplementation((id, tokens, window) => {
+      effects.calls.push('recordSessionContextSnapshot');
+      const write = actualSnapshotWriter.recordSessionContextSnapshot(id as string, tokens as number, window as number);
+      writes.push(write);
+      return write;
+    });
+    try {
+      await deliver(event('status', { isRunning: true }, { source: 'pi' }));
+      const boundary = event('compact_boundary', { postTokens: 46703 }, { source: 'pi' });
+      await deliver(boundary);
+      expect(proxy.handle.getUsageSnapshot().contextTokens).toBe(579216);
+      expect(effects.fn('recordSessionContextSnapshot')).not.toHaveBeenCalled();
+      const usage = { ...oldUsage, contextTokens: 46703 };
+      if (stateFirst) proxy.onState({ usage });
+      effects.calls.length = 0;
+      await deliver(event('status', { ...usage, isRunning: true, status: 'Working…',
+        contextSnapshotAuthoritative: true }, { source: 'pi' }));
+      ordered('broadcast', 'recordSessionContextSnapshot');
+      await Promise.all(writes);
+      if (!stateFirst) proxy.onState({ usage });
+      const reopened = new Database(sqlite.serialize());
+      try {
+        expect(reopened.prepare('SELECT context_tokens, context_window, context_window_runtime FROM sessions').get()).toEqual({
+          context_tokens: 46703, context_window: 272000, context_window_runtime: 272000,
+        });
+      } finally { reopened.close(); }
+      expect(h.activity.isSessionInTurn('task')).toBe(true);
+      expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
+      proxy.onState({ usage: { ...usage, contextTokens: 58000 } });
+      await deliver(boundary);
+      expect(effects.fn('recordSessionContextSnapshot')).toHaveBeenCalledTimes(1);
+      await deliver(event('tool_use', { toolUseId: 'after-compact', toolName: 'read', input: {} }, { source: 'pi' }));
+      expect(effects.fn('onToolUseEvent')).toHaveBeenCalled();
+      expect(h.activity.isSessionInTurn('task')).toBe(true);
+    } finally {
+      await Promise.all(writes);
+      clearCurrentDbClient(db);
+      sqlite.close();
+      await h.dispose();
+      await iterator.return?.();
+    }
+  });
+
+  it.each([
+    ['missing', undefined, {}],
+    ['NaN', NaN, {}],
+    ['negative', -1, {}],
+    ['infinite', Infinity, {}],
+    ['old generation', 46703, { sessionTurnGeneration: -1 }],
+    ['old instance', 46703, { sessionInstanceId: 'retired-instance' }],
+    ['background', 46703, { turnScope: 'background' as const }],
+  ])('does not persist a %s compaction over active work', async (_label, postTokens, scope) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }, { source: 'pi' }));
+    h.emit(event('compact_boundary', { postTokens }, { source: 'pi', ...scope }));
+    h.emit(event('status', { isRunning: true, status: 'Working…', contextSnapshotAuthoritative: true,
+      contextTokens: postTokens, contextWindow: 272000 }, { source: 'pi', ...scope }));
+    expect(effects.fn('recordSessionContextSnapshot')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
 
   it.each([
     ['xd', 1],
@@ -1604,16 +1730,19 @@ describe('production Session event pipeline', () => {
     },
   );
 
-  it.each([null, 'ssh-host'])(
-    'only records local Codex account snapshots (remote=%s)',
-    async (remoteHostId) => {
+  it.each([
+    [null, null], ['ssh-host', null], [null, 'remote-computer'], [null, 'share:example'],
+  ])(
+    'only records local Codex account snapshots (ssh=%s, device=%s)',
+    async (remoteHostId, agentDeviceId) => {
       const h = harness();
       Object.defineProperty(h.session, 'remoteHostId', { value: remoteHostId });
+      Object.defineProperty(h.session, 'agentDeviceId', { value: agentDeviceId });
       h.emit(event('account_usage', { remaining: 42 }));
       expect(effects.fn('recordCodexAccountUsageSnapshot')).toHaveBeenCalledTimes(
-        remoteHostId ? 0 : 1,
+        remoteHostId || agentDeviceId ? 0 : 1,
       );
-      if (!remoteHostId) ordered('broadcast', 'recordCodexAccountUsageSnapshot');
+      if (!remoteHostId && !agentDeviceId) ordered('broadcast', 'recordCodexAccountUsageSnapshot');
       await h.dispose();
     },
   );
@@ -2283,7 +2412,7 @@ describe('usage through the production event pipeline', () => {
     async (source, subscription) => {
       const h = harness();
       pricing(subscription);
-      h.emit(event('done', { usage: usage(source) }, { source }));
+      h.emit(event('done', { usage: { ...usage(source), reasoningTokens: 5 } }, { source }));
       await microtasks();
       expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130);
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(
@@ -2301,6 +2430,21 @@ describe('usage through the production event pipeline', () => {
       );
       expect(effects.fn('recordTurnSpend')).toHaveBeenCalledTimes(subscription ? 0 : 1);
       expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledTimes(subscription ? 0 : 1);
+      if (source === 'codex') {
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+          model: `test-model#billing=${subscription ? 'subscription' : 'api'}`,
+          money: expect.objectContaining({ kind: subscription ? 'value-estimate' : 'actual-cost' }),
+          inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+        }));
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          turnUsageDetails: expect.objectContaining({
+            providerId: subscription ? 'openai' : 'xd',
+            billingSource: subscription ? 'subscription' : 'cindy-ai',
+          }),
+        }));
+        expect(effects.fn('triggerClaudeAccountUsageRefresh')).toHaveBeenCalledTimes(subscription ? 0 : 1);
+      }
       ordered('broadcast', 'recordSessionTurnTokens');
       await h.dispose();
     },
@@ -2432,6 +2576,107 @@ describe('usage through the production event pipeline', () => {
       await h.dispose();
     },
   );
+
+  // Unit regression: SSH-only coverage above did not check billing identity or
+  // device-link runs. A remote OpenAI done with local env-key must retain tokens
+  // without inventing gateway spend, subscription value, or local quota traffic.
+  it.each(([
+    ['agentDeviceId', 'remote-computer', 'openai', 'test-model'],
+    ['agentDeviceId', 'share:example', 'xd', 'codex/test-model'],
+    ['agentDeviceId', 'remote-computer', 'custom-api', 'test-model'],
+    ['agentDeviceId', 'remote-computer', 'xai', 'xai/grok-4.6'],
+    ['remoteHostId', 'ssh-host', 'openai', 'test-model'],
+  ] as const).flatMap(row => ['env-key', 'oauth-bearer'].map(auth => [...row, auth] as const)))(
+    'keeps remote Codex billing unknown (%s, %s, %s, %s, local %s)',
+    async (location, remoteId, providerId, model, auth) => {
+      const h = harness();
+      pricing(false);
+      Object.defineProperty(h.session, location, { value: remoteId });
+      effects.fn('getSessionProvider').mockReturnValue(providerId);
+      effects.fn('getCodexProxyAuthInjection').mockReturnValue(auth);
+      effects.fn('readClaudeApiKey').mockReturnValue('test-key');
+      // A same-named local subscription is not evidence about the remote route.
+      effects.fn('getActiveCatalog').mockReturnValue({ providers: [
+        { id: providerId, auth: { method: 'oauth' }, access: { kind: 'subscription' } },
+      ] });
+      h.deps.readSessionModelForUsage.mockResolvedValue(model);
+      h.emit(event('done', { usage: usage('codex') }, {
+        turnOrigin: { kind: 'scheduler', scheduleId: 'test-schedule', scheduleName: 'Test', runId: 'test-run' },
+      }));
+      await microtasks();
+      expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        model, money: undefined, inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10,
+      }));
+      expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+        clientId: 'assistant-row',
+        turnUsageDetails: expect.objectContaining({ providerId, billingSource: 'unknown', totalTokens: 130 }),
+      }));
+      for (const name of ['recordTurnSpend', 'recordSessionTurnSpend', 'recordSchedulerTurnCost',
+        'getCodexProxyAuthInjection', 'readClaudeApiKey', 'getGatewayModelPricingForModel',
+        'getReferenceModelPricing', 'triggerClaudeAccountUsageRefresh',
+        'triggerClaudeSubscriptionUsageRefresh', 'triggerXaiSubscriptionUsageRefresh']) {
+        expect(effects.fn(name), name).not.toHaveBeenCalled();
+      }
+      await h.dispose();
+    },
+  );
+
+  it.each(['agentDeviceId', 'remoteHostId'] as const)(
+    'retains remote Codex tokens without local quota fallback when model lookup rejects (%s)', async location => {
+      const h = harness();
+      pricing(false);
+      Object.defineProperty(h.session, location, { value: 'remote-computer' });
+      effects.fn('readClaudeApiKey').mockReturnValue('test-key');
+      h.deps.readSessionModelForUsage.mockRejectedValue(new Error('model unavailable'));
+      h.emit(event('done', { usage: usage('codex') }));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        model: 'unknown', money: undefined, inputTokensDelta: 100, outputTokensDelta: 20,
+      }));
+      expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+        turnUsageDetails: expect.objectContaining({ providerId: 'xd', billingSource: 'unknown', totalTokens: 130 }),
+      }));
+      expect(effects.fn('triggerClaudeAccountUsageRefresh')).not.toHaveBeenCalled();
+      expect(effects.fn('readClaudeApiKey')).not.toHaveBeenCalled();
+      expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  // Replaces the source-text Codex guard in makerEventHotPathOrdering.test.ts.
+  // Unit: a delayed gateway quote must not delay token persistence or count the
+  // same tokens again when cost arrives. Immediate-price coverage misses this.
+  it('persists Codex tokens before a cold price lookup and later writes only money', async () => {
+    const h = harness();
+    pricing(false);
+    const pendingPrice = deferred<unknown>();
+    effects.fn('getGatewayModelPricingForModel').mockReturnValue(pendingPrice.promise);
+    h.emit(event('done', { usage: { ...usage('codex'), reasoningTokens: 5 } }));
+    await microtasks();
+    expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledExactlyOnceWith('task', 130);
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      model: 'test-model#billing=api', money: undefined,
+      inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10, cacheCreateTokensDelta: 0,
+    }));
+    expect(effects.fn('rebroadcastCodexTodayUsage')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+    pendingPrice.resolve({});
+    await microtasks();
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+      model: 'test-model#billing=api', money: expect.objectContaining({ kind: 'actual-cost' }),
+      inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+    }));
+    expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordTurnSpend')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'assistant-row', money: expect.objectContaining({ kind: 'actual-cost' }),
+    }));
+    await h.dispose();
+  });
 
   it.each(['codex', 'pi'] as const)(
     'retains %s token facts when pricing rejects',

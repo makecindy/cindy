@@ -1,4 +1,4 @@
-import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from './worktreePaths.js';
+import { collapseWorktreeDirForGrouping, sessionTaskProjectDirectory } from './worktreePaths.js';
 import {
   normalizeProjectOrderPath,
   parseSyncedProjectOrderOwnerStamp,
@@ -28,6 +28,7 @@ export type ProjectAliasDisplayIndex = ProjectAliasesByDevice | ReadonlyMap<stri
 export interface ProjectAliasSessionLike {
   workingDir: string | null;
   projectDir?: string | null;
+  companion?: { taskProjectDir?: string | null } | null;
   remoteHostId?: string | null;
   /** Physical source, never canonicalDeviceId (which is only a display identity). */
   deviceLinkDeviceId?: string | null;
@@ -128,7 +129,7 @@ export function resolveProjectAliasForSessions(
   let alias: string | null = null;
   for (const session of sessions) {
     const deviceId = session.deviceLinkDeviceId || defaultDeviceId;
-    const projectDir = sessionProjectDirectory(session);
+    const projectDir = sessionTaskProjectDirectory(session);
     if (!deviceId || !projectDir) return null;
     const snapshot = snapshots.get(deviceId);
     if (!snapshot || typeof snapshot === 'string') {

@@ -13,6 +13,11 @@ import { MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RosterEntry, type Tra
 
 interface Peer { deviceId: string; key: string; channel: PeerChannel; outbound: boolean; info?: PresenceSnapshot; }
 
+/** Node timers can release the event loop; React Native timers are numeric ids. */
+function unrefTimer(timer: number | { unref?: () => void }): void {
+  if (typeof timer !== 'number') timer.unref?.();
+}
+
 /** A bounded length-prefixed stream parser. A malformed peer closes only its own channel. */
 class Frames {
   private chunks: Uint8Array[] = [];
@@ -115,7 +120,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         socket.lan.start();
       }
       socket.directoryRefresh = setInterval(() => { void socket.refreshDirectory().catch(() => undefined); }, 6 * 60 * 60_000);
-      socket.directoryRefresh.unref?.();
+      unrefTimer(socket.directoryRefresh);
       setTimeout(() => { if (!socket.closed) socket.emit('open'); }, 0);
       return socket;
     } catch (error) { socket.close(); throw error; }
@@ -246,7 +251,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
     for (const [id, peer] of this.peers) if (peer.info && next.has(id)) {
       const view = next.get(id)!;
-      peer.info = { ...peer.info, deviceName: view.name, selfName: view.selfName ?? peer.info.selfName };
+      peer.info = { ...peer.info, app: view.app ?? peer.info.app,
+        deviceName: view.name, selfName: view.selfName ?? peer.info.selfName };
       if (this.ready) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });
     }
     for (const id of this.lanCandidates.keys()) if (!this.authorized(id)) this.lanCandidates.delete(id);
@@ -304,7 +310,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       this.reconnect = null;
       void this.connectRelay().catch(() => this.scheduleReconnect());
     }, this.retryMs);
-    this.reconnect.unref?.(); this.retryMs = Math.min(15_000, this.retryMs * 2);
+    unrefTimer(this.reconnect); this.retryMs = Math.min(15_000, this.retryMs * 2);
   }
   send(text: string): void {
     if (this.closed) throw new Error('AGENT_NET_SOCKET_CLOSED');
@@ -454,7 +460,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (deviceId === this.deviceId) return;
     const view = this.roster.get(deviceId);
     this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId, deviceName: view?.name ?? '', selfName: view?.selfName,
-      online, remoteControlEnabled: online && (view?.remoteControlEnabled ?? false), platform: view?.platform ?? '',
+      online, remoteControlEnabled: online && (view?.remoteControlEnabled ?? false), platform: view?.platform ?? '', app: view?.app,
       appVersion: view?.appVersion ?? '', busy: online && !!view?.busy, lastSeenAt: view?.lastSeenAt ?? Date.now() } });
   }
   private fromPeer(peer: Peer, frame: Envelope): void {
@@ -463,7 +469,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (d && frame.kind === 'presence-changed') return;
     if (frame.kind === 'presence-changed') {
       const reported = frame.payload as PresenceSnapshot, view = this.roster.get(peer.deviceId);
-      peer.info = { ...reported, deviceName: view?.name ?? reported.deviceName, selfName: reported.selfName ?? reported.deviceName,
+      peer.info = { ...reported, app: reported.app ?? view?.app ?? peer.info?.app,
+        deviceName: view?.name ?? reported.deviceName, selfName: reported.selfName ?? reported.deviceName,
         deviceId: peer.deviceId, online: true, lastSeenAt: Date.now() };
       this.deliver({ ...frame, payload: peer.info });
       return;

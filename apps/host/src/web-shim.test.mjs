@@ -69,6 +69,18 @@ test('both auth API shapes use the same Host routes', async () => {
   assert.ok(b.calls.every(c => c.credentials === 'same-origin'));
 });
 
+test('plugin approval and confirmation use the authenticated Host routes', async () => {
+  const b = browser(() => ({ granted: true, handled: true }));
+  assert.equal((await b.api.ghosts.requestTaskApproval('demo', 'host-tools:terminal')).granted, true);
+  await b.api.ghosts.resolveInstallConsent('group-request', true);
+  await b.api.ghosts.resolveConfirm('command-request', false);
+  assert.deepEqual(b.calls.map(call => ({ url: call.url, body: call.body })), [
+    { url: '/api/ghosts/request-task-approval', body: { id: 'demo', capability: 'host-tools:terminal' } },
+    { url: '/api/ghosts/install-consent/resolve', body: { requestId: 'group-request', confirmed: true } },
+    { url: '/api/ghosts/confirm/resolve', body: { requestId: 'command-request', confirmed: false } },
+  ]);
+});
+
 test('entering the app preserves the actual Host auth verdict', async () => {
   for (const state of [
     { user: { id: 'test-user' }, mode: 'cloud', canEnterApp: true },

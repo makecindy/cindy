@@ -181,6 +181,17 @@ describe('settings discoverability regressions', () => {
       }
     },
   );
+  // Unit regression (#8561): the modern-Chinese reply-style row is searchable by
+  // the style names it renders; classical and system/en locales keep it absent.
+  it.each(['en', 'zh-CN', 'zh-TW', 'system', 'zh-Hans-x-lzh'])('finds the reply-style row only in modern Chinese locales for %s', (locale) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, locale });
+    const visible = locale === 'zh-CN' || locale === 'zh-TW';
+    expect(searchSettings(documents, '唐诗').some(({ entry }) => entry.id === 'general.replyStyle')).toBe(visible);
+    for (const lng of ['zh-CN', 'en']) {
+      const matches = searchSettings(documents, searchI18n.t('settings.language.classical.styleAriaLabel', { lng }));
+      expect(matches.some(({ entry }) => entry.id === 'general.replyStyle')).toBe(visible);
+    }
+  });
   // Unit regression (#8481): disabled refinement leaves both child controls
   // unmounted. Query real translated labels instead of inspecting declarations.
   it.each([false, true])('filters refinement children with refinementEnabled=%s', (voiceRefinementEnabled) => {
@@ -227,7 +238,6 @@ describe('settings discoverability regressions', () => {
     ['我的浏览器', 'computerUse.browserTarget'],
     ['恢复默认布局', 'appearance.layout'],
     ['对话工作区', 'storage.dialogueDirectory'],
-    ['伙伴默认模型', 'general.botModel'],
     ['供应商组', 'providers.sharing'],
     ['字体大小', 'settings.appearance.font.uiSize.label'],
     ['自动更新', 'settings.about.autoUpdateLabel'],

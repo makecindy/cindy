@@ -4,7 +4,7 @@ import type { LiziMcpSessionContext } from '../types.js';
 import { errorPayload, okPayload } from './_payload.js';
 
 export interface AppSettingsCallbacks {
-  call(input: { callerSessionId: string; operation: 'list' | 'get' | 'update' | 'reset';
+  call(input: { callerSessionId?: string; operation: 'list' | 'get' | 'update' | 'reset';
     section?: string; query?: string; patch?: Record<string, unknown> }): Promise<Record<string, unknown>>;
 }
 
@@ -14,8 +14,9 @@ export function registerAppSettingsTools(registry: XdtHelperToolRegistry,
   const invoke = async (operation: 'list' | 'get' | 'update' | 'reset', input: {
     section?: string; query?: string; patch?: Record<string, unknown>;
   }) => {
-    const callerSessionId = context().sessionId;
-    if (!callerSessionId || context().remoteHostId) return errorPayload('CAPABILITY_NOT_AVAILABLE', '请在目标电脑上的本机任务中管理设置。手机可以继续使用该任务。');
+    const caller = context();
+    const callerSessionId = caller.sessionId;
+    if ((!callerSessionId && !caller.hostCaller) || caller.remoteHostId) return errorPayload('CAPABILITY_NOT_AVAILABLE', '请在目标电脑上的本机任务中管理设置。手机可以继续使用该任务。');
     try {
       const result = await callbacks.call({ callerSessionId, operation, ...input });
       return result.ok === false ? errorPayload(String(result.errorCode ?? 'SETTINGS_OPERATION_FAILED'),

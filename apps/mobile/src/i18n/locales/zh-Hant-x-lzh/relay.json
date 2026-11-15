@@ -23,9 +23,9 @@
     "pushUnavailable": "用自建中繼之時，機上差事之告不推至此手機。",
     "accountManagedOn": "於「{{device}}」上理之",
     "accountSwitchTitle": "入「{{name}}」乎？",
-    "accountSwitchBody": "此乃君帳號下之中繼，由「{{device}}」放行，此機自入，無需分享連結。用自建中繼時，此機不得收機上任務之通知。",
+    "accountSwitchBody": "此乃君名籍下之中繼，由「{{device}}」放行，此手機自入，無需分享連結。用自建中繼時，此手機不得收機上差事之告。",
     "accountSwitchAction": "入",
-    "sharedHint": "裝置之間經他人所分享之中繼 {{address}} 相連，唯連君己之裝置；登入、模型、共享任務諸事仍用 {{appName}} 官方之服務。",
+    "sharedHint": "諸裝置經他人所分享之中繼 {{address}} 相連，唯連君己之裝置；登入、模型與共事等仍用 {{appName}} 官方服務。",
     "sharedCurrent": "{{name}}（{{owner}} 所分享）",
     "accountSharedBy": "{{owner}} 所分享 · 由「{{device}}」入之",
     "accountSharedOn": "由「{{device}}」入之"
@@ -37,7 +37,7 @@
   "join": {
     "title": "入中繼",
     "checking": "方連中繼…",
-    "body": "入之後，此手機經此中繼連君之機；登入、模型等仍用 {{appName}} 官方服務。用自建中繼之時，此手機不得機上差事之告。",
+    "body": "入之後，此手機經此中繼連君之機；登入、模型與共事等仍用 {{appName}} 官方服務。用自建中繼之時，此手機不得機上差事之告。",
     "switchNote": "入之後，將自「{{current}}」轉至此中繼。",
     "action": "入",
     "pairingCodeLabel": "配對碼",
@@ -54,7 +54,7 @@
     "cancelled": "加入已罷。欲入此中繼，請於機上重生分享之連結。",
     "accountRequesting": "正請「{{device}}」放行…",
     "accountWaiting": "正入，候「{{device}}」放行…",
-    "openOnComputer": "此乃他帳號所分享之中繼，請於君之電腦開此連結以入。電腦既入，此手機於設定之中繼服務中即見之，一點即入。"
+    "openOnComputer": "此乃他名籍所分享之中繼，請於君之機開此連結以入。機既入，此手機於規制之中繼中即見之，一點即入。"
   },
   "errors": {
     "unreachable": "此中繼連之不上。請確手機與機同在一網，或手機能訪此位址。",
@@ -72,6 +72,6 @@
     "credentialUnavailable": "此手機無可用之中繼憑證。請重入，或於規制中歸官方中繼。",
     "ownerUnavailable": "「{{device}}」無應。請確其開 {{appName}} 且已連網，或請其分享連結予君。",
     "relayUnavailable": "「{{device}}」已不用此中繼。",
-    "accountDirectoryUnavailable": "暫連不上 {{appName}} 帳號之服務，不得讀君帳號下之中繼。請稍後再試，或請對方分享連結予君。"
+    "accountDirectoryUnavailable": "暫連不上 {{appName}} 名籍之服務，不得讀君名籍下之中繼。請稍後再試，或請對方分享連結予君。"
   }
 }

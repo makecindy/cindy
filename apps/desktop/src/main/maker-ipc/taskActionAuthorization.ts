@@ -26,6 +26,9 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'move_session_queued_message',
   'archive_sessions',
   'unarchive_sessions',
+  'delete_session',
+  'fork_session',
+  'rewind_session',
   'rename_sessions',
   'move_session',
   'manage_session_prs',
@@ -62,15 +65,23 @@ export interface TaskActionScope {
   assertCurrentSync?(): void;
   /** Queued delivery outlives the admitting turn: real revocation only, no live turn facts. */
   assertDeliveryCurrent?(): Promise<void>;
+  /** Only the exact admitted self rewind may cross its own runtime transitions. */
+  rewindBoundary?<T>(sessionId: string, clientId: string, phase: 'stop' | 'native-close', operation: () => T | Promise<T>): Promise<T>;
+  rewindTarget?: { sessionId: string; clientId: string };
+  startRewind?(): void;
+  finishRewind?(): void;
 }
 
 interface ActionContext {
-  sessionId: string;
+  sessionId?: string;
+  caller?: Extract<NonNullable<Call['caller']>, { kind: 'plugin' }>;
   tool: string;
   fingerprint: string;
   assertCurrent(): Promise<void>;
   assertCurrentSync?(): void;
   assertDeliveryCurrent(): Promise<void>;
+  rewindBoundary?: TaskActionScope['rewindBoundary'];
+  rewindTarget?: TaskActionScope['rewindTarget'];
 }
 const actionContext = new AsyncLocalStorage<ActionContext>();
 export const TASK_ACTION_INPUT_GUARD = Symbol('task-action-input-guard');
@@ -160,24 +171,68 @@ export async function admitTaskAction(
       if (consumed || fingerprint !== taskActionFingerprint(call))
         throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
       consumed = true;
-      await scope.assertCurrent();
-      return actionContext.run(
-        {
-          sessionId: call.sessionId!,
-          tool: call.tool,
-          fingerprint,
-          assertCurrent: scope.assertCurrent,
-          assertCurrentSync: scope.assertCurrentSync,
-          assertDeliveryCurrent: scope.assertDeliveryCurrent ?? scope.assertCurrent,
-        },
-        operation,
-      );
+      try {
+        scope.startRewind?.();
+        await scope.assertCurrent();
+        const result = actionContext.run(
+          {
+            sessionId: call.sessionId!,
+            tool: call.tool,
+            fingerprint,
+            assertCurrent: scope.assertCurrent,
+            assertCurrentSync: scope.assertCurrentSync,
+            assertDeliveryCurrent: scope.assertDeliveryCurrent ?? scope.assertCurrent,
+            rewindBoundary: scope.rewindBoundary,
+            rewindTarget: scope.rewindTarget,
+          },
+          operation,
+        );
+        return scope.finishRewind ? await result : result;
+      } finally { scope.finishRewind?.(); }
     },
   };
 }
 
-export async function assertTaskActionCurrent(): Promise<void> {
-  await actionContext.getStore()?.assertCurrent();
+/** The plugin gateway has checked the declared group and the shared per-call policy.
+ * Reuse mutation and queued-delivery guards without attributing the action to a task. */
+export function admitPluginTaskAction(call: Call, assertCurrent: () => void, assertDeliveryCurrent = assertCurrent): Decision {
+  if (call.caller?.kind !== 'plugin' || call.sessionId !== undefined) return denied();
+  const caller = call.caller;
+  const fingerprint = taskActionFingerprint(call);
+  let consumed = false;
+  return {
+    ok: true,
+    run: async operation => {
+      if (consumed || fingerprint !== taskActionFingerprint(call)) throw new TaskActionAuthorizationError();
+      consumed = true;
+      const assertActive = (guard = assertCurrent) => {
+        try { guard(); } catch { throw new TaskActionAuthorizationError(); }
+      };
+      assertActive();
+      return actionContext.run({ caller, tool: call.tool, fingerprint,
+        assertCurrent: async () => assertActive(), assertCurrentSync: () => assertActive(),
+        assertDeliveryCurrent: async () => assertActive(assertDeliveryCurrent),
+      }, operation);
+    },
+  };
+}
+
+export async function assertTaskActionCurrent(rewindSessionId?: string, rewindClientId?: string): Promise<void> {
+  const current = actionContext.getStore();
+  if (rewindSessionId !== undefined && current?.rewindTarget &&
+    (current.rewindTarget.sessionId !== rewindSessionId || current.rewindTarget.clientId !== rewindClientId))
+    throw new TaskActionAuthorizationError();
+  await current?.assertCurrent();
+}
+
+/** No admission or ordinary/non-self action: keep the existing synchronous path. */
+export function runTaskActionRewindBoundary<T>(
+  sessionId: string, clientId: string | undefined, phase: 'stop' | 'native-close', operation: () => T | Promise<T>,
+): T | Promise<T> {
+  const current = actionContext.getStore();
+  return current?.rewindBoundary
+    ? current.rewindBoundary(sessionId, clientId ?? current.rewindTarget?.clientId ?? '', phase, operation)
+    : operation();
 }
 
 /** An independent inbound request must not inherit the action that lazily started

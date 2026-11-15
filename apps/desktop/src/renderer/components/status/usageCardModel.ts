@@ -21,6 +21,7 @@ import {
   formatClaudeSubscriptionPlanLabel,
   formatCodexPlanLabel,
 } from '@/lib/subscriptionPlanLabel';
+import appI18n from 'i18next';
 
 export interface UsageCardWindow {
   key: string;
@@ -400,8 +401,8 @@ export function buildXaiUsageCard(
   ) {
     details.push(
       t('todaySpend.xai.requestsLine', {
-        remaining: rateLimit.remainingRequests.toLocaleString(),
-        limit: rateLimit.limitRequests.toLocaleString(),
+        remaining: rateLimit.remainingRequests.toLocaleString(appI18n.language),
+        limit: rateLimit.limitRequests.toLocaleString(appI18n.language),
       }),
     );
   }

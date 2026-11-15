@@ -296,6 +296,9 @@ export const MAKER_INVOKE = {
   /** 本机供应商是否允许同账号另一台电脑的远程 Agent 调用；仅本机可信 renderer 可写。 */
   PROVIDER_REMOTE_ACCESS_SET: 'maker:provider:remote-access:set',
   PROVIDER_RUN_LOCATION_SET: 'maker:provider:run-location:set',
+  /** 「远程连接」里的「让我的其他电脑用本机模型」。设置类：仅本机主页面可调，不进 device-link allowlist。 */
+  OWN_COMPUTER_MODEL_USE_GET: 'maker:own-computer-model-use:get',
+  OWN_COMPUTER_MODEL_USE_SET: 'maker:own-computer-model-use:set',
   /**
    * Owner-scoped provider display-order override.
    * Input = { dataOwnerId: string | null; ownerGeneration: number; providerIds: string[] }.
@@ -856,6 +859,7 @@ export const MAKER_INVOKE = {
   COMPANION_CLOUD_STATE: 'maker:companion-cloud:state',
   /** Make this computer the companion's home (cloud-companions.md §3.1). */
   COMPANION_CLOUD_TAKE_OVER: 'maker:companion-cloud:take-over',
+  COMPANION_CLOUD_REPAIR_PROFILE: 'maker:companion-cloud:repair-profile',
   /** Move the companion to another computer from any computer (hand over, ask its home, or take over). */
   COMPANION_CLOUD_SWITCH_HOME: 'maker:companion-cloud:switch-home',
   /** Read the companion's 1:1 room (works while its home is offline). */

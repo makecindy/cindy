@@ -3,6 +3,7 @@ import type { ArchiveSessionsDeps, SessionStatusChangeItem } from '@cindy/mcps';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 
 type Failure = { errorCode: string; message: string };
+export { failure as remoteSessionMutationFailure };
 const unknownOutcome = (): Failure => ({
   errorCode: 'REMOTE_RESULT_UNKNOWN',
   message: '未收到可信回执，失败项可能已生效；请先查询目标任务状态再决定是否重试。后续项未执行。',
@@ -16,7 +17,7 @@ function failure(code: string, message: string, beforeSend = false): Failure {
   switch (actual) {
     case 'CHANNEL_NOT_ALLOWED':
     case 'VERSION_MISMATCH':
-      return { errorCode: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持远程归档/取消归档。' };
+      return { errorCode: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持此任务状态操作。' };
     case 'DEVICE_OFFLINE':
       return { errorCode: 'REMOTE_DEVICE_OFFLINE', message: '目标电脑不在线。' };
     case 'ACCESS_REVOKED':
@@ -36,7 +37,7 @@ function failure(code: string, message: string, beforeSend = false): Failure {
     case 'DEVICE_UNRESPONSIVE':
       return { errorCode: 'REMOTE_UNAVAILABLE', message: '暂时无法连接目标电脑。' };
     case 'INVALID_PARAMS':
-      return { errorCode: 'INVALID_ARGS', message: '目标电脑拒绝了归档状态参数。' };
+      return { errorCode: 'INVALID_ARGS', message: '目标电脑拒绝了任务状态参数。' };
     case 'PRECONDITION_FAILED':
       if (message.includes('[PRECONDITION_FAILED] 已删除的任务不能恢复或归档') ||
           message.includes('[PRECONDITION_FAILED] Bot task lifecycle is managed by teammate recovery and history controls')) {
@@ -64,8 +65,10 @@ export function createRemoteSessionsStatusSetter(deps: {
     args: unknown[],
     options?: { preSend?: () => void },
   ): Promise<InvokeResultPayload>;
-}): NonNullable<ArchiveSessionsDeps['setRemoteSessionsStatus']> {
-  return async ({ deviceId, sessionIds, status }) => {
+}) {
+  return async ({ deviceId, sessionIds, status }: {
+    deviceId: string; sessionIds: string[]; status: SessionStatusChangeItem['status'];
+  }): Promise<Awaited<ReturnType<NonNullable<ArchiveSessionsDeps['setRemoteSessionsStatus']>>>> => {
     const assertActionCurrent = captureTaskActionSyncGuard();
     const changed: SessionStatusChangeItem[] = [];
     const fail = (index: number, reason: Failure) => ({

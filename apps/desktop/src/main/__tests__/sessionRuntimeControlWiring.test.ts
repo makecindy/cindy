@@ -303,6 +303,8 @@ describe('session runtime control wiring', () => {
     expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
     // Controllers only offer moving a controlled Orca Lead / local Worker's Agent when this is declared.
     expect(capabilities).toContain('supportsOrcaAgentRelocation: true');
+    // Same for an execution-device Worker whose Lead is on another computer.
+    expect(capabilities).toContain('supportsOrcaRemoteWorkerAgentRelocation: true');
   });
 
   it('authenticates Desktop package-command entry points before minting Main context', () => {
@@ -866,11 +868,13 @@ describe('session runtime control wiring', () => {
   });
 
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
-    const commitRebuild = handlerBody(
-      registerSource,
-      'commitRebuild: async (sessionId, handoff, meta, signal) => {',
-      'setPendingHandoff: (sessionId, handoff, expectedGeneration)',
-    );
+    const coreSource = readFileSync(resolve(mainRoot, 'maker-ipc/contextRecoveryAssembly.ts'), 'utf8');
+    const coreAst = ts.createSourceFile('contextRecoveryAssembly.ts', coreSource, ts.ScriptTarget.Latest, true);
+    const core = coreAst.statements.find((node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'commitContextRecoveryWithPorts');
+    if (!core) throw new Error('Shared context rebuild coordination is missing');
+    const commitRebuild = core.body!.getText(coreAst).replace(/\bports\./g, '');
+    expect(registerSource).toContain('commitContextRecoveryWithPorts({');
     const query = commitRebuild.indexOf('contextWindow: sessions.contextWindow,');
     const commit = commitRebuild.indexOf('commitContextRebuild(sessionId, handoff, meta)');
     const cancellation = commitRebuild.indexOf('signal?.throwIfAborted();');
@@ -1795,5 +1799,203 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain(
       'if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||',
     );
+  });
+});
+
+// Guard tier: the scheduled startup owner assertion protects an asynchronous account switch.
+// Start before the automation preference holder: the buggy snapshot lived just
+// above the bootstrap holder assignment, so a block anchored on that assignment
+// would have skipped the exact line the guard is meant to catch.
+const WIRING_START = 'prepareScheduledModelPreferencesHolder = async';
+const WIRING_ANCHOR = 'scheduledSessionBootstrapHolder = createScheduledSessionBootstrap(';
+const WIRING_END = 'let recoverRenamedSessionModelOnSend';
+
+describe('scheduled session bootstrap wiring', () => {
+  function wiringBlock(): string {
+    const start = registerSource.indexOf(WIRING_START);
+    expect(start).toBeGreaterThan(-1);
+    const end = registerSource.indexOf(WIRING_END, start);
+    expect(end).toBeGreaterThan(start);
+    return registerSource.slice(start, end);
+  }
+
+  it('builds the automation bootstrap holder from the per-fire factory', () => {
+    expect(wiringBlock()).toContain(WIRING_ANCHOR);
+  });
+
+  it('forwards the owner assertion into the startup funnel', () => {
+    // Losing this forwarder would silently downgrade the guard to the single
+    // entry check, so an account switch inside the funnel could create the task
+    // under the new owner instead of aborting.
+    expect(wiringBlock()).toContain(
+      'bootstrapSession(options as MakerSessionCreateOpts, assertAccess)',
+    );
+  });
+
+  it('never snapshots the data owner for automations at registration time', () => {
+    // A snapshot evaluated once while the handlers register is the bug: the app
+    // session commit that restores the account can land later, so it stays stale
+    // and every automation fails until the app restarts. Assert on the wiring
+    // block, not on a variable name: any `const`/`let` shape that captures the
+    // scope here reintroduces the same failure.
+    expect(wiringBlock()).not.toContain('captureDataOwnerBroadcastScope');
+  });
+});
+
+
+// Recovery assembly guard: execute the actual Desktop callbacks, not a copy
+// of their bodies or a mock of the recovery deps. Covers owner/DB fences and
+// persistence-before-projection before these closures become host ports.
+// Minimal failures: changed owner across an await, or a card write failing
+// after context.rebuild committed. Ordinary factory tests replace these deps.
+async function recoveryAssembly(bindings: Record<string, unknown>) {
+  let rowReader: ts.VariableStatement | undefined;
+  let assembly: ts.ExpressionStatement | undefined;
+  function visit(node: ts.Node): void {
+    if (ts.isVariableStatement(node) && node.declarationList.declarations.some(d => d.name.getText(registerAst) === 'readContextRecoverySession')) rowReader = node;
+    if (ts.isExpressionStatement(node) && ts.isBinaryExpression(node.expression)
+      && node.expression.left.getText(registerAst) === 'contextOverflowRolloverHolder') assembly = node;
+    ts.forEachChild(node, visit);
+  }
+  visit(registerAst);
+  if (!rowReader || !assembly) throw new Error('Desktop recovery assembly is missing');
+  const code = ts.transpileModule(`let contextOverflowRolloverHolder;\n${rowReader.getText(registerAst)}\n${assembly.getText(registerAst)}\nreturn contextOverflowRolloverHolder;`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, removeComments: true } }).outputText;
+  // Load newly extracted production functions from their real imports. Existing
+  // Desktop IO remains injected. This same guard runs unchanged before/after
+  // extraction and never recreates the extracted implementation in the test.
+  for (const statement of registerAst.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    const named = statement.importClause?.namedBindings;
+    if (!named || !ts.isNamedImports(named) || statement.importClause?.isTypeOnly) continue;
+    for (const spec of named.elements) {
+      const name = spec.name.text;
+      if (spec.isTypeOnly || name in bindings || !new RegExp(`\\b${name}\\b`).test(code)) continue;
+      const file = resolve(mainRoot, 'maker-ipc', statement.moduleSpecifier.text).replace(/\.js$/, '.ts');
+      const imported = await import(/* @vite-ignore */ file);
+      bindings[name] = imported[spec.propertyName?.text ?? name];
+    }
+  }
+  return new Function(...Object.keys(bindings), code)(...Object.values(bindings)) as Record<string, (...args: unknown[]) => unknown>;
+}
+
+function recoveryFixture() {
+  const order: string[] = [];
+  let current = true;
+  const row = { status: 'active', source: 'desktop', botRole: 'canonical', botStatus: 'active',
+    botHiddenAt: null, botLinkArchivedAt: null, agentKind: 'codex', workingDir: '/fixture',
+    model: 'm', providerId: 'p', clearedAt: null, contextWindow: 1000, remoteHostId: null };
+  const query = { from: () => query, leftJoin: () => query, where: () => query,
+    limit: vi.fn(async () => { order.push('read'); return [row]; }) };
+  const db = { clientEpoch: 1, client: { drizzle: { select: () => query } } };
+  const coordinator = { clearError: vi.fn(() => { order.push('clear'); return { status: 'idle' }; }),
+    hasPendingQueuedWork: vi.fn(() => false), getInputAbortSignal: () => new AbortController().signal };
+  const bindings: Record<string, unknown> = {
+    createContextOverflowRollover: (deps: unknown) => deps,
+    getDbClient: () => db.client, getCurrentDbClientSnapshot: () => ({ ...db }),
+    captureDataOwnerBroadcastScope: () => 'owner', isDataOwnerBroadcastScopeCurrent: () => current,
+    sessions: new Proxy({}, { get: (_t, key) => key }), botSessionLinks: {}, botProfiles: {}, eq: vi.fn(),
+    maker: { getSession: vi.fn(), closeSession: vi.fn() },
+    log: { info: vi.fn(), warn: vi.fn(() => { order.push('warn'); }) },
+    isHeadlessGhostSetupTurn: () => false, bindingStore: { findByTarget: () => null },
+    needsSubscriptionAccountHandoff: vi.fn(), remoteBackgroundInvoke: vi.fn(),
+    readCodexThreadStorageReadOnly: vi.fn(async () => ({ rolloutPath: '/fixture/history' })),
+    classifyCodexHistoryOversized: vi.fn(async () => 'healthy'),
+    DEFAULT_MODEL_COMPACTION_PCT: 80, getActiveCatalog: vi.fn(), dbToMakerAgentKind: (x: unknown) => x,
+    resolveConfiguredContextWindow: vi.fn(), listMessagesForAgentHandoff: vi.fn(),
+    listBotRecallSessionIds: vi.fn(), COMPANION_SESSION_IDS_LIMIT: 10,
+    findLatestUserMessageForRebuild: vi.fn(), findLatestContextRebuildMeta: vi.fn(),
+    rehydrateColdPiRuntimeForWindowVerification: vi.fn(), drainPersistQueue: vi.fn(),
+    commitContextRebuild: vi.fn(async () => { order.push('commit'); return { updatedAt: 123 }; }),
+    broadcastSessionPatched: vi.fn(() => { order.push('project'); }),
+    createDbMessage: vi.fn(async () => { order.push('card'); throw new Error('card unavailable'); }),
+    createId: () => 'id', agentHandoffPending: { set: vi.fn(), readGeneration: () => 1 },
+    agentInputCoordinatorHolder: coordinator, wireNoteMemory: { reset: vi.fn(() => { order.push('reset'); }) },
+    readPiNativeCompatOverride: vi.fn(), recordPiNativeCompatOverride: vi.fn(),
+    buildCreateOptsWithStderr: (x: unknown) => x,
+    readSessionExtraDirsFromDb: vi.fn(async () => []), directoryGrantsForRuntime: vi.fn(),
+    readSessionWritableDirsFromDb: vi.fn(async () => []), readAutoReviewHistory: vi.fn(async () => []),
+    restoreAutoReviewUserIntent: vi.fn(() => 'authored-intent'), canContinueContextRecovery: () => true,
+    persistedUserContentToWireMessage: (x: unknown) => x, readAutoReviewUserText: () => 'author',
+    sendToAgentAcceptedUnlocked: vi.fn(async () => { order.push('send'); return { accepted: true }; }),
+    PI_CACHE_RECOVERY_EXPECTATION: Symbol('compat'), INHERITED_CAPABILITY_SELECTION: Symbol('capabilities'),
+    AUTO_REVIEW_SOURCE_CONTENT: Symbol('source'), AUTO_REVIEW_USER_INTENT: Symbol('intent'),
+    app: { getPath: () => '/fixture/profile' },
+    withCindyMakeProjectUse: async (_profile: unknown, _dir: unknown, send: () => unknown) => {
+      order.push('project-use'); return send();
+    },
+    withSendToSessionLock: vi.fn(), withRehydrateCloseSuppressed: vi.fn(),
+  };
+  return { bindings, row, order, db, coordinator, setCurrent: (value: boolean) => { current = value; } };
+}
+
+describe('Desktop recovery assembly ordering and fences', () => {
+  it('reads an active companion role only while its link and profile are active', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    expect(await deps.getSessionRow('s')).toMatchObject({ botRole: 'canonical' });
+    h.row.botStatus = 'inactive';
+    expect(await deps.getSessionRow('s')).toMatchObject({ botRole: null });
+  });
+
+  it('classifies only the recorded history and refuses an owner change across inspection', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    expect(await deps.classifyCodexHistory('thread')).toBe('healthy');
+    h.setCurrent(false);
+    await expect(deps.classifyCodexHistory('thread')).rejects.toThrow('owner changed');
+    h.setCurrent(true);
+    (h.bindings.readCodexThreadStorageReadOnly as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    expect(await deps.classifyCodexHistory('thread')).toBe('unknown');
+  });
+
+  it('commits before zero-usage projection and tolerates a derived card failure', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    await deps.commitRebuild('s', 'handoff', { reason: 'context-overflow', sourceUserClientId: 'u' });
+    expect(h.order).toEqual(['read', 'commit', 'project', 'card', 'warn']);
+    expect(h.bindings.broadcastSessionPatched).toHaveBeenCalledWith('s', expect.objectContaining({
+      sdkSessionId: null, contextTokens: 0, contextWindow: 1000,
+    }), 'owner');
+    h.order.length = 0; h.setCurrent(false);
+    await expect(deps.commitRebuild('s', 'handoff', {})).rejects.toThrow('owner changed before commit');
+    expect(h.order).toEqual(['read']);
+    h.setCurrent(true);
+    (h.bindings.commitContextRebuild as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      h.order.push('commit'); h.db.clientEpoch++; return { updatedAt: 123 };
+    });
+    await expect(deps.commitRebuild('s', 'handoff', {})).rejects.toThrow('owner changed after commit');
+    expect(h.order).toEqual(['read', 'read', 'commit']);
+  });
+
+  // clearError returns a projection object in the real Desktop coordinator.
+  // The void callback contract must ignore it rather than treating it as a Promise.
+  it.each(['rebuild', 'queued-input'])('keeps %s synchronous when clearError returns a projection', async (entry) => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    if (entry === 'rebuild') {
+      expect(deps.onRebuilt('s')).toBeUndefined();
+      expect(h.order).toEqual(['clear', 'reset']);
+    } else {
+      expect((deps.getRecoveryAbortSignal('s') as AbortSignal).aborted).toBe(false);
+      h.coordinator.hasPendingQueuedWork.mockReturnValue(true);
+      const signal = deps.getRecoveryAbortSignal('s');
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect((signal as AbortSignal).aborted).toBe(true);
+      expect(h.order).toEqual(['clear']);
+    }
+  });
+
+  it('rechecks continuation ownership before sending and preserves authored recovery intent', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    const recovery = { continueFromHistory: true, sourceUserContent: 'author', sourceUserClientId: 'u',
+      sourceCapabilitySelectionText: 'capability', signal: new AbortController().signal };
+    expect(await deps.replayUserMessage('s', 'continue', undefined, recovery)).toEqual({ accepted: true });
+    expect(h.order).toEqual(['read', 'read', 'project-use', 'send']);
+    const send = h.bindings.sendToAgentAcceptedUnlocked as ReturnType<typeof vi.fn>;
+    const opts = send.mock.calls[0][3];
+    expect(opts[h.bindings.AUTO_REVIEW_SOURCE_CONTENT as symbol]).toBe('author');
+    expect(opts[h.bindings.AUTO_REVIEW_USER_INTENT as symbol]).toBe('authored-intent');
+    h.row.status = 'archived';
+    expect(await deps.replayUserMessage('s', 'continue', undefined, recovery)).toEqual({ accepted: false });
+    expect(send).toHaveBeenCalledTimes(1);
+    const cancelled = new AbortController(); cancelled.abort();
+    expect(await deps.replayUserMessage('s', 'continue', undefined, { signal: cancelled.signal })).toEqual({ accepted: false });
   });
 });

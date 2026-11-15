@@ -44,6 +44,8 @@ vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null })
 // Fee-button accessibility is rendered by the real component; the unopened
 // native sheet is outside this suite's scope.
 vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
+// Card previews have their own regression suite; this suite preserves the message/source-label assertions.
+vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
 
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));

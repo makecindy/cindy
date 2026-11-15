@@ -656,6 +656,56 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(result).not.toHaveProperty('ghost.companionsCapabilityApproved');
   });
 
+  // §1.2/§5: receipt identity and installed declarations bound each group, through update and uninstall.
+  // Existing capability tests use booleans; this exercises independent array entries in the real installer.
+  it('keeps approved host tool groups only for the same installation and still-declared groups', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { hostTools: ['history', 'control'] } };
+    const pkg = await makeCindy('host-tools.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg);
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected.approvedHostToolGroups).toBeUndefined();
+    expect(await manager.approveTaskCapability(id, 'stale', () => true, 'host-tools:history')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'host-tools:history')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'host-tools:history')).toBe(true);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'host-tools:settings')).toBe(false);
+    expect(manager.list()[0]?.approvedHostToolGroups).toEqual(['history']);
+    const update = await makeCindy('host-tools-update.cindy', { ...manifest, version: '1.0.1', agent: { hostTools: ['history', 'scheduler'] } }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    if (!('ghost' in updated)) throw new Error('fixture update failed');
+    expect(updated.ghost.approvedHostToolGroups).toEqual(['history']);
+    const removed = await makeCindy('host-tools-removed.cindy', { ...manifest, version: '1.0.2', agent: { hostTools: ['control'] } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).not.toHaveProperty('ghost.approvedHostToolGroups');
+    await manager.uninstall(id);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'host-tools:history')).toBe(false);
+    await manager.install(pkg);
+    expect(manager.list()).toHaveLength(1);
+    expect(manager.list()[0]?.approvedHostToolGroups).toBeUndefined();
+  });
+
+  // Unit installer contract: previously unknown content topics do not inherit metadata consent.
+  it('persists explicit event topic consent and removes it on update/uninstall', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'subscribe'], subscribe: { topics: ['session', 'message', 'task-state'] } };
+    const pkg = await makeCindy('content-events.cindy', manifest, { 'main.js': '// content' });
+    await manager.install(pkg);
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected.approvedEventTopics).toBeUndefined();
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'event:message')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'event:message')).toBe(true);
+    expect(manager.list()[0]?.approvedEventTopics).toEqual(['message']);
+    const update = await makeCindy('content-events-update.cindy', { ...manifest, version: '1.0.1', subscribe: { topics: ['session', 'task-state'] } }, { 'main.js': '// updated' });
+    const result = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(result).not.toHaveProperty('ghost.approvedEventTopics');
+    await manager.uninstall(id);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'event:message')).toBe(false);
+    await manager.install(pkg);
+    expect(manager.list()[0]?.approvedEventTopics).toBeUndefined();
+  });
+
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
     await writeLegacyInstall('hello', {...goodManifest(), slots:['tool','agent'], agent:{tasks}});
     await manager.migrateLegacyApprovalsOnce();
