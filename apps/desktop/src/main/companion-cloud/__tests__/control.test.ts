@@ -25,7 +25,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
   canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
-  store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived']; current?: () => boolean }) {
+  retireLocalCopy?: CompanionCloudHost['retireLocalCopy']; store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived']; current?: () => boolean }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
   const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
@@ -43,6 +43,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   const onShadowChanged = vi.fn();
   const log = { warn: vi.fn(), info: vi.fn() };
   const host: CompanionCloudHost = {
+    retireLocalCopy: options.retireLocalCopy,
     homes: createCompanionHomeRegistry(), openState: () => state,
     readValues: options.readValues ?? (async () => options.values ?? [{ key: 'companion.profile.v1', value: { name: 'Mia' } }]),
     canonicalSession: options.canonicalSession ?? (async () => 'session-1'), rowsAfter: async () => [], latestRows: async () => [],
@@ -1039,6 +1040,30 @@ describe('transcript', () => {
 });
 
 describe('retire', () => {
+  // #6578: old demoted copies still held names. Unlike a live remote home, disabled is definitive.
+  // Unit: reconcile is the production entry; the worker transaction separately proves retained data.
+  it('retires an already-hidden deleted copy, retries failed persistence, and keeps live remote copies', async () => {
+    const local = { id: 'bot_mia', status: 'active' };
+    let fail = true;
+    const t = setup({ home: 'laptop', retireLocalCopy: async (_botId, current) => {
+      expect(current()).toBe(true);
+      if (fail) throw new Error('WRITE_FAILED');
+      local.status = 'archived';
+    } });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; });
+    await t.runtime.reconcile([local]);
+    expect(local.status).toBe('active');
+    t.actors[0]!.disabled = true;
+    await t.runtime.reconcile([local]);
+    expect(local.status).toBe('active');
+    fail = false;
+    await t.runtime.reconcile([local]);
+    expect(local.status).toBe('archived');
+    expect(t.runtime.isShadowed('bot_mia')).toBe(true);
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+  });
+
+
   // An explicit local deletion must survive an unavailable actor registry. Persist the
   // known actor identity; a later registry must still prove home + installation ownership.
   it('persists retirement without an actor registry and completes it after restart', async () => {
