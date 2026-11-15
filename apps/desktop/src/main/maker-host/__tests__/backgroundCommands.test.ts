@@ -22,12 +22,16 @@
  * - 最小失败输入还包括：受理宽限窗内退出的命令（秒败/短命令）——结果作为工具结果
  *   同步返回且不再回注（2026-11-14 回投时机收口：病态短尾巴走前台语义，秒败不占
  *   轮次），窗口后仍运行的转后台照旧回注。
- * - 实测耗时：本机 < 30s（16 用例，含 5MB 输出用例、名额让出等待、宽限窗（同步完成/超限/超时）与两个 shell 用例）。
+ * - 最小失败输入还包括：宿主退出/重启时在跑命令没有回注（2026-11-15 ab-old3
+ *   事故：报告所有权只在发起实例内存里，宿主一死会话永久等待）——退出遗言
+ *   （flushTerminationReports 萰持久队列，重启后送达）与启动对账（meta 心跳
+ *   过期的孤儿补投，投后删 meta 一次性；新鲜心跳跳过多实例活写者）。
+ * - 实测耗时：本机 < 40s（18 用例，含 5MB 输出用例、名额让出等待、宽限窗（同步完成/超限/超时）、宿主中断遗言与启动对账、两个 shell 用例）。
  */
 
 import { spawn } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -119,6 +123,76 @@ it('命令退出后回注一次完成报告:退出码、日志尾部、scheduler
   expect(service.runningCount()).toBe(0);
 });
 
+it('宿主中断遗言：flushTerminationReports 投「宿主中断」报告，持久队列跨重启可达；dispose 纯杀树不重复投', async () => {
+  const capture = vi.fn();
+  const service = buildService(capture);
+  await service.start({
+    sessionId: 'sess-flush',
+    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 30_000)"`,
+    cwd: logDir,
+  });
+  await service.flushTerminationReports();
+  expect(capture).toHaveBeenCalledTimes(1);
+  const report = capture.mock.calls[0]?.[0] as {
+    sessionId?: string;
+    text?: string;
+    persistedContent?: string;
+  };
+  expect(report.sessionId).toBe('sess-flush');
+  expect(report.text).toContain('宿主中断');
+  expect(report.persistedContent).toContain('后台命令被宿主中断');
+  // dispose 纯杀树：退出流程在遗言之后调用它，不会产生第二份报告。
+  service.dispose();
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  expect(capture).toHaveBeenCalledTimes(1);
+});
+
+it('启动对账：心跳过期的孤儿 meta 补投「宿主中断」报告并删除；新鲜心跳跳过活写者', async () => {
+  const staleLog = path.join(logDir, 'bg-crashtest.log');
+  const staleMeta = `${staleLog}.meta.json`;
+  const freshLog = path.join(logDir, 'bg-crashlive.log');
+  const freshMeta = `${freshLog}.meta.json`;
+  await writeFile(staleLog, 'stale-partial-out\n', 'utf8');
+  await writeFile(
+    staleMeta,
+    JSON.stringify({
+      sessionId: 'sess-crash',
+      command: 'bash /tmp/ab-old3.sh',
+      runId: 'bg-crashtest',
+      logPath: staleLog,
+      startedAt: Date.now() - 60_000,
+    }),
+    'utf8',
+  );
+  const stale = new Date(Date.now() - 60_000);
+  await utimes(staleMeta, stale, stale);
+  await writeFile(freshLog, 'live-out\n', 'utf8');
+  await writeFile(
+    freshMeta,
+    JSON.stringify({
+      sessionId: 'sess-live',
+      command: 'sleep 30',
+      runId: 'bg-crashlive',
+      logPath: freshLog,
+      startedAt: Date.now() - 60_000,
+    }),
+    'utf8',
+  );
+  const now = new Date();
+  await utimes(freshMeta, now, now); // 活写者的新鲜心跳
+  const capture = vi.fn();
+  buildService(capture); // 创建即对账
+  await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+  const report = capture.mock.calls[0]?.[0] as { sessionId?: string; text?: string };
+  expect(report.sessionId).toBe('sess-crash');
+  expect(report.text).toContain('宿主中断');
+  expect(report.text).toContain('ab-old3.sh');
+  // 投后删 meta：一次性。
+  await expect(access(staleMeta)).rejects.toThrow();
+  // 新鲜心跳 = 另一实例的活写者：不投、meta 保留。
+  await expect(access(freshMeta)).resolves.toBeUndefined();
+});
+
 it('受理宽限窗：窗口内退出的命令结果同步返回，不再回注（秒败不占轮次）', async () => {
   const capture = vi.fn();
   // 大宽限窗：node 启动远快于窗口，必走同步路径。
@@ -135,6 +209,8 @@ it('受理宽限窗：窗口内退出的命令结果同步返回，不再回注�
   // 工具结果即报告：不再有「后台命令完成」回注；名额随 exit 即时让出。
   expect(capture).not.toHaveBeenCalled();
   expect(service.runningCount()).toBe(0);
+  // settle 已删 meta 旁车：崩溃对账不再需要它。
+  await expect(access(`${failed.logPath}.meta.json`)).rejects.toThrow();
 });
 
 it('受理宽限窗内被体量巡检杀树：同步结果带 outputCapped，不回注', async () => {

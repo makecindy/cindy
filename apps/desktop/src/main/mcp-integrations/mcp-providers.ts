@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { onQuit } from '../lifecycle.js';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { gateBuiltinMcpProviders } from './provider-gate.js';
 import { createIMessageMcpServer } from './imessageMcpServer';
@@ -232,10 +233,23 @@ const feishuTransportFor = createFeishuTransportResolver({
 let backgroundCommandServiceSingleton: Promise<
   import('../maker-host/background-commands.js').BackgroundCommandService
 > | null = null;
+// 退出遗言只挂一次(切账号会重建单例,但退出流程只需要冲当时现存的那份)。
+let backgroundCommandQuitHookRegistered = false;
 async function getBackgroundCommandService(): Promise<
   import('../maker-host/background-commands.js').BackgroundCommandService
 > {
   if (!backgroundCommandServiceSingleton) {
+    if (!backgroundCommandQuitHookRegistered) {
+      backgroundCommandQuitHookRegistered = true;
+      onQuit('background-commands', async () => {
+        const service = await backgroundCommandServiceSingleton?.catch(() => null);
+        if (!service) return;
+        // 先投遗言(持久队列,重启后送达——会话不会「永远等不到回注」),再杀树;
+        // 崩溃时这步不跑,由下次启动对账兜底。
+        await service.flushTerminationReports().catch(() => {});
+        service.dispose();
+      }, 'async');
+    }
     backgroundCommandServiceSingleton = import('../maker-host/background-commands.js').then(({ createBackgroundCommandService }) =>
       createBackgroundCommandService({
         enqueueReport: (req) =>
@@ -255,7 +269,12 @@ async function getBackgroundCommandService(): Promise<
 export function resetBackgroundCommandService(): void {
   const pending = backgroundCommandServiceSingleton;
   backgroundCommandServiceSingleton = null;
-  void pending?.then((service) => service.dispose());
+  // 切账号也是「宿主对旧账号会话的终止」:先把中断报告投进旧账号会话的持久队列,
+  // 再作废服务。失败不阻断切换。
+  void pending?.then(async (service) => {
+    await service.flushTerminationReports().catch(() => {});
+    service.dispose();
+  });
 }
 
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {

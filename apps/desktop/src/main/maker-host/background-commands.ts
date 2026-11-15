@@ -27,8 +27,17 @@
 
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from 'node:fs';
-import { readdir, stat, truncate, unlink } from 'node:fs/promises';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { access, readFile, readdir, stat, truncate, unlink, utimes } from 'node:fs/promises';
 import path from 'node:path';
 
 import { killProcessTree } from '../scheduler-host/proc-util.js';
@@ -43,6 +52,8 @@ import type { SchedulerQueuedPromptRequest } from '../maker-ipc/register.js';
 export const BACKGROUND_COMMAND_MAX_MS = 24 * 60 * 60 * 1000;
 /** 同一应用实例内并发后台命令上限;超出直接拒绝,逼模型先收敛。 */
 export const BACKGROUND_COMMAND_MAX_CONCURRENT = 8;
+/** meta 心跳过期线:超过即认定写它的宿主实例已不在(崩溃/被杀),启动对账才补投。 */
+export const BACKGROUND_COMMAND_META_STALE_MS = 5_000;
 /** 单条日志文件上限(保头部,超出丢弃并写截断标记);报告用内存尾部不受此限。 */
 export const BACKGROUND_COMMAND_LOG_CAP_BYTES = 5 * 1024 * 1024;
 /** 报告附带的内存日志尾部(保留最后的输出,不受文件截断影响)。 */
@@ -224,8 +235,13 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
   // active=false：命令已退出、并发名额已让出；条目保留是因为治理计时器（硬顶杀树 /
   // POSIX 组探测）仍在管进程树，树死透或硬顶到点才整体移除。
   const running = new Map<string, {
+    runId: string;
+    sessionId: string;
+    command: string;
     startedAt: number;
     logPath: string;
+    metaPath: string | null;
+    terminationDelivered: boolean;
     timeoutTimer: NodeJS.Timeout;
     groupPoll: NodeJS.Timeout | null;
     killTree: () => void;
@@ -303,32 +319,41 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       signal: NodeJS.Signals | null;
       timedOut: boolean;
       spawnError?: string;
+      hostTerminated?: boolean;
     };
     tail: string;
   }): { text: string; persistedContent: string } {
     const seconds = Math.max(0, Math.round(input.durationMs / 1000));
     const duration =
       seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`;
-    const status = input.exit.spawnError
-      ? `启动失败（${input.exit.spawnError}）`
-      : input.exit.timedOut
-        ? '超过时限被强制终止（结果未知；若命令有副作用请先核实）'
-        : input.exit.code === 0
-          ? '成功（exit 0）'
-          : input.exit.code !== null
-            ? `失败（exit ${input.exit.code}）`
-            : `被信号终止（${input.exit.signal ?? 'unknown'}）`;
+    const status = input.exit.hostTerminated
+      ? '宿主中断（应用退出/重启/崩溃），命令未跑完，之后不会再有完成报告'
+      : input.exit.spawnError
+        ? `启动失败（${input.exit.spawnError}）`
+        : input.exit.timedOut
+          ? '超过时限被强制终止（结果未知；若命令有副作用请先核实）'
+          : input.exit.code === 0
+            ? '成功（exit 0）'
+            : input.exit.code !== null
+              ? `失败（exit ${input.exit.code}）`
+              : `被信号终止（${input.exit.signal ?? 'unknown'}）`;
     const head = input.command.length > 160 ? `${input.command.slice(0, 160)}…` : input.command;
     const logLine = input.logTruncated
       ? `输出超过 ${BACKGROUND_COMMAND_LOG_CAP_BYTES} 字节上限，进程树已被终止。日志文件（终止前的记录）：${input.logPath}`
       : `完整日志：${input.logPath}`;
+    const intro = input.exit.hostTerminated
+      ? `〔后台命令被宿主中断〕宿主退出/重启/崩溃时命令未完成，之后不会再有「后台命令完成」报告。可依据下方日志判断进度；如任务仍依赖它，宿主就绪后请重新启动。`
+      : `〔后台命令完成〕这条消息由宿主在后台命令结束时自动发来，不是主人输入。`;
     const text =
-      `〔后台命令完成〕这条消息由宿主在后台命令结束时自动发来，不是主人输入。\n` +
+      `${intro}\n` +
       `命令：${head}\n状态：${status}\n耗时：${duration}\n` +
       (input.tail.trim() ? `日志尾部：\n---\n${input.tail}\n---\n` : '') +
       `${logLine}\n` +
       `请根据结果继续推进任务；不需要主人决策时向主人简短汇报即可。`;
-    return { text, persistedContent: `后台命令完成 · ${status} · ${head}` };
+    return {
+      text,
+      persistedContent: `${input.exit.hostTerminated ? '后台命令被宿主中断' : '后台命令完成'} · ${status} · ${head}`,
+    };
   }
 
   function deliverReport(params: {
@@ -343,9 +368,10 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       signal: NodeJS.Signals | null;
       timedOut: boolean;
       spawnError?: string;
+      hostTerminated?: boolean;
     };
     tail: string;
-  }): void {
+  }): Promise<void> {
     let attempts = 0;
     const attempt = async (): Promise<void> => {
       attempts += 1;
@@ -391,8 +417,77 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         timer.unref?.();
       }
     };
-    void attempt();
+    // 返回 attempt:遗言/对账路径要 await 首次投递(退出窗口内必须落队);
+    // 完成报告路径用 void 前缀刻意不等待。
+    return attempt();
   }
+
+  /** 读日志文件末尾 TAIL_CAP_BYTES;文件不可读(被移走等)返回空串。 */
+  function readTailFromFile(tailPath: string): string {
+    try {
+      const size = statSync(tailPath).size;
+      const start = Math.max(0, size - TAIL_CAP_BYTES);
+      const length = Math.min(size, TAIL_CAP_BYTES);
+      const buffer = Buffer.alloc(length);
+      const handle = openSync(tailPath, 'r');
+      try {
+        readSync(handle, buffer, 0, length, start);
+      } finally {
+        closeSync(handle);
+      }
+      return buffer.toString('utf8');
+    } catch {
+      return '';
+    }
+  }
+
+  // 启动对账(崩溃/被杀兜底):上一个实例没来得及投的「宿主中断」报告在这里补投。
+  // meta 心跳过期(>BACKGROUND_COMMAND_META_STALE_MS) = 写它的实例已不在;多实例
+  // 并存时活写者靠新鲜心跳跳过。先删 meta 再投:一次性,投递失败(会话已删)
+  // deliverReport 内部记日志放弃,不空转。
+  function reconcileInterruptedRuns(): void {
+    const logDir = deps.resolveLogDir();
+    void readdir(logDir)
+      .then((entries) => {
+        const now = Date.now();
+        for (const entry of entries) {
+          if (!entry.startsWith('bg-') || !entry.endsWith('.meta.json')) continue;
+          const full = path.join(logDir, entry);
+          void (async () => {
+            const info = await stat(full);
+            if (now - info.mtimeMs < BACKGROUND_COMMAND_META_STALE_MS) return;
+            let meta: {
+              sessionId?: string;
+              command?: string;
+              runId?: string;
+              logPath?: string;
+              startedAt?: number;
+            };
+            try {
+              meta = JSON.parse(await readFile(full, 'utf8'));
+            } catch {
+              meta = {};
+            }
+            if (!meta.sessionId || !meta.command || !meta.runId || !meta.logPath) {
+              return void unlink(full).catch(() => {});
+            }
+            await unlink(full).catch(() => {});
+            deliverReport({
+              sessionId: meta.sessionId,
+              runId: meta.runId,
+              command: meta.command,
+              logPath: meta.logPath,
+              logTruncated: false,
+              durationMs: Math.max(0, now - (meta.startedAt ?? now)),
+              exit: { code: null, signal: null, timedOut: false, hostTerminated: true },
+              tail: readTailFromFile(meta.logPath),
+            });
+          })().catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }
+  reconcileInterruptedRuns();
 
   return {
     async start(input: BackgroundCommandStartInput): Promise<BackgroundCommandStartResult> {
@@ -522,23 +617,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       let reportSent = false;
       // 报告尾部从文件末尾读:子进程直写,宿主没有内存副本。读不到(文件被外部
       // 清掉等)按空尾部处理,报告主体不受影响。
-      const readLogTail = (): string => {
-        try {
-          const size = statSync(logPath).size;
-          const start = Math.max(0, size - TAIL_CAP_BYTES);
-          const length = Math.min(size, TAIL_CAP_BYTES);
-          const buffer = Buffer.alloc(length);
-          const handle = openSync(logPath, 'r');
-          try {
-            readSync(handle, buffer, 0, length, start);
-          } finally {
-            closeSync(handle);
-          }
-          return buffer.toString('utf8');
-        } catch {
-          return '';
-        }
-      };
+      const readLogTail = (): string => readTailFromFile(logPath);
       const reportOnce = (exit: {
         code: number | null;
         signal: NodeJS.Signals | null;
@@ -547,7 +626,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }) => {
         if (reportSent) return;
         reportSent = true;
-        deliverReport({
+        void deliverReport({
           sessionId: input.sessionId,
           runId,
           command,
@@ -617,6 +696,14 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       // 按既有约定查杀不到后代,只记日志留痕(与硬顶治理同一口径)。
       let outputCapped = false;
       const capPoll = setInterval(() => {
+        // meta 心跳:每次巡检 touch 一次 mtime,就是「本实例还活着在管这条命令」
+        // 的凭据;其他实例启动对账时靠它跳过活写者。一次 utimes,无额外进程/IO。
+        try {
+          const now = new Date();
+          utimesSync(metaPath, now, now);
+        } catch {
+          // meta 已被 settle/对账删除时失败,静默即可。
+        }
         if (outputCapped) return;
         try {
           if (statSync(logPath).size <= BACKGROUND_COMMAND_LOG_CAP_BYTES) return;
@@ -664,6 +751,8 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }) => {
         if (settled) return;
         settled = true;
+        // meta 完成使命:退出已被本实例观察到,崩溃对账不再需要它。
+        void unlink(metaPath).catch(() => {});
         notifySettled?.(exit);
         // stdio 直写文件后没有 pipe EOF 要等;短延迟只为读尾部时避开杀毒/索引器
         // 的瞬时文件锁。同步消费(start 在宽限窗内拿到结果)时 reportSent 已置位,
@@ -672,9 +761,26 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         grace.unref?.();
       };
 
+      // meta 旁车:崩溃对账的凭据(sessionId/command 只活在内存注册表,宿主一死
+      // 报告就没了)。写失败不阻断运行,只少一份崩溃兜底。
+      const metaPath = `${logPath}.meta.json`;
+      try {
+        writeFileSync(
+          metaPath,
+          JSON.stringify({ sessionId: input.sessionId, command, runId, logPath, startedAt }),
+          'utf8',
+        );
+      } catch {
+        deps.logger.warn?.('[background-command] meta sidecar write failed', { runId });
+      }
       running.set(runId, {
+        runId,
+        sessionId: input.sessionId,
+        command,
         startedAt,
         logPath,
+        metaPath,
+        terminationDelivered: false,
         timeoutTimer,
         groupPoll,
         capPoll,
@@ -747,6 +853,34 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         }
         running.delete(runId);
       }
+    },
+
+    /**
+     * 宿主退出前的遗言:对每个在跑命令投「宿主中断」报告。报告队列跨重启持久
+     * (persistedContent + 排队快照恢复),重启后送达——会话不会「永远等不到回注」
+     * (2026-11-15 ab-old3 事故:宿主重启吞掉报告,会话永久等待)。崩溃时这步
+     * 来不及跑,由下次实例创建的对账(reconcileInterruptedRuns)补投。只投一次
+     * (terminationDelivered 标记);dispose 纯杀树,不投。
+     */
+    async flushTerminationReports(): Promise<void> {
+      const pending = [...running.values()].filter(
+        (entry) => entry.active && !entry.terminationDelivered,
+      );
+      for (const entry of pending) entry.terminationDelivered = true;
+      await Promise.allSettled(
+        pending.map((entry) =>
+          deliverReport({
+            sessionId: entry.sessionId,
+            runId: entry.runId,
+            command: entry.command,
+            logPath: entry.logPath,
+            logTruncated: false,
+            durationMs: Math.max(0, Date.now() - entry.startedAt),
+            exit: { code: null, signal: null, timedOut: false, hostTerminated: true },
+            tail: readTailFromFile(entry.logPath),
+          }),
+        ),
+      );
     },
   };
 }
