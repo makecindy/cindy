@@ -55,8 +55,8 @@ export function DocumentPreviewChrome(p: DocumentPreviewChromeProps) {
           style={{
             position: "absolute",
             top: insets.top + 64,
-            left: 0,
-            right: 0,
+            left: insets.left,
+            right: insets.right,
             backgroundColor: colors.surface,
             padding: spacing.sm,
             flexDirection: "row",

@@ -2416,6 +2416,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   });
   const sections = useMemo(() => {
     if (!shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) return homeSections;
+    // SectionList counts section headers/footers even with no rows, suppressing
+    // ListEmptyComponent. Leave the list truly empty while searching or on no hits.
+    if (indexedSearch.results.length === 0) return [];
     return [{
       data: indexedSearch.results.map((item) => ({
         item,
@@ -3505,7 +3508,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       ) : null}
       <View
         onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
-        style={[styles.homeChrome, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
+        style={[styles.homeChrome, {
+          // Absolute positioning ignores the root's padding. Keep the search and
+          // connection controls inside the same safe edges as the task list.
+          left: embedded ? 0 : edgePadding.paddingLeft,
+          right: embedded ? 0 : edgePadding.paddingRight,
+        }, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
       >
         <HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>
         <View style={{ paddingTop: nativeHomeHeader ? 0 : embedded ? spacing.lg : edgePadding.paddingTop }}>
