@@ -61,6 +61,11 @@ async function body(bytes: Buffer, mime = 'application/pdf') {
   await writeFile(filePath, raw);
   return { filePath, bytes: Buffer.byteLength(raw), signal: new AbortController().signal };
 }
+function preservedLocalPath(text: string): string {
+  const quoted = /Preserved local file: ("(?:\\.|[^"\\])*")\./.exec(text)?.[1];
+  if (!quoted) throw new Error('Missing preserved-file JSON string literal');
+  return JSON.parse(quoted) as string;
+}
 const factory = () => createAttachmentRecovery(() => state.resolved)({ reqId: 1, method: 'POST', url: '/v1/responses/compact', headers: {} });
 
 it('persists a PDF under the existing session attachment lifecycle and keeps a usable path', async () => {
@@ -227,7 +232,9 @@ it('persists count recovery media without learning a rule during body generation
     role: 'user'; content: Array<{ type: 'input_image'; image_url: string } | { type: 'input_text'; text: string }>;
   }> };
   expect(input.filter(item => item.content[0].type === 'input_image')).toHaveLength(31);
-  expect(input[0].content[0]).toMatchObject({ type: 'input_text', text: expect.stringContaining(path.join(state.root, 'saved.png')) });
+  const first = input[0].content[0];
+  expect(first.type).toBe('input_text');
+  expect(preservedLocalPath('text' in first ? first.text : '')).toBe(path.join(state.root, 'saved.png'));
   expect(state.ingest).toHaveBeenCalled();
   expect(state.addRef).toHaveBeenCalled();
   expect(await controller.control(raw, 'responses', { context: ctx, signal, route: controller.route!(ctx, parsed) })).toBeNull();
@@ -288,7 +295,8 @@ it('creates one scratch directory only after preprocessing and persists removed 
   const result = await controller.control(raw, 'responses', { signal: new AbortController().signal, route: {}, triggerBytes: 8192, targetBytes: 4096 });
   expect(directoryCallsDuringPrepare).toEqual([0, 0, 0]);
   expect(result!.removedImages).toBeGreaterThan(0);
-  expect(result!.body.toString()).toContain(path.join(state.root, 'saved.png'));
+  const text = JSON.parse(result!.body.toString()).input[0].content[0].text as string;
+  expect(preservedLocalPath(text)).toBe(path.join(state.root, 'saved.png'));
   expect(mkdtemp).toHaveBeenCalledOnce();
   expect(rm).toHaveBeenCalledExactlyOnceWith(vi.mocked(mkdtemp).mock.settledResults[0].value, { recursive: true, force: true });
   expect(state.ingest).toHaveBeenCalled();

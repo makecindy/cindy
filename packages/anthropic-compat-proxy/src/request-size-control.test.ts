@@ -1,3 +1,4 @@
+import { win32 } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { controlRequestSize, requestSizeBudgetAfterRejection, type InlineImagePreprocessor } from './request-size-control.js';
 import { classifyRequestSizeError } from './request-size-errors.js';
@@ -271,4 +272,21 @@ it('never loosens effective trigger or target when interpreting a rejection limi
     .toMatchObject({ triggerBytes: 32000, targetBytes: 14080, triggerImages: 26, targetImages: 11 });
   expect(requestSizeBudgetAfterRejection(undefined, { kind: 'image-count', limitCount: 50, limitBytes: 200000 }, { bytes: 100000, images: 60 }, 'other'))
     .toMatchObject({ triggerBytes: 44000, targetBytes: 19360, triggerImages: 50, targetImages: 22 });
+});
+
+// The production/main placeholder carries a JSON string literal, not a raw
+// filename. Decode that literal before comparing platform-native paths.
+it.each([
+  win32.join('C:\\Users', 'User Name', 'media', '截图.png'),
+  win32.join('\\\\server\\share', 'media', 'image.png'),
+  '/Users/example/My Files/media/image.png',
+])('round-trips the quoted path in a media placeholder: %s', async localPath => {
+  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [
+    { type: 'input_image', image_url: `data:image/png;base64,${imageData(1, 4000)}` },
+  ] }] }));
+  const result = await controlRequestSize(raw, 'responses', { triggerBytes: 1024, targetBytes: 512 }, async () => localPath);
+  const text = JSON.parse(result!.body.toString()).input[0].content[0].text as string;
+  const quoted = /Preserved local file: ("(?:\\.|[^"\\])*")\./.exec(text)?.[1];
+  expect(quoted).toBe(JSON.stringify(localPath));
+  expect(JSON.parse(quoted!)).toBe(localPath);
 });
