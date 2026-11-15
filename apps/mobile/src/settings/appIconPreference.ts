@@ -4,21 +4,32 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export const APP_ICON_STORAGE_KEY = 'xdt-maker.mobile.app-icon.v1';
 
 /** 资源集名称同时是运行时名称；改名会让已选用户回落到主图标。 */
-export const WORDMARK_ICON_NAME = 'AppIcon-Wordmark';
+export const APP_ICON_NATIVE_NAMES = {
+  cat: 'AppIcon-Cat',
+  wordmark: 'AppIcon-Wordmark',
+  mark: 'AppIcon-Mark',
+} as const;
 
-export const APP_ICON_CHOICES = ['default', 'wordmark'] as const;
-export type AppIconChoice = (typeof APP_ICON_CHOICES)[number];
+export type AppIconChoice = 'default' | keyof typeof APP_ICON_NATIVE_NAMES;
+
+export const APP_ICON_CHOICES = ['default', 'cat', 'wordmark', 'mark'] as const;
 
 export function normalizeAppIconChoice(value: unknown): AppIconChoice {
-  return value === 'wordmark' ? 'wordmark' : 'default';
+  return typeof value === 'string' && (APP_ICON_CHOICES as readonly string[]).includes(value)
+    ? (value as AppIconChoice)
+    : 'default';
 }
 
 export function nativeNameForAppIcon(choice: AppIconChoice): string | null {
-  return choice === 'wordmark' ? WORDMARK_ICON_NAME : null;
+  return choice === 'default' ? null : APP_ICON_NATIVE_NAMES[choice];
 }
 
 export function appIconFromNativeName(name: string | null | undefined): AppIconChoice {
-  return name === WORDMARK_ICON_NAME ? 'wordmark' : 'default';
+  if (!name) return 'default';
+  const match = (Object.entries(APP_ICON_NATIVE_NAMES) as Array<[AppIconChoice, string]>).find(
+    ([, nativeName]) => nativeName === name,
+  );
+  return match?.[0] ?? 'default';
 }
 
 export async function readAppIconPreference(): Promise<AppIconChoice> {

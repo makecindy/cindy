@@ -9,7 +9,7 @@ const { findNativeTargetByName } = require('@expo/config-plugins/build/ios/Targe
  *
  * 资源必须随包编译，运行时只能通过 `UIApplication.setAlternateIconName` 切换，
  * 因此这里在 prebuild 阶段把 1024 满幅 PNG 写进 `Images.xcassets`，并在 app target 上登记
- * `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES`，由 actool 生成 `CFBundleAlternateIcons`。
+ * `ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS`，由 actool 生成 `CFBundleAlternateIcons`。
  *
  * 资源来源：`apps/mobile/assets/app-icons/`（生成方式见 `scripts/generate-mobile-app-icons.mjs`）。
  */
@@ -17,10 +17,23 @@ const { findNativeTargetByName } = require('@expo/config-plugins/build/ios/Targe
 /** 图标集名称同时是运行时名称，发布后不得改名。 */
 const ALTERNATE_APP_ICONS = [
   {
+    name: 'AppIcon-Cat',
+    files: {
+      light: 'cat.png',
+    },
+  },
+  {
     name: 'AppIcon-Wordmark',
     files: {
       light: 'wordmark-light.png',
       dark: 'wordmark-dark.png',
+    },
+  },
+  {
+    name: 'AppIcon-Mark',
+    files: {
+      light: 'mark-light.png',
+      dark: 'mark-dark.png',
     },
   },
 ];
@@ -90,10 +103,12 @@ function withAlternateAppIcons(config) {
       project,
       target.buildConfigurationList,
     );
-    const names = ALTERNATE_APP_ICONS.map((icon) => icon.name).join(' ');
     for (const [, buildConfiguration] of configurations) {
       buildConfiguration.buildSettings = buildConfiguration.buildSettings || {};
-      buildConfiguration.buildSettings.ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = names;
+      // 名字列表含空格时会被 pbxproj 序列化成未加引号的字符串，CocoaPods 的 Nanaimo
+      // 解析器会报错；改用布尔开关让 actool 收录 catalog 里的全部 AppIcon 资源。
+      delete buildConfiguration.buildSettings.ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES;
+      buildConfiguration.buildSettings.ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = 'YES';
     }
     return mod;
   });

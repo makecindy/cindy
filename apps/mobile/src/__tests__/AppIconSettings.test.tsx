@@ -32,9 +32,12 @@ vi.mock('@/settings/appIconNative', () => ({
 }));
 
 vi.mock('@/settings/appIconAssets', () => ({
+  catIconAsset: 2,
   defaultIconAsset: 1,
-  wordmarkLightAsset: 2,
-  wordmarkDarkAsset: 3,
+  markDarkAsset: 6,
+  markLightAsset: 5,
+  wordmarkDarkAsset: 4,
+  wordmarkLightAsset: 3,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -132,7 +135,7 @@ async function click(element: Element) {
   });
 }
 
-const option = (key: 'default' | 'wordmark') =>
+const option = (key: 'default' | 'cat' | 'wordmark' | 'mark') =>
   host.querySelector(`[data-testid="settings.appIcon.option.${key}"]`)!;
 
 describe('AppIconSettings', () => {
@@ -149,12 +152,25 @@ describe('AppIconSettings', () => {
     expect(store.get('xdt-maker.mobile.app-icon.v1')).toBe('wordmark');
   });
 
+  it('渲染桌面版的四个图标选项', async () => {
+    await renderScreen();
+    expect(host.querySelectorAll('[data-testid^="settings.appIcon.option."]')).toHaveLength(4);
+  });
+
   it('选择后切换系统图标并写入偏好', async () => {
     await renderScreen();
     await click(option('wordmark'));
     expect(native.setIcon).toHaveBeenCalledWith('AppIcon-Wordmark');
     expect(store.get('xdt-maker.mobile.app-icon.v1')).toBe('wordmark');
     expect(option('wordmark').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('黑猫图标使用独立的原生名称', async () => {
+    await renderScreen();
+    await click(option('cat'));
+    expect(native.setIcon).toHaveBeenCalledWith('AppIcon-Cat');
+    expect(store.get('xdt-maker.mobile.app-icon.v1')).toBe('cat');
+    expect(option('cat').getAttribute('aria-checked')).toBe('true');
   });
 
   it('系统拒绝切换时回滚选中态并提示', async () => {

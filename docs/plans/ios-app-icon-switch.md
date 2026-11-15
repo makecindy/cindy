@@ -2,8 +2,9 @@
 
 > 状态：已实现（2026-11-14），待真机验收与冷更把关人确认；不代表已排期发售。
 > 核对日期：2026-11-14。源码基线：`origin/main` `d13d75ea83`（2026-11-14）。
-> 范围：`apps/mobile` 的 iOS 构建（CN `com.xd.cindycn` / Global `com.xd.cindy`），首批只做
-> `wordmark` 一个备选图标。Android 与桌面不在本方案内（桌面已有 Dock 图标选择）。
+> 范围：`apps/mobile` 的 iOS 构建（CN `com.xd.cindycn` / Global `com.xd.cindy`），
+> 覆盖桌面 Dock 图标的四个选项（default / cat / wordmark / mark）。Android 与桌面不在本方案内
+> （桌面已有 Dock 图标选择）。
 
 ## 1. 结论
 
@@ -12,8 +13,8 @@
   `CFBundleAlternateIcons`。不需要 entitlement，App Review 也没有额外权限申请。
 - **切换本身不需要发版**：用户选一次图标，系统立即换主屏、设置与搜索里的图标；但
   **“让包具备这个能力”必须随一次冷更包发布**——备选图标是编译进安装包的资源，OTA 改不了。
-- **首批范围**：主图标不变，新增一个 `wordmark` 备选。设置 → 外观里提供「默认 / Cindy 字标」
-  两个选项，切换只在这台设备生效（与桌面 Dock 图标的选择范围一致）。
+- **范围**：主图标不变，新增 `cat` / `wordmark` / `mark` 三个备选。设置 → 外观里提供「默认 / 黑猫 / Cindy 字标 / Cindy 符号」
+  四个选项，切换只在这台设备生效（与桌面 Dock 图标的选择范围一致）。
 - **素材**：桌面现有 wordmark 是 512、带透明、已烘圆角的 Dock 成图，iOS 不能直接用。改用仓库内
   官方 SVG 字标 + 同色渐变底重排 1024 满幅不透明图；该路径已在本机验证（见附录 B）。
 
@@ -43,8 +44,8 @@
 
 ## 4. 用户看到的行为
 
-1. 设置 → 外观，新增一行「应用图标」，两个 44pt 瓦片：默认、Cindy 字标。
-2. 点 Cindy 字标：系统弹出「已更改图标」提示；主屏幕、设置、搜索里的图标立即变化。
+1. 设置 → 外观，新增一行「应用图标」，四个 44pt 瓦片：默认、黑猫、Cindy 字标、Cindy 符号。
+2. 任点一个备选：系统弹出「已更改图标」提示；主屏幕、设置、搜索里的图标立即变化。
 3. 点默认：切回主图标，同样有一次系统提示。
 4. 选择只保存在这台手机；重启 App 保持；卸载重装回到主图标。
 5. Android 不显示这一行。
@@ -53,13 +54,14 @@
 
 ### 5.1 资源形态
 
-- 新增 `Images.xcassets/AppIcon-Wordmark.appiconset/`，内含：
-  - `wordmark-light.png`（1024×1024，RGB 无 alpha）
-  - `wordmark-dark.png`（1024×1024，RGB 无 alpha）
-  - `Contents.json`：两条 `idiom: universal` + `platform: ios`，其中一条带
-    `appearances: [{ appearance: "luminosity", value: "dark" }]`。
-- 资源集名称 `AppIcon-Wordmark` 同时是运行时名称，**发布后不得改名**（改名会让已选用户回落到
-  主图标）。
+- 新增三个 appiconset（命名与桌面选项一一对应）：
+  - `AppIcon-Cat.appiconset/`：`cat.png`（1024×1024，RGB 无 alpha），单外观；
+  - `AppIcon-Wordmark.appiconset/`：light + dark 两张 1024 PNG；
+  - `AppIcon-Mark.appiconset/`：light + dark 两张 1024 PNG。
+- 每个 `Contents.json` 使用 `idiom: universal` + `platform: ios` + `size: 1024x1024`；有深色素材的
+  额外带 `appearances: [{ appearance: "luminosity", value: "dark" }]`。
+- 资源集名称同时是运行时名称（`AppIcon-Cat` / `AppIcon-Wordmark` / `AppIcon-Mark`），
+  **发布后不得改名**（改名会让已选用户回落到主图标）。
 - 不设 `ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS`，只登记明确的名字，避免以后新增的
   图标资源被意外打进包。
 
@@ -67,11 +69,12 @@
 
 新增 `apps/mobile/plugins/with-ios-alternate-app-icons.js`：
 
-- `withDangerousMod('ios')`：把 `assets/app-icons/` 下的两张 1024 PNG 与 `Contents.json` 写入
+- `withDangerousMod('ios')`：把 `assets/app-icons/` 下的五张 1024 PNG 与各自的 `Contents.json` 写入
   `ios/<name>/Images.xcassets/AppIcon-Wordmark.appiconset/`；每次 prebuild 覆盖，并清掉列表外
   的旧 appiconset，保证幂等。
 - `withXcodeProject`：对 app target 的每个 build configuration 写
-  `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIcon-Wordmark`。
+  `ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES`（避免名字列表里的空格被 pbxproj
+  写成未引号字符串，CocoaPods 的 Nanaimo 解析器会因此失败）。
 - 插件本身不碰主图标设置（`ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` 仍由 Expo 负责）。
   现有同类先例：`apps/mobile/plugins/with-message-menu-icons.js` 就是在 prebuild 时把
   `assets/message-menu/*.imageset` 拷进 `Images.xcassets`；本插件沿用同一形态，只多一步写
@@ -96,12 +99,12 @@ setAlternateIconName(name: string | null): Promise<void>
 ### 5.4 JS 与 UI
 
 - `src/settings/appIconPreference.ts`：本机偏好，键 `xdt-maker.mobile.app-icon.v1`（沿用现有
-  `xdt-maker.mobile.*` 前缀），取值 `default` / `wordmark`；沿用现有 AsyncStorage 偏好 store 的
+  `xdt-maker.mobile.*` 前缀），取值 `default` / `cat` / `wordmark` / `mark`；沿用现有 AsyncStorage 偏好 store 的
   读写与损坏值回落语义。
 - `src/settings/useAppIcon.ts`：挂载时以原生 `getAlternateIconName()` 为准做一次对账（见 5.5），
   暴露 `{ choice, supported, pending, select }`。
 - 组件按仓库现有的平台分文件写法：`src/settings/AppIconSettings.ios.tsx` 提供一行两瓦片
-  （复用 `useSettingsRowStyles()` 保持与设置行同一内边距/字号；选中环、44pt 热区、
+  （复用 `useSettingsRowStyles()` 保持与设置行同一内边距/字号；选中环、四个 44pt 瓦片、
   `accessibilityRole="radio"`；失败回滚并用系统 Alert 说明），`AppIconSettings.tsx` 在 Android
   返回 `null`。挂载点：`app/settings.tsx` 的外观分组**之后**，自成一个「应用图标」分组——
   设置行规范要求说明性文字放在分组 footer，而外观分组的 footer 不能只描述其中一个行。
@@ -112,7 +115,9 @@ settings.appearance.appIcon.label             应用图标
 settings.appearance.appIcon.rowLabel          样式
 settings.appearance.appIcon.hint              切换后主屏幕图标会立即更新，只在这台手机上生效。
 settings.appearance.appIcon.options.default   默认
+settings.appearance.appIcon.options.cat       黑猫
 settings.appearance.appIcon.options.wordmark  Cindy 字标
+settings.appearance.appIcon.options.mark      Cindy 符号
 settings.appearance.appIcon.setFailed         图标没有切换成功，请稍后重试。
 settings.appearance.appIcon.saveFailed        图标已切换，但没能保存选择。
 ```
@@ -154,15 +159,19 @@ settings.appearance.appIcon.saveFailed        图标已切换，但没能保存�
 
 用仓库内官方字标矢量重排：
 
-- 字标：`.github/assets/cindy-wordmark-light.svg` / `cindy-wordmark-dark.svg`（viewBox
-  6828×2332，字色 `#040303` / `#FFFFFF`，箭头红 `#F70121`）。
+- **wordmark**：用 `.github/assets/cindy-wordmark-light.svg` / `-dark.svg`（viewBox
+  6828×2332，字色 `#040303` / `#FFFFFF`，箭头红 `#F70121`）在采样自桌面成图的渐变底上重排；
+  字标宽 67.8%、中心 y 50.2%。
+- **mark**：从 `mark-light.png` / `mark-dark.png` 里按“红色主导度”提取箭头与圆点
+  （保留原形状与抗锯齿），放到同一渐变底上；不需要桌面成图的圆角边。
+- **cat**：把 `cat.png` 放到红色渐变底上，用圆角蒙版去掉烘进去的圆角边，并对原 1px 描边做
+  轻微模糊回填；插图超出原圆角的部分由蒙版羽化收口。
 - 底色：从桌面成图采样，light `rgb(255,255,250)` → `rgb(238,238,234)`，dark
-  `rgb(50,44,44)` → `rgb(19,17,17)`，纵向线性渐变。
-- 字标比例沿用桌面成图：宽 67.8% 画布、中心 y 50.2%；产物为 1024×1024、RGB 无 alpha。
+  `rgb(50,44,44)` → `rgb(19,17,17)`；cat 红 `rgb(248,1,33)` → `rgb(225,13,40)`。
 - 生成脚本放仓库根 `scripts/generate-mobile-app-icons.mjs`（仓库规则：开发脚本不进
-  `apps/mobile/package.json`，避免扩大指纹输入），用本机 ImageMagick 的 `magick` 栅格化 SVG
-  （已验证透明底、矢量锐利），不新增 npm 依赖。产物入库，构建期不依赖 ImageMagick：
-  `apps/mobile/assets/app-icons/wordmark-light.png`、`wordmark-dark.png`。
+  `apps/mobile/package.json`，避免扩大指纹输入），复用 `apps/desktop` 已有的 `sharp`
+  （`createRequire` 锚定 desktop 的 package.json），不新增 npm 依赖。产物入库：
+  `apps/mobile/assets/app-icons/{cat,mark-light,mark-dark,wordmark-light,wordmark-dark}.png`。
 
 ### 6.3 变体
 
@@ -210,7 +219,7 @@ settings.appearance.appIcon.saveFailed        图标已切换，但没能保存�
 
 ```bash
 plutil -p <Cindy.app>/Info.plist | grep -A6 CFBundleAlternateIcons   # 应有 AppIcon-Wordmark
-xcrun assetutil --info <Cindy.app>/Assets.car | grep -i wordmark      # 应有对应图标条目
+xcrun assetutil --info <Cindy.app>/Assets.car | grep -i 'AppIcon-'    # 应有对应图标条目
 ```
 
 ### 8.3 真机验收清单
@@ -239,13 +248,13 @@ xcrun assetutil --info <Cindy.app>/Assets.car | grep -i wordmark      # 应有�
 - **Icon Composer `.icon` 备选图标**：Liquid Glass 效果最好，但“备选 `.icon` 能否被
   `setAlternateIconName` 切换”没有官方明文，本轮不采用，列为后续验证项。
 - **只做主题色/深色模式**：不换图标，不解决“选图标”的需求。
-- **本轮只做 wordmark**：素材与验证面最小；跑通后再评估 cat / mark。
+- **本轮一次覆盖四个选项**：cat / wordmark / mark 的素材都已从桌面成图重建；后续新增图标只需扩展同一生成脚本。
 
 ## 11. 里程碑与工作量
 
 | 阶段 | 内容 | 预估 |
 | --- | --- | --- |
-| 1 | 素材脚本与两张 1024 产物、设计复核 | 0.5 天 |
+| 1 | 素材脚本与五张 1024 产物、设计复核 | 0.5 天 |
 | 2 | config plugin + 单测 | 0.5 天 |
 | 3 | 原生模块 + JS 封装 | 0.5 天 |
 | 4 | 设置页 UI、i18n 12 个 locale、测试 | 1 天 |
@@ -291,7 +300,7 @@ G0 退出：基线指纹、依赖就绪、冷更意图有据可查；任一项�
 验证：
 - 插件单测：appiconset 文件与 `Contents.json` 结构、build setting 只写一次
 - `npx expo prebuild -p ios --no-install` 后检查 `Images.xcassets/AppIcon-Wordmark.appiconset/`
-  与 `project.pbxproj` 里的 `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES`
+  与 `project.pbxproj` 里的 `ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES`
 - 幂等：连续跑两次 prebuild，产物一致
 
 退出：prebuild 产物正确且可重复；否则回到插件实现。
@@ -391,15 +400,15 @@ xcrun assetutil --info <Cindy.app>/Assets.car | grep -i wordmark
 
 | 检查 | 结果 |
 | --- | --- |
-| 新增单测 | 3 个文件 / 12 个用例全通过（偏好、组件、插件） |
+| 新增单测 | 3 个文件 / 14 个用例全通过（偏好、组件、插件） |
 | `pnpm test:unit:related` | 767 passed / 0 failed |
 | `pnpm check:i18n` | 12 个 locale 全部一致 |
 | `pnpm check:i18n-glossary` | 无新增违规 |
 | `expo prebuild -p ios --no-install` | 连续两次产物哈希一致（appiconset 幂等） |
 | prebuild 产物 | `Images.xcassets/AppIcon-Wordmark.appiconset` + 两个 1024 PNG + `Contents.json` |
-| build setting | Debug/Release 均为 `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIcon-Wordmark` |
-| actool 产物断言 | partial Info.plist 含 `CFBundleAlternateIcons → AppIcon-Wordmark`；`Assets.car` 含对应 rendition |
-| fingerprint | iOS `3140f266` → `b1455191`；Android `d79ebee5` → `32cb02dd`（确认冷更；`assets/app-icons` 已登记为 `extraSources`） |
+| build setting | Debug/Release 均为 `ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES` |
+| actool 产物断言 | partial Info.plist 含 `CFBundleAlternateIcons → AppIcon-Cat / AppIcon-Wordmark / AppIcon-Mark`；`Assets.car` 含对应 rendition |
+| fingerprint | iOS `3140f266` → `37694785`；Android `d79ebee5` → `137df746`（确认冷更；`assets/app-icons` 已登记为 `extraSources`） |
 
 未执行项：
 

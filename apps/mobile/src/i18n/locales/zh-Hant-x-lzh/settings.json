@@ -92,7 +92,9 @@
       "hint": "易之，則主屏之圖示立更，唯此機是從。",
       "options": {
         "default": "常例",
-        "wordmark": "Cindy 字標"
+        "cat": "黑貓",
+        "wordmark": "Cindy 字標",
+        "mark": "Cindy 符號"
       },
       "setFailed": "圖示未易，請少遲再試。",
       "saveFailed": "圖示已易，然未存所擇。"

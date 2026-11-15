@@ -92,7 +92,9 @@
       "hint": "O ícone da tela de início é atualizado na hora. Vale só para este iPhone.",
       "options": {
         "default": "Padrão",
-        "wordmark": "Logotipo Cindy"
+        "cat": "Gato preto",
+        "wordmark": "Logotipo Cindy",
+        "mark": "Símbolo da Cindy"
       },
       "setFailed": "Não foi possível trocar o ícone. Tente de novo.",
       "saveFailed": "O ícone mudou, mas a escolha não foi salva."

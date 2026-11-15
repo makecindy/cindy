@@ -92,7 +92,9 @@
       "hint": "O ícone do ecrã principal é atualizado de imediato. Aplica-se apenas a este iPhone.",
       "options": {
         "default": "Predefinido",
-        "wordmark": "Logótipo Cindy"
+        "cat": "Gato preto",
+        "wordmark": "Logótipo Cindy",
+        "mark": "Símbolo Cindy"
       },
       "setFailed": "Não foi possível mudar o ícone. Tenta novamente.",
       "saveFailed": "O ícone mudou, mas a escolha não foi guardada."

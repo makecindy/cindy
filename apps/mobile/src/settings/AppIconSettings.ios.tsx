@@ -7,10 +7,17 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
 
 import { type AppIconChoice } from './appIconPreference';
-import { defaultIconAsset, wordmarkDarkAsset, wordmarkLightAsset } from './appIconAssets';
+import {
+  catIconAsset,
+  defaultIconAsset,
+  markDarkAsset,
+  markLightAsset,
+  wordmarkDarkAsset,
+  wordmarkLightAsset,
+} from './appIconAssets';
 import { useAppIcon } from './useAppIcon';
 
-/** iOS 设置行：默认 / Cindy 字标两个图标瓦片，切换即时生效并写入本机偏好。 */
+/** iOS 设置行：默认 / 黑猫 / Cindy 字标 / Cindy 符号四个图标瓦片，切换即时生效并写入本机偏好。 */
 export function AppIconSettings() {
   const { t } = useTranslation();
   const { mode } = useTheme();
@@ -27,9 +34,19 @@ export function AppIconSettings() {
       source: defaultIconAsset,
     },
     {
+      key: 'cat',
+      label: t('settings.appearance.appIcon.options.cat'),
+      source: catIconAsset,
+    },
+    {
       key: 'wordmark',
       label: t('settings.appearance.appIcon.options.wordmark'),
       source: mode === 'dark' ? wordmarkDarkAsset : wordmarkLightAsset,
+    },
+    {
+      key: 'mark',
+      label: t('settings.appearance.appIcon.options.mark'),
+      source: mode === 'dark' ? markDarkAsset : markLightAsset,
     },
   ];
 

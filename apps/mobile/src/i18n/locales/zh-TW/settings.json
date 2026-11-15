@@ -92,7 +92,9 @@
       "hint": "切換後主畫面圖示會立即更新，只在這個手機上生效。",
       "options": {
         "default": "預設",
-        "wordmark": "Cindy 字標"
+        "cat": "黑貓",
+        "wordmark": "Cindy 字標",
+        "mark": "Cindy 符號"
       },
       "setFailed": "圖示沒有切換成功，請稍後再試。",
       "saveFailed": "圖示已切換，但沒能儲存選擇。"

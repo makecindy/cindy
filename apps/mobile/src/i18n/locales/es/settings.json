@@ -92,7 +92,9 @@
       "hint": "El icono de la pantalla de inicio se actualiza al instante. Solo se aplica a este iPhone.",
       "options": {
         "default": "Predeterminado",
-        "wordmark": "Logotipo de Cindy"
+        "cat": "Gato negro",
+        "wordmark": "Logotipo de Cindy",
+        "mark": "Símbolo de Cindy"
       },
       "setFailed": "No se pudo cambiar el icono. Inténtalo de nuevo.",
       "saveFailed": "El icono cambió, pero no se guardó la elección."

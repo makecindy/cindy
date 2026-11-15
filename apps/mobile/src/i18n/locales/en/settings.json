@@ -92,7 +92,9 @@
       "hint": "The Home Screen icon updates immediately. Only this phone is affected.",
       "options": {
         "default": "Default",
-        "wordmark": "Cindy wordmark"
+        "cat": "Black cat",
+        "wordmark": "Cindy wordmark",
+        "mark": "Cindy symbol"
       },
       "setFailed": "Couldn't switch the icon. Try again.",
       "saveFailed": "The icon changed, but the choice wasn't saved."

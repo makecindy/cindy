@@ -92,7 +92,9 @@
       "hint": "L’icône de l’écran d’accueil est mise à jour immédiatement. S’applique uniquement à cet iPhone.",
       "options": {
         "default": "Par défaut",
-        "wordmark": "Logo Cindy"
+        "cat": "Chat noir",
+        "wordmark": "Logo Cindy",
+        "mark": "Symbole Cindy"
       },
       "setFailed": "Impossible de changer l’icône. Réessayez.",
       "saveFailed": "L’icône a changé, mais le choix n’a pas été enregistré."
