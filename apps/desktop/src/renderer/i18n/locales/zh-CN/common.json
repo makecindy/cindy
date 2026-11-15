@@ -16451,6 +16451,33 @@
         "priority": "优先级",
         "activity": "最近活动",
         "created": "创建时间"
+      },
+      "inbox": {
+        "thisEvening": "今晚",
+        "tomorrow": "明天",
+        "nextWeek": "下周",
+        "custom": "自定义…",
+        "wakeAt": "唤回日期和时间",
+        "timeZone": "本地时间（{{zone}}）",
+        "invalidTime": "请选择未来一年内的日期和时间。",
+        "inbox": "收件箱",
+        "working": "进行中",
+        "snoozed": "稍后处理",
+        "archived": "已处理",
+        "snooze": "稍后处理",
+        "wake": "立即取回",
+        "restore": "恢复任务",
+        "process": "标记已处理（归档）",
+        "empty": "收件箱已清空",
+        "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
+        "hours": "{{count}} 小时后",
+        "hours_one": "{{count}} 小时后",
+        "hours_other": "{{count}} 小时后"
+      },
+      "taskListMode": {
+        "heading": "任务模式",
+        "tasks": "任务列表",
+        "inbox": "收件箱"
       }
     },
     "rename": {

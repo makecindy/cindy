@@ -1,3 +1,4 @@
+import { taskInboxSection, taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
 import { i18n } from '@/i18n';
 import { compareSessionListStrings } from '@cindy/maker-shared/session-list';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
@@ -30,7 +31,7 @@ export type HomeRow =
     };
 
 /** SectionList 的一个分区。title 为 null 的分区不渲染表头。 */
-export type HomeSection = { data: HomeRow[]; key: string; title: string | null };
+export type HomeSection = { data: HomeRow[]; key: string; title: string | null; count?: number };
 
 /** 主列表分区跨分组模式保持同一身份，避免 SectionList 把仍存在的行整批卸载重挂。 */
 export const HOME_MAIN_SECTION_KEY = 'main';
@@ -374,4 +375,47 @@ function latestActivityAt(items: readonly RemoteSessionListItem[]): string {
   return items.reduce((latest, item) => (
     item.lastActivityAt > latest ? item.lastActivityAt : latest
   ), '');
+}
+
+
+/** Inbox never uses unread as a settled marker. Automation runs are individually actionable. */
+export function buildInboxHomeSections(
+  home: MobileHomePresentation,
+  collapsed: ReadonlySet<string>,
+  priorityContext: HomeListPriorityContext,
+  nowMs: number,
+): HomeSection[] {
+  const original = buildHomeSections(home, false, true, {
+    groupDialogue: false, groupCindyMake: false, sortBy: 'priority', priorityContext,
+  });
+  const sections: HomeSection[] = [];
+  const groups = new Map<string, HomeRow[]>(['inbox', 'working', 'snoozed', 'archived'].map(key => [key, []]));
+  for (const section of original) {
+    if (section.key === 'pinned') continue;
+    for (const row of section.data) {
+      if (row.kind !== 'session') continue;
+      for (const item of row.item.automationGroup?.items ?? [row.item]) {
+        const task = item.session;
+        const group = taskInboxSection(task, {
+          running: priorityContext.runningSessionIds.has(task.id),
+          following: item.scheduleInfo?.hasActiveFollowUp === true,
+          waiting: priorityContext.waitingSessionIds.has(task.id),
+        }, nowMs);
+        const until = taskSnoozeUntil(task);
+        groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,
+          sourceLabel: group === 'snoozed' ? new Date(until).toLocaleString(i18n.language) : row.sourceLabel });
+      }
+    }
+  }
+  for (const [group, data] of groups) {
+    data.sort((a, b) => a.kind === 'session' && b.kind === 'session'
+      ? group === 'snoozed'
+        ? taskSnoozeUntil(a.item.session) - taskSnoozeUntil(b.item.session)
+        : compareSessionItemsByPriority(a.item, b.item, priorityContext)
+      : 0);
+    const key = `inbox-${group}`;
+    sections.push({ key, title: i18n.t(`devices.list.menu.inbox.${group}`), count: data.length,
+      data: collapsed.has(key) ? [] : data });
+  }
+  return sections;
 }

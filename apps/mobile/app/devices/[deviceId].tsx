@@ -1,3 +1,4 @@
+import { TaskSnoozeSheet } from '@/session/TaskSnoozeSheet';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { readTeammateTasks } from '@/session/readTeammateTasks';
 import { deviceDisplayName } from '@/device-link/deviceName';
@@ -308,6 +309,7 @@ function DeviceDetailScreenContent() {
   const runDisclosure = disclosure.run;
   const animateListChange = useCallback((apply: () => void) => runDisclosure(apply, { nested: true }), [runDisclosure]);
   const {
+    snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,
     actionSheetSession,
     closeRenameSession,
     confirmRenameSession,
@@ -745,6 +747,7 @@ function DeviceDetailScreenContent() {
         visible={searchFilterOpen}
       />
       <SessionListActionOverlays
+        snoozeSessionTarget={snoozeSessionTarget} confirmSnooze={confirmSnooze} closeSnooze={closeSnooze} handleSnoozeClosed={handleSnoozeClosed}
         actionSheetSession={actionSheetSession}
         closeRenameSession={closeRenameSession}
         confirmRenameSession={confirmRenameSession}
@@ -1431,6 +1434,7 @@ function DeviceDetailSessionRow({
 }
 
 function SessionListActionOverlays({
+  snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,
   actionSheetSession,
   closeRenameSession,
   confirmRenameSession,
@@ -1441,6 +1445,10 @@ function SessionListActionOverlays({
   setActionSheetSession,
   setRenameSessionDraft,
 }: {
+  snoozeSessionTarget: RemoteSession | null;
+  confirmSnooze(until: string): void;
+  closeSnooze(): void;
+  handleSnoozeClosed(): void;
   actionSheetSession: RemoteSession | null;
   closeRenameSession(): void;
   confirmRenameSession(): void;
@@ -1453,6 +1461,8 @@ function SessionListActionOverlays({
 }) {
   return (
     <>
+      <TaskSnoozeSheet visible={snoozeSessionTarget !== null} onClose={closeSnooze}
+        onClosed={handleSnoozeClosed} onConfirm={confirmSnooze} />
       <SessionOptionsPresenter
         session={actionSheetSession}
         onAction={handleSessionSheetAction}

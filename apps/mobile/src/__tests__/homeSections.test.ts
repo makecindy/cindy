@@ -3,6 +3,7 @@ import { i18n } from '@/i18n';
 import {
   buildGroupedHomeRows,
   buildHomeSections,
+  buildInboxHomeSections,
   buildMixedHomeRows,
   HOME_MAIN_SECTION_KEY,
   homeFolderRowsShareRenderData,
@@ -307,4 +308,45 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
       expect(reversedKeys).toEqual(forwardKeys);
     }
   });
+});
+
+// Unit: real home projection must retain pins/Make tasks and split active runs from waiting work.
+it('builds inbox sections and recomputes snooze expiry without losing collapsed counts', () => {
+  const now = Date.parse('2026-11-12T08:00:00Z');
+  const idle = listItem('idle', new Date(now).toISOString());
+  const running = listItem('run', new Date(now).toISOString());
+  const waiting = listItem('wait', new Date(now).toISOString());
+  const later = listItem('later', new Date(now).toISOString());
+  later.session.snoozedUntil = new Date(now + 3600000).toISOString();
+  const done = listItem('done', new Date(now).toISOString());
+  done.session.status = 'archived';
+  const home = presentation({ pinned: [listItem('pin', '')], chats: [idle, running, waiting, later, done], projects: [
+    { ...projectGroup('make', '', [listItem('make-task', '')]), kind: 'cindy-make' },
+  ] });
+  const signals = { runningSessionIds: new Set(['run', 'wait']), waitingSessionIds: new Set(['wait']), unreadSessionIds: new Set<string>() };
+  const sections = buildInboxHomeSections(home, new Set(['inbox-working']), signals, now);
+  expect(sections.map(s => s.key)).toEqual(['inbox-inbox', 'inbox-working', 'inbox-snoozed', 'inbox-archived']);
+  const combined = [...buildHomeSections(home, true, false), ...sections];
+  expect(combined.map(s => s.key)).toEqual(['pinned', 'main', 'inbox-inbox', 'inbox-working', 'inbox-snoozed', 'inbox-archived']);
+  expect(combined.find(s => s.key === 'pinned')?.data).toHaveLength(1);
+  expect(sections.find(s => s.key === 'inbox-inbox')?.count).toBe(3);
+  expect(sections.find(s => s.key === 'inbox-working')).toMatchObject({ count: 1, data: [] });
+  expect(sections.find(s => s.key === 'inbox-snoozed')?.count).toBe(1);
+  expect(sections.find(s => s.key === 'inbox-archived')?.count).toBe(1);
+  expect(buildInboxHomeSections(home, new Set(), signals, now + 3600000).find(s => s.key === 'inbox-inbox')?.count).toBe(4);
+});
+
+it('puts a followed task in working between runs and returns it to inbox when paused or waiting', () => {
+  const item = listItem('followed', '2026-11-13T08:00:00Z');
+  item.scheduleInfo = { scheduleId: 'schedule', scheduleName: 'Follow', hasActiveFollowUp: true,
+    running: false, latestRunAt: 0, unreadRunIds: [], unreadCount: 0 };
+  const home = presentation({ chats: [item] });
+  const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const workingCount = () => buildInboxHomeSections(home, new Set(), signals, Date.now()).find(s => s.key === 'inbox-working')?.count;
+  expect(workingCount()).toBe(1);
+  signals.waitingSessionIds.add('followed');
+  expect(workingCount()).toBe(0);
+  signals.waitingSessionIds.clear();
+  item.scheduleInfo.hasActiveFollowUp = false;
+  expect(workingCount()).toBe(0);
 });

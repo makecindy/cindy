@@ -70,6 +70,7 @@ import {
 } from '../../hooks/useRemoteHostProjectOrders';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
 import { ProjectNode } from './ProjectNode';
 import { UnclassifiedSection } from './UnclassifiedSection';
@@ -120,6 +121,7 @@ import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
+import { TaskInbox } from '../TaskInbox';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -188,6 +190,8 @@ function ShowAllEntriesButton({ count, onClick }: { count: number; onClick: () =
 
 export interface ProjectsSectionProps {
   unclassified: Session[];
+  /** Same device/content scope, including archived tasks, for the standalone inbox mode. */
+  inboxSessions?: readonly Session[];
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
   projects: ProjectNodeData[];
   /**
@@ -285,6 +289,7 @@ export interface ProjectsSectionProps {
 
 export function ProjectsSection({
   unclassified,
+  inboxSessions,
   projects,
   dialogues,
   dialogueActionSessions = dialogues,
@@ -344,6 +349,7 @@ export function ProjectsSection({
   const localHostProjectOrder = useLocalHostProjectOrder();
   const remoteHostProjectOrders = useRemoteHostProjectOrders(selectedMachineForOrder);
   // 主列表显示形态(B 期):text 紧凑行 / list 满宽两行卡。独立于置顶段的三态设置。
+  const { mode: taskListMode } = useTaskListMode();
   const { mode: mainViewMode } = useSidebarMainViewMode();
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
   // SortableList 只在自定义项目顺序且按项目分组时挂载。
@@ -885,9 +891,10 @@ export function ProjectsSection({
   const FoldIcon = foldState === 'expand-all' ? ChevronsUpDown : ChevronsDownUp;
   // 散排行的来源标签:平铺时项目会话也要标项目名,不能只喂 dialogues。
   const flattenedSessionsForSourceLabels = useMemo(() => {
+    if (inboxSessions) return inboxSessions;
     if (filter.groupBy === 'project') return dialogues;
     return [...projects.flatMap((project) => project.sessions), ...dialogues];
-  }, [filter.groupBy, projects, dialogues]);
+  }, [inboxSessions, filter.groupBy, projects, dialogues]);
   const dialogueSourceLabelMap = useMemo(
     () =>
       buildSessionSourceLabelMap(
@@ -1095,7 +1102,7 @@ export function ProjectsSection({
         dialogueCount={dialogueCount}
         hasRemoteDevices={deviceGroupingAvailable}
         fold={
-          hasMainListContent && foldState !== null
+          taskListMode === 'tasks' && hasMainListContent && foldState !== null
             ? {
                 label: foldLabel,
                 Icon: FoldIcon,
@@ -1105,7 +1112,7 @@ export function ProjectsSection({
             : null
         }
       />
-      {hasMainListContent ? (
+      {taskListMode === 'tasks' && hasMainListContent ? (
         <div className="relative flex flex-col gap-1 pt-1 pr-0 pl-3">
           {!deviceGroupingActive &&
             visibleMixedEntries
@@ -1329,6 +1336,26 @@ export function ProjectsSection({
           )}
         </div>
       ) : null}
+      {taskListMode === 'inbox' && inboxSessions && (
+        <TaskInbox
+          sessions={inboxSessions}
+          priorityContext={priorityContext}
+          activeSessionId={activeSessionId}
+          runningSessionIds={runningSessionIds}
+          attachedSessionIds={attachedSessionIds}
+          notifications={notifications}
+          selectedSessionIds={selectedSessionIds}
+          onSessionClick={onSessionClick}
+          onAction={onAction}
+          onRename={onRename}
+          onTogglePin={onTogglePin}
+          onMoveSession={onMoveSession}
+          projectOptions={projectOptions}
+          onScheduleAction={onScheduleAction}
+          sourceLabelMap={dialogueSourceLabelMap}
+          sessionVariant={mainSessionVariant}
+        />
+      )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { ResolvedProjectIcon } from './ResolvedProjectIcon';
-import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { sessionProjectDirectory, sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
+import { SessionSnoozeAction } from './SessionSnoozeAction';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
@@ -256,6 +257,7 @@ export function SidebarTitleMarquee({ children, className, title }: SidebarTitle
 }
 
 export interface SessionItemProps {
+  inboxMode?: boolean;
   /** Shared guests retain navigation and the leave-sharing menu, without owner actions or selection. */
   navigationOnly?: boolean;
   /** Shared-group identity mark. Only owners show a crown; joined tasks match ordinary rows. */
@@ -331,6 +333,7 @@ export function hasSessionSelectionModifier(modifiers?: SessionClickModifiers): 
  */
 export const SessionItem = withSidebarNavigation<SessionItemProps>(function SessionItem({
   navigate,
+  inboxMode = false,
   session,
   isActive,
   isRunning,
@@ -351,6 +354,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   sharedTaskRole,
 }: SessionItemProps & SidebarNavigationProps) {
   const { t } = useTranslation();
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
   const followers = useSessionFollowers(session);
   const cindyMakeActivity = useCindyMakeActivity(session);
   const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
@@ -850,7 +854,10 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     />
   ) : null;
 
+  const canSnooze = inboxMode && !isArchived && !remoteWritesBlocked;
+  const actionsOpen = menuPos !== null || snoozeOpen;
   const showAutomationRunAction =
+    !inboxMode &&
     isAutomationGenerated &&
     !insideAutomationGroup &&
     !isArchived &&
@@ -874,17 +881,27 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           <Play size={14} strokeWidth={2} />
         </SessionAction>
       )}
-      <SessionAction
-        label={t('ccAgent.sidebar.sessionMenu.moreActions')}
-        onClick={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          prefetchRemovalPreflight();
-          setMenuPos({ x: rect.left, y: rect.bottom + 2 });
-        }}
-        isActive={isActive}
-      >
-        <EllipsisVertical size={14} strokeWidth={2} />
-      </SessionAction>
+      {inboxMode ? (
+        canSnooze && (
+          <SessionSnoozeAction
+            session={session}
+            isActive={isActive}
+            onOpenChange={setSnoozeOpen}
+          />
+        )
+      ) : (
+        <SessionAction
+          label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            prefetchRemovalPreflight();
+            setMenuPos({ x: rect.left, y: rect.bottom + 2 });
+          }}
+          isActive={isActive}
+        >
+          <EllipsisVertical size={14} strokeWidth={2} />
+        </SessionAction>
+      )}
       {isArchived && !remoteWritesBlocked ? (
         <SessionAction
           label={t('ccAgent.sidebar.sessionMenu.unarchive')}
@@ -1012,8 +1029,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           保证两处完全一致。
           外包 15px 定宽槽:状态图标本体 12px,槽宽与顶部导航/文件夹图标(15)一致,
           让会话标题与其它行落在同一文字列(见文件头注释)。 */}
-      <span className="flex w-[15px] shrink-0 items-center justify-center">
+      <span className={cn("flex shrink-0 items-center justify-center", inboxMode ? "w-[18px]" : "w-[15px]")}>
         <SessionStatusIcon
+          identityIcon={inboxMode && sessionTaskProjectIconDirectory(session) ? (
+            <ResolvedProjectIcon directory={sessionTaskProjectIconDirectory(session)!}
+              remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
+              name={sourceLabel} size={18} />
+          ) : undefined}
           session={session}
           isRunning={leftIconRunning}
           isAttached={isAttached}
@@ -1108,7 +1130,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                   : 'text-[var(--cmd-palette-item-meta)]',
               )}
             >
-              {session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
+              {!inboxMode && session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
                 <ResolvedProjectIcon directory={sessionProjectDirectory(session)!}
                   remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
                   name={sourceLabel} size={14} />
@@ -1143,7 +1165,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 'transition-opacity duration-[120ms]',
                 !navigationOnly && !archivePending &&
                   'group-hover:opacity-0 group-hover:w-0 group-hover:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
-                menuPos !== null && 'opacity-0 w-0 overflow-hidden',
+                actionsOpen && 'opacity-0 w-0 overflow-hidden',
                 archivePending && 'opacity-0 w-0 overflow-hidden',
                 // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
                 ordinalBadgeLabel != null && 'opacity-0 w-0 overflow-hidden',
@@ -1210,7 +1232,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
               尺寸/视觉与 Project Header 的 ProjectAction 同套（size-5 / icon 14 /
               strokeWidth 2 / gap-0.5）；普通行 hover 走 sidebar-item-hover，选中行
               则用 active foreground 的半透明叠色保持红色胶囊内的反色体系。
-              组装顺序固定为 [Run(automation only), More, Archive | Undo]：
+              普通模式为 [Run(automation only), More, Archive | Undo]；收件箱用稍后处理替换 More，
+              不再显示 Run，其他操作仍可从右键菜单进入：
                 - 非 archived：More + Archive；Archive pill 撤回(超时/点外面)后
                   按钮立即还原,符合用户对 "撤回 = 回到点击前" 的直觉预期。
                 - archived：More + Undo（lucide Undo），单击直接走 unarchive，
@@ -1222,13 +1245,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                   aria-hidden
                   className={cn(
                     'invisible col-start-1 row-start-1 h-6 items-center gap-0.5',
-                    menuPos !== null
+                    actionsOpen
                       ? 'flex'
                       : 'hidden group-hover:flex group-focus-within/slot:flex',
                   )}
                 >
                   {showAutomationRunAction ? <span className="size-5 shrink-0" /> : null}
-                  <span className="size-5 shrink-0" />
+                  {(!inboxMode || canSnooze) && <span className="size-5 shrink-0" />}
                   {isArchived && !remoteWritesBlocked ? (
                     <span className="size-5 shrink-0" />
                   ) : canQuickArchive ? (
@@ -1238,7 +1261,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 <div
                   className={cn(
                     'absolute right-0 top-0 flex h-6 items-center gap-0.5',
-                    menuPos !== null
+                    actionsOpen
                       ? 'opacity-100'
                       : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
                   )}

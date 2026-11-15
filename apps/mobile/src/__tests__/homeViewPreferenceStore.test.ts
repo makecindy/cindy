@@ -30,6 +30,7 @@ const defaultPrefs = {
   teammateFilterOwner: '',
   vendorFilter: 'all',
   lastActivityFilter: 'all',
+  taskListMode: 'tasks',
   viewMode: 'list',
   taskInfoFields: ['time'],
 } as const;
@@ -130,6 +131,7 @@ describe('homeViewPreferenceStore', () => {
     };
     await expect(readHomeViewPreferences(OWNER)).resolves.toEqual({
       ...expected,
+      taskListMode: 'tasks',
       teammateFilter: 'all',
       teammateFilterOwner: '',
       selectedDevice: { deviceId: 'devA', name: 'Mac A' },
@@ -250,4 +252,14 @@ describe('homeViewPreferenceStore', () => {
     store.set(__testing.storageKey, 'not-json');
     await expect(readHomeViewPreferences(OWNER)).resolves.toEqual({ ...defaultPrefs });
   });
+});
+
+it('persists task mode across reload without changing grouping', async () => {
+  const prefs = await import('@/session/homeViewPreferenceStore');
+  await prefs.saveHomeViewPreferences({ taskListMode: 'inbox', groupByProject: false, viewMode: 'text' });
+  vi.resetModules();
+  const reloaded = await import('@/session/homeViewPreferenceStore');
+  expect(await reloaded.readHomeViewPreferences(OWNER)).toMatchObject({ taskListMode: 'inbox', groupByProject: false, viewMode: 'text' });
+  await reloaded.saveHomeViewPreferences({ taskListMode: 'tasks' });
+  expect(await reloaded.readHomeViewPreferences(OWNER)).toMatchObject({ taskListMode: 'tasks', groupByProject: false, viewMode: 'text' });
 });

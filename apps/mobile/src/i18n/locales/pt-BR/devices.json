@@ -426,7 +426,32 @@
       "filterTeammatesHeading": "Amigos",
       "filterAnySource": "Todas",
       "filterHideAllTeammates": "Ocultar tudo",
-      "filterSelectedTeammates": "{{count}} selecionados"
+      "filterSelectedTeammates": "{{count}} selecionados",
+      "inbox": {
+        "inbox": "Caixa de entrada",
+        "working": "Em andamento",
+        "snoozed": "Adiadas",
+        "archived": "Tratadas",
+        "snooze": "Adiar tarefa",
+        "wake": "Mostrar agora",
+        "restore": "Restaurar tarefa",
+        "process": "Marcar como tratada (arquivar)",
+        "empty": "A caixa de entrada está vazia",
+        "snoozeFailed": "Não foi possível salvar o horário. Verifique a conexão e atualize o computador que hospeda esta tarefa.",
+        "hours": "Em {{count}} horas",
+        "hours_one": "Em {{count}} hora",
+        "hours_other": "Em {{count}} horas",
+        "thisEvening": "Hoje à noite",
+        "tomorrow": "Amanhã",
+        "nextWeek": "Na próxima semana",
+        "custom": "Personalizar…",
+        "invalidTime": "Escolha uma data e hora futuras dentro de um ano."
+      },
+      "taskListMode": {
+        "heading": "Modo de tarefas",
+        "tasks": "Lista de tarefas",
+        "inbox": "Caixa de entrada"
+      }
     },
     "search": {
       "placeholder": "Buscar títulos ou conteúdo…",

@@ -156,7 +156,7 @@ import { isCompanionShadowed } from '../../companion-cloud/homes.js';
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
 const log = createLogger('sessions');
-const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
+const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUntil']);
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
 
@@ -1777,7 +1777,7 @@ export function registerSessionIpc(
         workspaceKind: updated.workspaceKind,
       });
       if (isOwnerScopeCurrent(ownerScope)) {
-        broadcastSessionPatched(sid, { status: 'active' }, ownerScope);
+        broadcastSessionPatched(sid, { status: 'active', snoozedUntil: null, snoozedAt: null }, ownerScope);
       }
       scheduleWorktreeRecycleForStatusChange(sid, 'active');
       notifyGhostSessionStatusChange(sid, 'active', updated.workingDir);
@@ -1881,6 +1881,7 @@ export async function updateSessionInDb(
   },
 ): Promise<ReturnType<typeof sessionToCamel>> {
   moveGuard?.assertCurrent();
+  validateSnoozeTime(p.snoozedUntil);
   const ownerScope = captureOwnerScope();
   if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
     throwIpcError(
@@ -2051,6 +2052,7 @@ export async function updateSessionInDb(
       'writableDirs',
       'pinnedAt',
       'notificationsMuted',
+      'snoozedUntil',
       'workingDir',
       'workspaceKind',
       'title',
@@ -2248,10 +2250,13 @@ export async function updateSessionInDb(
       titleChanged ||
       statusChanged ||
       p.pinnedAt !== undefined ||
-      p.notificationsMuted !== undefined
+      p.notificationsMuted !== undefined ||
+      p.snoozedUntil !== undefined
     ) {
       if (isOwnerScopeCurrent(ownerScope)) {
-        broadcastSessionPatched(sid, broadcastPatch, ownerScope);
+        broadcastSessionPatched(sid, { ...broadcastPatch,
+          ...(p.snoozedUntil !== undefined || p.status !== undefined ? { snoozedUntil: updated.snoozedUntil, snoozedAt: updated.snoozedAt } : {}),
+        }, ownerScope);
       }
     }
     // sidebar-card-mode: 会话被置顶那一刻补生成任务摘要(turn-done 路径只覆盖
@@ -2365,10 +2370,12 @@ export async function patchSessionMetaInDb(
     status?: 'active' | 'archived' | 'deleted';
     title?: string;
     pinnedAt?: string | null;
+    snoozedUntil?: string | null;
   },
   options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
+  validateSnoozeTime(patch.snoozedUntil);
   for (const k of Object.keys(patch)) {
     if (!REMOTE_EDITABLE_META.has(k)) {
       throwIpcError('INVALID_PARAMS', `field not allowed in patch-meta: ${k}`);
@@ -2479,10 +2486,12 @@ export async function patchSessionMetaInDb(
   //   - sessionsStore.onPatched → patchLocal,即时反映到 sidebar(删/归档移出 active 桶、改名/置顶刷新);
   //   - CCAgentSessionView.onPatched → 合并进 serverSession。
   // 经 tap 转发:订阅了该被控端 `sessions` topic 的控制端也即时收到这条 patched(push 驱动镜像)。
+  const snoozePatch = patch.snoozedUntil !== undefined || patch.status !== undefined
+    ? { snoozedUntil: updated.snoozedUntil, snoozedAt: updated.snoozedAt } : {};
   const broadcastPatch =
     patch.pinnedAt !== undefined && updated.pinnedAt == null ? { ...patch, summary: null } : patch;
   if (isOwnerScopeCurrent(ownerScope)) {
-    broadcastSessionPatched(sessionId, broadcastPatch, ownerScope);
+    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch }, ownerScope);
   }
   if (patch.pinnedAt !== undefined && updated.pinnedAt != null) {
     void import('../../sessionTaskSummary.js').then((m) =>
@@ -2705,7 +2714,7 @@ export async function setSessionsStatusInDb(
       workingDir: item.workingDir,
       workspaceKind: item.workspaceKind,
     });
-    broadcastSessionPatched(item.sessionId, { status: item.status }, ownerScope);
+    broadcastSessionPatched(item.sessionId, { status: item.status, snoozedUntil: null, snoozedAt: null }, ownerScope);
     scheduleWorktreeRecycleForStatusChange(item.sessionId, item.status, {
       ownerScope,
       mediaDb: dbClient.drizzle,
@@ -3282,5 +3291,14 @@ export async function setSessionSourceInDb(
       `[localDb] setSessionSourceInDb failed for ${sessionId}:`,
       err instanceof Error ? err.message : String(err),
     );
+  }
+}
+
+/** Deferral is a bounded timestamp, never a command or task lifecycle transition. */
+function validateSnoozeTime(value: unknown): void {
+  if (value === undefined || value === null) return;
+  const ms = typeof value === 'string' ? Date.parse(value) : NaN;
+  if (!Number.isFinite(ms) || ms <= Date.now() || ms > Date.now() + 366 * 86_400_000) {
+    throwIpcError('INVALID_PARAMS', 'snoozedUntil must be a future ISO timestamp within one year');
   }
 }

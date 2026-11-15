@@ -101,6 +101,8 @@ export interface RemoteSession {
   parentSessionId?: string | null;
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
   userSendAt: string | null;
   lastActivityAt?: string | null;
   createdAt: string;

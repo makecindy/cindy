@@ -1,5 +1,6 @@
 import { ResolvedProjectIcon } from './ResolvedProjectIcon';
-import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { sessionProjectDirectory, sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
+import { SessionSnoozeAction } from './SessionSnoozeAction';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
@@ -147,6 +148,7 @@ export type SessionCardProps = SessionItemProps & {
 
 export const SessionCard = withSidebarNavigation<SessionCardProps>(function SessionCard({
   navigate,
+  inboxMode = false,
   session,
   isActive,
   isRunning,
@@ -587,8 +589,13 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   ) : null;
 
   const statusIconNode = (
-    <span className={CARD_TITLE_STATUS_SLOT_CLASS} aria-hidden>
+    <span className={cn(CARD_TITLE_STATUS_SLOT_CLASS, inboxMode && "!w-[18px]")} aria-hidden>
       <SessionStatusIcon
+          identityIcon={inboxMode && sessionTaskProjectIconDirectory(session) ? (
+            <ResolvedProjectIcon directory={sessionTaskProjectIconDirectory(session)!}
+              remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
+              name={sourceLabel} size={18} />
+          ) : undefined}
         session={session}
         isRunning={leftIconRunning}
         isAttached={isAttached}
@@ -839,7 +846,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                           : 'text-[var(--cmd-palette-item-meta)]',
                       )}
                     >
-                      {session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
+                      {!inboxMode && session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
                         <ResolvedProjectIcon directory={sessionProjectDirectory(session)!}
                           remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
                           name={sourceLabel} size={14} />
@@ -855,6 +862,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 Agent 身份图标留在标题左侧，状态指示器改由下方右下角承担。 */}
             {!isEditing && (
               <TimeActionsSlot
+                session={session}
+                inboxMode={inboxMode}
                 navigationOnly={navigationOnly}
                 pieces={cardInfoPieces}
                 prRef={cardInfoPrRef}
@@ -1201,6 +1210,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
  *  交互逻辑与对话列表(SessionItem)一致。Agent 身份 / 草稿由左侧 SessionStatusIcon 承担；
  *  list 的右下状态指示器由 SidebarRightStatusIndicator 单独承担。 */
 function TimeActionsSlot({
+  session,
+  inboxMode = false,
   navigationOnly = false,
   pieces,
   prRef,
@@ -1219,6 +1230,8 @@ function TimeActionsSlot({
   yieldToOrdinalBadge = false,
   ordinalBadgeLabel,
 }: {
+  session: Session;
+  inboxMode?: boolean;
   navigationOnly?: boolean;
   pieces: readonly SessionInfoPiece[];
   prRef?: SessionPrRef;
@@ -1239,6 +1252,9 @@ function TimeActionsSlot({
   ordinalBadgeLabel?: string | null;
 }) {
   const { t } = useTranslation();
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const actionsOpen = menuOpen || snoozeOpen;
+  const canSnooze = inboxMode && !isArchived && canUnarchive;
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
@@ -1249,7 +1265,7 @@ function TimeActionsSlot({
             'col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
             !navigationOnly && !archivePending &&
               'group-hover/card:opacity-0 group-hover/card:w-0 group-hover/card:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
-            (menuOpen || yieldToOrdinalBadge) && 'opacity-0 w-0 overflow-hidden',
+            (actionsOpen || yieldToOrdinalBadge) && 'opacity-0 w-0 overflow-hidden',
             // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
             archivePending && 'invisible opacity-0 w-0 overflow-hidden',
           )}
@@ -1310,10 +1326,10 @@ function TimeActionsSlot({
               aria-hidden
               className={cn(
                 'invisible col-start-1 row-start-1 h-[22px] items-center gap-0.5',
-                menuOpen ? 'flex' : 'hidden group-hover/card:flex group-focus-within/slot:flex',
+                actionsOpen ? 'flex' : 'hidden group-hover/card:flex group-focus-within/slot:flex',
               )}
             >
-              <span className="size-5 shrink-0" />
+              {(!inboxMode || canSnooze) && <span className="size-5 shrink-0" />}
               {(isArchived && canUnarchive) || canQuickArchive ? (
                 <span className="size-5 shrink-0" />
               ) : null}
@@ -1321,19 +1337,29 @@ function TimeActionsSlot({
             <div
               className={cn(
                 'absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5',
-                menuOpen
+                actionsOpen
                   ? 'opacity-100'
                   : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
               )}
             >
-              <CardAction
-                variant="list"
-                isActive={isActive}
-                label={t('ccAgent.sidebar.sessionMenu.moreActions')}
-                onClick={onOpenMenu}
-              >
-                <EllipsisVertical size={14} strokeWidth={2} />
-              </CardAction>
+              {inboxMode ? (
+                canSnooze && (
+                  <SessionSnoozeAction
+                    session={session}
+                    isActive={isActive}
+                    onOpenChange={setSnoozeOpen}
+                  />
+                )
+              ) : (
+                <CardAction
+                  variant="list"
+                  isActive={isActive}
+                  label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+                  onClick={onOpenMenu}
+                >
+                  <EllipsisVertical size={14} strokeWidth={2} />
+                </CardAction>
+              )}
               {isArchived && canUnarchive ? (
                 <CardAction
                   variant="list"

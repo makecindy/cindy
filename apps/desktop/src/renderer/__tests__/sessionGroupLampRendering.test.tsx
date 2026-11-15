@@ -632,3 +632,26 @@ describe('Dialogue groups across devices', () => {
     expect(screen.getAllByTestId(/^row-/)).toHaveLength(5);
   });
 });
+
+// Unit: the two modes are exclusive; archived inbox tasks stay reachable under active tree filters.
+it('switches between project navigation and inbox while retaining access to processed tasks', () => {
+  const p = props(false);
+  const task = { ...remoteSessions()[0], _count: { messages: 1 }, workingDir: '/inbox-layout', workspaceKind: 'project' as const };
+  p.projects = groupSessions([task]).projects;
+  p.allKnownProjects = p.projects;
+  p.collapsed = new Set(p.projects.map(project => project.projectKey));
+  p.inboxSessions = [task, { ...task, id: 'processed', title: 'Processed task', status: 'archived' }];
+  render(<ProjectsSection {...p} />);
+  const project = screen.getByText(p.projects[0].displayName).closest('[data-project-header]')!;
+  expect(project).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /^ccAgent.sidebar.inbox.inbox/ })).toBeNull();
+  act(() => {
+    localStorage.setItem('sidebar.taskListMode', 'inbox');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'sidebar.taskListMode' }));
+  });
+  expect(screen.getByRole('button', { name: /^ccAgent.sidebar.inbox.inbox/ })).toBeTruthy();
+  expect(document.querySelector('[data-project-header]')).toBeNull();
+  expect(screen.getByTestId(`row-${task.id}`)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /^ccAgent.sidebar.inbox.archived/ }));
+  expect(screen.getByTestId('row-processed')).toBeTruthy();
+});

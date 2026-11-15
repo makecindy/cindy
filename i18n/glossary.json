@@ -3848,6 +3848,63 @@
       }
     },
     {
+      "id": "task-inbox",
+      "status": "proposed",
+      "en": "Inbox",
+      "translations": {
+        "zh-CN": "收件箱",
+        "zh-TW": "收件匣",
+        "ja": "受信トレイ",
+        "ko": "받은 편지함",
+        "fr": "Boîte de réception",
+        "es": "Bandeja de entrada",
+        "de": "Posteingang",
+        "pt-PT": "Caixa de entrada",
+        "pt-BR": "Caixa de entrada",
+        "zh-Hant-x-lzh": "收件匣",
+        "zh-Hans-x-lzh": "收件箱"
+      },
+      "note": "任务列表的收件箱分区，读过的任务仍保留，处理沿用归档。"
+    },
+    {
+      "id": "task-processed",
+      "status": "proposed",
+      "en": "Processed",
+      "translations": {
+        "zh-CN": "已处理",
+        "zh-TW": "已處理",
+        "ja": "処理済み",
+        "ko": "처리됨",
+        "fr": "Traitées",
+        "es": "Procesadas",
+        "de": "Erledigt",
+        "pt-PT": "Tratadas",
+        "pt-BR": "Tratadas",
+        "zh-Hant-x-lzh": "已處理",
+        "zh-Hans-x-lzh": "已处理"
+      },
+      "note": "任务列表底部已归档任务分区的名称，沿用归档生命周期。"
+    },
+    {
+      "id": "task-snoozed",
+      "status": "proposed",
+      "en": "Snoozed",
+      "translations": {
+        "zh-CN": "稍后处理",
+        "zh-TW": "稍後處理",
+        "ja": "後で処理",
+        "ko": "나중에 처리",
+        "fr": "Reportées",
+        "es": "Pospuestas",
+        "de": "Zurückgestellt",
+        "pt-PT": "Adiadas",
+        "pt-BR": "Adiadas",
+        "zh-Hant-x-lzh": "待後處理",
+        "zh-Hans-x-lzh": "待后处理"
+      },
+      "note": "任务暂时收起，到期回到当前执行状态对应的分区，不停止 Agent。"
+    },
+    {
       "id": "task-tag",
       "status": "proposed",
       "en": "Tag",

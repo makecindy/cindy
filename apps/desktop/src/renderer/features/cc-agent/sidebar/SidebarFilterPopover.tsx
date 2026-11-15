@@ -16,6 +16,7 @@
  * --text-tertiary/--text-secondary,hover 时比邻居暗一档、视觉不齐。
  */
 
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { MountedMenuContent } from './MountedMenuContent';
 import type { ReactNode } from 'react';
 import {
@@ -424,6 +425,7 @@ export function SidebarFilterPopover({
   const { fields: taskInfoFields, toggleField: toggleTaskInfoField } = useTaskInfoFields();
 
   // 主列表显示形态(独立于置顶段的三态设置,B 期拆分)。
+  const { mode: taskListMode, setMode: setTaskListMode } = useTaskListMode();
   const { mode: mainViewMode, setMode: setMainViewMode } = useSidebarMainViewMode();
 
   const statusValue = optionLabel(STATUS_OPTIONS, status, t);
@@ -637,6 +639,13 @@ export function SidebarFilterPopover({
         <MountedMenuContent>
           {() => (
             <div className="max-h-[calc(var(--radix-dropdown-menu-content-available-height)-0.75rem)] overflow-x-hidden overflow-y-auto">
+              <MenuSubRow label={t('ccAgent.sidebar.taskListMode.heading')}
+                value={t(`ccAgent.sidebar.taskListMode.${taskListMode}`)} Icon={LayoutList}>
+                {(['tasks', 'inbox'] as const).map(mode => <SelectMenuItem key={mode}
+                  label={t(`ccAgent.sidebar.taskListMode.${mode}`)} selected={taskListMode === mode}
+                  onSelect={() => setTaskListMode(mode)} />)}
+              </MenuSubRow>
+              <DropdownMenuSeparator />
               <MenuSubRow
                 label={t('ccAgent.sidebar.filterGroupByHeading')}
                 value={groupByValue}

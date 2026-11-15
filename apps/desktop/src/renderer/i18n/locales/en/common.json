@@ -16525,6 +16525,33 @@
         "priority": "Priority",
         "activity": "Recent Activity",
         "created": "Creation Time"
+      },
+      "inbox": {
+        "thisEvening": "This evening",
+        "tomorrow": "Tomorrow",
+        "nextWeek": "Next week",
+        "custom": "Custom…",
+        "wakeAt": "Wake-up date and time",
+        "timeZone": "Local time ({{zone}})",
+        "invalidTime": "Choose a future date and time within one year.",
+        "inbox": "Inbox",
+        "working": "Working",
+        "snoozed": "Snoozed",
+        "archived": "Processed",
+        "snooze": "Snooze task",
+        "wake": "Bring back now",
+        "restore": "Restore task",
+        "process": "Mark processed (archive)",
+        "empty": "Inbox is clear",
+        "snoozeFailed": "Could not save the snooze time. Check the connection and update the computer hosting this task.",
+        "hours": "In {{count}} hours",
+        "hours_one": "In {{count}} hour",
+        "hours_other": "In {{count}} hours"
+      },
+      "taskListMode": {
+        "heading": "Task mode",
+        "tasks": "Task list",
+        "inbox": "Inbox"
       }
     },
     "rename": {

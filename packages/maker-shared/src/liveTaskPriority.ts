@@ -30,3 +30,34 @@ export function liveTaskPriorityRank(signals: LiveTaskPrioritySignals): LiveTask
   if (signals.running) return LIVE_TASK_PRIORITY.running;
   return LIVE_TASK_PRIORITY.rest;
 }
+
+
+export type TaskInboxSection = 'inbox' | 'working' | 'snoozed' | 'archived';
+
+export interface TaskInboxState {
+  status?: string;
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
+  userSendAt?: string | null;
+}
+
+/** Read state is deliberately absent: reading a result never settles the task. */
+export function taskInboxSection(
+  task: TaskInboxState,
+  signals: Pick<LiveTaskPrioritySignals, 'waiting' | 'running'> & { following?: boolean },
+  nowMs: number,
+): TaskInboxSection {
+  if (task.status === 'archived') return 'archived';
+  if (taskSnoozeUntil(task) > nowMs) return 'snoozed';
+  if ((signals.running || signals.following) && !signals.waiting) return 'working';
+  return 'inbox';
+}
+
+/** A new input (including an automation trigger) returns the task to its live section. */
+export function taskSnoozeUntil(task: TaskInboxState): number {
+  const until = Date.parse(task.snoozedUntil ?? '');
+  const at = Date.parse(task.snoozedAt ?? '');
+  const sent = Date.parse(task.userSendAt ?? '');
+  if (!Number.isFinite(until) || (Number.isFinite(at) && sent > at)) return 0;
+  return until;
+}

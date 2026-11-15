@@ -1,3 +1,4 @@
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { matchesTaskCreators, useTaskCreatorIndex, useTaskCreatorOptions } from '@/features/bots/botFollowScopes';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ErrorNotice } from '@/components/ui/error-notice';
@@ -450,6 +451,7 @@ export function CCAgentSidebarUpper() {
   const { hiddenProjectKeys, initialSnapshot: sidebarSettingsSnapshot } = hiddenProjects;
   const creatorOptions = useTaskCreatorOptions();
   const filter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot, creatorOptions);
+  const { mode: taskListMode } = useTaskListMode();
   const includeArchived = filter.status;
   const sessionsHook = useCCSessions({ includeArchived });
   const { sessions: allSessionsForAttentionRaw } = useCCSessions({ includeArchived: 'all' });
@@ -621,7 +623,8 @@ export function CCAgentSidebarUpper() {
   // 机器切换栏选中某机器后按 selectedMachineId 整体过滤(本机 → 只本地;远程 → 只该机器),
   // rail 与展开态共用同一选择态,保证 rail 折叠后仍尊重选中机器。
   useEffect(() => {
-    if (filter.status === 'active') return;
+    // Only inbox mode needs processed tasks independently of the regular status filter.
+    if (taskListMode !== 'inbox' && filter.status === 'active') return;
     const selectedRemoteIds =
       selectedMachineId === MACHINE_ALL
         ? null
@@ -631,7 +634,7 @@ export function CCAgentSidebarUpper() {
       if (selectedRemoteIds && !selectedRemoteIds.has(device.deviceId)) continue;
       requestRemoteSessionStatus(device.deviceId, 'archived');
     }
-  }, [filter.status, remoteDevices, selectedMachineId]);
+  }, [taskListMode, filter.status, remoteDevices, selectedMachineId]);
   const sessionsWithRemote = useMemo(
     () => selectVisibleSessions(sessionsHook.sessions, remoteProjectSessions, selectedMachineId)
       .filter((session) => CINDY_MAKE_ENABLED || !isCindyMakeSource(session.source))
@@ -1629,6 +1632,20 @@ function ExpandedView({
     return sidebarSessions.filter((s) => (cutoff === null || sessionActivityMs(s) >= cutoff)
       && matchesTaskCreators(s, filter.creators, taskCreatorIndex));
   }, [sidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
+  const inboxSourceSessions = useMemo(() => {
+    const scoped = selectVisibleSessions(allSessionsForAttention, remoteProjectSessions, selectedMachineId)
+      .filter(session => !isOrcaWorkerSession(session)
+        && session.status !== 'deleted'
+        && (!session.deviceLinkDeviceId || !isSharedTaskPeer(session.deviceLinkDeviceId)));
+    const visible = sidebarSessionsWithHiddenProjectsAsDialogues(scoped, hiddenProjectKeys, localPlatform);
+    const cutoff = cutoffForLastActivity(filter.lastActivity);
+    return visible.filter(session => (cutoff === null || sessionActivityMs(session) >= cutoff)
+      && matchesTaskCreators(session, filter.creators, taskCreatorIndex));
+  }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys,
+    localPlatform, filter.lastActivity, filter.creators, taskCreatorIndex]);
+  const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, false,
+    undefined, localPlatform, undefined, projectAliasMembers);
+
   const activityFilteredPersistentLocalProjects = useMemo(
     () =>
       filterPersistentLocalProjectsByLastActivity(
@@ -2143,6 +2160,22 @@ function ExpandedView({
     hostProjectSort,
     projectPriorityContext,
   ]);
+
+  const inboxSessions = useMemo(() => {
+    const projects = visibleSidebarProjects(
+      withoutTeammateProjectsElsewhere(inboxGroups.projects, teammatesElsewhere),
+      hiddenProjectKeys, localPlatform,
+    ).filter(project =>
+      !projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform)
+      && (filter.projectsAsSet === null || isTeammateProjectPath(project.workingDir)
+        || projectFilterIncludes(filter.projectsAsSet, project.projectKey, localPlatform)));
+    return [
+      ...projects.flatMap(project => project.sessions),
+      ...(filter.projectsAsSet === null || filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? inboxGroups.dialogues : []),
+      ...(filter.projects === 'all' ? inboxGroups.unclassified : []),
+    ].filter(session => !vendorPredicate || vendorPredicate(session));
+  }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform, pinnedProjectComparisonKeys,
+    filter.projectsAsSet, filter.projects, vendorPredicate]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
   // 否则侧栏折叠后这些项目及其取消置顶入口都会完全不可达。
@@ -3954,6 +3987,7 @@ function ExpandedView({
                 {/* D 期:主列表 = 混排模型(项目行 + 散排对话 / 对话组,ProjectsSection
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
                 <ProjectsSection
+                  inboxSessions={inboxSessions}
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}

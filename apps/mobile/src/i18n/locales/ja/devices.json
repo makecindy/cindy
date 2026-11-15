@@ -423,7 +423,32 @@
       "filterTeammatesHeading": "パートナー",
       "filterAnySource": "すべて",
       "filterHideAllTeammates": "すべて非表示",
-      "filterSelectedTeammates": "{{count}} 人を選択"
+      "filterSelectedTeammates": "{{count}} 人を選択",
+      "inbox": {
+        "inbox": "受信トレイ",
+        "working": "実行中",
+        "snoozed": "後で処理",
+        "archived": "処理済み",
+        "snooze": "後で処理する",
+        "wake": "今すぐ戻す",
+        "restore": "タスクを復元",
+        "process": "処理済みにする（アーカイブ）",
+        "empty": "受信トレイは空です",
+        "snoozeFailed": "後で処理する時刻を保存できませんでした。接続を確認し、タスクがあるコンピューターを更新してください。",
+        "hours": "{{count}} 時間後",
+        "hours_one": "{{count}} 時間後",
+        "hours_other": "{{count}} 時間後",
+        "thisEvening": "今夜",
+        "tomorrow": "明日",
+        "nextWeek": "来週",
+        "custom": "カスタム…",
+        "invalidTime": "1年以内の未来の日時を選択してください。"
+      },
+      "taskListMode": {
+        "heading": "タスクモード",
+        "tasks": "タスク一覧",
+        "inbox": "受信トレイ"
+      }
     },
     "search": {
       "placeholder": "タイトルまたは内容を検索…",

@@ -16687,6 +16687,33 @@
         "priority": "Prioridad",
         "activity": "Actividad reciente",
         "created": "Fecha de creación"
+      },
+      "inbox": {
+        "thisEvening": "Esta tarde",
+        "tomorrow": "Mañana",
+        "nextWeek": "La próxima semana",
+        "custom": "Personalizar…",
+        "wakeAt": "Fecha y hora de regreso",
+        "timeZone": "Hora local ({{zone}})",
+        "invalidTime": "Elige una fecha y hora futuras dentro de un año.",
+        "inbox": "Bandeja de entrada",
+        "working": "En curso",
+        "snoozed": "Pospuestas",
+        "archived": "Procesadas",
+        "snooze": "Posponer tarea",
+        "wake": "Mostrar ahora",
+        "restore": "Restaurar tarea",
+        "process": "Marcar como procesada (archivar)",
+        "empty": "La bandeja está vacía",
+        "snoozeFailed": "No se pudo guardar la hora. Comprueba la conexión y actualiza el equipo que aloja esta tarea.",
+        "hours": "En {{count}} horas",
+        "hours_one": "En {{count}} hora",
+        "hours_other": "En {{count}} horas"
+      },
+      "taskListMode": {
+        "heading": "Modo de tareas",
+        "tasks": "Lista de tareas",
+        "inbox": "Bandeja de entrada"
       }
     },
     "rename": {
