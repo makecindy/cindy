@@ -517,4 +517,19 @@ describe('probeOutboundPathFor (#9537 连接诊断)', () => {
     const snap = await probeOutboundPathFor(['ws://relay.example.com/api/device-link/ws']);
     expect(snap).toMatchObject({ kind: 'proxy', proxy: 'socks5://127.0.0.1:1080' });
   });
+
+  // Greptile review #9959 P2:探针刚按「协议归一 + host + path」解析过本次这条路径,
+  // 却用按 origin 归组的读法取判定 —— 同 origin 下另一条 path(PAC 逐 path 给不同
+  // 规则,本就合法)留下的判定会把**本次**的正确结论当成「冲突」丢掉。快照不会随
+  // 时间清掉,一次分歧就长期查不出结论。修法:按本次的解析键精确读取。
+  it('同 origin 的另一条 path 结论相反时,仍报本次 path 的判定', async () => {
+    electronState.resolveProxy.mockImplementation(async (url: string) =>
+      url.endsWith('/ws') ? 'PROXY 127.0.0.1:7890' : 'DIRECT');
+    // 先让另一条 path 落进快照(同 origin、不同结论)。
+    await resolveDesktopOutboundProxy('https://relay.example.com/other');
+    const snap = await probeOutboundPathFor(['wss://relay.example.com/ws']);
+    expect(snap).toMatchObject({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+    // 判定与展示仍按 origin 归一:path 不进用户可见消息。
+    expect(snap?.upstream).toBe('https://relay.example.com');
+  });
 });

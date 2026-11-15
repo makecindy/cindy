@@ -402,6 +402,26 @@ export function getOutboundPathSnapshotFor(
 }
 
 /**
+ * 取**精确那个解析键**的出站路径判定;没记录过则返回 null。
+ *
+ * 与 getOutboundPathSnapshotFor 的区别只在**粒度**:那个按 origin 归组,同 origin 下
+ * 只要有两条结论不一致的判定就整组放弃(宁可不报也不谎报);这个只认一把键
+ * (协议归一 + host + path),不给别的 path 的判定掺进来。
+ *
+ * 诊断探针(probeOutboundPathFor)要的就是这个粒度:它自己刚按同一把尺子解析过
+ * 那个键,本次请求走的就是它 —— 同 origin 下另一条 path 走另一条 PAC 规则是 PAC
+ * 的正常用法(PAC 本来就能按 path 写规则),拿那种差异当「冲突」会把**本次**的
+ * 正确结论一起丢掉(快照又不会随时间清掉,一次分歧就长期查不出结论)。
+ * 真正需要「候选之间结论一致」的场合(调用方不知道失败那次走的是哪条线路),
+ * 由调用方在候选之间自行比较 —— 探针正是这么做的。
+ */
+export function getOutboundPathSnapshotByKey(
+  resolveKey: string,
+): OutboundPathSnapshot | null {
+  return outboundPathByKey.get(resolveKey) ?? null;
+}
+
+/**
  * 两个 proxy host 共用的出站代理解析器(单例,系统代理缓存共享)。
  * per-request 由 anthropic-compat-proxy 以最终上游 origin 调用;loopback 上游
  * 在包侧已被过滤,不会到这里。
@@ -438,9 +458,11 @@ export const resolveDesktopOutboundProxy: OutboundProxyResolver = async (upstrea
  *    上游一律直连(outbound-fetch 的 resolveProxyTarget 与 dispatcher pick 都先跳过)。
  *    env 里的 HTTP_PROXY(无对应 NO_PROXY)会让通用解析器返回代理,照报就是谎称走了
  *    代理;同时 loopback 候选也意味着链路不止一条路径,无从断言「当前连接经代理」。
- * 2. **候选之间判定必须一致**:getOutboundPathSnapshotFor 的冲突判定只在同 origin
- *    组内,跨 origin 取最新 —— 对「任一候选都可能是当前路径」的诊断不够,一致性的
- *    校验在这里做。不一致(PAC 逐 path / NO_PROXY 差异)按宁可不报处理。
+ * 2. **候选之间判定必须一致**:候选本来就可能承载不同的线路(自建中转 vs 官方连接),
+ *    结论不同就无从断言「当前连接经代理」。逐候选的判定按**本次解析的键**精确读取
+ *    (见 getOutboundPathSnapshotByKey),不掺同 origin 下别的 path 的历史判定 ——
+ *    PAC 逐 path 给不同结论是正常用法,拿它当冲突会把本次的正确结论一起丢掉。
+ *    不一致(候选之间结论不同)按宁可不报处理。
  */
 export async function probeOutboundPathFor(
   upstreamUrls: readonly string[],
@@ -459,7 +481,8 @@ export async function probeOutboundPathFor(
   if (targets.some((t) => isLoopbackOrigin(originForLog(t.url)))) return null;
   await Promise.all(targets.map((t) => resolveDesktopOutboundProxy(t.resolveKey)));
   const verdicts = targets.map((t) => {
-    const snap = getOutboundPathSnapshotFor([t.resolveKey]);
+    // 精确键读取:本次解析的就是这把键,同 origin 下另一条 path 的判定与此无关。
+    const snap = getOutboundPathSnapshotByKey(t.resolveKey);
     if (!snap) return null;
     // 明文 ws:// 遇到 HTTP 代理:传输层拒用该代理(upgrade 握手必须是隧道),实际是
     // 直连 —— 报「经代理」是谎报,宁可不报。socks5 不受这条限制。
