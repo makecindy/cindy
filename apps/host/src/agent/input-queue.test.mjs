@@ -1,7 +1,7 @@
 import { runDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.ts';
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -26,6 +26,7 @@ import { createHostContextRecoveryRollover } from './context-recovery-assembly.t
 import { createHostAgentHandoffPending } from './handoff-pending.ts';
 import { createSessionStderrOptions } from '../../../desktop/src/main/maker-ipc/sessionRequest.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
+import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore.ts';
@@ -53,6 +54,17 @@ import { GIT_SETTLEMENT_SEQUENCES } from '../../../desktop/src/main/maker-ipc/__
 import { GitSnapshotCoordinator } from '../../../desktop/src/main/git-snapshot/gitSnapshotCoordinator.ts';
 
 /** Minimal Maker stand-in: one live session per id, driven by the test. */
+// The Host always runs with a profile: the working-directory check reads the profile's conversation
+// recovery directories (working-directory.ts). Tests that open their own profile reconfigure it.
+// A test that opens its own profile signs its owner out afterwards; the next fixture signs this one in.
+const unitProfile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-input-queue-'));
+after(() => rmSync(unitProfile, { recursive: true, force: true }));
+const signInUnitOwner = () => configureHostOwner({ userDataDir: unitProfile, ownerId: 'input-queue-unit' });
+signInUnitOwner();
+function ensureUnitOwner() {
+  if (!getActiveAppSession().dataOwnerId) signInUnitOwner();
+}
+
 function createFakeMaker() {
   const sessions = new Map();
   return {
@@ -130,6 +142,7 @@ function createFakeMaker() {
 }
 
 function createHarness(overrides = {}) {
+  ensureUnitOwner();
   const maker = createFakeMaker();
   const events = [];
   const persisted = [];
@@ -227,6 +240,7 @@ test('stopping a direct Host turn drains its pending start marker', async () => 
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   session.abort = async () => { order.push('aborted'); };
+  ensureUnitOwner();
   const executor = createTurnExecutor({ getMaker: () => maker, assertCurrent() {}, isCurrent: () => true,
     isStoppingRuntime: () => false, hub: { publish() {} }, persistMessage: async () => {},
     onPersistenceError: error => { throw error; }, onTerminal() {},
@@ -1396,7 +1410,9 @@ test('late provider idle after stop saves the partial reply before draining', as
   releaseWrite();
   await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(250);
-  await new Promise(resolve => setImmediate(resolve));
+  // The next send checks its working directory on disk first (working-directory.ts); setTimeout is
+  // mocked here, so yield to I/O until it is dispatched.
+  for (let turn = 0; turn < 200 && session.sent.length < 2; turn += 1) await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(session.sent, ['first', 'second']);
   assert.deepEqual(h.events.filter(event => event.type === 'input_receipt'), [{
     type: 'input_receipt', sessionId: 'late-stop', inputClientId: 'a', clientId: 'a', status: 'interrupted',
@@ -1591,6 +1607,7 @@ test('concurrent enqueue reserves the turn before asynchronous preparation', asy
 test('an admission read failure rejects input before acknowledging acceptance', async () => {
   const maker = createFakeMaker();
   let fail = true;
+  ensureUnitOwner();
   const queue = createInputQueue({ getMaker: () => maker, hub: { publish() {} }, sent() {},
     readSession: async () => { if (fail) throw new Error('storage unavailable'); return { agentKind: 'claude-code' }; },
   });
@@ -1607,6 +1624,7 @@ test('stop during admission prevents a late model startup', async () => {
   const maker = createFakeMaker();
   let release;
   const gate = new Promise(resolve => { release = resolve; });
+  ensureUnitOwner();
   const queue = createInputQueue({ getMaker: () => maker, hub: { publish() {} }, sent() {},
     readSession: async () => { await gate; return { agentKind: 'cc', workingDir: '/tmp' }; },
   });
@@ -2088,6 +2106,7 @@ test('a failed turn in one task leaves the next turn of another task in the same
 });
 
 async function changeRecordFixture(t) {
+  ensureUnitOwner();
   const { configureUserDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
   const store = await import('../../../desktop/src/main/turn-change-set/store.ts');
   const { turnChangeSetSessionDirectory } = await import('../../../desktop/src/main/turn-change-set/storagePaths.ts');
@@ -3146,4 +3165,50 @@ test('a send restores the task through the send transaction before the turn is d
   } finally {
     await h.queue.dispose();
   }
+});
+
+// Unit: the send's working-directory check is the desktop's (working-directory.ts over
+// createWorkingDirectoryPreflight). Real directories on disk; the Agent is the fake Maker.
+// - An ordinary directory that was deleted (its disk still there) is recreated empty, and the send
+//   carries the recovery note once (Gap: the Host failed the send). A conversation recovery directory
+//   in the profile is used only when the disk itself is unavailable, as on the desktop.
+// - A managed worktree that is gone fails the send at once with the Host's failure, and no recovery
+//   directory is taken: the Host must not answer `gone` before it can restore worktrees.
+test('a send to a task whose ordinary directory was deleted recreates it and carries the note once', async t => {
+  const gone = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-gone-dir-'));
+  rmSync(gone, { recursive: true, force: true });
+  t.after(() => rmSync(gone, { recursive: true, force: true }));
+  const h = createHarness({ statDirectory: undefined,
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'm', workingDir: gone, providerId: 'xd',
+      permissionMode: 'ask', planModeEnabled: false }) });
+  t.after(() => h.queue.dispose());
+  await enqueue(h, 'gone-dir', { clientId: 'first', text: 'first' });
+  const session = h.maker.getSession('gone-dir');
+  assert.equal(h.maker.sessions.get('gone-dir').options.workingDir, gone);
+  assert.equal(existsSync(gone), true, 'the directory is recreated');
+  assert.match(session.sent[0], /\[Working directory recovery\]\nThe working directory was missing\. Cindy recreated the directory/);
+  assert.match(session.sent[0], /first$/);
+  session.emit({ type: 'done', data: {} });
+  await h.queue.enqueue('gone-dir', { clientId: 'second', text: 'second' });
+  await waitFor(() => session.sent.length === 2);
+  assert.equal(session.sent[1], 'second', 'the note is carried once');
+});
+
+test('a send to a task whose managed worktree is gone fails at once without a recovery directory', async t => {
+  const repo = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-worktree-repo-'));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const worktree = path.join(repo, '.cindy-worktrees', 'gone-tree');
+  const h = createHarness({ statDirectory: undefined,
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'm', workingDir: worktree, providerId: 'xd',
+      permissionMode: 'ask', planModeEnabled: false }) });
+  t.after(() => h.queue.dispose());
+  await h.queue.enqueue('gone-tree', { clientId: 'first', text: 'first' });
+  await waitFor(() => h.queue.projection('gone-tree').error);
+  assert.match(h.queue.projection('gone-tree').error, /working directory is missing for session gone-tree/);
+  assert.equal(h.maker.getSession('gone-tree') ?? null, null, 'no Agent started');
+  assert.equal(existsSync(worktree), false);
+  const dialogues = path.join(unitProfile, 'owners');
+  const recoveryDirs = existsSync(dialogues)
+    ? readdirSync(dialogues, { recursive: true }).filter(entry => String(entry).includes('worktree-recovery')) : [];
+  assert.deepEqual(recoveryDirs, [], 'no "unrestored worktree" recovery directory');
 });

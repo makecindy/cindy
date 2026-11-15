@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
+import { configureHostOwner } from './agent/claude-auth.mjs';
 
 import { createChatHandler } from './chat.mjs';
 import { createEventHub } from './events.mjs';
@@ -14,6 +17,11 @@ import { createInputQueue } from './agent/input-queue.mjs';
  * is how file access silently stopped working for API clients.
  */
 test('chat uses the durable queue and approvals reach the client once', async (t) => {
+  // The Host always sends with a signed-in profile: the working-directory check reads its
+  // conversation recovery directories (agent/working-directory.ts).
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-chat-interactions-'));
+  configureHostOwner({ userDataDir: profile, ownerId: 'chat-interactions' });
+  t.after(() => { configureHostOwner({ userDataDir: profile, ownerId: null }); rmSync(profile, { recursive: true, force: true }); });
   const hub = createEventHub();
   const broker = createInteractionBroker({ hub });
   const published = [];

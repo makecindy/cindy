@@ -1,4 +1,3 @@
-import fs from 'node:fs/promises';
 import { createMakerSteerTransaction } from '../../../desktop/src/main/maker-ipc/makerSteerTransaction.ts';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 import { readReplyQuoteNote } from '../../../desktop/src/main/maker-ipc/chatReplyQuoteNote.ts';
@@ -16,6 +15,7 @@ import { assertHostTaskExecutionSupported, prepareHostUserMessage } from './send
 import { createHostLearnInvocationCapture } from './learn-capture.ts';
 import { createHostEventPersistence } from './event-persistence.ts';
 import { createHostContextRecovery } from './context-recovery.ts';
+import { createHostWorkingDirectory } from './working-directory.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
 import { noteClaudeSessionTurnState } from '../../../desktop/src/main/maker-host/claude-session-background-activity.ts';
@@ -291,7 +291,15 @@ export function createTurnExecutor(deps) {
   }
 
   const reconcileCreateOptsWithDb = createSessionOptionsReconciler({ log, readSession: readExecutionSession });
-  const statDirectory = deps.statDirectory ?? fs.stat;
+  // The desktop's working-directory check and recovery (working-directory.ts).
+  const workingDirectory = createHostWorkingDirectory({
+    stat: deps.statDirectory,
+    readBoundWorkingDir: async id => [deps.getMaker().getSession(id)?.workDir || null,
+      await readExecutionSession(id).then(row => row.workingDir ?? null, () => null)],
+    listActiveSessions: () => deps.getMaker().listActiveSessions?.() ?? [],
+    log,
+  });
+  const statDirectory = workingDirectory.statDirectory;
   const transaction = createMakerSendTransaction({
     // A server's OS language is not the remote user's interface preference.
     getResolvedMainLocale: deps.getResolvedMainLocale ?? (() => null),
@@ -307,15 +315,14 @@ export function createTurnExecutor(deps) {
       if (session) assertHostTaskExecutionSupported(session);
       if (createOpts) assertHostTaskExecutionSupported(createOpts);
     },
-    checkWorkDirExists: async (id, dir) => {
+    checkWorkDirExists: async (id, ...args) => {
       await readExecutionSession(id);
-      if (!dir) return true;
-      try { return (await statDirectory(dir)).isDirectory(); }
-      catch (error) {
-        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return false;
-        throw error;
-      }
+      return workingDirectory.checkWorkDirExists(id, ...args);
     },
+    resolveRecoveredWorkingDir: workingDirectory.resolveRecoveredWorkingDir,
+    isPersistedWorktreeFallback: workingDirectory.isPersistedWorktreeFallback,
+    peekWorkingDirectoryRecoveryNote: workingDirectory.peekWorkingDirectoryRecoveryNote,
+    consumeWorkingDirectoryRecoveryNote: workingDirectory.consumeWorkingDirectoryRecoveryNote,
     statDirectory,
     readSessionWorkingDirFromDb: async id => (await readExecutionSession(id)).workingDir ?? null,
     readSessionWorkingDirState: async id => ({ exists: true, workingDir: (await readExecutionSession(id)).workingDir ?? null }),
