@@ -5,7 +5,7 @@ import { copyFile, lstat, mkdir, mkdtemp, open, realpath, rm, writeFile } from '
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
-import { requestSizeBudgetAfterRejection, requestSizeModelFamily, countInlineRequestImages, hasRequestMediaMarkers, controlRequestSize, recoverInlineAttachments, type ImageRouteInfo, type InlineImagePreprocessor, type OversizedRequestRecovery, type RequestSizeController } from '@cindy/anthropic-compat-proxy';
+import { requestSizeBudgetAfterRejection, requestSizeModelFamily, countInlineRequestImages, hasRequestMediaMarkers, DEFAULT_REQUEST_SIZE_TRIGGER, controlRequestSize, recoverInlineAttachments, type ImageRouteInfo, type InlineImagePreprocessor, type OversizedRequestRecovery, type RequestSizeController } from '@cindy/anthropic-compat-proxy';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions, mediaRefs } from '../localDb/schema.js';
 import { addRef, removeRefById } from '../cindy-media/ledger.js';
@@ -197,7 +197,15 @@ function createRequestSizeController(
     control: async (body, format, policy) => {
       // Ordinary text traffic must not touch session storage, scratch directories
       // or INFO logging. Do this before resolving any attachment ownership.
-      if (!hasRequestMediaMarkers(body)) return null;
+      if (!hasRequestMediaMarkers(body)) {
+        // Text cannot be offloaded. Retain the route's byte ceiling without
+        // consulting ownership or storage; the kill switch keeps legacy limits.
+        if (controller.enabled?.() !== false && policy.allowRemoval !== false
+          && body.length > (policy.triggerBytes ?? DEFAULT_REQUEST_SIZE_TRIGGER)) {
+          throw new Error('REQUEST_TEXT_TOO_LARGE');
+        }
+        return null;
+      }
       let imageCount = 0;
       const countingPreprocessor: InlineImagePreprocessor = {
         prepare: input => {

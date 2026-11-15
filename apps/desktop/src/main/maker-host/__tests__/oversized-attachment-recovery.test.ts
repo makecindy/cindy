@@ -302,3 +302,85 @@ it('creates one scratch directory only after preprocessing and persists removed 
   expect(state.ingest).toHaveBeenCalled();
   expect(state.addRef).toHaveBeenCalled();
 });
+
+// Real HTTP + shared host controller. Scale only the injected route budget so
+// equality/+1 tests stay small; Codex assembly separately covers production MiB.
+it.each(['responses', 'anthropic', 'chat'] as const)('enforces the text-only trigger without media side effects for %s', async format => {
+  const received: Buffer[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
+    received.push(Buffer.concat(chunks)); res.end('ok');
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  if (!address || typeof address === 'string') throw new Error('test server address unavailable');
+  const prepare = vi.fn(async () => null);
+  const controller = createRequestSizeController(() => state.resolved, { prepare });
+  const route = format === 'responses' ? '/v1/responses' : format === 'anthropic' ? '/v1/messages' : '/v1/chat/completions';
+  const threshold = 8192;
+  const retry = vi.fn(async () => null);
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${address.port}`, transformRequest: [], maxRequestBodyBytes: 42 * 1024,
+    requestSizeRetry: retry,
+    requestSizeController: { ...controller, control: (body, wire, policy) => controller.control(body, wire, { ...policy, triggerBytes: threshold }) },
+  });
+  const wire = (bytes: number) => {
+    const body = { [format === 'responses' ? 'input' : 'messages']: [{ role: 'user', content: [{ type: format === 'responses' ? 'input_text' : 'text', text: '' }] }] };
+    const raw = JSON.stringify(body);
+    return Buffer.from(raw.replace('"text":""', `"text":"${'x'.repeat(bytes - Buffer.byteLength(raw))}"`));
+  };
+  const send = (body: Buffer<ArrayBuffer>) => fetch(`${proxy.url}${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+  const assertNoMediaWork = () => {
+    expect(state.getSnapshot).not.toHaveBeenCalled(); expect(state.query).not.toHaveBeenCalled();
+    expect(mkdtemp).not.toHaveBeenCalled(); expect(rm).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled(); expect(state.info).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+  };
+  try {
+    const equal = wire(threshold);
+    const ok = await send(equal); expect(ok.status).toBe(200); await ok.text();
+    expect(received).toHaveLength(1); expect(received[0].equals(equal)).toBe(true); assertNoMediaWork();
+    const large = wire(threshold + 1);
+    const rejected = await send(large); expect(rejected.status).toBe(413);
+    expect(await rejected.json()).toEqual({ error: { type: 'request_too_large', message: 'Request text exceeds the local 32 MiB request budget after image recovery.' } });
+    expect(received).toHaveLength(1); assertNoMediaWork();
+    vi.stubEnv('XDT_REQUEST_SIZE_CONTROL_DISABLE', '1');
+    const disabled = await send(large); expect(disabled.status).toBe(200); await disabled.text();
+    expect(received).toHaveLength(2); expect(received[1].equals(large)).toBe(true); assertNoMediaWork();
+  } finally {
+    vi.unstubAllEnvs(); await proxy.dispose(); upstream.closeAllConnections();
+    await new Promise<void>(resolve => upstream.close(() => resolve()));
+  }
+});
+
+it('uses a learned byte trigger for later text-only requests without DB or disk access', async () => {
+  const received: Buffer[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
+    received.push(Buffer.concat(chunks)); res.statusCode = received.length === 1 ? 413 : 200;
+    res.end(received.length === 1 ? 'Request too large' : 'ok');
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  if (!address || typeof address === 'string') throw new Error('test server address unavailable');
+  const controller = createRequestSizeController(() => state.resolved);
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${address.port}`, transformRequest: [], requestSizeController: controller });
+  const send = (body: Buffer<ArrayBuffer>) => fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+  try {
+    const images = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [pngBlock()] }] }));
+    const recovered = await send(images); expect(recovered.status).toBe(200); await recovered.text();
+    expect(received).toHaveLength(2);
+    const trigger = Math.floor(received[0].length * 0.44);
+    state.getSnapshot.mockClear(); state.query.mockClear(); state.info.mockClear();
+    vi.mocked(mkdtemp).mockClear(); vi.mocked(rm).mockClear();
+    for (const delta of [0, 1]) {
+      const raw = Buffer.from(JSON.stringify({ input: 'x'.repeat(trigger + delta - Buffer.byteLength('{"input":""}')) }));
+      const response = await send(raw); expect(response.status).toBe(delta ? 413 : 200); await response.text();
+      expect(received).toHaveLength(3);
+      if (!delta) expect(received[2].equals(raw)).toBe(true);
+    }
+    expect(state.getSnapshot).not.toHaveBeenCalled(); expect(state.query).not.toHaveBeenCalled();
+    expect(mkdtemp).not.toHaveBeenCalled(); expect(rm).not.toHaveBeenCalled(); expect(state.info).not.toHaveBeenCalled();
+  } finally {
+    await proxy.dispose(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
+  }
+});

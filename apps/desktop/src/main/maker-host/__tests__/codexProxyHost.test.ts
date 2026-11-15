@@ -35,6 +35,7 @@ const mockState = vi.hoisted(() => {
     },
     createAnthropicCompatProxy: vi.fn(),
     realStripTransforms: false,
+    requestSizeControllerFactory: undefined as typeof import('../oversized-attachment-recovery.js').createRequestSizeController | undefined,
     createPiProviderFetch: vi.fn(() => vi.fn()),
     handlePiProviderRequest: vi.fn(async () => undefined),
     createResponsesChatHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
@@ -168,7 +169,7 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
 // real request rewrite and replace only where the preserved file is published.
 vi.mock('../oversized-attachment-recovery.js', async () => {
   const { recoverInlineAttachments, controlRequestSize } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
-  const createRequestSizeController: typeof import('../oversized-attachment-recovery.js').createRequestSizeController = (_resolveSession, preprocessor) => ({
+  const createRequestSizeController: typeof import('../oversized-attachment-recovery.js').createRequestSizeController = (_resolveSession, preprocessor, resolveProvider) => mockState.requestSizeControllerFactory?.(_resolveSession, preprocessor, resolveProvider) ?? ({
     enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
     format: ctx => ctx.url.includes('/responses') ? 'responses' : ctx.url.includes('/messages') ? 'anthropic' : ctx.url.includes('/chat/completions') ? 'chat' : null,
     control: (body, format, policy) => controlRequestSize(body, format, { ...policy, preprocessor, modelFamily: 'gpt' }, async () => '/tmp/preserved.png'),
@@ -196,6 +197,7 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
 // ~7s (2026-10-16), and order-shuffled runs confirm cases stay independent.
 async function freshCodexProxyHost(realStripTransforms = false) {
   mockState.realStripTransforms = realStripTransforms;
+  mockState.requestSizeControllerFactory = undefined;
   mockState.reportCindyGatewayKeyRejected.mockReset();
   mockState.gatewayBaseUrl = '';
   const host = await import('../codex-proxy-host.desktop.js');
@@ -3536,6 +3538,47 @@ describe('codex proxy host', () => {
     });
     await host.ensureCodexProxyReady();
     expect(mockState.createAnthropicCompatProxy.mock.calls[0][0].maxRequestBodyBytes).toBe(42 * 1024 * 1024);
+  });
+
+  // Actual Codex host options + actual size controller/proxy; only the upstream
+  // is local. A 33 MiB text history fits the 42 MiB ingress but must stop at 32.
+  it('rejects a text-only Codex history between 32 and 42 MiB before upstream dispatch', async () => {
+    const host = await freshCodexProxyHost();
+    const realRecovery = await vi.importActual<typeof import('../oversized-attachment-recovery.js')>('../oversized-attachment-recovery.js');
+    mockState.requestSizeControllerFactory = realRecovery.createRequestSizeController;
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    let upstreamRequests = 0;
+    const upstream = createServer(async (req, res) => {
+      upstreamRequests++;
+      for await (const chunk of req) void chunk;
+      res.end('{}');
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    mockState.createAnthropicCompatProxy.mockImplementation((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({ ...opts, upstream: upstreamUrl, resolveOutboundProxy: () => null,
+        routingTransform: async (body, ctx) => ({ ...(await opts.routingTransform?.(body, ctx)), upstreamOverride: upstreamUrl }),
+      }));
+    try {
+      await host.ensureCodexProxyReady();
+      const proxy = await mockState.createAnthropicCompatProxy.mock.results[0].value as { url: string };
+      expect(mockState.createAnthropicCompatProxy.mock.calls[0][0].maxRequestBodyBytes).toBe(42 * 1024 * 1024);
+      const prefix = '{"model":"gpt-5","input":"';
+      const raw = Buffer.from(prefix + 'x'.repeat(33 * 1024 * 1024 - prefix.length - 2) + '"}');
+      expect(raw.length).toBe(33 * 1024 * 1024);
+      const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ error: { type: 'request_too_large', message: 'Request text exceeds the local 32 MiB request budget after image recovery.' } });
+      expect(upstreamRequests).toBe(0);
+      vi.stubEnv('XDT_REQUEST_SIZE_CONTROL_DISABLE', '1');
+      const disabled = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+      expect(disabled.status).toBe(200); await disabled.text();
+      expect(upstreamRequests).toBe(1); // Disabled mode retains the production 42 MiB fallback.
+    } finally {
+      vi.unstubAllEnvs();
+      await host.disposeCodexProxy(); mockState.requestSizeControllerFactory = undefined;
+      upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
   });
 
   // #7055: ChatGPT closes WebSocket messages over ~16 MiB with 1009. A reconnect resends the
