@@ -3,13 +3,10 @@ import type { PluginUiAttachmentResult } from '../../shared/pluginUi.js';
 import type { PluginFileAccess } from './pluginFiles.js';
 import { appDownloadName } from './downloadFile.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { GhostHandoffStore } from '../cindy-brain/handoffStore.js';
 import type { GhostCardService } from '../cindy-brain/cardService.js';
-import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
 
 /** Track the native provider call through the existing card lifecycle. */
 export async function callPluginAttachmentTool(input: {
@@ -28,7 +25,7 @@ export async function callPluginAttachmentTool(input: {
 
 /** Main-owned, user-added input. This is a transfer, not an Agent file grant. */
 export async function callPluginAttachmentProvider(input: {
-  instance: string; paths: readonly string[]; args: Record<string, unknown>; handoffDeclared: boolean;
+  instance: string; bytes: Uint8Array; args: Record<string, unknown>; handoffDeclared: boolean;
 }, ports: {
   signal: AbortSignal;
   assertCurrent(): Promise<void>;
@@ -41,14 +38,11 @@ export async function callPluginAttachmentProvider(input: {
   const check = async () => { ports.signal.throwIfAborted(); await ports.assertCurrent(); ports.signal.throwIfAborted(); };
   await check();
   const file = input.args.attachment as { name?: unknown; size?: unknown; mimeType?: unknown } | undefined;
-  if (input.paths.length !== 1 || !path.isAbsolute(input.paths[0]!) || !file || typeof file.name !== 'string' ||
+  if (!file || typeof file.name !== 'string' ||
       typeof file.mimeType !== 'string' || !Number.isSafeInteger(file.size) || (file.size as number) < 1 ||
       (file.size as number) > GHOST_HANDOFF_MAX_BYTES_PER_FILE) throw new Error('MCP_APP_INVALID_REQUEST');
-  const source = await fs.realpath(input.paths[0]!);
-  await check();
-  const bytes = await readBoundedFileNoFollow(source, GHOST_HANDOFF_MAX_BYTES_PER_FILE, { nonBlocking: true });
-  await check();
-  if (!bytes || bytes.length !== file.size) throw new Error('MCP_APP_FILE_INVALID');
+  if (!(input.bytes instanceof Uint8Array) || input.bytes.byteLength !== file.size) throw new Error('MCP_APP_FILE_INVALID');
+  const bytes = Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength);
   const mimeType = sniffMediaMime(bytes, file.mimeType);
   if (!mimeType && ports.supportsMedia(file.mimeType)) throw new Error('MCP_APP_FILE_INVALID');
   let cleanup = async () => {};

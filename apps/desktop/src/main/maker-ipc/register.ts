@@ -19484,7 +19484,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!owner || owner !== getCurrentDbClientSnapshot()) throw new Error('MCP_APP_OWNER_CHANGED');
     };
     assertOwner();
-    if (grant.attachments?.length) {
+    if (grant.attachmentBytes) {
       // Only the native composer supplies this Main-owned input, never an App's args.
       const entry = readPluginHostUi(grant.instance);
       if (!entry) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
@@ -19495,7 +19495,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
       const db = owner!.client.drizzle;
       const ownerScope = activeOwnerScopeKey();
-      return callPluginAttachmentProvider({ instance: grant.instance, paths: grant.attachments, args,
+      return callPluginAttachmentProvider({ instance: grant.instance, bytes: grant.attachmentBytes, args,
         handoffDeclared: ghostToolDeclaresHandoff(entry.ghost.manifest.tools?.find(tool => tool.name === grant.tool)),
       }, {
         signal, assertStillValid, handoff: getGhostHandoffStore(), supportsMedia: isCindyMediaMime,

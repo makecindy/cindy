@@ -107,9 +107,9 @@ describe('plugin virtual App server', () => {
       authorizeTool, readCard: vi.fn(), writeCard: vi.fn(), sendMessage: vi.fn() });
     const args = { attachment: { name: 'input.pdf', size: 5, mimeType: 'application/pdf' } };
     const result = await host.callPluginAction('renderer:1', null, { serverId: config.id, id: 'parse', title: 'Parse',
-      attachments: [path.resolve('input.pdf')], assertCurrent() {} }, 'save', args, new AbortController().signal);
+      attachmentBytes: new Uint8Array(5), assertCurrent() {} }, 'save', args, new AbortController().signal);
     expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual(args);
-    expect(grants[0]).toMatchObject({ sessionId: null, attachments: [path.resolve('input.pdf')] });
+    expect(grants[0]).toMatchObject({ sessionId: null, attachmentBytes: new Uint8Array(5) });
     expect(authorizeTool).not.toHaveBeenCalled();
     await host.reset();
   });

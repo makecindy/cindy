@@ -179,6 +179,21 @@ beforeEach(() => {
   registerMcpAppsIpc(async () => {}, request);
 });
 describe('MCP App persistence and IPC wiring', () => {
+  // Security regression #10649, unit: a trusted renderer's path is not proof
+  // that the user supplied its bytes. Reject it before any provider dispatch.
+  it.each([false, true])('rejects a renderer-supplied absolute attachment path before dispatch (with bytes: %s)', async withBytes => {
+    state.plugin = { host: { contributions: [{ id: 'parse', title: 'Parse', position: 'composer.attachment',
+      tool: 'parse', accept: { extensions: ['.txt'] } }] }, config: { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    state.action.mockResolvedValue({ structuredContent: { handled: false } });
+    await expect(state.handle!({ sender: { id: 1, isDestroyed: () => false } }, null, {
+      op: 'plugin-action', instanceId: 'local__demo', id: 'parse', requestId: 'forged-path', input: {
+        attachment: { name: 'private.txt', uri: path.resolve('private.txt'), size: 5, mimeType: 'text/plain',
+          ...(withBytes ? { bytes: new Uint8Array(5) } : {}) },
+      },
+    })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    expect(state.action).not.toHaveBeenCalled();
+  });
   // Unit integration, #9987: real native IPC -> Host -> SDK -> attachment adapter.
   // Old tests mocked a successful host; an unsent clipboard blob never reached
   // the provider. Both input paths must deliver real bytes without Agent approval.
@@ -212,7 +227,7 @@ describe('MCP App persistence and IPC wiring', () => {
       await client.connect(createPluginAppTransport({ instance: 'local__parse', revision: 'one', tools: [tool],
         ui: { resources: [], tools: { parse: { visibility: ['app'] } } }, assertCurrent() {}, readHtml: () => '',
         call: (grant, args, signal) => callPluginAttachmentProvider({ instance: grant.instance,
-          paths: grant.attachments!, args, handoffDeclared: true,
+          bytes: grant.attachmentBytes!, args, handoffDeclared: true,
         }, { signal, assertCurrent: grant.assertCurrent, assertStillValid() {}, handoff,
           supportsMedia: blobs.supportedMime, deposit, call: delivered }),
       }));
@@ -226,7 +241,7 @@ describe('MCP App persistence and IPC wiring', () => {
       state.action.mockImplementation(host.callPluginAction.bind(host));
       expect(await state.handle!({ sender: { id: 1, isDestroyed: () => false } }, 'task', {
         op: 'plugin-action', instanceId: 'local__parse', id: 'parse', requestId: 'input', input: { attachment: {
-          name: image ? 'clipboard.png' : 'picked.txt', uri: image?.url ?? disk, size: bytes.length,
+          name: image ? 'clipboard.png' : 'picked.txt', bytes: new Uint8Array(await new Blob([bytes]).arrayBuffer()), size: bytes.length,
           mimeType: image ? 'image/png' : 'text/plain',
         } },
       })).toEqual({ handled: false });
@@ -237,19 +252,19 @@ describe('MCP App persistence and IPC wiring', () => {
       await host.reset();
     } finally { await client.close(); await fs.rm(root, { recursive: true, force: true }); state.userData = ''; }
   });
-  // Unit: a selected local file goes through the original Host handoff, not tool JSON.
+  // Unit: selected File bytes go through the Main-owned input, not tool JSON.
   // Existing completion cases have no files; a MIME/extension mismatch must not call it.
-  it('matches added attachments and passes the path only in the Main-owned grant', async () => {
+  it('matches added attachments and passes bytes only in the Main-owned call', async () => {
     state.plugin = { host: { contributions: [{ id: 'parse', title: 'Parse', position: 'composer.attachment',
       tool: 'parse', accept: { extensions: ['.pdf'] } }] }, config: { id: 'plugin-source', url: '', transport: 'in-process',
       plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
     const event = { sender: { id: 1, isDestroyed: () => false } };
     const input = { op: 'plugin-action', instanceId: 'local__demo', id: 'parse', requestId: 'file',
-      input: { attachment: { name: 'input.pdf', uri: path.resolve('input.pdf'), size: 5, mimeType: 'application/pdf' } } };
+      input: { attachment: { name: 'input.pdf', bytes: new Uint8Array(5), size: 5, mimeType: 'application/pdf' } } };
     state.action.mockResolvedValue({ structuredContent: { handled: false } });
     expect(await state.handle!(event, null, input)).toEqual({ handled: false });
     expect(state.action.mock.calls[0].slice(0, 5)).toEqual(['renderer:1', null,
-      expect.objectContaining({ attachments: [path.resolve('input.pdf')] }), 'parse',
+      expect.objectContaining({ attachmentBytes: new Uint8Array(5) }), 'parse',
       { attachment: { name: 'input.pdf', size: 5, mimeType: 'application/pdf' } }]);
     state.action.mockClear();
     await expect(state.handle!(event, null, { ...input, input: { attachment: { ...input.input.attachment,
@@ -308,7 +323,7 @@ describe('MCP App persistence and IPC wiring', () => {
       config: { id: 'plugin-source', url: '', transport: 'in-process', plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
     const event = { sender: { id: 1, isDestroyed: () => false } };
     const input = position === 'composer.completion' ? { trigger: '@', query: 'record' }
-      : { attachment: { name: 'input.pdf', uri: path.resolve('input.pdf'), size: 5, mimeType: 'application/pdf' } };
+      : { attachment: { name: 'input.pdf', bytes: new Uint8Array(5), size: 5, mimeType: 'application/pdf' } };
     state.action.mockResolvedValue({ structuredContent: { handled: false } });
     const pending = state.handle!(event, null, { op: 'plugin-action', instanceId: 'local__demo', id: 'provider', requestId: 'early', input });
     const rejected = expect(pending).rejects.toThrow('MCP_APP_REQUEST_FAILED');

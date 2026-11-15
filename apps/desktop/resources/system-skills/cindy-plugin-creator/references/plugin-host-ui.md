@@ -123,6 +123,7 @@ insertText 不超过 32768 字符，description 可选且不超过 2000 字符�
 
 工具必须 app-visible。插件整体安装/更新批准有效且已启用时，Host 将主人本次主动添加、匹配声明的附件
 直接交给同一插件实例，不再询问文件权限、不写永久 grant，也不套用 Agent 的权限档位。
+本次输入来自浏览器 File 或粘贴 Blob 已有的字节，Host 校验真实大小；原生附件入口不接受绝对路径或缓存 URL 请求主机读盘。
 Host 填入 `attachment:{name,size,mimeType}` 元数据；媒体复用原媒体寄存并放入 `attachments` 哈希参数；
 非媒体工具须声明保留参数 `cindy_handoff_files:{type:"array"}`，
 得到 `handoff:` 引用。插件不能从参数取得本机路径。字节处理仍使用原文件能力（见 `plugin-files-and-library.md` §4.10.3），

@@ -85,7 +85,7 @@ it.each(['disk-file', 'disk-image', 'cached-paste', 'bad-size', 'invalid-media',
   });
   try {
     await fs.writeFile(source, bytes);
-    const pending = callPluginAttachmentProvider({ instance: 'local__parse', paths: [source], handoffDeclared: !media,
+    const pending = callPluginAttachmentProvider({ instance: 'local__parse', bytes, handoffDeclared: !media,
       args: { attachments: ['declared-media'], cindy_handoff_files: ['forged'], attachment: {
         name: media ? 'clipboard.png' : 'picked.txt', size: bytes.length + (mode === 'bad-size' ? 1 : 0),
         mimeType: media || mode === 'invalid-media' ? 'image/png' : 'text/plain',
@@ -123,7 +123,7 @@ it.each([
       expect(await handoff.read('local__parse', file!.ref)).toMatchObject({ bytes });
       return { content: [] };
     });
-    await callPluginAttachmentProvider({ instance: 'local__parse', paths: [source], handoffDeclared: true,
+    await callPluginAttachmentProvider({ instance: 'local__parse', bytes, handoffDeclared: true,
       args: { attachment: { name, mimeType, size: bytes.length } },
     }, { signal: new AbortController().signal, assertCurrent: async () => {}, assertStillValid() {}, handoff,
       supportsMedia: createBlobStore({ getUserDataDir: () => root }).supportedMime,
