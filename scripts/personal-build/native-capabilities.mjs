@@ -61,6 +61,20 @@ export function personalOpenTypes(region = 'global') {
         'public.mime-type':['application/x-xd-cindy']}}],
   };
 }
+/**
+ * Privacy usage strings shared with the Forge package. macOS silently refuses some protected
+ * resources when the key is absent: without NSLocalNetworkUsageDescription the personal runtime
+ * (and every agent/scheduled child process it is responsible for) gets EHOSTUNREACH even to the
+ * LAN gateway, which broke SSH hosts, direct device paths and LAN health checks (2026-11).
+ */
+export function personalUsageDescriptions(root) {
+  const locales = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/resources/mac-permission-locales.json'), 'utf8'));
+  const english = locales?.en;
+  if (!english || typeof english !== 'object') throw Error('Missing macOS permission descriptions');
+  const entries = Object.entries(english).filter(([key, value]) => /^NS[A-Za-z]+UsageDescription$/.test(key) && typeof value === 'string' && value.trim());
+  if (!entries.some(([key]) => key === 'NSLocalNetworkUsageDescription')) throw Error('Missing local network usage description');
+  return Object.fromEntries(entries);
+}
 /** Build the input helper into the app before sealing it; no profile cache identity. */
 export function preparePersonalInput(root, app, run) {
   const caller = fs.readFileSync(path.join(root, 'packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift'), 'utf8');
@@ -102,7 +116,7 @@ export function prepareNativeCapabilities(root, {name = 'personal', region = 'gl
   run('/usr/libexec/PlistBuddy',['-c','Set :CFBundleIconFile cindy.icns',path.join(app,'Contents/Info.plist')]);
   // Import structured fields without replacing Electron's existing plist or signing a live app.
   execFileSync('python3', ['-c', 'import json,plistlib,sys; p=sys.argv[1]; d=plistlib.load(open(p,"rb")); d.update(json.load(sys.stdin)); plistlib.dump(d,open(p,"wb"))',
-    path.join(app,'Contents/Info.plist')], {input:JSON.stringify(personalOpenTypes(region))});
+    path.join(app,'Contents/Info.plist')], {input:JSON.stringify({...personalOpenTypes(region), ...personalUsageDescriptions(root)})});
   fs.copyFileSync(path.join(desktop,'resources/icon.icns'),path.join(app,'Contents/Resources/cindy.icns'));
   // Some developer Electron distributions omit resource seals. Seal the base
   // runtime before adding the separately sandbox-signed WidgetKit extension.

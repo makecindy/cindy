@@ -48,6 +48,7 @@ import type { createHostClaudeProxyRuntime } from './claude-proxy-runtime.js';
 import { createHostModelContext } from './model-context.js';
 import { readDisabledSkillPaths } from '../../../desktop/src/main/skillhub/activationPreferences.js';
 import { createHostStartOptions } from './start-options.js';
+import { dbToMakerAgentKind } from '../../../desktop/src/shared/agentKindConversion.js';
 import { createBashConcurrencyHooks, mergeClaudeHooks } from '../../../desktop/src/main/maker-host/claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from '../../../desktop/src/main/maker-host/claude-hooks/read-image-hook.js';
 import { createDesktopInputShellGuardHooks } from '../../../desktop/src/main/maker-host/claude-hooks/desktop-input-shell-guard-hook.js';
@@ -380,6 +381,11 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
     ...(invalidate ? { invalidate } : {}),
     async getState(opts?: AuthAdapterOptions) {
       if (opts?.nativeSubscriptionAccount) return opts.nativeSubscriptionAccount.readState();
+      // The desktop's provider-oauth readState: a task on a third-party source passes by its mode; the
+      // Codex proxy injects that source's credential, and the default Codex login plays no part.
+      if (opts?.credentialMode === 'provider-oauth' && !opts.providerId) {
+        return { authenticated: true, identity: 'Provider OAuth · Proxy', authSource: 'api-key' };
+      }
       if (opts?.providerId && !['xd', 'cindy', 'openai'].includes(opts.providerId)) {
         if (accounts?.isCodexAccountProvider(opts.providerId)) return accounts.codexAccountState(opts.providerId);
         try {
@@ -455,11 +461,22 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       return logoutOperation;
     },
     async getAuthEnv(opts?: AuthAdapterOptions) {
+      // As the desktop's getAuthEnv, an independent Codex account first: its task runs in the
+      // account's own home whatever credential mode it carries, never in the default codex-home.
+      // (The desktop also projects Skills into that home here; release row 25.)
+      if (opts?.providerId && opts.providerId !== 'openai' && accounts?.isCodexAccountProvider(opts.providerId)) {
+        if (!accounts.codexAccountState(opts.providerId).authenticated) throw new Error('Codex account requires login');
+        return { CODEX_HOME: accounts.codexAccountHome(opts.providerId) };
+      }
       if (opts?.nativeSubscriptionAccount) {
         opts.nativeSubscriptionAccount.assertCurrent();
         return { CODEX_HOME: opts.nativeSubscriptionAccount.configDir };
       }
       await mkdir(codexHome, { recursive: true, mode: 0o700 });
+      // The desktop's provider-oauth getAuthEnv: the gateway key, else the placeholder the proxy replaces.
+      if (opts?.credentialMode === 'provider-oauth' && !opts.providerId) {
+        return { CODEX_HOME: codexHome, XDT_CODEX_API_KEY: gateway?.credential || CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY };
+      }
       // As the desktop's getAuthEnv: reconcile unless the login is invalidated, except for the
       // gateway-key and provider-oauth spawns and independent accounts, which it never reconciles for.
       const reconcileForSpawn = opts?.credentialMode !== 'gateway-key' && opts?.credentialMode !== 'provider-oauth'
@@ -467,10 +484,6 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       if (reconcileForSpawn && !readHostCodexInvalidation(codexHome, systemAuthPath)) await systemLogin.reconcile();
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') return { CODEX_HOME: codexHome };
       if (opts?.providerId && !['xd', 'cindy', 'openai'].includes(opts.providerId)) {
-        if (accounts?.isCodexAccountProvider(opts.providerId)) {
-          if (!accounts.codexAccountState(opts.providerId).authenticated) throw new Error('Codex account requires login');
-          return { CODEX_HOME: accounts.codexAccountHome(opts.providerId) };
-        }
         // The proxy injects the selected provider's exact credential and headers.
         // Do not place a different provider's key into the shared native process.
         return { CODEX_HOME: codexHome, XDT_CODEX_API_KEY: gateway?.credential || CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY };
@@ -492,9 +505,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       afterLogout: () => options.codexRuntime!.authBoundary.afterLogout(),
       systemLogin: options.codexRuntime!.systemLogin,
     } : undefined);
-  // The desktop retires every local Codex host at an auth boundary (maker-host/index.ts).
-  options.codexRuntime?.setLocalHostRetirement(async reason => {
-    await codex?.forceDisposeLocalHostForAuthChange(reason, { preserveExternalAuth: true });
+  // Match Desktop: default-auth invalidation preserves separately selected subscription accounts.
+  options.codexRuntime?.setLocalHostRetirement(async (reason, preserveSubscriptionAccounts) => {
+    await codex?.forceDisposeLocalHostForAuthChange(reason, { preserveExternalAuth: true, preserveSubscriptionAccounts });
   });
   const config = options.providerConfig;
   // The desktop's Auto-review and tool-loop review (maker-host/index.ts), handed to the same
@@ -530,6 +543,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // Engines read these lists at start; refresh them against the catalog just applied.
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     reloadCodexSkills: workingDir => codex ? codex.listAgentSkills({ workingDir, forceReload: true }) : Promise.resolve(),
+    // Assembled below; no session starts before the graph is returned.
+    beforeLocalCodexSessionStart: () => gatewayRestart.flushBeforeLocalCodexSessionStart(),
   });
   // Model lists derived from the selectable catalog, as the desktop injects them.
   const availableModels = (agent: AgentKind) => ({ availableModels: deriveAvailableModels(modelContext.getSelectableCatalog(), agent) });
@@ -839,7 +854,27 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     logger: LOGGER,
   });
   piPackages.attachMaker(maker);
+  // What context recovery reads from this graph (context-recovery-assembly.ts): the configured
+  // window of a route, as the desktop's resolveVerifiedWindow (register.ts); the learned Pi cache
+  // compatibility of this profile; and the Codex runtime's native history.
+  const contextRecovery = {
+    resolveVerifiedWindow: (agentKind: string, modelId: string, providerId: string | null | undefined) =>
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), providerId, modelId),
+    piCompat: {
+      read: piNativeCompatOverrides.readPiNativeCompatOverride,
+      record: piNativeCompatOverrides.recordPiNativeCompatOverride,
+    },
+    codexHistory: options.codexRuntime?.codexHistory ?? null,
+  };
+  // A model change's window gate (model-window-gate.ts): a route's configured window with the task's
+  // window budget, as the desktop's change of model reads it (register.ts resolveWindowForRoute).
+  const modelWindow = {
+    resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null, budget: number | null) =>
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), agentKind as AgentKind, providerId, modelId, budget),
+    readSessionBudget: (sessionId: string) => startOptions.readStoredSessionContextWindowBudget(sessionId),
+  };
   return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, visionBridge, piPackages,
+    contextRecovery, modelWindow,
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };
 }

@@ -61,7 +61,9 @@ export function recordSessionCodexTurnUsage(
     // 本会话显式选定的供应商('xd' / 'openai' / null=默认)。退役全局 authMode 后,
     // 「是否走订阅(不计网关费)」改由 spawn 注入 + 该会话是否显式选了 XD 网关决定。
     const sessionProvider = turnContext.providerId;
-    const isRemoteCodexSession = Boolean(session.remoteHostId);
+    // Remote done events carry token facts, not the executing host's billing route.
+    // Neither local auth nor a same-named local catalog entry establishes that route.
+    const isRemoteCodexSession = Boolean(session.remoteHostId || session.agentDeviceId);
     const isCustomProviderRoute = !isRemoteCodexSession && turnContext.isUserProviderRoute;
     const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();
     const modelPromise =
@@ -120,7 +122,7 @@ export function recordSessionCodexTurnUsage(
           (sessionProvider == null || sessionProvider === 'xai') &&
           isExclusiveXaiModelId(pricingModel);
         const isCodexOpenAiProviderRoute = sessionProvider == null || sessionProvider === 'openai';
-        const hasGatewayKey = Boolean(readClaudeApiKey());
+        const hasGatewayKey = !isRemoteCodexSession && Boolean(readClaudeApiKey());
         const hasEffectiveGatewayRoute =
           !isRemoteCodexSession &&
           !isCustomProviderRoute &&
@@ -137,21 +139,24 @@ export function recordSessionCodexTurnUsage(
           sessionProvider !== 'xd' &&
           sessionProviderAccessKind === 'subscription' &&
           !hasEffectiveGatewayRoute;
-        const isSubscriptionValue =
-          isRemoteCodexSession ||
+        const isSubscriptionValue = !isRemoteCodexSession && (
           isCodexXaiProviderRoute ||
           isCodexSubscriptionAccessRoute ||
           (isCodexOpenAiProviderRoute &&
             codexAuthInjection === 'oauth-bearer' &&
-            !hasEffectiveGatewayRoute);
+            !hasEffectiveGatewayRoute));
         const usesReferencePriceEstimate =
           !isSubscriptionValue &&
           !isRemoteCodexSession &&
           !hasEffectiveGatewayRoute &&
           Boolean(sessionProvider && sessionProvider !== 'xd');
-        const modelUsageKey = isSubscriptionValue
-          ? codexSubscriptionUsageModelKey(pricingModel)
-          : codexApiUsageModelKey(pricingModel);
+        // Keep unknown remote routes token-only, without a billing suffix that
+        // would classify them as API spend or trigger subscription revaluation.
+        const modelUsageKey = isRemoteCodexSession
+          ? pricingModel
+          : isSubscriptionValue
+            ? codexSubscriptionUsageModelKey(pricingModel)
+            : codexApiUsageModelKey(pricingModel);
         await recordModelTurnUsage({
           sessionId: session.id,
           agentKind: 'codex',
@@ -165,8 +170,8 @@ export function recordSessionCodexTurnUsage(
 
         // Codex SDK 不报 $, 用价格表折算。普通模型 + oauth(订阅)显示为 token 价值;api 模式和 codex/
         // 折扣模型走 gateway API, 显示为 API cost。远端 Codex 由远端 daemon
-        // 路由,本机不知道远端 OAuth/API 事实,因此只显示 token 价值,不写本地
-        // gateway cost。只有真实本地 API cost 写入 sessions.total_cost_usd,
+        // 路由,本机不知道远端 OAuth/API 事实,因此保留 unknown 来源和 token,
+        // 不估值、不写本地 gateway cost。只有真实本地 API cost 写入 sessions.total_cost_usd,
         // 避免 scheduler 的 Cost 汇总混入订阅价值或远端账号消耗。
         // fire-and-forget 不阻塞事件循环;价格表走 main 端内存 + 磁盘缓存,
         // stale 快返并后台刷新,
@@ -202,7 +207,7 @@ export function recordSessionCodexTurnUsage(
           // registry 参考价(含 codex 侧价格覆盖),默认/openai 保持 OpenAI 价表。
           const subscriptionValueProviderId =
             isCodexSubscriptionAccessRoute && sessionProvider != null ? sessionProvider : 'openai';
-          const price = isCodexXaiProviderRoute
+          const price = isSubscriptionValue && isCodexXaiProviderRoute
             ? getSubscriptionDirectValuePrice(pricingModel, 'codex', pricing)
             : isSubscriptionValue
               ? getCodexProviderSubscriptionValuePrice(
@@ -267,17 +272,17 @@ export function recordSessionCodexTurnUsage(
     // token 的 env-key fallback、或 codex/ 预算模型。普通 oauth 订阅没有 $ 配额,不刷。
     void modelPromise
       .then((model) => {
+        if (isRemoteCodexSession) return;
         const hasGatewayKey = Boolean(readClaudeApiKey());
-        if (!isRemoteCodexSession && isClaudeSubscriptionProviderId(sessionProvider)) {
+        if (isClaudeSubscriptionProviderId(sessionProvider)) {
           triggerClaudeSubscriptionUsageRefresh(sessionProvider ?? undefined);
           return;
         }
-        if (!isRemoteCodexSession && isExclusiveXaiModelId(model)) {
+        if (isExclusiveXaiModelId(model)) {
           triggerXaiSubscriptionUsageRefresh(sessionProvider ?? undefined);
           return;
         }
         if (
-          !isRemoteCodexSession &&
           !isCustomProviderRoute &&
           !isExclusiveXaiModelId(model) &&
           (codexAuthInjection === 'env-key' ||
@@ -288,7 +293,7 @@ export function recordSessionCodexTurnUsage(
         }
       })
       .catch(() => {
-        if (sessionProvider === 'xd' && readClaudeApiKey()) {
+        if (!isRemoteCodexSession && sessionProvider === 'xd' && readClaudeApiKey()) {
           void triggerClaudeAccountUsageRefresh();
         }
       });

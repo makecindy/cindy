@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   guard: vi.fn(),
   start: vi.fn(),
   connectGithub: vi.fn(),
+  installGithub: vi.fn(),
   githubStatus: vi.fn(),
   openExternal: vi.fn(),
   invalidate: vi.fn(),
@@ -21,7 +22,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../deepLink', () => ({ getDeepLinkMainWindow: () => mocks.main }));
 vi.mock('../secondary-windows', () => ({ isSecondaryAppWindow: (win: unknown) => win === mocks.secondary }));
 vi.mock('../scheduler-host/webhook/runtime.js', () => ({ getScheduleWebhookHost: () => ({
-  connectGithub: mocks.connectGithub, githubStatus: mocks.githubStatus,
+  connectGithub: mocks.connectGithub, installGithub: mocks.installGithub, githubStatus: mocks.githubStatus,
 }) }));
 vi.mock('electron', () => ({
   shell: { openExternal: mocks.openExternal },
@@ -102,6 +103,10 @@ describe('GitHub setup IPC boundary', () => {
     mocks.connectGithub.mockResolvedValue('https://github.com/login/oauth/authorize?state=synthetic');
     await connect({});
     expect(mocks.openExternal).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?state=synthetic');
+    mocks.installGithub.mockResolvedValue('https://github.com/apps/example-app/installations/new');
+    await mocks.handlers.get('git-context:github-app:install')!({});
+    expect(mocks.installGithub).toHaveBeenCalledOnce();
+    expect(mocks.openExternal).toHaveBeenLastCalledWith('https://github.com/apps/example-app/installations/new');
     mocks.openExternal.mockClear();
     mocks.connectGithub.mockResolvedValue('https://attacker.test/login/oauth/authorize');
     await expect(connect({})).rejects.toThrow();

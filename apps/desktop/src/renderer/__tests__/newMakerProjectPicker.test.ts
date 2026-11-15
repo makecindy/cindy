@@ -382,14 +382,12 @@ describe('Shared create project picker', () => {
     const send = newMakerDraftRouteSource.slice(sendStart, goalStart);
     const goal = newMakerDraftRouteSource.slice(goalStart);
 
-    // Checkbox APPLY is a bidirectional gate. Branch APPLY only gates when the
-    // current checkbox intent is ON, so OFF can still create a base-repo task.
+    // Both APPLY transactions must settle before consuming the displayed choice.
+    // OFF mismatch and draft preservation are exercised by newMakerDraftSubmission.
     for (const flow of [send, goal]) {
       expect(flow).toContain('wtPreferenceSavingRef.current');
       expect(flow).toContain('wtPreferenceAuthorityUnknownRef.current');
-      expect(flow).toContain(
-        'selectedWorktree.enabled && wtBranchPreferenceSavingRef.current',
-      );
+      expect(flow).toContain('wtBranchPreferenceSavingRef.current');
     }
     expect(newMakerDraftRouteSource).toContain('wtPreferenceWriteChainRef.current');
     expect(newMakerDraftRouteSource).toContain('wtBranchWriteChainRef.current');

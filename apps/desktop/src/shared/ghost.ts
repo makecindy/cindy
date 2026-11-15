@@ -1,8 +1,8 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { declaredGhostHostToolGroups, type GhostHostToolGroup } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
-import { getPluginHostUi, hostUiApprovalSubjects, type GhostHostUi } from '@cindy/plugin-protocol';
+import { getPluginHostUi, hostUiApprovalSubjects, HOST_UI_CAPABILITIES, isHostUiPosition, type GhostHostUi } from '@cindy/plugin-protocol';
 import { PLUGIN_APPEARANCE_FIELDS } from '@cindy/plugin-protocol/appearance';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
@@ -656,6 +656,19 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
  * (轻量任务模型链 vs embedding 模型),合成一档就没法只授权其中一样。信任面同 oneshot —— 只花额度,拿不到任何宿主
  * 能力,不进会话。
  */
+export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank'] as const;
+export type GhostCindyModelsAction = (typeof GHOST_CINDY_MODELS_ACTIONS)[number];
+
+export function declaredGhostCindyModelActions(manifest: GhostManifest): GhostCindyModelsAction[] {
+  const actions = manifest.cindy?.models;
+  return isGhostCindyModelActionsDeclaration(actions) ? GHOST_CINDY_MODELS_ACTIONS.filter(action => actions.includes(action)) : [];
+}
+
+export function ghostCindyModelActionApproved(ghost: InstalledGhost | null | undefined, action: GhostCindyModelsAction): boolean {
+  return ghost?.enabled === true && ghost.approval?.state === 'approved' &&
+    ghost.approvedCindyModelActions?.includes(action) === true && declaredGhostCindyModelActions(ghost.manifest).includes(action);
+}
+
 export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
 export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
 
@@ -688,6 +701,7 @@ export interface GhostCindyNeeds {
   text?: GhostCindyTextAction[];
   /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
   embed?: GhostCindyEmbedAction[];
+  models?: GhostCindyModelsAction[];
   /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由，意识不经手网关凭证)。 */
   search?: GhostCindySearchAction[];
   /**
@@ -1974,8 +1988,6 @@ export interface InstalledGhost {
   /** Independent Host consent for cross-task/companion target access. */
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
-  /** Exact Host UI permission projections shown by a supporting confirmation UI. */
-  approvedHostUi?: string[];
   /** Read-only remote management projection; never persisted as approval. */
   uiPromptSuppressed?: true;
   delegationCapabilityApproved?: true;
@@ -1989,6 +2001,8 @@ export interface InstalledGhost {
   companionsCapabilityApproved?: true;
   approvedHostToolGroups?: GhostHostToolGroup[];
   approvedEventTopics?: GhostTaskEventTopic[];
+  /** Only model APIs explicitly shown in an install/update confirmation. Missing means none. */
+  approvedCindyModelActions?: GhostCindyModelsAction[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2196,6 +2210,8 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'media.deposit': 'cindyMediaDeposit',
   'text.oneshot': 'cindyTextOneshot',
   'embed.text': 'cindyEmbedText',
+  'models.decisions': 'cindyModelsDecisions',
+  'models.rerank': 'cindyModelsRerank',
   'search.web': 'cindySearchWeb',
 };
 
@@ -2267,36 +2283,20 @@ export function ghostHostUiPermissionItems(manifest: GhostManifest): GhostPermis
   })) : [];
 }
 
-export function ghostHostUiApprovalTokens(manifest: GhostManifest): string[] {
-  return ghostHostUiPermissionItems(manifest).map(ghostPermissionProjectionKey);
-}
-
-/** Receipt approval is independent of a declaration and of the original page grant. */
+/** Host UI follows the enabled installation's manifest, independently of legacy page approval. */
 export function getApprovedGhostHostUi(ghost: InstalledGhost): GhostHostUi | undefined {
-  if (ghost.approval.state !== 'approved') return;
+  if (!ghost.enabled || ghost.approval.state !== 'approved') return;
   const host = getPluginHostUi(ghost.manifest);
   if (!host) return;
-  const approved = new Set(ghost.approvedHostUi ?? []);
-  const keys = new Set(ghostHostUiPermissionItems(ghost.manifest)
-    .filter(item => approved.has(ghostPermissionProjectionKey(item))).map(item => item.key));
-  if (!keys.size) return;
-  const has = (kind: string, id: string) => keys.has(`ui:host:${kind}:${id}`);
-  return {
-    views: (host.views ?? []).filter(view => has('view', view.id)),
-    contributions: (host.contributions ?? []).filter(item => has('contribution', item.id) && (!item.view || has('view', item.view))),
-    commands: (host.commands ?? []).filter(command => has('command', command.id) && (!command.view || has('view', command.view))),
-    capabilities: (host.capabilities ?? []).filter(capability => has('capability', capability)),
-    ...(host.settings ? { settings: host.settings.filter(field => has('setting', field.id)) } : {}),
-    ...(host.appearance || host.capabilities?.includes('appearance') ? { appearance: {
-      fields: (host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS).filter(field => has('appearance', field)),
-      resources: (host.appearance?.resources ?? []).filter(resource => has('appearance-resource', resource.id)),
+  const projected = { ...host,
+    ...(host.contributions ? { contributions: host.contributions.filter(item => isHostUiPosition(item.position)) } : {}),
+    ...(host.capabilities ? { capabilities: host.capabilities.filter(capability => HOST_UI_CAPABILITIES.some(known => known === capability)) } : {}),
+    ...(host.appearance ? { appearance: { ...host.appearance,
+      ...(host.appearance.fields ? { fields: host.appearance.fields.filter(field => PLUGIN_APPEARANCE_FIELDS.some(known => known === field)) } : {}),
     } } : {}),
   };
-}
-
-export function ghostHostUiNeedsApproval(ghost: InstalledGhost): boolean {
-  const approved = new Set(ghost.approvedHostUi ?? []);
-  return ghostHostUiApprovalTokens(ghost.manifest).some(token => !approved.has(token));
+  return [projected.views, projected.contributions, projected.commands, projected.capabilities, projected.settings,
+    projected.appearance?.fields, projected.appearance?.resources].some(items => items?.length) ? projected : undefined;
 }
 
 export function ghostPermissionProjectionFingerprint(manifest: GhostManifest): string {
@@ -2333,6 +2333,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
 
   for (const [category, actions] of Object.entries(manifest.cindy ?? {})) {
     if (category === 'oneshotModel') continue; // 偏好模型是标量意图,不是能力键
+    if (category === 'models' && !isGhostCindyModelActionsDeclaration(actions)) continue;
     if (!Array.isArray(actions)) continue;
     for (const action of actions) {
       if (typeof action !== 'string') continue;
@@ -2953,7 +2954,14 @@ export function diffGhostPermissionItems(
   prev: GhostManifest,
   next: GhostManifest,
 ): GhostPermissionDiff {
-  const prevItems = ghostPermissionItems(prev);
+  return compareGhostPermissionItems(prev, next, ghostPermissionItems(prev));
+}
+
+function compareGhostPermissionItems(
+  prev: GhostManifest,
+  next: GhostManifest,
+  prevItems: GhostPermissionItem[],
+): GhostPermissionDiff {
   const nextItems = ghostPermissionItems(next);
   const prevKeys = new Set(prevItems.map((i) => i.key));
   const nextKeys = new Set(nextItems.map((i) => i.key));
@@ -3036,17 +3044,23 @@ export function diffInstalledGhostPermissionItems(
       mcpApps: installed.manifest.mcpApps && typeof installed.manifest.mcpApps === 'object'
         ? { ...installed.manifest.mcpApps as object,
           ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
-          host: getApprovedGhostHostUi(installed) }
+          host: undefined }
         : undefined,
       ...(installed.manifest.agent ? { agent: { ...installed.manifest.agent,
         hostTools: declaredGhostHostToolGroups(installed.manifest).filter(group => installed.approvedHostToolGroups?.includes(group)),
       } } : {}),
-      // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
+      // 声明过但未确认的新能力不算旧权限，更新时作为新增项复核。
+      cindy: installed.manifest.cindy ? { ...installed.manifest.cindy,
+        models: declaredGhostCindyModelActions(installed.manifest).filter(action => installed.approvedCindyModelActions?.includes(action)),
+      } : undefined,
       subscribe: withoutUnapprovedControlPoints(installed),
       systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,
       tools: withoutUnapprovedAutoTools(installed),
     };
-    const diff = diffGhostPermissionItems(previous, next);
+    // Host declarations belong to the installed version, even when the legacy
+    // page grant is absent and its UI resources are omitted from that baseline.
+    const previousItems = [...ghostHostUiPermissionItems(installed.manifest), ...ghostPermissionItems(previous)];
+    const diff = compareGhostPermissionItems(previous, next, previousItems);
     // Only the historical official GitHub installation keeps its PAT -> gh fingerprint
     // compatibility. Other installations must explicitly approve using the shared login.
     const legacyGithub = installed.manifest.id === 'cindy-github' && installed.namespace == null &&
@@ -5021,7 +5035,7 @@ function validateGhostManifestInput(
     if (!slots.includes('cindy')) {
       return { ok: false, reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"' };
     }
-    cindy = unknownDeclarationFields(cindyRaw, ['image', 'video', 'media', 'text', 'embed', 'search', 'oneshotModel']);
+    cindy = unknownDeclarationFields(cindyRaw, ['image', 'video', 'media', 'text', 'embed', 'models', 'search', 'oneshotModel']);
     // oneshotModel(快问快答偏好模型)是标量键不是类目:先摘出,不进类目循环。
     // 只验形态不验存在——目录随主机演进,声明式字段永不构成硬依赖。
     const oneshotModelRaw = cindyRaw.oneshotModel;
@@ -5045,11 +5059,18 @@ function validateGhostManifestInput(
       media: GHOST_CINDY_MEDIA_ACTIONS,
       text: GHOST_CINDY_TEXT_ACTIONS,
       embed: GHOST_CINDY_EMBED_ACTIONS,
+      models: GHOST_CINDY_MODELS_ACTIONS,
       search: GHOST_CINDY_SEARCH_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       if (category === 'oneshotModel') continue;
       if (!Object.hasOwn(actionTable, category)) continue;
+      if (category === 'models' && preserveHistoricalParameterSize && !isGhostCindyModelActionsDeclaration(actionsRaw)) {
+        // Keep old opaque bytes for receipt comparisons/downgrades, but never grant them.
+        Object.assign(cindy, { models: actionsRaw });
+        continue;
+      }
+
       if (!Array.isArray(actionsRaw) || actionsRaw.length === 0) {
         return { ok: false, reason: `cindy.${category} 必须是非空数组` };
       }
@@ -5073,6 +5094,7 @@ function validateGhostManifestInput(
       else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
       else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
       else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
+      else if (category === 'models') cindy.models = actions as GhostCindyModelsAction[];
       else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
       else
         return {
@@ -8025,6 +8047,14 @@ export function isGhostCardLinkAllowed(url: string): boolean {
 }
 
 /**
+ * 卡内「复制链接」按钮(data-ghost-copy-link)可写入剪贴板的值:只认整串 http/https 外链,
+ * 不收任务链接或任意文字——插件不能借它往用户剪贴板里塞命令。净化器与宿主点击桥共用。
+ */
+export function isGhostCardCopyLinkAllowed(url: string): boolean {
+  return /^https?:\/\//i.test(url) && isGhostCardLinkAllowed(url);
+}
+
+/**
  * 衍生卡 callId 的分隔标记:card-action 派发时主机铸造 `<根callId>::sp<序>`
  * 作为新卡位(spawnCallId)随事件下发。意识对它 card-update = 在原卡下方长出
  * 一张新卡(原卡原封不动——MJ 抽卡式玩法,母卡按钮可反复点);仍写原 callId
@@ -8081,7 +8111,7 @@ export function ghostCardDeclaresModelSelect(html: string, actionId: string): bo
  * 卡内图标位:插件在 span / div 上标 `data-ghost-icon="<名字>"`,宿主换成 App 里同一个
  * Lucide 图标(跟随主题颜色),与 App 其它地方统一。不认识的宿主保留插件写在里面的兜底图形。
  */
-export const GHOST_CARD_ICONS = ['settings'] as const;
+export const GHOST_CARD_ICONS = ['settings', 'copy'] as const;
 export type GhostCardIconName = (typeof GHOST_CARD_ICONS)[number];
 export function isGhostCardIconName(value: string): value is GhostCardIconName {
   return (GHOST_CARD_ICONS as readonly string[]).includes(value);
@@ -8624,6 +8654,9 @@ export type GhostPipeCindyRequest =
       /** 必须透传本次 tool-call 的 msg.tool，供宿主与 callId 事实表配对验身。 */
       callerTool: string;
     }
+  | { type: 'cindy-request'; kind: 'list_models'; api: 'decisions' | 'rerank' }
+  | { type: 'cindy-request'; kind: 'decisions' | 'rerank'; model?: string; providerId?: string;
+      questions?: Record<string, unknown>; state?: unknown; query?: string; documents?: string[]; top_n?: number; callId?: string }
   | {
       type: 'cindy-request';
       kind: 'query_job';
@@ -8827,6 +8860,10 @@ interface GhostCindyEmbedResultMeta {
 
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */
 export type GhostPipeModelResult =
+  | { ok: true; models: Array<{ model: string; providerId: string; name: string }> }
+  | { ok: true; model: string; answers?: unknown; results?: Array<{ index: number; relevance_score: number }>;
+      usage: unknown; estimatedCost: { amount: number; currency: 'USD' | 'CNY' } | null }
+
   | {
       ok: true;
       /** 生成媒体的取件地址(cindy-media://…,聊天与面板皆可渲染)。 */
@@ -8955,6 +8992,8 @@ export type GhostPipeModelResult =
        * 'AUTH_REJECTED'、'UPSTREAM_UNAVAILABLE'、'RESPONSE_INVALID'。
        */
       errorCode?: string;
+      retryable?: boolean;
+      outcomeKnown?: boolean;
     };
 
 /* ── 订阅槽①:事件协议(2026-07-12 定案:一种事件模型,两个类型)──────

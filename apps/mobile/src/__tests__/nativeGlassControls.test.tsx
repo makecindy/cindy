@@ -1,3 +1,4 @@
+vi.mock("../session/ProjectPickerIcon", () => ({ ProjectPickerIcon: () => null }));
 // @vitest-environment jsdom
 import { act, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";

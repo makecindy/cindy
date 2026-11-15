@@ -336,9 +336,9 @@ test("current locale-aware QA artifacts cover every supported locale", () => {
 
 test("runtime versions and the docs contract are code-owned", () => {
 	const rootPackage = readJson("package.json");
-	assert.equal(rootPackage.engines.node, ">=22.12");
-	assert.equal(rootPackage.engines.pnpm, ">=10.7 <11");
-	assert.match(rootPackage.packageManager, /^pnpm@10\./);
+	assert.equal(rootPackage.engines.node, ">=22.13");
+	assert.equal(rootPackage.engines.pnpm, ">=11.25 <12");
+	assert.match(rootPackage.packageManager, /^pnpm@11\./);
 	assert.match(rootPackage.scripts["test:runner"], /scripts\/__tests__\/dev-docs-contract\.test\.mjs/);
 });
 
@@ -414,6 +414,13 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.match(checks, /^      - name: Check unit test hygiene\r?\n        run: pnpm check:test-hygiene$/m);
 	assert.doesNotMatch(checks, /node scripts\/test-workspaces\.mjs --tier unit/);
 
+	// Typecheck runs beside verify-checks; both package typechecks must stay behind verify.
+	const typecheck = workflowJob(workflow, "typecheck");
+	assert.ok(typecheck, "client CI must run typechecks in their own parallel job");
+	assert.doesNotMatch(typecheck, /^    needs:/m);
+	assert.match(typecheck, /^        run: pnpm --filter desktop typecheck$/m);
+	assert.match(typecheck, /^        run: pnpm --filter mobile typecheck$/m);
+
 	const shards = workflowJob(workflow, "linux-unit-shards");
 	assert.ok(shards, "client CI must define Linux unit shards");
 	assert.match(shards, /^    runs-on: ubuntu-latest$/m);
@@ -429,9 +436,12 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.match(gate, /^    name: verify$/m);
 	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
 	assert.match(gate, /^      - verify-checks$/m);
+	assert.match(gate, /^      - typecheck$/m);
 	assert.match(gate, /^      - linux-unit-shards$/m);
 	assert.match(gate, /^      - host-regressions$/m);
 	assert.match(gate, /^          VERIFY_CHECKS_RESULT: \$\{\{ needs\.verify-checks\.result \}\}$/m);
+	assert.match(gate, /^          TYPECHECK_RESULT: \$\{\{ needs\.typecheck\.result \}\}$/m);
+	assert.match(gate, /^          test "\$TYPECHECK_RESULT" = "success"$/m);
 	assert.match(gate, /^          LINUX_UNIT_SHARDS_RESULT: \$\{\{ needs\.linux-unit-shards\.result \}\}$/m);
 	assert.match(gate, /^          test "\$VERIFY_CHECKS_RESULT" = "success"$/m);
 	assert.match(gate, /^          test "\$LINUX_UNIT_SHARDS_RESULT" = "success"$/m);

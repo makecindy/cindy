@@ -192,6 +192,19 @@ describe('group work folder', () => {
       .toEqual([path.resolve('/work/gitlab')]);
   });
 
+  // 2026-11-14 field report: the group's Cindy had fetched its own copy before the user's fork was
+  // recognized; used more recently, the copy kept winning over the user's checkout.
+  it('prefers the user\'s own checkout over Cindy\'s copy used more recently', async () => {
+    const ensure = vi.fn();
+    const managed = '/managed/github/makecindy/cindy';
+    const folders = (dirs: string[]) => createGroupProjectFolders({ chosen: () => null, findRegistered: async () => dirs,
+      checkouts: { ensure, sync: vi.fn(), isManaged: dir => dir === managed, dirOf: () => managed },
+      validate: async dir => ({ ok: true as const, dir }) });
+    expect(await folders([managed, '/work/fork']).forWork(repoRoom, options)).toEqual({ dir: '/work/fork', auto: true });
+    expect(await folders([managed, '/work/fork']).shown(repoRoom)).toEqual({ dir: '/work/fork', auto: true });
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
   it('opens Cindy\'s folder at once and fetches the repository in the background', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'group-managed-'));
     const dir = path.join(root, 'makecindy', 'cindy');

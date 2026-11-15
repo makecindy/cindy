@@ -2693,7 +2693,7 @@ describe('BotGroupChatView', () => {
       expect(block.textContent).not.toContain('snapshot text');
       await user.click(block);
       const target = document.querySelector('[data-bot-group-message-id="b1"]') as HTMLElement;
-      await waitFor(() => expect(target.className).toContain('search-match-bg'));
+      await waitFor(() => expect(target.className).toContain('surface-hover'));
       expect(document.activeElement).toBe(target);
       expect(screen.queryByRole('complementary')).toBeNull();
     });
@@ -2764,7 +2764,7 @@ describe('BotGroupChatView', () => {
         : { ok: true, group: { ...base, messages: [msg({ id: 'q1', sequence: 50, content: '那就这班', quote: quoteOf('old1', { excerpt: '很早的原文', sequence: 1 }) })] } });
       renderView();
       await user.click(await screen.findByRole('button', { name: 'bots.groupChat.quote.jumpLabel:小满' }));
-      await waitFor(() => expect((document.querySelector('[data-bot-group-message-id="old1"]') as HTMLElement | null)?.className).toContain('search-match-bg'));
+      await waitFor(() => expect((document.querySelector('[data-bot-group-message-id="old1"]') as HTMLElement | null)?.className).toContain('surface-hover'));
       expect(mocks.getBotGroup).toHaveBeenCalledWith('g1', expect.objectContaining({ beforeSequence: 50 }));
     });
 
@@ -2778,7 +2778,7 @@ describe('BotGroupChatView', () => {
         : { ok: true, group: { ...base, messages: [msg({ id: 'q1', sequence: 50, content: '那就这班', quote: quoteOf('old1', { excerpt: '很早的原文', sequence: 1 }) })] } });
       renderView();
       await user.click(await screen.findByRole('button', { name: 'bots.groupChat.quote.jumpLabel:小满' }));
-      await waitFor(() => expect((document.querySelector('[data-bot-group-message-id="old1"]') as HTMLElement | null)?.className).toContain('search-match-bg'));
+      await waitFor(() => expect((document.querySelector('[data-bot-group-message-id="old1"]') as HTMLElement | null)?.className).toContain('surface-hover'));
       // Deleted on another client after it was paged in: the push re-read leaves older pages as they were.
       deleted = true;
       await user.click(screen.getByRole('button', { name: 'bots.groupChat.quote.jumpLabel:小满' }));
@@ -2846,7 +2846,7 @@ describe('BotGroupChatView', () => {
         scroll.scrollTo = vi.fn();
         fireEvent.click(screen.getByRole('button', { name: 'chat.jumpToBottom' }));
         await act(async () => finish([original]));
-        expect(document.querySelector('[class*="search-match-bg"]')).toBeNull();
+        expect(document.querySelector('[data-bot-group-message-id][class*="bg-[var(--surface-hover)]"]')).toBeNull();
         expect(mocks.toastInfo).not.toHaveBeenCalled();
         Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 3000 });
         mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
@@ -2898,7 +2898,7 @@ describe('BotGroupChatView', () => {
         expect(screen.getByTestId('bot-group-quote').textContent).toContain('快照摘要');
         await user.click(screen.getByTestId('bot-group-quote'));
         await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.timeline.loadEarlierFailed'));
-        expect(document.querySelector('[class*="search-match-bg"]')).toBeNull();
+        expect(document.querySelector('[data-bot-group-message-id][class*="bg-[var(--surface-hover)]"]')).toBeNull();
       });
 
       it('re-checks every quoted original across all opened pages on a single push', async () => {
@@ -2983,7 +2983,7 @@ describe('BotGroupChatView', () => {
       renderView();
       await user.click(await screen.findByRole('button', { name: 'bots.groupChat.quote.jumpLabel:小满' }));
       await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledWith('bots.groupChat.quote.unavailable'));
-      expect(document.querySelector('[class*="search-match-bg"]')).toBeNull();
+      expect(document.querySelector('[data-bot-group-message-id][class*="bg-[var(--surface-hover)]"]')).toBeNull();
     });
 
     it('keeps a quote draft inside its own group', async () => {

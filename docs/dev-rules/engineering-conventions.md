@@ -200,9 +200,10 @@ Agent 在提交新增测试前必须在 PR 描述或测试文件邻近注释中�
   依赖注入／纯函数用例保留等价覆盖；禁止按 `process.platform` 大面积跳过后让整个 CI 矩阵
   失去相应回归保护。
 
-PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整覆盖 `pnpm test:unit`；所有分片的
+PR 门禁必须在 Windows 上用多个并行分片（当前为 8 个）完整覆盖 `pnpm test:unit`；所有分片的
 并集必须等价于未分片的全量测试，且由稳定的汇总检查统一阻断。分片数可以按 CI 实测耗时调整，
-但分片矩阵必须连续列出 1..N 并与 `XDT_UNIT_TEST_SHARD` 的 N 一致；只需执行一次的检查放在
+但分片矩阵必须连续列出 1..N 并与 `XDT_UNIT_TEST_SHARD` 的 N 一致。Desktop 按已提交的逐文件耗时
+切分，各片必须读同一份数据（见 `desktop-unit-test-performance.md`）；只需执行一次的检查放在
 独立并行 job，不叠加在某个分片上。`scripts/__tests__/dev-docs-contract.test.mjs` 锁住
 该 CI 契约。不能用静态扫描“测试字符串是否含斜杠”代替 Windows 实跑，因为它无法可靠区分宿主
 路径与逻辑路径。

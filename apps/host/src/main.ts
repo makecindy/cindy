@@ -2,6 +2,8 @@
 import './boot-env.js';
 // Second: keeps unreadable user settings files instead of deleting them.
 import './boot-settings.js';
+import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutomaticIcon.js';
+import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
 import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
@@ -128,7 +130,11 @@ import { createTaskTagService } from '../../desktop/src/main/localDb/ipc/taskTag
 import { executeConversationSearch } from '../../desktop/src/main/localDb/ipc/search.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../desktop/src/main/device-link/broadcast-tap.js';
 import { createInputQueue } from './agent/input-queue.mjs';
-import { applyLiveSessionSettings } from './agent/session-settings.mjs';
+import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
+import type { ContextRecoveryKind } from './agent/context-recovery.ts';
+import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
+import { lockSessionRoute } from './agent/session-route-lock.mjs';
+import { createHostSessionUpdate } from './agent/session-update.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
@@ -643,7 +649,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   pluginGateway = createHostPluginGateway({ runtime: plugins, profileDir: dataDir, ownerId,
     version: layout.version, credentials, fileConfirmation,
     getSession: id => agentGraph?.maker.getSession(id),
-    restoreSession: (id, check) => inputQueue.restoreSession(id, check),
+    // Under the task's send lock, as the desktop's plugin page restore (register.ts).
+    restoreSession: lockSessionRoute((id: string, check: () => Promise<void>) => inputQueue.restoreSession(id, check)),
     requestHostPermission: async (id, instance, request, signal) => {
       const session = agentGraph?.maker.getSession(id);
       if (!session || session.instanceId !== instance) return null;
@@ -933,8 +940,28 @@ const insertSessionMessage = createHostMessageStore({ getOwner: getCurrentDbClie
 const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot,
   publish: (event: unknown) => eventHub.publish(event) });
 
+// The pending handoff summary: one registry for the Host process, as the desktop's singleton.
+const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
+  publish: event => eventHub.publish(event), log: createLogger('agent-handoff-pending') });
+// Context recovery of a turn's terminal error (context-recovery-assembly.ts). A kind opens after its
+// real-engine test (release table); until then it takes the normal error path, unclaimed.
+// - context-overflow: open (codex-runtime and claude-proxy e2e).
+// - oversized-history: closed; no engine emits this error now (maker-core Codex).
+// - unsupported-request-option: closed; Pi's own cache recovery handles it in the turn (pi-native e2e),
+//   so this fallback has no real-engine test.
+const OPEN_CONTEXT_RECOVERY_KINDS: ReadonlySet<ContextRecoveryKind> = new Set(['context-overflow']);
+const contextRecovery = createHostContextRecoveryWiring({
+  openKinds: OPEN_CONTEXT_RECOVERY_KINDS,
+  getGraph: () => agentGraph,
+  persistMessage: (...args) => insertSessionMessage(...args),
+  publish: event => eventHub.publish(event),
+  pendingHandoff,
+  log: createLogger('context-recovery'),
+});
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  pendingHandoff,
+  ...contextRecovery,
   createAttachments: ({ assertCurrent }: { assertCurrent(): void }) => createHostAttachments({
     getOwner: getCurrentDbClientSnapshot, assertCurrent,
   }),
@@ -948,9 +975,6 @@ const inputQueue = createInputQueue({
   hasPendingCredentialSwitch: (id: string) => agentGraph?.gatewayRestart.isSessionRestarting(id) ?? false,
   reportAgentCindyGatewayKeyRejected: () => modelAccess?.reportCurrentKeyRejected(),
   onSessionSettled: () => agentGraph?.gatewayRestart.onSessionSettled(),
-  beforeSessionStart: async (_id: string, kind: string) => {
-    if (kind === 'codex') await agentGraph?.gatewayRestart.flushBeforeLocalCodexSessionStart();
-  },
   readSession: readSessionForRun,
   assertProviderExecutionSupported: (id: string, providerId?: string | null) => {
     if (hostProviderBindings.readProviderGroupBinding(id)
@@ -1217,6 +1241,14 @@ const serverDeps = {
   },
   // Project aliases are rows in the same owner database; the sidebar groups by
   // them on both clients, so they come straight from that table.
+  readProjectInfo,
+  readProjectIconImage,
+  resolveAutomaticProjectIcon,
+  updateProjectInfo: async (input: unknown) => {
+    const result = await updateProjectInfo(input);
+    eventHub.publish({ type: 'project_aliases_changed' });
+    return result;
+  },
   listProjectAliases: async () => {
     const rows = await getDbClient().drizzle.select().from(projectAliasTable);
     return rows.map((row: Record<string, unknown>) => ({
@@ -1258,44 +1290,12 @@ const serverDeps = {
       activity: row.lastToolUse?.toolName ?? null,
     }));
   },
-  updateSession: async (sessionId: string, patch: Record<string, unknown>) => {
-    const allowed: Record<string, true> = {
-      title: true, status: true, pinnedAt: true, notificationsMuted: true, model: true,
-      effort: true, permissionMode: true, fastMode: true, planModeEnabled: true,
-      providerId: true, agentKind: true,
-    };
-    if (Object.keys(patch).some((key) => allowed[key] !== true)) {
-      throw new Error('unsupported session field');
-    }
-    // A live Session keeps its own permission mode and model route. Apply the
-    // change there first so the stored value and the running Agent cannot
-    // disagree (a tighter mode must bind the very next tool call). An engine
-    // switch is left to the input queue, which recreates the Session.
-    const live = patch.agentKind === undefined ? agentGraph?.maker.getSession(sessionId) : undefined;
-    const stored = live && patch.model === undefined && Object.hasOwn(patch, 'providerId')
-      ? await readSessionForRun(sessionId) : null;
-    await applyLiveSessionSettings(live, patch, stored);
-    const update: Record<string, unknown> = { updatedAt: Date.now() };
-    if (typeof patch.title === 'string') update.title = patch.title;
-    if (patch.status === 'active' || patch.status === 'archived') update.status = patch.status;
-    if (patch.pinnedAt === null) update.pinnedAt = null;
-    else if (typeof patch.pinnedAt === 'string') update.pinnedAt = Date.parse(patch.pinnedAt) || null;
-    if (typeof patch.notificationsMuted === 'boolean') update.notificationsMuted = patch.notificationsMuted;
-    if (typeof patch.model === 'string') update.model = patch.model;
-    if (typeof patch.effort === 'string') update.effort = patch.effort;
-    if (typeof patch.permissionMode === 'string') update.permissionMode = patch.permissionMode;
-    if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') update.fastMode = patch.fastMode;
-    if (typeof patch.planModeEnabled === 'boolean') update.planModeEnabled = patch.planModeEnabled;
-    if (patch.providerId === null || typeof patch.providerId === 'string') update.providerId = patch.providerId;
-    if (typeof patch.agentKind === 'string') update.agentKind = patch.agentKind === 'claude-code' ? 'cc' : patch.agentKind;
-    await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
-    const rows = await getDbClient().drizzle.select().from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const row = rows[0];
-    if (!row) throw new Error('session not found');
-    eventHub.publish({ type: 'session_changed', action: 'update', sessionId, patch, status: row.status });
-    return sessionToCamel({ ...row, messageCount: 0 });
-  },
+  updateSession: lockSessionRoute(createHostSessionUpdate({
+    getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
+    readSessionForRun,
+    publish: event => eventHub.publish(event),
+    modelWindow: () => agentGraph?.modelWindow ?? null,
+  })),
   /**
    * Cross-engine switch: record the intent and let the next enqueue apply it.
    * Mirrors the desktop contract (`deferred: true`) so the renderer can show
@@ -1366,7 +1366,7 @@ const serverDeps = {
   getSession: async (sessionId: string) => {
     return readHostSession(getDbClient().drizzle, sessionId);
   },
-  deleteSession: async (sessionId: string) => {
+  deleteSession: lockSessionRoute(async (sessionId: string) => {
     if (!sessionStorage) throw new Error('agent runtime is not ready');
     const existing = await sessionStorage.get(sessionId);
     if (!existing) return { deleted: false, sessionId };
@@ -1382,8 +1382,8 @@ const serverDeps = {
     forgetProvisionalSession(sessionId);
     eventHub.publish({ type: 'session_changed', action: 'delete', sessionId, status: 'deleted' });
     return { deleted: true, sessionId };
-  },
-  discardProvisionalSession: async (sessionId: string) => {
+  }),
+  discardProvisionalSession: lockSessionRoute(async (sessionId: string) => {
     // Only an unsent draft may be closed: a late request for a task another
     // client already sent must leave its queue running.
     if (!isProvisionalSession(sessionId)) {
@@ -1393,7 +1393,7 @@ const serverDeps = {
     pendingAgentSwitches.delete(sessionId);
     const discarded = await discardProvisionalSessionRow(sessionId, sessionDraftPorts);
     return { discarded, remaining: Boolean(await sessionStorage?.get(sessionId)) };
-  },
+  }),
   commitProvisionalSession: async (sessionId: string) => ({
     committed: await commitProvisionalSession(sessionId, sessionDraftPorts),
   }),

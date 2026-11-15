@@ -65,7 +65,6 @@ import {
   declaredGhostControlPoints,
   declaredGhostTaskEventTopics,
   ghostDeclaresHiddenTasks,
-  ghostHostUiNeedsApproval,
   ghostToolDeclaresHandoff,
   ghostTrustLabelKey,
   type GhostPermissionItem,
@@ -568,7 +567,7 @@ export function GhostPluginDetailView({
             <p>{tool.name}</p>
             <p className="break-all text-12">{getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility && !getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility!.includes('model') ? t('settings.ghosts.perm.mcpAppOnly') : `ghost_call: ${tool.name}`}</p>
           </div>)}
-          {!remote && enabled && (ghost.uiCapabilityApproved !== true || ghostHostUiNeedsApproval(ghost)) && <Button variant="secondary" size="sm" disabled={taskApprovalPending} onClick={async () => {
+          {!remote && enabled && ghost.uiCapabilityApproved !== true && <Button variant="secondary" size="sm" disabled={taskApprovalPending} onClick={async () => {
             setTaskApprovalPending(true);
             try { await window.electronAPI.ghosts.requestUiApproval(detail.id); }
             catch { toast.error(t('settings.ghosts.errors.generic')); }

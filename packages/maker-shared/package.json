@@ -128,7 +128,9 @@
     "./host-event-stream": "./src/hostEventStream.ts",
     "./host-ipc-registry": "./src/hostIpcRegistry.ts",
     "./subscription-selection": "./src/subscriptionSelection.ts",
-    "./host-platform-rpc": "./src/hostPlatformRpc.ts"
+    "./host-platform-rpc": "./src/hostPlatformRpc.ts",
+    "./settings-tabs": "./src/settingsTabs.ts",
+    "./settings-navigation": "./src/settingsNavigation.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

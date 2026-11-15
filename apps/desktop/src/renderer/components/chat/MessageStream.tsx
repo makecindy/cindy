@@ -140,6 +140,7 @@ import { basename, cn } from '@/lib/utils';
 import {
   readSessionScroll,
   saveSessionScroll,
+  updateRenderWindowFloor,
   type SessionScrollSnapshot,
 } from '@/lib/sessionScrollStore';
 import {
@@ -148,6 +149,7 @@ import {
   SHARE_SESSION_ATTR,
 } from '@/lib/shareConversationImage';
 import { ShareMessageCheckbox } from './ShareMessageCheckbox';
+import { CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS } from './chatChrome';
 import {
   isShareableMessage,
   isShareableToolMedia,
@@ -1114,6 +1116,20 @@ export function collectDeleteAnchorClientIds(items: readonly RenderItem[]): stri
     }
   }
   return ids;
+}
+
+/**
+ * 渲染窗口覆盖的最老原始消息 —— 窗口首 item 起第一个有源行的 item 的首个源行。
+ * 首 item 可能是无源行的横幅(fork_origin 等)，向后走到第一个有源行为止。
+ * 纯数据派生，不做 DOM 量测：store 的活动视图裁剪地板用它，自动跟随的
+ * 窗口推进同步也用它（滚动事件拿不到程序化 pinToBottom）。
+ */
+export function renderWindowFloorClientId(items: readonly RenderItem[]): string | undefined {
+  for (let index = 0; index < items.length; index += 1) {
+    const anchors = collectDeleteAnchorClientIds([items[index]]);
+    if (anchors.length > 0) return anchors[0];
+  }
+  return undefined;
 }
 
 function queryMessageElement(root: ParentNode, clientId: string): HTMLElement | null {
@@ -3524,6 +3540,16 @@ export function MessageStream({
     () => botUnreadBoundaryItemKey(visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys),
     [visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys],
   );
+
+  // 渲染窗口推进时同步裁剪地板 —— 新消息到达 / 窗口扩张都会改 visibleRenderItems。
+  // 自动跟随(pinToBottom)的程序化滚动不走滚动保存分支，只靠 saveSessionScroll
+  // 会让一直跟随的挂载面板没有地板快照，维护拍永远裁不动(Greptile P1)。
+  // 只 merge 地板字段，不碰阅读位置，上翻读者不受影响。
+  useEffect(() => {
+    if (!sessionId) return;
+    const floor = renderWindowFloorClientId(visibleRenderItems);
+    if (floor) updateRenderWindowFloor(sessionId, floor);
+  }, [sessionId, visibleRenderItems]);
   const visibleMetadataItems = visibleMetadataProjection(visibleRenderItems);
 
   // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
@@ -4440,6 +4466,8 @@ export function MessageStream({
         }
         itemHeights = { width: items.getBoundingClientRect().width, byKey };
       }
+      // 渲染窗口覆盖地板:窗口首 item 覆盖的最老原始行(纯数据,无量测)。
+      const windowFloorClientId = renderWindowFloorClientId(visible);
       saveSessionScroll(sessionId, {
         windowAnchorKey: firstVisibleItemKeyRef.current,
         viewportTopKey: measured.viewportTopKey,
@@ -4454,6 +4482,7 @@ export function MessageStream({
         messageOffset: measured.messageOffset,
         itemHeights,
         isNearBottom: isNearBottomRef.current,
+        windowFloorClientId,
         anchoredForwardCount:
           firstVisibleItemKeyRef.current !== null ? anchoredForwardItemsRef.current : undefined,
       });
@@ -6843,7 +6872,7 @@ export function MessageStream({
                     );
                     const highlightClass =
                       highlightMessageClientId === msg.clientId
-                        ? 'rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]'
+                        ? CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS
                         : undefined;
                     const shareAttributes = shareable
                       ? {
@@ -6863,7 +6892,7 @@ export function MessageStream({
                           key={item.key}
                           data-render-item-key={item.key}
                           data-message-client-id={msg.clientId}
-                          className={cn('scroll-mt-20 rounded-xl transition-[background-color,box-shadow]', highlightClass)}
+                          className={cn('scroll-mt-20 rounded-xl', CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, highlightClass)}
                         >
                           {startsUnread || groupTimestamp !== undefined ? (
                             <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
@@ -6887,7 +6916,7 @@ export function MessageStream({
                         data-message-client-id={msg.clientId}
                         {...shareAttributes}
                         className={cn(
-                          'scroll-mt-20 rounded-xl transition-[background-color,box-shadow]',
+                          'scroll-mt-20 rounded-xl', CHAT_MESSAGE_LOCATE_TRANSITION_CLASS,
                           shareable && 'relative',
                           highlightClass,
                         )}

@@ -264,6 +264,8 @@
     "transferProgress": "{{sent}} / {{total}} übertragen · Durchschnittlich {{speed}}/s",
     "thisComputer": "dieser Computer",
     "selectedComputer": "ausgewählter Computer",
+    "sourceComputer": "der Quellcomputer",
+    "waitingForSource": "Warte, bis {{name}} wieder online ist. Danach wird der Kopiervorgang fortgesetzt.",
     "estimating": "Dateien werden gezählt und Größe berechnet…",
     "fileSummary": "Projektdateien: {{count}}, insgesamt {{size}}",
     "estimateNote": "Schätzung vor dem Kopieren, einschließlich versteckter Dateien. Git-Verlauf, Chatverlauf und Anhänge werden separat kopiert und sind in dieser Größe nicht enthalten. Dateien können sich vor dem Kopieren noch ändern.",
@@ -1376,7 +1378,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "Die SSH-Konfiguration wurde gespeichert, aber Cindy konnte sie nicht aktualisieren. Lade die SSH-Konfiguration neu.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy kann diese SSH-Konfiguration nicht sicher verwalten. Lade sie neu und prüfe dann die Cindy-Eigentumsmarkierung sowie die Eindeutigkeit des Host-Alias.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy kann einige SSH-Konfigurationsregeln für diesen Host nicht sicher nachbilden. SSH im Terminal funktioniert möglicherweise weiterhin. Überprüfe Match, bedingte Include-Regeln, IdentityAgent, IdentitiesOnly und die Einstellungen für öffentliche Schlüssel.",
-    "SSH_AGENT_UNAVAILABLE": "Der SSH-Agent ist nicht verfügbar. Starte ihn, lade den passenden privaten Schlüssel mit ssh-add und versuch es erneut.",
+    "SSH_AGENT_UNAVAILABLE": "Der lokale SSH-Schlüsselagent (ssh-agent) ist nicht verfügbar. Prüfe, ob er läuft und ob ssh-add -l den benötigten Schlüssel auflistet. Hinweise findest du unter Schlüssel verwalten.",
     "SSH_HOST_PREFS_WRITE_FAILED": "Der Host ist weiterhin gespeichert, aber sein Anzeigename oder seine Agent-Proxy-Einstellungen konnten nicht gespeichert werden. Prüfe die lokalen Speicherberechtigungen und versuch es erneut.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Diese Aufgabe hat ihr Tab-Limit erreicht. Schließe zuerst einige Tabs",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Tab-Inhalt ist zu groß zum Hinzufügen",
@@ -1467,6 +1469,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "Zu prüfen",
+      "summaryInProgress": "In Bearbeitung",
+      "summaryPending": "Aktion erforderlich",
+      "summaryUnread": "Ungelesene Ergebnisse",
       "markRead": "Als gelesen markieren",
       "archive": "Archivieren",
       "actionFailed": "Die Aktion konnte nicht abgeschlossen werden. Die Benachrichtigung wurde beibehalten. Versuch es erneut.",
@@ -1920,6 +1926,12 @@
       "footnote": "Phase A: nur SSH-Verbindungsverwaltung. Das Ausführen von Agents auf dem Remote-Rechner folgt in einem späteren Update.",
       "viaAuth": "über {{label}}",
       "readOnlyFromSshConfig": "Verbindungsdetails stammen aus der SSH-Konfiguration",
+      "importedAgentHint": "Authentifiziert über den lokalen SSH-Schlüsselagenten (ssh-agent). Eine erfolgreiche ssh-Verbindung im Terminal bedeutet nicht, dass der Agent bereit ist.",
+      "agentError": {
+        "environmentUnset": "Die von IdentityAgent referenzierte Umgebungsvariable ist für Cindy nicht gesetzt. Setze sie oder korrigiere IdentityAgent in deiner SSH-Konfiguration.",
+        "endpointEmpty": "IdentityAgent ergibt einen leeren Endpunkt. Korrigiere IdentityAgent in deiner SSH-Konfiguration.",
+        "endpointUnavailable": "Der durch IdentityAgent konfigurierte SSH-Schlüsselagent-Endpunkt ist nicht verfügbar. Prüfe diesen Endpunkt und seinen Agenten; der Standard-ssh-agent verwendet möglicherweise einen anderen Endpunkt."
+      },
       "configWarning": "Cindy kann einige SSH-Konfigurationsregeln nicht auswerten. Die Hostliste bzw. Verbindungsdetails können von SSH im Terminal abweichen.",
       "configDiagnostic": {
         "io": "Cindy konnte deine SSH-Konfiguration nicht lesen. Die zuletzt erfolgreich geladenen Hosts werden weiterhin angezeigt. Prüfe die Dateiberechtigungen und lade neu.",
@@ -2017,7 +2029,7 @@
           "tryThis": "In deinem Terminal versuchen",
           "close": "Schließen",
           "fallbackTitle": "Oder ssh-agent ganz überspringen",
-          "fallbackBody": "Du kannst diesen Host stattdessen mit der Authentifizierung „Identitätsdatei“ hinzufügen – {{appName}} übergibt die Schlüsseldatei direkt an ssh, und du wirst bei jeder Verbindung nach der Passphrase gefragt. Kein ssh-agent nötig. Sicherheitsabwägung: Eingabe der Passphrase bei jeder Verbindung, dafür kein Schlüssel-Cache im Arbeitsspeicher.",
+          "fallbackBody": "Beim Hinzufügen eines Hosts kannst du auch „Identitätsdatei“ wählen. {{appName}} liest den privaten Schlüssel ohne ssh-agent in den Prozessspeicher. Derzeit werden nur unverschlüsselte private Schlüssel unterstützt; beim Verbinden wird keine Passphrase abgefragt. Nutze ssh-agent für verschlüsselte Schlüssel.",
           "reason": {
             "agent_unavailable": "ssh-add konnte deinen ssh-agent nicht erreichen (Programm fehlt, ssh-agent läuft nicht oder SSH_AUTH_SOCK ist nicht gesetzt).",
             "bad_passphrase": "ssh-add hat die Passphrase abgelehnt.",
@@ -4330,7 +4342,9 @@
           "inline": "Läuft auf",
           "signInHere": "Auf diesem Computer anmelden",
           "writeFailed": "Der Ausführungsort konnte nicht gespeichert werden. Bitte versuche es erneut."
-        }
+        },
+        "sameAccountConnections": "Gespeicherte Verbindungen für dieses Konto",
+        "sameAccountConnectionsHint": "Dieses Konto wird nur einmal angezeigt. Die Auswahl einer Verbindung ändert nur die verwalteten Einstellungen; bestehende Aufgaben behalten ihre Verbindung."
       },
       "detect": {
         "groupLabel": "Auf diesem Gerät erkannt",
@@ -5353,6 +5367,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex-Komprimierung auf dem Server",
+        "description": "Wenn aktiviert, wird die Komprimierung auf dem Server bevorzugt. Andernfalls nutzt Codex die native lokale Zusammenfassung, die weiterhin das aktuelle Modell aufruft.",
+        "hint": "Gilt beim nächsten Start oder Fortsetzen einer Codex-Aufgabe auf diesem Computer. Anbieter ohne Serverkomprimierung behalten ihr bisheriges Verhalten bei.",
+        "loadFailed": "Codex-Komprimierungseinstellungen konnten nicht geladen werden",
+        "saveFailed": "Codex-Komprimierungseinstellungen konnten nicht gespeichert werden"
+      },
       "title": "Kontextkomprimierung",
       "description": "Passe hier die Komprimierungsverhältnisse für Claude Code und Pi an. Codex leitet seinen Schwellenwert aus der Einstellung für den Modellkontext ab. Wenn die Remote-Komprimierung fehlschlägt, wechselt es automatisch zur Komprimierung per Zusammenfassung und nutzt diese für die aktuelle Aufgabe weiter.",
       "card": {
@@ -8181,6 +8202,8 @@
         "cindyTextOneshot": "Kann Cindys Fast Lane eine Frage stellen und eine Textantwort erhalten",
         "cindyTextOneshotDetail": "Verwendet die schlanke Hilfsmodellkette des Systems (denselben Verarbeitungspfad wie automatische Titel). Kein Agent beteiligt und kein Dateizugriff. Es können Modellkosten anfallen.",
         "cindyEmbedText": "Kann Text zur Umwandlung in Vektoren senden (für die semantische Suche)",
+        "cindyModelsDecisions": "Kann Entscheidungsmodelle aufrufen (verbraucht dein Modellkontingent)",
+        "cindyModelsRerank": "Kann Neusortierungsmodelle aufrufen (verbraucht dein Modellkontingent)",
         "cindyEmbedTextDetail": "Text wird an das Embedding-Modell des Systems gesendet und in Zahlen umgewandelt, bis zu {{max}} Elemente pro Aufruf. Es können Modellkosten anfallen. Die Vektoren gehen nur an das Plugin – in deiner eigenen Bibliothek wird nichts gespeichert.",
         "cindySearchWeb": "Kann mit Cindy AI das öffentliche Web durchsuchen",
         "cindySearchWebDetail": "Suchanfragen greifen auf das öffentliche Web zu und können Cindy AI-Kontingent verbrauchen.",
@@ -8203,9 +8226,9 @@
         "agentCompanionsDetail": "Kann alle Freunde sehen, auch die auf deinen anderen Computern: Name, Beschreibung, Avatar, Status (arbeitet, wartet auf dich, inaktiv, offline), die Art des aktuellen Schritts (etwa Nachdenken oder ein Tool ausführen), die Anfragen, die auf dich warten, so wie ihre Karten sie zeigen (Fragen, auszuführende Befehle, Pläne), und die letzten Nachrichten im Hauptchat (bis zu 50 deiner Nachrichten und ihrer Antworten, ohne Tool-Schritte); außerdem die Unterhaltung eines Freundes im Hauptfenster öffnen. Mit der Berechtigung zum Zustellen von Nachrichten kann es deine im Plugin gegebenen Antworten weitergeben: Fragen beantworten, Anfragen ablehnen und Feedback zu Plänen geben. Zum Erlauben eines Schritts klickst du weiterhin in Cindys eigener Bestätigung. Kann keine Dateien, Tool-Schritte oder Gedankengänge lesen.",
         "agentCompanionsRequest": "Berechtigung zum Anzeigen von Freunden prüfen",
         "hostTools_history": "Aufgabenverlauf",
-        "hostTools_historyDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben auflisten, vollständige Nachrichten lesen und den Verlauf durchsuchen, auch auf ausdrücklich ausgewählten, zugänglichen anderen Computern.",
+        "hostTools_historyDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben auflisten, vollständige Nachrichten lesen und den Verlauf durchsuchen, auch auf ausdrücklich ausgewählten, zugänglichen anderen Computern. Lokale Aufgaben im nativen Dateiformat exportieren. Plugins nutzen die bei der Installation erteilten Berechtigungen; Agent-Aufrufe folgen den eigenen Laufzeitberechtigungen.",
         "hostTools_control": "Aufgabenverwaltung",
-        "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern. Vorgänge mit hohem Risiko erfordern jedes Mal eine Bestätigung in Cindy.",
+        "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern sowie native Aufgabendateien auf diesem Computer importieren. Vorgänge mit hohem Risiko erfordern jedes Mal eine Bestätigung in Cindy.",
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
         "hostTools_settings": "App-Einstellungen",
@@ -9250,6 +9273,9 @@
         "failed": "Bereinigung konnte nicht abgeschlossen werden",
         "pending": "In der Warteschlange"
       }
+    },
+    "navigation": {
+      "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
     }
   },
   "remoteDevice": {
@@ -9365,6 +9391,7 @@
     "backToLogin": "Zurück zur Anmeldung"
   },
   "login": {
+    "networkResponseHint": "Der Anmeldedienst hat eine unerwartete Antwort zurückgegeben. Ein Netzwerkzwischengerät oder Proxy blockiert möglicherweise die Anfrage. Prüfe die Netzwerk- und Proxy-Einstellungen.",
     "title": "Willkommen bei Cindy",
     "subtitle": "Wähle eine sichere Anmeldemethode",
     "savedLoginPreserved": "Bei der Wiederherstellung bleiben deine gespeicherten Anmeldedaten erhalten",
@@ -9711,6 +9738,7 @@
     "tokenLine": "Tokens: {{total}} gesamt · Eingabe {{input}} · Ausgabe {{output}}",
     "cacheLine": "Cache-Aufschlüsselung: Lesen {{read}} · Schreiben {{create}} · Trefferquote {{rate}}",
     "cacheLineNoRate": "Cache-Aufschlüsselung: Lesen {{read}} · Schreiben {{create}}",
+    "stepsLine": "Anfragen in dieser Runde: {{steps}} · je ca. {{context}} Kontext",
     "modelLine": "Modell: {{model}}",
     "multipleModels": "{{count}} Modelle",
     "costBreakdownHeader": "Nach Modell:",
@@ -13488,6 +13516,15 @@
           "askNoQuestion": "Der Agent wartet auf deine Antwort, aber es gibt keine Frage zum Anzeigen. Antworte mit „weiter“.",
           "askQuestion": "Der Agent braucht deine Antwort:\n{{question}}\n{{options}}\nAntworte mit der Nummer einer Option oder gib deine Antwort direkt ein."
         }
+      },
+      "questions": {
+        "cardHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden. Du kannst auch auf diese Nachricht mit Text antworten. Antworte bei mehreren Fragen mit „Fragennummer: Antwort“ (z. B. „2: Deutsch“) und sende anschließend ab.",
+        "submitLabel": "Antworten senden",
+        "multiSelectHint": " (Mehrfachauswahl möglich)",
+        "resolved": "✅ Gewählt: {{option}}",
+        "expired": "Diese Karte ist abgelaufen",
+        "textHint": "Nur die fragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
+        "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden."
       }
     }
   },
@@ -13914,6 +13951,7 @@
         "realtime": "Echtzeit-Audio",
         "embedding": "Embeddings",
         "decision": "Entscheidung",
+        "rerank": "Neusortierung",
         "compression": "Komprimierung",
         "ungrouped": "Ohne Gruppe",
         "other": "Sonstige"
@@ -16039,6 +16077,8 @@
       "claudeSubscriptionWorkspaceOverride": "Die .claude-Einstellungen dieses Ordners ändern, wohin Claude Anfragen sendet oder wie die Anmeldung erfolgt. Daher kann das Claude-Abo hier nicht genutzt werden. Entferne diese Einstellungen oder wähle ein Gateway oder ein Modell mit API-Schlüssel",
       "deviceStillLoading": "Remotegerät wird noch geladen. Bitte warte",
       "remoteDefaultsLoadFailed": "Die Einstellungen des Remotegeräts konnten nicht geladen werden. Prüfe die Verbindung; Cindy versucht es erneut.",
+      "branchRequiresWorktree": "Der ausgewählte Branch ist nicht der aktuelle Branch. Aktiviere Worktree oder wähle den aktuellen Branch.",
+      "branchCheckFailed": "Der aktuelle Branch konnte nicht geprüft werden. Aktiviere Worktree, um den ausgewählten Branch zu verwenden, oder prüfe das Projekt und versuche es erneut.",
       "worktreeMissingRepo": "Worktree kann nicht erstellt werden: Das Repository-Stammverzeichnis des aktuellen Verzeichnisses fehlt",
       "worktreeRepoHint": "Wähle das Arbeitsverzeichnis erneut aus und versuche es noch einmal, sobald die Ordneranzeige unten rechts aktualisiert wurde",
       "sessionInactive": "Sitzung ist nicht mehr aktiv",
@@ -16614,6 +16654,8 @@
             "title": "Repository-Ereignisse",
             "description": "Verbinde die Cindy GitHub App, um verfolgte PRs bei Änderungen an Reviews oder CI zu aktualisieren.",
             "connected": "Verbunden als {{login}} · Beobachtete Repositorys: {{count}}",
+            "syncing": "Repositorys werden synchronisiert…",
+            "finishInBrowser": "Schließe die Einrichtung der Repositorys auf GitHub ab und kehre zu Cindy zurück.",
             "missing": "App-Installation und Zugriff prüfen: {{repositories}}",
             "error": "Verbindung konnte nicht geprüft werden. Versuche es erneut.",
             "repositories": "Repositorys auswählen",
@@ -17192,9 +17234,8 @@
         "automatic": "Automatisch",
         "manually": "Manuell",
         "session": "Sitzung",
-        "silentRun": "Keine Meldung, wenn Prüfungen nichts finden",
-        "silentRunTooltip": "Nur Änderungen oder Probleme melden. Für Erinnerungen und geplante Nachrichten deaktivieren.",
-        "silentRunInfoAria": "Regeln für stille Ausführungen anzeigen",
+        "silentRun": "Stille Ausführung",
+        "silentRunTooltip": "Wenn aktiviert, benachrichtigen erfolgreiche Ausführungen standardmäßig nicht. Verlangt der Aufgaben-Prompt eine Benachrichtigung unter bestimmten Bedingungen, meldet sich die KI, sobald diese erfüllt sind. Fehler und Ausnahmen werden weiterhin gemeldet.",
         "finishSendToFeishu": "Ergebnis an FeishuBot senden",
         "finishSendToWecomGroup": "Ergebnis an WeCom-Gruppe senden",
         "configWecomGroup": "WeCom-Gruppenbenachrichtigungen konfigurieren",
@@ -17304,10 +17345,7 @@
       },
       "layout": {
         "content": "Auszuführender Inhalt",
-        "notifications": "Benachrichtigungen und stille Ausführung",
-        "contentTab": "Inhalt und Auslöser",
-        "optionsTab": "Ausführungsoptionen",
-        "sections": "Automatisierungseinstellungen"
+        "notifications": "Benachrichtigungen und stille Ausführung"
       },
       "webhook": {
         "quotaHint": "Webhook-Empfänge sind pro Tag begrenzt, und Filter hier verringern die Anzahl nicht. Wähle beim Absender, etwa GitHub, nur die benötigten Ereignisse aus.",
@@ -17383,6 +17421,19 @@
         "repositoriesLabel": "Repositorys",
         "repositoriesHint": "Gib owner/repository ein, eines pro Zeile. Nur für diese GitHub App autorisierte Repositorys können die Aufgabe auslösen.",
         "repositoriesInvalid": "Gib 1–50 gültige Repository-Namen im Format owner/repository ein.",
+        "connectAccount": "Konto verbinden",
+        "connectionLabel": "Verbindungsart",
+        "cindyConnection": "Über Cindy verbinden (empfohlen)",
+        "manualConnection": "Webhook manuell einrichten",
+        "cindyConnectionHint": "Empfange Ereignisse über die GitHub App. Verbinde dein Konto und autorisiere Repositorys, ohne Empfangs-URL oder Secret zu kopieren.",
+        "manualConnectionHint": "Trage die von Cindy bereitgestellte Empfangs-URL und das Secret in den GitHub-Repository-Einstellungen ein.",
+        "manualSetupHint": "Nach dem Speichern findest du Empfangs-URL und Secret in den Automatisierungsdetails. Schließe die Einrichtung in den GitHub-Repository-Einstellungen ab.",
+        "accountLabel": "GitHub-Konto",
+        "accountDisconnected": "GitHub ist nicht verbunden. Verbinde zuerst dein Konto.",
+        "authorizeRepositories": "Repositorys autorisieren",
+        "appUnavailable": "Die GitHub-App-Verbindung ist hier nicht verfügbar. Du kannst einen Webhook manuell einrichten.",
+        "cindyConnectionTitle": "GitHub · Verbindung über Cindy",
+        "manualConnectionTitle": "GitHub · Manueller Webhook",
         "githubAppHint": "Verbinde GitHub App auf dem Computer, der diese Aufgabe ausführt, und autorisiere diese Repositorys. Eine eigene Webhook-URL oder ein eigenes Secret ist nicht erforderlich.",
         "githubAppPaused": "Diese Aufgabe ist pausiert. Ereignisse starten sie nicht."
       },
@@ -21407,8 +21458,7 @@
     "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
-      "detected": "Angemeldetes Konto gefunden",
-      "useAccount": "Dieses Konto verwenden",
+      "useAccount": "{{cli}}-Konto auf diesem Computer verwenden",
       "anotherAccount": "Mit anderem Konto anmelden",
       "keepExisting": "Das neue Konto wird ein eigener Anbieter, sofern du keinen zum Hinzufügen auswählst. Bestehende Anmeldungen bleiben erhalten.",
       "checkFailed": "Das lokale Konto konnte nicht geprüft werden. Bitte erneut versuchen.",
@@ -21418,7 +21468,6 @@
     "title": "Abonnementkonten",
     "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
-    "default": "Standardordner",
     "defaultTag": "Standard",
     "ready": "Verbunden",
     "signedOut": "Anmeldung erforderlich",
@@ -21618,5 +21667,73 @@
     "switchOffer": {
       "action": "Mit {{model}} fortfahren"
     }
+  },
+  "projectSettings": {
+    "autoLoading": "Projektsymbol wird gesucht…",
+    "autoNone": "Initialen aus dem Projektnamen werden verwendet.",
+    "autoSource": "Quelle",
+    "githubAvatar": "GitHub-Profilbild verwenden",
+    "title": "Projekteinstellungen",
+    "name": "Anzeigename",
+    "saveName": "Name speichern",
+    "reset": "Standard wiederherstellen",
+    "icon": "Symbol",
+    "directory": "Projektordner",
+    "done": "Fertig",
+    "failed": "Speichern fehlgeschlagen. Erneut versuchen.",
+    "unavailable": "Einstellungen nicht verfügbar. Einen aktualisierten Computer verbinden und erneut versuchen.",
+    "back": "Zurück",
+    "cancel": "Abbrechen",
+    "changeIcon": "Symbol ändern",
+    "chooseIcon": "Symbol auswählen",
+    "save": "Speichern",
+    "symbols": "Symbole",
+    "emoji": "Emoji",
+    "letters": "Buchstaben",
+    "image": "Bild",
+    "upload": "Bild hochladen",
+    "imageHint": "PNG, JPG oder WebP · quadratischer Zuschnitt",
+    "imageError": "Das Bild konnte nicht gelesen werden. Versuche eine kleinere PNG- oder JPG-Datei.",
+    "search": "Symbole suchen",
+    "customEmoji": "Oder ein Emoji einfügen",
+    "lettersHint": "Ein oder zwei Buchstaben oder Zahlen.",
+    "thisComputer": "Dieser Computer",
+    "nameHint": "Name in der Projektliste. Der Ordnername bleibt unverändert.",
+    "copy": "Pfad kopieren",
+    "copied": "Kopiert",
+    "applyIcon": "Symbol verwenden",
+    "noResults": "Keine passenden Symbole",
+    "discardHint": "Ungespeicherte Änderungen verwerfen?",
+    "keepEditing": "Weiter bearbeiten",
+    "discard": "Verwerfen",
+    "colors": {
+      "default": "Standard (dem Design folgen)"
+    }
+  },
+  "taskManagement": {
+    "scope": "Nur für dieses Konto auf diesem Computer.",
+    "archive": "Automatisch archivieren",
+    "enabled": "Inaktive Aufgaben automatisch archivieren",
+    "description": "Inaktive Aufgaben automatisch archivieren. Ihr Verlauf bleibt verfügbar.",
+    "days": "Inaktive Tage",
+    "daysHint": "Ab der letzten gesendeten oder empfangenen Nachricht oder dem Ende eines Laufs.",
+    "days7": "7 Tage",
+    "days14": "14 Tage",
+    "days30": "30 Tage",
+    "customDays": "Eigene Tageszahl",
+    "invalidDays": "Gib eine ganze Zahl von 1 bis 365 ein.",
+    "reset": "Standard wiederherstellen",
+    "archiveHint": "Genutzte Aufgaben bleiben erhalten. Archivierte Aufgaben kannst du jederzeit wiederherstellen.",
+    "preview": "Archivvorschau",
+    "loadFailed": "Einstellungen konnten nicht geladen werden.",
+    "loading": "Einstellungen werden geladen…",
+    "candidateCount": "Geeignete Aufgaben: {{count}}",
+    "keptCount": "Beibehalten: {{count}}",
+    "lastCheck": "Letzte Prüfung: {{date}}",
+    "notChecked": "Noch keine automatische Prüfung",
+    "saveFailed": "Einstellungen nicht gespeichert. Versuche es erneut.",
+    "archivedNotice": "Automatisch archivierte inaktive Aufgaben: {{count}}",
+    "undo": "Rückgängig",
+    "undoFailed": "Rücknahme fehlgeschlagen. Stelle die Aufgaben im Archiv wieder her."
   }
 }

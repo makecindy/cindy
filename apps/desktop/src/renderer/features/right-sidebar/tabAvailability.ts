@@ -38,7 +38,7 @@ function isUnavailablePluginView(
     (candidate) => installedGhostStoragePart(candidate) === instanceId,
   );
   const viewId = (tab.state as PluginViewTabState | null)?.resourceViewId;
-  if (viewId) return !ghost || ghost.enabled === false || ghost.uiCapabilityApproved !== true ||
+  if (viewId) return !ghost || ghost.enabled === false ||
     !getApprovedGhostHostUi(ghost)?.views?.some(view => view.id === viewId && view.scope !== 'task');
   return !ghost || !isGlobalTabCapableGhost(ghost);
 }
@@ -57,7 +57,7 @@ function isUnavailablePluginTask(
   const candidates = viewId ? availability.installedGhosts : availability.pluginTaskGhosts ?? availability.installedGhosts;
   const ghost = candidates.find((candidate) => installedGhostStoragePart(candidate) === instanceId);
   return !ghost || ghost.enabled === false || (viewId
-    ? ghost.uiCapabilityApproved !== true || !getApprovedGhostHostUi(ghost)?.views?.some(view => view.id === viewId && view.scope === 'task')
+    ? !getApprovedGhostHostUi(ghost)?.views?.some(view => view.id === viewId && view.scope === 'task')
     : !ghost.manifest.taskView);
 }
 

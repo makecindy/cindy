@@ -539,6 +539,7 @@ const MESSAGE_OP_PURPOSE_KINDS: Record<string, readonly string[]> = {
   'turn-progress': ['send', 'edit', 'delete'],
   'turn-final': ['send', 'media'],
   'interaction-card': ['send', 'edit'],
+  'turn-notice': ['send', 'edit'],
 };
 
 /**
@@ -547,6 +548,19 @@ const MESSAGE_OP_PURPOSE_KINDS: Record<string, readonly string[]> = {
  */
 function validateMessageOpPurpose(p: Record<string, unknown>, kind: unknown): string | null {
   const purpose = p.purpose;
+  if (p.purpose !== 'turn-notice' && p.questionMode !== undefined) return 'questionMode only applies to turn-notice';
+  if (p.purpose === 'turn-notice') {
+    const action = p.action as Record<string, unknown>;
+    if (!isNonEmptyString(p.requestId) || !isNonEmptyString(p.interactionId)
+      || (p.questionMode !== 'blocking' && p.questionMode !== 'async')
+      || !['send', 'edit'].includes(String(kind)) || !['html', 'plain'].includes(String(action.tier))
+      || !Array.isArray(action.buttons) || action.delivery !== undefined
+      || action.replyToMessageId !== undefined || action.effectId !== undefined || action.silent !== undefined
+      || p.finalPart !== undefined || (p.interactionClosed !== undefined
+        && (kind !== 'edit' || typeof p.interactionClosed !== 'boolean'))) {
+      return 'turn-notice requires a question identity and a card send/edit without placement fields';
+    }
+  }
   if (purpose === undefined) {
     if (p.finalPart !== undefined || p.interactionId !== undefined || p.interactionClosed !== undefined) {
       return 'msg.op.finalPart / interactionId / interactionClosed require a matching purpose';
@@ -558,7 +572,7 @@ function validateMessageOpPurpose(p: Record<string, unknown>, kind: unknown): st
     typeof purpose === 'string' && Object.hasOwn(MESSAGE_OP_PURPOSE_KINDS, purpose)
       ? MESSAGE_OP_PURPOSE_KINDS[purpose]
       : undefined;
-  if (!kinds) return 'msg.op.purpose must be one of: turn-progress, turn-final, interaction-card';
+  if (!kinds) return 'msg.op.purpose must be one of: turn-progress, turn-final, interaction-card, turn-notice';
   // purpose 按 requestId 归属到一轮(服务端据此核验设备归属并登记消息), 缺了它服务端
   // 无从判断这条消息归谁清理。
   if (!isNonEmptyString(p.requestId)) return `msg.op.requestId is required when purpose is ${purpose}`;
@@ -572,7 +586,7 @@ function validateMessageOpPurpose(p: Record<string, unknown>, kind: unknown): st
   } else if (p.finalPart !== undefined) {
     return 'msg.op.finalPart only applies to purpose turn-final';
   }
-  if (purpose === 'interaction-card') {
+  if (purpose === 'interaction-card' || purpose === 'turn-notice') {
     if (!isNonEmptyString(p.interactionId)) {
       return 'msg.op.interactionId is required when purpose is interaction-card';
     }
@@ -1254,7 +1268,11 @@ function validateInteractionRequest(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(p.kind)) return 'interaction.request.kind must be a non-empty string';
   if (!isNonEmptyString(p.title)) return 'interaction.request.title must be a non-empty string';
   if (typeof p.body !== 'string') return 'interaction.request.body must be a string';
-  if (!Array.isArray(p.buttons) || p.buttons.length === 0) {
+  if (p.questionMode !== undefined && (p.kind !== 'ask_user_question'
+    || !['blocking', 'async'].includes(p.questionMode as string)
+    || typeof p.questionCode !== 'string' || !/^Q[0-9a-f]{16}$/.test(p.questionCode))) return 'invalid question metadata';
+  if (p.questionCode !== undefined && p.questionMode === undefined) return 'questionCode requires questionMode';
+  if (!Array.isArray(p.buttons) || (p.buttons.length === 0 && p.questionMode === undefined)) {
     return 'interaction.request.buttons must be a non-empty array';
   }
   if (p.buttons.length > MAX_INTERACTION_BUTTONS) {
@@ -1279,6 +1297,8 @@ function validateInteractionRequest(p: Record<string, unknown>): string | null {
 }
 
 function validateInteractionDecision(p: Record<string, unknown>): string | null {
+  if (p.answerText !== undefined && (p.buttonId !== 'question:reply' || typeof p.answerText !== 'string'
+    || !p.answerText.trim() || p.answerText.length > 4096)) return 'invalid question answerText';
   if (!isNonEmptyString(p.requestId))
     return 'interaction.decision.requestId must be a non-empty string';
   if (!isNonEmptyString(p.interactionId)) {

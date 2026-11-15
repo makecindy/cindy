@@ -35,6 +35,10 @@ void mountPage({
       <ModelSelector modelId="openai-model-0" currentProviderId="openai" agentKind="codex"
         effort="medium" onModelChange={() => {}} onEffortChange={() => {}}
         useMorphPopover sessionEngineFilter={{ currentAgent: 'codex', onCrossEngineSelect: () => {} }}
+        modelGroups={ctx.data.groups === undefined ? undefined : {
+          config: { routes: ctx.data.groups ? [{ id: 'mode', name: 'Daily mode', strategy: 'order', candidates: [] }] : [] },
+          active: null, onSelect: () => {}, onManage: () => {},
+        }}
         providersOverride={sources.get(Number(ctx.data.count))!} providersOverrideState={ready} />
     </div>
   </main>,

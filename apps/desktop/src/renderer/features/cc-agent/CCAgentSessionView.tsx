@@ -2392,14 +2392,6 @@ function CCAgentSessionContent({
   );
   // 账号池：任务固定在执行电脑上的某个账号，模型列表与底部用量都按它显示，读的是与用量 chip
   // 同一台电脑(读不到那份账号时不读)。
-  const taskAccountProviderId =
-    usageAccount.kind === 'unreadable'
-      ? null
-      : sessionSubscriptionPoolProvider(
-          normalizeDbAgentKind(displayAgentKind),
-          usageChipProviderId,
-          session?.remoteHostId,
-        );
   const taskAccountDeviceId =
     usageAccount.kind === 'device'
       ? usageAccount.deviceId
@@ -2411,6 +2403,9 @@ function CCAgentSessionContent({
   );
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
+  const taskAccountProviderId = usageAccount.kind === 'unreadable' ? null
+    : sessionSubscriptionPoolProvider(normalizeDbAgentKind(displayAgentKind), usageChipProviderId,
+        session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId));
   const canSwitchToClaudeSubscription = useMemo(() => {
     if (
       remoteDeviceId ||
@@ -6668,6 +6663,7 @@ function CCAgentSessionContent({
           {/* 模型列表与底部用量共用：任务实际在用的订阅账号。 */}
           <SessionSubscriptionAccountProvider
             providerId={taskAccountProviderId}
+            routeProviderId={usageChipProviderId}
             deviceId={taskAccountDeviceId}
             sessionId={sessionId}
             nativeSessionId={session?.sdkSessionId}

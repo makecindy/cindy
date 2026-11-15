@@ -388,3 +388,65 @@ Dispatcher 只接受宿主解析的专线 ID 和精确工作目录，忽略入�
 | X | 只沿当前帖的祖先回复链，近祖先优先；仍受原有付费读取预算约束 | 保留现有媒体读取能力，不扩大月度读取额度 |
 
 本上限只管每次注入，不修改历史存储保留策略或显式历史检索。模型输入与展示复用同一截断结果；展示可去掉内部身份标记，不能另取一批消息。游标仍只在实际受理后提交，拒绝/失败不吞掉下一轮历史。
+
+
+## Telegram 统一提问与生命周期（2026-11-13）
+
+普通中断式与异步提问共用 `presentQuestion`，同时拿到
+结构化问题、通过 desktopDecide 的答题入口和最终 settled Promise；先登记 App 题卡再发送。
+router 统一使用桌面处理器与 desktopDecide，避免注册第二个答案 resolver。中断式保留 route
+token、等待状态与原渠道超时（官方 30 分钟），停止/释放/超时同时清理 App pending；异步
+不绑定轮次 token、等待状态或渠道超时，保留 Session 原有撤回/新输入规则。
+`questionCard.ts` 是两条 Telegram 链路共用的选择模型：稳定 question id、完整多题提交、
+多选 JSON 数组、选择版本防旧按钮、App 先回答的仲裁；提交后不再接受第二次点击，最终
+settled 才标记完成，执行暂停时不能绕过既有答案闸门。发布失败不合成默认答案，App 仍可答。
+
+个人 Telegram 从入站 `speaker.id` 捕获本轮提问者，透传 `questionRespondentId` 到传输层；
+卡片发在原 lane，并按实际 messageId 绑定提问者。仅 `aq:` 按钮使用这个例外，其他按钮仍
+走既有账号身份校验；引用题卡的其他成员消息在进入模型前被拒绝。换配置/下线清理映射。
+按钮订阅不随本轮结束关闭，而随题卡 settled 释放；换 session 后不再写旧卡。
+
+官方双方协商 `telegram-question-ops-v1` + `msg-op-v1`，以 `turn-notice` 发/改卡，
+不复用普通 DM send，也不复用 turn-scoped interaction-card。dispatcher 保留独立按钮路由，
+回调核验连接、账号代次、requestId；取消账号清理全部路由。发送前重验目录授权、连接和能力。
+每次 op 等回执最多 10 秒；turn.end 前最多 10 秒 drain 新卡及中断式题卡的最终关闭，
+不等待未答的异步题卡。异步卡结束后仍可编辑。
+未知发送不重试，未知编辑保留 App 答题入口。Telegram 布局与普通卡片共用正文/按钮尺寸限制。
+
+服务端用原任务、绑定和 externalKey 校验首次发送；后续编辑凭卡片身份再次校验绑定。
+message route 的 requestId=null、terminal=false，externalKey 保留，因此不被当作进度、终稿
+或重跑输出回收。回调 token 绑定原 principal、卡片/键盘代际、绑定 id 和设备，并在答题前
+核验当前 lane generation。`questionMode` 在首次发送时固定：blocking 卡在 turn.end 清理，
+async 卡跨轮存活、最长 24 小时。重启后旧卡安全失效。
+引用活卡的原提问者文字转换为 `question:reply` + `answerText`，两条链路均不进入普通发送
+队列；单题直接提交，多题要求显式「题号: 答案」，与选项混合后提交。传输层先校验身份、
+群准入、卡片是否关闭，服务端另校验绑定和 lane generation；不把文字用于其他按钮。
+关闭卡片的文字回复回到正常输入路径。权限确认与敏感代输入不改变；其他 IM 普通提问见下一节。
+
+回归入口：`questionCard.test.ts`、`interactionRouter.test.ts`、`telegramNoticeOps.test.ts`、
+`dispatcher.test.ts`、`turnRunnerThreadRouting.test.ts` 和传输层 `telegramIM.test.ts`。
+
+### 所有 IM 的普通提问（2026-11-13）
+
+`questionCard.ts` 是普通中断式／异步提问的共同答案模型，`questionPresentation.ts`
+负责个人 IM 展示与回答归属；权限、计划审阅、代输入沿用各自入口。原提问者只能回答
+自己在原聊天／话题中触发的问题，不能替其他人作答，也不会因此获得工具批准权限。
+
+- Telegram、飞书／Lark、Discord 使用各自原生按钮卡；文字可用问题编号回答。
+- 微信、企业微信、钉钉、iMessage 使用同一模型的文字投影，每题选项完整列出。
+  使用 `Q… 答案`，多题使用 `Q… 2: 答案`，全部填好后以 `Q… OK` 提交；单题单选直接提交。
+  多选可写选项序号，如 `1,2`。不能编辑消息的渠道另发当前状态／最终结果。
+- 支持引用消息 ID 的渠道也可直接引用问题卡回复。普通文字不隐式回答异步问题，
+  编号、真实发言人、原 lane／scope 和有效 Session 都必须匹配。
+- `messageHandler` 在用户队列前消费这些回答；微信在 poll 批次持久确认后、普通任务
+  入队前消费。否则中断式提问会占着执行轮次，答案排在其后导致互等。
+- 中断式普通问题统一 30 分钟等待，停止／轮次释放也会清理；异步问题不因原轮结束
+  清理，仍由 App 的请求生命周期最终收口。两端共享原有 App 答案与暂停闸门。
+- 卡片注册在实际消息 ID 上。账号替换、明确下线、渠道访问撤销和 Session 替换后旧入口
+  不再接收答案。任何回调 payload 自报的身份都不参与授权。
+
+官方 Slack、飞书／Lark 双向协商 `im-question-cards-v1`，经 `interaction.request`
+可选 `questionMode`、`questionCode` 发送／更新同一问题，`interaction.cancel` 收口；
+`interaction.decision` 的 `question:reply`＋`answerText` 回传文字。未协商时沿用旧入口。
+Telegram 继续使用已协商的 `telegram-question-ops-v1`，展示模型与其余 IM 同源。
+本实现不新增 X 的公开帖问答入口，不改变各渠道原有消息触发／成员准入规则。

@@ -5,7 +5,7 @@
  */
 import type { Catalog } from '@cindy/model-providers';
 import type { readPool, readProviderBoundAccountIds } from '../subscription-accounts/store.js';
-import type { readMergedProviderAccount, accountProviderId, readCreatedSubscriptionProviders } from '../subscription-accounts/placement.js';
+import type { readMergedProviderAccount, accountProviderId, readCreatedSubscriptionProvidersIfReadable } from '../subscription-accounts/placement.js';
 import type { readSubscriptionPoolCodexModels } from '../subscription-accounts/runtime.js';
 import type { getActiveCatalogWithCodexModels, setSubscriptionPoolProviders } from './active-catalog.js';
 
@@ -20,18 +20,20 @@ export interface SubscriptionPoolCatalogPorts {
 }
 
 export interface SubscriptionPoolPublisherPorts {
-  readCreatedSubscriptionProviders: typeof readCreatedSubscriptionProviders;
+  readCreatedSubscriptionProvidersIfReadable: typeof readCreatedSubscriptionProvidersIfReadable;
   setSubscriptionPoolProviders: typeof setSubscriptionPoolProviders;
   log: { warn(message: string, data: Record<string, unknown>): void };
 }
 
-/** Preserve the previous list when the reader throws, as on Desktop. */
+/** Preserve the published list when the placement file is unreadable or the reader throws. */
 export function publishSubscriptionPoolProviders(ports: SubscriptionPoolPublisherPorts): void {
   try {
-    ports.setSubscriptionPoolProviders(Object.entries(ports.readCreatedSubscriptionProviders())
+    const created = ports.readCreatedSubscriptionProvidersIfReadable();
+    if (created === null) return;
+    ports.setSubscriptionPoolProviders(Object.entries(created)
       .map(([id, entry]) => ({ id, kind: entry.kind, name: entry.name })));
   } catch (err) {
-    // An unreadable placement file keeps the previous list; the next refresh retries.
+    // A thrown read also keeps the previous list; the next refresh retries.
     ports.log.warn('publishing subscription providers failed', { err: String(err) });
   }
 }

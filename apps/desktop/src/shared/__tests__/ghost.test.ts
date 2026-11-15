@@ -33,8 +33,6 @@ import {
   ghostAppContextLanguages,
   ghostContentKeys,
   getApprovedGhostHostUi,
-  ghostHostUiApprovalTokens,
-  ghostHostUiNeedsApproval,
   ghostRequiresCindyAccount,
   ghostExternalLinkUrls,
   ghostLocalePathFor,
@@ -74,27 +72,64 @@ import {
   type InstalledGhost,
 } from '../ghost';
 
-// Real receipt projection: new resources/fields never inherit an older capability grant.
-describe('host appearance approval', () => {
+// Unit: mirror the protocol's stored compatibility at the Desktop production readers.
+it.each([{}, [], ['rerank', 'rerank'], [42]])('keeps old capabilities beside malformed historical model APIs %j', models => {
+  const raw = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'example', name: 'Example',
+    version: '1', kind: 'chip', entry: 'main.js', cindy: { image: ['generate'], models } };
+  expect(validateGhostManifest(raw).ok).toBe(false);
+  for (const validate of [validateStoredGhostManifest, validateInstalledGhostManifest]) {
+    const stored = validate(raw);
+    expect(stored).toMatchObject({ ok: true, manifest: { cindy: { image: ['generate'] } } });
+    if (stored.ok) {
+      expect(stored.manifest.cindy?.models).toEqual(models);
+      expect(ghostPermissionItems(stored.manifest).some(item => item.key.startsWith('cindy:models.'))).toBe(false);
+    }
+    expect(validate({ ...raw, cindy: { models } }).ok).toBe(true);
+  }
+});
+
+// Unit: runtime projection follows installation authority; display projections stay read-only.
+describe('installed Host UI', () => {
+  // Unit: an accepted installation grants the current manifest, including old
+  // receipts without per-Host grants; legacy page approval remains independent.
+  it.each([undefined, [], ['obsolete-token']])('uses the installed manifest without a separate Host grant: %j', approvedHostUi => {
+    const manifest = { schemaVersion: 3, id: 'example', name: 'Example', version: '1', kind: 'chip', entry: 'main.js',
+      tools: [{ name: 'lookup', description: 'Lookup' }], mcpApps: { host: {
+        capabilities: ['context', 'draft', 'appearance'],
+        contributions: [{ id: 'lookup', title: 'Lookup', position: 'composer.completion', trigger: '@', tool: 'lookup' },
+          { id: 'parse', title: 'Parse', position: 'composer.attachment', accept: { extensions: ['.pdf'] }, tool: 'lookup' },
+          { id: 'future', title: 'Future', position: 'future.slot', tool: 'lookup' }],
+        settings: [{ id: 'enabled', title: 'Enabled', type: 'boolean', default: true }],
+        appearance: { fields: ['uiFont'] },
+      } } } as GhostManifest;
+    const ghost = { manifest, dir: '/fixture', enabled: true, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    expect(getApprovedGhostHostUi(ghost)).toMatchObject({ capabilities: ['context', 'draft', 'appearance'],
+      contributions: [{ id: 'lookup', trigger: '@' }, { id: 'parse', accept: { extensions: ['.pdf'] } }],
+      settings: [{ id: 'enabled', type: 'boolean' }] });
+    expect(getApprovedGhostHostUi(ghost)?.contributions).toHaveLength(2);
+    expect(getApprovedGhostHostUi({ ...ghost, enabled: false })).toBeUndefined();
+    expect(getApprovedGhostHostUi({ ...ghost, approval: { state: 'invalid' } })).toBeUndefined();
+    expect(getApprovedGhostHostUi({ ...ghost, manifest: { ...manifest,
+      mcpApps: { host: { capabilities: ['future-capability'],
+        contributions: [{ id: 'future', title: 'Future', position: 'future.slot', tool: 'lookup' }] } },
+    } })).toBeUndefined();
+  });
   // Unit, #9987 compatibility: exercise the real installed-reader and receipt,
   // which the protocol-only tests cannot cover. Invalid new fields stay inert.
-  it('retains approved legacy entries and tokens beside invalid historical extensions', () => {
+  it('retains installed legacy entries beside invalid historical extensions', () => {
     const host: GhostHostUi = { contributions: [{ id: 'old', title: 'Toolbar', position: 'composer.toolbar', tool: 'help' }],
       commands: [{ id: 'open', title: 'Command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
     const manifest: GhostManifest = { schemaVersion: 3, minCindyVersion: '0.1.61', id: 'example', name: 'Example',
       version: '1', kind: 'chip', entry: 'main.js', tools: [{ name: 'help', description: 'Help' }], mcpApps: { host } };
-    const approvedHostUi = ghostHostUiApprovalTokens(manifest);
     const stored = validateInstalledGhostManifest({ ...manifest, mcpApps: { host: { ...host, settings: { vendor: true },
       contributions: [...host.contributions!, { id: 'future', title: 'Future', position: 'composer.completion', tool: 'help' }] } } });
     if (!stored.ok) throw new Error(stored.reason);
-    const ghost = { manifest: stored.manifest, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    const ghost = { manifest: stored.manifest, enabled: true, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
     expect(getApprovedGhostHostUi(ghost)).toMatchObject(host);
     expect(getApprovedGhostHostUi(ghost)?.contributions).toHaveLength(1);
     expect(getApprovedGhostHostUi(ghost)?.settings).toBeUndefined();
-    expect(ghostHostUiApprovalTokens(stored.manifest)).toEqual(approvedHostUi);
-    expect(ghostHostUiNeedsApproval(ghost)).toBe(false);
   });
-  it('requires approval for each new field and resource while preserving existing views', () => {
+  it('projects supported appearance fields and resources from the installed manifest', () => {
     const host: GhostHostUi = { capabilities: ['appearance'], appearance: { fields: ['uiFont'] },
       views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }] };
     const manifest: GhostManifest = { schemaVersion: 3, id: 'appearance-example', name: 'Appearance',
@@ -102,32 +137,23 @@ describe('host appearance approval', () => {
         ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
         host,
       } };
-    const approvedHostUi = ghostHostUiApprovalTokens(manifest);
     host.appearance = { fields: ['bodyFont', 'future-field'],
       resources: [{ id: 'font', kind: 'font', path: 'assets/font.woff2' }] };
-    const ghost = { manifest, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
-    expect(getApprovedGhostHostUi(ghost)).toMatchObject({ capabilities: ['appearance'],
-      views: [{ id: 'board' }], appearance: { fields: [], resources: [] } });
-    ghost.approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    const ghost = { manifest, enabled: true, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
     expect(getApprovedGhostHostUi(ghost)?.appearance).toEqual({ fields: ['bodyFont'],
       resources: [{ id: 'font', kind: 'font', path: 'assets/font.woff2' }] });
     host.appearance.resources![0].path = 'assets/replacement.woff2';
-    expect(getApprovedGhostHostUi(ghost)?.appearance?.resources).toEqual([]);
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.resources).toEqual([{ id: 'font', kind: 'font', path: 'assets/replacement.woff2' }]);
   });
-  // Removing the field declaration requests the public default (all fields),
-  // never an implicit expansion of the existing receipt's uiFont approval.
-  it('requires the remaining default fields to be approved after removing a restricted declaration', () => {
+  it('uses the public default fields when the installed manifest declares no restriction', () => {
     const host: GhostHostUi = { capabilities: ['appearance'], appearance: { fields: ['uiFont'] } };
     const manifest = { schemaVersion: 3, id: 'example', name: 'Example', version: '1', kind: 'chip',
       entry: 'main.js', mcpApps: { host } } as GhostManifest;
-    const ghost = { manifest, approvedHostUi: ghostHostUiApprovalTokens(manifest),
+    const ghost = { manifest, enabled: true,
       approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
     delete host.appearance;
-    expect(ghostHostUiNeedsApproval(ghost)).toBe(true);
-    expect(getApprovedGhostHostUi(ghost)?.appearance?.fields).toEqual(['uiFont']);
-    ghost.approvedHostUi = ghostHostUiApprovalTokens(manifest);
-    expect(ghostHostUiNeedsApproval(ghost)).toBe(false);
-    expect(getApprovedGhostHostUi(ghost)?.appearance?.fields).toContain('wallpaper');
+    expect(getApprovedGhostHostUi(ghost)?.capabilities).toContain('appearance');
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.fields).toBeUndefined();
   });
 });
 
