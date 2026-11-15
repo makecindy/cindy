@@ -479,15 +479,12 @@
     "colors": {
       "default": "Predeterminado (según el tema)"
     },
-    "additionalDirectories": "Directorios adicionales",
+    "directories": "Directorios",
     "directoriesHint": "Se aplica a todas las tareas de este proyecto a partir del siguiente turno. Se conservan los directorios propios de cada tarea.",
-    "readOnly": "Solo lectura",
-    "readWrite": "Lectura y escritura",
     "removeDirectory": "Quitar directorio",
     "directoryPath": "Ruta completa del directorio",
     "addDirectory": "Añadir directorio",
     "browseDirectory": "Explorar directorios",
-    "directoryAccess": "Acceso al directorio",
     "mainDirectory": "Directorio principal",
     "createTitle": "Nuevo proyecto",
     "createAction": "Crear proyecto"

@@ -21601,15 +21601,12 @@
     "colors": {
       "default": "標準色（テーマに合わせる）"
     },
-    "additionalDirectories": "追加ディレクトリ",
+    "directories": "ディレクトリ",
     "directoriesHint": "このプロジェクトの全タスクに次のターンから適用されます。タスク固有の既存ディレクトリは保持されます。",
-    "readOnly": "読み取り専用",
-    "readWrite": "読み書き",
     "removeDirectory": "ディレクトリを削除",
     "directoryPath": "ディレクトリのフルパス",
     "addDirectory": "ディレクトリを追加",
     "browseDirectory": "ディレクトリを参照",
-    "directoryAccess": "アクセス権",
     "mainDirectory": "メインディレクトリ",
     "createTitle": "新規プロジェクト",
     "createAction": "プロジェクトを作成"

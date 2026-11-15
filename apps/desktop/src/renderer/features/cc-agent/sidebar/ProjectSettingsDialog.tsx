@@ -839,7 +839,7 @@ export function ProjectSettingsDialog({
               setDirectories((previous) =>
                 previous.length >= 10 || previous.some((item) => item.path === target.path)
                   ? previous
-                  : [...previous, { path: target.path, access: 'read' }],
+                  : [...previous, { path: target.path, access: 'write' }],
               );
           }}
         />

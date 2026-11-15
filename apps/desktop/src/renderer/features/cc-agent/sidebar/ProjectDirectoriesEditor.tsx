@@ -5,7 +5,6 @@ import type { ProjectDirectory } from '@cindy/maker-shared/project-alias-sync';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 
 /** The same draft editor is used by project creation and project settings. */
 export function ProjectDirectoriesEditor({
@@ -28,37 +27,21 @@ export function ProjectDirectoriesEditor({
   const add = (candidate: string) => {
     const clean = candidate.trim();
     if (!clean || value.some((item) => item.path === clean)) return;
-    onChange([...value, { path: clean, access: 'read' }]);
+    onChange([...value, { path: clean, access: 'write' }]);
     setPath('');
   };
   return (
-    <FormField label={label('additionalDirectories')} hint={label('directoriesHint')}>
+    <FormField label={label('directories')} hint={label('directoriesHint')}>
       {() => (
         <div className="flex flex-col gap-3">
           {value.map((item, index) => (
             <div
               key={item.path}
-              className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border-default)] p-3"
+              className="flex items-center gap-2 rounded-lg border border-[var(--border-default)] p-3"
             >
-              <span className="min-w-0 flex-1 basis-full select-text break-all text-13 text-[var(--text-primary)]">
+              <span className="min-w-0 flex-1 select-text break-all text-13 text-[var(--text-primary)]">
                 {item.path}
               </span>
-              <SegmentedControl
-                aria-label={label('directoryAccess')}
-                value={item.access}
-                onValueChange={(access) =>
-                  onChange(
-                    value.map((row, at) =>
-                      at === index ? { ...row, access: access as 'read' | 'write' } : row,
-                    ),
-                  )
-                }
-                options={[
-                  { value: 'read', label: label('readOnly') },
-                  { value: 'write', label: label('readWrite') },
-                ]}
-                disabled={disabled}
-              />
               <Button
                 variant="secondary"
                 tone="quiet"

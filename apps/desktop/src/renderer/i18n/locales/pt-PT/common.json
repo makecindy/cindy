@@ -21888,15 +21888,12 @@
     "colors": {
       "default": "Predefinida (seguir tema)"
     },
-    "additionalDirectories": "Diretórios adicionais",
+    "directories": "Diretórios",
     "directoriesHint": "Aplica-se a todas as tarefas deste projeto a partir do próximo turno. Os diretórios específicos de cada tarefa são mantidos.",
-    "readOnly": "Só de leitura",
-    "readWrite": "Leitura e escrita",
     "removeDirectory": "Remover diretório",
     "directoryPath": "Caminho completo do diretório",
     "addDirectory": "Adicionar diretório",
     "browseDirectory": "Procurar diretórios",
-    "directoryAccess": "Acesso ao diretório",
     "mainDirectory": "Diretório principal",
     "createTitle": "Novo projeto",
     "createAction": "Criar projeto"

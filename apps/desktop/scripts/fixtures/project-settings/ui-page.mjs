@@ -20,7 +20,7 @@ export default {
       data: { create: true },
     },
     directories: {
-      about: 'Project directory draft switches access and persists only on Save',
+      about: 'New directory drafts allow writes and persist only on Save',
       data: { directories: true },
     },
     create: {
@@ -77,9 +77,7 @@ export default {
       await page
         .getByRole('textbox', { name: await ui.t('projectSettings.mainDirectory'), exact: true })
         .fill('/Projects/Cindy');
-      await page
-        .getByRole('radio', { name: await ui.t('projectSettings.readOnly'), exact: true })
-        .waitFor();
+      await page.getByText('/Projects/Reference', { exact: true }).waitFor();
       if (
         (await page
           .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
@@ -128,9 +126,14 @@ export default {
           .last()
           .click();
       }
-      await page
-        .getByRole('radio', { name: await ui.t('projectSettings.readWrite'), exact: true })
-        .click();
+      if (ui.case === 'directories') {
+        await page
+          .getByRole('textbox', { name: await ui.t('projectSettings.directoryPath'), exact: true })
+          .fill('/Projects/Output');
+        await page
+          .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+          .click();
+      }
       if (await page.evaluate(() => window.projectSettingsWrites.length))
         throw new Error('Directory draft saved early');
       await ui.capture('directory-form');
@@ -143,8 +146,10 @@ export default {
         })
         .click();
       const writes = await page.evaluate(() => window.projectSettingsWrites);
-      if (writes.length !== 1 || writes[0].value.directories[0].access !== 'write')
+      if (writes.length !== 1 || writes[0].value.directories.at(-1).access !== 'write')
         throw new Error('Missing project directory save');
+      if (ui.case === 'directories' && writes[0].value.directories[0].access !== 'read')
+        throw new Error('Changed a pre-existing directory permission');
       if (
         ui.case === 'create' &&
         (!writes[0].create || writes[0].projectKey !== 'local:/Projects/Example')

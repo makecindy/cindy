@@ -4,10 +4,7 @@ import { useTranslation } from "react-i18next";
 import { X } from "lucide-react-native";
 import type { ProjectDirectory } from "@cindy/maker-shared/project-alias-sync";
 import { Text, TextInput } from "@/components/AppText";
-import {
-  MainWindowActionButton,
-  MainWindowOptionButton,
-} from "@/components/MobilePrimitives";
+import { MainWindowActionButton } from "@/components/MobilePrimitives";
 import {
   useTheme,
   spacing,
@@ -35,7 +32,7 @@ export function ProjectDirectoriesEditor({
   return (
     <View style={styles.group}>
       <Text style={[styles.body, { color: colors.textPrimary }]}>
-        {label("additionalDirectories")}
+        {label("directories")}
       </Text>
       {value.map((item, index) => (
         <View
@@ -58,23 +55,6 @@ export function ProjectDirectoriesEditor({
             >
               <X size={iconSize.md} color={colors.textSecondary} />
             </Pressable>
-          </View>
-          <View style={styles.row}>
-            {(["read", "write"] as const).map((access) => (
-              <MainWindowOptionButton
-                key={access}
-                label={label(access === "read" ? "readOnly" : "readWrite")}
-                selected={item.access === access}
-                disabled={disabled}
-                onPress={() =>
-                  onChange(
-                    value.map((row, at) =>
-                      at === index ? { ...row, access } : row,
-                    ),
-                  )
-                }
-              />
-            ))}
           </View>
         </View>
       ))}
@@ -115,7 +95,7 @@ export function ProjectDirectoriesEditor({
               onPress: () => {
                 const clean = path.trim();
                 if (clean && !value.some((item) => item.path === clean))
-                  onChange([...value, { path: clean, access: "read" }]);
+                  onChange([...value, { path: clean, access: "write" }]);
                 setPath("");
               },
             }}

@@ -21601,15 +21601,12 @@
     "colors": {
       "default": "預設色（跟隨主題）"
     },
-    "additionalDirectories": "附加目錄",
+    "directories": "目錄",
     "directoriesHint": "從下一輪起套用至此專案的所有任務。既有任務個別加入的目錄會保留。",
-    "readOnly": "唯讀參考",
-    "readWrite": "可讀寫",
     "removeDirectory": "移除目錄",
     "directoryPath": "完整目錄路徑",
     "addDirectory": "加入目錄",
     "browseDirectory": "瀏覽目錄",
-    "directoryAccess": "目錄權限",
     "mainDirectory": "主目錄",
     "createTitle": "新增專案",
     "createAction": "建立專案"

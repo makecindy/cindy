@@ -364,7 +364,7 @@ export function ProjectSettingsSheet({
         setDirectories((previous) =>
           previous.length >= 10 || previous.some((item) => item.path === path)
             ? previous
-            : [...previous, { path, access: "read" }],
+            : [...previous, { path, access: "write" }],
         );
     },
   });
