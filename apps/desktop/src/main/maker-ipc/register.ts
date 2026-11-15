@@ -280,7 +280,12 @@ import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'dri
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
-import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
+import { createTurnModelAttribution } from './turnModelAttribution.js';
+import { createUserMessageDurableWrite } from './userMessageDurableWrite.js';
+import { createInterruptedTurnAutoResumeHooks } from './interruptedTurnAutoResumeHooks.js';
+import { createSessionRuntimeFallback } from './sessionRuntimeFallback.js';
+import { handleSilentStopTurnEndWithPorts } from './silentStopTurnEnd.js';
+import { createAgentSwitchBoundaryInsert, createAgentSwitchDbApply, createSwitchedSessionBootstrap, readAgentSwitchSessionRow } from './agentSwitchDepsCore.js';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
@@ -832,13 +837,14 @@ import {
 } from './orcaIdleReleaseWatcher.js';
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
 import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
-import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
+import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
 import { configureTaskArchiveRuntime } from '../task-management/service.js';
+import { resolveModelSwitchContextTokens, resolveModelSwitchWindows } from './modelSwitchGateInput.js';
+import { hasIdleReleaseQueuedWork, hasPendingIdleReleaseInput as hasPendingIdleReleaseInputFor, hasScheduledIdleReleaseAutoResume } from './idleReleaseInputGates.js';
 import {
   createPiIdleReleaseWatcher,
   createPiIdleReleaseClose,
-  piIdleReleaseCandidateWhere,
-  piIdleReleaseIdleSince,
+  createPiIdleReleaseCandidateQueries,
   DEFAULT_PI_IDLE_RELEASE_MINUTES,
   type PiIdleReleaseWatcher,
 } from './piIdleReleaseWatcher.js';
@@ -853,7 +859,6 @@ import {
   assertDesktopSendDispatched,
   createHostSendFailure,
   observeFireAndForgetSendOutcome,
-  toDesktopSessionDispatchOutcome,
 } from '../maker-host/send-outcome.js';
 import {
   markSessionUsedProjectContext,
@@ -972,7 +977,6 @@ import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { readSessionBackgroundTaskOutputTail } from '../background-task-output/reader.js';
 import { AgentInputCoordinator, markManualSchedulerContinuation } from './agent-input-coordinator.desktop.js';
 import { createAutomaticContinueEligibility, isActiveCompanionFailoverSession } from './automaticContinueEligibility.js';
-import { bindSilentStopContinuationGeneration } from './silentStopContinuationBinding.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import {
   estimateReferenceTokens,
@@ -1073,7 +1077,6 @@ import {
 } from './makerSendTransaction.js';
 import { createAgentPrewarmer, isAgentPrewarmEligible } from './agentPrewarm.js';
 import { isProvisionalSession } from '../localDb/provisionalSessions.js';
-import { findLatestAssistantTranscriptUuid } from './latestAssistantTranscriptUuid.js';
 import {
   installDesktopInteractionHandler,
   installInteractionLifecycleObserver,
@@ -1442,7 +1445,6 @@ import {
   applyRuntimeSetModelChange,
   refreshActiveModelContextSettings,
   closeRejectedRuntimeAndRestoreControlStores,
-  isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
 import { patchSessionMetaInDb, updateSessionInDb } from '../localDb/ipc/sessions.js';
 import { codexThreadTransferSourcePredicate, commitCodexThreadTransfer, relinkCodexProviderThread } from './codexProviderThreadRelink.js';
@@ -1469,8 +1471,6 @@ import {
   projectSessionRuntimeControl,
   isPendingSessionRuntimeRouteExplicit,
   mergeSessionRuntimeProfilePatch,
-  pickSessionRuntimeFallback,
-  recordFailedSessionRuntimeFallbackCandidate,
   recordRecoveredSessionRuntimeMutation,
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
@@ -1589,7 +1589,7 @@ import {
   registerSessionAutoTitleHooks,
   scheduleSessionAutoTitle,
 } from './sessionAutoTitle.js';
-import { SILENT_STOP_RESUME_PROMPT, SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
+import { SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
 import {
   publishUiContinuation,
   publishUiSessionIntervention,
@@ -1602,23 +1602,14 @@ import {
   AutoResumeBookkeeping,
   type OrcaSuppressedTerminal,
   type SuppressedTurnError,
-  type SuppressedTurnErrorOwner,
 } from './autoResumeBookkeeping.js';
 import {
   InterruptedTurnAutoResumeGuard,
-  isContinuationOnlyAutoResumeReason,
-  isAutoResumeUserMessage,
-  isInterruptedTurnError,
   shouldPreserveWaitingContinuationOnlyAutoResume,
   shouldPreserveRuntimeFallbackAutoResume,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import { readInterruptedTurnAutoResumeSettings } from '../maker-host/interrupted-turn-auto-resume-store.js';
-import {
-  isBotCandidateUnavailable,
-  canResumeAfterRuntimeFallback,
-  type RuntimeFallbackResult,
-} from './botCandidateRecovery.js';
 
 import {
   broadcastGhostMessageBlocked,
@@ -2298,15 +2289,6 @@ function autoResumeAttemptToken(item: AgentInputQueuedMessage): number | null {
   if (item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON) return null;
   const value = item.autoResumeInfo?.sessionTotal;
   return item.autoResume === true && typeof value === 'number' ? value : null;
-}
-
-/** 持久化 user row 的 agentMeta 归属；不要把它与 AgentEvent 的 runtime token 混用。 */
-function autoResumeAttemptTokenFromAgentMeta(agentMeta: unknown): number | null {
-  if (!agentMeta || typeof agentMeta !== 'object') return null;
-  const info = (agentMeta as { autoResumeInfo?: unknown }).autoResumeInfo;
-  if (!info || typeof info !== 'object') return null;
-  const value = (info as { sessionTotal?: unknown }).sessionTotal;
-  return typeof value === 'number' ? value : null;
 }
 
 function settleUndispatchedAutoResumeOutcome(
@@ -6011,119 +5993,11 @@ async function handleSilentStopTurnEnd(
   turnLeaseId: string,
   turnOrigin?: SendOrigin,
 ): Promise<void> {
-  const generation = session.getTurnGeneration();
-  if (!silentStopTurnLeaseGate.claim(session.id, turnLeaseId)) {
-    log.debug('ignored superseded silent-stop decision timer', {
-      sessionId: session.id,
-      turnLeaseId,
-    });
-    return;
-  }
-  if (agentInputCoordinatorHolder?.hasPendingQueuedWork(session.id)) {
-    log.debug('silent-stop auto-resume skipped — coordinator has queued work', {
-      sessionId: session.id,
-    });
-    await settleSilentStopDone(session.id, 'skip', turnLeaseId, session, generation);
-    return;
-  }
-  const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
-  if (decision.action === 'resume') {
-    const discardEndedActivity = sessionListActivityTracker.captureContinuation(session.id);
-    // 续跑绕过 send 事务:generation 的绑定/失败回滚接线集中在 binding 对象
-    // (bindSilentStopContinuationGeneration,见该文件头)。漏掉任一半边会让
-    // 协调器残留的 activeTurn 与续跑的真实 done 永久失配，输入边界卡在忙
-    // (僵尸 activeTurn)。声明在 try 外，未派发/抛出两条失败收口都要用。
-    const binding = bindSilentStopContinuationGeneration(session.id, {
-      noteHostTurnContinuation: (bindingSessionId, generation) =>
-        agentInputCoordinatorHolder?.noteHostTurnContinuation(bindingSessionId, generation),
-      noteHostTurnContinuationFailed: (bindingSessionId, adoptedGeneration) =>
-        agentInputCoordinatorHolder?.noteHostTurnContinuationFailed(
-          bindingSessionId,
-          adoptedGeneration,
-        ),
-    });
-    try {
-      // The next Claude running boundary belongs to the same user-visible turn.
-      // Mark it before send(), which may synchronously emit status events.
-      productTurnWallClockTracker.preserveForContinuation(session.id);
-      const clientId = randomUUID();
-      const sendResult = await session.sendHostTurnContinuation(
-        { type: 'user', content: SILENT_STOP_RESUME_PROMPT },
-        {
-          origin: turnOrigin,
-          onDispatching: () => advanceRuntimeRecoveryNotice(session),
-          // 预约(onTurnReserved)在 binding.sendOpts；语义与不变量见
-          // silentStopContinuationBinding.ts 文件头。
-          ...binding.sendOpts,
-          onAccepted: async () => {
-            await createDbMessage(session.id, {
-              clientId,
-              role: 'user',
-              content: SILENT_STOP_RESUME_PROMPT,
-              // autoResume: renderer 据此隐藏用户气泡、渲染「已自动继续」分隔线;
-              // 也是审计标记(DB/transcript 里可查每次自动续跑)。
-              agentMeta: {
-                delivery: 'turn',
-                autoResume: true,
-                ...(turnOrigin?.kind === 'scheduler' && turnOrigin.scheduleId
-                  ? {
-                      origin: {
-                        kind: 'scheduler' as const,
-                        scheduleId: turnOrigin.scheduleId,
-                        ...(turnOrigin.scheduleName
-                          ? { scheduleName: turnOrigin.scheduleName }
-                          : {}),
-                        ...(turnOrigin.runId ? { runId: turnOrigin.runId } : {}),
-                      },
-                    }
-                  : {}),
-              },
-            });
-          },
-        },
-      );
-      // send outcome 统一走 toDesktopSessionDispatchOutcome 消费(directSessionSendGuard
-      // 强制的调用点协议),不手检 accepted。
-      const outcome = toDesktopSessionDispatchOutcome(sendResult, {
-        source: 'silent-stop-auto-resume',
-        context: `maker-ipc.silent-stop.auto-resume sessionId=${session.id}`,
-      });
-      if (!outcome.dispatched) {
-        silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
-        // Session 在派发确认前失败会回滚 turnGeneration;绑定必须跟着回滚,
-        // 否则失败收口合成的 done 会因 generation 不匹配被 ownership 守卫丢弃,
-        // 形成与本次修复对称的反向僵尸(输入边界永久忙)。
-        binding.rollbackBinding();
-        log.warn('silent-stop auto-resume send not accepted', {
-          sessionId: session.id,
-          reason: outcome.reason,
-        });
-        await surfaceSilentStopExhaustedBanner(session.id);
-        await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
-      } else {
-        // 只在供应商确认派发后丢弃原结束时间；未派发或抛出时由失败收口按原时间提交。
-        discardEndedActivity();
-        log.info('silent-stop auto-resume dispatched', { sessionId: session.id });
-      }
-    } catch (err) {
-      silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
-      binding.rollbackBinding();
-      log.warn('silent-stop auto-resume send failed', {
-        sessionId: session.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      await surfaceSilentStopExhaustedBanner(session.id);
-      await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
-    }
-    return;
-  }
-  if (decision.action === 'exhausted') {
-    await surfaceSilentStopExhaustedBanner(session.id);
-    await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
-  }
-  if (decision.action === 'skip') {
-    await settleSilentStopDone(session.id, 'skip', turnLeaseId, session, generation);
-  }
+  await handleSilentStopTurnEndWithPorts(session, doneAt, turnLeaseId, turnOrigin, {
+    silentStopTurnLeaseGate, agentInputCoordinatorHolder, silentStopAutoResumeGuard, sessionListActivityTracker,
+    productTurnWallClockTracker, advanceRuntimeRecoveryNotice, createDbMessage, settleSilentStopDone,
+    surfaceSilentStopExhaustedBanner, log,
+  });
 }
 
 function isFencedStaleProductTerminal(event: AgentEvent): boolean {
@@ -11657,61 +11531,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     assertAgentDeviceRouteUsable,
     describeAgentDevice,
-    getSessionRow: async (sessionId) => {
-      const db = getDbClient().drizzle;
-      const [row] = await db
-        .select({
-          id: sessions.id,
-          agentKind: sessions.agentKind,
-          model: sessions.model,
-          providerId: sessions.providerId,
-          status: sessions.status,
-          remoteHostId: sessions.remoteHostId,
-          orcaRole: sessions.orcaRole,
-          orcaRemoteLead: sessions.orcaRemoteLead,
-          sdkSessionId: sessions.sdkSessionId,
-          workingDir: sessions.workingDir,
-          source: sessions.source,
-          agentDeviceId: sessions.agentDeviceId,
-        })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      return row ?? null;
-    },
+    getSessionRow: readAgentSwitchSessionRow,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId, 'agent-switch'),
     listMessagesForHandoff: (sessionId, after) =>
       listMessagesForAgentHandoff(sessionId, 400, after),
     findParkedEngineSession: (sessionId, targetDbKind, fromAgentDeviceId) =>
       findParkedEngineSession(sessionId, targetDbKind, fromAgentDeviceId),
-    applyAgentSwitchToDb: async (sessionId, patch) => {
-      // 把 Agent 挪到另一台电脑时那台的目录才算数，不拿本机目录的窗口写进去。
-      const movingToOtherDevice = typeof patch.agentDeviceId === 'string';
-      const verifiedWindow = movingToOtherDevice ? undefined : lookupVerifiedContextWindow(
-        (agentKind, modelId, pid) =>
-          resolveConfiguredContextWindow(
-            getActiveCatalog(),
-            dbToMakerAgentKind(agentKind || patch.agentKind),
-            pid,
-            modelId,
-          ),
-        patch.model,
-        patch.providerId ?? null,
-        dbToMakerAgentKind(patch.agentKind),
-      );
-      await applyAgentSwitchToSessionRow(sessionId, {
-        ...patch,
-        ...(verifiedWindow ? { contextWindow: verifiedWindow } : {}),
-      });
-    },
+    applyAgentSwitchToDb: createAgentSwitchDbApply(applyAgentSwitchToSessionRow, resolveConfiguredContextWindow),
     setSessionProvider,
     supersedePendingCredentialSwitch: clearPendingCredentialSwitchForSession,
-    insertBoundaryMessage: async (sessionId, content) => {
-      const clientId = `agent-switch:${createId()}`;
-      await createDbMessage(sessionId, { clientId, role: 'agent_switch', content });
-      return clientId;
-    },
+    insertBoundaryMessage: createAgentSwitchBoundaryInsert(createDbMessage),
     applyResumeFallbackAtomically: applyAgentSwitchResumeFallbackAtomically,
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
@@ -11729,69 +11559,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         thinking,
       });
     },
-    bootstrapSwitchedSession: async (sessionId, opts) => {
-      const ownerGeneration = getActiveAppSession().generation;
-      const assertOwner = () => {
-        if (getActiveAppSession().generation !== ownerGeneration) throw new Error('REMOTE_AGENT_ACCOUNT_CHANGED');
-      };
-      // 切换已提交,从 DB 行(新引擎值)重建 live session。resumeSessionId 直接取
-      // 行上的 sdk_session_id:切换事务在有停泊绑定时已把它落成停泊 id(Phase 2
-      // 切回续接),否则为 null = 全新原生会话,上下文由交接注入承接——与
-      // lazy-create(reconcileCreateOptsAgainstDb)同一条 resume 口径。
-      const db = getDbClient().drizzle;
-      const [row] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-      if (!row) throw new Error(`session ${sessionId} row missing after agent switch`);
-      if (!row.workingDir) {
-        // 无 workingDir(理论上只有从未 send 过的草稿,不可能有可切换的历史):
-        // 抛错走 engineReady=false 降级,下一条消息的 lazy-create 用其现有错误呈现。
-        throw new Error(`session ${sessionId} has no workingDir; cannot bootstrap switched engine`);
-      }
-      const co = buildCreateOptsWithStderr({
-        id: sessionId,
-        agentKind: dbToMakerAgentKind(row.agentKind),
-        workingDir: row.workingDir,
-        model: row.model ?? undefined,
-        providerId: row.providerId,
-        effort: (row.effort ?? undefined) as CreateOpts['effort'],
-        fastMode: (row.fastMode ?? false),
-        permissionMode: (row.permissionMode ?? 'ask') as CreateOpts['permissionMode'],
-        planMode: false,
-        // 跨引擎意图期内改的思考开关必须显式带入：否则 createSession 只能读被控端
-        // 镜像/默认值，与用户刚选的不一致（device-link 远程场景）。
-        ...(opts?.thinkingEnabled !== undefined
-          ? { thinkingEnabled: opts.thinkingEnabled }
-          : {}),
-        title: row.title ?? undefined,
-        resumeSessionId: row.sdkSessionId ?? undefined,
-        // 远端会话切换引擎后仍是远端:带回 remoteHostId 并走 ensure (SSH
-        // 重连 / agent 安装 / codex daemon MCP 注入), 否则会以远端
-        // workingDir 在本机 spawn。
-        remoteHostId: row.remoteHostId ?? undefined,
-        vendorOptions: resolveSwitchedSessionVendorOptions(sessionId),
-      });
-      // 协同的 Lead / Worker(只有供应商组换电脑会走到这里)：按任务记录带回协同身份、提示词与协同工具，
-      // 换过去的那台照常是团队成员，不等下一次发送再重启一次。
-      if (row.orcaRole) await synthesizeOrcaVendorOptionsFromDb(sessionId, co);
-      if (co.extraDirs === undefined) {
-        try {
-          const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-          if (extraDirs.length > 0) Object.assign(co, directoryGrantsForRuntime(extraDirs));
-        } catch (err) {
-          log.warn('agent-switch bootstrap: read extra_dirs from DB failed (non-fatal)', {
-            sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-      if (co.writableDirs === undefined) {
-        const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
-        if (writableDirs.length > 0) co.writableDirs = writableDirs;
-      }
-      assertOwner();
-      await ensureRemoteReadyForSessionStart({ createOpts: co });
-      await bootstrapSession(co, assertOwner, opts?.nativeHistoryResume);
-      broadcastSessionCreated(sessionId);
-    },
+    bootstrapSwitchedSession: createSwitchedSessionBootstrap({
+      getActiveAppSession, buildCreateOptsWithStderr, resolveSwitchedSessionVendorOptions,
+      synthesizeOrcaVendorOptionsFromDb, readSessionExtraDirsFromDb, directoryGrantsForRuntime,
+      readSessionWritableDirsFromDb, ensureRemoteReadyForSessionStart, bootstrapSession, broadcastSessionCreated, log,
+    }),
     withCloseSuppressed: withRehydrateCloseSuppressed,
     pendingSwitches: agentSwitchPending,
     selectSameAgentModel: async (sessionId, intent, applyNow, assertSelectionCurrent, beforeMutation, pendingSelectionAccess) => {
@@ -16306,16 +16078,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return result;
   });
 
-  const hasPendingIdleReleaseInput = async (sessionId: string): Promise<boolean> => {
-    await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
-    // A failed restore is itself a pending condition: never close a worker while
-    // its durable follow-up snapshot is still unavailable.
-    if (!inputCoordinator.isQueueRestored(sessionId)) return true;
-    return (
-      inputCoordinator.hasPendingQueuedWork(sessionId) ||
-      inputCoordinator.hasQueuedItemWhere(sessionId, () => true, { includeRecovery: true })
-    );
-  };
+  const hasPendingIdleReleaseInput = (sessionId: string): Promise<boolean> =>
+    hasPendingIdleReleaseInputFor(inputCoordinator, sessionId);
 
   // 协同远端 Worker：Worker 在同账号另一台电脑运行(见 orcaRemoteWorkers.ts)。
   // 其代理任务行永不在本机跑 Agent，团队服务的会话依赖按是否远端分流。
@@ -17049,35 +16813,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   piIdleReleaseWatcher = createPiIdleReleaseWatcher({
     closeSession: createPiIdleReleaseClose(maker, withRehydrateCloseSuppressed),
     readIdleReleaseMinutes: () => DEFAULT_PI_IDLE_RELEASE_MINUTES,
-    listCandidates: async (idleBeforeMs) => {
-      const idleSince = piIdleReleaseIdleSince();
-      const rows = await getDbClient()
-        .drizzle
-        .select({ id: sessions.id, idleSinceMs: idleSince })
-        .from(sessions)
-        .where(and(piIdleReleaseCandidateWhere(), sql`${idleSince} < ${idleBeforeMs}`));
-      return rows.map((row) => ({ id: row.id, idleSinceMs: Number(row.idleSinceMs) }));
-    },
-    readIdleSinceMs: async (sessionId) => {
-      const [row] = await getDbClient()
-        .drizzle
-        .select({ idleSinceMs: piIdleReleaseIdleSince() })
-        .from(sessions)
-        .where(and(eq(sessions.id, sessionId), piIdleReleaseCandidateWhere()))
-        .limit(1);
-      return row ? Number(row.idleSinceMs) : null;
-    },
+    ...createPiIdleReleaseCandidateQueries(getDbClient),
     getSession: (sessionId) => maker.getSession(sessionId) ?? null,
     withSessionLock: withSendToSessionLock,
     hasPendingInput: hasPendingIdleReleaseInput,
     hasScheduledAutoResume: (sessionId) => {
       const coordinator = agentInputCoordinatorHolder;
       if (!coordinator) return false;
-      return (
-        coordinator.isAutoResumePending(sessionId) ||
-        coordinator.getAutoResumeAttemptToken(sessionId) !== null ||
-        coordinator.hasQueuedAutoResume(sessionId)
-      );
+      return hasScheduledIdleReleaseAutoResume(coordinator, sessionId);
     },
     now: Date.now,
     timer: { setInterval, clearInterval },
@@ -17092,26 +16835,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listSessions: () => maker.listActiveSessions(),
     getSession: (id) => maker.getSession(id),
     readMinutes: readClaudeIdleMinutes,
-    isOrdinaryTask: async (id, sdkSessionId) => Boolean(
-      await getDbClient().queryOne(ORDINARY_CLAUDE_TASK_SQL, [id, sdkSessionId]),
-    ),
+    isOrdinaryTask: createOrdinaryIdleReleaseTaskCheck(getDbClient, ORDINARY_CLAUDE_TASK_SQL),
     hasPendingInput: hasPendingIdleReleaseInput,
     isHostBusy: (id) => isSessionTurnPendingCompletion(id)
       || hasPendingAgentInteractionForSession(id)
       || Boolean(getClaudeSessionBackgroundActivity(id))
-      || inputCoordinator.hasPendingQueuedWork(id)
-      || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
-      || inputCoordinator.isAutoResumePending(id)
-      || inputCoordinator.hasQueuedAutoResume(id)
-      || inputCoordinator.getAutoResumeAttemptToken(id) !== null
+      || hasIdleReleaseQueuedWork(inputCoordinator, id)
       || pendingCredentialSwitchHolder?.has(id) === true,
     withLock: withSendToSessionLock,
     // The existing suppression window is sampled by the synchronous status
     // listener and onClose hook before it yields; no task resources are removed.
-    close: (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, async () =>
-      await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh',
-        retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed',
-    ),
+    close: createIdleReleaseRuntimeClose(maker, withRehydrateCloseSuppressed),
     now: () => performance.now(),
     released: (sessionId, idleMs) => log.info('claudeIdleWatcher: released idle runtime', { sessionId, idleMs }),
     warn: (message) => log.warn(message),
@@ -17141,23 +16875,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listSessions: () => maker.listActiveSessions(),
     getSession: (id) => maker.getSession(id),
     readMinutes: () => DEFAULT_CODEX_IDLE_RELEASE_MINUTES,
-    isOrdinaryTask: async (id, sdkSessionId) => Boolean(
-      await getDbClient().queryOne(ORDINARY_CODEX_TASK_SQL, [id, sdkSessionId]),
-    ),
+    isOrdinaryTask: createOrdinaryIdleReleaseTaskCheck(getDbClient, ORDINARY_CODEX_TASK_SQL),
     hasPendingInput: hasPendingIdleReleaseInput,
     isHostBusy: (id) => isSessionTurnPendingCompletion(id)
       || hasPendingAgentInteractionForSession(id)
-      || inputCoordinator.hasPendingQueuedWork(id)
-      || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
-      || inputCoordinator.isAutoResumePending(id)
-      || inputCoordinator.hasQueuedAutoResume(id)
-      || inputCoordinator.getAutoResumeAttemptToken(id) !== null
+      || hasIdleReleaseQueuedWork(inputCoordinator, id)
       || pendingCredentialSwitchHolder?.has(id) === true,
     withLock: withSendToSessionLock,
-    close: (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, async () =>
-      await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh',
-        retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed',
-    ),
+    close: createIdleReleaseRuntimeClose(maker, withRehydrateCloseSuppressed),
     now: () => performance.now(),
     released: (sessionId, idleMs) => log.info('codexIdleWatcher: released idle runtime', { sessionId, idleMs }),
     warn: (message) => log.warn(message),
@@ -17782,269 +17507,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
 
-  const maybeApplySessionRuntimeFallback = async (
-    sessionId: string,
-    episodeAttempt: number,
-    attemptToken: number,
-    requireRouteChange = false,
-    isCurrent: () => boolean = () => true,
-  ): Promise<RuntimeFallbackResult<Session>> => {
-    const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
-    let runtimeSession: Session | null = null;
-    let blockAutoResumeForModelWindowConfirmation = false;
-    try {
-      const profiles = await readSessionRuntimeProfiles(sessionId);
-      if (!profiles || !isCurrent()) return { session: null, outcome: 'superseded' };
-      // A previously accepted Agent/fallback mutation owns the next boundary.
-      // Do not let a later infrastructure retry replace that pending intent.
-      if (profiles.control.pending ||
-          !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) return { session: null, outcome: 'superseded' };
-      // Ordinary delegated tasks have no Bot link. Their explicit creation route
-      // still forbids automatic model replacement, while same-route retries remain valid.
-      const explicitTaskModel = await hasExplicitSessionTaskModel(sessionId);
-      if (!isCurrent()) return { session: null, outcome: 'superseded' };
-      if (explicitTaskModel) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
-      // Bot routes are explicit and ordered. They switch on the first recoverable
-      // failure and never depend on the generic Session fallback toggle/catalog
-      // guesser. Ordinary Sessions keep their existing second-attempt behavior.
-      const botFallback = await readBotFallbackCandidate(sessionId, profiles.effective);
-      if (!isCurrent()) return { session: null, outcome: 'superseded' };
-      let currentForFallback = profiles.effective;
-      let candidate = botFallback.candidate;
-      if (!botFallback.isBot) {
-        if (await readSessionAgentDeviceId(sessionId)) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
-        if (requireRouteChange) return { session: null, outcome: 'exhausted' };
-        if (episodeAttempt < 2 || !readSessionRuntimeFallbackSettings().enabled) return { session: null, outcome: 'unchanged' };
-        const providers = await getDesktopProviderService().listProviders({
-          allowSideEffects: false,
-          catalog: getActiveCatalog(),
-        });
-        currentForFallback =
-          profiles.effective.providerId === null
-            ? {
-                ...profiles.effective,
-                providerId: effectiveSourceIdForModel(
-                  providers,
-                  null,
-                  profiles.effective.model,
-                  profiles.effective.agentKind,
-                ),
-              }
-            : profiles.effective;
-        candidate = pickSessionRuntimeFallback({
-            providers,
-            current: currentForFallback,
-            visitedRoutes: profiles.control.visitedRoutes,
-            currentHop: profiles.control.fallbackHop,
-            maxHops: 2,
-          });
-      }
-      // A Bot with no other route has nothing to exhaust; the caller decides whether
-      // the same route may be retried.
-      if (!candidate) return { session: null, outcome: botFallback.routeLocked ? 'unchanged' : 'exhausted' };
-      runtimeSession = maker.getSession(sessionId) ?? null;
-      if (runtimeSession) {
-        pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);
-      }
-      const recordFailedCandidate = async (
-        failed: SessionRuntimeProfile,
-      ): Promise<boolean> => {
-        let recorded = false;
-        try {
-          await withSendToSessionLock(sessionId, async () => {
-            if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;
-            if (!isCurrent()) return;
-            const [runtimeStatus] = await getDbClient()
-              .drizzle.select({ status: sessions.status })
-              .from(sessions)
-              .where(eq(sessions.id, sessionId))
-              .limit(1);
-            if (runtimeStatus?.status !== 'active') return;
-            recorded = recordFailedSessionRuntimeFallbackCandidate(
-              sessionId,
-              profiles.control.generation,
-              failed,
-            );
-          });
-        } catch (recordError) {
-          log.debug('automatic runtime fallback failed-candidate record skipped', {
-            sessionId,
-            providerId: failed.providerId,
-            model: failed.model,
-            error: recordError instanceof Error ? recordError.message : String(recordError),
-          });
-        }
-        return recorded;
-      };
-      const advanceConfiguredBotRoute = async (
-        failed: SessionRuntimeProfile,
-      ): Promise<boolean> => {
-        if (!await recordFailedCandidate(failed) || !botFallback.isBot) return false;
-        const next = await readBotFallbackCandidate(sessionId, currentForFallback);
-        candidate = next.candidate;
-        return candidate !== null;
-      };
+  // Assembled before the runtime selection and the other helpers below; each is read when a fallback runs.
+  const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({
+    maker,
+    readSessionRuntimeProfiles: (sessionId) => readSessionRuntimeProfiles(sessionId),
+    canApplyAutomaticRuntimeSelection: (sessionId, generation) => canApplyAutomaticRuntimeSelection(sessionId, generation),
+    readBotFallbackCandidate: (sessionId, current) => readBotFallbackCandidate(sessionId, current),
+    readSessionAgentDeviceId: (sessionId) => readSessionAgentDeviceId(sessionId),
+    readSessionRuntimeFallbackSettings, getDesktopProviderService, pendingSessionRuntimeFallbackRebuilds,
+    applySessionRuntimeSelection: (...args) => applySessionRuntimeSelection(...args),
+    getPendingCredentialSwitchTarget: (sessionId) => getPendingCredentialSwitchTarget(sessionId),
+    clearPendingCredentialSwitchForSession: (sessionId, options) => clearPendingCredentialSwitchForSession(sessionId, options),
+    broadcastSessionRuntimeProjection: (sessionId) => broadcastSessionRuntimeProjection(sessionId),
+    agentSwitchDeps,
+    performSessionAgentSwitch,
+    runtimeSelectionRequiresModelWindowConfirmation: (result) => runtimeSelectionRequiresModelWindowConfirmation(result),
+    log,
+  });
 
-      // A configured route can itself be unusable (missing login, unsupported
-      // harness on a remote host, disabled provider). Skip such routes inside
-      // this one recovery boundary instead of retrying the broken primary and
-      // waiting for another user-visible failure before trying route N+1.
-      while (candidate) {
-        if (!isCurrent()) return { session: runtimeSession, outcome: 'superseded' };
-        const selected = candidate;
-        const applyCandidate = () => withSendToSessionLock(sessionId, async () => {
-          if (!isCurrent() || !sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch) ||
-              !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) {
-            return { deferred: false, superseded: true };
-          }
-          const result = await applySessionRuntimeSelection(
-            sessionId,
-            selected.model,
-            selected.providerId,
-            { effort: selected.effort, fastMode: selected.fastMode },
-            {
-              source: 'fallback',
-              sessionLockHeld: true,
-              expectedGeneration: profiles.control.generation,
-              previousProfile: currentForFallback,
-              effortExplicit: false,
-              fastExplicit: false,
-            },
-          );
-          if (requireRouteChange && result.deferred && result.generation !== undefined &&
-              cancelPendingSessionRuntimeMutation(sessionId, result.generation)) {
-            const pendingCredential = getPendingCredentialSwitchTarget(sessionId);
-            if (pendingCredential?.model === selected.model &&
-                pendingCredential.providerId === selected.providerId) {
-              clearPendingCredentialSwitchForSession(sessionId, { wake: false });
-            }
-            await broadcastSessionRuntimeProjection(sessionId);
-          }
-          return result;
-        });
-        if (selected.agentKind !== currentForFallback.agentKind
-          || (selected.agentDeviceId ?? null) !== (currentForFallback.agentDeviceId ?? null)) {
-          try {
-            const result = await withSendToSessionLock(sessionId, async () => {
-              if (!isCurrent() || !sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch) ||
-                  !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) return null;
-              const switched = await performSessionAgentSwitch(agentSwitchDeps, {
-                sessionId,
-                targetAgentKind: selected.agentKind,
-                agentDeviceId: selected.agentDeviceId ?? null,
-                model: selected.model,
-                providerId: selected.providerId,
-                effort: selected.effort,
-                fastMode: selected.fastMode,
-                applyNow: true,
-              });
-              if (switched.switched) {
-                acceptSessionRuntimeMutation({
-                  sessionId,
-                  source: 'fallback',
-                  profile: selected,
-                  previousProfile: currentForFallback,
-                  deferred: false,
-                });
-              }
-              return switched;
-            });
-            if (!result) return { session: runtimeSession, outcome: 'superseded' };
-            if (!result.switched) {
-              if (await advanceConfiguredBotRoute(selected)) continue;
-              return { session: runtimeSession, outcome: 'exhausted' };
-            }
-            // The route transaction has already committed, including a new
-            // generation. Its failed bootstrap must not resume input or advance
-            // candidates using the pre-switch profile/generation captured above.
-            if (!result.engineReady) return { session: runtimeSession, outcome: 'failed' };
-          } catch (error) {
-            if (await advanceConfiguredBotRoute(selected)) continue;
-            throw error;
-          }
-          log.info('automatic Bot runtime fallback switched harness', {
-            sessionId,
-            episodeAttempt,
-            fromAgentKind: currentForFallback.agentKind,
-            toAgentKind: selected.agentKind,
-            toProviderId: selected.providerId,
-            toModel: selected.model,
-          });
-          return { session: runtimeSession, outcome: 'switched' };
-        }
-        let result: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
-        try {
-          result = await applyCandidate();
-        } catch (error) {
-          if (
-            runtimeSession?.agentKind !== 'claude-code' ||
-            !runtimeSession.remoteHostId ||
-            !isRemoteModelSwitchRouteChangeError(error)
-          ) {
-            if (await advanceConfiguredBotRoute(selected)) continue;
-            throw error;
-          }
-          // SSH Claude daemons freeze endpoint/credential env at spawn. The old
-          // Session is already registered in pendingSessionRuntimeFallbackRebuilds,
-          // so this requested close preserves the exact auto-resume attempt while
-          // lazy bootstrap recreates it from the accepted candidate profile.
-          log.info('automatic session runtime fallback rebuilding frozen remote route', {
-            sessionId,
-            episodeAttempt,
-            attemptToken,
-            remoteHostId: runtimeSession.remoteHostId,
-            toProviderId: selected.providerId,
-            toModel: selected.model,
-          });
-          await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-          try {
-            result = await applyCandidate();
-          } catch (retryError) {
-            if (await advanceConfiguredBotRoute(selected)) continue;
-            throw retryError;
-          }
-        }
-        if (runtimeSelectionRequiresModelWindowConfirmation(result)) {
-          // Confirmation is a user decision, not a candidate-availability
-          // failure, so it must not advance the configured fallback chain.
-          blockAutoResumeForModelWindowConfirmation = true;
-          throw new Error(
-            'automatic model-window confirmation is unsupported; runtime selection was not changed',
-          );
-        }
-        if (result.deferred && requireRouteChange) {
-          // The automatic intent was withdrawn inside the route lock above.
-          return { session: runtimeSession, outcome: 'failed' };
-        }
-        log.info('automatic session runtime fallback evaluated', {
-          sessionId,
-          episodeAttempt,
-          attemptToken,
-          fromProviderId: currentForFallback.providerId,
-          fromModel: currentForFallback.model,
-          toProviderId: selected.providerId,
-          toModel: selected.model,
-          applied: !result.superseded,
-        });
-        return { session: runtimeSession, outcome: result.superseded ? 'superseded' : 'switched' };
-      }
-      return { session: runtimeSession, outcome: 'exhausted' };
-    } catch (error) {
-      log.warn('automatic session runtime fallback skipped after switch failure', {
-        sessionId,
-        episodeAttempt,
-        attemptToken,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      if (blockAutoResumeForModelWindowConfirmation) {
-        // Ordinary fallback failures may retry the unchanged runtime. A required
-        // confirmation must instead abort auto-resume before it sends again.
-        if (runtimeSession) pendingSessionRuntimeFallbackRebuilds.delete(runtimeSession);
-        throw error;
-      }
-      return { session: runtimeSession, outcome: 'failed' };
-    }
-  };
 
   function hostPluginInputSource(): AgentInputQueuedMessage['sourcePlugin'] {
     const plugin = getPluginHostToolCaller();
@@ -18676,86 +18156,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   };
 
-  const createUserMessageDurably: typeof createDbMessage = async (sessionId, message, opts) => {
-    // 真实用户消息(renderer 发送事务)→ 给两个自动续跑守卫充值额度。
-    //
-    // **必须按 agentMeta.autoResume 排除自动补发的消息。** silent-stop 的自动续跑
-    // 走 session.send 直发、天然绕开本路径,但**中断自动续跑走的正是本路径**
-    // (coordinator 队列 → makerSendTransaction.onAccepted → 这里)。不排除的话它
-    // 每次续跑都给自己(和 silent-stop)重新充值,「每条人话最多买 N 个自动 turn」
-    // 这条防死循环的硬保证就没了 —— 上游连环抽风时会无限自动续跑。
-    if (isAutoResumeUserMessage(message.agentMeta)) {
-      // 这条自动续跑消息的结果还不知道,登记待确认(产出→succeeded / 再被打断→failed)。
-      const attemptToken = autoResumeAttemptTokenFromAgentMeta(message.agentMeta);
-      if (attemptToken !== null) {
-        autoResumeBookkeeping.registerPendingOutcome(sessionId, attemptToken, message.clientId);
-      }
-    } else {
-      const origin =
-        message.agentMeta && typeof message.agentMeta === 'object'
-          ? (message.agentMeta as { origin?: unknown }).origin
-          : undefined;
-      const originKind =
-        origin && typeof origin === 'object' ? (origin as { kind?: unknown }).kind : undefined;
-      // Automatic inputs (scheduler / goal / Orca / tool-sent session messages) are not fresh
-      // human intervention. They may share the coordinator persistence path with composer
-      // messages, but must not recharge the interrupted-turn episode budget and defeat its
-      // hard upper bound.
-      const isAutomaticPrompt = isAutomaticInputOriginKind(originKind);
-      silentStopAutoResumeGuard.noteUserSend(sessionId);
-      if (!isAutomaticPrompt) {
-        interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
-        usageLimitAutoResume.noteUserAction(sessionId);
-        providerGroupService?.noteUserAction(sessionId);
-      }
-    }
-    // 落库失败 → 撤掉刚才那条待确认登记:那条消息压根不存在,留着会让后续事件去 patch
-    // 一个不存在的 clientId,map 也一直脏着(copilot review)。登记刻意放在写之前(不能
-    // 让写完到登记之间的事件漏掉结算),所以这里补一条失败回滚。
-    const releasePendingOutcomeOnFailure = () => {
-      if (!isAutoResumeUserMessage(message.agentMeta)) return;
-      const attemptToken = autoResumeAttemptTokenFromAgentMeta(message.agentMeta);
-      if (attemptToken !== null) {
-        autoResumeBookkeeping.releasePendingOutcome(sessionId, attemptToken, message.clientId);
-      }
-    };
-    try {
-      return await enqueueDurableWrite(`user:${sessionId}:${message.clientId}`, async (ownerScope) => {
-        // Coordinator accepts can stamp transcriptParentUuid early; this late FIFO
-        // fallback covers makerSendTransaction/direct createDbMessage paths.
-        const hasTranscriptParent =
-          typeof message.agentMeta?.transcriptParentUuid === 'string' &&
-          message.agentMeta.transcriptParentUuid.length > 0;
-        // 会话关闭（如远程电脑断线）会清掉内存里的值，重发的第一条消息就没有锚点；
-        // 这时从库里补回上一条 assistant 的 uuid。
-        const transcriptParentUuid = hasTranscriptParent
-          ? undefined
-          : getLastAssistantTranscriptUuid(sessionId)
-            ?? await Promise.resolve().then(() => findLatestAssistantTranscriptUuid(sessionId)).catch(() => undefined);
-        const enrichedMessage =
-          transcriptParentUuid && !hasTranscriptParent
-            ? { ...message, agentMeta: { ...message.agentMeta, transcriptParentUuid } }
-            : message;
-        // session-agent-switch:user 行逐行 stamp 当前引擎(见 messages.agent_kind 注释)。
-        const agentKind = getSessionDbAgentKind(sessionId);
-        const scopedOpts = {
-          ...(opts ?? {}),
-          // Keep a committed user row durable across an owner switch, while
-          // preventing createMessage from relabelling its broadcast to the
-          // next owner after the media-ref await.
-          broadcastOwnerScope: ownerScope,
-        };
-        return createDbMessage(
-          sessionId,
-          agentKind ? { ...enrichedMessage, agentKind } : enrichedMessage,
-          scopedOpts,
-        );
-      });
-    } catch (err) {
-      releasePendingOutcomeOnFailure();
-      throw err;
-    }
-  };
+  const createUserMessageDurably: typeof createDbMessage = createUserMessageDurableWrite({
+    autoResumeBookkeeping, silentStopAutoResumeGuard, interruptedTurnAutoResumeGuard, usageLimitAutoResume,
+    getProviderGroupService: () => providerGroupService,
+    enqueueDurableWrite, getLastAssistantTranscriptUuid, getSessionDbAgentKind, createDbMessage,
+  });
 
   persistUserTurnMessage = createUserMessageDurably;
 
@@ -18987,48 +18392,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         patchMessageAgentMeta(sessionId, clientId, { piEntryId }),
       ),
     beforeDispatchDirectUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
-    onModelDispatched: recordDispatchedModelHolder = (sessionId, clientId) => {
-      const live = maker.getSession(sessionId);
-      if (!live) return;
-      const current: TurnModelIdentity = {
-        agentKind: live.agentKind, model: live.model, providerId: getSessionProvider(sessionId),
-      };
-      const owner = captureDataOwnerBroadcastScope();
-      const db = getDbClient().drizzle;
-      const createdAt = Date.now();
-      void enqueueDurableWrite(`turn-model:${sessionId}:${clientId}`, async () => {
-        if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
-        const [input] = await db.select({ content: messages.content, meta: messages.agentMeta }).from(messages)
-          .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
-            eq(messages.role, 'user'), isNull(messages.rewindAt))).limit(1);
-        if (!input) return;
-        await recordTurnModelChange(current, {
-          input: { content: input.content, autoResume: isAutoResumeUserMessage(input.meta ? JSON.parse(input.meta) : null) },
-          readPrevious: async () => {
-            const [previous] = await db.select({ meta: messages.agentMeta }).from(messages)
-              .innerJoin(sessions, eq(sessions.id, messages.sessionId))
-              .where(and(
-                eq(messages.sessionId, sessionId), eq(messages.role, 'user'),
-                sql`${messages.clientId} <> ${clientId}`, isNull(messages.rewindAt),
-                or(isNull(sessions.clearedAt), sql`${messages.createdAt} > ${sessions.clearedAt}`),
-                sql`CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.executionModel') END IS NOT NULL`,
-              )).orderBy(desc(messages.createdAt), desc(sql`${messages}.rowid`)).limit(1);
-            return previous?.meta
-              ? (JSON.parse(previous.meta) as { executionModel?: TurnModelIdentity }).executionModel ?? null
-              : null;
-          },
-          record: async (executionModel) => isDataOwnerBroadcastScopeCurrent(owner) &&
-            await patchMessageAgentMeta(sessionId, clientId, { executionModel }),
-          publish: async (modelChange) => {
-            if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
-            await createDbMessage(sessionId, {
-              clientId: `model-change:${clientId}`, role: 'assistant', content: '',
-              agentMeta: { modelChange }, agentKind: makerToDbAgentKind(current.agentKind), createdAt,
-            });
-          },
-        });
-      }).catch((error) => log.warn('turn model attribution failed', { sessionId, error }));
-    },
+    onModelDispatched: recordDispatchedModelHolder = createTurnModelAttribution({
+      maker, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
+      enqueueDurableWrite, patchMessageAgentMeta, createDbMessage, log,
+    }),
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
       assertTaskPromptCurrent(sessionId);
       const remote = isDeviceLinkInvoke();
@@ -19209,9 +18576,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Host-only hints belong to the dispatched input, not a persistent session cache.
   // The fallback transaction still rechecks the authoritative Bot link and chain.
   const botFallbackInputs = new WeakSet<object>();
-  const canRecoverTurn = (signals: InterruptedTurnErrorSignals, item?: AgentInputQueuedMessage | null) =>
-    isInterruptedTurnError(signals) ||
-    (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
+  // The coordinator and the stable-session lookup are assembled below; both are read when a hook runs.
+  const interruptedTurnAutoResumeHooks = createInterruptedTurnAutoResumeHooks<Session>({
+    inputCoordinator: {
+      isExecutionPaused: (sessionId) => inputCoordinator.isExecutionPaused(sessionId),
+      autoRetryLastError: (sessionId, attemptToken) => inputCoordinator.autoRetryLastError(sessionId, attemptToken),
+    },
+    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, saveTurnStartedAtForDeferred,
+    beginSchedulerAutoResume,
+    getStableSessionForTurnBoundary: (sessionId) => getStableSessionForTurnBoundary(sessionId),
+    pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
+    providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
+    notifySchedulerAutoResumeFailed, autoResumeAttemptToken, log,
+  });
+  const canRecoverTurn = interruptedTurnAutoResumeHooks.canRecoverTurn;
 
   const sendToAgentAccepted: typeof sendToAgentAcceptedUnlocked = async (...args) => {
     const [sessionId] = args;
@@ -20386,174 +19764,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           releaseProviderGroupHeld(sessionId, holdId);
         });
     },
-    onResumableTurnErrorDiscarded: (
-      sessionId: string,
-      options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner; providerGroupSwitchHoldId?: number },
-    ) => {
-      if (options.providerGroupSwitchHoldId !== undefined) {
-        const deferred = autoResumeBookkeeping.takeDeferredError(sessionId, options.owner);
-        if (deferred) {
-          providerGroupHeldErrors.stash(sessionId, options.providerGroupSwitchHoldId, deferred.detail);
-          if (deferred.orcaTerminal || deferred.groupTerminal) {
-            providerGroupHeldTerminals.stash(sessionId, options.providerGroupSwitchHoldId, deferred);
-          }
-        }
-        return;
-      }
-      if (options.surfaceError) {
-        autoResumeBookkeeping.surfaceSuppressedError(sessionId, { deferredOwner: options.owner });
-      } else {
-        autoResumeBookkeeping.flushSuppressedError(sessionId, { deferredOwner: options.owner });
-      }
-    },
-    onResumableTurnError: (
-      sessionId: string,
-      signals: InterruptedTurnErrorSignals,
-      item: AgentInputQueuedMessage,
-    ) => {
-      if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
-      const botInput = botFallbackInputs.has(item.createOpts);
-      const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
-      const sameRouteRetryable = isInterruptedTurnError(signals);
-      const erroredAt = Date.now();
-      const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
-      if (decision.action !== 'resume') {
-        // 不接管 → coordinator 走常规错误呈现(落 error 行 + 红横幅 + 「继续任务」)。
-        // 额度耗尽 / 熔断 / 开关关闭都走这里:自愈救不动了就把方向盘交回用户。
-        log.debug('interrupted-turn auto-resume not granted', {
-          sessionId,
-          action: decision.action,
-        });
-        return null;
-      }
-      // 接管:压住这条错误的落库与横幅,只在聊天流里显示低调的自愈提示。
-      //
-      // **详情的暂存刻意不在这里做**,由 onEvent 里"压住落库"那一刻唯一负责
-      // (`autoResumeSuppressesPersist` 分支)。原先两处都 stash 一遍,内容相同、看着无害,
-      // 但 stashSuppressedError 现在要在覆盖前把**上一次**中断补落 —— 同一次中断 stash 两遍
-      // 就会把正在压制中的自己补落出来,红色错误卡与活动行同时出现。每次中断只 stash 一次
-      // 是那条 flush 成立的前提。
-      //
-      // saveTurnStartedAtForDeferred 与 isRemoteAuthRetry 同款 —— 补落时 turn 开始时刻
-      // 已被 resetTurnPersistState 清掉,不先存一份会让 /clear 竞态 cap 判错。
-      saveTurnStartedAtForDeferred(sessionId);
-      log.info('interrupted-turn auto-resume scheduled', {
-        sessionId,
-        attempt: decision.attempt,
-        maxAttempts: decision.maxAttempts,
-        episodeAttempt: decision.episodeAttempt,
-        maxEpisodeAttempts: decision.maxEpisodeAttempts,
-        sessionTotal: decision.sessionTotal,
-        attemptToken: decision.attemptToken,
-        delayMs: decision.delayMs,
-      });
-      autoResumeBookkeeping.beginAttempt(sessionId, decision.attemptToken);
-      const schedulerRunId =
-        item.origin?.kind === 'scheduler' && typeof item.origin.runId === 'string'
-          ? item.origin.runId
-          : null;
-      if (schedulerRunId) {
-        beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken);
-      }
-      if (isContinuationOnlyAutoResumeReason(signals.reason)) {
-        const runtimeSession = getStableSessionForTurnBoundary(sessionId);
-        if (runtimeSession) {
-          pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);
-        }
-      }
-      // 排期的撤旧、补落与令牌都在 AutoResumeBookkeeping.schedule 里(带单测),这里只给
-      // 退避时长和到点要干的事。
-      autoResumeBookkeeping.schedule(
-        sessionId,
-        decision.attemptToken,
-        decision.delayMs,
-        (attempt) => {
-          return (async () => {
-            let fallbackRebuildSession: Session | null = null;
-            try {
-              const fallback = await maybeApplySessionRuntimeFallback(
-                sessionId,
-                decision.episodeAttempt,
-                decision.attemptToken,
-                requireRouteChange,
-                () => attempt.isCurrent() && !inputCoordinator.isExecutionPaused(sessionId),
-              );
-              fallbackRebuildSession = fallback.session;
-              if (!attempt.isCurrent()) return;
-              if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
-                interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
-                autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
-                  surfaceBanner: true,
-                });
-                return;
-              }
-              // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery
-              // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),
-              // autoRetryLastError 内部复核后会 no-op 并返回非 resumed —— 此时必须回滚
-              // pendingResume。
-              const outcome = await inputCoordinator.autoRetryLastError(
-                sessionId,
-                decision.attemptToken,
-              );
-              if (!attempt.isCurrent()) {
-                log.debug('interrupted-turn auto-resume completion superseded', {
-                  sessionId,
-                  outcome,
-                });
-                return;
-              }
-              if (outcome !== 'resumed') {
-                interruptedTurnAutoResumeGuard.noteResumeSendFailed(
-                  sessionId,
-                  decision.attemptToken,
-                );
-                // superseded = 用户自己接手了,别再弹横幅打扰(但中断要补进历史);
-                // no-progress = 零产出、按设计不自动续跑,这是一次没人接手的真失败,
-                // 必须把横幅还给用户,否则被静默吞掉(copilot review)。
-                autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
-                  surfaceBanner: outcome === 'no-progress',
-                });
-                log.debug('interrupted-turn auto-resume not dispatched', { sessionId, outcome });
-                return;
-              }
-              // resumed 只表示续跑项已经进队。被压住的错误要等 vendor 真正接受后再丢弃；
-              // 派发前被 Stop / clear / ghost block 丢弃时，discard/undispatched 回调会恢复
-              // 原 recovery 并把错误回落给用户。
-              log.info('interrupted-turn auto-resume queued', { sessionId });
-            } catch (err) {
-              if (!attempt.isCurrent()) {
-                log.debug('interrupted-turn auto-resume rejection superseded', { sessionId });
-                return;
-              }
-              interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
-              // 补发本身失败 → 回落成常规错误呈现,让用户能手点重试。
-              autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
-                surfaceBanner: true,
-              });
-              log.warn('interrupted-turn auto-resume failed', {
-                sessionId,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            } finally {
-              if (fallbackRebuildSession) {
-                pendingSessionRuntimeFallbackRebuilds.delete(fallbackRebuildSession);
-              }
-            }
-          })();
-        },
-      );
-      // 回传展示信息:coordinator 存进 autoResumePending → projection → 活动行
-      // (「重新连接中 attempt/maxAttempts」+ 展开详情里的原因与会话累计)。
-      return {
-        ...(signals.message !== undefined ? { error: signals.message } : {}),
-        ...(typeof signals.reason === 'string' && signals.reason.length > 0
-          ? { reason: signals.reason }
-          : {}),
-        attempt: decision.attempt,
-        maxAttempts: decision.maxAttempts,
-        sessionTotal: decision.sessionTotal,
-      };
-    },
+    onResumableTurnErrorDiscarded: interruptedTurnAutoResumeHooks.onResumableTurnErrorDiscarded,
+    onResumableTurnError: interruptedTurnAutoResumeHooks.onResumableTurnError,
     steerToAgent: (sessionId, message, sendOpts) => {
       const expectedText = trustedDesktopSteerText.getStore();
       return steerToAgentAccepted(
@@ -20821,12 +20033,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       notePluginTaskLifecycle(service => service.discard(sessionId, item, 'failed'));
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected');
-      // Auto-resume items have an exact-token cleanup boundary below. Keep
-      // their attempt lease until that boundary can restore recovery and
-      // finalize the suppressed error; releasing it here would make a later
-      // undispatched discard skip finalizeSuppressedError.
-      if (item.autoResume) return;
-      autoResumeBookkeeping.surfaceSuppressedErrorForRetry(sessionId, item.clientId);
+      interruptedTurnAutoResumeHooks.onRejectedUserTurn(sessionId, item);
     },
     persistTerminalSendError: (sessionId, message) => {
       onTurnErrorEvent(
@@ -20838,20 +20045,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         null,
       );
     },
-    onUnconfirmedAutoResumeTurn: (sessionId, item) => {
-      const pending = pendingSchedulerAutoResumeRunBySession.get(sessionId);
-      if (pending?.usageLimitToken !== undefined && pending.retryClientId === item.clientId) {
-        // Outcome is uncertain: settle the waiter without restoring/replaying input.
-        notifySchedulerAutoResumeFailed(sessionId, pending.runId, pending.attemptToken);
-      }
-      const attemptToken = autoResumeAttemptToken(item);
-      if (attemptToken === null) return;
-      autoResumeBookkeeping.abandonUnconfirmedPersistedResume(
-        sessionId,
-        attemptToken,
-        item.clientId,
-      );
-    },
+    onUnconfirmedAutoResumeTurn: interruptedTurnAutoResumeHooks.onUnconfirmedAutoResumeTurn,
     onPersistedSendRejected: (sessionId, message) => {
       if (!isPiPromptRpcTimeoutError({ message })) return;
       // 第一次 timeout：只关掉卡住的原生进程，不自动 replay。用户重试时再 hidden rebuild。
@@ -23921,36 +23115,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sshCodexProviders
             ? resolveVerifiedContextWindow({ providers: sshCodexProviders }, runtimeAgentKind, pid ?? 'openai', modelId)
             : resolveWindowForRoute(runtimeAgentKind, modelId, pid);
-        const catalogTargetWindow = lookupVerifiedContextWindow(
-          resolveRouteWindow,
-          model,
-          targetRouteProviderId,
-          runtimeAgentKind,
-        );
-        const verifiedTargetWindow =
-          runtimeAgentKind === 'pi' && piPreview?.windowVerified === true &&
-          typeof piPreview.targetContextWindow === 'number' && piPreview.targetContextWindow > 0
-            ? catalogTargetWindow === null
-              ? piPreview.targetContextWindow
-              : Math.min(piPreview.targetContextWindow, catalogTargetWindow)
-            : catalogTargetWindow;
-        const catalogCurrentWindow =
-          lookupVerifiedContextWindow(
-            resolveRouteWindow,
-            currentRuntimeModel,
-            currentProviderId,
-            runtimeAgentKind,
-          ) ?? undefined;
         const liveCurrentWindow = liveSessionBeforeRouteChange?.getUsageSnapshot?.().contextWindow;
-        // Pi 的有效窗口只能相信运行时上报值；其它引擎的缩窗闸门只接受目录核实值。
-        verifiedCurrentWindow =
-          runtimeAgentKind === 'pi'
-            ? typeof liveCurrentWindow === 'number' &&
-              Number.isFinite(liveCurrentWindow) &&
-              liveCurrentWindow > 0
-              ? liveCurrentWindow
-              : undefined
-            : catalogCurrentWindow;
+        const switchWindows = resolveModelSwitchWindows({
+          runtimeAgentKind, resolveRouteWindow, model, targetRouteProviderId,
+          currentRuntimeModel, currentProviderId, piPreview, liveCurrentWindow,
+        });
+        const verifiedTargetWindow = switchWindows.verifiedTargetWindow;
+        verifiedCurrentWindow = switchWindows.verifiedCurrentWindow;
         // 切模必须重建的**比较基准**：优先取被验证的当前窗口，其次取「运行时上报/目录收敛出的
         // 有效窗口」，再退到「同一收敛函数解出的当前路由窗口」（与建 live env 用的是同一个
         // resolveWindowForRoute，因此未核实但声明了 max 的路由也解得出）。
@@ -23992,24 +23163,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             !runtimeStatus.orcaRole && !parseOrcaRemoteLead(runtimeStatus.orcaRemoteLead)) {
           targetContextWindow = confirmedContextWindow ?? targetContextWindow;
         }
-        const persistedContextTokens =
-          typeof runtimeStatus.contextTokens === 'number' &&
-          Number.isFinite(runtimeStatus.contextTokens) &&
-          runtimeStatus.contextTokens >= 0
-            ? runtimeStatus.contextTokens
-            : null;
         const liveContextTokens = liveSessionBeforeRouteChange?.getUsageSnapshot?.().contextTokens;
-        const verifiedLiveContextTokens =
-          typeof liveContextTokens === 'number' && Number.isFinite(liveContextTokens)
-            ? liveContextTokens
-            : null;
-        const liveUsageIsAuthoritative =
-          verifiedLiveContextTokens !== null &&
-          (verifiedLiveContextTokens > 0 || persistedContextTokens === 0);
-        const contextTokensKnown = liveUsageIsAuthoritative || persistedContextTokens !== null;
-        const contextTokens = liveUsageIsAuthoritative
-          ? verifiedLiveContextTokens
-          : (persistedContextTokens ?? 0);
+        const { contextTokensKnown, contextTokens } = resolveModelSwitchContextTokens(runtimeStatus, liveContextTokens);
         modelWindowContextNeedsProtection = hasModelWindowContextToProtect(
           contextTokensKnown,
           contextTokens,
