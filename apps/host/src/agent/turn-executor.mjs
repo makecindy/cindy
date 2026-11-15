@@ -35,6 +35,8 @@ import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './sessi
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
+import { contextSnapshotForStatus, isContextCompactionSnapshot } from '../../../desktop/src/main/maker-ipc/sessionContextSnapshot.ts';
+import { recordHostContextSnapshot } from './context-usage.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
@@ -195,12 +197,22 @@ export function createTurnExecutor(deps) {
     const unsubscribe = session.onEvent(event => {
       const turn = turns.get(sessionId);
       if (!turn || turn.session !== session || !deps.isCurrent()) return;
+      // The context usage a status event carries, decided as the desktop decides it
+      // (sessionEventPreparation.ts: before its turn bookkeeping, from the shared rules) and written
+      // once the event is delivered, as the desktop writes it (sessionEventSnapshots.ts).
+      const contextSnapshot = event.type === 'status' && event.data
+        ? contextSnapshotForStatus(isContextCompactionSnapshot(session, event, event.data), event.data)
+        : null;
+      const recordContextSnapshot = () => {
+        if (contextSnapshot) void recordHostContextSnapshot(sessionId, contextSnapshot.contextTokens, contextSnapshot.contextWindow);
+      };
       if (event.turnScope !== 'background') {
         if (event.hostProjection) return;
         if (typeof event.sessionTurnGeneration === 'number' && (typeof turn.generation === 'number'
           ? event.sessionTurnGeneration !== turn.generation : event.sessionTurnGeneration === turn.previousGeneration)) return;
         noteBackgroundActivity(session, event);
         if (turn.terminal) {
+          recordContextSnapshot();
           // The turn has ended for the Host; only its Git baseline still listens.
           if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) settleGitBaseline(sessionId, turn, 'end');
           else if (isTerminalTurnErrorEvent(event)) settleGitBaseline(sessionId, turn, 'abort');
@@ -235,6 +247,7 @@ export function createTurnExecutor(deps) {
         : null;
       const claim = recoveryTerminal ? recovery.claim(recoveryTerminal) : 'idle';
       if (claim === 'idle') publishAgentEvent(deps.hub, sessionId, event, fields);
+      recordContextSnapshot();
       // Desktop takes the after-edit savepoint once the event is delivered (sessionEventDelivery.ts).
       if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) settleGitBaseline(sessionId, turn, 'end');
       if (isTerminalTurnErrorEvent(event)) settleGitBaseline(sessionId, turn, 'abort');

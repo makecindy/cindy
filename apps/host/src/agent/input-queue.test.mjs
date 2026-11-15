@@ -2725,6 +2725,27 @@ async function assembledRecovery(t, overrides = {}) {
   return { db, h, handoffs, runtimes, overflow, rows, marker };
 }
 
+// Context usage write-back (checkpoint 3). Rule: as on the desktop (sessionEventSnapshots.ts →
+// recordSessionContextSnapshot), a turn's end with its token count writes the task row's context
+// tokens and window, so a task without a live runtime is judged on its real usage by the model-window
+// gate (resolveModelSwitchContextTokens). Gap: the Host never wrote these columns; the row stayed at
+// its default 0, and the gate took 0 as known usage. Tier: unit, real database, Host event path.
+test('context usage: a turn\'s end writes the task\'s context tokens and window to its row', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  const { h } = assembledRuntime(t, db);
+  await db.createTask('usage-write');
+  await h.queue.enqueue('usage-write', { clientId: 'usage-input', text: 'work' });
+  await waitFor(() => h.maker.sessions.get('usage-write')?.sent.length === 1);
+  const session = h.maker.sessions.get('usage-write');
+  const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+  session.emit({ type: 'status', data: { isRunning: true }, ...stamp });
+  session.emit({ type: 'status', data: { isRunning: false, status: 'Done', contextTokens: 95_000.7, contextWindow: 200_000 }, ...stamp });
+  session.emit({ type: 'done', data: {}, ...stamp });
+  const row = () => db.db.prepare('SELECT context_tokens, context_window, context_window_runtime FROM sessions WHERE id = ?').get('usage-write');
+  await waitFor(() => row().context_tokens !== 0);
+  assert.deepEqual(row(), { context_tokens: 95_000, context_window: 200_000, context_window_runtime: 200_000 });
+});
+
 test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {
   const r = await assembledRecovery(t);
   const first = await r.overflow('assembled-ok');
