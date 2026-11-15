@@ -9,28 +9,14 @@
 
 import type { AgentKind } from '@cindy/maker-core';
 import type { BotModelRoute } from './botModelChain.js';
+import type { StdioMcpConfig } from './stdioMcp.js';
+
+export { isStdioMcpConfig } from './stdioMcp.js';
+export type { StdioMcpConfig } from './stdioMcp.js';
 
 /** 支持的 transport 类型。 */
 export const MCP_TRANSPORTS = ['http', 'sse', 'stdio'] as const;
 export type McpTransport = (typeof MCP_TRANSPORTS)[number];
-
-/** Runs on the Desktop owning this configuration, never in the task's project. */
-export interface StdioMcpConfig {
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-}
-
-export function isStdioMcpConfig(value: unknown): value is StdioMcpConfig {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const c = value as Record<string, unknown>;
-  const string = (v: unknown): v is string => typeof v === 'string' && !v.includes('\0');
-  return Object.keys(c).every(key => ['command', 'args', 'env'].includes(key)) &&
-    string(c.command) && c.command.trim().length > 0 &&
-    Array.isArray(c.args) && c.args.every(string) &&
-    !!c.env && typeof c.env === 'object' && !Array.isArray(c.env) &&
-    Object.entries(c.env).every(([key, val]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && string(val));
-}
 
 /** 一条自定义 MCP 配置（不含 token）。 */
 export interface CustomMcpConfig {

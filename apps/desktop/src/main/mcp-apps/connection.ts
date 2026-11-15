@@ -4,7 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { homedir } from 'node:os';
-import type { StdioMcpConfig } from '../../shared/customMcp.js';
+import type { StdioMcpConfig } from '../../shared/stdioMcp.js';
 import {
   ToolListChangedNotificationSchema,
   ResourceListChangedNotificationSchema,
