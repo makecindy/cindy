@@ -40,6 +40,10 @@ const queuedInputOriginSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const runtimeFallbackSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeFallback.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const autoResumeHooksSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/interruptedTurnAutoResumeHooks.ts'),
   'utf8',
@@ -1203,7 +1207,7 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain(
       'const pendingSessionRuntimeFallbackRebuilds = new WeakMap<Session, number>();',
     );
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain(
       'pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);',
     );
     expect(autoResumeHooksSource).toContain(
@@ -1216,14 +1220,14 @@ describe('session runtime control wiring', () => {
     expect(autoResumeHooksSource).toContain(
       'decision.episodeAttempt,\n                decision.attemptToken,',
     );
-    expect(registerSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
+    expect(runtimeFallbackSource).toContain(
       'automatic session runtime fallback rebuilding frozen remote route',
     );
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain(
       'await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));',
     );
-    expect(registerSource).toContain('result = await applyCandidate();');
+    expect(runtimeFallbackSource).toContain('result = await applyCandidate();');
   });
 
   it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
@@ -1248,10 +1252,12 @@ describe('session runtime control wiring', () => {
       'runtime selection was not changed',
     );
 
+    // The fallback is in sessionRuntimeFallback.ts; register.ts assembles it.
+    expect(registerSource).toContain('const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({');
     const fallback = handlerBody(
-      registerSource,
-      'const maybeApplySessionRuntimeFallback = async (',
-      'const sessionControlService = createSessionControlService({',
+      runtimeFallbackSource,
+      'export function createSessionRuntimeFallback',
+      '\n}\n',
     );
     const fallbackGuard = fallback.indexOf(
       'if (runtimeSelectionRequiresModelWindowConfirmation(result))',
@@ -1330,10 +1336,12 @@ describe('session runtime control wiring', () => {
   });
 
   it('records failed fallback routes without allowing stale owner work to mutate state', () => {
+    // The fallback is in sessionRuntimeFallback.ts; register.ts assembles it.
+    expect(registerSource).toContain('const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({');
     const fallback = handlerBody(
-      registerSource,
-      'const maybeApplySessionRuntimeFallback = async (',
-      'const sessionControlService = createSessionControlService({',
+      runtimeFallbackSource,
+      'export function createSessionRuntimeFallback',
+      '\n}\n',
     );
     expect(fallback).toContain(
       'const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();',
