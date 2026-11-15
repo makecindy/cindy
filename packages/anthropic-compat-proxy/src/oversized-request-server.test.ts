@@ -1,6 +1,7 @@
 import { Agent, createServer, request } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
+import { gzipSync } from 'node:zlib';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createAnthropicCompatProxy } from './server.js';
 import type { LocalRequestHandler, ProxyOptions } from './types.js';
@@ -51,6 +52,33 @@ it('invalidates the spooled parsed body after a text-only guard before local bri
   expect(control).toHaveBeenCalledOnce();
   expect(received).toHaveLength(1);
   expect(received[0]).not.toHaveProperty('tools');
+});
+
+// PR #10663: early 413 recovery used raw compressed bytes without their encoding.
+// Unit tier; one gzip error, complete or cut off, with no recoverable attachment.
+// A partial error must become an explicit local error, never a truncated gzip stream.
+it.each(['complete', 'partial'] as const)('returns a readable %s gzip 413 when recovery is unavailable', async mode => {
+  const error = { error: { message: 'The upstream request is too large.' } };
+  const compressed = gzipSync(JSON.stringify(error));
+  let attempts = 0;
+  const upstream = createServer(async (req, res) => {
+    for await (const chunk of req) void chunk;
+    attempts++;
+    res.writeHead(413, { 'content-type': 'application/json', 'content-encoding': 'gzip', 'content-length': compressed.length });
+    if (mode === 'complete') res.end(compressed);
+    else res.write(compressed.subarray(0, 12));
+  });
+  const port = await listenOnAvailableLoopbackPort(upstream);
+  cleanup.push(() => new Promise(resolve => upstream.close(() => resolve())));
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${port}`, transformRequest: [],
+    requestSizeController: { format: () => 'responses', control: async () => null },
+  });
+  cleanup.push(() => proxy.dispose());
+  const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"input":"hello"}' });
+  expect(response.status).toBe(413);
+  expect(await response.json()).toEqual(mode === 'complete' ? error
+    : { error: { type: 'request_too_large', message: 'Upstream rejected this request as too large.' } });
+  expect(attempts).toBe(1);
 });
 
 it.each(['recover', 'still-413', 'storage-failure', 'text', 'not-smaller'] as const)(

@@ -1218,10 +1218,16 @@ function forward(
           return;
         }
         if (!clientRes.headersSent) {
-          clientRes.writeHead(413, { 'content-type': 'application/json; charset=utf-8', connection: 'close' });
-          clientRes.end(early413Chunks.length > 0
-            ? Buffer.concat(early413Chunks)
-            : JSON.stringify({ error: { type: 'request_too_large', message: 'Upstream rejected this request as too large.' } }));
+          if (upstreamRes.readableEnded) {
+            // Preserve complete errors byte-for-byte, including their encoding.
+            clientRes.writeHead(413, { ...respHeaders, connection: 'close' });
+            clientRes.end(Buffer.concat(early413Chunks));
+          } else {
+            // Early cancellation may leave only part of a gzip/br body. Do not
+            // forward that fragment or wait for the closed upload to finish it.
+            clientRes.writeHead(413, { 'content-type': 'application/json; charset=utf-8', connection: 'close' });
+            clientRes.end(JSON.stringify({ error: { type: 'request_too_large', message: 'Upstream rejected this request as too large.' } }));
+          }
         }
       })();
       return;
