@@ -138,6 +138,9 @@ it.each(['locked', 'lock-failed', 'released', ''])(
     const rejected = expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
     await Promise.resolve();
     f.line(`ready\n${reply}\n`);
+    // Let startup observe the terminal status before close can mark it finished.
+    // The empty reply separately covers ready and close arriving together.
+    if (reply) await Promise.resolve();
     f.child.emit('close');
     await rejected;
     expect(ended).not.toHaveBeenCalled();
