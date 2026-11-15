@@ -229,6 +229,7 @@ describe('MCP App persistence and IPC wiring', () => {
         call: (grant, args, signal) => callPluginAttachmentProvider({ instance: grant.instance,
           bytes: grant.attachmentBytes!, args, handoffDeclared: true,
         }, { signal, assertCurrent: grant.assertCurrent, assertStillValid() {}, handoff,
+          ensureReady: async () => {}, assertReady() {},
           supportsMedia: blobs.supportedMime, deposit, call: delivered }),
       }));
       const config: AppServerConfig = { id: 'parse', transport: 'in-process', url: '',

@@ -30,6 +30,8 @@ export async function callPluginAttachmentProvider(input: {
   signal: AbortSignal;
   assertCurrent(): Promise<void>;
   assertStillValid(): void;
+  ensureReady(): Promise<void>;
+  assertReady(): void;
   handoff: Pick<GhostHandoffStore, 'hold' | 'currentRoot' | 'import' | 'delete'>;
   supportsMedia(mimeType: string): boolean;
   deposit(buffer: Buffer, mimeType: string): Promise<{ hash: string; cleanup(): Promise<void> }>;
@@ -45,6 +47,10 @@ export async function callPluginAttachmentProvider(input: {
   const bytes = Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength);
   const mimeType = sniffMediaMime(bytes, file.mimeType);
   if (!mimeType && ports.supportsMedia(file.mimeType)) throw new Error('MCP_APP_FILE_INVALID');
+  // Preserve the existing required-settings flow before making a plugin copy.
+  await ports.ensureReady();
+  await check();
+  ports.assertReady();
   let cleanup = async () => {};
   let release: (() => void) | undefined;
   let delivered = false;
@@ -66,6 +72,7 @@ export async function callPluginAttachmentProvider(input: {
       args.cindy_handoff_files = files;
     }
     await check();
+    ports.assertReady();
     const result = await ports.call(args);
     await check();
     delivered = result.isError !== true;

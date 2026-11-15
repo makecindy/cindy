@@ -352,7 +352,7 @@ import {
   type GhostSetupInteractionResponseTarget,
   type GhostSetupInteractionSnapshot,
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
-import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
+import { getGhostSetupCoordinator, initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.desktop.js';
 import { resolveSafe as resolveCindyMediaUrl, supportedMime as isCindyMediaMime } from '../cindy-media/blobStore.desktop.js';
 import { companionAvatarCache } from '../companion-cloud/avatarCacheHost.js';
@@ -19500,6 +19500,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }, {
         signal, assertStillValid, handoff: getGhostHandoffStore(), supportsMedia: isCindyMediaMime,
         assertCurrent: async () => { await grant.assertCurrent(); assertStillValid(); },
+        ensureReady: async () => {
+          const workingDir = grant.sessionId ? maker.getSession(grant.sessionId)?.workDir
+            ?? (await maker.getSessionMeta(grant.sessionId))?.workDir : null;
+          await grant.assertCurrent();
+          assertStillValid();
+          const coordinator = getGhostSetupCoordinator();
+          if (!coordinator) throw new Error('INTERNAL');
+          const setup = await coordinator.ensureReady({ sessionId: grant.sessionId, ghostId: grant.instance,
+            tool: grant.tool, workingDir, signal });
+          if (!setup.ok) throw new Error(setup.errorCode);
+        },
+        assertReady: () => {
+          if (getGhostSetupAssessment(grant.instance).state !== 'ready') throw new Error('SETUP_REQUIRED');
+        },
         deposit: async (buffer, mimeType) => {
           const media = await ingestMedia({ buffer, mimeType,
             refs: [{ refKind: 'ghost-deposit', refId: grant.instance, originKind: 'user' }],

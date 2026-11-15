@@ -7,8 +7,76 @@ import { createHash } from 'node:crypto';
 import { GhostHandoffStore } from '../../cindy-brain/handoffStore';
 import { GhostCardService } from '../../cindy-brain/cardService';
 import { GhostNetworkSlot } from '../../cindy-brain/networkSlot';
-import type { InstalledGhost } from '../../../shared/ghost';
+import type { GhostSetupAssessment, InstalledGhost } from '../../../shared/ghost';
 import { createBlobStore } from '../../cindy-media/blobStore';
+import { GhostSetupCoordinator } from '../../cindy-brain/ghostSetupCoordinator';
+import { GhostSetupChangeBus } from '../../cindy-brain/ghostSetupChangeBus';
+import { GhostSetupInteractionBridge } from '../../cindy-brain/ghostSetupInteractionBridge';
+
+// Unit regression #10649: real coordinator/cards and handoff, not a successful
+// dispatcher mock. A missing required account must finish setup before any copy
+// or provider call; cancellation and a setting removed during handoff must not dispatch.
+it.each(['configure', 'taskless', 'cancel', 'revoke', 'setup-changed'] as const)(
+  'retains required plugin setup for native input: %s', async mode => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-setup-'));
+  const handoff = new GhostHandoffStore({ root: () => root });
+  const controller = new AbortController();
+  const changeBus = new GhostSetupChangeBus();
+  let assessment: GhostSetupAssessment = { state: 'required', revision: 0, groups: [{
+    id: 'account', mode: 'any_of', items: [{ ref: 'secret:account', kind: 'oauth', label: 'Account',
+      state: 'missing', actions: [{ id: 'oauth_connect:secret:account', kind: 'oauth_connect' }] }],
+  }] };
+  let current = true, opened = false;
+  const bridge = new GhostSetupInteractionBridge({ broadcast: () => {
+    if (opened) return;
+    opened = true;
+    queueMicrotask(() => {
+      if (mode === 'cancel') controller.abort();
+      else {
+        if (mode === 'revoke') current = false;
+        assessment = { state: 'ready', revision: 1, groups: [] };
+        changeBus.emit('local__parse', { source: 'oauth', ref: 'secret:account' });
+      }
+    });
+  } });
+  const coordinator = new GhostSetupCoordinator({ changeBus, bridge, assess: () => assessment,
+    validateTarget: () => ({ ok: true }), getGhostIdentity: () => ({ id: 'local__parse', name: 'Parser' }),
+    executeAction: async () => ({ ok: true }), timeoutMs: 5000, terminalGraceMs: 0 });
+  const assertCurrent = async () => { if (!current) throw new Error('source changed'); };
+  const imported = vi.fn(async (...args: Parameters<GhostHandoffStore['import']>) => {
+    expect(assessment.state).toBe('ready');
+    const files = await handoff.import(...args);
+    if (mode === 'setup-changed') assessment = { ...assessment, state: 'required', revision: 2 };
+    return files;
+  });
+  const call = vi.fn(async () => {
+    expect(assessment.state).toBe('ready');
+    return { content: [] };
+  });
+  try {
+    const pending = callPluginAttachmentProvider({ instance: 'local__parse', bytes: Buffer.from('user file'),
+      handoffDeclared: true, args: { attachment: { name: 'picked.txt', size: 9, mimeType: 'text/plain' } },
+    }, { signal: controller.signal, assertCurrent, assertStillValid() {},
+      ensureReady: async () => {
+        expect(await handoff.list('local__parse')).toHaveLength(0);
+        const setup = await coordinator.ensureReady({ sessionId: mode === 'taskless' ? null : 'task',
+          ghostId: 'local__parse', tool: 'parse', workingDir: '/project', signal: controller.signal });
+        if (!setup.ok) throw new Error(setup.errorCode);
+      },
+      assertReady() { if (assessment.state !== 'ready') throw new Error('SETUP_REQUIRED'); },
+      handoff: { hold: handoff.hold.bind(handoff), currentRoot: handoff.currentRoot.bind(handoff),
+        import: imported, delete: handoff.delete.bind(handoff) }, supportsMedia: () => false,
+      deposit: async () => { throw new Error('unexpected media'); }, call });
+    if (mode === 'configure') await expect(pending).resolves.toMatchObject({ content: [] });
+    else await expect(pending).rejects.toThrow(mode === 'taskless' || mode === 'setup-changed' ? 'SETUP_REQUIRED'
+      : mode === 'revoke' ? 'source changed' : 'SETUP_CANCELLED');
+    expect(opened).toBe(mode !== 'taskless');
+    expect(call).toHaveBeenCalledTimes(mode === 'configure' ? 1 : 0);
+    expect(imported).toHaveBeenCalledTimes(mode === 'configure' || mode === 'setup-changed' ? 1 : 0);
+    expect(await handoff.list('local__parse')).toHaveLength(mode === 'configure' ? 1 : 0);
+    expect(bridge.pendingSnapshots()).toHaveLength(0);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
 
 // Unit regression #10649: previous native-input tests stopped at the dispatcher.
 // A task-bound attachment call must retain declared networking/card correlation,
@@ -91,6 +159,7 @@ it.each(['disk-file', 'disk-image', 'cached-paste', 'bad-size', 'invalid-media',
         mimeType: media || mode === 'invalid-media' ? 'image/png' : 'text/plain',
       } },
     }, { signal: controller.signal, assertStillValid, assertCurrent: async () => assertStillValid(), handoff,
+      ensureReady: async () => {}, assertReady() {},
       supportsMedia: createBlobStore({ getUserDataDir: () => root }).supportedMime, deposit, call });
     if (mode === 'bad-size' || mode === 'invalid-media' || mode.startsWith('cancel') || mode.startsWith('revoke')) await expect(pending).rejects.toThrow();
     else await expect(pending).resolves.toMatchObject({ content: [] });
@@ -126,6 +195,7 @@ it.each([
     await callPluginAttachmentProvider({ instance: 'local__parse', bytes, handoffDeclared: true,
       args: { attachment: { name, mimeType, size: bytes.length } },
     }, { signal: new AbortController().signal, assertCurrent: async () => {}, assertStillValid() {}, handoff,
+      ensureReady: async () => {}, assertReady() {},
       supportsMedia: createBlobStore({ getUserDataDir: () => root }).supportedMime,
       deposit: async () => { throw new Error('unsupported media must use file handoff'); }, call });
     expect(call).toHaveBeenCalledOnce();
