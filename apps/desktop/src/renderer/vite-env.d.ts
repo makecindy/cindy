@@ -1778,9 +1778,7 @@ interface ElectronAPI {
     query: (input: import('../shared/pluginMarket').PluginMarketQuery) => Promise<import('../shared/pluginMarket').PluginMarketPage>;
     lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     recommendations: () => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
-    autoIcon: (input: { projectKey: string }) => Promise<unknown>;
-    iconImage: (input: { projectKey: string }) => Promise<string | null>;
-          snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
+    snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
     prepareLocalShare: (instanceId: string, operationId: string, options: import('../shared/share').ShareOptions, expected: import('../shared/share').LocalPluginShareBinding, uploadConfirmed: boolean) => Promise<import('../shared/share').SharePreparation>;
@@ -5385,7 +5383,7 @@ interface ElectronAPI {
     };
     projectAliases: {
       autoIcon: (input: { projectKey: string }) => Promise<unknown>;
-    iconImage: (input: { projectKey: string }) => Promise<string | null>;
+      iconImage: (input: { projectKey: string }) => Promise<string | null>;
       snapshot: () => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
       updateInfo: (input: {projectKey: string; field: 'name' | 'icon' | 'profile'; value: string | null | {name?: string; icon?: string | null}; dataOwnerId: string | null; ownerGeneration: number}) => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
