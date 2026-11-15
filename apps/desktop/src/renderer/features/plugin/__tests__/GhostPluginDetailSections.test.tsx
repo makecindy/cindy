@@ -206,6 +206,22 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  // Unit: the installed Host declarations previously added a supplementary
+  // consent button. Only the pre-existing legacy page confirmation may remain.
+  it.each([true, undefined] as const)('keeps Host UI out of the legacy page confirmation (%s)', uiCapabilityApproved => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved,
+      approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'board', name: 'Board',
+        version: '1', kind: 'chip', entry: 'main.js', tools: [], mcpApps: {
+          ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+          host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }], capabilities: ['draft'] },
+        } } };
+    render(<GhostPluginDetailView ghost={ghost} detail={toGhostPluginDetail(ghost)} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.installConsent.updateNeedsConsent' }) !== null).toBe(uiCapabilityApproved !== true);
+  });
+
   // Unit: the real permission summary previously interpolated raw Host subjects.
   it('renders readable host capability details in the plugin permission summary', () => {
     const view = render(<PermissionSummary items={[{ key: 'ui:host:capability:draft', kind: 'panel',

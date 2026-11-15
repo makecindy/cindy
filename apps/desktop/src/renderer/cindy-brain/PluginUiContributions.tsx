@@ -117,9 +117,7 @@ function compileDirectory(ghosts: readonly InstalledGhost[]) {
     for (const ghost of ghosts) {
       if (!ghost.enabled) continue;
       const host = getApprovedGhostHostUi(ghost);
-      if (host?.settings?.length || ghost.uiCapabilityApproved === true &&
-          host?.contributions?.some(item => item.position === 'settings.section')) settings.push(ghost);
-      if (ghost.uiCapabilityApproved !== true) continue;
+      if (host?.settings?.length || host?.contributions?.some(item => item.position === 'settings.section')) settings.push(ghost);
       if (host) active = true;
       const instanceId = installedGhostStoragePart(ghost);
       for (const view of host?.views ?? []) launchers.push({ ghost, instanceId, id: view.id, title: view.title,
