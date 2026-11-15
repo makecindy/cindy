@@ -41,7 +41,7 @@ test('completes the loopback login against a stub provider and stores the sessio
         },
         exchangeAuthorizationCode: async (code, verifier) => {
           exchanged.push({ code, verifier });
-          return { refreshToken: 'fixture-refresh-value' };
+          return { status: 'ok', refreshToken: 'fixture-refresh-value' };
         },
       },
       store: { write: (key, value) => written.set(key, value) },
@@ -86,7 +86,7 @@ test('completes the hosted-callback login once polling returns a code', async ()
       },
       exchangeAuthorizationCode: async (code) => {
         assert.equal(code, 'hosted-code');
-        return { refreshToken: 'fixture-refresh-value' };
+        return { status: 'ok', refreshToken: 'fixture-refresh-value' };
       },
     },
     store: { write: (key, value) => written.set(key, value) },
