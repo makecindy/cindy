@@ -67,6 +67,7 @@ import {
   declaredGhostTaskEventTopics,
   ghostDeclaresHiddenTasks,
   ghostHostUiNeedsApproval,
+  ghostInstallApprovalToken,
   ghostToolDeclaresHandoff,
   ghostTrustLabelKey,
   type GhostPermissionItem,
@@ -646,7 +647,7 @@ export function GhostPluginDetailView({
           </Button>
         )) : null}
 
-        {!remote ? <GhostAccountReuseSection key={detail.id} ghostId={detail.id} enabled={enabled} declared={ghost?.manifest.network?.secrets?.some(secret => !secret.source || secret.source === 'user' || secret.source === 'oauth') === true} /> : null}
+        {!remote ? <GhostAccountReuseSection key={`${detail.id}:${ghostInstallApprovalToken(ghost?.approval)}`} ghostId={detail.id} enabled={enabled} declared={ghost?.manifest.network?.secrets?.some(secret => !secret.source || secret.source === 'user' || secret.source === 'oauth') === true} /> : null}
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
         {!remote ? (
           <GhostHandoffFilesSection

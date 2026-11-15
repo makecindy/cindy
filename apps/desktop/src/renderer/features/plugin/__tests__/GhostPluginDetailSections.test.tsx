@@ -287,6 +287,39 @@ it.each(['empty', 'pending'] as const)('reloads the account catalogue when enabl
   }
 });
 
+// #10130 / 4577503125: updating an enabled plugin can change its compatible
+// sources without changing id, enabled or the presence of credential declarations.
+// Unit tier: exercise the actual detail parent and existing unmount cleanup.
+it.each(['empty', 'pending'] as const)('reloads a hidden account catalogue after an install revision changes from %s', async initial => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  let finish!: (value: unknown) => void;
+  const reusableAccounts = vi.fn().mockImplementationOnce(() => initial === 'empty' ? Promise.resolve([])
+    : new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue([{ key: 'token', label: 'PAT', accounts: [], options: [
+      { kind: 'secret', instanceKey: 'source', secretKey: 'token', accountId: 'saved', pluginName: 'Source', scopes: [] },
+    ] }]);
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount: vi.fn() } });
+  const detailAt = (revision: string) => <GhostPluginDetailView
+    ghost={{ manifest: { schemaVersion: 2, id: detail.id, name: detail.name, version: detail.version,
+      kind: 'chip', entry: 'main.js', network: { hosts: ['api.example.test'], secrets: [
+        { key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } },
+      ] } },
+      dir: detail.installDir!, enabled: true, approval: { state: 'approved', revision } }}
+    detail={detail} panelStatus={null} onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()}
+    onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+  const { rerender } = render(detailAt('first-install'));
+  await act(async () => {});
+  expect(screen.queryByText('settings.ghosts.detail.reuseAccountTitle')).toBeNull();
+  rerender(detailAt('updated-install'));
+  await act(async () => {});
+  expect(reusableAccounts).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('combobox')).toBeTruthy();
+  if (initial === 'pending') {
+    await act(async () => { finish([]); });
+    expect(screen.getByRole('combobox')).toBeTruthy();
+  }
+});
+
 it('keeps Stop using functional after disabling with an existing reference', async () => {
   let connected = true;
   const reusableAccounts = vi.fn(async () => [{ key: 'google', label: 'Google', options: [],
