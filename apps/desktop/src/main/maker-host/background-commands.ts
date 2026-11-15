@@ -52,8 +52,11 @@ import type { SchedulerQueuedPromptRequest } from '../maker-ipc/register.js';
 export const BACKGROUND_COMMAND_MAX_MS = 24 * 60 * 60 * 1000;
 /** 同一应用实例内并发后台命令上限;超出直接拒绝,逼模型先收敛。 */
 export const BACKGROUND_COMMAND_MAX_CONCURRENT = 8;
-/** meta 心跳过期线:超过即认定写它的宿主实例已不在(崩溃/被杀),启动对账才补投。 */
+/** meta 心跳过期线：超过即认定写它的宿主实例已不在（崩溃/被杀），启动对账才补投。 */
 export const BACKGROUND_COMMAND_META_STALE_MS = 5_000;
+
+/** 退出遗言的就地等待预算：退出流程 async 阶段有限，耗尽后交给启动对账。 */
+const BACKGROUND_COMMAND_FLUSH_BUDGET_MS = 1_500;
 /** 单条日志文件上限(保头部,超出丢弃并写截断标记);报告用内存尾部不受此限。 */
 export const BACKGROUND_COMMAND_LOG_CAP_BYTES = 5 * 1024 * 1024;
 /** 报告附带的内存日志尾部(保留最后的输出,不受文件截断影响)。 */
@@ -242,6 +245,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     logPath: string;
     metaPath: string | null;
     terminationDelivered: boolean;
+    hostTerminating: boolean;
     timeoutTimer: NodeJS.Timeout;
     groupPoll: NodeJS.Timeout | null;
     killTree: () => void;
@@ -327,7 +331,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     const duration =
       seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`;
     const status = input.exit.hostTerminated
-      ? '宿主中断（应用退出/重启/崩溃），命令未跑完，之后不会再有完成报告'
+      ? '宿主失去观察（应用退出/重启/崩溃），结果未知——命令可能仍在运行、已完成或已终止'
       : input.exit.spawnError
         ? `启动失败（${input.exit.spawnError}）`
         : input.exit.timedOut
@@ -342,7 +346,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       ? `输出超过 ${BACKGROUND_COMMAND_LOG_CAP_BYTES} 字节上限，进程树已被终止。日志文件（终止前的记录）：${input.logPath}`
       : `完整日志：${input.logPath}`;
     const intro = input.exit.hostTerminated
-      ? `〔后台命令被宿主中断〕宿主退出/重启/崩溃时命令未完成，之后不会再有「后台命令完成」报告。可依据下方日志判断进度；如任务仍依赖它，宿主就绪后请重新启动。`
+      ? `〔后台命令观察中断〕宿主退出/重启/崩溃，不再观察这条命令：它可能仍在运行、可能已完成、也可能已终止。不要凭空重跑；先核实副作用（读日志尾部、查进程或产物），确认已停止且未完成才重新启动。`
       : `〔后台命令完成〕这条消息由宿主在后台命令结束时自动发来，不是主人输入。`;
     const text =
       `${intro}\n` +
@@ -352,7 +356,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       `请根据结果继续推进任务；不需要主人决策时向主人简短汇报即可。`;
     return {
       text,
-      persistedContent: `${input.exit.hostTerminated ? '后台命令被宿主中断' : '后台命令完成'} · ${status} · ${head}`,
+      persistedContent: `${input.exit.hostTerminated ? '后台命令观察中断' : '后台命令完成'} · ${status} · ${head}`,
     };
   }
 
@@ -721,6 +725,9 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
 
       // 结算以 exit(进程退出)为准。注意：结算只管报告，名额在 exit 让出
       // （releaseSlot），治理由 timeoutTimer/组探测继续，不随后代一起结束。
+      // settle/心跳引用的在跑条目:对象建好后回填,保证 settle 里能读到
+      // hostTerminating(宿主终止时不删 meta,留给启动对账)。
+      let activeEntry: { hostTerminating: boolean } | null = null;
       let settled = false;
       // 受理宽限窗的等待端:settle 时通知 start() 里的 race;start 已返回(转后台)
       // 后无人等待,通知落空即可。
@@ -751,8 +758,10 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       }) => {
         if (settled) return;
         settled = true;
-        // meta 完成使命:退出已被本实例观察到,崩溃对账不再需要它。
-        void unlink(metaPath).catch(() => {});
+        // meta 完成使命：退出已被本实例观察到，崩溃对账不再需要它。宿主终止例外：
+        // 遗言可能没进队列（队列暂停/退出预算耗尽），meta 留给下次启动对账——心跳
+        // 已随本实例消失，mtime 自然过期。
+        if (activeEntry?.hostTerminating !== true) void unlink(metaPath).catch(() => {});
         notifySettled?.(exit);
         // stdio 直写文件后没有 pipe EOF 要等;短延迟只为读尾部时避开杀毒/索引器
         // 的瞬时文件锁。同步消费(start 在宽限窗内拿到结果)时 reportSent 已置位,
@@ -773,7 +782,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       } catch {
         deps.logger.warn?.('[background-command] meta sidecar write failed', { runId });
       }
-      running.set(runId, {
+      const entry = {
         runId,
         sessionId: input.sessionId,
         command,
@@ -781,12 +790,15 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         logPath,
         metaPath,
         terminationDelivered: false,
+        hostTerminating: false,
         timeoutTimer,
         groupPoll,
         capPoll,
         killTree: () => killProcessTree(child.pid, child, () => {}),
         active: true,
-      });
+      };
+      activeEntry = entry;
+      running.set(runId, entry);
       child.once('exit', (code, signal) => {
         // 命令已退出即让出并发名额：报告跟着回注，新命令不被死名额堵住。
         releaseSlot();
@@ -838,6 +850,8 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
      * 报告也不能投进新账号;单例引用由调用方清空,下次懒建全新服务。
      */
     dispose(): void {
+      // 宿主终止路径：meta 不随 exit 删除，留给下次启动对账按「结果未知」补投。
+      for (const entry of running.values()) entry.hostTerminating = true;
       disposed = true;
       if (orphanPoll) clearInterval(orphanPoll);
       for (const [runId, entry] of running) {
@@ -866,20 +880,58 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       const pending = [...running.values()].filter(
         (entry) => entry.active && !entry.terminationDelivered,
       );
-      for (const entry of pending) entry.terminationDelivered = true;
+      for (const entry of pending) {
+        entry.terminationDelivered = true;
+        entry.hostTerminating = true; // settle 不删 meta：没进队列时留给启动对账。
+      }
       await Promise.allSettled(
-        pending.map((entry) =>
-          deliverReport({
-            sessionId: entry.sessionId,
-            runId: entry.runId,
+        pending.map(async (entry) => {
+          const { text, persistedContent } = buildReport({
             command: entry.command,
             logPath: entry.logPath,
             logTruncated: false,
             durationMs: Math.max(0, Date.now() - entry.startedAt),
             exit: { code: null, signal: null, timedOut: false, hostTerminated: true },
             tail: readTailFromFile(entry.logPath),
-          }),
-        ),
+          });
+          // 有界等待进队列，不用 deliverReport 的内存重试：retry 是等待型（队列
+          // 暂停/未恢复），内存重试会随进程死亡一起丢——retry 信号就地小步重试，
+          // 预算（退出流程 async 阶段有限）耗尽仍未进队列 → meta 已保留，
+          // 下次启动对账按「结果未知」接管。
+          const deadline = Date.now() + BACKGROUND_COMMAND_FLUSH_BUDGET_MS;
+          let accepted = false;
+          while (Date.now() < deadline) {
+            let result: Awaited<ReturnType<typeof deps.enqueueReport>>;
+            try {
+              result = await deps.enqueueReport({
+                sessionId: entry.sessionId,
+                text,
+                persistedContent,
+                inheritTargetPlanMode: true,
+                origin: {
+                  kind: 'scheduler',
+                  scheduleId: `bgcmd:${entry.runId}`,
+                  scheduleName: '后台命令',
+                },
+                onAccepted: () => {},
+              });
+            } catch {
+              // 会话已删/归档：重试无意义，与 deliverReport 同口径放弃。
+              accepted = true;
+              break;
+            }
+            if (!(result && 'retry' in result && result.retry)) {
+              accepted = true;
+              break;
+            }
+            await new Promise((resolve) => {
+              const timer = setTimeout(resolve, 150);
+              timer.unref?.();
+            });
+          }
+          // 进了队列：meta 使命完成；没进：meta 保留（心跳已停，下次启动对账接管）。
+          if (accepted && entry.metaPath) void unlink(entry.metaPath).catch(() => {});
+        }),
       );
     },
   };

@@ -278,6 +278,10 @@ export function resetBackgroundCommandService(): void {
 }
 
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {
+  // 崩溃对账不依赖下一次工具调用：宿主起来就先把服务建出来（创建即扫孤儿 meta
+  // 补投「观察中断」报告）。原任务重启后已结束回合等待，若等它再次调用工具才
+  // 建服务，那份报告永远不会来。
+  void getBackgroundCommandService().catch(() => {});
   setSessionPathAuthorizer((request) =>
     authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
   );

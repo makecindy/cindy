@@ -139,8 +139,8 @@ it('宿主中断遗言：flushTerminationReports 投「宿主中断」报告，�
     persistedContent?: string;
   };
   expect(report.sessionId).toBe('sess-flush');
-  expect(report.text).toContain('宿主中断');
-  expect(report.persistedContent).toContain('后台命令被宿主中断');
+  expect(report.text).toContain('观察中断');
+  expect(report.persistedContent).toContain('后台命令观察中断');
   // dispose 纯杀树：退出流程在遗言之后调用它，不会产生第二份报告。
   service.dispose();
   await new Promise((resolve) => setTimeout(resolve, 400));
@@ -185,12 +185,46 @@ it('启动对账：心跳过期的孤儿 meta 补投「宿主中断」报告并�
   await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1), { timeout: 5_000 });
   const report = capture.mock.calls[0]?.[0] as { sessionId?: string; text?: string };
   expect(report.sessionId).toBe('sess-crash');
-  expect(report.text).toContain('宿主中断');
+  expect(report.text).toContain('观察中断');
   expect(report.text).toContain('ab-old3.sh');
   // 投后删 meta：一次性。
   await expect(access(staleMeta)).rejects.toThrow();
   // 新鲜心跳 = 另一实例的活写者：不投、meta 保留。
   await expect(access(freshMeta)).resolves.toBeUndefined();
+});
+
+it('暂停队列时退出：遗言没进队列就不删 meta，留给下次启动对账（报告不随进程死亡丢失）', async () => {
+  const capture = vi.fn();
+  let accepting = false;
+  const service = buildService(capture, undefined, {
+    enqueueReport: async () => (accepting ? { duplicate: true } : { retry: true }),
+  });
+  const started = await service.start({
+    sessionId: 'sess-pause',
+    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 30_000)"`,
+    cwd: logDir,
+  });
+  if (!started.ok) throw new Error('start should succeed');
+  const metaPath = `${started.logPath}.meta.json`;
+  await expect(access(metaPath)).resolves.toBeUndefined(); // start 写了旁车
+  await service.flushTerminationReports(); // 队列暂停：预算内等不进队列
+  // 遗言没进队列：meta 保留（hostTerminating → settle 不删），交给下次启动对账。
+  await expect(access(metaPath)).resolves.toBeUndefined();
+  expect(capture).not.toHaveBeenCalled();
+  service.dispose(); // 杀树触发的 exit 也不删 meta
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  await expect(access(metaPath)).resolves.toBeUndefined();
+  // 重启（新实例，同一 logDir）+队列恢复：对账补投，一次性。
+  accepting = true;
+  const capture2 = vi.fn();
+  const revived = buildService(capture2, () => logDir);
+  const longAgo = new Date(Date.now() - 60_000);
+  await utimes(metaPath, longAgo, longAgo); // 心跳随旧实例死亡已过期
+  await vi.waitFor(() => expect(capture2).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+  const report = capture2.mock.calls[0]?.[0] as { sessionId?: string; text?: string };
+  expect(report.sessionId).toBe('sess-pause');
+  expect(report.text).toContain('观察中断');
+  revived.dispose();
 });
 
 it('受理宽限窗：窗口内退出的命令结果同步返回，不再回注（秒败不占轮次）', async () => {
