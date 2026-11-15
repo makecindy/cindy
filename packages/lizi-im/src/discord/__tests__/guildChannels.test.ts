@@ -714,6 +714,22 @@ describe('DiscordIM guild card clicks', () => {
     ...over,
   });
 
+  it('allows only the original question requester, then rejects closed or revoked question buttons', async () => {
+    const h = await harness({ channels: [{ guildId: GUILD, channelId: CHANNEL, allowMembers: true }] });
+    const spec = { body: 'Choose', buttons: [{ id: 'aq:question:0:0:0', label: 'A' }] };
+    const sent = await h.im.sendInteractiveCard(LANE, spec, { questionRespondentId: MEMBER });
+    const button = (user: string) => click(user, { message: { id: sent.messageId.split('|')[1] },
+      customId: JSON.stringify({ i: spec.buttons[0].id, p: {} }) });
+    await h.emitButton(button(OWNER)); expect(h.cardActions).toHaveLength(0);
+    await h.emitButton(button(MEMBER)); expect(h.cardActions).toHaveLength(1);
+    h.access.config = { channels: [{ guildId: GUILD, channelId: CHANNEL }] };
+    await h.emitButton(button(MEMBER)); expect(h.cardActions).toHaveLength(1);
+    h.access.config = { channels: [{ guildId: GUILD, channelId: CHANNEL, allowMembers: true }] };
+    await h.im.updateInteractiveCard(sent.messageId, { body: 'Done', buttons: [] }, { questionRespondentId: MEMBER, questionClosed: true });
+    await h.emitButton(button(MEMBER)); expect(h.cardActions).toHaveLength(1);
+    await h.im.dispose();
+  });
+
   it('forwards an owner click with the lane as the route key', async () => {
     const h = await harness();
     await h.emitButton(click(OWNER));

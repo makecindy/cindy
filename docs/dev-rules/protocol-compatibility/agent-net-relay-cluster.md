@@ -50,7 +50,8 @@
   不存在租户邀请与申请；单进程模式保持原来的一次清理（含租户邀请与申请）。
 - **就绪探针。** `GET /ready` 平时返回 `200 {"status":"ready"}`，副本开始离开后返回
   `503 {"status":"draining"}`，供负载均衡停止派发新连接；`/health` 仍只表示进程存活。
-- **附件。** `mediaDir` 必须是各副本共享的目录；附件元数据在共享状态里。
+- **附件。** 附件存储必须为各副本共享：共享目录 `mediaDir`，或实现 `RelayMediaStorage` 的 `mediaStorage`
+  （对象存储，可让客户端直传，见[附件存储接口与客户端直传](./agent-net-media-direct.md)）；附件元数据在共享状态里。
   每次读写、删除与过期清理都通过后端 `withMediaLock` 跨副本串行执行，锁内先应用最新网络状态，
   再校验进度与操作文件；归属变更也不能让新旧副本同时操作同一附件。
 - 自建中转仍是单进程：`cluster` 只能与 `mode: 'official'` 同时使用。
@@ -88,7 +89,7 @@
 | 新旧构建的 `RELAY_CLUSTER_COMPAT` 不同 | 后端拒绝新副本加入；先停全部旧副本再发布 |
 
 服务端仓需要把本次内核改动同步到其本地同名 relay package，并实现数据库版
-`RelayClusterBackend`，再给 agent-net-server 配置 `replicaId`、内部 `url`、`secret` 与共享 `mediaDir`。
+`RelayClusterBackend`，再给 agent-net-server 配置 `replicaId`、内部 `url`、`secret` 与共享附件存储（`mediaDir` 或 `mediaStorage`）。
 副本间转交不做跨版本协商，因此由 `RELAY_CLUSTER_COMPAT` 表示集群合同：共享状态文档的形状、副本间
 请求头与 `/_agent-net-cluster/*`、网络归属函数。改动其中任一项的构建必须在同一改动里提升该值。
 
@@ -100,7 +101,7 @@
 
 同日另回合两项服务端评审发现：已加入的副本在名单里找不到负责者时不再承载网络（原回退在后端自我隔离、
 名单为空时会让该副本与新负责副本同时承载同一网络）；集群模式必须显式配置共享 `mediaDir`
-（`CLUSTER_MEDIA_DIR_REQUIRED`），不再默认落到各副本自己的数据目录。
+（`CLUSTER_MEDIA_DIR_REQUIRED`），不再默认落到各副本自己的数据目录。同日起也可改传 `mediaStorage`。
 
 ## 验证入口
 

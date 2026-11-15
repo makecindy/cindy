@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   validateGhostManifest,
   getApprovedGhostHostUi,
-  ghostHostUiApprovalTokens,
   type GhostInstallApproval,
   type GhostManifest,
   type InstalledGhost,
@@ -16,9 +15,9 @@ import {
   confirmedAutoTools,
   confirmedHostToolGroups,
   confirmedEventTopics,
+  confirmedCindyModelActions,
   confirmedTaskCapability,
   confirmedUiCapability,
-  confirmedHostUiPermissions,
   type GhostInstallConsentPrompt,
   isGhostInstallConsentRequiredError,
   obtainGhostInstallConsent,
@@ -63,38 +62,47 @@ const userPrompt = (answer: boolean | Error) =>
 
 const reviewedDigest = 'a'.repeat(64);
 
-// Host UI extends the existing receipt boundary. Old preserved declarations and
-// a standard-page grant cannot silently grant newly understood Host access (unit).
-it('asks for Host UI authority preserved by an older Host while keeping its page grant', async () => {
+// Unit: no supplementary grant for the same installed version; actual updates
+// still show changed Host declarations through ordinary install/update consent.
+it('uses the installed Host declarations without re-confirming the same version', async () => {
   const next: GhostManifest = { ...manifest(['api.weather.test']), mcpApps: {
     ui: { resources: [{ uri: 'ui://workspace', file: 'ui/workspace.html' }], tools: {} },
     host: { views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://workspace' }], capabilities: ['context'] },
   } };
   const old = { ...installed(next), uiCapabilityApproved: true as const };
-  expect(getApprovedGhostHostUi(old)).toBeUndefined();
-  const prompt = Object.assign(vi.fn<GhostInstallConsentPrompt>(async () => true), { hostUiCapabilityApproval: true });
+  expect(getApprovedGhostHostUi(old)).toMatchObject({ views: [{ id: 'workspace' }], capabilities: ['context'] });
+  const prompt = vi.fn<GhostInstallConsentPrompt>(async () => true);
   const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'local-file' }, old, next, reviewedDigest);
-  expect(prompt).toHaveBeenCalledOnce();
-  const facts = prompt.mock.calls[0][0].facts;
-  expect(facts.kind === 'update' && facts.added.every(item => item.key.startsWith('ui:host:'))).toBe(true);
-  const approvedHostUi = confirmedHostUiPermissions(decision, old, next);
-  expect(approvedHostUi).toEqual(ghostHostUiApprovalTokens(next));
-  expect(getApprovedGhostHostUi({ ...old, approvedHostUi })).toMatchObject({ views: [{ id: 'workspace' }], capabilities: ['context'] });
+  expect(prompt).not.toHaveBeenCalled();
+  expect(decision.mode).toBe('unprompted');
 });
 
-it('keeps unknown Host UI capabilities inert and binds approvals to the exact resource', () => {
+it('keeps unsupported Host UI capabilities inert while projecting installed resources', () => {
   const next: GhostManifest = { ...manifest(['api.weather.test']), mcpApps: {
     ui: { resources: [{ uri: 'ui://one', file: 'one.html' }, { uri: 'ui://two', file: 'two.html' }], tools: {} },
     host: { views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://one' }], capabilities: ['context', 'future-capability'] },
   } };
-  const approvedHostUi = ghostHostUiApprovalTokens(next);
-  const old = { ...installed(next), approvedHostUi };
+  const old = installed(next);
   expect(getApprovedGhostHostUi(old)?.capabilities).toEqual(['context']);
   const changed = { ...next, mcpApps: { ...next.mcpApps as object, host: {
     views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://two' }], capabilities: ['context', 'future-capability'],
   } } };
-  expect(getApprovedGhostHostUi({ ...old, manifest: changed })?.views).toEqual([]);
-  expect(confirmedHostUiPermissions({ mode: 'unprompted' }, old, changed)).toEqual([]);
+  expect(getApprovedGhostHostUi({ ...old, manifest: changed })?.views).toMatchObject([{ resourceUri: 'ui://two' }]);
+});
+
+// Unit: legacy page approval may be absent, but it must not erase the installed
+// Host baseline and turn a subsequent update into supplementary Host consent.
+it('does not re-request Host declarations when only legacy pages lack approval', async () => {
+  const next: GhostManifest = { ...manifest(['api.weather.test']), mcpApps: {
+    ui: { resources: [{ uri: 'ui://workspace', file: 'ui/workspace.html' }], tools: {} },
+    host: { views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://workspace' }], capabilities: ['draft'] },
+  } };
+  const prompt = vi.fn<GhostInstallConsentPrompt>(async () => true);
+  await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'local-file' }, installed(next), next, reviewedDigest);
+  expect(prompt).toHaveBeenCalledOnce();
+  const facts = prompt.mock.calls[0][0].facts;
+  expect(facts.kind).toBe('update');
+  expect(facts.kind === 'update' && facts.added.map(item => item.key)).toEqual(['ui:pages']);
 });
 // Contract: the Host grants auto tools only when the exact tool permission was shown.
 // A predeclared auto tool with no receipt grant is the minimal old-Host input (unit).
@@ -149,6 +157,19 @@ it('records control points only when shown, and re-shows declared points the use
   // Already approved: nothing new to confirm.
   const approvedBefore = {...installed(next),approvedControlPoints:[point]};
   expect(await obtainGhostInstallConsent(policy,approvedBefore,next,reviewedDigest)).toEqual({mode:'unprompted'});
+});
+// Unit: formerly unknown model declarations stay unapproved until their exact permission rows are confirmed.
+it('requires confirmation for predeclared model APIs without re-confirming existing capabilities', async () => {
+  const next = { ...manifest(['api.example.test']), cindy: { image: ['generate'], models: ['rerank'] } } as GhostManifest;
+  const old = installed(next);
+  const prompt = vi.fn<GhostInstallConsentPrompt>(async () => true);
+  const policy = { mode: 'prompt' as const, prompt, initiator: 'user' as const, origin: 'market' as const };
+  const decision = await obtainGhostInstallConsent(policy, old, next, reviewedDigest);
+  expect(prompt.mock.calls[0][0].facts).toMatchObject({ kind: 'update', added: [{ key: 'cindy:models.rerank' }] });
+  expect(confirmedCindyModelActions(decision, old, next)).toEqual(['rerank']);
+  expect(confirmedCindyModelActions({ mode: 'unprompted' }, old, next)).toEqual([]);
+  expect(await obtainGhostInstallConsent(policy, { ...old, approvedCindyModelActions: ['rerank'] }, next, reviewedDigest))
+    .toEqual({ mode: 'unprompted' });
 });
 const replacedDigest = 'b'.repeat(64);
 

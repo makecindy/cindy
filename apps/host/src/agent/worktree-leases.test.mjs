@@ -17,6 +17,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
 import { configureHostOwner } from './claude-auth.mjs';
@@ -135,15 +136,29 @@ test('a lease the Host process holds is protected in the desktop view, and the H
   const f = fixture(t);
   const host = startHost(t, f);
   await host.ready;
+  const readyAt = performance.now();
   const [name] = leaseFiles(f.leaseDir);
   assert.equal(leaseFiles(f.leaseDir).length, 1);
   assert.match(name, new RegExp(`^${host.child.pid}-[a-f0-9]{64}\\.json$`));
   const lease = JSON.parse(fs.readFileSync(path.join(f.leaseDir, name), 'utf8'));
+  t.diagnostic(JSON.stringify({
+    processIdentityPresent: lease.processIdentity !== undefined,
+    readyToLeaseReadMs: performance.now() - readyAt,
+  }));
   const physical = await physicalWorktreeKey(f.worktree);
   assert.equal(lease.pid, host.child.pid);
   assert.equal(lease.path, physical);
-  assert.ok(lease.processIdentity, 'the Host records its OS identity');
-  // The Host is not in the desktop's instance registry; its live PID and identity protect it.
+  if (lease.processIdentity !== undefined) {
+    assert.ok(Number.isFinite(lease.processIdentity.startedAtMs));
+    assert.ok(lease.processIdentity.startedAtMs > 0);
+    assert.equal(typeof lease.processIdentity.executablePath, 'string');
+    assert.ok(path.isAbsolute(lease.processIdentity.executablePath));
+  } else {
+    // Windows' OS probe may exceed the production acquisition bound. Even then,
+    // the assertions below must prove the lease protects the worktree until close.
+    assert.equal(process.platform, 'win32', 'the Host records its OS identity on POSIX');
+  }
+  // No desktop registration: identity or the PID/heartbeat fallback must protect it.
   assert.deepEqual(fs.readdirSync(path.join(f.profile, '.dev-instances')), []);
   assert.deepEqual([...await f.desktop.readWorktreeRuntimePaths()], [physical]);
 

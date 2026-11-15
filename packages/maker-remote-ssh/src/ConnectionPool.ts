@@ -32,6 +32,7 @@ export interface ConnectionPoolDeps {
   /** Pre-built store; overrides `knownHostsPath` (mainly for tests). */
   hostKeys?: HostKeyStore;
   formatHostKeyError?: RemoteHostDeps['formatHostKeyError'];
+  formatAgentUnavailableError?: RemoteHostDeps['formatAgentUnavailableError'];
 }
 
 export class ConnectionPool {
@@ -116,6 +117,17 @@ export class ConnectionPool {
   }
 
   /**
+   * The system network changed or the machine woke: give hosts that dropped
+   * and exhausted their bounded reconnect one more bounded round. Hosts that
+   * never connected, were disconnected by the user or failed auth are untouched.
+   */
+  retryAfterNetworkChange(): string[] {
+    const retried: string[] = [];
+    for (const [id, host] of this.hosts) if (host.retryAfterNetworkChange()) retried.push(id);
+    return retried;
+  }
+
+  /**
    * Subscribe to status changes from any host. Listener fires once per
    * state transition with the host snapshot.
    */
@@ -138,6 +150,7 @@ export class ConnectionPool {
       logger: this.deps.logger,
       hostKeys: this.hostKeys,
       formatHostKeyError: this.deps.formatHostKeyError,
+      formatAgentUnavailableError: this.deps.formatAgentUnavailableError,
     });
     host.onStatus((snap) => this.events.emit('status', snap));
     this.hosts.set(cfg.id, host);

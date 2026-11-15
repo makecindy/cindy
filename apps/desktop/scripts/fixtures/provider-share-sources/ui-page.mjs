@@ -23,6 +23,10 @@ export default {
     'legacy-upgrade-shared': { about: 'A migrated connection with an existing share keeps its selective revocation entry even when disconnected and paused, without duplicating unshared connections' },
     'subscription-claude-choice': { about: 'An existing Claude Code login is shown before choosing it or another account' },
     'subscription-codex-choice': { about: 'An existing Codex login is shown before choosing it or another account' },
+    'subscription-claude-added': { about: 'An already added Claude Code login leaves only the new sign-in action' },
+    'subscription-codex-added': { about: 'An already added Codex login leaves only the new sign-in action' },
+    'subscription-codex-long': { about: 'The CLI shortcut keeps its action readable while truncating a long identity',
+      data: { identity: 'a-very-long-subscription-account-identity-for-the-shortcut@example.com' } },
     'subscription-login': { about: 'OpenAI browser login adds an account inside the existing provider' },
     'subscription-cancel': { about: 'Closing OpenAI login cancels its owned CLI operation without creating another provider' },
     'subscription-pool': { about: 'The real local provider detail shows both subscription accounts, each with all of its own usage windows, under one provider header' },
@@ -53,14 +57,22 @@ export default {
       }
       return;
     }
-    if (ui.case === 'subscription-claude-choice' || ui.case === 'subscription-codex-choice') {
+    if (/^subscription-(claude|codex)-(choice|added|long)$/.test(ui.case)) {
       await page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true }).click();
       const dialog = page.getByRole('dialog');
-      const brand = ui.case === 'subscription-claude-choice' ? /^Anthropic/ : /^OpenAI/;
+      const brand = ui.case.startsWith('subscription-claude-') ? /^Anthropic/ : /^OpenAI/;
       await dialog.getByRole('button', { name: brand }).first().click();
-      await dialog.getByText('alex@example.com', { exact: true }).waitFor();
-      await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.useAccount'), exact: true }).waitFor();
+      // The shortcut names the CLI and carries the detected identity (2026-11-14).
+      const cli = ui.case.startsWith('subscription-claude-') ? 'Claude Code' : 'Codex';
       await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.anotherAccount'), exact: true }).waitFor();
+      const shortcut = dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.useAccount', { cli }) });
+      if (ui.case.endsWith('-added')) {
+        assert.equal(await shortcut.count(), 0);
+        assert.equal(await dialog.getByText('alex@example.com', { exact: true }).count(), 0);
+      } else {
+        await dialog.getByText(ui.data.identity ?? 'alex@example.com', { exact: true }).waitFor();
+        await shortcut.waitFor();
+      }
       assert.equal(await page.evaluate(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'connect')), false);
       return;
     }

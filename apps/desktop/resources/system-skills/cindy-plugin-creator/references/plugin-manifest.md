@@ -76,7 +76,7 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 `agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`。每组独立确认并记录批准，未知组保留但不授权；新增组视为权限增加。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
 
 可选 `mcpApps.host` 声明具名视图、原生位置、命令、补全与附件处理提供者、普通设置字段和宿主能力，见[插件界面扩展](plugin-host-ui.md)。
-只激活用户已批准的已知声明；未知扩展保留为数据，原页面批准不会自动授予新增宿主能力。
+已安装版本批准有效且插件已启用时，宿主支持的声明直接生效；未知扩展保留为数据，不另存 Host UI 分项批准。
 
 `systemPrompt` 可选，声明包内静态系统提示词片段：
 `[{ "id": "style", "text": "Use the documented terminology.", "order": 100, "scope": "selected-task", "agentKinds": ["cc", "codex", "pi"] }]`。
@@ -416,3 +416,16 @@ UI 保留。检查、字段绑定、保存状态和恢复都在主机
   (写 `"setup": { "requires": [] }` 显式声明无前置需求,主机不再用启发式拦你)。
 - 检查只管**存在性**(配没配),不管有效性(key 对不对)——填错 key 仍会在真正调用时
   由主机网络层报错,你的工具逻辑照常处理失败即可。
+
+### 决策与重排声明
+
+`cindy.models` 是可选的模型能力类目，动作支持 `decisions` 和 `rerank`：
+
+```json
+{ "cindy": { "models": ["decisions", "rerank"] } }
+```
+
+只声明实际需要的动作。主机会展示模型额度使用说明，未声明的调用和模型查询会被拒绝。
+调用协议见 `plugin-runtime.md` 的「决策与重排模型」。使用此能力时通过
+`minCindyVersion` 声明已验证的最低版本；运行时仍须处理旧版不支持响应，不能把权限拒绝
+或账号失效当成不支持而绕过。

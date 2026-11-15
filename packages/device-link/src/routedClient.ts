@@ -249,6 +249,13 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     for (const connection of this.extraScopedConnections()) connection.restartConnection(reason);
   }
 
+  override suspendConnectionsForSystemSleep(reason?: string): void {
+    this.suspendForSystemSleep(reason);
+    if (this.crossAccountRunning) this.crossAccount?.suspendForSystemSleep(reason);
+    if (this.legacyRunning) this.legacy?.suspendForSystemSleep(reason);
+    for (const connection of this.extraScopedConnections()) connection.suspendForSystemSleep(reason);
+  }
+
   override connectAllNow(reason?: string, opts?: Parameters<DeviceLinkClient['connectNow']>[1]): void {
     this.connectNow(reason, opts);
     this.syncCrossAccount();
@@ -404,7 +411,7 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     dst: string,
     payload: InvokePayload,
     timeoutMs?: number,
-    options?: { preSend?: () => void; background?: boolean },
+    options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
   ): Promise<InvokeResultPayload> {
     return this.routed(dst)?.invoke(dst, payload, timeoutMs, options) ?? super.invoke(dst, payload, timeoutMs, options);
   }

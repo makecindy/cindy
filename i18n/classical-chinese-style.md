@@ -122,20 +122,23 @@
 
 ## 六、作答文风
 
-选用文言界面后，设置里的「简繁与文风」可选 AI 作答文风（雅正文言、唐诗、宋词、元曲、楚辞、骈文、
-先秦诸子、史传、明清小品，或「照常作答」只保留文言界面）。简体中文与繁體中文界面下也有同一行
-「AI 作答文风」：界面保持现代中文，只有回答换成文言文风，默认「照常作答」。两类语境的文风
-**分开记忆**：在文言界面选的文风不带进简体 / 繁體中文界面（反之亦然），各自从未选状态按界面
-语言取默认（文言界面 → 雅正文言，现代中文界面 → 照常作答）；style 名称统一叫「雅正文言」，
-不带「默认」后缀（该后缀在简体 / 繁體中文行里不成立，且与语言菜单里的「文言」选项撞名）。
-文风登记在 `packages/maker-shared/src/classicalReply.ts`，由 `buildUiLanguageErrorNote` 随轮次下发。
-「照常作答」的普通注记会显式声明「文风未激活、更早的文风要求作废」：文风注记自身写着须执行到
-后续注记点名另一文风为止，若普通注记对文风只字不提，切回照常作答后旧文风会在同一上下文里
-继续生效（简体中文 / 繁體中文界面与文言界面同理）。
+仅在显式选用文言界面（`zh-Hans-x-lzh`／`zh-Hant-x-lzh`）后，设置里的「简繁与文风」
+可选 AI 作答文风（雅正文言、唐诗、宋词、元曲、楚辞、骈文、先秦诸子、史传、明清小品，
+或「照常作答」只保留文言界面）。其他语言不显示文风选择，也不启用旧版保存的现代中文文风。
+文言界面未选过文风时默认「雅正文言」；普通语言默认普通作答。
+`classical`／`modern` 两档存储为兼容旧版保留，旧 `modern` 值不删除但不再生效。
+style 名称统一叫「雅正文言」，不带「默认」后缀，以免与语言菜单里的「文言」选项撞名。
 
-文风是用户主动选择的趣味表达要求，每次面向用户的消息从头至尾都须采用所选形式，不能
+文风登记在 `packages/maker-shared/src/classicalReply.ts`，由 `buildUiLanguageErrorNote` 生成
+本轮说明。普通作答与「照常作答」不附加任何语言／文风说明，包括取消旧文风的说明。
+启用特殊文风时，普通发送与插话每次携带提示，明确只在当前轮有效、轮末失效；文风说明不再走
+环境说明去重，也不进入固定 system 前缀。已经写入旧原生历史的跨轮指令无法事后撤回，
+仍可能影响已有会话；不自动清空或重置会话。
+配置规则正本见[作答文风与默认提示词](../docs/dev-rules/configuration-and-overrides.md#作答文风与默认提示词)。
+
+文风是用户主动选择的趣味表达要求，携带文风说明的当前轮中，面向用户的消息从头至尾都须采用所选形式，不能
 先以文言或诗词开场，再用普通话解释。覆盖工具前后的过程说明、进度、计划、追问、标题、
-列表、表格说明、图注、附注、最终答复及后续轮次；不能以话题实用、需要解释或工具失败
+列表、表格说明、图注、附注及最终答复；后续轮次仅在各自携带文风说明时启用，不能以话题实用、需要解释或工具失败
 为由自行省略。唐诗须以五言或七言绝句／律诗作答，短回复也须成一完整诗节；长答续章续阕，
 不在第一首后转为白话。宋词须成词，按可识别的词牌组织长短句。
 诗行使用 Markdown 硬换行（行末两个空格再换行），章间留空行；不把诗放进代码块。
@@ -168,7 +171,12 @@
 而隐藏摘要、把正文冒充思考，或另调模型转写。验收分别记录过程说明、最终答复与上游摘要的
 真实输出；提示文本的单测不等于文风效果验收。
 
-仅在中文界面（两个文言界面，及简体中文 / 繁體中文）启用；切到其他语言、「照常作答」或 IM 的
-`replyStyle: false` 时不带此要求。IM 轮次改为逐轮附「本轮暂停文风、不含此注记的轮次恢复」的
-说明：IM 经 `session.send` 直发且不更新去重记忆，用自限暂停保证 IM 回答不套文风，也不取消
-桌面已选文风。继续复用随轮次注记与既有去重机制，不把文风塞进稳定 system 前缀。
+IM（含公开回帖）不附加语言／文风说明，也不再注入暂停或恢复文风提示；模型正文与错误说明的
+语言由来信、用户要求及模型决定。宿主自身生成的控制回执与错误文案仍遵循各渠道的界面语言规则。
+实现见 [uiLanguageErrorNote.ts](../apps/desktop/src/main/maker-ipc/uiLanguageErrorNote.ts)、
+[makerSendTransaction.ts](../apps/desktop/src/main/maker-ipc/makerSendTransaction.ts)、
+[makerSteerTransaction.ts](../apps/desktop/src/main/maker-ipc/makerSteerTransaction.ts) 与
+[官方 IM session-runner.ts](../apps/desktop/src/main/hook-control/session-runner.ts)。
+回归见 [uiLanguageErrorNote.test.ts](../apps/desktop/src/main/__tests__/uiLanguageErrorNote.test.ts)、
+[makerSendTransaction.test.ts](../apps/desktop/src/main/maker-ipc/__tests__/makerSendTransaction.test.ts) 与
+[session-runner.test.ts](../apps/desktop/src/main/hook-control/__tests__/session-runner.test.ts)，验证实际发送文本。

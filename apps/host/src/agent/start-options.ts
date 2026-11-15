@@ -49,6 +49,11 @@ export interface HostStartOptionsPorts {
   refreshModels?: () => void;
   /** Codex caches skills/list per cwd; drop it after new shared Skill links. */
   reloadCodexSkills?: (workingDir: string) => Promise<unknown>;
+  /**
+   * Runs a pending restart of the shared Codex runtime before a local Codex session joins it, as the
+   * desktop's start hook does (maker-host/index.ts setBeforeLocalCodexSessionStartHook).
+   */
+  beforeLocalCodexSessionStart?: () => Promise<void>;
 }
 
 function providerNotReady(): Error {
@@ -153,8 +158,13 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     };
   }
 
-  /** The desktop's onBeforeStart Skill-link step (its Codex deferred restart lives in the Host input queue). */
+  /**
+   * The desktop's onBeforeStart (maker-host/index.ts): a local Codex session first runs the pending
+   * restart of the shared Codex runtime, then the shared Skill links are prepared. Maker calls this
+   * once for each session it starts, so each Codex start runs the restart at most once.
+   */
   async function onBeforeStart(context: { agentKind: string; workingDir?: string; remoteHostId?: string }): Promise<void> {
+    if (context.agentKind === 'codex' && !context.remoteHostId) await ports.beforeLocalCodexSessionStart?.();
     if (context.remoteHostId || !context.workingDir) return;
     const result = await prepareSharedProjectSkillLinks({ workingDir: context.workingDir });
     for (const warning of result.warnings) {
@@ -164,6 +174,10 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
   }
 
   return {
+    /** The desktop's configured context window of a route (model-context-settings.ts), on the Host's ports. */
+    resolveConfiguredContextWindow: budget.resolveConfiguredContextWindow,
+    /** The task's window budget the user set (null: the route's default). */
+    readStoredSessionContextWindowBudget: budget.readStoredSessionContextWindowBudget,
     prepareStartOptions,
     onBeforeStart,
     async onStartFailed({ sessionId, options, runtimeMayBeAlive }: SessionStartFailureContext): Promise<void> {

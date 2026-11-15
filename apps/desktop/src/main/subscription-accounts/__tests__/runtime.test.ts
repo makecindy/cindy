@@ -63,8 +63,7 @@ vi.mock('../placement.js', () => {
       && h.pools[ref.kind]?.accounts.some((a) => a.id === ref.ownAccount)
       ? ref.ownAccount : undefined;
   const place = (kind: string, accountId: string, providerId: string) => {
-    if (providerId === kind) delete h.placement[`${kind}:${accountId}`];
-    else h.placement[`${kind}:${accountId}`] = providerId;
+    h.placement[`${kind}:${accountId}`] = providerId;
   };
   return {
     accountProviderId: owner,
@@ -203,6 +202,7 @@ import {
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   hasConnectedSubscriptionPool,
+  subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
   pooledCodexResetTarget,
   hasRestoredPooledCodexQuota,
@@ -271,6 +271,42 @@ beforeEach(() => {
 // Unit regression (2026-11-13): native accounts had auth/quota snapshots but no
 // independent model discovery. Existing dispatch tests never read the supplier
 // catalog after default logout. Minimal input: default revoked, second healthy.
+describe('owner-only subscription identity', () => {
+  it('does not carry quota across same-email workspace changes', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.test' });
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-a', canDispatch: () => true });
+    const quota = (usedPercent: number) => ({ codexUsage: { appServerBuckets: { codex: { primary: null,
+      secondary: { usedPercent, windowMinutes: 10080, resetsAt: Date.now() / 1000 + 86400 } } } } });
+    h.usage.mockResolvedValue(quota(20));
+    const first = await refreshSubscriptionPool('openai');
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-b', canDispatch: () => true });
+    h.usage.mockResolvedValue(quota(70));
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    try {
+      const next = await refreshSubscriptionPool('openai');
+      expect(next.accounts[0].accountKey).not.toBe(first.accounts[0].accountKey);
+      expect(next.accounts[0].usage?.codex?.buckets.codex.secondary?.usedPercent).toBe(70);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('distinguishes workspaces and never publishes raw workspace ids or tokens', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.test' });
+    h.tokens.mockImplementation(async (directory: string) => ({ accessToken: 'secret-token', chatgptAccountId: directory, canDispatch: () => true }));
+    await refreshSubscriptionPool('openai');
+    const keys = subscriptionProviderAccountKeys('openai')!;
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(keys.every(key => /^[a-f0-9]{64}$/.test(key))).toBe(true);
+    const view = await readSubscriptionPool('openai');
+    expect(view.accounts.map(a => a.accountKey).sort()).toEqual(keys);
+    expect(JSON.stringify(keys)).not.toContain('secret-token');
+    h.pools.openai.accounts[1].paused = true;
+    expect(subscriptionProviderAccountKeys('openai')).toBeUndefined();
+  });
+});
+
 describe('pooled Codex model discovery', () => {
   // Unit / PR #10327: cold-start agents already exist before discovery. Previous
   // catalog tests only read the union, missing the capability invalidation path.
@@ -1801,10 +1837,41 @@ describe('native account assignment on the executing computer', () => {
         identity: 'account',
         status: 'ready',
       });
+      expect(preview.defaultAdded).toBe(false);
       expect(h.pools).toEqual({});
       expect(h.login).not.toHaveBeenCalled();
       expect((await readSubscriptionPool(providerId)).accounts[0].status).toBe('signed-out');
       expect(await acquireSubscriptionAccount(providerId, undefined, [])).toBeNull();
+    },
+  );
+  // PR #10473: a retained same-identity account in a disconnected built-in pool must not hide
+  // the shortcut. An account placed in its own provider stays connected when the built-in is off.
+  it.each(['anthropic', 'openai'] as const)(
+    'restores the %s shortcut after disconnecting the same-identity built-in account',
+    async (providerId) => {
+      h.bound = false;
+      h.pools[providerId] = { strategy: 'least', accounts: [account('default'), account('second')] };
+      h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.com' });
+      const preview = () => runSubscriptionAccountCommand({ action: 'preview', providerId });
+      expect((await preview()).defaultAdded).toBe(true);
+      await disconnectSubscriptionPool(providerId);
+      expect((await preview()).defaultAdded).toBe(false);
+      h.placement[`${providerId}:second`] = `${providerId}-sub-12345678`;
+      expect((await preview()).defaultAdded).toBe(true);
+    },
+  );
+  // Unit: old native connections already used the default login before a pool file existed.
+  // The wizard must hide that shortcut without creating a pool; an explicitly removed slot stays removed.
+  it.each(['anthropic', 'openai'] as const)(
+    'recognizes an implicit %s default login already connected before account pools',
+    async (providerId) => {
+      h.bound = true;
+      h.pools = {};
+      expect((await runSubscriptionAccountCommand({ action: 'preview', providerId })).defaultAdded).toBe(true);
+      expect(h.pools).toEqual({});
+      h.pools[providerId] = { strategy: 'least', accounts: [] };
+      expect((await runSubscriptionAccountCommand({ action: 'preview', providerId })).defaultAdded).toBe(false);
+      expect(h.login).not.toHaveBeenCalled();
     },
   );
   it.each(
@@ -1828,11 +1895,21 @@ describe('native account assignment on the executing computer', () => {
       });
       const ids = h.pools[providerId]!.accounts.map((a) => a.id);
       expect(ids).toEqual(['default', expect.stringMatching(/^cindy-/)]);
+      expect(h.placement[`${providerId}:${ids[1]}`]).toBe(providerId);
       expect(h.login).toHaveBeenCalledExactlyOnceWith(
         providerId,
         `${providerId}/${ids[1]}`,
         expect.any(AbortSignal),
       );
+      // Wizard shortcut (2026-11-14): the CLI login counts as added once the built-in provider uses
+      // it, or once the same identity is already signed in as another account.
+      const preview = () => runSubscriptionAccountCommand({ action: 'preview', providerId });
+      expect((await preview()).defaultAdded).toBe(bound);
+      h.read.mockImplementation(async (_provider, directory) => ({
+        authenticated: true,
+        identity: directory.endsWith('default') ? 'New@Example.com' : 'new@example.com',
+      }));
+      expect((await preview()).defaultAdded).toBe(true);
     },
   );
   it.each(['anthropic', 'openai'].flatMap(providerId =>
@@ -1849,6 +1926,10 @@ describe('native account assignment on the executing computer', () => {
       } as SubscriptionAccountCommand);
       expect(h.pools[providerId]!.accounts.map((a) => a.id)).toEqual(['default']);
       expect(h.login).not.toHaveBeenCalled();
+      // Turning the built-in provider off offers the CLI login in the wizard again.
+      h.bound = true;
+      h.pools[providerId]!.disconnected = true;
+      expect((await runSubscriptionAccountCommand({ action: 'preview', providerId })).defaultAdded).toBe(false);
     },
   );
   it('keeps the private legacy Codex default when the wizard connects it', async () => {
@@ -2371,6 +2452,7 @@ describe('native account assignment on the executing computer', () => {
       }),
     ).rejects.toThrow('login_cancelled');
     expect(h.pools.openai?.legacyCodexDefault).toBe(true);
+    expect(h.placement).toEqual({});
     const after = await readSubscriptionPool('openai');
     expect(after.accounts.map((a) => a.status)).toEqual(['ready']);
     const original = await acquireSubscriptionAccount('openai', undefined, []);
@@ -2385,6 +2467,8 @@ describe('native account assignment on the executing computer', () => {
       loginKey: 'retry-second',
     });
     const addedId = h.pools.openai!.accounts[1].id;
+    // Explicit additions to the built-in provider must survive the old-pool restoration.
+    expect(h.placement[`openai:${addedId}`]).toBe('openai');
     await runSubscriptionAccountCommand({
       action: 'configure',
       providerId: 'openai',
@@ -2600,6 +2684,44 @@ describe('native account assignment on the executing computer', () => {
       ...(providerId.endsWith('-old') ? { legacyProviderId: providerId } : { routeProviderId: providerId }) };
     expect(await readSubscriptionSessionAccount(kind, query, { remote: true, ownComputer: true }))
       .toMatchObject({ state: 'bound', account: { number: 3 } });
+  });
+  // 2026-11-14 regression (subscription-account-pools.md 旧版直接加入账号池的账号也拆开 / 任务跟着账号走),
+  // unit: splitting the old pool left the built-in source with only a signed-out default login, and
+  // the composer refused its old tasks as disconnected although the executor resumes them on their
+  // account. Minimal input: a built-in task bound to `second`, `second` split out, default signed out.
+  it.each(['anthropic', 'openai'] as const)('keeps a built-in %s task on its account after that account is split out', async kind => {
+    h.pools[kind] = { strategy: 'order', accounts: ['default', 'second'].map(account) };
+    h.read.mockImplementation(async (_kind: string, directory: string) =>
+      ({ authenticated: !directory.endsWith('default'), identity: directory }));
+    const model = kind === 'openai' ? 'gpt-6' : 'claude-sonnet';
+    const lease = await acquireSubscriptionAccount(kind, model, [], false, { accountId: 'second' });
+    await lease!.bind(['task:old-task', 'native:old-native']);
+    lease!.release();
+    const providerId = `${kind}-sub-12345678`;
+    h.created[providerId] = { kind, name: 'Split', account: 'second' };
+    h.placement[`${kind}:second`] = providerId;
+    await refreshSubscriptionPool(kind, true);
+    // New tasks still see the emptied source as disconnected; only routing keeps the bound account.
+    expect(hasConnectedSubscriptionPool(kind)).toBe(false);
+    expect(hasConnectedSubscriptionPool(kind, { includeBoundAccounts: true })).toBe(true);
+    // The local composer learns where the account lives now; remote replies keep their old shape.
+    expect(await readSubscriptionSessionAccount(kind, { sessionId: 'old-task', nativeSessionId: 'old-native', model }))
+      .toMatchObject({ state: 'bound', account: { status: 'ready', paused: false, ownerProviderId: providerId } });
+    expect(await readSubscriptionSessionAccount(kind, { sessionId: 'old-task', model }, { remote: true, ownComputer: true }))
+      .not.toHaveProperty('account.ownerProviderId');
+    // The resume continues the native history on the same account: no handoff, no rebinding.
+    const start = vi.fn<(options: StartSessionOptions) => Promise<AgentSessionHandle>>(async () =>
+      ({ id: 'old-native', close: async () => {} }) as unknown as AgentSessionHandle);
+    const agent = withSubscriptionAccounts({ kind: kind === 'openai' ? 'codex' : 'claude-code', startSession: start } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: kind, sessionId: 'old-task', resumeSessionId: 'old-native', model } as StartSessionOptions);
+    expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe(`${kind}/second`);
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('second');
+    expect(h.bindings.get('native:old-native')?.accountId).toBe('second');
+    await handle.close();
+    // An account that stays in the built-in source is not reported as living elsewhere.
+    delete h.placement[`${kind}:second`];
+    expect(await readSubscriptionSessionAccount(kind, { sessionId: 'old-task', model }))
+      .not.toHaveProperty('account.ownerProviderId');
   });
   // PR #10405 review, unit: built-in-only probes missed a created multi-account provider.
   // Two accounts in that provider plus an unrelated default prove selection stays scoped;

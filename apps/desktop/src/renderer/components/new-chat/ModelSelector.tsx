@@ -1,3 +1,5 @@
+import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
+import { sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy } from '@cindy/model-providers';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { SpeedIcon } from './SpeedIcon';
@@ -164,7 +166,7 @@ import { compactEnglishEffortLabel } from '@cindy/maker-shared/agent-capabilitie
 import type { ModelAccessAccountTier } from '../../../shared/modelAccess';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
-import { buildProviderSections } from './sourceSwitch';
+import { buildProviderSections, withFollowedAccountSource } from './sourceSwitch';
 import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import { mergeSshCodexCatalog, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
 
@@ -758,6 +760,11 @@ export interface ModelSelectorBaseProps {
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
   /**
+   * 已建立的本机任务跟着账号走时的原来源视图(sourceSwitch.ts followedAccountSourceProvider)：
+   * 只替换本机目录里同 id 的那一项；远程目录、SSH 与外部注入目录不受影响。
+   */
+  taskSourceProvider?: ProviderView;
+  /**
    * SSH project: Codex models come from the host (see mergeSshCodexCatalog), Claude Code
    * and Pi keep the local catalog. `idle` = not read yet; opening the picker calls refresh.
    */
@@ -984,6 +991,7 @@ export interface ModelSelectorContentBaseProps {
   modelGroups?: ModelGroupsPickerProps;
   providersOverride?: ProviderView[];
   providersOverrideState?: ModelSelectorProps['providersOverrideState'];
+  taskSourceProvider?: ModelSelectorProps['taskSourceProvider'];
   sshCodex?: SshCodexCatalog;
   modelId: string;
   effort: Effort;
@@ -1262,6 +1270,7 @@ function ModelSelectorContentView({
   modelGroups,
   providersOverride,
   providersOverrideState,
+  taskSourceProvider,
   sshCodex,
   modelId,
   effort,
@@ -1453,24 +1462,31 @@ function ModelSelectorContentView({
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(catalogDeviceId);
+  const remoteDisable = useRemoteProviderDisable();
   // 远程 Agent 只能用那台电脑「允许被远程调用」的供应商(远程控制照常列全部,被控电脑上的任务
   // 浏览被控电脑自己的目录时也一样)。
   const remoteAgentBrowsing = remoteAgent !== undefined && remoteBrowse !== null;
   const remoteCatalogProviders = useMemo(
     () =>
       remoteAgentBrowsing
-        ? remoteAgentProviders(remoteProviders.providers)
+        ? remoteAgentProviders(remoteProviders.providers).filter(provider =>
+          !catalogDeviceId || !remoteDisable.isDisabled(catalogDeviceId, provider.id)
+            || (remoteAgentDeviceId === catalogDeviceId && currentProviderId === provider.id))
         : remoteProviders.providers.map(withEffectiveModelContextWindows),
-    [remoteAgentBrowsing, remoteProviders.providers],
+    [remoteAgentBrowsing, remoteProviders.providers, catalogDeviceId, remoteDisable, remoteAgentDeviceId, currentProviderId],
   );
   const sshCodexProviders = sshCodex?.providers;
   const sshCatalogProviders = useMemo(
     () => (sshCodexProviders ? mergeSshCodexCatalog(localProviders.providers, sshCodexProviders) : null),
     [localProviders.providers, sshCodexProviders],
   );
+  const localTaskProviders = useMemo(
+    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider ?? null),
+    [localProviders.providers, taskSourceProvider],
+  );
   const providers = deviceId
     ? remoteCatalogProviders
-    : providersOverride ?? sshCatalogProviders ?? localProviders.providers;
+    : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
   // SSH 目录里 Codex 来自远端主机：本机账号用量、本机供应商组都不能代表它。
   const sshCodexActive = sshCodex !== undefined;
   const mixedCatalog = !!providersOverride || sshCodexActive;
@@ -1783,29 +1799,45 @@ function ModelSelectorContentView({
   const runLocationFold = useMemo(() => {
     const hiddenRemote = new Set<string>();
     const hiddenLocal = new Set<string>();
+    if (!homeDeviceId) for (const [id] of duplicateSubscriptionProviders(localProviders.providers.filter(provider => !localProviderGroups[provider.id]), unifiedIsVisible)) {
+      if (remoteAgentDeviceId || currentProviderId !== id) hiddenLocal.add(id);
+    }
     if (!remoteAgentDevices || homeDeviceId) return { hiddenRemote, hiddenLocal };
+    for (const device of remoteAgentDevices) {
+      if (isProviderShareAgentDeviceId(device.deviceId)) continue;
+      for (const provider of remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []) {
+        if (remoteDisable.isDisabled(device.deviceId, provider.id)
+          && !(remoteAgentDeviceId === device.deviceId && currentProviderId === provider.id))
+          hiddenRemote.add(remoteProviderEntryKey(device.deviceId, provider.id));
+      }
+    }
     for (const provider of localProviders.providers) {
-      if (localProviderGroups[provider.id]) continue;
+      if (localProviderGroups[provider.id] || provider.suspended || hiddenLocal.has(provider.id)) continue;
       const candidates = remoteAgentDevices.flatMap((device) => {
         if (isProviderShareAgentDeviceId(device.deviceId)) return [];
-        const offered = remoteDeviceCatalogs.get(device.deviceId)?.providers.find((entry) => entry.id === provider.id);
-        return offered?.connected && !offered.suspended && offered.remoteInvocationEnabled === true
-          && !(offered as { group?: unknown }).group
-          ? [{ deviceId: device.deviceId, name: device.name }]
-          : [];
+        return (remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []).filter(entry => entry.connected && !entry.suspended
+          && entry.remoteInvocationEnabled === true && !(entry as { group?: unknown }).group
+          && !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, entry.id))
+          && !remoteDisable.isDisabled(device.deviceId, entry.id) && sameRunLocationProvider(provider, entry))
+          .map(offered => ({ deviceId: device.deviceId, name: device.name, providerId: offered.id, provider: offered }));
       });
       if (candidates.length === 0) continue;
       const location = effectiveRunLocation(provider as typeof provider & { runLocation?: string }, candidates);
+      const preferred = candidates.find(candidate => candidate.deviceId === location);
+      const representative = preferred?.provider ?? provider;
+      const visibleAt = (deviceId?: string) => (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) => deviceId
+        ? isDeviceModelVisible(remoteDeviceCatalogs.get(deviceId)?.modelVisibilityOverrides, agent, providerId, model)
+        : isModelEnabled(agent, providerId, model);
       for (const candidate of candidates) {
-        const inUse = candidate.deviceId === remoteAgentDeviceId && provider.id === currentProviderId;
-        if (candidate.deviceId !== location && !inUse) hiddenRemote.add(remoteProviderEntryKey(candidate.deviceId, provider.id));
+        const inUse = candidate.deviceId === remoteAgentDeviceId && candidate.providerId === currentProviderId;
+        if (candidate !== preferred && !inUse && subscriptionModelsCoveredBy(candidate.provider, representative, visibleAt(candidate.deviceId), visibleAt(preferred?.deviceId))) hiddenRemote.add(remoteProviderEntryKey(candidate.deviceId, candidate.providerId));
       }
       const localInUse = !remoteAgentDeviceId && provider.id === currentProviderId;
-      if (location !== RUN_LOCATION_LOCAL && !localInUse) hiddenLocal.add(provider.id);
+      if (location !== RUN_LOCATION_LOCAL && !localInUse && subscriptionModelsCoveredBy(provider, representative, visibleAt(), visibleAt(preferred?.deviceId))) hiddenLocal.add(provider.id);
     }
     return { hiddenRemote, hiddenLocal };
   }, [remoteAgentDevices, homeDeviceId, localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
-    remoteAgentDeviceId, currentProviderId]);
+    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, unifiedIsVisible]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
@@ -1813,7 +1845,9 @@ function ModelSelectorContentView({
       // 只列那台电脑开了「允许被远程调用」的供应商；一个都没开的电脑整段不出现。
       const shared = catalog
         ? remoteAgentProviders(catalog.providers).filter(
-          (provider) => !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id)),
+          (provider) => !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id))
+            && (!remoteDisable.isDisabled(device.deviceId, provider.id)
+              || (remoteAgentDeviceId === device.deviceId && currentProviderId === provider.id)),
         )
         : [];
       if (!catalog || shared.length === 0) return [];
@@ -1832,7 +1866,7 @@ function ModelSelectorContentView({
         ? [{ deviceId: device.deviceId, providers: shared, providerIds, entries }]
         : [];
     });
-  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold]);
+  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold, remoteDisable, remoteAgentDeviceId, currentProviderId]);
   // 目录还在读或读取失败的其他电脑(分享不算):收藏区里它们的收藏置灰列出,不当作模型已下架。
   const remoteAgentUnavailableDeviceIds = useMemo(
     () =>
@@ -3717,7 +3751,7 @@ function ModelSelectorContentView({
               pinnedTopHasRows: (pluginModels ? matchPluginModels(pluginModels.models, query).length > 0 : false)
                 || (!!modelGroups && matchModelGroupRows(modelGroupRows, query) > 0),
             } : {})}
-            {...(modelGroups ? {
+            {...(modelGroups && modelGroupRows.length > 0 ? {
               modelGroupsView: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} />,
               favoritesPinned: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />,
               favoritesPinnedHasRows: favoriteModelGroupCount > 0,
@@ -4195,6 +4229,7 @@ export function ModelSelector({
   modelGroups,
   providersOverride,
   providersOverrideState,
+  taskSourceProvider,
   sshCodex,
   modelId,
   currentSelection,
@@ -4435,9 +4470,13 @@ export function ModelSelector({
     () => (sshCodexProviders ? mergeSshCodexCatalog(localProviders.providers, sshCodexProviders) : null),
     [localProviders.providers, sshCodexProviders],
   );
+  const localTaskProviders = useMemo(
+    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider ?? null),
+    [localProviders.providers, taskSourceProvider],
+  );
   const providers = deviceId
     ? remoteProviders.providers
-    : providersOverride ?? sshCatalogProviders ?? localProviders.providers;
+    : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
   // 当前是 SSH Codex 时 trigger 的加载 / 失败 / 来源都以远端清单为准;其余引擎仍看本机目录。
   const sshCodexCurrent = sshCodex !== undefined && agentKind === 'codex';
   // Old device-link hosts expose capabilities only. Never substitute local routes.
@@ -5145,6 +5184,7 @@ export function ModelSelector({
       fastModeConfigurable={fastModeConfigurable}
       providersOverride={providersOverride}
       providersOverrideState={providersOverrideState}
+      {...(taskSourceProvider ? { taskSourceProvider } : {})}
       sshCodex={sshCodex}
       unifiedPanel={unifiedPanel}
       sessionEngineFilter={contentSessionEngineFilter}

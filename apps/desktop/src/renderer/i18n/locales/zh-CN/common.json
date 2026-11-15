@@ -264,6 +264,8 @@
     "transferProgress": "已传输 {{sent}} / {{total}} · 平均 {{speed}}/s",
     "thisComputer": "本机",
     "selectedComputer": "所选电脑",
+    "sourceComputer": "来源电脑",
+    "waitingForSource": "{{name}}已离线，上线后会继续复制。",
     "estimating": "正在统计文件数量和大小…",
     "fileSummary": "项目文件：{{count}} 个，共 {{size}}",
     "estimateNote": "复制前估算，含隐藏文件；不含另行复制的 Git 历史、任务对话及附件。文件变化可能影响最终大小。",
@@ -1102,19 +1104,23 @@
   },
   "privacyExit": {
     "status": "这台电脑正在通过 Cindy 被远程控制",
-    "hint": "要关闭隐私屏，可在远程控制端的「安全」中关闭「电脑防窥」。也可在这台电脑上点击鼠标或按任意键，再选择「断开连接」。",
+    "hint": "要关闭隐私屏，可在远程控制端的「安全」中关闭「连接时打开隐私屏」。也可在这台电脑上点击鼠标或按任意键，再选择「断开连接」。",
     "title": "断开远程桌面连接？",
-    "detail": "这将结束远程控制并恢复电脑屏幕。如果已开启退出时锁屏，电脑也会锁屏。",
+    "detail": "这将结束远程控制并撤下隐私屏。如果开启了「退出后保护电脑」，电脑会锁屏。",
     "cancel": "保持连接",
     "disconnect": "断开连接"
   },
   "awayGuard": {
     "status": "Cindy 正在工作",
-    "hint": "按任意键锁屏，用 Touch ID 或密码解锁",
+    "hint": "按任意键或 Touch ID 键锁屏，再用指纹或密码解锁",
     "lockFailed": {
       "status": "Cindy 没能锁住这台电脑",
-      "hint": "按 Control-Command-Q 锁屏，稍后系统也会自动锁屏"
-    }
+      "hint": "碰一下电脑会再试一次锁屏；仍锁不上时，用 Touch ID 或密码验证后即可撤下。也可以合上屏幕或按电源键锁屏。",
+      "hintWindows": "碰一下电脑会再试一次锁定；仍锁不上时，用 Windows Hello 或 PIN 验证后即可撤下。也可以按 Windows 徽标键 + L 锁定。"
+    },
+    "hintWindows": "按任意键锁屏，用 Windows Hello 或密码解锁",
+    "hintLinux": "按任意键锁屏，用密码解锁",
+    "verifyReason": "撤下隐私屏"
   },
   "appBadge": {
     "attentionCount": "需要关注的任务：{{count}}"
@@ -1265,10 +1271,10 @@
       "resolutionHint": "分辨率修改会影响远端的实际显示器。"
     },
     "settingUnsupported": "当前电脑端暂不支持此设置",
-    "privacyScreen": "电脑防窥",
-    "privacyScreenHint": "遮住电脑屏幕。在电脑上点击鼠标或按键，确认后断开连接，并按设置锁屏。",
-    "privacyActive": "防窥已开启。在电脑上点击鼠标或按键，确认后断开连接，并按设置锁屏。",
-    "privacyFailed": "未能开启防窥，电脑屏幕可能仍可见。",
+    "privacyScreen": "连接时打开隐私屏",
+    "privacyScreenHint": "远程控制时遮住这台电脑的屏幕。有人在电脑前点按或按键时，会先询问是否断开连接。",
+    "privacyActive": "隐私屏已打开。有人在电脑前点按或按键时，会先询问是否断开连接。",
+    "privacyFailed": "未能打开隐私屏，电脑屏幕可能仍可见。",
     "hostMute": "被控端静音",
     "hostMuteHint": "连接期间将被控电脑静音",
     "hostMuteFailed": "无法修改被控端静音状态",
@@ -1283,8 +1289,8 @@
     "idleNever": "永不",
     "idleMinutes_other": "{{count}} 分钟",
     "idleDisconnected": "已因长时间无操作断开，请重新连接。",
-    "lockOnExit": "退出后锁定电脑",
-    "lockOnExitHint": "主动退出远程桌面时锁屏。",
+    "lockOnExit": "退出后保护电脑",
+    "lockOnExitHint": "退出远程桌面后锁屏。",
     "lockOnExitFailed": "未能确认电脑已锁屏，请检查电脑的锁屏状态。",
     "nativeResolution": "原生",
     "autoUnlock": "自动解锁电脑",
@@ -1326,7 +1332,9 @@
         "body": "这个任务在另一台电脑上开着 {{device}}。把这台电脑上的「{{plugin}}」插件更新到新版本后，就能在右侧栏查看和操作它。",
         "action": "去更新"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "退出远程桌面后盖上隐私屏，AI 可以继续工作；有人碰电脑就会锁屏。",
+    "lockedEnablePrivacyHint": "想让 AI 在你离开时继续用这台电脑，可以在它的「设置 → 通用 → 离开电脑时」里开启隐私屏。"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1359,7 +1367,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 配置已保存，但 Cindy 刷新失败。请重新加载 SSH 配置。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 无法安全管理此 SSH 配置。请重新加载，并确认 Cindy 所有权标记存在且主机别名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 无法安全复现此主机的部分 SSH 配置规则。终端 SSH 仍可能成功；请检查 Match、条件 Include、IdentityAgent、IdentitiesOnly 和公钥设置。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent 当前不可用。请启动 SSH Agent，并用 ssh-add 加载对应私钥后重试。",
+    "SSH_AGENT_UNAVAILABLE": "本机 SSH 密钥代理（ssh-agent）不可用。请确认代理已启动，并用 ssh-add -l 检查所需密钥是否已加载；可在「管理密钥」中查看排查指引。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主机仍已保存，但显示名称或 Agent Proxy 设置未能保存。请检查本地存储权限后重试。",
     "REMOTE_WORKDIR_INVALID": "远程项目目录无效，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_FOUND": "远程项目目录不存在，请重新选择项目目录。",
@@ -1454,6 +1462,10 @@
   },
   "agentIsland": {
     "native": {
+      "summaryAttention": "待查看",
+      "summaryInProgress": "进行中",
+      "summaryPending": "等你处理",
+      "summaryUnread": "未读结果",
       "markRead": "标为已读",
       "archive": "归档",
       "actionFailed": "操作未完成，提醒已保留，请重试。",
@@ -1874,7 +1886,8 @@
       "windowBehavior": "应用行为",
       "shortcuts": "键盘快捷键",
       "mcpServers": "自定义 MCP",
-      "bots": "伙伴"
+      "bots": "伙伴",
+      "awayFromComputer": "离开电脑时"
     },
     "remote": {
       "title": "远端机器",
@@ -1890,6 +1903,12 @@
       "footnote": "第一版仅支持 SSH 连接管理。在远端运行 Agent 的能力将在后续版本中加入。",
       "viaAuth": "通过 {{label}} 认证",
       "readOnlyFromSshConfig": "连接信息来自 SSH 配置",
+      "importedAgentHint": "使用本机 SSH 密钥代理（ssh-agent）完成认证。终端 ssh 能连接，不代表代理已就绪。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent 引用的环境变量未在 Cindy 中设置。请为 Cindy 设置该变量，或修正 SSH 配置中的 IdentityAgent",
+        "endpointEmpty": "IdentityAgent 解析后的端点为空。请修正 SSH 配置中的 IdentityAgent",
+        "endpointUnavailable": "IdentityAgent 配置的 SSH 密钥代理端点不可用。请检查该端点及其代理；默认 ssh-agent 可能使用不同端点"
+      },
       "configWarning": "部分 SSH 配置规则 Cindy 无法解析，主机列表或连接信息可能与终端 SSH 不一致。",
       "configDiagnostic": {
         "io": "Cindy 无法读取 SSH 配置。这里仍显示上次成功读取的主机；请检查文件权限，然后重新加载。",
@@ -1987,7 +2006,7 @@
           "tryThis": "在你的终端里试一下这些命令",
           "close": "关闭",
           "fallbackTitle": "或者干脆不走 agent",
-          "fallbackBody": "你可以在添加主机时改用「Identity file」认证方式，{{appName}} 会把密钥文件直接交给 ssh，每次连接时都会提示你输入 passphrase，完全不依赖 agent。安全上的取舍：每次连接都要输入 passphrase，但内存中不会缓存密钥。",
+          "fallbackBody": "添加主机时也可选择「私钥文件」：{{appName}} 会将私钥读入进程内存，不依赖 ssh-agent。目前仅支持未加密的私钥，不会在连接时询问密钥密码；加密私钥请通过 ssh-agent 使用。",
           "reason": {
             "agent_unavailable": "ssh-add 找不到可用的 ssh-agent（可能是 ssh-add 没装、agent 没启动，或 SSH_AUTH_SOCK 没设置）。",
             "bad_passphrase": "ssh-add 拒绝了这个 passphrase。",
@@ -2434,21 +2453,23 @@
       "swallowActivationClickAria": "切换返回窗口时的误点保护",
       "macRestartNote": "macOS 上需要重启应用才能生效。",
       "awayGuard": {
-        "label": "离开时继续工作",
-        "hint": "开启后，这台电脑不会因为没人操作而熄屏、锁屏，AI 随时可以用它。你离开一段时间后，屏幕会被一块黑色遮罩盖住，AI 在后面继续工作；有人按键或点按就立即锁屏，用 Touch ID 或密码解锁。",
+        "label": "用隐私屏代替锁屏",
+        "hint": "AI 需要用屏幕时，电脑不熄屏、不锁屏，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁屏，用 Touch ID 或密码解锁。没有任务时照常熄屏锁屏。远程控制结束后，也用隐私屏保护这台电脑。",
         "permission": "需要在「系统设置 → 隐私与安全性 → 辅助功能」中允许 Cindy，才能在有人碰电脑时立即锁屏。允许之前，电脑会照常熄屏、锁屏。",
         "preview": "立即试一下",
-        "previewStarting": "请松开鼠标和键盘，3 秒后屏幕会被遮住；按任意键即可锁屏，再解锁试试。",
-        "previewUnavailable": "无法遮住屏幕，请重启 Cindy 后再试。",
+        "previewStarting": "请松开鼠标和键盘，3 秒后会盖上隐私屏；按任意键即可锁屏，再解锁试试。",
+        "previewUnavailable": "无法打开隐私屏，请重启 Cindy 后再试。",
         "delay": {
           "30": "30 秒",
           "60": "1 分钟",
           "120": "2 分钟",
           "300": "5 分钟",
-          "label": "离开多久后遮住屏幕",
-          "hint": "键盘鼠标没人碰这么久后盖上遮罩。默认与系统熄屏时间一致。",
+          "label": "离开多久后打开隐私屏",
+          "hint": "AI 正在工作、键盘鼠标没人碰这么久后，盖上隐私屏。默认与系统熄屏时间一致。",
           "system": "跟随系统"
-        }
+        },
+        "hintWindows": "AI 需要用屏幕时，电脑不关屏、不锁定，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁定，用 Windows Hello 或密码解锁。没有任务时照常关屏锁定。远程控制结束后，也用隐私屏保护这台电脑。",
+        "hintLinux": "AI 需要用屏幕时，电脑不关屏、不锁定，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁定，用密码解锁。没有任务时照常关屏锁定。远程控制结束后，也用隐私屏保护这台电脑。"
       }
     },
     "agentIsland": {
@@ -4287,7 +4308,9 @@
           "inline": "运行于",
           "signInHere": "在这台电脑登录",
           "writeFailed": "「运行于」未能保存，请重试"
-        }
+        },
+        "sameAccountConnections": "此账号的已保存连接",
+        "sameAccountConnectionsHint": "同一账号只显示一项。选择连接仅切换要管理的设置，已有任务保持原连接。"
       },
       "detect": {
         "groupLabel": "检测到本机 CLI",
@@ -5338,6 +5361,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 服务器压缩",
+        "description": "开启时优先使用服务器压缩；关闭后使用 Codex 原生本地摘要，仍会调用当前模型。",
+        "hint": "在这台电脑运行的 Codex 下次启动或恢复任务时生效。不支持服务器压缩的供应商保持原有方式。",
+        "loadFailed": "无法读取 Codex 压缩设置",
+        "saveFailed": "保存 Codex 压缩设置失败"
+      },
       "title": "上下文压缩",
       "description": "Claude Code 和 Pi 的压缩比例在此调整。Codex 随模型设置的上下文上限自动调整压缩阈值；远端压缩失败时自动改用摘要压缩，并在当前任务中保持。",
       "card": {
@@ -6983,7 +7013,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "已包含在隐私屏中：电脑不会休眠。"
     },
     "imBot": {
       "beta": "Beta",
@@ -8166,6 +8197,8 @@
         "cindyTextOneshot": "可向 Cindy 的快速通道提问并获得文字回答",
         "cindyTextOneshotDetail": "走系统的轻量任务模型链(与自动起标题同一条通道)，不动用 Agent、碰不到你的文件，可能产生模型费用。",
         "cindyEmbedText": "可把文字送去算成向量（用于语义检索）",
+        "cindyModelsDecisions": "可调用决策模型（使用你的模型配额）",
+        "cindyModelsRerank": "可调用重排模型（使用你的模型配额）",
         "cindyEmbedTextDetail": "文字会送到系统的向量模型算成一串数字，单次最多 {{max}} 条，可能产生模型费用。算出的向量只交给插件自己保管，不写入你的资料库。",
         "cindySearchWeb": "可使用 Cindy AI 搜索公网",
         "cindySearchWebDetail": "查询会访问公网，并可能消耗 Cindy AI 配额。",
@@ -8188,9 +8221,9 @@
         "agentCompanionsDetail": "可查看所有伙伴（包括在你其他电脑上运行的伙伴）的名称、简介、头像和状态（工作中、等你处理、空闲、离线），每位伙伴正在做哪类事（如思考、执行工具），等你处理的请求内容（提问、要执行的命令、计划，和对话里看到的一样），以及伙伴主对话里最近的对话（最多 50 条你说的话和伙伴的回复，不含工具过程），并在主窗口打开伙伴的对话。同时获准投递消息时，可以把你在插件里给的回答交给伙伴：回答提问、拒绝请求、对计划提意见；允许执行仍要你在 Cindy 自己的确认框里点。不能读取文件，也看不到工具过程和思考内容。",
         "agentCompanionsRequest": "确认伙伴查看权限",
         "hostTools_history": "任务历史",
-        "hostTools_historyDetail": "通过 Cindy 的任务工具查询已有任务、读取完整消息和搜索历史；可显式选择你有权访问的其他电脑。",
+        "hostTools_historyDetail": "通过 Cindy 的任务工具查询已有任务、读取完整消息和搜索历史；可显式选择你有权访问的其他电脑。也可导出本机任务为原生文件。插件按安装授权调用；Agent 运行时遵循自身权限流程。",
         "hostTools_control": "任务管理",
-        "hostTools_controlDetail": "通过 Cindy 的任务工具修改、归档、恢复和控制已有任务及项目。高风险操作每次都需要在 Cindy 中确认。",
+        "hostTools_controlDetail": "通过 Cindy 的任务工具修改、归档、恢复和控制已有任务及项目，并在本机导入原生任务文件。高风险操作每次都需要在 Cindy 中确认。",
         "hostTools_handoff": "任务投递",
         "hostTools_handoffDetail": "通过 Cindy 的任务工具给已有任务发送消息。需要当前任务上下文的操作必须显式指定任务。",
         "hostTools_settings": "应用设置",
@@ -9235,6 +9268,12 @@
         "failed": "回收未能完成",
         "pending": "已排队"
       }
+    },
+    "awayFromComputer": {
+      "title": "离开电脑时"
+    },
+    "navigation": {
+      "unavailable": "无法打开目标电脑的设置。请确认电脑在线并已允许远程控制；旧版本请先更新 Cindy。"
     }
   },
   "remoteDevice": {
@@ -9350,6 +9389,7 @@
     "backToLogin": "返回登录方式"
   },
   "login": {
+    "networkResponseHint": "登录服务返回了异常响应，请求可能被中间网络或 Proxy 拦截。请检查网络和 Proxy 设置。",
     "title": "欢迎使用 Cindy",
     "subtitle": "选择一种方式安全登录",
     "savedLoginPreserved": "恢复操作会保留已保存的登录信息",
@@ -9696,6 +9736,7 @@
     "tokenLine": "Tokens：共 {{total}} · 输入 {{input}} · 输出 {{output}}",
     "cacheLine": "缓存拆分：读取 {{read}} · 写入 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "缓存拆分：读取 {{read}} · 写入 {{create}}",
+    "stepsLine": "本轮请求 {{steps}} 次 · 每次约 {{context}} 上下文",
     "modelLine": "模型：{{model}}",
     "multipleModels": "{{count}} 个模型",
     "costBreakdownHeader": "按模型拆分：",
@@ -13462,6 +13503,15 @@
           "askNoQuestion": "Agent 正在等待你的回答，但没有可显示的问题。请回复“继续”。",
           "askQuestion": "Agent 需要你的回答：\n{{question}}\n{{options}}\n请回复选项序号，或直接输入你的回答。"
         }
+      },
+      "questions": {
+        "cardHint": "仅提问者可作答。点击选项；多题或多选选好后提交。也可回复这条消息补充文字。多题文字回答请写“题号：答案”（如“2：用中文”），填好后提交。",
+        "submitLabel": "提交答案",
+        "multiSelectHint": "（可多选）",
+        "resolved": "✅ 已选：{{option}}",
+        "expired": "卡片已过期",
+        "textHint": "仅提问者可作答。回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。",
+        "replyHint": "仅提问者可作答。点击选项；多题或多选选好后提交。\n回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。"
       }
     }
   },
@@ -13888,6 +13938,7 @@
         "realtime": "实时语音",
         "embedding": "向量",
         "decision": "决策",
+        "rerank": "重排",
         "compression": "压缩",
         "ungrouped": "未分组",
         "other": "其他"
@@ -15993,6 +16044,8 @@
       "claudeSubscriptionWorkspaceOverride": "这个工作目录的 .claude 设置修改了 Claude 的上游地址或鉴权方式，不能在这里使用 Claude 订阅。请移除这些设置，或选择网关或 API Key 模型",
       "deviceStillLoading": "远程设备仍在加载中，请稍候",
       "remoteDefaultsLoadFailed": "无法读取远程设备配置。请检查连接，Cindy 正在重试。",
+      "branchRequiresWorktree": "所选分支与当前分支不同。请勾选 worktree，或选择当前分支。",
+      "branchCheckFailed": "无法确认当前分支。请勾选 worktree 使用所选分支，或检查项目后重试。",
       "worktreeMissingRepo": "无法创建 worktree：找不到当前目录的仓库根目录",
       "worktreeRepoHint": "可尝试重新选一次工作目录，等右下角文件夹标识刷新后再试",
       "sessionInactive": "任务已不再处于活跃状态",
@@ -16568,6 +16621,8 @@
             "title": "仓库事件",
             "description": "连接 Cindy GitHub App，在评审或 CI 变化时更新正在跟进的 PR。",
             "connected": "已连接 {{login}} · 正在关注 {{count}} 个仓库",
+            "syncing": "正在同步仓库…",
+            "finishInBrowser": "请在 GitHub 完成仓库设置后返回 Cindy。",
             "missing": "请检查这些仓库的 App 安装与访问权限：{{repositories}}",
             "error": "无法检查连接，请重试。",
             "repositories": "选择仓库",
@@ -17146,9 +17201,8 @@
         "automatic": "自动",
         "manually": "手动",
         "session": "任务",
-        "silentRun": "检查没事不说话",
-        "silentRunTooltip": "仅报告变化或问题。提醒和定时发送可关闭此项。",
-        "silentRunInfoAria": "查看静默运行规则",
+        "silentRun": "静默运行",
+        "silentRunTooltip": "开启后，任务成功完成时默认不提醒。若任务说明中要求在特定情况提醒，AI 会在满足条件时主动上报；失败和异常仍会提醒。",
         "finishSendToFeishu": "完成时发送到飞书机器人",
         "finishSendToWecomGroup": "完成时发送到企业微信群",
         "configWecomGroup": "配置企业微信群通知",
@@ -17258,10 +17312,7 @@
       },
       "layout": {
         "content": "执行内容",
-        "notifications": "通知与静默",
-        "contentTab": "内容与触发",
-        "optionsTab": "运行选项",
-        "sections": "自动化配置"
+        "notifications": "通知与静默"
       },
       "webhook": {
         "quotaHint": "每天的 Webhook 接收次数有上限，这里的筛选不会减少次数。请在发送方（如 GitHub）只勾选需要的事件。",
@@ -17337,6 +17388,19 @@
         "repositoriesLabel": "仓库",
         "repositoriesHint": "每行填写一个 owner/repository。只有已授权给此 GitHub App 的仓库才能触发任务。",
         "repositoriesInvalid": "请填写 1–50 个有效的 owner/repository 仓库名称。",
+        "connectAccount": "连接账号",
+        "connectionLabel": "连接方式",
+        "cindyConnection": "通过 Cindy 连接（推荐）",
+        "manualConnection": "手动配置 Webhook",
+        "cindyConnectionHint": "使用 GitHub App 接收事件，连接账号并授权仓库即可，无需填写接收地址和密钥。",
+        "manualConnectionHint": "在 GitHub 仓库设置中填写 Cindy 提供的接收地址和密钥。",
+        "manualSetupHint": "保存后，在任务详情获取接收地址和密钥，前往 GitHub 仓库设置完成连接。",
+        "accountLabel": "GitHub 账号",
+        "accountDisconnected": "尚未连接 GitHub，请先连接账号。",
+        "authorizeRepositories": "授权仓库",
+        "appUnavailable": "当前无法使用 GitHub App 连接，可选择手动配置 Webhook。",
+        "cindyConnectionTitle": "GitHub · 通过 Cindy 连接",
+        "manualConnectionTitle": "GitHub · 手动 Webhook",
         "githubAppHint": "请在运行此任务的电脑上连接 GitHub App，并授权这些仓库，无需另设 Webhook 地址或密钥。",
         "githubAppPaused": "此任务已暂停，事件不会启动它。"
       },
@@ -21354,8 +21418,7 @@
     "providerManagedAuth": "当前 Codex 供应商未提供 ChatGPT 账号信息。请在添加供应商时选择「$t(subscriptionAccounts.signIn.anotherAccount)」，以使用独立目录。",
     "signIn": {
       "checking": "正在检测本机账号…",
-      "detected": "检测到已登录账号",
-      "useAccount": "使用此账号",
+      "useAccount": "使用这台电脑上的 {{cli}} 账号",
       "anotherAccount": "登录另一个账号",
       "keepExisting": "新账号默认作为单独的供应商，也可以选择并入已有的供应商。现有账号的登录保持不变。",
       "checkFailed": "无法读取本机账号状态，请重试。",
@@ -21365,7 +21428,6 @@
     "title": "订阅账号",
     "strategy": "负载均衡",
     "add": "添加账号",
-    "default": "默认目录",
     "defaultTag": "默认",
     "ready": "已连接",
     "signedOut": "需要登录",
@@ -21564,5 +21626,73 @@
     "switchOffer": {
       "action": "换到 {{model}} 继续"
     }
+  },
+  "projectSettings": {
+    "autoLoading": "正在识别项目图标…",
+    "autoNone": "使用项目名称生成的字母图标。",
+    "autoSource": "来源",
+    "githubAvatar": "使用 GitHub 账号头像",
+    "title": "项目设置",
+    "name": "显示名称",
+    "saveName": "保存名称",
+    "reset": "恢复默认",
+    "icon": "图标",
+    "directory": "项目目录",
+    "done": "完成",
+    "failed": "保存失败，请重试。",
+    "unavailable": "项目设置暂不可用，请连接已更新的电脑后重试。",
+    "back": "返回",
+    "cancel": "取消",
+    "changeIcon": "更换图标",
+    "chooseIcon": "选择图标",
+    "save": "保存",
+    "symbols": "图标",
+    "emoji": "表情",
+    "letters": "字母",
+    "image": "图片",
+    "upload": "上传图片",
+    "imageHint": "PNG、JPG 或 WebP · 自动裁成正方形",
+    "imageError": "无法读取这张图片，请尝试较小的 PNG 或 JPG。",
+    "search": "搜索图标",
+    "customEmoji": "也可以粘贴一个表情",
+    "lettersHint": "输入一到两个文字或数字。",
+    "thisComputer": "这台电脑",
+    "nameHint": "用于项目列表中的显示，不会重命名文件夹。",
+    "copy": "复制路径",
+    "copied": "已复制",
+    "applyIcon": "使用图标",
+    "noResults": "没有找到匹配的图标",
+    "discardHint": "放弃尚未保存的修改？",
+    "keepEditing": "继续编辑",
+    "discard": "放弃修改",
+    "colors": {
+      "default": "默认色（跟随主题）"
+    }
+  },
+  "taskManagement": {
+    "scope": "仅应用于当前账号在这台电脑上的任务。",
+    "archive": "自动归档",
+    "enabled": "自动归档闲置任务",
+    "description": "自动收起闲置任务，历史记录仍可查看。",
+    "days": "闲置天数",
+    "daysHint": "从最近一次收发消息或运行结束开始计算。",
+    "days7": "7 天",
+    "days14": "14 天",
+    "days30": "30 天",
+    "customDays": "自定义天数",
+    "invalidDays": "请输入 1–365 之间的整数。",
+    "reset": "恢复默认",
+    "archiveHint": "正在使用的任务会保留，归档后可随时恢复。",
+    "preview": "归档预览",
+    "loadFailed": "未能读取设置。",
+    "loading": "正在读取设置…",
+    "candidateCount": "可归档 {{count}} 个任务",
+    "keptCount": "保留 {{count}} 个",
+    "lastCheck": "上次检查：{{date}}",
+    "notChecked": "尚未运行自动检查",
+    "saveFailed": "设置未保存，请重新操作。",
+    "archivedNotice": "已自动归档 {{count}} 个闲置任务",
+    "undo": "撤销",
+    "undoFailed": "未能撤销，请在已归档任务中恢复。"
   }
 }

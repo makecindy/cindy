@@ -800,8 +800,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         nextRenewAt = directTasks.get(taskKey)!.renewAt;
         if (permissionCurrent()) reusedHistory = false;
       };
-      // Poll recovery can run while send is waiting for a terminal. Serialize
-      // grants separately from sends, or renewal would deadlock behind that turn.
+      // Poll recovery can run while send is waiting for its RPC result. Serialize
+      // grants separately from sends, or renewal would stall behind that request.
       let grantTurn = Promise.resolve();
       const serializeGrant = (work: () => Promise<void>): Promise<void> => {
         const result = grantTurn.then(work);
@@ -874,9 +874,16 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         }
       });
       const renewTimer = deps.renewSharedProviderLink ? setInterval(() => {
-        if (!grantRenewable || reusedHistory || renewing || Date.now() < nextRenewAt) return;
+        if (!grantRenewable || reusedHistory || changingModel || renewing || Date.now() < nextRenewAt) return;
         renewing = true;
-        void serializeAuthorization(() => authorizeCurrentExecutor(authorizedModel)).catch((error: unknown) => {
+        // A send can remain pending through prompt preparation/compaction. It
+        // must not hold renewal behind the send queue until the lease expires.
+        // Use the existing grant queue, checking the model transition again when
+        // our turn arrives so an in-flight setModel keeps its new model grant.
+        void serializeGrant(async () => {
+          if (stopped || changingModel || !grantRenewable || reusedHistory || Date.now() < nextRenewAt) return;
+          await applyAuthorization(authorizedModel);
+        }).catch((error: unknown) => {
           log.warn('shared provider direct authorization renewal failed', { error: String(error) });
         }).finally(() => {
           renewing = false;

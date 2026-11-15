@@ -85,6 +85,22 @@ describe('GhostInstallReceiptStore cleanup', () => {
     if (result.state === 'approved') expect(result.receipt.uiCapabilityApproved).toBe(fact === true ? true : undefined);
   });
 
+  // Unit: old Host receipts carried supplementary grants. Reading must ignore
+  // that obsolete field without rewriting the file or invalidating the install.
+  it('ignores obsolete Host grants without migrating or deleting receipt data', async () => {
+    await store.write(createSetupReceipt());
+    const file = path.join(stateRoot, 'hello.json');
+    const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    raw.approvedHostUi = ['obsolete'];
+    const bytes = JSON.stringify(raw);
+    await fs.promises.writeFile(file, bytes);
+    const loaded = await store.readAsync('hello');
+    expect(loaded.state).toBe('approved');
+    if (loaded.state !== 'approved') throw new Error('install must remain approved');
+    expect(loaded.receipt).not.toHaveProperty('approvedHostUi');
+    expect(await fs.promises.readFile(file, 'utf8')).toBe(bytes);
+  });
+
   // Unit: main removed Harness grants. Existing optional-UI tests never load a
   // receipt written by that older Host. A legacy unknown Harness fact must not
   // revoke the plugin or grant UI; read/write must retain identity and setup.
@@ -447,6 +463,27 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(await store.readAsync('hello')).toMatchObject({ state: 'approved', receipt: {
       manifest: { systemPrompt: fragments }, approvedControlPoints: ['system-prompt'],
     } });
+  });
+
+  // Unit: old persisted manifests remain enabled, without converting previously unknown data into authority.
+  it('keeps legacy model declarations inert and round trips only explicit model grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.cindy = { image: ['generate'] };
+    await store.write(receipt);
+    const file = path.join(stateRoot, 'hello.json');
+    const historical = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    historical.manifest.cindy.models = {};
+    await fs.promises.writeFile(file, JSON.stringify(historical));
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { enabled: true,
+      manifest: { cindy: { image: ['generate'] } } } });
+    receipt.manifest.cindy.models = ['rerank'];
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('legacy receipt rejected');
+    expect(old.receipt.approvedCindyModelActions).toBeUndefined();
+    await store.write({ ...old.receipt, approvedCindyModelActions: ['rerank', 'decisions'] });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { enabled: true,
+      approvedCindyModelActions: ['rerank'], revision: receipt.revision } });
   });
 
   it('round trips approved control points and keeps older receipts approved without them', async () => {

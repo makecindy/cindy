@@ -15,7 +15,9 @@ import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REM
 import { ApiError, type ApiFetchOptions } from '@/api/client';
 import type { DeviceView, LinkAcceptPayload } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
-import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { refreshRemoteProjectAliases, setRemoteProjectAliasesAccount } from '@/session/remoteProjectAliases';
+import { PROJECT_AUTO_ICON_CHANNEL, PROJECT_ICON_IMAGE_CHANNEL, isProjectImageDraft, PROJECT_ALIASES_GET_CHANNEL, PROJECT_SETTINGS_SET_CHANNEL, validProjectIcon } from '@cindy/maker-shared/project-alias-sync';
 import { MOBILE_VISUAL_MOCK_REALDATA_URL } from '@/config/env';
 import type { DeviceLinkContextValue } from '@/device-link/DeviceLinkContext';
 import type {
@@ -197,11 +199,28 @@ export function visualMockDevices(): DeviceView[] {
     .map((device) => ({ ...device, name: renamedDevices.get(device.deviceId) ?? device.name }));
 }
 
+const visualProjectNames = new Map<string, string>();
+const visualProjectIcons = new Map<string, string>();
+const visualProjectImages = new Map<string, string>();
+let visualProjectImageRevision = 0;
+function visualProjectInfo() {
+  return {
+    aliases: Array.from(visualProjectNames, ([projectKey, alias]) => ({ projectKey, alias })),
+    icons: Object.fromEntries(visualProjectIcons),
+    platform: 'darwin',
+    settingsSupported: true,
+    settingsVersion: 5,
+    ownerStamp: { dataOwnerId: visualMockUser.id, ownerGeneration: 1 },
+  };
+}
+
 export function seedVisualMockStore(): void {
   // The startup/home-entry gate needs the same owner as the mock AuthProvider.
   setMobileAuthOwner(visualMockUser.id);
   const seededRealData = seedRealDataStore(realDataSnapshot);
   if (seededRealData) return;
+  setRemoteProjectAliasesAccount(visualMockUser.id, getMobileAuthOwner().generation);
+  void refreshRemoteProjectAliases(VISUAL_MOCK_DEVICE_ID, async () => visualProjectInfo());
 
   // The mock auth owner is generation zero. Establish its empty in-memory roster cache
   // before the six-host scene's ordinary roster replies populate it.
@@ -419,6 +438,34 @@ async function visualMockInvoke<T = unknown>(
     }
   }
   switch (channel) {
+    case PROJECT_ALIASES_GET_CHANNEL:
+      return visualProjectInfo() as T;
+    case PROJECT_AUTO_ICON_CHANNEL:
+      return {image:null,source:'',kind:'none',candidate:false} as T;
+    case PROJECT_ICON_IMAGE_CHANNEL:
+      return (visualProjectImages.get((args[0] as { projectKey: string }).projectKey) ?? null) as T;
+    case PROJECT_SETTINGS_SET_CHANNEL: {
+      const request = args[0] as { projectKey: string; field: string; value: string | null | { name?: string; icon?: string | null }; dataOwnerId: string; ownerGeneration: number };
+      if (request.dataOwnerId !== visualMockUser.id || request.ownerGeneration !== 1) throw new Error('Project account changed');
+      const changes = request.field === 'profile' ? request.value as { name?: string; icon?: string | null }
+        : request.field === 'name' ? { name: request.value as string } : { icon: request.value as string | null };
+      if ('name' in changes) {
+        if (typeof changes.name !== 'string' || changes.name.trim().length > 80) throw new Error('Invalid name');
+        const name = changes.name.trim();
+        if (name) visualProjectNames.set(request.projectKey, name); else visualProjectNames.delete(request.projectKey);
+      }
+      if ('icon' in changes) {
+        if (isProjectImageDraft(changes.icon)) {
+          visualProjectImages.set(request.projectKey, changes.icon);
+          // Valid content address; bytes live only in this mock instance.
+          visualProjectIcons.set(request.projectKey, `cindy-media://blobs/${(++visualProjectImageRevision).toString(16).padStart(64, '0')}.png`);
+        } else if (changes.icon === null || validProjectIcon(changes.icon)) {
+          if (changes.icon) visualProjectIcons.set(request.projectKey, changes.icon); else visualProjectIcons.delete(request.projectKey);
+          visualProjectImages.delete(request.projectKey);
+        } else throw new Error('Invalid icon');
+      }
+      return visualProjectInfo() as T;
+    }
     case 'maker:get-context-usage':
       return UI_MOCK_PI_CONTEXT_USAGE as T;
     case 'maker:regenerate-title':
@@ -1088,7 +1135,10 @@ function handleVisualMockFileBrowser(input: unknown): unknown {
   const op = input && typeof input === 'object' && 'op' in input ? String(input.op) : '';
   const shared = sharedUiMockFiles(input);
   if (shared !== undefined) return shared;
-  if (op === 'caps') return { ok: true, gzip: true } satisfies FileBrowserCapsResult;
+  if (op === 'caps') return { ok: true, gzip: true, fileRead: true } satisfies FileBrowserCapsResult & { fileRead: boolean };
+  // Reuse the synthetic PDF bytes so the multi-file browser can exercise the real reader.
+  if (op === 'fileUrl' && (input as { relPath?: string }).relPath === 'quarterly-report.pdf')
+    return { ok: true, url: 'xdt-file://open?path=%2Fattachment-preview%2Fsample.pdf' };
   if (op === 'listDir') return visualMockFileBrowserEntries();
   if (op === 'listAllFiles') {
     return {

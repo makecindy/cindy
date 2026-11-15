@@ -200,9 +200,10 @@ Agent 在提交新增测试前必须在 PR 描述或测试文件邻近注释中�
   依赖注入／纯函数用例保留等价覆盖；禁止按 `process.platform` 大面积跳过后让整个 CI 矩阵
   失去相应回归保护。
 
-PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整覆盖 `pnpm test:unit`；所有分片的
+PR 门禁必须在 Windows 上用多个并行分片（当前为 8 个）完整覆盖 `pnpm test:unit`；所有分片的
 并集必须等价于未分片的全量测试，且由稳定的汇总检查统一阻断。分片数可以按 CI 实测耗时调整，
-但分片矩阵必须连续列出 1..N 并与 `XDT_UNIT_TEST_SHARD` 的 N 一致；只需执行一次的检查放在
+但分片矩阵必须连续列出 1..N 并与 `XDT_UNIT_TEST_SHARD` 的 N 一致。Desktop 按已提交的逐文件耗时
+切分，各片必须读同一份数据（见 `desktop-unit-test-performance.md`）；只需执行一次的检查放在
 独立并行 job，不叠加在某个分片上。`scripts/__tests__/dev-docs-contract.test.mjs` 锁住
 该 CI 契约。不能用静态扫描“测试字符串是否含斜杠”代替 Windows 实跑，因为它无法可靠区分宿主
 路径与逻辑路径。
@@ -246,13 +247,14 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
 - **文言版（繁 `zh-Hant-x-lzh`／简 `zh-Hans-x-lzh`）**：只能由用户手动选择，系统语言永不自动
   落到它；Intl 日期与数字按 `zh-Hant`／`zh-Hans` 格式化，缺 key 先回退 `zh-TW`／`zh-CN` 再回退
   英文。繁体版是译写正本，简体版由它转写生成（规则见 `i18n/classical-chinese-style.md`，含文风、
-  术语表与必须保持白话的删除、权限、凭证、付款、安全文案）。选用文言界面时，每轮界面语言说明
-  同时要求 AI 以文言作答，作答文风（唐诗、宋词等）在设置的语言卡片里选，登记在
-  `packages/maker-shared/src/classicalReply.ts`；新增文风只需在该表加一项并补齐各语言的
-  `settings.language.classical.styles.*` 文案。简体中文 / 繁體中文界面也有同一行文风选择：
-  界面保持现代中文，默认「照常作答」，选中后才要求文言作答；文言界面与简体 / 繁體中文界面的
-  文风分开记忆（classical / modern 两档，见 `classicalReplyStyleContextOf`），互不带值；
-  style 名称统一叫「雅正文言」。IM 渠道不套用文言作答风格。
+  术语表与必须保持白话的删除、权限、凭证、付款、安全文案）。仅文言界面提供作答文风选择；
+  未选时为「雅正文言」，也可选唐诗、宋词等或「照常作答」。文风登记在
+  `packages/maker-shared/src/classicalReply.ts`；新增文风在该表加一项并补齐各语言的
+  `settings.language.classical.styles.*` 文案。普通语言不显示文风选择，旧 modern 偏好保留但忽略。
+  普通作答及「照常作答」不注入语言／文风说明；特殊文风只约束当前轮，发送与插话逐次附加，
+  不走环境说明去重；IM 不附加语言／文风说明。配置与历史边界见
+  [作答文风与默认提示词](configuration-and-overrides.md#作答文风与默认提示词)，
+  具体文体要求和实现／测试入口见 [译写准则 §六](../../i18n/classical-chinese-style.md#六作答文风)。
 - **翻译准确性**：`fallbackLng = 'en'`，缺 key 会静默回退英文。全部已支持语言都必须补齐并给出
   **准确**翻译，不留空、占位或“待校对”；ja / ko 没把握时先查证再写。
 - **术语一致性**：写任何术语前先查 `i18n/GLOSSARY.md`。同一个概念在不同界面译法不一致

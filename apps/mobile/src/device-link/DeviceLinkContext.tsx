@@ -271,7 +271,7 @@ export interface DeviceLinkContextValue {
     deviceId: string,
     channel: string,
     args?: unknown[],
-    opts?: { preSend?: () => void; background?: boolean },
+    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
   ): Promise<T>;
   // `owner` is a stable id for the mounted consumer (e.g. `session:<id>`, `device:<id>`),
   // so repeated subscribes from resync/retry are idempotent and a topic is only released
@@ -1855,7 +1855,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 回前台立刻重连:绕开断线后遗留的指数退避计时器(可能 park 到 30s),
         // 让"打开 App → 打开会话"路径快速恢复在线,而不是干等退避。
         // overrideCongestionCooldown:用户显式回前台是拥塞冷却的合法豁免——
-        // 冷却默认只拦请求路径的 un-park(waitUntilOnline),不拦真人操作。
+        // waitUntilOnline 始终保留退避；这里由真人回前台的生命周期入口主动恢复。
         backgroundConnection.active();
         // A short background stay can preserve a socket whose route changed.
         // Replace a known old path; otherwise probe without the hint cooldown.
@@ -2041,7 +2041,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     deviceId: string,
     channel: string,
     args: unknown[] = [],
-    opts?: { preSend?: () => void; background?: boolean },
+    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
   ) => {
     const preSend = () => {
       if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
@@ -2074,7 +2074,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             return withAccessRevokedHandling(deviceId, async () => unwrapInvoke<T>(result, channel));
           }
         }
-        return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background });
+        return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background, noResultCache: opts?.noResultCache });
       },
     );
     const result = isLowPriorityRead(channel)
@@ -2564,8 +2564,8 @@ function canUsePeerData(client: DeviceLinkClient, deviceId: string): boolean {
   return connection.getStatus() === 'online' || connection.hasOfflineDirectPath(deviceId);
 }
 
-// 发请求前确保连接就绪:online 直接放行;否则促成立即重连并有界等待上线,
-// 超时抛 NOT_CONNECTED(transient)交由上层重试 —— 把"等整个退避 gap"压成"等一次重连"。
+// 发请求前确保连接就绪:online 直接放行;否则在自己的预算内共享既有退避与握手。
+// 超时抛 NOT_CONNECTED(transient)交由上层重试，不提前建连或重置共享连接的退避。
 function ensureOnlineForRequest(client: DeviceLinkClient, deviceId?: string): Promise<void> {
   const connection = deviceId ? client.connectionFor(deviceId) : client;
   if (connection.getStatus() === 'online' || (deviceId && connection.hasOfflineDirectPath(deviceId))) return Promise.resolve();
@@ -2631,6 +2631,7 @@ async function sendOpenLink(
 interface SendInvokeOptions {
   preSend?: () => void;
   background?: boolean;
+  noResultCache?: boolean;
   /** 同一轮明确 fan-out 共享;普通独立请求省略。 */
   responsivenessCohort?: number;
   /** 仅主动的代表性 half-open 探测允许领取 probe 席位。 */
@@ -2681,7 +2682,7 @@ async function sendInvoke<T>(
       // 长通道(media / 文件搜索 / schedule 就绪窗口等)按 invokeTimeouts 解析
       // 规则保留更长窗口,避免 mobile 收紧的默认 15s 误伤合法慢操作。
       resolveMobileInvokeTimeoutMs(channel, args),
-      { background: opts?.background, preSend: () => {
+      { background: opts?.background, noResultCache: opts?.noResultCache, preSend: () => {
         try {
           opts?.preSend?.();
         } catch (err) {

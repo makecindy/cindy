@@ -1,5 +1,6 @@
 import { configureUserDataDir } from '../../../userDataPath.js';
 import { configureOwnerContext } from '../../../ownerContext.js';
+import { _setStoreForTests } from '../../../worktree/worktreeStore.js';
 import { registerMakerSessionCreateHandler } from '../../../maker-ipc/sessionCreateHandler';
 import { MAKER_INVOKE } from '../../../maker-ipc/channels';
 import { withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
@@ -217,6 +218,7 @@ import {
 } from '../../../appBadgeService';
 import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
+import { setSessionRestoreObserver } from '../../sessionRestoreRetention';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 import { createRemoteSessionsStatusSetter } from '../../../mcp-integrations/sessionStatusRemote.js';
 import * as sessionQueries from '../../sessionQueries';
@@ -373,6 +375,13 @@ async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
 }
 
 beforeEach(() => {
+  // Exercise the real worktree lookup without constructing electron-store in this Node fixture.
+  // Each case owns its registry; the separate safe-directory cleanup store is never used here.
+  const memory = new Map<string, unknown>([['worktrees', {}]]);
+  _setStoreForTests({
+    get: (key: string, fallback: unknown) => memory.get(key) ?? fallback,
+    set: (key: string, value: unknown) => { memory.set(key, value); },
+  } as unknown as NonNullable<Parameters<typeof _setStoreForTests>[0]>);
   clearAllSessionAttention();
   setSessionOpeningModelAdmission(async body => body);
   vi.clearAllMocks();
@@ -417,6 +426,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setSessionRestoreObserver(null);
+  _setStoreForTests(null);
   setSessionRuntimeCleanup(null);
   setSessionWorktreeBindingLookup(null);
   setSessionWorktreeRecycle(null);
@@ -429,6 +440,59 @@ afterEach(async () => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  // #10546 review, db tier: the ordinary restore/engine tests missed patch-meta's
+  // production transaction branch used by archive undo. Minimal input: one old
+  // archived task and an async retention save. Activation must wait for the save;
+  // failure or revocation during that await must leave the task archived.
+  it('waits for restore retention before activating through the patch-meta transaction', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+    Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
+    let entered!: () => void;
+    const saving = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const retain = vi.fn(async (ids, db) => {
+      expect(ids).toEqual(['codex-local']);
+      expect(db).toBe(h.db);
+      entered();
+      await gate;
+    });
+    setSessionRestoreObserver(retain);
+    const restoring = patchSessionMetaInDb('codex-local', { status: 'active' });
+    try {
+      expect(await Promise.race([saving.then(() => 'saving'), restoring.then(() => 'restored')])).toBe('saving');
+      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'archived' });
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await restoring;
+    }
+    expect(retain).toHaveBeenCalledOnce();
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
+  });
+
+  it.each(['persistence', 'owner', 'cancel', 'condition'] as const)(
+    'does not activate through the patch-meta transaction after a retention %s failure', async failure => {
+      h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+      Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
+      h.captureOwnerScope = true;
+      const controller = new AbortController();
+      let current = true;
+      setSessionRestoreObserver(async () => {
+        if (failure === 'persistence') throw new Error('RETENTION_WRITE_FAILED');
+        if (failure === 'owner') h.ownerCurrent = false;
+        if (failure === 'cancel') controller.abort();
+        if (failure === 'condition') current = false;
+      });
+      await expect(patchSessionMetaInDb('codex-local', { status: 'active' }, {
+        signal: controller.signal,
+        beforeWrite: () => { if (!current) throw new Error('TASK_ARCHIVE_SCOPE_CHANGED'); },
+      })).rejects.toThrow('PRECONDITION_FAILED');
+      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'archived' });
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    },
+  );
+
   // Terminal lifecycle through both real public handlers: an ordinary fork survives,
   // but a hidden side chat must not remain running after its parent becomes unreachable (unit).
   it.each([invokeUpdate, invokePatchMeta])('deletes dependent side chats without deleting ordinary forks (%#)', async update => {

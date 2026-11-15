@@ -35,6 +35,7 @@ const mockState = vi.hoisted(() => {
     },
     createAnthropicCompatProxy: vi.fn(),
     realStripTransforms: false,
+    requestSizeControllerFactory: undefined as typeof import('../oversized-attachment-recovery.js').createRequestSizeController | undefined,
     createPiProviderFetch: vi.fn(() => vi.fn()),
     handlePiProviderRequest: vi.fn(async () => undefined),
     createResponsesChatHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
@@ -167,8 +168,14 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
 // Media-store persistence is covered by oversized-attachment-recovery.test.ts; keep the
 // real request rewrite and replace only where the preserved file is published.
 vi.mock('../oversized-attachment-recovery.js', async () => {
-  const { recoverInlineAttachments } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+  const { recoverInlineAttachments, controlRequestSize } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+  const createRequestSizeController: typeof import('../oversized-attachment-recovery.js').createRequestSizeController = (_resolveSession, preprocessor, resolveProvider) => mockState.requestSizeControllerFactory?.(_resolveSession, preprocessor, resolveProvider) ?? ({
+    enabled: () => process.env.XDT_REQUEST_SIZE_CONTROL_DISABLE !== '1',
+    format: ctx => ctx.url.includes('/responses') ? 'responses' : ctx.url.includes('/messages') ? 'anthropic' : ctx.url.includes('/chat/completions') ? 'chat' : null,
+    control: (body, format, policy) => controlRequestSize(body, format, { ...policy, preprocessor, modelFamily: 'gpt' }, async () => '/tmp/preserved.png'),
+  });
   return {
+    createRequestSizeController,
     createAttachmentRecovery: () => () => (body: Parameters<typeof recoverInlineAttachments>[0], target: number) =>
       recoverInlineAttachments(body, target, { prepare: async () => '/tmp/preserved.png', commit: async () => {} }),
   };
@@ -190,6 +197,7 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
 // ~7s (2026-10-16), and order-shuffled runs confirm cases stay independent.
 async function freshCodexProxyHost(realStripTransforms = false) {
   mockState.realStripTransforms = realStripTransforms;
+  mockState.requestSizeControllerFactory = undefined;
   mockState.reportCindyGatewayKeyRejected.mockReset();
   mockState.gatewayBaseUrl = '';
   const host = await import('../codex-proxy-host.desktop.js');
@@ -1310,6 +1318,68 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     } finally {
       host.unregister('session-kimi-history');
       clearSessionProvider('session-kimi-history');
+      setCustomProviderKeyReader(() => null);
+      setOAuthTokenReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  // Unit regression: real routing -> native SDK -> outbound JSON. Kimi Code returned
+  // 400 "role 'developer' is not allowed"; existing native dispatch mocks never
+  // exercised that serialization. Minimal input is a reasoning model + instructions.
+  it.each<{ model: string; upstream: string; role: string; oauth?: boolean }>([
+    ...['k3', 'k3-256k', 'k3.1-pro-highspeed', 'kimi-for-coding', 'kimi-for-coding-highspeed']
+      .map(model => ({ model, upstream: 'https://api.kimi.com/coding/v1', role: 'system' })),
+    { model: 'k3', upstream: 'https://api.kimi.com/coding/v1', role: 'system', oauth: true },
+    { model: 'k3', upstream: 'https://api.kimi.com.evil.example/coding/v1', role: 'developer' },
+    { model: 'k3', upstream: 'https://api.kimi.com/coding/v10', role: 'developer' },
+    { model: 'k3', upstream: 'http://api.kimi.com/coding/v1', role: 'developer' },
+    { model: 'k3', upstream: 'https://other-provider.example/v1', role: 'developer' },
+  ])('serializes the Codex native Chat instruction role for $model at $upstream / oauth=$oauth', async ({ model, upstream, role, oauth }) => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider, providerPresetOAuth } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader, setOAuthTokenReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const transport = await vi.importActual<typeof import('../pi-provider-transport.js')>('../pi-provider-transport.js');
+    const provider = buildUserProvider({ id: 'kimi-role', name: 'Renamed connection',
+      ...(oauth ? { auth: { method: 'oauth' as const, oauth: providerPresetOAuth('kimi')! } } : {}), runtimes: {
+      codex: { baseUrl: upstream, wireProtocol: 'openai-chat', models: [
+        { id: model, name: model, api: 'openai-completions', efforts: ['high'], defaultEffort: 'high' },
+      ] },
+    } });
+    const originalProvider = structuredClone(provider);
+    setCustomProviders([provider]);
+    setCustomProviderKeyReader(() => 'fixture-key');
+    setOAuthTokenReader(() => 'fixture-oauth');
+    host.registerComposed('session-kimi-role', 'thread-kimi-role', 'PRODUCT_PROMPT');
+    setSessionProvider('session-kimi-role', provider.id);
+    host.setCodexProxyAuthInjection('env-key');
+    try {
+      const body = { model, instructions: 'BASE_PROMPT', input: 'Reply OK', stream: true };
+      const ctx = { reqId: 10370, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-kimi-role' } };
+      const decision = await host.createModelRoutingTransform()(body, ctx);
+      if (!decision?.localHandler) throw new Error('expected native Chat handler');
+      await decision.localHandler({ rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, ctx, res: {} as never });
+      const options = vi.mocked(mockState.createPiProviderFetch as typeof transport.createPiProviderFetch).mock.lastCall?.[0];
+      const request = vi.mocked(mockState.handlePiProviderRequest as typeof transport.handlePiProviderRequest).mock.lastCall?.[1];
+      if (!options || !request) throw new Error('native dispatch was not exercised');
+      let outbound: Record<string, unknown> | undefined;
+      const fetch = transport.createPiProviderFetch({ ...options, fetchImpl: async (_url, init) => {
+        outbound = JSON.parse(String(init?.body));
+        return new Response('data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          { headers: { 'content-type': 'text/event-stream' } });
+      } });
+      const response = await fetch('https://unused.invalid', { body: JSON.stringify(request) });
+      expect(await response.text()).toContain('response.completed');
+      expect(outbound?.messages).toEqual([
+        { role, content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
+        { role: 'user', content: [{ type: 'text', text: 'Reply OK' }] },
+      ]);
+      expect(provider).toEqual(originalProvider);
+    } finally {
+      host.unregister('session-kimi-role');
+      clearSessionProvider('session-kimi-role');
       setCustomProviderKeyReader(() => null);
       setOAuthTokenReader(() => null);
       setCustomProviders([]);
@@ -3459,6 +3529,58 @@ describe('codex proxy host', () => {
     expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
   });
 
+  // The shared Desktop/Node Host production assembly must use the approved
+  // 42 MiB HTTP fallback ceiling; scaled ingress behavior lives in proxy tests.
+  it('configures the shared Codex HTTP fallback ceiling at 42 MiB', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    expect(mockState.createAnthropicCompatProxy.mock.calls[0][0].maxRequestBodyBytes).toBe(42 * 1024 * 1024);
+  });
+
+  // Actual Codex host options + actual size controller/proxy; only the upstream
+  // is local. A 33 MiB text history fits the 42 MiB ingress but must stop at 32.
+  it('rejects a text-only Codex history between 32 and 42 MiB before upstream dispatch', async () => {
+    const host = await freshCodexProxyHost();
+    const realRecovery = await vi.importActual<typeof import('../oversized-attachment-recovery.js')>('../oversized-attachment-recovery.js');
+    mockState.requestSizeControllerFactory = realRecovery.createRequestSizeController;
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    let upstreamRequests = 0;
+    const upstream = createServer(async (req, res) => {
+      upstreamRequests++;
+      for await (const chunk of req) void chunk;
+      res.end('{}');
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    mockState.createAnthropicCompatProxy.mockImplementation((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({ ...opts, upstream: upstreamUrl, resolveOutboundProxy: () => null,
+        routingTransform: async (body, ctx) => ({ ...(await opts.routingTransform?.(body, ctx)), upstreamOverride: upstreamUrl }),
+      }));
+    try {
+      await host.ensureCodexProxyReady();
+      const proxy = await mockState.createAnthropicCompatProxy.mock.results[0].value as { url: string };
+      expect(mockState.createAnthropicCompatProxy.mock.calls[0][0].maxRequestBodyBytes).toBe(42 * 1024 * 1024);
+      const prefix = '{"model":"gpt-5","input":"';
+      const raw = Buffer.from(prefix + 'x'.repeat(33 * 1024 * 1024 - prefix.length - 2) + '"}');
+      expect(raw.length).toBe(33 * 1024 * 1024);
+      const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ error: { type: 'request_too_large', message: 'Request text exceeds the local 32 MiB request budget after image recovery.' } });
+      expect(upstreamRequests).toBe(0);
+      vi.stubEnv('XDT_REQUEST_SIZE_CONTROL_DISABLE', '1');
+      const disabled = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+      expect(disabled.status).toBe(200); await disabled.text();
+      expect(upstreamRequests).toBe(1); // Disabled mode retains the production 42 MiB fallback.
+    } finally {
+      vi.unstubAllEnvs();
+      await host.disposeCodexProxy(); mockState.requestSizeControllerFactory = undefined;
+      upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+
   // #7055: ChatGPT closes WebSocket messages over ~16 MiB with 1009. A reconnect resends the
   // whole image-heavy history, so every retry was rejected until the turn timed out.
   it('fits an oversized WebSocket request under the upstream message limit before forwarding', async () => {
@@ -3472,8 +3594,8 @@ describe('codex proxy host', () => {
       webSocketTransforms: (ctx: { url: string; headers: Readonly<Record<string, string>> }) => { outbound: Transform };
     };
     const { createWebSocketMessageTransform } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
-    const send = async (input: unknown[]): Promise<Buffer> => {
-      const payload = Buffer.from(JSON.stringify({ type: 'response.create', model: 'gpt-5.4', input }));
+    const send = async (input: unknown[], previous_response_id?: string): Promise<Buffer> => {
+      const payload = Buffer.from(JSON.stringify({ ...(previous_response_id ? { previous_response_id } : {}), type: 'response.create', model: 'gpt-5.4', input }));
       const header = Buffer.alloc(14);
       header[0] = 129; header[1] = 128 | 127; header.writeBigUInt64BE(BigInt(payload.length), 2);
       const { outbound } = proxyOpts.webSocketTransforms({ url: '/backend-api/codex/responses', headers: {} });
@@ -3497,6 +3619,16 @@ describe('codex proxy host', () => {
     const input = JSON.parse(oversized.toString()).input;
     expect(input[0]).toMatchObject({ type: 'input_text', text: expect.stringContaining('/tmp/preserved.png') });
     expect(input.at(-1)).toEqual(image);
+
+    // Count crossings use the same replay even for frames below the byte limit.
+    const tiny = { type: 'input_image', image_url: 'data:image/png;base64,YQ==' };
+    const first = await send(Array.from({ length: 51 }, () => tiny));
+    const extended = await send(Array.from({ length: 52 }, () => tiny));
+    expect(JSON.parse(first.toString()).input.filter((item: { type: string }) => item.type === 'input_image')).toHaveLength(22);
+    expect(JSON.parse(extended.toString()).input.filter((item: { type: string }) => item.type === 'input_image')).toHaveLength(23);
+    expect(extended.subarray(0, first.length - 2)).toEqual(first.subarray(0, -2));
+    const incremental = await send(Array.from({ length: 52 }, () => tiny), 'prior-response');
+    expect(JSON.parse(incremental.toString()).input).toEqual(Array.from({ length: 52 }, () => tiny));
   });
 
   it('only resolves the websocket upstream for the oauth-bearer spawn identity', async () => {

@@ -2,6 +2,8 @@
  * Protects the missing remote/share choices, model access and account-switch fence. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({ devices: [] as unknown[], shares: [] as unknown[], invoke: vi.fn(), api: vi.fn() }));
+// This catalog fixture has no signed-in owner or persisted disable preferences.
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({ disabledModels: {}, disabledProviders: {} }) }));
 vi.mock('../../device-link/index.js', () => ({ deviceLinkApiBase: 'https://example.invalid', remoteBackgroundInvoke: mock.invoke }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: () => mock.shares }));
 vi.mock('../../device-link/settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: ['disabled'], lastKnownDeviceNames: {} }) }));

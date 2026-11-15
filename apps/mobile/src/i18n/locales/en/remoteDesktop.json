@@ -15,10 +15,10 @@
   "switchRetro": "Switch to retro",
   "skinSwipeHint": "Swipe left or right here to change the appearance.",
   "hostDisconnected": "The computer ended the remote desktop connection.",
-  "privacyScreen": "Computer privacy screen",
-  "privacyScreenHint": "Cover the computer’s screens. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
-  "privacyActive": "Privacy screen is on. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
-  "privacyFailed": "Privacy screen could not be enabled. The computer’s screens may still be visible.",
+  "privacyScreen": "Privacy screen while connected",
+  "privacyScreenHint": "Covers this computer’s screen during remote control. If someone clicks or presses a key at the computer, it asks before disconnecting.",
+  "privacyActive": "Privacy screen is on. If someone clicks or presses a key at the computer, it asks before disconnecting.",
+  "privacyFailed": "Couldn't turn on the privacy screen. The computer's screen may still be visible.",
   "clipboardSync": "Clipboard sync",
   "clipboardSyncHint": "Sync text, images and rich text both ways while in the foreground. Allow paste access if iPhone asks.",
   "clipboardSyncConflict": "Both clipboards changed. Both copies were kept. Copy again on either device to sync.",
@@ -194,7 +194,7 @@
   "idleMinutes_other": "{{count}} minutes",
   "idleDisconnected": "Disconnected due to inactivity. Reconnect when you are ready.",
   "backgroundDisconnected": "Remote desktop ended when Cindy went into the background. Reconnect to continue.",
-  "lockOnExit": "Lock Computer on Exit",
+  "lockOnExit": "Protect Computer on Exit",
   "lockOnExitHint": "Locks the computer when you exit remote desktop.",
   "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended.",
   "hostMute": "Mute remote computer",
@@ -208,5 +208,8 @@
   "keyAppWindows": "App Windows",
   "keySearch": "Search",
   "keyTaskView": "Task View",
-  "keySpace": "Space"
+  "keySpace": "Space",
+  "lockOnExitHintPrivacy": "Shows the privacy screen when you exit, so AI can keep working; touching the computer locks it.",
+  "lockedEnablePrivacyHint": "To let AI keep using this computer while you're away, turn on the privacy screen in its Settings → General → When You're Away.",
+  "protectingOnExit": "Showing the privacy screen…"
 }
