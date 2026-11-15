@@ -9166,7 +9166,7 @@
       "dialog": {
         "createTitle": "Ajouter un serveur MCP",
         "editTitle": "Modifier le serveur MCP",
-        "desc": "Après enregistrement, les nouvelles sessions Agent ou les sessions redémarrées peuvent les charger. Les sessions en cours restent inchangées. Les configurations natives des moteurs restent séparées.",
+        "desc": "Après enregistrement, les nouvelles sessions Agent ou les sessions redémarrées peuvent les charger. Les sessions en cours d'exécution ne sont pas affectées. Les configurations natives des moteurs restent séparées.",
         "teammateDesc": "Après enregistrement, votre ami ajoute ces outils et peut les utiliser dès le prochain message de ce chat, sans nouvelle session."
       },
       "fields": {
