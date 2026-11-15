@@ -31,7 +31,7 @@ function browser(respond = () => ({}), script = source, openEvents = (_url, { si
     location: { href: 'http://127.0.0.1:1234/#/cc-agent/old', replace(url) { redirects.push(url); } }, console, TextDecoder, AbortController, URL, URLSearchParams, setTimeout, clearTimeout,
     fetch: async (url, options) => {
       // Keep the background event subscription pending, without timers/handles.
-      if (url.startsWith('/events')) return openEvents(url, options);
+      if (url.includes('/events?')) return openEvents(url, options);
       const body = JSON.parse(options.body);
       calls.push({ url, body, credentials: options.credentials });
       const result = await respond(url, body);
@@ -82,6 +82,35 @@ test('both auth API shapes use the same Host routes', async () => {
     '/api/auth/state', '/api/auth/refresh', '/api/auth/state', '/api/auth/refresh',
   ]);
   assert.ok(b.calls.every(c => c.credentials === 'same-origin'));
+});
+
+// Regression (#10614): behind a reverse proxy that serves the page below the
+// site root, root-absolute Host paths left the prefix and reached the wrong
+// server. Minimal input: one RPC, one chat turn, the event stream and logout.
+test('a proxy path prefix reaches Host requests, chat, events and the logout redirect', async () => {
+  const streams = [];
+  const b = browser(() => ({}), `window.__CINDY_BASE__ = '/cindy/';${source}`, (url, { signal }) => {
+    streams.push(url);
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  });
+  await b.api.auth.getState();
+  await b.api.maker.send('task', 'hi');
+  await b.api.authLogout();
+  assert.deepEqual(b.calls.map(c => c.url), ['/cindy/api/auth/state', '/cindy/chat', '/cindy/api/auth/logout']);
+  assert.deepEqual(b.redirects, ['/cindy/connect']);
+  assert.ok(streams.length > 0 && streams.every(url => url.startsWith('/cindy/events?')), streams.join());
+});
+
+// The prefix also feeds the logout redirect, so only a same-origin path counts.
+// A URL, `//host` or a backslash (browsers read it as `/`) keeps root paths.
+test('a prefix that is not a same-origin path is ignored', async () => {
+  for (const value of ['https://evil.example', '//evil.example', '/\\evil.example', 42]) {
+    const b = browser(() => ({}), `window.__CINDY_BASE__ = ${JSON.stringify(value)};${source}`);
+    await b.api.auth.getState();
+    await b.api.authLogout();
+    assert.deepEqual(b.calls.map(c => c.url), ['/api/auth/state', '/api/auth/logout'], String(value));
+    assert.deepEqual(b.redirects, ['/connect'], String(value));
+  }
 });
 
 test('installation and business confirmations use the authenticated Host routes', async () => {
