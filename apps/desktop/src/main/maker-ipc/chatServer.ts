@@ -2602,7 +2602,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           const ordinaryReply = !run.plan || run.plan.kind === 'talk';
           const validateUpload = async () => {
             assertCurrent();
-            if (pending.fileReply?.attachments.length) {
+            if (pending.fileReply?.attachments.length || pending.fileReply?.omittedFiles) {
               try { await validateExecutionAuthority(run); }
               catch (error) {
                 // Definitive revocation ends delivery; transport failures retain
@@ -2619,13 +2619,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 pending.fileReply ??= await prepareChatReplyFiles(text, run.sessionId, () => {
                   assertCurrent();
                   if (run.execution.access_mode === 'chat') throw new Error('ATTACHMENT_UNAVAILABLE');
-                }, !terminal.resultText.trim() ? terminal.resultMessageClientId : undefined);
+                }, !terminal.resultText.trim() ? terminal.resultMessageClientId : undefined, !run.execution.mask_owner_id);
                 // Shared reference classification reads file bytes before image import.
                 // Retain the later upload/seal checks and authorize this read as well.
-                if (!pending.reply && pending.fileReply.attachments.length) await validateUpload();
+                if (!pending.reply && (pending.fileReply.attachments.length || pending.fileReply.omittedFiles)) await validateUpload();
                 pending.reply ??= { sourceText: text, ...await prepareChatReplyImages(pending.fileReply.text, run.sessionId, assertCurrent,
                   pending.fileReply.attachments) };
                 contentText = pending.reply.text;
+                // Keep the notice inside the existing text budget, including on
+                // retries. It describes omitted references, not a failed turn.
+                if (pending.fileReply.omittedFiles) contentText = `${t('bots.groupChat.assistant.filesOutsideWorkingDir')}\n\n${contentText}`;
                 produced.push(...mergeChatReplyAttachments(pending.reply.attachments, pending.fileReply.attachments));
                 if (produced.length > BOT_GROUP_ATTACHMENTS_MAX) throw new Error('ATTACHMENT_UNAVAILABLE');
               }

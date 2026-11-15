@@ -11588,6 +11588,7 @@
         "threadRecent": "Mensajes recientes del hilo",
         "threadNew": "Mensajes nuevos del hilo",
         "replyingTo": "En respuesta a \"{{name}}\": {{text}}",
+        "filesOutsideWorkingDir": "No se adjuntaron los archivos fuera del directorio de trabajo.",
         "earlierOmitted": "(Mensajes anteriores omitidos)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {

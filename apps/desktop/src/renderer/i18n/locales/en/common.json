@@ -11497,6 +11497,7 @@
         "threadRecent": "Recent messages in the thread",
         "threadNew": "New messages in the thread",
         "replyingTo": "Replying to “{{name}}”: {{text}}",
+        "filesOutsideWorkingDir": "Files outside the working directory were not attached.",
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {

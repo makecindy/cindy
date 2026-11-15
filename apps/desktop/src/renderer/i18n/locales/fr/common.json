@@ -11588,6 +11588,7 @@
         "threadRecent": "Messages récents du fil",
         "threadNew": "Nouveaux messages du fil",
         "replyingTo": "En réponse à « {{name}} » : {{text}}",
+        "filesOutsideWorkingDir": "Les fichiers situés hors du répertoire de travail n’ont pas été joints.",
         "earlierOmitted": "(Messages plus anciens omis)",
         "actingFor": "{{name}} · pour {{person}}",
         "checkout": {

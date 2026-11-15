@@ -11452,6 +11452,7 @@
         "threadRecent": "话题近言",
         "threadNew": "话题新言",
         "replyingTo": "答「{{name}}」：{{text}}",
+        "filesOutsideWorkingDir": "部分文件不在工作目录内，未附上。",
         "earlierOmitted": "（更早之言略之）",
         "actingFor": "{{name}} · 代 {{person}}",
         "checkout": {
