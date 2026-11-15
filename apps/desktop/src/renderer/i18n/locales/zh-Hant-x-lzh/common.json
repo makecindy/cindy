@@ -9230,6 +9230,9 @@
         "failed": "回收未能畢",
         "pending": "已入佇列"
       }
+    },
+    "navigation": {
+      "unavailable": "未能開啟彼機設定。請驗其在線且已允遠控；版本舊則先更新 Cindy。"
     }
   },
   "remoteDevice": {

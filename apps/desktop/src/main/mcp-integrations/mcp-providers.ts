@@ -1,3 +1,4 @@
+import { deviceName } from '../device-link/deviceName';
 import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { gateBuiltinMcpProviders } from './provider-gate.js';
@@ -1362,6 +1363,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }),
       },
       appSettings: {
+        navigationDeviceId: () => getDeviceId(),
+        navigationDeviceName: () => deviceName(),
         call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
           return manageAppSettings(input, async () => {
             await assertCurrent();

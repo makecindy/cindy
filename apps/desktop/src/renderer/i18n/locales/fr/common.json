@@ -9345,6 +9345,9 @@
         "failed": "Le nettoyage n'a pas pu aboutir",
         "pending": "En file d'attente"
       }
+    },
+    "navigation": {
+      "unavailable": "Impossible d’ouvrir les paramètres de l’ordinateur cible. Vérifiez qu’il est en ligne et autorise le contrôle à distance ; mettez Cindy à jour si nécessaire."
     }
   },
   "remoteDevice": {

@@ -9230,6 +9230,9 @@
         "failed": "回收未能毕",
         "pending": "已入队列"
       }
+    },
+    "navigation": {
+      "unavailable": "未能开启彼机设置。请验其在线且已允远控；版本旧则先更新 Cindy。"
     }
   },
   "remoteDevice": {
