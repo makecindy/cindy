@@ -937,7 +937,11 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     {floatingHeader ? <>
       <View style={[styles.flex, group ? null : { paddingTop: headerHeight }]}>{body}</View>
       {headerBlurHeight > 0 ? <SessionHeaderNativeBlur height={headerBlurHeight} fadeInside={CHAT_HEADER_BLUR_FADE_INSIDE} /> : null}
-      <View style={[styles.floatingHeader, { paddingTop: nativeHeader && !imageSelectionActive ? nativeHeaderHeight : insets.top }]}
+      <View style={[styles.floatingHeader, {
+        left: screenInsets.paddingLeft,
+        right: screenInsets.paddingRight,
+        paddingTop: nativeHeader && !imageSelectionActive ? nativeHeaderHeight : insets.top,
+      }]}
         onLayout={(event) => setMeasuredHeader({ geometry: headerGeometry, height: event.nativeEvent.layout.height })}>
         {header}
         {offlineNote}
