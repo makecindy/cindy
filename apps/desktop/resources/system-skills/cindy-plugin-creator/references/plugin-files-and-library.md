@@ -56,9 +56,9 @@ await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
 - `root:'workdir'` **任务工作目录**:支持 write/read/list/delete/watch/changes/unwatch，必须带当次 tool-call 的 `callId`
   (主机凭它定位任务,不认自报)。read 支持 UTF-8/base64，单次上限 16MiB；list 只列当前层，
   返回目录与普通文件的相对路径、type、bytes、mtime，不返回隐藏路径或 symlink。
-  **写入和删除是否放行跟随该任务的权限模式**——Agent
+  **原有写入行为跟随该任务的权限模式**——Agent
   编辑文件免批的模式直接写;逐条确认的模式会弹确认卡请用户点头(同目录本
-  任务批一次)。删除单独裁决，不复用写入确认记忆；目录删除包含其内容。计划模式可读、列举和监听，禁止写入与删除。
+  任务批一次)。新增删除操作不再追加插件侧审核或确认；目录删除包含其内容。计划模式可读、列举和监听，禁止写入与删除。
   watch 只在原调用存活时生效，交卷、Stop、账号或安装变化即失效；游标只在该 watcher 内有效，
   最近 256 条元数据可续读，较旧游标返回 resetRequired。监听初始化失败明确报错，不能当作空事件。
   新操作须检测结构化 ok:false 并按不支持处理，旧 Host 无需重装插件。
@@ -78,7 +78,7 @@ await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
   监听不需要 Agent 在途调用，停用、原运行页结束、换源、账号或安装变化时清理；旧引用不能授权新目录身份。
   沙箱调用 `cindy.fs`；逻辑页与 Node Worker 也可经公共入口
   `cindy.host.call('cindy_helper','file_request',{op:'read',directoryRef,path:'a.txt'})` 操作相同目录。
-  公共工具入口的 write/delete 仍执行其原生逐次风险确认。普通 Agent 使用该工具时由真实 Session
+  安装批准有效且声明 files 后，插件公共工具入口的 write/delete 不追加调用确认。普通 Agent 使用该工具时仍走自身权限流程，由真实 Session
   定位当前工作目录，计划模式禁止修改，不借用插件引用。Node Host 复用已提供的文件服务，未装配
   系统选择器或 watcher 时明确不支持该部分，不在控制端操作远端路径。
 
@@ -283,8 +283,8 @@ _meta['cindy/file'].url 取临时只读地址。不要拼地址、传本机路�
 
 ### 4.10.4 统一存储接口与跨插件分享
 
-声明 `"agent":{"hostTools":["storage"]}`。安装/更新和详情页单列权限，receipt 记录组批准，
-旧声明不会自动补批准。逻辑页和 Node Worker 使用同一公共工具入口：
+声明 `"agent":{"hostTools":["storage"]}`。安装/更新确认和详情页展示能力；整体安装批准有效且启用后可用，
+不另记组批准。逻辑页和 Node Worker 使用同一公共工具入口：
 
 ```js
 const storage = async args => {
@@ -320,13 +320,13 @@ provider 继续拥有自己的 IO 与持久化，不复制一套存储实现。`
 单份最多 64 MiB，仍受源 provider 原有读取上限和接收方交接配额约束；Library/data 的普通 read
 上限为 16 MiB，不因为分享绕过。副本沿用 7 天使用续期、SHA-256 和用户详情页删除机制。
 
-双方都须启用、安装已批准且 `storage` 组已获批准；targets 只列同账号本机、同组织范围且
+双方都须启用、整体安装批准有效且声明 `storage`；targets 只列同账号本机、同组织范围且
 namespace 已确认的接收方。个人 root 与 local 实例属于个人范围；组织实例只与同一组织互享。
 分享不会替目标插件启用能力、批准权限或创建账号，也不能直接查询他人的 KV/库/凭证。
 普通 Agent 没有插件存储身份，直接调用返回 `PLUGIN_CONTEXT_REQUIRED`；应经该插件的工具操作其业务数据。
 
-宿主每次单独展示可信来源、接收方、文件名和字节数，用户拒绝或无确认客户端时不交付。
-确认期间 owner、安装、启用态或内容改变会阻止交付；`STALE_RESOURCE` 要重新展示当前内容并确认。
+分享不再弹二次确认；准备和交付期间仍复核 owner、安装、启用态和具体内容。
+内容改变返回 `STALE_RESOURCE`，由调用方重新读取后决定是否分享。
 `SHARE_RESULT_UNKNOWN` 表示写入阶段的回执不确定；返回 targetPluginId 和 file 的 name/size/sha256，
 先由接收方按这些事实查询交接列表，不能自动重发。底层 provider 失败的 reason 等结构化字段保留。
 已交付且被对方读取或另存的内容无法收回。停用/卸载仍可从 Cindy 管理页执行，不由插件控制。

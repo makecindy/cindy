@@ -2769,14 +2769,14 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
   });
 
   // Unit #9801/622jIH: real broker idle collection -> Host admission -> coordinator
-  // drain. Earlier broker tests only checked the immediate reply, before collection.
+  // drain. Also exercise an installed control group's mixed runtime call over the
+  // private worker channel, without an Agent RPC or an additional approval port.
   it('delivers an accepted message once after its source worker is normally collected', async () => {
     vi.useFakeTimers();
     const ghost = childSpawnGhost();
     ghost.manifest.node!.idleTimeoutSeconds = 30;
     ghost.manifest.agent = { hostTools: ['control'] };
     ghost.approval = { state: 'approved', revision: 'r1' };
-    ghost.approvedHostToolGroups = ['control'];
     let running = true;
     const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async () => ({ kind: 'session-dispatch', source: 'test', dispatched: true }));
     const coordinator = new AgentInputCoordinator({
@@ -2793,14 +2793,16 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
       createOpts: { agentKind: 'codex', model: 'model', workingDir: '/fixture' },
     };
     const result = { content: [{ type: 'text' as const, text: '{"ok":true,"queued":true}' }] };
+    const runtimeResult = { content: [{ type: 'text' as const, text: '{"ok":true,"generation":7,"permission_mode":"ask"}' }] };
+    const changeRuntime = vi.fn<(args: unknown) => Promise<typeof runtimeResult>>(async () => runtimeResult);
     const ports: PluginHostToolPorts = {
       owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => ghost,
-      approveGroup: async () => true, policy: () => 'auto-approve', confirm: async () => true,
       createRuntime: (server, caller) => ({ describe: name => ({ name, category: 'control' }), close: async () => {},
         call: async (tool, args) => {
           const admission = await authorizePluginHostToolCall({ caller, sessionId: undefined, server: server as 'cindy_helper', tool, args });
           if (!admission.ok || !admission.run) throw Error('missing Host admission');
           return await admission.run(async () => {
+            if (tool === 'set_session_runtime') return changeRuntime(args);
             bindTaskActionInput('target', item);
             coordinator.enqueue('target', item);
             return result;
@@ -2811,6 +2813,11 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     const { broker, worker } = await bootWorker(ghost, undefined, true, (id, payload, current) =>
       handlePluginHostToolRequest(id, payload, current, ports));
     try {
+      const runtimeArgs = { session_id: 'target', expected_generation: 6, model: 'next', permission_mode: 'ask' };
+      worker.emitControl({ type: 'host-tool-request', reqId: 'runtime', server: 'cindy_helper', tool: 'set_session_runtime', args: runtimeArgs });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'runtime', result: runtimeResult });
+      expect(changeRuntime).toHaveBeenCalledExactlyOnceWith(runtimeArgs);
       worker.emitControl({ type: 'host-tool-request', reqId: 'queued', server: 'cindy_helper', tool: 'send_to_session', args: { target_session_id: 'target', message: item.text } });
       await vi.advanceTimersByTimeAsync(0);
       expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'queued', result });

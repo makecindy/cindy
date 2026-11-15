@@ -69,3 +69,22 @@ export async function withdrawOwnedSessionInputs(params: {
   }
   await params.flush(params.sessionId);
 }
+
+/** Cancel one accepted request without granting control over later inputs in its task. */
+export async function stopOwnedSessionInput(params: Parameters<typeof withdrawOwnedSessionInputs>[0] & {
+  activeInput: () => OwnedQueuedInput | null;
+  withSessionLock: (sessionId: string, operation: () => Promise<void>) => Promise<void>;
+  stopTurn: (stillOwned: () => boolean) => Promise<void>;
+}): Promise<void> {
+  await withdrawOwnedSessionInputs(params);
+  const matches = () => {
+    const input = params.activeInput();
+    return !!input && queuedInputBelongsTo(input, params.owns);
+  };
+  await controlOwnedSessionExecution({
+    sessionId: params.sessionId,
+    matches,
+    withSessionLock: params.withSessionLock,
+    operation: () => params.stopTurn(matches),
+  });
+}

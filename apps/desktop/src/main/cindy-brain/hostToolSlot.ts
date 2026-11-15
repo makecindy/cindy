@@ -12,9 +12,6 @@ export interface PluginHostToolPorts {
   createRuntime(server: string, caller: Extract<HostToolCaller, { kind: 'plugin' }>): HostToolRuntime | null;
   /** A headless host may lack the service entirely rather than be starting it. */
   unavailableRuntimeError?: { errorCode: string; message: string };
-  approveGroup(id: string, group: GhostHostToolGroup, current: () => boolean): Promise<boolean>;
-  policy(server: string, tool: string, args: Record<string, unknown>): string;
-  confirm(input: { pluginId: string; pluginName: string; server: string; tool: string; args: Record<string, unknown> }): Promise<boolean>;
   recordCall?(pluginId: string, server: string, tool: string): void;
 }
 
@@ -57,12 +54,7 @@ export async function handlePluginHostToolRequest(id: string, payload: unknown, 
     const definition = runtime.describe(tool);
     const group = SERVICE_GROUPS[server] ?? GHOST_HOST_TOOL_GROUPS.find(item => item === definition?.category);
     if (!definition || !group) return fail('PERMISSION_DENIED');
-    if (!await ports.approveGroup(id, group, current)) return fail('PERMISSION_DENIED');
     const authorized = () => current() && hasPluginHostToolGroupApproval(ports.getGhost(id), group);
-    if (!authorized()) return fail('PERMISSION_DENIED');
-    const perCall = ports.policy(server, definition.name, args) !== 'auto-approve';
-    if (perCall && !await ports.confirm({ pluginId: id, pluginName: ghost.manifest.name, server, tool: definition.name, args: JSON.parse(argsJson) }))
-      return fail('PERMISSION_DENIED');
     if (!authorized()) return fail('PERMISSION_DENIED');
     const assertCurrent = () => { if (!authorized()) throw new Error('PERMISSION_DENIED'); };
     const assertDeliveryCurrent = () => {

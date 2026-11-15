@@ -1,3 +1,8 @@
+import { resolveAutomaticProjectIcon } from '../projectAutomaticIcon.desktop.js';
+import { parseProjectSymbol, parseProjectLetters } from '@cindy/maker-shared/project-alias-sync';
+import { readProjectInfo } from '../projectInfoCore.js';
+import { updateProjectInfo } from '../localDb/ipc/projectAliases.js';
+import { deviceName } from '../device-link/deviceName';
 import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { gateBuiltinMcpProviders } from './provider-gate.js';
@@ -35,6 +40,7 @@ import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
+import { createDesktopSessionShareCallbacks } from '../session-share/sessionShareTools.desktop.js';
 import { listProjects, renameProject, removeProject, readCurrentSessionProject } from './projectManagement.js';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
@@ -394,6 +400,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     return (await authorizeTaskToolCall({ sessionId, server: 'cindy_helper', tool: 'history', args: {} })).ok;
   };
 
+  const sessionShare = createDesktopSessionShareCallbacks();
   const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
     const dbClient = tryGetDbClient();
     const plugin = !sessionId ? getPluginHostToolCaller() : undefined;
@@ -834,6 +841,45 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       moveSession: createMoveSession(isSessionInTurn),
       createTaskWorktree: createTaskWorktreeHost(),
       projectManagement: {
+        inspectIcon: async ({callerSessionId,device,projectKey}) => {
+          if (isSessionSharedTaskActive(callerSessionId)) return {ok:false,errorCode:'PERMISSION_DENIED',message:'Not available in a shared task'};
+          return withAccountDataAccess(callerSessionId,async assertCurrent => {
+            if (!device || device === 'local' || device === getDeviceId()) {
+              const icon = await resolveAutomaticProjectIcon({projectKey});
+              await assertCurrent(); return {ok:true as const,icon};
+            }
+            const response = await deps.invokeRemote(device,'sidebar-settings:get-project-auto-icon',[{projectKey}],{preSend:assertCurrent});
+            await assertCurrent();
+            return response.ok ? {ok:true as const,icon:response.result} : {ok:false as const,errorCode:'UNSUPPORTED_CAPABILITY',message:response.error.message};
+          });
+        },
+        updateInfo: async ({callerSessionId, device, ...request}) => {
+          if (isSessionSharedTaskActive(callerSessionId)) return {ok:false, errorCode:'PERMISSION_DENIED', message:'Not available in a shared task'};
+          return withAccountDataAccess(callerSessionId, async assertCurrent => {
+            if (!device || device === 'local' || device === getDeviceId()) {
+              const snapshot = await readProjectInfo();
+              await assertCurrent();
+              await updateProjectInfo({...request, ...snapshot.ownerStamp});
+            } else {
+              const response = await deps.invokeRemote(device, 'sidebar-settings:get-project-aliases', []);
+              await assertCurrent();
+              if (!response.ok) return {ok:false as const, errorCode:'INTERNAL', message:response.error.message};
+              const snapshot = response.result as {settingsSupported?: boolean; settingsVersion?: number; ownerStamp?: unknown};
+              if (!snapshot.settingsSupported || (snapshot.settingsVersion ?? 0) < 2 || !snapshot.ownerStamp) return {ok:false as const, errorCode:'UNSUPPORTED_CAPABILITY', message:'Update the target computer and retry.'};
+              const requestedIcon = request.field === 'icon' ? request.value : request.field === 'profile' && request.value && typeof request.value === 'object' ? request.value.icon : null;
+              const symbol = typeof requestedIcon === 'string' ? parseProjectSymbol(requestedIcon) : null;
+              if (symbol && symbol.color !== 'default' && (snapshot.settingsVersion ?? 0) < 3)
+                return {ok:false as const, errorCode:'UNSUPPORTED_CAPABILITY', message:'Update the target computer to set an icon color.'};
+              const letters = typeof requestedIcon === 'string' ? parseProjectLetters(requestedIcon) : null;
+              if (letters && letters.color !== 'default' && (snapshot.settingsVersion ?? 0) < 5)
+                return {ok:false as const, errorCode:'UNSUPPORTED_CAPABILITY', message:'Update the target computer to set a letter color.'};
+              const saved = await deps.invokeRemote(device, 'sidebar-settings:set-project-info', [{...request, ...(snapshot.ownerStamp as object)}], {preSend:assertCurrent});
+              await assertCurrent();
+              if (!saved.ok) return {ok:false as const, errorCode:'INTERNAL', message:saved.error.message};
+            }
+            return {ok:true as const, saved:true};
+          });
+        },
         list: async ({ device, ...options }) => {
           if (!device || device === 'local' || device === getDeviceId()) return listProjects(options);
           if (isSessionSharedTaskActive(options.callerSessionId)) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
@@ -979,6 +1025,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       askUserQuestionAsync: deps.askUserQuestionAsync,
       manageUserQuestions: deps.manageUserQuestions,
       sessionImport: sessionImportCallbacks,
+      sessionShare: {
+        export: (params, context) => withAccountDataAccess(context.sessionId, () => sessionShare.export(params, context)),
+        import: (params, context) => withAccountDataAccess(context.sessionId, () => sessionShare.import(params, context)),
+      },
       renameSessions: async ({ changes, dryRun }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
@@ -1356,6 +1406,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }),
       },
       appSettings: {
+        navigationDeviceId: () => getDeviceId(),
+        navigationDeviceName: () => deviceName(),
         call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
           return manageAppSettings(input, async () => {
             await assertCurrent();

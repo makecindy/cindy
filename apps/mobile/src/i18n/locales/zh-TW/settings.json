@@ -436,5 +436,51 @@
       "sendText": "傳送已輸入文字",
       "taskHint": "組合鍵與 Start 僅用於任務頁。設為語音鍵時，優先按住說話；放開後文字留在輸入框。"
     }
+  },
+  "projectInfo": {
+    "automatic": "使用專案圖示",
+    "autoLoading": "正在辨識專案圖示…",
+    "autoNone": "使用專案名稱產生的字母圖示。",
+    "autoSource": "來源",
+    "githubAvatar": "使用 GitHub 帳號頭像",
+    "title": "專案設定",
+    "name": "顯示名稱",
+    "saveName": "儲存名稱",
+    "reset": "還原預設",
+    "icon": "圖示",
+    "directory": "專案目錄",
+    "done": "完成",
+    "failed": "儲存失敗，請重試。",
+    "unavailable": "專案設定暫不可用，請連線至已更新的電腦後重試。",
+    "back": "返回",
+    "cancel": "取消",
+    "changeIcon": "更換圖示",
+    "chooseIcon": "選擇圖示",
+    "save": "儲存",
+    "symbols": "圖示",
+    "emoji": "表情",
+    "letters": "字母",
+    "image": "圖片",
+    "upload": "上傳圖片",
+    "imageHint": "PNG、JPG 或 WebP · 自動裁成正方形",
+    "imageError": "無法讀取這張圖片，請嘗試較小的 PNG 或 JPG。",
+    "search": "搜尋圖示",
+    "customEmoji": "也可以貼上一個表情",
+    "lettersHint": "輸入一到兩個文字或數字。",
+    "thisComputer": "這台電腦",
+    "nameHint": "用於專案列表中的顯示，不會重新命名資料夾。",
+    "copy": "複製路徑",
+    "copied": "已複製",
+    "applyIcon": "使用圖示",
+    "noResults": "找不到符合的圖示",
+    "discardHint": "放棄尚未儲存的修改？",
+    "keepEditing": "繼續編輯",
+    "discard": "放棄修改",
+    "colors": {
+      "default": "預設色（跟隨主題）"
+    }
+  },
+  "navigation": {
+    "unavailable": "無法開啟目標電腦的設定。請確認電腦在線上且已允許遠端控制；舊版本請先更新 Cindy。"
   }
 }

@@ -1116,19 +1116,23 @@
   },
   "privacyExit": {
     "status": "Dieser Computer wird über Cindy ferngesteuert",
-    "hint": "Um diesen Bildschirm anzuzeigen, deaktiviere auf dem steuernden Gerät unter „Sicherheit“ die Option „Sichtschutz am Computer“. Oder klicke auf diesem Computer oder drücke eine beliebige Taste und wähle dann „Verbindung trennen“.",
+    "hint": "Um diesen Bildschirm anzuzeigen, deaktiviere auf dem steuernden Gerät unter „Sicherheit“ die Option „Sichtschutz während der Verbindung“. Oder klicke auf diesem Computer oder drücke eine beliebige Taste und wähle dann „Trennen“.",
     "title": "Remotedesktop-Verbindung trennen?",
-    "detail": "Dadurch wird die Fernsteuerung beendet und der Bildschirm dieses Computers wiederhergestellt. Der Computer wird gesperrt, wenn die Sperre beim Beenden aktiviert ist.",
+    "detail": "Damit endet die Fernsteuerung und der Sichtschutz wird entfernt. Ist „Computer beim Beenden schützen“ aktiv, wird der Computer auch gesperrt.",
     "cancel": "Verbunden bleiben",
     "disconnect": "Trennen"
   },
   "awayGuard": {
     "status": "Cindy arbeitet",
-    "hint": "Drücke eine Taste zum Sperren und entsperre dann mit Touch ID oder deinem Passwort.",
+    "hint": "Drücke eine beliebige Taste oder die Touch ID-Taste zum Sperren und entsperre dann mit Fingerabdruck oder Passwort",
     "lockFailed": {
       "status": "Cindy konnte diesen Mac nicht sperren",
-      "hint": "Drücke Control-Command-Q zum Sperren. Nach einer Weile sperrt sich der Bildschirm auch von selbst."
-    }
+      "hint": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Touch ID oder deinem Passwort, um den Sichtschutz zu entfernen. Du kannst auch den Deckel schließen oder die Ein/Aus-Taste drücken.",
+      "hintWindows": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Windows Hello oder deiner PIN, um den Sichtschutz zu entfernen. Du kannst auch Windows-Logo-Taste + L drücken."
+    },
+    "hintWindows": "Zum Sperren eine beliebige Taste drücken; entsperren mit Windows Hello oder deinem Passwort",
+    "hintLinux": "Zum Sperren eine beliebige Taste drücken; entsperren mit deinem Passwort",
+    "verifyReason": "den Sichtschutz entfernen"
   },
   "appBadge": {
     "attentionCount": "Aufgaben, die Aufmerksamkeit benötigen: {{count}}"
@@ -1279,10 +1283,10 @@
       "resolutionHint": "Auflösungsänderungen wirken sich auf den tatsächlichen entfernten Monitor aus."
     },
     "settingUnsupported": "Dieser Computer unterstützt diese Einstellung noch nicht",
-    "privacyScreen": "Sichtschutz am Computer",
-    "privacyScreenHint": "Die Bildschirme des Computers verdecken. Klicke auf dem Computer oder drücke eine Taste und bestätige dann, um die Verbindung zu trennen. Falls aktiviert, wird der Computer beim Beenden gesperrt.",
-    "privacyActive": "Der Sichtschutz ist eingeschaltet. Klicke auf dem Computer oder drücke eine Taste und bestätige dann, um die Verbindung zu trennen. Falls aktiviert, wird der Computer beim Beenden gesperrt.",
-    "privacyFailed": "Der Sichtschutz konnte nicht aktiviert werden. Die Bildschirme des Computers sind möglicherweise weiterhin sichtbar.",
+    "privacyScreen": "Sichtschutz während der Verbindung",
+    "privacyScreenHint": "Verdeckt den Bildschirm dieses Computers während der Fernsteuerung. Klickt jemand am Computer oder drückt eine Taste, wird zuerst gefragt, ob die Verbindung getrennt werden soll.",
+    "privacyActive": "Der Sichtschutz ist aktiv. Klickt jemand am Computer oder drückt eine Taste, wird zuerst gefragt, ob die Verbindung getrennt werden soll.",
+    "privacyFailed": "Der Sichtschutz konnte nicht aktiviert werden. Der Bildschirm des Computers ist möglicherweise noch sichtbar.",
     "hostMute": "Gesteuerten Computer stummschalten",
     "hostMuteHint": "Gesteuerten Computer während der Verbindung stummschalten",
     "hostMuteFailed": "Stummschaltung des gesteuerten Computers konnte nicht geändert werden",
@@ -1298,8 +1302,8 @@
     "idleMinutes_one": "{{count}} Minute",
     "idleMinutes_other": "{{count}} Minuten",
     "idleDisconnected": "Verbindung wegen Inaktivität getrennt. Verbinde dich erneut, wenn du bereit bist.",
-    "lockOnExit": "Computer beim Beenden sperren",
-    "lockOnExitHint": "Sperrt den Computer, wenn du den Remotedesktop beendest.",
+    "lockOnExit": "Computer beim Beenden schützen",
+    "lockOnExitHint": "Sperrt den Computer, wenn du den Remote-Desktop beendest.",
     "lockOnExitFailed": "Es konnte nicht bestätigt werden, dass der Computer gesperrt wurde. Prüfe den Computer, bevor du ihn unbeaufsichtigt lässt.",
     "nativeResolution": "Nativ",
     "autoUnlock": "Computer automatisch entsperren",
@@ -1341,7 +1345,9 @@
         "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktualisiere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
         "action": "Aktualisieren"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "Zeigt beim Beenden den Sichtschutz, damit die KI weiterarbeiten kann; eine Berührung am Computer sperrt ihn.",
+    "lockedEnablePrivacyHint": "Damit die KI diesen Computer weiter nutzen kann, während du weg bist, aktiviere auf ihm den Sichtschutz unter Einstellungen → Allgemein → Wenn du weg bist."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1910,7 +1916,8 @@
       "windowBehavior": "App-Verhalten",
       "shortcuts": "Tastenkombinationen",
       "mcpServers": "Benutzerdefiniertes MCP",
-      "bots": "Freunde"
+      "bots": "Freunde",
+      "awayFromComputer": "Wenn du weg bist"
     },
     "remote": {
       "title": "Remote-Rechner",
@@ -2476,21 +2483,23 @@
       "swallowActivationClickAria": "Schutz vor versehentlichen Klicks bei der Rückkehr zum Fenster ein-/ausschalten",
       "macRestartNote": "Starte unter macOS die App neu, damit die Änderungen wirksam werden.",
       "awayGuard": {
-        "label": "Weiterarbeiten, während du weg bist",
-        "hint": "Wenn aktiviert, schaltet dieser Mac den Bildschirm nicht mehr von selbst aus und sperrt sich nicht, damit die KI ihn jederzeit nutzen kann. Bist du eine Weile weg, verdeckt eine schwarze Abdeckung den Bildschirm und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort.",
+        "label": "Sichtschutz statt Sperren verwenden",
+        "hint": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
         "permission": "Erlaube Cindy unter Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen, damit der Bildschirm sofort gesperrt wird, wenn jemand diesen Mac berührt. Bis dahin geht der Bildschirm wie gewohnt in den Ruhezustand und wird gesperrt.",
         "preview": "Jetzt ausprobieren",
-        "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
-        "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut.",
+        "previewStarting": "Lass Maus und Tastatur los. In 3 Sekunden erscheint der Sichtschutz; drücke eine beliebige Taste zum Sperren und entsperre dann zum Testen.",
+        "previewUnavailable": "Der Sichtschutz konnte nicht angezeigt werden. Starte Cindy neu und versuche es erneut.",
         "delay": {
           "30": "30 s",
           "60": "1 Min.",
           "120": "2 Min.",
           "300": "5 Min.",
-          "label": "Bildschirm verdecken nach",
-          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
+          "label": "Sichtschutz anzeigen nach",
+          "hint": "So lange darf niemand Tastatur oder Maus berühren, während die KI arbeitet. Standard ist die Zeit, nach der das System den Bildschirm ausschaltet.",
           "system": "System"
-        }
+        },
+        "hintWindows": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Windows Hello oder deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
+        "hintLinux": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer."
       }
     },
     "agentIsland": {
@@ -4342,7 +4351,9 @@
           "inline": "Läuft auf",
           "signInHere": "Auf diesem Computer anmelden",
           "writeFailed": "Der Ausführungsort konnte nicht gespeichert werden. Bitte versuche es erneut."
-        }
+        },
+        "sameAccountConnections": "Gespeicherte Verbindungen für dieses Konto",
+        "sameAccountConnectionsHint": "Dieses Konto wird nur einmal angezeigt. Die Auswahl einer Verbindung ändert nur die verwalteten Einstellungen; bestehende Aufgaben behalten ihre Verbindung."
       },
       "detect": {
         "groupLabel": "Auf diesem Gerät erkannt",
@@ -5365,6 +5376,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex-Komprimierung auf dem Server",
+        "description": "Wenn aktiviert, wird die Komprimierung auf dem Server bevorzugt. Andernfalls nutzt Codex die native lokale Zusammenfassung, die weiterhin das aktuelle Modell aufruft.",
+        "hint": "Gilt beim nächsten Start oder Fortsetzen einer Codex-Aufgabe auf diesem Computer. Anbieter ohne Serverkomprimierung behalten ihr bisheriges Verhalten bei.",
+        "loadFailed": "Codex-Komprimierungseinstellungen konnten nicht geladen werden",
+        "saveFailed": "Codex-Komprimierungseinstellungen konnten nicht gespeichert werden"
+      },
       "title": "Kontextkomprimierung",
       "description": "Passe hier die Komprimierungsverhältnisse für Claude Code und Pi an. Codex leitet seinen Schwellenwert aus der Einstellung für den Modellkontext ab. Wenn die Remote-Komprimierung fehlschlägt, wechselt es automatisch zur Komprimierung per Zusammenfassung und nutzt diese für die aktuelle Aufgabe weiter.",
       "card": {
@@ -7010,7 +7028,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "Im Sichtschutz enthalten: Dieser Computer geht nicht in den Ruhezustand."
     },
     "imBot": {
       "beta": "Beta",
@@ -8217,41 +8236,36 @@
         "agentCompanionsDetail": "Kann alle Freunde sehen, auch die auf deinen anderen Computern: Name, Beschreibung, Avatar, Status (arbeitet, wartet auf dich, inaktiv, offline), die Art des aktuellen Schritts (etwa Nachdenken oder ein Tool ausführen), die Anfragen, die auf dich warten, so wie ihre Karten sie zeigen (Fragen, auszuführende Befehle, Pläne), und die letzten Nachrichten im Hauptchat (bis zu 50 deiner Nachrichten und ihrer Antworten, ohne Tool-Schritte); außerdem die Unterhaltung eines Freundes im Hauptfenster öffnen. Mit der Berechtigung zum Zustellen von Nachrichten kann es deine im Plugin gegebenen Antworten weitergeben: Fragen beantworten, Anfragen ablehnen und Feedback zu Plänen geben. Zum Erlauben eines Schritts klickst du weiterhin in Cindys eigener Bestätigung. Kann keine Dateien, Tool-Schritte oder Gedankengänge lesen.",
         "agentCompanionsRequest": "Berechtigung zum Anzeigen von Freunden prüfen",
         "hostTools_history": "Aufgabenverlauf",
-        "hostTools_historyDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben auflisten, vollständige Nachrichten lesen und den Verlauf durchsuchen, auch auf ausdrücklich ausgewählten, zugänglichen anderen Computern.",
+        "hostTools_historyDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben auflisten, vollständige Nachrichten lesen und den Verlauf durchsuchen, auch auf ausdrücklich ausgewählten, zugänglichen anderen Computern. Lokale Aufgaben im nativen Dateiformat exportieren. Plugins nutzen die bei der Installation erteilten Berechtigungen; Agent-Aufrufe folgen den eigenen Laufzeitberechtigungen.",
         "hostTools_control": "Aufgabenverwaltung",
-        "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern. Vorgänge mit hohem Risiko erfordern jedes Mal eine Bestätigung in Cindy.",
+        "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern sowie native Aufgabendateien auf diesem Computer importieren.",
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
         "hostTools_settings": "App-Einstellungen",
         "hostTools_settingsDetail": "Mit Cindys Werkzeugen die App-Konfiguration lesen und ändern. Geheimnisse werden nicht zurückgegeben; vertrauliche Eingaben machst du selbst.",
         "hostTools_scheduler": "Automatisierungsverwaltung",
-        "hostTools_schedulerDetail": "Nach der Genehmigung kann das Plugin automatische Aufgaben erstellen, anzeigen, ändern, pausieren, fortsetzen, löschen und ausführen sowie den Verlauf lesen. Von Agent ausgeführte geplante Aufgaben verwenden die Standardberechtigungen der Aufgabe, einschließlich Vollzugriff. Host-Vorgänge mit hohem Risiko erfordern jedes Mal eine Bestätigung.",
+        "hostTools_schedulerDetail": "Nach der Genehmigung kann das Plugin automatische Aufgaben erstellen, anzeigen, ändern, pausieren, fortsetzen, löschen und ausführen sowie den Verlauf lesen. Von Agent ausgeführte geplante Aufgaben verwenden die Standardberechtigungen der Aufgabe, einschließlich Vollzugriff.",
         "hostTools_terminal": "Terminal und Befehle",
         "codeDetailFiles": "Die Plugin-Seite bleibt isoliert. Cindy führt genehmigte Dateiaktionen in den von dir ausgewählten Verzeichnissen aus.",
         "hostTools_discovery": "Host-Fähigkeiten anzeigen",
         "hostTools_discoveryDetail": "Dienste des ausführenden Computers sowie deklarierte und genehmigte Werkzeuggruppen dieses Plugins lesen. Andere Plugins werden damit weder installiert noch deaktiviert oder widerrufen.",
         "hostTools_browser": "Browser bedienen",
-        "hostTools_browserDetail": "Seiten im von Cindy gewählten Browser lesen und bedienen. Der Wechsel zu Mein Browser, Datei-Uploads und andere sensible Aktionen behalten Cindys Bestätigungen bei.",
+        "hostTools_browserDetail": "Seiten im von Cindy gewählten Browser lesen und bedienen. Kann zu Mein Browser wechseln, Webseiten mit deinen angemeldeten Konten bedienen und Dateien hochladen.",
         "hostTools_computer": "Computer bedienen",
         "hostTools_computerDetail": "Fenster anzeigen und Tastatur und Maus über Cindys Computer-Werkzeuge bedienen. Systemberechtigungen, Schutz sensibler Eingaben und Host-Risikoregeln gelten weiterhin.",
         "hostTools_ssh": "SSH-Verbindungen",
-        "hostTools_sshDetail": "Befehle ausführen und eingerichtete SSH-Verbindungen verwalten. Zugangsdaten bleiben bei Cindy. Bestätigungspflichtige Aktionen werden jedes Mal bestätigt.",
+        "hostTools_sshDetail": "Befehle ausführen und eingerichtete SSH-Verbindungen verwalten. Zugangsdaten bleiben bei Cindy.",
         "hostTools_docs": "Dokumente lesen und erstellen",
-        "hostTools_docsDetail": "Cindys Dokumentwerkzeuge im privaten Verzeichnis dieses Plugins verwenden. Erstellen und Konvertieren erfordern Cindys Bestätigung.",
+        "hostTools_docsDetail": "Cindys Dokumentwerkzeuge im privaten Verzeichnis dieses Plugins verwenden.",
         "codeDetailHostServices": "Plugin-Seiten bleiben isoliert. Genehmigte Host-Werkzeuge bedienen Browser, Computer, Verbindungen oder Dokumente im Umfang der jeweiligen Berechtigung.",
         "hostTools_storage": "Speicher und Freigaben zwischen Plugins",
-        "hostTools_storageDetail": "Speicher, Library und freigegebene Medien dieses Plugins verwenden. Cindy bestätigt bei jeder Freigabe Quelle, Empfänger-Plugin und genaue Kopie. Speicher anderer Plugins kann nicht gelesen werden.",
-        "codeDetailStorage": "Speicheraktionen bleiben auf die Daten dieses Plugins beschränkt. Jede Freigabe an ein anderes Plugin bestätigst du selbst.",
-        "storageShareTitle": "Kopie an ein anderes Plugin geben",
-        "storageShareMessage": "„{{file}}“ ({{size}}) vom Plugin „{{name}}“ an „{{target}}“ kopieren. Der Empfänger erhält eine eigenständige Kopie; Änderungen der Quelle werden nicht synchronisiert. Bereits gelesene oder gespeicherte Inhalte lassen sich nicht zurückholen.",
+        "hostTools_storageDetail": "Speicher, Library und freigegebene Medien dieses Plugins verwenden. Kopien können nur zwischen aktivierten Plugins geteilt werden, die storage deklarieren und demselben Konto und derselben Organisation angehören. Speicher anderer Plugins kann nicht gelesen werden.",
+        "codeDetailStorage": "Speicheraktionen bleiben auf die Daten dieses Plugins beschränkt. Geteilt werden Kopien zwischen aktivierten Plugins, die storage deklarieren und demselben Konto und derselben Organisation angehören.",
         "hostTools_files": "Dateien in freigegebenen Verzeichnissen",
         "hostTools_filesDetail": "Dateien in ausdrücklich ausgewählten Verzeichnissen lesen, schreiben, auflisten und löschen sowie Änderungen beobachten. Frühere Auswahlen erteilen keinen Zugriff. Das Deaktivieren des Plugins beendet den Zugriff.",
         "filesPickMessage": "Das Plugin „{{name}}“ kann Dateien im ausgewählten Verzeichnis lesen, schreiben, auflisten und löschen sowie Änderungen beobachten. Wähle ein Verzeichnis, auf das es zugreifen darf.",
         "codeDetailTerminal": "Plugin-Seiten laufen in einer isolierten Sandbox. Bestätigte Befehle laufen mit deinen Benutzerrechten und können auf lokale Dateien, Apps und Netzwerke zugreifen.",
-        "hostTools_terminalDetail": "Befehle und interaktive Terminals mit deinen Benutzerrechten auf diesem Computer starten, Ausgaben lesen, Eingaben senden und Prozesse dieses Plugins stoppen. Befehle können auf deine Dateien und Apps zugreifen. Start, Eingaben und weitere Änderungen erfordern jedes Mal eine Bestätigung in Cindy.",
-        "hostToolsRequest": "Berechtigung für {{group}} prüfen",
-        "hostToolCallTitle": "Plugin-Vorgang erlauben",
-        "hostToolCallMessage": "Das Plugin „{{name}}“ möchte {{server}} / {{tool}} aufrufen. Diese Erlaubnis gilt nur für die folgenden Parameter.",
+        "hostTools_terminalDetail": "Befehle und interaktive Terminals mit deinen Benutzerrechten auf diesem Computer starten, Ausgaben lesen, Eingaben senden und Prozesse dieses Plugins stoppen. Befehle können auf deine Dateien und Apps zugreifen.",
         "agentHiddenTasks": "Kann Hintergrundaufgaben erstellen, die in der Aufgabenliste ausgeblendet sind",
         "agentHiddenTasksDetail": "Von diesem Plugin erstellte Aufgaben können in der Aufgabenliste, der Suche und den Benachrichtigungen ausgeblendet bleiben. Unter „Hintergrundaufgaben“ auf der Seite dieses Plugins kannst du sie jederzeit ansehen, öffnen oder in der Aufgabenliste einblenden; bei der Deinstallation des Plugins werden sie wieder eingeblendet.",
         "agentErrand": "Aufgaben erstellen, Arbeiten ausführen und Ergebnisse lesen",
@@ -9264,6 +9278,12 @@
         "failed": "Bereinigung konnte nicht abgeschlossen werden",
         "pending": "In der Warteschlange"
       }
+    },
+    "awayFromComputer": {
+      "title": "Wenn du weg bist"
+    },
+    "navigation": {
+      "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
     }
   },
   "remoteDevice": {
@@ -17174,7 +17194,9 @@
         "saveAria": "Automatisierung speichern",
         "createAria": "Automatisierung erstellen",
         "namePlaceholder": "Benenne diese Automatisierung",
-        "promptPlaceholder": "Beispiel: Finde neue Abstürze in Sentry und fasse die wichtigsten Regressionen zusammen."
+        "promptPlaceholder": "Beispiel: Finde neue Abstürze in Sentry und fasse die wichtigsten Regressionen zusammen.",
+        "expandPrompt": "Groß bearbeiten",
+        "collapsePrompt": "Verkleinern"
       },
       "executionMode": {
         "label": "Ausführung",
@@ -17409,6 +17431,19 @@
         "repositoriesLabel": "Repositorys",
         "repositoriesHint": "Gib owner/repository ein, eines pro Zeile. Nur für diese GitHub App autorisierte Repositorys können die Aufgabe auslösen.",
         "repositoriesInvalid": "Gib 1–50 gültige Repository-Namen im Format owner/repository ein.",
+        "connectAccount": "Konto verbinden",
+        "connectionLabel": "Verbindungsart",
+        "cindyConnection": "Über Cindy verbinden (empfohlen)",
+        "manualConnection": "Webhook manuell einrichten",
+        "cindyConnectionHint": "Empfange Ereignisse über die GitHub App. Verbinde dein Konto und autorisiere Repositorys, ohne Empfangs-URL oder Secret zu kopieren.",
+        "manualConnectionHint": "Trage die von Cindy bereitgestellte Empfangs-URL und das Secret in den GitHub-Repository-Einstellungen ein.",
+        "manualSetupHint": "Nach dem Speichern findest du Empfangs-URL und Secret in den Automatisierungsdetails. Schließe die Einrichtung in den GitHub-Repository-Einstellungen ab.",
+        "accountLabel": "GitHub-Konto",
+        "accountDisconnected": "GitHub ist nicht verbunden. Verbinde zuerst dein Konto.",
+        "authorizeRepositories": "Repositorys autorisieren",
+        "appUnavailable": "Die GitHub-App-Verbindung ist hier nicht verfügbar. Du kannst einen Webhook manuell einrichten.",
+        "cindyConnectionTitle": "GitHub · Verbindung über Cindy",
+        "manualConnectionTitle": "GitHub · Manueller Webhook",
         "githubAppHint": "Verbinde GitHub App auf dem Computer, der diese Aufgabe ausführt, und autorisiere diese Repositorys. Eine eigene Webhook-URL oder ein eigenes Secret ist nicht erforderlich.",
         "githubAppPaused": "Diese Aufgabe ist pausiert. Ereignisse starten sie nicht."
       },
@@ -17999,7 +18034,6 @@
       "descriptionSaveDir": "Das folgende Verzeichnis liegt außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, kann dieses Plugin heruntergeladene Dateien darin speichern (vorhandene Dateien werden niemals überschrieben).",
       "descriptionRevealPath": "Der Pfad wird erst nach deiner Zustimmung an den aktuellen Agent übergeben und in den Gesprächsverlauf aufgenommen. Gekoppelte Geräte können diesen Verlauf synchronisieren. Dadurch erhält kein Plugin Zugriff auf die Datei.",
       "descriptionFsWrite": "Dieses Plugin möchte die folgenden Dateien in das Arbeitsverzeichnis der aktuellen Sitzung schreiben. Wenn du zustimmst, wird bei weiteren Schreibzugriffen auf dasselbe Verzeichnis in dieser Sitzung nicht erneut nachgefragt.",
-      "descriptionFsDelete": "Dieses Plugin möchte die folgenden Dateien oder Ordner aus dem Arbeitsverzeichnis der aktuellen Aufgabe löschen. Dabei wird auch der Inhalt der Ordner gelöscht. Diese Zustimmung gilt nur für diesen Löschvorgang.",
       "descriptionWorkspace": "Dieser Ordner liegt außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, erstellt Cindy dafür eine leere Sitzung in der Seitenleiste (eine vorhandene Sitzung wird wiederverwendet), ohne Dateien darin zu lesen.",
       "descriptionForgeSource": "Das folgende Verzeichnis liegt außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, packt Forge dort das Plugin oder erstellt ein Grundgerüst (dabei wird ein .cindy-Artefakt oder werden Gerüstdateien geschrieben).",
       "descriptionForgeScaffold": "Das folgende Verzeichnis liegt außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, erstellt Forge dort Plugin-Quelldateien.",
@@ -21641,6 +21675,48 @@
     },
     "switchOffer": {
       "action": "Mit {{model}} fortfahren"
+    }
+  },
+  "projectSettings": {
+    "autoLoading": "Projektsymbol wird gesucht…",
+    "autoNone": "Initialen aus dem Projektnamen werden verwendet.",
+    "autoSource": "Quelle",
+    "githubAvatar": "GitHub-Profilbild verwenden",
+    "title": "Projekteinstellungen",
+    "name": "Anzeigename",
+    "saveName": "Name speichern",
+    "reset": "Standard wiederherstellen",
+    "icon": "Symbol",
+    "directory": "Projektordner",
+    "done": "Fertig",
+    "failed": "Speichern fehlgeschlagen. Erneut versuchen.",
+    "unavailable": "Einstellungen nicht verfügbar. Einen aktualisierten Computer verbinden und erneut versuchen.",
+    "back": "Zurück",
+    "cancel": "Abbrechen",
+    "changeIcon": "Symbol ändern",
+    "chooseIcon": "Symbol auswählen",
+    "save": "Speichern",
+    "symbols": "Symbole",
+    "emoji": "Emoji",
+    "letters": "Buchstaben",
+    "image": "Bild",
+    "upload": "Bild hochladen",
+    "imageHint": "PNG, JPG oder WebP · quadratischer Zuschnitt",
+    "imageError": "Das Bild konnte nicht gelesen werden. Versuche eine kleinere PNG- oder JPG-Datei.",
+    "search": "Symbole suchen",
+    "customEmoji": "Oder ein Emoji einfügen",
+    "lettersHint": "Ein oder zwei Buchstaben oder Zahlen.",
+    "thisComputer": "Dieser Computer",
+    "nameHint": "Name in der Projektliste. Der Ordnername bleibt unverändert.",
+    "copy": "Pfad kopieren",
+    "copied": "Kopiert",
+    "applyIcon": "Symbol verwenden",
+    "noResults": "Keine passenden Symbole",
+    "discardHint": "Ungespeicherte Änderungen verwerfen?",
+    "keepEditing": "Weiter bearbeiten",
+    "discard": "Verwerfen",
+    "colors": {
+      "default": "Standard (dem Design folgen)"
     }
   },
   "taskManagement": {

@@ -436,5 +436,51 @@
       "sendText": "입력한 글 보내기",
       "taskHint": "이 단축키는 세션 화면에서 사용할 수 있습니다. 음성 키로 지정한 버튼은 음성 입력이 우선되며, 놓으면 글이 입력란에 남습니다."
     }
+  },
+  "projectInfo": {
+    "automatic": "프로젝트 아이콘 사용",
+    "autoLoading": "아이콘 찾는 중…",
+    "autoNone": "프로젝트 이름으로 만든 문자 아이콘을 사용합니다.",
+    "autoSource": "출처",
+    "githubAvatar": "GitHub 계정 이미지 사용",
+    "title": "프로젝트 설정",
+    "name": "표시 이름",
+    "saveName": "이름 저장",
+    "reset": "기본값 복원",
+    "icon": "아이콘",
+    "directory": "프로젝트 폴더",
+    "done": "완료",
+    "failed": "저장하지 못했습니다. 다시 시도하세요.",
+    "unavailable": "설정을 사용할 수 없습니다. 업데이트된 컴퓨터에 연결하고 다시 시도하세요.",
+    "back": "뒤로",
+    "cancel": "취소",
+    "changeIcon": "아이콘 변경",
+    "chooseIcon": "아이콘 선택",
+    "save": "저장",
+    "symbols": "아이콘",
+    "emoji": "이모지",
+    "letters": "문자",
+    "image": "이미지",
+    "upload": "이미지 업로드",
+    "imageHint": "PNG, JPG, WebP · 정사각형으로 자르기",
+    "imageError": "이미지를 읽을 수 없습니다. 더 작은 PNG 또는 JPG를 사용하세요.",
+    "search": "아이콘 검색",
+    "customEmoji": "이모지 붙여넣기",
+    "lettersHint": "문자 또는 숫자 1~2개를 입력하세요.",
+    "thisComputer": "이 컴퓨터",
+    "nameHint": "프로젝트 목록에 표시됩니다. 폴더 이름은 바뀌지 않습니다.",
+    "copy": "경로 복사",
+    "copied": "복사됨",
+    "applyIcon": "아이콘 사용",
+    "noResults": "일치하는 아이콘이 없습니다",
+    "discardHint": "저장하지 않은 변경을 취소할까요?",
+    "keepEditing": "계속 편집",
+    "discard": "변경 취소",
+    "colors": {
+      "default": "기본 색상 (테마에 맞춤)"
+    }
+  },
+  "navigation": {
+    "unavailable": "대상 컴퓨터의 설정을 열 수 없습니다. 온라인 상태이고 원격 제어가 허용되어 있는지 확인하세요. 이전 버전이라면 Cindy를 업데이트하세요."
   }
 }

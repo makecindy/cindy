@@ -436,5 +436,51 @@
       "sendText": "入力した文字を送信",
       "taskHint": "これらの操作はセッション画面で使えます。音声キーに設定したボタンは音声入力が優先され、離すと文字が入力欄に残ります。"
     }
+  },
+  "projectInfo": {
+    "automatic": "プロジェクトのアイコンを使用",
+    "autoLoading": "アイコンを検索中…",
+    "autoNone": "プロジェクト名から生成した文字アイコンを使用します。",
+    "autoSource": "取得元",
+    "githubAvatar": "GitHub アカウントの画像を使用",
+    "title": "プロジェクト設定",
+    "name": "表示名",
+    "saveName": "名前を保存",
+    "reset": "既定値に戻す",
+    "icon": "アイコン",
+    "directory": "プロジェクトフォルダー",
+    "done": "完了",
+    "failed": "保存できませんでした。再試行してください。",
+    "unavailable": "設定を利用できません。更新済みのコンピューターに接続して再試行してください。",
+    "back": "戻る",
+    "cancel": "キャンセル",
+    "changeIcon": "アイコンを変更",
+    "chooseIcon": "アイコンを選択",
+    "save": "保存",
+    "symbols": "アイコン",
+    "emoji": "絵文字",
+    "letters": "文字",
+    "image": "画像",
+    "upload": "画像をアップロード",
+    "imageHint": "PNG・JPG・WebP · 正方形に切り抜き",
+    "imageError": "画像を読み込めません。小さい PNG または JPG をお試しください。",
+    "search": "アイコンを検索",
+    "customEmoji": "絵文字を貼り付ける",
+    "lettersHint": "文字または数字を1〜2文字入力。",
+    "thisComputer": "このコンピューター",
+    "nameHint": "プロジェクト一覧の表示名です。フォルダー名は変わりません。",
+    "copy": "パスをコピー",
+    "copied": "コピー済み",
+    "applyIcon": "このアイコンを使用",
+    "noResults": "一致するアイコンがありません",
+    "discardHint": "未保存の変更を破棄しますか？",
+    "keepEditing": "編集を続ける",
+    "discard": "破棄",
+    "colors": {
+      "default": "標準色（テーマに合わせる）"
+    }
+  },
+  "navigation": {
+    "unavailable": "対象のパソコンの設定を開けませんでした。オンラインでリモート操作が許可されているか確認し、古いバージョンの場合は Cindy を更新してください。"
   }
 }

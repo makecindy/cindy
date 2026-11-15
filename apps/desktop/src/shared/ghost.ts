@@ -1,8 +1,8 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration, type GhostHostToolGroup } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
-import { getPluginHostUi, hostUiApprovalSubjects, type GhostHostUi } from '@cindy/plugin-protocol';
+import { getPluginHostUi, hostUiApprovalSubjects, HOST_UI_CAPABILITIES, isHostUiPosition, type GhostHostUi } from '@cindy/plugin-protocol';
 import { PLUGIN_APPEARANCE_FIELDS } from '@cindy/plugin-protocol/appearance';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
@@ -219,7 +219,7 @@ export interface GhostCardNeeds {
  *   可重新提交"处理)。
  */
 export interface GhostAgentNeeds {
-  /** Each known group requires its own explicit Host receipt approval. */
+  /** 安装或更新批准后，可调用当前 manifest 声明的 Host 工具组。 */
   hostTools?: string[];
   background?: boolean;
   errand?: boolean;
@@ -719,7 +719,7 @@ export interface GhostCindyNeeds {
  * activity = 轮次内思考/审批/等待用户输入的开始结束边界(只含 id 元数据);
  * session = 会话创建/归档/切换(切换 = 用户把哪个会话切到台前,2026-07-13 增)。
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
- * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
+ * 两项在安装或更新确认中展示；整体批准后按当前声明订阅，旧元数据主题语义保持。
  */
 export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
@@ -730,7 +730,7 @@ export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subs
 }
 export function ghostTaskEventApproved(ghost: InstalledGhost, topic: GhostSubscribeTopic): boolean {
   return !GHOST_TASK_EVENT_TOPICS.includes(topic as GhostTaskEventTopic) ||
-    (ghost.approval?.state === 'approved' && ghost.approvedEventTopics?.includes(topic as GhostTaskEventTopic) === true);
+    (ghost.enabled === true && ghost.approval?.state === 'approved' && ghost.manifest.subscribe?.topics?.includes(topic) === true);
 }
 
 /**
@@ -1995,8 +1995,6 @@ export interface InstalledGhost {
   /** Independent Host consent for cross-task/companion target access. */
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
-  /** Exact Host UI permission projections shown by a supporting confirmation UI. */
-  approvedHostUi?: string[];
   /** Read-only remote management projection; never persisted as approval. */
   uiPromptSuppressed?: true;
   delegationCapabilityApproved?: true;
@@ -2008,8 +2006,6 @@ export interface InstalledGhost {
   observeCapabilityApproved?: true;
   /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
   companionsCapabilityApproved?: true;
-  approvedHostToolGroups?: GhostHostToolGroup[];
-  approvedEventTopics?: GhostTaskEventTopic[];
   /** Only model APIs explicitly shown in an install/update confirmation. Missing means none. */
   approvedCindyModelActions?: GhostCindyModelsAction[];
   manifest: GhostManifest;
@@ -2292,36 +2288,20 @@ export function ghostHostUiPermissionItems(manifest: GhostManifest): GhostPermis
   })) : [];
 }
 
-export function ghostHostUiApprovalTokens(manifest: GhostManifest): string[] {
-  return ghostHostUiPermissionItems(manifest).map(ghostPermissionProjectionKey);
-}
-
-/** Receipt approval is independent of a declaration and of the original page grant. */
+/** Host UI follows the enabled installation's manifest, independently of legacy page approval. */
 export function getApprovedGhostHostUi(ghost: InstalledGhost): GhostHostUi | undefined {
-  if (ghost.approval.state !== 'approved') return;
+  if (!ghost.enabled || ghost.approval.state !== 'approved') return;
   const host = getPluginHostUi(ghost.manifest);
   if (!host) return;
-  const approved = new Set(ghost.approvedHostUi ?? []);
-  const keys = new Set(ghostHostUiPermissionItems(ghost.manifest)
-    .filter(item => approved.has(ghostPermissionProjectionKey(item))).map(item => item.key));
-  if (!keys.size) return;
-  const has = (kind: string, id: string) => keys.has(`ui:host:${kind}:${id}`);
-  return {
-    views: (host.views ?? []).filter(view => has('view', view.id)),
-    contributions: (host.contributions ?? []).filter(item => has('contribution', item.id) && (!item.view || has('view', item.view))),
-    commands: (host.commands ?? []).filter(command => has('command', command.id) && (!command.view || has('view', command.view))),
-    capabilities: (host.capabilities ?? []).filter(capability => has('capability', capability)),
-    ...(host.settings ? { settings: host.settings.filter(field => has('setting', field.id)) } : {}),
-    ...(host.appearance || host.capabilities?.includes('appearance') ? { appearance: {
-      fields: (host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS).filter(field => has('appearance', field)),
-      resources: (host.appearance?.resources ?? []).filter(resource => has('appearance-resource', resource.id)),
+  const projected = { ...host,
+    ...(host.contributions ? { contributions: host.contributions.filter(item => isHostUiPosition(item.position)) } : {}),
+    ...(host.capabilities ? { capabilities: host.capabilities.filter(capability => HOST_UI_CAPABILITIES.some(known => known === capability)) } : {}),
+    ...(host.appearance ? { appearance: { ...host.appearance,
+      ...(host.appearance.fields ? { fields: host.appearance.fields.filter(field => PLUGIN_APPEARANCE_FIELDS.some(known => known === field)) } : {}),
     } } : {}),
   };
-}
-
-export function ghostHostUiNeedsApproval(ghost: InstalledGhost): boolean {
-  const approved = new Set(ghost.approvedHostUi ?? []);
-  return ghostHostUiApprovalTokens(ghost.manifest).some(token => !approved.has(token));
+  return [projected.views, projected.contributions, projected.commands, projected.capabilities, projected.settings,
+    projected.appearance?.fields, projected.appearance?.resources].some(items => items?.length) ? projected : undefined;
 }
 
 export function ghostPermissionProjectionFingerprint(manifest: GhostManifest): string {
@@ -2979,7 +2959,14 @@ export function diffGhostPermissionItems(
   prev: GhostManifest,
   next: GhostManifest,
 ): GhostPermissionDiff {
-  const prevItems = ghostPermissionItems(prev);
+  return compareGhostPermissionItems(prev, next, ghostPermissionItems(prev));
+}
+
+function compareGhostPermissionItems(
+  prev: GhostManifest,
+  next: GhostManifest,
+  prevItems: GhostPermissionItem[],
+): GhostPermissionDiff {
   const nextItems = ghostPermissionItems(next);
   const prevKeys = new Set(prevItems.map((i) => i.key));
   const nextKeys = new Set(nextItems.map((i) => i.key));
@@ -3033,11 +3020,10 @@ export function diffGhostPermissionItems(
  */
 function withoutUnapprovedControlPoints(installed: InstalledGhost): GhostManifest['subscribe'] {
   const subscribe = installed.manifest.subscribe;
-  if (!subscribe) return subscribe;
-  const topics = subscribe.topics?.filter(topic => ghostTaskEventApproved(installed, topic));
-  const hooks = subscribe.hooks?.filter((hook) =>
+  if (!subscribe?.hooks) return subscribe;
+  const hooks = subscribe.hooks.filter((hook) =>
     !isGhostControlPointId(hook) || isGhostRuntimeControlPoint(hook) || installed.approvedControlPoints?.includes(hook) === true);
-  return { ...subscribe, topics, hooks: hooks?.length ? hooks : undefined };
+  return { ...subscribe, hooks: hooks.length ? hooks : undefined };
 }
 
 /** 声明了 `approval: "auto"` 但用户从没确认过的工具,不算旧权限。 */
@@ -3062,11 +3048,8 @@ export function diffInstalledGhostPermissionItems(
       mcpApps: installed.manifest.mcpApps && typeof installed.manifest.mcpApps === 'object'
         ? { ...installed.manifest.mcpApps as object,
           ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
-          host: getApprovedGhostHostUi(installed) }
+          host: undefined }
         : undefined,
-      ...(installed.manifest.agent ? { agent: { ...installed.manifest.agent,
-        hostTools: declaredGhostHostToolGroups(installed.manifest).filter(group => installed.approvedHostToolGroups?.includes(group)),
-      } } : {}),
       // 声明过但未确认的新能力不算旧权限，更新时作为新增项复核。
       cindy: installed.manifest.cindy ? { ...installed.manifest.cindy,
         models: declaredGhostCindyModelActions(installed.manifest).filter(action => installed.approvedCindyModelActions?.includes(action)),
@@ -3075,7 +3058,10 @@ export function diffInstalledGhostPermissionItems(
       subscribe: withoutUnapprovedControlPoints(installed),
       tools: withoutUnapprovedAutoTools(installed),
     };
-    const diff = diffGhostPermissionItems(previous, next);
+    // Host declarations belong to the installed version, even when the legacy
+    // page grant is absent and its UI resources are omitted from that baseline.
+    const previousItems = [...ghostHostUiPermissionItems(installed.manifest), ...ghostPermissionItems(previous)];
+    const diff = compareGhostPermissionItems(previous, next, previousItems);
     // Only the historical official GitHub installation keeps its PAT -> gh fingerprint
     // compatibility. Other installations must explicitly approve using the shared login.
     const legacyGithub = installed.manifest.id === 'cindy-github' && installed.namespace == null &&

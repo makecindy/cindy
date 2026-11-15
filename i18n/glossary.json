@@ -2673,6 +2673,18 @@
       "note": "Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。"
     },
     {
+      "id": "privacy-screen",
+      "status": "proposed",
+      "en": "Privacy screen",
+      "translations": {
+        "zh-CN": "隐私屏",
+        "zh-TW": "隱私畫面",
+        "ja": "プライバシースクリーン",
+        "ko": "프라이버시 화면"
+      },
+      "note": "Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转系统锁屏，AI 在后面继续工作。用于离开时、远程控制中和远程结束后三种场景（docs/product-rules/privacy-screen.md）。取代旧称「电脑防窥」「防窥遮罩」「黑色遮罩」；不是系统自带的锁屏，也不是显示器防窥膜。"
+    },
+    {
       "id": "process",
       "status": "proposed",
       "en": "Process",
