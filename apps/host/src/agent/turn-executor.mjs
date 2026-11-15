@@ -199,7 +199,9 @@ export function createTurnExecutor(deps) {
       if (!turn || turn.session !== session || !deps.isCurrent()) return;
       // The context usage a status event carries, decided as the desktop decides it
       // (sessionEventPreparation.ts: before its turn bookkeeping, from the shared rules) and written
-      // once the event is delivered, as the desktop writes it (sessionEventSnapshots.ts).
+      // once the event is delivered, as the desktop writes it (sessionEventSnapshots.ts). The
+      // `event.data` check is the Host's own guard (the desktop reads a status event's data as
+      // present); a status without data carries no snapshot either way.
       const contextSnapshot = event.type === 'status' && event.data
         ? contextSnapshotForStatus(isContextCompactionSnapshot(session, event, event.data), event.data)
         : null;

@@ -2746,6 +2746,28 @@ test('context usage: a turn\'s end writes the task\'s context tokens and window 
   assert.deepEqual(row(), { context_tokens: 95_000, context_window: 200_000, context_window_runtime: 200_000 });
 });
 
+// Rule: as on the desktop, a Done status that arrives after its turn has ended for the Host (the
+// executor's terminal branch, where only the Git baseline still listens) still writes the usage it
+// carries. Gap: that branch returned before any write.
+test('context usage: a Done status arriving after the turn ended still writes the task\'s usage', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  const { h } = assembledRuntime(t, db);
+  await db.createTask('usage-late');
+  await h.queue.enqueue('usage-late', { clientId: 'usage-late-input', text: 'work' });
+  await waitFor(() => h.maker.sessions.get('usage-late')?.sent.length === 1);
+  const session = h.maker.sessions.get('usage-late');
+  const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+  session.emit({ type: 'status', data: { isRunning: true }, ...stamp });
+  session.emit({ type: 'done', data: {}, ...stamp });
+  await waitFor(() => h.events.some(event => event.type === 'done' && event.sessionId === 'usage-late'));
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  const row = () => db.db.prepare('SELECT context_tokens, context_window FROM sessions WHERE id = ?').get('usage-late');
+  assert.deepEqual(row(), { context_tokens: 0, context_window: 0 }, 'nothing written before the late status');
+  session.emit({ type: 'status', data: { isRunning: false, status: 'Done', contextTokens: 42_000, contextWindow: 128_000 }, ...stamp });
+  await waitFor(() => row().context_tokens !== 0);
+  assert.deepEqual(row(), { context_tokens: 42_000, context_window: 128_000 });
+});
+
 test('context recovery assembly: an overflow rebuilds the task and replays the message on a new runtime, with no error left', { timeout: 30_000 }, async t => {
   const r = await assembledRecovery(t);
   const first = await r.overflow('assembled-ok');
