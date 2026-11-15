@@ -398,3 +398,42 @@ const r = await cindy.send({
 
 页面用 SDK onprogress 接收工具进度；文件选择、上传、下载会自动报告自身进度。
 进度值保持递增，成功、失败、取消都应结束等待。完整写法见[§4.23](plugin-interactive-pages.md)。
+
+### 决策与重排模型
+
+在 `cindy.models` 声明 `decisions` 或 `rerank`，并在安装或更新时确认相应权限后，可通过 `cindy.send` 同步调用。
+旧版本中作为未知字段保存的声明不会随宿主升级自动获得权限，插件原有能力照常可用。
+这些接口使用主人的 Cindy AI 模型额度，不经过媒体生成 Guide，也不创建媒体任务。
+请用 `minCindyVersion` 声明完成验收的最低客户端版本，并处理旧客户端不支持的响应。
+
+```js
+const models = await cindy.send({ type: 'cindy-request', kind: 'list_models', api: 'rerank' });
+const ranked = await cindy.send({
+  type: 'cindy-request', kind: 'rerank', model: models.models[0].model,
+  providerId: models.models[0].providerId, query: '用户的问题',
+  documents: ['候选内容一', '候选内容二'], top_n: 1,
+});
+```
+
+`list_models` 只列当前账号可用且未停用、插件已声明的接口模型。
+省略 `model` 时仅在恰好一个模型可用时自动选择，否则返回 `MODEL_REQUIRED`。
+决策请求使用 `kind: 'decisions'`、`questions`、`state`；问题按 ID 映射到
+`{ type: 'noul' | 'choice' | 'score' | 'box', instructions, criteria? }`。
+`criteria` 按题型提供：`noul` 可省略，或写 `{ true: '成立的标准', false: '不成立的标准' }`；
+`choice` 必须写 `{ 选项ID: '选项说明' }`；`score` 必须写按从低到高排列的等级说明数组；`box` 省略。
+图片放在 state 顶层数组的 `{ type: 'image_url', image_url: { url } }`，url 只能使用
+图片 data URL 或本插件名下的受管媒体。每次最多 16 张、图片总大小和请求体分别不超过
+32 MiB；`typesafe/` 模型要求图片每边至少 256 像素。主机会校正方向、缩放并转成 PNG/JPEG。
+题型支持由所选模型决定，`box` 需要图片且仅支持该题型的模型可用。
+
+成功结果包含 `model`、原始 `usage`、`estimatedCost: { amount, currency } | null`，
+决策另含 `answers`，重排另含 `results: [{ index, relevance_score }]`，不重复返回文档原文。
+`answers` 以问题 ID 为键：`noul` 是成立的概率（0–1）；`choice` 是概率最高的选项 ID，
+`probabilities` 是各选项概率；`score` 是等级序号（从 0 开始）按概率加权的平均值，不是百分制，
+最可能的等级看 `probabilities`，序号含义看 `legend`；`box` 是相对图片宽高的 0–1 比例
+`{ left, top, right, bottom }`。答案是概率而不是确定结论，需要是/否或分档时由插件按业务设阈值。
+重排的 `index` 是 `documents` 的下标，`relevance_score` 越高越相关，只适合在同一次请求内比较。
+估算费用计入任务和当天费用；缺价时不猜测金额。失败返回
+`{ ok: false, errorCode, message }`；模型提交的失败还带 `retryable` 和 `outcomeKnown`。
+超时或断网后的 `SUBMISSION_OUTCOME_UNKNOWN`，以及 HTTP 5xx 返回的 `outcomeKnown: false`，
+表示请求可能已执行，不得自动重提付费请求。HTTP 429 表示明确限流，可稍后重试。

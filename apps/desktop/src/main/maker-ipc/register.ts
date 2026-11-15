@@ -57,7 +57,7 @@ import { setSessionHidden } from '../localDb/ipc/sessionHidden.js';
 import { isSessionHiddenSync, isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry.js';
 import { notifyAgentIslandBotGroupChanged } from '../localDb/agentIslandSessionPatch.js';
 import { ghostDeclaresHiddenTasks } from '../../shared/ghost.js';
-import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
+import { controlOwnedSessionExecution, isSameSessionExecution, stopOwnedSessionInput, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import {
   showMobilePluginTaskPermission,
   setPluginTaskHandler,
@@ -2383,7 +2383,8 @@ export function noteSilentStopSessionReset(sessionId: string): void {
 }
 
 /** 统一明确停止的实现(coordinator 就绪后由注册流程装上)。 */
-let explicitStopImpl: ((sessionId: string) => Promise<void>) | null = null;
+type ExplicitStopOptions = { keepQueue?: boolean; stillOwned?: () => boolean };
+let explicitStopImpl: ((sessionId: string, options?: ExplicitStopOptions) => Promise<void>) | null = null;
 
 /**
  * 用户明确喊停的统一入口 —— 与桌面 Stop 同一套清理, 顺序固定:
@@ -2401,11 +2402,12 @@ let explicitStopImpl: ((sessionId: string) => Promise<void>) | null = null;
  *
  * 注册前(启动早期 / 单测)退回最小语义: 撤自动续跑 + 暂停 Goal + 中止当前一轮。
  */
-export async function stopSessionTurnExplicitly(sessionId: string): Promise<void> {
+export async function stopSessionTurnExplicitly(sessionId: string, options?: ExplicitStopOptions): Promise<void> {
   if (explicitStopImpl) {
-    await explicitStopImpl(sessionId);
+    await explicitStopImpl(sessionId, options);
     return;
   }
+  if (options?.stillOwned && !options.stillOwned()) return;
   resetAutomaticRecoveryForExplicitStop(sessionId);
   const goalPause = pauseGoalBeforeExplicitStop(sessionId);
   await Promise.all([goalPause, getMaker().getSession(sessionId)?.abort()]);
@@ -6181,8 +6183,15 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
       shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason) ||
       (closeReason === 'unexpected' && session.wasClosedByRuntime() &&
         agentInputCoordinatorHolder?.hasUsageLimitRecovery(session.id) === true);
+    const preserveProviderGroupRecovery =
+      closeReason === 'agent-switch' &&
+      agentInputCoordinatorHolder?.hasProviderGroupSwitchHold(session.id) === true;
     pendingContinuationOnlyAutoResumeRebuilds.delete(session);
-    return { closeReason, closedDirectAbortBoundary, preserveAutoResumeIntent };
+    return {
+      closeReason,
+      closedDirectAbortBoundary,
+      preserveAutoResumeIntent: preserveAutoResumeIntent || preserveProviderGroupRecovery,
+    };
   },
   cleanupClosedSession: (session: WiredSession, context) => {
     if ((context.closeReason === 'requested' || context.closeReason === 'unexpected')
@@ -12601,6 +12610,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     /** Host-accepted task text or a forwarded request receipt. */
     autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
     authorizationGuard?: BotAuthorizationInputGuard;
+    /** Host-only fence checked synchronously at the final enqueue boundary. */
+    assertDispatchCurrent?: () => void;
     createDefaults?: SendToSessionCreateDefaults;
     /** 安全调用方可要求新会话不比来源会话拥有更高的权限。 */
     inheritSourcePermissionMode?: boolean;
@@ -13123,6 +13134,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           autoReviewUserText: params.autoReviewUserText,
           botTaskCoordination: params.botTaskCoordination,
           authorizationGuard: params.authorizationGuard,
+          assertDispatchCurrent: params.assertDispatchCurrent,
           files: params.files,
           pastedTextRanges: params.pastedTextRanges,
           inheritTargetPlanMode: params.inheritTargetPlanMode,
@@ -13523,6 +13535,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     /** Host-stamped source when there is no dispatching task (a group member's words for a task card's task). */
     origin?: AgentInputQueuedMessage['origin'];
     authorizationGuard?: BotAuthorizationInputGuard;
+    /** Host-only fence checked synchronously at the final enqueue boundary. */
+    assertDispatchCurrent?: () => void;
     toolsDisabled?: boolean;
     retry?: boolean;
     onQueued?: (clientId: string) => Promise<void>;
@@ -13630,9 +13644,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Chat-only dispatch allocates a queue id; keep the server execution identity
       // so error recovery can restore the group's full background as well.
       if (params.clientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX)) queued.retrySourceClientId = params.clientId;
-      const enqueue = () => inputCoordinator.enqueue(params.targetSessionId, queued, {
-        resumeRestorePausedQueue: true,
-      });
+      const enqueue = () => {
+        params.assertDispatchCurrent?.();
+        inputCoordinator.enqueue(params.targetSessionId, queued, { resumeRestorePausedQueue: true });
+      };
       if (params.toolsDisabled) {
         if (!await welcomeDispatchReceipts.dispatch(params.targetSessionId, clientId, enqueue)) {
           return { ok: false as const, errorCode: 'AGENT_NOT_READY' as const, message: 'Welcome turn was not accepted by the runtime.' };
@@ -13852,7 +13867,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
-    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, onQueued, onAccepted }) =>
+    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, assertDispatchCurrent, onQueued, onAccepted }) =>
       dispatchBotSessionMessage({
         targetSessionId,
         message,
@@ -13863,6 +13878,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         toolsDisabled,
         ...(resumeWithStoredPermissionMode ? { resumeWithStoredPermissionMode } : {}),
         onQueued,
+        assertDispatchCurrent,
         // Same attachment shape as a task message: images by their media address, files by path.
         ...(attachments && attachments.length > 0
           ? {
@@ -13883,7 +13899,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         onAccepted,
       }),
     prepareAttachments: botGroupAttachments.prepare,
-    abortLane: (sessionId) => stopSessionTurnExplicitly(sessionId),
+    abortLane: async (sessionId, inputClientId) => {
+      if (!inputClientId) return stopSessionTurnExplicitly(sessionId);
+      const scope = captureDataOwnerBroadcastScope();
+      await stopOwnedSessionInput({ sessionId,
+        owns: id => isDataOwnerBroadcastScopeCurrent(scope) && id === inputClientId,
+        queue: {
+          ensureQueueRestored: async id => {
+            await inputCoordinator.ensureQueueRestored(id);
+            if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new Error('OWNER_CHANGED');
+          },
+          getQueueControlSnapshot: id => inputCoordinator.getQueueControlSnapshot(id),
+          remove: (id, clientId) => inputCoordinator.remove(id, clientId),
+        },
+        activeInput: () => inputCoordinator.getAcceptedInputProvenance(sessionId),
+        withSessionLock: withSessionRestartLock,
+        flush: awaitAgentInputQueueSnapshotPersistence,
+        stopTurn: stillOwned => stopSessionTurnExplicitly(sessionId, { keepQueue: true, stillOwned }),
+      });
+    },
     closeLanes: async (sessionIds) => {
       await Promise.all(sessionIds.map((id) => maker.closeSession(id).catch(() => undefined)));
     },
@@ -15581,30 +15615,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     /** Host-accepted task text or a forwarded request receipt. */
     autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
     authorizationGuard?: BotAuthorizationInputGuard;
+    /** Host-only fence checked synchronously at the final enqueue boundary. */
+    assertDispatchCurrent?: () => void;
   }): Promise<void> {
     const queued = await buildSessionControlInputItem(params);
-    if (params.onAccepted) {
-      orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
-        params.clientId,
-        () => params.onAccepted?.({
-          permissionMode: queued.createOpts.permissionMode,
-          planMode: queued.createOpts.planMode,
-        }),
-        params.onAcceptedRollback,
-        params.onAcceptedCommit,
-      );
-    }
     // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
     // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
     await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
     await assertTaskActionCurrent();
-    if (params.authorizationGuard) {
-      await commitBotAuthorizationInput(params.authorizationGuard, () => {
-        inputCoordinator.enqueue(params.targetSessionId, queued);
-      });
-    } else {
+    const enqueue = () => {
+      params.assertDispatchCurrent?.();
+      if (params.onAccepted) {
+        orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
+          params.clientId,
+          () => params.onAccepted?.({
+            permissionMode: queued.createOpts.permissionMode,
+            planMode: queued.createOpts.planMode,
+          }),
+          params.onAcceptedRollback,
+          params.onAcceptedCommit,
+        );
+      }
       inputCoordinator.enqueue(params.targetSessionId, queued);
-    }
+    };
+    if (params.authorizationGuard) await commitBotAuthorizationInput(params.authorizationGuard, enqueue);
+    else enqueue();
     log.info('send_to_session queued while target busy', {
       targetSessionId: params.targetSessionId,
       clientId: params.clientId,
@@ -20245,6 +20280,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       providerGroupService?.mayHandleTurnError(sessionId, signals)
         ? providerGroupSwitchCause(signals, 'run')
         : null,
+    claimExternalAutomaticRecovery: (sessionId) =>
+      interruptedTurnAutoResumeGuard.claimExternalAutomaticRecovery(sessionId).action === 'allow',
     onUsageLimitedTurnError: (sessionId, signals, item, candidateToken) => {
       if (item.origin?.kind === 'scheduler' && item.origin.runId) {
         // Claim synchronously, before the runner consumes this error. Reset-time
@@ -20262,6 +20299,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。
       if (!providerGroupService || signals.providerGroupUsageLimit) {
+        usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
+        return;
+      }
+      // Provider-group recovery shares the interrupted-turn budget. Once it is
+      // exhausted, do not enter the group's failover loop; keep the normal
+      // manual/usage-limit recovery path instead.
+      if (interruptedTurnAutoResumeGuard.isBudgetExhausted(sessionId)) {
         usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
         return;
       }
@@ -20984,13 +21028,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       !inputCoordinator.isPausedForUncertainDelivery(session.id)) inputCoordinator.resume(session.id);
   };
 
-  explicitStopImpl = async (sessionId) => {
+  explicitStopImpl = async (sessionId, options) => {
     await inputCoordinator.ensureQueueRestored(sessionId);
+    if (options?.stillOwned && !options.stillOwned()) return;
     resetAutomaticRecoveryForExplicitStop(sessionId);
     contextOverflowRolloverHolder?.cancelRecovery(sessionId);
     // 与桌面 Stop 同序: Goal 暂停同步摘掉续跑源后, 中止先发出, 再等落盘(失败此时才抛)。
     const goalPause = pauseGoalBeforeExplicitStop(sessionId);
-    inputCoordinator.stop(sessionId);
+    inputCoordinator.stop(sessionId, options?.keepQueue ? { keepQueue: true, pauseQueue: true, resumeOnUserInput: true, discardActiveInput: true } : undefined);
     await Promise.all([goalPause, awaitAgentInputQueueSnapshotPersistence(sessionId)]);
   };
   setSharedTaskQueueReader((sessionId, clientId) => {

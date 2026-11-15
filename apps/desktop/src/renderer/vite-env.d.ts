@@ -6957,7 +6957,13 @@ interface ElectronAPI {
       effective: 'immediate';
     }>;
 
-    /** Claude Code 自动上下文压缩触发百分比。仅对新建会话生效 */
+    /** Codex 压缩方式；null 恢复默认，下次启动/恢复生效。 */
+    codexCompactionGet: () => Promise<{ enabled: boolean; isCustomized: boolean }>;
+    codexCompactionSet: (
+      enabled: boolean | null,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ) => Promise<{ enabled: boolean; isCustomized: boolean }>;
+    /** Claude Code 自动上下文压缩触发百分比。 */
     compactionGetPct: () => Promise<number>;
     compactionGetState: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
     /** 写入后返回 main 端 clamp 后的最终百分比 */
