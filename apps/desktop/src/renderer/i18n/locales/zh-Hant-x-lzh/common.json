@@ -5322,6 +5322,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 伺服器壓縮",
+        "description": "啟則優先於伺服器壓縮；閉則用 Codex 原生本機摘要，仍呼叫目前模型。",
+        "hint": "於本機下次啟動或恢復 Codex 任務時生效。供應商不支援伺服器壓縮者，仍循原法。",
+        "loadFailed": "未能載入 Codex 壓縮設定",
+        "saveFailed": "未能儲存 Codex 壓縮設定"
+      },
       "title": "前文縮略",
       "description": "Claude Code 與 Pi 之壓縮比例於此調之。Codex 依模型所設之上下文上限，自調壓縮門檻；遠端壓縮未成時，自改用摘要壓縮，並於今之差事中持之。",
       "card": {

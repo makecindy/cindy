@@ -5365,6 +5365,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex server compaction",
+        "description": "Prefer server compaction when enabled. When disabled, Codex uses native local summarization, which still calls the current model.",
+        "hint": "Applies when Codex next starts or resumes a session on this computer. Providers without server compaction keep their existing behavior.",
+        "loadFailed": "Could not load Codex compaction settings",
+        "saveFailed": "Could not save Codex compaction settings"
+      },
       "title": "Context compaction",
       "description": "Adjust Claude Code and Pi compaction ratios here. Codex derives its threshold from the model context setting. If remote compaction fails, it automatically switches to summary compaction and keeps using it for the current task.",
       "card": {
