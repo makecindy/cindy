@@ -8150,6 +8150,8 @@
         "cindyTextOneshot": "可向 Cindy 的快速通道提问并获得文字回答",
         "cindyTextOneshotDetail": "走系统的轻量任务模型链(与自动起标题同一条通道)，不动用 Agent、碰不到你的文件，可能产生模型费用。",
         "cindyEmbedText": "可把文字送去算成向量（用于语义检索）",
+        "cindyModelsDecisions": "可调用决策模型（使用你的模型配额）",
+        "cindyModelsRerank": "可调用重排模型（使用你的模型配额）",
         "cindyEmbedTextDetail": "文字会送到系统的向量模型算成一串数字，单次最多 {{max}} 条，可能产生模型费用。算出的向量只交给插件自己保管，不写入你的资料库。",
         "cindySearchWeb": "可使用 Cindy AI 搜索公网",
         "cindySearchWebDetail": "查询会访问公网，并可能消耗 Cindy AI 配额。",
@@ -13882,6 +13884,7 @@
         "realtime": "实时语音",
         "embedding": "向量",
         "decision": "决策",
+        "rerank": "重排",
         "compression": "压缩",
         "ungrouped": "未分组",
         "other": "其他"

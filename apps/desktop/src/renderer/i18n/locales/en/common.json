@@ -8193,6 +8193,8 @@
         "cindyTextOneshot": "Can ask Cindy's fast lane a question and receive a text answer",
         "cindyTextOneshotDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply.",
         "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
+        "cindyModelsDecisions": "Can call decision models (uses your model quota)",
+        "cindyModelsRerank": "Can call reranking models (uses your model quota)",
         "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "cindySearchWeb": "Can search the public web with Cindy AI",
         "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
@@ -13936,6 +13938,7 @@
         "realtime": "Realtime Audio",
         "embedding": "Embeddings",
         "decision": "Decision",
+        "rerank": "Rerank",
         "compression": "Compression",
         "ungrouped": "Ungrouped",
         "other": "Other"

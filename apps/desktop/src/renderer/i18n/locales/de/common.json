@@ -8193,6 +8193,8 @@
         "cindyTextOneshot": "Kann Cindys Fast Lane eine Frage stellen und eine Textantwort erhalten",
         "cindyTextOneshotDetail": "Verwendet die schlanke Hilfsmodellkette des Systems (denselben Verarbeitungspfad wie automatische Titel). Kein Agent beteiligt und kein Dateizugriff. Es können Modellkosten anfallen.",
         "cindyEmbedText": "Kann Text zur Umwandlung in Vektoren senden (für die semantische Suche)",
+        "cindyModelsDecisions": "Kann Entscheidungsmodelle aufrufen (verbraucht dein Modellkontingent)",
+        "cindyModelsRerank": "Kann Neusortierungsmodelle aufrufen (verbraucht dein Modellkontingent)",
         "cindyEmbedTextDetail": "Text wird an das Embedding-Modell des Systems gesendet und in Zahlen umgewandelt, bis zu {{max}} Elemente pro Aufruf. Es können Modellkosten anfallen. Die Vektoren gehen nur an das Plugin – in deiner eigenen Bibliothek wird nichts gespeichert.",
         "cindySearchWeb": "Kann mit Cindy AI das öffentliche Web durchsuchen",
         "cindySearchWebDetail": "Suchanfragen greifen auf das öffentliche Web zu und können Cindy AI-Kontingent verbrauchen.",
@@ -13936,6 +13938,7 @@
         "realtime": "Echtzeit-Audio",
         "embedding": "Embeddings",
         "decision": "Entscheidung",
+        "rerank": "Neusortierung",
         "compression": "Komprimierung",
         "ungrouped": "Ohne Gruppe",
         "other": "Sonstige"

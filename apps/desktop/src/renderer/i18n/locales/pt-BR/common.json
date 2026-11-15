@@ -8265,6 +8265,8 @@
         "cindyTextOneshot": "Pode fazer uma pergunta ao canal rápido da Cindy e receber uma resposta em texto",
         "cindyTextOneshotDetail": "Usa a cadeia de modelos utilitários leves do sistema (o mesmo canal dos títulos automáticos). Não envolve Agent nem acesso a arquivos. Pode haver cobrança pelo uso do modelo.",
         "cindyEmbedText": "Pode enviar texto para ser convertido em vetores (para busca semântica)",
+        "cindyModelsDecisions": "Pode usar modelos de decisão (consome sua cota de modelos)",
+        "cindyModelsRerank": "Pode usar modelos de reordenação (consome sua cota de modelos)",
         "cindyEmbedTextDetail": "O texto é enviado ao modelo de embeddings do sistema e convertido em números, com até {{max}} itens por chamada. Pode haver cobrança pelo uso do modelo. Os vetores vão apenas para o plugin — nada é gravado na sua biblioteca.",
         "cindySearchWeb": "Pode pesquisar na web pública com Cindy AI",
         "cindySearchWebDetail": "As solicitações de pesquisa acessam a web pública e podem consumir a cota do Cindy AI.",
@@ -14051,6 +14053,7 @@
         "realtime": "Áudio em tempo real",
         "embedding": "Embeddings",
         "decision": "Decisão",
+        "rerank": "Reordenação",
         "compression": "Compressão",
         "ungrouped": "Sem grupo",
         "other": "Outro"

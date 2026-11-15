@@ -1318,6 +1318,7 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'promote'; analyzerVersion: string };
 
 export interface MediaSpendArgs {
+  approximate?: boolean;
   providerName?: string;
   day: string;
   model: string;
