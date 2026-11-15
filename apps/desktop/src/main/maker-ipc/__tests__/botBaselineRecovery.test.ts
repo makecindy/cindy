@@ -10,6 +10,9 @@ import { readSshCodexModelList } from '../../remote-ssh/codex-model-list';
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import { projectSessionRuntimeControl } from '../sessionRuntimeControl';
 import { createSessionRuntimeProjection } from '../sessionRuntimeProjection';
+import { assertModelRouteUsableWith, type ModelRouteAdmissionPorts } from '../modelRouteAdmission';
+import type { ModelRouteVerdict } from '../../maker-host/model-route-guard';
+import type { AgentKind } from '@cindy/maker-core';
 
 // Regression for #7177/#7428: an unavailable frozen selection used to reject
 // every input before dispatch, despite a usable saved companion configuration.
@@ -384,8 +387,11 @@ it.each([
 describe('production restoration rejection classification', () => {
   const throwIpcError = (code: Parameters<typeof createIpcError>[0], message: string): never => { throw createIpcError(code, message); };
   it.each(['explicit-source-unavailable', 'explicit-source-disabled', 'model-retired', 'payment-required'])('%s retains ordinary semantics and marks only recoverable restoration failures', async (reason) => {
-    const guard = registeredFunction('assertModelRouteUsable', { throwIpcError,
-      verdictForModelRoute: async () => ({ kind: 'reject', reason }), describeModelRouteRejection: () => reason });
+    // assertModelRouteUsable moved out of register.ts (modelRouteAdmission.ts): call it with the verdict as its port.
+    const ports: ModelRouteAdmissionPorts = { listSshCodexProviders: vi.fn(),
+      verdictForModelRoute: async () => ({ kind: 'reject', reason } as ModelRouteVerdict) };
+    const guard = (agent: AgentKind, model: string, providerId: string | null, remoteHostId?: string | null,
+      unavailableCode?: 'MODEL_SELECTION_UNAVAILABLE') => assertModelRouteUsableWith(ports, agent, model, providerId, remoteHostId, unavailableCode);
     await expect(guard('pi', 'saved', 'old')).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     await expect(guard('pi', 'saved', 'old', undefined, 'MODEL_SELECTION_UNAVAILABLE')).rejects.toMatchObject({
       code: reason === 'payment-required' ? 'INVALID_PARAMS' : 'MODEL_SELECTION_UNAVAILABLE',

@@ -205,7 +205,7 @@ import { ensureBotCanonicalSession } from './botCanonicalSessionEnsure.js';
  */
 
 import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
-import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
+import { readSshCodexModelList, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { resolveConnectedDefaultProviderIdForModel } from '../maker-host/provider-route.js';
 import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
@@ -1396,9 +1396,6 @@ import {
 } from '../maker-host/model-disable-store.js';
 import { readProviderOrder, setProviderOrder } from '../maker-host/provider-order-store.js';
 import {
-  describeModelRouteRejection,
-} from '../maker-host/model-route-guard.js';
-import {
   pinExclusiveSessionProvider,
   resolveLenientSessionRoute,
   resolveScheduledModelSelectionLive,
@@ -1468,6 +1465,7 @@ import {
 } from './sessionRuntimeSelectionApply.js';
 import { createSessionRuntimeProjection, createUpdateScheduledPreference } from './sessionRuntimeProjection.js';
 import { createResolvePendingRuntimeAxisPatch } from './pendingRuntimeAxisPatch.js';
+import { assertModelRouteUsableWith } from './modelRouteAdmission.js';
 import { PendingCredentialSwitchService, type PendingCredentialSwitchDeps } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
@@ -8906,18 +8904,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     remoteHostId?: string | null,
     unavailableCode?: 'MODEL_SELECTION_UNAVAILABLE',
   ): Promise<string | undefined> {
-    if (agent === 'codex' && remoteHostId) {
-      assertSshCodexModel(await readSshCodexModelList({ id: remoteHostId }, listSshCodexProviders), model, providerId);
-      return undefined;
-    }
-    const verdict = await verdictForModelRoute(agent, model, providerId);
-    if (verdict.kind === 'reject') {
-      throwIpcError(
-        verdict.reason === 'payment-required' ? 'INVALID_PARAMS' : unavailableCode ?? 'INVALID_PARAMS',
-        describeModelRouteRejection(verdict.reason, model, providerId),
-      );
-    }
-    return verdict.kind === 'reroute' ? verdict.providerId : undefined;
+    return assertModelRouteUsableWith({ listSshCodexProviders, verdictForModelRoute }, agent, model, providerId, remoteHostId, unavailableCode);
   }
 
   // 供应商组(docs/product-rules/provider-groups.md)：在 agentSwitchDeps 就绪后装配。
