@@ -488,3 +488,16 @@ Claude 的插件技能不受 `skillOverrides` 控制，因此每个本地 Query 
 
 升级清理只删除可确认由 Cindy 创建的旧软链接，不删除目标内容、不覆盖用户同名
 技能、不修改 Git ignore。旧版本 Cindy 实例仍可能重建旧链接，这是迁移的已知边界。
+
+### 项目图标
+
+`owners/<账号>/project-icons.json` 保存项目身份到 Emoji、`symbol:<名称>`、`text:<缩写>`
+或规范 `cindy-media://blobs/<hash>.png` 地址的显式覆盖，最大 1MiB。
+使用既有 override settings 跨进程锁与原子替换；损坏文件保留且拒绝覆盖。
+名称继续使用现有项目别名表；组合编辑额外使用账号内的 `project-info-write.lock` 串行化，
+别名事务失败补偿旧图标。恢复默认删除项目键，不在项目目录写文件。
+
+用户图片通过统一媒体入库助手写入总仓，挂 `integration-cache` / `project-icon:<projectKey>` 引用，
+`isCache: false` 防止有效用户图片按缓存淘汰。替换／恢复默认成功后释放旧引用，未引用字节交给既有回收器。
+图片不在设置 JSON 内存 base64、不持久化控制端路径；读取只接受当前账号中已登记的项目身份。
+实现：`main/projectIconStore.ts`、`projectInfoCore.ts`、`projectIconMedia.ts`。

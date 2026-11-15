@@ -1,5 +1,6 @@
 import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
 import { lineHeight, spacing, typeScale, useTheme } from "@/theme";
@@ -9,10 +10,12 @@ import type { DocumentPreviewChromeProps } from "./HtmlBrowserChrome.types";
 export function DocumentPreviewChrome(p: DocumentPreviewChromeProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const chrome = usePreviewChromeFrame();
   const insets = useSafeAreaInsets();
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
       <PreviewHeader
+        standalone={p.standalone ?? false}
         name={p.title}
         detail={p.meta}
         onClose={p.onClose}
@@ -54,7 +57,7 @@ export function DocumentPreviewChrome(p: DocumentPreviewChromeProps) {
         <View
           style={{
             position: "absolute",
-            top: insets.top + 64,
+            top: chrome.documentContentTop,
             left: insets.left,
             right: insets.right,
             backgroundColor: colors.surface,
