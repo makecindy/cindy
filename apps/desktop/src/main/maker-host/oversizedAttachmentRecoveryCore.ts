@@ -5,7 +5,7 @@ import { copyFile, lstat, mkdir, mkdtemp, open, realpath, rm, writeFile } from '
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
-import { requestSizeBudgetAfterRejection, requestSizeModelFamily, countInlineRequestImages, controlRequestSize, recoverInlineAttachments, type ImageRouteInfo, type InlineImagePreprocessor, type OversizedRequestRecovery, type RequestSizeController } from '@cindy/anthropic-compat-proxy';
+import { requestSizeBudgetAfterRejection, requestSizeModelFamily, countInlineRequestImages, hasRequestMediaMarkers, controlRequestSize, recoverInlineAttachments, type ImageRouteInfo, type InlineImagePreprocessor, type OversizedRequestRecovery, type RequestSizeController } from '@cindy/anthropic-compat-proxy';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions, mediaRefs } from '../localDb/schema.js';
 import { addRef, removeRefById } from '../cindy-media/ledger.js';
@@ -195,6 +195,9 @@ function createRequestSizeController(
       return result?.body ?? null;
     },
     control: async (body, format, policy) => {
+      // Ordinary text traffic must not touch session storage, scratch directories
+      // or INFO logging. Do this before resolving any attachment ownership.
+      if (!hasRequestMediaMarkers(body)) return null;
       let imageCount = 0;
       const countingPreprocessor: InlineImagePreprocessor = {
         prepare: input => {
@@ -238,7 +241,7 @@ function createRequestSizeController(
             throw new Error('Attachment recovery owner changed');
           }
         };
-        const directory = await mkdtemp(path.join(tmpdir(), 'cindy-request-size-'));
+        let directory: string | undefined;
         const staged = new Map<string, { source: string; hash: string; mimeType: string; refId?: string }>();
         try {
           const route = policy.route as ImageRouteInfo;
@@ -249,6 +252,7 @@ function createRequestSizeController(
               const hash = createHash('sha256').update(bytes).digest('hex');
               const ext = extForMime(mimeType) ?? '.bin';
               const destination = resolveSafe(blobUrl(hash, ext)).absPath;
+              directory ??= await mkdtemp(path.join(tmpdir(), 'cindy-request-size-'));
               const source = path.join(directory, `${index}-${hash}${ext}`);
               await writeFile(source, bytes, { flag: 'wx', mode: 0o600 });
               if (!staged.has(destination)) {
@@ -259,7 +263,7 @@ function createRequestSizeController(
               return destination;
             },
           ));
-          if (!result) { skipped('unchanged'); return null; }
+          if (!result) return null;
           for (const [destination, item] of staged) {
             const media = await ingestMedia({ filePath: item.source, mimeType: item.mimeType, isCache: false,
               refs: [], assertStillValid: assertCurrent, refCompensationScope: scope }, db);
@@ -268,7 +272,7 @@ function createRequestSizeController(
               originSessionId: sessionId, originKind: 'user' }, db);
           }
           return result;
-        } finally { await rm(directory, { recursive: true, force: true }); }
+        } finally { if (directory) await rm(directory, { recursive: true, force: true }); }
       } catch (error) {
         if (error instanceof Error && error.message === 'REQUEST_TEXT_TOO_LARGE') throw error;
         skipped('error', error);

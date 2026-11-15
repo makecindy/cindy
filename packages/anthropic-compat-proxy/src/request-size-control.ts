@@ -215,6 +215,13 @@ function walkImages(node: JsonNode, format: WireFormat, out: ImageOccurrence[], 
   }
 }
 
+/** Cheap conservative hint; positive matches still go through the schema-aware scanner.
+ * Keep legacy inline documents/files eligible for recovery as well as images.
+ */
+export function hasRequestMediaMarkers(body: Buffer): boolean {
+  return /"type"\s*:\s*"(?:input_image|input_file|image|document|image_url)"/.test(body.toString('utf8'));
+}
+
 /** Count actual wire images (including translated protocols), without decoding their bytes. */
 export function countInlineRequestImages(body: Buffer, format?: WireFormat): number {
   try {
@@ -303,10 +310,7 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   const familyPolicy = disableRemoval ? undefined : policy.triggerImages === undefined ? familyLimit(policy.modelFamily)
     : { trigger: policy.triggerImages, keep: policy.targetImages ?? Math.floor(policy.triggerImages * 0.44) };
   const quickLimit = Math.min(trigger, DEFAULT_QUICK_PATH_BYTES);
-  if (body.length <= quickLimit) {
-    const hint = (body.toString('utf8').match(/"type"\s*:\s*"(?:input_image|image|document|image_url)"/g) ?? []).length;
-    if (hint === 0) return null;
-  }
+  if (body.length <= quickLimit && !hasRequestMediaMarkers(body)) return null;
   const text = body.toString('utf8');
   const root = new JsonScanner(text).parse();
   const occurrences: ImageOccurrence[] = [];

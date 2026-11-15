@@ -1,16 +1,22 @@
 import { mkdtemp, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
+import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
 import path from 'node:path';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   root: '', snapshot: null as any, session: { status: 'active', remoteHostId: null } as any,
   existing: undefined as any, resolved: 'test-session' as string | null, invalidOwner: false,
-  info: vi.fn(), ingest: vi.fn(), query: vi.fn(), addRef: vi.fn(), removeRef: vi.fn(),
+  getSnapshot: vi.fn(), info: vi.fn(), ingest: vi.fn(), query: vi.fn(), addRef: vi.fn(), removeRef: vi.fn(),
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: state.info }) }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
-vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => state.snapshot }));
+vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => state.getSnapshot() }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...fs, mkdtemp: vi.fn(fs.mkdtemp), rm: vi.fn(fs.rm) };
+});
 vi.mock('../../cindy-media/refCompensationJournal.desktop.js', () => ({
   captureMediaRefCompensationScope: () => ({ assertStillValid: () => { if (state.invalidOwner) throw new Error('owner changed'); } }),
   withMediaRefCompensation: async ({ perform, compensate, refIds }: any) => {
@@ -34,6 +40,10 @@ beforeEach(async () => {
   state.snapshot = { userId: 'owner', clientEpoch: 1, client: { drizzle: {
     select: () => ({ from: (table: unknown) => ({ where: () => ({ get: () => state.query(table) }) }) }),
   } } };
+  state.getSnapshot.mockReset().mockImplementation(() => state.snapshot);
+  state.query.mockClear();
+  vi.mocked(mkdtemp).mockClear();
+  vi.mocked(rm).mockClear();
   state.info.mockReset();
   state.addRef.mockReset();
   state.removeRef.mockReset();
@@ -221,4 +231,66 @@ it('persists count recovery media without learning a rule during body generation
   expect(state.ingest).toHaveBeenCalled();
   expect(state.addRef).toHaveBeenCalled();
   expect(await controller.control(raw, 'responses', { context: ctx, signal, route: controller.route!(ctx, parsed) })).toBeNull();
+});
+
+// Production host controller and actual HTTP forwarding: ordinary text must
+// bypass session DB, media scratch directories, preprocessing and INFO logs.
+// Unit tier; the three reported request sizes, with byte equality on the wire.
+it.each([100 * 1024, 1024 * 1024, 5 * 1024 * 1024])('forwards %i bytes of text without touching media resources', async bytes => {
+  let received: Buffer | undefined;
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
+    received = Buffer.concat(chunks); res.end('ok');
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  if (!address || typeof address === 'string') throw new Error('test server address unavailable');
+  const prepare = vi.fn(async () => null);
+  const controller = createRequestSizeController(() => state.resolved, { prepare });
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${address.port}`, transformRequest: [], requestSizeController: controller });
+  try {
+    const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [{ type: 'input_text', text: 'x'.repeat(bytes) }] }] }));
+    const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+    expect(response.status).toBe(200); await response.text();
+    expect(received?.equals(raw)).toBe(true);
+    expect(state.getSnapshot).not.toHaveBeenCalled();
+    expect(state.query).not.toHaveBeenCalled();
+    expect(mkdtemp).not.toHaveBeenCalled();
+    expect(rm).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(state.info).not.toHaveBeenCalled();
+  } finally {
+    await proxy.dispose();
+    upstream.closeAllConnections();
+    await new Promise<void>(resolve => upstream.close(() => resolve()));
+  }
+});
+
+it.each([false, true])('does not stage media when a small image only needs preprocessing: changed=%s', async changed => {
+  const prepare = vi.fn(async () => changed ? { bytes: Buffer.alloc(300), mimeType: 'image/webp', width: 1, height: 1, changed: true, cacheKey: 'small' } : null);
+  const controller = createRequestSizeController(() => state.resolved, { prepare });
+  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [pngBlock()] }] }));
+  const result = await controller.control(raw, 'responses', { signal: new AbortController().signal, route: {} });
+  expect(prepare).toHaveBeenCalledOnce();
+  expect(result?.removedImages ?? 0).toBe(0);
+  expect(result !== null).toBe(changed);
+  expect(mkdtemp).not.toHaveBeenCalled();
+  expect(rm).not.toHaveBeenCalled();
+  expect(state.ingest).not.toHaveBeenCalled();
+  expect(state.info).not.toHaveBeenCalled();
+});
+
+it('creates one scratch directory only after preprocessing and persists removed images', async () => {
+  const directoryCallsDuringPrepare: number[] = [];
+  const prepare = vi.fn(async () => { directoryCallsDuringPrepare.push(vi.mocked(mkdtemp).mock.calls.length); return null; });
+  const controller = createRequestSizeController(() => state.resolved, { prepare });
+  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [pngBlock(), pngBlock(), pngBlock()] }] }));
+  const result = await controller.control(raw, 'responses', { signal: new AbortController().signal, route: {}, triggerBytes: 8192, targetBytes: 4096 });
+  expect(directoryCallsDuringPrepare).toEqual([0, 0, 0]);
+  expect(result!.removedImages).toBeGreaterThan(0);
+  expect(result!.body.toString()).toContain(path.join(state.root, 'saved.png'));
+  expect(mkdtemp).toHaveBeenCalledOnce();
+  expect(rm).toHaveBeenCalledExactlyOnceWith(vi.mocked(mkdtemp).mock.settledResults[0].value, { recursive: true, force: true });
+  expect(state.ingest).toHaveBeenCalled();
+  expect(state.addRef).toHaveBeenCalled();
 });

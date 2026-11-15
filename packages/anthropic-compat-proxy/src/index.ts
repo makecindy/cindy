@@ -20,6 +20,7 @@ export type { OversizedRequestRecovery } from './types.js';
 export {
   controlRequestSize,
   countInlineRequestImages,
+  hasRequestMediaMarkers,
   mergeRequestSizeBudgets,
   requestSizeBudgetAfterRejection,
   requestSizeModelFamily,
