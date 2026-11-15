@@ -14,6 +14,8 @@ import { createOutboundProxyResolver } from './outboundProxyResolverCore.js';
 import type { OutboundPathSnapshot } from './outboundProxyResolverCore.js';
 // 传输层(真实 socket)自己的解析口径:诊断探针必须用同一把尺子,否则判出来的路径
 // 与真实请求不是同一条(协议归一 + path + 明文 ws 的代理限制)。
+// 用函数而非静态 import:outbound-fetch 在模块求值期就要 resolveDesktopOutboundProxy,
+// 静态 import 会形成环(本模块还没初始化完)。
 import { transportIsPlaintextWebSocket, transportProxyResolveKey } from './outbound-fetch.js';
 
 export {
@@ -36,6 +38,13 @@ export const resolveDesktopOutboundProxy: OutboundProxyResolver =
 /** 取指定上游的出站路径判定(只读诊断,见 outboundProxyResolverCore.ts)。 */
 export const getOutboundPathSnapshotFor = desktopOutboundProxyResolver.getOutboundPathSnapshotFor;
 
+/** 取**精确解析键**的出站路径判定(诊断探针用;粒度说明见 core 内注释)。 */
+export const getOutboundPathSnapshotByKey = desktopOutboundProxyResolver.getOutboundPathSnapshotByKey;
+
+/** @internal 单测用:清空系统代理解析缓存、日志去重与路径快照状态。 */
+export const resetOutboundProxyResolverStateForTest =
+  desktopOutboundProxyResolver.resetOutboundProxyResolverStateForTest;
+
 /**
  * 诊断探针(#9537):主动解析一次候选 origin 的出站路径并返回快照,不发任何业务请求。
  *
@@ -52,9 +61,11 @@ export const getOutboundPathSnapshotFor = desktopOutboundProxyResolver.getOutbou
  *    上游一律直连(outbound-fetch 的 resolveProxyTarget 与 dispatcher pick 都先跳过)。
  *    env 里的 HTTP_PROXY(无对应 NO_PROXY)会让通用解析器返回代理,照报就是谎称走了
  *    代理;同时 loopback 候选也意味着链路不止一条路径,无从断言「当前连接经代理」。
- * 2. **候选之间判定必须一致**:getOutboundPathSnapshotFor 的冲突判定只在同 origin
- *    组内,跨 origin 取最新 —— 对「任一候选都可能是当前路径」的诊断不够,一致性的
- *    校验在这里做。不一致(PAC 逐 path / NO_PROXY 差异)按宁可不报处理。
+ * 2. **候选之间判定必须一致**:候选本来就可能承载不同的线路(自建中转 vs 官方连接),
+ *    结论不同就无从断言「当前连接经代理」。逐候选的判定按**本次解析的键**精确读取
+ *    (见 getOutboundPathSnapshotByKey),不掺同 origin 下别的 path 的历史判定 ——
+ *    PAC 逐 path 给不同结论是正常用法,拿它当冲突会把本次的正确结论一起丢掉。
+ *    不一致(候选之间结论不同)按宁可不报处理。
  */
 export async function probeOutboundPathFor(
   upstreamUrls: readonly string[],
@@ -70,10 +81,13 @@ export async function probeOutboundPathFor(
     }]),
   ).values()];
   if (targets.length === 0) return null;
-  if (targets.some((t) => isLoopbackOrigin(originForLog(t.url)))) return null;
+  // 直接拿原始 URL 判 loopback:与旧版「先 originForLog 再取 hostname」同语义
+  // (合法 URL 两条路径的 hostname 一致;非法 URL 两边都是 false)。
+  if (targets.some((t) => isLoopbackOrigin(t.url))) return null;
   await Promise.all(targets.map((t) => resolveDesktopOutboundProxy(t.resolveKey)));
   const verdicts = targets.map((t) => {
-    const snap = getOutboundPathSnapshotFor([t.resolveKey]);
+    // 精确键读取:本次解析的就是这把键,同 origin 下另一条 path 的判定与此无关。
+    const snap = getOutboundPathSnapshotByKey(t.resolveKey);
     if (!snap) return null;
     // 明文 ws:// 遇到 HTTP 代理:传输层拒用该代理(upgrade 握手必须是隧道),实际是
     // 直连 —— 报「经代理」是谎报,宁可不报。socks5 不受这条限制。
@@ -94,25 +108,11 @@ function isHttpProxyAddress(proxy: string | null | undefined): boolean {
   return typeof proxy === 'string' && proxy.startsWith('http://');
 }
 
-/** origin(protocol//host)的 hostname 是否 loopback —— 传输层对此类上游一律直连。 */
-function isLoopbackOrigin(origin: string): boolean {
+/** 上游 URL 的 hostname 是否 loopback —— 传输层对此类上游一律直连。 */
+function isLoopbackOrigin(upstreamUrl: string): boolean {
   try {
-    return isLoopbackHostname(new URL(origin).hostname);
+    return isLoopbackHostname(new URL(upstreamUrl).hostname);
   } catch {
     return false;
   }
 }
-
-/** 日志维度恒为 origin:path 可能带业务语义;这里只用来把候选 URL 归一到 origin 去重。 */
-function originForLog(upstreamUrl: string): string {
-  try {
-    const u = new URL(upstreamUrl);
-    return `${u.protocol}//${u.host}`;
-  } catch {
-    return upstreamUrl;
-  }
-}
-
-/** @internal 单测用:清空系统代理解析缓存、日志去重与路径快照状态。 */
-export const resetOutboundProxyResolverStateForTest =
-  desktopOutboundProxyResolver.resetOutboundProxyResolverStateForTest;
