@@ -61,7 +61,7 @@ type HeaderProps = ActionsProps & SessionHeaderNativeTitleProps & {
 /** Horizontal system header keeps the existing custom title and native actions. */
 export function SessionStackHeader({ titleMaxWidth, onBack, onOpenSessionList,
   available, detailsOnly, screen, filesDisabled, filesDisabledReason, onFiles, onDetails, onDesktop,
-  title, tags, pinned, syncing, syncingImmediately, notice, onTagsPress, onTitleDoubleTap }: HeaderProps) {
+  title, projectIcon, tags, pinned, syncing, syncingImmediately, notice, onTagsPress, onTitleDoubleTap }: HeaderProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const backLabel = t('shared.back');
@@ -91,10 +91,10 @@ export function SessionStackHeader({ titleMaxWidth, onBack, onOpenSessionList,
       // Route-owned title options survive its unmount during a pop transition.
       headerTitle: () => <View style={{ width: titleMaxWidth, height: navigationChrome.target,
         minWidth: 0, flexShrink: 1, overflow: 'hidden', justifyContent: 'center' }}>
-        <SessionHeaderNativeTitle title={title} pinned={pinned} tags={stableTags} onTagsPress={canPressTags ? pressTags : undefined}
+        <SessionHeaderNativeTitle projectIcon={projectIcon} title={title} pinned={pinned} tags={stableTags} onTagsPress={canPressTags ? pressTags : undefined}
           onTitleDoubleTap={canRename ? rename : undefined} syncing={syncing} syncingImmediately={syncingImmediately} notice={notice} />
       </View>,
-    }), [colors.textPrimary, titleMaxWidth, title, pinned, stableTags, canPressTags, canRename,
+    }), [colors.textPrimary, titleMaxWidth, title, projectIcon, pinned, stableTags, canPressTags, canRename,
       pressTags, rename, syncing, syncingImmediately, notice]);
   const leftItems = useMemo(() => [
       <Stack.Toolbar.View key="back" hidesSharedBackground>

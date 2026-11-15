@@ -73,6 +73,28 @@ describe('git-review gitRunner', () => {
     expect(spawnedArgs().some((args) => args.includes('--global') || args.includes('safe.directory'))).toBe(false);
   });
 
+  // 2026-11-13 group checkout stall: `git pull` timed out but the runner waited ~8 more minutes,
+  // because the `fetch` it started still held the output pipes. A timeout now settles at once and
+  // ends the whole process group when asked to. Unit: the real runner over a child that never closes.
+  it('settles a timeout at once and ends the process group', async () => {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(),
+        stdin: { end: vi.fn() }, kill: vi.fn(), pid: 4242 });
+      vi.mocked(spawn).mockReturnValueOnce(child as never);
+      const pulled = runGit(['pull'], { cwd: '/tmp/repo', timeoutMs: 1000, killProcessGroup: true });
+      const settled = expect(pulled).rejects.toMatchObject({ message: 'git pull timed out after 1000ms' });
+      await vi.advanceTimersByTimeAsync(1000);
+      await settled;
+      expect(vi.mocked(spawn).mock.calls.at(-1)![2]).toMatchObject(process.platform === 'win32' ? {} : { detached: true });
+      if (process.platform !== 'win32') expect(kill).toHaveBeenCalledWith(-4242, 'SIGTERM');
+    } finally {
+      kill.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('isolates request-scoped execution backends from the local runner', async () => {
     const backend = {
       run: vi.fn().mockResolvedValue({ stdout: 'remote', stderr: '', exitCode: 0 }),

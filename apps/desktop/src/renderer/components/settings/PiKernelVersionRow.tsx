@@ -92,7 +92,7 @@ export function PiKernelVersionRow() {
       }}>{k('releaseNotes')}</DropdownMenuItem>
       {state?.upstream.checkedAt && <HarnessMenuFootnote>{t('settings.about.piKernel.checkedAt', { time: new Date(state.upstream.checkedAt).toLocaleString(i18n.language) })}</HarnessMenuFootnote>}
     </HarnessVersionMenuRow>
-    <ConfirmDialog open={!!target} onOpenChange={open => { if (!open) setTarget(null); }} presentation="standard" cancelFirst
+    <ConfirmDialog open={!!target} onOpenChange={open => { if (!open) setTarget(null); }}
       title={t(`settings.about.piKernel.${target?.source === 'official' ? 'restoreTitle' : 'updateTitle'}`, { version: target?.version })}
       description={k(target?.source === 'official' ? 'restoreDescription' : 'updateDescription')}
       confirmText={k(target?.source === 'official' ? 'restoreConfirm' : 'updateConfirm')}

@@ -1526,8 +1526,11 @@ describe('远程交互接线不变式', () => {
     expect(pushStart).toBeGreaterThan(-1);
     const pushBody = src.slice(pushStart, pushEnd);
     expect(pushBody).toContain('target?: {');
+    // 没有显式目标时写穿的型号必须是**当前显示的那一个**(draftInitialModel):播种型号在
+    // 目标目录里路由不出去、被换成目录里的另一个型号时,写旧型号等于把新型号的改动写到
+    // 旧型号的远端草稿记忆上(Codex review #9369)。
     expect(pushBody).toContain(
-      'const model = target?.modelId ?? dlSel?.model ?? deviceLinkInitial?.model;',
+      'const model = target?.modelId ?? draftInitialModel ?? dlSel?.model ?? deviceLinkInitial?.model;',
     );
     expect(pushBody).toContain('agent: target?.agent ?? capabilityAgentKind');
     expect(pushBody).toMatch(/providerId: target\s*\r?\n?\s*\?\s*\(target\.providerId \?\? ''\)/);

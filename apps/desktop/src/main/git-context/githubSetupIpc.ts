@@ -117,7 +117,7 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
     if (action === 'status') return host.githubStatus();
     if (action === 'disconnect') { await host.disconnectGithub(); return host.githubStatus(); }
     const owner = activeOwnerScopeKey();
-    const url = action === 'connect' ? await host.connectGithub() : (await host.githubStatus()).installUrl;
+    const url = action === 'connect' ? await host.connectGithub() : await host.installGithub();
     if (owner !== activeOwnerScopeKey()) throwIpcError('INVALID_PARAMS', 'Account changed');
     if (typeof url !== 'string') throwIpcError('INVALID_PARAMS', 'GitHub connection unavailable');
     const parsed = new URL(url);

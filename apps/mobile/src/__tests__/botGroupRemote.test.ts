@@ -419,3 +419,13 @@ it('opens the execution acceptance scene through the actual remote resource read
     groupExecutionVisualFixture(channel, args ?? []) as T, { deviceId: 'mock', deviceName: 'Mock' }, ref, 'zh-CN', ['bot-group-chat']);
   expect(botGroupChatDataFromResource(resource)?.round.speakers).toHaveLength(4);
 });
+
+// Unit: the remote resource previously discarded execution source/thread routing.
+it('preserves topic ownership and unresolved sources across the computer bridge', () => {
+  const round = { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's1', activity: 'reply', sourceMessageId: 'reply', threadRootId: 'topic' },
+    { botId: 'abu', sessionId: 's2', activity: 'reply', sourceMessageId: 'main', threadRootId: null },
+    { botId: 'abu', sessionId: 's3', activity: 'reply', sourceMessageId: 'unknown' },
+  ] };
+  expect(parseBotGroupChatData({ ...chatData(), round })?.round.speakers).toEqual(round.speakers);
+});

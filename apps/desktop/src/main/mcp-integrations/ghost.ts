@@ -1,3 +1,4 @@
+import { EvaluationError } from '../cindy-evaluate/errors.js';
 import { getPluginToolUi } from '@cindy/plugin-protocol';
 
 import { pluginToolVisible, compareCindyVersions, PLUGIN_UI_MIN_CINDY_VERSION } from '@cindy/plugin-protocol';
@@ -53,6 +54,7 @@ import type {
 import { toolAutoReviewAction, type PermissionMode, type ReviewableAction, type AutoReviewDecision } from '@cindy/maker-core';
 
 import {
+  authorizedSessionPathStillBound,
   getLiziMcpSessionContext,
   resolveLiziMcpSessionContext,
   type LiziMcpSessionContext,
@@ -251,6 +253,9 @@ export interface CindyGhostsHostDeps {
   onToolResultImagesFailed?: (sessionId: string, attemptedCount: number) => void;
 }
 export interface GhostGatewayPorts {
+  callEvaluate: typeof import('../cindy-evaluate/service.js').callEvaluate;
+  readEvaluationImageFile: typeof import('../cindy-evaluate/service.js').readEvaluationImageFile;
+  resolveEvaluationImage: (url: string) => { absPath: string };
   publishPluginAppResult: typeof import('../mcp-apps/pluginCards.js').publishPluginAppResult;
   pluginModelResult: typeof import('../mcp-apps/pluginCards.js').pluginModelResult;
   community: typeof import('../plugin-contributions/host.js');
@@ -290,7 +295,7 @@ export interface GhostGatewayPorts {
 
 /** Shared plugin discovery, authorization and tool execution. The launchers supply
  * their real platform services; all consent, identity and grant rules stay here. */
-type PlatformService = "community" | "contributionOwnerKey" | "assertContributionOwner" | "getPreparedContribution" | "createPluginMarketAgentTools" | "createTaskInstallConsentPrompt" | "publishImage" | "ghostForgeForbiddenRootDirs" | "installOrUpdateLocalGhostPackageFromForge" | "writeForgeScaffoldWithStableParent" | "currentPublisherIdentity" | "getPluginPublisherOrchestrator" | "startPluginPublish" | "callCindyMedia" | "forkForgeIconConversionHost" | "openGithubSignIn" | "readGithubConnection";
+type PlatformService = "callEvaluate" | "readEvaluationImageFile" | "resolveEvaluationImage" | "community" | "contributionOwnerKey" | "assertContributionOwner" | "getPreparedContribution" | "createPluginMarketAgentTools" | "createTaskInstallConsentPrompt" | "publishImage" | "ghostForgeForbiddenRootDirs" | "installOrUpdateLocalGhostPackageFromForge" | "writeForgeScaffoldWithStableParent" | "currentPublisherIdentity" | "getPluginPublisherOrchestrator" | "startPluginPublish" | "callCindyMedia" | "forkForgeIconConversionHost" | "openGithubSignIn" | "readGithubConnection";
 export type PluginGatewayPorts = Omit<GhostGatewayPorts, PlatformService> & Partial<Pick<GhostGatewayPorts, PlatformService>> & {
   getGhostGrantConfirmBridge?: typeof desktopGrantBridge;
   getGhostSetupCoordinator?: typeof desktopSetupCoordinator;
@@ -2294,6 +2299,40 @@ function getCindyGhostsMcpDeps(
       if (final.state !== 'ready') return { ok: false, errorCode: 'SETUP_REQUIRED' };
       return { ok: true, status: 'ready', ghostId: target.id,
         message: 'Host setup is ready. No plugin business operation was executed. Platform permissions are verified only by the requested operation.' };
+    },
+    callEvaluate: async (request, signal) => {
+      if (!ports.callEvaluate) return { ok: false, errorCode: 'UNAVAILABLE', message: '当前主机尚未接入决策和重排模型', retryable: false, outcomeKnown: true };
+      const imageGrants: Array<() => boolean> = [];
+      const sessionContext = resolveSessionContext();
+      const assertCurrent = () => {
+        const live = requireLiveSessionInstance(sessionContext?.sessionId, sessionContext?.sessionInstanceId, hostDeps.getLiveSessionGrantState);
+        if (!live.ok) throw new EvaluationError('PERMISSION_DENIED', live.message);
+        if (imageGrants.some(isCurrent => !isCurrent())) throw new EvaluationError('PERMISSION_DENIED', '图片文件授权已变化');
+      };
+      return requireService('callEvaluate')(request, {
+        sessionId: sessionContext?.sessionId, signal, assertCurrent,
+        readImage: async ref => {
+          assertCurrent();
+          if (!sessionContext?.workingDir || Boolean(sessionContext.remoteHostId)) throw new EvaluationError('PERMISSION_DENIED', '无法读取当前任务的本机图片');
+          const candidate = ref.startsWith('cindy-media://') ? blobStore.resolveSafe(ref).absPath
+            : ref.startsWith('xdt-image://') ? requireService('resolveEvaluationImage')(ref).absPath
+            : path.resolve(sessionContext.workingDir, ref);
+          const source = classifyLocalAttachmentPath(candidate, sessionContext.workingDir, { mimeForExt: blobStore.mimeForExt });
+          if (source.kind === 'not-local' || source.kind === 'unsupported-type' || !source.mimeType.startsWith('image/')) throw new EvaluationError('INVALID_INPUT', '请提供实际存在的图片文件');
+          const target = source.absPath;
+          const authorization = await authorizeDesktopSessionPath({ ...sessionContext,
+            path: target, toolName: 'evaluate.decisions', operation: 'read',
+          }, hostDeps.getLiveSessionGrantState);
+          if (!authorization.allowed) throw new EvaluationError('PERMISSION_DENIED', '当前任务没有读取此图片的权限');
+          if (authorization.isCurrent) imageGrants.push(authorization.isCurrent);
+          assertCurrent();
+          if (!await authorizedSessionPathStillBound(sessionContext.workingDir, target)) throw new EvaluationError('PERMISSION_DENIED', '图片路径已变化');
+          const bytes = await requireService('readEvaluationImageFile')(target);
+          assertCurrent();
+          if (!await authorizedSessionPathStillBound(sessionContext.workingDir, target)) throw new EvaluationError('PERMISSION_DENIED', '图片路径已变化');
+          return bytes;
+        },
+      });
     },
     callMedia: async (request) => {
       const sessionContext = resolveSessionContext();

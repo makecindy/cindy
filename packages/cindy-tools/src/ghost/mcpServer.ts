@@ -3,6 +3,7 @@ import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from "@cindy/plugin-protocol";
 import { z } from "zod";
 
 import type {
+  CindyEvaluateToolRequest,
   CindyForgeScaffoldTemplate,
   CindyGhostInfo,
   CindyGhostSetupAllowedAction,
@@ -138,6 +139,25 @@ const D_MEDIA = [
   "模型 id、endpoint、Authorization 和 wire model 均由 Host 管理，不要写进 body，不要猜测或覆盖。",
   "Guide 缺失、能力不匹配或当前客户端不支持协议时，结果会带稳定 errorCode、retryable、outcomeKnown 和 allowedActions；可按 allowedActions 换模型、改用其它已授权工具或仍存在的旧链路，不要把 INTERNAL 当成协议能力结论。",
   "prepare 返回的 invocation_id 是一次性付费提交令牌；request 超时或返回 SUBMISSION_OUTCOME_UNKNOWN 时不要自动重提，以免重复扣费。",
+].join("\n");
+
+// Usage, billing and retry lines are repeated on purpose: each description must stand alone.
+const D_EVALUATION_BILLING = "每次调用都会使用用户的 Cindy AI 额度，结果附带估算费用 estimated_cost（缺少价格时为 null）；请求超时或返回 outcomeKnown=false 时不要自动重提，以免重复扣费。";
+const D_EVALUATION_MODELS = "先用 action=list_models 查可用模型，结果同时说明返回字段的含义；model_id、provider_id 用它返回的值。";
+
+const D_DECISIONS = [
+  "调用决策模型，对 state 中的材料回答是否题、单选、等级评分和图片框选，只返回概率、选项、分数或坐标，不生成文字或理由。",
+  "仅在用户明确要求使用决策模型，或需要把概率、分数作为数据交付（例如给一批材料逐条打标签、写入表格）时使用。其他判断由 Agent 自己完成，包括用户直接提出的问题，以及工作中的理解意图、选择做法、检查结果对不对、决定下一步；不要把这些判断交给本工具，也不要先调用本工具再根据分数决定。",
+  D_EVALUATION_BILLING,
+  D_EVALUATION_MODELS,
+  "图片放在 state 顶层数组的 image_url.url，传受管地址或本机路径，不要自行转 Base64。",
+].join("\n");
+
+const D_RERANK = [
+  "调用重排模型，按 query 给 documents 中的每段文本打相关度分数，只返回分数和下标，不生成文字。",
+  "仅在用户明确要求使用重排模型，或需要把相关度分数作为数据交付时使用。Agent 自己阅读材料、挑选相关内容、决定引用哪些段落时直接自己判断；不要把这些判断交给本工具，也不要先调用本工具再根据分数决定。",
+  D_EVALUATION_BILLING,
+  D_EVALUATION_MODELS,
 ].join("\n");
 
 const D_GHOST_FORGE_GUIDE = [
@@ -1326,7 +1346,7 @@ export function createCindyGhostsMcpServer(
   const hostConnectionIds: readonly CindyHostConnectionId[] = ["grok", "im-telegram", "im-feishu", "im-wecom", "im-dingtalk", "im-discord", "im-imessage"];
   if (deps.connectAccount) server.tool(
     "connect_account",
-    "Request an account connection for an installed plugin in the current conversation: kind=plugin and its real ghost_id. The Host presents its supported setup card, including protected manual connection forms, without calling a plugin business tool. Use reauthorize=true when the user asks to reconnect, replace a token, update authorization, or reconfigure an existing connection; saved configuration must not skip that request. Ordinary tasks wait until setup completes or is cancelled; teammate tasks may return a pending card immediately, then the Host resumes them after authorization. Follow the returned status and do not infer provider access from setup readiness. Only if the Host reports no supported setup action, follow the installed plugin's documented login method on the machine running the task. Never request credentials in chat or tool arguments. Built-in Grok login (kind=host, id=grok) remains available only in teammate conversations and does not authorize X or change your model. Teammates connect a messaging platform bot to themselves with kind=host, id=im-telegram, im-feishu, im-wecom, im-dingtalk, im-discord or im-imessage (local BlueBubbles iMessage); the owner types its credentials on the card on the trusted desktop, never in chat. Do not invent connectors, URLs or credentials.",
+    "Request an account connection for an installed plugin in the current conversation: kind=plugin and its real ghost_id. When a requested task needs missing or expired plugin authorization, call this tool with the discovered plugin identity to show its native connection button instead of sending the user to settings. The Host presents its supported setup card, including protected manual connection forms, without calling a plugin business tool; the user starts authorization with the card button and the connection stays on the task device. Use reauthorize=true when the user asks to reconnect, replace a token, update authorization, or reconfigure an existing connection; saved configuration must not skip that request. Ordinary tasks wait until setup completes or is cancelled; teammate tasks may return a pending card immediately, then the Host resumes them after authorization. Follow the returned status and do not infer provider access from setup readiness. Only if the Host reports no supported setup action, follow the installed plugin's documented login method on the machine running the task. Never request credentials in chat or tool arguments. Built-in Grok login (kind=host, id=grok) remains available only in teammate conversations and does not authorize X or change your model. Teammates connect a messaging platform bot to themselves with kind=host, id=im-telegram, im-feishu, im-wecom, im-dingtalk, im-discord or im-imessage (local BlueBubbles iMessage); the owner types its credentials on the card on the trusted desktop, never in chat. Do not invent connectors, URLs or credentials.",
     { kind: z.enum(["host", "plugin"]), id: z.string().min(1).max(256), namespace: ghostNamespaceInput, reauthorize: z.boolean().optional().describe("Reopen supported setup for an explicit reconnect, token replacement, authorization update or reconfiguration request, or a known authorization/scope failure") },
     async ({ kind, id, namespace, reauthorize }, extra) => {
       const hostId = hostConnectionIds.find((candidate) => candidate === id);
@@ -1415,6 +1435,51 @@ export function createCindyGhostsMcpServer(
     },
     async (input, extra) =>
       handleGhostCall(deps, input, extractAgentToolUseId(extra), extra.signal),
+  );
+
+  const evaluationModelFields = {
+    model_id: z.string().max(256).optional().describe("list_models 返回的模型 id；只有一个可用模型时可省略"),
+    provider_id: z.string().max(128).optional().describe("list_models 返回的 provider_id"),
+  };
+  const callEvaluation = async (request: CindyEvaluateToolRequest, signal: AbortSignal) => {
+    if (!deps.callEvaluate) return textResult({ ok: false, errorCode: "UNAVAILABLE", message: "当前主机不支持决策和重排" }, true);
+    const result = await deps.callEvaluate(request, signal);
+    return textResult(result, result.ok === false);
+  };
+
+  server.tool(
+    "model_decisions",
+    D_DECISIONS,
+    {
+      action: z.enum(["list_models", "request"]),
+      ...evaluationModelFields,
+      questions: z.record(z.string(), z.object({
+        type: z.enum(["noul", "choice", "score", "box"]).describe("noul 是否题；choice 单选；score 按等级打分；box 在图片中框出目标，需要图片且仅部分模型支持"),
+        instructions: z.string().describe("这道题要判断的内容"),
+        criteria: z.unknown().optional().describe("noul 可省略，或 {\"true\":\"成立的标准\",\"false\":\"不成立的标准\"}；choice 必填 {\"选项ID\":\"选项说明\"}；score 必填，按从低到高排列的等级说明数组，如 [\"平静\",\"不满\",\"愤怒\"]；box 省略"),
+      })).optional().describe("request 必填：键是自定的问题 ID，answers 用同一 ID 返回"),
+      state: z.unknown().optional().describe("request 必填的判断材料：字符串、对象或数组。图片仅放在顶层数组的 {type:'image_url',image_url:{url:'本机路径或受管地址'}} 中"),
+    },
+    async ({ action, ...input }, extra) => callEvaluation(
+      action === "list_models" ? { action, api: "decisions" } : { action: "decisions", ...input },
+      extra.signal,
+    ),
+  );
+
+  server.tool(
+    "model_rerank",
+    D_RERANK,
+    {
+      action: z.enum(["list_models", "request"]),
+      ...evaluationModelFields,
+      query: z.string().optional().describe("request 必填：用来衡量相关度的问题或查询"),
+      documents: z.array(z.string()).optional().describe("request 必填：候选文本；结果中的 index 是这里的下标（从 0 开始）"),
+      top_n: z.number().int().positive().optional().describe("可选：只返回最相关的前 N 条，不超过 documents 数量"),
+    },
+    async ({ action, ...input }, extra) => callEvaluation(
+      action === "list_models" ? { action, api: "rerank" } : { action: "rerank", ...input },
+      extra.signal,
+    ),
   );
 
   server.tool(

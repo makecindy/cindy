@@ -33,6 +33,8 @@ describe('desktop Claude read-only allowlist', () => {
     ['cindy_scheduler', 'schedule_delete'],
     ['cindy_helper', 'delete_session'],
     ['cindy_helper', 'rewind_session'],
+    ['cindy_helper', 'export_session'],
+    ['cindy_helper', 'import_session'],
     ['cindy_helper', 'terminal_start'],
     ['cindy_helper', 'terminal_write'],
     ['cindy_helper', 'terminal_resize'],

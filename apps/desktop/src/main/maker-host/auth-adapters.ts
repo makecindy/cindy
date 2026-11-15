@@ -1,4 +1,4 @@
-import { chatgptAccountIdFromIdToken, chatgptAccountIdFromTokens, currentCodexCredentialGeneration, captureCodexOAuthDispatchProof, type CodexCredentialGeneration } from './codexCredentialRead.js';
+import { chatgptAccountIdFromIdToken, chatgptAccountIdFromTokens, currentCodexCredentialGeneration, captureCodexOAuthDispatchProof, parseCodexCredentialGeneration } from './codexCredentialRead.js';
 export { chatgptAccountIdFromIdToken, chatgptAccountIdFromTokens } from './codexCredentialRead.js';
 import { readCodexLocalAuthState } from './codex-local-auth-state.js';
 import { cindyManagedSkillRoots, listCindyManagedSkills } from './managed-skills.js';
@@ -26,7 +26,6 @@ export { getCodexHome } from './codex-home-path.js';
 import { app, safeStorage } from 'electron';
 import { isCodexAccountProvider, codexAccountState, codexAccountHome, prepareCodexAccountHome, parseCodexAccountIdentity } from './codex-account-auth.desktop.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { promises as fsp, existsSync } from 'node:fs';
@@ -297,7 +296,7 @@ export function isCodexAuthInheritedFromSystemCli(): boolean {
     const codexHome = getCodexHome();
     const localAuth = path.join(codexHome, 'auth.json');
     if (shouldSuppressLocalCodexAuth(codexHome, localAuth)) return false;
-    const systemAuth = path.join(os.homedir(), '.codex', 'auth.json');
+    const systemAuth = getCodexCliAuthPath();
     if (!existsSync(localAuth) || !existsSync(systemAuth)) return false;
     return pathsReferToSameFileSync(localAuth, systemAuth);
   } catch {
@@ -320,40 +319,6 @@ function pathsReferToSameFileSync(left: string, right: string): boolean {
     fs.statSync(left, { bigint: true }),
     fs.statSync(right, { bigint: true }),
   );
-}
-
-const DECIMAL_FILE_ID_RE = /^(0|[1-9]\d*)$/;
-
-function parseCodexCredentialGeneration(
-  value: string | null | undefined,
-): CodexCredentialGeneration | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value) as Partial<Record<keyof CodexCredentialGeneration, unknown>>;
-    const parseFileId = (candidate: unknown): string | null => {
-      if (typeof candidate === 'string' && DECIMAL_FILE_ID_RE.test(candidate)) return candidate;
-      if (typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 0) {
-        return String(candidate);
-      }
-      return null;
-    };
-    const dev = parseFileId(parsed.dev);
-    const ino = parseFileId(parsed.ino);
-    if (
-      dev === null ||
-      ino === null ||
-      typeof parsed.size !== 'number' ||
-      !Number.isFinite(parsed.size) ||
-      typeof parsed.mtimeMs !== 'number' ||
-      !Number.isFinite(parsed.mtimeMs) ||
-      typeof parsed.sha256 !== 'string' ||
-      !/^[0-9a-f]{64}$/i.test(parsed.sha256)
-    )
-      return null;
-    return { dev, ino, size: parsed.size, mtimeMs: parsed.mtimeMs, sha256: parsed.sha256 };
-  } catch {
-    return null;
-  }
 }
 
 async function pathsReferToSameFile(left: string, right: string): Promise<boolean> {

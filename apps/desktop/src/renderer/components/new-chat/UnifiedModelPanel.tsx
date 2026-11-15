@@ -314,6 +314,8 @@ export interface UnifiedModelPanelProps {
   overlayClassName?: string;
   /** deviceId 目录读取中/失败时取代「没有匹配的模型」。 */
   catalogNotice?: ReactNode;
+  /** Local catalog pending replaces only the empty state, preserving ready cross-source rows. */
+  emptyCatalogNotice?: ReactNode;
   /**
    * 远程 Agent：左侧栏在任务所在电脑的供应商之后列出其他电脑上的供应商。选中那台
    * 电脑上的模型 = Agent 在那台电脑运行，任务和文件仍在原电脑。
@@ -442,6 +444,7 @@ export function UnifiedModelPanel({
   overlayClassName,
   panelWidthFluid = false,
   catalogNotice,
+  emptyCatalogNotice,
   remoteSources,
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
@@ -1528,15 +1531,17 @@ export function UnifiedModelPanel({
             catalogNotice
           ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all')
             && !(favoritesPinnedHasRows && effectiveRail.kind === 'favorites' && !query.trim()) ? (
-            // 与跨 Harness 提示一样,空态文案在已定宽的面板内换行,不参与 max-content 撑宽。
-            <div className="w-0 min-w-full px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
-              {/* 最近 / ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;两格常驻后必经)。 */}
-              {!query.trim() && effectiveRail.kind === 'favorites'
-                ? t('newChat.modelSelector.unified.favoritesEmpty')
-                : !query.trim() && effectiveRail.kind === 'recent'
-                  ? t('newChat.modelSelector.unified.recentEmpty')
-                  : t('newChat.modelSelector.search.noResults')}
-            </div>
+            emptyCatalogNotice ?? (
+              // 与跨 Harness 提示一样,空态文案在已定宽的面板内换行,不参与 max-content 撑宽。
+              <div className="w-0 min-w-full px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
+                {/* 最近 / ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;两格常驻后必经)。 */}
+                {!query.trim() && effectiveRail.kind === 'favorites'
+                  ? t('newChat.modelSelector.unified.favoritesEmpty')
+                  : !query.trim() && effectiveRail.kind === 'recent'
+                    ? t('newChat.modelSelector.unified.recentEmpty')
+                    : t('newChat.modelSelector.search.noResults')}
+              </div>
+            )
           ) : (
             sections.map((section) => (
               <div key={section.key} role="group" aria-label={sectionLabel(section)}>

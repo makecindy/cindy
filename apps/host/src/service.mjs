@@ -64,6 +64,10 @@ export function createHostService(deps) {
     if (url.pathname === '/api/sessions/list') {
         return { status: 200, body: await deps.listSessions(body) };
     }
+    if (url.pathname === '/api/project-info/auto-icon') return { status: 200, body: await deps.resolveAutomaticProjectIcon(body) };
+    if (url.pathname === '/api/project-info/image') return { status: 200, body: await deps.readProjectIconImage(body) };
+    if (url.pathname === '/api/project-info/get') return { status: 200, body: await deps.readProjectInfo() };
+    if (url.pathname === '/api/project-info/set') return { status: 200, body: await deps.updateProjectInfo(body) };
     if (url.pathname === '/api/project-aliases/list') {
         return { status: 200, body: await deps.listProjectAliases() };
     }
