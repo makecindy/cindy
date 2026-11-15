@@ -60,7 +60,8 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
     }).catch(() => { if (!cancelled) setError(t('bots.profile.avatarSelectionFailed')); });
     return () => { cancelled = true; alive.current = false; };
   }, [initialPortrait]);
-  const duplicate = bots.some(bot => bot.status !== 'archived' && normalizeBotName(bot.name) === normalizeBotName(name));
+  // Creation publishes its own optimistic profile before the request settles.
+  const duplicate = !creating && bots.some(bot => bot.status !== 'archived' && normalizeBotName(bot.name) === normalizeBotName(name));
   const close = () => { if (onClose) onClose(); else navigate('/bots'); };
   const create = async () => {
     if (!name.trim() || duplicate || submitting.current || !portrait) return;

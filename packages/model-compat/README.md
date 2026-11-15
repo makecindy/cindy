@@ -97,6 +97,13 @@ Responses verbosity/reasoning policy; DeepSeek adjacency, empty result annotatio
 query fields and item IDs; xAI Responses web-search fields and subscription-only function schemas;
 OpenCode Go additional-tool declarations; and Codex custom/namespace/tool-search round trips.
 
+Kimi `k3` / `k3[1m]` Codex replay uses `normalizeKimiToolHistory` on the resolved
+`kimi` / `kimi-code` Chat route. The host invokes it in the local bridge, which bypasses
+the proxy's gateway transform chain. Only complete, uniquely paired tool batches may move
+results ahead of interleaved assistant messages; user, developer and reasoning boundaries,
+ambiguous or incomplete batches, and compact requests remain unchanged. Model IDs, item
+payloads and tool call IDs are preserved. This does not add bare `k3` to the gateway allowlist.
+
 The imported declarations also retain upstream transport metadata (`modelWireDefaults`,
 `responsesPath`, `googleMode`, `authKind`) and policies owned by OpenCodex's transport
 (`modelResponsesTerminalRepair`, `openaiChatEofTolerance`, `promptCacheKey`,

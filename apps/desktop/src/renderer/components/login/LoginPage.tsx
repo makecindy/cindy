@@ -76,6 +76,7 @@ import {
 import { PANEL_FIXED_SCALE } from './loginScale';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
 import { getSsoOrgHistory } from '@/state/ssoOrgHistory';
+import appI18n from 'i18next';
 
 /**
  * 标题旁区域徽标的 i18n key(2026-07-27 拍板)。
@@ -1294,6 +1295,9 @@ export function LoginPage({
       else void dispatch({ type: 'back' });
     };
     if (loginState?.step === 'error' || credentialStoreFailed || rateLimited) {
+      const httpStatus = loginState?.step === 'error' && loginState.code === 'INVALID_RESPONSE'
+        ? loginState.httpStatus : undefined;
+      const networkResponseFailed = Number.isInteger(httpStatus) && httpStatus! >= 400 && httpStatus! <= 599;
       // A rate limit can cover a still-valid form. Dismiss only the notice:
       // resetting main's flow would discard its ticket and require another code.
       const resumeForm = rateLimited && loginState !== null && !canLeaveProviderLoad;
@@ -1320,6 +1324,7 @@ export function LoginPage({
               onClick={returnFromError}
             />
             <LoginTitleBlock
+              subtitleMaxLines={networkResponseFailed ? 6 : undefined}
               title={t(
                 credentialStoreFailed ? 'credentialStore.dialog.title' : 'login.unavailable',
               )}
@@ -1332,7 +1337,9 @@ export function LoginPage({
                         time: new Date(retryAt).toLocaleString(i18n.language),
                       })
                     : t('login.rateLimit.unknownWait')
-                  : t(credentialStoreFailed ? 'login.savedLoginPreserved' : 'login.errors.fallback')
+                  : networkResponseFailed
+                    ? t('login.networkResponseHint')
+                    : t(credentialStoreFailed ? 'login.savedLoginPreserved' : 'login.errors.fallback')
               }
             />
             {(credentialStoreFailed || rateLimited) && (
@@ -1361,7 +1368,7 @@ export function LoginPage({
                   )}
             </LoginPrimaryButton>
             <LoginErrorText>
-              {t(
+              {networkResponseFailed ? `HTTP ${httpStatus}` : t(
                 `login.errors.${
                   credentialStoreFailed
                     ? 'CREDENTIAL_STORE_UNAVAILABLE'
@@ -1759,7 +1766,7 @@ function AccountDeletionStatusPanel({
 function formatAccountDeletionDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
+  return new Intl.DateTimeFormat(appI18n.language, { dateStyle: 'medium' }).format(date);
 }
 
 function SsoGlyph() {

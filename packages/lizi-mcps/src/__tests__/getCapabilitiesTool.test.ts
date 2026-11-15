@@ -87,7 +87,7 @@ describe('capabilities data source', () => {
   it('computer-use 说明未开启时的判断方法、设置入口深链与开启后的接续', () => {
     const entry = findCapability('computer-use');
     expect(entry).toBeDefined();
-    expect(entry!.detail).toContain('cindy://settings/builtin-tools');
+    expect(entry!.detail).toContain('get_settings_link');
     expect(entry!.detail).toContain('mcp__cindy_computer__');
     expect(entry!.detail).toContain('osascript');
     expect(entry!.detail).toContain('新建任务');

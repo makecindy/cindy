@@ -33,10 +33,15 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
     const bot = args[0] === 'qa-work' || args[0] === 'qa-permission' ? 'qa-design' : args[0] === 'qa-question' ? 'qa-check' : 'qa-research';
     const execution = args[0] === 'qa-work' ? 'qa-e2-work' : args[0] === 'qa-permission' ? 'qa-e2' : args[0] === 'qa-question' ? 'qa-e3' : 'qa-e1';
     return [{ clientId: BOT_GROUP_CLIENT_ID.memberTurn(args[0] === 'qa-work' ? `${GROUP}-work` : GROUP, execution, bot), role: 'user', type: 'text', content: '合成执行输入', createdAt: new Date(NOW - 30_000).toISOString() },
-      { clientId: `note-${execution}`, role: 'assistant', type: 'text', content: '已核对现有信息，正在整理下一步。', createdAt: new Date(NOW - 25_000).toISOString() }];
+      { clientId: `note-${execution}`, role: 'assistant', type: 'text', content: '已核对现有信息，正在整理下一步。', createdAt: new Date(NOW - 25_000).toISOString() },
+      ...(args[0] === 'qa-work' ? [
+        { clientId: 'qa-full-input', role: 'tool_use', toolUseId: 'qa-full-input', content: { toolName: 'Bash', toolUseId: 'qa-full-input',
+          input: { command: `printf "${'group process input '.repeat(15)}COMPLETE_INPUT_END"` } }, createdAt: new Date(NOW - 24_000).toISOString() },
+        { clientId: 'qa-full-input-result', role: 'tool_result', toolUseId: 'qa-full-input', content: '合成工具结果，不会执行命令。', createdAt: new Date(NOW - 23_000).toISOString() },
+      ] : [])];
   }
   const groupId = request?.ref?.id ?? request?.resourceRef?.id;
-  if (!groupId || ![GROUP, `${GROUP}-work`, `${GROUP}-talk`, `${GROUP}-member`, `${GROUP}-legacy`].includes(groupId)) return undefined;
+  if (!groupId || ![GROUP, `${GROUP}-work`, `${GROUP}-talk`, `${GROUP}-member`, `${GROUP}-legacy`, `${GROUP}-peer`].includes(groupId)) return undefined;
   if (channel === 'maker:remote-resources:invoke') { if (request?.actionId === 'stop') running = false; return { effects: [] }; }
   if (channel !== 'maker:remote-resources:get') return undefined;
   if (groupId.endsWith('-work') || groupId.endsWith('-talk')) {
@@ -62,7 +67,7 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
         ] },
       } }] };
   }
-  return { ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: groupId }, revision: String(running),
+  const resource = { ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: groupId }, revision: String(running),
     display: { title: '群内执行 · 模拟数据' }, actions: [], links: [], blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: '', data: {
       id: groupId, name: '群内执行 · 模拟数据', serverBacked: true, replyMode: 'mentioned', speakingMode: 'auto',
       members, plans: [], supportsScopedStop: !groupId.endsWith('-legacy'), canStopAll: !groupId.endsWith('-member'), createdAt: NOW, updatedAt: NOW,
@@ -75,4 +80,17 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
         { botId: 'qa-research', sessionId: null, activity: 'reply', executionId: 'qa-e4', executionStatus: 'queued' },
       ] : [] },
     } }] };
+  if (groupId.endsWith('-peer')) {
+    const data = resource.blocks[0].data;
+    data.members = [{ ...members[0], botId: 'qa-cindy', actorId: 'qa-cindy', name: 'Cindy', isOwned: false }];
+    data.canStopAll = false;
+    Object.assign(data.round, { canStop: false, speakers: [
+      { botId: 'qa-cindy', sessionId: null, activity: 'reply', executionId: 'qa-public-1', executionStatus: 'running' },
+      { botId: 'qa-cindy', sessionId: null, activity: 'reply', executionId: 'qa-public-2', executionStatus: 'needs_input' },
+    ] });
+    data.messages = [{ id: 'qa-public-reply', sequence: 1, kind: 'message', authorKind: 'bot', isSelf: false,
+      content: '已收到，我会把结果发到群里。', createdAt: NOW - 40_000,
+      ...{ authorBotId: 'qa-cindy', authorName: 'Cindy' } }];
+  }
+  return resource;
 }

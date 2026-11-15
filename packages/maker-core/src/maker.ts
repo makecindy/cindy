@@ -185,6 +185,8 @@ export class SessionCreationCleanupPendingError extends Error {
 }
 
 export interface CreateSessionOptions extends StartSessionOptions {
+  /** Host-only opt-in: retain confirmed-exit evidence for bounded startup recovery. */
+  preserveStartupStoppedError?: boolean;
   /** Host caller preferences before generated context; retained only by the live Session. */
   hostStartupPreferences?: SessionStartupPreferences;
   agentKind: AgentKind;
@@ -790,7 +792,7 @@ export class Maker {
     });
 
     const startedAt = Date.now();
-    const startOpts: CreateSessionOptions = { ...opts };
+    const { preserveStartupStoppedError, ...startOpts }: CreateSessionOptions = { ...opts };
     const notifyStartFailed = async (
       stage: SessionStartFailureContext['stage'],
       error: unknown,
@@ -951,7 +953,7 @@ export class Maker {
           });
         });
       }
-      throw startupError;
+      throw runtimeStopped && preserveStartupStoppedError ? error : startupError;
     }
     const rejectCancelledStartup = async (): Promise<never> => {
       let cleanupFailed = false;
@@ -1058,6 +1060,7 @@ export class Maker {
           workDir: opts.workingDir,
           title: opts.title ?? DEFAULT_DRAFT_SESSION_TITLE,
           model: opts.model,
+          providerId: startOpts.providerId,
           workspaceKind: opts.workspaceKind,
           projectDir: opts.projectDir,
           effort: opts.effort,
@@ -1970,10 +1973,17 @@ export class Maker {
     if (!agent) {
       return { binaryReady: false, binaryPath: null, authReady: false };
     }
+    // A host may resolve the runtime lazily; a missing install is a status, not an IPC error.
+    let binaryPath: string | null = null;
+    try {
+      binaryPath = agent.getBinaryPath() || null;
+    } catch {
+      binaryPath = null;
+    }
     const auth = await agent.getAuthState();
     return {
-      binaryReady: !!agent.getBinaryPath(),
-      binaryPath: agent.getBinaryPath(),
+      binaryReady: binaryPath !== null,
+      binaryPath,
       authReady: auth.authenticated,
       identity: auth.identity,
     };

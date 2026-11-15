@@ -82,3 +82,13 @@ describe('desktopAnthropicImageCodec', () => {
     })).resolves.toBeNull();
   });
 });
+
+// Unit: Decisions accepts only PNG/JPEG. Existing bridge calls must still pass WebP through.
+it('converts WebP only when the caller restricts allowed formats', async () => {
+  const bytes = await sharp({ create: { width: 256, height: 256, channels: 3, background: '#336699' } }).webp().toBuffer();
+  const input = { data: bytes.toString('base64'), mediaType: 'image/webp', maxEdge: 1568, qualities: [80], hardCap: 1024 * 1024 };
+  expect((await desktopAnthropicImageCodec.normalize(input))?.mediaType).toBe('image/webp');
+  const output = await desktopAnthropicImageCodec.normalize({ ...input, allowedMediaTypes: ['image/png', 'image/jpeg'] });
+  expect(output?.mediaType).toBe('image/jpeg');
+  expect((await sharp(Buffer.from(output!.data, 'base64')).metadata()).format).toBe('jpeg');
+});

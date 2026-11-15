@@ -18,3 +18,11 @@ export interface GithubSetupState {
   verificationUrl?: 'https://github.com/login/device';
   error?: 'unsupported' | 'install' | 'login' | 'timeout';
 }
+
+/** Public connection state only; App credentials remain on the server. */
+export interface GithubAppConnectionState {
+  available: boolean;
+  login?: string | null;
+  repositories?: string[];
+  unavailable?: string[];
+}

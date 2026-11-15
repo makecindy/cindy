@@ -17,7 +17,7 @@ vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-to
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download,
   get cacheGeneration() { return fixture.cacheGeneration; } }) }));
-vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => ({ projectDir: '/group/project', plans: {} }), save: vi.fn() }) }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
@@ -495,6 +495,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
       return response(route);
     });
     service = withChatServer(local as unknown as BotGroupChatService, { onChanged,
+      validateProjectDir: async (dir: string) => ({ ok: true as const, dir }),
       ensureLane: async () => ({ ok: true, sessionId: 'lane' }), abortLane: async () => {},
       dispatch: async () => { dispatchedAt = Date.now(); return { ok: true }; } } as unknown as BotGroupChatServiceDeps);
     await vi.advanceTimersByTimeAsync(3000);

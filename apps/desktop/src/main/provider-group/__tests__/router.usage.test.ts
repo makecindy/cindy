@@ -99,6 +99,20 @@ describe('OpenAI subscription group routing', () => {
     h.usage.set('local', { ...quota(100, 20), primary: { usedPercent: 100, resetsAt: NOW / 1000 } });
     expect(await h.pick()).toMatchObject({ member: { key: 'local' } });
   });
+
+  // Unit regression (2026-11-13): full plan windows still allow native-pool credit requests.
+  // Earlier routing cases had no native pool and only covered quota-based exclusion.
+  it('routes full-window native pools to upstream but retains real model cooldowns', async () => {
+    const h = openaiHarness();
+    const pooled = { nativeAccountPool: true, appServerBuckets: { codex: quota(100, 100) } };
+    h.usage.set('local', pooled);
+    h.usage.set(h.remote, pooled);
+    expect(await h.pick()).toMatchObject({ member: { key: 'local' } });
+    expect((await h.router.view('openai')).members[0].state).toBe('available');
+    h.router.markCooling('openai', 'local', NOW + 100_000, GPT);
+    expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
+    expect(h.router.coolingUntil('openai', 'local', GPT)).toBe(NOW + 100_000);
+  });
 });
 
 function harness(readPoolModelAvailability?: ProviderGroupRouterDeps['readPoolModelAvailability']) {
@@ -139,6 +153,18 @@ describe('provider-group quota routing', () => {
       .toMatchObject({ kind });
     expect(h.router.coolingUntil('anthropic', member.key, OPUS))
       .toBe(kind === 'member' ? null : NOW + 100_000);
+  });
+
+  // PR #10150 review, unit: a same-account pick launches with the own-computer grant, so its cooling probe of the
+  // local pool must use the same grant; picks for guests keep the strict one.
+  it('probes the local pool with the own-computer grant only for same-account picks', async () => {
+    const h = harness(async (_member, _model, options) => options?.ownComputer === true);
+    const exclude = new Set([h.config.members[1].key]);
+    h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, exclude }))
+      .toMatchObject({ kind: 'unavailable' });
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, ownComputer: true, exclude }))
+      .toMatchObject({ kind: 'member', member: { key: 'local' } });
   });
 
   // #9833, unit: recovery must not erase newer failures or unrelated scopes.

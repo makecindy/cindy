@@ -360,6 +360,7 @@ function createOutState() {
     deferredOpenerConsumes: [] as DeferredOpenerConsume[],
     evictedOpeners: [] as string[],
     openThreadByTrigger: new Map< string, { ts: number; promise: Promise<OpenThreadOutcome> } >(),
+    questionRespondents: new Map<string, { respondent: string; closed: boolean }>(),
     cardLanes: new Map<string, { ts: number; lane: string }>(),
   };
 }
@@ -379,6 +380,7 @@ function sameBoundAccount(next: BotCredentials): boolean {
  */
 
 function clearAccountScopedOutboundState(): void {
+  S().questionRespondents.clear();
   S().laneAnchors.clear();
   S().patchableOpeners.clear();
   S().openerTriggers.clear();
@@ -420,6 +422,7 @@ export function unbindClient(): void {
   S().client = null;
   S().creds = null;
   S().cardLanes.clear();
+  S().questionRespondents.clear();
   // patchableOpeners / laneAnchors 不随 unbind 清空(见 bindClient 的账号替换清理)。
 }
 
@@ -1216,6 +1219,18 @@ function pruneCardLanes(): void {
 
 /** 发卡成功后在 lane 通道登记 card messageId → laneUserId;私聊发送不登记。 */
 /** 登记交互卡的发卡 lane(按钮回调 resolveCardLane 反查用)。 */
+export function registerQuestion(messageId: string, respondent: string): void {
+  S().questionRespondents.set(messageId, { respondent, closed: false });
+  while (S().questionRespondents.size > 512) S().questionRespondents.delete(S().questionRespondents.keys().next().value!);
+}
+export function canAnswerQuestion(messageId: string, respondent: string): boolean {
+  const row = S().questionRespondents.get(messageId);
+  return !!row && row.respondent === respondent && !row.closed;
+}
+export function closeQuestion(messageId: string): void {
+  const row = S().questionRespondents.get(messageId);
+  if (row) row.closed = true;
+}
 export function registerCardLane(userId: string, messageId: string): void {
   if (!decodeLaneUserId(userId)) return;
   S().cardLanes.set(messageId, { ts: Date.now(), lane: userId });

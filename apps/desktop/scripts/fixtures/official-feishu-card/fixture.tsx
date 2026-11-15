@@ -137,12 +137,9 @@ void mountPage({
       get: async () => ({ hook: view(String(ctx.data.kind)) }),
       onStatusChanged: subscription('hook-status'),
       providerBindSelect: async () => ({ hook: view('confirmed') }),
-      onPrefsChanged: subscription('hook-prefs'),
-      onProviderPrefsChanged: subscription('hook-provider-prefs'),
+      onSharedProjectPrefsChanged: subscription('hook-shared-prefs'),
       onWorkspaceProviderSourcesChanged: subscription('hook-sources'),
-      getProviderWorkspacePrefs: async () => ({
-        prefs: { provider: 'feishu', bindingId: null, scopeId: null, bound: false, prefs: [] },
-      }),
+      getSharedProjectPrefs: async () => ({ prefs: { prefs: [] } }),
       getWorkspaceProviderSources: async () => ({ entries: [] }),
     },
     maker: {

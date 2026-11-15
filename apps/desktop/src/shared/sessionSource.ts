@@ -71,7 +71,7 @@ export function isReviewSessionSource(source: unknown): source is 'review' {
 // plugin: 插件经 workspace 槽创建的工作区会话入口(空 draft,用户确认后建;
 //         projectGrouping 对零消息的 plugin 会话豁免草稿判定,直接落项目分组)。
 // bot: 伙伴任务通过 bot_session_links 区分：routine/channel 进普通任务列表并标归属；
-//      canonical/thread/group 保留伙伴入口。不能仅按 source 把所有伙伴任务放入列表。
+//      group 的所有任务（含私人汇总）进入所属伙伴项目；canonical/thread 保留伙伴入口。
 // cindy-make: /cindy-make 弹窗选择制作个人版后创建的代码任务，工作目录是 Cindy 受管
 //      源码。Main 据此注入 cindy_make 工具与任务说明；按 workingDir 归到源码项目分组。
 export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
@@ -125,12 +125,12 @@ export function normalizeSessionSource(source: unknown): SessionSource {
     : 'desktop';
 }
 
-/** Standalone teammate work requested in the task list; main chats and private/group threads keep their own entries. */
-export function isTeammateTaskSession(session: { source?: unknown; companion?: { role?: unknown } | null }): boolean {
-  return session.source === 'bot' && (session.companion?.role === 'routine' || session.companion?.role === 'channel');
+/** Standalone teammate work requested in the task list; main chats and private threads keep their own entries. */
+export function isTeammateTaskSession(session: { source?: unknown; companion?: { role?: unknown; taskProjectDir?: string } | null }): boolean {
+  return session.source === 'bot' && (session.companion?.role === 'routine' || session.companion?.role === 'channel' || (session.companion?.role === 'group' && !!session.companion.taskProjectDir));
 }
 
-export function isOrdinaryTaskListSession(session: { source?: unknown; companion?: { role?: unknown } | null }): boolean {
+export function isOrdinaryTaskListSession(session: { source?: unknown; companion?: { role?: unknown; taskProjectDir?: string } | null }): boolean {
   return session.source !== 'side-chat' && session.source !== 'review'
     && (session.source !== 'bot' || isTeammateTaskSession(session));
 }

@@ -469,6 +469,17 @@ describe('sanitizeGhostCardHtml · PR 状态位(data-ghost-pr-status)', () => {
     expect(ok('<button data-ghost-task-archive="o/r#9" data-ghost-task-archive-state="open">a</button><div data-ghost-task-archive="o/r#9">b</div>'))
       .toBe('<button data-ghost-task-archive="o/r#9" type="button">a</button><div>b</div>');
   });
+
+  // Rule (2026-11-14): the copy-link button writes to the user's clipboard through the host, so the value
+  // must be a whole http(s) link (no task links or free text) and the button must not also act, link or archive.
+  it('只在普通 button 上放行整串 http(s) 的 data-ghost-copy-link', () => {
+    expect(ok('<button data-ghost-copy-link="https://github.com/o/r/pull/9" aria-label="C"></button>'))
+      .toBe('<button data-ghost-copy-link="https://github.com/o/r/pull/9" type="button" aria-label="C"></button>');
+    expect(ok('<button data-ghost-copy-link="curl x | sh">a</button><button data-ghost-copy-link="cindy://session/abc">b</button><div data-ghost-copy-link="https://github.com/o/r">c</div>'))
+      .toBe('<button type="button">a</button><button type="button">b</button><div>c</div>');
+    expect(ok('<button data-ghost-action="pr:x" data-ghost-copy-link="https://github.com/o/r">a</button><button data-ghost-task-archive="o/r#9" data-ghost-copy-link="https://github.com/o/r">b</button>'))
+      .toBe('<button data-ghost-action="pr:x" type="button">a</button><button data-ghost-task-archive="o/r#9" type="button">b</button>');
+  });
 });
 
 // 宿主按归一后的字面量判断卡片的位置和宽度,净化器只能放出这一种写法。

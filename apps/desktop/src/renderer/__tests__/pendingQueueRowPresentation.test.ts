@@ -45,7 +45,7 @@ function queuedMessage(patch: Partial<QueuedMessage> = {}): QueuedMessage {
 }
 
 describe('getPendingQueueRowPresentation', () => {
-  it('marks messages sent by another session as read-only rows with the sender title', () => {
+  it('allows messages sent by another session to steer without editing their source', () => {
     const presentation = getPendingQueueRowPresentation(
       queuedMessage({
         text: 'follow-up',
@@ -67,7 +67,7 @@ describe('getPendingQueueRowPresentation', () => {
       senderLabel: 'Release checklist',
       displayText: 'follow-up',
       canEdit: false,
-      canSteer: false,
+      canSteer: true,
     });
     expect(
       getPendingQueueRowPresentation(

@@ -19,6 +19,7 @@
 
 import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
+import { classifyDiffLines, type DiffLineType } from '../markdown/diffLineClassification';
 
 interface MarkdownDiffBlockProps {
   /** The raw text contents of a ```diff fenced code block. */
@@ -26,37 +27,26 @@ interface MarkdownDiffBlockProps {
 }
 
 interface DiffLine {
-  type: 'add' | 'del' | 'ctx';
+  type: DiffLineType;
   text: string;
   lineNum: number;
 }
 
 /**
  * Parse pre-prefixed diff text into typed rows.
- * `+++` / `---` / `@@` hunk headers stay as `ctx` so they render in the
+ * File headers outside hunks and `@@` hunk headers stay as `ctx` in the
  * default text color (no red/green bleed onto file headers).
  */
-function parseDiffText(raw: string): DiffLine[] {
+export function parseDiffText(raw: string): DiffLine[] {
   // Trim leading/trailing blank lines so the block doesn't open or close on
   // an empty row — matches how fenced code blocks are usually authored.
   const lines = raw.replace(/^\n+|\n+$/g, '').split('\n');
-  let lineNum = 1;
-  return lines.map((line) => {
-    let type: DiffLine['type'] = 'ctx';
-    let text = line;
-    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) {
-      // diff hunk / file headers — keep raw, render as ctx (no color)
-      type = 'ctx';
-    } else if (line.startsWith('+')) {
-      type = 'add';
-      // Drop the leading '+' and the conventional single space after it.
-      text = line.slice(1).replace(/^ /, '');
-    } else if (line.startsWith('-')) {
-      type = 'del';
-      text = line.slice(1).replace(/^ /, '');
-    }
-    return { type, text, lineNum: lineNum++ };
-  });
+  return Array.from(classifyDiffLines(lines), ({ text: line, type }, i) => ({
+    type,
+    // Drop the diff symbol and conventional single space, preserving the rest.
+    text: type === 'ctx' ? line : line.slice(1).replace(/^ /, ''),
+    lineNum: i + 1,
+  }));
 }
 
 export function MarkdownDiffBlock({ raw }: MarkdownDiffBlockProps) {

@@ -35,11 +35,30 @@ export interface OverrideSettingsFile<T> {
    * 支持"直接改文件即生效"语义的 store 在读取入口调用;不调用 = 原缓存语义。
    */
   invalidateIfChanged(): void;
+  /** 文件存在但读不了(只有 preserveUnreadableFile 的 store 会区分)；此时 read() 返回的是默认值。 */
+  isUnreadable(): boolean;
 }
 
 interface CachedState<T> extends OverrideSettingsState<T> {
   overrides: Record<string, unknown>;
   readStatus: 'missing' | 'readable' | 'unreadable';
+}
+
+/**
+ * The process-wide value of `preserveUnreadableFile` for stores that do not set it. The desktop
+ * never changes it, so an unreadable file is deleted as before. The Host sets it once at boot:
+ * while it shares a settings directory with the desktop window process, it must not delete a
+ * user settings file it cannot read. A store's own `preserveUnreadableFile` takes precedence.
+ */
+let preserveUnreadableFilesByDefault = false;
+
+export function setPreserveUnreadableSettingsFilesByDefault(preserve: boolean): void {
+  preserveUnreadableFilesByDefault = preserve;
+}
+
+/** The same default, for the settings files read outside createOverrideSettingsFile. */
+export function isPreservingUnreadableSettingsFilesByDefault(): boolean {
+  return preserveUnreadableFilesByDefault;
 }
 
 /**
@@ -97,6 +116,7 @@ export function createOverrideSettingsFile<T>(options: {
     const file = options.filePath();
     cachedResolvedPath = file;
     let readStatus: CachedState<T>['readStatus'] = 'missing';
+    const preserveUnreadableFile = options.preserveUnreadableFile ?? preserveUnreadableFilesByDefault;
     try {
       if (fs.existsSync(file)) {
         const stat = fs.statSync(file, { bigint: true });
@@ -105,7 +125,7 @@ export function createOverrideSettingsFile<T>(options: {
         }
         const text = fs.readFileSync(file, 'utf-8');
         const parsed = JSON.parse(text);
-        if (options.preserveUnreadableFile && !isLoggableObject(parsed)) {
+        if (preserveUnreadableFile && !isLoggableObject(parsed)) {
           throw new Error('settings file root must be an object');
         }
         const overrides = isLoggableObject(parsed) ? parsed : {};
@@ -130,14 +150,14 @@ export function createOverrideSettingsFile<T>(options: {
         return toPublicState(cached);
       }
     } catch (err) {
-      if (options.preserveUnreadableFile) readStatus = 'unreadable';
+      if (preserveUnreadableFile) readStatus = 'unreadable';
       options.log.warn(`${options.label} settings read failed; falling back to defaults`, {
         ...(options.logReadErrorDetails === false
           ? {}
           : { error: err instanceof Error ? err.message : String(err) }),
         path: file,
       });
-      if (!options.preserveUnreadableFile) {
+      if (!preserveUnreadableFile) {
         try {
           fs.unlinkSync(file);
         } catch {
@@ -335,6 +355,10 @@ export function createOverrideSettingsFile<T>(options: {
     reset,
     resetAtomic,
     invalidateIfChanged,
+    isUnreadable: () => {
+      readState();
+      return cached?.readStatus === 'unreadable';
+    },
   };
 
   function invalidate(): void {

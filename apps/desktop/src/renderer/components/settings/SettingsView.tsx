@@ -29,6 +29,8 @@ import { Tip } from '@/components/ui/tooltip';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
+import { buildPluginSettingsPages, buildPluginSettingsSearchDocuments, type PluginSettingsPage } from './pluginSettingsNavigation';
+import { getApprovedGhostHostUi, type InstalledGhost } from '../../../shared/ghost';
 import { isLegacyAppearanceDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
 import { SettingsCard, SettingsPageScope, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { SettingsSearchNavigationContext } from './SettingsSearchNavigation';
@@ -88,6 +90,7 @@ const WorktreeRecycleCard = lazy(() => import('./WorktreeRecycleCard').then(modu
 const StorageManagementCard = lazy(() => import('./StorageManagementCard').then(module => ({ default: module.StorageManagementCard })));
 const UserPromptSection = lazy(() => import('./UserPromptSection').then(module => ({ default: module.UserPromptSection })));
 const MemorySection = lazy(() => import('./MemorySection').then(module => ({ default: module.MemorySection })));
+const CompactionSection = lazy(() => import('./CompactionSection').then(module => ({ default: module.CompactionSection })));
 const StreamFadeSection = lazy(() => import('./StreamFadeSection').then(module => ({ default: module.StreamFadeSection })));
 const SessionImportSection = lazy(() => import('./SessionImportSection').then(module => ({ default: module.SessionImportSection })));
 const HelpSection = lazy(() => import('./HelpSection').then(module => ({ default: module.HelpSection })));
@@ -97,6 +100,8 @@ const ComputerUseSection = lazy(() => import('./ComputerUseSection').then(module
 const SettingsCatalogPanel = lazy(() => import('./SettingsCatalogPanel').then(module => ({ default: module.SettingsCatalogPanel })));
 const BillingSettingsSection = lazy(() => import('@/features/billing/BillingPage').then(module => ({ default: module.BillingSettingsSection })));
 const UsageHistorySection = lazy(() => import('./usage/UsageHistorySection').then(module => ({ default: module.UsageHistorySection })));
+const PluginSettingsFields = lazy(() => import('./PluginSettingsSection').then(module => ({ default: module.PluginSettingsFields })));
+const PluginUiView = lazy(() => import('@/cindy-brain/PluginUiView').then(module => ({ default: module.PluginUiView })));
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -106,7 +111,9 @@ const getAgentIslandSoundEnabled = () => getAgentIslandSoundSettings().enabled;
 
 interface SettingsOutletContext {
   sidebarWidth?: number;
+  pluginSettings?: readonly InstalledGhost[];
 }
+const NO_PLUGIN_SETTINGS: readonly InstalledGhost[] = [];
 
 export function SettingsView() {
   const { mode, dataOwnerId } = useAuth();
@@ -157,6 +164,13 @@ function SettingsViewContent() {
   );
   const rawTab = searchParams.get('tab');
   const rawSection = searchParams.get('section');
+  const pluginSettings = outletContext?.pluginSettings ?? NO_PLUGIN_SETTINGS;
+  const pluginPages = useMemo(() => buildPluginSettingsPages(pluginSettings), [pluginSettings]);
+  const pluginSearchDocuments = useMemo(() => buildPluginSettingsSearchDocuments(pluginPages, t('pluginUi.settings')), [pluginPages, t]);
+  const selectedPluginPage = rawTab === 'ghosts' ? pluginPages.find(page =>
+    page.instanceId === searchParams.get('plugin') && (page.contributionId ?? '') === (searchParams.get('pluginView') ?? '')) : undefined;
+  const selectedPluginFields = useMemo(() => selectedPluginPage && !selectedPluginPage.viewId
+    ? getApprovedGhostHostUi(selectedPluginPage.ghost)?.settings : undefined, [selectedPluginPage]);
   const canAccessBilling = canAccessBillingSettings({
     mode,
     membershipKind: user?.membershipKind ?? null,
@@ -174,6 +188,7 @@ function SettingsViewContent() {
     if (raw === 'feishu-bot' || raw === 'slack-bot') return 'im-bot';
     // legacy 别名:旧独立「Tina」(tina) 已并入「IM 机器人」(im-bot)。
     if (raw === 'tina') return 'im-bot';
+    if (raw === 'task-management') return 'storage';
     if (raw === 'billing' && !canAccessBilling) return 'general';
     if (raw === 'usage' && !canAccessUsage) return 'general';
     if (raw === 'agent-island' && !isMac) return 'general';
@@ -182,6 +197,13 @@ function SettingsViewContent() {
     return isSettingsTab(raw) ? raw : 'general';
   }, [canAccessBilling, canAccessUsage, isMac, rawSection, rawTab]);
   const previousTabRef = useRef(activeTab);
+  useEffect(() => {
+    if (rawTab !== 'task-management') return;
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', 'storage');
+    if (!next.has('section')) next.set('section', 'task-management');
+    startTransition(() => setSearchParams(next, { replace: true }));
+  }, [rawTab, searchParams, setSearchParams]);
   const refreshVoiceModelSelection = voiceModelSelection.refresh;
   useEffect(() => {
     // The shared hook outlives each tab; restore the old voice-page remount refresh.
@@ -227,17 +249,19 @@ function SettingsViewContent() {
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     contentScrollRef.current?.scrollTo({ top: 0 });
-  }, [activeTab, piExtensionsPanelOpen]);
+  }, [activeTab, piExtensionsPanelOpen, selectedPluginPage?.id]);
 
   const handleSelectTab = useCallback(
     (tab: SettingsTab) => {
-      if (tab === activeTab && !piExtensionsPanelOpen && !isTabPending) return;
+      if (tab === activeTab && !piExtensionsPanelOpen && !isTabPending && !searchParams.has('plugin')) return;
       const next = new URLSearchParams(searchParams);
       next.delete('openPanel');
       next.delete('ghost');
       next.delete('panel');
       next.delete('imGroup');
       next.delete('section');
+      next.delete('plugin');
+      next.delete('pluginView');
       // providers 页深链参数(connect/wizard)与计费页深链参数(intent):切走 tab 即
       // 作废,防再切回来被误消费。
       next.delete('connect');
@@ -253,11 +277,21 @@ function SettingsViewContent() {
     [activeTab, isTabPending, piExtensionsPanelOpen, searchParams, setSearchParams],
   );
 
+  const selectPluginPage = useCallback((page: PluginSettingsPage, sectionId?: string) => {
+    const next = new URLSearchParams();
+    next.set('tab', 'ghosts'); next.set('plugin', page.instanceId);
+    if (page.contributionId) next.set('pluginView', page.contributionId);
+    if (sectionId) next.set('section', sectionId);
+    startTransition(() => setSearchParams(next, { replace: true }));
+  }, [setSearchParams]);
+
   const handleSelectSearchResult = useCallback(
     ({ tab, sectionId }: { tab: SettingsTab; sectionId: string }) => {
       setSearchActivation((value) => value + 1);
+      const pluginResult = pluginSearchDocuments.find(document => document.entry.id === sectionId);
+      if (tab === 'ghosts' && pluginResult) { selectPluginPage(pluginResult.page, sectionId); return; }
       const next = new URLSearchParams(searchParams);
-      for (const key of ['openPanel', 'ghost', 'panel', 'imGroup', 'connect', 'wizard', 'intent']) {
+      for (const key of ['openPanel', 'ghost', 'panel', 'imGroup', 'connect', 'wizard', 'intent', 'plugin', 'pluginView']) {
         next.delete(key);
       }
       if (tab === 'general') next.delete('tab');
@@ -265,7 +299,7 @@ function SettingsViewContent() {
       next.set('section', sectionId);
       startTransition(() => setSearchParams(next, { replace: true }));
     },
-    [searchParams, setSearchParams],
+    [searchParams, setSearchParams, pluginSearchDocuments, selectPluginPage],
   );
 
   const handleOpenPiExtensions = useCallback(() => {
@@ -339,7 +373,9 @@ function SettingsViewContent() {
       asrProvider: voiceModelSelection.selection.asrProvider,
     } : undefined,
   }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled, agentIslandLiveActivitySupported, agentIslandLiveActivity]);
-  const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
+  const requestedEntry = selectedPluginPage
+    ? pluginSearchDocuments.find(document => document.page.id === selectedPluginPage.id && document.entry.id === rawSection)?.entry ?? null
+    : resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;
   const searchNavigation = useMemo(() => ({ entry: searchEntry, activation: searchActivation }), [searchEntry, searchActivation]);
@@ -385,11 +421,16 @@ function SettingsViewContent() {
           </div>
 
           <SettingsSidebarNav
+            requestedQuery={searchParams.get('query') ?? ''}
             tabIds={visibleTabIds}
             searchContext={searchContext}
             activeTab={activeTab}
             onSelectTab={handleSelectTab}
             onSelectSearchResult={handleSelectSearchResult}
+            pluginPages={pluginPages}
+            pluginSearchDocuments={pluginSearchDocuments}
+            selectedPluginPage={selectedPluginPage?.id}
+            onSelectPluginPage={selectPluginPage}
           />
         </aside>
 
@@ -407,20 +448,19 @@ function SettingsViewContent() {
             // providers 与 import / ghosts 同属「内部自己滚」:模型列表要贴着窗口底,
             // 外层再滚一层会让卡片高度只能靠猜(原先卡片写 calc(100vh-14rem),
             // 扣除量与真实 chrome 不符时下方就空出一条 —— 正是 pb-32 那 128px)。
-            activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers'
+            activeTab === 'import' || activeTab === 'ghosts' && !selectedPluginFields || activeTab === 'providers'
               ? 'overflow-hidden'
               : 'overflow-y-auto',
           )}
         >
-          {/* key={activeTab}:切分区时 wrapper 重挂跑 150ms 淡入(面板内容本就
-              按 activeTab 条件卸载重挂,key 不额外丢状态;滚动容器在外层不重挂)。 */}
+          {/* The resolved tab replaces the previous content atomically, at full opacity. */}
           {/* Keep the boundary outside the keyed panel: replacing it on each tab
               forces a fresh fallback and React delays revealing even cached-fast loads. */}
           <Suspense fallback={<div role="status" className="py-6 text-sm text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
           <div
-            key={`${activeTab}:${piExtensionsPanelOpen ? 'pi-extensions' : 'root'}`}
+            key={`${activeTab}:${selectedPluginPage?.id ?? (piExtensionsPanelOpen ? 'pi-extensions' : 'root')}`}
             className={cn(
-              'mx-auto w-full min-w-0 max-w-[920px] px-1 animate-fade-in',
+              'mx-auto w-full min-w-0 max-w-[920px] px-1',
               activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers'
                 ? 'h-full min-h-0'
                 : 'pb-32',
@@ -625,6 +665,9 @@ function SettingsViewContent() {
                   <section id={personalizationDetailsSettings.memoryMakerLabel.targetId} aria-label={t(personalizationSettings.memory.titleKey)}>
                     <MemorySection />
                   </section>
+                  <section id={personalizationSettings.codexCompaction.targetId} aria-label={t(personalizationSettings.codexCompaction.titleKey)}>
+                    <CompactionSection key={`codex-compaction:${mode}:${dataOwnerId ?? 'none'}`} />
+                  </section>
                   <section id={personalizationSettings.subagents.targetId} aria-label={t(personalizationSettings.subagents.titleKey)}>
                     <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
                   </section>
@@ -708,10 +751,11 @@ function SettingsViewContent() {
                 aria-labelledby="settings-tab-remote-control"
               >
                 <section aria-label={t(localAgentSettings.connections.sectionKey)}>
-                  {/* 远程连接的页面标题在 RemoteControlSection 里，本机应用连接是它下面的分区。 */}
+                  {/* 本机应用连接排在 SSH 之后，Agent-Net 设置卡片保持在整页最底部。 */}
                   <SettingsPageScope>
-                    <RemoteControlSection />
-                    <LocalAgentSection />
+                    <RemoteControlSection>
+                      <LocalAgentSection />
+                    </RemoteControlSection>
                   </SettingsPageScope>
                 </section>
               </div>
@@ -726,10 +770,15 @@ function SettingsViewContent() {
               <div
                 role="tabpanel"
                 id={settingsCatalogPanelSettings.plugins.targetId}
-                aria-labelledby="settings-tab-ghosts"
+                aria-labelledby={selectedPluginPage ? `settings-tab-${selectedPluginPage.id}` : 'settings-tab-ghosts'}
                 className="h-full min-h-0"
               >
-                <SettingsCatalogPanel />
+                {selectedPluginPage?.viewId ? <div id={selectedPluginPage.id} className="h-full pt-7">
+                  <PluginUiView ghost={selectedPluginPage.ghost} viewId={selectedPluginPage.viewId} sessionId={null} input={selectedPluginPage.input} />
+                </div> : selectedPluginFields && selectedPluginPage
+                  ? <PluginSettingsFields key={selectedPluginPage.id} instanceId={selectedPluginPage.instanceId}
+                    title={selectedPluginPage.title} fields={selectedPluginFields} />
+                  : <SettingsCatalogPanel />}
               </div>
             )}
 

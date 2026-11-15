@@ -3,7 +3,8 @@
  * 简化)与挂起注册表(按钮回流 / 超时默认 / 收口取消)。纯逻辑, 无 mock。
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../i18n.desktop';
 
 import type { InteractionRequest } from '@cindy/maker-core';
 
@@ -25,6 +26,11 @@ const ASK: InteractionRequest = {
     },
   ],
 };
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('composeInteractionCard', () => {
   it('ask: 只渲染第一道问题, 按钮->answers 用 question 全文做 key', () => {
@@ -175,7 +181,7 @@ describe('composeInteractionCard', () => {
         behavior: 'deny',
         reason: 'hook_interaction_timeout',
       });
-      expect(fallback).toHaveBeenCalledWith('等待授权超时, 已拒绝该权限请求');
+      expect(fallback).toHaveBeenCalledWith('等待授权超时，已拒绝该权限请求');
     } finally {
       vi.useRealTimers();
     }
@@ -243,4 +249,24 @@ it.each(['once', 'session'])('page scope %s controls the existing Hook answer ch
     metadata: { mcpApp: { scope } }, suggestions: scope === 'session' ? [{ destination: 'session' }] : undefined })!;
   expect(result.card.buttons.some(button => button.id === 'perm:always')).toBe(scope === 'session');
   expect(result.decisions.has('perm:always')).toBe(scope === 'session');
+});
+
+describe('hook card copy follows the UI language', () => {
+  beforeEach(() => setMainLocale('en'));
+
+  it('English UI renders English buttons, reusing the in-app wording for the same actions', () => {
+    const composed = composeInteractionCard({
+      kind: 'permission',
+      requestId: 'r-en',
+      toolName: 'Bash',
+      input: { command: 'ls' },
+    } as InteractionRequest);
+    expect(composed?.card.title).toBe('🔐 Permission request: Bash');
+    expect(composed?.card.buttons.map((b) => b.label)).toEqual([
+      'Allow once',
+      'Always allow for this session',
+      'Deny',
+    ]);
+    expect(composed?.fallbackReason).toBe('Timed out waiting for approval. The permission request was denied.');
+  });
 });

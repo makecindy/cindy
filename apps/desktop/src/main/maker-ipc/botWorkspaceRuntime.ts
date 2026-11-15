@@ -1,4 +1,5 @@
 import { stat } from 'node:fs/promises';
+import path from 'node:path';
 
 import { app } from 'electron';
 import { and, eq } from 'drizzle-orm';
@@ -68,11 +69,17 @@ export async function prepareBotWorkspaceRuntime(
 
   const ownerUserDataPath = deps.ownerUserDataPath ?? ownerScopedUserDataPath;
   const groupRouteKey = link[0]?.role === 'group' ? link[0].routeKey : null;
+  // Old chat-only lanes had no explicit project. Preserve their isolated
+  // workspace on recovery; new group lanes always carry the shared projectDir.
   if (isChatOnlyGroupLane(groupRouteKey)) {
-    opts.workingDir = await ensureBotChatOnlyWorkspaceDir(ownerUserDataPath(), botId, groupLaneOfRouteKey(groupRouteKey!));
-    opts.workspaceKind = 'dialogue';
-    opts.remoteHostId = undefined;
-    return;
+    const [lane] = await db.select({ projectDir: sessions.projectDir })
+      .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!lane?.projectDir) {
+      opts.workingDir = await ensureBotChatOnlyWorkspaceDir(ownerUserDataPath(), botId, groupLaneOfRouteKey(groupRouteKey!));
+      opts.workspaceKind = 'dialogue';
+      opts.remoteHostId = undefined;
+      return;
+    }
   }
 
   const planRoute = parseBotGroupPlanRouteKey(groupRouteKey);
@@ -103,6 +110,22 @@ export async function prepareBotWorkspaceRuntime(
   const ensureWorkspaceDir = deps.ensureWorkspaceDir ?? ensureBotWorkspaceDir;
   const legacyUserDataPath = deps.legacyUserDataPath ?? (() => app.getPath('userData'));
 
+  // A V2 group or Thread lane created in the group's project folder keeps working there, like an
+  // ordinary task in that folder (bot-group-chat.md §7.5). Its stored folder must still exist.
+  if (groupRouteKey) {
+    const [lane] = await db.select({ workingDir: sessions.workingDir, projectDir: sessions.projectDir })
+      .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    const dir = lane?.projectDir && lane.workingDir === lane.projectDir ? path.resolve(lane.workingDir) : null;
+    if (dir) {
+      const isDirectory = deps.isDirectory ?? isExistingDirectory;
+      if (!(await isDirectory(dir))) throw new BotPlanWorkDirUnavailableError();
+      opts.workingDir = dir;
+      opts.workspaceKind = 'project';
+      opts.projectDir = dir;
+      opts.remoteHostId = undefined;
+      return;
+    }
+  }
   const workingDir = await ensureWorkspaceDir(ownerUserDataPath(), botId, legacyUserDataPath());
   opts.workingDir = workingDir;
   opts.remoteHostId = undefined;

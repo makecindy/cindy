@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
-import { compressGzipSync, gunzipBase64TextBounded, type CompressionStats } from '@cindy/device-link/node-compression';
+import {
+  compressGzipSync,
+  deflateRawBase64Sync,
+  gunzipBase64TextBounded,
+  inflateRawBase64TextBounded,
+  type CompressionStats,
+} from '@cindy/device-link/node-compression';
 import type { DeviceLinkTransferCodec } from '@cindy/device-link';
 import { createLogger } from '../logger';
 
@@ -19,6 +25,7 @@ export function createCompressionStatsLog(
   emit: (event: string, fields: Record<string, unknown>) => void,
   now: () => number = Date.now,
   windowMs = COMPRESSION_STATS_WINDOW_MS,
+  label = 'gzip',
 ): (stats: CompressionStats) => void {
   let startedAt = 0;
   let count = 0;
@@ -30,7 +37,7 @@ export function createCompressionStatsLog(
   return (stats) => {
     const at = now();
     if (count > 0 && at - startedAt >= windowMs) {
-      emit('gzip summary', {
+      emit(`${label} summary`, {
         count, originalBytes, gzipBytes, wireBytes,
         compressionMs: Math.round(compressionMs),
         maxCompressionMs: Math.round(maxCompressionMs),
@@ -45,11 +52,17 @@ export function createCompressionStatsLog(
     wireBytes += stats.wireBytes;
     compressionMs += stats.compressionMs;
     maxCompressionMs = Math.max(maxCompressionMs, stats.compressionMs);
-    if (stats.compressionMs >= SLOW_COMPRESSION_MS) emit('gzip slow candidate', { ...stats });
+    if (stats.compressionMs >= SLOW_COMPRESSION_MS) emit(`${label} slow candidate`, { ...stats });
   };
 }
 
 const recordCompression = createCompressionStatsLog((event, fields) => log.debug(event, fields));
+// Pushes are far more frequent than large invoke results; keep their totals separate.
+// Like the gzip summary, counts are compression attempts, including ones sent raw
+// because they missed the 10% saving rule.
+const recordPushCompression = createCompressionStatsLog(
+  (event, fields) => log.debug(event, fields), Date.now, COMPRESSION_STATS_WINDOW_MS, 'push deflate',
+);
 
 /**
  * Desktop 既是被控端也是控制端（桌面远控桌面），两个方向共用一份编码器。
@@ -63,4 +76,10 @@ export const desktopTransferCodec: DeviceLinkTransferCodec = {
   },
   gunzipBase64: gunzipBase64TextBounded,
   contentTag: (text) => createHash('sha256').update(text).digest('base64url'),
+  deflateRawBase64: (text, dictionary) => {
+    const { compressed, stats } = deflateRawBase64Sync(text, 4, dictionary);
+    recordPushCompression(stats);
+    return compressed.toString('base64');
+  },
+  inflateRawBase64: inflateRawBase64TextBounded,
 };

@@ -24,7 +24,7 @@ import {
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody } from '@cindy/model-compat';
+import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -98,6 +98,7 @@ import {
   getProviderRoutingDescriptor,
   getSessionRoutingDescriptor,
   resolveProviderRouteById,
+  oauthRefreshFailedDecision,
   resolveProviderRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveSessionRoute,
@@ -224,6 +225,10 @@ export interface CodexProxyHostPorts {
   parseCodexCustomProviderPath: typeof import('./codex-custom-provider-route.js').parseCodexCustomProviderPath;
   relativeProviderRequestPath: typeof import('./codex-custom-provider-route.js').relativeProviderRequestPath;
   setAppliedCustomProviderRoutes: typeof import('./codex-custom-provider-route.js').setCodexAppliedCustomProviderRoutes;
+  /** Optional inbound admission for every Codex proxy this core starts, checked before all
+   * routing (the Node Host requires inbound credentials on its loopback proxy). Not set: no
+   * check, as before. */
+  authorizeInbound?: import('@cindy/anthropic-compat-proxy').ProxyOptions['authorizeInbound'];
 }
 
 /** Same protocol, routing and recovery implementation for both launchers. */
@@ -305,7 +310,7 @@ const responsesReasoningContentRecoveryRule = createResponsesReasoningContentRec
 const duplicateResponsesToolCallRecoveryRule: RecoveryRule = {
   id: 'duplicate_responses_tool_call',
   enabled: () => true,
-  matches: (errorText) => /duplicate\s+function_call_output\s+for\s+call_id/i.test(errorText),
+  matches: (errorText) => /duplicate\s+(?:function_call_output|tool\s+output)\s+for\s+call_id\b/i.test(errorText),
   strip: normalizeRepeatedResponseToolCallIdsFromBody,
   onRetry: (threadId, model) => responsesToolCallHistoryStripController.markActive(threadId, model),
   useUpstreamModel: true,
@@ -1284,7 +1289,7 @@ function createChatBridgeDecision(
   }, { logger: log, fetchImpl: outboundFetch });
   return {
     localHandler: ({ rawBody, parsedBody, ctx, res }) => {
-      const body = prepareLocalBridgeBody({
+      let body = prepareLocalBridgeBody({
         rawBody,
         parsedBody,
         instructions,
@@ -1304,6 +1309,19 @@ function createChatBridgeDecision(
       const selected = catalogSelected && modelWithInterface(catalogSelected, route.routing.modelInterface);
       const standard = selected?.api ? invocationModelRecord(selected, route.routing.upstream) : !route.routing.requestPath
         ? providerModelRecord(actualModel, route.routing.upstream, 'openai-chat') : undefined;
+      const upstream = standard
+        ? buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream
+        : route.routing.upstream;
+      // localHandler bypasses the proxy transform chain. Match the final route
+      // (including a frozen child's model) before either Chat serializer runs.
+      const usesChat = standard ? standard.execution.pi.api === 'openai-completions' : route.routing.wireProtocol === 'openai-chat';
+      if (usesChat && isPlainObject(body) && ctx?.method === 'POST'
+        && ctx.url.split('?', 1)[0]?.replace(/\/+$/, '') === '/responses') {
+        body = normalizeKimiToolHistory(body, {
+          harness: 'codex', protocol: 'openai-chat', upstreamBase: upstream, model: actualModel,
+          authMode: route.routing.authStrategy === 'oauth-token' || route.routing.authStrategy === 'provider-oauth-header' ? 'oauth' : 'api-key',
+        }) ?? body;
+      }
       if (standard && isPlainObject(body)) {
         const nativeHeaders = overrideHeadersCaseInsensitive(withChatBridgeUserAgent(Object.fromEntries(Object.entries(headers).filter(([name]) =>
           !['authorization', 'x-api-key'].includes(name.toLowerCase())))), resolveConversationSessionHeaders(ctx?.headers));
@@ -1311,11 +1329,25 @@ function createChatBridgeDecision(
           || (isOfficialAnthropicUpstream(standard.upstream) && (standard.contextWindow ?? 0) >= 1_000_000))) {
           appendCommaSeparatedHeaderToken(nativeHeaders, 'anthropic-beta', 'context-1m-2025-08-07');
         }
-        const nativeFetch = createPiProviderFetch({ row: { ...standard,
+        const nativeRow = { ...standard,
           supportsFastMode: selected?.supportsFastMode ?? standard.supportsFastMode,
-        }, providerId,
+        };
+        const chatProfile = standard.execution.pi.api === 'openai-completions'
+          ? resolveProviderCompatibilityProfile({
+            harness: 'codex', protocol: 'openai-chat', upstreamBase: upstream, model: actualModel,
+            authMode: route.routing.authStrategy === 'oauth-token' || route.routing.authStrategy === 'provider-oauth-header' ? 'oauth' : 'api-key',
+          }) : null;
+        // Kimi Code rejects developer messages. Its native SDK does not recognize
+        // this endpoint; fill only the missing role capability on this Codex route.
+        if ((chatProfile?.id === 'kimi' || chatProfile?.id === 'kimi-code')
+          && standard.execution.pi.compat?.supportsDeveloperRole === undefined) {
+          nativeRow.execution = { ...standard.execution, pi: { ...standard.execution.pi,
+            compat: { ...standard.execution.pi.compat, supportsDeveloperRole: false },
+          } };
+        }
+        const nativeFetch = createPiProviderFetch({ row: nativeRow, providerId,
           // Keep the catalog adapter while honoring the host assigned to this account.
-          upstream: buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream,
+          upstream,
           apiKey: nativeBridgeApiKey(headers),
           headers: nativeHeaders,
           fetchImpl: async (url, init) => {
@@ -3175,7 +3207,7 @@ function resolveCodexCustomProviderRoutingDecision(
             threadId,
             subagentRoute.reasoningEffort,
           ) ?? unresolvedCollabSpawnRouteDecision();
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       return resolveProviderRouteDecision(
         subagentRoute.providerId,
@@ -3205,7 +3237,7 @@ function resolveCodexCustomProviderRoutingDecision(
             model !== requestModel ? model : undefined,
             threadId,
           );
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
@@ -3245,7 +3277,7 @@ function resolveCodexCustomProviderRoutingDecision(
           );
           if (implicitProviderOAuth) return implicitProviderOAuth;
           return decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
-        });
+        }).catch(() => oauthRefreshFailedDecision());
       }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
       if (implicitProviderOAuth) return implicitProviderOAuth;
@@ -3556,6 +3588,7 @@ async function createCodexProxyHandle(
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
+    ...(ports.authorizeInbound ? { authorizeInbound: ports.authorizeInbound } : {}),
     transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined).map(
       (transform): RequestTransform => {
         // Namespaced Responses use a frozen Provider route. Preserve its native

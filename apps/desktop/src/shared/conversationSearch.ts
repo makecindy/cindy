@@ -60,6 +60,8 @@ export interface ConversationSearchSessionSummary {
   title: string;
   workingDir: string | null;
   projectDir?: string | null;
+  /** Display-only Buddy project membership; execution directories remain unchanged. */
+  taskProjectDir?: string;
   workspaceKind: ConversationSearchWorkspaceKind;
   agentKind: ConversationSearchAgentKind;
   status: ConversationSearchSessionStatus;

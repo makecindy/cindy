@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 import { materializeLocalMarkdownImageRefs, materializeLocalMarkdownImages } from '../localMarkdownImages';
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -23,6 +24,11 @@ function makeDeps(mediaAbsPath: string) {
 afterEach(async () => {
   for (const root of tempRoots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('materializeLocalMarkdownImages', () => {
   it('uses the common importer before collecting and deduplicating managed images', async () => {

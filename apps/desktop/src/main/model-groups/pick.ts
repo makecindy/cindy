@@ -14,7 +14,10 @@ import { quotaWindowsScheduleState } from '../provider-group/usage.js';
 
 /** 一个候选此刻的事实，顺序与 route.candidates 一致。 */
 export interface ModelGroupCandidateFacts {
-  /** 供应商已连接、模型现在可为新任务选用、对应引擎已安装。 */
+  /**
+   * 供应商已连接、模型现在可为新任务选用、对应引擎已安装；不在本机的来源还要求那个位置此刻能选、
+   * 模型在那里允许远程调用。
+   */
   available: boolean;
   modelName: string;
   sourceName: string;
@@ -104,6 +107,7 @@ export function pickModelGroupCandidate(
     const fact = facts[row.index];
     const base = {
       agentKind: row.candidate.agentKind, providerId: row.candidate.providerId, model: row.candidate.model,
+      ...(row.candidate.agentDeviceId ? { agentDeviceId: row.candidate.agentDeviceId } : {}),
       modelName: fact?.modelName || row.candidate.model, sourceName: fact?.sourceName || row.candidate.providerId,
       quota: row.quota,
     };

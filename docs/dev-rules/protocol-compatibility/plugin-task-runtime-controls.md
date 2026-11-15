@@ -9,6 +9,9 @@
 `runtime-plugin-prefs.json`，不改数据库 schema。未选择时无插件调用；选择不写入新任务草稿、
 不自动继承到分叉任务，不进 device-link allowlist。手机／另一台电脑的设置入口暂不支持，
 执行电脑仍在统一发送入口应用其已保存的选择。官方及自建中转无新帧、relay 或服务端改动。
+现有任务列表／更新投影附带可选 `runtimePluginsSelected` 布尔值，由同一设置缓存派生，
+不新增持久状态或 IPC 请求／通道；保存后复用 `sessions:patched` 通知更新，旧端忽略该字段。
+菜单仅在已装插件声明运行能力或任务仍有已选项时出现；关闭的列表行不订阅插件清单。
 逐请求控制只支持本机 Pi；Claude Code、Codex、SSH／设备托管 Pi 明确不支持。
 Pi 通过进程内 Symbol 接收宿主回调，能力不从 Renderer／远程 JSON 选项取得。
 发送接入范围仅限 App 内正常发起的新轮次，沿原有任务选模／重读／启动流程应用选择，

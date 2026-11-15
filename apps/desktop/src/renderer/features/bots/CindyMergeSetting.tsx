@@ -51,7 +51,7 @@ export function CindyMergeSetting({ bot, className = 'mt-3' }: { bot: { id: stri
     if (copy.homeDeviceId && copy.homeDeviceId === cloud.selfDeviceId) return t('bots.cloud.thisComputer');
     return actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
   };
-  const devices = copies.map(deviceName).join('、');
+  const devices = copies.map(deviceName).join(t('commonUi.listSeparator'));
   const kept = copies.find((copy) => copy.botId === keep) ?? copies[0]!;
 
   const merge = async () => {
@@ -72,7 +72,7 @@ export function CindyMergeSetting({ bot, className = 'mt-3' }: { bot: { id: stri
       setOpen(false);
       setCopies([]);
       toast.info(result.renamed.length
-        ? t('bots.cloud.mergedRenamed', { count: result.merged + 1, messages: result.messages, renamed: result.renamed.join('、') })
+        ? t('bots.cloud.mergedRenamed', { count: result.merged + 1, messages: result.messages, renamed: result.renamed.join(t('commonUi.listSeparator')) })
         : t('bots.cloud.merged', { count: result.merged + 1, messages: result.messages }));
       await ensureBotProfilesLoaded(true).catch(() => undefined);
       if (!isDataOwnerGenerationCurrent(owner)) return;
@@ -103,8 +103,6 @@ export function CindyMergeSetting({ bot, className = 'mt-3' }: { bot: { id: stri
       </SettingsCard>
       <ConfirmDialog
         open={open}
-        presentation="standard"
-        cancelFirst
         onOpenChange={(next) => { if (!next && !inFlight.current) setOpen(false); }}
         title={t('bots.cloud.mergeTitle', { count: copies.length })}
         description={t('bots.cloud.mergeDescription')}

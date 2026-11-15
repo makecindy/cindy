@@ -11,6 +11,7 @@
  * detach source 标记为 `${channel}-slash`。
  */
 
+import { imText } from './imText';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
 import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../../maker-host/model-visibility-mirror';
@@ -44,7 +45,7 @@ import {
   resolvePermissionMode,
 } from './permissionModeControl';
 import {
-  COMPANION_MANAGED_COMMAND_FALLBACK,
+  companionManagedCommandFallback,
   isBotCommandAvailableOnChannel,
   isCompanionManagedCommand,
   tokenizeBotCommand,
@@ -231,7 +232,7 @@ export function createSlashHandlers(
     // 连接已交给伙伴: 模型 / 权限 / 工作目录归伙伴设置管, 不在渠道里改伙伴任务的配置
     // (伙伴的 Home 工作区与模型链是伙伴的正本)。每个渠道都拦, 不看文案包有没有这条提示。
     if (isCompanionManagedCommand(cmd) && turnRunner.companionBotIdFor?.(ctx.botContextId)) {
-      await safeSendText(ctx, ui.slash.companionManagedCommand ?? COMPANION_MANAGED_COMMAND_FALLBACK);
+      await safeSendText(ctx, ui.slash.companionManagedCommand ?? companionManagedCommandFallback());
       return true;
     }
 
@@ -461,7 +462,7 @@ export function createSlashHandlers(
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`${invocation} executeDetach threw: ${msg}`);
-          await safeSendText(ctx, `❌ 结束接管失败：${msg}`);
+          await safeSendText(ctx, imText('imBot.text.shared.slash.detachFailed', { error: msg }));
         }
         return true;
       }
@@ -541,7 +542,7 @@ export function createSlashHandlers(
       }
 
       case '/project': {
-        // 项目切换 — projectSwitching 渠道专属(个人 Telegram);其它渠道当
+        // 项目切换 — projectSwitching 渠道专属(个人 Telegram、个人飞书);其它渠道当
         // 未知命令处理, 不暴露半成品入口。
         const projectUi = ui.cards.project;
         if (!richIm || !adapter.projectSwitching || !projectUi) {
@@ -559,7 +560,7 @@ export function createSlashHandlers(
           return true;
         }
         const [projects, current] = await Promise.all([
-          listProjectsForControl(),
+          listProjectsForControl({ projectsOnly: true }),
           repo.findActiveSession(ctx.botContextId, ctx.userId),
         ]);
         const currentName = workspaceDisplayName(
@@ -612,7 +613,7 @@ export function createSlashHandlers(
           : null;
         if (companionBound && !companionRow) {
           // 伙伴暂停 / 任务还没建起来: 没有一份能如实报的配置, 指回伙伴设置。
-          await safeSendText(ctx, ui.slash.companionManagedCommand ?? COMPANION_MANAGED_COMMAND_FALLBACK);
+          await safeSendText(ctx, ui.slash.companionManagedCommand ?? companionManagedCommandFallback());
           return true;
         }
         // 只读查询必须走只读路径: resolveRouteTarget 没有现成会话时会**建**一条,

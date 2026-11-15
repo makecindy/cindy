@@ -6,6 +6,12 @@ import { PluginCardActions } from "../plugins/PluginCardActions";
 import { pluginCardPlainText } from "../plugins/pluginCardText";
 import { pendingGhostCardFormDelivery } from "@cindy/maker-shared/ghost-card-form";
 import { MobileMailHtmlPreview } from '../plugins/MobileMailHtmlPreview';
+import { pluginPreviewFixture, PREVIEW_FIXTURE_PLUGIN } from '../debug/pluginPreviewFixture';
+
+vi.mock('../plugins/PluginNativeIntent', () => ({ PluginNativeIntent: (props: any) => {
+  h.preview = props;
+  return createElement('button', { 'data-testid': 'plugin-preview', onClick: props.onClose }, props.intent.url);
+} }));
 
 vi.mock('react-native-webview', () => ({ WebView: forwardRef((props: any, ref) => {
   h.web = props;
@@ -22,7 +28,7 @@ vi.mock('lucide-react-native', async () => {
   return Object.fromEntries(['Settings', 'ChevronDown', 'ExternalLink', 'GitPullRequest', 'GitMerge', 'GitPullRequestClosed', 'GitPullRequestDraft', 'Check', 'CircleMinus', 'CircleX', 'Clock'].map((name) => [name, icon(name)]));
 });
 
-const h = vi.hoisted(() => ({ noticeFrame: { y: 400, height: 24 }, invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
+const h = vi.hoisted(() => ({ noticeFrame: { y: 400, height: 24 }, invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, preview: {} as any, mode: 'light', focused: true, status: 'online', appStateChange: (_state: string) => {} }));
 vi.mock("react-native", () => {
   // The notice's frame comes from h.noticeFrame; every other View ignores its ref.
   const View = ({ children, ref }: { children?: ReactNode; ref?: { current: unknown } }) =>
@@ -32,6 +38,7 @@ vi.mock("react-native", () => {
   return {
     View,
     KeyboardAvoidingView: View,
+    ActivityIndicator: () => createElement("span", { role: "progressbar" }),
     Pressable: ({
       children,
       onPress,
@@ -45,9 +52,9 @@ vi.mock("react-native", () => {
       disabled: boolean;
       accessibilityLabel?: string;
       accessibilityRole?: string;
-      accessibilityState?: { checked?: boolean; expanded?: boolean };
+      accessibilityState?: { checked?: boolean; expanded?: boolean; busy?: boolean };
     }) => createElement("button", { onClick: onPress, disabled, 'aria-label': accessibilityLabel,
-      role: accessibilityRole, 'aria-checked': accessibilityState?.checked, 'aria-expanded': accessibilityState?.expanded }, children),
+      role: accessibilityRole, 'aria-busy': accessibilityState?.busy, 'aria-checked': accessibilityState?.checked, 'aria-expanded': accessibilityState?.expanded }, children),
     Modal: ({
       children,
       visible,
@@ -60,12 +67,15 @@ vi.mock("react-native", () => {
     StyleSheet: { create: (value: unknown) => value },
     AppState: {
       currentState: "active",
-      addEventListener: () => ({ remove: () => {} }),
+      addEventListener: (_event: string, listener: (state: string) => void) => {
+        h.appStateChange = listener;
+        return { remove: () => {} };
+      },
     },
     Alert: { alert: vi.fn() },
     Linking: { openURL: vi.fn(async () => true) },
-    Switch: ({ value, onValueChange, accessibilityLabel }: { value: boolean; onValueChange(): void; accessibilityLabel?: string }) =>
-      createElement("input", { type: "checkbox", checked: value, onChange: onValueChange, "aria-label": accessibilityLabel }),
+    Switch: ({ value, onValueChange, accessibilityLabel, accessibilityState, disabled }: { value: boolean; onValueChange(): void; accessibilityLabel?: string; accessibilityState?: { busy?: boolean }; disabled?: boolean }) =>
+      createElement("input", { type: "checkbox", checked: value, onChange: onValueChange, disabled, "aria-label": accessibilityLabel, "aria-busy": accessibilityState?.busy }),
     AccessibilityInfo: { isReduceMotionEnabled: async () => true },
     Animated: {
       Value: class { interpolate() { return 0; } },
@@ -107,9 +117,9 @@ vi.mock("@/theme", async () => ({
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
-vi.mock("expo-router", () => ({ useIsFocused: () => true }));
+vi.mock("expo-router", () => ({ useIsFocused: () => h.focused }));
 vi.mock("@/device-link/DeviceLinkContext", () => ({
-  useDeviceLink: () => ({ invoke: h.invoke, status: "online" }),
+  useDeviceLink: () => ({ invoke: h.invoke, status: h.status }),
 }));
 vi.mock("@/auth/authOwnerGeneration", () => ({
   getMobileAuthOwner: () => ({ accountKey: "owner" }),
@@ -120,7 +130,10 @@ let unmount: (() => void) | undefined;
 afterEach(() => {
   unmount?.();
   unmount = undefined;
+  vi.useRealTimers();
   h.mode = 'light';
+  h.focused = true;
+  h.status = 'online';
   h.noticeFrame = { y: 400, height: 24 };
   vi.clearAllMocks();
 });
@@ -134,6 +147,81 @@ it('shows desktop card text as plain text without its Markdown escapes', () => {
 });
 
 describe("rich plugin card hints", () => {
+  // Unit: settings use separate renderers from footer actions. A pending host action must
+  // be visible for the disclosure, toggle, model choice, and model picker, without faking success.
+  it.each(['Settings', 'Auto follow', 'Follow task', 'Pick model'])('shows pending feedback for %s', async (label) => {
+    let finish!: (value: unknown) => void;
+    const pending = new Promise(resolve => { finish = resolve; });
+    h.invoke.mockImplementation((_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return pending;
+      return Promise.resolve({ result: { pageId: 'page', confirms: [] } });
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    await act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's', callId: 'c', text: 'PR summary\nSettings\nModel',
+      data: { pluginId: 'cindy-github', revision: '1', items: [
+        { id: 'prui:settings', label: 'Settings', disabled: false },
+        { id: 'prset:follow', label: 'Auto follow', disabled: false, toggle: { on: false, title: 'Auto follow' } },
+        { id: 'prset:modelTask', label: 'Follow task', disabled: false },
+        { id: 'prset:model', label: 'Custom', disabled: false },
+        { id: 'prset:modelPick', label: 'Pick model', disabled: false },
+      ] },
+    })));
+    const control = container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+    await act(async () => control.click());
+    expect(control.getAttribute('aria-busy')).toBe('true');
+    expect(control.disabled).toBe(true);
+    expect(container.querySelector('[role=progressbar]')).not.toBeNull();
+    await act(async () => finish({ effects: [] }));
+    expect(control.getAttribute('aria-busy')).toBe('false');
+    expect(control.disabled).toBe(false);
+    expect(container.querySelector('[role=progressbar]')).toBeNull();
+  });
+
+  // Unit regression: PR publish disabled clicks but gave no visible feedback during remote delivery.
+  // Existing rich-card tests resolve immediately; hold both remote steps to cover the waiting UI.
+  it.each(['success', 'failure', 'revision'] as const)('shows immediate publish feedback and clears on %s', async (outcome) => {
+    let open!: (value: unknown) => void;
+    let finish!: (value: unknown) => void;
+    let fail!: (reason: Error) => void;
+    const opened = new Promise(resolve => { open = resolve; });
+    const delivered = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+    h.invoke.mockImplementation((_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return delivered;
+      if (args[0].actionId === 'open-interaction') return opened;
+      return Promise.resolve({ result: { confirms: [] } });
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const data = { pluginId: 'cindy-github', revision: '1', items: [
+      { id: 'pr:publish', label: 'Publish PR', disabled: false, primary: true },
+      { id: 'pr:draft', label: 'Draft', disabled: false },
+    ] };
+    const render = (revision: string) => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's', callId: 'c', data: { ...data, revision },
+    }));
+    await act(async () => render('1'));
+    const publish = container.querySelector<HTMLButtonElement>('[aria-label="Publish PR"]')!;
+    await act(async () => { publish.click(); publish.click(); });
+    expect(publish.getAttribute('aria-busy')).toBe('true');
+    expect(publish.querySelector('[role=progressbar]')).not.toBeNull();
+    expect(publish.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="Draft"]')!.disabled).toBe(true);
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+    await act(async () => open({ result: { pageId: 'page' } }));
+    expect(publish.getAttribute('aria-busy')).toBe('true');
+    if (outcome === 'revision') await act(async () => render('2'));
+    await act(async () => {
+      if (outcome === 'failure') fail(new Error('offline'));
+      else finish({ effects: [] });
+    });
+    expect(publish.getAttribute('aria-busy')).toBe('false');
+    expect(container.querySelector('[role=progressbar]')).toBeNull();
+    expect(publish.disabled).toBe(outcome === 'failure');
+    if (outcome === 'failure') expect(container.textContent).toContain('plugins.pageUnconfirmed');
+  });
+
   // Unit regression: the merged PR settings were flattened into the summary/footer. Existing
   // tests cover switches but not model choice state or the settings disclosure. Render the real
   // component with a rich merged card and verify accessible state + unchanged remote actions.
@@ -784,6 +872,81 @@ it('hides superseded mail entirely instead of showing another draft-updated card
   expect(h.invoke).not.toHaveBeenCalled();
 });
 
+
+// Unit regression: a card action returns a preview intent, which the card poll used to discard.
+it('opens and acknowledges the computer preview requested by a card action', async () => {
+  vi.useFakeTimers();
+  const intent = { id: 'preview-1', kind: 'preview', pluginId: 'design', ghostName: 'Design', url: 'http://localhost:1234/draft' };
+  h.invoke.mockImplementation(async (_device, _channel, [request]) => ({ result:
+    request.actionId === 'open-interaction' ? { pageId: 'card-page' } :
+    request.actionId === 'poll' ? { confirms: [], intents: [intent] } : {} }));
+  const container = document.createElement('div'), root = createRoot(container);
+  unmount = () => act(() => root.unmount());
+  await act(async () => root.render(createElement(PluginCardActions, {
+    deviceId: 'device', sessionId: 's', callId: 'c',
+    data: { pluginId: 'design', revision: '1', items: [{ id: 'preview', label: 'Open draft', disabled: false }] },
+  })));
+  await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === 'Open draft')!.click());
+  const preview = container.querySelector<HTMLButtonElement>('[data-testid="plugin-preview"]');
+  expect(preview?.textContent).toBe(intent.url);
+  await h.preview.readPreview(intent.url, 49152, 'revision');
+  expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({
+    actionId: 'preview:fetch', resourceRef: { collectionId: 'plugins', kind: 'plugin', id: 'design' },
+    input: { pageId: 'card-page', intentId: 'preview-1', url: intent.url, offset: 49152, revision: 'revision' },
+  })]);
+  await act(async () => preview!.click());
+  expect(container.querySelector('[data-testid="plugin-preview"]')).toBeNull();
+  expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({
+    actionId: 'intent:ack', input: { pageId: 'card-page', intentId: 'preview-1' },
+  })]);
+  // A poll captured before acknowledgement must not reopen the dismissed viewer.
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(container.querySelector('[data-testid="plugin-preview"]')).toBeNull();
+});
+
+// Unit: #10069 review found that a resumed card reopened a host-invalidated preview
+// before its fresh poll. The open/close test above never leaves the foreground.
+// Pause each visibility gate with a preview open, then hold the resume receipt.
+it.each(['background', 'blur', 'offline'])('waits for a fresh preview receipt after %s', async (reason) => {
+  vi.useFakeTimers();
+  let holdPoll = false;
+  let resumePoll: ((value: unknown) => void) | undefined;
+  h.invoke.mockImplementation(async (_device, channel, args) => {
+    if (holdPoll && args[0].actionId === 'poll') return new Promise(resolve => { resumePoll = resolve; });
+    return pluginPreviewFixture(channel, args);
+  });
+  const container = document.createElement('div'), root = createRoot(container);
+  unmount = () => act(() => root.unmount());
+  const render = () => root.render(createElement(PluginCardActions, {
+    deviceId: 'device', sessionId: 'qa-preview', callId: 'qa-preview-card',
+    data: { pluginId: PREVIEW_FIXTURE_PLUGIN, revision: '1', items: [{ id: 'editor', label: 'Open draft', disabled: false }] },
+  }));
+  await act(async () => render());
+  await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === 'Open draft')!.click());
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(container.querySelector('[data-testid="plugin-preview"]')).not.toBeNull();
+  await act(async () => {
+    if (reason === 'background') h.appStateChange('background');
+    if (reason === 'blur') h.focused = false;
+    if (reason === 'offline') h.status = 'offline';
+    render();
+  });
+  expect(container.querySelector('[data-testid="plugin-preview"]')).toBeNull();
+  holdPoll = true;
+  await act(async () => {
+    h.appStateChange('active');
+    h.focused = true;
+    h.status = 'online';
+    render();
+  });
+  expect(resumePoll).toBeDefined();
+  expect(container.querySelector('[data-testid="plugin-preview"]')).toBeNull();
+  await act(async () => resumePoll!(pluginPreviewFixture('maker:remote-resources:invoke', [{
+    resourceRef: { id: PREVIEW_FIXTURE_PLUGIN }, actionId: 'poll',
+  }])));
+  // An offline link cannot suspend the host; only its fresh receipt may reopen that preview.
+  expect(!!container.querySelector('[data-testid="plugin-preview"]')).toBe(reason === 'offline');
+});
 
 it('opens in-card task links through task navigation without a browser or plugin action', async () => {
   h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));

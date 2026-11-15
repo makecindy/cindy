@@ -651,14 +651,25 @@ describe('remote connection pool with a real host', () => {
         interrupt = true;
         await host.abortAll(); // Wake the real pending poll; inject only its transport input.
         await sending;
-        await vi.waitFor(() => expect(seen.some(event => event.type === 'error')).toBe(true));
-        const errors = seen.filter(event => event.type === 'error');
-        expect(errors).toHaveLength(1);
-        expect(errors[0].data).toMatchObject({
-          reason: 'remote_agent_closed', isTerminal: true,
-          remoteCloseReason: reason, remoteRunId: closedRunId,
-          message: close === 'eof' ? expect.stringContaining('(ended)') : 'provider stream ended early',
-        });
+        if (close === 'superseded') {
+          // Replacement cancels the old turn; it is not a machine failure.
+          await vi.waitFor(() => expect(seen.some(event => event.type === 'done'
+            && (event.data as { status?: string })?.status === 'cancelled')).toBe(true));
+          expect(seen.filter(event => event.type === 'error')).toEqual([]);
+          const terminals = seen.filter(event => event.type === 'done' && event.turnScope !== 'background');
+          expect(terminals).toHaveLength(1);
+          expect(terminals[0].data).toMatchObject({ status: 'cancelled', reason,
+            remoteCloseReason: reason, remoteRunId: closedRunId });
+        } else {
+          await vi.waitFor(() => expect(seen.some(event => event.type === 'error')).toBe(true));
+          const errors = seen.filter(event => event.type === 'error');
+          expect(errors).toHaveLength(1);
+          expect(errors[0].data).toMatchObject({
+            reason: 'remote_agent_closed', isTerminal: true,
+            remoteCloseReason: reason, remoteRunId: closedRunId,
+            message: close === 'eof' ? expect.stringContaining('(ended)') : 'provider stream ended early',
+          });
+        }
         expect(session.isTurnRunning()).toBe(false);
         await expect(handle.send({ type: 'user', content: 'must not reconnect' })).rejects.toThrow();
         expect(opens).toBe(1);

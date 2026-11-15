@@ -29,6 +29,7 @@ function setPluginPageToolRunner(runner: NonNullable<typeof runPageTool>): void 
 /** Cold-path projection rebuilt by the existing plugin lifecycle, never per message. */
 const hostEntries = new Map<string, { ghost: InstalledGhost; host: GhostHostUi; config: AppServerConfig; owner: string; fingerprint: string }>();
 function readPluginHostUi(instance: string) { return hostEntries.get(instance); }
+function listPluginHostUi() { return hostEntries.values(); }
 /** Registry belongs only to the App host, never to an Agent's MCP providers. */
 function refreshPluginApps(
   ghosts: InstalledGhost[],
@@ -42,7 +43,9 @@ function refreshPluginApps(
   const previousHostEntries = new Map(hostEntries);
   hostEntries.clear();
   for (const ghost of ghosts) {
-    if (!hasGhostUiPermission(ghost) || !deps.available() || ghost.approval.state !== 'approved')
+    const host = getApprovedGhostHostUi(ghost);
+    const hasUi = hasGhostUiPermission(ghost);
+    if ((!hasUi && !host) || !deps.available() || ghost.approval.state !== 'approved')
       continue;
     const instance = installedGhostStoragePart(ghost),
       revision = ghost.approval.revision;
@@ -56,7 +59,7 @@ function refreshPluginApps(
         owner !== activeOwnerScopeKey() ||
         !deps.available() ||
         !latest ||
-        !hasGhostUiPermission(latest) ||
+        (hasUi ? !hasGhostUiPermission(latest) : !getApprovedGhostHostUi(latest)) ||
         latest.approval.state !== 'approved' ||
         latest.approval.revision !== revision ||
         path.resolve(latest.dir) !== directory ||
@@ -84,7 +87,7 @@ function refreshPluginApps(
             instance,
             revision,
             tools: ghost.manifest.tools ?? [],
-            ui: getPluginToolUi(ghost.manifest)!,
+            ui: getPluginToolUi(ghost.manifest) ?? { resources: [], tools: {} },
             hosts: ghost.manifest.network?.hosts,
             assertCurrent,
             readHtml: (html) => {
@@ -109,13 +112,12 @@ function refreshPluginApps(
           }),
       },
     };
-    configs.set(config.id, () => {
+    if (hasUi) configs.set(config.id, () => {
       assertCurrent();
       return config;
     });
-    const host = getApprovedGhostHostUi(ghost);
     if (host) {
-      const fingerprint = JSON.stringify([revision, packageSha256, directory, ghost.approvedHostUi]);
+      const fingerprint = JSON.stringify([revision, packageSha256, directory, hasUi]);
       const previous = previousHostEntries.get(instance);
       hostEntries.set(instance, previous?.owner === owner && previous.fingerprint === fingerprint
         ? previous : { ghost, host, config, owner, fingerprint });
@@ -124,5 +126,5 @@ function refreshPluginApps(
   replacePluginAppServers(configs);
 }
 
-return { setPluginPageToolRunner, refreshPluginApps, readPluginHostUi };
+return { setPluginPageToolRunner, refreshPluginApps, readPluginHostUi, listPluginHostUi };
 }

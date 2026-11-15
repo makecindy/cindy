@@ -3,6 +3,7 @@
  * and an explicit delivery notice, never a machine-local URL.
  */
 
+import { imText } from './imText';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -131,8 +132,13 @@ export async function materializeLocalMarkdownImages(
   }
 
   const body = rewriteTaskImageReferences(sourceText, replacements, 'alt');
-  const notice = failedUrls.size > 0 ? `有 ${failedUrls.size} 张图片未能作为附件发送。` : '';
+  const notice = failedUrls.size > 0 ? imagesNotSentNotice(failedUrls.size) : '';
   return { absPaths, text: notice ? `${body.trimEnd()}\n\n${notice}` : body };
+}
+
+/** 没能作为附件发出的图片说明(跟随界面语言)。 */
+function imagesNotSentNotice(count: number): string {
+  return imText('imBot.text.shared.images.notSent', { count });
 }
 
 /**
@@ -158,5 +164,5 @@ export async function materializeLocalMarkdownImageRefs(
   }
   if (failed.size === 0) return source;
   const body = rewriteTaskImageReferences(source, failed, 'alt');
-  return `${body.trimEnd()}\n\n有 ${failed.size} 张图片未能作为附件发送。`;
+  return `${body.trimEnd()}\n\n${imagesNotSentNotice(failed.size)}`;
 }

@@ -163,21 +163,33 @@ describe('createWorktree naming authority', () => {
   // A caller that hands the directory to a running agent must not get it before the tree is complete.
   it('awaitFullCheckout returns only after the full checkout, and fails with a rollback if it fails', async () => {
     const previousGit = gitExecMock.getMockImplementation()!;
+    let enteredCheckout!: () => void;
+    const checkoutStarted = new Promise<void>((resolve) => { enteredCheckout = resolve; });
     let finishCheckout!: (fail: boolean) => void;
     const checkout = new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
       finishCheckout = (fail) => (fail ? reject(new Error('checkout failed')) : resolve({ stdout: '', stderr: '' }));
     });
     gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
-      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return checkout;
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        enteredCheckout();
+        return checkout;
+      }
       return previousGit(args, ...rest);
     });
     let settled = false;
     const creating = manager.createWorktree({ sessionId: 'full-checkout', baseRepo, name: 'full', sourceBranch: 'main' }, { awaitFullCheckout: true })
       .finally(() => { settled = true; });
-    await vi.waitFor(() => expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'checkout' && args.includes(':(exclude).sivi'))).toBe(true));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(settled).toBe(false);
-    finishCheckout(true);
+    try {
+      // Reaching checkout includes real temporary-directory I/O. Its latency
+      // is not the wait/rollback contract; synchronize on the actual Git edge.
+      await checkoutStarted;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settled).toBe(false);
+    } finally {
+      // Do not leak the writer into the next test if an assertion fails.
+      finishCheckout(true);
+      await creating;
+    }
     await expect(creating).resolves.toMatchObject({ ok: false });
     expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(true);
   });
