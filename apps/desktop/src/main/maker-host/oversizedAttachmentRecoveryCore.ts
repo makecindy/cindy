@@ -184,6 +184,11 @@ function createRequestSizeController(
       const route = controller.route?.(ctx, parsedHint) ?? {};
       const sessionId = resolveSession(ctx.headers) ?? '';
       const routeKey = `${sessionId}|${route.providerId ?? ''}|${route.endpoint ?? ''}|${route.modelId ?? ''}|${format}`;
+      if (error.kind === 'unsupported-image-format') {
+        const denied = deniedRouteMimes.get(routeKey) ?? new Set<string>();
+        denied.add('image/webp');
+        deniedRouteMimes.set(routeKey, denied);
+      }
       route.deniedMimeTypes = [...(deniedRouteMimes.get(routeKey) ?? [])];
       const budget = requestSizeBudgetAfterRejection(undefined, error,
         { bytes: body.length, images: countInlineRequestImages(body, format) }, requestSizeModelFamily(route.modelId));
@@ -197,11 +202,6 @@ function createRequestSizeController(
       });
       // Only the proxy sees the retried response. It commits size rules after
       // success; generating a body here must never teach a route a new budget.
-      if (error.kind === 'unsupported-image-format') {
-        const denied = deniedRouteMimes.get(routeKey) ?? new Set<string>();
-        denied.add('image/webp');
-        deniedRouteMimes.set(routeKey, denied);
-      }
       return result?.body ?? null;
     },
     control: async (body, format, policy) => {

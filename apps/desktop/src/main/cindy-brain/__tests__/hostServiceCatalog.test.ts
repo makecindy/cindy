@@ -85,13 +85,16 @@ describe('Host service discovery', () => {
       pluginCall: () => active ? { caller, server: 'cindy_helper', tool: 'host_services', argsJson: '{}', assertCurrent() {} } : undefined });
     const result = await execute.list({ ...context, hostCaller: caller });
     expect(result).toMatchObject({ scope: 'local', services: expect.arrayContaining([
-      expect.objectContaining({ group: 'browser', available: true, declared: true, approved: true }),
-      expect.objectContaining({ group: 'ssh', available: false, declared: true, approved: true }),
-      expect.objectContaining({ group: 'computer', declared: false, approved: false }),
+      expect.objectContaining({ group: 'browser', available: true, declared: true }),
+      expect.objectContaining({ group: 'ssh', available: false, declared: true }),
+      expect.objectContaining({ group: 'computer', declared: false }),
     ]) });
+    expect(JSON.stringify(result)).not.toContain('approved');
+    Object.assign(ghost, { approvedHostToolGroups: [] });
+    expect(await execute.list({ ...context, hostCaller: caller })).toEqual(result);
     ghost.manifest.agent!.hostTools = ['discovery'];
     expect(await execute.list({ ...context, hostCaller: caller })).toMatchObject({ services: expect.arrayContaining([
-      expect.objectContaining({ group: 'browser', declared: false, approved: false }),
+      expect.objectContaining({ group: 'browser', declared: false }),
     ]) });
     active = false;
     expect(() => execute.list({ ...context, hostCaller: caller })).toThrow('PERMISSION_DENIED');

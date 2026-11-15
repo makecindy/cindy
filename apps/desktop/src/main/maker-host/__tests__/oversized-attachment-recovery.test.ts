@@ -239,6 +239,87 @@ it('prepares only the PNG and preserves its compressed bytes separately from the
   );
 });
 
+// PR #10699, unit: a real adapter's WebP must become PNG in the rejected request,
+// not only in future requests. Existing denial tests used a fake prepare callback.
+it('retries its own rejected WebP as PNG and remembers the denial for later PNG inputs', async () => {
+  const png = await sharp({ create: { width: 64, height: 48, channels: 4, background: { r: 40, g: 80, b: 120, alpha: 0.5 } } })
+    .png({ compressionLevel: 0 }).toBuffer();
+  const preprocessor = createInlineImagePreprocessor(() => true);
+  const prepare = vi.spyOn(preprocessor, 'prepare');
+  const controller = createRequestSizeController(() => state.resolved, preprocessor, () => 'openai');
+  const control = vi.spyOn(controller, 'control');
+  const ctx = { reqId: 10699, method: 'POST', url: '/v1/responses', headers: {} };
+  const model = 'gpt-webp-rejection-regression';
+  const signal = new AbortController().signal;
+  const webp = await preprocessor.prepare({ bytes: png, mimeType: 'image/png', route: controller.route!(ctx, { model }), signal });
+  expect(webp?.mimeType).toBe('image/webp');
+  const bodyFor = (bytes: Buffer, mime: string) => ({ model, input: [{ role: 'user', content: [
+    { type: 'input_image', image_url: `data:${mime};base64,${bytes.toString('base64')}` },
+  ] }] });
+  const sent = Buffer.from(JSON.stringify(bodyFor(webp!.bytes, 'image/webp')));
+  const retried = await controller.retry!(sent, { kind: 'unsupported-image-format' }, ctx, signal);
+  expect(control.mock.calls[0][2]).toMatchObject({ allowRemoval: false, route: { deniedMimeTypes: ['image/webp'] } });
+  const candidate = await prepare.mock.results.at(-1)!.value;
+  expect(candidate?.mimeType).toBe('image/png');
+  expect(candidate!.bytes.length).toBeGreaterThan(webp!.bytes.length);
+  expect(retried).not.toBeNull();
+  expect(retried!.equals(sent)).toBe(false);
+  const retriedUrl = JSON.parse(retried!.toString()).input[0].content[0].image_url as string;
+  expect(retriedUrl).toMatch(/^data:image\/png;base64,/);
+  expect(await sharp(Buffer.from(retriedUrl.split(',')[1], 'base64')).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
+
+  const original = bodyFor(png, 'image/png');
+  const route = controller.route!(ctx, original);
+  expect(route.deniedMimeTypes).toContain('image/webp');
+  const subsequent = await controller.control(Buffer.from(JSON.stringify(original)), 'responses', { context: ctx, route, signal });
+  expect(JSON.parse(subsequent!.body.toString()).input[0].content[0].image_url).toMatch(/^data:image\/png;base64,/);
+  expect(state.ingest).not.toHaveBeenCalled();
+  expect(state.addRef).not.toHaveBeenCalled();
+});
+
+// PR #10699, unit: real loopback proxy -> classifier -> controller retry ->
+// real encoder. Direct retry tests cannot detect a dropped or repeated resend.
+it('retries a WebP format 400 once as PNG and sends PNG directly on the next request', async () => {
+  const png = await sharp({ create: { width: 64, height: 48, channels: 4, background: { r: 40, g: 80, b: 120, alpha: 0.5 } } })
+    .png({ compressionLevel: 0 }).toBuffer();
+  const received: string[] = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const image = JSON.parse(Buffer.concat(chunks).toString()).input[0].content[0].image_url as string;
+    received.push(image);
+    res.setHeader('content-type', 'application/json');
+    res.statusCode = image.startsWith('data:image/png;') ? 200 : 400;
+    res.end(res.statusCode === 200 ? '{}' : JSON.stringify({ error: { message: 'unsupported image format' } }));
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  if (!address || typeof address === 'string') throw new Error('test server address unavailable');
+  const controller = createRequestSizeController(() => state.resolved, createInlineImagePreprocessor(() => true), () => 'openai');
+  const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${address.port}`, transformRequest: [], requestSizeController: controller });
+  const body = JSON.stringify({ model: 'gpt-webp-http-retry-regression', input: [{ role: 'user', content: [
+    { type: 'input_image', image_url: `data:image/png;base64,${png.toString('base64')}` },
+  ] }] });
+  const send = () => fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+  try {
+    const first = await send();
+    await first.text();
+    expect({ status: first.status, calls: received.length }).toEqual({ status: 200, calls: 2 });
+    expect(received[0]).toMatch(/^data:image\/webp;base64,/);
+    expect(received[1]).toMatch(/^data:image\/png;base64,/);
+    expect(await sharp(Buffer.from(received[1].split(',')[1], 'base64')).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
+    const second = await send();
+    await second.text();
+    expect(second.status).toBe(200);
+    expect(received).toHaveLength(3);
+    expect(received[2]).toMatch(/^data:image\/png;base64,/);
+  } finally {
+    await proxy.dispose();
+    upstream.closeAllConnections();
+    await new Promise<void>(resolve => upstream.close(() => resolve()));
+  }
+});
+
 // PR #10663: batch persistence could leave the first new reference on later failure.
 // Unit tier: two different images, with failure/cancellation/owner change during commit.
 // Existing compensation tests covered only the legacy recovery factory.

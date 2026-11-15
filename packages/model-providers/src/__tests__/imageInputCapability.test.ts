@@ -16,11 +16,16 @@ describe('acceptsWebpImageInput', () => {
     expect(acceptsWebpImageInput({ providerId, modelId })).toBe(true);
   });
 
+  // Unit regression: explicit PNG/JPEG-only declarations must override model
+  // family guesses. Existing rows paired rejecting providers only with glm/grok.
   it.each([
     ['xai', 'grok-4'],
     ['zhipu-glm-cn', 'glm-5.2'],
     ['zhipu-glm-global', 'glm-5.2'],
-  ])('rejects WebP for %s', (providerId, modelId) => {
+    ['zhipu', 'gpt-4o'],
+    ['xai-proxy', 'claude-sonnet-4'],
+    [undefined, 'zhipu/gpt-4o'],
+  ])('rejects WebP for provider %s / model %s', (providerId, modelId) => {
     expect(acceptsWebpImageInput({ providerId, modelId })).toBe(false);
   });
 

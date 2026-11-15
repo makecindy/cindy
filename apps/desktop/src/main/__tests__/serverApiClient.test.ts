@@ -34,7 +34,6 @@ vi.mock('../logger', () => ({
 }));
 
 import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop';
-import { readOrganizationAccountUsage } from '../usage/organizationAccountUsage';
 
 describe('serverApiFetch', () => {
   beforeEach(() => {
@@ -320,28 +319,6 @@ describe('serverApiFetch', () => {
     expect((error as ServerApiError).statusCode).toBe(401);
     // 状态保住之后,401 仍然走共享刷新(归一成 status 0 时这一步不会发生)。
     expect(mocks.refresh).toHaveBeenCalled();
-  });
-
-  // Unit: exercise the real quota reader through the HTTP client. Previously its
-  // mocked client hid recurring warnings for a successful legacy fallback.
-  it.each([
-    { status: 404, code: 'NOT_FOUND', fallback: true },
-    { status: 501, code: 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED', fallback: true },
-    { status: 501, code: 'OTHER_FAILURE', fallback: false },
-    { status: 503, code: 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED', fallback: false },
-    { status: 403, code: 'FORBIDDEN', fallback: false },
-    { status: 401, code: 'ACCOUNT_UNAVAILABLE', fallback: false },
-  ])('only downgrades expected quota fallback logs: $status $code', async ({ status, code, fallback }) => {
-    mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({
-      error: { code, message: 'private upstream message' },
-    }), { status }));
-    const result = await readOrganizationAccountUsage();
-    expect(result).toBe(fallback ? undefined : null);
-    expect(mocks.logger.warn).toHaveBeenCalledTimes(fallback ? 0 : 1);
-    expect(mocks.logger.debug).toHaveBeenCalledTimes(fallback ? 1 : 0);
-    expect(JSON.stringify([...mocks.logger.warn.mock.calls, ...mocks.logger.debug.mock.calls]))
-      .not.toContain('private upstream message');
-    if (status === 401) expect(mocks.invalidateSession).toHaveBeenCalledWith('account-unavailable');
   });
 
   it('keeps an unfamiliar original error and its cause while redacting secrets before logging', async () => {

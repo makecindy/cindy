@@ -340,7 +340,10 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
     const route = policy.route ?? {};
     try {
       const output = await preprocessor.prepare({ bytes: original, mimeType: occurrence.mimeType, route, signal: policy.signal ?? new AbortController().signal });
-      if (output?.bytes?.length && output.bytes.length < original.length) {
+      // A rejected format must be replaced even when its compatible encoding grows.
+      const formatRequired = output && route.deniedMimeTypes?.includes(occurrence.mimeType)
+        && output.mimeType !== occurrence.mimeType && !route.deniedMimeTypes.includes(output.mimeType);
+      if (output?.bytes?.length && (output.bytes.length < original.length || formatRequired)) {
         next = { bytes: output.bytes, mimeType: output.mimeType, changed: true };
       }
       if (policy.singleImageMaxBytes && next.bytes.length > policy.singleImageMaxBytes && preprocessor.tighten) {
