@@ -85,7 +85,7 @@ export function SessionSnoozeAction({
               onPointerDown={(event) => event.stopPropagation()}
               onDoubleClick={(event) => event.stopPropagation()}
               className={cn(
-                'shrink-0 size-5 flex items-center justify-center rounded-md focus:outline-none disabled:opacity-40',
+                'shrink-0 size-5 flex items-center justify-center rounded-full focus:outline-none disabled:opacity-40',
                 isActive
                   ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
                   : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
