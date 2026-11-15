@@ -468,6 +468,7 @@ export interface ContextOverflowRolloverDeps {
       replacementRoute?: NativeSessionRecoveryTarget & { expectedSdkSessionId: string };
     },
     signal?: AbortSignal,
+    assertCanCommit?: () => void,
   ): Promise<void>;
   setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
   readPendingHandoffGeneration?(sessionId: string): number;
@@ -1252,7 +1253,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             expectedClearedAt: row.clearedAt,
             ...(target && target !== 'retain-route' ? { replacementRoute: { ...target, expectedSdkSessionId: row.sdkSessionId! } } : {}),
           }];
-          if (target === 'retain-route') assertReady();
+          if (target === 'retain-route') {
+            assertReady();
+            commitArgs[4] = assertReady;
+          }
           if (signal) commitArgs[3] = signal;
           await deps.commitRebuild(...commitArgs);
           deps.setPendingHandoff(sessionId, handoff, generation);

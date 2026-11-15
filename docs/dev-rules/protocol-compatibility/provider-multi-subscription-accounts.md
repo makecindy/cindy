@@ -7,10 +7,30 @@
 不生成新的后台卡片或跨端字段。余额报错可在确认同池替代账号后走普通／目标既有等待与发送锁；
 不能拿余额错误推导套餐重置。目标身份、原生历史账号绑定与权限保持原有语义。
 
-不新增 IPC channel、wire 字段、能力位、数据库 migration、账号文件结构或中转帧；
+上述基础调度与错误恢复不新增 IPC channel、wire 字段、能力位、数据库 migration、账号文件结构或中转帧；
+可选恢复偏好的追加字段与存储见下一节。
 官方及自建 relay 继续透传既有调用。旧执行端维持自身调度与错误恢复行为，不因控制端升级而获得此修复；
 来源被拆成单账号供应商时仍不跨供应商用号，需保持用户明确的账号归属。
 桌面与 Node Host 共享主体，须在各自环境测试；手机只沿用既有任务状态与恢复信息。
+
+## 分供应商的恢复重入偏好（2026-11-15）
+
+`maker:subscription-accounts` 的 `configure` 可选追加 `autoRejoinRecovered?: boolean`，仅接受布尔值，
+省略保持原覆盖。仅 OpenAI 供应商支持写入，Anthropic 拒绝此设置。
+`SubscriptionPoolView` 可选追加同名布尔字段：新版执行端对 OpenAI 返回有效值（默认 false），
+缺失表示旧宿主不支持，不得当作已关闭且可写。控制端写前检查 read 回包的布尔支持，写后核对回执；
+旧宿主可能忽略未知 configure 字段，因此不能仅以调用成功宣称启用，也不能自动重放写操作。
+Helper `configure_model_provider` 的 subscriptionAccounts 使用相同字段、校验与执行服务，权限沿用 configure。
+
+偏好按实际 providerId 保存于 owner 本机现有 `subscription-account-placement.json` 的
+`autoRejoinRecovered` 映射，内置、新建和旧 Codex 来源彼此隔离，不是 OpenAI 全局池选项；
+显式 true/false 均保留，未设置默认 false，不自动迁移或启用。新建供应商不继承原来源偏好，
+移动／合并账号不改变各来源覆盖；删除新建供应商时清其覆盖。损坏文件读取为未启用且拒绝覆写。
+早于分供应商归属功能的旧客户端不读写此文件；已支持归属但不认识恢复偏好的版本可能在写归属时丢掉新映射，
+此时再升级按默认关闭处理，不凭历史状态重新授权。旧执行端自身行为不因此获得新能力；不新增凭证、账号目录、channel、allowlist、
+轮询或 relay 帧，官方与自建中转继续透传既有 invoke JSON，无需服务端适配。
+回归入口：`subscription-accounts/__tests__/ipc.test.ts`（归一化、按来源覆盖及 owner 门禁）、
+`maker-ipc/__tests__/providerHandlers.test.ts`（Helper 旧宿主拒绝与回执核验）。未做真实新旧双设备互通。
 
 ## 自动化继续使用合并后的来源（2026-11-14）
 

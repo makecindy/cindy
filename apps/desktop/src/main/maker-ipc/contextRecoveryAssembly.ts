@@ -82,7 +82,7 @@ export interface CommitContextRecoveryPorts {
 }
 
 export async function commitContextRecoveryWithPorts(ports: CommitContextRecoveryPorts, ...args: Parameters<ContextOverflowRolloverDeps['commitRebuild']>) {
-  const [sessionId, handoff, meta, signal] = args;
+  const [sessionId, handoff, meta, signal, assertCanCommit] = args;
       // Read projection metadata before the transaction: after a successful
       // context.rebuild there must be no fallible step before the zero-usage push.
       const ownerScope = ports.captureDataOwnerBroadcastScope();
@@ -103,6 +103,9 @@ export async function commitContextRecoveryWithPorts(ports: CommitContextRecover
         throw new Error('context rebuild owner changed before commit');
       }
       signal?.throwIfAborted();
+      // Dispatching the database commit request is the transaction boundary. Recheck
+      // authorization after the metadata await, not after an irreversible commit.
+      assertCanCommit?.();
       const { updatedAt } = await ports.commitContextRebuild(sessionId, handoff, meta);
       if (
         !ports.isDataOwnerBroadcastScopeCurrent(ownerScope) ||

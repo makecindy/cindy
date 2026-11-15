@@ -19,6 +19,10 @@ export interface SubscriptionAccountRecovery {
   failedAt: number;
   until: number;
   periodic: boolean;
+  /** True: real credits/workspace failure; false: known non-billing; absent: legacy unknown.
+   * Billing evidence survives later failures until useful dispatch consumes its current epoch.
+   */
+  billing?: boolean;
 }
 export type SubscriptionAccountRecoveries = Record<string, Record<string, Record<string, SubscriptionAccountRecovery>>>;
 
@@ -69,6 +73,7 @@ function normalize(raw: unknown): CoolingFile {
             || !Number.isFinite(entry.until) || entry.until < entry.failedAt || typeof entry.periodic !== 'boolean') continue;
           ((recoveries[provider] ??= {})[account] ??= {})[scope] = {
             epoch: entry.epoch, failedAt: entry.failedAt, until: entry.until, periodic: entry.periodic,
+            ...(typeof entry.billing === 'boolean' ? { billing: entry.billing } : {}),
           };
         }
       }
@@ -186,9 +191,12 @@ export function writeSubscriptionAccountRecovery(
     );
     if (previous && (previous.failedAt > entry.failedAt || weakerTie)) return current;
     // A newer periodic error cannot prove an existing billing/auth failure recovered.
+    // Unlike the temporary nonperiodic cooldown, billing evidence never expires on its own.
     const keepNonperiodic = previous && !previous.periodic && previous.until > Date.now();
     ((recoveries[provider] ??= {})[account] ??= {})[scope] = { ...entry,
-      until: Math.max(previous?.until ?? 0, entry.until), periodic: entry.periodic && !keepNonperiodic };
+      until: Math.max(previous?.until ?? 0, entry.until), periodic: entry.periodic && !keepNonperiodic,
+      ...(previous?.billing === true ? { billing: true } : {}),
+    };
     return { ...current, recoveries };
   });
 }
@@ -207,7 +215,7 @@ export function clearRecoveredSubscriptionCooling(provider: string, account: str
     const cooling = structuredClone(current.cooling);
     const scopes = cooling[provider]?.[account];
     const recovery = current.recoveries?.[provider]?.[account]?.[scope];
-    if (recovery?.epoch === epoch && recovery.periodic && scopes && typeof scopes === 'object'
+    if (recovery?.epoch === epoch && recovery.periodic && recovery.billing !== true && scopes && typeof scopes === 'object'
       && scopes[scope] === until) delete scopes[scope];
     return { ...current, cooling };
   });

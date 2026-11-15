@@ -43,6 +43,7 @@ const h = vi.hoisted(() => ({
   /** Providers Cindy created for subscription accounts (placement.ts), by provider id. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   strategies: {} as Record<string, string>,
+  autoRejoin: {} as Record<string, boolean>,
   copyOverrides: vi.fn(),
 }));
 // Persisted placement is replaced like the pool file; its own rules are covered in ipc.test.ts.
@@ -104,6 +105,8 @@ vi.mock('../placement.js', () => {
     renameCreatedSubscriptionProvider: async (providerId: string, name: string) => {
       if (h.created[providerId]) h.created[providerId] = { ...h.created[providerId], name };
     },
+    readProviderAutoRejoinRecovered: (ref: { providerId: string }) => h.autoRejoin[ref.providerId] === true,
+    writeProviderAutoRejoinRecovered: async (ref: { providerId: string }, value: boolean) => { h.autoRejoin[ref.providerId] = value; },
     readProviderStrategy: (providerId: string) => h.strategies[providerId],
     writeProviderStrategy: async (providerId: string, strategy: string) => { h.strategies[providerId] = strategy; },
   };
@@ -277,6 +280,7 @@ beforeEach(() => {
   h.placement = {};
   h.created = {};
   h.strategies = {};
+  h.autoRejoin = {};
   h.copyOverrides.mockReset();
 });
 
@@ -4112,7 +4116,8 @@ describe('idle subscription rebalance reservation', () => {
     expect((await readSubscriptionPool('openai')).accounts.map(a => a.running)).toEqual([1, 0]);
     restarted?.release();
   });
-  it('lets an idle old native task supply a second account while another root stays on the original', async () => {
+  it('keeps healthy native history despite other active roots, even when recovery participation is enabled', async () => {
+    h.autoRejoin.openai = true;
     h.pools.openai = { strategy: 'weight', accounts: [{ ...account('default'), limit: 4 }, account('second')] };
     h.usage.mockImplementation(async (_provider, directory: string) => quotas(directory));
     h.bindings.set('task:idle-old', { providerId: 'openai', accountId: 'default' });
@@ -4120,11 +4125,12 @@ describe('idle subscription rebalance reservation', () => {
     setSubscriptionAccountActivityReader(async () => [{ sessionId: 'busy-old', nativeId: 'busy-native', provider: 'openai', accountId: 'default', running: true }]);
     const row = { status: 'active', providerId: 'openai', agentKind: 'codex', source: 'desktop', model: 'gpt-6', sdkSessionId: 'old-native' as string | null };
     expect(await prepareSubscriptionAccountFailover('idle-old', { readSession: async () => row, isRunning: () => false,
-      rebuild: async (_id, assertCurrent) => { assertCurrent(); row.sdkSessionId = null; } }, { balance: true })).toBe(true);
-    expect((await readSubscriptionPool('openai')).accounts.map(a => a.running)).toEqual([1, 1]);
-    expect(h.bindings.get('task:idle-old')?.accountId).toBe('second');
+      rebuild: async (_id, assertCurrent) => { assertCurrent(); row.sdkSessionId = null; } }, { balance: true })).toBe(false);
+    expect((await readSubscriptionPool('openai')).accounts.map(a => a.running)).toEqual([1, 0]);
+    expect(h.bindings.get('task:idle-old')?.accountId).toBe('default');
+    expect(row.sdkSessionId).toBe('old-native');
   });
-  it('drops a coverage handoff when the last source root finishes during asynchronous admission', async () => {
+  it('ignores coverage reads when optional recovery participation is disabled', async () => {
     h.pools.openai = { strategy: 'least', accounts: [{ ...account('default'), limit: 4 }, account('second')] };
     h.usage.mockImplementation(async (_provider, directory: string) => quotas(directory, 55));
     let reads = 0;
@@ -4132,9 +4138,10 @@ describe('idle subscription rebalance reservation', () => {
     setSubscriptionAccountActivityReader(async () => { if (++reads > 1) running = false; return [{
       sessionId: 'other', nativeId: 'other-native', provider: 'openai', accountId: 'default', running, isRunning: () => running }]; });
     expect(await acquireSubscriptionRebalance('openai', 'gpt-6', 'default')).toBeNull();
-    expect((await readSubscriptionPool('openai')).accounts.map(a => a.running)).toEqual([0, 0]);
+    expect(reads).toBe(0);
   });
-  it('relieves an idle old task from a tight short window before an actual rejection', async () => {
+  it('does not migrate healthy native history merely because its short window is tight', async () => {
+    h.autoRejoin.openai = true;
     h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
     h.usage.mockImplementation(async (_provider, directory: string) => {
       const value = quotas(directory);
@@ -4142,25 +4149,14 @@ describe('idle subscription rebalance reservation', () => {
       return value;
     });
     const lease = await acquireSubscriptionRebalance('openai', 'gpt-6', 'second');
-    expect(lease?.accountId).toBe('default');
-    lease?.release();
+    expect(lease).toBeNull();
   });
-  it('reserves an eligible materially less-used account and respects fresh bound task concurrency', async () => {
+  it('does not migrate healthy native history merely for a large quota gain', async () => {
+    h.autoRejoin.openai = true;
     h.pools.openai = { strategy: 'weight', accounts: [account('default'), account('second')] };
     h.usage.mockImplementation(async (_provider, directory: string) => quotas(directory));
     const lease = await acquireSubscriptionRebalance('openai', 'gpt-6', 'default');
-    expect(lease?.accountId).toBe('second');
-    await lease!.bind(['task:successor']);
-    lease!.reserveForTask('successor');
-    lease!.release();
-    expect(await acquireSubscriptionRebalance('openai', 'gpt-6', 'default')).toBeNull();
-    // The successor takes over its own reservation, but another binding cannot bypass a full cap.
-    h.bindings.set('task:another', { providerId: 'openai', accountId: 'second' });
-    await expect(acquireSubscriptionAccount('openai', 'gpt-6', ['task:another'], false, { resuming: false }))
-      .rejects.toThrow('SUBSCRIPTION_ACCOUNTS_FULL');
-    const successor = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:successor'], false, { resuming: false });
-    expect(successor?.accountId).toBe('second');
-    successor!.release();
+    expect(lease).toBeNull();
   });
   it.each(['unknown', 'small-gain', 'paused', 'full', 'short-tight', 'model-unavailable'] as const)(
     'keeps the original task when the destination is %s', async why => {
@@ -4185,11 +4181,12 @@ describe('idle subscription rebalance reservation', () => {
 // Exercise production failure observation, reservation, native handoff and dispatch wrapper;
 // only native I/O, owner storage and host persistence are fake. No new user input or probe.
 describe('restored account useful-work participation', () => {
-  async function recoveryCase(run: (s: any) => Promise<void>) {
+  async function recoveryCase(run: (s: any) => Promise<void>, enabled = true) {
     let now = Date.parse('2026-06-01T00:00:00Z');
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     let full = false, invalid = '', error: unknown, silentStartFailure = false;
     let background = false;
+    let credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null = { hasCredits: true, unlimited: false, balance: '10' };
     const dispatches: string[] = [];
     const row = { status: 'active', providerId: 'openai', agentKind: 'codex', source: 'desktop',
       model: 'gpt-6.1-sol', sdkSessionId: 'original-second' as string | null,
@@ -4197,7 +4194,8 @@ describe('restored account useful-work participation', () => {
     h.pools.openai = { strategy: 'weight', accounts: [
       { ...account('default'), limit: 4, weight: 4 }, { ...account('second'), limit: 4, weight: 1 },
     ] };
-    const quota = (directory: string) => ({ codexUsage: { appServerBuckets: { [invalid === 'other-model' ? 'other-model' : 'codex']: {
+    const quota = (directory: string) => ({ codexCredits: full ? { hasCredits: false, unlimited: false, balance: '0' } : credits,
+      codexUsage: { appServerBuckets: { [invalid === 'other-model' ? 'other-model' : 'codex']: {
       ...(invalid === 'other-model' ? { limitName: 'gpt-unrelated' } : {}),
       updatedAt: invalid === 'stale' ? now - 11 * 60_000 : now,
       primary: { usedPercent: directory.endsWith('/second') ? full ? 100 : 1 : 50,
@@ -4245,10 +4243,12 @@ describe('restored account useful-work participation', () => {
     };
     const prepare = () => prepareSubscriptionAccountFailover('continuing', deps, { balance: true });
     const refresh = () => refreshSubscriptionPool('openai', true);
-    const failThenContinueOnDefault = async (periodic = false, partialOnly = false) => {
+    const failThenContinueOnDefault = async (periodic: boolean | 'auth' | 'overload' = false, partialOnly = false) => {
       await start();
-      error = periodic ? { codexErrorInfo: 'usageLimitExceeded', message: 'usage limit reached', resetAtMs: now + 3_600_000 }
-        : new Error('Your workspace is out of credits. Ask your workspace owner to refill in order to continue.');
+      error = periodic === true ? { codexErrorInfo: 'usageLimitExceeded', message: 'usage limit reached', resetAtMs: now + 3_600_000 }
+        : periodic === 'auth' ? { errorStatus: 401, message: 'unauthorized' }
+          : periodic === 'overload' ? { errorStatus: 529, message: 'server overloaded' }
+            : new Error('Your workspace is out of credits. Ask your workspace owner to refill in order to continue.');
       await expect(send()).rejects.toBeDefined();
       full = true;
       if (partialOnly) {
@@ -4259,8 +4259,11 @@ describe('restored account useful-work participation', () => {
       expect(await prepare()).toBe(true); await start(); await send();
       expect(dispatches).toEqual(['openai/second', 'openai/default']);
     };
+    if (enabled) await runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', autoRejoinRecovered: true });
     try {
       await run({ row, dispatches, deps, agent, prepare, refresh, start, send, quota, failThenContinueOnDefault,
+        configure: (value: boolean) => runSubscriptionAccountCommand({ action: 'configure', providerId: 'openai', autoRejoinRecovered: value }),
+        credits: (value: typeof credits) => { credits = value; },
         restore: async (minutes = 31) => { now += minutes * 60_000; full = false; await refresh(); },
         invalid: async (value: string) => { invalid = value; await refresh(); },
         background: (value: boolean) => { background = value; },
@@ -4271,6 +4274,63 @@ describe('restored account useful-work participation', () => {
       expect(row).toMatchObject({ workDir: '/project', permissionMode: 'acceptEdits', goal: 'finish the approved work' });
     } finally { await handle?.close(); clock.mockRestore(); }
   }
+  // User opt-in contract (unit): configure → real prepare/start/send wrapper. Old
+  // coverage always enabled migration and missed default/off/late-disable behavior.
+  it('defaults off across runtime reconstruction without disabling real failure failover', async () => {
+    await recoveryCase(async s => {
+      expect((await readSubscriptionPool('openai')).autoRejoinRecovered).toBe(false);
+      await s.failThenContinueOnDefault(); await s.restore(); await s.stopHandle();
+      h.owner += '-restarted-off'; await s.refresh();
+      expect(await s.prepare()).toBe(false);
+      expect(h.recoveries.openai?.second?.['model:gpt-6.1-sol']).toBeDefined();
+      await s.start(); await s.send();
+      expect(s.dispatches).toEqual(['openai/second', 'openai/default', 'openai/default']);
+      await s.configure(true);
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      await s.configure(false);
+      expect(await s.prepare()).toBe(false);
+      expect(h.recoveries.openai?.second?.['model:gpt-6.1-sol']).toBeUndefined();
+    }, false);
+  });
+  it('disabling before durable rebuild cancels the optional handoff without consuming or replaying it', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      s.deps.rebuild.mockImplementationOnce(async (_id: string, assertCurrent: () => void) => {
+        await s.configure(false); assertCurrent();
+      });
+      await expect(s.prepare()).rejects.toThrow('participation was disabled');
+      expect(h.bindings.get('task:continuing')?.accountId).toBe('default');
+      expect(s.row.sdkSessionId).not.toBeNull();
+      expect(s.dispatches).toHaveLength(2);
+      expect(await s.prepare()).toBe(false);
+      await s.configure(true);
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      expect(s.dispatches).toHaveLength(3);
+    });
+  });
+  it('finishes an already committed handoff binding if disabled at the transaction boundary', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      const rebuild = s.deps.rebuild.getMockImplementation();
+      s.deps.rebuild.mockImplementationOnce(async (...args: unknown[]) => {
+        await rebuild(...args); await s.configure(false);
+      });
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      expect(h.bindings.get('task:continuing')?.accountId).toBe('second');
+      expect(await s.prepare()).toBe(false);
+      expect(s.dispatches).toHaveLength(3);
+    });
+  });
+  it.each([null, { hasCredits: false, unlimited: false, balance: '0' },
+    { hasCredits: true, unlimited: false, balance: null }])('does not treat plan recovery as proof of workspace credit recovery (%j)', async credits => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); s.credits(credits); await s.restore();
+      expect(await s.prepare()).toBe(false);
+      expect(s.dispatches).toHaveLength(2);
+      s.credits({ hasCredits: true, unlimited: false, balance: '10' }); await s.restore(1);
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+    });
+  });
   it('automatically sends the next existing-task continuation on recovered B despite only 5pp gain', async () => {
     await recoveryCase(async s => {
       await s.failThenContinueOnDefault(); await s.restore();
@@ -4281,12 +4341,25 @@ describe('restored account useful-work participation', () => {
       expect(s.dispatches).toEqual(['openai/second', 'openai/default', 'openai/second']);
       expect(await s.prepare()).toBe(false);
       expect(h.recoveries.openai?.second?.['model:gpt-6.1-sol']).toBeUndefined();
+      // Further real continuations stay on B; ordinary quota/load scoring cannot bounce back.
+      for (let i = 0; i < 3; i++) { expect(await s.prepare()).toBe(false); await s.send(); }
+      expect(s.dispatches.slice(2)).toEqual(Array(4).fill('openai/second'));
     });
   });
   it('uses fresh periodic recovery before the predicted reset but never clears billing cooldown early', async () => {
     await recoveryCase(async s => {
       await s.failThenContinueOnDefault(true); await s.restore(1);
       expect(await s.prepare()).toBe(true);
+    });
+  });
+  it.each(['auth', 'overload'] as const)('preserves the %s global cooldown despite fresh plan windows', async cause => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(cause); s.credits(null); await s.restore(1);
+      expect(await s.prepare()).toBe(false);
+      expect(readSubscriptionAccountBlocked('openai', 'second', s.row.model)).toBe(true);
+      await s.restore(2);
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      expect(s.dispatches).toHaveLength(3);
     });
   });
   it('waits through billing cooldown even if quota has already recovered', async () => {
@@ -4300,6 +4373,21 @@ describe('restored account useful-work participation', () => {
     await recoveryCase(async s => {
       await s.failThenContinueOnDefault(); await s.restore(); await s.invalid(invalid);
       expect(await s.prepare()).toBe(false); expect(s.dispatches).toHaveLength(2);
+    });
+  });
+  it.each(['permission', 'paused', 'full', 'non-desktop', 'orca'] as const)('does not spend recovery when the %s gate refuses the existing task', async gate => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      if (gate === 'permission') h.routeAllowed.mockReturnValue(false);
+      if (gate === 'paused') h.pools.openai!.accounts[1].paused = true;
+      if (gate === 'full') setSubscriptionAccountActivityReader(async () => [{ sessionId: 'other-root',
+        nativeId: 'other', provider: 'openai', accountId: 'second', running: true }]);
+      if (gate === 'non-desktop') s.row.source = 'bot';
+      if (gate === 'orca') s.row.orcaRole = 'worker';
+      expect(await s.prepare()).toBe(false);
+      expect(s.deps.rebuild).toHaveBeenCalledTimes(1); // only the original real-failure handoff
+      expect(s.dispatches).toHaveLength(2);
+      expect(h.recoveries.openai?.second?.['model:gpt-6.1-sol']).toBeDefined();
     });
   });
   it('waits for native descendants and retries a failed host handoff without losing recovery', async () => {
@@ -4344,7 +4432,7 @@ describe('restored account useful-work participation', () => {
   });
   it('rejects a healthy read begun before the newest failure, even when it completes afterward', async () => {
     await recoveryCase(async s => {
-      await s.failThenContinueOnDefault();
+      await s.failThenContinueOnDefault(true);
       const original = h.usage.getMockImplementation()!;
       let release!: () => void, began!: () => void;
       const gate = new Promise<void>(resolve => { release = resolve; });
@@ -4377,13 +4465,13 @@ describe('restored account useful-work participation', () => {
       expect(s.dispatches).toHaveLength(3);
     });
   });
-  it('does not pin an unwrapped restored source forever when no handoff claim owns its next send', async () => {
+  it('does not move a healthy restored source back for ordinary coverage after its recovery', async () => {
     await recoveryCase(async s => {
       await s.failThenContinueOnDefault(); await s.restore();
       setSubscriptionAccountActivityReader(async () => [{ sessionId: 'other-active-root',
         nativeId: 'other-native', provider: 'openai', accountId: 'second', running: true }]);
       const lease = await acquireSubscriptionRebalance('openai', s.row.model, 'second');
-      expect(lease?.accountId).toBe('default'); lease?.release();
+      expect(lease).toBeNull();
     });
   });
   it('preserves event-only Goal dispatch semantics and recovery until a positive native start receipt', async () => {

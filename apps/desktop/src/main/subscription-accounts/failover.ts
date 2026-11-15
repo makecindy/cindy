@@ -19,7 +19,7 @@
  */
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readPool } from './store.js';
-import { accountProviderId, providerAccounts } from './placement.js';
+import { accountProviderId, providerAccounts, readProviderAutoRejoinRecovered, resolveSubscriptionPoolProvider } from './placement.js';
 import {
   acquireSubscriptionAccount,
   acquireSubscriptionRebalance,
@@ -200,7 +200,9 @@ export async function prepareSubscriptionAccountFailover(
   const bound = row && boundAccount(sessionId, row);
   if (!bound || deps.isRunning(sessionId)) return false;
   const blocked = readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model);
-  if (!blocked && (!options.balance || row!.agentKind !== 'codex' || !row!.sdkSessionId
+  const recoveryRef = resolveSubscriptionPoolProvider(bound.providerId);
+  const recoveryEnabled = () => recoveryRef?.kind === 'openai' && readProviderAutoRejoinRecovered(recoveryRef);
+  if (!blocked && (!recoveryEnabled() || !options.balance || row!.agentKind !== 'codex' || !row!.sdkSessionId
     || row!.source !== 'desktop' || row!.orcaRole)) return false;
   if (bound.previousProviderId && !deps.moveRoute) return false;
   if (!(await routeAdmits(bound))) return false;
@@ -216,9 +218,13 @@ export async function prepareSubscriptionAccountFailover(
     return false;
   }
   if (!lease) return false;
+  // Disabling cancels a not-yet-committed optional handoff. Once the existing
+  // durable rebuild commits, finish its binding transaction rather than strand it.
+  let rebuilt = false;
   try {
     const assertCurrent = () => {
       assertOwner();
+      if (!blocked && !rebuilt && !recoveryEnabled()) throw new Error('Recovered account participation was disabled');
       lease!.assertDispatchable();
       if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
       const current = readTaskPoolAccount(sessionId, row!);
@@ -238,6 +244,7 @@ export async function prepareSubscriptionAccountFailover(
     assertCurrent();
     // Keep the old native id bound to the account that owns its history; only the task moves.
     if (row!.sdkSessionId) await deps.rebuild(sessionId, assertCurrent);
+    rebuilt = true;
     await assertRoute(true);
     assertCurrent();
     if (bound.previousProviderId) {

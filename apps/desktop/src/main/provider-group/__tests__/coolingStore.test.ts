@@ -38,6 +38,16 @@ describe('冷却记录的成员边界', () => {
   });
 });
 
+// Unit normalization contract: explicit false distinguishes new non-billing failures
+// from legacy unknown records; malformed values must not manufacture that distinction.
+it('preserves both billing booleans without assigning a value to legacy or malformed evidence', () => {
+  const entry = { epoch: 'probe', failedAt: 1, until: 2, periodic: false };
+  const entries = { 'model:yes': { ...entry, billing: true }, 'model:no': { ...entry, billing: false },
+    'model:legacy': entry, 'model:invalid': { ...entry, billing: 'false' } };
+  expect(coolingStore.__testing.normalize({ cooling: {}, recoveries: { openai: { second: entries } } })
+    .recoveries?.openai.second).toEqual({ ...entries, 'model:invalid': entry });
+});
+
 describe('mergeCooling', () => {
   const { mergeCooling } = coolingStore.__testing;
 
@@ -143,6 +153,27 @@ describe('writeProviderGroupCooling (real file)', () => {
     expect(coolingStore.readSubscriptionAccountRecoveries()).toEqual({});
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).recoveries).toBeUndefined();
   });
+  // Unit/real-file: billing evidence must survive normalization and later auth/periodic
+  // failures even after cooldown expiry; until-only/CAS tests did not cover this downgrade.
+  // Minimal regression: expired billing=true followed by a newer billing=false epoch.
+  it.each([false, true])('retains unconsumed billing across a newer periodic=%s failure and epoch CAS', async periodic => {
+    const at = Date.now(), scope = 'model:gpt-6.1-sol';
+    const first = { epoch: 'billing', failedAt: at - 2_000, until: at - 1_000, periodic: false, billing: true };
+    const next = { epoch: 'newer', failedAt: at, until: at + 60_000, periodic, billing: false };
+    await coolingStore.writeSubscriptionAccountRecovery('openai', 'second', scope, first);
+    await coolingStore.writeSubscriptionAccountRecovery('openai', 'second', scope, next);
+    await coolingStore.writeSubscriptionAccountCooling({ openai: { second: { [scope]: next.until } } });
+    await coolingStore.consumeSubscriptionAccountRecovery('openai', 'second', scope, first.epoch);
+    await coolingStore.clearRecoveredSubscriptionCooling('openai', 'second', scope, next.until, next.epoch);
+    const file = path.join(caseDir, 'subscription-account-cooling.json');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).recoveries.openai.second[scope]).toEqual({ ...next, billing: true });
+    expect(coolingStore.readSubscriptionAccountRecoveries().openai.second[scope].billing).toBe(true);
+    expect(coolingStore.readSubscriptionAccountCooling().openai.second).toEqual({ [scope]: next.until });
+    await coolingStore.consumeSubscriptionAccountRecovery('openai', 'second', scope, next.epoch);
+    await coolingStore.writeSubscriptionAccountRecovery('openai', 'second', scope, { ...next, epoch: 'after-consume' });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).recoveries.openai.second[scope]).toEqual({ ...next, epoch: 'after-consume' });
+  });
+
   it('only clears the proven periodic model while preserving unrelated and account-wide cooling', async () => {
     const at = Date.now(), scope = 'model:gpt-6.1-sol';
     const entry = { epoch: 'restored', failedAt: at, until: at + 60_000, periodic: true };

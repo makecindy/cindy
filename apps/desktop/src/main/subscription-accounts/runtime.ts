@@ -16,8 +16,8 @@ import {
 } from '../maker-host/nativeProviderAuthBinding.js';
 import { pickProviderGroupMember, providerGroupMembersFull } from '../provider-group/scheduler.js';
 import { concurrencyLimitPatch, effectiveConcurrencyLimit } from '../../shared/providerGroup.js';
-import { providerGroupMemberUsageState, providerGroupMemberQuotaWindows, providerGroupRebalanceTarget } from '../provider-group/usage.js';
-import { pickSubscriptionAccountMember, subscriptionWindowPressure, subscriptionWindowRoom } from './scheduler.js';
+import { providerGroupMemberUsageState, providerGroupMemberQuotaWindows } from '../provider-group/usage.js';
+import { pickSubscriptionAccountMember, subscriptionWindowRoom } from './scheduler.js';
 import {
   coolingScope,
   currentCooling,
@@ -80,6 +80,8 @@ import {
   placeSubscriptionAccount,
   providerAccounts,
   readProviderStrategy,
+  readProviderAutoRejoinRecovered,
+  writeProviderAutoRejoinRecovered,
   renameCreatedSubscriptionProvider,
   resolveSubscriptionPoolProvider,
   writeProviderStrategy,
@@ -327,6 +329,9 @@ export function observeSubscriptionAccountFailure(
       // A fresh plan window cannot shorten a remembered credit/auth/overload failure.
       periodic: usageLimit && !isBillingDepletionError(signals)
         && (!previous || previous <= now || (entries[scope]?.periodic === true && entries[scope].until === previous)),
+      // A later plan/auth error cannot turn unresolved workspace debt into plan recovery.
+      billing: isBillingDepletionError(signals) || entries[recoveryScope]?.billing === true
+        || (entries[recoveryScope]?.periodic === false && entries[recoveryScope]?.billing === undefined),
     };
     entries[recoveryScope] = entry;
     state.recoveries.set(key, Object.fromEntries(Object.entries(entries).slice(-PROVIDER_GROUP_COOLING_SCOPE_CAP)));
@@ -348,8 +353,15 @@ function restoredAccount(state: OwnerRuntime, provider: SubscriptionProvider, id
   if ((bucket?.updatedAt ?? 0) <= entry.failedAt || !subscriptionWindowRoom(
     providerGroupMemberQuotaWindows(info.usage ?? {}, model.replace(/^chatgpt\//, ''), Date.now(), 'codex'),
   )) return;
+  // Plan windows do not prove workspace credits were refilled. Legacy nonperiodic
+  // evidence did not distinguish billing from auth: keep that case conservative too.
+  if (entry.billing === true || (!entry.periodic && entry.billing === undefined)) {
+    const credits = info.usage?.codexCredits;
+    const balance = typeof credits?.balance === 'string' && credits.balance.trim() !== '' ? Number(credits.balance) : NaN;
+    if (credits?.unlimited !== true && !(credits?.hasCredits === true && Number.isFinite(balance) && balance > 0)) return;
+  }
   const scopes = state.quotaCooling.get(key);
-  if (entry.periodic && scopes?.[scope] === entry.until) {
+  if (entry.periodic && entry.billing !== true && scopes?.[scope] === entry.until) {
     delete scopes[scope];
     void clearRecoveredSubscriptionCooling(provider, id, scope, entry.until, entry.epoch);
   }
@@ -1461,6 +1473,7 @@ async function readSubscriptionPoolView(
     kind: provider,
     configured: readPool(provider) !== null,
     strategy: providerStrategy(ref.providerId, provider, pool),
+    ...(provider === 'openai' ? { autoRejoinRecovered: readProviderAutoRejoinRecovered(ref) } : {}),
     ...(taskId ? { boundAccountId: bound ?? null } : {}),
     accounts,
     ...(previewDefault
@@ -1671,12 +1684,12 @@ export async function needsSubscriptionAccountHandoff(
   return true;
 }
 
-/** Idle old tasks participate in coverage and window relief, without interrupting native work. */
+/** Opt-in recovery only: never move a healthy task merely to rebalance load or plan windows. */
 export async function acquireSubscriptionRebalance(
   providerId: string, model: string | undefined, currentId: string,
 ): Promise<SubscriptionAccountLease | null> {
   const ref = resolveSubscriptionPoolProvider(providerId);
-  if (!ref) return null;
+  if (!ref || ref.kind !== 'openai' || !readProviderAutoRejoinRecovered(ref)) return null;
   const pool = readPool(ref.kind);
   if (!pool || (pool.disconnected && ref.providerId === ref.kind)) return null;
   const state = currentRuntime();
@@ -1704,25 +1717,14 @@ export async function acquireSubscriptionRebalance(
       && subscriptionWindowRoom(windows) && !accountCooling(state, ref.kind, account.id, model)
       && running < effectiveConcurrencyLimit(account));
   const useful = (candidate: typeof facts[number], reserved = false) => {
-    const sourceRunning = accountRunning(state, ref.kind, currentId);
+    if (!readProviderAutoRejoinRecovered(ref)) return false;
     const candidateRunning = accountRunning(state, ref.kind, candidate.account.id) - (reserved ? 1 : 0);
-    const usageModel = ref.kind === 'openai' ? model?.replace(/^chatgpt\//, '') : model;
-    const agent = ref.kind === 'openai' ? 'codex' : 'claude-code';
-    const sourceUsage = state.cache.get(keyOf(ref.kind, currentId))?.usage ?? {};
-    const candidateUsage = state.cache.get(keyOf(ref.kind, candidate.account.id))?.usage ?? {};
-    const sourceWindows = providerGroupMemberQuotaWindows(sourceUsage, usageModel, Date.now(), agent);
-    const candidateWindows = providerGroupMemberQuotaWindows(candidateUsage, usageModel, Date.now(), agent);
-    if (!subscriptionWindowRoom(candidateWindows)) return false;
-    const sourceQuota = providerGroupMemberUsageState(sourceUsage, usageModel, Date.now(), agent).quota;
-    const candidateQuota = providerGroupMemberUsageState(candidateUsage, usageModel, Date.now(), agent).quota;
+    const usageModel = model?.replace(/^chatgpt\//, '');
     const recovery = restoredAccount(state, ref.kind, candidate.account.id, model);
     const claim = state.recoveryClaims.get(`${keyOf(ref.kind, candidate.account.id)}:${coolingScope(usageModel)}`);
-    return (candidateRunning === 0 && !!recovery && (!claim || claim.epoch !== recovery.epoch))
-    || subscriptionWindowPressure(sourceWindows)
-    // The idle source is not counted: another root stays behind while this one supplies coverage.
-    || (sourceRunning > 0 && candidateRunning === 0)
-    || ((sourceRunning > 0 || candidateRunning === 0) && !!sourceQuota && !!candidateQuota
-      && !!providerGroupRebalanceTarget(sourceQuota, [{ key: candidate.account.id, quota: candidateQuota }], Date.now()));
+    // Consumption removes this epoch. There is deliberately no ordinary balance
+    // fallback on later sends that could bounce the same task back again.
+    return candidateRunning === 0 && !!recovery && (!claim || claim.epoch !== recovery.epoch);
   };
   const destinations = candidates.filter(candidate => useful(candidate));
   if (!destinations.length) return null;
@@ -2167,6 +2169,7 @@ export async function runSubscriptionAccountCommand(
   }
   let resultProviderId = owned;
   if (command.action === 'configure') {
+    if (command.autoRejoinRecovered !== undefined) await writeProviderAutoRejoinRecovered(ref, command.autoRejoinRecovered);
     if (command.strategy && owned !== provider) await writeProviderStrategy(owned, command.strategy);
     await updatePool(provider, (pool) => ({
       ...pool,

@@ -82,6 +82,8 @@ export interface SubscriptionPoolView {
   kind?: SubscriptionProvider;
   configured: boolean;
   strategy: ProviderGroupStrategy;
+  /** Per-provider recovery opt-in. Undefined means an older host does not support it. */
+  autoRejoinRecovered?: boolean;
   /** Present only for an explicitly task-scoped read; null means no recorded binding. */
   boundAccountId?: string | null;
   accounts: SubscriptionAccountView[];
@@ -121,6 +123,8 @@ export type SubscriptionAccountCommand =
       action: 'configure';
       providerId: string;
       strategy?: ProviderGroupStrategy;
+      /** Explicit per-provider override; default false, never an account or whole-kind setting. */
+      autoRejoinRecovered?: boolean;
       accountId?: string;
       paused?: boolean;
       /** null clears the setting: unlimited concurrency. */

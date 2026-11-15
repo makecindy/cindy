@@ -19396,7 +19396,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     rehydrateColdPiRuntimeForWindowVerification,
     closeSession: (sessionId) => maker.closeSession(sessionId, 'runtime-refresh'),
     drainPersistQueue,
-    commitRebuild: (sessionId, handoff, meta, signal) => commitContextRecoveryWithPorts({
+    commitRebuild: (sessionId, handoff, meta, signal, assertCanCommit) => commitContextRecoveryWithPorts({
       captureDataOwnerBroadcastScope: (...args) => captureDataOwnerBroadcastScope(...args),
       getCurrentDbClientSnapshot: (...args) => getCurrentDbClientSnapshot(...args),
       get sessions() { return sessions; },
@@ -19407,7 +19407,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       createDbMessage: (...args) => createDbMessage(...args),
       createId: (...args) => createId(...args),
       log: { info: (...args) => log.info(...args), warn: (...args) => log.warn(...args) },
-    }, sessionId, handoff, meta, signal),
+    }, sessionId, handoff, meta, signal, assertCanCommit),
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
