@@ -85,6 +85,16 @@
       "reset": "Reset to default",
       "apply": "Apply",
       "hex": "Color value"
+    },
+    "appIcon": {
+      "label": "App icon",
+      "saveFailed": "Couldn’t change the app icon. Try again.",
+      "options": {
+        "default": "Default",
+        "cat": "Black cat",
+        "wordmark": "Cindy wordmark",
+        "mark": "Cindy symbol"
+      }
     }
   },
   "language": {
