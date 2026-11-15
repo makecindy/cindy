@@ -3391,3 +3391,80 @@ test('a send carries a referenced task\'s messages; another device\'s task is le
   await enqueue(h, 'remote-quoting', { clientId: 'remote-ref', text: 'and this', sessionRefs: [{ sessionId: 'elsewhere', deviceId: 'other-device' }] });
   assert.equal(JSON.stringify(h.maker.getSession('remote-quoting').sent[0]), JSON.stringify('and this'));
 });
+
+// Unit, over a migrated profile database: how /api/chat (chat.mjs) ends a message's stream when the
+// turn stops on an error. Rule: a user turn stored but not dispatched gets its error row, then the
+// input's interrupted receipt, and the stream ends; a reconnect with the same clientId is told
+// "interrupted" at once. An error after dispatch still ends on its terminal event, with no receipt.
+// Gap: the stream for a stored-but-undispatched turn never ended. (Context recovery through
+// /api/chat, whose claimed error stores no row, keeps its stream open: tests above.)
+async function chatFixture(t, { failAfterAccept = false } = {}) {
+  const hub = createEventHub();
+  const db = await recoveryDatabase(t);
+  const h = createHarness({ hub,
+    persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) }),
+    getOwner: getCurrentDbClientSnapshot, getPersistedClientIds: getPersistedInputClientIds,
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'm', workingDir: db.root,
+      providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  t.after(() => h.queue.dispose());
+  if (failAfterAccept) {
+    const create = h.maker.createSession.bind(h.maker);
+    h.maker.createSession = async opts => {
+      const session = await create(opts);
+      session.send = async (_text, sendOpts = {}) => {
+        sendOpts.onTurnReserved?.(++session.generation);
+        await sendOpts.beforeProviderStart?.();
+        await sendOpts.onAccepted?.(sendOpts.signal);
+        throw new Error('vendor failed');
+      };
+      return session;
+    };
+  }
+  const open = async (id, clientId) => {
+    const writes = [];
+    const response = Object.assign(new EventEmitter(), {
+      writableEnded: false, headersSent: false,
+      writeHead(status) { this.statusCode = status; this.headersSent = true; },
+      write(chunk) { writes.push(String(chunk)); },
+      end(chunk) { if (chunk) writes.push(String(chunk)); this.writableEnded = true; this.emit('close'); },
+    });
+    const chat = createChatHandler({ events: hub, readSession: async sid => ({ id: sid, status: 'active' }),
+      createSession: async () => { throw new Error('the task exists'); },
+      enqueue: (sid, input) => h.queue.enqueue(sid, input), inputStatus: (sid, cid) => h.queue.inputStatus(sid, cid) });
+    await chat(Readable.from([Buffer.from(JSON.stringify({ sessionId: id, clientId, prompt: 'hello' }))]), response);
+    const streamed = () => writes.join('').split('\n\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+    return { response, streamed };
+  };
+  return { db, h, open };
+}
+
+test('/api/chat: a stored turn that fails to dispatch streams its error row, then its interrupted receipt, and ends; a reconnect ends at once', { timeout: 30_000 }, async t => {
+  const c = await chatFixture(t, { failAfterAccept: true });
+  await c.db.createTask('chat-undispatched');
+  const first = await c.open('chat-undispatched', 'chat-lost');
+  await waitFor(() => first.response.writableEnded);
+  const types = first.streamed().map(event => event.type);
+  const errorRow = types.indexOf('error_persisted');
+  const receipt = first.streamed().findIndex(event => event.type === 'input_receipt' && event.inputClientId === 'chat-lost');
+  assert.ok(errorRow >= 0 && receipt > errorRow, `error row, then receipt: ${types.join(',')}`);
+  assert.equal(first.streamed()[receipt].status, 'interrupted');
+  assert.equal(first.streamed().filter(event => event.type === 'input_receipt').length, 1);
+  assert.equal(c.db.errorRows('chat-undispatched').length, 1);
+
+  const again = await c.open('chat-undispatched', 'chat-lost');
+  assert.equal(again.response.writableEnded, true, 'the reconnect ends at once');
+  assert.deepEqual(again.streamed().filter(event => event.type === 'input_receipt').map(event => event.status), ['interrupted']);
+  assert.equal(c.db.errorRows('chat-undispatched').length, 1, 'the reconnect does not resend');
+});
+
+test('/api/chat: an error after dispatch ends the stream on its terminal event, with no interrupted receipt', { timeout: 30_000 }, async t => {
+  const c = await chatFixture(t);
+  await c.db.createTask('chat-terminal');
+  const stream = await c.open('chat-terminal', 'chat-runs');
+  await waitFor(() => c.h.maker.getSession('chat-terminal')?.sent.length === 1);
+  const session = c.h.maker.getSession('chat-terminal');
+  session.emit({ type: 'error', data: { message: 'model failed' }, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+  await waitFor(() => stream.response.writableEnded);
+  assert.equal(stream.streamed().filter(event => event.type === 'input_receipt').length, 0);
+  assert.ok(stream.streamed().some(event => event.type === 'error' && event.inputClientId === 'chat-runs'));
+});

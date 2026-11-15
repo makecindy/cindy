@@ -241,7 +241,12 @@ export function createInputQueue(deps) {
         if (refreshed.agentReferences === undefined) delete item.agentReferences;
       },
       supersedeRetriedUserTurn: deps.supersedeRetriedUserTurn,
-      persistTerminalSendError: (id, message) => executor.persistTerminalSendError(id, message),
+      // The coordinator has just kept this input as the task's recovery point (active-turn) when it
+      // stores the error row; that input stopped here, so its receipt follows the row (turn-executor).
+      persistTerminalSendError: (id, message) => {
+        const recovery = coordinator.getProjection(id).recovery;
+        executor.persistTerminalSendError(id, message, recovery?.kind === 'active-turn' ? recovery.item?.clientId : undefined);
+      },
       onPersistedSendRejected: (id, message) => executor.onPersistedSendRejected(id, message),
       onAcceptedQueuedMessage: async (id, item) => {
         schedulePreparations.delete(item.clientId);
@@ -398,7 +403,9 @@ export function createInputQueue(deps) {
       inputStatus: (id, clientId) => command(id, async () => {
         const projection = api.projection(id);
         if (executor.isInputRunning(id, clientId)) return 'running';
-        if (projection.recovery?.clientId === clientId) return 'interrupted';
+        // A recovery point names its input as clientId (before dispatch) or as item (a stored turn
+        // whose dispatch failed): either way the input stopped there.
+        if ((projection.recovery?.clientId ?? projection.recovery?.item?.clientId) === clientId) return 'interrupted';
         if (projection.pendingQueue.some(item => item.clientId === clientId)) return 'queued';
         const known = await deps.getPersistedClientIds?.(id, [clientId]);
         assertCurrent();

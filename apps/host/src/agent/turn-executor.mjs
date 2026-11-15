@@ -754,10 +754,20 @@ export function createTurnExecutor(deps) {
     // The coordinator's hooks for a user turn stored but not dispatched, as register.ts passes them:
     // a retryable error row (the desktop's onTurnErrorEvent with the Pi prompt-timeout reason), and
     // for a Pi prompt timeout, closing the stuck native process (no replay; the user retries).
-    persistTerminalSendError(id, message) {
-      historyFor(id).onTurnErrorEvent(id, {
+    // Host-only: the input's interrupted receipt once its error row is stored. /api/chat (chat.mjs)
+    // ends a message's stream on it; without it a stream for this input waited for a terminal event
+    // that never comes. Only this path sends it: an error claimed by context recovery (or, later,
+    // held by an automatic continuation) stores no row here, so that stream stays open.
+    persistTerminalSendError(id, message, inputClientId) {
+      const history = historyFor(id);
+      history.onTurnErrorEvent(id, {
         message, ...(isPiPromptRpcTimeoutError({ message }) ? { reason: 'pi-prompt-timeout' } : {}),
       }, null);
+      if (typeof inputClientId !== 'string') return;
+      void history.drain().then(() => {
+        if (history.hasFailedWrites() || !deps.isCurrent()) return;
+        deps.hub.publish({ type: 'input_receipt', sessionId: id, inputClientId, clientId: inputClientId, status: 'interrupted' });
+      });
     },
     onPersistedSendRejected(id, message) {
       if (!isPiPromptRpcTimeoutError({ message })) return;
