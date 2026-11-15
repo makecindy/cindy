@@ -4398,7 +4398,9 @@
           "inline": "Executa em",
           "signInHere": "Iniciar sessão neste computador",
           "writeFailed": "Não foi possível guardar onde este fornecedor é executado. Tente novamente."
-        }
+        },
+        "sameAccountConnections": "Ligações guardadas desta conta",
+        "sameAccountConnectionsHint": "A conta aparece apenas uma vez. Escolher uma ligação altera apenas as definições a gerir; as tarefas existentes mantêm a sua ligação."
       },
       "detect": {
         "groupLabel": "Detetado neste dispositivo",
@@ -5423,6 +5425,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Compressão do Codex no servidor",
+        "description": "Quando ativada, dá preferência à compressão no servidor. Quando desativada, o Codex utiliza o resumo local nativo, que continua a chamar o modelo atual.",
+        "hint": "Aplica-se quando o Codex iniciar ou retomar uma tarefa neste computador. Os fornecedores sem compressão no servidor mantêm o comportamento atual.",
+        "loadFailed": "Não foi possível carregar as definições de compressão do Codex",
+        "saveFailed": "Não foi possível guardar as definições de compressão do Codex"
+      },
       "title": "Compactação de contexto",
       "description": "Ajuste aqui as proporções de compactação do Claude Code e do Pi. O Codex calcula o limiar a partir da definição de contexto do modelo. Se a compactação remota falhar, muda automaticamente para compactação por resumo e continua a utilizá-la na tarefa atual.",
       "card": {
@@ -8289,9 +8298,9 @@
         "agentCompanionsDetail": "Pode ver todos os amigos, incluindo os que são executados nos seus outros computadores: nome, descrição, avatar, estado (a trabalhar, a aguardar por si, inativo, offline), o tipo de passo em que cada um está (como a pensar ou a executar uma ferramenta), os pedidos que aguardam por si tal como os cartões os mostram (perguntas, comandos a executar, planos) e a conversa recente do chat principal (até 50 das suas mensagens e das respostas deles, sem os passos de ferramentas); e abrir a conversa de um amigo na janela principal. Com a permissão de entregar mensagens também, pode transmitir as respostas que der no plugin: responder a perguntas, recusar pedidos e comentar planos. Para permitir um passo, continua a clicar na confirmação do próprio Cindy. Não pode ler ficheiros, passos de ferramentas nem raciocínios.",
         "agentCompanionsRequest": "Rever permissão para ver amigos",
         "hostTools_history": "Histórico de tarefas",
-        "hostTools_historyDetail": "Usar as ferramentas da Cindy para listar tarefas existentes, ler mensagens completas e pesquisar o histórico, incluindo outros computadores acessíveis que selecione explicitamente.",
+        "hostTools_historyDetail": "Usar as ferramentas da Cindy para listar tarefas existentes, ler mensagens completas e pesquisar o histórico, incluindo outros computadores acessíveis que selecione explicitamente. Exportar tarefas locais em ficheiros de formato nativo. Os plugins usam as permissões concedidas na instalação; as chamadas do Agent seguem as suas próprias permissões em tempo de execução.",
         "hostTools_control": "Gestão de tarefas",
-        "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes. As operações de alto risco exigem confirmação na Cindy de cada vez.",
+        "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes, e importar ficheiros de tarefas em formato nativo neste computador. As operações de alto risco exigem confirmação na Cindy de cada vez.",
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. As operações que precisam da tarefa atual exigem um destino explícito.",
         "hostTools_settings": "Definições da aplicação",
@@ -9346,6 +9355,9 @@
         "failed": "Não foi possível concluir a limpeza",
         "pending": "Em fila"
       }
+    },
+    "navigation": {
+      "unavailable": "Não foi possível abrir as definições do computador de destino. Verifique se está online e permite controlo remoto; atualize o Cindy se tiver uma versão antiga."
     }
   },
   "remoteDevice": {

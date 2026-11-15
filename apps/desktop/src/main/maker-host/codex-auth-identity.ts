@@ -1,4 +1,10 @@
 import { createHash } from 'node:crypto';
+
+/** Non-secret presentation equality; an email alone cannot identify a ChatGPT workspace. */
+export function codexAccountDisplayKey(email: string, workspaceId: string): string | undefined {
+  if (!email.trim() || !workspaceId.trim()) return undefined;
+  return createHash('sha256').update(JSON.stringify(['openai', email.trim().toLowerCase(), workspaceId])).digest('hex');
+}
 interface ChatgptIdTokenClaims {
   chatgpt_account_id?: unknown;
   sub?: unknown;

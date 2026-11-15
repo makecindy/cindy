@@ -436,5 +436,8 @@
       "sendText": "Enviar texto escrito",
       "taskHint": "Estos atajos funcionan en las páginas de sesión. Si un botón está asignado a voz, esa función tiene prioridad; al soltarlo, el texto queda en el cuadro de mensaje."
     }
+  },
+  "navigation": {
+    "unavailable": "No se pudo abrir la configuración del equipo de destino. Comprueba que esté conectado y permita el control remoto; actualiza Cindy si usa una versión antigua."
   }
 }

@@ -4342,7 +4342,9 @@
           "inline": "Runs on",
           "signInHere": "Sign in on this computer",
           "writeFailed": "Couldn’t save where this provider runs. Try again."
-        }
+        },
+        "sameAccountConnections": "Saved connections for this account",
+        "sameAccountConnectionsHint": "This account appears once. Choosing a connection only changes which settings you manage; existing tasks keep their connection."
       },
       "detect": {
         "groupLabel": "Detected on this device",
@@ -5365,6 +5367,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex server compaction",
+        "description": "Prefer server compaction when enabled. When disabled, Codex uses native local summarization, which still calls the current model.",
+        "hint": "Applies when Codex next starts or resumes a session on this computer. Providers without server compaction keep their existing behavior.",
+        "loadFailed": "Could not load Codex compaction settings",
+        "saveFailed": "Could not save Codex compaction settings"
+      },
       "title": "Context compaction",
       "description": "Adjust Claude Code and Pi compaction ratios here. Codex derives its threshold from the model context setting. If remote compaction fails, it automatically switches to summary compaction and keeps using it for the current task.",
       "card": {
@@ -8217,9 +8226,9 @@
         "agentCompanionsDetail": "Can view all your buddies, including those running on your other computers: name, description, avatar, status (working, waiting for you, idle, offline), what kind of step each is on (such as thinking or running a tool), the requests waiting for you as their cards show them (questions, commands to run, plans), and the recent conversation in each buddy’s main chat (up to 50 of your messages and their replies, without tool steps); and open a buddy’s conversation in the main window. With the message delivery permission as well, it can pass on the answers you give in the plugin: answer questions, decline requests, and give feedback on plans. Allowing a step still takes your click in Cindy’s own confirmation. Cannot read files, tool steps or thinking.",
         "agentCompanionsRequest": "Review buddy viewing permission",
         "hostTools_history": "Task History",
-        "hostTools_historyDetail": "Use Cindy’s task tools to list existing tasks, read complete messages and search history, including your other computers when explicitly selected and accessible.",
+        "hostTools_historyDetail": "Use Cindy’s task tools to list existing tasks, read complete messages and search history, including your other computers when explicitly selected and accessible. Export local tasks as native files. Plugin calls use installation authorization; Agent calls follow their own runtime permissions.",
         "hostTools_control": "Task Management",
-        "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects. High-risk operations require confirmation in Cindy each time.",
+        "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects, and import native task files on this computer. High-risk operations require confirmation in Cindy each time.",
         "hostTools_handoff": "Task Messaging",
         "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
         "hostTools_settings": "App Settings",
@@ -9274,6 +9283,9 @@
         "failed": "Cleanup could not finish",
         "pending": "Queued"
       }
+    },
+    "navigation": {
+      "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
     }
   },
   "remoteDevice": {

@@ -15,17 +15,20 @@ import type { AgentEvent } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
 
 const binaryPath = process.env.CINDY_CODEX_TEST_BINARY;
-const logger: Logger = {
-  trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger,
-};
-
 it.skipIf(!binaryPath)('keeps Cindy AI, subscription and custom routes usable across native resume and provider changes', async () => {
+  let nativeInitializations = 0;
+  const logger: Logger = {
+    trace() {}, debug() {},
+    info(message) { if (message === 'initialized') nativeInitializations++; },
+    warn() {}, error() {}, fatal() {}, child: () => logger,
+  };
   const root = await mkdtemp(path.join(tmpdir(), 'cindy-provider-native-'));
   const home = path.join(root, 'codex');
   const work = path.join(root, 'work');
   await Promise.all([mkdir(home), mkdir(work)]);
   const requests: Array<{ provider: string; body: string }> = [];
   let exerciseCompaction = false;
+  let serverCompactionPreference: boolean | null = null;
   let seedReported = false;
   let failedCompactions = 0;
   const server = createServer(async (req, res) => {
@@ -62,6 +65,7 @@ it.skipIf(!binaryPath)('keeps Cindy AI, subscription and custom routes usable ac
   const locations = new Map<string, string>();
   const agent = new CodexAgent({
     binaryPath: binaryPath!, logger, runtimeConfig: {}, isolateCodexAccountSessions: true,
+    getCodexServerCompactionPreference: () => serverCompactionPreference,
     resolveModelContextLimit: () => exerciseCompaction ? 4096 : null,
     recordCodexThreadLocation: async (id, _home, rollout) => { if (rollout) locations.set(id, rollout); },
     prepareCodexResumeSession: async (id) => locations.get(id),
@@ -125,6 +129,17 @@ it.skipIf(!binaryPath)('keeps Cindy AI, subscription and custom routes usable ac
     };
   };
   try {
+    // Regression: an explicit off preference used to initialize the remote
+    // identity first, then restart the real process for the summary identity.
+    serverCompactionPreference = false;
+    for (const [provider, model] of [['openai', 'gpt-6.1-sol'], ['xd', 'codex/gpt-6.1-sol']]) {
+      const before = nativeInitializations;
+      const cold = await open(`summary-cold-${provider}`, provider, model);
+      await cold.send(`LOCAL_COLD_START_${provider}`, 'cindy_summary');
+      expect(nativeInitializations - before).toBe(1);
+      await cold.close();
+    }
+    serverCompactionPreference = null;
     const cindy = await open('cindy', 'xd', 'codex/gpt-6.1-sol');
     const subscription = await open('subscription', 'openai', 'gpt-6.1-sol');
     const [original] = await Promise.all([
@@ -151,6 +166,16 @@ it.skipIf(!binaryPath)('keeps Cindy AI, subscription and custom routes usable ac
       if (nextId !== previousId) expect(await readFile(sourcePath, 'utf8')).toBe(source);
       previousId = nextId;
     }
+    // The explicit switch must affect real native requests after resume, while
+    // preserving the earlier history across the native provider mismatch guard.
+    for (const enabled of [false, true]) {
+      serverCompactionPreference = enabled;
+      const next = await open('cindy', 'xd', 'codex/gpt-6.1-sol', previousId);
+      previousId = await next.send(`SERVER_COMPACTION_${enabled}`,
+        enabled ? 'cindy_codex' : 'cindy_summary', 'HISTORY_CINDY_SENTINEL');
+      await next.close();
+    }
+    serverCompactionPreference = null;
     exerciseCompaction = true;
     const compacting = await open('compacting', 'xd', 'codex/gpt-6.1-sol');
     await compacting.send('COMPACTION_SEED', 'cindy_codex');

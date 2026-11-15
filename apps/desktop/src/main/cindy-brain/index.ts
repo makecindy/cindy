@@ -10,7 +10,7 @@ import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
 import { importPickedFiles } from './pickedFiles.js';
 import { mediaTypeForLibraryPath } from './runtime/ghostFiles.js';
 import { pluginUiPromptDeclined, pluginUiPromptSuppressed, deferPluginUiPrompt, declinePluginUiPrompt } from './pluginUiPreferences.js';
-import { ghostPermissionItems, ghostHostUiNeedsApproval, declaredGhostControlPoints } from '../../shared/ghost.js';
+import { ghostPermissionItems, declaredGhostControlPoints } from '../../shared/ghost.js';
 import { refreshPluginApps, listPluginHostUi, readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
 import { configurePluginSettings } from '../app-settings/plugins.js';
 import { notifyAppSettingsChanged } from '../app-settings/changes.js';
@@ -211,8 +211,7 @@ export async function requestPluginUiApproval(id: string, sender?: WebContents, 
   remote?: { prompt: GhostInstallConsentPrompt; assertCurrent(): void }) {
   const ghost = findGhostForInstanceId(id);
   if (!ghost?.enabled || ghost.approval.state !== 'approved' || !pluginHasToolUi(ghost.manifest)) return { granted: false, state: 'unavailable' as const };
-  const approveHost = !remote || remote.prompt.hostUiCapabilityApproval === true;
-  if (ghost.uiCapabilityApproved === true && (!approveHost || !ghostHostUiNeedsApproval(ghost))) return { granted: true, state: 'enabled' as const };
+  if (ghost.uiCapabilityApproved === true) return { granted: true, state: 'enabled' as const };
   const revision = ghost.approval.revision;
   if (!explicit && pluginUiPromptDeclined(id, ghost.manifest.version)) return { granted: false, state: 'declined' as const };
   const mainWindow = getDeepLinkMainWindow();
@@ -238,7 +237,7 @@ export async function requestPluginUiApproval(id: string, sender?: WebContents, 
     const accepted = await confirm({
       trust: ghost.trust?.level, purpose: 'ui-capability', initiator: 'user', origin: 'local-file', facts: {
         kind: 'update', ghostId: id, name: ghost.manifest.name, version: ghost.manifest.version,
-        previousVersion: ghost.manifest.version, added: ghostPermissionItems(ghost.manifest).filter(item => item.key === 'ui:pages' || approveHost && item.key.startsWith('ui:host:')),
+        previousVersion: ghost.manifest.version, added: ghostPermissionItems(ghost.manifest).filter(item => item.key === 'ui:pages'),
         removed: [], unchangedCount: 0, builtinOauthClientChanged: false,
       },
     });
@@ -247,7 +246,7 @@ export async function requestPluginUiApproval(id: string, sender?: WebContents, 
       if (declined) { declinePluginUiPrompt(id, ghost.manifest.version); broadcastGhostsChanged(manager.list(), false, { projectionOnly: true }); }
       return false;
     }
-    return manager.approveUiCapability(id, revision, isCurrent, approveHost);
+    return manager.approveUiCapability(id, revision, isCurrent);
   });
   if (granted) { broadcastGhostsChanged(manager.list()); }
   return { granted, state: granted ? 'enabled' as const : declined ? 'declined' as const : 'pending' as const };
@@ -605,7 +604,6 @@ import {
   confirmedCindyModelActions,
   confirmedControlPoints,
   confirmedUiCapability,
-  confirmedHostUiPermissions,
   obtainGhostInstallConsent,
   type GhostInstallConsentDecision,
   type GhostInstallConsentPrompt,
@@ -4387,7 +4385,6 @@ export function createWindowGhostInstallConsentPrompt(
       { onDecision },
     );
   };
-  prompt.hostUiCapabilityApproval = true;
   return prompt;
 }
 
@@ -7995,7 +7992,6 @@ async function installAndDockLocked(
     taskCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
     targetCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'targets'),
     uiCapabilityApproved: confirmedUiCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
-    approvedHostUi: confirmedHostUiPermissions(opts.consent.decision, installedBefore, opts.consent.manifest),
     delegationCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'delegation'),
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
@@ -8196,7 +8192,6 @@ async function updateLocalGhostPackageLocked(
           taskCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest),
           targetCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'targets'),
           uiCapabilityApproved: confirmedUiCapability(consent, previousGhost, inspected.manifest),
-          approvedHostUi: confirmedHostUiPermissions(consent, previousGhost, inspected.manifest),
           delegationCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'delegation'),
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
@@ -8789,7 +8784,6 @@ async function installOrUpdateMarketGhostPackageLocked(
           taskCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest),
           targetCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'targets'),
           uiCapabilityApproved: confirmedUiCapability(expected.consent, installed, inspected.manifest),
-          approvedHostUi: confirmedHostUiPermissions(expected.consent, installed, inspected.manifest),
           delegationCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'delegation'),
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),

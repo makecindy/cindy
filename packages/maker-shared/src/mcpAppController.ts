@@ -95,7 +95,8 @@ export class McpAppController {
         this.startupTimer = undefined;
       }
       if (['ui/notifications/initialized', 'ui/notifications/size-changed', 'ui/notifications/host-context-changed',
-        'ui/notifications/sandbox-handshake-started', 'ui/notifications/sandbox-result-delivered'].includes(message.method ?? ''))
+        'ui/notifications/sandbox-handshake-started', 'ui/notifications/sandbox-result-delivered',
+        'ui/notifications/sandbox-escape'].includes(message.method ?? ''))
         this.onState(message);
       return;
     }
@@ -106,6 +107,7 @@ export class McpAppController {
     }
     if (message.method === 'ui/notifications/sandbox-escape') {
       void this.displayMode('inline').catch((error) => this.fail(error));
+      this.onState(message);
       return;
     }
     if (message.method?.startsWith('ui/notifications/sandbox-')) return;
