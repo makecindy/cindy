@@ -411,10 +411,11 @@ describe('Host copies of desktop expressions', () => {
 });
 
 // 以下断言原在桌面普通单测里读 register.ts；第一批桌面准备把被守护的代码原样搬进共用文件
-// （如 interruptedTurnAutoResumeHooks.ts），Host 之后直接调用这些文件。断言随代码
+// （interruptedTurnAutoResumeHooks.ts、silentStopTurnEnd.ts），Host 之后直接调用这些文件。断言随代码
 // 改读新文件，按测试规范从普通单测移到这里，每条的意思不变；register.ts 一侧的接线断言留在原文件。
 describe('shared turn files moved out of register.ts', () => {
   const autoResumeHooksSource = read(path.join(desktopMain, 'maker-ipc/interruptedTurnAutoResumeHooks.ts'));
+  const silentStopTurnEndSource = read(path.join(desktopMain, 'maker-ipc/silentStopTurnEnd.ts'));
 
   // 原在 interruptedContinuationContract.test.ts “keeps a scheduler auto-resume owned until dispatch and fails it
   // when discarded”。规则：定时任务的自动续接在派发前一直归它所有，被丢弃时以 deferredOwner 收尾。
@@ -447,5 +448,31 @@ describe('shared turn files moved out of register.ts', () => {
       'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
     );
     expect(autoResumeHooksSource).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
+  });
+
+  // 原在 makerEventHotPathOrdering.test.ts “preserves the product clock before a silent-stop continuation can emit
+  // running”。规则：静默停止续接发出前先保住这一轮的计时。失效后果：续接一开始就把用时清零。
+  it('preserves the product clock before a silent-stop continuation can emit running', () => {
+    const start = silentStopTurnEndSource.indexOf('export async function handleSilentStopTurnEndWithPorts(');
+    const continuation = silentStopTurnEndSource.slice(start);
+    const first = continuation.indexOf('productTurnWallClockTracker.preserveForContinuation(session.id);');
+    const second = continuation.indexOf('const sendResult = await session.sendHostTurnContinuation(');
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(second).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(second);
+  });
+
+  // 原在 silentStopContinuationBinding.test.ts “binds the reserved generation via the extracted helper and rolls back
+  // on send failure”。规则：续接预约的代次经 helper 绑定，sendOpts 并入续接调用，未派发与抛出两条失败都回滚。
+  // 失效后果：续接失败后代次留着，后面的终止事件被当成过期丢掉。
+  it('binds the reserved generation via the extracted helper and rolls back on send failure', () => {
+    const start = silentStopTurnEndSource.indexOf('export async function handleSilentStopTurnEndWithPorts(');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = silentStopTurnEndSource.indexOf('\n}\n', start);
+    expect(end).toBeGreaterThan(start);
+    const resumeBlock = silentStopTurnEndSource.slice(start, end);
+    expect(resumeBlock).toContain('bindSilentStopContinuationGeneration(session.id');
+    expect(resumeBlock).toContain('...binding.sendOpts,');
+    expect(resumeBlock.match(/binding\.rollbackBinding\(\);/g)).toHaveLength(2);
   });
 });

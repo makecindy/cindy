@@ -201,15 +201,8 @@ describe('maker:event hot path ordering', () => {
   // broadcasts EVENT before usage/context/island/idle side effects: covered by the executable sessionEventPipeline tests.
 
   // tracks Claude wall clock across continuation segments and only consumes it at product completion: covered by the executable sessionEventPipeline tests.
-  it('preserves the product clock before a silent-stop continuation can emit running', () => {
-    const start = source.indexOf('async function handleSilentStopTurnEnd(');
-    const continuation = source.slice(start, source.indexOf('\nfunction ', start + 1));
-    expectOrder(
-      continuation,
-      'productTurnWallClockTracker.preserveForContinuation(session.id);',
-      'const sendResult = await session.sendHostTurnContinuation(',
-    );
-  });
+  // preserves the product clock before a silent-stop continuation can emit running: the turn-end body is in
+  // silentStopTurnEnd.ts, guarded in hostDesktopSourceContracts.guard.test.ts.
 
   it('uses the assistant API message id as Vertex output-lag evidence', () => {
     const wireSessionSource = readEventModule('sessionClaudeTurnUsage');
