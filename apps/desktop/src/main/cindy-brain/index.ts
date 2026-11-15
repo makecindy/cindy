@@ -112,7 +112,7 @@ import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
 import { PluginTargetSlot, type PluginTargetAdapter } from './pluginTargetSlot.js';
 import { handlePluginObserveRequest, type PluginObserveAdapter } from './pluginObserveSlot.js';
 import { createCompanionWatchHub, handlePluginCompanionRequest, type CompanionWatchHub, type PluginCompanionAdapter } from './pluginCompanionSlot.js';
-import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, pluginHostToolGroup, pluginEventTopic, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
+import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
 import {
   registerGhostCardRemoteProvider,
   persistGhostCardWithRemoteChange,
@@ -166,28 +166,10 @@ function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm
   }, capability));
 }
 
-/** UI and Node requests share this exact gateway, including first-use and per-call approval. */
+/** UI and Node requests share the installed group's authority and invocation guards. */
 function requestPluginHostToolCall(id: string, payload: unknown, current: () => boolean) {
   return handlePluginHostToolRequest(id, payload, current, withPluginSchedulerApproval(id, {
     getGhost: findGhostForInstanceId, owner: getActiveDataOwnerPushStamp, createRuntime: createHostToolRuntime,
-    approveGroup: (pluginId, group, active) => requestPluginTaskApproval(pluginId, active, facts => {
-      const window = getDeepLinkMainWindow();
-      if (!window || !isTrustedAppRendererWindow(window)) return Promise.resolve(false);
-      return createWindowGhostInstallConsentPrompt(window.webContents)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts });
-    }, false, `host-tools:${group}`),
-    policy: (serverName, name, args) => getDesktopMcpToolApprovalPolicy({ serverName, toolName: 'call_tool', toolParams: { name, args } }),
-    confirm: async ({ pluginId, pluginName, server, tool, args }) => {
-      const parent = getDeepLinkMainWindow();
-      if (!parent || parent.isDestroyed() || !isTrustedAppRendererWindow(parent)) return false;
-      const decision = await dialog.showMessageBox(parent, {
-        type: 'question', title: t('settings.ghosts.perm.hostToolCallTitle'),
-        message: t('settings.ghosts.perm.hostToolCallMessage').replaceAll('{{name}}', () => pluginName)
-          .replaceAll('{{server}}', () => server).replaceAll('{{tool}}', () => tool),
-        detail: `${pluginId}\n\n${JSON.stringify(args, null, 2)}`,
-        buttons: [t('settings.ghosts.connections.confirmAllow'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
-      });
-      return decision.response === 0;
-    },
     recordCall: (pluginId, server, tool) => log.info('plugin host tool returned', { source: `插件 ${pluginId}`, server, tool }),
   }));
 }
@@ -578,8 +560,6 @@ import {
   assertGhostInstallConsent,
   confirmedTaskCapability,
   confirmedAutoTools,
-  confirmedHostToolGroups,
-  confirmedEventTopics,
   confirmedControlPoints,
   confirmedUiCapability,
   confirmedHostUiPermissions,
@@ -727,7 +707,7 @@ import { readModelDisableOverrides } from '../maker-host/model-disable-store.js'
 import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
-import { getDesktopMcpToolApprovalPolicy, setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
+import { setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
 import { createHostToolRuntime } from '../mcp-integrations/hostToolCaller.js';
 import { handlePluginHostToolRequest } from './hostToolSlot.js';
 import { withPluginSchedulerApproval } from './pluginSchedulerApproval.js';
@@ -7881,8 +7861,6 @@ async function installAndDockLocked(
     delegationCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'delegation'),
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
-    approvedHostToolGroups: confirmedHostToolGroups(opts.consent.decision, installedBefore, opts.consent.manifest),
-    approvedEventTopics: confirmedEventTopics(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
@@ -8083,8 +8061,6 @@ async function updateLocalGhostPackageLocked(
           delegationCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'delegation'),
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
-          approvedHostToolGroups: confirmedHostToolGroups(consent, previousGhost, inspected.manifest),
-          approvedEventTopics: confirmedEventTopics(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
@@ -8675,8 +8651,6 @@ async function installOrUpdateMarketGhostPackageLocked(
           delegationCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'delegation'),
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
-          approvedHostToolGroups: confirmedHostToolGroups(expected.consent, installed, inspected.manifest),
-          approvedEventTopics: confirmedEventTopics(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
@@ -11098,9 +11072,7 @@ export function registerGhostIpc(): void {
   ipcMain.handle('ghosts:request-task-approval', async (event, id: unknown, capability: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !id.trim()) throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
-    const hostGroup = typeof capability === 'string' ? pluginHostToolGroup(capability) : undefined;
-    const eventTopic = typeof capability === 'string' ? pluginEventTopic(capability) : undefined;
-    if (capability !== undefined && capability !== 'observe' && capability !== 'companions' && !hostGroup && !eventTopic) {
+    if (capability !== undefined && capability !== 'observe' && capability !== 'companions') {
       throwIpcError('INVALID_PARAMS', 'unknown plugin capability');
     }
     requireGhostAvailableForActiveSession(id);
@@ -11109,7 +11081,7 @@ export function registerGhostIpc(): void {
     };
     const granted = await requestPluginTaskApproval(id, isCurrent, facts =>
       createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true,
-      eventTopic ? `event:${eventTopic}` : hostGroup ? `host-tools:${hostGroup}` : capability === 'observe' || capability === 'companions' ? capability : 'tasks');
+      capability === 'observe' || capability === 'companions' ? capability : 'tasks');
     if (granted) broadcastGhostsChanged(getGhostManager().list());
     return { granted };
   });

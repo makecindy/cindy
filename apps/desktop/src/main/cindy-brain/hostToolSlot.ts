@@ -1,4 +1,4 @@
-import { GHOST_HOST_TOOL_GROUPS, type GhostHostToolGroup } from '@cindy/plugin-protocol';
+import { GHOST_HOST_TOOL_GROUPS } from '@cindy/plugin-protocol';
 import type { HostToolCaller, HostToolRuntime } from '@cindy/mcps';
 import type { GhostPipeHostToolRequest, InstalledGhost } from '../../shared/ghost.js';
 import { ghostInstallApprovalToken } from '../../shared/ghost.js';
@@ -10,9 +10,6 @@ export interface PluginHostToolPorts {
   getGhost(id: string): InstalledGhost | null;
   owner(): DataOwnerPushStamp;
   createRuntime(server: string, caller: Extract<HostToolCaller, { kind: 'plugin' }>): HostToolRuntime | null;
-  approveGroup(id: string, group: GhostHostToolGroup, current: () => boolean): Promise<boolean>;
-  policy(server: string, tool: string, args: Record<string, unknown>): string;
-  confirm(input: { pluginId: string; pluginName: string; server: string; tool: string; args: Record<string, unknown> }): Promise<boolean>;
   recordCall?(pluginId: string, server: string, tool: string): void;
 }
 
@@ -50,12 +47,7 @@ export async function handlePluginHostToolRequest(id: string, payload: unknown, 
     const definition = runtime.describe(tool);
     const group = GHOST_HOST_TOOL_GROUPS.find(item => item === definition?.category);
     if (!definition || !group) return fail('PERMISSION_DENIED');
-    if (!await ports.approveGroup(id, group, current)) return fail('PERMISSION_DENIED');
     const authorized = () => current() && hasPluginHostToolGroupApproval(ports.getGhost(id), group);
-    if (!authorized()) return fail('PERMISSION_DENIED');
-    const perCall = ports.policy(server, definition.name, args) !== 'auto-approve';
-    if (perCall && !await ports.confirm({ pluginId: id, pluginName: ghost.manifest.name, server, tool: definition.name, args: JSON.parse(argsJson) }))
-      return fail('PERMISSION_DENIED');
     if (!authorized()) return fail('PERMISSION_DENIED');
     const assertCurrent = () => { if (!authorized()) throw new Error('PERMISSION_DENIED'); };
     const assertDeliveryCurrent = () => {

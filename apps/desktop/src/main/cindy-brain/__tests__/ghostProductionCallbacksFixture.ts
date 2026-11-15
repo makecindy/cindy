@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import ts from 'typescript';
-import { confirmedAutoTools, confirmedHostToolGroups, confirmedEventTopics, confirmedHostUiPermissions } from '../ghostInstallConsent.js';
+import { confirmedAutoTools, confirmedHostUiPermissions } from '../ghostInstallConsent.js';
 import { setPluginEnabled } from '../pluginEnableService.js';
 import { createGhostExecutionPipe } from '../executionPipe.js';
 import { setTaskChangeListener } from '../../localDb/taskEvents.js';
@@ -28,8 +28,6 @@ const productionIdentityDeps = {
   LOCAL_PLUGIN_NAMESPACE,
   isOrganizationPluginNamespace,
   confirmedAutoTools,
-  confirmedHostToolGroups,
-  confirmedEventTopics,
   confirmedHostUiPermissions,
   ghostInstallTargetContext,
   resolveForgeInstallTarget,

@@ -1,5 +1,5 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { declaredGhostHostToolGroups, type GhostHostToolGroup } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { getPluginHostUi, hostUiApprovalSubjects, type GhostHostUi } from '@cindy/plugin-protocol';
@@ -219,7 +219,7 @@ export interface GhostCardNeeds {
  *   可重新提交"处理)。
  */
 export interface GhostAgentNeeds {
-  /** Each known group requires its own explicit Host receipt approval. */
+  /** 安装或更新批准后，可调用当前 manifest 声明的 Host 工具组。 */
   hostTools?: string[];
   background?: boolean;
   errand?: boolean;
@@ -705,7 +705,7 @@ export interface GhostCindyNeeds {
  * activity = 轮次内思考/审批/等待用户输入的开始结束边界(只含 id 元数据);
  * session = 会话创建/归档/切换(切换 = 用户把哪个会话切到台前,2026-07-13 增)。
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
- * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
+ * 两项在安装或更新确认中展示；整体批准后按当前声明订阅，旧元数据主题语义保持。
  */
 export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
@@ -716,7 +716,7 @@ export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subs
 }
 export function ghostTaskEventApproved(ghost: InstalledGhost, topic: GhostSubscribeTopic): boolean {
   return !GHOST_TASK_EVENT_TOPICS.includes(topic as GhostTaskEventTopic) ||
-    (ghost.approval?.state === 'approved' && ghost.approvedEventTopics?.includes(topic as GhostTaskEventTopic) === true);
+    (ghost.enabled === true && ghost.approval?.state === 'approved' && ghost.manifest.subscribe?.topics?.includes(topic) === true);
 }
 
 /**
@@ -1987,8 +1987,6 @@ export interface InstalledGhost {
   observeCapabilityApproved?: true;
   /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
   companionsCapabilityApproved?: true;
-  approvedHostToolGroups?: GhostHostToolGroup[];
-  approvedEventTopics?: GhostTaskEventTopic[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -3003,11 +3001,10 @@ export function diffGhostPermissionItems(
  */
 function withoutUnapprovedControlPoints(installed: InstalledGhost): GhostManifest['subscribe'] {
   const subscribe = installed.manifest.subscribe;
-  if (!subscribe) return subscribe;
-  const topics = subscribe.topics?.filter(topic => ghostTaskEventApproved(installed, topic));
-  const hooks = subscribe.hooks?.filter((hook) =>
+  if (!subscribe?.hooks) return subscribe;
+  const hooks = subscribe.hooks.filter((hook) =>
     !isGhostControlPointId(hook) || installed.approvedControlPoints?.includes(hook) === true);
-  return { ...subscribe, topics, hooks: hooks?.length ? hooks : undefined };
+  return { ...subscribe, hooks: hooks.length ? hooks : undefined };
 }
 
 /** 声明了 `approval: "auto"` 但用户从没确认过的工具,不算旧权限。 */
@@ -3034,9 +3031,6 @@ export function diffInstalledGhostPermissionItems(
           ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
           host: getApprovedGhostHostUi(installed) }
         : undefined,
-      ...(installed.manifest.agent ? { agent: { ...installed.manifest.agent,
-        hostTools: declaredGhostHostToolGroups(installed.manifest).filter(group => installed.approvedHostToolGroups?.includes(group)),
-      } } : {}),
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
       systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,
