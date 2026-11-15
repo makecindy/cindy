@@ -344,6 +344,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 固定的 manifest / list / get / invoke 入口。业务模块只在被控端 provider
   // registry 注册资源与动作，后续新增模块或动作不再扩张 device-link channel 表。
   ...REMOTE_RESOURCE_CHANNELS,
+  'maker:settings:navigate',
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
   'local-db:task-tags:execute',

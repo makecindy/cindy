@@ -479,5 +479,8 @@
     "colors": {
       "default": "Default (follow theme)"
     }
+  },
+  "navigation": {
+    "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
   }
 }

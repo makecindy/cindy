@@ -93,6 +93,14 @@ Windows 的共享链接替换需要先删除本实例的目标。对同一目标
 实现与回归见 `maker-host/codex-auth-link.ts`、`auth-adapters.ts`、
 `codexAuthLink.test.ts` 和 `codexAuthInvalidation.test.ts`。
 
+Windows 的无覆盖发布子进程保留每次 15 秒的超时。子进程结束后若源目录项已消失、
+目标仍是开始时记录的目录项，则接受已提交结果；否则仅在确认超时、源目录项的
+身份／大小／修改时间未变且目标确实不存在时重试一次。读取状态失败不等于不存在，
+目标存在或来源变化时不重试；第二次超时返回脱敏的 `ETIMEDOUT`，不泄漏子进程命令、
+路径或环境。重试仍用原子无覆盖的 `File.Move`，不使用硬链接或覆盖重命名。
+实现与回归见 `maker-host/codex-auth-file-move.ts`、`codexAuthFileMove.test.ts` 和
+`scripts/check-windows-codex-auth-move.mjs`。
+
 ## Claude 订阅只经 Claude Code 自己的登录
 
 Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；第三方应用不得提供

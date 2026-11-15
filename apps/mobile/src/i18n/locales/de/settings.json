@@ -479,5 +479,8 @@
     "colors": {
       "default": "Standard (dem Design folgen)"
     }
+  },
+  "navigation": {
+    "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
   }
 }

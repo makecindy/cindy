@@ -16,6 +16,7 @@ import {
   confirmedAutoTools,
   confirmedHostToolGroups,
   confirmedEventTopics,
+  confirmedCindyModelActions,
   confirmedTaskCapability,
   confirmedUiCapability,
   confirmedHostUiPermissions,
@@ -149,6 +150,19 @@ it('records control points only when shown, and re-shows declared points the use
   // Already approved: nothing new to confirm.
   const approvedBefore = {...installed(next),approvedControlPoints:[point]};
   expect(await obtainGhostInstallConsent(policy,approvedBefore,next,reviewedDigest)).toEqual({mode:'unprompted'});
+});
+// Unit: formerly unknown model declarations stay unapproved until their exact permission rows are confirmed.
+it('requires confirmation for predeclared model APIs without re-confirming existing capabilities', async () => {
+  const next = { ...manifest(['api.example.test']), cindy: { image: ['generate'], models: ['rerank'] } } as GhostManifest;
+  const old = installed(next);
+  const prompt = vi.fn<GhostInstallConsentPrompt>(async () => true);
+  const policy = { mode: 'prompt' as const, prompt, initiator: 'user' as const, origin: 'market' as const };
+  const decision = await obtainGhostInstallConsent(policy, old, next, reviewedDigest);
+  expect(prompt.mock.calls[0][0].facts).toMatchObject({ kind: 'update', added: [{ key: 'cindy:models.rerank' }] });
+  expect(confirmedCindyModelActions(decision, old, next)).toEqual(['rerank']);
+  expect(confirmedCindyModelActions({ mode: 'unprompted' }, old, next)).toEqual([]);
+  expect(await obtainGhostInstallConsent(policy, { ...old, approvedCindyModelActions: ['rerank'] }, next, reviewedDigest))
+    .toEqual({ mode: 'unprompted' });
 });
 const replacedDigest = 'b'.repeat(64);
 

@@ -479,5 +479,8 @@
     "colors": {
       "default": "Predeterminado (según el tema)"
     }
+  },
+  "navigation": {
+    "unavailable": "No se pudo abrir la configuración del equipo de destino. Comprueba que esté conectado y permita el control remoto; actualiza Cindy si usa una versión antigua."
   }
 }

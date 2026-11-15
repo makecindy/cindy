@@ -479,5 +479,8 @@
     "colors": {
       "default": "Par défaut (selon le thème)"
     }
+  },
+  "navigation": {
+    "unavailable": "Impossible d’ouvrir les paramètres de l’ordinateur cible. Vérifiez qu’il est en ligne et autorise le contrôle à distance ; mettez Cindy à jour si nécessaire."
   }
 }

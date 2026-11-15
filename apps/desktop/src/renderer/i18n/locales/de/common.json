@@ -4342,7 +4342,9 @@
           "inline": "Läuft auf",
           "signInHere": "Auf diesem Computer anmelden",
           "writeFailed": "Der Ausführungsort konnte nicht gespeichert werden. Bitte versuche es erneut."
-        }
+        },
+        "sameAccountConnections": "Gespeicherte Verbindungen für dieses Konto",
+        "sameAccountConnectionsHint": "Dieses Konto wird nur einmal angezeigt. Die Auswahl einer Verbindung ändert nur die verwalteten Einstellungen; bestehende Aufgaben behalten ihre Verbindung."
       },
       "detect": {
         "groupLabel": "Auf diesem Gerät erkannt",
@@ -5365,6 +5367,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex-Komprimierung auf dem Server",
+        "description": "Wenn aktiviert, wird die Komprimierung auf dem Server bevorzugt. Andernfalls nutzt Codex die native lokale Zusammenfassung, die weiterhin das aktuelle Modell aufruft.",
+        "hint": "Gilt beim nächsten Start oder Fortsetzen einer Codex-Aufgabe auf diesem Computer. Anbieter ohne Serverkomprimierung behalten ihr bisheriges Verhalten bei.",
+        "loadFailed": "Codex-Komprimierungseinstellungen konnten nicht geladen werden",
+        "saveFailed": "Codex-Komprimierungseinstellungen konnten nicht gespeichert werden"
+      },
       "title": "Kontextkomprimierung",
       "description": "Passe hier die Komprimierungsverhältnisse für Claude Code und Pi an. Codex leitet seinen Schwellenwert aus der Einstellung für den Modellkontext ab. Wenn die Remote-Komprimierung fehlschlägt, wechselt es automatisch zur Komprimierung per Zusammenfassung und nutzt diese für die aktuelle Aufgabe weiter.",
       "card": {
@@ -8193,6 +8202,8 @@
         "cindyTextOneshot": "Kann Cindys Fast Lane eine Frage stellen und eine Textantwort erhalten",
         "cindyTextOneshotDetail": "Verwendet die schlanke Hilfsmodellkette des Systems (denselben Verarbeitungspfad wie automatische Titel). Kein Agent beteiligt und kein Dateizugriff. Es können Modellkosten anfallen.",
         "cindyEmbedText": "Kann Text zur Umwandlung in Vektoren senden (für die semantische Suche)",
+        "cindyModelsDecisions": "Kann Entscheidungsmodelle aufrufen (verbraucht dein Modellkontingent)",
+        "cindyModelsRerank": "Kann Neusortierungsmodelle aufrufen (verbraucht dein Modellkontingent)",
         "cindyEmbedTextDetail": "Text wird an das Embedding-Modell des Systems gesendet und in Zahlen umgewandelt, bis zu {{max}} Elemente pro Aufruf. Es können Modellkosten anfallen. Die Vektoren gehen nur an das Plugin – in deiner eigenen Bibliothek wird nichts gespeichert.",
         "cindySearchWeb": "Kann mit Cindy AI das öffentliche Web durchsuchen",
         "cindySearchWebDetail": "Suchanfragen greifen auf das öffentliche Web zu und können Cindy AI-Kontingent verbrauchen.",
@@ -8215,9 +8226,9 @@
         "agentCompanionsDetail": "Kann alle Freunde sehen, auch die auf deinen anderen Computern: Name, Beschreibung, Avatar, Status (arbeitet, wartet auf dich, inaktiv, offline), die Art des aktuellen Schritts (etwa Nachdenken oder ein Tool ausführen), die Anfragen, die auf dich warten, so wie ihre Karten sie zeigen (Fragen, auszuführende Befehle, Pläne), und die letzten Nachrichten im Hauptchat (bis zu 50 deiner Nachrichten und ihrer Antworten, ohne Tool-Schritte); außerdem die Unterhaltung eines Freundes im Hauptfenster öffnen. Mit der Berechtigung zum Zustellen von Nachrichten kann es deine im Plugin gegebenen Antworten weitergeben: Fragen beantworten, Anfragen ablehnen und Feedback zu Plänen geben. Zum Erlauben eines Schritts klickst du weiterhin in Cindys eigener Bestätigung. Kann keine Dateien, Tool-Schritte oder Gedankengänge lesen.",
         "agentCompanionsRequest": "Berechtigung zum Anzeigen von Freunden prüfen",
         "hostTools_history": "Aufgabenverlauf",
-        "hostTools_historyDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben auflisten, vollständige Nachrichten lesen und den Verlauf durchsuchen, auch auf ausdrücklich ausgewählten, zugänglichen anderen Computern.",
+        "hostTools_historyDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben auflisten, vollständige Nachrichten lesen und den Verlauf durchsuchen, auch auf ausdrücklich ausgewählten, zugänglichen anderen Computern. Lokale Aufgaben im nativen Dateiformat exportieren. Plugins nutzen die bei der Installation erteilten Berechtigungen; Agent-Aufrufe folgen den eigenen Laufzeitberechtigungen.",
         "hostTools_control": "Aufgabenverwaltung",
-        "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern. Vorgänge mit hohem Risiko erfordern jedes Mal eine Bestätigung in Cindy.",
+        "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern sowie native Aufgabendateien auf diesem Computer importieren. Vorgänge mit hohem Risiko erfordern jedes Mal eine Bestätigung in Cindy.",
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
         "hostTools_settings": "App-Einstellungen",
@@ -9262,6 +9273,9 @@
         "failed": "Bereinigung konnte nicht abgeschlossen werden",
         "pending": "In der Warteschlange"
       }
+    },
+    "navigation": {
+      "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
     }
   },
   "remoteDevice": {
@@ -9377,6 +9391,7 @@
     "backToLogin": "Zurück zur Anmeldung"
   },
   "login": {
+    "networkResponseHint": "Der Anmeldedienst hat eine unerwartete Antwort zurückgegeben. Ein Netzwerkzwischengerät oder Proxy blockiert möglicherweise die Anfrage. Prüfe die Netzwerk- und Proxy-Einstellungen.",
     "title": "Willkommen bei Cindy",
     "subtitle": "Wähle eine sichere Anmeldemethode",
     "savedLoginPreserved": "Bei der Wiederherstellung bleiben deine gespeicherten Anmeldedaten erhalten",
@@ -9723,6 +9738,7 @@
     "tokenLine": "Tokens: {{total}} gesamt · Eingabe {{input}} · Ausgabe {{output}}",
     "cacheLine": "Cache-Aufschlüsselung: Lesen {{read}} · Schreiben {{create}} · Trefferquote {{rate}}",
     "cacheLineNoRate": "Cache-Aufschlüsselung: Lesen {{read}} · Schreiben {{create}}",
+    "stepsLine": "Anfragen in dieser Runde: {{steps}} · je ca. {{context}} Kontext",
     "modelLine": "Modell: {{model}}",
     "multipleModels": "{{count}} Modelle",
     "costBreakdownHeader": "Nach Modell:",
@@ -13935,6 +13951,7 @@
         "realtime": "Echtzeit-Audio",
         "embedding": "Embeddings",
         "decision": "Entscheidung",
+        "rerank": "Neusortierung",
         "compression": "Komprimierung",
         "ungrouped": "Ohne Gruppe",
         "other": "Sonstige"
@@ -17217,9 +17234,8 @@
         "automatic": "Automatisch",
         "manually": "Manuell",
         "session": "Sitzung",
-        "silentRun": "Keine Meldung, wenn Prüfungen nichts finden",
-        "silentRunTooltip": "Nur Änderungen oder Probleme melden. Für Erinnerungen und geplante Nachrichten deaktivieren.",
-        "silentRunInfoAria": "Regeln für stille Ausführungen anzeigen",
+        "silentRun": "Stille Ausführung",
+        "silentRunTooltip": "Wenn aktiviert, benachrichtigen erfolgreiche Ausführungen standardmäßig nicht. Verlangt der Aufgaben-Prompt eine Benachrichtigung unter bestimmten Bedingungen, meldet sich die KI, sobald diese erfüllt sind. Fehler und Ausnahmen werden weiterhin gemeldet.",
         "finishSendToFeishu": "Ergebnis an FeishuBot senden",
         "finishSendToWecomGroup": "Ergebnis an WeCom-Gruppe senden",
         "configWecomGroup": "WeCom-Gruppenbenachrichtigungen konfigurieren",
@@ -17329,10 +17345,7 @@
       },
       "layout": {
         "content": "Auszuführender Inhalt",
-        "notifications": "Benachrichtigungen und stille Ausführung",
-        "contentTab": "Inhalt und Auslöser",
-        "optionsTab": "Ausführungsoptionen",
-        "sections": "Automatisierungseinstellungen"
+        "notifications": "Benachrichtigungen und stille Ausführung"
       },
       "webhook": {
         "quotaHint": "Webhook-Empfänge sind pro Tag begrenzt, und Filter hier verringern die Anzahl nicht. Wähle beim Absender, etwa GitHub, nur die benötigten Ereignisse aus.",

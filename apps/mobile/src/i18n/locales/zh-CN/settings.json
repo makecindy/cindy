@@ -479,5 +479,8 @@
     "colors": {
       "default": "默认色（跟随主题）"
     }
+  },
+  "navigation": {
+    "unavailable": "无法打开目标电脑的设置。请确认电脑在线并已允许远程控制；旧版本请先更新 Cindy。"
   }
 }
