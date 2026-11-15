@@ -1,57 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
-import { Alert, Image, Pressable, StyleSheet, View } from 'react-native';
+import { Image, Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import type { AppIcon } from '@cindy/maker-shared';
 import { Text } from '@/components/AppText';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
-import { applyAppIcon, readAppIconState, type AppIconState } from '@/platform/appIcon';
 import { useSettingsRowStyles } from '@/session/SettingsGroupRows';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
 import { APP_ICON_PREVIEWS } from './appIconPreviews.generated';
 
-export interface AppIconChoice {
-  state: AppIconState;
-  select(icon: AppIcon): void;
-}
-
-/**
- * Null where the installed build cannot switch icons (Android, older builds),
- * so the settings page can leave the row out instead of showing an empty one.
- */
-export function useAppIconChoice(): AppIconChoice | null {
-  const { t } = useTranslation();
-  const [state, setState] = useState<AppIconState | null>(null);
-  const requestRef = useRef(0);
-
-  useEffect(() => {
-    let active = true;
-    void readAppIconState().then((next) => {
-      if (active) setState(next);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  if (!state) return null;
-  const select = (icon: AppIcon) => {
-    if (icon === state.current) return;
-    const previous = state.current;
-    const request = ++requestRef.current;
-    setState({ ...state, current: icon });
-    applyAppIcon(icon).catch(() => {
-      // A newer tap owns the selection; only the latest failure rolls back.
-      if (request !== requestRef.current) return;
-      setState((latest) => (latest ? { ...latest, current: previous } : latest));
-      Alert.alert(
-        t('settings.appearance.appIcon.label'),
-        t('settings.appearance.appIcon.saveFailed'),
-      );
-    });
-  };
-  return { state, select };
-}
+export { useAppIconChoice } from './useAppIconChoice';
+import type { AppIconChoice } from './useAppIconChoice';
 
 /**
  * Home screen icon choice, the phone counterpart of the Desktop Dock icon row:

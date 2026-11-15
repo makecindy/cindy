@@ -762,7 +762,8 @@ Android 原生接收器修改需要新安装包，旧包不能靠 OTA 获得后�
 `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES`；`CFBundleAlternateIcons` 由 actool 写入 Info.plist。
 带深色母版的图标在 iOS 18 及以上按主屏幕的图标样式显示：默认样式始终用浅色图，用户在主屏幕「自定义」里选了
 「深色」（或「自动」且系统为深色）才用深色图；更早的系统只显示浅色。`cindy-app-icon` 模块读取
-和切换图标，选择由系统保存，App 不另存一份。
+和切换图标，选择由系统保存，App 不另存一份。设置页每次只执行一次切换，完成后重新读取系统状态，
+选中项只表示已生效的图标；切换失败也读取实际状态，不回滚到尚未生效的点选。
 
 图标随原生包交付：新增或更换的图片必须冷更，清单与母版都是指纹输入（`fingerprint.config.cjs`
 只登记 manifest 与它引用的图片）。JS 清单可能先于原生包经 OTA 到达，所以设置页只显示当前安装包
