@@ -48,6 +48,7 @@ agentNetRequiresEncryption: () => mocks.onlyEncrypted, agentNetSelectionKey: () 
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.scope, isAppSessionBoundaryPending: () => false }));
 
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi.desktop';
+import { PROVIDER_METADATA_TRUST_MS } from '@cindy/device-link';
 import { __resetDeviceDirectoryUnionForTests } from '../agentNetDeviceDirectory';
 import { invalidateProviderDirectoryContinuity } from '../providerMetadataContinuity';
 import { __resetDirectoryThrottleForTests, recordDirectoryRetryDeadline, setDirectoryThrottleOwnerSource } from '../directoryThrottle';
@@ -229,12 +230,52 @@ describe('deviceLinkApiFetch', () => {
       opts.signal?.addEventListener('abort', () => reject(opts.signal!.reason), { once: true });
     }));
     const controller = new AbortController();
-    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string }>; partial?: boolean }>('/api/device-link/devices', { signal: controller.signal });
+    const pending = deviceLinkApiFetch<{ devices: Array<{ deviceId: string }>; partial?: boolean; rememberedUntilMs?: number }>('/api/device-link/devices', { signal: controller.signal });
     await vi.waitFor(() => expect(mocks.v2Directory).toHaveBeenCalledTimes(2));
     controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
     const partial = await pending;
     expect(partial.partial).toBe(true);
     expect(partial.devices.map((device) => device.deviceId).sort()).toEqual(['v1-peer', 'v2-peer']);
+    // 并进来的旧行带着**自己**的期限(上一次完整目录 + 30 分钟):连续性缓存按这份期限算
+    // 预算,不让一次部分成功给旧行续一整份 30 分钟
+    // (Greptile review #9360「旧目录被重新计时」)。
+    expect(partial.rememberedUntilMs).toBeGreaterThan(Date.now());
+    expect(partial.rememberedUntilMs).toBeLessThanOrEqual(Date.now() + PROVIDER_METADATA_TRUST_MS);
+  });
+
+  // 响应头**已经表态**的中止不是「连不上」。
+  //
+  // 旧版 REST 回了 403、正文卡到调用方期限时,fetch 层把已知的 403 贴在中止原因上
+  // (见 serverApiClient 的 attachAbortMetadata)。这种拒绝不能被「期限到点 = 暂时性」
+  // 的兜底吞掉:吞掉之后加密那条腿一成功,整次读就变成 partial,上层再也看不到那个
+  // 状态(403 不广播目录失效、终态不停重读)
+  // (Greptile review #9360「已知拒绝被当成超时」)。
+  // 最小失败输入:旧版 REST 收到 403 响应头后正文卡住 + 加密腿成立。tier:unit(真实
+  // deviceLinkApi + 真实 readCurrentDeviceDirectory,electron net 为 fake)。
+  it('surfaces a known 403 rejection that stalled behind the caller deadline', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = false;
+    mocks.v2Directory.mockResolvedValue([{ certificate: { deviceId: 'v2-peer' }, name: 'V2 Peer', online: true }]);
+    // 响应头到了(403),正文一直挂着:这条读只会在中止时收口。
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => {
+      const body = new ReadableStream({
+        start(streamController) {
+          opts.signal?.addEventListener('abort', () => streamController.error(opts.signal?.reason), { once: true });
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 403, headers: { 'content-type': 'application/json' } }));
+    });
+    const controller = new AbortController();
+    const pending = deviceLinkApiFetch('/api/device-link/devices', { signal: controller.signal })
+      .then(() => { throw new Error('a known rejection must not be answered with the other leg'); },
+        (error: unknown) => error);
+    await vi.waitFor(() => expect(mocks.netFetch).toHaveBeenCalledTimes(1));
+    controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+    const error = await pending as { name?: string; httpStatus?: number };
+    // 另一条腿读到了也不算数:权威拒绝必须原样冒出去。
+    expect(mocks.v2Directory).toHaveBeenCalledTimes(1);
+    expect(error.name).toBe('TimeoutError');
+    // 状态要留在中止原因上,上层才认得出这是 403 而不是「连不上」。
+    expect(error.httpStatus).toBe(403);
   });
 
   // /models 复用真实目录读取与 API 路由；旧 caller 直接用 serverApiFetch 会把官方 token 发到自建中转。

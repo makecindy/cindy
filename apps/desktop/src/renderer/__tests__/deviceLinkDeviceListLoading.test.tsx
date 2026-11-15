@@ -179,6 +179,64 @@ describe('useDeviceLinkDeviceList initial request', () => {
     expect(listDevices).toHaveBeenCalledTimes(2);
   });
 
+  // 一条腿长期坏着时,部分目录会**一直**成功返回。清零退避会让每次重问都从 2 秒开始,
+  // 永远到不了 30 秒上限 —— 一条坏腿就把追问变成每 2 秒一轮
+  // (Greptile review #9360「部分目录始终两秒重读」)。
+  // 最小失败输入:listDevices 每次都返回 { devices:[peer], partial:true }。
+  // tier:unit(模块级共享单例 + fake timers)。
+  it('keeps the backoff ladder growing while the directory stays partial', async () => {
+    const peer = {
+      deviceId: 'peer-1', name: 'Peer Mac', platform: 'darwin', appVersion: '0.1.27',
+      lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true,
+      controlEnabled: true, isSelf: false,
+    };
+    const listDevices = vi.fn().mockResolvedValue({ devices: [peer], partial: true });
+    vi.useFakeTimers();
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(),
+        onStatusChanged: vi.fn(),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+
+    const {
+      useDeviceLinkDeviceList,
+      nextDeviceListRetryDelay,
+    } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    renderHook(() => ({ devices: useDeviceLinkDeviceList() }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(1);
+
+    const firstDelay = nextDeviceListRetryDelay(0);            // 2s
+    const secondDelay = nextDeviceListRetryDelay(firstDelay);  // 4s
+    await act(async () => {
+      vi.advanceTimersByTime(firstDelay);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    // 第二次重问在 4 秒后,不是又是 2 秒:部分目录不清零退避阶梯。
+    await act(async () => {
+      vi.advanceTimersByTime(secondDelay - firstDelay);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      vi.advanceTimersByTime(secondDelay - firstDelay);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(3);
+  });
+
   it('keeps the backoff timer when presence arrives before the first snapshot', async () => {
     let resolveBackground: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
     let presenceChanged: ((payload: DeviceLinkPresenceSnapshot) => void) | undefined;

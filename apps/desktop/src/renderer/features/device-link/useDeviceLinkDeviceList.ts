@@ -492,13 +492,17 @@ function ensureStarted(): void {
         throw new Error('Invalid device list response');
       }
       clearRetryTimer();
-      retryDelayMs = 0;
       // 服务端限流期限:记住了就让下一次退避让过它;拿到权威目录 = 没有在限流,期限作废。
       // A **partial** directory (only one hybrid leg answered) is fresh for the
       // rows it carries but proves no absence: the server may still be limiting
       // reads, and the missing leg's devices are not gone (Codex review #9360
       // 「Keep one-leg hybrid results non-authoritative」).
       const authoritative = result?.stale !== true && result?.partial !== true;
+      // 退避**只在完整目录恢复时**清零:部分目录只说明它带来的那条腿读到了,缺的那条
+      // 腿仍可能坏着。每次部分成功都清零的话,下一次重试永远从 2 秒重新开始,阶梯
+      // 涨不到 30 秒上限 —— 一条腿长期坏着时会变成每 2 秒追问一次
+      // (Greptile review #9360「部分目录始终两秒重读」)。
+      if (result?.partial !== true) retryDelayMs = 0;
       if (typeof result?.retryAtMs === 'number' && Number.isFinite(result.retryAtMs)) {
         retryDeadlineMs = Math.max(retryDeadlineMs, result.retryAtMs);
       } else if (authoritative) {

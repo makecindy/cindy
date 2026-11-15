@@ -34,6 +34,20 @@ function isDeadlineAbort(error: unknown): boolean {
   return name === 'AbortError' || name === 'TimeoutError';
 }
 
+/**
+ * 响应头**已经表态**的中止不是「连不上」。
+ *
+ * fetch 层在「响应头已到、正文卡到调用方期限」时会把已知的非 OK 状态贴在中止原因上
+ * (`httpStatus`,见 serverApiClient 的 attachAbortMetadata)。这种中止带着权威拒绝:
+ * 403 / 404 这类终态必须原样抛给上层,让它恢复状态(403 广播目录失效、404 停掉重读),
+ * 不能被「期限到点 = 暂时性失败」的兜底吞掉 —— 吞掉之后一条腿成功就把整次读变成
+ * `partial`,上层再也看不到那个状态(Greptile review #9360「已知拒绝被当成超时」)。
+ */
+function knownRejectionStatus(error: unknown): number | null {
+  const status = (error as { httpStatus?: unknown } | null | undefined)?.httpStatus;
+  return typeof status === 'number' && Number.isFinite(status) && status >= 400 ? status : null;
+}
+
 /** 仅测试:清掉记住的完整目录,避免上一个用例的并集漏进下一个用例。 */
 export function __resetDeviceDirectoryUnionForTests(): void {
   lastCompleteDirectory = null;
@@ -70,13 +84,14 @@ function unionKey(scope: string, selection: string): string {
 }
 
 /** 当前仍然有效的完整目录并集;围栏不满足时连同这份记忆一起丢掉。 */
-function rememberedUnion(scope: string, selection: string): DeviceView[] {
+function rememberedUnion(scope: string, selection: string): { devices: DeviceView[]; until: number } | null {
   const union = lastCompleteDirectory;
-  if (!union) return [];
-  if (union.key !== unionKey(scope, selection)) return [];
-  if (union.generation !== providerDirectoryGeneration()) { lastCompleteDirectory = null; return []; }
-  if (Date.now() - union.at > PROVIDER_METADATA_TRUST_MS) { lastCompleteDirectory = null; return []; }
-  return union.devices;
+  if (!union) return null;
+  if (union.key !== unionKey(scope, selection)) return null;
+  if (union.generation !== providerDirectoryGeneration()) { lastCompleteDirectory = null; return null; }
+  if (Date.now() - union.at > PROVIDER_METADATA_TRUST_MS) { lastCompleteDirectory = null; return null; }
+  // 这份并集的可信期限:从上一次**完整**读算起,过了 30 分钟就不再并集。
+  return { devices: union.devices, until: union.at + PROVIDER_METADATA_TRUST_MS };
 }
 
 /**
@@ -84,11 +99,19 @@ function rememberedUnion(scope: string, selection: string): DeviceView[] {
  *
  * 返回的行 = 本次读到的那条腿 + 上一次完整目录里的其余行(身份保留);并标成 `partial`,
  * 上层据此不把它当成权威目录(不据此剪枝、不据此清掉限流期限,继续追问缺的那条腿)。
+ *
+ * `rememberedUntilMs` = 并进来的**旧行**到什么时候为止可信。这份期限要跟着答案一起
+ * 往上走:连续性缓存的预算按它算,不能让一次部分成功给旧行续一整份 30 分钟
+ * (Greptile review #9360「旧目录被重新计时」)。
  */
-function partialDirectory(scope: string, selection: string, devices: DeviceView[]): { devices: DeviceView[]; partial: true } {
+function partialDirectory(
+  scope: string,
+  selection: string,
+  devices: DeviceView[],
+): { devices: DeviceView[]; partial: true; rememberedUntilMs?: number } {
   const remembered = rememberedUnion(scope, selection);
-  if (remembered.length === 0) return { devices, partial: true };
-  const merged = new Map(remembered.map((device) => [device.deviceId, device]));
+  if (!remembered || remembered.devices.length === 0) return { devices, partial: true };
+  const merged = new Map(remembered.devices.map((device) => [device.deviceId, device]));
   for (const device of devices) {
     const old = merged.get(device.deviceId);
     // 活下来的那条腿说不了另一条路的账:它可能只是因为对端关掉了 V2 才把对方列成离线。
@@ -98,7 +121,7 @@ function partialDirectory(scope: string, selection: string, devices: DeviceView[
       ? { ...old, ...device, deviceInfo: old.deviceInfo ?? device.deviceInfo }
       : device);
   }
-  return { devices: [...merged.values()], partial: true };
+  return { devices: [...merged.values()], partial: true, rememberedUntilMs: remembered.until };
 }
 
 /** V1 presence cannot describe a peer that has disconnected V1 to use only V2. */
@@ -111,7 +134,7 @@ export async function readCurrentDeviceDirectory(
    * 物理读(Codex review #9360「Apply the caller deadline to the Agent Net directory read」)。
    */
   signal?: AbortSignal,
-): Promise<{ devices: DeviceView[]; partial?: boolean }> {
+): Promise<{ devices: DeviceView[]; partial?: boolean; rememberedUntilMs?: number }> {
   const scope = activeOwnerScopeKey();
   const assertOwner = () => {
     assertRoute();
@@ -142,8 +165,15 @@ export async function readCurrentDeviceDirectory(
   // Only transient transport failures can use the other live directory. Never
   // hide a membership denial, invalid certificate or account boundary as fallback.
   // 期限到点的中止按**暂时性**失败处理:两条腿里只要有一条读成了,就用那条结果。
-  const legIsTemporary = (reason: unknown): boolean =>
-    isTemporaryProviderMetadataFailure(reason) || isDeadlineAbort(reason);
+  // 但「响应头已表态」的中止例外:它带着权威拒绝(403 / 404 / 429 / 5xx),必须先按
+  // 已知状态判断 —— 429 与 5xx 仍是暂时性(服务端明确说了限流 / 故障),其余终态原样
+  // 抛给上层,否则上层永远看不到那个状态(目录失效不广播、终态不停重读)
+  // (Greptile review #9360「已知拒绝被当成超时」)。
+  const legIsTemporary = (reason: unknown): boolean => {
+    const known = knownRejectionStatus(reason);
+    if (known !== null) return known === 429 || (known >= 500 && known < 600);
+    return isTemporaryProviderMetadataFailure(reason) || isDeadlineAbort(reason);
+  };
   if (encrypted.status === 'rejected' && !legIsTemporary(encrypted.reason)) throw encrypted.reason;
   if (legacy.status === 'rejected' && !legIsTemporary(legacy.reason)) throw legacy.reason;
   if (encrypted.status === 'rejected') {

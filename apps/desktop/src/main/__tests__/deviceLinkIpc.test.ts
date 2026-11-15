@@ -985,6 +985,31 @@ describe('device-link IPC handlers', () => {
     expect(deps.rememberLastKnownDeviceName).not.toHaveBeenCalled();
   });
 
+  // 部分目录并进来的**旧行**只在上一次完整目录的 30 分钟预算内可信。连续性缓存必须按
+  // 这份旧期限算预算:按「刚读到的」算,就是「完整目录 29 分钟前 → 部分读 → 两条腿都
+  // 失败」之后旧设备还能再显示约 30 分钟(Greptile review #9360「旧目录被重新计时」)。
+  // 最小失败输入:apiFetch 返回 { devices:[...], partial:true, rememberedUntilMs: 60 秒后 }。
+  // tier:unit(同一 harness + 真实连续性读取层)。
+  it('listDevices: 部分目录的显示预算按并进来的旧行算,不重新给满 30 分钟', async () => {
+    const device = {
+      deviceId: 'dev-1', name: 'Peer', selfName: 'Host.local', platform: 'darwin', lastSeenAt: null,
+      online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+    };
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => ({
+      devices: [device], partial: true, rememberedUntilMs: Date.now() + 60_000,
+    }) as T;
+    const partial = await handleListDevices(makeDeps({ apiFetch }));
+    // 旧行只剩 1 分钟预算 → 下发的显示预算就是 1 分钟,不是重新给满 30 分钟。
+    expect(partial.displayBudget?.remainingMs).toBeLessThanOrEqual(60_000);
+    expect(partial.displayBudget?.remainingMs).toBeGreaterThan(30_000);
+    // 对照:完整目录的每一行都是刚读到的 → 满额 30 分钟。
+    __resetDeviceListCoalescingForTests();
+    const complete = await handleListDevices(makeDeps({
+      apiFetch: async <T>() => ({ devices: [device] }) as T,
+    }));
+    expect(complete.displayBudget?.remainingMs).toBeGreaterThan(29 * 60_000);
+  });
+
   it('listDevices: projects a retained group path as control-ready without granting local control or reviving other devices', async () => {
     const deps = makeDeps({
       apiFetch: vi.fn().mockResolvedValue({ devices: ['executor', 'explicitly-off', 'fresh-off', 'phone', 'other'].map(deviceId => ({
