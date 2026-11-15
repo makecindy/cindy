@@ -3737,7 +3737,7 @@ export function NewMakerDraftRoute() {
     && !effectiveAgentDeviceId && !activePluginModel && !activeModelGroup && unifiedModelPanelActive && draft.vendor !== 'orca'
     ? localProviders.find((provider) => provider.id === effectiveSourceId) ?? null
     : null;
-  const runLocation = useProviderBorrow(runLocationProvider).location;
+  const { location: runLocation, routeProviderId: runLocationProviderId, borrowedCatalog: runLocationCatalog } = useProviderBorrow(runLocationProvider);
   const runLocationAppliedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!runLocationProvider || !draftInitialModel) return;
@@ -3746,19 +3746,21 @@ export function NewMakerDraftRoute() {
       return;
     }
     const device = remoteAgentDevices?.find((candidate) => candidate.deviceId === runLocation);
-    const key = `${runLocationProvider.id}:${runLocation}`;
+    const key = `${runLocationProvider.id}:${runLocation}:${runLocationProviderId}`;
     if (!device || runLocationAppliedRef.current === key) return;
+    // A matching account does not imply that this computer exposes the selected model.
+    if (!runLocationCatalog?.provider.models[dbToMakerAgentKind(draft.vendor)]?.some(model => model.id === draftInitialModel && !model.disabled)) return;
     runLocationAppliedRef.current = key;
     handleUnifiedDraftSelect({
       vendor: draft.vendor,
-      providerId: runLocationProvider.id,
+      providerId: runLocationProviderId ?? runLocationProvider.id,
       modelId: draftInitialModel,
       ...(draftInitialEffort ? { effort: draftInitialEffort } : {}),
       fast: effectiveFastMode,
       favoriteUid: selectedFavoriteUid,
       agentDevice: { deviceId: device.deviceId, name: device.name },
     });
-  }, [runLocationProvider, runLocation, remoteAgentDevices, draftInitialModel, draftInitialEffort, draft.vendor,
+  }, [runLocationProvider, runLocationProviderId, runLocationCatalog, runLocation, remoteAgentDevices, draftInitialModel, draftInitialEffort, draft.vendor,
     effectiveFastMode, selectedFavoriteUid, handleUnifiedDraftSelect]);
 
   // ─── 用户改 workingDir(FolderPicker)→ 写回 draft ─────────────────────

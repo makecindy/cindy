@@ -79,11 +79,12 @@ function rememberMcpAppHeight(key: string, height: number): void {
   while (mcpAppHeightCache.size > MCP_APP_HEIGHT_CACHE_LIMIT)
     mcpAppHeightCache.delete(mcpAppHeightCache.keys().next().value!);
 }
-function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' | 'active', sessionId: string | null, clientId: string): void {
+function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' | 'active' | 'exit-fullscreen', sessionId: string | null, clientId: string): void {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   const code = message.match(/\b[A-Z][A-Z_]+\b/g)?.find(value => appFailureCodes.has(value)) ?? 'UNKNOWN';
   const stage = code.endsWith('_TIMEOUT') ? 'timeout' : code === 'MCP_APP_SANDBOX_FAILED' ? 'sandbox' : phase;
-  const write = (card: string) => createLogger('mcp-apps').warn('App View failed', { code, stage, card });
+  const event = phase === 'exit-fullscreen' ? 'App fullscreen exit not delivered' : 'App View failed';
+  const write = (card: string) => createLogger('mcp-apps').warn(event, { code, stage, card });
   // A stable digest supports correlation without writing task/card identifiers.
   void (async () => {
     try {
@@ -301,6 +302,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         if (initialized && resultDelivered && sizeDelivered && !revealedFrame) reveal();
         if (initialized && resultDelivered && !revealedFrame && revealTimer === undefined)
           revealTimer = setTimeout(reveal, 150);
+        if (message.method === 'ui/notifications/sandbox-escape') setMode('inline');
         if (message.method === 'ui/notifications/host-context-changed') {
           const mode = message.params?.displayMode;
           if (mode === 'inline' || mode === 'fullscreen') setMode(mode);
@@ -498,6 +500,11 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [mode]);
+  // Exit locally; the modal blocks the window.
+  const exitFullscreen = () => {
+    setMode('inline');
+    void controllerRef.current?.displayMode('inline').catch((error) => logAppFailure(error, 'exit-fullscreen', sessionId, clientId));
+  };
   return (
     <dialog
       ref={card}
@@ -512,7 +519,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       aria-label={appTitle}
       onCancel={(event) => {
         event.preventDefault();
-        void controllerRef.current?.displayMode('inline').catch(() => {});
+        exitFullscreen();
       }}
     >
       <div className="flex min-h-9 items-center justify-between gap-3 px-3 text-13 text-[var(--text-secondary)]">
@@ -524,9 +531,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
             data-exit-fullscreen
             variant="secondary"
             size="sm"
-            onClick={() => {
-              void controllerRef.current?.displayMode('inline').catch(() => {});
-            }}
+            onClick={exitFullscreen}
           >
             {t('mcpApps.exitFullscreen')}
           </Button>

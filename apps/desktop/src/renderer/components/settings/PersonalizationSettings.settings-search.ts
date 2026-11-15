@@ -26,6 +26,16 @@ export const personalizationSettings = defineSettings({
     sectionKey: 'settings.sections.memory',
     aliases: ['memories', '记忆'],
   },
+  codexCompaction: {
+    id: 'personalization.codexCompaction',
+    tab: 'personalization',
+    targetId: 'settings-search-target-codex-compaction',
+    titleKey: 'settings.compaction.codex.label',
+    sectionKey: 'settings.compaction.title',
+    descriptionKey: 'settings.compaction.codex.description',
+    keywordKeys: ['settings.compaction.codex.hint'],
+    aliases: ['server compaction', 'local summary', '服务器压缩', '本地摘要'],
+  },
   subagents: {
     id: 'personalization.subagents',
     tab: 'personalization',
