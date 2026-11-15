@@ -1,5 +1,5 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { declaredGhostHostToolGroups, type GhostHostToolGroup } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { getPluginHostUi, hostUiApprovalSubjects, type GhostHostUi } from '@cindy/plugin-protocol';
@@ -219,7 +219,7 @@ export interface GhostCardNeeds {
  *   可重新提交"处理)。
  */
 export interface GhostAgentNeeds {
-  /** Each known group requires its own explicit Host receipt approval. */
+  /** 安装或更新批准后，可调用当前 manifest 声明的 Host 工具组。 */
   hostTools?: string[];
   background?: boolean;
   errand?: boolean;
@@ -656,6 +656,19 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
  * (轻量任务模型链 vs embedding 模型),合成一档就没法只授权其中一样。信任面同 oneshot —— 只花额度,拿不到任何宿主
  * 能力,不进会话。
  */
+export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank'] as const;
+export type GhostCindyModelsAction = (typeof GHOST_CINDY_MODELS_ACTIONS)[number];
+
+export function declaredGhostCindyModelActions(manifest: GhostManifest): GhostCindyModelsAction[] {
+  const actions = manifest.cindy?.models;
+  return isGhostCindyModelActionsDeclaration(actions) ? GHOST_CINDY_MODELS_ACTIONS.filter(action => actions.includes(action)) : [];
+}
+
+export function ghostCindyModelActionApproved(ghost: InstalledGhost | null | undefined, action: GhostCindyModelsAction): boolean {
+  return ghost?.enabled === true && ghost.approval?.state === 'approved' &&
+    ghost.approvedCindyModelActions?.includes(action) === true && declaredGhostCindyModelActions(ghost.manifest).includes(action);
+}
+
 export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
 export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
 
@@ -688,6 +701,7 @@ export interface GhostCindyNeeds {
   text?: GhostCindyTextAction[];
   /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
   embed?: GhostCindyEmbedAction[];
+  models?: GhostCindyModelsAction[];
   /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由，意识不经手网关凭证)。 */
   search?: GhostCindySearchAction[];
   /**
@@ -705,7 +719,7 @@ export interface GhostCindyNeeds {
  * activity = 轮次内思考/审批/等待用户输入的开始结束边界(只含 id 元数据);
  * session = 会话创建/归档/切换(切换 = 用户把哪个会话切到台前,2026-07-13 增)。
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
- * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
+ * 两项在安装或更新确认中展示；整体批准后按当前声明订阅，旧元数据主题语义保持。
  */
 export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
@@ -716,7 +730,7 @@ export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subs
 }
 export function ghostTaskEventApproved(ghost: InstalledGhost, topic: GhostSubscribeTopic): boolean {
   return !GHOST_TASK_EVENT_TOPICS.includes(topic as GhostTaskEventTopic) ||
-    (ghost.approval?.state === 'approved' && ghost.approvedEventTopics?.includes(topic as GhostTaskEventTopic) === true);
+    (ghost.enabled === true && ghost.approval?.state === 'approved' && ghost.manifest.subscribe?.topics?.includes(topic) === true);
 }
 
 /**
@@ -1987,8 +2001,8 @@ export interface InstalledGhost {
   observeCapabilityApproved?: true;
   /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
   companionsCapabilityApproved?: true;
-  approvedHostToolGroups?: GhostHostToolGroup[];
-  approvedEventTopics?: GhostTaskEventTopic[];
+  /** Only model APIs explicitly shown in an install/update confirmation. Missing means none. */
+  approvedCindyModelActions?: GhostCindyModelsAction[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2196,6 +2210,8 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'media.deposit': 'cindyMediaDeposit',
   'text.oneshot': 'cindyTextOneshot',
   'embed.text': 'cindyEmbedText',
+  'models.decisions': 'cindyModelsDecisions',
+  'models.rerank': 'cindyModelsRerank',
   'search.web': 'cindySearchWeb',
 };
 
@@ -2333,6 +2349,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
 
   for (const [category, actions] of Object.entries(manifest.cindy ?? {})) {
     if (category === 'oneshotModel') continue; // 偏好模型是标量意图,不是能力键
+    if (category === 'models' && !isGhostCindyModelActionsDeclaration(actions)) continue;
     if (!Array.isArray(actions)) continue;
     for (const action of actions) {
       if (typeof action !== 'string') continue;
@@ -3007,11 +3024,10 @@ export function diffGhostPermissionItems(
  */
 function withoutUnapprovedControlPoints(installed: InstalledGhost): GhostManifest['subscribe'] {
   const subscribe = installed.manifest.subscribe;
-  if (!subscribe) return subscribe;
-  const topics = subscribe.topics?.filter(topic => ghostTaskEventApproved(installed, topic));
-  const hooks = subscribe.hooks?.filter((hook) =>
+  if (!subscribe?.hooks) return subscribe;
+  const hooks = subscribe.hooks.filter((hook) =>
     !isGhostControlPointId(hook) || installed.approvedControlPoints?.includes(hook) === true);
-  return { ...subscribe, topics, hooks: hooks?.length ? hooks : undefined };
+  return { ...subscribe, hooks: hooks.length ? hooks : undefined };
 }
 
 /** 声明了 `approval: "auto"` 但用户从没确认过的工具,不算旧权限。 */
@@ -3038,9 +3054,10 @@ export function diffInstalledGhostPermissionItems(
           ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
           host: getApprovedGhostHostUi(installed) }
         : undefined,
-      ...(installed.manifest.agent ? { agent: { ...installed.manifest.agent,
-        hostTools: declaredGhostHostToolGroups(installed.manifest).filter(group => installed.approvedHostToolGroups?.includes(group)),
-      } } : {}),
+      // 声明过但未确认的新能力不算旧权限，更新时作为新增项复核。
+      cindy: installed.manifest.cindy ? { ...installed.manifest.cindy,
+        models: declaredGhostCindyModelActions(installed.manifest).filter(action => installed.approvedCindyModelActions?.includes(action)),
+      } : undefined,
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
       systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,
@@ -5021,7 +5038,7 @@ function validateGhostManifestInput(
     if (!slots.includes('cindy')) {
       return { ok: false, reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"' };
     }
-    cindy = unknownDeclarationFields(cindyRaw, ['image', 'video', 'media', 'text', 'embed', 'search', 'oneshotModel']);
+    cindy = unknownDeclarationFields(cindyRaw, ['image', 'video', 'media', 'text', 'embed', 'models', 'search', 'oneshotModel']);
     // oneshotModel(快问快答偏好模型)是标量键不是类目:先摘出,不进类目循环。
     // 只验形态不验存在——目录随主机演进,声明式字段永不构成硬依赖。
     const oneshotModelRaw = cindyRaw.oneshotModel;
@@ -5045,11 +5062,18 @@ function validateGhostManifestInput(
       media: GHOST_CINDY_MEDIA_ACTIONS,
       text: GHOST_CINDY_TEXT_ACTIONS,
       embed: GHOST_CINDY_EMBED_ACTIONS,
+      models: GHOST_CINDY_MODELS_ACTIONS,
       search: GHOST_CINDY_SEARCH_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       if (category === 'oneshotModel') continue;
       if (!Object.hasOwn(actionTable, category)) continue;
+      if (category === 'models' && preserveHistoricalParameterSize && !isGhostCindyModelActionsDeclaration(actionsRaw)) {
+        // Keep old opaque bytes for receipt comparisons/downgrades, but never grant them.
+        Object.assign(cindy, { models: actionsRaw });
+        continue;
+      }
+
       if (!Array.isArray(actionsRaw) || actionsRaw.length === 0) {
         return { ok: false, reason: `cindy.${category} 必须是非空数组` };
       }
@@ -5073,6 +5097,7 @@ function validateGhostManifestInput(
       else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
       else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
       else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
+      else if (category === 'models') cindy.models = actions as GhostCindyModelsAction[];
       else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
       else
         return {
@@ -8632,6 +8657,9 @@ export type GhostPipeCindyRequest =
       /** 必须透传本次 tool-call 的 msg.tool，供宿主与 callId 事实表配对验身。 */
       callerTool: string;
     }
+  | { type: 'cindy-request'; kind: 'list_models'; api: 'decisions' | 'rerank' }
+  | { type: 'cindy-request'; kind: 'decisions' | 'rerank'; model?: string; providerId?: string;
+      questions?: Record<string, unknown>; state?: unknown; query?: string; documents?: string[]; top_n?: number; callId?: string }
   | {
       type: 'cindy-request';
       kind: 'query_job';
@@ -8835,6 +8863,10 @@ interface GhostCindyEmbedResultMeta {
 
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */
 export type GhostPipeModelResult =
+  | { ok: true; models: Array<{ model: string; providerId: string; name: string }> }
+  | { ok: true; model: string; answers?: unknown; results?: Array<{ index: number; relevance_score: number }>;
+      usage: unknown; estimatedCost: { amount: number; currency: 'USD' | 'CNY' } | null }
+
   | {
       ok: true;
       /** 生成媒体的取件地址(cindy-media://…,聊天与面板皆可渲染)。 */
@@ -8963,6 +8995,8 @@ export type GhostPipeModelResult =
        * 'AUTH_REJECTED'、'UPSTREAM_UNAVAILABLE'、'RESPONSE_INVALID'。
        */
       errorCode?: string;
+      retryable?: boolean;
+      outcomeKnown?: boolean;
     };
 
 /* ── 订阅槽①:事件协议(2026-07-12 定案:一种事件模型,两个类型)──────

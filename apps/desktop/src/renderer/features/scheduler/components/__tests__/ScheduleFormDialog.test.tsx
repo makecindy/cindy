@@ -146,9 +146,9 @@ beforeEach(() => {
 afterEach(cleanup);
 afterEach(() => vi.unstubAllGlobals());
 
-// User-requested form grouping / unit: inactive tabs unmount their fields. Existing
-// model tests do not protect configured options during a save from another tab.
-it('preserves configured options across tab switches and saving from content', async () => {
+// User-requested form grouping / unit: run options share the form with the content. Existing
+// model tests do not protect configured run options when another field is edited and saved.
+it('preserves configured run options when saving after editing the title', async () => {
   const expireAt = new Date(2027, 4, 1, 18, 30).getTime();
   const h = mount(
     schedule({
@@ -159,9 +159,7 @@ it('preserves configured options across tab switches and saving from content', a
       preRunHook: { command: 'node check.mjs' },
     }),
   );
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
   expect(screen.getByPlaceholderText('scheduler.editor.preRunHook.commandPlaceholder').getAttribute('value')).toBe('node check.mjs');
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.contentTab' }));
   fireEvent.change(screen.getByPlaceholderText('scheduler.editor.promptDialog.namePlaceholder'), {
     target: { value: 'Renamed' },
   });
@@ -182,19 +180,17 @@ it('preserves configured options across tab switches and saving from content', a
 });
 
 // Unit: the optional deadline popover must update and clear the saved deadline,
-// including after leaving the content tab (the popover is then unmounted).
+// including after the popover has been closed.
 it('edits and clears a deadline through its compact picker', async () => {
   const h = mount(schedule());
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.deadline.label' }));
   const input = await screen.findByLabelText('scheduler.deadline.label', { selector: 'input' });
   fireEvent.change(input, { target: { value: '2027-05-02T09:15' } });
   fireEvent.keyDown(input, { key: 'Escape' });
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
   h.save();
   await waitFor(() => expect(h.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     expireAt: new Date(2027, 4, 2, 9, 15).getTime(),
   }), true));
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.contentTab' }));
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.deadline.label' }));
   fireEvent.click(await screen.findByRole('button', { name: 'scheduler.deadline.clear' }));
   fireEvent.keyDown(screen.getByLabelText('scheduler.deadline.label', { selector: 'input' }), { key: 'Escape' });
@@ -202,12 +198,10 @@ it('edits and clears a deadline through its compact picker', async () => {
   await waitFor(() => expect(h.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ expireAt: null }), true));
 });
 
-// An invalid pre-run command on another tab must be reachable directly after Save fails.
-it('selects the invalid tab and accepts its correction without losing the form', async () => {
+// An invalid pre-run command must stay editable in place after Save fails.
+it('reports an invalid pre-run command and accepts its correction without losing the form', async () => {
   const h = mount(schedule({ preRunHook: { command: 'node check.mjs' } }));
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
   fireEvent.change(await screen.findByPlaceholderText('scheduler.editor.preRunHook.commandPlaceholder'), { target: { value: '' } });
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.contentTab' }));
   h.save();
   expect(h.onSubmit).not.toHaveBeenCalled();
   expect(state.warning).toHaveBeenCalledWith(
@@ -262,7 +256,6 @@ it('sends the explicit local Harness and location when generating a bound hook',
   state.references.set('bound', { id: 'bound', state: 'available', status: 'active', agentKind: 'claude-code', agentDeviceId: 'studio' });
   mount(schedule({ targetSessionId: 'bound', modelAgentKind: 'codex', modelAgentDeviceId: '', providerId: '',
     preRunHook: { command: 'node check.mjs' } }));
-  fireEvent.click(screen.getByRole('tab', { name: 'scheduler.editor.layout.optionsTab' }));
   fireEvent.click(await screen.findByRole('button', { name: 'scheduler.editor.preRunHook.aiModify' }));
   fireEvent.change(screen.getByPlaceholderText('scheduler.editor.preRunHook.aiPlaceholder'), { target: { value: 'check changes' } });
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.preRunHook.aiGenerate' }));

@@ -89,7 +89,7 @@ describe('Host service discovery', () => {
       expect.objectContaining({ group: 'computer', declared: false }),
     ]) });
     expect(JSON.stringify(result)).not.toContain('approved');
-    ghost.approvedHostToolGroups = [];
+    Object.assign(ghost, { approvedHostToolGroups: [] });
     expect(await execute.list({ ...context, hostCaller: caller })).toEqual(result);
     ghost.manifest.agent!.hostTools = ['discovery'];
     expect(await execute.list({ ...context, hostCaller: caller })).toMatchObject({ services: expect.arrayContaining([

@@ -213,14 +213,15 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   批准后，插件创建的任务及 Worker 中的 Agent 按普通任务的权限使用已连接工具；
   创建回执仅约束插件直接管理该任务，不参与任务内 Agent 的工具权限判定。
   插件直接调用 `cindy.tasks` 仍只管理本插件的任务。
-- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` 工具组，在安装/更新确认中逐项展示，批准仍为整包接受或拒绝。
-  整体安装批准有效、已启用且当前 manifest 已声明即可调用，不设分组批准账目、首次补批、逐次确认或详情重试入口。
-  旧 receipt 中的 `approvedHostToolGroups` 等分项字段读到即忽略，不迁移或删数据；移除声明、撤销整体安装批准或卸载仍使对应调用失效。
+- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` 工具组，安装/更新确认中展示各项声明。
+  安装/更新确认是整体决定：接受即授予该版本 manifest 的全部已知声明能力，拒绝则不安装或不更新。整体安装批准有效、已启用且 manifest 声明对应组即放行，不另存分项批准，也不提供补批入口。
+  旧 receipt 的 `approvedHostToolGroups` / `approvedEventTopics` 字段读取时忽略，不迁移或清理数据，不建立替代许可。新增声明随整体更新确认，移除声明、停用、卸载或撤销整体安装批准立即失效。
   `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
   插件没有已批准的 `node` 能力时，不支持提交或修改脚本、前置命令，也不支持运行或恢复实际配置中带有脚本或前置命令的调度，返回 `UNSUPPORTED_CAPABILITY`。
   更新时读取实际配置，不能只凭入参判断；普通调度更新、运行和恢复经既有 `callerScope` / `getApprovedScheduleGuard` 传入主干 `expectedSchedule`，在执行点拒绝期间的配置改动。不新增确认层、锁或授权缓存。
-  普通定时任务读改、已有 `node` 的插件与 Agent 的原共享策略分类保持，不能用 `scheduler` 组批准替代本机命令执行批准。
-  调用方显式为插件实例与请求时 owner 快照，不绑定任务；插件不套用 Agent 的 Full/Auto/Ask 或 MCP 审批策略，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。Agent 运行时自身权限流程不变。
+  普通定时任务读改不受影响，使用脚本仍需已批准的 `node` 能力；Agent 的工具分类与权限档保持原行为。
+  调用方显式为插件实例与请求时 owner 快照，不绑定任务；整体安装批准授予的已声明能力直接进入共享 Host 处理器，不套用 Agent MCP Full/Auto/Ask 逐次策略，不自动弹原生框或插件权限卡，也不另加逐次许可或固定拒绝。真实 Agent 执行继续走自己的既有权限机制。
+  每次调用及现有写入、返回和投递边界仍复核账号、安装目录与批准版本、启用状态、声明组和整体安装批准；保留 Host 业务准入，停用、卸载、批准失效与账号变化继续拒绝。
   每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
   浏览器插件调用没有任务归属：选中 `rsb-webview` 时返回现有结构化错误 `BROWSER_RUNTIME_ACTION_FAILED`，
@@ -228,7 +229,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   外部 AI 工具历史的 `scan_importable_sessions`、`get_session_import_status`、`import_sessions` 在共享 handler 中对插件返回 `UNSUPPORTED_CAPABILITY`，不进入扫描、状态或导入回调；前两者会触发既有中断导入恢复，不能作为纯读取开放。Agent 和设置页不变。
   持有任务 admission 的调用任务修改自身 `permission_mode`（含混合运行设置请求）在任何写入前返回 `UNSUPPORTED_CAPABILITY`，不改写权限快照或放宽守卫；插件、修改其他任务、无 admission 及仅改模型保持原行为。
   合法的模型与权限组合仍可单次调用；按 live Session 能力在模型写入前拒绝不支持的权限档。模型已应用或延后后权限失败，保持原权限提交/回滚，错误回执明确已生效字段、代次及原权限错误，不新增跨字段回滚。
-  已接受的插件消息复用现有独立投递守卫，正常关闭逻辑页或回收 Node 不撤销；实际投递仍核对 owner、安装目录/批准版本、enabled、最新组批准及精确目标/正文/clientId。停用、卸载、更新重批和账号变化仍撤销；宿主重启不持久恢复守卫。
+  已接受的插件消息复用现有独立投递守卫，正常关闭逻辑页或回收 Node 不撤销；实际投递仍核对 owner、安装目录/批准版本、enabled、manifest 声明及精确目标/正文/clientId。停用、卸载、安装批准失效和账号变化仍撤销；宿主重启不持久恢复守卫。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
   `browser/computer/ssh/docs` 直接复用相应现有 MCP server 的 validated handler；新组不改公共调用或调用方签名。
   browser recipe/切换用户浏览器/upload、电脑敏感输入与系统权限、SSH 认证和文档文件边界沿用原规则。
@@ -250,7 +251,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   任务托管作业订阅当次真实 Session 的关闭状态，关闭经 ProcessOwner destroyed 释放 PTY；
   订阅随作用域销毁移除，旧实例不能回收新实例，普通轮次结束不触发回收。插件自主作业与 UI PTY 不变。
   Node Host 通过同一 `createLiziMcpProviders` / `HostTerminalService` 装配终端，逻辑页与 Node
-  私有通道均进入公共 `hostToolSlot`，只校验整体安装批准与声明，不接入分组补批或 Agent MCP 策略。
+  私有通道均进入公共 `hostToolSlot`，共用整体安装批准、启用与 manifest 声明校验，不提供首次或逐次补批。
   `history` 组的本机查询通过共享 `historyToolCallbacks` 读取同一 owner 数据库，不建插件任务副本。
   两种执行宿主共用输入归属快照与任务动作授权器；群执行授权由各宿主的真实群运行时注入，缺失时拒绝。
   宿主已有安装确认与显式交互的确认复用 `WindowConfirmationBridge`，只接受被选中、已认证控制端的回答；插件 host.call 不产生批准请求。Cindy 桌面
@@ -274,11 +275,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   不追加分享确认；宿主核对具体文件与字节数，准备及交付时复核安装/owner，复读源并校验摘要，变更拒绝；
   只在最终 IO 期间持有原 handoff relocation hold，不阻塞准备期间停用或恢复。写入回执不明返回 SHARE_RESULT_UNKNOWN，
   补偿只用原 owner 根，不重发；副本仍按原 TTL/配额/SHA/详情删除管理。接收方已读取或另存的副本不能宣称可撤回。
-- `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
+- `subscribe.topics` 的 `message` / `task-state` 在整体安装/更新确认中展示，整体安装批准有效、已启用且 manifest 声明该 topic 即分发，不另存主题批准。
   消息仅在持久化后通知，结构化附件使用不透明位置引用；附件读取只覆盖已有宿主授权的本机媒体和 grant / deposit / handoff 引用，复用既有账本和交接。历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`，不以消息形状授予文件读取权限，不新增可信来源表或确认流程。
   状态只发布生命周期变化（开始、结束、出错、等待权限/回答、排队、取消及归档/恢复/删除），复用宿主规范投影，不含活动摘要、标题标签或工具参数；不发布高频进度和活动变化。
   花名册变动时建立 topic 索引，禁止每个消息/状态事件扫描全部插件；缓冲补投重查安装版本、批准和 owner。
-  无已批准订阅时生产端同步短路；沿用既有逐事件投递、100 条熄灯队列、单调序号和 `dropped`，不新增合批、折叠或 timer。
+  无符合整体安装批准、启用与声明条件的订阅时生产端同步短路；沿用既有逐事件投递、100 条熄灯队列、单调序号和 `dropped`，不新增合批、折叠或 timer。
   断线按 `get_chat_history` 游标补拉，旧 `turn` / `session` / `activity` 订阅和既有插件批准保持原行为。
   作者契约见 [事件订阅](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md)。
 - `agent.targets` 必须与 `agent.tasks: true` 同时声明，独立列出 `agent:targets` 权限并要求 Host receipt 的 `targetCapabilityApproved` 显式批准。

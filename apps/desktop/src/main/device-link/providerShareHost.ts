@@ -416,30 +416,39 @@ export function refreshProviderShareHost(reason: string): Promise<void> {
   const rt = runtime;
   if (!rt) return Promise.resolve();
   const readLocal = async () => {
-    try {
-      const shares = await providerShareApi.listOwned();
-      if (!current(rt)) return;
-      rt.unavailable = new Set(shares.unavailableShareIds);
-      const self = getDeviceId();
-      const next = shares.filter((share) => !self || share.hostDeviceId === self);
-      const before = rt.shares;
-      for (const share of before) for (const member of share.members) {
-        const after = next.find((item) => item.shareId === share.shareId)?.members.find((item) => item.memberId === member.memberId);
-        if (!after || after.joinedAt !== member.joinedAt) rt.blockedMembers.add(JSON.stringify([share.shareId, member.memberId]));
+    // A local decision replaces the snapshot. Capture it before REST, not after:
+    // all callers share this read and one follow-up for decisions made in flight.
+    while (current(rt)) {
+      let before = rt.shares;
+      try {
+        const shares = await providerShareApi.listOwned();
+        if (!current(rt)) return;
+        if (rt.shares !== before) continue;
+        rt.unavailable = new Set(shares.unavailableShareIds);
+        const self = getDeviceId();
+        const next = shares.filter((share) => !self || share.hostDeviceId === self);
+        for (const share of before) for (const member of share.members) {
+          const after = next.find((item) => item.shareId === share.shareId)?.members.find((item) => item.memberId === member.memberId);
+          if (!after || after.joinedAt !== member.joinedAt) rt.blockedMembers.add(JSON.stringify([share.shareId, member.memberId]));
+        }
+        await rt.events.prepareSnapshot?.(next);
+        if (!current(rt)) return;
+        if (rt.shares !== before) continue;
+        const complete = !shares.authorityIncomplete;
+        const completenessChanged = rt.complete !== complete;
+        rt.complete = complete;
+        before = next;
+        applySnapshot(rt, next, !!rt.events.prepareSnapshot, completenessChanged);
+        rt.blockedMembers.clear();
+        if (!rt.reconciled && !shares.authorityIncomplete) {
+          rt.reconciled = true;
+          rt.events.reconcile(new Map(rt.shares.map((share) => [share.shareId, new Set(share.members.map((member) => member.memberId))])));
+        }
+      } catch (error) {
+        if (current(rt) && rt.shares !== before) continue;
+        if (current(rt)) log.warn('provider share snapshot refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
       }
-      await rt.events.prepareSnapshot?.(next);
-      if (!current(rt) || rt.shares !== before) return;
-      const complete = !shares.authorityIncomplete;
-      const completenessChanged = rt.complete !== complete;
-      rt.complete = complete;
-      applySnapshot(rt, next, !!rt.events.prepareSnapshot, completenessChanged);
-      rt.blockedMembers.clear();
-      if (!rt.reconciled && !shares.authorityIncomplete) {
-        rt.reconciled = true;
-        rt.events.reconcile(new Map(rt.shares.map((share) => [share.shareId, new Set(share.members.map((member) => member.memberId))])));
-      }
-    } catch (error) {
-      if (current(rt)) log.warn('provider share snapshot refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
+      return;
     }
   };
   // REST 只返回本机分享。远端申请经已有同账号管理通道读取，每台电脑最多一次在途；

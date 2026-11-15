@@ -130,7 +130,6 @@ test('plugin confirmation replies use the authenticated controller, never a call
     resolvePluginConfirmation: (caller, kind, requestId, confirmed) => {
       replies.push({ caller, kind, requestId, confirmed }); return caller === authenticated;
     },
-    requestPluginTaskApproval: async (id, capability) => ({ granted: id === 'demo' && capability === 'host-tools:terminal' }),
   });
   const body = JSON.stringify({ requestId: 'pending', confirmed: true, caller: 'web:forged' });
   const headers = { cookie, 'content-type': 'application/json' };
@@ -140,6 +139,7 @@ test('plugin confirmation replies use the authenticated controller, never a call
   assert.equal((await request('/api/ghosts/confirm/resolve', { method: 'POST', headers,
     body: JSON.stringify({ requestId: 'pending', confirmed: 'yes' }) })).status, 400);
   assert.equal(replies.length, 1);
+  // Installed declarations do not expose a supplementary approval endpoint.
   assert.equal((await request('/api/ghosts/request-task-approval', { method: 'POST', headers,
     body: JSON.stringify({ id: 'demo', capability: 'host-tools:terminal' }) })).status, 404);
 });
