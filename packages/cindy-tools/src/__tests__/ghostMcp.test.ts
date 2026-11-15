@@ -1267,7 +1267,6 @@ describe("cindy_ghosts · server 构建", () => {
       _registeredTools: Record<string, { description?: string } | undefined>;
     };
     expect(Object.keys(server._registeredTools).sort()).toEqual([
-      "evaluate",
       "ghost_call",
       "ghost_cancel_plugin_review",
       "ghost_contribution_prepare",
@@ -1285,6 +1284,8 @@ describe("cindy_ghosts · server 构建", () => {
       "ghost_manual",
       "ghost_my_plugins",
       "media",
+      "model_decisions",
+      "model_rerank",
     ]);
     const infoDescription = server._registeredTools.ghost_info?.description ?? "";
     expect(infoDescription).toContain("精准查询单个当前可用插件");
@@ -2334,9 +2335,9 @@ describe('personal community author MCP transport', () => {
   });
 });
 
-// Unit: exercise the real MCP transport so evaluate's schema and cancellation handle
-// reach the Host, not merely the helper function; media transport did not cover this API.
-it('routes evaluate through MCP and returns its structured answer', async () => {
+// Unit: exercise the real MCP transport so the model_decisions/model_rerank schemas, their mapping onto
+// the shared Host request and the cancellation handle reach the Host; media did not cover this API.
+it('routes model_decisions and model_rerank through MCP and returns their structured answer', async () => {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
   const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
   const callEvaluate = vi.fn(async () => ({ ok: true, answers: { q: true }, estimated_cost: null }));
@@ -2344,9 +2345,11 @@ it('routes evaluate through MCP and returns its structured answer', async () => 
   const client = new Client({ name: 'evaluation-test', version: '1' });
   const [ct, st] = InMemoryTransport.createLinkedPair(); await server.connect(st); await client.connect(ct);
   try {
-    const args = { action: 'decisions', model_id: 'example-decision', questions: { q: { type: 'noul', instructions: 'Check' } }, state: 'text' };
-    const result = await client.callTool({ name: 'evaluate', arguments: args });
-    expect(callEvaluate).toHaveBeenCalledWith(args, expect.any(AbortSignal));
+    const args = { model_id: 'example-decision', questions: { q: { type: 'noul', instructions: 'Check' } }, state: 'text' };
+    const result = await client.callTool({ name: 'model_decisions', arguments: { action: 'request', ...args } });
+    expect(callEvaluate).toHaveBeenCalledWith({ action: 'decisions', ...args }, expect.any(AbortSignal));
     expect(result).toMatchObject({ content: [{ type: 'text', text: expect.stringContaining('"q":true') }] });
+    await client.callTool({ name: 'model_rerank', arguments: { action: 'list_models', model_id: 'ignored' } });
+    expect(callEvaluate).toHaveBeenLastCalledWith({ action: 'list_models', api: 'rerank' }, expect.any(AbortSignal));
   } finally { await client.close(); await server.close(); }
 });
