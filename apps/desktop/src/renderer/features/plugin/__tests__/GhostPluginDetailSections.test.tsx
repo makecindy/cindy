@@ -206,6 +206,22 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  // Unit: the installed Host declarations previously added a supplementary
+  // consent button. Only the pre-existing legacy page confirmation may remain.
+  it.each([true, undefined] as const)('keeps Host UI out of the legacy page confirmation (%s)', uiCapabilityApproved => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved,
+      approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'board', name: 'Board',
+        version: '1', kind: 'chip', entry: 'main.js', tools: [], mcpApps: {
+          ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+          host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }], capabilities: ['draft'] },
+        } } };
+    render(<GhostPluginDetailView ghost={ghost} detail={toGhostPluginDetail(ghost)} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.installConsent.updateNeedsConsent' }) !== null).toBe(uiCapabilityApproved !== true);
+  });
+
   // Unit: the real permission summary previously interpolated raw Host subjects.
   it('renders readable host capability details in the plugin permission summary', () => {
     const view = render(<PermissionSummary items={[{ key: 'ui:host:capability:draft', kind: 'panel',
@@ -506,6 +522,21 @@ describe('Ghost plugin detail sections', () => {
     rerender(view(true));
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentCompanionsRequest' })).toBeNull();
   });
+  // Unit: accepted installation grants the manifest's Host declarations. The old
+  // detail actions created a second grant; existing tasks/observe actions stay separate.
+  it.each([
+    { name: 'tool groups', manifest: { agent: { hostTools: ['history', 'future-group'] } } },
+    { name: 'event topics', manifest: { subscribe: { topics: ['message', 'task-state'] } } },
+  ])('shows no supplementary approval for installed host declarations: $name', ({ manifest }) => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const requestTaskApproval = vi.fn(async () => ({ granted: false }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest, enabled: true, approval: { state: 'approved', revision: 'r1' } } as InstalledGhost;
+    render(<GhostPluginDetailView ghost={ghost} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    expect(screen.queryAllByRole('button', { name: 'settings.ghosts.perm.hostToolsRequest' })).toHaveLength(0);
+    expect(requestTaskApproval).not.toHaveBeenCalled();
+  });
+
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(
       'ResizeObserver',

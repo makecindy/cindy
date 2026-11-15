@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const native = vi.hoisted(() => ({
   props: null as any,
+  hostProps: null as any,
   hide: vi.fn<() => Promise<void>>(),
   expand: vi.fn<() => Promise<void>>(),
   mode: "light",
@@ -13,7 +14,10 @@ vi.mock("@expo/ui/jetpack-compose", () => ({
   Host: ({ children, colorScheme }: any) => (
     <div data-scheme={colorScheme}>{children}</div>
   ),
-  RNHostView: ({ children }: any) => children,
+  RNHostView: ({ children, ...rest }: any) => {
+    native.hostProps = rest;
+    return children;
+  },
   ModalBottomSheet: ({ ref, ...props }: any) => {
     native.props = props;
     React.useImperativeHandle(
@@ -73,6 +77,11 @@ beforeEach(() => {
   native.hide.mockReset().mockResolvedValue();
   native.expand.mockReset().mockResolvedValue();
   native.mode = "light";
+  // Codex review #9634: hostProps / props 是 hoisted 单例,只在 RNHostView /
+  // ModalBottomSheet 渲染时写入。上一个用例渲染过、本用例还没渲染(或渲染没挂上)
+  // 时断言会读到陈旧值 —— 用例假过。每个用例从空值开始,断言只认本次渲染的值。
+  native.hostProps = null;
+  native.props = null;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -209,6 +218,23 @@ describe.each([SessionActionSheetFrame, NativeBottomSheet])(
         });
       },
     );
+  },
+);
+
+// #9612: Expo UI 58 measures both axes when `matchContents` is true, so the
+// sheet's RN content collapsed to the width of its widest child. The width must
+// stay the sheet's; only the height follows the content.
+it.each([SessionActionSheetFrame, NativeBottomSheet])(
+  "keeps the bottom-sheet width and only matches the content height (%s)",
+  (Frame) => {
+    act(() =>
+      root.render(
+        <Frame visible onClose={vi.fn()}>
+          actions
+        </Frame>,
+      ),
+    );
+    expect(native.hostProps.matchContents).toEqual({ vertical: true });
   },
 );
 

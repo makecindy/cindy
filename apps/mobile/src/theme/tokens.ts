@@ -760,10 +760,12 @@ export const iconSize = {
 
 /**
  * lucide 图标 strokeWidth 阶梯。收敛前仓库里散落 14 种碎片值(1.5~3),
- * 视觉上无法区分意图;收敛为四档:thin(大圆形图标的轻盈描边)、
+ * 通用控件收敛为四档;project 保留项目身份图标的独立描边。thin(大圆形图标的轻盈描边)、
  * regular(默认,lucide 出厂值)、medium(选中态 Check 等强调)、bold(微图标增粗保清晰)。
  */
 export const iconStroke = {
+  /** Project glyphs retain the approved light stroke at small title sizes. */
+  project: 1.6,
   thin: 1.75,
   regular: 2,
   medium: 2.2,

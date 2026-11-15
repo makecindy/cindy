@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createOverrideSettingsFile } from '../override-settings-file.js';
+import { createOverrideSettingsFile, setPreserveUnreadableSettingsFilesByDefault } from '../override-settings-file.js';
 
 interface TestSettings {
   enabled: boolean;
@@ -343,6 +343,82 @@ describe('createOverrideSettingsFile', () => {
       expect(fs.existsSync(`${first.file}.lock`)).toBe(false);
     } finally {
       fs.rmSync(first.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The process-wide default (setPreserveUnreadableSettingsFilesByDefault): the desktop never sets
+ * it; the Host sets it at boot. Stores without their own preserveUnreadableFile follow it.
+ */
+describe('the process-wide default for unreadable settings files', () => {
+  afterEach(() => setPreserveUnreadableSettingsFilesByDefault(false));
+  const malformed = '{"limit":private-settings-sentinel}';
+
+  it('unset, as on the desktop: an unreadable file is deleted and the next write replaces it', () => {
+    const { dir, file, store } = createTempStore();
+    try {
+      fs.writeFileSync(file, malformed, 'utf-8');
+      expect(store.read()).toEqual(DEFAULTS);
+      expect(fs.existsSync(file)).toBe(false);
+      store.writePatch({ limit: 9 });
+      expect(JSON.parse(fs.readFileSync(file, 'utf-8'))).toEqual({ limit: 9 });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('unset, as on the desktop: a non-object root reads as no overrides and is kept', () => {
+    const { dir, file, store } = createTempStore();
+    try {
+      fs.writeFileSync(file, 'null', 'utf-8');
+      expect(store.readState()).toMatchObject({ value: DEFAULTS, isCustomized: false });
+      expect(fs.readFileSync(file, 'utf-8')).toBe('null');
+      store.writePatch({ limit: 9 });
+      expect(JSON.parse(fs.readFileSync(file, 'utf-8'))).toEqual({ limit: 9 });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('set: a store without its own option keeps the file, refuses writes, and reset still removes it', async () => {
+    setPreserveUnreadableSettingsFilesByDefault(true);
+    const { dir, file, store } = createTempStore();
+    try {
+      fs.writeFileSync(file, malformed, 'utf-8');
+      expect(store.read()).toEqual(DEFAULTS);
+      expect(fs.readFileSync(file, 'utf-8')).toBe(malformed);
+      expect(() => store.writePatch({ limit: 9 })).toThrow(/unreadable/);
+      await expect(store.writePatchAtomic({ limit: 8 })).rejects.toThrow(/unreadable/);
+      expect(fs.readFileSync(file, 'utf-8')).toBe(malformed);
+      expect(store.reset()).toEqual(DEFAULTS);
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('set: it applies to stores created before it was set', () => {
+    const { dir, file, store } = createTempStore();
+    setPreserveUnreadableSettingsFilesByDefault(true);
+    try {
+      fs.writeFileSync(file, malformed, 'utf-8');
+      expect(store.read()).toEqual(DEFAULTS);
+      expect(fs.readFileSync(file, 'utf-8')).toBe(malformed);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a store's own option wins over the process default", () => {
+    setPreserveUnreadableSettingsFilesByDefault(true);
+    const { dir, file, store } = createTempStore(undefined, { preserveUnreadableFile: false });
+    try {
+      fs.writeFileSync(file, malformed, 'utf-8');
+      expect(store.read()).toEqual(DEFAULTS);
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

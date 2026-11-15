@@ -47,6 +47,12 @@
     "footer": "Logs stay on this phone for up to 7 days or 8 MB and are never uploaded automatically. Exported logs exclude conversation text and credentials; uploads send only filtered run records and version info."
   },
   "title": "Settings",
+  "promptRecommendation": {
+    "label": "Input Suggestions",
+    "description": "Suggest what to say next after a reply. Applies only to this phone.",
+    "saveFailed": "The setting applies for now, but could not be saved.",
+    "reset": "Reset to Default"
+  },
   "appearance": {
     "title": "Appearance",
     "modeLabel": "Appearance Mode",
@@ -108,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Classical prose (default)",
+        "prose": "Classical prose",
         "tang-poetry": "Tang poetry",
         "song-ci": "Song ci",
         "yuan-qu": "Yuan qu",
@@ -424,7 +430,57 @@
       "voice": "Hold to talk",
       "scrollKeys": "Right stick",
       "scroll": "Scroll",
-      "page": "Page up / down"
+      "page": "Page up / down",
+      "triggerScrollKeys": "L2 / R2 + D-pad up/down",
+      "triggerScroll": "Scroll visible content",
+      "sendText": "Send entered text",
+      "taskHint": "These shortcuts work on session pages. A key assigned to voice takes priority; releasing it keeps the text in the message box."
     }
+  },
+  "projectInfo": {
+    "automatic": "Use project icon",
+    "autoLoading": "Finding project icon…",
+    "autoNone": "Using initials from the project name.",
+    "autoSource": "Source",
+    "githubAvatar": "Use GitHub account avatar",
+    "title": "Project settings",
+    "name": "Display name",
+    "saveName": "Save name",
+    "reset": "Restore default",
+    "icon": "Icon",
+    "directory": "Project directory",
+    "done": "Done",
+    "failed": "Could not save. Try again.",
+    "unavailable": "Project settings are unavailable. Connect to an updated computer and try again.",
+    "back": "Back",
+    "cancel": "Cancel",
+    "changeIcon": "Change icon",
+    "chooseIcon": "Choose an icon",
+    "save": "Save",
+    "symbols": "Icons",
+    "emoji": "Emoji",
+    "letters": "Letters",
+    "image": "Image",
+    "upload": "Upload image",
+    "imageHint": "PNG, JPG or WebP · cropped to square",
+    "imageError": "Could not read this image. Try a smaller PNG or JPG.",
+    "search": "Search icons",
+    "customEmoji": "Or paste an emoji",
+    "lettersHint": "Use one or two letters or numbers.",
+    "thisComputer": "This computer",
+    "nameHint": "Shown in your project list. The folder name stays the same.",
+    "copy": "Copy path",
+    "copied": "Copied",
+    "applyIcon": "Use icon",
+    "noResults": "No matching icons",
+    "discardHint": "Discard unsaved changes?",
+    "keepEditing": "Keep editing",
+    "discard": "Discard",
+    "colors": {
+      "default": "Default (follow theme)"
+    }
+  },
+  "navigation": {
+    "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
   }
 }

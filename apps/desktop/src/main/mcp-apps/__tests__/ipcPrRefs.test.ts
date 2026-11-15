@@ -1,7 +1,7 @@
 /**
- * #8486: production writeCard + message writer/mapper + PR store in memory SQLite.
+ * Explicit-only PR ownership through production writeCard and message persistence.
  * Existing ipc.test.ts mocks message persistence; store tests bypass writeCard.
- * Minimal failure: a pending card completes with one public PR after backfill.
+ * Minimal failure: a pending card completes with one public PR link.
  * Observe persisted associations, public broadcasts and rejected stale writes.
  * Standard tier: no account, filesystem, network or Electron process is used.
  * A separate file is needed because ipc.test.ts replaces the DB and message writer.
@@ -72,9 +72,7 @@ import { messages, migrationMeta, sessionPrRefs, sessions } from '../../localDb/
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
 import { tx } from '../../localDb/worker/opHandlers/tx.js';
 import { createMessage } from '../../localDb/ipc/messages.js';
-import {
-  ensurePrRefsBackfill, listPrRefs, managePrRefs, setPrRefsChangedListener,
-} from '../../git-context/prRefsStore.js';
+import { listPrRefs, managePrRefs, setPrRefsChangedListener } from '../../git-context/prRefsStore.js';
 import { registerMcpAppsIpc } from '../ipc.js';
 
 const sqlite = new Database(':memory:');
@@ -119,25 +117,23 @@ beforeEach(async () => {
   db.insert(sessions).values({ id: 'task', title: 'fixture', workingDir: tmpdir(),
     source: 'desktop', status: 'active', createdAt: 1, updatedAt: 1 }).run();
   setPrRefsChangedListener(h.changed);
-  // Complete the current production backfill before any App result exists.
-  await ensurePrRefsBackfill();
   registerMcpAppsIpc(async () => {}, async () => ({ kind: 'permission', behavior: 'allow' }));
 });
 afterAll(() => { clearCurrentDbClient(client); sqlite.close(); });
 
-describe('MCP App result PR associations after backfill', () => {
-  it('associates public completion, replaces A with B and removes links without another backfill', async () => {
+describe('MCP App results do not infer PR associations', () => {
+  it('does not associate PRs from public App completion or rewrites', async () => {
     await write(pending);
     expect(await refs()).toEqual([]);
     await write(completed(url(1)));
-    expect(await refs()).toEqual([1]);
-    expect(h.changed).toHaveBeenLastCalledWith('task');
+    expect(await refs()).toEqual([]);
+    expect(h.changed).not.toHaveBeenCalled();
     expect(h.broadcast).toHaveBeenCalledWith('local-db:messages:created',
       expect.objectContaining({ message: expect.objectContaining({
         content: { mcpAppHistory: { version: 1, title: 'form', text: url(1) } },
       }) }));
     await write(completed(url(2)));
-    expect(await refs()).toEqual([2]);
+    expect(await refs()).toEqual([]);
     await write(completed('Saved'));
     expect(await refs()).toEqual([]);
     expect(h.warn).not.toHaveBeenCalled();
@@ -145,7 +141,7 @@ describe('MCP App result PR associations after backfill', () => {
     expect(JSON.parse(row.content)).toEqual({ mcpApp: completed('Saved') });
   });
 
-  it('keeps other visible mentions, manual associations and removal tombstones during replacement', async () => {
+  it('keeps manual associations and removal tombstones during replacement', async () => {
     await write(pending);
     await write(completed(url(1)));
     const verify = async () => {};
@@ -154,7 +150,7 @@ describe('MCP App result PR associations after backfill', () => {
     await managePrRefs('task', { action: 'remove', id: added.find(ref => ref.prNumber === 3)!.id }, verify);
     await createMessage('task', { clientId: 'other', role: 'user', content: url(1) });
     await write(completed(`${url(3)} ${url(4)}`));
-    expect(await refs()).toEqual([1, 2, 4]);
+    expect(await refs()).toEqual([2]);
     const tombstone = db.select().from(sessionPrRefs).where(eq(sessionPrRefs.prNumber, 3)).get()!;
     expect(tombstone.removedAt).not.toBeNull();
     db.delete(messages).where(eq(messages.clientId, 'other')).run();

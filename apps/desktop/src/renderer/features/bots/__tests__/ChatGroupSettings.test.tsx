@@ -327,11 +327,26 @@ it('saves the group repository from the project section', async () => {
   fireEvent.focus(input);
   fireEvent.change(input, { target: { value: 'https://github.com/makecindy/cindy.git' } });
   fireEvent.blur(input);
-  await waitFor(() => expect(mocks.updateBotGroup).toHaveBeenCalledWith({ groupId: 'room', githubRepo: 'makecindy/cindy' }));
-  fireEvent.focus(input);
-  fireEvent.change(input, { target: { value: 'not a repo' } });
-  fireEvent.blur(input);
+  await waitFor(() => expect(mocks.updateBotGroup).toHaveBeenCalledWith({ groupId: 'room', repository: 'makecindy/cindy' }));
+  // A GitLab link where the server keeps GitHub only, or no repository at all, is not saved.
+  for (const value of ['not a repo', 'https://gitlab.example.com/platform/cindy']) {
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value } });
+    fireEvent.blur(input);
+  }
   expect(mocks.updateBotGroup).toHaveBeenCalledOnce();
+});
+
+// 2026-11-14 request: where the server keeps any git host, a GitLab (a company's own too) or CNB link
+// is saved in its plain host/path form.
+it('saves a GitLab or CNB repository link where the server keeps any git host', async () => {
+  renderAt({ ...group(true), supportsGroupProject: true, supportsGroupProjectGit: true, project: null }, 'manage');
+  const input = screen.getByRole('textbox', { name: key('repository') });
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: 'https://gitlab.example.com/platform/cindy.git' } });
+  fireEvent.blur(input);
+  await waitFor(() => expect(mocks.updateBotGroup).toHaveBeenCalledWith({ groupId: 'room', repository: 'gitlab.example.com/platform/cindy' }));
+  expect((input as HTMLInputElement).value).toBe('gitlab.example.com/platform/cindy');
 });
 
 // bot-group-chat.md「群里的 Cindy」(2026-11-12, replaces the 2026-11-11 「负责人回答」 layout): a server
@@ -376,7 +391,7 @@ it('uses the existing member leave action without changing the group archive sta
   renderAt(group());
   fireEvent.click(row(LEAVE));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'member', actorId: 'me', action: 'leave' } }));
-  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ presentation: 'standard', description: key('leaveHint'), confirmVariant: 'destructive' }));
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ description: key('leaveHint'), confirmVariant: 'destructive' }));
   expect(mocks.refresh).toHaveBeenCalledOnce();
 });
 

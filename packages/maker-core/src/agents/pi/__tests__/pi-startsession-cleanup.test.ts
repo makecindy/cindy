@@ -29,6 +29,7 @@ import path from 'node:path';
 import * as childProcess from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
+import { estimateSpawnArgvLength, PI_WINDOWS_SPAWN_ARGV_BUDGET } from '../project-resource-cli.js';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -3056,6 +3057,35 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       ),
     ]);
     await reviewHandle.close();
+  });
+
+  it('collapses oversized project Skill argv into one session directory', async () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      const skills = Array.from({ length: 220 }, (_, index) => {
+        const skillDir = path.join(cwd, '.agents', 'skills', `long-project-skill-${String(index).padStart(3, '0')}-${'nested-path-'.repeat(10)}`);
+        mkdirSync(skillDir, { recursive: true });
+        writeFileSync(path.join(skillDir, 'SKILL.md'), `# skill ${index}\n`);
+        return skillDir;
+      });
+
+      const handle = await new PiAgent(buildDeps()).startSession(opts());
+      try {
+        const args = knobs.spawnedArgs[0]!;
+        const skillArgs = repeatedArgValues(args, '--skill');
+        expect(skillArgs).toHaveLength(1);
+        expect(path.basename(skillArgs[0]!)).toBe('cindy-project-skills');
+        expect(readdirSync(skillArgs[0]!)).toHaveLength(skills.length);
+        expect(readdirSync(skillArgs[0]!).map((entry) => realpathSync(path.join(skillArgs[0]!, entry))).sort())
+          .toEqual(skills.map((skill) => realpathSync(skill)).sort());
+        expect(estimateSpawnArgvLength(args, 'win32')).toBeLessThanOrEqual(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+      } finally {
+        await handle.close();
+      }
+      await waitFor(() => !existsSync(path.join(knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!, 'cindy-project-skills')));
+    } finally {
+      platform.mockRestore();
+    }
   });
 
   it('still loads project resources when a local root session resumes a fork jsonl', async () => {

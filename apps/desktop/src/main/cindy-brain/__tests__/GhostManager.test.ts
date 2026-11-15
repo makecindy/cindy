@@ -10,6 +10,7 @@ import {
   GHOST_SKILL_MD_MAX_BYTES,
   ghostManifestToAuthorFormat,
   ghostInstallApprovalToken,
+  ghostTaskEventApproved,
   validateGhostManifest,
   type InstalledGhost,
 } from '../../../shared/ghost';
@@ -34,6 +35,7 @@ import { writeTestCindyPackage } from './cindyPackageFixture';
 import { PluginMarketLedger } from '../../plugin-market/ledger';
 import { projectPluginPublishingSource } from '../pluginPublishingSource';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture';
+import { hasPluginHostToolGroupApproval } from '../taskCapability';
 
 const productionManager = createGhostProductionCallbacks<{ getGhostManager(): GhostManager }>({
   functions: ['getGhostManager'], initialize: 'let managerSingleton = null;',
@@ -654,6 +656,64 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     const removed = await makeCindy('companions-removed.cindy', { ...manifest, version: '1.0.2', agent: { errand: true } }, { 'main.js': '// update' });
     const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
     expect(result).not.toHaveProperty('ghost.companionsCapabilityApproved');
+  });
+
+  // Unit, installation authority: real install/update/list derives Host tool access
+  // from the package declaration, without persisting or restoring per-group grants.
+  it('enables installed Host tool declarations through update and reinstall without group grants', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { hostTools: ['history', 'control'] } };
+    const pkg = await makeCindy('host-tools.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg);
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostPhysicalRelId(selected);
+    expect(selected).not.toHaveProperty('approvedHostToolGroups');
+    expect(hasPluginHostToolGroupApproval(selected, 'history')).toBe(true);
+    expect(hasPluginHostToolGroupApproval(selected, 'control')).toBe(true);
+    expect(hasPluginHostToolGroupApproval(selected, 'settings')).toBe(false);
+    const update = await makeCindy('host-tools-update.cindy', { ...manifest, version: '1.0.1', agent: { hostTools: ['history', 'scheduler'] } }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    if (!('ghost' in updated)) throw new Error('fixture update failed');
+    expect(updated.ghost).not.toHaveProperty('approvedHostToolGroups');
+    expect(hasPluginHostToolGroupApproval(updated.ghost, 'history')).toBe(true);
+    expect(hasPluginHostToolGroupApproval(updated.ghost, 'scheduler')).toBe(true);
+    expect(hasPluginHostToolGroupApproval(updated.ghost, 'control')).toBe(false);
+    const removed = await makeCindy('host-tools-removed.cindy', { ...manifest, version: '1.0.2', agent: { hostTools: ['control'] } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).not.toHaveProperty('ghost.approvedHostToolGroups');
+    if (!('ghost' in result)) throw new Error('fixture update failed');
+    expect(hasPluginHostToolGroupApproval(result.ghost, 'history')).toBe(false);
+    expect(hasPluginHostToolGroupApproval(result.ghost, 'control')).toBe(true);
+    await expect(manager.uninstall(id)).resolves.toEqual({ ok: true });
+    expect(hasPluginHostToolGroupApproval(manager.list()[0], 'history')).toBe(false);
+    await manager.install(pkg);
+    expect(manager.list()).toHaveLength(1);
+    expect(manager.list()[0]).not.toHaveProperty('approvedHostToolGroups');
+    expect(hasPluginHostToolGroupApproval(manager.list()[0], 'history')).toBe(true);
+  });
+
+  // Unit installer contract: current event declarations use whole-install approval.
+  it('enables installed event declarations through update and reinstall without topic grants', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'subscribe'], subscribe: { topics: ['session', 'message', 'task-state'] } };
+    const pkg = await makeCindy('content-events.cindy', manifest, { 'main.js': '// content' });
+    await manager.install(pkg);
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostPhysicalRelId(selected);
+    expect(selected).not.toHaveProperty('approvedEventTopics');
+    expect(ghostTaskEventApproved(selected, 'message')).toBe(true);
+    expect(ghostTaskEventApproved(selected, 'task-state')).toBe(true);
+    const update = await makeCindy('content-events-update.cindy', { ...manifest, version: '1.0.1', subscribe: { topics: ['session', 'task-state'] } }, { 'main.js': '// updated' });
+    const result = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(result).not.toHaveProperty('ghost.approvedEventTopics');
+    if (!('ghost' in result)) throw new Error('fixture update failed');
+    expect(ghostTaskEventApproved(result.ghost, 'message')).toBe(false);
+    expect(ghostTaskEventApproved(result.ghost, 'task-state')).toBe(true);
+    await expect(manager.uninstall(id)).resolves.toEqual({ ok: true });
+    expect(manager.list()).toHaveLength(0);
+    await manager.install(pkg);
+    expect(manager.list()[0]).not.toHaveProperty('approvedEventTopics');
+    expect(ghostTaskEventApproved(manager.list()[0]!, 'message')).toBe(true);
   });
 
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {

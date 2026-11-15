@@ -83,7 +83,6 @@ import {
   finalizePlainPreview,
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
-import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
 import * as imageCacheStore from '../../imageCacheStore.desktop';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
 import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
@@ -115,6 +114,7 @@ import {
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
+import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
 import { recoverGeneratedImagesForHistory } from '../../cindy-media/generatedImageRecovery';
@@ -141,6 +141,7 @@ import {
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
+import { noteSessionsRestoring } from '../sessionRestoreRetention.js';
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
 import { requestSessionArchiveSync } from '../sessionArchiveSync.js';
 import { cindyMakeManager } from '../../cindy-make/manager.js';
@@ -262,9 +263,11 @@ async function withStatusWriteLock<T>(
   task: () => Promise<T>,
   alreadyLocked = false,
   beforeWrite?: () => void,
+  requireNoWorktree = false,
 ): Promise<T> {
   const write = async () => {
     const resources = status === undefined ? [] : await readSessionWorktreeResources(db, sessionId);
+    if (requireNoWorktree && resources.length > 0) throwIpcError('PRECONDITION_FAILED', 'Task has a worktree');
     const physicalResources = await Promise.all(resources.map(physicalWorktreeKey));
     const mutate = async () => {
       beforeWrite?.();
@@ -361,8 +364,11 @@ async function writeSessionPatch(
   sessionId: string,
   setObj: ReturnType<typeof sessionPatchToRow>,
   status: unknown,
+  beforeWrite?: () => void,
 ): Promise<void> {
   if (Object.keys(setObj).length === 0) return;
+  if (status === 'active') await noteSessionsRestoring([sessionId], db);
+  beforeWrite?.();
   const deletedIsTerminal = status === 'active' || status === 'archived';
   const result = await db
     .update(sessions)
@@ -387,9 +393,11 @@ async function setTerminalSessionStatus(
   dbClient: DbClient,
   sessionId: string,
   status: 'archived' | 'deleted',
+  idleArchiveCutoff?: number,
 ): Promise<SessionsSetTerminalStatusResult['deletedSideChats']> {
   try {
-    const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status });
+    const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status,
+      ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}) });
     return result.deletedSideChats;
   } catch (error) {
     const code = (error as { code?: string }).code;
@@ -479,6 +487,9 @@ export function broadcastSessionPatched(
   pagePermissionSessionChanged(sessionId, patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
+  if (hasTaskChangeListener('state') && !isProvisionalSession(sessionId) && patch.status !== undefined) {
+    publishTaskChange({ kind: 'state', sessionId, state: { status: patch.status } }, ownerStamp);
+  }
   try {
     // 未发送任务只在本机可见，转正前不推给控制端。
     if (isProvisionalSession(sessionId)) {
@@ -1318,7 +1329,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  void recomputePrRefsForSession(sessionId).catch(() => undefined);
+
   if (isOwnerScopeCurrent(ownerScope)) {
     broadcastSessionPatched(
       sessionId,
@@ -1720,6 +1731,10 @@ export function registerSessionIpc(
       const updated = await withStatusWriteLock(db, sid, 'active', async () => {
         if (!isOwnerScopeCurrent(ownerScope)) return null;
         await assertGenericSessionLifecycleAllowed(db, sid);
+        // Bulk restore uses this CAS path instead of writeSessionPatch. Persist
+        // the same retention before activation, then fence the async owner boundary.
+        await noteSessionsRestoring([sid], db);
+        if (!isOwnerScopeCurrent(ownerScope)) return null;
         // 显式 .run() 才能从生产 DbClient.drizzle proxy 拿到 changes；隐式 await
         // 会丢弃写结果。CAS 是否命中必须以该原子 UPDATE 的 changes 判定。
         const writeResult = await db
@@ -2125,7 +2140,10 @@ export async function updateSessionInDb(
             await finalizeSharedTaskClosure(dbClient, prepared);
           }
         } else {
-          await writeSessionPatch(db, sid, setObj, p.status);
+          await writeSessionPatch(db, sid, setObj, p.status, () => {
+            moveGuard?.assertCurrent();
+            if (!isOwnerScopeCurrent(ownerScope)) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+          });
         }
         cleanupSessionRuntimeForTerminalStatus(sid, p.status);
         if (terminal) {
@@ -2136,8 +2154,6 @@ export async function updateSessionInDb(
       p.workingDir !== undefined,
     );
     moveGuard?.assertCurrent();
-    // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
-    // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
     if (p.clearedAt !== undefined) {
       noteSessionClearBoundary(sid, p.clearedAt as string | null);
       // sidebar-card-mode(codex review):summary 是基于 clear 前内容生成的,clear 后
@@ -2146,7 +2162,6 @@ export async function updateSessionInDb(
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
       }
-      void recomputePrRefsForSession(sid).catch(() => undefined);
     }
     const row = await selectSessionWithCount(db, sid);
     moveGuard?.assertCurrent();
@@ -2347,7 +2362,7 @@ export async function patchSessionMetaInDb(
     title?: string;
     pinnedAt?: string | null;
   },
-  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void } = {},
+  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   for (const k of Object.keys(patch)) {
@@ -2388,7 +2403,7 @@ export async function patchSessionMetaInDb(
         const { status: _status, ...nonTerminalPatch } = setObj;
         await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
         options.beforeWrite?.();
-        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted');
+        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', options.idleArchiveCutoff);
       } else {
         const prepared = await prepareSharedTaskClosure(sessionId, dbClient);
         try {
@@ -2400,11 +2415,28 @@ export async function patchSessionMetaInDb(
         }
         await finalizeSharedTaskClosure(dbClient, prepared);
       }
+    } else if (patch.status === 'active' && typeof dbClient.tx === 'function') {
+      // Restore through the same transaction as batch actions, including the
+      // group receiver fence for archived rows written by older versions.
+      // Undo also uses this branch: persist its fresh retention before any write.
+      const assertRestoreCurrent = () => {
+        if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted)
+          throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+        options.beforeWrite?.();
+      };
+      await noteSessionsRestoring([sessionId], db);
+      const { status: _status, ...nonStatusPatch } = setObj;
+      await writeSessionPatch(db, sessionId, nonStatusPatch, undefined, assertRestoreCurrent);
+      assertRestoreCurrent();
+      await dbClient.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active' });
     } else {
       // All asynchronous preparation has finished. Once this write is issued,
       // cancellation does not roll back a committed lifecycle transition.
       if (options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
-      await writeSessionPatch(db, sessionId, setObj, patch.status);
+      await writeSessionPatch(db, sessionId, setObj, patch.status, () => {
+        if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+        options.beforeWrite?.();
+      });
     }
     const row = await selectSessionWithCount(db, sessionId);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
@@ -2418,7 +2450,7 @@ export async function patchSessionMetaInDb(
       await closeSharedTaskForTask(sessionId, dbClient);
     }
     return sessionToCamel(row);
-  }, options.routeLockHeld, options.beforeWrite);
+  }, options.routeLockHeld, options.beforeWrite, options.idleArchiveCutoff !== undefined);
   if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
     clearSessionAttention(sessionId, 'explicit');
   }
@@ -2459,9 +2491,9 @@ export async function patchSessionMetaInDb(
 }
 
 /**
- * Routine and channel lanes are listed with ordinary tasks (`ordinaryTaskListFilter`)
+ * Routine, channel and group lanes are listed with ordinary tasks (`ordinaryTaskListFilter`)
  * and hold no Profile pointer, so they archive, restore and delete like ordinary tasks.
- * Their next trigger resumes an archived lane (`ensureBotOwnedLaneSession`).
+ * IM/routine triggers resume archived lanes; group triggers create a fresh active lane.
  */
 async function isTaskListBotLane(db: DbClient['drizzle'], sessionId: string): Promise<boolean> {
   const [link] = await db
@@ -2469,7 +2501,7 @@ async function isTaskListBotLane(db: DbClient['drizzle'], sessionId: string): Pr
     .from(botSessionLinks)
     .where(and(
       eq(botSessionLinks.sessionId, sessionId),
-      inArray(botSessionLinks.role, ['routine', 'channel']),
+      inArray(botSessionLinks.role, ['routine', 'channel', 'group']),
     ))
     .limit(1);
   return !!link;
@@ -2627,6 +2659,10 @@ export async function setSessionsStatusInDb(
         }
       }
       await beforeMutation?.();
+      if (status === 'active') {
+        await noteSessionsRestoring(sessionIds, dbClient.drizzle);
+        await beforeMutation?.();
+      }
       const rows = await dbClient.tx('sessions.setStatus', status === 'archived'
         ? { sessionIds, status, closeSharedTasks: true }
         : { sessionIds, status }).catch((err) => {
