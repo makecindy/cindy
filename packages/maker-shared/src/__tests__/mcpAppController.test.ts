@@ -248,7 +248,7 @@ describe('MCP App transport lifecycle', () => {
     await f.controller.open({});
     f.controller.receive({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-escape' });
     expect(f.invoke).toHaveBeenLastCalledWith('task', { op: 'display-mode', viewId: 'view', mode: 'inline' });
-    expect(f.state).not.toHaveBeenCalled();
+    expect(f.state).toHaveBeenCalledWith({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-escape' });
     await f.controller.close();
   });
   it('times out initialization and releases the View without restarting a write', async () => {

@@ -691,6 +691,11 @@ it.each(['light', 'dark'])('keeps the live App mounted while entering and leavin
     await act(async () => state.controllers[0].message({
       method: 'ui/notifications/host-context-changed', params: { displayMode: 'fullscreen' },
     }));
+    await act(async () => state.controllers[0].message({ method: 'ui/notifications/sandbox-escape' }));
+    expect(dialog.getAttribute('role')).toBe('region');
+    await act(async () => state.controllers[0].message({
+      method: 'ui/notifications/host-context-changed', params: { displayMode: 'fullscreen' },
+    }));
     await act(async () => state.controllers[0].fail(new Error('offline')));
     expect(document.activeElement).toBe(opener);
     expect(dialog.getAttribute('aria-modal')).toBeNull();

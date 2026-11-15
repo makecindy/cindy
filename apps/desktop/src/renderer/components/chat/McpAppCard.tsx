@@ -244,6 +244,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         if (initialized && resultDelivered && sizeDelivered && !revealedFrame) reveal();
         if (initialized && resultDelivered && !revealedFrame && revealTimer === undefined)
           revealTimer = setTimeout(reveal, 150);
+        if (message.method === 'ui/notifications/sandbox-escape') setMode('inline');
         if (message.method === 'ui/notifications/host-context-changed') {
           const mode = message.params?.displayMode;
           if (mode === 'inline' || mode === 'fullscreen') setMode(mode);
