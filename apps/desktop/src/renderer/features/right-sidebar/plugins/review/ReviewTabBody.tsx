@@ -11,6 +11,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -75,6 +76,14 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+} from '@/components/ui/menu-row';
 import { Spinner } from '@/components/ui/spinner';
 import {
   DropdownMenu,
@@ -4206,6 +4215,34 @@ export function BranchBaseDropdown({
   onSelectBase: (baseRef: string) => void;
 }) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
+  const listboxId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const panelRef = useMenuPanel<HTMLDivElement>(undefined, {
+    lockWidth: false,
+    options: {
+      current: (rows) => rows.find((row) => row.hasAttribute('data-menu-current')),
+      currentAttributes: ['data-menu-current'],
+      keyboardSource: inputRef.current ?? undefined,
+    },
+  });
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleCandidates = candidates.filter(
+    (candidate) =>
+      candidate.refName.toLowerCase().includes(normalizedQuery) ||
+      candidate.shortName.toLowerCase().includes(normalizedQuery),
+  );
+  const currentIndex = Math.min(activeIndex, visibleCandidates.length - 1);
+  useEffect(() => {
+    if (open) optionRefs.current[currentIndex]?.scrollIntoView?.({ block: 'nearest' });
+  }, [open, currentIndex, query]);
+  const pickBase = (refName: string) => {
+    onSelectBase(refName);
+    setOpen(false);
+  };
   const selected =
     candidates.find((candidate) => candidate.refName === selectedBaseRef) ?? candidates[0] ?? null;
   const label = selected?.shortName ?? t('rightSidebar.review.branch.basePlaceholder');
@@ -4213,8 +4250,22 @@ export function BranchBaseDropdown({
     ? t('rightSidebar.review.branch.baseTooltip', { base: selected.refName })
     : t('rightSidebar.review.branch.baseDropdownAria');
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) {
+          setQuery('');
+          setActiveIndex(
+            Math.max(
+              0,
+              candidates.findIndex((candidate) => candidate.refName === selected?.refName),
+            ),
+          );
+        }
+      }}
+    >
+      <PopoverTrigger asChild>
         <Tip text={tooltip}>
           <button
             type="button"
@@ -4226,34 +4277,103 @@ export function BranchBaseDropdown({
             <ChevronDown size={13} className="ml-1.5 shrink-0 text-[var(--text-tertiary)]" />
           </button>
         </Tip>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
+      </PopoverTrigger>
+      <PopoverContent
         align="start"
         sideOffset={4}
-        className="max-h-72 w-[var(--radix-dropdown-menu-trigger-width)] min-w-[14rem] overflow-y-auto"
+        aria-label={t('rightSidebar.review.branch.baseDropdownAria')}
+        className="flex max-h-[min(24rem,var(--radix-popover-content-available-height))] w-[28rem] max-w-[calc(100vw-1rem)] flex-col gap-1 p-1"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          inputRef.current?.focus();
+        }}
       >
-        {candidates.map((candidate) => (
-          <DropdownMenuItem
-            key={candidate.refName}
-            onSelect={() => onSelectBase(candidate.refName)}
-            className="gap-2"
-          >
-            <span className="flex h-4 w-4 items-center justify-center text-[var(--text-secondary)]">
-              {candidate.refName === selectedBaseRef && <Check size={12} />}
-            </span>
-            <span className="min-w-0 flex-1 truncate">
-              {candidate.shortName}
-              {candidate.isStaleRisk && (
-                <span className="text-[var(--text-tertiary)]">
-                  {' '}
-                  {t('rightSidebar.review.branch.staleRiskSuffix')}
-                </span>
+        <Input
+          inputRef={inputRef}
+          size="sm"
+          className="m-1 shrink-0"
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-controls={listboxId}
+          aria-activedescendant={currentIndex >= 0 ? `${listboxId}-${currentIndex}` : undefined}
+          aria-label={t('newChat.branchChip.searchPlaceholder')}
+          placeholder={t('newChat.branchChip.searchPlaceholder')}
+          value={query}
+          onChange={(value) => {
+            setQuery(value);
+            setActiveIndex(0);
+          }}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              if (visibleCandidates.length > 0) {
+                const step = event.key === 'ArrowDown' ? 1 : -1;
+                setActiveIndex(
+                  (currentIndex + step + visibleCandidates.length) % visibleCandidates.length,
+                );
+              }
+            } else if (event.key === 'Enter') {
+              event.preventDefault();
+              const candidate = visibleCandidates[currentIndex];
+              if (candidate) pickBase(candidate.refName);
+            }
+          }}
+        />
+        <div
+          ref={panelRef}
+          {...menuPanelAttrs}
+          role="listbox"
+          id={listboxId}
+          aria-label={t('rightSidebar.review.branch.baseDropdownAria')}
+          className="relative min-h-0 overflow-y-auto"
+        >
+          <MenuHighlightLayer />
+          {visibleCandidates.map((candidate, index) => (
+            <div
+              key={candidate.refName}
+              ref={(element) => {
+                optionRefs.current[index] = element;
+              }}
+              id={`${listboxId}-${index}`}
+              role="option"
+              aria-selected={candidate.refName === selected?.refName}
+              title={candidate.refName}
+              {...menuRowAttrs({
+                checked: candidate.refName === selected?.refName,
+                current: index === currentIndex,
+              })}
+              onMouseMove={() => setActiveIndex(index)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => pickBase(candidate.refName)}
+              className={cn(
+                COMPOSER_MENU_ROW,
+                'flex cursor-pointer items-center gap-2 px-2 py-1.5',
               )}
-            </span>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+            >
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-secondary)]">
+                {candidate.refName === selected?.refName && <Check size={12} />}
+              </span>
+              <span className="min-w-0 flex-1 break-all">
+                {candidate.shortName}
+                {candidate.isStaleRisk && (
+                  <span className="text-[var(--text-tertiary)]">
+                    {' '}
+                    {t('rightSidebar.review.branch.staleRiskSuffix')}
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div role="status" aria-live="polite" className="text-12 text-[var(--text-tertiary)]">
+          {visibleCandidates.length === 0 && (
+            <span className="block px-3 py-2">{t('newChat.branchChip.noMatch')}</span>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
