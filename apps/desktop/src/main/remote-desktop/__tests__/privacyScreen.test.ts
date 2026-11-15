@@ -2,12 +2,46 @@ import { EventEmitter } from 'node:events';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ windows: [] as any[], displays: [] as any[], confirm: vi.fn() }));
+const away = vi.hoisted(() => ({
+  ended: (_locked: boolean) => {},
+  quit: () => {},
+  lock: vi.fn<() => Promise<void>>(),
+  helperLock: vi.fn<() => Promise<boolean>>(),
+}));
 vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
-vi.mock('../../logger', () => ({ createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }) }));
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() }),
+}));
+vi.mock('../../lifecycle', () => ({
+  onQuit: (_key: string, quit: () => void) => { away.quit = quit; },
+}));
+vi.mock('node:child_process', () => ({
+  execFile: (
+    _file: string, _args: string[], _options: unknown,
+    done: (error: null, stdout: string, stderr: string) => void,
+  ) => done(null, '', ''),
+}));
+vi.mock('../inputHost', () => ({
+  lockDesktopScreen: away.lock,
+  // The owner has not answered the system verification yet.
+  verifyDesktopOwner: () => new Promise(() => {}),
+}));
+vi.mock('../privacyInput', () => ({
+  watchPrivacyInput: vi.fn(),
+  watchAwayGuardInput: async (ended: (locked: boolean) => void) => {
+    away.ended = ended;
+    return { stop: async () => {}, lock: away.helperLock, lockOnExit: () => {} };
+  },
+}));
 vi.mock('electron', () => ({
   app: { focus: vi.fn() },
+  powerMonitor: new EventEmitter(),
+  powerSaveBlocker: { start: () => 1, stop: vi.fn() },
+  ipcMain: { handle: vi.fn() },
   dialog: { showMessageBox: state.confirm },
   BrowserWindow: class extends EventEmitter {
+    static getFocusedWindow() { return null; }
+    getNativeWindowHandle() { return Buffer.alloc(8); }
     id = state.windows.length + 1;
     destroyed = false;
     options: any;
@@ -22,7 +56,8 @@ vi.mock('electron', () => ({
       state.windows.push(this);
     }
     setMenuBarVisibility() {}
-    async loadURL() {}
+    page = '';
+    async loadURL(url: string) { this.page = decodeURIComponent(url); }
     setContentProtection() {}
     setIgnoreMouseEvents = vi.fn();
     setFocusable = vi.fn();
@@ -71,7 +106,8 @@ vi.mock('electron', () => ({
 }));
 
 import { PrivacyScreen } from '../privacyScreen';
-import { screen } from 'electron';
+import { startAwayGuard } from '../awayGuardService';
+import { powerMonitor, screen } from 'electron';
 beforeEach(() => {
   screen.removeAllListeners();
   state.displays = [{ id: 1, bounds: { x: 0, y: 0, width: 1440, height: 900 } }];
@@ -410,4 +446,103 @@ it('retries from a held mask click when the native watcher cannot re-arm', async
   f.masks.stop();
   window.webContents.emit('before-mouse-event', {}, { type: 'mouseDown' });
   expect(retry).toHaveBeenCalledOnce();
+});
+
+// Service integration in the existing window fixture: a failed native lock must
+// retain the cover until a system lock/unlock, then leave no stale failure page.
+// The pure controller tests cannot observe these Electron event/window callbacks.
+// One service lifetime covers held and in-flight failures without module resets.
+it('recovers away-guard failure masks after OS unlock, including late lock failures', async () => {
+  vi.useFakeTimers();
+  // Keep process methods: vitest reports errors through process.listeners.
+  vi.stubGlobal(
+    'process',
+    Object.create(process, {
+      platform: { value: 'darwin' },
+      getSystemVersion: { value: () => '15.0' },
+    }),
+  );
+  let enabled = true;
+  away.lock.mockRejectedValue(new Error('DESKTOP_LOCK_FAILED'));
+  away.helperLock.mockResolvedValue(false);
+  try {
+    startAwayGuard({
+      excludedWindows: () => {},
+      // Covers appear only while work needs the screen (displayDemand.ts).
+      needsDisplay: () => true,
+      enabled: () => enabled,
+      delaySeconds: () => 30,
+      screenLocked: () => false,
+      seedScreenLocked: () => {},
+      msSinceOwnerInput: () => Infinity,
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    const held = state.windows.at(-1);
+    expect(held).toBeDefined();
+    away.ended(false);
+    await settle();
+    expect(held.destroyed).toBe(false);
+    expect(held.page).toContain('awayGuard.lockFailed.status');
+    // The prior lock notification may have been missed; unlock is OS evidence too.
+    powerMonitor.emit('unlock-screen');
+    await settle();
+    expect.soft(held.destroyed).toBe(true);
+    powerMonitor.emit('lock-screen');
+
+    for (const trigger of ['helper', 'disable'] as const) {
+      enabled = true;
+      await vi.advanceTimersByTimeAsync(32_000);
+      const pending = state.windows.at(-1);
+      expect(pending.destroyed).toBe(false);
+      let failLock!: (error: Error) => void;
+      away.lock.mockImplementationOnce(() => new Promise((_, reject) => { failLock = reject; }));
+      if (trigger === 'helper') away.ended(false);
+      else {
+        enabled = false;
+        vi.advanceTimersByTime(2_000);
+      }
+      await settle();
+      expect(failLock).toBeDefined();
+      // OS lock + authenticated unlock can finish before the helper's failure.
+      powerMonitor.emit('lock-screen');
+      powerMonitor.emit('unlock-screen');
+      failLock(new Error('DESKTOP_LOCK_FAILED'));
+      await settle();
+      expect.soft(pending.destroyed).toBe(true);
+      expect.soft(pending.page).not.toContain('awayGuard.lockFailed.status');
+      powerMonitor.emit('lock-screen');
+    }
+
+    // An old helper callback can arrive only after the owner has unlocked.
+    enabled = true;
+    await vi.advanceTimersByTimeAsync(32_000);
+    const late = state.windows.at(-1);
+    const calls = away.lock.mock.calls.length;
+    powerMonitor.emit('lock-screen');
+    powerMonitor.emit('unlock-screen');
+    away.ended(false);
+    await settle();
+    expect(late.destroyed).toBe(true);
+    expect(away.lock).toHaveBeenCalledTimes(calls);
+
+    // The native lock can settle after unlock, before Main's fallback would run.
+    await vi.advanceTimersByTimeAsync(32_000);
+    const slow = state.windows.at(-1);
+    let finishHelper!: (locked: boolean) => void;
+    away.helperLock.mockImplementationOnce(() => new Promise(resolve => { finishHelper = resolve; }));
+    enabled = false;
+    vi.advanceTimersByTime(2_000);
+    await settle();
+    powerMonitor.emit('lock-screen');
+    powerMonitor.emit('unlock-screen');
+    finishHelper(false);
+    await settle();
+    expect(slow.destroyed).toBe(true);
+    expect(away.lock).toHaveBeenCalledTimes(calls);
+  } finally {
+    away.quit();
+    powerMonitor.removeAllListeners();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
 });

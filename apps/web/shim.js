@@ -560,6 +560,10 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     'checkAppUpdate': () => ({ hasUpdate: false }),
     'modelFavoritesHost.ready': () => undefined,
     'modelFavoritesHost.changed': () => () => {},
+    // The Host has no model groups yet. The generic read fallback would answer
+    // `null`, which the renderer stores as the config and the model picker then
+    // crashes on; rejecting keeps the renderer's built-in empty defaults.
+    'modelGroups.get': () => Promise.reject(unsupportedHostChannel('modelGroups.get')),
     'gitContext.listAllPrRefs': () => [],
     'gitContext.getForSession': () => ({ workdir: null, head: null, source: null }),
     'gitContext.listPrRefs': () => [],

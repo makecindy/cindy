@@ -6401,6 +6401,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:task-tags:execute', request),
     },
     projectAliases: {
+      snapshot: () => ipcRenderer.invoke('sidebar-settings:get-project-aliases'),
+      autoIcon: (input: unknown) => ipcRenderer.invoke('sidebar-settings:get-project-auto-icon', input),
+      iconImage: (input: unknown) => ipcRenderer.invoke('sidebar-settings:get-project-icon-image', input),
+      updateInfo: (input: unknown) => ipcRenderer.invoke('sidebar-settings:set-project-info', input),
       list: (): Promise<unknown> => ipcRenderer.invoke('local-db:project-aliases:list'),
       set: (input: { projectKey: string; alias: string }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:project-aliases:set', input),
