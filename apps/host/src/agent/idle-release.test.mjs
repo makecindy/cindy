@@ -102,7 +102,7 @@ async function fixture(t) {
   /** Moves both clocks forward, as idle time passes. */
   function pass(ms) { clock.monotonic += ms; clock.wall += ms; }
   const released = () => closes.filter(close => !live.has(close.id)).map(close => close.id).sort();
-  return { task, pass, release, closes, released, queued, running, interactions, live,
+  return { db: opened.db, task, pass, release, closes, released, queued, running, interactions, live,
     setClaudeMinutes(minutes) { claudeMinutes = minutes; } };
 }
 
@@ -179,4 +179,34 @@ test('idle release: a release waits for the task\'s send lock and leaves a runti
   await sending;
   await scanning;
   assert.deepEqual(f.released(), [], 'the send started a new turn: the runtime stays');
+});
+
+// Tasks outside the ordinary scope keep their own lifecycle on the Host as on the desktop, also when
+// the profile carries them from the desktop: hidden, remote-host, other-computer, Orca and goal tasks
+// keep their Claude and Codex runtimes; hidden, remote-host, other-computer and Orca Pi tasks keep theirs.
+test('idle release: hidden, remote, other-computer, Orca and goal tasks keep their runtimes', async t => {
+  const f = await fixture(t);
+  const scoped = {
+    hidden: "UPDATE sessions SET hidden_at = 1 WHERE id = ?",
+    remote: "UPDATE sessions SET remote_host_id = 'ssh-host' WHERE id = ?",
+    device: "UPDATE sessions SET agent_device_id = 'other-computer' WHERE id = ?",
+    orca: "UPDATE sessions SET orca_role = 'worker' WHERE id = ?",
+    goal: "INSERT INTO session_goals (session_id, objective, status, agent_kind, started_at, updated_at) VALUES (?, 'ship it', 'active', 'cc', 0, 0)",
+  };
+  const kept = [];
+  for (const [scope, sql] of Object.entries(scoped)) {
+    for (const agentKind of ['claude-code', 'codex', 'pi']) {
+      if (agentKind === 'pi' && scope === 'goal') continue;
+      const id = `${scope}-${agentKind}`;
+      await f.task(id, agentKind);
+      f.db.prepare(sql).run(id);
+      kept.push(id);
+    }
+  }
+  await f.task('ordinary', 'claude-code');
+  await f.release.scanNow();
+  f.pass(31 * MINUTE);
+  await f.release.scanNow();
+  assert.deepEqual(f.released(), ['ordinary'], 'only the ordinary task releases its runtime');
+  for (const id of kept) assert.ok(f.live.has(id), `${id} keeps its runtime`);
 });

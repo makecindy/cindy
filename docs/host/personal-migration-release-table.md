@@ -291,7 +291,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 1 | `agent/context-recovery.ts` `holdsOverflowBroadcast` | `sessionEventDelivery.ts` 压住上下文恢复错误广播的判据 | 保留并有对照测试（`sessionEventPipeline.test.ts`）；第一批改为共用 |
 | 2 | `agent/model-window-gate.ts` `modelSwitchGateInput` | `applySessionRuntimeSelection` 远程分支的闸门输入 | 待定；第一批改为共用 |
 | 3 | `main.ts` 的 `pendingAgentSwitches`、`applyPendingAgentSwitch`、`projectAgentSwitchIntent` | `sessionAgentSwitchHandler.ts` 的待切换登记与应用 | 待定；第一批改为共用 |
-| 4 | `agent/turn-executor.mjs` `listen` 的事件处理顺序（第一批检查点 1 加入后台活动检测的回合起止） | `prepareSessionEvent` → 投递 → 终态的流水线 | 待定；第一批只重排终态顺序，保留并有对照测试 |
+| 4 | `agent/turn-executor.mjs` `listen` 的事件处理顺序；第一批检查点 1 加入的后台活动检测回合起止（`noteBackgroundActivity`）待抽：归第一批桌面准备 D7，抽成共用后 Host 改为调用，抽之前不算减少 | `prepareSessionEvent` → 投递 → 终态的流水线 | 待定；第一批只重排终态顺序，保留并有对照测试 |
 | 5 | `agent/turn-executor.mjs` `finish` 的终态结算 | `sessionEventTerminal.ts` 与 register 的 `onTurnErrorEvent` 收尾 | 待定；同上 |
 | 6 | `agent/turn-executor.mjs` 的 `send`、`openTurn`、`dispatchTurn` | `register.ts` 的 `sendToAgentAccepted` | 待定；第一批补齐第 32 行的端口 |
 | 7 | `agent/session-settings.mjs` 的 `applyQueuedSessionSettings`、`applyLiveSessionSettings` | 回合中改模型的延期兑现、发送时对账 | 待定；第一批改走共用核心后删掉 |
