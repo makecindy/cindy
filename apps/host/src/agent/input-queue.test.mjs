@@ -47,6 +47,7 @@ import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/ma
 import { AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_SOURCE_CONTENT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS } from '@cindy/maker-core';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
 import { GIT_SETTLEMENT_SEQUENCES } from '../../../desktop/src/main/maker-ipc/__tests__/gitBaselineSettlementSequences.ts';
+import { GitSnapshotCoordinator } from '../../../desktop/src/main/git-snapshot/gitSnapshotCoordinator.ts';
 
 /** Minimal Maker stand-in: one live session per id, driven by the test. */
 function createFakeMaker() {
@@ -2755,6 +2756,65 @@ test('context recovery assembly: the replay is refused while a turn of the task 
   assert.equal(r.h.maker.sessions.has('assembled-running'), false, 'no runtime is started');
   assert.deepEqual(git, [], 'no Git baseline');
 });
+
+// Bug (Greptile on #10613): the replay opened its own Git baseline before dispatch and the shared send
+// transaction opened another (a replay has no persistUserMessage, so the transaction's
+// beforeDispatchDirectUserTurn runs), leaving one extra turn-start record per recovery for the next
+// turn's end to take. Rule: the desktop's replay (contextRecoveryAssembly.ts) opens and drops its
+// baseline only through the transaction. Asserted on the real snapshot coordinator's records.
+for (const outcome of ['accepted', 'refused', 'throws']) {
+  const name = { accepted: 'an accepted replay', refused: 'a refused replay', throws: 'a replay whose send throws' }[outcome];
+  test(`context recovery assembly: ${name} leaves no Git baseline record behind`, { timeout: 30_000 }, async t => {
+    const coordinator = new GitSnapshotCoordinator({ readAutoSnapshotEnabled: () => false,
+      detectRepoRoot: async () => null, getSessionContext: async () => null,
+      createShadowSavepoint: async () => { throw new Error('unused'); },
+      createShadowMarker: async () => { throw new Error('unused'); },
+      oneShot: async () => '', logger: { ...quiet, debug() {} } });
+    const calls = [];
+    const gitSnapshot = {
+      onTurnStart: (id, signal) => { calls.push('start'); return coordinator.onTurnStart(id, signal); },
+      onTurnAbort: id => { calls.push('abort'); coordinator.onTurnAbort(id); },
+      onTurnEnd: id => { calls.push('end'); return coordinator.onTurnEnd(id); },
+      onSessionClosed: id => coordinator.onSessionClosed(id),
+    };
+    const r = await assembledRecovery(t, { getGitSnapshot: () => gitSnapshot });
+    const id = `assembled-git-${outcome}`;
+    await r.db.createTask(id);
+    await r.h.queue.enqueue(id, { clientId: `${id}-input`, text: 'hello' });
+    await waitFor(() => r.h.maker.sessions.get(id)?.sent.length === 1);
+    const first = r.h.maker.sessions.get(id);
+    first.emit({ type: 'done', data: {}, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+    await waitFor(() => !r.h.queue.projection(id).turnInProgress && !coordinator.hasPendingTurnStart(id));
+    // Recovery closes the runtime before it replays.
+    r.h.maker.sessions.delete(id);
+    calls.length = 0;
+    if (outcome !== 'accepted') {
+      const create = r.h.maker.createSession;
+      r.h.maker.createSession = async opts => {
+        const session = await create(opts);
+        session.send = async (_text, sendOpts = {}) => {
+          sendOpts.onTurnReserved?.(++session.generation);
+          // The vendor refuses or fails after the transaction's pre-dispatch hook ran.
+          await sendOpts.onAccepted?.(sendOpts.signal);
+          if (outcome === 'throws') throw new Error('vendor failed');
+          return { accepted: false };
+        };
+        return session;
+      };
+    }
+    const replaying = r.runtimes[0].replay(id, 'hello', { agentKind: 'claude-code', workingDir: r.db.root });
+    if (outcome === 'throws') await assert.rejects(replaying, /vendor failed/);
+    else assert.equal((await replaying).accepted, outcome === 'accepted');
+    if (outcome === 'accepted') {
+      const replayed = r.h.maker.sessions.get(id);
+      replayed.emit({ type: 'done', data: {}, sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId });
+      await waitFor(() => !r.h.queue.projection(id).turnInProgress);
+    }
+    await waitFor(() => calls.length >= 2);
+    assert.deepEqual(calls, ['start', outcome === 'accepted' ? 'end' : 'abort']);
+    assert.equal(coordinator.hasPendingTurnStart(id), false, 'no baseline record is left for the next turn to take');
+  });
+}
 
 test('context recovery assembly: a steer in flight when the replay is accepted is not aborted', { timeout: 30_000 }, async t => {
   const r = await assembledRecovery(t);

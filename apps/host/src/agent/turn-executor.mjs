@@ -604,8 +604,9 @@ export function createTurnExecutor(deps) {
   // through the same shared transaction, with no input-queue item, no new user row and no send lock
   // (recovery holds it). Recovery has closed the task's runtime and waited for the claimed turn's
   // settlement before it replays; a turn of the task still running, or a live runtime, means
-  // something started since, so the replay is refused. Its Git baseline opens once before dispatch
-  // and is cancelled if the replay is refused.
+  // something started since, so the replay is refused. As on the desktop, its Git baseline is the
+  // transaction's: a replay has no persistUserMessage, so beforeDispatchDirectUserTurn opens it and
+  // onUndispatchedDirectUserTurn drops it when the replay is refused or fails.
   async function replay(sessionId, message, createOpts, sendOpts = {}) {
     if (turns.get(sessionId)?.running || deps.getMaker().getSession(sessionId)) return { accepted: false };
     createOpts = { ...createOpts };
@@ -615,19 +616,10 @@ export function createTurnExecutor(deps) {
       assertHostTaskExecutionSupported(createOpts);
       deps.assertProviderExecutionSupported?.(sessionId, createOpts.providerId);
       turn.check();
-      await startGitBaseline(sessionId, sendOpts.signal);
-      turn.check();
     })();
-    let result;
-    try {
-      result = await dispatchTurn(sessionId, turn, message, (...args) => transaction.sendToAgentAccepted(...args));
-    } catch (error) {
-      settleGitBaseline(sessionId, turn, 'abort');
-      throw error;
-    }
+    const result = await dispatchTurn(sessionId, turn, message, (...args) => transaction.sendToAgentAccepted(...args));
     if (!result.accepted) {
       turn.running = false;
-      settleGitBaseline(sessionId, turn, 'abort');
       if (deps.isCurrent()) await deps.markEnded?.(sessionId, Date.now());
     }
     return result;
