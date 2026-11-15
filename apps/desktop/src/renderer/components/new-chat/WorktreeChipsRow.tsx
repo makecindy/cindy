@@ -80,6 +80,14 @@ export interface WorktreeDefaultSource {
   sourceBranch: string;
 }
 
+/** The exact OFF label and its scoped refresh, shared with the explicit-start check. */
+export interface CheckoutBranchView {
+  cwd: string | null;
+  deviceId: string | null;
+  displayedBranch: string;
+  refresh: () => void;
+}
+
 export interface WorktreeChipsRowProps {
   cwd: string | null;
   // 接受 null:当 picker 选了"对话(不在项目中)"时,上游需要清掉 workingDir
@@ -102,6 +110,7 @@ export interface WorktreeChipsRowProps {
   sourceBranch: string;
   onSourceBranchChange: (v: string) => void;
   onDefaultSourceBranchChange?: (value: WorktreeDefaultSource) => void;
+  onCheckoutBranchViewChange?: (value: CheckoutBranchView | null) => void;
   onCheckoutBusyChange?: (busy: boolean) => void;
   onBaseRepoChange?: (baseRepo: string | null) => void;
   /**
@@ -158,6 +167,7 @@ export function WorktreeChipsRow({
   onSourceBranchChange,
   onDefaultSourceBranchChange,
   onCheckoutBusyChange,
+  onCheckoutBranchViewChange,
   onBaseRepoChange,
   onRecoveryKeyDiscardSupportChange,
   onConfirmedIneligibleChange,
@@ -175,10 +185,11 @@ export function WorktreeChipsRow({
   // 统一创建页的 project-picker 模式下, cwd 为空表示即将创建纯对话。
   // worktree/branch 依赖真实项目目录,这里隐藏 Advanced 并清掉残留状态。
   const advancedHidden = folderPickerMode === 'project' && !cwd;
+  const [branchCheckEpoch, setBranchCheckEpoch] = useState(0);
   const detect = useDetectCwd(
     worktreeDisabled ? null : (cwd ?? null),
     deviceLinkDeviceId,
-    deviceLinkReconnectEpoch,
+    deviceLinkReconnectEpoch + branchCheckEpoch,
   );
   // 探测成功且三种资格(已装 git / 是 git 仓库 / 未嵌套)同时满足为 true;
   // detect.data 未到达(探测中/失败)时为 null——与「确认不合格」不同,后者必须
@@ -280,6 +291,26 @@ export function WorktreeChipsRow({
     !effectiveWorktreeEnabled && !environmentDisabled && !advancedHidden,
   );
   const actualBranch = checkout.status?.current || branches.current || currentBranch || 'HEAD';
+  const refreshDisplayedBranch = useCallback(() => {
+    if (detect.data?.supportsCheckout) {
+      void checkout.refresh();
+    } else {
+      // Older controlled computers have no checkout status. Refresh their
+      // existing probe (and the branch list only if it was already requested).
+      setBranchCheckEpoch((epoch) => epoch + 1);
+      if (branchListWanted) branches.refetch();
+    }
+  }, [detect.data?.supportsCheckout, checkout.refresh, branchListWanted, branches.refetch]);
+  useLayoutEffect(() => {
+    onCheckoutBranchViewChange?.({
+      cwd,
+      deviceId: deviceLinkDeviceId ?? null,
+      displayedBranch: actualBranch,
+      refresh: refreshDisplayedBranch,
+    });
+    return () => onCheckoutBranchViewChange?.(null);
+  }, [cwd, deviceLinkDeviceId, actualBranch, refreshDisplayedBranch, onCheckoutBranchViewChange]);
+
   const defaultSourceBranch = branches.loading
     ? ''
     : branches.remoteDefaultBranch ||

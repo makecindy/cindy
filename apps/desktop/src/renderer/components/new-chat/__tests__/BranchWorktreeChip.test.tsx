@@ -15,7 +15,7 @@ import {
   waitFor,
 } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { BranchWorktreeChip, WorktreeChipsRow } from '../WorktreeChipsRow';
+import { BranchWorktreeChip, WorktreeChipsRow, type CheckoutBranchView } from '../WorktreeChipsRow';
 import {
   applyRemoteSessionActivity,
   clearRemoteSessionActivity,
@@ -534,6 +534,7 @@ function CheckoutRow({
   onSourceChange,
   remembered = 'remembered-source',
   defaultSource,
+  branchView,
   cwd = '/repo',
 }: {
   deviceId?: string;
@@ -541,6 +542,7 @@ function CheckoutRow({
   onSourceChange?: (branch: string) => void;
   remembered?: string;
   defaultSource?: (value: { sourceBranch: string }) => void;
+  branchView?: (value: CheckoutBranchView | null) => void;
 } = {}) {
   const [enabled, setEnabled] = React.useState(false);
   const [source, setSource] = React.useState(remembered);
@@ -552,6 +554,7 @@ function CheckoutRow({
       onEnabledChange={setEnabled}
       sourceBranch={source}
       onDefaultSourceBranchChange={defaultSource}
+      onCheckoutBranchViewChange={branchView}
       onSourceBranchChange={(branch) => {
         onSourceChange?.(branch);
         setSource(branch);
@@ -640,7 +643,8 @@ it('lazy-loads branches on menu open and does not refetch them on focus', async 
 });
 it('shows actual checkout when off and the remembered source when on; toggles never mutate Git', async () => {
   const checkout = setupCheckout();
-  render(<CheckoutRow />);
+  const branchView = vi.fn();
+  render(<CheckoutRow branchView={branchView} />);
   await waitFor(() => expect(branchButton().textContent).toBe('main'));
   await act(async () => {
     fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
@@ -651,6 +655,13 @@ it('shows actual checkout when off and the remembered source when on; toggles ne
   });
   expect(branchButton().textContent).toBe('main');
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
+  // The explicit-start check must read the same OFF label and refresh that row
+  // after an external checkout; source preference remains independent.
+  expect(branchView.mock.lastCall?.[0]?.displayedBranch).toBe(branchButton().textContent);
+  checkout.mockResolvedValue({ status: { ...checkoutStatus, current: 'feature' } });
+  await act(async () => branchView.mock.lastCall?.[0]?.refresh());
+  await waitFor(() => expect(branchButton().textContent).toBe('feature'));
+  expect(branchView.mock.lastCall?.[0]?.displayedBranch).toBe('feature');
 });
 it('disables checkout choices while a task is running; explicit worktree keeps the menu open', async () => {
   const checkout = setupCheckout(true, {
@@ -754,9 +765,19 @@ it('explains ignored-only collisions before any checkout or stash request', asyn
 });
 it('keeps an old execution host read-only and never invokes the new channel', async () => {
   const checkout = setupCheckout(false);
-  render(<CheckoutRow />);
+  const branchView = vi.fn();
+  render(<CheckoutRow branchView={branchView} />);
   await waitFor(() => expect(branchButton().textContent).toBe('main'));
   expect(branchButton().getAttribute('aria-disabled')).toBe('true');
+  expect(checkout).not.toHaveBeenCalled();
+  // An explicit start can detect an external checkout even on a legacy host.
+  // Refresh its label through detect-cwd, never the unsupported checkout channel.
+  vi.mocked(window.electronAPI.worktreeDetectCwd).mockResolvedValue({
+    isGitRepo: true, gitInstalled: true, isInsideWorktree: false,
+    repoRoot: '/repo', currentBranch: 'feature', supportsCheckout: false,
+  });
+  await act(async () => branchView.mock.lastCall?.[0]?.refresh());
+  await waitFor(() => expect(branchButton().textContent).toBe('feature'));
   expect(checkout).not.toHaveBeenCalled();
 });
 

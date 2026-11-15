@@ -159,6 +159,7 @@ async function submit(options: {
   };
   branchSaving?: boolean;
   currentBranch?: string | null;
+  displayedBranch?: string;
   detectFailure?: boolean;
 } = {}) {
   const providers = options.providers ?? [provider()];
@@ -252,6 +253,7 @@ async function submit(options: {
   const toastError = vi.fn();
   const toastWarning = vi.fn();
   const clearDraft = vi.fn();
+  const refreshDisplayedBranch = vi.fn();
   let started = false;
   const checkAndConfirm = vi.fn(async (_vendor, params) => ({
     proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey,
@@ -296,6 +298,8 @@ async function submit(options: {
       : hasWorktree
       ? { enabled: options.worktreeEnabled ?? true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
       : { enabled: false, confirmedIneligible: true } },
+    wtCheckoutBranchViewRef: { current: { cwd: baseRepo, deviceId: options.deviceId ?? null,
+      displayedBranch: options.displayedBranch ?? 'main', refresh: refreshDisplayedBranch } },
     wtCheckoutBusyRef: { current: options.checkoutBusy ?? false },
     wtPreferenceSavingRef: { current: false }, wtPreferenceAuthorityUnknownRef: { current: false },
     wtBranchPreferenceSavingRef: { current: options.branchSaving ?? false },
@@ -325,7 +329,6 @@ async function submit(options: {
     }) => (await invoke('maker:create-session', [createArgs])).sessionId,
     commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: () => {},
     deliverRecoverableHandoff: (_id: string, deliver: () => Promise<boolean>) => deliver(),
-    remoteProjectsStore: { setPendingTitlePreview: noop, clearPendingTitlePreview: noop, clearPendingFirstSend: noop },
     getBranchName: (name: string) => `cindy/${name}`,
     sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }), update: async () => {} },
     crossAgentConvertService: { detect: async () => ({ items: [] }) },
@@ -393,20 +396,19 @@ async function submit(options: {
     }
     if (started) await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm };
+    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm };
   } finally { vi.unstubAllGlobals(); }
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
-  // #10518 / unit: run the complete Send/Goal callbacks. branchPick only proves
-  // selecting does not checkout; it cannot prove creation and draft handoff stop.
-  // Minimal failure: worktree OFF, source cindy/other, repo HEAD main.
+  // #10518 / unit: execute Send/Goal end to end. An external checkout can stale
+  // the OFF label; stop handoff and refresh it, independently of source memory.
   it.each([
     ['send', undefined, 'feature/other'], ['send', 'task-computer', 'cindy/other'],
     ['goal', undefined, 'cindy/other'], ['goal', 'task-computer', 'feature/other'],
-  ] as const)('retains the draft for %s on %s when branch %s would be ignored', async (entry, deviceId, sourceBranch) => {
+  ] as const)('retains the draft for %s on %s when the displayed branch changed to %s', async (entry, deviceId, currentBranch) => {
     const result = await submit({ entry, deviceId, providers: [provider(providerId, ['medium'])],
-      worktree: { enabled: false, sourceBranch } });
+      currentBranch, displayedBranch: 'main', worktree: { enabled: false, sourceBranch: 'main' } });
     expect(result.createSession).not.toHaveBeenCalled();
     expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(false);
     expect(result.sendMessage).not.toHaveBeenCalled();
@@ -419,8 +421,9 @@ describe('homepage submission to Main admission and first-message handoff', () =
     } else {
       expect(result.detectCwd).toHaveBeenCalledWith({ cwd: '/fixture/repo' });
     }
-    if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.branchRequiresWorktree');
-    else expect(String(result.errors[0])).toContain('ccAgent.draft.branchRequiresWorktree');
+    expect(result.refreshDisplayedBranch).toHaveBeenCalledOnce();
+    if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.branchChanged');
+    else expect(String(result.errors[0])).toContain('ccAgent.draft.branchChanged');
   });
   it.each(['send', 'goal'] as const)('does not start %s while an OFF branch choice is still saving', async entry => {
     const result = await submit({ entry, branchSaving: true,
@@ -451,9 +454,9 @@ describe('homepage submission to Main admission and first-message handoff', () =
   });
   it.each([
     ['send', undefined], ['goal', undefined], ['send', 'task-computer'], ['goal', 'task-computer'],
-  ] as const)('allows %s on %s on the current branch with worktree OFF', async (entry, deviceId) => {
+  ] as const)('allows %s on %s on the displayed branch with different remembered source and worktree OFF', async (entry, deviceId) => {
     const result = await submit({ entry, deviceId, providers: [provider(providerId, ['medium'])],
-      worktree: { enabled: false, sourceBranch: 'main' } });
+      worktree: { enabled: false, sourceBranch: 'remembered-feature' } });
     expect(result.errors).toEqual([]);
     if (deviceId) {
       expect(result.invokeRemote).toHaveBeenCalledWith(deviceId, 'maker:create-session', [expect.objectContaining({ workingDir: '/fixture/repo' })]);

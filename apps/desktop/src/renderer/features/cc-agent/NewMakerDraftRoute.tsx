@@ -63,6 +63,7 @@ import { ChatInput } from '@/components/new-chat/ChatInput';
 import {
   WorktreeChipsRow,
   type WorktreeDefaultSource,
+  type CheckoutBranchView,
 } from '@/components/new-chat/WorktreeChipsRow';
 import { checkDraftBranchBeforeStart } from './newMakerDraftBranchCheck';
 import {
@@ -922,6 +923,10 @@ export function NewMakerDraftRoute() {
   const [wtCreating, setWtCreating] = useState(false);
   const [wtCheckoutBusy, setWtCheckoutBusy] = useState(false);
   const wtCheckoutBusyRef = useRef(false);
+  const wtCheckoutBranchViewRef = useRef<CheckoutBranchView | null>(null);
+  const handleWtCheckoutBranchViewChange = useCallback((view: CheckoutBranchView | null) => {
+    wtCheckoutBranchViewRef.current = view;
+  }, []);
   const handleWtCheckoutBusyChange = useCallback((busy: boolean) => {
     wtCheckoutBusyRef.current = busy;
     setWtCheckoutBusy(busy);
@@ -4471,15 +4476,27 @@ export function NewMakerDraftRoute() {
       void (async () => {
         try {
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
+          const branchView = wtCheckoutBranchViewRef.current;
+          const displayedBranch =
+            branchView?.cwd === selectedWorkingDir &&
+            branchView?.deviceId === (effectiveDeviceLinkDeviceId ?? null)
+              ? branchView.displayedBranch
+              : undefined;
           const branchError = await checkDraftBranchBeforeStart({
             workingDir: selectedWorkingDir,
             deviceId: effectiveDeviceLinkDeviceId,
             ssh: isRemoteProjectDraft,
             worktree: selectedWorktree,
+            displayedBranch,
           });
           if (!isCurrentDataOwner()) return;
           if (branchError) {
-            toast.error(t(branchError));
+            if (typeof branchError === 'object') {
+              branchView?.refresh();
+              toast.error(t(branchError.code, { branch: branchError.branch }));
+            } else {
+              toast.error(t(branchError));
+            }
             return;
           }
           // 插件模型：建任务前问一次插件。插件只能从已连接的模型里选(主进程校验)，
@@ -5735,14 +5752,27 @@ export function NewMakerDraftRoute() {
         const isCurrentDataOwner = () =>
           dataOwnerAtGoal.dataOwnerId === dataOwnerId &&
           isDataOwnerGenerationCurrent(dataOwnerAtGoal);
+        const branchView = wtCheckoutBranchViewRef.current;
+        const displayedBranch =
+          branchView?.cwd === selectedWorkingDir &&
+          branchView?.deviceId === (effectiveDeviceLinkDeviceId ?? null)
+            ? branchView.displayedBranch
+            : undefined;
         const branchError = await checkDraftBranchBeforeStart({
           workingDir: selectedWorkingDir,
           deviceId: effectiveDeviceLinkDeviceId,
           ssh: isRemoteProjectDraft,
           worktree: selectedWorktree,
+          displayedBranch,
         });
         if (!isCurrentDataOwner()) throw new Error(t('ccAgent.draft.createSessionFailed'));
-        if (branchError) throw new Error(t(branchError));
+        if (branchError) {
+          if (typeof branchError === 'object') {
+            branchView?.refresh();
+            throw new Error(t(branchError.code, { branch: branchError.branch }));
+          }
+          throw new Error(t(branchError));
+        }
         let policyEnabled = collabPolicy.enabled;
         if (effectiveCollab.enabled && collabPolicyEligible) {
           if (collabPolicy.loading) {
@@ -6775,6 +6805,7 @@ export function NewMakerDraftRoute() {
                   sourceBranch={wtSourceBranch}
                   onSourceBranchChange={handleWtSourceBranchChange}
                   onDefaultSourceBranchChange={setWtDefaultSource}
+                  onCheckoutBranchViewChange={handleWtCheckoutBranchViewChange}
                   onCheckoutBusyChange={handleWtCheckoutBusyChange}
                   onBaseRepoChange={handleWtBaseRepoChange}
                   onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}
