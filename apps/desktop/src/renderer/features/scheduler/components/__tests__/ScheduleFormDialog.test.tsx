@@ -138,7 +138,7 @@ beforeEach(() => {
   state.pendingCapabilities.clear();
   state.vendors = new Set(['cc', 'codex', 'pi']);
   localStorage.clear();
-  vi.stubGlobal('electronAPI', { maker: { schedule: {
+  vi.stubGlobal('electronAPI', { gitContext: { githubAppStatus: async () => ({ available: true, login: null }) }, maker: { schedule: {
     webhookReceiver: async () => 'cloud', scriptCapabilityStatus: async () => ({ statuses: [] }),
   } } });
   resetDraft();
@@ -622,4 +622,30 @@ it('does not relocate hidden Auto history outside a template source constraint',
   });
   fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
   expect(onSubmit).not.toHaveBeenCalled();
+});
+
+// 2026-11-15 connection-choice UX, unit/jsdom: the existing legacy tests cover
+// omitted sources, not a new default or changing modes. Save the real dialog to
+// protect the persisted source and repository scope, without contacting GitHub.
+it('defaults new Webhooks to Cindy and saves the selected connection method', async () => {
+  const onSubmit = vi.fn(async () => {});
+  render(<ScheduleFormDialog open initial={null} initialValues={{ name: 'Events', prompt: 'Check events',
+    agentKind: 'codex', model: 'shared', providerId: 'source', webhookEnabled: true }}
+    onOpenChange={() => {}} onSubmit={onSubmit} />);
+  const key = 'scheduler.editor.webhook.';
+  const app = await screen.findByRole('radio', { name: key + 'cindyConnection' });
+  expect((app as HTMLInputElement).checked).toBe(true);
+  fireEvent.change(screen.getByRole('textbox', { name: key + 'repositoriesLabel' }), { target: { value: 'example/project' } });
+  const save = () => fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+  save();
+  await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: [], source: { preset: 'github-app', repositories: ['example/project'] } },
+  }), false));
+  fireEvent.click(screen.getByRole('radio', { name: key + 'manualConnection' }));
+  save();
+  await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: [], source: { preset: 'github' } },
+  }), false));
+  fireEvent.click(app);
+  expect((screen.getByRole('textbox', { name: key + 'repositoriesLabel' }) as HTMLTextAreaElement).value).toBe('example/project');
 });

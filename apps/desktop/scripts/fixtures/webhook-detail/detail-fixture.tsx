@@ -53,9 +53,13 @@ mountPage({
       delete: forbid('deleteProjectAlias'),
       onChanged: () => () => {},
     } },
+    gitContext: {
+      githubAppStatus: async () => ({ available: true, login: ctx.case === 'app-disconnected' ? null : 'example-user', repositories: ['makecindy/cindy'], unavailable: ctx.case === 'app-unauthorized' ? ['example/project'] : [] }),
+      connectGithubApp: forbid('connectGithubApp'), installGithubApp: forbid('installGithubApp'),
+    },
     maker: { schedule: {
       webhookReceiver: async () => 'cloud',
-      webhookStatus: async () => ({ receiver: 'cloud', connected: ctx.case !== 'offline' && ctx.case !== 'app-disconnected',
+      webhookStatus: async () => ({ receiver: 'cloud', connected: ctx.case !== 'offline' && ctx.case !== 'app-disconnected' && ctx.case !== 'app-unauthorized',
         url: released ? undefined : 'https://webhook.example.test/hooks/fixture',
         hasSecret: !initial, lastReceivedAt: initial ? undefined : time, ignored: 0,
         problem: released ? 'released' : unsupported ? 'unsupported' : undefined,

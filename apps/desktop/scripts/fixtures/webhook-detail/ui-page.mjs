@@ -14,6 +14,7 @@ export default {
   cases: {
     'app-source': { about: 'GitHub App 仓库和事件选择：无需独立地址或密钥', data: {} },
     'app-connected': { about: 'GitHub App 已连接的自动任务', data: {} },
+    'app-unauthorized': { about: '账号已连接但仓库未授权：展示缺少权限及授权入口', data: {} },
     'app-disconnected': { about: 'GitHub App 尚未连接的操作提示', data: {} },
     default: { about: '已收到事件：默认简洁摘要，最近运行在首屏', data: {} },
     initial: { about: '首次缺少密钥：自动展开必要配置', data: {} },
@@ -33,10 +34,20 @@ export default {
       await repositories.fill('makecindy/cindy\nexample/project');
       await page.getByText(await ui.t('scheduler.editor.webhook.repositoriesInvalid'), { exact: true }).waitFor({ state: 'detached' });
       await ui.capture('repositories-and-events');
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.manualConnection'), exact: true }).check();
+      await page.getByText(await ui.t('scheduler.editor.webhook.manualSetupHint'), { exact: true }).waitFor();
+      if (await repositories.count()) throw new Error('Manual Webhook must not ask for App repositories');
+      await ui.capture('manual-connection');
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.cindyConnection'), exact: true }).check();
+      if (await repositories.inputValue() !== 'makecindy/cindy\nexample/project') throw new Error('Switching connection methods lost repository input');
       return;
     }
+    if (ui.case === 'app-unauthorized') {
+      await page.getByRole('button', { name: await ui.t('scheduler.editor.webhook.authorizeRepositories'), exact: true }).waitFor();
+      await page.getByText(await ui.t('ccAgent.gitContext.pr.setup.app.missing', { repositories: 'example/project' }), { exact: true }).waitFor();
+    }
     if (ui.case.startsWith('app-')) {
-      await page.getByText('GitHub App', { exact: true }).waitFor();
+      await page.getByText(await ui.t('scheduler.editor.webhook.cindyConnectionTitle'), { exact: true }).waitFor();
       if (await page.getByText('https://webhook.example.test/hooks/fixture', { exact: true }).count()) throw new Error('Managed App must not show a task Webhook URL');
       return;
     }
