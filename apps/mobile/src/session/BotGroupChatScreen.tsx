@@ -6,7 +6,7 @@ import { LegendList, type LegendListProps, type LegendListRef } from '@legendapp
 import { mobileHistoryTopOffsetAdjustment } from './messageHistoryAnchor';
 import { ProcessDisclosureViewport, useProcessDisclosureViewport } from './useProcessDisclosureViewport';
 import { useTaskListBack } from '@/utils/useTaskListBack';
-import { BotGroupProcess } from './BotGroupProcess';
+import { BotGroupProcess, BotGroupProcessCacheProvider } from './BotGroupProcess';
 import { useGroupPersonalMask } from './useGroupPersonalMask';
 import { GroupMaskAvatar, GroupMaskStatus, GroupMaskSettingsSheet, GroupMaskCatchupSheet } from './GroupMaskControls';
 import type { ChatMaskMention } from '@cindy/maker-shared/botGroupChat';
@@ -1280,11 +1280,11 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
         onEnd={() => onPlanAction('dismiss', openPlan.id, openPlan.revision)} />
     </View> : null}
   </>;
-  return <>
+  return <BotGroupProcessCacheProvider active={active} scope={JSON.stringify([deviceId, group.id, threadRootId, group.members.filter(member => member.isOwned).map(member => member.botId)])}>
     <BotGroupVirtualList data={timeline} keyExtractor={entry => entry.kind === 'work' ? `work:${entry.value.key}` : rowKey(entry.value.id)} renderItem={renderEntry}
       header={header} footer={footer} onMessageLayout={onMessageLayout} />
     <BotGroupMentionIdentity member={mentionedMember} anchor={mentioned?.anchor ?? null} deviceId={deviceId} onClose={() => setMentioned(null)} />
-  </>;
+  </BotGroupProcessCacheProvider>;
 });
 
 function BotGroupTimelineItem({
