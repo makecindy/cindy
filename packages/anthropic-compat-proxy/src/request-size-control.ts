@@ -222,6 +222,10 @@ export function hasRequestMediaMarkers(body: Buffer): boolean {
   return /"type"\s*:\s*"(?:input_image|input_file|image|document|image_url)"/.test(body.toString('utf8'));
 }
 
+function isImageMimeType(mimeType: string): boolean {
+  return mimeType.startsWith('image/');
+}
+
 /** Count actual wire images (including translated protocols), without decoding their bytes. */
 export function countInlineRequestImages(body: Buffer, format?: WireFormat): number {
   try {
@@ -231,7 +235,7 @@ export function countInlineRequestImages(body: Buffer, format?: WireFormat): num
     for (const wire of formats) {
       const images: ImageOccurrence[] = [];
       for (const item of modelItems(root, wire)) walkImages(item, wire, images, { count: 0 });
-      count += images.filter(image => image.mimeType.startsWith('image/')).length;
+      count += images.filter(image => isImageMimeType(image.mimeType)).length;
     }
     return count;
   } catch { return 0; } // A malformed body has no reliably identifiable image blocks.
@@ -321,10 +325,17 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   const prepared = new Map<number, { bytes: Buffer; mimeType: string; changed: boolean }>();
   const preprocessor = policy.preprocessor ?? NOOP_IMAGE_PREPROCESSOR;
   const decoded = new Map<string, Buffer>();
-  for (const [index, occurrence] of occurrences.entries()) {
-    policy.signal?.throwIfAborted();
+  const readOriginal = (occurrence: ImageOccurrence): Buffer => {
     let original = decoded.get(occurrence.raw);
     if (!original) { original = decodeBase64(occurrence.raw); decoded.set(occurrence.raw, original); }
+    return original;
+  };
+  for (const [index, occurrence] of occurrences.entries()) {
+    policy.signal?.throwIfAborted();
+    // Files still consume the wire budget, but only images may enter the image
+    // preprocessor. Decode non-images lazily if the replay actually removes them.
+    if (!isImageMimeType(occurrence.mimeType)) continue;
+    const original = readOriginal(occurrence);
     let next = { bytes: original, mimeType: occurrence.mimeType, changed: false };
     const route = policy.route ?? {};
     try {
@@ -347,10 +358,10 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   const rewrites = new Map<number, { start: number; end: number; text: string }>();
   const inlineBytes: number[] = [];
   for (const [index, occurrence] of occurrences.entries()) {
-    const item = prepared.get(index)!;
+    const item = prepared.get(index);
     const originalBytes = Buffer.byteLength(text.slice(occurrence.node.start, occurrence.node.end));
     let bytes = originalBytes;
-    if (item.changed) {
+    if (item?.changed) {
       const encoded = item.bytes.toString('base64');
       const block = occurrence.node.value as Record<string, unknown>;
       if (format === 'anthropic' && record(block.source)) { block.source.data = encoded; block.source.media_type = item.mimeType; }
@@ -369,10 +380,13 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   let prefixEnd = 0;
   const retained: number[] = [];
   let oldest = 0;
+  let oldestImage = 0;
+  let retainedImageCount = 0;
+  let removedImages = 0;
   const removed = new Set<number>();
   const omitImage = async (index: number, assistantCount: number) => {
     const occurrence = occurrences[index];
-    const item = prepared.get(index)!;
+    const item = prepared.get(index) ?? { bytes: readOriginal(occurrence), mimeType: occurrence.mimeType };
     const localPath = await preserve(item.bytes, item.mimeType, index);
     const replacement = { type: occurrence.textType,
       text: replacementText(localPath, occurrence.assistantCount < assistantCount) };
@@ -383,21 +397,38 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
     Object.assign(block, replacement);
     rewrites.set(index, { start: occurrence.node.start, end: occurrence.node.end, text: replacementJson });
     removed.add(index);
+    if (isImageMimeType(occurrence.mimeType)) { retainedImageCount--; removedImages++; }
   };
   const compactPrefix = async (assistantCount: number) => {
     const byteCrossing = prefixBytes > trigger;
-    const countCrossing = familyPolicy !== undefined && retained.length - oldest > familyPolicy.trigger;
-    while (oldest < retained.length && (
+    const countCrossing = familyPolicy !== undefined && retainedImageCount > familyPolicy.trigger;
+    while (
       (byteCrossing && prefixBytes > target) ||
-      (countCrossing && retained.length - oldest > familyPolicy!.keep)
-    )) await omitImage(retained[oldest++], assistantCount);
+      (countCrossing && retainedImageCount > familyPolicy!.keep)
+    ) {
+      let index: number;
+      if (byteCrossing && prefixBytes > target) {
+        while (oldest < retained.length && removed.has(retained[oldest])) oldest++;
+        if (oldest === retained.length) break;
+        index = retained[oldest++];
+      } else {
+        // A count-only crossing must not offload intervening PDFs/documents.
+        while (oldestImage < retained.length && (removed.has(retained[oldestImage])
+          || !isImageMimeType(occurrences[retained[oldestImage]].mimeType))) oldestImage++;
+        if (oldestImage === retained.length) break;
+        index = retained[oldestImage++];
+      }
+      await omitImage(index, assistantCount);
+    }
   };
   // Both limits cross at their historical positions. Appending another image
   // consumes the remaining window; it does not reapply a final-request count cap.
   for (const [index, occurrence] of occurrences.entries()) {
     prefixBytes += Buffer.byteLength(text.slice(prefixEnd, occurrence.node.start)) + inlineBytes[index];
     prefixEnd = occurrence.node.end;
-    if (!disableRemoval && policy.singleImageMaxBytes !== undefined && prepared.get(index)!.bytes.length > policy.singleImageMaxBytes) {
+    const image = prepared.get(index);
+    if (image) retainedImageCount++;
+    if (!disableRemoval && policy.singleImageMaxBytes !== undefined && image && image.bytes.length > policy.singleImageMaxBytes) {
       await omitImage(index, occurrence.assistantCount);
     } else retained.push(index);
     await compactPrefix(occurrence.assistantCount);
@@ -419,7 +450,7 @@ export async function controlRequestSize(body: Buffer, format: WireFormat, polic
   if (result.length > trigger) {
     throw new Error('REQUEST_TEXT_TOO_LARGE');
   }
-  return { body: result, parsedBody: root.value, changed: result.compare(body) !== 0, originalBytes: body.length, bytes: result.length, removedImages: removed.size, imageCount: occurrences.length, reason: policy.reason ?? (removed.size ? 'budget' : 'preprocessed') };
+  return { body: result, parsedBody: root.value, changed: result.compare(body) !== 0, originalBytes: body.length, bytes: result.length, removedImages, imageCount: prepared.size, reason: policy.reason ?? (removed.size ? 'budget' : 'preprocessed') };
 }
 
 export function routeInfoFor(model: string, endpoint?: string): ImageRouteInfo {

@@ -15,6 +15,51 @@ import { classifyRequestSizeError } from './request-size-errors.js';
 const imageData = (value: number, bytes = 400) => Buffer.alloc(bytes, value).toString('base64');
 const preserve = async (_bytes: Buffer, _mime: string, index: number) => `/tmp/recovered-${index}.png`;
 
+// PR #10663: file/document occurrences must not enter image-only preprocessing,
+// count caps or single-image caps. Unit tier; 51 PDFs plus one small PNG fit the
+// byte budget and must remain byte-identical in both native file representations.
+it.each(['responses', 'anthropic'] as const)('keeps PDFs outside image limits and preprocessing in %s', async format => {
+  const pdf = Buffer.from('%PDF-' + 'x'.repeat(1100)).toString('base64');
+  const png = imageData(1, 100);
+  const blocks = [
+    ...Array.from({ length: 51 }, () => format === 'responses'
+      ? { type: 'input_file', file_data: `data:application/pdf;base64,${pdf}` }
+      : { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf } }),
+    format === 'responses' ? { type: 'input_image', image_url: `data:image/png;base64,${png}` }
+      : { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } },
+  ];
+  const raw = Buffer.from(JSON.stringify({ [format === 'responses' ? 'input' : 'messages']: [{ role: 'user', content: blocks }] }));
+  const prepared: string[] = [];
+  const tightened: string[] = [];
+  const omitted: string[] = [];
+  const preprocessor: InlineImagePreprocessor = {
+    prepare: async input => { prepared.push(input.mimeType); return null; },
+    tighten: async input => { tightened.push(input.mimeType); return null; },
+  };
+  for (const singleImageMaxBytes of [undefined, 1000]) {
+    const result = await controlRequestSize(raw, format, { modelFamily: 'gpt', singleImageMaxBytes, preprocessor }, async (_bytes, mime) => {
+      omitted.push(mime); return '/tmp/file.pdf';
+    });
+    expect((result?.body ?? raw).equals(raw)).toBe(true);
+  }
+  expect(prepared).toEqual(['image/png', 'image/png']);
+  expect(tightened).toEqual([]);
+  expect(omitted).toEqual([]);
+  // A real image-count crossing must skip the PDFs rather than remove them on
+  // its way to the oldest images. Keep their original prefix bytes untouched.
+  const crowded = Buffer.from(JSON.stringify({ [format === 'responses' ? 'input' : 'messages']: [{ role: 'user',
+    content: [...blocks, ...Array.from({ length: 50 }, () => blocks.at(-1)!)],
+  }] }));
+  const result = await controlRequestSize(crowded, format, { modelFamily: 'gpt', preprocessor }, async (_bytes, mime) => {
+    omitted.push(mime); return '/tmp/image.png';
+  });
+  expect(result).toMatchObject({ imageCount: 51, removedImages: 29 });
+  expect(omitted).toEqual(Array.from({ length: 29 }, () => 'image/png'));
+  const firstImage = crowded.indexOf(Buffer.from(JSON.stringify(blocks.at(-1))));
+  expect(firstImage).toBeGreaterThan(0);
+  expect(result!.body.subarray(0, firstImage).equals(crowded.subarray(0, firstImage))).toBe(true);
+});
+
 describe('request size control', () => {
   it('classifies nested provider size errors after decoding', () => {
     expect(classifyRequestSizeError('{"error":{"message":"Exceeded maximum number of images (50) allowed"}}')).toMatchObject({ kind: 'image-count', limitCount: 50 });

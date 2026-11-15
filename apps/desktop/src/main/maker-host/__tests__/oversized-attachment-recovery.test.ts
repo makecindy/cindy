@@ -137,6 +137,7 @@ const pngBlock = () => ({ type: 'input_image', image_url: `data:image/png;base64
 // PR #10663: the new controller sent PDFs to media ingestion, unlike legacy recovery.
 // Unit tier: a PDF + PNG exceeding a 4 KiB ingress window exercises the actual proxy,
 // controller and file persistence; existing PDF coverage used only legacy recovery.
+// Image preparation/tightening must never receive the PDF, even under a single-image cap.
 it('recovers a spooled PDF to hook-attachments while preserving images in the media store', async () => {
   const input = await multiBody([pdfBlock(1), pngBlock()]);
   const raw = await readFile(input.filePath);
@@ -157,9 +158,11 @@ it('recovers a spooled PDF to hook-attachments while preserving images in the me
     await writeFile(path.join(state.root, 'saved.png'), await readFile(params.filePath!));
     return { url: 'cindy-media://blobs/test.png' };
   });
-  const controller = createRequestSizeController(() => state.resolved);
+  const prepare = vi.fn<import('@cindy/anthropic-compat-proxy').InlineImagePreprocessor['prepare']>(async () => null);
+  const tighten = vi.fn<NonNullable<import('@cindy/anthropic-compat-proxy').InlineImagePreprocessor['tighten']>>(async () => null);
+  const controller = createRequestSizeController(() => state.resolved, { prepare, tighten });
   const proxy = await createAnthropicCompatProxy({ upstream: `http://127.0.0.1:${address.port}`, transformRequest: [], maxRequestBodyBytes: 4096,
-    requestSizeController: { ...controller, control: (body, format, policy) => controller.control(body, format, { ...policy, triggerBytes: 3500, targetBytes: 1600 }) },
+    requestSizeController: { ...controller, control: (body, format, policy) => controller.control(body, format, { ...policy, triggerBytes: 3500, targetBytes: 1600, singleImageMaxBytes: 2000 }) },
   });
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -167,6 +170,7 @@ it('recovers a spooled PDF to hook-attachments while preserving images in the me
       expect(response.status).toBe(200); await response.text();
     }
     expect(received).toHaveLength(2); expect(received[0]).toEqual(received[1]);
+    expect(received[0].length).toBeLessThanOrEqual(3500);
     const content = JSON.parse(received[0].toString()).input[0].content as Array<{ text: string }>;
     expect(preservedLocalPath(content[0].text)).toBe(pdfPath);
     expect(preservedLocalPath(content[1].text)).toBe(path.join(state.root, 'saved.png'));
@@ -174,6 +178,9 @@ it('recovers a spooled PDF to hook-attachments while preserving images in the me
     expect(await readFile(path.join(state.root, 'saved.png'))).toEqual(png);
     expect(state.ingest.mock.calls.every(([params]) => params.mimeType === 'image/png')).toBe(true);
     expect(state.addRef).toHaveBeenCalled();
+    expect(prepare.mock.calls.map(([input]) => input.mimeType)).toEqual(['image/png', 'image/png']);
+    expect(tighten.mock.calls.map(([input]) => input.mimeType)).toEqual(['image/png', 'image/png']);
+    for (const [input] of [...prepare.mock.calls, ...tighten.mock.calls]) expect(input.bytes).toEqual(png);
   } finally {
     await proxy.dispose(); upstream.closeAllConnections();
     await new Promise<void>(resolve => upstream.close(() => resolve()));
