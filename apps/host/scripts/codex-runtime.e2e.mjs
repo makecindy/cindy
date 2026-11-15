@@ -336,6 +336,35 @@ try {
   delete process.env.XDT_CODEX_API_KEY;
   console.log('PASS native cross-account resume, archive/unarchive, fork/tail rollback and route storage');
 
+  // An independent Codex account (a user-added native Codex source with its own login): the task
+  // the Host starts on it runs in the account's own home, never in the profile's codex-home
+  // (desktop getAuthEnv order; m1-cp19). The login is synthetic; no model request is made.
+  {
+    const { legacyCodexAccountHome } = await import('../../desktop/src/main/maker-host/codex-account-path.ts');
+    const { createHash } = await import('node:crypto');
+    const accountId = 'cxacct-fixture';
+    await createCustomProvider({ id: accountId, name: 'OpenAI · fixture', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', wireProtocol: 'openai-responses', models: [] } } });
+    await config.list();
+    const accountHome = legacyCodexAccountHome(profile, ownerId, accountId);
+    await fs.mkdir(accountHome, { recursive: true });
+    const claims = Buffer.from(JSON.stringify({ sub: 'fixture-subject', email: 'fixture@example.invalid' })).toString('base64url');
+    const jwt = `header.${claims}.signature`;
+    await fs.writeFile(path.join(accountHome, 'auth.json'), JSON.stringify({ tokens: { access_token: jwt, id_token: jwt,
+      refresh_token: 'synthetic-refresh', account_id: 'fixture-workspace' } }), { mode: 0o600 });
+    await fs.writeFile(path.join(accountHome, 'account.json'), JSON.stringify({
+      principal: createHash('sha256').update('fixture-subject\0fixture-workspace').digest('hex'), label: 'fixture@example.invalid' }));
+    assert.equal(config.codexAccounts.codexAccountState(accountId).authenticated, true, 'the fixture account is logged in');
+    const accountHandle = await graph.codex.startSession({ sessionId: 'independent-account', providerId: accountId,
+      model: 'gpt-5.4', workingDir: root });
+    handles.push(accountHandle);
+    const accountStorage = await runtime.deps.resolveCodexThreadStorage(accountHandle.id, { readOnly: true });
+    assert.equal(accountStorage.historyHome, accountHome);
+    assert.equal(accountStorage.sqliteHome, accountHome);
+    await accountHandle.close();
+    console.log('PASS an independent Codex account task starts on the Host in the account\'s own home, not the profile codex-home');
+  }
+
   // Shared-send integration: earlier checks bypass the queue. Use the real
   // HTTP/queue/Maker pipeline, isolated SQLite and a synthetic local upstream.
   const sessionId = 'queued-native-fixture';

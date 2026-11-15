@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 // @vitest-environment jsdom
 import { act, createElement, useEffect, useImperativeHandle, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -55,6 +56,8 @@ vi.mock('react-native-webview', () => ({
   },
 }));
 vi.mock('expo-crypto', () => ({
+  CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
+  digestStringAsync: async (_algorithm: string, text: string) => createHash('sha256').update(text).digest('hex'),
   getRandomBytes: (length: number) => new Uint8Array(length).fill(++state.random),
 }));
 vi.mock('react-i18next', () => ({
@@ -574,4 +577,35 @@ it.each(['MCP_APP_FILES_LOCAL_ONLY', '[PRECONDITION_FAILED] MCP_APP_FILES_LOCAL_
   expect(container.textContent).toContain('mcpApps.filesOnExecutionComputer');
   expect(container.textContent).toContain('Report');
   expect(container.querySelector('button, [data-testid="mcp-webview"]')).toBeNull();
+});
+
+it('bypasses result caching only for mobile App open and poll', async () => {
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
+  for (const op of ['open', 'poll']) {
+    const call = state.invoke.mock.calls.find(([, , [, input]]) => input.op === op)!;
+    expect(call).toBeDefined();
+    expect(call[3]).toEqual({ noResultCache: true });
+    expect(call[2][1]).not.toHaveProperty('noResultCache');
+  }
+  await act(async () => render(null));
+  const teardown = state.invoke.mock.calls.find(([, , [, input]]) => input.op === 'teardown')!;
+  expect(teardown).toBeDefined();
+  expect(teardown[3]).toBeUndefined();
+});
+
+it('restores a warm SDK on the phone without forwarding its cache hash into page context', async () => {
+  const sdk = { source: 'export const phoneApp = 1;' };
+  const hash = createHash('sha256').update(JSON.stringify([sdk.source, null, null])).digest('hex');
+  let opens = 0;
+  state.invoke.mockImplementation(async (_device, _channel, [, input]) => {
+    if (input.op === 'open') return ++opens === 1 ? { ...doc, sdk } : { ...doc, viewId: 'second', sdkRef: hash };
+    return input.op === 'poll' ? new Promise(() => {}) : {};
+  });
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="one" title="App" />));
+  await act(async () => render(null));
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="two" title="App" />));
+  const input = state.invoke.mock.calls.filter(([, , [, input]]) => input.op === 'open').at(-1)![2][1];
+  expect(input.sdkCacheHashes).toEqual([hash]);
+  expect(input.context).not.toHaveProperty('sdkCacheHashes');
+  expect(state.prepare.mock.calls.at(-1)![0].sdk).toEqual(sdk);
 });

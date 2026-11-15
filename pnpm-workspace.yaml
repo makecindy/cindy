@@ -41,6 +41,7 @@ patchedDependencies:
   expo-modules-core@58.0.30: dependency-patches/expo-modules-core@58.0.30.patch
   "@terrazzo/parser@2.7.1": dependency-patches/@terrazzo__parser@2.7.1.patch
   expo-image@58.0.18: dependency-patches/expo-image@58.0.18.patch
+  '@expo/ui@58.0.27': dependency-patches/@expo__ui@58.0.27.patch
 allowUnusedPatches: true
 allowBuilds:
   "@parcel/watcher": true

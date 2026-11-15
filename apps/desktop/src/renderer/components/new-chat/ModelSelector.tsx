@@ -164,7 +164,7 @@ import { compactEnglishEffortLabel } from '@cindy/maker-shared/agent-capabilitie
 import type { ModelAccessAccountTier } from '../../../shared/modelAccess';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
-import { buildProviderSections } from './sourceSwitch';
+import { buildProviderSections, withFollowedAccountSource } from './sourceSwitch';
 import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import { mergeSshCodexCatalog, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
 
@@ -758,6 +758,11 @@ export interface ModelSelectorBaseProps {
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
   /**
+   * 已建立的本机任务跟着账号走时的原来源视图(sourceSwitch.ts followedAccountSourceProvider)：
+   * 只替换本机目录里同 id 的那一项；远程目录、SSH 与外部注入目录不受影响。
+   */
+  taskSourceProvider?: ProviderView;
+  /**
    * SSH project: Codex models come from the host (see mergeSshCodexCatalog), Claude Code
    * and Pi keep the local catalog. `idle` = not read yet; opening the picker calls refresh.
    */
@@ -984,6 +989,7 @@ export interface ModelSelectorContentBaseProps {
   modelGroups?: ModelGroupsPickerProps;
   providersOverride?: ProviderView[];
   providersOverrideState?: ModelSelectorProps['providersOverrideState'];
+  taskSourceProvider?: ModelSelectorProps['taskSourceProvider'];
   sshCodex?: SshCodexCatalog;
   modelId: string;
   effort: Effort;
@@ -1262,6 +1268,7 @@ function ModelSelectorContentView({
   modelGroups,
   providersOverride,
   providersOverrideState,
+  taskSourceProvider,
   sshCodex,
   modelId,
   effort,
@@ -1468,9 +1475,13 @@ function ModelSelectorContentView({
     () => (sshCodexProviders ? mergeSshCodexCatalog(localProviders.providers, sshCodexProviders) : null),
     [localProviders.providers, sshCodexProviders],
   );
+  const localTaskProviders = useMemo(
+    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider ?? null),
+    [localProviders.providers, taskSourceProvider],
+  );
   const providers = deviceId
     ? remoteCatalogProviders
-    : providersOverride ?? sshCatalogProviders ?? localProviders.providers;
+    : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
   // SSH 目录里 Codex 来自远端主机：本机账号用量、本机供应商组都不能代表它。
   const sshCodexActive = sshCodex !== undefined;
   const mixedCatalog = !!providersOverride || sshCodexActive;
@@ -4195,6 +4206,7 @@ export function ModelSelector({
   modelGroups,
   providersOverride,
   providersOverrideState,
+  taskSourceProvider,
   sshCodex,
   modelId,
   currentSelection,
@@ -4435,9 +4447,13 @@ export function ModelSelector({
     () => (sshCodexProviders ? mergeSshCodexCatalog(localProviders.providers, sshCodexProviders) : null),
     [localProviders.providers, sshCodexProviders],
   );
+  const localTaskProviders = useMemo(
+    () => withFollowedAccountSource(localProviders.providers, taskSourceProvider ?? null),
+    [localProviders.providers, taskSourceProvider],
+  );
   const providers = deviceId
     ? remoteProviders.providers
-    : providersOverride ?? sshCatalogProviders ?? localProviders.providers;
+    : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
   // 当前是 SSH Codex 时 trigger 的加载 / 失败 / 来源都以远端清单为准;其余引擎仍看本机目录。
   const sshCodexCurrent = sshCodex !== undefined && agentKind === 'codex';
   // Old device-link hosts expose capabilities only. Never substitute local routes.
@@ -5145,6 +5161,7 @@ export function ModelSelector({
       fastModeConfigurable={fastModeConfigurable}
       providersOverride={providersOverride}
       providersOverrideState={providersOverrideState}
+      {...(taskSourceProvider ? { taskSourceProvider } : {})}
       sshCodex={sshCodex}
       unifiedPanel={unifiedPanel}
       sessionEngineFilter={contentSessionEngineFilter}

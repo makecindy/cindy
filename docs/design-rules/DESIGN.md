@@ -1186,6 +1186,13 @@ The existing IDs and explicit theme overrides remain supported. Exact values liv
 `packages/design-tokens/src/reference/color.json` and generate `themes/colors.ts`;
 this decision does not grant new uses of warning/status colors.
 
+**Message jump locator (user request, 2026-11-14):** after jumping to a message from
+search or a notification, Desktop chat and teammate group chat briefly mark the whole
+message with the neutral `--surface-hover` tint, extended 8px past the content by a
+same-tint spread so text does not touch the edge and layout does not move. No ring.
+Gold `search-match-*` stays for matched text only; do not use it as a whole-message fill.
+Shared class: `CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS` in `components/chat/chatChrome.ts`.
+
 ### Built-in Themes
 
 The implementation truth is `builtinThemes` in `apps/desktop/src/renderer/themes/registry.ts` for lookup and `BUILTIN_FAMILIES` in `themes/families.ts` for what Settings shows; adding or removing themes does not require updating this document. The default light/dark (base) themes are exactly the §2 palette.

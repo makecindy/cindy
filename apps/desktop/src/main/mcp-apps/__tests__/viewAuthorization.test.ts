@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createAppMessageSender } from '../messageSender.js';
 import { queuedAppMessageGuard } from '../message.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -953,4 +954,27 @@ it('cancels a ui/message still preparing when its document is replaced', async (
   metadata.resolve({});
   await vi.waitFor(() => expect(finished).toBe(true));
   expect(enqueue).not.toHaveBeenCalled();
+});
+
+it('keeps SDK negotiation hashes out of the initialized page hostContext', async () => {
+  const f = await fixture('device:viewer');
+  const sdk = f.document.sdk!;
+  const addon = sdk.addons?.['cindy/view-state'];
+  const hash = createHash('sha256').update(JSON.stringify([sdk.source, addon?.source ?? null, addon?.reactSource ?? null])).digest('hex');
+  const doc = await handleMcpAppOperation(f.host, 'device:viewer', 'task', {
+    op: 'open', clientId: 'second', sdkCacheHashes: [hash], context: { theme: 'dark' },
+  }) as { viewId: string; sdkRef?: string };
+  expect(doc.sdkRef).toBe(hash);
+  await f.host.dispatch('device:viewer', 'task', doc.viewId, {
+    jsonrpc: '2.0', id: 777, method: 'ui/initialize', params: {
+      protocolVersion: '2026-01-26', appInfo: { name: 'Fixture', version: '1' }, appCapabilities: {},
+    },
+  });
+  await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 777, result: expect.anything() })));
+  const reply = f.outgoing.find(message => 'id' in message && message.id === 777);
+  if (!reply || !('result' in reply)) throw new Error('Missing initialize result');
+  expect(reply.result.hostContext).toMatchObject({ theme: 'dark' });
+  expect(reply.result.hostContext).not.toHaveProperty('sdkCacheHashes');
+  expect(reply.result.hostContext).not.toHaveProperty('sdkRef');
+  expect(JSON.stringify(reply.result.hostContext)).not.toContain(hash);
 });

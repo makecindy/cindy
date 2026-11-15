@@ -164,6 +164,13 @@ export interface SubscriptionSessionAccount {
   blocked?: true;
   /** For a blocked account, whether the executor can actually select another account, including concurrency and route grants. */
   switchAvailable?: boolean;
+  /**
+   * Local reads only (2026-11-14): the provider the bound account belongs to now, when that is not
+   * the provider the task names (the account was split, moved or taken out). The task keeps
+   * running on it; the composer uses it so the task's own source is not shown as disconnected.
+   * Never sent to another computer.
+   */
+  ownerProviderId?: string;
 }
 export type SubscriptionSessionAccountView = (
   /** No pool, only the CLI default, or a pre-pool task: the provider's original readers apply. */
@@ -227,6 +234,8 @@ export function parseSubscriptionSessionAccountView(
       ...(account.blocked === true && account.paused !== true ? { blocked: true as const } : {}),
       ...((account.blocked === true || (route.routeProviderId && account.paused === true)) && typeof account.switchAvailable === 'boolean'
         ? { switchAvailable: account.switchAvailable } : {}),
+      ...(isSubscriptionPoolProviderIdShape(account.ownerProviderId) && account.ownerProviderId !== providerId
+        ? { ownerProviderId: account.ownerProviderId } : {}),
     },
   };
 }

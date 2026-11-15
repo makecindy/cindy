@@ -1,3 +1,4 @@
+import { commitContextRebuildWithPorts } from '../contextRebuildPersistence.js';
 import { parseAgentMetaRecord, patchMessageAgentMetaWithResultRow, findVisibleToolUseMessageByAliasesRow,
   writeMessageContentRow, rollbackAssistantMessageRow, readVisiblePiUserEntry } from '../messageMutations.js';
 import type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
@@ -1206,7 +1207,7 @@ export async function commitMessageDeletion(
   };
 }
 
-export async function commitContextRebuild(
+export function commitContextRebuild(
   sessionId: string,
   handoff: string,
   meta: {
@@ -1225,30 +1226,11 @@ export async function commitContextRebuild(
     replacementRoute?: ContextRebuildArgs['replacementRoute'];
   },
 ): Promise<{ updatedAt: number }> {
-  const now = Date.now();
-  await getDbClient().tx('context.rebuild', {
-    sessionId,
-    markerId: createId(),
-    markerClientId: `context-rebuild:${createId()}`,
-    markerContent: JSON.stringify({
-      handoff,
-      consumed: false,
-      reason: meta.reason,
-      sourceUserClientId: meta.sourceUserClientId,
-      ...(meta.replacementRoute || meta.expectedSdkSessionId
-        ? { sourceSdkSessionId: meta.replacementRoute?.expectedSdkSessionId ?? meta.expectedSdkSessionId }
-        : {}),
-      ...(meta.sourceAgentKind ? { sourceAgentKind: meta.sourceAgentKind } : {}),
-      ...(meta.sourceModel !== undefined ? { sourceModel: meta.sourceModel } : {}),
-      ...(meta.sourceProviderId !== undefined ? { sourceProviderId: meta.sourceProviderId } : {}),
-    }),
-    markerCreatedAt: now,
-    updatedAt: now,
-    expectedClearedAt: meta.expectedClearedAt ?? null,
-    ...(meta.replacementRoute ? { replacementRoute: meta.replacementRoute } : {}),
-    ...(meta.expectedSdkSessionId !== undefined ? { expectedSdkSessionId: meta.expectedSdkSessionId } : {}),
-  });
-  return { updatedAt: now };
+  return commitContextRebuildWithPorts({
+    now: () => Date.now(),
+    createId: () => createId(),
+    tx: (...args) => getDbClient().tx(...args),
+  }, sessionId, handoff, meta);
 }
 
 export async function findLatestContextRebuildMeta(sessionId: string): Promise<{

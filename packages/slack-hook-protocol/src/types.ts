@@ -1135,7 +1135,12 @@ export interface InteractionButton {
  * kind 是开放集合(当前 'ask_user_question' / 'plan_review'), server 只透传
  * 日志不理解语义 —— 新 kind 不需要 server 升级。
  */
+export const HOOK_FEATURE_IM_QUESTIONS = 'im-question-cards-v1';
+
 export interface InteractionRequestPayload {
+  /** Negotiated ordinary-question surface; updates reuse interactionId. */
+  questionMode?: 'blocking' | 'async';
+  questionCode?: string;
   /** 所属任务(server 据此定位回帖 thread 并校验归属)。 */
   requestId: string;
   /** 交互唯一标识(maker-core InteractionRequest.requestId), 决策配对键。 */
@@ -1153,6 +1158,8 @@ export interface InteractionRequestPayload {
  * 按钮->决策映射(语义不过网线)。迟到/未知的 decision 静默忽略。
  */
 export interface InteractionDecisionPayload {
+  /** Text answer to a requester-bound IM question; buttonId must be question:reply. */
+  answerText?: string;
   requestId: string;
   interactionId: string;
   buttonId: string;
@@ -1602,6 +1609,8 @@ export interface MessageOpPayload {
   requestId?: string;
   scope: MessageOpScope;
   action: MessageOpAction;
+  /** Required on turn-notice question cards; only async questions survive turn.end. */
+  questionMode?: 'blocking' | 'async';
   /**
    * 这次操作在 turn 里承担什么角色(可选; 缺席 = 普通独立操作, 与本字段出现前
    * 的语义逐字相同)。见 MessageOpPurpose。
@@ -1613,10 +1622,10 @@ export interface MessageOpPayload {
    * 同一规则), 且它是续跑锚点的候选。其余 purpose 不得携带。
    */
   finalPart?: number;
-  /** `purpose: 'interaction-card'` 时必填(parse 强制): 这张卡对应的 interactionId。 */
+  /** `purpose: 'interaction-card' | 'turn-notice'` 时必填: 这张卡对应的 interactionId。 */
   interactionId?: string;
   /**
-   * 只用于 `purpose: 'interaction-card'` 的 `edit`: 这是收口编辑(卡片已决 / 超时 /
+   * 只用于 `purpose: 'interaction-card' | 'turn-notice'` 的 `edit`: 这是收口编辑(卡片已决 / 超时 /
    * 撤销)。服务端执行编辑后作废这张卡全部回调映射, 迟到的点按不再转成 decision。
    */
   interactionClosed?: boolean;
@@ -1676,7 +1685,8 @@ export interface MessageOpPayload {
  * `MESSAGE_OP_ERROR_IDEMPOTENCY_CONFLICT`。所以回执未知时客户端必须原样重发
  * (同 opId 同正文), 不得沿用 opId 换正文。
  */
-export type MessageOpPurpose = 'turn-progress' | 'turn-final' | 'interaction-card';
+/** `turn-notice` sends and edits durable requester-bound question cards under HOOK_FEATURE_TELEGRAM_QUESTION_OPS. */
+export type MessageOpPurpose = 'turn-progress' | 'turn-final' | 'interaction-card' | 'turn-notice';
 
 /*
  * msg.op.result.errorCode: 服务端**自己**判定的拒绝(未调用 Bot API, 或调用结果
@@ -2151,3 +2161,6 @@ export type HookParseResult = { ok: true; message: HookMessage } | { ok: false; 
 
 /** Multiple independently enabled Feishu apps on one connection; each app keeps its own identities. */
 export const HOOK_FEATURE_FEISHU_MULTI_APP = 'feishu-multi-app-v1';
+
+/** Durable requester-bound question cards in the originating lane, independent of turn cleanup. */
+export const HOOK_FEATURE_TELEGRAM_QUESTION_OPS = 'telegram-question-ops-v1';

@@ -77,6 +77,10 @@
 
 页面 `callServerTool` 的整个结果只回页面；要告知 AI，用上表的 `updateModelContext` 或 `sendMessage`。AI 调用工具时 `content` / `structuredContent` 进入模型，根 `_meta` 只给页面；双向可见工具应把只供页面的数据放根 `_meta`。
 
+### 主题首帧和系统外观
+
+页面声明 `color-scheme: light dark`（例如在 `:root` 上）时，Cindy 会在页面首帧预置当前 Cindy 主题和页面未定义的颜色变量（`--color-*`），并在主题切换时更新这些由宿主预置的变量。页面自己定义的颜色变量保持作者值。只声明 `light` 或只声明 `dark` 的页面保持作者自己的外观。页面里的 `@media (prefers-color-scheme: ...)` 仍按浏览器系统外观匹配；这一点目前只依据浏览器规则推断，尚未在所有平台实测，页面若要完全跟随 Cindy 主题应优先使用宿主变量。
+
 ## 4. 标准工具
 
 | 工具 | 谁调用 | 参数 → 返回 | 用途 |

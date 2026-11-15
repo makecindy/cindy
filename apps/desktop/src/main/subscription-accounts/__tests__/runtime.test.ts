@@ -2648,6 +2648,44 @@ describe('native account assignment on the executing computer', () => {
     expect(await readSubscriptionSessionAccount(kind, query, { remote: true, ownComputer: true }))
       .toMatchObject({ state: 'bound', account: { number: 3 } });
   });
+  // 2026-11-14 regression (subscription-account-pools.md 旧版直接加入账号池的账号也拆开 / 任务跟着账号走),
+  // unit: splitting the old pool left the built-in source with only a signed-out default login, and
+  // the composer refused its old tasks as disconnected although the executor resumes them on their
+  // account. Minimal input: a built-in task bound to `second`, `second` split out, default signed out.
+  it.each(['anthropic', 'openai'] as const)('keeps a built-in %s task on its account after that account is split out', async kind => {
+    h.pools[kind] = { strategy: 'order', accounts: ['default', 'second'].map(account) };
+    h.read.mockImplementation(async (_kind: string, directory: string) =>
+      ({ authenticated: !directory.endsWith('default'), identity: directory }));
+    const model = kind === 'openai' ? 'gpt-6' : 'claude-sonnet';
+    const lease = await acquireSubscriptionAccount(kind, model, [], false, { accountId: 'second' });
+    await lease!.bind(['task:old-task', 'native:old-native']);
+    lease!.release();
+    const providerId = `${kind}-sub-12345678`;
+    h.created[providerId] = { kind, name: 'Split', account: 'second' };
+    h.placement[`${kind}:second`] = providerId;
+    await refreshSubscriptionPool(kind, true);
+    // New tasks still see the emptied source as disconnected; only routing keeps the bound account.
+    expect(hasConnectedSubscriptionPool(kind)).toBe(false);
+    expect(hasConnectedSubscriptionPool(kind, { includeBoundAccounts: true })).toBe(true);
+    // The local composer learns where the account lives now; remote replies keep their old shape.
+    expect(await readSubscriptionSessionAccount(kind, { sessionId: 'old-task', nativeSessionId: 'old-native', model }))
+      .toMatchObject({ state: 'bound', account: { status: 'ready', paused: false, ownerProviderId: providerId } });
+    expect(await readSubscriptionSessionAccount(kind, { sessionId: 'old-task', model }, { remote: true, ownComputer: true }))
+      .not.toHaveProperty('account.ownerProviderId');
+    // The resume continues the native history on the same account: no handoff, no rebinding.
+    const start = vi.fn<(options: StartSessionOptions) => Promise<AgentSessionHandle>>(async () =>
+      ({ id: 'old-native', close: async () => {} }) as unknown as AgentSessionHandle);
+    const agent = withSubscriptionAccounts({ kind: kind === 'openai' ? 'codex' : 'claude-code', startSession: start } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: kind, sessionId: 'old-task', resumeSessionId: 'old-native', model } as StartSessionOptions);
+    expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe(`${kind}/second`);
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('second');
+    expect(h.bindings.get('native:old-native')?.accountId).toBe('second');
+    await handle.close();
+    // An account that stays in the built-in source is not reported as living elsewhere.
+    delete h.placement[`${kind}:second`];
+    expect(await readSubscriptionSessionAccount(kind, { sessionId: 'old-task', model }))
+      .not.toHaveProperty('account.ownerProviderId');
+  });
   // PR #10405 review, unit: built-in-only probes missed a created multi-account provider.
   // Two accounts in that provider plus an unrelated default prove selection stays scoped;
   // the old native history must stay bound while the task starts on its replacement.
