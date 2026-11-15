@@ -56,6 +56,8 @@ export interface SubscriptionAccountUsage {
   };
 }
 export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity'> {
+  /** Owner-only verified account/workspace digest, for duplicate quota presentation. */
+  accountKey?: string;
   legacy?: boolean;
   identity?: string;
   plan?: string;

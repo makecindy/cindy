@@ -4299,7 +4299,9 @@
           "inline": "실행 위치",
           "signInHere": "이 컴퓨터에서 로그인",
           "writeFailed": "실행 위치를 저장하지 못했습니다. 다시 시도해 주세요."
-        }
+        },
+        "sameAccountConnections": "이 계정의 저장된 연결",
+        "sameAccountConnectionsHint": "같은 계정은 한 번만 표시됩니다. 연결을 선택하면 관리할 설정만 바뀌며 기존 작업의 연결은 유지됩니다."
       },
       "detect": {
         "groupLabel": "이 기기에서 감지됨",

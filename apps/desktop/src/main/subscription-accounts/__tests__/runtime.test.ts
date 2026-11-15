@@ -202,6 +202,7 @@ import {
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   hasConnectedSubscriptionPool,
+  subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
   pooledCodexResetTarget,
   hasRestoredPooledCodexQuota,
@@ -270,6 +271,42 @@ beforeEach(() => {
 // Unit regression (2026-11-13): native accounts had auth/quota snapshots but no
 // independent model discovery. Existing dispatch tests never read the supplier
 // catalog after default logout. Minimal input: default revoked, second healthy.
+describe('owner-only subscription identity', () => {
+  it('does not carry quota across same-email workspace changes', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.test' });
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-a', canDispatch: () => true });
+    const quota = (usedPercent: number) => ({ codexUsage: { appServerBuckets: { codex: { primary: null,
+      secondary: { usedPercent, windowMinutes: 10080, resetsAt: Date.now() / 1000 + 86400 } } } } });
+    h.usage.mockResolvedValue(quota(20));
+    const first = await refreshSubscriptionPool('openai');
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'workspace-b', canDispatch: () => true });
+    h.usage.mockResolvedValue(quota(70));
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+    try {
+      const next = await refreshSubscriptionPool('openai');
+      expect(next.accounts[0].accountKey).not.toBe(first.accounts[0].accountKey);
+      expect(next.accounts[0].usage?.codex?.buckets.codex.secondary?.usedPercent).toBe(70);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('distinguishes workspaces and never publishes raw workspace ids or tokens', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.read.mockResolvedValue({ authenticated: true, identity: 'same@example.test' });
+    h.tokens.mockImplementation(async (directory: string) => ({ accessToken: 'secret-token', chatgptAccountId: directory, canDispatch: () => true }));
+    await refreshSubscriptionPool('openai');
+    const keys = subscriptionProviderAccountKeys('openai')!;
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(keys.every(key => /^[a-f0-9]{64}$/.test(key))).toBe(true);
+    const view = await readSubscriptionPool('openai');
+    expect(view.accounts.map(a => a.accountKey).sort()).toEqual(keys);
+    expect(JSON.stringify(keys)).not.toContain('secret-token');
+    h.pools.openai.accounts[1].paused = true;
+    expect(subscriptionProviderAccountKeys('openai')).toBeUndefined();
+  });
+});
+
 describe('pooled Codex model discovery', () => {
   // Unit / PR #10327: cold-start agents already exist before discovery. Previous
   // catalog tests only read the union, missing the capability invalidation path.

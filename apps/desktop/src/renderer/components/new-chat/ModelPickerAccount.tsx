@@ -242,7 +242,7 @@ export function useModelPickerAccount(providerId: string, deviceId?: string | nu
   const display = preview.enabled ? sessionAccountDisplay(session, t) : null;
   if (display) {
     return {
-      kind: preview.accounts[providerId]?.kind,
+      kind: session?.providerId ?? preview.accounts[providerId]?.kind,
       ...(display.identity ? { identity: display.identity } : {}),
       plan: display.plan,
       usage: session?.state === 'bound' ? session.account.usage ?? null : display.usage,

@@ -7,14 +7,16 @@
  *   3. 本机 CLI 检测命中且渠道未连接时,左栏出现建议行,点击直达向导授权步。
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { remoteProviderDisableKey } from '@cindy/model-providers';
 import type { CustomProviderConfig, ModelRegistry, ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../shared/ipc-errors';
 import { toast } from '@/lib/toast';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 
 const {
@@ -38,6 +40,7 @@ const {
     ownerGeneration: 1,
     order: ['anthropic', 'xd', 'custom'],
     customConnected: true,
+    disabledProviders: {} as Record<string, true>,
     mediaReady: false,
     customOverride: null as ProviderView | null,
     loading: false,
@@ -141,6 +144,7 @@ vi.mock('@/hooks/useProviders', () => ({
     return {
       providers:
         providerSnapshotState.dataOwnerId === authState.dataOwnerId && !providerSnapshotState.loading ? [...byId.values()] : [],
+      disabledProviders: providerSnapshotState.disabledProviders,
       providerOrder:
         providerSnapshotState.dataOwnerId === authState.dataOwnerId
           ? providerSnapshotState.order
@@ -157,6 +161,7 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
+  useOptionalDataOwnerGeneration: () => 0,
   useAuth: () => ({
     mode: 'cloud',
     dataOwnerId: authState.dataOwnerId,
@@ -235,10 +240,13 @@ type ScanResult = { detections: unknown[] };
 let scanResult: ScanResult;
 
 beforeEach(() => {
+  localStorage.clear();
+  setDataOwnerGeneration('owner-1');
   authState.dataOwnerId = 'owner-1';
   providerSnapshotState.dataOwnerId = 'owner-1';
   providerSnapshotState.ownerGeneration = 1;
   providerSnapshotState.customConnected = true;
+  providerSnapshotState.disabledProviders = {};
   providerSnapshotState.mediaReady = false;
   providerSnapshotState.customOverride = null;
   providerSnapshotState.loading = false;
@@ -274,6 +282,46 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // Reuse receiver-side disable, retaining the settings row for re-enabling.
+  it('disables an extra remote provider and re-enables it from the same action menu after reopening', async () => {
+    ownDevicesState.devices = [{ deviceId: 'peer', name: 'Other computer', platform: 'darwin' }];
+    ownDevicesState.catalogs = new Map([['peer', { providers: [{
+      id: 'extra-gpt3', name: 'GPT3', source: 'user', agents: ['codex'],
+      auth: { method: 'apiKey' }, routing: {}, connected: true, remoteInvocationEnabled: true,
+      models: { codex: [{ id: 'gpt-test', name: 'GPT test', contextWindow: 1000, efforts: [], defaultEffort: null }] },
+    } satisfies ProviderView], loading: false, error: null }]]);
+    const disable = vi.fn<typeof window.electronAPI.maker.setModelDisable>(async input => {
+      if (input.kind === 'provider' && input.remoteDeviceId) {
+        const key = remoteProviderDisableKey(input.remoteDeviceId, input.providerId);
+        providerSnapshotState.disabledProviders = input.disabled ? { [key]: true } : {};
+      }
+      return { ok: true as const };
+    });
+    window.electronAPI.maker.setModelDisable = disable;
+    const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.remote.rowLabel' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    await act(async () => { fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.menu.disableProvider' })); });
+    expect(disable).toHaveBeenLastCalledWith({ kind: 'provider', remoteDeviceId: 'peer', providerId: 'extra-gpt3', disabled: true });
+    view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    expect(await screen.findByText('settings.providers.detail.suspendedBanner')).toBeTruthy();
+    expect(screen.queryByText('GPT test')).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.providers.remote.rowLabel' })).toBeTruthy();
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect((ownDevicesState.catalogs.get('peer') as { providers: ProviderView[] }).providers[0]?.remoteInvocationEnabled).toBe(true);
+    view.unmount();
+    const reopened = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.remote.rowLabel' }));
+    expect(await screen.findByText('settings.providers.detail.suspendedBanner')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    await act(async () => { fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.menu.enableProvider' })); });
+    expect(disable).toHaveBeenLastCalledWith({ kind: 'provider', remoteDeviceId: 'peer', providerId: 'extra-gpt3', disabled: false });
+    reopened.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await waitFor(() => expect(screen.queryByText('settings.providers.detail.suspendedBanner')).toBeNull());
+    expect(await screen.findByText('GPT test')).toBeTruthy();
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+
   // Unit: an opaque enterprise UUID has no inferred brand. The settings rail
   // must still render the host-supplied artwork instead of a name initial.
   it('renders explicit organization artwork in the provider list', async () => {

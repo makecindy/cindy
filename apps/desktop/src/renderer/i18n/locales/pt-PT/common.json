@@ -4398,7 +4398,9 @@
           "inline": "Executa em",
           "signInHere": "Iniciar sessão neste computador",
           "writeFailed": "Não foi possível guardar onde este fornecedor é executado. Tente novamente."
-        }
+        },
+        "sameAccountConnections": "Ligações guardadas desta conta",
+        "sameAccountConnectionsHint": "A conta aparece apenas uma vez. Escolher uma ligação altera apenas as definições a gerir; as tarefas existentes mantêm a sua ligação."
       },
       "detect": {
         "groupLabel": "Detetado neste dispositivo",

@@ -4342,7 +4342,9 @@
           "inline": "Läuft auf",
           "signInHere": "Auf diesem Computer anmelden",
           "writeFailed": "Der Ausführungsort konnte nicht gespeichert werden. Bitte versuche es erneut."
-        }
+        },
+        "sameAccountConnections": "Gespeicherte Verbindungen für dieses Konto",
+        "sameAccountConnectionsHint": "Dieses Konto wird nur einmal angezeigt. Die Auswahl einer Verbindung ändert nur die verwalteten Einstellungen; bestehende Aufgaben behalten ihre Verbindung."
       },
       "detect": {
         "groupLabel": "Auf diesem Gerät erkannt",

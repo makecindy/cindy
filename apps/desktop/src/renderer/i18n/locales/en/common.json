@@ -4342,7 +4342,9 @@
           "inline": "Runs on",
           "signInHere": "Sign in on this computer",
           "writeFailed": "Couldn’t save where this provider runs. Try again."
-        }
+        },
+        "sameAccountConnections": "Saved connections for this account",
+        "sameAccountConnectionsHint": "This account appears once. Choosing a connection only changes which settings you manage; existing tasks keep their connection."
       },
       "detect": {
         "groupLabel": "Detected on this device",
