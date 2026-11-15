@@ -43,7 +43,6 @@ import {
   checkModelRoute,
   materializeExclusiveProviderRoute,
   resolveLenientRoute,
-  shouldApplyExclusiveProviderReroute,
   type ModelRouteGuardOptions,
   type ModelRouteVerdict,
 } from './model-route-guard.js';
@@ -225,11 +224,8 @@ export async function pinExclusiveSessionProvider(
   return exclusive.kind === 'pin' ? exclusive.providerId : undefined;
 }
 
-export function shouldApplyExclusiveProviderRerouteLive(
-  providerId: string | null | undefined,
-): boolean {
-  return shouldApplyExclusiveProviderReroute(providerId, getActiveCatalog().providers);
-}
+// Moved to model-route-guard-catalog.ts, which does not load Electron (the Node Host imports it).
+export { shouldApplyExclusiveProviderRerouteLive } from './model-route-guard-catalog.js';
 
 /**
  * resolveLenientRoute 的桌面接线壳(语义见 model-route-guard.ts 头注):IM control:new /
