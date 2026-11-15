@@ -297,10 +297,12 @@ export function createTurnExecutor(deps) {
     listen(id, session);
   }
 
-  // The desktop's write FIFO does not pause on a failed write; the Host's pauses the task's reply
-  // writes after one, until it is retried. The send's own reads and best-effort records (plan, goal,
-  // model of the turn) keep the desktop's behaviour: they wait behind the task's writes, and their
-  // failure goes back to the caller (which skips the note or logs) without pausing the task.
+  // The desktop's write FIFO does not pause on a failed write (messagePersistBroadcaster.ts
+  // enqueueDurableWrite pauses only when given onPersistenceError, which the desktop never passes);
+  // the Host's pauses the task's reply writes after one, until it is retried. Used for two reads (the
+  // plan snapshot, the goal note) and two best-effort writes (clearing a sealed plan, recording the
+  // turn's model and its model-change card): they wait behind the task's writes, as on the desktop,
+  // and their failure goes back to the caller (which skips the note or logs) without pausing the task.
   function behindDurableWrites(id, label, fn) {
     return historyFor(id).enqueueDurableWrite(label, () => Promise.resolve().then(fn)
       .then(value => ({ value }), error => ({ error })))
@@ -777,6 +779,9 @@ export function createTurnExecutor(deps) {
     },
     isRunning(id) { return turns.get(id)?.running === true; },
     isInputRunning(id, clientId) { const turn = turns.get(id); return turn?.clientId === clientId && turn.running; },
+    // Context recovery has claimed this input's terminal error and is rebuilding before its replay:
+    // the input is still being answered (the replay carries its client id).
+    isInputRecovering(id, clientId) { return recovery?.replayClientId(id) === clientId; },
     reconcileIdle(id) {
       const turn = turns.get(id);
       if (!turn?.abortRequested || turn.terminal || turn.session?.isTurnRunning?.() !== false) return false;

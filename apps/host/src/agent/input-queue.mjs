@@ -402,7 +402,9 @@ export function createInputQueue(deps) {
       getProjection: id => command(id, () => api.projection(id)),
       inputStatus: (id, clientId) => command(id, async () => {
         const projection = api.projection(id);
-        if (executor.isInputRunning(id, clientId)) return 'running';
+        // Before the recovery point below: during context recovery the claimed input is the recovery
+        // point too, but it is still being answered.
+        if (executor.isInputRunning(id, clientId) || executor.isInputRecovering(id, clientId)) return 'running';
         // A recovery point names its input as clientId (before dispatch) or as item (a stored turn
         // whose dispatch failed): either way the input stopped there.
         if ((projection.recovery?.clientId ?? projection.recovery?.item?.clientId) === clientId) return 'interrupted';

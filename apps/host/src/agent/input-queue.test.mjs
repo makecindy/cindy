@@ -3468,3 +3468,44 @@ test('/api/chat: an error after dispatch ends the stream on its terminal event, 
   assert.equal(stream.streamed().filter(event => event.type === 'input_receipt').length, 0);
   assert.ok(stream.streamed().some(event => event.type === 'error' && event.inputClientId === 'chat-runs'));
 });
+
+// Unit, over the assembled recovery: a reconnect to /api/chat while context recovery is rebuilding
+// (the claimed turn has ended, its replay is not yet accepted). Rule: the input is still being
+// answered, so the reconnect's stream stays open and ends after the replay's done with its answer.
+// Gap: inputStatus took the recovery point for an interrupted input and the stream ended at once.
+test('/api/chat: a reconnect while context recovery rebuilds stays open and ends after the replay', { timeout: 30_000 }, async t => {
+  const hub = createEventHub();
+  const r = await assembledRecovery(t, { hub });
+  let releaseRebuild;
+  const rebuildHeld = new Promise(resolve => { releaseRebuild = resolve; });
+  // Hold the rebuild where it closes the overflowed runtime, before the replay starts.
+  const close = r.h.maker.closeSession.bind(r.h.maker);
+  let closing = 0;
+  r.h.maker.closeSession = async id => { closing += 1; await rebuildHeld; return close(id); };
+  const first = await r.overflow('reconnect-recovery');
+  await waitFor(() => closing > 0);
+  await waitFor(() => !first.running && r.h.queue.projection('reconnect-recovery').recovery);
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  const writes = [];
+  const response = Object.assign(new EventEmitter(), {
+    writableEnded: false, headersSent: false,
+    writeHead(status) { this.statusCode = status; this.headersSent = true; },
+    write(chunk) { writes.push(String(chunk)); },
+    end(chunk) { if (chunk) writes.push(String(chunk)); this.writableEnded = true; this.emit('close'); },
+  });
+  const chat = createChatHandler({ events: hub, readSession: async id => ({ id, status: 'active' }),
+    createSession: async () => { throw new Error('the task exists'); },
+    enqueue: (id, input) => r.h.queue.enqueue(id, input), inputStatus: (id, clientId) => r.h.queue.inputStatus(id, clientId) });
+  await chat(Readable.from([Buffer.from(JSON.stringify({ sessionId: 'reconnect-recovery', clientId: 'reconnect-recovery-input', prompt: 'long task' }))]), response);
+  assert.equal(response.writableEnded, false, 'the reconnect stays open while the recovery rebuilds');
+  releaseRebuild();
+  await waitFor(() => { const next = r.h.maker.sessions.get('reconnect-recovery'); return next && next !== first && next.sent.length === 1; });
+  const replayed = r.h.maker.sessions.get('reconnect-recovery');
+  const stamp = { sessionTurnGeneration: replayed.generation, sessionInstanceId: replayed.instanceId };
+  replayed.emit({ type: 'text', data: { text: 'replayed answer' }, ...stamp });
+  replayed.emit({ type: 'done', data: {}, ...stamp });
+  await waitFor(() => response.writableEnded);
+  const streamed = writes.join('').split('\n\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+  assert.ok(streamed.some(event => event.type === 'text' && event.inputClientId === 'reconnect-recovery-input'), 'the replay\'s answer reaches the reconnect');
+  assert.equal(streamed.filter(event => event.type === 'input_receipt' && event.status === 'interrupted').length, 0);
+});
