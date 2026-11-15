@@ -4223,7 +4223,11 @@ export function BranchBaseDropdown({
   const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
   const panelRef = useMenuPanel<HTMLDivElement>(undefined, {
     lockWidth: false,
-    options: { current: (rows) => rows.find((row) => row.hasAttribute('data-menu-current')) },
+    options: {
+      current: (rows) => rows.find((row) => row.hasAttribute('data-menu-current')),
+      currentAttributes: ['data-menu-current'],
+      keyboardSource: inputRef.current ?? undefined,
+    },
   });
   const normalizedQuery = query.trim().toLowerCase();
   const visibleCandidates = candidates.filter(

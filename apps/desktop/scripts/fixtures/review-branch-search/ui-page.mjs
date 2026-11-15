@@ -45,12 +45,51 @@ export default {
     assert.deepEqual(await trigger.boundingBox(), before, 'Selection must not resize the toolbar');
     await trigger.click();
     assert.equal(await search.inputValue(), '');
+    const expectActiveHighlight = async () => {
+      await page.waitForFunction(
+        () => {
+          const input = document.querySelector('[role="combobox"]');
+          const row = document.getElementById(input?.getAttribute('aria-activedescendant'));
+          const layer = document.querySelector('[data-menu-highlight-layer]');
+          if (!row?.hasAttribute('data-menu-active') || !layer) return false;
+          const rowBox = row.getBoundingClientRect();
+          const layerBox = layer.getBoundingClientRect();
+          return (
+            getComputedStyle(layer).opacity === '1' &&
+            Math.abs(rowBox.y - layerBox.y) < 1 &&
+            Math.abs(rowBox.height - layerBox.height) < 1
+          );
+        },
+        undefined,
+        { timeout: 1500 },
+      );
+    };
+    await expectActiveHighlight();
+    const scrollTop = await page.getByRole('listbox').evaluate((el) => el.scrollTop);
     await search.press('ArrowUp');
+    await expectActiveHighlight();
+    assert.equal(
+      await page.getByRole('listbox').evaluate((el) => el.scrollTop),
+      scrollTop,
+      'Adjacent keyboard highlight must update without a scroll event',
+    );
     const activeId = await search.getAttribute('aria-activedescendant');
     assert.equal(
       await page.locator(`[id="${activeId}"]`).textContent(),
       'feature/shared-long-prefix-for-review-comparison-first',
     );
+    await page.locator(`[id="${activeId}"]`).hover();
+    await expectActiveHighlight();
+    await search.press('ArrowDown');
+    await expectActiveHighlight();
+    assert.match(
+      await page.locator('[role="option"][data-menu-active]').textContent(),
+      /comparison-second/,
+      'Keyboard navigation must reclaim the highlight from the stationary pointer',
+    );
+    await ui.capture('keyboard-highlight');
+    await search.press('ArrowUp');
+    await expectActiveHighlight();
     await search.press('ArrowUp');
     await search.press('ArrowUp');
     const lastId = await search.getAttribute('aria-activedescendant');
