@@ -6785,7 +6785,7 @@ function renderInline(
       }
       const settingsTarget = parseSettingsNavigationUrl(inline.url);
       if (settingsTarget) return <SettingsLinkSpan key={spanKey(`settings:${index}:${inline.url}`)} target={settingsTarget}
-        label={inline.text} style={clickableInlineStyle(styles, () => {}, ctx.baseStyle)} />;
+        label={inline.text} SpanText={SpanText} style={clickableInlineStyle(styles, () => {}, ctx.baseStyle)} />;
       const session = parseSessionDeepLinkUrl(inline.url);
       if (session) {
         return (

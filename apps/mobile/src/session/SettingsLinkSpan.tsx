@@ -6,14 +6,14 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { navigateRemoteSettings, type SettingsNavigationTarget } from '@cindy/maker-shared/settings-navigation';
 
-export function SettingsLinkSpan({ target, label, style }: {
-  target: SettingsNavigationTarget; label: string; style?: ComponentProps<typeof Text>['style'];
+export function SettingsLinkSpan({ target, label, style, SpanText = Text }: {
+  target: SettingsNavigationTarget; label: string; style?: ComponentProps<typeof Text>['style']; SpanText?: typeof Text;
 }) {
   const { invoke, readDeviceList } = useDeviceLink();
   const push = useGuardedPush();
   const { t } = useTranslation();
   const busy = useRef(false);
-  return <Text style={style} accessibilityRole="link" onPress={() => {
+  return <SpanText style={style} accessibilityRole="link" onPress={() => {
     if (busy.current) return;
     busy.current = true;
     void (async () => {
@@ -22,5 +22,5 @@ export function SettingsLinkSpan({ target, label, style }: {
       if (!device) throw new Error('SETTINGS_DEVICE_UNAVAILABLE');
       await navigateRemoteSettings(target, invoke, () => push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId: target.deviceId, name: device.name } }));
     })().catch(() => Alert.alert(t('settings.navigation.unavailable'))).finally(() => { busy.current = false; });
-  }}>{label}</Text>;
+  }}>{label}</SpanText>;
 }
