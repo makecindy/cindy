@@ -1,6 +1,7 @@
-import { getRandomBytes } from 'expo-crypto';
+import { CryptoDigestAlgorithm, digestStringAsync, getRandomBytes } from 'expo-crypto';
 import { McpAppController, McpAppHeightGuard, mcpAppFailureKey, type AppRpc } from '@cindy/maker-shared/mcp-app-controller';
-import { MCP_APPS_INVOKE, type McpAppDocument } from '@cindy/maker-shared/mcp-apps';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { McpAppSdkCache, MCP_APPS_INVOKE, type McpAppDocument } from '@cindy/maker-shared/mcp-apps';
 import { prepareMcpAppNativeDocument, type McpAppNativeDocument } from './mcpAppNativeDocument';
 
 export interface McpAppViewState {
@@ -9,7 +10,30 @@ export interface McpAppViewState {
   filesUnavailable?: boolean;
   error?: ReturnType<typeof mcpAppFailureKey> | 'mcpApps.mobileUpdateRequired';
 }
-type Invoke = (device: string, channel: string, args: unknown[]) => Promise<unknown>;
+type Invoke = (device: string, channel: string, args: unknown[], options?: { noResultCache?: boolean }) => Promise<unknown>;
+
+const sdkCache = new McpAppSdkCache(text => digestStringAsync(CryptoDigestAlgorithm.SHA256, text));
+
+export const MCP_APP_DEFAULT_HEIGHT = 320;
+const MCP_APP_HEIGHT_CACHE_LIMIT = 100;
+const heightCache = new Map<string, number>();
+function heightKey(ownerGeneration: number, deviceId: string, sessionId: string, clientId: string): string {
+  return JSON.stringify([ownerGeneration, deviceId, sessionId, clientId]);
+}
+export function getMcpAppHeight(ownerGeneration: number, deviceId: string, sessionId: string, clientId: string): number | undefined {
+  const key = heightKey(ownerGeneration, deviceId, sessionId, clientId);
+  const value = heightCache.get(key);
+  if (value !== undefined) {
+    heightCache.delete(key);
+    heightCache.set(key, value);
+  }
+  return value;
+}
+function rememberMcpAppHeight(key: string, height: number): void {
+  heightCache.delete(key);
+  heightCache.set(key, height);
+  while (heightCache.size > MCP_APP_HEIGHT_CACHE_LIMIT) heightCache.delete(heightCache.keys().next().value!);
+}
 
 /** Owned by the persistent native host, not by a virtualized message/route. */
 export class McpAppView {
@@ -19,11 +43,12 @@ export class McpAppView {
   document?: McpAppDocument;
   nativeDocument?: McpAppNativeDocument;
   width = 1;
-  state: McpAppViewState = { loading: true, height: 320 };
+  state: McpAppViewState;
   closing = false;
   disposed = false;
   inject?: (script: string) => void;
   private listeners = new Set<(state: McpAppViewState) => void>();
+  private readonly heightCacheKey: string;
   private readonly heightGuard = new McpAppHeightGuard(() => console.warn('[mcp-apps] App height feedback loop bounded'));
   private closePromise?: Promise<void>;
 
@@ -31,10 +56,23 @@ export class McpAppView {
     invoke: Invoke, deviceId: string, sessionId: string, clientId: string,
     private readonly changed: () => void,
     private readonly removed: () => void,
-    openLink: (url: string) => Promise<void>,
+    openLink: (url: string) => Promise<void>, ownerGeneration: number,
   ) {
+    this.heightCacheKey = heightKey(ownerGeneration, deviceId, sessionId, clientId);
+    this.state = { loading: true, height: getMcpAppHeight(ownerGeneration, deviceId, sessionId, clientId) ?? MCP_APP_DEFAULT_HEIGHT };
+    const sdkOwner = getMobileAuthOwner();
     this.controller = new McpAppController(
-      (id, input) => invoke(deviceId, MCP_APPS_INVOKE, [id, input]), sessionId, clientId,
+      (id, input) => {
+        const send = (request: Record<string, unknown>) => {
+          if (request.op === 'open' && this.closing) throw new Error('MCP_APP_OPEN_CANCELLED');
+          return request.op === 'open' || request.op === 'poll'
+            ? invoke(deviceId, MCP_APPS_INVOKE, [id, request], { noResultCache: true })
+            : invoke(deviceId, MCP_APPS_INVOKE, [id, request]);
+        };
+        return input.op === 'open' ? sdkCache.open(sdkOwner, deviceId, input, send, () => {
+          if (!isMobileAuthOwnerCurrent(sdkOwner)) throw new Error('MCP_APP_OWNER_CHANGED');
+        }) : send(input);
+      }, sessionId, clientId,
       (message) => {
         if (this.disposed) return;
         if (!this.closing && hasExecutionComputerFile(message)) {
@@ -69,6 +107,7 @@ export class McpAppView {
   }
   private update(value: Partial<McpAppViewState>): void {
     if (this.disposed) return;
+    if (value.height !== undefined) rememberMcpAppHeight(this.heightCacheKey, value.height);
     this.state = { ...this.state, ...value };
     this.listeners.forEach((listener) => listener(this.state));
     this.changed();

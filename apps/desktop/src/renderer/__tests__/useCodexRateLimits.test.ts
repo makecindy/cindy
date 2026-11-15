@@ -25,6 +25,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// #10286 review: pool running-count updates must not launch account CLI reads.
+// Only this account's explicit reset invalidation may refresh; its own echo is ignored.
+it('refreshes only the named pooled reset account and ignores running-count updates', async () => {
+  const scope = 'openai-account:second';
+  let changed!: (event: { providerId: string; resetAccountId?: string }) => void;
+  const reader = vi.fn(async () => {
+    changed({ providerId: 'openai', resetAccountId: 'second' });
+    return { ...result, providerId: scope };
+  });
+  vi.stubGlobal('electronAPI', {
+    maker: { usage: { getCodexRateLimits: reader } },
+    subscriptionAccounts: { onChanged: (listener: typeof changed) => { changed = listener; return () => {}; } },
+  });
+  const hook = renderHook(() => useCodexRateLimits(true, scope));
+  await waitFor(() => expect(hook.result.current.snapshot?.providerId).toBe(scope));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'anthropic' }));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'openai' }));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'openai', resetAccountId: 'third' }));
+  expect(reader).toHaveBeenCalledTimes(1);
+  await act(async () => changed({ providerId: 'openai', resetAccountId: 'second' }));
+  expect(reader).toHaveBeenCalledTimes(2);
+  hook.unmount();
+  await act(async () => changed({ providerId: 'openai', resetAccountId: 'second' }));
+  expect(reader).toHaveBeenCalledTimes(2);
+});
+
 describe('useCodexRateLimits', () => {
   // PR #9916: a read with no reply must release the Retry button and discard
   // any late reply. Fake time keeps this unit regression network-free.

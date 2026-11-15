@@ -1,4 +1,5 @@
 import { installDesktopInteractionHandler, requestHostInteraction, allowHostPagePermission } from '../../../desktop/src/main/maker-ipc/interactionRouter.ts';
+import { redactToolInputForUntrustedBoundary } from '../../../desktop/src/main/toolInputRedaction.ts';
 
 /** Client presentation for the shared Session interaction router. Routing,
  * aborts and unattended-turn policy remain the same as Desktop and IM. */
@@ -53,9 +54,22 @@ export function createInteractionBroker(deps) {
         return new Promise(resolve => {
           binding.history?.flushAssistantBlock(sessionId);
           const persistId = binding.history?.onInteractionMessage(sessionId, request);
-          pending.set(request.requestId, { binding, request, persistId, resolve });
+          // As the desktop (register.ts installDesktopInteractionListener): a permission request
+          // reaches the clients and the device link with its tool input redacted; the Host keeps
+          // the original for the decision.
+          const boundaryRequest =
+            request.kind === 'permission'
+              ? {
+                  ...request,
+                  input: redactToolInputForUntrustedBoundary(
+                    request.toolName,
+                    request.input,
+                  ),
+                }
+              : request;
+          pending.set(request.requestId, { binding, request, boundaryRequest, persistId, resolve });
           deps.hub.publish({ type: 'interaction_request', sessionId,
-            request: { ...request, ...(persistId ? { persistId } : {}) } });
+            request: { ...boundaryRequest, ...(persistId ? { persistId } : {}) } });
         });
       }, (requestId, decision) => {
         const entry = pending.get(requestId);
@@ -84,8 +98,8 @@ export function createInteractionBroker(deps) {
 
     pending(sessionId) {
       return [...pending.values()].filter(entry => entry.binding.sessionId === sessionId && entry.binding.isCurrent())
-        .map(({ request, persistId }) => ({ requestId: request.requestId,
-          request: { ...request, ...(persistId ? { persistId } : {}) } }));
+        .map(({ request, boundaryRequest, persistId }) => ({ requestId: request.requestId,
+          request: { ...boundaryRequest, ...(persistId ? { persistId } : {}) } }));
     },
 
     respond(sessionId, requestId, decision) {

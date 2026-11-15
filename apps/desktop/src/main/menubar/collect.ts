@@ -22,7 +22,7 @@ import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/m
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
-import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
 import type { UsageHistoryPayload } from '../usage/usageHistory.js';
@@ -78,7 +78,7 @@ export interface MenubarCollectDeps {
   nowMs: number;
   listProviders(): Promise<ProviderView[]>;
   /** Null means the provider still uses the original single-account reader. */
-  readSubscriptionPool?(providerId: SubscriptionProvider): Promise<SubscriptionPoolView | null>;
+  readSubscriptionPool?(providerId: string): Promise<SubscriptionPoolView | null>;
   readKimi?(providerId: string): Promise<ProviderAccountUsageResult>;
   readOpenCodeGo?(providerId: string): Promise<ProviderAccountUsageResult>;
   readCodex(providerId: string): Promise<CodexAccountUsagePayload | RateLimitSnapshot | null>;
@@ -130,12 +130,13 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     if (!provider.connected || provider.suspended || provider.removed) return null;
     // Migrated routes remain addressable for old tasks, but are now displayed by the pool.
     if (provider.subscriptionPoolAlias && deps.readSubscriptionPool) return null;
-    if (isSubscriptionProvider(provider.id) && deps.readSubscriptionPool) {
+    if ((isSubscriptionProvider(provider.id) || provider.subscriptionPool || provider.subscriptionAccountPool) && deps.readSubscriptionPool) {
       const providerId = provider.id;
       const pool = await safe<SubscriptionPoolView | null | false>(`pool:${providerId}`, () => deps.readSubscriptionPool!(providerId), false);
       // A failed pool read must not substitute the CLI default's identity or quota.
       if (pool === false) {
-        const source = provider.id === 'openai' ? codexSource(provider, null, deps.nowMs) : claudeSource(provider, null, deps.nowMs);
+        const source = (provider.subscriptionAccountPool ?? provider.subscriptionPool ?? provider.id) === 'openai'
+          ? codexSource(provider, null, deps.nowMs) : claudeSource(provider, null, deps.nowMs);
         return { ...source, account: null, accountKeys: [], pooled: true };
       }
       if (pool?.configured) {
@@ -423,7 +424,7 @@ export function subscriptionPoolSources(provider: ProviderView, pool: Subscripti
     const signedIn = account.status === 'ready' || account.status === 'limited';
     const usage = signedIn ? account.usage : undefined;
     const view = { ...provider, openAiAccount: undefined, subscriptionAccount: undefined };
-    const source = provider.id === 'openai'
+    const source = (pool.kind ?? provider.subscriptionAccountPool ?? provider.subscriptionPool ?? provider.id) === 'openai'
       ? codexSource(view, codexPoolPayload(usage?.codex), nowMs)
       : claudeSource(view, usage?.claude ?? null, nowMs);
     const identity = account.identity?.trim() || null;

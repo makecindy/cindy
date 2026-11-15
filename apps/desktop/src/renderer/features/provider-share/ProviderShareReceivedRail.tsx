@@ -201,7 +201,6 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
 
   const leave = async () => {
     const ok = await confirm({
-      presentation: 'standard',
       title: t('providerShare.received.leaveConfirm.title', {
         name: share.owner.displayName,
         provider: share.providerLabel,

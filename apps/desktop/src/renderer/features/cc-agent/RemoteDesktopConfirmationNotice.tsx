@@ -17,7 +17,7 @@ export function RemoteDesktopConfirmationNotice() {
         size={18}
       />
       <div className="min-w-0">
-        <p className="text-14 font-semibold leading-tight text-[var(--chat-input-text)]">
+        <p className="text-14 font-medium leading-tight text-[var(--chat-input-text)]">
           {t('ccAgent.remoteDesktopConfirmation.title')}
         </p>
         <p className="mt-1 text-12 leading-relaxed text-[var(--status-bar-meta)]">

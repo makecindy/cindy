@@ -138,6 +138,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private readonly cardActionHandlers = new Set<CardActionHandler>();
   private readonly statusHandlers = new Set<StatusHandler>();
   private readonly gateway: DiscordGateway;
+  private readonly questionRespondents = new Map<string, { respondent: string; closed: boolean }>();
   private readonly cardSpecs = new Map<string, InteractiveCardSpec>();
 
   private status: IMStatus = { kind: 'idle' };
@@ -203,6 +204,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const noticeDeadline = Date.now() + RUNTIME_NOTICE_SHUTDOWN_BUDGET_MS;
     await this.waitForRuntimeOnlineNotice(noticeDeadline);
     this.configVersion += 1;
+    this.questionRespondents.clear();
     await this.announceRuntimeOffline(noticeDeadline);
     await this.destroyGateway();
     this.setStatus({ kind: 'idle' });
@@ -270,6 +272,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (token) {
       this.connectionRetry.reset();
       this.configVersion += 1;
+      this.questionRespondents.clear();
       const wasConnectedBeforeReconnect = this.status.kind === 'connected';
       await this.destroyGateway();
       this.ownerUserId = nextOwnerUserId;
@@ -301,6 +304,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       }
     } else if (nextOwnerUserId !== this.ownerUserId) {
       this.configVersion += 1;
+      this.questionRespondents.clear();
       this.ownerUserId = nextOwnerUserId;
     }
     return configResult();
@@ -322,6 +326,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   async disconnect(): Promise<{ status: IMStatus }> {
     this.connectionRetry.reset();
     this.configVersion += 1;
+    this.questionRespondents.clear();
     const disconnectedNoticeConfigVersion = this.configVersion;
     const disconnectedOwnerUserId = this.ownerUserId;
     this.ownerUserId = '';
@@ -476,15 +481,24 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   async sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
+    opts?: { questionRespondentId?: string },
   ): Promise<{ messageId: string }> {
+    const generation = this.configVersion;
     const channel = await this.requireTargetChannel(userId);
     const sent = await channel.send(buildCardMessage(spec));
     const messageId = encodeMessageId(channel.id, sent.id);
     this.cardSpecs.set(messageId, cloneCardSpec(spec));
+    if (opts?.questionRespondentId && generation === this.configVersion) {
+      this.questionRespondents.set(messageId, { respondent: opts.questionRespondentId, closed: false });
+      while (this.questionRespondents.size > 512) this.questionRespondents.delete(this.questionRespondents.keys().next().value!);
+    }
     return { messageId };
   }
 
-  async updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void> {
+  async updateInteractiveCard(messageId: string, spec: InteractiveCardSpec, opts?: { questionRespondentId?: string; questionClosed?: boolean }): Promise<void> {
+    const question = this.questionRespondents.get(messageId);
+    if (opts?.questionRespondentId && (!question || question.respondent !== opts.questionRespondentId || question.closed)) throw new Error('stale question');
+    if (opts?.questionClosed && question) question.closed = true;
     const message = await this.fetchMessage(messageId);
     await message.edit({ content: '', ...buildCardMessage(spec) });
     this.cardSpecs.set(messageId, cloneCardSpec(spec));
@@ -1147,14 +1161,17 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       return;
     }
     // 点击人必须是主人：频道里谁都看得到卡片，但审批 / 控制只认主人身份（不是频道管理员）。
-    if (i.user.id !== this.ownerUserId) {
+    const question = this.questionRespondents.get(event.messageId);
+    const isQuestion = event.buttonId.startsWith('aq:') || (event.buttonId === DISCORD_CARD_PAGE_BUTTON_ID && !!question);
+    if (isQuestion ? !question || question.closed || question.respondent !== i.user.id : i.user.id !== this.ownerUserId) {
       if (i.guildId) await this.notifyOwnerOnlyInteraction(i);
       return;
     }
     if (i.guildId) {
       // 频道已被移出白名单：旧卡不再生效，不能借历史卡片继续驱动该频道的任务。
       const lane = decodeDiscordLaneUserId(event.senderId);
-      if (!lane || !isDiscordLaneEnabled(this.readChannelAccess(), lane)) {
+      if (!lane || !isDiscordLaneEnabled(this.readChannelAccess(), lane)
+        || (isQuestion && !isDiscordLaneAdmitted(this.readChannelAccess(), lane, i.user.id === this.ownerUserId))) {
         await this.notifyExpiredInteraction(i);
         return;
       }
@@ -1164,6 +1181,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       return;
     }
 
+    event.actorId = i.user.id;
     for (const h of this.cardActionHandlers) {
       try {
         h(event);

@@ -44,7 +44,8 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 首次接触本仓、需要定位功能代码位置或判断新代码归属模块时，先读仓库地图
   `docs/dev-rules/repo-map.md`。
 - 只为检查界面而需要启动 Desktop 或 Mobile 模拟器、且不需要真实账号时，用 `--mock`
-  免登录模拟数据启动；新增或修改模拟任务、`--mock` 行为前先读 `docs/dev-rules/ui-mock-data.md`。
+  免登录模拟数据启动。`--mock` 不阻止 Desktop 调用真实模型（会沿用本机命令行登录），只看
+  界面时不要在里面发送消息；新增或修改模拟任务、`--mock` 行为前先读 `docs/dev-rules/ui-mock-data.md`。
 - 首次安装、修复依赖或准备新 worktree 时，必须先读
   `docs/dev-rules/environment-setup.md`。
 - 首次理解模型配置架构，新增模型／供应商，更新模型窗口／价格／推理档位／默认值／本地推荐，
@@ -157,8 +158,8 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   Cindy Pi 比同版本原生 Pi 更难用。完整裁决见 `docs/dev-rules/pi-harness.md`「Pi 上游 GUI
   非退化红线」。
 - 修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、面板供片、网络／凭证／文件交接、
-  插件市场分页读取、安装扫描、实例核对或使用统计，或身份卡、管子协议、打包与编写手册前，
-  必须先读 `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何
+  插件市场分页读取、安装扫描、实例核对、使用统计或远程插件状态读取，或身份卡、管子协议、
+  打包与编写手册前，必须先读 `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何
   插件系统改动（含批准状态 schema、指纹格式、manifest 校验、安装布局、包格式）都必须
   向下兼容——用户升级后什么都不做，已装、已批准、已启用的插件必须照旧可用，**绝不允许
   要求用户重新安装、重新确认权限或重新配置**。做不到就必须自带从旧版数据的自动迁移；
@@ -177,9 +178,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   `docs/dev-rules/plugin-library-storage.md`。
 - 修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）前，必须先读
   `docs/dev-rules/cindy-updater.md`。
-- 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、客户端本地读取／扫描、
-  缓存与轮询性能、跨平台（macOS／Windows）行为，或任何 UI 文案的 i18n 落地前，必须先读
-  `docs/dev-rules/engineering-conventions.md`。
+- 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、客户端本地或远程数据读取／
+  扫描、变化通知后的刷新、界面频繁触发的持久化写入、缓存与轮询性能、跨平台（macOS／Windows）
+  行为，或任何 UI 文案的 i18n 落地前，必须先读 `docs/dev-rules/engineering-conventions.md`。
 - 新增一处每个功能都要来登记的列表、台账、注册表或版本号前，先读
   `docs/dev-rules/engineering-conventions.md` §9：不规定「加在开头／末尾」，不让多个 PR
   改同一行；一项一个文件、按键排序或从内容推导。

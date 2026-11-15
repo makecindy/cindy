@@ -8,6 +8,7 @@ export const MODEL_GROUPS_IPC = {
   GET: 'model-groups:get',
   SET: 'model-groups:set',
   RESOLVE: 'model-groups:resolve',
+  COMMIT: 'model-groups:commit',
   /** 记下这个任务是经哪条路线建的、用着哪个候选(撞配额时据此提议换来源)。 */
   BIND_SESSION: 'model-groups:bind-session',
   /** 撞配额时同一条路线里还能接着用的下一个来源；没有为 null。 */
@@ -124,7 +125,10 @@ export interface ModelGroupAppliedException {
   viaRouteName?: string;
 }
 
-export type ModelGroupResolveResult =
+export type ModelGroupResolveResult = {
+  /** 本机选路凭据：实际采用后提交；预览没有凭据。 */
+  decisionId?: string;
+} & (
   | {
       outcome: 'routed';
       groupName: string;
@@ -138,7 +142,7 @@ export type ModelGroupResolveResult =
       exceptions?: ModelGroupAppliedException[];
     }
   /** missing = 这条路线已被删除；unavailable = 里面没有现在能用的模型。两者都沿用用户原来选的模型。 */
-  | { outcome: 'missing' | 'unavailable'; groupName: string; trace: ModelGroupTraceEntry[] };
+  | { outcome: 'missing' | 'unavailable'; groupName: string; trace: ModelGroupTraceEntry[] });
 
 /** 撞配额时「换到下一个来源继续」的提议(model-groups.md §6.1)。只提议与任务同一运行位置(本机)的来源。 */
 export interface ModelGroupSwitchOffer {
@@ -160,6 +164,11 @@ export interface ModelGroupResolveRequest {
   dryRun?: boolean;
   /** 第一条消息的情况；时间由主进程自己取，不信界面传来的。 */
   context?: { hasImages?: boolean };
+  /**
+   * 只在这个运行位置的来源里选(agentDeviceId null = 本机)：进行中的任务里选模式时用，任务换不了电脑。
+   * 省略 = 不限(新任务)。
+   */
+  location?: { agentDeviceId: string | null };
 }
 
 function text(value: unknown, max: number): string {

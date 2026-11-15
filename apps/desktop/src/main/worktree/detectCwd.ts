@@ -3,23 +3,27 @@ import path from 'node:path';
 import { currentOperationBudget, operationWait } from '../utils/operationBudget.js';
 import { createCwdProbeScheduler } from './cwdProbeScheduler.js';
 import { realpathWorkingDirectory } from '../workdir-probe-host/index.js';
-import { gitExec, GitExecError } from './gitExec.js';
+import { gitExec, GitExecError, type GitExecOpts } from './gitExec.js';
 import { gitPathOutput } from './gitPathOutput.js';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
 import type { DetectCwdResp } from './types.js';
 
 const scheduledDetectCwd = createCwdProbeScheduler(detectCwdOnce);
-export function detectCwd(cwd: string): Promise<DetectCwdResp> {
+type DetectCwdOptions = Pick<GitExecOpts, 'repairSafeDirectory'>;
+// Read-only callers must never borrow a pending probe that can change global trust.
+const scheduledReadOnlyDetectCwd = createCwdProbeScheduler((cwd) => detectCwdOnce(cwd, { repairSafeDirectory: false }));
+export function detectCwd(cwd: string, opts?: DetectCwdOptions): Promise<DetectCwdResp> {
   // Automatic snapshots own cancellation. Never lend their abortable probe to
   // an unrelated UI request (or borrow an unabortable pending UI probe).
-  return currentOperationBudget() ? operationWait(detectCwdOnce(cwd)) : scheduledDetectCwd(cwd);
+  if (currentOperationBudget()) return operationWait(detectCwdOnce(cwd, opts));
+  return opts?.repairSafeDirectory === false ? scheduledReadOnlyDetectCwd(cwd) : scheduledDetectCwd(cwd);
 }
 
 // Share the work budget across realpath and every Git query. Git's additional
 // 3s process-tree cleanup still leaves response headroom under Mobile's 15s wait.
 const CWD_PROBE_TIMEOUT_MS = 10_000;
 
-async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
+async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<DetectCwdResp> {
   const deadline = performance.now() + CWD_PROBE_TIMEOUT_MS;
   const probeGit = async (args: readonly string[], dir?: string) => {
     currentOperationBudget()?.check();
@@ -29,7 +33,7 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
         args, exitCode: null, stdout: '', stderr: 'directory probe deadline exceeded', timedOut: true,
       });
     }
-    return gitExec(args, dir, { timeoutMs, deadlineAtMs: deadline });
+    return gitExec(args, dir, { ...opts, timeoutMs, deadlineAtMs: deadline });
   };
   // Git resolves relative metadata paths from the physical process cwd. A
   // symlink spelling can otherwise make an ordinary repo look like a linked

@@ -15,7 +15,10 @@ Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture
 
 Claude Code、Codex、Pi 共用 Maker 的启动失败清理契约：只有明确未启动进程或已确认
 进程退出时，adapter 才返回 `AgentStartupStoppedError`；Maker 释放本次启动的目录租约，
-并向调用方还原原始错误。准备环境失败也必须进入该契约，不能把尚未启动的任务永久
+并默认向调用方还原原始错误。宿主可在本次 `CreateSessionOptions` 显式设置
+`preserveStartupStoppedError` 保留真实的退出证明，供自动化首次启动在账号准入确已改变后
+最多重试一次；此标记不进入 adapter 或远程协议，普通错误与清理未完成错误不提供退出证明。
+准备环境失败也必须进入该契约，不能把尚未启动的任务永久
 记为可能仍占用目录。鉴权失败保留原 `AgentNotAuthenticatedError` 类型。
 
 本地 SDK 已接收启动调用、已观察到进程创建、或远端启动请求已发出后，普通异常不是

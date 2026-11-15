@@ -370,6 +370,8 @@ export interface SessionsSetStatusArgs {
 export interface SessionsSetTerminalStatusArgs {
   sessionId: string;
   status: 'archived' | 'deleted';
+  /** Internal automatic housekeeping only; never accepted as renderer metadata. */
+  idleArchiveCutoff?: number;
 }
 
 export interface SessionsSetTerminalStatusResult extends Omit<SessionsSetStatusResultItem, 'status'> {
@@ -395,6 +397,8 @@ export interface ContextRebuildArgs {
   updatedAt: number;
   /** 读历史时看到的 sessions.cleared_at；提交时必须仍相同，否则 /clear 竞态整单回滚。 */
   expectedClearedAt?: number | null;
+  /** Resume recovery clears only this rejected native ID; it never rewrites route settings. */
+  expectedSdkSessionId?: string;
   /** Same transaction as the durable handoff; source SDK ownership must still match. */
   replacementRoute?: {
     expectedSdkSessionId: string;

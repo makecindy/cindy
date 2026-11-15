@@ -78,6 +78,7 @@ function statusHint(status: NonNullable<WebhookStatus>): string | null {
   if (status.problem === 'suspended') return 'scheduler.webhook.suspended';
   if (status.problem === 'quota') return 'scheduler.webhook.quotaExhausted';
   if (status.problem === 'limit') return 'scheduler.webhook.endpointLimit';
+  if (status.problem === 'unsupported') return 'scheduler.webhook.unsupportedFormat';
   if (status.problem === 'failed') return 'scheduler.webhook.urlUnavailable';
   if (!status.url) return 'scheduler.webhook.preparing';
   if (!status.connected) return 'scheduler.webhook.offline';

@@ -43,7 +43,8 @@ export function ExtraDirsButton({
   open,
   onOpenChange,
   panel,
-  maxContentHeight,
+  // 默认聊天沿用建议面板原来的 400px 上限；新建任务页可传更小值。
+  maxContentHeight = 400,
   disabled,
   dense = false,
   visualVariant = 'default',
@@ -60,7 +61,10 @@ export function ExtraDirsButton({
       maxContentHeight={maxContentHeight}
       panelClassName="p-0"
       panelAriaLabel={t('extraDirs.menuAria')}
-      wrapperClassName="shrink-0"
+      wrapperClassName={cn(
+        'max-w-full shrink',
+        count > 0 && hasReferenceDirs ? 'min-w-[36px]' : 'min-w-[30px]',
+      )}
       trigger={
         <Tip
           text={count === 0 ? t('extraDirs.tooltipEmpty') : t('extraDirs.tooltipCount', { count })}
@@ -82,7 +86,7 @@ export function ExtraDirsButton({
               open &&
                 'border-[var(--border-default)] bg-[var(--composer-pill-bg)]',
               count > 0 && hasReferenceDirs
-                ? 'min-w-max justify-center gap-1 px-2.5'
+                ? 'min-w-[36px] max-w-full shrink justify-center gap-1 overflow-hidden px-2.5'
                 : 'w-[30px] justify-center p-0',
             )}
             aria-label={t('extraDirs.menuAria')}
@@ -91,7 +95,7 @@ export function ExtraDirsButton({
             {count > 0 && hasReferenceDirs && (
               <span
                 className={cn(
-                  'font-normal tabular-nums',
+                  'min-w-0 truncate font-normal tabular-nums',
                   dense ? 'text-12' : 'text-13',
                 )}
               >

@@ -47,6 +47,12 @@
     "footer": "Los registros permanecen en este teléfono hasta por 7 días u 8 MB y nunca se cargan automáticamente. Los registros exportados excluyen el texto de la conversación y las credenciales; las cargas envían solo registros de ejecución filtrados e información de versión."
   },
   "title": "Configuración",
+  "promptRecommendation": {
+    "label": "Sugerencias de entrada",
+    "description": "Sugerir qué escribir después de una respuesta. Solo se aplica a este teléfono.",
+    "saveFailed": "El ajuste se aplica por ahora, pero no se pudo guardar.",
+    "reset": "Restablecer valor predeterminado"
+  },
   "appearance": {
     "title": "Apariencia",
     "modeLabel": "Modo de apariencia",
@@ -108,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Prosa clásica (predeterminado)",
+        "prose": "Prosa clásica",
         "tang-poetry": "Poesía Tang",
         "song-ci": "Ci de los Song",
         "yuan-qu": "Qu de los Yuan",
@@ -424,7 +430,11 @@
       "voice": "Mantener para hablar",
       "scrollKeys": "Stick derecho",
       "scroll": "Desplazar",
-      "page": "Pasar página"
+      "page": "Pasar página",
+      "triggerScrollKeys": "L2 / R2 + cruceta arriba/abajo",
+      "triggerScroll": "Desplazar contenido visible",
+      "sendText": "Enviar texto escrito",
+      "taskHint": "Estos atajos funcionan en las páginas de sesión. Si un botón está asignado a voz, esa función tiene prioridad; al soltarlo, el texto queda en el cuadro de mensaje."
     }
   }
 }
