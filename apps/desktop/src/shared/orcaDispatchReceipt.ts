@@ -39,8 +39,29 @@ export type OrcaDispatchSystemRecord = OrcaDispatchReceipt | OrcaDispatchClaimNo
 /** 回执摘要长度上限，避免把整段派单正文塞进卡片。 */
 export const ORCA_DISPATCH_RECEIPT_SUMMARY_MAX = 240;
 
+/**
+ * 摘要是一句旁证，不是正文：markdown 标记在卡片里只会变成噪音（`##`、反引号、`**` 原样露出）。
+ * 在写入端剥一次，卡片、历史与导出三处读到的就是同一句干净的话。
+ */
+function stripMarkupForSummary(message: string): string {
+  return message
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function buildOrcaDispatchReceiptSummary(message: string): string {
-  const text = message.replace(/\s+/g, ' ').trim();
+  const text = stripMarkupForSummary(message);
   return text.length > ORCA_DISPATCH_RECEIPT_SUMMARY_MAX
     ? `${text.slice(0, ORCA_DISPATCH_RECEIPT_SUMMARY_MAX - 1)}…`
     : text;

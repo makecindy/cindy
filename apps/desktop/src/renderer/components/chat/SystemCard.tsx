@@ -1403,34 +1403,73 @@ function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
         : '';
   const queued = data?.delivery === 'queued';
   const summary = typeof data?.summary === 'string' ? data.summary : '';
+  const [expanded, setExpanded] = useState(false);
   const label = unverified
     ? t('chat.systemCard.orcaDispatch.unverified')
     : queued
       ? t('chat.systemCard.orcaDispatch.queued', { worker })
       : t('chat.systemCard.orcaDispatch.sent', { worker });
+  // 升级卡是要人行动的信息，保持多行不截断；普通回执压成一行事实，点开看三行。
+  if (unverified) {
+    return (
+      <div
+        className="flex w-full select-none flex-col gap-1 py-2 text-center"
+        role="note"
+        aria-label={label}
+      >
+        <span className="inline-flex items-center justify-center gap-2 text-12 leading-[1.33] text-[var(--error-fg)]">
+          {label}
+        </span>
+        {summary && (
+          <span
+            className="mx-auto w-full max-w-[86%] text-left text-11 leading-[1.33] whitespace-pre-line text-[var(--text-secondary)]"
+            title={summary}
+          >
+            {summary}
+          </span>
+        )}
+      </div>
+    );
+  }
   return (
     <div
-      className="flex w-full select-none flex-col gap-1 py-2 text-center"
+      className="flex w-full select-none justify-center py-2 text-center"
       role="note"
       aria-label={label}
     >
-      <span
-        className={cn(
-          'inline-flex items-center justify-center gap-2 text-12 leading-[1.33]',
-          unverified ? 'text-[var(--error-fg)]' : 'text-[var(--text-tertiary)]',
-        )}
-      >
-        {label}
-      </span>
-      {summary && (
-        <span
+      {summary ? (
+        <button
+          type="button"
           className={cn(
-            'mx-auto max-w-[86%] text-11 leading-[1.33] whitespace-pre-line text-[var(--text-tertiary)]',
-            unverified ? 'text-left' : 'truncate',
+            'mx-auto flex min-h-6 w-full max-w-[92%] justify-center gap-1.5 px-1 text-12 leading-[1.33] text-[var(--text-tertiary)]',
+            expanded ? 'items-start' : 'items-center',
           )}
-          title={summary}
+          onClick={() => setExpanded(prev => !prev)}
+          aria-expanded={expanded}
+          title={expanded ? undefined : summary}
         >
-          {summary}
+          <span className="shrink-0 text-[var(--text-secondary)]">{label}</span>
+          <span aria-hidden className="shrink-0">
+            ·
+          </span>
+          <span
+            className={cn(
+              'min-w-0 text-left',
+              expanded ? 'line-clamp-3 whitespace-normal' : 'truncate',
+            )}
+          >
+            {summary}
+          </span>
+          <ChevronRight
+            size={11}
+            strokeWidth={1.8}
+            aria-hidden
+            className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}
+          />
+        </button>
+      ) : (
+        <span className="inline-flex items-center justify-center gap-2 text-12 leading-[1.33] text-[var(--text-secondary)]">
+          {label}
         </span>
       )}
     </div>
