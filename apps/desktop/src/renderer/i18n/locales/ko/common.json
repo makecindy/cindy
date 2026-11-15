@@ -8197,7 +8197,7 @@
         "hostTools_discovery": "호스트 기능 보기",
         "hostTools_discoveryDetail": "실행 컴퓨터가 제공하는 서비스와 이 플러그인이 선언하고 승인받은 도구 그룹을 읽습니다. 다른 플러그인을 설치하거나 비활성화하거나 권한을 취소할 수 없습니다.",
         "hostTools_browser": "브라우저 제어",
-        "hostTools_browserDetail": "Cindy에서 선택한 브라우저의 페이지를 읽고 조작합니다. 내 브라우저로 전환, 파일 업로드 등 민감한 작업은 계속 Cindy에서 확인합니다.",
+        "hostTools_browserDetail": "Cindy에서 선택한 브라우저의 페이지를 읽고 조작합니다. 내 브라우저로 전환하고 로그인된 페이지에 접근하거나 파일을 업로드할 수 있습니다.",
         "hostTools_computer": "컴퓨터 제어",
         "hostTools_computerDetail": "Cindy의 컴퓨터 도구로 창을 보고 키보드와 마우스를 조작합니다. 시스템 권한, 민감한 입력 보호 및 호스트 위험 규칙이 계속 적용됩니다.",
         "hostTools_ssh": "SSH 연결",

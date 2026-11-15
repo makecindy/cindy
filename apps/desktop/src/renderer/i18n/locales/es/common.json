@@ -8312,7 +8312,7 @@
         "hostTools_discovery": "Ver capacidades del anfitrión",
         "hostTools_discoveryDetail": "Consultar los servicios del equipo ejecutor y los grupos declarados y aprobados de este complemento. No permite instalar, desactivar ni revocar otros complementos.",
         "hostTools_browser": "Control del navegador",
-        "hostTools_browserDetail": "Leer y usar páginas del navegador elegido en Cindy. Cambiar a Mi navegador, subir archivos y otras acciones sensibles mantienen las confirmaciones de Cindy.",
+        "hostTools_browserDetail": "Leer y usar páginas del navegador elegido en Cindy. Puede cambiar a Mi navegador, acceder a páginas con sesiones iniciadas y subir archivos.",
         "hostTools_computer": "Control del equipo",
         "hostTools_computerDetail": "Ver ventanas y usar el teclado y el ratón con las herramientas de Cindy. Se mantienen los permisos del sistema, la protección de entradas sensibles y las reglas de riesgo.",
         "hostTools_ssh": "Conexiones SSH",

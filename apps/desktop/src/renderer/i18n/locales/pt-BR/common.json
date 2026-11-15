@@ -8312,7 +8312,7 @@
         "hostTools_discovery": "Ver capacidades do host",
         "hostTools_discoveryDetail": "Consultar os serviços do computador executor e os grupos declarados e aprovados deste plugin. Não permite instalar, desativar nem revogar outros plugins.",
         "hostTools_browser": "Controle do navegador",
-        "hostTools_browserDetail": "Ler e operar páginas no navegador selecionado na Cindy. Mudar para Meu navegador, enviar arquivos e outras ações sensíveis mantêm as confirmações da Cindy.",
+        "hostTools_browserDetail": "Ler e operar páginas no navegador selecionado na Cindy. Pode mudar para Meu navegador, acessar páginas com sessão iniciada e enviar arquivos.",
         "hostTools_computer": "Controle do computador",
         "hostTools_computerDetail": "Ver janelas e usar teclado e mouse pelas ferramentas da Cindy. Continuam valendo as permissões do sistema, a proteção de entradas sensíveis e as regras de risco.",
         "hostTools_ssh": "Conexões SSH",

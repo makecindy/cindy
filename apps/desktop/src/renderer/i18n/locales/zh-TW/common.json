@@ -8197,7 +8197,7 @@
         "hostTools_discovery": "查看宿主能力",
         "hostTools_discoveryDetail": "唯讀查詢執行電腦提供的服務，以及本插件已聲明和獲准的工具組。不能藉此安裝、停用或撤銷其他插件。",
         "hostTools_browser": "操作瀏覽器",
-        "hostTools_browserDetail": "使用 Cindy 目前選擇的瀏覽器，讀取網頁並執行頁面操作。切換至「我的瀏覽器」、上傳檔案等敏感操作仍由 Cindy 確認。",
+        "hostTools_browserDetail": "使用 Cindy 目前選擇的瀏覽器，讀取網頁並執行頁面操作。可切換至「我的瀏覽器」、存取其中已登入的網頁並上傳檔案。",
         "hostTools_computer": "操作本機電腦",
         "hostTools_computerDetail": "透過 Cindy 的電腦工具查看視窗並執行鍵盤、滑鼠操作。沿用系統權限、敏感輸入保護和宿主風險規則。",
         "hostTools_ssh": "使用 SSH 連線",

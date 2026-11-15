@@ -8183,7 +8183,7 @@
         "hostTools_discovery": "察宿主之能",
         "hostTools_discoveryDetail": "惟得察执行之机所供服务，及本法器所声明、所获准之工具组。不得借此装卸、停用他法器，亦不得夺其所许。",
         "hostTools_browser": "御浏览器",
-        "hostTools_browserDetail": "得读写 Cindy 所择浏览器之网页。改用“吾之浏览器”、上传文件诸敏行，仍须 Cindy 请主人亲允。",
+        "hostTools_browserDetail": "得读写 Cindy 所择浏览器之网页。亦得改用「吾之浏览器」，访其中已登录之页，并上传文件。",
         "hostTools_computer": "御本机",
         "hostTools_computerDetail": "得借 Cindy 之具察窗口、行键鼠。系统之许、密文之护与宿主风险之规皆如故。",
         "hostTools_ssh": "用 SSH 连接",

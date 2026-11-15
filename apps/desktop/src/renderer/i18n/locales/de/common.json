@@ -8240,7 +8240,7 @@
         "hostTools_discovery": "Host-Fähigkeiten anzeigen",
         "hostTools_discoveryDetail": "Dienste des ausführenden Computers sowie deklarierte und genehmigte Werkzeuggruppen dieses Plugins lesen. Andere Plugins werden damit weder installiert noch deaktiviert oder widerrufen.",
         "hostTools_browser": "Browser bedienen",
-        "hostTools_browserDetail": "Seiten im von Cindy gewählten Browser lesen und bedienen. Der Wechsel zu Mein Browser, Datei-Uploads und andere sensible Aktionen behalten Cindys Bestätigungen bei.",
+        "hostTools_browserDetail": "Seiten im von Cindy gewählten Browser lesen und bedienen. Kann zu Mein Browser wechseln, Webseiten mit deinen angemeldeten Konten bedienen und Dateien hochladen.",
         "hostTools_computer": "Computer bedienen",
         "hostTools_computerDetail": "Fenster anzeigen und Tastatur und Maus über Cindys Computer-Werkzeuge bedienen. Systemberechtigungen, Schutz sensibler Eingaben und Host-Risikoregeln gelten weiterhin.",
         "hostTools_ssh": "SSH-Verbindungen",

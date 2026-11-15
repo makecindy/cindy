@@ -8240,7 +8240,7 @@
         "hostTools_discovery": "View Host Capabilities",
         "hostTools_discoveryDetail": "Read the services provided by the execution computer and this plugin’s declared and approved tool groups. Cannot install, disable or revoke other plugins.",
         "hostTools_browser": "Browser Control",
-        "hostTools_browserDetail": "Read and operate pages in Cindy’s selected browser. Switching to My Browser, uploading files and other sensitive actions keep Cindy’s confirmations.",
+        "hostTools_browserDetail": "Read and operate pages in Cindy’s selected browser. Can switch to My Browser, access signed-in pages and upload files.",
         "hostTools_computer": "Computer Control",
         "hostTools_computerDetail": "View windows and use keyboard and mouse actions through Cindy’s computer tools. System permissions, sensitive input protection and Host risk rules still apply.",
         "hostTools_ssh": "SSH Connections",
