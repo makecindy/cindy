@@ -1275,9 +1275,11 @@ export class McpAppsHost {
   ): void {
     const view = this.view(caller, sessionId, id);
     const appModes = view.bridge.getAppCapabilities()?.availableDisplayModes;
+    // Inline is always allowed.
     if (
-      !view.context.availableDisplayModes?.includes(mode) ||
-      (appModes && !appModes.includes(mode))
+      mode !== 'inline' &&
+      (!view.context.availableDisplayModes?.includes(mode) ||
+        (appModes && !appModes.includes(mode)))
     )
       return;
     view.context = { ...view.context, displayMode: mode };

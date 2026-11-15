@@ -521,6 +521,22 @@ describe('2026-01-26 MCP Apps conformance against an independent local server', 
     );
     expect(f.peer.links).toEqual(['https://example.org/metrics', 'https://example.org/denied']);
   });
+  // #10625
+  it('always returns to inline when the user exits fullscreen', async () => {
+    const f = await fixture('http', true, ['fullscreen']);
+    expect(await f.peer.request('ui/request-display-mode', { mode: 'fullscreen' })).toEqual({
+      mode: 'fullscreen',
+    });
+    f.host.displayMode('renderer:conformance', 'task', f.document.viewId, 'inline');
+    await vi.waitFor(() =>
+      expect(f.peer.notifications.at(-1)).toEqual(
+        expect.objectContaining({
+          method: 'ui/notifications/host-context-changed',
+          params: expect.objectContaining({ displayMode: 'inline' }),
+        }),
+      ),
+    );
+  });
   it('honors App mode restrictions and sends updated environment as partial Host context', async () => {
     const f = await fixture('http', true, ['inline']);
     expect(await f.peer.request('ui/request-display-mode', { mode: 'fullscreen' })).toEqual({

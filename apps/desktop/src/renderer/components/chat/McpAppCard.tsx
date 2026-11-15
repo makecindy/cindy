@@ -425,6 +425,11 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [mode]);
+  // Exit locally; the modal blocks the window.
+  const exitFullscreen = () => {
+    setMode('inline');
+    void controllerRef.current?.displayMode('inline').catch(() => {});
+  };
   return (
     <dialog
       ref={card}
@@ -439,7 +444,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       aria-label={appTitle}
       onCancel={(event) => {
         event.preventDefault();
-        void controllerRef.current?.displayMode('inline').catch(() => {});
+        exitFullscreen();
       }}
     >
       <div className="flex min-h-9 items-center justify-between gap-3 px-3 text-13 text-[var(--text-secondary)]">
@@ -451,9 +456,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
             data-exit-fullscreen
             variant="secondary"
             size="sm"
-            onClick={() => {
-              void controllerRef.current?.displayMode('inline').catch(() => {});
-            }}
+            onClick={exitFullscreen}
           >
             {t('mcpApps.exitFullscreen')}
           </Button>

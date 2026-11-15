@@ -675,6 +675,8 @@ it.each(['light', 'dark'])('keeps the live App mounted while entering and leavin
     expect(dialog.getAttribute('aria-label')).toBe('Live form');
     expect(showModal).toHaveBeenCalledOnce();
     expect(document.activeElement).toBe(dialog.querySelector('[data-exit-fullscreen]'));
+    // #10625: host drops the request.
+    state.controllers[0].displayMode.mockImplementationOnce(async () => {});
     const cancel = new Event('cancel', { cancelable: true });
     await act(async () => { dialog.dispatchEvent(cancel); });
     expect(cancel.defaultPrevented).toBe(true);
