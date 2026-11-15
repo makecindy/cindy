@@ -15,11 +15,10 @@ interface Deps {
   connectionSources(): readonly ConnectionSource[];
   connectionSource(id: string): ConnectionSource | null;
   captureTarget(id: string): string | null;
-  confirm(input: { instanceKey: string; secretKey: string; source: GhostReusableSavedCredential; hosts: string[] }): Promise<boolean>;
   withMutationLock<T>(id: string, task: () => T | Promise<T>): Promise<T>;
 }
 
-/** Existing owner-scoped vault, source catalogue and native confirmation; no
+/** Existing owner-scoped vault, source catalogue and trusted selection; no
  * credential copies or grant store. The ordinary key carries a non-secret
  * marker so unused credentials keep their existing single-read path. */
 export class GhostSavedCredentialManager {
@@ -112,9 +111,6 @@ export class GhostSavedCredentialManager {
     const target = this.deps.captureTarget(id);
     const sourceTarget = this.deps.captureTarget(ref.instanceKey);
     if (!candidate || !target || !sourceTarget) return { ok: false, error: 'INVALID_CONFIG' };
-    if (!await this.deps.confirm({ instanceKey: id, secretKey: key, source: candidate.option, hosts: candidate.hosts })) {
-      return { ok: false, error: 'CANCELLED' };
-    }
     return this.deps.withMutationLock(id, () => {
       const current = this.candidate(id, key, ref);
       if (target !== this.deps.captureTarget(id) || sourceTarget !== this.deps.captureTarget(ref.instanceKey) ||

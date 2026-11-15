@@ -445,7 +445,7 @@ import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
 import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccounts.js';
 import { GhostSavedCredentialManager } from './ghostSavedCredentials.js';
-import { isReusableSavedSecret, type GhostReusableOauthAccount } from '../../shared/pluginAccountReuse.js';
+import { isReusableSavedSecret } from '../../shared/pluginAccountReuse.js';
 import { withGhostOauthMutationLock } from './ghostOauthMutationLock.js';
 import { createGhostOauthOwnerReconciliationGate } from './ghostOauthOwnerReconciliation.js';
 import { cancelActiveGhostOauthFlow } from './ghostOauthFlow.js';
@@ -6417,32 +6417,12 @@ function ghostReusableConnectionSources() {
   });
 }
 
-async function confirmGhostAccountReuse(input: { instanceKey: string; secretKey: string; source: GhostReusableOauthAccount; hosts: string[] }): Promise<boolean> {
-  const owner = activeOwnerScopeKey();
-  const parent = getDeepLinkMainWindow();
-  const ghost = findGhostForInstanceId(input.instanceKey);
-  if (isGhostBoundaryPending() || !ghost || !parent || parent.isDestroyed() || !isTrustedAppRendererWindow(parent)) return false;
-  const safe = (value: string) => sanitizeGhostNoticeText(value).replace(/\n+/g, ' ').slice(0, 200);
-  const decision = await dialog.showMessageBox(parent, {
-    type: 'question', title: t('settings.ghosts.detail.reuseAccountTitle'),
-    message: t('settings.ghosts.detail.reuseAccountConfirmMessage')
-      .replaceAll('{{name}}', () => safe(ghost.manifest.name))
-      .replaceAll('{{account}}', () => safe(input.source.label ?? input.source.accountId))
-      .replaceAll('{{source}}', () => safe(input.source.pluginName)),
-    detail: t('settings.ghosts.detail.reuseAccountConfirmDetail')
-      .replaceAll('{{hosts}}', () => input.hosts.join(', '))
-      .replaceAll('{{scopes}}', () => input.source.scopes.join('\n') || t('settings.ghosts.detail.reuseAccountUnknownScopes')),
-    buttons: [t('settings.ghosts.detail.reuseAccountUse'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
-  });
-  return decision.response === 0 && !isGhostBoundaryPending() && owner === activeOwnerScopeKey() && !parent.isDestroyed();
-}
-
 let ghostSavedCredentialManagerSingleton: GhostSavedCredentialManager | null = null;
 function getGhostSavedCredentialManager(): GhostSavedCredentialManager {
   return ghostSavedCredentialManagerSingleton ??= new GhostSavedCredentialManager({
     vault: { read: readGhostSecret, readStrict: readGhostSecretStrict, store: storeGhostSecret, remove: removeGhostSecret },
     connections: getGhostConnectionManager(), connectionSources: ghostReusableConnectionSources, connectionSource: ghostReusableConnectionSource,
-    captureTarget: ghostInstallMutationTargetFor, confirm: confirmGhostAccountReuse,
+    captureTarget: ghostInstallMutationTargetFor,
     withMutationLock: withActiveOwnerGhostOauthMutationLock,
   });
 }
@@ -6452,7 +6432,6 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
     ghostOauthManagerSingleton = new GhostOauthAccountManager({
       connectionSources: ghostReusableConnectionSources,
       connectionSource: ghostReusableConnectionSource,
-      confirmAccountReuse: confirmGhostAccountReuse,
       vault: {
         read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),
         readStrict: (ghostId, storageKey) => readGhostSecretStrict(ghostId, storageKey),

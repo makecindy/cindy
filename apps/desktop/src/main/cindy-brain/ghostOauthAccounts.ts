@@ -119,8 +119,6 @@ export interface GhostOauthAccountManagerDeps {
   connectionSources?(): readonly { instanceKey: string; name: string; manifest: GhostManifest }[];
   /** Same live checks for one exact instance; token/stream guards never enumerate the catalogue. */
   connectionSource?(instanceKey: string): { instanceKey: string; name: string; manifest: GhostManifest } | null;
-  /** Native owner confirmation; unavailable means reuse is denied. */
-  confirmAccountReuse?(input: { instanceKey: string; secretKey: string; source: GhostReusableOauthAccount; hosts: string[] }): Promise<boolean>;
   vault: GhostOauthVault;
   fetchImpl: typeof fetch;
   /** 拉起系统浏览器(仅 connect 用;生产注入 shell.openExternal)。 */
@@ -871,8 +869,6 @@ export class GhostOauthAccountManager {
       this.reuseTargetCurrent(instanceKey, secretKey, decl, target) &&
       this.reuseTargetCurrent(ref.instanceKey, ref.secretKey, source.secret.oauth, sourceTarget) &&
       this.resolveReusableAccount(instanceKey, secretKey, decl, ref) !== null;
-    const selection = { ...ref, pluginName: source.source.name, label: source.row.displayLabel ?? source.row.label, scopes: [...source.scopes] };
-    if (!await this.deps.confirmAccountReuse?.({ instanceKey, secretKey, source: selection, hosts: source.targetHosts })) return { ok: false, error: 'CANCELLED' };
     return this.withMutationLock(instanceKey, () => {
       if (!current()) return { ok: false as const, error: 'INVALID_CONFIG' as const };
       const manifest = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey)));

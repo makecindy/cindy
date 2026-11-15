@@ -177,8 +177,7 @@ export function createHostPluginAuthorization(options: {
       vault: { read: secret.readGhostSecret, readStrict: secret.readGhostSecretStrict,
         store: secret.storeGhostSecret, remove: secret.removeGhostSecret },
       connections, connectionSources, connectionSource, captureTarget: target,
-      // Creating references remains a trusted Desktop-only action.
-      confirm: async () => false, withMutationLock,
+      withMutationLock,
     });
   }
   return {
