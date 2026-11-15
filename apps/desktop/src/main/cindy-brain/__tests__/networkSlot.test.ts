@@ -154,8 +154,8 @@ describe('plugin cloud metadata boundary', () => {
       const start = 'https://start.example.test';
       const wsOrigin = origin.replace(/^http/, 'ws');
       const socket = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('never-open');
-      const fetch = vi.fn(async (url: string) => new Response('{}', { status: url.startsWith(start) ? 302 : 200,
-        headers: url.startsWith(start) ? { location: origin } : { 'content-type': 'application/json' } }));
+      const fetch = vi.fn(async (url: string) => new Response('{}', { status: new URL(url).origin === start ? 302 : 200,
+        headers: new URL(url).origin === start ? { location: origin } : { 'content-type': 'application/json' } }));
       const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: [start, origin, wsOrigin] } }),
         fetchImpl: fetch,
       });
