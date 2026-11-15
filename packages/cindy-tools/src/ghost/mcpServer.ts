@@ -141,9 +141,10 @@ const D_MEDIA = [
 ].join("\n");
 
 const D_EVALUATE = [
-  "用决策模型做结构化判断，或用重排模型按查询给候选文本排序。",
-  "decisions 回答是否题、单选、按等级打分和图片框选；rerank 从多段候选文本中找出与问题最相关的几段。答案带概率，适合批量分类或打分、按阈值分流、用同一标准反复判断，或用户明确要求使用决策／重排模型。需要开放式写作、解释理由或多步推理时直接回答，不用本工具。",
-  "先调用 list_models 并传 api，结果包含可用模型和该接口的返回字段与用法说明；model_id、provider_id 用 list_models 返回的值。",
+  "调用决策模型或重排模型。",
+  "decisions 针对给定材料回答是否题、单选、等级评分和图片框选，只返回概率、选项、分数或坐标，不生成文字或理由；rerank 按查询给候选文本打相关度分数，只返回分数和下标。",
+  "结果是模型给出的概率和分数，不是最终结论；是否采用、下一步做什么由 Agent 结合任务自行判断。",
+  "先用 list_models 查可用模型（需传 api），结果同时说明该接口返回字段的含义；model_id、provider_id 用它返回的值。",
   "决策图片放在 state 顶层数组的 image_url.url，传受管地址或本机路径，不要自行转 Base64。",
   "调用按用量计费；请求超时或返回 outcomeKnown=false 时不要自动重提，以免重复扣费。",
 ].join("\n");
@@ -1435,8 +1436,8 @@ export function createCindyGhostsMcpServer(
       provider_id: z.string().max(128).optional().describe("list_models 返回的 provider_id"),
       questions: z.record(z.string(), z.object({
         type: z.enum(["noul", "choice", "score", "box"]).describe("noul 是否题；choice 单选；score 按等级打分；box 在图片中框出目标，需要图片且仅部分模型支持"),
-        instructions: z.string().describe("要判断什么，写清对象和标准"),
-        criteria: z.unknown().optional().describe("noul 可省略，或 {\"true\":\"成立的标准\",\"false\":\"不成立的标准\"}；choice 必填 {\"选项ID\":\"选项说明\"}；score 必填，按从低到高排列的等级说明数组，如 [\"平静\",\"不满\",\"愤怒\"]；box 省略。说明写成能直接据此判断的标准"),
+        instructions: z.string().describe("这道题要判断的内容"),
+        criteria: z.unknown().optional().describe("noul 可省略，或 {\"true\":\"成立的标准\",\"false\":\"不成立的标准\"}；choice 必填 {\"选项ID\":\"选项说明\"}；score 必填，按从低到高排列的等级说明数组，如 [\"平静\",\"不满\",\"愤怒\"]；box 省略"),
       })).optional().describe("decisions 必填：键是自定的问题 ID，answers 用同一 ID 返回"),
       state: z.unknown().optional().describe("decisions 必填的判断材料：字符串、对象或数组。图片仅放在顶层数组的 {type:'image_url',image_url:{url:'本机路径或受管地址'}} 中"),
       query: z.string().optional().describe("rerank 必填：用来衡量相关度的问题或查询"),
