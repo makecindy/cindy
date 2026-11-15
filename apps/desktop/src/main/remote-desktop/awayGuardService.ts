@@ -69,6 +69,8 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   let awayAfterMs = DEFAULT_AWAY_MS;
   let displaySleepReadAt = 0;
   let generation = 0;
+  let lockTransition = 0;
+  let coverLockTransition = 0;
   // The system lock screen takes the front; after unlock, give the owner back the
   // Cindy window they were using rather than whatever macOS picks.
   let restoreWindow: BrowserWindow | null = null;
@@ -80,7 +82,6 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     window.focus();
     app.focus({ steal: true });
   };
-  powerMonitor.on('unlock-screen', restoreFront);
   // Started on a locked screen there is no lock event yet; read the console session so
   // the guard does not hold the display on behind the lock screen.
   void exec('/usr/sbin/ioreg', ['-n', 'Root', '-d1'], { timeout: 5000, maxBuffer: 1024 * 1024 })
@@ -134,20 +135,28 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
       .catch(() => {});
   };
   const releaseHeld = () => {
+    // An OS unlock also proves the owner passed the system lock. Remember both
+    // transitions so a late failed lock attempt cannot put its old cover back.
+    lockTransition++;
     if (!heldUntilLocked) return;
     heldUntilLocked = false;
     masks.stop();
   };
   powerMonitor.on('lock-screen', releaseHeld);
+  powerMonitor.on('unlock-screen', () => {
+    releaseHeld();
+    restoreFront();
+  });
 
   const masks = new PrivacyScreen(
     // Nothing streams these masks; Agent screenshots read the windows behind them.
     () => {},
     // The helper or a mask ended on its own: never leave the desktop without a lock.
     async () => {
-      const locked = helperLocked || (await lockNow());
+      const transition = coverLockTransition;
+      const locked = helperLocked || transition !== lockTransition || (await lockNow());
       controller?.masksEnded();
-      if (locked) return;
+      if (locked || transition !== lockTransition) return;
       holdUntilLocked();
       return false;
     },
@@ -198,6 +207,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
         releaseHeld();
       }
       const current = ++generation;
+      coverLockTransition = lockTransition;
       restoreWindow = BrowserWindow.getFocusedWindow();
       try {
         await masks.set(true, () => current === generation);
@@ -208,8 +218,14 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     },
     lockAndHideMasks: async () => {
       generation++;
-      const locked = (monitor ? await monitor.lock() : false) || (await lockNow());
-      if (!locked) {
+      const transition = coverLockTransition;
+      // Do not send another lock shortcut after an intervening OS unlock.
+      const locked =
+        transition !== lockTransition ||
+        (monitor ? await monitor.lock() : false) ||
+        transition !== lockTransition ||
+        (await lockNow());
+      if (!locked && transition === lockTransition) {
         holdUntilLocked();
         throw new Error('DESKTOP_LOCK_FAILED');
       }
