@@ -10637,7 +10637,7 @@
         "manualDownload": "此安裝須手取新版。",
         "noUpdate": "當前頻道無適於此裝置之可裝更新。",
         "versionChanged": "當前頻道新版已易為 {{version}}，與所確認之 {{confirmed}} 不同，此番未裝。",
-        "notRestarted": "更新已下載，然此番未重啟（如其間辭出或易名籍）。",
+        "notRestarted": "更新已下載，{{appName}} 未重啟（如其間辭出或易名籍）。",
         "notReady": "已下載之更新不復可用。",
         "updaterNotStarted": "更新器未啟，{{appName}} 未重啟。",
         "unsupported": "此安裝環境不支應用內更新。",
