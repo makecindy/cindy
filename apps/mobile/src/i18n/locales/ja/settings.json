@@ -479,7 +479,7 @@
     "colors": {
       "default": "標準色（テーマに合わせる）"
     },
-    "directories": "ディレクトリ",
+    "directories": "プロジェクトのディレクトリ",
     "directoriesHint": "このプロジェクトの全タスクに次のターンから適用されます。タスク固有の既存ディレクトリは保持されます。",
     "removeDirectory": "ディレクトリを削除",
     "directoryPath": "ディレクトリのフルパス",

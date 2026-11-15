@@ -21601,7 +21601,7 @@
     "colors": {
       "default": "기본 색상 (테마에 맞춤)"
     },
-    "directories": "디렉터리",
+    "directories": "프로젝트 디렉터리",
     "directoriesHint": "다음 턴부터 이 프로젝트의 모든 작업에 적용됩니다. 기존 작업별 디렉터리는 유지됩니다.",
     "removeDirectory": "디렉터리 제거",
     "directoryPath": "전체 디렉터리 경로",

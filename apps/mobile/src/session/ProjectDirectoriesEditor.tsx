@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { View, Pressable, StyleSheet } from "react-native";
 import { useTranslation } from "react-i18next";
-import { X } from "lucide-react-native";
+import { Check, Copy, X } from "lucide-react-native";
 import type { ProjectDirectory } from "@cindy/maker-shared/project-alias-sync";
 import { Text, TextInput } from "@/components/AppText";
 import { MainWindowActionButton } from "@/components/MobilePrimitives";
@@ -15,11 +15,21 @@ import {
 } from "@/theme";
 
 export function ProjectDirectoriesEditor({
+  mainDirectory,
+  onMainDirectoryChange,
+  copied,
+  onCopy,
+  allowAdd = true,
   value,
   onChange,
   disabled,
   onBrowse,
 }: {
+  mainDirectory: string;
+  onMainDirectoryChange?: (path: string) => void;
+  copied: boolean;
+  onCopy: () => void;
+  allowAdd?: boolean;
   value: readonly ProjectDirectory[];
   onChange(value: ProjectDirectory[]): void;
   disabled: boolean;
@@ -34,6 +44,49 @@ export function ProjectDirectoriesEditor({
       <Text style={[styles.body, { color: colors.textPrimary }]}>
         {label("directories")}
       </Text>
+      {mainDirectory && (
+        <View style={[styles.item, { borderColor: colors.border }]}>
+          <View style={styles.row}>
+            <View style={{ flex: 1, gap: spacing.xs }}>
+              <Text
+                selectable
+                style={[styles.body, { color: colors.textPrimary }]}
+              >
+                {mainDirectory}
+              </Text>
+              <Text style={[styles.note, { color: colors.textSecondary }]}>
+                {label("mainDirectory")}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={label(
+                onMainDirectoryChange
+                  ? "removeDirectory"
+                  : copied
+                    ? "copied"
+                    : "copy",
+              )}
+              disabled={disabled}
+              style={styles.remove}
+              onPress={() => {
+                if (onMainDirectoryChange) {
+                  onMainDirectoryChange(value[0]?.path ?? "");
+                  onChange(value.slice(1));
+                } else onCopy();
+              }}
+            >
+              {onMainDirectoryChange ? (
+                <X size={iconSize.md} color={colors.textSecondary} />
+              ) : copied ? (
+                <Check size={iconSize.md} color={colors.textSecondary} />
+              ) : (
+                <Copy size={iconSize.md} color={colors.textSecondary} />
+              )}
+            </Pressable>
+          </View>
+        </View>
+      )}
       {value.map((item, index) => (
         <View
           key={item.path}
@@ -58,7 +111,7 @@ export function ProjectDirectoriesEditor({
           </View>
         </View>
       ))}
-      {value.length < 10 && (
+      {allowAdd && value.length < 10 && (
         <View style={styles.group}>
           {onBrowse && (
             <MainWindowActionButton
@@ -94,8 +147,15 @@ export function ProjectDirectoriesEditor({
               tone: "secondary",
               onPress: () => {
                 const clean = path.trim();
-                if (clean && !value.some((item) => item.path === clean))
-                  onChange([...value, { path: clean, access: "write" }]);
+                if (
+                  clean &&
+                  clean !== mainDirectory &&
+                  !value.some((item) => item.path === clean)
+                ) {
+                  if (!mainDirectory && onMainDirectoryChange)
+                    onMainDirectoryChange(clean);
+                  else onChange([...value, { path: clean, access: "write" }]);
+                }
                 setPath("");
               },
             }}

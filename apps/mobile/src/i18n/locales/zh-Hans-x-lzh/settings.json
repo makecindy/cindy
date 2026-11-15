@@ -479,7 +479,7 @@
     "colors": {
       "default": "本色（随主题）"
     },
-    "directories": "目錄",
+    "directories": "專案目錄",
     "directoriesHint": "自下轮起用于本项目诸任务；各任务既有目录仍存。",
     "removeDirectory": "移除目录",
     "directoryPath": "目录全径",

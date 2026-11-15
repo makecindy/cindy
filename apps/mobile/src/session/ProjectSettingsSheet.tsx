@@ -8,7 +8,7 @@ import {
 } from "@cindy/maker-shared/project-alias-sync";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, Pressable, StyleSheet, View } from "react-native";
-import { ChevronDown, Pencil, Copy, Check, Monitor } from "lucide-react-native";
+import { ChevronDown, Pencil, Check, Monitor } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import * as Clipboard from "expo-clipboard";
 import {
@@ -41,7 +41,15 @@ import {
   MainWindowActionButton,
   MainWindowOptionButton,
 } from "@/components/MobilePrimitives";
-import { useTheme, radius, spacing, typeScale, lineHeight, fontWeight, iconSize } from "@/theme";
+import {
+  useTheme,
+  radius,
+  spacing,
+  typeScale,
+  lineHeight,
+  fontWeight,
+  iconSize,
+} from "@/theme";
 import { FormSheet } from "./FormSheet";
 import {
   useRemoteProjectAliases,
@@ -362,7 +370,9 @@ export function ProjectSettingsSheet({
       if (browseTarget === "main") setDirectory(path);
       else
         setDirectories((previous) =>
-          previous.length >= 10 || previous.some((item) => item.path === path)
+          path === directory ||
+          previous.length >= 10 ||
+          previous.some((item) => item.path === path)
             ? previous
             : [...previous, { path, access: "write" }],
         );
@@ -588,69 +598,26 @@ export function ProjectSettingsSheet({
                     {deviceName || label("thisComputer")}
                   </Text>
                 </View>
-                <View style={styles.directoryRow}>
-                  <View style={styles.grow}>
-                    <Text style={[styles.note, noteColor]}>
-                      {label("mainDirectory")}
-                    </Text>
-                    {create ? (
-                      <View style={styles.grow}>
-                        <TextInput
-                          value={directory}
-                          onChangeText={setDirectory}
-                          editable={!disabled}
-                          autoCapitalize="none"
-                          autoCorrect={false}
-                          accessibilityLabel={label("mainDirectory")}
-                          placeholder={label("directoryPath")}
-                          placeholderTextColor={colors.textPlaceholder}
-                          style={inputStyle}
-                        />
-                        <MainWindowActionButton
-                          action={{
-                            label: label("browseDirectory"),
-                            tone: "secondary",
-                            disabled,
-                            onPress: () => browse("main"),
-                          }}
-                        />
-                      </View>
-                    ) : (
-                      <Text selectable style={[styles.path, textColor]}>
-                        {directory}
-                      </Text>
-                    )}
-                  </View>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={label(copied ? "copied" : "copy")}
-                    style={styles.copy}
-                    onPress={() =>
-                      void Clipboard.setStringAsync(directory)
-                        .then(() => setCopied(true))
-                        .catch(() => setError(label("failed")))
-                    }
-                  >
-                    {copied ? (
-                      <Check size={iconSize.lg} color={colors.textSecondary} />
-                    ) : (
-                      <Copy size={iconSize.lg} color={colors.textSecondary} />
-                    )}
-                  </Pressable>
-                </View>
-              </View>
-              {(snapshot?.settingsVersion ?? 0) >= 6 && (
                 <ProjectDirectoriesEditor
+                  mainDirectory={directory}
+                  copied={copied}
+                  onMainDirectoryChange={create ? setDirectory : undefined}
+                  onCopy={() =>
+                    void Clipboard.setStringAsync(directory)
+                      .then(() => setCopied(true))
+                      .catch(() => setError(label("failed")))
+                  }
+                  allowAdd={(snapshot?.settingsVersion ?? 0) >= 6}
                   value={directories}
                   onChange={setDirectories}
                   disabled={disabled}
                   onBrowse={
                     projectKey.startsWith("remote:")
                       ? undefined
-                      : () => browse("additional")
+                      : () => browse(directory ? "additional" : "main")
                   }
                 />
-              )}
+              </View>
             </>
           ) : (
             <>

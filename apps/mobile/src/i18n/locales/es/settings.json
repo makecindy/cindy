@@ -479,7 +479,7 @@
     "colors": {
       "default": "Predeterminado (según el tema)"
     },
-    "directories": "Directorios",
+    "directories": "Directorios del proyecto",
     "directoriesHint": "Se aplica a todas las tareas de este proyecto a partir del siguiente turno. Se conservan los directorios propios de cada tarea.",
     "removeDirectory": "Quitar directorio",
     "directoryPath": "Ruta completa del directorio",

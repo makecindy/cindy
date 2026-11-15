@@ -12,7 +12,6 @@ import {
   Check,
   Pencil,
   ChevronDown,
-  Copy,
   ImagePlus,
   Monitor,
   RotateCcw,
@@ -481,74 +480,28 @@ export function ProjectSettingsDialog({
                       <Monitor size={15} />
                       <span>{project.deviceLinkDeviceName || label('thisComputer')}</span>
                     </div>
-                    <div className="flex items-start gap-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="mb-1 text-13 text-[var(--text-secondary)]">
-                          {label('mainDirectory')}
-                        </p>
-                        {create ? (
-                          <div className="flex flex-col gap-2">
-                            <Input
-                              value={directory}
-                              placeholder={label('directoryPath')}
-                              aria-label={label('mainDirectory')}
-                              disabled={busy}
-                              onChange={setDirectory}
-                            />
-                            <Button
-                              variant="secondary"
-                              disabled={busy}
-                              onClick={() => {
-                                if (project.deviceLinkDeviceId) {
-                                  setRemoteBrowse('main');
-                                  return;
-                                }
-                                void window.electronAPI
-                                  .showOpenDirectoryDialog()
-                                  .then((result) => {
-                                    if (!result.canceled && result.path) setDirectory(result.path);
-                                  })
-                                  .catch(() => setError(label('failed')));
-                              }}
-                            >
-                              {label('browseDirectory')}
-                            </Button>
-                          </div>
-                        ) : (
-                          <p className="select-text break-all text-13 leading-relaxed text-[var(--text-primary)]">
-                            {directory}
-                          </p>
-                        )}
-                      </div>
-                      <Button
-                        variant="secondary"
-                        tone="quiet"
-                        className="w-8 shrink-0 px-0"
-                        aria-label={label(copied ? 'copied' : 'copy')}
-                        onClick={() =>
-                          void navigator.clipboard
-                            .writeText(directory)
-                            .then(() => setCopied(true))
-                            .catch(() => setError(label('failed')))
-                        }
-                      >
-                        {copied ? <Check size={15} /> : <Copy size={15} />}
-                      </Button>
-                    </div>
-                  </div>
-                  {(snapshot?.settingsVersion ?? 0) >= 6 && (
                     <ProjectDirectoriesEditor
+                      mainDirectory={directory}
+                      copied={copied}
+                      onMainDirectoryChange={create ? setDirectory : undefined}
+                      onCopy={() =>
+                        void navigator.clipboard
+                          .writeText(directory)
+                          .then(() => setCopied(true))
+                          .catch(() => setError(label('failed')))
+                      }
+                      allowAdd={(snapshot?.settingsVersion ?? 0) >= 6}
                       value={directories}
                       onChange={setDirectories}
                       disabled={busy || !available}
                       local={!project.deviceLinkDeviceId && !key.startsWith('remote:')}
                       onBrowse={
                         project.deviceLinkDeviceId && !key.startsWith('remote:')
-                          ? () => setRemoteBrowse('additional')
+                          ? () => setRemoteBrowse(directory ? 'additional' : 'main')
                           : undefined
                       }
                     />
-                  )}
+                  </div>
                 </div>
               ) : (
                 <div className="flex min-h-[436px] flex-col gap-4">
@@ -837,7 +790,9 @@ export function ProjectSettingsDialog({
             if (remoteBrowse === 'main') setDirectory(target.path);
             else
               setDirectories((previous) =>
-                previous.length >= 10 || previous.some((item) => item.path === target.path)
+                target.path === directory ||
+                previous.length >= 10 ||
+                previous.some((item) => item.path === target.path)
                   ? previous
                   : [...previous, { path: target.path, access: 'write' }],
               );

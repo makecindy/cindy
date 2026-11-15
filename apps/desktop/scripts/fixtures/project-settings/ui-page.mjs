@@ -11,6 +11,11 @@ export default {
   real: 'ProjectSettingsDialog and ProjectIcon',
   notCovered: 'Real persistence, device-link transport and phone native presentation.',
   cases: {
+    'create-primary': {
+      about:
+        'The first directory becomes primary; removing it promotes the next directory before creation',
+      data: { create: true },
+    },
     'create-existing': {
       about: 'Selecting a registered project preserves its saved name, icon and directory grants',
       data: { create: true, directories: true },
@@ -73,10 +78,41 @@ export default {
       .waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'create-primary') {
+      for (const path of ['/Projects/First', '/Projects/Second']) {
+        await page
+          .getByRole('textbox', { name: await ui.t('projectSettings.directoryPath'), exact: true })
+          .fill(path);
+        await page
+          .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+          .click();
+      }
+      await page.getByText(await ui.t('projectSettings.mainDirectory'), { exact: true }).waitFor();
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.removeDirectory'), exact: true })
+        .first()
+        .click();
+      await page.getByText('/Projects/Second', { exact: true }).waitFor();
+      await ui.capture('promoted-primary');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true })
+        .click();
+      const writes = await page.evaluate(() => window.projectSettingsWrites);
+      if (
+        writes.length !== 1 ||
+        writes[0].projectKey !== 'local:/Projects/Second' ||
+        writes[0].value.directories.length !== 0
+      )
+        throw new Error('First directory was not promoted to primary');
+      return;
+    }
     if (ui.case === 'create-existing') {
       await page
-        .getByRole('textbox', { name: await ui.t('projectSettings.mainDirectory'), exact: true })
+        .getByRole('textbox', { name: await ui.t('projectSettings.directoryPath'), exact: true })
         .fill('/Projects/Cindy');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+        .click();
       await page.getByText('/Projects/Reference', { exact: true }).waitFor();
       if (
         (await page
@@ -95,8 +131,11 @@ export default {
     }
     if (ui.case === 'create-cancel') {
       await page
-        .getByRole('textbox', { name: await ui.t('projectSettings.mainDirectory'), exact: true })
+        .getByRole('textbox', { name: await ui.t('projectSettings.directoryPath'), exact: true })
         .fill('/Projects/Example');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+        .click();
       await page
         .getByRole('button', { name: await ui.t('projectSettings.browseDirectory'), exact: true })
         .last()
@@ -119,8 +158,11 @@ export default {
           .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
           .fill('Example');
         await page
-          .getByRole('textbox', { name: await ui.t('projectSettings.mainDirectory'), exact: true })
+          .getByRole('textbox', { name: await ui.t('projectSettings.directoryPath'), exact: true })
           .fill('/Projects/Example');
+        await page
+          .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+          .click();
         await page
           .getByRole('button', { name: await ui.t('projectSettings.browseDirectory'), exact: true })
           .last()

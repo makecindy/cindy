@@ -21888,7 +21888,7 @@
     "colors": {
       "default": "Predefinida (seguir tema)"
     },
-    "directories": "Diretórios",
+    "directories": "Diretórios do projeto",
     "directoriesHint": "Aplica-se a todas as tarefas deste projeto a partir do próximo turno. Os diretórios específicos de cada tarefa são mantidos.",
     "removeDirectory": "Remover diretório",
     "directoryPath": "Caminho completo do diretório",

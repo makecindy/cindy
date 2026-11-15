@@ -479,7 +479,7 @@
     "colors": {
       "default": "Standard (dem Design folgen)"
     },
-    "directories": "Verzeichnisse",
+    "directories": "Projektverzeichnisse",
     "directoriesHint": "Gilt ab dem nächsten Durchlauf für alle Aufgaben dieses Projekts. Bestehende aufgabenspezifische Verzeichnisse bleiben erhalten.",
     "removeDirectory": "Verzeichnis entfernen",
     "directoryPath": "Vollständiger Verzeichnispfad",

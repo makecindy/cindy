@@ -479,7 +479,7 @@
     "colors": {
       "default": "Par défaut (selon le thème)"
     },
-    "directories": "Dossiers",
+    "directories": "Dossiers du projet",
     "directoriesHint": "S’applique à toutes les tâches de ce projet dès le prochain tour. Les dossiers propres à chaque tâche sont conservés.",
     "removeDirectory": "Retirer le dossier",
     "directoryPath": "Chemin complet du dossier",

@@ -21601,7 +21601,7 @@
     "colors": {
       "default": "默认色（跟随主题）"
     },
-    "directories": "目录",
+    "directories": "项目目录",
     "directoriesHint": "从下一轮起应用于此项目的所有任务。已有任务单独添加的目录会保留。",
     "removeDirectory": "移除目录",
     "directoryPath": "完整目录路径",

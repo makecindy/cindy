@@ -479,7 +479,7 @@
     "colors": {
       "default": "Default (follow theme)"
     },
-    "directories": "Directories",
+    "directories": "Project directories",
     "directoriesHint": "Applies to all tasks in this project from their next turn. Existing task-specific directories are kept.",
     "removeDirectory": "Remove directory",
     "directoryPath": "Full directory path",
