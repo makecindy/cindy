@@ -21692,14 +21692,16 @@
     "mainDirectory": "Main directory",
     "createTitle": "New project",
     "createAction": "Create project",
-    "repository": "Repository URL (optional)",
-    "repositoryHint": "Paste a GitHub, GitLab or Git URL; leave blank for an empty project.",
+    "repository": "Repository URL",
+    "repositoryHint": "Supports GitHub, GitLab and other Git repositories via HTTPS or SSH.",
     "autoDirectory": "Without a selected directory, create in {{path}}. Name conflicts get a number.",
     "cloning": "Cloning repository…",
     "invalidRepository": "Enter a valid GitHub, GitLab or Git repository URL.",
     "createFailed": "Could not create the project. Check directory write access, the repository URL and Git access on this computer. A clone destination must be empty.",
-    "createNamePlaceholder": "Project name or repository URL",
-    "createNameHint": "Enter a project name, or paste a repository URL."
+    "createNamePlaceholder": "Project name",
+    "createNameHint": "Give your project a name to get started.",
+    "createFromRepository": "Create from a code repository",
+    "createBlank": "Switch to a blank project"
   },
   "taskManagement": {
     "scope": "Applies to this account on this computer only.",

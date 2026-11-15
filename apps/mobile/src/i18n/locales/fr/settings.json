@@ -488,13 +488,15 @@
     "mainDirectory": "Dossier principal",
     "createTitle": "Nouveau projet",
     "createAction": "Créer le projet",
-    "repository": "URL du dépôt (facultatif)",
-    "repositoryHint": "Collez une URL GitHub, GitLab ou Git ; laissez vide pour un projet vide.",
+    "repository": "URL du dépôt",
+    "repositoryHint": "Compatible avec GitHub, GitLab et les autres dépôts Git via HTTPS ou SSH.",
     "autoDirectory": "Sans dossier choisi, création dans {{path}}. Un numéro est ajouté si le nom existe.",
     "cloning": "Clonage du dépôt…",
     "invalidRepository": "Saisissez une URL de dépôt GitHub, GitLab ou Git valide.",
     "createFailed": "Impossible de créer le projet. Vérifiez les droits en écriture, l’URL et l’accès Git de cet ordinateur. Le dossier de clonage doit être vide.",
-    "createNamePlaceholder": "Nom du projet ou URL du dépôt",
-    "createNameHint": "Saisissez un nom de projet ou collez une URL de dépôt."
+    "createNamePlaceholder": "Nom du projet",
+    "createNameHint": "Donnez un nom à votre projet pour commencer.",
+    "createFromRepository": "Créer depuis un dépôt de code",
+    "createBlank": "Passer à un projet vide"
   }
 }

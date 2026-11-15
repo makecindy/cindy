@@ -99,16 +99,24 @@ export function ProjectSettingsDialog({
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(project.displayName);
   const [repositoryUrl, setRepositoryUrl] = useState('');
+  const [repositoryExpanded, setRepositoryExpanded] = useState(false);
   const repositoryCreation = create && (snapshot?.settingsVersion ?? 0) >= 7;
   const changeRepository = (value: string) => {
     const previous = parseProjectRepository(repositoryUrl);
     const next = parseProjectRepository(value);
     setRepositoryUrl(value);
+    setError(null);
     if (next && (!name.trim() || name === previous?.name)) setName(next.name.slice(0, 80));
   };
   const changeName = (value: string) => {
-    const repository = repositoryCreation ? parseProjectRepository(value) : null;
+    // Names such as Design/2027 must not silently become GitHub repositories.
+    const address = /^(?:https?:\/\/|ssh:\/\/|[\w.-]+@[\w.-]+:|[\w.-]+\.[\w.-]+\/)/i.test(
+      value.trim(),
+    );
+    const repository = repositoryCreation && address ? parseProjectRepository(value) : null;
     if (repository) {
+      setRepositoryExpanded(true);
+      setError(null);
       setRepositoryUrl(value.trim());
       setName(repository.name.slice(0, 80));
     } else setName(value.slice(0, 80));
@@ -199,7 +207,7 @@ export function ProjectSettingsDialog({
       !isDataOwnerGenerationCurrent(owner)
     )
       return;
-    if (create && repositoryUrl.trim() && !parseProjectRepository(repositoryUrl)) {
+    if (repositoryCreation && repositoryExpanded && !parseProjectRepository(repositoryUrl)) {
       setError(label('invalidRepository'));
       return;
     }
@@ -516,12 +524,13 @@ export function ProjectSettingsDialog({
                         )}
                       </div>
                     )}
-                  {create && (snapshot?.settingsVersion ?? 0) >= 7 && (
+                  {repositoryCreation && repositoryExpanded && (
                     <div className="flex flex-col gap-2">
                       <FormField label={label('repository')} hint={label('repositoryHint')}>
                         {(control) => (
                           <Input
                             {...control}
+                            autoFocus
                             value={repositoryUrl}
                             onChange={changeRepository}
                             disabled={busy}
@@ -529,13 +538,6 @@ export function ProjectSettingsDialog({
                           />
                         )}
                       </FormField>
-                      {!directory && (
-                        <p className="select-text break-all text-12 text-[var(--text-secondary)]">
-                          {t('projectSettings.autoDirectory', {
-                            path: `${snapshot?.creationRoot ?? ''}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || 'Project')}`,
-                          })}
-                        </p>
-                      )}
                       {busy && repositoryUrl && (
                         <p role="status" className="text-13 text-[var(--text-secondary)]">
                           {label('cloning')}
@@ -548,6 +550,13 @@ export function ProjectSettingsDialog({
                       <Monitor size={15} />
                       <span>{project.deviceLinkDeviceName || label('thisComputer')}</span>
                     </div>
+                    {repositoryCreation && !directory && (
+                      <p className="select-text break-all text-12 text-[var(--text-secondary)]">
+                        {t('projectSettings.autoDirectory', {
+                          path: `${snapshot?.creationRoot ?? ''}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || 'Project')}`,
+                        })}
+                      </p>
+                    )}
                     <ProjectDirectoriesEditor
                       mainDirectory={directory}
                       showHint={!create}
@@ -571,6 +580,22 @@ export function ProjectSettingsDialog({
                       }
                     />
                   </div>
+                  {repositoryCreation && (
+                    <Button
+                      variant="secondary"
+                      tone="quiet"
+                      size="sm"
+                      className="self-start"
+                      disabled={busy || !available}
+                      onClick={() => {
+                        setRepositoryExpanded(!repositoryExpanded);
+                        if (repositoryExpanded) setRepositoryUrl('');
+                        setError(null);
+                      }}
+                    >
+                      {label(repositoryExpanded ? 'createBlank' : 'createFromRepository')}
+                    </Button>
+                  )}
                 </div>
               ) : (
                 <div className="flex min-h-[436px] flex-col gap-4">

@@ -12,6 +12,7 @@ export default {
   notCovered: 'Real persistence, device-link transport and phone native presentation.',
   cases: {
     'create-legacy': { about: 'Version 6 still requires an existing directory and hides clone fields', data: { create: true, version: 6 } },
+    'create-blank': { about: 'Repository creation is opt-in and returning to blank cannot send a hidden clone URL', data: { create: true } },
     'create-auto': { about: 'Create by name without choosing a directory', data: { create: true } },
     'create-repository': {
       about: 'Paste a GitLab URL as the name and clone into the automatically allocated directory',
@@ -84,11 +85,30 @@ export default {
       .waitFor();
   },
   async check(page, ui) {
-    if (ui.case === 'create-auto' || ui.case === 'create-repository') {
+    if (['create-auto', 'create-repository', 'create-blank'].includes(ui.case)) {
+      const repositoryInput = page.getByRole('textbox', { name: await ui.t('projectSettings.repository'), exact: true });
+      if (await repositoryInput.count()) throw new Error('Repository field appeared before opting in');
       const repository = ui.case === 'create-repository';
+      if (ui.case === 'create-auto') {
+        const name = page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true });
+        await name.fill('Design/2027');
+        if ((await name.inputValue()) !== 'Design/2027' || await repositoryInput.count()) throw new Error('A project name was interpreted as a GitHub shortcut');
+      }
       await page
         .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
         .fill(repository ? 'https://gitlab.example.com/engineering/platform/client/applications/project-management/demo' : 'Demo');
+      if (repository && !(await repositoryInput.isVisible())) throw new Error('Pasted URL did not reveal repository options');
+      if (ui.case === 'create-blank') {
+        await page.getByRole('button', { name: await ui.t('projectSettings.createFromRepository'), exact: true }).click();
+        await repositoryInput.waitFor();
+        await page.getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true }).click();
+        if (await page.evaluate(() => window.projectSettingsWrites.length)) throw new Error('Empty repository mode created a blank project');
+        await repositoryInput.fill('https://github.com/example/Demo');
+        if (await page.getByText(await ui.t('projectSettings.invalidRepository'), { exact: true }).count()) throw new Error('Repository error persisted after editing');
+        await ui.capture('repository-options');
+        await page.getByRole('button', { name: await ui.t('projectSettings.createBlank'), exact: true }).click();
+        if (await repositoryInput.count()) throw new Error('Repository field remained after switching to blank');
+      }
       await ui.capture('automatic-location');
       await page
         .getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true })
@@ -98,6 +118,7 @@ export default {
         throw new Error('Missing automatic creation');
       if (repository && writes[0].repositoryUrl !== 'https://gitlab.example.com/engineering/platform/client/applications/project-management/demo')
         throw new Error('Repository paste was lost');
+      if (!repository && writes[0].repositoryUrl) throw new Error('Blank creation retained a hidden repository URL');
       const opened = await page.evaluate(() => window.projectCreatedPath);
       if (opened !== (repository ? '/Projects/demo' : '/Projects/Demo'))
         throw new Error('Did not use host-assigned directory');

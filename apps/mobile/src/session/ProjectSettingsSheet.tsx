@@ -118,16 +118,22 @@ export function ProjectSettingsSheet({
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(title);
   const [repositoryUrl, setRepositoryUrl] = useState("");
+  const [repositoryExpanded, setRepositoryExpanded] = useState(false);
   const repositoryCreation = create && (snapshot?.settingsVersion ?? 0) >= 7;
   const changeRepository = (value: string) => {
     const previous = parseProjectRepository(repositoryUrl);
     const next = parseProjectRepository(value);
     setRepositoryUrl(value);
+    setError(null);
     if (next && (!name.trim() || name === previous?.name)) setName(next.name.slice(0, 80));
   };
   const changeName = (value: string) => {
-    const repository = repositoryCreation ? parseProjectRepository(value) : null;
+    // Names such as Design/2027 must not silently become GitHub repositories.
+    const address = /^(?:https?:\/\/|ssh:\/\/|[\w.-]+@[\w.-]+:|[\w.-]+\.[\w.-]+\/)/i.test(value.trim());
+    const repository = repositoryCreation && address ? parseProjectRepository(value) : null;
     if (repository) {
+      setRepositoryExpanded(true);
+      setError(null);
       setRepositoryUrl(value.trim());
       setName(repository.name.slice(0, 80));
     } else setName(value.slice(0, 80));
@@ -270,8 +276,8 @@ export function ProjectSettingsSheet({
       return;
     Keyboard.dismiss();
     if (
-      create &&
-      repositoryUrl.trim() &&
+      repositoryCreation &&
+      repositoryExpanded &&
       !parseProjectRepository(repositoryUrl)
     ) {
       setError(label("invalidRepository"));
@@ -641,12 +647,13 @@ export function ProjectSettingsSheet({
                     )}
                   </View>
                 )}
-              {create && (snapshot?.settingsVersion ?? 0) >= 7 && (
+              {repositoryCreation && repositoryExpanded && (
                 <View style={{ gap: spacing.sm }}>
                   <Text style={[styles.note, noteColor]}>
                     {label("repository")}
                   </Text>
                   <TextInput
+                    autoFocus
                     value={repositoryUrl}
                     onChangeText={changeRepository}
                     editable={!disabled}
@@ -657,13 +664,6 @@ export function ProjectSettingsSheet({
                     placeholderTextColor={colors.textPlaceholder}
                     style={inputStyle}
                   />
-                  {!directory && (
-                    <Text selectable style={[styles.note, noteColor]}>
-                      {t("settings.projectInfo.autoDirectory", {
-                        path: `${snapshot?.creationRoot ?? ""}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || "Project")}`,
-                      })}
-                    </Text>
-                  )}
                   {busy && repositoryUrl && (
                     <Text style={[styles.note, noteColor]}>
                       {label("cloning")}
@@ -678,6 +678,13 @@ export function ProjectSettingsSheet({
                     {deviceName || label("thisComputer")}
                   </Text>
                 </View>
+                  {repositoryCreation && !directory && (
+                    <Text selectable style={[styles.note, noteColor]}>
+                      {t("settings.projectInfo.autoDirectory", {
+                        path: `${snapshot?.creationRoot ?? ""}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || "Project")}`,
+                      })}
+                    </Text>
+                  )}
                 <ProjectDirectoriesEditor
                   mainDirectory={directory}
                   showHint={!create}
@@ -699,6 +706,22 @@ export function ProjectSettingsSheet({
                   }
                 />
               </View>
+              {repositoryCreation && (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={disabled}
+                  onPress={() => {
+                    setRepositoryExpanded(!repositoryExpanded);
+                    if (repositoryExpanded) setRepositoryUrl("");
+                    setError(null);
+                  }}
+                  style={[styles.reset, { alignSelf: "flex-start" }]}
+                >
+                  <Text style={[styles.path, textColor, { fontWeight: fontWeight.medium }]}>
+                    {label(repositoryExpanded ? "createBlank" : "createFromRepository")}
+                  </Text>
+                </Pressable>
+              )}
             </>
           ) : (
             <>

@@ -488,13 +488,15 @@
     "mainDirectory": "기본 디렉터리",
     "createTitle": "새 프로젝트",
     "createAction": "프로젝트 만들기",
-    "repository": "저장소 URL (선택)",
-    "repositoryHint": "GitHub, GitLab 또는 Git URL을 붙여 넣으세요. 비워 두면 빈 프로젝트를 만듭니다.",
+    "repository": "저장소 URL",
+    "repositoryHint": "GitHub, GitLab 및 다른 Git 저장소의 HTTPS / SSH 링크를 지원합니다.",
     "autoDirectory": "디렉터리를 선택하지 않으면 {{path}}에 만듭니다. 이름이 겹치면 번호를 붙입니다.",
     "cloning": "저장소 복제 중…",
     "invalidRepository": "유효한 GitHub, GitLab 또는 Git 저장소 URL을 입력하세요.",
     "createFailed": "프로젝트를 만들 수 없습니다. 디렉터리 쓰기 권한, 저장소 URL 및 이 컴퓨터의 Git 접근 권한을 확인하세요. 복제 대상은 비어 있어야 합니다.",
-    "createNamePlaceholder": "프로젝트 이름 또는 저장소 URL",
-    "createNameHint": "프로젝트 이름을 입력하거나 저장소 URL을 붙여 넣으세요."
+    "createNamePlaceholder": "프로젝트 이름",
+    "createNameHint": "프로젝트 이름을 정하고 시작하세요.",
+    "createFromRepository": "코드 저장소에서 만들기",
+    "createBlank": "빈 프로젝트로 전환"
   }
 }
