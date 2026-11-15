@@ -38,6 +38,7 @@ vi.mock("react-native", () => {
   return {
     View,
     KeyboardAvoidingView: View,
+    ActivityIndicator: () => createElement("span", { role: "progressbar" }),
     Pressable: ({
       children,
       onPress,
@@ -51,9 +52,9 @@ vi.mock("react-native", () => {
       disabled: boolean;
       accessibilityLabel?: string;
       accessibilityRole?: string;
-      accessibilityState?: { checked?: boolean; expanded?: boolean };
+      accessibilityState?: { checked?: boolean; expanded?: boolean; busy?: boolean };
     }) => createElement("button", { onClick: onPress, disabled, 'aria-label': accessibilityLabel,
-      role: accessibilityRole, 'aria-checked': accessibilityState?.checked, 'aria-expanded': accessibilityState?.expanded }, children),
+      role: accessibilityRole, 'aria-busy': accessibilityState?.busy, 'aria-checked': accessibilityState?.checked, 'aria-expanded': accessibilityState?.expanded }, children),
     Modal: ({
       children,
       visible,
@@ -146,6 +147,49 @@ it('shows desktop card text as plain text without its Markdown escapes', () => {
 });
 
 describe("rich plugin card hints", () => {
+  // Unit regression: PR publish disabled clicks but gave no visible feedback during remote delivery.
+  // Existing rich-card tests resolve immediately; hold both remote steps to cover the waiting UI.
+  it.each(['success', 'failure', 'revision'] as const)('shows immediate publish feedback and clears on %s', async (outcome) => {
+    let open!: (value: unknown) => void;
+    let finish!: (value: unknown) => void;
+    let fail!: (reason: Error) => void;
+    const opened = new Promise(resolve => { open = resolve; });
+    const delivered = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+    h.invoke.mockImplementation((_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return delivered;
+      if (args[0].actionId === 'open-interaction') return opened;
+      return Promise.resolve({ result: { confirms: [] } });
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const data = { pluginId: 'cindy-github', revision: '1', items: [
+      { id: 'pr:publish', label: 'Publish PR', disabled: false, primary: true },
+      { id: 'pr:draft', label: 'Draft', disabled: false },
+    ] };
+    const render = (revision: string) => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's', callId: 'c', data: { ...data, revision },
+    }));
+    await act(async () => render('1'));
+    const publish = container.querySelector<HTMLButtonElement>('[aria-label="Publish PR"]')!;
+    await act(async () => { publish.click(); publish.click(); });
+    expect(publish.getAttribute('aria-busy')).toBe('true');
+    expect(publish.querySelector('[role=progressbar]')).not.toBeNull();
+    expect(publish.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="Draft"]')!.disabled).toBe(true);
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+    await act(async () => open({ result: { pageId: 'page' } }));
+    expect(publish.getAttribute('aria-busy')).toBe('true');
+    if (outcome === 'revision') await act(async () => render('2'));
+    await act(async () => {
+      if (outcome === 'failure') fail(new Error('offline'));
+      else finish({ effects: [] });
+    });
+    expect(publish.getAttribute('aria-busy')).toBe('false');
+    expect(container.querySelector('[role=progressbar]')).toBeNull();
+    expect(publish.disabled).toBe(outcome === 'failure');
+    if (outcome === 'failure') expect(container.textContent).toContain('plugins.pageUnconfirmed');
+  });
+
   // Unit regression: the merged PR settings were flattened into the summary/footer. Existing
   // tests cover switches but not model choice state or the settings disclosure. Render the real
   // component with a rich merged card and verify accessible state + unchanged remote actions.

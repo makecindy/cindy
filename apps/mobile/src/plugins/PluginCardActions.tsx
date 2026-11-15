@@ -21,6 +21,7 @@ import {
 } from "@cindy/maker-shared/ghost-card-form";
 import {
   AccessibilityInfo,
+  ActivityIndicator,
   Alert,
   Animated,
   AppState,
@@ -369,14 +370,15 @@ function CardControls({
   const [confirm, setConfirm] = useState<PluginPageConfirm>();
   const [previewIntent, setPreviewIntent] = useState<Extract<NativeIntent, { kind: 'preview' }>>();
   const dismissedPreviews = useRef(new Set<string>());
-  const [busy, setBusy] = useState(false),
+  const [busyAction, setBusyAction] = useState<string>(),
     [unknown, setUnknown] = useState(false),
     [answering, setAnswering] = useState(false);
+  const busy = busyAction !== undefined;
   const current = () =>
     lifetime.current.active && isMobileAuthOwnerCurrent(lifetime.current.owner);
   useEffect(() => {
     sending.current = false;
-    setBusy(false);
+    setBusyAction(undefined);
     setUnknown(false);
   }, [revision]);
   useEffect(() => {
@@ -469,7 +471,7 @@ function CardControls({
       isMobileAuthOwnerCurrent(token.owner);
     if (!passive) {
       sending.current = true;
-      setBusy(true);
+      setBusyAction(action.id);
     }
     try {
       if (!passive && action.submit && !(await changeQueue.current))
@@ -542,7 +544,7 @@ function CardControls({
         setDraft("");
         if (!action.submit) {
           sending.current = false;
-          setBusy(false);
+          setBusyAction(undefined);
         }
       }
       if (passive && valid()) setUnknown(false);
@@ -552,7 +554,7 @@ function CardControls({
       if (valid()) {
         setUnknown(true);
         if (!passive) {
-          setBusy(false);
+          setBusyAction(undefined);
           sending.current = false;
         }
       }
@@ -888,6 +890,7 @@ function CardControls({
               <Pressable
                 key={action.id}
                 accessibilityRole={action.url ? "link" : "button"}
+                accessibilityState={{ busy: busyAction === action.id }}
                 accessibilityLabel={sendNow && mail ? `${action.label}, ${mailCardStatus(mail, countdownNow)}` : host ? `${label}: ${action.label}` : action.label}
                 disabled={action.disabled || busy || uploading || unknown || status !== "online" || (readonly && !mail?.pendingSend && !action.id.startsWith('mail:continue:'))}
                 hitSlop={compact ? { top: spacing.xs, bottom: spacing.xs } : undefined}
@@ -899,7 +902,10 @@ function CardControls({
                     <View style={[styles.countdownFill, { width: `${(1 - mailSendRemainingFraction(mail, countdownNow)) * 100}%` }]} />
                   </View>
                 ) : null}
-                <Text style={[styles.label, compact && styles.compactLabel, primary && styles.sendLabel, host && styles.quietLabel]}>{label}</Text>
+                <View style={styles.buttonContent}>
+                  {busyAction === action.id ? <ActivityIndicator size="small" color={primary ? colors.ctaText : colors.textPrimary} /> : null}
+                  <Text style={[styles.label, compact && styles.compactLabel, primary && styles.sendLabel, host && styles.quietLabel]}>{label}</Text>
+                </View>
               </Pressable>
             );
           })}
@@ -1164,6 +1170,7 @@ const makeStyles = (c: ThemeColors) =>
     sendLabel: { color: c.ctaText },
     countdownFill: { height: "100%", backgroundColor: c.textPrimary, opacity: 0.14 },
     sendNowButton: { backgroundColor: c.surface, overflow: "hidden", borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+    buttonContent: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
     button: {
       minHeight: 44,
       padding: spacing.md,
