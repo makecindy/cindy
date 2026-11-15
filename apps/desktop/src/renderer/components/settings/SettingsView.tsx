@@ -90,6 +90,7 @@ const WorktreeRecycleCard = lazy(() => import('./WorktreeRecycleCard').then(modu
 const StorageManagementCard = lazy(() => import('./StorageManagementCard').then(module => ({ default: module.StorageManagementCard })));
 const UserPromptSection = lazy(() => import('./UserPromptSection').then(module => ({ default: module.UserPromptSection })));
 const MemorySection = lazy(() => import('./MemorySection').then(module => ({ default: module.MemorySection })));
+const CompactionSection = lazy(() => import('./CompactionSection').then(module => ({ default: module.CompactionSection })));
 const StreamFadeSection = lazy(() => import('./StreamFadeSection').then(module => ({ default: module.StreamFadeSection })));
 const SessionImportSection = lazy(() => import('./SessionImportSection').then(module => ({ default: module.SessionImportSection })));
 const HelpSection = lazy(() => import('./HelpSection').then(module => ({ default: module.HelpSection })));
@@ -187,6 +188,7 @@ function SettingsViewContent() {
     if (raw === 'feishu-bot' || raw === 'slack-bot') return 'im-bot';
     // legacy 别名:旧独立「Tina」(tina) 已并入「IM 机器人」(im-bot)。
     if (raw === 'tina') return 'im-bot';
+    if (raw === 'task-management') return 'storage';
     if (raw === 'billing' && !canAccessBilling) return 'general';
     if (raw === 'usage' && !canAccessUsage) return 'general';
     if (raw === 'agent-island' && !isMac) return 'general';
@@ -195,6 +197,13 @@ function SettingsViewContent() {
     return isSettingsTab(raw) ? raw : 'general';
   }, [canAccessBilling, canAccessUsage, isMac, rawSection, rawTab]);
   const previousTabRef = useRef(activeTab);
+  useEffect(() => {
+    if (rawTab !== 'task-management') return;
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', 'storage');
+    if (!next.has('section')) next.set('section', 'task-management');
+    startTransition(() => setSearchParams(next, { replace: true }));
+  }, [rawTab, searchParams, setSearchParams]);
   const refreshVoiceModelSelection = voiceModelSelection.refresh;
   useEffect(() => {
     // The shared hook outlives each tab; restore the old voice-page remount refresh.
@@ -412,6 +421,7 @@ function SettingsViewContent() {
           </div>
 
           <SettingsSidebarNav
+            requestedQuery={searchParams.get('query') ?? ''}
             tabIds={visibleTabIds}
             searchContext={searchContext}
             activeTab={activeTab}
@@ -654,6 +664,9 @@ function SettingsViewContent() {
                   </section>
                   <section id={personalizationDetailsSettings.memoryMakerLabel.targetId} aria-label={t(personalizationSettings.memory.titleKey)}>
                     <MemorySection />
+                  </section>
+                  <section id={personalizationSettings.codexCompaction.targetId} aria-label={t(personalizationSettings.codexCompaction.titleKey)}>
+                    <CompactionSection key={`codex-compaction:${mode}:${dataOwnerId ?? 'none'}`} />
                   </section>
                   <section id={personalizationSettings.subagents.targetId} aria-label={t(personalizationSettings.subagents.titleKey)}>
                     <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />

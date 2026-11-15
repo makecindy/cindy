@@ -436,5 +436,8 @@
       "sendText": "Enviar texto escrito",
       "taskHint": "Estes atalhos funcionam nas páginas de sessão. Um botão atribuído à voz tem prioridade; ao soltá-lo, o texto fica na caixa de mensagem."
     }
+  },
+  "navigation": {
+    "unavailable": "Não foi possível abrir as definições do computador de destino. Verifique se está online e permite controlo remoto; atualize o Cindy se tiver uma versão antiga."
   }
 }

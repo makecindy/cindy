@@ -633,6 +633,8 @@ export interface Provider {
   videoModels?: ProviderMediaModel[];
   /** Speech, transcription and realtime audio; each entry retains its explicit mode. */
   audioModels?: ProviderMediaModel[];
+  /** Non-chat decision and reranking endpoints. */
+  evaluationModels?: ProviderMediaModel[];
   /**
    * 视频能力的默认选型(与 videoModels 配套;值必须是 videoModels 里的 id;
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。

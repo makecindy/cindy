@@ -4299,7 +4299,9 @@
           "inline": "運於",
           "signInHere": "於此機登門",
           "writeFailed": "運處未能存，請再試。"
-        }
+        },
+        "sameAccountConnections": "此帳號已存之連線",
+        "sameAccountConnectionsHint": "同一帳號僅列一項。擇連線則切換所管設定；既有任務仍循原連線。"
       },
       "detect": {
         "groupLabel": "察得此機 CLI",
@@ -5322,6 +5324,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 伺服器壓縮",
+        "description": "啟則優先於伺服器壓縮；閉則用 Codex 原生本機摘要，仍呼叫目前模型。",
+        "hint": "於本機下次啟動或恢復 Codex 任務時生效。供應商不支援伺服器壓縮者，仍循原法。",
+        "loadFailed": "未能載入 Codex 壓縮設定",
+        "saveFailed": "未能儲存 Codex 壓縮設定"
+      },
       "title": "前文縮略",
       "description": "Claude Code 與 Pi 之壓縮比例於此調之。Codex 依模型所設之上下文上限，自調壓縮門檻；遠端壓縮未成時，自改用摘要壓縮，並於今之差事中持之。",
       "card": {
@@ -8136,6 +8145,8 @@
         "cindyTextOneshot": "可向 Cindy 快速通道發問，得文字之答",
         "cindyTextOneshotDetail": "行系統之輕量任務模型鏈(與自動擬題同一通道)，不動 Agent，不觸君之卷，或生模型費用。",
         "cindyEmbedText": "可將文字送算為向量（用於語義檢索）",
+        "cindyModelsDecisions": "可用決策模型（耗模型額度）",
+        "cindyModelsRerank": "可用重排模型（耗模型額度）",
         "cindyEmbedTextDetail": "文字將送至系統之向量模型算為一串數字，每次至多 {{max}} 條，或生模型費用。所得向量僅交法器自存，不寫入君之資料庫。",
         "cindySearchWeb": "可用 Cindy AI 搜尋公網",
         "cindySearchWebDetail": "查詢將存取公網，或耗 Cindy AI 限額。",
@@ -8158,9 +8169,9 @@
         "agentCompanionsDetail": "可觀諸同伴（含行於君他機者）之名、簡介、像與其狀（方行、待君理、閒、離線），各同伴所行何類之事（如思慮、施器），待君理之請之文（問、將行之令、策，與對談所見同），及其主對談之近語（至多五十條，君之言與同伴之復，不含施器之程），並於主窗啟同伴之對談。兼得遣訊之許者，可將君於法器所予之答轉致同伴：答問、卻請、議策；許其行事，仍須君於 Cindy 自有之確框親點。不能讀卷，亦不見施器之程與思慮之文。",
         "agentCompanionsRequest": "確認觀同伴之權柄",
         "hostTools_history": "任務往錄",
-        "hostTools_historyDetail": "得循 Cindy 之器列既有任務、閱訊息全文、索往錄；明擇且有權之他機亦可。",
+        "hostTools_historyDetail": "透過 Cindy 的任務工具查詢現有任務、讀取完整訊息及搜尋歷史；可明確選擇你有權存取的其他電腦。也可將本機任務匯出為原生檔案。法器依安裝授權呼叫；Agent 執行時遵循自身權限流程。",
         "hostTools_control": "任務治辦",
-        "hostTools_controlDetail": "得循 Cindy 之器改、藏、復及治既有任務與專案。涉重險者，每次須於 Cindy 親允。",
+        "hostTools_controlDetail": "得循 Cindy 之器改、藏、復及治既有任務與專案，並在本機匯入原生任務檔案。涉重險者，每次須於 Cindy 親允。",
         "hostTools_handoff": "任務傳言",
         "hostTools_handoffDetail": "得循 Cindy 之器傳訊息於既有任務。需當前任務之境者，須明指任務。",
         "hostTools_settings": "應用設定",
@@ -9219,6 +9230,9 @@
         "failed": "回收未能畢",
         "pending": "已入佇列"
       }
+    },
+    "navigation": {
+      "unavailable": "未能開啟彼機設定。請驗其在線且已允遠控；版本舊則先更新 Cindy。"
     }
   },
   "remoteDevice": {
@@ -9334,6 +9348,7 @@
     "backToLogin": "歸登入方式"
   },
   "login": {
+    "networkResponseHint": "登入之應異常，或為網路、 Proxy 所阻。請察網路與 Proxy 之設。",
     "title": "Cindy 恭候多時矣",
     "subtitle": "擇一法，安然登門",
     "savedLoginPreserved": "復原之舉將保留已存之登入資訊",
@@ -9680,6 +9695,7 @@
     "tokenLine": "Tokens：共 {{total}} · 入 {{input}} · 出 {{output}}",
     "cacheLine": "快取分項：讀 {{read}} · 寫 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "快取分項：讀 {{read}} · 寫 {{create}}",
+    "stepsLine": "本輪共請 {{steps}} 次 · 每請約 {{context}} 上下文",
     "modelLine": "模型：{{model}}",
     "multipleModels": "{{count}} 個模型",
     "costBreakdownHeader": "依模型分之：",
@@ -13880,6 +13896,7 @@
         "realtime": "即時聲",
         "embedding": "向量",
         "decision": "決斷",
+        "rerank": "重排",
         "compression": "縮",
         "ungrouped": "未歸類",
         "other": "其餘"
@@ -17143,9 +17160,8 @@
         "automatic": "自發",
         "manually": "手發",
         "session": "差事",
-        "silentRun": "察而無事則默",
-        "silentRunTooltip": "唯報變故與疑難。提醒與定時遣訊者可闔之。",
-        "silentRunInfoAria": "觀默行之規",
+        "silentRun": "默行",
+        "silentRunTooltip": "啟之，則事成默不告。若任務所述有當告之情，AI 遇之自報；敗與異常仍告。",
         "finishSendToFeishu": "畢則遣至飛書機器人",
         "finishSendToWecomGroup": "畢則遣至企業微信群",
         "configWecomGroup": "設企微群之告",
@@ -17255,10 +17271,7 @@
       },
       "layout": {
         "content": "所行之事",
-        "notifications": "告知與靜行",
-        "contentTab": "內容與觸發",
-        "optionsTab": "執行之設",
-        "sections": "自運之設"
+        "notifications": "告知與靜行"
       },
       "webhook": {
         "quotaHint": "Webhook 受信之數日有其限，此處之篩不減其數。請於發信之方（如 GitHub）唯選所需之事。",
@@ -21559,5 +21572,31 @@
     "switchOffer": {
       "action": "易用 {{model}} 續之"
     }
+  },
+  "taskManagement": {
+    "scope": "僅用於本機當前名籍之差事。",
+    "archive": "自動封存",
+    "enabled": "自動封存閒置差事",
+    "description": "閒置差事自動封存，舊錄仍可閱。",
+    "days": "閒置日數",
+    "daysHint": "自末次收遣訊或行畢時計起。",
+    "days7": "7 天",
+    "days14": "14 天",
+    "days30": "30 天",
+    "customDays": "自定日數",
+    "invalidDays": "請填 1–365 間之整數。",
+    "reset": "復其預設",
+    "archiveHint": "正用之差事仍留，封存後隨時可復。",
+    "preview": "封存先覽",
+    "loadFailed": "規制未能讀取。",
+    "loading": "方讀規制…",
+    "candidateCount": "可封存 {{count}} 件差事",
+    "keptCount": "保留 {{count}} 件",
+    "lastCheck": "前次查驗：{{date}}",
+    "notChecked": "尚未自動查驗",
+    "saveFailed": "規制未存，請重行之。",
+    "archivedNotice": "已自動封存 {{count}} 件閒置差事",
+    "undo": "復原",
+    "undoFailed": "未能復原，請於已封存差事中恢復。"
   }
 }

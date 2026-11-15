@@ -243,6 +243,10 @@ try {
   packages.set('node-pty', packageRoot('node-pty', desktopRequire));
   packages.set('sharp', packageRoot('sharp', desktopRequire));
   packages.set('playwright-core', packageRoot('playwright-core', hostRequire));
+  // The shared Pi package modules load these through createRequire, which the
+  // bundler cannot see, so they would otherwise be missing from the release.
+  packages.set('semver', packageRoot('semver', desktopRequire));
+  packages.set('picomatch', packageRoot('picomatch', desktopRequire));
   for (const [name, source] of packages) {
     const ancestors = new Map(packages);
     ancestors.delete(name);

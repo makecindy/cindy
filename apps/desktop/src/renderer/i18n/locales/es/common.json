@@ -4398,7 +4398,9 @@
           "inline": "Se ejecuta en",
           "signInHere": "Iniciar sesión en esta computadora",
           "writeFailed": "No se pudo guardar dónde se ejecuta este proveedor. Inténtalo de nuevo."
-        }
+        },
+        "sameAccountConnections": "Conexiones guardadas de esta cuenta",
+        "sameAccountConnectionsHint": "La cuenta aparece una sola vez. Elegir una conexión solo cambia los ajustes que gestionas; las tareas existentes conservan su conexión."
       },
       "detect": {
         "groupLabel": "Detectado en este dispositivo",
@@ -5423,6 +5425,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Compresión de Codex en el servidor",
+        "description": "Si se activa, se prefiere la compresión en el servidor. Si se desactiva, Codex usa su resumen local nativo, que sigue llamando al modelo actual.",
+        "hint": "Se aplica la próxima vez que Codex inicie o reanude una tarea en este ordenador. Los proveedores sin compresión en el servidor mantienen su comportamiento.",
+        "loadFailed": "No se pudo cargar la configuración de compresión de Codex",
+        "saveFailed": "No se pudo guardar la configuración de compresión de Codex"
+      },
       "title": "Compactación de contexto",
       "description": "Ajusta aquí las proporciones de compactación de Claude Code y Pi. Codex calcula su umbral a partir de la configuración de contexto del modelo. Si falla la compactación remota, cambia automáticamente a compactación por resumen y la sigue usando en la tarea actual.",
       "card": {
@@ -8265,6 +8274,8 @@
         "cindyTextOneshot": "Puede hacer una pregunta a la vía rápida de Cindy y recibir una respuesta en texto",
         "cindyTextOneshotDetail": "Usa la cadena de modelos auxiliares ligeros del sistema (el mismo canal que los títulos automáticos). No interviene ningún Agent ni hay acceso a archivos. Pueden aplicarse cargos por uso del modelo.",
         "cindyEmbedText": "Puede enviar texto para convertirlo en vectores (para búsqueda semántica)",
+        "cindyModelsDecisions": "Puede usar modelos de decisión (consume tu cuota de modelos)",
+        "cindyModelsRerank": "Puede usar modelos de reordenación (consume tu cuota de modelos)",
         "cindyEmbedTextDetail": "El texto se envía al modelo de embeddings del sistema y se convierte en números, hasta {{max}} elementos por llamada. Pueden aplicarse cargos por uso del modelo. Los vectores van solo al complemento; no se escribe nada en tu propia biblioteca.",
         "cindySearchWeb": "Puede buscar en la web pública con Cindy AI",
         "cindySearchWebDetail": "Las solicitudes de búsqueda acceden a la web pública y pueden consumir la cuota de Cindy AI.",
@@ -8287,9 +8298,9 @@
         "agentCompanionsDetail": "Puede ver a todos los amigos, incluidos los que se ejecutan en tus otras computadoras: nombre, descripción, avatar, estado (trabajando, esperando tu respuesta, inactivo, sin conexión), el tipo de paso en el que está cada uno (como pensar o ejecutar una herramienta), las solicitudes que esperan tu respuesta tal como las muestran sus tarjetas (preguntas, comandos por ejecutar, planes) y la conversación reciente de su chat principal (hasta 50 de tus mensajes y sus respuestas, sin los pasos de herramientas); y abrir la conversación de un amigo en la ventana principal. Si también tiene el permiso para entregar mensajes, puede transmitir las respuestas que des en el complemento: responder preguntas, rechazar solicitudes y opinar sobre planes. Para permitir un paso, sigues haciendo clic en la confirmación propia de Cindy. No puede leer archivos, pasos de herramientas ni razonamientos.",
         "agentCompanionsRequest": "Revisar el permiso para ver amigos",
         "hostTools_history": "Historial de tareas",
-        "hostTools_historyDetail": "Usar las herramientas de Cindy para listar tareas existentes, leer mensajes completos y buscar en el historial, también en otros ordenadores accesibles que selecciones explícitamente.",
+        "hostTools_historyDetail": "Usar las herramientas de Cindy para listar tareas existentes, leer mensajes completos y buscar en el historial, también en otros ordenadores accesibles que selecciones explícitamente. Exportar tareas locales en archivos de formato nativo. Los complementos usan los permisos concedidos al instalarse; el Agent sigue sus propios permisos durante la ejecución.",
         "hostTools_control": "Gestión de tareas",
-        "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes. Las operaciones de alto riesgo requieren confirmación en Cindy cada vez.",
+        "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes, e importar archivos de tareas en formato nativo en este ordenador. Las operaciones de alto riesgo requieren confirmación en Cindy cada vez.",
         "hostTools_handoff": "Mensajes a tareas",
         "hostTools_handoffDetail": "Usar las herramientas de Cindy para enviar mensajes a tareas existentes. Las operaciones que necesitan una tarea actual requieren un destino explícito.",
         "hostTools_settings": "Ajustes de la aplicación",
@@ -9334,6 +9345,9 @@
         "failed": "No se pudo completar la limpieza",
         "pending": "En cola"
       }
+    },
+    "navigation": {
+      "unavailable": "No se pudo abrir la configuración del equipo de destino. Comprueba que esté conectado y permita el control remoto; actualiza Cindy si usa una versión antigua."
     }
   },
   "remoteDevice": {
@@ -9449,6 +9463,7 @@
     "backToLogin": "Volver al inicio de sesión"
   },
   "login": {
+    "networkResponseHint": "El servicio de inicio de sesión devolvió una respuesta inesperada. Un intermediario de red o proxy podría estar bloqueando la solicitud. Revisa la configuración de red y proxy.",
     "title": "Te damos la bienvenida a Cindy",
     "subtitle": "Elige cómo iniciar sesión de forma segura",
     "savedLoginPreserved": "La recuperación conserva tus datos de inicio de sesión guardados",
@@ -9795,6 +9810,7 @@
     "tokenLine": "Tokens: {{total}} en total · entrada {{input}} · salida {{output}}",
     "cacheLine": "Desglose de caché: lectura {{read}} · escritura {{create}} · tasa de aciertos {{rate}}",
     "cacheLineNoRate": "Desglose de caché: lectura {{read}} · escritura {{create}}",
+    "stepsLine": "Solicitudes este turno: {{steps}} · ~{{context}} de contexto cada una",
     "modelLine": "Modelo: {{model}}",
     "multipleModels": "{{count}} modelos",
     "costBreakdownHeader": "Por modelo:",
@@ -14050,6 +14066,7 @@
         "realtime": "Audio en tiempo real",
         "embedding": "Embeddings",
         "decision": "Decisión",
+        "rerank": "Reordenación",
         "compression": "Compresión",
         "ungrouped": "Sin agrupar",
         "other": "Otro"
@@ -17382,9 +17399,8 @@
         "automatic": "Automático",
         "manually": "Manualmente",
         "session": "Sesión",
-        "silentRun": "No notificar si las comprobaciones no encuentran nada",
-        "silentRunTooltip": "Informa solo sobre cambios o problemas. Desactiva esta opción para recordatorios y mensajes programados.",
-        "silentRunInfoAria": "Ver reglas de ejecución silenciosa",
+        "silentRun": "Ejecución silenciosa",
+        "silentRunTooltip": "Si está activada, las ejecuciones correctas no notifican de forma predeterminada. Si el prompt de la tarea pide avisar en ciertas condiciones, la IA avisará cuando se cumplan. Los fallos y errores se siguen notificando.",
         "finishSendToFeishu": "Enviar a FeishuBot al finalizar",
         "finishSendToWecomGroup": "Enviar resultado al grupo de WeCom",
         "configWecomGroup": "Configurar notificaciones del grupo de WeCom",
@@ -17494,10 +17510,7 @@
       },
       "layout": {
         "content": "Qué ejecutar",
-        "notifications": "Notificaciones y ejecución silenciosa",
-        "contentTab": "Contenido y activación",
-        "optionsTab": "Opciones de ejecución",
-        "sections": "Configuración de automatización"
+        "notifications": "Notificaciones y ejecución silenciosa"
       },
       "webhook": {
         "quotaHint": "Las entregas de Webhook tienen un límite diario y filtrar aquí no reduce el recuento. En el emisor, como GitHub, selecciona solo los eventos que necesites.",
@@ -21846,5 +21859,31 @@
     "switchOffer": {
       "action": "Continuar con {{model}}"
     }
+  },
+  "taskManagement": {
+    "scope": "Solo se aplica a esta cuenta en este ordenador.",
+    "archive": "Archivo automático",
+    "enabled": "Archivar tareas inactivas automáticamente",
+    "description": "Archiva automáticamente las tareas inactivas. Su historial sigue disponible.",
+    "days": "Días de inactividad",
+    "daysHint": "Desde el último mensaje enviado o recibido, o el fin de una ejecución.",
+    "days7": "7 días",
+    "days14": "14 días",
+    "days30": "30 días",
+    "customDays": "Días personalizados",
+    "invalidDays": "Introduce un entero entre 1 y 365.",
+    "reset": "Restaurar valores",
+    "archiveHint": "Las tareas en uso se conservan. Puedes restaurar las archivadas en cualquier momento.",
+    "preview": "Vista previa del archivo",
+    "loadFailed": "No se pudo cargar la configuración.",
+    "loading": "Cargando configuración…",
+    "candidateCount": "Tareas aptas: {{count}}",
+    "keptCount": "Conservadas: {{count}}",
+    "lastCheck": "Última comprobación: {{date}}",
+    "notChecked": "Aún no hay comprobaciones automáticas",
+    "saveFailed": "No se guardaron los ajustes. Inténtalo de nuevo.",
+    "archivedNotice": "Tareas inactivas archivadas automáticamente: {{count}}",
+    "undo": "Deshacer",
+    "undoFailed": "No se pudo deshacer. Restaura las tareas desde Archivadas."
   }
 }

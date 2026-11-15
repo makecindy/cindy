@@ -94,21 +94,21 @@ afterEach(() => {
 describe('provider weekly quota identity and windows', () => {
   // User report: an unallocated pool still has known per-account quota. Busy
   // accounts remain visible; no pooled percentage or paused default is invented.
-  it.each(['anthropic', 'openai'] as const)('shows each %s account quota before allocation in both rail and model row', async providerId => {
+  it.each(['anthropic', 'openai', 'openai-sub-account'] as const)('shows each %s account quota before allocation in both rail and model row', async providerId => {
     reads.codex.mockReturnValue({ snapshot: null });
     reads.claude.mockReturnValue(null);
     const account = (id: string, used: number, paused = false) => ({
       id, identity: `${id}@example.test`, paused, status: 'ready', running: id === 'a' ? 4 : 0, limit: 4,
       usage: { claude: { sevenDay: { utilization: used } }, codex: { buckets: { codex: { secondary: { windowMinutes: 10080, usedPercent: used } } } } },
     });
-    const pool = { providerId, configured: true,
+    const pool = { providerId, kind: providerId === 'anthropic' ? 'anthropic' : 'openai', configured: true,
       accounts: [account('a', 66), account('b', 20), account('paused', 1, true)] };
     const command = vi.fn().mockResolvedValue(pool);
     let changed!: (event: { providerId: string }) => void;
     Object.assign(window, { electronAPI: { subscriptionAccounts: { command,
       onChanged: (listener: typeof changed) => { changed = listener; return () => {}; },
     } } });
-    const providers = [provider(providerId, { auth: { method: 'oauth', native: providerId === 'anthropic' ? 'claude' : 'codex' } })];
+    const providers = [provider(providerId, { subscriptionAccountPool: providerId === 'anthropic' ? 'anthropic' : 'openai', auth: { method: 'oauth', native: providerId === 'anthropic' ? 'claude' : 'codex' } })];
     const view = render(<ModelSourceUsageProvider providers={providers} scope={{ deviceId: null }}>
       <UnifiedModelRail items={[{ kind: 'provider', providerId }]} active={{ kind: 'all' }}
         providers={providers} providerLabel={() => 'Provider'} onSelect={() => {}} providerUsage={{ deviceId: null }} />

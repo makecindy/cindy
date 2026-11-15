@@ -4299,7 +4299,9 @@
           "inline": "執行於",
           "signInHere": "在這台電腦登入",
           "writeFailed": "「執行於」未能儲存，請重試"
-        }
+        },
+        "sameAccountConnections": "此帳號的已儲存連線",
+        "sameAccountConnectionsHint": "同一帳號只顯示一項。選擇連線僅切換要管理的設定，既有任務維持原連線。"
       },
       "detect": {
         "groupLabel": "偵測到本機 CLI",
@@ -5322,6 +5324,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 伺服器壓縮",
+        "description": "開啟時優先使用伺服器壓縮；關閉後使用 Codex 原生本地摘要，仍會呼叫目前模型。",
+        "hint": "在這台電腦執行的 Codex 下次啟動或恢復任務時生效。不支援伺服器壓縮的供應商維持原有方式。",
+        "loadFailed": "無法讀取 Codex 壓縮設定",
+        "saveFailed": "儲存 Codex 壓縮設定失敗"
+      },
       "title": "上下文壓縮",
       "description": "Claude Code 和 Pi 的壓縮比例在此調整。Codex 隨模型設定的上下文上限自動調整壓縮門檻；遠端壓縮失敗時自動改用摘要壓縮，並在目前任務中保持。",
       "card": {
@@ -8150,6 +8159,8 @@
         "cindyTextOneshot": "可向 Cindy 的快速通道提問並獲得文字回答",
         "cindyTextOneshotDetail": "走系統的輕量任務模型鏈（與自動起標題同一條通道），不動用 Agent、碰不到你的檔案，可能產生模型費用。",
         "cindyEmbedText": "可把文字送去算成向量（用於語義檢索）",
+        "cindyModelsDecisions": "可呼叫決策模型（使用你的模型配額）",
+        "cindyModelsRerank": "可呼叫重排模型（使用你的模型配額）",
         "cindyEmbedTextDetail": "文字會送到系統的向量模型算成一串數字，單次最多 {{max}} 條，可能產生模型費用。算出的向量只交給插件自己保管，不寫入你的資料庫。",
         "cindySearchWeb": "可使用 Cindy AI 搜尋公網",
         "cindySearchWebDetail": "查詢會存取公開網路，並可能消耗 Cindy AI 配額。",
@@ -8172,9 +8183,9 @@
         "agentCompanionsDetail": "可查看所有夥伴（包括在你其他電腦上執行的夥伴）的名稱、簡介、頭像和狀態（工作中、等你處理、閒置、離線），每位夥伴正在做哪類事（如思考、執行工具），等你處理的請求內容（提問、要執行的指令、計畫，和對話裡看到的一樣），以及夥伴主對話裡最近的對話（最多 50 則你說的話和夥伴的回覆，不含工具過程），並在主視窗開啟夥伴的對話。同時獲准投遞訊息時，可以把你在插件裡給的回答交給夥伴：回答提問、拒絕請求、對計畫提意見；允許執行仍要你在 Cindy 自己的確認框裡點。無法讀取檔案，也看不到工具過程和思考內容。",
         "agentCompanionsRequest": "確認夥伴檢視權限",
         "hostTools_history": "任務歷史",
-        "hostTools_historyDetail": "透過 Cindy 的任務工具查詢現有任務、讀取完整訊息及搜尋歷史；可明確選擇你有權存取的其他電腦。",
+        "hostTools_historyDetail": "透過 Cindy 的任務工具查詢現有任務、讀取完整訊息及搜尋歷史；可明確選擇你有權存取的其他電腦。也可將本機任務匯出為原生檔案。插件依安裝授權呼叫；Agent 執行時遵循自身權限流程。",
         "hostTools_control": "任務管理",
-        "hostTools_controlDetail": "透過 Cindy 的任務工具修改、封存、還原及控制現有任務與專案。高風險操作每次都須在 Cindy 中確認。",
+        "hostTools_controlDetail": "透過 Cindy 的任務工具修改、封存、還原及控制現有任務與專案，並在本機匯入原生任務檔案。高風險操作每次都須在 Cindy 中確認。",
         "hostTools_handoff": "任務投遞",
         "hostTools_handoffDetail": "透過 Cindy 的任務工具向現有任務傳送訊息。需要目前任務情境的操作須明確指定任務。",
         "hostTools_settings": "應用程式設定",
@@ -9219,6 +9230,9 @@
         "failed": "回收未能完成",
         "pending": "已排入佇列"
       }
+    },
+    "navigation": {
+      "unavailable": "無法開啟目標電腦的設定。請確認電腦在線上且已允許遠端控制；舊版本請先更新 Cindy。"
     }
   },
   "remoteDevice": {
@@ -9334,6 +9348,7 @@
     "backToLogin": "返回登入方式"
   },
   "login": {
+    "networkResponseHint": "登入服務傳回異常回應，請求可能被中間網路或 Proxy 攔截。請檢查網路和 Proxy 設定。",
     "title": "歡迎使用 Cindy",
     "subtitle": "選擇一種方式安全登入",
     "savedLoginPreserved": "恢復操作會保留已儲存的登入資訊",
@@ -9680,6 +9695,7 @@
     "tokenLine": "Tokens：共 {{total}} · 輸入 {{input}} · 輸出 {{output}}",
     "cacheLine": "快取拆分：讀取 {{read}} · 寫入 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "快取拆分：讀取 {{read}} · 寫入 {{create}}",
+    "stepsLine": "本輪請求 {{steps}} 次 · 每次約 {{context}} 上下文",
     "modelLine": "模型：{{model}}",
     "multipleModels": "{{count}} 個模型",
     "costBreakdownHeader": "按模型拆分：",
@@ -13880,6 +13896,7 @@
         "realtime": "即時語音",
         "embedding": "向量",
         "decision": "決策",
+        "rerank": "重排",
         "compression": "壓縮",
         "ungrouped": "未分組",
         "other": "其他"
@@ -17143,9 +17160,8 @@
         "automatic": "自動",
         "manually": "手動",
         "session": "任務",
-        "silentRun": "檢查沒事不說話",
-        "silentRunTooltip": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
-        "silentRunInfoAria": "檢視靜默執行規則",
+        "silentRun": "靜默執行",
+        "silentRunTooltip": "開啟後，任務成功完成時預設不提醒。若任務說明中要求在特定情況提醒，AI 會在滿足條件時主動上報；失敗和異常仍會提醒。",
         "finishSendToFeishu": "完成時傳送到飛書機器人",
         "finishSendToWecomGroup": "完成時傳送到企業微信群",
         "configWecomGroup": "設定企業微信群通知",
@@ -17255,10 +17271,7 @@
       },
       "layout": {
         "content": "執行內容",
-        "notifications": "通知與靜默",
-        "contentTab": "內容與觸發",
-        "optionsTab": "執行選項",
-        "sections": "自動化設定"
+        "notifications": "通知與靜默"
       },
       "webhook": {
         "quotaHint": "每天的 Webhook 接收次數有上限，這裡的篩選不會減少次數。請在傳送方（如 GitHub）只勾選需要的事件。",
@@ -21559,5 +21572,31 @@
     "switchOffer": {
       "action": "換到 {{model}} 繼續"
     }
+  },
+  "taskManagement": {
+    "scope": "僅套用於目前帳號在這台電腦上的任務。",
+    "archive": "自動封存",
+    "enabled": "自動封存閒置任務",
+    "description": "自動收起閒置任務，歷史記錄仍可查看。",
+    "days": "閒置天數",
+    "daysHint": "從最近一次收發訊息或執行結束開始計算。",
+    "days7": "7 天",
+    "days14": "14 天",
+    "days30": "30 天",
+    "customDays": "自訂天數",
+    "invalidDays": "請輸入 1–365 之間的整數。",
+    "reset": "恢復預設",
+    "archiveHint": "使用中的任務會保留，封存後可隨時恢復。",
+    "preview": "封存預覽",
+    "loadFailed": "未能讀取設定。",
+    "loading": "正在讀取設定…",
+    "candidateCount": "可封存 {{count}} 個任務",
+    "keptCount": "保留 {{count}} 個",
+    "lastCheck": "上次檢查：{{date}}",
+    "notChecked": "尚未執行自動檢查",
+    "saveFailed": "設定未儲存，請重新操作。",
+    "archivedNotice": "已自動封存 {{count}} 個閒置任務",
+    "undo": "復原",
+    "undoFailed": "無法復原，請在已封存任務中恢復。"
   }
 }

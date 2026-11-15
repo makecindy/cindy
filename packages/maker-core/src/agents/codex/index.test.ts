@@ -5984,10 +5984,13 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await handle.close();
   });
 
-  it('selects remote compaction identities only for ChatGPT and Cindy codex routes', async () => {
-    const agent = new CodexAgent(createDeps());
+  // Unit: startSession must emit the requested native provider without changing
+  // unrelated routes. Existing default-only coverage could not detect ignored off.
+  it.each([null, false, true])('selects native compaction identities with server preference %s', async preference => {
+    const agent = new CodexAgent(createDeps({}, { getCodexServerCompactionPreference: () => preference }));
     const host = installFakeHost(agent, undefined, {
       codexProxyActive: true,
+      localCompactionProviderId: 'cindy_summary',
       remoteCompactionProviderId: 'cindy_openai',
       cindyRemoteCompactionProviderId: 'cindy_codex',
     });
@@ -6002,7 +6005,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const oauthParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       modelProvider?: string;
     };
-    expect(oauthParams.modelProvider).toBe('cindy_openai');
+    expect(oauthParams.modelProvider).toBe(preference === false ? 'cindy_summary' : 'cindy_openai');
     await oauthHandle.close();
 
     // Cindy Provider codex/* → 同一 app-server 内选择固定 HTTP 的远程压缩 identity。
@@ -6016,7 +6019,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const gatewayParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       modelProvider?: string;
     };
-    expect(gatewayParams.modelProvider).toBe('cindy_codex');
+    expect(gatewayParams.modelProvider).toBe(preference === false ? 'cindy_summary' : 'cindy_codex');
     await gatewayHandle.close();
 
     // 旧会话未写 providerId 时，codex/* 仍属于 Cindy Provider。
@@ -6029,7 +6032,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const implicitGatewayParams = host.request.mock.calls.find(
       ([method]) => method === Method.ThreadStart,
     )?.[1] as { modelProvider?: string };
-    expect(implicitGatewayParams.modelProvider).toBe('cindy_codex');
+    expect(implicitGatewayParams.modelProvider).toBe(preference === false ? 'cindy_summary' : 'cindy_codex');
     await implicitGatewayHandle.close();
 
     // openai-codex/* 与 codex/* 一样走 Cindy 远程压缩。
@@ -6043,7 +6046,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const openAiCodexParams = host.request.mock.calls.find(
       ([method]) => method === Method.ThreadStart,
     )?.[1] as { modelProvider?: string };
-    expect(openAiCodexParams.modelProvider).toBe('cindy_codex');
+    expect(openAiCodexParams.modelProvider).toBe(preference === false ? 'cindy_summary' : 'cindy_codex');
     await openAiCodexHandle.close();
 
     // Cindy Provider 的非 codex/* 模型不误开远程压缩。
@@ -11934,7 +11937,10 @@ describe('CodexAgent MCP thread context hooks', () => {
   });
 
   describe('automatic remote compaction summary fallback', () => {
-    it.each(['cindy_openai', 'cindy_summary', null])('resumes canonical account history before host reads (%s)', async (savedProvider) => {
+    it.each([
+      ['cindy_openai', null], ['cindy_summary', null], [null, null],
+      ['cindy_openai', false], ['cindy_summary', true],
+    ] as const)('resumes canonical account history (%s, server preference %s)', async (savedProvider, preference) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-account-resume-'));
       const threadId = '0199ae4e-d6b0-7755-a755-66754cd7a847';
       const source = path.join(dir, 'rollout.jsonl');
@@ -11947,20 +11953,20 @@ describe('CodexAgent MCP thread context hooks', () => {
         await fs.writeFile(source, history);
         const prepare = vi.fn(async () => source);
         const recordLocation = vi.fn(async () => {});
-        const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession: prepare,
+        const agent = new CodexAgent(createDeps({}, { getCodexServerCompactionPreference: () => preference, prepareCodexResumeSession: prepare,
           resolveCodexThreadStorage: async () => ({ historyHome: dir, sqliteHome: dir }), recordCodexThreadLocation: recordLocation }));
         const host = installFakeHost(agent, (method, raw) => {
           if (method === 'thread/read') throw new Error(`thread not loaded: ${threadId}`);
           if (method === Method.ThreadResume) return { thread: { id: threadId, path: source }, model: 'gpt-5.6-luna', modelProvider: (raw as { modelProvider?: string }).modelProvider };
           return undefined;
-        }, { codexProxyActive: true, localCompactionProviderId: 'cindy_summary', codexHome: '/tmp/target-account-home' });
+        }, { codexProxyActive: true, remoteCompactionProviderId: 'cindy_openai', localCompactionProviderId: 'cindy_summary', codexHome: '/tmp/target-account-home' });
         const handle = await agent.startSession({ sessionId: 'account-switch', providerId: 'openai', model: 'gpt-5.6-luna', workingDir: dir, resumeSessionId: threadId });
         expect(prepare).toHaveBeenCalledOnce();
         expect(host.getHost).toHaveBeenCalledWith(undefined, expect.anything(), expect.objectContaining({ sqliteHome: dir, keyOverride: expect.stringContaining(`:storage:${dir}`) }));
         expect(recordLocation).toHaveBeenCalledWith(threadId, dir, source);
         const resume = host.request.mock.calls.find(([m]) => m === Method.ThreadResume)!;
         expect(resume[1]).toMatchObject({ threadId, path: source });
-        if (savedProvider === 'cindy_summary') expect(resume[1]).toMatchObject({ modelProvider: savedProvider });
+        expect(resume[1]).toMatchObject({ modelProvider: preference === false || (savedProvider === 'cindy_summary' && preference !== true) ? 'cindy_summary' : 'cindy_openai' });
         expect(host.request.mock.calls.some(([m]) => m === 'thread/read' || m === Method.ThreadStart || m === Method.ThreadFork)).toBe(false);
         expect(handle.id).toBe(threadId);
         await handle.close();

@@ -436,5 +436,8 @@
       "sendText": "Eingegebenen Text senden",
       "taskHint": "Diese Kurzbefehle gelten auf Sitzungsseiten. Ist eine Taste der Spracheingabe zugewiesen, hat diese Vorrang; beim Loslassen bleibt der Text im Nachrichtenfeld."
     }
+  },
+  "navigation": {
+    "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
   }
 }

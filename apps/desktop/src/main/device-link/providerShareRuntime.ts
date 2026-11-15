@@ -2,7 +2,7 @@ import { flushStandbyUsage, importStandbyUsage } from './providerShareAvailabili
 import { publishShareAvailability, refreshStandbyGuests } from './providerShareAvailability.js';
 import { onProviderGroupChanged } from '../provider-group/store.js';
 import { keepSharedProvidersOpen, onRemoteProviderAccessChanged, sharedProviderIdsForRevert } from '../maker-host/remote-provider-access-store.js';
-import { readOpenAiLegacyAccountsIfReadable } from '../subscription-accounts/store.js';
+import { readSharedOpenAiLegacyAccountsIfReadable } from '../subscription-accounts/placement.js';
 import { onDeviceLinkSettingChanged } from './settings-store.desktop.js';
 import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
@@ -377,7 +377,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
     if (accessDefaultMigrated || accessDefaultMigrating) return;
     const loaded = getProviderShareHostCompleteSnapshot();
     if (!loaded) return;
-    const ids = sharedProviderIdsForRevert(loaded, readOpenAiLegacyAccountsIfReadable);
+    const ids = sharedProviderIdsForRevert(loaded, readSharedOpenAiLegacyAccountsIfReadable);
     if (!ids) return;
     accessDefaultMigrating = true;
     void keepSharedProvidersOpen(ids)

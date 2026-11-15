@@ -2669,6 +2669,7 @@ function filterReviewGrepResult(result: any, input: unknown, allowedPaths: strin
 
 interface McpServerRef {
   name: string;
+  displayName?: string;
   url: string;
   remote?: {
     headerEnvVars: Record<string, string>;
@@ -2695,6 +2696,7 @@ const CINDY_DIRECT_BOT_TOOLS = new Set([
 
 interface ConnectedMcpTool {
   serverName: string;
+  displayName: string;
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -2889,6 +2891,7 @@ class McpHttpClient {
   private readonly directLoopback: boolean;
   private readonly requestTimeoutMs: number;
   private startupDeadlineAt: number | null;
+  serverInfoName: string | undefined;
 
   constructor(
     private readonly server: McpServerRef,
@@ -3114,11 +3117,15 @@ class McpHttpClient {
   }
 
   async initialize(): Promise<void> {
-    await this.request('initialize', {
+    const result = await this.request('initialize', {
       protocolVersion: '2025-03-26',
       capabilities: {},
       clientInfo: { name: 'cindy-pi-bridge', version: '1.0.0' },
     });
+    const serverInfo = result && typeof result === 'object' ? (result as Record<string, unknown>).serverInfo : undefined;
+    const name = serverInfo && typeof serverInfo === 'object'
+      ? (serverInfo as Record<string, unknown>).name : undefined;
+    if (typeof name === 'string' && name.trim().length > 0) this.serverInfoName = name.trim();
     await this.notify('notifications/initialized');
   }
 }
@@ -3261,6 +3268,7 @@ class CindyMcpGateway {
   // Weak identities keep the status private without retaining completed calls.
   private readonly failedResults = new WeakMap<object, { content: object; details: unknown }>();
   private readonly tools = new Map<string, ConnectedMcpTool>();
+  private readonly serverDisplayNames = new Map<string, string>();
   // 内层 registry 代拉结果, 按 server 缓存(服务端工具表刷新时失效) — 同一 server 不重复代拉。
   private readonly innerListingCache = new Map<
     string,
@@ -3363,7 +3371,9 @@ class CindyMcpGateway {
     }
   }
 
-  add(serverName: string, client: McpHttpClient, tools: any[]): void {
+  add(serverName: string, client: McpHttpClient, tools: any[], displayName?: string): void {
+    const resolvedDisplayName = displayName?.trim() || client.serverInfoName?.trim() || serverName;
+    this.serverDisplayNames.set(serverName, resolvedDisplayName);
     for (const [key, tool] of this.tools) {
       if (tool.serverName === serverName) this.tools.delete(key);
     }
@@ -3379,6 +3389,7 @@ class CindyMcpGateway {
         : { type: 'object', properties: {}, additionalProperties: true };
       this.tools.set(mcpGatewayKey(serverName, rawTool.name), {
         serverName,
+        displayName: resolvedDisplayName,
         name: rawTool.name,
         description: typeof rawTool.description === 'string' && rawTool.description.length > 0
           ? rawTool.description
@@ -3393,11 +3404,16 @@ class CindyMcpGateway {
     return this.tools.size;
   }
 
+  setServerDisplayName(serverName: string, displayName?: string): void {
+    const normalized = displayName?.trim();
+    if (normalized) this.serverDisplayNames.set(serverName, normalized);
+  }
+
   markUnavailable(serverName: string, reason: string): void {
     this.unavailableServers.set(serverName, reason);
   }
 
-  registerReconnect(serverName: string, connect: () => Promise<{ client: McpHttpClient; tools: any[] }>): void {
+  registerReconnect(serverName: string, connect: () => Promise<{ client: McpHttpClient; tools: any[]; displayName?: string }>): void {
     this.reconnectors.set(serverName, connect);
   }
 
@@ -3411,8 +3427,8 @@ class CindyMcpGateway {
     if (!this.needsRecovery(serverName)) return;
     let pending = this.reconnecting.get(serverName);
     if (!pending) {
-      pending = this.reconnectors.get(serverName)!().then(({ client, tools }) => {
-        this.add(serverName, client, tools);
+      pending = this.reconnectors.get(serverName)!().then(({ client, tools, displayName }) => {
+        this.add(serverName, client, tools, displayName);
       }).catch((error) => {
         this.markUnavailable(serverName, safeMcpFailure(error));
         throw new McpBridgeError('reconnect failed: ' + safeMcpFailure(error));
@@ -3431,10 +3447,11 @@ class CindyMcpGateway {
 
   resolveCall(input: unknown): ResolvedMcpGatewayCall | null {
     const record = recordInput(input);
-    const serverName = typeof record.server === 'string' ? record.server : '';
+    const requestedServerName = typeof record.server === 'string' ? record.server : '';
     const toolName = typeof record.tool === 'string' ? record.tool : '';
-    if (!serverName || !toolName) return null;
-    if (this.botMemoryFacadeEnabled && serverName === 'cindy_memory') return null;
+    if (!requestedServerName || !toolName) return null;
+    const serverName = this.resolveServerName(requestedServerName);
+    if (!serverName || (this.botMemoryFacadeEnabled && serverName === 'cindy_memory')) return null;
     const tool = this.tools.get(mcpGatewayKey(serverName, toolName));
     if (!tool) return null;
     return {
@@ -3442,6 +3459,28 @@ class CindyMcpGateway {
       args: recordInput(record.args),
       tool,
     };
+  }
+
+  private resolveServerName(requested: string): string | null {
+    if (this.clients.has(requested) || this.unavailableServers.has(requested)
+      || this.serverDisplayNames.has(requested)) {
+      return requested;
+    }
+    const matches = [...this.serverDisplayNames.entries()]
+      .filter(([, displayName]) => displayName === requested)
+      .map(([serverName]) => serverName);
+    return matches.length === 1 ? matches[0]! : null;
+  }
+
+  private ambiguousServerNames(requested: string): string[] {
+    return [...this.serverDisplayNames.entries()]
+      .filter(([, displayName]) => displayName === requested)
+      .map(([serverName]) => serverName);
+  }
+
+  private isStableServerId(requested: string): boolean {
+    return this.clients.has(requested) || this.unavailableServers.has(requested)
+      || this.serverDisplayNames.has(requested);
   }
 
   resolveDirectHelperTool(name: string, input: unknown): ResolvedMcpGatewayCall | null {
@@ -3707,12 +3746,14 @@ class CindyMcpGateway {
   }
 
   list(serverName?: string): Array<{ server: string; name: string; description: string }> {
+    const canonicalServerName = serverName ? this.resolveServerName(serverName) : undefined;
     return [...this.tools.values()]
       .filter((tool) => !this.botMemoryFacadeEnabled || tool.serverName !== 'cindy_memory')
-      .filter((tool) => !serverName || tool.serverName === serverName)
+      .filter((tool) => !serverName || (canonicalServerName && tool.serverName === canonicalServerName))
       .sort((a, b) => a.serverName.localeCompare(b.serverName) || a.name.localeCompare(b.name))
       .map((tool) => ({
-        server: tool.serverName,
+        server: tool.displayName,
+        ...(tool.displayName !== tool.serverName ? { serverId: tool.serverName } : {}),
         name: tool.name,
         description: tool.description,
       }));
@@ -3736,9 +3777,12 @@ class CindyMcpGateway {
     const toolName = typeof input.tool === 'string' && input.tool.length > 0
       ? input.tool
       : undefined;
+    const canonicalServerName = serverName ? this.resolveServerName(serverName) : undefined;
+    const ambiguousServerNames = serverName && !this.isStableServerId(serverName)
+      ? this.ambiguousServerNames(serverName) : [];
     const tools = this.list(serverName);
-    const unavailableReason = serverName
-      ? this.unavailableServers.get(serverName)
+    const unavailableReason = canonicalServerName
+      ? this.unavailableServers.get(canonicalServerName)
       : undefined;
     const unavailableServers = this.unavailable();
     let payload: unknown;
@@ -3749,6 +3793,14 @@ class CindyMcpGateway {
         reason: 'Pass both server and tool to inspect one input schema.',
         availableServers: this.availableServers(),
       };
+    } else if (serverName && ambiguousServerNames.length > 1) {
+      payload = {
+        ok: false,
+        errorCode: 'AMBIGUOUS_SERVER',
+        requested: serverName,
+        reason: 'Multiple MCP servers use this display name; pass serverId from the discovery result.',
+        matchingServerIds: ambiguousServerNames,
+      };
     } else if (serverName && unavailableReason) {
       payload = {
         ok: false,
@@ -3758,9 +3810,9 @@ class CindyMcpGateway {
         availableServers: this.availableServers(),
       };
     } else if (serverName && toolName) {
-      const selected = this.botMemoryFacadeEnabled && serverName === 'cindy_memory'
+      const selected = canonicalServerName && this.botMemoryFacadeEnabled && canonicalServerName === 'cindy_memory'
         ? undefined
-        : this.tools.get(mcpGatewayKey(serverName, toolName));
+        : canonicalServerName ? this.tools.get(mcpGatewayKey(canonicalServerName, toolName)) : undefined;
       if (!selected) {
         payload = {
           ok: false,
@@ -3773,7 +3825,8 @@ class CindyMcpGateway {
         payload = {
           ok: true,
           tools: [{
-            server: selected.serverName,
+            server: selected.displayName,
+            ...(selected.displayName !== selected.serverName ? { serverId: selected.serverName } : {}),
             name: selected.name,
             description: selected.description,
             inputSchema: selected.inputSchema,
@@ -3816,6 +3869,12 @@ class CindyMcpGateway {
   private unknownCallMessage(params: unknown): string {
     const input = recordInput(params);
     const serverName = typeof input.server === 'string' ? input.server : '';
+    const ambiguous = serverName && !this.isStableServerId(serverName)
+      ? this.ambiguousServerNames(serverName) : [];
+    if (ambiguous.length > 1) {
+      return 'Ambiguous Cindy MCP server display name. Pass one of these stable server ids: ' +
+        JSON.stringify(ambiguous);
+    }
     const scoped = this.list(serverName || undefined);
     const available = (scoped.length > 0 ? scoped : this.list()).map((tool) => ({
       server: tool.server,
@@ -4195,7 +4254,9 @@ class CindyMcpGateway {
         additionalProperties: false,
       },
       execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => {
-        const server = recordInput(params).server;
+        const requestedServer = recordInput(params).server;
+        const server = typeof requestedServer === 'string'
+          ? (this.resolveServerName(requestedServer) ?? requestedServer) : requestedServer;
         if (typeof server === 'string' && this.needsRecovery(server)) {
           try { await this.recover(server, signal); } catch (error) {
             if (signal?.aborted) throw error;
@@ -4246,6 +4307,7 @@ class CindyMcpGateway {
 async function connectServer(server: McpServerRef, token: string): Promise<{
   client: McpHttpClient;
   tools: any[];
+  displayName: string;
 }> {
   const client = new McpHttpClient(server, token);
   await client.initialize();
@@ -4264,7 +4326,11 @@ async function connectServer(server: McpServerRef, token: string): Promise<{
     cursor = nextCursor;
   }
   client.finishStartup();
-  return { client, tools };
+  return {
+    client,
+    tools,
+    displayName: server.displayName?.trim() || client.serverInfoName || server.name,
+  };
 }
 
 // Pi 内置 find 依赖 fd；PI_OFFLINE=1 时缺失后不会下载。Cindy 已随 Desktop 校验并
@@ -5652,10 +5718,11 @@ export default async function cindyBridge(piApi: any) {
   // 全部 server 并行启动：每个 remote 有独立短预算，多个黑洞 provider 也只占一份
   // startup window，不会串行叠加到 Pi RPC 的 30s ready 超时。
   await Promise.all(servers.map(async (server) => {
+    mcpGateway.setServerDisplayName(server.name, server.displayName);
     mcpGateway.registerReconnect(server.name, () => connectServer(server, token));
     try {
       const connected = await connectServer(server, token);
-      mcpGateway.add(server.name, connected.client, connected.tools);
+      mcpGateway.add(server.name, connected.client, connected.tools, connected.displayName);
       console.error('[cindy-bridge] connected ' + server.name + ' (' + connected.tools.length + ' tools)');
     } catch (err) {
       mcpGateway.markUnavailable(server.name, safeMcpFailure(err));
