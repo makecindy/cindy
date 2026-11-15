@@ -468,6 +468,8 @@ export interface AgentInputCoordinatorDeps {
     signals: InterruptedTurnErrorSignals,
     item: AgentInputQueuedMessage,
   ) => AutoResumeAgentSwitchCause | null;
+  /** Shared bounded budget for provider-group recovery, which has no normal auto-resume token. */
+  claimExternalAutomaticRecovery?: (sessionId: string) => boolean;
   /**
    * **纯判定**：这条 terminal error 有没有可能被自愈接管（`isInterruptedTurnError`）。
    * 不消耗额度、不排期、无副作用。
@@ -3168,7 +3170,7 @@ export class AgentInputCoordinator {
 
   stop(
     sessionId: string,
-    opts?: { keepQueue?: boolean; pauseQueue?: boolean; resumeOnUserInput?: boolean },
+    opts?: { keepQueue?: boolean; pauseQueue?: boolean; resumeOnUserInput?: boolean; discardActiveInput?: boolean },
   ): AgentInputProjection {
     const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
     assertSharedTaskQueueMutation(sharedTask, sessionId, 'agent.stop');
@@ -3214,7 +3216,8 @@ export class AgentInputCoordinator {
     clearErrorProjectionSignals(state);
     state.stickyError = null;
     state.recovery = null;
-    this.cancelPreSendActiveTurn(sessionId, state, preserveQueue);
+    // A scoped group stop preserves unrelated queued inputs, never the cancelled active input.
+    this.cancelPreSendActiveTurn(sessionId, state, preserveQueue && !opts?.discardActiveInput);
     // 用户显式 Stop 立即结束续跑行的 vendor-turn 归属。已跨过 vendor dispatch
     // 的 activeTurn 仍需保留到 abort/terminal 收口，以维持队列边界；这里只清 owner，
     // 让本次 stop projection 不再把「重新连接中」误判为仍在飞。
@@ -6990,7 +6993,7 @@ export class AgentInputCoordinator {
     // resumeAfterProviderGroupDeclined 以 preferProviderGroup=false 回到原有恢复。
     // 其他中断仍先走自愈(如断线后在原电脑恢复)；不能交给组的输入也保持原有处理。
     if (preferProviderGroup) {
-      const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals);
+      const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals, false);
       if (cause === 'overload' || cause === 'usage-limit') return null;
     }
     try {
@@ -7223,7 +7226,7 @@ export class AgentInputCoordinator {
     // a provider-group takeover that this scheduled path does not start.
     if (isSchedulerOriginItem(item)) return;
     if (!this.willNotifyUsageLimitedTurnError(state, item)) return;
-    const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals);
+    const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals, true);
     if (!cause) return;
     state.providerGroupSwitchHold = {
       id: ++this.providerGroupSwitchHoldSeq,
@@ -7239,10 +7242,14 @@ export class AgentInputCoordinator {
     item: AgentInputQueuedMessage,
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+    consumeBudget = false,
   ): AutoResumeAgentSwitchCause | null {
     if (!this.deps.onUsageLimitedTurnError || isSchedulerOriginItem(item) || item.sharedTaskAuthor) return null;
     try {
-      return this.deps.providerGroupSwitchCandidate?.(sessionId, { ...(signals ?? {}), message }, item) ?? null;
+      const cause = this.deps.providerGroupSwitchCandidate?.(sessionId, { ...(signals ?? {}), message }, item) ?? null;
+      if (!cause) return null;
+      if (consumeBudget && this.deps.claimExternalAutomaticRecovery?.(sessionId) === false) return null;
+      return cause;
     } catch (err) {
       log.warn('providerGroupSwitchCandidate failed', { sessionId, error: errorMessage(err) });
       return null;
@@ -7296,6 +7303,12 @@ export class AgentInputCoordinator {
   getProviderGroupSwitchHoldId(sessionId: string): number | null {
     const state = this.states.get(sessionId);
     return state && isProviderGroupSwitchHoldLive(state) ? state.providerGroupSwitchHold!.id : null;
+  }
+
+  /** Whether an automatic provider-group relocation currently owns the recovery hold. */
+  hasProviderGroupSwitchHold(sessionId: string): boolean {
+    const state = this.states.get(sessionId);
+    return Boolean(state && isProviderGroupSwitchHoldLive(state));
   }
 
   /** A synchronous group candidate was declined by its async configuration/eligibility check. */

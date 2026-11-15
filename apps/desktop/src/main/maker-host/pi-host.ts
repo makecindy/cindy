@@ -329,6 +329,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
             // 隧道本地端(不再是远端直连), remote 字段缺省 = undefined。
             const ref: PiMcpServerRef = {
               name: s.name,
+              ...(s.displayName ? { displayName: s.displayName } : {}),
               url: rewritten.url,
             };
             return ref;

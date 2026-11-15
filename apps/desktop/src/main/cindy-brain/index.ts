@@ -1,3 +1,4 @@
+import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/runtime.js';
 import { setPluginEnabled } from './pluginEnableService.js';
 import { createRuntimePluginControl } from './runtimeControl.js';
 import { createRuntimeContextProviders } from './runtimeContext.js';
@@ -598,6 +599,7 @@ import {
   confirmedAutoTools,
   confirmedHostToolGroups,
   confirmedEventTopics,
+  confirmedCindyModelActions,
   confirmedControlPoints,
   confirmedUiCapability,
   obtainGhostInstallConsent,
@@ -6012,6 +6014,8 @@ export function getGhostCindySlot(): GhostCindySlot {
       getOwnerScopeKey: () => activeOwnerScopeKey(),
       isOwnerBoundaryPending: () => isGhostBoundaryPending(),
       // 旧协议只适配参数/结果；付费提交、轮询和入仓全部复用 Core。
+      evaluate: (...args) => callEvaluate(...args),
+      readEvaluationImage: (...args) => readEvaluationImageFile(...args),
       invokeMedia: async ({ imagePaths, imageRefs, sessionId, assertCurrent, ...request }) => {
         assertCurrent();
         const maker = sessionId ? (await import('../maker-host/index.js')).getMakerIfReady() : undefined;
@@ -7934,6 +7938,7 @@ async function installAndDockLocked(
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedHostToolGroups: confirmedHostToolGroups(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedEventTopics: confirmedEventTopics(opts.consent.decision, installedBefore, opts.consent.manifest),
+    approvedCindyModelActions: confirmedCindyModelActions(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
@@ -8135,6 +8140,7 @@ async function updateLocalGhostPackageLocked(
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           approvedHostToolGroups: confirmedHostToolGroups(consent, previousGhost, inspected.manifest),
           approvedEventTopics: confirmedEventTopics(consent, previousGhost, inspected.manifest),
+          approvedCindyModelActions: confirmedCindyModelActions(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
@@ -8726,6 +8732,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           approvedHostToolGroups: confirmedHostToolGroups(expected.consent, installed, inspected.manifest),
           approvedEventTopics: confirmedEventTopics(expected.consent, installed, inspected.manifest),
+          approvedCindyModelActions: confirmedCindyModelActions(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,

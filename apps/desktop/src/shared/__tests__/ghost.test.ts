@@ -72,6 +72,22 @@ import {
   type InstalledGhost,
 } from '../ghost';
 
+// Unit: mirror the protocol's stored compatibility at the Desktop production readers.
+it.each([{}, [], ['rerank', 'rerank'], [42]])('keeps old capabilities beside malformed historical model APIs %j', models => {
+  const raw = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'example', name: 'Example',
+    version: '1', kind: 'chip', entry: 'main.js', cindy: { image: ['generate'], models } };
+  expect(validateGhostManifest(raw).ok).toBe(false);
+  for (const validate of [validateStoredGhostManifest, validateInstalledGhostManifest]) {
+    const stored = validate(raw);
+    expect(stored).toMatchObject({ ok: true, manifest: { cindy: { image: ['generate'] } } });
+    if (stored.ok) {
+      expect(stored.manifest.cindy?.models).toEqual(models);
+      expect(ghostPermissionItems(stored.manifest).some(item => item.key.startsWith('cindy:models.'))).toBe(false);
+    }
+    expect(validate({ ...raw, cindy: { models } }).ok).toBe(true);
+  }
+});
+
 // Unit: runtime projection follows installation authority; display projections stay read-only.
 describe('installed Host UI', () => {
   // Unit: an accepted installation grants the current manifest, including old

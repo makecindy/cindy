@@ -5322,6 +5322,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 서버 압축",
+        "description": "켜면 서버 압축을 우선 사용합니다. 끄면 Codex 기본 로컬 요약을 사용하며, 이 경우에도 현재 모델을 호출합니다.",
+        "hint": "이 컴퓨터에서 Codex가 다음 세션을 시작하거나 재개할 때 적용됩니다. 서버 압축을 지원하지 않는 제공자는 기존 방식을 유지합니다.",
+        "loadFailed": "Codex 압축 설정을 불러오지 못했습니다",
+        "saveFailed": "Codex 압축 설정을 저장하지 못했습니다"
+      },
       "title": "컨텍스트 압축",
       "description": "여기서 Claude Code와 Pi의 압축 비율을 조정합니다. Codex는 모델 컨텍스트 설정에 따라 임계값을 정합니다. 원격 압축이 실패하면 요약 압축으로 자동 전환하고 현재 작업에서 계속 사용합니다.",
       "card": {
@@ -8150,6 +8157,8 @@
         "cindyTextOneshot": "Cindy의 빠른 채널에 질문하고 텍스트 답변을 받을 수 있음",
         "cindyTextOneshotDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다.",
         "cindyEmbedText": "텍스트를 벡터로 변환할 수 있습니다(의미 검색용)",
+        "cindyModelsDecisions": "의사결정 모델 호출 가능(모델 사용 한도 사용)",
+        "cindyModelsRerank": "재순위화 모델 호출 가능(모델 사용 한도 사용)",
         "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
         "cindySearchWeb": "Cindy AI로 공개 웹을 검색할 수 있음",
         "cindySearchWebDetail": "검색 요청은 공개 웹에 접근하며 Cindy AI 할당량을 소모할 수 있습니다.",
@@ -9334,6 +9343,7 @@
     "backToLogin": "로그인 방식으로 돌아가기"
   },
   "login": {
+    "networkResponseHint": "로그인 서비스에서 예상치 못한 응답을 받았습니다. 중간 네트워크나 프록시가 요청을 차단했을 수 있습니다. 네트워크 및 프록시 설정을 확인하세요.",
     "title": "Cindy에 오신 것을 환영합니다",
     "subtitle": "안전한 로그인 방법을 선택하세요",
     "savedLoginPreserved": "복구 과정에서 저장된 로그인 정보를 유지합니다",
@@ -13882,6 +13892,7 @@
         "realtime": "실시간 음성",
         "embedding": "임베딩",
         "decision": "의사결정",
+        "rerank": "재순위화",
         "compression": "압축",
         "ungrouped": "미분류",
         "other": "기타"
@@ -17144,9 +17155,8 @@
         "automatic": "자동",
         "manually": "수동",
         "session": "세션",
-        "silentRun": "확인 결과 변화가 없으면 알리지 않기",
-        "silentRunTooltip": "변화나 문제만 보고합니다. 리마인더와 예약 메시지는 이 옵션을 끌 수 있습니다.",
-        "silentRunInfoAria": "조용히 실행 규칙 보기",
+        "silentRun": "조용히 실행",
+        "silentRunTooltip": "켜면 작업이 성공적으로 완료되어도 기본적으로 알림을 보내지 않습니다. 작업 프롬프트에서 특정 조건에 알림을 요청한 경우, AI가 조건이 충족될 때 직접 보고합니다. 실패와 오류는 계속 알림을 보냅니다.",
         "finishSendToFeishu": "완료 시 Feishu Bot에 전송",
         "finishSendToWecomGroup": "완료 시 WeCom 그룹으로 전송",
         "configWecomGroup": "WeCom 그룹 알림 설정",
@@ -17256,10 +17266,7 @@
       },
       "layout": {
         "content": "실행 내용",
-        "notifications": "알림 및 조용한 실행",
-        "contentTab": "내용 및 트리거",
-        "optionsTab": "실행 옵션",
-        "sections": "자동화 설정"
+        "notifications": "알림 및 조용한 실행"
       },
       "webhook": {
         "quotaHint": "Webhook 수신 횟수에는 일일 한도가 있으며 여기서 필터링해도 횟수는 줄지 않습니다. 보내는 곳(예: GitHub)에서 필요한 이벤트만 선택하세요.",

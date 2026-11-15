@@ -163,6 +163,8 @@ export interface BotGroupChatServiceDeps {
     toolsDisabled?: boolean;
     /** An ordinary task that is not running starts with the permission it was opened with, never bypass. */
     resumeWithStoredPermissionMode?: boolean;
+    /** Recheck execution liveness after async preparation, immediately before enqueue. */
+    assertDispatchCurrent?: () => void;
     onQueued?: (clientId: string) => Promise<void>;
     onAccepted: () => void | Promise<void>;
   }) => Promise<DispatchResult>;
@@ -185,7 +187,7 @@ export interface BotGroupChatServiceDeps {
     controllerDeviceId?: string;
   }) => Promise<BotGroupPreparedAttachments | BotGroupFailure>;
   /** Stop the lane's current turn and drop its pending group inputs. */
-  abortLane: (sessionId: string) => Promise<void>;
+  abortLane: (sessionId: string, inputClientId?: string) => Promise<void>;
   /** Archived lanes are closed in the runtime as well. */
   closeLanes?: (sessionIds: string[]) => Promise<void>;
   /** Keep a lane on the Bot's current canonical permission profile. */
