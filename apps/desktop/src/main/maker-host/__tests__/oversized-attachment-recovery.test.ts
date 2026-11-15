@@ -189,6 +189,56 @@ it('recovers a spooled PDF to hook-attachments while preserving images in the me
   }
 });
 
+// PR2 unit regression: PDFs reached prepare before PR1's image-only fix.
+// PR1's spy callbacks return null, so they cannot detect saving the original PNG
+// after real compression. A PDF plus a 64x48 PNG exercises the actual adapter/
+// controller; only storage/account ports are fakes.
+// Half noise keeps the compressed PNG above the small injected removal budget.
+it('prepares only the PNG and preserves its compressed bytes separately from the PDF', async () => {
+  const pixels = Buffer.alloc(64 * 48 * 3);
+  let seed = 1;
+  for (let i = 0; i < pixels.length / 2; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    pixels[i] = seed >>> 24;
+  }
+  const png = await sharp(pixels, { raw: { width: 64, height: 48, channels: 3 } })
+    .png({ compressionLevel: 0 }).toBuffer();
+  const file = pdfBlock(1);
+  const pdf = Buffer.from(file.file_data.split(',')[1], 'base64');
+  const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [
+    file, { type: 'input_image', image_url: `data:image/png;base64,${png.toString('base64')}` },
+  ] }] }));
+  const preprocessor = createInlineImagePreprocessor(() => true);
+  const prepare = vi.spyOn(preprocessor, 'prepare');
+  const controller = createRequestSizeController(() => state.resolved, preprocessor);
+  const result = await controller.control(raw, 'responses', {
+    signal: new AbortController().signal, route: { providerId: 'xai', modelId: 'grok-4' },
+    triggerBytes: 3500, targetBytes: 1600,
+  });
+
+  expect(prepare).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ bytes: png, mimeType: 'image/png' }));
+  const prepared = await prepare.mock.results[0].value;
+  expect(prepared).toMatchObject({ changed: true, mimeType: 'image/png', width: 64, height: 48 });
+  expect(prepared!.bytes.length).toBeLessThanOrEqual(png.length * 0.85);
+  expect(result).toMatchObject({ imageCount: 1, removedImages: 1 });
+  const content = JSON.parse(result!.body.toString()).input[0].content as Array<{ text: string }>;
+  const pdfPath = preservedLocalPath(content[0].text);
+  const pngPath = preservedLocalPath(content[1].text);
+  expect(path.dirname(pdfPath)).toBe(path.join(state.root, 'hook-attachments', 'test-session'));
+  expect(path.extname(pdfPath)).toBe('.pdf');
+  expect(await readFile(pdfPath)).toEqual(pdf);
+  expect(pngPath).toBe(path.join(state.root, 'saved.png'));
+  const stored = await readFile(pngPath);
+  expect(stored).toEqual(prepared!.bytes);
+  expect(await sharp(stored).raw().toBuffer()).toEqual(pixels);
+  expect(state.ingest).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ mimeType: 'image/png', isCache: false }), expect.anything(),
+  );
+  expect(state.addRef).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ refKind: 'session-attachment', refId: 'test-session' }), expect.anything(),
+  );
+});
+
 // PR #10663: batch persistence could leave the first new reference on later failure.
 // Unit tier: two different images, with failure/cancellation/owner change during commit.
 // Existing compensation tests covered only the legacy recovery factory.
