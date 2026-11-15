@@ -157,7 +157,7 @@ describe('message write paths avoid large-content readback', () => {
     h.nextIds.push('z-first', 'a-second');
     const index = new GhostTaskEventIndex();
     index.replace([{ enabled: true, manifest: { subscribe: { topics: ['message'] } },
-      approval: { state: 'approved', revision: 'r1' }, approvedEventTopics: ['message'] } as InstalledGhost], owner);
+      approval: { state: 'approved', revision: 'r1' } } as InstalledGhost], owner);
     const publishIndexed = vi.fn();
     setTaskChangeListener((event, stamp) => index.publish(event, stamp,
       () => ({ publishIndexed }) as unknown as GhostSubscriptionGateway));
