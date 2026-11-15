@@ -1,3 +1,5 @@
+import { ProjectSettingsSheet } from './ProjectSettingsSheet';
+import { Settings as ProjectSettingsIcon } from 'lucide-react-native';
 import { playHaptic } from '@/platform/haptics';
 import { taskListSessionTarget } from './sessionDrawerNavigation';
 import type { ViewInstance } from 'react-native';
@@ -4068,6 +4070,10 @@ function ProjectRow({
   /** 项目标题与子任务共用同一滑动互斥注册表。 */
   swipe?: SessionSwipeControls;
 }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const hostKeys = new Set(project.sessions.map(item => item.session.remoteHostId
+    ? `remote:${encodeURIComponent(item.session.remoteHostId)}:${project.workingDir}` : `local:${project.workingDir}`));
+  const hostKey = hostKeys.size === 1 ? Array.from(hostKeys)[0]! : null;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -4196,6 +4202,7 @@ function ProjectRow({
         { name: 'newTask', label: t('devices.list.projectActions.newTask') },
         { name: 'allTasks', label: t('devices.list.projectActions.allTasks') },
         { name: 'search', label: t('devices.list.projectActions.search') },
+        ...(hostKey ? [{name:'settings', label:t('settings.projectInfo.title')}] : []),
       ] : undefined}
       onAccessibilityAction={actionable ? (event) => {
         swipe?.registry.closeOpenRow();
@@ -4203,6 +4210,7 @@ function ProjectRow({
           case 'newTask': onNewTask(); break;
           case 'allTasks': onOpenProject(); break;
           case 'search': onSearchProject(); break;
+          case 'settings': if (hostKey) setSettingsOpen(true); break;
         }
       } : undefined}
       accessibilityState={{ expanded: !collapsed }}
@@ -4245,6 +4253,10 @@ function ProjectRow({
         <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
         {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
       </View>
+      {kind === 'project' && hostKey && project.deviceId && <Pressable accessibilityRole="button" accessibilityLabel={t('settings.projectInfo.title')}
+        hitSlop={8} onPress={event => {event.stopPropagation(); setSettingsOpen(true);}} style={{padding:8}}>
+        <ProjectSettingsIcon size={iconSize.lg} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
+      </Pressable>}
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
       {collapsedStatus?.dot ? (
         // 与任务行右槽同一 18×18 槽、同一右边缘,点色与任务行同表。
@@ -4274,6 +4286,8 @@ function ProjectRow({
       style={[styles.projectGroup, suppressTopBorder && styles.projectGroupNoTop]}
       testID={groupTestID}
     >
+      {settingsOpen && hostKey && project.deviceId && <ProjectSettingsSheet deviceId={project.deviceId} projectKey={hostKey}
+        title={project.title} deviceName={project.deviceName} directory={project.workingDir} visible={settingsOpen} onClose={() => setSettingsOpen(false)} />}
       {windowingEnabled && scrollY ? (
         <HomeProjectWindowAnchorTracker
           childOffsets={estimatedChildOffsets}

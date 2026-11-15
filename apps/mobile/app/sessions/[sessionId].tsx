@@ -1,3 +1,8 @@
+import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
+import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
+import { projectAliasComparisonKey, projectDirectoryName } from '@cindy/maker-shared/project-alias-sync';
+import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { playHaptic } from '@/platform/haptics';
 import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
@@ -10351,6 +10356,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     </>
       ) : (
         <SessionHeaderBar
+              deviceId={deviceId}
               horizontalSystemHeader={horizontalSystemHeader}
               currentSession={currentSession}
               diffCount={diffCount}
@@ -11790,6 +11796,7 @@ function SessionChromeLayer({
 type SessionHeaderIcon = typeof Folder;
 
 function SessionHeaderBar({
+  deviceId,
   horizontalSystemHeader,
   noticeOverride,
   currentSession,
@@ -11819,6 +11826,7 @@ function SessionHeaderBar({
   searchOpen,
   title,
 }: {
+  deviceId: string;
   horizontalSystemHeader: boolean;
   noticeOverride?: string;
   currentSession: RemoteSession | null;
@@ -11859,6 +11867,39 @@ function SessionHeaderBar({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const projectDirectory = currentSession && sessionProjectDirectory(currentSession);
+  const hostProjectKey = projectDirectory
+    ? currentSession?.remoteHostId
+      ? `remote:${encodeURIComponent(currentSession.remoteHostId)}:${projectDirectory}`
+      : `local:${projectDirectory}`
+    : null;
+  const projectInfo = useRemoteProjectAliases().get(deviceId);
+  const projectComparison = projectInfo && hostProjectKey && projectAliasComparisonKey(hostProjectKey, projectInfo.platform);
+  const projectName = projectInfo?.aliases.find(row => projectAliasComparisonKey(row.projectKey, projectInfo.platform) === projectComparison)?.alias
+    || (projectDirectory ? projectDirectoryName(projectDirectory) : '');
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
+  useEffect(() => setProjectSettingsOpen(false), [deviceId, hostProjectKey]);
+  const canShowProject = !messageOnly && !isDeviceAccessRevoked && !sharedTaskEnded
+    && !isSharedTaskPeer(deviceId) && currentSession?.workspaceKind !== 'dialogue' && !!projectDirectory;
+  const projectSettings = projectSettingsOpen && canShowProject && hostProjectKey && projectDirectory ? (
+    <ProjectSettingsSheet key={`${deviceId}:${hostProjectKey}`} deviceId={deviceId}
+      projectKey={hostProjectKey} directory={projectDirectory} title={projectName} deviceName={deviceDisplayName(deviceId)}
+      visible onClose={() => setProjectSettingsOpen(false)} />
+  ) : null;
+  const projectIcon = !messageOnly && !isDeviceAccessRevoked && !sharedTaskEnded
+    ? currentSession?.workspaceKind === 'dialogue'
+      ? <View style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
+          <MessagesSquare size={iconSize.md} strokeWidth={iconStroke.thin} color={colors.textSecondary} />
+        </View>
+      : canShowProject && projectDirectory
+        ? <Pressable accessibilityRole="button" accessibilityLabel={t('settings.projectInfo.title')}
+            onPress={() => setProjectSettingsOpen(true)} hitSlop={12}
+            style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
+            <ProjectPickerIcon deviceId={deviceId} workingDir={projectDirectory}
+              remoteHostId={currentSession?.remoteHostId} size={20} />
+          </Pressable>
+        : null
+    : null;
   const overview = currentSession
     ? summarizeSessionOverview({
         diffCount,
@@ -11917,6 +11958,7 @@ function SessionHeaderBar({
     const files = overview?.actions.find((action) => action.id === 'files');
     return (
       <>
+      {projectSettings}
       <Stack.Screen options={{ headerShown: true, headerTransparent: true,
         headerShadowVisible: false, headerBackVisible: false, headerTitleAlign: 'center',
         headerStyle: { backgroundColor: 'transparent' }, headerTintColor: colors.textPrimary,
@@ -11925,7 +11967,7 @@ function SessionHeaderBar({
           <View style={{ width: nativeTitleMaxWidth, height: navigationChrome.target,
             // Reserve the toolbar gaps in the width budget, outside the title.
             minWidth: 0, flexShrink: 1, overflow: 'hidden', justifyContent: 'center' }}>
-            <SessionHeaderNativeTitle title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
+            <SessionHeaderNativeTitle projectIcon={projectIcon} title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
               tags={isDeviceAccessRevoked ? undefined : currentSession?.tags} onTagsPress={onOpenSettings}
               onTitleDoubleTap={titleDoubleTap}
               syncing={syncing} syncingImmediately={syncingImmediately} notice={notice} />
@@ -11971,6 +12013,7 @@ function SessionHeaderBar({
   }
   return (
     <View style={[styles.sessionHeaderBar, nativeHeader && styles.sessionHeaderBarNative]} testID="session.summary">
+      {projectSettings}
       <SystemNavigationBack label={t('shared.back')} onPress={onBack} />
       {sessionListButton}
       {systemBack ? (
@@ -12004,7 +12047,7 @@ function SessionHeaderBar({
         />
       )}
 
-      {nativeHeader ? <SessionHeaderNativeTitle
+      {nativeHeader ? <SessionHeaderNativeTitle projectIcon={projectIcon}
         title={sharedTaskEnded ? t('sharedTask.ended') : title}
           tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}
           onTagsPress={onOpenSettings}
@@ -12015,8 +12058,7 @@ function SessionHeaderBar({
         notice={notice}
       /> : (
       // 双击标题改名;不参与读屏焦点,读屏用户从「任务详情」进入重命名。
-      <Pressable accessible={false} disabled={!titleDoubleTap} onPress={handleTitlePress}
-        style={styles.sessionHeaderTextBlock} testID="session.titleArea">
+      <View style={styles.sessionHeaderTextBlock}>
         <View style={styles.sessionHeaderTitleRow}>
           {!messageOnly && currentSession?.pinnedAt ? (
             <Pin
@@ -12025,9 +12067,13 @@ function SessionHeaderBar({
               strokeWidth={iconStroke.regular}
             />
           ) : null}
+          {projectIcon}
+          <Pressable accessible={false} disabled={!titleDoubleTap} onPress={handleTitlePress}
+            style={{ flexShrink: 1, minWidth: 0, minHeight: 44, justifyContent: 'center' }} testID="session.titleArea">
           <Text numberOfLines={1} style={styles.sessionHeaderTitle} testID="session.title">
             {sharedTaskEnded ? t('sharedTask.ended') : title}
           </Text>
+          </Pressable>
           <TaskTagDots
               tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}
               maxVisible={7}
@@ -12040,7 +12086,7 @@ function SessionHeaderBar({
             {notice}
           </Text>
         ) : null}
-      </Pressable>
+      </View>
       )}
 
       {sharedTaskEnded || systemBack ? null : nativeHeader ? (

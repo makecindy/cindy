@@ -319,6 +319,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'sidebar-settings:apply-project-order',
   // Host-owned project names are read-only on controllers. Local overrides and write channels stay local.
   'sidebar-settings:get-project-aliases',
+  'sidebar-settings:set-project-info',
+  'sidebar-settings:get-project-icon-image',
+  'sidebar-settings:get-project-auto-icon',
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',

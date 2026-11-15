@@ -303,3 +303,13 @@ Desktop 来源选择与 `schedule_create/update` 共用 `source={preset:"github-
 OAuth 代码、App 密钥或任务签名密钥。`schedule_get.webhookStatus` 返回接收状态，不伪造专属地址。
 旧执行端明确拒绝未知来源；旧控制端省略来源的编辑保持既有配置。手机当前保留／读取该配置，新增来源
 表单只在 Desktop；不把控制端本机的登录状态冒充运行电脑的连接状态。
+
+### 项目资料（2026-11-13）
+
+`update_project_info` 与桌面／手机共用项目名称和图标保存入口，支持 `device` 指定同账号电脑。
+`projects.management` 第一层索引可发现；共享任务访客沿用既有拒绝规则，未升级的目标明确返回不支持。
+不更改目录或任务执行参数。
+
+项目图标颜色：`update_project_info` 的 icon 接受 `symbol:Rocket:blue` 等白名单颜色，走同一资料保存入口；连接旧主机时检查 v3 能力，默认颜色省略后缀。字母支持 `text:CY:blue` 等相同色板，远端检查 v5，默认仍是 `text:CY`。
+
+项目自动图标：`get_project_icon` 与设置页共用主机发现／缓存入口，支持跨电脑查询来源及候选；`update_project_info` 传 null 恢复自动，传候选 data URI 主动采用头像。共享任务访客不开放该读写能力。

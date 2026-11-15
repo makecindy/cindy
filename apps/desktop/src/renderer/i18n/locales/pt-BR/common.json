@@ -20587,5 +20587,47 @@
     "switchOffer": {
       "action": "Continuar com {{model}}"
     }
+  },
+  "projectSettings": {
+    "autoLoading": "Buscando ícone…",
+    "autoNone": "Usando as iniciais do nome do projeto.",
+    "autoSource": "Origem",
+    "githubAvatar": "Usar avatar do GitHub",
+    "title": "Configurações do projeto",
+    "name": "Nome de exibição",
+    "saveName": "Salvar nome",
+    "reset": "Restaurar padrão",
+    "icon": "Ícone",
+    "directory": "Pasta do projeto",
+    "done": "Concluído",
+    "failed": "Não foi possível salvar. Tente novamente.",
+    "unavailable": "Configurações indisponíveis. Conecte um computador atualizado e tente novamente.",
+    "back": "Voltar",
+    "cancel": "Cancelar",
+    "changeIcon": "Alterar ícone",
+    "chooseIcon": "Escolher ícone",
+    "save": "Salvar",
+    "symbols": "Ícones",
+    "emoji": "Emoji",
+    "letters": "Letras",
+    "image": "Imagem",
+    "upload": "Enviar imagem",
+    "imageHint": "PNG, JPG ou WebP · corte quadrado",
+    "imageError": "Não foi possível ler a imagem. Tente um PNG ou JPG menor.",
+    "search": "Buscar ícones",
+    "customEmoji": "Ou cole um emoji",
+    "lettersHint": "Use uma ou duas letras ou números.",
+    "thisComputer": "Este computador",
+    "nameHint": "Nome na lista de projetos. A pasta não será renomeada.",
+    "copy": "Copiar caminho",
+    "copied": "Copiado",
+    "applyIcon": "Usar ícone",
+    "noResults": "Nenhum ícone encontrado",
+    "discardHint": "Descartar alterações não salvas?",
+    "keepEditing": "Continuar editando",
+    "discard": "Descartar",
+    "colors": {
+      "default": "Padrão (seguir tema)"
+    }
   }
 }
