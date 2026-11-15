@@ -28,6 +28,8 @@ import { setSessionProvider, getSessionProvider, clearSessionProvider } from '..
 import { planUserRuntimeModelSwitch } from '../../../desktop/src/shared/runtimeModelSwitchGate.ts';
 import { createHostSessionUpdate } from './session-update.ts';
 import { createHostTaskRestore } from './task-restore.ts';
+import { setSessionRouteLockImplementation } from '../../../desktop/src/main/localDb/sessionRouteLock.ts';
+import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { botProfiles, botSessionLinks } from '../../../desktop/src/main/localDb/schema.ts';
 import { MODEL_WINDOW_REBUILD_UNSUPPORTED } from './model-window-gate.ts';
 
@@ -255,4 +257,31 @@ test('restore: a teammate\'s own task is refused, a group lane is restored and d
     assert.equal((await f.row(id)).status, 'active');
     assert.ok((await linkOf(f, id)).archivedAt > 0, 'restored history is never the live group receiver again');
   }
+});
+
+// Unit: the route lock a restore takes. The Host installs the task's send lock as the shared route
+// lock bridge (main.ts, as the desktop's registerAll does). Rule: a send already holding the lock
+// restores re-entrantly; a restore from outside it (context recovery's replay) waits for the holder.
+test('restore: a send holding the task lock restores re-entrantly, and a restore outside it waits for the lock', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  setSessionRouteLockImplementation(withSendToSessionLock);
+  t.after(() => setSessionRouteLockImplementation(null));
+  await archivedTask(f, 'restore-locked');
+  // Re-entrant: the send path already holds the task's lock.
+  await withSendToSessionLock('restore-locked', () => f.taskRestore.restoreArchivedSessionForSend('restore-locked'));
+  assert.equal((await f.row('restore-locked')).status, 'active');
+
+  await f.database.drizzle.update(sessions).set({ status: 'archived' }).where(eq(sessions.id, 'restore-locked'));
+  let release;
+  const held = withSendToSessionLock('restore-locked', () => new Promise(resolve => { release = resolve; }));
+  await new Promise(resolve => setImmediate(resolve));
+  let restored = false;
+  const restoring = f.taskRestore.restoreArchivedSessionForSend('restore-locked').then(() => { restored = true; });
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(restored, false, 'waits while another holder has the task lock');
+  assert.equal((await f.row('restore-locked')).status, 'archived');
+  release();
+  await held;
+  await restoring;
+  assert.equal((await f.row('restore-locked')).status, 'active');
 });
