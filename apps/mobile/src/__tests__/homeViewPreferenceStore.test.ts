@@ -257,6 +257,7 @@ describe('homeViewPreferenceStore', () => {
 it('persists task mode across reload without changing grouping', async () => {
   const prefs = await import('@/session/homeViewPreferenceStore');
   await prefs.saveHomeViewPreferences({ taskListMode: 'inbox', groupByProject: false, viewMode: 'text' });
+  // reset-modules: simulate an app restart so persisted mode is read without the module's in-memory state.
   vi.resetModules();
   const reloaded = await import('@/session/homeViewPreferenceStore');
   expect(await reloaded.readHomeViewPreferences(OWNER)).toMatchObject({ taskListMode: 'inbox', groupByProject: false, viewMode: 'text' });
