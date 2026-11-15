@@ -17145,7 +17145,6 @@
         "session": "セッション",
         "silentRun": "サイレント実行",
         "silentRunTooltip": "オンにすると、正常完了時はデフォルトで通知しません。タスク説明で特定条件の通知を求めている場合、AI が条件を満たしたときに自動で上報します。失敗や異常は引き続き通知されます。",
-        "silentRunInfoAria": "サイレント実行のルールを表示",
         "finishSendToFeishu": "完了時に Feishu Bot に送信",
         "finishSendToWecomGroup": "完了時に WeCom グループへ送信",
         "configWecomGroup": "WeCom グループ通知を設定",
@@ -17255,10 +17254,7 @@
       },
       "layout": {
         "content": "実行内容",
-        "notifications": "通知とサイレント実行",
-        "contentTab": "内容と起動方法",
-        "optionsTab": "実行オプション",
-        "sections": "自動化の設定"
+        "notifications": "通知とサイレント実行"
       },
       "webhook": {
         "quotaHint": "Webhook の受信回数には 1 日の上限があり、ここでのフィルターでは回数は減りません。送信元（GitHub など）で必要なイベントだけを選択してください。",

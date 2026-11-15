@@ -17384,7 +17384,6 @@
         "session": "Sessão",
         "silentRun": "Execução silenciosa",
         "silentRunTooltip": "Quando ativada, as execuções bem-sucedidas não notificam por predefinição. Se o prompt da tarefa pedir aviso em condições específicas, a IA avisará quando forem cumpridas. As falhas e os erros continuam a ser notificados.",
-        "silentRunInfoAria": "Ver regras de execução silenciosa",
         "finishSendToFeishu": "Enviar para FeishuBot ao terminar",
         "finishSendToWecomGroup": "Enviar resultado para o grupo WeCom",
         "configWecomGroup": "Configurar notificações de grupo WeCom",
@@ -17494,10 +17493,7 @@
       },
       "layout": {
         "content": "O que executar",
-        "notifications": "Notificações e execução silenciosa",
-        "contentTab": "Conteúdo e ativação",
-        "optionsTab": "Opções de execução",
-        "sections": "Definições da automatização"
+        "notifications": "Notificações e execução silenciosa"
       },
       "webhook": {
         "quotaHint": "As receções de Webhook têm um limite diário e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários.",

@@ -17145,7 +17145,6 @@
         "session": "세션",
         "silentRun": "조용히 실행",
         "silentRunTooltip": "켜면 작업이 성공적으로 완료되어도 기본적으로 알림을 보내지 않습니다. 작업 프롬프트에서 특정 조건에 알림을 요청한 경우, AI가 조건이 충족될 때 직접 보고합니다. 실패와 오류는 계속 알림을 보냅니다.",
-        "silentRunInfoAria": "조용히 실행 규칙 보기",
         "finishSendToFeishu": "완료 시 Feishu Bot에 전송",
         "finishSendToWecomGroup": "완료 시 WeCom 그룹으로 전송",
         "configWecomGroup": "WeCom 그룹 알림 설정",
@@ -17255,10 +17254,7 @@
       },
       "layout": {
         "content": "실행 내용",
-        "notifications": "알림 및 조용한 실행",
-        "contentTab": "내용 및 트리거",
-        "optionsTab": "실행 옵션",
-        "sections": "자동화 설정"
+        "notifications": "알림 및 조용한 실행"
       },
       "webhook": {
         "quotaHint": "Webhook 수신 횟수에는 일일 한도가 있으며 여기서 필터링해도 횟수는 줄지 않습니다. 보내는 곳(예: GitHub)에서 필요한 이벤트만 선택하세요.",

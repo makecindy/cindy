@@ -17145,7 +17145,6 @@
         "session": "任务",
         "silentRun": "静默运行",
         "silentRunTooltip": "开启后，任务成功完成时默认不提醒。若任务说明中要求在特定情况提醒，AI 会在满足条件时主动上报；失败和异常仍会提醒。",
-        "silentRunInfoAria": "查看静默运行规则",
         "finishSendToFeishu": "完成时发送到飞书机器人",
         "finishSendToWecomGroup": "完成时发送到企业微信群",
         "configWecomGroup": "配置企业微信群通知",
@@ -17255,10 +17254,7 @@
       },
       "layout": {
         "content": "执行内容",
-        "notifications": "通知与静默",
-        "contentTab": "内容与触发",
-        "optionsTab": "运行选项",
-        "sections": "自动化配置"
+        "notifications": "通知与静默"
       },
       "webhook": {
         "quotaHint": "每天的 Webhook 接收次数有上限，这里的筛选不会减少次数。请在发送方（如 GitHub）只勾选需要的事件。",
