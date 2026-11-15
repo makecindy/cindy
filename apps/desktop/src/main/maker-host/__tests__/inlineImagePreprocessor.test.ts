@@ -124,3 +124,30 @@ it('bypasses encoding while disabled and reuses the result after reenabling', as
   expect(await processor.prepare(input)).toBe(first);
   expect(encode).toHaveBeenCalledOnce();
 });
+
+// Unit: user decision to keep JPEG byte-for-byte in prepare. Existing provenance
+// coverage only checked resizer outputs, not untouched q95/q85 or EXIF sources.
+it.each([{ quality: 95 }, { quality: 85 }, { quality: 95, orientation: 6 }])(
+  'preserves JPEG $quality / $orientation before encoding, but still tightens originals',
+  async ({ quality, orientation }) => {
+    const bytes = await sharp({ create: { width: 128, height: 96, channels: 3, background: '#517293' } })
+      .withMetadata({ orientation }).jpeg({ quality, chromaSubsampling: '4:4:4' }).toBuffer();
+    const encode = vi.fn(compressImageBuffer);
+    const processor = createInlineImagePreprocessor(() => true, encode);
+    const input = { bytes, mimeType: 'image/jpeg', route: { providerId: 'openai' }, signal: new AbortController().signal };
+    const result = await processor.prepare(input);
+    expect(result).toBeNull();
+    expect(result?.bytes ?? bytes).toEqual(bytes);
+    expect(encode).not.toHaveBeenCalled();
+    const maxBytes = Math.floor(bytes.length * 0.7);
+    const tight = await processor.tighten!({ ...input, maxBytes });
+    expect(tight?.mimeType).toBe('image/jpeg');
+    expect(tight!.bytes.length).toBeLessThanOrEqual(maxBytes);
+    expect(encode.mock.calls[0][0].bytes).toEqual(bytes);
+    if (orientation === 6) {
+      const meta = await sharp(tight!.bytes).metadata();
+      expect([meta.width, meta.height]).toEqual([96, 128]);
+      expect(meta.orientation).toBeUndefined();
+    }
+  },
+);

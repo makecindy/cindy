@@ -51,13 +51,15 @@ describe('compressImageBuffer', () => {
     expect(result.changed).toBe(true);
   });
 
-  it('re-encodes JPEG at fixed dimensions and falls back when the 15% saving is not met', async () => {
-    const input = await sharp({ create: { width: 120, height: 80, channels: 3, background: { r: 255, g: 255, b: 255 } } }).jpeg().toBuffer();
+  // Unit: normal proxy compression must preserve JPEG, even if a smaller
+  // q90 encoding exists; attachment maxEdgePx and byte budgets remain separate.
+  it('keeps a JPEG byte-for-byte without an attachment or oversized budget', async () => {
+    const input = await sharp({ create: { width: 120, height: 80, channels: 3, background: 'white' } })
+      .withMetadata({ orientation: 6 }).jpeg({ quality: 95 }).toBuffer();
     const result = await compressImageBuffer({ bytes: input, mimeType: 'image/jpeg' });
-    expect(result.mimeType).toBe('image/jpeg');
-    expect(result.width).toBe(120);
-    expect(result.height).toBe(80);
-    expect(result.bytes.length).toBeLessThanOrEqual(input.length);
+    expect(result.changed).toBe(false);
+    expect(result.bytes).toEqual(input);
+    expect([result.width, result.height]).toEqual([80, 120]);
   });
 
   it('uses original content plus complete parameters for a stable cache key', async () => {
@@ -109,7 +111,7 @@ describe('required resizing and byte budgets', () => {
     expect(result.bytes).toEqual(bytes);
     expect(result.changed).toBe(false);
   });
-  it('applies 15 percent only to ordinary recompression, not a satisfied byte budget', async () => {
+  it('accepts JPEG byte-budget output even when savings are below 15 percent', async () => {
     const encoded = await sharp({ create: { width: 200, height: 100, channels: 3, background: 'white' } })
       .jpeg({ quality: 90, mozjpeg: true, chromaSubsampling: '4:4:4' }).toBuffer();
     // Valid JPEG with a tiny trailing pad: re-encoding saves less than 15%.
@@ -128,9 +130,9 @@ describe('required resizing and byte budgets', () => {
     expect(result.changed).toBe(false);
     expect(result.bytes).toEqual(bytes);
   });
-  it('bakes orientation and removes metadata on accepted output', async () => {
+  it('bakes orientation and removes metadata on attachment output', async () => {
     const bytes = await sharp({ create: { width: 400, height: 300, channels: 3, background: 'white' } }).withMetadata({ orientation: 6 }).jpeg({ quality: 100 }).toBuffer();
-    const result = await compressImageBuffer({ bytes, mimeType: 'image/jpeg' });
+    const result = await compressImageBuffer({ bytes, mimeType: 'image/jpeg', budget: { maxEdgePx: 400 } });
     expect(result.changed).toBe(true);
     const meta = await sharp(result.bytes).metadata();
     expect([meta.width, meta.height]).toEqual([300, 400]);

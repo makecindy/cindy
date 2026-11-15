@@ -88,7 +88,7 @@ it.each([
     expect(await sharp(compressedPng.bytes).raw().toBuffer()).toEqual(await sharp(png).raw().toBuffer());
     const compressedJpeg = decode(content[2].image_url!);
     expect(compressedJpeg.mime).toBe('image/jpeg');
-    expect(compressedJpeg.bytes.length).toBeLessThanOrEqual(jpeg.length * 0.85);
+    expect(compressedJpeg.bytes).toEqual(jpeg);
     expect(await sharp(compressedJpeg.bytes).metadata()).toMatchObject({ width: 128, height: 96 });
     expect(content[3]).toEqual(original.input[0].content[3]);
     expect(content[0]).toEqual(original.input[0].content[0]);

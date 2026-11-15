@@ -1,5 +1,5 @@
 /**
- * Deterministic, metadata-free image encoding shared by maker-core and Desktop.
+ * Deterministic image encoding (metadata-free when re-encoding) shared by maker-core and Desktop.
  * The caller decides whether the target route accepts WebP; this module never
  * guesses a remote capability from an image MIME type.
  */
@@ -99,7 +99,7 @@ export function imageCompressionCacheKey(
       acceptsWebp: request.route?.acceptsWebp === true,
     },
     budget: { maxBytes: request.budget?.maxBytes ?? null, maxEdgePx: request.budget?.maxEdgePx ?? null },
-    policy: { revision: 2, quality: 90, mozjpeg: true, chromaSubsampling: '4:4:4', pngLevel: 9, adaptiveFiltering: true, palette: false, colourspace: 'srgb', autoOrient: true, minSaving: 0.15, scale: 0.75, steps: 4 },
+    policy: { revision: 3, quality: 90, mozjpeg: true, chromaSubsampling: '4:4:4', pngLevel: 9, adaptiveFiltering: true, palette: false, colourspace: 'srgb', autoOrient: true, minSaving: 0.15, scale: 0.75, steps: 4 },
     versions: versions(sharp),
   });
   return createHash('sha256').update(bytes).update('\0').update(params).digest('hex');
@@ -126,6 +126,10 @@ export async function compressImageBuffer(request: ImageCompressionRequest): Pro
     const budget = maxBytes !== undefined;
     if (budget && (!Number.isFinite(maxBytes) || maxBytes <= 0)) return unchanged();
     const maxEdge = request.budget?.maxEdgePx;
+    // Ordinary proxy preparation preserves JPEG bytes. The attachment resizer
+    // supplies maxEdgePx and retains its existing q90 policy; tighten supplies
+    // maxBytes and may still encode the original to meet an upstream limit.
+    if (!budget && maxEdge === undefined && originalMime === 'image/jpeg') return unchanged();
     const resize = maxEdge !== undefined && Number.isFinite(maxEdge) && maxEdge > 0 && Math.max(width, height) > maxEdge;
     if (!budget && !resize && (originalMime === 'image/webp' || originalMime === 'image/gif')) return unchanged();
     if (budget && bytes.length <= maxBytes) return unchanged();

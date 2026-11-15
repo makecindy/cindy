@@ -1,4 +1,4 @@
-import { compressImageBuffer, imageCompressionCacheKey, isCompressedImageOutput, rememberCompressedImage } from '@cindy/maker-core/image-compressor';
+import { compressImageBuffer, detectSupportedImageMime, imageCompressionCacheKey, isCompressedImageOutput, rememberCompressedImage } from '@cindy/maker-core/image-compressor';
 import { acceptsWebpImageInput } from '@cindy/model-providers';
 
 import type { ImageRouteInfo, InlineImagePreprocessor, PreparedImage } from '@cindy/anthropic-compat-proxy';
@@ -22,6 +22,9 @@ export function createInlineImagePreprocessor(
   const waiters: Array<() => void> = [];
   const run = async (input: Input, maxBytes?: number): Promise<PreparedImage | null> => {
     if (!enabled() || input.signal.aborted) return null;
+    // Returning null preserves the original bytes, including EXIF orientation.
+    // Do this before cache lookup or encoder scheduling; tighten is unaffected.
+    if (maxBytes === undefined && detectSupportedImageMime(input.bytes) === 'image/jpeg') return null;
     const denied = input.route.deniedMimeTypes ?? [];
     const acceptsWebp = Boolean(input.route.providerId?.trim()) && !denied.includes('image/webp') && acceptsWebpImageInput(input.route);
     const request = { bytes: input.bytes, mimeType: input.mimeType, route: { acceptsWebp }, budget: maxBytes === undefined ? undefined : { maxBytes } };
