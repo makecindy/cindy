@@ -14,6 +14,8 @@ export interface ImageCompressionRoute {
   modelId?: string;
   /** Proxy supplies the resolved capability. Omitted means false (fail closed). */
   acceptsWebp?: boolean;
+  /** Explicit upstream refusal; ordinary WebP preparation must use PNG. */
+  rejectsWebp?: boolean;
 }
 
 export interface ImageCompressionBudget {
@@ -97,9 +99,10 @@ export function imageCompressionCacheKey(
       providerId: request.route?.providerId ?? null,
       modelId: request.route?.modelId ?? null,
       acceptsWebp: request.route?.acceptsWebp === true,
+      rejectsWebp: request.route?.rejectsWebp === true,
     },
     budget: { maxBytes: request.budget?.maxBytes ?? null, maxEdgePx: request.budget?.maxEdgePx ?? null },
-    policy: { revision: 3, quality: 90, mozjpeg: true, chromaSubsampling: '4:4:4', pngLevel: 9, adaptiveFiltering: true, palette: false, colourspace: 'srgb', autoOrient: true, minSaving: 0.15, scale: 0.75, steps: 4 },
+    policy: { revision: 4, quality: 90, mozjpeg: true, chromaSubsampling: '4:4:4', pngLevel: 9, adaptiveFiltering: true, palette: false, colourspace: 'srgb', autoOrient: true, minSaving: 0.15, scale: 0.75, steps: 4 },
     versions: versions(sharp),
   });
   return createHash('sha256').update(bytes).update('\0').update(params).digest('hex');
@@ -131,7 +134,8 @@ export async function compressImageBuffer(request: ImageCompressionRequest): Pro
     // maxBytes and may still encode the original to meet an upstream limit.
     if (!budget && maxEdge === undefined && originalMime === 'image/jpeg') return unchanged();
     const resize = maxEdge !== undefined && Number.isFinite(maxEdge) && maxEdge > 0 && Math.max(width, height) > maxEdge;
-    if (!budget && !resize && (originalMime === 'image/webp' || originalMime === 'image/gif')) return unchanged();
+    const convertRejectedWebp = request.budget === undefined && originalMime === 'image/webp' && request.route?.rejectsWebp === true;
+    if (!budget && !resize && !convertRejectedWebp && (originalMime === 'image/webp' || originalMime === 'image/gif')) return unchanged();
     if (budget && bytes.length <= maxBytes) return unchanged();
     const webp = request.route?.acceptsWebp === true;
     let edge = resize && !budget ? Math.floor(maxEdge) : Math.max(width, height);
@@ -139,7 +143,9 @@ export async function compressImageBuffer(request: ImageCompressionRequest): Pro
       let pipeline = sharp(bytes, { failOn: 'error', limitInputPixels: 100_000_000 }).rotate().toColourspace('srgb');
       if (edge < Math.max(width, height)) pipeline = pipeline.resize({ width: edge, height: edge, fit: 'inside', withoutEnlargement: true });
       let mimeType: SupportedImageMime;
-      if (originalMime === 'image/jpeg') {
+      if (convertRejectedWebp) {
+        mimeType = 'image/png';
+      } else if (originalMime === 'image/jpeg') {
         mimeType = 'image/jpeg';
       } else if (originalMime === 'image/webp' && !budget) {
         mimeType = 'image/webp';
@@ -156,7 +162,7 @@ export async function compressImageBuffer(request: ImageCompressionRequest): Pro
         edge = Math.max(1, Math.floor(edge * 0.75));
         continue;
       }
-      if (!budget && !resize && output.data.length > Math.floor(bytes.length * 0.85)) return unchanged();
+      if (!budget && !resize && !convertRejectedWebp && output.data.length > Math.floor(bytes.length * 0.85)) return unchanged();
       rememberCompressedImage(output.data);
       return { bytes: output.data, mimeType, width: output.info.width, height: output.info.height, changed: true, cacheKey };
     }

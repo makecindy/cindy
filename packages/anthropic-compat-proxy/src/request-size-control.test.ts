@@ -185,6 +185,34 @@ describe('request size control', () => {
     expect(calls).toBe(2);
   });
 
+  // Format rejection previously discarded a valid PNG because it was larger than
+  // WebP. Unit: one inline image; existing preprocessing tests only shrink bytes.
+  it.each([
+    { deniedMimeTypes: [], mimeType: 'image/png', accepted: false },
+    { deniedMimeTypes: ['image/webp'], mimeType: 'image/png', accepted: true },
+    { deniedMimeTypes: ['image/webp'], mimeType: 'image/webp', accepted: false },
+    { deniedMimeTypes: ['image/webp', 'image/png'], mimeType: 'image/png', accepted: false },
+  ])('accepts larger prepared bytes only to repair a rejected format: %j', async ({ deniedMimeTypes, mimeType, accepted }) => {
+    const raw = Buffer.from(JSON.stringify({ input: [{ role: 'user', content: [
+      { type: 'input_image', image_url: `data:image/webp;base64,${imageData(1, 10)}` },
+    ] }] }));
+    const output = Buffer.alloc(20, 2);
+    const result = await controlRequestSize(raw, 'responses', {
+      allowRemoval: false,
+      route: { deniedMimeTypes },
+      preprocessor: { async prepare() {
+        return { bytes: output, mimeType, width: 1, height: 1, changed: true, cacheKey: 'format-retry' };
+      } },
+    }, preserve);
+    if (accepted) {
+      expect(result?.body.toString()).toContain(`data:image/png;base64,${output.toString('base64')}`);
+      expect(result?.removedImages).toBe(0);
+      expect(result!.body.length).toBeGreaterThan(raw.length);
+    } else {
+      expect(result).toBeNull();
+    }
+  });
+
   it('passes original bytes to tighten even after prepare returns an intermediate image', async () => {
     const original = Buffer.alloc(400, 9);
     let tightenedInput: Buffer | undefined;
