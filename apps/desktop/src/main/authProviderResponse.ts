@@ -3,6 +3,9 @@ import { redact } from './log-upload/redact';
 
 /** Untrusted proxy pages can echo credentials in HTML, URLs or plain text. */
 function safeExcerpt(value: string, limit: number): string {
+  // Bound synchronous diagnostic work, not just its output. Omit oversized
+  // values whole: slicing before redaction could expose a partial credential.
+  if (value.length > 16 * 1024) return '[omitted: exceeds diagnostic limit]';
   return redact(value
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/gi, '[url]')
     .replace(/\b(?:Bearer|Basic|Digest|Negotiate|NTLM)\s+[^\s<>]+/gi, '[credential]')

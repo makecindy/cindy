@@ -40,8 +40,20 @@ describe('public providers response diagnostics', () => {
     expect(report.mock.calls[0][0].bodyPrefix).not.toMatch(/[\r\n]/);
   });
 
+  // Review #10627: output truncation did not bound synchronous redaction work.
+  // One character above the diagnostic budget must omit the whole unsafe value.
+  it('omits oversized diagnostics while preserving the responder and HTTP failure', async () => {
+    const body = '<html>password=private-secret'.padEnd(16 * 1024 + 1, 'x');
+    const { client, report, fetch } = setup(body, 418, { server: 'edge-proxy', via: '1.1 gateway' });
+    const failure = await client.getProviders().catch(mapLoginProvidersLoadFailure);
+    expect(failure).toMatchObject({ code: 'INVALID_RESPONSE', state: { httpStatus: 418 } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(report).toHaveBeenCalledExactlyOnceWith({ status: 418, server: 'edge-proxy', via: '1.1 gateway',
+      bodyPrefix: '[omitted: exceeds diagnostic limit]' });
+  });
+
   it('keeps structured server errors and authenticated endpoints out of body diagnostics', async () => {
-    const structured = setup(JSON.stringify({ error: { code: 'AUTH_REQUEST_FAILED' } }), 503);
+    const structured = setup(JSON.stringify({ error: { code: 'AUTH_REQUEST_FAILED' }, detail: 'x'.repeat(16 * 1024 + 1) }), 503);
     await expect(structured.client.getProviders()).rejects.toMatchObject({ code: 'AUTH_REQUEST_FAILED', statusCode: 503 });
     expect(structured.report).not.toHaveBeenCalled();
     const authenticated = setup('<html>private account response</html>');
