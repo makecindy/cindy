@@ -5322,6 +5322,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 服务器压缩",
+        "description": "开启时优先使用服务器压缩；关闭后使用 Codex 原生本地摘要，仍会调用当前模型。",
+        "hint": "在这台电脑运行的 Codex 下次启动或恢复任务时生效。不支持服务器压缩的供应商保持原有方式。",
+        "loadFailed": "无法读取 Codex 压缩设置",
+        "saveFailed": "保存 Codex 压缩设置失败"
+      },
       "title": "上下文压缩",
       "description": "Claude Code 和 Pi 的压缩比例在此调整。Codex 随模型设置的上下文上限自动调整压缩阈值；远端压缩失败时自动改用摘要压缩，并在当前任务中保持。",
       "card": {

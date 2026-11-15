@@ -5423,6 +5423,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Compressão do Codex no servidor",
+        "description": "Quando ativada, dá preferência à compressão no servidor. Quando desativada, o Codex utiliza o resumo local nativo, que continua a chamar o modelo atual.",
+        "hint": "Aplica-se quando o Codex iniciar ou retomar uma tarefa neste computador. Os fornecedores sem compressão no servidor mantêm o comportamento atual.",
+        "loadFailed": "Não foi possível carregar as definições de compressão do Codex",
+        "saveFailed": "Não foi possível guardar as definições de compressão do Codex"
+      },
       "title": "Compactação de contexto",
       "description": "Ajuste aqui as proporções de compactação do Claude Code e do Pi. O Codex calcula o limiar a partir da definição de contexto do modelo. Se a compactação remota falhar, muda automaticamente para compactação por resumo e continua a utilizá-la na tarefa atual.",
       "card": {

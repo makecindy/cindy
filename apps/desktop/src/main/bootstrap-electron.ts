@@ -1004,6 +1004,8 @@ import {
   type ProviderSecretId,
 } from '../shared/providerSecrets.js';
 import {
+  readCodexCompactionState,
+  writeCodexServerCompaction,
   readCompactionPct,
   readCompactionState,
   resetCompactionPct,
@@ -5745,6 +5747,20 @@ const registerIpcHandlers = () => {
     assertTrustedAppRendererEvent(event);
     resetSessionRuntimeFallbackSettings();
     return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
+  });
+
+  ipcMain.handle(MAKER_IPC_INVOKE.CODEX_COMPACTION_GET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return codexCompactionWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.CODEX_COMPACTION_SET, async (event, enabled: unknown, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    assertCompactionMutationOwner(owner);
+    if (enabled !== null && typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'codex compaction enabled must be boolean or null');
+    }
+    writeCodexServerCompaction(enabled as boolean | null);
+    return codexCompactionWire();
   });
 
   ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async (event) => {
@@ -11401,6 +11417,11 @@ function sessionRuntimeFallbackWire() {
     isCustomized: state.isCustomized,
     defaultEnabled: state.defaults.enabled,
   };
+}
+
+function codexCompactionWire() {
+  const state = readCodexCompactionState();
+  return { enabled: state.value.serverEnabled !== false, isCustomized: state.isCustomized };
 }
 
 function compactionWire() {

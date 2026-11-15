@@ -5423,6 +5423,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Compression de Codex sur le serveur",
+        "description": "Lorsque cette option est activée, la compression sur le serveur est privilégiée. Sinon, Codex utilise son résumé local natif, qui fait toujours appel au modèle actuel.",
+        "hint": "Ce réglage prend effet au prochain démarrage ou à la prochaine reprise d’une tâche Codex sur cet ordinateur. Les fournisseurs sans compression sur le serveur conservent leur fonctionnement.",
+        "loadFailed": "Impossible de charger les paramètres de compression de Codex",
+        "saveFailed": "Impossible d’enregistrer les paramètres de compression de Codex"
+      },
       "title": "Compaction du contexte",
       "description": "Réglez ici les ratios de compaction de Claude Code et de Pi. Codex calcule son seuil à partir du paramètre de contexte du modèle. Si la compaction distante échoue, il bascule automatiquement sur la compaction par résumé et continue de l'utiliser pour la tâche en cours.",
       "card": {

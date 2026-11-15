@@ -1364,6 +1364,8 @@ export interface AgentDeps {
    * 缺省 / no-op → 行为与改动前一致。
    */
   prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
+  /** null/absent preserves native policy; sampled at session start/resume. */
+  getCodexServerCompactionPreference?: () => boolean | null;
   recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
   /** readOnly locates existing storage without invoking resume recovery or copying history. */
   resolveCodexThreadStorage?: (threadId: string, options?: { readOnly?: boolean }) => Promise<{ historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined>;

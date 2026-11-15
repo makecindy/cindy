@@ -8108,7 +8108,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       effective: 'immediate';
     }> => ipcRenderer.invoke('maker:session-runtime-fallback:reset'),
 
-    // Claude Code 自动上下文压缩阈值。仅对新建会话生效。
+    // Codex 原生服务器/本地压缩选择。下次启动或恢复任务时生效。
+    codexCompactionGet: (): Promise<{ enabled: boolean; isCustomized: boolean }> =>
+      ipcRenderer.invoke('maker:codex-compaction:get'),
+    codexCompactionSet: (
+      enabled: boolean | null,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ): Promise<{ enabled: boolean; isCustomized: boolean }> =>
+      ipcRenderer.invoke('maker:codex-compaction:set', enabled, owner),
+    // Claude Code 自动上下文压缩阈值。
     compactionGetPct: (): Promise<number> => ipcRenderer.invoke('maker:compaction:get-pct'),
     compactionGetState: (): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:compaction:get-state'),

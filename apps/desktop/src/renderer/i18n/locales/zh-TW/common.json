@@ -5322,6 +5322,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 伺服器壓縮",
+        "description": "開啟時優先使用伺服器壓縮；關閉後使用 Codex 原生本地摘要，仍會呼叫目前模型。",
+        "hint": "在這台電腦執行的 Codex 下次啟動或恢復任務時生效。不支援伺服器壓縮的供應商維持原有方式。",
+        "loadFailed": "無法讀取 Codex 壓縮設定",
+        "saveFailed": "儲存 Codex 壓縮設定失敗"
+      },
       "title": "上下文壓縮",
       "description": "Claude Code 和 Pi 的壓縮比例在此調整。Codex 隨模型設定的上下文上限自動調整壓縮門檻；遠端壓縮失敗時自動改用摘要壓縮，並在目前任務中保持。",
       "card": {

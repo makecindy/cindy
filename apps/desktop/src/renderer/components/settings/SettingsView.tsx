@@ -90,6 +90,7 @@ const WorktreeRecycleCard = lazy(() => import('./WorktreeRecycleCard').then(modu
 const StorageManagementCard = lazy(() => import('./StorageManagementCard').then(module => ({ default: module.StorageManagementCard })));
 const UserPromptSection = lazy(() => import('./UserPromptSection').then(module => ({ default: module.UserPromptSection })));
 const MemorySection = lazy(() => import('./MemorySection').then(module => ({ default: module.MemorySection })));
+const CompactionSection = lazy(() => import('./CompactionSection').then(module => ({ default: module.CompactionSection })));
 const StreamFadeSection = lazy(() => import('./StreamFadeSection').then(module => ({ default: module.StreamFadeSection })));
 const SessionImportSection = lazy(() => import('./SessionImportSection').then(module => ({ default: module.SessionImportSection })));
 const HelpSection = lazy(() => import('./HelpSection').then(module => ({ default: module.HelpSection })));
@@ -654,6 +655,9 @@ function SettingsViewContent() {
                   </section>
                   <section id={personalizationDetailsSettings.memoryMakerLabel.targetId} aria-label={t(personalizationSettings.memory.titleKey)}>
                     <MemorySection />
+                  </section>
+                  <section id={personalizationSettings.codexCompaction.targetId} aria-label={t(personalizationSettings.codexCompaction.titleKey)}>
+                    <CompactionSection key={`codex-compaction:${mode}:${dataOwnerId ?? 'none'}`} />
                   </section>
                   <section id={personalizationSettings.subagents.targetId} aria-label={t(personalizationSettings.subagents.titleKey)}>
                     <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />

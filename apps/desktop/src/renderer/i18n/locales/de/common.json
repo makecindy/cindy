@@ -5365,6 +5365,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex-Komprimierung auf dem Server",
+        "description": "Wenn aktiviert, wird die Komprimierung auf dem Server bevorzugt. Andernfalls nutzt Codex die native lokale Zusammenfassung, die weiterhin das aktuelle Modell aufruft.",
+        "hint": "Gilt beim nächsten Start oder Fortsetzen einer Codex-Aufgabe auf diesem Computer. Anbieter ohne Serverkomprimierung behalten ihr bisheriges Verhalten bei.",
+        "loadFailed": "Codex-Komprimierungseinstellungen konnten nicht geladen werden",
+        "saveFailed": "Codex-Komprimierungseinstellungen konnten nicht gespeichert werden"
+      },
       "title": "Kontextkomprimierung",
       "description": "Passe hier die Komprimierungsverhältnisse für Claude Code und Pi an. Codex leitet seinen Schwellenwert aus der Einstellung für den Modellkontext ab. Wenn die Remote-Komprimierung fehlschlägt, wechselt es automatisch zur Komprimierung per Zusammenfassung und nutzt diese für die aktuelle Aufgabe weiter.",
       "card": {
