@@ -276,30 +276,31 @@ describe("invoke admission", () => {
 
   // A task view keeps up to twelve history/list reads in flight; before the allowance
   // a send queued behind them until one settled (one relay round trip ≈ 0.5 s each).
-  it("admits interactive writes beyond the twelve-slot limit and ahead of queued reads", async () => {
+  it("admits exact-turn stops beyond the twelve-slot limit and ahead of queued reads", async () => {
     const scheduler = new InvokeScheduler();
     const reads = Array.from({ length: 12 }, deferred);
     const running = reads.map((job) => scheduler.run("a", "foreground", 30_000, () => job.promise));
     const started: string[] = [];
     const queuedRead = scheduler.run("a", "foreground", 30_000, async () => { started.push("read"); });
-    const sends = Array.from({ length: 3 }, deferred);
-    const sent = sends.map((job, index) => scheduler.run("a", "interactive", 30_000, () => {
-      started.push(`send-${index}`);
+    const stops = Array.from({ length: 3 }, deferred);
+    const priority = resolveInvokePriority("maker:input:stop-turn");
+    const sent = stops.map((job, index) => scheduler.run("a", priority, 30_000, () => {
+      started.push(`stop-${index}`);
       return job.promise;
     }));
-    // Two extra slots: the third send waits, but still ahead of the queued read.
-    expect(started).toEqual(["send-0", "send-1"]);
-    sends[0].resolve();
+    // Two extra slots: the third stop waits, but still ahead of the queued read.
+    expect(started).toEqual(["stop-0", "stop-1"]);
+    stops[0].resolve();
     await flush();
-    expect(started).toEqual(["send-0", "send-1", "send-2"]);
-    sends[1].resolve();
-    sends[2].resolve();
+    expect(started).toEqual(["stop-0", "stop-1", "stop-2"]);
+    stops[1].resolve();
+    stops[2].resolve();
     await flush();
-    // Sends never borrow from the read limit: twelve reads are still running.
-    expect(started).toEqual(["send-0", "send-1", "send-2"]);
+    // Stops never borrow from the read limit: twelve reads are still running.
+    expect(started).toEqual(["stop-0", "stop-1", "stop-2"]);
     reads[0].resolve();
     await flush();
-    expect(started).toEqual(["send-0", "send-1", "send-2", "read"]);
+    expect(started).toEqual(["stop-0", "stop-1", "stop-2", "read"]);
     reads.forEach((job) => job.resolve());
     await Promise.all([...running, queuedRead, ...sent]);
   });

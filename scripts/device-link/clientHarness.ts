@@ -97,7 +97,10 @@ export async function invoke(
 }
 
 /** Host data/IPC fixture. Transport, reliable ordering and request matching are production code. */
-export function createHost(client: DeviceLinkClient) {
+export function createHost(
+  client: DeviceLinkClient,
+  additionalInvokes: Record<string, (args: unknown[], source: string) => unknown> = {},
+) {
   const messages = [{ id: "m1", clientId: "m1", content: "initial" }];
   const subscriptions = new Map<string, string[]>();
   const executions = new Map<string, number>();
@@ -155,6 +158,10 @@ export function createHost(client: DeviceLinkClient) {
         return;
       }
       default:
+        if (Object.hasOwn(additionalInvokes, channel)) {
+          result = additionalInvokes[channel](args, env.src);
+          break;
+        }
         client.sendInvokeResult(env.src, env.id, {
           ok: false,
           error: { code: "CHANNEL_NOT_ALLOWED", message: "fixture channel" },

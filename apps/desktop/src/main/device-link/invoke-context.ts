@@ -17,6 +17,8 @@ import type { SharedTaskPeerCapture } from './sharedTaskDispatch.js';
 export interface DeviceLinkInvokeContext {
   controllerDeviceId: string;
   channel: string;
+  /** Rechecks a same-account controller at final admission after database IO. */
+  isCurrentController?: () => boolean;
   /** Host-verified sharedTask identity and revocation fence; never populated from wire args. */
   sharedTask?: SharedTaskPeerCapture;
   /** Shared only within this invoke; an admitted native mutation must finish or roll back. */

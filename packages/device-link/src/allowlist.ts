@@ -224,6 +224,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:compact-session',
   'maker:input:steer',
   'maker:input:stop',
+  // This channel performs its own non-takeover, exact-runtime authorization.
+  'maker:input:stop-turn',
   'maker:input:resume',
   'maker:images:retry',
   'maker:input:retry-last-error',

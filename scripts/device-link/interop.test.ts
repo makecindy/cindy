@@ -14,6 +14,7 @@ import { nodeRelayAuthCrypto } from "../../packages/device-link/src/nodeRelayCry
 import { RelayFrameAuthenticator } from "../../packages/device-link/src/selfHostedRelayAuth";
 import { PLUGIN_SYNC_CHANNEL } from "../../packages/device-link/src/pluginSyncProtocol";
 import { deflateRawBase64Sync, inflateRawBase64TextBounded } from "../../packages/device-link/src/nodeCompression";
+import { projectActiveRuntimeSummary, REMOTE_STOP_TURN, RemoteTurnControl } from "../../apps/desktop/src/main/maker-ipc/remoteTurnControl";
 import {
   createClient,
   createHost,
@@ -114,7 +115,35 @@ it("interoperates with an explicitly provisioned isolated relay and automaticall
     timing,
     frameAuth: frameAuthSpec ? frameAuthFor(frameAuthSpec, "controller", rejected) : undefined,
   });
-  const data = createHost(host.client);
+  const sessionId = "turn-fixture";
+  const runtime = {
+    instanceId: "fixture-runtime", running: true,
+    isTurnRunning() { return this.running; },
+    getTurnGeneration() { return 1; },
+  };
+  const turnControl = new RemoteTurnControl<typeof runtime>();
+  const data = createHost(host.client, {
+    "maker:list-active": (args, source) => projectActiveRuntimeSummary({
+      format: "active-sessions-v2",
+      turnControlVersion: 1,
+      sessions: [{
+        sessionId, isTurnRunning: runtime.running,
+        turnControlToken: turnControl.token(runtime, source),
+        turnControlOutcome: turnControl.outcome(runtime),
+      }],
+    }, args[0], true),
+    [REMOTE_STOP_TURN]: ([id, token], source) => {
+      const accepted = id === sessionId && turnControl.consume(runtime, source, token);
+      if (accepted) {
+        runtime.running = false;
+        turnControl.observeTerminal(runtime, {
+          type: "done", source: "claude-code", sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1,
+          data: { terminal_reason: "aborted_streaming", stop_reason: "tool_use", is_error: true },
+        });
+      }
+      return { sessionId, accepted };
+    },
+  });
   let recovery: ReturnType<typeof createMobileRecovery> | undefined;
   try {
     host.client.start();
@@ -178,6 +207,13 @@ it("interoperates with an explicitly provisioned isolated relay and automaticall
       await vi.waitFor(() => expect(pushes).toEqual([{ channel: "maker:event:batch", payload: batch }]), { timeout: 10_000 });
       expect(wire.some(frame => frame.includes("deflateBase64"))).toBe(true);
     } finally { stopPushes(); socket.off("message", onWire); }
+    const activity = { channel: "maker:list-active", args: [{ summary: true, snapshotVersion: 2, turnControlVersion: 1 }] };
+    const live = await controller.client.invoke(hostId, activity);
+    expect(live).toMatchObject({ ok: true, result: { sessions: [{ sessionId, isTurnRunning: true, turnControlToken: expect.stringMatching(/^[a-f0-9]{64}$/) }] } });
+    if (!live.ok) throw new Error("stop authority unavailable");
+    const token = (live.result as { sessions: Array<{ turnControlToken: string }> }).sessions[0].turnControlToken;
+    const stop = { channel: REMOTE_STOP_TURN, args: [sessionId, token] };
+    expect(await controller.client.invoke(hostId, stop)).toMatchObject({ ok: true, result: { sessionId, accepted: true } });
     const before = recovery.state.completed;
     data.addMessage("interop-gap");
     controller.sockets.at(-1)!.terminate();
@@ -190,6 +226,10 @@ it("interoperates with an explicitly provisioned isolated relay and automaticall
       "interop-gap",
     ]);
     expect(controller.sockets.length).toBeGreaterThan(1);
+    expect(await controller.client.invoke(hostId, activity)).toMatchObject({
+      ok: true, result: { sessions: [{ sessionId, isTurnRunning: false, turnControlOutcome: "interrupted" }] },
+    });
+    expect(await controller.client.invoke(hostId, stop)).toMatchObject({ ok: true, result: { sessionId, accepted: false } });
     expect(rejected).toEqual([]);
   } finally {
     recovery?.close();
