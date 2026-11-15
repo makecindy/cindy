@@ -412,7 +412,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     }
     // 空账户 / 只剩置顶:ProjectsSection 不再因无内容整段 return null。
     expect(projectsSectionSource).toContain('const hasMainListContent =');
-    expect(projectsSectionSource).toContain('{hasMainListContent ? (');
+    expect(projectsSectionSource).toContain("{taskListMode === 'tasks' && hasMainListContent ? (");
   });
 
   it('项目段头标题即范围下拉(2026-08-13 定稿,推翻 2026-07「不挂段头」)', () => {

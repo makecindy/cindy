@@ -16708,6 +16708,7 @@
         "snoozeFailed": "Impossible de conserver l’heure du report. Vérifiez la connexion et mettez à jour l’ordinateur hébergeant cette tâche.",
         "hours": "Dans {{count}} heures",
         "hours_one": "Dans {{count}} heure",
+        "hours_many": "Dans {{count}} heures",
         "hours_other": "Dans {{count}} heures"
       },
       "taskListMode": {

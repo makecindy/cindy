@@ -74,8 +74,8 @@ export function SessionSnoozeAction({
           setMenuOpen(open);
         }}
       >
-        <Tip text={t('ccAgent.sidebar.inbox.snooze')}>
-          <DropdownMenuTrigger asChild>
+        <DropdownMenuTrigger asChild>
+          <Tip text={t('ccAgent.sidebar.inbox.snooze')}>
             <button
               ref={triggerRef}
               type="button"
@@ -93,8 +93,8 @@ export function SessionSnoozeAction({
             >
               <Clock size={14} strokeWidth={2} />
             </button>
-          </DropdownMenuTrigger>
-        </Tip>
+          </Tip>
+        </DropdownMenuTrigger>
         <DropdownMenuContent
           className="w-64 max-w-[calc(100vw-24px)]"
           align="end"

@@ -16708,6 +16708,7 @@
         "snoozeFailed": "No se pudo guardar la hora. Comprueba la conexión y actualiza el equipo que aloja esta tarea.",
         "hours": "En {{count}} horas",
         "hours_one": "En {{count}} hora",
+        "hours_many": "En {{count}} horas",
         "hours_other": "En {{count}} horas"
       },
       "taskListMode": {

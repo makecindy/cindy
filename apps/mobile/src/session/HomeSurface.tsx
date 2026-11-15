@@ -4886,7 +4886,7 @@ function HomeSessionRowInner({
           <SessionStatusMark
             identityIcon={projectDirectory && projectDeviceId ? (
               <ProjectPickerIcon deviceId={projectDeviceId} workingDir={projectDirectory}
-                remoteHostId={latestItem.session.remoteHostId} size={24} />
+                remoteHostId={latestItem.session.remoteHostId} size={iconSize.xl} />
             ) : undefined}
             item={item}
             running={running}

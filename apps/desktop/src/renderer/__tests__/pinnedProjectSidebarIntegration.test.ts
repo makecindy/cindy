@@ -31,7 +31,7 @@ describe('pinned project sidebar integration', () => {
       '<RailPanels\n        projects={visibleRailProjectsWithVendor}',
     );
     expect(sidebarSource).toMatch(
-      /<ProjectsSection\s+unclassified=\{visibleUnclassified\}\s+projects=\{visibleProjectsWithVendor\}/,
+      /<ProjectsSection\s+inboxSessions=\{inboxSessions\}\s+unclassified=\{visibleUnclassified\}\s+projects=\{visibleProjectsWithVendor\}/,
     );
   });
 

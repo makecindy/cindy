@@ -16708,6 +16708,7 @@
         "snoozeFailed": "Não foi possível salvar o horário. Verifique a conexão e atualize o computador que hospeda esta tarefa.",
         "hours": "Em {{count}} horas",
         "hours_one": "Em {{count}} hora",
+        "hours_many": "Em {{count}} horas",
         "hours_other": "Em {{count}} horas"
       },
       "taskListMode": {
