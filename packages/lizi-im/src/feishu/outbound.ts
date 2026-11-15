@@ -1297,7 +1297,7 @@ export async function sendCardRaw(
   userId: string,
   cardJson: unknown,
   opts?: { threadTs?: string; advanceRound?: boolean },
-): Promise<{ messageId: string }> {
+): Promise<{ messageId: string; chatId?: string }> {
   return withSendTarget(userId, { advanceRound: true, ...opts }, (target) => createMessage(
     target,
     'interactive',

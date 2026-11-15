@@ -14,6 +14,7 @@ import {
 const api = vi.hoisted(() => ({
   call: vi.fn(),
   send: vi.fn(),
+  getMessage: vi.fn(),
   epoch: 1,
   owner: 'ou_owner',
 }));
@@ -22,7 +23,7 @@ vi.mock('../outbound.js', () => ({
   getAccountEpoch: () => api.epoch,
   pushReplyAnchor: vi.fn(),
   sendCardRaw: api.send,
-  getMessage: async () => ({ chat_id: 'oc_direct' }),
+  getMessage: api.getMessage,
 }));
 vi.mock('../ownerGuard.js', () => ({
   firstAllowed: () => api.owner,
@@ -77,6 +78,7 @@ beforeEach(() => {
     const result = await api.call();
     return { messageId: result.data.message_id };
   });
+  api.getMessage.mockReset().mockResolvedValue({ chat_id: 'oc_direct' });
 });
 
 describe('managed Feishu cards', () => {
@@ -85,6 +87,7 @@ describe('managed Feishu cards', () => {
       sendManagedCard('g/oc_group/omt_topic', card, 'request-1'),
     );
     expect(api.send.mock.calls[0]![0]).toBe('g/oc_group/omt_topic');
+    expect(api.send.mock.calls[0]![2]).toEqual({ advanceRound: false });
     expect(api.send.mock.calls[0]![1].body.elements[0].behaviors).toEqual([
       { type: 'callback', value: { __cindy_managed_card: true } },
     ]);
@@ -268,6 +271,35 @@ describe('managed Feishu cards', () => {
       chatId: 'oc_direct',
     });
     expect(JSON.parse(received[0]!.text).isOwner).toBe(true);
+  });
+
+  it('registers an owner DM from the send receipt and ignores a later read failure', async () => {
+    api.send.mockResolvedValueOnce({
+      messageId: 'om_card',
+      chatId: 'oc_direct',
+    });
+    api.getMessage.mockRejectedValueOnce(new Error('READ_FAILED'));
+    const result = await runInScope(scope(), () =>
+      sendManagedCard('ou_owner', card, 'daily-1'),
+    );
+    expect(result).toMatchObject({
+      messageId: 'om_card',
+      registered: true,
+    });
+    expect(api.getMessage).not.toHaveBeenCalled();
+    expect(api.send.mock.calls[0]![2]).toEqual({ advanceRound: false });
+  });
+
+  it('falls back to a message read only when the send receipt has no chat id', async () => {
+    await runInScope(scope(), () =>
+      sendManagedCard('ou_owner', card, 'daily-1'),
+    );
+    expect(api.getMessage).toHaveBeenCalledWith('om_card');
+    api.getMessage.mockRejectedValueOnce(new Error('READ_FAILED'));
+    const failed = await runInScope(scope(), () =>
+      sendManagedCard('ou_owner', card, 'daily-2'),
+    );
+    expect(failed).toMatchObject({ registered: false });
   });
 
   it('keeps system cards independent of unavailable business state and refuses marked unknown cards', () => {

@@ -191,8 +191,11 @@ export async function sendManagedCard(
   registry.cards.push(entry);
   // Persist intent before network I/O. An ambiguous timeout must not create another card on retry.
   store.write(key, JSON.stringify(registry));
-  // Reuse transport topic/anchor routing, never treat an omt_ thread id as an om_ message id.
-  const receipt = await sendCardRaw(lane, JSON.parse(content));
+  // A business card belongs to the current turn. Advancing the reply anchor
+  // would attach it to the next queued message on the same lane.
+  const receipt = await sendCardRaw(lane, JSON.parse(content), {
+    advanceRound: false,
+  });
   const sent = { messageId: receipt.messageId, expiresAt: entry.expiresAt };
   // A remote receipt proves delivery even if the account changes or local persistence fails.
   if (
@@ -205,13 +208,23 @@ export async function sendManagedCard(
   }
   entry.messageId = receipt.messageId;
   if (!group) {
-    try {
-      const message = await getMessage(receipt.messageId);
-      if (!message || typeof message.chat_id !== 'string')
+    // createMessage already returns chat_id. A follow-up read can fail after
+    // delivery and must not leave a sent card unable to receive clicks.
+    const receiptChatId =
+      typeof receipt.chatId === 'string' && receipt.chatId
+        ? receipt.chatId
+        : '';
+    if (receiptChatId) {
+      entry.chatId = receiptChatId;
+    } else {
+      try {
+        const message = await getMessage(receipt.messageId);
+        if (!message || typeof message.chat_id !== 'string')
+          return { ...sent, registered: false };
+        entry.chatId = message.chat_id;
+      } catch {
         return { ...sent, registered: false };
-      entry.chatId = message.chat_id;
-    } catch {
-      return { ...sent, registered: false };
+      }
     }
     if (
       !accountIsCurrent() ||
