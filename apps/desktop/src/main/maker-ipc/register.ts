@@ -826,12 +826,12 @@ import {
 } from './orcaIdleReleaseWatcher.js';
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
 import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
-import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
+import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
+import { hasIdleReleaseQueuedWork, hasPendingIdleReleaseInput as hasPendingIdleReleaseInputFor, hasScheduledIdleReleaseAutoResume } from './idleReleaseInputGates.js';
 import {
   createPiIdleReleaseWatcher,
   createPiIdleReleaseClose,
-  piIdleReleaseCandidateWhere,
-  piIdleReleaseIdleSince,
+  createPiIdleReleaseCandidateQueries,
   DEFAULT_PI_IDLE_RELEASE_MINUTES,
   type PiIdleReleaseWatcher,
 } from './piIdleReleaseWatcher.js';
@@ -16260,16 +16260,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return result;
   });
 
-  const hasPendingIdleReleaseInput = async (sessionId: string): Promise<boolean> => {
-    await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
-    // A failed restore is itself a pending condition: never close a worker while
-    // its durable follow-up snapshot is still unavailable.
-    if (!inputCoordinator.isQueueRestored(sessionId)) return true;
-    return (
-      inputCoordinator.hasPendingQueuedWork(sessionId) ||
-      inputCoordinator.hasQueuedItemWhere(sessionId, () => true, { includeRecovery: true })
-    );
-  };
+  const hasPendingIdleReleaseInput = (sessionId: string): Promise<boolean> =>
+    hasPendingIdleReleaseInputFor(inputCoordinator, sessionId);
 
   // 协同远端 Worker：Worker 在同账号另一台电脑运行(见 orcaRemoteWorkers.ts)。
   // 其代理任务行永不在本机跑 Agent，团队服务的会话依赖按是否远端分流。
@@ -17003,35 +16995,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   piIdleReleaseWatcher = createPiIdleReleaseWatcher({
     closeSession: createPiIdleReleaseClose(maker, withRehydrateCloseSuppressed),
     readIdleReleaseMinutes: () => DEFAULT_PI_IDLE_RELEASE_MINUTES,
-    listCandidates: async (idleBeforeMs) => {
-      const idleSince = piIdleReleaseIdleSince();
-      const rows = await getDbClient()
-        .drizzle
-        .select({ id: sessions.id, idleSinceMs: idleSince })
-        .from(sessions)
-        .where(and(piIdleReleaseCandidateWhere(), sql`${idleSince} < ${idleBeforeMs}`));
-      return rows.map((row) => ({ id: row.id, idleSinceMs: Number(row.idleSinceMs) }));
-    },
-    readIdleSinceMs: async (sessionId) => {
-      const [row] = await getDbClient()
-        .drizzle
-        .select({ idleSinceMs: piIdleReleaseIdleSince() })
-        .from(sessions)
-        .where(and(eq(sessions.id, sessionId), piIdleReleaseCandidateWhere()))
-        .limit(1);
-      return row ? Number(row.idleSinceMs) : null;
-    },
+    ...createPiIdleReleaseCandidateQueries(getDbClient),
     getSession: (sessionId) => maker.getSession(sessionId) ?? null,
     withSessionLock: withSendToSessionLock,
     hasPendingInput: hasPendingIdleReleaseInput,
     hasScheduledAutoResume: (sessionId) => {
       const coordinator = agentInputCoordinatorHolder;
       if (!coordinator) return false;
-      return (
-        coordinator.isAutoResumePending(sessionId) ||
-        coordinator.getAutoResumeAttemptToken(sessionId) !== null ||
-        coordinator.hasQueuedAutoResume(sessionId)
-      );
+      return hasScheduledIdleReleaseAutoResume(coordinator, sessionId);
     },
     now: Date.now,
     timer: { setInterval, clearInterval },
@@ -17046,26 +17017,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listSessions: () => maker.listActiveSessions(),
     getSession: (id) => maker.getSession(id),
     readMinutes: readClaudeIdleMinutes,
-    isOrdinaryTask: async (id, sdkSessionId) => Boolean(
-      await getDbClient().queryOne(ORDINARY_CLAUDE_TASK_SQL, [id, sdkSessionId]),
-    ),
+    isOrdinaryTask: createOrdinaryIdleReleaseTaskCheck(getDbClient, ORDINARY_CLAUDE_TASK_SQL),
     hasPendingInput: hasPendingIdleReleaseInput,
     isHostBusy: (id) => isSessionTurnPendingCompletion(id)
       || hasPendingAgentInteractionForSession(id)
       || Boolean(getClaudeSessionBackgroundActivity(id))
-      || inputCoordinator.hasPendingQueuedWork(id)
-      || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
-      || inputCoordinator.isAutoResumePending(id)
-      || inputCoordinator.hasQueuedAutoResume(id)
-      || inputCoordinator.getAutoResumeAttemptToken(id) !== null
+      || hasIdleReleaseQueuedWork(inputCoordinator, id)
       || pendingCredentialSwitchHolder?.has(id) === true,
     withLock: withSendToSessionLock,
     // The existing suppression window is sampled by the synchronous status
     // listener and onClose hook before it yields; no task resources are removed.
-    close: (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, async () =>
-      await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh',
-        retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed',
-    ),
+    close: createIdleReleaseRuntimeClose(maker, withRehydrateCloseSuppressed),
     now: () => performance.now(),
     released: (sessionId, idleMs) => log.info('claudeIdleWatcher: released idle runtime', { sessionId, idleMs }),
     warn: (message) => log.warn(message),
@@ -17083,23 +17045,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listSessions: () => maker.listActiveSessions(),
     getSession: (id) => maker.getSession(id),
     readMinutes: () => DEFAULT_CODEX_IDLE_RELEASE_MINUTES,
-    isOrdinaryTask: async (id, sdkSessionId) => Boolean(
-      await getDbClient().queryOne(ORDINARY_CODEX_TASK_SQL, [id, sdkSessionId]),
-    ),
+    isOrdinaryTask: createOrdinaryIdleReleaseTaskCheck(getDbClient, ORDINARY_CODEX_TASK_SQL),
     hasPendingInput: hasPendingIdleReleaseInput,
     isHostBusy: (id) => isSessionTurnPendingCompletion(id)
       || hasPendingAgentInteractionForSession(id)
-      || inputCoordinator.hasPendingQueuedWork(id)
-      || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
-      || inputCoordinator.isAutoResumePending(id)
-      || inputCoordinator.hasQueuedAutoResume(id)
-      || inputCoordinator.getAutoResumeAttemptToken(id) !== null
+      || hasIdleReleaseQueuedWork(inputCoordinator, id)
       || pendingCredentialSwitchHolder?.has(id) === true,
     withLock: withSendToSessionLock,
-    close: (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, async () =>
-      await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh',
-        retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed',
-    ),
+    close: createIdleReleaseRuntimeClose(maker, withRehydrateCloseSuppressed),
     now: () => performance.now(),
     released: (sessionId, idleMs) => log.info('codexIdleWatcher: released idle runtime', { sessionId, idleMs }),
     warn: (message) => log.warn(message),
