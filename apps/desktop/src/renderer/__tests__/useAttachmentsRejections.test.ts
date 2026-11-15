@@ -14,7 +14,7 @@ import { useLayoutEffect } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { File as BrowserFile, Blob as BrowserBlob } from 'node:buffer';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../shared/ghost';
+import { type InstalledGhost } from '../../shared/ghost';
 
 const toastWarning = vi.hoisted(() => vi.fn());
 const stageChatAttachment = vi.hoisted(() => vi.fn());
@@ -74,7 +74,7 @@ function enableAttachmentProvider(extensions = ['.pdf']) {
           { id: 'parse', title: 'Parse attachment', position: 'composer.attachment', tool: 'parse', accept: { extensions } },
         ] },
       } } };
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); plugins.ghosts = [ghost];
+  plugins.ghosts = [ghost];
 }
 
 beforeEach(() => {
@@ -193,7 +193,7 @@ describe('useAttachments inline rejections', () => {
     if (kind === 'remove') act(() => result.current.removeFile(result.current.attachments[0].id));
     else {
       plugins.ghosts = structuredClone(plugins.ghosts);
-      if (kind === 'revoke') plugins.ghosts[0].approvedHostUi = [];
+      if (kind === 'revoke') plugins.ghosts[0].approval = { state: 'invalid' };
       else if (kind === 'disable') plugins.ghosts[0].enabled = false;
       else plugins.ghosts[0].approval = { state: 'approved', revision: 'two' };
     }
