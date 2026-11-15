@@ -140,6 +140,14 @@ const D_MEDIA = [
   "prepare 返回的 invocation_id 是一次性付费提交令牌；request 超时或返回 SUBMISSION_OUTCOME_UNKNOWN 时不要自动重提，以免重复扣费。",
 ].join("\n");
 
+const D_EVALUATE = [
+  "用决策模型做结构化判断，或用重排模型按查询给候选文本排序。",
+  "decisions 回答是否题、单选、按等级打分和图片框选；rerank 从多段候选文本中找出与问题最相关的几段。答案带概率，适合批量分类或打分、按阈值分流、用同一标准反复判断，或用户明确要求使用决策／重排模型。需要开放式写作、解释理由或多步推理时直接回答，不用本工具。",
+  "先调用 list_models 并传 api，结果包含可用模型和该接口的返回字段与用法说明；model_id、provider_id 用 list_models 返回的值。",
+  "决策图片放在 state 顶层数组的 image_url.url，传受管地址或本机路径，不要自行转 Base64。",
+  "调用按用量计费；请求超时或返回 outcomeKnown=false 时不要自动重提，以免重复扣费。",
+].join("\n");
+
 const D_GHOST_FORGE_GUIDE = [
   "读取内置 cindy-plugin-creator Skill 中的插件编写参考资料，随当前主机版本发布。",
   "创建、修改、调试、打包或发布 Cindy 插件时使用该 Skill；本工具保留按章读取同一份资料的兼容入口。",
@@ -1419,21 +1427,21 @@ export function createCindyGhostsMcpServer(
 
   server.tool(
     "evaluate",
-    "用决策模型回答结构化问题，或按查询对文档重排。先 list_models 并指定 api。决策图片放在 state 顶层数组的 image_url.url，传受管地址或本机路径，不要自行转 Base64。请求超时或 outcomeKnown=false 时不要自动重提。",
+    D_EVALUATE,
     {
       action: z.enum(["list_models", "decisions", "rerank"]),
-      api: z.enum(["decisions", "rerank"]).optional(),
-      model_id: z.string().max(256).optional(),
-      provider_id: z.string().max(128).optional(),
+      api: z.enum(["decisions", "rerank"]).optional().describe("list_models 必填：要查询的接口"),
+      model_id: z.string().max(256).optional().describe("list_models 返回的模型 id；只有一个可用模型时可省略"),
+      provider_id: z.string().max(128).optional().describe("list_models 返回的 provider_id"),
       questions: z.record(z.string(), z.object({
-        type: z.enum(["noul", "choice", "score", "box"]).describe("问题题型；box 需要图片并且模型必须支持该题型"),
-        instructions: z.string().describe("这道问题的判断要求"),
-        criteria: z.unknown().optional().describe("可选的题型约束，按所选模型的接口要求提供"),
-      })).optional().describe("decisions 必填：以问题 ID 为键，每题提供 type 和 instructions；answers 使用相同 ID"),
-      state: z.unknown().optional().describe("decisions 必填的判断上下文：字符串、对象或数组。图片仅放在顶层数组的 {type:'image_url',image_url:{url:'本机路径或受管地址'}} 中"),
-      query: z.string().optional(),
-      documents: z.array(z.string()).optional(),
-      top_n: z.number().int().positive().optional(),
+        type: z.enum(["noul", "choice", "score", "box"]).describe("noul 是否题；choice 单选；score 按等级打分；box 在图片中框出目标，需要图片且仅部分模型支持"),
+        instructions: z.string().describe("要判断什么，写清对象和标准"),
+        criteria: z.unknown().optional().describe("noul 可省略，或 {\"true\":\"成立的标准\",\"false\":\"不成立的标准\"}；choice 必填 {\"选项ID\":\"选项说明\"}；score 必填，按从低到高排列的等级说明数组，如 [\"平静\",\"不满\",\"愤怒\"]；box 省略。说明写成能直接据此判断的标准"),
+      })).optional().describe("decisions 必填：键是自定的问题 ID，answers 用同一 ID 返回"),
+      state: z.unknown().optional().describe("decisions 必填的判断材料：字符串、对象或数组。图片仅放在顶层数组的 {type:'image_url',image_url:{url:'本机路径或受管地址'}} 中"),
+      query: z.string().optional().describe("rerank 必填：用来衡量相关度的问题或查询"),
+      documents: z.array(z.string()).optional().describe("rerank 必填：候选文本；结果中的 index 是这里的下标（从 0 开始）"),
+      top_n: z.number().int().positive().optional().describe("rerank 可选：只返回最相关的前 N 条，不超过 documents 数量"),
     },
     async (input, extra) => {
       if (!deps.callEvaluate) return textResult({ ok: false, errorCode: "UNAVAILABLE", message: "当前主机不支持决策和重排" }, true);

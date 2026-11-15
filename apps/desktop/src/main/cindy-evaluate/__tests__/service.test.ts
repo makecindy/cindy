@@ -45,7 +45,7 @@ beforeEach(() => {
 });
 describe('evaluate', () => {
   it('lists local enabled models without any network call', async () => {
-    expect(await callEvaluate({ action: 'list_models', api: 'rerank' }, context)).toEqual({ ok: true, models: [{ id: 'example-rerank', provider_id: 'xd', name: 'example-rerank' }] });
+    expect(await callEvaluate({ action: 'list_models', api: 'rerank' }, context)).toEqual({ ok: true, models: [{ id: 'example-rerank', provider_id: 'xd', name: 'example-rerank' }], guide: expect.any(Array) });
     mocks.models[1].availability = 'requires_payment';
     expect(await callEvaluate({ action: 'list_models', api: 'rerank' }, context)).toMatchObject({ models: [] });
     mocks.models[1].availability = 'available'; mocks.gateway = false;

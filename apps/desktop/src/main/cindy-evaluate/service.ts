@@ -20,6 +20,7 @@ export function evaluationFailure(errorCode: string, message: string, retryable 
   return { ok: false, errorCode, message, retryable, outcomeKnown };
 }
 import { listEvaluationModels } from './models.js';
+import { EVALUATION_GUIDE } from './guide.js';
 export { listEvaluationModels } from './models.js';
 export interface EvaluationContext {
   sessionId?: string;
@@ -108,7 +109,7 @@ export async function callEvaluate(request: CindyEvaluateToolRequest, context: E
     const api = request.action === 'list_models' ? request.api : request.action;
     if (api !== 'decisions' && api !== 'rerank') throw new EvaluationError('INVALID_INPUT', 'api 必须是 decisions 或 rerank');
     const models = listEvaluationModels(api);
-    if (request.action === 'list_models') return { ok: true, models };
+    if (request.action === 'list_models') return { ok: true, models, guide: EVALUATION_GUIDE[api] };
     if (request.provider_id && request.provider_id !== 'xd') throw new EvaluationError('MODEL_NOT_FOUND', '该来源不支持决策或重排');
     const model = request.model_id ?? (models.length === 1 ? models[0].id : undefined);
     if (!model) throw new EvaluationError('MODEL_REQUIRED', '请从 list_models 返回的模型中指定 model_id');
