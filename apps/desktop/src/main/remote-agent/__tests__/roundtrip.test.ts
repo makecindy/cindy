@@ -1102,7 +1102,8 @@ describe('remote agent round trip', () => {
       const handle = await startRemoteAgentSession('pi', opts, depsFor(deviceId));
       try {
         handle.setInteractionResolver(async (request) => {
-          if (request.requestId !== 'forged') localConfirmations += 1;
+          if (request.requestId !== 'forged' && request.kind === 'permission'
+            && request.metadata?.hostOwnedConfirmation === 'shared_provider_credential') localConfirmations += 1;
           return { kind: 'permission', behavior: 'allow', permissionUpdates: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL] };
         });
         const reader = (async () => {
@@ -1179,6 +1180,10 @@ describe('remote agent round trip', () => {
     const requests: InteractionRequest[] = [];
     handle.setInteractionResolver(async (request): Promise<InteractionDecision> => {
       requests.push(request);
+      // 本机拦下的普通操作现在会补问；先拒绝，再由后续远端交互明确允许同一操作。
+      if (request.kind === 'permission' && request.metadata?.hostOwnedConfirmation === 'remote_executor_permission') {
+        return { kind: 'permission', behavior: 'deny' };
+      }
       return { kind: 'permission', behavior: 'allow' };
     });
     const entries: string[] = [];
@@ -1211,7 +1216,11 @@ describe('remote agent round trip', () => {
       expect(execExits.at(-1)).toBe(0);
       expect(fs.existsSync(path.join(root, 'victim'))).toBe(false);
     }
-    expect(requests).toHaveLength(1);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({
+      kind: 'permission', toolName: 'Bash',
+      metadata: { hostOwnedConfirmation: 'remote_executor_permission' },
+    });
     expect(entries).toEqual(['entry-42']);
 
     // 图片字节随消息带到对方，换成对方本机路径；Symbol 证明在对方重新附上。

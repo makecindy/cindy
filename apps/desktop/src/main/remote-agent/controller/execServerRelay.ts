@@ -46,8 +46,8 @@ export interface ExecServerRelayDeps {
   cwd: string;
   workspace: ExecutorWorkspace;
   authorize(action: ExecutorAction): ExecutorGateDecision;
-  /** 凭证类操作在本机补问(供应商分享的受邀者任务)；允许后再 authorize 一次即放行。 */
-  confirm?(action: ExecutorAction): Promise<boolean>;
+  /** 在本机补问；连接结束时取消旧确认，允许后再 authorize 一次即放行。 */
+  confirm?(action: ExecutorAction, signal: AbortSignal): Promise<boolean>;
   push(frames: RemoteAgentPushFrame[]): Promise<void>;
   env?: NodeJS.ProcessEnv;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
@@ -75,6 +75,7 @@ export interface ExecServerRelayStats {
 
 interface Connection {
   child: ChildProcessWithoutNullStreams;
+  confirmationAbort: AbortController;
   buffer: string;
   closed: boolean;
   /** 有消息在等本机确认时，后面的消息按顺序排在它后面。 */
@@ -468,7 +469,7 @@ export class ExecServerRelay {
       this.send({ connId, kind: 'close' });
       return;
     }
-    const connection: Connection = { child, buffer: '', closed: false, processes: new Set(), starting: new Map() };
+    const connection: Connection = { child, confirmationAbort: new AbortController(), buffer: '', closed: false, processes: new Set(), starting: new Map() };
     this.connections.set(connId, connection);
     // 只记耗时、字节数与退出码(不记输出内容)：首次握手失败时能分清是本机进程起得慢、异常退出，还是链路慢。
     const now = this.deps.now ?? Date.now;
@@ -508,6 +509,8 @@ export class ExecServerRelay {
     });
     // close 在 stdout 完全读完后触发；尾部结果的异步投影完成后才通知对端连接结束。
     child.on('close', (exitCode, signal) => {
+      // 输出投影可以继续收尾，但已退出的执行端不能继续等待确认或接受迟到许可。
+      connection.confirmationAbort.abort();
       // 本机这边关掉的(对方断开、让出名额)不算；进程自己退出的记下退出码，对方的 Codex 会看到环境断开。
       if (!connection.closed) {
         this.deps.log?.warn('remote agent: exec-server exited', {
@@ -522,7 +525,7 @@ export class ExecServerRelay {
 
   private forward(connId: string, data: string): void {
     const connection = this.connections.get(connId);
-    if (!connection || connection.closed) return;
+    if (!connection || connection.closed || connection.confirmationAbort.signal.aborted) return;
     type JsonRpcMessage = { id?: unknown; method?: unknown; params?: unknown };
     let message: JsonRpcMessage | null = null;
     try {
@@ -583,16 +586,21 @@ export class ExecServerRelay {
   }
 
   private async deliver(connId: string, connection: Connection, id: unknown, line: () => string, actions: ExecutorAction[]): Promise<void> {
+    const signal = connection.confirmationAbort.signal;
     for (const action of actions) {
+      if (connection.closed || signal.aborted) return;
       let decision = this.deps.authorize(action);
-      if (!decision.ok && this.deps.confirm && await this.deps.confirm(action)) decision = this.deps.authorize(action);
-      if (connection.closed) return;
+      if (!decision.ok && this.deps.confirm) {
+        const allowed = await this.deps.confirm(action, signal);
+        if (connection.closed || signal.aborted) return;
+        if (allowed) decision = this.deps.authorize(action);
+      }
       if (!decision.ok) {
         this.reject(connId, id, decision);
         return;
       }
     }
-    if (!connection.closed) connection.child.stdin.write(line());
+    if (!connection.closed && !signal.aborted) connection.child.stdin.write(line());
   }
 
   /** 记下 exec-server 报的进程起止(只看编号，不改消息)。 */
@@ -683,6 +691,7 @@ export class ExecServerRelay {
     // 由忙转闲。只看各连接上的工作：本机这侧断开时紧接着排进去的关闭帧不算忙。
     const hadWork = this.hasWork();
     connection.closed = true;
+    connection.confirmationAbort.abort();
     this.connections.delete(connId);
     try {
       connection.child.stdin.end();
