@@ -3,6 +3,66 @@ import type { PluginUiAttachmentResult } from '../../shared/pluginUi.js';
 import type { PluginFileAccess } from './pluginFiles.js';
 import { appDownloadName } from './downloadFile.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { GhostHandoffStore } from '../cindy-brain/handoffStore.js';
+import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
+
+/** Main-owned, user-added input. This is a transfer, not an Agent file grant. */
+export async function callPluginAttachmentProvider(input: {
+  instance: string; paths: readonly string[]; args: Record<string, unknown>; handoffDeclared: boolean;
+}, ports: {
+  signal: AbortSignal;
+  assertCurrent(): Promise<void>;
+  assertStillValid(): void;
+  handoff: Pick<GhostHandoffStore, 'hold' | 'currentRoot' | 'import' | 'delete'>;
+  deposit(buffer: Buffer, mimeType: string): Promise<{ hash: string; cleanup(): Promise<void> }>;
+  call(args: Record<string, unknown>): Promise<CallToolResult>;
+}): Promise<CallToolResult> {
+  const check = async () => { ports.signal.throwIfAborted(); await ports.assertCurrent(); ports.signal.throwIfAborted(); };
+  await check();
+  const file = input.args.attachment as { name?: unknown; size?: unknown; mimeType?: unknown } | undefined;
+  if (input.paths.length !== 1 || !path.isAbsolute(input.paths[0]!) || !file || typeof file.name !== 'string' ||
+      typeof file.mimeType !== 'string' || !Number.isSafeInteger(file.size) || (file.size as number) < 1 ||
+      (file.size as number) > GHOST_HANDOFF_MAX_BYTES_PER_FILE) throw new Error('MCP_APP_INVALID_REQUEST');
+  const source = await fs.realpath(input.paths[0]!);
+  await check();
+  const bytes = await readBoundedFileNoFollow(source, GHOST_HANDOFF_MAX_BYTES_PER_FILE, { nonBlocking: true });
+  await check();
+  if (!bytes || bytes.length !== file.size) throw new Error('MCP_APP_FILE_INVALID');
+  const mimeType = sniffMediaMime(bytes, file.mimeType);
+  if (!mimeType && /^(image|audio|video|model)\//.test(file.mimeType)) throw new Error('MCP_APP_FILE_INVALID');
+  let cleanup = async () => {};
+  let release: (() => void) | undefined;
+  let delivered = false;
+  try {
+    const args = { ...input.args };
+    // Only Host supplies file references. Other declared arguments keep their original meaning.
+    delete args.cindy_handoff_files;
+    if (mimeType) {
+      const media = await ports.deposit(bytes, mimeType);
+      cleanup = media.cleanup;
+      args.attachments = [media.hash];
+    } else {
+      if (!input.handoffDeclared) throw new Error('MCP_APP_INVALID_REQUEST');
+      release = ports.handoff.hold(input.instance) ?? undefined;
+      if (!release) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+      const root = ports.handoff.currentRoot();
+      const files = await ports.handoff.import(input.instance, [{ name: file.name, bytes }], ports.assertStillValid, root);
+      cleanup = async () => { for (const file of files) await ports.handoff.delete(input.instance, file.ref, root); };
+      args.cindy_handoff_files = files;
+    }
+    await check();
+    const result = await ports.call(args);
+    await check();
+    delivered = result.isError !== true;
+    return result;
+  } finally {
+    try { if (!delivered) await cleanup(); }
+    finally { release?.(); }
+  }
+}
 
 /** Import provider-owned resource links through the original file reader/cache. */
 export async function preparePluginAttachmentResult(instance: string, raw: unknown, ports: {

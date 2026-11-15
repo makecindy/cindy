@@ -121,8 +121,10 @@ insertText 不超过 32768 字符，description 可选且不超过 2000 字符�
 仅用户本次选取、拖入或粘贴的附件进入此入口，不扫描已有草稿和消息。没有贡献时不订阅或请求。
 多个匹配提供者按声明目录顺序尝试，首个 `handled:true` 结束，`handled:false` 交给下一个。
 
-工具必须 app-visible。Host 填入 `attachment:{name,size,mimeType}` 元数据；文件本体沿原工具审批及
-附件过户，媒体放入原 `attachments` 参数；非媒体工具须声明保留参数 `cindy_handoff_files:{type:"array"}`，
+工具必须 app-visible。插件整体安装/更新批准有效且已启用时，Host 将主人本次主动添加、匹配声明的附件
+直接交给同一插件实例，不再询问文件权限、不写永久 grant，也不套用 Agent 的权限档位。
+Host 填入 `attachment:{name,size,mimeType}` 元数据；媒体复用原媒体寄存并放入 `attachments` 哈希参数；
+非媒体工具须声明保留参数 `cindy_handoff_files:{type:"array"}`，
 得到 `handoff:` 引用。插件不能从参数取得本机路径。字节处理仍使用原文件能力（见 `plugin-files-and-library.md` §4.10.3），
 需要联网时也沿原 network 声明；此入口不增添文件或网络权限。
 

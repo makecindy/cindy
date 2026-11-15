@@ -96,12 +96,12 @@ async function fixture() {
 describe('plugin virtual App server', () => {
   // Unit: real native-action Host -> SDK server -> one-use grant. Existing page
   // ticket cases do not originate in native composer input; no local path may enter args.
-  it('carries native attachment authority through the original ticket without exposing its path in args', async () => {
+  it('delivers a user-added native attachment without asking Agent tool policy', async () => {
     const { client, grants } = await fixture();
     const owner = {};
     const config: AppServerConfig = { id: 'plugin-source', url: '', transport: 'in-process',
       plugin: { instance: 'demo', revision: 'v1' } as AppServerConfig['plugin'] };
-    const authorizeTool = vi.fn(async () => {});
+    const authorizeTool = vi.fn(async () => { throw new Error('Agent policy must not gate a user-added attachment'); });
     const host = new McpAppsHost({ owner: () => owner, config: () => config,
       connection: () => ({ tools: async () => (await client.listTools()).tools, getClient: async () => client }) as AppConnection,
       authorizeTool, readCard: vi.fn(), writeCard: vi.fn(), sendMessage: vi.fn() });
@@ -110,8 +110,7 @@ describe('plugin virtual App server', () => {
       attachments: [path.resolve('input.pdf')], assertCurrent() {} }, 'save', args, new AbortController().signal);
     expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual(args);
     expect(grants[0]).toMatchObject({ sessionId: null, attachments: [path.resolve('input.pdf')] });
-    expect(authorizeTool).toHaveBeenCalledWith(null, expect.objectContaining({ name: 'save' }), args,
-      expect.any(AbortSignal), expect.objectContaining({ caller: 'renderer:1' }));
+    expect(authorizeTool).not.toHaveBeenCalled();
     await host.reset();
   });
   it('projects shared pages and visibility into standard MCP tools and resource metadata', async () => {

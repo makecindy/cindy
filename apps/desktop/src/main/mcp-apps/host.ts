@@ -276,7 +276,8 @@ export class McpAppsHost {
     const connection = this.deps.connection?.(config) ?? sharedPluginConnection(config, owner);
     const target = (await connection.tools(signal)).find(tool => tool.name === name && toolVisibleTo(tool, 'app'));
     if (!target) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
-    await this.deps.authorizeTool(sessionId, target, args, signal, { caller, clientId: source.id,
+    // The owner just added this input to a declared, installed provider.
+    if (!source.attachments?.length) await this.deps.authorizeTool(sessionId, target, args, signal, { caller, clientId: source.id,
       serverId: config.id, title: source.title });
     await assertCurrent();
     const client = await connection.getClient(signal);
