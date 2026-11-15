@@ -1,3 +1,4 @@
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
 import { SettingsLinkSpan } from './SettingsLinkSpan';
 import type { ViewInstance } from 'react-native';
@@ -7825,6 +7826,7 @@ export function MessagePayloadModal({
     && isDirectPreviewableMediaUrl(payloadSummary.openTarget.value);
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
+  const previewChrome = usePreviewChromeFrame();
   const headerLayout = buildPayloadHeaderLayout({
     canCopy: canCopyPayload,
     canOpen: canOpenPayloadUrl,
@@ -7943,7 +7945,7 @@ export function MessagePayloadModal({
         <View style={[
             styles.payloadModal,
             {
-              paddingTop: safeAreaInsets.top + 64,
+              paddingTop: previewChrome.documentContentTop,
               paddingBottom: safeAreaInsets.bottom,
             },
           ]} testID="message.payloadModal">
@@ -8008,7 +8010,7 @@ export function MessagePayloadModal({
             // Landscape side insets hold the notch or a vertical system bar (Duo).
             paddingLeft: safeAreaInsets.left,
             paddingRight: safeAreaInsets.right,
-            paddingTop: safeAreaInsets.top + 64,
+            paddingTop: previewChrome.documentContentTop,
             },
         ]}
         testID="message.payloadModal"
