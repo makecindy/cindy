@@ -577,6 +577,29 @@ App 为 active 的等待时间，`wallElapsedMs` 单独保留包含后台与离�
 实现与回归见 `src/debug/useContentRecoveryDiagnostics.ts`、`scrollDebugSampler.ts`
 及相邻测试，键盘回归见 `src/__tests__/composerKeyboard.test.tsx`、`sheetKeyboardSubscription.test.tsx`。
 
+### 切回任务后跳到旧消息
+
+先对照 `message history surface` 的尺寸、`message list visibility gate` 的定位状态与
+`list scroll` 的原生 offset。`nearBottom` 表示跟随意图，不是当前几何位置；应另外计算
+`contentHeight - viewportHeight - offsetY`。若没有 dragging / momentum / readingOlder /
+reopening，但意图仍贴底而几何突然远离尾部，不能直接归因于用户翻历史或书签恢复。
+保留列表在页面宽度变化后可能晚到一次原生位置修正，发生在 content-size / layout 校验结束之后。
+
+消息定位的边界：
+
+- 晚到的非手势偏移唤醒既有有界 tail follower，不在 onScroll 里直接发滚动命令；原生回执
+  到达底部后不再发命令。手指、惯性、历史分页与未完成的 seek 仍拥有优先权。
+- 页面隐藏或 App 非 active 时暂停定位；失去页面后原生可能不再发送手势结束事件，释放瞬时
+  touch / drag / momentum 状态，但保留用户的阅读历史意图。
+- 隐藏期间不消费首次书签恢复、搜索或消息链接定位，重新可见后才执行；旧版原生包的 inline
+  fallback 同样受定位状态约束。切换列表身份时取消旧的书签校正帧。
+- 后台暂停定位与订阅不等于隐藏页面画面，避免把 App 切换器中的页面变为空白。
+
+自动化回归见 `messageFollowGesture.test.ts`、`messageEntryPositioning.test.ts`、
+`messageReadingRestore.test.ts` 和 `recentMessageHistories.test.tsx`。这些测试覆盖回调顺序与状态
+所有权，不能替代 UIKit 真机验收。验收应覆盖：长任务切换后宽度改变、键盘收放、横竖屏、
+拖动途中离开/锁屏后返回、刻意阅读旧消息、搜索定位后切换，以及旧原生包的备用显示路径。
+
 ### 真机排查与并存测试版
 
 真机上的问题（缓存、推送、后台恢复等）先取证据再动手：读设备日志、核对正在运行的版本、

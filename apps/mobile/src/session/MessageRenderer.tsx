@@ -1044,6 +1044,10 @@ export function MessageRenderer({
     tailFollowerRef.current = null;
     initialAnchorDoneRef.current = false;
     reopeningAnchorRef.current = null;
+    if (reopeningFrameRef.current !== null) {
+      cancelAnimationFrame(reopeningFrameRef.current);
+      reopeningFrameRef.current = null;
+    }
     initialRevealGenerationRef.current += 1;
     initialRevealAnimationRef.current?.stop();
     initialRevealAnimationRef.current = null;
@@ -2445,6 +2449,16 @@ export function MessageRenderer({
       setIsAwayFromBottom(!nearBottom);
       if (nearBottom) setHasNewMessages(false);
     }
+    // Native size anchoring can arrive after a retained history resizes and the
+    // tail verifier has already settled. That late scroll may be the last event:
+    // no subsequent layout/content-size callback will wake follow again. Use the
+    // same bounded controller, never an immediate scroll from onScroll. Its
+    // gesture/history guards and pending-seek ownership still take precedence.
+    if (nearBottomRef.current && !isDragSample && !isUserControllingScroll()
+      && metrics.contentHeight > 0 && metrics.viewportHeight > 0
+      && metrics.contentHeight - metrics.viewportHeight - metrics.offsetY > MOBILE_ANCHOR_VERIFY_TOLERANCE) {
+      runStickToLatestVerify();
+    }
     acknowledgeCompanionReadRef.current();
     // 拖动进近顶区时 onStartReached 边沿可能早已被消费(见 attemptAutoLoadEarlier 注释),
     // 滚动事件兜底重评估;前置短路让稳态滚动只付 1~2 次 ref 比较的成本。
@@ -2457,6 +2471,8 @@ export function MessageRenderer({
       if (anchor && !reopeningAnchorRef.current) readingPosition?.write({ anchor, atEnd: nearBottomRef.current });
     }
   }, [
+    isUserControllingScroll,
+    runStickToLatestVerify,
     captureCurrentHistoryAnchor,
     reopeningPosition,
     getCurrentHistoryTopOffsetAdjustment,
@@ -2474,6 +2490,7 @@ export function MessageRenderer({
   ]);
 
   const handleHistoryTouchStart = useCallback((event: GestureResponderEvent) => {
+    if (!historyPositioningRef.current) return;
     reopeningAnchorRef.current = null;
     // Android may omit momentum-end when a new finger stops a fling. The new touch owns the
     // ScrollView now, so the old momentum flag must not keep a queued history request suspended.
@@ -2535,6 +2552,7 @@ export function MessageRenderer({
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
   // shouldUnpinMobileFollowOnDrag 判「相对起点累计上移」。
   const handleScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (!historyPositioningRef.current) return;
     richContent?.onScroll();
     reopeningAnchorRef.current = null;
     const nativeMetrics = {
@@ -2576,6 +2594,7 @@ export function MessageRenderer({
   ]);
 
   const handleMomentumScrollBegin = useCallback(() => {
+    if (!historyPositioningRef.current) return;
     isMomentumScrollingRef.current = true;
   }, []);
 
@@ -2596,10 +2615,18 @@ export function MessageRenderer({
   useEffect(() => {
     if (!historyPositioning) {
       tailFollowerRef.current?.reset();
+      // Detached native surfaces may never deliver touch/drag/momentum end.
+      // Release only transient gesture ownership; keep deliberate history intent.
+      isDraggingRef.current = false;
+      isMomentumScrollingRef.current = false;
+      dragStartOffsetYRef.current = null;
+      historyTouchStartYRef.current = null;
+      historyTouchTriggeredRef.current = false;
+      clearProgrammaticScroll();
       return;
     }
     getTailFollower().reconcile();
-  }, [historyPositioning, getTailFollower]);
+  }, [historyPositioning, getTailFollower, clearProgrammaticScroll]);
 
   const handleStartReached = useCallback(() => {
     attemptAutoLoadEarlier();
@@ -2679,6 +2706,7 @@ export function MessageRenderer({
   // 没有淡入阶段；持续 resize 或复杂 cell 占满 JS 也不能无限延长隐藏。
   useLayoutEffect(() => {
     if (initialAnchorDoneRef.current) return;
+    if (!historyPositioning) return;
     if (listData.length === 0) {
       initialRevealProgress.setValue(1);
       setListRevealed(true);
@@ -2740,6 +2768,7 @@ export function MessageRenderer({
       scrollToEndProgrammatically(false);
     }
   }, [
+    historyPositioning,
     reopeningPosition,
     reconcileReopeningAnchor,
     markProgrammaticScroll,
@@ -2781,6 +2810,7 @@ export function MessageRenderer({
   // 补滚被 readingOlderRef 挡住,即便被判近底(短会话)也必须在这里补,否则 topPadding
   // 变化两边都不处理、可见消息仍跳(review P1 L683)。
   useEffect(() => {
+    if (!historyPositioning) return;
     const prev = prevTopPaddingRef.current;
     prevTopPaddingRef.current = topPadding;
     const delta = topPadding - prev;
@@ -2794,7 +2824,7 @@ export function MessageRenderer({
     if (!initialAnchorDoneRef.current || nativeScrollEventSequenceRef.current === 0) return;
     const { offsetY } = scrollMetricsRef.current;
     scrollToOffsetProgrammatically(Math.max(0, offsetY + delta), false);
-  }, [reconcileReopeningAnchor, scrollToOffsetProgrammatically, topPadding]);
+  }, [historyPositioning, reconcileReopeningAnchor, scrollToOffsetProgrammatically, topPadding]);
 
   // 深链/搜索:滚到指定消息(LegendList scrollToIndex 自带 offscreen 处理,无需 rAF/失败兜底)。
   useEffect(() => {
@@ -2802,6 +2832,7 @@ export function MessageRenderer({
       lastAppliedFocusKeyRef.current = null;
       return;
     }
+    if (!historyPositioning) return;
     if (lastAppliedFocusKeyRef.current === focusRunKey) return;
     const index = listData.findIndex((item) => item.key === focusedItemKey);
     if (index < 0) return;
@@ -2822,6 +2853,7 @@ export function MessageRenderer({
       }
     }, () => { /* The existing bounded reveal fallback handles a failed native seek. */ });
   }, [
+    historyPositioning,
     focusRunKey,
     focusedItemKey,
     listData,
