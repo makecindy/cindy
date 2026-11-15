@@ -13,6 +13,7 @@ import {
   GhostOauthAccountManager,
   missingAuthScopes,
   type GhostOauthDecl,
+  type GhostOauthAccountManagerDeps,
   type GhostOauthVault,
 } from '../ghostOauthAccounts.js';
 import type { GhostOauthAvatarHop } from '../ghostOauthFlow.js';
@@ -139,24 +140,22 @@ function oauthManifestWithoutBuiltinClient(): GhostManifest {
 // Tier 1: existing OAuth tests only cover per-plugin token storage. Delegated
 // accounts must refresh at the original owner and immediately observe removal.
 describe('reuse of owner-selected existing OAuth accounts', () => {
-  function setup(confirm = true) {
+  function setup(withMutationLock?: GhostOauthAccountManagerDeps['withMutationLock']) {
     const vault = seededVault('source-refresh');
     const consumer = 'consumer-plugin';
     const sourceManifest = oauthManifest('source-client');
     const consumerManifest = { ...oauthManifest('different-client'), id: consumer, name: 'Consumer' };
     let available = true;
     const fetchImpl = vi.fn(async () => jsonResponse({ access_token: 'source-access', token_type: 'Bearer', expires_in: 3600 }));
-    const confirmAccountReuse = vi.fn(async () => confirm);
     const connectionSource = vi.fn((id: string) => id === consumer ? { instanceKey: consumer, name: 'Consumer', manifest: consumerManifest }
       : id === GHOST && available ? { instanceKey: GHOST, name: 'Source', manifest: sourceManifest } : null);
     const connectionSources = vi.fn(() => [{ instanceKey: consumer, name: 'Consumer', manifest: consumerManifest },
       ...(available ? [{ instanceKey: GHOST, name: 'Source', manifest: sourceManifest }] : [])]);
     const mgr = new GhostOauthAccountManager({ vault, fetchImpl: fetchImpl as typeof fetch, openExternal: vi.fn(),
-      connectionSource, connectionSources,
-      confirmAccountReuse,
+      connectionSource, connectionSources, withMutationLock,
     });
     const selection = { instanceKey: GHOST, secretKey: KEY, accountId: 'acc-1' };
-    return { mgr, vault, fetchImpl, confirmAccountReuse, connectionSource, connectionSources, consumer, sourceManifest, consumerManifest, selection,
+    return { mgr, vault, fetchImpl, connectionSource, connectionSources, consumer, sourceManifest, consumerManifest, selection,
       hideSource: () => { available = false; } };
   }
 
@@ -186,13 +185,12 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     expect(h.connectionSources).not.toHaveBeenCalled();
   });
 
-  it('stores a reference, reuses the source refresh path, and forwards 401 invalidation', async () => {
+  it('stores a reference without another confirmation, reuses the source refresh path, and forwards 401 invalidation', async () => {
     const h = setup();
     const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
     expect(h.mgr.listReusableAccounts(h.consumer, KEY, decl)).toMatchObject([{ instanceKey: GHOST, secretKey: KEY, accountId: 'acc-1', label: 'a@b.com' }]);
     const connected = await h.mgr.reuseAccount(h.consumer, KEY, decl, h.selection);
     expect(connected).toMatchObject({ ok: true, account: { reused: true } });
-    expect(h.confirmAccountReuse).toHaveBeenCalledOnce();
     expect(h.mgr.clientConfigured(h.consumer, KEY, decl)).toBe(true);
     const first = await h.mgr.getFreshAccessToken(h.consumer, KEY, decl);
     expect(first).toMatchObject({ ok: true, accessToken: 'source-access', reused: true });
@@ -227,17 +225,13 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     expect(await h.mgr.getFreshAccessToken(GHOST, KEY, h.sourceManifest.network!.secrets![0]!.oauth!)).toMatchObject({ ok: true });
   });
 
-  it('does not bind without the native owner confirmation or to an incompatible service', async () => {
-    const denied = setup(false);
-    const decl = denied.consumerManifest.network!.secrets![0]!.oauth!;
-    expect(await denied.mgr.reuseAccount(denied.consumer, KEY, decl, denied.selection)).toMatchObject({ ok: false, error: 'CANCELLED' });
-    expect(denied.mgr.listAccounts(denied.consumer, KEY, decl)).toEqual([]);
+  it('does not bind to an incompatible service', async () => {
     const h = setup();
     const secret = h.consumerManifest.network!.secrets![0]!;
     secret.inject.hosts = ['outside.example.com'];
     expect(h.mgr.listReusableAccounts(h.consumer, KEY, secret.oauth!)).toEqual([]);
     expect(await h.mgr.reuseAccount(h.consumer, KEY, secret.oauth!, h.selection)).toMatchObject({ ok: false });
-    expect(h.confirmAccountReuse).not.toHaveBeenCalled();
+    expect(h.mgr.listAccounts(h.consumer, KEY, secret.oauth!)).toEqual([]);
   });
 
   it('disconnects only the consumer reference and preserves the original account', async () => {
@@ -252,13 +246,15 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     expect(h.vault.read(GHOST, KEY + '-rt-acc-1')).toBe('source-refresh');
   });
 
-  it('fences source removal during native confirmation and during token refresh', async () => {
-    const consent = setup();
+  it('fences source removal while waiting for the mutation lock and during token refresh', async () => {
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    const consent = setup(async (_id, task) => { enter(); await ready; return task(); });
     const decl = consent.consumerManifest.network!.secrets![0]!.oauth!;
-    let allow!: (value: boolean) => void;
-    consent.confirmAccountReuse.mockImplementation(() => new Promise<boolean>(resolve => { allow = resolve; }));
     const binding = consent.mgr.reuseAccount(consent.consumer, KEY, decl, consent.selection);
-    consent.hideSource(); allow(true);
+    await entered;
+    consent.hideSource(); release();
     expect(await binding).toMatchObject({ ok: false });
     expect(consent.mgr.listAccounts(consent.consumer, KEY)).toEqual([]);
 
@@ -280,7 +276,7 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     const mgr = new GhostOauthAccountManager({ vault: h.vault, fetchImpl: vi.fn(), openExternal: vi.fn(),
       connectionSource: h.connectionSource,
       connectionSources: () => [{ instanceKey: GHOST, name: 'Source', manifest: h.sourceManifest }, { instanceKey: h.consumer, name: 'Consumer', manifest: h.consumerManifest }],
-      confirmAccountReuse: async () => true, isTokenBrokerAuthorized: id => id === GHOST,
+      isTokenBrokerAuthorized: id => id === GHOST,
       broker: { refresh, exchange: vi.fn() },
     });
     const decl = h.consumerManifest.network!.secrets![0]!.oauth!;

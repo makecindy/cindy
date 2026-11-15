@@ -3995,7 +3995,7 @@ describe('GhostManager · uninstall', () => {
     };
     const references = new GhostSavedCredentialManager({ vault, connections: new GhostConnectionManager({ vault }),
       connectionSource: source, connectionSources: () => [], captureTarget: id => source(id) ? id : null,
-      confirm: async () => true, withMutationLock: async (_id, task) => {
+      withMutationLock: async (_id, task) => {
         if (blocked && failure === 'lock') throw new Error('consumer lock unavailable');
         return task();
       } });
@@ -6700,7 +6700,7 @@ describe('GhostManager · update(原位换版)', () => {
     };
     const references = new GhostSavedCredentialManager({ vault, connections: new GhostConnectionManager({ vault }),
       connectionSource: source, connectionSources: () => [], captureTarget: id => source(id) ? id : null,
-      confirm: async () => true, withMutationLock: async (_id, task) => task() });
+      withMutationLock: async (_id, task) => task() });
     const noop = () => {};
     ({ relocateGhostUserData: relocate } = createGhostProductionCallbacks<{ relocateGhostUserData(from: string, to: string): Promise<void> }>({
       functions: ['relocateGhostUserData', 'relocateGhostAccountReuseReferences'],

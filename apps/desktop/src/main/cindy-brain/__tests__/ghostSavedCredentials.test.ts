@@ -23,7 +23,7 @@ const createReuseIpc = createGhostProductionCallbacks<{
 
 // §4 credential handoff: OAuth reuse tests cannot exercise saved PATs or
 // connection tokens. Unit tier; the public manager must persist references,
-// observe source rotation/removal and reject unconfirmed or changed installs.
+// observe source rotation/removal and reject changed installs without another prompt.
 function setup(withMutationLock: <T>(id: string, task: () => T | Promise<T>) => Promise<T> = async (_id, task) => task()) {
   const data = new Map<string, string>();
   const vault = {
@@ -40,18 +40,16 @@ function setup(withMutationLock: <T>(id: string, task: () => T | Promise<T>) => 
   const target = { instanceKey: 'target', name: 'Target', manifest: manifest('target') };
   const sources = [source, target];
   let generation = 1;
-  const confirm = vi.fn(async () => true);
   const connectionSources = vi.fn(() => sources);
   const connections = new GhostConnectionManager({ vault });
   const manager = new GhostSavedCredentialManager({ vault, connections,
     connectionSources,
     connectionSource: id => sources.find(source => source.instanceKey === id) ?? null,
     captureTarget: id => `${generation}:${id}`,
-    confirm,
     withMutationLock,
   });
   vault.store('source', 'token', 'private-source-token');
-  return { manager, vault, data, source, target, sources, connections, confirm, connectionSources, withMutationLock,
+  return { manager, vault, data, source, target, sources, connections, connectionSources, withMutationLock,
     boundary: () => { generation++; },
     ref: { kind: 'secret' as const, instanceKey: 'source', secretKey: 'token', accountId: 'saved' } };
 }
@@ -88,7 +86,7 @@ function lifecycle(h: ReturnType<typeof setup>) {
 describe('saved credential references', () => {
   // #10130 / 4560156890: resolve-only removal coverage missed reinstalling
   // the same physical source. Unit: production lifecycle entry + real manager;
-  // a replacement PAT must not inherit the old native reuse confirmation.
+  // a replacement PAT must not inherit the old source selection.
   it.each(['uninstall', 'archive'] as const)('does not reuse a replacement PAT after source %s', async kind => {
     const h = setup();
     await h.manager.reuse('target', 'token', h.ref);
@@ -106,7 +104,7 @@ describe('saved credential references', () => {
     expect(h.manager.resolve('target', 'token')?.value).toBe('replacement-pat');
   });
 
-  it('preserves a confirmed reference across ordinary source updates and credential rotation', async () => {
+  it('preserves a selected reference across ordinary source updates and credential rotation', async () => {
     const h = setup();
     await h.manager.reuse('target', 'token', h.ref);
     const before = [...h.data].filter(([key]) => key.startsWith('target\0'));
@@ -115,7 +113,6 @@ describe('saved credential references', () => {
     h.vault.store('source', 'token', 'rotated-source-token');
     expect(h.manager.resolve('target', 'token')?.value).toBe('rotated-source-token');
     expect([...h.data].filter(([key]) => key.startsWith('target\0'))).toEqual(before);
-    expect(h.confirm).toHaveBeenCalledOnce();
   });
 
   it.each(['uninstall', 'archive'] as const)('revokes orphaned references before a removed declaration is restored after source %s', async kind => {
@@ -221,7 +218,7 @@ describe('saved credential references', () => {
     expect(h.vault.read('source', 'token')).toBe('private-source-token');
   });
 
-  it('stores only a reference, resolves the original value freshly, and stops on source removal', async () => {
+  it('stores only a reference without another confirmation, resolves freshly, and stops on source removal', async () => {
     const h = setup();
     expect(h.manager.list('target', 'token').options).toMatchObject([{ ...h.ref, label: 'PAT' }]);
     expect(await h.manager.reuse('target', 'token', h.ref)).toEqual({ ok: true });
@@ -238,16 +235,13 @@ describe('saved credential references', () => {
     expect(h.manager.list('target', 'token').accounts).toMatchObject([{ status: 'expired' }]);
   });
 
-  it('requires confirmation and binds it to the original installations and declaration', async () => {
-    const h = setup();
-    h.confirm.mockResolvedValueOnce(false);
-    expect(await h.manager.reuse('target', 'token', h.ref)).toEqual({ ok: false, error: 'CANCELLED' });
-    expect(h.vault.read('target', 'token')).toBeNull();
-    h.confirm.mockImplementationOnce(async () => { h.boundary(); return true; });
-    expect(await h.manager.reuse('target', 'token', h.ref)).toEqual({ ok: false, error: 'INVALID_CONFIG' });
-    h.confirm.mockImplementationOnce(async () => {
-      h.target.manifest.network!.secrets![0]!.inject.format = '{value}'; return true;
-    });
+  it.each(['installation', 'declaration'] as const)('rejects %s changes before the mutation lock is acquired', async change => {
+    let beforeMutation = () => {};
+    const h = setup(async (_id, task) => { beforeMutation(); return task(); });
+    beforeMutation = () => {
+      if (change === 'installation') h.boundary();
+      else h.target.manifest.network!.secrets![0]!.inject.format = '{value}';
+    };
     expect(await h.manager.reuse('target', 'token', h.ref)).toEqual({ ok: false, error: 'INVALID_CONFIG' });
     expect(h.vault.read('target', 'token')).toBeNull();
   });
