@@ -834,6 +834,7 @@ import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js'
 import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
 import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
 import { configureTaskArchiveRuntime } from '../task-management/service.js';
+import { resolveModelSwitchContextTokens, resolveModelSwitchWindows } from './modelSwitchGateInput.js';
 import { hasIdleReleaseQueuedWork, hasPendingIdleReleaseInput as hasPendingIdleReleaseInputFor, hasScheduledIdleReleaseAutoResume } from './idleReleaseInputGates.js';
 import {
   createPiIdleReleaseWatcher,
@@ -23874,36 +23875,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sshCodexProviders
             ? resolveVerifiedContextWindow({ providers: sshCodexProviders }, runtimeAgentKind, pid ?? 'openai', modelId)
             : resolveWindowForRoute(runtimeAgentKind, modelId, pid);
-        const catalogTargetWindow = lookupVerifiedContextWindow(
-          resolveRouteWindow,
-          model,
-          targetRouteProviderId,
-          runtimeAgentKind,
-        );
-        const verifiedTargetWindow =
-          runtimeAgentKind === 'pi' && piPreview?.windowVerified === true &&
-          typeof piPreview.targetContextWindow === 'number' && piPreview.targetContextWindow > 0
-            ? catalogTargetWindow === null
-              ? piPreview.targetContextWindow
-              : Math.min(piPreview.targetContextWindow, catalogTargetWindow)
-            : catalogTargetWindow;
-        const catalogCurrentWindow =
-          lookupVerifiedContextWindow(
-            resolveRouteWindow,
-            currentRuntimeModel,
-            currentProviderId,
-            runtimeAgentKind,
-          ) ?? undefined;
         const liveCurrentWindow = liveSessionBeforeRouteChange?.getUsageSnapshot?.().contextWindow;
-        // Pi 的有效窗口只能相信运行时上报值；其它引擎的缩窗闸门只接受目录核实值。
-        verifiedCurrentWindow =
-          runtimeAgentKind === 'pi'
-            ? typeof liveCurrentWindow === 'number' &&
-              Number.isFinite(liveCurrentWindow) &&
-              liveCurrentWindow > 0
-              ? liveCurrentWindow
-              : undefined
-            : catalogCurrentWindow;
+        const switchWindows = resolveModelSwitchWindows({
+          runtimeAgentKind, resolveRouteWindow, model, targetRouteProviderId,
+          currentRuntimeModel, currentProviderId, piPreview, liveCurrentWindow,
+        });
+        const verifiedTargetWindow = switchWindows.verifiedTargetWindow;
+        verifiedCurrentWindow = switchWindows.verifiedCurrentWindow;
         // 切模必须重建的**比较基准**：优先取被验证的当前窗口，其次取「运行时上报/目录收敛出的
         // 有效窗口」，再退到「同一收敛函数解出的当前路由窗口」（与建 live env 用的是同一个
         // resolveWindowForRoute，因此未核实但声明了 max 的路由也解得出）。
@@ -23945,24 +23923,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             !runtimeStatus.orcaRole && !parseOrcaRemoteLead(runtimeStatus.orcaRemoteLead)) {
           targetContextWindow = confirmedContextWindow ?? targetContextWindow;
         }
-        const persistedContextTokens =
-          typeof runtimeStatus.contextTokens === 'number' &&
-          Number.isFinite(runtimeStatus.contextTokens) &&
-          runtimeStatus.contextTokens >= 0
-            ? runtimeStatus.contextTokens
-            : null;
         const liveContextTokens = liveSessionBeforeRouteChange?.getUsageSnapshot?.().contextTokens;
-        const verifiedLiveContextTokens =
-          typeof liveContextTokens === 'number' && Number.isFinite(liveContextTokens)
-            ? liveContextTokens
-            : null;
-        const liveUsageIsAuthoritative =
-          verifiedLiveContextTokens !== null &&
-          (verifiedLiveContextTokens > 0 || persistedContextTokens === 0);
-        const contextTokensKnown = liveUsageIsAuthoritative || persistedContextTokens !== null;
-        const contextTokens = liveUsageIsAuthoritative
-          ? verifiedLiveContextTokens
-          : (persistedContextTokens ?? 0);
+        const { contextTokensKnown, contextTokens } = resolveModelSwitchContextTokens(runtimeStatus, liveContextTokens);
         modelWindowContextNeedsProtection = hasModelWindowContextToProtect(
           contextTokensKnown,
           contextTokens,
