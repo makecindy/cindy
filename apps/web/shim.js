@@ -77,6 +77,19 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
   const pending = new Map();
 
   /**
+   * Path prefix of this page when a reverse proxy serves the web client below
+   * the site root (for example `/cindy`). The proxy sets it before this script
+   * runs; empty means the Host's own root, so every request path is unchanged.
+   * Reject URLs, `//host`, backslashes and ASCII control characters so the
+   * logout redirect stays on the site. URL parsing strips tabs, CR and LF.
+   */
+  const base = (() => {
+    const value = window.__CINDY_BASE__;
+    const path = typeof value === 'string' ? value.replace(/\/+$/, '') : '';
+    return /^\/(?!\/)[^\\\x00-\x1F\x7F]*$/.test(path) ? path : '';
+  })();
+
+  /**
    * The Desktop's own settings, inlined when the host serves this page. They
    * come from the same files the Desktop main process reads, so the browser and
    * the client show one copy instead of two. Writes below go back to those same
@@ -109,7 +122,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
 
   async function requestHost(path, args, method = 'POST', signal) {
     const headers = { 'content-type': 'application/json' };
-    const response = await fetch(path, {
+    const response = await fetch(`${base}${path}`, {
       method,
       signal,
       headers,
@@ -290,7 +303,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
         agentKind: createOpts?.agentKind ?? 'claude-code',
       };
       const headers = { 'content-type': 'application/json' };
-        const response = await fetch('/chat', {
+        const response = await fetch(`${base}/chat`, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -724,7 +737,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     'authSwitchAccount': () => unsupported('authSwitchAccount'),
     'authBeginAddAccount': () => ({ success: false, code: 'NOT_SUPPORTED', state: null }),
     'authCancelAddAccount': () => undefined,
-    'authLogout': async () => { const result = await hostChannels['auth.logout'](); location.replace('/connect'); return result; },
+    'authLogout': async () => { const result = await hostChannels['auth.logout'](); location.replace(`${base}/connect`); return result; },
     'authGetAccountDeletionAvailability': () => ({ success: true, value: { available: false, reason: 'not_supported' } }),
     'authRequestAccountDeletionChallenge': () => ({ success: false, code: 'NOT_SUPPORTED' }),
     'authConfirmAccountDeletion': () => ({ success: false, code: 'NOT_SUPPORTED' }),
@@ -1000,7 +1013,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     if (eventConnection) return;
     eventConnection = startHostEventStream({
       confirmations: true,
-      open: (query, signal) => fetch(`/events${query}`, { credentials: 'same-origin', signal }),
+      open: (query, signal) => fetch(`${base}/events${query}`, { credentials: 'same-origin', signal }),
       beforeEvents: async (signal) => {
         const auth = await requestHost('/api/auth/state', null, 'POST', signal);
         if (signal.aborted) return;
