@@ -16,6 +16,12 @@ import { createHostLearnInvocationCapture } from './learn-capture.ts';
 import { createHostEventPersistence } from './event-persistence.ts';
 import { createHostContextRecovery } from './context-recovery.ts';
 import { createHostWorkingDirectory } from './working-directory.ts';
+import { clearSealedCodexPlanState, readCodexPlanState } from '../../../desktop/src/main/localDb/codexPlanState.ts';
+import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from '../../../desktop/src/main/maker-ipc/planReconcile.ts';
+import { peekGoalInactiveNote } from '../../../desktop/src/main/goal-host/inactiveNote.ts';
+import { createTurnModelAttribution } from '../../../desktop/src/main/maker-ipc/turnModelAttribution.ts';
+import { patchMessageAgentMetaWithResultRow } from '../../../desktop/src/main/localDb/messageMutations.ts';
+import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
 import { noteClaudeSessionTurnState } from '../../../desktop/src/main/maker-host/claude-session-background-activity.ts';
@@ -290,6 +296,16 @@ export function createTurnExecutor(deps) {
     listen(id, session);
   }
 
+  // The desktop's write FIFO does not pause on a failed write; the Host's pauses the task's reply
+  // writes after one, until it is retried. The send's own reads and best-effort records (plan, goal,
+  // model of the turn) keep the desktop's behaviour: they wait behind the task's writes, and their
+  // failure goes back to the caller (which skips the note or logs) without pausing the task.
+  function behindDurableWrites(id, label, fn) {
+    return historyFor(id).enqueueDurableWrite(label, () => Promise.resolve().then(fn)
+      .then(value => ({ value }), error => ({ error })))
+      .then(result => { if ('error' in result) throw result.error; return result.value; });
+  }
+
   const reconcileCreateOptsWithDb = createSessionOptionsReconciler({ log, readSession: readExecutionSession });
   // The desktop's working-directory check and recovery (working-directory.ts).
   const workingDirectory = createHostWorkingDirectory({
@@ -446,6 +462,30 @@ export function createTurnExecutor(deps) {
     onUndispatchedDirectUserTurn: id => { const turn = turns.get(id); if (turn) settleGitBaseline(id, turn, 'abort'); },
     readHostDeviceIdentity: deps.readHostDeviceIdentity,
     planRepeatableWireNotes: (id, notes, options) => wireNotes.plan(id, notes, options),
+    // The plan reconciliation and goal notes, read behind the task's durable writes, as register.ts
+    // reads them behind its write FIFO (so a reply still being stored is not missed).
+    peekPlanReconcileNote: async id => {
+      const snapshot = await behindDurableWrites(id, `plan-reconcile-read:${id}`, () => readCodexPlanState(id));
+      if (!snapshot) return null;
+      if (snapshot.state === 'sealed') return { note: buildCompletedPlanGuardNote(), sealedTurnId: snapshot.turnId };
+      const openSteps = snapshot.plan.filter(item => item.status !== 'completed').map(item => item.step);
+      if (openSteps.length === 0 && snapshot.state !== 'interrupted') return null;
+      return { note: buildPlanReconcileNote({ openSteps, totalSteps: snapshot.plan.length }) };
+    },
+    consumeSealedPlanReconcileNote: (id, turnId) =>
+      behindDurableWrites(id, `plan-seal-consume:${id}:${turnId}`, () => clearSealedCodexPlanState(id, turnId)),
+    peekGoalInactiveNote: id => behindDurableWrites(id, `goal-inactive-read:${id}`, () => peekGoalInactiveNote(id)),
+    // Which model ran a dispatched user turn, and a model-change card when it changed (turnModelAttribution.ts).
+    onModelDispatched: (id, clientId) => createTurnModelAttribution({
+      maker: deps.getMaker(), getSessionProvider,
+      captureDataOwnerBroadcastScope: () => deps.getOwner?.() ?? null,
+      isDataOwnerBroadcastScopeCurrent: owner => (deps.getOwner?.() ?? null) === owner && deps.isCurrent(),
+      enqueueDurableWrite: (label, write) => behindDurableWrites(id, label, write),
+      patchMessageAgentMeta: async (sessionId, messageClientId, patch) =>
+        (await patchMessageAgentMetaWithResultRow(getDbClient(), sessionId, messageClientId, patch)) !== null,
+      createDbMessage: (sessionId, body) => deps.persistMessage(sessionId, body),
+      log,
+    })(id, clientId),
     log,
   });
 

@@ -5,6 +5,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { configureHostOwner } from './agent/claude-auth.mjs';
+import { configureAppDataDir } from '../../desktop/src/main/userDataPath.ts';
+import { hostRuntimeLayout } from './runtime-layout.mjs';
+import { openOwnerDatabase } from '../../desktop/src/main/localDb/startupCore.ts';
+import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 
 import { createChatHandler } from './chat.mjs';
 import { createEventHub } from './events.mjs';
@@ -17,11 +22,25 @@ import { createInputQueue } from './agent/input-queue.mjs';
  * is how file access silently stopped working for API clients.
  */
 test('chat uses the durable queue and approvals reach the client once', async (t) => {
-  // The Host always sends with a signed-in profile: the working-directory check reads its
-  // conversation recovery directories (agent/working-directory.ts).
+  // The Host always sends with a signed-in profile and its database: the working-directory check
+  // reads the profile's conversation recovery directories (agent/working-directory.ts), and the send
+  // reads the task's rows (a fixture profile: the guard against migrating the official shared
+  // profile is lifted while it opens).
   const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-chat-interactions-'));
   configureHostOwner({ userDataDir: profile, ownerId: 'chat-interactions' });
-  t.after(() => { configureHostOwner({ userDataDir: profile, ownerId: null }); rmSync(profile, { recursive: true, force: true }); });
+  configureAppDataDir(path.join(profile, 'app-data'));
+  const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  const layout = hostRuntimeLayout();
+  const opened = await openOwnerDatabase({ userDataDir: profile, ownerId: 'chat-interactions',
+    isPackaged: false, drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath })
+    .finally(() => { if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile; });
+  const database = createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
+  setCurrentDbClient(database, 'chat-interactions');
+  t.after(async () => {
+    clearCurrentDbClient(); await database.dispose();
+    configureHostOwner({ userDataDir: profile, ownerId: null }); rmSync(profile, { recursive: true, force: true });
+  });
   const hub = createEventHub();
   const broker = createInteractionBroker({ hub });
   const published = [];

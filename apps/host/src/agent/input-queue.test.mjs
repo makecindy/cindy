@@ -24,6 +24,9 @@ import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/age
 import { RECOVERY_SHUTDOWN_WAIT_MS, contextRecoveryKind, createHostContextRecovery } from './context-recovery.ts';
 import { createHostContextRecoveryRollover } from './context-recovery-assembly.ts';
 import { createHostAgentHandoffPending } from './handoff-pending.ts';
+import { markCodexPlanInterrupted, writeCodexPlanUpdate } from '../../../desktop/src/main/localDb/codexPlanState.ts';
+import { buildPlanReconcileNote } from '../../../desktop/src/main/maker-ipc/planReconcile.ts';
+import { buildGoalInactiveNote } from '../../../desktop/src/main/goal-host/inactiveNote.ts';
 import { createSessionStderrOptions } from '../../../desktop/src/main/maker-ipc/sessionRequest.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.ts';
@@ -61,9 +64,28 @@ const unitProfile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-input-queue-'
 after(() => rmSync(unitProfile, { recursive: true, force: true }));
 const signInUnitOwner = () => configureHostOwner({ userDataDir: unitProfile, ownerId: 'input-queue-unit' });
 signInUnitOwner();
+// The send reads the task's rows (plan, goal, the turn's model) as on the desktop, where a database
+// is always open, so a sending fixture without its own database uses this empty one (a fixture
+// profile: the development guard against migrating the official shared profile is lifted to open it).
+const unitDatabase = await (async () => {
+  const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  delete process.env.XDT_OFFICIAL_SHARED_PROFILE;
+  try {
+    const layout = hostRuntimeLayout();
+    configureAppDataDir(path.join(unitProfile, 'app-data'));
+    const opened = await openOwnerDatabase({ userDataDir: unitProfile, ownerId: 'input-queue-unit',
+      isPackaged: false, drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
+    return createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
+  } finally {
+    if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile;
+  }
+})();
+after(() => unitDatabase.dispose());
 function ensureUnitOwner() {
   if (!getActiveAppSession().dataOwnerId) signInUnitOwner();
+  if (!getCurrentDbClientSnapshot()) setCurrentDbClient(unitDatabase, 'input-queue-unit');
 }
+ensureUnitOwner();
 
 function createFakeMaker() {
   const sessions = new Map();
@@ -95,6 +117,7 @@ function createFakeMaker() {
         isTurnRunning() { return session.running; },
         getTurnGeneration() { return session.generation; },
         options: opts,
+        get model() { return session.options.model; },
         sent: [],
         sendOptions: [],
         steerOptions: [],
@@ -3211,4 +3234,62 @@ test('a send to a task whose managed worktree is gone fails at once without a re
   const recoveryDirs = existsSync(dialogues)
     ? readdirSync(dialogues, { recursive: true }).filter(entry => String(entry).includes('worktree-recovery')) : [];
   assert.deepEqual(recoveryDirs, [], 'no "unrestored worktree" recovery directory');
+});
+
+// Unit, over a migrated profile database: the send transaction's plan reconciliation, goal and
+// model-attribution ports (turn-executor.mjs), with the desktop's shared readers and writers.
+// - Rule: a send carries the open plan of an interrupted Codex plan and the inactive-goal note
+//   after a goal verdict, read behind the task's durable writes; a dispatched user turn records
+//   the model that ran it, and a change of model adds one model-change card (register.ts).
+// - Gap: the Host carried neither note and recorded no model.
+async function notesFixture(t) {
+  const db = await recoveryDatabase(t);
+  const stored = { model: 'model-a' };
+  const h = createHarness({ persistMessage: db.persistMessage, getOwner: getCurrentDbClientSnapshot,
+    readSession: async id => ({ id, status: 'active', agentKind: 'codex', model: stored.model, workingDir: db.root,
+      providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  t.after(() => h.queue.dispose());
+  return { db, h, stored };
+}
+
+test('a send carries the open steps of an interrupted Codex plan', { timeout: 30_000 }, async t => {
+  const { db, h } = await notesFixture(t);
+  await db.createTask('plan-task');
+  db.db.prepare("UPDATE sessions SET agent_kind = 'codex' WHERE id = 'plan-task'").run();
+  await writeCodexPlanUpdate('plan-task', { turnId: 'turn-1', plan: [
+    { step: 'Read the code', status: 'completed' }, { step: 'Write the fix', status: 'in_progress' }] });
+  await markCodexPlanInterrupted('plan-task', 'turn-1');
+  await enqueue(h, 'plan-task', { clientId: 'next', text: 'continue' });
+  const sent = h.maker.getSession('plan-task').sent[0];
+  assert.ok(sent.includes(buildPlanReconcileNote({ openSteps: ['Write the fix'], totalSteps: 2 })), sent);
+  assert.match(sent, /continue$/);
+});
+
+test('a send after a goal verdict, with no running goal, carries the inactive-goal note', { timeout: 30_000 }, async t => {
+  const { db, h } = await notesFixture(t);
+  await db.createTask('goal-task');
+  await db.persistMessage('goal-task', { clientId: 'verdict', role: 'assistant',
+    content: 'Done.\n```json\n{"goal_status":"achieved","reason":"all set"}\n```' });
+  await enqueue(h, 'goal-task', { clientId: 'next', text: 'one more thing' });
+  const sent = h.maker.getSession('goal-task').sent[0];
+  assert.ok(sent.startsWith(buildGoalInactiveNote()), sent);
+});
+
+test('a dispatched user turn records its model, and a changed model adds one model-change card', { timeout: 30_000 }, async t => {
+  const { db, h, stored } = await notesFixture(t);
+  await db.createTask('model-task');
+  await enqueue(h, 'model-task', { clientId: 'first', text: 'first' });
+  const session = h.maker.getSession('model-task');
+  const meta = clientId => JSON.parse(db.db.prepare('SELECT agent_meta FROM messages WHERE session_id = ? AND client_id = ?')
+    .get('model-task', clientId)?.agent_meta ?? 'null');
+  await waitFor(() => meta('first')?.executionModel);
+  assert.deepEqual(meta('first').executionModel, { agentKind: 'codex', model: 'model-a', providerId: 'xd' });
+  session.emit({ type: 'done', data: {} });
+  // The task's model changes between the two turns (the next send applies the stored settings).
+  stored.model = 'model-b';
+  await h.queue.enqueue('model-task', { clientId: 'second', text: 'second' });
+  await waitFor(() => meta('model-change:second'));
+  assert.equal(meta('second').executionModel.model, 'model-b');
+  assert.deepEqual(Object.keys(meta('model-change:second')), ['modelChange']);
+  assert.equal(db.db.prepare("SELECT count(*) AS n FROM messages WHERE session_id = 'model-task' AND client_id LIKE 'model-change:%'").get().n, 1);
 });
