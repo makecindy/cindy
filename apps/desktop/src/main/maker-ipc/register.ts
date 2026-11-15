@@ -22,7 +22,11 @@ import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { measureTraceOperation } from '../performance-trace/measure.js';
 import { assertSessionCreationCurrent, currentSessionCreationSignal } from '../localDb/sessionRuntimeCleanup.js';
 import { pagePermissionGrants } from '../mcp-apps/pagePermissions.js';
-import { setPluginPageToolRunner } from '../mcp-integrations/plugin-app-registry.js';
+import { setPluginPageToolRunner, readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
+import { callPluginAttachmentProvider, callPluginAttachmentTool } from '../mcp-apps/pluginAttachment.js';
+import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
+import { removeRefById } from '../cindy-media/ledger.js';
+import { ghostToolDeclaresHandoff } from '../../shared/ghost.js';
 import { getCindyGhostsMcpDeps } from '../mcp-integrations/ghost.desktop.js';
 import { pluginAppResult } from '../mcp-apps/pluginCards.js';
 import { restorePluginPageSession } from '../mcp-apps/pluginPageCall.js';
@@ -348,9 +352,9 @@ import {
   type GhostSetupInteractionResponseTarget,
   type GhostSetupInteractionSnapshot,
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
-import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
+import { getGhostSetupCoordinator, initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.desktop.js';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop.js';
+import { resolveSafe as resolveCindyMediaUrl, supportedMime as isCindyMediaMime } from '../cindy-media/blobStore.desktop.js';
 import { companionAvatarCache } from '../companion-cloud/avatarCacheHost.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import { removeRefs as removeMediaRefs } from '../cindy-media/ledger.js';
@@ -366,6 +370,8 @@ import {
   ghostInstallMutationTargetFor,
   getGhostManager,
   getGhostPipeDispatcher,
+  getGhostHandoffStore,
+  getGhostCardService,
   getGhostSetupAssessment,
   remotePluginSettings,
   isGhostAvailableForActiveSession,
@@ -19481,11 +19487,60 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!owner || owner !== getCurrentDbClientSnapshot()) throw new Error('MCP_APP_OWNER_CHANGED');
     };
     assertOwner();
+    if (grant.attachmentBytes) {
+      // Only the native composer supplies this Main-owned input, never an App's args.
+      const entry = readPluginHostUi(grant.instance);
+      if (!entry) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+      const assertStillValid = () => {
+        assertOwner();
+        entry.config.plugin!.assertCurrent(grant.sessionId ?? undefined);
+        if (readPluginHostUi(grant.instance) !== entry) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+      };
+      const db = owner!.client.drizzle;
+      const ownerScope = activeOwnerScopeKey();
+      return callPluginAttachmentProvider({ instance: grant.instance, bytes: grant.attachmentBytes, args,
+        handoffDeclared: ghostToolDeclaresHandoff(entry.ghost.manifest.tools?.find(tool => tool.name === grant.tool)),
+      }, {
+        signal, assertStillValid, handoff: getGhostHandoffStore(), supportsMedia: isCindyMediaMime,
+        assertCurrent: async () => { await grant.assertCurrent(); assertStillValid(); },
+        ensureReady: async () => {
+          const workingDir = grant.sessionId ? maker.getSession(grant.sessionId)?.workDir
+            ?? (await maker.getSessionMeta(grant.sessionId))?.workDir : null;
+          await grant.assertCurrent();
+          assertStillValid();
+          const coordinator = getGhostSetupCoordinator();
+          if (!coordinator) throw new Error('INTERNAL');
+          const setup = await coordinator.ensureReady({ sessionId: grant.sessionId, ghostId: grant.instance,
+            tool: grant.tool, workingDir, signal });
+          if (!setup.ok) throw new Error(setup.errorCode);
+        },
+        assertReady: () => {
+          if (getGhostSetupAssessment(grant.instance).state !== 'ready') throw new Error('SETUP_REQUIRED');
+        },
+        deposit: async (buffer, mimeType) => {
+          const media = await ingestMedia({ buffer, mimeType,
+            refs: [{ refKind: 'ghost-deposit', refId: grant.instance, originKind: 'user' }],
+            assertStillValid, refCompensationScope: captureMediaRefCompensationScope(ownerScope),
+          }, db);
+          return { hash: media.hash, cleanup: async () => {
+            for (const id of media.refIds) await removeRefById(id, db);
+          } };
+        },
+        call: transferred => callPluginAttachmentTool({ instance: grant.instance, sessionId: grant.sessionId, tool: grant.tool }, {
+          cards: getGhostCardService(),
+          call: async callId => {
+            const result = await getGhostPipeDispatcher().callGhostTool({ ghostId: grant.instance,
+              tool: grant.tool, args: transferred, callId, signal, ...(grant.sessionId ? { sessionId: grant.sessionId } : {}) });
+            return result.ok ? pluginAppResult(result.result) : { isError: true,
+              content: [{ type: 'text', text: JSON.stringify(result) }] };
+          },
+        }),
+      });
+    }
     if (grant.sessionId === null) {
       // Explicitly taskless: never inherit an Agent's ambient authority or focused task.
       const deps = getCindyGhostsMcpDeps(undefined, {}, grant);
-      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal,
-        ...(grant.attachments ? { attachments: grant.attachments } : {}) });
+      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
       await grant.assertCurrent();
       assertOwner();
       return result.ok ? pluginAppResult(result.result) : { isError: true,
@@ -19510,8 +19565,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ...snapshot, permissionMode: permissionModeOrAsk(snapshot.permissionMode), isCurrent: () => !snapshot.planModeEnabled && snapshot.permissionMode !== 'plan' && snapshot.isCurrent?.() === true };
       },
     }, grant);
-    const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal,
-      ...(grant.attachments ? { attachments: grant.attachments } : {}) });
+    const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
     await grant.assertCurrent();
     return result.ok ? pluginAppResult(result.result) : { isError: true,
       content: [{ type: 'text', text: JSON.stringify(result) }] };
