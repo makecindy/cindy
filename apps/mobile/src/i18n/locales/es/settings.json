@@ -430,7 +430,11 @@
       "voice": "Mantener para hablar",
       "scrollKeys": "Stick derecho",
       "scroll": "Desplazar",
-      "page": "Pasar página"
+      "page": "Pasar página",
+      "triggerScrollKeys": "L2 / R2 + cruceta arriba/abajo",
+      "triggerScroll": "Desplazar contenido visible",
+      "sendText": "Enviar texto escrito",
+      "taskHint": "Estos atajos funcionan en las páginas de sesión. Si un botón está asignado a voz, esa función tiene prioridad; al soltarlo, el texto queda en el cuadro de mensaje."
     }
   }
 }

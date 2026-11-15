@@ -180,6 +180,7 @@ export function scrubSharedProvider<T>(provider: T): T {
   const groupStatus = readProviderShareGroupStatus(provider);
   const guestRunning = readProviderShareGuestRunning(provider);
   const { subscriptionAccount, openAiAccount, subscriptionPoolAlias: _poolAlias, ...fields } = provider as Record<string, unknown>;
+  delete fields.subscriptionPoolTarget;
   delete fields.group;
   // Gateway and organization artwork must not disclose the owner's organization identity.
   if (fields.id === 'xd' || fields.source === 'organization') delete fields.logoKind;

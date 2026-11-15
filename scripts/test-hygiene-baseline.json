@@ -98,9 +98,6 @@
     "apps/desktop/src/main/__tests__/projectOrderStore.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/main/__tests__/providerImportWiring.test.ts": {
-      "sourceReads": 5
-    },
     "apps/desktop/src/main/__tests__/releaseNotesService.test.ts": {
       "resetModules": 1
     },
@@ -368,7 +365,7 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/remote-agent/executor/__tests__/executor.test.ts": {
-      "realWaits": 5
+      "realWaits": 4
     },
     "apps/desktop/src/main/remote-desktop/__tests__/backgroundActivity.test.ts": {
       "sourceReads": 3

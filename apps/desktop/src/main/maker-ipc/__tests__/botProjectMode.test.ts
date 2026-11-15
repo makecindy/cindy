@@ -2,13 +2,18 @@ import { spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { Readable } from 'node:stream';
+import { Script } from 'node:vm';
+import type { ProjectScheduleConfig } from '../../scheduler-host/project-automation-loader.js';
+import { executePreRunHook } from '../../scheduler-host/pre-run-hook.js';
 
 import { MEMORY_STORAGE_MIGRATION_RECEIPT } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const loader = vi.hoisted(() => ({
-  loadProjectSchedules: vi.fn<(dir: string) => Promise<Array<{ id: string }> | null>>(async () => null),
-  upsertSchedule: vi.fn(async () => ({})),
+  loadProjectSchedules: vi.fn<(dir: string) => Promise<Array<Partial<ProjectScheduleConfig> & { id: string }> | null>>(async () => null),
+  upsertSchedule: vi.fn(async (_dir: string, _config: ProjectScheduleConfig, _options?: unknown) => ({})),
   removeSchedule: vi.fn(async () => ({})),
 }));
 const aliases = vi.hoisted(() => ({
@@ -17,6 +22,9 @@ const aliases = vi.hoisted(() => ({
 }));
 
 const snapshot = vi.hoisted(() => vi.fn(async () => ({})));
+const database = vi.hoisted(() => ({ path: '' }));
+vi.mock('../../localDb/index.js', () => ({ getDbPathForUser: () => database.path }));
+vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientUserId: () => 'test-owner' }));
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' }, BrowserWindow: { getAllWindows: () => [] } }));
 vi.mock('../../git-snapshot/gitSnapshotService.js', () => ({ createSnapshotDetailed: snapshot }));
@@ -32,22 +40,186 @@ vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ 
 import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 
+// Evaluate the actual generated check with real SQLite, in-process. The hook
+// protocol has its own process tests; retain one real spawn below. Repeated
+// cold Node startups made the activity matrix exceed 60s on CI (#10413).
+async function runMemoryCheck(workingDir: string, firedAt: number): Promise<number> {
+  let exitCode = 0;
+  const output = { write: (_text: string, done?: () => void) => { done?.(); } };
+  const script = await fs.readFile(path.join(workingDir, '..', '.memory-review-check-v1.cjs'), 'utf8');
+  await new Script(script).runInNewContext({
+    require: (name: string) => {
+      if (name !== 'node:sqlite') throw new Error(`Unexpected check dependency: ${name}`);
+      return { DatabaseSync };
+    },
+    console: { log() {}, error() {} },
+    process: {
+      stdin: Readable.from([JSON.stringify({ event: 'schedule-pre-run', firedAt })]),
+      stdout: output, stderr: output,
+      get exitCode() { return exitCode; },
+      set exitCode(value: number) { exitCode = value; },
+      exit: (code: number) => { exitCode = code; },
+    },
+  });
+  return exitCode;
+}
+
 // Teammate V2 (2026-11-06): the nightly review is the project's own automation,
 // added once on the teammate's model; an owner's later edit or removal is kept.
 describe('ensureBotProjectAutomations', () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  let root = '';
+  let workingDir = '';
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-review-'));
+    workingDir = path.join(root, 'workspace');
+    await fs.mkdir(workingDir);
+    database.path = path.join(root, 'account.db');
+  });
+  afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
   it('adds the memory review to the teammate project on its own model, only once', async () => {
     const route = { harness: 'pi' as const, model: 'm1', providerId: 'p1', effort: 'medium', fastMode: false };
-    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir: '/w', route })).resolves.toBe(true);
-    expect(loader.upsertSchedule).toHaveBeenCalledWith('/w', expect.objectContaining({
+    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir, route })).resolves.toBe(true);
+    expect(loader.upsertSchedule).toHaveBeenCalledWith(workingDir, expect.objectContaining({
       id: BOT_PROJECT_MEMORY_REVIEW_ID, agentKind: 'pi', model: 'm1', providerId: 'p1',
       name: 'Mimi · Review memory', persistentSession: true, silentWhenIdle: true,
       prompt: expect.stringContaining('teammate id bot-1'),
     }), { keepUnreadable: true });
 
-    loader.loadProjectSchedules.mockResolvedValueOnce([{ id: BOT_PROJECT_MEMORY_REVIEW_ID }]);
-    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir: '/w', route })).resolves.toBe(false);
+    const supplied = loader.upsertSchedule.mock.calls[0]![1];
+    // Restoring an already-upgraded project on this computer recreates only its local check.
+    const checkFile = path.join(root, '.memory-review-check-v1.cjs');
+    await fs.rm(checkFile);
+    loader.loadProjectSchedules.mockResolvedValueOnce([supplied]);
+    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir, route })).resolves.toBe(false);
+    expect((await fs.stat(checkFile)).isFile()).toBe(true);
+    await fs.writeFile(checkFile, '/* owner-edited check */');
+    loader.loadProjectSchedules.mockResolvedValueOnce([supplied]);
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir, route });
+    expect(await fs.readFile(checkFile, 'utf8')).toBe('/* owner-edited check */');
+    expect(loader.upsertSchedule).toHaveBeenCalledOnce();
+  });
+
+  // User report: idle teammates ran nightly. Tier: filesystem + real preRunHook process;
+  // automatic user-role messages must not satisfy the check or create a database.
+  it('skips automatic activity, admits human chat and fails closed on a missing database', async () => {
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const db = new DatabaseSync(database.path);
+    try {
+      db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+        CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT DEFAULT '');
+        INSERT INTO bot_session_links VALUES ('bot-1','chat'), ('other','other-chat');`);
+      const firedAt = Date.now();
+      const insert = db.prepare('INSERT INTO messages(session_id,role,rewind_at,created_at,agent_meta) VALUES (?, ?, ?, ?, ?)');
+      // Actual first-run fixture: welcoming a teammate writes a hidden user-role trigger.
+      const welcome = db.prepare('INSERT INTO messages(session_id,role,created_at,content) VALUES (?, ?, ?, ?)');
+      welcome.run('chat', 'user', firedAt - 1, '[UI_ACTION_TRIGGER]Say hello');
+      welcome.run('chat', 'user', firedAt - 1, JSON.stringify('[UI_ACTION_TRIGGER]Say hello'));
+      for (const meta of [{ origin: { kind: 'scheduler' } }, { origin: { kind: 'session' } }, { sourcePlugin: { id: 'p' } }]) {
+        insert.run('chat', 'user', null, firedAt - 10, JSON.stringify(meta));
+      }
+      insert.run('chat', 'assistant', null, firedAt - 10, null);
+      insert.run('chat', 'user', null, firedAt - 86_400_001, null);
+      insert.run('chat', 'user', firedAt, firedAt - 10, null);
+      insert.run('other-chat', 'user', null, firedAt - 10, null);
+      const config = loader.upsertSchedule.mock.calls[0]![1];
+      // One smoke still exercises the production process adapter + generated script.
+      expect((await executePreRunHook({ ...config.preRunHook!, cwd: workingDir,
+        stdinPayload: { event: 'schedule-pre-run', scheduleId: 'review', scheduleName: 'review', runId: 'run', firedAt },
+      })).exitCode).toBe(2);
+      const run = () => runMemoryCheck(workingDir, firedAt);
+      insert.run('chat', 'user', null, firedAt - 1, null);
+      expect(await run()).toBe(2); // 1 human message is insufficient.
+      for (let i = 1; i < 19; i++) insert.run('chat', 'user', null, firedAt - 1, null);
+      expect(await run()).toBe(2); // 19 humans plus automatic traffic is still insufficient.
+      insert.run('chat', 'user', null, firedAt - 1, JSON.stringify({ autoResume: true }));
+      expect(await run()).toBe(2);
+      insert.run('chat', 'user', null, firedAt - 1, null);
+      expect(await run()).toBe(0); // Exactly 20.
+      db.exec('DELETE FROM messages');
+      for (let i = 0; i < 20; i++) insert.run('chat', 'user', null, firedAt - 1, JSON.stringify({ origin: { kind: 'scheduler', scheduleId: 'hook:telegram' } }));
+      expect(await run()).toBe(0);
+    } finally { db.close(); }
+    await fs.rm(database.path);
+    expect(await runMemoryCheck(workingDir, Date.now())).not.toBe(0);
+    await expect(fs.stat(database.path)).rejects.toThrow();
+  });
+
+  // PR #10294: actual chatServer group dispatches retain the hidden prefix even for
+  // host-attested owner text; attachments serialize it as {text,images,files}. Exercise the
+  // production-generated script, not a copy of its predicate (unit, synthetic SQLite).
+  it.each([
+    ['silent-stop continuation', '继续', { autoResume: true }, 2],
+    ['human group text', '[UI_ACTION_TRIGGER]group request', { autoReviewUserText: 'Please review this' }, 0],
+    ['human JSON string', JSON.stringify('[UI_ACTION_TRIGGER]group request'), { autoReviewUserText: 'Please review this' }, 0],
+    ['human group attachments', JSON.stringify({ text: '[UI_ACTION_TRIGGER]group request', images: [], files: [{ path: 'sample.txt' }] }), { autoReviewUserText: 'Please review this' }, 0],
+    ['autonomous attachments', JSON.stringify({ text: '[UI_ACTION_TRIGGER]peer update', images: [], files: [{ path: 'sample.txt' }] }), { autoReviewUserText: '' }, 2],
+    ['autonomous attachments without origin', JSON.stringify({ text: '[UI_ACTION_TRIGGER]peer update', images: [], files: [{ path: 'sample.txt' }] }), null, 2],
+  ] as const)('counts activity correctly for %s', async (_label, content, meta, expectedExit) => {
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      INSERT INTO bot_session_links VALUES ('bot-1','group');`);
+    const firedAt = Date.now();
+    const insert = db.prepare('INSERT INTO messages VALUES (?, ?, NULL, ?, ?, ?)');
+    for (let i = 0; i < 19; i++) insert.run('group', 'user', firedAt - 1, null, 'Human request');
+    insert.run('group', 'user', firedAt - 1, meta === null ? null : JSON.stringify(meta), content);
+    db.close();
+    expect(await runMemoryCheck(workingDir, firedAt)).toBe(expectedExit);
+  });
+
+  // User correction 2026-11-13: the bundled minimum is 20, not a single human input.
+  // Unit, real generated hook + SQLite: installed cdb14543 allows 19; upgrade must skip
+  // 19 and admit 20 without changing customized schedules/scripts. Windows checkout uses
+  // CRLF: exercise both stored byte formats so the fingerprint cannot misclassify a stock script.
+  it.each(['\n', '\r\n'])('upgrades the installed one-message check with %j line endings while preserving choices and edits', async (lineEnding) => {
+    loader.loadProjectSchedules.mockResolvedValueOnce(null);
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const supplied = { ...loader.upsertSchedule.mock.calls[0]![1], cronExpr: '0 5 * * *',
+      model: 'chosen-model', prompt: 'Owner-maintained review instructions' };
+    const checkFile = path.join(root, '.memory-review-check-v1.cjs');
+    const old = (await fs.readFile(new URL('./fixtures/memory-review-cdb14543.cjs.txt', import.meta.url), 'utf8'))
+      .replace(/\r?\n/g, lineEnding);
+    await fs.writeFile(checkFile, `const source = ${JSON.stringify({ databasePath: database.path,
+      botId: 'bot-1', syntheticPrefix: '[UI_ACTION_TRIGGER]' })};\n${old.slice(old.indexOf('\n') + 1)}`);
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      INSERT INTO bot_session_links VALUES ('bot-1','chat');`);
+    const firedAt = Date.now();
+    const insert = db.prepare("INSERT INTO messages VALUES ('chat', 'user', NULL, ?, NULL, 'Human request')");
+    for (let i = 0; i < 19; i++) insert.run(firedAt - 1);
+    const run = () => runMemoryCheck(workingDir, firedAt);
+    try {
+      expect(await run()).toBe(0); // Actual predecessor behavior.
+      loader.loadProjectSchedules.mockResolvedValue([supplied]);
+      await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
+      expect(await run()).toBe(2);
+      insert.run(firedAt - 1);
+      expect(await run()).toBe(0);
+      expect(loader.upsertSchedule).toHaveBeenCalledTimes(1);
+      const edited = (await fs.readFile(checkFile, 'utf8')) + '\n// Owner customization\n';
+      await fs.writeFile(checkFile, edited);
+      await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+      expect(await fs.readFile(checkFile, 'utf8')).toBe(edited);
+    } finally { db.close(); }
+  });
+
+  it('upgrades the supplied review while retaining choices, custom checks and removal', async () => {
+    const old = { id: BOT_PROJECT_MEMORY_REVIEW_ID, cronExpr: '0 4 * * *', model: 'chosen',
+      prompt: "Look back at Old Name's conversations from the last day (teammate id bot-1) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly." };
+    const input = { botId: 'bot-1', displayName: 'Mimi', workingDir, addMissing: false };
+    loader.loadProjectSchedules.mockResolvedValueOnce([old]);
+    await expect(ensureBotProjectAutomations(input)).resolves.toBe(true);
+    expect(loader.upsertSchedule).toHaveBeenCalledWith(workingDir, expect.objectContaining({
+      cronExpr: old.cronExpr, model: old.model, preRunHook: expect.any(Object),
+    }), { keepUnreadable: true });
+    for (const configs of [[{ ...old, prompt: 'Custom review' }], [{ ...old, preRunHook: { command: 'custom-check' } }], []]) {
+      loader.loadProjectSchedules.mockResolvedValueOnce(configs);
+      await expect(ensureBotProjectAutomations(input)).resolves.toBe(false);
+    }
     expect(loader.upsertSchedule).toHaveBeenCalledOnce();
   });
 });

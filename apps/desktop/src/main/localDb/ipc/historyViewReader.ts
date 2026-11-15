@@ -27,6 +27,8 @@ export interface HistoryPageShape {
   fingerprints: string[];
   /** Running top-level leaf work items, key → revision exactly as delivered. */
   running: Map<string, string>;
+  /** Outline suffix appended to every work summary revision of this page, if any. */
+  revisionSuffix?: string;
 }
 
 export interface HistoryPageOptions {
@@ -295,6 +297,7 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
           keys: selected.map((item) => item.key),
           fingerprints: selected.map((item) => fingerprints.get(item)!),
           running: new Map(selected.filter(isRunningLeafWork).map((item) => [item.key, item.summary.revision])),
+          ...(outlined ? { revisionSuffix: `:${outlineRevision}` } : {}),
         });
       }
       return { version: 1, items: selected, hasMore,

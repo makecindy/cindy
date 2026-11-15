@@ -385,4 +385,60 @@ describe('host token speed (Pi extension algorithm)', () => {
     expect(readTokenSpeedSnapshot({ ...speed(10, 1000), rate: Number.NaN })).toBeUndefined();
     expect(readTokenSpeedSnapshot(null)).toBeUndefined();
   });
+
+  it('does not treat a mid-turn provisional elapsedMs adjustment as a new turn reset and keeps plotting', () => {
+    let history = recordTokenSpeed(emptyRateHistory(null), {
+      startedAt: 1,
+      speed: { rate: 80, average: 20, tokens: 200, elapsedMs: 10_000, streaming: true, peak: 80 },
+      now: 100,
+    });
+    expect(history.latestRate).toBe(80);
+    expect(history.samples.map((sample) => sample.durationMs)).toEqual([10_000]);
+    history = recordTokenSpeed(history, {
+      startedAt: 1,
+      speed: { rate: 100, average: 100, tokens: 300, elapsedMs: 3_000, streaming: true, peak: 100 },
+      now: 200,
+    });
+    expect(history.latestRate).toBe(100);
+    expect(history.speedOffsetMs).toBe(7_000);
+    expect(history.peak).toBe(100);
+
+    history = recordTokenSpeed(history, {
+      startedAt: 1,
+      speed: { rate: 95, average: 98, tokens: 395, elapsedMs: 4_000, streaming: true, peak: 100 },
+      now: 300,
+    });
+    expect(history.samples.map((sample) => ({ durationMs: sample.durationMs, rate: sample.rate }))).toEqual([
+      { durationMs: 10_000, rate: 80 },
+      { durationMs: 11_000, rate: 95 },
+    ]);
+  });
+
+  it('clears latestRate while a new same-turn request warms up without dropping samples or peak', () => {
+    let history = recordTokenSpeed(emptyRateHistory(null), {
+      startedAt: 1,
+      speed: { rate: 80, average: 75, tokens: 300, elapsedMs: 4_000, streaming: true, peak: 90 },
+      now: 100,
+    });
+    expect(history.latestRate).toBe(80);
+    expect(history.samples).toHaveLength(1);
+
+    history = recordTokenSpeed(history, {
+      startedAt: 1,
+      speed: { rate: 0, average: 75, tokens: 310, elapsedMs: 4_200, streaming: true, peak: 90 },
+      now: 200,
+    });
+    expect(history.latestRate).toBeNull();
+    expect(history.samples).toHaveLength(1);
+    expect(history.peak).toBe(90);
+
+    history = recordTokenSpeed(history, {
+      startedAt: 1,
+      speed: { rate: 110, average: 85, tokens: 550, elapsedMs: 6_500, streaming: true, peak: 110 },
+      now: 300,
+    });
+    expect(history.latestRate).toBe(110);
+    expect(history.samples).toHaveLength(2);
+    expect(history.peak).toBe(110);
+  });
 });

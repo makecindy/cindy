@@ -68,6 +68,7 @@ JavaScript 状态。
 
 页面状态优先用 [§4.23 §9.2 的内置辅助模块](../../plugin-interactive-pages.md#92-内置页面状态辅助模块)：
 原生 JS 用 `createViewState`，React 把自己的实例传入 `createViewStateHooks(React)`。
+官方 `App` 没有可叠加的 teardown 注册接口；若页面要设置 `app.onteardown`，请先设置，再创建状态 helper，之后赋值会替换辅助模块的写出包装。
 旧查看端采用动态 import 兜底；模块不存在时仍保持本地交互，不能声称已保存。
 类型提示见 [cindy-ext-apps.d.ts](cindy-ext-apps.d.ts)，它不提供运行时代码。
 

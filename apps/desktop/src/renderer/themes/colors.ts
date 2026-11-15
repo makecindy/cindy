@@ -226,6 +226,10 @@ const GENERATED_DEFAULTS = {
     "light": "#059669",
     "dark": "#34D399"
   },
+  "remote-agent-net-accent": {
+    "light": "#7C5CFF",
+    "dark": "#A993FF"
+  },
   "usage-heatmap-high": {
     "light": "var(--process-agent-task-icon)",
     "dark": "var(--process-agent-task-icon)"
@@ -3293,3 +3297,4 @@ registerColor('plugin-identity-team-text', GENERATED_DEFAULTS["plugin-identity-t
 registerColor('plugin-identity-team-bg', GENERATED_DEFAULTS["plugin-identity-team-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
 registerColor('plugin-identity-custom-text', GENERATED_DEFAULTS["plugin-identity-custom-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
 registerColor('plugin-identity-custom-bg', GENERATED_DEFAULTS["plugin-identity-custom-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('remote-agent-net-accent', GENERATED_DEFAULTS["remote-agent-net-accent"], '远程连接拓扑：Agent-Net 协议标识(图标与文字); owner-approved 2026-11-13');
