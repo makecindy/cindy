@@ -123,17 +123,32 @@ export function useBotGroupComposerAttachments({ deviceId, upload, onPicked }: {
       .map(([assetId]) => assetId));
   }, [attachments, mediaAssetAttachments]);
 
-  /** A tap in the recent-photo strip adds that photo at once (same as the task composer). */
-  const toggleMediaAsset = useCallback((asset: ContextSheetMediaAsset) => {
-    if (mediaTapAcceptedRef.current || mediaAssetAttachments[asset.id] || busyAssetIds.has(asset.id)) return;
-    if (attachmentsRef.current.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
-      setError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
+  /** How many more attachments fit: attached and uploading ones both hold a slot. */
+  const getRemainingSlots = useCallback(
+    () => MOBILE_MAX_ATTACHMENTS - attachmentsRef.current.length - getPendingUploadCount(),
+    [getPendingUploadCount],
+  );
+  const reportLimit = useCallback(
+    () => setError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS })),
+    [t],
+  );
+
+  /**
+   * Recent photos are added at once (same as the task composer): one for a tap on a photo,
+   * several for the photos picked with their selection circles.
+   */
+  const addMediaAssets = useCallback((assets: readonly ContextSheetMediaAsset[]) => {
+    if (mediaTapAcceptedRef.current) return;
+    const fresh = assets.filter((asset) => !mediaAssetAttachments[asset.id] && !busyAssetIds.has(asset.id));
+    if (fresh.length === 0) return;
+    if (fresh.length > getRemainingSlots()) {
+      reportLimit();
       return;
     }
     mediaTapAcceptedRef.current = true;
     setError(null);
-    enqueueUploads([{
-      kind: 'image',
+    enqueueUploads(fresh.map((asset) => ({
+      kind: 'image' as const,
       uri: asset.uri,
       name: asset.filename,
       size: 0,
@@ -151,9 +166,10 @@ export function useBotGroupComposerAttachments({ deviceId, upload, onPicked }: {
           skipPreprocess: resolved.optimized === true,
         };
       },
-    }], { token: getAccessTokenRef.current() });
+    })), { token: getAccessTokenRef.current() });
     onPickedRef.current();
-  }, [busyAssetIds, enqueueUploads, getPendingUploadCount, mediaAssetAttachments, t]);
+  }, [busyAssetIds, enqueueUploads, getRemainingSlots, mediaAssetAttachments, reportLimit]);
+  const toggleMediaAsset = useCallback((asset: ContextSheetMediaAsset) => addMediaAssets([asset]), [addMediaAssets]);
 
   /** The computer cannot take attachments: a pasted image is dropped like before, its copy deleted. */
   const dropPastedImages = useCallback((uris: readonly string[]) => {
@@ -196,6 +212,9 @@ export function useBotGroupComposerAttachments({ deviceId, upload, onPicked }: {
     holdForSend,
     armMediaTap,
     toggleMediaAsset,
+    addMediaAssets,
+    getRemainingSlots,
+    reportLimit,
     busyAssetIds,
     selectedAssetIds,
     galleryImages,
