@@ -162,6 +162,18 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
   约定。
 - agent 修改配置时，只有用户明确要求才写入 override，不得把当前默认值固化回用户配置。
 
+### 请求体积控制
+
+`XDT_REQUEST_SIZE_CONTROL_DISABLE` 是 Desktop／Node Host 宿主进程的隐藏环境开关，不新增
+设置页或持久化 override。默认开启请求体积控制；只有值为字符串 `1` 时才关闭，未设置或其他值
+均保持开启。修改启动环境变量后须重启宿主，新的环境才会进入该进程。
+
+关闭后 HTTP 回到原有入口超限／上游 413 附件恢复路径，不启用新的主动重放和预算学习；
+Codex 的回退上限为 **42 MiB**，不会恢复到原来的 128 MiB，Claude Code／Pi 仍为 32 MiB。
+**图片压缩不受此开关控制**，已注入的图片预处理继续运行。完整阈值、恢复与归属边界以
+[模型请求超限时的附件恢复](media-storage-and-protocols.md#模型请求超限时的附件恢复)为正本；
+实现入口为 `oversizedAttachmentRecoveryCore.ts` 的 `createRequestSizeController`。
+
 ## 6. 设置搜索与页面定义
 
 设置页新增、改写设置控件时，使用 `defineSettings` 声明稳定 ID、分类、定位锚点、
