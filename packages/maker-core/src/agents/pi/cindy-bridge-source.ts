@@ -4638,8 +4638,8 @@ export default async function cindyBridge(piApi: any) {
   // directions — with only the "don't script" half, codemode never gets picked. Only injected
   // when codemode is actually active; guests and review sessions never reach this branch.
   const PI_TOOL_EFFICIENCY_GUIDELINES = [
-    'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip.',
-    'A codemode script pays off when the calls are already known and their raw output needs filtering or cross-checking; return only the fields you need, never the raw output; when each result decides the next call, or for one or two small calls, issue the calls directly.',
+    'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip. A call is independent when nothing in it needs another call\'s result; when you start exploring, batch every independent read, grep, ls or git query instead of taking one step at a time.',
+    'Use a codemode script when the raw output is large or needs filtering, counting or cross-checking before it reaches you, or when one operation runs over many files; return only the fields you need, never the raw output. Issue one or two small calls directly, and never wrap a single call that needs no processing in a script.',
   ];
   pi.on('before_agent_start', (event: any) => {
     if (guestToolGate && guestToolGate.blocks('codemode')) return;

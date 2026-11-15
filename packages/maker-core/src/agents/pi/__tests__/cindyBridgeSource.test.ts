@@ -2481,8 +2481,8 @@ it('injects the parallel-vs-codemode split only when codemode is active', () => 
   handlers.get('before_agent_start')!(event);
   expect(event.systemPromptOptions.promptGuidelines).toEqual([
     'base rule',
-    'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip.',
-    'A codemode script pays off when the calls are already known and their raw output needs filtering or cross-checking; return only the fields you need, never the raw output; when each result decides the next call, or for one or two small calls, issue the calls directly.',
+    'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip. A call is independent when nothing in it needs another call\'s result; when you start exploring, batch every independent read, grep, ls or git query instead of taking one step at a time.',
+    'Use a codemode script when the raw output is large or needs filtering, counting or cross-checking before it reaches you, or when one operation runs over many files; return only the fields you need, never the raw output. Issue one or two small calls directly, and never wrap a single call that needs no processing in a script.',
   ]);
 
   // Runs without prompt options stay untouched instead of throwing.
