@@ -10,6 +10,8 @@ const registerSource = readFileSync(
 // Retain local characterization guards at the production stages they describe.
 // Cross-stage delivery and recovery timing run in sessionEventPipeline.test.ts.
 const eventSource = [
+  // The pipeline's auto-resume steps are in sessionEventAutoResumeSteps.ts; the pipeline calls them in place.
+  'sessionEventAutoResumeSteps',
   'sessionEventPreparation',
   'sessionEventStream',
   'sessionEventDelivery',
