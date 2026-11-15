@@ -413,6 +413,25 @@ function notifyRemoteCapabilities(
   for (const listener of remoteListeners.get(cacheKey(agentKind, deviceId)) ?? []) listener(event);
 }
 
+/** Capabilities-only consumers also keep a received-share refresh live. */
+export function hasDeviceCapabilitiesInterest(deviceId: string): boolean {
+  return getInterestedDeviceCapabilityTargets(deviceId).length > 0;
+}
+
+/** Capability-only routed consumers must receive a replacement after eviction. */
+export function getInterestedDeviceCapabilityTargets(deviceId: string): string[] {
+  const devices = new Set([...inflight.keys(), ...remoteListeners.keys()]
+    .map(key => key.slice(0, key.lastIndexOf(':'))));
+  return [...devices].filter(key => {
+    const route = parseModelCatalogKey(key);
+    return key === deviceId || route?.taskDeviceId === deviceId || route?.agentDeviceId === deviceId;
+  });
+}
+
+export function getDeviceCapabilitiesGeneration(deviceId: string): number {
+  return deviceGen.get(deviceId) ?? 0;
+}
+
 /** 订阅某被控端某 agent 的能力快照；只通知当前代际成功提交的完整结果。 */
 export function subscribeDeviceCapabilities(
   deviceId: string,

@@ -10,7 +10,8 @@ const guard = source.slice(
   source.indexOf('  cancelPendingAgentSwitchHolder ='),
 );
 // The fallback body is in sessionRuntimeFallback.ts; its ports and imports keep the names injected below.
-const fallbackSource = readFileSync(new URL('../maker-ipc/sessionRuntimeFallback.ts', import.meta.url), 'utf8');
+// A Windows checkout has CRLF line endings; the slice below finds multi-line markers.
+const fallbackSource = readFileSync(new URL('../maker-ipc/sessionRuntimeFallback.ts', import.meta.url), 'utf8').replace(/\r\n?/g, '\n');
 const fallbackBodyStart = fallbackSource.indexOf('  return async (\n    sessionId: string,') + '  return '.length;
 const fallback = `const maybeApplySessionRuntimeFallback = ${fallbackSource.slice(fallbackBodyStart, fallbackSource.lastIndexOf('\n}'))}`;
 
