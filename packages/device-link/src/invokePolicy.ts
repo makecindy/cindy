@@ -46,6 +46,7 @@ const INTERACTIVE_INVOKE_CHANNELS = new Set([
   'maker:input:enqueue',
   'maker:input:steer',
   'maker:input:stop',
+  'maker:input:stop-turn',
   'maker:input:resume',
   'maker:input:retry-last-error',
   'maker:input:remove',
