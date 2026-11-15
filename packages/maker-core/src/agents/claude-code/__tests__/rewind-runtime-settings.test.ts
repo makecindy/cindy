@@ -1080,6 +1080,27 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it('uses concrete route effort support over a flattened descriptor', async () => {
+    const customModel: ModelDescriptor = {
+      id: 'shared/model',
+      displayName: 'Shared model',
+      contextWindow: 200_000,
+      efforts: [],
+      effortsUnknown: true,
+      defaultEffort: null,
+    };
+    const { handle } = await startRewindableSession({
+      model: customModel.id,
+      effort: 'max',
+      availableModels: [customModel],
+      resolveModelEfforts: () => [],
+    });
+
+    expect(sdkMock.query.mock.calls[0]?.[0]?.options?.effort).toBeUndefined();
+
+    await handle.close();
+  });
+
   it('clamps a carried-over xhigh to the target model efforts on start and live change (#5402)', async () => {
     const glm: ModelDescriptor = {
       id: 'z-ai/glm-5.3',
