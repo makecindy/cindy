@@ -30,7 +30,7 @@ import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
 import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentMessageHistories';
 import { rememberRecentTask } from '@/session/recentTasks';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
-import { keyboardControlRegion, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, type LayoutRect } from '@/platform/windowGeometry';
+import { floatingTopRow, keyboardControlRegion, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, type LayoutRect } from '@/platform/windowGeometry';
 import { useAdaptiveWindow, useAdaptiveWindowDimensions, PaneViewportProvider } from '@/platform/AdaptiveWindowContext';
 import { useSessionHeaderHeight } from '@/session/useSessionHeaderHeight';
 import { useDoubleTap } from '@/session/useDoubleTap';
@@ -3180,8 +3180,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 留在遮罩下原地不动,不随抽屉开合收起。
   // Duo shares the status area with its native toolbar. Its measured height
   // already includes that area; safeArea.top + 44 would count the toolbar twice.
+  // With the native toolbar on the side, the content owns its top row and
+  // needs breathing room even when UIKit reports no top safe-area inset.
+  const sessionHeaderTop = horizontalSystemHeader ? nativeHeaderHeight
+    : adaptiveWindow.barEdge !== 'none' ? Math.max(
+      floatingTopRow(adaptiveWindow, navigationChrome.target).top,
+      insets.top + (paneLayout.persistent ? spacing.lg : 0))
+    : insets.top + (paneLayout.persistent ? spacing.lg : 0);
   const topChromeHeight = Math.max(topOverlayHeight,
-    horizontalSystemHeader ? nativeHeaderHeight : insets.top + navigationChrome.target);
+    horizontalSystemHeader ? nativeHeaderHeight : sessionHeaderTop + navigationChrome.target);
   // The drawer covers that toolbar; put the drawer's own header in the same row instead of
   // below the whole status area.
   const sessionListDrawerTopInset = horizontalSystemHeader
@@ -10477,7 +10484,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             </View>
           ) : null}
           {/* iOS chat headers sit on the task header's feathered blur; an opaque band left a hard edge. */}
-          <View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== 'ios' && { backgroundColor: colors.surface }]}>
+          <View style={[styles.sessionChromeContent, { paddingTop: sessionHeaderTop }, companionChat && Platform.OS !== 'ios' && { backgroundColor: colors.surface }]}>
             {headerNode}
 
             {cloudHomeActor && cloudHomeUnreachable ? (
