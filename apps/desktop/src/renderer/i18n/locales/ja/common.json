@@ -4299,7 +4299,9 @@
           "inline": "実行先",
           "signInHere": "このコンピュータでログイン",
           "writeFailed": "実行先を保存できませんでした。もう一度お試しください。"
-        }
+        },
+        "sameAccountConnections": "このアカウントの保存済み接続",
+        "sameAccountConnectionsHint": "同じアカウントは1つにまとめて表示されます。接続を選ぶと管理対象の設定が切り替わります。既存のタスクの接続は変わりません。"
       },
       "detect": {
         "groupLabel": "このデバイスで検出",

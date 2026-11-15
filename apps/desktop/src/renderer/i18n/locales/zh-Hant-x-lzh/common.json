@@ -4299,7 +4299,9 @@
           "inline": "運於",
           "signInHere": "於此機登門",
           "writeFailed": "運處未能存，請再試。"
-        }
+        },
+        "sameAccountConnections": "此帳號已存之連線",
+        "sameAccountConnectionsHint": "同一帳號僅列一項。擇連線則切換所管設定；既有任務仍循原連線。"
       },
       "detect": {
         "groupLabel": "察得此機 CLI",

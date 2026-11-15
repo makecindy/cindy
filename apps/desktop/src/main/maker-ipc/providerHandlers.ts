@@ -1,3 +1,5 @@
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
+import { remoteProviderDisableKey } from '@cindy/model-providers';
 import { withoutProviderHeaderCredentials } from '../maker-host/provider-public-view.js';
 import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 import { bindModelSourceSnapshot, acceptsModelSourceSnapshot, modelSourceRequestSignature, issueModelSourceSnapshot } from '../maker-host/model-source-snapshots.js';
@@ -450,6 +452,8 @@ export interface ProviderHandlerDeps {
    */
   setModelsDisabled(providerId: string, modelIds: readonly string[], disabled: boolean): void;
   setProviderDisabled(providerId: string, disabled: boolean): void;
+  getDisabledProviders?(): Record<string, boolean>;
+  listRemoteProviders?(deviceId: string): Promise<ProviderView[]>;
   /** Per-provider opt-in for remote Agent use; absent means disabled. */
   getRemoteProviderInvocationEnabled?(providerId: string): boolean;
   setRemoteProviderInvocationEnabled?(providerId: string, enabled: boolean): void | Promise<void>;
@@ -1220,6 +1224,7 @@ export function registerProviderHandlers(
       providers: ProviderView[];
       providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
+      disabledProviders?: Record<string, boolean>;
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
@@ -1271,6 +1276,7 @@ export function registerProviderHandlers(
         }),
         providerOrder,
         modelVisibilityOverrides,
+        ...(trusted ? { disabledProviders: deps.getDisabledProviders?.() ?? {} } : {}),
       };
     };
   registry.handle(MAKER_INVOKE.PROVIDER_LIST, async (event) => {
@@ -1819,6 +1825,14 @@ export function registerProviderHandlers(
     if (i.kind !== 'model' && i.kind !== 'provider' && i.kind !== 'reset') {
       throwIpcError('INVALID_PARAMS', 'kind must be "model", "provider" or "reset"');
     }
+    if (i.remoteDeviceId !== undefined && (
+      i.kind !== 'provider' || typeof i.remoteDeviceId !== 'string' ||
+      !i.remoteDeviceId || i.remoteDeviceId.length > MAX_DISABLE_ID_LENGTH ||
+      isProviderShareAgentDeviceId(i.remoteDeviceId)
+    )) throwIpcError('INVALID_PARAMS', 'invalid remote provider disable target');
+    const disableKey = typeof i.remoteDeviceId === 'string'
+      ? remoteProviderDisableKey(i.remoteDeviceId, i.providerId as string)
+      : i.providerId as string;
     // reset = 删除整组 override(恢复默认),无 disabled 语义;其余两种必须显式带方向。
     if (i.kind !== 'reset' && typeof i.disabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'disabled required');
@@ -1839,7 +1853,10 @@ export function registerProviderHandlers(
     // provider / model(chat 各 agent 清单 ∪ imageModels ∪ videoModels);恢复启用是
     // 删条目,故意不校验 —— 目录漂移后用户仍能清掉指向已下架 id 的陈旧 override。
     const requireCatalogProvider = async (providerId: string): Promise<ProviderView> => {
-      const provider = (await deps.listProviders()).find((p) => p.id === providerId);
+      const catalog = typeof i.remoteDeviceId === 'string'
+        ? await deps.listRemoteProviders?.(i.remoteDeviceId) ?? []
+        : await deps.listProviders();
+      const provider = catalog.find((p) => p.id === providerId);
       if (!provider) throwIpcError('INVALID_PARAMS', `unknown providerId "${providerId}"`);
       return provider;
     };
@@ -1907,12 +1924,12 @@ export function registerProviderHandlers(
       } else {
         if (i.disabled) await requireCatalogProvider(i.providerId as string);
         assertSameOwner();
-        persist(() => deps.setProviderDisabled(i.providerId as string, i.disabled as boolean));
+        persist(() => deps.setProviderDisabled(disableKey, i.disabled as boolean));
       }
       deps.broadcastChanged();
       return { ok: true };
     };
-    return withAvailabilityPolicyMutation(i.providerId as string, () => enqueueDisableWrite(run));
+    return withAvailabilityPolicyMutation(disableKey, () => enqueueDisableWrite(run));
   };
   registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);

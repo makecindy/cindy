@@ -4299,7 +4299,9 @@
           "inline": "執行於",
           "signInHere": "在這台電腦登入",
           "writeFailed": "「執行於」未能儲存，請重試"
-        }
+        },
+        "sameAccountConnections": "此帳號的已儲存連線",
+        "sameAccountConnectionsHint": "同一帳號只顯示一項。選擇連線僅切換要管理的設定，既有任務維持原連線。"
       },
       "detect": {
         "groupLabel": "偵測到本機 CLI",

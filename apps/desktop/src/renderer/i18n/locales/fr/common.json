@@ -4398,7 +4398,9 @@
           "inline": "S’exécute sur",
           "signInHere": "Se connecter sur cet ordinateur",
           "writeFailed": "Impossible d’enregistrer l’emplacement d’exécution. Veuillez réessayer."
-        }
+        },
+        "sameAccountConnections": "Connexions enregistrées pour ce compte",
+        "sameAccountConnectionsHint": "Ce compte apparaît une seule fois. Choisir une connexion change uniquement les réglages à gérer ; les tâches existantes conservent leur connexion."
       },
       "detect": {
         "groupLabel": "Détecté sur cet appareil",

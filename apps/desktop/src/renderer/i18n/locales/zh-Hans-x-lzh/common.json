@@ -4299,7 +4299,9 @@
           "inline": "运于",
           "signInHere": "于此机登门",
           "writeFailed": "运处未能存，请再试。"
-        }
+        },
+        "sameAccountConnections": "此账号已存之连线",
+        "sameAccountConnectionsHint": "同一账号仅列一项。择连线则切换所管设定；既有任务仍循原连线。"
       },
       "detect": {
         "groupLabel": "察得此机 CLI",

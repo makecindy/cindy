@@ -174,6 +174,7 @@ export type {
 
 export {
   modelDisableKey,
+  remoteProviderDisableKey,
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
@@ -355,3 +356,5 @@ export {
   markedSelectionAliasGroups, projectSelectionAliases, inheritSelectionAliasPreferences,
   selectionAliasTargets, type SelectionAliasGroup, type SelectionAliasPreferences,
 } from './selectionAliasGroups.js';
+
+export { sameSubscriptionAccounts, sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy } from './subscriptionIdentity.js';

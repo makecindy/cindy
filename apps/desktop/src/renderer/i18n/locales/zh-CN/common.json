@@ -4299,7 +4299,9 @@
           "inline": "运行于",
           "signInHere": "在这台电脑登录",
           "writeFailed": "「运行于」未能保存，请重试"
-        }
+        },
+        "sameAccountConnections": "此账号的已保存连接",
+        "sameAccountConnectionsHint": "同一账号只显示一项。选择连接仅切换要管理的设置，已有任务保持原连接。"
       },
       "detect": {
         "groupLabel": "检测到本机 CLI",

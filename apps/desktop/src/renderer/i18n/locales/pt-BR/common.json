@@ -4398,7 +4398,9 @@
           "inline": "Executa em",
           "signInHere": "Fazer login neste computador",
           "writeFailed": "Não foi possível salvar onde este provedor é executado. Tente novamente."
-        }
+        },
+        "sameAccountConnections": "Conexões salvas desta conta",
+        "sameAccountConnectionsHint": "A conta aparece apenas uma vez. Escolher uma conexão altera apenas as configurações a gerenciar; as tarefas existentes mantêm sua conexão."
       },
       "detect": {
         "groupLabel": "Detectado neste dispositivo",

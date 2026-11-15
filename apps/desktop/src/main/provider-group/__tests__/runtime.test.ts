@@ -13,6 +13,8 @@ import type { GroupContinuityGrant } from '../../../shared/providerGroupContinui
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../service.js';
 import type { ProviderGroupBinding } from '../bindings.desktop.js';
 
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({}) }));
+
 let owner = 'owner-a';
 const io = vi.hoisted(() => ({
   local: vi.fn(async () => [] as ProviderView[]),
