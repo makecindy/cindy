@@ -15,11 +15,13 @@ import type { AgentEvent } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
 
 const binaryPath = process.env.CINDY_CODEX_TEST_BINARY;
-const logger: Logger = {
-  trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger,
-};
-
 it.skipIf(!binaryPath)('keeps Cindy AI, subscription and custom routes usable across native resume and provider changes', async () => {
+  let nativeInitializations = 0;
+  const logger: Logger = {
+    trace() {}, debug() {},
+    info(message) { if (message === 'initialized') nativeInitializations++; },
+    warn() {}, error() {}, fatal() {}, child: () => logger,
+  };
   const root = await mkdtemp(path.join(tmpdir(), 'cindy-provider-native-'));
   const home = path.join(root, 'codex');
   const work = path.join(root, 'work');
@@ -127,6 +129,17 @@ it.skipIf(!binaryPath)('keeps Cindy AI, subscription and custom routes usable ac
     };
   };
   try {
+    // Regression: an explicit off preference used to initialize the remote
+    // identity first, then restart the real process for the summary identity.
+    serverCompactionPreference = false;
+    for (const [provider, model] of [['openai', 'gpt-6.1-sol'], ['xd', 'codex/gpt-6.1-sol']]) {
+      const before = nativeInitializations;
+      const cold = await open(`summary-cold-${provider}`, provider, model);
+      await cold.send(`LOCAL_COLD_START_${provider}`, 'cindy_summary');
+      expect(nativeInitializations - before).toBe(1);
+      await cold.close();
+    }
+    serverCompactionPreference = null;
     const cindy = await open('cindy', 'xd', 'codex/gpt-6.1-sol');
     const subscription = await open('subscription', 'openai', 'gpt-6.1-sol');
     const [original] = await Promise.all([
