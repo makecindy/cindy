@@ -747,14 +747,18 @@ it('does not rewrite private Google-compatible discovery or an explicit catalog'
   expect(fetcher.mock.calls[1][1].headers).toEqual(fetcher.mock.calls[0][1].headers);
 });
 
-it.each([404, 405])('does not rewrite an explicit manifest after %i', async status => {
-  const fetcher = vi.fn(async (_url: RequestInfo | URL) => fakeResponse(status, '{}'));
+it.each([404, 405])('falls back from an explicit manifest after %i', async status => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(fakeResponse(status, '{}'))
+    .mockResolvedValueOnce(fakeResponse(200, '{"data":[{"id":"grok-4.7","reasoningEfforts":["low","high"]}]}'));
   const modelsUrl = 'https://relay.example/proxy/v1/models?client_version=0.147.0&tenant=test';
   const result = await fetchProviderModels(spec({ agent: 'codex', wireProtocol: 'openai-responses',
     baseUrl: 'https://relay.example/proxy/v1', modelsUrl }), fetcher);
-  expect(result.ok).toBe(false);
-  expect(fetcher).toHaveBeenCalledOnce();
+  expect(result).toMatchObject({ ok: true, models: [{ id: 'grok-4.7', discoveredMetadata: { efforts: ['low', 'high'] } }] });
+  expect(fetcher).toHaveBeenCalledTimes(2);
   expect(String(fetcher.mock.calls[0][0])).toBe(modelsUrl);
+  expect(String(fetcher.mock.calls[1][0])).toBe('https://relay.example/proxy/v1/models?tenant=test');
+  expect(fetcher.mock.calls[1][1].headers).toEqual(fetcher.mock.calls[0][1].headers);
 });
 
 it.each([401, 403, 429, 503])('does not disguise manifest authorization or availability failures (%i)', async status => {

@@ -721,16 +721,12 @@ export function registerProviderHandlers(
               ?? (typeof storedHeaders === 'object' ? storedHeaders : {})) },
           });
           signatures = [modelSourceRequestSignature(request.url, request.init)];
-          // An implicit Codex Responses manifest may fall back to the ordinary
-          // catalog after a 404/405. Accept that effective request identity too;
-          // explicit modelsUrl values never enter this branch.
-          if (!runtime.modelsUrl?.trim() && agent === 'codex'
-            && (runtime.wireProtocol ?? 'openai-responses') === 'openai-responses') {
-            const ordinaryUrl = new URL(request.url);
-            if (ordinaryUrl.searchParams.has('client_version')) {
-              ordinaryUrl.searchParams.delete('client_version');
-              signatures.push(modelSourceRequestSignature(ordinaryUrl.toString(), request.init));
-            }
+          // A manifest request may fall back to the ordinary catalog after a
+          // 404/405. Accept that effective request identity too.
+          const requestUrl = new URL(request.url);
+          if (requestUrl.searchParams.has('client_version')) {
+            requestUrl.searchParams.delete('client_version');
+            signatures.push(modelSourceRequestSignature(requestUrl.toString(), request.init));
           }
         } catch { /* A source without provable discovery context is omitted. */ }
       }
@@ -739,9 +735,11 @@ export function registerProviderHandlers(
         const source = model.discoveredSource;
         // A receipt proves the submitted context even when credentials changed.
         // OAuth has no reconstructed signature, so retain its saved-context gate.
-        const accepted = (signatures.length > 0 || (sameContext && !!previous && config.auth?.method === 'oauth'))
-          && (signatures.length === 0 || signatures.some(signature =>
-            acceptsModelSourceSnapshot(model.id, source, config.id, agent as AgentKind, signature, model.discoverySnapshotId ?? source?.snapshotId)));
+        const accepted = signatures.length > 0
+          ? signatures.some(signature => acceptsModelSourceSnapshot(
+            model.id, source, config.id, agent as AgentKind, signature, model.discoverySnapshotId ?? source?.snapshotId))
+          : acceptsModelSourceSnapshot(
+            model.id, source, config.id, agent as AgentKind, undefined, model.discoverySnapshotId ?? source?.snapshotId);
         const { discoveredSource: _source, ...rest } = model;
         // A stale renderer cannot restore a source invalidated by another edit/request.
         return { ...rest, ...((accepted ? source : old) ? { discoveredSource: accepted ? source : old } : {}) };

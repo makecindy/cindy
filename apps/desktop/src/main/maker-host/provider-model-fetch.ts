@@ -342,7 +342,7 @@ export async function fetchProviderModels(
     // A configured Codex manifest may be unavailable on older compatible gateways.
     // Retry only the same endpoint without its manifest selector; never retry auth failures.
     const ordinaryUrl = new URL(url);
-    if (!spec.modelsUrl?.trim() && (res.status === 404 || res.status === 405) && ordinaryUrl.searchParams.has('client_version')) {
+    if ((res.status === 404 || res.status === 405) && ordinaryUrl.searchParams.has('client_version')) {
       await res.body?.cancel().catch(() => undefined);
       ordinaryUrl.searchParams.delete('client_version');
       return fetchProviderModels({ ...spec, modelsUrl: ordinaryUrl.toString() }, fetchImpl);

@@ -5791,11 +5791,13 @@ describe('Magpie discovery source lifecycle through real IPC and persistence', (
     expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('Old');
   });
 
-  it('keeps the discovered source when an implicit Codex manifest falls back', async () => {
+  it.each([undefined, 'https://relay.example/v1/models?client_version=0.147.0'])
+  ('keeps the discovered source when a Codex manifest falls back (%s)', async modelsUrl => {
     mountDb();
     const config: CustomProviderConfig = { id: 'codex-fallback-source', name: 'Gateway',
       auth: { method: 'apiKey' },
       runtimes: { codex: { baseUrl: 'https://relay.example/v1', wireProtocol: 'openai-responses',
+        modelsUrl,
         models: [{ id: 'vendor/gpt-6.1-sol-oneai', name: 'GPT', opaqueModelId: true }] } } };
     await createCustomProvider(config);
     const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
@@ -5803,7 +5805,7 @@ describe('Magpie discovery source lifecycle through real IPC and persistence', (
     const harness = new IpcHarness();
     registerProviderHandlers(harness, makeDeps({
       readCustomProviderKeyForMutation: () => 'fixture-key',
-      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.codex!.baseUrl, modelsUrl: null }),
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.codex!.baseUrl, modelsUrl: config.runtimes.codex!.modelsUrl ?? null }),
       fetchModels: spec => fetchProviderModels(spec, async () => {
         calls++;
         if (calls === 1) return new Response('{}', { status: 404 });
@@ -5813,7 +5815,7 @@ describe('Magpie discovery source lifecycle through real IPC and persistence', (
     }));
     const fetched = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
       agent: 'codex', savedProviderId: config.id, baseUrl: config.runtimes.codex!.baseUrl,
-      authMethod: 'apiKey', apiKey: 'fixture-key', wireProtocol: 'openai-responses',
+      authMethod: 'apiKey', apiKey: 'fixture-key', wireProtocol: 'openai-responses', modelsUrl,
     }) as { ok: boolean; models: DiscoveredModel[] };
     expect(fetched.ok).toBe(true);
     expect(calls).toBe(2);
@@ -5823,6 +5825,24 @@ describe('Magpie discovery source lifecycle through real IPC and persistence', (
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, updated, { codex: 'fixture-key' });
     expect((await getCustomProvider(config.id))!.runtimes.codex!.models[0].discoveredSource?.providerId)
       .toBe('New account');
+  });
+
+  it('rejects an OAuth source without a live discovery receipt', async () => {
+    mountDb();
+    const config: CustomProviderConfig = { id: 'oauth-forged-source', name: 'OAuth Gateway',
+      auth: { method: 'oauth', oauth: { authorizeUrl: 'https://oauth.example/authorize',
+        tokenUrl: 'https://oauth.example/token', clientId: 'fixture-client', scopes: 'openid' } },
+      runtimes: { pi: { baseUrl: 'https://oauth.example/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'vendor/gpt-6.1', name: 'GPT', opaqueModelId: true }] } } };
+    await createCustomProvider(config);
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps());
+    const forged = structuredClone(config);
+    forged.runtimes.pi!.models[0].discoveredSource = {
+      kind: 'magpie', providerId: 'Forged', label: 'Forged', snapshotId: 'deadbeef:deadbeef',
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, forged);
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
   });
 
   it('commits a current source and clears it on a successful response that omits source fields', async () => {
