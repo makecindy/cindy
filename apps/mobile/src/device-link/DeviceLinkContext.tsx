@@ -1372,18 +1372,25 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       ...unresponsiveDevicesStore.getSnapshot(),
       ...catalogRefresh.deviceIds(),
     ])].filter((deviceId) => client.connectionFor(deviceId) === connection);
-    const invalidateConnectionPeers = (connection: DeviceLinkClient) => {
-      for (const deviceId of connectionPeerIds(connection)) {
-        if (connection.hasOfflineDirectPath(deviceId)) continue;
-        catalogRefresh.cancel(deviceId);
-        invalidatePeerLinkState(deviceId, openLinkInFlightRef.current,
-          remoteSubscribedTopicsRef.current, noteSessionLiveStreamsInterrupted);
-        peerRecoverySchedulerRef.current?.cancel(deviceId);
-      }
+    // This phone lost its route to a peer; that is not a verdict about the peer.
+    const invalidatePeerWithoutRoute = (deviceId: string) => {
+      catalogRefresh.cancel(deviceId);
+      invalidatePeerLinkState(deviceId, openLinkInFlightRef.current,
+        remoteSubscribedTopicsRef.current, noteSessionLiveStreamsInterrupted);
+      peerRecoverySchedulerRef.current?.cancel(deviceId);
+    };
+    const pauseRecoveryWithoutRoute = (connection: DeviceLinkClient) => {
       if (!client.hasOnlineConnection()
         && !connectionPeerIds(connection).some(deviceId => connection.hasOfflineDirectPath(deviceId))) {
         peerRecoverySchedulerRef.current?.pause();
       }
+    };
+    const invalidateConnectionPeers = (connection: DeviceLinkClient) => {
+      for (const deviceId of connectionPeerIds(connection)) {
+        if (connection.hasOfflineDirectPath(deviceId)) continue;
+        invalidatePeerWithoutRoute(deviceId);
+      }
+      pauseRecoveryWithoutRoute(connection);
     };
     // 走自建中转时共享任务看专用的官方连接;还没连上是「暂时不可用」,不是版本问题。
     const syncSharedTaskAvailable = () => {
@@ -1615,7 +1622,21 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const offPresence = client.onPresenceChanged((snap) => applyPresence(snap, 'ws'));
     const offPeerPath = client.onPeerPathChanged(({ deviceId, path }) => {
       setPresenceVersion(version => version + 1);
-      if (path !== 'relay' || (!retainedOfflinePeers.has(deviceId) && canUsePeerData(client, deviceId))) return;
+      if (path !== 'relay') return;
+      if (!retainedOfflinePeers.has(deviceId)) {
+        if (canUsePeerData(client, deviceId)) return;
+        // The relay never reported this computer offline: the phone's own relay
+        // connection is down and its direct path just ended too. Handle it like
+        // every other peer of a disconnected relay (requests fail as transient
+        // NOT_CONNECTED and resume on reconnect) instead of declaring the
+        // computer offline, which would fail requests as DEVICE_OFFLINE, show it
+        // as offline and schedule its cached tasks for cleanup.
+        invalidatePeerWithoutRoute(deviceId);
+        pauseRecoveryWithoutRoute(client.connectionFor(deviceId));
+        return;
+      }
+      // The relay's offline verdict was on hold while the direct path carried
+      // data; with the path gone that verdict applies.
       applyPresence({ deviceId, online: false, remoteControlEnabled: true,
         deviceName: '', platform: '', appVersion: '', busy: false, lastSeenAt: Date.now() }, 'synthetic');
       catalogRefresh.cancel(deviceId);
