@@ -1148,6 +1148,7 @@ import {
 } from './orcaManualInterrupt.js';
 import { tryInjectProjectContext } from './projectContextInject.js';
 import { registerMakerSessionCreateHandler } from './sessionCreateHandler.js';
+import { isOrdinaryRemoteTurnSession, REMOTE_STOP_TURN, RemoteTurnControl, remoteTurnInputBoundary } from './remoteTurnControl.js';
 import {
   createOrcaRemoteWorkerHost,
   createOrcaRemoteWorkerSessionOpener,
@@ -4209,6 +4210,7 @@ export function takePendingInteractionsForSession(sessionId: string): Array<{
 }
 
 type WiredSession = NonNullable<ReturnType<Maker['getSession']>>;
+const remoteTurnControl = new RemoteTurnControl<WiredSession>();
 
 /**
  * Monotonic logical-turn generation used by direct abort reconciliation.
@@ -6579,6 +6581,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         }).catch((error) => log.warn('persist plan_mode_changed failed', {sessionId: session.id, error: String(error)}));
       }
       return;
+    }
+    if (event.type === 'done' && ownerDb && getCurrentDbClientSnapshot() === ownerDb
+      && sessionBindings.getSession(session.id) === session
+      && !isTurnContinuationBoundaryEvent(event) && !isFencedStaleSessionTerminal(session.id, event)) {
+      remoteTurnControl.observeTerminal(session, event);
     }
     handleSessionEvent(ownerEventDependencies, session, event);
   };
@@ -22241,10 +22248,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
-  ipcMain.handle(MAKER_INVOKE.INPUT_STOP, async (_e, sessionId: unknown, opts?: unknown) => {
-    const sid = requireSessionId(sessionId);
-    const remote = isDeviceLinkInvoke();
-    await assertRemoteInputControlBoundary(sid, remote, opts, 'stop');
+  const stopInput = (sid: string, remote: boolean, opts?: unknown) => {
     // Some providers acknowledge Stop without emitting another terminal event.
     // Close the native build's wait at this authorized, shared Stop boundary.
     const makeInterrupted = interruptUpstreamMergeTurn(sid).catch(() =>
@@ -22277,8 +22281,62 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!inputCoordinator.hasPendingQueuedWork(sid)) {
       getAgentIslandService()?.notifyQueueEmptied(sid);
     }
-    await Promise.all([goalPause, makeInterrupted]);
+    return { result, bookkeeping: Promise.all([goalPause, makeInterrupted]) };
+  };
+
+  ipcMain.handle(MAKER_INVOKE.INPUT_STOP, async (_e, sessionId: unknown, opts?: unknown) => {
+    const sid = requireSessionId(sessionId);
+    const remote = isDeviceLinkInvoke();
+    await assertRemoteInputControlBoundary(sid, remote, opts, 'stop');
+    const { result, bookkeeping } = stopInput(sid, remote, opts);
+    await bookkeeping;
     return result;
+  });
+
+  const readRemoteStopBoundary = (
+    sid: string,
+    row: Pick<Awaited<ReturnType<typeof getInputSessionRow>>, 'status' | 'source' | 'remoteHostId' | 'agentDeviceId' |
+      'orcaRole' | 'orcaRemoteLead' | 'clearedAt'>,
+  ) => {
+    if (!isOrdinaryRemoteTurnSession(row) || isSessionHiddenSync(sid) ||
+        hasLocalAgentVisibleRuntime(sid)) return undefined;
+    const runtime = getStableSessionForTurnBoundary(sid);
+    if (!runtime) return undefined;
+    const boundary = remoteTurnInputBoundary({
+      generation: inputCoordinator.getGeneration(sid),
+      clearInFlight: inputClearInFlightSessions.has(sid),
+      observedClear: inputCoordinator.getClearBoundaryMs(sid),
+      persistedClear: normalizeAgentInputClearBoundaryMs(row.clearedAt) ?? null,
+    });
+    return boundary === undefined ? undefined : { runtime, boundary };
+  };
+
+  ipcMain.handle(REMOTE_STOP_TURN, async (_e, sessionId: unknown, token: unknown) => {
+    const sid = requireSessionId(sessionId);
+    const caller = getDeviceLinkInvokeContext();
+    if (caller?.channel !== REMOTE_STOP_TURN || caller.sharedTask || caller.sharedTaskSetting) {
+      throwIpcError('PERMISSION_DENIED', 'Expected an authorized same-account controller');
+    }
+    if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+      throwIpcError('INVALID_PARAMS', 'Invalid turn control token');
+    }
+    assertRemoteInputClearNotInFlight(sid, true);
+    const generation = inputCoordinator.getGeneration(sid);
+    const owner = getCurrentDbClientSnapshot();
+    const row = await getInputSessionRow(sid);
+    if (!owner || getCurrentDbClientSnapshot() !== owner || !caller.isCurrentController?.() ||
+        !inputCoordinator.isGenerationCurrent(sid, generation)) {
+      throwIpcError('PRECONDITION_FAILED', 'Stop authority changed before admission');
+    }
+    // Final local-runtime and clear checks are synchronous with token use and native stop.
+    const current = readRemoteStopBoundary(sid, row);
+    if (!current || !remoteTurnControl.consume(current.runtime, caller.controllerDeviceId, token, current.boundary)) {
+      return { sessionId: sid, accepted: false };
+    }
+    const { bookkeeping } = stopInput(sid, true, { keepQueue: true, pauseQueue: true });
+    // Goal persistence has its own error reporting and cannot undo stop admission.
+    void bookkeeping.catch(() => {});
+    return { sessionId: sid, accepted: true };
   });
 
   ipcMain.handle(MAKER_INVOKE.INPUT_RESUME, async (_e, sessionId: unknown, opts?: unknown) => {
@@ -22764,14 +22822,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     );
   });
 
-  ipcMain.handle(MAKER_INVOKE.LIST_ACTIVE, (_event, options?: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.LIST_ACTIVE, async (_event, options?: unknown) => {
+    const caller = getDeviceLinkInvokeContext();
+    const params = options && typeof options === 'object' && !Array.isArray(options)
+      ? options as Record<string, unknown> : undefined;
+    const turnControlVersion = caller && !caller.sharedTask && !caller.sharedTaskSetting
+      && params?.summary === true && params.snapshotVersion === 2 && params.turnControlVersion === 1
+      ? 1 : undefined;
+    const owner = turnControlVersion === 1 ? getCurrentDbClientSnapshot() : null;
+    const ids = owner ? maker.listActiveSessions().map((session) => session.id) : [];
+    // One narrow lookup for the opted-in snapshot. The legacy summary does no new DB work.
+    const stopRows = owner && ids.length ? await owner.client.drizzle.select({
+      id: sessions.id,
+      status: sessions.status,
+      source: sessions.source,
+      remoteHostId: sessions.remoteHostId,
+      agentDeviceId: sessions.agentDeviceId,
+      orcaRole: sessions.orcaRole,
+      orcaRemoteLead: sessions.orcaRemoteLead,
+      clearedAt: sessions.clearedAt,
+    }).from(sessions).where(inArray(sessions.id, ids)) : [];
+    const stopRowsById = new Map((owner === getCurrentDbClientSnapshot() ? stopRows : []).map((row) => [row.id, row]));
     const activityService = getAgentIslandService();
     const activityById = new Map(activityService?.getSessionActivitySnapshots()
       .map((activity) => [activity.sessionId, activity] as const) ?? []);
-    const sessions = maker.listActiveSessions().map((s) => {
+    const activeSessions = maker.listActiveSessions().map((s) => {
       const activity = activityById.get(s.id);
+      const row = stopRowsById.get(s.id);
+      const current = row ? readRemoteStopBoundary(s.id, row) : undefined;
+      const boundary = current?.runtime === s ? current.boundary : undefined;
+      const turnControlToken = boundary !== undefined && caller
+        ? remoteTurnControl.token(s, caller.controllerDeviceId, boundary) : undefined;
+      const turnControlOutcome = boundary !== undefined ? remoteTurnControl.outcome(s, boundary) : undefined;
       return {
         sessionId: s.id,
+        ...(turnControlToken ? { turnControlToken } : {}),
+        ...(turnControlOutcome ? { turnControlOutcome } : {}),
         agentKind: s.agentKind,
         workDir: s.workDir,
         capabilities: s.capabilities,
@@ -22787,9 +22873,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (options && typeof options === 'object' && !Array.isArray(options)
       && (options as Record<string, unknown>).summary === true
       && (options as Record<string, unknown>).snapshotVersion === 2) {
-      return { format: 'active-sessions-v2', sessions };
+      return { format: 'active-sessions-v2', sessions: activeSessions, ...(turnControlVersion ? { turnControlVersion } : {}) };
     }
-    return sessions;
+    return activeSessions;
   });
 
   ipcMain.handle(

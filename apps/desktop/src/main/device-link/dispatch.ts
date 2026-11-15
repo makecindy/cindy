@@ -138,6 +138,7 @@ import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
 import { createToolBodyPushProjector } from './toolBodyProjection';
 import { createToolResultLiveLimiter } from './toolResultLiveLimit';
+import { projectActiveRuntimeSummary, REMOTE_STOP_TURN } from '../maker-ipc/remoteTurnControl.js';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import type { readDeviceLinkSettings } from './settings-store.desktop';
 import type { noteControllerAccessAllowed, noteControllerAccessDenied, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
@@ -1071,30 +1072,8 @@ function projectInvokeResultForTunnel(
   sameAccountController = false,
 ): unknown {
   result = encodeModelSpeedPayload(channel, result);
-  // Opt-in only: legacy/desktop controllers still receive complete runtime capabilities.
-  // Home only needs run state; repeating the model catalog per runtime blocks slow links.
-  const options = args[0];
-  if (channel === 'maker:list-active' && options && typeof options === 'object'
-    && !Array.isArray(options) && 'summary' in options && options.summary === true
-    && (Array.isArray(result) || (
-      'snapshotVersion' in options && options.snapshotVersion === 2
-      && result && typeof result === 'object' && !Array.isArray(result)
-      && 'format' in result && result.format === 'active-sessions-v2'
-      && 'sessions' in result && Array.isArray(result.sessions)
-    ))) {
-    const complete = !Array.isArray(result);
-    const rows = Array.isArray(result) ? result : (result as { sessions: unknown[] }).sessions;
-    const projected = rows.map((item: unknown) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
-      const row = item as Record<string, unknown>;
-      return {
-        sessionId: row.sessionId,
-        isTurnRunning: row.isTurnRunning,
-        ...(typeof row.activityPhase === 'string' && typeof row.activityAttention === 'boolean'
-          ? { activityPhase: row.activityPhase, activityAttention: row.activityAttention } : {}),
-      };
-    });
-    return complete ? { format: 'active-sessions-v2', sessions: projected } : projected;
+  if (channel === 'maker:list-active') {
+    return projectActiveRuntimeSummary(result, args[0], sameAccountController);
   }
   if (channel === 'maker:schedule:list-sidebar-index-runs') {
     return capScheduleSidebarIndexForTunnel(result);
@@ -5354,6 +5333,13 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   try {
     let args = payload.args ?? [];
     const invocationOwner = broadcastTap.captureDataOwnerBroadcastScope();
+    const controllerEpoch = remoteInvokeLinkEpoch.get(src) ?? 0;
+    const controllerClient = activeClient;
+    const isCurrentController = payload.channel === REMOTE_STOP_TURN && controllerClient
+      ? () => activeClient === controllerClient && (remoteInvokeLinkEpoch.get(src) ?? 0) === controllerEpoch
+        && broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)
+        && readDeviceLinkSettings().remoteControlEnabled && !isControllerRevoked(src)
+      : undefined;
     // 参数级收敛:新建任务按实际执行端探测目录;worktree 等其它入口仍只接受本地目录。
     // SSH 历史记录只能解析端点,不能替代实时探测;解析结果必须传入真正的创建 handler。
     const guardedField = PATH_GUARDED_CHANNELS.get(payload.channel);
@@ -5409,6 +5395,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       {
         controllerDeviceId: src,
         channel: payload.channel,
+        ...(isCurrentController ? { isCurrentController } : {}),
         sharedTask: getDeviceLinkInvokeContext()?.sharedTask,
         sharedTaskSetting: getDeviceLinkInvokeContext()?.sharedTaskSetting,
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何
