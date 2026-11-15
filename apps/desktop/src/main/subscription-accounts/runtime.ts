@@ -24,13 +24,16 @@ import {
   PROVIDER_GROUP_COOLING_SCOPE_CAP,
   PROVIDER_GROUP_FAILURE_COOLDOWN_MS,
 } from '../provider-group/cooling.js';
-import { clearSubscriptionAccountCooling, readSubscriptionAccountCooling, writeSubscriptionAccountCooling } from '../provider-group/coolingStore.js';
+import { clearSubscriptionAccountCooling, readSubscriptionAccountCooling, writeSubscriptionAccountCooling,
+  readSubscriptionAccountRecoveries, writeSubscriptionAccountRecovery, consumeSubscriptionAccountRecovery,
+  clearRecoveredSubscriptionCooling, type SubscriptionAccountRecovery } from '../provider-group/coolingStore.js';
 import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, PROVIDER_GROUP_LOCAL_PROVISIONAL_MS } from '../provider-group/router.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
 import { providerGroupCodexUsageSnapshot } from '../provider-group/usage.js';
-import { codexLimitBucketKey } from '@cindy/maker-shared/codex-usage-buckets';
+import { codexLimitBucketKey, matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
+import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 import {
   mergeClaudeSubscriptionUsageSnapshot,
   mergeClaudeSubscriptionUsageDuringRead,
@@ -128,6 +131,8 @@ interface AccountSnapshot {
   unavailable?: boolean;
   at: number;
   usageAt?: number;
+  /** Start of a successful full usage read, not its completion or a partial SDK event. */
+  usageStartedAt?: number;
 }
 interface OwnerRuntime {
   owner: string;
@@ -144,6 +149,8 @@ interface OwnerRuntime {
   invalidated: Map<string, { token: string; reason: string }>;
   /** Actual account failures outrank optimistic cached quota for new assignments. */
   quotaCooling: Map<string, Record<string, number>>;
+  recoveries: Map<string, Record<string, SubscriptionAccountRecovery>>;
+  recoveryClaims: Map<string, { epoch: string; token: string }>;
   codexModels: Map<string, { auth: AccountSnapshot['auth']; models: CatalogModel[]; failedAt?: number }>;
   codexModelFlights: Map<string, { promise: Promise<void>; forced: boolean }>;
   codexCatalogs?: Map<string, readonly CatalogModel[]>;
@@ -224,6 +231,9 @@ function currentRuntime(): OwnerRuntime {
       logins: new Map(),
       invalidated: new Map(),
       quotaCooling: loadCooling(),
+      recoveries: new Map(Object.entries(readSubscriptionAccountRecoveries()).flatMap(([provider, accounts]) =>
+        Object.entries(accounts).map(([id, entries]) => [`${provider}:${id}`, structuredClone(entries)]))),
+      recoveryClaims: new Map(),
       codexModels: new Map(),
       codexModelFlights: new Map(),
       defaultCodexAuthEpoch: 0,
@@ -238,6 +248,7 @@ function expirePendingStarts(state: OwnerRuntime): void {
     if (pending.until > Date.now()) continue;
     const provider = key.slice(0, key.indexOf(':')) as SubscriptionProvider;
     if (state.running.get(keyOf(provider, pending.accountId))?.delete(pending.token)) changed(provider);
+    for (const [claimKey, claim] of state.recoveryClaims) if (claim.token === pending.token) state.recoveryClaims.delete(claimKey);
     // Keep the task's admission marker until takeover: an expired reassignment
     // must not use the ordinary existing-task exemption to exceed the limit.
   }
@@ -309,7 +320,41 @@ export function observeSubscriptionAccountFailure(
   scopes[scope] = Math.max(previous, until);
   state.quotaCooling.set(key, Object.fromEntries(Object.entries(scopes).slice(-PROVIDER_GROUP_COOLING_SCOPE_CAP)));
   persistCooling(state);
+  if (provider === 'openai' && failedModel) {
+    const recoveryScope = coolingScope(failedModel.replace(/^chatgpt\//, ''));
+    const entries = state.recoveries.get(key) ?? {};
+    const entry: SubscriptionAccountRecovery = { epoch: randomUUID(), failedAt: now, until: scopes[scope],
+      // A fresh plan window cannot shorten a remembered credit/auth/overload failure.
+      periodic: usageLimit && !isBillingDepletionError(signals)
+        && (!previous || previous <= now || (entries[scope]?.periodic === true && entries[scope].until === previous)),
+    };
+    entries[recoveryScope] = entry;
+    state.recoveries.set(key, Object.fromEntries(Object.entries(entries).slice(-PROVIDER_GROUP_COOLING_SCOPE_CAP)));
+    state.recoveryClaims.delete(`${key}:${recoveryScope}`);
+    void writeSubscriptionAccountRecovery(provider, accountId, recoveryScope, entry);
+  }
   return true;
+}
+
+/** A recovery is a chance to dispatch useful work, not permission to invent a turn or replay one. */
+function restoredAccount(state: OwnerRuntime, provider: SubscriptionProvider, id: string, model?: string): SubscriptionAccountRecovery | undefined {
+  if (provider !== 'openai' || !model) return;
+  const key = keyOf(provider, id);
+  const scope = coolingScope(model.replace(/^chatgpt\//, ''));
+  const entry = state.recoveries.get(key)?.[scope];
+  const info = state.cache.get(key);
+  if (!entry || !info?.auth.authenticated || info.unavailable || (info.usageStartedAt ?? 0) <= entry.failedAt) return;
+  const bucket = matchCodexBucketForModel(info.usage?.codexUsage?.appServerBuckets, model.replace(/^chatgpt\//, ''), Date.now());
+  if ((bucket?.updatedAt ?? 0) <= entry.failedAt || !subscriptionWindowRoom(
+    providerGroupMemberQuotaWindows(info.usage ?? {}, model.replace(/^chatgpt\//, ''), Date.now(), 'codex'),
+  )) return;
+  const scopes = state.quotaCooling.get(key);
+  if (entry.periodic && scopes?.[scope] === entry.until) {
+    delete scopes[scope];
+    void clearRecoveredSubscriptionCooling(provider, id, scope, entry.until, entry.epoch);
+  }
+  if ((!entry.periodic && Date.now() < entry.until) || accountCooling(state, provider, id, model)) return;
+  return entry;
 }
 
 function legacyCodexDefault(provider: SubscriptionProvider): boolean {
@@ -619,12 +664,14 @@ async function snapshot(
           sameAccount(current) &&
           current?.usageAt !== undefined &&
           Date.now() - current.usageAt < 180_000;
+        let usageReadFailed = false;
         let usage = auth.authenticated
           ? reuseUsage
             ? current?.usage
-            : await readNativeAccountUsage(provider, directory).catch(() =>
-                sameAccount(state.cache.get(key)) ? state.cache.get(key)?.usage : undefined,
-              )
+            : await readNativeAccountUsage(provider, directory).catch(() => {
+                usageReadFailed = true;
+                return sameAccount(state.cache.get(key)) ? state.cache.get(key)?.usage : undefined;
+              })
           : undefined;
         const latest = state.cache.get(key);
         const eventDuringRead = auth.authenticated && sameAccount(latest)
@@ -666,6 +713,7 @@ async function snapshot(
           at: Date.now(),
           usageAt: reuseUsage ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
+          usageStartedAt: reuseUsage || usageReadFailed ? current?.usageStartedAt : startedAt,
         };
       } catch (error) {
         const account = provider === 'anthropic'
@@ -980,6 +1028,7 @@ export function readSubscriptionAccountBlocked(
     || accountSiblings(provider, pool.accounts, accountId).length < 2) return false;
   if (!pool.accounts.some((account) => account.id === accountId && !account.paused)) return false;
   const state = currentRuntime();
+  restoredAccount(state, provider, accountId, model);
   if (accountCooling(state, provider, accountId, model)) return true;
   const info = state.cache.get(keyOf(provider, accountId));
   if (!info || info.unavailable) return false;
@@ -1645,6 +1694,11 @@ export async function acquireSubscriptionRebalance(
     running: accountRunning(state, ref.kind, account.id) }));
   const source = facts.find(entry => entry.account.id === currentId);
   if (!source) return null;
+  // A claimed handoff must get its first dispatch before another healthy rebalance.
+  const sourceRecovery = restoredAccount(state, ref.kind, currentId, model);
+  const sourceClaim = state.recoveryClaims.get(`${keyOf(ref.kind, currentId)}:${coolingScope(model?.replace(/^chatgpt\//, ''))}`);
+  if (sourceRecovery && sourceClaim?.epoch === sourceRecovery.epoch) return null;
+  for (const entry of facts) restoredAccount(state, ref.kind, entry.account.id, model);
   const candidates = facts.filter(({ account, info, windows, running }) =>
     account.id !== currentId && !account.paused && info.auth.authenticated && !info.unavailable
       && subscriptionWindowRoom(windows) && !accountCooling(state, ref.kind, account.id, model)
@@ -1661,7 +1715,10 @@ export async function acquireSubscriptionRebalance(
     if (!subscriptionWindowRoom(candidateWindows)) return false;
     const sourceQuota = providerGroupMemberUsageState(sourceUsage, usageModel, Date.now(), agent).quota;
     const candidateQuota = providerGroupMemberUsageState(candidateUsage, usageModel, Date.now(), agent).quota;
-    return subscriptionWindowPressure(sourceWindows)
+    const recovery = restoredAccount(state, ref.kind, candidate.account.id, model);
+    const claim = state.recoveryClaims.get(`${keyOf(ref.kind, candidate.account.id)}:${coolingScope(usageModel)}`);
+    return (candidateRunning === 0 && !!recovery && (!claim || claim.epoch !== recovery.epoch))
+    || subscriptionWindowPressure(sourceWindows)
     // The idle source is not counted: another root stays behind while this one supplies coverage.
     || (sourceRunning > 0 && candidateRunning === 0)
     || ((sourceRunning > 0 || candidateRunning === 0) && !!sourceQuota && !!candidateQuota
@@ -1683,6 +1740,10 @@ export async function acquireSubscriptionRebalance(
     lease.release();
     return null;
   }
+  const recovery = restoredAccount(state, ref.kind, picked.account.id, model);
+  if (recovery && accountRunning(state, ref.kind, picked.account.id) === 1 && !lease.claimRecovery()) {
+    lease.release(); return null;
+  }
   return lease;
 }
 
@@ -1690,6 +1751,10 @@ export interface SubscriptionAccountLease {
   account: NativeSubscriptionAccount;
   /** New turns must not reuse a disabled, renewing or unverified account. */
   assertDispatchable(): void;
+  /** Provisional recovery ownership follows the existing task reservation. */
+  claimRecovery(): boolean;
+  /** Capture before send; commit only if the native dispatch is accepted. */
+  beginDispatch(): (() => Promise<void>) | undefined;
   /** Pool account id (not the owner-scoped capability id). */
   accountId: string;
   /** Selected from an existing task binding or an explicit legacy route rather than by the pool policy. */
@@ -1768,6 +1833,7 @@ export async function acquireSubscriptionAccount(
   // for actual OpenAI selection, not while unrelated catalogs initialize.
   const legacyAccess = provider === 'openai' ? await import('./legacyAccountAccess.js') : null;
   assertOwner(state);
+  for (const account of scoped) restoredAccount(state, provider, account.id, model);
   // Settings may change while the official CLI is answering.
   const latest = readPool(provider);
   if (!latest || (latest.disconnected && selectionProvider === provider)) throw new Error('Subscription accounts changed');
@@ -1879,6 +1945,10 @@ export async function acquireSubscriptionAccount(
   if (!control) {
     if (pending && pendingKey) {
       state.running.get(keyOf(provider, pending.accountId))?.delete(pending.token);
+      for (const [claimKey, claim] of state.recoveryClaims) if (claim.token === pending.token) {
+        if (pending.accountId === selected) state.recoveryClaims.set(claimKey, { ...claim, token });
+        else state.recoveryClaims.delete(claimKey);
+      }
       state.pendingStarts.delete(pendingKey);
     }
     active.add(token);
@@ -1909,6 +1979,28 @@ export async function acquireSubscriptionAccount(
       throw new Error(options.remote ? 'Subscription account remote access was revoked' : 'Subscription account does not allow this model');
   };
   return {
+    claimRecovery: () => {
+      assertCurrent();
+      const scope = coolingScope(currentModel?.replace(/^chatgpt\//, ''));
+      const entry = restoredAccount(state, provider, selected, currentModel);
+      const claimKey = `${key}:${scope}`;
+      if (!entry || state.recoveryClaims.has(claimKey)) return false;
+      state.recoveryClaims.set(claimKey, { epoch: entry.epoch, token });
+      return true;
+    },
+    beginDispatch: () => {
+      assertCurrent();
+      const scope = coolingScope(currentModel?.replace(/^chatgpt\//, ''));
+      const entry = !control && state.recoveries.get(key)?.[scope];
+      if (!entry) return;
+      return async () => {
+        if (state !== runtime || state.owner !== activeOwnerScopeKey()
+          || state.recoveries.get(key)?.[scope]?.epoch !== entry.epoch) return;
+        delete state.recoveries.get(key)![scope];
+        state.recoveryClaims.delete(`${key}:${scope}`);
+        await consumeSubscriptionAccountRecovery(provider, selected, scope, entry.epoch);
+      };
+    },
     assertDispatchable: () => {
       assertCurrent();
       const account = readPool(provider)?.accounts.find(a => a.id === selected);
@@ -2013,7 +2105,10 @@ export async function acquireSubscriptionAccount(
         throw new Error('Cannot transfer the subscription account reservation');
       const taskKey = keyOf(provider, `task:${taskId}`);
       const previous = state.pendingStarts.get(taskKey);
-      if (previous) state.running.get(keyOf(provider, previous.accountId))?.delete(previous.token);
+      if (previous) {
+        state.running.get(keyOf(provider, previous.accountId))?.delete(previous.token);
+        for (const [claimKey, claim] of state.recoveryClaims) if (claim.token === previous.token) state.recoveryClaims.delete(claimKey);
+      }
       active.add(token);
       state.pendingStarts.set(taskKey, { accountId: selected, token, until: Date.now() + PROVIDER_GROUP_LOCAL_PROVISIONAL_MS });
       handedOff = true;
@@ -2032,6 +2127,7 @@ export async function acquireSubscriptionAccount(
       released = true;
       for (const [id, leaseToken] of taskTokens) if (leaseToken === token) taskTokens.delete(id);
       if (!handedOff && active.delete(token)) changed(provider);
+      if (!handedOff) for (const [claimKey, claim] of state.recoveryClaims) if (claim.token === token) state.recoveryClaims.delete(claimKey);
     },
   };
 }

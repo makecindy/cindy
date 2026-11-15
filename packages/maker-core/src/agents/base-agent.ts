@@ -2289,6 +2289,11 @@ export interface SendOptions {
    * 回调失败不得改变已经接受的 provider dispatch 结果。
    */
   onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
+  /**
+   * Codex: positive turn/start RPC acceptance after cancellation checks. Optional host observer;
+   * event-only start failures do not call it. Observer errors must not change dispatch semantics.
+   */
+  onTurnStartAccepted?: () => void;
   /** Exact accepted Pi input replaced by a zero-output retry; never match by text. */
   retryTranscriptUserEntryId?: string;
   /**

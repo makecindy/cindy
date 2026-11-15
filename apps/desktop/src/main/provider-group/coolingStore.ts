@@ -11,11 +11,25 @@ import { currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP, type ProviderGroupCoo
 
 interface CoolingFile {
   cooling: ProviderGroupPersistedCooling;
+  /** Failure evidence, not credentials; retained until useful work resumes on that account. */
+  recoveries?: SubscriptionAccountRecoveries;
 }
+export interface SubscriptionAccountRecovery {
+  epoch: string;
+  failedAt: number;
+  until: number;
+  periodic: boolean;
+}
+export type SubscriptionAccountRecoveries = Record<string, Record<string, Record<string, SubscriptionAccountRecovery>>>;
 
 const MEMBER_KEY_PATTERN = /^[A-Za-z0-9_.:-]{1,300}$/;
 /** 防止损坏文件无限膨胀的存储边界，远高于实际用量。 */
 const MAX_PROVIDERS = 1024;
+function validRecoveryKey(provider: string, account: string, scope: string): boolean {
+  return (provider === 'openai' || provider === 'anthropic') && MEMBER_KEY_PATTERN.test(account)
+    && !Object.hasOwn(Object.prototype, account) && account !== 'prototype'
+    && /^(claude|model):.{1,512}$/.test(scope);
+}
 
 function normalize(raw: unknown): CoolingFile {
   const source = (raw as Partial<CoolingFile> | null)?.cooling;
@@ -40,7 +54,27 @@ function normalize(raw: unknown): CoolingFile {
     }
     if (Object.keys(entries).length > 0) cooling[providerId] = entries;
   }
-  return { cooling };
+  const recoveries: SubscriptionAccountRecoveries = {};
+  const rawRecoveries = (raw as CoolingFile)?.recoveries;
+  if (rawRecoveries && typeof rawRecoveries === 'object' && !Array.isArray(rawRecoveries)) {
+    for (const provider of ['openai', 'anthropic']) {
+      const accounts = rawRecoveries[provider];
+      if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts)) continue;
+      for (const [account, entries] of Object.entries(accounts).slice(0, PROVIDER_GROUP_STORAGE_MEMBER_CAP)) {
+        if (!MEMBER_KEY_PATTERN.test(account) || !entries || typeof entries !== 'object' || Array.isArray(entries)) continue;
+        for (const [scope, entry] of Object.entries(entries).slice(0, PROVIDER_GROUP_COOLING_SCOPE_CAP)) {
+          if (!validRecoveryKey(provider, account, scope) || !entry || typeof entry !== 'object'
+            || typeof entry.epoch !== 'string' || !/^[A-Za-z0-9-]{1,80}$/.test(entry.epoch)
+            || !Number.isFinite(entry.failedAt) || entry.failedAt <= 0
+            || !Number.isFinite(entry.until) || entry.until < entry.failedAt || typeof entry.periodic !== 'boolean') continue;
+          ((recoveries[provider] ??= {})[account] ??= {})[scope] = {
+            epoch: entry.epoch, failedAt: entry.failedAt, until: entry.until, periodic: entry.periodic,
+          };
+        }
+      }
+    }
+  }
+  return { cooling, ...(Object.keys(recoveries).length ? { recoveries } : {}) };
 }
 
 const log = desktopMakerLogger.child('provider-group');
@@ -71,6 +105,10 @@ export function readProviderGroupCooling(): ProviderGroupPersistedCooling {
 export function readSubscriptionAccountCooling(): ProviderGroupPersistedCooling {
   accountStore.invalidateIfChanged();
   return accountStore.read().cooling;
+}
+export function readSubscriptionAccountRecoveries(): SubscriptionAccountRecoveries {
+  accountStore.invalidateIfChanged();
+  return accountStore.read().recoveries ?? {};
 }
 
 /**
@@ -117,15 +155,62 @@ export function writeSubscriptionAccountCooling(cooling: ProviderGroupPersistedC
 
 let accountWrites: Promise<void> = Promise.resolve();
 function updateAccountCooling(edit: (current: ProviderGroupPersistedCooling) => ProviderGroupPersistedCooling): Promise<void> {
+  return updateAccountFile(current => ({ ...current, cooling: edit(current.cooling) }));
+}
+function updateAccountFile(edit: (current: CoolingFile) => CoolingFile): Promise<void> {
   const owner = activeOwnerScopeKey();
   // Clear must follow all earlier writes, including background failure snapshots.
   accountWrites = accountWrites.then(async () => {
     if (owner !== activeOwnerScopeKey()) return;
-    await accountStore.updateAtomic(current => normalize({ cooling: edit(current.value.cooling) }));
+    await accountStore.updateAtomic(current => {
+      const next = normalize(edit(current.value));
+      // updateAtomic merges a partial patch: explicitly clear an absent optional key.
+      return { ...next, recoveries: next.recoveries };
+    });
   }).catch((error: unknown) => {
     log.warn('subscription accounts: saving cooldowns failed', { error: error instanceof Error ? error.message : String(error) });
   });
   return accountWrites;
+}
+/** Serialized with cooling writes; an old acceptance cannot consume a newer failure. */
+export function writeSubscriptionAccountRecovery(
+  provider: string, account: string, scope: string, entry: SubscriptionAccountRecovery,
+): Promise<void> {
+  if (!validRecoveryKey(provider, account, scope)) return Promise.resolve();
+  return updateAccountFile(current => {
+    const recoveries = structuredClone(current.recoveries ?? {});
+    const previous = recoveries[provider]?.[account]?.[scope];
+    const weakerTie = previous?.failedAt === entry.failedAt && (
+      (!previous.periodic && entry.periodic)
+      || (previous.periodic === entry.periodic && previous.until > entry.until)
+    );
+    if (previous && (previous.failedAt > entry.failedAt || weakerTie)) return current;
+    // A newer periodic error cannot prove an existing billing/auth failure recovered.
+    const keepNonperiodic = previous && !previous.periodic && previous.until > Date.now();
+    ((recoveries[provider] ??= {})[account] ??= {})[scope] = { ...entry,
+      until: Math.max(previous?.until ?? 0, entry.until), periodic: entry.periodic && !keepNonperiodic };
+    return { ...current, recoveries };
+  });
+}
+export function consumeSubscriptionAccountRecovery(provider: string, account: string, scope: string, epoch: string): Promise<void> {
+  if (!validRecoveryKey(provider, account, scope)) return Promise.resolve();
+  return updateAccountFile(current => {
+    const recoveries = structuredClone(current.recoveries ?? {});
+    if (recoveries[provider]?.[account]?.[scope]?.epoch === epoch) delete recoveries[provider][account][scope];
+    return { ...current, recoveries };
+  });
+}
+/** Only fresh periodic recovery may shorten this exact model failure, never an account-wide/billing failure. */
+export function clearRecoveredSubscriptionCooling(provider: string, account: string, scope: string, until: number, epoch: string): Promise<void> {
+  if (!validRecoveryKey(provider, account, scope)) return Promise.resolve();
+  return updateAccountFile(current => {
+    const cooling = structuredClone(current.cooling);
+    const scopes = cooling[provider]?.[account];
+    const recovery = current.recoveries?.[provider]?.[account]?.[scope];
+    if (recovery?.epoch === epoch && recovery.periodic && scopes && typeof scopes === 'object'
+      && scopes[scope] === until) delete scopes[scope];
+    return { ...current, cooling };
+  });
 }
 
 /** A successful login or removal clears only this account, preserving other cooldowns. */

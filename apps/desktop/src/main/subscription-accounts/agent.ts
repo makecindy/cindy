@@ -186,6 +186,7 @@ function wrapHandle(
   lease: SubscriptionAccountLease,
   unregister: () => void,
   model: string | undefined,
+  agentKind: string,
 ): AgentSessionHandle {
   let cleanupPending = false;
   return new Proxy(handle, {
@@ -194,9 +195,17 @@ function wrapHandle(
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
           if (cleanupPending) throw new Error('Subscription account runtime is closing');
           lease.assertDispatchable();
+          const accepted = lease.beginDispatch();
           lease.running(true);
           try {
-            return await target.send(...args);
+            // Codex's legacy event-only failure may resolve send. Observe its positive RPC
+            // receipt instead of forcing rejection (which would change Goal's terminal lifecycle).
+            let started = agentKind !== 'codex';
+            const result = await target.send(args[0], accepted && agentKind === 'codex' ? { ...args[1],
+              onTurnStartAccepted: () => { started = true; args[1]?.onTurnStartAccepted?.(); },
+            } : args[1]);
+            if (started) await accepted?.();
+            return result;
           } catch (error) {
             lease.observeFailure(error, model, 'run');
             if (!cleanupPending) lease.running(false);
@@ -432,7 +441,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               });
               await current.bind([...keys, `native:${handle.id}`]);
               // Startup owns its slot until the first turn completes or the runtime closes.
-              return guardAccountSwitch(wrapHandle(handle, current, unregister, options.model), target, {
+              return guardAccountSwitch(wrapHandle(handle, current, unregister, options.model, target.kind), target, {
                 ...options,
                 // Keep the effective native source for later switch checks even if
                 // the user's implicit default changes while this runtime is alive.

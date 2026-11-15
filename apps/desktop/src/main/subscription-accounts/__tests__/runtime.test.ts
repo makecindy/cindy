@@ -37,6 +37,7 @@ const h = vi.hoisted(() => ({
   cooling: {} as Record<string, Record<string, Record<string, number>>>,
   writeCooling: vi.fn<(cooling: Record<string, Record<string, Record<string, number>>>) => Promise<undefined>>(async () => undefined),
   clearCooling: vi.fn<(provider: string, accountId: string) => Promise<undefined>>(async () => undefined),
+  recoveries: {} as import('../../provider-group/coolingStore.js').SubscriptionAccountRecoveries,
   /** `${kind}:${accountId}` -> provider the account belongs to (placement.ts); absent = built-in. */
   placement: {} as Record<string, string>,
   /** Providers Cindy created for subscription accounts (placement.ts), by provider id. */
@@ -113,6 +114,12 @@ vi.mock('../../provider-group/coolingStore.js', () => ({
   readSubscriptionAccountCooling: () => h.cooling,
   writeSubscriptionAccountCooling: h.writeCooling,
   clearSubscriptionAccountCooling: h.clearCooling,
+  readSubscriptionAccountRecoveries: () => structuredClone(h.recoveries),
+  writeSubscriptionAccountRecovery: async (p: string, a: string, s: string, r: any) => { ((h.recoveries[p] ??= {})[a] ??= {})[s] = r; },
+  consumeSubscriptionAccountRecovery: async (p: string, a: string, s: string, epoch: string) => {
+    if (h.recoveries[p]?.[a]?.[s]?.epoch === epoch) delete h.recoveries[p][a][s];
+  },
+  clearRecoveredSubscriptionCooling: vi.fn(async () => {}),
 }));
 vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.remote }));
 vi.mock('../../appSessionState.js', () => ({
@@ -205,6 +212,7 @@ import {
   hasConnectedSubscriptionPool,
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
+  observeSubscriptionAccountFailure,
   pooledCodexResetTarget,
   hasRestoredPooledCodexQuota,
 } from '../runtime.js';
@@ -263,6 +271,7 @@ beforeEach(() => {
   h.setLegacyPaused.mockReset();
   h.remote.mockReset();
   h.cooling = {};
+  h.recoveries = {};
   h.writeCooling.mockReset().mockResolvedValue(undefined);
   h.clearCooling.mockReset().mockResolvedValue(undefined);
   h.placement = {};
@@ -4169,4 +4178,234 @@ describe('idle subscription rebalance reservation', () => {
         method === 'model/list' ? { data: directory.endsWith('/second') ? [] : [{ id: 'gpt-6' }], nextCursor: null } : undefined);
       expect(await acquireSubscriptionRebalance('openai', 'gpt-6', 'default')).toBeNull();
     });
+});
+
+// Unit/standard regression: a recovered idle account must take useful work from an existing
+// lone task even below the ordinary 15pp benefit threshold. Previous tests ended at B→A.
+// Exercise production failure observation, reservation, native handoff and dispatch wrapper;
+// only native I/O, owner storage and host persistence are fake. No new user input or probe.
+describe('restored account useful-work participation', () => {
+  async function recoveryCase(run: (s: any) => Promise<void>) {
+    let now = Date.parse('2026-06-01T00:00:00Z');
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    let full = false, invalid = '', error: unknown, silentStartFailure = false;
+    let background = false;
+    const dispatches: string[] = [];
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex', source: 'desktop',
+      model: 'gpt-6.1-sol', sdkSessionId: 'original-second' as string | null,
+      workDir: '/project', permissionMode: 'acceptEdits', goal: 'finish the approved work' };
+    h.pools.openai = { strategy: 'weight', accounts: [
+      { ...account('default'), limit: 4, weight: 4 }, { ...account('second'), limit: 4, weight: 1 },
+    ] };
+    const quota = (directory: string) => ({ codexUsage: { appServerBuckets: { [invalid === 'other-model' ? 'other-model' : 'codex']: {
+      ...(invalid === 'other-model' ? { limitName: 'gpt-unrelated' } : {}),
+      updatedAt: invalid === 'stale' ? now - 11 * 60_000 : now,
+      primary: { usedPercent: directory.endsWith('/second') ? full ? 100 : 1 : 50,
+        windowMinutes: directory.endsWith('/second') ? 300 : 10080,
+        resetsAt: invalid === 'past-reset' ? now / 1000 - 1 : now / 1000 + (directory.endsWith('/second') ? 10_800 : 432_000) },
+      secondary: directory.endsWith('/second') ? { usedPercent: invalid === 'week-full' ? 100 : 45,
+        windowMinutes: 10080, resetsAt: now / 1000 + 432_000 } : null,
+    } } } });
+    h.usage.mockImplementation(async (_provider, directory: string) => quota(directory));
+    for (const key of ['task:continuing', 'native:original-second'])
+      h.bindings.set(key, { providerId: 'openai', accountId: 'second' });
+    let handle: AgentSessionHandle | undefined;
+    let native = 0;
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async (options: StartSessionOptions) => {
+      expect(options).toMatchObject({ providerId: 'openai', model: 'gpt-6.1-sol', workingDir: '/project', permissionMode: 'acceptEdits' });
+      const directory = options[NATIVE_SUBSCRIPTION_ACCOUNT]!.configDir;
+      return { id: ++native === 1 ? 'original-second' : `replacement-${native}`,
+        send: async (_message: unknown, options?: { throwOnStartFailure?: boolean; onTurnStartAccepted?: () => void }) => {
+          dispatches.push(directory);
+          if (silentStartFailure) {
+            silentStartFailure = false;
+            if (options?.throwOnStartFailure) throw new Error('native start rejected before acceptance');
+            return; // Codex's legacy event-only start failure.
+          }
+          if (error) { const e = error; error = undefined; throw e; }
+          options?.onTurnStartAccepted?.();
+        },
+        close: async () => {}, events: async function* () { yield { type: 'done', data: {} }; },
+      } as unknown as AgentSessionHandle;
+    } } as unknown as BaseAgent);
+    const start = async () => {
+      handle = await agent.startSession({ sessionId: 'continuing', providerId: row.providerId, model: row.model,
+        workingDir: row.workDir, permissionMode: row.permissionMode,
+        ...(row.sdkSessionId ? { resumeSessionId: row.sdkSessionId } : {}),
+      } as StartSessionOptions); row.sdkSessionId = handle.id;
+    };
+    const send = async () => {
+      await handle!.send({ type: 'user', content: 'continue the already approved next step' });
+      for await (const _ of handle!.events()) { /* production terminal release */ }
+    };
+    const deps = { readSession: async () => row, isRunning: () => background,
+      rebuild: vi.fn(async (_id: string, assertCurrent: () => void) => {
+        assertCurrent(); await handle?.close(); assertCurrent(); handle = undefined; row.sdkSessionId = null;
+      }),
+    };
+    const prepare = () => prepareSubscriptionAccountFailover('continuing', deps, { balance: true });
+    const refresh = () => refreshSubscriptionPool('openai', true);
+    const failThenContinueOnDefault = async (periodic = false, partialOnly = false) => {
+      await start();
+      error = periodic ? { codexErrorInfo: 'usageLimitExceeded', message: 'usage limit reached', resetAtMs: now + 3_600_000 }
+        : new Error('Your workspace is out of credits. Ask your workspace owner to refill in order to continue.');
+      await expect(send()).rejects.toBeDefined();
+      full = true;
+      if (partialOnly) {
+        now += 1;
+        observeSubscriptionAccountUsage(getSessionSubscriptionAccount('continuing')!, { limitId: 'codex',
+          secondary: { usedPercent: 45, windowMinutes: 10080, resetsAt: now / 1000 + 432_000 } });
+      } else await refresh();
+      expect(await prepare()).toBe(true); await start(); await send();
+      expect(dispatches).toEqual(['openai/second', 'openai/default']);
+    };
+    try {
+      await run({ row, dispatches, deps, agent, prepare, refresh, start, send, quota, failThenContinueOnDefault,
+        restore: async (minutes = 31) => { now += minutes * 60_000; full = false; await refresh(); },
+        invalid: async (value: string) => { invalid = value; await refresh(); },
+        background: (value: boolean) => { background = value; },
+        rejectStart: () => { silentStartFailure = true; },
+        advance: (ms: number) => { now += ms; },
+        stopHandle: async () => { await handle?.close(); handle = undefined; },
+      });
+      expect(row).toMatchObject({ workDir: '/project', permissionMode: 'acceptEdits', goal: 'finish the approved work' });
+    } finally { await handle?.close(); clock.mockRestore(); }
+  }
+  it('automatically sends the next existing-task continuation on recovered B despite only 5pp gain', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      expect(await s.prepare()).toBe(true);
+      expect(h.bindings.get('task:continuing')?.accountId).toBe('second');
+      expect(h.bindings.get('native:original-second')?.accountId).toBe('second');
+      await s.start(); await s.send();
+      expect(s.dispatches).toEqual(['openai/second', 'openai/default', 'openai/second']);
+      expect(await s.prepare()).toBe(false);
+      expect(h.recoveries.openai?.second?.['model:gpt-6.1-sol']).toBeUndefined();
+    });
+  });
+  it('uses fresh periodic recovery before the predicted reset but never clears billing cooldown early', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(true); await s.restore(1);
+      expect(await s.prepare()).toBe(true);
+    });
+  });
+  it('waits through billing cooldown even if quota has already recovered', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore(1);
+      expect(await s.prepare()).toBe(false);
+      expect(readSubscriptionAccountBlocked('openai', 'second', s.row.model)).toBe(true);
+    });
+  });
+  it.each(['stale', 'past-reset', 'week-full', 'other-model'])('does not infer recovery from %s data', async invalid => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore(); await s.invalid(invalid);
+      expect(await s.prepare()).toBe(false); expect(s.dispatches).toHaveLength(2);
+    });
+  });
+  it('waits for native descendants and retries a failed host handoff without losing recovery', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore(); s.background(true);
+      expect(await s.prepare()).toBe(false); s.background(false);
+      s.deps.rebuild.mockRejectedValueOnce(new Error('handoff not saved'));
+      await expect(s.prepare()).rejects.toThrow('handoff not saved');
+      expect(h.bindings.get('task:continuing')?.accountId).toBe('default');
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      expect(s.dispatches).toHaveLength(3);
+    });
+  });
+  it('does not move the old task just to reuse recovery already satisfied by new useful work', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      h.bindings.set('task:independent', { providerId: 'openai', accountId: 'second' });
+      const other = await s.agent.startSession({ providerId: 'openai', model: s.row.model, sessionId: 'independent',
+        workingDir: '/project', permissionMode: 'acceptEdits' });
+      await other.send({ type: 'user', content: 'useful independent work' });
+      for await (const _ of other.events()) {}
+      await other.close();
+      expect(await s.prepare()).toBe(false);
+    });
+  });
+  it('retains unconsumed recovery across owner-runtime reconstruction without replaying old work', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore(); await s.stopHandle();
+      h.owner += '-restarted';
+      await s.refresh();
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      expect(s.dispatches).toHaveLength(3);
+    });
+  });
+  it('does not clear a short-window failure from a partial weekly event carrying old healthy short data', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(true, true);
+      expect(readSubscriptionAccountBlocked('openai', 'second', s.row.model)).toBe(true);
+      expect(await s.prepare()).toBe(false);
+      expect(s.dispatches).toHaveLength(2);
+    });
+  });
+  it('rejects a healthy read begun before the newest failure, even when it completes afterward', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault();
+      const original = h.usage.getMockImplementation()!;
+      let release!: () => void, began!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const started = new Promise<void>(resolve => { began = resolve; });
+      h.usage.mockImplementation(async (provider, directory: string) => {
+        const result = await original(provider, directory);
+        if (directory.endsWith('/second')) { began(); await gate; }
+        return result;
+      });
+      const reading = s.restore();
+      await started; s.advance(1);
+      observeSubscriptionAccountFailure('openai', 'second', { codexErrorInfo: 'usageLimitExceeded',
+        message: 'usage limit reached', resetAtMs: Date.now() + 3_600_000 }, s.row.model);
+      release(); await reading;
+      expect(await s.prepare()).toBe(false); expect(s.dispatches).toHaveLength(2);
+      h.usage.mockImplementation(original);
+      await s.restore(1);
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      expect(s.dispatches).toHaveLength(3);
+    });
+  });
+  it('only reserves one recovery opportunity concurrently and releases it after an abandoned handoff', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      const candidates = await Promise.all([acquireSubscriptionRebalance('openai', s.row.model, 'default'),
+        acquireSubscriptionRebalance('openai', s.row.model, 'default')]);
+      const picked = candidates.filter(Boolean);
+      expect(picked).toHaveLength(1); picked[0]!.release();
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      expect(s.dispatches).toHaveLength(3);
+    });
+  });
+  it('does not pin an unwrapped restored source forever when no handoff claim owns its next send', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      setSubscriptionAccountActivityReader(async () => [{ sessionId: 'other-active-root',
+        nativeId: 'other-native', provider: 'openai', accountId: 'second', running: true }]);
+      const lease = await acquireSubscriptionRebalance('openai', s.row.model, 'second');
+      expect(lease?.accountId).toBe('default'); lease?.release();
+    });
+  });
+  it('preserves event-only Goal dispatch semantics and recovery until a positive native start receipt', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      expect(await s.prepare()).toBe(true); await s.start(); s.rejectStart();
+      await expect(s.send()).resolves.toBeUndefined();
+      expect(h.recoveries.openai?.second?.['model:gpt-6.1-sol']).toBeDefined();
+      await s.send();
+      expect(h.recoveries.openai?.second?.['model:gpt-6.1-sol']).toBeUndefined();
+    });
+  });
+  it('returns an unsent recovery claim when a paused destination is replaced by another reservation', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      expect(await s.prepare()).toBe(true);
+      h.pools.openai!.accounts[1].paused = true;
+      expect(await prepareSubscriptionAccountForSend('continuing', s.deps)).toBe(true);
+      await s.start(); await s.send();
+      h.pools.openai!.accounts[1].paused = false;
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      expect(s.dispatches).toEqual(['openai/second', 'openai/default', 'openai/default', 'openai/second']);
+    });
+  });
 });

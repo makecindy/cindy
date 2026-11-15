@@ -14334,6 +14334,10 @@ assertRouteCurrent();
         if (rejectClosedOrCancelledSend(sendOpts, 'before resolving send')) {
           return;
         }
+        if (initialStartSettledOk) {
+          try { sendOpts?.onTurnStartAccepted?.(); }
+          catch { log.warn('turn/start acceptance observer failed'); }
+        }
         flushInteractionIdleWaiters();
       },
 
