@@ -4,6 +4,7 @@ import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
+import { contextSnapshotForStatus, isContextCompactionSnapshot } from './sessionContextSnapshot.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
   AgentEvent,
@@ -356,12 +357,7 @@ export function prepareSessionEvent(
     // Remote event and state records can arrive in different poll chunks. Use
     // the confirmed status payload, never the proxy cache at compact_boundary.
     // A replayed boundary alone therefore cannot write an older watermark.
-    const isCompactionSnapshot = event.source === 'pi' && data.isRunning === true
-      && data.contextSnapshotAuthoritative === true && event.turnScope !== 'background'
-      && (event.sessionInstanceId === undefined || event.sessionInstanceId === session.instanceId)
-      && (event.sessionTurnGeneration === undefined || event.sessionTurnGeneration === session.getTurnGeneration())
-      && typeof data.contextTokens === 'number' && Number.isFinite(data.contextTokens) && data.contextTokens >= 0
-      && typeof data.contextWindow === 'number' && Number.isFinite(data.contextWindow) && data.contextWindow > 0;
+    const isCompactionSnapshot = isContextCompactionSnapshot(session, event, data);
     // Idle compact / late background work may still send isRunning for UI
     // copy. It must not latch the product turn tracker or idle bookkeeping.
     if (isForegroundRunningStatus(data, event)) {
@@ -407,15 +403,8 @@ export function prepareSessionEvent(
     } else if (endsForegroundTurnByStatus(data, isContinuationBoundary, event)) {
       shouldMarkTurnStatusIdleAfterBroadcast = true;
     }
-    if (
-      (isCompactionSnapshot || (data.isRunning === false && data.status === 'Done')) &&
-      typeof data.contextTokens === 'number'
-    ) {
-      pendingContextSnapshot = {
-        contextTokens: data.contextTokens,
-        contextWindow: data.contextWindow ?? 0,
-      };
-    }
+    const contextSnapshot = contextSnapshotForStatus(isCompactionSnapshot, data);
+    if (contextSnapshot) pendingContextSnapshot = contextSnapshot;
   }
   if (event.type === 'done') {
     settleAutoResumeAttemptOnDone(deps, session, event, isContinuationBoundary);
