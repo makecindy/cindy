@@ -45,6 +45,22 @@ describe('sessionModelMirror', () => {
     expect(acc.getFast('codex', 'openai', 'gpt-5.5')).toBe('ultrafast');
   });
 
+  // 时序:请求落定前被控端推来和乐观值相同的值(回包丢了但已应用,或另一控制端写了同值),
+  // 这是被控端已有该值的证据;之后两条请求都失败也不能撤回。只比较值会把它改回旧值。
+  it('请求落定前被控端推来同值,之后请求失败也不撤回', async () => {
+    const offline = () => [Promise.reject(new Error('offline')), Promise.reject(new Error('offline'))];
+    const acc = makeSessionMirrorAccessors('s1', offline);
+    const row = { sessionId: 's1', agent: 'codex', providerId: 'openai', model: 'gpt-5.5' };
+    applySessionModelPrefPush({ ...row, effort: 'medium', fast: false });
+    const effort = acc.setEffort('codex', 'openai', 'gpt-5.5', 'high');
+    const fast = acc.setFast('codex', 'openai', 'gpt-5.5', true);
+    applySessionModelPrefPush({ ...row, effort: 'high', fast: true });
+    await expect(effort).rejects.toThrow('offline');
+    await expect(fast).rejects.toThrow('offline');
+    expect(acc.getEffort('codex', 'openai', 'gpt-5.5')).toBe('high');
+    expect(acc.getFast('codex', 'openai', 'gpt-5.5')).toBe(true);
+  });
+
   it('按 sessionId 隔离;clearSessionMirror 只清该会话', () => {
     const a = makeSessionMirrorAccessors('s1', vi.fn());
     const b = makeSessionMirrorAccessors('s2', vi.fn());

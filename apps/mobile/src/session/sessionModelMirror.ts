@@ -24,7 +24,12 @@ import type { MobileModelMemoryAccessors } from './draftModelMemory';
 interface Slot {
   effortByModel: Record<string, string>;
   fastByModel: Record<string, boolean | 'ultrafast'>;
+  /** 每个值最近一次被写下的序号(本机乐观写、被控端推送都记,同值也记),撤回靠它认出「还是我写的那次」。 */
+  effortStamp: Record<string, number>;
+  fastStamp: Record<string, number>;
 }
+
+let stampSeq = 0;
 
 // sessionId → (`${agent}:${providerId}` → Slot)
 const store = new Map<string, Map<string, Slot>>();
@@ -61,26 +66,31 @@ function getSlot(sessionId: string, agent: AgentKind, providerId: string, create
   const k = slotKey(agent, providerId);
   let slot = bySlot.get(k);
   if (!slot && create) {
-    slot = { effortByModel: {}, fastByModel: {} };
+    slot = { effortByModel: {}, fastByModel: {}, effortStamp: {}, fastStamp: {} };
     bySlot.set(k, slot);
   }
   return slot;
 }
 
-function setMirrorEffort(sessionId: string, agent: AgentKind, providerId: string, model: string, effort: string): void {
-  if (!sessionId || !providerId || !model || !effort) return;
+/** 写下一个值并返回这次写入的序号;值没变也换新序号(同值推送同样让更早的撤回失效)。 */
+function setMirrorEffort(sessionId: string, agent: AgentKind, providerId: string, model: string, effort: string): number | undefined {
+  if (!sessionId || !providerId || !model || !effort) return undefined;
   const slot = getSlot(sessionId, agent, providerId, true)!;
-  if (slot.effortByModel[model] === effort) return;
+  const stamp = (slot.effortStamp[model] = ++stampSeq);
+  if (slot.effortByModel[model] === effort) return stamp;
   slot.effortByModel[model] = effort;
   emit();
+  return stamp;
 }
 
-function setMirrorFast(sessionId: string, agent: AgentKind, providerId: string, model: string, enabled: boolean | 'ultrafast'): void {
-  if (!sessionId || !providerId || !model) return;
+function setMirrorFast(sessionId: string, agent: AgentKind, providerId: string, model: string, enabled: boolean | 'ultrafast'): number | undefined {
+  if (!sessionId || !providerId || !model) return undefined;
   const slot = getSlot(sessionId, agent, providerId, true)!;
-  if (slot.fastByModel[model] === enabled) return;
+  const stamp = (slot.fastStamp[model] = ++stampSeq);
+  if (slot.fastByModel[model] === enabled) return stamp;
   slot.fastByModel[model] = enabled;
   emit();
+  return stamp;
 }
 
 /**
@@ -145,7 +155,8 @@ function settleWrite(
  * 给模型选择列表注入的 accessors:读镜像、写镜像 + 经 onWrite 写穿被控端。
  * onWrite 由调用方绑定隧道调用(set-session-model-pref + apply-new-maker-draft-pref 双写),
  * 返回它发出的请求;本工厂负责「乐观写镜像 + 触发 onWrite + 没写到时撤回」,不关心传输细节。
- * 撤回只动自己写下的那个值:期间被控端推来的新值、或之后的另一次写入保持不变。
+ * 撤回只动自己写下的那一次:期间被控端推来的值(哪怕和乐观值相同——那是被控端已经有这个值的
+ * 证据)、或之后的另一次写入保持不变。
  */
 export function makeSessionMirrorAccessors(
   sessionId: string,
@@ -163,10 +174,10 @@ export function makeSessionMirrorAccessors(
       getSlot(sessionId, agent, providerId, false)?.fastByModel[model],
     setEffort: (agent, providerId, model, effort) => {
       const previous = getSlot(sessionId, agent, providerId, false)?.effortByModel[model];
-      setMirrorEffort(sessionId, agent, providerId, model, effort);
+      const stamp = setMirrorEffort(sessionId, agent, providerId, model, effort);
       return settleWrite(onWrite(agent, providerId, model, { effort }), () => {
         const slot = getSlot(sessionId, agent, providerId, false);
-        if (!slot || previous === effort || slot.effortByModel[model] !== effort) return;
+        if (!slot || previous === effort || slot.effortStamp[model] !== stamp) return;
         if (previous === undefined) delete slot.effortByModel[model];
         else slot.effortByModel[model] = previous;
         emit();
@@ -174,10 +185,10 @@ export function makeSessionMirrorAccessors(
     },
     setFast: (agent, providerId, model, enabled) => {
       const previous = getSlot(sessionId, agent, providerId, false)?.fastByModel[model];
-      setMirrorFast(sessionId, agent, providerId, model, enabled);
+      const stamp = setMirrorFast(sessionId, agent, providerId, model, enabled);
       return settleWrite(onWrite(agent, providerId, model, { fast: enabled }), () => {
         const slot = getSlot(sessionId, agent, providerId, false);
-        if (!slot || previous === enabled || slot.fastByModel[model] !== enabled) return;
+        if (!slot || previous === enabled || slot.fastStamp[model] !== stamp) return;
         if (previous === undefined) delete slot.fastByModel[model];
         else slot.fastByModel[model] = previous;
         emit();
