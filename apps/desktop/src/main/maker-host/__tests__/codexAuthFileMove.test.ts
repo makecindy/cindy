@@ -81,6 +81,47 @@ describe('moveCodexAuthFile interrupted publication', () => {
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 
+  // Credential storage contract: publication consumes the link itself, not its
+  // referent. Ordinary-file fixtures cannot distinguish two links to one file.
+  // Model both stat APIs so this unit regression also runs without Windows
+  // symlink privileges; real File.Move/symlink behavior has an integration tier.
+  it.each([true, false])(
+    'accepts a lost symlink move acknowledgement only for the original link (same link: %s)',
+    async (sameLink) => {
+      const shared = path.join(root, 'shared-auth.json');
+      await fs.rename(source, shared);
+      const referent = await fs.stat(shared, { bigint: true });
+      const originalLink = referent.ino + 1n;
+      const links = new Map([[source, originalLink]]);
+      const linkIdentity = (file: unknown) => {
+        const ino = links.get(String(file));
+        if (ino === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        return ino;
+      };
+      vi.spyOn(fs, 'lstat').mockImplementation((async (file) => ({
+        ...referent,
+        ino: linkIdentity(file),
+      })) as typeof fs.lstat);
+      vi.spyOn(fs, 'stat').mockImplementation((async (file) => {
+        linkIdentity(file);
+        return referent;
+      }) as typeof fs.stat);
+      child(async () => {
+        links.delete(source);
+        // Both links resolve to exactly the same file, but only one is ours.
+        links.set(destination, sameLink ? originalLink : originalLink + 1n);
+        throw timeout();
+      });
+      const result = moveCodexAuthFile(source, destination);
+      if (sameLink) await expect(result).resolves.toBeUndefined();
+      else await expect(result).rejects.toMatchObject({ code: 'ETIMEDOUT' });
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+      expect(links.has(source)).toBe(false);
+      expect(links.get(destination)).toBe(sameLink ? originalLink : originalLink + 1n);
+      expect(await fs.readFile(shared, 'utf8')).toBe('fake-original-token');
+    },
+  );
+
   it('preserves a concurrently published destination instead of retrying', async () => {
     child(async () => {
       await fs.writeFile(destination, 'fake-concurrent-token');
