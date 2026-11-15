@@ -4398,7 +4398,9 @@
           "inline": "Executa em",
           "signInHere": "Fazer login neste computador",
           "writeFailed": "Não foi possível salvar onde este provedor é executado. Tente novamente."
-        }
+        },
+        "sameAccountConnections": "Conexões salvas desta conta",
+        "sameAccountConnectionsHint": "A conta aparece apenas uma vez. Escolher uma conexão altera apenas as configurações a gerenciar; as tarefas existentes mantêm sua conexão."
       },
       "detect": {
         "groupLabel": "Detectado neste dispositivo",
@@ -5423,6 +5425,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Compressão do Codex no servidor",
+        "description": "Quando ativada, prioriza a compressão no servidor. Quando desativada, o Codex usa o resumo local nativo, que continua chamando o modelo atual.",
+        "hint": "Aplica-se quando o Codex iniciar ou retomar uma tarefa neste computador. Os provedores sem compressão no servidor mantêm o comportamento atual.",
+        "loadFailed": "Não foi possível carregar as configurações de compressão do Codex",
+        "saveFailed": "Não foi possível salvar as configurações de compressão do Codex"
+      },
       "title": "Compactação de contexto",
       "description": "Ajuste aqui as taxas de compactação do Claude Code e do Pi. O Codex calcula seu limite a partir da configuração de contexto do modelo. Se a compactação remota falhar, ele muda automaticamente para a compactação por resumo e continua usando-a na tarefa atual.",
       "card": {
@@ -8289,9 +8298,9 @@
         "agentCompanionsDetail": "Pode ver todos os amigos, inclusive os que rodam nos seus outros computadores: nome, descrição, avatar, status (trabalhando, aguardando você, inativo, offline), o tipo de etapa em que cada um está (como pensando ou executando uma ferramenta), as solicitações que aguardam você do jeito que os cartões as mostram (perguntas, comandos a executar, planos) e a conversa recente do chat principal (até 50 das suas mensagens e das respostas deles, sem as etapas de ferramentas); e abrir a conversa de um amigo na janela principal. Com a permissão de entregar mensagens também, pode repassar as respostas que você der no plugin: responder perguntas, recusar solicitações e comentar planos. Para permitir uma etapa, você ainda clica na confirmação do próprio Cindy. Não pode ler arquivos, etapas de ferramentas nem raciocínios.",
         "agentCompanionsRequest": "Revisar permissão para ver amigos",
         "hostTools_history": "Histórico de tarefas",
-        "hostTools_historyDetail": "Usar as ferramentas da Cindy para listar tarefas existentes, ler mensagens completas e pesquisar o histórico, incluindo outros computadores acessíveis que você selecionar explicitamente.",
+        "hostTools_historyDetail": "Usar as ferramentas da Cindy para listar tarefas existentes, ler mensagens completas e pesquisar o histórico, incluindo outros computadores acessíveis que você selecionar explicitamente. Exportar tarefas locais em arquivos de formato nativo. Os plugins usam as permissões concedidas na instalação; as chamadas do Agent seguem suas próprias permissões em tempo de execução.",
         "hostTools_control": "Gerenciamento de tarefas",
-        "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes.",
+        "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes, e importar arquivos de tarefas em formato nativo neste computador.",
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. Operações que precisam da tarefa atual exigem um destino explícito.",
         "hostTools_settings": "Configurações do aplicativo",
@@ -8312,8 +8321,8 @@
         "hostTools_docsDetail": "Usar as ferramentas de documentos da Cindy no diretório privado deste plugin. Criar e converter documentos exige confirmação na Cindy.",
         "codeDetailHostServices": "As páginas do plugin continuam isoladas. Ferramentas autorizadas operam navegadores, computadores, conexões ou documentos conforme cada permissão.",
         "hostTools_storage": "Armazenamento e compartilhamento entre plugins",
-        "hostTools_storageDetail": "Usar o armazenamento, a Library e as mídias autorizadas deste plugin. A Cindy confirma a origem, o plugin destinatário e a cópia a cada compartilhamento. Não permite ler o armazenamento de outros plugins.",
-        "codeDetailStorage": "As operações se limitam aos dados deste plugin. Você confirma cada compartilhamento com outro plugin.",
+        "hostTools_storageDetail": "Usar o armazenamento, a Library e as mídias autorizadas deste plugin. O compartilhamento entrega uma cópia apenas entre plugins ativados que declarem storage e pertençam à mesma conta e organização. Não permite ler o armazenamento de outros plugins.",
+        "codeDetailStorage": "As operações se limitam aos dados deste plugin. O compartilhamento entrega cópias entre plugins ativados que declarem storage e pertençam à mesma conta e organização.",
         "storageShareTitle": "Entregar uma cópia a outro plugin",
         "storageShareMessage": "Copiar “{{file}}” ({{size}}) do plugin “{{name}}” para “{{target}}”. O destinatário recebe uma cópia independente; alterações da origem não são sincronizadas. Conteúdo já lido ou salvo não pode ser recuperado.",
         "hostTools_files": "Arquivos em diretórios autorizados",
@@ -9333,6 +9342,9 @@
         "failed": "Não foi possível concluir a limpeza",
         "pending": "Na fila"
       }
+    },
+    "navigation": {
+      "unavailable": "Não foi possível abrir as configurações do computador de destino. Verifique se está online e permite controle remoto; atualize o Cindy se estiver em uma versão antiga."
     }
   },
   "remoteDevice": {

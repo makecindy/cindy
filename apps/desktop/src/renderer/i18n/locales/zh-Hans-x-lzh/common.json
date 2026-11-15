@@ -4299,7 +4299,9 @@
           "inline": "运于",
           "signInHere": "于此机登门",
           "writeFailed": "运处未能存，请再试。"
-        }
+        },
+        "sameAccountConnections": "此账号已存之连线",
+        "sameAccountConnectionsHint": "同一账号仅列一项。择连线则切换所管设定；既有任务仍循原连线。"
       },
       "detect": {
         "groupLabel": "察得此机 CLI",
@@ -5322,6 +5324,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 服务器压缩",
+        "description": "启则优先于服务器压缩；闭则用 Codex 原生本地摘要，仍调用当前模型。",
+        "hint": "于本机下次启动或恢复 Codex 任务时生效。供应商不支持服务器压缩者，仍循原法。",
+        "loadFailed": "未能载入 Codex 压缩设置",
+        "saveFailed": "未能保存 Codex 压缩设置"
+      },
       "title": "前文缩略",
       "description": "Claude Code 与 Pi 之压缩比例于此调之。Codex 依模型所设之上下文上限，自调压缩门槛；远程压缩未成时，自改用摘要压缩，并于今之差事中持之。",
       "card": {
@@ -8160,9 +8169,9 @@
         "agentCompanionsDetail": "可观诸同伴（含行于君他机者）之名、简介、像与其状（方行、待君理、闲、离线），各同伴所行何类之事（如思虑、施器），待君理之请之文（问、将行之令、策，与对谈所见同），及其主对谈之近语（至多五十条，君之言与同伴之复，不含施器之程），并于主窗启同伴之对谈。兼得遣讯之许者，可将君于法器所予之答转致同伴：答问、却请、议策；许其行事，仍须君于 Cindy 自有之确框亲点。不能读卷，亦不见施器之程与思虑之文。",
         "agentCompanionsRequest": "确认观同伴之权柄",
         "hostTools_history": "任务往录",
-        "hostTools_historyDetail": "得循 Cindy 之器列既有任务、阅消息全文、索往录；明择且有权之他机亦可。",
+        "hostTools_historyDetail": "通过 Cindy 的任务工具查询已有任务、读取完整消息和搜索历史；可显式选择你有权访问的其他电脑。也可导出本机任务为原生文件。法器按安装授权调用；Agent 运行时遵循自身权限流程。",
         "hostTools_control": "任务治办",
-        "hostTools_controlDetail": "得循 Cindy 之器改、藏、复及治既有任务与项目。",
+        "hostTools_controlDetail": "得循 Cindy 之器改、藏、复及治既有任务与项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务传言",
         "hostTools_handoffDetail": "得循 Cindy 之器传消息于既有任务。需当前任务之境者，须明指任务。",
         "hostTools_settings": "应用设置",
@@ -8183,8 +8192,8 @@
         "hostTools_docsDetail": "得借 Cindy 文书之具，于本法器私有目录读写。制文、转式诸行，须 Cindy 请主人亲允。",
         "codeDetailHostServices": "法器页面仍隔离；获准之宿主工具，依各项所许，得御浏览器、本机、连接或文书。",
         "hostTools_storage": "存储与法器互享",
-        "hostTools_storageDetail": "得用本法器之存储、作品库与所许素材。每次互享，Cindy 明列来源、受者法器与副本，请主人亲允；不得窥他法器存储。",
-        "codeDetailStorage": "存储之行止于本法器资料；与他法器互享，每次须主人亲允。",
+        "hostTools_storageDetail": "得用本法器之存储、作品库与所许素材。互享须两器皆启用、皆声明 storage，且同账号、同组织，所交为副本；不得窥他法器存储。",
+        "codeDetailStorage": "存储之行止于本法器资料；互享须两器皆启用、皆声明 storage，且同账号、同组织，所交为副本。",
         "storageShareTitle": "交副本于他法器",
         "storageShareMessage": "将法器“{{name}}”之“{{file}}”（{{size}}）复制于法器“{{target}}”。受者得独立副本，原件后改不随之更。既阅或另存者，不可追回。",
         "hostTools_files": "亲许目录之文件",
@@ -9218,6 +9227,9 @@
         "failed": "回收未能毕",
         "pending": "已入队列"
       }
+    },
+    "navigation": {
+      "unavailable": "未能开启彼机设置。请验其在线且已允远控；版本旧则先更新 Cindy。"
     }
   },
   "remoteDevice": {

@@ -3,6 +3,7 @@ import { createCodexSpawnConfig, createCodexRoutingSignature } from './codexSpaw
 import { refreshCodexGatewayRuntime } from './codexGatewayRefresh.js';
 import { isReplacedCindyGatewayKey } from '../model-access/gatewayKeyRejection.js';
 import { refreshInstalledPluginApps } from '../cindy-brain/index.js';
+import { readCodexCompactionState } from './compaction-settings-store.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
 import { resolveHelperSurface } from '../mcp-integrations/helperSurface.js';
@@ -1931,6 +1932,7 @@ export function getMaker(): Maker {
       // Keep storage keys explicit; the record binding follows the token-reader callback.
       prepareCodexResumeSession: prepareCodexResumeSession,
       resolveCodexThreadStorage: resolveCodexThreadStorage,
+      getCodexServerCompactionPreference: () => readCodexCompactionState().value.serverEnabled,
       createCodexAuthTokenReader: (providerId) => {
         const owner = getActiveAppSession();
         const authRealm = getActiveAuthRealm();

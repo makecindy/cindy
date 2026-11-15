@@ -4398,7 +4398,9 @@
           "inline": "S’exécute sur",
           "signInHere": "Se connecter sur cet ordinateur",
           "writeFailed": "Impossible d’enregistrer l’emplacement d’exécution. Veuillez réessayer."
-        }
+        },
+        "sameAccountConnections": "Connexions enregistrées pour ce compte",
+        "sameAccountConnectionsHint": "Ce compte apparaît une seule fois. Choisir une connexion change uniquement les réglages à gérer ; les tâches existantes conservent leur connexion."
       },
       "detect": {
         "groupLabel": "Détecté sur cet appareil",
@@ -5423,6 +5425,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Compression de Codex sur le serveur",
+        "description": "Lorsque cette option est activée, la compression sur le serveur est privilégiée. Sinon, Codex utilise son résumé local natif, qui fait toujours appel au modèle actuel.",
+        "hint": "Ce réglage prend effet au prochain démarrage ou à la prochaine reprise d’une tâche Codex sur cet ordinateur. Les fournisseurs sans compression sur le serveur conservent leur fonctionnement.",
+        "loadFailed": "Impossible de charger les paramètres de compression de Codex",
+        "saveFailed": "Impossible d’enregistrer les paramètres de compression de Codex"
+      },
       "title": "Compaction du contexte",
       "description": "Réglez ici les ratios de compaction de Claude Code et de Pi. Codex calcule son seuil à partir du paramètre de contexte du modèle. Si la compaction distante échoue, il bascule automatiquement sur la compaction par résumé et continue de l'utiliser pour la tâche en cours.",
       "card": {
@@ -8289,9 +8298,9 @@
         "agentCompanionsDetail": "Peut voir tous les amis, y compris ceux qui s'exécutent sur vos autres ordinateurs : nom, description, avatar, état (au travail, en attente de votre réponse, inactif, hors ligne), le type d'étape en cours (réflexion, exécution d'un outil, etc.), les demandes qui vous attendent telles que leurs cartes les affichent (questions, commandes à exécuter, plans) et la conversation récente de leur discussion principale (jusqu’à 50 de vos messages et de leurs réponses, sans les étapes d’outils) ; et ouvrir la conversation d'un ami dans la fenêtre principale. Avec aussi l'autorisation de remettre des messages, il peut transmettre les réponses que vous donnez dans le plugin : répondre aux questions, refuser des demandes et commenter des plans. Pour autoriser une étape, vous cliquez toujours dans la confirmation propre à Cindy. Ne peut pas lire les fichiers, les étapes d’outils ni les réflexions.",
         "agentCompanionsRequest": "Vérifier l'autorisation de voir les amis",
         "hostTools_history": "Historique des tâches",
-        "hostTools_historyDetail": "Utiliser les outils de Cindy pour lister les tâches, lire les messages complets et rechercher dans l’historique, y compris sur vos autres ordinateurs accessibles et explicitement sélectionnés.",
+        "hostTools_historyDetail": "Utiliser les outils de Cindy pour lister les tâches, lire les messages complets et rechercher dans l’historique, y compris sur vos autres ordinateurs accessibles et explicitement sélectionnés. Exporter les tâches locales au format natif. Les plugins utilisent les autorisations accordées à l’installation ; les appels de l’Agent suivent ses propres règles d’autorisation à l’exécution.",
         "hostTools_control": "Gestion des tâches",
-        "hostTools_controlDetail": "Utiliser les outils de Cindy pour modifier, archiver, restaurer et contrôler les tâches et projets existants.",
+        "hostTools_controlDetail": "Utiliser les outils de Cindy pour modifier, archiver, restaurer et contrôler les tâches et projets existants, et importer des fichiers de tâches au format natif sur cet ordinateur.",
         "hostTools_handoff": "Messages aux tâches",
         "hostTools_handoffDetail": "Utiliser les outils de Cindy pour envoyer des messages aux tâches existantes. Une opération nécessitant le contexte de la tâche actuelle exige une cible explicite.",
         "hostTools_settings": "Paramètres de l’application",
@@ -8312,8 +8321,8 @@
         "hostTools_docsDetail": "Utiliser les outils de documents de Cindy dans le répertoire privé de ce plugin. La création et la conversion demandent une confirmation dans Cindy.",
         "codeDetailHostServices": "Les pages du plugin restent isolées. Les outils autorisés peuvent utiliser le navigateur, l’ordinateur, les connexions ou les documents selon chaque autorisation.",
         "hostTools_storage": "Stockage et partage entre plugins",
-        "hostTools_storageDetail": "Utiliser le stockage, la Library et les médias autorisés de ce plugin. Cindy confirme la source, le plugin destinataire et la copie à chaque partage. Le stockage des autres plugins reste inaccessible.",
-        "codeDetailStorage": "Les opérations restent limitées aux données de ce plugin. Vous confirmez chaque partage avec un autre plugin.",
+        "hostTools_storageDetail": "Utiliser le stockage, la Library et les médias autorisés de ce plugin. Le partage transmet une copie uniquement entre plugins activés qui déclarent storage et appartiennent au même compte et à la même organisation. Le stockage des autres plugins reste inaccessible.",
+        "codeDetailStorage": "Les opérations restent limitées aux données de ce plugin. Le partage transmet des copies entre plugins activés qui déclarent storage et appartiennent au même compte et à la même organisation.",
         "storageShareTitle": "Remettre une copie à un autre plugin",
         "storageShareMessage": "Copier « {{file}} » ({{size}}) du plugin « {{name}} » vers « {{target}} ». Le destinataire reçoit une copie indépendante ; les modifications de la source ne sont pas synchronisées. Le contenu déjà lu ou enregistré ne peut pas être repris.",
         "hostTools_files": "Fichiers des répertoires autorisés",
@@ -9333,6 +9342,9 @@
         "failed": "Le nettoyage n'a pas pu aboutir",
         "pending": "En file d'attente"
       }
+    },
+    "navigation": {
+      "unavailable": "Impossible d’ouvrir les paramètres de l’ordinateur cible. Vérifiez qu’il est en ligne et autorise le contrôle à distance ; mettez Cindy à jour si nécessaire."
     }
   },
   "remoteDevice": {

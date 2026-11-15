@@ -119,6 +119,19 @@ override 仍然优先。供应商／模型停用、退役、付费准入和凭�
 实现与回归：`apps/desktop/src/main/utility-model/directTextRoute.ts`、
 `__tests__/auxiliaryDirectRoutes.test.ts`、`__tests__/oneShotCandidates.test.ts`。
 
+### Codex 服务器压缩
+
+设置 → 个性化 → 上下文压缩提供一个开关，按本机 data owner 保存到
+`codex-compaction-settings.json`。默认 `serverEnabled: null` 保留原生选择与失败后的
+摘要回退；显式 `false` 对现有 OpenAI/Cindy Codex 远程压缩身份选择 `cindy_summary`，
+显式 `true` 允许已保存的摘要任务恢复服务器压缩。恢复默认删除 override。
+设置在本机 Codex 启动/恢复时读取，不打断正在运行的轮，不切模型、不改写历史。
+第三方供应商、SSH 和受托访客任务保持原策略。设备互联执行由执行端读取自己的设置；
+此本机设置不新增远程全局写权限。兼容旧宿主/缺省依赖时保留原行为。
+回归：`compaction-settings-store.test.ts`、Codex `index.test.ts` 的 native compaction
+identity / canonical account history 场景，以及
+`provider-compatibility.integration.test.ts` 的原生开关往返与历史保留验证。
+
 ## 3. 默认值演进与迁移
 
 ### 模型上下文与压缩（2026-10-27）

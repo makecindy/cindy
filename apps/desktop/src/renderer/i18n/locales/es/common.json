@@ -4398,7 +4398,9 @@
           "inline": "Se ejecuta en",
           "signInHere": "Iniciar sesión en esta computadora",
           "writeFailed": "No se pudo guardar dónde se ejecuta este proveedor. Inténtalo de nuevo."
-        }
+        },
+        "sameAccountConnections": "Conexiones guardadas de esta cuenta",
+        "sameAccountConnectionsHint": "La cuenta aparece una sola vez. Elegir una conexión solo cambia los ajustes que gestionas; las tareas existentes conservan su conexión."
       },
       "detect": {
         "groupLabel": "Detectado en este dispositivo",
@@ -5423,6 +5425,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Compresión de Codex en el servidor",
+        "description": "Si se activa, se prefiere la compresión en el servidor. Si se desactiva, Codex usa su resumen local nativo, que sigue llamando al modelo actual.",
+        "hint": "Se aplica la próxima vez que Codex inicie o reanude una tarea en este ordenador. Los proveedores sin compresión en el servidor mantienen su comportamiento.",
+        "loadFailed": "No se pudo cargar la configuración de compresión de Codex",
+        "saveFailed": "No se pudo guardar la configuración de compresión de Codex"
+      },
       "title": "Compactación de contexto",
       "description": "Ajusta aquí las proporciones de compactación de Claude Code y Pi. Codex calcula su umbral a partir de la configuración de contexto del modelo. Si falla la compactación remota, cambia automáticamente a compactación por resumen y la sigue usando en la tarea actual.",
       "card": {
@@ -8289,9 +8298,9 @@
         "agentCompanionsDetail": "Puede ver a todos los amigos, incluidos los que se ejecutan en tus otras computadoras: nombre, descripción, avatar, estado (trabajando, esperando tu respuesta, inactivo, sin conexión), el tipo de paso en el que está cada uno (como pensar o ejecutar una herramienta), las solicitudes que esperan tu respuesta tal como las muestran sus tarjetas (preguntas, comandos por ejecutar, planes) y la conversación reciente de su chat principal (hasta 50 de tus mensajes y sus respuestas, sin los pasos de herramientas); y abrir la conversación de un amigo en la ventana principal. Si también tiene el permiso para entregar mensajes, puede transmitir las respuestas que des en el complemento: responder preguntas, rechazar solicitudes y opinar sobre planes. Para permitir un paso, sigues haciendo clic en la confirmación propia de Cindy. No puede leer archivos, pasos de herramientas ni razonamientos.",
         "agentCompanionsRequest": "Revisar el permiso para ver amigos",
         "hostTools_history": "Historial de tareas",
-        "hostTools_historyDetail": "Usar las herramientas de Cindy para listar tareas existentes, leer mensajes completos y buscar en el historial, también en otros ordenadores accesibles que selecciones explícitamente.",
+        "hostTools_historyDetail": "Usar las herramientas de Cindy para listar tareas existentes, leer mensajes completos y buscar en el historial, también en otros ordenadores accesibles que selecciones explícitamente. Exportar tareas locales en archivos de formato nativo. Los complementos usan los permisos concedidos al instalarse; el Agent sigue sus propios permisos durante la ejecución.",
         "hostTools_control": "Gestión de tareas",
-        "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes.",
+        "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes, e importar archivos de tareas en formato nativo en este ordenador.",
         "hostTools_handoff": "Mensajes a tareas",
         "hostTools_handoffDetail": "Usar las herramientas de Cindy para enviar mensajes a tareas existentes. Las operaciones que necesitan una tarea actual requieren un destino explícito.",
         "hostTools_settings": "Ajustes de la aplicación",
@@ -8312,8 +8321,8 @@
         "hostTools_docsDetail": "Usar las herramientas de documentos de Cindy en el directorio privado de este complemento. Crear y convertir documentos requiere confirmación en Cindy.",
         "codeDetailHostServices": "Las páginas del complemento permanecen aisladas. Las herramientas autorizadas usan navegadores, equipos, conexiones o documentos según cada permiso.",
         "hostTools_storage": "Almacenamiento y uso compartido entre complementos",
-        "hostTools_storageDetail": "Usar el almacenamiento, la Library y los medios autorizados de este complemento. Cindy confirma el origen, el complemento destinatario y la copia en cada envío. No permite leer el almacenamiento de otros complementos.",
-        "codeDetailStorage": "Las operaciones se limitan a los datos de este complemento. Tú confirmas cada envío a otro complemento.",
+        "hostTools_storageDetail": "Usar el almacenamiento, la Library y los medios autorizados de este complemento. Solo se comparten copias entre complementos habilitados que declaren storage y pertenezcan a la misma cuenta y organización. No permite leer el almacenamiento de otros complementos.",
+        "codeDetailStorage": "Las operaciones se limitan a los datos de este complemento. Se entregan copias entre complementos habilitados que declaren storage y pertenezcan a la misma cuenta y organización.",
         "storageShareTitle": "Entregar una copia a otro complemento",
         "storageShareMessage": "Copiar «{{file}}» ({{size}}) del complemento «{{name}}» a «{{target}}». El destinatario recibe una copia independiente; los cambios del origen no se sincronizan. El contenido que ya haya leído o guardado no se puede recuperar.",
         "hostTools_files": "Archivos en directorios autorizados",
@@ -9333,6 +9342,9 @@
         "failed": "No se pudo completar la limpieza",
         "pending": "En cola"
       }
+    },
+    "navigation": {
+      "unavailable": "No se pudo abrir la configuración del equipo de destino. Comprueba que esté conectado y permita el control remoto; actualiza Cindy si usa una versión antigua."
     }
   },
   "remoteDevice": {

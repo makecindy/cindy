@@ -1,3 +1,5 @@
+import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
+import { sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy } from '@cindy/model-providers';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { SpeedIcon } from './SpeedIcon';
@@ -1460,15 +1462,18 @@ function ModelSelectorContentView({
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(catalogDeviceId);
+  const remoteDisable = useRemoteProviderDisable();
   // 远程 Agent 只能用那台电脑「允许被远程调用」的供应商(远程控制照常列全部,被控电脑上的任务
   // 浏览被控电脑自己的目录时也一样)。
   const remoteAgentBrowsing = remoteAgent !== undefined && remoteBrowse !== null;
   const remoteCatalogProviders = useMemo(
     () =>
       remoteAgentBrowsing
-        ? remoteAgentProviders(remoteProviders.providers)
+        ? remoteAgentProviders(remoteProviders.providers).filter(provider =>
+          !catalogDeviceId || !remoteDisable.isDisabled(catalogDeviceId, provider.id)
+            || (remoteAgentDeviceId === catalogDeviceId && currentProviderId === provider.id))
         : remoteProviders.providers.map(withEffectiveModelContextWindows),
-    [remoteAgentBrowsing, remoteProviders.providers],
+    [remoteAgentBrowsing, remoteProviders.providers, catalogDeviceId, remoteDisable, remoteAgentDeviceId, currentProviderId],
   );
   const sshCodexProviders = sshCodex?.providers;
   const sshCatalogProviders = useMemo(
@@ -1794,29 +1799,45 @@ function ModelSelectorContentView({
   const runLocationFold = useMemo(() => {
     const hiddenRemote = new Set<string>();
     const hiddenLocal = new Set<string>();
+    if (!homeDeviceId) for (const [id] of duplicateSubscriptionProviders(localProviders.providers.filter(provider => !localProviderGroups[provider.id]), unifiedIsVisible)) {
+      if (remoteAgentDeviceId || currentProviderId !== id) hiddenLocal.add(id);
+    }
     if (!remoteAgentDevices || homeDeviceId) return { hiddenRemote, hiddenLocal };
+    for (const device of remoteAgentDevices) {
+      if (isProviderShareAgentDeviceId(device.deviceId)) continue;
+      for (const provider of remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []) {
+        if (remoteDisable.isDisabled(device.deviceId, provider.id)
+          && !(remoteAgentDeviceId === device.deviceId && currentProviderId === provider.id))
+          hiddenRemote.add(remoteProviderEntryKey(device.deviceId, provider.id));
+      }
+    }
     for (const provider of localProviders.providers) {
-      if (localProviderGroups[provider.id]) continue;
+      if (localProviderGroups[provider.id] || provider.suspended || hiddenLocal.has(provider.id)) continue;
       const candidates = remoteAgentDevices.flatMap((device) => {
         if (isProviderShareAgentDeviceId(device.deviceId)) return [];
-        const offered = remoteDeviceCatalogs.get(device.deviceId)?.providers.find((entry) => entry.id === provider.id);
-        return offered?.connected && !offered.suspended && offered.remoteInvocationEnabled === true
-          && !(offered as { group?: unknown }).group
-          ? [{ deviceId: device.deviceId, name: device.name }]
-          : [];
+        return (remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []).filter(entry => entry.connected && !entry.suspended
+          && entry.remoteInvocationEnabled === true && !(entry as { group?: unknown }).group
+          && !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, entry.id))
+          && !remoteDisable.isDisabled(device.deviceId, entry.id) && sameRunLocationProvider(provider, entry))
+          .map(offered => ({ deviceId: device.deviceId, name: device.name, providerId: offered.id, provider: offered }));
       });
       if (candidates.length === 0) continue;
       const location = effectiveRunLocation(provider as typeof provider & { runLocation?: string }, candidates);
+      const preferred = candidates.find(candidate => candidate.deviceId === location);
+      const representative = preferred?.provider ?? provider;
+      const visibleAt = (deviceId?: string) => (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) => deviceId
+        ? isDeviceModelVisible(remoteDeviceCatalogs.get(deviceId)?.modelVisibilityOverrides, agent, providerId, model)
+        : isModelEnabled(agent, providerId, model);
       for (const candidate of candidates) {
-        const inUse = candidate.deviceId === remoteAgentDeviceId && provider.id === currentProviderId;
-        if (candidate.deviceId !== location && !inUse) hiddenRemote.add(remoteProviderEntryKey(candidate.deviceId, provider.id));
+        const inUse = candidate.deviceId === remoteAgentDeviceId && candidate.providerId === currentProviderId;
+        if (candidate !== preferred && !inUse && subscriptionModelsCoveredBy(candidate.provider, representative, visibleAt(candidate.deviceId), visibleAt(preferred?.deviceId))) hiddenRemote.add(remoteProviderEntryKey(candidate.deviceId, candidate.providerId));
       }
       const localInUse = !remoteAgentDeviceId && provider.id === currentProviderId;
-      if (location !== RUN_LOCATION_LOCAL && !localInUse) hiddenLocal.add(provider.id);
+      if (location !== RUN_LOCATION_LOCAL && !localInUse && subscriptionModelsCoveredBy(provider, representative, visibleAt(), visibleAt(preferred?.deviceId))) hiddenLocal.add(provider.id);
     }
     return { hiddenRemote, hiddenLocal };
   }, [remoteAgentDevices, homeDeviceId, localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
-    remoteAgentDeviceId, currentProviderId]);
+    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, unifiedIsVisible]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
@@ -1824,7 +1845,9 @@ function ModelSelectorContentView({
       // 只列那台电脑开了「允许被远程调用」的供应商；一个都没开的电脑整段不出现。
       const shared = catalog
         ? remoteAgentProviders(catalog.providers).filter(
-          (provider) => !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id)),
+          (provider) => !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id))
+            && (!remoteDisable.isDisabled(device.deviceId, provider.id)
+              || (remoteAgentDeviceId === device.deviceId && currentProviderId === provider.id)),
         )
         : [];
       if (!catalog || shared.length === 0) return [];
@@ -1843,7 +1866,7 @@ function ModelSelectorContentView({
         ? [{ deviceId: device.deviceId, providers: shared, providerIds, entries }]
         : [];
     });
-  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold]);
+  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold, remoteDisable, remoteAgentDeviceId, currentProviderId]);
   // 目录还在读或读取失败的其他电脑(分享不算):收藏区里它们的收藏置灰列出,不当作模型已下架。
   const remoteAgentUnavailableDeviceIds = useMemo(
     () =>

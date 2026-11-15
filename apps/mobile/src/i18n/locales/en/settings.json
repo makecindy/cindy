@@ -436,5 +436,8 @@
       "sendText": "Send entered text",
       "taskHint": "These shortcuts work on session pages. A key assigned to voice takes priority; releasing it keeps the text in the message box."
     }
+  },
+  "navigation": {
+    "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
   }
 }

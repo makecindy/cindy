@@ -4342,7 +4342,9 @@
           "inline": "Läuft auf",
           "signInHere": "Auf diesem Computer anmelden",
           "writeFailed": "Der Ausführungsort konnte nicht gespeichert werden. Bitte versuche es erneut."
-        }
+        },
+        "sameAccountConnections": "Gespeicherte Verbindungen für dieses Konto",
+        "sameAccountConnectionsHint": "Dieses Konto wird nur einmal angezeigt. Die Auswahl einer Verbindung ändert nur die verwalteten Einstellungen; bestehende Aufgaben behalten ihre Verbindung."
       },
       "detect": {
         "groupLabel": "Auf diesem Gerät erkannt",
@@ -5365,6 +5367,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex-Komprimierung auf dem Server",
+        "description": "Wenn aktiviert, wird die Komprimierung auf dem Server bevorzugt. Andernfalls nutzt Codex die native lokale Zusammenfassung, die weiterhin das aktuelle Modell aufruft.",
+        "hint": "Gilt beim nächsten Start oder Fortsetzen einer Codex-Aufgabe auf diesem Computer. Anbieter ohne Serverkomprimierung behalten ihr bisheriges Verhalten bei.",
+        "loadFailed": "Codex-Komprimierungseinstellungen konnten nicht geladen werden",
+        "saveFailed": "Codex-Komprimierungseinstellungen konnten nicht gespeichert werden"
+      },
       "title": "Kontextkomprimierung",
       "description": "Passe hier die Komprimierungsverhältnisse für Claude Code und Pi an. Codex leitet seinen Schwellenwert aus der Einstellung für den Modellkontext ab. Wenn die Remote-Komprimierung fehlschlägt, wechselt es automatisch zur Komprimierung per Zusammenfassung und nutzt diese für die aktuelle Aufgabe weiter.",
       "card": {
@@ -8217,9 +8226,9 @@
         "agentCompanionsDetail": "Kann alle Freunde sehen, auch die auf deinen anderen Computern: Name, Beschreibung, Avatar, Status (arbeitet, wartet auf dich, inaktiv, offline), die Art des aktuellen Schritts (etwa Nachdenken oder ein Tool ausführen), die Anfragen, die auf dich warten, so wie ihre Karten sie zeigen (Fragen, auszuführende Befehle, Pläne), und die letzten Nachrichten im Hauptchat (bis zu 50 deiner Nachrichten und ihrer Antworten, ohne Tool-Schritte); außerdem die Unterhaltung eines Freundes im Hauptfenster öffnen. Mit der Berechtigung zum Zustellen von Nachrichten kann es deine im Plugin gegebenen Antworten weitergeben: Fragen beantworten, Anfragen ablehnen und Feedback zu Plänen geben. Zum Erlauben eines Schritts klickst du weiterhin in Cindys eigener Bestätigung. Kann keine Dateien, Tool-Schritte oder Gedankengänge lesen.",
         "agentCompanionsRequest": "Berechtigung zum Anzeigen von Freunden prüfen",
         "hostTools_history": "Aufgabenverlauf",
-        "hostTools_historyDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben auflisten, vollständige Nachrichten lesen und den Verlauf durchsuchen, auch auf ausdrücklich ausgewählten, zugänglichen anderen Computern.",
+        "hostTools_historyDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben auflisten, vollständige Nachrichten lesen und den Verlauf durchsuchen, auch auf ausdrücklich ausgewählten, zugänglichen anderen Computern. Lokale Aufgaben im nativen Dateiformat exportieren. Plugins nutzen die bei der Installation erteilten Berechtigungen; Agent-Aufrufe folgen den eigenen Laufzeitberechtigungen.",
         "hostTools_control": "Aufgabenverwaltung",
-        "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern.",
+        "hostTools_controlDetail": "Mit Cindys Werkzeugen vorhandene Aufgaben und Projekte bearbeiten, archivieren, wiederherstellen und steuern sowie native Aufgabendateien auf diesem Computer importieren.",
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
         "hostTools_settings": "App-Einstellungen",
@@ -8240,8 +8249,8 @@
         "hostTools_docsDetail": "Cindys Dokumentwerkzeuge im privaten Verzeichnis dieses Plugins verwenden. Erstellen und Konvertieren erfordern Cindys Bestätigung.",
         "codeDetailHostServices": "Plugin-Seiten bleiben isoliert. Genehmigte Host-Werkzeuge bedienen Browser, Computer, Verbindungen oder Dokumente im Umfang der jeweiligen Berechtigung.",
         "hostTools_storage": "Speicher und Freigaben zwischen Plugins",
-        "hostTools_storageDetail": "Speicher, Library und freigegebene Medien dieses Plugins verwenden. Cindy bestätigt bei jeder Freigabe Quelle, Empfänger-Plugin und genaue Kopie. Speicher anderer Plugins kann nicht gelesen werden.",
-        "codeDetailStorage": "Speicheraktionen bleiben auf die Daten dieses Plugins beschränkt. Jede Freigabe an ein anderes Plugin bestätigst du selbst.",
+        "hostTools_storageDetail": "Speicher, Library und freigegebene Medien dieses Plugins verwenden. Kopien können nur zwischen aktivierten Plugins geteilt werden, die storage deklarieren und demselben Konto und derselben Organisation angehören. Speicher anderer Plugins kann nicht gelesen werden.",
+        "codeDetailStorage": "Speicheraktionen bleiben auf die Daten dieses Plugins beschränkt. Geteilt werden Kopien zwischen aktivierten Plugins, die storage deklarieren und demselben Konto und derselben Organisation angehören.",
         "storageShareTitle": "Kopie an ein anderes Plugin geben",
         "storageShareMessage": "„{{file}}“ ({{size}}) vom Plugin „{{name}}“ an „{{target}}“ kopieren. Der Empfänger erhält eine eigenständige Kopie; Änderungen der Quelle werden nicht synchronisiert. Bereits gelesene oder gespeicherte Inhalte lassen sich nicht zurückholen.",
         "hostTools_files": "Dateien in freigegebenen Verzeichnissen",
@@ -9261,6 +9270,9 @@
         "failed": "Bereinigung konnte nicht abgeschlossen werden",
         "pending": "In der Warteschlange"
       }
+    },
+    "navigation": {
+      "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
     }
   },
   "remoteDevice": {

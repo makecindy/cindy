@@ -4299,7 +4299,9 @@
           "inline": "執行於",
           "signInHere": "在這台電腦登入",
           "writeFailed": "「執行於」未能儲存，請重試"
-        }
+        },
+        "sameAccountConnections": "此帳號的已儲存連線",
+        "sameAccountConnectionsHint": "同一帳號只顯示一項。選擇連線僅切換要管理的設定，既有任務維持原連線。"
       },
       "detect": {
         "groupLabel": "偵測到本機 CLI",
@@ -5322,6 +5324,13 @@
       }
     },
     "compaction": {
+      "codex": {
+        "label": "Codex 伺服器壓縮",
+        "description": "開啟時優先使用伺服器壓縮；關閉後使用 Codex 原生本地摘要，仍會呼叫目前模型。",
+        "hint": "在這台電腦執行的 Codex 下次啟動或恢復任務時生效。不支援伺服器壓縮的供應商維持原有方式。",
+        "loadFailed": "無法讀取 Codex 壓縮設定",
+        "saveFailed": "儲存 Codex 壓縮設定失敗"
+      },
       "title": "上下文壓縮",
       "description": "Claude Code 和 Pi 的壓縮比例在此調整。Codex 隨模型設定的上下文上限自動調整壓縮門檻；遠端壓縮失敗時自動改用摘要壓縮，並在目前任務中保持。",
       "card": {
@@ -8174,9 +8183,9 @@
         "agentCompanionsDetail": "可查看所有夥伴（包括在你其他電腦上執行的夥伴）的名稱、簡介、頭像和狀態（工作中、等你處理、閒置、離線），每位夥伴正在做哪類事（如思考、執行工具），等你處理的請求內容（提問、要執行的指令、計畫，和對話裡看到的一樣），以及夥伴主對話裡最近的對話（最多 50 則你說的話和夥伴的回覆，不含工具過程），並在主視窗開啟夥伴的對話。同時獲准投遞訊息時，可以把你在插件裡給的回答交給夥伴：回答提問、拒絕請求、對計畫提意見；允許執行仍要你在 Cindy 自己的確認框裡點。無法讀取檔案，也看不到工具過程和思考內容。",
         "agentCompanionsRequest": "確認夥伴檢視權限",
         "hostTools_history": "任務歷史",
-        "hostTools_historyDetail": "透過 Cindy 的任務工具查詢現有任務、讀取完整訊息及搜尋歷史；可明確選擇你有權存取的其他電腦。",
+        "hostTools_historyDetail": "透過 Cindy 的任務工具查詢現有任務、讀取完整訊息及搜尋歷史；可明確選擇你有權存取的其他電腦。也可將本機任務匯出為原生檔案。插件依安裝授權呼叫；Agent 執行時遵循自身權限流程。",
         "hostTools_control": "任務管理",
-        "hostTools_controlDetail": "透過 Cindy 的任務工具修改、封存、還原及控制現有任務與專案。",
+        "hostTools_controlDetail": "透過 Cindy 的任務工具修改、封存、還原及控制現有任務與專案，並在本機匯入原生任務檔案。",
         "hostTools_handoff": "任務投遞",
         "hostTools_handoffDetail": "透過 Cindy 的任務工具向現有任務傳送訊息。需要目前任務情境的操作須明確指定任務。",
         "hostTools_settings": "應用程式設定",
@@ -8197,8 +8206,8 @@
         "hostTools_docsDetail": "使用 Cindy 的文件工具，在本插件私有目錄讀寫檔案。產生和轉換等操作由 Cindy 確認。",
         "codeDetailHostServices": "插件頁面保持隔離；獲准的宿主工具可操作瀏覽器、電腦、連線或文件，具體範圍見各項權限。",
         "hostTools_storage": "儲存與跨插件分享",
-        "hostTools_storageDetail": "使用本插件的儲存、作品庫和授權素材。每次分享由 Cindy 確認來源、目標插件和具體副本；不能讀取其他插件的儲存。",
-        "codeDetailStorage": "儲存操作只在本插件的資料範圍內執行；跨插件分享每次由你確認。",
+        "hostTools_storageDetail": "使用本插件的儲存、作品庫和授權素材。僅同帳號、同組織且雙方均已啟用並宣告 storage 的插件可分享副本；不能讀取其他插件的儲存。",
+        "codeDetailStorage": "儲存操作只在本插件的資料範圍內執行；分享要求雙方已啟用並宣告 storage、同帳號且同組織，交付為副本。",
         "storageShareTitle": "將副本交給其他插件",
         "storageShareMessage": "將插件「{{name}}」的「{{file}}」（{{size}}）複製給插件「{{target}}」。對方將取得獨立副本，來源檔案更新不會同步。對方已讀取或另存的內容無法收回。",
         "hostTools_files": "授權目錄檔案",
@@ -9218,6 +9227,9 @@
         "failed": "回收未能完成",
         "pending": "已排入佇列"
       }
+    },
+    "navigation": {
+      "unavailable": "無法開啟目標電腦的設定。請確認電腦在線上且已允許遠端控制；舊版本請先更新 Cindy。"
     }
   },
   "remoteDevice": {

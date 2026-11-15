@@ -762,9 +762,15 @@ it.each(['light', 'dark'])('keeps the live App mounted while entering and leavin
     expect(dialog.getAttribute('aria-label')).toBe('Live form');
     expect(showModal).toHaveBeenCalledOnce();
     expect(document.activeElement).toBe(dialog.querySelector('[data-exit-fullscreen]'));
+    // #10625: host drops the request.
+    const logToMain = vi.fn();
+    vi.stubGlobal('electronAPI', { logToMain });
+    state.controllers[0].displayMode.mockImplementationOnce(async () => { throw new Error('IPC_TIMEOUT'); });
     const cancel = new Event('cancel', { cancelable: true });
     await act(async () => { dialog.dispatchEvent(cancel); });
     expect(cancel.defaultPrevented).toBe(true);
+    await vi.waitFor(() => expect(logToMain).toHaveBeenCalledOnce());
+    expect(logToMain.mock.calls[0][2]).toContain('"stage":"exit-fullscreen"');
     expect(state.controllers[0].displayMode).toHaveBeenCalledWith('inline');
     expect(dialog.getAttribute('role')).toBe('region');
     expect(dialog.hasAttribute('aria-modal')).toBe(false);
@@ -773,6 +779,11 @@ it.each(['light', 'dark'])('keeps the live App mounted while entering and leavin
     expect(frame.contentWindow).toBe(appWindow);
     expect(state.controllers).toHaveLength(1);
     expect(state.controllers[0].close).not.toHaveBeenCalled();
+    await act(async () => state.controllers[0].message({
+      method: 'ui/notifications/host-context-changed', params: { displayMode: 'fullscreen' },
+    }));
+    await act(async () => state.controllers[0].message({ method: 'ui/notifications/sandbox-escape' }));
+    expect(dialog.getAttribute('role')).toBe('region');
     await act(async () => state.controllers[0].message({
       method: 'ui/notifications/host-context-changed', params: { displayMode: 'fullscreen' },
     }));
