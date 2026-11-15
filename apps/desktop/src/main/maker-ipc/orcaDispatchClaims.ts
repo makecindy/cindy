@@ -8,6 +8,8 @@
  * - 处置（action）：一条 Lead 至多唤醒一次、升级一次，且在真派发出现前保持静默。
  */
 
+import type { OrcaDispatchClaimFailure } from '../../shared/orcaDispatchReceipt.js';
+
 export type OrcaDispatchDelivery = 'direct' | 'queued';
 
 export interface LeadDispatchFact {
@@ -42,7 +44,7 @@ export type DispatchClaimVerdict =
   | { consistent: true }
   | {
       consistent: false;
-      reason: 'no-dispatch' | 'target-not-dispatched' | 'unknown-message-id';
+      reason: OrcaDispatchClaimFailure;
       /** 出问题的目标名或编号，用于文案与日志。 */
       detail: string;
     };
@@ -257,7 +259,7 @@ export function verifyDispatchClaim(
   return { consistent: true };
 }
 
-/** 卡片与唤醒文本共用的短原因，避免同一判定在别处再写一遍分支。 */
+/** 唤醒文本用的短原因；卡片正文走 i18n，不再复用这句英文。 */
 export function describeDispatchClaimVerdict(verdict: DispatchClaimVerdict): string {
   if (verdict.consistent) return '';
   switch (verdict.reason) {
@@ -298,25 +300,3 @@ export function resetDispatchClaimState(): void {
   ledgers.clear();
 }
 
-/** 升级卡是给主人看的：不能复用发给 Lead 的英文纠正句，要写清「谁说的、宿主查到什么、引文出自哪里」。 */
-export function buildDispatchClaimNoticeSummary(params: {
-  verdict: DispatchClaimVerdict;
-  targets: OrcaDispatchRosterEntry[];
-  quote: string;
-}): string {
-  const { verdict, targets, quote } = params;
-  const target = targets.map(entry => entry.label).join('、');
-  const claim = target ? `Lead 称已派给 ${target}` : 'Lead 称已派单';
-  const reason = verdict.consistent
-    ? ''
-    : verdict.reason === 'no-dispatch'
-      ? '但宿主这一轮没有接受任何派单'
-      : verdict.reason === 'target-not-dispatched'
-        ? `但宿主这一轮没有派往 ${verdict.detail} 的记录`
-        : `但引用的队列编号 ${verdict.detail} 不对应任何派单`;
-  const trimmedQuote = quote.length > 120 ? `${quote.slice(0, 120)}…` : quote;
-  return [
-    `${claim}${reason}；引文取自它这轮回复：「${trimmedQuote}」；`,
-    '已要求 Lead 重派。',
-  ].join('');
-}

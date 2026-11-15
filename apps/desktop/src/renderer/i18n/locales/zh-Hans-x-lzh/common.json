@@ -15133,7 +15133,15 @@
       "orcaDispatch": {
         "sent": "已遣往 {{worker}}",
         "queued": "已列於 {{worker}} 之隊",
-        "unverified": "遣單無據，待核"
+        "unverified": "遣單無據，待核",
+        "notice": {
+          "claim": "Lead 称已遣单",
+          "claimTarget": "Lead 称已遣往 {{target}}",
+          "noDispatch": "然宿未纳一单",
+          "notDispatched": "然宿无遣往 {{target}} 之记",
+          "unknownId": "然所引队号 {{id}} 无对应之单",
+          "body": "{{claim}}。{{reason}}。引文取自其此轮之覆：「{{quote}}」。已命 Lead 重遣。"
+        }
       },
       "help": {
         "title": "可用指令",

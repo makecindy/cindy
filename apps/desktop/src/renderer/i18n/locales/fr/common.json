@@ -15311,7 +15311,15 @@
       "orcaDispatch": {
         "sent": "Envoyé à {{worker}}",
         "queued": "En file pour {{worker}}",
-        "unverified": "Envoi non vérifié"
+        "unverified": "Envoi non vérifié",
+        "notice": {
+          "claim": "Le Lead affirme avoir envoyé",
+          "claimTarget": "Le Lead affirme avoir envoyé à {{target}}",
+          "noDispatch": "Mais l’hôte n’a accepté aucun envoi ce tour-ci",
+          "notDispatched": "Mais l’hôte n’a aucun envoi vers {{target}} enregistré ce tour-ci",
+          "unknownId": "Mais l’identifiant de file cité {{id}} ne correspond à aucun envoi",
+          "body": "{{claim}}. {{reason}}. Citation de sa réponse de ce tour-ci : «{{quote}}». Le Lead a été prié de renvoyer."
+        }
       },
       "help": {
         "title": "Commandes disponibles",

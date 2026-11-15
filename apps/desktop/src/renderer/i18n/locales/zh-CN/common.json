@@ -15142,7 +15142,15 @@
       "orcaDispatch": {
         "sent": "已派给 {{worker}}",
         "queued": "已排队给 {{worker}}",
-        "unverified": "派单未经核实"
+        "unverified": "派单未经核实",
+        "notice": {
+          "claim": "Lead 称已派单",
+          "claimTarget": "Lead 称已派给 {{target}}",
+          "noDispatch": "宿主这一轮没有接受任何派单",
+          "notDispatched": "宿主这一轮没有派往 {{target}} 的记录",
+          "unknownId": "引用的队列编号 {{id}} 不对应任何派单",
+          "body": "{{claim}}。{{reason}}。引文取自它这轮回复：「{{quote}}」。已要求 Lead 重派。"
+        }
       },
       "help": {
         "title": "可用命令",

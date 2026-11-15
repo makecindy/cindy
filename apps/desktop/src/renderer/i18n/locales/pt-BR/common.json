@@ -15311,7 +15311,15 @@
       "orcaDispatch": {
         "sent": "Enviado para {{worker}}",
         "queued": "Na fila para {{worker}}",
-        "unverified": "Envio não verificado"
+        "unverified": "Envio não verificado",
+        "notice": {
+          "claim": "O Lead diz ter enviado",
+          "claimTarget": "O Lead diz ter enviado para {{target}}",
+          "noDispatch": "Mas o host não aceitou nenhum envio neste turno",
+          "notDispatched": "Mas o host não tem envio para {{target}} registrado neste turno",
+          "unknownId": "Mas o id de fila citado {{id}} não corresponde a nenhum envio",
+          "body": "{{claim}}. {{reason}}. Citação da resposta deste turno: “{{quote}}”. O Lead foi solicitado a reenviar."
+        }
       },
       "help": {
         "title": "Comandos disponíveis",

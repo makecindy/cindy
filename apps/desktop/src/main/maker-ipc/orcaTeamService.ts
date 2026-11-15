@@ -17,7 +17,6 @@ import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 import {
   describeDispatchClaimVerdict,
   dispatchFactsForTurn,
-  buildDispatchClaimNoticeSummary,
   dropLeadDispatchFact,
   noteLeadDispatchFact,
   readDispatchClaim,
@@ -2402,16 +2401,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       return;
     }
 
+    // 升级只在主张与凭据不一致时发生（settle 的契约）；这里显式收窄，卡片才有原因可写。
+    if (verdict.consistent) return;
+
     // 升级不再开新 turn：只会在会话里落一张宿主纠正卡并提醒主人。
     deps.escalateDispatchClaim?.(params.leadSessionId, {
       state: 'unverified',
       version: 1,
-      summary: buildDispatchClaimNoticeSummary({
-        verdict,
-        targets: reading.targets,
-        quote: reading.quote,
-      }),
-      reason,
+      // 正文不在这里拼：同一行记录会在手机、其他语言界面上重读。
+      targets: reading.targets.map(entry => entry.label),
+      reason: verdict.reason,
+      detail: verdict.detail,
       quote: reading.quote,
       at: Date.now(),
     });

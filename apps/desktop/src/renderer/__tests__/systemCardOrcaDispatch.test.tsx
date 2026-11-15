@@ -79,26 +79,53 @@ describe('SystemCard orca-dispatch 行', () => {
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('升级卡保持多行、不可折叠', () => {
+  it('升级卡保持多行、不可折叠，正文按当前语言拼装', () => {
     render(
       <SystemCard
         cardType="orca-dispatch"
         data={{
           version: 1,
           state: 'unverified',
-          summary: '你说了已派给 developer，但本轮没有对应派发凭据',
-          reason: 'no-dispatch-fact',
-          quote: '已派给 developer',
+          targets: ['developer'],
+          reason: 'no-dispatch',
+          detail: '',
+          quote: '已派给 developer，接着做行值修复',
           at: 1,
         }}
       />,
     );
 
     expect(screen.queryByRole('button')).toBeNull();
-    const summary = screen.getByText('你说了已派给 developer，但本轮没有对应派发凭据');
+    const body = screen.getByText(/orcaDispatch\.notice\.body/);
+    // 主张与判定各自取自己的文案键，模板只负责把它们和引文接成一句。
+    expect(body.textContent).toContain('orcaDispatch.notice.claimTarget');
+    expect(body.textContent).toContain('orcaDispatch.notice.noDispatch');
+    expect(body.textContent).toContain('已派给 developer，接着做行值修复');
     // 升级卡与普通回执同一套行内节奏，只差颜色；区别是它不折叠、不截断。
-    expect(summary.className).toContain('whitespace-normal');
-    expect(summary.className).not.toContain('truncate');
+    expect(body.className).toContain('whitespace-normal');
+    expect(body.className).not.toContain('truncate');
     expect(screen.getByRole('note').className).toContain('px-2 py-[3px]');
+  });
+
+  it('升级卡把队列编号写进判定，过长引文截断', () => {
+    render(
+      <SystemCard
+        cardType="orca-dispatch"
+        data={{
+          version: 1,
+          state: 'unverified',
+          targets: [],
+          reason: 'unknown-message-id',
+          detail: '3f1a',
+          quote: 'x'.repeat(200),
+          at: 1,
+        }}
+      />,
+    );
+
+    const body = screen.getByText(/orcaDispatch\.notice\.body/);
+    expect(body.textContent).toContain('orcaDispatch.notice.unknownId');
+    expect(body.textContent).toContain('3f1a');
+    expect(body.textContent).not.toContain('x'.repeat(200));
   });
 });

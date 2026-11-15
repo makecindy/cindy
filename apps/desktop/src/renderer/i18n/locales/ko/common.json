@@ -15142,7 +15142,15 @@
       "orcaDispatch": {
         "sent": "{{worker}}에게 전달했습니다",
         "queued": "{{worker}}의 대기열에 추가했습니다",
-        "unverified": "발송이 확인되지 않았습니다"
+        "unverified": "발송이 확인되지 않았습니다",
+        "notice": {
+          "claim": "Lead가 발송했다고 밝혔습니다",
+          "claimTarget": "Lead가 {{target}}에 발송했다고 밝혔습니다",
+          "noDispatch": "하지만 호스트는 이번 턴에 어떤 발송도 받지 않았습니다",
+          "notDispatched": "하지만 호스트에는 이번 턴 {{target}}으로 보낸 기록이 없습니다",
+          "unknownId": "하지만 인용한 대기열 ID {{id}}와 맞는 발송이 없습니다",
+          "body": "{{claim}}. {{reason}}. 인용 출처는 이번 턴의 답변입니다: “{{quote}}”. Lead에 재발송을 요청했습니다."
+        }
       },
       "help": {
         "title": "사용 가능한 명령",

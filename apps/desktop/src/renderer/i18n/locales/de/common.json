@@ -15170,7 +15170,15 @@
       "orcaDispatch": {
         "sent": "An {{worker}} übergeben",
         "queued": "Für {{worker}} eingereiht",
-        "unverified": "Versand nicht bestätigt"
+        "unverified": "Versand nicht bestätigt",
+        "notice": {
+          "claim": "Laut Lead wurde versandt",
+          "claimTarget": "Laut Lead wurde an {{target}} versandt",
+          "noDispatch": "Der Host hat in diesem Turn keine Übergabe angenommen",
+          "notDispatched": "Der Host hat in diesem Turn keinen Versand an {{target}} verzeichnet",
+          "unknownId": "Die zitierte Queue-ID {{id}} gehört zu keinem Versand",
+          "body": "{{claim}}. {{reason}}. Zitat aus der Antwort dieses Turns: „{{quote}}“. Der Lead wurde um erneuten Versand gebeten."
+        }
       },
       "help": {
         "title": "Verfügbare Befehle",

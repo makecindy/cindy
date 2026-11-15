@@ -1,6 +1,7 @@
 import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
 import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
 import { isImportSourceId } from '../../../shared/sessionImport';
+import { ORCA_DISPATCH_CLAIM_QUOTE_MAX } from '../../../shared/orcaDispatchReceipt';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
@@ -1394,7 +1395,7 @@ function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
 }
 
 function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const unverified = data?.state === 'unverified';
   const worker =
     typeof data?.workerLabel === 'string' && data.workerLabel
@@ -1418,6 +1419,29 @@ function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
       : t('chat.systemCard.orcaDispatch.sent', { worker });
   // 升级卡是要人行动的结论，保持常显；普通回执是一行事实，点开看全文。
   if (unverified) {
+    // 正文按查看者当前语言拼：同一行记录会在手机、英文桌面上重读。
+    const labels = Array.isArray(data?.targets)
+      ? data.targets.filter((target): target is string => typeof target === 'string' && target !== '')
+      : [];
+    const detail = typeof data?.detail === 'string' ? data.detail : '';
+    const rawQuote = typeof data?.quote === 'string' ? data.quote : '';
+    const target = labels.length
+      ? new Intl.ListFormat(i18n.language || 'en', { style: 'long', type: 'conjunction' }).format(labels)
+      : '';
+    const claim = target
+      ? t('chat.systemCard.orcaDispatch.notice.claimTarget', { target })
+      : t('chat.systemCard.orcaDispatch.notice.claim');
+    const reason =
+      data?.reason === 'target-not-dispatched'
+        ? t('chat.systemCard.orcaDispatch.notice.notDispatched', { target: detail })
+        : data?.reason === 'unknown-message-id'
+          ? t('chat.systemCard.orcaDispatch.notice.unknownId', { id: detail })
+          : t('chat.systemCard.orcaDispatch.notice.noDispatch');
+    const quote =
+      rawQuote.length > ORCA_DISPATCH_CLAIM_QUOTE_MAX
+        ? `${rawQuote.slice(0, ORCA_DISPATCH_CLAIM_QUOTE_MAX - 1)}…`
+        : rawQuote;
+    const body = t('chat.systemCard.orcaDispatch.notice.body', { claim, reason, quote });
     return (
       <div
         className="flex w-full items-start gap-1.5 px-2 py-[3px]"
@@ -1425,19 +1449,15 @@ function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
         aria-label={label}
       >
         <span className="shrink-0 text-12 leading-[1.5] text-[var(--error-fg)]">{label}</span>
-        {summary && (
-          <>
-            <span aria-hidden className="shrink-0 text-12 leading-[1.5] text-[var(--text-tertiary)]">
-              ·
-            </span>
-            <span
-              className="min-w-0 whitespace-normal text-left text-12 leading-[1.5] text-[var(--text-secondary)]"
-              title={summary}
-            >
-              {summary}
-            </span>
-          </>
-        )}
+        <span aria-hidden className="shrink-0 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+          ·
+        </span>
+        <span
+          className="min-w-0 whitespace-normal text-left text-12 leading-[1.5] text-[var(--text-secondary)]"
+          title={body}
+        >
+          {body}
+        </span>
       </div>
     );
   }

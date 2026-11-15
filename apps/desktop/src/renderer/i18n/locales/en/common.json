@@ -15207,7 +15207,15 @@
       "orcaDispatch": {
         "sent": "Dispatched to {{worker}}",
         "queued": "Queued for {{worker}}",
-        "unverified": "Dispatch not verified"
+        "unverified": "Dispatch not verified",
+        "notice": {
+          "claim": "Lead said it dispatched",
+          "claimTarget": "Lead said it dispatched to {{target}}",
+          "noDispatch": "The host accepted no dispatch this turn",
+          "notDispatched": "The host has no record of dispatching to {{target}} this turn",
+          "unknownId": "The queued message id {{id}} matches no dispatch",
+          "body": "{{claim}}. {{reason}}. Quoted from its reply this turn: “{{quote}}”. Lead has been asked to re-dispatch."
+        }
       },
       "help": {
         "title": "Available Commands",

@@ -22,6 +22,12 @@ describe('buildOrcaDispatchReceiptSummary', () => {
     expect(summary).toBe('三个症状一个根 改判值写进了总分，没写进 marks。 先验证，再改：见 设计说明。');
   });
 
+  it('keeps filenames inside inline code intact', () => {
+    const summary = buildOrcaDispatchReceiptSummary('修 `pkg/__init__.py` 与 `a*b*c` 两处');
+
+    expect(summary).toBe('修 pkg/__init__.py 与 a*b*c 两处');
+  });
+
   it('keeps bare asterisks and list markers out while collapsing whitespace', () => {
     const summary = buildOrcaDispatchReceiptSummary('- 第一项\n- 第二项\n\n> 引用一句');
 
