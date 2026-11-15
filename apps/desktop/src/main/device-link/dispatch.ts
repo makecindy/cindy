@@ -12,6 +12,8 @@ import { encodeMessageBodies, versionMessageBody } from './sessionMessageReuse.j
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
   AGENT_NET_SWITCH_CHANNEL,
+  DL_SESSION_ARCHIVE_GET_CHANNEL,
+  DL_SESSION_ARCHIVE_SET_CHANNEL,
   FILE_PEER_CHANNEL,
   REMOTE_AGENT_CHANNEL,
   SETUP_SNAPSHOT_CHANNEL,
@@ -458,6 +460,10 @@ export interface InboundDispatchPorts {
   noteControllerAccessAllowed: typeof noteControllerAccessAllowed;
   noteControllerAccessDenied: typeof noteControllerAccessDenied;
   syncRemoteControlAccessGeneration: typeof syncRemoteControlAccessGeneration;
+  remoteControlAccessGeneration: () => number;
+  deviceAccessGeneration: (deviceId: string) => number;
+  executeRemoteSessionArchive: typeof import('../task-management/remoteArchive.js').executeRemoteSessionArchive;
+  revalidateRemoteArchiveReply: (channel: string, reply: unknown) => Promise<unknown>;
   requestPluginOauth?: typeof requestPluginOauth;
   invalidatePluginOauth?: typeof invalidatePluginOauth;
   dispatchLocalInvoke: typeof dispatchLocalInvoke;
@@ -516,6 +522,10 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     noteControllerAccessAllowed,
     noteControllerAccessDenied,
     syncRemoteControlAccessGeneration,
+    remoteControlAccessGeneration,
+    deviceAccessGeneration,
+    executeRemoteSessionArchive,
+    revalidateRemoteArchiveReply,
     requestPluginOauth = unavailable('requestPluginOauth'),
     invalidatePluginOauth,
     dispatchLocalInvoke,
@@ -3830,6 +3840,9 @@ async function authorizeRemoteBotResult(
     if (!result.ok) return result;
     try {
       await assertRemoteBotInvocationAllowed(args ?? [], channel);
+      if (channel && isRemoteArchiveInvoke(channel)) {
+        return { ok: true, result: await revalidateRemoteArchiveReply(channel, result.result) };
+      }
       return {
         ok: true,
         result: await projectRemoteSessionResult(
@@ -3913,7 +3926,10 @@ function sendInvokeResultSafe(
   // 不能把缓存留在原始大对象上，否则缓存可能自淘汰且重复 requestId 会再次执行。
   // 远程 Agent 的每个 op 自带幂等(poll 按游标、其余按各自 id 去重)，高频的事件流结果不进
   // 全局去重缓存，免得冲掉其它控制端非幂等调用的去重记录。
-  if (fingerprint !== undefined && channel !== REMOTE_AGENT_CHANNEL && channel !== PROVIDER_SHARE_INSIGHTS_CHANNEL) {
+  // Archive queries must read the current task and mutations already have a durable
+  // receipt. Reconnect never needs a cached projection from an older task instance.
+  if (fingerprint !== undefined && !isRemoteArchiveInvoke(channel) &&
+      channel !== REMOTE_AGENT_CHANNEL && channel !== PROVIDER_SHARE_INSIGHTS_CHANNEL) {
     rememberRemoteInvokeResult(key, fingerprint, attempt.result);
   }
   if (attempt.sent) {
@@ -5034,6 +5050,10 @@ async function abortProviderShareReshareRuns(
   await remoteAgentHandler?.abortReshare?.((controller) => isProviderSharePeer(controller) && match(controller), reshareKey);
 }
 
+function isRemoteArchiveInvoke(channel: string | undefined): boolean {
+  return channel === DL_SESSION_ARCHIVE_GET_CHANNEL || channel === DL_SESSION_ARCHIVE_SET_CHANNEL;
+}
+
 async function runAuthorizedInvoke(
   src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming,
 ): Promise<InvokeResultPayload> {
@@ -5357,6 +5377,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     }
   }
 
+  const isArchive = isRemoteArchiveInvoke(payload.channel);
+  const accessGeneration = isArchive ? remoteControlAccessGeneration() : 0;
+  const controllerGeneration = isArchive ? deviceAccessGeneration(src) : 0;
   let handlerCompleted = false;
   try {
     let args = payload.args ?? [];
@@ -5427,7 +5450,23 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
       () =>
-          payload.channel === 'maker:turn-change-set:apply'
+          isArchive
+            ? (async () => {
+                if (!ordinaryPeer || !hasRemoteBotSessionLookup()) {
+                  throw new Error('[NOT_FOUND] Session does not exist');
+                }
+                return executeRemoteSessionArchive(payload.channel, args, invocationOwner, async () => {
+                  await assertRemoteBotInvocationAllowed(args, payload.channel);
+                  if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) {
+                    throw new Error('[NOT_FOUND] Session does not exist');
+                  }
+                  if (!readDeviceLinkSettings().remoteControlEnabled || isControllerRevoked(src) || !isSameAccountController(src) ||
+                      accessGeneration !== remoteControlAccessGeneration() || controllerGeneration !== deviceAccessGeneration(src)) {
+                    throw new Error('[ACCESS_REVOKED] Remote control is no longer allowed');
+                  }
+                });
+              })()
+            : payload.channel === 'maker:turn-change-set:apply'
             ? (() => {
                 if (!remoteTurnChangeAction) throw new Error('[UNSUPPORTED_CAPABILITY] Turn restore is unavailable');
                 return remoteTurnChangeAction(args[0], args[1], args[2], async () => {

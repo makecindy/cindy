@@ -16,6 +16,8 @@ import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   DL_SUBSCRIBE_CHANNEL,
+  DL_SESSION_ARCHIVE_GET_CHANNEL,
+  DL_SESSION_ARCHIVE_SET_CHANNEL,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   type InvokeResultPayload,
@@ -47,6 +49,12 @@ const deviceLinkSettings = vi.hoisted(() => ({
   },
 }));
 
+const remoteSessionArchive = vi.hoisted(() => vi.fn());
+vi.mock('../../task-management/remoteArchive.js', () => ({
+  executeRemoteSessionArchive: remoteSessionArchive,
+  revalidateRemoteArchiveReply: (_channel: string, reply: unknown) => Promise.resolve(reply),
+}));
+
 vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
@@ -56,6 +64,7 @@ import { __testing as registry } from '../invoke-registry';
 import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 import { currentDbRpcAdmissionClass } from '../../localDb/client/rpcAdmission';
 import { getDeviceLinkInvokeContext } from '../invoke-context';
+import { bumpDeviceAccessGeneration } from '../remoteControlAccess';
 import { HistoryViewController, type HistoryViewPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import * as subscriptions from '../subscriptions';
 import { setHistoryWorkPageReader } from '../historyViewPush';
@@ -1495,6 +1504,56 @@ it('lets a controller fall back to individual reads when a detail batch exceeds 
   });
 });
 
+
+describe('remote archive dispatch', () => {
+  it('keeps a committed receipt in the reliable outbox after send backpressure', async () => {
+    setRemoteBotSessionLookup(async () => 'ordinary');
+    const client = mkClient();
+    wireInboundDispatch(client as never);
+    const result = { ok: true as const, result: { version: 1, sessionId: 'task', operationId: 'operation',
+      instance: '', revision: 1, archived: true } };
+    client.sendInvokeResult.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    expect(__testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'archive-receipt',
+      result, DL_SESSION_ARCHIVE_SET_CHANNEL, ['task'], 'archive-fingerprint')).toBe(true);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+    __testing.flushRemoteInvokeResultOutbox();
+    await vi.waitFor(() => expect(__testing.remoteInvokeResultOutboxSize()).toBe(0));
+    expect(client.sendInvokeResult.mock.calls.at(-1)?.[2]).toEqual(result);
+  });
+
+  it('checks target visibility before a receipt read and preserves the authenticated controller', async () => {
+    remoteSessionArchive.mockReset();
+    setRemoteBotSessionLookup(async (id) => id === 'hidden' ? 'hidden' : 'ordinary');
+    remoteSessionArchive.mockImplementation(async () => ({
+      version: 1,
+      controllerId: getDeviceLinkInvokeContext()?.controllerDeviceId,
+    }));
+    await expect(runInvoke('controller', {
+      channel: DL_SESSION_ARCHIVE_GET_CHANNEL, args: ['hidden'],
+    })).resolves.toMatchObject({ ok: false });
+    expect(remoteSessionArchive).not.toHaveBeenCalled();
+    await expect(runInvoke('controller', {
+      channel: DL_SESSION_ARCHIVE_GET_CHANNEL, args: ['visible', { operationId: 'operation' }],
+    })).resolves.toMatchObject({ ok: true, result: { version: 1, controllerId: 'controller' } });
+  });
+
+  it.each([false, true])('rejects revocation while waiting for its lock (access restored=%s)', async restored => {
+    remoteSessionArchive.mockReset();
+    setRemoteBotSessionLookup(async () => 'ordinary');
+    const mutate = vi.fn();
+    remoteSessionArchive.mockImplementation(async (_channel, _args, _scope, beforeWrite) => {
+      deviceLinkSettings.value.revokedControllers = ['controller'];
+      bumpDeviceAccessGeneration('controller');
+      if (restored) deviceLinkSettings.value.revokedControllers = [];
+      await beforeWrite();
+      mutate();
+    });
+    await expect(runInvoke('controller', {
+      channel: DL_SESSION_ARCHIVE_SET_CHANNEL, args: ['visible', { operationId: 'operation' }],
+    })).resolves.toMatchObject({ ok: false });
+    expect(mutate).not.toHaveBeenCalled();
+  });
+});
 
 describe('remote recorded-turn actions', () => {
   const channel = 'maker:turn-change-set:apply';

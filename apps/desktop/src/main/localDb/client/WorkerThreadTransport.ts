@@ -1,6 +1,7 @@
 import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
+import { setRemoteSessionArchive } from '../worker/opHandlers/sessionArchiveTx.js';
 import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
 import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
@@ -9,7 +10,7 @@ import { recordPiUsage } from '../worker/opHandlers/piUsageTx.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
-import { IDLE_ARCHIVE_GUARD_SQL } from '../../task-management/eligibility.js';
+import { IDLE_ARCHIVE_GUARD_SQL, REMOTE_ARCHIVE_GUARD_SQL } from '../../task-management/eligibility.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -41,6 +42,8 @@ const readAutoReviewProjection = ${readAutoReviewProjection.toString()};
 const batchAutoReviewProjection = ${batchAutoReviewProjection.toString()};
 const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
 const IDLE_ARCHIVE_GUARD_SQL = ${JSON.stringify(IDLE_ARCHIVE_GUARD_SQL)};
+const REMOTE_ARCHIVE_GUARD_SQL = ${JSON.stringify(REMOTE_ARCHIVE_GUARD_SQL)};
+const setRemoteSessionArchive = ${setRemoteSessionArchive.toString()};
 const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
@@ -485,6 +488,8 @@ function dispatchTransaction(readyDb, payload) {
       return sessionsRenameTitles(readyDb, request.args);
     case 'sessions.setStatus':
       return sessionsSetStatus(readyDb, request.args);
+    case 'sessions.setRemoteArchive':
+      return setRemoteSessionArchive(readyDb, request.args, REMOTE_ARCHIVE_GUARD_SQL);
     case 'sessions.setTerminalStatus':
       return sessionsSetTerminalStatus(readyDb, request.args);
     case 'recentWorkdirs.mergeWindowsIdentity':

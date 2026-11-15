@@ -11,7 +11,7 @@ import { app } from 'electron';
 import { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { readDeviceLinkSettings } from './settings-store.desktop';
-import { noteControllerAccessAllowed, noteControllerAccessDenied, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
+import { noteControllerAccessAllowed, noteControllerAccessDenied, syncRemoteControlAccessGeneration, remoteControlAccessGeneration, deviceAccessGeneration } from './remoteControlAccess.js';
 import { requestPluginOauth, invalidatePluginOauth } from '../plugin-oauth/runtime.js';
 import { dispatchLocalInvoke } from './invoke-registry';
 import {
@@ -134,6 +134,12 @@ export const {
   noteControllerAccessAllowed,
   noteControllerAccessDenied,
   syncRemoteControlAccessGeneration,
+  remoteControlAccessGeneration,
+  deviceAccessGeneration,
+  executeRemoteSessionArchive: async (...args) =>
+    (await import('../task-management/remoteArchive.js')).executeRemoteSessionArchive(...args),
+  revalidateRemoteArchiveReply: async (...args) =>
+    (await import('../task-management/remoteArchive.js')).revalidateRemoteArchiveReply(...args),
   requestPluginOauth: (...args) => requestPluginOauth(...args),
   invalidatePluginOauth: (...args) => invalidatePluginOauth(...args),
   dispatchLocalInvoke,

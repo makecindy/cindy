@@ -423,6 +423,66 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
+  it.each([false, true])('persists remote archive with its exact receipt (inline=%s)', async useInlineWorker => {
+    await withClient(async (client, reopen) => {
+      await client.exec('ALTER TABLE sessions ADD COLUMN last_activity_at INTEGER');
+      await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
+      await client.exec('ALTER TABLE sessions ADD COLUMN worktree_path TEXT');
+      await client.exec('ALTER TABLE sessions ADD COLUMN orca_remote_lead TEXT');
+      await client.exec('CREATE TABLE schedules (target_session_id TEXT, status TEXT)');
+      await client.exec('CREATE TABLE session_goals (session_id TEXT, status TEXT)');
+      await client.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT)');
+      await client.exec('CREATE TABLE bot_session_links (session_id TEXT)');
+      const migration = fs.readFileSync(path.resolve('drizzle/0150_device_link_session_archive.sql'), 'utf8');
+      for (const statement of migration.split('--> statement-breakpoint')) await client.exec(statement);
+      await seedSession(client, 'task', { source: 'desktop', status: 'active' });
+      const state = async (db: DbClient) => db.queryOne<{ status: string; instance: string; revision: number; workingDir: string | null; restoredAt: number | null }>(
+        "SELECT status, archive_instance AS instance, archive_revision AS revision, working_dir AS workingDir, remote_restored_at AS restoredAt FROM sessions WHERE id = 'task'",
+      );
+      const initial = (await state(client))!;
+      const request = {
+        sessionId: 'task', controllerId: 'controller-a', operationId: 'operation-a',
+        expected: { instance: initial.instance, revision: initial.revision }, archived: true, workingDir: initial.workingDir,
+      };
+      const set = (patch: Partial<typeof request> = {}) => client.tx('sessions.setRemoteArchive', { ...request, ...patch });
+      await client.exec("INSERT INTO agent_input_queue_snapshots VALUES ('task', '[{}]')");
+      await expect(set()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await client.exec('DELETE FROM agent_input_queue_snapshots');
+      await client.exec("CREATE TRIGGER fail_archive_receipt BEFORE INSERT ON session_archive_receipts BEGIN SELECT RAISE(ABORT, 'receipt failure'); END");
+      await expect(set()).rejects.toThrow('receipt failure');
+      await expect(state(client)).resolves.toEqual(initial);
+      await expect(client.query('SELECT * FROM session_archive_receipts')).resolves.toEqual([]);
+
+      await client.exec('DROP TRIGGER fail_archive_receipt');
+      const receipt = { sessionId: 'task', operationId: 'operation-a', instance: initial.instance, revision: 1, archived: true };
+      await expect(set()).resolves.toEqual({ applied: true, receipt });
+      const restarted = await reopen();
+      await expect(state(restarted)).resolves.toMatchObject({ status: 'archived', revision: 1, restoredAt: null });
+      const restore = { ...request, operationId: 'restore', archived: false, expected: { instance: initial.instance, revision: 1 } };
+      await restarted.exec("CREATE TRIGGER fail_restore_receipt BEFORE INSERT ON session_archive_receipts BEGIN SELECT RAISE(ABORT, 'receipt failure'); END");
+      await expect(restarted.tx('sessions.setRemoteArchive', restore)).rejects.toThrow('receipt failure');
+      await expect(state(restarted)).resolves.toMatchObject({ status: 'archived', revision: 1, restoredAt: null });
+      await restarted.exec('DROP TRIGGER fail_restore_receipt');
+      await expect(restarted.tx('sessions.setRemoteArchive', restore)).resolves.toMatchObject({
+        applied: true, receipt: { operationId: 'restore', archived: false, revision: 2 },
+      });
+      await restarted.tx('sessions.setStatus', { sessionIds: ['task'], status: 'archived' });
+      await expect(restarted.tx('sessions.setRemoteArchive', request)).resolves.toEqual({ applied: false, receipt });
+      await expect(state(restarted)).resolves.toMatchObject({ status: 'archived', revision: 3, restoredAt: expect.any(Number) });
+      await expect(restarted.tx('sessions.setRemoteArchive', { ...request, controllerId: 'controller-b' }))
+        .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await expect(restarted.tx('sessions.setRemoteArchive', {
+        ...request, archived: false, expected: { instance: initial.instance, revision: 2 },
+      })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+
+      await restarted.exec("DELETE FROM sessions WHERE id = 'task'");
+      await seedSession(restarted, 'task', { source: 'desktop', status: 'active' });
+      await expect(state(restarted)).resolves.not.toMatchObject({ instance: initial.instance });
+      await expect(restarted.tx('sessions.setRemoteArchive', { ...request, operationId: 'operation-b' }))
+        .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    }, { useInlineWorker });
+  });
+
   afterAll(() => {
     if (workerBundleDir) {
       fs.rmSync(workerBundleDir, { recursive: true, force: true });

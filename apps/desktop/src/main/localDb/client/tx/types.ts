@@ -30,6 +30,7 @@ export type DbTxName =
   | 'sessions.renameTitles'
   | 'sessions.setStatus'
   | 'sessions.setTerminalStatus'
+  | 'sessions.setRemoteArchive'
   | 'recentWorkdirs.mergeWindowsIdentity'
   | 'recentWorkdirs.removeWindowsIdentity'
   | 'projectAliases.replaceIdentity'
@@ -366,6 +367,31 @@ export interface SessionsSetStatusArgs {
   sessionIds: string[];
   status: 'active' | 'archived';
   closeSharedTasks?: boolean;
+}
+
+export interface SessionArchiveVersion {
+  instance: string;
+  revision: number;
+}
+
+export interface SessionArchiveReceipt extends SessionArchiveVersion {
+  operationId: string;
+  sessionId: string;
+  archived: boolean;
+}
+
+export interface SessionsSetRemoteArchiveArgs {
+  sessionId: string;
+  controllerId: string;
+  operationId: string;
+  expected: SessionArchiveVersion;
+  workingDir: string | null;
+  archived: boolean;
+}
+
+export interface SessionsSetRemoteArchiveResult {
+  receipt: SessionArchiveReceipt;
+  applied: boolean;
 }
 
 export interface SessionsSetTerminalStatusArgs {
@@ -1353,6 +1379,7 @@ export type DbTxArgsByName = {
   'sessions.renameTitles': SessionsRenameTitlesArgs;
   'sessions.setStatus': SessionsSetStatusArgs;
   'sessions.setTerminalStatus': SessionsSetTerminalStatusArgs;
+  'sessions.setRemoteArchive': SessionsSetRemoteArchiveArgs;
   'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
   'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
   'pluginUsage.execute': PluginUsageTransaction;
@@ -1449,6 +1476,7 @@ export type DbTxResultByName = {
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
   'sessions.setTerminalStatus': SessionsSetTerminalStatusResult;
+  'sessions.setRemoteArchive': SessionsSetRemoteArchiveResult;
   'recentWorkdirs.mergeWindowsIdentity': undefined;
   'recentWorkdirs.removeWindowsIdentity': { changes: number };
   'pluginUsage.execute': PluginUsageHandle | null;
