@@ -183,7 +183,7 @@ export function buildRegistry(
     // 原引用透传零分配 —— PR #744 review)。前缀误命中(如 'a:' 命中 'a:b:model')只
     // 多做一次无害映射,不影响正确性。
     let models = p.models;
-    let mediaOverrides: Pick<Provider, 'imageModels' | 'videoModels' | 'audioModels' | 'embeddingModels'> = {};
+    let mediaOverrides: Pick<Provider, 'imageModels' | 'videoModels' | 'audioModels' | 'embeddingModels' | 'evaluationModels'> = {};
     if (disabledKeys.length > 0 && disabledKeys.some((k) => k.startsWith(`${p.id}:`))) {
       const mapped: Provider['models'] = {};
       for (const agent of Object.keys(p.models) as AgentKind[]) {
@@ -203,6 +203,7 @@ export function buildRegistry(
         ...(p.imageModels ? { imageModels: mapMedia(p.imageModels) } : {}),
         ...(p.videoModels ? { videoModels: mapMedia(p.videoModels) } : {}),
         ...(p.audioModels ? { audioModels: mapMedia(p.audioModels) } : {}),
+        ...(p.evaluationModels ? { evaluationModels: mapMedia(p.evaluationModels) } : {}),
         ...(p.embeddingModels ? { embeddingModels: mapMedia(p.embeddingModels) } : {}),
       };
     }

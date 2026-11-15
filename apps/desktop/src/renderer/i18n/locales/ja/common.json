@@ -8150,6 +8150,8 @@
         "cindyTextOneshot": "Cindy のクイックチャンネルに質問してテキスト回答を受け取れます",
         "cindyTextOneshotDetail": "システムの軽量タスクモデルチェーン(自動タイトルと同じ経路)を使用します。Agent は使わず、ファイルにもアクセスしません。モデル料金が発生する場合があります。",
         "cindyEmbedText": "テキストをベクトルに変換できます（意味検索用）",
+        "cindyModelsDecisions": "意思決定モデルを呼び出せます（モデル利用枠を使用）",
+        "cindyModelsRerank": "リランキングモデルを呼び出せます（モデル利用枠を使用）",
         "cindyEmbedTextDetail": "テキストはシステムのベクトルモデルに送られて数値列に変換されます。1 回あたり最大 {{max}} 件で、モデル料金が発生する場合があります。生成されたベクトルはプラグインだけが保持し、あなたのライブラリには書き込まれません。",
         "cindySearchWeb": "Cindy AI で公開ウェブを検索できます",
         "cindySearchWebDetail": "検索では公開ウェブにアクセスし、Cindy AI のクォータを消費する場合があります。",
@@ -9331,6 +9333,7 @@
     "backToLogin": "ログイン方法に戻る"
   },
   "login": {
+    "networkResponseHint": "ログインサービスから想定外の応答が返されました。ネットワークの中継機器やプロキシがリクエストを遮断している可能性があります。ネットワークとプロキシの設定を確認してください。",
     "title": "Cindy へようこそ",
     "subtitle": "安全なログイン方法を選択してください",
     "savedLoginPreserved": "復旧操作で保存済みのログイン情報は削除しません",
@@ -13879,6 +13882,7 @@
         "realtime": "リアルタイム音声",
         "embedding": "埋め込み",
         "decision": "意思決定",
+        "rerank": "リランキング",
         "compression": "圧縮",
         "ungrouped": "未分類",
         "other": "その他"
@@ -17141,9 +17145,8 @@
         "automatic": "自動",
         "manually": "手動",
         "session": "セッション",
-        "silentRun": "確認で変化がなければ通知しない",
-        "silentRunTooltip": "変化や問題のみ報告します。リマインダーや定時送信ではオフにできます。",
-        "silentRunInfoAria": "サイレント実行のルールを表示",
+        "silentRun": "サイレント実行",
+        "silentRunTooltip": "オンにすると、正常完了時はデフォルトで通知しません。タスク説明で特定条件の通知を求めている場合、AI が条件を満たしたときに自動で上報します。失敗や異常は引き続き通知されます。",
         "finishSendToFeishu": "完了時に Feishu Bot に送信",
         "finishSendToWecomGroup": "完了時に WeCom グループへ送信",
         "configWecomGroup": "WeCom グループ通知を設定",
@@ -17253,10 +17256,7 @@
       },
       "layout": {
         "content": "実行内容",
-        "notifications": "通知とサイレント実行",
-        "contentTab": "内容と起動方法",
-        "optionsTab": "実行オプション",
-        "sections": "自動化の設定"
+        "notifications": "通知とサイレント実行"
       },
       "webhook": {
         "quotaHint": "Webhook の受信回数には 1 日の上限があり、ここでのフィルターでは回数は減りません。送信元（GitHub など）で必要なイベントだけを選択してください。",

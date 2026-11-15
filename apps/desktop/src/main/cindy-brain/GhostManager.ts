@@ -112,6 +112,7 @@ import {
 } from './pluginInstanceRegistryService.js';
 import {
   assertManagedPluginParentSync,
+  approvedCindyModelActionsField,
   createGhostInstallReceipt,
   effectiveInstallOrigin,
   legacyFirstPartyEligibilityAfterUpdate,
@@ -3092,6 +3093,7 @@ export class GhostManager {
           ...approvedAutoToolsProjection(receipt),
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
           ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
+          ...approvedCindyModelActionsField(receipt.approvedCindyModelActions, receipt.manifest),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -4048,6 +4050,7 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4084,6 +4087,7 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4265,6 +4269,7 @@ export class GhostManager {
           ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
           ...(opts?.approvedHostUi?.length ? { approvedHostUi: opts.approvedHostUi } : {}),
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
+          approvedCindyModelActions: opts?.approvedCindyModelActions,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           trust,
@@ -4399,6 +4404,7 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4434,6 +4440,7 @@ export class GhostManager {
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
+      approvedCindyModelActions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4754,6 +4761,10 @@ export class GhostManager {
         approvedAutoTools: [
           ...(opts.approvedAutoTools ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedAutoTools ?? [] : []),
+        ],
+        approvedCindyModelActions: [
+          ...(opts.approvedCindyModelActions ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedCindyModelActions ?? [] : []),
         ],
         ...((opts.observeCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.observeCapabilityApproved === true)) &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
@@ -5177,6 +5188,7 @@ export class GhostManager {
         approvedControlPoints: [...new Set([...(approvedManifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(approvedManifest)])],
         approvedHostUi: current.state === 'approved' ? current.receipt.approvedHostUi : undefined,
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
+        approvedCindyModelActions: current.state === 'approved' ? current.receipt.approvedCindyModelActions : undefined,
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&

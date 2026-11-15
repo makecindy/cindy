@@ -20,6 +20,8 @@ import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
   declaredAutoApproveTools,
+  declaredGhostCindyModelActions,
+  type GhostCindyModelsAction,
   ghostHostUiApprovalTokens,
   declaredGhostControlPoints,
   ghostManifestToAuthorFormat,
@@ -148,6 +150,7 @@ export interface GhostInstallReceipt {
   approvedAutoTools?: string[];
   observeCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
+  approvedCindyModelActions?: GhostCindyModelsAction[];
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -1302,6 +1305,12 @@ function approvedControlPointsField(raw: unknown, manifest: GhostManifest): { ap
   return points.length > 0 ? { approvedControlPoints: points.sort() } : {};
 }
 
+/** Match explicit confirmation to the APIs still declared; never infer grants from old manifests. */
+export function approvedCindyModelActionsField(raw: unknown, manifest: GhostManifest): { approvedCindyModelActions?: GhostCindyModelsAction[] } {
+  const approved = Array.isArray(raw) ? declaredGhostCindyModelActions(manifest).filter(action => raw.includes(action)) : [];
+  return approved.length ? { approvedCindyModelActions: approved } : {};
+}
+
 function approvedHostUiField(raw: unknown, manifest: GhostManifest): { approvedHostUi?: string[] } {
   if (!Array.isArray(raw)) return {};
   const declared = new Set(ghostHostUiApprovalTokens(manifest));
@@ -1310,6 +1319,7 @@ function approvedHostUiField(raw: unknown, manifest: GhostManifest): { approvedH
 }
 
 export function createGhostInstallReceipt(input: {
+  approvedCindyModelActions?: readonly string[];
   simulatorPreviousRelId?: string;
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
   taskCapabilityApproved?: true;
@@ -1363,6 +1373,7 @@ export function createGhostInstallReceipt(input: {
     ...approvedAutoToolsField(input.approvedAutoTools, input.manifest),
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
     ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
+    ...approvedCindyModelActionsField(input.approvedCindyModelActions, input.manifest),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1584,6 +1595,7 @@ function validateReceipt(
       ...approvedAutoToolsField(value.approvedAutoTools, manifestResult.manifest),
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
       ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
+      ...approvedCindyModelActionsField(value.approvedCindyModelActions, manifestResult.manifest),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),

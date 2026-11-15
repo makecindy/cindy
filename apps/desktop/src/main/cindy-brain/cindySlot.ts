@@ -1,3 +1,6 @@
+import { EvaluationError } from '../cindy-evaluate/errors.js';
+import type { EvaluationContext } from '../cindy-evaluate/service.js';
+import type { CindyEvaluateToolRequest } from 'cindy-tools';
 /**
  * cindySlot.ts — cindy 槽代办(卡槽⑤,原名模型槽)。
  * ---------------------------------------------------------------------------
@@ -78,6 +81,7 @@ import {
   type GhostVideoResolution,
   type GhostVideoResultParams,
   type InstalledGhost,
+  ghostCindyModelActionApproved,
 } from '../../shared/ghost.js';
 import type { CindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import type { LegacyMediaKind, LegacyMediaResult } from '../cindy-media/legacyMediaInvocation.js';
@@ -137,6 +141,8 @@ export interface CindyImageCapabilities {
 }
 
 export interface CindySlotDeps {
+  evaluate?(request: CindyEvaluateToolRequest, context: EvaluationContext): Promise<Record<string, unknown>>;
+  readEvaluationImage?(path: string): Promise<Buffer>;
   getGhost(id: string): InstalledGhost | null;
   /** 当前账号作用域；跨 await 的媒体任务必须捕获并持续复核。 */
   getOwnerScopeKey(): string;
@@ -586,6 +592,53 @@ export class GhostCindySlot {
       provider?: unknown;
       callerTool?: unknown;
     };
+    if (p?.kind === 'decisions' || p?.kind === 'rerank' || p?.kind === 'list_models') {
+      const input = payload as Record<string, unknown>;
+      const api = p.kind === 'list_models' ? input.api : p.kind;
+      const ghost = this.deps.getGhost(ghostId);
+      if ((api !== 'decisions' && api !== 'rerank') || !ghostCindyModelActionApproved(ghost, api)) {
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未获准调用所请求的模型能力' };
+      }
+      const count = this.inflight.get(ghostId) ?? 0;
+      const limit = this.deps.getInflightLimit?.(ghostId) ?? null;
+      if (limit !== null && count >= limit) return { ok: false, errorCode: 'BUSY', message: '同时进行的代办已达上限' };
+      const owner = this.deps.getOwnerScopeKey();
+      const assertCurrent = () => {
+        if (this.deps.isOwnerBoundaryPending() || this.deps.getOwnerScopeKey() !== owner
+          || !ghostCindyModelActionApproved(this.deps.getGhost(ghostId), api)) {
+          throw new EvaluationError('PERMISSION_DENIED', '插件或账号授权已变化');
+        }
+      };
+      this.inflight.set(ghostId, count + 1);
+      try {
+        const request = { ...input, action: p.kind, api,
+          model_id: input.model, provider_id: input.providerId } as CindyEvaluateToolRequest;
+        if (!this.deps.evaluate || !this.deps.readEvaluationImage) return { ok: false, errorCode: 'UNAVAILABLE', message: '主机不支持决策和重排' };
+        const result = await this.deps.evaluate(request, { sessionId, assertCurrent,
+          readImage: async ref => {
+            assertCurrent();
+            if (ref.startsWith('data:')) {
+              if (ref.length > 44 * 1024 * 1024 || !/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]*={0,2}$/.test(ref)) throw new EvaluationError('INVALID_INPUT', '图片 data URL 无效或过大');
+              return Buffer.from(ref.slice(ref.indexOf(',') + 1), 'base64');
+            }
+            const hash = /^cindy-media:\/\/blobs\/([a-f0-9]{64})\.[a-z0-9]+$/.exec(ref)?.[1] ?? ref;
+            const media = await this.deps.resolveOwnedMedia(ghostId, hash, owner);
+            if (!media) throw new EvaluationError('PERMISSION_DENIED', '图片不属于当前插件');
+            assertCurrent();
+            return this.deps.readEvaluationImage!(media.absPath);
+          },
+        });
+        if (result.ok !== true) return result as GhostPipeModelResult;
+        if (p.kind === 'list_models') return { ok: true, models: (result.models as Array<{id: string; provider_id: string; name: string}>).map(m => ({ model: m.id, providerId: m.provider_id, name: m.name })) } as GhostPipeModelResult;
+        const { estimated_cost, ...rest } = result;
+        return { ...rest, ok: true, model: String(result.model), usage: result.usage, estimatedCost: estimated_cost } as GhostPipeModelResult;
+      } catch {
+        return { ok: false, errorCode: 'INTERNAL', message: '模型调用未完成' };
+      } finally {
+        const remaining = (this.inflight.get(ghostId) ?? 1) - 1;
+        if (remaining > 0) this.inflight.set(ghostId, remaining); else this.inflight.delete(ghostId);
+      }
+    }
     if (p?.kind === 'query_job') {
       return this.handleQueryJob(ghostId, p);
     }

@@ -13,6 +13,8 @@
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import {
   declaredAutoApproveTools,
+  declaredGhostCindyModelActions,
+  type GhostCindyModelsAction,
   declaredGhostControlPoints,
   ghostHostUiApprovalTokens,
   ghostPermissionProjectionKey,
@@ -67,6 +69,15 @@ export type GhostInstallConsentDecision =
 
 const pendingPromptAborts = new Set<AbortController>();
 
+/** Follow the control-point consent path: unknown declarations never become grants on upgrade. */
+export function confirmedCindyModelActions(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostCindyModelsAction[] {
+  const declared = declaredGhostCindyModelActions(next);
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return declared.filter(action => shown?.some(item => item.key === `cindy:models.${action}`));
+}
 /** Use only after assertGhostInstallConsent binds the confirmed facts to this package/receiver. */
 export function confirmedTaskCapability(
   decision: GhostInstallConsentDecision,

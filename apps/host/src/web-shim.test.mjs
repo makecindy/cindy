@@ -43,7 +43,7 @@ function browser(respond = () => ({}), script = source, openEvents = (_url, { si
   calls.length = 0; // Ignore the independent plugin-list boot read.
   const close = () => listeners.get('pagehide')?.({ persisted: false });
   cleanups.push(close);
-  return { api: window.electronAPI, calls, redirects, opened, focus: () => listeners.get('focus')?.(), close };
+  return { api: window.electronAPI, window, calls, redirects, opened, focus: () => listeners.get('focus')?.(), close };
 }
 
 // Browser Files have no local filesystem authority, and opening a task must
@@ -55,6 +55,21 @@ test('browser-only task actions preserve synchronous paths and same-origin navig
   assert.deepEqual(b.opened, [['http://127.0.0.1:1234/#/cc-agent/task%2Fa', '_blank', 'noopener,noreferrer']]);
   await assert.rejects(b.api.maker.openSessionInNewWindow('task', 'another-device'), /HOST_CHANNEL_UNSUPPORTED/);
   assert.equal(b.opened.length, 1);
+});
+
+// Regression: a release built with `--harnesses pi-bin` has no Claude Code or
+// Codex, and the startup check required both, so the web client stayed on its
+// startup failure screen. Minimal inputs: Pi only passes; no ready agent fails.
+test('the startup check passes when any bundled agent is ready', async () => {
+  const b = browser();
+  for (const [harness, passed] of [
+    [{ 'claude-code': false, codex: false, pi: true }, true],
+    [{ 'claude-code': true, codex: true, pi: false }, true],
+    [{ 'claude-code': false, codex: false, pi: false }, false],
+  ]) {
+    b.window.__cindyBoot = { harness };
+    assert.equal((await b.api.checkEnvironment()).allPassed, passed, JSON.stringify(harness));
+  }
 });
 
 test('both auth API shapes use the same Host routes', async () => {

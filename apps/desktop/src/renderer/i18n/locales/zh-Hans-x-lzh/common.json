@@ -8136,6 +8136,8 @@
         "cindyTextOneshot": "可向 Cindy 快速通道发问，得文字之答",
         "cindyTextOneshotDetail": "行系统之轻量任务模型链(与自动拟题同一通道)，不动 Agent，不触君之卷，或生模型费用。",
         "cindyEmbedText": "可将文字送算为矢量（用于语义检索）",
+        "cindyModelsDecisions": "可用决策模型（耗模型额度）",
+        "cindyModelsRerank": "可用重排模型（耗模型额度）",
         "cindyEmbedTextDetail": "文字将送至系统之矢量模型算为一串数字，每次至多 {{max}} 条，或生模型费用。所得矢量仅交法器自存，不写入君之数据库。",
         "cindySearchWeb": "可用 Cindy AI 搜索公网",
         "cindySearchWebDetail": "查找将访问公网，或耗 Cindy AI 限额。",
@@ -9331,6 +9333,7 @@
     "backToLogin": "归登录方式"
   },
   "login": {
+    "networkResponseHint": "登入之应异常，或为网络、 Proxy 所阻。请察网络与 Proxy 之设。",
     "title": "Cindy 恭候多时矣",
     "subtitle": "择一法，安然登门",
     "savedLoginPreserved": "复原之举将保留已存之登录信息",
@@ -13878,6 +13881,7 @@
         "realtime": "实时声",
         "embedding": "向量",
         "decision": "决断",
+        "rerank": "重排",
         "compression": "缩",
         "ungrouped": "未归类",
         "other": "其余"
@@ -17141,9 +17145,8 @@
         "automatic": "自发",
         "manually": "手发",
         "session": "差事",
-        "silentRun": "察而无事则默",
-        "silentRunTooltip": "唯报变故与疑难。提醒与定时遣讯者可阖之。",
-        "silentRunInfoAria": "观默行之规",
+        "silentRun": "默行",
+        "silentRunTooltip": "启之，则事成默不告。若任务所述有当告之情，AI 遇之自报；败与异常仍告。",
         "finishSendToFeishu": "毕则遣至飞书机器人",
         "finishSendToWecomGroup": "毕则遣至企业微信群",
         "configWecomGroup": "设企微群之告",
@@ -17253,10 +17256,7 @@
       },
       "layout": {
         "content": "所行之事",
-        "notifications": "告知与静行",
-        "contentTab": "内容与触发",
-        "optionsTab": "执行之设",
-        "sections": "自运之设"
+        "notifications": "告知与静行"
       },
       "webhook": {
         "quotaHint": "Webhook 受信之数日有其限，此处之筛不减其数。请于发信之方（如 GitHub）唯选所需之事。",

@@ -124,3 +124,25 @@ it.each([
   expect(f.child.kill).not.toHaveBeenCalled();
   expect(ended).toHaveBeenCalledOnce();
 });
+
+// A stalled Main can receive startup and termination in one pipe delivery.
+// The service has not assigned its awaited monitor yet: notifying it here can
+// access that binding before initialization, or publish an already-dead shield.
+// Unit regression through the real watcher; existing tests awaited ready first.
+it.each(['locked', 'lock-failed', 'released', ''])(
+  'does not publish an away guard that reports %s during startup',
+  async (reply) => {
+    const f = fixture();
+    const ended = vi.fn();
+    const starting = watchAwayGuardInput(ended, undefined, f.runtime);
+    const rejected = expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+    await Promise.resolve();
+    f.line(`ready\n${reply}\n`);
+    // Let startup observe the terminal status before close can mark it finished.
+    // The empty reply separately covers ready and close arriving together.
+    if (reply) await Promise.resolve();
+    f.child.emit('close');
+    await rejected;
+    expect(ended).not.toHaveBeenCalled();
+  },
+);
